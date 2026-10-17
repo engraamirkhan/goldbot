@@ -7,7 +7,8 @@ import { CusumChart, DrawdownBars, PsiHeatmap, ReliabilityChart } from "./Charts
 const CHECK_TITLES: Record<string, string> = { deploy: "Deploy", data_quality: "Data quality", drift: "Drift watch" };
 const CHECK_WORDS: Record<HealthCheckRow["status"], string> = { ok: "ok", warn: "warning", fail: "FAILING" };
 
-function CopyCommand({ cmd }: { cmd: string }) {
+/** A server command with a Copy button (also used by the Progress tab's record-gate commands). */
+export function CopyCommand({ cmd }: { cmd: string }) {
   const [done, setDone] = useState(false);
   return (
     <div className="cmd">

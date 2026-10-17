@@ -121,6 +121,35 @@ describe("ProposalCard", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
+  // docs/ux/order-not-placed.md: the API words the MT5 box's and the broker's refusals (`not_placed`)
+  const margin = { by: "broker" as const, reason: "there wasn't enough free margin", code: null, next_step: "Check free margin on the Overview before approving the next trade.", nothing_sent: true };
+  const stops = { by: "broker" as const, reason: "the stop or target wasn't accepted (too close to the price)", code: null, next_step: "x", nothing_sent: true };
+  const stale = { by: "mt5_box" as const, reason: "it took more than 10 s to check the order, so it dropped it rather than trade on an old price", code: null, next_step: "x", nothing_sent: true };
+  const generic = { by: "broker" as const, reason: null, code: 10006, next_step: "If it repeats, ask Claude to check (broker code 10006).", nothing_sent: true };
+  it.each([
+    [{ refusal: ["broker_refused:10019"], not_placed: margin, decided_channel: "telegram" }, /^Refused by the broker\. There wasn't enough free margin; nothing was sent\. · via Telegram$/],
+    [{ refusal: ["broker_refused:10016"], not_placed: stops }, /^Refused by the broker\. The stop or target wasn't accepted \(too close to the price\); nothing was sent\.$/],
+    [{ refusal: ["bridge_stale_order"], not_placed: stale }, /^Refused by the MT5 box\. It took more than 10 s to check the order, so it dropped it rather than trade on an old price; nothing was sent\.$/],
+    [{ refusal: ["broker_refused:10006"], not_placed: generic }, /^Refused by the broker \(code 10006\); nothing was sent\.$/],
+  ])("shows an order the MT5 box or the broker refused as not placed, in the API's words (%#)", (over, copy) => {
+    const { container } = render(<ProposalCard p={decided("refused", over)} now={NOW} canDecide blockers={[]} />);
+    expect(screen.getByRole("status")).toHaveTextContent(copy);
+    expect(screen.getByRole("status")).toHaveClass("outcome", "bad");
+    expect(container.querySelector("article")).toHaveAttribute("aria-label", "Long 0.05 lots XAUUSD, not placed");
+  });
+
+  it("never says nothing was sent for the paper broker's duplicate, whose first send went out", () => {
+    const dup = { by: "broker" as const, reason: "it was already sent; this repeat was refused", code: null, next_step: "x", nothing_sent: false };
+    render(<ProposalCard p={decided("refused", { refusal: ["broker_refused:10027:paper"], not_placed: dup })} now={NOW} canDecide blockers={[]} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/^Refused by the broker\. It was already sent; this repeat was refused\.$/);
+  });
+
+  it("falls back to the broker's code from an older API without not_placed, never blaming the RiskGate", () => {
+    render(<ProposalCard p={decided("refused", { refusal: ["broker_refused:10019"] })} now={NOW} canDecide blockers={[]} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/^Refused by the broker \(code 10019\); nothing was sent\.$/);
+    expect(screen.getByRole("status")).not.toHaveTextContent("The RiskGate blocked the order");
+  });
+
   it("names only the decision channel, never who decided, and says nothing when the channel is unknown", () => {
     const { rerender } = render(<ProposalCard p={decided("rejected", { reason_code: "news", decided_channel: "dashboard" })} now={NOW} canDecide blockers={[]} />);
     expect(screen.getByRole("status")).toHaveTextContent(/^Rejected · News · via the dashboard$/);

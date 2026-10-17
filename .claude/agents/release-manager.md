@@ -61,3 +61,4 @@ Work is done only when every item holds; the report says which hold and shows th
 - Posts a short progress note on issue #34 with no identifiers.
 - No reviewed work older than 24 h is outside a PR; every merged server-changing release has a deploy date, and each
   past date has a verified deploy on #34 or a new date with the reason.
+- **Owner-verified done:** for any deploy or owner-facing change, the owner can open it at its fixed address and complete the first action (sign in / approve), checked from outside the servers and recorded in the deploy note. Owner-facing commands are single-line and pasted from the rendered message before handing over. A classifier block on an operational step is reported to the owner in one line with the exact command the first time (incident 2026-10-17).

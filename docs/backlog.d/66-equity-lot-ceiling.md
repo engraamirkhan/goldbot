@@ -1,10 +1,9 @@
 ---
 number: 66
-rank: 3
 title: Equity-scaled lot ceiling at the bridge (GuardedBroker)
 stage: Execution and risk (independent backstop under RiskGate) · PROTECT · RUN
 size: M
-status: 'ready for the architect (decided 2026-10-16 from the CFO capital plan) · next: architect plan by 2026-10-23, trading-safety verdict on the plan, implementer (failing tests first), trading-safety verdict on the build · accountable: architect · due 2026-10-23 (plan; the plan names the build lane and its date)'
+status: 'done, accepted 2026-10-17 by the product owner (on main via PR #84, merge 0bd0c10: plan 8567c4d; trading-safety APPROVE x2, code APPROVE, security PUSH-OK, SRE APPROVE, ui-ux APPROVE). Criteria: 0.01 lot passes and 0.02 refused at 1,000, scales at 10,000, unreadable figures refuse, closes never gated (tests/test_bridge.py ceiling tests, re-run pass); built stricter than asked (counts all open XAUUSD exposure) · accountable: release-manager'
 ---
 - **66. Equity-scaled lot ceiling at the bridge (GuardedBroker).** Decided 2026-10-16 by program director + product
   owner from the CFO's capital plan (`docs/finance/capital-plan.md` section 6, second sre row). Value (RUN,

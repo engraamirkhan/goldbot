@@ -52,6 +52,7 @@ without typing the password. Free with Gmail:
 - **Morning digest:** at 06:45 UTC Telegram sends one message: all good or what needs attention, yesterday's trades, risk, and decisions waiting for you. [More](RUNBOOK.md#05-daily-use)
 - **Approve:** Telegram shows direction, lots, entry, stop, target, probability, spread. Tap **Approve**, or a **Reject** reason. Or the dashboard **Approvals** tab. After 90 s it expires. [More](RUNBOOK.md#approving-or-rejecting-an-entry)
 - **`/halt`** stops new entries; open trades keep their stops. Resume on the dashboard: **Overview**, authenticator code, **Re-arm**. [More](RUNBOOK.md#halt-and-re-arm)
+- **12% kill switch:** if it trips, every open position on the account is closed at market, including trades you opened by hand on other symbols. [More](RUNBOOK.md#halt-and-re-arm)
 - **Deploy:** Telegram *New version ready* -> **[Deploy]**. Never while an entry waits; rolls back by itself if a service fails. [More](RUNBOOK.md#05-daily-use)
 - **Entry status (top of Overview):** one block per account answers "can it take new trades right now?".
   **OPEN** (green): yes. **PARTLY OPEN** (amber): yes, except the strategies named (e.g. "trend-g0 paused after 3
@@ -65,6 +66,27 @@ without typing the password. Free with Gmail:
   badge turns grey **UNKNOWN**: what you see is the last report. The Approvals tab's safety strip uses the same reasons.
   [Spec](ux/entry-status.md)
 - **Health tab:** each check reads ok, warn or fail with a reason, plus drift and drawdown per strategy.
+- **Progress tab:** one page that answers three questions; Overview's line under the entry status opens it. Nothing
+  on it is red, records a gate, turns on live or halts.
+  - **Stop rule** ("should the project stop?"): NOT BREACHED, NOT STARTED, BREACHED or CAN'T CHECK. It has two
+    conditions: the long-run edge, which can trigger from month 18, and a single trade losing more than the weekly
+    limit. A breach is amber and halts nothing. Press **Go to Halt** if you agree, then ask Claude for options.
+  - **Road to live:** the four gates in order: RECORDED, MET, NOT MET (k of n) or WAITS. The next gate is open, and
+    each item says "have X of Y". The gates' 95% range is a *per-trade interval, not day-clustered*, so it is
+    narrower than the Results rows. A gate can be MET, but only you record it, with the command shown to the owner
+    (Runbook: Going live); live also needs `unlock-live`.
+  - **Proposed thresholds:** a threshold tagged **Proposed** waits for your sign-off. A gate met on one reads **MET
+    ON A PROPOSED THRESHOLD**, never plain MET. To sign one off, add its name to `gates.signed_off` in
+    `config/settings.local.yaml` on the server, for example `gates: { signed_off: [paper_min_days, live_min_days] }`,
+    The tab picks it up within a minute. This records your decision and changes no value. A misspelt name stops the
+    settings from loading, and the tab then reads CAN'T CHECK, so check the tab after the edit.
+  - **Results** (simulated shadow trades, not your money): net R per trade after costs, with the verdict in words.
+    AHEAD or BEHIND means unlikely to be luck; below 100 trades it only reads CAN'T TELL FROM LUCK or TOO FEW
+    TRADES. Breakdown rows face a stricter bar because many are compared. Target and stop exit rows read **BY
+    CONSTRUCTION**, because their sign is set by the exit itself. A row can suggest an idea but cannot prove it: that
+    needs a new registered trial. If the daily job is late, an amber note says when it runs next.
+  - **Your account's trades:** the last 30 calendar days (about 22 trading days), with the days at £50 or more
+    counted, never aimed at. [Spec](ux/progress-screens.md)
 - **Your account (Overview):** once the engine is connected to the broker, each account card shows the **balance** and
   **equity** in the account's currency (equity includes open trades), today's change since 00:00 UTC, the margin level,
   the **loss budget** (how much more can be lost before new entries stop, and which limit decides it: today's or

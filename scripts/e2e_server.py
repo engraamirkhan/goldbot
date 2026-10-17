@@ -23,11 +23,14 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+TOTP_CLOCK_FILE = "totp_clock_steps"           # read by the server below, written by web/e2e/totp.ts
 sys.path.insert(0, str(ROOT))
 
 import pandas as pd  # noqa: E402
 import uvicorn  # noqa: E402
 
+import goldbot  # noqa: E402
+from goldbot.api import auth as auth_module  # noqa: E402
 from goldbot.api.app import create_app  # noqa: E402
 from goldbot.api.e2e_mailer import STATE_PREFIX, CaptureMailer  # noqa: E402
 from goldbot.config import MailSettings  # noqa: E402
@@ -37,6 +40,38 @@ from goldbot.data.store import Store  # noqa: E402
 from goldbot.engine.shadow import ShadowBook  # noqa: E402
 from goldbot.telegram.approvals import Proposal  # noqa: E402
 from goldbot.telegram.bus import ApprovalBus  # noqa: E402
+
+
+def check_tree(goldbot_file: str | None = None) -> None:
+    """Refuse to serve another checkout's code: an editable install in a different tree's venv would import goldbot
+    from there, and the run would pass or fail on code this tree did not write (TD-3)."""
+    where = Path(goldbot_file or goldbot.__file__).resolve()
+    if not where.is_relative_to(ROOT):
+        sys.exit(f"e2e_server: goldbot is imported from {where.parent}, outside this tree ({ROOT}).\n"
+                 f"Run with this checkout's interpreter, e.g. PYTHON={ROOT}/.venv/bin/python "
+                 f"(created by `uv venv .venv && uv pip install -e '.[dev]'` in this tree).")
+
+
+def install_totp_clock(state: str) -> None:
+    """Let the browser tests step the TOTP clock instead of sleeping for the next 30-s step (TD-4).
+
+    The server accepts each authenticator code once and only within +-1 step of its clock, so a story that signs the
+    same user in more than a few times can only wait for real time to pass: 30-60 s per test, and a timeout when
+    the machine is slow. The clock is a seam of its own (`auth._totp_now`, "so tests can step it"); here it is the real
+    time plus 30 s times the whole number in `<state>/totp_clock_steps`, which only ever grows. Verification, the
+    replay guard and the +-1 window are untouched; this is an e2e script and production never imports it."""
+    path = Path(state) / TOTP_CLOCK_FILE
+    steps = 0
+
+    def now() -> float:
+        nonlocal steps
+        try:
+            steps = max(steps, int(path.read_text()))              # a half-written or missing file keeps the last value
+        except (OSError, ValueError):
+            pass
+        return time.time() + 30.0 * steps
+
+    auth_module._totp_now = now
 
 
 def seed_proposals(state: str) -> None:
@@ -164,7 +199,9 @@ def main() -> None:
     ap.add_argument("--info", default=str(ROOT / "web" / "e2e" / ".server.json"))
     ap.add_argument("--fake-mailer", action="store_true", help="capture mail to an outbox (e2e only, see docstring)")
     args = ap.parse_args()
+    check_tree()
     state = tempfile.mkdtemp(prefix=STATE_PREFIX)                 # 0700, this user only
+    install_totp_clock(state)
     seed_proposals(state)
     seed_store(str(Path(state) / "data"))
     seed_health_research(state)

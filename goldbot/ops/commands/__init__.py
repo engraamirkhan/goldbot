@@ -6,7 +6,8 @@ the registry and re-exports every name it always had.
   drift.py     drift-review
   gates.py     record-gate, gates, gate-evidence
   costs.py     publish-costs (and the release uploader the scheduler shares)
-  ops.py       backup / restore / restore-drill, setup, preflight, health, monthly-report, perf-report
+  ops.py       backup / restore / restore-drill, setup, preflight, health, monthly-report, perf-report,
+               bridge-smoke
   auth.py      revoke-sessions, mail-test
   research.py  owner-history, ruin, sizing-feasibility
 

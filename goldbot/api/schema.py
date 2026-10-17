@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from goldbot.execution.not_placed import NotPlaced
 from goldbot.ops.account_view import CantCheck, LossBudget, Milestones
 from goldbot.telegram.approvals import PROPOSAL_ID_PATTERN
 
@@ -105,13 +106,17 @@ class DecidedProposal(Proposal):
     """A proposal decided in the last few minutes, so its card can show what happened to it.
 
     submitted: decision recorded, the engine applies it (and re-checks the RiskGate) on its next tick;
-    approved: the order was sent; refused: approved, but the RiskGate re-check refused the order (see `refusal`);
+    approved: the order was sent; refused: approved, but not placed: the RiskGate re-check, the MT5 box or the broker
+    refused the order (see `refusal`; `not_placed` words the MT5 box's and the broker's refusals);
     rejected: with its reason code; expired: nobody decided within the window. `decided_channel` ("telegram" |
     "dashboard") and `decided_ts` say how and when it was decided, never who (BACKLOG 52: identity is kept in the
     auth audit log only)."""
     status: Literal["submitted", "approved", "rejected", "expired", "refused"]
     reason_code: Literal["news", "cost", "discretion", "duplicate", "other"] | None = None
     refusal: list[str] = []
+    # docs/ux/order-not-placed.md: who refused an approved order and why, in the owner's words (the same table as the
+    # Telegram card and notice); null for a RiskGate refusal and for every other status
+    not_placed: NotPlaced | None = None
     decided_channel: str | None = None
     decided_ts: float | None = None         # epoch s, the decision's own clock; None for expired and older files
 
@@ -691,6 +696,194 @@ class ModeChangeResult(BaseModel):
     message: str
     view: AutoModeView
 # ============================================================================= end auto mode
+
+
+# ============================================================================= Progress tab (W2-3, read-only)
+# docs/ux/progress-screens.md "API gaps", built by goldbot/api/progress.py. Accounts appear by config name with any run
+# of 5+ digits cut to its last two; no operator-typed text, no email, login or host; every time is UTC.
+class GateProgressView(BaseModel):
+    value: float
+    target: float
+    unit: Literal["trades", "days"]
+
+
+class GateItemView(BaseModel):
+    name: str
+    met: bool
+    required: bool                          # False: context only, decides nothing
+    need: str
+    evidence: str                           # the measured value; never the owner's `gate-evidence --detail` note
+    proposed: bool                          # its threshold is PROPOSED and not in gates.signed_off
+    progress: GateProgressView | None = None
+    earliest_utc: datetime | None = None    # a day item: the calendar date the count is reached (never a forecast)
+    ci95: tuple[float, float] | None = None # an expectancy item: 95% interval of the phase's mean return per trade
+    # how `ci95` is computed: on per-trade returns as independent draws (the gates' convention), not clustered by day
+    # like the Results rows (ADR 0022), so the screen can say so
+    ci95_basis: str = "per-trade iid, return"
+
+
+class GateView(BaseModel):
+    gate: str
+    met: bool                               # met on the evidence; recording stays the owner's command
+    recorded: bool
+    recorded_utc: datetime | None = None
+    items: list[GateItemView]
+    met_on_proposed: bool = False           # met, but a required item's threshold is PROPOSED and not signed off
+
+
+class StopIncidentView(BaseModel):
+    account: str
+    mode: Literal["demo", "live"]
+    closed_utc: datetime
+    loss_frac: float                        # of the equity before the trade
+
+
+class ImputedView(BaseModel):
+    n: int                                  # pooled rows whose return is not net, charged an imputed cost
+    charged_usd: float
+    unpriced: int                           # gross rows that could not be priced
+
+
+class StopRuleView(BaseModel):
+    """P6 in fields a screen words itself. status: breached > cant_check > not_started > ok (a breach stays a breach
+    while part of the record is unreadable: a missing row can only hide more)."""
+    status: Literal["ok", "not_started", "breached", "cant_check"]
+    cant_check: str | None = None           # owner wording; set whenever part of the record is unreadable or lost
+    months: float | None = None
+    after_months: float | None = None
+    pooled_trades: int | None = None
+    min_pooled_trades: int | None = None
+    confidence: float | None = None
+    lower_bound: float | None = None        # per-trade return, fraction (one-sided bound at `confidence`)
+    min_trades_for_estimate: int            # below it there is no bound: "too few trades to estimate yet"
+    worst_loss_frac: float | None = None
+    weekly_cap: float | None = None
+    clock_start_utc: datetime | None = None
+    clock_source: Literal["paper_gate", "first_trade"] | None = None
+    breach: list[Literal["long_run", "single_loss"]] = []
+    incidents: list[StopIncidentView] = []  # worst first, at most 5
+    incident_count: int = 0
+    imputed: ImputedView | None = None
+
+
+class ProposedThreshold(BaseModel):
+    name: str                               # the config/settings.yaml `gates:` key
+    value: float
+
+
+class GatesView(BaseModel):
+    generated_utc: datetime
+    phase: int | None = None
+    gates: list[GateView]
+    stop_rule: StopRuleView
+    proposed_count: int                     # from settings: PROPOSED thresholds not in gates.signed_off
+    proposed: list[ProposedThreshold]
+    cant_check: str | None = None           # owner wording for any unreadable input; never the raw error
+
+
+AttributionVerdict = Literal["noise", "positive", "negative", "indistinguishable from zero", "by construction"]
+
+
+class ResultCell(BaseModel):
+    """One attribution cell (research/attribution.py Cell, ADR 0022). Rows are judged on `verdict_adj` at the row's
+    own bar `t_bar`; "by construction" marks a cell whose sign is set by its definition (exit target / stop)."""
+    n: int
+    mean_r_gross: float | None
+    mean_r_net: float | None
+    std_r_net: float | None
+    t_stat: float | None
+    ci95_net: tuple[float, float] | None
+    hit_rate: float | None
+    profit_factor: float | None
+    verdict: AttributionVerdict             # raw, |t| >= 2 (the overall headline)
+    t_bar: float | None                     # the bar this cell applied
+    ci_adj: tuple[float, float] | None      # mean +- t_bar x se; agrees with verdict_adj
+    verdict_adj: AttributionVerdict
+    se: float | None = None                 # day-clustered standard error, R per trade
+
+
+class ResultExitCell(ResultCell):
+    share: float
+    mae_r_median: float | None = None
+    mfe_r_median: float | None = None
+
+
+class ResultCosts(BaseModel):
+    source: str
+    n: int
+    mean_r: dict[str, float | None]         # spread, slippage, commission, swap, total (R per trade)
+    share_of_gross: float | None
+    killed: int                             # won before costs, lost after them
+    by_session: dict[str, dict[str, float | None]]
+
+
+class ResultLiveFills(BaseModel):
+    fills: int
+    mean_slippage_usd: float | None
+    prior_usd: float | None
+    mean_excess_usd: float | None
+    t_stat: float | None
+    mean_excess_r: float | None
+    n_with_risk: int
+    verdict: AttributionVerdict
+    t_bar: float
+    verdict_adj: AttributionVerdict
+    orders: dict[str, int]
+
+
+class AttributionReportView(BaseModel):
+    as_of: datetime
+    window_from: datetime
+    min_trades: int
+    t_bar: float                            # nominal row bar over `m` rows (each row carries its own `t_bar`)
+    m: int
+    n_candidates: int
+    n_taken: int
+    overall: ResultCell
+    challengers: ResultCell
+    breakdowns: dict[str, dict[str, ResultCell]]
+    exits: dict[str, ResultExitCell]
+    costs: ResultCosts
+    live: dict[str, ResultLiveFills]        # by account (digits cut)
+    notes: list[str]
+
+
+class AttributionView(BaseModel):
+    """state/attribution.json without its trade rows and calibration (calibration stays on Health)."""
+    report: AttributionReportView | None    # None: no report yet (or unreadable: see cant_check)
+    stale: bool                             # older than the job's last slot plus its max_late_hours
+    next_run_utc: datetime | None
+    cant_check: str | None = None
+
+
+class DayNet(BaseModel):
+    day: str                                # YYYY-MM-DD opportunity day (D-1 22:00 to D 22:00 UTC)
+    net: float                              # account currency, net rows only
+    n: int
+
+
+class TradesSummary(BaseModel):
+    """Your account's closed trades over the last `days` opportunity days (ops/report_days.py, the monthly report's
+    day and P&L basis: net rows in the account currency only; other rows are counted and flagged, never summed)."""
+    account: str
+    mode: Literal["demo", "live", "paper"] | None
+    currency: str | None
+    days: int
+    first_day: str
+    last_day: str
+    net: float
+    n: int                                  # every closed trade in the window
+    net_n: int                              # the ones in `net`
+    days_traded: int
+    trading_days: int                       # Monday-Friday opportunity days in the window
+    target: float                           # ADR 0004's £50 day, counted, never aimed at
+    days_at_target: int | None              # GBP accounts only, as the monthly report
+    best_day: DayNet | None
+    worst_day: DayNet | None
+    by_day: list[DayNet]
+    gross_rows: int                         # costs not recorded: not in `net`
+    other_currency_rows: int                # P&L not in the account currency: not in `net`
+# ============================================================================= end Progress tab
 
 
 ResearchPlanView.model_rebuild()   # refers to models defined after it

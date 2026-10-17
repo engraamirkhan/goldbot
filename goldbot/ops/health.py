@@ -157,6 +157,7 @@ from goldbot.ops.checks.risk import (
     _control,
     check_entry_windows,
     check_halt,
+    check_kill_switch,
     check_loss_caps,
     check_open_risk,
     check_phase,
@@ -291,6 +292,7 @@ __all__ = [
     "check_feature_versions",
     "check_halt",
     "check_heartbeat",
+    "check_kill_switch",
     "check_loss_caps",
     "check_model_watch",
     "check_news",
@@ -520,7 +522,7 @@ MAX_ALERT = 3900                   # Telegram's limit is 4096 characters
 
 # warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
 NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "tick_errors:",
-                  "throttle:", "entry_windows:", "open_risk:", "schema_skew:")
+                  "throttle:", "entry_windows:", "open_risk:", "schema_skew:", "kill_switch:")
 
 
 def _alerting(name: str, status: str) -> bool:

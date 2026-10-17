@@ -32,7 +32,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
-from goldbot.api import entry_status, explain
+from goldbot.api import entry_status, explain, progress
 from goldbot.api.auth import (
     EMAIL_LINK_TTL_S,
     RESET_TTL_H,
@@ -51,6 +51,7 @@ from goldbot.api.schema import (
     ActiveBlackout,
     AgentRow,
     AgentRunRow,
+    AttributionView,
     AuthState,
     AutoModeView,
     CalendarEvent,
@@ -64,6 +65,7 @@ from goldbot.api.schema import (
     EmailLinkResponse,
     FeedHealth,
     ForgotPasswordRequest,
+    GatesView,
     HaltRequest,
     Headline,
     HealthView,
@@ -91,11 +93,13 @@ from goldbot.api.schema import (
     SetupRequest,
     SetupResponse,
     Status,
+    TradesSummary,
     UserRef,
     UserRow,
 )
 from goldbot.config import MailSettings
 from goldbot.data.timeutil import heartbeat_problem
+from goldbot.execution.not_placed import first_not_placed
 from goldbot.ops.account_view import LossBudget, loss_budget, margin_level_pct, milestones, proposal_budget
 from goldbot.telegram.approvals import Outcome, decision_channel
 from goldbot.telegram.approvals import Proposal as BusProposal
@@ -602,7 +606,9 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
             out.append(DecidedProposal.model_validate({**card(p), "status": status,
                                                        "decided_channel": p.decided_channel, "decided_ts": p.decided_ts,
                                                        "reason_code": p.reason_code if status == "rejected" else None,
-                                                       "refusal": list(p.gate_refusal or [])}))
+                                                       "refusal": list(p.gate_refusal or []),
+                                                       "not_placed": first_not_placed(p.gate_refusal)
+                                                       if status == "refused" else None}))
         return out
 
     @app.post("/api/decisions")
@@ -716,6 +722,42 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     def research_view(_: User = Depends(auth)) -> ResearchView:
         return explain.research_view(st.dir, view_settings(), docs)
     # ============================================================== end Health and Research screens
+
+    # ============================================================== Progress tab (W2-3; read-only, viewer and above)
+    # goldbot/api/progress.py: the gates evaluated on request with nothing written (cached 60 s), the daily results
+    # file without its trade rows, and each account's last 30 opportunity days. Nothing here records a gate, unlocks
+    # live, halts or changes a setting; accounts are named with their digits cut.
+    gates_cache = progress.GatesCache()
+
+    def engines_or_none() -> list[dict]:
+        try:
+            return st.engines()
+        except OSError:
+            log.warning("engine states unreadable: progress views without them")
+            return []
+
+    def build_gates() -> GatesView:
+        now, s = pd.Timestamp.now("UTC"), view_settings()
+        if s is None:
+            return progress.gates_unavailable(now, None)
+        try:
+            return progress.gates_view(st.dir, s, now, engines_or_none())
+        except Exception:                      # noqa: BLE001 - reporting only: the owner reads "can't check"
+            log.exception("gates view failed")
+            return progress.gates_unavailable(now, s)
+
+    @app.get("/api/gates", response_model=GatesView)
+    def gates(_: User = Depends(need("viewer"))) -> GatesView:
+        return gates_cache.get(build_gates)
+
+    @app.get("/api/attribution", response_model=AttributionView)
+    def attribution(_: User = Depends(need("viewer"))) -> AttributionView:
+        return progress.attribution_view(st.dir, view_settings(), pd.Timestamp.now("UTC"))
+
+    @app.get("/api/trades/summary", response_model=list[TradesSummary])
+    def trades_summary(_: User = Depends(need("viewer"))) -> list[TradesSummary]:
+        return progress.trades_summary(st.dir, pd.Timestamp.now("UTC"), engines_or_none())
+    # ============================================================== end Progress tab
 
     # ============================================================== auto mode (A10): card for any role, switch owner-only
     # The switch runs telegram/automode.py `mode_command`, the code behind Telegram's /mode, with the same checks:

@@ -93,7 +93,7 @@ def test_mt5_close_and_modify_fail_loudly_on_a_terminal_error_never_as_no_such_p
     with pytest.raises(RuntimeError, match="positions_get failed"):
         b.modify(7, 2395.0, None)
     monkeypatch.setattr(mt5_adapter.mt5, "positions_get", lambda **k: (pos,))
-    monkeypatch.setattr(b, "_filling", lambda: 1)
+    monkeypatch.setattr(b, "_filling", lambda symbol: 1)
     r = b.close(7)                                                          # order_send None: refused, not a crash
     assert not r.ok and r.retcode == -1 and "order_send failed" in r.message
     assert not b.modify(7, 2395.0, None).ok
@@ -228,11 +228,13 @@ def test_a_raising_kill_switch_close_does_not_stop_the_others_and_is_retried_unt
 def test_the_kill_switch_runs_again_next_tick_when_the_book_cannot_be_read(tmp_path, monkeypatch):
     eng, pb = _engine(tmp_path, TREND)
     pid = _enter(eng, pb, TREND)
-    real = pb.positions
+    real, real_all = pb.positions, pb.account_positions
     monkeypatch.setattr(pb, "positions", _down)
+    monkeypatch.setattr(pb, "account_positions", _down)                # the account book and its fallback
     eng.state.stage = Stage.HALTED
     assert eng._kill_switch(everything=True) is False and eng._kill_pending and pid in eng.open
     monkeypatch.setattr(pb, "positions", real)
+    monkeypatch.setattr(pb, "account_positions", real_all)
     eng.on_tick(_tick(1, 1999.5))
     assert pid not in eng.open and not pb.positions()
 

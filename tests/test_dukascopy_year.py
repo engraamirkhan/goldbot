@@ -1,8 +1,13 @@
 import datetime as dt
 import importlib.util
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
+import yaml
 
 _spec = importlib.util.spec_from_file_location("dukascopy_year", Path(__file__).resolve().parents[1] / "scripts" / "dukascopy_year.py")
 assert _spec is not None and _spec.loader is not None
@@ -161,3 +166,206 @@ def test_main_never_publishes_fewer_bars_for_a_day_than_before(monkeypatch, tmp_
     got = pd.read_parquet(out)
     assert len(got) == 600
     assert (got["bid_close"] == 2000.0).all()
+
+
+# --- G1/G2 targeted refetch: a strictly validated month list, one dispatch, never-shrink merge --------------------
+
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW = ROOT / ".github" / "workflows" / "data-dukascopy.yml"
+TODAY = dt.date(2026, 10, 17)
+_MONTH_RANGE = dy.month_range
+
+
+def test_parse_months_normalises_a_valid_list():
+    got = dy.parse_months("2026-06,2024-01, 2024-06 ,2024-01", today=TODAY)
+    assert got == ["2024-01", "2024-06", "2026-06"]           # sorted, de-duplicated, spaces around commas allowed
+    assert dy.parse_months("2026-10", today=TODAY) == ["2026-10"]  # the open month (has completed days) is allowed
+
+
+@pytest.mark.parametrize("bad", [
+    "", " ", ",", "2024-01,", ",2024-01", "2024-01,,2024-02",
+    "2024-1", "24-01", "2024-13", "2024-00", "2024/01", "2024-01-05", "202401",
+    "2024-01;rm -rf /", "2024-01 2024-02", "2024-01\n", "2024-01\n2024-02", "$(id)", "2024-01`id`",
+    "２０２４-01",      # full-width digits: \d would accept them, [0-9] does not
+    "2009-12",                           # before the first year Dukascopy is pulled for
+    "2026-11", "2027-01",                # not started yet (no completed day to download)
+])
+def test_parse_months_rejects_anything_but_yyyy_mm(bad):
+    with pytest.raises(ValueError):
+        dy.parse_months(bad, today=TODAY)
+
+
+def test_parse_months_caps_the_list_so_a_typo_cannot_book_a_full_refresh():
+    many = ",".join(f"{y}-{m:02d}" for y in (2022, 2023) for m in range(1, 13)) + ",2024-01"
+    with pytest.raises(ValueError, match="at most"):
+        dy.parse_months(many, today=TODAY)
+    assert len(dy.parse_months(many.rsplit(",", 1)[0], today=TODAY)) == 24
+
+
+def test_months_cli_prints_years_and_normalised_months_for_the_plan_job():
+    cli = str(ROOT / "scripts" / "dukascopy_months.py")
+    r = subprocess.run([sys.executable, cli, "2026-06,2024-01,2024-06"], capture_output=True, text=True, check=False)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines() == ["years=[2024, 2026]", "months=2024-01,2024-06,2026-06"]
+    bad = subprocess.run([sys.executable, cli, "2024-01;id"], capture_output=True, text=True, check=False)
+    assert bad.returncode != 0 and "years=" not in bad.stdout
+
+
+def _full_bars(ts: pd.DatetimeIndex, price: float, flag: str = "") -> pd.DataFrame:
+    from goldbot.data.resample import BAR_COLUMNS
+    df = pd.DataFrame({"ts_utc": ts})
+    for c in ("bid_open", "bid_high", "bid_low", "bid_close"):
+        df[c] = price
+    for c in ("ask_open", "ask_high", "ask_low", "ask_close"):
+        df[c] = price + 0.3
+    df["tick_count"] = 1.0
+    df["spread_mean"], df["spread_max"] = 0.3, 0.3
+    df["visible_at"] = df["ts_utc"] + pd.Timedelta(minutes=1)
+    df["dq_flag"] = flag
+    return df[BAR_COLUMNS + ["dq_flag"]]
+
+
+def _session(day: str, n: int = 300) -> pd.DatetimeIndex:
+    return pd.date_range(f"{day} 10:00", periods=n, freq="1min", tz="UTC")
+
+
+def _run_main(monkeypatch, tmp_path, argv: list[str], fetched: dict[str, pd.DataFrame], calls: list[str]) -> int:
+    def fake_month_bars(start, end, tmp):
+        calls.append(f"{start:%Y-%m}")
+        return fetched.get(f"{start:%Y-%m}")
+    monkeypatch.setattr(dy, "month_bars", fake_month_bars)
+    monkeypatch.setattr(dy, "month_range", lambda year, today=None: _MONTH_RANGE(year, TODAY))
+    monkeypatch.setattr(dy.sys, "argv", ["dukascopy_year.py", *argv, "--tmp", str(tmp_path / "raw"),
+                                         "--report", str(tmp_path / "r.md")])
+    return dy.main()
+
+
+def test_main_with_months_refetches_exactly_those_months_and_keeps_the_rest(monkeypatch, tmp_path):
+    # G1: 2024-01 lost 01-10..12 yet still cleared 15,000 bars, so no default run reaches it; only a month list does.
+    # Here Jan/Feb/Mar are all "complete" and unflagged: without --months nothing would be downloaded.
+    jan = pd.DatetimeIndex(_session("2024-01-09").append(_session("2024-01-15")))
+    feb, mar = _session("2024-02-06"), _session("2024-03-05")
+    published = _full_bars(pd.DatetimeIndex(jan.append(feb).append(mar)), 2000.0).assign(source="dukascopy")
+    prev = tmp_path / "prev.parquet"
+    published.to_parquet(prev, index=False)
+    monkeypatch.setattr(dy, "MIN_BARS_PER_FULL_MONTH", 1)
+    # the refetch brings the lost day back, plus a throttled (short) copy of 01-09 that must not win
+    fresh_jan = _full_bars(pd.DatetimeIndex(_session("2024-01-09", 40).append(_session("2024-01-10"))), 1.0)
+    calls: list[str] = []
+    out = tmp_path / "out.parquet"
+    rc = _run_main(monkeypatch, tmp_path, ["2024", "--out", str(out), "--existing", str(prev),
+                                           "--months", "2024-01,2026-06"], {"2024-01": fresh_jan}, calls)
+    assert rc == 0
+    assert calls == ["2024-01"]                        # exactly the listed month of this year; 2026-06 is another job's
+    got = pd.read_parquet(out)
+    day = got["ts_utc"].dt.strftime("%Y-%m-%d")
+    counts = day.value_counts().to_dict()
+    assert counts == {"2024-01-09": 300, "2024-01-10": 300, "2024-01-15": 300, "2024-02-06": 300, "2024-03-05": 300}
+    assert (got.loc[day == "2024-01-09", "bid_close"] == 2000.0).all()   # never-shrink: published day kept bar for bar
+    assert (got.loc[day == "2024-01-10", "bid_close"] == 1.0).all()      # the recovered day is added
+    assert (got.loc[day.isin(["2024-01-15", "2024-02-06", "2024-03-05"]), "bid_close"] == 2000.0).all()
+
+
+def test_main_with_months_retries_a_flagged_month_and_repairs_imputed_days(monkeypatch, tmp_path):
+    # G2: 2026-02 is bid-imputed on every bar; listing it is the targeted retry (retry_flagged for that month only)
+    feb = _session("2026-02-03")
+    published = _full_bars(feb, 2000.0, "warning:bid_imputed").assign(source="dukascopy")
+    prev = tmp_path / "prev.parquet"
+    published.to_parquet(prev, index=False)
+    monkeypatch.setattr(dy, "MIN_BARS_PER_FULL_MONTH", 1)
+    calls: list[str] = []
+    out = tmp_path / "out.parquet"
+    rc = _run_main(monkeypatch, tmp_path, ["2026", "--out", str(out), "--existing", str(prev), "--months", "2026-02"],
+                   {"2026-02": _full_bars(feb, 1.0)}, calls)
+    assert rc == 0 and calls == ["2026-02"]           # the open month 2026-10 is not touched by a targeted run
+    got = pd.read_parquet(out)
+    assert (got["bid_close"] == 1.0).all() and not got["dq_flag"].fillna("").str.contains("imputed").any()
+
+
+def test_main_with_months_refuses_without_a_published_year(monkeypatch, tmp_path):
+    # a targeted run keeps every unlisted month from the published file; with no file it would publish a year that
+    # holds only the listed months, so it stops before any download
+    calls: list[str] = []
+    out = tmp_path / "out.parquet"
+    rc = _run_main(monkeypatch, tmp_path, ["2024", "--out", str(out), "--existing", str(tmp_path / "absent.parquet"),
+                                           "--months", "2024-01"], {}, calls)
+    assert rc != 0 and calls == [] and not out.exists()
+
+
+def test_main_with_months_refuses_when_no_listed_month_is_in_the_year(monkeypatch, tmp_path):
+    prev = tmp_path / "prev.parquet"
+    _full_bars(_session("2024-01-09"), 2000.0).assign(source="dukascopy").to_parquet(prev, index=False)
+    calls: list[str] = []
+    with pytest.raises(SystemExit):
+        _run_main(monkeypatch, tmp_path, ["2024", "--existing", str(prev), "--months", "2026-06"], {}, calls)
+    assert calls == []
+
+
+@pytest.mark.parametrize("flag", ["--refetch-all", "--retry-flagged"])
+def test_months_cannot_be_combined_with_the_broad_modes(monkeypatch, tmp_path, flag):
+    calls: list[str] = []
+    with pytest.raises(SystemExit):
+        _run_main(monkeypatch, tmp_path, ["2024", "--months", "2024-01", flag], {}, calls)
+    assert calls == []
+
+
+# --- the workflow: the input exists, reaches shell only through env:, and the plan step validates it -------------
+
+def _wf() -> dict:
+    return yaml.safe_load(WORKFLOW.read_text())
+
+
+def _step(job: str, step_id: str | None = None, name_prefix: str | None = None) -> dict:
+    for s in _wf()["jobs"][job]["steps"]:
+        if (step_id and s.get("id") == step_id) or (name_prefix and str(s.get("name", "")).startswith(name_prefix)):
+            return s
+    raise AssertionError(f"step not found in {job}")
+
+
+def test_workflow_has_a_months_input_and_never_interpolates_expressions_into_run():
+    wf = _wf()
+    on = wf["on"] if "on" in wf else wf[True]                  # PyYAML reads the bare key `on` as True
+    assert on["workflow_dispatch"]["inputs"]["months"]["default"] == ""
+    for job in wf["jobs"].values():
+        for s in job["steps"]:
+            assert "${{" not in s.get("run", ""), f"expression in run: {s.get('name') or s.get('id')}"
+    build = _step("build-year", name_prefix="download and build")
+    assert build["env"]["MONTHS"] == "${{ needs.plan.outputs.months }}"   # only the validated, normalised list
+    assert '--months "$MONTHS"' in build["run"]
+
+
+def _run_plan(tmp_path, **env: str) -> tuple[int, dict[str, str], str]:
+    step = _step("plan", step_id="years")
+    out = tmp_path / "gh_output"
+    out.write_text("")
+    base = {"EVENT_NAME": "workflow_dispatch", "FROM_YEAR": "2010", "TO_YEAR": "2026", "MONTHS": "",
+            "FULL_REFRESH": "false", "RETRY_FLAGGED": "false"}
+    assert set(base) <= set(step["env"])
+    r = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=ROOT, capture_output=True, text=True, check=False,
+                       env={"PATH": os.environ["PATH"], "GITHUB_OUTPUT": str(out), **base, **env})
+    lines = dict(line.split("=", 1) for line in out.read_text().splitlines() if "=" in line)
+    return r.returncode, lines, r.stdout + r.stderr
+
+
+def test_plan_step_turns_a_month_list_into_years_and_a_normalised_list(tmp_path):
+    rc, got, log = _run_plan(tmp_path, MONTHS="2026-06,2024-01,2024-06")
+    assert rc == 0, log
+    assert got == {"years": "[2024, 2026]", "months": "2024-01,2024-06,2026-06"}
+
+
+def test_plan_step_without_months_keeps_the_year_range(tmp_path):
+    rc, got, log = _run_plan(tmp_path, FROM_YEAR="2024", TO_YEAR="2025")
+    assert rc == 0, log
+    assert got == {"years": "[2024, 2025]", "months": ""}
+
+
+@pytest.mark.parametrize("env", [
+    {"MONTHS": "2024-01;id"},
+    {"MONTHS": "2024-01\n2024-02"},
+    {"MONTHS": "2024-13"},
+    {"MONTHS": "2024-01", "FULL_REFRESH": "true"},       # a targeted refetch and a full refresh are exclusive
+    {"MONTHS": "2024-01", "RETRY_FLAGGED": "true"},      # listing a month already retries it
+])
+def test_plan_step_rejects_bad_or_conflicting_month_lists(tmp_path, env):
+    rc, got, _ = _run_plan(tmp_path, **env)
+    assert rc != 0 and "years" not in got

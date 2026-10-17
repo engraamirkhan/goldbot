@@ -321,8 +321,9 @@ def test_the_kill_switch_closes_every_position_before_any_exit_fill_is_written(t
     monkeypatch.setattr(pb, "close", close)
     monkeypatch.setattr(eng.store, "append", slow_append)
     pb.on_tick(_tick(10, 2000.2))
-    assert eng._kill_switch(everything=True)
-    assert calls == ["close"] * 3                              # nothing written during the exits
+    eng._kill_switch(everything=True)
+    assert calls == ["close"] * 3 and not pb.positions()      # nothing written during the exits
+    assert pb.account_positions() == [] and eng._kill_switch(everything=False)   # the next read sees it flat
     eng._save_orders()
     assert calls[3:] == ["append:exit_fills"]                  # one write for the tick's legs, afterwards
     assert len(_exit_fills(tmp_path)) == 3
@@ -338,7 +339,7 @@ def test_a_failing_exit_fill_write_keeps_the_legs_and_writes_them_later(tmp_path
         raise OSError(28, "No space left on device")
     monkeypatch.setattr(eng.store, "append", disk_full)
     pb.on_tick(_tick(10, 2000.2))
-    assert eng._kill_switch(everything=True)                   # every position closed
+    eng._kill_switch(everything=True)                          # every position closed
     eng._save_orders()                                         # the write fails: logged, not raised
     assert not pb.positions() and len(load_closed_trades(tmp_path)[0]) == 3
     monkeypatch.setattr(eng.store, "append", real_append)

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as apiModule from "./lib/api";
 import { App } from "./App";
@@ -66,5 +66,28 @@ describe("App header", () => {
     apiModule.setUser({ email: "owner@example.com", role: "owner" });
     renderApp();
     expect(document.title).not.toContain("@");
+  });
+});
+
+// A session the server no longer knows (signed out elsewhere, expired, revoked, or a sign-out whose request was cut off
+// by a page change) must send the person back to the sign-in screen. It used to leave the dashboard up, every query
+// answering 401, forever: the e2e flake of issue #87 (a signed-out page reopened on a link showed this, not the form).
+describe("App when the session is gone server-side", () => {
+  beforeEach(() => {
+    vi.stubGlobal("WebSocket", SilentSocket);
+    vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(
+      url.startsWith("/api/auth/state")
+        ? new Response(JSON.stringify({ needs_setup: false, email_link: false }), { status: 200, headers: { "content-type": "application/json" } })
+        : new Response(JSON.stringify({ detail: "login required" }), { status: 401, headers: { "content-type": "application/json" } }))));
+    apiModule.setToken("revoked-token");
+    apiModule.setUser({ email: "owner@example.com", role: "owner" });
+  });
+  afterEach(() => { vi.unstubAllGlobals(); apiModule.setToken(null); });
+
+  it("shows the sign-in screen after the first 401", async () => {
+    renderApp();
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();      // up until the server answers
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Sign out" })).not.toBeInTheDocument();
   });
 });

@@ -1,5 +1,5 @@
 id: S4
 requirement: Unreadable engine state counts as a fault (fail closed)
 status: implemented
-code: goldbot/risk/supervisor.py:69-70
-test: tests/test_risk_ops.py::test_engine_state_is_written_atomically_and_an_unreadable_one_halts
+code: 'goldbot/risk/supervisor.py:69-70 (an unreadable engine file is a fault); the engine, risk and orders files are written atomically by goldbot/engine/store.py `JsonEngineStore` (ADR 0023 step 1: `write_engine_state` without fsync, `save_risk` / `save_orders` durable), and an unreadable risk or orders file raises from `load_risk` / `load_orders`, so the engine refuses to start'
+test: tests/test_risk_ops.py::test_engine_state_is_written_atomically_and_an_unreadable_one_halts; tests/test_engine_store.py::test_the_engine_file_is_written_without_fsync_and_the_others_durably; tests/test_engine_store.py::test_an_unreadable_file_raises_the_json_error_not_none; tests/test_engine_store_golden.py::test_save_load_round_trip_matches_golden_grid

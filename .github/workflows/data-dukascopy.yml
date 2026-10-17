@@ -9,6 +9,7 @@ on:
       to_year:   { description: "last year (inclusive)", default: "2026" }
       full_refresh: { description: "download every month again (published bars stay as fallback). Costs hours of runner time per year of data: on the free tier this can use the whole month's 2,000 minutes", type: boolean, default: false }
       retry_flagged: { description: "also re-download closed months flagged imputed/partial (about 80 runner-minutes per month; off for the Saturday run, G5)", type: boolean, default: false }
+      months: { description: "targeted refetch (G1/G2): comma-separated YYYY-MM, e.g. 2024-01,2024-06. Downloads exactly these months again (flagged or not) and keeps every other month as published; replaces from_year/to_year; leave full_refresh and retry_flagged off. Max 24", default: "" }
   schedule:
     - cron: "17 3 * * 6"   # Saturdays 03:17 UTC: refresh the current year
 # Least privilege: the token has no scopes by default; only build-year may upload release assets and write issues.
@@ -20,19 +21,43 @@ concurrency:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read    # sparse checkout of the month-list parser
     outputs:
       years: ${{ steps.years.outputs.years }}
+      months: ${{ steps.years.outputs.months }}   # validated and normalised; build-year never sees the raw input
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/dukascopy_months.py
+          sparse-checkout-cone-mode: false
       - id: years
         env:
           EVENT_NAME: ${{ github.event_name }}
           FROM_YEAR: ${{ inputs.from_year }}
           TO_YEAR: ${{ inputs.to_year }}
+          MONTHS: ${{ inputs.months }}
+          FULL_REFRESH: ${{ inputs.full_refresh }}
+          RETRY_FLAGGED: ${{ inputs.retry_flagged }}
         run: |
+          set -euo pipefail
           if [ "$EVENT_NAME" = "schedule" ]; then
             echo "years=[$(date -u +%Y)]" >> "$GITHUB_OUTPUT"
+            echo "months=" >> "$GITHUB_OUTPUT"
+          elif [ -n "$MONTHS" ]; then
+            # targeted refetch: the month list alone decides the years; it is validated strictly (YYYY-MM only)
+            if [ "$FULL_REFRESH" = "true" ] || [ "$RETRY_FLAGGED" = "true" ]; then
+              echo "::error::months is a targeted refetch: leave full_refresh and retry_flagged off"; exit 1
+            fi
+            if ! plan=$(python3 scripts/dukascopy_months.py "$MONTHS"); then
+              echo "::error::months must be comma-separated YYYY-MM months (2010-01 .. this month), at most 24"; exit 1
+            fi
+            echo "$plan"
+            echo "$plan" >> "$GITHUB_OUTPUT"
           else
             python3 -c "import json,os;print('years='+json.dumps(list(range(int(os.environ['FROM_YEAR']), int(os.environ['TO_YEAR'])+1))))" >> "$GITHUB_OUTPUT"
+            echo "months=" >> "$GITHUB_OUTPUT"
           fi
   build-year:
     needs: plan
@@ -81,13 +106,17 @@ jobs:
         env:
           REFETCH: ${{ inputs.full_refresh == true && '--refetch-all' || '' }}
           RETRY: ${{ inputs.retry_flagged == true && '--retry-flagged' || '' }}
+          MONTHS: ${{ needs.plan.outputs.months }}
         run: |
           set -o pipefail
           # REFETCH/RETRY are constant flags or empty (empty must expand to no argument), so they stay unquoted.
           # Every re-downloaded month is merged day by day and never publishes a day with fewer bars than before.
+          # MONTHS is the plan job's validated list; the script validates it again and refetches only this year's.
+          target=()
+          if [ -n "$MONTHS" ]; then target=(--months "$MONTHS"); fi
           # shellcheck disable=SC2086
           python scripts/dukascopy_year.py "$YEAR" --report "coverage-${YEAR}.md" \
-            --existing "prev/xauusd_1m_dukascopy_${YEAR}.parquet" $REFETCH $RETRY 2>&1 | tee "report-${YEAR}.txt"
+            --existing "prev/xauusd_1m_dukascopy_${YEAR}.parquet" $REFETCH $RETRY "${target[@]}" 2>&1 | tee "report-${YEAR}.txt"
       - name: day-by-day coverage (a month can pass at 15,000 bars and still have lost whole weekdays)
         if: always()
         run: |

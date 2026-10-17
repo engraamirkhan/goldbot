@@ -340,12 +340,12 @@ def test_paper_positions_carry_no_swap_and_its_account_book_is_its_positions(tmp
 # ---------------------------------------------------------------------------------------------- re-review: failed saves
 def _disk_full(monkeypatch: Any) -> None:
     """Every durable state write (risk, orders, engine state) raises, as on a full disk."""
-    import goldbot.engine.runner as runner
+    import goldbot.engine.store as store
 
     def fail(*a: Any, **k: Any) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr(runner, "write_atomic", fail)
+    monkeypatch.setattr(store, "write_atomic", fail)
 
 
 def _no_book(monkeypatch: Any, pb: PaperBroker) -> None:
@@ -391,7 +391,8 @@ def test_a_failed_risk_state_save_never_stops_an_uncorroborated_crash_from_tripp
     assert not _halted(eng) and eng._stage2_pending_since is not None and eng.state.tick_error
     _read(eng, 2)
     assert _halted(eng) and runs == [True] and pb.positions() == []  # the whole account flattened
-    assert not eng._kill_pending                                      # flat, so nothing left to re-run
+    # BACKLOG 62 (C1): the account book stays unreadable, so the gold fallback was closed and the flag stays set
+    assert eng._kill_pending and eng._kill_everything
 
 
 def test_a_failed_save_on_the_halt_still_closes_the_whole_account_on_that_read(tmp_path, monkeypatch):

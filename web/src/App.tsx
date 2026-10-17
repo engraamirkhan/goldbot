@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, currentUser, hasRole, hasToken, liveSocket, setToken } from "./lib/api";
+import { api, currentUser, hasRole, hasToken, liveSocket, onSessionEnded, setToken } from "./lib/api";
 import { roleLabel } from "./lib/roles";
 import { Login } from "./screens/Login";
 import { Overview } from "./screens/Overview";
@@ -12,14 +12,19 @@ import { Research } from "./screens/Research";
 import { News } from "./screens/News";
 import { Users } from "./screens/Users";
 import { Account } from "./screens/Account";
+import { Progress } from "./screens/Progress";
 
-const TABS = ["Overview", "Approvals", "News", "Agents", "Health", "Research", "Feeds", "Users", "Account"] as const;
+// Progress is third: on a phone the tab row scrolls sideways, so a tab at the end would be off-screen
+// (docs/ux/progress-screens.md "Placement")
+const TABS = ["Overview", "Approvals", "Progress", "News", "Agents", "Health", "Research", "Feeds", "Users", "Account"] as const;
 type Tab = (typeof TABS)[number];
 
 export function App() {
   const [authed, setAuthed] = useState(hasToken());
   const [tab, setTab] = useState<Tab>("Overview");
   const qc = useQueryClient();
+
+  useEffect(() => onSessionEnded(() => setAuthed(false)), []);
 
   useEffect(() => {
     if (!authed) return;
@@ -50,8 +55,9 @@ export function App() {
         <button className="link" onClick={async () => { try { await api.logout(); } catch { /* session already gone server-side */ } setToken(null); setAuthed(false); }}>Sign out</button>
       </header>
       <main>
-        {tab === "Overview" && <Overview />}
+        {tab === "Overview" && <Overview onOpenProgress={() => setTab("Progress")} />}
         {tab === "Approvals" && <Approvals />}
+        {tab === "Progress" && <Progress onOpenOverview={() => setTab("Overview")} />}
         {tab === "News" && <News />}
         {tab === "Agents" && <Agents />}
         {tab === "Health" && <Health />}

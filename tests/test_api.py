@@ -299,6 +299,28 @@ def test_recent_proposals_say_what_happened_to_each_card(tmp_path):
     assert rows["rej"]["side"] == "short"
 
 
+def test_a_card_the_broker_or_the_mt5_box_refused_carries_the_worded_not_placed_reason(tmp_path):
+    bus = ApprovalBus(tmp_path)
+    for pid, code in (("margin", "broker_refused:10019"), ("generic", "broker_refused:10006"),
+                      ("stale", "bridge_stale_order"), ("ceiling", "bridge_notional_ceiling"), ("gate", "owner_halt")):
+        bus.archive(_prop(pid, outcome=Outcome.APPROVED, gate_refusal=[code]))
+    bus.archive(_prop("ok", outcome=Outcome.APPROVED))
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
+    c = TestClient(app)
+    rows = {r["proposal_id"]: r for r in c.get("/api/proposals/recent", headers=_owner_headers(c, app)).json()}
+    assert rows["margin"]["status"] == "refused" and rows["margin"]["not_placed"] == {
+        "by": "broker", "reason": "there wasn't enough free margin", "code": None,
+        "next_step": "Check free margin on the Overview before approving the next trade.", "nothing_sent": True}
+    assert rows["generic"]["not_placed"] == {"by": "broker", "reason": None, "code": 10006,
+                                             "next_step": "If it repeats, ask Claude to check (broker code 10006).",
+                                             "nothing_sent": True}
+    assert rows["stale"]["not_placed"]["by"] == "mt5_box" and rows["stale"]["not_placed"]["reason"].startswith(
+        "it took more than 10 s to check the order")
+    assert rows["ceiling"]["not_placed"]["reason"] == ("its safety limit stops open gold worth more than 6× equity, "
+                                                       "and this trade would have gone over it")
+    assert rows["gate"]["not_placed"] is None and rows["ok"]["not_placed"] is None   # the RiskGate's own words stay
+
+
 def test_status_carries_the_safety_strip(tmp_path):
     (tmp_path / "supervisor.json").write_text(json.dumps({"ts": 0, "halt": True, "reasons": ["combined_dd"]}))
     (tmp_path / "engine_icm.json").write_text(json.dumps({"account": "icm-demo", "blackout": {

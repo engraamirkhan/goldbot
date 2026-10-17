@@ -1,9 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { freshTotp } from "./totp";
+import { totpClock } from "./totp";
 
 const info = () => JSON.parse(readFileSync("e2e/.server.json", "utf8")) as { setup_code: string; state_dir: string };
+const clock = totpClock(() => info().state_dir);
 const OWNER = { email: "owner@example.com", password: "owner password 123" };
 const VIEWER = { email: "viewer@example.com", password: "viewer password 123" };
 
@@ -17,7 +18,7 @@ async function enrolledSecret(page: Page): Promise<string> {
 async function signIn(page: Page, email: string, password: string, secret: string) {
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(password);
-  await page.getByLabel("Authenticator code").fill(await freshTotp(secret));
+  await page.getByLabel("Authenticator code").fill(clock.fresh(secret));
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
 }
@@ -34,7 +35,7 @@ async function expectRoleNotEmail(page: Page, role: string, email: string) {
 }
 
 // One serial story: first run -> owner approves a trade -> halts and re-arms -> invites a viewer -> viewer sees but cannot act.
-// each authenticator code is accepted once, so a sign-in may wait up to 30 s for a fresh time step (freshTotp)
+// each authenticator code is accepted once, so a test that needs another one steps the server's TOTP clock (totpClock)
 test.describe.configure({ mode: "serial", timeout: 90_000 });
 let ownerSecret = "";
 let inviteLink = "";
@@ -115,7 +116,7 @@ test("owner halts new entries and re-arms with an authenticator code", async ({ 
   await page.getByLabel("Authenticator code").fill("000000");
   await page.getByRole("button", { name: "Re-arm" }).click();
   await expect(page.locator(".err")).toContainText("authenticator code required");
-  await page.getByLabel("Authenticator code").fill(await freshTotp(ownerSecret));
+  await page.getByLabel("Authenticator code").fill(clock.fresh(ownerSecret));
   await page.getByRole("button", { name: "Re-arm" }).click();
   await expect(page.getByRole("button", { name: "Halt new entries" })).toBeVisible();
 });
@@ -132,7 +133,7 @@ test("owner enables auto mode with an authenticator code on the evidence, then s
   await card.getByLabel("Code to enable auto mode").fill("000000");
   await card.getByRole("button", { name: "Enable auto mode" }).click();
   await expect(card.getByRole("alert")).toContainText("authenticator code required");
-  await card.getByLabel("Code to enable auto mode").fill(await freshTotp(ownerSecret));
+  await card.getByLabel("Code to enable auto mode").fill(clock.fresh(ownerSecret));
   await card.getByRole("button", { name: "Enable auto mode" }).click();
   await expect(card.getByRole("heading", { name: /Entry mode: Auto/ })).toBeVisible();
   await expect(card.getByRole("status")).toContainText("Mode: AUTO");
@@ -146,7 +147,7 @@ test("owner regenerates the recovery codes with password and authenticator code;
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
   await page.getByRole("button", { name: "Account", exact: true }).click();
   await page.getByLabel("Your password").fill(OWNER.password);
-  await page.getByLabel("Code from your authenticator app").fill(await freshTotp(ownerSecret));
+  await page.getByLabel("Code from your authenticator app").fill(clock.fresh(ownerSecret));
   const generate = page.getByRole("button", { name: "Generate new recovery codes" });
   await expect(generate).toBeDisabled();
   await page.getByLabel(/My current recovery codes will stop working/).check();
@@ -233,6 +234,19 @@ test("viewer accepts the invite and can watch but not approve or manage users", 
   }
   await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
 
+  // Progress (docs/ux/progress-screens.md) is read-only for every role: on a fresh state nothing is recorded, the stop
+  // rule has not started and the daily results job has not run; nobody sees a record-gate command here
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.getByRole("button", { name: "Progress", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Road to live" })).toBeVisible();
+  await expect(page.getByTestId("gate-foundation_to_backtest")).toContainText("Not met");
+  await expect(page.getByTestId("stop-rule")).toContainText("Not started");
+  await expect(page.getByText(/No results yet/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy" })).toHaveCount(0);
+  const road = await page.getByRole("region", { name: "Road to live" }).boundingBox();
+  expect(road && road.x >= 0 && road.x + road.width <= 360).toBe(true);        // fits the phone without sideways scroll
+  await page.setViewportSize({ width: 1280, height: 720 });
+
   // the API enforces the same rule the UI hides
   const token = await page.evaluate(() => sessionStorage.getItem("goldbot_token"));
   const r = await page.request.post("/api/decisions", {
@@ -251,14 +265,14 @@ test("viewer resets a forgotten password with an authenticator code, then change
   await page.getByLabel("Authenticator code").fill("000000");
   await page.getByRole("button", { name: "Set new password" }).click();
   await expect(page.locator(".err")).toContainText("invalid credentials");
-  await page.getByLabel("Authenticator code").fill(await freshTotp(viewerSecret));
+  await page.getByLabel("Authenticator code").fill(clock.fresh(viewerSecret));
   await page.getByRole("button", { name: "Set new password" }).click();
   await expect(page.getByText("Password changed. Sign in with the new password.")).toBeVisible();
   await signIn(page, VIEWER.email, "forgotten viewer pw 1", viewerSecret);
 
   await page.getByRole("button", { name: "Account", exact: true }).click();
   await page.getByLabel("Current password").fill("forgotten viewer pw 1");
-  await page.getByLabel("Authenticator code").fill(await freshTotp(viewerSecret));
+  await page.getByLabel("Authenticator code").fill(clock.fresh(viewerSecret));
   await page.getByLabel("New password (12+ characters)").fill(VIEWER.password);
   await page.getByRole("button", { name: "Change password" }).click();
   await expect(page.getByText("Password changed. Your other sessions were signed out.")).toBeVisible();

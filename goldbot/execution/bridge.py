@@ -51,6 +51,7 @@ from pydantic import BaseModel
 from goldbot.base import load_record
 from goldbot.data.calendar import TradingSession
 from goldbot.execution.broker import (
+    SMOKE_MAGIC_OFFSET,
     AccountInfo,
     OrderIntent,
     OrderResult,
@@ -292,7 +293,8 @@ class GuardedBroker:
     """The terminal-side broker behind the bridge, refusing what goldbot never sends: orders outside this account's
     magic range (magic_base .. magic_base + 99) or above MAX_ORDER_LOTS, and stop/target changes on positions outside
     that range. Closes are allowed for any position: closing only reduces risk, and the 12% kill switch closes
-    everything on the account (design: Drawdown kill switch).
+    everything on the account (design: Drawdown kill switch). The bridge smoke's magic (magic_base + SMOKE_MAGIC_OFFSET)
+    is refused unless the terminal reports a demo account (ADR 0021 F4).
 
     BACKLOG 66, the notional ceiling (DESIGN.md:112: "combined exposure capped at 3 lots or 30% of combined equity
     notional", 30% x 1:20 = 6x equity): an order is refused when (every open lot on its symbol + its lots) x contract x
@@ -303,8 +305,8 @@ class GuardedBroker:
     magic, both sides (gross). Any read that raises, is missing, non-finite or <= 0 refuses (`unreadable:<field>`).
     A refusal is a definite reject, never a raise: OrderResult retcode 10006 with the message
     "bridge_notional_ceiling: ...", so the engine records `rejected` and alerts the owner. Order of the checks: magic
-    -> 3.0 lots -> account (verified) -> ceiling -> the order's age again (`order_sent_at`) -> send. `close` and
-    `modify` are never sized."""
+    -> 3.0 lots -> account (one read) -> F4 smoke magic on demo only -> verify -> ceiling -> the order's age again
+    (`order_sent_at`) -> send. `close` and `modify` are never sized."""
 
     def __init__(self, broker: Any, *, magic_base: int, verify: Callable[[Any], str | None] | None = None) -> None:
         self._b, self.magic_base, self._verify = broker, magic_base, verify
@@ -325,12 +327,17 @@ class GuardedBroker:
             raise PermissionError(f"magic {intent.magic} outside {self.magic_base}..{self.magic_base + 99}")
         if not 0 < intent.lots <= MAX_ORDER_LOTS:
             raise PermissionError(f"{intent.lots} lots outside (0, {MAX_ORDER_LOTS}]")
-        try:
+        try:                                           # the one account() read: F4, verify and the ceiling use it
             info = _read("account", self._b.account)
         except _Unreadable as u:
             return self._refuse(intent, f"unreadable:{u}")
         if info is None:                               # MT5 account_info() returning None: no figures, never a 500
             return self._refuse(intent, "unreadable:account")
+        # ADR 0021 F4: the bridge smoke's magic only ever trades a terminal that reports a demo account, whatever the
+        # brain sent (internal only: METHODS, signatures and the protocol digest are unchanged)
+        if int(intent.magic) == self.magic_base + SMOKE_MAGIC_OFFSET and getattr(info, "trade_mode", None) != "demo":
+            raise PermissionError(f"smoke magic {intent.magic} refused: the terminal account is "
+                                  f"{getattr(info, 'trade_mode', None) or 'unknown'}, not demo")
         why = self._verify(info) if self._verify is not None else None
         if why:                                        # the terminal was switched to another account after start
             raise PermissionError(f"terminal account changed: {why}")

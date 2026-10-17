@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal
 from urllib.parse import urlsplit
 
 import yaml
@@ -508,6 +508,26 @@ class GateSettings(_Section):
     # unknown, charged an imputed cost: ops/cost_imputation.py) before the paper and live gates are not met. None = off:
     # the share is shown for context only
     max_gross_share: float | None = Field(None, gt=0, le=1)
+    # The PROPOSED thresholds above the owner has signed off (field names); every other one is shown as proposed on
+    # the dashboard's Progress tab. Signing off is the owner's decision: this list only records it and changes no value
+    signed_off: list[str] = Field(default_factory=list)
+
+    # the thresholds marked "PROPOSED: owner sign-off required" (the design does not commit their numbers)
+    PROPOSED: ClassVar[tuple[str, ...]] = ("shuffle_auc_tolerance", "feed_max_mismatch_share", "backtest_min_dsr",
+                                           "paper_min_days", "live_min_days", "broker_min_trades")
+
+    @field_validator("signed_off")
+    @classmethod
+    def _only_proposed(cls, v: list[str]) -> list[str]:
+        """Only a proposed threshold can be signed off: a misspelt or design-committed name fails at load."""
+        bad = sorted(set(v) - set(cls.PROPOSED))
+        if bad:
+            raise ValueError(f"not a proposed gate threshold: {', '.join(bad)} (known: {', '.join(cls.PROPOSED)})")
+        return v
+
+    def pending_sign_off(self) -> list[str]:
+        """The proposed thresholds not yet signed off, in settings order."""
+        return [n for n in self.PROPOSED if n not in self.signed_off]
 
 
 class Settings(_Section):

@@ -1,10 +1,9 @@
 ---
 number: 43
-rank: 7
 title: The engine publishes why it refuses entries, and writes state while the market is closed
 stage: Operational resilience, entry status · RUN
 size: M
-status: 'in review: the heartbeat part landed as BACKLOG 59 (6287d10, 412fd0d; in PR #79); the `entry_blocks` part is built on lane/entry-blocks (R43), reviews owed: code, trading-safety, ui-ux · accountable: implementer · due 2026-10-21'
+status: 'done, accepted with follow-up 2026-10-17 by the product owner (entry_blocks on main via PR #83/#84: 558588e, ab929ae, 079951a; the heartbeat part is 59). Evidence: code APPROVE, trading-safety APPROVE of 558588e (0 differences in 420k differential cases), tests/test_api_entry_status.py re-run pass. Follow-up: the ui-ux-designer asked for CHANGES, they were applied, but no re-check verdict is on record (E1); the ui-ux-designer records it by 2026-10-19 · accountable: ui-ux-designer'
 ---
 - **43. The engine publishes why it refuses entries (trading-safety review; from the entry-status review of 66ba8f9,
   ADR 0011).** Value: the dashboard's entry status (docs/ux/entry-status.md) still mirrors in the API which published

@@ -576,3 +576,99 @@ def test_a_bridge_refused_id_is_never_re_sent_after_a_restart(tmp_path):
     assert "icm-demo-66-b" in again.sent_ids and again._orders["icm-demo-66-b"].status == "rejected"
     assert again._execute(_prop("icm-demo-66-b"), agent, 0.03, 2396.0, 2406.0, requested=2400.2) is None
     assert pb.calls == 1 and not pb.positions()                        # the refused id never reaches the bridge again
+
+
+# ------------------------------------------------------------------- order not placed (docs/ux/order-not-placed.md)
+class _BrokerRefuses(_BridgeRefuses):
+    """The first order comes back with `retcode` and `message` (not a fill); later ones fill as on paper."""
+
+    def __init__(self, retcode: int, message: str = "Request rejected", **kw: Any) -> None:
+        super().__init__(message=message, **kw)
+        self.retcode = retcode
+
+    def place_order(self, intent: OrderIntent) -> OrderResult:
+        res = super().place_order(intent)
+        return res.model_copy(update={"retcode": self.retcode}) if self.calls == 1 else res
+
+
+def _approved_through(tmp_path: Path, pb: PaperBroker, **cfg: Any) -> tuple[Any, Proposal, list[str]]:
+    """Publish one card, approve it on the engine, and return (engine, the bus's copy of the card, the outcomes the
+    Telegram outbox reports for it)."""
+    from goldbot.telegram.outbox import Outbox
+    from tests.test_approved_card_cap import _approve, _card
+    from tests.test_engine_clock import WED, _intent
+    from tests.test_engine_clock import _engine as _clock_engine
+    from tests.test_engine_clock import _tick as _clock_tick
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "classifier_icm-demo.json").write_text(json.dumps({"class": "raw"}))   # a demo terminal's class
+    pb.on_tick(_clock_tick(WED))
+    eng, _, _ = _clock_engine(tmp_path, pb=pb, **cfg)
+    bus = eng.center.bus = ApprovalBus(tmp_path)
+    eng._refresh_account(_clock_tick(WED))
+    prop = _card(eng, _intent().model_copy(update=eng._sizing_terms(1, 2400.2, 4.0)))
+    bus.publish(prop)
+    outbox = Outbox(tmp_path, bus)
+    outbox.mark_sent(prop.proposal_id, [(1, 2)])
+    _approve(eng, prop)
+    stored = bus.get(prop.proposal_id)
+    assert stored is not None
+    return eng, stored, [outcome for pid, outcome, _ in outbox.finished() if pid == prop.proposal_id]
+
+
+def test_an_approved_order_the_broker_refuses_for_margin_is_archived_not_placed_with_one_notice(tmp_path):
+    from goldbot.telegram.bot import outcome_text
+    pb = _BrokerRefuses(10019, equity=10_000)
+    eng, archived, [outcome] = _approved_through(tmp_path, pb)
+    assert pb.calls == 1 and not pb.positions()
+    assert archived.gate_refusal == ["broker_refused:10019"]
+    assert outcome_text(outcome) == ("🛑 NOT PLACED: approved, but the broker refused it: there wasn't enough free "
+                                     "margin. Nothing was sent.")
+    lots = [d for d in eng.decisions if d.get("action") == "order"][0]["lots"] or archived.lots
+    assert _notices(tmp_path) == [
+        f"Order not placed: the broker refused LONG {lots:g} lots XAUUSD on icm-demo: there wasn't enough free margin. "
+        f"Nothing was sent; open trades keep their stops. Check free margin on the Overview before approving the next "
+        f"trade."]
+    [order] = [d for d in eng.decisions if d.get("action") == "order"]
+    assert order["retcode"] == 10019 and order["message"] == "Request rejected"     # the journal keeps both
+
+
+def test_a_bridge_stale_refusal_at_approval_is_coded_stale_never_as_a_broker_10006(tmp_path):
+    pb = _BrokerRefuses(10006, message="bridge_stale_order: 11.2 s old", equity=10_000)
+    _, archived, _ = _approved_through(tmp_path, pb)
+    assert archived.gate_refusal == ["bridge_stale_order"]
+    [notice] = _notices(tmp_path)
+    assert notice.startswith("Order not placed: the MT5 box refused LONG ") and "bridge_" not in notice
+
+
+def test_a_broker_10027_on_a_demo_terminal_means_algo_trading_off_and_on_paper_a_duplicate(tmp_path):
+    _, demo, _ = _approved_through(tmp_path / "demo", _BrokerRefuses(10027, equity=10_000), mode="demo")
+    _, paper, _ = _approved_through(tmp_path / "paper", _BrokerRefuses(10027, equity=10_000), mode="paper")
+    assert demo.gate_refusal == ["broker_refused:10027"]
+    assert paper.gate_refusal == ["broker_refused:10027:paper"]
+    [demo_notice] = _notices(tmp_path / "demo")
+    [paper_notice] = _notices(tmp_path / "paper")
+    assert demo_notice.endswith("Turn on Algo Trading in the MT5 terminal.")
+    assert paper_notice.endswith("Nothing to do: the first send stands.") and "Nothing was sent" not in paper_notice
+
+
+@pytest.mark.parametrize("retcode", [10008, 10010, 10012, -1])
+def test_an_ambiguous_result_at_approval_is_not_marked_not_placed_and_sends_no_notice(tmp_path, retcode):
+    pb = _BrokerRefuses(retcode, message="no answer", equity=10_000)
+    _, archived, outcomes = _approved_through(tmp_path, pb)
+    assert not archived.gate_refusal and not any(o.startswith("GATE_REFUSED") for o in outcomes)
+    assert _notices(tmp_path) == []
+
+
+def test_a_fill_at_approval_is_not_marked_not_placed_and_sends_no_notice(tmp_path):
+    pb = PaperBroker(equity=10_000)
+    _, archived, outcomes = _approved_through(tmp_path, pb)
+    assert pb.positions() and not archived.gate_refusal and not any(o.startswith("GATE_REFUSED") for o in outcomes)
+    assert _notices(tmp_path) == []
+
+
+def test_a_ceiling_refusal_at_approval_still_sends_exactly_its_own_notice(tmp_path):
+    pb = _BridgeRefuses(equity=10_000)
+    _, archived, _ = _approved_through(tmp_path, pb)
+    assert archived.gate_refusal == ["bridge_notional_ceiling"]
+    [notice] = _notices(tmp_path)
+    assert notice.startswith("Order not placed: the MT5 box's safety limit refused LONG ")

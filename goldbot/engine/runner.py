@@ -27,15 +27,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.allocator import Regime, RuleAllocator, tier1_minutes
-from goldbot.base import (
-    Record,
-    UtcTimestamp,
-    load_record,
-    load_record_json,
-    note_schema_skew,
-    schema_skew_summary,
-    write_atomic,
-)
+from goldbot.base import Record, load_record_json, schema_skew_summary
 from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_cache
 from goldbot.data.econ_calendar import blackout_window
@@ -45,15 +37,26 @@ from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resamp
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
 from goldbot.engine.shadow import ShadowBook, ShadowTrade
+from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, SentOrder: re-exported, ADR 0023 step 1)
+    EngineStore,
+    JsonEngineStore,
+    OpenTrade,
+    OrdersSnapshot,
+    PendingClose,
+    RiskSnapshot,
+    SentOrder,
+    orders_file,
+    risk_file,
+)
 from goldbot.execution.bridge import CEILING_REFUSAL, UNREADABLE_REFUSAL
 from goldbot.execution.broker import AccountInfo, Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 from goldbot.execution.costs import CostTable
+from goldbot.execution.not_placed import not_placed, notice_text, refusal_code
 from goldbot.features import build_features
 from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
 from goldbot.features.registry import versions_for, with_versions
 from goldbot.features.technical import atr
 from goldbot.labels.excursion import Excursion
-from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.labels.triple_barrier import SwapSpec
 from goldbot.ops import server_clock
 from goldbot.ops.account_view import LADDER_TIMEFRAMES
@@ -86,6 +89,9 @@ APPROVED_RISK_TOLERANCE = 1.02   # ADR 0009: the risk sent may exceed the approv
 # close refused with one of these is backed off; any other failure (requote 10004/10021, price changed 10020, a
 # raising call) is retried on the next tick, so an exit is never delayed by a transient refusal
 MARKET_CLOSED_RETCODES = frozenset({10017, 10018})
+# 10021 no quotes: transient on the engine's own symbol (retried as above); on another symbol (the kill switch closes
+# every symbol, BACKLOG 62) a hidden or delisted symbol refuses it on every attempt, so it is backed off like the above
+NO_QUOTES_RETCODE = 10021
 # MT5 trade-server retcodes that mean the order was definitely NOT placed, listed one by one (review LOW-1: only
 # defined codes; 10037 does not exist): 10004 requote, 10006 reject, 10007 cancelled by trader, 10013-10022 invalid
 # request / volume / price / stops, trade disabled, market closed, no money, prices changed, no quotes, invalid
@@ -108,15 +114,6 @@ def bridge_refused(res: OrderResult | None) -> bool:
     """BACKLOG 66: the MT5 bridge's notional ceiling refused the order (retcode 10006, a definite reject: nothing was
     placed). Its message starts with `bridge.CEILING_REFUSAL`; a broker's own 10006 does not."""
     return res is not None and not res.ok and res.message.startswith(CEILING_REFUSAL)
-
-
-BRIDGE_UNREADABLE_CODE = f"{CEILING_REFUSAL}_unreadable"
-
-
-def bridge_refusal_code(res: OrderResult) -> str:
-    """The approval card's refusal code for a bridge refusal (`bridge_refused`): the ceiling itself, or a figure the
-    MT5 box could not read. Codes only: the raw message stays in the journal and the log (ui-ux, BACKLOG 66)."""
-    return BRIDGE_UNREADABLE_CODE if res.message.startswith(UNREADABLE_REFUSAL) else CEILING_REFUSAL
 
 
 # review MEDIUM-2 (d): a pending_orders row still `sending` this long after its send is resolved in-process
@@ -255,72 +252,6 @@ class _Frame(Record):
     by_version: dict[str, pd.DataFrame | None] = Field(default_factory=dict)   # X rebuilt for older model versions
 
 
-class OpenTrade(Record):
-    position_id: int
-    agent_id: str
-    side: int
-    lots: float
-    entry_bar_ts: UtcTimestamp
-    max_bars: int
-    bars_held: int = 0
-    sl: float | None = None           # the protection this engine expects at the broker (reinstated if lost)
-    tp: float | None = None
-    # the specialist's exit policy (labels.exit_policy), run on bars of the agent's timeframe as its labels were built
-    policy: ExitPolicy | None = None
-    timeframe: str | None = None
-    entry: float | None = None        # fill price: the policy's distances are measured from it
-    atr_usd: float | None = None      # the signal bar's ATR, which the policy's distances are in
-    opened_utc: UtcTimestamp | None = None   # fill time (tick clock): bars closing after it count for the trail
-    flat_at: UtcTimestamp | None = None      # hard-flat deadline
-    scaled: bool = False              # the scale-out is done: taken, skipped (minimum volume) or out of retries
-    scale_tries: int = 0              # failed scale-out attempts (bounded by EngineConfig.scale_out_retries)
-    # for the closed-trade record (gates_phase.ClosedTrade): set at the fill, None on trades saved before they existed
-    client_order_id: str | None = None
-    open_price: float | None = None   # fill price (with or without an exit policy)
-    initial_sl: float | None = None   # the stop at entry: R is measured against it
-    initial_lots: float | None = None
-    equity_before: float | None = None
-    scaled_lots: float = 0.0          # taken by the scale-out, at scaled_price: folded into the final record
-    scaled_price: float | None = None
-    # MAE / MFE so far (BACKLOG 23), from every tick while this engine holds the position (`_track_excursions`);
-    # approx: part of the path was not seen by ticks (carried across a restart, adopted), so the record fills it from
-    # the stored 1m bars and flags it
-    excursion: Excursion | None = None
-    excursion_approx: bool = False
-    # False for an orphan adopted without an order record: its initial stop is the broker's current one (maybe trailed
-    # since entry), so the record leaves R-based excursions empty (prices and times are still recorded)
-    risk_known: bool = True
-    audit: EntryAudit | None = None   # finance audit entry facts for the record; None: adopted or saved before them
-
-
-class PendingClose(Record):
-    """A closed-trade record waiting to be written (EngineConfig.closed_record_retries attempts in all)."""
-    position_id: int
-    trade: OpenTrade
-    reason: str
-    price: float | None = None
-    at: UtcTimestamp
-    tries: int = 0
-    next_try: UtcTimestamp | None = None
-
-
-class SentOrder(Record):
-    """One row of the pending_orders table (state/orders_<account>.json), written BEFORE order_send."""
-    client_order_id: str
-    ts_utc: UtcTimestamp
-    agent_id: str
-    side: int
-    magic: int
-    lots: float
-    max_bars: int
-    sl: float
-    tp: float
-    status: str = "sending"         # sending -> filled | rejected | unfilled (restart found no fill)
-    position_id: int | None = None
-    atr_usd: float | None = None    # the signal bar's ATR: a fill recovered on restart gets its exit policy back
-    audit: EntryAudit | None = None  # finance audit entry facts, handed to a fill recovered on restart
-
-
 class Engine:
     def __init__(self, cfg: EngineConfig, broker: Broker, agents: list[Specialist], models: dict[str, Model],
                  center: ApprovalCenter | None = None, allocator: RuleAllocator | None = None,
@@ -388,6 +319,7 @@ class Engine:
         self.shadow_models: dict[str, tuple[str, Model]] = {}
         self.set_shadow_models(shadow_models or {})
         Path(cfg.state_dir).mkdir(parents=True, exist_ok=True)
+        self.state_store: EngineStore = JsonEngineStore(Path(cfg.state_dir), cfg.account_id)   # ADR 0023 step 1
         self.center.on_decision = self._on_decision
         # data quality: errors since the last bar close, and those the last bar close was decided with
         self._last_tick: Tick | None = None
@@ -490,6 +422,8 @@ class Engine:
         self._close_due: dict[int, tuple[str, dict, pd.Timestamp | None]] = {}
         # the kill switch has not seen its book flat yet; a saved close-everything (`_load_risk_state`) retries at once
         self._kill_pending = self._kill_everything
+        # an account_positions() read for the kill switch is failing (logged and journalled once per streak, C6)
+        self._kill_book_failing = False
         # the owner's mode still to be set back to propose (A10): a halted engine owes it after a restart, since a failed
         # write is not saved (re-review LOW); the write is a no-op unless the bus says auto
         self._mode_reset_due = self._kill_everything or self.state.stage == Stage.HALTED
@@ -1283,16 +1217,36 @@ class Engine:
                 res = self._execute(prop, agent, lots, price - prop.side * gd.stop_distance,
                                     price + prop.side * agent.label_spec.target_atr * intent.atr_usd, requested=price,
                                     atr_usd=intent.atr_usd)
-                if res is not None and bridge_refused(res):   # BACKLOG 66: the card says "refused by the MT5 box"
-                    p.gate_refusal = [bridge_refusal_code(res)]
+                code = None if res is None else refusal_code(res, paper=self.cfg.mode == "paper",
+                                                             definite=DEFINITE_REJECT_RETCODES)
+                if res is not None and code is not None:      # the card says "NOT PLACED" (docs/ux/order-not-placed.md)
+                    p.gate_refusal = [code]
                     if self.center.bus is not None:
                         self.center.bus.archive(p)
+                    if not bridge_refused(res):                # the ceiling's own notice went from `_execute`
+                        self._note_not_placed(prop, code, lots)
             else:
                 self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "gate_at_approval:" + ",".join(gd.reasons)})
                 p.gate_refusal = list(gd.reasons)
                 if self.center.bus is not None:
                     self.center.bus.archive(p)          # the dashboard shows "refused at approval", not "approved"
         self._write_state()
+
+    def _note_not_placed(self, prop: Proposal, code: str, lots: float) -> None:
+        """docs/ux/order-not-placed.md: the owner approved, the RiskGate allowed it, and the MT5 box (a stale order) or
+        the broker (a definite reject) refused it, so nothing was placed. One notice per refusal, in the words of
+        `goldbot.execution.not_placed`: the trade, the masked account name, the reason and the next step, "never the
+        proposal id, the bridge or broker message, a host, a login" (the journal's `order` row keeps the retcode and
+        the message). Approval path only. Best effort: a notice that cannot be queued is logged and never changes the
+        outcome."""
+        np = not_placed(code)
+        if np is None or self.center.bus is None:
+            return
+        try:
+            self.center.bus.notify_owner(notice_text(np, side=prop.side, lots=lots, symbol=self.cfg.symbol,
+                                                     account=account_name(self.cfg.account_id)))
+        except Exception as exc:                        # noqa: BLE001 - the refusal stands either way
+            log.warning("not-placed notice not queued (%s)", type(exc).__name__)
 
     def _note_refusal(self, agent_id: str, gd: GateDecision, at: pd.Timestamp) -> None:
         """BACKLOG 43 (`entry_refusals`): a gate decision for one agent. A per-trade refusal (gate.PER_TRADE_REFUSALS,
@@ -1437,7 +1391,7 @@ class Engine:
         self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "bridge_refused",
                                "proposal": prop.proposal_id, "message": res.message})
         auto = " Automatic entries pause until the next bar." if self.cfg.approval_mode == "auto" else ""
-        why = ("(it couldn't read the account figures it checks)" if bridge_refusal_code(res) == BRIDGE_UNREADABLE_CODE
+        why = ("(it couldn't read the account figures it checks)" if res.message.startswith(UNREADABLE_REFUSAL)
                else "(open gold would be worth more than 6× equity)")
         if self.center.bus is None:
             return
@@ -1483,6 +1437,31 @@ class Engine:
             return None
         self._read_fails["positions"] = 0
         return positions
+
+    def _read_kill_book(self, then: str) -> tuple[list[Position], bool] | None:
+        """The book the kill switch and the close retries work from, and whether it is complete for their scope
+        (BACKLOG 62; design: "12%: close everything at market immediately"). While `_kill_everything` is set the scope
+        is every position on the account, every symbol and magic: `account_positions()`, complete. If that read fails,
+        `positions()` (the engine's symbol, every magic: never fewer closes than before), NOT complete, so it can never
+        clear the flag or drop a due close of another symbol (trading-safety C1, C3); the failure is logged and
+        journalled once per streak (C6). Without the flag the scope is this engine's symbol, so `positions()` is
+        complete. None when no book could be read (counted by `_read_positions`)."""
+        if self._kill_everything:
+            try:
+                book = self.broker.account_positions()
+            except Exception as exc:                      # an older bridge, a terminal fault: fall back, stay pending
+                if not self._kill_book_failing:
+                    self._kill_book_failing = True
+                    log.warning("account positions unreadable (%s); the kill switch closes the %s positions and stays "
+                                "pending until the account reads flat", type(exc).__name__, self.cfg.symbol)
+                    self.decisions.append({"ts": time.time(), "action": "book_unreadable", "read": "account_positions"})
+            else:
+                if self._kill_book_failing:
+                    log.info("account positions readable again")
+                self._kill_book_failing = False
+                return book, True
+        positions = self._read_positions(then)
+        return None if positions is None else (positions, not self._kill_everything)
 
     def _read_deals(self, since: pd.Timestamp) -> pd.DataFrame:
         """The broker's deal history; a failed read (MT5 history_deals_get returning None) is counted and raised."""
@@ -1585,7 +1564,9 @@ class Engine:
     def _try_close(self, pid: int, action: str, now: pd.Timestamp | None, **extra: object) -> OrderResult:
         """Close one position at market; never raises. The trade leaves the open table (and is queued for the
         closed-trade record) only when the broker confirms the close. A failure keeps the close due (`_retry_closes`,
-        every tick): refused with a market-closed retcode (MARKET_CLOSED_RETCODES) it is backed off reconcile_every_s
+        every tick): refused with a market-closed retcode (MARKET_CLOSED_RETCODES), or with no quotes
+        (NO_QUOTES_RETCODE) on a symbol other than the engine's (a hidden or delisted symbol the kill switch closes,
+        BACKLOG 62: one journal row per backoff step, not per tick), it is backed off reconcile_every_s
         of tick time, doubling per consecutive refusal up to modify_backoff_max_s; any other refusal (requote, price
         changed) or a raising call is retried on the first tick CLOSE_RETRY_MIN_S later (`_retry_wait`). Automatic:
         never gated."""
@@ -1614,8 +1595,12 @@ class Engine:
                 self._log_exit_fill(pid, tr, action, res.filled_lots or tr.lots, res.price, at=now, quote=quote,
                                     retcode=res.retcode)
             return res
-        self._close_due[pid] = (action, dict(extra), now)
-        if res.retcode in MARKET_CLOSED_RETCODES:
+        # every due close names its symbol (the engine's unless the caller says otherwise), so the fallback drop rule
+        # in `_retry_closes` never assumes one (trading-safety LOW 4)
+        due_extra: dict = {"symbol": self.cfg.symbol, **extra}
+        self._close_due[pid] = (action, due_extra, now)
+        if res.retcode in MARKET_CLOSED_RETCODES or (res.retcode == NO_QUOTES_RETCODE
+                                                     and due_extra["symbol"] != self.cfg.symbol):
             fails = self._close_backoff.get(pid, (0, now))[0]
             wait = min(self.cfg.reconcile_every_s * 2 ** fails, self.cfg.modify_backoff_max_s)
             self._close_backoff[pid] = (fails + 1, now + pd.Timedelta(seconds=wait))
@@ -1678,21 +1663,28 @@ class Engine:
     def _retry_closes(self, now: pd.Timestamp) -> None:
         """Every tick: re-send each close the engine decided that has not succeeded (kill switch, weekend loser, time
         exit, hard flat, trail, blackout, engine stop), unless it is backing off after a market-closed refusal or was
-        tried less than CLOSE_RETRY_MIN_S ago (`_retry_wait`). A position the broker no longer lists is left to `_sweep_closed`, which records it
-        once its exit deal is seen. An unreadable book skips this tick (the next one retries)."""
+        tried less than CLOSE_RETRY_MIN_S ago (`_retry_wait`). The book is the kill switch's (`_read_kill_book`): while
+        it closes the whole account, `account_positions()`, so a due close of another symbol is re-sent too. A position
+        a book that would list it no longer lists is left to `_sweep_closed`, which records it once its exit deal is
+        seen; a close of another symbol missing from the fallback book (the engine's symbol only) stays due (BACKLOG
+        62, trading-safety C3). An unreadable book skips this tick (the next one retries)."""
         due = [pid for pid in self._close_due if not self._retry_wait(pid, now)]
         if not due:
             return
-        positions = self._read_positions("closes are retried next tick")
-        if positions is None:
+        read = self._read_kill_book("closes are retried next tick")
+        if read is None:
             return
+        positions, complete = read
         live = {p.position_id for p in positions}
         for pid in due:
-            if pid not in live:
-                self._close_due.pop(pid, None)
-                self._close_backoff.pop(pid, None)
-                continue
             action, extra, _ = self._close_due[pid]
+            if pid not in live:
+                # the fallback is complete for the engine's symbol (every due close names its symbol, `_try_close`), so
+                # only another symbol's close, or one that names none, waits for an account read
+                if complete or extra.get("symbol") == self.cfg.symbol:
+                    self._close_due.pop(pid, None)
+                    self._close_backoff.pop(pid, None)
+                continue
             self._try_close(pid, action, now, **extra)
         self._save_orders()
 
@@ -2205,36 +2197,41 @@ class Engine:
 
     def _kill_switch(self, *, everything: bool) -> bool:
         """12% drawdown: close at market immediately (design: Drawdown kill switch) and fall back to propose-and-
-        approve. The trip closes every XAUUSD position on the account (all magics; the broker's positions() reads the
-        engine's symbol only, so other symbols are untouched). That choice is state, not this call's argument
-        (trading-safety F1): `_kill_everything` is set before any I/O, saved with the risk state, used by every retry
-        and after a restart, and cleared only once a run has closed every such position (seen flat). After
-        that, while halted, any of this engine's positions (its magic range) still open is closed again on each refresh.
-        The trip also sets the owner's mode back to propose, so auto mode is offered again only on new evidence (A10);
-        that write comes after the flatten and never raises (`_reset_owner_mode`).
+        approve. The trip closes every position on the account: every symbol and every magic, the owner's manual
+        trades included (BACKLOG 62, ADR 0016 amendment; the 12% is measured on the account's equity, which counts them
+        all). That choice is state, not this call's argument (trading-safety F1): `_kill_everything` is set before any
+        I/O, saved with the risk state, used by every retry and after a restart. While it is set the book is
+        `account_positions()`; if that read fails, `positions()` (the engine's symbol, every magic) is closed in full
+        and the flag stays set (`_read_kill_book`, C1). The flag clears only when a successful `account_positions()`
+        read lists nothing: every close returning ok is not enough, the next read must see the account flat (C2).
+        After that, while halted, any of this engine's positions (its magic range) still open is closed again on each
+        refresh. The trip also sets the owner's mode back to propose, so auto mode is offered again only on new
+        evidence (A10); that write comes after the flatten and never raises (`_reset_owner_mode`).
         Each close is tried on its own (one raising or refused close never stops the others) and a failed one is
-        re-sent every tick (`_retry_closes`); until a run sees its scope flat the switch runs again on every tick
-        (`_kill_pending`). Returns whether the scope was seen flat."""
+        re-sent every tick (`_retry_closes`); until a complete read sees its scope empty the switch runs again on every
+        tick (`_kill_pending`). Every `kill_switch_close` row carries the position's symbol, magic and lots (C8).
+        Returns whether the scope was seen flat."""
         self.cfg.approval_mode = "propose"     # in memory, before any I/O: auto entries are blocked from here on
         if everything:
             self._kill_everything = self._mode_reset_due = True
         whole = self._kill_everything
         self._kill_pending = True
         try:
-            positions = self._read_positions("the kill switch runs again next tick")
-            if positions is None:
+            read = self._read_kill_book("the kill switch runs again next tick")
+            if read is None:
                 return False
-            flat, left = True, len(positions)
-            for p in positions:
-                if not (whole or self._own(p.magic)):
-                    continue
+            book, complete = read
+            scope = [p for p in book if whole or self._own(p.magic)]
+            closed: set[int] = set()
+            for p in scope:
                 # a close already due is re-sent by _retry_closes (with its market-closed backoff), not twice per tick
-                ok = p.position_id not in self._close_due and \
-                    self._try_close(p.position_id, "kill_switch_close", None).ok
-                left -= ok
-                flat = flat and ok
+                if p.position_id not in self._close_due and self._try_close(
+                        p.position_id, "kill_switch_close", None, symbol=p.symbol, magic=p.magic, lots=p.lots).ok:
+                    closed.add(p.position_id)
+            flat = complete and not scope          # seen flat: a complete read with nothing left to close (C2)
             self._kill_pending = not flat
-            self.state.open_positions = left
+            # the engine's symbol, any magic, as `_refresh_account` counts it (C7); other symbols are not its exposure
+            self.state.open_positions = sum(p.symbol == self.cfg.symbol and p.position_id not in closed for p in book)
             if whole and flat:
                 self._kill_everything = False      # the whole account seen flat: later refreshes close our book only
                 self._save_risk_state_now("the kill switch's whole-account flatten")
@@ -2463,7 +2460,7 @@ class Engine:
 
     # ------------------------------------------------------------------ pending_orders and restart reconciliation
     def _orders_path(self) -> Path:
-        return Path(self.cfg.state_dir, f"orders_{self.cfg.account_id}.json")   # not engine_*: the supervisor globs those
+        return orders_file(self.cfg.state_dir, self.cfg.account_id)
 
     def _orders_record(self, cid: str, *, agent_id: str, side: int, magic: int, lots: float, max_bars: int, sl: float,
                        tp: float, ts: pd.Timestamp, atr_usd: float | None = None,
@@ -2478,33 +2475,24 @@ class Engine:
         self._flush_closed()      # a close is on disk before the open-trade table forgets the position
         keep_after = pd.Timestamp.now("UTC") - pd.Timedelta(days=7)
         self._orders = {k: o for k, o in self._orders.items() if o.ts_utc >= keep_after or o.status == "sending"}
-        payload = {"sent": {k: o.model_dump(mode="json") for k, o in self._orders.items()},
-                   "open": {str(k): t.model_dump(mode="json") for k, t in self.open.items()},
-                   # closed-trade records not written yet (a failed write) survive a restart; lost ones stay listed
-                   "closing": [c.model_dump(mode="json") for c in self._closes],
-                   "records_lost": self._records_lost}
-        write_atomic(self._orders_path(), json.dumps(payload))     # durable: restart reconciliation reads it
+        self.state_store.save_orders(OrdersSnapshot(sent=self._orders, open=self.open, closing=self._closes,
+                                                    records_lost=self._records_lost))
 
     def _load_orders(self) -> None:
         """On start: reload the pending_orders table and the open trades, then reconcile them with the broker: an id
         whose send was never confirmed is looked up in the broker's positions and deals (by client id / MT5 comment);
         a fill is adopted with its own agent (and, when that agent is loaded, its exit policy), no fill marks it unfilled. Every id stays in sent_ids, so a restart never
         re-sends. Open trades the broker no longer has were closed while the engine was down."""
-        path = self._orders_path()
-        if not path.exists():
+        snap = self.state_store.load_orders()     # unreadable -> raises: fail loudly rather than forget what was sent
+        if snap is None:
             return
-        d = json.loads(path.read_text())          # unreadable -> fail loudly rather than forget what was sent
-        # ADR 0010 (rollback = restart): fields a newer release added are dropped, a wrong type still fails loudly
-        src = "orders_<account>.json"
-        if extra := sorted(set(d) - {"sent", "open", "closing", "records_lost"}):
-            note_schema_skew(src, "orders file", extra)      # a newer release's table: not read here (S12)
-        self._orders = {k: load_record(SentOrder, v, source=src) for k, v in d.get("sent", {}).items()}
+        self._orders = dict(snap.sent)
         self.sent_ids = set(self._orders)
-        self.open = {int(k): load_record(OpenTrade, v, source=src) for k, v in d.get("open", {}).items()}
+        self.open = dict(snap.open)
         for tr in self.open.values():
             tr.excursion_approx = True            # ticks while the engine was down were not seen (BACKLOG 23)
-        self._closes = [load_record(PendingClose, v, source=src) for v in d.get("closing", [])]
-        self._records_lost = [int(x) for x in d.get("records_lost", [])]
+        self._closes = list(snap.closing)
+        self._records_lost = list(snap.records_lost)
         try:
             positions = {p.position_id: p for p in self.broker.positions()}
         except Exception as exc:
@@ -2898,20 +2886,16 @@ class Engine:
             return {}
 
     def _risk_path(self) -> Path:
-        return Path(self.cfg.state_dir, f"risk_{self.cfg.account_id}.json")   # not engine_*: the supervisor globs those
+        return risk_file(self.cfg.state_dir, self.cfg.account_id)
 
     def _save_risk_state(self) -> None:
         st = self.state
-        payload = {"last_reset": self._last_reset.isoformat() if self._last_reset is not None else None,
-                   "day_start_equity": st.day_start_equity, "week_start_equity": st.week_start_equity,
-                   "balance_closed_hwm": st.balance_closed_hwm, "stage": Stage(st.stage).value,
-                   "rearm_seen": self._rearm_seen, "weekend_done": self._weekend_done,
-                   "halted_at": self._halted_at.isoformat() if self._halted_at is not None else None,
-                   "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
-                   "rearm_refused": self._rearm_refused, "kill_everything": self._kill_everything,
-                   "stage2_pending_since": None if self._stage2_pending_since is None
-                   else self._stage2_pending_since.isoformat()}
-        write_atomic(self._risk_path(), json.dumps(payload))       # durable: halts and stages survive a power cut
+        self.state_store.save_risk(RiskSnapshot(
+            last_reset=self._last_reset, day_start_equity=st.day_start_equity, week_start_equity=st.week_start_equity,
+            balance_closed_hwm=st.balance_closed_hwm, stage=Stage(st.stage), rearm_seen=self._rearm_seen,
+            weekend_done=self._weekend_done, halted_at=self._halted_at, propose_only_until=self._propose_only_until,
+            rearm_refused=self._rearm_refused, kill_everything=self._kill_everything,
+            stage2_pending_since=self._stage2_pending_since))
 
     def _save_risk_state_now(self, what: str) -> None:
         """Save the risk state from the account-refresh path; never raises (BACKLOG 44 re-review MEDIUM-1, LOW-2). The
@@ -2927,30 +2911,25 @@ class Engine:
             self.note_tick_error(exc)
 
     def _load_risk_state(self) -> None:
-        path = self._risk_path()
         self._kill_everything = False
-        if not path.exists():
+        snap = self.state_store.load_risk()       # unreadable -> raises: fail loudly rather than forget a drawdown halt
+        if snap is None:
             # first start: an earlier re-arm on the bus is not a re-arm of this engine
             self._rearm_seen = self.center.bus.control().rearm_id if self.center.bus is not None else None
             return
-        d = json.loads(path.read_text())          # unreadable -> fail loudly rather than forget a drawdown halt
         st = self.state
-        self._last_reset = pd.Timestamp(d["last_reset"]) if d.get("last_reset") else None
-        st.day_start_equity = float(d.get("day_start_equity", 0.0))
-        st.week_start_equity = float(d.get("week_start_equity", 0.0))
-        st.balance_closed_hwm = float(d.get("balance_closed_hwm", 0.0))
-        st.stage = Stage(d.get("stage", Stage.NORMAL.value))
-        self._rearm_seen = d.get("rearm_seen")
-        self._weekend_done = d.get("weekend_done")
-        self._halted_at = pd.Timestamp(d["halted_at"]) if d.get("halted_at") else None
-        self._propose_only_until = pd.Timestamp(d["propose_only_until"]) if d.get("propose_only_until") else None
-        self._rearm_refused = d.get("rearm_refused")
-        # ADR 0016: absent (an older file) = nothing pending; an older release drops it and trips on one read instead
-        pending = d.get("stage2_pending_since")
-        self._stage2_pending_since = pd.Timestamp(pending) if pending else None
-        # F1: a trip whose whole-account flatten had not been seen flat goes on closing the whole account; absent (an
-        # older file) = this engine's book only, as that release did
-        self._kill_everything = bool(d.get("kill_everything", False))
+        self._last_reset = snap.last_reset
+        st.day_start_equity = snap.day_start_equity
+        st.week_start_equity = snap.week_start_equity
+        st.balance_closed_hwm = snap.balance_closed_hwm
+        st.stage = snap.stage
+        self._rearm_seen = snap.rearm_seen
+        self._weekend_done = snap.weekend_done
+        self._halted_at = snap.halted_at
+        self._propose_only_until = snap.propose_only_until
+        self._rearm_refused = snap.rearm_refused
+        self._stage2_pending_since = snap.stage2_pending_since
+        self._kill_everything = snap.kill_everything
 
     def _regime(self, X: pd.DataFrame, close_ts: pd.Timestamp) -> Regime:
         """The allocator's inputs at this close. The tier-1 distances (row M9) come from the archived calendar the
@@ -3485,7 +3464,7 @@ class Engine:
             payload.pop("entry_blocks", None)
             log.warning("entry_blocks not published (%s)", type(exc).__name__)
         # the supervisor never reads a half-written file; a heartbeat, rewritten constantly, needs no fsync
-        write_atomic(Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json"), json.dumps(payload), durable=False)
+        self.state_store.write_engine_state(payload, durable=False)
         self._save_risk_state()
         self._save_orders()
         if self.cfg.live_clock:

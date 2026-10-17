@@ -49,6 +49,29 @@ finance-auditor, 11-04). 27 records the terminal's contract terms read today and
 (release-manager, due 10-23, wave lane 4; accepted at that PR). 65 is parked. The CFO's owner-only matters (C1-C5,
 OD-12) are in ROADMAP section 6 as OD-16 to OD-20.
 
+**Order outcomes after approval 2026-10-17 (program director + product owner; base 765ec27).** From the two risks
+`docs/ux/order-not-placed.md` flags. New 71 (rank 6: the definite-reject build itself, copy final but never
+ranked), 72 (rank 7: ambiguous results, NOT CONFIRMED) and 73 (parked: auto-mode reject notices). Why this order:
+both 71 and 72 fix a false safety state (a card reads APPROVED when no trade, or an unknown one, exists) on the
+propose path the demo runs from its first day, so they rank with the safety rails and above 62 (other symbols, which
+the demo account does not hold). 71 is ready and small; 72 also closes a record gap (an ambiguous result's row is
+marked `rejected`, so a fill that closes inside one reconciliation pass is never recorded) and needs a
+trading-safety plan first, so it ranks second. 73 cannot fire until auto mode exists (A10: 100 decided proposals), so
+it is parked with a trigger. To hold 15 rows, 45, 69 and 70 are parked (work and dates unchanged): the holiday window
+they feed stays off, and the November audit is two weeks out.
+
+**Acceptance pass 2026-10-17 (product owner; base bdd89f7; PR #85 open, backend CI re-running).** Each delivered
+item was checked criterion by criterion; its suites were re-run at bdd89f7 (556 passed, 1 failed). Accepted: 60, 61,
+63, 66 (on `main` with their reviews recorded at the merge). Accepted with a follow-up: 43 (ui-ux re-check not on
+record), 64 (ui-ux and code verdicts not on record), 65 (N3 ADR owed 10-30), W1-1 bridge smoke (item 1; never run on
+the demo yet), the W2-3 Progress API, the e2e fix (TD-3, TD-4, TD-6 done, issue #82 closed; TD-10 only unblocked,
+no code-review record) and PR 0 golden grid (34bfdf3, trading-safety APPROVE per ADR 0023 A1). Returned: 71 (no
+verdict recorded on d067a19, no TRACEABILITY row) and the W2-3 Progress screens (the ui-ux-designer asked for
+changes; b90cdef has no re-check on record). **Release blocker:** `runner.py` is 3504 lines against PR 0's ratchet
+of 3492 (71 merged after the cap was set), so `test_runner_py_stays_under_its_line_cap` fails at bdd89f7 and at the
+PR #85 head 22a9055; PR #85's backend job will go red. The CTO rules today (re-baseline once with a reason, or
+trim), and 62 must hold the cap too. 11 ranked rows.
+
 ## Ranked items
 
 | # | Item | Stage · kind | Size | Status |
@@ -123,41 +146,34 @@ Every owner step below has `chaser: program-director`, who asks on #34 with a re
   item 2 lands; VM provisioning and every credential (item 1).
 
 ## Next parallel wave
-Only items that are not done (job-check sweep 2026-10-16 evening). The reviewer queue rule applies first:
-trading-safety holds four items (59, 44, 58, 60) against a limit of 2, so two trading-safety reviewer lanes run
-before any new trading-safety builder. Every lane below touches different files.
+Only items that are not done (acceptance pass 2026-10-17, base bdd89f7). One runner.py lane at a time; every other
+lane touches different files.
 
-1. **Trading-safety reviewer lane A: 59, then 58** (read-only). 59's re-verify of 412fd0d is due Sun 2026-10-18
-   20:00 UTC, ahead of the engine start; SRE re-verifies 59 in the same window.
-2. **Trading-safety reviewer lane B: 44 (869bb04 re-verify), then 60 (bf5240b)** (read-only).
-3. **Security reviewer lane: 52 (d2ecb8f re-verify), then 51 (cc00630 re-verify)** (read-only).
-4. **Release-manager: PR #79** merged on green, main merged back; then the next PR with 36, 51, 55, 60 and 52's
-   d2ecb8f by 2026-10-23 (ROADMAP M1).
-5. **Item 1, demo deploy** (`lane/claude-run-deploy`, sre runs it, release-manager accountable): `docs/deploy/`,
-   `goldbot/ops/linux/`. The bridge smoke (ROADMAP W1-1, new `goldbot/ops/smoke.py`) follows the architect's plan.
-6. **Item 43, `entry_blocks`** (`lane/entry-blocks`, implementer): `goldbot/risk/gate.py` (`account_reasons`), the
-   engine state write in `goldbot/engine/runner.py`, `goldbot/api/entry_status.py`. Starts when lane A has cleared 59
-   and lane 9 (62, higher rank, same file) has merged: one runner.py lane at a time.
-7. **Item 61, mixed-currency budget**: merged at 921a38a with its reviews; release-manager ships it in the next PR,
-   then product-owner acceptance.
-8. **Running:** 45 (quant ruling on the draft, due 10-23), 5 (research-director, `docs/research/`).
-9. **Item 62, kill switch on every symbol** (implementer, then trading-safety): `_kill_switch` in
-   `goldbot/engine/runner.py`, `goldbot/execution/mt5_adapter.py` `_filling`/`close`, ADR 0016, RUNBOOK. Starts when
-   lane A has cleared 59; lane 6 (43) waits for it. Not before the Sunday start.
-10. **Item 64, header role** (ui-ux-designer spec, then implementer): `web/src/` header only. Free now; disjoint
-   from every other lane's files.
-11. **Item 66, bridge lot ceiling: architect plan** (read-only; plan by Fri 2026-10-23), then a trading-safety
-   verdict on the plan when lane A or B has room. The build (`goldbot/execution/bridge.py`, tests) waits for that
-   verdict; no other lane touches bridge.py.
-12. **Item 67, Object Storage alert** (sre): `goldbot/ops/health.py` check and settings, after lane 5's deploy steps
-   free the SRE (due 10-23). Disjoint from lanes 6 and 9.
-13. **Item 68, release hygiene** (release-manager): worktree clean-up Mon 2026-10-19; CI-minutes answer by 10-23
-   (ROADMAP section 2, budget-2026-10.md).
-14. **Item 69** (finance-auditor): one row in `docs/finance/audit-framework.md`, by the 2026-11-04 audit.
-63 waits for 60's fix lane (same approval files); 65 is parked.
+1. **Release blocker, PR #85** (release-manager with the CTO's ruling, today): the runner.py line-cap ratchet
+   (`tests/test_engine_structure.py`, cap 3492, file 3504). Only that test file, or a trim in runner.py, changes.
+2. **Item 71 gaps** (implementer, due 2026-10-18): the TRACEABILITY A row (`docs/traceability.d/`) and the
+   trading-safety, code and ui-ux verdicts on d067a19 written into `docs/handoff.d/2026-10-17-not-placed-copy.md`
+   (reviewers read-only).
+3. **Item 1, demo deploy and the bridge smoke run** (`lane/claude-run-deploy`, sre runs it, release-manager
+   accountable): `docs/deploy/`, `goldbot/ops/linux/`, the server. Engine start Sun 2026-10-18 22:02 UTC; smoke run
+   by Mon 2026-10-26.
+4. **Item 62, kill switch on every symbol** (trading-safety reviewer, read-only, due 2026-10-22): verdict on
+   f211e0a/90b2603/e35f566; it merges only after lane 1 settles the cap (runner.py).
+5. **Item 72, NOT CONFIRMED build** (implementer): starts when 71 is accepted and 62 has merged (runner.py,
+   `not_placed.py`, `bot.py`, `ProposalCard.tsx`); tests/test_order_not_confirmed.py first.
+6. **W2-3 Progress screens re-check** (ui-ux-designer, read-only, due 2026-10-19): b90cdef against
+   docs/ux/progress-screens.md; records the verdict in `docs/handoff.d/2026-10-17-progress-screens.md`.
+7. **Verdict records owed** (read-only, due 2026-10-19): ui-ux-designer for 43 and 64, code-reviewer for 64 and for
+   the e2e fix (a2c66b0, ae5fbf1), code and trading-safety for 65 (a)(b). Each writes into that item's HANDOFF fragment.
+8. **Item 59 and 44 re-verifies** (trading-safety, read-only): 59 before the engine start; 44 by 2026-10-19.
+9. **Item 67, Object Storage alert** (sre, due 2026-10-23): `goldbot/ops/health.py` and settings, after lane 3.
+10. **Item 68, release hygiene** (release-manager): worktree clean-up Mon 2026-10-19; CI-minutes answer by 10-23.
+11. **Item 27 and 5** (running): terminal terms after the engine start; research-director in `docs/research/`.
+12. **TD-10, e2e in local gates** (test-engineer, `scripts/gates.sh` only, due 2026-10-30).
+74 waits for the ADR 0023 step-1 move; 65 (N3 ADR, research-director, 2026-10-30) and 73 are parked.
 
-Top three ready items (2026-10-16 night): 66 (lane 11, architect plan), 62 (lane 9) and 43 (lane 6). 27 is in
-progress, read from the terminal; the rest of it follows item 1's engine start (Sun 2026-10-18).
+Top three ready items (2026-10-17): the PR #85 ratchet (lane 1), 71's gaps (lane 2) and item 1 (lane 3); all three
+have lanes. 62 is in review, not ready for a builder.
 
 ## Later (parked)
 Moved off the ranked table in the sweep of 2026-10-16. Each item's detail block has its status and the full reason.
@@ -173,10 +189,16 @@ Moved off the ranked table in the sweep of 2026-10-16. Each item's detail block 
 - 34, material feature version: waits on the owner's ADR 0006 ruling.
 - 46, replay of the entry windows: needs a shadow book (after 1); schedule after 45.
 - 53, phase-gate comparator on the deployed trial: matters only once a model is promoted, and none is.
-- 65, review hygiene (parked 2026-10-16 for the cap): none of its parts can lose money; the quant N1 text (10-19)
-  and the N3 ADR (10-30) are still owed on their dates.
-- 36, 51, 61 (off the table 2026-10-16, not parked): merged on the integration branch, shipping in the next PR
-  (release-manager, due 10-23); accepted at that PR.
+- 65, review hygiene: (a), (b), (c) and (d N1, N2) accepted with follow-up 2026-10-17; only the N3 ADR
+  (research-director, 2026-10-30) and the verdict records remain.
+- 45 and 70, holiday list (parked 2026-10-17 for the cap): the window is off until adopted after 46; the 45 final
+  and the v3 list keep their 2026-10-30 dates.
+- 69, audit of leverage and the largest order (parked 2026-10-17 for the cap): re-enters 2026-11-01 for the
+  2026-11-04 audit.
+- 73, auto-mode reject notices (parked 2026-10-17): auto mode is off and offered only after 100 decided proposals;
+  re-enters at 80 decided proposals or before any /mode auto, whichever is first.
+- 36, 51 (off the table 2026-10-16, not parked): shipped to `main` in PR #83/#84; the product owner's
+  criterion-by-criterion check is owed with the 10-23 safety re-run.
 - M28 TreeSHAP per decision, A5 per-trade SHAP, and a post-trade review after each exit.
 - R8 `order_calc_margin` (touches the broker protocol; schedule after item 6).
 - D10 bar close by clock, A2 window from settings, M9 allocator blackout input, D11
@@ -188,6 +210,27 @@ Moved off the ranked table in the sweep of 2026-10-16. Each item's detail block 
 - Entry order type study (limit vs market); portfolio volatility target (risk use only, not alpha, per C3).
 
 ## Done
+**Acceptance pass 2026-10-17 (product owner, base bdd89f7).** Suites re-run at bdd89f7: test_not_placed,
+test_engine_safety, test_approval_window_clock, test_card_bound_approvals, test_bridge, test_engine_store_golden,
+test_engine_structure, test_e2e_server_tree, test_api_progress, test_smoke, test_account_view,
+test_api_entry_status, test_config, test_risk_gate_split: 556 passed, 1 failed (the line cap, see the sweep note).
+
+| Item | Verdict | Criteria and evidence | Gap, owner, date |
+| --- | --- | --- | --- |
+| 60 approval window | ACCEPT | future/NaN expired, monotonic deadline, restart drops, digest counts (test_approval_window_clock.py); trading-safety APPROVE re-verify, 9113ce6 on `main` | none |
+| 61 mixed-currency budget | ACCEPT | amber can't-check, red on halt, caps kept (API + web tests); TS, code, ui-ux at 921a38a | none (L1/L2 via 65 a) |
+| 63 card-bound approvals | ACCEPT | card_created bound, missing/mismatch refused, 64-byte test, API regenerated; TS x2, code x2, security x2 at 3e1ee0a | none |
+| 66 bridge ceiling | ACCEPT | 0.01 passes / 0.02 refused at 1,000, scales, fail closed, closes ungated (test_bridge.py); plan 8567c4d; all six reviews at 0bd0c10 | none |
+| 43 entry_blocks | ACCEPT WITH FOLLOW-UP | account_reasons shared, entry_blocks published, API words them; code and TS APPROVE (420k differential cases) | ui-ux re-check not recorded; ui-ux-designer, 10-19 |
+| 64 header role | ACCEPT WITH FOLLOW-UP | role shown, email only in Account; unit + e2e | ui-ux and code verdicts not recorded at a merge; 10-19 |
+| 65 hygiene | ACCEPT WITH FOLLOW-UP | (a)(b)(d N1,N2) on `main`; (c) in the W2-3 API | N3 ADR, research-director, 10-30; verdict records 10-19 |
+| W1-1 bridge smoke (item 1) | ACCEPT WITH FOLLOW-UP | test_smoke.py, 960-case gate grid; TS APPROVE c399976, security PUSH-OK, SRE APPROVE at a9e3274; gates green at ab671be | never run on the demo; sre, 10-26 |
+| W2-3 Progress API | ACCEPT WITH FOLLOW-UP | quant, security, code APPROVE on b8c33a5; F1/F2 kept (34bdd78); test_api_progress.py | fixes 34bdd78 not re-verified on record; code-reviewer, 10-19 |
+| W2-3 Progress screens | REJECT (returned) | progress.test.ts, Progress.test.tsx; code and security APPROVE | ui-ux asked for changes; b90cdef has no re-check; ui-ux-designer, 10-19 |
+| 71 not placed | REJECT (returned) | tests pass; API regenerated | no verdicts on d067a19; no TRACEABILITY row; breaks the line cap; implementer, 10-18 |
+| e2e fix TD-3/4/6/10 | ACCEPT WITH FOLLOW-UP | TD-3 fdd362b + test_e2e_server_tree.py; TD-4 root cause proven, #82 closed; TD-6 7.5 min -> 24 s | TD-10 only unblocked; no code-review record; test-engineer, 10-30 |
+| PR 0 golden grid | ACCEPT WITH FOLLOW-UP | 192-case grid and edge tests pass; TS APPROVE (ADR 0023 A1) | its line cap is red at the tip; CTO ruling today |
+
 **Accepted 2026-10-16 evening (job-check sweep).** Each has the seven-check scorecard in its detail block; tests
 re-run at 3092923 (238 passed across their suites). Acceptance is conditional on the PR merging (check 5).
 

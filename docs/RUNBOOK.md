@@ -162,6 +162,62 @@ goldbot run health
 log. If the bridge is unreachable the engine exits and restarts every 10 s; it trades nothing meanwhile, and open
 positions keep their broker-side stop and target.
 
+#### Bridge smoke (BACKLOG 1: one real 0.01-lot round trip, demo only)
+Proves the brain can trade the demo terminal through the bridge: it prints the login (masked, `****123`), server,
+balance and a live XAUUSD tick, then, after **your one click**, buys the minimum lot with a stop and target about
+$1 away and closes it at once. It refuses anything but a demo account (exit 2).
+
+Before you start, check all of these:
+* the market is open: not the weekend, and not the daily break at 00:00 server time (21:00 UTC until 25 Oct,
+  22:00 UTC after it);
+* the MT5 box runs exactly the brain's commit: on the MT5 box run `sudo goldbot-deploy <sha>` with the commit the
+  brain runs, never `latest`. Its bridge refuses the smoke's order unless the terminal reports a demo account. The
+  smoke refuses (exit 4) unless both commits are known and equal;
+* the engine has run once on this account: `state/risk_icm-demo.json` exists (the day start and high-water mark the
+  limits are judged by);
+* `state/classifier_icm-demo.json` shows `"class": "raw"` or `"standard"`. While it is missing or `unknown` the
+  RiskGate refuses (exit 7) until the Friday `nightly_costs` run classifies the account;
+* the supervisor is running (`systemctl is-active goldbot-supervisor` says `active`);
+* no deploy is waiting for you: do **not** approve a Telegram *Deploy* until the smoke has finished.
+
+Then, on the brain, inside `tmux` (so a dropped SSH connection cannot kill it mid-order):
+```bash
+tmux new -s smoke
+sudo systemctl stop goldbot-engine@icm-demo     # the engine only: KEEP the supervisor running
+sleep 160                                       # the smoke waits for the engine heartbeat to be 150 s old
+goldbot run bridge-smoke icm-demo               # approve the card on Telegram or the dashboard within 90 s
+sudo systemctl start goldbot-engine@icm-demo    # always start the engine; on exit 5 or 6 close the position first
+```
+Always start the engine again at the end. On exit 5 or 6 a smoke position may still be open, so close it first
+(below), then start the engine.
+Once it prints `sending BUY`, never press Ctrl-C and never close the SSH session until it prints its exit line: the
+order may already be at the broker, and only the smoke itself looks for it and closes it. While the engine is stopped,
+expect the health alert for the engine loop (`engine_loop:icm-demo` FAIL) on Telegram; it clears once the engine is
+started again.
+
+Paste the output on issue #34 (it never shows the full login). What each exit code means, and what to do:
+* **0**: opened and closed. Nothing to do.
+* **1**: failed with nothing left open. Either the broker rejected the order, or the fill's stop or target was
+  missing or not what was sent (`closed, unverified`) and it was closed at once. A Python traceback before
+  `sending BUY` also exits 1; then nothing was sent. Read the last lines and re-run once the cause is fixed.
+* **2**: the terminal is not the demo account of `icm-demo`. Nothing was sent.
+* **3**: not approved (no click within 90 s, or you rejected it). Nothing was sent.
+* **4**: a precondition failed and nothing was sent. The usual causes: the engine is still running or its heartbeat
+  is under 150 s old (wait and re-run); `state/risk_icm-demo.json` is missing (start the engine once); the calendar
+  archive is empty (the scheduler's `calendar_archive` jobs, daily at 06:10 UTC and Sunday at 18:00 UTC, have not
+  fetched the week yet); the supervisor is down (start it); another smoke holds the lock; the MT5 box runs another
+  or an unknown commit; no bridge endpoint in the keyring.
+* **5 LEFT OPEN**: a smoke position could not be closed after three tries (Telegram says so too). Close it
+  **before** restarting the engine: re-run the smoke (it closes a leftover smoke position first, then stops if it
+  cannot), or open the terminal over VNC (0.3) and close the position with magic 260199 by hand.
+* **6 UNKNOWN**: the order call failed and no fill was found within 25 s (it is never sent twice). Look for a
+  position with magic 260199: re-run the smoke (it closes a leftover first) or use VNC (0.3), and close it before
+  restarting the engine.
+* **7**: the RiskGate refused; the reasons are printed. Common ones: `account_class_unknown` (see above),
+  `bridge_incompatible` (update the MT5 box), a halt, a cap, stale data, the news blackout.
+
+The smoke's position is listed apart in the broker ledger (`smoke_positions`), not as a missing trade.
+
 ### 0.5 Daily use
 Only your Mac's browser (the dashboard) and Telegram (the one-click Approve).
 
@@ -181,6 +237,8 @@ Only your Mac's browser (the dashboard) and Telegram (the one-click Approve).
 It is sent once a day. If the Telegram service was down at 06:45 it sends the digest when it starts, if that is
 within 6 hours; later than that it skips the day. A file it cannot read shows as "could not read" on that line
 and the rest still arrives. It never contains account numbers or emails.
+
+* **A deploy is done only when you can open the dashboard at its address and sign in** (sections 2.7 and 2.10 are part of it).
 
 **Updates: one click on Telegram, or by hand.** Nothing is ever deployed without you.
 * When a new version is merged and has passed CI, Telegram shows *New version ready* with the list of changes and
@@ -269,6 +327,31 @@ and the rest still arrives. It never contains account numbers or emails.
       print("scrubbed", f.name)
   PY
   ```
+* **After a rollback below `e98eec8`, once you have rolled forward again: reset the classifier's `last_known`.**
+  From `e98eec8` the account classifier keeps `last_known` in `state/classifier_<account>.json`: the last Raw or
+  Standard class it stored. A stored *unknown* adopts Raw on a single Friday run only when `last_known` is not
+  Standard. An older release (the Friday `nightly_costs` re-run) keeps the field when it rewrites the file but never
+  updates it, so if it stored Standard while it ran, `last_known` can still say Raw. Back on the newer release, the
+  first Friday that stores Raw or Standard corrects it; until then, a stored unknown could be relaxed to Raw on one
+  run instead of two. To close that gap, remove the field: the newer release then re-derives it on its next read
+  (the stored class when it is Raw or Standard; for a stored unknown, Standard if any kept run was Standard).
+  Nothing else in the file changes. Do not run it during Friday's 23:10 `nightly_costs` job.
+
+  ```bash
+  sudo -u goldbot /opt/goldbot/.venv/bin/python - <<'PY'
+  import json
+  from pathlib import Path
+  from goldbot.base import write_atomic
+  for f in sorted(Path("/opt/goldbot/state").glob("classifier_*.json")):
+      d = json.loads(f.read_text())
+      if "last_known" in d:
+          del d["last_known"]
+          write_atomic(f, json.dumps(d, default=str))
+          print("reset", f.name)
+  PY
+  ```
+
+  Doing nothing is also acceptable: the gap closes at the next Friday that stores a known class.
 * Before anything is touched, every deploy and rollback also checks:
   * **aux.db.** A target from before schema compatibility (no `compat_back_to` in its `goldbot/db/migrations.py`)
     cannot open aux.db at schema 5. The script stops every service (inputs, supervisor, engines last), steps aux.db
@@ -494,7 +577,7 @@ Tailscale is optional.
 
 | Workflow | When | What it does | Where results appear |
 | --- | --- | --- | --- |
-| `data-dukascopy.yml` | Saturdays 03:17 UTC (current year), or by hand | Downloads Dukascopy ticks, builds 1m bars, publishes Parquet files to the release `data-v1`. | Issues `data coverage <year>` (label `data-coverage`); failures as `data-dukascopy failure for <year>` (labels `ci`, `data`). |
+| `data-dukascopy.yml` | Saturdays 03:17 UTC (current year), or by hand (inputs `from_year`/`to_year`, or `months` for a targeted refetch, section 6) | Downloads Dukascopy ticks, builds 1m bars, publishes Parquet files to the release `data-v1`. | Issues `data coverage <year>` (label `data-coverage`); failures as `data-dukascopy failure for <year>` (labels `ci`, `data`). |
 | `data-macro.yml` | Tuesdays 04:41 UTC, or by hand | Downloads the FRED macro series (10y real yield, breakeven, broad dollar, gold VIX, 2y yield) and publishes `macro_fred.parquet` to the release `macro-v1`. | Failures as issue `data-macro failure` (labels `ci`, `data`). |
 | `data-positioning.yml` | Saturdays 05:23 UTC, or by hand (input `from_year` re-downloads COT from that year) | Downloads COMEX gold Commitments of Traders (CFTC) and GLD holdings (SPDR archive) and publishes `positioning.parquet` to the release `positioning-v1`, each row with a conservative `available_utc`. If the GLD archive is blocked, the run stays green, keeps the published GLD rows and says `GLD SOURCE UNAVAILABLE` in its summary. | Failures (COT download or upload) as issue `data-positioning failure` (labels `ci`, `data`). |
 | `research.yml` | By hand only (Actions -> research -> Run workflow; inputs `specialist`, `from_year`, `to_year`, `rationale`, `macro`) | Walk-forward research for one specialist family (`session_open`, `mean_reversion`, `trend`, `breakout`) on the `data-v1` bars; with `macro` ticked, adds the macro features from `macro-v1`. Keeps the trial registry on release `research-v1`. | Issue `research: <specialist>` (label `research`). |
@@ -799,7 +882,17 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
   authenticator code -> **Re-arm**. Telegram `/rearm` only tells you to use the dashboard. The same re-arm also
   clears an engine's 12% drawdown halt (the kill switch, which closes every position at market when it trips); each
   engine applies it once, and a restart does not clear the halt.
+* **Warning: if the kill switch trips, every open position on the account is closed at market, including trades you
+  opened by hand on other symbols** (any symbol, any magic; ADR 0016 amendment, BACKLOG 62). There is no prompt
+  first: exits are never gated. A symbol with no live quote is retried until it closes. Pending orders you placed by
+  hand are not cancelled; delete them yourself after a trip. Keep manual trades off this account if you do not want
+  them closed.
 * `/status` on Telegram shows whether entries are halted, the approval mode and how many proposals are pending.
+* **Health `kill_switch:<account>`** (WARN on Telegram 5 min after a 12% trip, FAIL after 30 min of open market):
+  the kill switch could not close every position yet; the engine re-sends each due close every tick. Check
+  `engine:<account>` for a broker or quote fault, then close the listed positions by hand in the MT5 terminal. The
+  check clears when the engine reads the whole account flat. Outside market hours it stays a WARN: the closes go out
+  when the market opens.
 
 
 ### Auto mode (entries without your click)
@@ -1079,6 +1172,36 @@ was a network blip.
 Issues labelled `ci` and `data` (`data-dukascopy failure for <year>`) mean a bar download failed; the next
 Saturday run or a manual run of `data-dukascopy` retries it.
 
+### Missing days in data-v1: targeted refetch (`data-dukascopy`, input `months`)
+
+A month can clear the 15,000-bar check and still have lost whole weekdays (the day-by-day table on the
+`data coverage <year>` issue, from `scripts/check_coverage.py`, lists them). Neither the Saturday run nor
+`retry_flagged` downloads such a month again. Refetch exactly the affected months with one dispatch:
+
+```
+gh workflow run data-dukascopy.yml --ref main -f months=2024-01,2024-06,2026-04
+```
+
+(or Actions -> data-dukascopy -> Run workflow, field `months`). What it does:
+
+- `months` is comma-separated `YYYY-MM`, 2010-01 up to the current month, at most 24 per dispatch. Anything else
+  fails the `plan` job before any download (`scripts/dukascopy_months.py`). `from_year`/`to_year` are ignored, and
+  `full_refresh` or `retry_flagged` ticked together with `months` is refused.
+- One `build-year` job per year in the list (two at a time). Each downloads only its listed months, flagged or
+  not, and keeps every other month exactly as published. If the year has no published file, the job refuses
+  and downloads nothing, so a year never loses its unlisted months.
+- Each listed month is merged day by day (`merge_never_shrink`): a day is replaced only by one with more bars,
+  or by an unflagged copy of a bid/ask-imputed day with the same number of bars. A throttled download can add
+  or repair days; it never removes one.
+- Cost: about 1-2 runner-minutes a month when Dukascopy answers, plus about 3 minutes per year job. When it
+  throttles, up to about 80 minutes a month; a year job stops at 340 minutes and then publishes nothing
+  (the published file stays as it was). If a year job times out, dispatch that year's months again in
+  lists of 4 or fewer.
+
+Afterwards, check the `data coverage <year>` issues: the day-by-day section should no longer list the repaired
+days. A day that is still missing after two refetches is a gap in Dukascopy's archive; it stays listed
+on the issue and is not imputed.
+
 ### US calendar: a type refused for mass cancellations
 
 A `data-us-calendar failure` issue whose report says `REFUSED for this run (would cancel more future events than
@@ -1201,7 +1324,21 @@ lost bridge reply:
 ### Broker reconciliation (`reconcile:<account>`)
 
 One check per account, the worse of two daily reports: the feed check (`feed_reconcile`, the engine's 1m bars against
-the broker's) and the broker ledger (`broker_ledger`). The ledger part:
+the broker's) and the broker ledger (`broker_ledger`). The feed part:
+
+* **warn** "engine bars missing for N of M broker minutes (... a coverage gap, not a price fault)": the engine was
+  stopped (a deploy, a restart, terminal login work) or not collecting for those minutes. Nothing to fix in the data;
+  `engine:<account>` and `engine_loop:<account>` show whether it runs now. It clears with the next weekday run.
+* **warn / fail** "divergence X% over N engine minutes": closes more than 2 points from the broker's M1, or engine bars
+  the broker does not have, while the engine ran (fail above 5% with at least 60 minutes compared). Compare the
+  feeds before trusting new signals. The minute either side of an engine stop is not compared; many such minutes
+  (over 5% of matched warns, over 20% fails) mean the engine restarted again and again: read its journal.
+* **fail** "engine bars missing ... while the engine was up (loop heartbeat): a stalled feed": the engine ran but
+  stored no bars for most of its run. Check `bridge:<account>`, the MT5 terminal's connection and the engine log,
+  then restart the bridge and the engine.
+* **fail** with "the engine stored no ticks in the window": the engine collected nothing for a whole trading day.
+
+The ledger part:
 
 * **warn**: a position differs between goldbot and the broker. `missing` means the broker has it (open, or closed by
   its deals) and goldbot has no record; `extra` means goldbot has a record the broker knows nothing of; `mismatch`

@@ -5,6 +5,152 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- **Targeted refetch for G1/G2: `data-dukascopy` input `months` (data-engineer, 2026-10-17; not dispatched, not
+  pushed; security review of the workflow change pending).** One manual dispatch now refetches exactly a list of
+  months, e.g. `gh workflow run data-dukascopy.yml --ref main -f months=2024-01,2024-06`. The list is validated
+  strictly (comma-separated `YYYY-MM`, ASCII digits, 2010-01 up to the current month, at most 24) by
+  `scripts/dukascopy_months.py` in the `plan` job (sparse checkout, `contents: read`). It reaches the shell only
+  through `env:`, and `build-year` receives only the plan job's normalised list. `full_refresh` or `retry_flagged`
+  together with `months` is refused. `scripts/dukascopy_year.py --months` downloads only that year's listed months,
+  flagged or not, so a listed month gets the `retry_flagged` treatment. It merges each month through
+  `merge_never_shrink` (a day is replaced only by more bars, or by an unflagged copy of an imputed day) and keeps
+  every other month as published. Without a published year file it refuses before downloading. Tests:
+  `tests/test_dukascopy_year.py`, 51 passed (the parser, the CLI, `main()` refetching only listed months and never
+  shrinking a day, imputed-day repair, both refusals, and the workflow's plan step executed with good, bad and
+  conflicting inputs, with no `${{ }}` in any `run:`). actionlint 1.7.12 and shellcheck are clean. RUNBOOK section 6
+  covers the dispatch: "Missing days in data-v1: targeted refetch".
+  - Month list for G1/G2 from the 2026-10-16 coverage triage: research window 2020-05, 2021-11, 2022-01, 2023-11,
+    2024-01, 2024-06, 2024-07, 2025-02, 2025-03, 2025-05; holdout 2026-04, 2026-06..09 (lost days) and 2026-02,
+    2026-03, 2026-05 (bid-imputed). G1 ("0 unexpected weekday gaps in 2010-01..2025-09") needs all ten
+    research-window months, not only the three 2024 ones.
+  - Actions minutes for the full 18-month list (7 year jobs, two at a time): about 40 minutes if Dukascopy answers
+    (10-06 healthy years: 10-16 min per 12-month job). About 105 minutes if 2026 throttles as it did on 10-06 (89 min
+    for 10 months). Worst case about 1,100 minutes, if every month throttles as on 10-10 (259 min for 4 months), with
+    the 2026 job stopped at its 340-minute timeout and publishing nothing. Data volume: 7 year files re-uploaded with
+    `--clobber`, tens of MB. The repo is public, and standard GitHub-hosted runners are not billed for public repos.
+    The owner should confirm the "2,000 free minutes" premise in G5 on the billing page.
+  - Next (program director): security review of the workflow diff, then the PR, then the dispatch after the PR is on
+    `main`, by Fri 2026-11-06. Then the data-engineer reads the day-by-day coverage issues for 2020-2026 and reports
+    which days remain.
+- Gates on release candidate ab671be (W1-1 bridge smoke on top of PR #84), test-engineer, 2026-10-17. `GATES_WORKERS=4 scripts/gates.sh --web` (total 377 s), then e2e. All green:
+
+  | Gate | Result |
+  |---|---|
+  | dry_run | PASS lookahead check: 0 of 240 columns use future data [] |
+  | integration | PASS 90 passed, 1 skipped, 1 warning in 375.79s (0:06:15) |
+  | mypy | PASS Success: no issues found in 369 source files |
+  | pre_commit | PASS |
+  | ruff | PASS All checks passed! |
+  | unit | PASS 5662 passed in 176.07s (0:02:56) |
+  | web | PASS Tests 142 passed (142) (lint, typecheck, build included in the gate) |
+  | e2e | PASS 19 passed (7.5m), `E2E_PORT=8890` because another lane held 8790; the teardown CancelledError trace in the log is graceful-shutdown noise after the pass |
+- **BACKLOG 62, the 12% kill switch closes every symbol (implementer, 2026-10-17; reviews owed: code-reviewer,
+  trading-safety-reviewer E1, security before push).** Two commits on the plan
+  `docs/proposals/2026-10-backlog62-kill-switch-all-symbols-plan.md` with the trading-safety conditions C1-C9.
+  PR-A, broker layer: `MT5Broker.close` uses the position's own symbol (fill mode `_filling(symbol)`, `symbol_select`
+  before the tick, no symbol info or tick is a refused close 10021, no partial close of another symbol); the paper
+  broker keeps a quote per symbol (`set_quote`) and lists only its symbol in `positions()`, every symbol in
+  `account_positions()`, as MT5. PR-B, engine: `_read_kill_book`; while `_kill_everything` is set the switch and
+  `_retry_closes` read `account_positions()` and close every symbol and magic; an unreadable account book closes the
+  `positions()` fallback and never clears the flag; the flag clears only on a flat `account_positions()` read (one
+  more read after an all-ok run); `kill_switch_close` rows carry symbol, magic and lots. ADR 0016 amended (manual
+  trades are closed; pending orders out of scope), RUNBOOK and OWNER_GUIDE warn the owner, TRACEABILITY R46.
+  Before the deploy: the one-time owner notice on #34 (C8). Follow-ups: SRE health WARN when `kill_everything` stays
+  set with closes due (C9); an older (v4) bridge without `account_positions` keeps the flag set and the switch
+  running each tick until the bridge is upgraded (by design, C1). Verify on the demo terminal: closing a manual
+  EURUSD trade (fill mode, `symbol_select`), which the fake MT5 in the tests cannot prove. Review fix round
+  (trading-safety E1 APPROVE, LOW 1 and LOW 4): a 10021 close on another symbol backs off with the market-closed
+  table (one journal row per step; the adapter logs it once per streak) while XAUUSD keeps the 1 s retry, and every
+  `_close_due` entry records its symbol. Follow-ups: LOW 2 (a re-arm leaves `_kill_everything` set; the C9 health
+  WARN in the SRE lane covers it before the deploy), LOW 3 (re-send another symbol's close without the read).
+- Order not placed (trading-safety LOW-R1 follow-up to BACKLOG 66; copy `docs/ux/order-not-placed.md`): an approved
+  entry the MT5 box or the broker definitely refused no longer archives as APPROVED. The engine stores
+  `bridge_stale_order` (10006 with the bridge's stale prefix, tested before the retcode) or `broker_refused:<retcode>`
+  (any other `DEFINITE_REJECT_RETCODES`) in `gate_refusal`, and queues exactly one owner notice per refusal. The
+  paper broker's duplicate is `broker_refused:10027:paper`, worded "it was already sent; this repeat was refused" and
+  never "Nothing was sent" (its first send went out; `NotPlaced.nothing_sent` false). One wording table,
+  `goldbot/execution/not_placed.py`, feeds the Telegram card (`outcome_text`), the notice and the new API field
+  `DecidedProposal.not_placed {by, reason, code, next_step, nothing_sent}`; the dashboard's red note reads it, with
+  "Refused by the broker (code N); nothing was sent." for older APIs, and the card's state name is now "not placed".
+  Ceiling codes keep their shipped words. A fill, any `ok` result or an ambiguous result (10008, 10010, 10012, -1,
+  ...) still reads APPROVED. Not in this change: the amber "NOT CONFIRMED" state and auto-mode notices (open points
+  in the spec, awaiting decisions).
+- Progress tab screens (ROADMAP W2-3, implementer, 2026-10-17; spec docs/ux/progress-screens.md, API from the
+  progress-tab-api lane): a new **Progress** tab, third after Overview and Approvals, for every role. It is one page
+  with jump chips and three sections. **Stop rule** shows NOT BREACHED, NOT STARTED, BREACHED (amber, with "Go to
+  Halt" for approvers) or CAN'T CHECK, with both conditions as meters. **Road to live** shows the four gates as
+  `details` rows (RECORDED, MET, MET ON A PROPOSED THRESHOLD, NOT MET k of n, WAITS); the next gate starts open and
+  each item shows "have X of Y", the Proposed tag, the earliest date and the gates' 95% range, labelled "per-trade
+  interval, not day-clustered". **Results** shows net R per trade with the verdict in words (no AHEAD/BEHIND below
+  100 trades), breakdown rows in a fixed order judged on `verdict_adj`, "by construction" exit rows with no range,
+  costs, live fills, and a stale note that says when the next run is. "Your account's trades" covers the last 30
+  calendar days and names the trading days. Overview gains a one-line summary that opens Progress, and an amber
+  banner while the stop rule is breached.
+  - Words and order only live in `web/src/lib/progress.ts`; verdicts, flags and statuses all come from the API.
+    Nothing on the tab is red, records a gate or halts. The owner alone sees the `record-gate` commands for a met gate.
+  - Tests: `src/lib/progress.test.ts` and `src/screens/Progress.test.tsx` (loading, can't check, empty, populated,
+    stale, met on a proposed threshold, breach for approver and viewer, 404, no identifiers); the viewer e2e story
+    opens Progress at phone width.
+  - Not built: the desktop breakdown as a real table (rows are disclosures at every width) and the per-section
+    "last success more than 3 polls ago" rule (only the gates query shows the "can't reach the server" banner).
+  - Review round 1 (code and security APPROVE, ui-ux REQUEST CHANGES), fixed in one commit:
+    - Tap targets: the Proposed tag and the proposed-thresholds note are 44 px tall.
+    - The stop rule's Edge sentence spans the value and meter columns at 360 px.
+    - An item that shows "have X of Y" no longer repeats its `need`.
+    - The breakdown select falls back to the first breakdown when a refresh drops the chosen one or the screen
+      narrows below 960 px.
+    - An unknown stop-rule status or verdict from a newer server reads "Unknown (…)" in grey instead of blanking
+      the tab.
+    - Notes are keyed by index, and the "by agent" breakdown has a test.
+  - Follow-ups:
+    - API: send `checked_now` on the stop rule. The screen copies the server's "month 18 and more than 500 trades"
+      rule only to choose its wording (marked in `LongRun`).
+    - ui-ux backlog:
+      - Gate evidence and need in plain words from the API (`gates_phase.py` around lines 563, 634 and 638).
+      - The breakdown as a real table from 720 px.
+      - "(2 days ago)" in the stale note.
+      - A family-name map.
+      - For a gate met on a proposed threshold, show "sign it off first" before the record commands. This is needed
+        before gate 3 can be met.
+  - Reviews needed: ui-ux-designer (re-check of the three fixes).
+- Progress tab API (ROADMAP W2-3, implementer, 2026-10-17; spec docs/ux/progress-screens.md, ADR 0022, TRACEABILITY
+  U21): three new read-only routes for viewer and above. `GET /api/gates` evaluates the gates and the stop rule on
+  request, writes nothing and caches the result for 60 s. `GET /api/attribution` serves the daily results without the
+  trade rows or calibration. Each row keeps its own bar and se (quant F1), and exit target/stop rows read "by
+  construction" (quant F2). `GET /api/trades/summary` gives each account's last 30 opportunity days. That is 30
+  calendar days, about 22 trading days, and `days_traded` counts only Monday to Friday.
+  - Review round 1 (quant, security and code all APPROVE on b8c33a5), fixed in one commit:
+    - "by construction" rows also drop `ci95_net`, `t_stat` and `se`.
+    - Gate items carry `ci95_basis` ("per-trade iid, return"), and gates carry `met_on_proposed`.
+    - The `account_id` inside each cost table is cut too.
+    - The gates cache builds outside its lock and serves the old value during a rebuild.
+    - The route tests scan both bodies for emails and bare 5+ digit runs.
+  - New setting `gates.signed_off: []` records which PROPOSED gate thresholds the owner has signed off. It changes no
+    value, and an unknown or non-proposed name fails at load.
+  - The `gate-evidence --detail` note now prints only in the CLI (`GateItem.detail`) and is no longer part of the
+    evidence text.
+  - Reviews needed: quant (verdict exposure, "by construction", the gates' iid 95% interval), security (read access,
+    identifier cutting) and code. The web screens are the next lane.
+- Engine split step 1: state save/load moved to `goldbot/engine/store.py` (TD-2, ADR 0023 step 1, implementer,
+  2026-10-17). Move-only. The PR 0 golden grid (192 cases) and every golden under `tests/data/engine_store_golden/`
+  pass unchanged.
+  - New: `EngineStore` protocol, `JsonEngineStore(state_dir, account_id)`, FrozenRecords `OrdersSnapshot` and
+    `RiskSnapshot`. `OpenTrade`, `PendingClose` and `SentOrder` live in the store; `engine.runner` re-exports them.
+  - The runner reaches the store as `self.state_store`, because `self.store` is already the market-data `Store`.
+    The eight persistence method names stay as thin delegates. `_orders_record` (X7), `_save_risk_state_now`, the
+    7-day prune, reconciliation and the kill-switch reset all stay in the runner.
+  - Ratchets: `runner.py` 3,552 -> 3,471 lines, cap 3,471. `write_atomic` is banned from `runner.py`;
+    `json.loads` / `read_text` are allowed only in `_archive_stale_proposals`, `_drift` and `_account_class` (A1).
+  - The full-disk test now patches `store.write_atomic` (S4).
+  - One deviation from S2, kept on the trading-safety ruling of 2026-10-17: `RiskSnapshot` types `rearm_seen`,
+    `weekend_done` and `rearm_refused` as `str | None` and the timestamps as `pd.Timestamp | None`. A risk file with a
+    value the engine never writes (a non-string `rearm_seen`, a "NaT" `halted_at`) now refuses the start with a
+    ValueError (pydantic ValidationError) instead of loading. Exact parity would keep a fail-open re-arm check on a
+    hand-edited `rearm_seen`, and a `NaT` `halted_at` crashed mid-tick. Test:
+    `tests/test_engine_store.py::test_a_risk_file_value_the_engine_never_writes_refuses_the_start`.
+  - Not done here: the ADR 0010 skew note for unknown risk-file keys (BACKLOG 74, the next PR in `store.py`).
+  - Reviews needed: trading-safety (restart and state path) and code. Review with
+    `git diff --color-moved=dimmed-zebra`.
 - The approval window no longer trusts the wall clock alone (2026-10-16, BACKLOG 60; needs trading-safety review).
   `Proposal.expired` was `time.time() > created + window_s`, so a backward clock step stretched the owner's 90 s
   window and a pending file stamped in the future (a restored backup, a bad write) stayed approvable. Now
@@ -187,6 +333,32 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Deploy: MT5 box first (the guard works with any brain), then the brain. RUNBOOK has the recovery entry for both
   refusal messages (ceiling, `unreadable:<field>`; SRE condition C1). Reviews pending: trading-safety (build),
   code-reviewer, security PUSH-OK, sre for the deploy.
+- **W1-1 bridge smoke built (BACKLOG 1, ADR 0021, plan docs/proposals/2026-10-w1-1-bridge-smoke-plan.md; implementer,
+  2026-10-16, eb52fad..ed14a83; not yet reviewed).** `goldbot run bridge-smoke icm-demo` prints the masked login,
+  server, balance and a tick, then buys and closes the minimum lot after one owner click on the ApprovalBus (no click
+  in 90 s: exit 3, nothing sent). `RiskGate.check_operational` shares `check`'s account checks and every limit after
+  sizing, and skips only the five named model checks. `check` was split into shared helpers as a pure refactor: a
+  720-case decision grid captured before the split stays identical (tests/test_risk_gate_split.py).
+  Fences: F3 is an AST test (only ops/smoke.py references `check_operational`). F4 is in GuardedBroker: magic + 99 only
+  on a terminal that reports demo, with the protocol digest unchanged. The smoke needs the engine unit inactive, its
+  heartbeat at least 150 s old and a non-blocking flock (0600); `smoke_state` sets every AccountState field from a
+  named source. The ledger lists smoke positions apart from RC-8. Closes are never gated. The smoke itself has **not**
+  been run against a server. Order of work for the
+  demo run: update the MT5 box first (F4), then RUNBOOK 0.4 "Bridge smoke". Reviews due: trading-safety (gate split,
+  order/close path), security (masked login, lock mode), SRE (RUNBOOK steps).
+- **W1-1 review round 1 fixed (implementer, 2026-10-16; reviews of 8945bdc: trading-safety CHANGES, security
+  PUSH-OK, SRE CHANGES).** Tests first: fe2a061 (12 smoke and 3 gate tests failing), then fixes.
+  * 5a984b5: the F5 grid now has 960 cases, recaptured from 9f04599's gate.py, and reaches heat_cap, the minimum-lot
+    paths and weekly_cap.
+  * c8e7a85: F1 refuses on any live gate.
+  * 70065cc, the look-up after a send that raised: deals are read before positions, and "already closed" needs an
+    exit deal (HIGH-1).
+  * 70065cc, the fill check: the fill's sl/tp must match the order's within one point (MEDIUM-2). The lock is opened
+    O_NOFOLLOW | O_CLOEXEC, as an owned regular file. A bridge on another commit exits 4.
+  * The RUNBOOK lists the preconditions (classifier, tmux, no deploy, always restart the engine) and an action for
+    each exit code.
+
+  Re-review pending.
 - Account classifier: a stored Unknown no longer sticks (implementer, 2026-10-16, SRE review finding;
   trading-safety Low and Option B applied). `PersistentClassifier.update` (goldbot/execution/classifier.py) lets a
   stored "unknown" adopt a known class on its first run when that cannot relax the account: the class is Standard,
@@ -381,6 +553,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   | e2e (`npm --prefix web run test:e2e`) | PASS, 19 passed (7.2m) |
 
   Total wall time of gates.sh: 384 s. E2E needed `PW_CHROMIUM_PATH` set to the cached chromium_headless_shell-1208 (Playwright wanted build 1248, not installed); the first attempt without it failed on browser launch only. The `CancelledError` traceback at e2e server shutdown is the websocket sleep being cancelled at teardown, not a test failure.
+- Gates on frozen release candidate 0bd0c10 (test-engineer, 2026-10-16, `GATES_WORKERS=4 scripts/gates.sh --web`, 415 s, then e2e), all green:
+
+  | Gate | Result |
+  |---|---|
+  | dry_run | PASS lookahead check: 0 of 240 columns use future data [] |
+  | integration | PASS 90 passed, 1 skipped, 1 warning in 413.59s (0:06:53) |
+  | mypy | PASS Success: no issues found in 364 source files |
+  | pre-commit | PASS |
+  | ruff | PASS All checks passed! |
+  | unit | PASS 5512 passed in 244.61s (0:04:04) |
+  | web (lint, typecheck, vitest, build) | PASS Tests 142 passed (142) |
+  | e2e (`npm --prefix web run test:e2e`, chromium_headless_shell-1208) | PASS 19 passed (7.3m); the WebServer CancelledError trace is teardown noise after the run |
 - **Gates on the frozen release candidate 3db12c8 (claude/gifted-goldberg-lcb7pl tip), 2026-10-16, all PASS.**
   `GATES_WORKERS=4 scripts/gates.sh --web` (372 s total) plus e2e, on a tree nobody edited:
 

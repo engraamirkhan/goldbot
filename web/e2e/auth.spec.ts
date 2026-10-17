@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
-import { freshTotp, totp } from "./totp";
+import { totp, totpClock } from "./totp";
 
 // The sign-in story on its own server (playwright.config.ts project "auth"), whose emails are captured by the
 // e2e-only fake mailer (goldbot/api/e2e_mailer.py) into a JSONL outbox: login, forgot-password, the owner's password
@@ -8,6 +8,7 @@ import { freshTotp, totp } from "./totp";
 type Server = { setup_code: string; state_dir: string; outbox: string | null };
 type Mail = { to: string; subject: string; body: string };
 const server = () => JSON.parse(readFileSync("e2e/.server-auth.json", "utf8")) as Server;
+const clock = totpClock(() => server().state_dir);
 const OWNER = { email: "owner@example.com", password: "owner password 123" };
 const VIEWER = { email: "viewer@example.com", password: "viewer password 123" };
 const UNKNOWN = "nobody@example.com";
@@ -60,7 +61,7 @@ async function enrolledSecret(page: Page): Promise<string> {
 async function signIn(page: Page, email: string, password: string, secret: string) {
   await page.getByLabel("Email", { exact: true }).fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
-  await page.getByLabel("Authenticator code", { exact: true }).fill(await freshTotp(secret));
+  await page.getByLabel("Authenticator code", { exact: true }).fill(clock.fresh(secret));
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
 }
@@ -76,17 +77,8 @@ async function expectRoleNotEmail(page: Page, role: string, email: string) {
   expect(await banner.innerHTML()).not.toContain("@");                         // no title / aria-label carries it
 }
 
-/** A six-digit code that is none of the codes the server would accept now (it allows one step either side). */
-function wrongCode(secret: string): string {
-  const now = Date.now();
-  const valid = new Set([-1, 0, 1].map((k) => totp(secret, now + k * 30_000)));
-  for (let i = 0; ; i++) {
-    const c = String(i).padStart(6, "0");
-    if (!valid.has(c)) return c;
-  }
-}
-
-// each authenticator code is accepted once, so a sign-in may wait up to 30 s for a fresh time step (freshTotp).
+// each authenticator code is accepted once, so a test that needs another one steps the server's TOTP clock (totpClock)
+// rather than sleeping for the next real 30 s step.
 // No retries: a retry would rerun the story against the same server state, where first-run setup is spent and the
 // owner address (one per server, by design) keeps its hourly link count, so a rate-limited retry would fail as a
 // missing mail instead of the real fault. The story asks for two owner links, under the limit of 3.
@@ -107,11 +99,11 @@ test("login: the owner is created, a wrong code is refused, the right one signs 
   await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
   await page.getByLabel("Email", { exact: true }).fill(OWNER.email);
   await page.getByLabel("Password", { exact: true }).fill("not the password 1");
-  await page.getByLabel("Authenticator code", { exact: true }).fill(wrongCode(ownerSecret));
+  await page.getByLabel("Authenticator code", { exact: true }).fill(clock.wrong(ownerSecret));
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("alert")).toHaveText("invalid credentials");
   await page.getByLabel("Password", { exact: true }).fill(OWNER.password);
-  await page.getByLabel("Authenticator code", { exact: true }).fill(wrongCode(ownerSecret));
+  await page.getByLabel("Authenticator code", { exact: true }).fill(clock.wrong(ownerSecret));
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("alert")).toHaveText("invalid credentials");   // the same words: nothing to tell apart
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
@@ -148,11 +140,11 @@ test("forgot password: an unknown account is answered like a wrong code; the rig
   await expect(page.getByRole("alert")).toHaveText("invalid credentials");
   const unknownAnswer = await page.getByRole("alert").textContent();
   await page.getByLabel("Email", { exact: true }).fill(VIEWER.email);
-  await page.getByLabel("Authenticator code", { exact: true }).fill(wrongCode(viewerSecret));
+  await page.getByLabel("Authenticator code", { exact: true }).fill(clock.wrong(viewerSecret));
   await page.getByRole("button", { name: "Set new password", exact: true }).click();
   await expect(page.getByRole("alert")).toHaveText(unknownAnswer ?? "");
 
-  await page.getByLabel("Authenticator code", { exact: true }).fill(await freshTotp(viewerSecret));
+  await page.getByLabel("Authenticator code", { exact: true }).fill(clock.fresh(viewerSecret));
   await page.getByRole("button", { name: "Set new password", exact: true }).click();
   await expect(page.getByRole("status")).toHaveText("Password changed. Sign in with the new password.");
   await signIn(page, VIEWER.email, "a new password 42", viewerSecret);
@@ -215,7 +207,7 @@ test("email sign-in link: the owner gets a one-time link, signs in with it and t
   await expect(page.getByRole("heading", { name: "Finish signing in", exact: true })).toBeVisible();
   expect(new URL(page.url()).hash).toBe("");                                   // the token leaves the address bar
   await expect(page.getByLabel("Password", { exact: true })).toHaveCount(0);   // the link replaces the password only
-  await page.getByLabel("Authenticator code", { exact: true }).fill(await freshTotp(ownerSecret));
+  await page.getByLabel("Authenticator code", { exact: true }).fill(clock.fresh(ownerSecret));
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
   await expectRoleNotEmail(page, "Owner", OWNER.email);
@@ -226,9 +218,14 @@ test("email sign-in link: the owner gets a one-time link, signs in with it and t
   expect(notice.body).not.toContain("203.0.113.4");
   expect(notice.body).not.toContain(token);
 
+  // wait for the sign-out to finish: reopening while its request is in flight cuts it off and leaves the token in the
+  // tab's session storage (issue #87), so the reopened page would be a dashboard, not the sign-in form
+  const loggedOut = page.waitForResponse((r) => r.url().endsWith("/api/auth/logout"));
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await loggedOut;
+  await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
   await openFromMail(page, link);                                              // a used link is spent
-  await page.getByLabel("Authenticator code", { exact: true }).fill(await freshTotp(ownerSecret));
+  await page.getByLabel("Authenticator code", { exact: true }).fill(clock.fresh(ownerSecret));
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("alert")).toHaveText(
     "sign-in link invalid or expired, or wrong authenticator code. Ask for a new link below.");
@@ -264,9 +261,18 @@ test("unknown and non-owner addresses get the same neutral answer as the owner, 
       data: { email, totp: code, new_password: "a fresh password 99" }, headers: { "cf-connecting-ip": ip } });
     return { status: r.status(), body: await r.text() };
   };
-  const nobody = await forgot(UNKNOWN, wrongCode(viewerSecret), "203.0.113.54");
-  expect(await forgot(VIEWER.email, wrongCode(viewerSecret), "203.0.113.55")).toEqual(nobody);
+  const nobody = await forgot(UNKNOWN, clock.wrong(viewerSecret), "203.0.113.54");
+  expect(await forgot(VIEWER.email, clock.wrong(viewerSecret), "203.0.113.55")).toEqual(nobody);
   expect(nobody).toEqual({ status: 403, body: JSON.stringify({ detail: "invalid credentials" }) });
+});
+
+test("a session the server no longer knows sends the page back to the sign-in screen", async ({ page }) => {
+  await asClient(page, "203.0.113.7");
+  await page.addInitScript(() => sessionStorage.setItem("goldbot_token", "revoked-or-expired"));   // a stale tab
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign out", exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => sessionStorage.getItem("goldbot_token"))).toBeNull();
 });
 
 test.describe("on a phone", () => {
@@ -304,7 +310,7 @@ test.describe("on a phone", () => {
     await fitsThePhone(page);
     const code = page.getByLabel("Authenticator code", { exact: true });
     await expect(code).toHaveAttribute("inputmode", "numeric");               // the digit keypad
-    await code.fill(await freshTotp(ownerSecret));
+    await code.fill(clock.fresh(ownerSecret));
     await page.getByRole("button", { name: "Sign in", exact: true }).tap();
     await expectRoleNotEmail(page, "Owner", OWNER.email);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
