@@ -64,7 +64,9 @@ M3 positive verdict -> gates -> holdout once -> shadow -> M4 -> 6 months of pape
 One worktree per lane on the integration branch tip; pytest `-n 2` while the load is above 24, otherwise `-n 4`.
 At most 8 builder lanes at once. Every lane also needs code-reviewer and test-engineer. **Shared files:**
 `ops/run.py` and `ops/jobs.py` take additive entries merged by the integrator (after the run.py split merges, new
-commands go in its new modules); the OpenAPI contract is regenerated once per batch. Each lane's Definition of done
+commands go in its new modules); the OpenAPI contract is regenerated once per batch. `engine/store.py` (ADR 0023
+step 1) belongs to the TD-2 split lane; W2-1 adds `CoreDbEngineStore` there, and its protocol changes are additive
+only (S6). Each lane's Definition of done
 is its role file's "Definition of done" plus S1–S12.
 
 ### Wave 1: Fri 2026-10-16 – Fri 10-30 (re-planned 10-16; was 10-12 – 10-24), feeds M1/M2

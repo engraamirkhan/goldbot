@@ -68,7 +68,7 @@ freeze.
 
 | Step | Module | Code that moves (lines at `7dc12a3`) | Depends on | Due | Accountable |
 |---|---|---|---|---|---|
-| 1 | `engine/store.py` | `OpenTrade`, `PendingClose`, `SentOrder` (258-323, re-exported); the path, dump, write and parse of `_orders_path` / `_save_orders` / `_load_orders` (2465-2525) and `_risk_path` / `_save_risk_state` / `_load_risk_state` (2900-2953); the engine-file write in `_write_state` (3488) | BACKLOG 62 merged; PR 0 (golden grid, by Tue 10-27) | Fri 10-30 (merge on the integration branch; no deploy in the DST-gap week) | implementer |
+| 1 | `engine/store.py` | `OpenTrade`, `PendingClose`, `SentOrder` (258-323, re-exported); the path, dump, write and parse of `_orders_path` / `_save_orders` / `_load_orders` (2465-2525) and `_risk_path` / `_save_risk_state` / `_load_risk_state` (2900-2953); the engine-file write in `_write_state` (3488) | BACKLOG 62 merged; PR 0 (golden grid, by Tue 10-27) | Fri 10-30 (merge on the integration branch; no deploy in the DST-gap week). **Done 2026-10-17** (built on the integration branch at 57bdc02; golden grid unchanged; runner.py 3,552 -> 3,471, cap 3,471) | implementer |
 | 2 | `engine/windows.py` | `_blackout` … `_windows_state` (2980-3131) | step 1 | Tue 11-24 | implementer |
 | 3 | `engine/exits.py` | `_read_positions` … `_blackout_rescore` (1476-1818) | W2-1 merged (F4) | Thu 11-26 | implementer |
 | 4 | `engine/account_guard.py` | `_refresh_account` … `_reset_owner_mode` (1963-2261); `_roll_risk_period` … `_rearm_conditions` (2407-2463) | BACKLOG 62, W2-1 (F5); state-ownership table (below) | Tue 12-01 | implementer; ownership table by the architect |

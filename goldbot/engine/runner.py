@@ -27,15 +27,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.allocator import Regime, RuleAllocator, tier1_minutes
-from goldbot.base import (
-    Record,
-    UtcTimestamp,
-    load_record,
-    load_record_json,
-    note_schema_skew,
-    schema_skew_summary,
-    write_atomic,
-)
+from goldbot.base import Record, load_record_json, schema_skew_summary
 from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_cache
 from goldbot.data.econ_calendar import blackout_window
@@ -45,6 +37,17 @@ from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resamp
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
 from goldbot.engine.shadow import ShadowBook, ShadowTrade
+from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, SentOrder: re-exported, ADR 0023 step 1)
+    EngineStore,
+    JsonEngineStore,
+    OpenTrade,
+    OrdersSnapshot,
+    PendingClose,
+    RiskSnapshot,
+    SentOrder,
+    orders_file,
+    risk_file,
+)
 from goldbot.execution.bridge import CEILING_REFUSAL, UNREADABLE_REFUSAL
 from goldbot.execution.broker import AccountInfo, Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 from goldbot.execution.costs import CostTable
@@ -54,7 +57,6 @@ from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
 from goldbot.features.registry import versions_for, with_versions
 from goldbot.features.technical import atr
 from goldbot.labels.excursion import Excursion
-from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.labels.triple_barrier import SwapSpec
 from goldbot.ops import server_clock
 from goldbot.ops.account_view import LADDER_TIMEFRAMES
@@ -250,72 +252,6 @@ class _Frame(Record):
     by_version: dict[str, pd.DataFrame | None] = Field(default_factory=dict)   # X rebuilt for older model versions
 
 
-class OpenTrade(Record):
-    position_id: int
-    agent_id: str
-    side: int
-    lots: float
-    entry_bar_ts: UtcTimestamp
-    max_bars: int
-    bars_held: int = 0
-    sl: float | None = None           # the protection this engine expects at the broker (reinstated if lost)
-    tp: float | None = None
-    # the specialist's exit policy (labels.exit_policy), run on bars of the agent's timeframe as its labels were built
-    policy: ExitPolicy | None = None
-    timeframe: str | None = None
-    entry: float | None = None        # fill price: the policy's distances are measured from it
-    atr_usd: float | None = None      # the signal bar's ATR, which the policy's distances are in
-    opened_utc: UtcTimestamp | None = None   # fill time (tick clock): bars closing after it count for the trail
-    flat_at: UtcTimestamp | None = None      # hard-flat deadline
-    scaled: bool = False              # the scale-out is done: taken, skipped (minimum volume) or out of retries
-    scale_tries: int = 0              # failed scale-out attempts (bounded by EngineConfig.scale_out_retries)
-    # for the closed-trade record (gates_phase.ClosedTrade): set at the fill, None on trades saved before they existed
-    client_order_id: str | None = None
-    open_price: float | None = None   # fill price (with or without an exit policy)
-    initial_sl: float | None = None   # the stop at entry: R is measured against it
-    initial_lots: float | None = None
-    equity_before: float | None = None
-    scaled_lots: float = 0.0          # taken by the scale-out, at scaled_price: folded into the final record
-    scaled_price: float | None = None
-    # MAE / MFE so far (BACKLOG 23), from every tick while this engine holds the position (`_track_excursions`);
-    # approx: part of the path was not seen by ticks (carried across a restart, adopted), so the record fills it from
-    # the stored 1m bars and flags it
-    excursion: Excursion | None = None
-    excursion_approx: bool = False
-    # False for an orphan adopted without an order record: its initial stop is the broker's current one (maybe trailed
-    # since entry), so the record leaves R-based excursions empty (prices and times are still recorded)
-    risk_known: bool = True
-    audit: EntryAudit | None = None   # finance audit entry facts for the record; None: adopted or saved before them
-
-
-class PendingClose(Record):
-    """A closed-trade record waiting to be written (EngineConfig.closed_record_retries attempts in all)."""
-    position_id: int
-    trade: OpenTrade
-    reason: str
-    price: float | None = None
-    at: UtcTimestamp
-    tries: int = 0
-    next_try: UtcTimestamp | None = None
-
-
-class SentOrder(Record):
-    """One row of the pending_orders table (state/orders_<account>.json), written BEFORE order_send."""
-    client_order_id: str
-    ts_utc: UtcTimestamp
-    agent_id: str
-    side: int
-    magic: int
-    lots: float
-    max_bars: int
-    sl: float
-    tp: float
-    status: str = "sending"         # sending -> filled | rejected | unfilled (restart found no fill)
-    position_id: int | None = None
-    atr_usd: float | None = None    # the signal bar's ATR: a fill recovered on restart gets its exit policy back
-    audit: EntryAudit | None = None  # finance audit entry facts, handed to a fill recovered on restart
-
-
 class Engine:
     def __init__(self, cfg: EngineConfig, broker: Broker, agents: list[Specialist], models: dict[str, Model],
                  center: ApprovalCenter | None = None, allocator: RuleAllocator | None = None,
@@ -383,6 +319,7 @@ class Engine:
         self.shadow_models: dict[str, tuple[str, Model]] = {}
         self.set_shadow_models(shadow_models or {})
         Path(cfg.state_dir).mkdir(parents=True, exist_ok=True)
+        self.state_store: EngineStore = JsonEngineStore(Path(cfg.state_dir), cfg.account_id)   # ADR 0023 step 1
         self.center.on_decision = self._on_decision
         # data quality: errors since the last bar close, and those the last bar close was decided with
         self._last_tick: Tick | None = None
@@ -2523,7 +2460,7 @@ class Engine:
 
     # ------------------------------------------------------------------ pending_orders and restart reconciliation
     def _orders_path(self) -> Path:
-        return Path(self.cfg.state_dir, f"orders_{self.cfg.account_id}.json")   # not engine_*: the supervisor globs those
+        return orders_file(self.cfg.state_dir, self.cfg.account_id)
 
     def _orders_record(self, cid: str, *, agent_id: str, side: int, magic: int, lots: float, max_bars: int, sl: float,
                        tp: float, ts: pd.Timestamp, atr_usd: float | None = None,
@@ -2538,33 +2475,24 @@ class Engine:
         self._flush_closed()      # a close is on disk before the open-trade table forgets the position
         keep_after = pd.Timestamp.now("UTC") - pd.Timedelta(days=7)
         self._orders = {k: o for k, o in self._orders.items() if o.ts_utc >= keep_after or o.status == "sending"}
-        payload = {"sent": {k: o.model_dump(mode="json") for k, o in self._orders.items()},
-                   "open": {str(k): t.model_dump(mode="json") for k, t in self.open.items()},
-                   # closed-trade records not written yet (a failed write) survive a restart; lost ones stay listed
-                   "closing": [c.model_dump(mode="json") for c in self._closes],
-                   "records_lost": self._records_lost}
-        write_atomic(self._orders_path(), json.dumps(payload))     # durable: restart reconciliation reads it
+        self.state_store.save_orders(OrdersSnapshot(sent=self._orders, open=self.open, closing=self._closes,
+                                                    records_lost=self._records_lost))
 
     def _load_orders(self) -> None:
         """On start: reload the pending_orders table and the open trades, then reconcile them with the broker: an id
         whose send was never confirmed is looked up in the broker's positions and deals (by client id / MT5 comment);
         a fill is adopted with its own agent (and, when that agent is loaded, its exit policy), no fill marks it unfilled. Every id stays in sent_ids, so a restart never
         re-sends. Open trades the broker no longer has were closed while the engine was down."""
-        path = self._orders_path()
-        if not path.exists():
+        snap = self.state_store.load_orders()     # unreadable -> raises: fail loudly rather than forget what was sent
+        if snap is None:
             return
-        d = json.loads(path.read_text())          # unreadable -> fail loudly rather than forget what was sent
-        # ADR 0010 (rollback = restart): fields a newer release added are dropped, a wrong type still fails loudly
-        src = "orders_<account>.json"
-        if extra := sorted(set(d) - {"sent", "open", "closing", "records_lost"}):
-            note_schema_skew(src, "orders file", extra)      # a newer release's table: not read here (S12)
-        self._orders = {k: load_record(SentOrder, v, source=src) for k, v in d.get("sent", {}).items()}
+        self._orders = dict(snap.sent)
         self.sent_ids = set(self._orders)
-        self.open = {int(k): load_record(OpenTrade, v, source=src) for k, v in d.get("open", {}).items()}
+        self.open = dict(snap.open)
         for tr in self.open.values():
             tr.excursion_approx = True            # ticks while the engine was down were not seen (BACKLOG 23)
-        self._closes = [load_record(PendingClose, v, source=src) for v in d.get("closing", [])]
-        self._records_lost = [int(x) for x in d.get("records_lost", [])]
+        self._closes = list(snap.closing)
+        self._records_lost = list(snap.records_lost)
         try:
             positions = {p.position_id: p for p in self.broker.positions()}
         except Exception as exc:
@@ -2958,20 +2886,16 @@ class Engine:
             return {}
 
     def _risk_path(self) -> Path:
-        return Path(self.cfg.state_dir, f"risk_{self.cfg.account_id}.json")   # not engine_*: the supervisor globs those
+        return risk_file(self.cfg.state_dir, self.cfg.account_id)
 
     def _save_risk_state(self) -> None:
         st = self.state
-        payload = {"last_reset": self._last_reset.isoformat() if self._last_reset is not None else None,
-                   "day_start_equity": st.day_start_equity, "week_start_equity": st.week_start_equity,
-                   "balance_closed_hwm": st.balance_closed_hwm, "stage": Stage(st.stage).value,
-                   "rearm_seen": self._rearm_seen, "weekend_done": self._weekend_done,
-                   "halted_at": self._halted_at.isoformat() if self._halted_at is not None else None,
-                   "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
-                   "rearm_refused": self._rearm_refused, "kill_everything": self._kill_everything,
-                   "stage2_pending_since": None if self._stage2_pending_since is None
-                   else self._stage2_pending_since.isoformat()}
-        write_atomic(self._risk_path(), json.dumps(payload))       # durable: halts and stages survive a power cut
+        self.state_store.save_risk(RiskSnapshot(
+            last_reset=self._last_reset, day_start_equity=st.day_start_equity, week_start_equity=st.week_start_equity,
+            balance_closed_hwm=st.balance_closed_hwm, stage=Stage(st.stage), rearm_seen=self._rearm_seen,
+            weekend_done=self._weekend_done, halted_at=self._halted_at, propose_only_until=self._propose_only_until,
+            rearm_refused=self._rearm_refused, kill_everything=self._kill_everything,
+            stage2_pending_since=self._stage2_pending_since))
 
     def _save_risk_state_now(self, what: str) -> None:
         """Save the risk state from the account-refresh path; never raises (BACKLOG 44 re-review MEDIUM-1, LOW-2). The
@@ -2987,30 +2911,25 @@ class Engine:
             self.note_tick_error(exc)
 
     def _load_risk_state(self) -> None:
-        path = self._risk_path()
         self._kill_everything = False
-        if not path.exists():
+        snap = self.state_store.load_risk()       # unreadable -> raises: fail loudly rather than forget a drawdown halt
+        if snap is None:
             # first start: an earlier re-arm on the bus is not a re-arm of this engine
             self._rearm_seen = self.center.bus.control().rearm_id if self.center.bus is not None else None
             return
-        d = json.loads(path.read_text())          # unreadable -> fail loudly rather than forget a drawdown halt
         st = self.state
-        self._last_reset = pd.Timestamp(d["last_reset"]) if d.get("last_reset") else None
-        st.day_start_equity = float(d.get("day_start_equity", 0.0))
-        st.week_start_equity = float(d.get("week_start_equity", 0.0))
-        st.balance_closed_hwm = float(d.get("balance_closed_hwm", 0.0))
-        st.stage = Stage(d.get("stage", Stage.NORMAL.value))
-        self._rearm_seen = d.get("rearm_seen")
-        self._weekend_done = d.get("weekend_done")
-        self._halted_at = pd.Timestamp(d["halted_at"]) if d.get("halted_at") else None
-        self._propose_only_until = pd.Timestamp(d["propose_only_until"]) if d.get("propose_only_until") else None
-        self._rearm_refused = d.get("rearm_refused")
-        # ADR 0016: absent (an older file) = nothing pending; an older release drops it and trips on one read instead
-        pending = d.get("stage2_pending_since")
-        self._stage2_pending_since = pd.Timestamp(pending) if pending else None
-        # F1: a trip whose whole-account flatten had not been seen flat goes on closing the whole account; absent (an
-        # older file) = this engine's book only, as that release did
-        self._kill_everything = bool(d.get("kill_everything", False))
+        self._last_reset = snap.last_reset
+        st.day_start_equity = snap.day_start_equity
+        st.week_start_equity = snap.week_start_equity
+        st.balance_closed_hwm = snap.balance_closed_hwm
+        st.stage = snap.stage
+        self._rearm_seen = snap.rearm_seen
+        self._weekend_done = snap.weekend_done
+        self._halted_at = snap.halted_at
+        self._propose_only_until = snap.propose_only_until
+        self._rearm_refused = snap.rearm_refused
+        self._stage2_pending_since = snap.stage2_pending_since
+        self._kill_everything = snap.kill_everything
 
     def _regime(self, X: pd.DataFrame, close_ts: pd.Timestamp) -> Regime:
         """The allocator's inputs at this close. The tier-1 distances (row M9) come from the archived calendar the
@@ -3545,7 +3464,7 @@ class Engine:
             payload.pop("entry_blocks", None)
             log.warning("entry_blocks not published (%s)", type(exc).__name__)
         # the supervisor never reads a half-written file; a heartbeat, rewritten constantly, needs no fsync
-        write_atomic(Path(self.cfg.state_dir, f"engine_{self.cfg.account_id}.json"), json.dumps(payload), durable=False)
+        self.state_store.write_engine_state(payload, durable=False)
         self._save_risk_state()
         self._save_orders()
         if self.cfg.live_clock:
