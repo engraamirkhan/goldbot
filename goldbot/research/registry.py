@@ -73,7 +73,10 @@ NOT_TRIALS = frozenset({PREREGISTERED, WITHDRAWN, VERDICT})
 # (preregistration-2027Q1.md: cluster stability >= 0.6 AND OOF AUC >= 0.53 with the lower 95% bound > 0.50)
 # the screened-row decision rules coded in director.preregistered_decisions (preregistration-2027Q1.md): a
 # pre-registration names one with `rule_id`, and only a trial linked to it is read by it
-PREREGISTERED_RULE_IDS: tuple[str, ...] = ("H-01", "H-04", "C4H")
+# the discovery survivors' rule (preregistration-2027Q1.md O-5/O-6, E-6): an evaluated trial linked to a pre-registration
+# with one of these ids passes only with the day-summed DSR reading as well (`director.survivor_refusal`)
+DAY_SUMMED_RULE_IDS: tuple[str, ...] = ("O-5", "O-6")
+PREREGISTERED_RULE_IDS: tuple[str, ...] = ("H-01", "H-04", "C4H", *DAY_SUMMED_RULE_IDS)
 DEFAULT_SLOT_RULE: dict[str, float] = {"min_stability": 0.6, "min_auc": 0.53, "min_auc_lower_bound": 0.5}
 
 
@@ -260,8 +263,13 @@ def promotion_refusal(row: dict[str, Any], rows: list[dict[str, Any]]) -> str | 
     if latest is not None and latest != row:
         return (f"a later rerun of the same configuration (trial #{latest.get('trial')}) decides"
                 + ("" if gate_pass_counts(latest) else ", and it did not pass"))
-    if (row.get("config") or {}).get(FROM_DISCOVERY_KEY) and not holdout_passed(rows, family, h, fv):
-        return "discovery-derived configuration without a passed holdout scoring"
+    if (row.get("config") or {}).get(FROM_DISCOVERY_KEY):
+        from goldbot.research.director import survivor_refusal  # director imports this module
+        why = survivor_refusal(rows, row)
+        if why is not None:
+            return why
+        if not holdout_passed(rows, family, h, fv):
+            return "discovery-derived configuration without a passed holdout scoring"
     return None
 
 
@@ -354,7 +362,8 @@ class TrialRegistry:
 
         `rule_id` (PREREGISTERED_RULE_IDS: "H-01", "H-04", "C4H"): the coded decision rule a screened trial linked to
         this row is read by (`director.preregistered_decisions`; the rule is keyed on the link, not on the config's
-        shape). ValueError for an unknown id."""
+        shape); "O-5", "O-6" (DAY_SUMMED_RULE_IDS): the discovery survivors' rule an evaluated trial linked to this row
+        is read by (`director.survivor_decisions`: gates AND the day-summed DSR). ValueError for an unknown id."""
         if rule_id is not None and rule_id not in PREREGISTERED_RULE_IDS:
             raise ValueError(f"rule_id must be one of {PREREGISTERED_RULE_IDS}, got {rule_id!r}")
         if target_quarter is not None and not queue:
@@ -489,9 +498,11 @@ class TrialRegistry:
         this row's "continue" (`director._Ledger.slot_state`); a discovery's own recorded reading verdict is never
         replaced by one: a discovery row is refused. For a `screened` row the decision must be the one its
         pre-registered rule gives on the recorded results (`director.preregistered_decisions`: H-01, H-04, tsmom 4h,
-        else the screen itself); a mismatch is refused and the row records `rule_checked`. The first verdict of a
+        else the screen itself), and for an evaluated trial linked to an O-5/O-6 pre-registration the one the survivors'
+        rule gives (`director.survivor_decisions`: "continue" only with the gates AND the day-summed DSR reading
+        passed); a mismatch is refused and the row records `rule_checked`. The first verdict of a
         trial is final (ValueError for a second, an unknown trial or decision, or an empty reason)."""
-        from goldbot.research.director import preregistered_decisions, verdict_of
+        from goldbot.research.director import preregistered_decisions, survivor_decisions, verdict_of
         if decision not in VERDICT_DECISIONS:
             raise ValueError(f"a verdict decision is one of {VERDICT_DECISIONS}, got {decision!r}")
         if not reason.strip():
@@ -512,6 +523,13 @@ class TrialRegistry:
                 raise ValueError(f"trial #{target.get('trial')}: {decision!r} is not the pre-registered decision; "
                                  f"the {which} rule gives {sorted(allowed)} on the recorded results")
             rule = rule or which
+        survivor = survivor_decisions(target, rows)
+        if survivor is not None:
+            allowed, which, why = survivor
+            if decision not in allowed:
+                raise ValueError(f"trial #{target.get('trial')}: {decision!r} is not the pre-registered decision; "
+                                 f"the {which} rule gives {sorted(allowed)}: {why}")
+            checked, rule = True, rule or which
         row: dict[str, Any] = {
             "trial": self.n_trials + 1, "ts": self._stamp().isoformat(), "agent_id": agent_id,
             "family": target.get("family"), "config_hash": target.get("config_hash"), "status": VERDICT,
@@ -682,7 +700,10 @@ class TrialRegistry:
         latest = latest_evaluated(rows, family, h, feature_version)
         if latest is None or not gate_pass_counts(latest):
             return False
-        return not config.get(FROM_DISCOVERY_KEY) or holdout_passed(rows, family, h, feature_version)
+        if not config.get(FROM_DISCOVERY_KEY):
+            return True
+        from goldbot.research.director import survivor_refusal  # director imports this module
+        return survivor_refusal(rows, latest) is None and holdout_passed(rows, family, h, feature_version)
 
     @contextmanager
     def locked(self, wait_s: float = LOCK_WAIT_S, stale_s: float = LOCK_STALE_S) -> Iterator[None]:

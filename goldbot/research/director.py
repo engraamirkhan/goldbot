@@ -96,9 +96,11 @@ from pydantic import Field
 from goldbot.base import FrozenRecord, UtcTimestamp, load_record
 from goldbot.config import RetiredFamily
 from goldbot.research.attribution import T_SIGNIFICANT
+from goldbot.research.gates import day_summed_check
 from goldbot.research.population import DSR_PROMOTE, MIN_RANK_TRADES
 from goldbot.research.promotion import MIN_SHADOW_TRADES, PerfStats
 from goldbot.research.registry import (
+    DAY_SUMMED_RULE_IDS,
     DEFAULT_SLOT_RULE,
     DISCOVERY,
     FROM_DISCOVERY_KEY,
@@ -486,7 +488,7 @@ class _Ledger:
             return "live"
         tried = self.survivor_trials(run, names[k - 1])
         if tried:
-            return "live" if any(gate_pass_counts(t) for t in tried) else "expired"
+            return "live" if any(survivor_pass_counts(self.rows, t) for t in tried) else "expired"
         used = [s for s in self.slots if s["slot"].get("kind") == "survivor" and s["slot"].get("k") == k
                 and parent is not None and refers_to(s["slot"].get("parent"), parent) and id(s) in self.slot_use]
         return "expired" if used else "pending"
@@ -610,6 +612,49 @@ def cited_rule(prereg: dict[str, Any] | None, rule_ref: str | None, *, capped: b
                          "--rule-ref, or pre-register it with preregister(..., rule_ref=) "
                          "(research.open_budget_preregistered_only)")
     return None
+
+
+def survivor_rule(rows: list[dict[str, Any]], row: dict[str, Any]) -> str | None:
+    """The day-summed survivor rule (DAY_SUMMED_RULE_IDS: "O-5", "O-6") the trial `row` is read by: the `rule_id` of
+    the pre-registration it is linked to (never guessed from the config's shape), or None for any other trial."""
+    rule = (linked_preregistration(rows, row) or {}).get("rule_id")
+    return str(rule) if rule in DAY_SUMMED_RULE_IDS else None
+
+
+def survivor_refusal(rows: list[dict[str, Any]], row: dict[str, Any]) -> str | None:
+    """Why trial `row`'s DSR evidence is no O-5/O-6 survivor pass, or None (also for a trial no such rule reads). The
+    rule (pre-registration 2027Q1 O-5/O-6, E-6): "pass only if the unchanged design gates pass ... AND ... the
+    day-summed DSR is also >= 0.95 ... It is a coded check ... and without it the row does not run": the gate's DSR
+    and the day-summed DSR both on today's K (`gates.day_summed_check`), failing closed without the stored inputs."""
+    rule = survivor_rule(rows, row)
+    if rule is None:
+        return None
+    check = day_summed_check(row, rows)
+    return None if check["passed"] else f"{rule}: the day-summed DSR reading did not pass ({check['detail']})"
+
+
+def survivor_pass_counts(rows: list[dict[str, Any]], row: dict[str, Any]) -> bool:
+    """`row`'s recorded gate pass counts (`registry.gate_pass_counts`) and, for an O-5/O-6 survivor, so does its
+    day-summed DSR reading (`survivor_refusal`): the pass a holdout slot and a holdout scoring rest on."""
+    return gate_pass_counts(row) and survivor_refusal(rows, row) is None
+
+
+def survivor_decisions(row: dict[str, Any], rows: list[dict[str, Any]]) -> tuple[set[str], str, str] | None:
+    """The decisions the O-5/O-6 rule allows for an evaluated trial linked to it, the rule id and why (None for any
+    other trial): "continue" (pass) only if the gates pass with costs recorded AND the day-summed reading passes;
+    "stop" (fail: retired as an entry signal) otherwise; "inconclusive" only when the stored DSR inputs are missing, so
+    the reading cannot be made (re-run the trial)."""
+    rule = survivor_rule(rows, row)
+    if rule is None or row.get("status") != "evaluated":
+        return None
+    check = day_summed_check(row, rows)
+    if not gate_pass_counts(row):
+        return {"stop"}, rule, "the design gates did not pass with their costs recorded"
+    if check["passed"]:
+        return {"continue"}, rule, str(check["detail"])
+    if check["dsr_gate"] is None or check["dsr_day_summed"] is None:
+        return {"inconclusive"}, rule, f"no day-summed DSR reading: {check['detail']}"
+    return {"stop"}, rule, f"the day-summed DSR reading did not pass: {check['detail']}"
 
 
 SCREEN_PASS, SCREEN_FAIL = "pass", "fail"
@@ -738,7 +783,7 @@ def slot_refusal(rows: list[dict[str, Any]], quarter: str, prereg: dict[str, Any
     feats = sorted(str(c) for c in config.get("features") or [] if c != "side")
     if feats != members:
         return f"the config's features {feats} are not survivor {name!r}'s recorded members {members} ({what})"
-    if kind == "holdout" and not any(gate_pass_counts(t) and t.get("family") == family
+    if kind == "holdout" and not any(survivor_pass_counts(led.rows, t) and t.get("family") == family
                                      and t.get("config_hash") == config_hash for t in led.survivor_trials(run, name)):
         return f"the {what} covers only survivor trial {k}'s configuration ({name!r}, gates passed)"
     return None

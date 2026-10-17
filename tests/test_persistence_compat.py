@@ -39,7 +39,7 @@ from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_close
 from goldbot.research import ruin
 from goldbot.research.attribution import AttributionReport
 from goldbot.research.director import ResearchPlan
-from goldbot.research.metrics import DsrInputs
+from goldbot.research.metrics import DaySummedDsr, DsrInputs
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.population import Member, Population
 from goldbot.research.promotion import PerfStats
@@ -284,6 +284,19 @@ def case_trial_dsr_inputs(tmp: Path) -> None:
     assert current_dsr(row, 7) == (inputs.dsr(7), "")
 
 
+def case_trial_day_summed_dsr(tmp: Path) -> None:
+    """A trial row's stored day-summed DSR (results.model_filtered.day_summed, metrics.DaySummedDsr; E-6) with a field
+    from a newer release at the top and in both nested inputs: the evaluator's reading still re-reads it on today's K."""
+    from goldbot.research.gates import day_summed_check
+    per_trade = DsrInputs(sr=0.15, n=900, skew=0.0, kurtosis=3.0, var_sr_trials=1 / 900)
+    day = DsrInputs(sr=0.2, n=450, skew=0.0, kurtosis=3.0, var_sr_trials=1 / 450)
+    stored = DaySummedDsr.of(per_trade, day, 5).model_dump()
+    stored = _newer({**stored, "per_trade_r": _newer(stored["per_trade_r"]), "day_summed": _newer(stored["day_summed"])})
+    row = json.loads(json.dumps({"status": "evaluated", "results": {"model_filtered": {"day_summed": stored}}}))
+    check = day_summed_check(row, [row])
+    assert check["n_trials"] == 1 and check["dsr_day_summed"] == day.dsr(1)
+
+
 def case_attribution_report(tmp: Path) -> None:
     """state/attribution.json (research/attribution.py AttributionReport) with a field from a newer release at the top
     and in a cell: the Progress tab's results view still serves it (goldbot/api/progress.py)."""
@@ -301,7 +314,7 @@ CASES = [case_closed_trade, case_closed_trade_from_before_ret_basis, case_closed
          case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
          case_shadow_stats, case_model_registry_and_backtest, case_population, case_research_plan, case_costs,
          case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_hwm_confirmation,
-         case_trial_dsr_inputs, case_attribution_report]
+         case_trial_dsr_inputs, case_trial_day_summed_dsr, case_attribution_report]
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c.__name__.removeprefix("case_") for c in CASES])
@@ -314,7 +327,7 @@ def test_every_persisted_record_model_has_a_compat_case():
     covered = {ClosedTrade, Proposal, VersionBook, PerfStats, ModelEntry, Member, ResearchPlan,
                BrokerTerms, CostTable, PublishedCostTable, scheduler.JobState, health.WatchState, health.HealthReport,
                DigestState, OutboxState, crossfeed.ReconcileReport, ledger.LedgerReport,
-               ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation, DsrInputs,
+               ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation, DsrInputs, DaySummedDsr,
                AttributionReport,
                # the engine's orders file: tests/test_engine_safety.py::
                # test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote

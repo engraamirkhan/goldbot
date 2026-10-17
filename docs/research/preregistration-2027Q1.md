@@ -744,6 +744,18 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
   same K = `n_trials_effective` as the gate (both discoveries' K_eff included). It is a coded check (E-6:
   `metrics.day_summed_dsr`, `tests/test_day_summed_dsr.py`), and without it the row does not run; promotion additionally needs the discovery holdout rule (O-10). Otherwise **fail** and the group
   is retired as a 15m entry signal (kept as a filter feature only).
+  - Amendment 2026-10-17, before any H-14 outcome (quant re-review of E-6; noted for the owner by the program
+    director). The rule gets stricter in three ways:
+    - **G floor.** The day-summed DSR also needs G >= 200 trading days, the same asymptotic floor as the per-trade
+      DSR's 200 trades. With fewer days the check reports nothing and the row fails closed (**fail**, or
+      **inconclusive** only when the stored inputs are missing).
+    - **Entry day.** A trade's entry UTC day is that of its signal bar's open plus one bar (`ts_utc + timeframe`, the
+      real entry at the next bar's open).
+    - **Gate DSR.** The gate's DSR in this rule is the per-trade DSR on `ret`, as the phase gate reads it
+      (`gates.current_dsr`). The per-trade figure stored beside the day-summed one is on R and is shown only.
+  - The rule is coded as `rule_id` "O-5"/"O-6" on the run's pre-registration (`director.survivor_decisions`,
+    `survivor_refusal`). A verdict, a holdout slot or a promotion counts a survivor's pass only with both DSRs
+    >= 0.95 on today's K.
 - Power (conditional on O-4's candidate count): gate 1 needs >= 500 model-filtered trades. At the floor case (0.9%
   of 100,000+ candidates, about 900 trades) and K ≈ 60 (t about 4.0), that is about 0.19 R net per trade. A higher
   retention lowers the bar per trade, but the threshold is never changed to get one. The day-summed check raises
