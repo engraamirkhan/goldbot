@@ -5,16 +5,18 @@ import { viaChannel } from "../lib/approval";
 import { AutoModeCard } from "./AutoMode";
 import { BalanceCard, BalanceCardSkeleton } from "./BalanceCard";
 import { EntryStatusPanel } from "./EntryStatus";
+import { ProgressLine } from "./Progress";
 
 const pct = (x: number) => `${(x * 100).toFixed(2)}%`;
 
-export function Overview() {
+export function Overview({ onOpenProgress }: { onOpenProgress?: () => void } = {}) {
   const status = useQuery({ queryKey: ["status"], queryFn: api.status });
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts });
   return (
     <section>
       <EntryStatusPanel loading={accounts.isLoading} error={accounts.isError} accounts={accounts.data}
                         updatedAt={accounts.dataUpdatedAt || undefined} />
+      {onOpenProgress && <ProgressLine onOpen={onOpenProgress} />}
       <div className="tiles">
         <div className="tile"><span>Mode</span><strong>{status.data?.mode ?? "…"}</strong></div>
         <div className={`tile ${status.data?.halted ? "bad" : ""}`}><span>Halted</span><strong>{status.data ? (status.data.halted ? "yes" : "no") : "…"}</strong></div>

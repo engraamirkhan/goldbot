@@ -234,6 +234,19 @@ test("viewer accepts the invite and can watch but not approve or manage users", 
   }
   await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
 
+  // Progress (docs/ux/progress-screens.md) is read-only for every role: on a fresh state nothing is recorded, the stop
+  // rule has not started and the daily results job has not run; nobody sees a record-gate command here
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.getByRole("button", { name: "Progress", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Road to live" })).toBeVisible();
+  await expect(page.getByTestId("gate-foundation_to_backtest")).toContainText("Not met");
+  await expect(page.getByTestId("stop-rule")).toContainText("Not started");
+  await expect(page.getByText(/No results yet/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy" })).toHaveCount(0);
+  const road = await page.getByRole("region", { name: "Road to live" }).boundingBox();
+  expect(road && road.x >= 0 && road.x + road.width <= 360).toBe(true);        // fits the phone without sideways scroll
+  await page.setViewportSize({ width: 1280, height: 720 });
+
   // the API enforces the same rule the UI hides
   const token = await page.evaluate(() => sessionStorage.getItem("goldbot_token"));
   const r = await page.request.post("/api/decisions", {
