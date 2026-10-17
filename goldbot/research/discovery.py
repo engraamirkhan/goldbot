@@ -31,7 +31,8 @@ Choosing which features a model uses is a look at the data, so it happens inside
   groups go forward; `selected` is then their members, at most 39).
 
 Groups (`--families`): every column is its own group by default; `feature` groups columns by the registered feature
-that produced them (h1_/h4_/d1_ context columns join their base feature), `family` by the feature's registry family.
+that produced them (h1_/h4_/d1_ context columns join their base feature, or with the pre-registered
+`context_groups: per_timeframe` form one group `ctx_<tf>` per timeframe), `family` by the feature's registry family.
 The column -> feature map is found by running each feature on the last bars BEFORE the holdout start (never a holdout
 bar).
 
@@ -81,6 +82,7 @@ from goldbot.research.walkforward import Fold, splits_for, window_for
 
 GroupMode = Literal["column", "feature", "family", "cluster"]
 GROUP_MODES: tuple[str, ...] = ("column", "feature", "family", "cluster")
+ContextGroups = Literal["join", "per_timeframe"]
 # H-02's pre-registered hypothesis clusters (preregistration-2027Q1.md rows 6-9; group mode "cluster"; amended
 # 2026-10-11 to follow hypotheses.md exactly): each entry is a registered feature (all its columns) or a column name or
 # glob (context prefixes h1_/h4_/d1_/w1_ stripped); first match wins, in this order; every other column stays in its
@@ -193,6 +195,10 @@ class DiscoveryConfig(FrozenRecord):
     # review R1, fix 2: any other q is a new trial); left at the constants under the break-even rule
     tercile_q: float = Field(TERCILE_Q, gt=0.0, lt=1.0)
     tercile_method: Literal["linear"] = TERCILE_METHOD
+    # where h1_/h4_/d1_/w1_ context columns go (`column_groups`): "join" their base column's group (the coded rule) or,
+    # O-4's pinned splitting rule (BACKLOG 81), "per_timeframe": one group `ctx_<tf>` per context timeframe across
+    # families; in the dump and the config hash only when "per_timeframe", so every existing hash holds
+    context_groups: ContextGroups = "join"
 
     @model_validator(mode="after")
     def _q_only_under_tercile(self) -> DiscoveryConfig:
@@ -207,11 +213,14 @@ class DiscoveryConfig(FrozenRecord):
         """Under the break-even rule (the literal "break_even_margin", whatever DEFAULT_THRESHOLD_RULE says) the rule,
         q and method are left out of the dump, so such a config dumps and hashes exactly as before E-2 (H-02's pinned
         dump and every queued config hash hold); under the tercile rule all three are in the dump and so in the
-        pre-registered config hash: another rule or another q is another trial."""
+        pre-registered config hash: another rule or another q is another trial. `context_groups` likewise: left out
+        at "join", in the dump (and the hash) at "per_timeframe"."""
         out: dict[str, Any] = handler(self)
         if self.threshold_rule == BREAK_EVEN_RULE:
             for k in ("threshold_rule", "tercile_q", "tercile_method"):
                 out.pop(k, None)
+        if self.context_groups == "join":
+            out.pop("context_groups", None)
         return out
 
 
@@ -252,12 +261,16 @@ class DiscoveryResult(Record):
 # ---------------------------------------------------------------------------------------------- groups
 def column_groups(columns: list[str], mode: str, m: pd.DataFrame | None = None, names: list[str] | None = None,
                   ctx: dict | None = None, holdout_start: pd.Timestamp | None = None,
-                  clusters: dict[str, list[str]] | None = None) -> dict[str, str]:
+                  clusters: dict[str, list[str]] | None = None,
+                  context_groups: ContextGroups = "join") -> dict[str, str]:
     """Group of each column. "column": itself; "feature" / "family": the registered feature that produced it (found by
     running each feature on the last 2,000 bars of `m` BEFORE `holdout_start`, so no holdout bar is read) or that
     feature's family; "cluster": the first pre-registered cluster (`clusters`, e.g. H02_CLUSTERS) with an entry
-    naming the column's feature or matching it as a glob, else its family. A context column (h1_/h4_/d1_/w1_) joins
-    its base column's group; a column no feature claims is its own group."""
+    naming the column's feature or matching it as a glob, else its family. A column no feature claims is its own
+    group. A context column (h1_/h4_/d1_/w1_) joins its base column's group under `context_groups` "join"; under
+    "per_timeframe" (O-4's pinned splitting rule, preregistration-2027Q1.md: "every context column goes to the group
+    `ctx_<tf>` of its timeframe (`ctx_h1`, `ctx_h4`, `ctx_d1`), across families") it goes to `ctx_<tf>`, so at 15m
+    the h1/h4/d1 copies of trend and volatility no longer push their families past max_selected."""
     if mode not in GROUP_MODES:
         raise ValueError(f"unknown group mode {mode!r}; one of {GROUP_MODES}")
     if mode == "column":
@@ -280,6 +293,10 @@ def column_groups(columns: list[str], mode: str, m: pd.DataFrame | None = None, 
                 owner.setdefault(str(c), n)
     out = {}
     for c in columns:
+        tf = _CONTEXT_PREFIX.match(c)
+        if context_groups == "per_timeframe" and tf is not None:
+            out[c] = f"ctx_{tf.group(1)}"
+            continue
         who = owner.get(c) or owner.get(_CONTEXT_PREFIX.sub("", c))
         hit = cluster_of(c, who, clusters or {})
         if mode == "cluster" and hit is not None:
@@ -527,7 +544,9 @@ def check_group_config(cfg: DiscoveryConfig) -> None:
 def check_group_sizes(groups: dict[str, str], cfg: DiscoveryConfig, group_mode: str) -> None:
     """Before any look at the data (quant re-review, MEDIUM 4): when whole groups go forward (survivor_unit "group")
     or a cluster becomes a survivor trial's inputs (group mode "cluster"), every group that can go forward (in cluster mode with feature unit: each cluster) must fit one model:
-    <= max_selected columns besides `side` (ValueError naming the group otherwise)."""
+    <= max_selected columns besides `side` (ValueError naming the group otherwise). `discovery_pass` runs it on the
+    decision frame's full map, context columns included, before the pre-registration row is written (BACKLOG 81); a
+    group over the cap is refused, never truncated or re-split after a count."""
     if cfg.survivor_unit != "group" and group_mode != "cluster":
         return
     sizes: dict[str, int] = {}
@@ -798,7 +817,8 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
                    holdout: Window | None = None, ctx: dict | None = None, rationale: str = "",
                    cost_source: str = "settings priors", rule_ref: str | None = None,
                    capped: bool = False, holdout_from: Any = None) -> tuple[dict[str, Any], str]:
-    """`research_pass.py --discover`: budget check (one trial), the pre-registration row, then the run and its result
+    """`research_pass.py --discover`: budget check (one trial), the decision frame's group map and its size check
+    (`check_group_sizes`, context columns counted; BACKLOG 81), the pre-registration row, then the run and its result
     row (status "discovery"). Call under `reg.locked()`. Returns (result row, report).
 
     Budget (`TrialRegistry.check_budget_reserved`): a discovery whose exact config (family discovery_<specialist>,
@@ -841,23 +861,29 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
                                                    agents=[spec.agent_id])
     from goldbot.research.director import cited_rule
     cited = cited_rule(prereg, rule_ref, capped=capped)      # E-5: a capped run cites its pre-registered rule
+    tf = spec.timeframe
+    b_dec = resample_bars(b1, tf).reset_index(drop=True)
+    context = {TF_LABEL[x]: resample_bars(b1, x) for x in context_tfs(tf)}
+    frame = build_decision_frame(b_dec, context, ctx=ctx)
+    # BACKLOG 81: the group map of every frame column (context included; prices only, no label) and its size check
+    # come before the pre-registration row, so a refused config writes no row and spends no trial. The pool is a
+    # subset of the frame's columns, so a map that passes here passes on the pool in run_discovery.
+    frame_groups = column_groups([c for c in frame[1].columns if c != "ts_utc"], group_mode, frame[0], names, ctx,
+                                 holdout_start=None if holdout is None else pd.Timestamp(holdout[0]),
+                                 clusters=cfg.clusters, context_groups=cfg.context_groups)
+    check_group_sizes(frame_groups, cfg, group_mode)
     if prereg is None:
         prereg = reg.preregister(agent_id=spec.agent_id, family=family, config=config,
                                  feature_version=feature_version(names), rationale=rationale,
                                  reading_rule=reading_rule(cfg.survivor_unit, cfg.threshold_rule, cfg.tercile_q),
                                  plan={"features": names, "group_mode": group_mode, "trial_status": DISCOVERY,
                                        "survivor_unit": cfg.survivor_unit, **threshold_plan(cfg)}, queue=False)
-    tf = spec.timeframe
-    b_dec = resample_bars(b1, tf).reset_index(drop=True)
-    context = {TF_LABEL[x]: resample_bars(b1, x) for x in context_tfs(tf)}
     leak = lookahead_check(b_dec, context, ctx=ctx)
-    frame = build_decision_frame(b_dec, context, ctx=ctx)
     prep = prepare(spec, b_dec, context, extra_cost_usd=extra_cost_usd, holdout=holdout, frame=frame, swap=swap)
     if prep.labels.empty:
         raise ValueError(f"{spec.family} produced no labelled candidates; nothing to discover")
     pool = discovery_pool(prep)
-    groups = column_groups(pool, group_mode, frame[0], names, ctx,
-                           holdout_start=None if holdout is None else pd.Timestamp(holdout[0]), clusters=cfg.clusters)
+    groups = {c: frame_groups[c] for c in pool}
     n_eff = reg.n_trials_effective + 1
     d = discover(prep, cfg, groups, group_mode, n_trials=n_eff, extra_cost_usd=extra_cost_usd, holdout=holdout)
     metrics = {**d.result.metrics, "lookahead": leak, "cost_source": cost_source,
