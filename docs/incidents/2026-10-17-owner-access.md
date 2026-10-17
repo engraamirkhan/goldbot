@@ -1,6 +1,6 @@
 # Incident: the owner could not reach or sign in to the dashboard after the 17 Oct deploy
 
-Status: open until the owner is signed in; program director accountable. States and timings only.
+Status: resolved — the owner signed in at ~07:55 UTC after the reset and a fresh setup. Program director accountable. States and timings only.
 
 ## What happened (UTC)
 
