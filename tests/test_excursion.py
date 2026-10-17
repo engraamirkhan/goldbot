@@ -415,7 +415,7 @@ def _frozen_then_closed(tmp_path: Path, monkeypatch: Any, after_s: float) -> Clo
     `after_s` seconds later; a stored 1m bar wholly inside the trade reached 1997.0 after the freeze."""
     eng, pb = _engine(tmp_path, TREND)
     pid = _enter(eng, pb, TREND)
-    monkeypatch.setattr(pb, "_check_exits", lambda tick: None)       # the broker does not take the stop
+    monkeypatch.setattr(pb, "_check_exits", lambda: None)             # the broker does not take the stop
     eng.on_tick(_q(1, 1998.75, 1998.75))                             # at the 1998.75 broker stop: frozen
     ex = eng.open[pid].excursion
     assert ex is not None and ex.frozen_utc == _at(1) and pid in eng.open

@@ -93,7 +93,7 @@ def test_mt5_close_and_modify_fail_loudly_on_a_terminal_error_never_as_no_such_p
     with pytest.raises(RuntimeError, match="positions_get failed"):
         b.modify(7, 2395.0, None)
     monkeypatch.setattr(mt5_adapter.mt5, "positions_get", lambda **k: (pos,))
-    monkeypatch.setattr(b, "_filling", lambda: 1)
+    monkeypatch.setattr(b, "_filling", lambda symbol: 1)
     r = b.close(7)                                                          # order_send None: refused, not a crash
     assert not r.ok and r.retcode == -1 and "order_send failed" in r.message
     assert not b.modify(7, 2395.0, None).ok
