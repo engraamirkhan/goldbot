@@ -4,7 +4,7 @@ rank: 3
 title: Equity-scaled lot ceiling at the bridge (GuardedBroker)
 stage: Execution and risk (independent backstop under RiskGate) · PROTECT · RUN
 size: M
-status: 'ready for the architect (decided 2026-10-16 from the CFO capital plan) · next: architect plan by 2026-10-23, trading-safety verdict on the plan, implementer (failing tests first), trading-safety verdict on the build · accountable: architect · due 2026-10-23 (plan; the plan names the build lane and its date)'
+status: 'built: bridge notional ceiling 6x equity (MAX_NOTIONAL_EQUITY_MULT, refusal 10006) merged on the integration branch 2026-10-17 · next: release PR, trading-safety verdict recorded at merge (E1), then PO acceptance · accountable: release-manager · due 2026-10-20'
 ---
 - **66. Equity-scaled lot ceiling at the bridge (GuardedBroker).** Decided 2026-10-16 by program director + product
   owner from the CFO's capital plan (`docs/finance/capital-plan.md` section 6, second sre row). Value (RUN,
