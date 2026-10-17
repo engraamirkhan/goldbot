@@ -10,7 +10,7 @@ const status = (over: Partial<apiModule.Status>): apiModule.Status => ({
 });
 
 function renderOverview(role: apiModule.Role) {
-  apiModule.setUser({ email: "a@x.io", role });
+  apiModule.setUser({ email: "a@x.io", role, signed_in_with: "password_totp" });
   vi.spyOn(apiModule.api, "accounts").mockResolvedValue([]);
   vi.spyOn(apiModule.api, "automode").mockRejectedValue(new Error("not under test"));   // AutoMode.test.tsx covers the card
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -21,7 +21,7 @@ describe("Overview accounts", () => {
   afterEach(() => { vi.restoreAllMocks(); apiModule.setUser(null); });
 
   it("shows a loading placeholder until the accounts arrive", async () => {
-    apiModule.setUser({ email: "a@x.io", role: "viewer" });
+    apiModule.setUser({ email: "a@x.io", role: "viewer", signed_in_with: "password_totp" });
     vi.spyOn(apiModule.api, "status").mockResolvedValue(status({}));
     vi.spyOn(apiModule.api, "accounts").mockReturnValue(new Promise(() => {}));
     vi.spyOn(apiModule.api, "automode").mockRejectedValue(new Error("not under test"));
@@ -35,7 +35,7 @@ describe("Overview entry status", () => {
   afterEach(() => { vi.restoreAllMocks(); apiModule.setUser(null); });
 
   it("puts the entry status first, one line per account from the API", async () => {
-    apiModule.setUser({ email: "a@x.io", role: "viewer" });
+    apiModule.setUser({ email: "a@x.io", role: "viewer", signed_in_with: "password_totp" });
     vi.spyOn(apiModule.api, "status").mockResolvedValue(status({}));
     vi.spyOn(apiModule.api, "automode").mockRejectedValue(new Error("not under test"));
     vi.spyOn(apiModule.api, "accounts").mockResolvedValue([{

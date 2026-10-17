@@ -516,7 +516,7 @@ TOTP_GATED = {"/api/rearm", "/api/automode", "/api/auth/password/change", "/api/
 def _write_routes() -> list[str]:
     with tempfile.TemporaryDirectory() as d:
         app = create_app(d, web_dist=f"{d}/nodist", owner_email=OWNER, mail=MAIL, mailer=FakeMailer())
-        return sorted({r.path for r in app.routes if isinstance(r, APIRoute) and r.methods - {"GET", "HEAD"}})
+        return sorted({r.path for r in app.routes if isinstance(r, APIRoute) and (r.methods or set()) - {"GET", "HEAD"}})
 
 
 @pytest.mark.parametrize("path", _write_routes())
@@ -525,10 +525,17 @@ def test_every_owner_route_is_stepped_up_or_already_needs_an_authenticator_code(
     ask for an authenticator code itself."""
     r = api.c.post(path, json={}, headers=api.login("v@x.io"))
     owner_only = r.status_code == 403 and r.json().get("detail") == "owner role required"
-    if not owner_only:
-        assert path not in STEPUP_ROUTES, path
-        return
-    assert path in STEPUP_ROUTES | TOTP_GATED, f"{path}: owner-only but neither stepped up nor authenticator-gated"
+    if owner_only:
+        assert path in STEPUP_ROUTES | TOTP_GATED, \
+            f"{path}: owner-only routes must be stepped up (STEPUP_ROUTES) or ask for an authenticator code (TOTP_GATED)"
+    assert owner_only or path not in STEPUP_ROUTES | {"/api/rearm", "/api/automode", "/api/auth/recovery/codes"}
     if path in STEPUP_ROUTES:
-        r = api.c.post(path, json={"email": "v@x.io", "role": "viewer"}, headers=api.code_session())
+        body = {"email": "v@x.io", **({"role": "viewer"} if path in ("/api/auth/invite", "/api/users/role") else {})}
+        r = api.c.post(path, json=body, headers=api.code_session())
         assert r.status_code == 403 and r.json()["detail"] == STEPUP, (path, r.text)
+    elif path in TOTP_GATED:                    # an email-code session without an authenticator code gets nothing
+        body = {"/api/rearm": {"totp": ""}, "/api/automode": {"mode": "auto", "totp": ""},
+                "/api/auth/password/change": {"current_password": PW, "totp": "", "new_password": PW + " two"},
+                "/api/auth/recovery/codes": {"password": PW, "totp": ""}}[path]
+        r = api.c.post(path, json=body, headers=api.code_session())
+        assert r.status_code == 403 or (path == "/api/automode" and r.json()["ok"] is False), (path, r.text)

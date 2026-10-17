@@ -43,4 +43,15 @@ def test_release_7_code_still_writes_sessions_into_a_version_8_file(tmp_path):
         conn.execute("INSERT INTO users (email, role, enabled, body) VALUES ('o@x.io', 'owner', 1, '{}')")
         conn.execute("INSERT INTO sessions (token_sha256, email, expires_ns) VALUES ('t', 'o@x.io', 1)")
         assert conn.execute("SELECT method FROM sessions").fetchone() == ("password_totp",)
+        conn.commit()
         assert migrate(conn, "aux", migrations=AUX[:7]) == []          # the older code accepts the newer file
+
+
+def test_migration_8_reapplies_after_the_runbook_downgrade_without_a_duplicate_column(tmp_path):
+    """The RUNBOOK downgrade deletes the newer schema_version rows; the next start re-applies 8 over its own column."""
+    with sqlite3.connect(tmp_path / "aux.db") as conn:
+        migrate(conn, "aux")
+        conn.execute("DELETE FROM schema_version WHERE version = 8")
+        conn.commit()
+        assert migrate(conn, "aux") == [8]
+        assert [r[1] for r in conn.execute("PRAGMA table_info(sessions)")].count("method") == 1

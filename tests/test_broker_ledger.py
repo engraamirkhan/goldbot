@@ -333,7 +333,7 @@ def test_reconcile_check_warns_when_the_ledger_report_is_stale(tmp_path):
 
 # ------------------------------------------------------------------------------------------------ storage and bridge
 def test_the_ledger_migration_is_additive_so_a_rollback_still_opens_aux_db():
-    m = AUX[-1]
+    m = AUX[6]
     assert m.name == "broker_ledger" and m.additive
     assert compat_back_to(AUX, m.version) == compat_back_to(AUX, m.version - 1)
 
