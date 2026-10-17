@@ -170,6 +170,43 @@ def check_risk_state(ctx: HealthContext, account_id: str) -> Check:
     return Check(name=name, status=_worst(statuses), reason="; ".join(parts))
 
 
+KILL_DUE_WARN = pd.Timedelta(minutes=5)    # close-everything set with closes due this long after the trip: WARN
+KILL_DUE_FAIL = pd.Timedelta(minutes=30)   # ... this long with the market open throughout: FAIL
+
+
+@register_check("account", block=BLOCK_ACCOUNT, pos=25)
+def check_kill_switch(ctx: HealthContext, account_id: str) -> list[Check]:
+    """C9 (BACKLOG 62 plan review): the 12% kill switch's close-everything flag (`kill_everything`,
+    state/risk_<account>.json) still set with closes the engine could not get filled (`closes_due`,
+    engine_<account>.json). Timed from the trip (`halted_at`): ok inside KILL_DUE_WARN, then WARN (Telegram,
+    NOTIFY_ON_WARN), FAIL after KILL_DUE_FAIL with the market open throughout. Nothing while the flag is clear or no
+    close is due; an unreadable file is check_engine's and check_risk_state's to report. Reporting only."""
+    try:
+        r = _read_json(ctx.state_dir / f"risk_{account_id}.json")
+        due = list(_read_json(ctx.state_dir / f"engine_{account_id}.json").get("closes_due") or [])
+        since = pd.Timestamp(r["halted_at"]) if r.get("halted_at") else None
+        flag = bool(r.get("kill_everything"))
+    except (ValueError, OSError, AttributeError, TypeError):
+        # silent here on purpose: a corrupt engine or risk file FAILs check_engine / check_risk_state, and a missing one
+        # is reported there too (tests/test_kill_switch_health.py pins this), so one fault raises one alert
+        return []
+    if not (flag and due):
+        return []
+    name = f"kill_switch:{account_id}"
+    what = (f"{len(due)} close(s) still due after the 12% kill switch: the whole account is not flat yet; closes are "
+            "re-sent every tick (with back-off while the broker says the market is closed), stops rest with the broker")
+    if since is None:
+        return [Check(name=name, status="warn", reason=f"{what}; tripped since an unknown time")]
+    age = ctx.now - (since.tz_localize("UTC") if since.tzinfo is None else since)
+    if age <= KILL_DUE_WARN:
+        return [Check(name=name, status="ok", reason=f"{what}; tripped {_age(age.total_seconds())} ago")]
+    open_ = _market_open_throughout(ctx, KILL_DUE_FAIL.total_seconds())
+    status: Status = "fail" if age > KILL_DUE_FAIL and open_ else "warn"
+    tail = "" if _market_open_throughout(ctx, 0) else "; market closed: the closes go out when it opens"
+    return [Check(name=name, status=status, reason=f"{what}; tripped {_age(age.total_seconds())} ago{tail}; close them "
+                                                   "by hand in the terminal if this persists (RUNBOOK, kill switch)")]
+
+
 def _hwm_pending(ctx: HealthContext, account_id: str, risk: dict[str, Any]) -> str | None:
     """ADR 0018: a balance rise the engine has not confirmed or refused for HWM_PENDING_WARN_S in market hours (the
     terminal's balance reads keep disagreeing, so the drawdown may be measured on a mark below the real one). No

@@ -96,6 +96,24 @@ def test_sd_notify_is_a_no_op_outside_systemd_and_never_raises(tmp_path):
 
 
 # ------------------------------------------------------------------------------------------------ LoopWatch
+def test_a_new_run_keeps_the_earlier_runs_spans_in_its_heartbeat(tmp_path):
+    """The feed reconcile judges a stalled feed on every run of the day, not only the current one (re-verify A2)."""
+    t0 = 1_000_000.0
+    loop_heartbeat_path(tmp_path, "icm-demo").write_text(json.dumps(
+        {"phase": "loop", "started": t0, "ts": t0 + 3600, "runs": [[t0 - 7200, t0 - 3600], [t0 - 4 * 86400, t0 - 3 * 86400]]}))
+    w = LoopWatch(tmp_path, "icm-demo", clock=FakeClock(t0 + 7200), notify=lambda m: True)
+    w.ready()
+    assert _beat(tmp_path)["runs"] == [[t0 - 7200, t0 - 3600], [t0, t0 + 3600]]   # older than 2 days dropped
+    assert _beat(tmp_path)["started"] == t0 + 7200
+
+
+def test_an_unreadable_previous_heartbeat_starts_an_empty_run_history(tmp_path):
+    loop_heartbeat_path(tmp_path, "icm-demo").write_text("{")
+    w = LoopWatch(tmp_path, "icm-demo", clock=FakeClock(), notify=lambda m: True)
+    w.ready()
+    assert _beat(tmp_path)["runs"] == []
+
+
 def test_every_loop_pass_beats_and_feeds_the_watchdog_rate_limited(tmp_path):
     clock, sent = FakeClock(), list[str]()
     w = LoopWatch(tmp_path, "icm-demo", beat_every_s=15, notify_every_s=5, clock=clock,

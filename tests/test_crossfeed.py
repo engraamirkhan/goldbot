@@ -115,10 +115,15 @@ def _health_ctx(tmp_path: Path, now: pd.Timestamp = NOW) -> HealthContext:
                          get_secret=lambda k: None, disk_usage=lambda p: (100e9, 50e9, 50e9))
 
 
+_CLOSES = {"ok": 0, "warning": 30, "error": 200}      # close mismatches of 1,300 minutes for each grade
+
+
 def _report(severity: str, ts: pd.Timestamp = NOW) -> cf.ReconcileReport:
+    """A report whose counts grade to `severity` (health grades the counts, not the stored word)."""
     return cf.ReconcileReport(account_id="icm-demo", ts_utc=ts, window_from=ts - pd.Timedelta(days=1), window_to=ts,
-                              tolerance=0.02, broker_minutes=1300, engine_minutes=1300, matched=1300, close_mismatch=0,
-                              missing_engine=0, missing_broker=0, max_close_diff=0.0, divergence=0.0, severity=severity)
+                              tolerance=0.02, broker_minutes=1300, engine_minutes=1300, matched=1300,
+                              close_mismatch=_CLOSES[severity], missing_engine=0, missing_broker=0, max_close_diff=0.0,
+                              divergence=_CLOSES[severity] / 1300, severity=severity)
 
 
 @pytest.mark.parametrize("severity,status", [("ok", "ok"), ("warning", "warn"), ("error", "fail")])
@@ -139,6 +144,160 @@ def test_run_checks_includes_the_reconcile_check(tmp_path):
     _report("error").save(tmp_path)
     checks = {c.name: c.status for c in health.run_checks(_health_ctx(tmp_path)).checks}
     assert checks["reconcile:icm-demo"] == "fail"
+
+
+# ---- an engine outage is a coverage gap, not a price fault (docs/proposals/2026-10-feed-reconcile-outage-minutes.md)
+def _outage(eb: pd.DataFrame, runs: list[range]) -> pd.DataFrame:
+    """The engine's bars for the given row ranges only (it was stopped in between)."""
+    return eb.iloc[[i for r in runs for i in r]].reset_index(drop=True)
+
+
+def test_minutes_the_engine_did_not_store_are_a_coverage_gap_not_divergence():
+    eb = ticks_to_1m(day_ticks())
+    bb = cf.broker_m1_bars(as_broker_m1(eb))
+    n = cf.reconcile(_outage(eb, [range(400, 700)]), bb, start=NOW - pd.Timedelta(days=1), end=NOW, tolerance=0.02)
+    assert n["matched"] == 300 and n["missing_engine"] == n["broker_minutes"] - 300 > 1000
+    assert n["close_mismatch"] == 0 and n["missing_broker"] == 0 and n["edge_excluded"] == 2   # restart + stop
+    assert n["divergence"] == 0.0 and n["severity"] == "warning"     # a gap warns; it never reads as a price error
+
+
+def test_one_clean_stop_skips_exactly_one_minute():
+    eb = ticks_to_1m(day_ticks())
+    bb = cf.broker_m1_bars(as_broker_m1(eb))
+    mine = _outage(eb, [range(0, 500)])                             # up from the window's start, stopped once
+    mine.loc[mine.index[-1], "bid_close"] += 0.5                    # the engine stopped inside its last minute
+    n = cf.reconcile(mine, bb, start=NOW - pd.Timedelta(days=1), end=NOW, tolerance=0.02)
+    assert n["close_mismatch"] == 0 and n["edge_excluded"] == 1
+
+
+def test_the_first_partial_minute_after_a_restart_is_not_compared():
+    eb = ticks_to_1m(day_ticks())
+    bb = cf.broker_m1_bars(as_broker_m1(eb))
+    mine = _outage(eb, [range(0, 300), range(400, len(eb))])
+    mine.loc[[300], "bid_close"] += 0.5                              # row 300 of mine is eb row 400: the restart
+    n = cf.reconcile(mine, bb, start=NOW - pd.Timedelta(days=1), end=NOW, tolerance=0.02)
+    assert n["close_mismatch"] == 0 and n["edge_excluded"] == 2
+
+
+def test_a_flapping_feed_still_fails_on_price():
+    """A feed dropping every other minute leaves one-minute gaps: no minute is an edge, every close is compared."""
+    eb = ticks_to_1m(day_ticks())
+    m1 = as_broker_m1(eb)
+    m1.loc[m1.index[300:700], "close"] += 1.0
+    n = cf.reconcile(eb.iloc[::2].reset_index(drop=True), cf.broker_m1_bars(m1), start=NOW - pd.Timedelta(days=1),
+                     end=NOW, tolerance=0.02)
+    assert n["edge_excluded"] == 0 and n["close_mismatch"] >= 150 and n["severity"] == "error"
+
+
+@pytest.mark.parametrize("edges,severity", [(2, "ok"), (15, "warning"), (50, "error")])
+def test_many_skipped_edge_minutes_are_graded(edges, severity):
+    """Edges over matched minutes: above 5% warns, above 20% fails (a crash-looping engine)."""
+    _, g = cf.grade(broker_minutes=200, engine_minutes=200, matched=200, edge_excluded=edges, close_mismatch=0,
+                    missing_engine=0, missing_broker=0)
+    assert g == severity
+
+
+def test_a_friday_outage_with_four_engine_minutes_warns_instead_of_failing():
+    """2026-10-16: the engine ran for 4 of 1,297 broker minutes (deploy, MT5 login); 3 edge closes mismatched."""
+    eb = ticks_to_1m(day_ticks())
+    bb = cf.broker_m1_bars(as_broker_m1(eb))
+    mine = _outage(eb, [range(400, 402), range(800, 802)])
+    mine.loc[[0, 1, 3], "bid_close"] += 0.5          # every minute is a restart or a stop edge
+    n = cf.reconcile(mine, bb, start=NOW - pd.Timedelta(days=1), end=NOW, tolerance=0.02)
+    assert (n["close_mismatch"], n["edge_excluded"]) == (0, 4)
+    assert n["severity"] == "warning"                # too few compared minutes to call a price error
+
+
+def test_a_real_price_fault_while_the_engine_ran_still_fails():
+    eb = ticks_to_1m(day_ticks())
+    m1 = as_broker_m1(eb)
+    m1.loc[m1.index[400:500], "close"] += 1.0
+    n = cf.reconcile(_outage(eb, [range(300, 700)]), cf.broker_m1_bars(m1), start=NOW - pd.Timedelta(days=1), end=NOW,
+                     tolerance=0.02)
+    assert n["close_mismatch"] == 100 and n["severity"] == "error"
+
+
+def test_an_engine_that_is_up_with_a_frozen_feed_fails():
+    """A2: the engine's current run began before the window; its bars stop after two hours."""
+    eb = ticks_to_1m(day_ticks())
+    bb = cf.broker_m1_bars(as_broker_m1(eb))
+    n = cf.reconcile(_outage(eb, [range(0, 120)]), bb, start=NOW - pd.Timedelta(days=1), end=NOW, tolerance=0.02,
+                     engine_up=[(NOW - pd.Timedelta(days=2), NOW)])
+    assert n["missing_engine_up"] == n["missing_engine"] == n["up_minutes"] - n["matched"] > 1000
+    assert n["severity"] == "error"
+
+
+def test_reconcile_account_reads_the_engine_run_start_from_the_loop_heartbeat(tmp_path):
+    from goldbot.ops.watchdog import loop_heartbeat_path
+    store = Store(tmp_path / "data")
+    ticks = day_ticks()
+    store.append("ticks", ticks[ticks["ts_utc"] < pd.Timestamp("2026-10-07 02:00", tz="UTC")], source="icm-demo",
+                 dedupe=False)
+    loop_heartbeat_path(tmp_path, "icm-demo").write_text(json.dumps(
+        {"phase": "loop", "ts": NOW.timestamp() - 5, "started": (NOW - pd.Timedelta(days=3)).timestamp()}))
+    rep = cf.reconcile_account(store, FakeBroker(as_broker_m1(ticks_to_1m(ticks))), "icm-demo", "XAUUSD", NOW,
+                               state_dir=tmp_path)
+    assert rep.severity == "error" and rep.missing_engine_up > 0
+    c = cf.check_reconciliation(_health_ctx(tmp_path), "icm-demo")
+    assert c.status == "fail" and "while the engine was up" in c.reason
+
+
+def test_a_stall_then_a_restart_later_the_same_day_still_fails(tmp_path):
+    """Re-verify A2: the current run is 10 minutes old, the stall was in an earlier run of the day; the heartbeat
+    keeps earlier runs' spans (LoopWatch `runs`), so the stall is still judged on the up-minutes of every run."""
+    from goldbot.ops.watchdog import loop_heartbeat_path
+    store = Store(tmp_path / "data")
+    ticks = day_ticks()
+    store.append("ticks", ticks[ticks["ts_utc"] < pd.Timestamp("2026-10-07 02:00", tz="UTC")], source="icm-demo",
+                 dedupe=False)
+    earlier = [(NOW - pd.Timedelta(days=1, hours=1)).timestamp(), (NOW - pd.Timedelta(hours=2)).timestamp()]
+    loop_heartbeat_path(tmp_path, "icm-demo").write_text(json.dumps(
+        {"phase": "loop", "ts": NOW.timestamp() - 5, "started": (NOW - pd.Timedelta(minutes=10)).timestamp(),
+         "runs": [earlier]}))
+    rep = cf.reconcile_account(store, FakeBroker(as_broker_m1(ticks_to_1m(ticks))), "icm-demo", "XAUUSD", NOW,
+                               state_dir=tmp_path)
+    assert rep.up_minutes > 1000 and rep.severity == "error"
+
+
+def test_an_engine_started_after_the_outage_keeps_the_gap_a_warning():
+    eb = ticks_to_1m(day_ticks())
+    bb = cf.broker_m1_bars(as_broker_m1(eb))
+    up = pd.Timestamp(eb["ts_utc"].iloc[1200])
+    n = cf.reconcile(_outage(eb, [range(1200, len(eb))]), bb, start=NOW - pd.Timedelta(days=1), end=NOW,
+                     tolerance=0.02, engine_up=[(up, NOW)])
+    assert n["missing_engine_up"] == 0 and n["severity"] == "warning"
+
+
+def test_the_health_reason_separates_engine_coverage_from_divergence(tmp_path):
+    rep = _report("warning").model_copy(update={"broker_minutes": 1297, "engine_minutes": 4, "matched": 4,
+                                                "missing_engine": 1293, "edge_excluded": 2, "close_mismatch": 0})
+    rep.save(tmp_path)
+    c = cf.check_reconciliation(_health_ctx(tmp_path), "icm-demo")
+    assert c.status == "warn"
+    assert "engine bars missing for 1293 of 1297 broker minutes" in c.reason and "not a price fault" in c.reason
+    assert "2 stop/restart-edge minutes not compared" in c.reason
+
+
+def test_health_regrades_a_report_written_before_the_rule_change(tmp_path):
+    """The 2026-10-16 report (old rule: severity error over broker minutes) reads as a WARN after the deploy, so a
+    stale FAIL does not hold the outside dead man's switch on /fail until the next weekday run."""
+    rep = _report("ok").model_copy(update={"broker_minutes": 1297, "engine_minutes": 4, "matched": 4, "close_mismatch": 3,
+                                           "missing_engine": 1293, "divergence": 0.9992, "severity": "error"})
+    rep.save(tmp_path)
+    assert cf.check_reconciliation(_health_ctx(tmp_path), "icm-demo").status == "warn"
+
+
+def test_a_coverage_gap_writes_a_warning_event_and_a_price_fault_an_error(tmp_path):
+    store = Store(tmp_path / "data")
+    ticks = day_ticks()
+    keep = ticks[(ticks["ts_utc"] >= pd.Timestamp("2026-10-07 10:00", tz="UTC"))
+                 & (ticks["ts_utc"] < pd.Timestamp("2026-10-07 18:00", tz="UTC"))]
+    store.append("ticks", keep, source="icm-demo", dedupe=False)
+    m1 = as_broker_m1(ticks_to_1m(ticks))
+    rep = cf.reconcile_account(store, FakeBroker(m1), "icm-demo", "XAUUSD", NOW, state_dir=tmp_path)
+    assert rep.severity == "warning" and rep.missing_engine > 0 and rep.close_mismatch == 0
+    ev = store.read("dq_events", source="icm-demo")
+    assert list(ev["check"]) == ["reconcile_missing_engine"] and set(ev["severity"]) == {"warning"}
 
 
 def _job_ctx(tmp_path: Path, broker_for: Any) -> JobContext:
