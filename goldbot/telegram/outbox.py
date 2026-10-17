@@ -2,6 +2,11 @@
 
 * proposals published on the approval bus that have not been sent yet; once a proposal is finished (approved,
   rejected or expired, on any channel) its messages are edited to show the outcome;
+* NOT CONFIRMED cards (BACKLOG 87; docs/ux/order-not-confirmed.md: "the card is edited at approval, then once more
+  when resolved"): the replies that read "⚠️ NOT CONFIRMED" are watched until the order's outcome is settled; each
+  poll re-reads the archived proposal, which `engine.unconfirmed._card` rewrites at every resolution, and the service
+  edits them once per new outcome. Only replies that went out are watched, so a card it never sent is never edited;
+  best effort, logged: the owner's notice for the outcome is a separate message either way;
 * staff-agent reports: new rows of aux.db table agent_runs, each as a short phone-sized message, and owner notices
   (status "notice"), which the API appends to state/agent_runs.jsonl. The first run starts at the end of both, so a
   fresh install does not replay history. Reports are at least once: `pending_reports` reads, and the cursor moves
@@ -40,12 +45,16 @@ from goldbot.db.bookkeeping import (
     outbox_forget,
     outbox_mark_sent,
     outbox_sent,
+    outbox_set_shown,
+    outbox_unwatch,
+    outbox_watch,
+    outbox_watched,
     runs_after,
     set_outbox_cursor,
     table_empty,
 )
 from goldbot.db.import_state import ImportSpec
-from goldbot.execution.not_confirmed import NOT_CONFIRMED
+from goldbot.execution.not_confirmed import NOT_CONFIRMED, SETTLED, Confirmation, NcOutcome
 from goldbot.ops.watchdog import loop_heartbeat_path
 from goldbot.telegram.approvals import Proposal
 from goldbot.telegram.bus import ApprovalBus
@@ -60,6 +69,10 @@ MARK_RETRY_MAX_S = 300.0
 # PLACING_MAX_S (longer than any bridge order timeout: a send that raised)
 PLACING_SILENT_S = 60.0
 PLACING_MAX_S = 120.0
+NOT_CONFIRMED_OUTCOME = "GATE_REFUSED: " + NOT_CONFIRMED     # `finished`'s outcome for a card shown NOT CONFIRMED
+# BACKLOG 87: a NOT CONFIRMED card is watched at most this long. The engine stops looking after 7 days
+# (`unconfirmed.KEEP`, notice only, the card unchanged); one more day covers a stopped engine catching up
+WATCH_MAX_S = 8 * 86400.0
 
 
 class OutboxState(Record):
@@ -72,6 +85,14 @@ class ReportsAck(FrozenRecord):
     """Where the report cursor moves once the messages from `pending_reports` were all sent."""
     reports_id: int
     notices_line: int
+
+
+class CardEdit(FrozenRecord):
+    """A watched NOT CONFIRMED card whose archived outcome changed: its replies get `card_text(confirmation)`."""
+    proposal_id: str
+    outcome: NcOutcome
+    confirmation: Confirmation | None
+    messages: tuple[tuple[int, int], ...]
 
 
 def import_outbox_json(path: Path, conn: sqlite3.Connection) -> int:
@@ -162,7 +183,7 @@ class Outbox:
                 if p is not None and p.placing:              # BACKLOG 72 review: the order is still in flight
                     if not self._placing_abandoned(p):
                         continue
-                    outcome = "GATE_REFUSED: " + NOT_CONFIRMED   # never APPROVED for an order nobody confirmed
+                    outcome = NOT_CONFIRMED_OUTCOME              # never APPROVED for an order nobody confirmed
                 elif p is not None and p.gate_refusal:       # approved, but the RiskGate re-check refused the order
                     outcome = "GATE_REFUSED: " + ", ".join(p.gate_refusal)
             with self.db.write() as conn:
@@ -187,6 +208,55 @@ class Outbox:
         except (OSError, ValueError, KeyError, TypeError):
             return True
         return not now - beat < PLACING_SILENT_S
+
+    # ------------------------------------------------------------------ NOT CONFIRMED cards (BACKLOG 87)
+    @property
+    def watched(self) -> dict[str, tuple[list[tuple[int, int]], str, int]]:
+        with self.db.connection() as conn:
+            return outbox_watched(conn)
+
+    def watch(self, proposal_id: str, messages: list[tuple[int, int]]) -> None:
+        """After the service sent `finished`'s NOT CONFIRMED replies: keep the ids of those that went out (they show
+        the pending words) until the outcome is settled. Nothing went out: nothing to edit, nothing kept."""
+        if not messages:
+            return
+        with self.db.write() as conn:
+            outbox_watch(conn, proposal_id, messages, "pending", time.time_ns())
+
+    def card_edits(self) -> list[CardEdit]:
+        """Watched cards whose archived outcome differs from what their replies show. A card whose archive is gone,
+        or watched longer than WATCH_MAX_S, is forgotten; one whose archive cannot be read (torn, or an outcome a newer
+        release wrote) is kept for the next poll."""
+        out: list[CardEdit] = []
+        gone: list[str] = []
+        now = time.time_ns()
+        for pid, (msgs, shown, since) in self.watched.items():
+            try:
+                p = self.bus.get(pid)
+            except Exception as exc:                   # noqa: BLE001 - a torn or newer file: read again next poll
+                log.warning("NOT CONFIRMED card %s not read (%s)", pid, type(exc).__name__)
+                continue
+            if p is None or (now - since) / 1e9 > WATCH_MAX_S:
+                gone.append(pid)
+                continue
+            c = p.not_confirmed
+            outcome = "pending" if c is None else c.outcome      # None: left `placing`, reported pending
+            if outcome != shown:
+                out.append(CardEdit(proposal_id=pid, outcome=outcome, confirmation=c, messages=tuple(msgs)))
+        if gone:
+            with self.db.write() as conn:
+                for pid in gone:
+                    outbox_unwatch(conn, pid)
+        return out
+
+    def card_edited(self, proposal_id: str, outcome: NcOutcome) -> None:
+        """The edit for `outcome` was attempted (one attempt per outcome: a lost edit is logged, not retried every
+        poll); a settled outcome ends the watch."""
+        with self.db.write() as conn:
+            if outcome in SETTLED:
+                outbox_unwatch(conn, proposal_id)
+            else:
+                outbox_set_shown(conn, proposal_id, outcome)
 
     # ------------------------------------------------------------------ agent reports
     def pending_reports(self) -> tuple[list[str], ReportsAck | None]:

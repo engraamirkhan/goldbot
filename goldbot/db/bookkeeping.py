@@ -431,6 +431,29 @@ def outbox_forget(conn: sqlite3.Connection, proposal_id: str) -> bool:
     return gone
 
 
+def outbox_watched(conn: sqlite3.Connection) -> dict[str, tuple[list[tuple[int, int]], str, int]]:
+    """proposal id -> (NOT CONFIRMED reply messages, the outcome they show, since_ns), oldest first (BACKLOG 87)."""
+    return {pid: ([(int(c), int(m)) for c, m in json.loads(msgs)], shown, int(since))
+            for pid, msgs, shown, since in
+            conn.execute("SELECT proposal_id, messages, shown, since_ns FROM outbox_watch ORDER BY rowid")}
+
+
+def outbox_watch(conn: sqlite3.Connection, proposal_id: str, messages: list[tuple[int, int]], shown: str,
+                 since_ns: int) -> None:
+    """Start watching a card's replies; a card already watched keeps what it shows (a repeat never resets it)."""
+    conn.execute("INSERT INTO outbox_watch (proposal_id, messages, shown, since_ns) VALUES (?, ?, ?, ?) "
+                 "ON CONFLICT(proposal_id) DO NOTHING",
+                 (proposal_id, json.dumps([list(m) for m in messages]), shown, since_ns))
+
+
+def outbox_set_shown(conn: sqlite3.Connection, proposal_id: str, shown: str) -> None:
+    conn.execute("UPDATE outbox_watch SET shown = ? WHERE proposal_id = ?", (shown, proposal_id))
+
+
+def outbox_unwatch(conn: sqlite3.Connection, proposal_id: str) -> None:
+    conn.execute("DELETE FROM outbox_watch WHERE proposal_id = ?", (proposal_id,))
+
+
 def outbox_cursor(conn: sqlite3.Connection) -> tuple[int, int] | None:
     """(last agent_runs id relayed, agent_runs.jsonl lines scanned for notices); None before the first start."""
     r = conn.execute("SELECT reports_id, notices_line FROM outbox_cursor WHERE id = 1").fetchone()
@@ -485,6 +508,7 @@ __all__ = ["AGENT_RUNS", "AGENT_SPEND", "AgentRunLog", "OUTBOX_FILE", "RUNS_FILE
            "dual_read", "ensure_imported", "export_json", "export_latest", "export_spend", "fallback_hits",
            "foreign_write", "line_offset_from_cursor", "load_jobs", "max_run_id", "merge_agent_spend_json",
            "month_spent", "outbox_cursor", "outbox_document", "outbox_forget", "outbox_mark_sent", "outbox_sent",
+           "outbox_set_shown", "outbox_unwatch", "outbox_watch", "outbox_watched",
            "render_spend", "reserve_spend", "runs_after", "remember_hash", "save_jobs", "scheduler_document", "scheduler_heartbeat",
            "scheduler_status", "set_outbox_cursor",
            "table_empty"]

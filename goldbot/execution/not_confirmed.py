@@ -24,6 +24,9 @@ GATE = " New entries wait until it's settled."        # the refusal path of cond
 AMBIGUOUS_SETTLE_S = 120.0
 AMBIGUOUS_ALERT_S = 600.0
 NcOutcome = Literal["pending", "opened", "opened_closed", "no_trade", "opened_late", "still_unknown"]
+# outcomes no later look changes (BACKLOG 87: the Telegram card stops being edited); "no_trade" is not one, its order
+# can still turn up (`opened_late`, condition 6)
+SETTLED: frozenset[str] = frozenset({"opened", "opened_closed", "opened_late"})
 NoticeKind = Literal["opened", "opened_stop_set", "opened_no_stop", "opened_no_stop_through", "opened_closed",
                      "no_trade", "opened_late", "still_unknown", "gave_up"]
 Tone = Literal["warn", "ok", "neutral", "bad"]
