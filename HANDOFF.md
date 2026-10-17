@@ -21,6 +21,23 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     outbox has already reported NOT CONFIRMED, and no "opened" notice follows. A raise before the order row exists
     (for example `last_tick`) is also archived NOT CONFIRMED with nothing to look up, so the dashboard lists it as
     pending until UNCONFIRMED_LISTED_S. Both are routed to trading-safety.
+- An approval that raises before its order row exists is archived "not sent", never "approved and sent" or NOT
+  CONFIRMED (BACKLOG 85, implementer, 2026-10-17; trading-safety residual 1 on BACKLOG 84).
+  - `Engine._on_decision` now wraps the old body (`_apply_decision`); on any raise it calls
+    `unconfirmed.archive_not_sent`, then re-raises. With no `pending_orders` row for the proposal (nothing can have
+    reached the broker) and no answer archived yet, the card gets the refusal code `not_sent:mt5_box` (a bridge error
+    or a connection failure, e.g. `account()` at approval) or `not_sent:engine` (anything else), `placing` cleared,
+    archived, one owner notice and a `not_sent` journal row. A raise after the row exists keeps BACKLOG 84 (NOT
+    CONFIRMED, entries refused until the look-up settles it). No row, so nothing is pending and the next entry is
+    allowed.
+  - Wording in `goldbot/execution/not_placed.py` (`not_sent_code`, `NotPlaced.not_sent`, `by` gains "engine"): card
+    "🛑 NOT PLACED: approved, but the order could not be sent: the MT5 box couldn't be reached. Nothing was sent.";
+    dashboard red "Could not be sent. …; nothing was sent."; the notice names the trade and the masked account, never
+    the proposal id, the exception, a host or a login. Rows added to docs/ux/order-not-placed.md for ui-ux approval.
+  - API contract: `NotPlaced.by` gains "engine" and `NotPlaced.not_sent` (bool) is added; web/openapi.json and
+    web/src/lib/schema.d.ts regenerated, `ProposalCard` picks the "Could not be sent" heading.
+  - Not changed: the digest and performance report count a not-sent card under "not placed by the MT5 box or the
+    broker" (`approval_cause` "not_placed"); its phrase does not name the engine.
 - **Targeted refetch for G1/G2: `data-dukascopy` input `months` (data-engineer, 2026-10-17; not dispatched, not
   pushed; security review of the workflow change pending).** One manual dispatch now refetches exactly a list of
   months, e.g. `gh workflow run data-dukascopy.yml --ref main -f months=2024-01,2024-06`. The list is validated

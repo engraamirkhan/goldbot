@@ -38,6 +38,7 @@ The existing two ceiling codes may move into the same table, but their words sta
 | The MT5 box dropped an order that aged past `ORDER_MAX_AGE_S` (retcode 10006, message prefix `bridge_stale_order`) | `bridge_stale_order` |
 | Any other definite reject | `broker_refused:<retcode>`, e.g. `broker_refused:10019` |
 | The paper broker's 10027 (a duplicate send, not Algo Trading off) | `broker_refused:10027:paper` |
+| **BACKLOG 85 (for ui-ux approval):** the approval path raised before `_execute` wrote the order row (a bridge read failure at approval, a connection error: `not_sent:mt5_box`; any other error: `not_sent:engine`). Nothing left the engine | `not_sent:mt5_box`, `not_sent:engine` |
 
 Bridge prefixes are tested before the retcode, because the bridge's own refusals also use 10006.
 
@@ -85,6 +86,24 @@ Bridge prefixes are tested before the retcode, because the bridge's own refusals
 | `broker_refused:10044` | only closing trades are allowed in this symbol right now | Nothing to do: it's the broker's restriction. |
 | `broker_refused:10046` | the account doesn't allow opposite trades at the same time (no hedging) | Check open trades on the Overview. |
 | `broker_refused:<any other N>`, including 10006 from the broker | none: the fallback template above | If it repeats, ask Claude to check (broker code N). |
+
+**Not sent (BACKLOG 85, for ui-ux approval).** Nobody refused the order: it never left the engine, so the card,
+notice and dashboard name no refuser. `{reason}` reads after "could not be sent: ".
+
+| Code | `{reason}` | `{next_step}` (notice only) |
+|---|---|---|
+| `not_sent:mt5_box` (by: MT5 box) | the MT5 box couldn't be reached | Nothing to do if it's a one-off. If it repeats, check the MT5 box on the Health tab. |
+| `not_sent:engine` (by: engine) | the engine hit an error before sending it | Nothing to do if it's a one-off. If it repeats, ask Claude to check the engine log. |
+
+| Surface | Template (final strings for `not_sent:mt5_box`) |
+|---|---|
+| Telegram card | `🛑 NOT PLACED: approved, but the order could not be sent: {reason}. Nothing was sent.` e.g. `🛑 NOT PLACED: approved, but the order could not be sent: the MT5 box couldn't be reached. Nothing was sent.` |
+| Dashboard red note (`not_placed.not_sent` true) | **Could not be sent.** `{Reason}; nothing was sent.` e.g. "Could not be sent. The MT5 box couldn't be reached; nothing was sent." |
+| Owner notice | `Order not placed: {LONG\|SHORT} {lots} lots {symbol} on {account} could not be sent: {reason}. Nothing was sent; open trades keep their stops. {next_step}` e.g. "Order not placed: LONG 0.37 lots XAUUSD on icm-demo could not be sent: the MT5 box couldn't be reached. Nothing was sent; open trades keep their stops. Nothing to do if it's a one-off. If it repeats, check the MT5 box on the Health tab." |
+
+`{lots}` is the card's lots (the re-check may not have sized it yet). Never shown: the proposal id, the exception or
+its message, a host, a login. A raise **after** the order row exists stays NOT CONFIRMED (BACKLOG 84,
+docs/ux/order-not-confirmed.md): the send may have reached the broker.
 
 10006 from the broker itself means "rejected" with no reason, so it gets the fallback. That is honest: the broker
 gave no reason, so the copy doesn't invent one.
@@ -136,6 +155,7 @@ Order not placed: the MT5 box refused LONG 0.37 lots XAUUSD on icm-demo: it took
 | Refused by the MT5 box (ceiling) | shipped, BACKLOG 66 | unchanged | unchanged |
 | **Refused by the MT5 box (stale)** | `bridge_stale_order` | this doc | this doc |
 | **Refused by the broker** | any other definite reject | this doc | this doc |
+| **Not sent (BACKLOG 85)** | the approval path raised before the order row existed | 🛑 NOT PLACED: approved, but the order could not be sent: … | red "Could not be sent. …" |
 | Not confirmed | ambiguous result (10008, 10010, 10011, 10012, 10031, -1, unknown) | BACKLOG 72: docs/ux/order-not-confirmed.md | BACKLOG 72 |
 
 Phone (360 px) and desktop, light and dark: the note is the existing `outcome bad` paragraph (AA tokens
