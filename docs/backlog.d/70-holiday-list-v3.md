@@ -1,10 +1,9 @@
 ---
 number: 70
-rank: 16
 title: Ship the cme-metals-v3 holiday list (BACKLOG 45 decision)
 stage: Operational risk (evidence) · RUN
 size: S
-status: 'ready (decided 2026-10-16 by program director + product owner on BACKLOG 45) · accountable: implementer · due 2026-10-30'
+status: 'parked 2026-10-17 (cap of 15): the holiday window stays off until the PD+PO adopt it after 46, so the list change cannot move money before then; still ready, re-enters when 45''s final lands · accountable: implementer · due 2026-10-30'
 ---
 - **70. Ship the cme-metals-v3 holiday list (implementer; quant review).** Decided 2026-10-16 by program director +
   product owner (owner delegated) on BACKLOG 45: ADOPT cme-metals-v3 (evidence:

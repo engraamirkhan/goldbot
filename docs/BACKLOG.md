@@ -50,6 +50,17 @@ finance-auditor, 11-04). 27 records the terminal's contract terms read today and
 (release-manager, due 10-23, wave lane 4; accepted at that PR). 65 is parked. The CFO's owner-only matters (C1-C5,
 OD-12) are in ROADMAP section 6 as OD-16 to OD-20.
 
+**Order outcomes after approval 2026-10-17 (program director + product owner; base 765ec27).** From the two risks
+`docs/ux/order-not-placed.md` flags. New 71 (rank 6: the definite-reject build itself, copy final but never
+ranked), 72 (rank 7: ambiguous results, NOT CONFIRMED) and 73 (parked: auto-mode reject notices). Why this order:
+both 71 and 72 fix a false safety state (a card reads APPROVED when no trade, or an unknown one, exists) on the
+propose path the demo runs from its first day, so they rank with the safety rails and above 62 (other symbols, which
+the demo account does not hold). 71 is ready and small; 72 also closes a record gap (an ambiguous result's row is
+marked `rejected`, so a fill that closes inside one reconciliation pass is never recorded) and needs a
+trading-safety plan first, so it ranks second. 73 cannot fire until auto mode exists (A10: 100 decided proposals), so
+it is parked with a trigger. To hold 15 rows, 45, 69 and 70 are parked (work and dates unchanged): the holiday window
+they feed stays off, and the November audit is two weeks out.
+
 ## Ranked items
 
 | # | Item | Stage · kind | Size | Status |
@@ -59,6 +70,8 @@ OD-12) are in ROADMAP section 6 as OD-16 to OD-20.
 | 66 | Equity-scaled lot ceiling at the bridge (GuardedBroker) | Execution and risk (independent backstop under RiskGate) · PROTECT · RUN | M | ready for the architect (decided 2026-10-16 from the CFO capital plan) · next: architect plan by 2026-10-23, trading-safety verdict on the plan, implementer (failing tests first), trading-safety verdict on the build · accountable: architect · due 2026-10-23 (plan; the plan names the build lane and its date) |
 | 44 | Confirm a zero or collapsed equity read before the 12% kill switch (ADR 0016) | Execution and risk (drawdown stages) · PROTECT | S | in review (d2f2999, b9e9dac; re-review 2026-10-16 found a save-failure gap, fixed in 869bb04; all in PR #79; trading-safety re-verify of 869bb04 not on record) · accountable: trading-safety-reviewer · due 2026-10-17 |
 | 60 | Approval window expiry trusts a future-stamped proposal | Approvals (owner confirms entries, 90 s) · PROTECT | S | changes requested (bf5240b/2bfeb36) · trading-safety-reviewer CHANGES 2026-10-16 at 626b56b: 3 decision paths expire at 90 s and future/NaN stamps are refused (tests/test_approval_window_clock.py); F60-1 LOW a pre-restart click can apply to the same proposal re-raised after a restart (runner.py:486-498, bus.py:186-198); F60-2 LOW checks/services.py:138 reads NaN/future as fine; fix lane running, then re-verify of F60-1/F60-2 only · accountable: implementer, then trading-safety-reviewer · due 2026-10-20 |
+| 71 | Approved orders the broker or the MT5 box refuses read NOT PLACED, with a notice | Execution and approvals (entry outcome truth) · PROTECT · RUN | M | ready (decided 2026-10-17 by program director + product owner; copy final in docs/ux/order-not-placed.md) · accountable: implementer, then trading-safety-reviewer · due 2026-10-23 (built; starts when 62 and 43 have left runner.py, one runner.py lane at a time) |
+| 72 | NOT CONFIRMED: an ambiguous order result is resolved against the broker and the owner told | Execution and reconciliation (sent orders, entry outcome truth) · PROTECT · RUN | M | ready for the architect (decided 2026-10-17 by program director + product owner) · next: architect plan and trading-safety plan verdict by 2026-10-21, ui-ux copy by 2026-10-21, build after 71 (same files) · accountable: architect · due 2026-10-21 (plan; the plan names the build date, target 2026-10-27) |
 | 62 | The 12% kill switch flattens every position on the account, all symbols | Execution and risk (drawdown stages, ADR 0016) · PROTECT · RUN | S | ready (decided 2026-10-16) · accountable: implementer, then trading-safety-reviewer · due 2026-10-22 (built 10-21, trading-safety verdict 10-22) |
 | 43 | The engine publishes why it refuses entries, and writes state while the market is closed | Operational resilience, entry status · RUN | M | in review: the heartbeat part landed as BACKLOG 59 (6287d10, 412fd0d; in PR #79); the `entry_blocks` part is built on lane/entry-blocks (R43), reviews owed: code, trading-safety, ui-ux · accountable: implementer · due 2026-10-21 |
 | 27 | Broker contract terms recorded from the demo terminal (ADR 0004) | Execution, position sizing · RUN | S | in progress (leverage, margin, stop-out, contract and volume read from the terminal 2026-10-16; swap, commission or Raw Spread, negative-balance protection and the collector file still open) · accountable: sre · due 2026-10-20 |
@@ -66,10 +79,7 @@ OD-12) are in ROADMAP section 6 as OD-16 to OD-20.
 | 63 | Card-bound approvals: a tap is bound to the exact card the owner saw | Approvals (owner confirms entries, 90 s) · PROTECT · RUN | S | built 2026-10-16 (implementer; TRACEABILITY A16), awaiting trading-safety-reviewer APPROVE · accountable: implementer, then trading-safety-reviewer · due 2026-10-23 |
 | 68 | Release hygiene: explain the CI-minutes record; clean up and retire worktrees | Engineering operations (CI cost, disk) · RUN | S | ready (decided 2026-10-16 from the CFO budget and the CTO tech-debt list) · accountable: release-manager · due 2026-10-19 (worktrees), 2026-10-23 (CI minutes) |
 | 64 | Dashboard header shows the signed-in role, never the email | Dashboard (every screen; privacy) · RUN | S | built 2026-10-16 to docs/ux/header-role.md (no API change; tests in HANDOFF) · next: ui-ux-designer review, code-reviewer · accountable: ui-ux-designer · due 2026-10-27 |
-| 69 | Monthly audit checks the recorded leverage and the largest order against the gate limits | Review and audit (monthly finance audit) · RUN | S | ready (decided 2026-10-16 from the CFO capital plan) · accountable: finance-auditor · due 2026-11-04 (the November audit) |
 | 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (owner rulings recorded 2026-10-11; owed counts run on `main` 2026-10-16, run 38931951849: H-01 lower bound 152 >= 150, kept as a retire test; H-06 107 < 150, withdrawn by its rule; reservation 8 in the spec and settings (done 2026-10-16, `lane/h06-withdraw-lowerbound`; local dry run of 47 accepts it, 4 queued + 4 slots, nothing written); lower-bound loop fixed to the `one_at_a_time` rule, H-01 AT RISK (152 vs 150 on data-v1 with 21 weekdays missing, coverage triage 2026-10-16); the 2026-11-01 script recount and the G3 recount on repaired data merged into one count-owed-events run after G1 closes, by 2026-11-13, evaluator G3 check by 2026-11-14; `macro-v1` present since 2026-10-13; freeze commit 2026-12-14, rows 2026-12-18..23; needs a first dry run of 47) · accountable: research-director · due 2026-12-14 |
-| 45 | Measure the holiday list before it is adopted | Operational risk (evidence) · RUN | S | in review: draft feda07a ruled 2026-10-16 (quant CHANGES, v3 list SAFE TO ADOPT; ruling applied by the research director) · DECIDED 2026-10-16: ADOPT cme-metals-v3 (implementation: 66, due 2026-10-30) · final with scripts/measure_holidays.py due 2026-10-30; G1 re-run addendum by 2026-11-13 · accountable: performance-analyst · due 2026-10-30 |
-| 70 | Ship the cme-metals-v3 holiday list (BACKLOG 45 decision) | Operational risk (evidence) · RUN | S | ready (decided 2026-10-16 by program director + product owner on BACKLOG 45) · accountable: implementer · due 2026-10-30 |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -1200,6 +1210,89 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
     test).
   - Reviews: quant-reviewer (the list matches the note's recommendation table) and code-reviewer, recorded at the
     merge (E1).
+- **71. Approved orders the broker or the MT5 box refuses read NOT PLACED, with a notice (trading-safety LOW-R1
+  follow-up to 66).** Decided 2026-10-17 by program director + product owner (owner delegated). Value (RUN, protect):
+  today only the bridge's ceiling refusal turns an approved card into NOT PLACED; every other definite reject
+  (`DEFINITE_REJECT_RETCODES`: 10019 no money, 10016 invalid stops, 10018 market closed, the MT5 box's
+  `bridge_stale_order`) archives as ✅ APPROVED with a green "order sent" note, so the owner believes a trade is open
+  when none is. It finds no edge; it stops a false safety state on the path the demo runs from day one (propose mode).
+  This item had no backlog row although its copy was final; it is the prerequisite of 72 and 73 (same table, same
+  card and API field). Depends on: nothing new (66's ceiling refusal is on `main`); file order behind 62 and 43
+  (runner.py). Files: new `goldbot/execution/not_placed.py` (the one wording table), `goldbot/engine/runner.py`
+  `_on_decision` and the notice, `goldbot/telegram/bot.py` `outcome_text`, `goldbot/api/schema.py`
+  (`DecidedProposal.not_placed`), `goldbot/api/app.py`, the generated OpenAPI and `web/src/api`,
+  `web/src/screens/ProposalCard.tsx`, `docs/ux/approval-card.md` (the state row). TRACEABILITY: new A row (the
+  implementer adds it; card outcome after approval), X6 (refusals logged and alerted).
+  Acceptance (the tests listed in `docs/ux/order-not-placed.md` "Tests the implementer writes first", written first and
+  failing on `main`):
+  - `tests/test_not_placed.py`: every retcode in `DEFINITE_REJECT_RETCODES` has a row or reaches the fallback; the
+    fallback names the code; no string holds a proposal id, `bridge_`, `broker_refused`, the word "retcode" or the
+    raw broker message.
+  - Runner: an approved order refused 10019 archives `gate_refusal == ["broker_refused:10019"]` and queues exactly the
+    doc's notice once; `bridge_stale_order` archives `["bridge_stale_order"]`, never `broker_refused:10006`; the
+    ceiling refusal is byte-for-byte unchanged; a fill and every ambiguous result (10008, 10010, 10011, 10012, 10031,
+    -1, an undefined code) still archive APPROVED (72 changes that, not this item).
+  - `outcome_text`: the doc's four worked card examples byte for byte. `ProposalCard.test.tsx`: the four dashboard
+    examples (anchored regexes); an older API without `not_placed` given `broker_refused:N` shows "Refused by the
+    broker (code N); nothing was sent." and never "The RiskGate blocked the order". `STATE_NAME.refused` reads
+    "not placed".
+  - API contract regenerated (`export_openapi.py`, `gen:api`) and committed; e2e unchanged or updated.
+  - Reviews on record at the merge: trading-safety-reviewer (the archive path and that the notice never changes the
+    outcome), code-reviewer, ui-ux-designer (the build matches the doc's words; no re-review of the copy itself).
+- **72. NOT CONFIRMED: an ambiguous order result is resolved against the broker and the owner told
+  (docs/ux/order-not-placed.md open point 1).** Decided 2026-10-17 by program director + product owner (owner
+  delegated). Value (RUN, protect): an approved entry whose result is neither a fill nor a definite reject (10008,
+  10010, 10011, 10012, 10031, -1, any undefined code) archives as ✅ APPROVED, so the owner cannot tell whether a trade
+  exists. Worse than 71's case, and more likely on our set-up (a Wine bridge on a free VM: timeouts and dropped
+  connections). It finds no edge; it keeps the owner's picture and the trade record true.
+  **What the engine does today (product-owner reading of `goldbot/engine/runner.py` at 765ec27; the plan must confirm
+  it):** `_execute` marks the pending_orders row `rejected` for every result that is not a fill, ambiguous ones
+  included. So `_resolve_stale_sending` (rows still `sending` after `SENDING_RESOLVE_S` = 60 s) and the restart's
+  `_resolve_sent` never look that order up again. What does happen: `_reconcile` (engine start, every bar close, every
+  `reconcile_every_s` = 30 s of tick time, so only while ticks arrive) adopts any position in the engine's magic range;
+  `_adopt` finds the row by comment and marks it filled, and a missing stop is reinstated. Gaps: (a) a fill that
+  closes before the next pass (stopped out inside ~30 s) is never recorded, so it is missing from the closed-trade
+  record the stop rule (P6), the phase gates (P7) and the finance ledger read; (b) the owner is never told the
+  answer; (c) with the market closed or the feed down, no pass runs. So the UX doc's proposed "the engine checks again
+  on its next tick" over-promises and must not ship as written.
+  Depends on: 71 (same table, `outcome_text`, API field, ProposalCard; built in the same lane after it). Files: as 71,
+  plus `_execute`, `_resolve_sent`, `_resolve_stale_sending`, `_after_auto_order` in runner.py. TRACEABILITY: X7
+  (pending_orders reconciled against deals; extend the row), X8 (reconciliation), the A row 71 adds.
+  Acceptance:
+  - Plan first: architect plan with a trading-safety-reviewer verdict on it before any code; ui-ux-designer finalises
+    the copy against the plan, and the copy promises only what a test proves (a check "within N minutes" only if a
+    test shows it, and it says the check needs the market open). Starting text: Telegram `⚠️ NOT CONFIRMED: approved
+    and sent, but the broker didn't confirm it. Check Positions; the engine looks it up at the broker and tells you
+    what it finds.`; dashboard amber **Not confirmed.** Amber, not red; the heading word carries the state.
+  - `tests/test_order_not_confirmed.py` (written first, failing on `main`):
+    `test_an_ambiguous_result_on_approval_archives_not_confirmed_never_approved` (each code above and 10099);
+    `test_an_ambiguous_result_keeps_the_sent_row_unresolved_and_it_is_never_resent`;
+    `test_a_position_found_later_is_adopted_with_the_sent_stop_and_the_owner_told_it_is_open`;
+    `test_a_fill_closed_before_the_next_check_is_recorded_from_its_deals`;
+    `test_no_position_and_no_deal_marks_unfilled_and_the_owner_told_no_trade_opened`;
+    `test_an_unreadable_deal_history_keeps_looking_and_sends_at_most_one_still_unknown_notice`;
+    `test_an_auto_unconfirmed_result_is_resolved_the_same_way_and_auto_entries_stay_paused_for_the_bar`;
+    `test_a_restart_resolves_an_unconfirmed_row_as_before`.
+  - Exactly one resolution notice per order (open, opened and already closed, or no trade); no string holds a
+    proposal id, the word "retcode" or the raw message (the 71 table's rule).
+  - `outcome_text` and `ProposalCard.test.tsx`: the final NOT CONFIRMED copy byte for byte, amber, at 360 px and
+    desktop, light and dark.
+  - Reviews on record at the merge: trading-safety-reviewer (plan and build), code-reviewer, ui-ux-designer.
+- **73. Auto-mode broker refusals reach the owner, at most once per cause per hour (docs/ux/order-not-placed.md open
+  point 2).** Decided 2026-10-17 by program director + product owner (owner delegated): accepted, parked. Value (RUN,
+  protect): in auto mode a definite reject is journalled (`auto_rejected:<retcode>`) and the owner is never told, so a
+  repeating refusal (no money, invalid stops) can block every automatic entry unseen. It finds no edge. Depends on: 71
+  (the wording table and notice); ambiguous auto results are 72's. Files: `goldbot/engine/runner.py` (the auto branch
+  and a per-cause throttle), the 71 table. TRACEABILITY: A10 (auto mode), the A row 71 adds.
+  Acceptance (`tests/test_auto_reject_notice.py`, written first):
+  - `test_an_auto_definite_reject_queues_the_not_placed_notice_with_automatic_entries_carry_on`: 71's notice for the
+    cause plus " Automatic entries carry on." (ui-ux-designer confirms the words).
+  - `test_the_same_cause_notifies_at_most_once_an_hour` (cause = who refused + code; host clock; the second within the
+    hour is journalled only); `test_two_causes_in_one_hour_each_notify_once`.
+  - `test_a_ceiling_refusal_keeps_only_its_own_notice` (66's "Automatic entries pause until the next bar", never both);
+    `test_an_auto_unconfirmed_result_is_left_to_72`.
+  - A notice that cannot be queued is logged and never changes the decision or the auto pause (existing best-effort
+    rule). Reviews: trading-safety-reviewer, code-reviewer, ui-ux-designer.
 
 ## Needs the owner
 These are never decided by the product owner or by agents. Since 2026-10-16 (owner rule) only truly owner-only
@@ -1284,7 +1377,12 @@ before any new trading-safety builder. Every lane below touches different files.
    free the SRE (due 10-23). Disjoint from lanes 6 and 9.
 13. **Item 68, release hygiene** (release-manager): worktree clean-up Mon 2026-10-19; CI-minutes answer by 10-23
    (ROADMAP section 2, budget-2026-10.md).
-14. **Item 69** (finance-auditor): one row in `docs/finance/audit-framework.md`, by the 2026-11-04 audit.
+14. **Item 69** (finance-auditor; parked, re-enters 2026-11-01): one row in `docs/finance/audit-framework.md`, by the 2026-11-04 audit.
+15. **Item 72, NOT CONFIRMED: architect plan** (read-only, by 2026-10-21), then a trading-safety verdict on the
+   plan and the ui-ux copy against it. Can start now: it edits no files.
+16. **Item 71, NOT PLACED build** (implementer, then trading-safety): `goldbot/execution/not_placed.py` (new),
+   runner `_on_decision`, `goldbot/telegram/bot.py`, `goldbot/api/`, `web/src/screens/ProposalCard.tsx`. Waits for
+   62 and 43 to leave runner.py (one runner.py lane at a time); 72's build follows in the same lane.
 63 waits for 60's fix lane (same approval files); 65 is parked.
 
 Top three ready items (2026-10-16 night): 66 (lane 11, architect plan), 62 (lane 9) and 43 (lane 6). 27 is in
@@ -1306,6 +1404,12 @@ Moved off the ranked table in the sweep of 2026-10-16. Each item's detail block 
 - 53, phase-gate comparator on the deployed trial: matters only once a model is promoted, and none is.
 - 65, review hygiene (parked 2026-10-16 for the cap): none of its parts can lose money; the quant N1 text (10-19)
   and the N3 ADR (10-30) are still owed on their dates.
+- 45 and 70, holiday list (parked 2026-10-17 for the cap): the window is off until adopted after 46; the 45 final
+  and the v3 list keep their 2026-10-30 dates.
+- 69, audit of leverage and the largest order (parked 2026-10-17 for the cap): re-enters 2026-11-01 for the
+  2026-11-04 audit.
+- 73, auto-mode reject notices (parked 2026-10-17): auto mode is off and offered only after 100 decided proposals;
+  re-enters at 80 decided proposals or before any /mode auto, whichever is first.
 - 36, 51, 61 (off the table 2026-10-16, not parked): merged on the integration branch, shipping in the next PR
   (release-manager, due 10-23); accepted at that PR.
 - M28 TreeSHAP per decision, A5 per-trade SHAP, and a post-trade review after each exit.

@@ -1,6 +1,6 @@
 ---
 number: 62
-rank: 6
+rank: 8
 title: The 12% kill switch flattens every position on the account, all symbols
 stage: Execution and risk (drawdown stages, ADR 0016) · PROTECT · RUN
 size: S

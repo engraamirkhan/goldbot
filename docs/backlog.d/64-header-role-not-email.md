@@ -1,6 +1,6 @@
 ---
 number: 64
-rank: 12
+rank: 14
 title: Dashboard header shows the signed-in role, never the email
 stage: Dashboard (every screen; privacy) · RUN
 size: S

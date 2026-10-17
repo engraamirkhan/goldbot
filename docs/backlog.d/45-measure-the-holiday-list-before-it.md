@@ -1,10 +1,9 @@
 ---
 number: 45
-rank: 15
 title: Measure the holiday list before it is adopted
 stage: Operational risk (evidence) · RUN
 size: S
-status: 'in review: draft feda07a ruled 2026-10-16 (quant CHANGES, v3 list SAFE TO ADOPT; ruling applied by the research director) · DECIDED 2026-10-16: ADOPT cme-metals-v3 (implementation: 66, due 2026-10-30) · final with scripts/measure_holidays.py due 2026-10-30; G1 re-run addendum by 2026-11-13 · accountable: performance-analyst · due 2026-10-30'
+status: 'parked from the table 2026-10-17 (cap of 15; work and dates unchanged, it feeds a window that stays off): in review: draft feda07a ruled 2026-10-16 (quant CHANGES, v3 list SAFE TO ADOPT; ruling applied by the research director) · DECIDED 2026-10-16: ADOPT cme-metals-v3 (implementation: 66, due 2026-10-30) · final with scripts/measure_holidays.py due 2026-10-30; G1 re-run addendum by 2026-11-13 · accountable: performance-analyst · due 2026-10-30'
 ---
 - **45. Measure the holiday list before it is adopted (performance analyst; review M3, 2026-10-11).** Value: the
   holiday window (item 17, `config/holidays_cme_metals.yaml`) is a proxy, not a measurement; blocking entries on a
