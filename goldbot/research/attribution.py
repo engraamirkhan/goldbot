@@ -384,7 +384,9 @@ def _exit_group(barrier: str) -> str:
 
 def trade_rows(trades: list[ShadowTrade], *, costs: CostModel, daily_vol: pd.Series | None, now: pd.Timestamp,
                since: pd.Timestamp) -> list[TradeRow]:
-    """Closed trades exited in [since, now], each priced in R with its cost components, sorted deterministically."""
+    """Closed trades exited in [since, now], each priced in R with its cost components, sorted deterministically.
+    A shadow trade's `entry_ts` is its signal bar's open; it enters at that bar's close, so `entry_utc` = entry_ts + tf
+    and the ADR 0022 cluster key is that day ("clustered by entry UTC day"; a 15m signal at 23:45 is the next day's)."""
     keep = []
     for t in trades:
         if t.exit_ts is None or t.ret is None or t.exit is None or t.barrier is None:
