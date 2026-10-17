@@ -11,7 +11,7 @@ from scipy.stats import t as student_t
 
 from goldbot.agents.roles import ROLES
 from goldbot.agents.tools import ReadOnlyTools
-from goldbot.config import AttributionSettings
+from goldbot.config import AttributionSettings, tf_seconds
 from goldbot.data.store import Store
 from goldbot.engine.shadow import ShadowTrade
 from goldbot.execution.costs import CostTable, SlippageStat, SpreadStat
@@ -24,11 +24,13 @@ from goldbot.research.attribution import (
     build_report,
     cell_stats,
     clustered_se,
+    day_keys,
     family_of,
     render_markdown,
     save_report,
     t_bar,
 )
+from goldbot.research.pipeline import entry_utc
 
 NOW = pd.Timestamp("2026-10-09 23:50", tz="UTC")
 S = AttributionSettings(window_days=180, min_trades=30, calibration_bins=10, calibration_min_bin=10)
@@ -428,3 +430,50 @@ def test_build_report_notes_do_not_say_live_r_unrecorded():
     notes = " ".join(build_report(_book(30, 10), now=NOW, costs=FREE, settings=S).notes)
     assert "not recorded" not in notes and "BACKLOG item 8" not in notes
     assert "ClosedTrade.r" in notes and "closed_trades*.jsonl" in notes and "not pooled here" in notes
+
+
+# ------------------------------------------------------------------------------------------------ day cluster key
+def _signal(open_utc: str, *, tf: str, r: float, i: int = 0) -> ShadowTrade:
+    """A closed taken shadow trade whose signal bar OPENS at `open_utc` (the book's `entry_ts`), R = r."""
+    entry_ts = pd.Timestamp(open_utc, tz="UTC")
+    step = pd.Timedelta(seconds=tf_seconds(tf))
+    return ShadowTrade(version="tsmom-g0-abcdef0123-v1", agent_id="tsmom-g0-abcdef0123", side=1, entry_ts=entry_ts,
+                       entry=2400.0, stop=2390.0, target=2420.0, max_bars=10, timeframe=tf, p=0.6 + i * 1e-6,
+                       threshold=0.55, taken=True, bars_held=1, exit_ts=entry_ts + step, exit=2400.0 + 10 * r,
+                       barrier="target" if r > 0 else "stop", ret=10 * r / 2400.0)
+
+
+@pytest.mark.parametrize(("tf", "open_utc"), [("15m", "2026-09-01 23:45"), ("1h", "2026-09-01 23:00")])
+def test_the_last_bar_of_a_utc_day_clusters_on_the_next_day_its_entry_day(tf, open_utc):
+    """ADR 0022: "clustered by entry UTC day"; a shadow trade enters at its signal bar's close, entry_ts + tf."""
+    rows = build_report([_signal(open_utc, tf=tf, r=1.0)], now=NOW, costs=FREE, settings=S).trades
+    assert rows[0].entry_utc == pd.Timestamp("2026-09-02 00:00", tz="UTC")
+    assert day_keys(pd.DatetimeIndex([rows[0].entry_utc]))[0] == day_keys(pd.DatetimeIndex(["2026-09-02"], tz="UTC"))[0]
+
+
+@pytest.mark.parametrize("tf", ["15m", "1h"])
+def test_a_day_end_signal_shares_the_next_days_cluster_and_an_earlier_one_keeps_its_own(tf):
+    """The overall cell's se is clustered on entry_ts + tf: the 23:xx signal joins the next day's trades, a signal one
+    bar earlier stays on its own day (its entry is still before midnight)."""
+    step = pd.Timedelta(seconds=tf_seconds(tf))
+    last = pd.Timestamp("2026-09-01 00:00", tz="UTC") + pd.Timedelta(days=1) - step            # the day's last bar
+    book = [_signal(str(last - step), tf=tf, r=-1.0, i=0),       # enters at `last`: 2026-09-01
+            _signal(str(last), tf=tf, r=2.0, i=1),               # enters at 00:00: 2026-09-02
+            _signal("2026-09-02 09:00", tf=tf, r=2.0, i=2),      # 2026-09-02
+            _signal("2026-09-03 09:00", tf=tf, r=-1.0, i=3)]     # 2026-09-03
+    rep = build_report(book, now=NOW, costs=FREE, settings=S)
+    by_entry = sorted(rep.trades, key=lambda r: r.entry_utc)
+    days = day_keys(pd.DatetimeIndex([r.entry_utc for r in by_entry]))
+    assert len(np.unique(days)) == 3 and days[1] == days[2] != days[0]
+    gross, net = np.array([r.r_gross for r in by_entry]), np.array([r.r_net for r in by_entry])
+    want = cell_stats(gross, net, min_trades=S.min_trades, days=days)
+    assert rep.overall.se == want.se and rep.overall.t_bar == want.t_bar
+    open_days = day_keys(pd.DatetimeIndex([pd.Timestamp(r.entry_utc) - step for r in by_entry]))   # the open's day
+    assert cell_stats(gross, net, min_trades=S.min_trades, days=open_days).se != rep.overall.se
+
+
+def test_shadow_attribution_and_the_e6_entry_day_derive_the_same_key():
+    """One rule, two consumers: attribution (shadow book) and E-6 (`pipeline.entry_utc`) key a signal bar alike."""
+    for tf, open_utc in [("15m", "2026-09-01 23:45"), ("1h", "2026-09-01 23:00"), ("15m", "2026-09-01 12:00")]:
+        row = build_report([_signal(open_utc, tf=tf, r=1.0)], now=NOW, costs=FREE, settings=S).trades[0]
+        assert row.entry_utc == entry_utc(pd.DatetimeIndex([open_utc], tz="UTC"), tf)[0]
