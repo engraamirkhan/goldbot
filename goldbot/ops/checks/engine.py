@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 
 from goldbot.data.timeutil import heartbeat_problem
+from goldbot.execution.not_confirmed import AMBIGUOUS_ALERT_S, health_line
 from goldbot.ops.checks._base import (
     ENGINE_FAIL_S,
     ENGINE_WARN_S,
@@ -129,6 +130,12 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
         statuses.append("fail")
         parts.append(f"closed-trade record LOST for position(s) {', '.join(str(x) for x in lost)} after repeated write "
                      f"failures: the phase gates and stop rule undercount (details in the engine log)")
+    # BACKLOG 72: an order the broker neither filled nor refused, unresolved for 10 minutes or more (the engine keeps
+    # looking and refuses entries meanwhile): a warning, so the owner checks MT5 for an open trade and its stop
+    uo = e.get("unconfirmed_orders")
+    if isinstance(uo, dict) and int(uo.get("count") or 0) > 0 and float(uo.get("oldest_age_s") or 0.0) >= AMBIGUOUS_ALERT_S:
+        statuses.append("warn")
+        parts.append(health_line(int(uo["count"]), _age(float(uo["oldest_age_s"])), str(uo.get("symbol") or "XAUUSD")))
     cls = str(e.get("account_class") or "unknown")
     if e.get("mode", "paper") != "paper":
         if cls == "unknown":

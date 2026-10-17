@@ -20,6 +20,8 @@ from typing import Literal
 from goldbot.base import FrozenRecord
 from goldbot.execution.bridge import CEILING_REFUSAL, ORDER_MAX_AGE_S, STALE_REFUSAL, UNREADABLE_REFUSAL
 from goldbot.execution.broker import OrderResult
+from goldbot.execution.not_confirmed import NOT_CONFIRMED
+from goldbot.execution.not_confirmed import card_text as not_confirmed_card
 
 By = Literal["broker", "mt5_box"]
 BROKER_REFUSED = "broker_refused"
@@ -146,7 +148,10 @@ def _cause(np: NotPlaced) -> str:
 
 
 def card_text(code: str) -> str | None:
-    """The Telegram card's outcome line for a refusal code; None when the code is not one of this table's."""
+    """The Telegram card's outcome line for a refusal code; None when the code is not one of this table's. An approval
+    the broker neither filled nor refused (`not_confirmed`, BACKLOG 72) reads NOT CONFIRMED, never NOT PLACED."""
+    if code == NOT_CONFIRMED:
+        return not_confirmed_card(None)
     if code in _CEILING_CARD:
         return _CEILING_CARD[code]
     np = not_placed(code)

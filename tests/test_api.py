@@ -321,6 +321,41 @@ def test_a_card_the_broker_or_the_mt5_box_refused_carries_the_worded_not_placed_
     assert rows["gate"]["not_placed"] is None and rows["ok"]["not_placed"] is None   # the RiskGate's own words stay
 
 
+def test_an_unconfirmed_card_carries_its_note_and_stays_listed_past_the_10_minute_window_until_resolved(tmp_path):
+    """BACKLOG 72 (docs/ux/order-not-confirmed.md): `not_confirmed` words what the engine found; the dashboard never
+    drops an unanswered order (pending, still unknown), and a resolved one follows the window from its resolution."""
+    import os
+    import time
+
+    from goldbot.execution.not_confirmed import Confirmation
+    bus = ApprovalBus(tmp_path)
+    for pid, outcome in (("pending", "pending"), ("unknown", "still_unknown"), ("opened", "opened"),
+                         ("none", "no_trade"), ("fresh", "pending")):
+        bus.archive(_prop(pid, outcome=Outcome.APPROVED, gate_refusal=["not_confirmed"],
+                          not_confirmed=Confirmation.model_validate({"outcome": outcome})))
+    bus.archive(_prop("gate", outcome=Outcome.APPROVED, gate_refusal=["unconfirmed_order_pending"]))
+    old = time.time() - 20 * 60
+    for pid in ("pending", "unknown", "opened", "none"):
+        os.utime(bus.done_dir / f"{pid}.json", (old, old))
+    app = create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email="o@x.io")
+    c = TestClient(app)
+    h = _owner_headers(c, app)
+    rows = {r["proposal_id"]: r for r in c.get("/api/proposals/recent", headers=h).json()}
+    assert set(rows) == {"pending", "unknown", "fresh", "gate"}             # resolved 20 min ago: gone
+    assert rows["pending"]["status"] == "approved" and rows["pending"]["not_confirmed"] == {
+        "outcome": "pending", "heading": "Not confirmed.", "tone": "warn",
+        "text": "Sent, but the broker didn't confirm it. The engine looks it up at the broker and tells you what it "
+                "finds, or tells you after 10 minutes that it still doesn't know. New entries wait until it's settled."}
+    assert rows["unknown"]["not_confirmed"]["heading"] == "Still not confirmed."
+    assert rows["gate"]["status"] == "refused" and rows["gate"]["not_confirmed"] is None
+    assert rows["gate"]["refusal_text"] == ["an earlier order isn't confirmed by the broker yet"]
+    for pid in ("opened", "none"):
+        os.utime(bus.done_dir / f"{pid}.json", None)                        # just resolved
+    rows = {r["proposal_id"]: r for r in c.get("/api/proposals/recent", headers=h).json()}
+    assert rows["opened"]["status"] == "approved" and rows["opened"]["not_confirmed"]["tone"] == "ok"
+    assert rows["none"]["status"] == "refused" and rows["none"]["not_confirmed"]["heading"] == "Not placed."
+
+
 def test_status_carries_the_safety_strip(tmp_path):
     (tmp_path / "supervisor.json").write_text(json.dumps({"ts": 0, "halt": True, "reasons": ["combined_dd"]}))
     (tmp_path / "engine_icm.json").write_text(json.dumps({"account": "icm-demo", "blackout": {

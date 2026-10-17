@@ -36,6 +36,7 @@ from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
 from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
+from goldbot.engine import unconfirmed
 from goldbot.engine.shadow import ShadowBook, ShadowTrade
 from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, SentOrder: re-exported, ADR 0023 step 1)
     EngineStore,
@@ -432,6 +433,7 @@ class Engine:
         self._quote_invalid_since: pd.Timestamp | None = None
         self._invalid_state_written: pd.Timestamp | None = None
         self._dq_repeats: dict[str, int] = {}        # ticks folded into the pending event of each check (LOW-1)
+        self._looks = unconfirmed.Looks()            # BACKLOG 72: this process's looks at unconfirmed orders
         self._load_orders()
         self._last_state_write: pd.Timestamp | None = None   # tick time of the last account refresh and write
         self._state_written_host: pd.Timestamp | None = None   # host clock of the last state write of any kind
@@ -663,6 +665,7 @@ class Engine:
         if self._kill_pending and self.state.stage == Stage.HALTED:
             self._guard(lambda: self._kill_switch(everything=False))
         self._guard(lambda: self._host_clock_exits(now))
+        self._guard(lambda: unconfirmed.no_quote_look(self))     # BACKLOG 72: the look-up needs no quote
         if self._invalid_state_written is None or \
                 (now - self._invalid_state_written).total_seconds() >= self.cfg.state_every_s:
             self._invalid_state_written = now
@@ -1225,6 +1228,8 @@ class Engine:
                         self.center.bus.archive(p)
                     if not bridge_refused(res):                # the ceiling's own notice went from `_execute`
                         self._note_not_placed(prop, code, lots)
+                elif res is not None and self._orders[prop.proposal_id].status == unconfirmed.AMBIGUOUS:
+                    unconfirmed.archive_pending(self, p)        # BACKLOG 72: NOT CONFIRMED, never ✅ APPROVED
             else:
                 self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "gate_at_approval:" + ",".join(gd.reasons)})
                 p.gate_refusal = list(gd.reasons)
@@ -1353,7 +1358,8 @@ class Engine:
                             atr_usd=atr_usd, audit=audit)
         res = self.broker.place_order(oi)
         rec = self._orders[prop.proposal_id]
-        rec.status, rec.position_id = ("filled", res.position_id) if res.ok and res.position_id is not None else ("rejected", None)
+        rec.status = unconfirmed.sent_status(res, paper=self.cfg.mode == "paper", definite=DEFINITE_REJECT_RETCODES)
+        rec.position_id = res.position_id if rec.status == "filled" else None
         if res.ok and res.position_id is not None:
             fill_px = float(res.price if res.price is not None else requested)
             opened = self.broker.last_tick(self.cfg.symbol).ts_utc
@@ -1825,7 +1831,9 @@ class Engine:
         if positions is None:                             # the next pass retries; the per-tick stop check still guards
             return
         self._foreign = sorted(p.position_id for p in positions if not self._own(p.magic))
-        changed = self._resolve_stale_sending({p.position_id: p for p in positions})
+        book = {p.position_id: p for p in positions}
+        changed = self._resolve_stale_sending(book)
+        changed = unconfirmed.resolve(self, book) or changed   # BACKLOG 72, before the adoption loop (condition 7)
         for p in positions:
             if not self._own(p.magic):
                 continue
@@ -1876,15 +1884,15 @@ class Engine:
         and the broker's current stop as its initial stop."""
         rec = next((o for o in self._orders.values() if o.position_id == p.position_id), None) or \
             next((o for o in self._orders.values() if p.comment and p.comment in (o.client_order_id, o.client_order_id[-31:])), None)
-        if rec is not None and rec.status != "filled":
-            # review MEDIUM-2 (a): the row of a send that raised (or a fill found late) now names its position, so a
-            # restart keeps this trade instead of recovering the send again and resetting its stop and state
-            rec.status, rec.position_id = "filled", p.position_id
+        # BACKLOG 72: a row never confirmed keeps the tighter of the stop sent and the broker's, and the target sent
+        late = rec is not None and rec.status in unconfirmed.NEVER_CONFIRMED
         agent = self.agents.get(rec.agent_id) if rec is not None else self._agent_for_magic(p.magic)
         agent_id = rec.agent_id if rec is not None else "orphan" if agent is None else agent.agent_id
         max_bars = rec.max_bars if rec is not None else 48 if agent is None else self._base_bars(agent)
         tr = OpenTrade(position_id=p.position_id, agent_id=agent_id, side=p.side, lots=p.lots,
-                       entry_bar_ts=p.open_time_utc, max_bars=max_bars, sl=p.sl, tp=p.tp,
+                       entry_bar_ts=p.open_time_utc, max_bars=max_bars,
+                       sl=unconfirmed.tighter(p.side, rec.sl, p.sl) if late and rec else p.sl,
+                       tp=rec.tp if late and rec else p.tp,
                        client_order_id=rec.client_order_id if rec is not None else p.comment or None,
                        open_price=p.open_price, initial_sl=rec.sl if rec is not None else p.sl,
                        initial_lots=rec.lots if rec is not None else p.lots, opened_utc=p.open_time_utc,
@@ -1894,6 +1902,12 @@ class Engine:
             atr_usd = rec.atr_usd if rec is not None and rec.atr_usd is not None else \
                 self._implied_atr(agent, p.open_price, tr.initial_sl)
             self._attach_policy(tr, agent, entry=p.open_price, atr_usd=atr_usd, opened=p.open_time_utc)
+        if rec is not None and rec.status != "filled":
+            # review MEDIUM-2 (a): the row of a send that raised (or a fill found late) now names its position, so a
+            # restart keeps this trade instead of recovering the send again; the trade is in the open table before
+            # `adopted` saves the row and tells the owner (BACKLOG 72)
+            self.open[p.position_id] = tr
+            unconfirmed.adopted(self, rec, p)
         return tr
 
     def _agent_for_magic(self, magic: int) -> Specialist | None:
@@ -2474,7 +2488,9 @@ class Engine:
     def _save_orders(self) -> None:
         self._flush_closed()      # a close is on disk before the open-trade table forgets the position
         keep_after = pd.Timestamp.now("UTC") - pd.Timedelta(days=7)
-        self._orders = {k: o for k, o in self._orders.items() if o.ts_utc >= keep_after or o.status == "sending"}
+        self._orders = {k: o for k, o in self._orders.items()
+                        if o.ts_utc >= keep_after or o.status in ("sending", unconfirmed.AMBIGUOUS)}
+        self.state.unconfirmed_order = unconfirmed.pending(self._orders)   # BACKLOG 72: entries wait until settled
         self.state_store.save_orders(OrdersSnapshot(sent=self._orders, open=self.open, closing=self._closes,
                                                     records_lost=self._records_lost))
 
@@ -2506,6 +2522,7 @@ class Engine:
         for cid, rec in self._orders.items():
             if rec.status == "sending":
                 self._resolve_sent(cid, rec, positions)
+        unconfirmed.resolve(self, positions)      # BACKLOG 72: a restart's first look never declares `unfilled`
         # open trades the broker no longer has were closed while the engine was down: recorded once their exit deal
         # is seen (a trade recorded before the restart is skipped by position id)
         self._sweep_closed(set(positions))
@@ -2513,46 +2530,18 @@ class Engine:
 
     def _resolve_sent(self, cid: str, rec: SentOrder, positions: dict[int, Position]) -> None:
         """A `sending` row (a send never confirmed: a crash, or an order call that raised) looked up in the broker's
-        positions and deals by client id / MT5 comment. A position is adopted with the row's agent, entry stop, lots
+        positions and deals by client id / MT5 comment. A position is adopted with the row's agent, entry stop, the dealt lots
         and exit policy, unless the open table already holds it (adopted by reconciliation, or carried over a
         restart): that trade is kept with its stop, bars held and scale-out state and only the row is marked filled
         (review MEDIUM-2 b). No position: filled and closed (recorded from its deals) or never filled ("unfilled").
         An unreadable deal history without a position leaves the row `sending` for the next look. Never re-sent."""
         pos = next((p for p in positions.values() if p.comment == cid[-31:] or p.comment == cid), None)
-        try:
-            deals = self._read_deals(rec.ts_utc - pd.Timedelta(minutes=5))
-        except Exception:
-            if pos is None:
-                return                # unknown yet: stays "sending" (never re-sent) and is looked up again
-            deals = pd.DataFrame()
-        dealt = not deals.empty and (
-            ("client_order_id" in deals.columns and bool((deals["client_order_id"] == cid).any()))
-            or ("comment" in deals.columns and bool(deals["comment"].isin([cid, cid[-31:]]).any())))
         if pos is not None:
-            rec.status, rec.position_id = "filled", pos.position_id
-            if pos.position_id in self.open:
-                self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": "reconcile_sent_known",
-                                       "proposal": cid, "position": pos.position_id})
-                return
-            tr = self.open[pos.position_id] = OpenTrade(position_id=pos.position_id, agent_id=rec.agent_id,
-                                                        side=pos.side, lots=pos.lots, entry_bar_ts=pos.open_time_utc,
-                                                        max_bars=rec.max_bars, sl=rec.sl, tp=rec.tp,
-                                                        client_order_id=cid, open_price=pos.open_price,
-                                                        initial_sl=rec.sl, initial_lots=rec.lots,
-                                                        opened_utc=pos.open_time_utc, excursion_approx=True,
-                                                        audit=rec.audit)
-            agent = self.agents.get(rec.agent_id)
-            if agent is not None:
-                atr_usd = rec.atr_usd if rec.atr_usd is not None else self._implied_atr(agent, pos.open_price, rec.sl)
-                self._attach_policy(tr, agent, entry=pos.open_price, atr_usd=atr_usd, opened=pos.open_time_utc)
-            self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": "reconcile_adopt_sent",
-                                   "proposal": cid, "position": pos.position_id})
-        else:
-            rec.status = "filled" if dealt else "unfilled"     # filled and already closed, or never filled
-            self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": f"reconcile_sent_{rec.status}",
+            unconfirmed.adopt_sent(self, cid, rec, pos)
+        else:     # BACKLOG 72 review: never resolved on one look; the look-up records a closed fill or, after two
+            rec.status = unconfirmed.AMBIGUOUS      # clean looks, marks it unfilled (it runs right after this)
+            self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": "reconcile_sent_ambiguous",
                                    "proposal": cid})
-            if dealt:
-                self._record_closed_while_down(cid, rec, deals)
 
     def _resolve_stale_sending(self, positions: dict[int, Position]) -> bool:
         """Review MEDIUM-2 (d): `sending` rows older than SENDING_RESOLVE_S (host clock, as the row was stamped) are
@@ -2567,24 +2556,6 @@ class Engine:
         return changed
 
     # ------------------------------------------------------------------ closed-trade record (phase gates P7, stop rule P6)
-    def _record_closed_while_down(self, cid: str, rec: SentOrder, deals: pd.DataFrame) -> None:
-        """A send confirmed only by its deals on restart (filled and closed while the engine was down): its position
-        is found by client id / comment and recorded like any other close."""
-        if "position_id" not in deals.columns:
-            return
-        if "client_order_id" in deals.columns:
-            mine = deals[deals["client_order_id"] == cid]
-        else:
-            mine = deals[deals["comment"].isin([cid, cid[-31:]])]
-        if mine.empty:
-            return
-        pid = int(mine["position_id"].iloc[0])
-        rec.position_id = pid
-        tr = OpenTrade(position_id=pid, agent_id=rec.agent_id, side=rec.side, lots=rec.lots, entry_bar_ts=rec.ts_utc,
-                       max_bars=rec.max_bars, sl=rec.sl, tp=rec.tp, client_order_id=cid, initial_sl=rec.sl,
-                       initial_lots=rec.lots, opened_utc=rec.ts_utc, audit=rec.audit)
-        self._note_closed(pid, tr, "broker_close")
-
     def _sweep_closed(self, live: set[int]) -> None:
         """Open trades the broker no longer lists closed at the broker (stop, target, stop-out, manual): each is
         recorded once its exit deal is seen and then forgotten. When the broker's deal history carries positions but
@@ -3426,6 +3397,8 @@ class Engine:
                             + [e for e in self._dq_bar_events + self._dq_pending if e.severity != "error"]],
             "late_ticks": self._late_ticks, "clock_skew_s": self.clock_skew_s(), "bar_close_grace_s": BAR_CLOSE_GRACE_S,
             "closed_records_lost": self._records_lost, "closes_due": sorted(self._close_due),
+            # BACKLOG 72: orders the broker neither filled nor refused (health WARNs from 600 s; entry status "since")
+            "unconfirmed_orders": unconfirmed.summary(self._orders, pd.Timestamp.now("UTC"), self.cfg.symbol),
             "foreign_positions": self._foreign, "rearm_refused": self._rearm_refused,
             "propose_only_until": self._propose_only_until.isoformat() if self._propose_only_until is not None else None,
             # the dashboard's account view (goldbot/ops/account_view.py): the broker's balance, currency and margin,

@@ -92,7 +92,7 @@ describe("Approvals", () => {
   });
 
   it("lists recently decided proposals once, as decided", async () => {
-    const done: DecidedProposal = { ...proposal(), status: "rejected", reason_code: "news", refusal: [] };
+    const done: DecidedProposal = { ...proposal(), status: "rejected", reason_code: "news", refusal: [], refusal_text: [] };
     vi.spyOn(apiModule.api, "recentProposals").mockResolvedValue([done]);
     renderWithClient();
     expect(await screen.findByText("Decided in the last 10 minutes")).toBeInTheDocument();

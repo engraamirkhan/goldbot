@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from goldbot.execution.not_confirmed import NotConfirmed
 from goldbot.execution.not_placed import NotPlaced
 from goldbot.ops.account_view import CantCheck, LossBudget, Milestones
 from goldbot.telegram.approvals import PROPOSAL_ID_PATTERN
@@ -117,6 +118,12 @@ class DecidedProposal(Proposal):
     # docs/ux/order-not-placed.md: who refused an approved order and why, in the owner's words (the same table as the
     # Telegram card and notice); null for a RiskGate refusal and for every other status
     not_placed: NotPlaced | None = None
+    # docs/ux/order-not-confirmed.md (BACKLOG 72): approved and sent, but the broker neither filled nor refused it; what
+    # the engine's look-up found, worded (the same table as the Telegram card and notices). Status "approved" ("refused"
+    # once no trade was found); null on every other card. Unresolved ones stay listed past the 10-minute window
+    not_confirmed: NotConfirmed | None = None
+    # the RiskGate's refusal codes in the owner's words (`refusal`, same order), for "Refused at approval (…)"
+    refusal_text: list[str] = []
     decided_channel: str | None = None
     decided_ts: float | None = None         # epoch s, the decision's own clock; None for expired and older files
 

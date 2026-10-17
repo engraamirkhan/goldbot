@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -44,6 +45,8 @@ from goldbot.db.bookkeeping import (
     table_empty,
 )
 from goldbot.db.import_state import ImportSpec
+from goldbot.execution.not_confirmed import NOT_CONFIRMED
+from goldbot.ops.watchdog import loop_heartbeat_path
 from goldbot.telegram.approvals import Proposal
 from goldbot.telegram.bus import ApprovalBus
 
@@ -52,6 +55,11 @@ log = logging.getLogger(__name__)
 MAX_MESSAGE = 3900                 # Telegram's limit is 4096 characters
 MARK_RETRY_S = 2.0                 # first retry of a failed mark_sent; doubles up to MARK_RETRY_MAX_S
 MARK_RETRY_MAX_S = 300.0
+# BACKLOG 72 review (race): an approval still `placing` is not reported until the engine has the broker's answer; it is
+# reported NOT CONFIRMED (never APPROVED) once its engine loop has not beaten for PLACING_SILENT_S, or after
+# PLACING_MAX_S (longer than any bridge order timeout: a send that raised)
+PLACING_SILENT_S = 60.0
+PLACING_MAX_S = 120.0
 
 
 class OutboxState(Record):
@@ -151,7 +159,11 @@ class Outbox:
                 outcome = "EXPIRED_UNAPPROVED"
             elif outcome == "APPROVED":
                 p = self.bus.get(pid)
-                if p is not None and p.gate_refusal:         # approved, but the RiskGate re-check refused the order
+                if p is not None and p.placing:              # BACKLOG 72 review: the order is still in flight
+                    if not self._placing_abandoned(p):
+                        continue
+                    outcome = "GATE_REFUSED: " + NOT_CONFIRMED   # never APPROVED for an order nobody confirmed
+                elif p is not None and p.gate_refusal:       # approved, but the RiskGate re-check refused the order
                     outcome = "GATE_REFUSED: " + ", ".join(p.gate_refusal)
             with self.db.write() as conn:
                 if outbox_forget(conn, pid):
@@ -159,6 +171,22 @@ class Outbox:
         if out:
             self._export()
         return out
+
+    def _placing_abandoned(self, p: Proposal) -> bool:
+        """An approval still `placing` whose engine stopped beating (its loop heartbeat missing or older than
+        PLACING_SILENT_S) or that has been placing for PLACING_MAX_S (a send that raised): reported NOT CONFIRMED."""
+        now = time.time()
+        try:
+            since = (self.bus.done_dir / f"{p.proposal_id}.json").stat().st_mtime
+        except OSError:
+            since = now
+        if now - since >= PLACING_MAX_S:
+            return True
+        try:
+            beat = float(json.loads(loop_heartbeat_path(self.dir, p.account_id).read_text())["ts"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return True
+        return not now - beat < PLACING_SILENT_S
 
     # ------------------------------------------------------------------ agent reports
     def pending_reports(self) -> tuple[list[str], ReportsAck | None]:

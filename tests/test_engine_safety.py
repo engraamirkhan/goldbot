@@ -133,12 +133,14 @@ def test_a_restart_archives_an_expired_proposal_a_newer_release_wrote(tmp_path):
     assert not (bus.pending_dir / "icm-demo-9-a.json").exists() and (bus.done_dir / "icm-demo-9-a.json").exists()
 
 
-def test_a_restart_after_an_unfilled_send_marks_it_unfilled_and_keeps_the_id(tmp_path):
+def test_a_restart_after_an_unanswered_send_leaves_it_ambiguous_and_keeps_the_id(tmp_path):
     eng, pb = _engine(tmp_path)
     eng._orders_record("icm-demo-3-a", agent_id="x", side=1, magic=260150, lots=0.1, max_bars=4,
                        sl=2396.0, tp=2406.0, ts=pd.Timestamp.now("UTC"))   # crashed before order_send returned
     again, _ = _engine(tmp_path, pb)
-    assert again._orders["icm-demo-3-a"].status == "unfilled" and "icm-demo-3-a" in again.sent_ids
+    # BACKLOG 72 (trading-safety review, condition 3): no position on the restart's look is `ambiguous`, never unfilled
+    # on one look; the look-up declares it unfilled after two clean looks (tests/test_order_not_confirmed.py)
+    assert again._orders["icm-demo-3-a"].status == "ambiguous" and "icm-demo-3-a" in again.sent_ids
     assert again.open == {}
 
 
@@ -655,7 +657,8 @@ def test_a_broker_10027_on_a_demo_terminal_means_algo_trading_off_and_on_paper_a
 def test_an_ambiguous_result_at_approval_is_not_marked_not_placed_and_sends_no_notice(tmp_path, retcode):
     pb = _BrokerRefuses(retcode, message="no answer", equity=10_000)
     _, archived, outcomes = _approved_through(tmp_path, pb)
-    assert not archived.gate_refusal and not any(o.startswith("GATE_REFUSED") for o in outcomes)
+    # BACKLOG 72: archived NOT CONFIRMED (tests/test_order_not_confirmed.py), never NOT PLACED: the order may exist
+    assert archived.gate_refusal == ["not_confirmed"] and outcomes == ["GATE_REFUSED: not_confirmed"]
     assert _notices(tmp_path) == []
 
 

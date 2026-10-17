@@ -322,6 +322,30 @@ def test_the_older_release_reads_a_file_the_newer_release_wrote(tmp_path, case):
     case(tmp_path)
 
 
+def test_an_older_release_loads_a_file_with_ambiguous_rows(tmp_path):
+    """BACKLOG 72 rollback (ADR 0010, X7): the release before it knows neither the `ambiguous` status nor `notified` /
+    `unknown_notified`. Its SentOrder (this one without the two fields) still loads the row: the status is a plain
+    string, the new fields are dropped, and the id stays in its sent_ids, so it never re-sends; it only fails to
+    resolve the row (its restart loop and its in-process look-up read `sending` rows only)."""
+    from pydantic import create_model
+
+    from goldbot.base import load_record
+    from goldbot.engine.store import JsonEngineStore, OrdersSnapshot
+    new_fields = {"notified", "unknown_notified"}
+    older = create_model("SentOrder", __base__=Record, **{  # type: ignore[call-overload]
+        k: (f.annotation, f) for k, f in SentOrder.model_fields.items() if k not in new_fields})
+    row = SentOrder(client_order_id="icm-demo-72-a", ts_utc=T0, agent_id="a", side=1, magic=260150, lots=0.1,
+                    max_bars=4, sl=2396.0, tp=2406.0, status="ambiguous", notified="opened", unknown_notified=True)
+    JsonEngineStore(tmp_path, "icm-demo").save_orders(OrdersSnapshot(sent={row.client_order_id: row}, open={},
+                                                                     closing=[], records_lost=[]))
+    saved = json.loads((tmp_path / "orders_icm-demo.json").read_text())
+    back = {k: load_record(older, v, source="orders_<account>.json") for k, v in saved["sent"].items()}
+    assert set(back) == {"icm-demo-72-a"}                                    # older sent_ids = set(the table)
+    old: Any = back["icm-demo-72-a"]
+    assert old.status == "ambiguous" and old.status != "sending"             # never resolved, never re-sent
+    assert not set(old.model_dump()) & new_fields
+
+
 def test_every_persisted_record_model_has_a_compat_case():
     """A new persisted model must add a case above (and a default that is safe when missing, AGENT_STANDARDS S12)."""
     covered = {ClosedTrade, Proposal, VersionBook, PerfStats, ModelEntry, Member, ResearchPlan,

@@ -589,3 +589,16 @@ def test_times_the_engine_publishes_win_over_ones_worked_out_here():
                                   {"windows": {"enabled": {"holidays": True}, "holiday_thin": "yes"}}])
 def test_junk_windows_never_break_the_status(junk):
     assert status(engine(**junk), limits=window_limits()).state in ("open", "partial", "waiting", "blocked")
+
+
+def test_an_unconfirmed_order_is_worded_with_the_time_it_was_sent():
+    """BACKLOG 72 (docs/ux/order-not-confirmed.md, "Entry refusal"): the account-level reason, since the oldest
+    unresolved order was sent, a wait; never the raw code."""
+    sent = "2026-10-07T13:52:00+00:00"
+    b = es._engine_block("unconfirmed_order_pending", {"unconfirmed_orders": {"count": 1, "oldest_utc": sent}},
+                         pd.Timestamp("2026-10-07 14:00", tz="UTC"), RiskLimits())
+    assert b.text == "An earlier order isn't confirmed by the broker yet" and b.kind == "wait"
+    assert b.at_label == "since" and b.at is not None and b.at.isoformat().startswith("2026-10-07T13:52")
+    assert b.fix == ("Nothing to do: the engine is looking it up at the broker. If it lasts over 10 minutes, check MT5 "
+                     "for an open trade and its stop.")
+    assert es.refusal_words("unconfirmed_order_pending") == "an earlier order isn't confirmed by the broker yet"

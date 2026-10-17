@@ -139,6 +139,7 @@ STATE_SOURCES: dict[str, str] = {
     "open_long": "account_positions(): long count",
     "open_short": "account_positions(): short count",
     "equity_unconfirmed": "risk_<account>.json stage2_pending_since (ADR 0016)",
+    "unconfirmed_order": "orders_<account>.json: any `ambiguous` row (BACKLOG 72); unreadable counts as one",
 }
 
 
@@ -358,6 +359,19 @@ def _account_class(state_dir: Path, account_id: str) -> str:
     return c if c in ("raw", "standard", "unknown") else "unknown"
 
 
+def _unconfirmed_order(state_dir: Path, account_id: str) -> bool:
+    """BACKLOG 72 (trading-safety condition 1): the engine's pending_orders table holds an order the broker neither
+    filled nor refused. Fail closed: an unreadable table counts as one."""
+    path = state_dir / f"orders_{account_id}.json"
+    if not path.exists():
+        return False
+    try:
+        sent = json.loads(path.read_text()).get("sent", {})
+        return any(isinstance(o, dict) and o.get("status") == "ambiguous" for o in sent.values())
+    except (OSError, ValueError, AttributeError):
+        return True
+
+
 def _drift_halt(state_dir: Path) -> bool:
     path = state_dir / "drift.json"
     if not path.exists():
@@ -481,6 +495,7 @@ def smoke_state(broker: Any, bus: ApprovalBus, acc: Account, state_dir: Path, *,
         combined_size_down=size_down, account_class=_account_class(state_dir, acc.account_id),
         drift_halt=_drift_halt(state_dir), clock_mismatch=clock is None or clock.status == "mismatch",
         market_closed=closed, tick_error=tick is None, bridge_incompatible=getattr(compat, "status", None) != "ok",
+        unconfirmed_order=_unconfirmed_order(state_dir, acc.account_id),
         **_windows(cfg.limits, sessions, events, tick_ts, now),
         **_open_book(positions, sym, tick, fx))
     new_day(st, now, risk["last_reset"])        # in memory only (S5)

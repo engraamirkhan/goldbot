@@ -11,7 +11,7 @@ const p = (expiresIn = 60, over: Partial<Proposal> = {}): Proposal => ({
   top_features: [["adx14", 31.2], ["atr_14", 0.4], ["rv_20", -0.2], ["extra", 1]],
   expires_at: new Date(NOW + expiresIn * 1000).toISOString(), created: NOW / 1000, ...over,
 });
-const decided = (status: DecidedProposal["status"], over: Partial<DecidedProposal> = {}): DecidedProposal => ({ ...p(), status, refusal: [], ...over });
+const decided = (status: DecidedProposal["status"], over: Partial<DecidedProposal> = {}): DecidedProposal => ({ ...p(), status, refusal: [], refusal_text: [], ...over });
 
 describe("ProposalCard", () => {
   it("shows direction, size, risk, levels, p/EV/spread and top features in plain words", () => {
@@ -155,6 +155,41 @@ describe("ProposalCard", () => {
     expect(screen.getByRole("status")).toHaveTextContent(/^Rejected · News · via the dashboard$/);
     rerender(<ProposalCard p={decided("approved", { decided_channel: null })} now={NOW} canDecide blockers={[]} />);
     expect(screen.getByRole("status")).not.toHaveTextContent("via");
+  });
+
+  // docs/ux/order-not-confirmed.md (BACKLOG 72): the API words the broker's silence (`not_confirmed`); amber while unknown
+  const GATE = " New entries wait until it's settled.";
+  const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const nc = (outcome: string, heading: string, text: string, tone: string) =>
+    ({ refusal: ["not_confirmed"], not_confirmed: { outcome, heading, text, tone } }) as Partial<DecidedProposal>;
+  it.each([
+    ["pending", "Not confirmed.", "Sent, but the broker didn't confirm it. The engine looks it up at the broker and tells you what it finds, or tells you after 10 minutes that it still doesn't know." + GATE, "warn", "warn", "sent, not confirmed by the broker"],
+    ["opened", "Opened.", "The broker confirmed it late; stop, target and exit are automatic.", "ok", "ok", "opened"],
+    ["opened_closed", "Opened and already closed.", "The broker confirmed it late: it opened at 2400.40 and closed at 2396.00 (−£8.20). It's in the trade record.", "neutral", "muted-box", "opened and closed"],
+    ["no_trade", "Not placed.", "Sent, but the broker has no trade for it (checked twice, at least 2 minutes apart); no trade was opened.", "bad", "bad", "not placed"],
+    ["opened_late", "Opened after all.", "The broker confirmed it after it was reported not placed; stop, target and exit are automatic.", "ok", "ok", "opened"],
+    ["still_unknown", "Still not confirmed.", "After 10 minutes the broker hasn't shown whether it opened. The engine keeps looking; check MT5 for an open XAUUSD trade." + GATE, "warn", "warn", "still not confirmed"],
+  ])("shows an order the broker didn't confirm as %s, in the API's words", (outcome, heading, text, tone, cls, name) => {
+    const status = outcome === "no_trade" ? "refused" : "approved";
+    const { container } = render(
+      <ProposalCard p={decided(status, { ...nc(outcome, heading, text, tone), decided_channel: "telegram" })} now={NOW} canDecide blockers={[]} />);
+    const note = screen.getByRole("status");
+    expect(note).toHaveTextContent(new RegExp(`^${esc(heading)} ${esc(text)} · via Telegram$`));
+    expect(note).toHaveClass("outcome", cls);
+    expect(note.querySelector("strong")).toHaveTextContent(heading);
+    expect(container.querySelector("article")).toHaveAttribute("aria-label", `Long 0.05 lots XAUUSD, ${name}`);
+    expect(note).not.toHaveTextContent(/APPROVED|Approved, order sent|not_confirmed|retcode/);
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("falls back to the approved note from an older API without not_confirmed", () => {
+    render(<ProposalCard p={decided("approved")} now={NOW} canDecide blockers={[]} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/^Approved, order sent\. Stop, target and exit are automatic\.$/);
+  });
+
+  it("words a refusal at approval for an unconfirmed order in the API's words, never the code", () => {
+    render(<ProposalCard p={decided("refused", { refusal: ["unconfirmed_order_pending"], refusal_text: ["an earlier order isn't confirmed by the broker yet"] })} now={NOW} canDecide blockers={[]} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/^Refused at approval\. The RiskGate blocked the order \(an earlier order isn't confirmed by the broker yet\); nothing was sent\.$/);
   });
 
   it("warns that the RiskGate will refuse while entries are blocked", () => {

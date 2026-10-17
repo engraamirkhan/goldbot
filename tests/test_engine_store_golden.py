@@ -90,7 +90,8 @@ def fresh_skew(monkeypatch: pytest.MonkeyPatch) -> None:
 def _set_rows(eng: Engine, pb: PaperBroker, rows: str) -> None:
     """The three order-row sets. old: a `sending` row (never pruned, found unfilled on restart), a filled and a
     rejected row past the 7-day window (pruned at the save), a lost record. fresh: a filled row whose position is
-    open at the broker and in the open-trade table, an unfilled row and a `sending` row, all inside the window."""
+    open at the broker and in the open-trade table, an unfilled row, a `sending` row and an `ambiguous` row (BACKLOG
+    72: neither filled nor refused; no position, so it stays ambiguous across the restart), all inside the window."""
     if rows == "old":
         eng._orders = {"old-sending": _row("old-sending", OLD, "sending"),
                        "old-filled": _row("old-filled", OLD, "filled", position_id=1),
@@ -102,7 +103,8 @@ def _set_rows(eng: Engine, pb: PaperBroker, rows: str) -> None:
         assert r.ok and r.position_id is not None
         eng._orders = {"fresh-filled": _row("fresh-filled", FRESH, "filled", position_id=r.position_id),
                        "fresh-unfilled": _row("fresh-unfilled", FRESH, "unfilled"),
-                       "fresh-sending": _row("fresh-sending", FRESH, "sending")}
+                       "fresh-sending": _row("fresh-sending", FRESH, "sending"),
+                       "fresh-ambiguous": _row("fresh-ambiguous", FRESH, "ambiguous")}
         eng.open = {r.position_id: OpenTrade(position_id=r.position_id, agent_id="session_open-g0-x", side=1, lots=0.1,
                                              entry_bar_ts=T0, max_bars=8, bars_held=2, sl=2396.0, tp=2406.0,
                                              client_order_id="fresh-filled", open_price=r.price, initial_sl=2396.0,
@@ -116,6 +118,15 @@ def _canon(obj: Any) -> str:
 
 def _no_ts(d: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in d.items() if k != "ts"}
+
+
+def _no_host_clock(d: dict[str, Any]) -> dict[str, Any]:
+    """The engine file without what the host clock stamps: `ts`, and the age of the oldest unconfirmed order (BACKLOG
+    72; its send time `oldest_utc` stays)."""
+    out = _no_ts(d)
+    if isinstance(out.get("unconfirmed_orders"), dict):
+        out["unconfirmed_orders"] = {k: v for k, v in out["unconfirmed_orders"].items() if k != "oldest_age_s"}
+    return out
 
 
 def _iso(t: pd.Timestamp | None) -> str | None:
@@ -164,7 +175,7 @@ def _case(state_dir: Path, stage: str, kill: bool, pending: bool, halted: bool, 
         risk.write_text(json.dumps({k: v for k, v in files["risk"].items() if k != "stage"}))
     again = _engine(state_dir, pb)
     after = json.loads((state_dir / f"orders_{ACCOUNT}.json").read_text())
-    return {"orders": files["orders"], "risk": files["risk"], "engine": _no_ts(files["engine"]),
+    return {"orders": files["orders"], "risk": files["risk"], "engine": _no_host_clock(files["engine"]),
             "restart": _restart_dump(again), "orders_after": after}
 
 
