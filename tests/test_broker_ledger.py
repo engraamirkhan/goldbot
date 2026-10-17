@@ -318,8 +318,8 @@ def test_reconcile_check_warns_on_a_trade_mismatch_and_fails_on_an_unexplained_b
 
 def test_reconcile_check_takes_the_worse_of_the_feed_and_the_ledger_report(tmp_path):
     cf.ReconcileReport(account_id=ACC_ID, ts_utc=DAY2, window_from=DAY1, window_to=DAY2, tolerance=0.02,
-                       broker_minutes=1300, engine_minutes=1300, matched=1300, close_mismatch=0, missing_engine=0,
-                       missing_broker=0, max_close_diff=0.0, divergence=0.0, severity="warning").save(tmp_path)
+                       broker_minutes=1300, engine_minutes=1300, matched=1300, close_mismatch=30, missing_engine=0,
+                       missing_broker=0, max_close_diff=0.03, divergence=30 / 1300, severity="warning").save(tmp_path)
     _run(tmp_path, FakeBroker(1000.0, []), DAY2)
     c = cf.check_reconciliation(_health(tmp_path), ACC_ID)
     assert c.status == "warn" and "ledger" in c.reason
