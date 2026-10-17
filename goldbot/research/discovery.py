@@ -48,11 +48,12 @@ import fnmatch
 import hashlib
 import json
 import math
+from fractions import Fraction
 from typing import Any, Callable, Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import SerializerFunctionWrapHandler, model_serializer
+from pydantic import Field, SerializerFunctionWrapHandler, model_serializer, model_validator
 
 from goldbot.base import FrozenRecord, Record
 from goldbot.data.timeutil import epoch_ns, utc_index
@@ -110,21 +111,39 @@ CONTINUE_AUC = 0.53
 STOP_AUC = 0.52
 AUC_LOWER_BOUND = 0.50
 MIN_READ_EVENTS = 1000
+BREAK_EVEN_RULE = "break_even_margin"      # the coded rule, as a literal (the dump keys on it)
+assert DEFAULT_THRESHOLD_RULE == BREAK_EVEN_RULE, "the default threshold rule must stay the coded break-even rule"
 
 
 BREAK_EVEN_CLAUSE = "(cross-fitted, break-even + margin)"
 # E-2 (quant plan review condition 3): the tercile rule REPLACES the break-even clause, so the default string stays
 # byte-identical (the director compares cited_rule == the pre-registration's reading_rule) ...
-TERCILE_CLAUSE = ("(top-tercile cut, E-2: test-fold raw p >= the 2/3 quantile (linear) of the earlier folds' "
-                  "out-of-fold p inside the fold's training window; no break-even floor)")
+
+
+def _q_text(q: float) -> str:
+    """q as written in the rule: a simple fraction when it is one (2/3), else its repr."""
+    f = Fraction(q).limit_denominator(1000)
+    return f"{f.numerator}/{f.denominator}" if float(f) == q else repr(q)
+
+
+def tercile_clause(q: float = TERCILE_Q, method: str = TERCILE_METHOD) -> str:
+    """The tercile rule's clause, built from the pinned q and quantile method (both part of the rule). O-4's rule
+    reads "net mean R > 0 on >= 1,000 trades" (quant review R1, fix 1): the clause names the trade floor."""
+    return (f"(top-tercile cut, E-2: test-fold raw p >= the {_q_text(q)} quantile ({method}) of the earlier folds' "
+            f"out-of-fold p inside the fold's training window; no break-even floor) "
+            f"(at least {MIN_READ_EVENTS:,} taken)")
+
+
+TERCILE_CLAUSE = tercile_clause()
 # ... and adds one sentence (quant ruling 2: live trading keeps break-even + 0.02)
 LIVE_RULE_NOTE = (f"A result under the tercile rule does not carry to live trading (break-even + {THRESHOLD_MARGIN}): "
                   f"promotion needs a separate trial under the live rule.")
 
 
-def reading_rule(survivor_unit: str = "feature", threshold_rule: ThresholdRule = DEFAULT_THRESHOLD_RULE) -> str:
+def reading_rule(survivor_unit: str = "feature", threshold_rule: ThresholdRule = DEFAULT_THRESHOLD_RULE,
+                 tercile_q: float = TERCILE_Q) -> str:
     """The pre-registered reading rule; the survivor unit (and so the K_eff a later trial pays) and the threshold rule
-    (`pipeline.select`; TERCILE_Q and TERCILE_METHOD are part of it) are part of it."""
+    (`pipeline.select`; under the tercile rule its q and quantile method, and the 1,000-trade floor) are part of it."""
     tercile = threshold_rule == "tercile_inner"
     unit = ("survivors are features: individual features whose fold frequency reaches the threshold in >= the "
             "stability share of folds; at most five go forward, and every later trial of one uses n_trials_effective "
@@ -136,7 +155,8 @@ def reading_rule(survivor_unit: str = "feature", threshold_rule: ThresholdRule =
     return (
     f"continue if the pooled out-of-fold AUC >= {CONTINUE_AUC} with a weekly-block bootstrap 95% lower bound > "
     f"{AUC_LOWER_BOUND}, at least {MIN_READ_EVENTS:,} candidates scored out of fold, and the model-filtered "
-    f"{TERCILE_CLAUSE if tercile else BREAK_EVEN_CLAUSE} trades have net mean R > 0; stop if the AUC < {STOP_AUC} (the screened "
+    f"{tercile_clause(tercile_q) if tercile else BREAK_EVEN_CLAUSE} trades have net mean R > 0; stop if the AUC < "
+    f"{STOP_AUC} (the screened "
     f"features carry no information for this label: keep them as risk and cost filters only); otherwise inconclusive. "
     f"Survivor unit: {unit} in its deflated Sharpe, and must also pass the holdout rule before promotion. The design's "
     f"gates are reported; a discovery is never promoted." + (f" {LIVE_RULE_NOTE}" if tercile else ""))
@@ -169,15 +189,29 @@ class DiscoveryConfig(FrozenRecord):
     clusters: dict[str, list[str]] | None = None   # group mode "cluster": the pre-registered map (e.g. H02_CLUSTERS)
     # the model-stage threshold (pipeline.select): "break_even_margin" (the coded rule) or O-4's "tercile_inner" (E-2)
     threshold_rule: ThresholdRule = DEFAULT_THRESHOLD_RULE
+    # the tercile rule's q and quantile method: part of the rule, so in the dump and the config hash under it (quant
+    # review R1, fix 2: any other q is a new trial); left at the constants under the break-even rule
+    tercile_q: float = Field(TERCILE_Q, gt=0.0, lt=1.0)
+    tercile_method: Literal["linear"] = TERCILE_METHOD
+
+    @model_validator(mode="after")
+    def _q_only_under_tercile(self) -> DiscoveryConfig:
+        if self.threshold_rule == BREAK_EVEN_RULE and (self.tercile_q != TERCILE_Q
+                                                       or self.tercile_method != TERCILE_METHOD):
+            raise ValueError("tercile_q / tercile_method are set but threshold_rule is break_even_margin: they would "
+                             "be ignored; pre-register threshold_rule tercile_inner or leave them at their defaults")
+        return self
 
     @model_serializer(mode="wrap")
     def _dump(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        """The default threshold rule is left out of the dump, so a default config dumps and hashes exactly as before
-        E-2 (H-02's pinned dump and every queued config hash hold); any other rule is in the dump and so in the
-        pre-registered config hash: reading the same candidates under the other rule is another trial."""
+        """Under the break-even rule (the literal "break_even_margin", whatever DEFAULT_THRESHOLD_RULE says) the rule,
+        q and method are left out of the dump, so such a config dumps and hashes exactly as before E-2 (H-02's pinned
+        dump and every queued config hash hold); under the tercile rule all three are in the dump and so in the
+        pre-registered config hash: another rule or another q is another trial."""
         out: dict[str, Any] = handler(self)
-        if self.threshold_rule == DEFAULT_THRESHOLD_RULE:
-            out.pop("threshold_rule", None)
+        if self.threshold_rule == BREAK_EVEN_RULE:
+            for k in ("threshold_rule", "tercile_q", "tercile_method"):
+                out.pop(k, None)
         return out
 
 
@@ -185,8 +219,8 @@ def threshold_plan(cfg: DiscoveryConfig) -> dict[str, Any]:
     """The threshold rule's pins for a discovery's pre-registration plan (and its result row): rule, q and quantile
     method under the tercile rule, the margin under the break-even rule."""
     tercile = cfg.threshold_rule == "tercile_inner"
-    return {"threshold_rule": cfg.threshold_rule, "tercile_q": TERCILE_Q if tercile else None,
-            "tercile_method": TERCILE_METHOD if tercile else None, "margin": None if tercile else THRESHOLD_MARGIN}
+    return {"threshold_rule": cfg.threshold_rule, "tercile_q": cfg.tercile_q if tercile else None,
+            "tercile_method": cfg.tercile_method if tercile else None, "margin": None if tercile else THRESHOLD_MARGIN}
 
 
 class FoldSelection(Record):
@@ -473,6 +507,16 @@ def group_map_hash(groups: dict[str, str]) -> str:
     return hashlib.sha256(json.dumps(groups, sort_keys=True).encode()).hexdigest()
 
 
+def check_threshold_config(cfg: DiscoveryConfig, window: dict[str, Any]) -> None:
+    """Before the budget check, the pre-registration and any look (quant review R1, fix 3): under the tercile rule the
+    walk-forward's test windows must not overlap (`step_months` >= `test_months`), or `pipeline.fold_cuts` would
+    refuse the run after its rows were written. ValueError otherwise; the break-even rule is not affected."""
+    if cfg.threshold_rule == "tercile_inner" and int(window["step_months"]) < int(window["test_months"]):
+        raise ValueError(f"threshold_rule tercile_inner needs non-overlapping test folds, but step_months "
+                         f"{window['step_months']} < test_months {window['test_months']}: the earlier folds' "
+                         f"out-of-fold p would hold the fold's own test rows")
+
+
 def check_group_config(cfg: DiscoveryConfig) -> None:
     """A group-unit discovery pre-registers `group_top_k` explicitly (quant ruling Q-3; ValueError otherwise)."""
     if cfg.survivor_unit == "group" and cfg.group_top_k is None:
@@ -568,12 +612,13 @@ def auc_lower_bound(y: np.ndarray, p: np.ndarray, ts: pd.DatetimeIndex, n_boot: 
 
 
 def reading_verdict(auc: float | None, auc_lb: float | None, n_scored: int, taken_mean_r: float | None,
-                    n_taken: int, rule: str = READING_RULE) -> dict[str, Any]:
-    """READING_RULE applied to the result."""
+                    n_taken: int, rule: str = READING_RULE, min_taken: int = 1) -> dict[str, Any]:
+    """READING_RULE applied to the result. `min_taken`: the taken trades "continue" needs, 1 under the coded rule and
+    MIN_READ_EVENTS under the tercile rule (O-4: "net mean R > 0 on >= 1,000 trades"; quant review R1, fix 1)."""
     if auc is None or auc < STOP_AUC:
         decision = "stop"
     elif (auc >= CONTINUE_AUC and auc_lb is not None and auc_lb > AUC_LOWER_BOUND and n_scored >= MIN_READ_EVENTS
-          and n_taken > 0 and taken_mean_r is not None and taken_mean_r > 0):
+          and n_taken >= max(min_taken, 1) and taken_mean_r is not None and taken_mean_r > 0):
         decision = "continue"
     else:
         decision = "inconclusive"
@@ -590,6 +635,7 @@ def run_discovery(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
     """Fold-internal stability selection, then the walk-forward of a model fitted in each fold on that fold's own
     selection (cross-fitted calibration and gates as every walk-forward). `labels` carries weight."""
     check_group_config(cfg)              # before any look at the data
+    check_threshold_config(cfg, window)
     groups = groups or {c: c for c in pool}
     check_group_sizes(groups, cfg, group_mode)
     cluster_columns = check_cluster_columns(feats, pool, groups, cfg, group_mode)
@@ -600,9 +646,11 @@ def run_discovery(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
     res = _walk_forward(agent_id, labels, gross, feats, ["side", *selected], folds, version, n_trials=n_trials,
                         trades_per_year=trades_per_year, extra_cost_usd=extra_cost_usd, holdout=holdout,
                         score_holdout=False, window=window, timeframe=None, swap=swap,
-                        fold_cols={s.k: ["side", *s.selected] for s in sels}, threshold_rule=cfg.threshold_rule)
+                        fold_cols={s.k: ["side", *s.selected] for s in sels}, threshold_rule=cfg.threshold_rule,
+                        tercile_q=cfg.tercile_q)
     oof = res.oof
-    selection = res.metrics.get("selection") or selection_summary(oof, folds, cfg.threshold_rule).model_dump()
+    selection = res.metrics.get("selection") or selection_summary(oof, folds, cfg.threshold_rule,
+                                                                  tercile_q=cfg.tercile_q).model_dump()
     scored = oof[oof["p_raw"].notna()] if "p_raw" in oof else oof.iloc[0:0]
     taken = scored[scored["p"].notna() & scored["taken"]] if len(scored) else scored
     auc = _auc(scored["target_hit"].to_numpy(dtype=int), scored["p_raw"].to_numpy()) if len(scored) else None
@@ -611,7 +659,8 @@ def run_discovery(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
           if auc is not None else None)
     tk = expectancy(taken["ret"].to_numpy(), taken["risk"].to_numpy()) if len(taken) else {"n": 0}
     verdict = reading_verdict(auc, lb, len(scored), tk.get("mean_r"), int(tk.get("n", 0)),
-                              rule=reading_rule(cfg.survivor_unit, cfg.threshold_rule))
+                              rule=reading_rule(cfg.survivor_unit, cfg.threshold_rule, cfg.tercile_q),
+                              min_taken=MIN_READ_EVENTS if cfg.threshold_rule == "tercile_inner" else 1)
     n_groups = len(set(groups[c] for c in pool))
     k_eff = len(pool) if cfg.survivor_unit == "feature" else n_groups
     res.metrics["discovery"] = {
@@ -776,6 +825,7 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
     from goldbot.research.registry import DISCOVERY
 
     check_group_config(cfg)              # before the budget check, the pre-registration and any look
+    check_threshold_config(cfg, window_for(spec.timeframe, **spec.walkforward))
     if holdout is None and holdout_from is not None:
         raise ValueError(f"research.holdout_from is {holdout_from} but there is no holdout window (research.holdout_to "
                          f"unset?): --discover would read the held-out bars uncut; set the window or clear holdout_from")
@@ -794,7 +844,7 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
     if prereg is None:
         prereg = reg.preregister(agent_id=spec.agent_id, family=family, config=config,
                                  feature_version=feature_version(names), rationale=rationale,
-                                 reading_rule=reading_rule(cfg.survivor_unit, cfg.threshold_rule),
+                                 reading_rule=reading_rule(cfg.survivor_unit, cfg.threshold_rule, cfg.tercile_q),
                                  plan={"features": names, "group_mode": group_mode, "trial_status": DISCOVERY,
                                        "survivor_unit": cfg.survivor_unit, **threshold_plan(cfg)}, queue=False)
     tf = spec.timeframe

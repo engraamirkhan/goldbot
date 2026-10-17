@@ -725,8 +725,11 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
   finding 5) and `stability_threshold: 0.7` written explicitly in the dump (P-7). The AUC lower bound is the coded
   **weekly-block** bootstrap (finding 2). The full `DiscoveryConfig.model_dump()` and
   `group_map_sha256` are written here as an amendment when E-2 merges, before the candidate count.
-- Threshold (amended 2026-10-17, E-2): `threshold_rule: tercile_inner` in the pinned `DiscoveryConfig` dump (so in
-  the config hash), the top-tercile cut as pinned under "Threshold rule, per row" (q = 2/3, linear, prior set =
+- Threshold (amended 2026-10-17, E-2; quant review R1): `threshold_rule: tercile_inner`,
+  `tercile_q: 0.6666666666666666` and `tercile_method: linear` in the pinned `DiscoveryConfig` dump (so in the config
+  hash: another q is another trial). The coded verdict needs at least 1,000 taken trades for "continue", as the
+  reading rule below. The walk-forward must have `step_months >= test_months`, which is checked before any row is
+  written. This is the top-tercile cut as pinned under "Threshold rule, per row" (q = 2/3, linear, prior set =
   earlier folds' out-of-fold rows inside fold k's training rows, no break-even floor). O-4's result row records
   `threshold_rule`, `tercile_q`, `tercile_method`, `fold_cuts`, `retention` and `share_taken_below_breakeven`.
   Reading the same candidates under the coded rule would be another trial. A survivor is promoted only through a

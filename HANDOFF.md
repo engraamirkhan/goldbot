@@ -198,7 +198,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - The pre-registration is amended (2026-10-17, before any H-14 count): the cut is pinned, O-4 names
     `tercile_inner`, and O-5/O-6 name the live rule.
   - Not changed: RiskGate, execution, live thresholds, Q4 rows, frozen readings.
-  - Reviews needed: quant (cut, prior set, CPCV ruling, amendment text) and code.
+  - Quant review round 1 (code APPROVE, quant REQUEST CHANGES), fixed in one commit:
+    - Under the tercile rule, "continue" needs at least 1,000 taken trades (`reading_verdict(min_taken=)`, as O-4's
+      rule reads). The clause says "(at least 1,000 taken)". The default rule and its string do not move.
+    - `tercile_q` and `tercile_method` are `DiscoveryConfig` fields. They are in the dump and the config hash under
+      the tercile rule, so another q is another trial, and the clause is built from them. Under the break-even rule
+      all three are dropped from the dump, keyed on the literal "break_even_margin", and a non-default q is refused.
+    - `check_threshold_config` refuses a tercile run with `step_months < test_months` (overlapping test folds). It
+      runs in `discovery_pass` and in the pre-registration writer, before the budget check or any registry row.
+    - `threshold_plan` also adds its four keys to default-rule pre-registration plans. Plans are not hashed, so this
+      is harmless.
+  - Reviews needed: quant re-review of round 1.
 - The approval window no longer trusts the wall clock alone (2026-10-16, BACKLOG 60; needs trading-safety review).
   `Proposal.expired` was `time.time() > created + window_s`, so a backward clock step stretched the owner's 90 s
   window and a pending file stamped in the future (a restored backup, a bad write) stayed approvable. Now

@@ -268,7 +268,7 @@ class SelectionSummary(FrozenRecord):
 
 
 def selection_summary(oof: pd.DataFrame, folds: list[Any], rule: ThresholdRule,
-                      cuts: np.ndarray | None = None) -> SelectionSummary:
+                      cuts: np.ndarray | None = None, tercile_q: float = TERCILE_Q) -> SelectionSummary:
     """`SelectionSummary` of an out-of-fold frame (p_raw, p, threshold, taken) over its folds."""
     p_raw, taken = oof["p_raw"].to_numpy(dtype=float), oof["taken"].to_numpy(dtype=bool)
     per: list[float | None] = []
@@ -284,7 +284,7 @@ def selection_summary(oof: pd.DataFrame, folds: list[Any], rule: ThresholdRule,
     ok = np.isfinite(p_cal)
     tercile = rule == "tercile_inner"
     return SelectionSummary(
-        threshold_rule=rule, tercile_q=TERCILE_Q if tercile else None, tercile_method=TERCILE_METHOD if tercile else None,
+        threshold_rule=rule, tercile_q=tercile_q if tercile else None, tercile_method=TERCILE_METHOD if tercile else None,
         margin=None if tercile else THRESHOLD_MARGIN,
         fold_cuts=None if cuts is None else [float(c) if np.isfinite(c) else None for c in cuts],
         retention=Retention(per_fold=per, overall=n_taken / n_scored if n_scored else None, n_taken=n_taken,
@@ -406,7 +406,8 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
                   extra_cost_usd: float, holdout: Window | None, score_holdout: bool,
                   window: dict[str, Any], timeframe: str | None, swap: SwapSpec | None = None,
                   fold_cols: dict[int, list[str]] | None = None,
-                  threshold_rule: ThresholdRule = DEFAULT_THRESHOLD_RULE) -> ResearchResult:
+                  threshold_rule: ThresholdRule = DEFAULT_THRESHOLD_RULE,
+                  tercile_q: float = TERCILE_Q) -> ResearchResult:
     """Shared by the per-family and the pooled walk-forward: fit per fold, cross-fitted calibration, per-candidate
     threshold from its own barriers, metrics, rule-only expectancy and the design's gates (or the holdout rule).
     `labels` carries ret (net), risk, weight, target_atr, stop_atr and atr_sig; `feats` is row-aligned with it.
@@ -414,8 +415,8 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
     folds not in it use `cols`. timeframe: the decision bars' (a trade enters one bar after its signal, `entry_utc`);
     None (a discovery trial, which no day-summed rule reads) records no `model_filtered.day_summed`.
     threshold_rule (`select`): the default "break_even_margin" leaves every output as before E-2; "tercile_inner"
-    (O-4's pre-registered rule) takes raw p >= the fold's `fold_cuts`, adds the `cut` column and records
-    `metrics.selection` (`selection_summary`)."""
+    (O-4's pre-registered rule) takes raw p >= the fold's `fold_cuts` at `tercile_q` (the pre-registered q), adds
+    the `cut` column and records `metrics.selection` (`selection_summary`)."""
     y = labels["target_hit"].astype(int)
     oof_pred = np.full(len(labels), np.nan)
     last_model = None
@@ -431,7 +432,7 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
     oof["threshold"] = candidate_threshold(labels, extra_cost_usd)
     cuts = None
     if threshold_rule == "tercile_inner":
-        cuts = fold_cuts(oof_pred, folds)
+        cuts = fold_cuts(oof_pred, folds, tercile_q)
         oof["cut"] = row_cuts(cuts, folds, len(oof))
     oof["taken"] = select(oof_pred, oof["p"].to_numpy(dtype=float),
                           oof["cut" if cuts is not None else "threshold"].to_numpy(dtype=float), threshold_rule)
@@ -452,7 +453,7 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
         "rule_only": rule_only(gross_eval, oof[in_hold]),
     }
     if cuts is not None:              # the default rule's metrics stay exactly as before E-2
-        metrics["selection"] = selection_summary(oof, folds, threshold_rule, cuts).model_dump()
+        metrics["selection"] = selection_summary(oof, folds, threshold_rule, cuts, tercile_q).model_dump()
     if len(scored) > 20 and last_model is not None:
         # the deployed model (last fold) is calibrated on every out-of-fold prediction: all of them precede its use
         last_model.calibrate(oof["p_raw"].dropna().to_numpy(), oof.loc[oof["p_raw"].notna(), "target_hit"].to_numpy())

@@ -319,6 +319,7 @@ def _discovery_config(row: SpecRow, spec: Any, research: Any) -> tuple[dict[str,
     """(the discovery trial's registry config, its pre-registration plan), as `discovery.discovery_pass` builds them."""
     from goldbot.research import discovery as disc
     from goldbot.research.registry import DISCOVERY
+    from goldbot.research.walkforward import window_for
     over = dict(row.discovery or {})
     if isinstance(over.get("clusters"), str):
         if over["clusters"] not in NAMED_CLUSTERS:
@@ -327,6 +328,7 @@ def _discovery_config(row: SpecRow, spec: Any, research: Any) -> tuple[dict[str,
     try:
         cfg = disc.DiscoveryConfig(**over)
         disc.check_group_config(cfg)
+        disc.check_threshold_config(cfg, window_for(spec.timeframe, **spec.walkforward))
     except ValueError as exc:                          # pydantic's ValidationError included
         raise SpecError(f"{row.id}: discovery config: {exc}") from None
     if row.group_mode not in disc.GROUP_MODES:

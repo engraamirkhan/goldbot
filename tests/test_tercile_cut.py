@@ -464,3 +464,87 @@ def test_threshold_rule_change_after_preregistration_is_refused_by_director(tmp_
     msg = str(exc.value)
     assert "pending queued row" in msg and "discovery.threshold_rule" in msg
     assert reg.path.read_text() == before                                  # no pre-registration, no trial
+
+
+# ---------------------------------------------------------------------------------------------- quant review round 1
+def test_tercile_verdict_needs_1000_trades():
+    """Quant R1 fix 1: O-4's rule is "net mean R > 0 on >= 1,000 trades"; under the tercile rule 999 taken trades with
+    a positive mean R read inconclusive. The default rule's verdict and string do not move."""
+    from goldbot.research.discovery import MIN_READ_EVENTS, TERCILE_CLAUSE, reading_rule, reading_verdict
+    assert MIN_READ_EVENTS == 1000 and "(at least 1,000 taken)" in TERCILE_CLAUSE
+    t_rule = reading_rule("group", "tercile_inner")
+    assert "(at least 1,000 taken)" in t_rule
+    assert reading_verdict(0.56, 0.53, 50_000, 0.05, 999, rule=t_rule, min_taken=MIN_READ_EVENTS)["decision"] \
+        == "inconclusive"
+    assert reading_verdict(0.56, 0.53, 50_000, 0.05, 1000, rule=t_rule, min_taken=MIN_READ_EVENTS)["decision"] \
+        == "continue"
+    assert reading_verdict(0.56, 0.53, 50_000, 0.05, 1)["decision"] == "continue"      # default rule: unchanged
+    assert reading_rule("group") == json.loads(GOLDEN.read_text())["reading_rule"]["group"]
+
+
+def test_run_discovery_under_the_tercile_rule_applies_the_1000_trade_floor(monkeypatch: pytest.MonkeyPatch):
+    from goldbot.research import discovery
+    seen: dict[str, Any] = {}
+    real = discovery.reading_verdict
+
+    def spy(*a: Any, **k: Any) -> dict[str, Any]:
+        seen.update(k)
+        return real(*a, **k)
+    monkeypatch.setattr(discovery, "reading_verdict", spy)
+    _discover_with("tercile_inner")
+    assert seen["min_taken"] == discovery.MIN_READ_EVENTS
+    _discover_with("break_even_margin")
+    assert seen["min_taken"] == 1
+
+
+def test_q_is_part_of_the_config_hash_and_of_the_reading_rule():
+    """Quant R1 fix 2: q and the quantile method are in the tercile dump (so in the hash), and the clause is built
+    from them; the default rule is dropped from the dump only when it is literally "break_even_margin"."""
+    from goldbot.research.discovery import DiscoveryConfig, reading_rule
+    from goldbot.research.registry import config_hash
+    assert pipeline.DEFAULT_THRESHOLD_RULE == "break_even_margin"
+    t = DiscoveryConfig(threshold_rule="tercile_inner")
+    d = t.model_dump()
+    assert d["tercile_q"] == 2 / 3 and d["tercile_method"] == "linear"
+    other = DiscoveryConfig(threshold_rule="tercile_inner", tercile_q=0.75)
+    assert config_hash({"discovery": other.model_dump()}) != config_hash({"discovery": d})
+    assert "the 3/4 quantile (linear)" in reading_rule("feature", "tercile_inner", tercile_q=0.75)
+    assert "the 2/3 quantile (linear)" in reading_rule("feature", "tercile_inner")
+    assert not {"threshold_rule", "tercile_q", "tercile_method"} & set(DiscoveryConfig().model_dump())
+    with pytest.raises(ValueError, match="tercile_q"):
+        DiscoveryConfig(tercile_q=0.75)                     # a q under the break-even rule would be silently ignored
+    with pytest.raises(ValueError):
+        DiscoveryConfig(threshold_rule="tercile_inner", tercile_q=1.0)
+
+
+def test_a_tercile_q_other_than_two_thirds_reaches_the_cut(stub_model: None):
+    labels, gross, feats = _wf_frames()
+    folds = list(walk_forward_splits(labels, **WINDOW))
+    sel = _walk(labels, gross, feats, folds, threshold_rule="tercile_inner", tercile_q=0.75).metrics["selection"]
+    p = _walk(labels, gross, feats, folds).oof["p_raw"].to_numpy()
+    assert sel["tercile_q"] == 0.75
+    assert sel["fold_cuts"][2] == float(np.quantile(p[np.intersect1d(np.concatenate([folds[0].test_idx,
+                                                                                      folds[1].test_idx]),
+                                                                       folds[2].train_idx)], 0.75, method="linear"))
+
+
+def test_a_tercile_discovery_with_overlapping_test_windows_is_refused_before_any_registry_row(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Quant R1 fix 3: step_months < test_months gives overlapping test folds; under the tercile rule the run is
+    refused before the budget check, the pre-registration or any look (the default rule is not affected)."""
+    from goldbot.research.discovery import DiscoveryConfig, check_threshold_config, discovery_pass
+    from goldbot.research.registry import TrialRegistry
+    from goldbot.specialists import SPECIALISTS
+    with pytest.raises(ValueError, match="step_months"):
+        check_threshold_config(DiscoveryConfig(threshold_rule="tercile_inner"),
+                               {"test_months": 3, "step_months": 1})
+    check_threshold_config(DiscoveryConfig(), {"test_months": 3, "step_months": 1})
+    check_threshold_config(DiscoveryConfig(threshold_rule="tercile_inner"), {"test_months": 3, "step_months": 3})
+    spec = SPECIALISTS["tsmom"](timeframe="4h", max_bars=12)
+    monkeypatch.setattr(type(spec), "walkforward", {"step_months": 1})
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    b1 = pd.DataFrame({"ts_utc": pd.to_datetime(["2010-01-03 23:00:00", "2025-09-30 20:59:00"], utc=True)})
+    with pytest.raises(ValueError, match="step_months"):
+        discovery_pass(spec, b1, reg, budget_cap=20, reserved_setting=0,
+                       cfg=DiscoveryConfig(threshold_rule="tercile_inner"))
+    assert not (tmp_path / "r.jsonl").exists() or not (tmp_path / "r.jsonl").read_text()
