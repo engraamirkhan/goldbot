@@ -15,12 +15,15 @@ RUNNER = Path(__file__).parents[1] / "goldbot" / "engine" / "runner.py"
 LINE_CAP = 3471             # measured after step 1; lowered by every step, <= 1,500 after step 7 (ADR 0023)
 
 # A1 (ADR 0023 addendum): after step 1 runner.py writes no state file. The reads left are of files other jobs write, each
-# allowed only in its named function until that function moves; a stale entry fails, so the list only shrinks and is
-# empty after step 7.
-READ_ALLOWED: dict[str, str] = {
-    "Engine._archive_stale_proposals": "W2-1 F1 (approvals/pending, the bus's files)",
-    "Engine._drift": "step 5, engine/sizing.py (state/drift.json, drift_watch job)",
-    "Engine._account_class": "step 5, engine/sizing.py (state/classifier_<account>.json, classifier job)",
+# allowed only in its named function, at today's count, until that function moves: a second read inside an allowed
+# function fails, and so does a stale entry, so the list only shrinks and is empty after step 7.
+READ_ALLOWED: dict[str, Counter[str]] = {
+    # W2-1 F1 (approvals/pending, the bus's files)
+    "Engine._archive_stale_proposals": Counter({"read_text": 1}),
+    # step 5, engine/sizing.py (state/drift.json, drift_watch job)
+    "Engine._drift": Counter({"json.loads": 1, "read_text": 1}),
+    # step 5, engine/sizing.py (state/classifier_<account>.json, classifier job)
+    "Engine._account_class": Counter({"json.loads": 1, "read_text": 1}),
 }
 
 
@@ -61,14 +64,18 @@ def test_runner_py_stays_under_its_line_cap():
 
 def test_runner_does_no_state_file_io():
     """Seam map step 1 and ADR 0023 A1: runner.py never calls `write_atomic` (engine/store.py owns the engine, risk and
-    orders files), and `json.loads` / `read_text` appear only in the READ_ALLOWED functions. An entry whose function no
-    longer reads a file is stale and fails until it is struck, so the list only shrinks."""
+    orders files), and `json.loads` / `read_text` appear only in the READ_ALLOWED functions, each at its listed count.
+    An entry whose function no longer reads a file is stale and fails until it is struck, so the list only shrinks."""
     got = _io_sites(RUNNER.read_text())
     writes = {fn: n for (fn, call), n in got.items() if call == "write_atomic"}
     assert not writes, f"write_atomic in runner.py: {writes}; durable writes go through engine/store.py"
-    readers = {fn for fn, _ in got}
-    assert readers <= set(READ_ALLOWED), f"file reads outside the allow-list: {sorted(readers - set(READ_ALLOWED))}"
-    assert set(READ_ALLOWED) <= readers, f"stale allow-list entries (strike them): {sorted(set(READ_ALLOWED) - readers)}"
+    reads: dict[str, Counter[str]] = {}
+    for (fn, call), n in got.items():
+        reads.setdefault(fn, Counter())[call] += n
+    assert set(reads) <= set(READ_ALLOWED), f"file reads outside the allow-list: {sorted(set(reads) - set(READ_ALLOWED))}"
+    assert set(READ_ALLOWED) <= set(reads), f"stale allow-list entries (strike them): {sorted(set(READ_ALLOWED) - set(reads))}"
+    changed = {fn: dict(reads[fn]) for fn in READ_ALLOWED if reads[fn] != READ_ALLOWED[fn]}
+    assert not changed, f"reads in an allowed function changed from the listed counts: {changed}; never add one"
 
 
 def test_the_io_site_finder_sees_every_spelling_it_polices():

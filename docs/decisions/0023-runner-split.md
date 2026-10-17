@@ -76,6 +76,10 @@ freeze.
 | 6 | `engine/reconcile.py` | `_own` … `_lot_terms` (1819-1937); `_resolve_sent` … `_closed_excursion` (2526-2899) | steps 1, 3; W2-1 | Tue 12-08 | implementer |
 | 7 | `engine/clock.py` | `_host_now` … `_host_clock_exits` (711-784); `_server_clock` … `_check_new_bars` (2262-2406) | none | Fri 12-11 | implementer |
 
+Step 1 note (trading-safety ruling, 2026-10-17): one deviation from S2 is kept. `RiskSnapshot`'s types refuse a risk
+file value the engine never writes (a non-string `rearm_seen`, a "NaT" timestamp) with a ValueError at start; exact
+parity would keep a fail-open re-arm check and a mid-tick `NaT` crash.
+
 Line numbers are re-read at each PR's base. One split PR is open at a time, and each is reviewed by the
 trading-safety-reviewer and the code-reviewer with `git diff --color-moved=dimmed-zebra` and full gates. A step
 whose dependency is late may swap with a later step that has none, such as clock. The swap is recorded in the

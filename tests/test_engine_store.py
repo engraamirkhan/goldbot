@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 
 from goldbot import base
-from goldbot.engine import runner, store
+from goldbot.engine import Engine, EngineConfig, runner, store
 from goldbot.engine.store import (
     EngineStore,
     JsonEngineStore,
@@ -23,7 +23,9 @@ from goldbot.engine.store import (
     RiskSnapshot,
     SentOrder,
 )
+from goldbot.execution.paper import PaperBroker
 from goldbot.risk.gate import Stage
+from goldbot.telegram.approvals import ApprovalCenter
 
 ACCOUNT = "icm-demo"
 T0 = pd.Timestamp("2025-03-05 10:00", tz="UTC")
@@ -102,6 +104,19 @@ def test_an_unreadable_file_raises_the_json_error_not_none(tmp_path, kind):
     s = JsonEngineStore(tmp_path, ACCOUNT)
     with pytest.raises(json.JSONDecodeError):
         s.load_risk() if kind == "risk" else s.load_orders()
+
+
+@pytest.mark.parametrize("field", [{"rearm_seen": 5}, {"halted_at": "NaT"}])
+def test_a_risk_file_value_the_engine_never_writes_refuses_the_start(tmp_path, field):
+    """Deviation from S2, kept on the trading-safety ruling (2026-10-17): the snapshot's types refuse what the old
+    parse let through. A hand-edited non-string `rearm_seen` would never equal a re-arm id (a fail-open re-arm check),
+    and a `NaT` `halted_at` crashed mid-tick; both now refuse the start with a ValueError (pydantic ValidationError)."""
+    (tmp_path / f"risk_{ACCOUNT}.json").write_text(json.dumps({"stage": "halted", **field}))
+    with pytest.raises(ValueError):
+        JsonEngineStore(tmp_path, ACCOUNT).load_risk()
+    with pytest.raises(ValueError):
+        Engine(EngineConfig(account_id=ACCOUNT, broker_name="icm", state_dir=str(tmp_path), owner_user_id=111),
+               PaperBroker(equity=10_000), [], {}, ApprovalCenter({111}))
 
 
 def test_the_engine_file_is_written_without_fsync_and_the_others_durably(tmp_path, monkeypatch):
