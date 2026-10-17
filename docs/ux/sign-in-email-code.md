@@ -226,3 +226,34 @@ IPv6 /32). The code line has nothing else on it, so a long press copies only the
 ## Out of scope
 
 Approver email codes (Q3), SMS, passkeys, retiring the email link (recommended follow-up), Telegram sign-in.
+
+## Conditions from the security plan review (APPROVE-WITH-CONDITIONS, d025dca, 2026-10-17)
+
+Rulings: (1) password + emailed code signs the OWNER in without the authenticator, only while mail is ready; approval is
+one tap, so password + mailbox can approve the engine's proposals — the RiskGate still bounds them (the new ADR says so
+in plain words). (2) Step-up (authenticator or recovery code) after an email-code sign-in for: invite, set role,
+disable, **enable**, reset-link, user-session revoke — plus the existing re-arm, auto mode, password change, new
+recovery codes; unlock live stays server-side only. (3) Approvers excluded. (4) Code never in the subject. (5) One
+shared limit: 3 mails an hour per address and per client IP.
+
+Binding on the build:
+1. A new ADR replaces ADR 0013's "the authenticator is still needed" clause and the auth.py text; it states the trade-off
+   (an attacker with password + mailbox can view, approve/reject and halt, but cannot keep access) and a revert trigger:
+   email codes off on any live-money incident or if the Gmail account has no 2-Step Verification.
+2. The server stores how each session signed in and decides step-ups from that record only, for every route above.
+3. Brute force: 3 tries per challenge; wrong codes count under `email:<e>`; after 3 burned challenges or one lockout in
+   24 h, email codes are suspended until the next authenticator sign-in, with a Telegram notice.
+4. The code is stored keyed (HMAC) with a key in the keyring (not aux.db or backups); `compare_digest`; single-use;
+   10-minute TTL; only the newest code works.
+5. Each code is tied to a random 32-byte challenge id held only by the requesting browser, stored hashed.
+6. Same answer for any input: scrypt against a dummy hash; mail sent in a background task after the reply; the decoy
+   matches shape, status and timing (a test measures it).
+7. STARTTLS with certificate checks only (as mailer.py today); no plain-text fallback; never log the body or exception
+   details.
+8. The code never appears in logs, audit rows or URLs; audit rows `email_code_sent/_failed/_burned/_login/_rate_limited`.
+9. The challenge is deleted on success; password change, forgot-password, recovery sign-in, sign-out and
+   revoke-sessions delete open challenges; replay after sign-out fails (test).
+10. Every email-code sign-in sends a Telegram notice (the attacker controls the mailbox).
+11. Email never becomes a way to reset the password.
+Extra tests: `test_email_code_stepup_on_enable_and_reset_link`, `test_email_code_suspended_after_burns`,
+`test_email_code_decoy_timing`.
