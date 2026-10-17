@@ -350,3 +350,117 @@ def test_default_rule_results_are_unchanged_on_a_golden_frame(stub_model: None):
     got = golden_snapshot()
     _same(got["walk_forward"], want["walk_forward"], "walk_forward")
     _same(got["cpcv"], want["cpcv"], "cpcv")
+
+
+# ---------------------------------------------------------------------------------------------- discovery and registry
+def _discover_with(rule: str) -> Any:
+    from goldbot.research.discovery import DiscoveryConfig, run_discovery
+    from tests.test_discovery import POOL, _synthetic
+    from tests.test_discovery import WINDOW as D_WINDOW
+    labels, gross, feats = _synthetic(n_days=600)
+    folds = list(walk_forward_splits(labels, **D_WINDOW))
+    cfg = DiscoveryConfig(n_subsamples=4, top_k=2, freq_threshold=0.5, stability_threshold=0.5,
+                          threshold_rule=rule)                                  # type: ignore[arg-type]
+    return run_discovery("synthetic-e2", labels, gross, feats, folds, "f-test", D_WINDOW, POOL, cfg)
+
+
+def test_default_reading_rule_string_is_byte_identical_and_tercile_replaces_the_break_even_clause():
+    """Quant condition 3: the default string is unchanged (the director compares cited_rule == the pre-registration's
+    reading_rule); the tercile rule REPLACES "(cross-fitted, break-even + margin)" and adds one sentence: promotion
+    needs a separate trial under the live rule."""
+    from goldbot.research.discovery import LIVE_RULE_NOTE, READING_RULE, TERCILE_CLAUSE, reading_rule
+    want = json.loads(GOLDEN.read_text())["reading_rule"]
+    assert reading_rule("feature") == reading_rule("feature", "break_even_margin") == READING_RULE == want["feature"]
+    assert reading_rule("group") == reading_rule("group", "break_even_margin") == want["group"]
+    assert "test-fold raw p >= the 2/3 quantile (linear)" in TERCILE_CLAUSE and "no break-even floor" in TERCILE_CLAUSE
+    assert "promotion needs a separate trial under the live rule" in LIVE_RULE_NOTE
+    for unit in ("feature", "group"):
+        t = reading_rule(unit, "tercile_inner")
+        assert "(cross-fitted, break-even + margin)" not in t and TERCILE_CLAUSE in t and LIVE_RULE_NOTE in t
+        back = t.replace(TERCILE_CLAUSE, "(cross-fitted, break-even + margin)").replace(" " + LIVE_RULE_NOTE, "")
+        assert back == want[unit]                                           # nothing else in the rule moved
+
+
+def test_the_default_discovery_config_dump_and_its_hash_are_unchanged():
+    """A default config dumps (and so hashes) exactly as before E-2: H-02's pinned dump and every queued hash hold;
+    the tercile rule is in the dump, so it is part of the hashed, pre-registered configuration."""
+    from goldbot.research.discovery import DiscoveryConfig
+    from goldbot.research.registry import config_hash
+    assert "threshold_rule" not in DiscoveryConfig().model_dump()
+    assert DiscoveryConfig(threshold_rule="break_even_margin").model_dump() == DiscoveryConfig().model_dump()
+    t = DiscoveryConfig(threshold_rule="tercile_inner")
+    assert t.model_dump()["threshold_rule"] == "tercile_inner" and DiscoveryConfig(**t.model_dump()) == t
+    assert config_hash({"discovery": t.model_dump()}) != config_hash({"discovery": DiscoveryConfig().model_dump()})
+    with pytest.raises(ValueError):
+        DiscoveryConfig(threshold_rule="top_decile")                            # type: ignore[arg-type]
+
+
+def test_threshold_rule_and_fold_cuts_are_recorded_on_the_registry_row(tmp_path: Path):
+    from goldbot.research.registry import DISCOVERY, TrialRegistry
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    for rule in ("tercile_inner", "break_even_margin"):
+        d = _discover_with(rule)
+        reg.record(agent_id="synthetic-e2", family="discovery_tsmom", config={"rule": rule}, feature_version="f",
+                   rationale="r", results=d.result.metrics, status=DISCOVERY)
+    rows = TrialRegistry(tmp_path / "r.jsonl")._rows()                          # after a reload
+    t, b = (r["results"]["discovery"] for r in rows)
+    assert t["threshold_rule"] == "tercile_inner" and t["tercile_q"] == 2 / 3 and t["tercile_method"] == "linear"
+    assert t["margin"] is None and len(t["fold_cuts"]) == rows[0]["results"]["n_folds"]
+    assert t["fold_cuts"][0] is None and all(isinstance(c, float) for c in t["fold_cuts"][1:])
+    assert set(t["retention"]) == {"per_fold", "overall", "n_taken", "n_scored"} and t["retention"]["n_taken"] > 0
+    assert isinstance(t["share_taken_below_breakeven"], float)
+    assert "promotion needs a separate trial under the live rule" in t["reading_verdict"]["rule"]
+    assert b["threshold_rule"] == "break_even_margin" and b["margin"] == pipeline.THRESHOLD_MARGIN
+    assert b["tercile_q"] is None and b["tercile_method"] is None and b["fold_cuts"] is None
+    assert b["share_taken_below_breakeven"] in (0.0, None)                  # p > break-even + margin by construction
+    assert "selection" not in rows[1]["results"]                              # the default walk-forward is unchanged
+
+
+def test_the_preregistration_plan_names_the_threshold_rule():
+    from goldbot.research.discovery import DiscoveryConfig, threshold_plan
+    assert threshold_plan(DiscoveryConfig(threshold_rule="tercile_inner")) == {
+        "threshold_rule": "tercile_inner", "tercile_q": 2 / 3, "tercile_method": "linear", "margin": None}
+    assert threshold_plan(DiscoveryConfig()) == {"threshold_rule": "break_even_margin", "tercile_q": None,
+                                                 "tercile_method": None, "margin": pipeline.THRESHOLD_MARGIN}
+
+
+def test_a_second_reading_of_the_same_candidates_under_the_other_rule_is_a_new_trial_in_n_trials_effective(
+        tmp_path: Path):
+    from goldbot.research.discovery import DiscoveryConfig, discovery_trial_config
+    from goldbot.research.registry import DISCOVERY, TrialRegistry, config_hash
+    from goldbot.specialists import SPECIALISTS
+    spec = SPECIALISTS["tsmom"](timeframe="4h", max_bars=12)
+    cfgs = [discovery_trial_config(spec, DiscoveryConfig(threshold_rule=r), "column", ["atr"], "a", "b", None)
+            for r in ("break_even_margin", "tercile_inner")]
+    assert config_hash(cfgs[0]) != config_hash(cfgs[1])                       # not the same trial re-read
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    for c in cfgs:
+        reg.record(agent_id=spec.agent_id, family="discovery_tsmom", config=c, feature_version="f", rationale="r",
+                   results={"discovery": {"k_eff": 12}}, status=DISCOVERY)
+    assert reg.n_trials == 2 and reg.n_trials_effective == 2 + 12 + 12       # each reading pays its K_eff
+
+
+def test_threshold_rule_change_after_preregistration_is_refused_by_director(tmp_path: Path,
+                                                                           monkeypatch: pytest.MonkeyPatch):
+    """The queued discovery row pins its DiscoveryConfig; a run reading it under the other threshold rule hashes
+    differently and is refused (director.queued_mismatch), never charged to the open budget."""
+    from goldbot.research.discovery import H02_CLUSTERS
+    from tests.test_discover_holdout_and_digests import (
+        _b1_past_the_holdout,
+        _discover,
+        _release,
+        _research_pass,
+        _stop_at_link,
+        _written,
+    )
+    bars = _release(tmp_path / "raw")
+    reg = _written(tmp_path, monkeypatch, bars)
+    before = reg.path.read_text()
+    rp = _research_pass(monkeypatch)
+    _stop_at_link(monkeypatch)
+    tercile = {"survivor_unit": "feature", "group_top_k": 3, "clusters": H02_CLUSTERS, "threshold_rule": "tercile_inner"}
+    with pytest.raises(SystemExit) as exc:
+        _discover(rp, tmp_path, reg, bars, _b1_past_the_holdout(), discovery=tercile)
+    msg = str(exc.value)
+    assert "pending queued row" in msg and "discovery.threshold_rule" in msg
+    assert reg.path.read_text() == before                                  # no pre-registration, no trial

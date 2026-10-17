@@ -335,7 +335,7 @@ def _discovery_config(row: SpecRow, spec: Any, research: Any) -> tuple[dict[str,
     config = disc.discovery_trial_config(spec, cfg, row.group_mode, names, str(row.bars_from), str(row.bars_to),
                                          research.holdout_window())
     plan = {"features": names, "group_mode": row.group_mode, "trial_status": DISCOVERY,
-            "survivor_unit": cfg.survivor_unit}
+            "survivor_unit": cfg.survivor_unit, **disc.threshold_plan(cfg)}
     return config, plan
 
 

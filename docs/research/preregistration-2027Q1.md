@@ -582,12 +582,24 @@ protection**: a row not listed here is not run from the open budget in Q1. Each 
   candidates of one ISO week resampled together, 500 resamples, seed 0). No day-block AUC option is added.
 - **Threshold rule, per row (amended 2026-10-17, quant review of 0f9d6d8, finding 1).** The coded model-stage
   threshold is: take a candidate when its **cross-fitted calibrated p > break-even + 0.02**
-  (`pipeline.THRESHOLD_MARGIN`, `cpcv.py`, `discovery.reading_rule`). No tercile cut exists in code. Each row below
+  (`pipeline.THRESHOLD_MARGIN`, `cpcv.py`, `discovery.reading_rule`). No tercile cut exists in code (built by E-2,
+  2026-10-17, as amended below). Each row below
   names its threshold:
   - O-5, O-6, O-8 and O-10 use the coded rule.
   - O-4's pre-set rule uses a top-tercile cut, which **E-2 must implement**: the cut is the 2/3 quantile of the
     **inner cross-fitted out-of-fold p** of the training fold's rows, never in-sample training p, and it must come
     with a test proving that the cut never sees a test-fold row. Without that merged code O-4 does not run.
+  - *Amended 2026-10-17 (E-2 build, quant plan review of the BACKLOG 75 plan, conditions 1-7; written before any
+    H-14 candidate count):* the cut is pinned as coded (`pipeline.fold_cuts`, `DiscoveryConfig.threshold_rule:
+    tercile_inner`). For test fold k it is `np.quantile(p, 2/3, method="linear")` of the raw out-of-fold p of the
+    rows that are **both a test row of an earlier fold and in fold k's training rows** (`train_idx`: inside its
+    24-month rolling window, after the purge), finite p only. With fewer than 50 such rows the fold has no cut and
+    takes no trade. A candidate is taken when its raw test-fold p >= the cut; there is **no break-even floor**
+    (the share of trades below break-even is reported, never read). q = 2/3 and the linear method are part of the
+    rule: any other q or method is a new trial. Folds whose test windows overlap are refused. Under this rule the
+    discovery's reading rule replaces "(cross-fitted, break-even + margin)" with the tercile clause and adds:
+    "promotion needs a separate trial under the live rule". A tercile result does not carry to live trading, which
+    keeps break-even + 0.02.
   - Thresholds are never changed to reach a trade count.
 - **Costs (P-5, as the Q2 draft).** The source is pinned at this file's freeze. It is the named `costs-v1` version
   if published by 2026-12-11, otherwise the priors ("priors accepted" on 2026-12-14): 0.37 $/oz beyond the spread,
@@ -713,6 +725,12 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
   finding 5) and `stability_threshold: 0.7` written explicitly in the dump (P-7). The AUC lower bound is the coded
   **weekly-block** bootstrap (finding 2). The full `DiscoveryConfig.model_dump()` and
   `group_map_sha256` are written here as an amendment when E-2 merges, before the candidate count.
+- Threshold (amended 2026-10-17, E-2): `threshold_rule: tercile_inner` in the pinned `DiscoveryConfig` dump (so in
+  the config hash), the top-tercile cut as pinned under "Threshold rule, per row" (q = 2/3, linear, prior set =
+  earlier folds' out-of-fold rows inside fold k's training rows, no break-even floor). O-4's result row records
+  `threshold_rule`, `tercile_q`, `tercile_method`, `fold_cuts`, `retention` and `share_taken_below_breakeven`.
+  Reading the same candidates under the coded rule would be another trial. A survivor is promoted only through a
+  separate trial under the live rule (O-5/O-6).
 - Reading rule (O-4, H-14; written 2026-10-17 before any H-14 outcome): a group **survives** if it is selected in
   >= 70% of folds (frequency >= 0.6) AND the walk-forward on the selected set has out-of-fold AUC >= 0.53 with a
   weekly-block bootstrap lower 95% bound > 0.50 (`discovery.auc_lower_bound`) AND the pre-set rule (trade when the
@@ -734,7 +752,9 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
 #### O-5, O-6 H-14 survivor groups (<= 2 trials)
 - Config: a walk-forward model on H-14's label and candidates, inputs = the surviving group's recorded columns +
   `side` (<= 40), tagged `from_discovery`. Written here as an amendment after O-4's verdict and before the run.
-- Threshold: the coded rule (cross-fitted calibrated p > break-even + 0.02), not a tercile cut.
+- Threshold: the coded rule (cross-fitted calibrated p > break-even + 0.02), not a tercile cut
+  (`threshold_rule: break_even_margin`, the default; amended 2026-10-17, E-2). This is the live rule, so O-5/O-6 are
+  the separate trial under the live rule that a tercile-read O-4 survivor needs before promotion.
 - Reading rule (O-5/O-6, H-14 survivors; written 2026-10-17 before any H-14 outcome; day-summed DSR inputs specified
   2026-10-17 per quant finding 6): **pass** only if the unchanged design gates pass (>= 1,500 candidates, >= 60 per
   complete test fold, positive net expectancy in >= 3 calendar years incl. 2021 or 2022, DSR >= 0.95 on >= 200
@@ -829,7 +849,7 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
 | G2 holdout repair | O-10 | data-engineer | 2026-11-06 (needed before 2027-03-19) | open |
 | `calendar-v1` (owner adds `FRED_API_KEY`; data-engineer dispatches `data-us-calendar`) | O-1, O-2/O-3, O-4 | owner (chaser: program-director) | key by **2026-11-30** (escalated now, 6 weeks ahead) | blocked on the owner; release absent |
 | `costs-v1` or "priors accepted" | every row (P-5 pin) | owner / research-director | 2026-12-11 / 2026-12-14 | open; fallback likely |
-| E-2 15m discovery candidate spec + BACKLOG 31 `flat_at_local`. E-2 includes the top-tercile cut from inner cross-fitted p, with a test that the cut never sees a test-fold row (quant finding 1) | O-4 (31 also O-2/O-3) | implementer (quant-reviewer) | 2027-01-29 | not started; BACKLOG item owed (program-director to file) |
+| E-2 15m discovery candidate spec + BACKLOG 31 `flat_at_local`. E-2 includes the top-tercile cut from inner cross-fitted p, with a test that the cut never sees a test-fold row (quant finding 1) | O-4 (31 also O-2/O-3) | implementer (quant-reviewer) | 2027-01-29 | tercile cut built 2026-10-17 (BACKLOG 75, TRACEABILITY M48), quant and code review pending; the 15m candidate spec still open |
 | E-6 day-summed DSR coded check (`metrics.day_summed_dsr`: daily net-R sums over days with trades, var(SR) = 1/G, skew and kurtosis of the sums, K = `n_trials_effective`; `tests/test_day_summed_dsr.py`) | O-5, O-6 | implementer (quant-reviewer) | 2027-02-26 | new; BACKLOG item owed (program-director to file) |
 | H-02 `survivor_unit: group` amendment (doc + yaml dump, done here); PD+PO record; owner note on #34 | every later row's K | research-director (doc), PD+PO (record), quant-reviewer (#34 note) | 2026-12-11 | doc done 2026-10-17; record and note open |
 | E-3 `trend_day` screening specialist | O-2/O-3 | implementer (quant-reviewer) | 2027-02-05 | not started |
