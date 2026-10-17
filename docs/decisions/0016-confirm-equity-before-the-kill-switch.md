@@ -134,3 +134,34 @@ The review offered two ways to close the alternating-readings hole:
   A rollback to an earlier release ignores the saved flag: the narrower, pre-fix behaviour.
 - **What would change this.** A measured bad read lasting two ticks would call for confirmation by time (reads N
   seconds apart). A bridge that reports credit would let the tolerance shrink.
+
+## Amendment (BACKLOG 62, 2026-10-17): the kill switch closes every symbol
+
+Decided 2026-10-16 by the program director and product owner (owner delegated: it tightens risk and loosens
+nothing); plan `docs/proposals/2026-10-backlog62-kill-switch-all-symbols-plan.md` with the trading-safety conditions
+C1-C9. It replaces the line of the F1 correction above that "positions in other symbols are not closed; whether to
+flatten them is an owner decision".
+
+- **What.** "Close everything" (DESIGN.md:122, "12%: close everything at market immediately") means every position on
+  the account: every symbol and every magic. While `_kill_everything` is set, the kill switch and the close retries
+  read `account_positions()` and close what it lists, each with that symbol's own quote and fill mode
+  (`MT5Broker.close`, `_filling(symbol)`).
+- **Why.** The 12% is measured on the account's equity, which already counts every symbol's P&L (the cross-check
+  above reads `account_positions()`). A losing position on another symbol kept draining the account after the halt;
+  closing everything matches what the switch measures.
+- **The owner's manual trades are closed.** A trade opened by hand on any symbol, or another engine's, is closed at
+  market when the switch trips. There is no confirmation step for it: exits are never gated. RUNBOOK (Halt and
+  re-arm) and OWNER_GUIDE say so in plain words; a one-time owner notice goes on issue #34 before the deploy (C8).
+- **Unreadable account book.** If `account_positions()` fails, the switch closes what `positions()` returns (the
+  engine's symbol, every magic: never fewer closes than before) and the flag stays set (C1). The flag clears only on
+  a successful `account_positions()` read that lists nothing; every close returning ok is not enough (C2). A due close
+  of another symbol is never dropped on the fallback read (C3). The failure is logged and journalled
+  (`book_unreadable`, `read: account_positions`) once per streak, and the owner-mode reset still runs (C6).
+- **A symbol without a quote.** MT5 selects the symbol before reading its tick; no symbol info or no tick is a
+  refused close (10021), retried every CLOSE_RETRY_MIN_S; a market-closed refusal (10017/10018) backs off as before.
+  The flag stays set meanwhile. One symbol's refusal never stops the others.
+- **Out of scope.** Pending orders on other symbols are not cancelled (goldbot places none; a pending order the owner
+  left could fill after the flatten, and the next run while the flag is set closes that position). A partial close
+  of another symbol is never sent (its volume step is not read). Multi-account flattening and bridge protocol v6 are
+  not part of this change. SRE follow-up (C9): a health WARN when `kill_everything` stays set with closes due.
+- **Evidence.** `tests/test_kill_switch_everything.py` (BACKLOG 62 section), `tests/test_close_any_symbol.py`.

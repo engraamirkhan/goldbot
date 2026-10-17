@@ -490,6 +490,8 @@ class Engine:
         self._close_due: dict[int, tuple[str, dict, pd.Timestamp | None]] = {}
         # the kill switch has not seen its book flat yet; a saved close-everything (`_load_risk_state`) retries at once
         self._kill_pending = self._kill_everything
+        # an account_positions() read for the kill switch is failing (logged and journalled once per streak, C6)
+        self._kill_book_failing = False
         # the owner's mode still to be set back to propose (A10): a halted engine owes it after a restart, since a failed
         # write is not saved (re-review LOW); the write is a no-op unless the bus says auto
         self._mode_reset_due = self._kill_everything or self.state.stage == Stage.HALTED
@@ -1484,6 +1486,31 @@ class Engine:
         self._read_fails["positions"] = 0
         return positions
 
+    def _read_kill_book(self, then: str) -> tuple[list[Position], bool] | None:
+        """The book the kill switch and the close retries work from, and whether it is complete for their scope
+        (BACKLOG 62; design: "12%: close everything at market immediately"). While `_kill_everything` is set the scope
+        is every position on the account, every symbol and magic: `account_positions()`, complete. If that read fails,
+        `positions()` (the engine's symbol, every magic: never fewer closes than before), NOT complete, so it can never
+        clear the flag or drop a due close of another symbol (trading-safety C1, C3); the failure is logged and
+        journalled once per streak (C6). Without the flag the scope is this engine's symbol, so `positions()` is
+        complete. None when no book could be read (counted by `_read_positions`)."""
+        if self._kill_everything:
+            try:
+                book = self.broker.account_positions()
+            except Exception as exc:                      # an older bridge, a terminal fault: fall back, stay pending
+                if not self._kill_book_failing:
+                    self._kill_book_failing = True
+                    log.warning("account positions unreadable (%s); the kill switch closes the %s positions and stays "
+                                "pending until the account reads flat", type(exc).__name__, self.cfg.symbol)
+                    self.decisions.append({"ts": time.time(), "action": "book_unreadable", "read": "account_positions"})
+            else:
+                if self._kill_book_failing:
+                    log.info("account positions readable again")
+                self._kill_book_failing = False
+                return book, True
+        positions = self._read_positions(then)
+        return None if positions is None else (positions, not self._kill_everything)
+
     def _read_deals(self, since: pd.Timestamp) -> pd.DataFrame:
         """The broker's deal history; a failed read (MT5 history_deals_get returning None) is counted and raised."""
         try:
@@ -1678,21 +1705,28 @@ class Engine:
     def _retry_closes(self, now: pd.Timestamp) -> None:
         """Every tick: re-send each close the engine decided that has not succeeded (kill switch, weekend loser, time
         exit, hard flat, trail, blackout, engine stop), unless it is backing off after a market-closed refusal or was
-        tried less than CLOSE_RETRY_MIN_S ago (`_retry_wait`). A position the broker no longer lists is left to `_sweep_closed`, which records it
-        once its exit deal is seen. An unreadable book skips this tick (the next one retries)."""
+        tried less than CLOSE_RETRY_MIN_S ago (`_retry_wait`). The book is the kill switch's (`_read_kill_book`): while
+        it closes the whole account, `account_positions()`, so a due close of another symbol is re-sent too. A position
+        a book that would list it no longer lists is left to `_sweep_closed`, which records it once its exit deal is
+        seen; a close of another symbol missing from the fallback book (the engine's symbol only) stays due (BACKLOG
+        62, trading-safety C3). An unreadable book skips this tick (the next one retries)."""
         due = [pid for pid in self._close_due if not self._retry_wait(pid, now)]
         if not due:
             return
-        positions = self._read_positions("closes are retried next tick")
-        if positions is None:
+        read = self._read_kill_book("closes are retried next tick")
+        if read is None:
             return
+        positions, complete = read
         live = {p.position_id for p in positions}
         for pid in due:
-            if pid not in live:
-                self._close_due.pop(pid, None)
-                self._close_backoff.pop(pid, None)
-                continue
             action, extra, _ = self._close_due[pid]
+            if pid not in live:
+                # the fallback is complete for the engine's symbol (kill-switch rows name theirs; every other close is
+                # of the engine's symbol), so only another symbol's close waits for an account read
+                if complete or extra.get("symbol", self.cfg.symbol) == self.cfg.symbol:
+                    self._close_due.pop(pid, None)
+                    self._close_backoff.pop(pid, None)
+                continue
             self._try_close(pid, action, now, **extra)
         self._save_orders()
 
@@ -2205,36 +2239,41 @@ class Engine:
 
     def _kill_switch(self, *, everything: bool) -> bool:
         """12% drawdown: close at market immediately (design: Drawdown kill switch) and fall back to propose-and-
-        approve. The trip closes every XAUUSD position on the account (all magics; the broker's positions() reads the
-        engine's symbol only, so other symbols are untouched). That choice is state, not this call's argument
-        (trading-safety F1): `_kill_everything` is set before any I/O, saved with the risk state, used by every retry
-        and after a restart, and cleared only once a run has closed every such position (seen flat). After
-        that, while halted, any of this engine's positions (its magic range) still open is closed again on each refresh.
-        The trip also sets the owner's mode back to propose, so auto mode is offered again only on new evidence (A10);
-        that write comes after the flatten and never raises (`_reset_owner_mode`).
+        approve. The trip closes every position on the account: every symbol and every magic, the owner's manual
+        trades included (BACKLOG 62, ADR 0016 amendment; the 12% is measured on the account's equity, which counts them
+        all). That choice is state, not this call's argument (trading-safety F1): `_kill_everything` is set before any
+        I/O, saved with the risk state, used by every retry and after a restart. While it is set the book is
+        `account_positions()`; if that read fails, `positions()` (the engine's symbol, every magic) is closed in full
+        and the flag stays set (`_read_kill_book`, C1). The flag clears only when a successful `account_positions()`
+        read lists nothing: every close returning ok is not enough, the next read must see the account flat (C2).
+        After that, while halted, any of this engine's positions (its magic range) still open is closed again on each
+        refresh. The trip also sets the owner's mode back to propose, so auto mode is offered again only on new
+        evidence (A10); that write comes after the flatten and never raises (`_reset_owner_mode`).
         Each close is tried on its own (one raising or refused close never stops the others) and a failed one is
-        re-sent every tick (`_retry_closes`); until a run sees its scope flat the switch runs again on every tick
-        (`_kill_pending`). Returns whether the scope was seen flat."""
+        re-sent every tick (`_retry_closes`); until a complete read sees its scope empty the switch runs again on every
+        tick (`_kill_pending`). Every `kill_switch_close` row carries the position's symbol, magic and lots (C8).
+        Returns whether the scope was seen flat."""
         self.cfg.approval_mode = "propose"     # in memory, before any I/O: auto entries are blocked from here on
         if everything:
             self._kill_everything = self._mode_reset_due = True
         whole = self._kill_everything
         self._kill_pending = True
         try:
-            positions = self._read_positions("the kill switch runs again next tick")
-            if positions is None:
+            read = self._read_kill_book("the kill switch runs again next tick")
+            if read is None:
                 return False
-            flat, left = True, len(positions)
-            for p in positions:
-                if not (whole or self._own(p.magic)):
-                    continue
+            book, complete = read
+            scope = [p for p in book if whole or self._own(p.magic)]
+            closed: set[int] = set()
+            for p in scope:
                 # a close already due is re-sent by _retry_closes (with its market-closed backoff), not twice per tick
-                ok = p.position_id not in self._close_due and \
-                    self._try_close(p.position_id, "kill_switch_close", None).ok
-                left -= ok
-                flat = flat and ok
+                if p.position_id not in self._close_due and self._try_close(
+                        p.position_id, "kill_switch_close", None, symbol=p.symbol, magic=p.magic, lots=p.lots).ok:
+                    closed.add(p.position_id)
+            flat = complete and not scope          # seen flat: a complete read with nothing left to close (C2)
             self._kill_pending = not flat
-            self.state.open_positions = left
+            # the engine's symbol, any magic, as `_refresh_account` counts it (C7); other symbols are not its exposure
+            self.state.open_positions = sum(p.symbol == self.cfg.symbol and p.position_id not in closed for p in book)
             if whole and flat:
                 self._kill_everything = False      # the whole account seen flat: later refreshes close our book only
                 self._save_risk_state_now("the kill switch's whole-account flatten")
