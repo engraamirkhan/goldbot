@@ -98,9 +98,30 @@ depends on, and before it runs:
 3. H-04 **continue**: model research with a time-exit meta-label (1).
 4. H-04 **continue**: H-24, the West-hours leg (short 08:30–16:00 New York, stop 1.5 ATR(1h), rule-only screen, read
    by H-04's rule: gross t ≥ 2.0 on ≥ 1,000 events AND net mean R > 0) (1; added 2026-10-11 by the session-coverage
-   review, `hypotheses.md` A4 G-2, before any H-04 outcome exists).
+   review, `hypotheses.md` A4 G-2, before any H-04 outcome exists). *Entry pinned 2026-10-17 at the 09:00 New York 1h
+   bar close (estimand 09:00-16:00), as the amendment under Q1 row O-7.*
 5. H-02 survivors that Q1's rows 6–9 could not fund (≤ 2).
 6. A holdout scoring (`--score-holdout`) of any Q1 gate passer (1; a holdout scoring is a charged trial).
+7. *(Added 2026-10-17 by the strategy researcher, quant review of 1f0447e finding 4. Written before any H-04, H-24 or
+   IC-5 outcome. It is past the sixth item, so it is funded only from the free reserve by a written research-director
+   note.)* **IC-5, the Asia→London session-transition continuation (1h; 1 trial)**, as specified in
+   `candidates/intraday-2026-10-17.md` IC-5.
+   - **Rule.** Decision at the 1h bar closing 08:00 Europe/London, Monday to Friday. z = (close − the open of the
+     1h bar starting 23:00 UTC the day before) ÷ (ATR14(1h) × √bars). If |z| >= 0.5, enter in z's sign. Stop 1.5 ×
+     ATR14(1h), no target, time exit at the 4th 1h bar's close. One position, swap 0.
+   - **Funded only if all hold:**
+     - (a) H-04 or H-24 (O-7) reads **continue**.
+     - (b) The count of days with |z| >= 0.5, from the promoted diagnostic on repaired data, is >= 1,000.
+     - (c) After H-04's verdict, the sign of z agrees with the sign of `tsmom_z_24` on <= 70% of events (otherwise it
+       repeats R-06).
+     If any condition fails, IC-5 is withdrawn and no trial is spent.
+   - **Reading rule.**
+     - **Continue** if gross t >= 2.0 on >= 1,000 events AND net mean R > 0 AND >= 3 positive net years incl. 2021
+       or 2022.
+     - **Retire** if gross t < 2.0 on >= 1,000 events or net mean R <= 0.
+     - **Inconclusive** below 1,000 events.
+     - A significant reversal triggers nothing without a new pre-registration.
+   - **K:** +1 registry trial if run, and no K_eff.
 The list is in priority order and stops at six live items; anything past the sixth waits for the free reserve, which
 funds it only by a written note from the research director before its pre-registration.
 If every Q1 hypothesis fails or is inconclusive, the six slots join the free reserve by a written note from the
