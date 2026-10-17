@@ -20,7 +20,7 @@ changes the Q1 2027 pre-registration.** Every number about the account is ADR 00
 |---|---|---|
 | Strategies that passed the research gates | **0** | hypotheses.md B (R-01..R-07): every Q4 2026 family had no gross edge or a gross edge smaller than its costs |
 | Best gross edge found | tsmom 1h/4h, +0.06 R (t 2.6 / 2.4); net −0.079 R (1h), −0.014 R (4h, before swap) | SoA header, R-06 |
-| Trial budget | Q4 2026 spent 20/20; Q1 2027: 13 reserved for the frozen queue, 7 reserve | hypotheses.md C, settings `research.reserved_trials_quarter: 13` |
+| Trial budget | Q4 2026 spent 20/20; Q1 2027: 8 reserved (4 queued rows + 4 contingent H-02 survivor slots; H-06 withdrawn 2026-10-16), 12 open under the E-5 cap | hypotheses.md C, settings `research.reserved_trials_quarter: "2027Q1": 8` (corrected 2026-10-17; was 13) |
 | Account | £1,000 GBP demo (IC Markets SC), read from MT5 | ADR 0004 |
 | What can trade at £1,000 | **15m only**, one 0.01 lot (£8.20 = 0.82% per R), and only after BACKLOG 28 (currency fix) and 25 (min-lot exception), on a Raw-spread account, while ATR(15m) ≤ ~$8.87 | ADR 0004 §2, OD §0 |
 | Positions at once | 1 (combined-notional cap) | ADR 0004 §2 |
