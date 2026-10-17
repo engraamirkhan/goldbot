@@ -18,7 +18,8 @@
     matched above EDGE_WARN (5%) is a "warning", above EDGE_ERROR (20%) an "error".
   - Fewer than MIN_COMPARED compared minutes cap a divergence or edge "error" at "warning".
   - Coverage: missing_engine above WARN_FRACTION of the broker minutes is a "warning" (the engine was stopped), an
-    "error" when the engine was up (the loop heartbeat's current run, `started` to its last beat, covers at least
+    "error" when the engine was up (the loop heartbeat's runs of the window, `runs` and the current `started` to its
+    last beat, cover at least
     MIN_COMPARED broker minutes and the engine lacks more than STALL_FRACTION of them: a stalled feed), and an
     "error" when the broker returned bars and the engine stored no tick in the window. Each kind with a non-zero count is one dq_events row (source = account) at
   that severity, the report is state/reconcile_<account>.json, and `check_reconciliation` turns it into a health check
@@ -153,10 +154,10 @@ def grade(*, broker_minutes: int, engine_minutes: int, matched: int, edge_exclud
 
 
 def reconcile(engine: pd.DataFrame, broker: pd.DataFrame, *, start: pd.Timestamp, end: pd.Timestamp,
-              tolerance: float, sessions: SessionTable = DEFAULT_SESSIONS, engine_up_from: pd.Timestamp | None = None,
-              engine_up_to: pd.Timestamp | None = None) -> dict[str, Any]:
-    """Minute-by-minute comparison over in-session minutes in [start, end) (see the module docstring). `engine_up_from`
-    / `engine_up_to`: the engine's current run per its loop heartbeat (None: no evidence it was up)."""
+              tolerance: float, sessions: SessionTable = DEFAULT_SESSIONS,
+              engine_up: list[tuple[pd.Timestamp, pd.Timestamp]] | None = None) -> dict[str, Any]:
+    """Minute-by-minute comparison over in-session minutes in [start, end) (see the module docstring). `engine_up`:
+    the engine's runs [started, last beat] per its loop heartbeat (None or []: no evidence it was up)."""
     def frame(b: pd.DataFrame) -> pd.Series:
         if b.empty:
             return pd.Series(dtype=float)
@@ -176,8 +177,10 @@ def reconcile(engine: pd.DataFrame, broker: pd.DataFrame, *, start: pd.Timestamp
         gap_prev[2:] = miss[1:-1] & miss[:-2]
     edge = both.intersection(b.index[gap_next | gap_prev])
     diff = (e.reindex(both.difference(edge)) - b.reindex(both.difference(edge))).abs()
-    up = b.index[(b.index >= engine_up_from.ceil("min")) & (b.index < (engine_up_to or end))] \
-        if engine_up_from is not None else b.index[:0]
+    in_run = np.zeros(len(b), dtype=bool)
+    for frm, to in engine_up or []:
+        in_run |= (b.index >= frm.ceil("min")) & (b.index < to)
+    up = b.index[in_run]
     n: dict[str, Any] = {"broker_minutes": len(b), "engine_minutes": len(e), "matched": len(both),
          "close_mismatch": int((diff > tolerance + 1e-9).sum()), "edge_excluded": len(edge),
          "missing_engine": len(b.index.difference(e.index)), "missing_broker": len(e.index.difference(b.index)),
@@ -198,17 +201,18 @@ def _point(broker: Any, symbol: str) -> float:
         return POINT_DEFAULT
 
 
-def _engine_run(state_dir: Path | None, account_id: str) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
-    """(started, last beat) of the engine's current run from its loop heartbeat (goldbot.ops.watchdog
-    loop_heartbeat_path, read here without importing ops); (None, None) without one."""
+def _engine_runs(state_dir: Path | None, account_id: str) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """[started, last beat] of the engine's runs from its loop heartbeat (goldbot.ops.watchdog loop_heartbeat_path,
+    read here without importing ops): the earlier runs it keeps (`runs`) and the current one; [] without one."""
     if state_dir is None:
-        return None, None
+        return []
     try:
         hb = json.loads((Path(state_dir) / f"heartbeat_engine-{account_id}.json").read_text())
-        return (pd.Timestamp(float(hb["started"]), unit="s", tz="UTC"),
-                pd.Timestamp(float(hb["ts"]), unit="s", tz="UTC"))
-    except (OSError, ValueError, KeyError, TypeError):
-        return None, None
+        spans = [*(hb.get("runs") or []), (hb["started"], hb["ts"])]
+        return [(pd.Timestamp(float(a), unit="s", tz="UTC"), pd.Timestamp(float(b), unit="s", tz="UTC"))
+                for a, b in spans]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return []
 
 
 def reconcile_account(store: Store, broker: Any, account_id: str, symbol: str, now: pd.Timestamp, *,
@@ -224,9 +228,8 @@ def reconcile_account(store: Store, broker: Any, account_id: str, symbol: str, n
     bb = bb[(bb["ts_utc"] >= start) & (bb["ts_utc"] < end)].reset_index(drop=True)
     ticks = store.read("ticks", source=account_id, symbol=symbol, start=start, end=end)
     eb = ticks_to_1m(ticks[["ts_utc", "bid", "ask"]], sessions) if not ticks.empty else pd.DataFrame(columns=BAR_COLUMNS)
-    up_from, up_to = _engine_run(state_dir, account_id)
-    n = reconcile(eb, bb, start=start, end=end, tolerance=tol, sessions=sessions, engine_up_from=up_from,
-                  engine_up_to=up_to)
+    n = reconcile(eb, bb, start=start, end=end, tolerance=tol, sessions=sessions,
+                  engine_up=_engine_runs(state_dir, account_id))
     events: list[DQEvent] = []
     for kind, label in (("close_mismatch", f"closes more than {tol:.2f} from the broker's M1 (max {n['max_close_diff']:.2f})"),
                         ("missing_engine", "broker M1 minutes with no engine bar"),

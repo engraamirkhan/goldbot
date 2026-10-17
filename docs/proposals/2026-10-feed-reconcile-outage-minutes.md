@@ -38,20 +38,23 @@ outage. Every future deploy or restart in market hours would repeat it.
   below and the no-engine-bars rule are not capped.
 - **Coverage.** missing_engine above 0.5% of broker minutes is a **warning** ("engine bars missing for N of M broker
   minutes (engine stopped or not collecting: a coverage gap, not a price fault)").
-- **Stalled feed (A2).** The job reads the engine's loop heartbeat (`state/heartbeat_engine-<account>.json`: `started`
-  to the last beat `ts`), which is evidence the engine was up for that span of the current run. When that span holds
-  at least 60 broker minutes and the engine has no bar for more than 50% of them, it is an **error** ("... while the
-  engine was up (loop heartbeat): a stalled feed"). Limit: only the current run is known; a stall in an earlier run
-  of the same window (before a restart) reads as a coverage gap. `engine:<account>` (last tick age) and the loop
-  heartbeat FAIL a live stall in real time, so the daily job is the second line, not the first.
+- **Stalled feed (A2, re-verified).** The job reads the engine's loop heartbeat
+  (`state/heartbeat_engine-<account>.json`): the current run (`started` to the last beat `ts`) and the earlier runs'
+  spans it keeps (`runs`: each new `LoopWatch` carries the previous file's history plus that run's
+  [started, last beat], spans ending in the last 2 days, at most 200; `goldbot/ops/watchdog.py`, not `runner.py`).
+  That is evidence the engine was up. When the up-minutes of all runs hold at least 60 broker minutes and the engine
+  has no bar for more than 50% of them, it is an **error** ("... while the engine was up (loop heartbeat): a stalled
+  feed"), so a stall followed by a restart (a crash loop, a deploy) still fails. Limit: a deleted heartbeat file
+  loses the history, and a run killed between beats loses at most its last 15 s. `engine:<account>` (last tick
+  age) and the loop heartbeat FAIL a live stall in real time, so the daily job is the second line, not the first.
 - Still an **error** when the broker had bars and the engine stored none in the window (unchanged).
 - Health grades the stored counts with the same `grade()` rule rather than the stored word, so Friday's report
   reads WARN as soon as the release is deployed (its 4 engine minutes are under 60). A report from this release read
   by an older one (rollback) loads with a schema-skew note (new counts ignored), never unreadable.
 - dq_events: `reconcile_missing_engine` is a warning while the engine stored any bar, an error on a stalled feed.
 
-**What would change my mind.** If stalls in earlier runs of a window turn out to matter, the engine appends its run
-intervals to `core.db` (needs `runner.py`, after BACKLOG 62) and the stall rule covers every run, not only the last.
+**What would change my mind.** If the heartbeat's run history proves fragile (deleted with the state, or the
+file grows), move the run spans to a `core.db` table with the state-store work (docs/proposals/2026-10-state-store.md).
 
 **Tests** (`tests/test_crossfeed.py`): `test_minutes_the_engine_did_not_store_are_a_coverage_gap_not_divergence`,
 `test_one_clean_stop_skips_exactly_one_minute`, `test_the_first_partial_minute_after_a_restart_is_not_compared`,
@@ -60,7 +63,10 @@ intervals to `core.db` (needs `runner.py`, after BACKLOG 62) and the stall rule 
 `test_a_real_price_fault_while_the_engine_ran_still_fails` (guard, passed before and after),
 `test_an_engine_that_is_up_with_a_frozen_feed_fails`,
 `test_reconcile_account_reads_the_engine_run_start_from_the_loop_heartbeat`,
-`test_an_engine_started_after_the_outage_keeps_the_gap_a_warning`,
+`test_a_stall_then_a_restart_later_the_same_day_still_fails`,
+`test_an_engine_started_after_the_outage_keeps_the_gap_a_warning`; `tests/test_engine_watchdog.py`:
+`test_a_new_run_keeps_the_earlier_runs_spans_in_its_heartbeat`,
+`test_an_unreadable_previous_heartbeat_starts_an_empty_run_history`;
 `test_the_health_reason_separates_engine_coverage_from_divergence`,
 `test_health_regrades_a_report_written_before_the_rule_change`,
 `test_a_coverage_gap_writes_a_warning_event_and_a_price_fault_an_error`.

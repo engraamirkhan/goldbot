@@ -37,6 +37,8 @@ log = logging.getLogger(__name__)
 LOOP_BEAT_EVERY_S = 15.0       # loop heartbeat file rewritten at most this often (health FAILs after LOOP_FAIL_S)
 NOTIFY_EVERY_S = 5.0           # WATCHDOG=1 at most this often (the unit's WatchdogSec is 300 s)
 STARTUP_MAX_S = 15 * 60.0      # the start is fed this long at most; the unit's TimeoutStartSec matches
+RUN_HISTORY_S = 2 * 86400.0    # earlier runs' [started, last beat] spans kept in the heartbeat this long (feed reconcile)
+RUN_HISTORY_MAX = 200          # ... at most this many (the latest)
 SLOW_PASS_S = 30.0             # a loop pass longer than this is logged (WatchdogSec is 300 s): measured headroom
 
 
@@ -76,6 +78,7 @@ class LoopWatch:
         self.beat_every_s, self.notify_every_s, self.startup_max_s = beat_every_s, notify_every_s, startup_max_s
         self.clock, self.monotonic, self.notify = clock, monotonic, notify
         self.started = clock()
+        self.runs = self._earlier_runs(self.started)
         self.passes = 0
         self.last_pass_s: float | None = None    # wall time between the last two passes (monotonic clock)
         self.max_pass_s: float | None = None     # the longest since the loop started: headroom to WatchdogSec
@@ -86,10 +89,23 @@ class LoopWatch:
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()                # the startup thread and the caller never write at once
 
+    def _earlier_runs(self, now: float) -> list[list[float]]:
+        """The previous heartbeat's run history plus its own run's [started, last beat], spans ending within
+        RUN_HISTORY_S. The daily feed reconcile (goldbot/data/crossfeed.py) judges a stalled feed on the minutes the
+        engine was up in every run of the day, so a restart after a stall does not hide it. [] when unreadable."""
+        try:
+            prev = json.loads(self.path.read_text())
+            spans = [[float(a), float(b)] for a, b in prev.get("runs") or []]
+            spans.append([float(prev["started"]), float(prev["ts"])])
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return []
+        kept = sorted(s for s in spans if s[1] >= now - RUN_HISTORY_S and s[0] <= s[1])
+        return kept[-RUN_HISTORY_MAX:]                # a crash loop must not grow the file rewritten every 15 s
+
     def _write(self, phase: str, now: float) -> bool:
         doc = {"service": f"engine-{self.account_id}", "phase": phase, "ts": now, "started": self.started,
-               "passes": self.passes, "last_pass_s": self.last_pass_s, "max_pass_s": self.max_pass_s,
-               "pid": os.getpid()}
+               "runs": self.runs, "passes": self.passes, "last_pass_s": self.last_pass_s,
+               "max_pass_s": self.max_pass_s, "pid": os.getpid()}
         try:
             with self._lock:
                 write_atomic(self.path, json.dumps(doc), durable=False)   # rewritten constantly: no fsync

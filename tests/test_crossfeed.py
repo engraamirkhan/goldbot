@@ -222,7 +222,7 @@ def test_an_engine_that_is_up_with_a_frozen_feed_fails():
     eb = ticks_to_1m(day_ticks())
     bb = cf.broker_m1_bars(as_broker_m1(eb))
     n = cf.reconcile(_outage(eb, [range(0, 120)]), bb, start=NOW - pd.Timedelta(days=1), end=NOW, tolerance=0.02,
-                     engine_up_from=NOW - pd.Timedelta(days=2))
+                     engine_up=[(NOW - pd.Timedelta(days=2), NOW)])
     assert n["missing_engine_up"] == n["missing_engine"] == n["up_minutes"] - n["matched"] > 1000
     assert n["severity"] == "error"
 
@@ -242,12 +242,29 @@ def test_reconcile_account_reads_the_engine_run_start_from_the_loop_heartbeat(tm
     assert c.status == "fail" and "while the engine was up" in c.reason
 
 
+def test_a_stall_then_a_restart_later_the_same_day_still_fails(tmp_path):
+    """Re-verify A2: the current run is 10 minutes old, the stall was in an earlier run of the day; the heartbeat
+    keeps earlier runs' spans (LoopWatch `runs`), so the stall is still judged on the up-minutes of every run."""
+    from goldbot.ops.watchdog import loop_heartbeat_path
+    store = Store(tmp_path / "data")
+    ticks = day_ticks()
+    store.append("ticks", ticks[ticks["ts_utc"] < pd.Timestamp("2026-10-07 02:00", tz="UTC")], source="icm-demo",
+                 dedupe=False)
+    earlier = [(NOW - pd.Timedelta(days=1, hours=1)).timestamp(), (NOW - pd.Timedelta(hours=2)).timestamp()]
+    loop_heartbeat_path(tmp_path, "icm-demo").write_text(json.dumps(
+        {"phase": "loop", "ts": NOW.timestamp() - 5, "started": (NOW - pd.Timedelta(minutes=10)).timestamp(),
+         "runs": [earlier]}))
+    rep = cf.reconcile_account(store, FakeBroker(as_broker_m1(ticks_to_1m(ticks))), "icm-demo", "XAUUSD", NOW,
+                               state_dir=tmp_path)
+    assert rep.up_minutes > 1000 and rep.severity == "error"
+
+
 def test_an_engine_started_after_the_outage_keeps_the_gap_a_warning():
     eb = ticks_to_1m(day_ticks())
     bb = cf.broker_m1_bars(as_broker_m1(eb))
     up = pd.Timestamp(eb["ts_utc"].iloc[1200])
     n = cf.reconcile(_outage(eb, [range(1200, len(eb))]), bb, start=NOW - pd.Timedelta(days=1), end=NOW,
-                     tolerance=0.02, engine_up_from=up)
+                     tolerance=0.02, engine_up=[(up, NOW)])
     assert n["missing_engine_up"] == 0 and n["severity"] == "warning"
 
 
