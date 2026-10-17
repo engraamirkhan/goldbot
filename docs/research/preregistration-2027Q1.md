@@ -725,6 +725,33 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
   finding 5) and `stability_threshold: 0.7` written explicitly in the dump (P-7). The AUC lower bound is the coded
   **weekly-block** bootstrap (finding 2). The full `DiscoveryConfig.model_dump()` and
   `group_map_sha256` are written here as an amendment when E-2 merges, before the candidate count.
+- *Amendment 2026-10-17 (group map; quant review of `candidates/scalping-2026-10-17.md` at 61695d4, findings 1-2;
+  written before any H-14 count, label or outcome, from column counts on synthetic bars only):*
+  - **Why.** At 15m the decision frame adds h1/h4/d1 context columns of `atr`, `realised_vol`, `moving_averages`
+    and `trend_strength` (`pipeline.CONTEXT_FEATURES`, `context_tfs("15m")`), and `column_groups` puts each context
+    column in its base column's group. Grouped by family, `trend` then has about 72 columns and `volatility` about
+    49-53, both over `max_selected` 39, so `check_group_sizes` refuses O-4 as configured. `structure` has 38 and
+    playbook D-5's $100 step would take it to 40.
+  - **One splitting rule (pinned now).** Decision-timeframe columns stay in their family. **Every context column
+    goes to the group `ctx_<tf>` of its timeframe (`ctx_h1`, `ctx_h4`, `ctx_d1`), across families** (about 26
+    columns each). New 15m columns never go into `structure`: they form two new families, `liquidity` (sweep
+    depth/age by reference, the $100 step, stop-cluster distances) and `activity` (time-of-day-relative Dukascopy
+    volume `volbid_*`, quote fraction, v3 THIN-day flag, LBMA auction / overlap / 08:30 ET windows). Any group still
+    over 39 columns after this rule refuses the run; it is never truncated or re-split after a count.
+  - **H-08 spans two groups.** The existing `sweep_*` columns stay in `structure` (`market_structure` v2);
+    `liquidity` therefore measures only what it adds to them. A `structure` survival is not evidence for the new
+    columns, and a `liquidity` survival is not evidence for `sweep_*`.
+  - **Feature version.** O-4's pinned feature version `f-079deacc61` is **superseded for O-4 only** by the version
+    that adds `liquidity` and `activity`. That version and the group map hash are written here when they merge
+    (due 2026-12-11), before the count. No other row's feature version changes.
+  - **Code owed (BACKLOG item, product-owner files; implementer, quant-reviewer):** (a) the grouping above, as a
+    pinned map or a cluster map whose globs take precedence over the base-column join; (b) a test that O-4's pinned
+    map, **with context columns included**, has no group over 39; (c) `check_group_sizes` moved **before**
+    `reg.preregister` in `discovery_pass` (today it runs after it, `discovery.py` ~838-860, so a refusal leaves a
+    pre-registered row), with confirmation and a test that such a row spends no trial.
+  - **K_eff.** Groups screened = 11 families + 3 context groups + 2 new families = **about 16** (was "about 10-15").
+    The adopted gate-1 case becomes about 66 (40 + H-02 ~10 + H-14 ~16): t ≈ 4.03, still 4.0 at one decimal, so the
+    "Gate-1 power" table is unchanged.
 - Threshold (amended 2026-10-17, E-2; quant review R1): `threshold_rule: tercile_inner`,
   `tercile_q: 0.6666666666666666` and `tercile_method: linear` in the pinned `DiscoveryConfig` dump (so in the config
   hash: another q is another trial). The coded verdict needs at least 1,000 taken trades for "continue", as the
@@ -748,7 +775,11 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
   weeks) the AUC's standard error is expected to be under 0.01, so the 0.53 bound is resolvable. **Every trade count
   here is conditional on E-2's tercile cut.** A top tercile of 100,000+ candidates gives several thousand trades
   after one position at a time. The floor case, the coded rule's retention on #16 (0.9%), gives about 900. Either
-  way the net-R test is about cost (0.27 R typical, up to 0.67 R at the gate floor), not power. K_eff = groups screened (about 10–15) is added to every later trial.
+  way the net-R test is about cost (0.27 R typical, up to 0.67 R at the gate floor), not power. K_eff = groups screened (about 10–15; about 16 under the 2026-10-17 group-map amendment above) is added to every later trial.
+  **Withdrawal (written 2026-10-17, before any count or outcome; quant review finding 3):** if the cost-in-R
+  diagnostic (`candidates/scalping-2026-10-17.md` D-1, inputs at the decision bar only) gives a median round trip
+  above 0.35 R at **every** admissible gate floor (1×, 1.5×, 2× the round trip, each leaving >= 55,000 candidate
+  bars), O-4 is **withdrawn before it runs**: no trial is spent and nothing is added to K.
 - Kill: AUC < 0.52 (above). The 15m lane is then H-17 alone, and research-plan §7 applies if H-17 also fails.
 - Data first: `calendar-v1`, G1/G4; engineering E-2 and BACKLOG 31.
 
