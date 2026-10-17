@@ -5,9 +5,9 @@ import { api, hasRole, type AttributionReportView, type AttributionView, type Ga
 import { cash, signedCash } from "../lib/account";
 import { localHm } from "../lib/entry";
 import { pct, utcTitle } from "../lib/explain";
-import { DIMENSIONS, GATE_TITLE, PHASE_WORDS, VERDICT_BADGE, VERDICT_TONE, dayLabel, dayText, gateStates, headlineVerdict,
-  intervalLabel, itemLabel, nextGate, orderedRows, rowLabel, signedPct, signedR, whenShort, type BadgeTone,
-  type GateState } from "../lib/progress";
+import { DIMENSIONS, GATE_TITLE, PHASE_WORDS, dayLabel, dayText, gateStates, headlineVerdict,
+  intervalLabel, itemLabel, nextGate, orderedRows, rowLabel, signedPct, signedR, stopBadge, verdictBadge, whenShort,
+  type BadgeTone, type GateState, type Verdict } from "../lib/progress";
 import { CopyCommand } from "./Health";
 
 // The Progress tab (docs/ux/progress-screens.md, ROADMAP W2-3): the stop rule, the road to live and the results, read
@@ -55,6 +55,11 @@ export function Progress({ onOpenOverview }: Props) {
 // ---------------------------------------------------------------------------------------------------- shared bits
 type Q<T> = { data?: T; isLoading: boolean; error: Error | null };
 
+function VerdictBadge({ v }: { v: Verdict }) {
+  const b = verdictBadge(v);
+  return <Badge tone={b.tone}>{b.badge}</Badge>;
+}
+
 function Badge({ tone, children }: { tone: BadgeTone; children: ReactNode }) {
   return <span className={`pbadge ${tone}`}>{children}</span>;
 }
@@ -84,10 +89,6 @@ function Pending({ q, what }: { q: Q<unknown>; what: string }) {
 }
 
 // ---------------------------------------------------------------------------------------------------- stop rule
-const STOP_BADGE: Record<StopRuleView["status"], [string, BadgeTone]> = {
-  ok: ["Not breached", "ok"], not_started: ["Not started", "idle"], breached: ["Breached", "warn"], cant_check: ["Can't check", "warn"],
-};
-
 function StopRuleSection({ q, asOf, onOpenOverview }: { q: Q<GatesView>; asOf: string | null } & Props) {
   return (
     <section id="stop-rule" className="psection" aria-labelledby="stop-h">
@@ -98,7 +99,7 @@ function StopRuleSection({ q, asOf, onOpenOverview }: { q: Q<GatesView>; asOf: s
 }
 
 function StopRule({ s, asOf, onOpenOverview }: { s: StopRuleView; asOf: string | null } & Props) {
-  const [word, tone] = STOP_BADGE[s.status];
+  const { badge: word, tone } = stopBadge(s.status);
   const breached = s.status === "breached";
   return (
     <div className={`pcard ${tone}`} role={breached ? "alert" : undefined} data-testid="stop-rule">
@@ -153,6 +154,8 @@ function Breach({ s, onOpenOverview }: { s: StopRuleView } & Props) {
 function LongRun({ s }: { s: StopRuleView }) {
   const after = s.after_months ?? 18, minPooled = s.min_pooled_trades ?? 500, months = s.months ?? 0, n = s.pooled_trades ?? 0;
   const conf = pct(s.confidence ?? 0.9, 0);
+  // wording only (the "Judged only after…" sentence); the status and badge come from the API. Follow-up: the API
+  // sends `checked_now` so this copy of the server's rule can go (HANDOFF progress-screens)
   const early = months < after || n <= minPooled;
   return (
     <div className="cond">
@@ -163,8 +166,8 @@ function LongRun({ s }: { s: StopRuleView }) {
         <Meter label={`Trades, ${n} of ${minPooled}`} value={n} max={minPooled} text={`${n} of ${minPooled} trades`} /></div>
       <div className="cond-row"><span className="cond-k">Edge</span>{" "}
         {n < s.min_trades_for_estimate || s.lower_bound == null
-          ? <span>too few trades to estimate yet</span>
-          : <span>Cautious estimate {signedPct(s.lower_bound)} per trade (lower {conf} bound).
+          ? <span className="cond-wide">too few trades to estimate yet</span>
+          : <span className="cond-wide">Cautious estimate {signedPct(s.lower_bound)} per trade (lower {conf} bound).
             {early && ` Judged only after month ${after} and more than ${minPooled} trades; below zero this early is expected.`}</span>}
       </div>
       {s.clock_start_utc && (
@@ -184,7 +187,7 @@ function SingleLoss({ s }: { s: StopRuleView }) {
     <div className="cond">
       <h3>Single big loss · any time</h3>
       <div className="cond-row"><span className="cond-k">Worst</span>{" "}
-        {w == null ? <span>no closed trade yet</span> : <>
+        {w == null ? <span className="cond-wide">no closed trade yet</span> : <>
           <span>{pct(w, 2)} of equity · limit {pct(cap, 1)}</span>
           <Meter label={`Worst loss, ${pct(w, 2)} of a ${pct(cap, 1)} limit`} value={w} max={cap} text={`${pct(w, 2)} of a ${pct(cap, 1)} limit`} />
         </>}
@@ -291,7 +294,7 @@ function Item({ it }: { it: GateItemView }) {
         {it.ci95 && (
           <span className="small">Range {signedPct(it.ci95[0])} to {signedPct(it.ci95[1])} per trade (95%, {intervalLabel(it.ci95_basis)})</span>
         )}
-        {it.need && <span className="muted small">needs {it.need}</span>}
+        {it.need && !p && <span className="muted small">needs {it.need}</span>}
       </div>
     </li>
   );
@@ -337,7 +340,7 @@ function Report({ rep, days }: { rep: AttributionReportView; days: number }) {
   return (
     <>
       <p className="headline">{signedR(o.mean_r_net)} per trade after costs · {o.n} trades</p>
-      <p><Badge tone={VERDICT_TONE[verdict]}>{VERDICT_BADGE[verdict]}</Badge>{" "}
+      <p><VerdictBadge v={verdict} />{" "}
         {(verdict === "positive" || verdict === "negative") && <span className="muted small">unlikely to be luck alone (|t| ≥ 2, today's {days} days)</span>}
         {verdict === "noise" && <span className="muted small">{o.n} of {rep.min_trades} needed</span>}</p>
       {o.ci95_net && <><p>Average per trade: {signedR(o.ci95_net[0]).replace(" R", "")} to {signedR(o.ci95_net[1])} (95%)</p>
@@ -354,7 +357,7 @@ function Report({ rep, days }: { rep: AttributionReportView; days: number }) {
           <li key={acc}>{acc}: {f.fills} fills
             {f.mean_excess_usd != null && f.prior_usd != null &&
               `, $${Math.abs(f.mean_excess_usd).toFixed(3)}/oz ${f.mean_excess_usd >= 0 ? "worse" : "better"} than the $${f.prior_usd.toFixed(2)}/oz the backtest charged`}
-            {" "}<Badge tone={VERDICT_TONE[f.verdict_adj]}>{VERDICT_BADGE[f.verdict_adj]}</Badge></li>
+            {" "}<VerdictBadge v={f.verdict_adj} /></li>
         ))}</ul>
       </>}
       <p className="muted small">These are findings, not settings. Each row must clear a stricter bar because {rep.m} rows are compared
@@ -362,7 +365,7 @@ function Report({ rep, days }: { rep: AttributionReportView; days: number }) {
         recomputed daily: a row that crosses once and falls back is not a finding. A row can suggest an idea but cannot prove it.
         Testing the idea is a new registered trial, judged on data the row did not use: ask the research director.</p>
       <details className="as-table"><summary>Notes</summary>
-        <ul className="plain small"><li>Costs from {rep.costs.source}.</li>{rep.notes.map((n) => <li key={n}>{n}</li>)}</ul>
+        <ul className="plain small"><li>Costs from {rep.costs.source}.</li>{rep.notes.map((n, i) => <li key={i}>{n}</li>)}</ul>
       </details>
     </>
   );
@@ -387,13 +390,16 @@ const wide = () => typeof window.matchMedia === "function" && window.matchMedia(
 function Breakdowns({ rep }: { rep: AttributionReportView }) {
   // "by agent" only on desktop, as the last option, because agent ids are long
   const dims = DIMENSIONS.filter(([k]) => rep.breakdowns[k] && (k !== "agent" || wide()));
-  const [dim, setDim] = useState(dims[0]?.[0] ?? "timeframe");
+  const [picked, setPicked] = useState(dims[0]?.[0] ?? "timeframe");
+  // a refresh that drops the picked breakdown, or a screen narrowed below 960 px, falls back to the first one, so
+  // the select and the rows always agree
+  const dim = dims.some(([k]) => k === picked) ? picked : dims[0]?.[0] ?? "timeframe";
   const rows = orderedRows(dim, rep.breakdowns[dim] ?? {});
   if (dims.length === 0) return null;
   return (
     <div className="breakdown">
       <label className="chart-pick">Break down by{" "}
-        <select value={dim} onChange={(e) => setDim(e.target.value)}>
+        <select value={dim} onChange={(e) => setPicked(e.target.value)}>
           {dims.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
         </select>
       </label>
@@ -410,7 +416,7 @@ function Row({ dim, k, c, m, min }: { dim: string; k: string; c: ResultCell; m: 
       <details>
         <summary>
           <span title={k}>{rowLabel(dim, k)}</span> {signedR(c.mean_r_net)} · {c.n} trades{" "}
-          <Badge tone={VERDICT_TONE[v]}>{VERDICT_BADGE[v]}</Badge>
+          <VerdictBadge v={v} />
           {v === "noise" && <span className="small"> {c.n} of {min} needed</span>}
           {(v === "positive" || v === "negative") && c.t_bar != null &&
             <span className="small"> unlikely to be luck, even among {m} rows (|t| ≥ {c.t_bar.toFixed(1)})</span>}

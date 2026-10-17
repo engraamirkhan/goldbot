@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { GateView, ResultCell } from "./api";
-import { gateStates, headlineVerdict, intervalLabel, nextGate, orderedRows, rowLabel, signedPct, signedR } from "./progress";
+import { gateStates, headlineVerdict, intervalLabel, nextGate, orderedRows, rowLabel, signedPct, signedR, stopBadge, verdictBadge,
+  type Verdict } from "./progress";
+import type { StopRuleView } from "./api";
 
 const item = (name: string, met: boolean, required = true) => ({
   name, met, required, need: "", evidence: "", proposed: false, ci95_basis: "per-trade iid, return",
@@ -78,5 +80,14 @@ describe("results words", () => {
   it("labels the gates' interval as per-trade, not day-clustered", () => {
     expect(intervalLabel("per-trade iid, return")).toBe("per-trade interval, not day-clustered");
     expect(intervalLabel("something else")).toBe("something else");
+  });
+});
+
+describe("values from a newer server", () => {
+  it("names an unknown verdict or stop-rule status in grey instead of blanking the tab", () => {
+    expect(verdictBadge("lucky" as Verdict)).toEqual({ badge: "Unknown (lucky)", tone: "idle" });
+    expect(verdictBadge("positive")).toEqual({ badge: "Ahead", tone: "ok" });
+    expect(stopBadge("paused" as StopRuleView["status"])).toEqual({ badge: "Unknown (paused)", tone: "idle" });
+    expect(stopBadge("breached")).toEqual({ badge: "Breached", tone: "warn" });
   });
 });

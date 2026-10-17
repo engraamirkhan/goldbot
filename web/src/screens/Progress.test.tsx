@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as apiModule from "../lib/api";
@@ -80,7 +80,7 @@ const TRADES: TradesSummary[] = [{
 function renderProgress(role: apiModule.Role = "owner", props: Parameters<typeof Progress>[0] = {}) {
   apiModule.setUser({ email: "o@x.io", role });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={qc}><Progress {...props} /></QueryClientProvider>);
+  return { qc, ...render(<QueryClientProvider client={qc}><Progress {...props} /></QueryClientProvider>) };
 }
 
 function mock(gates: GatesView | Error | "pending" = GATES, attr: AttributionView | Error | "pending" = ATTR,
@@ -309,6 +309,48 @@ describe("Progress", () => {
     mock(GATES, ATTR, [{ ...TRADES[0], n: 0, net_n: 0, net: 0, days_traded: 0, best_day: null, worst_day: null, days_at_target: 0 }]);
     renderProgress();
     expect(await screen.findByText("No closed trades on icm-demo-…67 in the last 30 days.")).toBeInTheDocument();
+  });
+
+  it("hides the need when the item already says have X of Y", async () => {
+    mock();
+    renderProgress();
+    const road = await screen.findByTestId("gate-paper_to_tiny_live");
+    expect(road).toHaveTextContent("have 12 of 150 trades");
+    expect(road).not.toHaveTextContent("needs >= 150");
+    expect(road).not.toHaveTextContent("needs >= 182 days");
+  });
+
+  it("still shows the tab when a newer server sends an unknown stop-rule status or verdict", async () => {
+    const report = { ...ATTR.report!, breakdowns: { timeframe: { "15m": cell({ verdict_adj: "lucky" as ResultCell["verdict_adj"] }) } } };
+    mock({ ...GATES, stop_rule: { ...STOP_OK, status: "paused" as StopRuleView["status"] } }, { ...ATTR, report });
+    renderProgress();
+    expect(await screen.findByTestId("stop-rule")).toHaveTextContent("Unknown (paused)");
+    expect(await screen.findByTestId("result-row")).toHaveTextContent("Unknown (lucky)");
+    expect(screen.getByRole("heading", { name: "Road to live" })).toBeInTheDocument();
+  });
+
+  it("offers the by-agent breakdown last, on a wide screen only", async () => {
+    const report = { ...ATTR.report!, breakdowns: { ...ATTR.report!.breakdowns, agent: { "tsmom-g0": cell({ n: 40 }) } } };
+    mock(GATES, { ...ATTR, report });
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: q === "(min-width: 960px)", media: q }));
+    try {
+      renderProgress();
+      const select = await screen.findByLabelText("Break down by");
+      const options = within(select).getAllByRole("option").map((o) => o.getAttribute("value"));
+      expect(options).toEqual(["timeframe", "exit", "agent"]);
+      await userEvent.selectOptions(select, "agent");
+      expect(screen.getAllByTestId("result-row").map((r) => r.dataset.key)).toEqual(["tsmom-g0"]);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("keeps the select and the rows together when a refresh drops the chosen breakdown", async () => {
+    mock();
+    const { qc } = renderProgress();
+    const select = await screen.findByLabelText("Break down by");
+    await userEvent.selectOptions(select, "exit");
+    act(() => qc.setQueryData(["attribution"], { ...ATTR, report: { ...ATTR.report!, breakdowns: { timeframe: ATTR.report!.breakdowns.timeframe } } }));
+    await waitFor(() => expect(screen.getByLabelText("Break down by")).toHaveValue("timeframe"));
+    expect(screen.getAllByTestId("result-row").map((r) => r.dataset.key)).toEqual(["15m", "1h", "4h"]);
   });
 
   it("never shows an email or a long digit run", async () => {

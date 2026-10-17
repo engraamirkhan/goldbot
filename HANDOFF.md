@@ -62,7 +62,26 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     opens Progress at phone width.
   - Not built: the desktop breakdown as a real table (rows are disclosures at every width) and the per-section
     "last success more than 3 polls ago" rule (only the gates query shows the "can't reach the server" banner).
-  - Reviews needed: ui-ux-designer (against the spec), code, security (no identifiers rendered).
+  - Review round 1 (code and security APPROVE, ui-ux REQUEST CHANGES), fixed in one commit:
+    - Tap targets: the Proposed tag and the proposed-thresholds note are 44 px tall.
+    - The stop rule's Edge sentence spans the value and meter columns at 360 px.
+    - An item that shows "have X of Y" no longer repeats its `need`.
+    - The breakdown select falls back to the first breakdown when a refresh drops the chosen one or the screen
+      narrows below 960 px.
+    - An unknown stop-rule status or verdict from a newer server reads "Unknown (…)" in grey instead of blanking
+      the tab.
+    - Notes are keyed by index, and the "by agent" breakdown has a test.
+  - Follow-ups:
+    - API: send `checked_now` on the stop rule. The screen copies the server's "month 18 and more than 500 trades"
+      rule only to choose its wording (marked in `LongRun`).
+    - ui-ux backlog:
+      - Gate evidence and need in plain words from the API (`gates_phase.py` around lines 563, 634 and 638).
+      - The breakdown as a real table from 720 px.
+      - "(2 days ago)" in the stale note.
+      - A family-name map.
+      - For a gate met on a proposed threshold, show "sign it off first" before the record commands. This is needed
+        before gate 3 can be met.
+  - Reviews needed: ui-ux-designer (re-check of the three fixes).
 - Progress tab API (ROADMAP W2-3, implementer, 2026-10-17; spec docs/ux/progress-screens.md, ADR 0022, TRACEABILITY
   U21): three new read-only routes for viewer and above. `GET /api/gates` evaluates the gates and the stop rule on
   request, writes nothing and caches the result for 60 s. `GET /api/attribution` serves the daily results without the

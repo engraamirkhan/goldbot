@@ -1,7 +1,7 @@
 // Words and order for the Progress tab (docs/ux/progress-screens.md). "Verdicts, staleness, proposed flags and the
 // stop-rule status all come from the API": nothing here judges a gate or a result, it only names what the API sent
 // and keeps the rows in a fixed order ("never sorted by result, so the screen does not invite picking the best row").
-import type { GateView, ResultCell } from "./api";
+import type { GateView, ResultCell, StopRuleView } from "./api";
 import type { Tone } from "./account";
 import { signed } from "./explain";
 
@@ -85,6 +85,22 @@ export const VERDICT_BADGE: Record<Verdict, string> = {
 export const VERDICT_TONE: Record<Verdict, BadgeTone> = {
   positive: "ok", negative: "warn", "indistinguishable from zero": "idle", noise: "idle", "by construction": "idle",
 };
+
+/** A verdict's badge; a value this build does not know (a newer server) reads "Unknown (…)" in grey instead of
+ *  blanking the tab. */
+export function verdictBadge(v: Verdict): { badge: string; tone: BadgeTone } {
+  return v in VERDICT_BADGE ? { badge: VERDICT_BADGE[v], tone: VERDICT_TONE[v] } : { badge: `Unknown (${v})`, tone: "idle" };
+}
+
+const STOP_BADGE: Record<StopRuleView["status"], [string, BadgeTone]> = {
+  ok: ["Not breached", "ok"], not_started: ["Not started", "idle"], breached: ["Breached", "warn"], cant_check: ["Can't check", "warn"],
+};
+
+/** The stop rule's word badge ("a breach is amber, not red"); an unknown status reads "Unknown (…)" in grey. */
+export function stopBadge(s: StopRuleView["status"]): { badge: string; tone: BadgeTone } {
+  const b = STOP_BADGE[s];
+  return b ? { badge: b[0], tone: b[1] } : { badge: `Unknown (${s})`, tone: "idle" };
+}
 
 /** "Below 100 trades the overall headline shows no AHEAD or BEHIND badge, only CAN'T TELL FROM LUCK or TOO FEW TRADES." */
 export const MIN_HEADLINE_TRADES = 100;

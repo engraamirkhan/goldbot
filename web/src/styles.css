@@ -337,6 +337,7 @@ td a { color: inherit; }
 .cond-row { display: grid; grid-template-columns: 5em minmax(0, 1fr) 96px; align-items: center; gap: 8px; min-height: 28px; }
 .gbody .cond-row { grid-template-columns: minmax(0, 1fr) 96px; }
 .cond-k { color: var(--muted); font-size: 13px; }
+.cond-wide { grid-column: 2 / -1; }   /* a sentence spans the value and meter columns, not the narrow middle one */
 .pmeter { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
 .pmeter span { display: block; height: 100%; background: var(--info-fg); transform-origin: left; transition: transform 0.4s ease; }
 @media (prefers-reduced-motion: reduce) { .pmeter span { transition: none; } }
@@ -353,9 +354,9 @@ td a { color: inherit; }
 .gitem.met .mark { color: var(--ok-fg); } .gitem.unmet .mark { color: var(--warn-fg); } .gitem.context .mark { color: var(--muted); }
 .gbody { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .ptag { display: inline-block; font-size: 13px; color: var(--info-fg); }
-.ptag summary { display: inline-block; cursor: pointer; padding: 0 6px; border: 1px solid var(--info-fg); border-radius: 4px;
+.ptag summary { display: inline-flex; align-items: center; min-height: 44px; box-sizing: border-box; cursor: pointer; padding: 0 6px; border: 1px solid var(--info-fg); border-radius: 4px;
   font-size: 12px; font-weight: 700; background: var(--info-tint); }
-.info-note summary { cursor: pointer; min-height: 32px; }
+.info-note summary { cursor: pointer; min-height: 44px; display: list-item; }
 .info-note a { display: inline-flex; align-items: center; min-height: 44px; color: inherit; }
 .rows { list-style: none; padding: 0; margin: 8px 0; }
 .rows li { border-bottom: 1px solid var(--line); }
