@@ -89,6 +89,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/code-sign-ins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Code Sign Ins
+         * @description The owner's Telegram-code sign-ins of the last 7 days (time, coarse network), for the banner shown after
+         *     every sign-in with its one-tap "sign out everywhere".
+         */
+        get: operations["code_sign_ins_api_auth_code_sign_ins_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/email-code": {
         parameters: {
             query?: never;
@@ -141,8 +162,9 @@ export interface paths {
         put?: never;
         /**
          * Email Code Verify
-         * @description The challenge and its code: a 12 h owner session (method email_code). Every success is announced by
-         *     Telegram (AuthStore) and by email (condition 10).
+         * @description The challenge and its code: a 12 h owner session (method email_code). A Telegram-code sign-in is audited
+         *     `tg_code_login` and listed in the owner's banner (condition 6); the mail channel also mails a notice. The
+         *     delivered message is deleted once the code is used or burned.
          */
         post: operations["email_code_verify_api_auth_email_code_verify_post"];
         delete?: never;
@@ -979,10 +1001,16 @@ export interface components {
         /** AuthState */
         AuthState: {
             /**
-             * Email Code
+             * Code Channel
+             * @default telegram
+             * @enum {string}
+             */
+            code_channel: "telegram" | "mail";
+            /**
+             * Code Sign In
              * @default false
              */
-            email_code: boolean;
+            code_sign_in: boolean;
             /**
              * Email Link
              * @default false
@@ -1093,6 +1121,27 @@ export interface components {
              * @default
              */
             totp: string;
+        };
+        /** CodeSignIn */
+        CodeSignIn: {
+            /** At Utc */
+            at_utc: string;
+            /** Network */
+            network: string;
+        };
+        /**
+         * CodeSignIns
+         * @description The owner's Telegram-code sign-ins of the last 7 days, newest first (security condition 6): the banner shown
+         *     after every sign-in.
+         */
+        CodeSignIns: {
+            /**
+             * Channel
+             * @enum {string}
+             */
+            channel: "telegram" | "mail";
+            /** Sign Ins */
+            sign_ins: components["schemas"]["CodeSignIn"][];
         };
         /** CusumPoint */
         CusumPoint: {
@@ -1281,7 +1330,8 @@ export interface components {
         };
         /**
          * EmailCodeRequest
-         * @description Email + password: the owner gets a 6-digit code by email; every input gets the same answer (ADR 0028).
+         * @description Email + password: the owner gets a 6-digit code on the code channel (Telegram by default; the route names are
+         *     from the first, email-only design); every input gets the same answer (ADR 0028).
          */
         EmailCodeRequest: {
             /**
@@ -2919,6 +2969,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    code_sign_ins_api_auth_code_sign_ins_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodeSignIns"];
                 };
             };
         };

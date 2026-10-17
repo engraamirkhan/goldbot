@@ -49,3 +49,31 @@ Limits that bound it (security conditions):
 - **Revert trigger:** turn email codes off (`auth.mail.enabled: false`, restart the API) on any live-money incident,
   or if the Gmail account has no 2-Step Verification. A second person ever holding the owner role also reopens this
   decision.
+
+## Amendment 2026-10-17: the code goes through Telegram (BACKLOG 77; security APPROVE-WITH-CONDITIONS, 1-7)
+Context: the owner will not provide a Gmail App Password, so no mail can be sent. The code is delivered through the
+existing Telegram bot instead; the mail path stays behind a `CodeDelivery` seam and `auth.code_channel: telegram|mail`
+(default `telegram`).
+
+Decision: everything above stands with "sent to the owner's goldbot Telegram chat" for "emailed", and these changes.
+- **One chat.** Keyring `telegram-owner-chat-id` holds one positive integer that must also be in
+  `telegram.allowed_user_ids`; before every send a Bot API `getChat` must return `type == "private"`. Any failure
+  sends nothing and audits `code_channel_unavailable`. Never a group chat.
+- **Sent by the API itself** with `sendMessage` over HTTPS (certificate checks on) in a background task. The code is
+  never written to agent_runs.jsonl or `_notify_owner`, the Telegram outbox, aux.db or any file; the API never calls
+  `getUpdates`. The bot token is in the URL, so httpx/httpcore log at WARNING and errors are logged by type only.
+- **Message:** the code, its expiry and "Not you? Your password is known — change it with your authenticator."; no email,
+  no password context, `protect_content`, no `parse_mode`. Only the Telegram message id is stored with the challenge
+  (aux.db migration 10); `deleteMessage` on use, burn, resend and expiry, best effort.
+- **Condition 10 (a notice to the mailbox) is replaced:** every Telegram-code sign-in writes a `tg_code_login` audit
+  row, and after every owner sign-in a banner lists these sign-ins (time, coarse network, last 7 days) with a one-tap
+  "Sign out everywhere" (revoke-sessions; after a code sign-in it still needs the authenticator).
+- Unchanged: HMAC-keyed single-use code, 600 s, 3 tries, challenge binding, decoy parity including resend,
+  suspension, step-up routes, and the shared send limit (now covering Telegram sends).
+
+Threat model now: password + the owner's Telegram account (previously password + mailbox). A Telegram code cannot
+change the chat id or turn itself on: both are server-side settings and keyring entries.
+
+**Revert trigger (replaces the Gmail one):** Telegram two-step verification is off on the owner's account, or any
+live-money incident. To revert, set `auth.code_channel` to something other than a configured chat, or remove
+`telegram-owner-chat-id` from the keyring and restart the API: the login page then offers only the authenticator.

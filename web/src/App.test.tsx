@@ -78,7 +78,7 @@ describe("App when the session is gone server-side", () => {
     vi.stubGlobal("WebSocket", SilentSocket);
     vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(
       url.startsWith("/api/auth/state")
-        ? new Response(JSON.stringify({ needs_setup: false, email_link: false, email_code: false }), { status: 200, headers: { "content-type": "application/json" } })
+        ? new Response(JSON.stringify({ needs_setup: false, email_link: false, code_sign_in: false, code_channel: "mail" }), { status: 200, headers: { "content-type": "application/json" } })
         : new Response(JSON.stringify({ detail: "login required" }), { status: 401, headers: { "content-type": "application/json" } }))));
     apiModule.setToken("revoked-token");
     apiModule.setUser({ email: "owner@example.com", role: "owner", signed_in_with: "password_totp" });

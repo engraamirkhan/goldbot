@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { api, NETWORK_TEXT, SERVER_SAYS, setToken, setUser, type Me } from "../lib/api";
 import { takeLinkTokens } from "../lib/links";
 import { useNow } from "../lib/useNow";
+import { CODE_COPY, CodeChannel } from "../lib/codeCopy";
 
 // Every way in, one screen. Sign-in needs a second step: the authenticator code, or (owner only, while the server's
 // mail is ready) a 6-digit code emailed to the owner (ADR 0028, docs/ux/sign-in-email-code.md states A-H). The
@@ -39,15 +40,11 @@ const RESEND_S = 60;                // RESEND_AFTER_S: a longer wait in an answe
 const NO_MAIL_HINT_S = 120;
 const LOCK_MS = 15 * 60_000;        // the sign-in lockout: 5 failures per email in 15 minutes, shared by both methods
 
-const WRONG = (left: number) =>
-  `That code did not work. Check the newest email from goldbot. ${left} ${left === 1 ? "try" : "tries"} left for this code.`;
 const BURNED = "That code can no longer be used. Send a new one.";
 const EXPIRED = "This code has expired or was already used. Send a new code.";
 const SEND_FAILED = "Could not send a code just now. Try again in a minute, or use the authenticator app.";
 const RESEND_FAILED = "Could not send a new code just now. Try again in a minute, or use the authenticator app.";
 const CHECK_FAILED = "Could not check the code just now. Try again in a minute.";
-const PARTIAL = "Type all 6 digits from the email.";
-const NO_MAIL = "No email? Check the spam folder, check the password you typed (we do not say whether it was right), or use the authenticator app.";
 
 /** The HTTP status of a failed request (lib/api.ts ApiError: 0 when the server was not reached). */
 function statusOf(ex: unknown): number | undefined {
@@ -100,6 +97,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
   const [signinToken, setSigninToken] = useState(() => takeLinkTokens().signin);
   const [emailLinkOn, setEmailLinkOn] = useState(false);
   const [emailCodeOn, setEmailCodeOn] = useState(false);
+  const [codeChannel, setCodeChannel] = useState<CodeChannel>("telegram");
   const [method, setMethod] = useState<Method>(storedMethod);
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [tries, setTries] = useState(0);
@@ -119,7 +117,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
 
   useEffect(() => {
     api.authState().then((s) => {
-      setEmailLinkOn(s.email_link); setEmailCodeOn(s.email_code);
+      setEmailLinkOn(s.email_link); setEmailCodeOn(s.code_sign_in); setCodeChannel(s.code_channel);
       if (s.needs_setup) setMode("setup");
       else if (inviteToken) setMode("accept");
       else if (resetToken) setMode("reset");
@@ -145,12 +143,13 @@ export function Login({ onLogin }: { onLogin: () => void }) {
   }
 
   const byEmail = emailCodeOn && method === "email";
+  const copy = CODE_COPY[codeChannel];
   const t = Math.max(now, challenge?.at ?? 0);                       // never behind the last answer
   const secsTo = (at: number) => Math.max(0, Math.round((at - t) / 1000));
   const expired = !!challenge && secsTo(challenge.expiresAt) === 0;
   const burned = tries >= TRIES;
   const locked = secsTo(lockedUntil) > 0;
-  const codeErr = !challenge ? null : expired ? EXPIRED : burned ? BURNED : tries > 0 ? WRONG(TRIES - tries) : null;
+  const codeErr = !challenge ? null : expired ? EXPIRED : burned ? BURNED : tries > 0 ? copy.wrong(TRIES - tries) : null;
   const fieldErr = err ?? codeErr;                          // one message under the code field, joined to it
 
   async function verify(digits: string) {
@@ -197,7 +196,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
     if (mode === "emailCode") {
       const digits = code.replace(/\s/g, "");
       if (/^\d{6}$/.test(digits)) await verify(digits);
-      else if (!checking.current) { setErr(PARTIAL); codeRef.current?.focus(); }   // a partial code spends no try
+      else if (!checking.current) { setErr(copy.partial); codeRef.current?.focus(); }   // a partial code spends no try
       return;
     }
     setErr(null); setInfo(null); setBusy(true);
@@ -261,7 +260,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
         <h1>goldbot</h1>
         <h2>Add goldbot to your authenticator</h2>
         {recoveryCodes.length > 0
-          ? <p>Add goldbot to your authenticator app. You will need it to re-arm after a halt, switch auto mode and manage users. Day-to-day sign-in can use a code sent to your email once mail is set up.</p>
+          ? <p>Add goldbot to your authenticator app. You will need it to re-arm after a halt, switch auto mode and manage users. {copy.setupHint}</p>
           : <p>Add this account to your authenticator app (Google Authenticator, 1Password, Authy…), then sign in.</p>}
         <p className="mono">{secret}</p>
         <a href={totpUri}>Open in authenticator app</a>
@@ -275,7 +274,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
         <button onClick={() => {
           setTotpUri(null); setRecoveryCodes([]); setPassword(""); setInviteToken(""); setResetToken(""); history.replaceState(null, "", "/");
           // the owner may exist now, so email codes may be ready
-          api.authState().then((s) => { setEmailLinkOn(s.email_link); setEmailCodeOn(s.email_code); }).catch(() => {});
+          api.authState().then((s) => { setEmailLinkOn(s.email_link); setEmailCodeOn(s.code_sign_in); setCodeChannel(s.code_channel); }).catch(() => {});
           if (after) after(); else go("login");
         }}>Continue to sign in</button>
       </div>
@@ -297,9 +296,9 @@ export function Login({ onLogin }: { onLogin: () => void }) {
     return (<>
       <form className="login" onSubmit={submit} aria-labelledby="login-title">
         <h1>goldbot</h1>
-        <h2 id="login-title">{TITLE.emailCode}</h2>
+        <h2 id="login-title">{copy.title}</h2>
         <p className="muted">
-          If the email and password are right, a 6-digit code is on its way to {maskEmail(email)}. It works once, for{" "}
+          {copy.sentLine(maskEmail(email))} It works once, for{" "}
           {Math.round((challenge.expiresAt - challenge.sentAt) / 60_000)} minutes (until <Clock at={challenge.expiresAt} />).
         </p>
         <label>Code
@@ -312,7 +311,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
             }} />
         </label>
         {fieldErr && <p className="err" role="alert" id="code-err">{fieldErr}</p>}
-        {secsTo(challenge.sentAt + NO_MAIL_HINT_S * 1000) === 0 && <p className="muted">{NO_MAIL}</p>}
+        {secsTo(challenge.sentAt + NO_MAIL_HINT_S * 1000) === 0 && <p className="muted">{copy.noMessage}</p>}
         <button type="submit" disabled={busy || expired || burned}>{busy ? "Checking..." : SUBMIT.emailCode}</button>
         {resendLine}
         <nav className="alt" aria-label="Other ways to sign in">
@@ -334,7 +333,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
   const showCode = mode === "login" || mode === "forgot" || mode === "signin";
   // with the email code chosen the authenticator field keeps its slot, hidden and inert, so switching moves nothing
   const codeSlotHidden = mode === "login" && byEmail;
-  const submitLabel = mode === "login" && byEmail ? (busy ? "Sending..." : "Email me a code") : SUBMIT[mode];
+  const submitLabel = mode === "login" && byEmail ? (busy ? "Sending..." : copy.choose) : SUBMIT[mode];
   return (<>
     <form className="login" onSubmit={submit} aria-labelledby="login-title">
       <h1>goldbot</h1>
@@ -362,7 +361,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
       {mode === "login" && emailCodeOn && (
         <fieldset className="method">
           <legend>Second step</legend>
-          <label><input type="radio" name="method" checked={method === "email"} onChange={() => choose("email")} />Email me a code</label>
+          <label><input type="radio" name="method" checked={method === "email"} onChange={() => choose("email")} />{copy.choose}</label>
           <label><input type="radio" name="method" checked={method === "authenticator"} onChange={() => choose("authenticator")} />Authenticator app</label>
         </fieldset>
       )}

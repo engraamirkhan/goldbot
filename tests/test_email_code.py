@@ -293,7 +293,7 @@ def test_email_code_burned_after_3_wrong(api, lockout_clock):
 def test_email_code_off_when_mail_not_ready(tmp_path):
     for i, (mail, fake) in enumerate(((MailSettings(), FakeMailer()), (MAIL, FakeMailer(ready=False)))):
         a = Api(tmp_path / str(i), mail=mail, mailer=fake)
-        assert a.c.get("/api/auth/state").json()["email_code"] is False
+        assert a.c.get("/api/auth/state").json()["code_sign_in"] is False
         r = a.ask()
         assert r.status_code == 200 and set(r.json()) == {"challenge", "expires_in_s", "resend_after_s"}
         assert fake.sent == []
@@ -403,7 +403,7 @@ def test_email_codes_are_off_when_the_keyring_is_unreadable_or_the_key_corrupt(t
                                                                             email_code_keyring):
     email_code_keyring[EMAIL_CODE_KEY] = "not-hex"
     a = Api(tmp_path / "corrupt")
-    assert a.c.get("/api/auth/state").json()["email_code"] is False
+    assert a.c.get("/api/auth/state").json()["code_sign_in"] is False
     a.ask()
     assert a.fake.sent == [] and email_code_keyring[EMAIL_CODE_KEY] == "not-hex"     # never overwritten
 
@@ -411,14 +411,14 @@ def test_email_codes_are_off_when_the_keyring_is_unreadable_or_the_key_corrupt(t
         raise RuntimeError("keyring locked")
     monkeypatch.setattr(auth_mod, "_secret_get", broken)
     b = Api(tmp_path / "unreadable")
-    assert b.c.get("/api/auth/state").json()["email_code"] is False
+    assert b.c.get("/api/auth/state").json()["code_sign_in"] is False
     b.ask()
     assert b.fake.sent == []
 
 
 def test_a_missing_key_is_created_once_as_32_random_bytes(api, email_code_keyring):
     assert EMAIL_CODE_KEY not in email_code_keyring
-    assert api.c.get("/api/auth/state").json()["email_code"] is True
+    assert api.c.get("/api/auth/state").json()["code_sign_in"] is True
     key = email_code_keyring[EMAIL_CODE_KEY]
     assert len(bytes.fromhex(key)) == 32
     api.ask()
@@ -428,7 +428,7 @@ def test_a_missing_key_is_created_once_as_32_random_bytes(api, email_code_keyrin
 def test_an_unwritable_keyring_leaves_email_codes_off(tmp_path, monkeypatch):
     monkeypatch.setattr(auth_mod, "_secret_set", lambda k, v: None)       # accepted, never stored
     a = Api(tmp_path)
-    assert a.c.get("/api/auth/state").json()["email_code"] is False
+    assert a.c.get("/api/auth/state").json()["code_sign_in"] is False
 
 
 def test_replay_after_sign_out_fails(api):

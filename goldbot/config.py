@@ -495,6 +495,10 @@ class AuthSettings(_Section):
     config/settings.local.yaml. Unset, the owner account cannot be created (bootstrap refuses)."""
     owner_email: str | None = None
     mail: MailSettings = Field(default_factory=MailSettings)
+    # where the owner's one-time sign-in code goes (ADR 0028 as amended 2026-10-17, goldbot/api/code_delivery.py):
+    # `telegram` sends it to the owner's private chat with the bot (keyring `telegram-owner-chat-id`, which must be in
+    # telegram.allowed_user_ids); `mail` uses the SMTP path of `mail` above
+    code_channel: Literal["telegram", "mail"] = "telegram"
 
 
 class DriftSettings(_Section):

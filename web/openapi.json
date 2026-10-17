@@ -664,9 +664,18 @@
    },
    "AuthState": {
     "properties": {
-     "email_code": {
+     "code_channel": {
+      "default": "telegram",
+      "enum": [
+       "telegram",
+       "mail"
+      ],
+      "title": "Code Channel",
+      "type": "string"
+     },
+     "code_sign_in": {
       "default": false,
-      "title": "Email Code",
+      "title": "Code Sign In",
       "type": "boolean"
      },
      "email_link": {
@@ -975,6 +984,50 @@
      }
     },
     "title": "ChangePasswordRequest",
+    "type": "object"
+   },
+   "CodeSignIn": {
+    "properties": {
+     "at_utc": {
+      "title": "At Utc",
+      "type": "string"
+     },
+     "network": {
+      "title": "Network",
+      "type": "string"
+     }
+    },
+    "required": [
+     "at_utc",
+     "network"
+    ],
+    "title": "CodeSignIn",
+    "type": "object"
+   },
+   "CodeSignIns": {
+    "description": "The owner's Telegram-code sign-ins of the last 7 days, newest first (security condition 6): the banner shown\nafter every sign-in.",
+    "properties": {
+     "channel": {
+      "enum": [
+       "telegram",
+       "mail"
+      ],
+      "title": "Channel",
+      "type": "string"
+     },
+     "sign_ins": {
+      "items": {
+       "$ref": "#/components/schemas/CodeSignIn"
+      },
+      "title": "Sign Ins",
+      "type": "array"
+     }
+    },
+    "required": [
+     "sign_ins",
+     "channel"
+    ],
+    "title": "CodeSignIns",
     "type": "object"
    },
    "CusumPoint": {
@@ -1519,7 +1572,7 @@
    },
    "EmailCodeRequest": {
     "additionalProperties": false,
-    "description": "Email + password: the owner gets a 6-digit code by email; every input gets the same answer (ADR 0028).",
+    "description": "Email + password: the owner gets a 6-digit code on the code channel (Telegram by default; the route names are\nfrom the first, email-only design); every input gets the same answer (ADR 0028).",
     "properties": {
      "email": {
       "default": "",
@@ -5913,6 +5966,30 @@
     "summary": "Accept"
    }
   },
+  "/api/auth/code-sign-ins": {
+   "get": {
+    "description": "The owner's Telegram-code sign-ins of the last 7 days (time, coarse network), for the banner shown after\nevery sign-in with its one-tap \"sign out everywhere\".",
+    "operationId": "code_sign_ins_api_auth_code_sign_ins_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/CodeSignIns"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Code Sign Ins"
+   }
+  },
   "/api/auth/email-code": {
    "post": {
     "description": "Owner only. A challenge for every input (a decoy unless the password is right, the address is the owner's\nand mail is ready); 403 only while the sign-in lockout holds, as for sign-in.",
@@ -5993,7 +6070,7 @@
   },
   "/api/auth/email-code/verify": {
    "post": {
-    "description": "The challenge and its code: a 12 h owner session (method email_code). Every success is announced by\nTelegram (AuthStore) and by email (condition 10).",
+    "description": "The challenge and its code: a 12 h owner session (method email_code). A Telegram-code sign-in is audited\n`tg_code_login` and listed in the owner's banner (condition 6); the mail channel also mails a notice. The\ndelivered message is deleted once the code is used or burned.",
     "operationId": "email_code_verify_api_auth_email_code_verify_post",
     "requestBody": {
      "content": {

@@ -139,6 +139,8 @@ export const api = {
     req<Schemas["LoginResponse"]>("/api/auth/email-code/verify", { method: "POST", body: JSON.stringify({ challenge, code }) }),
   resendEmailCode: (challenge: string) =>
     req<Schemas["EmailCodeChallenge"]>("/api/auth/email-code/resend", { method: "POST", body: JSON.stringify({ challenge }) }),
+  // Telegram-code sign-ins of the last 7 days (owner only), for the banner shown after every sign-in
+  codeSignIns: () => req<Schemas["CodeSignIns"]>("/api/auth/code-sign-ins"),
   recoveryCodes: (password: string, totp: string) =>
     req<Schemas["RecoveryCodesResponse"]>("/api/auth/recovery/codes", { method: "POST", body: JSON.stringify({ password, totp }) }),
   status: () => req<Status>("/api/status"),

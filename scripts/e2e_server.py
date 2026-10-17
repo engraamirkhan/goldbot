@@ -6,8 +6,9 @@ code is written to --info so the browser test can create the owner account the w
 
   python scripts/e2e_server.py --port 8790 --info web/e2e/.server.json
 
---fake-mailer (the auth tests, web/e2e/auth.spec.ts) turns on the owner's email sign-in link with the e2e-only
-CaptureMailer (goldbot/api/e2e_mailer.py): mail lands in a JSONL outbox in the throwaway state dir (path in --info). It
+--fake-mailer (the auth tests, web/e2e/auth.spec.ts) turns on the owner's email sign-in link and sign-in code with the
+e2e-only CaptureMailer and CaptureCodeDelivery (goldbot/api/e2e_mailer.py): the link, and the message the Telegram bot
+would send, land in a JSONL outbox in the throwaway state dir (path in --info). It
 is refused unless GOLDBOT_E2E_FAKE_MAILER=1 and --host is 127.0.0.1 or ::1; the same host is what uvicorn binds.
 """
 from __future__ import annotations
@@ -33,7 +34,7 @@ import uvicorn  # noqa: E402
 import goldbot  # noqa: E402
 from goldbot.api import auth as auth_module  # noqa: E402
 from goldbot.api.app import create_app  # noqa: E402
-from goldbot.api.e2e_mailer import STATE_PREFIX, CaptureMailer  # noqa: E402
+from goldbot.api.e2e_mailer import STATE_PREFIX, CaptureCodeDelivery, CaptureMailer  # noqa: E402
 from goldbot.config import MailSettings  # noqa: E402
 from goldbot.data.econ_calendar import COLUMNS as CALENDAR_COLUMNS  # noqa: E402
 from goldbot.data.news import COLUMNS as NEWS_COLUMNS  # noqa: E402
@@ -215,18 +216,19 @@ def main() -> None:
     seed_store(str(Path(state) / "data"))
     seed_health_research(state)
     seed_automode(state)
-    mail, mailer, outbox = None, None, None
+    mail, mailer, codes, outbox = None, None, None, None
     if args.fake_mailer:
         # refused (E2EMailerRefused) unless the flag is set and args.host, the address uvicorn binds below, is loopback
         mailer = CaptureMailer(Path(state) / "e2e_outbox.jsonl", bind_host=args.host)
-        install_email_code_key()                                  # mail is ready, so email codes are offered
+        codes = CaptureCodeDelivery(Path(state) / "e2e_outbox.jsonl", bind_host=args.host)    # same outbox, same guards
+        install_email_code_key()                                  # the code channel is ready, so codes are offered
         outbox = str(mailer.outbox)
         url_host = f"[{args.host}]" if ":" in args.host else args.host
-        # host is required once enabled; CaptureMailer never connects anywhere
+        # host is required once enabled; the fakes never connect anywhere
         mail = MailSettings(enabled=True, host="127.0.0.1", from_address="goldbot-e2e@example.com",
                             dashboard_origin=f"http://{url_host}:{args.port}")
     app = create_app(state, web_dist=ROOT / "web" / "dist", data_root=Path(state) / "data", owner_email="owner@example.com",
-                     mail=mail, mailer=mailer)
+                     mail=mail, mailer=mailer, code_delivery=codes)
     Path(args.info).parent.mkdir(parents=True, exist_ok=True)
     Path(args.info).write_text(json.dumps({"setup_code": app.state.st.auth.setup_code, "state_dir": state,
                                            "outbox": outbox}))

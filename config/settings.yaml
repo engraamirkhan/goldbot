@@ -267,6 +267,13 @@ drift:                               # design: Drift and health (goldbot/researc
 # The same mail setup also offers the owner "email me a code" (password + a 6-digit emailed code, ADR 0028; RUNBOOK
 # 2.10 "Email sign-in code"). Its HMAC key is the keyring entry `email-code-hmac-key`, created on first use; there is
 # no setting for it, and `enabled: false` turns codes off together with the link.
+#
+# Where that sign-in code is delivered (ADR 0028 as amended 2026-10-17; RUNBOOK 2.10). Default `telegram`: the API sends
+# it to your private chat with the bot, so no mail setup is needed. Store your chat id (it must also be in
+# telegram.allowed_user_ids above) with `python -m goldbot.ops.accounts set telegram-owner-chat-id`. `mail` sends it with
+# the SMTP setup above instead.
+#   auth:
+#     code_channel: telegram           # telegram | mail
 
 gates:                               # design: Roadmap gates and stop rule (goldbot/ops/gates_phase.py; `run.py gates`)
   # The design wants these "committed in writing before the first paper trade". Uncommented values are the design's

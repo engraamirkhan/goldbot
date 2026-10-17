@@ -31,7 +31,8 @@ def test_a_version_7_aux_db_upgrades_and_keeps_its_sessions_as_password_and_auth
         assert current_version(conn) == AUX[-1].version
         assert conn.execute("SELECT method FROM sessions").fetchall() == [("password_totp",)]
         cols = {r[1] for r in conn.execute("PRAGMA table_info(email_codes)")}
-        assert cols == {"challenge_sha256", "email", "code_hmac", "expires_ns", "tries", "consumed", "created_ns"}
+        assert cols == {"challenge_sha256", "email", "code_hmac", "expires_ns", "tries", "consumed", "created_ns",
+                        "message_id"}
         assert conn.execute("SELECT COUNT(*) FROM auth_suspensions").fetchone()[0] == 0
 
 
@@ -68,3 +69,14 @@ def test_migration_9_adds_the_outbox_watch_and_is_additive_so_a_rollback_still_o
             "proposal_id", "messages", "shown", "since_ns", "tries", "retry_ns"}
         conn.commit()
         assert migrate(conn, "aux", migrations=AUX[:8]) == []          # the older code accepts the newer file
+
+
+def test_migration_10_adds_the_code_message_id_and_is_additive_so_a_rollback_still_opens_aux_db(tmp_path):
+    """BACKLOG 77 Telegram amendment: only the message id of a sent code is kept (never the code)."""
+    m = AUX[9]
+    assert (m.version, m.name, m.additive) == (10, "code_message_id", True)
+    with sqlite3.connect(tmp_path / "aux.db") as conn:
+        migrate(conn, "aux")
+        assert "message_id" in {r[1] for r in conn.execute("PRAGMA table_info(email_codes)")}
+        conn.commit()
+        assert migrate(conn, "aux", migrations=AUX[:9]) == []          # the older code accepts the newer file

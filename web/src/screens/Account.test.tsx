@@ -98,7 +98,7 @@ describe("Account: your sign-in", () => {
 describe("Account: email codes row", () => {
   afterEach(() => { vi.restoreAllMocks(); apiModule.setUser(null); });
   const state = (email_code: boolean) =>
-    vi.spyOn(apiModule.api, "authState").mockResolvedValue({ needs_setup: false, users: 1, email_link: false, email_code });
+    vi.spyOn(apiModule.api, "authState").mockResolvedValue({ needs_setup: false, users: 1, email_link: false, code_sign_in: email_code, code_channel: "mail" });
 
   it("tells the owner email codes are off, and why, in a neutral row when mail is not set up", async () => {
     apiModule.setUser({ email: "owner@example.com", role: "owner", signed_in_with: "password_totp" });
