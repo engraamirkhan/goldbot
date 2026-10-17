@@ -807,3 +807,109 @@ def test_a_stop_that_cannot_be_set_with_the_price_already_through_it_says_the_en
         f"⚠️ Order confirmed, but without its stop: LONG 0.1 lots XAUUSD on icm-demo is open at {pos.open_price:.2f} and "
         f"the engine couldn't set stop 2396.00. The price is already past stop 2396.00, so the engine closes the trade "
         f"at the first quote."]
+
+
+# ---------------------------------------------------------------------------------------------- BACKLOG 84
+class _SendRaises(PaperBroker):
+    """The order reaches the broker and fills, then the send raises (the terminal connection drops mid-call); the
+    Telegram service polls its outbox while the order is in flight."""
+
+    def __init__(self, **kw: Any) -> None:
+        super().__init__(**kw)
+        self.poll: Any = None
+        self.seen: list[str] = []
+
+    def place_order(self, intent: OrderIntent) -> OrderResult:
+        if self.poll is not None:
+            self.seen += self.poll()
+        super().place_order(intent)
+        raise RuntimeError("terminal connection lost")
+
+
+def test_a_send_that_raises_archives_the_card_not_confirmed_and_never_leaves_it_placing(tmp_path):
+    """BACKLOG 84: "if `on_decision` raises, `_finish` archives the card not confirmed (placing cleared) then
+    re-raises", so the outbox and the dashboard show NOT CONFIRMED at once, never APPROVED and never "submitted"."""
+    pb = _SendRaises(equity=10_000)
+    eng, prop, outbox = _through_finish(tmp_path, pb)
+    _beat(tmp_path)
+    pb.poll = lambda: [o for pid, o, _ in outbox.finished() if pid == prop.proposal_id]
+    with pytest.raises(RuntimeError, match="terminal connection lost"):
+        eng.center.decide(prop.proposal_id, OWNER, True)
+    assert pb.seen == []                                          # in flight: not reported
+    stored = eng.center.bus.get(prop.proposal_id)
+    assert stored is not None and not stored.placing
+    assert stored.gate_refusal == ["not_confirmed"]
+    assert stored.not_confirmed is not None and stored.not_confirmed.outcome == "pending"
+    assert [o for pid, o, _ in outbox.finished() if pid == prop.proposal_id] == ["GATE_REFUSED: not_confirmed"]
+    assert eng._orders[prop.proposal_id].status == "sending"     # entries stay refused until it is settled
+    # the fill the send left at the broker, met by the reconcile loop: the owner is told it is open, the card says so
+    [pos] = pb.positions()
+    eng._adopt(pos)
+    assert [n for n in _notices(tmp_path) if n.startswith("Order confirmed: LONG")]
+    card = eng.center.bus.get(prop.proposal_id)
+    assert card is not None and card.not_confirmed is not None and card.not_confirmed.outcome == "opened"
+    assert card.gate_refusal == ["not_confirmed"] and not card.placing
+
+
+def test_a_send_that_raises_after_a_refusal_was_archived_keeps_that_refusal(tmp_path):
+    """`_finish` marks NOT CONFIRMED only a card nothing has answered yet: a refusal already archived stands."""
+    from goldbot.telegram.approvals import Outcome
+    bus = ApprovalBus(tmp_path)
+
+    def refuse_then_raise(p: Any) -> None:
+        p.gate_refusal = ["broker_rejected"]
+        bus.archive(p)
+        raise RuntimeError("state write failed")
+    center = ApprovalCenter({OWNER}, on_decision=refuse_then_raise, bus=bus)
+    center.propose(_prop(PID))
+    with pytest.raises(RuntimeError):
+        center.decide(PID, OWNER, True)
+    stored = bus.get(PID)
+    assert stored is not None and stored.outcome == Outcome.APPROVED and not stored.placing
+    assert stored.gate_refusal == ["broker_rejected"] and stored.not_confirmed is None
+
+
+def test_a_fill_after_the_silent_engine_fallback_still_sends_the_opened_notice_and_updates_the_card(tmp_path,
+                                                                                                    clock):
+    """BACKLOG 84: the engine went silent mid-send (it died with the card `placing`), so the outbox reported the card
+    NOT CONFIRMED; the restarted engine's look-up finds the fill: the owner gets the "opened" notice and the card
+    says so."""
+    from goldbot.telegram.approvals import Outcome
+    from goldbot.telegram.outbox import Outbox
+    pb = _SendRaises(equity=10_000)
+    pb.on_tick(_tick(T0))
+    eng, _ = _engine(tmp_path, pb)
+    bus = eng.center.bus
+    assert bus is not None
+    bus.archive(_prop(PID).model_copy(update={"outcome": Outcome.APPROVED, "placing": True}))   # `_finish` archived it
+    with pytest.raises(RuntimeError):
+        eng._execute(_prop(PID), AGENT, 0.1, SL, TP, requested=2400.2)                       # then the engine died
+    outbox = Outbox(tmp_path, bus)
+    outbox.mark_sent(PID, [(1, 2)])
+    _beat(tmp_path, age_s=600)
+    assert [o for _, o, _ in outbox.finished()] == ["GATE_REFUSED: not_confirmed"]           # the silent-engine fallback
+    [pos] = pb.positions()
+    again, _ = _engine(tmp_path, pb)                                                          # restart: the look-up
+    assert again._orders[PID].status == "filled" and again.open[pos.position_id].initial_sl == SL
+    assert _notices(tmp_path) == [
+        f"Order confirmed: LONG 0.1 lots XAUUSD on icm-demo is open at {pos.open_price:.2f} (the broker confirmed it "
+        f"late). Stop 2396.00, target 2406.00; exits are automatic."]
+    card = bus.get(PID)
+    assert card is not None and not card.placing and card.gate_refusal == ["not_confirmed"]
+    assert card.not_confirmed is not None and card.not_confirmed.outcome == "opened"
+    outbox.mark_sent(PID, [(1, 2)])                                # polled again: never APPROVED
+    assert [o for _, o, _ in outbox.finished()] == ["GATE_REFUSED: not_confirmed"]
+    _engine(tmp_path, pb)                                          # one notice per order, across another restart
+    assert len(_notices(tmp_path)) == 1
+
+
+def test_a_sending_row_found_filled_with_no_card_shown_unconfirmed_sends_no_notice(tmp_path, clock):
+    """The notice follows the card: a crash-restart fill whose card was never shown NOT CONFIRMED (none on the bus:
+    the auto path) is adopted as before, silently."""
+    pb = _SendRaises(equity=10_000)
+    pb.on_tick(_tick(T0))
+    eng, _ = _engine(tmp_path, pb)
+    with pytest.raises(RuntimeError):
+        eng._execute(_prop(PID), AGENT, 0.1, SL, TP, requested=2400.2)
+    again, _ = _engine(tmp_path, pb)
+    assert again._orders[PID].status == "filled" and _notices(tmp_path) == []
