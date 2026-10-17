@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { clearLinkTokens } from "./lib/links";
 import { api, currentUser, hasRole, hasToken, liveSocket, onSessionEnded, setToken } from "./lib/api";
 import { roleLabel } from "./lib/roles";
 import { Login } from "./screens/Login";
@@ -24,7 +25,7 @@ export function App() {
   const [tab, setTab] = useState<Tab>("Overview");
   const qc = useQueryClient();
 
-  useEffect(() => onSessionEnded(() => setAuthed(false)), []);
+  useEffect(() => onSessionEnded(() => { clearLinkTokens(); setAuthed(false); }), []);
 
   useEffect(() => {
     if (!authed) return;
@@ -38,7 +39,7 @@ export function App() {
     });
   }, [authed, qc]);
 
-  if (!authed) return <Login onLogin={() => setAuthed(true)} />;
+  if (!authed) return <Login onLogin={() => { clearLinkTokens(); setAuthed(true); }} />;
   const me = currentUser();
 
   return (
@@ -52,7 +53,7 @@ export function App() {
         </nav>
         {/* Role, never the email: persistent chrome never renders an identity (docs/ux/header-role.md) */}
         <span className="muted who">{me ? <><span className="sr-only">Signed in as </span>{roleLabel(me.role)}</> : "Signed in"}</span>
-        <button className="link" onClick={async () => { try { await api.logout(); } catch { /* session already gone server-side */ } setToken(null); setAuthed(false); }}>Sign out</button>
+        <button className="link" onClick={async () => { try { await api.logout(); } catch { /* session already gone server-side */ } setToken(null); clearLinkTokens(); setAuthed(false); }}>Sign out</button>
       </header>
       <main>
         {tab === "Overview" && <Overview onOpenProgress={() => setTab("Progress")} />}

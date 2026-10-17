@@ -20,3 +20,9 @@ export function takeLinkTokens(): LinkTokens {
   }
   return taken;
 }
+
+/** Forget the tokens read from the URL. They are one-time links: once a session starts or ends they are spent, and a
+ * Login that mounts again in the same page (after sign-out) must not offer them a second time (issue #89). */
+export function clearLinkTokens(): void {
+  taken = null;                               // the next read looks at the URL again, whose fragment was already removed
+}
