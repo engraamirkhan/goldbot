@@ -109,3 +109,17 @@ Build blocked until 1-4 are honoured; they override the text above where they di
    `_record_closed_while_down`, `_adopt`, `_on_decision` (~1243), `_reconcile`, `no_quote_pass`. No conflict with 62
    (it edits `_kill_switch` only); 71 shares `_execute` and `_on_decision`, so build after 71 merges. Run the ambiguous
    lookup before `_reconcile`'s adoption loop so the row's stop and policy are used and the owner is told.
+
+## Decisions after the UX copy (docs/ux/order-not-confirmed.md, 2026-10-17, program director + ui-ux; trading-safety
+allowed either reading of condition 1)
+
+- **Condition 1 is met by refusing entries** with `unconfirmed_order_pending` while any row is unresolved (fail-closed,
+  and the owner sees "an earlier order isn't confirmed yet" rather than "too much risk open" with no trade). The `{gate}`
+  sentence stays in the copy.
+- `/api/proposals/recent` keeps an unresolved order listed past its 10-minute window (the dashboard must not drop the
+  card when the warning fires); test it.
+- A position adopted whose stop cannot be set tells the owner to set it in MT5:
+  `test_an_adopted_position_whose_stop_cannot_be_set_tells_the_owner_to_set_it`.
+- Build additions: `DecidedProposal.not_confirmed` API field (regenerate the contract), amber `outcome warn` style, the
+  refused-at-approval reason in plain English; map the 7-day "gave up" notice into the `notified` values (add
+  `gave_up`).
