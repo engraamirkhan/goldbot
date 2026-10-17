@@ -28,6 +28,14 @@ export type Headline = Schemas["Headline"];
 export type AutoModeView = Schemas["AutoModeView"];
 export type ModeChangeResult = Schemas["ModeChangeResult"];
 export type ApprovalMode = Schemas["ModeChangeRequest"]["mode"];
+export type GatesView = Schemas["GatesView"];
+export type GateView = Schemas["GateView"];
+export type GateItemView = Schemas["GateItemView"];
+export type StopRuleView = Schemas["StopRuleView"];
+export type AttributionView = Schemas["AttributionView"];
+export type AttributionReportView = Schemas["AttributionReportView"];
+export type ResultCell = Schemas["ResultCell"];
+export type TradesSummary = Schemas["TradesSummary"];
 export type CalendarQuery = NonNullable<operations["calendar_api_calendar_get"]["parameters"]["query"]>;
 export type NewsQuery = NonNullable<operations["news_api_news_get"]["parameters"]["query"]>;
 
@@ -102,6 +110,10 @@ export const api = {
   news: (q: NewsQuery = {}) => req<Headline[]>(`/api/news${qs(q)}`),
   health: () => req<Schemas["HealthView"]>("/api/health"),
   research: () => req<Schemas["ResearchView"]>("/api/research"),
+  // Progress tab (docs/ux/progress-screens.md): read-only, any signed-in role
+  gates: () => req<GatesView>("/api/gates"),
+  attribution: () => req<AttributionView>("/api/attribution"),
+  tradesSummary: () => req<TradesSummary[]>("/api/trades/summary"),
 };
 
 export function liveSocket(onEvent: (e: { type: string } & Record<string, unknown>) => void): () => void {
