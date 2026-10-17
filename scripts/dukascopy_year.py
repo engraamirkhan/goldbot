@@ -14,8 +14,12 @@ week-sized chunks with an exclusive end, retried with backoff, and a last salvag
 With --existing (last published Parquet for the year) months that are already complete are kept and only
 missing, partial or still-open months are downloaded again.
 
+With --months (targeted refetch, G1/G2) exactly the listed months of this year are downloaded again, whatever their
+size or flags, and every other month is kept from --existing (required). Each listed month goes through
+merge_never_shrink, so a refetch can only add or repair days, never lose one.
+
   python scripts/dukascopy_year.py 2025 [--out xauusd_1m_dukascopy_2025.parquet] [--report report.md]
-                                        [--existing xauusd_1m_dukascopy_2025.parquet]
+                                        [--existing xauusd_1m_dukascopy_2025.parquet] [--months 2025-02,2025-03]
 """
 from __future__ import annotations
 
@@ -32,6 +36,9 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from dukascopy_months import parse_months  # noqa: E402
+
 from goldbot.data.calendar import DEFAULT_SESSIONS  # noqa: E402
 from goldbot.data.quality import check_bars, quarantine  # noqa: E402
 from goldbot.data.resample import BAR_COLUMNS  # noqa: E402
@@ -236,15 +243,42 @@ def main() -> int:
     ap.add_argument("--refetch-all", action="store_true", help="download every month; --existing is only a fallback")
     ap.add_argument("--retry-flagged", action="store_true",
                     help="also download closed months flagged partial/imputed (off by default: hours per month)")
+    ap.add_argument("--months", default=None,
+                    help="targeted refetch: comma-separated YYYY-MM; only this year's are downloaded, the rest are kept "
+                         "from --existing (required)")
     args = ap.parse_args()
     months = list(month_range(args.year))
+    wanted: set[str] | None = None
+    if args.months is not None:
+        if args.refetch_all or args.retry_flagged:
+            ap.error("--months is a targeted refetch; it cannot be combined with --refetch-all or --retry-flagged")
+        try:
+            listed = parse_months(args.months)
+        except ValueError as e:
+            ap.error(f"--months: {e}")
+        wanted = {m for m in listed if m.startswith(f"{args.year:04d}-")}
+        if not wanted:
+            ap.error(f"--months lists no month of {args.year}: {','.join(listed)}")
+        unknown = wanted - {f"{s:%Y-%m}" for s, _ in months}
+        if unknown:
+            ap.error(f"--months: {','.join(sorted(unknown))} has no completed day to download")
+        if not (args.existing and Path(args.existing).exists()):
+            # unlisted months are kept from the published file; without it the year would be published with only the
+            # listed months
+            print(f"REFUSED: --months needs the published {args.year} file (--existing); nothing downloaded", flush=True)
+            return 1
     existing = None
     if args.existing and Path(args.existing).exists():
         existing = pd.read_parquet(args.existing)
         existing["ts_utc"] = pd.to_datetime(existing["ts_utc"], utc=True)
         print(f"existing: {len(existing):,} bars from {args.existing}", flush=True)
-    todo = ({f"{m:%Y-%m}" for m, _ in months} if args.refetch_all
-            else months_to_fetch(existing, months, retry_flagged=args.retry_flagged))
+    if wanted is not None:
+        todo = wanted
+        print(f"targeted refetch of {','.join(sorted(wanted))}; every other month is kept as published", flush=True)
+    elif args.refetch_all:
+        todo = {f"{m:%Y-%m}" for m, _ in months}
+    else:
+        todo = months_to_fetch(existing, months, retry_flagged=args.retry_flagged)
     frames, rows = [], []
     for start, end in months:
         k = f"{start:%Y-%m}"

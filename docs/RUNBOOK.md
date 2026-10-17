@@ -550,7 +550,7 @@ Tailscale is optional.
 
 | Workflow | When | What it does | Where results appear |
 | --- | --- | --- | --- |
-| `data-dukascopy.yml` | Saturdays 03:17 UTC (current year), or by hand | Downloads Dukascopy ticks, builds 1m bars, publishes Parquet files to the release `data-v1`. | Issues `data coverage <year>` (label `data-coverage`); failures as `data-dukascopy failure for <year>` (labels `ci`, `data`). |
+| `data-dukascopy.yml` | Saturdays 03:17 UTC (current year), or by hand (inputs `from_year`/`to_year`, or `months` for a targeted refetch, section 6) | Downloads Dukascopy ticks, builds 1m bars, publishes Parquet files to the release `data-v1`. | Issues `data coverage <year>` (label `data-coverage`); failures as `data-dukascopy failure for <year>` (labels `ci`, `data`). |
 | `data-macro.yml` | Tuesdays 04:41 UTC, or by hand | Downloads the FRED macro series (10y real yield, breakeven, broad dollar, gold VIX, 2y yield) and publishes `macro_fred.parquet` to the release `macro-v1`. | Failures as issue `data-macro failure` (labels `ci`, `data`). |
 | `data-positioning.yml` | Saturdays 05:23 UTC, or by hand (input `from_year` re-downloads COT from that year) | Downloads COMEX gold Commitments of Traders (CFTC) and GLD holdings (SPDR archive) and publishes `positioning.parquet` to the release `positioning-v1`, each row with a conservative `available_utc`. If the GLD archive is blocked, the run stays green, keeps the published GLD rows and says `GLD SOURCE UNAVAILABLE` in its summary. | Failures (COT download or upload) as issue `data-positioning failure` (labels `ci`, `data`). |
 | `research.yml` | By hand only (Actions -> research -> Run workflow; inputs `specialist`, `from_year`, `to_year`, `rationale`, `macro`) | Walk-forward research for one specialist family (`session_open`, `mean_reversion`, `trend`, `breakout`) on the `data-v1` bars; with `macro` ticked, adds the macro features from `macro-v1`. Keeps the trial registry on release `research-v1`. | Issue `research: <specialist>` (label `research`). |
@@ -1134,6 +1134,36 @@ was a network blip.
 
 Issues labelled `ci` and `data` (`data-dukascopy failure for <year>`) mean a bar download failed; the next
 Saturday run or a manual run of `data-dukascopy` retries it.
+
+### Missing days in data-v1: targeted refetch (`data-dukascopy`, input `months`)
+
+A month can clear the 15,000-bar check and still have lost whole weekdays (the day-by-day table on the
+`data coverage <year>` issue, from `scripts/check_coverage.py`, lists them). Neither the Saturday run nor
+`retry_flagged` downloads such a month again. Refetch exactly the affected months with one dispatch:
+
+```
+gh workflow run data-dukascopy.yml --ref main -f months=2024-01,2024-06,2026-04
+```
+
+(or Actions -> data-dukascopy -> Run workflow, field `months`). What it does:
+
+- `months` is comma-separated `YYYY-MM`, 2010-01 up to the current month, at most 24 per dispatch. Anything else
+  fails the `plan` job before any download (`scripts/dukascopy_months.py`). `from_year`/`to_year` are ignored, and
+  `full_refresh` or `retry_flagged` ticked together with `months` is refused.
+- One `build-year` job per year in the list (two at a time). Each downloads only its listed months, flagged or
+  not, and keeps every other month exactly as published. If the year has no published file, the job refuses
+  and downloads nothing, so a year never loses its unlisted months.
+- Each listed month is merged day by day (`merge_never_shrink`): a day is replaced only by one with more bars,
+  or by an unflagged copy of a bid/ask-imputed day with the same number of bars. A throttled download can add
+  or repair days; it never removes one.
+- Cost: about 1-2 runner-minutes a month when Dukascopy answers, plus about 3 minutes per year job. When it
+  throttles, up to about 80 minutes a month; a year job stops at 340 minutes and then publishes nothing
+  (the published file stays as it was). If a year job times out, dispatch that year's months again in
+  lists of 4 or fewer.
+
+Afterwards, check the `data coverage <year>` issues: the day-by-day section should no longer list the repaired
+days. A day that is still missing after two refetches is a gap in Dukascopy's archive; it stays listed
+on the issue and is not imputed.
 
 ### US calendar: a type refused for mass cancellations
 
