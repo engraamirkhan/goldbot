@@ -122,10 +122,10 @@ describe("ProposalCard", () => {
   });
 
   // docs/ux/order-not-placed.md: the API words the MT5 box's and the broker's refusals (`not_placed`)
-  const margin = { by: "broker" as const, reason: "there wasn't enough free margin", code: null, next_step: "Check free margin on the Overview before approving the next trade.", nothing_sent: true };
-  const stops = { by: "broker" as const, reason: "the stop or target wasn't accepted (too close to the price)", code: null, next_step: "x", nothing_sent: true };
-  const stale = { by: "mt5_box" as const, reason: "it took more than 10 s to check the order, so it dropped it rather than trade on an old price", code: null, next_step: "x", nothing_sent: true };
-  const generic = { by: "broker" as const, reason: null, code: 10006, next_step: "If it repeats, ask Claude to check (broker code 10006).", nothing_sent: true };
+  const margin = { by: "broker" as const, reason: "there wasn't enough free margin", code: null, next_step: "Check free margin on the Overview before approving the next trade.", nothing_sent: true, not_sent: false };
+  const stops = { by: "broker" as const, reason: "the stop or target wasn't accepted (too close to the price)", code: null, next_step: "x", nothing_sent: true, not_sent: false };
+  const stale = { by: "mt5_box" as const, reason: "it took more than 10 s to check the order, so it dropped it rather than trade on an old price", code: null, next_step: "x", nothing_sent: true, not_sent: false };
+  const generic = { by: "broker" as const, reason: null, code: 10006, next_step: "If it repeats, ask Claude to check (broker code 10006).", nothing_sent: true, not_sent: false };
   it.each([
     [{ refusal: ["broker_refused:10019"], not_placed: margin, decided_channel: "telegram" }, /^Refused by the broker\. There wasn't enough free margin; nothing was sent\. · via Telegram$/],
     [{ refusal: ["broker_refused:10016"], not_placed: stops }, /^Refused by the broker\. The stop or target wasn't accepted \(too close to the price\); nothing was sent\.$/],
@@ -138,8 +138,20 @@ describe("ProposalCard", () => {
     expect(container.querySelector("article")).toHaveAttribute("aria-label", "Long 0.05 lots XAUUSD, not placed");
   });
 
+  // BACKLOG 85: the approval path failed before the order existed; the order could not be sent, nobody refused it
+  const box = { by: "mt5_box" as const, reason: "the MT5 box couldn't be reached", code: null, next_step: "x", nothing_sent: true, not_sent: true };
+  const engine = { by: "engine" as const, reason: "the engine hit an error before sending it", code: null, next_step: "x", nothing_sent: true, not_sent: true };
+  it.each([
+    [{ refusal: ["not_sent:mt5_box"], not_placed: box }, /^Could not be sent\. The MT5 box couldn't be reached; nothing was sent\.$/],
+    [{ refusal: ["not_sent:engine"], not_placed: engine }, /^Could not be sent\. The engine hit an error before sending it; nothing was sent\.$/],
+  ])("shows an approval that could not be sent as not placed, never as refused (%#)", (over, copy) => {
+    render(<ProposalCard p={decided("refused", over)} now={NOW} canDecide blockers={[]} />);
+    expect(screen.getByRole("status")).toHaveTextContent(copy);
+    expect(screen.getByRole("status")).toHaveClass("outcome", "bad");
+  });
+
   it("never says nothing was sent for the paper broker's duplicate, whose first send went out", () => {
-    const dup = { by: "broker" as const, reason: "it was already sent; this repeat was refused", code: null, next_step: "x", nothing_sent: false };
+    const dup = { by: "broker" as const, reason: "it was already sent; this repeat was refused", code: null, next_step: "x", nothing_sent: false, not_sent: false };
     render(<ProposalCard p={decided("refused", { refusal: ["broker_refused:10027:paper"], not_placed: dup })} now={NOW} canDecide blockers={[]} />);
     expect(screen.getByRole("status")).toHaveTextContent(/^Refused by the broker\. It was already sent; this repeat was refused\.$/);
   });

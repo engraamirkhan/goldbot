@@ -913,3 +913,85 @@ def test_a_sending_row_found_filled_with_no_card_shown_unconfirmed_sends_no_noti
         eng._execute(_prop(PID), AGENT, 0.1, SL, TP, requested=2400.2)
     again, _ = _engine(tmp_path, pb)
     assert again._orders[PID].status == "filled" and _notices(tmp_path) == []
+
+
+# ---------------------------------------------------------------------------------------------- BACKLOG 85
+class _ReadFails(PaperBroker):
+    """The MT5 box can't be read at approval (`account()` raises) once `fail` is set: the approval path raises before
+    `_execute` writes the order row. The Telegram service polls its outbox meanwhile."""
+
+    def __init__(self, **kw: Any) -> None:
+        super().__init__(**kw)
+        self.fail, self.sends = False, 0
+        self.poll: Any = None
+        self.seen: list[str] = []
+
+    def account(self) -> Any:
+        if self.fail:
+            if self.poll is not None:
+                self.seen += self.poll()
+            from goldbot.execution.bridge import BridgeUnavailable
+            raise BridgeUnavailable("bridge account: ConnectTimeout 10.0.0.9")
+        return super().account()
+
+    def place_order(self, intent: OrderIntent) -> OrderResult:
+        self.sends += 1
+        return super().place_order(intent)
+
+
+def test_a_raise_before_the_order_row_archives_not_sent_never_approved_and_allows_the_next_entry(tmp_path):
+    """BACKLOG 85: "`_on_decision` archives a "not sent" refusal code on a raise before the row exists": the card
+    reads NOT PLACED (could not be sent), the outbox never returns APPROVED, no row exists, nothing is pending, so the
+    next entry is not refused `unconfirmed_order_pending`, and the owner gets exactly one notice."""
+    pb = _ReadFails(equity=10_000)
+    eng, prop, outbox = _through_finish(tmp_path, pb)
+    _beat(tmp_path)
+    pb.fail = True
+    pb.poll = lambda: [o for pid, o, _ in outbox.finished() if pid == prop.proposal_id]
+    with pytest.raises(ConnectionError):
+        eng.center.decide(prop.proposal_id, OWNER, True)
+    assert pb.seen == [] and pb.sends == 0                        # in flight: not reported; nothing was sent
+    stored = eng.center.bus.get(prop.proposal_id)
+    assert stored is not None and not stored.placing and stored.not_confirmed is None
+    assert stored.gate_refusal == ["not_sent:mt5_box"]
+    [after] = [o for pid, o, _ in outbox.finished() if pid == prop.proposal_id]
+    assert after == "GATE_REFUSED: not_sent:mt5_box"
+    assert outcome_text(after) == ("🛑 NOT PLACED: approved, but the order could not be sent: the MT5 box couldn't be "
+                                   "reached. Nothing was sent.")
+    assert prop.proposal_id not in eng._orders and not unconfirmed.pending(eng._orders)
+    assert "unconfirmed_order_pending" not in eng.gate.account_reasons(eng.state)
+    notices = _notices(tmp_path)
+    assert len(notices) == 1 and notices[0].startswith("Order not placed: LONG ")
+    assert "could not be sent: the MT5 box couldn't be reached." in notices[0]
+    assert prop.proposal_id not in notices[0] and "10.0.0.9" not in notices[0]
+    assert [d for d in eng.decisions if d.get("action") == "not_sent"]
+    eng._reconcile(None)                                          # the look-up has nothing to find: no second notice
+    assert len(_notices(tmp_path)) == 1
+
+
+def test_a_raise_in_the_engine_before_the_order_row_is_coded_not_sent_by_the_engine(tmp_path, monkeypatch):
+    pb = _ReadFails(equity=10_000)
+    eng, prop, _ = _through_finish(tmp_path, pb)
+
+    def boom(*a: Any, **k: Any) -> Any:
+        raise RuntimeError("gate state corrupt")
+    monkeypatch.setattr(eng.gate, "check", boom)
+    with pytest.raises(RuntimeError, match="gate state corrupt"):
+        eng.center.decide(prop.proposal_id, OWNER, True)
+    stored = eng.center.bus.get(prop.proposal_id)
+    assert stored is not None and stored.gate_refusal == ["not_sent:engine"] and not stored.placing
+    assert prop.proposal_id not in eng._orders and pb.sends == 0
+    assert len(_notices(tmp_path)) == 1
+
+
+def test_a_raise_after_the_order_row_exists_keeps_not_confirmed_never_not_sent(tmp_path):
+    """BACKLOG 84 stands once the row is written: the send may have reached the broker, so the card is NOT CONFIRMED
+    and no "not sent" notice goes out."""
+    pb = _SendRaises(equity=10_000)
+    eng, prop, _ = _through_finish(tmp_path, pb)
+    with pytest.raises(RuntimeError, match="terminal connection lost"):
+        eng.center.decide(prop.proposal_id, OWNER, True)
+    stored = eng.center.bus.get(prop.proposal_id)
+    assert stored is not None and stored.gate_refusal == ["not_confirmed"]
+    assert eng._orders[prop.proposal_id].status == "sending"
+    assert not [n for n in _notices(tmp_path) if "could not be sent" in n]
