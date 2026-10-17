@@ -881,6 +881,11 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
   clears an engine's 12% drawdown halt (the kill switch, which closes every position at market when it trips); each
   engine applies it once, and a restart does not clear the halt.
 * `/status` on Telegram shows whether entries are halted, the approval mode and how many proposals are pending.
+* **Health `kill_switch:<account>`** (WARN on Telegram 5 min after a 12% trip, FAIL after 30 min of open market):
+  the kill switch could not close every position yet; the engine re-sends each due close every tick. Check
+  `engine:<account>` for a broker or quote fault, then close the listed positions by hand in the MT5 terminal. The
+  check clears when the engine reads the whole account flat. Outside market hours it stays a WARN: the closes go out
+  when the market opens.
 
 
 ### Auto mode (entries without your click)
@@ -1282,7 +1287,17 @@ lost bridge reply:
 ### Broker reconciliation (`reconcile:<account>`)
 
 One check per account, the worse of two daily reports: the feed check (`feed_reconcile`, the engine's 1m bars against
-the broker's) and the broker ledger (`broker_ledger`). The ledger part:
+the broker's) and the broker ledger (`broker_ledger`). The feed part:
+
+* **warn** "engine bars missing for N of M broker minutes (... a coverage gap, not a price fault)": the engine was
+  stopped (a deploy, a restart, terminal login work) or not collecting for those minutes. Nothing to fix in the data;
+  `engine:<account>` and `engine_loop:<account>` show whether it runs now. It clears with the next weekday run.
+* **warn / fail** "divergence X% over N engine minutes": closes more than 2 points from the broker's M1, or engine bars
+  the broker does not have, while the engine ran (fail above 5% with at least 60 minutes compared). Compare the
+  feeds before trusting new signals; the last minute before an engine stop is not compared.
+* **fail** with "the engine stored no ticks in the window": the engine collected nothing for a whole trading day.
+
+The ledger part:
 
 * **warn**: a position differs between goldbot and the broker. `missing` means the broker has it (open, or closed by
   its deals) and goldbot has no record; `extra` means goldbot has a record the broker knows nothing of; `mismatch`
