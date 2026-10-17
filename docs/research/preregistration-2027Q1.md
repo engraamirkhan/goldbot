@@ -776,6 +776,12 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
   - **K_eff.** Groups screened = 11 families + 3 context groups + 2 new families = **about 16** (was "about 10-15").
     The adopted gate-1 case becomes about 66 (40 + H-02 ~10 + H-14 ~16): t ≈ 4.03, still 4.0 at one decimal, so the
     "Gate-1 power" table is unchanged.
+  - **Pinned in `DiscoveryConfig`: `context_groups: per_timeframe`** (in the dump and the config hash; code 6705096).
+    *(Added 2026-10-17, research director, before any H-14 count, label or outcome.)*
+  - **Group count verified.** On `f-079deacc61` the coded map gives **14 groups** (verified by
+    `tests/test_group_size_before_preregister.py`). The two new families `liquidity` and `activity` bring it to about
+    16, so "about 16" stands. The exact K_eff and `group_map_sha256` (the pool map) are written here when the
+    liquidity/activity feature version merges, before the count.
 - Threshold (amended 2026-10-17, E-2; quant review R1): `threshold_rule: tercile_inner`,
   `tercile_q: 0.6666666666666666` and `tercile_method: linear` in the pinned `DiscoveryConfig` dump (so in the config
   hash: another q is another trial). The coded verdict needs at least 1,000 taken trades for "continue", as the
