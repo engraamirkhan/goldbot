@@ -174,7 +174,7 @@ def test_the_first_partial_minute_after_a_restart_is_not_compared():
     eb = ticks_to_1m(day_ticks())
     bb = cf.broker_m1_bars(as_broker_m1(eb))
     mine = _outage(eb, [range(0, 300), range(400, len(eb))])
-    mine.loc[300, "bid_close"] += 0.5                               # row 300 of mine is eb row 400: the restart
+    mine.loc[[300], "bid_close"] += 0.5                              # row 300 of mine is eb row 400: the restart
     n = cf.reconcile(mine, bb, start=NOW - pd.Timedelta(days=1), end=NOW, tolerance=0.02)
     assert n["close_mismatch"] == 0 and n["edge_excluded"] == 2
 
