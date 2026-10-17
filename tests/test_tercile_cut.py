@@ -334,6 +334,25 @@ def test_cpcv_cut_ignores_nan_filled_rows():
     assert not taken[np.isnan(p)].any()
 
 
+def test_the_cpcv_cut_uses_the_preregistered_tercile_q(stub_model: None):
+    """Quant re-verify (non-blocking): q is part of the rule, so CPCV takes the trial's q, not a fixed 2/3."""
+    rng = np.random.default_rng(8)
+    n_groups = 4
+    groups = np.repeat(np.arange(n_groups), 100)
+    p = rng.uniform(size=len(groups))
+    y = rng.integers(0, 2, len(groups))
+    _, _, cuts = cpcv.path_selection(p, groups, n_groups, y, np.full(len(p), 0.5), "tercile_inner", tercile_q=0.75)
+    assert cuts is not None
+    for g in range(1, n_groups):
+        assert cuts[g] == np.quantile(p[groups < g], 0.75, method="linear")
+    labels, feats = _cpcv_frames()
+    res = _run_cpcv(labels, feats, threshold_rule="tercile_inner", tercile_q=0.75)
+    two_thirds = _run_cpcv(labels, feats, threshold_rule="tercile_inner")
+    assert res["tercile_q"] == 0.75 and two_thirds["tercile_q"] == 2 / 3
+    assert res["paths"][0]["fold_cuts"][1] > two_thirds["paths"][0]["fold_cuts"][1]
+    assert sum(x["n_trades"] for x in res["paths"]) < sum(x["n_trades"] for x in two_thirds["paths"])
+
+
 def test_run_cpcv_under_the_tercile_rule_records_the_rule_and_each_paths_cuts(stub_model: None):
     labels, feats = _cpcv_frames()
     res = _run_cpcv(labels, feats, threshold_rule="tercile_inner")

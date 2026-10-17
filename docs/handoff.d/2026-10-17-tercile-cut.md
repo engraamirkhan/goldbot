@@ -30,4 +30,6 @@
       runs in `discovery_pass` and in the pre-registration writer, before the budget check or any registry row.
     - `threshold_plan` also adds its four keys to default-rule pre-registration plans. Plans are not hashed, so this
       is harmless.
-  - Reviews needed: quant re-review of round 1.
+  - Quant re-verify APPROVE on 48226f5. Rebased onto BACKLOG 76 (day-summed DSR): discovery's walk-forward passes
+    `timeframe=None` with the threshold rule. TRACEABILITY row renumbered M47 to M48. Non-blocking quant item done:
+    `cpcv.path_selection` / `run_cpcv` take the trial's `tercile_q`, not a fixed 2/3.

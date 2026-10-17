@@ -208,7 +208,9 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
       runs in `discovery_pass` and in the pre-registration writer, before the budget check or any registry row.
     - `threshold_plan` also adds its four keys to default-rule pre-registration plans. Plans are not hashed, so this
       is harmless.
-  - Reviews needed: quant re-review of round 1.
+  - Quant re-verify APPROVE on 48226f5. Rebased onto BACKLOG 76 (day-summed DSR): discovery's walk-forward passes
+    `timeframe=None` with the threshold rule. TRACEABILITY row renumbered M47 to M48. Non-blocking quant item done:
+    `cpcv.path_selection` / `run_cpcv` take the trial's `tercile_q`, not a fixed 2/3.
 - The approval window no longer trusts the wall clock alone (2026-10-16, BACKLOG 60; needs trading-safety review).
   `Proposal.expired` was `time.time() > created + window_s`, so a backward clock step stretched the owner's 90 s
   window and a pending file stamped in the future (a restored backup, a bad write) stayed approvable. Now
