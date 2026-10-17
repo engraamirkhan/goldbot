@@ -1912,18 +1912,24 @@ export interface components {
          *     stop that reads after either heading ("Refused by the broker." / "Refused by the MT5 box."); None for the
          *     fallback, which names the broker's `code` instead. `next_step` closes the owner notice. `nothing_sent` False only
          *     for the paper broker's duplicate: its first send did go out, so no surface may say "Nothing was sent"
-         *     (trading-safety review LOW).
+         *     (trading-safety review LOW). `not_sent` (BACKLOG 85): the order never left the engine; `reason` then reads after
+         *     "could not be sent: " and `by` says where it failed.
          */
         NotPlaced: {
             /**
              * By
              * @enum {string}
              */
-            by: "broker" | "mt5_box";
+            by: "broker" | "mt5_box" | "engine";
             /** Code */
             code?: number | null;
             /** Next Step */
             next_step: string;
+            /**
+             * Not Sent
+             * @default false
+             */
+            not_sent: boolean;
             /**
              * Nothing Sent
              * @default true

@@ -52,7 +52,8 @@ from goldbot.execution.not_confirmed import (
     NoticeKind,
     notice_text,
 )
-from goldbot.execution.not_placed import refusal_code
+from goldbot.execution.not_placed import not_placed, not_sent_code, refusal_code
+from goldbot.execution.not_placed import notice_text as not_placed_notice
 from goldbot.telegram.entry_text import account_name
 
 if TYPE_CHECKING:
@@ -211,6 +212,31 @@ def archive_pending(eng: Engine, p: Proposal) -> None:
     p.not_confirmed = Confirmation(symbol=eng.cfg.symbol)
     if eng.center.bus is not None:
         eng.center.bus.archive(p)
+
+
+def archive_not_sent(eng: Engine, p: Proposal, exc: BaseException) -> None:
+    """BACKLOG 85: `_on_decision` raised. Before `_execute` wrote the order row nothing can have reached the broker,
+    so "a raise before the row exists is archived as a "not sent" refusal, never "approved and sent"": the refusal
+    code `not_sent:<by>` (`not_placed.not_sent_code`), `placing` cleared, the card archived and one owner notice, then
+    the caller re-raises. With the row written the send may have gone out: nothing here, and `_finish` archives it
+    NOT CONFIRMED (BACKLOG 84). A card the engine already answered keeps its answer. Best effort: a failure here is
+    logged and never hides the original error."""
+    if p.outcome is None or p.outcome.value != "APPROVED" or p.gate_refusal is not None or p.proposal_id in eng._orders:
+        return
+    code = not_sent_code(exc)
+    p.gate_refusal, p.placing = [code], False
+    eng.decisions.append({"ts": time.time(), "agent": p.agent_id, "action": "not_sent", "proposal": p.proposal_id,
+                          "error": type(exc).__name__})
+    log.warning("approval %s not sent: %s before the order row (%s)", p.proposal_id, code, type(exc).__name__)
+    bus, np = eng.center.bus, not_placed(code)
+    if bus is None or np is None:
+        return
+    try:
+        bus.archive(p)
+        bus.notify_owner(not_placed_notice(np, side=p.side, lots=p.lots, symbol=eng.cfg.symbol,
+                                           account=account_name(eng.cfg.account_id)))
+    except Exception as exc2:           # noqa: BLE001 - the original error is re-raised by the caller
+        log.warning("not-sent card or notice not queued (%s)", type(exc2).__name__)
 
 
 def adopted(eng: Engine, rec: SentOrder, p: Position) -> bool:

@@ -6,7 +6,9 @@ from drifting, the words live in one Python table", used by `bot.outcome_text`, 
 
 The engine stores a refusal code in `Proposal.gate_refusal` (never shown to the owner): `bridge_notional_ceiling` /
 `bridge_notional_ceiling_unreadable` (the MT5 box's notional ceiling, BACKLOG 66), `bridge_stale_order` (the MT5 box
-dropped an order that aged past ORDER_MAX_AGE_S) and `broker_refused:<retcode>` for any other definite reject.
+dropped an order that aged past ORDER_MAX_AGE_S), `broker_refused:<retcode>` for any other definite reject and
+`not_sent:<by>` (BACKLOG 85) when the approval path raised before `_execute` wrote the order row: nothing left the
+engine, so "a raise before the row exists is archived as a "not sent" refusal, never "approved and sent"".
 "Bridge prefixes are tested before the retcode, because the bridge's own refusals also use 10006." 10027 depends on
 the broker: on a terminal it is Algo Trading switched off, on the paper broker a duplicate send, so the paper broker's
 is stored `broker_refused:10027:paper`. "Never shown: the proposal id, the bridge or broker message, a host, a login."
@@ -18,18 +20,25 @@ import re
 from typing import Literal
 
 from goldbot.base import FrozenRecord
-from goldbot.execution.bridge import CEILING_REFUSAL, ORDER_MAX_AGE_S, STALE_REFUSAL, UNREADABLE_REFUSAL
+from goldbot.execution.bridge import (
+    CEILING_REFUSAL,
+    ORDER_MAX_AGE_S,
+    STALE_REFUSAL,
+    UNREADABLE_REFUSAL,
+    BridgeError,
+)
 from goldbot.execution.broker import OrderResult
 from goldbot.execution.not_confirmed import NOT_CONFIRMED
 from goldbot.execution.not_confirmed import card_text as not_confirmed_card
 
-By = Literal["broker", "mt5_box"]
+By = Literal["broker", "mt5_box", "engine"]
 BROKER_REFUSED = "broker_refused"
 PAPER_SUFFIX = ":paper"                 # the paper broker's 10027 (a duplicate), not a terminal's (Algo Trading off)
 CEILING_UNREADABLE = f"{CEILING_REFUSAL}_unreadable"
 CEILING_CODES = (CEILING_REFUSAL, CEILING_UNREADABLE)
 _BROKER_CODE = re.compile(rf"{BROKER_REFUSED}:(\d+)({PAPER_SUFFIX})?")
-BY_PHRASE: dict[str, str] = {"broker": "the broker", "mt5_box": "the MT5 box"}
+BY_PHRASE: dict[str, str] = {"broker": "the broker", "mt5_box": "the MT5 box", "engine": "the engine"}
+NOT_SENT = "not_sent"
 # BACKLOG 83: an approved card's cause, counted apart in the digest and the performance report ("opened": a
 # not-confirmed card the broker later showed opened, an opened trade, in no refused count)
 ApprovalCause = Literal["risk_check", "not_placed", "not_confirmed", "opened"]
@@ -44,12 +53,14 @@ class NotPlaced(FrozenRecord):
     stop that reads after either heading ("Refused by the broker." / "Refused by the MT5 box."); None for the
     fallback, which names the broker's `code` instead. `next_step` closes the owner notice. `nothing_sent` False only
     for the paper broker's duplicate: its first send did go out, so no surface may say "Nothing was sent"
-    (trading-safety review LOW)."""
+    (trading-safety review LOW). `not_sent` (BACKLOG 85): the order never left the engine; `reason` then reads after
+    "could not be sent: " and `by` says where it failed."""
     by: By
     reason: str | None = None
     code: int | None = None             # the retcode, set for the fallback only
     next_step: str
     nothing_sent: bool = True
+    not_sent: bool = False
 
 
 _ONE_OFF = "Nothing to do if it's a one-off."
@@ -95,6 +106,13 @@ _MT5_BOX: dict[str, tuple[str, str]] = {
                       "over it", _CEILING_STEP),
     CEILING_UNREADABLE: ("it couldn't read the account figures it checks, so it refused to be safe", _CEILING_STEP),
 }
+# BACKLOG 85: the approval path raised before the order row existed: (reason, next_step) by where it failed
+_NOT_SENT: dict[str, tuple[str, str]] = {
+    "mt5_box": ("the MT5 box couldn't be reached",
+                f"{_ONE_OFF} If it repeats, check the MT5 box on the Health tab."),
+    "engine": ("the engine hit an error before sending it",
+               f"{_ONE_OFF} If it repeats, ask Claude to check the engine log."),
+}
 _CEILING_CARD = {
     CEILING_REFUSAL: ("🛑 NOT PLACED: approved, but the MT5 box's safety limit refused it (open gold would be worth "
                       "more than 6× equity). Nothing was sent."),
@@ -118,6 +136,12 @@ def refusal_code(res: OrderResult, *, paper: bool, definite: frozenset[int]) -> 
     return f"{BROKER_REFUSED}:{res.retcode}{PAPER_SUFFIX if paper and res.retcode == 10027 else ''}"
 
 
+def not_sent_code(exc: BaseException) -> str:
+    """BACKLOG 85: the refusal code for an approval that raised before its order row existed. A bridge error or a
+    connection failure (`BridgeUnavailable` is a ConnectionError) is the MT5 box's; anything else is the engine's."""
+    return f"{NOT_SENT}:{'mt5_box' if isinstance(exc, BridgeError | OSError) else 'engine'}"
+
+
 def broker_code(code: str) -> int | None:
     """The retcode in a `broker_refused:<retcode>` code; None for any other code."""
     m = _BROKER_CODE.fullmatch(code)
@@ -126,6 +150,11 @@ def broker_code(code: str) -> int | None:
 
 def not_placed(code: str) -> NotPlaced | None:
     """The owner's words for a refusal code; None when the code is not one of this table's (a RiskGate refusal)."""
+    kind, _, where = code.partition(":")
+    if kind == NOT_SENT and where in _NOT_SENT:
+        reason, step = _NOT_SENT[where]
+        return NotPlaced(by="mt5_box" if where == "mt5_box" else "engine", reason=reason, next_step=step,
+                         not_sent=True)
     if code in _MT5_BOX:
         reason, step = _MT5_BOX[code]
         return NotPlaced(by="mt5_box", reason=reason, next_step=step)
@@ -181,6 +210,8 @@ def card_text(code: str) -> str | None:
     if np is None:
         return None
     tail = " Nothing was sent." if np.nothing_sent else ""
+    if np.not_sent:
+        return f"🛑 NOT PLACED: approved, but the order could not be sent: {np.reason}.{tail}"
     return f"🛑 NOT PLACED: approved, but {BY_PHRASE[np.by]} refused it{_cause(np)}.{tail}"
 
 
@@ -188,6 +219,9 @@ def notice_text(np: NotPlaced, *, side: int, lots: float, symbol: str, account: 
     """The owner notice (a separate Telegram message): the trade, the account, the reason and the next step. `account`
     is already masked (`entry_text.account_name`: a login never reaches the chat). Not used for the ceiling codes,
     whose shipped notice the engine words itself (`_note_bridge_refusal`)."""
-    return (f"Order not placed: {BY_PHRASE[np.by]} refused {'LONG' if side > 0 else 'SHORT'} {lots:g} lots {symbol} "
-            f"on {account}{_cause(np)}. {'Nothing was sent; open' if np.nothing_sent else 'Open'} trades keep their "
+    trade = f"{'LONG' if side > 0 else 'SHORT'} {lots:g} lots {symbol} on {account}"
+    if np.not_sent:
+        return (f"Order not placed: {trade} could not be sent: {np.reason}. Nothing was sent; open trades keep their "
+                f"stops. {np.next_step}")
+    return (f"Order not placed: {BY_PHRASE[np.by]} refused {trade}{_cause(np)}. {'Nothing was sent; open' if np.nothing_sent else 'Open'} trades keep their "
             f"stops. {np.next_step}")
