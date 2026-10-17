@@ -152,7 +152,8 @@ function Outcome({ p, state }: { p: AnyProposal; state: CardState }) {
           return (
             <p className="outcome bad" role="status">
               {np.reason != null
-                ? <><strong>{heading}.</strong> {capitalise(np.reason)}; nothing was sent.</>
+                // nothing_sent false: the paper broker's duplicate, whose first send went out (trading-safety LOW)
+                ? <><strong>{heading}.</strong> {capitalise(np.reason)}{np.nothing_sent ? "; nothing was sent." : "."}</>
                 : <><strong>{heading}</strong> (code {np.code}); nothing was sent.</>}
               {tail}
             </p>

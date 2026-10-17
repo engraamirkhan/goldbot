@@ -78,7 +78,7 @@ Bridge prefixes are tested before the retcode, because the bridge's own refusals
 | `broker_refused:10024` | it was too busy (too many requests at once) | Nothing to do if it's a one-off. |
 | `broker_refused:10026` | automatic trading is switched off for this account at the broker | Contact the broker: automatic trading is off at their end. |
 | `broker_refused:10027` (live or demo terminal) | Algo Trading is switched off in the MT5 terminal | Turn on Algo Trading in the MT5 terminal. |
-| `broker_refused:10027` (paper broker) | it had already been sent once | Nothing to do: the first send stands. |
+| `broker_refused:10027:paper` (paper broker) | it was already sent; this repeat was refused. Its first send went out, so no surface says "Nothing was sent" (trading-safety review LOW): card `🛑 NOT PLACED: approved, but the broker refused it: it was already sent; this repeat was refused.`; dashboard "Refused by the broker. It was already sent; this repeat was refused."; notice "…: it was already sent; this repeat was refused. Open trades keep their stops. Nothing to do: the first send stands." | Nothing to do: the first send stands. |
 | `broker_refused:10033`, `:10034`, `:10040` | the account's limit on open trades or total size was reached | Check open trades on the Overview. |
 | `broker_refused:10042` | only buys are allowed in this symbol right now | Nothing to do: it's the broker's restriction. |
 | `broker_refused:10043` | only sells are allowed in this symbol right now | Nothing to do: it's the broker's restriction. |

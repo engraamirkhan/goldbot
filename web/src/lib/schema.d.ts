@@ -1547,7 +1547,9 @@ export interface components {
          * NotPlaced
          * @description Why an approved order was not placed, in the owner's words. `reason` is a lower-case clause with no final full
          *     stop that reads after either heading ("Refused by the broker." / "Refused by the MT5 box."); None for the
-         *     fallback, which names the broker's `code` instead. `next_step` closes the owner notice.
+         *     fallback, which names the broker's `code` instead. `next_step` closes the owner notice. `nothing_sent` False only
+         *     for the paper broker's duplicate: its first send did go out, so no surface may say "Nothing was sent"
+         *     (trading-safety review LOW).
          */
         NotPlaced: {
             /**
@@ -1559,6 +1561,11 @@ export interface components {
             code?: number | null;
             /** Next Step */
             next_step: string;
+            /**
+             * Nothing Sent
+             * @default true
+             */
+            nothing_sent: boolean;
             /** Reason */
             reason?: string | null;
         };

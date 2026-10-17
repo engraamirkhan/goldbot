@@ -648,7 +648,7 @@ def test_a_broker_10027_on_a_demo_terminal_means_algo_trading_off_and_on_paper_a
     [demo_notice] = _notices(tmp_path / "demo")
     [paper_notice] = _notices(tmp_path / "paper")
     assert demo_notice.endswith("Turn on Algo Trading in the MT5 terminal.")
-    assert paper_notice.endswith("Nothing to do: the first send stands.")
+    assert paper_notice.endswith("Nothing to do: the first send stands.") and "Nothing was sent" not in paper_notice
 
 
 @pytest.mark.parametrize("retcode", [10008, 10010, 10012, -1])

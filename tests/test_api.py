@@ -310,9 +310,10 @@ def test_a_card_the_broker_or_the_mt5_box_refused_carries_the_worded_not_placed_
     rows = {r["proposal_id"]: r for r in c.get("/api/proposals/recent", headers=_owner_headers(c, app)).json()}
     assert rows["margin"]["status"] == "refused" and rows["margin"]["not_placed"] == {
         "by": "broker", "reason": "there wasn't enough free margin", "code": None,
-        "next_step": "Check free margin on the Overview before approving the next trade."}
+        "next_step": "Check free margin on the Overview before approving the next trade.", "nothing_sent": True}
     assert rows["generic"]["not_placed"] == {"by": "broker", "reason": None, "code": 10006,
-                                             "next_step": "If it repeats, ask Claude to check (broker code 10006)."}
+                                             "next_step": "If it repeats, ask Claude to check (broker code 10006).",
+                                             "nothing_sent": True}
     assert rows["stale"]["not_placed"]["by"] == "mt5_box" and rows["stale"]["not_placed"]["reason"].startswith(
         "it took more than 10 s to check the order")
     assert rows["ceiling"]["not_placed"]["reason"] == ("its safety limit stops open gold worth more than 6× equity, "

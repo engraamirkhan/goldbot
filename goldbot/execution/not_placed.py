@@ -33,11 +33,14 @@ BY_PHRASE: dict[str, str] = {"broker": "the broker", "mt5_box": "the MT5 box"}
 class NotPlaced(FrozenRecord):
     """Why an approved order was not placed, in the owner's words. `reason` is a lower-case clause with no final full
     stop that reads after either heading ("Refused by the broker." / "Refused by the MT5 box."); None for the
-    fallback, which names the broker's `code` instead. `next_step` closes the owner notice."""
+    fallback, which names the broker's `code` instead. `next_step` closes the owner notice. `nothing_sent` False only
+    for the paper broker's duplicate: its first send did go out, so no surface may say "Nothing was sent"
+    (trading-safety review LOW)."""
     by: By
     reason: str | None = None
     code: int | None = None             # the retcode, set for the fallback only
     next_step: str
+    nothing_sent: bool = True
 
 
 _ONE_OFF = "Nothing to do if it's a one-off."
@@ -72,7 +75,7 @@ _BROKER: dict[int, tuple[str, str]] = {
     10046: ("the account doesn't allow opposite trades at the same time (no hedging)",
             "Check open trades on the Overview."),
 }
-_PAPER_DUPLICATE = ("it had already been sent once", "Nothing to do: the first send stands.")
+_PAPER_DUPLICATE = ("it was already sent; this repeat was refused", "Nothing to do: the first send stands.")
 _CEILING_STEP = "If this repeats, the trade sizing and the MT5 box's limit disagree: ask Claude to check."
 _MT5_BOX: dict[str, tuple[str, str]] = {
     STALE_REFUSAL: (f"it took more than {ORDER_MAX_AGE_S:g} s to check the order, so it dropped it rather than trade "
@@ -95,9 +98,9 @@ def refusal_code(res: OrderResult, *, paper: bool, definite: frozenset[int]) -> 
     """The refusal code for an order result, or None when it is not a definite reject (a fill or an ambiguous result:
     the card stays approved). `definite` is the engine's DEFINITE_REJECT_RETCODES. The bridge's message prefixes are
     tested before the retcode: its own refusals use 10006 too, and a broker's 10006 must never read as the box's."""
-    if res.ok and res.position_id is not None:
+    if res.ok:                          # a fill, or accepted without a position yet: never "not placed"
         return None
-    if res.message.startswith(CEILING_REFUSAL):
+    if not res.ok and res.message.startswith(CEILING_REFUSAL):     # as runner.bridge_refused
         return CEILING_UNREADABLE if res.message.startswith(UNREADABLE_REFUSAL) else CEILING_REFUSAL
     if res.retcode not in definite:     # never claim "not placed" when the order may exist
         return None
@@ -120,7 +123,9 @@ def not_placed(code: str) -> NotPlaced | None:
     retcode = broker_code(code)
     if retcode is None:
         return None
-    row = _PAPER_DUPLICATE if code.endswith(PAPER_SUFFIX) and retcode == 10027 else _BROKER.get(retcode)
+    if code.endswith(PAPER_SUFFIX) and retcode == 10027:
+        return NotPlaced(by="broker", reason=_PAPER_DUPLICATE[0], next_step=_PAPER_DUPLICATE[1], nothing_sent=False)
+    row = _BROKER.get(retcode)
     if row is None:
         return NotPlaced(by="broker", code=retcode,
                          next_step=f"If it repeats, ask Claude to check (broker code {retcode}).")
@@ -147,7 +152,8 @@ def card_text(code: str) -> str | None:
     np = not_placed(code)
     if np is None:
         return None
-    return f"🛑 NOT PLACED: approved, but {BY_PHRASE[np.by]} refused it{_cause(np)}. Nothing was sent."
+    tail = " Nothing was sent." if np.nothing_sent else ""
+    return f"🛑 NOT PLACED: approved, but {BY_PHRASE[np.by]} refused it{_cause(np)}.{tail}"
 
 
 def notice_text(np: NotPlaced, *, side: int, lots: float, symbol: str, account: str) -> str:
@@ -155,5 +161,5 @@ def notice_text(np: NotPlaced, *, side: int, lots: float, symbol: str, account: 
     is already masked (`entry_text.account_name`: a login never reaches the chat). Not used for the ceiling codes,
     whose shipped notice the engine words itself (`_note_bridge_refusal`)."""
     return (f"Order not placed: {BY_PHRASE[np.by]} refused {'LONG' if side > 0 else 'SHORT'} {lots:g} lots {symbol} "
-            f"on {account}{_cause(np)}. Nothing was sent; open trades keep their stops. "
-            f"{np.next_step}")
+            f"on {account}{_cause(np)}. {'Nothing was sent; open' if np.nothing_sent else 'Open'} trades keep their "
+            f"stops. {np.next_step}")

@@ -111,7 +111,6 @@ def bridge_refused(res: OrderResult | None) -> bool:
     return res is not None and not res.ok and res.message.startswith(CEILING_REFUSAL)
 
 
-
 # review MEDIUM-2 (d): a pending_orders row still `sending` this long after its send is resolved in-process
 SENDING_RESOLVE_S = 60.0
 # design (D10): a bar close is detected by clock, close time plus this grace, not by the next bar's first tick

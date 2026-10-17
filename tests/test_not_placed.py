@@ -71,14 +71,36 @@ def test_only_a_definite_reject_gets_a_refusal_code():
     assert _code(filled) is None
 
 
+def test_a_ceiling_prefix_on_an_ok_result_is_not_a_refusal():
+    ok = OrderResult(ok=True, retcode=10006, order_id=1, position_id=None, filled_lots=0.0, price=None,
+                     message="bridge_notional_ceiling: notional 7500.00 USD > 6 x equity 1000.00")
+    assert _code(ok) is None                                   # matches runner.bridge_refused: `not res.ok` first
+
+
 def test_the_paper_brokers_10027_is_a_duplicate_and_a_terminals_is_algo_trading_off():
     assert _code(_res(10027), paper=True) == "broker_refused:10027:paper"
     assert _code(_res(10019), paper=True) == "broker_refused:10019"         # only 10027 depends on the kind
     assert not_placed("broker_refused:10027:paper") == NotPlaced(
-        by="broker", reason="it had already been sent once", next_step="Nothing to do: the first send stands.")
+        by="broker", reason="it was already sent; this repeat was refused", nothing_sent=False,
+        next_step="Nothing to do: the first send stands.")
     assert not_placed("broker_refused:10027") == NotPlaced(
         by="broker", reason="Algo Trading is switched off in the MT5 terminal",
         next_step="Turn on Algo Trading in the MT5 terminal.")
+
+
+def test_the_paper_duplicate_never_claims_nothing_was_sent_on_the_card_or_the_notice():
+    """Trading-safety review LOW: the first send of a duplicate did go out, so "Nothing was sent" would be false."""
+    code = "broker_refused:10027:paper"
+    np = not_placed(code)
+    assert np is not None
+    assert card_text(code) == ("🛑 NOT PLACED: approved, but the broker refused it: it was already sent; this repeat "
+                               "was refused.")
+    assert notice_text(np, side=1, lots=0.37, symbol="XAUUSD", account="icm-demo") == (
+        "Order not placed: the broker refused LONG 0.37 lots XAUUSD on icm-demo: it was already sent; this repeat was "
+        "refused. Open trades keep their stops. Nothing to do: the first send stands.")
+    for other in _codes():
+        if other != code:
+            assert (n := not_placed(other)) is not None and n.nothing_sent, other
 
 
 def test_broker_code_reads_the_retcode_of_any_broker_refusal_and_nothing_else():

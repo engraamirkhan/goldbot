@@ -2537,7 +2537,7 @@
    },
    "NotPlaced": {
     "additionalProperties": false,
-    "description": "Why an approved order was not placed, in the owner's words. `reason` is a lower-case clause with no final full\nstop that reads after either heading (\"Refused by the broker.\" / \"Refused by the MT5 box.\"); None for the\nfallback, which names the broker's `code` instead. `next_step` closes the owner notice.",
+    "description": "Why an approved order was not placed, in the owner's words. `reason` is a lower-case clause with no final full\nstop that reads after either heading (\"Refused by the broker.\" / \"Refused by the MT5 box.\"); None for the\nfallback, which names the broker's `code` instead. `next_step` closes the owner notice. `nothing_sent` False only\nfor the paper broker's duplicate: its first send did go out, so no surface may say \"Nothing was sent\"\n(trading-safety review LOW).",
     "properties": {
      "by": {
       "enum": [
@@ -2561,6 +2561,11 @@
      "next_step": {
       "title": "Next Step",
       "type": "string"
+     },
+     "nothing_sent": {
+      "default": true,
+      "title": "Nothing Sent",
+      "type": "boolean"
      },
      "reason": {
       "anyOf": [
