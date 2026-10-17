@@ -4,8 +4,12 @@ check that the committed file matches uv.lock, and that every pip install in the
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import re
+import subprocess
 import sys
+from importlib.metadata import packages_distributions
 from pathlib import Path
 
 import pytest
@@ -144,3 +148,55 @@ def test_the_header_names_the_absolute_interpreter_not_a_bare_wine_python():
     assert not any(re.search(r"\bwine\s+python\s+-m", x) for x in header)
     assert any("wine $WINPY -m pip install --require-hashes" in x for x in header)
     assert not any(x.endswith("\\") for x in header), "a trailing backslash would read as a continuation"
+
+
+# ------------------------------------------------------------------------------- SRE F1: the bridge's real import set
+# the import name of each requirement whose dist name does not map by `-` -> `_` (dist names are lower-case in the file)
+_IMPORT_NAME = {"pyyaml": "yaml", "python-dateutil": "dateutil", "pywin32-ctypes": "win32ctypes",
+                "metatrader5": "MetaTrader5", "jaraco-classes": "jaraco", "jaraco-context": "jaraco",
+                "jaraco-functools": "jaraco", "backports-tarfile": "backports"}
+# loaded by the import but no requirement: pyarrow imports cloudpickle when it happens to be installed (optional; its
+# absence on the box is fine), Cython's runtime modules, and CPython's per-platform sysconfig data
+_ALLOWED = {"cloudpickle", "cython_runtime", "_cyutility"}
+_ALLOWED_RE = re.compile(r"_cython_\d+_\d+(_\d+)?|_sysconfigdata_\w*")
+_PROBE = """
+import importlib.util, json, sys
+before = set(sys.modules)
+import goldbot.execution.bridge, goldbot.execution.mt5_adapter, goldbot.ops.accounts, goldbot.ops.bridge_compat
+if importlib.util.find_spec("MetaTrader5") is not None:      # Windows only: mt5_adapter imports it lazily
+    import MetaTrader5
+new = {m.split(".")[0] for m in set(sys.modules) - before}
+print(json.dumps(sorted(n for n in new if n not in sys.stdlib_module_names and n != "goldbot")))
+"""
+
+
+def _import_name(dist: str) -> str:
+    return _IMPORT_NAME.get(dist, dist.replace("-", "_"))
+
+
+def test_the_bridge_imports_only_what_its_requirements_file_installs():
+    """SRE F1: the Wine box installs mt5-bridge-requirements.txt with --no-deps, so a module the bridge imports that is
+    not in it fails only on the box, at start. A fresh interpreter imports what the bridge process runs
+    (goldbot.execution.bridge, goldbot.execution.mt5_adapter, goldbot.ops.accounts, goldbot.ops.bridge_compat), and
+    every new top-level non-stdlib module must be a requirement's import name or allow-listed. MetaTrader5 is
+    Windows-only: imported too when the test host has it, skipped otherwise (its own imports are then not checked
+    here; the bridge smoke on the box covers them)."""
+    out = subprocess.run([sys.executable, "-c", _PROBE], cwd=REPO, capture_output=True, text=True, check=True,
+                         env={**os.environ, "PYTHONPATH": str(REPO)})
+    loaded = set(json.loads(out.stdout.strip().splitlines()[-1]))
+    allowed = {_import_name(d) for d in _pins(br.OUT.read_text(encoding="utf-8"))} | _ALLOWED
+    missing = sorted(n for n in loaded - allowed if not _ALLOWED_RE.fullmatch(n))
+    assert missing == [], f"imported by the bridge but not installed on the box: {missing} (add to BRIDGE_ROOTS)"
+    assert {"pandas", "pydantic", "requests", "yaml"} <= loaded           # the probe really imported the bridge
+
+
+def test_the_import_name_map_matches_the_installed_distributions():
+    """The dist -> import name map is checked against the metadata of every requirement installed on the test host
+    (MetaTrader5 and pywin32-ctypes are Windows-only and skipped when absent)."""
+    by_dist: dict[str, set[str]] = {}
+    for mod, dists in packages_distributions().items():
+        for d in dists:
+            by_dist.setdefault(br._norm(d), set()).add(mod)
+    checked = [d for d in _pins(br.OUT.read_text(encoding="utf-8")) if d in by_dist]
+    assert {"pyyaml", "python-dateutil", "pandas"} <= set(checked)
+    assert {d: sorted(by_dist[d]) for d in checked if _import_name(d) not in by_dist[d]} == {}
