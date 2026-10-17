@@ -21,6 +21,19 @@ def stepping_totp_clock(monkeypatch):
     monkeypatch.setattr(auth, "_totp_now", now)
 
 
+@pytest.fixture(autouse=True)
+def email_code_keyring(monkeypatch) -> dict[str, str]:
+    """The email-code HMAC key (goldbot/api/auth.py `email_code_key`) in a dict instead of the OS keyring, and the
+    in-process key cache emptied: no test ever writes `email-code-hmac-key` to the developer's keyring or to
+    state/.secrets.json. A test reads or edits the dict to see or break the stored key."""
+    import goldbot.api.auth as auth
+    store: dict[str, str] = {}
+    monkeypatch.setattr(auth, "_secret_get", store.get)
+    monkeypatch.setattr(auth, "_secret_set", store.__setitem__)
+    monkeypatch.setattr(auth, "_KEY_CACHE", {})
+    return store
+
+
 @pytest.fixture
 def real_totp_clock(monkeypatch):
     """The wall clock for TOTP: two codes made within the same 30 s are the same code."""
