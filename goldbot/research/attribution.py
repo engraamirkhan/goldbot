@@ -141,6 +141,9 @@ class Cell(FrozenRecord):
     t_bar: float | None                   # the bar this cell applies: 2.0, or the row's Bonferroni bar (ADR 0022)
     ci_adj: tuple[float, float] | None    # mean +- t_bar se; None for a noise cell or one without a se
     verdict_adj: str                      # signed if and only if ci_adj excludes 0
+    # the day-clustered se itself (ADR 0022), so a reader shows "the smallest average this row can tell from luck"
+    # (t_bar x se) without recomputing it; None without a se, and on reports written before the field
+    se: float | None = None
 
 
 class ExitCell(Cell):
@@ -320,7 +323,7 @@ def cell_stats(gross: np.ndarray, net: np.ndarray, *, min_trades: int, days: np.
     return Cell(n=n, mean_r_gross=_r(float(g.mean())), mean_r_net=_r(mean), std_r_net=_r(std), t_stat=_r(t),
                 ci95_net=ci, hit_rate=_r(float((x > 0).mean())),
                 profit_factor=_r(wins / losses) if losses > 0 else None, verdict=_verdict(n, mean, t, se, min_trades),
-                t_bar=_r(bar), ci_adj=ci_adj, verdict_adj=_range_verdict(n, ci_adj, min_trades))
+                t_bar=_r(bar), ci_adj=ci_adj, verdict_adj=_range_verdict(n, ci_adj, min_trades), se=_r(se))
 
 
 def _cell(rows: list[TradeRow], min_trades: int, m: int | None = None) -> Cell:

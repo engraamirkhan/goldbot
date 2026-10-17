@@ -55,6 +55,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/attribution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Attribution */
+        get: operations["attribution_api_attribution_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/accept": {
         parameters: {
             query?: never;
@@ -369,6 +386,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/gates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Gates */
+        get: operations["gates_api_gates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/halt": {
         parameters: {
             query?: never;
@@ -535,6 +569,23 @@ export interface paths {
         };
         /** Status */
         get: operations["status_api_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/trades/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Trades Summary */
+        get: operations["trades_summary_api_trades_summary_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -807,6 +858,61 @@ export interface components {
             /** Turns */
             turns: number;
         };
+        /** AttributionReportView */
+        AttributionReportView: {
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
+            /** Breakdowns */
+            breakdowns: {
+                [key: string]: {
+                    [key: string]: components["schemas"]["ResultCell"];
+                };
+            };
+            challengers: components["schemas"]["ResultCell"];
+            costs: components["schemas"]["ResultCosts"];
+            /** Exits */
+            exits: {
+                [key: string]: components["schemas"]["ResultExitCell"];
+            };
+            /** Live */
+            live: {
+                [key: string]: components["schemas"]["ResultLiveFills"];
+            };
+            /** M */
+            m: number;
+            /** Min Trades */
+            min_trades: number;
+            /** N Candidates */
+            n_candidates: number;
+            /** N Taken */
+            n_taken: number;
+            /** Notes */
+            notes: string[];
+            overall: components["schemas"]["ResultCell"];
+            /** T Bar */
+            t_bar: number;
+            /**
+             * Window From
+             * Format: date-time
+             */
+            window_from: string;
+        };
+        /**
+         * AttributionView
+         * @description state/attribution.json without its trade rows and calibration (calibration stays on Health).
+         */
+        AttributionView: {
+            /** Cant Check */
+            cant_check?: string | null;
+            /** Next Run Utc */
+            next_run_utc: string | null;
+            report: components["schemas"]["AttributionReportView"] | null;
+            /** Stale */
+            stale: boolean;
+        };
         /** AuthState */
         AuthState: {
             /**
@@ -963,6 +1069,15 @@ export interface components {
             trades_per_week?: number | null;
             /** Version */
             version: string;
+        };
+        /** DayNet */
+        DayNet: {
+            /** Day */
+            day: string;
+            /** N */
+            n: number;
+            /** Net */
+            net: number;
         };
         /**
          * DecidedProposal
@@ -1243,6 +1358,83 @@ export interface components {
             /** Passed */
             passed: boolean;
         };
+        /** GateItemView */
+        GateItemView: {
+            /** Ci95 */
+            ci95?: [
+                number,
+                number
+            ] | null;
+            /**
+             * Ci95 Basis
+             * @default per-trade iid, return
+             */
+            ci95_basis: string;
+            /** Earliest Utc */
+            earliest_utc?: string | null;
+            /** Evidence */
+            evidence: string;
+            /** Met */
+            met: boolean;
+            /** Name */
+            name: string;
+            /** Need */
+            need: string;
+            progress?: components["schemas"]["GateProgressView"] | null;
+            /** Proposed */
+            proposed: boolean;
+            /** Required */
+            required: boolean;
+        };
+        /** GateProgressView */
+        GateProgressView: {
+            /** Target */
+            target: number;
+            /**
+             * Unit
+             * @enum {string}
+             */
+            unit: "trades" | "days";
+            /** Value */
+            value: number;
+        };
+        /** GateView */
+        GateView: {
+            /** Gate */
+            gate: string;
+            /** Items */
+            items: components["schemas"]["GateItemView"][];
+            /** Met */
+            met: boolean;
+            /**
+             * Met On Proposed
+             * @default false
+             */
+            met_on_proposed: boolean;
+            /** Recorded */
+            recorded: boolean;
+            /** Recorded Utc */
+            recorded_utc?: string | null;
+        };
+        /** GatesView */
+        GatesView: {
+            /** Cant Check */
+            cant_check?: string | null;
+            /** Gates */
+            gates: components["schemas"]["GateView"][];
+            /**
+             * Generated Utc
+             * Format: date-time
+             */
+            generated_utc: string;
+            /** Phase */
+            phase?: number | null;
+            /** Proposed */
+            proposed: components["schemas"]["ProposedThreshold"][];
+            /** Proposed Count */
+            proposed_count: number;
+            stop_rule: components["schemas"]["StopRuleView"];
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -1354,6 +1546,15 @@ export interface components {
             rows: string[][];
             /** Title */
             title: string;
+        };
+        /** ImputedView */
+        ImputedView: {
+            /** Charged Usd */
+            charged_usd: number;
+            /** N */
+            n: number;
+            /** Unpriced */
+            unpriced: number;
         };
         /** InviteRequest */
         InviteRequest: {
@@ -1681,6 +1882,13 @@ export interface components {
             /** Tradingview Url */
             tradingview_url?: string | null;
         };
+        /** ProposedThreshold */
+        ProposedThreshold: {
+            /** Name */
+            name: string;
+            /** Value */
+            value: number;
+        };
         /**
          * PsiHeatmap
          * @description PSI of the top features (rows) per agent (columns); null where the agent does not use the feature.
@@ -1905,6 +2113,152 @@ export interface components {
              */
             token: string;
         };
+        /**
+         * ResultCell
+         * @description One attribution cell (research/attribution.py Cell, ADR 0022). Rows are judged on `verdict_adj` at the row's
+         *     own bar `t_bar`; "by construction" marks a cell whose sign is set by its definition (exit target / stop).
+         */
+        ResultCell: {
+            /** Ci95 Net */
+            ci95_net: [
+                number,
+                number
+            ] | null;
+            /** Ci Adj */
+            ci_adj: [
+                number,
+                number
+            ] | null;
+            /** Hit Rate */
+            hit_rate: number | null;
+            /** Mean R Gross */
+            mean_r_gross: number | null;
+            /** Mean R Net */
+            mean_r_net: number | null;
+            /** N */
+            n: number;
+            /** Profit Factor */
+            profit_factor: number | null;
+            /** Se */
+            se?: number | null;
+            /** Std R Net */
+            std_r_net: number | null;
+            /** T Bar */
+            t_bar: number | null;
+            /** T Stat */
+            t_stat: number | null;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "noise" | "positive" | "negative" | "indistinguishable from zero" | "by construction";
+            /**
+             * Verdict Adj
+             * @enum {string}
+             */
+            verdict_adj: "noise" | "positive" | "negative" | "indistinguishable from zero" | "by construction";
+        };
+        /** ResultCosts */
+        ResultCosts: {
+            /** By Session */
+            by_session: {
+                [key: string]: {
+                    [key: string]: number | null;
+                };
+            };
+            /** Killed */
+            killed: number;
+            /** Mean R */
+            mean_r: {
+                [key: string]: number | null;
+            };
+            /** N */
+            n: number;
+            /** Share Of Gross */
+            share_of_gross: number | null;
+            /** Source */
+            source: string;
+        };
+        /** ResultExitCell */
+        ResultExitCell: {
+            /** Ci95 Net */
+            ci95_net: [
+                number,
+                number
+            ] | null;
+            /** Ci Adj */
+            ci_adj: [
+                number,
+                number
+            ] | null;
+            /** Hit Rate */
+            hit_rate: number | null;
+            /** Mae R Median */
+            mae_r_median?: number | null;
+            /** Mean R Gross */
+            mean_r_gross: number | null;
+            /** Mean R Net */
+            mean_r_net: number | null;
+            /** Mfe R Median */
+            mfe_r_median?: number | null;
+            /** N */
+            n: number;
+            /** Profit Factor */
+            profit_factor: number | null;
+            /** Se */
+            se?: number | null;
+            /** Share */
+            share: number;
+            /** Std R Net */
+            std_r_net: number | null;
+            /** T Bar */
+            t_bar: number | null;
+            /** T Stat */
+            t_stat: number | null;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "noise" | "positive" | "negative" | "indistinguishable from zero" | "by construction";
+            /**
+             * Verdict Adj
+             * @enum {string}
+             */
+            verdict_adj: "noise" | "positive" | "negative" | "indistinguishable from zero" | "by construction";
+        };
+        /** ResultLiveFills */
+        ResultLiveFills: {
+            /** Fills */
+            fills: number;
+            /** Mean Excess R */
+            mean_excess_r: number | null;
+            /** Mean Excess Usd */
+            mean_excess_usd: number | null;
+            /** Mean Slippage Usd */
+            mean_slippage_usd: number | null;
+            /** N With Risk */
+            n_with_risk: number;
+            /** Orders */
+            orders: {
+                [key: string]: number;
+            };
+            /** Prior Usd */
+            prior_usd: number | null;
+            /** T Bar */
+            t_bar: number;
+            /** T Stat */
+            t_stat: number | null;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "noise" | "positive" | "negative" | "indistinguishable from zero" | "by construction";
+            /**
+             * Verdict Adj
+             * @enum {string}
+             */
+            verdict_adj: "noise" | "positive" | "negative" | "indistinguishable from zero" | "by construction";
+        };
         /** RetiredFamilyView */
         RetiredFamilyView: {
             /** Family */
@@ -2002,6 +2356,75 @@ export interface components {
              */
             supervisor_reasons: string[];
         };
+        /** StopIncidentView */
+        StopIncidentView: {
+            /** Account */
+            account: string;
+            /**
+             * Closed Utc
+             * Format: date-time
+             */
+            closed_utc: string;
+            /** Loss Frac */
+            loss_frac: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "demo" | "live";
+        };
+        /**
+         * StopRuleView
+         * @description P6 in fields a screen words itself. status: breached > cant_check > not_started > ok (a breach stays a breach
+         *     while part of the record is unreadable: a missing row can only hide more).
+         */
+        StopRuleView: {
+            /** After Months */
+            after_months?: number | null;
+            /**
+             * Breach
+             * @default []
+             */
+            breach: ("long_run" | "single_loss")[];
+            /** Cant Check */
+            cant_check?: string | null;
+            /** Clock Source */
+            clock_source?: ("paper_gate" | "first_trade") | null;
+            /** Clock Start Utc */
+            clock_start_utc?: string | null;
+            /** Confidence */
+            confidence?: number | null;
+            imputed?: components["schemas"]["ImputedView"] | null;
+            /**
+             * Incident Count
+             * @default 0
+             */
+            incident_count: number;
+            /**
+             * Incidents
+             * @default []
+             */
+            incidents: components["schemas"]["StopIncidentView"][];
+            /** Lower Bound */
+            lower_bound?: number | null;
+            /** Min Pooled Trades */
+            min_pooled_trades?: number | null;
+            /** Min Trades For Estimate */
+            min_trades_for_estimate: number;
+            /** Months */
+            months?: number | null;
+            /** Pooled Trades */
+            pooled_trades?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "not_started" | "breached" | "cant_check";
+            /** Weekly Cap */
+            weekly_cap?: number | null;
+            /** Worst Loss Frac */
+            worst_loss_frac?: number | null;
+        };
         /** SystemHaltView */
         SystemHaltView: {
             /** Clear Command */
@@ -2012,6 +2435,47 @@ export interface components {
             review_command: string;
             /** Since */
             since: string | null;
+        };
+        /**
+         * TradesSummary
+         * @description Your account's closed trades over the last `days` opportunity days (ops/report_days.py, the monthly report's
+         *     day and P&L basis: net rows in the account currency only; other rows are counted and flagged, never summed).
+         */
+        TradesSummary: {
+            /** Account */
+            account: string;
+            best_day: components["schemas"]["DayNet"] | null;
+            /** By Day */
+            by_day: components["schemas"]["DayNet"][];
+            /** Currency */
+            currency: string | null;
+            /** Days */
+            days: number;
+            /** Days At Target */
+            days_at_target: number | null;
+            /** Days Traded */
+            days_traded: number;
+            /** First Day */
+            first_day: string;
+            /** Gross Rows */
+            gross_rows: number;
+            /** Last Day */
+            last_day: string;
+            /** Mode */
+            mode: ("demo" | "live" | "paper") | null;
+            /** N */
+            n: number;
+            /** Net */
+            net: number;
+            /** Net N */
+            net_n: number;
+            /** Other Currency Rows */
+            other_currency_rows: number;
+            /** Target */
+            target: number;
+            /** Trading Days */
+            trading_days: number;
+            worst_day: components["schemas"]["DayNet"] | null;
         };
         /** TrialBudget */
         TrialBudget: {
@@ -2187,6 +2651,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentRow"][];
+                };
+            };
+        };
+    };
+    attribution_api_attribution_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttributionView"];
                 };
             };
         };
@@ -2765,6 +3249,26 @@ export interface operations {
             };
         };
     };
+    gates_api_gates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatesView"];
+                };
+            };
+        };
+    };
     halt_api_halt_post: {
         parameters: {
             query?: never;
@@ -2999,6 +3503,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Status"];
+                };
+            };
+        };
+    };
+    trades_summary_api_trades_summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradesSummary"][];
                 };
             };
         };

@@ -287,6 +287,9 @@ gates:                               # design: Roadmap gates and stop rule (gold
   # conservative imputed cost in the expectancy, drawdown and stop-rule figures; this also fails the paper and live
   # gates while more than this share of their trades is gross. null = the share is shown for context only.
   max_gross_share: null
+  # The PROPOSED thresholds above the owner has signed off, by name (e.g. [paper_min_days, live_min_days]). Records the
+  # owner's decision only: the dashboard's Progress tab shows every other PROPOSED threshold as "proposed".
+  signed_off: []
 
 gaps:                                # bounded spawning (goldbot/ops/gap_watch.py, TRADER_LIFECYCLE section 3)
   founders_per_month: 2              # zero-capital SHADOW founders a month (into 4 reserved slots inside the 24 shadow cap)
