@@ -97,6 +97,24 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (`email_codes`, `sessions.method`, `auth_suspensions`). HMAC key `email-code-hmac-key` lives in the keyring only
   (created on first use; unreadable or corrupt means off). RUNBOOK 2.10 "Email sign-in code". Not done here: the
   Login/Users/Account screens and the e2e (step 3, web lane, against the regenerated contract), OWNER_GUIDE.
+- Email-code sign-in, web (BACKLOG 77 step 3, implementer, 2026-10-17; ADR 0028, TRACEABILITY U22; spec
+  docs/ux/sign-in-email-code.md states A-H). `web/src/screens/Login.tsx`: when `AuthState.email_code` is true the Sign
+  in screen has a "Second step" radio (Email me a code / Authenticator app; the choice is the only thing stored, as
+  `signin.method` in localStorage; email is the default); the authenticator field keeps its slot hidden so switching
+  moves nothing. The code screen (B-F) masks the address in the browser, shows the expiry in local time with UTC in the
+  title, one numeric `one-time-code` field that signs in on the 6th digit, a fixed 44 px resend slot (countdown, the
+  hourly limit when `resend_after_s` > 60, or the Resend button), a 2-minute "No email?" hint, one `aria-live` region
+  (Code sent / 1 minute left / Code expired) and `role="alert"` errors joined by `aria-describedby`. Wrong codes are
+  counted in the browser (the server says the same words for every refusal): after 3 the Sign in button is disabled
+  and Resend is offered at once; a resend that returns a new challenge restarts the code (three fresh tries), the same
+  challenge back means wait. A lockout reply shows State F for both methods. Without mail the screen is today's (H).
+  `Users.tsx` asks for "Authenticator code (or a recovery code)" after an email-code sign-in (or once the server says
+  so) and sends it as `totp` with invite, role, disable, enable, reset link and sign-out-everywhere; the 403 reads in
+  words. `Account.tsx`: a neutral "Email codes: on/off" row for the owner. `scripts/e2e_server.py
+  install_email_code_key` seeds a throwaway HMAC key in-process with `--fake-mailer`, so an e2e run never writes the
+  developer's keyring or `state/.secrets.json`. e2e: emailed-code sign-in from the fake outbox, the code screen at
+  360 px, a refused then accepted invite (step-up). OWNER_GUIDE "Signing in" updated. Also fixed: `App.test.tsx`
+  did not typecheck on the integration tip (`signed_in_with` missing).
 - Gates on release candidate ab671be (W1-1 bridge smoke on top of PR #84), test-engineer, 2026-10-17. `GATES_WORKERS=4 scripts/gates.sh --web` (total 377 s), then e2e. All green:
 
   | Gate | Result |
