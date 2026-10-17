@@ -1,14 +1,15 @@
 import { FormEvent, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, currentUser, GrantableRole } from "../lib/api";
+import { api, currentUser, GrantableRole, SERVER_SAYS } from "../lib/api";
 import { linkUrl } from "../lib/links";
 import { roleLabel } from "../lib/roles";
 
-// The server's 403 when a session opened with an emailed code tries a user-management action without (or with a
-// wrong) authenticator or recovery code (goldbot/api/app.py STEPUP_REQUIRED).
-const STEPUP_REQUIRED = "authenticator code required";
+// The server's 403s on a session opened with an emailed code (goldbot/api/app.py STEPUP_REQUIRED: no or a wrong
+// authenticator or recovery code; STEPUP_LOCKED: too many wrong ones), in the owner's words.
 const STEPUP_TEXT = "This action needs a current code from your authenticator app (or a recovery code), because you " +
   "signed in with an email code. Type it above and try again.";
+const STEPUP_LOCKED_TEXT = "Too many wrong codes. Managing users, re-arm and auto mode are locked for 15 minutes; Halt still works.";
+const IN_WORDS: Record<string, string> = { [SERVER_SAYS.stepupRequired]: STEPUP_TEXT, [SERVER_SAYS.stepupLocked]: STEPUP_LOCKED_TEXT };
 
 // Owner only. The owner role is never granted: invites and role changes offer approver or viewer.
 // ADR 0028 ruling 2: after an email-code sign-in, invite, role change, disable, enable, reset link and sign out
@@ -29,8 +30,8 @@ export function Users() {
   const common = {
     onMutate: () => setFail(null),
     onError: (e: Error) => {
-      if (e.message === STEPUP_REQUIRED) setAsked(true);
-      setFail(e.message === STEPUP_REQUIRED ? STEPUP_TEXT : e.message);
+      if (e.message === SERVER_SAYS.stepupRequired) setAsked(true);
+      setFail(IN_WORDS[e.message] ?? e.message);
     },
     onSettled: () => setStepup(""),
   };

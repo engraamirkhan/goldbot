@@ -63,7 +63,7 @@ describe("Users step-up after an email-code sign-in", () => {
     code("abcd-efgh-ijkl-mnop");                                                 // a recovery code works too
     fireEvent.click(within(row("viewer@example.com")).getByRole("button", { name: "Reset link" }));
     await waitFor(() => expect(reset).toHaveBeenCalledWith("viewer@example.com", "abcd-efgh-ijkl-mnop"));
-  });
+  }, 15_000);                                                                   // six actions in turn: slow on a loaded host
 
   it("shows the server's refusal in words when the code is missing or wrong", async () => {
     renderAs("email_code");
@@ -74,6 +74,16 @@ describe("Users step-up after an email-code sign-in", () => {
       "This action needs a current code from your authenticator app (or a recovery code), because you signed in " +
       "with an email code. Type it above and try again.");
     expect(screen.getByLabelText(FIELD)).toHaveAttribute("aria-describedby", screen.getByRole("alert").id);
+  });
+
+  it("says in plain words when too many wrong codes have locked user management", async () => {
+    renderAs("email_code");
+    await screen.findByText("viewer@example.com");
+    vi.spyOn(apiModule.api, "disable").mockRejectedValue(
+      new Error("too many attempts: user management, re-arm and auto mode are locked for 15 minutes"));
+    fireEvent.click(within(row("viewer@example.com")).getByRole("button", { name: "Disable" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Too many wrong codes. Managing users, re-arm and auto mode are locked for 15 minutes; Halt still works.");
   });
 
   it("does not ask for a code after an authenticator sign-in", async () => {

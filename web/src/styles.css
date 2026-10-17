@@ -39,6 +39,10 @@ th { color: var(--muted); font-weight: 500; }
 .login fieldset.method legend { font-size: 14px; padding: 0; margin-bottom: 2px; }
 .login .method label { flex-direction: row; align-items: center; gap: 10px; min-height: 44px; font-size: 16px; cursor: pointer; }
 .login .method input { width: 20px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: none; accent-color: var(--accent); }
+.login .pw-field { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.login .pw-row { display: flex; gap: 8px; }
+.login .pw-row input { flex: 1; min-width: 0; }
+.login button.pw-toggle { flex: none; min-width: 64px; background: none; color: var(--fg); border: 1px solid var(--line); }
 .login .resend { min-height: 44px; display: flex; align-items: center; }
 .login .countdown { font-variant-numeric: tabular-nums; }
 .login :focus-visible, .stepup :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }

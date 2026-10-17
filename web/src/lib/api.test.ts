@@ -66,6 +66,17 @@ describe("api client", () => {
     ]);
   });
 
+  it("says a network failure in words, never the browser's text, and keeps every HTTP status on the error", async () => {
+    const { api, ApiError, NETWORK_TEXT } = await import("./api");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    const offline = await api.status().catch((e: unknown) => e);
+    expect(offline).toBeInstanceOf(ApiError);
+    expect(offline).toMatchObject({ status: 0, message: "Could not reach goldbot. Check your connection and try again." });
+    expect(NETWORK_TEXT).toBe("Could not reach goldbot. Check your connection and try again.");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(503, { detail: "upstream down" })));
+    expect(await api.status().catch((e: unknown) => e)).toMatchObject({ status: 503, message: "upstream down" });
+  });
+
   it("drops the session on 401", async () => {
     const { api, setToken, hasToken } = await import("./api");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(401, { detail: "login required" })));

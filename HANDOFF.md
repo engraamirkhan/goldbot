@@ -113,8 +113,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   words. `Account.tsx`: a neutral "Email codes: on/off" row for the owner. `scripts/e2e_server.py
   install_email_code_key` seeds a throwaway HMAC key in-process with `--fake-mailer`, so an e2e run never writes the
   developer's keyring or `state/.secrets.json`. e2e: emailed-code sign-in from the fake outbox, the code screen at
-  360 px, a refused then accepted invite (step-up). OWNER_GUIDE "Signing in" updated. Also fixed: `App.test.tsx`
-  did not typecheck on the integration tip (`signed_in_with` missing).
+  360 px, a refused then accepted invite (step-up). OWNER_GUIDE "Signing in" updated.
+  Review round 1 (ui-ux, code-reviewer): `lib/api.ts` throws `ApiError` (HTTP status; 0 with "Could not reach
+  goldbot..." instead of the browser's text) and `SERVER_SAYS`, the server refusals the screens match word for word
+  (`auth.SIGN_IN_LOCKED`, `app.STEPUP_REQUIRED`, `app.STEPUP_LOCKED`; `tests/test_web_auth_wording.py` pins both
+  sides). Only a 401/403 counts as a wrong code; a lockout goes to State F, a 5xx or the network reads in plain words;
+  Enter on a partial code spends no try; one code check at a time. The password field has a 44 px Show/Hide toggle;
+  the sign-in form waits for `/api/auth/state`, so the method choice never pushes it down. Found on the way: a spent
+  `#signin=` token came back after sign-out in the same page load: fixed on the tip by `links.clearLinkTokens` (issue
+  #89); this lane adds a links test for it.
 - Gates on release candidate ab671be (W1-1 bridge smoke on top of PR #84), test-engineer, 2026-10-17. `GATES_WORKERS=4 scripts/gates.sh --web` (total 377 s), then e2e. All green:
 
   | Gate | Result |

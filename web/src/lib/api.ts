@@ -75,14 +75,34 @@ function endSession(sent: string | null) {
   sessionEnded.forEach((fn) => fn());
 }
 
+/** A failed request: the server's `detail` (or the status text) and the HTTP status; 0 when the server was not reached,
+ * with NETWORK_TEXT instead of the browser's own words ("Failed to fetch", "Load failed"). */
+export class ApiError extends Error {
+  constructor(readonly status: number, message: string) { super(message); this.name = "ApiError"; }
+}
+export const NETWORK_TEXT = "Could not reach goldbot. Check your connection and try again.";
+
+/** Server refusals the screens recognise by their exact words (goldbot/api/auth.py SIGN_IN_LOCKED, goldbot/api/app.py
+ * STEPUP_REQUIRED and STEPUP_LOCKED; tests/test_web_auth_wording.py fails when either side changes alone). */
+export const SERVER_SAYS = {
+  signInLocked: "too many attempts; wait 15 minutes",
+  stepupRequired: "authenticator code required",
+  stepupLocked: "too many attempts: user management, re-arm and auto mode are locked for 15 minutes",
+} as const;
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const sent = token;
-  const r = await fetch(path, { ...init, headers: { "content-type": "application/json", ...(sent ? { authorization: `Bearer ${sent}` } : {}), ...(init?.headers ?? {}) } });
+  let r: Response;
+  try {
+    r = await fetch(path, { ...init, headers: { "content-type": "application/json", ...(sent ? { authorization: `Bearer ${sent}` } : {}), ...(init?.headers ?? {}) } });
+  } catch {
+    throw new ApiError(0, NETWORK_TEXT);
+  }
   if (r.status === 401) {
     endSession(sent);
-    throw new Error("login required");
+    throw new ApiError(401, "login required");
   }
-  if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.detail ?? r.statusText);
+  if (!r.ok) throw new ApiError(r.status, (await r.json().catch(() => ({})))?.detail ?? r.statusText);
   return r.json() as Promise<T>;
 }
 

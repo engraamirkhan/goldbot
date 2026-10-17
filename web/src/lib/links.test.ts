@@ -22,6 +22,14 @@ describe("invite and reset links", () => {
     expect(takeLinkTokens().reset).toBe("tok-1"); // StrictMode's second render sees the same value
   });
 
+  it("forgets a spent token, so a later sign-in screen in the same page load does not offer it again", async () => {
+    history.replaceState(null, "", "/#signin=s-2");
+    const { takeLinkTokens, clearLinkTokens } = await import("./links");
+    expect(takeLinkTokens().signin).toBe("s-2");
+    clearLinkTokens();                            // App.tsx on sign-in, sign-out and a lost session
+    expect(takeLinkTokens()).toEqual({ invite: "", reset: "", signin: "" });
+  });
+
   it("reads an emailed sign-in token from the fragment once and clears it", async () => {
     history.replaceState(null, "", "/#signin=s-1");
     const { takeLinkTokens } = await import("./links");

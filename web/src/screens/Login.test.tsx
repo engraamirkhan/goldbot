@@ -10,7 +10,8 @@ async function setup(hash = "", emailLink = true, emailCode = false) {
   const { Login } = await import("./Login");
   const onLogin = vi.fn();
   render(<Login onLogin={onLogin} />);
-  return { api: apiModule.api, onLogin };
+  await act(async () => {});                                  // the form waits for the server's sign-in options
+  return { api: apiModule.api, onLogin, ApiError: apiModule.ApiError, SERVER_SAYS: apiModule.SERVER_SAYS };
 }
 
 function type(label: string | RegExp, value: string) {
@@ -119,6 +120,12 @@ describe("Login", () => {
 const CHALLENGE = { challenge: "ch-1", expires_in_s: 600, resend_after_s: 60 };
 const REFUSED = "that code did not work, or it has expired or was already used";
 const OWNER = { email: "owner@example.com", password: "owner password 123" };
+const NETWORK = "Could not reach goldbot. Check your connection and try again.";
+/** What lib/api.ts throws for an HTTP refusal: the server's words and the status (ApiError's shape). */
+const refused = (status: number, message: string) => Object.assign(new Error(message), { status });
+const offline = () => vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+const answering = (status: number, detail: string) => vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+  new Response(JSON.stringify({ detail }), { status, headers: { "content-type": "application/json" } })));
 type Api = Awaited<ReturnType<typeof setup>>["api"];
 
 async function emailCodeScreen() {
@@ -137,7 +144,7 @@ async function requestCode(api: Api, answer = CHALLENGE) {
 }
 
 async function wrongCode(api: Api, value = "111111") {
-  const verify = vi.spyOn(api, "verifyEmailCode").mockRejectedValue(new Error(REFUSED));
+  const verify = vi.spyOn(api, "verifyEmailCode").mockRejectedValue(refused(403, REFUSED));
   type("Code", value);
   await waitFor(() => expect(verify).toHaveBeenCalled());
   await screen.findByRole("alert");
@@ -148,7 +155,7 @@ const tick = (ms: number) => act(async () => { vi.advanceTimersByTime(ms); });
 
 describe("Login with an emailed code", () => {
   beforeEach(() => { sessionStorage.clear(); localStorage.clear(); });
-  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); history.replaceState(null, "", "/"); });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); history.replaceState(null, "", "/"); });
 
   it("A: offers the email code by default when the server can send one, with the authenticator field slot kept but hidden", async () => {
     await emailCodeScreen();
@@ -352,7 +359,7 @@ describe("Login with an emailed code", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date(2026, 9, 17, 14, 57, 0));
     const { api } = await emailCodeScreen();
-    vi.spyOn(api, "emailCode").mockRejectedValue(new Error("too many attempts; wait 15 minutes"));
+    vi.spyOn(api, "emailCode").mockRejectedValue(refused(403, "too many attempts; wait 15 minutes"));
     type("Email", OWNER.email);
     type("Password", "a wrong password 1");
     fireEvent.click(screen.getByRole("button", { name: "Email me a code" }));
@@ -365,6 +372,129 @@ describe("Login with an emailed code", () => {
     expect(screen.getByRole("button", { name: "Sign in" })).toBeDisabled();
     await tick(15 * 60_000);
     expect(screen.getByRole("button", { name: "Sign in" })).toBeEnabled();
+  });
+
+  // review round 1 (ui-ux 1-3, code LOW 6-8): no raw error reaches the owner, and only a refusal is a wrong try
+  it("asking for a code while offline says so in words, never the browser's text", async () => {
+    await emailCodeScreen();
+    offline();
+    type("Email", OWNER.email);
+    type("Password", OWNER.password);
+    fireEvent.click(screen.getByRole("button", { name: "Email me a code" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(NETWORK);
+    expect(screen.getByRole("alert")).not.toHaveTextContent("Failed to fetch");
+  });
+
+  it("asking for a code when the server fails says so in plain words and offers the authenticator", async () => {
+    await emailCodeScreen();
+    answering(500, "Internal Server Error");
+    type("Email", OWNER.email);
+    type("Password", OWNER.password);
+    fireEvent.click(screen.getByRole("button", { name: "Email me a code" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not send a code just now. Try again in a minute, or use the authenticator app.");
+  });
+
+  it("checking the code while offline says so in words and does not count as a wrong try", async () => {
+    const { api } = await emailCodeScreen();
+    await requestCode(api);
+    offline();
+    type("Code", "482913");
+    expect(await screen.findByRole("alert")).toHaveTextContent(NETWORK);
+    expect(screen.queryByText(/tries left|try left/)).toBeNull();
+  });
+
+  it("a server failure while checking the code is not a wrong try", async () => {
+    const { api } = await emailCodeScreen();
+    await requestCode(api);
+    answering(503, "Service Unavailable");
+    type("Code", "482913");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not check the code just now. Try again in a minute.");
+    expect(screen.queryByText(/tries left|try left/)).toBeNull();
+  });
+
+  it("a lockout while checking the code is not a wrong try: it returns to sign in and says until when", async () => {
+    const { api } = await emailCodeScreen();
+    await requestCode(api);
+    vi.spyOn(api, "verifyEmailCode").mockRejectedValue(refused(403, "too many attempts; wait 15 minutes"));
+    type("Code", "482913");
+    expect(await screen.findByRole("alert")).toHaveTextContent(/^Too many attempts\. Sign-in for this account is paused/);
+    expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Email me a code" })).toBeDisabled();
+  });
+
+  it("a failed resend says so in plain words", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { api } = await emailCodeScreen();
+    await requestCode(api);
+    await tick(60_000);
+    answering(500, "Internal Server Error");
+    fireEvent.click(screen.getByRole("button", { name: "Resend code" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not send a new code just now. Try again in a minute, or use the authenticator app.");
+    offline();
+    fireEvent.click(screen.getByRole("button", { name: "Resend code" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(NETWORK));
+  });
+
+  it("Enter on a partial code asks for all 6 digits and spends no try", async () => {
+    const { api } = await emailCodeScreen();
+    await requestCode(api);
+    const verify = vi.spyOn(api, "verifyEmailCode");
+    type("Code", "4829");
+    fireEvent.submit(screen.getByLabelText("Code").closest("form")!);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Type all 6 digits from the email.");
+    expect(verify).not.toHaveBeenCalled();
+  });
+
+  it("a pasted code and Enter at once send the code once", async () => {
+    const { api } = await emailCodeScreen();
+    await requestCode(api);
+    const verify = vi.spyOn(api, "verifyEmailCode").mockReturnValue(new Promise(() => {}));
+    const field = screen.getByLabelText("Code");
+    act(() => {
+      fireEvent.change(field, { target: { value: "482913" } });          // auto-verify on the 6th digit
+      fireEvent.submit(field.closest("form")!);                           // and Enter, before React re-renders
+    });
+    await waitFor(() => expect(verify).toHaveBeenCalledTimes(1));
+  });
+
+  it("the password field has a Show toggle that reveals and hides it", async () => {
+    await emailCodeScreen();
+    const pw = screen.getByLabelText("Password");
+    expect(pw).toHaveAttribute("type", "password");
+    // the name is its visible text (it says what pressing does), and no label lookup for "Password" can hit it
+    expect(screen.getAllByLabelText(/password/i)).toEqual([pw]);
+    fireEvent.click(screen.getByRole("button", { name: "Show" }));
+    expect(pw).toHaveAttribute("type", "text");
+    expect(screen.getByRole("button", { name: "Hide" })).toHaveAttribute("aria-controls", pw.id);
+    fireEvent.click(screen.getByRole("button", { name: "Hide" }));
+    expect(pw).toHaveAttribute("type", "password");
+  });
+
+  it("waits for the server's sign-in options before showing the form, so the method choice never pushes it down", async () => {
+    history.replaceState(null, "", "/");
+    vi.resetModules();
+    const { api } = await import("../lib/api");
+    let answer: (s: { needs_setup: boolean; users: number; email_link: boolean; email_code: boolean }) => void = () => {};
+    vi.spyOn(api, "authState").mockReturnValue(new Promise((r) => { answer = r; }));
+    const { Login } = await import("./Login");
+    render(<Login onLogin={vi.fn()} />);
+    expect(screen.queryByLabelText("Email")).toBeNull();
+    expect(screen.getByText("goldbot")).toBeInTheDocument();
+    await act(async () => answer({ needs_setup: false, users: 1, email_link: false, email_code: true }));
+    expect(screen.getByLabelText("Email")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Email me a code" })).toBeChecked();
+  });
+
+  it("shows today's form when the sign-in options cannot be loaded", async () => {
+    history.replaceState(null, "", "/");
+    vi.resetModules();
+    const { api } = await import("../lib/api");
+    vi.spyOn(api, "authState").mockRejectedValue(new Error("down"));
+    const { Login } = await import("./Login");
+    render(<Login onLogin={vi.fn()} />);
+    expect(await screen.findByLabelText("Authenticator code")).toBeVisible();
   });
 
   it("first run still enrols an authenticator and says why, then offers the email code once the owner exists", async () => {

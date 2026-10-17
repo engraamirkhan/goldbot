@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { api, setToken, setUser, type Me } from "../lib/api";
+import { api, NETWORK_TEXT, SERVER_SAYS, setToken, setUser, type Me } from "../lib/api";
 import { takeLinkTokens } from "../lib/links";
 import { useNow } from "../lib/useNow";
 
@@ -43,7 +43,22 @@ const WRONG = (left: number) =>
   `That code did not work. Check the newest email from goldbot. ${left} ${left === 1 ? "try" : "tries"} left for this code.`;
 const BURNED = "That code can no longer be used. Send a new one.";
 const EXPIRED = "This code has expired or was already used. Send a new code.";
+const SEND_FAILED = "Could not send a code just now. Try again in a minute, or use the authenticator app.";
+const RESEND_FAILED = "Could not send a new code just now. Try again in a minute, or use the authenticator app.";
+const CHECK_FAILED = "Could not check the code just now. Try again in a minute.";
+const PARTIAL = "Type all 6 digits from the email.";
 const NO_MAIL = "No email? Check the spam folder, check the password you typed (we do not say whether it was right), or use the authenticator app.";
+
+/** The HTTP status of a failed request (lib/api.ts ApiError: 0 when the server was not reached). */
+function statusOf(ex: unknown): number | undefined {
+  const s = (ex as { status?: unknown } | null)?.status;
+  return typeof s === "number" ? s : undefined;
+}
+
+/** Plain words for a failed request: never the browser's text, never a bare status line. */
+function failure(ex: unknown, otherwise: string): string {
+  return statusOf(ex) === 0 ? NETWORK_TEXT : otherwise;
+}
 
 function storedMethod(): Method {
   try { return localStorage.getItem(METHOD_KEY) === "authenticator" ? "authenticator" : "email"; } catch { return "email"; }
@@ -96,7 +111,10 @@ export function Login({ onLogin }: { onLogin: () => void }) {
   const [busy, setBusy] = useState(false);
   const [info, setInfo] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);                // the server's sign-in options are known
+  const [showPw, setShowPw] = useState(false);
   const codeRef = useRef<HTMLInputElement>(null);
+  const checking = useRef(false);                           // one code check at a time: auto-verify and Enter can race
   const now = useNow();
 
   useEffect(() => {
@@ -106,10 +124,16 @@ export function Login({ onLogin }: { onLogin: () => void }) {
       else if (inviteToken) setMode("accept");
       else if (resetToken) setMode("reset");
       else if (signinToken) setMode("signin");
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setReady(true));
   }, [inviteToken, resetToken, signinToken]);
 
-  function go(m: ModeT) { setMode(m); setErr(null); setInfo(null); setPassword(""); setCode(""); setRecoveryCode(""); setChallenge(null); }
+  function go(m: ModeT) { setMode(m); setErr(null); setInfo(null); setPassword(""); setShowPw(false); setCode(""); setRecoveryCode(""); setChallenge(null); }
+
+  /** State F: the sign-in lockout covers both methods, so it is shown on the sign-in screen with its end time. */
+  function lockOut() {
+    setLockedUntil(Date.now() + LOCK_MS);
+    setMode("login"); setChallenge(null); setCode(""); setErr(null);
+  }
 
   function choose(m: Method) {
     setMethod(m);
@@ -127,17 +151,22 @@ export function Login({ onLogin }: { onLogin: () => void }) {
   const burned = tries >= TRIES;
   const locked = secsTo(lockedUntil) > 0;
   const codeErr = !challenge ? null : expired ? EXPIRED : burned ? BURNED : tries > 0 ? WRONG(TRIES - tries) : null;
+  const fieldErr = err ?? codeErr;                          // one message under the code field, joined to it
 
   async function verify(digits: string) {
-    if (!challenge || busy || expired || burned) return;
+    if (!challenge || checking.current || expired || burned) return;
+    checking.current = true;
     setErr(null); setBusy(true);
     try {
       signedIn(await api.verifyEmailCode(challenge.id, digits));
     } catch (ex) {
-      if (ex instanceof TypeError) setErr(ex.message);                 // the network, not a refusal: not a try
-      else setTries((n) => n + 1);                                      // every refusal reads the same on the server
+      const status = statusOf(ex);
+      if ((ex as Error).message === SERVER_SAYS.signInLocked) lockOut();
+      else if (status === 401 || status === 403) setTries((n) => n + 1);   // a refusal: every one reads the same
+      else setErr(failure(ex, CHECK_FAILED));                                // the network or the server: not a try
       codeRef.current?.focus(); codeRef.current?.select();
     } finally {
+      checking.current = false;
       setBusy(false);
     }
   }
@@ -157,7 +186,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
         codeRef.current?.focus();
       }
     } catch (ex) {
-      setErr((ex as Error).message);
+      setErr(failure(ex, RESEND_FAILED));
     } finally {
       setBusy(false);
     }
@@ -165,7 +194,12 @@ export function Login({ onLogin }: { onLogin: () => void }) {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (mode === "emailCode") { await verify(code.replace(/\s/g, "")); return; }
+    if (mode === "emailCode") {
+      const digits = code.replace(/\s/g, "");
+      if (/^\d{6}$/.test(digits)) await verify(digits);
+      else if (!checking.current) { setErr(PARTIAL); codeRef.current?.focus(); }   // a partial code spends no try
+      return;
+    }
     setErr(null); setInfo(null); setBusy(true);
     try {
       if (mode === "login" && byEmail) {
@@ -204,8 +238,10 @@ export function Login({ onLogin }: { onLogin: () => void }) {
         setSigninToken("");
         go(emailLinkOn ? "emailLink" : "login");
         setErr(emailLinkOn ? `${msg}. Ask for a new link below.` : msg);
-      } else if (mode === "login" && emailCodeOn && msg.startsWith("too many attempts")) {
-        setLockedUntil(Date.now() + LOCK_MS);                          // State F: one counter for both methods
+      } else if (mode === "login" && emailCodeOn && msg === SERVER_SAYS.signInLocked) {
+        lockOut();                                                      // State F: one counter for both methods
+      } else if (mode === "login" && byEmail) {
+        setErr(failure(ex, SEND_FAILED));
       } else {
         setErr(msg);
       }
@@ -213,6 +249,10 @@ export function Login({ onLogin }: { onLogin: () => void }) {
       setBusy(false);
     }
   }
+
+  // until the server says which sign-in options it offers, show only the name: the form then appears whole, so the
+  // method choice never pushes it down under a thumb (an unreachable server shows today's form)
+  if (!ready) return <div className="login" aria-busy="true"><h1>goldbot</h1></div>;
 
   if (totpUri) {
     const secret = totpUri.split("secret=")[1]?.split("&")[0];
@@ -264,18 +304,17 @@ export function Login({ onLogin }: { onLogin: () => void }) {
         </p>
         <label>Code
           <input ref={codeRef} className="code" value={code} autoFocus inputMode="numeric" pattern="[0-9 ]*" maxLength={7}
-            autoComplete="one-time-code" aria-invalid={codeErr ? true : undefined} aria-describedby={codeErr ? "code-err" : undefined}
+            autoComplete="one-time-code" aria-invalid={fieldErr ? true : undefined} aria-describedby={fieldErr ? "code-err" : undefined}
             onChange={(e) => {
-              setCode(e.target.value);
+              setCode(e.target.value); setErr(null);
               const digits = e.target.value.replace(/\s/g, "");
               if (/^\d{6}$/.test(digits)) void verify(digits);           // the 6th digit, typed or pasted; never a partial code
             }} />
         </label>
-        {codeErr && <p className="err" role="alert" id="code-err">{codeErr}</p>}
+        {fieldErr && <p className="err" role="alert" id="code-err">{fieldErr}</p>}
         {secsTo(challenge.sentAt + NO_MAIL_HINT_S * 1000) === 0 && <p className="muted">{NO_MAIL}</p>}
         <button type="submit" disabled={busy || expired || burned}>{busy ? "Checking..." : SUBMIT.emailCode}</button>
         {resendLine}
-        {err && <p className="err" role="alert">{err}</p>}
         <nav className="alt" aria-label="Other ways to sign in">
           <button type="button" className="link" onClick={() => {
             choose("authenticator"); setMode("login"); setChallenge(null); setCode(""); setErr(null);
@@ -303,7 +342,17 @@ export function Login({ onLogin }: { onLogin: () => void }) {
       {INTRO[mode] && <p className="muted">{INTRO[mode]}</p>}
       {mode === "setup" && <label>Setup code<input value={setupCode} onChange={(e) => setSetupCode(e.target.value)} autoFocus /></label>}
       {showEmail && <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" autoCapitalize="none" spellCheck={false} required /></label>}
-      {showPassword && <label>{newPassword && mode !== "setup" ? "New password" : "Password"}<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete={newPassword ? "new-password" : "current-password"} required /></label>}
+      {showPassword && (
+        <div className="pw-field">
+          <label htmlFor="login-pw">{newPassword && mode !== "setup" ? "New password" : "Password"}</label>
+          <div className="pw-row">
+            <input id="login-pw" type={showPw ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)}
+              autoComplete={newPassword ? "new-password" : "current-password"} autoCapitalize="none" spellCheck={false} required />
+            <button type="button" className="pw-toggle" aria-controls="login-pw"
+              onClick={() => setShowPw((v) => !v)}>{showPw ? "Hide" : "Show"}</button>
+          </div>
+        </div>
+      )}
       {showCode && (
         <label style={codeSlotHidden ? { visibility: "hidden" } : undefined} aria-hidden={codeSlotHidden || undefined}>Authenticator code
           <input className="code" value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" pattern="[0-9 ]*" autoComplete="one-time-code"
