@@ -30,6 +30,13 @@ CEILING_UNREADABLE = f"{CEILING_REFUSAL}_unreadable"
 CEILING_CODES = (CEILING_REFUSAL, CEILING_UNREADABLE)
 _BROKER_CODE = re.compile(rf"{BROKER_REFUSED}:(\d+)({PAPER_SUFFIX})?")
 BY_PHRASE: dict[str, str] = {"broker": "the broker", "mt5_box": "the MT5 box"}
+# BACKLOG 83: an approved card's cause, counted apart in the digest and the performance report ("opened": a
+# not-confirmed card the broker later showed opened, an opened trade, in no refused count)
+ApprovalCause = Literal["risk_check", "not_placed", "not_confirmed", "opened"]
+CAUSE_PHRASE: dict[str, str] = {"risk_check": "refused by the risk check",
+                                "not_placed": f"not placed by {BY_PHRASE['mt5_box']} or {BY_PHRASE['broker']}",
+                                "not_confirmed": "not confirmed by the broker"}
+_NC_OPENED = frozenset({"opened", "opened_closed", "opened_late"})
 
 
 class NotPlaced(FrozenRecord):
@@ -140,6 +147,22 @@ def first_not_placed(codes: list[str] | None) -> NotPlaced | None:
         if (np := not_placed(c)) is not None:
             return np
     return None
+
+
+def approval_cause(codes: list[str] | None, outcome: str | None = None) -> ApprovalCause | None:
+    """Why an approved card did not simply trade, for the counts in the daily digest and the performance report
+    (BACKLOG 83: "count the three causes separately ... A `not_confirmed` card resolved as "opened" counts as an opened
+    trade"). `codes` is the card's `gate_refusal`, `outcome` its `Confirmation.outcome`. None: no refusal code, a plain
+    approval. A not-confirmed card the broker showed opened is "opened"; one it showed no trade for is "not_placed";
+    pending, still unknown or an unknown outcome stays "not_confirmed" (it needs no outcome to be true). Any code that
+    is not this table's and not `not_confirmed` is the RiskGate's own."""
+    if not codes:
+        return None
+    if NOT_CONFIRMED in codes:
+        if outcome in _NC_OPENED:
+            return "opened"
+        return "not_placed" if outcome == "no_trade" else "not_confirmed"
+    return "not_placed" if first_not_placed(codes) is not None else "risk_check"
 
 
 def _cause(np: NotPlaced) -> str:

@@ -79,6 +79,7 @@ from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.timeutil import floor_tf, risk_day
 from goldbot.engine.shadow import ShadowTrade, VersionBook
 from goldbot.execution.costs import SESSIONS, CostTable
+from goldbot.execution.not_placed import CAUSE_PHRASE, approval_cause
 from goldbot.ops.gates_phase import ClosedTrade, load_closed_trades, pnl_basis
 from goldbot.ops.report_days import day_buckets, month_days, report_day
 from goldbot.ops.report_days import weekdays as weekdays_in
@@ -236,7 +237,10 @@ class ApprovalReport(FrozenRecord):
     rejected: int = 0
     expired: int = 0
     open: int = 0                              # not finished yet (pending)
+    # BACKLOG 83: approved cards by cause (`not_placed.approval_cause`); the RiskGate's own refusals only in the first
     gate_refused_after_approval: int = 0
+    not_placed_after_approval: int = 0        # refused by the MT5 box or the broker, or not confirmed then no trade
+    not_confirmed_after_approval: int = 0     # not confirmed by the broker, still unresolved
     reasons: dict[str, int] = {}
     counterfactual: list[ShadowOutcome] = []
     calibration: Calibration | None = None     # None without approved proposals
@@ -750,6 +754,10 @@ def _approvals(props: list[Proposal], pending: int, shadow: list[ShadowTrade],
     for p in props:
         if p.outcome is not None:
             by[names[p.outcome]].append(p)
+    causes: dict[str | None, int] = {}
+    for p in by["approved"]:
+        c = approval_cause(p.gate_refusal, p.not_confirmed.outcome if p.not_confirmed is not None else None)
+        causes[c] = causes.get(c, 0) + 1
     reasons: dict[str, int] = {}
     for p in by["rejected"]:
         k = p.reason_code or NOT_RECORDED
@@ -790,7 +798,9 @@ def _approvals(props: list[Proposal], pending: int, shadow: list[ShadowTrade],
             verdict=_reading(len(rs), _ci90(rs) if len(rs) >= MIN_TRADES else None) + " (gross)"))
     return ApprovalReport(proposals=len(props), approved=len(by["approved"]), rejected=len(by["rejected"]),
                           expired=len(by["expired"]), open=pending,
-                          gate_refused_after_approval=sum(p.gate_refusal is not None for p in by["approved"]),
+                          gate_refused_after_approval=causes.get("risk_check", 0),
+                          not_placed_after_approval=causes.get("not_placed", 0),
+                          not_confirmed_after_approval=causes.get("not_confirmed", 0),
                           reasons=dict(sorted(reasons.items(), key=lambda kv: (-kv[1], kv[0]))), counterfactual=cf,
                           calibration=_calibration(by["approved"], shadow, live) if by["approved"] else None)
 
@@ -974,9 +984,13 @@ def format_markdown(rep: PerformanceReport) -> str:
                   f"- {n.note}", ""]
         ap = a.approvals
         reasons = ", ".join(f"{k} {v}" for k, v in ap.reasons.items()) or "-"
+        # BACKLOG 83: the MT5 box's or broker's and the not-confirmed counts follow only when there are any
+        apart = "".join(f"; {CAUSE_PHRASE[c]}: {n}" for c, n in (("not_placed", ap.not_placed_after_approval),
+                                                                  ("not_confirmed", ap.not_confirmed_after_approval))
+                        if n)
         L += ["### Owner decisions", "",
               f"- proposals {ap.proposals}: approved {ap.approved} (refused by the RiskGate at approval: "
-              f"{ap.gate_refused_after_approval}), rejected {ap.rejected} ({reasons}), expired {ap.expired}; "
+              f"{ap.gate_refused_after_approval}{apart}), rejected {ap.rejected} ({reasons}), expired {ap.expired}; "
               f"still open {ap.open}", ""]
         if ap.counterfactual:
             L += ["What the signals would have done in the shadow book (GROSS: no commission or swap, gaps filled at "
