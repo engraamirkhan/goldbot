@@ -339,7 +339,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
             if self.deploy is None:         # deploys off: still a deploy tap, never read as an approval (INFO-1)
                 await q.answer("no longer on offer", show_alert=True)
                 return
-            ok =self.deploy.approve(parts[1]) if parts[0] == "dep" else self.deploy.skip(parts[1])
+            ok = self.deploy.approve(parts[1]) if parts[0] == "dep" else self.deploy.skip(parts[1])
             if ok and parts[0] == "dep":    # who tapped: the audit log only (A15); before the answer, which can fail
                 self.audit.write("deploy_approve", uid, sha=parts[1])
             await q.answer("ok" if ok else "no longer on offer", show_alert=not ok)

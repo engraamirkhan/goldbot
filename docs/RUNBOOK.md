@@ -325,6 +325,31 @@ and the rest still arrives. It never contains account numbers or emails.
       print("scrubbed", f.name)
   PY
   ```
+* **After a rollback below `e98eec8`, once you have rolled forward again: reset the classifier's `last_known`.**
+  From `e98eec8` the account classifier keeps `last_known` in `state/classifier_<account>.json`: the last Raw or
+  Standard class it stored. A stored *unknown* adopts Raw on a single Friday run only when `last_known` is not
+  Standard. An older release (the Friday `nightly_costs` re-run) keeps the field when it rewrites the file but never
+  updates it, so if it stored Standard while it ran, `last_known` can still say Raw. Back on the newer release, the
+  first Friday that stores Raw or Standard corrects it; until then, a stored unknown could be relaxed to Raw on one
+  run instead of two. To close that gap, remove the field: the newer release then re-derives it on its next read
+  (the stored class when it is Raw or Standard; for a stored unknown, Standard if any kept run was Standard).
+  Nothing else in the file changes. Do not run it during Friday's 23:10 `nightly_costs` job.
+
+  ```bash
+  sudo -u goldbot /opt/goldbot/.venv/bin/python - <<'PY'
+  import json
+  from pathlib import Path
+  from goldbot.base import write_atomic
+  for f in sorted(Path("/opt/goldbot/state").glob("classifier_*.json")):
+      d = json.loads(f.read_text())
+      if "last_known" in d:
+          del d["last_known"]
+          write_atomic(f, json.dumps(d, default=str))
+          print("reset", f.name)
+  PY
+  ```
+
+  Doing nothing is also acceptable: the gap closes at the next Friday that stores a known class.
 * Before anything is touched, every deploy and rollback also checks:
   * **aux.db.** A target from before schema compatibility (no `compat_back_to` in its `goldbot/db/migrations.py`)
     cannot open aux.db at schema 5. The script stops every service (inputs, supervisor, engines last), steps aux.db

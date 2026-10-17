@@ -264,6 +264,10 @@ class ApprovalBus:
         return [(p, d) for _, p, d in rows[:limit]]
 
     def outcome(self, proposal_id: str) -> str | None:
+        """The archived proposal's outcome; None while undecided, for an unknown id and for one `valid_proposal_id`
+        refuses (never a path outside approvals/, as get/submit)."""
+        if not valid_proposal_id(proposal_id):
+            return None
         f = self.done_dir / f"{proposal_id}.json"
         if not f.exists():
             return None

@@ -279,6 +279,15 @@ def test_the_bus_refuses_a_traversal_or_unlisted_proposal_id_at_submit_get_and_d
     assert victim.exists() and not list(bus.decisions_dir.glob("*.json"))
 
 
+@pytest.mark.parametrize("pid", BAD_IDS)
+def test_the_bus_outcome_of_a_traversal_or_unlisted_proposal_id_is_none(tmp_path, pid):
+    """As get/submit/discard: an id `valid_proposal_id` refuses never names a file, so outcome() reads nothing."""
+    bus = ApprovalBus(tmp_path)
+    victim = bus.root / "victim.json"                          # what "../victim" reaches from done/
+    victim.write_text(_p("victim").model_copy(update={"outcome": Outcome.APPROVED}).model_dump_json())
+    assert bus.outcome(pid) is None and bus.outcome("../victim") is None
+
+
 def test_decision_callbacks_refuse_an_unlisted_proposal_id():
     with pytest.raises(ValueError, match="invalid proposal id"):
         decision_callbacks(_p("a..b"))
