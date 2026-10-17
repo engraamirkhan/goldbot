@@ -173,8 +173,10 @@ class AuthState(BaseModel):
     needs_setup: bool
     users: int
     email_link: bool = False      # the owner's "email me a sign-in link" is offered (auth.mail configured)
-    # the owner's "email me a code" is offered: mail ready, the owner account exists, the code key is in the keyring
-    email_code: bool = False
+    # the owner's "send me a code" is offered: the code channel is ready (Telegram chat set up, or mail), the owner
+    # account exists and the code key is in the keyring
+    code_sign_in: bool = False
+    code_channel: Literal["telegram", "mail"] = "telegram"      # where the code goes (auth.code_channel)
 
 
 class SetupRequest(ApiRequest):
@@ -207,7 +209,8 @@ class LoginResponse(BaseModel):
 
 
 class EmailCodeRequest(ApiRequest):
-    """Email + password: the owner gets a 6-digit code by email; every input gets the same answer (ADR 0028)."""
+    """Email + password: the owner gets a 6-digit code on the code channel (Telegram by default; the route names are
+    from the first, email-only design); every input gets the same answer (ADR 0028)."""
     email: str = ""
     password: str = ""
 
@@ -341,6 +344,18 @@ class RecoveryCodesRequest(ApiRequest):
 
 class RecoveryCodesResponse(BaseModel):
     recovery_codes: list[str]
+
+
+class CodeSignIn(BaseModel):
+    at_utc: str
+    network: str                  # coarse (auth.coarse_ip), never the full address
+
+
+class CodeSignIns(BaseModel):
+    """The owner's Telegram-code sign-ins of the last 7 days, newest first (security condition 6): the banner shown
+    after every sign-in."""
+    sign_ins: list[CodeSignIn]
+    channel: Literal["telegram", "mail"]
 
 
 class RevokeResponse(BaseModel):

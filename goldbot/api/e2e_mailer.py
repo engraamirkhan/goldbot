@@ -1,5 +1,5 @@
-"""E2E-only fake mailer: the Playwright auth tests (web/e2e/auth.spec.ts) read the owner's sign-in link from a JSONL
-outbox instead of a mailbox. It never sends anything, and it is REFUSED (E2EMailerRefused, at construction, before any
+"""E2E-only fake mailer and fake code channel: the Playwright auth tests (web/e2e/auth.spec.ts) read the owner's sign-in
+link and sign-in code from a JSONL outbox instead of a mailbox or a Telegram chat. They never send anything, and it is REFUSED (E2EMailerRefused, at construction, before any
 file is touched) unless every one of these holds:
 
 1. the API it serves is bound to a loopback address, exactly `127.0.0.1` or `::1` (not `localhost`, which a hosts file
@@ -25,6 +25,9 @@ import tempfile
 import threading
 from collections.abc import Mapping
 from pathlib import Path
+
+from goldbot.api.code_delivery import CodeMessage, telegram_code_text
+from goldbot.api.mailer import EMAIL_CODE_SUBJECT
 
 E2E_FLAG = "GOLDBOT_E2E_FAKE_MAILER"
 LOOPBACK_BINDS = frozenset({"127.0.0.1", "::1"})
@@ -64,20 +67,44 @@ def require_e2e(bind_host: str, outbox: Path, environ: Mapping[str, str] | None 
     return parent / Path(outbox).name
 
 
-class CaptureMailer:
-    """`goldbot.api.mailer.Mailer` that appends each message to `outbox` as one JSON line {to, subject, body}."""
+class _Outbox:
+    """The guarded JSONL outbox both fakes append to."""
 
     def __init__(self, outbox: Path, *, bind_host: str, environ: Mapping[str, str] | None = None):
         self.outbox = require_e2e(bind_host, outbox, environ)
         self._lock = threading.Lock()           # sends run in the API's thread pool
 
-    def ready(self) -> bool:
-        return True
-
-    def send(self, to: str, subject: str, body: str) -> None:
-        line = json.dumps({"to": to, "subject": subject, "body": body}) + "\n"
+    def _append(self, row: dict[str, str]) -> None:
+        line = json.dumps(row) + "\n"
         with self._lock:
             # never through a symlink (O_NOFOLLOW raises ELOOP), and created readable by this user only
             fd = os.open(self.outbox, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
             with os.fdopen(fd, "a", encoding="utf-8") as fh:
                 fh.write(line)
+
+
+class CaptureMailer(_Outbox):
+    """`goldbot.api.mailer.Mailer` that appends each message to `outbox` as one JSON line {to, subject, body}."""
+
+    def ready(self) -> bool:
+        return True
+
+    def send(self, to: str, subject: str, body: str) -> None:
+        self._append({"to": to, "subject": subject, "body": body})
+
+
+class CaptureCodeDelivery(_Outbox):
+    """`goldbot.api.code_delivery.CodeDelivery` for the Telegram channel that never calls Telegram: the message the
+    bot would send goes to the same outbox as {to: "telegram", subject: "Your goldbot sign-in code", body}, under the
+    same refusal rules (module docstring). No message id, so there is nothing to delete."""
+    channel = "telegram"
+
+    def ready(self) -> bool:
+        return True
+
+    def send(self, msg: CodeMessage) -> str | None:
+        self._append({"to": "telegram", "subject": EMAIL_CODE_SUBJECT, "body": telegram_code_text(msg)})
+        return None
+
+    def delete(self, message_id: str) -> None:
+        return None

@@ -7,7 +7,7 @@ import { roleLabel } from "../lib/roles";
 // The server's 403s on a session opened with an emailed code (goldbot/api/app.py STEPUP_REQUIRED: no or a wrong
 // authenticator or recovery code; STEPUP_LOCKED: too many wrong ones), in the owner's words.
 const STEPUP_TEXT = "This action needs a current code from your authenticator app (or a recovery code), because you " +
-  "signed in with an email code. Type it above and try again.";
+  "signed in with a sign-in code. Type it above and try again.";
 const STEPUP_LOCKED_TEXT = "Too many wrong codes. Managing users, re-arm and auto mode are locked for 15 minutes; Halt still works.";
 const IN_WORDS: Record<string, string> = { [SERVER_SAYS.stepupRequired]: STEPUP_TEXT, [SERVER_SAYS.stepupLocked]: STEPUP_LOCKED_TEXT };
 
@@ -60,7 +60,7 @@ export function Users() {
             <input value={stepup} onChange={(e) => setStepup(e.target.value)} autoComplete="one-time-code" autoCapitalize="none"
               spellCheck={false} aria-describedby={fail ? "users-err" : undefined} />
           </label>
-          <p className="muted">Signed in with an email code: this action also needs your authenticator.</p>
+          <p className="muted">Signed in with a sign-in code: this action also needs your authenticator.</p>
         </div>
       )}
       <form className="inline" onSubmit={submit}>

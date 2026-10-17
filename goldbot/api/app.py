@@ -11,6 +11,7 @@ import json
 import logging
 import math
 import os
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +32,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 
 from goldbot.api import entry_status, explain, progress
 from goldbot.api.auth import (
@@ -46,9 +48,15 @@ from goldbot.api.auth import (
     has_role,
     need_stepup,
 )
+from goldbot.api.code_delivery import (
+    CodeDelivery,
+    CodeMessage,
+    MailCodeDelivery,
+    TelegramCodeDelivery,
+    quiet_http_logs,
+)
 from goldbot.api.mailer import (
     Mailer,
-    email_code_message,
     email_link_message,
     mailer_from_settings,
     sign_in_notice_message,
@@ -66,6 +74,8 @@ from goldbot.api.schema import (
     CalendarEvent,
     CalendarResponse,
     ChangePasswordRequest,
+    CodeSignIn,
+    CodeSignIns,
     DecidedProposal,
     Decision,
     DecisionResult,
@@ -280,6 +290,24 @@ def _local_and_utc(ts: float, tz_name: str) -> tuple[str, str]:
     return (f"{local:%H:%M} UTC" if place == "UTC" else f"{local:%H:%M} {place} time", f"{utc:%H:%M} UTC")
 
 
+def _default_code_delivery(mailer: Mailer | None, mail: MailSettings, mailer_injected: bool,
+                           owner_email: Callable[[], str | None]) -> CodeDelivery:
+    """`auth.code_channel` decides (telegram unless settings say mail); unreadable settings mean Telegram with no
+    allowed user, which is never ready (fails closed)."""
+    channel: str = "mail" if mailer_injected else "telegram"
+    allowed: list[int] = []
+    if not mailer_injected:
+        try:
+            from goldbot.config import load_settings
+            cfg = load_settings()
+            channel, allowed = cfg.auth.code_channel, list(cfg.telegram.allowed_user_ids)
+        except Exception as exc:                # noqa: BLE001 - the API still serves; codes stay off
+            print(f"goldbot api: settings unreadable, sign-in codes off: {type(exc).__name__}", flush=True)
+    if channel == "mail":
+        return MailCodeDelivery(mailer, owner_email, mail.enabled)
+    return TelegramCodeDelivery(allowed)
+
+
 def client_ip(request: Request) -> str | None:
     """The caller's address for the per-IP lockout. The API listens on 127.0.0.1 behind the Cloudflare tunnel, so a
     loopback peer is cloudflared and the visitor's address is its CF-Connecting-IP header; any other peer is used as
@@ -295,12 +323,19 @@ def client_ip(request: Request) -> str | None:
 def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist",
                data_root: str | Path | None = None, docs_dir: str | Path | None = None,
                owner_email: str | None = None, mail: MailSettings | None = None,
-               mailer: Mailer | None = None) -> FastAPI:
+               mailer: Mailer | None = None, code_delivery: CodeDelivery | None = None) -> FastAPI:
     """owner_email: the dashboard owner; None reads `auth.owner_email` from settings. mail: None reads `auth.mail`;
-    mailer: None sends through SMTP when mail is enabled (tests pass a fake)."""
+    mailer: None sends through SMTP when mail is enabled (tests pass a fake). code_delivery: how the sign-in code
+    reaches the owner; None follows `auth.code_channel` (Telegram by default), and an injected `mailer` with no
+    `code_delivery` means the mail channel (the tests of the SMTP path)."""
+    quiet_http_logs()                           # the bot token is in the Telegram URL (code_delivery.py)
     st = State(state_dir, data_root, owner_email if owner_email is not None else _settings_owner_email())
     mail = mail if mail is not None else _settings_mail()
+    mailer_injected = mailer is not None
     mailer = mailer if mailer is not None else mailer_from_settings(mail)
+    if code_delivery is None:
+        code_delivery = _default_code_delivery(mailer, mail, mailer_injected, lambda: st.auth.owner_email)
+    st.auth.code_channel = code_delivery.channel
 
     def email_link_ready() -> bool:
         """The owner's email sign-in link is offered: auth.mail enabled and complete, and the SMTP password stored."""
@@ -331,25 +366,57 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         failed = "email_code_notice_failed" if method == "email_code" else "email_link_notice_failed"
         mail_owner(subject, text, "sign-in notice", failed)
 
-    def send_email_code(code: str, ip: str | None) -> None:
-        """After the answer has gone (condition 6: a real send takes as long as a decoy). The body is never logged; a
-        failure anywhere, formatting included, is logged and audited by exception type only."""
+    def delete_message(message_id: str | None) -> None:
+        """Best effort: a delivered code that is used, burned, replaced or expired should not stay in the chat."""
+        if message_id is None:
+            return
+        try:
+            code_delivery.delete(message_id)
+        except Exception as exc:                # noqa: BLE001 - the token is in the URL: the type only
+            log.warning("sign-in code message not deleted: %s", type(exc).__name__)
+
+    def sweep_expired_code_messages() -> None:
+        """At API start: delete the chat messages of codes that expired while the process was down (their expiry timers
+        died with it). Best effort, off the start-up path."""
+        try:
+            for mid in st.auth.take_expired_code_messages():
+                delete_message(mid)
+        except Exception as exc:                # noqa: BLE001 - never stops the API starting
+            log.warning("expired sign-in code messages not swept: %s", type(exc).__name__)
+
+    if code_delivery.channel == "telegram":
+        threading.Thread(target=sweep_expired_code_messages, daemon=True).start()
+
+    def send_email_code(code: str, challenge: str, ip: str | None, stale: str | None) -> None:
+        """After the answer has gone (condition 6: a real send takes as long as a decoy). The code is never logged; a
+        failure anywhere, formatting included, is logged and audited by exception type only (`code_channel_unavailable`
+        on Telegram, where nothing is sent when the chat is not the owner's private chat). The message id is kept with
+        the challenge so the message can be deleted on use, burn, resend and expiry."""
         try:
             now = time.time()
             tz = _settings_owner_tz()
             expires_local, expires_utc = _local_and_utc(now + EMAIL_CODE_TTL_S, tz)
             requested_local, _ = _local_and_utc(now, tz)
-            subject, text = email_code_message(code, expires_local, expires_utc, requested_local, coarse_ip(ip))
+            mid = code_delivery.send(CodeMessage(code=code, expires_local=expires_local, expires_utc=expires_utc,
+                                                 requested_local=requested_local, network=coarse_ip(ip)))
         except Exception as exc:                # noqa: BLE001 - the caller already has its answer
-            log.warning("email sign-in code not sent: %s", type(exc).__name__)
-            st.auth.audit("email_code_send_failed", error=type(exc).__name__)
+            log.warning("sign-in code not sent: %s", type(exc).__name__)
+            st.auth.audit("code_channel_unavailable" if code_delivery.channel == "telegram" else "email_code_send_failed",
+                          error=type(exc).__name__)
             return
-        mail_owner(subject, text, "email sign-in code", "email_code_send_failed")
+        finally:
+            delete_message(stale)
+        if mid is not None:
+            st.auth.set_code_message(challenge, mid)
+            timer = threading.Timer(EMAIL_CODE_TTL_S + 5, delete_message, args=(mid,))
+            timer.daemon = True
+            timer.start()
 
-    def challenge_answer(issue: EmailCodeIssue, ip: str | None, background: BackgroundTasks) -> EmailCodeChallenge:
-        """The same JSON for a real challenge and a decoy; the mail (if any) goes in the background, after it."""
+    def challenge_answer(issue: EmailCodeIssue, ip: str | None, background: BackgroundTasks,
+                         stale: str | None = None) -> EmailCodeChallenge:
+        """The same JSON for a real challenge and a decoy; the code (if any) goes in the background, after it."""
         if issue.code is not None:
-            background.add_task(send_email_code, issue.code, ip)
+            background.add_task(send_email_code, issue.code, issue.challenge, ip, stale)
         return EmailCodeChallenge(challenge=issue.challenge, expires_in_s=EMAIL_CODE_TTL_S,
                                   resend_after_s=issue.resend_after_s)
     app = FastAPI(title="goldbot api", version="0.2")
@@ -397,9 +464,10 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     # ------------------------------------------------------------- auth endpoints
     @app.get("/api/auth/state")
     def auth_state() -> AuthState:
-        ready = email_link_ready()
         return AuthState(needs_setup=st.auth.setup_code is not None, users=st.auth.user_count(),
-                         email_link=ready, email_code=ready and st.auth.email_code_available())
+                         email_link=email_link_ready(),
+                         code_sign_in=code_delivery.ready() and st.auth.email_code_available(),
+                         code_channel="mail" if code_delivery.channel == "mail" else "telegram")
 
     @app.post("/api/auth/setup")
     def setup(body: SetupRequest) -> SetupResponse:
@@ -454,7 +522,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         and mail is ready); 403 only while the sign-in lockout holds, as for sign-in."""
         ip = client_ip(request)
         try:
-            issue = st.auth.request_email_code(body.email, body.password, ip=ip, enabled=email_link_ready())
+            issue = st.auth.request_email_code(body.email, body.password, ip=ip, enabled=code_delivery.ready())
         except PermissionError as exc:
             raise HTTPException(403, str(exc))
         return challenge_answer(issue, ip, background)
@@ -464,25 +532,40 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                           background: BackgroundTasks) -> EmailCodeChallenge:
         """A new code for this challenge (only the newest works): not before resend_after_s; the same shape always."""
         ip = client_ip(request)
-        issue = st.auth.resend_email_code(body.challenge, ip=ip, enabled=email_link_ready())
-        return challenge_answer(issue, ip, background)
+        stale, _ = st.auth.code_message(body.challenge)
+        issue = st.auth.resend_email_code(body.challenge, ip=ip, enabled=code_delivery.ready())
+        return challenge_answer(issue, ip, background, stale)
 
-    @app.post("/api/auth/email-code/verify")
+    @app.post("/api/auth/email-code/verify", response_model=LoginResponse)
     def email_code_verify(body: EmailCodeVerifyRequest, request: Request,
-                          background: BackgroundTasks) -> LoginResponse:
-        """The challenge and its code: a 12 h owner session (method email_code). Every success is announced by
-        Telegram (AuthStore) and by email (condition 10)."""
+                          background: BackgroundTasks) -> LoginResponse | JSONResponse:
+        """The challenge and its code: a 12 h owner session (method email_code). A Telegram-code sign-in is audited
+        `tg_code_login` and listed in the owner's banner (condition 6); the mail channel also mails a notice. The
+        delivered message is deleted once the code is used or burned."""
         ip = client_ip(request)
+        before, _ = st.auth.code_message(body.challenge)
         try:
             tok = st.auth.verify_email_code(body.challenge, body.code, ip=ip)
         except PermissionError as exc:
+            if before is not None and not st.auth.code_message(body.challenge)[1]:       # burned
+                return JSONResponse({"detail": str(exc)}, status_code=403,
+                                    background=BackgroundTask(delete_message, before))
             raise HTTPException(403, str(exc))
         u = st.auth.session_user(tok)
         if u is None:
             raise HTTPException(403, "invalid credentials")
-        background.add_task(send_sign_in_notice, ip, "email_code")
+        background.add_task(delete_message, before)
+        if code_delivery.channel == "mail":
+            background.add_task(send_sign_in_notice, ip, "email_code")
         return LoginResponse(token=tok, expires_in=SESSION_TTL_H * 3600, role=u.role, email=u.email,
                              signed_in_with="email_code")
+
+    @app.get("/api/auth/code-sign-ins")
+    def code_sign_ins(u: User = Depends(need("owner"))) -> CodeSignIns:
+        """The owner's Telegram-code sign-ins of the last 7 days (time, coarse network), for the banner shown after
+        every sign-in with its one-tap "sign out everywhere"."""
+        return CodeSignIns(sign_ins=[CodeSignIn(**r) for r in st.auth.code_sign_ins()],
+                           channel="mail" if code_delivery.channel == "mail" else "telegram")
 
     @app.post("/api/auth/logout")
     def logout(creds: HTTPAuthorizationCredentials | None = Depends(bearer)) -> Ok:

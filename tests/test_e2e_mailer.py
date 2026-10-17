@@ -16,7 +16,8 @@ import pytest
 from pydantic import ValidationError
 
 from goldbot.api import e2e_mailer
-from goldbot.api.e2e_mailer import E2E_FLAG, CaptureMailer, E2EMailerRefused
+from goldbot.api.code_delivery import CodeMessage
+from goldbot.api.e2e_mailer import E2E_FLAG, CaptureCodeDelivery, CaptureMailer, E2EMailerRefused
 from goldbot.api.mailer import SmtpMailer, mailer_from_settings
 from goldbot.config import MailSettings, Settings
 
@@ -40,6 +41,21 @@ def test_captures_mail_on_loopback_with_the_flag(outbox, host):
     assert rows == [{"to": "owner@example.com", "subject": "Your goldbot sign-in link",
                      "body": "http://127.0.0.1:1/#signin=tok\n"},
                     {"to": "owner@example.com", "subject": "second", "body": "b"}]
+
+
+def test_the_fake_code_channel_captures_the_telegram_message_to_the_outbox_under_the_same_guards(outbox):
+    msg = CodeMessage(code="123456", expires_local="14:42 London time", expires_utc="13:42 UTC",
+                      requested_local="14:32 London time", network="203.0.x.x")
+    with pytest.raises(E2EMailerRefused):
+        CaptureCodeDelivery(outbox, bind_host="0.0.0.0", environ=ON)
+    with pytest.raises(E2EMailerRefused):
+        CaptureCodeDelivery(outbox, bind_host="127.0.0.1", environ={})
+    assert not outbox.exists()
+    d = CaptureCodeDelivery(outbox, bind_host="127.0.0.1", environ=ON)
+    assert d.channel == "telegram" and d.ready() and d.send(msg) is None
+    (row,) = [json.loads(line) for line in outbox.read_text().splitlines()]
+    assert row["to"] == "telegram" and row["subject"] == "Your goldbot sign-in code"
+    assert row["body"].split("\n")[0] == "123456" and "Not you?" in row["body"]
 
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "::", "", "localhost", "127.0.0.2", "192.168.1.10", "dash.example.com",
@@ -104,7 +120,7 @@ def test_settings_cannot_select_the_fake_mailer(monkeypatch):
 
 def test_no_deployed_module_imports_the_fake_mailer():
     """Only scripts/e2e_server.py builds it; nothing under goldbot/ (API, ops entry points, services) imports it."""
-    pat = re.compile(r"\be2e_mailer\b|\bCaptureMailer\b")
+    pat = re.compile(r"\be2e_mailer\b|\bCaptureMailer\b|\bCaptureCodeDelivery\b")
     users = sorted(str(p.relative_to(ROOT)) for p in (ROOT / "goldbot").rglob("*.py")
                    if p.name != "e2e_mailer.py" and pat.search(p.read_text(encoding="utf-8")))
     assert users == []

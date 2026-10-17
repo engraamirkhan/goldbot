@@ -16,7 +16,6 @@ const NEUTRAL = "If this address can use email sign-in, a link is on its way";
 const LINK_SUBJECT = "Your goldbot sign-in link";
 const NOTICE_SUBJECT = "goldbot: new sign-in with an emailed link";
 const CODE_SUBJECT = "Your goldbot sign-in code";
-const CODE_NOTICE_SUBJECT = "goldbot: new sign-in with an emailed code";
 
 function mails(): Mail[] {
   const p = server().outbox;
@@ -71,7 +70,7 @@ async function enrolledSecret(page: Page): Promise<string> {
   return secret;
 }
 
-/** The auth server can send mail, so once the owner exists the Sign in screen defaults to "Email me a code"
+/** The auth server can send mail, so once the owner exists the Sign in screen defaults to "Send me a code"
  * (docs/ux/sign-in-email-code.md State A); these steps use today's path. */
 async function chooseAuthenticator(page: Page) {
   await page.getByRole("radio", { name: "Authenticator app", exact: true }).check();
@@ -118,7 +117,7 @@ test("login: the owner is created, a wrong code is refused, the right one signs 
   ownerSecret = await enrolledSecret(page);
 
   await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
-  await expect(page.getByRole("radio", { name: "Email me a code", exact: true })).toBeChecked();   // the owner exists now
+  await expect(page.getByRole("radio", { name: "Send me a code", exact: true })).toBeChecked();   // the owner exists now
   await chooseAuthenticator(page);
   await page.getByLabel("Email", { exact: true }).fill(OWNER.email);
   await page.getByLabel("Password", { exact: true }).fill("not the password 1");
@@ -255,31 +254,32 @@ test("email sign-in link: the owner gets a one-time link, signs in with it and t
   await expect(page.getByRole("heading", { name: "Email me a sign-in link", exact: true })).toBeVisible();
 });
 
-test("email code: the owner signs in with the password and an emailed code; user management then needs the authenticator", async ({ page }) => {
+test("sign-in code: the owner signs in with the password and a code sent to Telegram; user management then needs the authenticator", async ({ page }) => {
   await asClient(page, "203.0.113.8");
   await page.goto("/");
-  await expect(page.getByRole("radio", { name: "Email me a code", exact: true })).toBeChecked();
+  await expect(page.getByRole("radio", { name: "Send me a code", exact: true })).toBeChecked();
   await page.getByLabel("Email", { exact: true }).fill(OWNER.email);
   await page.getByLabel("Password", { exact: true }).fill(OWNER.password);
   const before = mails().length;
-  await page.getByRole("button", { name: "Email me a code", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Enter the code we emailed", exact: true })).toBeVisible();
-  await expect(page.getByText(/a 6-digit code is on its way to o•••@e•••\.com\. It works once, for 10 minutes/)).toBeVisible();
+  await page.getByRole("button", { name: "Send me a code", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Enter the code we sent", exact: true })).toBeVisible();
+  await expect(page.getByText(/a 6-digit code is on its way to your goldbot Telegram chat\. It works once, for 10 minutes/)).toBeVisible();
   await expect(page.getByText(/^Resend code in [01]:\d\d$/)).toBeVisible();
   await page.setViewportSize({ width: 360, height: 800 });                    // the code screen fits a phone too
   await fitsThePhone(page);
   await page.setViewportSize({ width: 1280, height: 720 });
 
   const mail = await mailAfter(before, CODE_SUBJECT);
-  expect(mail.to).toBe(OWNER.email);
+  expect(mail.to).toBe("telegram");                                   // the fake code channel: the message the bot would send
   const code = mail.body.split("\n")[0];
   expect(code).toMatch(/^\d{6}$/);                                             // alone on the first line
   expect(mail.subject).not.toContain(code);
   await page.getByLabel("Code", { exact: true }).fill(code);                   // signs in on the sixth digit
   await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
   await expectRoleNotEmail(page, "Owner", OWNER.email);
-  const notice = await mailAfter(before, CODE_NOTICE_SUBJECT);                 // condition 10: every one is announced
-  expect(notice.body).not.toContain(code);
+  const recent = page.getByRole("region", { name: "Sign-ins with a Telegram code, last 7 days" });   // condition 6: every one is listed
+  await expect(recent).toContainText("203.0.x.x");
+  await expect(recent).not.toContainText(code);
   const stored = await page.evaluate(() => ({ local: Object.keys(localStorage), all: JSON.stringify({ ...localStorage, ...sessionStorage }) }));
   expect(stored.local.filter((k) => k !== "signin.method")).toEqual([]);      // the browser keeps no code or password
   expect(stored.all).not.toContain(code);
@@ -293,7 +293,7 @@ test("email code: the owner signs in with the password and an emailed code; user
   await page.getByRole("button", { name: "Create invite link", exact: true }).click();
   await expect(page.getByRole("alert")).toHaveText(
     "This action needs a current code from your authenticator app (or a recovery code), because you signed in with " +
-    "an email code. Type it above and try again.");
+    "a sign-in code. Type it above and try again.");
   await expect(page.locator("code.mono")).toHaveCount(0);                      // refused: no invite was made
   await stepup.fill(clock.fresh(ownerSecret));
   await page.getByRole("button", { name: "Create invite link", exact: true }).click();
