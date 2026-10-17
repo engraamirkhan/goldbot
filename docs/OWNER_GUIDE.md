@@ -52,6 +52,7 @@ without typing the password. Free with Gmail:
 - **Morning digest:** at 06:45 UTC Telegram sends one message: all good or what needs attention, yesterday's trades, risk, and decisions waiting for you. [More](RUNBOOK.md#05-daily-use)
 - **Approve:** Telegram shows direction, lots, entry, stop, target, probability, spread. Tap **Approve**, or a **Reject** reason. Or the dashboard **Approvals** tab. After 90 s it expires. [More](RUNBOOK.md#approving-or-rejecting-an-entry)
 - **`/halt`** stops new entries; open trades keep their stops. Resume on the dashboard: **Overview**, authenticator code, **Re-arm**. [More](RUNBOOK.md#halt-and-re-arm)
+- **12% kill switch:** if it trips, every open position on the account is closed at market, including trades you opened by hand on other symbols. [More](RUNBOOK.md#halt-and-re-arm)
 - **Deploy:** Telegram *New version ready* -> **[Deploy]**. Never while an entry waits; rolls back by itself if a service fails. [More](RUNBOOK.md#05-daily-use)
 - **Entry status (top of Overview):** one block per account answers "can it take new trades right now?".
   **OPEN** (green): yes. **PARTLY OPEN** (amber): yes, except the strategies named (e.g. "trend-g0 paused after 3

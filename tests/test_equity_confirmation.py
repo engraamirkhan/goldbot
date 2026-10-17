@@ -391,7 +391,8 @@ def test_a_failed_risk_state_save_never_stops_an_uncorroborated_crash_from_tripp
     assert not _halted(eng) and eng._stage2_pending_since is not None and eng.state.tick_error
     _read(eng, 2)
     assert _halted(eng) and runs == [True] and pb.positions() == []  # the whole account flattened
-    assert not eng._kill_pending                                      # flat, so nothing left to re-run
+    # BACKLOG 62 (C1): the account book stays unreadable, so the gold fallback was closed and the flag stays set
+    assert eng._kill_pending and eng._kill_everything
 
 
 def test_a_failed_save_on_the_halt_still_closes_the_whole_account_on_that_read(tmp_path, monkeypatch):

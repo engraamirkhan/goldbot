@@ -880,6 +880,11 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
   authenticator code -> **Re-arm**. Telegram `/rearm` only tells you to use the dashboard. The same re-arm also
   clears an engine's 12% drawdown halt (the kill switch, which closes every position at market when it trips); each
   engine applies it once, and a restart does not clear the halt.
+* **Warning: if the kill switch trips, every open position on the account is closed at market, including trades you
+  opened by hand on other symbols** (any symbol, any magic; ADR 0016 amendment, BACKLOG 62). There is no prompt
+  first: exits are never gated. A symbol with no live quote is retried until it closes. Pending orders you placed by
+  hand are not cancelled; delete them yourself after a trip. Keep manual trades off this account if you do not want
+  them closed.
 * `/status` on Telegram shows whether entries are halted, the approval mode and how many proposals are pending.
 * **Health `kill_switch:<account>`** (WARN on Telegram 5 min after a 12% trip, FAIL after 30 min of open market):
   the kill switch could not close every position yet; the engine re-sends each due close every tick. Check

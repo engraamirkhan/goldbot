@@ -69,6 +69,8 @@ RETCODE_DONE = 10009
 MT5_INIT_TIMEOUT_MS = 60_000
 RETCODE_REQUOTE = 10004
 RETCODE_REJECT = 10006
+RETCODE_INVALID_VOLUME = 10014
+RETCODE_PRICE_OFF = 10021        # no quotes: a close the engine retries (not a market-closed backoff code)
 
 
 def _positions_get(**kw: Any) -> Any:
@@ -210,6 +212,7 @@ class MT5Broker:
             raise RuntimeError(f"symbol_info({symbol}) returned None; refusing to start")
         self._info = info
         self._sessions_noted = False
+        self._unquoted: set[str] = set()     # symbols whose close was refused for want of a quote (logged once)
 
     # ------------------------------------------------------------------ info
     def symbol_info(self, symbol: str) -> SymbolInfo:
@@ -317,8 +320,10 @@ class MT5Broker:
         return resolve_server_sessions(SessionTable(server_tz=self.server_tz).server_sessions(), self.server_tz, today)
 
     # ------------------------------------------------------------------ orders
-    def _filling(self) -> int:
-        modes = self.symbol_info(self.symbol).filling_modes
+    def _filling(self, symbol: str) -> int:
+        """The fill mode `symbol` itself allows (IOC, else FOK, else RETURN): an order or close of another symbol (the
+        kill switch closes every symbol, BACKLOG 62) never borrows the engine symbol's mode."""
+        modes = self.symbol_info(symbol).filling_modes
         for pref, const in (("IOC", "ORDER_FILLING_IOC"), ("FOK", "ORDER_FILLING_FOK"), ("RETURN", "ORDER_FILLING_RETURN")):
             if pref in modes:
                 return getattr(mt5, const)
@@ -331,7 +336,7 @@ class MT5Broker:
             "action": mt5.TRADE_ACTION_DEAL, "symbol": intent.symbol, "volume": intent.lots,
             "type": mt5.ORDER_TYPE_BUY if intent.side > 0 else mt5.ORDER_TYPE_SELL, "price": price,
             "sl": intent.sl, "tp": intent.tp, "deviation": intent.deviation_points, "magic": intent.magic,
-            "comment": intent.comment[:31], "type_time": mt5.ORDER_TIME_GTC, "type_filling": self._filling(),
+            "comment": intent.comment[:31], "type_time": mt5.ORDER_TIME_GTC, "type_filling": self._filling(intent.symbol),
         }
         for attempt in range(3):
             chk = mt5.order_check(req)
@@ -361,16 +366,35 @@ class MT5Broker:
         return OrderResult(ok=res.retcode == RETCODE_DONE, retcode=res.retcode, order_id=None, position_id=position_id, filled_lots=p.volume, price=None, message=res.comment)
 
     def close(self, position_id: int, lots: float | None = None) -> OrderResult:
+        """Close a position of any symbol at market (design: "12%: close everything at market immediately"; BACKLOG 62)
+        with that symbol's own quote and fill mode. The symbol is selected into Market Watch before its tick is read
+        (a manual trade's symbol may not be shown); no symbol info or no tick is a refused close (10021, no quotes),
+        never a raise, so the engine retries it and one symbol never stops the others. A full close sends the
+        position's own volume as the terminal reports it (no rounding); a partial close of another symbol is never sent
+        (the engine scales out only its own symbol, whose volume step it knows)."""
         pos = [p for p in _positions_get() if p.ticket == position_id]
         if not pos:
             return OrderResult(ok=False, retcode=10013, order_id=None, position_id=position_id, filled_lots=0.0, price=None, message="no such position")
         p = pos[0]
-        tick = mt5.symbol_info_tick(p.symbol)
+        if lots is not None and p.symbol != self.symbol:
+            return OrderResult(ok=False, retcode=RETCODE_INVALID_VOLUME, order_id=None, position_id=position_id,
+                               filled_lots=0.0, price=None, message=f"partial close of {p.symbol} not sent")
+        mt5.symbol_select(p.symbol, True)
+        info, tick = mt5.symbol_info(p.symbol), mt5.symbol_info_tick(p.symbol)
+        if info is None or tick is None:
+            missing = "symbol info" if info is None else "tick"
+            if p.symbol not in self._unquoted:              # once per streak: the engine retries it with a backoff
+                self._unquoted.add(p.symbol)
+                log.warning("close of position %s refused: no %s for %s (%s); retried", position_id, missing,
+                            p.symbol, mt5.last_error())
+            return OrderResult(ok=False, retcode=RETCODE_PRICE_OFF, order_id=None, position_id=position_id,
+                               filled_lots=0.0, price=None, message=f"no {missing} for {p.symbol}")
+        self._unquoted.discard(p.symbol)
         is_buy = p.type == mt5.POSITION_TYPE_BUY
         req = {"action": mt5.TRADE_ACTION_DEAL, "symbol": p.symbol, "position": position_id,
                "volume": lots or p.volume, "type": mt5.ORDER_TYPE_SELL if is_buy else mt5.ORDER_TYPE_BUY,
                "price": tick.bid if is_buy else tick.ask, "deviation": 30, "magic": p.magic,
-               "comment": "close", "type_filling": self._filling()}
+               "comment": "close", "type_filling": self._filling(p.symbol)}
         res = mt5.order_send(req)
         if res is None:
             return _send_failed(position_id)
