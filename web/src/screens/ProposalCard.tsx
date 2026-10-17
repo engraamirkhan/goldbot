@@ -123,9 +123,11 @@ export function ProposalCard({ p, now, canDecide, blockers, busy = false, error,
   );
 }
 
+const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
 const STATE_NAME: Record<CardState, string> = {
   pending: "waiting for your decision", expiring: "expiring", expired: "expired", submitted: "approval sent",
-  approved: "approved", rejected: "rejected", refused: "refused by the RiskGate",
+  approved: "approved", rejected: "rejected", refused: "not placed",   // by the RiskGate, the MT5 box or the broker
 };
 
 function Outcome({ p, state }: { p: AnyProposal; state: CardState }) {
@@ -142,8 +144,30 @@ function Outcome({ p, state }: { p: AnyProposal; state: CardState }) {
       return <p className="outcome muted-box" role="status"><strong>Rejected</strong> · {reasonLabel(d?.reason_code)}{tail}</p>;
     case "refused":
       {
-        // BACKLOG 66: the RiskGate allowed it; the MT5 box's own ceiling (6× its equity) refused it. The code picks
-        // the wording (a prefix match) and is never shown
+        // docs/ux/order-not-placed.md: the RiskGate allowed it; the MT5 box or the broker refused it. The API words it
+        // (`not_placed`, one table with the Telegram card and notice); the codes are never shown
+        const np = d?.not_placed;
+        if (np) {
+          const heading = np.by === "mt5_box" ? "Refused by the MT5 box" : "Refused by the broker";
+          return (
+            <p className="outcome bad" role="status">
+              {np.reason != null
+                ? <><strong>{heading}.</strong> {capitalise(np.reason)}; nothing was sent.</>
+                : <><strong>{heading}</strong> (code {np.code}); nothing was sent.</>}
+              {tail}
+            </p>
+          );
+        }
+        // an older API without `not_placed`: the broker's code, never the RiskGate's words
+        const broker = (d?.refusal ?? []).map((r) => /^broker_refused:(\d+)/.exec(r)).find((m) => m != null);
+        if (broker) {
+          return (
+            <p className="outcome bad" role="status">
+              <strong>Refused by the broker</strong> (code {broker[1]}); nothing was sent.{tail}
+            </p>
+          );
+        }
+        // BACKLOG 66, from an older API: the MT5 box's own ceiling (6× its equity) refused it (a prefix match)
         const bridge = (d?.refusal ?? []).find((r) => r.startsWith("bridge_notional_ceiling"));
         if (bridge) {
           return (

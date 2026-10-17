@@ -5,6 +5,16 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- Order not placed (trading-safety LOW-R1 follow-up to BACKLOG 66; copy `docs/ux/order-not-placed.md`): an approved
+  entry the MT5 box or the broker definitely refused no longer archives as APPROVED. The engine stores
+  `bridge_stale_order` (10006 with the bridge's stale prefix, tested before the retcode) or `broker_refused:<retcode>`
+  (any other `DEFINITE_REJECT_RETCODES`; the paper broker's duplicate is `broker_refused:10027:paper`) in
+  `gate_refusal`, and queues exactly one owner notice per refusal. One wording table, `goldbot/execution/not_placed.py`,
+  feeds the Telegram card (`outcome_text`), the notice and the new API field `DecidedProposal.not_placed {by, reason,
+  code, next_step}`; the dashboard's red note reads it, with "Refused by the broker (code N); nothing was sent." for
+  older APIs, and the card's state name is now "not placed". Ceiling codes keep their shipped words. A fill or an
+  ambiguous result (10008, 10010, 10012, -1, ...) still reads APPROVED. Not in this change: the amber "NOT
+  CONFIRMED" state and auto-mode notices (open points in the spec, awaiting decisions).
 - The approval window no longer trusts the wall clock alone (2026-10-16, BACKLOG 60; needs trading-safety review).
   `Proposal.expired` was `time.time() > created + window_s`, so a backward clock step stretched the owner's 90 s
   window and a pending file stamped in the future (a restored backup, a bad write) stayed approvable. Now

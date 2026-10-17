@@ -96,6 +96,7 @@ from goldbot.api.schema import (
 )
 from goldbot.config import MailSettings
 from goldbot.data.timeutil import heartbeat_problem
+from goldbot.execution.not_placed import first_not_placed
 from goldbot.ops.account_view import LossBudget, loss_budget, margin_level_pct, milestones, proposal_budget
 from goldbot.telegram.approvals import Outcome, decision_channel
 from goldbot.telegram.approvals import Proposal as BusProposal
@@ -602,7 +603,9 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
             out.append(DecidedProposal.model_validate({**card(p), "status": status,
                                                        "decided_channel": p.decided_channel, "decided_ts": p.decided_ts,
                                                        "reason_code": p.reason_code if status == "rejected" else None,
-                                                       "refusal": list(p.gate_refusal or [])}))
+                                                       "refusal": list(p.gate_refusal or []),
+                                                       "not_placed": first_not_placed(p.gate_refusal)
+                                                       if status == "refused" else None}))
         return out
 
     @app.post("/api/decisions")

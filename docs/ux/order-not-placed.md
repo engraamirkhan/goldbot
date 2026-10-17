@@ -37,6 +37,7 @@ The existing two ceiling codes may move into the same table, but their words sta
 | The MT5 box's notional ceiling (shipped) | `bridge_notional_ceiling`, `bridge_notional_ceiling_unreadable` |
 | The MT5 box dropped an order that aged past `ORDER_MAX_AGE_S` (retcode 10006, message prefix `bridge_stale_order`) | `bridge_stale_order` |
 | Any other definite reject | `broker_refused:<retcode>`, e.g. `broker_refused:10019` |
+| The paper broker's 10027 (a duplicate send, not Algo Trading off) | `broker_refused:10027:paper` |
 
 Bridge prefixes are tested before the retcode, because the bridge's own refusals also use 10006.
 
