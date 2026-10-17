@@ -25,8 +25,15 @@ equity, the design's 30% at 1:20 (BACKLOG 66), read entirely on this box and fai
 reject (retcode 10006, message "bridge_notional_ceiling: ..."), never a raise, and the order's age is checked again
 just before the send. The bridge listens on
 127.0.0.1 only and the engine reaches it through an SSH tunnel (goldbot/ops/linux), so the token never crosses the
-network in clear text. On start both ends check the terminal is logged in to the registry's account (login, server,
-demo vs real): `accounts.verify_terminal_account`.
+network in clear text. Both ends check the terminal is logged in to the registry's account (login, server, demo vs
+real): `accounts.verify_terminal_account`. The bridge serves GET /health from the start but refuses every RPC until it
+has once seen the terminal on that account (`verify_first`).
+
+The terminal's state on /health (docs/proposals/2026-10-mt5-terminal-lifecycle.md): `terminal` is one fixed token of
+TERMINAL_STATES (never a login, server or balance), `terminal_for_s` how long it has had that state (capped below six
+digits), and the status is 200 only for `ok`, 503 otherwise. Consecutive `not_running` reads 30 s apart end the process
+(TERMINAL_LOST_EXIT) so systemd re-attaches it to the terminal its own unit restarted. The root watchdog on the MT5 box
+reads only that token, through an unprivileged probe (goldbot/ops/linux/goldbot-bridge-probe.sh).
 
 No credentials pass through the bridge: the terminal keeps its own saved login, and the URL and token live in the
 keyring of each machine (`mt5-bridge-url-<account>`, `mt5-bridge-token-<account>`), never in the repository.
@@ -117,6 +124,12 @@ CEILING_REFUSAL = "bridge_notional_ceiling"     # the message prefix of every ce
 UNREADABLE_REFUSAL = f"{CEILING_REFUSAL}: unreadable:"   # ... when a figure it checks could not be read (fail closed)
 STALE_REFUSAL = "bridge_stale_order"            # an order that aged past ORDER_MAX_AGE_S during the ceiling's reads
 REFUSED_RETCODE = 10006         # MT5 "request rejected": a definite reject (runner.DEFINITE_REJECT_RETCODES)
+# The terminal's state on GET /health: exactly these tokens (the root watchdog's probe matches them literally).
+TERMINAL_STATES = ("ok", "not_running", "not_connected", "not_logged_in", "wrong_account")
+TERMINAL_LOST_READS = 2         # consecutive not_running reads after which the bridge exits to be re-attached
+TERMINAL_LOST_MIN_SPAN_S = 30.0  # ... and only when those reads span at least this long (review L1)
+TERMINAL_LOST_EXIT = 75         # EX_TEMPFAIL: systemd's Restart=always starts it again
+TERMINAL_FOR_CAP_S = 99_999     # terminal_for_s never has six digits (security condition 6: no 6-digit run on /health)
 
 
 class BridgeUnavailable(ConnectionError):
@@ -179,11 +192,48 @@ def _decode(v: Any, *, response: bool) -> Any:
 
 
 # ---------------------------------------------------------------------------------------------- server
-def make_handler(broker: Any, token: str, *, commit: str | None = None) -> type[BaseHTTPRequestHandler]:
+def _exit_terminal_lost() -> None:
+    """End the bridge after TERMINAL_LOST_READS not_running reads: its IPC is gone, and a fresh process re-attaches
+    (initialize(path=..., timeout=60 s)) once the terminal unit has the terminal up again. SystemExit is not an
+    Exception, so it leaves serve_forever after the reply was written; one request at a time, so no RPC is cut."""
+    log.error("MT5 terminal not running on %d consecutive reads over %g s: exiting to re-attach",
+              TERMINAL_LOST_READS, TERMINAL_LOST_MIN_SPAN_S)
+    raise SystemExit(TERMINAL_LOST_EXIT)
+
+
+def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_first: bool = False,
+                 on_terminal_lost: Callable[[], None] | None = None,
+                 clock: Callable[[], float] = time.monotonic) -> type[BaseHTTPRequestHandler]:
     """`commit`: the commit this bridge process runs (read once at start), reported on /health so the brain can see
-    when the two boxes run different code. Nothing on /health is a secret: zone, commit (public repo), protocol."""
+    when the two boxes run different code. Nothing on /health is a secret: zone, commit (public repo), protocol, and
+    the terminal's state token when the broker reports one (`terminal_state()`).
+
+    `verify_first`: the terminal's state is read on every RPC. Every RPC is refused (503) until the terminal has once
+    been seen in state `ok` (logged in to the registered account, connected), and again whenever it is CURRENTLY on
+    another account (`wrong_account`: reads and closes included, a terminal switched to another account serves
+    nothing). Any other state after that lets calls through: exits are never gated, and the terminal answers what it
+    can. /health is served throughout, so a lost login shows as `not_logged_in` instead of a bridge that keeps
+    restarting. `on_terminal_lost`: called after TERMINAL_LOST_READS consecutive `not_running` reads spanning at
+    least TERMINAL_LOST_MIN_SPAN_S (default: exit, `_exit_terminal_lost`)."""
     if len(token) < 32:
         raise ValueError("bridge token must be at least 32 characters")
+    lost_cb = on_terminal_lost or _exit_terminal_lost
+    seen: dict[str, Any] = {"state": None, "since": clock(), "lost": 0, "lost_at": 0.0,
+                            "verified": not verify_first}
+
+    def terminal_state() -> str | None:
+        """The terminal's token (and its bookkeeping), or None when the broker does not report one."""
+        fn = getattr(broker, "terminal_state", None)
+        state = fn() if callable(fn) else None
+        if state is None:
+            return None
+        if state not in TERMINAL_STATES:                  # never echo anything else
+            state = "not_running"
+        if state != seen["state"]:
+            seen["state"], seen["since"] = state, clock()
+        if state == "ok":
+            seen["verified"] = True
+        return str(state)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "goldbot-bridge"
@@ -205,6 +255,11 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None) -> type[
                 self._reply(404, {"error": "not found"})
                 return
             body: dict[str, Any] = {"ok": True}
+            state = terminal_state()
+            if state is not None:                            # a fixed token and a capped age: no account data
+                body["ok"] = state == "ok"
+                body["terminal"] = state
+                body["terminal_for_s"] = min(int(max(clock() - seen["since"], 0)), TERMINAL_FOR_CAP_S)
             tz = getattr(broker, "server_tz", None)      # the zone this box converts MT5 stamps with (not a secret)
             if isinstance(tz, str):
                 body["server_tz"] = tz
@@ -213,7 +268,18 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None) -> type[
             body["methods"] = sorted(METHODS)                # exactly what do_POST serves
             if commit is not None:
                 body["commit"] = commit
-            self._reply(200, body)
+            self._reply(200 if body["ok"] else 503, body)
+            if state != "not_running":
+                seen["lost"] = 0
+                return
+            if seen["lost"] == 0:
+                seen["lost_at"] = clock()
+            seen["lost"] += 1
+            # one brain health pass reads /health three times within a second: only reads spanning
+            # TERMINAL_LOST_MIN_SPAN_S end the bridge (a terminal restarting for a moment does not)
+            if seen["lost"] >= TERMINAL_LOST_READS and clock() - seen["lost_at"] >= TERMINAL_LOST_MIN_SPAN_S:
+                seen["lost"] = 0
+                lost_cb()
 
         def do_POST(self) -> None:
             auth = self.headers.get("Authorization", "")
@@ -230,6 +296,16 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None) -> type[
             if n <= 0 or n > MAX_BODY:
                 self._reply(400, {"error": "bad body"})
                 return
+            if verify_first:                                 # the terminal's CURRENT account, on every call
+                state = terminal_state()
+                if not seen["verified"]:                     # not yet seen on the registered account: no call at all
+                    self._reply(503, {"error": f"terminal not verified: {state or 'unknown'}"})
+                    return
+                if state == "wrong_account":                 # switched since: nothing at all, reads and closes too
+                    self._reply(503, {"error": "terminal on another account: refused"})
+                    return
+                # not_logged_in / not_running / not_connected: calls go through (exits are never gated); the
+                # terminal answers what it can
             try:
                 req = json.loads(self.rfile.read(n))
                 method = req["method"]
@@ -253,10 +329,10 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None) -> type[
     return Handler
 
 
-def serve(broker: Any, host: str, port: int, token: str,
-          commit: str | None = None) -> None:  # pragma: no cover - blocking loop
+def serve(broker: Any, host: str, port: int, token: str, commit: str | None = None,
+          verify_first: bool = False) -> None:  # pragma: no cover - blocking loop
     """One request at a time (HTTPServer, not ThreadingHTTPServer): the MetaTrader5 package is not thread-safe."""
-    httpd = HTTPServer((host, port), make_handler(broker, token, commit=commit))
+    httpd = HTTPServer((host, port), make_handler(broker, token, commit=commit, verify_first=verify_first))
     log.info("bridge serving %s on %s:%d", type(broker).__name__, host, port)
     httpd.serve_forever()
 
@@ -386,6 +462,36 @@ class GuardedBroker:
     def close(self, position_id: int, lots: float | None = None) -> OrderResult:
         return self._b.close(position_id, lots)
 
+    def terminal_state(self) -> str | None:
+        """The terminal's state as one token of TERMINAL_STATES, for GET /health; None when the wrapped broker cannot
+        say (no `terminal_info`, e.g. the paper broker). Order: no terminal (terminal_info None or an IPC error) ->
+        no account -> another account than registered (`verify`) -> not connected to the broker server -> ok. A login
+        or a server never leaves this method."""
+        info_fn = getattr(self._b, "terminal_info", None)
+        if not callable(info_fn):
+            return None
+        try:
+            term = info_fn()
+        except Exception:                                # noqa: BLE001 - an IPC error is a terminal gone
+            return "not_running"
+        if term is None:
+            return "not_running"
+        try:
+            info = self._b.account()
+        except Exception:                                # noqa: BLE001 - MT5Broker.account() on account_info() None
+            return "not_logged_in"
+        if info is None or not getattr(info, "login", None):
+            return "not_logged_in"
+        try:
+            why = self._verify(info) if self._verify is not None else None
+        except Exception:                                # noqa: BLE001 - cannot be checked: not the registered account
+            why = "unverifiable"
+        if why:
+            return "wrong_account"
+        if not getattr(term, "connected", False):
+            return "not_connected"
+        return "ok"
+
     @property
     def server_tz(self) -> str | None:
         """The wrapped terminal's server_tz (reported on /health so the brain can compare it with its own)."""
@@ -420,12 +526,20 @@ def protocol_digest() -> str:
 
 # ---------------------------------------------------------------------------------------------- client
 def probe_health(url: str, timeout_s: float = 5.0, get: Callable[..., Any] = requests.get) -> str | None:
-    """None when the bridge answers GET /health with {"ok": true}; otherwise why not (no URL or token in the text).
-    Used by the brain's health checks; no token is needed and nothing reaches the terminal."""
+    """None when the bridge answers GET /health with {"ok": true}, or with a 503 that reports a terminal state (the
+    bridge answers; `terminal:<account>` reports the terminal); otherwise why not (no URL or token in the text).
+    Used by the brain's health checks; no token is needed (/health reads the terminal's state, never an order)."""
     try:
         r = get(f"{url.rstrip('/')}/health", timeout=timeout_s)
     except requests.RequestException as exc:
         return f"unreachable ({type(exc).__name__})"
+    if r.status_code == 503:
+        try:
+            body = r.json()
+        except (ValueError, AttributeError):
+            body = None
+        if isinstance(body, dict) and body.get("terminal") in TERMINAL_STATES:
+            return None
     if r.status_code != 200:
         return f"HTTP {r.status_code}"
     try:
@@ -433,6 +547,43 @@ def probe_health(url: str, timeout_s: float = 5.0, get: Callable[..., Any] = req
     except (ValueError, AttributeError):
         return "answered, but not with the bridge's JSON"
     return None if ok is True else "answered without ok"
+
+
+TERMINAL_PROBE_MAX_BYTES = 64 * 1024
+
+
+def probe_terminal(url: str, timeout_s: float = 5.0,
+                   get: Callable[..., Any] = requests.get) -> tuple[str, int | None]:
+    """The terminal's state from the bridge's GET /health, for `terminal:<account>`: (token, seconds in it). The token
+    is one of TERMINAL_STATES, "unreported" (a bridge older than the terminal state: 200 without the field), or
+    "noanswer" (no answer, junk, an unknown value, or a status that does not match the value: 200 only with ok)."""
+    try:
+        r = get(f"{url.rstrip('/')}/health", timeout=timeout_s, stream=True)
+    except requests.RequestException:
+        return "noanswer", None
+    try:
+        buf = bytearray()
+        for chunk in r.iter_content(4096):
+            buf += chunk
+            if len(buf) > TERMINAL_PROBE_MAX_BYTES:
+                return "noanswer", None
+        body = json.loads(bytes(buf))
+    except (requests.RequestException, ValueError):
+        return "noanswer", None
+    finally:
+        try:
+            r.close()
+        except Exception:                                # noqa: BLE001
+            pass
+    if not isinstance(body, dict):
+        return "noanswer", None
+    state = body.get("terminal")
+    if state is None:
+        return ("unreported", None) if r.status_code == 200 and body.get("ok") is True else ("noanswer", None)
+    if state not in TERMINAL_STATES or r.status_code != (200 if state == "ok" else 503):
+        return "noanswer", None
+    age = body.get("terminal_for_s")
+    return str(state), age if isinstance(age, int) and not isinstance(age, bool) and age >= 0 else None
 
 
 def bridge_server_tz(url: str, timeout_s: float = 5.0, get: Callable[..., Any] = requests.get) -> str | None:

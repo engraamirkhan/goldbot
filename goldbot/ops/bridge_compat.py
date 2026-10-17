@@ -43,7 +43,7 @@ from goldbot.execution.bridge import API_VERSION, METHODS, MIN_COMPATIBLE
 log = logging.getLogger("goldbot.bridge_compat")
 
 CompatStatus = Literal["ok", "incompatible", "unreachable", "unchecked"]
-CHECK_TIMEOUT_S = 5.0                    # /health answers without touching the terminal; also the total read deadline
+CHECK_TIMEOUT_S = 5.0                    # /health reads only the terminal state (no order); also the total read deadline
 MAX_HEALTH_BYTES = 64 * 1024             # the bridge's report is ~400 bytes; anything larger is not it
 MAX_VERDICT_AGE_S = 300.0                # an ok older than this counts as unchecked (checks run every 60 s)
 UNCHECKED_GRACE_S = 120.0                # health: an engine unchecked longer than this FAILs (Telegram); warns inside
@@ -113,7 +113,7 @@ def _int(v: Any) -> int | None:
 
 
 def read_bridge_info(url: str, timeout_s: float = CHECK_TIMEOUT_S, get: Callable[..., Any] = requests.get) -> BridgeInfo:
-    """GET <url>/health (no token, nothing reaches the terminal), streamed: at most MAX_HEALTH_BYTES are read, and the
+    """GET <url>/health (no token, no order: only the terminal state is read), streamed: at most MAX_HEALTH_BYTES are read, and the
     whole GET runs on a daemon thread joined with a hard deadline of `timeout_s`. requests' timeout is per socket read,
     so a server dripping header bytes would otherwise hold the call far longer; an abandoned read ends when the socket
     does (one at most per check, i.e. per minute)."""
