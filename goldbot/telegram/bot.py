@@ -14,6 +14,7 @@ import pandas as pd
 
 from goldbot.api.entry_status import refusal_words
 from goldbot.config import ROOT, TelegramSettings
+from goldbot.execution.not_confirmed import card_text as nc_card_text
 from goldbot.execution.not_placed import card_text
 from goldbot.ops import accounts
 from goldbot.ops.account_view import proposal_budget_from_state
@@ -24,7 +25,7 @@ from goldbot.telegram import automode
 from goldbot.telegram.approvals import Proposal, decision_callbacks, decision_channel, parse_decision_callback
 from goldbot.telegram.bus import ApprovalBus
 from goldbot.telegram.digest import DigestSchedule, digest_from_runtime
-from goldbot.telegram.outbox import Outbox, ReportRetry, SendGuard
+from goldbot.telegram.outbox import NOT_CONFIRMED_OUTCOME, Outbox, ReportRetry, SendGuard
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +62,17 @@ def outcome_text(outcome: str) -> str:
         why = ", ".join(refusal_words(c.strip()) for c in code.split(",") if c.strip())
         return f"🛑 NOT PLACED: approved, but the risk check refused it at approval ({why})"
     return OUTCOME_TEXT.get(outcome, outcome)
+
+
+FINAL_EDIT_ERRORS = frozenset({"BadRequest", "Forbidden"})    # python-telegram-bot's telegram.error classes
+
+
+def edit_is_final(exc: BaseException) -> bool:
+    """A message edit Telegram refused for good, so retrying cannot help: a BadRequest (the text is already shown,
+    the message was deleted or is too old to edit) or Forbidden (the bot was blocked). RetryAfter, TimedOut and other
+    network errors may pass and are retried (BACKLOG 87 review). Matched by class name along the MRO, so this module
+    imports without the [live] extra; BadRequest subclasses NetworkError there, so it is checked by its own name."""
+    return any(c.__name__ in FINAL_EDIT_ERRORS for c in type(exc).__mro__)
 
 
 class OffLoopAudit:
@@ -180,30 +192,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
                 # the health pass does, so a busy database never delays the owner's Approve/Reject callbacks
                 if self.outbox is None:
                     self.outbox = await asyncio.to_thread(Outbox, self.state_dir, self.bus)
-                outbox = self.outbox
-                await asyncio.to_thread(self.send_guard.retry, outbox, time.monotonic())
-                await self._send_new_proposals(outbox)
-                for pid, outcome, msgs in await asyncio.to_thread(outbox.finished):
-                    for chat, mid in msgs:
-                        try:
-                            await self.app.bot.edit_message_reply_markup(chat, mid, reply_markup=None)
-                            await self.app.bot.send_message(chat, f"{pid}: {outcome_text(outcome)}",
-                                                            reply_parameters=ReplyParameters(message_id=mid))
-                        except Exception as exc:
-                            log.warning("could not update %s: %s", pid, exc)
-                if n % max(int(30 / self.poll_s), 1) == 0:          # reports every ~30 s
-                    texts, ack = await asyncio.to_thread(outbox.pending_reports)
-                    delivered = True
-                    for text in texts:
-                        for uid in self.owner_ids:
-                            try:
-                                await self.app.bot.send_message(uid, text)
-                            except Exception as exc:
-                                delivered = False
-                                log.warning("could not send a report to an owner: %s", exc)
-                    # only after delivery: a failed batch is retried, at most REPORT_ATTEMPTS passes (ReportRetry)
-                    if ack is not None and self.report_retry.should_ack(ack, delivered):
-                        await asyncio.to_thread(outbox.ack_reports, ack)
+                await self._outbox_pass(self.outbox, n)
             except Exception:
                 log.exception("telegram pump")
             if n % max(int(HEALTH_EVERY_S / self.poll_s), 1) == 0:
@@ -294,6 +283,73 @@ class TelegramBot:  # pragma: no cover - needs network + token
                         await self.app.bot.send_message(uid, text)
         except Exception:
             log.exception("deploy pass")
+
+    async def _outbox_pass(self, outbox: Outbox, n: int) -> None:
+        """One pump pass over the outbox: new proposals, finished ones, NOT CONFIRMED cards that resolved, and every
+        ~30 s the staff-agent reports and owner notices."""
+        await asyncio.to_thread(self.send_guard.retry, outbox, time.monotonic())
+        await self._send_new_proposals(outbox)
+        for pid, outcome, msgs in await asyncio.to_thread(outbox.finished):
+            replies = []
+            for chat, mid in msgs:
+                try:
+                    await self.app.bot.edit_message_reply_markup(chat, mid, reply_markup=None)
+                    m = await self.app.bot.send_message(chat, f"{pid}: {outcome_text(outcome)}",
+                                                        reply_parameters=ReplyParameters(message_id=mid))
+                    replies.append((chat, m.message_id))
+                except Exception as exc:
+                    log.warning("could not update %s: %s", pid, exc)
+            if outcome == NOT_CONFIRMED_OUTCOME:
+                await self._watch(outbox, pid, replies)
+        await self._edit_resolved_cards(outbox)
+        if n % max(int(30 / self.poll_s), 1) == 0:          # reports every ~30 s
+            texts, ack = await asyncio.to_thread(outbox.pending_reports)
+            delivered = True
+            for text in texts:
+                for uid in self.owner_ids:
+                    try:
+                        await self.app.bot.send_message(uid, text)
+                    except Exception as exc:
+                        delivered = False
+                        log.warning("could not send a report to an owner: %s", exc)
+            # only after delivery: a failed batch is retried, at most REPORT_ATTEMPTS passes (ReportRetry)
+            if ack is not None and self.report_retry.should_ack(ack, delivered):
+                await asyncio.to_thread(outbox.ack_reports, ack)
+
+    @staticmethod
+    async def _watch(outbox: Outbox, pid: str, replies: list[tuple[int, int]]) -> None:
+        """Keep the NOT CONFIRMED replies that went out, for the edit at resolution (BACKLOG 87). Best effort: a
+        failure only loses that edit, never the pass's reports."""
+        try:
+            await asyncio.to_thread(outbox.watch, pid, replies)
+        except Exception as exc:
+            log.warning("NOT CONFIRMED card %s will not be edited at resolution: %s", pid, exc)
+
+    async def _edit_resolved_cards(self, outbox: Outbox) -> None:
+        """BACKLOG 87: each watched NOT CONFIRMED reply is edited to its new outcome's words (`card_text`), once per
+        outcome; an edit that failed for a reason that may pass is retried with backoff (`Outbox.card_edit_failed`),
+        one Telegram refused for good is not (`edit_is_final`). Best effort, logged, never raised: the owner's notice
+        for the outcome is a separate message."""
+        try:
+            edits = await asyncio.to_thread(outbox.card_edits)
+        except Exception as exc:
+            log.warning("NOT CONFIRMED cards not checked for edits: %s", exc)
+            return
+        for e in edits:
+            text = f"{e.proposal_id}: {nc_card_text(e.confirmation)}"
+            done = True
+            for chat, mid in e.messages:
+                try:
+                    await self.app.bot.edit_message_text(text, chat_id=chat, message_id=mid)
+                except Exception as exc:
+                    done = done and edit_is_final(exc)
+                    log.warning("could not edit NOT CONFIRMED card %s: %s", e.proposal_id, exc)
+            # an edit that may still go through keeps the card watched (retried with backoff, `card_edit_failed`)
+            record = outbox.card_edited if done else outbox.card_edit_failed
+            try:
+                await asyncio.to_thread(record, e.proposal_id, e.outcome)
+            except Exception as exc:
+                log.warning("NOT CONFIRMED card %s edit not recorded: %s", e.proposal_id, exc)
 
     async def _send_new_proposals(self, outbox: Outbox) -> None:
         """Each proposal not yet sent goes out once; one that went out but whose mark is being retried is skipped."""

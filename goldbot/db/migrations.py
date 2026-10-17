@@ -239,6 +239,20 @@ AUX: tuple[Migration, ...] = (
                since_ns INTEGER NOT NULL
            ) STRICT""",
     ), add_columns=(("sessions", "method", "TEXT NOT NULL DEFAULT 'password_totp'"),)),
+    # additive (BACKLOG 87): the Telegram replies that read "⚠️ NOT CONFIRMED", kept until the order's outcome is
+    # settled so the outbox edits them once per outcome (`shown`: the not_confirmed outcome they show now; `tries`:
+    # failed attempts at the next edit, retried from `retry_ns`). Not in the telegram_outbox.json export: a release
+    # without it never edits a card at resolution, as before
+    Migration(version=9, name="outbox_watch", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS outbox_watch (
+               proposal_id TEXT PRIMARY KEY,
+               messages TEXT NOT NULL CHECK (json_valid(messages)),
+               shown TEXT NOT NULL,
+               since_ns INTEGER NOT NULL,
+               tries INTEGER NOT NULL DEFAULT 0,
+               retry_ns INTEGER NOT NULL DEFAULT 0
+           ) STRICT""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

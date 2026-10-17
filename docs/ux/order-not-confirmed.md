@@ -67,7 +67,10 @@ number (except the fallback below), raw broker or bridge text, a host, a login.
 | Opened after all (correction) | `✅ OPENED AFTER ALL: the broker confirmed it after it was reported not placed. Stop, target and exit are automatic.` |
 | Still unknown (10 min) | `⚠️ STILL NOT CONFIRMED after 10 minutes. The engine keeps looking; check MT5 for an open {symbol} trade.` |
 
-The card edit at resolution is best effort (logged); the notice still arrives.
+The card edit at resolution is best effort (logged); the notice still arrives. Built in BACKLOG 87. The message edited
+is the NOT CONFIRMED reply under the card, which carries the outcome line; the proposal text above it is unchanged.
+The reply is edited once per new outcome (no trade, then opened after all, is two edits). Editing stops at opened,
+opened and closed, or opened after all, or after 8 days. A card whose reply never went out is never edited.
 
 ### Dashboard note (`ProposalCard` `Outcome`, `role="status"`, heading word carries the state)
 
