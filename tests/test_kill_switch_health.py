@@ -65,6 +65,16 @@ def test_unreadable_files_leave_it_to_the_engine_and_risk_checks(tmp_path):
     assert _check(tmp_path) == []
 
 
+def test_a_corrupt_file_is_failed_loudly_by_the_engine_and_risk_checks(tmp_path):
+    """Review B: kill_switch stays silent on an unreadable file because these two FAIL on it."""
+    (tmp_path / "engine_icm-demo.json").write_text("{")
+    (tmp_path / "risk_icm-demo.json").write_text("{")
+    ctx = make_ctx(tmp_path)
+    assert _check(tmp_path) == []
+    assert health.check_engine(ctx, "icm-demo").status == "fail"
+    assert health.check_risk_state(ctx, "icm-demo").status == "fail"
+
+
 def test_run_checks_includes_it(tmp_path):
     _tripped(tmp_path, 6)
     names = [c.name for c in health.run_checks(make_ctx(tmp_path)).checks]

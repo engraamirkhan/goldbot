@@ -187,6 +187,8 @@ def check_kill_switch(ctx: HealthContext, account_id: str) -> list[Check]:
         since = pd.Timestamp(r["halted_at"]) if r.get("halted_at") else None
         flag = bool(r.get("kill_everything"))
     except (ValueError, OSError, AttributeError, TypeError):
+        # silent here on purpose: a corrupt engine or risk file FAILs check_engine / check_risk_state, and a missing one
+        # is reported there too (tests/test_kill_switch_health.py pins this), so one fault raises one alert
         return []
     if not (flag and due):
         return []
