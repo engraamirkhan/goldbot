@@ -1,0 +1,27 @@
+[Unit]
+Description=goldbot MT5 terminal under Wine for account %i (the only launcher of the terminal)
+# never give up restarting: a dead terminal means no exits managed by the engine (stops stay at the broker)
+StartLimitIntervalSec=0
+After=network-online.target goldbot-xvfb.service
+Requires=goldbot-xvfb.service
+
+[Service]
+User=mt5
+WorkingDirectory=/home/mt5
+Environment=DISPLAY=:99 WINEDEBUG=-all
+# One terminal, ever: refuse to start while any terminal64.exe runs for mt5 (a hand-started one, or one left from an
+# earlier run). The bracket keeps pgrep from matching this shell's own command line.
+# docs/proposals/2026-10-mt5-terminal-lifecycle.md section 1; RUNBOOK 'Terminal down'.
+ExecStartPre=/bin/sh -c 'if /usr/bin/pgrep -u mt5 -f "[t]erminal64[.]exe" >/dev/null; then echo "a terminal64.exe already runs for mt5: refusing a second one"; exit 1; fi'
+# The install path the bootstrap uses (C:\MT5\ICMarkets, config/accounts.yaml terminal_path). The terminal keeps its
+# saved login in its own Config/; nothing about the account is in this file.
+ExecStart=/usr/bin/wine /home/mt5/.wine/drive_c/MT5/ICMarkets/terminal64.exe
+Restart=always
+RestartSec=15
+# Backoff on systemd 254+ (Ubuntu 24.04): 15 s growing in 5 steps to 10 min. systemd 249 (22.04) ignores these two
+# keys with a warning and keeps the fixed 15 s; goldbot-bridge-watchdog restarts the terminal at most once per 10 min.
+RestartSteps=5
+RestartMaxDelaySec=10min
+
+[Install]
+WantedBy=multi-user.target

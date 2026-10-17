@@ -2,6 +2,9 @@
 terminal). Moved verbatim from goldbot/ops/run.py, which re-exports it."""
 from __future__ import annotations
 
+import logging
+
+log = logging.getLogger(__name__)
 
 def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTrader5 package and a terminal
     """Serve the MT5 terminal on this machine to the engine (goldbot/execution/bridge.py). Run under the Wine (or
@@ -19,13 +22,17 @@ def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTra
     host, port = listen.rsplit(":", 1)
     if host not in ("127.0.0.1", "localhost"):     # the token must never cross a network in clear text
         raise SystemExit(f"bridge must listen on 127.0.0.1 (reached through the SSH tunnel), not {host}")
+    # Attaches to the terminal its own unit started (goldbot-mt5-terminal@.service; the bridge unit waits for the
+    # process first): initialize(path=..., timeout=60 s). A failed attach raises, and Restart=always tries again.
     broker = MT5Broker(terminal_path=acc.terminal_path, login=None, password=None, server=acc.server,
                        server_tz=acc.server_tz, symbol=acc.symbol, account_label=account_id)
-    why = accounts.verify_terminal_account(acc, broker.account())
-    if why:                                        # e.g. the terminal's saved login is a live account
-        broker.shutdown()
-        raise SystemExit(f"refusing to serve {account_id}: {why}")
+    guarded = GuardedBroker(broker, magic_base=acc.magic_base,
+                            verify=lambda info: accounts.verify_terminal_account(acc, info))
+    # The registered-account check (login, server, demo vs real, hedging) gates every RPC instead of the start:
+    # until the terminal is once seen `ok`, /health answers with the token (not_logged_in, wrong_account, ...) and
+    # every call is refused, so a lost login shows as such rather than as a bridge that keeps restarting. Orders are
+    # checked again on every send (GuardedBroker.verify). The token is logged; the reason (it names the account) is not.
+    log.info("MT5 terminal state at start: %s", guarded.terminal_state())
     from goldbot.ops.bridge_compat import repo_commit
-    serve(GuardedBroker(broker, magic_base=acc.magic_base,
-                        verify=lambda info: accounts.verify_terminal_account(acc, info)), host, int(port), token,
+    serve(guarded, host, int(port), token, verify_first=True,
           commit=repo_commit())           # read once: the code this process runs, reported on /health (BACKLOG 42)

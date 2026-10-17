@@ -2,14 +2,19 @@
 # never give up restarting (a bridge outage causes fast exits on purpose)
 StartLimitIntervalSec=0
 Description=goldbot MT5 bridge for account %i (terminal under Wine)
-After=network-online.target goldbot-xvfb.service
-Requires=goldbot-xvfb.service
+# The terminal is started by its own unit, never by the bridge: starting the bridge starts the terminal first, and an
+# explicit stop or restart of the terminal unit stops or restarts the bridge with it (Requires=).
+After=network-online.target goldbot-xvfb.service goldbot-mt5-terminal@%i.service
+Requires=goldbot-xvfb.service goldbot-mt5-terminal@%i.service
 
 [Service]
 User=mt5
 WorkingDirectory=/opt/goldbot
 Environment=DISPLAY=:99 WINEDEBUG=-all PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring
-# starts the terminal itself (saved login) and serves it to the brain; restarts if the terminal or Wine dies.
+# Attach only: wait up to 60 s for the terminal process its unit started, so initialize(path=...) never launches a
+# second terminal of its own (it would if none ran). The MT5Broker then attaches with path= and a 60 s timeout; it
+# exits non-zero after two consecutive not_running reads and Restart=always re-attaches it.
+ExecStartPre=/usr/bin/timeout 60 /bin/sh -c 'until /usr/bin/pgrep -u mt5 -f "[t]erminal64[.]exe" >/dev/null; do sleep 2; done'
 # The interpreter by absolute path ($WINPY in mt5_bootstrap.sh): with a bare `python`, Windows lookup would run a
 # python.exe from the working directory (/opt/goldbot, writable by mt5) first.
 ExecStart=/usr/bin/wine /home/mt5/.wine/drive_c/users/mt5/AppData/Local/Programs/Python/Python311/python.exe -m goldbot.ops.run bridge %i

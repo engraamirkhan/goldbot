@@ -568,7 +568,8 @@ def test_the_watchdog_restarts_only_the_two_literal_units():
     code = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
     for banned in ("eval", "grep", "$body", "source ", "read "):
         assert banned not in code, banned
-    probe = (LINUX / "goldbot-bridge-probe.sh").read_text()
+    probe = "\n".join(ln for ln in (LINUX / "goldbot-bridge-probe.sh").read_text().splitlines()
+                      if not ln.lstrip().startswith("#"))
     assert "--max-filesize 1024" in probe and "-m " in probe and "eval" not in probe
 
 

@@ -215,6 +215,11 @@ class MT5Broker:
         self._unquoted: set[str] = set()     # symbols whose close was refused for want of a quote (logged once)
 
     # ------------------------------------------------------------------ info
+    def terminal_info(self) -> Any:
+        """mt5.terminal_info() as the package returns it (None when the terminal is gone or its IPC is dead). Read by
+        GuardedBroker.terminal_state for the bridge's GET /health only; not an RPC method (METHODS)."""
+        return mt5.terminal_info()
+
     def symbol_info(self, symbol: str) -> SymbolInfo:
         i = mt5.symbol_info(symbol)
         modes = []
