@@ -521,6 +521,147 @@
     "title": "AgentRunRow",
     "type": "object"
    },
+   "AttributionReportView": {
+    "properties": {
+     "as_of": {
+      "format": "date-time",
+      "title": "As Of",
+      "type": "string"
+     },
+     "breakdowns": {
+      "additionalProperties": {
+       "additionalProperties": {
+        "$ref": "#/components/schemas/ResultCell"
+       },
+       "type": "object"
+      },
+      "title": "Breakdowns",
+      "type": "object"
+     },
+     "challengers": {
+      "$ref": "#/components/schemas/ResultCell"
+     },
+     "costs": {
+      "$ref": "#/components/schemas/ResultCosts"
+     },
+     "exits": {
+      "additionalProperties": {
+       "$ref": "#/components/schemas/ResultExitCell"
+      },
+      "title": "Exits",
+      "type": "object"
+     },
+     "live": {
+      "additionalProperties": {
+       "$ref": "#/components/schemas/ResultLiveFills"
+      },
+      "title": "Live",
+      "type": "object"
+     },
+     "m": {
+      "title": "M",
+      "type": "integer"
+     },
+     "min_trades": {
+      "title": "Min Trades",
+      "type": "integer"
+     },
+     "n_candidates": {
+      "title": "N Candidates",
+      "type": "integer"
+     },
+     "n_taken": {
+      "title": "N Taken",
+      "type": "integer"
+     },
+     "notes": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Notes",
+      "type": "array"
+     },
+     "overall": {
+      "$ref": "#/components/schemas/ResultCell"
+     },
+     "t_bar": {
+      "title": "T Bar",
+      "type": "number"
+     },
+     "window_from": {
+      "format": "date-time",
+      "title": "Window From",
+      "type": "string"
+     }
+    },
+    "required": [
+     "as_of",
+     "window_from",
+     "min_trades",
+     "t_bar",
+     "m",
+     "n_candidates",
+     "n_taken",
+     "overall",
+     "challengers",
+     "breakdowns",
+     "exits",
+     "costs",
+     "live",
+     "notes"
+    ],
+    "title": "AttributionReportView",
+    "type": "object"
+   },
+   "AttributionView": {
+    "description": "state/attribution.json without its trade rows and calibration (calibration stays on Health).",
+    "properties": {
+     "cant_check": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cant Check"
+     },
+     "next_run_utc": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Next Run Utc"
+     },
+     "report": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/AttributionReportView"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "stale": {
+      "title": "Stale",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "report",
+     "stale",
+     "next_run_utc"
+    ],
+    "title": "AttributionView",
+    "type": "object"
+   },
    "AuthState": {
     "properties": {
      "email_link": {
@@ -941,6 +1082,29 @@
      "points"
     ],
     "title": "CusumTrace",
+    "type": "object"
+   },
+   "DayNet": {
+    "properties": {
+     "day": {
+      "title": "Day",
+      "type": "string"
+     },
+     "n": {
+      "title": "N",
+      "type": "integer"
+     },
+     "net": {
+      "title": "Net",
+      "type": "number"
+     }
+    },
+    "required": [
+     "day",
+     "net",
+     "n"
+    ],
+    "title": "DayNet",
     "type": "object"
    },
    "DecidedProposal": {
@@ -1657,6 +1821,218 @@
     "title": "GateCheck",
     "type": "object"
    },
+   "GateItemView": {
+    "properties": {
+     "ci95": {
+      "anyOf": [
+       {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "number"
+         }
+        ],
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ci95"
+     },
+     "earliest_utc": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Earliest Utc"
+     },
+     "evidence": {
+      "title": "Evidence",
+      "type": "string"
+     },
+     "met": {
+      "title": "Met",
+      "type": "boolean"
+     },
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "need": {
+      "title": "Need",
+      "type": "string"
+     },
+     "progress": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/GateProgressView"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "proposed": {
+      "title": "Proposed",
+      "type": "boolean"
+     },
+     "required": {
+      "title": "Required",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "name",
+     "met",
+     "required",
+     "need",
+     "evidence",
+     "proposed"
+    ],
+    "title": "GateItemView",
+    "type": "object"
+   },
+   "GateProgressView": {
+    "properties": {
+     "target": {
+      "title": "Target",
+      "type": "number"
+     },
+     "unit": {
+      "enum": [
+       "trades",
+       "days"
+      ],
+      "title": "Unit",
+      "type": "string"
+     },
+     "value": {
+      "title": "Value",
+      "type": "number"
+     }
+    },
+    "required": [
+     "value",
+     "target",
+     "unit"
+    ],
+    "title": "GateProgressView",
+    "type": "object"
+   },
+   "GateView": {
+    "properties": {
+     "gate": {
+      "title": "Gate",
+      "type": "string"
+     },
+     "items": {
+      "items": {
+       "$ref": "#/components/schemas/GateItemView"
+      },
+      "title": "Items",
+      "type": "array"
+     },
+     "met": {
+      "title": "Met",
+      "type": "boolean"
+     },
+     "recorded": {
+      "title": "Recorded",
+      "type": "boolean"
+     },
+     "recorded_utc": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Recorded Utc"
+     }
+    },
+    "required": [
+     "gate",
+     "met",
+     "recorded",
+     "items"
+    ],
+    "title": "GateView",
+    "type": "object"
+   },
+   "GatesView": {
+    "properties": {
+     "cant_check": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cant Check"
+     },
+     "gates": {
+      "items": {
+       "$ref": "#/components/schemas/GateView"
+      },
+      "title": "Gates",
+      "type": "array"
+     },
+     "generated_utc": {
+      "format": "date-time",
+      "title": "Generated Utc",
+      "type": "string"
+     },
+     "phase": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Phase"
+     },
+     "proposed": {
+      "items": {
+       "$ref": "#/components/schemas/ProposedThreshold"
+      },
+      "title": "Proposed",
+      "type": "array"
+     },
+     "proposed_count": {
+      "title": "Proposed Count",
+      "type": "integer"
+     },
+     "stop_rule": {
+      "$ref": "#/components/schemas/StopRuleView"
+     }
+    },
+    "required": [
+     "generated_utc",
+     "gates",
+     "stop_rule",
+     "proposed_count",
+     "proposed"
+    ],
+    "title": "GatesView",
+    "type": "object"
+   },
    "HTTPValidationError": {
     "properties": {
      "detail": {
@@ -2027,6 +2403,29 @@
      "rows"
     ],
     "title": "HypothesisTable",
+    "type": "object"
+   },
+   "ImputedView": {
+    "properties": {
+     "charged_usd": {
+      "title": "Charged Usd",
+      "type": "number"
+     },
+     "n": {
+      "title": "N",
+      "type": "integer"
+     },
+     "unpriced": {
+      "title": "Unpriced",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "n",
+     "charged_usd",
+     "unpriced"
+    ],
+    "title": "ImputedView",
     "type": "object"
    },
    "InviteRequest": {
@@ -2964,6 +3363,24 @@
     "title": "Proposal",
     "type": "object"
    },
+   "ProposedThreshold": {
+    "properties": {
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "value": {
+      "title": "Value",
+      "type": "number"
+     }
+    },
+    "required": [
+     "name",
+     "value"
+    ],
+    "title": "ProposedThreshold",
+    "type": "object"
+   },
    "PsiHeatmap": {
     "description": "PSI of the top features (rows) per agent (columns); null where the agent does not use the feature.",
     "properties": {
@@ -3506,6 +3923,569 @@
     "title": "ResetRequest",
     "type": "object"
    },
+   "ResultCell": {
+    "description": "One attribution cell (research/attribution.py Cell, ADR 0022). Rows are judged on `verdict_adj` at the row's\nown bar `t_bar`; \"by construction\" marks a cell whose sign is set by its definition (exit target / stop).",
+    "properties": {
+     "ci95_net": {
+      "anyOf": [
+       {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "number"
+         }
+        ],
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ci95 Net"
+     },
+     "ci_adj": {
+      "anyOf": [
+       {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "number"
+         }
+        ],
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ci Adj"
+     },
+     "hit_rate": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hit Rate"
+     },
+     "mean_r_gross": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mean R Gross"
+     },
+     "mean_r_net": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mean R Net"
+     },
+     "n": {
+      "title": "N",
+      "type": "integer"
+     },
+     "profit_factor": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Profit Factor"
+     },
+     "se": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Se"
+     },
+     "std_r_net": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Std R Net"
+     },
+     "t_bar": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "T Bar"
+     },
+     "t_stat": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "T Stat"
+     },
+     "verdict": {
+      "enum": [
+       "noise",
+       "positive",
+       "negative",
+       "indistinguishable from zero",
+       "by construction"
+      ],
+      "title": "Verdict",
+      "type": "string"
+     },
+     "verdict_adj": {
+      "enum": [
+       "noise",
+       "positive",
+       "negative",
+       "indistinguishable from zero",
+       "by construction"
+      ],
+      "title": "Verdict Adj",
+      "type": "string"
+     }
+    },
+    "required": [
+     "n",
+     "mean_r_gross",
+     "mean_r_net",
+     "std_r_net",
+     "t_stat",
+     "ci95_net",
+     "hit_rate",
+     "profit_factor",
+     "verdict",
+     "t_bar",
+     "ci_adj",
+     "verdict_adj"
+    ],
+    "title": "ResultCell",
+    "type": "object"
+   },
+   "ResultCosts": {
+    "properties": {
+     "by_session": {
+      "additionalProperties": {
+       "additionalProperties": {
+        "anyOf": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "type": "object"
+      },
+      "title": "By Session",
+      "type": "object"
+     },
+     "killed": {
+      "title": "Killed",
+      "type": "integer"
+     },
+     "mean_r": {
+      "additionalProperties": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "title": "Mean R",
+      "type": "object"
+     },
+     "n": {
+      "title": "N",
+      "type": "integer"
+     },
+     "share_of_gross": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Share Of Gross"
+     },
+     "source": {
+      "title": "Source",
+      "type": "string"
+     }
+    },
+    "required": [
+     "source",
+     "n",
+     "mean_r",
+     "share_of_gross",
+     "killed",
+     "by_session"
+    ],
+    "title": "ResultCosts",
+    "type": "object"
+   },
+   "ResultExitCell": {
+    "properties": {
+     "ci95_net": {
+      "anyOf": [
+       {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "number"
+         }
+        ],
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ci95 Net"
+     },
+     "ci_adj": {
+      "anyOf": [
+       {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "number"
+         }
+        ],
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ci Adj"
+     },
+     "hit_rate": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hit Rate"
+     },
+     "mae_r_median": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mae R Median"
+     },
+     "mean_r_gross": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mean R Gross"
+     },
+     "mean_r_net": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mean R Net"
+     },
+     "mfe_r_median": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mfe R Median"
+     },
+     "n": {
+      "title": "N",
+      "type": "integer"
+     },
+     "profit_factor": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Profit Factor"
+     },
+     "se": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Se"
+     },
+     "share": {
+      "title": "Share",
+      "type": "number"
+     },
+     "std_r_net": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Std R Net"
+     },
+     "t_bar": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "T Bar"
+     },
+     "t_stat": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "T Stat"
+     },
+     "verdict": {
+      "enum": [
+       "noise",
+       "positive",
+       "negative",
+       "indistinguishable from zero",
+       "by construction"
+      ],
+      "title": "Verdict",
+      "type": "string"
+     },
+     "verdict_adj": {
+      "enum": [
+       "noise",
+       "positive",
+       "negative",
+       "indistinguishable from zero",
+       "by construction"
+      ],
+      "title": "Verdict Adj",
+      "type": "string"
+     }
+    },
+    "required": [
+     "n",
+     "mean_r_gross",
+     "mean_r_net",
+     "std_r_net",
+     "t_stat",
+     "ci95_net",
+     "hit_rate",
+     "profit_factor",
+     "verdict",
+     "t_bar",
+     "ci_adj",
+     "verdict_adj",
+     "share"
+    ],
+    "title": "ResultExitCell",
+    "type": "object"
+   },
+   "ResultLiveFills": {
+    "properties": {
+     "fills": {
+      "title": "Fills",
+      "type": "integer"
+     },
+     "mean_excess_r": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mean Excess R"
+     },
+     "mean_excess_usd": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mean Excess Usd"
+     },
+     "mean_slippage_usd": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mean Slippage Usd"
+     },
+     "n_with_risk": {
+      "title": "N With Risk",
+      "type": "integer"
+     },
+     "orders": {
+      "additionalProperties": {
+       "type": "integer"
+      },
+      "title": "Orders",
+      "type": "object"
+     },
+     "prior_usd": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Prior Usd"
+     },
+     "t_bar": {
+      "title": "T Bar",
+      "type": "number"
+     },
+     "t_stat": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "T Stat"
+     },
+     "verdict": {
+      "enum": [
+       "noise",
+       "positive",
+       "negative",
+       "indistinguishable from zero",
+       "by construction"
+      ],
+      "title": "Verdict",
+      "type": "string"
+     },
+     "verdict_adj": {
+      "enum": [
+       "noise",
+       "positive",
+       "negative",
+       "indistinguishable from zero",
+       "by construction"
+      ],
+      "title": "Verdict Adj",
+      "type": "string"
+     }
+    },
+    "required": [
+     "fills",
+     "mean_slippage_usd",
+     "prior_usd",
+     "mean_excess_usd",
+     "t_stat",
+     "mean_excess_r",
+     "n_with_risk",
+     "verdict",
+     "t_bar",
+     "verdict_adj",
+     "orders"
+    ],
+    "title": "ResultLiveFills",
+    "type": "object"
+   },
    "RetiredFamilyView": {
     "properties": {
      "family": {
@@ -3747,6 +4727,225 @@
     "title": "Status",
     "type": "object"
    },
+   "StopIncidentView": {
+    "properties": {
+     "account": {
+      "title": "Account",
+      "type": "string"
+     },
+     "closed_utc": {
+      "format": "date-time",
+      "title": "Closed Utc",
+      "type": "string"
+     },
+     "loss_frac": {
+      "title": "Loss Frac",
+      "type": "number"
+     },
+     "mode": {
+      "enum": [
+       "demo",
+       "live"
+      ],
+      "title": "Mode",
+      "type": "string"
+     }
+    },
+    "required": [
+     "account",
+     "mode",
+     "closed_utc",
+     "loss_frac"
+    ],
+    "title": "StopIncidentView",
+    "type": "object"
+   },
+   "StopRuleView": {
+    "description": "P6 in fields a screen words itself. status: breached > cant_check > not_started > ok (a breach stays a breach\nwhile part of the record is unreadable: a missing row can only hide more).",
+    "properties": {
+     "after_months": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "After Months"
+     },
+     "breach": {
+      "default": [],
+      "items": {
+       "enum": [
+        "long_run",
+        "single_loss"
+       ],
+       "type": "string"
+      },
+      "title": "Breach",
+      "type": "array"
+     },
+     "cant_check": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cant Check"
+     },
+     "clock_source": {
+      "anyOf": [
+       {
+        "enum": [
+         "paper_gate",
+         "first_trade"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Clock Source"
+     },
+     "clock_start_utc": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Clock Start Utc"
+     },
+     "confidence": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Confidence"
+     },
+     "imputed": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ImputedView"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "incident_count": {
+      "default": 0,
+      "title": "Incident Count",
+      "type": "integer"
+     },
+     "incidents": {
+      "default": [],
+      "items": {
+       "$ref": "#/components/schemas/StopIncidentView"
+      },
+      "title": "Incidents",
+      "type": "array"
+     },
+     "lower_bound": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Lower Bound"
+     },
+     "min_pooled_trades": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Min Pooled Trades"
+     },
+     "min_trades_for_estimate": {
+      "title": "Min Trades For Estimate",
+      "type": "integer"
+     },
+     "months": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Months"
+     },
+     "pooled_trades": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Pooled Trades"
+     },
+     "status": {
+      "enum": [
+       "ok",
+       "not_started",
+       "breached",
+       "cant_check"
+      ],
+      "title": "Status",
+      "type": "string"
+     },
+     "weekly_cap": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Weekly Cap"
+     },
+     "worst_loss_frac": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Worst Loss Frac"
+     }
+    },
+    "required": [
+     "status",
+     "min_trades_for_estimate"
+    ],
+    "title": "StopRuleView",
+    "type": "object"
+   },
    "SystemHaltView": {
     "properties": {
      "clear_command": {
@@ -3784,6 +4983,146 @@
      "clear_command"
     ],
     "title": "SystemHaltView",
+    "type": "object"
+   },
+   "TradesSummary": {
+    "description": "Your account's closed trades over the last `days` opportunity days (ops/report_days.py, the monthly report's\nday and P&L basis: net rows in the account currency only; other rows are counted and flagged, never summed).",
+    "properties": {
+     "account": {
+      "title": "Account",
+      "type": "string"
+     },
+     "best_day": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/DayNet"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "by_day": {
+      "items": {
+       "$ref": "#/components/schemas/DayNet"
+      },
+      "title": "By Day",
+      "type": "array"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
+     "days": {
+      "title": "Days",
+      "type": "integer"
+     },
+     "days_at_target": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Days At Target"
+     },
+     "days_traded": {
+      "title": "Days Traded",
+      "type": "integer"
+     },
+     "first_day": {
+      "title": "First Day",
+      "type": "string"
+     },
+     "gross_rows": {
+      "title": "Gross Rows",
+      "type": "integer"
+     },
+     "last_day": {
+      "title": "Last Day",
+      "type": "string"
+     },
+     "mode": {
+      "anyOf": [
+       {
+        "enum": [
+         "demo",
+         "live",
+         "paper"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mode"
+     },
+     "n": {
+      "title": "N",
+      "type": "integer"
+     },
+     "net": {
+      "title": "Net",
+      "type": "number"
+     },
+     "net_n": {
+      "title": "Net N",
+      "type": "integer"
+     },
+     "other_currency_rows": {
+      "title": "Other Currency Rows",
+      "type": "integer"
+     },
+     "target": {
+      "title": "Target",
+      "type": "number"
+     },
+     "trading_days": {
+      "title": "Trading Days",
+      "type": "integer"
+     },
+     "worst_day": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/DayNet"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "account",
+     "mode",
+     "currency",
+     "days",
+     "first_day",
+     "last_day",
+     "net",
+     "n",
+     "net_n",
+     "days_traded",
+     "trading_days",
+     "target",
+     "days_at_target",
+     "best_day",
+     "worst_day",
+     "by_day",
+     "gross_rows",
+     "other_currency_rows"
+    ],
+    "title": "TradesSummary",
     "type": "object"
    },
    "TrialBudget": {
@@ -4246,6 +5585,29 @@
      }
     ],
     "summary": "Agents"
+   }
+  },
+  "/api/attribution": {
+   "get": {
+    "operationId": "attribution_api_attribution_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AttributionView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Attribution"
    }
   },
   "/api/auth/accept": {
@@ -4956,6 +6318,29 @@
     "summary": "Feeds"
    }
   },
+  "/api/gates": {
+   "get": {
+    "operationId": "gates_api_gates_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/GatesView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Gates"
+   }
+  },
   "/api/halt": {
    "post": {
     "operationId": "halt_api_halt_post",
@@ -5273,6 +6658,33 @@
      }
     ],
     "summary": "Status"
+   }
+  },
+  "/api/trades/summary": {
+   "get": {
+    "operationId": "trades_summary_api_trades_summary_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/TradesSummary"
+         },
+         "title": "Response Trades Summary Api Trades Summary Get",
+         "type": "array"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Trades Summary"
    }
   },
   "/api/users": {

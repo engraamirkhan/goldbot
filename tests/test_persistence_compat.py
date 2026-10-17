@@ -37,6 +37,7 @@ from goldbot.execution.costs import (
 from goldbot.ops import health, jobs, ledger, scheduler
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
 from goldbot.research import ruin
+from goldbot.research.attribution import AttributionReport
 from goldbot.research.director import ResearchPlan
 from goldbot.research.metrics import DsrInputs
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
@@ -283,11 +284,24 @@ def case_trial_dsr_inputs(tmp: Path) -> None:
     assert current_dsr(row, 7) == (inputs.dsr(7), "")
 
 
+def case_attribution_report(tmp: Path) -> None:
+    """state/attribution.json (research/attribution.py AttributionReport) with a field from a newer release at the top
+    and in a cell: the Progress tab's results view still serves it (goldbot/api/progress.py)."""
+    from goldbot.api.progress import attribution_view
+    from goldbot.research.attribution import CostModel, build_report, save_report
+    free = CostModel(spread_usd={}, slippage_usd={}, slippage_prior_usd=0.0, commission_usd_per_oz=0.0, swap=None,
+                     source="test")
+    save_report(build_report([], now=T0, costs=free, settings=load_settings().attribution), tmp)
+    _rewrite(tmp / "attribution.json", lambda d: {**_newer(d), "overall": _newer(d["overall"])})
+    v = attribution_view(tmp, load_settings(), T0)
+    assert v.cant_check is None and v.report is not None and v.report.overall.n == 0
+
+
 CASES = [case_closed_trade, case_closed_trade_from_before_ret_basis, case_closed_trade_price_return_without_ret_basis,
          case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
          case_shadow_stats, case_model_registry_and_backtest, case_population, case_research_plan, case_costs,
          case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_hwm_confirmation,
-         case_trial_dsr_inputs]
+         case_trial_dsr_inputs, case_attribution_report]
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c.__name__.removeprefix("case_") for c in CASES])
@@ -301,6 +315,7 @@ def test_every_persisted_record_model_has_a_compat_case():
                BrokerTerms, CostTable, PublishedCostTable, scheduler.JobState, health.WatchState, health.HealthReport,
                DigestState, OutboxState, crossfeed.ReconcileReport, ledger.LedgerReport,
                ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation, DsrInputs,
+               AttributionReport,
                # the engine's orders file: tests/test_engine_safety.py::
                # test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote
                SentOrder, OpenTrade, PendingClose,

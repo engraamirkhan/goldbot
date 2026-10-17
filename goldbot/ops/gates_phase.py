@@ -80,6 +80,9 @@ REPORT_FILE = "gate_report.json"
 PHASE_FILE = "phase_state.json"
 # Owner- or job-recorded evidence for the items the code cannot measure itself (foundation gate, chaos drill).
 EVIDENCE_NAMES = ("shuffle_auc", "asof_violations", "feed_mismatch_share", "chaos_drill")
+MIN_TRADES_FOR_BOUND = 2           # fewer pooled trades: no lower bound (and no interval) can be estimated
+MAX_INCIDENTS = 5                  # stop-rule incidents listed (worst first); `incident_count` has them all
+TRADES_UNREADABLE = "closed-trade record"   # prefix of the error an unreadable closed-trade line gives
 NEVER_UNLOCKS = ("This report never records a gate or unlocks live: record with `run.py record-gate`, "
                  "enable live with `accounts unlock-live` and the typed phrase.")
 
@@ -176,12 +179,25 @@ class EntryAudit(FrozenRecord):
     model_version: str | None = None
 
 
+class GateProgress(FrozenRecord):
+    """How far a count or duration item has come: "have `value` of `target` `unit`"."""
+    value: float
+    target: float
+    unit: Literal["trades", "days"]
+
+
 class GateItem(FrozenRecord):
     name: str
     met: bool
-    evidence: str
+    evidence: str                      # what was measured; never the owner's typed note (`detail`)
     need: str
     required: bool = True              # False: shown for context, does not decide the gate
+    # structured facts for the dashboard (docs/ux/progress-screens.md); None where they do not apply
+    detail: str | None = None          # the note typed with `gate-evidence --detail`: CLI output only, never served
+    threshold: str | None = None       # the GateSettings field that sets `need` (its PROPOSED state is the API's)
+    progress: GateProgress | None = None
+    earliest_utc: UtcTimestamp | None = None    # a day item: its clock start + the minimum days (a calendar fact)
+    ci95: tuple[float, float] | None = None     # an expectancy item: the 95% interval of the phase's mean return
 
 
 class GateStatus(FrozenRecord):
@@ -189,6 +205,15 @@ class GateStatus(FrozenRecord):
     met: bool
     recorded: bool
     items: list[GateItem]
+    recorded_utc: UtcTimestamp | None = None    # from phase_state.json's gate_log
+
+
+class StopIncident(FrozenRecord):
+    """One closed trade whose loss (with a gross row's imputed cost) exceeded the weekly cap of its equity before it."""
+    account: str
+    mode: Literal["demo", "live"]
+    closed_utc: UtcTimestamp
+    loss_frac: float
 
 
 class StopRuleStatus(FrozenRecord):
@@ -199,6 +224,13 @@ class StopRuleStatus(FrozenRecord):
     lower_bound: float | None
     worst_loss_frac: float | None      # largest single-trade loss as a fraction of equity before it
     detail: str
+    # structured, so a screen can word and localise them (the reasons above carry UTC times and the account)
+    clock_start_utc: UtcTimestamp | None = None   # where the pooled trades and the months start
+    clock_source: Literal["paper_gate", "first_trade"] | None = None
+    breach: list[Literal["long_run", "single_loss"]] = Field(default_factory=list)
+    incidents: list[StopIncident] = Field(default_factory=list)   # worst first, at most MAX_INCIDENTS
+    incident_count: int = 0
+    imputed: ImputationSummary = Field(default_factory=ImputationSummary)   # the pooled gross rows and their charge
 
 
 class GateReport(FrozenRecord):
@@ -239,7 +271,7 @@ def load_closed_trades(state_dir: Path) -> tuple[list[ClosedTrade], str | None]:
                 seen.add(key)
             out.append(t)
     if bad:
-        return out, f"closed-trade record: {len(bad)} unreadable line(s) skipped ({bad[0]})"
+        return out, f"{TRADES_UNREADABLE}: {len(bad)} unreadable line(s) skipped ({bad[0]})"
     return out, None
 
 
@@ -411,13 +443,26 @@ def _charged(note: ImputationSummary) -> str:
 
 
 def lower_bound(rets: list[float], confidence: float) -> float | None:
-    """One-sided lower confidence bound on the mean: mean - t(confidence, n-1) * sd / sqrt(n); None below 2 trades."""
+    """One-sided lower confidence bound on the mean: mean - t(confidence, n-1) * sd / sqrt(n); None below
+    MIN_TRADES_FOR_BOUND trades."""
     n = len(rets)
-    if n < 2:
+    if n < MIN_TRADES_FOR_BOUND:
         return None
     a = np.asarray(rets, dtype=float)
     sd = float(np.std(a, ddof=1))
     return float(np.mean(a) - stats.t.ppf(confidence, n - 1) * sd / math.sqrt(n))
+
+
+def mean_ci95(rets: list[float]) -> tuple[float, float] | None:
+    """Two-sided 95% interval of the mean per-trade return, mean +- t(0.975, n-1) * sd / sqrt(n), on the same iid
+    standard error as `lower_bound` (the gates' convention; ADR 0022 leaves the gates unchanged). Shown beside an
+    expectancy item; it decides nothing. None below MIN_TRADES_FOR_BOUND trades."""
+    n = len(rets)
+    if n < MIN_TRADES_FOR_BOUND:
+        return None
+    a = np.asarray(rets, dtype=float)
+    half = float(stats.t.ppf(0.975, n - 1) * float(np.std(a, ddof=1)) / math.sqrt(n))
+    return float(np.mean(a) - half), float(np.mean(a) + half)
 
 
 def within(value: float | None, reference: float | None, frac: float) -> bool:
@@ -449,15 +494,18 @@ def evaluate_stop_rule(trades: list[ClosedTrade], paper_start: pd.Timestamp | No
     rets, note = imputer.net_rets(pooled)
     lb = lower_bound(rets, cfg.stop_confidence)
     reasons: list[str] = []
+    breach: list[Literal["long_run", "single_loss"]] = []
     if months >= cfg.stop_after_months and len(pooled) > cfg.stop_min_pooled_trades and lb is not None and lb < 0:
+        breach.append("long_run")
         reasons.append(f"after {months:.1f} months and {len(pooled)} pooled trades the lower {cfg.stop_confidence:.0%} "
                        f"bound on expectancy is {lb:.5f} (< 0)")
     # a USD-flagged P&L (pnl_currency) is kept here as recorded, never dropped: on a GBP or EUR deposit it overstates
     # the loss fraction (conservative for the stop rule); it is kept out of money sums elsewhere
     losses = [(-(t.pnl - (imputer.charge(t).usd or 0.0)) / t.equity_before, t) for t in trades]
     worst = max(losses, key=lambda x: x[0]) if losses else None
-    over = [x for x in losses if x[0] > weekly_cap]
+    over = sorted((x for x in losses if x[0] > weekly_cap), key=lambda x: (-x[0], x[1].exit_utc))
     if over and worst is not None:
+        breach.append("single_loss")
         frac, t = worst
         more = f" ({len(over)} such trades)" if len(over) > 1 else ""
         reasons.append(f"single loss of {frac:.2%} of equity on {t.account_id} ({t.mode}) closed {t.exit_utc:%Y-%m-%d %H:%M} "
@@ -467,17 +515,26 @@ def evaluate_stop_rule(trades: list[ClosedTrade], paper_start: pd.Timestamp | No
               f"worst single loss {_fmt(worst[0] if worst else None, '.2%')} (weekly cap {weekly_cap:.1%})"
               + _charged(note))
     return StopRuleStatus(breached=bool(reasons), reasons=reasons, pooled_trades=len(pooled), months=round(months, 2),
-                          lower_bound=lb, worst_loss_frac=worst[0] if worst else None, detail=detail)
+                          lower_bound=lb, worst_loss_frac=worst[0] if worst else None, detail=detail,
+                          clock_start_utc=start,
+                          clock_source=None if start is None else "paper_gate" if paper_start is not None else "first_trade",
+                          breach=breach, incident_count=len(over), imputed=note,
+                          incidents=[StopIncident(account=t.account_id, mode=t.mode, closed_utc=t.exit_utc, loss_frac=f)
+                                     for f, t in over[:MAX_INCIDENTS]])
 
 
 # ---------------------------------------------------------------------------------------------- gates (P7)
-def _evidence_item(ev: dict[str, dict[str, Any]], name: str, need: str, ok: Any) -> GateItem:
+def _evidence_item(ev: dict[str, dict[str, Any]], name: str, need: str, ok: Any,
+                   threshold: str | None = None) -> GateItem:
+    """A recorded evidence item: the value or pass/fail and the date as evidence; the owner's typed note apart in
+    `detail` (it can hold a login or a host, so only the CLI prints it)."""
     e = ev.get(name)
     if not e:
-        return GateItem(name=name, met=False, evidence="not recorded (run.py gate-evidence)", need=need)
+        return GateItem(name=name, met=False, evidence="not recorded (run.py gate-evidence)", need=need,
+                        threshold=threshold)
     shown = f"value {e['value']}" if e.get("value") is not None else ("passed" if e.get("passed") else "failed")
-    note = f" — {e['detail']}" if e.get("detail") else ""
-    return GateItem(name=name, met=bool(ok(e)), evidence=f"{shown} on {str(e.get('ts_utc', '?'))[:10]}{note}", need=need)
+    return GateItem(name=name, met=bool(ok(e)), evidence=f"{shown} on {str(e.get('ts_utc', '?'))[:10]}", need=need,
+                    detail=str(e["detail"]) if e.get("detail") else None, threshold=threshold)
 
 
 def _previous(i: int, passed: list[str]) -> list[GateItem]:
@@ -542,13 +599,15 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     tol = cfg.shuffle_auc_tolerance
     items = [
         _evidence_item(ev, "shuffle_auc", f"|AUC - 0.5| <= {tol} (at chance)",
-                       lambda e: e.get("value") is not None and abs(float(e["value"]) - 0.5) <= tol + 1e-12),
+                       lambda e: e.get("value") is not None and abs(float(e["value"]) - 0.5) <= tol + 1e-12,
+                       "shuffle_auc_tolerance"),
         _evidence_item(ev, "asof_violations", "0 (as-of audit clean)",
                        lambda e: e.get("value") is not None and float(e["value"]) == 0),
         _evidence_item(ev, "feed_mismatch_share", f"<= {cfg.feed_max_mismatch_share} of bars (broker and Dukascopy agree)",
-                       lambda e: e.get("value") is not None and float(e["value"]) <= cfg.feed_max_mismatch_share),
+                       lambda e: e.get("value") is not None and float(e["value"]) <= cfg.feed_max_mismatch_share,
+                       "feed_max_mismatch_share"),
     ]
-    gates.append(_status(0, passed, items))
+    gates.append(_status(0, passed, items, when))
 
     # 1 backtest -> paper: from the trial registry and the measured spread table; the DSR recomputed on today's count
     k_now = n_trials_effective(rows)
@@ -572,16 +631,18 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
                  evidence=(f"{_fmt(dsr, '.3f')} at {trial}, recomputed on the registry's {k_now} trials"
                            if dsr is not None else f"n/a at {trial}: {dsr_why}")
                  + (f" ({float(stored):.3f} stored at run time)" if stored is not None else ""),
-                 need=f">= {cfg.backtest_min_dsr} on the true trial count"),
+                 need=f">= {cfg.backtest_min_dsr} on the true trial count", threshold="backtest_min_dsr"),
         GateItem(name="positive_years", met=bool(years.get("passed")), evidence=str(years.get("detail") or "n/a"),
                  need="positive in 3 separate years incl. 2021-22 (research gates)"),
         GateItem(name="backtest_trades", met=int(mf.get("n") or 0) >= cfg.backtest_min_trades,
-                 evidence=f"{int(mf.get('n') or 0)} model-filtered trades", need=f">= {cfg.backtest_min_trades}"),
+                 evidence=f"{int(mf.get('n') or 0)} model-filtered trades", need=f">= {cfg.backtest_min_trades}",
+                 threshold="backtest_min_trades",
+                 progress=GateProgress(value=int(mf.get("n") or 0), target=cfg.backtest_min_trades, unit="trades")),
         GateItem(name="live_tick_spread_model", met=bool(spread_tables),
                  evidence=", ".join(f"{c.get('account_id')} {int(c.get('n_ticks') or 0):,} ticks" for c in spread_tables)
                  or "no cost table built from own ticks", need="a spread table measured from the terminal's own ticks"),
     ]
-    gates.append(_status(1, passed, items))
+    gates.append(_status(1, passed, items, when))
 
     # 2 paper -> tiny live
     p_rets, p_note = imputer.net_rets(paper)
@@ -592,23 +653,27 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
         GateItem(name="paper_trades", met=len(paper) >= cfg.paper_min_trades,
                  evidence=f"{len(paper)} closed demo trades"
                  + ("" if closed_trade_files(state_dir) else " (no closed-trade record yet)"),
-                 need=f">= {cfg.paper_min_trades}"),
+                 need=f">= {cfg.paper_min_trades}", threshold="paper_min_trades",
+                 progress=GateProgress(value=len(paper), target=cfg.paper_min_trades, unit="trades")),
         GateItem(name="paper_days", met=p_days >= cfg.paper_min_days, evidence=f"{p_days:.0f} days since backtest_to_paper",
-                 need=f">= {cfg.paper_min_days} days"),
+                 need=f">= {cfg.paper_min_days} days", threshold="paper_min_days",
+                 progress=GateProgress(value=round(p_days, 2), target=cfg.paper_min_days, unit="days"),
+                 earliest_utc=_earliest(paper_start, cfg.paper_min_days)),
         GateItem(name="paper_expectancy",
                  met=not p_note.n_unpriced and within(p_mean, bt_mean, cfg.paper_expectancy_within),
                  evidence=f"paper {_fmt(p_mean)} vs backtest {_fmt(bt_mean)} per trade ({reference}){_charged(p_note)}",
-                 need=f"no more than {cfg.paper_expectancy_within:.0%} below a positive backtest expectancy"),
+                 need=f"no more than {cfg.paper_expectancy_within:.0%} below a positive backtest expectancy",
+                 threshold="paper_expectancy_within", ci95=mean_ci95(p_rets)),
         GateItem(name="fills", met=slip is not None and slip[0] <= (1 + cfg.paper_fills_within) * slip[1],
                  evidence=(f"measured slippage ${slip[0]:.3f}/oz on {slip[2]} fills vs modelled ${slip[1]:.3f}"
                            if slip else "no measured fills in the cost tables"),
-                 need=f"within {cfg.paper_fills_within:.0%} of the modelled slippage"),
+                 need=f"within {cfg.paper_fills_within:.0%} of the modelled slippage", threshold="paper_fills_within"),
         _evidence_item(ev, "chaos_drill", "passed", lambda e: e.get("passed") is True),
         _incident_item(stop, cap),
         _gross_share_item("paper_gross_share", p_note, cfg.max_gross_share),
         _shadow_item(state_dir),
     ]
-    gates.append(_status(2, passed, items))
+    gates.append(_status(2, passed, items, when))
 
     # 3 tiny live -> full size
     live = sorted(live, key=lambda t: t.exit_utc)
@@ -628,32 +693,44 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
         brokers_ok = False
     items = _previous(3, passed) + [
         GateItem(name="live_trades", met=len(live) >= cfg.live_min_trades, evidence=f"{len(live)} closed live trades",
-                 need=f">= {cfg.live_min_trades}"),
+                 need=f">= {cfg.live_min_trades}", threshold="live_min_trades",
+                 progress=GateProgress(value=len(live), target=cfg.live_min_trades, unit="trades")),
         GateItem(name="live_days", met=l_days >= cfg.live_min_days, evidence=f"{l_days:.0f} days since paper_to_tiny_live",
-                 need=f">= {cfg.live_min_days} days"),
+                 need=f">= {cfg.live_min_days} days", threshold="live_min_days",
+                 progress=GateProgress(value=round(l_days, 2), target=cfg.live_min_days, unit="days"),
+                 earliest_utc=_earliest(live_start, cfg.live_min_days)),
         GateItem(name="live_expectancy",
                  met=l_ok and not p_note.n_unpriced and within(l_mean, p_mean, cfg.live_expectancy_within),
                  evidence=f"live {_fmt(l_mean)} vs paper {_fmt(p_mean)} per trade{_charged(l_note)}",
-                 need=f"no more than {cfg.live_expectancy_within:.0%} below a positive paper expectancy"),
+                 need=f"no more than {cfg.live_expectancy_within:.0%} below a positive paper expectancy",
+                 threshold="live_expectancy_within", ci95=mean_ci95(l_rets)),
         GateItem(name="live_drawdown",
                  met=l_ok and l_dd is not None and bt_dd is not None and l_dd < cfg.live_dd_mult * bt_dd,
                  evidence=f"live max drawdown {_fmt(l_dd, '.4f')} vs backtest {_fmt(bt_dd, '.4f')} ({reference})"
                  + _charged(l_note),
-                 need=f"under {cfg.live_dd_mult}x backtest"),
+                 need=f"under {cfg.live_dd_mult}x backtest", threshold="live_dd_mult"),
         GateItem(name="brokers_agree", met=l_ok and brokers_ok,
                  evidence=(", ".join(f"{b} {len(ts)} trades {_fmt(means[b])}" for b, ts in by_broker.items())
                            or "no live trades") + _charged(l_note),
-                 need=f"two brokers with >= {cfg.broker_min_trades} trades each, expectancy within {cfg.brokers_within:.0%}"),
+                 need=f"two brokers with >= {cfg.broker_min_trades} trades each, expectancy within {cfg.brokers_within:.0%}",
+                 threshold="broker_min_trades"),
         _incident_item(stop, cap),
         _gross_share_item("live_gross_share", l_note, cfg.max_gross_share),
     ]
-    gates.append(_status(3, passed, items))
+    gates.append(_status(3, passed, items, when))
     return GateReport(ts=now, phase=int(st.get("phase", 0) or 0), gates_passed=passed, gates=gates, stop_rule=stop,
                       errors=errors)
 
 
-def _status(i: int, passed: list[str], items: list[GateItem]) -> GateStatus:
-    return GateStatus(gate=GATES[i], met=all(it.met for it in items if it.required), recorded=GATES[i] in passed, items=items)
+def _status(i: int, passed: list[str], items: list[GateItem], when: dict[str, pd.Timestamp]) -> GateStatus:
+    rec = GATES[i] in passed
+    return GateStatus(gate=GATES[i], met=all(it.met for it in items if it.required), recorded=rec, items=items,
+                      recorded_utc=when.get(GATES[i]) if rec else None)
+
+
+def _earliest(start: pd.Timestamp | None, days: float) -> pd.Timestamp | None:
+    """The calendar date a day count is reached (never a forecast of trades); None before its clock starts."""
+    return None if start is None else start + pd.Timedelta(days=days)
 
 
 def _registry_path(state_dir: Path, settings: Settings) -> Path:
@@ -695,7 +772,8 @@ def render(report: GateReport) -> str:
         lines.append(f"\n{g.gate}: {'MET' if g.met else 'NOT MET'} ({rec})")
         for it in g.items:
             mark = "info" if not it.required else ("ok" if it.met else "--")
-            lines.append(f"  [{mark:4}] {it.name:<22} {it.evidence}  (need {it.need})")
+            note = f" — {it.detail}" if it.detail else ""
+            lines.append(f"  [{mark:4}] {it.name:<22} {it.evidence}{note}  (need {it.need})")
     s = report.stop_rule
     lines.append(f"\nstop rule: {'BREACHED' if s.breached else 'not breached'} — {s.detail}")
     for r in s.reasons:
