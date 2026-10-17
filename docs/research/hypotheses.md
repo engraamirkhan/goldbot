@@ -178,7 +178,7 @@ a quarter (to the one with the best post-retirement evidence, else by rotation) 
 | Quarter | Registry trials | Screens inside trials (K_eff) | DSR trial count to use for the next trial |
 |---|---|---|---|
 | Q4 2026 | #1–#20 | 0 | 20 |
-| Q1 2027 (planned) | #21–#33 at most (13 planned + 7 reserve) | H-02: K_eff = features screened when survivors go forward as features, groups screened only for whole-group survivors (recorded as `k_eff` on the discovery row; `registry.n_trials_effective` adds it) | 20 + trials run so far + K_eff for any survivor of H-02 |
+| Q1 2027 (planned) | #21–#40 at most (8 reserved: 4 queued + 4 contingent H-02 survivor slots; 12 open under the E-5 cap; corrected 2026-10-17 to settings) | H-02: K_eff = features screened when survivors go forward as features, groups screened only for whole-group survivors (recorded as `k_eff` on the discovery row; `registry.n_trials_effective` adds it) | 20 + trials run so far + K_eff for any survivor of H-02 |
 
 ## Next generation (after Q1 verdicts)
 
