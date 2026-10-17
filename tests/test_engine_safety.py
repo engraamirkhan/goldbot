@@ -655,7 +655,8 @@ def test_a_broker_10027_on_a_demo_terminal_means_algo_trading_off_and_on_paper_a
 def test_an_ambiguous_result_at_approval_is_not_marked_not_placed_and_sends_no_notice(tmp_path, retcode):
     pb = _BrokerRefuses(retcode, message="no answer", equity=10_000)
     _, archived, outcomes = _approved_through(tmp_path, pb)
-    assert not archived.gate_refusal and not any(o.startswith("GATE_REFUSED") for o in outcomes)
+    # BACKLOG 72: archived NOT CONFIRMED (tests/test_order_not_confirmed.py), never NOT PLACED: the order may exist
+    assert archived.gate_refusal == ["not_confirmed"] and outcomes == ["GATE_REFUSED: not_confirmed"]
     assert _notices(tmp_path) == []
 
 
