@@ -156,7 +156,8 @@ scheduler:
 
   feed_reconcile:   { kind: daily,   at: "23:20", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }   # D12: engine bars vs broker M1, last day
   broker_ledger:    { kind: daily,   at: "23:25", max_late_hours: 20 }                  # GAP-07/08: balance snapshot, positions + balance vs broker
-  tick_record:      { kind: daily,   at: "22:40", max_late_hours: 20 }                  # BACKLOG 79: broker ticks of each closed server day -> state/ticks/
+  tick_record:      { kind: daily,   at: "21:10", max_late_hours: 0.5 }                 # BACKLOG 79: broker ticks -> state/ticks/, in the daily break (US summer time)
+  tick_record_winter: { kind: daily, at: "22:10", max_late_hours: 0.5 }                 #   ... and in the winter break; outside the break or weekend a run skips
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
@@ -327,3 +328,8 @@ ticks:                               # broker tick record (goldbot/data/ticks.py
   retain_days: 240                   # server days kept in state/ticks/<account>/ (H-A reads Nov 2026 days in May 2027)
   min_london_ny_ticks: 1000          # health ticks:<account> WARNs when the latest trading day has fewer (classifier's bar)
   backfill_days: 7                   # closed server days before the latest that each run re-checks and pulls if missing
+  max_days_per_run: 1                # oldest missing day first; weekend runs (both slots run) catch up
+  page_ticks: 2000                   # rows per copy_ticks call: the bridge serves one request at a time
+  pause_s: 0.2                       # pause between pages so the engine's quote reads get the bridge
+  page_limit_s: 2.0                  # a slower page stops the run (engine orders older than 10 s are refused)
+  run_budget_s: 300                  # per account per run; an unfinished day is not written and is pulled next run

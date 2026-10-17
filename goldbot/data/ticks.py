@@ -9,8 +9,14 @@ stores that sample (data/ticks/source=<account>, `Engine.flush_ticks`) for the c
 per quoted minute and the spread, which need the terminal's complete tick history, and its uptime rule would otherwise
 drop every day the engine was restarted. `copy_ticks` returns that history for any closed day, so a missed run is
 back-filled by the next one. Nothing is added to the trading path: the daily scheduler job `tick_record` reads through
-the scheduler's existing read-only broker (the one feed_reconcile and broker_ledger use), in pages of PAGE_TICKS rows
-so the single-threaded bridge is never held for more than a fraction of a second between the engine's quote reads.
+the scheduler's existing read-only broker (the one feed_reconcile and broker_ledger use).
+
+Bridge load (trading-safety review): the bridge serves one request at a time and refuses an engine order that waited
+more than ORDER_MAX_AGE_S (10 s), so the pull must never sit in front of the engine while it can trade. The job runs
+only while gold is closed (`market_quiet`: New York's 17:05-17:50 daily break, or the weekend), and stops when that
+window ends; pages are `ticks.page_ticks` rows with a `pause_s` gap; a page slower than `page_limit_s` or a run past
+`run_budget_s` stops the run. A day is written only when complete, so a stopped day is simply pulled by a later run
+(oldest missing first, `max_days_per_run` a run; the weekend runs catch up).
 
 Layout (state directory, mode 0700 directories and 0600 files, like the rest of state/):
 
@@ -39,7 +45,7 @@ import re
 import tempfile
 from datetime import date, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -59,8 +65,10 @@ log = logging.getLogger("goldbot.ticks")
 
 TICKS_DIR = "ticks"
 INDEX_FILE = "index.json"
-PAGE_TICKS = 10_000           # rows per copy_ticks call: ~0.6 MB of JSON over the bridge, well inside its timeout
-MAX_PAGES = 500               # 5M ticks: a server day never has this many; a runaway loop stops here
+PAGE_TICKS = 2_000            # default rows per copy_ticks call (~120 KB of JSON over the bridge)
+MAX_PAGES = 2_000             # a server day never needs this many pages; a runaway loop stops here
+NEW_YORK = "America/New_York"
+BREAK_FROM, BREAK_TO = pd.Timedelta(hours=17, minutes=5), pd.Timedelta(hours=17, minutes=50)   # New York wall clock
 SETTLE = pd.Timedelta(minutes=5)   # a server day is pulled only this long after it ended (late ticks reach the terminal)
 STALE_DAYS = 4                # health: the newest recorded day older than this (Friday -> Monday is 3) WARNs
 SOURCE = "mt5 copy_ticks via the scheduler's read-only broker"
@@ -137,16 +145,68 @@ def days_due(now: pd.Timestamp, server_tz: str, *, backfill_days: int) -> list[d
     return [d for d in days if d.weekday() < 5]
 
 
+# ------------------------------------------------------------------------------------------- quiet window, pacing
+def market_quiet(ts_utc: pd.Timestamp) -> bool:
+    """Gold is closed at `ts_utc`, with margins: New York 17:05-17:50 on Monday to Thursday (the daily break is
+    17:00-18:00), Friday from 17:05, all Saturday, Sunday before 17:50 (the reopen is 18:00). Holidays are not
+    counted as quiet: a conservative miss, the weekend catches up."""
+    ny = pd.Timestamp(ts_utc).tz_convert(NEW_YORK)
+    t = ny - ny.normalize()
+    wd = ny.weekday()
+    if wd == 5:
+        return True
+    if wd == 6:
+        return bool(t < BREAK_TO)
+    if wd == 4:
+        return bool(t >= BREAK_FROM)
+    return bool(BREAK_FROM <= t < BREAK_TO)
+
+
+class PullDeferred(RuntimeError):
+    """The pull stopped before the day was complete (time limit or the quiet window ended); nothing is written."""
+
+
+class Pace:
+    """Paces one run's copy_ticks calls: a pause between pages, a per-page time limit, a run deadline and the quiet
+    window, all on `clock` (wall time, UTC). Raises PullDeferred when a limit is hit."""
+
+    def __init__(self, clock: Callable[[], pd.Timestamp], sleep: Callable[[float], None], *, pause_s: float,
+                 page_limit_s: float, budget_s: float) -> None:
+        self.clock, self.sleep, self.pause_s, self.page_limit_s = clock, sleep, pause_s, page_limit_s
+        self.deadline = clock() + pd.Timedelta(seconds=budget_s)
+        self.pages = 0
+
+    def before_page(self) -> pd.Timestamp:
+        if self.pages and self.pause_s > 0:
+            self.sleep(self.pause_s)
+        now = self.clock()
+        if now >= self.deadline:
+            raise PullDeferred(f"run budget spent after {self.pages} pages")
+        if not market_quiet(now):
+            raise PullDeferred(f"market reopening at {now.isoformat()} after {self.pages} pages")
+        return now
+
+    def after_page(self, started: pd.Timestamp) -> None:
+        self.pages += 1
+        took = (self.clock() - started).total_seconds()
+        if took > self.page_limit_s:
+            raise PullDeferred(f"page {self.pages} took {took:.1f} s (> {self.page_limit_s} s): bridge slow")
+
+
 # ------------------------------------------------------------------------------------------- pull
 def pull_day(broker: Any, symbol: str, start: pd.Timestamp, end: pd.Timestamp, *,
-             chunk: int = PAGE_TICKS) -> pd.DataFrame:
+             chunk: int = PAGE_TICKS, pace: Pace | None = None) -> pd.DataFrame:
     """Every tick the terminal holds in [start, end), paged by `chunk` rows. copy_ticks_from starts at a whole second,
     so each page restarts at its last tick's second and the overlap is dropped on (ts_utc, bid, ask, flags), the live
-    collector's dedup key. A full page that cannot move past its start second raises instead of looping."""
+    collector's dedup key. A full page that cannot move past its start second raises instead of looping. With `pace`,
+    every page is paced and time-limited (PullDeferred)."""
     pages: list[pd.DataFrame] = []
     since = pd.Timestamp(start)
     for _ in range(MAX_PAGES):
+        started = pace.before_page() if pace is not None else None
         page = broker.copy_ticks(symbol, since, chunk)
+        if pace is not None and started is not None:
+            pace.after_page(started)
         if page is None or page.empty:
             break
         page = page.assign(ts_utc=pd.to_datetime(page["ts_utc"], utc=True))
@@ -245,24 +305,39 @@ def prune(state_dir: str | Path, account: str, keep_from: date) -> list[str]:
 
 
 # ------------------------------------------------------------------------------------------- the daily job
-def record_ticks(broker: Any, state_dir: str | Path, account: str, symbol: str, server_tz: str, now: pd.Timestamp,
-                 cfg: TickRecordSettings) -> dict[str, Any]:
-    """Pull every due server day not yet on disk (idempotent: a recorded day is never pulled again; delete its file to
-    re-pull), then prune days older than `retain_days`. Returns what it did, for the scheduler's job record."""
-    now = pd.Timestamp(now)
+def record_ticks(broker: Any, state_dir: str | Path, account: str, symbol: str, server_tz: str,
+                 cfg: TickRecordSettings, *, clock: Callable[[], pd.Timestamp],
+                 sleep: Callable[[float], None]) -> dict[str, Any]:
+    """Pull up to `max_days_per_run` due server days not yet on disk, oldest first (idempotent: a recorded day is never
+    pulled again; delete its file to re-pull), paced and time-boxed (`Pace`), then prune days older than
+    `retain_days`. A deferred day is reported and left for a later run. Returns what it did, for the job record. The
+    broker is only ever asked for `copy_ticks`."""
+    now = pd.Timestamp(clock())
     have = read_index(state_dir, account)
+    d = account_dir(state_dir, account)
+    missing = [day for day in days_due(now, server_tz, backfill_days=cfg.backfill_days)
+               if not (day.isoformat() in have and (d / f"{day.isoformat()}.parquet").exists())]
+    pace = Pace(clock, sleep, pause_s=cfg.pause_s, page_limit_s=cfg.page_limit_s, budget_s=cfg.run_budget_s)
     written: list[str] = []
-    for day in days_due(now, server_tz, backfill_days=cfg.backfill_days):
-        if day.isoformat() in have and (account_dir(state_dir, account) / f"{day.isoformat()}.parquet").exists():
-            continue
+    deferred: str | None = None
+    for day in missing[:cfg.max_days_per_run]:
         start, end = server_day_bounds(day, server_tz)
-        rec = write_day(state_dir, account, day, pull_day(broker, symbol, start, end), symbol=symbol,
-                        server_tz=server_tz, pulled_utc=now)
+        try:
+            ticks = pull_day(broker, symbol, start, end, chunk=cfg.page_ticks, pace=pace)
+        except PullDeferred as exc:
+            deferred = f"{day.isoformat()}: {exc}"
+            log.warning("tick record %s %s deferred: %s", account, day, exc)
+            break
+        rec = write_day(state_dir, account, day, ticks, symbol=symbol, server_tz=server_tz, pulled_utc=clock())
         written.append(day.isoformat())
         log.info("tick record %s %s: %d ticks (%d London/NY), %d bytes", account, day, rec.rows, rec.london_ny_ticks,
                  rec.bytes)
     pruned = prune(state_dir, account, latest_closed(now, server_tz) - timedelta(days=cfg.retain_days))
-    return {"written": written, "pruned": pruned, "days": len(read_index(state_dir, account))}
+    out: dict[str, Any] = {"written": written, "pruned": pruned, "days": len(read_index(state_dir, account)),
+                           "behind": len(missing) - len(written), "pages": pace.pages}
+    if deferred is not None:
+        out["deferred"] = deferred
+    return out
 
 
 # ------------------------------------------------------------------------------------------- research loader
@@ -317,6 +392,6 @@ def check_tick_record(ctx: HealthContext, account_id: str) -> Check:
     return Check(name=name, status="ok", reason=msg)
 
 
-__all__ = ["DayRecord", "TickIndex", "INDEX_FILE", "PAGE_TICKS", "account_dir", "check_tick_record", "days_due", "load_day",
+__all__ = ["DayRecord", "Pace", "PullDeferred", "TickIndex", "market_quiet", "INDEX_FILE", "PAGE_TICKS", "account_dir", "check_tick_record", "days_due", "load_day",
            "latest_closed", "prune", "pull_day", "read_index", "record_ticks", "recorded_days", "server_date", "server_day_bounds",
            "write_day"]

@@ -166,6 +166,8 @@ class JobContext(Record):
     upload_costs: Callable[[bytes], str] | None = None           # published cost table -> release costs-v1 (VPS only)
     broker_for: Callable[[Account], Any] | None = None           # read-only Broker per account (feed_reconcile, broker_ledger)
     get_secret: Callable[[str], str | None] | None = None        # backup credentials (default: goldbot.ops.accounts)
+    clock: Callable[[], pd.Timestamp] | None = None              # tick_record's wall clock (default: now, UTC)
+    sleep: Callable[[float], None] | None = None                 # tick_record's pause between pages (default: time.sleep)
 
 
 # ---------------------------------------------------------------------------------------------- nightly costs
@@ -1154,10 +1156,17 @@ def broker_ledger(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 # ---------------------------------------------------------------------------------------------- broker tick record (BACKLOG 79)
 def tick_record(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Daily, per enabled account (goldbot/data/ticks.py): the broker's ticks of every closed server day not yet on
-    disk -> state/ticks/<account>/<date>.parquet (copy_ticks, read-only, paged), then retention. Health: ticks:<acc>."""
-    from goldbot.data.ticks import record_ticks
+    disk -> state/ticks/<account>/<date>.parquet (copy_ticks, read-only, paged), then retention. Health: ticks:<acc>.
+    Runs only while gold is closed (daily break or weekend, `market_quiet`), time-boxed and paced, so the shared
+    bridge is never busy in trading hours (trading-safety review); `slot` is not used as the time."""
+    import time
+
+    from goldbot.data.ticks import market_quiet, record_ticks
     if ctx.broker_for is None:
         return {"skipped": "no broker connection configured for the scheduler"}
+    clock = ctx.clock or (lambda: pd.Timestamp.now("UTC"))
+    if not market_quiet(clock()):
+        return {"skipped": f"market open at {clock().isoformat()}: runs only in the daily break or at the weekend"}
     out: dict[str, Any] = {}
     failed: list[str] = []
     for acc in ctx.accounts:
@@ -1167,8 +1176,8 @@ def tick_record(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             if broker is None:
                 out[acc.account_id] = {"skipped": "no read-only broker connection for this account"}
                 continue
-            out[acc.account_id] = record_ticks(broker, ctx.state_dir, acc.account_id, acc.symbol, acc.server_tz, slot,
-                                               ctx.settings.ticks)
+            out[acc.account_id] = record_ticks(broker, ctx.state_dir, acc.account_id, acc.symbol, acc.server_tz,
+                                               ctx.settings.ticks, clock=clock, sleep=ctx.sleep or time.sleep)
         except Exception as exc:
             failed.append(f"{acc.account_id}: {type(exc).__name__}: {exc}")
         finally:
@@ -1231,6 +1240,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "cpcv_quarterly": cpcv_quarterly,             # M16 combinatorial purged CV + PBO of gate-passing trials
     "attribution": attribution,                   # BACKLOG 12: daily attribution for the staff agents (reporting only)
     "tick_record": tick_record,                   # BACKLOG 79: broker ticks per server day for research (H-A)
+    "tick_record_winter": tick_record,            # ... the same job in the winter daily break (one slot skips)
 }
 
 

@@ -201,6 +201,11 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
+   "job:tick_record_winter",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
    "job:tournament",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -606,6 +611,11 @@
   ],
   [
    "job:tick_record",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:tick_record_winter",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],

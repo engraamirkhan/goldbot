@@ -240,9 +240,12 @@ class SchedulerSettings(_Section):
     # review M2 (BACKLOG 18): a second calendar fetch on Sunday afternoon, so the new Forex Factory week is archived
     # before the weekly open (an enabled tier-2 window refuses entries until the archive covers the next 24 h)
     calendar_archive_sunday: ScheduleSettings = ScheduleSettings(kind="weekly", at="18:00", weekday=6, max_late_hours=3)
-    # BACKLOG 79: the broker's ticks of each closed server day -> state/ticks/<account>/ (goldbot/data/ticks.py), after
-    # the server day ends (21:00 UTC summer, 22:00 UTC winter for Europe/Athens); missed days are back-filled
-    tick_record: ScheduleSettings = ScheduleSettings(kind="daily", at="22:40", max_late_hours=20)
+    # BACKLOG 79: the broker's ticks of each closed server day -> state/ticks/<account>/ (goldbot/data/ticks.py). Only
+    # while gold is closed (trading-safety review): the daily break 17:00-18:00 New York is 21:00 UTC in US summer time
+    # and 22:00 UTC in winter, so one slot per regime; the other one skips (`ticks.market_quiet`). Never caught up late
+    # into London/NY: max_late_hours stays at most 1
+    tick_record: ScheduleSettings = ScheduleSettings(kind="daily", at="21:10", max_late_hours=0.5)
+    tick_record_winter: ScheduleSettings = ScheduleSettings(kind="daily", at="22:10", max_late_hours=0.5)
 
 
 class BackupSettings(_Section):
@@ -302,6 +305,13 @@ class TickRecordSettings(_Section):
     retain_days: int = Field(240, ge=2, le=3650)
     min_london_ny_ticks: int = Field(1000, ge=0)          # health WARN below this (the account classifier's bar)
     backfill_days: int = Field(7, ge=0, le=30)            # closed server days before the latest that a run re-checks
+    # bridge load (trading-safety review): the bridge serves one request at a time and refuses an engine order older
+    # than ORDER_MAX_AGE_S (10 s), so a page must stay short and the run bounded
+    max_days_per_run: int = Field(1, ge=1, le=31)          # oldest missing day first; the weekend runs catch up
+    page_ticks: int = Field(2000, ge=100, le=10_000)       # rows per copy_ticks call (~120 KB of JSON)
+    pause_s: float = Field(0.2, ge=0, le=5)                # between pages: the engine's quote reads get the bridge
+    page_limit_s: float = Field(2.0, gt=0, le=8)           # a slower page stops the run; the day is pulled next run
+    run_budget_s: float = Field(300.0, gt=0, le=1800)      # per account per run; an unfinished day is not written
 
     @model_validator(mode="after")
     def _retention_outlives_the_backfill(self) -> TickRecordSettings:
