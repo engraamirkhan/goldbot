@@ -190,8 +190,9 @@ def test_loader_refuses_a_missing_day_and_a_changed_file(tmp_path):
 
 # ------------------------------------------------------------------------------------------- record, retention
 def _record(tmp_path: Path, broker: Any, now: pd.Timestamp = NOW, **kw: Any) -> dict[str, Any]:
+    kw.setdefault("max_days_per_run", 10)
     cfg = TickRecordSettings(**kw)
-    return tk.record_ticks(broker, tmp_path, "icm-demo", "XAUUSD", TZ, now, cfg)
+    return tk.record_ticks(broker, tmp_path, "icm-demo", "XAUUSD", TZ, cfg, clock=lambda: now, sleep=lambda s: None)
 
 
 def _week_broker() -> FakeTickBroker:
@@ -217,7 +218,7 @@ def test_record_pulls_each_due_day_once_and_is_idempotent(tmp_path):
 def test_retention_deletes_days_older_than_retain_days(tmp_path):
     broker = _week_broker()
     _record(tmp_path, broker, backfill_days=5)
-    later = NOW + pd.Timedelta(days=3)       # Monday 2026-10-19 23:00: the 12th and 13th are older than 4 days
+    later = pd.Timestamp("2026-10-19 21:20", tz="UTC")   # Monday, in the daily break: the 12th-14th are > 4 days old
     out = _record(tmp_path, FakeTickBroker(broker.ticks.head(0)), later, backfill_days=1, retain_days=4)
     assert out["pruned"] == ["2026-10-12", "2026-10-13", "2026-10-14"]
     d = tmp_path / "ticks" / "icm-demo"
@@ -262,18 +263,19 @@ def test_health_registry_runs_the_tick_check_per_account(tmp_path):
 
 
 # ------------------------------------------------------------------------------------------- job, settings, backup
-def _job_ctx(tmp_path: Path, broker_for: Any) -> JobContext:
+def _job_ctx(tmp_path: Path, broker_for: Any, now: pd.Timestamp = NOW) -> JobContext:
     from goldbot.data.store import Store
     return JobContext(settings=load_settings(), store=Store(tmp_path / "data"), state_dir=tmp_path,
                       models=ModelRegistry(tmp_path / "models"), trials=TrialRegistry(tmp_path / "trials.jsonl"),
-                      accounts=[ACC], population=Population(tmp_path / "population.json"), broker_for=broker_for)
+                      accounts=[ACC], population=Population(tmp_path / "population.json"), broker_for=broker_for,
+                      clock=lambda: now, sleep=lambda s: None)
 
 
 def test_job_records_per_account_skips_without_a_broker_and_reports_failures(tmp_path):
     assert JOBS["tick_record"] is tick_record
     broker = _week_broker()
     out = tick_record(_job_ctx(tmp_path, lambda acc: broker), NOW)
-    assert "2026-10-16" in out["icm-demo"]["written"] and broker.shut
+    assert out["icm-demo"]["written"] == ["2026-10-09"] and broker.shut     # one day a run, oldest first
     assert "skipped" in tick_record(_job_ctx(tmp_path, None), NOW)
     assert tick_record(_job_ctx(tmp_path, lambda acc: None), NOW)["icm-demo"]["skipped"]
 
@@ -288,7 +290,13 @@ def test_settings_defaults_cover_the_h_a_window():
     assert s.ticks.min_london_ny_ticks == 1000 and s.ticks.backfill_days == 7
     # H-A reads 2026-10-18 .. 2027-04-30 plus 14-day controls: the first THIN day must outlive the verdict
     assert s.ticks.retain_days >= (pd.Timestamp("2027-05-14") - pd.Timestamp("2026-11-12")).days
-    assert s.scheduler.tick_record.kind == "daily"
+    for name in ("tick_record", "tick_record_winter"):          # trading-safety: no catch-up into London/NY
+        assert s.scheduler.tick_record.kind == "daily" and getattr(s.scheduler, name).max_late_hours <= 1
+    assert JOBS["tick_record_winter"] is tick_record
+    # each slot falls in the daily break of one DST regime (17:00-18:00 New York)
+    assert tk.market_quiet(pd.Timestamp(f"2026-07-15 {s.scheduler.tick_record.at}", tz="UTC"))
+    assert tk.market_quiet(pd.Timestamp(f"2026-12-16 {s.scheduler.tick_record_winter.at}", tz="UTC"))
+    assert s.ticks.max_days_per_run == 1 and s.ticks.page_limit_s < 10      # bridge ORDER_MAX_AGE_S
 
 
 def test_backup_keeps_day_files_and_drops_temporaries():
@@ -296,3 +304,108 @@ def test_backup_keeps_day_files_and_drops_temporaries():
     assert not _excluded_state(Path("ticks/icm-demo/2026-10-16.parquet"))
     assert not _excluded_state(Path("ticks/icm-demo/index.json"))
     assert _excluded_state(Path("ticks/icm-demo/.2026-10-16.parquet.abc.tmp"))
+
+
+# ------------------------------------------------------------------------------------------- trading safety (review)
+@pytest.mark.parametrize("utc, quiet", [
+    ("2026-07-15 21:20", True),      # Wed 17:20 EDT: daily break
+    ("2026-07-15 22:40", False),     # Wed 18:40 EDT: reopened
+    ("2026-12-16 22:20", True),      # Wed 17:20 EST: daily break
+    ("2026-12-16 21:20", False),     # Wed 16:20 EST: New York afternoon
+    ("2026-10-16 23:00", True),      # Fri 19:00 EDT: weekend
+    ("2026-10-17 12:00", True),      # Saturday
+    ("2026-12-20 22:45", True),      # Sun 17:45 EST: before the reopen
+    ("2026-12-20 22:55", False),     # Sun 17:55 EST: too close to the 18:00 reopen
+    ("2026-07-15 21:02", False),     # Wed 17:02 EDT: the break has just started (late ticks)
+])
+def test_market_quiet_is_the_daily_break_or_the_weekend(utc, quiet):
+    assert tk.market_quiet(pd.Timestamp(utc, tz="UTC")) is quiet
+
+
+def test_job_skips_while_the_market_is_open_and_never_calls_the_broker(tmp_path):
+    broker = _week_broker()
+    out = tick_record(_job_ctx(tmp_path, lambda acc: broker, pd.Timestamp("2026-10-14 13:00", tz="UTC")), NOW)
+    assert "market open" in out["skipped"] and broker.calls == []
+
+
+class _Clock:
+    def __init__(self, t0: pd.Timestamp) -> None:
+        self.t = t0
+
+    def __call__(self) -> pd.Timestamp:
+        return self.t
+
+
+class SlowBroker(FakeTickBroker):
+    def __init__(self, ticks: pd.DataFrame, clock: _Clock, page_s: float) -> None:
+        super().__init__(ticks)
+        self.clock, self.page_s = clock, page_s
+
+    def copy_ticks(self, symbol: str, since_utc: pd.Timestamp, n: int = 100_000) -> pd.DataFrame:
+        self.clock.t += pd.Timedelta(seconds=self.page_s)
+        return super().copy_ticks(symbol, since_utc, n)
+
+
+def _timed(tmp_path: Path, page_s: float, t0: pd.Timestamp = NOW, **kw: Any) -> tuple[dict[str, Any], SlowBroker, list[float]]:
+    clock = _Clock(t0)
+    s, e = _bounds("2026-10-16")
+    broker = SlowBroker(synthetic_day(s, e, 20_000), clock, page_s)
+    sleeps: list[float] = []
+    kw.setdefault("backfill_days", 0)
+    cfg = TickRecordSettings(page_ticks=1_000, **kw)
+    out = tk.record_ticks(broker, tmp_path, "icm-demo", "XAUUSD", TZ, cfg, clock=clock, sleep=sleeps.append)
+    return out, broker, sleeps
+
+
+def test_pages_pause_between_calls(tmp_path):
+    out, broker, sleeps = _timed(tmp_path, 0.1, pause_s=0.25)
+    assert out["written"] == ["2026-10-16"] and len(broker.calls) >= 20
+    assert sleeps and set(sleeps) == {0.25} and len(sleeps) == len(broker.calls) - 1
+
+
+def test_a_slow_page_defers_the_day_and_writes_nothing(tmp_path):
+    out, broker, _ = _timed(tmp_path, 3.0, page_limit_s=2.0)
+    assert out["written"] == [] and "2026-10-16" in out["deferred"] and "page" in out["deferred"]
+    assert len(broker.calls) == 1 and not (tmp_path / "ticks" / "icm-demo" / "2026-10-16.parquet").exists()
+
+
+def test_the_run_budget_defers_the_day_and_the_next_run_resumes(tmp_path):
+    out, broker, _ = _timed(tmp_path, 1.0, run_budget_s=5)
+    assert out["written"] == [] and "budget" in out["deferred"] and len(broker.calls) <= 6
+    again, _, _ = _timed(tmp_path, 0.01, run_budget_s=5)
+    assert again["written"] == ["2026-10-16"]
+
+
+def test_the_pull_stops_when_the_quiet_window_ends(tmp_path):
+    # Sunday 2026-10-18 17:49:50 EDT: the window closes at 17:50 (before the 18:00 reopen), each page takes 1.5 s
+    out, broker, _ = _timed(tmp_path, 1.5, pd.Timestamp("2026-10-18 21:49:50", tz="UTC"), page_limit_s=2.0,
+                            run_budget_s=300, backfill_days=2)
+    assert out["written"] == [] and "market" in out["deferred"] and len(broker.calls) < 20
+
+
+def test_one_day_per_run_while_catching_up(tmp_path):
+    broker = _week_broker()
+    out = _record(tmp_path, broker, backfill_days=5, max_days_per_run=1)
+    assert out["written"] == ["2026-10-12"] and out["behind"] == 4
+
+
+class ReadOnlyBroker(FakeTickBroker):
+    """Every order method raises: the job must never reach one."""
+
+    def place_order(self, *a: Any, **k: Any) -> Any:
+        raise AssertionError("place_order called")
+
+    def modify(self, *a: Any, **k: Any) -> Any:
+        raise AssertionError("modify called")
+
+    def close(self, *a: Any, **k: Any) -> Any:
+        raise AssertionError("close called")
+
+    def __getattr__(self, name: str) -> Any:
+        raise AssertionError(f"{name} called: only copy_ticks and shutdown are allowed")
+
+
+def test_job_is_read_only(tmp_path):
+    broker = ReadOnlyBroker(_week_broker().ticks)
+    out = tick_record(_job_ctx(tmp_path, lambda acc: broker), NOW)
+    assert out["icm-demo"]["written"] == ["2026-10-09"] and broker.calls and broker.shut
