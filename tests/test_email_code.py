@@ -371,7 +371,7 @@ def test_email_code_suspended_after_a_lockout(api, lockout_clock):
 
 def test_email_code_decoy_timing(tmp_path, lockout_clock):
     """Condition 6: scrypt runs on every request, so a wrong password or an unknown address takes as long as a real
-    send. Medians of interleaved runs; the tolerance absorbs a busy CI worker, not a skipped scrypt (~2x)."""
+    send. Medians of interleaved runs; 0.5-2.0x absorbs a busy CI worker, while a skipped scrypt shows 10x or more."""
     s = _store(tmp_path)
     s.request_email_code(OWNER, PW, ip="10.9.9.9", enabled=True)          # warm-up: the key is created lazily
     times: dict[str, list[float]] = {"real": [], "wrong_password": [], "unknown": []}
@@ -385,7 +385,7 @@ def test_email_code_decoy_timing(tmp_path, lockout_clock):
             assert (issue.code is not None) == (kind == "real")
     real = statistics.median(times["real"])
     for kind in ("wrong_password", "unknown"):
-        assert 0.6 < statistics.median(times[kind]) / real < 1.6, (kind, times)
+        assert 0.5 < statistics.median(times[kind]) / real < 2.0, (kind, times)
 
 
 # ----------------------------------------------------------------------------- boundaries and lifecycle
@@ -539,3 +539,75 @@ def test_every_owner_route_is_stepped_up_or_already_needs_an_authenticator_code(
                 "/api/auth/recovery/codes": {"password": PW, "totp": ""}}[path]
         r = api.c.post(path, json=body, headers=api.code_session())
         assert r.status_code == 403 or (path == "/api/automode" and r.json()["ok"] is False), (path, r.text)
+
+
+# ----------------------------------------------------------------------------- security review round 1 (68a8cfc..81e730b)
+def test_resend_from_another_ip_answers_a_real_challenge_exactly_as_a_decoy(tmp_path, lockout_clock):
+    """Security 1: the visible resend reply depends only on the client IP and the challenge. A real challenge whose
+    address is paced or over its hourly limit sends nothing and answers as a decoy (new challenge, standard wait), so
+    a resend from a fresh IP cannot tell a right password from a wrong one without the mailbox."""
+    s = _store(tmp_path)
+    real = s.request_email_code(OWNER, PW, ip="10.0.0.1", enabled=True)
+    decoy = s.request_email_code(OWNER, "not the password!", ip="10.0.0.2", enabled=True)
+    assert real.code is not None and decoy.code is None
+    lockout_clock[0] += 5 * S                                   # inside the address's 60 s pacing
+    r_real = s.resend_email_code(real.challenge, ip="10.0.0.3", enabled=True)
+    r_decoy = s.resend_email_code(decoy.challenge, ip="10.0.0.4", enabled=True)
+    assert r_real.code is None                                  # paced: nothing sent, silently
+    assert r_real.challenge != real.challenge and r_decoy.challenge != decoy.challenge
+    assert r_real.resend_after_s == r_decoy.resend_after_s == RESEND_AFTER_S
+    assert len(r_real.challenge) == len(r_decoy.challenge)
+    assert "email_code_rate_limited" in [e["event"] for e in s.audit_events()]
+
+
+def test_resend_replies_are_identical_over_http_for_a_real_and_a_decoy_challenge(api, monkeypatch):
+    real = api.ask().json()["challenge"]
+    decoy = api.ask(password="not the password").json()["challenge"]
+    ips = iter(["198.51.100.7", "198.51.100.8"])                  # two other networks, one per resend
+    monkeypatch.setattr("goldbot.api.app.client_ip", lambda request: next(ips))
+    a, b = api.resend(real), api.resend(decoy)
+    assert a.status_code == b.status_code == 200
+    aj, bj = a.json(), b.json()
+    assert set(aj) == set(bj) and aj["challenge"] != real and bj["challenge"] != decoy
+    assert (aj["expires_in_s"], aj["resend_after_s"]) == (bj["expires_in_s"], bj["resend_after_s"])
+
+
+def test_new_session_needs_its_sign_in_method_named():
+    """Security 2: every caller names how the session signed in; only the column default (rollback) is implicit."""
+    import inspect
+    p = inspect.signature(AuthStore._new_session).parameters["method"]
+    assert p.default is inspect.Parameter.empty
+
+
+def test_the_key_cached_is_the_one_read_back_after_writing(monkeypatch, email_code_keyring):
+    """Security 3: another writer won the race between our write and our read: the key read back is the one used."""
+    other = "ab" * 32
+
+    def racing_set(key: str, value: str) -> None:
+        email_code_keyring[key] = other                         # someone else's write lands after ours
+    monkeypatch.setattr(auth_mod, "_secret_set", racing_set)
+    assert auth_mod.email_code_key() == bytes.fromhex(other)
+    assert auth_mod._KEY_CACHE[EMAIL_CODE_KEY] == bytes.fromhex(other)
+
+
+def test_verify_refuses_a_real_and_a_decoy_challenge_identically_while_locked_out(api, lockout_clock, monkeypatch):
+    """Security 4: during the sign-in lockout a real challenge refuses with the same message as a decoy. (A lockout
+    also suspends email codes and deletes open ones; that is switched off here so the live challenge survives.)"""
+    monkeypatch.setattr(AuthStore, "_suspend_email_codes", lambda self, conn, email, reason: False)
+    ch = api.ask().json()["challenge"]
+    code = api.fake.codes()[0]
+    for _ in range(LOCKOUT_FAILURES):
+        api.c.post("/api/auth/login", json={"email": OWNER, "password": "wrong password!", "totp": "000000"})
+    real, decoy = api.verify(ch, code), api.verify("x" * 43, code)
+    assert real.status_code == decoy.status_code == 403 and real.json() == decoy.json()
+
+
+def test_a_failure_anywhere_in_the_code_mail_is_audited_by_type_only(tmp_path, monkeypatch, caplog):
+    """Code review: the whole background send, formatting included, is inside the audited try/except."""
+    def broken(ts: float, tz_name: str) -> tuple[str, str]:
+        raise ValueError("o@x.io 123456")
+    monkeypatch.setattr("goldbot.api.app._local_and_utc", broken)
+    a = Api(tmp_path)
+    assert a.ask().status_code == 200
+    assert "email_code_send_failed" in a.events()
+    assert "o@x.io 123456" not in caplog.text

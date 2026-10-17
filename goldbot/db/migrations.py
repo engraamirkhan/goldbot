@@ -220,7 +220,8 @@ AUX: tuple[Migration, ...] = (
     # the code as HMAC-SHA-256(key, challenge|code) with the key in the OS keyring, never here or in a backup.
     # `consumed` = 1 once three wrong codes burned it (the row stays so Resend can find its challenge for an hour).
     # sessions.method records how each session signed in (password_totp, email_link, email_code, recovery): the
-    # step-up rule reads it. Older code never names the column; its INSERTs get the default, so a rollback still works.
+    # step-up rule reads it, and every new session names its method; the column DEFAULT exists only for a rollback: an
+    # older release never names the column, so its INSERTs get the default and still work.
     # auth_suspensions: email codes paused for an address until its next password + authenticator sign-in
     Migration(version=8, name="email_codes", additive=True, statements=(
         """CREATE TABLE IF NOT EXISTS email_codes (

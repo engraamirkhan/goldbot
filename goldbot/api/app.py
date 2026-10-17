@@ -329,12 +329,18 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         mail_owner(subject, text, "sign-in notice", failed)
 
     def send_email_code(code: str, ip: str | None) -> None:
-        """After the answer has gone (condition 6: a real send takes as long as a decoy). The body is never logged."""
-        now = time.time()
-        tz = _settings_owner_tz()
-        expires_local, expires_utc = _local_and_utc(now + EMAIL_CODE_TTL_S, tz)
-        requested_local, _ = _local_and_utc(now, tz)
-        subject, text = email_code_message(code, expires_local, expires_utc, requested_local, coarse_ip(ip))
+        """After the answer has gone (condition 6: a real send takes as long as a decoy). The body is never logged; a
+        failure anywhere, formatting included, is logged and audited by exception type only."""
+        try:
+            now = time.time()
+            tz = _settings_owner_tz()
+            expires_local, expires_utc = _local_and_utc(now + EMAIL_CODE_TTL_S, tz)
+            requested_local, _ = _local_and_utc(now, tz)
+            subject, text = email_code_message(code, expires_local, expires_utc, requested_local, coarse_ip(ip))
+        except Exception as exc:                # noqa: BLE001 - the caller already has its answer
+            log.warning("email sign-in code not sent: %s", type(exc).__name__)
+            st.auth.audit("email_code_send_failed", error=type(exc).__name__)
+            return
         mail_owner(subject, text, "email sign-in code", "email_code_send_failed")
 
     def challenge_answer(issue: EmailCodeIssue, ip: str | None, background: BackgroundTasks) -> EmailCodeChallenge:

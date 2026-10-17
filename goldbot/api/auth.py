@@ -212,7 +212,9 @@ _KEY_CACHE: dict[str, bytes] = {}
 def email_code_key() -> bytes | None:
     """The HMAC key of the emailed codes (security condition 4): 32 bytes in the OS keyring under `email-code-hmac-key`
     (goldbot.ops.accounts), never in aux.db or a backup. Created on first use, read back (an unwritable keyring stays
-    off), then cached in this process. An unreadable keyring or a stored value that is not 32 bytes of hex is None:
+    off; the value read back, not the one written, is used, so a racing writer cannot leave two keys), then cached
+    in this process. The API runs as ONE process (`uvicorn.run(create_app(...))` takes an app object, which uvicorn
+    cannot fork into workers), so one cache serves every request. An unreadable keyring or a stored value that is not 32 bytes of hex is None:
     email codes are off (fail closed) and the stored value is never overwritten. Rotate with
     `python -m goldbot.ops.accounts set email-code-hmac-key` and restart the API; open codes stop working."""
     cached = _KEY_CACHE.get(EMAIL_CODE_KEY)
@@ -778,9 +780,9 @@ class AuthStore:
         return inv.email, totp_uri(secret, inv.email)
 
     # ------------------------------------------------------------------ login and sessions
-    def _new_session(self, conn: sqlite3.Connection, email: str, ttl_h: int = SESSION_TTL_H,
-                     method: SessionMethod = "password_totp") -> str:
-        """A new session that records how it signed in (`method`): the step-up rule reads only this record."""
+    def _new_session(self, conn: sqlite3.Connection, email: str, ttl_h: int, method: SessionMethod) -> str:
+        """A new session that records how it signed in (`method`, always named by the caller): the step-up rule reads
+        only this record. The column's default exists only so a rollback release's INSERT still works."""
         tok = secrets.token_urlsafe(32)
         now = time.time_ns()
         conn.execute("DELETE FROM sessions WHERE expires_ns < ?", (now,))
@@ -803,7 +805,7 @@ class AuthStore:
             with self.db.write() as conn:
                 cur = _USERS.get(conn, email)
                 if cur is not None and cur.enabled and self._spend_totp(conn, cur, code):
-                    tok = self._new_session(conn, email, ttl_h)
+                    tok = self._new_session(conn, email, ttl_h, "password_totp")
                     self._release(conn, r)
                     _audit(conn, "login", email=email)
                     if conn.execute("DELETE FROM auth_suspensions WHERE email = ?", (email,)).rowcount:
@@ -1055,7 +1057,7 @@ class AuthStore:
                 conn.execute("DELETE FROM totp_steps WHERE email = ?", (email,))         # a new authenticator
                 conn.execute("DELETE FROM email_links WHERE email = ?", (email,))
                 conn.execute("DELETE FROM email_codes WHERE email = ?", (email,))
-                tok = self._new_session(conn, email, method="recovery")
+                tok = self._new_session(conn, email, SESSION_TTL_H, "recovery")
                 self._release(conn, r)
                 left = int(conn.execute("SELECT COUNT(*) FROM recovery_codes WHERE email = ? AND used_ns IS NULL",
                                         (email,)).fetchone()[0])
@@ -1133,7 +1135,7 @@ class AuthStore:
                 conn.execute("DELETE FROM email_links WHERE email = ?", (email,))     # single use, and the others
                 cur = _USERS.get(conn, email)
                 if self.is_owner(cur) and cur is not None and self._spend_totp(conn, cur, code):
-                    tok = self._new_session(conn, email, ttl_h, method="email_link")
+                    tok = self._new_session(conn, email, ttl_h, "email_link")
                     self._release(conn, r)
                     _audit(conn, "email_link_login", email=email, **({"ip": ip} if ip else {}))
         if tok is None:
@@ -1225,9 +1227,12 @@ class AuthStore:
 
     def resend_email_code(self, challenge: str, ip: str | None = None, *, enabled: bool) -> EmailCodeIssue:
         """A new code for a challenge this browser holds (live, expired or burned within the hour): the old code stops
-        working (only the newest works). Not before RESEND_AFTER_S since the last request and within the shared hourly
-        limit; otherwise the same challenge comes back with the wait and nothing is sent. An unknown challenge (a
-        decoy) answers in the same shape with a new decoy, paced by the client IP alone."""
+        working (only the newest works). The visible reply depends only on the client IP and the challenge (security
+        review 1 of 68a8cfc): while this IP is paced (RESEND_AFTER_S) or over the shared hourly limit, the same
+        challenge comes back with the wait. Otherwise a new challenge with the standard wait, whether a code was sent
+        or not: a real challenge whose ADDRESS is paced or over its limit sends nothing, silently (audited), and
+        answers exactly as an unknown challenge (a decoy) does, so a resend from another network cannot tell a right
+        password from a wrong one without the mailbox."""
         ch = _token_hash(challenge)
         key = email_code_key() if enabled else None
         now = time.time_ns()
@@ -1237,13 +1242,18 @@ class AuthStore:
             row = conn.execute("SELECT email FROM email_codes WHERE challenge_sha256 = ? AND created_ns > ?",
                                (ch, now - EMAIL_CODE_KEEP_S * _NS)).fetchone()
             email: str | None = None if row is None else str(row[0])
-            keys = ([f"email:{email}"] if email else []) + ([f"ip:{ip}"] if ip else [])
+            ip_keys = [f"ip:{ip}"] if ip else []
             where = {**({"email": email} if email else {}), **({"ip": ip} if ip else {})}
-            wait = self._send_wait(conn, keys, now, pace=True)
+            wait = self._send_wait(conn, ip_keys, now, pace=True)
             if wait:
                 _audit(conn, "email_code_rate_limited", resend=True, **where)
                 return EmailCodeIssue(challenge=challenge, resend_after_s=wait)
-            conn.executemany("INSERT INTO email_link_requests (key, ts_ns) VALUES (?, ?)", [(k, now) for k in keys])
+            conn.executemany("INSERT INTO email_link_requests (key, ts_ns) VALUES (?, ?)", [(k, now) for k in ip_keys])
+            if email is not None and self._send_wait(conn, [f"email:{email}"], now, pace=True):
+                _audit(conn, "email_code_rate_limited", resend=True, silent=True, **where)
+                return EmailCodeIssue(challenge=new)                  # answered as a decoy: nothing sent
+            if email is not None:
+                conn.execute("INSERT INTO email_link_requests (key, ts_ns) VALUES (?, ?)", (f"email:{email}", now))
             cur = _USERS.get(conn, email) if email else None
             if email is None:
                 _audit(conn, "email_code_refused", reason="unknown challenge", resend=True, **where)
@@ -1270,12 +1280,18 @@ class AuthStore:
             row0 = conn.execute("SELECT email FROM email_codes WHERE challenge_sha256 = ? AND consumed = 0 "
                                 "AND expires_ns > ?", (ch, time.time_ns())).fetchone()
         if row0 is None or row0[0] != self.owner_email:
-            self._count_ip_failure(ip, "email_code_locked")
+            try:
+                self._count_ip_failure(ip, "email_code_locked")
+            except PermissionError:
+                raise PermissionError(EMAIL_CODE_REFUSED) from None
             self.audit("email_code_failed", reason="unknown, expired, used or burned challenge",
                        **({"ip": ip} if ip else {}))
             raise PermissionError(EMAIL_CODE_REFUSED)
         email = str(row0[0])
-        r = self._reserve(email, "email_code_locked", ip)
+        try:
+            r = self._reserve(email, "email_code_locked", ip)
+        except PermissionError:             # locked: refused exactly as a decoy is (security review 4 of 68a8cfc)
+            raise PermissionError(EMAIL_CODE_REFUSED) from None
         key = email_code_key()
         digits = "".join(code.split())
         tok: str | None = None
@@ -1289,7 +1305,7 @@ class AuthStore:
                 ok = key is not None and hmac.compare_digest(str(row[0]), _code_mac(key, challenge, digits))
                 if ok and self.is_owner(cur):
                     conn.execute("DELETE FROM email_codes WHERE email = ?", (email,))
-                    tok = self._new_session(conn, email, ttl_h, method="email_code")
+                    tok = self._new_session(conn, email, ttl_h, "email_code")
                     self._release(conn, r)
                     _audit(conn, "email_code_login", email=email, **({"ip": ip} if ip else {}))
                 else:
