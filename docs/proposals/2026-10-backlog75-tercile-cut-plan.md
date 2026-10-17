@@ -67,7 +67,8 @@ recorded before the candidate count). Two PRs: (a) pipeline/cpcv functions + tes
 **Risks.** (1) CPCV leakage: prior groups' p_raw on a path can come from splits trained on group g (combinatorial
 paths) — already true for the calibrator; the cut is label-free, but the quant-reviewer rules whether a purged variant
 (path-prior p only from splits that excluded g) is required. (2) A raw-p cut with no floor can take trades below
-break-even (diagnostic reported). (3) Retention fixed at ~33% per fold, so power depends on the candidate count (the
+break-even (diagnostic reported). (3) ~~Retention fixed at ~33% per fold~~ (struck, quant condition 5: each fold's
+raw-p scale differs; retention is recorded, never read), so power depends on the candidate count (the
 pre-registration conditions on it). (4) Prose drift of `reading_rule` breaks the director's citation check (byte-identical
 test).
 
