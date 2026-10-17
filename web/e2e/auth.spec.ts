@@ -263,7 +263,7 @@ test("sign-in code: the owner signs in with the password and a code sent to Tele
   const before = mails().length;
   await page.getByRole("button", { name: "Send me a code", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Enter the code we sent", exact: true })).toBeVisible();
-  await expect(page.getByText(/we sent a 6-digit code to your goldbot Telegram chat\. It works once, for 10 minutes/)).toBeVisible();
+  await expect(page.getByText(/a 6-digit code is on its way to your goldbot Telegram chat\. It works once, for 10 minutes/)).toBeVisible();
   await expect(page.getByText(/^Resend code in [01]:\d\d$/)).toBeVisible();
   await page.setViewportSize({ width: 360, height: 800 });                    // the code screen fits a phone too
   await fitsThePhone(page);

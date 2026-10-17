@@ -258,6 +258,21 @@ def test_the_telegram_notice_for_a_code_sign_in_does_not_talk_about_a_mailbox(ap
     assert "Telegram code" in runs and "mailbox" not in runs and code not in runs
 
 
+def test_an_api_start_deletes_the_messages_of_codes_that_expired_while_it_was_down(tmp_path, lockout_clock):
+    a = Api(tmp_path)
+    a.ask()
+    mid = a.bot.next_id
+    lockout_clock[0] += 700 * 10**9                         # past the 600 s life of the code
+    b = FakeBotApi()
+    b.next_id = 500
+    create_app(tmp_path, web_dist=tmp_path / "nodist", owner_email=OWNER, code_delivery=delivery(b))
+    import time
+    time.sleep(0.5)                                         # the sweep runs in a daemon thread
+    assert ("deleteMessage", {"chat_id": CHAT, "message_id": mid}) in b.calls
+    with a.st.auth.db.connection() as conn:
+        assert conn.execute("SELECT message_id FROM email_codes").fetchone()[0] is None
+
+
 def test_sends_share_the_hourly_limit(api):
     for _ in range(5):
         api.ask()

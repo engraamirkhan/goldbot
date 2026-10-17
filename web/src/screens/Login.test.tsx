@@ -547,7 +547,7 @@ describe("Login with a Telegram code", () => {
     type("Password", "a long password here");
     fireEvent.click(screen.getByRole("button", { name: "Send me a code" }));
     await screen.findByRole("heading", { name: "Enter the code we sent" });
-    expect(screen.getByText(/we sent a 6-digit code to your goldbot Telegram chat/)).toBeInTheDocument();
+    expect(screen.getByText(/a 6-digit code is on its way to your goldbot Telegram chat/)).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/emailed|mailbox|o•••@/i);
   });
 });

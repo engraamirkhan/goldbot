@@ -1177,6 +1177,16 @@ class AuthStore:
             return None, False
         return (None if row[0] is None else str(row[0])), not row[1] and int(row[2]) > time.time_ns()
 
+    def take_expired_code_messages(self) -> list[str]:
+        """The Telegram message ids of codes that have expired, forgotten here as they are returned: the API start
+        deletes them so a restart does not leave a spent code in the chat (best effort, caller's)."""
+        with self.db.write() as conn:
+            ids = [str(r[0]) for r in conn.execute(
+                "SELECT message_id FROM email_codes WHERE message_id IS NOT NULL AND expires_ns <= ?", (time.time_ns(),))]
+            conn.execute("UPDATE email_codes SET message_id = NULL WHERE message_id IS NOT NULL AND expires_ns <= ?",
+                         (time.time_ns(),))
+        return ids
+
     def set_code_message(self, challenge: str, message_id: str) -> None:
         """Keep the id of the message that carries this challenge's code (never the code itself)."""
         with self.db.write() as conn:
@@ -1190,7 +1200,7 @@ class AuthStore:
         with self.db.connection() as conn:
             rows = [json.loads(b) for (b,) in conn.execute(
                 "SELECT body FROM audit WHERE event = 'tg_code_login' ORDER BY id DESC LIMIT 200")]
-        return [{"at_utc": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(r["ts"])), "network": coarse_ip(r.get("ip"))}
+        return [{"at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(r["ts"])), "network": coarse_ip(r.get("ip"))}
                 for r in rows if r["ts"] >= since]
 
     @staticmethod

@@ -10,10 +10,10 @@ import { CODE_COPY, CodeChannel } from "../lib/codeCopy";
 type ModeT = "login" | "setup" | "accept" | "forgot" | "reset" | "recover" | "emailLink" | "signin" | "emailCode";
 type Method = "email" | "authenticator";
 
-const TITLE: Record<ModeT, string> = {
+const TITLE: Record<Exclude<ModeT, "emailCode">, string> = {
   login: "Sign in", setup: "Create the owner account", accept: "Accept your invite", forgot: "Reset your password",
   reset: "Set a new password", recover: "Sign in with a recovery code", emailLink: "Email me a sign-in link",
-  signin: "Finish signing in", emailCode: "Enter the code we emailed",
+  signin: "Finish signing in",
 };
 
 const SUBMIT: Record<ModeT, string> = {
@@ -337,7 +337,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
   return (<>
     <form className="login" onSubmit={submit} aria-labelledby="login-title">
       <h1>goldbot</h1>
-      <h2 id="login-title">{TITLE[mode]}</h2>
+      <h2 id="login-title">{mode === "emailCode" ? copy.title : TITLE[mode]}</h2>
       {INTRO[mode] && <p className="muted">{INTRO[mode]}</p>}
       {mode === "setup" && <label>Setup code<input value={setupCode} onChange={(e) => setSetupCode(e.target.value)} autoFocus /></label>}
       {showEmail && <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" autoCapitalize="none" spellCheck={false} required /></label>}

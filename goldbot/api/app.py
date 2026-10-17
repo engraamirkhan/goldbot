@@ -375,6 +375,18 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         except Exception as exc:                # noqa: BLE001 - the token is in the URL: the type only
             log.warning("sign-in code message not deleted: %s", type(exc).__name__)
 
+    def sweep_expired_code_messages() -> None:
+        """At API start: delete the chat messages of codes that expired while the process was down (their expiry timers
+        died with it). Best effort, off the start-up path."""
+        try:
+            for mid in st.auth.take_expired_code_messages():
+                delete_message(mid)
+        except Exception as exc:                # noqa: BLE001 - never stops the API starting
+            log.warning("expired sign-in code messages not swept: %s", type(exc).__name__)
+
+    if code_delivery.channel == "telegram":
+        threading.Thread(target=sweep_expired_code_messages, daemon=True).start()
+
     def send_email_code(code: str, challenge: str, ip: str | None, stale: str | None) -> None:
         """After the answer has gone (condition 6: a real send takes as long as a decoy). The code is never logged; a
         failure anywhere, formatting included, is logged and audited by exception type only (`code_channel_unavailable`

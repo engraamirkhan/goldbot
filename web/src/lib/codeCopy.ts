@@ -19,7 +19,7 @@ export const CODE_COPY: Record<CodeChannel, CodeCopy> = {
   telegram: {
     choose: "Send me a code",
     title: "Enter the code we sent",
-    sentLine: () => "If the email and password are right, we sent a 6-digit code to your goldbot Telegram chat.",
+    sentLine: () => "If the email and password are right, a 6-digit code is on its way to your goldbot Telegram chat.",
     wrong: (left) => `That code did not work. Check the newest message from goldbot in Telegram. ${left} ${left === 1 ? "try" : "tries"} left for this code.`,
     partial: "Type all 6 digits from the message.",
     noMessage: "No message? Open your goldbot chat in Telegram, check the password you typed (we do not say whether it was right), or use the authenticator app.",

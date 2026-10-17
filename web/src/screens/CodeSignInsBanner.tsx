@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, currentUser, SERVER_SAYS, setToken } from "../lib/api";
+import { localTime, utcTitle } from "../lib/explain";
 
 // Shown to the owner after EVERY sign-in while a Telegram code has signed anyone in during the last 7 days (ADR 0028
 // as amended 2026-10-17, security condition 6): when, from what rough network, and a one-tap "Sign out everywhere"
@@ -40,9 +41,9 @@ export function CodeSignInsBanner({ onSignedOut }: { onSignedOut: () => void }) 
     <section className="banner" aria-labelledby="csi-h">
       <h2 id="csi-h">Sign-ins with a Telegram code, last 7 days</h2>
       <ul>
-        {rows.map((r, i) => <li key={`${r.at_utc}-${i}`}>{r.at_utc} from {r.network}</li>)}
+        {rows.map((r, i) => <li key={`${r.at_utc}-${i}`}><time dateTime={r.at_utc} title={utcTitle(r.at_utc)}>{localTime(r.at_utc)}</time> from {r.network}</li>)}
       </ul>
-      <p className="muted">Not you? Someone has your password. Sign out everywhere, then change your password.</p>
+      <p className="muted">Not you? Sign out everywhere, then change your password.</p>
       {needCode && (
         <div className="stepup">
           <label>Authenticator code to sign out everywhere
