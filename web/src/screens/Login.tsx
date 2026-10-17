@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { api, setToken, setUser } from "../lib/api";
+import { api, setToken, setUser, type Me } from "../lib/api";
 import { takeLinkTokens } from "../lib/links";
 
 // Every way in, one screen. Sign-in always needs the authenticator code: the emailed link (owner only, when the
@@ -58,8 +58,8 @@ export function Login({ onLogin }: { onLogin: () => void }) {
 
   function go(m: ModeT) { setMode(m); setErr(null); setInfo(null); setPassword(""); setCode(""); setRecoveryCode(""); }
 
-  function signedIn(r: { token: string; email: string; role: "owner" | "approver" | "viewer" }) {
-    setToken(r.token); setUser({ email: r.email, role: r.role }); onLogin();
+  function signedIn(r: { token: string; email: string; role: Me["role"]; signed_in_with: Me["signed_in_with"] }) {
+    setToken(r.token); setUser({ email: r.email, role: r.role, signed_in_with: r.signed_in_with }); onLogin();
   }
 
   async function submit(e: FormEvent) {
@@ -89,7 +89,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
         signedIn(r);
       } else {
         const r = await api.recoveryLogin(email, password, code);
-        setToken(r.token); setUser({ email: r.email, role: r.role });
+        setToken(r.token); setUser({ email: r.email, role: r.role, signed_in_with: "recovery" });
         setTotpUri(r.totp_uri); setInfo(`${r.recovery_codes_left} recovery codes left.`); setAfter(() => onLogin);
       }
     } catch (ex) {

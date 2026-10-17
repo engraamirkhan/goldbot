@@ -1,4 +1,5 @@
-"""Outgoing mail for the owner's email sign-in link: plain SMTP with STARTTLS, standard library only.
+"""Outgoing mail for the owner's email sign-in link and emailed sign-in code: plain SMTP with STARTTLS, standard
+library only.
 
 * Settings `auth.mail` (goldbot/config.py MailSettings): host, port, from-address, dashboard origin, enabled. Real
   values only in the server's git-ignored config/settings.local.yaml (the repo is public).
@@ -7,6 +8,9 @@
 * `SmtpMailer.send` blocks (connect, STARTTLS, login, send, each bounded by `timeout_s`): the API calls it off the
   event loop, after the generic answer has gone. A failure is the caller's to log, by exception type only: smtplib's
   errors can carry the recipient and the message.
+* The emailed sign-in code (ADR 0028) is never in the subject (a lock-screen preview would show it) and sits alone on
+  the first body line (a long press copies only the digits); the body is never logged. STARTTLS with certificate
+  checks only, no plain-text fallback.
 
 Check the setup on the server without signing in: `python -m goldbot.ops.run mail-test` (on the brain:
 `goldbot run mail-test`) sends a test message to `auth.owner_email`.
@@ -23,6 +27,9 @@ from typing import Callable, Protocol
 from goldbot.config import MailSettings
 
 SMTP_PASSWORD_KEY = "smtp-password"
+EMAIL_CODE_SUBJECT = "Your goldbot sign-in code"
+SIGN_IN_NOTICE_SUBJECT_LINK = "goldbot: new sign-in with an emailed link"
+SIGN_IN_NOTICE_SUBJECT_CODE = "goldbot: new sign-in with an emailed code"
 READY_CACHE_S = 60.0                     # how long `SmtpMailer.ready()` trusts its last keyring lookup
 SecretLookup = Callable[[str], str | None]
 
@@ -98,10 +105,33 @@ def email_link_message(origin: str, token: str, ttl_min: int) -> tuple[str, str]
             f"code.\n")
 
 
-def sign_in_notice_message(when_utc: str, network: str) -> tuple[str, str]:
-    """(subject, body) of the notice sent after every sign-in with an emailed link: no token, and only a coarse
-    network hint (`auth.coarse_ip`), never the full address."""
-    return ("goldbot: new sign-in with an emailed link",
+def email_code_message(code: str, expires_local: str, expires_utc: str, requested_local: str,
+                       network: str) -> tuple[str, str]:
+    """(subject, plain-text body) of the owner's sign-in code (docs/ux/sign-in-email-code.md "Email copy"): the code
+    alone on line 1 and never in the subject; times in the owner's zone with UTC beside; only a coarse network hint
+    (`auth.coarse_ip`). No link, image or tracking."""
+    return (EMAIL_CODE_SUBJECT,
+            f"{code}\n\n"
+            f"This is your goldbot sign-in code. It works once, until {expires_local} ({expires_utc}).\n\n"
+            f"Requested at {requested_local} from network {network}.\n"
+            f"Did not ask for it? Someone has your goldbot password. Change it now, and on the server run "
+            f"revoke-sessions to sign everyone out.\n\n"
+            f"goldbot never asks for this code by phone, chat or Telegram.\n")
+
+
+def sign_in_notice_message(when_utc: str, network: str, *, method: str = "email_link") -> tuple[str, str]:
+    """(subject, body) of the notice sent after every sign-in with an emailed link or an emailed code: no token or
+    code, and only a coarse network hint (`auth.coarse_ip`), never the full address."""
+    if method == "email_code":
+        return (SIGN_IN_NOTICE_SUBJECT_CODE,
+                f"Someone signed in to the goldbot dashboard as the owner with the password and an emailed code, at "
+                f"{when_utc}, from {network}.\n\n"
+                f"If this was you, there is nothing to do.\n\n"
+                f"If it was not you, someone has your password and your mailbox: on the server run "
+                f"`python -m goldbot.ops.run revoke-sessions` (signs everyone out and cancels every emailed code), set "
+                f"auth.mail.enabled to false, change your password and your email password, and check the audit "
+                f"trail.\n")
+    return (SIGN_IN_NOTICE_SUBJECT_LINK,
             f"Someone signed in to the goldbot dashboard as the owner with an emailed sign-in link and the "
             f"authenticator code, at {when_utc}, from {network}.\n\n"
             f"If this was you, there is nothing to do.\n\n"

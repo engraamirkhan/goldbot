@@ -30,7 +30,7 @@ describe("cardState", () => {
 
   it("takes a decided proposal's status from the server whatever the clock says", () => {
     for (const s of ["submitted", "approved", "rejected", "expired", "refused"] as const) {
-      const d: DecidedProposal = { ...prop(60), status: s, refusal: [] };
+      const d: DecidedProposal = { ...prop(60), status: s, refusal: [], refusal_text: [] };
       expect(cardState(d, NOW)).toBe(s);
     }
   });

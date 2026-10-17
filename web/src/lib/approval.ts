@@ -18,12 +18,14 @@ export const REASONS: { code: ReasonCode; label: string; hint: string }[] = [
 ];
 
 export type AnyProposal = Proposal | DecidedProposal;
-export type CardState = "pending" | "expiring" | "expired" | "submitted" | "approved" | "rejected" | "refused";
+export type CardState =
+  "pending" | "expiring" | "expired" | "submitted" | "approved" | "rejected" | "refused" | "not_confirmed";
 
 export const isDecided = (p: AnyProposal): p is DecidedProposal => "status" in p;
 
 export function cardState(p: AnyProposal, now: number): CardState {
-  if (isDecided(p)) return p.status;
+  // BACKLOG 72: sent, but the broker neither filled nor refused it; the API words what the engine found
+  if (isDecided(p)) return p.not_confirmed ? "not_confirmed" : p.status;
   const left = secondsLeft(p.expires_at, now);
   if (left <= 0) return "expired";
   return left <= EXPIRING_S ? "expiring" : "pending";

@@ -161,5 +161,8 @@ def test_the_ceiling_codes_keep_their_shipped_words_on_every_surface(code, reaso
 def test_a_risk_gate_refusal_is_not_a_not_placed_code():
     from goldbot.telegram.bot import outcome_text
     assert not_placed("daily_loss") is None and card_text("daily_loss") is None
+    # BACKLOG 72 (docs/ux/order-not-confirmed.md): the RiskGate's code in words, never the raw code
     assert outcome_text("GATE_REFUSED: daily_loss") == ("🛑 NOT PLACED: approved, but the risk check refused it at "
-                                                        "approval (daily_loss)")
+                                                        "approval (daily loss)")
+    assert outcome_text("GATE_REFUSED: heat_cap, owner_halt") == (
+        "🛑 NOT PLACED: approved, but the risk check refused it at approval (too much risk already open, owner halt)")

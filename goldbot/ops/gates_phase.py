@@ -58,14 +58,15 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import Field, ValidationError
+from pydantic import Field
 from scipy import stats
 
-from goldbot.base import FrozenRecord, UtcTimestamp, fsync_dir, load_record, load_record_json, write_atomic
+from goldbot.base import FrozenRecord, UtcTimestamp, fsync_dir, load_record_json, write_atomic
 from goldbot.config import GateSettings, Settings
 from goldbot.ops.accounts import GATES
 from goldbot.ops.cost_imputation import CostImputer, ImputationSummary
-from goldbot.research.metrics import DsrInputs, max_drawdown
+from goldbot.research.gates import current_dsr
+from goldbot.research.metrics import max_drawdown
 from goldbot.research.registry import (
     costs_recorded,
     latest_evaluated,
@@ -381,23 +382,6 @@ def _trial_rows(path: Path) -> list[dict[str, Any]]:
         except ValueError:
             continue
     return rows
-
-
-def current_dsr(row: dict[str, Any] | None, n_trials: int) -> tuple[float | None, str]:
-    """The row's model-filtered deflated Sharpe recomputed on `n_trials` (the registry's `n_trials_effective` today)
-    from its stored inputs (`metrics.DsrInputs`, results.model_filtered.dsr_inputs), and the reason when it cannot be.
-    Design: "DSR >= 1.0 on the true trial count"; the stored `dsr` used the count of its run, which every later trial
-    makes too small (quant review 2026-10-16). A row without stored inputs (written before they were recorded, or below
-    metrics.MIN_TRADES_FOR_DSR trades) fails closed: it is no DSR evidence whatever its stored value."""
-    mf = ((row or {}).get("results") or {}).get("model_filtered") or {}
-    raw = mf.get("dsr_inputs")
-    if raw is None:
-        return None, "no stored DSR inputs to recompute it on today's trial count (re-run the trial)"
-    try:
-        inputs = load_record(DsrInputs, raw, source="trial_registry")
-    except ValidationError:
-        return None, "unreadable stored DSR inputs (re-run the trial)"
-    return inputs.dsr(max(int(n_trials), 1)), ""
 
 
 def best_backtest_trial(rows: list[dict[str, Any]]) -> dict[str, Any] | None:

@@ -9,14 +9,14 @@ describe("Account recovery codes", () => {
   afterEach(() => { vi.restoreAllMocks(); apiModule.setUser(null); });
 
   it("is offered to the owner only", () => {
-    apiModule.setUser({ email: "v@x.io", role: "approver" });
+    apiModule.setUser({ email: "v@x.io", role: "approver", signed_in_with: "password_totp" });
     render(<Account />);
     expect(screen.getByRole("heading", { name: "Change password" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Recovery codes" })).toBeNull();
   });
 
   it("needs the password, a code and the confirmation, then shows the new codes once with copy and download", async () => {
-    apiModule.setUser({ email: "o@x.io", role: "owner" });
+    apiModule.setUser({ email: "o@x.io", role: "owner", signed_in_with: "password_totp" });
     const regen = vi.spyOn(apiModule.api, "recoveryCodes").mockResolvedValue({ recovery_codes: CODES });
     const write = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText: write }, configurable: true });
@@ -50,7 +50,7 @@ describe("Account recovery codes", () => {
   });
 
   it("shows a refusal and keeps the form", async () => {
-    apiModule.setUser({ email: "o@x.io", role: "owner" });
+    apiModule.setUser({ email: "o@x.io", role: "owner", signed_in_with: "password_totp" });
     vi.spyOn(apiModule.api, "recoveryCodes").mockRejectedValue(new Error("invalid credentials"));
     render(<Account />);
     fireEvent.change(screen.getByLabelText("Your password"), { target: { value: "x" } });
@@ -67,7 +67,7 @@ describe("Account: your sign-in", () => {
   afterEach(() => { apiModule.setUser(null); });
 
   it("comes first and lists the owner's role and email", () => {
-    apiModule.setUser({ email: "owner@example.com", role: "owner" });
+    apiModule.setUser({ email: "owner@example.com", role: "owner", signed_in_with: "password_totp" });
     render(<Account />);
     const mine = screen.getByRole("region", { name: "Your sign-in" });
     expect(within(mine).getByText("Owner")).toBeInTheDocument();
@@ -78,7 +78,7 @@ describe("Account: your sign-in", () => {
   });
 
   it("shows a viewer their own role and email", () => {
-    apiModule.setUser({ email: "v@x.io", role: "viewer" });
+    apiModule.setUser({ email: "v@x.io", role: "viewer", signed_in_with: "password_totp" });
     render(<Account />);
     const mine = screen.getByRole("region", { name: "Your sign-in" });
     expect(within(mine).getByText("Viewer")).toBeInTheDocument();

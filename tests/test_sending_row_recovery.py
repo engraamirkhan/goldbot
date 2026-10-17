@@ -143,14 +143,15 @@ def test_a_sending_row_older_than_a_minute_is_resolved_in_process(tmp_path):
     rec = eng._orders[cid]
     eng._reconcile(T0)                                                        # adopted (a) already marks it
     assert rec.status == "filled"
-    # a row whose order never reached the broker: no position and no deal -> unfilled once it is a minute old
+    # a row whose order never reached the broker: no position and no deal -> handed to the look-up once it is a minute
+    # old (BACKLOG 72 trading-safety review: `ambiguous`, unfilled only after two clean looks 120 s apart)
     eng._orders_record("icm-demo-ghost", agent_id="x", side=1, magic=1, lots=0.1, max_bars=4, sl=1.0, tp=2.0,
                        ts=pd.Timestamp.now("UTC"))
     eng._reconcile(T0)
     assert eng._orders["icm-demo-ghost"].status == "sending"                  # too young: maybe still in flight
     eng._orders["icm-demo-ghost"].ts_utc = pd.Timestamp.now("UTC") - pd.Timedelta(seconds=90)
     eng._reconcile(T0)
-    assert eng._orders["icm-demo-ghost"].status == "unfilled"                 # (d)
+    assert eng._orders["icm-demo-ghost"].status == "ambiguous"                # (d), then the look-up decides
     assert "icm-demo-ghost" in eng.sent_ids                                    # never re-sent
 
 

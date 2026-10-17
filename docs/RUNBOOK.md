@@ -65,20 +65,23 @@ Log in to your IC Markets demo **once** (MT5 keeps the login; goldbot never sees
 1. On the VM: `sudo systemctl start goldbot-vnc`.
 2. On your Mac, a second Terminal window: `ssh -L 5900:localhost:5900 ubuntu@<mt5 public ip>`.
 3. In Finder: Go -> Connect to Server -> `vnc://localhost:5900` (macOS Screen Sharing; leave the password empty).
-4. In that window start the terminal if it is not open (`sudo -u mt5 -H env DISPLAY=:99 wine 'C:\MT5\ICMarkets\terminal64.exe' &`
-   on the VM). The bootstrap installs MetaQuotes' generic terminal, which has **no IC Markets servers** (ADR 0020),
+4. In that window the terminal should be open. If it is not, start it on the VM with
+   `sudo systemctl start goldbot-mt5-terminal@icm-demo`. Its unit is the only thing that starts the terminal, and it
+   refuses to start a second one. Never start it by hand with `wine`. The bootstrap installs MetaQuotes' generic terminal, which has **no IC Markets servers** (ADR 0020),
    so do not use File -> Login to Trade Account first. Instead: File -> Open an Account -> type `ICMarkets` in the
    search box -> pick **Raw Trading Ltd** (the company behind the ICMarketsSC servers) -> Next -> **Connect with an
    existing trade account** -> your login, password, server **ICMarketsSC-Demo**, tick **Save password** -> Finish.
    This downloads the server list into `Config/servers.dat`; later logins can use File -> Login as usual.
    Check `XAUUSD` is in Market Watch, and enable Tools -> Options -> Expert Advisors -> *Allow algorithmic trading*.
-   Close the terminal.
+   Leave the terminal open. If you close it, its unit starts it again within 15 s.
 
    *Symptom when the server list is missing:* File -> Login with ICMarketsSC-Demo does nothing at all: no line in
    the Journal, no network connection, the corner keeps showing "No connection". Fix: the Open an Account flow above.
 5. `sudo systemctl stop goldbot-vnc`, close the tunnel window.
 
-The bridge attaches to that running terminal through the MT5 Python API with
+The bridge never starts the terminal. `goldbot-bridge@icm-demo` requires `goldbot-mt5-terminal@icm-demo`, so starting
+the bridge starts the terminal first. The bridge then waits up to 60 s for the terminal process and attaches to it
+through the MT5 Python API with
 `initialize(path=r"C:\MT5\ICMarkets\terminal64.exe", timeout=60000)` (`terminal_path` in `config/accounts.yaml`,
 `MT5_INIT_TIMEOUT_MS` in `goldbot/execution/mt5_adapter.py`). Without `path=` it fails with IPC timeout `-10005`.
 If a hand test from the Windows Python on the box shows `-10005`, check the path is given and the terminal runs
@@ -90,8 +93,10 @@ goldbot-mt5 accounts bridge-serve icm-demo     # your MT5 login number, then 127
 sudo systemctl start goldbot-bridge@icm-demo
 ```
 Copy the token straight into `goldbot run setup` on the brain (step 2); do not save it anywhere else. Do this
-step only when the brain is installed and you are about to run setup, so the token is never left in a window. The bridge refuses to start unless the
-terminal is logged in to that login on ICMarketsSC-Demo as a **demo** account.
+step only when the brain is installed and you are about to run setup, so the token is never left in a window. The bridge refuses every call
+until it has seen the terminal logged in to that login on the registered demo server as a **demo** account. Until then it only
+answers `GET /health`, with the terminal's state (`not_logged_in`, `wrong_account`, ...). On the box,
+`curl -s 127.0.0.1:8765/health` shows that state, and the brain shows it as `terminal:icm-demo` (see "Terminal down").
 
 ### 0.4 The brain
 ```bash
@@ -852,6 +857,34 @@ an App Password (Google Account -> Security -> 2-Step Verification -> App passwo
    open link), set `enabled: false`, then change your password and your email password. The accepted risk and its
    limits are in [ADR 0013](decisions/0013-email-sign-in-link-accepted-risk.md).
 
+**Email sign-in code (owner only; uses the same mail setup)**
+
+With mail set up (steps 1-3 above), the owner can sign in with the password and a 6-digit code sent by email instead
+of the authenticator ([ADR 0028](decisions/0028-email-code-sign-in.md)). Nothing else to configure:
+
+1. The code is checked with a secret key kept in the server's keyring as `email-code-hmac-key` (32 random bytes,
+   created on the first request; never in `aux.db` or a backup). The VPS needs a real keyring: the
+   `state/.secrets.json` fallback is for the brain only. If the keyring cannot be read, or the stored key is not
+   32 bytes of hex, email codes stay off (the login page shows only the authenticator) and the API log says
+   `email codes off: email-code-hmac-key ...`. To rotate the key (open codes stop working): brain
+   `goldbot accounts set email-code-hmac-key`, VPS `.\.venv\Scripts\python.exe -m goldbot.ops.accounts set
+   email-code-hmac-key`, paste 64 hex characters (for example from `python -c "import secrets; print(secrets.token_hex(32))"`),
+   then restart the API.
+2. A code works once, for 10 minutes; 3 wrong codes kill it; a resend (not before 60 s) cancels the old one. Mail
+   shares the link's limit: 3 an hour per address and per network address. Wrong codes count towards the sign-in
+   lockout.
+3. After an email-code sign-in, **invite, reset link, role change, disable, enable and sign out everywhere** also ask
+   for the authenticator code (or a recovery code, which is spent). Re-arm, auto mode, password change and new
+   recovery codes ask for the authenticator as before. Approve, reject and halt never ask.
+4. Three codes killed by wrong guesses, or one sign-in lockout, within 24 h **suspend email codes** (one Telegram
+   notice; audit `email_code_suspended`): the page still answers but no email is sent. Sign in once with the password
+   and the authenticator code to switch them back on (audit `email_code_resumed`).
+5. Every email-code sign-in sends a Telegram notice and an email ("new sign-in with an emailed code"). If it was not
+   you, someone has your password and your mailbox: run `python -m goldbot.ops.run revoke-sessions` on the server
+   (signs everyone out and cancels every open code), set `enabled: false`, change your password and your email
+   password. Turn email codes off at once (set `enabled: false`, restart the API) on any live-money incident or if
+   the Gmail account loses 2-Step Verification (ADR 0028's revert trigger).
+
 ---
 
 ## 3. Daily operation
@@ -1232,6 +1265,12 @@ and when it recovers (needs `telegram.allowed_user_ids` and the Telegram service
 when that loop has stopped). When the whole brain is down, the outside dead man's switch tells you instead ("Outside
 alert" below; the `deadman` check says whether it is set).
 
+### Order not confirmed
+
+Health WARN "order(s) not confirmed by the broker" (BACKLOG 72): on the MT5 box, open the terminal and look in Trade for a
+XAUUSD position with the engine's comment and in History for its deals; if it is open without a stop, set the stop the
+notice names. The engine keeps looking and refuses new entries until it settles; the WARN clears by itself.
+
 ### Outside alert (dead man's switch)
 
 Telegram alerts come from the brain itself, so a dead brain cannot report itself. A free check on Healthchecks.io
@@ -1310,11 +1349,111 @@ lost bridge reply:
 3. `systemctl list-timers 'goldbot-bridge-watchdog@*'` shows that the timer is running. To pause it for maintenance,
    run `sudo systemctl stop goldbot-bridge-watchdog@<account>.timer`, and `start` it again afterwards.
 
+The same watchdog also reads the terminal's state from `/health`. The probe runs as `nobody` and passes on a single
+word, never the reply itself. The watchdog acts on that word alone:
+- `not_running` or `not_connected` on all 3 probes, with the terminal unit up for at least 10 min: it restarts
+  `goldbot-mt5-terminal@<account>`, which restarts the bridge with it.
+- The bridge restarting 3 times without settling while the terminal has been up for 10 min: the terminal is hung and
+  the bridge cannot attach to it, so the watchdog restarts the terminal unit.
+- `not_logged_in` or `wrong_account`: it logs the state and never restarts anything.
+It restarts the terminal at most once every 10 min.
+
+### Terminal down (`terminal:<account>`)
+
+The terminal runs in its own unit, `goldbot-mt5-terminal@<account>`. That unit is the only thing that starts it. It
+restarts the terminal 15 s after it dies (on Ubuntu 24.04 the wait grows to 10 min) and refuses to start a second
+copy. The brain's `terminal:<account>` check reads the state from the bridge. In every state below, entries are
+blocked, stops and targets stay with the broker, and nothing is lost by waiting:
+- **"not running on the MT5 box; it is being restarted"**: normally clears within 1 to 2 minutes, because the unit
+  starts the terminal again and the bridge re-attaches. If it still fails after 10 minutes, on the box run
+  `systemctl status goldbot-mt5-terminal@<account> goldbot-bridge@<account>` and
+  `sudo journalctl -u goldbot-mt5-terminal@<account> -n 100`. The line "a terminal64.exe already runs for mt5" means
+  a terminal was started by hand. Stop that copy with `sudo pkill -u mt5 -f terminal64.exe`, then run
+  `sudo systemctl start goldbot-mt5-terminal@<account>`.
+- **"running but not logged in (saved login lost?)"**: a restart cannot fix this, so the watchdog leaves it alone.
+  First stop the watchdog timer (`sudo systemctl stop goldbot-bridge-watchdog@<account>.timer`). Then log in over VNC
+  as in 0.3, steps 1 to 5, ticking *Save password*. The bridge starts serving by itself once it sees the right
+  account. Start the timer again afterwards. If the bridge had already seen the right account before the login was
+  lost, it keeps passing calls through: reads and closes keep flowing (exits are never gated), and the terminal
+  answers what it can. Orders still fail the account check on every send.
+- **"not connected to the broker server"**: this is a warning for the first 5 minutes, then a FAIL. Check the box's
+  network, then check the terminal's corner indicator over VNC. After 10 minutes the watchdog restarts the terminal.
+- **"logged in to a different account than registered"**: while the terminal is on another account, the bridge
+  refuses every call, reads and closes included. It never reads or closes positions on an account it was not set up
+  for. Your positions on the registered account keep their stops and targets at the broker. Over VNC, log in to the
+  registered demo account (0.3). Calls flow again on their own once it is back. Never change `config/accounts.yaml`
+  to match the terminal.
+
+### Cold-restart test of the saved login (MT5 box)
+
+This tests that the terminal comes back logged in after a full reboot, with no help from you. Plan:
+docs/proposals/2026-10-mt5-terminal-lifecycle.md section 2. Only run it when all of these hold: you can be reached
+(Telegram, and the VNC tunnel ready), the market is closed, it is outside London and New York hours, the book is
+flat, and the engine is stopped. Do not run it on a classifier Friday or a clock-change Sunday. The new units must be
+installed by an approved deploy first.
+
+**Back up `Config/` first.** It holds the saved login. Keep the copy on the MT5 box only, never off-box:
+```bash
+sudo -u mt5 -H sh -c 'umask 077; mkdir -p ~/config-backup && chmod 700 ~/config-backup && cp -a ~/.wine/drive_c/MT5/ICMarkets/Config ~/config-backup/'
+```
+Rules for this copy:
+- It stays owned by `mt5` in that 0700 directory, which is outside `/opt/goldbot` and outside anything that is synced
+  or backed up.
+- Never copy it off the box: no scp, no upload, no cron job.
+- Never paste its contents, or a hash of it, into an issue, a comment or a chat.
+- Delete it (`sudo -u mt5 -H rm -rf ~/config-backup`) once the test has passed, or keep it only there.
+
+Steps (record only states and times):
+1. Record the starting state. `systemctl is-active goldbot-xvfb goldbot-mt5-terminal@icm-demo goldbot-bridge@icm-demo`,
+   `pgrep -c -u mt5 -f terminal64.exe` (expect 1), `curl -s 127.0.0.1:8765/health` (expect `"terminal": "ok"`), and
+   `free -m` for memory and swap.
+2. `sudo reboot`. Start a timer.
+3. **Pass within 10 min**, all of these:
+   - xvfb, the terminal and the bridge are all active, and exactly one terminal64.exe runs;
+   - `/health` shows `"terminal": "ok"`;
+   - on the brain, `bridge:icm-demo` and `terminal:icm-demo` are ok;
+   - Telegram showed the down alert within 6 min, followed by the recovery.
+4. `sudo systemctl kill -s KILL goldbot-mt5-terminal@icm-demo`. The terminal must come back within its backoff, the
+   bridge must re-attach, and there must still be exactly one terminal. Record the times.
+   **Which unit owns wineserver, and does exit 76 loop?** These steps check both:
+   - Run `systemd-cgls -u goldbot-mt5-terminal@icm-demo` and `systemd-cgls -u goldbot-bridge@icm-demo`, and record
+     which unit lists `wineserver`. The first Wine process to start launches it, so normally that is the terminal
+     unit. If it is the bridge's, then stopping the bridge (and so every exit 76) also kills the terminal's Wine. Write
+     that down as a finding.
+   - `sudo journalctl -u goldbot-bridge@icm-demo -b | grep -c "launched .* MT5 terminal"` should print 0. Also check
+     that `systemctl show -p NRestarts goldbot-bridge@icm-demo` does not keep rising over 5 minutes.
+   - If exit 76 repeats (the bridge launches a terminal, is stopped, and launches one again), stop the bridge, run
+     `sudo systemctl restart goldbot-mt5-terminal@icm-demo` (the bridge starts again behind it), and open a postmortem.
+5. **Hardening check.** `goldbot-mt5-terminal@.service` carries `NoNewPrivileges=yes` and `PrivateTmp=yes` commented
+   out. They stay off until this step shows the terminal still works with them under Wine. Enable them one at a time
+   with a drop-in (`sudo systemctl edit goldbot-mt5-terminal@icm-demo`), then
+   `sudo systemctl restart goldbot-mt5-terminal@icm-demo`. Pass when, within 5 min, the terminal and the bridge are
+   active and `/health` shows `"terminal": "ok"`. `PrivateTmp=yes` is the likely failure: the terminal gets its own
+   `/tmp`, so it also gets its own wineserver socket and the bridge cannot attach. If either key fails, remove the
+   drop-in and restart. Record pass or fail for each key; the unit file is changed only through a PR.
+6. Write up the result in `docs/incidents/`. Record unit states and times only. Never include the login, the server
+   name, a hostname, or any VNC or tunnel details.
+
+**If the login is lost** (`terminal: not_logged_in`):
+1. Stop the watchdog timer.
+2. Log in over VNC (0.3), or restore the copy:
+   `sudo systemctl stop goldbot-mt5-terminal@icm-demo`, then
+   `sudo -u mt5 -H cp -a ~mt5/config-backup/Config/. ~mt5/.wine/drive_c/MT5/ICMarkets/Config/`, then start the
+   terminal unit again.
+3. Reboot once more.
+4. If the login is lost again, disable the terminal unit, start the terminal the old way and open a postmortem.
+
+Finish well before Sunday's open.
+
 **Installing on a box set up before the watchdogs.** `goldbot-deploy` does not reinstall units:
 - Brain: install `goldbot-engine@.service` from root's own clone at the deployed commit (as in 0.4), then run
   `sudo systemctl daemon-reload` and restart the engines.
-- MT5 box: install the two `goldbot-bridge-watchdog@` units and the `/usr/local/sbin/goldbot-bridge-watchdog` script
-  the same way, then run `sudo systemctl enable --now goldbot-bridge-watchdog@icm-demo.timer`.
+- MT5 box: from the same clone, install these: the two `goldbot-bridge-watchdog@` units,
+  `goldbot-mt5-terminal@.service`, the new `goldbot-bridge@.service`, and the `goldbot-bridge-watchdog.sh` and
+  `goldbot-bridge-probe.sh` scripts as `/usr/local/sbin/goldbot-bridge-watchdog` and
+  `/usr/local/sbin/goldbot-bridge-probe` (root-owned, 755). Then run `sudo systemctl daemon-reload`. Stop any terminal
+  started by hand, run `sudo systemctl enable goldbot-mt5-terminal@icm-demo`, and restart the bridge (the terminal unit
+  starts first). Finally run `sudo systemctl enable --now goldbot-bridge-watchdog@icm-demo.timer`.
 - Then set the rollback floor (`/etc/goldbot/rollback-floor`, 0.5) to the watchdog commit. A new brain gets it from
   the bootstrap, which writes the bootstrap commit there when no floor exists. Why it matters: under `Type=notify`,
   an older release never reports ready. It still starts and trades for up to 15 min, until `TimeoutStartSec`. Then

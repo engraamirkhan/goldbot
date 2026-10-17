@@ -6,7 +6,7 @@ async function setup(hash = "", emailLink = true) {
   history.replaceState(null, "", `/${hash}`);
   vi.resetModules();
   const apiModule = await import("../lib/api");
-  vi.spyOn(apiModule.api, "authState").mockResolvedValue({ needs_setup: false, users: 2, email_link: emailLink });
+  vi.spyOn(apiModule.api, "authState").mockResolvedValue({ needs_setup: false, users: 2, email_link: emailLink, email_code: false });
   const { Login } = await import("./Login");
   const onLogin = vi.fn();
   render(<Login onLogin={onLogin} />);
@@ -17,7 +17,7 @@ function type(label: string | RegExp, value: string) {
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
 }
 
-const SESSION = { token: "t", expires_in: 43200, role: "owner" as const, email: "o@x.io" };
+const SESSION = { token: "t", expires_in: 43200, role: "owner" as const, email: "o@x.io", signed_in_with: "password_totp" as const };
 
 describe("Login", () => {
   beforeEach(() => sessionStorage.clear());

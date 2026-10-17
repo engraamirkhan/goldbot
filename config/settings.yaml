@@ -262,6 +262,9 @@ drift:                               # design: Drift and health (goldbot/researc
 #       timeout_s: 10                  # connect + each SMTP command
 # The SMTP password (a Google App Password) is never a setting: `python -m goldbot.ops.accounts set smtp-password`
 # stores it in the OS keyring.
+# The same mail setup also offers the owner "email me a code" (password + a 6-digit emailed code, ADR 0028; RUNBOOK
+# 2.10 "Email sign-in code"). Its HMAC key is the keyring entry `email-code-hmac-key`, created on first use; there is
+# no setting for it, and `enabled: false` turns codes off together with the link.
 
 gates:                               # design: Roadmap gates and stop rule (goldbot/ops/gates_phase.py; `run.py gates`)
   # The design wants these "committed in writing before the first paper trade". Uncommented values are the design's

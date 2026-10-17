@@ -30,6 +30,52 @@ def check_bridge(ctx: HealthContext, account_id: str) -> Check | None:
     return Check(name=name, status="ok", reason="bridge answers /health")
 
 
+TERMINAL_NOT_CONNECTED_FAIL_S = 5 * 60    # a terminal off the broker server this long FAILs (warns before)
+_NO_ENTRIES = "No entries; stops stay at the broker."
+_TERMINAL_FAIL = {
+    "not_running": "MT5 terminal not running on the MT5 box; it is being restarted. " + _NO_ENTRIES
+                   + " If this lasts 10 min: RUNBOOK 'Terminal down'.",
+    "not_logged_in": "MT5 terminal running but not logged in (saved login lost?). " + _NO_ENTRIES
+                     + " Owner login over VNC: RUNBOOK 0.3.",
+    "wrong_account": "MT5 terminal logged in to a different account than registered; the bridge refuses orders.",
+}
+
+
+@register_check("account", block=BLOCK_ACCOUNT, pos=115)
+def check_terminal(ctx: HealthContext, account_id: str) -> Check | None:
+    """The MT5 terminal behind the bridge, as the bridge's GET /health reports it: one token (ok, not_running,
+    not_connected, not_logged_in, wrong_account; docs/proposals/2026-10-mt5-terminal-lifecycle.md section 3). The
+    wording never carries a login, a server or a host (security condition 6). Omitted without a bridge URL or a probe;
+    a bridge that does not answer is `bridge:<account>`'s FAIL, so here it is a warning."""
+    try:
+        url = ctx.get_secret(f"mt5-bridge-url-{account_id}")
+    except Exception:
+        url = None
+    if not url or ctx.terminal_probe is None:
+        return None
+    name = f"terminal:{account_id}"
+    try:
+        state, for_s = ctx.terminal_probe(url)
+    except Exception as exc:              # the type only: a message can name the tunnel endpoint
+        return Check(name=name, status="warn", reason=f"MT5 terminal state not read ({type(exc).__name__})")
+    if state == "ok":
+        return Check(name=name, status="ok", reason="MT5 terminal running, logged in to the registered account and "
+                     "connected")
+    if state in _TERMINAL_FAIL:
+        return Check(name=name, status="fail", reason=_TERMINAL_FAIL[state])
+    if state == "not_connected":
+        long = isinstance(for_s, int) and for_s >= TERMINAL_NOT_CONNECTED_FAIL_S
+        span = f" for {for_s // 60} min" if isinstance(for_s, int) and for_s >= 60 else ""
+        return Check(name=name, status="fail" if long else "warn",
+                     reason=f"MT5 terminal not connected to the broker server.{span and ' (' + span.strip() + ')'} "
+                            + _NO_ENTRIES + " Its unit and the watchdog restart it after 10 min; RUNBOOK 'Terminal down'.")
+    if state == "unreported":
+        return Check(name=name, status="warn", reason="the bridge does not report the MT5 terminal state (older than "
+                     "this release): deploy the MT5 box (RUNBOOK 0.5)")
+    return Check(name=name, status="warn", reason=f"MT5 terminal state unknown: the bridge does not answer /health "
+                 f"(see bridge:{account_id})")
+
+
 @register_check("account", block=BLOCK_ACCOUNT, pos=120, pass_account=True)
 def check_bridge_compat(ctx: HealthContext, account: AccountRef) -> Check | None:
     """BACKLOG 42 (gap G6): the bridge's /health against this checkout (goldbot/ops/bridge_compat.py). FAIL when a

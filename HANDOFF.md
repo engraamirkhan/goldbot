@@ -32,6 +32,41 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - Next (program director): security review of the workflow diff, then the PR, then the dispatch after the PR is on
     `main`, by Fri 2026-11-06. Then the data-engineer reads the day-by-day coverage issues for 2020-2026 and reports
     which days remain.
+- **E-6 day-summed DSR coded and wired into the survivor verdict (BACKLOG 76, implementer, 2026-10-17; code review
+  APPROVE, quant review round 2 pending; not pushed).** The discovery survivors' reading rule (pre-registration
+  2027Q1 O-5/O-6: "the day-summed DSR is also >= 0.95") is now a coded check.
+  - **The record.** `metrics.day_summed_dsr` sums net R per UTC entry day over days with a trade only (G days), with
+    var(SR) = 1/G and the skew and kurtosis of the daily sums. The entry day is `pipeline.entry_utc`: `ts_utc` plus
+    one bar, the real entry. Every walk-forward (not a discovery trial) stores it with the trial as
+    `results.model_filtered.day_summed`. Beside it are the per-trade DSR of the same R series and both effective ts
+    (`dsr_per_trade_r`, `t_per_trade_r`). Those two are **R basis, not the gate DSR**, which is on `ret`.
+  - **The reading.** `gates.day_summed_check(row, rows)` reads, on `registry.n_trials_effective(rows)` (the phase
+    gate's K, both discoveries' K_eff included), two things: the gate's DSR from `gates.current_dsr` (moved there from
+    `ops/gates_phase.py`, which imports it) and the day-summed DSR. It passes only if both are >= 0.95, and fails
+    closed without stored inputs or below 200 trading days.
+  - **The verdict path.** A pre-registration with `rule_id` "O-5"/"O-6" (`registry.DAY_SUMMED_RULE_IDS`) puts its
+    evaluated trial under `director.survivor_decisions` and `survivor_refusal`:
+    - `record_verdict`: "continue" needs the gates and the reading passed; otherwise "stop", or "inconclusive" when
+      the inputs are missing.
+    - A holdout slot goes live, and `promotion_refusal` / `passed_gates` count the survivor's pass, only with the
+      reading passed.
+    - H-02's survivors, pre-registered under their own rule, are not read by it.
+  - **Rule amendment.** The pre-registration's O-5/O-6 text records the stricter amendments dated 2026-10-17, before
+    any H-14 outcome: the 200-day floor, the entry day and the gate DSR on `ret`. The program director notes them for
+    the owner.
+  - **Not changed.** `research_gates`, the phase gate's numbers, stored Q4 results and any frozen reading. Rows
+    written before this have no `day_summed`.
+  - **Tests.** `tests/test_day_summed_dsr.py` (22) and a compat case in `tests/test_persistence_compat.py`.
+- Email-code sign-in, backend (BACKLOG 77 steps 1-2, implementer, 2026-10-17; ADR 0028, TRACEABILITY U22; spec and
+  security conditions 1-11 in docs/ux/sign-in-email-code.md). The owner can sign in with password + a 6-digit code
+  sent by email while mail is ready: `POST /api/auth/email-code` (same challenge shape for every input),
+  `/email-code/verify` (session method `email_code`), `/email-code/resend` (60 s pacing, shared 3-an-hour limit with
+  the email link). An email-code session needs the authenticator or a recovery code (`totp` field) for invite, reset
+  link, role, disable, enable and revoke-sessions (403 "authenticator code required"); a router test fails for any
+  new owner write route that is neither stepped up nor already authenticator-gated. aux.db migration 8 is additive
+  (`email_codes`, `sessions.method`, `auth_suspensions`). HMAC key `email-code-hmac-key` lives in the keyring only
+  (created on first use; unreadable or corrupt means off). RUNBOOK 2.10 "Email sign-in code". Not done here: the
+  Login/Users/Account screens and the e2e (step 3, web lane, against the regenerated contract), OWNER_GUIDE.
 - Gates on release candidate ab671be (W1-1 bridge smoke on top of PR #84), test-engineer, 2026-10-17. `GATES_WORKERS=4 scripts/gates.sh --web` (total 377 s), then e2e. All green:
 
   | Gate | Result |
@@ -75,6 +110,71 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Ceiling codes keep their shipped words. A fill, any `ok` result or an ambiguous result (10008, 10010, 10012, -1,
   ...) still reads APPROVED. Not in this change: the amber "NOT CONFIRMED" state and auto-mode notices (open points
   in the spec, awaiting decisions).
+- Order not confirmed (BACKLOG 72; plan `docs/proposals/2026-10-backlog72-not-confirmed-plan.md` with trading-safety
+  conditions 1-7 and the PD/UX decisions; copy `docs/ux/order-not-confirmed.md`, byte for byte). An approved or
+  automatic entry the broker neither filled nor definitely refused (10008, 10010, 10011, 10012, 10031, -1, any undefined
+  code, `ok` without a position) no longer archives as ✅ APPROVED.
+  - The pending_orders row becomes `ambiguous`. It stays in `sent_ids` and is never re-sent.
+  - It is looked up at the broker on every pass: from `_reconcile`, before its adoption loop, and from `no_quote_pass`
+    every `reconcile_every_s`, so it also runs with no ticks. The logic is in `goldbot/engine/unconfirmed.py`.
+  - Outcomes:
+    - a position is adopted with the stop sent, at the dealt lots. A missing or looser stop is put back in the same
+      pass; a stop that can't be set tells the owner to set it in MT5;
+    - an entry deal plus an exit deal found by position id (never by comment) is recorded as a closed trade, at the
+      dealt lots;
+    - `unfilled` only after two clean looks in this process at least 120 s apart;
+    - otherwise it keeps looking: one "still not confirmed" notice and a health WARN at 600 s, and terminal `unknown`
+      (with one notice) at 7 days, after which the row is pruned.
+  - Entries are refused `unconfirmed_order_pending` while any row is unresolved (condition 1, refusal path). After
+    review round 1, a `sending` row counts as unresolved: the engine is single-threaded, so a `sending` row seen at a
+    gate check is a send that raised.
+  - Notices: at most one per outcome, plus one correction if a fill turns up after "no trade". `SentOrder.notified` and
+    `SentOrder.unknown_notified` are persisted before each notice is sent.
+  - One wording table, `goldbot/execution/not_confirmed.py`, feeds `outcome_text`, the notices, the health line and the
+    new API field `DecidedProposal.not_confirmed {outcome, heading, text, tone}`. A new `DecidedProposal.refusal_text`
+    words the RiskGate codes on "Refused at approval".
+  - `/api/proposals/recent` keeps unresolved cards listed past the 10-minute window. The ProposalCard has a new state
+    `not_confirmed` and amber `outcome warn`.
+  - Telegram "refused at approval" now words the RiskGate code ("daily loss", not `daily_loss`).
+  - `runner.py`: 3,471 to 3,444 lines. The adoption block of `_resolve_sent` moved into `unconfirmed.py`, and
+    `_record_closed_while_down` was removed. The cap is unchanged.
+  - Trading-safety review, round 1:
+    - Race (HIGH): `_finish` archives an approval as `placing` (new `Proposal.placing`) and clears it once the engine's
+      `on_decision` has the broker's answer. `Outbox.finished` waits while a card is `placing`. If the engine loop
+      heartbeat is older than 60 s, or the card has been placing for 120 s, it reports NOT CONFIRMED, never ✅
+      APPROVED. The API shows such a card as "submitted".
+    - `sending` path (condition 3): `_resolve_sent` with no position marks the row `ambiguous`, never `filled` or
+      `unfilled` on one look; the look-up then decides with the two-look rule.
+    - Clean look (condition 2): a look is clean only when the last quote is valid and no older than
+      `stale_tick_seconds`. No look in `no_quote_pass` is clean, so "no trade" is never declared while the market is
+      closed or the feed is down. A restart's first look (before any quote) is not clean.
+    - A look that raises is logged and waits. The other rows and the reconcile loop go on.
+    - `_adopt` puts the trade in the open table before `adopted` saves the row and tells the owner.
+    - A late-adopted trade keeps the tighter of the stop sent and the broker's stop.
+    - A stop that can't be set while the price is already past it gets a notice that the engine closes the trade at
+      the first quote. This is a new row in the UX copy, pending ui-ux review.
+    - The look-up journal records the row's send time, not its age, so the store golden is clock-independent.
+  - The bridge smoke reads the same refusal from `orders_<account>.json` (an unreadable table counts as one).
+  - Store golden grid (192 cases), checked by comparing each case at fb59e15 with the current one after removing the
+    new keys (`notified`, `unknown_notified`, `unconfirmed_orders`):
+    - At the first build (a4fe4cb), all 192 cases matched fb59e15 exactly.
+    - After review round 1, the 64 "none" cases still match in all five files. The 64 "old" cases differ only in the
+      restart journal: an old `sending` row now reads `reconcile_sent_ambiguous` and then `unconfirmed_gave_up`
+      (past 7 days) instead of `reconcile_sent_unfilled`, and it is pruned as before.
+    - The 64 "fresh" cases also add an `ambiguous` row, which stays ambiguous across the restart, and their `sending`
+      row is restarted as `ambiguous`.
+    - The engine-file comparison drops `unconfirmed_orders.oldest_age_s`, which the host clock stamps, as it already
+      drops `ts`.
+  - Known limit: a row whose entry deal carries no position id never resolves. It stays `ambiguous` for up to 7 days,
+    with entries refused, until it turns terminal `unknown` with one notice.
+  - `tests/test_auto_same_close.py`: the second auto entry in a bar is now refused at the gate
+    (`unconfirmed_order_pending`) before the bar pause is consulted. The pause still applies.
+  - Filed BACKLOG 79: the digest and the approval report count `not_confirmed` cards and item 71's broker refusals
+    as "refused by the risk check".
+  - Not done: the second Telegram card edit at resolution. The outbox forgets a card's message ids once it has reported
+    the outcome, so resolution reaches Telegram as the notice only (the copy calls that edit best effort). The
+    dashboard shows the resolved outcome.
+  - Reviews needed: trading-safety (order and exit path), code, ui-ux (copy and amber states), sre (health WARN).
 - Progress tab screens (ROADMAP W2-3, implementer, 2026-10-17; spec docs/ux/progress-screens.md, API from the
   progress-tab-api lane): a new **Progress** tab, third after Overview and Approvals, for every role. It is one page
   with jump chips and three sections. **Stop rule** shows NOT BREACHED, NOT STARTED, BREACHED (amber, with "Go to
@@ -131,6 +231,32 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     evidence text.
   - Reviews needed: quant (verdict exposure, "by construction", the gates' iid 95% interval), security (read access,
     identifier cutting) and code. The web screens are the next lane.
+- The risk file notes schema skew (BACKLOG 74, ADR 0023 addendum A1, implementer, 2026-10-17; TRACEABILITY X7).
+  `JsonEngineStore.load_risk` now calls `note_schema_skew("risk_<account>.json", "risk file", extra)` for keys that
+  are not `RiskSnapshot` fields, as the orders loader already did. The keys are still ignored and nothing raises, so a
+  rollback below a release that added a risk field shows in health (`schema_skew_summary`) and the halt and stage
+  load as before.
+  - Tests: `tests/test_store.py` (the note, and no note for a file this release wrote). The two step-1 pins that
+    asserted "no note" now assert the load (golden edge test renamed to
+    `test_a_newer_key_in_the_risk_file_is_ignored_and_the_file_still_loads`); the golden JSON files are unchanged.
+  - Not changed: runner.py, the risk file's format, RiskGate, any order or exit path.
+- **Shadow-book day clustering on `entry_ts + tf` confirmed and pinned (BACKLOG 78, implementer, 2026-10-17; quant
+  and code review pending; not pushed).** ADR 0022 clusters by entry UTC day. A shadow trade's `entry_ts` is its
+  signal bar's open, and the trade enters at that bar's close.
+  - **Finding.** No code was keying on the open. `attribution.trade_rows` has used `entry_ts + tf` for
+    `TradeRow.entry_utc` since the report was first written (490ebe4). That field is the cluster key for every cell
+    and for the director's term. E-6 (`pipeline.entry_utc`) uses the same key. The other shadow-book readers
+    (`population`, `ruin`, `jobs`, `api/explain`) key on `exit_ts` and do no ADR 0022 clustering. `perf_report`
+    and `gates_phase` read `ClosedTrade.entry_utc`, the fill time.
+  - **Change.** Tests in `tests/test_attribution.py` cover four things: a 15m 23:45 signal and a 1h 23:00 signal
+    cluster on the next UTC day; a signal one bar earlier keeps its own day; the overall se uses that key; and
+    attribution agrees with `pipeline.entry_utc`. Changing the key back to the bar open makes all 5 cases fail. The
+    `trade_rows` docstring now states the key, and ADR 0022 has a dated note saying this is not a rule change.
+  - **Readings.** No CR1 se, t_bar or verdict moved. The repo has no attribution or metrics golden, and no golden
+    changed.
+  - **Open, out of scope.** `ruin.r_from_shadow_book` and `population.weekly_returns` time exits by `exit_ts` (the exit
+    bar's open) rather than by `exit_ts + tf`. The weekly bucket can move by one bar at the Sunday open. This is not
+    ADR 0022 and is a quant-reviewer call.
 - Engine split step 1: state save/load moved to `goldbot/engine/store.py` (TD-2, ADR 0023 step 1, implementer,
   2026-10-17). Move-only. The PR 0 golden grid (192 cases) and every golden under `tests/data/engine_store_golden/`
   pass unchanged.
@@ -151,6 +277,41 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - Not done here: the ADR 0010 skew note for unknown risk-file keys (BACKLOG 74, the next PR in `store.py`).
   - Reviews needed: trading-safety (restart and state path) and code. Review with
     `git diff --color-moved=dimmed-zebra`.
+- E-2 top-tercile cut (BACKLOG 75, implementer, 2026-10-17; plan docs/proposals/2026-10-backlog75-tercile-cut-plan.md
+  with the quant plan review's conditions 1-7; TRACEABILITY M48). O-4 can now pre-register
+  `DiscoveryConfig.threshold_rule: tercile_inner`.
+  - The cut (`pipeline.fold_cuts`) is the 2/3 quantile (`method="linear"`) of the raw out-of-fold p. It uses only
+    rows that are test rows of an earlier fold and also in fold k's `train_idx`. Only finite p count, and a fold
+    with fewer than 50 such rows takes no trade. A candidate is taken when its raw p >= the cut, with no break-even
+    floor. Overlapping test folds raise.
+  - CPCV (`cpcv.path_selection`) takes the cut from p_raw before the 0.5 fill. Earlier groups on the path are the
+    prior set, with no purged variant (quant ruling 1).
+  - Default unchanged: `break_even_margin` gives byte-identical walk-forward and CPCV outputs (golden
+    `tests/data/tercile_default_golden.json`, captured on 65ece6e before the change). It also keeps the same
+    `reading_rule` string and the same `DiscoveryConfig` dump and config hash, because the default rule is left out
+    of the dump, so H-02's pin and every queued hash hold.
+  - Under the tercile rule the reading rule's "(cross-fitted, break-even + margin)" is replaced, and one sentence is
+    added: "promotion needs a separate trial under the live rule".
+  - The discovery row records `threshold_rule`, `tercile_q`, `tercile_method`, `margin`, `fold_cuts`, `retention` and
+    `share_taken_below_breakeven`. The pre-registration plan records the rule pins.
+  - A run under the other rule hashes differently, so it is a new trial. Against a pending queued row it is refused
+    (`director.queued_mismatch`).
+  - The pre-registration is amended (2026-10-17, before any H-14 count): the cut is pinned, O-4 names
+    `tercile_inner`, and O-5/O-6 name the live rule.
+  - Not changed: RiskGate, execution, live thresholds, Q4 rows, frozen readings.
+  - Quant review round 1 (code APPROVE, quant REQUEST CHANGES), fixed in one commit:
+    - Under the tercile rule, "continue" needs at least 1,000 taken trades (`reading_verdict(min_taken=)`, as O-4's
+      rule reads). The clause says "(at least 1,000 taken)". The default rule and its string do not move.
+    - `tercile_q` and `tercile_method` are `DiscoveryConfig` fields. They are in the dump and the config hash under
+      the tercile rule, so another q is another trial, and the clause is built from them. Under the break-even rule
+      all three are dropped from the dump, keyed on the literal "break_even_margin", and a non-default q is refused.
+    - `check_threshold_config` refuses a tercile run with `step_months < test_months` (overlapping test folds). It
+      runs in `discovery_pass` and in the pre-registration writer, before the budget check or any registry row.
+    - `threshold_plan` also adds its four keys to default-rule pre-registration plans. Plans are not hashed, so this
+      is harmless.
+  - Quant re-verify APPROVE on 48226f5. Rebased onto BACKLOG 76 (day-summed DSR): discovery's walk-forward passes
+    `timeframe=None` with the threshold rule. TRACEABILITY row renumbered M47 to M48. Non-blocking quant item done:
+    `cpcv.path_selection` / `run_cpcv` take the trial's `tercile_q`, not a fixed 2/3.
 - The approval window no longer trusts the wall clock alone (2026-10-16, BACKLOG 60; needs trading-safety review).
   `Proposal.expired` was `time.time() > created + window_s`, so a backward clock step stretched the owner's 90 s
   window and a pending file stamped in the future (a restored backup, a bad write) stayed approvable. Now

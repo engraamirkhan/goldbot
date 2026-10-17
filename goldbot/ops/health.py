@@ -111,12 +111,14 @@ from goldbot.ops.checks._base import (
 )
 from goldbot.ops.checks.auth import check_email_link, check_secrets
 from goldbot.ops.checks.bridge import (
+    TERMINAL_NOT_CONNECTED_FAIL_S,
     _age_s,
     _engine_bridge_unconfirmed,
     _engine_sessions,
     check_bridge,
     check_bridge_compat,
     check_server_clock,
+    check_terminal,
 )
 from goldbot.ops.checks.engine import (
     TICK_ERROR_RECENT_S,
@@ -193,6 +195,7 @@ __all__ = [
     "BACKUP_SLOW_WARN_S",
     "BACKUP_WARN_H",
     "BRIDGE_TIMEOUT_S",
+    "TERMINAL_NOT_CONNECTED_FAIL_S",
     "COSTS_FAIL_DAYS",
     "COSTS_PUBLISHED_WARN_DAYS",
     "COSTS_WARN_DAYS",
@@ -307,6 +310,7 @@ __all__ = [
     "check_schema_skew",
     "check_secrets",
     "check_server_clock",
+    "check_terminal",
     "check_service_schema_skew",
     "check_settings",
     "check_stop_rule",
@@ -349,6 +353,7 @@ class HealthContext(Record):
     bridge_probe: Callable[[str], str | None] | None = None   # url -> None when /health answers, else why not
     tick_reader: Callable[[str, str], Any] | None = None      # (account_id, symbol) -> broker Tick (read-only); None: no bridge
     bridge_info: Callable[[str], Any] | None = None           # url -> bridge_compat.BridgeInfo from /health; None: not probed
+    terminal_probe: Callable[[str], Any] | None = None        # url -> (terminal token, seconds in it); None: not probed
     commit: str | None = None                                 # this checkout's commit, compared with the bridge's
     clock: Callable[[], pd.Timestamp] | None = None           # host UTC read after a network probe; None: use `now`
     last_run: UtcTimestamp | None = None                      # the previous health run (health_last.json), if any
@@ -369,13 +374,14 @@ class HealthContext(Record):
                     for a in accounts.enabled_accounts()]
         except Exception as exc:
             a_err = f"{type(exc).__name__}: {exc}"
-        from goldbot.execution.bridge import probe_health
+        from goldbot.execution.bridge import probe_health, probe_terminal
         from goldbot.ops.bridge_compat import read_bridge_info, repo_commit
         return cls(state_dir=Path(state_dir), now=now if now is not None else pd.Timestamp.now("UTC"),
                    settings=settings, settings_error=s_err, accounts=accs, accounts_error=a_err,
                    get_secret=accounts.get_secret, bridge_probe=lambda url: probe_health(url, BRIDGE_TIMEOUT_S),
                    clock=lambda: pd.Timestamp.now("UTC"), last_run=_last_run(Path(state_dir)),
                    tick_reader=bridge_tick_reader, bridge_info=lambda url: read_bridge_info(url, BRIDGE_TIMEOUT_S),
+                   terminal_probe=lambda url: probe_terminal(url, BRIDGE_TIMEOUT_S),
                    commit=repo_commit())
 
 

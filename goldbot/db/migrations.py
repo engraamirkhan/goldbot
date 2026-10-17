@@ -25,6 +25,9 @@ class Migration(FrozenRecord):
     # only adds tables or indexes that older code never touches: a release that knows the previous version can still
     # open the file (rollback). Recorded per file as schema_version.compat_back_to, so older code can read it.
     additive: bool = False
+    # (table, column, declaration) added with ALTER TABLE only when the column is missing: SQLite has no ADD COLUMN
+    # IF NOT EXISTS, and the RUNBOOK downgrade (delete the newer schema_version rows) re-applies a migration
+    add_columns: tuple[tuple[str, str, str], ...] = ()
 
 
 _BODY = "body TEXT NOT NULL CHECK (json_valid(body))"
@@ -213,6 +216,29 @@ AUX: tuple[Migration, ...] = (
            ) STRICT""",
         "CREATE INDEX IF NOT EXISTS ledger_reports_account ON ledger_reports(account_id, ts_ns)",
     )),
+    # additive (BACKLOG 77, ADR 0028): the owner's emailed sign-in codes. Hashes only: the challenge id as SHA-256 and
+    # the code as HMAC-SHA-256(key, challenge|code) with the key in the OS keyring, never here or in a backup.
+    # `consumed` = 1 once three wrong codes burned it (the row stays so Resend can find its challenge for an hour).
+    # sessions.method records how each session signed in (password_totp, email_link, email_code, recovery): the
+    # step-up rule reads it, and every new session names its method; the column DEFAULT exists only for a rollback: an
+    # older release never names the column, so its INSERTs get the default and still work.
+    # auth_suspensions: email codes paused for an address until its next password + authenticator sign-in
+    Migration(version=8, name="email_codes", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS email_codes (
+               challenge_sha256 TEXT PRIMARY KEY,
+               email TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+               code_hmac TEXT NOT NULL,
+               expires_ns INTEGER NOT NULL,
+               tries INTEGER NOT NULL DEFAULT 0,
+               consumed INTEGER NOT NULL DEFAULT 0 CHECK (consumed IN (0, 1)),
+               created_ns INTEGER NOT NULL
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS email_codes_email ON email_codes(email)",
+        """CREATE TABLE IF NOT EXISTS auth_suspensions (
+               email TEXT PRIMARY KEY,
+               since_ns INTEGER NOT NULL
+           ) STRICT""",
+    ), add_columns=(("sessions", "method", "TEXT NOT NULL DEFAULT 'password_totp'"),)),
 )
 
 CORE: tuple[Migration, ...] = (
@@ -315,6 +341,9 @@ def migrate(conn: sqlite3.Connection, kind: DbKind, *, migrations: tuple[Migrati
             m = migs[have]
             for stmt in m.statements:
                 conn.execute(stmt)
+            for table, column, decl in m.add_columns:
+                if column not in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
             conn.execute("INSERT INTO schema_version (version, name, applied_ns, compat_back_to) "
                          "VALUES (?, ?, ?, ?)", (m.version, m.name, now_ns(), compat_back_to(migs, m.version)))
             conn.execute(f"PRAGMA user_version={int(m.version)}")

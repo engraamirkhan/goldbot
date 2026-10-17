@@ -78,7 +78,7 @@ const TRADES: TradesSummary[] = [{
 }];
 
 function renderProgress(role: apiModule.Role = "owner", props: Parameters<typeof Progress>[0] = {}) {
-  apiModule.setUser({ email: "o@x.io", role });
+  apiModule.setUser({ email: "o@x.io", role, signed_in_with: "password_totp" });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return { qc, ...render(<QueryClientProvider client={qc}><Progress {...props} /></QueryClientProvider>) };
 }

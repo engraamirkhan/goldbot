@@ -56,6 +56,18 @@
   of the account (a wrong code burns the link, so a stolen link gets one guess, and that guess counts towards the
   sign-in lockout); an unknown or expired token counts against the client IP only, so garbage tokens cannot lock the
   owner out. The link carries the token in the URL fragment (`#signin=`), so it is never in a log or a Referer.
+* Emailed sign-in code (owner only; ADR 0028 supersedes ADR 0013's "the authenticator is still needed" for this path):
+  password + a 6-digit code sent to `auth.owner_email` signs the owner in WITHOUT the authenticator, only while mail
+  is ready. Accepted trade-off: password + mailbox can view, approve/reject and halt (the RiskGate still checks every
+  order), but cannot keep access: the session records `method = email_code`, and invite, reset link, role change,
+  disable, enable and revoke-sessions then need the authenticator or a recovery code (`verify_stepup`); re-arm, auto
+  mode, password change and new recovery codes ask for the authenticator as before. The request answers the same for
+  every input (scrypt always runs; a decoy challenge for anything else); the code comes from `secrets.randbelow`, is
+  stored only as HMAC-SHA-256(keyring key, challenge|code), works once for 10 minutes, 3 wrong tries burn it, only
+  the newest works, and it is never logged, audited or put in a URL. Mail shares the email link's 3-an-hour limit per
+  address and per client IP. Three burned codes or one sign-in lockout in 24 h suspend email codes until the next
+  password + authenticator sign-in (one Telegram notice). Every email-code sign-in sends the owner a Telegram notice.
+  Email never resets the password.
 * Audit: every login, failed login, invite, role change, password or authenticator change and decision is appended
   to the append-only `audit` table.
 
@@ -82,7 +94,7 @@ from typing import Any, NoReturn
 
 from pydantic import Field
 
-from goldbot.api.schema import Role
+from goldbot.api.schema import Role, SessionMethod
 from goldbot.base import FrozenRecord, Record
 from goldbot.db import Database, RecordRepo, StateDbError, db_path
 
@@ -101,6 +113,14 @@ EMAIL_LINK_TTL_S, EMAIL_LINK_PER_HOUR, EMAIL_LINK_WINDOW_S = 900, 3, 3600
 EMAIL_LINK_REFUSED = "sign-in link invalid or expired, or wrong authenticator code"
 EMAIL_LINK_ABUSE_WARN = 3                # owner-address requests refused by the hourly limit in 24 h -> health warn
 RECOVERY_CODES = 10
+# emailed sign-in codes (BACKLOG 77, ADR 0028; docs/ux/sign-in-email-code.md security conditions 1-11)
+EMAIL_CODE_TTL_S, EMAIL_CODE_TRIES, RESEND_AFTER_S = 600, 3, 60
+EMAIL_CODE_KEEP_S = 3600                 # a burned or expired challenge stays findable by Resend this long
+EMAIL_CODE_BURNS, EMAIL_CODE_SUSPEND_WINDOW_S = 3, 86400     # 3 burned challenges in 24 h suspend email codes
+EMAIL_CODE_KEY = "email-code-hmac-key"   # the keyring entry of the codes' HMAC key (32 random bytes, hex)
+EMAIL_CODE_REFUSED = "that code did not work, or it has expired or was already used"
+SESSION_METHODS: tuple[SessionMethod, ...] = ("password_totp", "email_link", "email_code", "recovery")
+_NS = 10**9
 
 
 # ----------------------------------------------------------------------------- TOTP (RFC 6238)
@@ -176,6 +196,58 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def _secret_get(key: str) -> str | None:
+    from goldbot.ops.accounts import get_secret
+    return get_secret(key)
+
+
+def _secret_set(key: str, value: str) -> None:
+    from goldbot.ops.accounts import set_secret
+    set_secret(key, value)
+
+
+_KEY_CACHE: dict[str, bytes] = {}
+
+
+def email_code_key() -> bytes | None:
+    """The HMAC key of the emailed codes (security condition 4): 32 bytes in the OS keyring under `email-code-hmac-key`
+    (goldbot.ops.accounts), never in aux.db or a backup. Created on first use, read back (an unwritable keyring stays
+    off; the value read back, not the one written, is used, so a racing writer cannot leave two keys), then cached
+    in this process. The API runs as ONE process (`uvicorn.run(create_app(...))` takes an app object, which uvicorn
+    cannot fork into workers), so one cache serves every request. An unreadable keyring or a stored value that is not 32 bytes of hex is None:
+    email codes are off (fail closed) and the stored value is never overwritten. Rotate with
+    `python -m goldbot.ops.accounts set email-code-hmac-key` and restart the API; open codes stop working."""
+    cached = _KEY_CACHE.get(EMAIL_CODE_KEY)
+    if cached is not None:
+        return cached
+    try:
+        value = _secret_get(EMAIL_CODE_KEY)
+        if value is None:
+            _secret_set(EMAIL_CODE_KEY, secrets.token_hex(32))
+            value = _secret_get(EMAIL_CODE_KEY)
+        raw = bytes.fromhex(value or "")
+    except Exception as exc:                # noqa: BLE001 - the type only; an unreadable key means codes are off
+        log.warning("email codes off: %s is unreadable (%s)", EMAIL_CODE_KEY, type(exc).__name__)
+        return None
+    if len(raw) != 32:
+        log.warning("email codes off: %s is missing or not 32 bytes of hex", EMAIL_CODE_KEY)
+        return None
+    _KEY_CACHE[EMAIL_CODE_KEY] = raw
+    return raw
+
+
+def _code_mac(key: bytes, challenge: str, code: str) -> str:
+    """HMAC-SHA-256 over challenge|code (condition 5): a code is worthless for any other challenge, and a copy of
+    aux.db without the keyring key cannot be brute-forced over the million possible codes."""
+    return hmac.new(key, f"{challenge}|{code}".encode(), hashlib.sha256).hexdigest()
+
+
+def need_stepup(method: str | None) -> bool:
+    """A session opened with password + emailed code needs the authenticator (or a recovery code) again for the owner's
+    admin actions (security ruling 2); every other sign-in method already proved it."""
+    return method == "email_code"
+
+
 def _new_recovery_code() -> str:
     raw = base64.b32encode(secrets.token_bytes(10)).decode()          # 80 bits, 16 characters
     return "-".join(raw[i:i + 4] for i in range(0, 16, 4)).lower()
@@ -216,6 +288,14 @@ class EmailLink(Record):
     token_hash: str
     email: str
     expires: float
+
+
+class EmailCodeIssue(FrozenRecord):
+    """What a code request or resend answers: the challenge (a decoy with no row when nothing was sent), the code to
+    mail (None when nothing is sent; never in a repr, so never in a log line) and when the screen may resend."""
+    challenge: str = Field(repr=False)
+    code: str | None = Field(default=None, repr=False)
+    resend_after_s: int = RESEND_AFTER_S
 
 
 class Enrolment(Record):
@@ -515,12 +595,17 @@ class AuthStore:
             locked = (prev >= LOCKOUT_FAILURES or (code and n(f"email:{email}") >= LOCKOUT_FAILURES)
                       or (ip is not None and n(f"ip:{ip}") >= IP_LOCKOUT_FAILURES))
             rows: list[int] = []
+            suspended = False
             if locked:
                 _audit(conn, locked_event, email=email, **({"ip": ip} if ip else {}))
+                if not code and prev >= LOCKOUT_FAILURES:
+                    suspended = self._suspend_email_codes(conn, email, "sign-in lockout")
             else:
                 for k in [key] + ([f"ip:{ip}"] if ip else []):
                     cur = conn.execute("INSERT INTO auth_failures (key, ts_ns) VALUES (?, ?)", (k, now))
                     rows.append(int(cur.lastrowid or 0))
+        if suspended:
+            self._suspension_notice("the sign-in lockout")
         if locked:
             raise PermissionError("too many attempts; wait 15 minutes")
         return _Reservation(key=key, rows=rows, prev=prev, new=prev + 1)
@@ -540,7 +625,53 @@ class AuthStore:
     def _fail(self, email: str, event: str, ip: str | None = None) -> NoReturn:
         """A reserved attempt failed: its rows stay counted; audit it and refuse with one message for every cause."""
         self.audit(event, email=email, **({"ip": ip} if ip else {}))
+        self._suspend_if_locked(email)
         raise PermissionError("invalid credentials")
+
+    # ------------------------------------------------------------------ email-code suspension (security condition 3)
+    def _suspend_email_codes(self, conn: sqlite3.Connection, email: str, reason: str) -> bool:
+        """Inside a write transaction: suspend the owner's email codes until the next password + authenticator
+        sign-in, deleting any open code. True only when this call suspended them (the caller sends the one notice)."""
+        if email != self.owner_email:
+            return False
+        if conn.execute("INSERT OR IGNORE INTO auth_suspensions (email, since_ns) VALUES (?, ?)",
+                        (email, time.time_ns())).rowcount != 1:
+            return False
+        conn.execute("DELETE FROM email_codes WHERE email = ?", (email,))
+        _audit(conn, "email_code_suspended", email=email, reason=reason)
+        return True
+
+    def _suspend_if_locked(self, email: str) -> None:
+        """After a failure counted under `email:<owner>`: a sign-in lockout (LOCKOUT_FAILURES in the window) suspends
+        email codes."""
+        if email != self.owner_email:
+            return
+        with self.db.write() as conn:
+            n = int(conn.execute("SELECT COUNT(*) FROM auth_failures WHERE key = ?", (f"email:{email}",)).fetchone()[0])
+            new = n >= LOCKOUT_FAILURES and self._suspend_email_codes(conn, email, "sign-in lockout")
+        if new:
+            self._suspension_notice("the sign-in lockout")
+
+    def _burn_suspends(self, conn: sqlite3.Connection, email: str) -> bool:
+        """Inside the burn's write transaction: EMAIL_CODE_BURNS burned challenges within 24 h (counted since the last
+        resume) suspend email codes. True when this call suspended them."""
+        last = conn.execute("SELECT COALESCE(MAX(id), 0) FROM audit WHERE event = 'email_code_resumed' AND actor = ?",
+                            (email,)).fetchone()[0]
+        since = time.time_ns() - EMAIL_CODE_SUSPEND_WINDOW_S * _NS
+        n = int(conn.execute("SELECT COUNT(*) FROM audit WHERE event = 'email_code_burned' AND actor = ? AND id > ? "
+                             "AND ts_ns > ?", (email, last, since)).fetchone()[0])
+        return n >= EMAIL_CODE_BURNS and self._suspend_email_codes(conn, email, f"{n} burned codes in 24 h")
+
+    def _suspension_notice(self, why: str) -> None:
+        self._notify_owner(f"Email codes are suspended for the owner account after {why} (at "
+                           f"{time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}). Sign-in with your password and "
+                           f"authenticator code still works and switches email codes back on. If this was not you, "
+                           f"someone may know your password: change it, check the audit trail, and on the server run "
+                           f"`python -m goldbot.ops.run revoke-sessions` to sign everyone out.")
+
+    @staticmethod
+    def _suspended(conn: sqlite3.Connection, email: str) -> bool:
+        return conn.execute("SELECT 1 FROM auth_suspensions WHERE email = ?", (email,)).fetchone() is not None
 
     def verify_code_guarded(self, code: str, action: str, *, email: str | None = None, ip: str | None = None) -> bool:
         """An authenticator code for an authority-raising action ("rearm", "mode"), counted under `code:<email>`
@@ -572,7 +703,8 @@ class AuthStore:
             if last is not None and now - int(last) < LOCK_NOTICE_EVERY_S * 10**9:
                 return
             _audit(conn, "code_lock_notice", action=action)
-        what = {"mode": "switching to auto mode", "rearm": "re-arming"}.get(action, action)
+        what = {"mode": "switching to auto mode", "rearm": "re-arming",
+                "stepup": "user management after an email-code sign-in"}.get(action, action)
         mins = LOCKOUT_WINDOW_S // 60
         self._notify_owner(f"{LOCKOUT_FAILURES} wrong authenticator codes for {what} within {mins} minutes (at "
                            f"{time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}); re-arm and auto mode are locked "
@@ -648,12 +780,14 @@ class AuthStore:
         return inv.email, totp_uri(secret, inv.email)
 
     # ------------------------------------------------------------------ login and sessions
-    def _new_session(self, conn: sqlite3.Connection, email: str, ttl_h: int = SESSION_TTL_H) -> str:
+    def _new_session(self, conn: sqlite3.Connection, email: str, ttl_h: int, method: SessionMethod) -> str:
+        """A new session that records how it signed in (`method`, always named by the caller): the step-up rule reads
+        only this record. The column's default exists only so a rollback release's INSERT still works."""
         tok = secrets.token_urlsafe(32)
         now = time.time_ns()
         conn.execute("DELETE FROM sessions WHERE expires_ns < ?", (now,))
-        conn.execute("INSERT INTO sessions (token_sha256, email, expires_ns) VALUES (?, ?, ?)",
-                     (_token_hash(tok), email, now + ttl_h * 3600 * 10**9))
+        conn.execute("INSERT INTO sessions (token_sha256, email, expires_ns, method) VALUES (?, ?, ?, ?)",
+                     (_token_hash(tok), email, now + ttl_h * 3600 * 10**9, method))
         cur = _USERS.get(conn, email)
         if cur is not None:
             cur.last_login = time.time()
@@ -671,9 +805,11 @@ class AuthStore:
             with self.db.write() as conn:
                 cur = _USERS.get(conn, email)
                 if cur is not None and cur.enabled and self._spend_totp(conn, cur, code):
-                    tok = self._new_session(conn, email, ttl_h)
+                    tok = self._new_session(conn, email, ttl_h, "password_totp")
                     self._release(conn, r)
                     _audit(conn, "login", email=email)
+                    if conn.execute("DELETE FROM auth_suspensions WHERE email = ?", (email,)).rowcount:
+                        _audit(conn, "email_code_resumed", email=email)     # condition 3: the authenticator resumes
         if tok is None:
             self._fail(email, "login_failed", ip)
         return tok
@@ -695,8 +831,25 @@ class AuthStore:
         return u if u.enabled else None
 
     def logout(self, token: str) -> None:
+        """Ends this session and deletes the account's open email codes (condition 9: no replay after sign-out)."""
+        th = _token_hash(token)
         with self.db.write() as conn:
-            conn.execute("DELETE FROM sessions WHERE token_sha256 = ?", (_token_hash(token),))
+            row = conn.execute("SELECT email FROM sessions WHERE token_sha256 = ?", (th,)).fetchone()
+            conn.execute("DELETE FROM sessions WHERE token_sha256 = ?", (th,))
+            if row is not None:
+                conn.execute("DELETE FROM email_codes WHERE email = ?", (row[0],))
+
+    def session_method(self, token: str | None) -> SessionMethod | None:
+        """How the session signed in, from its stored record only (condition 2); None for no session. A value this
+        code does not know reads as `email_code`, the method that asks for the most (fails closed)."""
+        if not token:
+            return None
+        with self.db.connection() as conn:
+            row = conn.execute("SELECT method FROM sessions WHERE token_sha256 = ?", (_token_hash(token),)).fetchone()
+        if row is None:
+            return None
+        known: dict[str, SessionMethod] = {m: m for m in SESSION_METHODS}
+        return known.get(str(row[0]), "email_code")
 
     # ------------------------------------------------------------------ passwords
     def change_password(self, token: str, current_password: str, code: str, new_password: str) -> None:
@@ -725,6 +878,7 @@ class AuthStore:
                 conn.execute("DELETE FROM sessions WHERE email = ? AND token_sha256 != ?", (u.email, _token_hash(token)))
                 conn.execute("DELETE FROM password_resets WHERE email = ?", (u.email,))
                 conn.execute("DELETE FROM email_links WHERE email = ?", (u.email,))
+                conn.execute("DELETE FROM email_codes WHERE email = ?", (u.email,))
                 self._release(conn, r)
                 _audit(conn, "password_change", email=u.email)
         if not ok:
@@ -770,6 +924,7 @@ class AuthStore:
                 conn.execute("DELETE FROM sessions WHERE email = ?", (email,))
                 conn.execute("DELETE FROM password_resets WHERE email = ?", (email,))
                 conn.execute("DELETE FROM email_links WHERE email = ?", (email,))
+                conn.execute("DELETE FROM email_codes WHERE email = ?", (email,))
                 self._release(conn, r)
                 if owner:
                     left = int(conn.execute("SELECT COUNT(*) FROM recovery_codes WHERE email = ? AND used_ns IS NULL",
@@ -901,7 +1056,8 @@ class AuthStore:
                 conn.execute("DELETE FROM sessions WHERE email = ?", (email,))
                 conn.execute("DELETE FROM totp_steps WHERE email = ?", (email,))         # a new authenticator
                 conn.execute("DELETE FROM email_links WHERE email = ?", (email,))
-                tok = self._new_session(conn, email)
+                conn.execute("DELETE FROM email_codes WHERE email = ?", (email,))
+                tok = self._new_session(conn, email, SESSION_TTL_H, "recovery")
                 self._release(conn, r)
                 left = int(conn.execute("SELECT COUNT(*) FROM recovery_codes WHERE email = ? AND used_ns IS NULL",
                                         (email,)).fetchone()[0])
@@ -979,7 +1135,7 @@ class AuthStore:
                 conn.execute("DELETE FROM email_links WHERE email = ?", (email,))     # single use, and the others
                 cur = _USERS.get(conn, email)
                 if self.is_owner(cur) and cur is not None and self._spend_totp(conn, cur, code):
-                    tok = self._new_session(conn, email, ttl_h)
+                    tok = self._new_session(conn, email, ttl_h, "email_link")
                     self._release(conn, r)
                     _audit(conn, "email_link_login", email=email, **({"ip": ip} if ip else {}))
         if tok is None:
@@ -993,6 +1149,214 @@ class AuthStore:
                            f"on the server run `python -m goldbot.ops.run revoke-sessions`, set auth.mail.enabled to "
                            f"false, then change your password and check the audit trail.")
         return tok
+
+    # ------------------------------------------------------------------ owner sign-in with an emailed code (ADR 0028)
+    def email_code_available(self) -> bool:
+        """Email codes can be offered (with mail ready, the caller's half): the owner account exists and the HMAC key
+        is readable from the keyring (created on first use)."""
+        return (self.owner_email is not None and self.is_owner(self.get_user(self.owner_email))
+                and email_code_key() is not None)
+
+    @staticmethod
+    def _send_wait(conn: sqlite3.Connection, keys: list[str], now: int, *, pace: bool) -> int:
+        """Seconds before another mail may go to these keys: the shared hourly limit (EMAIL_LINK_PER_HOUR per address
+        and per client IP, the same rows as the email link: ruling 5) and, with `pace`, RESEND_AFTER_S since the last
+        request. 0 when a mail may go now. Prunes the hour's rows."""
+        conn.execute("DELETE FROM email_link_requests WHERE ts_ns <= ?", (now - EMAIL_LINK_WINDOW_S * _NS,))
+        wait = 0
+        for k in keys:
+            n, oldest, newest = conn.execute("SELECT COUNT(*), MIN(ts_ns), MAX(ts_ns) FROM email_link_requests "
+                                             "WHERE key = ?", (k,)).fetchone()
+            if n >= EMAIL_LINK_PER_HOUR:
+                wait = max(wait, -(-(int(oldest) + EMAIL_LINK_WINDOW_S * _NS - now) // _NS))
+            if pace and newest is not None:
+                wait = max(wait, -(-(int(newest) + RESEND_AFTER_S * _NS - now) // _NS))
+        return max(wait, 0)
+
+    @staticmethod
+    def _issue_code(conn: sqlite3.Connection, email: str, challenge: str, key: bytes, now: int) -> str:
+        """Inside a write transaction: a new 6-digit code from the CSPRNG, zero-padded, stored only as its
+        challenge-bound HMAC. Every older code of the account goes (only the newest works), as do stale rows."""
+        conn.execute("DELETE FROM email_codes WHERE email = ? OR created_ns <= ?", (email, now - EMAIL_CODE_KEEP_S * _NS))
+        code = f"{secrets.randbelow(10**6):06d}"
+        conn.execute("INSERT INTO email_codes (challenge_sha256, email, code_hmac, expires_ns, tries, consumed, "
+                     "created_ns) VALUES (?, ?, ?, ?, 0, 0, ?)",
+                     (_token_hash(challenge), email, _code_mac(key, challenge, code), now + EMAIL_CODE_TTL_S * _NS, now))
+        return code
+
+    def request_email_code(self, email: str, password: str, ip: str | None = None, *, enabled: bool) -> EmailCodeIssue:
+        """Email + password -> a challenge, the same shape for every input (condition 6); a code to mail only when mail
+        is ready (`enabled`), the key is readable, the address is `auth.owner_email`, that account is the enabled owner,
+        the password is right and email codes are not suspended. scrypt runs on every request (against a dummy hash
+        for an unknown address) and a decoy challenge is as random as a real one, with no row. Raises PermissionError
+        only while the sign-in lockout holds, as sign-in does. The attempt is counted under `email:<e>` before the
+        check and released when the password is right (earlier failures stay). Every request counts towards the hourly
+        mail limit shared with the email link. Audited without the code or challenge: `email_code_sent`,
+        `email_code_refused`, `email_code_rate_limited`, `email_code_unavailable`, `email_code_suspended_refused`."""
+        norm = _norm_email(email) or ""
+        challenge = secrets.token_urlsafe(32)
+        r = self._reserve(norm, "email_code_locked", ip)
+        u = self.get_user(norm) if norm else None
+        pw_ok = verify_password(password, u.password_hash if u is not None else _dummy_hash()) and u is not None
+        if pw_ok:
+            self._unreserve(r)
+        else:
+            self._suspend_if_locked(norm)
+        key = email_code_key() if enabled else None
+        now = time.time_ns()
+        keys = [f"email:{norm}"] + ([f"ip:{ip}"] if ip else [])
+        where = {"email": norm, **({"ip": ip} if ip else {})}
+        code: str | None = None
+        with self.db.write() as conn:
+            wait = self._send_wait(conn, keys, now, pace=False)
+            if wait:
+                _audit(conn, "email_code_rate_limited", **where)
+                return EmailCodeIssue(challenge=challenge, resend_after_s=wait)
+            conn.executemany("INSERT INTO email_link_requests (key, ts_ns) VALUES (?, ?)", [(k, now) for k in keys])
+            cur = _USERS.get(conn, norm) if norm else None
+            if not enabled or key is None:
+                _audit(conn, "email_code_unavailable", reason="mail not ready" if not enabled else "no key", **where)
+            elif not pw_ok or self.owner_email is None or norm != self.owner_email or not self.is_owner(cur):
+                _audit(conn, "email_code_refused", reason="wrong password" if not pw_ok else "not the owner", **where)
+            elif self._suspended(conn, norm):
+                _audit(conn, "email_code_suspended_refused", **where)
+            else:
+                code = self._issue_code(conn, norm, challenge, key, now)
+                _audit(conn, "email_code_sent", **where)
+        return EmailCodeIssue(challenge=challenge, code=code)
+
+    def resend_email_code(self, challenge: str, ip: str | None = None, *, enabled: bool) -> EmailCodeIssue:
+        """A new code for a challenge this browser holds (live, expired or burned within the hour): the old code stops
+        working (only the newest works). The visible reply depends only on the client IP and the challenge (security
+        review 1 of 68a8cfc): while this IP is paced (RESEND_AFTER_S) or over the shared hourly limit, the same
+        challenge comes back with the wait. Otherwise a new challenge with the standard wait, whether a code was sent
+        or not: a real challenge whose ADDRESS is paced or over its limit sends nothing, silently (audited), and
+        answers exactly as an unknown challenge (a decoy) does, so a resend from another network cannot tell a right
+        password from a wrong one without the mailbox."""
+        ch = _token_hash(challenge)
+        key = email_code_key() if enabled else None
+        now = time.time_ns()
+        code: str | None = None
+        new = secrets.token_urlsafe(32)
+        with self.db.write() as conn:
+            row = conn.execute("SELECT email FROM email_codes WHERE challenge_sha256 = ? AND created_ns > ?",
+                               (ch, now - EMAIL_CODE_KEEP_S * _NS)).fetchone()
+            email: str | None = None if row is None else str(row[0])
+            ip_keys = [f"ip:{ip}"] if ip else []
+            where = {**({"email": email} if email else {}), **({"ip": ip} if ip else {})}
+            wait = self._send_wait(conn, ip_keys, now, pace=True)
+            if wait:
+                _audit(conn, "email_code_rate_limited", resend=True, **where)
+                return EmailCodeIssue(challenge=challenge, resend_after_s=wait)
+            conn.executemany("INSERT INTO email_link_requests (key, ts_ns) VALUES (?, ?)", [(k, now) for k in ip_keys])
+            if email is not None and self._send_wait(conn, [f"email:{email}"], now, pace=True):
+                _audit(conn, "email_code_rate_limited", resend=True, silent=True, **where)
+                return EmailCodeIssue(challenge=new)                  # answered as a decoy: nothing sent
+            if email is not None:
+                conn.execute("INSERT INTO email_link_requests (key, ts_ns) VALUES (?, ?)", (f"email:{email}", now))
+            cur = _USERS.get(conn, email) if email else None
+            if email is None:
+                _audit(conn, "email_code_refused", reason="unknown challenge", resend=True, **where)
+            elif not enabled or key is None:
+                _audit(conn, "email_code_unavailable", resend=True, **where)
+            elif email != self.owner_email or not self.is_owner(cur):
+                _audit(conn, "email_code_refused", reason="not the owner", resend=True, **where)
+            elif self._suspended(conn, email):
+                _audit(conn, "email_code_suspended_refused", resend=True, **where)
+            else:
+                code = self._issue_code(conn, email, new, key, now)
+                _audit(conn, "email_code_sent", resend=True, **where)
+        return EmailCodeIssue(challenge=new, code=code)
+
+    def verify_email_code(self, challenge: str, code: str, ttl_h: int = SESSION_TTL_H, ip: str | None = None) -> str:
+        """A session for the owner (method `email_code`) from a live challenge and its code, compared as HMACs with
+        `compare_digest`. The challenge is deleted on success (single use). A wrong code counts under `email:<owner>`
+        like a failed sign-in; the EMAIL_CODE_TRIES-th wrong code burns the challenge, and EMAIL_CODE_BURNS burns in
+        24 h suspend email codes. An unknown, expired, used, burned or decoy challenge counts against the client IP
+        only. One message for every refusal (EMAIL_CODE_REFUSED), so a decoy and a wrong code look the same. Every
+        success queues the owner a Telegram notice (condition 10: the attacker may hold the mailbox)."""
+        ch = _token_hash(challenge)
+        with self.db.connection() as conn:
+            row0 = conn.execute("SELECT email FROM email_codes WHERE challenge_sha256 = ? AND consumed = 0 "
+                                "AND expires_ns > ?", (ch, time.time_ns())).fetchone()
+        if row0 is None or row0[0] != self.owner_email:
+            try:
+                self._count_ip_failure(ip, "email_code_locked")
+            except PermissionError:
+                raise PermissionError(EMAIL_CODE_REFUSED) from None
+            self.audit("email_code_failed", reason="unknown, expired, used or burned challenge",
+                       **({"ip": ip} if ip else {}))
+            raise PermissionError(EMAIL_CODE_REFUSED)
+        email = str(row0[0])
+        try:
+            r = self._reserve(email, "email_code_locked", ip)
+        except PermissionError:             # locked: refused exactly as a decoy is (security review 4 of 68a8cfc)
+            raise PermissionError(EMAIL_CODE_REFUSED) from None
+        key = email_code_key()
+        digits = "".join(code.split())
+        tok: str | None = None
+        burned_suspends = False
+        tries_left = 0
+        with self.db.write() as conn:
+            row = conn.execute("SELECT code_hmac, tries FROM email_codes WHERE challenge_sha256 = ? AND consumed = 0 "
+                               "AND expires_ns > ?", (ch, time.time_ns())).fetchone()
+            if row is not None:
+                cur = _USERS.get(conn, email)
+                ok = key is not None and hmac.compare_digest(str(row[0]), _code_mac(key, challenge, digits))
+                if ok and self.is_owner(cur):
+                    conn.execute("DELETE FROM email_codes WHERE email = ?", (email,))
+                    tok = self._new_session(conn, email, ttl_h, "email_code")
+                    self._release(conn, r)
+                    _audit(conn, "email_code_login", email=email, **({"ip": ip} if ip else {}))
+                else:
+                    tries = int(row[1]) + 1
+                    tries_left = max(EMAIL_CODE_TRIES - tries, 0)
+                    conn.execute("UPDATE email_codes SET tries = ?, consumed = ? WHERE challenge_sha256 = ?",
+                                 (tries, int(tries_left == 0), ch))
+                    if tries_left == 0:
+                        _audit(conn, "email_code_burned", email=email, **({"ip": ip} if ip else {}))
+                        burned_suspends = self._burn_suspends(conn, email)
+        if tok is None:
+            self.audit("email_code_failed", email=email, tries_left=tries_left, **({"ip": ip} if ip else {}))
+            if burned_suspends:
+                self._suspension_notice(f"{EMAIL_CODE_BURNS} codes were burned by wrong guesses within 24 hours")
+            self._suspend_if_locked(email)
+            raise PermissionError(EMAIL_CODE_REFUSED)
+        self._notify_owner(f"Signed in to the dashboard as the owner with the password and an emailed code at "
+                           f"{time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}, from {coarse_ip(ip)}. If this was "
+                           f"not you, someone has your password and your mailbox: on the server run `python -m "
+                           f"goldbot.ops.run revoke-sessions`, set auth.mail.enabled to false, then change your "
+                           f"password and your email password and check the audit trail.")
+        return tok
+
+    def verify_stepup(self, email: str, code: str, ip: str | None = None) -> bool:
+        """The step-up after an email-code sign-in (security ruling 2): a current authenticator code (spent once) or,
+        failing that, one of the owner's recovery codes (spent), counted under `code:<email>` like re-arm and auto
+        mode (`_reserve`, atomic): PermissionError while locked (`stepup_locked`), a wrong code stays counted
+        (`stepup_failed`), a right one clears the code counter (`stepup`). An empty code is refused uncounted."""
+        target = _norm_email(email)
+        if target is None or not code.strip():
+            return False
+        r = self._reserve(target, "stepup_locked", ip, code=True)
+        how: str | None = None
+        with self.db.write() as conn:
+            u = _USERS.get(conn, target)
+            if self.is_owner(u) and u is not None:
+                if self._spend_totp(conn, u, code):
+                    how = "authenticator"
+                elif conn.execute("UPDATE recovery_codes SET used_ns = ? WHERE code_sha256 = ? AND email = ? "
+                                  "AND used_ns IS NULL",
+                                  (time.time_ns(), _token_hash(_norm_code(code)), target)).rowcount == 1:
+                    how = "recovery_code"
+            if how is not None:
+                self._release(conn, r)
+                _audit(conn, "stepup", email=target, how=how, **({"ip": ip} if ip else {}))
+        if how is None:
+            self.audit("stepup_failed", email=target, **({"ip": ip} if ip else {}))
+            if r.prev < LOCKOUT_FAILURES <= r.new:
+                self._lock_notice("stepup")
+            return False
+        return True
 
     # ------------------------------------------------------------------ admin (owner only)
     def _require(self, email: str, role: Role) -> User:
@@ -1056,6 +1420,7 @@ class AuthStore:
                 raise KeyError(email)
             n = conn.execute("DELETE FROM sessions WHERE email = ?", (email.lower(),)).rowcount
             conn.execute("DELETE FROM email_links WHERE email = ?", (email.lower(),))
+            conn.execute("DELETE FROM email_codes WHERE email = ?", (email.lower(),))
             _audit(conn, "revoke_sessions", by=by_email, email=email, sessions=n)
         return int(n)
 
@@ -1095,13 +1460,18 @@ def revoke_sessions_cli(argv: list[str]) -> int:
     with db.write() as conn:
         n = int(conn.execute("DELETE FROM sessions").rowcount)
         links = int(conn.execute("DELETE FROM email_links").rowcount)      # same transaction (security review L2)
-        _audit(conn, "revoke_all_sessions", by="server:revoke-sessions", sessions=n, email_links=links)
+        has_codes = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'email_codes'").fetchone()
+        codes = int(conn.execute("DELETE FROM email_codes").rowcount) if has_codes else 0     # v7 file: none yet
+        _audit(conn, "revoke_all_sessions", by="server:revoke-sessions", sessions=n, email_links=links,
+               email_codes=codes)
     print(f"revoked {n} session{'s' if n != 1 else ''} and {links} email sign-in link{'s' if links != 1 else ''} "
           f"in {path}; every account must sign in again")
     return 0
 
 
-__all__ = ["AuthStore", "User", "Invite", "PasswordReset", "EmailLink", "EMAIL_LINK_PER_HOUR", "EMAIL_LINK_TTL_S",
+__all__ = ["AuthStore", "User", "Invite", "PasswordReset", "EmailLink", "EmailCodeIssue", "EMAIL_CODE_KEY",
+           "EMAIL_CODE_TTL_S", "EMAIL_CODE_TRIES", "EMAIL_CODE_REFUSED", "RESEND_AFTER_S", "email_code_key", "need_stepup",
+           "EMAIL_LINK_PER_HOUR", "EMAIL_LINK_TTL_S",
            "EMAIL_LINK_REFUSED", "Enrolment", "RecoveryLogin", "import_users", "import_users_json",
            "import_audit_jsonl", "owner_conflict", "owner_health_note", "coarse_ip", "email_link_health_note", "check_password_policy", "has_role",
            "totp_code", "totp_step", "totp_verify", "new_totp_secret", "totp_uri", "ROLES", "GRANTABLE", "env_setup_code_hint", "os"]

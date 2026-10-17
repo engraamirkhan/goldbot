@@ -101,10 +101,13 @@ sudo -u mt5 mkdir -p "$ROOT/state" "$ROOT/logs"
 sudo -u mt5 chmod 700 "$ROOT/state"
 
 install -m 644 "$OPS"/systemd/goldbot-xvfb.service "$OPS"/systemd/goldbot-bridge@.service \
+  "$OPS"/systemd/goldbot-mt5-terminal@.service \
   "$OPS"/systemd/goldbot-vnc.service "$OPS"/systemd/goldbot-bridge-watchdog@.service \
   "$OPS"/systemd/goldbot-bridge-watchdog@.timer /etc/systemd/system/
 # root-run, so root's copy from its own clone (never the mt5-writable tree): restarts a bridge stuck in a terminal call
+# and a terminal that stays down. The probe it runs as nobody (it reads the mt5-written /health) is root-owned too.
 install -m 755 -o root -g root "$OPS/goldbot-bridge-watchdog.sh" /usr/local/sbin/goldbot-bridge-watchdog
+install -m 755 -o root -g root "$OPS/goldbot-bridge-probe.sh" /usr/local/sbin/goldbot-bridge-probe
 systemctl daemon-reload
 systemctl enable --now goldbot-xvfb
 
@@ -167,6 +170,9 @@ cd /opt/goldbot && exec sudo -u mt5 -H env DISPLAY=:99 WINEDEBUG=-all PYTHON_KEY
   wine /home/mt5/.wine/drive_c/users/mt5/AppData/Local/Programs/Python/Python311/python.exe -m "goldbot.ops.$mod" "$@"
 WRAP
 chmod 755 /usr/local/bin/goldbot-mt5
+# the terminal unit is the only launcher of the terminal (the bridge Requires= it); enabled, not started: the owner
+# starts it for the first login over VNC (RUNBOOK 0.3)
+systemctl enable goldbot-mt5-terminal@icm-demo
 systemctl enable goldbot-bridge@icm-demo
 systemctl enable --now goldbot-bridge-watchdog@icm-demo.timer   # idle until the bridge has run 5 min
 
@@ -179,6 +185,7 @@ echo mt5 > /etc/goldbot/role
 install -m 755 -o root -g root "$OPS/goldbot-deploy.sh" /usr/local/sbin/goldbot-deploy
 # the MT5 box is updated by hand only (sudo goldbot-deploy latest): no deploy timer here
 
-echo "MT5 box installed. Next: log in to MT5 once over VNC, then bridge-serve (docs/RUNBOOK.md 0.3)."
+echo "MT5 box installed. Next: sudo systemctl start goldbot-mt5-terminal@icm-demo, log in to MT5 once over VNC, then"
+echo "bridge-serve (docs/RUNBOOK.md 0.3)."
 echo "The terminal has no IC Markets servers yet: log in through File > Open an Account > ICMarkets > Raw Trading Ltd,"
 echo "not File > Login (that never connects until the company is added)."

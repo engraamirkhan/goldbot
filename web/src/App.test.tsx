@@ -34,7 +34,7 @@ describe("App header", () => {
   afterEach(() => { vi.unstubAllGlobals(); apiModule.setToken(null); });
 
   it("shows the owner as 'Owner' with 'Signed in as' for screen readers, and never the email", () => {
-    apiModule.setUser({ email: "owner@example.com", role: "owner" });
+    apiModule.setUser({ email: "owner@example.com", role: "owner", signed_in_with: "password_totp" });
     renderApp();
     const banner = appBanner();
     expect(banner).toHaveTextContent("Owner");
@@ -45,7 +45,7 @@ describe("App header", () => {
   it.each([["approver", "Approver"], ["viewer", "Viewer"]] as const)(
     "shows the %s role as '%s' and never their email",
     (role, label) => {
-      apiModule.setUser({ email: "v@x.io", role });
+      apiModule.setUser({ email: "v@x.io", role, signed_in_with: "password_totp" });
       renderApp();
       const banner = appBanner();
       expect(banner).toHaveTextContent(`Signed in as ${label}`);
@@ -63,7 +63,7 @@ describe("App header", () => {
   });
 
   it("keeps the email out of the page title", () => {
-    apiModule.setUser({ email: "owner@example.com", role: "owner" });
+    apiModule.setUser({ email: "owner@example.com", role: "owner", signed_in_with: "password_totp" });
     renderApp();
     expect(document.title).not.toContain("@");
   });
@@ -80,7 +80,7 @@ describe("App when the session is gone server-side", () => {
         ? new Response(JSON.stringify({ needs_setup: false, email_link: false }), { status: 200, headers: { "content-type": "application/json" } })
         : new Response(JSON.stringify({ detail: "login required" }), { status: 401, headers: { "content-type": "application/json" } }))));
     apiModule.setToken("revoked-token");
-    apiModule.setUser({ email: "owner@example.com", role: "owner" });
+    apiModule.setUser({ email: "owner@example.com", role: "owner", signed_in_with: "password_totp" });
   });
   afterEach(() => { vi.unstubAllGlobals(); apiModule.setToken(null); });
 

@@ -101,7 +101,7 @@ describe("api client", () => {
   it("ranks roles owner > approver > viewer", async () => {
     const { hasRole, setUser } = await import("./api");
     expect(hasRole("viewer")).toBe(false);   // nobody signed in
-    setUser({ email: "a@x.io", role: "approver" });
+    setUser({ email: "a@x.io", role: "approver", signed_in_with: "password_totp" });
     expect(hasRole("viewer")).toBe(true);
     expect(hasRole("approver")).toBe(true);
     expect(hasRole("owner")).toBe(false);

@@ -34,16 +34,25 @@ from fastapi.staticfiles import StaticFiles
 
 from goldbot.api import entry_status, explain, progress
 from goldbot.api.auth import (
+    EMAIL_CODE_TTL_S,
     EMAIL_LINK_TTL_S,
     RESET_TTL_H,
     SESSION_TTL_H,
     AuthStore,
+    EmailCodeIssue,
     User,
     coarse_ip,
     env_setup_code_hint,
     has_role,
+    need_stepup,
 )
-from goldbot.api.mailer import Mailer, email_link_message, mailer_from_settings, sign_in_notice_message
+from goldbot.api.mailer import (
+    Mailer,
+    email_code_message,
+    email_link_message,
+    mailer_from_settings,
+    sign_in_notice_message,
+)
 from goldbot.api.schema import (
     AcceptRequest,
     AcceptResponse,
@@ -60,6 +69,10 @@ from goldbot.api.schema import (
     DecidedProposal,
     Decision,
     DecisionResult,
+    EmailCodeChallenge,
+    EmailCodeRequest,
+    EmailCodeResendRequest,
+    EmailCodeVerifyRequest,
     EmailLinkRedeemRequest,
     EmailLinkRequest,
     EmailLinkResponse,
@@ -99,6 +112,7 @@ from goldbot.api.schema import (
 )
 from goldbot.config import MailSettings
 from goldbot.data.timeutil import heartbeat_problem
+from goldbot.execution.not_confirmed import note as not_confirmed_note
 from goldbot.execution.not_placed import first_not_placed
 from goldbot.ops.account_view import LossBudget, loss_budget, margin_level_pct, milestones, proposal_budget
 from goldbot.telegram.approvals import Outcome, decision_channel
@@ -239,6 +253,29 @@ def _settings_mail() -> MailSettings:
 
 LOOPBACK = {"127.0.0.1", "::1"}
 CODES_LOCKED = "too many attempts: re-arm and auto mode are locked for 15 minutes; /halt still works"
+STEPUP_REQUIRED = "authenticator code required"
+STEPUP_LOCKED = "too many attempts: user management, re-arm and auto mode are locked for 15 minutes"
+
+
+def _settings_owner_tz() -> str:
+    """The owner's time zone for the emailed code's times (telegram.owner_tz); UTC when settings are unreadable."""
+    try:
+        from goldbot.config import load_settings
+        return load_settings().telegram.owner_tz
+    except Exception:                           # noqa: BLE001 - the mail still goes, with UTC times
+        return "UTC"
+
+
+def _local_and_utc(ts: float, tz_name: str) -> tuple[str, str]:
+    """('14:42 London time', '13:42 UTC') for the email copy; an unknown zone shows UTC only."""
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    utc = datetime.fromtimestamp(ts, timezone.utc)
+    try:
+        local = utc.astimezone(ZoneInfo(tz_name))
+        place = tz_name.rsplit("/", 1)[-1].replace("_", " ")
+    except (ZoneInfoNotFoundError, ValueError):
+        local, place = utc, "UTC"
+    return (f"{local:%H:%M} UTC" if place == "UTC" else f"{local:%H:%M} {place} time", f"{utc:%H:%M} UTC")
 
 
 def client_ip(request: Request) -> str | None:
@@ -284,11 +321,35 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
             subject, text = email_link_message(mail.dashboard_origin, token, EMAIL_LINK_TTL_S // 60)
             mail_owner(subject, text, "email sign-in link", "email_link_send_failed")
 
-    def send_sign_in_notice(ip: str | None) -> None:
-        """ADR 0013: every sign-in with an emailed link is also mailed to the owner (the Telegram notice is queued
-        by AuthStore.redeem_email_link). No token, only a coarse network hint."""
-        subject, text = sign_in_notice_message(time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()), coarse_ip(ip))
-        mail_owner(subject, text, "sign-in notice", "email_link_notice_failed")
+    def send_sign_in_notice(ip: str | None, method: str = "email_link") -> None:
+        """ADR 0013 and 0028: every sign-in with an emailed link or code is also mailed to the owner (the Telegram
+        notice is queued by AuthStore). No token or code, only a coarse network hint."""
+        subject, text = sign_in_notice_message(time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()), coarse_ip(ip),
+                                               method=method)
+        failed = "email_code_notice_failed" if method == "email_code" else "email_link_notice_failed"
+        mail_owner(subject, text, "sign-in notice", failed)
+
+    def send_email_code(code: str, ip: str | None) -> None:
+        """After the answer has gone (condition 6: a real send takes as long as a decoy). The body is never logged; a
+        failure anywhere, formatting included, is logged and audited by exception type only."""
+        try:
+            now = time.time()
+            tz = _settings_owner_tz()
+            expires_local, expires_utc = _local_and_utc(now + EMAIL_CODE_TTL_S, tz)
+            requested_local, _ = _local_and_utc(now, tz)
+            subject, text = email_code_message(code, expires_local, expires_utc, requested_local, coarse_ip(ip))
+        except Exception as exc:                # noqa: BLE001 - the caller already has its answer
+            log.warning("email sign-in code not sent: %s", type(exc).__name__)
+            st.auth.audit("email_code_send_failed", error=type(exc).__name__)
+            return
+        mail_owner(subject, text, "email sign-in code", "email_code_send_failed")
+
+    def challenge_answer(issue: EmailCodeIssue, ip: str | None, background: BackgroundTasks) -> EmailCodeChallenge:
+        """The same JSON for a real challenge and a decoy; the mail (if any) goes in the background, after it."""
+        if issue.code is not None:
+            background.add_task(send_email_code, issue.code, ip)
+        return EmailCodeChallenge(challenge=issue.challenge, expires_in_s=EMAIL_CODE_TTL_S,
+                                  resend_after_s=issue.resend_after_s)
     app = FastAPI(title="goldbot api", version="0.2")
     app.state.st = st
     hint = env_setup_code_hint(st.auth)
@@ -334,8 +395,9 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     # ------------------------------------------------------------- auth endpoints
     @app.get("/api/auth/state")
     def auth_state() -> AuthState:
+        ready = email_link_ready()
         return AuthState(needs_setup=st.auth.setup_code is not None, users=st.auth.user_count(),
-                         email_link=email_link_ready())
+                         email_link=ready, email_code=ready and st.auth.email_code_available())
 
     @app.post("/api/auth/setup")
     def setup(body: SetupRequest) -> SetupResponse:
@@ -379,7 +441,46 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         if u is None:
             raise HTTPException(403, "invalid credentials")
         background.add_task(send_sign_in_notice, ip)
-        return LoginResponse(token=tok, expires_in=SESSION_TTL_H * 3600, role=u.role, email=u.email)
+        return LoginResponse(token=tok, expires_in=SESSION_TTL_H * 3600, role=u.role, email=u.email,
+                             signed_in_with="email_link")
+
+    # ADR 0028: password + a 6-digit code by email signs the owner in without the authenticator, only while mail is
+    # ready; the same answer for every input; the session then needs a step-up for the owner's admin actions
+    @app.post("/api/auth/email-code")
+    def email_code(body: EmailCodeRequest, request: Request, background: BackgroundTasks) -> EmailCodeChallenge:
+        """Owner only. A challenge for every input (a decoy unless the password is right, the address is the owner's
+        and mail is ready); 403 only while the sign-in lockout holds, as for sign-in."""
+        ip = client_ip(request)
+        try:
+            issue = st.auth.request_email_code(body.email, body.password, ip=ip, enabled=email_link_ready())
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
+        return challenge_answer(issue, ip, background)
+
+    @app.post("/api/auth/email-code/resend")
+    def email_code_resend(body: EmailCodeResendRequest, request: Request,
+                          background: BackgroundTasks) -> EmailCodeChallenge:
+        """A new code for this challenge (only the newest works): not before resend_after_s; the same shape always."""
+        ip = client_ip(request)
+        issue = st.auth.resend_email_code(body.challenge, ip=ip, enabled=email_link_ready())
+        return challenge_answer(issue, ip, background)
+
+    @app.post("/api/auth/email-code/verify")
+    def email_code_verify(body: EmailCodeVerifyRequest, request: Request,
+                          background: BackgroundTasks) -> LoginResponse:
+        """The challenge and its code: a 12 h owner session (method email_code). Every success is announced by
+        Telegram (AuthStore) and by email (condition 10)."""
+        ip = client_ip(request)
+        try:
+            tok = st.auth.verify_email_code(body.challenge, body.code, ip=ip)
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc))
+        u = st.auth.session_user(tok)
+        if u is None:
+            raise HTTPException(403, "invalid credentials")
+        background.add_task(send_sign_in_notice, ip, "email_code")
+        return LoginResponse(token=tok, expires_in=SESSION_TTL_H * 3600, role=u.role, email=u.email,
+                             signed_in_with="email_code")
 
     @app.post("/api/auth/logout")
     def logout(creds: HTTPAuthorizationCredentials | None = Depends(bearer)) -> Ok:
@@ -387,8 +488,23 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
             st.auth.logout(creds.credentials)
         return Ok()
 
+    def stepup(u: User, creds: HTTPAuthorizationCredentials | None, code: str, request: Request) -> None:
+        """ADR 0028 ruling 2: a session opened with an emailed code (its stored `method`, nothing the client says)
+        needs the authenticator or a recovery code for invite, reset link, role, disable, enable and revoke-sessions.
+        403 STEPUP_REQUIRED for a missing or wrong code (counted under code:<email>, like re-arm and auto mode)."""
+        if not need_stepup(st.auth.session_method(creds.credentials if creds else None)):
+            return
+        try:
+            ok = st.auth.verify_stepup(u.email, code, ip=client_ip(request))
+        except PermissionError:
+            raise HTTPException(403, STEPUP_LOCKED)
+        if not ok:
+            raise HTTPException(403, STEPUP_REQUIRED)
+
     @app.post("/api/auth/invite")
-    def invite(body: InviteRequest, u: User = Depends(need("owner"))) -> InviteResponse:
+    def invite(body: InviteRequest, request: Request, u: User = Depends(need("owner")),
+               creds: HTTPAuthorizationCredentials | None = Depends(bearer)) -> InviteResponse:
+        stepup(u, creds, body.totp, request)
         try:
             tok = st.auth.create_invite(u.email, body.email, body.role)
         except (ValueError, PermissionError) as exc:
@@ -427,7 +543,9 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return Ok()
 
     @app.post("/api/auth/reset-link")
-    def reset_link(body: UserRef, u: User = Depends(need("owner"))) -> ResetLinkResponse:
+    def reset_link(body: UserRef, request: Request, u: User = Depends(need("owner")),
+                   creds: HTTPAuthorizationCredentials | None = Depends(bearer)) -> ResetLinkResponse:
+        stepup(u, creds, body.totp, request)
         try:
             tok = st.auth.create_reset_link(u.email, body.email)
         except (KeyError, PermissionError) as exc:
@@ -465,7 +583,9 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return [UserRow.model_validate(r) for r in st.auth.list_users()]
 
     @app.post("/api/users/role")
-    def set_role(body: RoleChange, u: User = Depends(need("owner"))) -> Ok:
+    def set_role(body: RoleChange, request: Request, u: User = Depends(need("owner")),
+                 creds: HTTPAuthorizationCredentials | None = Depends(bearer)) -> Ok:
+        stepup(u, creds, body.totp, request)
         try:
             st.auth.set_role(u.email, body.email, body.role)
         except (ValueError, KeyError) as exc:
@@ -473,7 +593,9 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return Ok()
 
     @app.post("/api/users/disable")
-    def disable(body: UserRef, u: User = Depends(need("owner"))) -> Ok:
+    def disable(body: UserRef, request: Request, u: User = Depends(need("owner")),
+                creds: HTTPAuthorizationCredentials | None = Depends(bearer)) -> Ok:
+        stepup(u, creds, body.totp, request)
         try:
             st.auth.disable(u.email, body.email)
         except (ValueError, KeyError) as exc:
@@ -481,7 +603,9 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return Ok()
 
     @app.post("/api/users/enable")
-    def enable(body: UserRef, u: User = Depends(need("owner"))) -> Ok:
+    def enable(body: UserRef, request: Request, u: User = Depends(need("owner")),
+               creds: HTTPAuthorizationCredentials | None = Depends(bearer)) -> Ok:
+        stepup(u, creds, body.totp, request)
         try:
             st.auth.enable(u.email, body.email)
         except (ValueError, KeyError) as exc:
@@ -489,7 +613,9 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return Ok()
 
     @app.post("/api/users/revoke-sessions")
-    def revoke_sessions(body: UserRef, u: User = Depends(need("owner"))) -> RevokeResponse:
+    def revoke_sessions(body: UserRef, request: Request, u: User = Depends(need("owner")),
+                        creds: HTTPAuthorizationCredentials | None = Depends(bearer)) -> RevokeResponse:
+        stepup(u, creds, body.totp, request)
         try:
             n = st.auth.revoke_sessions(u.email, body.email)
         except (ValueError, KeyError) as exc:
@@ -497,8 +623,10 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return RevokeResponse(sessions=n)
 
     @app.get("/api/me")
-    def me(u: User = Depends(auth)) -> Me:
-        return Me(email=u.email, role=u.role)
+    def me(u: User = Depends(auth), creds: HTTPAuthorizationCredentials | None = Depends(bearer)) -> Me:
+        method = st.auth.session_method(creds.credentials if creds else None)
+        return Me(email=u.email, role=u.role,
+                  signed_in_with=method or "password_totp")
 
     @app.get("/api/accounts", response_model=list[AccountSummary])
     def accounts(u: User = Depends(auth)) -> list[AccountSummary]:
@@ -588,7 +716,8 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     @app.get("/api/proposals/recent", response_model=list[DecidedProposal])
     def recent_proposals(_: User = Depends(auth)) -> list[DecidedProposal]:
         """Proposals decided in the last 10 minutes (newest first), so a decided card says what happened to it: by
-        channel and time only, never who (BACKLOG 52)."""
+        channel and time only, never who (BACKLOG 52). An approval whose order is not confirmed yet stays listed until
+        it resolves (BACKLOG 72: the dashboard never drops an unanswered order)."""
         out = []
         for p, d in st.bus.recent():
             if d is not None:                       # decided, the engine has not applied it yet
@@ -597,7 +726,12 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                                                            "decided_channel": decision_channel(d.by),
                                                            "decided_ts": d.ts}))
                 continue
-            if p.outcome == Outcome.APPROVED:
+            nc = not_confirmed_note(p.not_confirmed) if p.not_confirmed is not None else None
+            if p.outcome == Outcome.APPROVED and p.placing:         # BACKLOG 72 review: the order is in flight
+                status = "submitted"
+            elif p.outcome == Outcome.APPROVED and nc is not None:    # BACKLOG 72: never "refused" while unknown
+                status = "refused" if nc.outcome == "no_trade" else "approved"
+            elif p.outcome == Outcome.APPROVED:
                 status = "refused" if p.gate_refusal else "approved"
             elif p.outcome == Outcome.REJECTED:
                 status = "rejected"
@@ -608,7 +742,10 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                                                        "reason_code": p.reason_code if status == "rejected" else None,
                                                        "refusal": list(p.gate_refusal or []),
                                                        "not_placed": first_not_placed(p.gate_refusal)
-                                                       if status == "refused" else None}))
+                                                       if status == "refused" else None,
+                                                       "not_confirmed": nc,
+                                                       "refusal_text": [entry_status.refusal_words(c)
+                                                                    for c in p.gate_refusal or []]}))
         return out
 
     @app.post("/api/decisions")

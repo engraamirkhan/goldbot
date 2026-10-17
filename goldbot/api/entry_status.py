@@ -38,6 +38,7 @@ from goldbot.data.calendar import (
     session_table_from_cache,
 )
 from goldbot.data.timeutil import floor_tf, server_to_utc, server_wall
+from goldbot.execution.not_confirmed import PENDING_REFUSAL, PENDING_REFUSAL_CODE
 from goldbot.ops.account_view import LossBudget, loss_budget
 from goldbot.ops.health import ENGINE_FAIL_S
 from goldbot.risk.gate import RiskLimits
@@ -165,6 +166,10 @@ REASONS: dict[str, Reason] = {
                                f"{NOTHING}: it resumes after its cooldown or a winning shadow trade.", "wait"),
     "throttle_entry_rate": _r("{agent} made its trades for today", f"{NOTHING}: the count resets at 00:00 UTC.",
                               "wait"),
+    # BACKLOG 72 (docs/ux/order-not-confirmed.md): an earlier order is still unresolved at the broker; "since" its send
+    PENDING_REFUSAL_CODE: _r("An earlier order isn't confirmed by the broker yet",
+                             f"{NOTHING}: the engine is looking it up at the broker. If it lasts over 10 minutes, check "
+                             "MT5 for an open trade and its stop.", "wait", "Order not confirmed"),
     "tick_error": _r("The engine hit an error reading prices",
                      "Usually clears at the next clean bar; if it repeats, restart the engine.", "wait"),
     "data_quality_error": _r("Market data failed a quality check",
@@ -215,6 +220,16 @@ REFUSAL_TEXT: dict[str, str] = {
     "min_lot_exceeds_risk": "the smallest trade would risk too much for this balance",
     "fx_conversion_unavailable": "couldn't convert dollars to the account currency",
 }
+# the reason in a card refused at approval (the Telegram line and the dashboard note, docs/ux/order-not-confirmed.md):
+# a per-trade refusal's words, or an account reason's own; any other code in plain words, never the raw code
+APPROVAL_REFUSAL_TEXT: dict[str, str] = {**REFUSAL_TEXT, PENDING_REFUSAL_CODE: PENDING_REFUSAL}
+
+
+def refusal_words(code: str) -> str:
+    """The words for one RiskGate code in "refused it at approval (…)"."""
+    return APPROVAL_REFUSAL_TEXT.get(code) or code.replace("_", " ")
+
+
 API_ONLY = frozenset({"engine_not_reporting", "status_unknown", "entry_reasons_missing"})   # raised here, not by the engine
 WINDOW_CODES = frozenset({"tier2_blackout", "reopen_window", "holiday_thin", "calendar_unavailable"})
 # worded ahead of the lanes adding them (bridge check, playbook G-items); the engine publishes them in entry_blocks
@@ -459,6 +474,9 @@ def _engine_block(code: str, e: dict[str, Any], now: pd.Timestamp, limits: RiskL
         return block(code, text=f"This account is {_pct(limits.dd_stage2)} below its high: trading stopped")
     if code == "market_closed":
         return block(code, at=next_open(sessions, now), at_label="opens")
+    if code == PENDING_REFUSAL_CODE:          # since the oldest unresolved order was sent
+        uo = e.get("unconfirmed_orders")
+        return block(code, at=_ts(uo.get("oldest_utc")) if isinstance(uo, dict) else None, at_label="since")
     if code == "rollover":
         return block(code, at=rollover_end(sessions, now), at_label="until")
     if code == "weekend":

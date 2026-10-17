@@ -143,7 +143,10 @@ def test_an_ambiguous_order_result_stops_auto_entries_for_the_rest_of_the_close(
     # LOW-B: the journal says the order was not confirmed, never "executed"; an unknown code is never a definite reject
     pb = AmbiguousPaper(retcode=retcode, equity=10_000, adverse_slip_points=0.0)
     eng, _, dec = _run(tmp_path, _two(), RiskLimits(**BASE), pb=pb)
-    assert _actions(dec) == [f"auto_unconfirmed:{retcode}", "auto_paused:unconfirmed_order"], _actions(dec)
+    # BACKLOG 72 (condition 1): the unresolved order now refuses the next entry at the RiskGate itself, before the
+    # bar's auto pause is consulted; the pause stays (tests/test_order_not_confirmed.py)
+    assert _actions(dec) == [f"auto_unconfirmed:{retcode}", "gate:unconfirmed_order_pending"], _actions(dec)
+    assert eng._auto_paused is not None and eng._auto_paused[1] == "unconfirmed_order"
     assert not pb.positions()
 
 

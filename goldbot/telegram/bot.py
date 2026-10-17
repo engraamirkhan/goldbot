@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 import pandas as pd
 
+from goldbot.api.entry_status import refusal_words
 from goldbot.config import ROOT, TelegramSettings
 from goldbot.execution.not_placed import card_text
 from goldbot.ops import accounts
@@ -51,12 +52,14 @@ OUTCOME_TEXT = {"APPROVED": "✅ APPROVED", "REJECTED": "❌ REJECTED", "EXPIRED
 
 def outcome_text(outcome: str) -> str:
     """The card's outcome line. An approved order the MT5 box or the broker refused reads "NOT PLACED" in the words of
-    `goldbot.execution.not_placed` (docs/ux/order-not-placed.md: one table for the card, the notice and the API)."""
+    `goldbot.execution.not_placed` (docs/ux/order-not-placed.md: one table for the card, the notice and the API); one
+    the broker neither filled nor refused reads "NOT CONFIRMED" (`not_confirmed`, BACKLOG 72)."""
     code = outcome.partition(": ")[2]
     if outcome.startswith("GATE_REFUSED") and (text := card_text(code)) is not None:
         return text
-    if outcome.startswith("GATE_REFUSED"):
-        return "🛑 NOT PLACED: approved, but the risk check refused it at approval (" + outcome.partition(": ")[2] + ")"
+    if outcome.startswith("GATE_REFUSED"):          # the RiskGate's codes in words (BACKLOG 72), never the raw code
+        why = ", ".join(refusal_words(c.strip()) for c in code.split(",") if c.strip())
+        return f"🛑 NOT PLACED: approved, but the risk check refused it at approval ({why})"
     return OUTCOME_TEXT.get(outcome, outcome)
 
 

@@ -202,6 +202,30 @@ above is the queued part only.
   cluster above; its selection stability = its group stability; the AUC condition is H-02's recorded reading
   verdict "continue"). Survivors earn their own
   trial (rows 6-9); if no cluster survives, rows 6-9 are cancelled and their budget returns to reserve.
+- **Amendment 2026-10-17 (strategy researcher, quant review of 1f0447e finding 3; before any H-02 outcome; no reading
+  rule changes; `candidates/intraday-2026-10-17.md` IC-3).**
+  - **The `macro_spx_dd20` early-fold gap.** FRED serves about ten years of SP500 (`scripts/fred_macro.py`), so
+    `macro_spx_dd20` is NaN before about 2016. A lower H-07 group stability in the early 4h folds is **expected; D4
+    measures it**. D4 is the per-fold share of decision bars with an informative column per cluster, and the NaN
+    share per `macro_*` column. It is reported on H-02's row before the run.
+  - **Declared option (one only):** H-07 is a **true VIX-only cluster in any fold whose training window lacks full
+    SP500 coverage.** In such a fold, `macro_spx_dd20` is set to NaN in **both** the training and the test rows.
+    - *Corrected 2026-10-17, quant re-verify of 4c98477, before any H-02 outcome.* "VIX-only by data" was false.
+      With the 4h rolling 48-month training window, test folds from about 2016-10 to about 2020-10 train on windows
+      that only partly cover SP500. There `macro_spx_dd20` is NaN before about 2016 and present after, so the NaN
+      marks the era and the model can learn it.
+    - Full coverage means the column is finite on every training row of the fold. Masking is per fold and uses
+      only the fold's own training rows' coverage, never the test rows.
+    - The cluster map and the reading rule are unchanged.
+    - A coverage rule that relabels a cluster "inconclusive by coverage" is not adopted.
+    - **Owed before the freeze (2027-01-01): a small code item** (implementer, quant-reviewer review). The fold mask
+      goes into the discovery and walk-forward path. The implementer adds the test
+      `test_spx_dd20_is_nan_in_train_and_test_for_folds_without_full_coverage`, which also checks that folds with
+      full coverage are untouched.
+    - Without that merged code, H-02 does not run, because its configuration would not be the one registered here.
+  - **Macro release pinned.** `macro-v1` refreshes weekly, so H-02's row records the sha256 of the `macro_fred.parquet`
+    it reads. That digest is written into the config at the 2026-12-11 config date (data-engineer), alongside the G4
+    bar digests. A run on any other digest is a deviation.
 
 ### H-01 Slow TSMOM
 - Config: `specialist=tsmom`, signal from 1d bars (20/60/120-day vol-scaled returns, 60-day vol), execution and
@@ -582,12 +606,24 @@ protection**: a row not listed here is not run from the open budget in Q1. Each 
   candidates of one ISO week resampled together, 500 resamples, seed 0). No day-block AUC option is added.
 - **Threshold rule, per row (amended 2026-10-17, quant review of 0f9d6d8, finding 1).** The coded model-stage
   threshold is: take a candidate when its **cross-fitted calibrated p > break-even + 0.02**
-  (`pipeline.THRESHOLD_MARGIN`, `cpcv.py`, `discovery.reading_rule`). No tercile cut exists in code. Each row below
+  (`pipeline.THRESHOLD_MARGIN`, `cpcv.py`, `discovery.reading_rule`). No tercile cut exists in code (built by E-2,
+  2026-10-17, as amended below). Each row below
   names its threshold:
   - O-5, O-6, O-8 and O-10 use the coded rule.
   - O-4's pre-set rule uses a top-tercile cut, which **E-2 must implement**: the cut is the 2/3 quantile of the
     **inner cross-fitted out-of-fold p** of the training fold's rows, never in-sample training p, and it must come
     with a test proving that the cut never sees a test-fold row. Without that merged code O-4 does not run.
+  - *Amended 2026-10-17 (E-2 build, quant plan review of the BACKLOG 75 plan, conditions 1-7; written before any
+    H-14 candidate count):* the cut is pinned as coded (`pipeline.fold_cuts`, `DiscoveryConfig.threshold_rule:
+    tercile_inner`). For test fold k it is `np.quantile(p, 2/3, method="linear")` of the raw out-of-fold p of the
+    rows that are **both a test row of an earlier fold and in fold k's training rows** (`train_idx`: inside its
+    24-month rolling window, after the purge), finite p only. With fewer than 50 such rows the fold has no cut and
+    takes no trade. A candidate is taken when its raw test-fold p >= the cut; there is **no break-even floor**
+    (the share of trades below break-even is reported, never read). q = 2/3 and the linear method are part of the
+    rule: any other q or method is a new trial. Folds whose test windows overlap are refused. Under this rule the
+    discovery's reading rule replaces "(cross-fitted, break-even + margin)" with the tercile clause and adds:
+    "promotion needs a separate trial under the live rule". A tercile result does not carry to live trading, which
+    keeps break-even + 0.02.
   - Thresholds are never changed to reach a trade count.
 - **Costs (P-5, as the Q2 draft).** The source is pinned at this file's freeze. It is the named `costs-v1` version
   if published by 2026-12-11, otherwise the priors ("priors accepted" on 2026-12-14): 0.37 $/oz beyond the spread,
@@ -713,6 +749,42 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
   finding 5) and `stability_threshold: 0.7` written explicitly in the dump (P-7). The AUC lower bound is the coded
   **weekly-block** bootstrap (finding 2). The full `DiscoveryConfig.model_dump()` and
   `group_map_sha256` are written here as an amendment when E-2 merges, before the candidate count.
+- *Amendment 2026-10-17 (group map; quant review of `candidates/scalping-2026-10-17.md` at 61695d4, findings 1-2;
+  written before any H-14 count, label or outcome, from column counts on synthetic bars only):*
+  - **Why.** At 15m the decision frame adds h1/h4/d1 context columns of `atr`, `realised_vol`, `moving_averages`
+    and `trend_strength` (`pipeline.CONTEXT_FEATURES`, `context_tfs("15m")`), and `column_groups` puts each context
+    column in its base column's group. Grouped by family, `trend` then has about 72 columns and `volatility` about
+    49-53, both over `max_selected` 39, so `check_group_sizes` refuses O-4 as configured. `structure` has 38 and
+    playbook D-5's $100 step would take it to 40.
+  - **One splitting rule (pinned now).** Decision-timeframe columns stay in their family. **Every context column
+    goes to the group `ctx_<tf>` of its timeframe (`ctx_h1`, `ctx_h4`, `ctx_d1`), across families** (about 26
+    columns each). New 15m columns never go into `structure`: they form two new families, `liquidity` (sweep
+    depth/age by reference, the $100 step, stop-cluster distances) and `activity` (time-of-day-relative Dukascopy
+    volume `volbid_*`, quote fraction, v3 THIN-day flag, LBMA auction / overlap / 08:30 ET windows). Any group still
+    over 39 columns after this rule refuses the run; it is never truncated or re-split after a count.
+  - **H-08 spans two groups.** The existing `sweep_*` columns stay in `structure` (`market_structure` v2);
+    `liquidity` therefore measures only what it adds to them. A `structure` survival is not evidence for the new
+    columns, and a `liquidity` survival is not evidence for `sweep_*`.
+  - **Feature version.** O-4's pinned feature version `f-079deacc61` is **superseded for O-4 only** by the version
+    that adds `liquidity` and `activity`. That version and the group map hash are written here when they merge
+    (due 2026-12-11), before the count. No other row's feature version changes.
+  - **Code owed (BACKLOG item, product-owner files; implementer, quant-reviewer):** (a) the grouping above, as a
+    pinned map or a cluster map whose globs take precedence over the base-column join; (b) a test that O-4's pinned
+    map, **with context columns included**, has no group over 39; (c) `check_group_sizes` moved **before**
+    `reg.preregister` in `discovery_pass` (today it runs after it, `discovery.py` ~838-860, so a refusal leaves a
+    pre-registered row), with confirmation and a test that such a row spends no trial.
+  - **K_eff.** Groups screened = 11 families + 3 context groups + 2 new families = **about 16** (was "about 10-15").
+    The adopted gate-1 case becomes about 66 (40 + H-02 ~10 + H-14 ~16): t ≈ 4.03, still 4.0 at one decimal, so the
+    "Gate-1 power" table is unchanged.
+- Threshold (amended 2026-10-17, E-2; quant review R1): `threshold_rule: tercile_inner`,
+  `tercile_q: 0.6666666666666666` and `tercile_method: linear` in the pinned `DiscoveryConfig` dump (so in the config
+  hash: another q is another trial). The coded verdict needs at least 1,000 taken trades for "continue", as the
+  reading rule below. The walk-forward must have `step_months >= test_months`, which is checked before any row is
+  written. This is the top-tercile cut as pinned under "Threshold rule, per row" (q = 2/3, linear, prior set =
+  earlier folds' out-of-fold rows inside fold k's training rows, no break-even floor). O-4's result row records
+  `threshold_rule`, `tercile_q`, `tercile_method`, `fold_cuts`, `retention` and `share_taken_below_breakeven`.
+  Reading the same candidates under the coded rule would be another trial. A survivor is promoted only through a
+  separate trial under the live rule (O-5/O-6).
 - Reading rule (O-4, H-14; written 2026-10-17 before any H-14 outcome): a group **survives** if it is selected in
   >= 70% of folds (frequency >= 0.6) AND the walk-forward on the selected set has out-of-fold AUC >= 0.53 with a
   weekly-block bootstrap lower 95% bound > 0.50 (`discovery.auc_lower_bound`) AND the pre-set rule (trade when the
@@ -727,14 +799,20 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
   weeks) the AUC's standard error is expected to be under 0.01, so the 0.53 bound is resolvable. **Every trade count
   here is conditional on E-2's tercile cut.** A top tercile of 100,000+ candidates gives several thousand trades
   after one position at a time. The floor case, the coded rule's retention on #16 (0.9%), gives about 900. Either
-  way the net-R test is about cost (0.27 R typical, up to 0.67 R at the gate floor), not power. K_eff = groups screened (about 10–15) is added to every later trial.
+  way the net-R test is about cost (0.27 R typical, up to 0.67 R at the gate floor), not power. K_eff = groups screened (about 10–15; about 16 under the 2026-10-17 group-map amendment above) is added to every later trial.
+  **Withdrawal (written 2026-10-17, before any count or outcome; quant review finding 3):** if the cost-in-R
+  diagnostic (`candidates/scalping-2026-10-17.md` D-1, inputs at the decision bar only) gives a median round trip
+  above 0.35 R at **every** admissible gate floor (1×, 1.5×, 2× the round trip, each leaving >= 55,000 candidate
+  bars), O-4 is **withdrawn before it runs**: no trial is spent and nothing is added to K.
 - Kill: AUC < 0.52 (above). The 15m lane is then H-17 alone, and research-plan §7 applies if H-17 also fails.
 - Data first: `calendar-v1`, G1/G4; engineering E-2 and BACKLOG 31.
 
 #### O-5, O-6 H-14 survivor groups (<= 2 trials)
 - Config: a walk-forward model on H-14's label and candidates, inputs = the surviving group's recorded columns +
   `side` (<= 40), tagged `from_discovery`. Written here as an amendment after O-4's verdict and before the run.
-- Threshold: the coded rule (cross-fitted calibrated p > break-even + 0.02), not a tercile cut.
+- Threshold: the coded rule (cross-fitted calibrated p > break-even + 0.02), not a tercile cut
+  (`threshold_rule: break_even_margin`, the default; amended 2026-10-17, E-2). This is the live rule, so O-5/O-6 are
+  the separate trial under the live rule that a tercile-read O-4 survivor needs before promotion.
 - Reading rule (O-5/O-6, H-14 survivors; written 2026-10-17 before any H-14 outcome; day-summed DSR inputs specified
   2026-10-17 per quant finding 6): **pass** only if the unchanged design gates pass (>= 1,500 candidates, >= 60 per
   complete test fold, positive net expectancy in >= 3 calendar years incl. 2021 or 2022, DSR >= 0.95 on >= 200
@@ -744,6 +822,18 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
   same K = `n_trials_effective` as the gate (both discoveries' K_eff included). It is a coded check (E-6:
   `metrics.day_summed_dsr`, `tests/test_day_summed_dsr.py`), and without it the row does not run; promotion additionally needs the discovery holdout rule (O-10). Otherwise **fail** and the group
   is retired as a 15m entry signal (kept as a filter feature only).
+  - Amendment 2026-10-17, before any H-14 outcome (quant re-review of E-6; noted for the owner by the program
+    director). The rule gets stricter in three ways:
+    - **G floor.** The day-summed DSR also needs G >= 200 trading days, the same asymptotic floor as the per-trade
+      DSR's 200 trades. With fewer days the check reports nothing and the row fails closed (**fail**, or
+      **inconclusive** only when the stored inputs are missing).
+    - **Entry day.** A trade's entry UTC day is that of its signal bar's open plus one bar (`ts_utc + timeframe`, the
+      real entry at the next bar's open).
+    - **Gate DSR.** The gate's DSR in this rule is the per-trade DSR on `ret`, as the phase gate reads it
+      (`gates.current_dsr`). The per-trade figure stored beside the day-summed one is on R and is shown only.
+  - The rule is coded as `rule_id` "O-5"/"O-6" on the run's pre-registration (`director.survivor_decisions`,
+    `survivor_refusal`). A verdict, a holdout slot or a promotion counts a survivor's pass only with both DSRs
+    >= 0.95 on today's K.
 - Power (conditional on O-4's candidate count): gate 1 needs >= 500 model-filtered trades. At the floor case (0.9%
   of 100,000+ candidates, about 900 trades) and K ≈ 60 (t about 4.0), that is about 0.19 R net per trade. A higher
   retention lowers the bar per trade, but the threshold is never changed to get one. The day-summed check raises
@@ -753,6 +843,23 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
 #### O-7 H-24 West-hours drift, short (1 trial; only if H-04 continues)
 - Config: as `hypotheses.md` H-24 (short at 08:30 New York, flat 16:00 New York, stop 1.5 ATR(1h), every trading
   day, no target, rule-only screening specialist like `asia_drift`, swap 0 by construction).
+  - **Amendment 2026-10-17 (strategy researcher, quant review of 1f0447e finding 2; written before H-04's verdict and
+    before any H-24 outcome; `candidates/intraday-2026-10-17.md` IC-1).**
+    - **Entry.** On UTC-floored 1h bars (`resample.py`), "08:30 New York" falls inside a bar. It is also inside the
+      tier-1 blackout [−15, +30) min of an 08:30 ET release. The entry is therefore pinned at the **close of the 1h
+      bar closing 09:00 America/New_York**, DST-aware (13:00 UTC in summer, 14:00 UTC in winter), short on the bid,
+      Monday to Friday when the session calendar is open.
+    - **Exit.** A time barrier at the close of the 1h bar ending 16:00 New York (7 bars). Stop 1.5 × ATR14(1h) at
+      the decision bar, frozen. No target.
+    - **Estimand change.** H-24 now tests the West-hours drift from 09:00 to 16:00 New York. The first 30 minutes
+      after the open, including the 08:30 release reaction, are excluded. A result does not speak to 08:30–09:00.
+      The reading rule below is unchanged.
+    - **Withdrawal rule** (no trial spent). Before the row is written, the median round-trip cost in R of the pinned
+      candidates (spread at the decision bar + 0.37 $/oz, over 1.5 × ATR14(1h)) is computed on the **repaired**
+      data-v1 (after G1, digests pinned at G4) by the promoted diagnostic (`candidates/intraday_diag_2026-10-17.py`
+      D3, once moved into `scripts/` with its tests). If the median exceeds **0.10 R**, O-7 is withdrawn. The
+      expected edge (<= 0.03% a session, about 0.07 R) could then never be net positive.
+    - The count and the median are pasted here before the row is written.
 - Reading rule (O-7, H-24; written 2026-10-17 before any H-04 or H-24 outcome, as the Q2 draft's follow-up item 4):
   **continue** if gross t >= 2.0 on >= 1,000 events AND net mean R > 0 (rule-only, every candidate, one position at a
   time); **retire** the West leg if net mean R <= 0 or the screen fails on >= 1,000 events; fewer events:
@@ -817,7 +924,7 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
 | G2 holdout repair | O-10 | data-engineer | 2026-11-06 (needed before 2027-03-19) | open |
 | `calendar-v1` (owner adds `FRED_API_KEY`; data-engineer dispatches `data-us-calendar`) | O-1, O-2/O-3, O-4 | owner (chaser: program-director) | key by **2026-11-30** (escalated now, 6 weeks ahead) | blocked on the owner; release absent |
 | `costs-v1` or "priors accepted" | every row (P-5 pin) | owner / research-director | 2026-12-11 / 2026-12-14 | open; fallback likely |
-| E-2 15m discovery candidate spec + BACKLOG 31 `flat_at_local`. E-2 includes the top-tercile cut from inner cross-fitted p, with a test that the cut never sees a test-fold row (quant finding 1) | O-4 (31 also O-2/O-3) | implementer (quant-reviewer) | 2027-01-29 | not started; BACKLOG item owed (program-director to file) |
+| E-2 15m discovery candidate spec + BACKLOG 31 `flat_at_local`. E-2 includes the top-tercile cut from inner cross-fitted p, with a test that the cut never sees a test-fold row (quant finding 1) | O-4 (31 also O-2/O-3) | implementer (quant-reviewer) | 2027-01-29 | tercile cut built 2026-10-17 (BACKLOG 75, TRACEABILITY M48), quant and code review pending; the 15m candidate spec still open |
 | E-6 day-summed DSR coded check (`metrics.day_summed_dsr`: daily net-R sums over days with trades, var(SR) = 1/G, skew and kurtosis of the sums, K = `n_trials_effective`; `tests/test_day_summed_dsr.py`) | O-5, O-6 | implementer (quant-reviewer) | 2027-02-26 | new; BACKLOG item owed (program-director to file) |
 | H-02 `survivor_unit: group` amendment (doc + yaml dump, done here); PD+PO record; owner note on #34 | every later row's K | research-director (doc), PD+PO (record), quant-reviewer (#34 note) | 2026-12-11 | doc done 2026-10-17; record and note open |
 | E-3 `trend_day` screening specialist | O-2/O-3 | implementer (quant-reviewer) | 2027-02-05 | not started |

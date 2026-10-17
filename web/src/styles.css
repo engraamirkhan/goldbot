@@ -130,6 +130,7 @@ td a { color: inherit; }
 .outcome.ok { background: var(--ok-tint); color: var(--ok-fg); }
 .outcome.bad { background: var(--bad-tint); color: var(--bad-fg); }
 .outcome.info { background: var(--info-tint); color: var(--info-fg); }
+.outcome.warn { background: var(--warn-tint); color: var(--warn-fg); }   /* BACKLOG 72: not confirmed, not a halt */
 .outcome.muted-box { border: 1px solid var(--line); }
 .decide { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 @media (min-width: 720px) { .decide { grid-template-columns: 2fr 1fr; } }
