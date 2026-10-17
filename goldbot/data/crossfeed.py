@@ -9,9 +9,13 @@
       or it is on the broker but not in the engine's bars               (missing_engine)
       or it is in the engine's bars but not on the broker               (missing_broker)
 
-  over in-session minutes of the window. divergence = diverging minutes / broker minutes; severity "ok" at or below
-  WARN_FRACTION (0.5%), "warning" up to ERROR_FRACTION (5%), "error" above it (or when the broker returned bars and
-  the engine stored no tick in the window). Each kind with a non-zero count is one dq_events row (source = account) at
+  over in-session minutes of the window. Minutes the engine did not store (it was stopped: a deploy, a restart) are a
+  coverage gap, not a price fault: divergence = (close_mismatch + missing_broker) / engine minutes, severity "ok" at
+  or below WARN_FRACTION (0.5%), "warning" up to ERROR_FRACTION (5%), "error" above it, capped at "warning" when fewer
+  than MIN_COMPARED minutes could be compared; missing_engine above WARN_FRACTION of the broker minutes is a
+  "warning" on its own, and "error" only when the broker returned bars and the engine stored no tick in the window.
+  The last engine minute before a gap is partial (the engine stopped inside it), so its close is not compared
+  (edge_excluded; docs/proposals/2026-10-feed-reconcile-outage-minutes.md). Each kind with a non-zero count is one dq_events row (source = account) at
   that severity, the report is state/reconcile_<account>.json, and `check_reconciliation` turns it into a health check
   (warning -> warn, error -> fail, older than RECONCILE_MAX_AGE_HOURS -> warn). The broker's M1 is kept in the store
   table `bars_1m_broker` (source = account), so broker history accumulates for the survival check below.
@@ -40,6 +44,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import pandas as pd
 
 from goldbot.base import Record, UtcTimestamp, load_record_json, write_atomic
@@ -56,6 +61,8 @@ POINT_DEFAULT = 0.01              # XAUUSD point on both brokers when the termin
 CLOSE_TOL_POINTS = 2.0            # a close more than 2 points away from the broker's is a mismatch
 WARN_FRACTION = 0.005             # diverging minutes / broker minutes above this: warning
 ERROR_FRACTION = 0.05             # ... above this: error
+MIN_COMPARED = 60                 # fewer engine minutes compared than this: divergence is at most a warning
+_COUNTS = ("broker_minutes", "engine_minutes", "close_mismatch", "missing_engine", "missing_broker")
 RECONCILE_WINDOW = pd.Timedelta(days=1)
 RECONCILE_BARS = 1500             # M1 bars asked of the broker (a day is at most 1,440)
 RECONCILE_MAX_AGE_HOURS = 96      # the job runs Mon-Fri: an older report (a missed weekday) warns
@@ -79,11 +86,12 @@ class ReconcileReport(Record):
     missing_engine: int
     missing_broker: int
     max_close_diff: float
-    divergence: float                      # diverging minutes / broker minutes
+    divergence: float                      # (close_mismatch + missing_broker) / engine minutes (before: broker minutes)
     severity: str                          # "ok" | "warning" | "error"
     spikes_flagged: int = 0                # spikes check_bars flagged on either feed
     spikes_unconfirmed: int = 0            # ... of which the other feed shows no matching move (kept as warnings)
     note: str = ""
+    edge_excluded: int = 0                 # partial last minutes before an engine gap, not compared
 
     def save(self, state_dir: Path) -> None:
         write_atomic(reconcile_file(state_dir, self.account_id), self.model_dump_json(indent=1), durable=False)
@@ -110,6 +118,19 @@ def _severity(fraction: float) -> str:
     return "error" if fraction > ERROR_FRACTION else ("warning" if fraction > WARN_FRACTION else "ok")
 
 
+def grade(*, broker_minutes: int, engine_minutes: int, compared: int, close_mismatch: int, missing_engine: int,
+          missing_broker: int) -> tuple[float, str]:
+    """(divergence, severity) from a reconciliation's counts (module docstring). Health grades a stored report with
+    it too, so a rule change applies to the last report at once (an older report has no edge count: 0)."""
+    div = (close_mismatch + missing_broker) / engine_minutes if engine_minutes else 0.0
+    sev = _severity(div)
+    if sev == "error" and compared + missing_broker < MIN_COMPARED:
+        sev = "warning"                    # a handful of minutes cannot show a price fault
+    if broker_minutes and missing_engine / broker_minutes > WARN_FRACTION and sev == "ok":
+        sev = "warning"                    # a coverage gap: the engine was stopped or not collecting
+    return div, "error" if broker_minutes and not engine_minutes else sev
+
+
 def reconcile(engine: pd.DataFrame, broker: pd.DataFrame, *, start: pd.Timestamp, end: pd.Timestamp,
               tolerance: float, sessions: SessionTable = DEFAULT_SESSIONS) -> dict[str, Any]:
     """Minute-by-minute comparison over in-session minutes in [start, end) (see the module docstring)."""
@@ -121,18 +142,17 @@ def reconcile(engine: pd.DataFrame, broker: pd.DataFrame, *, start: pd.Timestamp
         s = s[~s.index.duplicated(keep="last")]
         s = s[(s.index >= start) & (s.index < end)]
         return s[sessions.is_open(pd.DatetimeIndex(s.index))] if len(s) else s
-    e, b = frame(engine), frame(broker)
+    e, b = frame(engine).sort_index(), frame(broker).sort_index()
     both = e.index.intersection(b.index)
-    diff = (e.reindex(both) - b.reindex(both)).abs()
+    # the engine minute just before a broker minute it lacks is partial (stopped inside it): its close is not compared
+    stop_edge = np.append(~b.index[1:].isin(e.index), False)
+    edge = both.intersection(b.index[stop_edge])
+    diff = (e.reindex(both.difference(edge)) - b.reindex(both.difference(edge))).abs()
     n: dict[str, Any] = {"broker_minutes": len(b), "engine_minutes": len(e), "matched": len(both),
-         "close_mismatch": int((diff > tolerance + 1e-9).sum()),
+         "close_mismatch": int((diff > tolerance + 1e-9).sum()), "edge_excluded": len(edge),
          "missing_engine": len(b.index.difference(e.index)), "missing_broker": len(e.index.difference(b.index)),
          "max_close_diff": float(diff.max()) if len(diff) else 0.0}
-    bad = n["close_mismatch"] + n["missing_engine"] + n["missing_broker"]
-    n["divergence"] = bad / len(b) if len(b) else (1.0 if len(e) else 0.0)
-    n["severity"] = _severity(n["divergence"])
-    if len(b) and not len(e):
-        n["severity"] = "error"
+    n["divergence"], n["severity"] = grade(compared=len(diff), **{k: n[k] for k in _COUNTS})
     first = {"close_mismatch": diff[diff > tolerance + 1e-9].index,
              "missing_engine": b.index.difference(e.index), "missing_broker": e.index.difference(b.index)}
     n["first"] = {k: (pd.Timestamp(v[0]) if len(v) else None) for k, v in first.items()}
@@ -166,8 +186,9 @@ def reconcile_account(store: Store, broker: Any, account_id: str, symbol: str, n
                         ("missing_engine", "broker M1 minutes with no engine bar"),
                         ("missing_broker", "engine bars with no broker M1 minute")):
         if n[kind]:
+            gap_only = kind == "missing_engine" and n["engine_minutes"] > 0     # an outage, not a price fault
             events.append(DQEvent(ts_utc=n["first"][kind], check=f"reconcile_{kind}",
-                                  severity="error" if n["severity"] == "error" else "warning",
+                                  severity="error" if n["severity"] == "error" and not gap_only else "warning",
                                   detail=f"{n[kind]} {label} of {n['broker_minutes']} ({n['divergence']:.2%} diverging)"))
     # D20: a spike on one feed is a warning only with no matching move on the other
     flagged = unconfirmed = 0
@@ -209,12 +230,17 @@ def _feed_status(ctx: "HealthContext", account_id: str) -> "tuple[Status, str]":
     except (ValueError, OSError) as exc:
         return "warn", f"reconcile file unreadable: {exc}"
     age_h = (ctx.now - r.ts_utc).total_seconds() / 3600
-    msg = (f"{r.divergence:.2%} of {r.broker_minutes} broker minutes diverge (close {r.close_mismatch}, missing engine "
-           f"{r.missing_engine}, missing broker {r.missing_broker}); {r.spikes_unconfirmed} unconfirmed spikes")
+    edges = f", {r.edge_excluded} stop-edge minutes not compared" if r.edge_excluded else ""
+    msg = (f"divergence {r.divergence:.2%} over {r.engine_minutes} engine minutes (close {r.close_mismatch}, missing "
+           f"broker {r.missing_broker}{edges}); {r.spikes_unconfirmed} unconfirmed spikes")
+    if r.missing_engine:
+        msg += (f"; engine bars missing for {r.missing_engine} of {r.broker_minutes} broker minutes (engine stopped or "
+                "not collecting: a coverage gap, not a price fault)")
     msg += f"; {r.note}" if r.note else ""
     if age_h > RECONCILE_MAX_AGE_HOURS:
         return "warn", f"last reconciliation {age_h:.0f} h ago: {msg}"
-    status: Status = "fail" if r.severity == "error" else "warn" if r.severity == "warning" else "ok"
+    _, severity = grade(compared=max(r.matched - r.edge_excluded, 0), **{k: getattr(r, k) for k in _COUNTS})
+    status: Status = "fail" if severity == "error" else "warn" if severity == "warning" else "ok"
     return status, msg
 
 
