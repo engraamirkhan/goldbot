@@ -611,7 +611,7 @@ Weekdays are Mon-Fri. A job missed while the VPS was down is run once on restart
 | `backup` | Daily 22:15 | Brain only: encrypted `restic` backup of the databases, state files, trial registry, models and the brain's own Parquet to Oracle Object Storage, append only (old snapshots are thinned monthly from your Mac to 14 daily, 8 weekly and 12 monthly); result in `state/backup_last.json` (section 0.6). |
 | `restore_drill` | Sunday 10:00 | Restores the latest backup to a temporary folder and verifies checksums, database integrity, row counts and model checksums; result in `state/restore_drill_last.json`. |
 | `broker_ledger` | Daily 23:25 | Read-only: each account's balance, equity, margin and currency, the deposits and withdrawals in the broker's deal history, the balance tied out against the day's deals, and every goldbot position compared with the broker by position id. Stored in `aux.db`; health check `reconcile:<account>` (section 6, "Broker reconciliation"). |
-| `tick_record` | Daily 22:40 | Read-only: the broker's own XAUUSD ticks of every closed server day not yet recorded (missed days within 7 are back-filled) -> `state/ticks/<account>/<date>.parquet`; days older than `ticks.retain_days` (240) are deleted. Research data for the H-A holiday check; health check `ticks:<account>` (section 6, "Broker tick record"). |
+| `tick_record`, `tick_record_winter` | Daily 21:10 and 22:10 | Read-only, and only while gold is closed (New York's 17:00-18:00 daily break, which is 21:00 UTC in US summer time and 22:00 UTC in winter, or the weekend; the other slot skips): the broker's own XAUUSD ticks of the oldest closed server day not yet recorded (missed days within 7 are back-filled, one a run, and the weekend runs catch up) -> `state/ticks/<account>/<date>.parquet`; days older than `ticks.retain_days` (240) are deleted. Research data for the H-A holiday check; health check `ticks:<account>` (section 6, "Broker tick record"). |
 
 The staff-agent jobs and headline scoring only run when the `anthropic-api-key` secret is stored; otherwise the
 job records "skipped" and headlines are collected unscored. Their total spend is capped by
@@ -1507,7 +1507,10 @@ the job only reads the account, the positions and the deal history.
 ### Broker tick record (`ticks:<account>`)
 
 The daily `tick_record` job asks the terminal (`copy_ticks`, read-only, through the scheduler's bridge connection) for
-every tick of each closed server day and writes one file per server date to `state/ticks/<account>/<date>.parquet`,
+every tick of each closed server day. It runs only while gold is closed, because the bridge answers one request at a
+time and the engine's orders must never wait behind it. It pulls in small pages with a pause between them. It stops
+(and the day is pulled on a later run) if a page takes over 2 s, the run takes over 5 minutes, or the market is about
+to reopen. It writes one file per server date to `state/ticks/<account>/<date>.parquet`,
 with `index.json` beside it (rows, London/New York ticks, median spread, size and sha256 of each file). Only the
 account label (for example `icm-demo`) is in the paths and files. A busy day is under 1 MB (about 0.6 MB per 50,000
 ticks), so 240 days is about 150 MB an account; the files are included in the nightly backup because the terminal
