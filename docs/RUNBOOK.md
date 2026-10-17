@@ -611,6 +611,7 @@ Weekdays are Mon-Fri. A job missed while the VPS was down is run once on restart
 | `backup` | Daily 22:15 | Brain only: encrypted `restic` backup of the databases, state files, trial registry, models and the brain's own Parquet to Oracle Object Storage, append only (old snapshots are thinned monthly from your Mac to 14 daily, 8 weekly and 12 monthly); result in `state/backup_last.json` (section 0.6). |
 | `restore_drill` | Sunday 10:00 | Restores the latest backup to a temporary folder and verifies checksums, database integrity, row counts and model checksums; result in `state/restore_drill_last.json`. |
 | `broker_ledger` | Daily 23:25 | Read-only: each account's balance, equity, margin and currency, the deposits and withdrawals in the broker's deal history, the balance tied out against the day's deals, and every goldbot position compared with the broker by position id. Stored in `aux.db`; health check `reconcile:<account>` (section 6, "Broker reconciliation"). |
+| `tick_record` | Daily 22:40 | Read-only: the broker's own XAUUSD ticks of every closed server day not yet recorded (missed days within 7 are back-filled) -> `state/ticks/<account>/<date>.parquet`; days older than `ticks.retain_days` (240) are deleted. Research data for the H-A holiday check; health check `ticks:<account>` (section 6, "Broker tick record"). |
 
 The staff-agent jobs and headline scoring only run when the `anthropic-api-key` secret is stored; otherwise the
 job records "skipped" and headlines are collected unscored. Their total spend is capped by
@@ -1502,6 +1503,20 @@ The first run is a baseline with nothing to tie out against. Its deposits are li
 they are already in the opening balance. A balance operation marked `"follows_cancel": true` may be the broker
 reversing a cancelled deal, not a deposit or withdrawal of yours; check the broker's statement. Nothing here trades:
 the job only reads the account, the positions and the deal history.
+
+### Broker tick record (`ticks:<account>`)
+
+The daily `tick_record` job asks the terminal (`copy_ticks`, read-only, through the scheduler's bridge connection) for
+every tick of each closed server day and writes one file per server date to `state/ticks/<account>/<date>.parquet`,
+with `index.json` beside it (rows, London/New York ticks, median spread, size and sha256 of each file). Only the
+account label (for example `icm-demo`) is in the paths and files. A busy day is under 1 MB (about 0.6 MB per 50,000
+ticks), so 240 days is about 150 MB an account; the files are included in the nightly backup because the terminal
+cannot give old days back. **warn** "thin day (< 1000 London/NY ticks ...)": on a market holiday this is expected (it
+is what the H-A check measures); on a normal weekday check `bridge:<account>` and the terminal's connection, then
+delete that day's `.parquet` file so the next run pulls it again (only within the 7-day back-fill). **warn** "newest
+recorded day is N days old": the job is failing; read `job:tick_record` in the health report. Nothing here trades,
+and the engine does not read these files. Research reads them with `goldbot.data.ticks.load_day("icm-demo",
+"2026-11-26", state_dir="state")`, which refuses a file whose sha256 no longer matches the index.
 
 ### Currency rollout (one time: the update that brings currency-correct sizing, BACKLOG 28/25/29)
 
