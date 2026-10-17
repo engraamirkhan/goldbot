@@ -1,10 +1,9 @@
 ---
 number: 64
-rank: 14
 title: Dashboard header shows the signed-in role, never the email
 stage: Dashboard (every screen; privacy) · RUN
 size: S
-status: 'built 2026-10-16 to docs/ux/header-role.md (no API change; tests in HANDOFF) · next: ui-ux-designer review, code-reviewer · accountable: ui-ux-designer · due 2026-10-27'
+status: 'done, accepted with follow-up 2026-10-17 by the product owner (bb80ac1 on main via PR #84). Criteria met: role in the header, email only under Account > Your sign-in, unit and e2e checks (App.test.tsx, roles.test.ts, Account.test.tsx, dashboard and auth e2e). Gap: the ui-ux-designer and code-reviewer verdicts are not recorded at a merge (only claimed in the PR #84 body); both record them in the HANDOFF fragment by 2026-10-19 · accountable: ui-ux-designer'
 ---
 - **64. Dashboard header shows the signed-in role, never the email.** Decided 2026-10-16 by program director +
   product owner (owner delegated). Value (RUN, privacy): the header shows the signed-in email, and it appears in

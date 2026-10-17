@@ -1,10 +1,10 @@
 ---
 number: 62
-rank: 8
+rank: 4
 title: The 12% kill switch flattens every position on the account, all symbols
 stage: Execution and risk (drawdown stages, ADR 0016) · PROTECT · RUN
 size: S
-status: 'ready (decided 2026-10-16) · accountable: implementer, then trading-safety-reviewer · due 2026-10-22 (built 10-21, trading-safety verdict 10-22)'
+status: 'in review (built f211e0a, 90b2603, e35f566; health check 6c5af75; plan 9301fb9 with trading-safety conditions C1-C9) · next: trading-safety verdict on the build, then merge; it also edits runner.py, so it must hold the PR 0 line cap · accountable: trading-safety-reviewer · due 2026-10-22'
 ---
 - **62. The 12% kill switch flattens every position on the account, all symbols.** Decided 2026-10-16 by program
   director + product owner (owner delegated). Value (RUN, protect): the 12% drawdown is measured on the account's
