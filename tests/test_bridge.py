@@ -281,6 +281,29 @@ def test_guarded_broker_refuses_smoke_magic_unless_demo(trade_mode, allowed):
     assert SMOKE_MAGIC_OFFSET == 99
 
 
+@pytest.mark.parametrize("unreadable", ["raises", "none"])
+def test_smoke_magic_with_an_unreadable_account_is_a_definite_reject_and_places_nothing(unreadable):
+    """ADR 0021 F4 behind the one account() read (order of the checks: account -> F4): when the read raises or MT5's
+    account_info() returns None, the smoke's order is refused with retcode 10006 before F4 is consulted, and nothing
+    reaches the terminal."""
+    from goldbot.execution.bridge import REFUSED_RETCODE
+    from goldbot.execution.broker import SMOKE_MAGIC_OFFSET
+
+    class Terminal(PaperBroker):
+        def account(self) -> AccountInfo:
+            if unreadable == "raises":
+                raise RuntimeError("terminal not connected")
+            return None  # type: ignore[return-value]
+    pb = Terminal(equity=10_000)
+    pb.on_tick(Tick(ts_utc=T0, bid=2400.0, ask=2400.2))
+    g = GuardedBroker(pb, magic_base=260100)
+    smoke = _intent("icm-demo-1-smoke").model_copy(update={"magic": 260100 + SMOKE_MAGIC_OFFSET, "lots": 0.01})
+    res = g.place_order(smoke)
+    assert not res.ok and res.retcode == REFUSED_RETCODE == 10006
+    assert "unreadable:account" in res.message
+    assert pb.positions() == []
+
+
 def test_the_health_probe_answers_through_the_bridge(bridge):
     url, _ = bridge
     assert bridge_mod.probe_health(url) is None                     # no token needed, nothing reaches the terminal
