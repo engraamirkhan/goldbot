@@ -268,7 +268,9 @@ The scripts and outputs are kept outside the repo, in the temp folders of the an
 **Hypotheses for pre-registration** (at most three; rewritten 2026-10-16 per the quant ruling, before any
 pre-registration row). H-A reads forward broker data not used here. H-B and H-C read the frozen Q1 candidate sets,
 whose research window overlaps the data measured here. **Trial cost:** H-A and H-B are 0-cost diagnostics (no model
-or parameter is chosen, nothing is promoted); H-C counts as **1 registry trial**.
+or parameter is chosen, nothing is promoted); H-C counts as **1 registry trial**. *Amended 2026-10-17 (quant
+review of 0f9d6d8, finding 7; before any H-04 outcome): in Q1 2027 H-C is also a **0-trial diagnostic**. Its only
+allowed outcome is "the whole-day block stays" (`preregistration-2027Q1.md`, row O-9).*
 
 - **H-A (broker check of the proxy, forward).**
   - Data source: the IC Markets demo terminal (ICMarketsSC-Demo; account type recorded at the start: Raw Spread
@@ -309,7 +311,8 @@ or parameter is chosen, nothing is promoted); H-C counts as **1 registry trial**
 - **H-C (session-scoped block).**
   - Claim: on US early-close holidays (MLK, Presidents, Memorial, Juneteenth, 4 July, Labor, Thanksgiving),
     Asia-session entries are not worse than on control days.
-  - Runs only after H-04's verdict, and only if H-04 is not retired.
+  - Runs only after H-04's verdict, and only if H-04 reads **continue** (amended 2026-10-17 from "is not retired":
+    session scoping matters only when there is an Asia strategy to trade).
   - Measure: gross mean R of Asia-session candidates (H-04 `asia_drift`, and H-01 where entry falls in Asia) on those
     days against matched controls; net and the mechanical cost reported separately, as in H-B.
   - n and power, stated now: about 97 holiday Asia entries from H-04 if spread evenly (99 such weekdays in the
@@ -323,6 +326,10 @@ or parameter is chosen, nothing is promoted); H-C counts as **1 registry trial**
     60 holiday Asia entries: the holiday rule is re-specified to block London and New York only, which needs a list
     format change, a trading-safety review and a PD+PO decision. **WORSE** if the upper bound is below 0: the whole-day
     block stays. Otherwise, or below 60 entries, **INCONCLUSIVE**: the whole-day block stays.
+  - **Amended 2026-10-17 (quant review of 0f9d6d8, finding 7; before any H-04 outcome).** For Q1 2027 the
+    NON-INFERIOR branch is removed. H-C runs as a 0-trial diagnostic whose only allowed outcome is "the whole-day
+    block stays" (WORSE or INCONCLUSIVE, reported). It becomes a trial again only when pooled Asia holiday entries
+    give >= 50% power at the −0.10 R margin, under a new pre-registration.
 
 **Decision (2026-10-16, program director + product owner, under the owner's delegation; owner-only items untouched).**
 **ADOPT cme-metals-v3** as recommended above (drop 2 Jan; keep every other listed day, unresolved days marked; add

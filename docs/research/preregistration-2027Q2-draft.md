@@ -9,6 +9,19 @@ and A2. Evidence: `opportunity-days.md` ("OD"), `xauusd-trader-playbook.md` ("pl
 amended before the freeze; once a trial's `preregistered` row is written (with this file's freeze commit), its rule
 is fixed and a change after seeing data makes it exploratory.
 
+**Sync with Q1 (research director, 2026-10-17).** H-16, H-17 V0/V1 and H-14 (with ≤ 2 survivors) are
+pre-registered against Q1 2027's open budget (`preregistration-2027Q1.md`, "Q1 open-budget round", rows O-1 to O-6).
+Each runs there only if its inputs land by its date (2027-01-29 / 2027-02-12) and it runs by 2027-03-26. A row that
+runs in Q1 is removed from this draft at its next revision, and its trials join this quarter's free reserve. A row
+that does not run in Q1 stays here unchanged. The Q1 texts add three things for those rows, which this draft adopts
+at its freeze:
+- the ADR 0022 day-clustered trade t, with weekly-block AUC bounds;
+- the top-tercile cut from inner cross-fitted p (E-2);
+- the day-summed DSR check for H-14 survivors (E-6).
+
+H-01 can no longer read "continue" (strict floor), so follow-up items 1-2 below cannot arise. H-02 moved to
+`survivor_unit: group` (Q-H02U, 2026-10-17).
+
 ## Fixed for every trial (as Q1 unless stated)
 
 - **Data:** Dukascopy 1m XAUUSD 2010-01 .. 2025-09 (release `data-v1`); `macro-v1` (first releases, `asof_join` on
