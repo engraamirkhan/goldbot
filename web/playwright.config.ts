@@ -14,11 +14,12 @@ const PYTHON = process.env.PYTHON ?? (existsSync(REPO_PYTHON) ? REPO_PYTHON : "p
 // so these tests cover the browser, the API contract, auth/TOTP and the approval centre together.
 // Two servers, each with its own throwaway state: the dashboard story, and the sign-in story (auth.spec.ts), whose
 // server captures the owner's sign-in emails with the e2e-only fake mailer (goldbot/api/e2e_mailer.py: refused unless
-// GOLDBOT_E2E_FAKE_MAILER=1 and the server is bound to 127.0.0.1). One worker: the stories run one after the other.
+// GOLDBOT_E2E_FAKE_MAILER=1 and the server is bound to 127.0.0.1). Each story is serial inside its file (shared state), and the
+// two files use different servers and different TOTP clocks (e2e/totp.ts), so two workers run them side by side.
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
-  workers: 1,
+  workers: 2,                                      // the two servers' stories run side by side; each file is serial
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
