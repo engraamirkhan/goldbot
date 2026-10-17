@@ -1294,7 +1294,11 @@ the broker's) and the broker ledger (`broker_ledger`). The feed part:
   `engine:<account>` and `engine_loop:<account>` show whether it runs now. It clears with the next weekday run.
 * **warn / fail** "divergence X% over N engine minutes": closes more than 2 points from the broker's M1, or engine bars
   the broker does not have, while the engine ran (fail above 5% with at least 60 minutes compared). Compare the
-  feeds before trusting new signals; the last minute before an engine stop is not compared.
+  feeds before trusting new signals. The minute either side of an engine stop is not compared; many such minutes
+  (over 5% of matched warns, over 20% fails) mean the engine restarted again and again: read its journal.
+* **fail** "engine bars missing ... while the engine was up (loop heartbeat): a stalled feed": the engine ran but
+  stored no bars for most of its run. Check `bridge:<account>`, the MT5 terminal's connection and the engine log,
+  then restart the bridge and the engine.
 * **fail** with "the engine stored no ticks in the window": the engine collected nothing for a whole trading day.
 
 The ledger part:
