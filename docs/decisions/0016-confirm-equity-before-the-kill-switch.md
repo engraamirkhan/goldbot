@@ -158,8 +158,11 @@ flatten them is an owner decision".
   of another symbol is never dropped on the fallback read (C3). The failure is logged and journalled
   (`book_unreadable`, `read: account_positions`) once per streak, and the owner-mode reset still runs (C6).
 - **A symbol without a quote.** MT5 selects the symbol before reading its tick; no symbol info or no tick is a
-  refused close (10021), retried every CLOSE_RETRY_MIN_S; a market-closed refusal (10017/10018) backs off as before.
-  The flag stays set meanwhile. One symbol's refusal never stops the others.
+  refused close (10021). On another symbol (hidden or delisted: refused on every attempt) it is backed off with the
+  market-closed table (10017/10018: reconcile_every_s, doubling up to modify_backoff_max_s), so the journal gets one
+  row per backoff step and the adapter logs it once per streak (trading-safety LOW 1); on the engine's own symbol a
+  10021 stays a transient refusal retried every CLOSE_RETRY_MIN_S. The flag stays set meanwhile. One symbol's refusal
+  never stops the others. Every due close records its symbol, so the fallback drop rule never assumes one (LOW 4).
 - **Out of scope.** Pending orders on other symbols are not cancelled (goldbot places none; a pending order the owner
   left could fill after the flatten, and the next run while the flag is set closes that position). A partial close
   of another symbol is never sent (its volume step is not read). Multi-account flattening and bridge protocol v6 are

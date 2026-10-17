@@ -335,7 +335,8 @@ def test_an_older_bridge_refuses_entries_with_its_reason_while_exits_and_closes_
     # and the kill switch closes everything
     _open(pb, 1, 2300.0)
     eng._kill_switch(everything=True)
-    assert not pb.positions()
+    assert not pb.positions() and pb.account_positions() == []
+    assert eng._kill_switch(everything=False)                           # the next read sees the account flat
     # the verdict is published for health and the dashboard; still blocking after the refresh
     eng._refresh_account(pb.last_tick("XAUUSD"))
     assert eng.state.bridge_incompatible

@@ -297,6 +297,49 @@ def test_a_due_xauusd_close_gone_from_the_fallback_read_is_dropped(tmp_path, mon
     assert other not in eng._close_due
 
 
+def test_a_hidden_eurusd_close_is_backed_off_one_row_per_step_not_per_tick(tmp_path, monkeypatch):
+    """Trading-safety LOW 1: a symbol the terminal cannot quote (hidden, delisted) is refused 10021 on every attempt.
+    For another symbol that is backed off like a market-closed refusal (same table), so the journal gets one row per
+    backoff step, not one per tick; the XAUUSD closes are not held back by it."""
+    eng, pb, own, other, eur = _everything(tmp_path)
+    attempts = _refuse(monkeypatch, pb, eur, 10021, times=10_000)
+    eng.on_tick(_crash(pb))                                            # the trip, on the tick clock
+    assert _all_ids(pb) == [eur] and eur in eng._close_backoff         # both XAUUSD positions closed
+    for s in range(2, 102, 2):                                         # 100 s of ticks, 2 s apart
+        eng.on_tick(_crash(pb, s))
+    rows = [d for d in eng.decisions if d.get("action") == "kill_switch_close" and d["position"] == eur]
+    # attempts at 1 s, 32 s (after 30 s of backoff) and 92 s (after 60 s): three steps, not 50 ticks
+    assert len(rows) == len(attempts) == 3 and eng._kill_everything
+
+
+def test_an_xauusd_close_refused_10021_is_not_backed_off(tmp_path, monkeypatch):
+    """The engine's own symbol keeps the transient retry (CLOSE_RETRY_MIN_S): a gold quote gap is seconds long."""
+    eng, pb, own, other, eur = _everything(tmp_path)
+    _refuse(monkeypatch, pb, own, 10021)
+    eng.on_tick(_crash(pb))
+    assert own in eng._close_due and own not in eng._close_backoff
+    eng.on_tick(_crash(pb, 3))
+    assert own not in _all_ids(pb)
+
+
+def test_every_due_close_records_its_symbol(tmp_path, monkeypatch):
+    """Trading-safety LOW 4: every `_close_due` entry names its symbol, not only the kill switch's."""
+    eng, pb, own, other, eur = _everything(tmp_path)
+    _refuse(monkeypatch, pb, own, 10004)
+    eng._try_close(own, "time_exit", T0)
+    assert eng._close_due[own][1]["symbol"] == "XAUUSD"
+
+
+def test_a_due_close_without_a_recorded_symbol_is_kept_on_the_fallback_read(tmp_path, monkeypatch):
+    """The fallback drop rule never assumes the engine's symbol: an entry that names none waits for an account read."""
+    eng, pb, own, other, eur = _everything(tmp_path)
+    _account_book_fails_when_halted(monkeypatch, eng, pb, times=None)
+    eng._refresh_account(_crash(pb))
+    eng._close_due[eur] = ("kill_switch_close", {}, T0)
+    eng._retry_closes(T0 + pd.Timedelta(seconds=5))
+    assert eur in eng._close_due
+
+
 def test_the_flag_stays_set_until_account_positions_reads_flat(tmp_path, monkeypatch):
     """Trading-safety C2: positions() flat is not the account flat, and every close returning ok is not a flat read."""
     eng, pb, own, other, eur = _everything(tmp_path)

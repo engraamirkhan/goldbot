@@ -121,6 +121,22 @@ def test_close_with_no_tick_for_another_symbol_returns_refused_not_raises(monkey
     assert "EURUSD" in res.message and fake.sent == []
 
 
+def test_a_close_without_a_quote_is_logged_once_per_streak(monkeypatch, caplog):
+    ticks: dict[str, Any] = {"XAUUSD": MTick(MS, 2400.0, 2400.2, 6)}
+    fake = _terminal(ticks=ticks)
+    broker = _adapter(monkeypatch, fake)
+    with caplog.at_level("WARNING", logger="goldbot.mt5"):
+        for _ in range(3):
+            assert broker.close(EUR).retcode == 10021
+        assert sum("EURUSD" in r.getMessage() for r in caplog.records) == 1
+        ticks["EURUSD"] = MTick(MS, 1.0800, 1.0801, 6)                  # quoted again: the streak ends
+        fake.book.append(fake.book[-1]._replace(ticket=EUR + 1))
+        assert broker.close(EUR).ok
+        del ticks["EURUSD"]
+        assert broker.close(EUR + 1).retcode == 10021
+        assert sum("EURUSD" in r.getMessage() for r in caplog.records) == 2
+
+
 def test_close_with_no_symbol_info_for_another_symbol_returns_refused_not_raises(monkeypatch):
     infos = {"XAUUSD": Sym("XAUUSD", 2, 0.01, 100.0, 0.01, 0.01, 50.0, 0, 2, 4, True)}
     fake = _terminal(infos=infos)

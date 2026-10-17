@@ -212,6 +212,7 @@ class MT5Broker:
             raise RuntimeError(f"symbol_info({symbol}) returned None; refusing to start")
         self._info = info
         self._sessions_noted = False
+        self._unquoted: set[str] = set()     # symbols whose close was refused for want of a quote (logged once)
 
     # ------------------------------------------------------------------ info
     def symbol_info(self, symbol: str) -> SymbolInfo:
@@ -382,10 +383,13 @@ class MT5Broker:
         info, tick = mt5.symbol_info(p.symbol), mt5.symbol_info_tick(p.symbol)
         if info is None or tick is None:
             missing = "symbol info" if info is None else "tick"
-            log.warning("close of position %s refused: no %s for %s (%s); retried", position_id, missing, p.symbol,
-                        mt5.last_error())
+            if p.symbol not in self._unquoted:              # once per streak: the engine retries it with a backoff
+                self._unquoted.add(p.symbol)
+                log.warning("close of position %s refused: no %s for %s (%s); retried", position_id, missing,
+                            p.symbol, mt5.last_error())
             return OrderResult(ok=False, retcode=RETCODE_PRICE_OFF, order_id=None, position_id=position_id,
                                filled_lots=0.0, price=None, message=f"no {missing} for {p.symbol}")
+        self._unquoted.discard(p.symbol)
         is_buy = p.type == mt5.POSITION_TYPE_BUY
         req = {"action": mt5.TRADE_ACTION_DEAL, "symbol": p.symbol, "position": position_id,
                "volume": lots or p.volume, "type": mt5.ORDER_TYPE_SELL if is_buy else mt5.ORDER_TYPE_BUY,

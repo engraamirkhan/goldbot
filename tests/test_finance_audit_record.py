@@ -323,6 +323,7 @@ def test_the_kill_switch_closes_every_position_before_any_exit_fill_is_written(t
     pb.on_tick(_tick(10, 2000.2))
     eng._kill_switch(everything=True)
     assert calls == ["close"] * 3 and not pb.positions()      # nothing written during the exits
+    assert pb.account_positions() == [] and eng._kill_switch(everything=False)   # the next read sees it flat
     eng._save_orders()
     assert calls[3:] == ["append:exit_fills"]                  # one write for the tick's legs, afterwards
     assert len(_exit_fills(tmp_path)) == 3

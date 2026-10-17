@@ -19,7 +19,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   Before the deploy: the one-time owner notice on #34 (C8). Follow-ups: SRE health WARN when `kill_everything` stays
   set with closes due (C9); an older (v4) bridge without `account_positions` keeps the flag set and the switch
   running each tick until the bridge is upgraded (by design, C1). Verify on the demo terminal: closing a manual
-  EURUSD trade (fill mode, `symbol_select`), which the fake MT5 in the tests cannot prove.
+  EURUSD trade (fill mode, `symbol_select`), which the fake MT5 in the tests cannot prove. Review fix round
+  (trading-safety E1 APPROVE, LOW 1 and LOW 4): a 10021 close on another symbol backs off with the market-closed
+  table (one journal row per step; the adapter logs it once per streak) while XAUUSD keeps the 1 s retry, and every
+  `_close_due` entry records its symbol. Follow-ups: LOW 2 (a re-arm leaves `_kill_everything` set; the C9 health
+  WARN in the SRE lane covers it before the deploy), LOW 3 (re-send another symbol's close without the read).
 - The approval window no longer trusts the wall clock alone (2026-10-16, BACKLOG 60; needs trading-safety review).
   `Proposal.expired` was `time.time() > created + window_s`, so a backward clock step stretched the owner's 90 s
   window and a pending file stamped in the future (a restored backup, a bad write) stayed approvable. Now

@@ -86,6 +86,9 @@ APPROVED_RISK_TOLERANCE = 1.02   # ADR 0009: the risk sent may exceed the approv
 # close refused with one of these is backed off; any other failure (requote 10004/10021, price changed 10020, a
 # raising call) is retried on the next tick, so an exit is never delayed by a transient refusal
 MARKET_CLOSED_RETCODES = frozenset({10017, 10018})
+# 10021 no quotes: transient on the engine's own symbol (retried as above); on another symbol (the kill switch closes
+# every symbol, BACKLOG 62) a hidden or delisted symbol refuses it on every attempt, so it is backed off like the above
+NO_QUOTES_RETCODE = 10021
 # MT5 trade-server retcodes that mean the order was definitely NOT placed, listed one by one (review LOW-1: only
 # defined codes; 10037 does not exist): 10004 requote, 10006 reject, 10007 cancelled by trader, 10013-10022 invalid
 # request / volume / price / stops, trade disabled, market closed, no money, prices changed, no quotes, invalid
@@ -1612,7 +1615,9 @@ class Engine:
     def _try_close(self, pid: int, action: str, now: pd.Timestamp | None, **extra: object) -> OrderResult:
         """Close one position at market; never raises. The trade leaves the open table (and is queued for the
         closed-trade record) only when the broker confirms the close. A failure keeps the close due (`_retry_closes`,
-        every tick): refused with a market-closed retcode (MARKET_CLOSED_RETCODES) it is backed off reconcile_every_s
+        every tick): refused with a market-closed retcode (MARKET_CLOSED_RETCODES), or with no quotes
+        (NO_QUOTES_RETCODE) on a symbol other than the engine's (a hidden or delisted symbol the kill switch closes,
+        BACKLOG 62: one journal row per backoff step, not per tick), it is backed off reconcile_every_s
         of tick time, doubling per consecutive refusal up to modify_backoff_max_s; any other refusal (requote, price
         changed) or a raising call is retried on the first tick CLOSE_RETRY_MIN_S later (`_retry_wait`). Automatic:
         never gated."""
@@ -1641,8 +1646,12 @@ class Engine:
                 self._log_exit_fill(pid, tr, action, res.filled_lots or tr.lots, res.price, at=now, quote=quote,
                                     retcode=res.retcode)
             return res
-        self._close_due[pid] = (action, dict(extra), now)
-        if res.retcode in MARKET_CLOSED_RETCODES:
+        # every due close names its symbol (the engine's unless the caller says otherwise), so the fallback drop rule
+        # in `_retry_closes` never assumes one (trading-safety LOW 4)
+        due_extra: dict = {"symbol": self.cfg.symbol, **extra}
+        self._close_due[pid] = (action, due_extra, now)
+        if res.retcode in MARKET_CLOSED_RETCODES or (res.retcode == NO_QUOTES_RETCODE
+                                                     and due_extra["symbol"] != self.cfg.symbol):
             fails = self._close_backoff.get(pid, (0, now))[0]
             wait = min(self.cfg.reconcile_every_s * 2 ** fails, self.cfg.modify_backoff_max_s)
             self._close_backoff[pid] = (fails + 1, now + pd.Timedelta(seconds=wait))
@@ -1721,9 +1730,9 @@ class Engine:
         for pid in due:
             action, extra, _ = self._close_due[pid]
             if pid not in live:
-                # the fallback is complete for the engine's symbol (kill-switch rows name theirs; every other close is
-                # of the engine's symbol), so only another symbol's close waits for an account read
-                if complete or extra.get("symbol", self.cfg.symbol) == self.cfg.symbol:
+                # the fallback is complete for the engine's symbol (every due close names its symbol, `_try_close`), so
+                # only another symbol's close, or one that names none, waits for an account read
+                if complete or extra.get("symbol") == self.cfg.symbol:
                     self._close_due.pop(pid, None)
                     self._close_backoff.pop(pid, None)
                 continue
