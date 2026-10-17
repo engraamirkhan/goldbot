@@ -58,6 +58,10 @@
                     the balance tied out against the deals, and goldbot's closed records and open trades reconciled
                     with the broker by position id -> aux.db (ops/ledger.py; health check reconcile:<account>).
                     Skipped without a broker.
+* tick_record       daily (BACKLOG 79, goldbot/data/ticks.py): per account, the broker's ticks of every closed server
+                    day not yet recorded (copy_ticks, read-only, paged; missed days back-filled) ->
+                    state/ticks/<account>/<date>.parquet + index.json, older than ticks.retain_days pruned (health
+                    check ticks:<account>). Research data for the H-A holiday diagnostic. Skipped without a broker.
 * cpcv_quarterly    first Sunday of each quarter (M16): combinatorial purged CV (6 groups, 2 test: 15 splits, 5 paths)
                     of every trial that passed the gates, PBO against its family's other trials, attached to the
                     trial as evidence (not a trial) -> state/cpcv_<quarter>.md (research/cpcv.py).
@@ -162,6 +166,8 @@ class JobContext(Record):
     upload_costs: Callable[[bytes], str] | None = None           # published cost table -> release costs-v1 (VPS only)
     broker_for: Callable[[Account], Any] | None = None           # read-only Broker per account (feed_reconcile, broker_ledger)
     get_secret: Callable[[str], str | None] | None = None        # backup credentials (default: goldbot.ops.accounts)
+    clock: Callable[[], pd.Timestamp] | None = None              # tick_record's wall clock (default: now, UTC)
+    sleep: Callable[[float], None] | None = None                 # tick_record's pause between pages (default: time.sleep)
 
 
 # ---------------------------------------------------------------------------------------------- nightly costs
@@ -1147,6 +1153,41 @@ def broker_ledger(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return out
 
 
+# ---------------------------------------------------------------------------------------------- broker tick record (BACKLOG 79)
+def tick_record(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Daily, per enabled account (goldbot/data/ticks.py): the broker's ticks of every closed server day not yet on
+    disk -> state/ticks/<account>/<date>.parquet (copy_ticks, read-only, paged), then retention. Health: ticks:<acc>.
+    Runs only while gold is closed (daily break or weekend, `market_quiet`), time-boxed and paced, so the shared
+    bridge is never busy in trading hours (trading-safety review); `slot` is not used as the time."""
+    import time
+
+    from goldbot.data.ticks import market_quiet, record_ticks
+    if ctx.broker_for is None:
+        return {"skipped": "no broker connection configured for the scheduler"}
+    clock = ctx.clock or (lambda: pd.Timestamp.now("UTC"))
+    if not market_quiet(clock()):
+        return {"skipped": f"market open at {clock().isoformat()}: runs only in the daily break or at the weekend"}
+    out: dict[str, Any] = {}
+    failed: list[str] = []
+    for acc in ctx.accounts:
+        broker = None
+        try:                                  # one unreachable terminal does not stop the other account's record
+            broker = ctx.broker_for(acc)
+            if broker is None:
+                out[acc.account_id] = {"skipped": "no read-only broker connection for this account"}
+                continue
+            out[acc.account_id] = record_ticks(broker, ctx.state_dir, acc.account_id, acc.symbol, acc.server_tz,
+                                               ctx.settings.ticks, clock=clock, sleep=ctx.sleep or time.sleep)
+        except Exception as exc:
+            failed.append(f"{acc.account_id}: {type(exc).__name__}: {exc}")
+        finally:
+            if broker is not None and hasattr(broker, "shutdown"):
+                broker.shutdown()
+    if failed:                                # the scheduler records the failure (health: scheduler check)
+        raise RuntimeError("tick_record failed for " + "; ".join(failed) + f" (done: {sorted(out)})")
+    return out
+
+
 # ---------------------------------------------------------------------------------------------- backups (state store step 2)
 def _backup_args(ctx: JobContext) -> tuple[Any, Callable[[str], str | None]]:
     from goldbot.ops import backup as backup_mod
@@ -1198,6 +1239,8 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "restore_drill": restore_drill,               # weekly restore + verification of the latest backup
     "cpcv_quarterly": cpcv_quarterly,             # M16 combinatorial purged CV + PBO of gate-passing trials
     "attribution": attribution,                   # BACKLOG 12: daily attribution for the staff agents (reporting only)
+    "tick_record": tick_record,                   # BACKLOG 79: broker ticks per server day for research (H-A)
+    "tick_record_winter": tick_record,            # ... the same job in the winter daily break (one slot skips)
 }
 
 

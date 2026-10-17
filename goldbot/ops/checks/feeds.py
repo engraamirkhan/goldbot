@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pandas as pd
 
 from goldbot.data.crossfeed import check_reconciliation
+from goldbot.data.ticks import check_tick_record
 from goldbot.ops.checks._base import (
     COSTS_FAIL_DAYS,
     COSTS_PUBLISHED_WARN_DAYS,
@@ -255,3 +256,5 @@ def check_news(ctx: HealthContext) -> Check:
 
 # D12: the feed reconciliation check lives with the reconciliation (goldbot/data/crossfeed.py)
 register_check("account", block=BLOCK_RECONCILIATION, pos=10)(check_reconciliation)
+# BACKLOG 79: the broker tick record lives with the record (goldbot/data/ticks.py); WARN only, research data
+register_check("account", block=BLOCK_RECONCILIATION, pos=20)(check_tick_record)
