@@ -55,14 +55,19 @@ from goldbot.labels import uniqueness_weights
 from goldbot.research.metrics import expectancy, sharpe_annualised
 from goldbot.research.model import MetaLabelModel
 from goldbot.research.pipeline import (
+    DEFAULT_THRESHOLD_RULE,
     Prepared,
+    ThresholdRule,
     _cross_fitted,
     candidate_threshold,
     eligible_columns,
+    fold_cuts,
     model_inputs,
     pool_frames,
     pooled_inputs,
     prepare,
+    row_cuts,
+    select,
 )
 from goldbot.research.walkforward import window_for
 
@@ -203,12 +208,31 @@ def _dist(x: list[float]) -> dict[str, float]:
             "median": float(np.median(a)), "max": float(a.max())}
 
 
+def path_selection(p_raw: np.ndarray, groups: np.ndarray, n_groups: int, y: np.ndarray, threshold: np.ndarray,
+                   threshold_rule: ThresholdRule = DEFAULT_THRESHOLD_RULE
+                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """(taken, calibrated p, the groups' tercile cuts or None) on one backtest path: groups are the path's folds in
+    time order, each calibrated only from the groups before it. The calibrator reads p_raw with NaN (rows of an
+    unfitted split) filled with 0.5, as before E-2; the tercile cut (`pipeline.fold_cuts`, groups before g as the
+    prior set) reads p_raw BEFORE that fill, so only finite rows count toward the quantile and the 50 (quant plan
+    review, condition 7). Quant ruling 1: the prior groups' p on a path may come from splits that trained on group g;
+    the cut is a label-free scalar and CPCV only vetoes (ADR 0003), so no purged variant."""
+    folds = [SimpleNamespace(test_idx=np.flatnonzero((groups == g) & np.isfinite(p_raw))) for g in range(n_groups)]
+    p_cal = _cross_fitted(np.nan_to_num(p_raw, nan=0.5), y, folds)
+    if threshold_rule == "tercile_inner":
+        cuts = fold_cuts(p_raw, folds)
+        return select(p_raw, p_cal, row_cuts(cuts, folds, len(p_raw)), threshold_rule), p_cal, cuts
+    return select(p_raw, p_cal, threshold, threshold_rule), p_cal, None
+
+
 def run_cpcv(labels: pd.DataFrame, feats: pd.DataFrame, cols: list[str], *, edges: list[pd.Timestamp],
              purge_days: float, embargo_days: float, extra_cost_usd: float, feature_version: str = "",
-             n_test: int = N_TEST_GROUPS, min_train: int = MIN_TRAIN) -> dict[str, Any]:
+             n_test: int = N_TEST_GROUPS, min_train: int = MIN_TRAIN,
+             threshold_rule: ThresholdRule = DEFAULT_THRESHOLD_RULE) -> dict[str, Any]:
     """CPCV of one configuration. `labels` (net, with weight, target_hit, ret, risk, atr_sig, stop_atr, target_atr,
     ts_utc, ts_exit) and `feats` are row-aligned; `cols` are the meta-model's inputs. Returns per-path metrics, their
-    distribution, and `group_r` (R earned per path and group) for PBO."""
+    distribution, and `group_r` (R earned per path and group) for PBO. threshold_rule (`path_selection`): the default
+    leaves the result as before E-2; "tercile_inner" adds `threshold_rule` and each path's `fold_cuts`."""
     n_groups = len(edges) - 1
     splits = cpcv_splits(labels, edges, purge_days, embargo_days, n_test)
     groups = assign_groups(labels, edges)
@@ -235,9 +259,7 @@ def run_cpcv(labels: pd.DataFrame, feats: pd.DataFrame, cols: list[str], *, edge
         for g, k in enumerate(path):
             rows = groups == g
             p_raw[rows] = preds[k][rows]
-        folds = [SimpleNamespace(test_idx=np.flatnonzero((groups == g) & np.isfinite(p_raw))) for g in range(n_groups)]
-        p_cal = _cross_fitted(np.nan_to_num(p_raw, nan=0.5), y.to_numpy(), folds)
-        taken = np.isfinite(p_cal) & (p_cal > threshold)
+        taken, p_cal, cuts = path_selection(p_raw, groups, n_groups, y.to_numpy(), threshold, threshold_rule)
         scored_groups = [g for g in range(n_groups) if np.isfinite(p_cal[groups == g]).any()]
         years = float(g_years[scored_groups].sum()) if scored_groups else 0.0
         ret = labels["ret"].to_numpy(dtype=float)[taken]
@@ -247,8 +269,10 @@ def run_cpcv(labels: pd.DataFrame, feats: pd.DataFrame, cols: list[str], *, edge
                           "mean_r": ex.get("mean_r", float("nan")), "t_stat": ex.get("t_stat", float("nan")),
                           "hit_rate": ex.get("hit_rate", float("nan")),
                           "sharpe_ann": sharpe_annualised(ret, tpy) if len(ret) > 1 else float("nan")})
+        if cuts is not None:
+            paths_out[-1]["fold_cuts"] = [float(c) if np.isfinite(c) else None for c in cuts]
         group_r.append([float(r[taken & (groups == g)].sum()) for g in range(n_groups)])
-    return {
+    out = {
         "n_groups": n_groups, "n_test_groups": n_test, "n_splits": len(splits), "n_paths": len(paths_out),
         "edges": [str(e) for e in edges], "purge_days": purge_days, "embargo_days": embargo_days,
         "n_candidates": int(len(labels)), "group_sizes": [int((groups == g).sum()) for g in range(n_groups)],
@@ -258,6 +282,11 @@ def run_cpcv(labels: pd.DataFrame, feats: pd.DataFrame, cols: list[str], *, edge
         if any(np.isfinite(x["mean_r"]) for x in paths_out) else None,
         "evaluation": "CPCV, cross-fitted calibration per path (earlier groups only), pipeline threshold",
     }
+    if threshold_rule != DEFAULT_THRESHOLD_RULE:     # the default rule's result stays exactly as before E-2
+        out.update(threshold_rule=threshold_rule,
+                   evaluation="CPCV, cross-fitted calibration per path (earlier groups only), top-tercile cut of the "
+                              "earlier groups' raw p per path (pipeline.fold_cuts)")
+    return out
 
 
 # ---------------------------------------------------------------------------------------------- registered trials

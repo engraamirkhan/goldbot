@@ -5,12 +5,12 @@ same feature and model objects."""
 from __future__ import annotations
 
 import random
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 
-from goldbot.base import Record
+from goldbot.base import FrozenRecord, Record
 from goldbot.config import tf_seconds
 from goldbot.data.resample import mid
 from goldbot.features import FEATURES, build_features
@@ -114,6 +114,16 @@ def lookahead_check(bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame] | N
 
 MIN_CALIBRATION_ROWS = 50      # a test fold is calibrated only from at least this many earlier out-of-fold rows (Platt below 500)
 THRESHOLD_MARGIN = 0.02        # take a candidate when calibrated p > break-even + this margin (design)
+# The model-stage threshold rules (preregistration-2027Q1.md, "Threshold rule, per row"): "break_even_margin" is the
+# coded design rule (calibrated p > break-even + THRESHOLD_MARGIN; every live model and O-5/O-6/O-8/O-10);
+# "tercile_inner" is O-4's pre-set top-tercile cut (E-2, BACKLOG 75): test-fold p >= the TERCILE_Q quantile
+# (TERCILE_METHOD) of the earlier folds' out-of-fold p inside the fold's training window. q and the method are part
+# of the rule: any other value is a new trial (quant plan review, 2026-10-17).
+ThresholdRule = Literal["break_even_margin", "tercile_inner"]
+THRESHOLD_RULES: tuple[str, ...] = ("break_even_margin", "tercile_inner")
+DEFAULT_THRESHOLD_RULE: ThresholdRule = "break_even_margin"
+TERCILE_Q = 2 / 3
+TERCILE_METHOD: Literal["linear"] = "linear"
 Window = tuple[pd.Timestamp, pd.Timestamp]   # [start, end) in UTC
 
 
@@ -178,6 +188,108 @@ def candidate_threshold(labels: pd.DataFrame, extra_cost_usd: float) -> np.ndarr
     cost_atr = np.where(atr_sig > 0, extra_cost_usd / np.where(atr_sig > 0, atr_sig, 1.0), 0.0)
     stop, target = labels["stop_atr"].to_numpy(dtype=float), labels["target_atr"].to_numpy(dtype=float)
     return (stop + cost_atr) / (target + stop) + THRESHOLD_MARGIN
+
+
+def fold_cuts(p_raw: np.ndarray, folds: list[Any], q: float = TERCILE_Q) -> np.ndarray:
+    """One top-tercile cut per fold (E-2): `np.quantile(..., q, method=TERCILE_METHOD)` of the raw out-of-fold p of
+    the fold's prior set. Design rule (preregistration-2027Q1.md): "the 2/3 quantile of the inner cross-fitted
+    out-of-fold p of the training fold's rows, never in-sample training p".
+
+    Prior set (quant plan review, condition 1): the test rows of the folds before it that are also in its
+    `train_idx`, so on a rolling window the cut never reaches past the fold's own training rows. A fold with
+    `train_idx` None (a CPCV path group: each group is predicted by another split, so there is no one training set)
+    uses every earlier fold's test rows. Only finite p count, toward the quantile and toward MIN_CALIBRATION_ROWS; a
+    fold with fewer gets a NaN cut and takes no trade (fail closed, as the calibrator). Raw p, not calibrated: the
+    calibrator is monotone, so the rank order and the trades are the same, and no outcome enters the cut (label-free).
+    Folds must not share a test row (ValueError: a step shorter than the test window)."""
+    tests = [np.asarray(f.test_idx, dtype=int) for f in folds]
+    every = np.concatenate(tests) if tests else np.array([], dtype=int)
+    if len(np.unique(every)) != len(every):
+        raise ValueError("fold test sets overlap (step_months < test_months?): an earlier fold's out-of-fold p would "
+                         "include the fold's own test rows, so the tercile cut is undefined")
+    cuts = np.full(len(folds), np.nan)
+    earlier: list[np.ndarray] = []
+    for i, f in enumerate(folds):
+        prior = np.concatenate(earlier) if earlier else np.array([], dtype=int)
+        train = getattr(f, "train_idx", None)
+        if train is not None:
+            prior = np.intersect1d(prior, np.asarray(train, dtype=int))
+        vals = p_raw[prior]
+        vals = vals[np.isfinite(vals)]
+        if len(vals) >= MIN_CALIBRATION_ROWS:
+            cuts[i] = float(np.quantile(vals, q, method=TERCILE_METHOD))
+        earlier.append(tests[i])
+    return cuts
+
+
+def row_cuts(cuts: np.ndarray, folds: list[Any], n: int) -> np.ndarray:
+    """Each row's fold cut (NaN for a row in no fold, or in a fold without a cut)."""
+    out = np.full(n, np.nan)
+    for f, c in zip(folds, cuts, strict=True):
+        out[np.asarray(f.test_idx, dtype=int)] = c
+    return out
+
+
+def select(p_raw: np.ndarray, p_cal: np.ndarray, cut: np.ndarray, rule: ThresholdRule) -> np.ndarray:
+    """The candidates taken under the pre-registered threshold rule; `cut` is per row.
+
+    "break_even_margin": calibrated p > break-even + THRESHOLD_MARGIN (`candidate_threshold`), the coded design rule,
+    unchanged. "tercile_inner": raw p >= the row's fold cut (`>=` as pre-registered); a NaN cut or NaN p takes nothing
+    (`np.isfinite` guards). No break-even floor under the tercile rule (quant plan review: a floor would restore the
+    coded rule's retention; `share_taken_below_breakeven` is reported instead, a diagnostic only)."""
+    with np.errstate(invalid="ignore"):
+        if rule == "break_even_margin":
+            return np.asarray(np.isfinite(p_cal) & (p_cal > cut))
+        if rule == "tercile_inner":
+            return np.asarray(np.isfinite(cut) & np.isfinite(p_raw) & (p_raw >= cut))
+    raise ValueError(f"unknown threshold rule {rule!r}; one of {THRESHOLD_RULES}")
+
+
+class Retention(FrozenRecord):
+    """Taken / scored (finite raw p) per fold and overall. Recorded, never read: each fold's raw-p scale differs, so
+    the tercile rule does not fix it at a third (quant plan review, condition 5)."""
+    per_fold: list[float | None]
+    overall: float | None
+    n_taken: int
+    n_scored: int
+
+
+class SelectionSummary(FrozenRecord):
+    """How a trial selected its trades, recorded on its registry row (`results.discovery`, and `metrics.selection`
+    under the tercile rule). `margin` is None under the tercile rule (no break-even floor); `tercile_q`,
+    `tercile_method` and `fold_cuts` (None for a fold without a cut) only under it."""
+    threshold_rule: ThresholdRule
+    tercile_q: float | None
+    tercile_method: str | None
+    margin: float | None
+    fold_cuts: list[float | None] | None
+    retention: Retention
+    share_taken_below_breakeven: float | None   # taken rows with calibrated p < break-even; diagnostic only
+
+
+def selection_summary(oof: pd.DataFrame, folds: list[Any], rule: ThresholdRule,
+                      cuts: np.ndarray | None = None) -> SelectionSummary:
+    """`SelectionSummary` of an out-of-fold frame (p_raw, p, threshold, taken) over its folds."""
+    p_raw, taken = oof["p_raw"].to_numpy(dtype=float), oof["taken"].to_numpy(dtype=bool)
+    per: list[float | None] = []
+    n_taken = n_scored = 0
+    for f in folds:
+        idx = np.asarray(f.test_idx, dtype=int)
+        scored = np.isfinite(p_raw[idx])
+        t = int((taken[idx] & scored).sum())
+        per.append(t / int(scored.sum()) if scored.any() else None)
+        n_taken, n_scored = n_taken + t, n_scored + int(scored.sum())
+    p_cal = oof["p"].to_numpy(dtype=float)[taken]
+    be = oof["threshold"].to_numpy(dtype=float)[taken] - THRESHOLD_MARGIN
+    ok = np.isfinite(p_cal)
+    tercile = rule == "tercile_inner"
+    return SelectionSummary(
+        threshold_rule=rule, tercile_q=TERCILE_Q if tercile else None, tercile_method=TERCILE_METHOD if tercile else None,
+        margin=None if tercile else THRESHOLD_MARGIN,
+        fold_cuts=None if cuts is None else [float(c) if np.isfinite(c) else None for c in cuts],
+        retention=Retention(per_fold=per, overall=n_taken / n_scored if n_scored else None, n_taken=n_taken,
+                            n_scored=n_scored),
+        share_taken_below_breakeven=float((p_cal[ok] < be[ok]).mean()) if ok.any() else None)
 
 
 class Prepared(Record):
@@ -293,13 +405,17 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
                   folds: list[Fold], version: str, *, n_trials: int, trades_per_year: float | None,
                   extra_cost_usd: float, holdout: Window | None, score_holdout: bool,
                   window: dict[str, Any], timeframe: str | None, swap: SwapSpec | None = None,
-                  fold_cols: dict[int, list[str]] | None = None) -> ResearchResult:
+                  fold_cols: dict[int, list[str]] | None = None,
+                  threshold_rule: ThresholdRule = DEFAULT_THRESHOLD_RULE) -> ResearchResult:
     """Shared by the per-family and the pooled walk-forward: fit per fold, cross-fitted calibration, per-candidate
     threshold from its own barriers, metrics, rule-only expectancy and the design's gates (or the holdout rule).
     `labels` carries ret (net), risk, weight, target_atr, stop_atr and atr_sig; `feats` is row-aligned with it.
     fold_cols: per fold number, the inputs selected from that fold's training rows only (feature discovery);
     folds not in it use `cols`. timeframe: the decision bars' (a trade enters one bar after its signal, `entry_utc`);
-    None (a discovery trial, which no day-summed rule reads) records no `model_filtered.day_summed`."""
+    None (a discovery trial, which no day-summed rule reads) records no `model_filtered.day_summed`.
+    threshold_rule (`select`): the default "break_even_margin" leaves every output as before E-2; "tercile_inner"
+    (O-4's pre-registered rule) takes raw p >= the fold's `fold_cuts`, adds the `cut` column and records
+    `metrics.selection` (`selection_summary`)."""
     y = labels["target_hit"].astype(int)
     oof_pred = np.full(len(labels), np.nan)
     last_model = None
@@ -313,7 +429,12 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
     oof["p_raw"] = oof_pred
     oof["p"] = _cross_fitted(oof_pred, y.to_numpy(), folds)
     oof["threshold"] = candidate_threshold(labels, extra_cost_usd)
-    oof["taken"] = oof["p"].notna() & (oof["p"] > oof["threshold"])
+    cuts = None
+    if threshold_rule == "tercile_inner":
+        cuts = fold_cuts(oof_pred, folds)
+        oof["cut"] = row_cuts(cuts, folds, len(oof))
+    oof["taken"] = select(oof_pred, oof["p"].to_numpy(dtype=float),
+                          oof["cut" if cuts is not None else "threshold"].to_numpy(dtype=float), threshold_rule)
 
     in_hold = _in_window(oof, holdout) if holdout is not None and score_holdout else np.ones(len(oof), dtype=bool)
     scored = oof[oof["p_raw"].notna() & in_hold]
@@ -330,6 +451,8 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
         "holdout": None if holdout is None else {"from": str(holdout[0]), "to": str(holdout[1]), "scored": score_holdout},
         "rule_only": rule_only(gross_eval, oof[in_hold]),
     }
+    if cuts is not None:              # the default rule's metrics stay exactly as before E-2
+        metrics["selection"] = selection_summary(oof, folds, threshold_rule, cuts).model_dump()
     if len(scored) > 20 and last_model is not None:
         # the deployed model (last fold) is calibrated on every out-of-fold prediction: all of them precede its use
         last_model.calibrate(oof["p_raw"].dropna().to_numpy(), oof.loc[oof["p_raw"].notna(), "target_hit"].to_numpy())
