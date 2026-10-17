@@ -71,3 +71,4 @@ Also meet `docs/AGENT_STANDARDS.md`.
 - Every item and dated target has one accountable role and a date; nothing is late without a new date and an
   escalation; every owner step due so far was chased on its day; the 4-hourly, daily and weekly checks are armed.
 - **Owner-verified done:** for any deploy or owner-facing change, the owner can open it at its fixed address and complete the first action (sign in / approve), checked from outside the servers and recorded in the deploy note. Owner-facing commands are single-line and pasted from the rendered message before handing over. A classifier block on an operational step is reported to the owner in one line with the exact command the first time (incident 2026-10-17).
+- **Token budget (S14):** lanes, reviewers and models follow docs/process/token-efficiency.md (tiers, narrow tests, one full gates run per release candidate, short hand-backs, no CI polling).
