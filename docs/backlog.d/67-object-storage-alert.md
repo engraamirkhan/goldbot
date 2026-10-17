@@ -1,6 +1,6 @@
 ---
 number: 67
-rank: 11
+rank: 8
 title: Object Storage size alert at 15 GB (restic and versioning vs the 20 GB free limit)
 stage: Operations (backups, cost guard) · RUN
 size: S

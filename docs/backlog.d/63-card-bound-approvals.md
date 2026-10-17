@@ -1,10 +1,9 @@
 ---
 number: 63
-rank: 12
 title: 'Card-bound approvals: a tap is bound to the exact card the owner saw'
 stage: Approvals (owner confirms entries, 90 s) · PROTECT · RUN
 size: S
-status: 'built 2026-10-16 (implementer; TRACEABILITY A16), awaiting trading-safety-reviewer APPROVE · accountable: implementer, then trading-safety-reviewer · due 2026-10-23'
+status: 'done, accepted 2026-10-17 by the product owner (on main via PR #84, merge 3e1ee0a: trading-safety APPROVE x2, code APPROVE x2, security PUSH-OK x2). Criteria: card_created bound, card_mismatch and card_missing refused, 64-byte test, API regenerated, dashboard 422 without created (tests/test_card_bound_approvals.py, re-run pass) · accountable: trading-safety-reviewer'
 ---
 - **63. Card-bound approvals: a tap is bound to the exact card the owner saw.** Decided 2026-10-16 by program
   director + product owner (owner delegated). Value (RUN, protect): the residual of BACKLOG 60's trading-safety

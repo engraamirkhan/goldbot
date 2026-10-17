@@ -3,7 +3,7 @@ number: 61
 title: 'Mixed-currency accounts: the loss budget shows the account cap, not the combined cap'
 stage: Dashboard and Telegram (loss budget, ADR 0004 section 3) · PROTECT
 size: S
-status: 'merged on the integration branch 2026-10-16 at 921a38a (4c3d087 + ecce681; trading-safety APPROVE, code-review APPROVE + PUSH-OK, ui-ux copy approved, per the merge message); ships in the next PR; product-owner acceptance at that PR; follow-ups L1/L2 in BACKLOG 65 · accountable: release-manager · due 2026-10-23'
+status: 'done, accepted 2026-10-17 by the product owner (on main via PR #83, merge 921a38a: trading-safety APPROVE, code APPROVE + PUSH-OK, ui-ux copy approved). Criteria: amber can''t-check with no amount, red on a mixed-currency halt, caps unchanged (tests/test_account_view.py, the GBP+USD API tests, BalanceCard/SafetyStrip; re-run pass); L1/L2 closed by 65 (a) eb4be7c · accountable: release-manager'
 ---
 - **61. Mixed-currency accounts: the loss budget shows the account cap, not the combined cap (UX review,
   2026-10-16).** Value: with accounts in more than one currency, `account_view._combined`

@@ -1,10 +1,9 @@
 ---
 number: 66
-rank: 3
 title: Equity-scaled lot ceiling at the bridge (GuardedBroker)
 stage: Execution and risk (independent backstop under RiskGate) · PROTECT · RUN
 size: M
-status: 'built: bridge notional ceiling 6x equity (MAX_NOTIONAL_EQUITY_MULT, refusal 10006) merged on the integration branch 2026-10-17 · next: release PR, trading-safety verdict recorded at merge (E1), then PO acceptance · accountable: release-manager · due 2026-10-20'
+status: 'done, accepted 2026-10-17 by the product owner (on main via PR #84, merge 0bd0c10: plan 8567c4d; trading-safety APPROVE x2, code APPROVE, security PUSH-OK, SRE APPROVE, ui-ux APPROVE). Criteria: 0.01 lot passes and 0.02 refused at 1,000, scales at 10,000, unreadable figures refuse, closes never gated (tests/test_bridge.py ceiling tests, re-run pass); built stricter than asked (counts all open XAUUSD exposure) · accountable: release-manager'
 ---
 - **66. Equity-scaled lot ceiling at the bridge (GuardedBroker).** Decided 2026-10-16 by program director + product
   owner from the CFO's capital plan (`docs/finance/capital-plan.md` section 6, second sre row). Value (RUN,

@@ -1,10 +1,10 @@
 ---
 number: 71
-rank: 6
+rank: 3
 title: Approved orders the broker or the MT5 box refuses read NOT PLACED, with a notice
 stage: Execution and approvals (entry outcome truth) · PROTECT · RUN
 size: M
-status: 'ready (decided 2026-10-17 by program director + product owner; copy final in docs/ux/order-not-placed.md) · accountable: implementer, then trading-safety-reviewer · due 2026-10-23 (built; starts when 62 and 43 have left runner.py, one runner.py lane at a time)'
+status: 'returned 2026-10-17 by the product owner (built 0b61b2a+fe1a93f, review round d067a19; in PR #85). Met: tests/test_not_placed.py and the runner refusal tests in tests/test_engine_safety.py pass, API regenerated, fills and ambiguous results still read APPROVED. Gaps: (1) no trading-safety, code or ui-ux verdict on d067a19 is on record (E1); (2) the TRACEABILITY A row was not added; (3) runner.py is 3504 lines, over the PR 0 ratchet of 3492, so tests/test_engine_structure.py::test_runner_py_stays_under_its_line_cap fails at bdd89f7 and at the PR #85 head 22a9055 (the CTO rules: re-baseline once with a reason, or trim) · accountable: implementer · due 2026-10-18'
 ---
 - **71. Approved orders the broker or the MT5 box refuses read NOT PLACED, with a notice (trading-safety LOW-R1
   follow-up to 66).** Decided 2026-10-17 by program director + product owner (owner delegated). Value (RUN, protect):

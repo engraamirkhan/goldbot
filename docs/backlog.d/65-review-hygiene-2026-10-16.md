@@ -3,7 +3,7 @@ number: 65
 title: Review follow-ups from 2026-10-16 (hygiene)
 stage: Dashboard, Telegram and research tooling (review residuals) · RUN and FIND
 size: M
-status: 'parked 2026-10-16 (cap of 15; none of its parts can lose money; it re-enters the table when an implementer lane is free). Owed dates still hold for the records: quant N1 text 2026-10-19, research-director N3 ADR 2026-10-30 · accountable: implementer (N1: quant-reviewer, N3: research-director)'
+status: 'parked; parts accepted with follow-up 2026-10-17 by the product owner: (a) eb4be7c, (b) 5095732, (d N1) 69ac3b7, (d N2) a2e82ee+9cc441c on main via PR #84 (quant N2 re-review; test_account_view.py, test_api_entry_status.py, test_config.py re-run pass); (c) carried by the W2-3 API (quant APPROVE b8c33a5, F1/F2 kept in 34bdd78). Open: the N3 ADR (research-director, 2026-10-30); code and trading-safety verdicts on (a)(b) are only claimed in the PR #84 body, record them by 2026-10-19 · accountable: research-director (N3)'
 ---
 - **65. Review follow-ups from 2026-10-16 (hygiene).** Decided 2026-10-16 by program director + product owner
   (owner delegated). Value: none of these can lose money; each makes a screen or a setting say the truth, so the

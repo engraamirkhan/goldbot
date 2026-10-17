@@ -1,6 +1,6 @@
 ---
 number: 44
-rank: 4
+rank: 5
 title: Confirm a zero or collapsed equity read before the 12% kill switch (ADR 0016)
 stage: Execution and risk (drawdown stages) · PROTECT
 size: S

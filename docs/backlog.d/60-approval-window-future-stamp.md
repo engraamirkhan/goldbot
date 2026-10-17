@@ -1,10 +1,9 @@
 ---
 number: 60
-rank: 5
 title: Approval window expiry trusts a future-stamped proposal
 stage: Approvals (owner confirms entries, 90 s) · PROTECT
 size: S
-status: 'changes requested (bf5240b/2bfeb36) · trading-safety-reviewer CHANGES 2026-10-16 at 626b56b: 3 decision paths expire at 90 s and future/NaN stamps are refused (tests/test_approval_window_clock.py); F60-1 LOW a pre-restart click can apply to the same proposal re-raised after a restart (runner.py:486-498, bus.py:186-198); F60-2 LOW checks/services.py:138 reads NaN/future as fine; fix lane running, then re-verify of F60-1/F60-2 only · accountable: implementer, then trading-safety-reviewer · due 2026-10-20'
+status: 'done, accepted 2026-10-17 by the product owner (on main via PR #84, merge 9113ce6; trading-safety APPROVE on re-verify 2026-10-16). Criteria: 10 s ahead expired, 2 s open, NaN/string expired, backward wall-clock step vs the monotonic deadline, restart drops the proposal, digest counts EXPIRED_UNAPPROVED (tests/test_approval_window_clock.py, re-run 2026-10-17 at bdd89f7: pass); F60-1 closed by 63 · accountable: trading-safety-reviewer'
 ---
 - **60. Approval window expiry trusts a future-stamped proposal (review of BACKLOG 58, 2026-10-16).** Value:
   `Proposal.expired` (goldbot/telegram/approvals.py:120) is `time.time() > created + window_s`, the same
