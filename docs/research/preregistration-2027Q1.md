@@ -223,6 +223,9 @@ above is the queued part only.
       `test_spx_dd20_is_nan_in_train_and_test_for_folds_without_full_coverage`, which also checks that folds with
       full coverage are untouched.
     - Without that merged code, H-02 does not run, because its configuration would not be the one registered here.
+    - *Implemented 2026-10-17 (BACKLOG 82, implementer; not yet pinned).* The config field is
+      `DiscoveryConfig.full_coverage_columns`; H-02 would set it to `["macro_spx_dd20"]`. It is in the dump and the
+      config hash only when set, so pinning it changes H-02's hash; the research-director pins it.
   - **Macro release pinned.** `macro-v1` refreshes weekly, so H-02's row records the sha256 of the `macro_fred.parquet`
     it reads. That digest is written into the config at the 2026-12-11 config date (data-engineer), alongside the G4
     bar digests. A run on any other digest is a deviation.

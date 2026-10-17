@@ -76,7 +76,9 @@ from goldbot.research.pipeline import (
     _log_loss,
     _walk_forward,
     eligible_columns,
+    mask_columns,
     selection_summary,
+    uncovered_columns,
 )
 from goldbot.research.walkforward import Fold, splits_for, window_for
 
@@ -199,6 +201,10 @@ class DiscoveryConfig(FrozenRecord):
     # O-4's pinned splitting rule (BACKLOG 81), "per_timeframe": one group `ctx_<tf>` per context timeframe across
     # families; in the dump and the config hash only when "per_timeframe", so every existing hash holds
     context_groups: ContextGroups = "join"
+    # H-02 amendment 2026-10-17 (BACKLOG 82): columns that are NaN in both train and test of any fold whose training
+    # rows do not all carry a finite value ("full coverage"; `pipeline.uncovered_columns`), e.g. ("macro_spx_dd20",)
+    # so H-07 is VIX-only there; in the dump and the config hash only when set, so every existing hash holds
+    full_coverage_columns: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def _q_only_under_tercile(self) -> DiscoveryConfig:
@@ -214,13 +220,15 @@ class DiscoveryConfig(FrozenRecord):
         q and method are left out of the dump, so such a config dumps and hashes exactly as before E-2 (H-02's pinned
         dump and every queued config hash hold); under the tercile rule all three are in the dump and so in the
         pre-registered config hash: another rule or another q is another trial. `context_groups` likewise: left out
-        at "join", in the dump (and the hash) at "per_timeframe"."""
+        at "join", in the dump (and the hash) at "per_timeframe"; `full_coverage_columns` left out when empty."""
         out: dict[str, Any] = handler(self)
         if self.threshold_rule == BREAK_EVEN_RULE:
             for k in ("threshold_rule", "tercile_q", "tercile_method"):
                 out.pop(k, None)
         if self.context_groups == "join":
             out.pop("context_groups", None)
+        if not self.full_coverage_columns:
+            out.pop("full_coverage_columns", None)
         return out
 
 
@@ -658,15 +666,20 @@ def run_discovery(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
     groups = groups or {c: c for c in pool}
     check_group_sizes(groups, cfg, group_mode)
     cluster_columns = check_cluster_columns(feats, pool, groups, cfg, group_mode)
+    cover = cfg.full_coverage_columns
+    if cover:
+        uncovered_columns(feats, np.array([], dtype=int), cover)     # a column the frame lacks: refused before any look
     purge = int(window.get("purge_days", 0))
-    sels = [select_in_fold(feats, labels, f, pool, cfg, groups, purge_days=purge) for f in folds]
+    # BACKLOG 82: a fold's selection sees an uncovered column as NaN, as its model will (`pipeline._walk_forward`)
+    sels = [select_in_fold(mask_columns(feats, uncovered_columns(feats, f.train_idx, cover) if cover else []), labels,
+                           f, pool, cfg, groups, purge_days=purge) for f in folds]
     feat_t, grp_t = stability_tables(sels, pool, groups, cfg)
     surv_groups, selected, surv_n, skipped = survivor_selection(feat_t, grp_t, cfg)
     res = _walk_forward(agent_id, labels, gross, feats, ["side", *selected], folds, version, n_trials=n_trials,
                         trades_per_year=trades_per_year, extra_cost_usd=extra_cost_usd, holdout=holdout,
                         score_holdout=False, window=window, timeframe=None, swap=swap,
                         fold_cols={s.k: ["side", *s.selected] for s in sels}, threshold_rule=cfg.threshold_rule,
-                        tercile_q=cfg.tercile_q)
+                        tercile_q=cfg.tercile_q, full_coverage_columns=cover)
     oof = res.oof
     selection = res.metrics.get("selection") or selection_summary(oof, folds, cfg.threshold_rule,
                                                                   tercile_q=cfg.tercile_q).model_dump()
