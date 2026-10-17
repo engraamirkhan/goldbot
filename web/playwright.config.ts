@@ -19,7 +19,10 @@ const PYTHON = process.env.PYTHON ?? (existsSync(REPO_PYTHON) ? REPO_PYTHON : "p
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
-  workers: 2,                                      // the two servers' stories run side by side; each file is serial
+  // Safe only while each spec file has its own server and TOTP clock (dashboard.spec.ts: port PORT, auth.spec.ts:
+  // AUTH_PORT) and is serial inside. A second spec in the "chromium" project must get its own server, or that
+  // project must be made serial (workers: 1), or two files would share one owner, one clock and one set of spent codes.
+  workers: 2,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {

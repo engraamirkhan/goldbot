@@ -22,7 +22,21 @@ export function totp(secretB32: string, t = Date.now()): string {
  * The server still verifies every code, accepts each once and only within +-1 step of its clock. The file only grows. */
 export function totpClock(stateDir: () => string) {
   const file = () => join(stateDir(), "totp_clock_steps");
-  const lastStep = new Map<string, number>();
+  // the steps already spent per secret live next to the clock, so a worker restarted after a failed test (Playwright
+  // starts a new one) cannot hand out a step the server has spent
+  const stepsFile = () => join(stateDir(), "totp_last_step");
+  const readSteps = (): Record<string, number> => {
+    try {
+      return JSON.parse(readFileSync(stepsFile(), "utf8")) as Record<string, number>;
+    } catch {
+      return {};
+    }
+  };
+  const writeAtomic = (path: string, text: string) => {
+    const tmp = `${path}.${process.pid}.tmp`;
+    writeFileSync(tmp, text);
+    renameSync(tmp, path);                                          // atomic: nobody reads half a file
+  };
   const offset = () => (existsSync(file()) ? Number(readFileSync(file(), "utf8")) || 0 : 0);
   const now = () => Date.now() + offset() * 30_000;
   return {
@@ -32,13 +46,11 @@ export function totpClock(stateDir: () => string) {
      * are spent. One test at a time per server (the stories are serial), so nothing else holds a code meanwhile. */
     fresh(secretB32: string): string {
       const current = Math.floor(now() / 30_000);
-      const step = Math.max(current, (lastStep.get(secretB32) ?? -Infinity) + 1);
-      if (step > current + 1) {
-        const tmp = `${file()}.${process.pid}.tmp`;
-        writeFileSync(tmp, String(offset() + (step - current - 1)));
-        renameSync(tmp, file());                                    // atomic: the server never reads half a number
-      }
-      lastStep.set(secretB32, step);
+      const steps = readSteps();
+      const step = Math.max(current, (steps[secretB32] ?? -Infinity) + 1);
+      steps[secretB32] = step;
+      writeAtomic(stepsFile(), JSON.stringify(steps));              // before the clock: a crash between leaves it ahead, safe
+      if (step > current + 1) writeAtomic(file(), String(offset() + (step - current - 1)));
       return totp(secretB32, step * 30_000);
     },
     /** A six-digit code that is none of the codes the server would accept now (it allows one step either side). */
