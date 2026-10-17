@@ -93,3 +93,39 @@ describe("Account: your sign-in", () => {
     expect(mine.textContent).not.toContain("@");
   });
 });
+
+// docs/ux/sign-in-email-code.md State H: a neutral (never red) row, owner only; email codes do not stop trading.
+describe("Account: email codes row", () => {
+  afterEach(() => { vi.restoreAllMocks(); apiModule.setUser(null); });
+  const state = (email_code: boolean) =>
+    vi.spyOn(apiModule.api, "authState").mockResolvedValue({ needs_setup: false, users: 1, email_link: false, email_code });
+
+  it("tells the owner email codes are off, and why, in a neutral row when mail is not set up", async () => {
+    apiModule.setUser({ email: "owner@example.com", role: "owner", signed_in_with: "password_totp" });
+    state(false);
+    render(<Account />);
+    const row = await screen.findByText(/^Email codes: off\./);
+    expect(row).toHaveTextContent(
+      'Email codes: off. Mail is not set up on the server (RUNBOOK 2.10, "Email sign-in"). Sign-in uses your authenticator app.');
+    expect(row).not.toHaveClass("err");
+    expect(row).not.toHaveAttribute("role", "alert");
+  });
+
+  it("tells the owner email codes are on and what still needs the authenticator", async () => {
+    apiModule.setUser({ email: "owner@example.com", role: "owner", signed_in_with: "email_code" });
+    state(true);
+    render(<Account />);
+    expect(await screen.findByText(/^Email codes: on\./)).toHaveTextContent(
+      "Email codes: on. You can sign in with your password and a code sent to your email. Re-arm, auto mode, " +
+      "password change, recovery codes and managing users still need your authenticator.");
+  });
+
+  it("is not shown to an approver", async () => {
+    apiModule.setUser({ email: "a@example.com", role: "approver", signed_in_with: "password_totp" });
+    const s = state(true);
+    render(<Account />);
+    await screen.findByRole("heading", { name: "Change password" });
+    expect(s).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Email codes:/)).toBeNull();
+  });
+});

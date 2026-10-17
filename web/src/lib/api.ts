@@ -92,13 +92,15 @@ export const api = {
   login: (email: string, password: string, totp: string) => req<Schemas["LoginResponse"]>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password, totp }) }),
   logout: () => req<Schemas["Ok"]>("/api/auth/logout", { method: "POST" }),
   accept: (token: string, password: string) => req<Schemas["AcceptResponse"]>("/api/auth/accept", { method: "POST", body: JSON.stringify({ token, password }) }),
-  invite: (email: string, role: GrantableRole) => req<Schemas["InviteResponse"]>("/api/auth/invite", { method: "POST", body: JSON.stringify({ email, role }) }),
+  // `totp` on the six user-management calls: the step-up after an email-code sign-in (ADR 0028), an authenticator or
+  // recovery code; "" after any other sign-in (the server decides from the session's stored method)
+  invite: (email: string, role: GrantableRole, totp = "") => req<Schemas["InviteResponse"]>("/api/auth/invite", { method: "POST", body: JSON.stringify({ email, role, totp }) }),
   users: () => req<UserRow[]>("/api/users"),
-  setRole: (email: string, role: GrantableRole) => req<Schemas["Ok"]>("/api/users/role", { method: "POST", body: JSON.stringify({ email, role }) }),
-  disable: (email: string) => req<Schemas["Ok"]>("/api/users/disable", { method: "POST", body: JSON.stringify({ email }) }),
-  enable: (email: string) => req<Schemas["Ok"]>("/api/users/enable", { method: "POST", body: JSON.stringify({ email }) }),
-  revokeSessions: (email: string) => req<Schemas["RevokeResponse"]>("/api/users/revoke-sessions", { method: "POST", body: JSON.stringify({ email }) }),
-  resetLink: (email: string) => req<Schemas["ResetLinkResponse"]>("/api/auth/reset-link", { method: "POST", body: JSON.stringify({ email }) }),
+  setRole: (email: string, role: GrantableRole, totp = "") => req<Schemas["Ok"]>("/api/users/role", { method: "POST", body: JSON.stringify({ email, role, totp }) }),
+  disable: (email: string, totp = "") => req<Schemas["Ok"]>("/api/users/disable", { method: "POST", body: JSON.stringify({ email, totp }) }),
+  enable: (email: string, totp = "") => req<Schemas["Ok"]>("/api/users/enable", { method: "POST", body: JSON.stringify({ email, totp }) }),
+  revokeSessions: (email: string, totp = "") => req<Schemas["RevokeResponse"]>("/api/users/revoke-sessions", { method: "POST", body: JSON.stringify({ email, totp }) }),
+  resetLink: (email: string, totp = "") => req<Schemas["ResetLinkResponse"]>("/api/auth/reset-link", { method: "POST", body: JSON.stringify({ email, totp }) }),
   reset: (token: string, new_password: string) => req<Schemas["AcceptResponse"]>("/api/auth/reset", { method: "POST", body: JSON.stringify({ token, new_password }) }),
   changePassword: (current_password: string, totp: string, new_password: string) =>
     req<Schemas["Ok"]>("/api/auth/password/change", { method: "POST", body: JSON.stringify({ current_password, totp, new_password }) }),
@@ -109,6 +111,14 @@ export const api = {
   emailLink: (email: string) => req<Schemas["EmailLinkResponse"]>("/api/auth/email-link", { method: "POST", body: JSON.stringify({ email }) }),
   redeemEmailLink: (token: string, totp: string) =>
     req<Schemas["LoginResponse"]>("/api/auth/email-link/redeem", { method: "POST", body: JSON.stringify({ token, totp }) }),
+  // ADR 0028: password + a 6-digit code emailed to the owner. The same answer for every input (a decoy challenge when
+  // nothing was sent); the challenge and the code live only in the Login screen's memory, never in storage.
+  emailCode: (email: string, password: string) =>
+    req<Schemas["EmailCodeChallenge"]>("/api/auth/email-code", { method: "POST", body: JSON.stringify({ email, password }) }),
+  verifyEmailCode: (challenge: string, code: string) =>
+    req<Schemas["LoginResponse"]>("/api/auth/email-code/verify", { method: "POST", body: JSON.stringify({ challenge, code }) }),
+  resendEmailCode: (challenge: string) =>
+    req<Schemas["EmailCodeChallenge"]>("/api/auth/email-code/resend", { method: "POST", body: JSON.stringify({ challenge }) }),
   recoveryCodes: (password: string, totp: string) =>
     req<Schemas["RecoveryCodesResponse"]>("/api/auth/recovery/codes", { method: "POST", body: JSON.stringify({ password, totp }) }),
   status: () => req<Status>("/api/status"),

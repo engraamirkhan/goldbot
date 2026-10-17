@@ -37,6 +37,35 @@ describe("api client", () => {
     ]);
   });
 
+  it("posts the email-code request, verify and resend to their routes, and the step-up code with the six owner actions", async () => {
+    const { api } = await import("./api");
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(200, {})));
+    vi.stubGlobal("fetch", fetchMock);
+    await api.emailCode("o@x.io", "pw");
+    await api.verifyEmailCode("ch", "123456");
+    await api.resendEmailCode("ch");
+    await api.invite("n@x.io", "viewer", "111111");
+    await api.setRole("n@x.io", "approver", "222222");
+    await api.disable("n@x.io", "333333");
+    await api.enable("n@x.io", "444444");
+    await api.revokeSessions("n@x.io", "555555");
+    await api.resetLink("n@x.io", "666666");
+    await api.disable("n@x.io");                       // no step-up after an authenticator sign-in
+    const sent = fetchMock.mock.calls.map((c) => [c[0], JSON.parse(c[1].body)]);
+    expect(sent).toEqual([
+      ["/api/auth/email-code", { email: "o@x.io", password: "pw" }],
+      ["/api/auth/email-code/verify", { challenge: "ch", code: "123456" }],
+      ["/api/auth/email-code/resend", { challenge: "ch" }],
+      ["/api/auth/invite", { email: "n@x.io", role: "viewer", totp: "111111" }],
+      ["/api/users/role", { email: "n@x.io", role: "approver", totp: "222222" }],
+      ["/api/users/disable", { email: "n@x.io", totp: "333333" }],
+      ["/api/users/enable", { email: "n@x.io", totp: "444444" }],
+      ["/api/users/revoke-sessions", { email: "n@x.io", totp: "555555" }],
+      ["/api/auth/reset-link", { email: "n@x.io", totp: "666666" }],
+      ["/api/users/disable", { email: "n@x.io", totp: "" }],
+    ]);
+  });
+
   it("drops the session on 401", async () => {
     const { api, setToken, hasToken } = await import("./api");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(401, { detail: "login required" })));

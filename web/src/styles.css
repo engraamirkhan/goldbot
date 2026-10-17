@@ -33,6 +33,18 @@ th { color: var(--muted); font-weight: 500; }
 .login button:disabled { opacity: 0.6; }
 .login button.link { background: none; color: var(--fg); text-decoration: underline; padding: 8px 4px; align-self: flex-start; }
 .login .alt { display: flex; flex-wrap: wrap; gap: 0 16px; }
+/* email code (docs/ux/sign-in-email-code.md): the method choice is two 44px rows; the resend line keeps one fixed
+   44px slot whether it holds the countdown, the limit or the button, so nothing reflows as the seconds run */
+.login fieldset.method { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.login fieldset.method legend { font-size: 14px; padding: 0; margin-bottom: 2px; }
+.login .method label { flex-direction: row; align-items: center; gap: 10px; min-height: 44px; font-size: 16px; cursor: pointer; }
+.login .method input { width: 20px; height: 44px; min-height: 44px; margin: 0; padding: 0; flex: none; accent-color: var(--accent); }
+.login .resend { min-height: 44px; display: flex; align-items: center; }
+.login .countdown { font-variant-numeric: tabular-nums; }
+.login :focus-visible, .stepup :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.stepup { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; max-width: 380px; }
+.stepup label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.stepup input { box-sizing: border-box; min-height: 44px; padding: 6px 10px; font-size: 16px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--fg); }
 tr.retired { color: var(--muted); }
 
 /* signed-in role, never the email (docs/ux/header-role.md); muted, never a state colour */
