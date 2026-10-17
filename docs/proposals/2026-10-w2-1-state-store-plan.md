@@ -17,13 +17,17 @@ wins; A11 owner halt fails closed; proposal §2 `core.db` `synchronous=FULL`.
 3. A corrupt or unreadable `core.db` refuses the start (as today); broker-side stops protect open trades.
 
 ## Files (F10: refreshed anchors)
+Amended 2026-10-17 (cto, ADR 0023): W2-1 builds on TD-2 step 1. The persistence code is in `engine/store.py` behind
+`EngineStore`, and `RiskStateRecord` is replaced by step 1's `RiskSnapshot`.
+
 | File | Change |
 |---|---|
 | `db/migrations.py:218-231` | core v3 `orders`, `open_trades`, `closing`, `state_meta`; v4 `risk_state`; v5 `proposals`, `decisions` (`card_created NOT NULL`), `control`, `control_log`; all additive; every row has `written_ns` |
-| new `db/core_state.py` | `OrderStore`, `RiskStore`, `OrderPersistError(StateDbError)`, `RiskStateRecord`, `export_state(state_dir)` |
+| new `db/core_state.py` | `OrderStore`, `RiskStore`, `OrderPersistError(StateDbError)`, `export_state(state_dir)`; reuses `RiskSnapshot` / `OrdersSnapshot` from `engine/store.py` (no `RiskStateRecord`, ADR 0023) |
+| `engine/store.py` (from TD-2 step 1) | `CoreDbEngineStore` behind `EngineStore`; additive protocol extensions only (e.g. entry-path `commit_sending` for F4/F6 timeouts, `written_ns` stamping for F3), each also implemented by `JsonEngineStore` (ADR 0023 S6) |
 | `db/__main__.py` | `export-state` command |
 | `db/import_state.py:85` | importers `once=True, backup=True`, insert-or-do-nothing |
-| `engine/runner.py` | `_execute` 1354, `_orders_record` 2414, `_save_orders` 2423, `_load_orders` 2434, `_save_risk_state` 2849, `_save_risk_state_now`, `_load_risk_state` 2875, `_archive_stale_proposals` 494, `_retired_proposal` 527, `_reset_owner_mode` 2191 |
+| `engine/runner.py` | `_execute`, `_orders_record` (F7 `state_unwritable`; stays in the runner), `_save_risk_state_now`, `_archive_stale_proposals`, `_retired_proposal`, `_reset_owner_mode` (F5); the store is chosen in `__init__`. The save/load paths of `_save_orders`, `_load_orders`, `_save_risk_state`, `_load_risk_state` are in `engine/store.py` after TD-2 step 1 and are not edited here. Anchors re-read at the build base |
 | `telegram/bus.py:92-286` | DB-backed; existing API kept (incl. `discard_decision`, `notify_owner`) plus `retired`, `open_for_account`, `has_decision`, `is_open` |
 | `telegram/outbox.py:149`, `automode.py:177`, `scripts/e2e_server.py:148` | onto the new bus methods |
 | `risk/gate.py` | reason `state_unwritable` |

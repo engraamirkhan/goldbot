@@ -8,6 +8,12 @@ measured number. Nothing here changes a safety rail.
 delegation; TD-16 added (bridge lot ceiling, ranked 3rd); TD-13 given lane id W3-1; standing rule on self-hosted CI
 runners added (section 4, "Standing constraint"). ROADMAP §5 now points here.
 
+**Update 2026-10-17, cto:** ADR 0023 (TD-2 / TD-14 engine split) accepted with conditions after review of the architect's
+seam map (`docs/proposals/2026-10-runner-seam-map.md`, `7dc12a3`). Step-1 interface accepted (conditions S1-S7);
+`_orders_record` stays in the runner; steps reordered (account guard 4th, windows 2nd); stop rule made measurable;
+line-cap target after step 7 is ≤ 1,500, with ≤ 1,200 left to a step 8. W2-1 reuses `RiskSnapshot` (its
+`RiskStateRecord` is dropped). Ruling 11 in section 7.
+
 ## Verdict
 
 The platform is sound on the money path: fail-closed fallbacks exist for every cross-process field checked, the bridge
@@ -47,7 +53,7 @@ risk × (6 − cost), so a cheap fix to a real risk ranks first. Ties go to the 
 | Rank | Id | Item | Risk (L×I) | Cost | Priority | Accountable | Date | ADR |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | TD-1 | Wine (and MT5 build) unpinned on the MT5 box | 15 (3×5) | 1 | **75** | sre | **decided 10-16 (ADR 0019 accepted, option 2)**; held and in `/health` at the next owner-approved MT5-box command, by Sat 10-24 (market closed) | ADR 0019 (accepted) |
-| 2 | TD-2 | Extract the engine's persistence boundary from `runner.py` before W2-1 (split step 1) | 16 (4×4) | 2 | **64** | implementer (seam map: architect, with the W2-1 plan Wed 10-21) | merged on the integration branch Fri 10-30 | yes: 0023 runner split |
+| 2 | TD-2 | Extract the engine's persistence boundary from `runner.py` before W2-1 (split step 1) | 16 (4×4) | 2 | **64** | implementer (seam map: architect, delivered `7dc12a3` 10-17) | PR 0 golden grid Tue 10-27; move merged on the integration branch Fri 10-30 | ADR 0023 (accepted 10-17, conditions S1-S7) |
 | 3 | TD-16 | Bridge's only independent size ceiling is a fixed 3.0 lots while the demo account offers 1:5000: an equity-scaled lot ceiling in `GuardedBroker` | 15 (3×5) | 2 | **60** (money path, ranked above TD-3) | architect (plan); implementer builds; trading-safety reviews | plan Fri 10-23; built and merged Fri 11-06 | yes: 0027 bridge lot ceiling |
 | 4 | TD-3 | e2e `PYTHON` default can run the server on the wrong interpreter and the wrong tree | 12 (4×3) | 1 | **60** | implementer | Tue 10-20 (after R-AUTH merges; same files) | no |
 | 5 | TD-4 | Flaky auth e2e: email sign-in timeout | 12 (4×3) | 2 | **48** | test-engineer | Tue 10-20 | no |
@@ -60,7 +66,7 @@ risk × (6 − cost), so a cheap fix to a real risk ranks first. Ties go to the 
 | 12 | TD-11 | Unit and integration suite speed | 10 (5×2) | 3 | **30** | test-engineer | durations measured Wed 10-21; fixes Fri 11-06 | no |
 | 13 | TD-12 | State store: W2-1 cutover and its rollback story | 10 (2×5) | 4 | **20** | implementer (plan: architect) | rollback ADR Wed 10-28; build Wave 2, 11-02 – 11-20 | yes: 0026 core.db cutover and rollback |
 | 14 | TD-13 | State store leftovers (lane **W3-1**): step 3 remainder, steps 4-5 and 8, `state_db` health, `run.py migrate` | 9 (3×3) | 3 | **27** → ranked after TD-12, which it depends on | implementer | plan Fri 11-20; JSON exports retired (step 8) Fri 12-11 | covered by 0026 |
-| 15 | TD-14 | `runner.py` split steps 2-7 (after W2-1) | 16 (4×4) | 5 | **16** | implementer (plan: architect, Fri 11-13) | one seam per PR, Mon 11-23 – Fri 12-11, before the 12-14 freeze | covered by 0023 |
+| 15 | TD-14 | `runner.py` split steps 2-7 (after W2-1) | 16 (4×4) | 5 | **16** | implementer (plan and state-ownership tables for account guard, reconcile and clock: architect, Fri 11-13) | one seam per PR, Tue 11-24 – Fri 12-11, before the 12-14 freeze; order windows, exits, account guard, sizing, reconcile, clock | ADR 0023 |
 | 16 | TD-15 | Watch list: `owner_history.py`, `director.py`, `jobs.py`, `perf_report.py` above 1,100 lines | 4 (2×2) | 3 | **12** | architect | review Fri 11-20 | no |
 
 TD-13 scores 27 but cannot start before TD-12's tables exist; it is ranked by dependency, not score.
@@ -168,28 +174,35 @@ money-path code need hand resolution.
    keeps its public methods (`on_tick`, `on_bar_close`, `warm_start`, `no_quote_pass`, `set_*`, `flush_*`,
    `note_tick_error`, `clock_skew_s`) as the facade, so `ops/run.py` and the tests do not change. A seam that reads too
    much of `Engine` to extract cleanly is stopped and recorded, not forced through a mixin.
-3. **Ratchet.** A test caps `runner.py`'s line count at its post-step size, lowered at each step (target ≤ 1,200
-   after step 7), so the hotspot cannot regrow.
+3. **Ratchet.** A test caps `runner.py`'s line count at its post-step size, lowered at each step, so the hotspot
+   cannot regrow. Target after step 7: ≤ 1,500 (ADR 0023: the seams move 2,078 lines of 3,492); ≤ 1,200 needs a
+   step 8, scoped at the step-7 review.
 4. **File ownership.** After each step the ROADMAP "Shared files" note lists the new module and its owning lane.
 5. **No split step deploys during the DST-gap week (10-26 – 10-30)**; merging on the integration branch is fine.
 
-**Seams, in order** (line ranges at `9f04599`):
+**Seams, in order** (superseded 2026-10-17 by ADR 0023, which holds the dated table and line ranges at `7dc12a3`):
 
-| Step | Module | Methods | When |
+| Step | Module | Due | Depends on |
 | --- | --- | --- | --- |
-| 1 | `engine/store.py`: `EngineStore` interface, JSON implementation | `_orders_path`, `_orders_record`, `_save_orders`, `_load_orders` (2411-2471); `_risk_path`, `_save_risk_state`, `_save_risk_state_now`, `_load_risk_state` (2846-2900); the file write in `_write_state` (`runner.py:3434`). `_write_state` keeps building the payload | TD-2, by Fri 10-30; W2-1 then adds the `core.db` implementation behind `EngineStore` |
-| 2 | `engine/exits.py` | `_manage_open` … `_blackout_rescore` (1457-1765) | after W2-1 merges |
-| 3 | `engine/reconcile.py` | `_reconcile`, `_adopt`, `_agent_for_magic` (1768-1858); `_resolve_sent` … `_closed_excursion` (2472-2846) | Wave 3 start |
-| 4 | `engine/account_guard.py` | `_refresh_account` … `_reset_owner_mode` (1909-2208); `_roll_risk_period`, `_poll_rearm`, `_rearm_conditions` (2353-2411) | |
-| 5 | `engine/clock.py` | `_host_now`, `no_quote_pass`, `_host_clock_exits` (692-766); `_server_clock` … `_check_new_bars` (2208-2353) | |
-| 6 | `engine/sizing.py` | `_account_currency` … `_published_limits` (961-1123); `_refresh_broker_terms` … `_throttle_state` (3197-3368) | |
-| 7 | `engine/windows.py` | `_blackout` … `_windows_state` (2926-3078) | by Fri 12-11 |
+| 1 | `engine/store.py`: `EngineStore` protocol, `JsonEngineStore`, `RiskSnapshot` / `OrdersSnapshot`; `_orders_record` and `_save_risk_state_now` stay in the runner | Fri 10-30 (PR 0 golden grid first) | BACKLOG 62 |
+| 2 | `engine/windows.py` | Tue 11-24 | step 1 |
+| 3 | `engine/exits.py` | Thu 11-26 | W2-1 (F4) |
+| 4 | `engine/account_guard.py` (split in two if its ownership table shows > 8 shared attributes) | Tue 12-01 | BACKLOG 62, W2-1 (F5) |
+| 5 | `engine/sizing.py` | Thu 12-03 | TD-16 |
+| 6 | `engine/reconcile.py` | Tue 12-08 | steps 1, 3; W2-1 |
+| 7 | `engine/clock.py` | Fri 12-11 | none |
 
 What stays in `runner.py`: the tick loop, bar close, frame building, `_decide` / `_on_decision` / `_execute`
-orchestration and shadow stepping, roughly 1,000-1,200 lines. **ADR 0023** records the seams and rules; the
-architect's seam map is due with the W2-1 plan on Wed 10-21 (an addition to lane A-PLAN, read-only).
-**Reverse if** step 1 shows the persistence methods share more `Engine` state than a narrow interface can carry: then
-W2-1 goes first in place (option B) and the split moves after it.
+orchestration and shadow stepping. The 2026-10-16 estimate of "roughly 1,000-1,200 lines" was not backed by
+arithmetic; measured, the seams leave ~1,414 lines before delegates (ADR 0023). **Reverse if** PR 0's golden grid
+cannot be reproduced by a move-only step 1: then W2-1 goes first in place (option B) and the split moves after it.
+
+**CTO review of the seam map (2026-10-17).** Evidence from `7dc12a3`: anchors re-read with `grep -n "def "`
+(all match the map); shared Engine attributes per seam by a regex pass (store 14 as snapshot fields, account guard
+24, reconcile 17, clock 15, exits 10, sizing 10, windows 4); `runner.py:527, 3307, 3319` still read files outside
+the state store, so the AST ratchet needs an allow-list (S5); `FrozenRecord` is `extra="forbid"` (`base.py:38`)
+while the risk load ignores unknown keys, so snapshots must be built from parsed values (S1). Decisions and
+conditions in ADR 0023.
 
 ### TD-3 e2e `PYTHON` default (`web/playwright.config.ts:5`)
 `const PYTHON = process.env.PYTHON ?? "python"` starts `scripts/e2e_server.py` with whichever `python` is first on
@@ -319,7 +332,7 @@ TD-11 → TD-10 → TD-5 test. SRE: TD-1, then TD-5 health and deploy parts.
 | --- | --- | --- | --- | --- |
 | 0019 | Wine pinning | sre | **accepted 2026-10-16** by PD + PO + CTO (option 2) | done |
 | 0021 | Operational orders through the RiskGate | architect | **accepted 2026-10-16** by PD + PO + CTO; trading-safety APPROVE at `d1d86d6`, G1a-c fixed in `d4ce33d` | done |
-| 0023 | Engine split: seams, move-only rule, ratchet | architect | CTO | Wed 10-21 |
+| 0023 | Engine split: seams, move-only rule, ratchet | architect (seam map) | **accepted 2026-10-17** by CTO, with conditions S1-S7 | done |
 | 0024 | Release compatibility: cross-release test, deploy-together manifest, release skew | test-engineer with sre | CTO | Fri 10-23 |
 | 0025 | ADR number reservation (amends 0012) | implementer | CTO | Fri 10-23 |
 | 0026 | `core.db` cutover and rollback (W2-1) | architect | CTO, trading-safety review | Wed 10-28 |
@@ -339,6 +352,12 @@ Numbers 0023-0027 are reserved by this register under the TD-7 interim rule.
 8. Bridge lot ceiling scaled to equity (TD-16): direction set, plan by the architect Fri 10-23, ADR 0027.
 9. No self-hosted CI runner on a host holding trading secrets without a security-reviewer GO (standing constraint).
 10. Post-W2-1 state-store work is lane W3-1 (TD-13).
+11. **ADR 0023 accepted with conditions (2026-10-17, CTO).** Step-1 interface accepted (S1-S7); `_orders_record` stays
+    in the runner (X7 ordering, `runner.py:2468-2475`); order changed to windows, exits, account guard, sizing,
+    reconcile, clock (account guard 4th: most coupled seam, 24 shared attributes, proven pattern first); stop rule
+    measured as non-owned, non-injected Engine attributes > 8; ratchet target ≤ 1,500 after step 7, ≤ 1,200 via a
+    step 8; W2-1's `RiskStateRecord` replaced by `RiskSnapshot`. Reverse if step 1 cannot be move-only, or three
+    seams in a row are stopped.
 
 ## 8. Not verified / left out
 
@@ -346,8 +365,8 @@ Numbers 0023-0027 are reserved by this register under the TD-7 interim rule.
   sandbox, CLAUDE.md "Environment facts"). Whether CI's one retry also failed was not read from the log.
 - Unit and integration durations per test were not measured here (no run on a shared, loaded machine); TD-11 starts
   with that measurement.
-- The method counts and seam line ranges are from `grep` at `9f04599`; state shared between seams was not traced, which
-  is what the architect's seam map (TD-2) settles.
+- Shared-state counts per seam (ADR 0023) are a regex pass at `7dc12a3`, not a data-flow trace; the architect's
+  state-ownership tables (Fri 11-13) settle steps 4, 6 and 7.
 - TD-16's figures are the terminal's as read on 2026-10-16; the notional and loss rows are derived from them (price
   and equity inferred, not read from the broker ledger). The architect's plan re-reads them on the box.
 - The ROADMAP §5 pointer to this register was added 2026-10-16 (late).

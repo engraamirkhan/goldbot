@@ -1,6 +1,6 @@
 # Seam map: splitting goldbot/engine/runner.py (TD-2 / ADR 0023, option C)
 
-Status: architect, 2026-10-17, at ab671be (runner.py = 3,492 lines). For CTO sign-off. Requirements: DESIGN Stack
+Status: architect, 2026-10-17, at ab671be (runner.py = 3,492 lines). For CTO sign-off. **Decided 2026-10-17: ADR 0023 accepts it with conditions; the step order and line-cap target there supersede this map.** Requirements: DESIGN Stack
 "SQLite for live state", TRACEABILITY X7, A11, S4.
 
 ## Step 1 — `engine/store.py` (move-only, due Fri 10-30, after BACKLOG 62 merges)
