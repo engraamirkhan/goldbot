@@ -33,7 +33,7 @@ describe("Approvals", () => {
   });
 
   it("shows the safety strip above the proposal card", async () => {
-    apiModule.setUser({ email: "v@x.io", role: "viewer" });
+    apiModule.setUser({ email: "v@x.io", role: "viewer", signed_in_with: "password_totp" });
     renderWithClient();
     expect(await screen.findByText("New entries allowed")).toBeInTheDocument();
     expect(await screen.findByText("LONG")).toBeInTheDocument();
@@ -42,7 +42,7 @@ describe("Approvals", () => {
   });
 
   it("does not offer approve to a viewer", async () => {
-    apiModule.setUser({ email: "v@x.io", role: "viewer" });
+    apiModule.setUser({ email: "v@x.io", role: "viewer", signed_in_with: "password_totp" });
     renderWithClient();
     await screen.findByText("LONG");
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
@@ -50,7 +50,7 @@ describe("Approvals", () => {
   });
 
   it("lets an approver approve and reject with a reason, each bound to the card's own created stamp", async () => {
-    apiModule.setUser({ email: "a@x.io", role: "approver" });
+    apiModule.setUser({ email: "a@x.io", role: "approver", signed_in_with: "password_totp" });
     vi.spyOn(apiModule.api, "proposals").mockResolvedValue([proposal(),
       proposal({ proposal_id: "p2", side: "short", created: 1760000001.875 })]);
     const decide = vi.spyOn(apiModule.api, "decide").mockResolvedValue({ outcome: "SUBMITTED" });
@@ -64,7 +64,7 @@ describe("Approvals", () => {
   });
 
   it("shows a refused decision on the card", async () => {
-    apiModule.setUser({ email: "a@x.io", role: "approver" });
+    apiModule.setUser({ email: "a@x.io", role: "approver", signed_in_with: "password_totp" });
     vi.spyOn(apiModule.api, "decide").mockRejectedValue(new Error("proposal expired"));
     renderWithClient();
     await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
@@ -74,7 +74,7 @@ describe("Approvals", () => {
   it("counts the 90 s window down without a refetch, turns urgent, then expires", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      apiModule.setUser({ email: "a@x.io", role: "approver" });
+      apiModule.setUser({ email: "a@x.io", role: "approver", signed_in_with: "password_totp" });
       vi.spyOn(apiModule.api, "proposals").mockResolvedValue([proposal({ expires_at: new Date(Date.now() + 20_000).toISOString() })]);
       renderWithClient();
       const secs = () => Number(screen.getByRole("timer").getAttribute("aria-label")?.split(" ")[0]);

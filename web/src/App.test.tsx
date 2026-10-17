@@ -34,7 +34,7 @@ describe("App header", () => {
   afterEach(() => { vi.unstubAllGlobals(); apiModule.setToken(null); });
 
   it("shows the owner as 'Owner' with 'Signed in as' for screen readers, and never the email", () => {
-    apiModule.setUser({ email: "owner@example.com", role: "owner" });
+    apiModule.setUser({ email: "owner@example.com", role: "owner", signed_in_with: "password_totp" });
     renderApp();
     const banner = appBanner();
     expect(banner).toHaveTextContent("Owner");
@@ -45,7 +45,7 @@ describe("App header", () => {
   it.each([["approver", "Approver"], ["viewer", "Viewer"]] as const)(
     "shows the %s role as '%s' and never their email",
     (role, label) => {
-      apiModule.setUser({ email: "v@x.io", role });
+      apiModule.setUser({ email: "v@x.io", role, signed_in_with: "password_totp" });
       renderApp();
       const banner = appBanner();
       expect(banner).toHaveTextContent(`Signed in as ${label}`);
@@ -63,7 +63,7 @@ describe("App header", () => {
   });
 
   it("keeps the email out of the page title", () => {
-    apiModule.setUser({ email: "owner@example.com", role: "owner" });
+    apiModule.setUser({ email: "owner@example.com", role: "owner", signed_in_with: "password_totp" });
     renderApp();
     expect(document.title).not.toContain("@");
   });

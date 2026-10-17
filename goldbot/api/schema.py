@@ -157,12 +157,17 @@ class FeedHealth(BaseModel):
 # ----------------------------------------------------------------------------- auth and users
 Role = Literal["owner", "approver", "viewer"]
 GrantableRole = Literal["approver", "viewer"]     # the owner role belongs to auth.owner_email and is never granted
+# how a session signed in (aux.db sessions.method; ADR 0028): an `email_code` session needs the authenticator or a
+# recovery code again for the owner's admin actions (invite, reset link, role, disable, enable, revoke sessions)
+SessionMethod = Literal["password_totp", "email_link", "email_code", "recovery"]
 
 
 class AuthState(BaseModel):
     needs_setup: bool
     users: int
     email_link: bool = False      # the owner's "email me a sign-in link" is offered (auth.mail configured)
+    # the owner's "email me a code" is offered: mail ready, the owner account exists, the code key is in the keyring
+    email_code: bool = False
 
 
 class SetupRequest(ApiRequest):
@@ -191,11 +196,36 @@ class LoginResponse(BaseModel):
     expires_in: int
     role: Role
     email: str
+    signed_in_with: SessionMethod = "password_totp"
+
+
+class EmailCodeRequest(ApiRequest):
+    """Email + password: the owner gets a 6-digit code by email; every input gets the same answer (ADR 0028)."""
+    email: str = ""
+    password: str = ""
+
+
+class EmailCodeChallenge(BaseModel):
+    """The same shape for every request: an opaque challenge id held only by this browser (a decoy that can never
+    verify when nothing was sent), how long a code works and when the screen may offer Resend."""
+    challenge: str
+    expires_in_s: int
+    resend_after_s: int
+
+
+class EmailCodeVerifyRequest(ApiRequest):
+    challenge: str = ""
+    code: str = Field("", max_length=16)      # 6 digits; a pasted "482 913" keeps its space, the server strips it
+
+
+class EmailCodeResendRequest(ApiRequest):
+    challenge: str = ""
 
 
 class InviteRequest(ApiRequest):
     email: str
     role: GrantableRole = "viewer"
+    totp: str = ""          # the step-up after an email-code sign-in: authenticator or recovery code (ADR 0028)
 
 
 class InviteResponse(BaseModel):
@@ -216,6 +246,7 @@ class AcceptResponse(BaseModel):
 class Me(BaseModel):
     email: str
     role: Role
+    signed_in_with: SessionMethod = "password_totp"     # the screens ask for the step-up code when "email_code"
 
 
 class UserRow(BaseModel):
@@ -228,10 +259,13 @@ class UserRow(BaseModel):
 class RoleChange(ApiRequest):
     email: str
     role: GrantableRole
+    totp: str = ""          # the step-up after an email-code sign-in (ADR 0028)
 
 
 class UserRef(ApiRequest):
+    """A user for reset-link, disable, enable and revoke-sessions."""
     email: str
+    totp: str = ""          # the step-up after an email-code sign-in: authenticator or recovery code (ADR 0028)
 
 
 class Ok(BaseModel):

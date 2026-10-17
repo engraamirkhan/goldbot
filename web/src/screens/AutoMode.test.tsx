@@ -19,7 +19,7 @@ const setLine = (re: RegExp) => (_: string, el: Element | null) => el?.tagName =
 const ELIGIBLE =view({ eligible: true, reasons: [], decided: 120, approved: 70, rejected: 50, can_enable: true });
 
 function renderCard(role: apiModule.Role) {
-  apiModule.setUser({ email: "o@x.io", role });
+  apiModule.setUser({ email: "o@x.io", role, signed_in_with: "password_totp" });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={qc}><AutoModeCard /></QueryClientProvider>);
 }

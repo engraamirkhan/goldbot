@@ -664,6 +664,11 @@
    },
    "AuthState": {
     "properties": {
+     "email_code": {
+      "default": false,
+      "title": "Email Code",
+      "type": "boolean"
+     },
      "email_link": {
       "default": false,
       "title": "Email Link",
@@ -1468,6 +1473,78 @@
      "outcome"
     ],
     "title": "DecisionResult",
+    "type": "object"
+   },
+   "EmailCodeChallenge": {
+    "description": "The same shape for every request: an opaque challenge id held only by this browser (a decoy that can never\nverify when nothing was sent), how long a code works and when the screen may offer Resend.",
+    "properties": {
+     "challenge": {
+      "title": "Challenge",
+      "type": "string"
+     },
+     "expires_in_s": {
+      "title": "Expires In S",
+      "type": "integer"
+     },
+     "resend_after_s": {
+      "title": "Resend After S",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "challenge",
+     "expires_in_s",
+     "resend_after_s"
+    ],
+    "title": "EmailCodeChallenge",
+    "type": "object"
+   },
+   "EmailCodeRequest": {
+    "additionalProperties": false,
+    "description": "Email + password: the owner gets a 6-digit code by email; every input gets the same answer (ADR 0028).",
+    "properties": {
+     "email": {
+      "default": "",
+      "title": "Email",
+      "type": "string"
+     },
+     "password": {
+      "default": "",
+      "title": "Password",
+      "type": "string"
+     }
+    },
+    "title": "EmailCodeRequest",
+    "type": "object"
+   },
+   "EmailCodeResendRequest": {
+    "additionalProperties": false,
+    "properties": {
+     "challenge": {
+      "default": "",
+      "title": "Challenge",
+      "type": "string"
+     }
+    },
+    "title": "EmailCodeResendRequest",
+    "type": "object"
+   },
+   "EmailCodeVerifyRequest": {
+    "additionalProperties": false,
+    "properties": {
+     "challenge": {
+      "default": "",
+      "title": "Challenge",
+      "type": "string"
+     },
+     "code": {
+      "default": "",
+      "maxLength": 16,
+      "title": "Code",
+      "type": "string"
+     }
+    },
+    "title": "EmailCodeVerifyRequest",
     "type": "object"
    },
    "EmailLinkRedeemRequest": {
@@ -2463,6 +2540,11 @@
       ],
       "title": "Role",
       "type": "string"
+     },
+     "totp": {
+      "default": "",
+      "title": "Totp",
+      "type": "string"
      }
     },
     "required": [
@@ -2622,6 +2704,17 @@
       "title": "Role",
       "type": "string"
      },
+     "signed_in_with": {
+      "default": "password_totp",
+      "enum": [
+       "password_totp",
+       "email_link",
+       "email_code",
+       "recovery"
+      ],
+      "title": "Signed In With",
+      "type": "string"
+     },
      "token": {
       "title": "Token",
       "type": "string"
@@ -2772,6 +2865,17 @@
        "viewer"
       ],
       "title": "Role",
+      "type": "string"
+     },
+     "signed_in_with": {
+      "default": "password_totp",
+      "enum": [
+       "password_totp",
+       "email_link",
+       "email_code",
+       "recovery"
+      ],
+      "title": "Signed In With",
       "type": "string"
      }
     },
@@ -3596,6 +3700,17 @@
        "viewer"
       ],
       "title": "Role",
+      "type": "string"
+     },
+     "signed_in_with": {
+      "default": "password_totp",
+      "enum": [
+       "password_totp",
+       "email_link",
+       "email_code",
+       "recovery"
+      ],
+      "title": "Signed In With",
       "type": "string"
      },
      "token": {
@@ -4656,6 +4771,11 @@
       ],
       "title": "Role",
       "type": "string"
+     },
+     "totp": {
+      "default": "",
+      "title": "Totp",
+      "type": "string"
      }
     },
     "required": [
@@ -5370,9 +5490,15 @@
    },
    "UserRef": {
     "additionalProperties": false,
+    "description": "A user for reset-link, disable, enable and revoke-sessions.",
     "properties": {
      "email": {
       "title": "Email",
+      "type": "string"
+     },
+     "totp": {
+      "default": "",
+      "title": "Totp",
       "type": "string"
      }
     },
@@ -5717,6 +5843,123 @@
      }
     },
     "summary": "Accept"
+   }
+  },
+  "/api/auth/email-code": {
+   "post": {
+    "description": "Owner only. A challenge for every input (a decoy unless the password is right, the address is the owner's\nand mail is ready); 403 only while the sign-in lockout holds, as for sign-in.",
+    "operationId": "email_code_api_auth_email_code_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/EmailCodeRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/EmailCodeChallenge"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Email Code"
+   }
+  },
+  "/api/auth/email-code/resend": {
+   "post": {
+    "description": "A new code for this challenge (only the newest works): not before resend_after_s; the same shape always.",
+    "operationId": "email_code_resend_api_auth_email_code_resend_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/EmailCodeResendRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/EmailCodeChallenge"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Email Code Resend"
+   }
+  },
+  "/api/auth/email-code/verify": {
+   "post": {
+    "description": "The challenge and its code: a 12 h owner session (method email_code). Every success is announced by\nTelegram (AuthStore) and by email (condition 10).",
+    "operationId": "email_code_verify_api_auth_email_code_verify_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/EmailCodeVerifyRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/LoginResponse"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Email Code Verify"
    }
   },
   "/api/auth/email-link": {
