@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from goldbot.execution.not_placed import NotPlaced
 from goldbot.ops.account_view import CantCheck, LossBudget, Milestones
 from goldbot.telegram.approvals import PROPOSAL_ID_PATTERN
 
@@ -105,13 +106,17 @@ class DecidedProposal(Proposal):
     """A proposal decided in the last few minutes, so its card can show what happened to it.
 
     submitted: decision recorded, the engine applies it (and re-checks the RiskGate) on its next tick;
-    approved: the order was sent; refused: approved, but the RiskGate re-check refused the order (see `refusal`);
+    approved: the order was sent; refused: approved, but not placed: the RiskGate re-check, the MT5 box or the broker
+    refused the order (see `refusal`; `not_placed` words the MT5 box's and the broker's refusals);
     rejected: with its reason code; expired: nobody decided within the window. `decided_channel` ("telegram" |
     "dashboard") and `decided_ts` say how and when it was decided, never who (BACKLOG 52: identity is kept in the
     auth audit log only)."""
     status: Literal["submitted", "approved", "rejected", "expired", "refused"]
     reason_code: Literal["news", "cost", "discretion", "duplicate", "other"] | None = None
     refusal: list[str] = []
+    # docs/ux/order-not-placed.md: who refused an approved order and why, in the owner's words (the same table as the
+    # Telegram card and notice); null for a RiskGate refusal and for every other status
+    not_placed: NotPlaced | None = None
     decided_channel: str | None = None
     decided_ts: float | None = None         # epoch s, the decision's own clock; None for expired and older files
 

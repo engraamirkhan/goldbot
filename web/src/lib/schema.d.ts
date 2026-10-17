@@ -1084,7 +1084,8 @@ export interface components {
          * @description A proposal decided in the last few minutes, so its card can show what happened to it.
          *
          *     submitted: decision recorded, the engine applies it (and re-checks the RiskGate) on its next tick;
-         *     approved: the order was sent; refused: approved, but the RiskGate re-check refused the order (see `refusal`);
+         *     approved: the order was sent; refused: approved, but not placed: the RiskGate re-check, the MT5 box or the broker
+         *     refused the order (see `refusal`; `not_placed` words the MT5 box's and the broker's refusals);
          *     rejected: with its reason code; expired: nobody decided within the window. `decided_channel` ("telegram" |
          *     "dashboard") and `decided_ts` say how and when it was decided, never who (BACKLOG 52: identity is kept in the
          *     auth audit log only).
@@ -1124,6 +1125,7 @@ export interface components {
              * @default false
              */
             min_lot_exception: boolean;
+            not_placed?: components["schemas"]["NotPlaced"] | null;
             /** P */
             p: number;
             /** Proposal Id */
@@ -1741,6 +1743,32 @@ export interface components {
             /** Message */
             message: string;
             view: components["schemas"]["AutoModeView"];
+        };
+        /**
+         * NotPlaced
+         * @description Why an approved order was not placed, in the owner's words. `reason` is a lower-case clause with no final full
+         *     stop that reads after either heading ("Refused by the broker." / "Refused by the MT5 box."); None for the
+         *     fallback, which names the broker's `code` instead. `next_step` closes the owner notice. `nothing_sent` False only
+         *     for the paper broker's duplicate: its first send did go out, so no surface may say "Nothing was sent"
+         *     (trading-safety review LOW).
+         */
+        NotPlaced: {
+            /**
+             * By
+             * @enum {string}
+             */
+            by: "broker" | "mt5_box";
+            /** Code */
+            code?: number | null;
+            /** Next Step */
+            next_step: string;
+            /**
+             * Nothing Sent
+             * @default true
+             */
+            nothing_sent: boolean;
+            /** Reason */
+            reason?: string | null;
         };
         /** Ok */
         Ok: {

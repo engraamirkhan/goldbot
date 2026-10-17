@@ -17,6 +17,7 @@ automatic. This spec covers the dashboard's Approvals tab (`web/src/screens/Appr
 | Owner, supervisor and drift halts, news blackout | `GET /api/status`: `halted`, `supervisor_halt`, `drift_halt` (+ reasons), `blackout` |
 | Drawdown stage, account class, mode | `GET /api/accounts` |
 | Refused at approval | `Proposal.gate_refusal`, written by the engine when the RiskGate re-check at approval refuses the order |
+| Not placed | `DecidedProposal.not_placed` (`by`, `reason`, `code`, `next_step`), worded by `goldbot/execution/not_placed.py` from the engine's `gate_refusal` code when the MT5 box or the broker refused an approved order. Older APIs: `broker_refused:N` reads "Refused by the broker (code N); nothing was sent." |
 
 Feature values are the current values of the model's three most important features, not contributions. The card
 labels them in plain words (`web/src/lib/features.ts`) and keeps the raw name in the hover title.

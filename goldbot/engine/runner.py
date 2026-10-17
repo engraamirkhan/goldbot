@@ -48,6 +48,7 @@ from goldbot.engine.shadow import ShadowBook, ShadowTrade
 from goldbot.execution.bridge import CEILING_REFUSAL, UNREADABLE_REFUSAL
 from goldbot.execution.broker import AccountInfo, Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 from goldbot.execution.costs import CostTable
+from goldbot.execution.not_placed import not_placed, notice_text, refusal_code
 from goldbot.features import build_features
 from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
 from goldbot.features.registry import versions_for, with_versions
@@ -108,15 +109,6 @@ def bridge_refused(res: OrderResult | None) -> bool:
     """BACKLOG 66: the MT5 bridge's notional ceiling refused the order (retcode 10006, a definite reject: nothing was
     placed). Its message starts with `bridge.CEILING_REFUSAL`; a broker's own 10006 does not."""
     return res is not None and not res.ok and res.message.startswith(CEILING_REFUSAL)
-
-
-BRIDGE_UNREADABLE_CODE = f"{CEILING_REFUSAL}_unreadable"
-
-
-def bridge_refusal_code(res: OrderResult) -> str:
-    """The approval card's refusal code for a bridge refusal (`bridge_refused`): the ceiling itself, or a figure the
-    MT5 box could not read. Codes only: the raw message stays in the journal and the log (ui-ux, BACKLOG 66)."""
-    return BRIDGE_UNREADABLE_CODE if res.message.startswith(UNREADABLE_REFUSAL) else CEILING_REFUSAL
 
 
 # review MEDIUM-2 (d): a pending_orders row still `sending` this long after its send is resolved in-process
@@ -1283,16 +1275,36 @@ class Engine:
                 res = self._execute(prop, agent, lots, price - prop.side * gd.stop_distance,
                                     price + prop.side * agent.label_spec.target_atr * intent.atr_usd, requested=price,
                                     atr_usd=intent.atr_usd)
-                if res is not None and bridge_refused(res):   # BACKLOG 66: the card says "refused by the MT5 box"
-                    p.gate_refusal = [bridge_refusal_code(res)]
+                code = None if res is None else refusal_code(res, paper=self.cfg.mode == "paper",
+                                                             definite=DEFINITE_REJECT_RETCODES)
+                if res is not None and code is not None:      # the card says "NOT PLACED" (docs/ux/order-not-placed.md)
+                    p.gate_refusal = [code]
                     if self.center.bus is not None:
                         self.center.bus.archive(p)
+                    if not bridge_refused(res):                # the ceiling's own notice went from `_execute`
+                        self._note_not_placed(prop, code, lots)
             else:
                 self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "gate_at_approval:" + ",".join(gd.reasons)})
                 p.gate_refusal = list(gd.reasons)
                 if self.center.bus is not None:
                     self.center.bus.archive(p)          # the dashboard shows "refused at approval", not "approved"
         self._write_state()
+
+    def _note_not_placed(self, prop: Proposal, code: str, lots: float) -> None:
+        """docs/ux/order-not-placed.md: the owner approved, the RiskGate allowed it, and the MT5 box (a stale order) or
+        the broker (a definite reject) refused it, so nothing was placed. One notice per refusal, in the words of
+        `goldbot.execution.not_placed`: the trade, the masked account name, the reason and the next step, "never the
+        proposal id, the bridge or broker message, a host, a login" (the journal's `order` row keeps the retcode and
+        the message). Approval path only. Best effort: a notice that cannot be queued is logged and never changes the
+        outcome."""
+        np = not_placed(code)
+        if np is None or self.center.bus is None:
+            return
+        try:
+            self.center.bus.notify_owner(notice_text(np, side=prop.side, lots=lots, symbol=self.cfg.symbol,
+                                                     account=account_name(self.cfg.account_id)))
+        except Exception as exc:                        # noqa: BLE001 - the refusal stands either way
+            log.warning("not-placed notice not queued (%s)", type(exc).__name__)
 
     def _note_refusal(self, agent_id: str, gd: GateDecision, at: pd.Timestamp) -> None:
         """BACKLOG 43 (`entry_refusals`): a gate decision for one agent. A per-trade refusal (gate.PER_TRADE_REFUSALS,
@@ -1437,7 +1449,7 @@ class Engine:
         self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "bridge_refused",
                                "proposal": prop.proposal_id, "message": res.message})
         auto = " Automatic entries pause until the next bar." if self.cfg.approval_mode == "auto" else ""
-        why = ("(it couldn't read the account figures it checks)" if bridge_refusal_code(res) == BRIDGE_UNREADABLE_CODE
+        why = ("(it couldn't read the account figures it checks)" if res.message.startswith(UNREADABLE_REFUSAL)
                else "(open gold would be worth more than 6× equity)")
         if self.center.bus is None:
             return
