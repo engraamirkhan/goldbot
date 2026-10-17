@@ -1,8 +1,14 @@
 import { defineConfig, devices } from "@playwright/test";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const PORT = Number(process.env.E2E_PORT ?? 8790);   // E2E_PORT: run beside another e2e server
 const AUTH_PORT = PORT + 1;
-const PYTHON = process.env.PYTHON ?? "python";
+// The interpreter for the backend: PYTHON if set (CI), else this checkout's own venv, else python3. A bare `python`
+// can be a pyenv shim or another checkout's venv whose editable install imports goldbot from the wrong tree (TD-3);
+// scripts/e2e_server.py also refuses to start on a goldbot outside this tree.
+const REPO_PYTHON = fileURLToPath(new URL("../.venv/bin/python", import.meta.url));
+const PYTHON = process.env.PYTHON ?? (existsSync(REPO_PYTHON) ? REPO_PYTHON : "python3");
 
 // The backend is the real FastAPI app (scripts/e2e_server.py) serving the production build from web/dist,
 // so these tests cover the browser, the API contract, auth/TOTP and the approval centre together.
