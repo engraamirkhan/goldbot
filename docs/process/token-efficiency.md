@@ -25,7 +25,6 @@ HIGH/CRITICAL re-verify rule. Estimates are planning figures, not measurements; 
 - A Workflow: one-shot fan-out of many identical, independent, read-only checks (for example 10 files, same question).
   It saves orchestration turns and the PD's context.
 - Single agents: anything with dependent steps, edits, or judgement; and any item under three files.
-- Never use either for a task the PD can do with one `grep`.
 
 ## Budget and tripwires
 
