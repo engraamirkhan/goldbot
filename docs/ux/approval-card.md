@@ -72,6 +72,7 @@ follow under "Decided in the last 10 minutes", with no buttons.
 | Rejected | with reason | Neutral note: "Rejected · Cost" |
 | Refused at approval | approved, RiskGate refused | Red note: "Refused at approval. The RiskGate blocked the order (owner halt); nothing was sent." |
 | Not placed | approved, then the MT5 box or the broker refused the order (a definite reject) | Red note: "Refused by the broker. There wasn't enough free margin; nothing was sent." Wording per cause: docs/ux/order-not-placed.md |
+| Not confirmed | approved and sent; the broker neither filled nor refused it (10008, 10010, 10011, 10012, 10031, -1, unknown) | Amber note: "Not confirmed. Sent, but the broker didn't confirm it. The engine looks it up at the broker and tells you what it finds, or tells you after 10 minutes that it still doesn't know." Listed until resolved; then Opened (green), Opened and already closed (neutral), Not placed (red) or Still not confirmed (amber). Wording: docs/ux/order-not-confirmed.md |
 | Expired | clock reached 0, or engine archived it | Neutral note: "Expired. Nobody approved within 90 s; no order." No buttons, no timer |
 | Minimum lot | sized by the minimum-lot exception | Blue note: "Smallest trade size: above the normal 0.5%, within your 1% cap." Information, not a warning: the gate allowed it within the owner's cap |
 | Budget left | pending, engine reporting | "LOSS BUDGET £11.80 left today if this loses (open trades aside)" ("this week" when the weekly cap binds). Open positions' stop risk is not reserved, so the card says so |

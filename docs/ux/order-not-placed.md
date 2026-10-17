@@ -135,7 +135,7 @@ Order not placed: the MT5 box refused LONG 0.37 lots XAUUSD on icm-demo: it took
 | Refused by the MT5 box (ceiling) | shipped, BACKLOG 66 | unchanged | unchanged |
 | **Refused by the MT5 box (stale)** | `bridge_stale_order` | this doc | this doc |
 | **Refused by the broker** | any other definite reject | this doc | this doc |
-| Not confirmed | ambiguous result (10008, 10010, 10011, 10012, 10031, -1, unknown) | unchanged today (see Open points) | unchanged |
+| Not confirmed | ambiguous result (10008, 10010, 10011, 10012, 10031, -1, unknown) | BACKLOG 72: docs/ux/order-not-confirmed.md | BACKLOG 72 |
 
 Phone (360 px) and desktop, light and dark: the note is the existing `outcome bad` paragraph (AA tokens
 `--bad-fg`/`--bad-tint`), the heading word carries the state, so colour is never alone. The longest dashboard note
@@ -163,7 +163,8 @@ edits the card once when archived; if the edit fails, the notice still arrives (
 
 ## Open points (recommendations, not in this build)
 
-1. **Not confirmed (ambiguous results)** still reads ✅ APPROVED. This is worse than a definite reject: the owner
+1. **Not confirmed (ambiguous results)**: superseded by docs/ux/order-not-confirmed.md (BACKLOG 72); the
+   "next tick" wording below must not ship. Original note: still reads ✅ APPROVED. This is worse than a definite reject: the owner
    cannot tell whether a trade exists. Recommended copy, for a later item with trading-safety:
    Telegram `⚠️ NOT CONFIRMED: approved and sent, but the broker didn't confirm it. Check Positions; the engine
    checks again on its next tick.`; dashboard amber **Not confirmed.** "Sent, but the broker didn't confirm it. Check
