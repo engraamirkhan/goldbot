@@ -18,6 +18,12 @@ ExecStartPre=/bin/sh -c 'if /usr/bin/pgrep -u mt5 -f "[t]erminal64[.]exe" >/dev/
 ExecStart=/usr/bin/wine /home/mt5/.wine/drive_c/MT5/ICMarkets/terminal64.exe
 Restart=always
 RestartSec=15
+# Hardening staged, NOT on until the cold-restart test (RUNBOOK) shows the terminal still starts, logs in and is
+# attached by the bridge with them under Wine. PrivateTmp especially: the terminal would get its own /tmp and so its
+# own wineserver socket, out of the bridge's reach (the bridge would then fail to attach), and Xvfb's socket in
+# /tmp/.X11-unix would only be reachable through the abstract namespace.
+#NoNewPrivileges=yes
+#PrivateTmp=yes
 # Backoff on systemd 254+ (Ubuntu 24.04): 15 s growing in 5 steps to 10 min. systemd 249 (22.04) ignores these two
 # keys with a warning and keeps the fixed 15 s; goldbot-bridge-watchdog restarts the terminal at most once per 10 min.
 RestartSteps=5

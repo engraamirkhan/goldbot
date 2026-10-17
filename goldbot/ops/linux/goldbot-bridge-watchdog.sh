@@ -10,15 +10,17 @@
 # wrong_account|noanswer. Root keeps at most 32 bytes of it, drops every byte outside [a-z_] and matches the rest with
 # an exact `case` on that list; anything else is noanswer. The body never reaches root, the log, a path, a unit name
 # or an argument, and the only actions are restarts of the two literal units named from the validated <account>
-# (docs/proposals/2026-10-mt5-terminal-lifecycle.md, security conditions 1-3). It writes no file and follows no path
-# the mt5 user can write.
+# (docs/proposals/2026-10-mt5-terminal-lifecycle.md, security conditions 1-3). It writes one file, a restart count in
+# its own root-only runtime directory (refused when that is a symlink or not root's), and follows no path the mt5
+# user can write.
 #
 # Decisions, in order:
 # * bridge stopped (inactive/failed): nothing; Restart=always owns a failure and a stopped bridge was stopped on purpose.
 # * bridge restarting, or up less than GRACE_S: nothing, unless it has restarted ATTACH_RESTARTS times without settling
-#   while the terminal unit has been up TERMINAL_GRACE_S. That is a terminal the bridge cannot attach to (alive, its
-#   IPC dead: the bridge exits after two not_running reads and its 60 s re-attach times out): restart the terminal
-#   unit (Requires= restarts the bridge with it, which resets NRestarts).
+#   (counted since the bridge was last seen settled, not since boot) while the terminal unit has been up
+#   TERMINAL_GRACE_S. That is a terminal the bridge cannot attach to (alive, its IPC dead: the bridge exits after two
+#   not_running reads 30 s apart and its 60 s re-attach times out): restart the terminal unit (Requires= restarts the
+#   bridge with it, which resets NRestarts).
 # * otherwise PROBES probes PROBE_GAP_S apart (an order the terminal takes 20-30 s to answer must not trip it):
 #   - ok on any probe: nothing;
 #   - not_logged_in or wrong_account: logged, never restarted (a restart cannot restore a login; a loop would hide it);
@@ -32,6 +34,8 @@ set -euo pipefail
 export LC_ALL=C
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 PROBE=/usr/local/sbin/goldbot-bridge-probe
+# root-only (RuntimeDirectory=, 0700, kept between runs): the bridge's NRestarts when it was last seen settled
+STATE_DIR=/run/goldbot-bridge-watchdog
 GRACE_S=${GOLDBOT_BRIDGE_GRACE_S:-300}
 TERMINAL_GRACE_S=${GOLDBOT_TERMINAL_GRACE_S:-600}
 ATTACH_RESTARTS=${GOLDBOT_BRIDGE_ATTACH_RESTARTS:-3}
@@ -61,6 +65,22 @@ age_s() {                     # seconds since a systemd timestamp; -1 when there
   if [[ "$s" =~ ^[0-9]{1,12}$ ]] && [ "$s" -gt 0 ]; then echo $(( $(date +%s) - s )); else echo -1; fi
 }
 log() { echo "goldbot-bridge-watchdog: $*"; }
+# NRestarts counts every automatic restart since the unit was last started by hand (or boot), so restarts from days
+# ago would add up. Only the restarts since the bridge was last seen settled count: that count is kept as a baseline
+# in STATE_DIR, a directory only root may own (a symlink or another owner: nothing is read or written there).
+state_ok() { [ -d "$STATE_DIR" ] && [ ! -L "$STATE_DIR" ] && [ -O "$STATE_DIR" ]; }
+baseline_file="$STATE_DIR/$inst.nrestarts"
+set_baseline() {              # $1: a validated count
+  state_ok || { log "state directory $STATE_DIR is not a root-owned directory; restart counts not kept"; return 0; }
+  printf '%s\n' "$1" > "$STATE_DIR/.$inst.tmp" && mv -f "$STATE_DIR/.$inst.tmp" "$baseline_file"
+}
+get_baseline() {              # the stored count, or nothing
+  local b=""
+  if state_ok && [ -f "$baseline_file" ] && [ ! -L "$baseline_file" ]; then
+    b=$(head -c 12 "$baseline_file" | tr -cd '0-9')
+  fi
+  if [[ "$b" =~ ^[0-9]{1,9}$ ]]; then echo "$b"; fi
+}
 restart_terminal() {          # $1: why, built from fixed text, validated numbers and allow-listed tokens only
   [ "$(prop ActiveEnterTimestamp "$term")" = "$term_since" ] || exit 0      # restarted while we looked
   log "$1; restarting $term"
@@ -83,16 +103,31 @@ case "$(prop ActiveState "$bridge")" in
   *) exit 0 ;;                                               # stopped on purpose, or failed: Restart=always owns it
 esac
 
+total=$(prop NRestarts "$bridge")
+[[ "$total" =~ ^[0-9]{1,9}$ ]] || total=""
 if [ "$bridge_up" -lt "$GRACE_S" ]; then                     # just (re)started: the terminal is still logging in
-  restarts=$(prop NRestarts "$bridge")
-  if [[ "$restarts" =~ ^[0-9]{1,9}$ ]] && [ "$restarts" -ge "$ATTACH_RESTARTS" ] && [ "$term_up" -ge "$TERMINAL_GRACE_S" ]; then
+  [ -n "$total" ] || exit 0
+  if ! state_ok; then
+    log "state directory $STATE_DIR is not a root-owned directory; restart counts not kept"
+    exit 0
+  fi
+  base=$(get_baseline)
+  if [ -z "$base" ]; then                                    # first sight: count from now on
+    set_baseline "$total"
+    exit 0
+  fi
+  [ "$total" -ge "$base" ] || base=0                         # NRestarts was reset by a start by hand
+  restarts=$((total - base))
+  if [ "$restarts" -ge "$ATTACH_RESTARTS" ] && [ "$term_up" -ge "$TERMINAL_GRACE_S" ]; then
     restart_terminal "$bridge restarted $restarts times without settling while $term has run $term_up s"
   fi
   exit 0
 fi
+[ -z "$total" ] || set_baseline "$total"                     # settled: earlier restarts no longer count
 
 probe() {                     # one token from the unprivileged probe; never the body
-  setpriv --reuid=nobody --regid=nogroup --clear-groups --no-new-privs -- "$PROBE" "$port" "$PROBE_TIMEOUT_S" \
+  setpriv --reuid=nobody --regid=nogroup --clear-groups --no-new-privs --bounding-set=-all --inh-caps=-all -- \
+    "$PROBE" "$port" "$PROBE_TIMEOUT_S" \
     2>/dev/null | head -c 32 | tr -cd 'a-z_' || true
 }
 

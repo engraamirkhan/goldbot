@@ -31,7 +31,7 @@ has once seen the terminal on that account (`verify_first`).
 
 The terminal's state on /health (docs/proposals/2026-10-mt5-terminal-lifecycle.md): `terminal` is one fixed token of
 TERMINAL_STATES (never a login, server or balance), `terminal_for_s` how long it has had that state (capped below six
-digits), and the status is 200 only for `ok`, 503 otherwise. Two consecutive `not_running` reads end the process
+digits), and the status is 200 only for `ok`, 503 otherwise. Consecutive `not_running` reads 30 s apart end the process
 (TERMINAL_LOST_EXIT) so systemd re-attaches it to the terminal its own unit restarted. The root watchdog on the MT5 box
 reads only that token, through an unprivileged probe (goldbot/ops/linux/goldbot-bridge-probe.sh).
 
@@ -127,6 +127,7 @@ REFUSED_RETCODE = 10006         # MT5 "request rejected": a definite reject (run
 # The terminal's state on GET /health: exactly these tokens (the root watchdog's probe matches them literally).
 TERMINAL_STATES = ("ok", "not_running", "not_connected", "not_logged_in", "wrong_account")
 TERMINAL_LOST_READS = 2         # consecutive not_running reads after which the bridge exits to be re-attached
+TERMINAL_LOST_MIN_SPAN_S = 30.0  # ... and only when those reads span at least this long (review L1)
 TERMINAL_LOST_EXIT = 75         # EX_TEMPFAIL: systemd's Restart=always starts it again
 TERMINAL_FOR_CAP_S = 99_999     # terminal_for_s never has six digits (security condition 6: no 6-digit run on /health)
 
@@ -195,7 +196,8 @@ def _exit_terminal_lost() -> None:
     """End the bridge after TERMINAL_LOST_READS not_running reads: its IPC is gone, and a fresh process re-attaches
     (initialize(path=..., timeout=60 s)) once the terminal unit has the terminal up again. SystemExit is not an
     Exception, so it leaves serve_forever after the reply was written; one request at a time, so no RPC is cut."""
-    log.error("MT5 terminal not running on %d consecutive reads: exiting to re-attach", TERMINAL_LOST_READS)
+    log.error("MT5 terminal not running on %d consecutive reads over %g s: exiting to re-attach",
+              TERMINAL_LOST_READS, TERMINAL_LOST_MIN_SPAN_S)
     raise SystemExit(TERMINAL_LOST_EXIT)
 
 
@@ -206,14 +208,18 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
     when the two boxes run different code. Nothing on /health is a secret: zone, commit (public repo), protocol, and
     the terminal's state token when the broker reports one (`terminal_state()`).
 
-    `verify_first`: refuse every RPC (503) until the terminal has once been seen in state `ok` (logged in to the
-    registered account, connected); /health is served throughout, so a lost login shows as `not_logged_in` instead of
-    a bridge that keeps restarting. `on_terminal_lost`: called after TERMINAL_LOST_READS consecutive `not_running`
-    reads (default: exit, `_exit_terminal_lost`)."""
+    `verify_first`: the terminal's state is read on every RPC. Every RPC is refused (503) until the terminal has once
+    been seen in state `ok` (logged in to the registered account, connected), and again whenever it is CURRENTLY on
+    another account (`wrong_account`: reads and closes included, a terminal switched to another account serves
+    nothing). Any other state after that lets calls through: exits are never gated, and the terminal answers what it
+    can. /health is served throughout, so a lost login shows as `not_logged_in` instead of a bridge that keeps
+    restarting. `on_terminal_lost`: called after TERMINAL_LOST_READS consecutive `not_running` reads spanning at
+    least TERMINAL_LOST_MIN_SPAN_S (default: exit, `_exit_terminal_lost`)."""
     if len(token) < 32:
         raise ValueError("bridge token must be at least 32 characters")
     lost_cb = on_terminal_lost or _exit_terminal_lost
-    seen: dict[str, Any] = {"state": None, "since": clock(), "lost": 0, "verified": not verify_first}
+    seen: dict[str, Any] = {"state": None, "since": clock(), "lost": 0, "lost_at": 0.0,
+                            "verified": not verify_first}
 
     def terminal_state() -> str | None:
         """The terminal's token (and its bookkeeping), or None when the broker does not report one."""
@@ -263,8 +269,15 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
             if commit is not None:
                 body["commit"] = commit
             self._reply(200 if body["ok"] else 503, body)
-            seen["lost"] = seen["lost"] + 1 if state == "not_running" else 0
-            if seen["lost"] >= TERMINAL_LOST_READS:
+            if state != "not_running":
+                seen["lost"] = 0
+                return
+            if seen["lost"] == 0:
+                seen["lost_at"] = clock()
+            seen["lost"] += 1
+            # one brain health pass reads /health three times within a second: only reads spanning
+            # TERMINAL_LOST_MIN_SPAN_S end the bridge (a terminal restarting for a moment does not)
+            if seen["lost"] >= TERMINAL_LOST_READS and clock() - seen["lost_at"] >= TERMINAL_LOST_MIN_SPAN_S:
                 seen["lost"] = 0
                 lost_cb()
 
@@ -283,11 +296,16 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
             if n <= 0 or n > MAX_BODY:
                 self._reply(400, {"error": "bad body"})
                 return
-            if not seen["verified"]:                         # not yet seen on the registered account: no call at all
+            if verify_first:                                 # the terminal's CURRENT account, on every call
                 state = terminal_state()
-                if not seen["verified"]:
+                if not seen["verified"]:                     # not yet seen on the registered account: no call at all
                     self._reply(503, {"error": f"terminal not verified: {state or 'unknown'}"})
                     return
+                if state == "wrong_account":                 # switched since: nothing at all, reads and closes too
+                    self._reply(503, {"error": "terminal on another account: refused"})
+                    return
+                # not_logged_in / not_running / not_connected: calls go through (exits are never gated); the
+                # terminal answers what it can
             try:
                 req = json.loads(self.rfile.read(n))
                 method = req["method"]

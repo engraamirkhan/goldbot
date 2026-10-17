@@ -5,7 +5,12 @@ After=goldbot-bridge@%i.service
 
 [Service]
 Type=oneshot
-# root-owned copy installed by mt5_bootstrap.sh from root's own clone; reads only (one local GET, systemctl show)
+# root-owned copy installed by mt5_bootstrap.sh from root's own clone. Reads systemctl show and one fixed token from
+# the probe (run as nobody); writes only the bridge's restart baseline in its own root-only runtime directory, kept
+# between runs (a oneshot's runtime directory is removed on stop otherwise)
 ExecStart=/usr/local/sbin/goldbot-bridge-watchdog %i 8765
+RuntimeDirectory=goldbot-bridge-watchdog
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 # three probes 20 s apart with a 20 s timeout each, plus a restart: well inside this
 TimeoutStartSec=180
