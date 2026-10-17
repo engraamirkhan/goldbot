@@ -204,6 +204,9 @@ class Proposal(Record):
     # BACKLOG 72: approved and sent, but the broker neither filled nor refused it (`gate_refusal` ["not_confirmed"]):
     # what the engine's look-up at the broker found, for the card and the dashboard; None on every other proposal
     not_confirmed: Confirmation | None = None
+    # BACKLOG 72 review (race): set when an approval is archived and cleared once the engine has the broker's answer, so
+    # the Telegram outbox never reports a card APPROVED while its order is still in flight (`Outbox.finished`)
+    placing: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -365,13 +368,22 @@ class ApprovalCenter:
         return done
 
     def _finish(self, p: Proposal, outcome: Outcome) -> Proposal:
+        """Archive the decision, then apply it (`on_decision`: the engine re-checks and sends). An approval is archived
+        `placing` and cleared only after `on_decision` returns, so the outbox waits for the broker's answer (BACKLOG 72
+        review). One that raised stays `placing`: the outbox reports it NOT CONFIRMED once the engine is silent or
+        PLACING_MAX_S has passed, never APPROVED."""
         p.outcome = outcome
+        p.placing = outcome == Outcome.APPROVED
         self.pending.pop(p.proposal_id, None)
         self.deadlines.pop(p.proposal_id, None)
         self.log.append(p)
         if self.bus is not None:
             self.bus.archive(p)
         self.on_decision(p)
+        if p.placing:
+            p.placing = False
+            if self.bus is not None:
+                self.bus.archive(p)
         return p
 
     # ------------------------------------------------------------- commands

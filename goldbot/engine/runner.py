@@ -1884,15 +1884,14 @@ class Engine:
         and the broker's current stop as its initial stop."""
         rec = next((o for o in self._orders.values() if o.position_id == p.position_id), None) or \
             next((o for o in self._orders.values() if p.comment and p.comment in (o.client_order_id, o.client_order_id[-31:])), None)
-        # review MEDIUM-2 (a): the row of a send that raised (or a fill found late) now names its position, so a
-        # restart keeps this trade instead of recovering the send again and resetting its stop and state; BACKLOG 72: a
-        # row never confirmed keeps the stop and target sent (the loop puts them back) and the owner is told
-        late = rec is not None and rec.status != "filled" and unconfirmed.adopted(self, rec, p)
+        # BACKLOG 72: a row never confirmed keeps the tighter of the stop sent and the broker's, and the target sent
+        late = rec is not None and rec.status in unconfirmed.NEVER_CONFIRMED
         agent = self.agents.get(rec.agent_id) if rec is not None else self._agent_for_magic(p.magic)
         agent_id = rec.agent_id if rec is not None else "orphan" if agent is None else agent.agent_id
         max_bars = rec.max_bars if rec is not None else 48 if agent is None else self._base_bars(agent)
         tr = OpenTrade(position_id=p.position_id, agent_id=agent_id, side=p.side, lots=p.lots,
-                       entry_bar_ts=p.open_time_utc, max_bars=max_bars, sl=rec.sl if late and rec else p.sl,
+                       entry_bar_ts=p.open_time_utc, max_bars=max_bars,
+                       sl=unconfirmed.tighter(p.side, rec.sl, p.sl) if late and rec else p.sl,
                        tp=rec.tp if late and rec else p.tp,
                        client_order_id=rec.client_order_id if rec is not None else p.comment or None,
                        open_price=p.open_price, initial_sl=rec.sl if rec is not None else p.sl,
@@ -1903,6 +1902,12 @@ class Engine:
             atr_usd = rec.atr_usd if rec is not None and rec.atr_usd is not None else \
                 self._implied_atr(agent, p.open_price, tr.initial_sl)
             self._attach_policy(tr, agent, entry=p.open_price, atr_usd=atr_usd, opened=p.open_time_utc)
+        if rec is not None and rec.status != "filled":
+            # review MEDIUM-2 (a): the row of a send that raised (or a fill found late) now names its position, so a
+            # restart keeps this trade instead of recovering the send again; the trade is in the open table before
+            # `adopted` saves the row and tells the owner (BACKLOG 72)
+            self.open[p.position_id] = tr
+            unconfirmed.adopted(self, rec, p)
         return tr
 
     def _agent_for_magic(self, magic: int) -> Specialist | None:
@@ -2531,23 +2536,12 @@ class Engine:
         (review MEDIUM-2 b). No position: filled and closed (recorded from its deals) or never filled ("unfilled").
         An unreadable deal history without a position leaves the row `sending` for the next look. Never re-sent."""
         pos = next((p for p in positions.values() if p.comment == cid[-31:] or p.comment == cid), None)
-        try:
-            deals = self._read_deals(rec.ts_utc - pd.Timedelta(minutes=5))
-        except Exception:
-            if pos is None:
-                return                # unknown yet: stays "sending" (never re-sent) and is looked up again
-            deals = pd.DataFrame()
-        dealt = not deals.empty and (
-            ("client_order_id" in deals.columns and bool((deals["client_order_id"] == cid).any()))
-            or ("comment" in deals.columns and bool(deals["comment"].isin([cid, cid[-31:]]).any())))
         if pos is not None:
             unconfirmed.adopt_sent(self, cid, rec, pos)
-        else:
-            rec.status = "filled" if dealt else "unfilled"     # filled and already closed, or never filled
-            self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": f"reconcile_sent_{rec.status}",
+        else:     # BACKLOG 72 review: never resolved on one look; the look-up records a closed fill or, after two
+            rec.status = unconfirmed.AMBIGUOUS      # clean looks, marks it unfilled (it runs right after this)
+            self.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": "reconcile_sent_ambiguous",
                                    "proposal": cid})
-            if dealt:
-                unconfirmed.record_closed(self, cid, rec, deals)
 
     def _resolve_stale_sending(self, positions: dict[int, Position]) -> bool:
         """Review MEDIUM-2 (d): `sending` rows older than SENDING_RESOLVE_S (host clock, as the row was stamped) are

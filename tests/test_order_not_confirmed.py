@@ -88,6 +88,7 @@ def _engine(tmp_path: Path, pb: PaperBroker, **cfg: Any) -> tuple[Engine, PaperB
     tmp_path.mkdir(parents=True, exist_ok=True)
     eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path), owner_user_id=OWNER,
                               **cfg), pb, [], {}, ApprovalCenter({OWNER}, bus=ApprovalBus(tmp_path)))
+    eng._last_tick = pb.last_tick("XAUUSD")       # a fresh quote (replay clock): looks can be clean from here on
     return eng, pb
 
 
@@ -244,21 +245,24 @@ def test_no_deal_is_not_declared_unfilled_before_settle_s_boundary(tmp_path, clo
 
 
 def test_two_clean_looks_at_least_120_s_apart_are_needed_and_row_age_alone_never_declares_unfilled(tmp_path, clock):
-    """Condition 2: a restart an hour later has an old row but no clean look in this process: its first look never
-    declares `unfilled`; an unreadable look between two clean ones neither counts nor resets the first."""
+    """Condition 2: a restart an hour later has an old row but no clean look in this process: its first look (before
+    any quote) never declares `unfilled`; an unreadable look between two clean ones neither counts nor resets the
+    first."""
     pb = _broker()
     eng = _sent(tmp_path, pb)
     _at(clock, eng, 3600)
-    again, _ = _engine(tmp_path, pb)                 # the restart's look (`_load_orders`)
-    assert again._orders[PID].status == "ambiguous"
-    _at(clock, again, 3660)
+    again, _ = _engine(tmp_path, pb)                 # the restart's look (`_load_orders`): no quote yet, not clean
+    assert again._orders[PID].status == "ambiguous" and PID not in again._looks.first_clean
+    _at(clock, again, 3640)
+    _look(again)                                     # the first clean look
+    _at(clock, again, 3700)
     pb.deals_fail = True
     _look(again)
     pb.deals_fail = False
-    _at(clock, again, 3700)
+    _at(clock, again, 3759)
     _look(again)
     assert again._orders[PID].status == "ambiguous"
-    _at(clock, again, 3720)
+    _at(clock, again, 3760)
     _look(again)
     assert again._orders[PID].status == "unfilled"
 
@@ -598,3 +602,208 @@ def test_an_unknown_outcome_falls_back_to_the_pending_texts():
     raw = Confirmation.model_construct(outcome="sideways", symbol="XAUUSD")  # type: ignore[arg-type]  # a newer value
     assert card_text(raw) == CARD_PENDING and note(raw).heading == "Not confirmed."
     assert card_text(None) == CARD_PENDING
+
+
+# ---------------------------------------------------------------------------------------------- review round 1
+class _Polling(_BrokerRefuses):
+    """The broker is slow to answer: while the order is in flight, the Telegram service polls its outbox."""
+
+    def __init__(self, retcode: int, **kw: Any) -> None:
+        super().__init__(retcode, message="Request timed out", **kw)
+        self.poll: Any = None
+        self.seen: list[str] = []
+
+    def place_order(self, intent: OrderIntent) -> OrderResult:
+        if self.poll is not None:
+            self.seen += self.poll()
+        return super().place_order(intent)
+
+
+def _beat(tmp_path: Path, age_s: float = 0.0) -> None:
+    import time
+
+    from goldbot.ops.watchdog import loop_heartbeat_path
+    t = time.time() - age_s
+    loop_heartbeat_path(tmp_path, "icm-demo").write_text(json.dumps({"ts": t, "started": t, "phase": "loop"}))
+
+
+def _through_finish(tmp_path: Path, pb: PaperBroker) -> tuple[Any, Any, Any]:
+    """The real decision path: the card is proposed, approved on the ApprovalCenter (`_finish` archives, then the
+    engine applies it), with the outbox watching the card."""
+    from goldbot.telegram.outbox import Outbox
+    from tests.test_approved_card_cap import _card
+    from tests.test_engine_clock import WED
+    from tests.test_engine_clock import _engine as _clock_engine
+    from tests.test_engine_clock import _intent as _clock_intent
+    from tests.test_engine_clock import _tick as _clock_tick
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "classifier_icm-demo.json").write_text(json.dumps({"class": "raw"}))
+    pb.on_tick(_clock_tick(WED))
+    eng, _, _ = _clock_engine(tmp_path, pb=pb)
+    bus = eng.center.bus = ApprovalBus(tmp_path)
+    eng._refresh_account(_clock_tick(WED))
+    prop = _card(eng, _clock_intent().model_copy(update=eng._sizing_terms(1, 2400.2, 4.0)))
+    eng.center.propose(prop)
+    outbox = Outbox(tmp_path, bus)
+    outbox.mark_sent(prop.proposal_id, [(1, 2)])
+    return eng, prop, outbox
+
+
+@pytest.mark.parametrize("retcode", [10012, 10009])
+def test_polling_the_outbox_while_the_order_is_in_flight_never_reports_approved(tmp_path, retcode):
+    """Review HIGH (race): `_finish` archives the approval before the engine sends it; the outbox must not report
+    (and forget) the card until the engine has the broker's answer."""
+    pb = _Polling(retcode, refusals=0 if retcode == 10009 else 1, equity=10_000)
+    eng, prop, outbox = _through_finish(tmp_path, pb)
+    _beat(tmp_path)
+    pb.poll = lambda: [o for pid, o, _ in outbox.finished() if pid == prop.proposal_id]
+    eng.center.decide(prop.proposal_id, OWNER, True)
+    assert pb.calls == 1 and pb.seen == []                       # in flight: the card is not reported yet
+    [after] = [o for pid, o, _ in outbox.finished() if pid == prop.proposal_id]
+    stored = eng.center.bus.get(prop.proposal_id)
+    assert stored is not None and not stored.placing
+    assert after == ("APPROVED" if retcode == 10009 else "GATE_REFUSED: not_confirmed")
+
+
+def test_a_card_left_placing_by_a_silent_engine_reports_not_confirmed_never_approved(tmp_path):
+    from goldbot.telegram.approvals import Outcome
+    from goldbot.telegram.outbox import Outbox
+    bus = ApprovalBus(tmp_path)
+    p = _prop(PID).model_copy(update={"outcome": Outcome.APPROVED, "placing": True})
+    bus.archive(p)
+    outbox = Outbox(tmp_path, bus)
+    outbox.mark_sent(PID, [(1, 2)])
+    _beat(tmp_path)
+    assert outbox.finished() == []                                # the engine is alive and sending: wait
+    _beat(tmp_path, age_s=600)                                     # the engine went silent mid-send
+    assert [o for _, o, _ in outbox.finished()] == ["GATE_REFUSED: not_confirmed"]
+    assert outcome_text("GATE_REFUSED: not_confirmed") == CARD_PENDING
+
+
+def test_a_send_that_raised_refuses_the_next_entry_within_sending_resolve_s(tmp_path, clock):
+    """Review MEDIUM (condition 1 on `sending`): the single-threaded engine never checks the gate during its own send,
+    so a `sending` row at gate time is a send that raised, and its exposure is unknown."""
+    class _Raises(_Unanswered):
+        def place_order(self, intent: OrderIntent) -> OrderResult:
+            super().place_order(intent)
+            raise RuntimeError("terminal connection lost")
+    pb = _Raises(fill=0.1, equity=10_000)
+    pb.on_tick(_tick(T0))
+    eng, _ = _engine(tmp_path, pb)
+    with pytest.raises(RuntimeError):
+        eng._execute(_prop(PID), AGENT, 0.1, SL, TP, requested=2400.2)
+    assert eng._orders[PID].status == "sending"
+    assert "unconfirmed_order_pending" in eng.gate.account_reasons(eng.state)
+    assert not eng.gate.check(_intent(), eng.state).allowed
+
+
+def test_a_restart_with_a_sending_row_and_no_position_takes_the_two_look_rule(tmp_path, clock):
+    """Review MEDIUM (condition 3 on the `sending` path): with no position the row is never marked filled or unfilled
+    on one look; it becomes `ambiguous` and the look-up decides (an entry deal without a position id never resolves)."""
+    eng, pb = _engine(tmp_path, _broker())
+    assert isinstance(pb, _Unanswered)
+    eng._orders_record(PID, agent_id=AGENT.agent_id, side=1, magic=eng._magic(AGENT.family), lots=0.1, max_bars=4,
+                       sl=SL, tp=TP, ts=pd.Timestamp.now("UTC"))       # crashed before order_send returned
+    pb.mt5_deals = _mt5_deals(77, with_ids=False)[:1]
+    clock[0] = pd.Timestamp.now("UTC")
+    again, _ = _engine(tmp_path, pb)
+    assert again._orders[PID].status == "ambiguous" and again._closes == []
+    pb.mt5_deals = []
+    clock[0] += pd.Timedelta(seconds=10)
+    _look(again)
+    clock[0] += pd.Timedelta(seconds=120)
+    _look(again)
+    assert again._orders[PID].status == "unfilled"
+
+
+def test_no_look_is_clean_with_a_stale_quote_or_in_no_quote_pass(tmp_path, clock):
+    """Review MEDIUM (condition 2): a terminal that lost the trade server answers with cached positions and deals, so
+    two successful reads are not enough: a look is clean only with a quote no older than stale_tick_seconds, and never
+    in `no_quote_pass` (no "no trade" while the market is closed or the feed is down)."""
+    pb = _broker()
+    eng = _sent(tmp_path, pb)
+    for s in (5, 400):                                          # no quote: never clean, however long
+        _at(clock, eng, s)
+        eng._looks.last = None
+        eng.no_quote_pass()
+    assert eng._orders[PID].status == "ambiguous" and PID not in eng._looks.first_clean
+    eng._quote_invalid_since = None
+    tick = eng._last_tick
+    eng.cfg.live_clock = True
+    eng.clock = lambda: tick.ts_utc + pd.Timedelta(seconds=21)
+    for s in (410, 600):
+        _at(clock, eng, s)
+        _look(eng)
+    assert eng._orders[PID].status == "ambiguous" and PID not in eng._looks.first_clean
+    eng.clock = lambda: tick.ts_utc + pd.Timedelta(seconds=20)    # at the limit: fresh
+    for s in (610, 730):
+        _at(clock, eng, s)
+        _look(eng)
+    assert eng._orders[PID].status == "unfilled"
+
+
+def test_one_failing_look_does_not_stop_the_other_rows_or_the_stop_reinstatement(tmp_path, clock, monkeypatch):
+    """Review LOW (code 1): a look that raises is logged and waits; the other rows and the reconcile loop go on."""
+    pb = _broker(fill=0.1)
+    eng = _sent(tmp_path, pb)
+    [pos] = pb.positions()
+    eng._orders["icm-demo-72-b"] = eng._orders[PID].model_copy(update={"client_order_id": "icm-demo-72-b"})
+    real = unconfirmed._look
+
+    def look(e: Any, cid: str, *a: Any, **kw: Any) -> bool:
+        if cid == "icm-demo-72-b":
+            raise KeyError("a malformed deal row")
+        return real(e, cid, *a, **kw)
+    monkeypatch.setattr(unconfirmed, "_look", look)
+    pb._positions[pos.position_id].sl = None
+    eng._orders = dict(sorted(eng._orders.items(), reverse=True))  # the failing row first
+    _look(eng)
+    assert eng._orders[PID].status == "filled" and pb._positions[pos.position_id].sl == SL
+    assert eng._orders["icm-demo-72-b"].status == "ambiguous"
+
+
+def test_a_late_adopted_trade_is_in_the_open_table_before_its_row_is_saved_and_the_owner_told(tmp_path, clock):
+    """Review LOW (code 2): `adopted` saves the table and sends the notice; the trade it names is already in it."""
+    pb = _broker(fill=0.1)
+    eng = _sent(tmp_path, pb)
+    [pos] = pb.positions()
+    seen: list[dict] = []
+    bus = eng.center.bus
+    orig = bus.notify_owner
+
+    def notify(text: str) -> None:
+        seen.append(json.loads((tmp_path / "orders_icm-demo.json").read_text()))
+        orig(text)
+    bus.notify_owner = notify
+    eng._adopt(pos)
+    assert seen and str(pos.position_id) in seen[0]["open"] and seen[0]["sent"][PID]["status"] == "filled"
+
+
+def test_a_late_adopted_trade_keeps_the_tighter_of_the_sent_and_the_broker_stop(tmp_path, clock):
+    """Review LOW (TS 6): the engine's stop floor is never looser than the stop already at the broker."""
+    pb = _broker(fill=0.1)
+    eng = _sent(tmp_path, pb)
+    [pos] = pb.positions()
+    pb._positions[pos.position_id].sl = 2398.0                       # tighter than the stop sent (2396)
+    assert eng._adopt(pb.positions()[0]).sl == 2398.0
+    pb2 = _broker(fill=0.1)
+    eng2 = _sent(tmp_path / "b", pb2)
+    [pos2] = pb2.positions()
+    pb2._positions[pos2.position_id].sl = 2398.0
+    _look(eng2)
+    assert eng2.open[pos2.position_id].sl == 2398.0 and pb2._positions[pos2.position_id].sl == 2398.0
+
+
+def test_a_stop_that_cannot_be_set_with_the_price_already_through_it_says_the_engine_closes_it(tmp_path, clock):
+    """Review LOW (TS 5): the per-tick stop check closes the trade at the first quote, and the notice says so."""
+    pb = _broker(fill=0.1)
+    pb.modify_ok = False
+    eng = _sent(tmp_path, pb)
+    [pos] = pb.positions()
+    pb._positions[pos.position_id].sl = None
+    pb.on_tick(_tick(T0, bid=2395.0))                                  # already through the stop sent (2396)
+    _look(eng)
+    assert _notices(tmp_path) == [
+        f"⚠️ Order confirmed, but without its stop: LONG 0.1 lots XAUUSD on icm-demo is open at {pos.open_price:.2f} and "
+        f"the engine couldn't set stop 2396.00. The price is already past stop 2396.00, so the engine closes the trade "
+        f"at the first quote."]

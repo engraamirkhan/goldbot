@@ -13,7 +13,7 @@
   "records_lost": [],
   "sent": {}
  },
- "eeb5ea6e3605648d": {
+ "e98d851a433a9742": {
   "closing": [],
   "open": {
    "1": {
@@ -49,6 +49,23 @@
   },
   "records_lost": [],
   "sent": {
+   "fresh-ambiguous": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-ambiguous",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "ambiguous",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
    "fresh-filled": {
     "agent_id": "session_open-g0-x",
     "atr_usd": 4.0,
@@ -78,7 +95,7 @@
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
-    "status": "unfilled",
+    "status": "ambiguous",
     "tp": 2406.0,
     "ts_utc": "2200-01-06T09:00:00+00:00",
     "unknown_notified": false

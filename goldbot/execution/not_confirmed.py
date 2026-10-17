@@ -24,8 +24,8 @@ GATE = " New entries wait until it's settled."        # the refusal path of cond
 AMBIGUOUS_SETTLE_S = 120.0
 AMBIGUOUS_ALERT_S = 600.0
 NcOutcome = Literal["pending", "opened", "opened_closed", "no_trade", "opened_late", "still_unknown"]
-NoticeKind = Literal["opened", "opened_stop_set", "opened_no_stop", "opened_closed", "no_trade", "opened_late",
-                     "still_unknown", "gave_up"]
+NoticeKind = Literal["opened", "opened_stop_set", "opened_no_stop", "opened_no_stop_through", "opened_closed",
+                     "no_trade", "opened_late", "still_unknown", "gave_up"]
 Tone = Literal["warn", "ok", "neutral", "bad"]
 
 
@@ -105,6 +105,10 @@ _NOTICE: dict[str, str] = {
                         "are automatic."),
     "opened_no_stop": ("⚠️ Order confirmed, but without its stop: {trade} on {account} is open at {entry} and the "
                        "engine couldn't set stop {sl}. Set stop {sl} in MT5 now."),
+    # trading-safety review (TS 5): the price is already past the stop, so the per-tick stop check closes the trade
+    "opened_no_stop_through": ("⚠️ Order confirmed, but without its stop: {trade} on {account} is open at {entry} and "
+                               "the engine couldn't set stop {sl}. The price is already past stop {sl}, so the engine "
+                               "closes the trade at the first quote."),
     "opened_closed": ("Order confirmed, already closed: {trade} on {account} opened at {entry} and closed at {exit} "
                       "({pnl}). It's in the trade record."),
     "no_trade": ("Order not placed after all: the broker has no trade for {trade} on {account} (checked twice, at "

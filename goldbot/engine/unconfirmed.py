@@ -18,8 +18,10 @@ or the bridge's refusal), including `ok` with no position, leaves its pending_or
   flight, and deals without position ids never resolve the row: it keeps looking;
 - no position and no deal on two clean looks in this process at least `AMBIGUOUS_SETTLE_S` apart, counted from the
   first ("one empty deal read is not proof of no fill", condition 2): `unfilled`, and the owner told no trade opened. A
-  clean look is one where the positions read and the deal-history read both succeeded; the bridge publishes no
-  terminal-connected flag without a protocol bump, so those two reads stand for it. Row age alone never declares
+  clean look is one where the positions read and the deal-history read both succeeded while the feed is live (a valid
+  quote no older than stale_tick_seconds): a terminal that lost the trade server still answers both from its cache,
+  and the bridge publishes no terminal-connected flag without a protocol bump. No look in `no_quote_pass` is clean,
+  and a `sending` row with no position on its look is handed over as `ambiguous`. Row age alone never declares
   `unfilled` (a restart). Market orders on a hedging account leave no resting order, which is why `orders_get` is not
   read;
 - anything else (deal history unreadable, a close in flight) keeps looking; after `AMBIGUOUS_ALERT_S` one "still not
@@ -65,6 +67,10 @@ AMBIGUOUS = "ambiguous"
 KEEP = pd.Timedelta(days=7)    # the pending_orders prune: an unresolved row turns terminal `unknown` at this age
 LOOK_BACK = pd.Timedelta(days=1)   # deal history read from the row's send time less this (broker vs host clock)
 NEVER_CONFIRMED = frozenset({AMBIGUOUS, "unfilled", "unknown"})
+# rows whose order may exist at the broker: entries are refused while any is in the table (condition 1). A `sending`
+# row counts: the engine is single-threaded, so one seen at a gate check is never that check's own send but a send
+# that raised (trading-safety review, round 1)
+UNRESOLVED = frozenset({"sending", AMBIGUOUS})
 Look = Literal["opened", "opened_closed", "no_trade", "wait", "gave_up"]
 
 
@@ -107,13 +113,20 @@ def decide(*, age_s: float, position: bool, deals_read: bool, entry_dealt: bool,
 
 
 def pending(orders: dict[str, SentOrder]) -> bool:
-    return any(o.status == AMBIGUOUS for o in orders.values())
+    return any(o.status in UNRESOLVED for o in orders.values())
+
+
+def tighter(side: int, a: float | None, b: float | None) -> float | None:
+    """The tighter of two stops for a position on `side` (the higher for a long); None only when both are."""
+    if a is None or b is None:
+        return a if b is None else b
+    return max(a, b) if side > 0 else min(a, b)
 
 
 def summary(orders: dict[str, SentOrder], now: pd.Timestamp, symbol: str) -> dict[str, Any]:
     """Engine state `unconfirmed_orders`: how many rows are unresolved and the oldest's age (health WARNs from
     AMBIGUOUS_ALERT_S) and send time (the entry status's "since")."""
-    rows = [pd.Timestamp(o.ts_utc) for o in orders.values() if o.status == AMBIGUOUS]
+    rows = [pd.Timestamp(o.ts_utc) for o in orders.values() if o.status in UNRESOLVED]
     if not rows:
         return {"count": 0, "oldest_age_s": None, "oldest_utc": None, "symbol": symbol}
     oldest = min(rows)
@@ -179,19 +192,6 @@ def adopt_sent(eng: Engine, cid: str, rec: SentOrder, pos: Position) -> OpenTrad
     return tr
 
 
-def record_closed(eng: Engine, cid: str, rec: SentOrder, deals: pd.DataFrame) -> bool:
-    """A send confirmed only by its deals (filled and closed while unseen): its position is found from the entry deal
-    and recorded like any other close, at the dealt lots. False, and nothing recorded, when the deals carry no
-    position id (condition 3: never marked resolved without a record)."""
-    entries = _entries(deals, cid)
-    if entries.empty or "position_id" not in entries.columns:
-        return False
-    pid = int(entries["position_id"].iloc[0])
-    rec.position_id = pid
-    eng._note_closed(pid, _closed_trade(rec, cid, pid, entries), "broker_close")
-    return True
-
-
 def archive_pending(eng: Engine, p: Proposal) -> None:
     """`_on_decision`: an approval whose order came back ambiguous is archived NOT CONFIRMED (refusal code
     `not_confirmed`, the facts pending), never ✅ APPROVED; no notice yet, the look-up tells the owner what it finds."""
@@ -221,16 +221,33 @@ def adopted(eng: Engine, rec: SentOrder, p: Position) -> bool:
 
 
 # ---------------------------------------------------------------------------------------------- the look-up
-def resolve(eng: Engine, positions: dict[int, Position]) -> bool:
+def resolve(eng: Engine, positions: dict[int, Position], *, quoted: bool = True) -> bool:
     """Look every `ambiguous` row up against `positions` (a read that succeeded) and the deal history. Returns whether
-    any row changed (the caller saves the table)."""
+    any row changed (the caller saves the table). `quoted` False (`no_quote_pass`): no look is clean. A look that
+    raises (a malformed deal row) is logged and waits, so it never stops the other rows or the caller's reconcile
+    loop (code review LOW 1)."""
     now = _now()
     eng._looks.last = now
+    fresh = quoted and _fresh_quote(eng)
     changed = False
     for cid, rec in list(eng._orders.items()):
-        if rec.status == AMBIGUOUS:
-            changed = _look(eng, cid, rec, positions, now) or changed
+        if rec.status != AMBIGUOUS:
+            continue
+        try:
+            changed = _look(eng, cid, rec, positions, now, fresh=fresh) or changed
+        except Exception:
+            log.exception("look-up of unconfirmed order %s failed; looked up again next pass", cid)
     return changed
+
+
+def _fresh_quote(eng: Engine) -> bool:
+    """Trading-safety review (condition 2): a terminal that lost the trade server still answers positions and deals
+    from its cache, so a look is clean only while the feed is live: a valid quote no older than the gate's
+    stale_tick_seconds (the engine's clock, as `_refresh_account` measures it)."""
+    t = eng._last_tick
+    if t is None or eng._quote_invalid_since is not None:
+        return False
+    return abs((eng._now(t) - t.ts_utc).total_seconds()) <= eng.gate.limits.stale_tick_seconds
 
 
 def no_quote_look(eng: Engine) -> None:
@@ -241,11 +258,12 @@ def no_quote_look(eng: Engine) -> None:
     if eng._looks.last is not None and (now - eng._looks.last).total_seconds() < eng.cfg.reconcile_every_s:
         return
     positions = eng._read_positions("the unconfirmed-order look-up is retried next pass")
-    if positions is not None and resolve(eng, {p.position_id: p for p in positions}):
+    if positions is not None and resolve(eng, {p.position_id: p for p in positions}, quoted=False):
         eng._save_orders()
 
 
-def _look(eng: Engine, cid: str, rec: SentOrder, positions: dict[int, Position], now: pd.Timestamp) -> bool:
+def _look(eng: Engine, cid: str, rec: SentOrder, positions: dict[int, Position], now: pd.Timestamp, *,
+          fresh: bool) -> bool:
     age = (now - pd.Timestamp(rec.ts_utc)).total_seconds()
     pos = next((p for p in positions.values() if p.comment in (cid, cid[-31:])), None)
     try:
@@ -264,7 +282,7 @@ def _look(eng: Engine, cid: str, rec: SentOrder, positions: dict[int, Position],
         except Exception:
             info = None
         closed = (tr, info) if info is not None else None
-    clean = deals is not None and entries.empty and pos is None
+    clean = fresh and deals is not None and entries.empty and pos is None
     if clean:
         eng._looks.first_clean.setdefault(cid, now)
     first = eng._looks.first_clean.get(cid)
@@ -291,11 +309,11 @@ def _look(eng: Engine, cid: str, rec: SentOrder, positions: dict[int, Position],
     elif out == "gave_up":
         rec.status = "unknown"
         eng._looks.first_clean.pop(cid, None)
-        _journal(eng, rec, out, age_s=round(age))
+        _journal(eng, rec, out, sent=pd.Timestamp(rec.ts_utc).isoformat())
         _tell(eng, rec, out, notified=out)
     elif age >= AMBIGUOUS_ALERT_S and not rec.unknown_notified:
         rec.unknown_notified = True
-        _journal(eng, rec, "still_unknown", age_s=round(age))
+        _journal(eng, rec, "still_unknown", sent=pd.Timestamp(rec.ts_utc).isoformat())
         _tell(eng, rec, "still_unknown", notified=None)
         _card(eng, rec, "still_unknown")
     else:
@@ -308,8 +326,7 @@ def _opened(eng: Engine, cid: str, rec: SentOrder, pos: Position, dealt: float) 
     (condition 5; a target that is there is kept, a stop is never loosened). `pos` is updated in place on success, so
     `_reconcile`'s loop over the same read does not send it again."""
     tr = adopt_sent(eng, cid, rec, pos)
-    if tr.sl is None:
-        tr.sl = rec.sl
+    tr.sl = tighter(pos.side, tr.sl if tr.sl is not None else rec.sl, pos.sl)   # never looser than the broker's (TS 6)
     loose = pos.sl is None or pos.side * (rec.sl - pos.sl) > 1e-9
     lost_tp = pos.tp is None
     kind: NoticeKind = "opened"
@@ -326,10 +343,20 @@ def _opened(eng: Engine, cid: str, rec: SentOrder, pos: Position, dealt: float) 
         if ok:
             pos.sl, pos.tp = sl, tp
         if loose:
-            kind = "opened_stop_set" if ok else "opened_no_stop"
+            kind = "opened_stop_set" if ok else "opened_no_stop_through" if _through(eng, pos.side, rec.sl) \
+                else "opened_no_stop"
     _journal(eng, rec, "opened", position=pos.position_id, lots=dealt)
     _tell(eng, rec, kind, notified="opened", dealt=dealt, entry=pos.open_price)
     _card(eng, rec, "opened")
+
+
+def _through(eng: Engine, side: int, sl: float) -> bool:
+    """The exit-side price is already at or past `sl` (the per-tick stop check closes the trade at the first quote)."""
+    try:
+        t = eng.broker.last_tick(eng.cfg.symbol)
+    except Exception:                   # noqa: BLE001 - no quote: the plain "set it in MT5" notice
+        return False
+    return side * ((t.bid if side > 0 else t.ask) - sl) <= 0
 
 
 def _journal(eng: Engine, rec: SentOrder, what: str, **extra: Any) -> None:

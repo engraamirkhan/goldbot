@@ -600,7 +600,9 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                                                            "decided_ts": d.ts}))
                 continue
             nc = not_confirmed_note(p.not_confirmed) if p.not_confirmed is not None else None
-            if p.outcome == Outcome.APPROVED and nc is not None:      # BACKLOG 72: never "refused" while unknown
+            if p.outcome == Outcome.APPROVED and p.placing:         # BACKLOG 72 review: the order is in flight
+                status = "submitted"
+            elif p.outcome == Outcome.APPROVED and nc is not None:    # BACKLOG 72: never "refused" while unknown
                 status = "refused" if nc.outcome == "no_trade" else "approved"
             elif p.outcome == Outcome.APPROVED:
                 status = "refused" if p.gate_refusal else "approved"
