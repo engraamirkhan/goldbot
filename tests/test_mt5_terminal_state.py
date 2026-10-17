@@ -346,3 +346,23 @@ def test_run_bridge_refuses_to_serve_a_terminal_it_launched():
     attach, check, serve = src.index("MT5Broker("), src.index("terminals_in_bridge_cgroup("), src.index("serve(")
     assert attach < check < serve and "SystemExit(TERMINAL_SPAWNED_EXIT)" in src
     assert svc.TERMINAL_SPAWNED_EXIT not in (0, bridge_mod.TERMINAL_LOST_EXIT)
+
+
+def test_terminals_in_bridge_cgroup_counts_only_the_bridge_units_cgroup(tmp_path):
+    """Trading-safety re-review: only a terminal inside goldbot-bridge@<account>.service counts; the terminal unit's
+    own and anything in the watchdog's cgroup (goldbot-bridge-watchdog@, a prefix look-alike) do not; an unreadable
+    proc root is "cannot tell" (None), never 0."""
+    from goldbot.ops.services.bridge import terminals_in_bridge_cgroup
+    exe = b"C:\\MT5\\ICMarkets\\terminal64.exe\x00"
+    slice_ = "0::/system.slice/system-goldbot\\x2d{}.slice/{}@icm-demo.service\n"
+    _proc(tmp_path, 10, exe, slice_.format("mt5\\x2dterminal", "goldbot-mt5-terminal"))
+    _proc(tmp_path, 11, exe, slice_.format("bridge\\x2dwatchdog", "goldbot-bridge-watchdog"))
+    assert terminals_in_bridge_cgroup(tmp_path) == 0
+    _proc(tmp_path, 12, exe, slice_.format("bridge", "goldbot-bridge"))
+    assert terminals_in_bridge_cgroup(tmp_path) == 1
+    _proc(tmp_path, 13, b"C:\\wine\\wineserver\x00", slice_.format("bridge", "goldbot-bridge"))   # not a terminal
+    assert terminals_in_bridge_cgroup(tmp_path) == 1
+    assert terminals_in_bridge_cgroup(tmp_path / "missing") is None
+    unreadable = tmp_path / "file-not-dir"
+    unreadable.write_text("x")
+    assert terminals_in_bridge_cgroup(unreadable) is None

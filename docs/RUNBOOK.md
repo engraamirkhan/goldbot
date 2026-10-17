@@ -1381,6 +1381,15 @@ Steps (record only states and times):
    - Telegram showed the down alert within 6 min, followed by the recovery.
 4. `sudo systemctl kill -s KILL goldbot-mt5-terminal@icm-demo`. The terminal must come back within its backoff, the
    bridge must re-attach, and there must still be exactly one terminal. Record the times.
+   **Which unit owns wineserver, and does exit 76 loop?** These steps check both:
+   - Run `systemd-cgls -u goldbot-mt5-terminal@icm-demo` and `systemd-cgls -u goldbot-bridge@icm-demo`, and record
+     which unit lists `wineserver`. The first Wine process to start launches it, so normally that is the terminal
+     unit. If it is the bridge's, then stopping the bridge (and so every exit 76) also kills the terminal's Wine. Write
+     that down as a finding.
+   - `sudo journalctl -u goldbot-bridge@icm-demo -b | grep -c "launched .* MT5 terminal"` should print 0. Also check
+     that `systemctl show -p NRestarts goldbot-bridge@icm-demo` does not keep rising over 5 minutes.
+   - If exit 76 repeats (the bridge launches a terminal, is stopped, and launches one again), stop the bridge, run
+     `sudo systemctl restart goldbot-mt5-terminal@icm-demo` (the bridge starts again behind it), and open a postmortem.
 5. **Hardening check.** `goldbot-mt5-terminal@.service` carries `NoNewPrivileges=yes` and `PrivateTmp=yes` commented
    out. They stay off until this step shows the terminal still works with them under Wine. Enable them one at a time
    with a drop-in (`sudo systemctl edit goldbot-mt5-terminal@icm-demo`), then
