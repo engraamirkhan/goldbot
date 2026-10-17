@@ -82,3 +82,11 @@ That would be a superseding ADR, not an edit of this one.
   bound is an owner note only.
 - **Consumers.** The director's attribution term (`goldbot/research/director.py`) recomputes its own t from the trade
   rows. The raw verdict's meaning (|t| >= 2) is unchanged for the staff agents.
+
+## Note 2026-10-17: the shadow book's entry day is `entry_ts + tf` (BACKLOG 78)
+Not a rule change. A shadow trade's `entry_ts` (`goldbot/engine/shadow.py`, `goldbot/labels/excursion.py`) is the
+signal bar's OPEN; the trade enters at that bar's close, `entry_ts + tf`. The "entry UTC day" of rule 1 is the day of
+`entry_ts + tf`, so a 15m signal bar opening at 23:45 UTC (or a 1h bar at 23:00) clusters on the next UTC day. This
+is the key `attribution.trade_rows` has derived since the report was first written (`TradeRow.entry_utc`) and the one
+E-6 uses (`goldbot.research.pipeline.entry_utc`, BACKLOG 76); no code changed and no reading moved. Tests in
+`tests/test_attribution.py` pin the day-end boundary and the agreement of the two derivations.
