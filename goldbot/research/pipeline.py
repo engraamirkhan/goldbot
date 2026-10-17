@@ -17,7 +17,7 @@ from goldbot.features.mtf import merge_higher_tf
 from goldbot.features.technical import atr
 from goldbot.labels import SwapSpec, one_at_a_time, triple_barrier, uniqueness_weights
 from goldbot.research.gates import RULE_ONLY_LABEL, holdout_verdict, research_gates
-from goldbot.research.metrics import expectancy, summarize
+from goldbot.research.metrics import day_summed_dsr, expectancy, summarize
 from goldbot.research.model import MAX_FEATURES, MetaLabelModel, fit_calibrator
 from goldbot.research.walkforward import Fold, splits_for, window_for
 from goldbot.specialists.base import FEATURE_SEED_KEY, AgentIdentity, Specialist
@@ -338,6 +338,7 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
             "model_filtered": summarize(taken, tpy * len(taken) / max(len(scored), 1), n_trials),
             "oof_auc": _auc(scored["target_hit"].to_numpy(), scored["p_raw"].to_numpy()),
         })
+        metrics["model_filtered"]["day_summed"] = model_filtered_day_summed(taken, n_trials)
     if holdout is not None and score_holdout:
         metrics["holdout_verdict"] = holdout_verdict(taken["ret"].to_numpy(), taken["risk"].to_numpy())
     else:
@@ -347,6 +348,18 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
     imp = last_model.importance() if last_model is not None else None
     return ResearchResult(agent_id=agent_id, n_candidates=len(labels), n_folds=len(folds), oof=oof, metrics=metrics,
                           feature_version=version, importance=imp, model=last_model if "threshold" in metrics else None)
+
+
+def model_filtered_day_summed(taken: pd.DataFrame, n_trials: int) -> dict[str, Any] | None:
+    """E-6 (pre-registration 2027Q1 O-5/O-6): the day-summed DSR of the model-filtered trades, "one summed net R per
+    entry UTC day, over days with at least one model-filtered trade only", on the run's trial count, with the per-trade
+    DSR and both effective ts of the same net-R series (metrics.DaySummedDsr dump; None below MIN_TRADES_FOR_DSR trades
+    or days). Net R = ret / risk, entry = ts_utc (the signal bar the trade enters on); a row without a positive risk is
+    no trade in R (as `expectancy`). Recorded with the trial so `gates.day_summed_check` re-reads it on today's K."""
+    ret, risk = taken["ret"].to_numpy(dtype=float), taken["risk"].to_numpy(dtype=float)
+    ok = np.isfinite(ret) & np.isfinite(risk) & (risk > 0)
+    res = day_summed_dsr(ret[ok] / risk[ok], pd.DatetimeIndex(pd.to_datetime(taken["ts_utc"], utc=True))[ok], n_trials)
+    return res.model_dump() if res is not None else None
 
 
 def rule_only_gates(net: pd.DataFrame, fold_test_sizes: list[int], n_trials: int,

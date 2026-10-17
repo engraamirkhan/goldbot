@@ -115,7 +115,8 @@ from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
 from goldbot.features.registry import feature_version  # noqa: E402
 from goldbot.research import h16  # noqa: E402
 from goldbot.research.director import cited_rule, queued_rows_for  # noqa: E402
-from goldbot.research.metrics import MIN_TRADES_FOR_DSR  # noqa: E402
+from goldbot.research.gates import DSR_BAR  # noqa: E402
+from goldbot.research.metrics import MIN_TRADES_FOR_DSR, DaySummedDsr  # noqa: E402
 from goldbot.research.pipeline import (  # noqa: E402
     POOLED_FEATURES,
     ResearchResult,
@@ -393,7 +394,8 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
              + (" (**volume features carry no information; re-pull the bars**)" if meta.get("zero_volume", 0) > 0.5 else ""),
              f"- runtime {meta['seconds']:.0f}s", ""]
     lines += screen_lines(m.get("screen"), bool(m.get("screen_skipped")))
-    lines += _gates_lines(m.get("gates")) + _rule_gates_lines(m.get("rule_only_gates")) + _holdout_lines(m.get("holdout_verdict")) + _rule_only_lines(m.get("rule_only"))
+    lines += _gates_lines(m.get("gates")) + day_summed_lines(m.get("model_filtered"))
+    lines += _rule_gates_lines(m.get("rule_only_gates")) + _holdout_lines(m.get("holdout_verdict")) + _rule_only_lines(m.get("rule_only"))
     lines += rule_only_split_lines(m.get("rule_only_split"))
     lines += _by_family_lines(m.get("by_family"))
     if "all_candidates" in m:
@@ -451,6 +453,24 @@ def _gates_lines(g: dict[str, Any] | None) -> list[str]:
     out = [f"### Design gates: {'**PASS**' if g['passed'] else '**FAIL**'}", ""]
     out += [f"- {'pass' if c['passed'] else 'FAIL'} {c['name']}: {c['detail']}" for c in g["checks"]]
     return out + [""]
+
+
+def day_summed_lines(mf: dict[str, Any] | None) -> list[str]:
+    """E-6: the day-summed DSR the discovery survivors' reading rule needs (pre-registration 2027Q1 O-5/O-6: "the
+    day-summed DSR is also >= 0.95"), beside the per-trade DSR and both effective ts, on this run's trial count. The
+    evaluator reads it on today's count (`gates.day_summed_check`); for other trials it is information only."""
+    if not mf:
+        return []
+    raw = mf.get("day_summed")
+    head = "### Day-summed DSR (reading rule O-5/O-6, discovery survivors; E-6)"
+    if raw is None:
+        return [head, "", f"- n/a: fewer than {MIN_TRADES_FOR_DSR} model-filtered trades or trading days", ""]
+    d = DaySummedDsr(**raw)
+    fall = 1 - d.t_day_summed / d.t_per_trade if d.t_per_trade else 0.0
+    return [head, "",
+            f"- day-summed {d.dsr_day_summed:.3f} on {d.n_days} trading days, per-trade {d.dsr_per_trade:.3f} on "
+            f"{d.n_trades} trades, K = {d.n_trials} at this run (need {DSR_BAR}, re-read on the registry's count today)",
+            f"- effective t {d.t_day_summed:.2f} day-summed vs {d.t_per_trade:.2f} per trade ({fall:.1%} lower)", ""]
 
 
 def _rule_gates_lines(g: dict[str, Any] | None) -> list[str]:

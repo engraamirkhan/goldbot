@@ -26,8 +26,11 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from pydantic import ValidationError
 
-from goldbot.research.metrics import MIN_TRADES_FOR_DSR, expectancy
+from goldbot.base import load_record
+from goldbot.research.metrics import MIN_TRADES_FOR_DSR, DaySummedDsr, expectancy
+from goldbot.research.registry import n_trials_effective
 
 MIN_CANDIDATES = 1500
 MIN_TEST_FOLD = 60
@@ -76,3 +79,29 @@ def holdout_verdict(ret: np.ndarray, risk: np.ndarray) -> dict[str, Any]:
     passed = n >= 2 and mean_r > 0 and t >= HOLDOUT_MIN_T
     return {"passed": passed, "n": n, "mean_r": mean_r, "t_stat": t,
             "rule": f"model-filtered trades in the held-out window: mean R > 0 and t >= {HOLDOUT_MIN_T}"}
+
+
+def day_summed_check(row: dict[str, Any] | None, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """The discovery survivors' extra reading (pre-registration 2027Q1 O-5/O-6, E-6): pass only if "the day-summed DSR
+    is also >= 0.95", read on "the same K = `n_trials_effective` as the gate (both discoveries' K_eff included)", i.e.
+    the registry's count today (`registry.n_trials_effective(rows)`, as the phase gate's `current_dsr`), recomputed
+    from the trial's stored `results.model_filtered.day_summed` (metrics.DaySummedDsr). A row without them, or below
+    MIN_TRADES_FOR_DSR trading days, fails closed. Returns a research_gates-style check plus both DSRs and ts."""
+    k = n_trials_effective(rows)
+    mf = ((row or {}).get("results") or {}).get("model_filtered") or {}
+    out: dict[str, Any] = {"name": "day_summed_dsr", "passed": False, "n_trials": k, "dsr_per_trade": None,
+                           "dsr_day_summed": None, "t_per_trade": None, "t_day_summed": None}
+    raw = mf.get("day_summed")
+    if raw is None:
+        return {**out, "detail": f"no stored day-summed DSR inputs (fewer than {MIN_TRADES_FOR_DSR} trading days, or "
+                                 "a run before E-6): re-run the trial"}
+    try:
+        res = load_record(DaySummedDsr, raw, source="trial_registry").at(k)
+    except ValidationError:
+        return {**out, "detail": "unreadable stored day-summed DSR inputs: re-run the trial"}
+    fall = 1 - res.t_day_summed / res.t_per_trade if res.t_per_trade else 0.0
+    return {**out, "passed": res.dsr_day_summed >= DSR_BAR, "dsr_per_trade": res.dsr_per_trade,
+            "dsr_day_summed": res.dsr_day_summed, "t_per_trade": res.t_per_trade, "t_day_summed": res.t_day_summed,
+            "detail": f"day-summed deflated Sharpe {res.dsr_day_summed:.3f} on {res.n_days} trading days "
+                      f"({res.n_trades} trades; per-trade {res.dsr_per_trade:.3f}), t {res.t_day_summed:.2f} vs "
+                      f"{res.t_per_trade:.2f} per trade ({fall:.1%} lower), K = {k} (need {DSR_BAR})"}
