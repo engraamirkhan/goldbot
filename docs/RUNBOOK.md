@@ -852,6 +852,34 @@ an App Password (Google Account -> Security -> 2-Step Verification -> App passwo
    open link), set `enabled: false`, then change your password and your email password. The accepted risk and its
    limits are in [ADR 0013](decisions/0013-email-sign-in-link-accepted-risk.md).
 
+**Email sign-in code (owner only; uses the same mail setup)**
+
+With mail set up (steps 1-3 above), the owner can sign in with the password and a 6-digit code sent by email instead
+of the authenticator ([ADR 0028](decisions/0028-email-code-sign-in.md)). Nothing else to configure:
+
+1. The code is checked with a secret key kept in the server's keyring as `email-code-hmac-key` (32 random bytes,
+   created on the first request; never in `aux.db` or a backup). The VPS needs a real keyring: the
+   `state/.secrets.json` fallback is for the brain only. If the keyring cannot be read, or the stored key is not
+   32 bytes of hex, email codes stay off (the login page shows only the authenticator) and the API log says
+   `email codes off: email-code-hmac-key ...`. To rotate the key (open codes stop working): brain
+   `goldbot accounts set email-code-hmac-key`, VPS `.\.venv\Scripts\python.exe -m goldbot.ops.accounts set
+   email-code-hmac-key`, paste 64 hex characters (for example from `python -c "import secrets; print(secrets.token_hex(32))"`),
+   then restart the API.
+2. A code works once, for 10 minutes; 3 wrong codes kill it; a resend (not before 60 s) cancels the old one. Mail
+   shares the link's limit: 3 an hour per address and per network address. Wrong codes count towards the sign-in
+   lockout.
+3. After an email-code sign-in, **invite, reset link, role change, disable, enable and sign out everywhere** also ask
+   for the authenticator code (or a recovery code, which is spent). Re-arm, auto mode, password change and new
+   recovery codes ask for the authenticator as before. Approve, reject and halt never ask.
+4. Three codes killed by wrong guesses, or one sign-in lockout, within 24 h **suspend email codes** (one Telegram
+   notice; audit `email_code_suspended`): the page still answers but no email is sent. Sign in once with the password
+   and the authenticator code to switch them back on (audit `email_code_resumed`).
+5. Every email-code sign-in sends a Telegram notice and an email ("new sign-in with an emailed code"). If it was not
+   you, someone has your password and your mailbox: run `python -m goldbot.ops.run revoke-sessions` on the server
+   (signs everyone out and cancels every open code), set `enabled: false`, change your password and your email
+   password. Turn email codes off at once (set `enabled: false`, restart the API) on any live-money incident or if
+   the Gmail account loses 2-Step Verification (ADR 0028's revert trigger).
+
 ---
 
 ## 3. Daily operation

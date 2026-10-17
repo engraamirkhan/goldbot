@@ -1,5 +1,5 @@
 id: U4
 requirement: '"five failed logins lock an account for 15 minutes"'
 status: partial
-code: 'goldbot/api/auth.py `_check_lockout`/`_fail`: five failures in a sliding 15-minute window, counted in aux.db `auth_failures` (survives a restart), plus 20 per client IP across emails; the lock can be shorter than 15 min after the fifth failure (it lifts when the oldest ages out)'
+code: 'goldbot/api/auth.py `_check_lockout`/`_fail`: five failures in a sliding 15-minute window, counted in aux.db `auth_failures` (survives a restart), plus 20 per client IP across emails; the lock can be shorter than 15 min after the fifth failure (it lifts when the oldest ages out); wrong emailed codes count towards it too (see U22)'
 test: tests/test_api.py::test_lockout_after_five_failures; tests/test_auth_security.py::test_lockout_survives_a_restart; ::test_one_ip_is_limited_across_many_emails

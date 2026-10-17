@@ -1,6 +1,6 @@
 # 0013: Owner email sign-in link: mailbox plus authenticator is accepted as a sign-in
 
-Status: accepted (implementer, 2026-10-11; owner request of 2026-10-11, security review of fe58fae, finding M1)
+Status: accepted (implementer, 2026-10-11; owner request of 2026-10-11, security review of fe58fae, finding M1) Superseded in part by [ADR 0028](0028-email-code-sign-in.md): the owner's emailed-code sign-in does not need the authenticator; this link still does.
 
 ## Context
 The owner asked for "send link to email for login, that will only be for me". Until then, every sign-in to the owner
