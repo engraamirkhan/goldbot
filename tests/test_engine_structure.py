@@ -1,8 +1,9 @@
 """Ratchets for splitting goldbot/engine/runner.py (TD-2, ADR 0023; docs/proposals/2026-10-runner-seam-map.md,
-"Ratchets"). Each move-only step lowers them in the same PR and nothing may raise them: the line cap falls towards the
-seam map's target of at most 1,200 lines, and the state-file I/O sites leave runner.py for engine/store.py.
+"Ratchets"). Each move-only step lowers them in the same PR and nothing may raise them (raising the cap needs a CTO
+ruling): the line cap falls to at most 1,500 lines after step 7 (ADR 0023; 1,200 is the step-8 goal), and the
+state-file I/O sites have left runner.py for engine/store.py.
 
-Captured at 7dc12a3 (PR 0, tests only): today's line count and today's I/O sites, so both pass on the current code.
+Step 1 (engine/store.py): the cap is runner.py's measured size after the move, and the I/O allow-list is ADR 0023 A1.
 """
 from __future__ import annotations
 
@@ -11,26 +12,19 @@ from collections import Counter
 from pathlib import Path
 
 RUNNER = Path(__file__).parents[1] / "goldbot" / "engine" / "runner.py"
-LINE_CAP = 3552             # CTO ruling 12 (2026-10-17): one-time raise for lanes 71+62 that pre-dated PR 0; lowered by every step
+LINE_CAP = 3471             # measured after step 1; lowered by every step, <= 1,500 after step 7 (ADR 0023)
 
-# (enclosing function, call) -> count. Step 1 (engine/store.py) removes STORE_SITES; the seam map places no step for
-# OTHER_SITES (reads of files other jobs write), which the architect assigns before the list can reach zero.
-STORE_SITES: Counter[tuple[str, str]] = Counter({
-    ("Engine._save_orders", "write_atomic"): 1,
-    ("Engine._load_orders", "json.loads"): 1,
-    ("Engine._load_orders", "read_text"): 1,
-    ("Engine._save_risk_state", "write_atomic"): 1,
-    ("Engine._load_risk_state", "json.loads"): 1,
-    ("Engine._load_risk_state", "read_text"): 1,
-    ("Engine._write_state", "write_atomic"): 1,
-})
-OTHER_SITES: Counter[tuple[str, str]] = Counter({
-    ("Engine._archive_stale_proposals", "read_text"): 1,    # approvals/pending (the bus's files)
-    ("Engine._drift", "json.loads"): 1,                     # state/drift.json (drift_watch job)
-    ("Engine._drift", "read_text"): 1,
-    ("Engine._account_class", "json.loads"): 1,             # state/classifier_<account>.json (classifier job)
-    ("Engine._account_class", "read_text"): 1,
-})
+# A1 (ADR 0023 addendum): after step 1 runner.py writes no state file. The reads left are of files other jobs write, each
+# allowed only in its named function, at today's count, until that function moves: a second read inside an allowed
+# function fails, and so does a stale entry, so the list only shrinks and is empty after step 7.
+READ_ALLOWED: dict[str, Counter[str]] = {
+    # W2-1 F1 (approvals/pending, the bus's files)
+    "Engine._archive_stale_proposals": Counter({"read_text": 1}),
+    # step 5, engine/sizing.py (state/drift.json, drift_watch job)
+    "Engine._drift": Counter({"json.loads": 1, "read_text": 1}),
+    # step 5, engine/sizing.py (state/classifier_<account>.json, classifier job)
+    "Engine._account_class": Counter({"json.loads": 1, "read_text": 1}),
+}
 
 
 def _io_sites(source: str) -> Counter[tuple[str, str]]:
@@ -69,13 +63,19 @@ def test_runner_py_stays_under_its_line_cap():
 
 
 def test_runner_does_no_state_file_io():
-    """Seam map step 1: runner.py keeps no `write_atomic` / `json.loads` / `read_text`; the store owns the files.
-    Until the steps land the test holds runner.py to today's sites exactly: a new site fails, and a removed one fails
-    until it is struck from the allow-list, so the list only shrinks."""
+    """Seam map step 1 and ADR 0023 A1: runner.py never calls `write_atomic` (engine/store.py owns the engine, risk and
+    orders files), and `json.loads` / `read_text` appear only in the READ_ALLOWED functions, each at its listed count.
+    An entry whose function no longer reads a file is stale and fails until it is struck, so the list only shrinks."""
     got = _io_sites(RUNNER.read_text())
-    assert got == STORE_SITES + OTHER_SITES, (
-        f"new: {dict(got - (STORE_SITES + OTHER_SITES))}; gone (strike them from the list): "
-        f"{dict((STORE_SITES + OTHER_SITES) - got)}")
+    writes = {fn: n for (fn, call), n in got.items() if call == "write_atomic"}
+    assert not writes, f"write_atomic in runner.py: {writes}; durable writes go through engine/store.py"
+    reads: dict[str, Counter[str]] = {}
+    for (fn, call), n in got.items():
+        reads.setdefault(fn, Counter())[call] += n
+    assert set(reads) <= set(READ_ALLOWED), f"file reads outside the allow-list: {sorted(set(reads) - set(READ_ALLOWED))}"
+    assert set(READ_ALLOWED) <= set(reads), f"stale allow-list entries (strike them): {sorted(set(READ_ALLOWED) - set(reads))}"
+    changed = {fn: dict(reads[fn]) for fn in READ_ALLOWED if reads[fn] != READ_ALLOWED[fn]}
+    assert not changed, f"reads in an allowed function changed from the listed counts: {changed}; never add one"
 
 
 def test_the_io_site_finder_sees_every_spelling_it_polices():
