@@ -49,6 +49,17 @@ finance-auditor, 11-04). 27 records the terminal's contract terms read today and
 (release-manager, due 10-23, wave lane 4; accepted at that PR). 65 is parked. The CFO's owner-only matters (C1-C5,
 OD-12) are in ROADMAP section 6 as OD-16 to OD-20.
 
+**Order outcomes after approval 2026-10-17 (program director + product owner; base 765ec27).** From the two risks
+`docs/ux/order-not-placed.md` flags. New 71 (rank 6: the definite-reject build itself, copy final but never
+ranked), 72 (rank 7: ambiguous results, NOT CONFIRMED) and 73 (parked: auto-mode reject notices). Why this order:
+both 71 and 72 fix a false safety state (a card reads APPROVED when no trade, or an unknown one, exists) on the
+propose path the demo runs from its first day, so they rank with the safety rails and above 62 (other symbols, which
+the demo account does not hold). 71 is ready and small; 72 also closes a record gap (an ambiguous result's row is
+marked `rejected`, so a fill that closes inside one reconciliation pass is never recorded) and needs a
+trading-safety plan first, so it ranks second. 73 cannot fire until auto mode exists (A10: 100 decided proposals), so
+it is parked with a trigger. To hold 15 rows, 45, 69 and 70 are parked (work and dates unchanged): the holiday window
+they feed stays off, and the November audit is two weeks out.
+
 ## Ranked items
 
 | # | Item | Stage · kind | Size | Status |
@@ -153,7 +164,12 @@ before any new trading-safety builder. Every lane below touches different files.
    free the SRE (due 10-23). Disjoint from lanes 6 and 9.
 13. **Item 68, release hygiene** (release-manager): worktree clean-up Mon 2026-10-19; CI-minutes answer by 10-23
    (ROADMAP section 2, budget-2026-10.md).
-14. **Item 69** (finance-auditor): one row in `docs/finance/audit-framework.md`, by the 2026-11-04 audit.
+14. **Item 69** (finance-auditor; parked, re-enters 2026-11-01): one row in `docs/finance/audit-framework.md`, by the 2026-11-04 audit.
+15. **Item 72, NOT CONFIRMED: architect plan** (read-only, by 2026-10-21), then a trading-safety verdict on the
+   plan and the ui-ux copy against it. Can start now: it edits no files.
+16. **Item 71, NOT PLACED build** (implementer, then trading-safety): `goldbot/execution/not_placed.py` (new),
+   runner `_on_decision`, `goldbot/telegram/bot.py`, `goldbot/api/`, `web/src/screens/ProposalCard.tsx`. Waits for
+   62 and 43 to leave runner.py (one runner.py lane at a time); 72's build follows in the same lane.
 63 waits for 60's fix lane (same approval files); 65 is parked.
 
 Top three ready items (2026-10-16 night): 66 (lane 11, architect plan), 62 (lane 9) and 43 (lane 6). 27 is in
@@ -175,6 +191,12 @@ Moved off the ranked table in the sweep of 2026-10-16. Each item's detail block 
 - 53, phase-gate comparator on the deployed trial: matters only once a model is promoted, and none is.
 - 65, review hygiene (parked 2026-10-16 for the cap): none of its parts can lose money; the quant N1 text (10-19)
   and the N3 ADR (10-30) are still owed on their dates.
+- 45 and 70, holiday list (parked 2026-10-17 for the cap): the window is off until adopted after 46; the 45 final
+  and the v3 list keep their 2026-10-30 dates.
+- 69, audit of leverage and the largest order (parked 2026-10-17 for the cap): re-enters 2026-11-01 for the
+  2026-11-04 audit.
+- 73, auto-mode reject notices (parked 2026-10-17): auto mode is off and offered only after 100 decided proposals;
+  re-enters at 80 decided proposals or before any /mode auto, whichever is first.
 - 36, 51, 61 (off the table 2026-10-16, not parked): merged on the integration branch, shipping in the next PR
   (release-manager, due 10-23); accepted at that PR.
 - M28 TreeSHAP per decision, A5 per-trade SHAP, and a post-trade review after each exit.
