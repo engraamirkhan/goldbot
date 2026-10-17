@@ -295,14 +295,13 @@ def test_a_newer_key_in_an_orders_row_is_dropped_and_noted_as_schema_skew(tmp_pa
     assert base.schema_skew()[("orders_<account>.json", "SentOrder", ("future_field",))] == 1
 
 
-def test_a_newer_key_in_the_risk_file_is_ignored_and_not_yet_counted_as_schema_skew(tmp_path, fresh_skew):
-    """Today's behaviour, pinned so the move keeps it: `_load_risk_state` reads its keys with `get` and ignores any
-    other, without `note_schema_skew` (unlike the orders file). Raised as a gap against ADR 0010 in the PR 0 report;
-    noting it is a behaviour change, made outside the move."""
+def test_a_newer_key_in_the_risk_file_is_ignored_and_the_file_still_loads(tmp_path, fresh_skew):
+    """Pinned so the move keeps it: the risk file's keys are read with `get` and any other is ignored, so a file a
+    newer release wrote still starts the engine in its stage. Whether the key is noted as schema skew is the store's
+    contract (BACKLOG 74, tests/test_store.py), not this edge's."""
     _risk_file(tmp_path).write_text(json.dumps({"stage": "size_down", "future_cap": 0.5}))
     eng = _engine(tmp_path, _broker())
     assert eng.state.stage == Stage.SIZE_DOWN
-    assert base.schema_skew() == {}
 
 
 def test_sending_rows_are_never_pruned_and_settled_rows_go_after_seven_days(tmp_path):
