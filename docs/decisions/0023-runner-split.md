@@ -159,3 +159,15 @@ into `engine/approvals_io.py` and W2-1 re-points it later. **After step 7 the al
 
 ADR 0010 gap: `_load_risk_state` ignores unknown keys without `note_schema_skew`. The fix **follows** the step-1 move
 (S1/S7: the move changes no golden) as its own PR in `store.py` before step 2 — BACKLOG 74.
+
+## Ruling 12 (CTO, 2026-10-17): runner.py line cap, one-time raise
+
+`LINE_CAP` is raised once, 3,492 → **3,552**, the measured size on the integration tip. PR 0 (34bfdf3) was written in
+parallel with two approved feature lanes that have since merged — BACKLOG 71 (d067a19) and BACKLOG 62 (e35f566), both
+trading-safety E1 APPROVE — so the pin was stale when written. Trimming now (option b) was rejected: it would edit a
+file the step-1 lane holds and put safety-reviewed code at risk to satisfy a counter. Exempting the ratchet (option c)
+was rejected: it stays live. The step-1 move lowers the cap to its measured size in the same PR, with no slack.
+**Future feature lanes touching runner.py:** while a move step is open, a feature lane lands after that step or rebases
+onto it; it may raise the cap only by its net added lines, with a code-reviewer note in the PR, a trading-safety E1 for
+any engine change and a CTO ruling line; a feature adding more than 40 net lines to runner.py puts the new code in the
+extracted module instead. Owner: implementer; review at the step-1 merge.

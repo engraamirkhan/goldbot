@@ -11,7 +11,7 @@ from collections import Counter
 from pathlib import Path
 
 RUNNER = Path(__file__).parents[1] / "goldbot" / "engine" / "runner.py"
-LINE_CAP = 3492             # lowered by every step; target <= 1,200 (seam map)
+LINE_CAP = 3552             # CTO ruling 12 (2026-10-17): one-time raise for lanes 71+62 that pre-dated PR 0; lowered by every step
 
 # (enclosing function, call) -> count. Step 1 (engine/store.py) removes STORE_SITES; the seam map places no step for
 # OTHER_SITES (reads of files other jobs write), which the architect assigns before the list can reach zero.
