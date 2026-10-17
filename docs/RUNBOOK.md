@@ -1237,6 +1237,12 @@ and when it recovers (needs `telegram.allowed_user_ids` and the Telegram service
 when that loop has stopped). When the whole brain is down, the outside dead man's switch tells you instead ("Outside
 alert" below; the `deadman` check says whether it is set).
 
+### Order not confirmed
+
+Health WARN "order(s) not confirmed by the broker" (BACKLOG 72): on the MT5 box, open the terminal and look in Trade for a
+XAUUSD position with the engine's comment and in History for its deals; if it is open without a stop, set the stop the
+notice names. The engine keeps looking and refuses new entries until it settles; the WARN clears by itself.
+
 ### Outside alert (dead man's switch)
 
 Telegram alerts come from the brain itself, so a dead brain cannot report itself. A free check on Healthchecks.io
