@@ -205,6 +205,11 @@ while the risk load ignores unknown keys, so snapshots must be built from parsed
 conditions in ADR 0023.
 
 ### TD-3 e2e `PYTHON` default (`web/playwright.config.ts:5`)
+**Done 2026-10-17 (`fdd362b`):** the default is `<repo>/.venv/bin/python`, then `python3`; `e2e_server.py` refuses to run
+on a `goldbot` outside its tree (`check_tree`, tests in `tests/test_e2e_server_tree.py`). Finding: the server already
+inserts its own root first on `sys.path`, so the "wrong tree" half was prevented; the failure seen was the wrong
+interpreter (no duckdb). Text below is the original item.
+
 `const PYTHON = process.env.PYTHON ?? "python"` starts `scripts/e2e_server.py` with whichever `python` is first on
 PATH. CI sets `PYTHON: python` after `setup-python` (`ci.yml:113`), so CI is right; locally `python` is often missing,
 the system one, or the main checkout's venv, whose editable install imports `goldbot` from the main checkout, not the
@@ -215,6 +220,14 @@ its own repo root, printing both paths. Same files as lane R-AUTH: added to R-AU
 lane right after.
 
 ### TD-4 Flaky auth e2e: email sign-in link (issue #82, PR #81)
+**Done 2026-10-17 (`a2c66b0`), root cause proven:** TOTP step waits. Timed on the unmodified suite, the sign-in-link test
+slept 21 s + 30 s in `freshTotp` (51.5 s of its 90 s), the phone test 27 s; the server accepts each code once within
++-1 step, so an owner secret used 5 times per story leaves only real time to wait on. Not the spent-link page (the
+server does not spend a code there). Fix: `e2e_server.py` steps the existing `auth._totp_now` seam through
+`<state>/totp_clock_steps`, `web/e2e/totp.ts` `totpClock` advances it instead of sleeping and records spent steps in
+`<state>/totp_last_step`; verification and replay guard untouched, no production code changed. Text below is the
+original item.
+
 The test failed at `auth.spec.ts:220` after `await freshTotp(ownerSecret)`. `freshTotp` (`web/e2e/totp.ts:19-30`)
 sleeps until the clock reaches an unused step once the current and next are spent; the test uses the owner's secret
 several times, so up to ~60 s of its 90 s budget can go to sleeping before the field is filled. That is a likely
@@ -255,6 +268,10 @@ Accountable: test-engineer for 1, sre for 2 and 3 (one lane, reviewed by trading
 W2-1 merges, because W2-1 moves orders and approvals into a new store: exactly the change it exists to catch.
 
 ### TD-6 e2e speed
+**Done 2026-10-17 (`a2c66b0`):** e2e 19 tests 7.5 min -> about 24 s (3 runs: 23.3, 24.2, 23.4 s) with `workers: 2`. Not by a
+fresh user per test (the owner is one per server) but by stepping the e2e server's TOTP clock (see TD-4), which also
+meets the "no override in `goldbot/api/auth.py`" rule. Text below is the original item.
+
 ~331 s of the dashboard file's 342 s are TOTP step waits (section 1). **Fix:** give each test that needs codes its own
 user and TOTP secret (a fresh secret has no spent steps), or seed users per test through `e2e_server.py` fixtures. Do
 **not** add a clock override or replay-guard bypass to `goldbot/api/auth.py`: production auth stays untouched. Then
@@ -285,6 +302,8 @@ Declare `pytest-testmon` and `pytest-timeout` in the `dev` extra and the lock; s
 unit, 300 s integration) so a hang fails one test, not the 40-minute job.
 
 ### TD-10 e2e in local gates
+**Unblocked 2026-10-17:** TD-6 landed, e2e is about 24 s, so `--web` can imply it now. Text below is the original item.
+
 Add `scripts/gates.sh --e2e` (implied by `--web` once TD-6 makes e2e ≤ 2 min), so e2e fails on the lane, not on CI
 minutes. CI minutes ran out on 10-06 (ROADMAP risk 7).
 
