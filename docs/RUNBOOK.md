@@ -238,6 +238,8 @@ It is sent once a day. If the Telegram service was down at 06:45 it sends the di
 within 6 hours; later than that it skips the day. A file it cannot read shows as "could not read" on that line
 and the rest still arrives. It never contains account numbers or emails.
 
+* **A deploy is done only when you can open the dashboard at its address and sign in** (sections 2.7 and 2.10 are part of it).
+
 **Updates: one click on Telegram, or by hand.** Nothing is ever deployed without you.
 * When a new version is merged and has passed CI, Telegram shows *New version ready* with the list of changes and
   **[Deploy] [Skip]**. Deploy restarts the services within a minute (never while an entry waits for your click; open

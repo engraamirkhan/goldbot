@@ -52,3 +52,5 @@ Work is done only when every item holds; the report says which hold and shows th
 - Accessibility: WCAG AA contrast, keyboard focus, 44 px tap targets, no information by colour alone, units and time zone on every number.
 - No layout shift on live updates; no heavy dependencies without a reason.
 - Implementation passes lint, typecheck, vitest, build and e2e; API contract regenerated if the API changed.
+- **Owner-verified done:** for any deploy or owner-facing change, the owner can open it at its fixed address and complete the first action (sign in / approve), checked from outside the servers and recorded in the deploy note. Owner-facing commands are single-line and pasted from the rendered message before handing over. A classifier block on an operational step is reported to the owner in one line with the exact command the first time (incident 2026-10-17).
+- **Walk the owner's first run** end to end from the owner's side before accepting any sign-in/setup change.

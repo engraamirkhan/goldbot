@@ -377,6 +377,9 @@ Numbers 0023-0027 are reserved by this register under the TD-7 interim rule.
     measured as non-owned, non-injected Engine attributes > 8; ratchet target ≤ 1,500 after step 7, ≤ 1,200 via a
     step 8; W2-1's `RiskStateRecord` replaced by `RiskSnapshot`. Reverse if step 1 cannot be move-only, or three
     seams in a row are stopped.
+13. **Owner-facing checklist is part of the deploy (2026-10-17, CTO).** RUNBOOK tunnel (2.7) and first run (2.10) are
+    not optional: no deploy is reported done until the owner has opened the dashboard and signed in (S13; incident
+    2026-10-17). Reverse only by owner decision.
 
 ## 8. Not verified / left out
 
