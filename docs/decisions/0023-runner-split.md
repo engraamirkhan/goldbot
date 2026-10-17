@@ -139,3 +139,23 @@ to an order, exits are never gated, features are unchanged. No owner decision is
   pass). Then W2-1 goes in place (option B) and the split follows it. Steps 2-7 are revisited if three seams in a
   row are stopped by the stop rule: then the class structure, not the file, is the problem, and the architect
   proposes a state-model change instead.
+
+## Addendum A1 (2026-10-17, architect; S5 resolution and the ADR 0010 gap)
+
+PR 0 (34bfdf3, trading-safety APPROVE) found that after step 1 removes the seven orders/risk/engine-file sites, three
+functions still read files that are not engine state. The ratchet allow-list is per function:
+
+| Function | Seam | Step | Kind |
+|---|---|---|---|
+| `_drift` (~3300) | `sizing.py` (inside the step-5 range 3251-3421) | 5 | move-only |
+| `_account_class` (~3313) | `sizing.py` | 5 | move-only |
+| `_archive_stale_proposals` (~513) | W2-1 F1 approvals path (behind the bus/state store), not a 1-7 seam | W2-1 F1 | interface: `approvals.archive_stale(now_ns) -> int` |
+
+Rules: step 1 bans `write_atomic` from `runner.py`; `json.loads`/`read_text` are allowed only in those three functions;
+each entry is deleted in the PR that moves its function, and a stale entry fails the ratchet (the allow-list must be a
+subset of the functions still present); if W2-1 F1 has not merged by step 5, `_archive_stale_proposals` moves unchanged
+into `engine/approvals_io.py` and W2-1 re-points it later. **After step 7 the allow-list is empty**: `runner.py` holds no
+`json.loads`, `read_text`, `write_text`, `open(` or `write_atomic` (the step-7 PR's final-state assertion).
+
+ADR 0010 gap: `_load_risk_state` ignores unknown keys without `note_schema_skew`. The fix **follows** the step-1 move
+(S1/S7: the move changes no golden) as its own PR in `store.py` before step 2 — BACKLOG 74.

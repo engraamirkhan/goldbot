@@ -80,6 +80,7 @@ they feed stays off, and the November audit is two weeks out.
 | 68 | Release hygiene: explain the CI-minutes record; clean up and retire worktrees | Engineering operations (CI cost, disk) · RUN | S | ready (decided 2026-10-16 from the CFO budget and the CTO tech-debt list) · accountable: release-manager · due 2026-10-19 (worktrees), 2026-10-23 (CI minutes) |
 | 64 | Dashboard header shows the signed-in role, never the email | Dashboard (every screen; privacy) · RUN | S | built 2026-10-16 to docs/ux/header-role.md (no API change; tests in HANDOFF) · next: ui-ux-designer review, code-reviewer · accountable: ui-ux-designer · due 2026-10-27 |
 | 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (owner rulings recorded 2026-10-11; owed counts run on `main` 2026-10-16, run 38931951849: H-01 lower bound 152 >= 150, kept as a retire test; H-06 107 < 150, withdrawn by its rule; reservation 8 in the spec and settings (done 2026-10-16, `lane/h06-withdraw-lowerbound`; local dry run of 47 accepts it, 4 queued + 4 slots, nothing written); lower-bound loop fixed to the `one_at_a_time` rule, H-01 AT RISK (152 vs 150 on data-v1 with 21 weekdays missing, coverage triage 2026-10-16); the 2026-11-01 script recount and the G3 recount on repaired data merged into one count-owed-events run after G1 closes, by 2026-11-13, evaluator G3 check by 2026-11-14; `macro-v1` present since 2026-10-13; freeze commit 2026-12-14, rows 2026-12-18..23; needs a first dry run of 47) · accountable: research-director · due 2026-12-14 |
+| 74 | The risk file notes schema skew on unknown keys (ADR 0010 gap) | Execution and reconciliation (persisted risk state) · PROTECT | S | proposed (architect addendum A1 to ADR 0023, 2026-10-17) · next: own PR in engine/store.py straight after the step-1 move and before step 2 · accountable: implementer · reviews: trading-safety, code-reviewer · due 2026-11-06 |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -1293,6 +1294,14 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
     `test_an_auto_unconfirmed_result_is_left_to_72`.
   - A notice that cannot be queued is logged and never changes the decision or the auto pause (existing best-effort
     rule). Reviews: trading-safety-reviewer, code-reviewer, ui-ux-designer.
+- **74. The risk file notes schema skew on unknown keys (ADR 0010 gap).** Value: `_load_risk_state` ignores keys it
+  does not know without calling `note_schema_skew`, while the orders loader already notes them (runner.py ~2500); a
+  rollback below a release that added a risk field is therefore invisible to health. Acceptance: `store.py` calls
+  `note_schema_skew(src, "risk file", extra)` and keeps ignoring the keys — never raises, so the file loads as today
+  apart from the note (`tests/test_store.py::test_risk_file_unknown_key_notes_skew_and_still_loads`); the PR 0 golden
+  edge test asserts only that the file loads, not "no note". Ordered after the step-1 move (ADR 0023 S1/S7: the move
+  changes no golden) — trading-safety ruled the frozen behaviour fail-safe (a newer key is ignored, halt and stage still
+  load, nothing widens).
 
 ## Needs the owner
 These are never decided by the product owner or by agents. Since 2026-10-16 (owner rule) only truly owner-only

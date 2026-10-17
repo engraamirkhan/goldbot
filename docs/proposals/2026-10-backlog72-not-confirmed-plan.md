@@ -82,3 +82,30 @@ build after 71 merges. (4) `_record_closed_while_down` uses `rec.lots`, not the 
 
 **Reviews.** trading-safety (plan verdict and build), code-reviewer, ui-ux-designer (copy and amber states), sre (the
 health WARN). No quant review. **Owner-only decisions:** none.
+
+## Conditions from the trading-safety plan review (APPROVE-WITH-CONDITIONS, d8de4ad, 2026-10-17)
+
+Build blocked until 1-4 are honoured; they override the text above where they differ.
+1. **HIGH — the gate must not fail open while a row is unresolved.** While any `ambiguous` row is unresolved, either
+   count its `rec.lots` and stop risk as open exposure in the RiskGate inputs (max positions, heat, combined caps) or
+   refuse entries with `unconfirmed_order_pending`. Tests for both paths; a late 10012 fill must never let a second
+   entry pass with understated exposure.
+2. **HIGH — one empty deal read is not proof of no fill.** `unfilled` needs at least two clean looks in this process,
+   ≥ `AMBIGUOUS_SETTLE_S` apart, counted from the first clean look; a clean look = positions read and deals read both
+   succeeded and the terminal connected. Row age alone never declares `unfilled` (restart case). State that market
+   orders on a hedging account leave no resting order, which is why `orders_get` is not read.
+3. **HIGH — exit deals do not carry our comment** (`[sl …]`/`[tp …]`). Find the position id from the entry deal's
+   comment, then look for the exit by `position_id`. `_record_closed_while_down` (~2585) returns silently without a
+   `position_id` column: on this path keep the row `ambiguous`; never mark it resolved without a record.
+4. **MEDIUM — partial (10010) fills record the dealt lots**, not `rec.lots` (`_record_closed_while_down` ~2597,
+   `_resolve_sent` ~2553 set `initial_lots=rec.lots`; `_record_closed` ~2741 prefers it). Test
+   `test_a_partial_ambiguous_fill_records_the_dealt_lots`.
+5. **MEDIUM — a fill adopted in `no_quote_pass` may have no stop.** A found position with no stop, or one looser than
+   `rec.sl`, gets `broker.modify(rec.sl, rec.tp)` in the same pass (modify needs no quote). Test it.
+6. **MEDIUM — notices.** At-most-once stands, plus one correction notice ("it did open after all") when a fill appears
+   after `unfilled` (row `unfilled` → `filled` via `_adopt`). Card and dashboard show the outcome whether or not a
+   notice was sent. After 7 days an unresolved row becomes terminal `unknown` (journalled) and is then pruned.
+7. **LOW — footprint.** Real edits: `_execute`, `_save_orders`, `_load_orders`, `_resolve_sent`,
+   `_record_closed_while_down`, `_adopt`, `_on_decision` (~1243), `_reconcile`, `no_quote_pass`. No conflict with 62
+   (it edits `_kill_switch` only); 71 shares `_execute` and `_on_decision`, so build after 71 merges. Run the ambiguous
+   lookup before `_reconcile`'s adoption loop so the row's stop and policy are used and the owner is told.
