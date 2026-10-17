@@ -9,6 +9,7 @@ from goldbot.execution.broker import OrderResult
 from goldbot.execution.not_placed import (
     CEILING_CODES,
     NotPlaced,
+    approval_cause,
     broker_code,
     card_text,
     not_placed,
@@ -166,3 +167,20 @@ def test_a_risk_gate_refusal_is_not_a_not_placed_code():
                                                         "approval (daily loss)")
     assert outcome_text("GATE_REFUSED: heat_cap, owner_halt") == (
         "🛑 NOT PLACED: approved, but the risk check refused it at approval (too much risk already open, owner halt)")
+
+
+@pytest.mark.parametrize(("codes", "outcome", "cause"), [
+    (None, None, None), ([], None, None),
+    (["spread"], None, "risk_check"), (["daily_loss", "heat_cap"], None, "risk_check"),
+    (["broker_refused:10019"], None, "not_placed"), (["broker_refused:10027:paper"], None, "not_placed"),
+    (["broker_refused:10006"], None, "not_placed"), (["bridge_stale_order"], None, "not_placed"),
+    (["bridge_notional_ceiling"], None, "not_placed"), (["bridge_notional_ceiling_unreadable"], None, "not_placed"),
+    (["not_confirmed"], None, "not_confirmed"), (["not_confirmed"], "pending", "not_confirmed"),
+    (["not_confirmed"], "still_unknown", "not_confirmed"), (["not_confirmed"], "no_trade", "not_placed"),
+    (["not_confirmed"], "opened", "opened"), (["not_confirmed"], "opened_closed", "opened"),
+    (["not_confirmed"], "opened_late", "opened"), (["not_confirmed"], "a future outcome", "not_confirmed"),
+])
+def test_an_approved_card_is_sorted_by_cause_risk_check_mt5_box_or_broker_not_confirmed_or_opened(codes, outcome, cause):
+    # BACKLOG 83: only the RiskGate's own codes are "refused by the risk check"; a resolved not_confirmed card counts
+    # by what the broker showed
+    assert approval_cause(codes, outcome) == cause
