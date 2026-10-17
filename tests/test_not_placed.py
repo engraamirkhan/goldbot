@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from goldbot.engine.runner import DEFINITE_REJECT_RETCODES
+from goldbot.execution.bridge import BridgeError, BridgeUnavailable
 from goldbot.execution.broker import OrderResult
 from goldbot.execution.not_placed import (
     CEILING_CODES,
@@ -13,6 +14,7 @@ from goldbot.execution.not_placed import (
     broker_code,
     card_text,
     not_placed,
+    not_sent_code,
     notice_text,
     refusal_code,
 )
@@ -184,3 +186,48 @@ def test_an_approved_card_is_sorted_by_cause_risk_check_mt5_box_or_broker_not_co
     # BACKLOG 83: only the RiskGate's own codes are "refused by the risk check"; a resolved not_confirmed card counts
     # by what the broker showed
     assert approval_cause(codes, outcome) == cause
+
+
+# ---------------------------------------------------------------------------------------------- BACKLOG 85: not sent
+@pytest.mark.parametrize(("exc", "code"), [
+    (BridgeUnavailable("bridge account: ConnectTimeout"), "not_sent:mt5_box"),
+    (BridgeError("bridge account: HTTP 500 account() failed"), "not_sent:mt5_box"),
+    (ConnectionError("reset"), "not_sent:mt5_box"), (TimeoutError("read"), "not_sent:mt5_box"),
+    # trading-safety LOW: a local disk or file error is the engine's, never "the MT5 box couldn't be reached"
+    (OSError(28, "No space left on device"), "not_sent:engine"), (PermissionError("state"), "not_sent:engine"),
+    (FileNotFoundError("orders.json"), "not_sent:engine"),
+    (RuntimeError("bad state"), "not_sent:engine"), (KeyError("x"), "not_sent:engine"),
+])
+def test_a_raise_before_the_order_row_is_coded_not_sent_by_the_mt5_box_or_the_engine(exc, code):
+    assert not_sent_code(exc) == code
+
+
+@pytest.mark.parametrize(("code", "card", "notice"), [
+    ("not_sent:mt5_box",
+     "🛑 NOT PLACED: approved, but the order could not be sent: the MT5 box couldn't be reached. Nothing was sent.",
+     "Order not placed: LONG 0.37 lots XAUUSD on icm-demo could not be sent: the MT5 box couldn't be reached. Nothing "
+     "was sent; open trades keep their stops. Nothing to do if it's a one-off. If it repeats, check the MT5 box on the "
+     "Health tab."),
+    ("not_sent:engine",
+     "🛑 NOT PLACED: approved, but the order could not be sent: the engine hit an error before sending it. Nothing was "
+     "sent.",
+     "Order not placed: LONG 0.37 lots XAUUSD on icm-demo could not be sent: the engine hit an error before sending "
+     "it. Nothing was sent; open trades keep their stops. Nothing to do if it's a one-off. If it repeats, ask Claude "
+     "to check the engine log."),
+])
+def test_a_not_sent_card_and_notice_read_in_the_not_placed_pattern_byte_for_byte(code, card, notice):
+    from goldbot.telegram.bot import outcome_text
+    np = not_placed(code)
+    assert np is not None and np.not_sent and np.nothing_sent and np.code is None
+    assert np.by == code.partition(":")[2]
+    assert outcome_text(f"GATE_REFUSED: {code}") == card
+    assert notice_text(np, side=1, lots=0.37, symbol="XAUUSD", account="icm-demo") == notice
+    for t in (card, notice, np.reason or "", np.next_step):
+        for banned in (PID, "not_sent", "bridge", "retcode", "51234567", "Error"):
+            assert banned not in t, (code, banned, t)
+
+
+def test_a_not_sent_card_counts_as_not_placed_and_a_refusal_never_reads_not_sent():
+    assert approval_cause(["not_sent:mt5_box"]) == "not_placed"
+    assert all(not (np := not_placed(c)) or not np.not_sent for c in _codes())
+    assert not_placed("not_sent:somewhere") is None

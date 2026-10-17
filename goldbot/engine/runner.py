@@ -1178,6 +1178,14 @@ class Engine:
 
     # ------------------------------------------------------------------ approvals -> orders
     def _on_decision(self, p: Proposal) -> None:
+        """BACKLOG 85: a raise before the order row exists is archived "not sent" (`unconfirmed.archive_not_sent`)."""
+        try:
+            self._apply_decision(p)
+        except BaseException as exc:
+            unconfirmed.archive_not_sent(self, p, exc)
+            raise
+
+    def _apply_decision(self, p: Proposal) -> None:
         entry = self.pending.pop(p.proposal_id, None)
         if entry is None:
             return
