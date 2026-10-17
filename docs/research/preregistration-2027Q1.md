@@ -202,6 +202,18 @@ above is the queued part only.
   cluster above; its selection stability = its group stability; the AUC condition is H-02's recorded reading
   verdict "continue"). Survivors earn their own
   trial (rows 6-9); if no cluster survives, rows 6-9 are cancelled and their budget returns to reserve.
+- **Amendment 2026-10-17 (strategy researcher, quant review of 1f0447e finding 3; before any H-02 outcome; no reading
+  rule changes; `candidates/intraday-2026-10-17.md` IC-3).**
+  - **The `macro_spx_dd20` early-fold gap.** FRED serves about ten years of SP500 (`scripts/fred_macro.py`), so
+    `macro_spx_dd20` is NaN before about 2016. A lower H-07 group stability in the early 4h folds is **expected; D4
+    measures it**. D4 is the per-fold share of decision bars with an informative column per cluster, and the NaN
+    share per `macro_*` column. It is reported on H-02's row before the run.
+  - **Declared option (one only):** H-07 is a **VIX-only cluster by data** until the first fold whose training
+    window has full SP500 coverage. The cluster map and the code are unchanged, and the reading rule is unchanged. A
+    coverage rule that relabels a cluster "inconclusive by coverage" is not adopted.
+  - **Macro release pinned.** `macro-v1` refreshes weekly, so H-02's row records the sha256 of the `macro_fred.parquet`
+    it reads. That digest is written into the config at the 2026-12-11 config date (data-engineer), alongside the G4
+    bar digests. A run on any other digest is a deviation.
 
 ### H-01 Slow TSMOM
 - Config: `specialist=tsmom`, signal from 1d bars (20/60/120-day vol-scaled returns, 60-day vol), execution and
@@ -819,6 +831,23 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
 #### O-7 H-24 West-hours drift, short (1 trial; only if H-04 continues)
 - Config: as `hypotheses.md` H-24 (short at 08:30 New York, flat 16:00 New York, stop 1.5 ATR(1h), every trading
   day, no target, rule-only screening specialist like `asia_drift`, swap 0 by construction).
+  - **Amendment 2026-10-17 (strategy researcher, quant review of 1f0447e finding 2; written before H-04's verdict and
+    before any H-24 outcome; `candidates/intraday-2026-10-17.md` IC-1).**
+    - **Entry.** On UTC-floored 1h bars (`resample.py`), "08:30 New York" falls inside a bar. It is also inside the
+      tier-1 blackout [−15, +30) min of an 08:30 ET release. The entry is therefore pinned at the **close of the 1h
+      bar closing 09:00 America/New_York**, DST-aware (13:00 UTC in summer, 14:00 UTC in winter), short on the bid,
+      Monday to Friday when the session calendar is open.
+    - **Exit.** A time barrier at the close of the 1h bar ending 16:00 New York (7 bars). Stop 1.5 × ATR14(1h) at
+      the decision bar, frozen. No target.
+    - **Estimand change.** H-24 now tests the West-hours drift from 09:00 to 16:00 New York. The first 30 minutes
+      after the open, including the 08:30 release reaction, are excluded. A result does not speak to 08:30–09:00.
+      The reading rule below is unchanged.
+    - **Withdrawal rule** (no trial spent). Before the row is written, the median round-trip cost in R of the pinned
+      candidates (spread at the decision bar + 0.37 $/oz, over 1.5 × ATR14(1h)) is computed on the **repaired**
+      data-v1 (after G1, digests pinned at G4) by the promoted diagnostic (`candidates/intraday_diag_2026-10-17.py`
+      D3, once moved into `scripts/` with its tests). If the median exceeds **0.10 R**, O-7 is withdrawn. The
+      expected edge (<= 0.03% a session, about 0.07 R) could then never be net positive.
+    - The count and the median are pasted here before the row is written.
 - Reading rule (O-7, H-24; written 2026-10-17 before any H-04 or H-24 outcome, as the Q2 draft's follow-up item 4):
   **continue** if gross t >= 2.0 on >= 1,000 events AND net mean R > 0 (rule-only, every candidate, one position at a
   time); **retire** the West leg if net mean R <= 0 or the screen fails on >= 1,000 events; fewer events:

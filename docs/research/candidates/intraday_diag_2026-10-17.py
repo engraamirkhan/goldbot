@@ -47,7 +47,7 @@ def quart(x: np.ndarray) -> list[float | None]:
 
 
 def d1_c4h_cost_regime(b1: pd.DataFrame) -> dict:
-    """IC-2 / IC-5: the C4H candidates (tsmom 4h, max_bars 12), their vol_tercile at the decision bar, cost in R at
+    """D1, for IC-4: the C4H candidates (tsmom 4h, max_bars 12), their vol_tercile at the decision bar, cost in R at
     the 1.5-ATR stop, swap in R for a long held 2 nights, target / cost multiple per exit geometry, per fold."""
     spec = SPECIALISTS["tsmom"](timeframe="4h", max_bars=12)
     dec = resample_bars(b1, "4h").reset_index(drop=True)
@@ -77,9 +77,9 @@ def d1_c4h_cost_regime(b1: pd.DataFrame) -> dict:
 
 
 def d2_session_transition(b1: pd.DataFrame) -> dict:
-    """IC-1: days with a London-open decision bar (the 1h bar closing 08:00 Europe/London) and the UNSIGNED size of
-    the move since the Tokyo open (23:00 UTC), z = |move| / (ATR14(1h) x sqrt(bars)); counts by |z| bin, per fold.
-    The sign is never computed (H-04 reads that window)."""
+    """D2, for IC-5: days with a London-open decision bar (the 1h bar closing 08:00 Europe/London) and the UNSIGNED
+    size of the move since the Tokyo open (23:00 UTC), z = |move| / (ATR14(1h) x sqrt(bars)); counts by |z| bin, per
+    fold. The sign is never computed (H-04 reads that window)."""
     dec = resample_bars(b1, "1h").reset_index(drop=True)
     m = mid(dec)
     a = build_features(m, ["atr"])["atr14"].to_numpy(float)
@@ -107,8 +107,9 @@ def d2_session_transition(b1: pd.DataFrame) -> dict:
 
 
 def d3_clock_rules_cost(b1: pd.DataFrame) -> dict:
-    """IC-3 / O-7 / O-8: cost in R at a 1.5 x ATR14(1h) stop for H-04's own candidates and for H-24 under the pinned
-    convention proposed in section 3 (decision = the 1h bar closing 09:00 America/New_York, weekdays); counts."""
+    """D3, for IC-1 (O-7) and IC-2 (O-8): cost in R at a 1.5 x ATR14(1h) stop for H-04's own candidates and for
+    H-24 under the pinned convention of the O-7 amendment (decision = the 1h bar closing 09:00 America/New_York,
+    weekdays); counts."""
     dec = resample_bars(b1, "1h").reset_index(drop=True)
     m = mid(dec)
     a, spr = build_features(m, ["atr"])["atr14"].to_numpy(float), m["spread"].to_numpy(float)
@@ -123,8 +124,8 @@ def d3_clock_rules_cost(b1: pd.DataFrame) -> dict:
 
 
 def d4_cluster_coverage(b1: pd.DataFrame, macro: pd.DataFrame | None) -> dict:
-    """IC-5 / IC-6: per 1h and 4h fold, the share of decision bars where each H-02 cluster has at least one finite,
-    non-constant column (feature values only), and NaN share of every macro column."""
+    """D4, for IC-3 and IC-6: per 1h and 4h fold, the share of decision bars where each H-02 cluster has at least
+    one finite, non-constant column (feature values only), and NaN share of every macro column."""
     ctx = {"macro": macro} if macro is not None and len(macro) else {}
     out = {}
     for tf in ("1h", "4h"):
