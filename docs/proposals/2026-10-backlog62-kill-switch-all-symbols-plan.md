@@ -53,3 +53,30 @@ HANDOFF fragment.
 no live quote is retried with backoff and the flag stays set; a second engine on the account is also closed (intended).
 **Reviews.** Trading-safety on this plan; after the build: code-reviewer, trading-safety APPROVE (E1), security before
 push. **Out of scope:** per-symbol volume step for partial closes, multi-account flattening, protocol v6.
+
+## Conditions from the trading-safety plan review (APPROVE-WITH-CONDITIONS, 9301fb9, 2026-10-17)
+
+Binding on the build; they override the text above where they differ.
+- **C1** Two separate values: *what to close* is every position in the book, any magic, whenever `_kill_everything` is
+  set (the fallback book included); *may the flag clear* is true only for a book read by `account_positions()`. A
+  fallback run never closes fewer positions than today. Test: `account_positions` raises and an OTHER_MAGIC XAUUSD
+  position is still closed while the flag stays set.
+- **C2** The flag clears only on a successful `account_positions()` read that returns zero positions — not when every
+  close in a run returned ok. An all-ok run keeps `_kill_pending` for one more read.
+- **C3** Paper `positions()` filters to `self.symbol` and `account_positions()` returns every symbol (as MT5 does), so
+  the gold-only retry test fails on the base commit; show that failure.
+- **C4** Paper gets per-symbol quotes through an explicit input (e.g. `set_quote(symbol, tick)`; `on_tick` keys to
+  `self.symbol`); `_check_exits` prices each position with its own symbol's tick and skips a symbol with none;
+  `_close_at` reads the tick before any state change.
+- Build-time: **C5** `symbol_info`/tick None → refused `OrderResult` retcode 10021 (never a raise), `symbol_select`
+  before every tick read; **C6** `_read_kill_book` inside the existing try so `_reset_owner_mode` always runs, an
+  `account_positions` failure logged once per streak; **C7** `open_positions` counts `cfg.symbol` positions of any magic
+  (same as `_refresh_account`); **C8** `kill_switch_close` rows carry `symbol`, `magic`, `lots`; RUNBOOK + OWNER_GUIDE
+  warning; one-time owner notice on #34 before deploy; no confirmation gate on closing manual trades (exits are never
+  gated). **C9** (ADR/SRE): pending orders on other symbols are not cancelled (out of scope, stated in the ADR 0016
+  amendment); SRE follow-up health WARN when `kill_everything` stays set with closes due.
+- Extra tests: 10010 partial close resent with remaining volume; 10018 back-off while XAUUSD still closes; due EURUSD
+  close retried through `no_quote_pass`; auto-mode trip with `account_positions` raising still resets to propose; paper
+  EURUSD without a quote never breaks XAUUSD stop checks; adapter `symbol_info` None and tick None refused with 10021;
+  every `kill_switch_close` row carries symbol and magic. `test_the_notional_ceiling_ignores_closes` uses a non-gold,
+  foreign-magic position.
