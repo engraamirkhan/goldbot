@@ -191,6 +191,10 @@ class JsonEngineStore:
         if not path.exists():
             return None
         d = json.loads(path.read_text())          # unreadable -> fail loudly rather than forget a drawdown halt
+        # ADR 0010 (rollback = restart): keys a newer release added are noted and ignored, never raised, so the halt
+        # and stage still load (BACKLOG 74, ADR 0023 addendum A1)
+        if extra := sorted(set(d) - set(RiskSnapshot.model_fields)):   # save_risk writes one key per field
+            note_schema_skew("risk_<account>.json", "risk file", extra)
         last_reset = pd.Timestamp(d["last_reset"]) if d.get("last_reset") else None
         day_start_equity = float(d.get("day_start_equity", 0.0))
         week_start_equity = float(d.get("week_start_equity", 0.0))

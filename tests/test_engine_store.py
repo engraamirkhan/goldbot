@@ -77,14 +77,15 @@ def test_risk_and_orders_round_trip_to_the_same_snapshot(tmp_path):
     assert sorted(p.name for p in tmp_path.iterdir()) == [f"orders_{ACCOUNT}.json", f"risk_{ACCOUNT}.json"]
 
 
-def test_a_risk_file_with_a_key_this_release_does_not_know_loads_without_a_skew_note(tmp_path, monkeypatch):
+def test_a_risk_file_with_a_key_this_release_does_not_know_loads_and_notes_the_skew(tmp_path, monkeypatch):
     """S1: the snapshot is built from the parsed values, never by validating the file's dict (FrozenRecord forbids
-    extra keys); the parse ignores unknown keys, as it did in the runner (the skew note is BACKLOG 74, not this move)."""
+    extra keys); the parse ignores unknown keys and, since BACKLOG 74, notes them as schema skew (ADR 0010)."""
     from collections import Counter
     monkeypatch.setattr(base, "_skew", Counter())
     (tmp_path / f"risk_{ACCOUNT}.json").write_text(json.dumps({"stage": "halted", "from_a_newer_release": 1}))
     got = JsonEngineStore(tmp_path, ACCOUNT).load_risk()
-    assert got is not None and got.stage == Stage.HALTED and not base._skew
+    assert got is not None and got.stage == Stage.HALTED
+    assert base.schema_skew() == {("risk_<account>.json", "risk file", ("from_a_newer_release",)): 1}
 
 
 def test_an_older_risk_file_takes_the_parse_defaults(tmp_path):
