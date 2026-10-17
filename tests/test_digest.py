@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from goldbot.config import TelegramSettings, load_settings
+from goldbot.execution.not_confirmed import Confirmation
 from goldbot.ops.gates_phase import ClosedTrade, closed_trade_file
 from goldbot.ops.health import Check, HealthReport
 from goldbot.telegram.approvals import Outcome, Proposal
@@ -453,3 +454,28 @@ def test_a_weekend_day_with_a_proposal_shows_its_rows_not_the_weekend_line(tmp_p
 
 def test_the_weekend_line_is_plain_and_points_at_tuesday() -> None:
     assert WEEKEND_LINE == "• Weekend: market closed, no trading. Sunday-evening trades show in Tuesday's digest."
+
+
+def test_the_digest_counts_risk_check_refusals_broker_and_mt5_box_refusals_and_unconfirmed_orders_apart(
+        tmp_path: Path) -> None:
+    # BACKLOG 83: a broker or MT5-box refusal and a not-confirmed card are not "refused by the risk check"; a
+    # not-confirmed card the broker later showed opened counts as an opened trade (in no bucket)
+    bus = ApprovalBus(tmp_path)
+    cards: list[tuple[list[str] | None, str | None]] = [
+        (None, None), (["spread"], None), (["broker_refused:10019"], None), (["bridge_stale_order"], None),
+        (["bridge_notional_ceiling"], None), (["not_confirmed"], "pending"), (["not_confirmed"], "still_unknown"),
+        (["not_confirmed"], "no_trade"), (["not_confirmed"], "opened"), (["not_confirmed"], "opened_late")]
+    for i, (codes, outcome) in enumerate(cards):
+        nc = Confirmation(outcome=outcome) if outcome is not None else None    # type: ignore[arg-type]
+        bus.archive(_proposal(f"a{i}", YDAY, Outcome.APPROVED, gate_refusal=codes, not_confirmed=nc))
+    text = build_digest(tmp_path, NOW)
+    assert ("Proposals 10: ✅ 10 approved (1 refused by the risk check · 4 not placed by the MT5 box, the broker or the engine · "
+            "2 not confirmed by the broker) · ❌ 0 rejected · ⌛ 0 expired") in text
+
+
+def test_the_digest_names_only_the_buckets_that_have_cards(tmp_path: Path) -> None:
+    bus = ApprovalBus(tmp_path)
+    bus.archive(_proposal("a1", YDAY, Outcome.APPROVED, gate_refusal=["not_confirmed"]))
+    bus.archive(_proposal("a2", YDAY, Outcome.APPROVED, gate_refusal=["not_confirmed"],
+                          not_confirmed=Confirmation(outcome="opened_closed")))
+    assert "✅ 2 approved (1 not confirmed by the broker) · ❌" in build_digest(tmp_path, NOW)

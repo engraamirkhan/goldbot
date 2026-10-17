@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from goldbot.base import Record, SkewSummary
 from goldbot.config import load_settings
 from goldbot.data import crossfeed
+from goldbot.data.ticks import TickIndex
 from goldbot.engine.runner import OpenTrade, PendingClose, SentOrder
 from goldbot.engine.shadow import ShadowBook, VersionBook
 from goldbot.execution.costs import (
@@ -240,6 +241,19 @@ def case_reconcile(tmp: Path) -> None:
     assert "unreadable" not in crossfeed.check_reconciliation(ctx, "icm-demo").reason
 
 
+def case_tick_index(tmp: Path) -> None:
+    """state/ticks/<account>/index.json (BACKLOG 79) with a field from a newer release, top level and per day."""
+    from goldbot.data import ticks
+    day = T0.date()
+    ticks.write_day(tmp, "icm-demo", day, pd.DataFrame({"ts_utc": [T0], "bid": [2400.0], "ask": [2400.2]}),
+                    symbol="XAUUSD", server_tz="Europe/Athens", pulled_utc=T0)
+    _rewrite(ticks.account_dir(tmp, "icm-demo") / ticks.INDEX_FILE,
+             lambda o: _newer({**o, "days": {k: _newer(v) for k, v in o["days"].items()}}))
+    assert ticks.read_index(tmp, "icm-demo")[day.isoformat()].rows == 1
+    ctx = health.HealthContext(state_dir=tmp, now=T0, settings=load_settings(), get_secret=lambda k: None)
+    assert "unreadable" not in ticks.check_tick_record(ctx, "icm-demo").reason
+
+
 def case_ledger(tmp: Path) -> None:
     """aux.db broker ledger rows (snapshot, balance deal, report) with a field from a newer release."""
     from goldbot.db import Database
@@ -314,7 +328,7 @@ CASES = [case_closed_trade, case_closed_trade_from_before_ret_basis, case_closed
          case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
          case_shadow_stats, case_model_registry_and_backtest, case_population, case_research_plan, case_costs,
          case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_hwm_confirmation,
-         case_trial_dsr_inputs, case_trial_day_summed_dsr, case_attribution_report]
+         case_trial_dsr_inputs, case_trial_day_summed_dsr, case_attribution_report, case_tick_index]
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c.__name__.removeprefix("case_") for c in CASES])
@@ -352,7 +366,7 @@ def test_every_persisted_record_model_has_a_compat_case():
                BrokerTerms, CostTable, PublishedCostTable, scheduler.JobState, health.WatchState, health.HealthReport,
                DigestState, OutboxState, crossfeed.ReconcileReport, ledger.LedgerReport,
                ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation, DsrInputs, DaySummedDsr,
-               AttributionReport,
+               AttributionReport, TickIndex,
                # the engine's orders file: tests/test_engine_safety.py::
                # test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote
                SentOrder, OpenTrade, PendingClose,

@@ -49,6 +49,16 @@ without typing the password. Free with Gmail:
   No link? Sign in with your password. If it keeps happening, check for `email_link_rate_limited` in the audit
   trail (the Health tab warns too). Every link sign-in sends you a Telegram message and an email. If one was not
   you, follow its instructions straight away.
+- **Sign in with an emailed code (owner, once mail is set up):** type your email and password, leave **Email me a
+  code** chosen under "Second step" and press it. A 6-digit code arrives by email (never in the subject); it works
+  once, for 10 minutes. Type or paste it and you are in. **Resend code** appears after a minute (3 emails an hour,
+  shared with the sign-in link). Three wrong codes spend that code: press Resend. The screen never says whether the
+  password was right; if no email comes, check spam and the password, or choose **Authenticator app**. Every such
+  sign-in sends you a Telegram message and an email. After signing in this way, the Users tab asks for your
+  authenticator code (or a recovery code) to invite, change a role, disable, enable, make a reset link or sign
+  someone out; re-arm, auto mode, password change and new recovery codes always ask for it. The Account tab shows
+  **Email codes: on** or **off**. Your choice of method is remembered on this device; the code never is.
+  [More](RUNBOOK.md#210-dashboard-first-run-create-the-owner-account) ("Email sign-in code")
 - **Morning digest:** at 06:45 UTC Telegram sends one message: all good or what needs attention, yesterday's trades, risk, and decisions waiting for you. [More](RUNBOOK.md#05-daily-use)
 - **Approve:** Telegram shows direction, lots, entry, stop, target, probability, spread. Tap **Approve**, or a **Reject** reason. Or the dashboard **Approvals** tab. After 90 s it expires. [More](RUNBOOK.md#approving-or-rejecting-an-entry)
 - **`/halt`** stops new entries; open trades keep their stops. Resume on the dashboard: **Overview**, authenticator code, **Re-arm**. [More](RUNBOOK.md#halt-and-re-arm)

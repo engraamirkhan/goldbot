@@ -137,7 +137,7 @@ shadow book is empty (scorecard section 1). Every row below is queued or propose
 | H-17 trend day | Q2 draft | 15m | entries 09:00 London .. 10:30 New York; flat 16:30 New York | — | **trades** | **trades** | yes (M1) |
 | H-14 15m discovery (+ ≤ 2 survivors) | Q2 draft | 15m | candidates 08:00 London .. 16:00 New York | uses (Asia extremes in the sweep group) | **trades** | **trades** | yes (M1) |
 | H-18 event continuation | Q2 draft, conditional | 15m | release + 30 min (08:30 ET releases, FOMC 14:00 ET); flat 16:30 New York | — | — | **trades** | yes (M1) |
-| H-24 West-hours drift | proposed, conditional | 1h | short 08:30–16:00 New York | — | — | **trades** | no (M2) |
+| H-24 West-hours drift | proposed, conditional | 1h | short 09:00–16:00 New York (entry pinned 2026-10-17 at the 09:00 New York bar close, after the tier-1 blackout) | — | — | **trades** | no (M2) |
 | H-11 | blocked (consensus feed) | 15m–4h | after US releases | — | — | trades | yes (M1) |
 | H-03, H-07, H-15 | proposed (daily) | 1d | multi-day | held | held | held | no (M4) |
 | H-05, H-08, H-10 | at 15m inside H-14; at 4h inside H-02 | 15m / 4h | as H-14 / H-02 | 4h only | trades | trades | 15m form yes |
@@ -167,6 +167,20 @@ rules are in the note, and the Q1 rows are in `preregistration-2027Q1.md`, "Q1 o
 | H-B | Candidates entered on THIN days earn >= 0.05 R less gross than matched controls | pre-registered; read per family after its verdict | frozen Q1 candidate sets + the 2010-2025 instance list | 0 (diagnostic) | H-01 ~6 THIN candidates (INCONCLUSIVE by construction); H-04 ~110 |
 | H-C | Asia-session entries on US early-close holidays are not worse than on controls (margin −0.10 R) | pre-registered as Q1 row O-9; **only if H-04 continues** (tightened 2026-10-17 from "not retired"); **0-trial diagnostic, only outcome "the whole-day block stays"** (quant finding 7, 2026-10-17); a trial again only at >= 50% power | H-04 candidates + instance list | 0 | ~97 entries, se ~0.12 R, **~13% power**: INCONCLUSIVE expected |
 
+## A6. Style lanes: candidate lists of 2026-10-17 (research director)
+
+The owner's directive of 2026-10-17 starts the continuous program (`program-continuous.md`). The three style lanes
+filed their first candidate lists the same day. None ran a trial or read an outcome. What each asks for, as adopted:
+
+| Lane | File | Q1 2027 trials asked | Asks adopted | Q2 2027 and later |
+|---|---|---|---|---|
+| Scalping (15m) | `candidates/scalping-2026-10-17.md` | **O-4 only** (H-14, already in the open round) + O-5/O-6 survivors; no new row | **Withdrawal rule** written into O-4's row: if D-1 gives a median round trip above 0.35 R at every admissible gate floor (1×, 1.5×, 2×, each ≥ 55,000 candidate bars), O-4 is withdrawn before it runs (0 trials, 0 to K). F-1 group map amended (`ctx_<tf>` groups, families `liquidity` and `activity`, `context_groups: per_timeframe` pinned; 14 groups on `f-079deacc61`, about 16 with the new families). C-1..C-10 are groups inside O-4 or next-generation exits, not separate trials | C-8 cost-aware exits only from an O-4 survivor |
+| Intraday (1h/4h) | `candidates/intraday-2026-10-17.md` | **0** | H-24 (O-7) entry pinned at the **09:00 New York** 1h bar close, estimand 09:00–16:00 New York, withdrawn before the run if D3's median cost exceeds 0.10 R (amendment under O-7). O-8 inputs pinned (IC-2). `macro_spx_dd20` masked in folds without full SP500 coverage (amendment under H-02). London→New York transition is covered by R-05 | **IC-5** Asia→London transition continuation: **1 conditional Q2 trial**, Q2 draft follow-up item 7, from the Q2 free reserve only by a written note; withdrawn if neither H-04 nor H-24 continues, if D2's count is < 1,000, or if it agrees with `tsmom_z_24` on > 70% of events. IC-4 (vol-regime tsmom 4h) forward shadow only. IC-6 ≤ 2 Q2 follow-ups of a surviving H-02 cluster |
+| Swing (1d/1w) | `candidates/swing-2026-10-17.md` | **0** (H-01 is the lane's Q1 trial) | No swing trade can be placed at £1,000, and as the rails stand none at any equity while ATR(1d) > ~$43 at a 1.5 × ATR stop: **ADR 0004 §4 amended 2026-10-17** (M4 conditional on volatility; 1d research and shadow only; no limit loosened). Gate 1 is unreachable for holds ≥ 8 days on 2010-2025, so swing yields **context features and retirements, not a book** | **SW-0** 1d swing feature discovery (groups SW-1..SW-6, SW-8, SW-9; `survivor_unit: group`, K_eff ≈ 16): **1 trial from the Q2 free reserve, conditional**, else Q3. **Forward-shadow rule:** a surviving swing group's forward shadow only decides whether it stays as a context input or is retired. It is never a promotion route (25-40 trades a year) |
+
+**Status of these IDs.** IC-1..IC-9, SW-0..SW-9 and C-1..C-10 are recorded here as **proposed**. Proposed rows are not
+tests and add nothing to K. K grows only when a registry row runs (or a discovery records its `k_eff`).
+
 ## B. Retired: do not re-test without new evidence
 
 The governing list is `research.retired_families` in `config/settings.yaml` (family, row id, retired date, reason,
@@ -191,7 +205,8 @@ a quarter (to the one with the best post-retirement evidence, else by rotation) 
 | Quarter | Registry trials | Screens inside trials (K_eff) | DSR trial count to use for the next trial |
 |---|---|---|---|
 | Q4 2026 | #1–#20 | 0 | 20 |
-| Q1 2027 (planned) | #21–#40 at most (8 reserved: 4 queued + 4 contingent H-02 survivor slots; 12 open under the E-5 cap, allocated 2026-10-17 as 9 conditional trial rows (O-1..O-10 without O-9, now a 0-trial diagnostic) + 3 free reserve; corrected 2026-10-17 to settings) | H-02: K_eff = features screened when survivors go forward as features, groups screened only for whole-group survivors (recorded as `k_eff` on the discovery row; `registry.n_trials_effective` adds it) | 20 + trials run so far + K_eff for any survivor of H-02. Projection, end of Q1: up to 40 registry rows + H-02 K_eff (about 10: **H-02 moved to `survivor_unit: group`, quant ruling Q-H02U 2026-10-17**; it was about 300 at the feature unit) + H-14 K_eff (about 12) ≈ 60; the gate-1 DSR then needs a model-filtered t of about 4.0 (was about 4.6) |
+| Q1 2027 (planned) | #21–#40 at most (8 reserved: 4 queued + 4 contingent H-02 survivor slots; 12 open under the E-5 cap, allocated 2026-10-17 as 9 conditional trial rows (O-1..O-10 without O-9, now a 0-trial diagnostic) + 3 free reserve; corrected 2026-10-17 to settings) | H-02: K_eff = features screened when survivors go forward as features, groups screened only for whole-group survivors (recorded as `k_eff` on the discovery row; `registry.n_trials_effective` adds it) | 20 + trials run so far + K_eff for any survivor of H-02. Projection, end of Q1: up to 40 registry rows + H-02 K_eff (about 10: **H-02 moved to `survivor_unit: group`, quant ruling Q-H02U 2026-10-17**; it was about 300 at the feature unit) + H-14 K_eff (about 12) ≈ 60; the gate-1 DSR then needs a model-filtered t of about 4.0 (was about 4.6). *Updated 2026-10-17:* H-14's K_eff is about 16 under the O-4 group-map amendment (14 groups verified on `f-079deacc61`, plus `liquidity` and `activity`), so the adopted end-of-Q1 case is about 66 (t ≈ 4.03, still 4.0) |
+| Q2 2027 (draft) | #41–#60 at most | SW-0 if it runs: K_eff ≈ 16 (about 8 groups × 2 sides, `survivor_unit: group`); H-14 survivors and Q1 follow-ups add 1 each | **About 77 + the other Q2 trials** (the swing lane's projection: 60 + SW-0's row + its K_eff ≈ 16). On the updated Q1 base of about 66 the same sum is about 83 + the other Q2 trials. Either way the gate-1 bar is a t of about 4.1. Nothing in the lane lists adds to K until a row runs |
 
 ## Next generation (after Q1 verdicts)
 

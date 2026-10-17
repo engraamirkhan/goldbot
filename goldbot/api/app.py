@@ -253,6 +253,8 @@ def _settings_mail() -> MailSettings:
 
 LOOPBACK = {"127.0.0.1", "::1"}
 CODES_LOCKED = "too many attempts: re-arm and auto mode are locked for 15 minutes; /halt still works"
+# STEPUP_REQUIRED and STEPUP_LOCKED are matched word for word by the Users screen (web/src/lib/api.ts SERVER_SAYS,
+# pinned by tests/test_web_auth_wording.py)
 STEPUP_REQUIRED = "authenticator code required"
 STEPUP_LOCKED = "too many attempts: user management, re-arm and auto mode are locked for 15 minutes"
 

@@ -157,10 +157,22 @@ Recomputed monthly from measured ATR (BACKLOG 22/26).
 | **M1** | **£825** | £1,370 | 15m (Raw account) | **reached, once BACKLOG 28 + 25 land** |
 | M2 | £1,650 | £2,745 | + 1h | +65% away |
 | M3 | £3,270 | £5,450 | + 4h | ×3.3 |
-| M4 | £7,900 | £13,160 | + 1d (also needs 1d promoted to a decision timeframe) | ×7.9 |
+| M4 | £7,900 | £13,160 | + 1d (also needs 1d promoted to a decision timeframe; **conditional on volatility**, amendment 2026-10-17 below) | ×7.9 |
 
 Each milestone is a **permission, not a promise**: a timeframe trades only when a strategy on it has passed the
 research gates and the paper gate. Above £1,370 the 15m min lot fits the design's 0.5% rule without the exception.
+
+> **Amended 2026-10-17 (program director + product owner; owner told on #34).** Proposed by the strategy researcher
+> (`docs/research/candidates/swing-2026-10-17.md` §6, F-1), confirmed by the trading-safety reviewer against
+> `goldbot/risk/gate.py:569-572` and `sizing.py:91,101,106`, and ruled "no loosening" by the quant reviewer.
+> **M4 (+1d) is conditional on volatility.** The £50 absolute daily limit is checked at entry against the day's loss
+> plus the new trade's full stop risk. A 1d minimum-lot (0.01) trade at the design's 1.5 × ATR(1d) stop risks about
+> £79 at ATR(1d) ≈ $70, so that check **refuses it at any equity while ATR(1d) is above about $43**. It is admitted
+> only with a stop of about ≤ 0.5 × ATR(1d) (≈ £26 at today's ATR), or when ATR(1d) falls to about ≤ $30 at the
+> 1.5 × stop, which leaves room under £50 for the day's other losses (the bare break-even is about $43-44). Until then
+> 1d stays **research and shadow only**, whatever the equity. **No limit is loosened to change this.** The thresholds
+> scale with the gold price, ATR and GBPUSD, and are recomputed monthly with the others in this section. A ≤ 0.5 ×
+> ATR(1d) or 4h-ATR stop would be a different design, and it would need its own pre-registered trial.
 
 ## 5. Realistic expectations at £1,000
 

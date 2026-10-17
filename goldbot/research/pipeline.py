@@ -166,6 +166,29 @@ def model_inputs(spec: Specialist, eligible: list[str]) -> list[str]:
     return ["side", *cols]
 
 
+def uncovered_columns(feats: pd.DataFrame, train_idx: np.ndarray, columns: tuple[str, ...]) -> list[str]:
+    """The pre-registered `columns` that lack full coverage in a fold: not finite on at least one of the fold's
+    training rows. Design rule (preregistration-2027Q1.md, H-02 amendment 2026-10-17): "Full coverage means the column
+    is finite on every training row of the fold. Masking is per fold and uses only the fold's own training rows'
+    coverage, never the test rows." A column the frame lacks is refused (ValueError): a misspelt name would otherwise
+    mask nothing, silently."""
+    missing = [c for c in columns if c not in feats.columns]
+    if missing:
+        raise ValueError(f"full_coverage_columns names {missing}, not in the feature frame (macro opted in? spelling?)")
+    tr = np.asarray(train_idx, dtype=int)
+    return [c for c in columns
+            if not np.isfinite(pd.to_numeric(feats[c].iloc[tr], errors="coerce").to_numpy(dtype=float)).all()]
+
+
+def mask_columns(X: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    """`X` with `columns` set to NaN (a copy; `X` itself when there is nothing to mask)."""
+    if not columns:
+        return X
+    out = X.copy()
+    out[columns] = np.nan
+    return out
+
+
 def _cross_fitted(p_raw: np.ndarray, y: np.ndarray, folds: list[Any]) -> np.ndarray:
     """Calibrated out-of-fold probabilities where fold k's map is fitted only on the out-of-fold predictions of the
     folds before it (all earlier in time), never on fold k itself. Folds without MIN_CALIBRATION_ROWS earlier rows stay
@@ -407,7 +430,8 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
                   window: dict[str, Any], timeframe: str | None, swap: SwapSpec | None = None,
                   fold_cols: dict[int, list[str]] | None = None,
                   threshold_rule: ThresholdRule = DEFAULT_THRESHOLD_RULE,
-                  tercile_q: float = TERCILE_Q) -> ResearchResult:
+                  tercile_q: float = TERCILE_Q,
+                  full_coverage_columns: tuple[str, ...] = ()) -> ResearchResult:
     """Shared by the per-family and the pooled walk-forward: fit per fold, cross-fitted calibration, per-candidate
     threshold from its own barriers, metrics, rule-only expectancy and the design's gates (or the holdout rule).
     `labels` carries ret (net), risk, weight, target_atr, stop_atr and atr_sig; `feats` is row-aligned with it.
@@ -416,15 +440,22 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
     None (a discovery trial, which no day-summed rule reads) records no `model_filtered.day_summed`.
     threshold_rule (`select`): the default "break_even_margin" leaves every output as before E-2; "tercile_inner"
     (O-4's pre-registered rule) takes raw p >= the fold's `fold_cuts` at `tercile_q` (the pre-registered q), adds
-    the `cut` column and records `metrics.selection` (`selection_summary`)."""
+    the `cut` column and records `metrics.selection` (`selection_summary`).
+    full_coverage_columns (H-02 amendment 2026-10-17, BACKLOG 82): in a fold where one of them lacks full coverage
+    (`uncovered_columns`, from the fold's training rows only) it is NaN in both the fold's training and test rows;
+    fully covered folds are untouched; `metrics.full_coverage` records the columns masked per fold. Empty (the
+    default): every output as before."""
     y = labels["target_hit"].astype(int)
     oof_pred = np.full(len(labels), np.nan)
     last_model = None
+    masked: dict[str, list[str]] = {}
     for f in folds:
         fc = (fold_cols or {}).get(f.k, cols)
+        gone = uncovered_columns(feats, f.train_idx, full_coverage_columns) if full_coverage_columns else []
+        masked[str(f.k)] = gone
         mdl = MetaLabelModel(feature_names=fc, feature_version=version).fit(
-            feats.iloc[f.train_idx], y.iloc[f.train_idx], labels["weight"].iloc[f.train_idx])
-        oof_pred[f.test_idx] = mdl.predict_raw(feats.iloc[f.test_idx])
+            mask_columns(feats.iloc[f.train_idx], gone), y.iloc[f.train_idx], labels["weight"].iloc[f.train_idx])
+        oof_pred[f.test_idx] = mdl.predict_raw(mask_columns(feats.iloc[f.test_idx], gone))
         last_model = mdl
     oof = labels.copy()
     oof["p_raw"] = oof_pred
@@ -452,6 +483,8 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
         "holdout": None if holdout is None else {"from": str(holdout[0]), "to": str(holdout[1]), "scored": score_holdout},
         "rule_only": rule_only(gross_eval, oof[in_hold]),
     }
+    if full_coverage_columns:         # without the field the metrics stay exactly as before BACKLOG 82
+        metrics["full_coverage"] = {"columns": list(full_coverage_columns), "masked": masked}
     if cuts is not None:              # the default rule's metrics stay exactly as before E-2
         metrics["selection"] = selection_summary(oof, folds, threshold_rule, cuts, tercile_q).model_dump()
     if len(scored) > 20 and last_model is not None:

@@ -28,7 +28,7 @@ def test_a_version_7_aux_db_upgrades_and_keeps_its_sessions_as_password_and_auth
                      (time.time_ns() + 10**12,))
     db = Database.open(tmp_path, "aux")
     with db.connection() as conn:
-        assert current_version(conn) == 8
+        assert current_version(conn) == AUX[-1].version
         assert conn.execute("SELECT method FROM sessions").fetchall() == [("password_totp",)]
         cols = {r[1] for r in conn.execute("PRAGMA table_info(email_codes)")}
         assert cols == {"challenge_sha256", "email", "code_hmac", "expires_ns", "tries", "consumed", "created_ns"}
@@ -51,7 +51,20 @@ def test_migration_8_reapplies_after_the_runbook_downgrade_without_a_duplicate_c
     """The RUNBOOK downgrade deletes the newer schema_version rows; the next start re-applies 8 over its own column."""
     with sqlite3.connect(tmp_path / "aux.db") as conn:
         migrate(conn, "aux")
-        conn.execute("DELETE FROM schema_version WHERE version = 8")
+        conn.execute("DELETE FROM schema_version WHERE version >= 8")
         conn.commit()
-        assert migrate(conn, "aux") == [8]
+        assert migrate(conn, "aux") == list(range(8, AUX[-1].version + 1))
         assert [r[1] for r in conn.execute("PRAGMA table_info(sessions)")].count("method") == 1
+
+
+def test_migration_9_adds_the_outbox_watch_and_is_additive_so_a_rollback_still_opens_aux_db(tmp_path):
+    """BACKLOG 87: the NOT CONFIRMED replies the outbox edits at resolution; a release before it ignores the table."""
+    m = AUX[8]
+    assert (m.version, m.name, m.additive) == (9, "outbox_watch", True)
+    assert compat_back_to(AUX, 9) == compat_back_to(AUX, 8)
+    with sqlite3.connect(tmp_path / "aux.db") as conn:
+        migrate(conn, "aux")
+        assert {r[1] for r in conn.execute("PRAGMA table_info(outbox_watch)")} == {
+            "proposal_id", "messages", "shown", "since_ns", "tries", "retry_ns"}
+        conn.commit()
+        assert migrate(conn, "aux", migrations=AUX[:8]) == []          # the older code accepts the newer file

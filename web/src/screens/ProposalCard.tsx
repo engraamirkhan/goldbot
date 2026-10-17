@@ -172,7 +172,9 @@ function Outcome({ p, state }: { p: AnyProposal; state: CardState }) {
         // (`not_placed`, one table with the Telegram card and notice); the codes are never shown
         const np = d?.not_placed;
         if (np) {
-          const heading = np.by === "mt5_box" ? "Refused by the MT5 box" : "Refused by the broker";
+          // BACKLOG 85: `not_sent`, the approval failed before the order existed: nobody refused it
+          const heading = np.not_sent ? "Could not be sent"
+            : np.by === "mt5_box" ? "Refused by the MT5 box" : "Refused by the broker";
           return (
             <p className="outcome bad" role="status">
               {np.reason != null

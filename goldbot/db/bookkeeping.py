@@ -33,6 +33,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from goldbot.base import FrozenRecord
 from goldbot.db.connection import Database, db_path, now_ns
 from goldbot.db.import_state import ImportSpec, Loader, file_sha256, import_file
 
@@ -431,6 +432,45 @@ def outbox_forget(conn: sqlite3.Connection, proposal_id: str) -> bool:
     return gone
 
 
+class WatchedCard(FrozenRecord):
+    """A row of outbox_watch (BACKLOG 87): the NOT CONFIRMED replies, the outcome they show, when the watch began, and
+    the failed attempts at the next edit with the earliest time to try again."""
+    messages: tuple[tuple[int, int], ...]
+    shown: str
+    since_ns: int
+    tries: int = 0
+    retry_ns: int = 0
+
+
+def outbox_watched(conn: sqlite3.Connection) -> dict[str, WatchedCard]:
+    """proposal id -> its watched card, oldest first."""
+    rows = conn.execute("SELECT proposal_id, messages, shown, since_ns, tries, retry_ns FROM outbox_watch ORDER BY rowid")
+    return {pid: WatchedCard(messages=tuple((int(c), int(m)) for c, m in json.loads(msgs)), shown=shown,
+                             since_ns=int(since), tries=int(tries), retry_ns=int(retry))
+            for pid, msgs, shown, since, tries, retry in rows}
+
+
+def outbox_watch(conn: sqlite3.Connection, proposal_id: str, messages: list[tuple[int, int]], shown: str,
+                 since_ns: int) -> None:
+    """Start watching a card's replies; a card already watched keeps what it shows (a repeat never resets it)."""
+    conn.execute("INSERT INTO outbox_watch (proposal_id, messages, shown, since_ns) VALUES (?, ?, ?, ?) "
+                 "ON CONFLICT(proposal_id) DO NOTHING",
+                 (proposal_id, json.dumps([list(m) for m in messages]), shown, since_ns))
+
+
+def outbox_set_shown(conn: sqlite3.Connection, proposal_id: str, shown: str) -> None:
+    conn.execute("UPDATE outbox_watch SET shown = ?, tries = 0, retry_ns = 0 WHERE proposal_id = ?",
+                 (shown, proposal_id))
+
+
+def outbox_edit_failed(conn: sqlite3.Connection, proposal_id: str, tries: int, retry_ns: int) -> None:
+    conn.execute("UPDATE outbox_watch SET tries = ?, retry_ns = ? WHERE proposal_id = ?", (tries, retry_ns, proposal_id))
+
+
+def outbox_unwatch(conn: sqlite3.Connection, proposal_id: str) -> None:
+    conn.execute("DELETE FROM outbox_watch WHERE proposal_id = ?", (proposal_id,))
+
+
 def outbox_cursor(conn: sqlite3.Connection) -> tuple[int, int] | None:
     """(last agent_runs id relayed, agent_runs.jsonl lines scanned for notices); None before the first start."""
     r = conn.execute("SELECT reports_id, notices_line FROM outbox_cursor WHERE id = 1").fetchone()
@@ -485,6 +525,8 @@ __all__ = ["AGENT_RUNS", "AGENT_SPEND", "AgentRunLog", "OUTBOX_FILE", "RUNS_FILE
            "dual_read", "ensure_imported", "export_json", "export_latest", "export_spend", "fallback_hits",
            "foreign_write", "line_offset_from_cursor", "load_jobs", "max_run_id", "merge_agent_spend_json",
            "month_spent", "outbox_cursor", "outbox_document", "outbox_forget", "outbox_mark_sent", "outbox_sent",
+           "outbox_edit_failed", "outbox_set_shown", "outbox_unwatch", "outbox_watch", "outbox_watched",
+           "WatchedCard",
            "render_spend", "reserve_spend", "runs_after", "remember_hash", "save_jobs", "scheduler_document", "scheduler_heartbeat",
            "scheduler_status", "set_outbox_cursor",
            "table_empty"]

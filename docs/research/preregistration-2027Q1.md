@@ -223,9 +223,40 @@ above is the queued part only.
       `test_spx_dd20_is_nan_in_train_and_test_for_folds_without_full_coverage`, which also checks that folds with
       full coverage are untouched.
     - Without that merged code, H-02 does not run, because its configuration would not be the one registered here.
+    - *Implemented 2026-10-17 (BACKLOG 82, implementer; not yet pinned).* The config field is
+      `DiscoveryConfig.full_coverage_columns`; H-02 would set it to `["macro_spx_dd20"]`. It is in the dump and the
+      config hash only when set, so pinning it changes H-02's hash; the research-director pins it.
   - **Macro release pinned.** `macro-v1` refreshes weekly, so H-02's row records the sha256 of the `macro_fred.parquet`
     it reads. That digest is written into the config at the 2026-12-11 config date (data-engineer), alongside the G4
     bar digests. A run on any other digest is a deviation.
+  - **Pinned 2026-10-17 (research director, before any H-02 outcome and before D4 is run; BACKLOG 82 merged at
+    0120db0).** Three pins. Each changes H-02's config hash, and nothing else: the cluster map, the reading rule and
+    the slot rule are unchanged.
+    1. **`full_coverage_columns: ("macro_spx_dd20",)` is pinned in H-02's `DiscoveryConfig`** (pinned now, by this
+       text). The line goes into the pinned dump above and into `preregistration-2027Q1.yaml` in the same change as
+       the code item below. It is not written there today, because the coded dump returns a tuple and the YAML holds a
+       list, so `tests/test_preregister_quarter.py` (the verbatim-dump test) fails until it compares them
+       normalised. H-02's row is not written until the dump, the YAML and the code agree.
+    2. **Pool rule: the exemption is chosen; "H-07 is VIX-only" is not.** `macro_spx_dd20` is finite on only about
+       57% of candidates (SP500 from about 2016-10), so the global > 80% pool rule (`pipeline.eligible_columns`,
+       used by `discovery.discovery_pool`) would drop it from **every** fold. H-07 would then be VIX-only
+       throughout, and the per-fold mask above would never act. That would test a narrower hypothesis than H-07
+       (an equity-drawdown haven), and the mask was built to avoid exactly that. Rule: **columns named in
+       `full_coverage_columns` are exempt from the 80% pool rule; the per-fold full-coverage mask governs them**
+       (NaN in both train and test in a fold whose training rows lack full coverage, untouched otherwise). Every
+       other column keeps the 80% rule.
+       - **Code owed** (new BACKLOG item, implementer; quant-reviewer review): the exemption in the discovery pool,
+         plus a test that `discovery_pool` keeps a named column at 57% coverage and still drops an unnamed column at
+         57%. The same item writes `full_coverage_columns` into the pinned dump and the YAML, and makes the
+         verbatim-dump test compare tuple and list alike. Due **2026-12-11**, the config date. **Without that merged code, H-02 does not run.**
+       - D4 is still reported on H-02's row before the run, as stated above. It is descriptive and does not choose
+         between the options: this choice is made now, before D4's numbers exist.
+    3. **Scope of the mask.** H-02 is walk-forward only. **CPCV and the pooled path are out of scope**: they do not
+       carry the mask, and an H-02 result is never read through them. **Survivor slots 6-9 carry the mask:** a
+       survivor trial whose inputs include a `full_coverage_columns` column runs with the same per-fold mask
+       (`evaluate(..., full_coverage_columns=...)`), because a survivor trial is H-02's configuration with cluster
+       k's inputs. `run_specialist` passes the field through to `evaluate`, in the same BACKLOG item and with a
+       test. Without it, a slot whose cluster contains `macro_spx_dd20` (H-07) does not run under the slot.
 
 ### H-01 Slow TSMOM
 - Config: `specialist=tsmom`, signal from 1d bars (20/60/120-day vol-scaled returns, 60-day vol), execution and
@@ -776,6 +807,12 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
   - **K_eff.** Groups screened = 11 families + 3 context groups + 2 new families = **about 16** (was "about 10-15").
     The adopted gate-1 case becomes about 66 (40 + H-02 ~10 + H-14 ~16): t ≈ 4.03, still 4.0 at one decimal, so the
     "Gate-1 power" table is unchanged.
+  - **Pinned in `DiscoveryConfig`: `context_groups: per_timeframe`** (in the dump and the config hash; code 6705096).
+    *(Added 2026-10-17, research director, before any H-14 count, label or outcome.)*
+  - **Group count verified.** On `f-079deacc61` the coded map gives **14 groups** (verified by
+    `tests/test_group_size_before_preregister.py`). The two new families `liquidity` and `activity` bring it to about
+    16, so "about 16" stands. The exact K_eff and `group_map_sha256` (the pool map) are written here when the
+    liquidity/activity feature version merges, before the count.
 - Threshold (amended 2026-10-17, E-2; quant review R1): `threshold_rule: tercile_inner`,
   `tercile_q: 0.6666666666666666` and `tercile_method: linear` in the pinned `DiscoveryConfig` dump (so in the config
   hash: another q is another trial). The coded verdict needs at least 1,000 taken trades for "continue", as the

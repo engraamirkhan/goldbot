@@ -52,7 +52,8 @@ from goldbot.execution.not_confirmed import (
     NoticeKind,
     notice_text,
 )
-from goldbot.execution.not_placed import refusal_code
+from goldbot.execution.not_placed import not_placed, not_sent_code, refusal_code
+from goldbot.execution.not_placed import notice_text as not_placed_notice
 from goldbot.telegram.entry_text import account_name
 
 if TYPE_CHECKING:
@@ -172,7 +173,19 @@ def adopt_sent(eng: Engine, cid: str, rec: SentOrder, pos: Position) -> OpenTrad
     """A position the engine sent but never saw filled (a `sending` row on restart, an `ambiguous` one) adopted with
     the row's agent, entry stop and exit policy and the dealt lots (the position's: condition 4), unless the open
     table already holds it (adopted by reconciliation, or carried over a restart): that trade is kept with its stop,
-    bars held and scale-out state and only the row is marked filled (review MEDIUM-2 b)."""
+    bars held and scale-out state and only the row is marked filled (review MEDIUM-2 b). BACKLOG 84: a `sending` row
+    whose card was shown NOT CONFIRMED (`shown_unconfirmed`) tells the owner it is open and updates the card ("a later
+    fill found by the look-up still sends the "opened" notice and updates the card")."""
+    was = rec.status
+    tr = _adopt_row(eng, cid, rec, pos)
+    if was == "sending" and _card_unconfirmed(eng, cid):
+        _journal(eng, rec, "opened", position=pos.position_id)
+        _tell(eng, rec, "opened", notified="opened", dealt=pos.lots, entry=pos.open_price)
+        _card(eng, rec, "opened")
+    return tr
+
+
+def _adopt_row(eng: Engine, cid: str, rec: SentOrder, pos: Position) -> OpenTrade:
     rec.status, rec.position_id = "filled", pos.position_id
     if pos.position_id in eng.open:
         eng.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": "reconcile_sent_known",
@@ -201,15 +214,41 @@ def archive_pending(eng: Engine, p: Proposal) -> None:
         eng.center.bus.archive(p)
 
 
+def archive_not_sent(eng: Engine, p: Proposal, exc: BaseException) -> None:
+    """BACKLOG 85: `_on_decision` raised. Before `_execute` wrote the order row nothing can have reached the broker,
+    so "a raise before the row exists is archived as a "not sent" refusal, never "approved and sent"": the refusal
+    code `not_sent:<by>` (`not_placed.not_sent_code`), `placing` cleared, the card archived and one owner notice, then
+    the caller re-raises. With the row written the send may have gone out: nothing here, and `_finish` archives it
+    NOT CONFIRMED (BACKLOG 84). A card the engine already answered keeps its answer. Best effort: a failure here is
+    logged and never hides the original error."""
+    if p.outcome is None or p.outcome.value != "APPROVED" or p.gate_refusal is not None or p.proposal_id in eng._orders:
+        return
+    code = not_sent_code(exc)
+    p.gate_refusal, p.placing = [code], False
+    eng.decisions.append({"ts": time.time(), "agent": p.agent_id, "action": "not_sent", "proposal": p.proposal_id,
+                          "error": type(exc).__name__})
+    log.warning("approval %s not sent: %s before the order row (%s)", p.proposal_id, code, type(exc).__name__)
+    bus, np = eng.center.bus, not_placed(code)
+    if bus is None or np is None:
+        return
+    try:
+        bus.archive(p)
+        bus.notify_owner(not_placed_notice(np, side=p.side, lots=p.lots, symbol=eng.cfg.symbol,
+                                           account=account_name(eng.cfg.account_id)))
+    except Exception as exc2:           # noqa: BLE001 - the original error is re-raised by the caller
+        log.warning("not-sent card or notice not queued (%s)", type(exc2).__name__)
+
+
 def adopted(eng: Engine, rec: SentOrder, p: Position) -> bool:
     """`_adopt` met the position of a row it has not seen filled. The row is marked filled; True when the engine never
     saw it confirmed (`NEVER_CONFIRMED`: the trade then keeps the stop and target sent, which the reconcile loop puts
-    back). An `ambiguous` row tells the owner it is open (when the look-up did not get there first); an `unfilled` row
-    already reported "no trade" sends the one correction (condition 6)."""
+    back). An `ambiguous` row, or a `sending` one whose card was shown NOT CONFIRMED (BACKLOG 84), tells the owner it
+    is open (when the look-up did not get there first); an `unfilled` row already reported "no trade" sends the one
+    correction (condition 6)."""
     was = rec.status
     rec.status, rec.position_id = "filled", p.position_id
     kind: Literal["opened", "opened_late"] | None = None
-    if was == AMBIGUOUS:
+    if was == AMBIGUOUS or (was == "sending" and _card_unconfirmed(eng, rec.client_order_id)):
         kind = "opened"
     elif was == "unfilled" and rec.notified == "no_trade":
         kind = "opened_late"
@@ -390,16 +429,39 @@ def _tell(eng: Engine, rec: SentOrder, kind: NoticeKind, *, notified: str | None
         log.warning("unconfirmed-order notice not queued (%s)", type(exc).__name__)
 
 
+def shown_unconfirmed(p: Proposal | None) -> bool:
+    """The approved card was shown NOT CONFIRMED, or may have been: archived not confirmed (`archive_pending`, or
+    `_finish` after a send that raised) or left `placing` by an engine that died mid-send, which the outbox's
+    silent-engine fallback reports NOT CONFIRMED (BACKLOG 84). Never a card the engine answered otherwise."""
+    if p is None or p.outcome is None or p.outcome.value != "APPROVED":
+        return False
+    return p.not_confirmed is not None or p.placing or p.gate_refusal == [NOT_CONFIRMED]
+
+
+def _card_unconfirmed(eng: Engine, cid: str) -> bool:
+    bus = eng.center.bus
+    if bus is None:
+        return False
+    try:
+        return shown_unconfirmed(bus.get(cid))
+    except Exception as exc:            # noqa: BLE001 - an unreadable card: no notice, as before BACKLOG 84
+        log.warning("card for an unconfirmed order not read (%s)", type(exc).__name__)
+        return False
+
+
 def _card(eng: Engine, rec: SentOrder, outcome: NcOutcome, **facts: Any) -> None:
-    """Rewrite the archived card's facts (an approved card only: the auto path has none). Best effort, logged."""
+    """Rewrite the archived card's facts (an approved card shown NOT CONFIRMED only: the auto path has none). A card
+    the silent-engine fallback reported while it was still `placing` gets the facts and the refusal code here
+    (BACKLOG 84), so it never reads APPROVED or "submitted". Best effort, logged."""
     bus = eng.center.bus
     if bus is None:
         return
     try:
         p = bus.get(rec.client_order_id)
-        if p is None or p.not_confirmed is None:
+        if p is None or not shown_unconfirmed(p):
             return
-        c = p.not_confirmed.model_copy(update={"outcome": outcome, "digits": _digits(eng), **facts})
-        bus.archive(p.model_copy(update={"not_confirmed": c}))
+        was = p.not_confirmed or Confirmation(symbol=eng.cfg.symbol)
+        c = was.model_copy(update={"outcome": outcome, "digits": _digits(eng), **facts})
+        bus.archive(p.model_copy(update={"not_confirmed": c, "gate_refusal": [NOT_CONFIRMED], "placing": False}))
     except Exception as exc:            # noqa: BLE001
         log.warning("card for an unconfirmed order not updated (%s)", type(exc).__name__)

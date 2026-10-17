@@ -119,7 +119,12 @@ def test_t9_two_consecutive_not_running_reads_30_s_apart_exit_the_bridge(served)
     CLOCK.t += bridge_mod.TERMINAL_LOST_MIN_SPAN_S
     term.mode = "dead"
     r = requests.get(f"{url}/health", timeout=5)
-    assert r.status_code == 503 and r.json()["terminal"] == "not_running" and lost == ["lost"]   # replied, then exit
+    assert r.status_code == 503 and r.json()["terminal"] == "not_running"
+    for _ in range(200):                                              # the handler exits AFTER writing the reply, so
+        if lost:                                                      # the client can see the reply first (CI #91)
+            break
+        threading.Event().wait(0.01)
+    assert lost == ["lost"]                                           # replied, then exit
 
 
 def test_not_running_reads_within_30_s_never_exit_the_bridge(served):

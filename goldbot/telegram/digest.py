@@ -42,6 +42,7 @@ import pandas as pd
 
 from goldbot.base import Record, load_record_json, write_atomic
 from goldbot.config import ROOT, Settings
+from goldbot.execution.not_placed import CAUSE_PHRASE, approval_cause
 from goldbot.ops.report_days import day_before, day_bounds
 from goldbot.telegram.approvals import window_over
 from goldbot.telegram.entry_text import digest_line as entry_digest_line
@@ -159,11 +160,15 @@ def status_line(report: Any) -> list[str]:
 
 
 def proposals_line(state_dir: Path, day0: pd.Timestamp, day1: pd.Timestamp, now: pd.Timestamp) -> list[str]:
-    """Proposals created in [day0, day1): outcome from the archive; a pending one past its window counts as expired."""
+    """Proposals created in [day0, day1): outcome from the archive; a pending one past its window counts as expired.
+    An approved card with a refusal code is counted by its cause, "(1 refused by the risk check · 1 not placed by the
+    MT5 box or the broker · 1 not confirmed by the broker)", naming only the causes that occurred (BACKLOG 83: "count
+    the three causes separately"); a not-confirmed card the broker showed opened is an opened trade, in none."""
     root = state_dir / "approvals"
     lo, hi = day0.timestamp(), day1.timestamp()
     counts = {"APPROVED": 0, "REJECTED": 0, "EXPIRED_UNAPPROVED": 0, "open": 0}
-    refused = bad = 0
+    causes = dict.fromkeys(CAUSE_PHRASE, 0)
+    bad = 0
     for sub in ("done", "pending"):
         d = root / sub
         for f in sorted(d.glob("*.json")) if d.exists() else []:
@@ -180,19 +185,29 @@ def proposals_line(state_dir: Path, day0: pd.Timestamp, day1: pd.Timestamp, now:
             outcome = p.get("outcome")
             if outcome in counts:
                 counts[outcome] += 1
-                refused += bool(outcome == "APPROVED" and p.get("gate_refusal"))
+                if outcome == "APPROVED" and (cause := _approval_cause(p)) in causes:
+                    causes[cause] += 1
             elif sub == "pending" and window_over(created, p.get("window_s", 90), now.timestamp()):   # BACKLOG 60
                 counts["EXPIRED_UNAPPROVED"] += 1
             else:
                 counts["open"] += 1
     n = sum(counts.values())
-    note = f" ({refused} refused by the risk check)" if refused else ""
+    named = [f"{k} {CAUSE_PHRASE[c]}" for c, k in causes.items() if k]
+    note = f" ({' · '.join(named)})" if named else ""
     tail = f" · {counts['open']} open" if counts["open"] else ""
     tail += f" · {bad} unreadable" if bad else ""
     if n == 0:
         return [NO_PROPOSALS + tail]
     return [f"• Proposals {n}: ✅ {counts['APPROVED']} approved{note} · ❌ {counts['REJECTED']} rejected · "
             f"⌛ {counts['EXPIRED_UNAPPROVED']} expired{tail}"]
+
+
+def _approval_cause(p: dict[str, Any]) -> str | None:
+    """`approval_cause` for an archived card read as JSON; a malformed field reads as absent, as the codes would."""
+    codes, nc = p.get("gate_refusal"), p.get("not_confirmed")
+    codes = [c for c in codes if isinstance(c, str)] if isinstance(codes, list) else None
+    outcome = nc.get("outcome") if isinstance(nc, dict) else None
+    return approval_cause(codes, outcome if isinstance(outcome, str) else None)
 
 
 def trades_line(state_dir: Path, day0: pd.Timestamp, day1: pd.Timestamp) -> list[str]:

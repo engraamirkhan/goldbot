@@ -119,6 +119,9 @@ EMAIL_CODE_KEEP_S = 3600                 # a burned or expired challenge stays f
 EMAIL_CODE_BURNS, EMAIL_CODE_SUSPEND_WINDOW_S = 3, 86400     # 3 burned challenges in 24 h suspend email codes
 EMAIL_CODE_KEY = "email-code-hmac-key"   # the keyring entry of the codes' HMAC key (32 random bytes, hex)
 EMAIL_CODE_REFUSED = "that code did not work, or it has expired or was already used"
+# the sign-in lockout's words: the Login screen recognises them (web/src/lib/api.ts SERVER_SAYS, pinned by
+# tests/test_web_auth_wording.py) to show State F instead of counting a wrong code
+SIGN_IN_LOCKED = "too many attempts; wait 15 minutes"
 SESSION_METHODS: tuple[SessionMethod, ...] = ("password_totp", "email_link", "email_code", "recovery")
 _NS = 10**9
 
@@ -607,7 +610,7 @@ class AuthStore:
         if suspended:
             self._suspension_notice("the sign-in lockout")
         if locked:
-            raise PermissionError("too many attempts; wait 15 minutes")
+            raise PermissionError(SIGN_IN_LOCKED)
         return _Reservation(key=key, rows=rows, prev=prev, new=prev + 1)
 
     @staticmethod
@@ -1112,7 +1115,7 @@ class AuthStore:
             else:
                 conn.execute("INSERT INTO auth_failures (key, ts_ns) VALUES (?, ?)", (f"ip:{ip}", now))
         if n >= IP_LOCKOUT_FAILURES:
-            raise PermissionError("too many attempts; wait 15 minutes")
+            raise PermissionError(SIGN_IN_LOCKED)
 
     def redeem_email_link(self, token: str, code: str, ttl_h: int = SESSION_TTL_H, ip: str | None = None) -> str:
         """A session for the owner from a live link AND a current authenticator code (the link replaces the password,

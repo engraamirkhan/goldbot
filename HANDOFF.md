@@ -5,6 +5,71 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- An approval whose send raises is archived NOT CONFIRMED, never left placing (BACKLOG 84, implementer, 2026-10-17;
+  trading-safety residual on BACKLOG 72).
+  - `ApprovalCenter._finish`: if `on_decision` raises, the card's `placing` flag is cleared and it is archived with
+    the refusal code `not_confirmed` and the facts pending (as `unconfirmed.archive_pending` does), then the error is
+    re-raised. A refusal or NOT CONFIRMED the engine already archived stands. The outbox reports it NOT CONFIRMED
+    at once instead of after PLACING_MAX_S, and the dashboard no longer shows "submitted" and then drops it.
+  - `engine/unconfirmed.py`: a `sending` row (the send raised, or the engine died mid-send and the outbox's
+    silent-engine fallback reported the card NOT CONFIRMED) whose position is found later, by `_resolve_sent`
+    (restart or stale-sending) or by the reconcile adopt, sends the "opened" notice once and rewrites the card.
+    `_card` also rewrites a card still `placing` (`shown_unconfirmed`), which sets `not_confirmed`, the refusal code
+    and clears `placing`. A `sending` row with no card shown NOT CONFIRMED (the auto path) is adopted silently, as
+    before. No new owner-facing strings and no runner change.
+  - Not covered: an engine silent for 60 s whose send then returns a plain fill (status `filled`, no look-up). The
+    outbox has already reported NOT CONFIRMED, and no "opened" notice follows. A raise before the order row exists
+    (for example `last_tick`) is also archived NOT CONFIRMED with nothing to look up, so the dashboard lists it as
+    pending until UNCONFIRMED_LISTED_S. Both are routed to trading-safety.
+- An approval that raises before its order row exists is archived "not sent", never "approved and sent" or NOT
+  CONFIRMED (BACKLOG 85, implementer, 2026-10-17; trading-safety residual 1 on BACKLOG 84).
+  - `Engine._on_decision` now wraps the old body (`_apply_decision`); on any raise it calls
+    `unconfirmed.archive_not_sent`, then re-raises. With no `pending_orders` row for the proposal (nothing can have
+    reached the broker) and no answer archived yet, the card gets the refusal code `not_sent:mt5_box` (a bridge error
+    or a connection failure, e.g. `account()` at approval) or `not_sent:engine` (anything else), `placing` cleared,
+    archived, one owner notice and a `not_sent` journal row. A raise after the row exists keeps BACKLOG 84 (NOT
+    CONFIRMED, entries refused until the look-up settles it). No row, so nothing is pending and the next entry is
+    allowed.
+  - Wording in `goldbot/execution/not_placed.py` (`not_sent_code`, `NotPlaced.not_sent`, `by` gains "engine"): card
+    "🛑 NOT PLACED: approved, but the order could not be sent: the MT5 box couldn't be reached. Nothing was sent.";
+    dashboard red "Could not be sent. …; nothing was sent."; the notice names the trade and the masked account, never
+    the proposal id, the exception, a host or a login. Rows added to docs/ux/order-not-placed.md for ui-ux approval.
+  - API contract: `NotPlaced.by` gains "engine" and `NotPlaced.not_sent` (bool) is added; web/openapi.json and
+    web/src/lib/schema.d.ts regenerated, `ProposalCard` picks the "Could not be sent" heading.
+  - Trading-safety review LOW: only `BridgeError`, `ConnectionError` and `TimeoutError` read "the MT5 box couldn't be
+    reached"; any other `OSError` (a local disk or file error) is `not_sent:engine`. The digest and the performance
+    report count a not-sent card under "not placed by the MT5 box, the broker or the engine" (`CAUSE_PHRASE`).
+- Broker tick record for the H-A holiday diagnostic (BACKLOG 79, data-engineer, 2026-10-17).
+  - New daily scheduler job `tick_record`. For each enabled account it pulls the broker's XAUUSD ticks of closed
+    server dates with `copy_ticks`, read-only, through the scheduler's existing broker connection (`_job_broker`,
+    the one feed_reconcile and broker_ledger use). Each day goes to `state/ticks/<account>/<YYYY-MM-DD>.parquet`.
+  - Trading-safety review (bridge load), fixed:
+    - Two slots, 21:10 and 22:10 UTC, one in each DST regime's daily break, each with `max_late_hours` 0.5.
+    - The job skips unless `market_quiet` holds (New York 17:05-17:50, or the weekend), and stops when the window
+      ends.
+    - Pages of 2000 rows with a 0.2 s pause. A page over 2 s or a run over 300 s stops the run; the unfinished day
+      is not written.
+    - One day per run, oldest first; the weekend runs catch up.
+    - A test proves the job is read-only: its fake broker's order methods raise.
+  - File contents: `time_ns` (int64, through `epoch_ns`), `bid`, `ask`, `flags`. Written atomically, mode 0600, in
+    a 0700 directory. `index.json` records rows, London/NY ticks, median spread, bytes and sha256 per day.
+  - Re-runs are idempotent. Missed days within `ticks.backfill_days` (7) are back-filled. Days older than
+    `ticks.retain_days` are pruned.
+  - Health `ticks:<account>` (WARN only) when the newest day has fewer than `ticks.min_london_ny_ticks` (1000)
+    London/NY ticks, or has not advanced in 4 days.
+  - Loader: `goldbot.data.ticks.load_day(account, day, state_dir=...)`, which verifies the sha256.
+  - Size: about 12 B/tick, so 50k ticks is about 0.6 MB a day.
+  - Backup: the files are backed up (the whole state dir is). The terminal's tick history is finite, so a lost day
+    cannot be pulled again.
+  - Deviation from the lane brief: no recorder in the engine and no change to runner.py.
+    - The engine already stores its polled `last_tick` sample in `data/ticks/source=<account>`.
+    - A polled sample misses ticks between reads, so it biases H-A's ticks-per-minute.
+    - The pre-registration (docs/research/holiday-list-measurement-2026-10.md) fixes "copy_ticks after each server
+      day closes, one Parquet per server date".
+  - `retain_days` defaults to 240, not 90: H-A reads the 2026-11-26 file after 2027-04-30.
+  - Not done:
+    - the 90% uptime rule (terminal connection history);
+    - compaction of the engine's per-minute `data/ticks` part files (about 1,400 files a day, existing debt).
 - **Targeted refetch for G1/G2: `data-dukascopy` input `months` (data-engineer, 2026-10-17; not dispatched, not
   pushed; security review of the workflow change pending).** One manual dispatch now refetches exactly a list of
   months, e.g. `gh workflow run data-dukascopy.yml --ref main -f months=2024-01,2024-06`. The list is validated
@@ -57,6 +122,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - **Not changed.** `research_gates`, the phase gate's numbers, stored Q4 results and any frozen reading. Rows
     written before this have no `day_summed`.
   - **Tests.** `tests/test_day_summed_dsr.py` (22) and a compat case in `tests/test_persistence_compat.py`.
+- Digest and approval report count refusals by cause (BACKLOG 83, implementer, 2026-10-17). Before, every approved
+  card with a `gate_refusal` was "refused by the risk check", including item 71's MT5-box and broker refusals and item
+  72's `not_confirmed` cards.
+  - `not_placed.approval_cause(codes, outcome)` sorts an approved card into `risk_check`, `not_placed` (the
+    `broker_refused:*`, `bridge_stale_order` and ceiling codes, and a not-confirmed card the broker showed no trade
+    for), `not_confirmed` (pending, still unknown or an unknown outcome) or `opened` (opened, opened and closed, opened
+    after all: an opened trade, in no count). `CAUSE_PHRASE` holds the three labels next to item 71's `BY_PHRASE`.
+  - Digest: "✅ N approved (1 refused by the risk check · 4 not placed by the MT5 box or the broker · 2 not confirmed by
+    the broker)", naming only causes that occurred. The approved count is unchanged.
+  - Performance report: `ApprovalReport.gate_refused_after_approval` now counts the RiskGate's refusals only; new
+    `not_placed_after_approval` and `not_confirmed_after_approval`. The markdown line adds "; not placed by the MT5 box
+    or the broker: N" / "; not confirmed by the broker: N" only when non-zero.
+  - Frozen outputs: a day with only RiskGate refusals renders byte-identically in both (the existing digest assertion
+    and a new report test pin it); the only change is the new bucket text when those causes occur.
 - Email-code sign-in, backend (BACKLOG 77 steps 1-2, implementer, 2026-10-17; ADR 0028, TRACEABILITY U22; spec and
   security conditions 1-11 in docs/ux/sign-in-email-code.md). The owner can sign in with password + a 6-digit code
   sent by email while mail is ready: `POST /api/auth/email-code` (same challenge shape for every input),
@@ -67,6 +146,31 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (`email_codes`, `sessions.method`, `auth_suspensions`). HMAC key `email-code-hmac-key` lives in the keyring only
   (created on first use; unreadable or corrupt means off). RUNBOOK 2.10 "Email sign-in code". Not done here: the
   Login/Users/Account screens and the e2e (step 3, web lane, against the regenerated contract), OWNER_GUIDE.
+- Email-code sign-in, web (BACKLOG 77 step 3, implementer, 2026-10-17; ADR 0028, TRACEABILITY U22; spec
+  docs/ux/sign-in-email-code.md states A-H). `web/src/screens/Login.tsx`: when `AuthState.email_code` is true the Sign
+  in screen has a "Second step" radio (Email me a code / Authenticator app; the choice is the only thing stored, as
+  `signin.method` in localStorage; email is the default); the authenticator field keeps its slot hidden so switching
+  moves nothing. The code screen (B-F) masks the address in the browser, shows the expiry in local time with UTC in the
+  title, one numeric `one-time-code` field that signs in on the 6th digit, a fixed 44 px resend slot (countdown, the
+  hourly limit when `resend_after_s` > 60, or the Resend button), a 2-minute "No email?" hint, one `aria-live` region
+  (Code sent / 1 minute left / Code expired) and `role="alert"` errors joined by `aria-describedby`. Wrong codes are
+  counted in the browser (the server says the same words for every refusal): after 3 the Sign in button is disabled
+  and Resend is offered at once; a resend that returns a new challenge restarts the code (three fresh tries), the same
+  challenge back means wait. A lockout reply shows State F for both methods. Without mail the screen is today's (H).
+  `Users.tsx` asks for "Authenticator code (or a recovery code)" after an email-code sign-in (or once the server says
+  so) and sends it as `totp` with invite, role, disable, enable, reset link and sign-out-everywhere; the 403 reads in
+  words. `Account.tsx`: a neutral "Email codes: on/off" row for the owner. `scripts/e2e_server.py
+  install_email_code_key` seeds a throwaway HMAC key in-process with `--fake-mailer`, so an e2e run never writes the
+  developer's keyring or `state/.secrets.json`. e2e: emailed-code sign-in from the fake outbox, the code screen at
+  360 px, a refused then accepted invite (step-up). OWNER_GUIDE "Signing in" updated.
+  Review round 1 (ui-ux, code-reviewer): `lib/api.ts` throws `ApiError` (HTTP status; 0 with "Could not reach
+  goldbot..." instead of the browser's text) and `SERVER_SAYS`, the server refusals the screens match word for word
+  (`auth.SIGN_IN_LOCKED`, `app.STEPUP_REQUIRED`, `app.STEPUP_LOCKED`; `tests/test_web_auth_wording.py` pins both
+  sides). Only a 401/403 counts as a wrong code; a lockout goes to State F, a 5xx or the network reads in plain words;
+  Enter on a partial code spends no try; one code check at a time. The password field has a 44 px Show/Hide toggle;
+  the sign-in form waits for `/api/auth/state`, so the method choice never pushes it down. Found on the way: a spent
+  `#signin=` token came back after sign-out in the same page load: fixed on the tip by `links.clearLinkTokens` (issue
+  #89); this lane adds a links test for it.
 - Gates on release candidate ab671be (W1-1 bridge smoke on top of PR #84), test-engineer, 2026-10-17. `GATES_WORKERS=4 scripts/gates.sh --web` (total 377 s), then e2e. All green:
 
   | Gate | Result |
@@ -79,6 +183,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   | unit | PASS 5662 passed in 176.07s (0:02:56) |
   | web | PASS Tests 142 passed (142) (lint, typecheck, build included in the gate) |
   | e2e | PASS 19 passed (7.5m), `E2E_PORT=8890` because another lane held 8790; the teardown CancelledError trace in the log is graceful-shutdown noise after the pass |
+- Discovery group-size check before the pre-registration row; context columns counted (BACKLOG 81, implementer,
+  2026-10-17; TRACEABILITY M49).
+  - `discovery_pass` now builds the decision frame (prices only, no label), maps every frame column to its group,
+    context columns included, and runs `check_group_sizes` BEFORE `reg.preregister`. A refused config writes no
+    registry row and leaves `n_trials_effective` unchanged. The pool is a subset of the frame's columns, so the
+    run's map is the frame map restricted to the pool (same per-column groups as before).
+  - O-4's pinned splitting rule is `DiscoveryConfig.context_groups: per_timeframe`: every h1_/h4_/d1_/w1_ column
+    goes to `ctx_<tf>` across families. Default `join` keeps the old rule and is left out of the dump, so every
+    existing config hash and group map is unchanged. New families (`liquidity`, `activity`) group by family with no
+    code change.
+  - On `f-079deacc61` at 15m: 14 groups (11 families + `ctx_h1`/`ctx_h4`/`ctx_d1` at 26 columns each), the largest
+    `structure` at 38. With `join` the check refuses on `trend` (72) and `volatility` (53).
+  - Owed by the research-director: write `context_groups: per_timeframe` into O-4's pinned dump and restate K_eff
+    (14 on `f-079deacc61`, about 16 once `liquidity` and `activity` merge). K formula unchanged.
 - **BACKLOG 62, the 12% kill switch closes every symbol (implementer, 2026-10-17; reviews owed: code-reviewer,
   trading-safety-reviewer E1, security before push).** Two commits on the plan
   `docs/proposals/2026-10-backlog62-kill-switch-all-symbols-plan.md` with the trading-safety conditions C1-C9.
@@ -257,6 +375,24 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - **Open, out of scope.** `ruin.r_from_shadow_book` and `population.weekly_returns` time exits by `exit_ts` (the exit
     bar's open) rather than by `exit_ts + tf`. The weekly bucket can move by one bar at the Sunday open. This is not
     ADR 0022 and is a quant-reviewer call.
+- H-02/H-07 per-fold coverage mask (BACKLOG 82, implementer, 2026-10-17; H-02 amendment 2026-10-17 in
+  docs/research/preregistration-2027Q1.md). H-02 can now pre-register
+  `DiscoveryConfig.full_coverage_columns: ["macro_spx_dd20"]`; the research-director pins it in the quarter spec
+  (not pinned here).
+  - Rule: a named column is NaN in both the training and the test rows of any fold whose training rows do not all
+    carry a finite value (`pipeline.uncovered_columns`, from the fold's `train_idx` only, never its test rows).
+    Fully covered folds are untouched.
+  - Applied in the discovery's fold selection (`select_in_fold` sees the masked frame) and in the walk-forward fit and
+    predict (`pipeline._walk_forward(full_coverage_columns=)`). `metrics.full_coverage` records the masked columns
+    per fold. A named column the frame lacks is refused before any selection (no silent no-op on a misspelling).
+  - Default unchanged: an empty field is left out of the dump, so every existing config hash holds; the walk-forward
+    and CPCV golden (`tests/data/tercile_default_golden.json`) is byte-identical and the default metrics carry no new
+    key. Frozen Q4 readings: no delta (none set the field).
+  - Not wired: CPCV (`cpcv.run_cpcv`) and the pooled path, which no H-02 run uses. Watch: `eligible_columns` needs a
+    column populated on > 80% of the candidates, so on a long window `macro_spx_dd20` may not enter the pool at all.
+  - Tests: `tests/test_full_coverage_mask.py`
+    (`test_spx_dd20_is_nan_in_train_and_test_for_folds_without_full_coverage` and 7 more). Not changed: RiskGate,
+    execution, live thresholds, the trial budget.
 - Engine split step 1: state save/load moved to `goldbot/engine/store.py` (TD-2, ADR 0023 step 1, implementer,
   2026-10-17). Move-only. The PR 0 golden grid (192 cases) and every golden under `tests/data/engine_store_golden/`
   pass unchanged.
@@ -277,6 +413,32 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - Not done here: the ADR 0010 skew note for unknown risk-file keys (BACKLOG 74, the next PR in `store.py`).
   - Reviews needed: trading-safety (restart and state path) and code. Review with
     `git diff --color-moved=dimmed-zebra`.
+- Telegram NOT CONFIRMED card edited at resolution (BACKLOG 87; copy `docs/ux/order-not-confirmed.md`). This closes
+  the "Not done" of BACKLOG 72.
+  - When the outbox reports a card NOT CONFIRMED, the Telegram service keeps the ids of the reply messages that went
+    out. They live in aux.db table `outbox_watch` (migration 9, additive).
+  - On each poll it re-reads the archived proposal, which `engine.unconfirmed._card` rewrites at each resolution. When
+    the outcome changes, it edits those replies to `not_confirmed.card_text` (OPENED, OPENED AND CLOSED, NOT PLACED,
+    OPENED AFTER ALL, STILL NOT CONFIRMED). The shown outcome is recorded in aux.db, so a restart never repeats an
+    edit.
+  - Failed edits (review round 1): an edit Telegram refuses for good (`BadRequest`: already shown, deleted, too old;
+    `Forbidden`) is not retried (`bot.edit_is_final`). A rate limit, timeout or network error keeps the card watched
+    and is retried after 2 s, doubling to 300 s, for 10 attempts per outcome (about 13 minutes); then it is given up
+    for that outcome and logged. The attempt count is kept in aux.db, so it survives a restart.
+  - Known window: `finished` deletes the sent row before the service sends the NOT CONFIRMED reply, and the reply ids
+    are recorded only after it went out. A crash between the send and `watch` (one aux.db write) leaves that card
+    unedited at resolution. The reply ids can't be recorded earlier because they don't exist yet; the notice and the
+    dashboard still carry the outcome.
+  - The watch ends on a settled outcome (`not_confirmed.SETTLED`: opened, opened and closed, opened after all). "No
+    trade" stays watched for the correction. The watch also ends when the archive is gone or after 8 days
+    (`WATCH_MAX_S`).
+  - A card whose reply never went out is never watched or edited. Every step is best effort and logged; a failed edit
+    or a busy aux.db never stops the owner's notices in the same pass.
+  - The edited message is the NOT CONFIRMED reply (the message that carries the outcome line), not the proposal text
+    above it, which the bot cannot rebuild. No new owner-facing strings.
+  - `TelegramBot._pump`'s outbox work moved into `_outbox_pass` so it can be tested without the network.
+  - Engine path unchanged (no edit to `goldbot/engine` or `approvals._on_decision`).
+  - Reviews needed: ui-ux, code.
 - E-2 top-tercile cut (BACKLOG 75, implementer, 2026-10-17; plan docs/proposals/2026-10-backlog75-tercile-cut-plan.md
   with the quant plan review's conditions 1-7; TRACEABILITY M48). O-4 can now pre-register
   `DiscoveryConfig.threshold_rule: tercile_inner`.

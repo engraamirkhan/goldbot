@@ -14,6 +14,7 @@ import pytest
 from goldbot.data.store import Store
 from goldbot.engine.shadow import ShadowTrade, VersionBook
 from goldbot.execution.costs import CostTable, SlippageStat, SpreadStat
+from goldbot.execution.not_confirmed import Confirmation
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade
 from goldbot.ops.perf_report import MIN_TRADES, build_performance_report, default_range, format_markdown, main
 from goldbot.telegram.approvals import Outcome, Proposal
@@ -173,12 +174,14 @@ def test_an_empty_state_folder_reports_nothing_without_failing(tmp_path):
 
 # ---------------------------------------------------------------------------------------------- approvals and shadow
 def _proposal(state: Path, close: str, outcome: Outcome | None, *, side: int = 1, reason: str | None = None,
-              agent: str = SO, gate_refusal: list[str] | None = None, folder: str = "done") -> Proposal:
+              agent: str = SO, gate_refusal: list[str] | None = None, folder: str = "done",
+              not_confirmed: Confirmation | None = None) -> Proposal:
     ts = pd.Timestamp(close, tz="UTC")
     p = Proposal(proposal_id=f"{ACC}-{int(ts.timestamp())}-0a1b2c3d4e", account_id=ACC, agent_id=agent, side=side,
                  lots=0.01, entry=2000.0, stop=1990.0, target=2025.0, p=0.6, ev_r=0.2, spread_points=20.0,
                  top_features=[("x", 0.1)], currency="GBP", risk_amount=8.0, created=ts.timestamp() + 2,
-                 outcome=outcome, reason_code=reason, gate_refusal=gate_refusal)
+                 outcome=outcome, reason_code=reason, gate_refusal=gate_refusal,
+                 not_confirmed=not_confirmed)
     d = state / "approvals" / folder
     d.mkdir(parents=True, exist_ok=True)
     # written as a release before BACKLOG 52 did: the decider's identity is in the file, and must never reach a report
@@ -697,3 +700,29 @@ def test_the_default_range_is_the_month_of_todays_opportunity_day_up_to_today():
     assert default_range(pd.Timestamp("2026-10-31 23:00", tz="UTC")) == ("2026-11-01", "2026-11-01")
     assert default_range(pd.Timestamp("2026-10-31 21:59", tz="UTC")) == ("2026-10-01", "2026-10-31")
     assert default_range(pd.Timestamp("2026-10-31 23:00", tz="UTC"), "2026-10-05", None) == ("2026-10-05", "2026-11-01")
+
+
+def test_the_report_counts_risk_check_refusals_broker_and_mt5_box_refusals_and_unconfirmed_orders_apart(tmp_path):
+    # BACKLOG 83: only the RiskGate's own codes are refused by the RiskGate at approval; a not-confirmed card the
+    # broker later showed opened counts as an opened trade, one it showed no trade for as not placed
+    _engine(tmp_path)
+    cards: list[tuple[list[str] | None, str | None]] = [
+        (None, None), (["spread"], None), (["broker_refused:10019"], None), (["bridge_stale_order"], None),
+        (["bridge_notional_ceiling_unreadable"], None), (["not_confirmed"], None), (["not_confirmed"], "still_unknown"),
+        (["not_confirmed"], "no_trade"), (["not_confirmed"], "opened"), (["not_confirmed"], "opened_late")]
+    for i, (codes, outcome) in enumerate(cards):
+        _proposal(tmp_path, f"2026-10-05 {9 + i:02d}:00", Outcome.APPROVED, gate_refusal=codes,
+                  not_confirmed=Confirmation(outcome=outcome) if outcome is not None else None)  # type: ignore[arg-type]
+    rep = build_performance_report(tmp_path, start=START, end=END, now=NOW)
+    ap = rep.accounts[0].approvals
+    assert ap.approved == 10
+    assert (ap.gate_refused_after_approval, ap.not_placed_after_approval, ap.not_confirmed_after_approval) == (1, 4, 2)
+    assert ("approved 10 (refused by the RiskGate at approval: 1; not placed by the MT5 box, the broker or the engine: 4; not "
+            "confirmed by the broker: 2), rejected 0") in format_markdown(rep)
+
+
+def test_the_report_line_is_unchanged_when_every_refusal_is_the_risk_checks(tmp_path):
+    _engine(tmp_path)
+    _proposal(tmp_path, "2026-10-05 09:00", Outcome.APPROVED, gate_refusal=["spread"])
+    rep = build_performance_report(tmp_path, start=START, end=END, now=NOW)
+    assert "approved 1 (refused by the RiskGate at approval: 1), rejected 0" in format_markdown(rep)
