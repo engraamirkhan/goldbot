@@ -346,12 +346,23 @@ def _bridge_watchdog(tmp_path: Path, *, active: bool = True, up_s: int = 3600, c
                      restarted_meanwhile: bool = False, args: tuple[str, ...] = ("icm-demo",),
                      env: dict[str, str] | None = None, bodies: list[bytes | None] | None = None,
                      bridge_state: str | None = None, term_active: bool = True, term_up_s: int = 3600,
-                     term_restarted_meanwhile: bool = False, nrestarts: int = 0) -> tuple[int, str, str]:
+                     term_restarted_meanwhile: bool = False, nrestarts: int = 0, baseline: int | None = 0,
+                     state_link: bool = False) -> tuple[int, str, str]:
     """The root script (and its unprivileged probe) with fake systemctl / curl / date / setpriv first on PATH; only
     the test copies' PATH line and the probe's install path are changed. `bodies`: what GET /health returns on each
-    probe in turn (None: no answer); default: `curl_ok` -> the legacy {"ok": true} body, else no answer."""
+    probe in turn (None: no answer); default: `curl_ok` -> the legacy {"ok": true} body, else no answer. `baseline`:
+    the NRestarts the watchdog last saw on a settled bridge (None: no file yet); `state_link`: its state directory is a
+    symlink (refused)."""
     fake = tmp_path / "bin"
     fake.mkdir()
+    run = tmp_path / "run"
+    if state_link:
+        (tmp_path / "elsewhere").mkdir()
+        run.symlink_to(tmp_path / "elsewhere")
+    else:
+        run.mkdir(mode=0o700)
+        if baseline is not None:
+            (run / "icm-demo.nrestarts").write_text(f"{baseline}\n")
     log = tmp_path / "calls"
     now = 2_000_000_000
     if bodies is None:
@@ -407,10 +418,13 @@ exec "$@"
     probe.write_text(probe_src.replace(path_line, f"PATH={fake}:/usr/bin:/bin\n"))
     probe.chmod(0o755)
     src = (LINUX / "goldbot-bridge-watchdog.sh").read_text()
+    state_line = "STATE_DIR=/run/goldbot-bridge-watchdog\n"
     assert src.count(path_line) == 1 and src.count("PROBE=/usr/local/sbin/goldbot-bridge-probe\n") == 1
+    assert src.count(state_line) == 1
     copy = tmp_path / "wd.sh"
     copy.write_text(src.replace(path_line, f"PATH={fake}:/usr/bin:/bin\n")
-                    .replace("PROBE=/usr/local/sbin/goldbot-bridge-probe\n", f"PROBE={probe}\n"))
+                    .replace("PROBE=/usr/local/sbin/goldbot-bridge-probe\n", f"PROBE={probe}\n")
+                    .replace(state_line, f"STATE_DIR={run}\n"))
     r = subprocess.run([BASH, str(copy), *args], capture_output=True, timeout=30, env={**os.environ, **(env or {})})
     out = (r.stdout + r.stderr).decode("utf-8", "replace")
     return r.returncode, out, log.read_text() if log.exists() else ""
@@ -468,7 +482,7 @@ def _restarted(calls: str) -> list[str]:
 def test_t1_terminal_ok_restarts_nothing(tmp_path):
     rc, out, calls = _bridge_watchdog(tmp_path, bodies=[_health("ok")])
     assert rc == 0 and _restarted(calls) == [] and calls.count("curl ") == 1
-    assert "setpriv --reuid=nobody --regid=nogroup --clear-groups --no-new-privs -- " in calls   # the probe is unprivileged
+    assert "setpriv --reuid=nobody --regid=nogroup --clear-groups --no-new-privs --bounding-set=-all --inh-caps=-all -- " in calls   # the probe is unprivileged
 
 
 @pytest.mark.skipif(not BASH, reason="needs bash")
@@ -558,6 +572,42 @@ def test_a_bridge_that_cannot_attach_restarts_the_terminal_once_it_has_run_10_mi
     assert rc == 0 and _restarted(calls) == ([TERMINAL_UNIT] if restarts else []) and "curl " not in calls, calls
     if restarts:
         assert "restarted" in out and "times without settling" in out
+
+
+# ---- review follow-up (code MEDIUM): only restarts since the bridge last settled count, not NRestarts since boot
+def _baseline(tmp_path: Path) -> str:
+    return (tmp_path / "run" / "icm-demo.nrestarts").read_text().strip()
+
+
+@pytest.mark.skipif(not BASH, reason="needs bash")
+@pytest.mark.parametrize("nrestarts,baseline,restarts", [
+    (4, 3, False),            # three crashes days ago, one restart now: not an attach loop
+    (6, 3, True),             # three since the bridge last settled
+    (3, 10, True),            # NRestarts reset by an explicit start below the baseline: counted from zero
+    (5, None, False),         # no baseline yet (a fresh install): the current count becomes it, nothing restarted
+], ids=["old_restarts", "three_in_window", "counter_reset", "no_baseline"])
+def test_only_restarts_since_the_bridge_last_settled_count(tmp_path, nrestarts, baseline, restarts):
+    rc, _, calls = _bridge_watchdog(tmp_path, bridge_state="activating", nrestarts=nrestarts, baseline=baseline)
+    assert rc == 0 and _restarted(calls) == ([TERMINAL_UNIT] if restarts else []), calls
+    if baseline is None:
+        assert _baseline(tmp_path) == str(nrestarts)
+
+
+@pytest.mark.skipif(not BASH, reason="needs bash")
+def test_a_settled_bridge_moves_the_baseline_to_its_current_count(tmp_path):
+    rc, _, calls = _bridge_watchdog(tmp_path, bodies=[_health("ok")], nrestarts=7, baseline=2)
+    assert rc == 0 and _restarted(calls) == [] and _baseline(tmp_path) == "7"
+
+
+@pytest.mark.skipif(not BASH, reason="needs bash")
+def test_a_symlinked_state_directory_is_never_written_or_trusted(tmp_path):
+    rc, out, calls = _bridge_watchdog(tmp_path, bridge_state="activating", nrestarts=9, state_link=True)
+    assert rc == 0 and _restarted(calls) == [] and list((tmp_path / "elsewhere").iterdir()) == []
+    assert "state directory" in out
+    settled = tmp_path / "settled"
+    settled.mkdir()
+    rc, _, calls = _bridge_watchdog(settled, bodies=[_health("ok")], nrestarts=9, state_link=True)
+    assert rc == 0 and list((settled / "elsewhere").iterdir()) == []
 
 
 def test_the_watchdog_restarts_only_the_two_literal_units():
@@ -675,3 +725,24 @@ def test_first_deploy_has_watchdog_acceptance_and_the_fallback():
                    "engine loop running", "engine_loop", "kill -STOP", "Watchdog timeout", "WatchdogSec=0",
                    "/proc/sys/kernel/core_pattern"):
         assert needle in text, needle
+
+
+def test_watchdog_state_directory_is_a_root_only_runtime_directory():
+    svc = (UNITS / "goldbot-bridge-watchdog@.service").read_text()
+    assert _directive(svc, "RuntimeDirectory") == "goldbot-bridge-watchdog"
+    assert _directive(svc, "RuntimeDirectoryMode") == "0700" and _directive(svc, "RuntimeDirectoryPreserve") == "yes"
+
+
+def test_terminal_unit_hardening_is_staged_until_verified_under_wine():
+    """Security nit: NoNewPrivileges/PrivateTmp are written down but stay off until the cold-restart test shows Wine
+    works with them (PrivateTmp would give the terminal its own wineserver socket, out of the bridge's reach)."""
+    term = (UNITS / "goldbot-mt5-terminal@.service").read_text()
+    assert "#NoNewPrivileges=yes" in term and "#PrivateTmp=yes" in term and "wineserver" in term
+    text = (Path(__file__).resolve().parents[1] / "docs" / "RUNBOOK.md").read_text()
+    assert "NoNewPrivileges=yes" in text and "PrivateTmp=yes" in text
+
+
+def test_runbook_names_no_server_and_says_reads_and_closes_flow_when_logged_out():
+    text = (Path(__file__).resolve().parents[1] / "docs" / "RUNBOOK.md").read_text()
+    assert "until it has seen the terminal logged in to that login on the registered demo server" in text
+    assert "reads and closes keep flowing" in text and "refuses every call, reads and closes included" in text

@@ -60,12 +60,24 @@ def _verify(info: Any) -> str | None:
     return None if info.login == LOGIN else f"terminal is logged in to another account ({info.login} on {info.server})"
 
 
+class Clock:
+    def __init__(self) -> None:
+        self.t = 1000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+CLOCK = Clock()
+
+
 @pytest.fixture
 def served() -> Iterator[tuple[str, FakeTerminal, list[str]]]:
     term, lost = FakeTerminal(), list[str]()
+    CLOCK.t = 1000.0
     g = GuardedBroker(term, magic_base=260100, verify=_verify)
     httpd = HTTPServer(("127.0.0.1", 0), make_handler(g, TOKEN, commit="a" * 40, verify_first=True,
-                                                     on_terminal_lost=lambda: lost.append("lost")))
+                                                     on_terminal_lost=lambda: lost.append("lost"), clock=CLOCK))
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{httpd.server_address[1]}", term, lost
     httpd.shutdown()
@@ -93,19 +105,36 @@ def test_t9_health_maps_the_terminal_to_one_fixed_token(served, mode):
     assert len(r.content) <= 1024, len(r.content)                   # the probe reads at most 1 KiB
 
 
-def test_t9_two_consecutive_not_running_reads_exit_the_bridge(served):
+def test_t9_two_consecutive_not_running_reads_30_s_apart_exit_the_bridge(served):
     url, term, lost = served
     term.mode = "dead"
     requests.get(f"{url}/health", timeout=5)
     assert lost == []
+    CLOCK.t += 40
     term.mode = "ok"                                                  # an answer in between resets the count
     requests.get(f"{url}/health", timeout=5)
     term.mode = "ipc_error"
     requests.get(f"{url}/health", timeout=5)
     assert lost == []
+    CLOCK.t += bridge_mod.TERMINAL_LOST_MIN_SPAN_S
     term.mode = "dead"
     r = requests.get(f"{url}/health", timeout=5)
     assert r.status_code == 503 and r.json()["terminal"] == "not_running" and lost == ["lost"]   # replied, then exit
+
+
+def test_not_running_reads_within_30_s_never_exit_the_bridge(served):
+    """Trading-safety L1: one brain health pass makes three GETs within a second; a terminal restarting for a moment
+    must not end the bridge. Only reads spanning TERMINAL_LOST_MIN_SPAN_S do."""
+    url, term, lost = served
+    assert bridge_mod.TERMINAL_LOST_MIN_SPAN_S == 30
+    term.mode = "dead"
+    for _ in range(5):
+        requests.get(f"{url}/health", timeout=5)
+        CLOCK.t += 5
+    assert lost == []                                                 # 20 s of not_running so far
+    CLOCK.t += 10
+    requests.get(f"{url}/health", timeout=5)
+    assert lost == ["lost"]
 
 
 def test_the_default_on_terminal_lost_exits_non_zero():
@@ -129,6 +158,36 @@ def test_rpc_is_refused_until_the_terminal_is_seen_on_the_registered_account(ser
     term.mode = "disconnected"                                        # verified once: reads keep being served
     r = requests.post(f"{url}/rpc", json={"method": "last_tick", "args": ["XAUUSD"]}, headers=hdr, timeout=5)
     assert r.status_code == 200
+
+
+def _rpc(url: str, method: str, *args: Any) -> requests.Response:
+    return requests.post(f"{url}/rpc", json={"method": method, "args": list(args), "sent_at": __import__("time").time()},
+                         headers={"Authorization": f"Bearer {TOKEN}"}, timeout=5)
+
+
+def test_a_terminal_switched_to_another_account_serves_nothing_after_verification(served):
+    """Trading-safety L2: the gate re-closes while the CURRENT state is wrong_account, reads and closes included."""
+    url, term, _ = served
+    assert _rpc(url, "last_tick", "XAUUSD").status_code == 200        # verified (ok)
+    term.mode = "other_account"
+    for method, args in (("last_tick", ["XAUUSD"]), ("close", [1]), ("positions", [])):
+        r = _rpc(url, method, *args)
+        assert r.status_code == 503 and r.json()["error"] == "terminal on another account: refused", (method, r.text)
+        assert str(LOGIN) not in r.text and SERVER not in r.text
+    term.mode = "ok"
+    assert _rpc(url, "last_tick", "XAUUSD").status_code == 200        # back on the registered account
+
+
+def test_a_logged_out_terminal_keeps_reads_and_closes_flowing_after_verification(served):
+    """Exits are never gated: not_logged_in (or not_running) after verification does not refuse a call; the terminal
+    answers what it can (here the fake has no close: a 500 from the terminal, not the gate's 503)."""
+    url, term, _ = served
+    assert _rpc(url, "last_tick", "XAUUSD").status_code == 200
+    for mode in ("logged_out", "dead", "disconnected"):
+        term.mode = mode
+        assert _rpc(url, "last_tick", "XAUUSD").status_code == 200, mode
+        r = _rpc(url, "close", 1)
+        assert r.status_code != 503 and "refused" not in r.text, (mode, r.text)
 
 
 def test_a_broker_without_terminal_info_keeps_the_old_health(tmp_path):
@@ -254,3 +313,36 @@ def test_run_checks_places_the_terminal_check_after_the_bridge(tmp_path):
     names = [c.name for c in health.run_checks(ctx).checks]
     assert names.index("bridge:icm-demo") < names.index("terminal:icm-demo")
     assert {c.name: c.status for c in health.run_checks(ctx).checks}["terminal:icm-demo"] == "fail"
+
+
+# ---- trading-safety L3: a terminal that initialize(path=...) launched under the bridge unit
+def _proc(root: Any, pid: int, cmdline: bytes, cgroup: str) -> None:
+    d = root / str(pid)
+    d.mkdir()
+    (d / "cmdline").write_bytes(cmdline)
+    (d / "cgroup").write_text(cgroup)
+
+
+def test_a_terminal_in_the_bridge_cgroup_is_found(tmp_path):
+    from goldbot.ops.services.bridge import terminals_in_bridge_cgroup
+    unit = "0::/system.slice/system-goldbot\\x2dmt5\\x2dterminal.slice/goldbot-mt5-terminal@icm-demo.service\n"
+    bridge = "0::/system.slice/system-goldbot\\x2dbridge.slice/goldbot-bridge@icm-demo.service\n"
+    _proc(tmp_path, 100, b"C:\\MT5\\ICMarkets\\terminal64.exe\x00", unit)            # the unit's own terminal
+    _proc(tmp_path, 200, b"C:\\users\\python.exe\x00-m\x00goldbot.ops.run\x00", bridge)
+    (tmp_path / "self").mkdir()
+    assert terminals_in_bridge_cgroup(tmp_path) == 0
+    _proc(tmp_path, 300, b"C:\\MT5\\ICMarkets\\TERMINAL64.EXE\x00", bridge)          # launched by initialize
+    assert terminals_in_bridge_cgroup(tmp_path) == 1
+    (tmp_path / "400").mkdir()                                                      # a process gone mid-scan
+    assert terminals_in_bridge_cgroup(tmp_path) == 1
+    assert terminals_in_bridge_cgroup(tmp_path / "missing") is None                 # cannot tell
+
+
+def test_run_bridge_refuses_to_serve_a_terminal_it_launched():
+    import inspect
+
+    from goldbot.ops.services import bridge as svc
+    src = inspect.getsource(svc.run_bridge)
+    attach, check, serve = src.index("MT5Broker("), src.index("terminals_in_bridge_cgroup("), src.index("serve(")
+    assert attach < check < serve and "SystemExit(TERMINAL_SPAWNED_EXIT)" in src
+    assert svc.TERMINAL_SPAWNED_EXIT not in (0, bridge_mod.TERMINAL_LOST_EXIT)
