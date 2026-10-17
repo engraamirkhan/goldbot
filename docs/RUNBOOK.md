@@ -94,7 +94,7 @@ sudo systemctl start goldbot-bridge@icm-demo
 ```
 Copy the token straight into `goldbot run setup` on the brain (step 2); do not save it anywhere else. Do this
 step only when the brain is installed and you are about to run setup, so the token is never left in a window. The bridge refuses every call
-until it has seen the terminal logged in to that login on ICMarketsSC-Demo as a **demo** account. Until then it only
+until it has seen the terminal logged in to that login on the registered demo server as a **demo** account. Until then it only
 answers `GET /health`, with the terminal's state (`not_logged_in`, `wrong_account`, ...). On the box,
 `curl -s 127.0.0.1:8765/health` shows that state, and the brain shows it as `terminal:icm-demo` (see "Terminal down").
 
@@ -1339,11 +1339,16 @@ blocked, stops and targets stay with the broker, and nothing is lost by waiting:
 - **"running but not logged in (saved login lost?)"**: a restart cannot fix this, so the watchdog leaves it alone.
   First stop the watchdog timer (`sudo systemctl stop goldbot-bridge-watchdog@<account>.timer`). Then log in over VNC
   as in 0.3, steps 1 to 5, ticking *Save password*. The bridge starts serving by itself once it sees the right
-  account. Start the timer again afterwards.
+  account. Start the timer again afterwards. If the bridge had already seen the right account before the login was
+  lost, it keeps passing calls through: reads and closes keep flowing (exits are never gated), and the terminal
+  answers what it can. Orders still fail the account check on every send.
 - **"not connected to the broker server"**: this is a warning for the first 5 minutes, then a FAIL. Check the box's
   network, then check the terminal's corner indicator over VNC. After 10 minutes the watchdog restarts the terminal.
-- **"logged in to a different account than registered"**: the bridge refuses orders. Over VNC, log in to the
-  registered demo account (0.3). Never change `config/accounts.yaml` to match the terminal.
+- **"logged in to a different account than registered"**: while the terminal is on another account, the bridge
+  refuses every call, reads and closes included. It never reads or closes positions on an account it was not set up
+  for. Your positions on the registered account keep their stops and targets at the broker. Over VNC, log in to the
+  registered demo account (0.3). Calls flow again on their own once it is back. Never change `config/accounts.yaml`
+  to match the terminal.
 
 ### Cold-restart test of the saved login (MT5 box)
 
@@ -1376,7 +1381,14 @@ Steps (record only states and times):
    - Telegram showed the down alert within 6 min, followed by the recovery.
 4. `sudo systemctl kill -s KILL goldbot-mt5-terminal@icm-demo`. The terminal must come back within its backoff, the
    bridge must re-attach, and there must still be exactly one terminal. Record the times.
-5. Write up the result in `docs/incidents/`. Record unit states and times only. Never include the login, the server
+5. **Hardening check.** `goldbot-mt5-terminal@.service` carries `NoNewPrivileges=yes` and `PrivateTmp=yes` commented
+   out. They stay off until this step shows the terminal still works with them under Wine. Enable them one at a time
+   with a drop-in (`sudo systemctl edit goldbot-mt5-terminal@icm-demo`), then
+   `sudo systemctl restart goldbot-mt5-terminal@icm-demo`. Pass when, within 5 min, the terminal and the bridge are
+   active and `/health` shows `"terminal": "ok"`. `PrivateTmp=yes` is the likely failure: the terminal gets its own
+   `/tmp`, so it also gets its own wineserver socket and the bridge cannot attach. If either key fails, remove the
+   drop-in and restart. Record pass or fail for each key; the unit file is changed only through a PR.
+6. Write up the result in `docs/incidents/`. Record unit states and times only. Never include the login, the server
    name, a hostname, or any VNC or tunnel details.
 
 **If the login is lost** (`terminal: not_logged_in`):
