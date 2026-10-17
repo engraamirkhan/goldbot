@@ -26,7 +26,7 @@ from pydantic import Field, model_validator
 
 from goldbot.base import FrozenRecord, Record
 from goldbot.data.timeutil import heartbeat_problem
-from goldbot.execution.not_confirmed import Confirmation
+from goldbot.execution.not_confirmed import NOT_CONFIRMED, Confirmation
 
 if TYPE_CHECKING:
     from goldbot.ops.account_view import LossBudget
@@ -370,8 +370,11 @@ class ApprovalCenter:
     def _finish(self, p: Proposal, outcome: Outcome) -> Proposal:
         """Archive the decision, then apply it (`on_decision`: the engine re-checks and sends). An approval is archived
         `placing` and cleared only after `on_decision` returns, so the outbox waits for the broker's answer (BACKLOG 72
-        review). One that raised stays `placing`: the outbox reports it NOT CONFIRMED once the engine is silent or
-        PLACING_MAX_S has passed, never APPROVED."""
+        review). BACKLOG 84: "if `on_decision` raises, `_finish` archives the card not confirmed (placing cleared)
+        then re-raises": the refusal code `not_confirmed` with the facts pending, as `unconfirmed.archive_pending`
+        writes it, unless the engine already archived an answer (a refusal, or NOT CONFIRMED itself), which stands.
+        The send may have reached the broker, so it is never APPROVED; the engine's look-up tells the owner what it
+        finds. Only an engine that dies mid-send leaves a card `placing` (the outbox's silent-engine fallback)."""
         p.outcome = outcome
         p.placing = outcome == Outcome.APPROVED
         self.pending.pop(p.proposal_id, None)
@@ -379,7 +382,16 @@ class ApprovalCenter:
         self.log.append(p)
         if self.bus is not None:
             self.bus.archive(p)
-        self.on_decision(p)
+        try:
+            self.on_decision(p)
+        except BaseException:
+            if p.placing:
+                p.placing = False
+                if p.gate_refusal is None:          # nothing answered yet: the send may have reached the broker
+                    p.gate_refusal, p.not_confirmed = [NOT_CONFIRMED], Confirmation()
+                if self.bus is not None:
+                    self.bus.archive(p)
+            raise
         if p.placing:
             p.placing = False
             if self.bus is not None:
