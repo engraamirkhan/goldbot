@@ -76,3 +76,21 @@ def test_replay_guard_still_holds_on_the_stepped_clock(monkeypatch, tmp_path) ->
     code = _code_at(auth, secret, 5)
     assert store.verify_totp("owner@example.com", code) is True
     assert store.verify_totp("owner@example.com", code) is False              # each code is accepted once
+
+
+# ---- the emailed-code HMAC key (ADR 0028): a throwaway key per e2e server, never the developer's keyring
+def test_email_code_key_is_throwaway_and_never_touches_the_keyring(monkeypatch) -> None:
+    import goldbot.api.auth as auth
+
+    def keyring(*_: object) -> None:
+        raise AssertionError("the e2e server must not read or write the OS keyring")
+
+    monkeypatch.setattr(auth, "_KEY_CACHE", {})
+    monkeypatch.setattr(auth, "_secret_get", keyring)
+    monkeypatch.setattr(auth, "_secret_set", keyring)
+    e2e_server.install_email_code_key()
+    key = auth.email_code_key()
+    assert key is not None and len(key) == 32
+    monkeypatch.setattr(auth, "_KEY_CACHE", {})
+    e2e_server.install_email_code_key()
+    assert auth.email_code_key() != key                                       # a new key for every server

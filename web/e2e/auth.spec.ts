@@ -15,6 +15,8 @@ const UNKNOWN = "nobody@example.com";
 const NEUTRAL = "If this address can use email sign-in, a link is on its way";
 const LINK_SUBJECT = "Your goldbot sign-in link";
 const NOTICE_SUBJECT = "goldbot: new sign-in with an emailed link";
+const CODE_SUBJECT = "Your goldbot sign-in code";
+const CODE_NOTICE_SUBJECT = "goldbot: new sign-in with an emailed code";
 
 function mails(): Mail[] {
   const p = server().outbox;
@@ -50,6 +52,17 @@ async function openFromMail(page: Page, link: string) {
   await page.goto(link);
 }
 
+/** Every visible field and button of a sign-in screen fits 360 px with a thumb-sized (44 px) target; the authenticator
+ * field kept hidden while the email code is chosen (its reserved slot) is not a target. */
+async function fitsThePhone(page: Page) {
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360); // no sideways scroll
+  for (const el of await page.locator("form.login input:visible, form.login button:visible").all()) {
+    const box = await el.boundingBox();
+    expect(box && box.x >= 0 && box.x + box.width <= 360).toBe(true);
+    expect(box && box.height >= 44).toBe(true);                                // thumb-sized tap targets
+  }
+}
+
 async function enrolledSecret(page: Page): Promise<string> {
   await expect(page.getByRole("heading", { name: "Add goldbot to your authenticator", exact: true })).toBeVisible();
   const secret = (await page.locator("p.mono").first().textContent())?.trim() ?? "";
@@ -58,7 +71,14 @@ async function enrolledSecret(page: Page): Promise<string> {
   return secret;
 }
 
+/** The auth server can send mail, so once the owner exists the Sign in screen defaults to "Email me a code"
+ * (docs/ux/sign-in-email-code.md State A); these steps use today's path. */
+async function chooseAuthenticator(page: Page) {
+  await page.getByRole("radio", { name: "Authenticator app", exact: true }).check();
+}
+
 async function signIn(page: Page, email: string, password: string, secret: string) {
+  await chooseAuthenticator(page);
   await page.getByLabel("Email", { exact: true }).fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByLabel("Authenticator code", { exact: true }).fill(clock.fresh(secret));
@@ -81,7 +101,8 @@ async function expectRoleNotEmail(page: Page, role: string, email: string) {
 // rather than sleeping for the next real 30 s step.
 // No retries: a retry would rerun the story against the same server state, where first-run setup is spent and the
 // owner address (one per server, by design) keeps its hourly link count, so a rate-limited retry would fail as a
-// missing mail instead of the real fault. The story asks for two owner links, under the limit of 3.
+// missing mail instead of the real fault. The story asks for two owner links and one owner code: the shared limit of
+// 3 mails an hour per address (ADR 0028 ruling 5) is reached exactly, so a fourth owner mail would be refused.
 test.describe.configure({ mode: "serial", timeout: 90_000, retries: 0 });
 let ownerSecret = "";
 let viewerSecret = "";
@@ -97,6 +118,8 @@ test("login: the owner is created, a wrong code is refused, the right one signs 
   ownerSecret = await enrolledSecret(page);
 
   await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
+  await expect(page.getByRole("radio", { name: "Email me a code", exact: true })).toBeChecked();   // the owner exists now
+  await chooseAuthenticator(page);
   await page.getByLabel("Email", { exact: true }).fill(OWNER.email);
   await page.getByLabel("Password", { exact: true }).fill("not the password 1");
   await page.getByLabel("Authenticator code", { exact: true }).fill(clock.wrong(ownerSecret));
@@ -232,6 +255,56 @@ test("email sign-in link: the owner gets a one-time link, signs in with it and t
   await expect(page.getByRole("heading", { name: "Email me a sign-in link", exact: true })).toBeVisible();
 });
 
+test("email code: the owner signs in with the password and an emailed code; user management then needs the authenticator", async ({ page }) => {
+  await asClient(page, "203.0.113.8");
+  await page.goto("/");
+  await expect(page.getByRole("radio", { name: "Email me a code", exact: true })).toBeChecked();
+  await page.getByLabel("Email", { exact: true }).fill(OWNER.email);
+  await page.getByLabel("Password", { exact: true }).fill(OWNER.password);
+  const before = mails().length;
+  await page.getByRole("button", { name: "Email me a code", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Enter the code we emailed", exact: true })).toBeVisible();
+  await expect(page.getByText(/a 6-digit code is on its way to o•••@e•••\.com\. It works once, for 10 minutes/)).toBeVisible();
+  await expect(page.getByText(/^Resend code in [01]:\d\d$/)).toBeVisible();
+  await page.setViewportSize({ width: 360, height: 800 });                    // the code screen fits a phone too
+  await fitsThePhone(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  const mail = await mailAfter(before, CODE_SUBJECT);
+  expect(mail.to).toBe(OWNER.email);
+  const code = mail.body.split("\n")[0];
+  expect(code).toMatch(/^\d{6}$/);                                             // alone on the first line
+  expect(mail.subject).not.toContain(code);
+  await page.getByLabel("Code", { exact: true }).fill(code);                   // signs in on the sixth digit
+  await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
+  await expectRoleNotEmail(page, "Owner", OWNER.email);
+  const notice = await mailAfter(before, CODE_NOTICE_SUBJECT);                 // condition 10: every one is announced
+  expect(notice.body).not.toContain(code);
+  const stored = await page.evaluate(() => ({ local: Object.keys(localStorage), all: JSON.stringify({ ...localStorage, ...sessionStorage }) }));
+  expect(stored.local.filter((k) => k !== "signin.method")).toEqual([]);      // the browser keeps no code or password
+  expect(stored.all).not.toContain(code);
+  expect(stored.all).not.toContain(OWNER.password);
+
+  // ADR 0028 ruling 2: this session was opened with an emailed code, so an invite also needs the authenticator
+  await page.getByRole("button", { name: "Users", exact: true }).click();
+  const stepup = page.getByLabel("Authenticator code (or a recovery code)", { exact: true });
+  await expect(stepup).toBeVisible();
+  await page.getByPlaceholder("email to invite").fill("approver@example.com");
+  await page.getByRole("button", { name: "Create invite link", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "This action needs a current code from your authenticator app (or a recovery code), because you signed in with " +
+    "an email code. Type it above and try again.");
+  await expect(page.locator("code.mono")).toHaveCount(0);                      // refused: no invite was made
+  await stepup.fill(clock.fresh(ownerSecret));
+  await page.getByRole("button", { name: "Create invite link", exact: true }).click();
+  await expect(page.locator("code.mono")).toContainText("/#invite=");
+  await expect(stepup).toHaveValue("");                                        // spent: the next action asks afresh
+
+  const loggedOut = page.waitForResponse((r) => r.url().endsWith("/api/auth/logout"));
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await loggedOut;
+});
+
 test("unknown and non-owner addresses get the same neutral answer as the owner, and no email", async ({ page }) => {
   await asClient(page, "203.0.113.5");
   await page.goto("/");
@@ -277,15 +350,6 @@ test("a session the server no longer knows sends the page back to the sign-in sc
 
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 360, height: 800 }, isMobile: true, hasTouch: true });
-
-  async function fitsThePhone(page: Page) {
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360); // no sideways scroll
-    for (const el of await page.locator("form.login input, form.login button").all()) {
-      const box = await el.boundingBox();
-      expect(box && box.x >= 0 && box.x + box.width <= 360).toBe(true);
-      expect(box && box.height >= 44).toBe(true);                              // thumb-sized tap targets
-    }
-  }
 
   test("sign-in screens fit a phone, and the owner signs in with an emailed link there", async ({ page, baseURL }) => {
     await asClient(page, "203.0.113.6");

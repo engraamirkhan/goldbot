@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { api, currentUser, hasRole } from "../lib/api";
 import { roleLabel } from "../lib/roles";
 
@@ -100,6 +100,25 @@ function RecoveryCodes() {
   );
 }
 
+// Owner only (docs/ux/sign-in-email-code.md State H): whether the owner can sign in with an emailed code. Neutral,
+// never red: email codes do not stop trading.
+function EmailCodes() {
+  const [on, setOn] = useState<boolean | null>(null);
+  useEffect(() => {
+    let mounted = true;
+    api.authState().then((s) => { if (mounted) setOn(s.email_code); }).catch(() => {});
+    return () => { mounted = false; };
+  }, []);
+  if (on === null) return null;
+  return (
+    <p className="muted">
+      {on
+        ? "Email codes: on. You can sign in with your password and a code sent to your email. Re-arm, auto mode, password change, recovery codes and managing users still need your authenticator."
+        : 'Email codes: off. Mail is not set up on the server (RUNBOOK 2.10, "Email sign-in"). Sign-in uses your authenticator app.'}
+    </p>
+  );
+}
+
 // The signed-in user's own role and address: the one place a non-owner sees the email (docs/ux/header-role.md:
 // "the email is shown only on the Users tab (owner) and on the signed-in user's own Account tab").
 function YourSignIn() {
@@ -112,6 +131,7 @@ function YourSignIn() {
         <dt>Email</dt>
         <dd>{me ? me.email : <span className="muted">not known in this tab: sign out and in again to see it</span>}</dd>
       </dl>
+      {me?.role === "owner" && <EmailCodes />}
     </section>
   );
 }

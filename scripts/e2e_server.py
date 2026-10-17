@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import secrets
 import shutil
 import signal
 import sys
@@ -72,6 +73,14 @@ def install_totp_clock(state: str) -> None:
         return time.time() + 30.0 * steps
 
     auth_module._totp_now = now
+
+
+def install_email_code_key() -> None:
+    """A throwaway HMAC key for the emailed sign-in codes (ADR 0028), held only in this process. The API creates the
+    key in the OS keyring on first use (`auth.email_code_key`); an e2e run must neither write the developer's keyring
+    nor, on a host without one, leave a key in the repo's state/.secrets.json fallback. The key is seeded into the
+    module's in-process cache, which `email_code_key` reads first, so the keyring is never consulted."""
+    auth_module._KEY_CACHE[auth_module.EMAIL_CODE_KEY] = secrets.token_bytes(32)
 
 
 def seed_proposals(state: str) -> None:
@@ -210,6 +219,7 @@ def main() -> None:
     if args.fake_mailer:
         # refused (E2EMailerRefused) unless the flag is set and args.host, the address uvicorn binds below, is loopback
         mailer = CaptureMailer(Path(state) / "e2e_outbox.jsonl", bind_host=args.host)
+        install_email_code_key()                                  # mail is ready, so email codes are offered
         outbox = str(mailer.outbox)
         url_host = f"[{args.host}]" if ":" in args.host else args.host
         # host is required once enabled; CaptureMailer never connects anywhere
