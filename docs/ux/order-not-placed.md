@@ -38,7 +38,7 @@ The existing two ceiling codes may move into the same table, but their words sta
 | The MT5 box dropped an order that aged past `ORDER_MAX_AGE_S` (retcode 10006, message prefix `bridge_stale_order`) | `bridge_stale_order` |
 | Any other definite reject | `broker_refused:<retcode>`, e.g. `broker_refused:10019` |
 | The paper broker's 10027 (a duplicate send, not Algo Trading off) | `broker_refused:10027:paper` |
-| **BACKLOG 85 (for ui-ux approval):** the approval path raised before `_execute` wrote the order row (a bridge read failure at approval, a connection error: `not_sent:mt5_box`; any other error: `not_sent:engine`). Nothing left the engine | `not_sent:mt5_box`, `not_sent:engine` |
+| **BACKLOG 85 (for ui-ux approval):** the approval path raised before `_execute` wrote the order row (a bridge error, a connection failure or a timeout at approval: `not_sent:mt5_box`; any other error, a local disk or file error included: `not_sent:engine`). Nothing left the engine | `not_sent:mt5_box`, `not_sent:engine` |
 
 Bridge prefixes are tested before the retcode, because the bridge's own refusals also use 10006.
 

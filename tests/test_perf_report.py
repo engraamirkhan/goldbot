@@ -717,7 +717,7 @@ def test_the_report_counts_risk_check_refusals_broker_and_mt5_box_refusals_and_u
     ap = rep.accounts[0].approvals
     assert ap.approved == 10
     assert (ap.gate_refused_after_approval, ap.not_placed_after_approval, ap.not_confirmed_after_approval) == (1, 4, 2)
-    assert ("approved 10 (refused by the RiskGate at approval: 1; not placed by the MT5 box or the broker: 4; not "
+    assert ("approved 10 (refused by the RiskGate at approval: 1; not placed by the MT5 box, the broker or the engine: 4; not "
             "confirmed by the broker: 2), rejected 0") in format_markdown(rep)
 
 

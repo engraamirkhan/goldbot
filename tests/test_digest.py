@@ -469,7 +469,7 @@ def test_the_digest_counts_risk_check_refusals_broker_and_mt5_box_refusals_and_u
         nc = Confirmation(outcome=outcome) if outcome is not None else None    # type: ignore[arg-type]
         bus.archive(_proposal(f"a{i}", YDAY, Outcome.APPROVED, gate_refusal=codes, not_confirmed=nc))
     text = build_digest(tmp_path, NOW)
-    assert ("Proposals 10: ✅ 10 approved (1 refused by the risk check · 4 not placed by the MT5 box or the broker · "
+    assert ("Proposals 10: ✅ 10 approved (1 refused by the risk check · 4 not placed by the MT5 box, the broker or the engine · "
             "2 not confirmed by the broker) · ❌ 0 rejected · ⌛ 0 expired") in text
 
 

@@ -193,6 +193,9 @@ def test_an_approved_card_is_sorted_by_cause_risk_check_mt5_box_or_broker_not_co
     (BridgeUnavailable("bridge account: ConnectTimeout"), "not_sent:mt5_box"),
     (BridgeError("bridge account: HTTP 500 account() failed"), "not_sent:mt5_box"),
     (ConnectionError("reset"), "not_sent:mt5_box"), (TimeoutError("read"), "not_sent:mt5_box"),
+    # trading-safety LOW: a local disk or file error is the engine's, never "the MT5 box couldn't be reached"
+    (OSError(28, "No space left on device"), "not_sent:engine"), (PermissionError("state"), "not_sent:engine"),
+    (FileNotFoundError("orders.json"), "not_sent:engine"),
     (RuntimeError("bad state"), "not_sent:engine"), (KeyError("x"), "not_sent:engine"),
 ])
 def test_a_raise_before_the_order_row_is_coded_not_sent_by_the_mt5_box_or_the_engine(exc, code):

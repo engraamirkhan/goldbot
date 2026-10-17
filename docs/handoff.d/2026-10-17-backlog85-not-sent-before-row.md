@@ -13,5 +13,6 @@
     the proposal id, the exception, a host or a login. Rows added to docs/ux/order-not-placed.md for ui-ux approval.
   - API contract: `NotPlaced.by` gains "engine" and `NotPlaced.not_sent` (bool) is added; web/openapi.json and
     web/src/lib/schema.d.ts regenerated, `ProposalCard` picks the "Could not be sent" heading.
-  - Not changed: the digest and performance report count a not-sent card under "not placed by the MT5 box or the
-    broker" (`approval_cause` "not_placed"); its phrase does not name the engine.
+  - Trading-safety review LOW: only `BridgeError`, `ConnectionError` and `TimeoutError` read "the MT5 box couldn't be
+    reached"; any other `OSError` (a local disk or file error) is `not_sent:engine`. The digest and the performance
+    report count a not-sent card under "not placed by the MT5 box, the broker or the engine" (`CAUSE_PHRASE`).

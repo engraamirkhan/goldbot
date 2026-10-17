@@ -43,7 +43,9 @@ NOT_SENT = "not_sent"
 # not-confirmed card the broker later showed opened, an opened trade, in no refused count)
 ApprovalCause = Literal["risk_check", "not_placed", "not_confirmed", "opened"]
 CAUSE_PHRASE: dict[str, str] = {"risk_check": "refused by the risk check",
-                                "not_placed": f"not placed by {BY_PHRASE['mt5_box']} or {BY_PHRASE['broker']}",
+                                # BACKLOG 85: a not-sent card counts here too, so the engine is named
+                                "not_placed": f"not placed by {BY_PHRASE['mt5_box']}, {BY_PHRASE['broker']} or "
+                                              f"{BY_PHRASE['engine']}",
                                 "not_confirmed": "not confirmed by the broker"}
 _NC_OPENED = frozenset({"opened", "opened_closed", "opened_late"})
 
@@ -138,8 +140,10 @@ def refusal_code(res: OrderResult, *, paper: bool, definite: frozenset[int]) -> 
 
 def not_sent_code(exc: BaseException) -> str:
     """BACKLOG 85: the refusal code for an approval that raised before its order row existed. A bridge error or a
-    connection failure (`BridgeUnavailable` is a ConnectionError) is the MT5 box's; anything else is the engine's."""
-    return f"{NOT_SENT}:{'mt5_box' if isinstance(exc, BridgeError | OSError) else 'engine'}"
+    connection failure or timeout (`BridgeUnavailable` is a ConnectionError) is the MT5 box's; anything else, a local
+    disk or file error (another OSError) included, is the engine's (trading-safety review LOW)."""
+    box = isinstance(exc, BridgeError | ConnectionError | TimeoutError)
+    return f"{NOT_SENT}:{'mt5_box' if box else 'engine'}"
 
 
 def broker_code(code: str) -> int | None:
