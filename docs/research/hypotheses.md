@@ -165,7 +165,7 @@ rules are in the note, and the Q1 rows are in `preregistration-2027Q1.md`, "Q1 o
 |---|---|---|---|---|---|
 | H-A | The Dukascopy holiday-thinness proxy holds on the broker: pooled spr/ATR on THIN days >= 1.25× controls | pre-registered (forward, 2026-10-18 .. 2027-04-30); **at risk**: no tick-recorder job yet, and BACKLOG 1 is late | broker ticks (demo) | 0 (diagnostic) | 5 THIN dates; needs >= 4 clean, so losing Thanksgiving plus one more is INCONCLUSIVE |
 | H-B | Candidates entered on THIN days earn >= 0.05 R less gross than matched controls | pre-registered; read per family after its verdict | frozen Q1 candidate sets + the 2010-2025 instance list | 0 (diagnostic) | H-01 ~6 THIN candidates (INCONCLUSIVE by construction); H-04 ~110 |
-| H-C | Asia-session entries on US early-close holidays are not worse than on controls (margin −0.10 R) | pre-registered as Q1 open-budget row O-9; **only if H-04 continues** (tightened 2026-10-17 from "not retired") | H-04 candidates + instance list | 1 | ~97 entries, se ~0.12 R, **~13% power**: INCONCLUSIVE expected |
+| H-C | Asia-session entries on US early-close holidays are not worse than on controls (margin −0.10 R) | pre-registered as Q1 row O-9; **only if H-04 continues** (tightened 2026-10-17 from "not retired"); **0-trial diagnostic, only outcome "the whole-day block stays"** (quant finding 7, 2026-10-17); a trial again only at >= 50% power | H-04 candidates + instance list | 0 | ~97 entries, se ~0.12 R, **~13% power**: INCONCLUSIVE expected |
 
 ## B. Retired: do not re-test without new evidence
 
@@ -191,7 +191,7 @@ a quarter (to the one with the best post-retirement evidence, else by rotation) 
 | Quarter | Registry trials | Screens inside trials (K_eff) | DSR trial count to use for the next trial |
 |---|---|---|---|
 | Q4 2026 | #1–#20 | 0 | 20 |
-| Q1 2027 (planned) | #21–#40 at most (8 reserved: 4 queued + 4 contingent H-02 survivor slots; 12 open under the E-5 cap, allocated 2026-10-17 as rows O-1..O-10 + 2 free reserve, all conditional; corrected 2026-10-17 to settings) | H-02: K_eff = features screened when survivors go forward as features, groups screened only for whole-group survivors (recorded as `k_eff` on the discovery row; `registry.n_trials_effective` adds it) | 20 + trials run so far + K_eff for any survivor of H-02. Projection, end of Q1: up to 40 registry rows + H-02 K_eff (about 300 at the feature unit, about 10 at the group unit: quant question Q-H02U) + H-14 K_eff (about 12) ≈ 350 or ≈ 60; the gate-1 DSR then needs a model-filtered t of about 4.6 or 4.0 |
+| Q1 2027 (planned) | #21–#40 at most (8 reserved: 4 queued + 4 contingent H-02 survivor slots; 12 open under the E-5 cap, allocated 2026-10-17 as 9 conditional trial rows (O-1..O-10 without O-9, now a 0-trial diagnostic) + 3 free reserve; corrected 2026-10-17 to settings) | H-02: K_eff = features screened when survivors go forward as features, groups screened only for whole-group survivors (recorded as `k_eff` on the discovery row; `registry.n_trials_effective` adds it) | 20 + trials run so far + K_eff for any survivor of H-02. Projection, end of Q1: up to 40 registry rows + H-02 K_eff (about 10: **H-02 moved to `survivor_unit: group`, quant ruling Q-H02U 2026-10-17**; it was about 300 at the feature unit) + H-14 K_eff (about 12) ≈ 60; the gate-1 DSR then needs a model-filtered t of about 4.0 (was about 4.6) |
 
 ## Next generation (after Q1 verdicts)
 

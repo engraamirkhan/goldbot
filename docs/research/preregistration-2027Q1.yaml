@@ -36,7 +36,7 @@ rows:
       seed: 0
       stability_threshold: 0.6
       subsample_frac: 0.5
-      survivor_unit: feature
+      survivor_unit: group     # amended 2026-10-17 (Q-H02U, quant review of 0f9d6d8)
       top_k: 39
     group_mode: cluster
     macro: true
