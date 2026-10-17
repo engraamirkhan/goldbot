@@ -208,9 +208,21 @@ above is the queued part only.
     `macro_spx_dd20` is NaN before about 2016. A lower H-07 group stability in the early 4h folds is **expected; D4
     measures it**. D4 is the per-fold share of decision bars with an informative column per cluster, and the NaN
     share per `macro_*` column. It is reported on H-02's row before the run.
-  - **Declared option (one only):** H-07 is a **VIX-only cluster by data** until the first fold whose training
-    window has full SP500 coverage. The cluster map and the code are unchanged, and the reading rule is unchanged. A
-    coverage rule that relabels a cluster "inconclusive by coverage" is not adopted.
+  - **Declared option (one only):** H-07 is a **true VIX-only cluster in any fold whose training window lacks full
+    SP500 coverage.** In such a fold, `macro_spx_dd20` is set to NaN in **both** the training and the test rows.
+    - *Corrected 2026-10-17, quant re-verify of 4c98477, before any H-02 outcome.* "VIX-only by data" was false.
+      With the 4h rolling 48-month training window, test folds from about 2016-10 to about 2020-10 train on windows
+      that only partly cover SP500. There `macro_spx_dd20` is NaN before about 2016 and present after, so the NaN
+      marks the era and the model can learn it.
+    - Full coverage means the column is finite on every training row of the fold. Masking is per fold and uses
+      only the fold's own training rows' coverage, never the test rows.
+    - The cluster map and the reading rule are unchanged.
+    - A coverage rule that relabels a cluster "inconclusive by coverage" is not adopted.
+    - **Owed before the freeze (2027-01-01): a small code item** (implementer, quant-reviewer review). The fold mask
+      goes into the discovery and walk-forward path. The implementer adds the test
+      `test_spx_dd20_is_nan_in_train_and_test_for_folds_without_full_coverage`, which also checks that folds with
+      full coverage are untouched.
+    - Without that merged code, H-02 does not run, because its configuration would not be the one registered here.
   - **Macro release pinned.** `macro-v1` refreshes weekly, so H-02's row records the sha256 of the `macro_fred.parquet`
     it reads. That digest is written into the config at the 2026-12-11 config date (data-engineer), alongside the G4
     bar digests. A run on any other digest is a deviation.
