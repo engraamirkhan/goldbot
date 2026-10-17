@@ -49,3 +49,4 @@ Work is done only when every item holds; the report shows the evidence. Also mee
 - Backups are encrypted, off-host (never GitHub), with a restore drill and a backup-age health check.
 - Resource budgets are measured (RSS, disk growth) on the target VM sizes and stated.
 - Incidents produce a blameless postmortem with root cause, impact, timeline and a prevention item that is shipped.
+- **Owner-verified done:** for any deploy or owner-facing change, the owner can open it at its fixed address and complete the first action (sign in / approve), checked from outside the servers and recorded in the deploy note. Owner-facing commands are single-line and pasted from the rendered message before handing over. A classifier block on an operational step is reported to the owner in one line with the exact command the first time (incident 2026-10-17).
