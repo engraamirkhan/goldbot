@@ -80,7 +80,7 @@ describe("App when the session is gone server-side", () => {
         ? new Response(JSON.stringify({ needs_setup: false, email_link: false }), { status: 200, headers: { "content-type": "application/json" } })
         : new Response(JSON.stringify({ detail: "login required" }), { status: 401, headers: { "content-type": "application/json" } }))));
     apiModule.setToken("revoked-token");
-    apiModule.setUser({ email: "owner@example.com", role: "owner" });
+    apiModule.setUser({ email: "owner@example.com", role: "owner", signed_in_with: "password_totp" });
   });
   afterEach(() => { vi.unstubAllGlobals(); apiModule.setToken(null); });
 
