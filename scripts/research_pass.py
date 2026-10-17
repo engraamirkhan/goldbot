@@ -456,21 +456,28 @@ def _gates_lines(g: dict[str, Any] | None) -> list[str]:
 
 
 def day_summed_lines(mf: dict[str, Any] | None) -> list[str]:
-    """E-6: the day-summed DSR the discovery survivors' reading rule needs (pre-registration 2027Q1 O-5/O-6: "the
-    day-summed DSR is also >= 0.95"), beside the per-trade DSR and both effective ts, on this run's trial count. The
-    evaluator reads it on today's count (`gates.day_summed_check`); for other trials it is information only."""
+    """E-6: the DSRs the discovery survivors' reading rule needs (pre-registration 2027Q1 O-5/O-6: the gate's DSR and
+    "the day-summed DSR is also >= 0.95"), on this run's trial count, with both effective ts. The gate DSR is the
+    model-filtered `dsr` (on `ret`); the per-trade figure of the day-summed record is on R and labelled so (R basis, not
+    the gate DSR; quant review 2026-10-17). The evaluator reads both on today's count (`gates.day_summed_check`); for
+    other trials it is information only."""
     if not mf:
         return []
     raw = mf.get("day_summed")
     head = "### Day-summed DSR (reading rule O-5/O-6, discovery survivors; E-6)"
+    gate = mf.get("dsr")
+    gate_txt = f"gate DSR {float(gate):.3f}" if gate is not None else "gate DSR n/a"
     if raw is None:
-        return [head, "", f"- n/a: fewer than {MIN_TRADES_FOR_DSR} model-filtered trades or trading days", ""]
+        return [head, "", f"- n/a: fewer than {MIN_TRADES_FOR_DSR} model-filtered trades or trading days ({gate_txt})",
+                ""]
     d = DaySummedDsr(**raw)
-    fall = 1 - d.t_day_summed / d.t_per_trade if d.t_per_trade else 0.0
+    fall = 1 - d.t_day_summed / d.t_per_trade_r if d.t_per_trade_r else 0.0
     return [head, "",
-            f"- day-summed {d.dsr_day_summed:.3f} on {d.n_days} trading days, per-trade {d.dsr_per_trade:.3f} on "
-            f"{d.n_trades} trades, K = {d.n_trials} at this run (need {DSR_BAR}, re-read on the registry's count today)",
-            f"- effective t {d.t_day_summed:.2f} day-summed vs {d.t_per_trade:.2f} per trade ({fall:.1%} lower)", ""]
+            f"- day-summed {d.dsr_day_summed:.3f} on {d.n_days} trading days; {gate_txt} on {d.n_trades} trades (ret); "
+            f"K = {d.n_trials} at this run (need both >= {DSR_BAR}, re-read on the registry's count today)",
+            f"- per trade on R {d.dsr_per_trade_r:.3f} (R basis, not the gate DSR)",
+            f"- effective t {d.t_day_summed:.2f} day-summed vs {d.t_per_trade_r:.2f} per trade on R ({fall:.1%} lower)",
+            ""]
 
 
 def _rule_gates_lines(g: dict[str, Any] | None) -> list[str]:

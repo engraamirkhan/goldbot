@@ -136,34 +136,39 @@ class DaySummedDsr(FrozenRecord):
     days), with var(SR) = 1/G, the skew and kurtosis of those daily sums, and the same K = `n_trials_effective` as the
     gate". Same-day trades share one move, so a day carries less evidence than its trade count says; with one trade a
     day both sides are the same number. Stored with the trial (results.model_filtered.day_summed) and re-read on
-    today's K by `gates.day_summed_check`; `at(k)` recomputes it."""
+    today's K by `gates.day_summed_check`; `at(k)` recomputes it.
 
-    per_trade: DsrInputs               # the same net-R series, one observation per trade
+    The per-trade side is on the same net R, so the two ts compare like with like: it is R basis, NOT the gate DSR
+    (`summarize` and `gates.current_dsr` are on `ret`, the fraction of price; they differ when the risk varies, quant
+    review 2026-10-17). A pass verdict takes the gate's DSR from `current_dsr`, never from this record."""
+
+    per_trade_r: DsrInputs             # the same net-R series, one observation per trade (R basis, not the gate's)
     day_summed: DsrInputs              # one summed net R per entry UTC day with a trade: n = G, var(SR) = 1 / G
     n_trades: int = Field(ge=1)
     n_days: int = Field(ge=1)          # G
     n_trials: int = Field(ge=1)        # K the two DSRs below use
-    dsr_per_trade: float
+    dsr_per_trade_r: float             # R basis, not the gate DSR
     dsr_day_summed: float
-    t_per_trade: float                 # DsrInputs.t: the effective t each DSR deflates
+    t_per_trade_r: float               # DsrInputs.t: the effective t each DSR deflates
     t_day_summed: float
 
     @classmethod
-    def of(cls, per_trade: DsrInputs, day_summed: DsrInputs, n_trials: int) -> DaySummedDsr:
+    def of(cls, per_trade_r: DsrInputs, day_summed: DsrInputs, n_trials: int) -> DaySummedDsr:
         k = max(int(n_trials), 1)
-        return cls(per_trade=per_trade, day_summed=day_summed, n_trades=per_trade.n, n_days=day_summed.n, n_trials=k,
-                   dsr_per_trade=per_trade.dsr(k), dsr_day_summed=day_summed.dsr(k),
-                   t_per_trade=per_trade.t(), t_day_summed=day_summed.t())
+        return cls(per_trade_r=per_trade_r, day_summed=day_summed, n_trades=per_trade_r.n, n_days=day_summed.n,
+                   n_trials=k, dsr_per_trade_r=per_trade_r.dsr(k), dsr_day_summed=day_summed.dsr(k),
+                   t_per_trade_r=per_trade_r.t(), t_day_summed=day_summed.t())
 
     def at(self, n_trials: int) -> DaySummedDsr:
         """The same sample read on another trial count (the registry's `n_trials_effective` today)."""
-        return DaySummedDsr.of(self.per_trade, self.day_summed, n_trials)
+        return DaySummedDsr.of(self.per_trade_r, self.day_summed, n_trials)
 
 
 def day_summed_dsr(net_r: np.ndarray, entry_utc: pd.DatetimeIndex | pd.Series, n_trials: int) -> DaySummedDsr | None:
     """E-6: the day-summed DSR of model-filtered trades (`net_r`, net R per trade; `entry_utc`, each trade's entry) on
-    `n_trials`, beside the per-trade DSR of the same series. None below MIN_TRADES_FOR_DSR trades or days with a trade:
-    the statistic is asymptotic on its observations, which are the days (the reading then fails closed)."""
+    `n_trials`, beside the per-trade DSR of the same R series. None below MIN_TRADES_FOR_DSR trades or MIN_TRADES_FOR_DSR
+    days with a trade: the statistic is asymptotic on its observations, which are the days (O-5/O-6 rule, amended
+    2026-10-17 before any H-14 outcome; the reading then fails closed)."""
     r = np.asarray(net_r, dtype=float)
     sums = daily_sums(r, entry_utc)
     if len(r) < MIN_TRADES_FOR_DSR or len(sums) < MIN_TRADES_FOR_DSR:

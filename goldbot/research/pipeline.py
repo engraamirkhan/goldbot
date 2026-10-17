@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from goldbot.base import Record
+from goldbot.config import tf_seconds
 from goldbot.data.resample import mid
 from goldbot.features import FEATURES, build_features
 from goldbot.features.mtf import merge_higher_tf
@@ -284,19 +285,21 @@ def evaluate(prep: Prepared, model_features: list[str] | None = None, n_trials: 
     folds = splits_for(labels, spec.timeframe, **spec.walkforward)
     return _walk_forward(spec.agent_id, labels, prep.gross, prep.feats, cols, folds, prep.feature_version,
                          n_trials=n_trials, trades_per_year=trades_per_year, extra_cost_usd=extra_cost_usd,
-                         holdout=holdout, score_holdout=score_holdout, window=window, swap=prep.swap)
+                         holdout=holdout, score_holdout=score_holdout, window=window, timeframe=spec.timeframe,
+                         swap=prep.swap)
 
 
 def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feats: pd.DataFrame, cols: list[str],
                   folds: list[Fold], version: str, *, n_trials: int, trades_per_year: float | None,
                   extra_cost_usd: float, holdout: Window | None, score_holdout: bool,
-                  window: dict[str, Any], swap: SwapSpec | None = None,
+                  window: dict[str, Any], timeframe: str | None, swap: SwapSpec | None = None,
                   fold_cols: dict[int, list[str]] | None = None) -> ResearchResult:
     """Shared by the per-family and the pooled walk-forward: fit per fold, cross-fitted calibration, per-candidate
     threshold from its own barriers, metrics, rule-only expectancy and the design's gates (or the holdout rule).
     `labels` carries ret (net), risk, weight, target_atr, stop_atr and atr_sig; `feats` is row-aligned with it.
     fold_cols: per fold number, the inputs selected from that fold's training rows only (feature discovery);
-    folds not in it use `cols`."""
+    folds not in it use `cols`. timeframe: the decision bars' (a trade enters one bar after its signal, `entry_utc`);
+    None (a discovery trial, which no day-summed rule reads) records no `model_filtered.day_summed`."""
     y = labels["target_hit"].astype(int)
     oof_pred = np.full(len(labels), np.nan)
     last_model = None
@@ -338,7 +341,8 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
             "model_filtered": summarize(taken, tpy * len(taken) / max(len(scored), 1), n_trials),
             "oof_auc": _auc(scored["target_hit"].to_numpy(), scored["p_raw"].to_numpy()),
         })
-        metrics["model_filtered"]["day_summed"] = model_filtered_day_summed(taken, n_trials)
+        if timeframe is not None:
+            metrics["model_filtered"]["day_summed"] = model_filtered_day_summed(taken, n_trials, timeframe)
     if holdout is not None and score_holdout:
         metrics["holdout_verdict"] = holdout_verdict(taken["ret"].to_numpy(), taken["risk"].to_numpy())
     else:
@@ -350,15 +354,23 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
                           feature_version=version, importance=imp, model=last_model if "threshold" in metrics else None)
 
 
-def model_filtered_day_summed(taken: pd.DataFrame, n_trials: int) -> dict[str, Any] | None:
+def entry_utc(ts_utc: pd.Series | pd.DatetimeIndex, timeframe: str) -> pd.DatetimeIndex:
+    """When a candidate's trade enters: the open of the bar after its signal bar, ts_utc + one bar (labels fill at the
+    next bar's open; `ts_utc` is the signal bar's open). A 15m signal bar opening at 23:45 enters at 00:00 the next
+    UTC day (quant review 2026-10-17)."""
+    return pd.DatetimeIndex(pd.to_datetime(ts_utc, utc=True)) + pd.Timedelta(seconds=tf_seconds(timeframe))
+
+
+def model_filtered_day_summed(taken: pd.DataFrame, n_trials: int, timeframe: str) -> dict[str, Any] | None:
     """E-6 (pre-registration 2027Q1 O-5/O-6): the day-summed DSR of the model-filtered trades, "one summed net R per
     entry UTC day, over days with at least one model-filtered trade only", on the run's trial count, with the per-trade
     DSR and both effective ts of the same net-R series (metrics.DaySummedDsr dump; None below MIN_TRADES_FOR_DSR trades
-    or days). Net R = ret / risk, entry = ts_utc (the signal bar the trade enters on); a row without a positive risk is
-    no trade in R (as `expectancy`). Recorded with the trial so `gates.day_summed_check` re-reads it on today's K."""
+    or days). Net R = ret / risk; the entry day is `entry_utc` (ts_utc + one `timeframe` bar); a row without a positive
+    risk is no trade in R (as `expectancy`). Recorded with the trial so `gates.day_summed_check` re-reads it on
+    today's K."""
     ret, risk = taken["ret"].to_numpy(dtype=float), taken["risk"].to_numpy(dtype=float)
     ok = np.isfinite(ret) & np.isfinite(risk) & (risk > 0)
-    res = day_summed_dsr(ret[ok] / risk[ok], pd.DatetimeIndex(pd.to_datetime(taken["ts_utc"], utc=True))[ok], n_trials)
+    res = day_summed_dsr(ret[ok] / risk[ok], entry_utc(taken["ts_utc"], timeframe)[ok], n_trials)
     return res.model_dump() if res is not None else None
 
 
@@ -498,7 +510,7 @@ def run_pool(preps: list[Prepared], timeframe: str, n_trials: int = 1, trades_pe
     folds = splits_for(labels, timeframe)
     res = _walk_forward(ident.agent_id, labels, gross, feats, cols, folds, version, n_trials=n_trials,
                         trades_per_year=trades_per_year, extra_cost_usd=extra_cost_usd, holdout=holdout,
-                        score_holdout=score_holdout, window=window_for(timeframe),
+                        score_holdout=score_holdout, window=window_for(timeframe), timeframe=timeframe,
                         swap=preps[0].swap if preps else None)
     local = _local_predictions(preps, labels, feats, folds, version) if compare_local else {}
     res.metrics["by_family"] = _by_family(res.oof, gross, local, holdout if score_holdout else None)

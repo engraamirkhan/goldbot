@@ -558,7 +558,7 @@ def run_discovery(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
     surv_groups, selected, surv_n, skipped = survivor_selection(feat_t, grp_t, cfg)
     res = _walk_forward(agent_id, labels, gross, feats, ["side", *selected], folds, version, n_trials=n_trials,
                         trades_per_year=trades_per_year, extra_cost_usd=extra_cost_usd, holdout=holdout,
-                        score_holdout=False, window=window, swap=swap,
+                        score_holdout=False, window=window, timeframe=None, swap=swap,
                         fold_cols={s.k: ["side", *s.selected] for s in sels})
     oof = res.oof
     scored = oof[oof["p_raw"].notna()] if "p_raw" in oof else oof.iloc[0:0]

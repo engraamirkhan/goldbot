@@ -291,7 +291,7 @@ def case_trial_day_summed_dsr(tmp: Path) -> None:
     per_trade = DsrInputs(sr=0.15, n=900, skew=0.0, kurtosis=3.0, var_sr_trials=1 / 900)
     day = DsrInputs(sr=0.2, n=450, skew=0.0, kurtosis=3.0, var_sr_trials=1 / 450)
     stored = DaySummedDsr.of(per_trade, day, 5).model_dump()
-    stored = _newer({**stored, "per_trade": _newer(stored["per_trade"]), "day_summed": _newer(stored["day_summed"])})
+    stored = _newer({**stored, "per_trade_r": _newer(stored["per_trade_r"]), "day_summed": _newer(stored["day_summed"])})
     row = json.loads(json.dumps({"status": "evaluated", "results": {"model_filtered": {"day_summed": stored}}}))
     check = day_summed_check(row, [row])
     assert check["n_trials"] == 1 and check["dsr_day_summed"] == day.dsr(1)
