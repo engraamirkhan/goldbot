@@ -58,6 +58,10 @@
                     the balance tied out against the deals, and goldbot's closed records and open trades reconciled
                     with the broker by position id -> aux.db (ops/ledger.py; health check reconcile:<account>).
                     Skipped without a broker.
+* tick_record       daily (BACKLOG 79, goldbot/data/ticks.py): per account, the broker's ticks of every closed server
+                    day not yet recorded (copy_ticks, read-only, paged; missed days back-filled) ->
+                    state/ticks/<account>/<date>.parquet + index.json, older than ticks.retain_days pruned (health
+                    check ticks:<account>). Research data for the H-A holiday diagnostic. Skipped without a broker.
 * cpcv_quarterly    first Sunday of each quarter (M16): combinatorial purged CV (6 groups, 2 test: 15 splits, 5 paths)
                     of every trial that passed the gates, PBO against its family's other trials, attached to the
                     trial as evidence (not a trial) -> state/cpcv_<quarter>.md (research/cpcv.py).
@@ -1147,6 +1151,34 @@ def broker_ledger(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return out
 
 
+# ---------------------------------------------------------------------------------------------- broker tick record (BACKLOG 79)
+def tick_record(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Daily, per enabled account (goldbot/data/ticks.py): the broker's ticks of every closed server day not yet on
+    disk -> state/ticks/<account>/<date>.parquet (copy_ticks, read-only, paged), then retention. Health: ticks:<acc>."""
+    from goldbot.data.ticks import record_ticks
+    if ctx.broker_for is None:
+        return {"skipped": "no broker connection configured for the scheduler"}
+    out: dict[str, Any] = {}
+    failed: list[str] = []
+    for acc in ctx.accounts:
+        broker = None
+        try:                                  # one unreachable terminal does not stop the other account's record
+            broker = ctx.broker_for(acc)
+            if broker is None:
+                out[acc.account_id] = {"skipped": "no read-only broker connection for this account"}
+                continue
+            out[acc.account_id] = record_ticks(broker, ctx.state_dir, acc.account_id, acc.symbol, acc.server_tz, slot,
+                                               ctx.settings.ticks)
+        except Exception as exc:
+            failed.append(f"{acc.account_id}: {type(exc).__name__}: {exc}")
+        finally:
+            if broker is not None and hasattr(broker, "shutdown"):
+                broker.shutdown()
+    if failed:                                # the scheduler records the failure (health: scheduler check)
+        raise RuntimeError("tick_record failed for " + "; ".join(failed) + f" (done: {sorted(out)})")
+    return out
+
+
 # ---------------------------------------------------------------------------------------------- backups (state store step 2)
 def _backup_args(ctx: JobContext) -> tuple[Any, Callable[[str], str | None]]:
     from goldbot.ops import backup as backup_mod
@@ -1198,6 +1230,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "restore_drill": restore_drill,               # weekly restore + verification of the latest backup
     "cpcv_quarterly": cpcv_quarterly,             # M16 combinatorial purged CV + PBO of gate-passing trials
     "attribution": attribution,                   # BACKLOG 12: daily attribution for the staff agents (reporting only)
+    "tick_record": tick_record,                   # BACKLOG 79: broker ticks per server day for research (H-A)
 }
 
 

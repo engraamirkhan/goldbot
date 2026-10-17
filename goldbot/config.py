@@ -240,6 +240,9 @@ class SchedulerSettings(_Section):
     # review M2 (BACKLOG 18): a second calendar fetch on Sunday afternoon, so the new Forex Factory week is archived
     # before the weekly open (an enabled tier-2 window refuses entries until the archive covers the next 24 h)
     calendar_archive_sunday: ScheduleSettings = ScheduleSettings(kind="weekly", at="18:00", weekday=6, max_late_hours=3)
+    # BACKLOG 79: the broker's ticks of each closed server day -> state/ticks/<account>/ (goldbot/data/ticks.py), after
+    # the server day ends (21:00 UTC summer, 22:00 UTC winter for Europe/Athens); missed days are back-filled
+    tick_record: ScheduleSettings = ScheduleSettings(kind="daily", at="22:40", max_late_hours=20)
 
 
 class BackupSettings(_Section):
@@ -289,6 +292,24 @@ class LedgerSettings(_Section):
     pnl_tolerance: float = Field(0.01, ge=0)              # account currency per trade (audit RC-9: 0.01 per trade)
     close_grace_minutes: int = Field(15, ge=0, le=1440)   # a broker close this recent may not be recorded yet
     max_age_hours: float = Field(48.0, gt=0)              # health warns when the last ledger report is older
+
+
+class TickRecordSettings(_Section):
+    """The broker tick record (goldbot/data/ticks.py, BACKLOG 79; the H-A holiday diagnostic). Research data only: no
+    trading decision reads it."""
+    # H-A reads 2026-10-18 .. 2027-04-30 with controls 14 days either side, after the window closes: the first THIN day
+    # (2026-11-26) must still be on disk in mid-May 2027. 240 days of under 1 MB a day is under 200 MB an account
+    retain_days: int = Field(240, ge=2, le=3650)
+    min_london_ny_ticks: int = Field(1000, ge=0)          # health WARN below this (the account classifier's bar)
+    backfill_days: int = Field(7, ge=0, le=30)            # closed server days before the latest that a run re-checks
+
+    @model_validator(mode="after")
+    def _retention_outlives_the_backfill(self) -> TickRecordSettings:
+        """A day pruned while still inside the backfill would be pulled again every run and deleted again."""
+        if self.retain_days <= self.backfill_days + 1:
+            raise ValueError(f"ticks.retain_days ({self.retain_days}) must exceed backfill_days + 1 "
+                             f"({self.backfill_days + 1})")
+        return self
 
 
 class RetiredFamily(_Section):
@@ -554,6 +575,7 @@ class Settings(_Section):
     backup: BackupSettings = Field(default_factory=BackupSettings)
     attribution: AttributionSettings = Field(default_factory=AttributionSettings)
     ledger: LedgerSettings = Field(default_factory=LedgerSettings)
+    ticks: TickRecordSettings = Field(default_factory=TickRecordSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")
     @classmethod

@@ -196,6 +196,11 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
+   "job:tick_record",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
    "job:tournament",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -214,6 +219,11 @@
    "reconcile:icm-demo",
    "ok",
    "no reconciliation yet (feed_reconcile has not run)"
+  ],
+  [
+   "ticks:icm-demo",
+   "ok",
+   "no broker tick day recorded yet (scheduler job tick_record)"
   ],
   [
    "data_quality",
@@ -595,6 +605,11 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
+   "job:tick_record",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
    "job:tournament",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -625,9 +640,19 @@
    "no reconciliation yet (feed_reconcile has not run)"
   ],
   [
+   "ticks:icm-demo",
+   "ok",
+   "no broker tick day recorded yet (scheduler job tick_record)"
+  ],
+  [
    "reconcile:icm-b",
    "ok",
    "no reconciliation yet (feed_reconcile has not run)"
+  ],
+  [
+   "ticks:icm-b",
+   "ok",
+   "no broker tick day recorded yet (scheduler job tick_record)"
   ],
   [
    "costs:published",

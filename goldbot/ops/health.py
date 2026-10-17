@@ -55,6 +55,7 @@ from goldbot.base import (
 from goldbot.config import DEFAULT_SETTINGS, Settings, settings_dict
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
 from goldbot.data.crossfeed import check_reconciliation
+from goldbot.data.ticks import check_tick_record
 from goldbot.ops.checks._base import (
     _RANK,
     BACKUP_FAIL_H,
@@ -317,6 +318,7 @@ __all__ = [
     "check_supervisor",
     "check_throttle",
     "check_tick_errors",
+    "check_tick_record",
     "exit_code",
     "heartbeat_path",
     "log",

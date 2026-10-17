@@ -39,8 +39,8 @@ def _agent_runner(settings: Settings, store: Store,
 def _job_broker(acc: Any) -> Any:
     """A read-only Broker for the scheduler's feed_reconcile (D12) and broker_ledger (GAP-07/08): the account's bridge
     when one is configured, else on Windows the terminal's own saved login (attach without logging in, as the bridge
-    does); None elsewhere. Only read-only methods are called on it: get_bars, symbol_info, account, positions and
-    deals_since (all retry-safe bridge methods; never an order)."""
+    does); None elsewhere. Only read-only methods are called on it: get_bars, symbol_info, account, positions,
+    deals_since and copy_ticks (tick_record, BACKLOG 79; all retry-safe bridge methods; never an order)."""
     from goldbot.ops import accounts
     bridge = accounts.bridge_endpoint(acc.account_id)
     if bridge is not None:
