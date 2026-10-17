@@ -272,6 +272,17 @@ W2-1 merges, because W2-1 moves orders and approvals into a new store: exactly t
 fresh user per test (the owner is one per server) but by stepping the e2e server's TOTP clock (see TD-4), which also
 meets the "no override in `goldbot/api/auth.py`" rule. Text below is the original item.
 
+**Correction 2026-10-17 (issue #87, CI run on PR #85, trace read):** the TOTP waits were only the slowness; the failing
+step is the same line both times (the field fill after the spent-link reopen, `auth.spec.ts:~220/223`) and the cause is a
+dead dashboard. In CI's Chrome the sign-out request was cut off by the next navigation and the token stayed in the tab's
+session storage; the reopened page loaded as the dashboard, the server answered 401 to every query, and the SPA never
+returned to sign-in because `App` only learned `authed` from `hasToken()` at load (the page snapshot shows the dashboard
+with "can't reach the server"; the trace shows the whole test at 1.4 s, then 85 s of waiting for a field that could not
+appear). A real product bug (a revoked or expired session left the dashboard up forever), fixed in `App.tsx`/`api.ts`
+(`onSessionEnded`), with a vitest test and a stale-token e2e test, and the test now waits for sign-out to finish. Not
+reproduced locally with a different Chrome or Python (the local browser drops the token on the about:blank hop), so the
+stale-token test is the deterministic proof. The `aux.db-wal` and websocket lines in the CI log are shutdown noise.
+
 ~331 s of the dashboard file's 342 s are TOTP step waits (section 1). **Fix:** give each test that needs codes its own
 user and TOTP secret (a fresh secret has no spent steps), or seed users per test through `e2e_server.py` fixtures. Do
 **not** add a clock override or replay-guard bypass to `goldbot/api/auth.py`: production auth stays untouched. Then

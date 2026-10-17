@@ -50,6 +50,13 @@ function qs(q: Record<string, number | string | undefined>): string {
 let token: string | null = sessionStorage.getItem("goldbot_token");
 let me: Me | null = JSON.parse(sessionStorage.getItem("goldbot_me") ?? "null");
 
+const sessionEnded = new Set<() => void>();
+/** Called when the server says the session is gone (any 401), so the app can return to the sign-in screen. */
+export function onSessionEnded(fn: () => void): () => void {
+  sessionEnded.add(fn);
+  return () => { sessionEnded.delete(fn); };
+}
+
 export function setToken(t: string | null) {
   token = t;
   if (t) sessionStorage.setItem("goldbot_token", t); else { sessionStorage.removeItem("goldbot_token"); sessionStorage.removeItem("goldbot_me"); me = null; }
@@ -59,9 +66,22 @@ export const hasToken = () => !!token;
 export const currentUser = () => me;
 export const hasRole = (r: Role) => { const rank = { viewer: 0, approver: 1, owner: 2 }; return !!me && rank[me.role] >= rank[r]; };
 
+/** The server refused the token a request or socket was SENT with. Act only if that is still the current session: a
+ * late 401 for an old token (a poll in flight when someone signed in again) must not wipe the new session, and a failed
+ * sign-in (no token sent) is not a lost session. */
+function endSession(sent: string | null) {
+  if (sent === null || token !== sent) return;
+  setToken(null);
+  sessionEnded.forEach((fn) => fn());
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(path, { ...init, headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...(init?.headers ?? {}) } });
-  if (r.status === 401) { setToken(null); throw new Error("login required"); }
+  const sent = token;
+  const r = await fetch(path, { ...init, headers: { "content-type": "application/json", ...(sent ? { authorization: `Bearer ${sent}` } : {}), ...(init?.headers ?? {}) } });
+  if (r.status === 401) {
+    endSession(sent);
+    throw new Error("login required");
+  }
   if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.detail ?? r.statusText);
   return r.json() as Promise<T>;
 }
@@ -120,7 +140,9 @@ export function liveSocket(onEvent: (e: { type: string } & Record<string, unknow
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
   // browsers cannot set headers on a WebSocket: the session token is the first message, or the server closes it
-  ws.onopen = () => ws.send(JSON.stringify({ token }));
+  const sent = token;
+  ws.onopen = () => ws.send(JSON.stringify({ token: sent }));
+  ws.onclose = (e) => { if (e.code === 4401) endSession(sent); };   // the server dropped this session (app.py: logged out, expired, disabled)
   ws.onmessage = (m) => onEvent(JSON.parse(m.data));
   return () => ws.close();
 }

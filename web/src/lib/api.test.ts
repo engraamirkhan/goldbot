@@ -46,6 +46,52 @@ describe("api client", () => {
     expect(sessionStorage.getItem("goldbot_token")).toBeNull();
   });
 
+  it("a late 401 for an old token does not end the session that replaced it", async () => {
+    const { api, setToken, hasToken, onSessionEnded } = await import("./api");
+    const ended = vi.fn();
+    onSessionEnded(ended);
+    let answer: (r: Response) => void = () => {};
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise<Response>((res) => { answer = res; })));
+    setToken("token-A");
+    const poll = api.accounts();                       // in flight with token A
+    setToken("token-B");                               // a fresh sign-in lands meanwhile
+    answer(jsonResponse(401, { detail: "login required" }));
+    await expect(poll).rejects.toThrow("login required");
+    expect(hasToken()).toBe(true);
+    expect(sessionStorage.getItem("goldbot_token")).toBe("token-B");
+    expect(ended).not.toHaveBeenCalled();
+  });
+
+  it("a 401 for a request sent without a token (a failed sign-in) is not a lost session", async () => {
+    const { api, setToken, onSessionEnded } = await import("./api");
+    const ended = vi.fn();
+    onSessionEnded(ended);
+    setToken(null);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(401, { detail: "invalid credentials" })));
+    await expect(api.accounts()).rejects.toThrow("login required");
+    expect(ended).not.toHaveBeenCalled();
+  });
+
+  it("tells the app when the live socket is closed with 4401 for the current token, not for an old one", async () => {
+    const { liveSocket, setToken, onSessionEnded, hasToken } = await import("./api");
+    const sockets: { onclose: ((e: { code: number }) => void) | null; send: () => void; close: () => void }[] = [];
+    vi.stubGlobal("WebSocket", class { onclose = null; send() {} close() {} constructor() { sockets.push(this as never); } });
+    const ended = vi.fn();
+    onSessionEnded(ended);
+    setToken("token-A");
+    liveSocket(() => {});
+    setToken("token-B");
+    sockets[0].onclose?.({ code: 4401 });              // the old socket's session is gone; B is a new one
+    expect(hasToken()).toBe(true);
+    expect(ended).not.toHaveBeenCalled();
+    liveSocket(() => {});
+    sockets[1].onclose?.({ code: 1006 });              // a dropped connection is not a lost session
+    expect(hasToken()).toBe(true);
+    sockets[1].onclose?.({ code: 4401 });
+    expect(hasToken()).toBe(false);
+    expect(ended).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces the server's detail message on errors", async () => {
     const { api } = await import("./api");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(400, { detail: "cannot demote the last owner" })));

@@ -218,7 +218,12 @@ test("email sign-in link: the owner gets a one-time link, signs in with it and t
   expect(notice.body).not.toContain("203.0.113.4");
   expect(notice.body).not.toContain(token);
 
+  // wait for the sign-out to finish: reopening while its request is in flight cuts it off and leaves the token in the
+  // tab's session storage (issue #87), so the reopened page would be a dashboard, not the sign-in form
+  const loggedOut = page.waitForResponse((r) => r.url().endsWith("/api/auth/logout"));
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await loggedOut;
+  await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
   await openFromMail(page, link);                                              // a used link is spent
   await page.getByLabel("Authenticator code", { exact: true }).fill(clock.fresh(ownerSecret));
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -259,6 +264,15 @@ test("unknown and non-owner addresses get the same neutral answer as the owner, 
   const nobody = await forgot(UNKNOWN, clock.wrong(viewerSecret), "203.0.113.54");
   expect(await forgot(VIEWER.email, clock.wrong(viewerSecret), "203.0.113.55")).toEqual(nobody);
   expect(nobody).toEqual({ status: 403, body: JSON.stringify({ detail: "invalid credentials" }) });
+});
+
+test("a session the server no longer knows sends the page back to the sign-in screen", async ({ page }) => {
+  await asClient(page, "203.0.113.7");
+  await page.addInitScript(() => sessionStorage.setItem("goldbot_token", "revoked-or-expired"));   // a stale tab
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign out", exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => sessionStorage.getItem("goldbot_token"))).toBeNull();
 });
 
 test.describe("on a phone", () => {

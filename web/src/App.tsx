@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, currentUser, hasRole, hasToken, liveSocket, setToken } from "./lib/api";
+import { api, currentUser, hasRole, hasToken, liveSocket, onSessionEnded, setToken } from "./lib/api";
 import { roleLabel } from "./lib/roles";
 import { Login } from "./screens/Login";
 import { Overview } from "./screens/Overview";
@@ -23,6 +23,8 @@ export function App() {
   const [authed, setAuthed] = useState(hasToken());
   const [tab, setTab] = useState<Tab>("Overview");
   const qc = useQueryClient();
+
+  useEffect(() => onSessionEnded(() => setAuthed(false)), []);
 
   useEffect(() => {
     if (!authed) return;
