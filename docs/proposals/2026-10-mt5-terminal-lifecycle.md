@@ -77,3 +77,23 @@ terminal `Restart=always` + single-instance `ExecStartPre`; bootstrap installs i
 `/health` maps fake `terminal_info`/`account_info` to each state with no login digits; two `None` reads exit non-zero.
 
 Reviews: security (root parses mt5 output), trading-safety (bridge exit), code-review.
+
+## Conditions from the security plan review (APPROVE-WITH-CONDITIONS, 0526017, 2026-10-17)
+
+Binding on the build.
+1. The `/health` probe runs as a separate unprivileged step or user (`DynamicUser=` or `nobody`) and emits only a
+   fixed token: `ok|not_running|not_connected|not_logged_in|wrong_account|noanswer`. Root consumes the token. If one
+   root script remains, root never `eval`s, expands or logs the raw body and never puts it in a path, unit name or
+   argument; bounded read (`curl --max-filesize 1024 -m …`), exact-match `case` on the allow-list, no regex/grep;
+   anything else is `noanswer`.
+2. Log only the matched token, never the body (journald log injection).
+3. Root's actions stay fixed: `systemctl restart` on two literal units derived from the already-validated `$inst`;
+   the body never chooses an action or a unit.
+4. Test 5 includes newline, NUL, ANSI and `$(...)` bodies and asserts the log contains no body bytes.
+5. The `Config/` backup (holds the saved login): `umask 077`, mt5-owned, in a 0700 directory outside the git clone and
+   outside any synced or backed-up path; no scp/upload/cron copy; deleted after the test passes or kept only there;
+   never pasted (contents or hashes) into issue comments.
+6. Health wording carries no login, server or host; a test fails if `/health` or the check text matches `\d{6,}` or
+   contains the server name; `wrong_account` echoes neither account.
+7. The incident file in `docs/incidents/` records states and timings only — no login, server, hostname, VNC or tunnel
+   details.
