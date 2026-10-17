@@ -49,6 +49,8 @@ from goldbot.telegram.approvals import (
 )
 
 log = logging.getLogger(__name__)
+UNCONFIRMED_LISTED_S = 8 * 86400.0      # BACKLOG 72: an unresolved order's card is listed at most this long
+UNRESOLVED = ("pending", "still_unknown")
 
 
 class BusDecision(Record):
@@ -242,14 +244,22 @@ class ApprovalBus:
     def recent(self, max_age_s: float = 600.0, limit: int = 20) -> list[tuple[Proposal, BusDecision | None]]:
         """Proposals decided in the last `max_age_s`, newest first, for the dashboard's decided cards: those the engine
         has finished (archived with an outcome, decision None) and those decided but not yet applied by the engine
-        (outcome None, with the decision)."""
-        cutoff = time.time() - max_age_s
+        (outcome None, with the decision). BACKLOG 72: an approval whose order the broker has not confirmed yet
+        (`not_confirmed` pending or still unknown) stays listed, first, until the engine resolves it (at most
+        UNCONFIRMED_LISTED_S, past the engine's 7-day look-up); a resolved one follows the window from its resolution
+        (the engine rewrites the file then)."""
+        now = time.time()
+        cutoff, unresolved_cutoff = now - max_age_s, now - UNCONFIRMED_LISTED_S
         rows: list[tuple[float, Proposal, BusDecision | None]] = []
         for f in self.done_dir.glob("*.json"):
             try:
                 mtime = f.stat().st_mtime
                 if mtime >= cutoff:
                     rows.append((mtime, load_record_json(Proposal, f.read_text(), source="approvals/done"), None))
+                elif mtime >= unresolved_cutoff:
+                    p = load_record_json(Proposal, f.read_text(), source="approvals/done")
+                    if p.not_confirmed is not None and p.not_confirmed.outcome in UNRESOLVED:
+                        rows.append((now, p, None))
             except (ValueError, OSError):
                 continue
         for f in self.decisions_dir.glob("*.json"):

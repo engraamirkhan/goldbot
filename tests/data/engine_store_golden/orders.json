@@ -1,11 +1,5 @@
 {
- "30bde012f80794b8": {
-  "closing": [],
-  "open": {},
-  "records_lost": [],
-  "sent": {}
- },
- "49f2a393f7ba5800": {
+ "2ab08775d2d2a602": {
   "closing": [],
   "open": {
    "1": {
@@ -49,12 +43,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -64,12 +60,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "sending",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -79,16 +77,24 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   }
  },
- "6ca47e51bb473981": {
+ "30bde012f80794b8": {
+  "closing": [],
+  "open": {},
+  "records_lost": [],
+  "sent": {}
+ },
+ "be447a8013b5f089": {
   "closing": [],
   "open": {},
   "records_lost": [
@@ -103,12 +109,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "sending",
     "tp": 2406.0,
-    "ts_utc": "2020-01-06T09:00:00+00:00"
+    "ts_utc": "2020-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   }
  }

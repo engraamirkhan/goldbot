@@ -26,6 +26,7 @@ from pydantic import Field, model_validator
 
 from goldbot.base import FrozenRecord, Record
 from goldbot.data.timeutil import heartbeat_problem
+from goldbot.execution.not_confirmed import Confirmation
 
 if TYPE_CHECKING:
     from goldbot.ops.account_view import LossBudget
@@ -200,6 +201,9 @@ class Proposal(Record):
     decided_ts: float | None = None
     decided_channel: str | None = None
     gate_refusal: list[str] | None = None    # approved, but the RiskGate re-check at approval time refused the order
+    # BACKLOG 72: approved and sent, but the broker neither filled nor refused it (`gate_refusal` ["not_confirmed"]):
+    # what the engine's look-up at the broker found, for the card and the dashboard; None on every other proposal
+    not_confirmed: Confirmation | None = None
 
     @model_validator(mode="before")
     @classmethod

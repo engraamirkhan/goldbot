@@ -149,6 +149,9 @@ class AccountState(Record):
     holiday_thin: bool = False        # a thin-liquidity server date of the holiday list (risk.holidays)
     calendar_unavailable: bool = False  # an enabled calendar window has no calendar to judge by (fail closed)
     bridge_incompatible: bool = False  # the MT5 bridge lacks a method, protocol or zone this brain needs (BACKLOG 42)
+    # BACKLOG 72 (trading-safety condition 1, the refusal path): an order the broker neither filled nor refused is still
+    # unresolved, so its exposure is unknown; entries are refused `unconfirmed_order_pending` until it is settled
+    unconfirmed_order: bool = False
     # BACKLOG 19/35: what this account's open positions can still lose down to their stops, account currency
     # (goldbot/risk/open_risk.py); None = unknown (not read yet, a position without SL, or no usable conversion; review
     # LOW-2: unknown until the engine has read the positions), and the positions on each side, whoever opened them
@@ -478,6 +481,8 @@ class RiskGate:
             reasons.append("tick_error")
         if st.bridge_incompatible:
             reasons.append("bridge_incompatible")
+        if st.unconfirmed_order:
+            reasons.append("unconfirmed_order_pending")
         if st.data_recovering:
             reasons.append("data_recovering")
         if st.spread_points > L.max_spread_points:

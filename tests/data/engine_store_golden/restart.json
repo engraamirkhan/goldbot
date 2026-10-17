@@ -81,7 +81,7 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "0a151f080a02c74e": {
+ "073cca4049759d7a": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -139,12 +139,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -154,12 +156,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -169,16 +173,18 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": null,
+  "propose_only_until": null,
+  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
   "rearm_seen": "rearm-1",
   "records_lost": [],
   "sent_ids": [
@@ -186,7 +192,7 @@
    "fresh-sending",
    "fresh-unfilled"
   ],
-  "stage": "size_down",
+  "stage": "halted",
   "stage2_clean_since": null,
   "stage2_pending_since": null,
   "week_start_equity": 10100.0,
@@ -213,6 +219,123 @@
   "stage": "size_down",
   "stage2_clean_since": null,
   "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "0aadf735ad6c65af": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": null,
+  "kill_everything": false,
+  "kill_pending": false,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": null,
+  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "halted",
+  "stage2_clean_since": null,
+  "stage2_pending_since": null,
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
@@ -243,117 +366,6 @@
   ],
   "sent_ids": [
    "old-sending"
-  ],
-  "stage": "normal",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "0b5879b6414dd00b": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": null,
-  "kill_everything": true,
-  "kill_pending": true,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": null,
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
   ],
   "stage": "normal",
   "stage2_clean_since": null,
@@ -545,117 +557,6 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "166e47e0d032e664": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": true,
-  "kill_pending": true,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "normal",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
  "1716507cb696b9aa": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
@@ -690,41 +591,7 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "1abdabc2c2cef552": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "old-sending"
-   }
-  ],
-  "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": false,
-  "kill_pending": false,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": false,
-  "open": {},
-  "orders": {},
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [
-   7
-  ],
-  "sent_ids": [
-   "old-sending"
-  ],
-  "stage": "size_down",
-  "stage2_clean_since": null,
-  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "1b726a27ff5183b5": {
+ "1ab4141c293667a3": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -736,11 +603,11 @@
     "proposal": "fresh-sending"
    }
   ],
-  "halted_at": null,
+  "halted_at": "2025-03-04T10:00:00+00:00",
   "kill_everything": false,
   "kill_pending": false,
   "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": false,
+  "mode_reset_due": true,
   "open": {
    "1": {
     "agent_id": "session_open-g0-x",
@@ -782,12 +649,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -797,12 +666,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -812,22 +683,58 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
   "propose_only_until": null,
-  "rearm_refused": null,
+  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
   "rearm_seen": "rearm-1",
   "records_lost": [],
   "sent_ids": [
    "fresh-filled",
    "fresh-sending",
    "fresh-unfilled"
+  ],
+  "stage": "halted",
+  "stage2_clean_since": null,
+  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "1abdabc2c2cef552": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "old-sending"
+   }
+  ],
+  "halted_at": "2025-03-04T10:00:00+00:00",
+  "kill_everything": false,
+  "kill_pending": false,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": false,
+  "open": {},
+  "orders": {},
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [
+   7
+  ],
+  "sent_ids": [
+   "old-sending"
   ],
   "stage": "size_down",
   "stage2_clean_since": null,
@@ -893,6 +800,240 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
+ "1f3542f6c69fd935": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": null,
+  "kill_everything": true,
+  "kill_pending": true,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": null,
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "normal",
+  "stage2_clean_since": null,
+  "stage2_pending_since": null,
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "21be18adf39e3d7c": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": null,
+  "kill_everything": false,
+  "kill_pending": false,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": false,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "normal",
+  "stage2_clean_since": null,
+  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
  "22441d11a8b78cea": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
@@ -917,79 +1058,7 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "24371f7da285932e": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [],
-  "halted_at": null,
-  "kill_everything": true,
-  "kill_pending": true,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {},
-  "orders": {},
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [],
-  "stage": "size_down",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "27808710ce3bc39f": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [],
-  "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": false,
-  "kill_pending": false,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": false,
-  "open": {},
-  "orders": {},
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [],
-  "stage": "size_down",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "2c72f0d95bffbcca": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [],
-  "halted_at": null,
-  "kill_everything": false,
-  "kill_pending": false,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {},
-  "orders": {},
-  "propose_only_until": null,
-  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [],
-  "stage": "halted",
-  "stage2_clean_since": null,
-  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "2e68c0a44f579309": {
+ "23ccad0a4d905ca9": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -1047,12 +1116,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -1062,12 +1133,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -1077,12 +1150,179 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": null,
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "normal",
+  "stage2_clean_since": null,
+  "stage2_pending_since": null,
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "24371f7da285932e": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [],
+  "halted_at": null,
+  "kill_everything": true,
+  "kill_pending": true,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {},
+  "orders": {},
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [],
+  "stage": "size_down",
+  "stage2_clean_since": null,
+  "stage2_pending_since": null,
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "27808710ce3bc39f": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [],
+  "halted_at": "2025-03-04T10:00:00+00:00",
+  "kill_everything": false,
+  "kill_pending": false,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": false,
+  "open": {},
+  "orders": {},
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [],
+  "stage": "size_down",
+  "stage2_clean_since": null,
+  "stage2_pending_since": null,
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "280692e5fb105222": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": "2025-03-04T10:00:00+00:00",
+  "kill_everything": true,
+  "kill_pending": true,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
   "propose_only_until": "2025-04-04T10:00:00+00:00",
@@ -1094,6 +1334,147 @@
    "fresh-sending",
    "fresh-unfilled"
   ],
+  "stage": "halted",
+  "stage2_clean_since": null,
+  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "2aa969a4a14eaa42": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": null,
+  "kill_everything": true,
+  "kill_pending": true,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": null,
+  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "halted",
+  "stage2_clean_since": null,
+  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "2c72f0d95bffbcca": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [],
+  "halted_at": null,
+  "kill_everything": false,
+  "kill_pending": false,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {},
+  "orders": {},
+  "propose_only_until": null,
+  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [],
   "stage": "halted",
   "stage2_clean_since": null,
   "stage2_pending_since": "2025-03-05T09:55:00+00:00",
@@ -1153,117 +1534,6 @@
   "records_lost": [],
   "sent_ids": [],
   "stage": "halted",
-  "stage2_clean_since": null,
-  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "306e01bce27a62aa": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": null,
-  "kill_everything": true,
-  "kill_pending": true,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "normal",
   "stage2_clean_since": null,
   "stage2_pending_since": "2025-03-05T09:55:00+00:00",
   "week_start_equity": 10100.0,
@@ -1409,6 +1679,123 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
+ "39538ccac1d281be": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": null,
+  "kill_everything": false,
+  "kill_pending": false,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": false,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": null,
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "size_down",
+  "stage2_clean_since": null,
+  "stage2_pending_since": null,
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
  "3bd03cdd0c13f6ae": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
@@ -1501,117 +1888,6 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "3d6e2da1322bb347": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": null,
-  "kill_everything": false,
-  "kill_pending": false,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": false,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "size_down",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
  "42cc6dd5d32b56ed": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
@@ -1636,118 +1912,7 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "43a015591a0074fc": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": false,
-  "kill_pending": false,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": false,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "size_down",
-  "stage2_clean_since": null,
-  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "47492b9a19079606": {
+ "440088459bff5204": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -1760,10 +1925,10 @@
    }
   ],
   "halted_at": null,
-  "kill_everything": false,
-  "kill_pending": false,
+  "kill_everything": true,
+  "kill_pending": true,
   "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": false,
+  "mode_reset_due": true,
   "open": {
    "1": {
     "agent_id": "session_open-g0-x",
@@ -1805,12 +1970,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -1820,12 +1987,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -1835,15 +2004,17 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
-  "propose_only_until": null,
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
   "rearm_refused": null,
   "rearm_seen": "rearm-1",
   "records_lost": [],
@@ -1852,7 +2023,7 @@
    "fresh-sending",
    "fresh-unfilled"
   ],
-  "stage": "size_down",
+  "stage": "normal",
   "stage2_clean_since": null,
   "stage2_pending_since": null,
   "week_start_equity": 10100.0,
@@ -1892,6 +2063,123 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
+ "4c5067dfd99f6515": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": "2025-03-04T10:00:00+00:00",
+  "kill_everything": false,
+  "kill_pending": false,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": false,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": null,
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "normal",
+  "stage2_clean_since": null,
+  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
  "4db915bc3cac37e8": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
@@ -1926,117 +2214,6 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "4ded09ca9f0ccd83": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": null,
-  "kill_everything": false,
-  "kill_pending": false,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": null,
-  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "halted",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
  "4e1ef9d99a07e367": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
@@ -2058,228 +2235,6 @@
   "stage": "normal",
   "stage2_clean_since": null,
   "stage2_pending_since": "2025-03-05T09:55:00+00:00",
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "4eadb9aa52883957": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": null,
-  "kill_everything": false,
-  "kill_pending": false,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": null,
-  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "halted",
-  "stage2_clean_since": null,
-  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "4f1e956dacfdd05b": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": null,
-  "kill_everything": false,
-  "kill_pending": false,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "halted",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
@@ -2409,117 +2364,6 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "535eb2662d4965e3": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": false,
-  "kill_pending": false,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": false,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": null,
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "size_down",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
  "54095235b83effd3": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
@@ -2568,7 +2412,7 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "54dd9298a3a4a45c": {
+ "547927476678e361": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -2581,8 +2425,8 @@
    }
   ],
   "halted_at": null,
-  "kill_everything": true,
-  "kill_pending": true,
+  "kill_everything": false,
+  "kill_pending": false,
   "last_reset": "2025-03-05T01:00:00+00:00",
   "mode_reset_due": true,
   "open": {
@@ -2626,12 +2470,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -2641,12 +2487,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -2656,15 +2504,17 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "propose_only_until": null,
   "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
   "rearm_seen": "rearm-1",
   "records_lost": [],
@@ -2676,228 +2526,6 @@
   "stage": "halted",
   "stage2_clean_since": null,
   "stage2_pending_since": "2025-03-05T09:55:00+00:00",
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "55df40a37199ea9a": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": null,
-  "kill_everything": true,
-  "kill_pending": true,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "halted",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "564820d0ccee44b8": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": null,
-  "kill_everything": true,
-  "kill_pending": true,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "normal",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
@@ -2969,7 +2597,7 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "5847640befbca735": {
+ "57604480f1ce6a7b": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -2982,10 +2610,10 @@
    }
   ],
   "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": true,
-  "kill_pending": true,
+  "kill_everything": false,
+  "kill_pending": false,
   "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
+  "mode_reset_due": false,
   "open": {
    "1": {
     "agent_id": "session_open-g0-x",
@@ -3027,12 +2655,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -3042,12 +2672,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -3057,15 +2689,134 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
-  "propose_only_until": null,
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "normal",
+  "stage2_clean_since": null,
+  "stage2_pending_since": null,
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "5843cf60141f2368": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": null,
+  "kill_everything": false,
+  "kill_pending": false,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": false,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
   "rearm_refused": null,
   "rearm_seen": "rearm-1",
   "records_lost": [],
@@ -3135,6 +2886,123 @@
   "stage": "size_down",
   "stage2_clean_since": null,
   "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "59e83596792cb707": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": null,
+  "kill_everything": true,
+  "kill_pending": true,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": null,
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "size_down",
+  "stage2_clean_since": null,
+  "stage2_pending_since": null,
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
@@ -3230,6 +3098,123 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
+ "5cc3b687c697da22": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": null,
+  "kill_everything": true,
+  "kill_pending": true,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "halted",
+  "stage2_clean_since": null,
+  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
  "6100c21a062ba24f": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
@@ -3264,118 +3249,7 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "66c3a06816264da0": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": true,
-  "kill_pending": true,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": null,
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "normal",
-  "stage2_clean_since": null,
-  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "6782566700dbe3a7": {
+ "6afa8ca28346a517": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -3433,12 +3307,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -3448,12 +3324,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -3463,15 +3341,17 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
-  "propose_only_until": null,
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
   "rearm_refused": null,
   "rearm_seen": "rearm-1",
   "records_lost": [],
@@ -3481,117 +3361,6 @@
    "fresh-unfilled"
   ],
   "stage": "size_down",
-  "stage2_clean_since": null,
-  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "6a033b7394c769a5": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": false,
-  "kill_pending": false,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": false,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": null,
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "normal",
   "stage2_clean_since": null,
   "stage2_pending_since": "2025-03-05T09:55:00+00:00",
   "week_start_equity": 10100.0,
@@ -3655,7 +3424,7 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "7037d8a91c79405f": {
+ "6fd59038edc50d95": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -3667,11 +3436,11 @@
     "proposal": "fresh-sending"
    }
   ],
-  "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": true,
-  "kill_pending": true,
+  "halted_at": null,
+  "kill_everything": false,
+  "kill_pending": false,
   "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
+  "mode_reset_due": false,
   "open": {
    "1": {
     "agent_id": "session_open-g0-x",
@@ -3713,12 +3482,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -3728,12 +3499,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -3743,12 +3516,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
   "propose_only_until": null,
@@ -3762,11 +3537,11 @@
   ],
   "stage": "size_down",
   "stage2_clean_since": null,
-  "stage2_pending_since": null,
+  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "70ffbebac8261d64": {
+ "7465609bca91179e": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -3778,7 +3553,7 @@
     "proposal": "fresh-sending"
    }
   ],
-  "halted_at": "2025-03-04T10:00:00+00:00",
+  "halted_at": null,
   "kill_everything": false,
   "kill_pending": false,
   "last_reset": "2025-03-05T01:00:00+00:00",
@@ -3824,12 +3599,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -3839,12 +3616,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -3854,12 +3633,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
   "propose_only_until": "2025-04-04T10:00:00+00:00",
@@ -3871,229 +3652,7 @@
    "fresh-sending",
    "fresh-unfilled"
   ],
-  "stage": "normal",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "71d18a71994b7d5b": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": null,
-  "kill_everything": false,
-  "kill_pending": false,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": false,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": null,
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "normal",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "7555e6ee1c2dfdcd": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": null,
-  "kill_everything": true,
-  "kill_pending": true,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": null,
-  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "halted",
+  "stage": "size_down",
   "stage2_clean_since": null,
   "stage2_pending_since": null,
   "week_start_equity": 10100.0,
@@ -4259,7 +3818,7 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "82f36466320b127f": {
+ "801dd40c6fa8b1ab": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -4317,12 +3876,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -4332,12 +3893,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -4347,15 +3910,17 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "propose_only_until": null,
   "rearm_refused": null,
   "rearm_seen": "rearm-1",
   "records_lost": [],
@@ -4366,11 +3931,11 @@
   ],
   "stage": "normal",
   "stage2_clean_since": null,
-  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "stage2_pending_since": null,
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "843276fdcd4efc42": {
+ "87d2711678a79245": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -4428,12 +3993,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -4443,12 +4010,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -4458,15 +4027,17 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
-  "propose_only_until": null,
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
   "rearm_refused": null,
   "rearm_seen": "rearm-1",
   "records_lost": [],
@@ -4477,11 +4048,11 @@
   ],
   "stage": "normal",
   "stage2_clean_since": null,
-  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "stage2_pending_since": null,
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "892fd0c73deb0255": {
+ "89c54eb6eab4969c": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -4539,12 +4110,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -4554,12 +4127,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -4569,12 +4144,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
   "propose_only_until": "2025-04-04T10:00:00+00:00",
@@ -4626,7 +4203,7 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "8c970e992dd5160c": {
+ "8b374c16e77aede1": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -4638,9 +4215,9 @@
     "proposal": "fresh-sending"
    }
   ],
-  "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": false,
-  "kill_pending": false,
+  "halted_at": null,
+  "kill_everything": true,
+  "kill_pending": true,
   "last_reset": "2025-03-05T01:00:00+00:00",
   "mode_reset_due": true,
   "open": {
@@ -4684,12 +4261,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -4699,12 +4278,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -4714,16 +4295,18 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
-  "propose_only_until": null,
-  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "rearm_refused": null,
   "rearm_seen": "rearm-1",
   "records_lost": [],
   "sent_ids": [
@@ -4731,9 +4314,9 @@
    "fresh-sending",
    "fresh-unfilled"
   ],
-  "stage": "halted",
+  "stage": "size_down",
   "stage2_clean_since": null,
-  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "stage2_pending_since": null,
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
@@ -4761,7 +4344,7 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "8d1104d17c0df4ea": {
+ "8d275388fea500c2": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -4773,11 +4356,11 @@
     "proposal": "fresh-sending"
    }
   ],
-  "halted_at": null,
-  "kill_everything": false,
-  "kill_pending": false,
+  "halted_at": "2025-03-04T10:00:00+00:00",
+  "kill_everything": true,
+  "kill_pending": true,
   "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": false,
+  "mode_reset_due": true,
   "open": {
    "1": {
     "agent_id": "session_open-g0-x",
@@ -4819,12 +4402,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -4834,12 +4419,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -4849,12 +4436,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
   "propose_only_until": "2025-04-04T10:00:00+00:00",
@@ -4866,7 +4455,7 @@
    "fresh-sending",
    "fresh-unfilled"
   ],
-  "stage": "normal",
+  "stage": "size_down",
   "stage2_clean_since": null,
   "stage2_pending_since": null,
   "week_start_equity": 10100.0,
@@ -4893,6 +4482,123 @@
   "stage": "size_down",
   "stage2_clean_since": null,
   "stage2_pending_since": null,
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "8f7b6e72cc7292cd": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": "2025-03-04T10:00:00+00:00",
+  "kill_everything": false,
+  "kill_pending": false,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "halted",
+  "stage2_clean_since": null,
+  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
@@ -4930,118 +4636,7 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "95418735069467fd": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": null,
-  "kill_everything": false,
-  "kill_pending": false,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": false,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "normal",
-  "stage2_clean_since": null,
-  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "95a4c07cba9b477d": {
+ "94011647ae329d6e": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -5099,12 +4694,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -5114,12 +4711,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -5129,15 +4728,17 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
-  "propose_only_until": null,
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
   "rearm_refused": null,
   "rearm_seen": "rearm-1",
   "records_lost": [],
@@ -5200,7 +4801,31 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "99c57cfb60253ebb": {
+ "9bd7083aebf36f1c": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [],
+  "halted_at": "2025-03-04T10:00:00+00:00",
+  "kill_everything": true,
+  "kill_pending": true,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {},
+  "orders": {},
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [],
+  "stage": "size_down",
+  "stage2_clean_since": null,
+  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "9be8ff7390f857ac": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -5213,10 +4838,10 @@
    }
   ],
   "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": true,
-  "kill_pending": true,
+  "kill_everything": false,
+  "kill_pending": false,
   "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
+  "mode_reset_due": false,
   "open": {
    "1": {
     "agent_id": "session_open-g0-x",
@@ -5258,12 +4883,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -5273,12 +4900,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -5288,16 +4917,18 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
-  "propose_only_until": null,
-  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "rearm_refused": null,
   "rearm_seen": "rearm-1",
   "records_lost": [],
   "sent_ids": [
@@ -5305,31 +4936,7 @@
    "fresh-sending",
    "fresh-unfilled"
   ],
-  "stage": "halted",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "9bd7083aebf36f1c": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [],
-  "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": true,
-  "kill_pending": true,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {},
-  "orders": {},
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [],
-  "stage": "size_down",
+  "stage": "normal",
   "stage2_clean_since": null,
   "stage2_pending_since": "2025-03-05T09:55:00+00:00",
   "week_start_equity": 10100.0,
@@ -5475,117 +5082,6 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "a8d9ded267e2d11b": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": false,
-  "kill_pending": false,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": false,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": null,
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "normal",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
  "a9778945443dd3c3": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
@@ -5607,117 +5103,6 @@
   "stage": "size_down",
   "stage2_clean_since": null,
   "stage2_pending_since": null,
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "ad1d95256e8c9caf": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": null,
-  "kill_everything": true,
-  "kill_pending": true,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": null,
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "normal",
-  "stage2_clean_since": null,
-  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
@@ -5745,7 +5130,7 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "ae42ee2f8f290752": {
+ "b047fa5b465fddc8": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -5757,7 +5142,7 @@
     "proposal": "fresh-sending"
    }
   ],
-  "halted_at": null,
+  "halted_at": "2025-03-04T10:00:00+00:00",
   "kill_everything": true,
   "kill_pending": true,
   "last_reset": "2025-03-05T01:00:00+00:00",
@@ -5803,12 +5188,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -5818,12 +5205,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -5833,15 +5222,17 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
-  "propose_only_until": null,
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
   "rearm_refused": null,
   "rearm_seen": "rearm-1",
   "records_lost": [],
@@ -5851,6 +5242,123 @@
    "fresh-unfilled"
   ],
   "stage": "size_down",
+  "stage2_clean_since": null,
+  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "b23466a7cbea224b": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": "2025-03-04T10:00:00+00:00",
+  "kill_everything": true,
+  "kill_pending": true,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "halted",
   "stage2_clean_since": null,
   "stage2_pending_since": null,
   "week_start_equity": 10100.0,
@@ -5890,118 +5398,7 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "b25571e3e8260a6a": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": null,
-  "kill_everything": false,
-  "kill_pending": false,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": false,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "size_down",
-  "stage2_clean_since": null,
-  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "b7c3b0ce294aeecc": {
+ "b433b713d21614f5": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -6059,12 +5456,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -6074,12 +5473,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -6089,15 +5490,17 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "propose_only_until": null,
   "rearm_refused": null,
   "rearm_seen": "rearm-1",
   "records_lost": [],
@@ -6106,9 +5509,243 @@
    "fresh-sending",
    "fresh-unfilled"
   ],
-  "stage": "size_down",
+  "stage": "normal",
   "stage2_clean_since": null,
   "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "b8671aaa33bf261a": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": null,
+  "kill_everything": true,
+  "kill_pending": true,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "halted",
+  "stage2_clean_since": null,
+  "stage2_pending_since": null,
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "b982b70231809eaa": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": null,
+  "kill_everything": false,
+  "kill_pending": false,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": false,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": null,
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "normal",
+  "stage2_clean_since": null,
+  "stage2_pending_since": null,
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
@@ -6170,6 +5807,123 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
+ "bb62359ae45f9e8d": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": "2025-03-04T10:00:00+00:00",
+  "kill_everything": false,
+  "kill_pending": false,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": false,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": null,
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "size_down",
+  "stage2_clean_since": null,
+  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
  "bdc26f681c9b083a": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
@@ -6204,7 +5958,31 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "becfa1d94c6c1c50": {
+ "bf5ca54572403da8": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [],
+  "halted_at": null,
+  "kill_everything": true,
+  "kill_pending": true,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {},
+  "orders": {},
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [],
+  "stage": "normal",
+  "stage2_clean_since": null,
+  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "c01501e556032055": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -6262,12 +6040,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -6277,12 +6057,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -6292,16 +6074,18 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
   "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
+  "rearm_refused": null,
   "rearm_seen": "rearm-1",
   "records_lost": [],
   "sent_ids": [
@@ -6309,37 +6093,13 @@
    "fresh-sending",
    "fresh-unfilled"
   ],
-  "stage": "halted",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "bf5ca54572403da8": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [],
-  "halted_at": null,
-  "kill_everything": true,
-  "kill_pending": true,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {},
-  "orders": {},
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [],
   "stage": "normal",
   "stage2_clean_since": null,
   "stage2_pending_since": "2025-03-05T09:55:00+00:00",
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "c2d6e483ca670820": {
+ "c13f1a5a11cb6541": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -6351,11 +6111,11 @@
     "proposal": "fresh-sending"
    }
   ],
-  "halted_at": null,
-  "kill_everything": true,
-  "kill_pending": true,
+  "halted_at": "2025-03-04T10:00:00+00:00",
+  "kill_everything": false,
+  "kill_pending": false,
   "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
+  "mode_reset_due": false,
   "open": {
    "1": {
     "agent_id": "session_open-g0-x",
@@ -6397,12 +6157,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -6412,12 +6174,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -6427,16 +6191,18 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
-  "propose_only_until": null,
-  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "rearm_refused": null,
   "rearm_seen": "rearm-1",
   "records_lost": [],
   "sent_ids": [
@@ -6444,7 +6210,7 @@
    "fresh-sending",
    "fresh-unfilled"
   ],
-  "stage": "halted",
+  "stage": "size_down",
   "stage2_clean_since": null,
   "stage2_pending_since": "2025-03-05T09:55:00+00:00",
   "week_start_equity": 10100.0,
@@ -6484,7 +6250,275 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "c34a116edb7cade8": {
+ "c3560824262d33e4": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": "2025-03-04T10:00:00+00:00",
+  "kill_everything": false,
+  "kill_pending": false,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": false,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "size_down",
+  "stage2_clean_since": null,
+  "stage2_pending_since": null,
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "c406b0c67950bec9": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "old-sending"
+   }
+  ],
+  "halted_at": "2025-03-04T10:00:00+00:00",
+  "kill_everything": true,
+  "kill_pending": true,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {},
+  "orders": {},
+  "propose_only_until": null,
+  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
+  "rearm_seen": "rearm-1",
+  "records_lost": [
+   7
+  ],
+  "sent_ids": [
+   "old-sending"
+  ],
+  "stage": "halted",
+  "stage2_clean_since": null,
+  "stage2_pending_since": null,
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "c6c494134c078fd3": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": null,
+  "kill_everything": false,
+  "kill_pending": false,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": false,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": null,
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "normal",
+  "stage2_clean_since": null,
+  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "c6ecfd93634487ab": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -6542,12 +6576,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -6557,12 +6593,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -6572,15 +6610,17 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "propose_only_until": null,
   "rearm_refused": null,
   "rearm_seen": "rearm-1",
   "records_lost": [],
@@ -6589,13 +6629,13 @@
    "fresh-sending",
    "fresh-unfilled"
   ],
-  "stage": "size_down",
+  "stage": "normal",
   "stage2_clean_since": null,
   "stage2_pending_since": "2025-03-05T09:55:00+00:00",
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "c3ba2bb5a862430d": {
+ "c71b2b82dfd318fa": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -6653,12 +6693,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -6668,12 +6710,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -6683,12 +6727,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
   "propose_only_until": null,
@@ -6702,45 +6748,11 @@
   ],
   "stage": "halted",
   "stage2_clean_since": null,
-  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "c406b0c67950bec9": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "old-sending"
-   }
-  ],
-  "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": true,
-  "kill_pending": true,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {},
-  "orders": {},
-  "propose_only_until": null,
-  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
-  "rearm_seen": "rearm-1",
-  "records_lost": [
-   7
-  ],
-  "sent_ids": [
-   "old-sending"
-  ],
-  "stage": "halted",
-  "stage2_clean_since": null,
   "stage2_pending_since": null,
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "c48a41089c1b2e35": {
+ "c8c54fa1b921decb": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -6752,7 +6764,7 @@
     "proposal": "fresh-sending"
    }
   ],
-  "halted_at": "2025-03-04T10:00:00+00:00",
+  "halted_at": null,
   "kill_everything": false,
   "kill_pending": false,
   "last_reset": "2025-03-05T01:00:00+00:00",
@@ -6798,12 +6810,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -6813,12 +6827,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -6828,12 +6844,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
   "propose_only_until": "2025-04-04T10:00:00+00:00",
@@ -6846,6 +6864,123 @@
    "fresh-unfilled"
   ],
   "stage": "halted",
+  "stage2_clean_since": null,
+  "stage2_pending_since": null,
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "cd362df146e8e7cc": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": "2025-03-04T10:00:00+00:00",
+  "kill_everything": true,
+  "kill_pending": true,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": null,
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "size_down",
   "stage2_clean_since": null,
   "stage2_pending_since": "2025-03-05T09:55:00+00:00",
   "week_start_equity": 10100.0,
@@ -6967,6 +7102,123 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
+ "d27d4827bc55d81f": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": "2025-03-04T10:00:00+00:00",
+  "kill_everything": false,
+  "kill_pending": false,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": false,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": null,
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "size_down",
+  "stage2_clean_since": null,
+  "stage2_pending_since": null,
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
  "d2fa826113b42815": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
@@ -6996,6 +7248,123 @@
    "old-sending"
   ],
   "stage": "normal",
+  "stage2_clean_since": null,
+  "stage2_pending_since": null,
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "d3622239a8af7c53": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": "2025-03-04T10:00:00+00:00",
+  "kill_everything": false,
+  "kill_pending": false,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": null,
+  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "halted",
   "stage2_clean_since": null,
   "stage2_pending_since": null,
   "week_start_equity": 10100.0,
@@ -7035,7 +7404,158 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "d6972226ba1641a8": {
+ "d5fb988e021f1b42": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": null,
+  "kill_everything": true,
+  "kill_pending": true,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": null,
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "size_down",
+  "stage2_clean_since": null,
+  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "d91df8786d5f5041": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "old-sending"
+   }
+  ],
+  "halted_at": null,
+  "kill_everything": false,
+  "kill_pending": false,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": false,
+  "open": {},
+  "orders": {},
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [
+   7
+  ],
+  "sent_ids": [
+   "old-sending"
+  ],
+  "stage": "size_down",
+  "stage2_clean_since": null,
+  "stage2_pending_since": null,
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "db51d3aa0d289f5d": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -7093,12 +7613,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -7108,12 +7630,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -7123,15 +7647,17 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "propose_only_until": null,
   "rearm_refused": null,
   "rearm_seen": "rearm-1",
   "records_lost": [],
@@ -7139,40 +7665,6 @@
    "fresh-filled",
    "fresh-sending",
    "fresh-unfilled"
-  ],
-  "stage": "size_down",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "d91df8786d5f5041": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "old-sending"
-   }
-  ],
-  "halted_at": null,
-  "kill_everything": false,
-  "kill_pending": false,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": false,
-  "open": {},
-  "orders": {},
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [
-   7
-  ],
-  "sent_ids": [
-   "old-sending"
   ],
   "stage": "size_down",
   "stage2_clean_since": null,
@@ -7252,117 +7744,6 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "dc74324b6f61a7e0": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": true,
-  "kill_pending": true,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "normal",
-  "stage2_clean_since": null,
-  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
  "dcd3583e18a7cc1d": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
@@ -7387,7 +7768,7 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "de7d308c18367f78": {
+ "e20aeab5e51f5477": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -7403,7 +7784,7 @@
   "kill_everything": false,
   "kill_pending": false,
   "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": false,
+  "mode_reset_due": true,
   "open": {
    "1": {
     "agent_id": "session_open-g0-x",
@@ -7445,12 +7826,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -7460,12 +7843,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -7475,16 +7860,18 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
-  "propose_only_until": null,
-  "rearm_refused": null,
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
   "rearm_seen": "rearm-1",
   "records_lost": [],
   "sent_ids": [
@@ -7492,9 +7879,9 @@
    "fresh-sending",
    "fresh-unfilled"
   ],
-  "stage": "size_down",
+  "stage": "halted",
   "stage2_clean_since": null,
-  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "stage2_pending_since": null,
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
@@ -7556,31 +7943,7 @@
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
- "ef8819c5b60cee08": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [],
-  "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": true,
-  "kill_pending": true,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {},
-  "orders": {},
-  "propose_only_until": null,
-  "rearm_refused": null,
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [],
-  "stage": "size_down",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "f20db1ec4587143d": {
+ "eb3e9aa82be41853": {
   "approval_mode": "propose",
   "balance_closed_hwm": 10500.0,
   "closing": [],
@@ -7593,10 +7956,10 @@
    }
   ],
   "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": false,
-  "kill_pending": false,
+  "kill_everything": true,
+  "kill_pending": true,
   "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": false,
+  "mode_reset_due": true,
   "open": {
    "1": {
     "agent_id": "session_open-g0-x",
@@ -7638,12 +8001,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": 1,
     "side": 1,
     "sl": 2396.0,
     "status": "filled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-sending": {
     "agent_id": "session_open-g0-x",
@@ -7653,12 +8018,14 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    },
    "fresh-unfilled": {
     "agent_id": "session_open-g0-x",
@@ -7668,16 +8035,18 @@
     "lots": 0.1,
     "magic": 260150,
     "max_bars": 8,
+    "notified": null,
     "position_id": null,
     "side": 1,
     "sl": 2396.0,
     "status": "unfilled",
     "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
    }
   },
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": null,
+  "propose_only_until": null,
+  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
   "rearm_seen": "rearm-1",
   "records_lost": [],
   "sent_ids": [
@@ -7685,6 +8054,30 @@
    "fresh-sending",
    "fresh-unfilled"
   ],
+  "stage": "halted",
+  "stage2_clean_since": null,
+  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "ef8819c5b60cee08": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [],
+  "halted_at": "2025-03-04T10:00:00+00:00",
+  "kill_everything": true,
+  "kill_pending": true,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {},
+  "orders": {},
+  "propose_only_until": null,
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [],
   "stage": "size_down",
   "stage2_clean_since": null,
   "stage2_pending_since": null,
@@ -7720,117 +8113,6 @@
    "old-sending"
   ],
   "stage": "size_down",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "f36ed1171c615432": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": false,
-  "kill_pending": false,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "halted",
   "stage2_clean_since": null,
   "stage2_pending_since": null,
   "week_start_equity": 10100.0,
@@ -7891,6 +8173,123 @@
   "stage": "halted",
   "stage2_clean_since": null,
   "stage2_pending_since": null,
+  "week_start_equity": 10100.0,
+  "weekend_done": "2025-02-28"
+ },
+ "f485707a29165abd": {
+  "approval_mode": "propose",
+  "balance_closed_hwm": 10500.0,
+  "closing": [],
+  "day_start_equity": 9900.0,
+  "decisions": [
+   {
+    "action": "reconcile_sent_unfilled",
+    "agent": "session_open-g0-x",
+    "proposal": "fresh-sending"
+   }
+  ],
+  "halted_at": null,
+  "kill_everything": true,
+  "kill_pending": true,
+  "last_reset": "2025-03-05T01:00:00+00:00",
+  "mode_reset_due": true,
+  "open": {
+   "1": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": null,
+    "audit": null,
+    "bars_held": 2,
+    "client_order_id": "fresh-filled",
+    "entry": null,
+    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
+    "equity_before": null,
+    "excursion": null,
+    "excursion_approx": true,
+    "flat_at": null,
+    "initial_lots": 0.1,
+    "initial_sl": 2396.0,
+    "lots": 0.1,
+    "max_bars": 8,
+    "open_price": 2400.2,
+    "opened_utc": "2025-03-05T10:00:00+00:00",
+    "policy": null,
+    "position_id": 1,
+    "risk_known": true,
+    "scale_tries": 0,
+    "scaled": false,
+    "scaled_lots": 0.0,
+    "scaled_price": null,
+    "side": 1,
+    "sl": 2396.0,
+    "timeframe": null,
+    "tp": 2406.0
+   }
+  },
+  "orders": {
+   "fresh-filled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-filled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": 1,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "filled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-sending": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-sending",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   },
+   "fresh-unfilled": {
+    "agent_id": "session_open-g0-x",
+    "atr_usd": 4.0,
+    "audit": null,
+    "client_order_id": "fresh-unfilled",
+    "lots": 0.1,
+    "magic": 260150,
+    "max_bars": 8,
+    "notified": null,
+    "position_id": null,
+    "side": 1,
+    "sl": 2396.0,
+    "status": "unfilled",
+    "tp": 2406.0,
+    "ts_utc": "2200-01-06T09:00:00+00:00",
+    "unknown_notified": false
+   }
+  },
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "rearm_refused": null,
+  "rearm_seen": "rearm-1",
+  "records_lost": [],
+  "sent_ids": [
+   "fresh-filled",
+   "fresh-sending",
+   "fresh-unfilled"
+  ],
+  "stage": "normal",
+  "stage2_clean_since": null,
+  "stage2_pending_since": "2025-03-05T09:55:00+00:00",
   "week_start_equity": 10100.0,
   "weekend_done": "2025-02-28"
  },
@@ -7961,117 +8360,6 @@
   "records_lost": [],
   "sent_ids": [],
   "stage": "size_down",
-  "stage2_clean_since": null,
-  "stage2_pending_since": null,
-  "week_start_equity": 10100.0,
-  "weekend_done": "2025-02-28"
- },
- "fb794b7a689e6f64": {
-  "approval_mode": "propose",
-  "balance_closed_hwm": 10500.0,
-  "closing": [],
-  "day_start_equity": 9900.0,
-  "decisions": [
-   {
-    "action": "reconcile_sent_unfilled",
-    "agent": "session_open-g0-x",
-    "proposal": "fresh-sending"
-   }
-  ],
-  "halted_at": "2025-03-04T10:00:00+00:00",
-  "kill_everything": false,
-  "kill_pending": false,
-  "last_reset": "2025-03-05T01:00:00+00:00",
-  "mode_reset_due": true,
-  "open": {
-   "1": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": null,
-    "audit": null,
-    "bars_held": 2,
-    "client_order_id": "fresh-filled",
-    "entry": null,
-    "entry_bar_ts": "2025-03-05T10:00:00+00:00",
-    "equity_before": null,
-    "excursion": null,
-    "excursion_approx": true,
-    "flat_at": null,
-    "initial_lots": 0.1,
-    "initial_sl": 2396.0,
-    "lots": 0.1,
-    "max_bars": 8,
-    "open_price": 2400.2,
-    "opened_utc": "2025-03-05T10:00:00+00:00",
-    "policy": null,
-    "position_id": 1,
-    "risk_known": true,
-    "scale_tries": 0,
-    "scaled": false,
-    "scaled_lots": 0.0,
-    "scaled_price": null,
-    "side": 1,
-    "sl": 2396.0,
-    "timeframe": null,
-    "tp": 2406.0
-   }
-  },
-  "orders": {
-   "fresh-filled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-filled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": 1,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "filled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-sending": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-sending",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   },
-   "fresh-unfilled": {
-    "agent_id": "session_open-g0-x",
-    "atr_usd": 4.0,
-    "audit": null,
-    "client_order_id": "fresh-unfilled",
-    "lots": 0.1,
-    "magic": 260150,
-    "max_bars": 8,
-    "position_id": null,
-    "side": 1,
-    "sl": 2396.0,
-    "status": "unfilled",
-    "tp": 2406.0,
-    "ts_utc": "2200-01-06T09:00:00+00:00"
-   }
-  },
-  "propose_only_until": null,
-  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
-  "rearm_seen": "rearm-1",
-  "records_lost": [],
-  "sent_ids": [
-   "fresh-filled",
-   "fresh-sending",
-   "fresh-unfilled"
-  ],
-  "stage": "halted",
   "stage2_clean_since": null,
   "stage2_pending_since": null,
   "week_start_equity": 10100.0,

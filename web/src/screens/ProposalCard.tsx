@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { ReasonCode } from "../lib/api";
+import type { DecidedProposal, ReasonCode } from "../lib/api";
 import {
   type AnyProposal, type CardState, EXPIRING_S, REASONS, WINDOW_S, budgetLine, cardMoney, cardState, countdown, isDecided,
   localTime, pct, plain, reasonLabel, signed, viaChannel,
@@ -32,7 +32,7 @@ export function ProposalCard({ p, now, canDecide, blockers, busy = false, error,
   const money = cardMoney(p);
   const budget = budgetLine(p);
   return (
-    <article className={`card ${p.side} ${state}`} aria-label={`${title}, ${STATE_NAME[state]}`}>
+    <article className={`card ${p.side} ${state}`} aria-label={`${title}, ${stateName(p, state)}`}>
       <header className="card-head">
         <span className={`dir ${p.side}`}><span aria-hidden="true">{long ? "▲" : "▼"}</span> {long ? "LONG" : "SHORT"}</span>
         <strong className="size">{p.lots.toFixed(2)} lots <span className="muted">XAUUSD</span></strong>
@@ -128,7 +128,21 @@ const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const STATE_NAME: Record<CardState, string> = {
   pending: "waiting for your decision", expiring: "expiring", expired: "expired", submitted: "approval sent",
   approved: "approved", rejected: "rejected", refused: "not placed",   // by the RiskGate, the MT5 box or the broker
+  not_confirmed: "sent, not confirmed by the broker",                  // docs/ux/order-not-confirmed.md
 };
+// docs/ux/order-not-confirmed.md: a resolved order the broker didn't confirm at first is named by what was found
+const NOT_CONFIRMED_NAME: Record<string, string> = {
+  opened: "opened", opened_late: "opened", opened_closed: "opened and closed", no_trade: "not placed",
+  still_unknown: "still not confirmed",
+};
+const stateName = (p: AnyProposal, state: CardState) =>
+  (state === "not_confirmed" && isDecided(p) && NOT_CONFIRMED_NAME[p.not_confirmed?.outcome ?? ""]) || STATE_NAME[state];
+// the API's tone to the note's class: amber while unknown (not a halt), red only for "Not placed"
+const TONE_CLASS: Record<string, string> = { warn: "warn", ok: "ok", neutral: "muted-box", bad: "bad" };
+
+// the API's words for the RiskGate's codes (`refusal_text`, BACKLOG 72); an older API's codes in plain words
+const refusedWhy = (d: DecidedProposal | null) =>
+  (d?.refusal_text?.length ? d.refusal_text : (d?.refusal ?? []).map(plain)).join(", ") || "no reason given";
 
 function Outcome({ p, state }: { p: AnyProposal; state: CardState }) {
   if (state === "pending" || state === "expiring") return null;
@@ -136,6 +150,16 @@ function Outcome({ p, state }: { p: AnyProposal; state: CardState }) {
   const by = viaChannel(d?.decided_channel);
   const tail = by ? <span className="muted"> · via {by}</span> : null;
   switch (state) {
+    case "not_confirmed": {
+      // BACKLOG 72: the API words what the engine's look-up at the broker found (one table with Telegram)
+      const nc = d?.not_confirmed;
+      if (!nc) return null;
+      return (
+        <p className={`outcome ${TONE_CLASS[nc.tone] ?? "warn"}`} role="status">
+          <strong>{nc.heading}</strong> {nc.text}{tail}
+        </p>
+      );
+    }
     case "submitted":
       return <p className="outcome info" role="status"><strong>Approval sent.</strong> The engine re-checks risk and places the order on its next tick.{tail}</p>;
     case "approved":
@@ -184,7 +208,7 @@ function Outcome({ p, state }: { p: AnyProposal; state: CardState }) {
       }
       return (
         <p className="outcome bad" role="status">
-          <strong>Refused at approval.</strong> The RiskGate blocked the order ({(d?.refusal ?? []).map(plain).join(", ") || "no reason given"}); nothing was sent.{tail}
+          <strong>Refused at approval.</strong> The RiskGate blocked the order ({refusedWhy(d)}); nothing was sent.{tail}
         </p>
       );
     case "expired":

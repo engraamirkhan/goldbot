@@ -86,10 +86,18 @@ class SentOrder(Record):
     max_bars: int
     sl: float
     tp: float
-    status: str = "sending"         # sending -> filled | rejected | unfilled (restart found no fill)
+    # sending -> filled | rejected | unfilled (restart found no fill) | ambiguous (BACKLOG 72: neither a fill nor a
+    # definite reject; looked up at the broker until filled, unfilled or, after 7 days, terminal `unknown`). A plain
+    # string: an older release keeps a status it does not know in sent_ids and never re-sends it (ADR 0010, X7)
+    status: str = "sending"
     position_id: int | None = None
     atr_usd: float | None = None    # the signal bar's ATR: a fill recovered on restart gets its exit policy back
     audit: EntryAudit | None = None  # finance audit entry facts, handed to a fill recovered on restart
+    # BACKLOG 72 (S6: additive, safe when missing): the last outcome the owner was told for an ambiguous row (opened |
+    # opened_closed | no_trade | opened_late | gave_up) and whether the 10-minute "still not confirmed" notice went;
+    # both persisted before the notice is sent, so a restart never tells the owner twice
+    notified: str | None = None
+    unknown_notified: bool = False
 
 
 class OrdersSnapshot(FrozenRecord):

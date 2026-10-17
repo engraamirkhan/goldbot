@@ -515,7 +515,8 @@ export interface paths {
         /**
          * Recent Proposals
          * @description Proposals decided in the last 10 minutes (newest first), so a decided card says what happened to it: by
-         *     channel and time only, never who (BACKLOG 52).
+         *     channel and time only, never who (BACKLOG 52). An approval whose order is not confirmed yet stays listed until
+         *     it resolves (BACKLOG 72: the dashboard never drops an unanswered order).
          */
         get: operations["recent_proposals_api_proposals_recent_get"];
         put?: never;
@@ -1125,6 +1126,7 @@ export interface components {
              * @default false
              */
             min_lot_exception: boolean;
+            not_confirmed?: components["schemas"]["NotConfirmed"] | null;
             not_placed?: components["schemas"]["NotPlaced"] | null;
             /** P */
             p: number;
@@ -1137,6 +1139,11 @@ export interface components {
              * @default []
              */
             refusal: string[];
+            /**
+             * Refusal Text
+             * @default []
+             */
+            refusal_text: string[];
             /** Reward Amount */
             reward_amount?: number | null;
             /** Risk Amount */
@@ -1743,6 +1750,27 @@ export interface components {
             /** Message */
             message: string;
             view: components["schemas"]["AutoModeView"];
+        };
+        /**
+         * NotConfirmed
+         * @description The dashboard note (API `DecidedProposal.not_confirmed`): a heading word that carries the state, then a
+         *     sentence; `tone` picks the colour (amber while unknown: it is not a halt; red only for "Not placed").
+         */
+        NotConfirmed: {
+            /** Heading */
+            heading: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "pending" | "opened" | "opened_closed" | "no_trade" | "opened_late" | "still_unknown";
+            /** Text */
+            text: string;
+            /**
+             * Tone
+             * @enum {string}
+             */
+            tone: "warn" | "ok" | "neutral" | "bad";
         };
         /**
          * NotPlaced

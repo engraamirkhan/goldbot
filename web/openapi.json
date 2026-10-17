@@ -1220,6 +1220,16 @@
       "title": "Min Lot Exception",
       "type": "boolean"
      },
+     "not_confirmed": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/NotConfirmed"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
      "not_placed": {
       "anyOf": [
        {
@@ -1262,6 +1272,14 @@
        "type": "string"
       },
       "title": "Refusal",
+      "type": "array"
+     },
+     "refusal_text": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "title": "Refusal Text",
       "type": "array"
      },
      "reward_amount": {
@@ -2942,6 +2960,50 @@
      "view"
     ],
     "title": "ModeChangeResult",
+    "type": "object"
+   },
+   "NotConfirmed": {
+    "additionalProperties": false,
+    "description": "The dashboard note (API `DecidedProposal.not_confirmed`): a heading word that carries the state, then a\nsentence; `tone` picks the colour (amber while unknown: it is not a halt; red only for \"Not placed\").",
+    "properties": {
+     "heading": {
+      "title": "Heading",
+      "type": "string"
+     },
+     "outcome": {
+      "enum": [
+       "pending",
+       "opened",
+       "opened_closed",
+       "no_trade",
+       "opened_late",
+       "still_unknown"
+      ],
+      "title": "Outcome",
+      "type": "string"
+     },
+     "text": {
+      "title": "Text",
+      "type": "string"
+     },
+     "tone": {
+      "enum": [
+       "warn",
+       "ok",
+       "neutral",
+       "bad"
+      ],
+      "title": "Tone",
+      "type": "string"
+     }
+    },
+    "required": [
+     "outcome",
+     "heading",
+     "text",
+     "tone"
+    ],
+    "title": "NotConfirmed",
     "type": "object"
    },
    "NotPlaced": {
@@ -6616,7 +6678,7 @@
   },
   "/api/proposals/recent": {
    "get": {
-    "description": "Proposals decided in the last 10 minutes (newest first), so a decided card says what happened to it: by\nchannel and time only, never who (BACKLOG 52).",
+    "description": "Proposals decided in the last 10 minutes (newest first), so a decided card says what happened to it: by\nchannel and time only, never who (BACKLOG 52). An approval whose order is not confirmed yet stays listed until\nit resolves (BACKLOG 72: the dashboard never drops an unanswered order).",
     "operationId": "recent_proposals_api_proposals_recent_get",
     "responses": {
      "200": {

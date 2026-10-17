@@ -99,6 +99,7 @@ from goldbot.api.schema import (
 )
 from goldbot.config import MailSettings
 from goldbot.data.timeutil import heartbeat_problem
+from goldbot.execution.not_confirmed import note as not_confirmed_note
 from goldbot.execution.not_placed import first_not_placed
 from goldbot.ops.account_view import LossBudget, loss_budget, margin_level_pct, milestones, proposal_budget
 from goldbot.telegram.approvals import Outcome, decision_channel
@@ -588,7 +589,8 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     @app.get("/api/proposals/recent", response_model=list[DecidedProposal])
     def recent_proposals(_: User = Depends(auth)) -> list[DecidedProposal]:
         """Proposals decided in the last 10 minutes (newest first), so a decided card says what happened to it: by
-        channel and time only, never who (BACKLOG 52)."""
+        channel and time only, never who (BACKLOG 52). An approval whose order is not confirmed yet stays listed until
+        it resolves (BACKLOG 72: the dashboard never drops an unanswered order)."""
         out = []
         for p, d in st.bus.recent():
             if d is not None:                       # decided, the engine has not applied it yet
@@ -597,7 +599,10 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                                                            "decided_channel": decision_channel(d.by),
                                                            "decided_ts": d.ts}))
                 continue
-            if p.outcome == Outcome.APPROVED:
+            nc = not_confirmed_note(p.not_confirmed) if p.not_confirmed is not None else None
+            if p.outcome == Outcome.APPROVED and nc is not None:      # BACKLOG 72: never "refused" while unknown
+                status = "refused" if nc.outcome == "no_trade" else "approved"
+            elif p.outcome == Outcome.APPROVED:
                 status = "refused" if p.gate_refusal else "approved"
             elif p.outcome == Outcome.REJECTED:
                 status = "rejected"
@@ -608,7 +613,10 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                                                        "reason_code": p.reason_code if status == "rejected" else None,
                                                        "refusal": list(p.gate_refusal or []),
                                                        "not_placed": first_not_placed(p.gate_refusal)
-                                                       if status == "refused" else None}))
+                                                       if status == "refused" else None,
+                                                       "not_confirmed": nc,
+                                                       "refusal_text": [entry_status.refusal_words(c)
+                                                                    for c in p.gate_refusal or []]}))
         return out
 
     @app.post("/api/decisions")
