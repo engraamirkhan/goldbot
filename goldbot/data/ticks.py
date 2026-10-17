@@ -81,7 +81,7 @@ class DayRecord(Record):
     sha256: str
 
 
-class _Index(Record):
+class TickIndex(Record):
     days: dict[str, DayRecord] = {}
 
 
@@ -180,11 +180,11 @@ def read_index(state_dir: str | Path, account: str) -> dict[str, DayRecord]:
     f = account_dir(state_dir, account) / INDEX_FILE
     if not f.exists():
         return {}
-    return load_record_json(_Index, f.read_text(), source=f"ticks/{account}/{INDEX_FILE}").days
+    return load_record_json(TickIndex, f.read_text(), source=f"ticks/{account}/{INDEX_FILE}").days
 
 
 def _write_index(d: Path, days: dict[str, DayRecord]) -> None:
-    write_atomic(d / INDEX_FILE, _Index(days=dict(sorted(days.items()))).model_dump_json(indent=1))
+    write_atomic(d / INDEX_FILE, TickIndex(days=dict(sorted(days.items()))).model_dump_json(indent=1))
 
 
 def write_day(state_dir: str | Path, account: str, day: date, ticks: pd.DataFrame, *, symbol: str, server_tz: str,
@@ -317,6 +317,6 @@ def check_tick_record(ctx: HealthContext, account_id: str) -> Check:
     return Check(name=name, status="ok", reason=msg)
 
 
-__all__ = ["DayRecord", "INDEX_FILE", "PAGE_TICKS", "account_dir", "check_tick_record", "days_due", "load_day",
+__all__ = ["DayRecord", "TickIndex", "INDEX_FILE", "PAGE_TICKS", "account_dir", "check_tick_record", "days_due", "load_day",
            "latest_closed", "prune", "pull_day", "read_index", "record_ticks", "recorded_days", "server_date", "server_day_bounds",
            "write_day"]
