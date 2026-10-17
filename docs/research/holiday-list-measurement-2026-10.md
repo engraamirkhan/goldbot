@@ -327,6 +327,6 @@ or parameter is chosen, nothing is promoted); H-C counts as **1 registry trial**
 **Decision (2026-10-16, program director + product owner, under the owner's delegation; owner-only items untouched).**
 **ADOPT cme-metals-v3** as recommended above (drop 2 Jan; keep every other listed day, unresolved days marked; add
 none), with this note's final on 2026-10-30. The implementer ships the list as a new version with the hand-reviewed
-set in its test (BACKLOG 66, due 2026-10-30). The window stays off; switching it on is the owner's, after BACKLOG 46.
+set in its test (BACKLOG 70, due 2026-10-30). The window stays off; switching it on is the owner's, after BACKLOG 46.
 Quant record (E1): quant-reviewer · CHANGES (v3 list SAFE TO ADOPT; text fixes M1-M7, H-A/H-B/H-C to rewrite before
 pre-registration) · draft feda07a · 2026-10-16.

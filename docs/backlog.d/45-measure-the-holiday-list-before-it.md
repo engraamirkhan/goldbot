@@ -22,7 +22,7 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
   the note on 2026-10-30. Evidence: `docs/research/holiday-list-measurement-2026-10.md` (draft feda07a, quant ruling
   applied 2026-10-16), Tables 1 and 4: 2 Jan is NORMAL on every reading, including Bonferroni and year clusters.
   Adopting the list does not switch the window on: `risk.holidays.enabled` stays off and stays with the owner, after
-  46. The list change is item 66 (implementer, due 2026-10-30).
+  46. The list change is item 70 (implementer, due 2026-10-30).
   Review record (E1): quant-reviewer · CHANGES (v3 list SAFE TO ADOPT; text fixes M1-M7, H-A/H-B/H-C to rewrite before pre-registration) · draft feda07a · 2026-10-16.
   Still owed by the performance analyst: the final (2026-10-30) with `scripts/measure_holidays.py` and its test (Table 4
   variants and the listed-day overlap rule included), and the re-run addendum on the repaired data-v1 in the same run
