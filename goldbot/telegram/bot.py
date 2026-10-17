@@ -64,6 +64,17 @@ def outcome_text(outcome: str) -> str:
     return OUTCOME_TEXT.get(outcome, outcome)
 
 
+FINAL_EDIT_ERRORS = frozenset({"BadRequest", "Forbidden"})    # python-telegram-bot's telegram.error classes
+
+
+def edit_is_final(exc: BaseException) -> bool:
+    """A message edit Telegram refused for good, so retrying cannot help: a BadRequest (the text is already shown,
+    the message was deleted or is too old to edit) or Forbidden (the bot was blocked). RetryAfter, TimedOut and other
+    network errors may pass and are retried (BACKLOG 87 review). Matched by class name along the MRO, so this module
+    imports without the [live] extra; BadRequest subclasses NetworkError there, so it is checked by its own name."""
+    return any(c.__name__ in FINAL_EDIT_ERRORS for c in type(exc).__mro__)
+
+
 class OffLoopAudit:
     """Who acted on Telegram (decision, halt, deploy tap), in the VPS audit log the dashboard and /mode write
     (automode.audit_to: state/aux.db), never in approvals/, control.json or approved.json (A15). Review M1: aux.db can
@@ -316,7 +327,9 @@ class TelegramBot:  # pragma: no cover - needs network + token
 
     async def _edit_resolved_cards(self, outbox: Outbox) -> None:
         """BACKLOG 87: each watched NOT CONFIRMED reply is edited to its new outcome's words (`card_text`), once per
-        outcome. Best effort, logged, never raised: the owner's notice for the outcome is a separate message."""
+        outcome; an edit that failed for a reason that may pass is retried with backoff (`Outbox.card_edit_failed`),
+        one Telegram refused for good is not (`edit_is_final`). Best effort, logged, never raised: the owner's notice
+        for the outcome is a separate message."""
         try:
             edits = await asyncio.to_thread(outbox.card_edits)
         except Exception as exc:
@@ -324,13 +337,17 @@ class TelegramBot:  # pragma: no cover - needs network + token
             return
         for e in edits:
             text = f"{e.proposal_id}: {nc_card_text(e.confirmation)}"
+            done = True
             for chat, mid in e.messages:
                 try:
                     await self.app.bot.edit_message_text(text, chat_id=chat, message_id=mid)
                 except Exception as exc:
+                    done = done and edit_is_final(exc)
                     log.warning("could not edit NOT CONFIRMED card %s: %s", e.proposal_id, exc)
+            # an edit that may still go through keeps the card watched (retried with backoff, `card_edit_failed`)
+            record = outbox.card_edited if done else outbox.card_edit_failed
             try:
-                await asyncio.to_thread(outbox.card_edited, e.proposal_id, e.outcome)
+                await asyncio.to_thread(record, e.proposal_id, e.outcome)
             except Exception as exc:
                 log.warning("NOT CONFIRMED card %s edit not recorded: %s", e.proposal_id, exc)
 

@@ -35,6 +35,7 @@ from goldbot.db.bookkeeping import (
     OUTBOX_FILE,
     RUNS_FILE,
     AgentRunLog,
+    WatchedCard,
     complete_lines,
     cursor_from_line_offset,
     dual_read,
@@ -42,6 +43,7 @@ from goldbot.db.bookkeeping import (
     max_run_id,
     outbox_cursor,
     outbox_document,
+    outbox_edit_failed,
     outbox_forget,
     outbox_mark_sent,
     outbox_sent,
@@ -73,6 +75,11 @@ NOT_CONFIRMED_OUTCOME = "GATE_REFUSED: " + NOT_CONFIRMED     # `finished`'s outc
 # BACKLOG 87: a NOT CONFIRMED card is watched at most this long. The engine stops looking after 7 days
 # (`unconfirmed.KEEP`, notice only, the card unchanged); one more day covers a stopped engine catching up
 WATCH_MAX_S = 8 * 86400.0
+# an edit that failed for a reason that may pass is retried after EDIT_RETRY_S, doubling up to EDIT_RETRY_MAX_S, for
+# EDIT_ATTEMPTS attempts per outcome (about 13 minutes); a refusal for good (`bot.edit_is_final`) is not retried
+EDIT_ATTEMPTS = 10
+EDIT_RETRY_S = 2.0
+EDIT_RETRY_MAX_S = 300.0
 
 
 class OutboxState(Record):
@@ -211,7 +218,7 @@ class Outbox:
 
     # ------------------------------------------------------------------ NOT CONFIRMED cards (BACKLOG 87)
     @property
-    def watched(self) -> dict[str, tuple[list[tuple[int, int]], str, int]]:
+    def watched(self) -> dict[str, WatchedCard]:
         with self.db.connection() as conn:
             return outbox_watched(conn)
 
@@ -224,25 +231,30 @@ class Outbox:
             outbox_watch(conn, proposal_id, messages, "pending", time.time_ns())
 
     def card_edits(self) -> list[CardEdit]:
-        """Watched cards whose archived outcome differs from what their replies show. A card whose archive is gone,
-        or watched longer than WATCH_MAX_S, is forgotten; one whose archive cannot be read (torn, or an outcome a newer
-        release wrote) is kept for the next poll."""
+        """Watched cards whose archived outcome differs from what their replies show and whose retry is due. A card
+        whose archive is gone, or watched longer than WATCH_MAX_S, is forgotten; one whose archive cannot be read
+        (torn, or an outcome a newer release wrote) is kept for the next poll."""
         out: list[CardEdit] = []
         gone: list[str] = []
         now = time.time_ns()
-        for pid, (msgs, shown, since) in self.watched.items():
+        for pid, w in self.watched.items():
+            if (now - w.since_ns) / 1e9 > WATCH_MAX_S:
+                gone.append(pid)
+                continue
+            if now < w.retry_ns:
+                continue
             try:
                 p = self.bus.get(pid)
             except Exception as exc:                   # noqa: BLE001 - a torn or newer file: read again next poll
                 log.warning("NOT CONFIRMED card %s not read (%s)", pid, type(exc).__name__)
                 continue
-            if p is None or (now - since) / 1e9 > WATCH_MAX_S:
+            if p is None:
                 gone.append(pid)
                 continue
             c = p.not_confirmed
             outcome = "pending" if c is None else c.outcome      # None: left `placing`, reported pending
-            if outcome != shown:
-                out.append(CardEdit(proposal_id=pid, outcome=outcome, confirmation=c, messages=tuple(msgs)))
+            if outcome != w.shown:
+                out.append(CardEdit(proposal_id=pid, outcome=outcome, confirmation=c, messages=w.messages))
         if gone:
             with self.db.write() as conn:
                 for pid in gone:
@@ -250,13 +262,29 @@ class Outbox:
         return out
 
     def card_edited(self, proposal_id: str, outcome: NcOutcome) -> None:
-        """The edit for `outcome` was attempted (one attempt per outcome: a lost edit is logged, not retried every
-        poll); a settled outcome ends the watch."""
+        """Every reply now shows `outcome` (or Telegram refused the edit for good: unchanged, deleted, too old to
+        edit); a settled outcome ends the watch."""
         with self.db.write() as conn:
             if outcome in SETTLED:
                 outbox_unwatch(conn, proposal_id)
             else:
                 outbox_set_shown(conn, proposal_id, outcome)
+
+    def card_edit_failed(self, proposal_id: str, outcome: NcOutcome) -> None:
+        """An edit failed for a reason that may pass (rate limit, timeout, network): retried after EDIT_RETRY_S,
+        doubling up to EDIT_RETRY_MAX_S, for EDIT_ATTEMPTS attempts; then given up for this outcome, logged."""
+        w = self.watched.get(proposal_id)
+        if w is None:
+            return
+        tries = w.tries + 1
+        if tries >= EDIT_ATTEMPTS:
+            log.warning("NOT CONFIRMED card %s not edited to %s after %d attempts: given up", proposal_id, outcome,
+                        tries)
+            self.card_edited(proposal_id, outcome)
+            return
+        delay = min(EDIT_RETRY_S * 2 ** (tries - 1), EDIT_RETRY_MAX_S)
+        with self.db.write() as conn:
+            outbox_edit_failed(conn, proposal_id, tries, time.time_ns() + int(delay * 1e9))
 
     # ------------------------------------------------------------------ agent reports
     def pending_reports(self) -> tuple[list[str], ReportsAck | None]:

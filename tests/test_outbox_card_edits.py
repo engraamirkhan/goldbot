@@ -45,13 +45,30 @@ def _archive(bus: ApprovalBus, outcome: str | None = "pending", pid: str = PID) 
                                               "not_confirmed": c}))
 
 
-class _Telegram:
-    """The bot API calls the pump makes; `fail_edits` makes every text edit raise (Telegram down, message gone)."""
+class NetworkError(Exception):
+    """Shaped like python-telegram-bot's telegram.error tree (the [live] extra is not installed here)."""
 
-    def __init__(self, fail_edits: bool = False) -> None:
+
+class TimedOut(NetworkError):
+    pass
+
+
+class RetryAfter(Exception):
+    pass
+
+
+class BadRequest(NetworkError):
+    pass
+
+
+class _Telegram:
+    """The bot API calls the pump makes; while `edit_errors` holds exceptions, each text edit raises the next one."""
+
+    def __init__(self) -> None:
         self.sent: list[tuple[int, str]] = []
         self.edits: list[tuple[int, int, str]] = []
-        self.fail_edits = fail_edits
+        self.edit_errors: list[BaseException] = []
+        self.attempts = 0
         self.next_id = 100
 
     async def send_message(self, chat: int, text: str, **_: Any) -> Any:
@@ -63,8 +80,9 @@ class _Telegram:
         return None
 
     async def edit_message_text(self, text: str, chat_id: int, message_id: int) -> None:
-        if self.fail_edits:
-            raise RuntimeError("Bad Request: message to edit not found")
+        self.attempts += 1
+        if self.edit_errors:
+            raise self.edit_errors.pop(0)
         self.edits.append((chat_id, message_id, text))
 
 
@@ -243,16 +261,75 @@ def test_an_unreadable_archive_does_not_stop_the_other_cards_edits(tmp_path):
 
 
 # ---------------------------------------------------------------------------------------------- best effort
-def test_a_lost_edit_never_hides_the_notice_and_is_not_retried_every_poll(tmp_path, monkeypatch):
+@pytest.fixture
+def quick_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed edit is due again on the next poll (the real backoff starts at 2 s)."""
+    from goldbot.telegram import outbox as outbox_mod
+    monkeypatch.setattr(outbox_mod, "EDIT_RETRY_S", 0.0)
+
+
+@pytest.mark.parametrize("error", [TimedOut("Timed out"), RetryAfter("Flood control exceeded"),
+                                   NetworkError("httpx.ConnectError")])
+def test_an_edit_that_failed_for_a_passing_reason_is_retried_and_lands_without_hiding_the_notice(
+        tmp_path, monkeypatch, quick_retry, error):
     tg = _Telegram()
     bot, _ = _reported(tmp_path, monkeypatch, tg)
     bot.outbox.pending_reports()                                   # first start: the report cursor is set
-    tg.fail_edits = True
+    tg.edit_errors = [error]
     _archive(bot.bus, "opened")
     bot.bus.notify_owner("Order confirmed: LONG 0.1 lots XAUUSD on demo is open at 2400.20.")
     _pass(bot, n=0)                                                # a report pass: the notice goes out
     assert any(t.endswith("Order confirmed: LONG 0.1 lots XAUUSD on demo is open at 2400.20.") for _, t in tg.sent)
-    assert tg.edits == [] and bot.outbox.card_edits() == []        # one attempt per outcome, logged
+    assert tg.edits == [] and PID in bot.outbox.watched            # the edit failed: still watched
+    _pass(bot)
+    assert tg.edits == [(CHAT, REPLY_MID, f"{PID}: {EXPECTED['opened']}")] and not bot.outbox.watched
+
+
+def test_a_failed_edit_waits_for_its_backoff_before_the_next_attempt(tmp_path, monkeypatch):
+    tg = _Telegram()
+    bot, _ = _reported(tmp_path, monkeypatch, tg)
+    tg.edit_errors = [TimedOut("Timed out")]
+    _archive(bot.bus, "opened")
+    _pass(bot)
+    _pass(bot)                                                     # within EDIT_RETRY_S: not tried again yet
+    assert tg.attempts == 1 and bot.outbox.watched[PID].tries == 1
+
+
+@pytest.mark.parametrize("why", ["Message is not modified: specified new message content and reply markup are "
+                                 "exactly the same", "Message can't be edited", "Message to edit not found"])
+def test_an_edit_telegram_refuses_for_good_is_not_retried(tmp_path, monkeypatch, quick_retry, why):
+    tg = _Telegram()
+    bot, _ = _reported(tmp_path, monkeypatch, tg)
+    tg.edit_errors = [BadRequest(why)]
+    _archive(bot.bus, "opened")
+    _pass(bot)
+    _pass(bot)
+    assert tg.attempts == 1 and not bot.outbox.watched
+
+
+def test_a_card_whose_edit_keeps_failing_is_given_up_after_the_attempt_cap(tmp_path, monkeypatch, quick_retry):
+    from goldbot.telegram import outbox as outbox_mod
+    monkeypatch.setattr(outbox_mod, "EDIT_ATTEMPTS", 3)
+    tg = _Telegram()
+    bot, _ = _reported(tmp_path, monkeypatch, tg)
+    tg.edit_errors = [TimedOut("Timed out")] * 10
+    _archive(bot.bus, "still_unknown")
+    for _ in range(6):
+        _pass(bot)
+    assert tg.attempts == 3                                        # given up for this outcome
+    assert bot.outbox.watched[PID].shown == "still_unknown"         # still watched for the next outcome
+    tg.edit_errors = []
+    _archive(bot.bus, "opened")
+    _pass(bot)
+    assert tg.edits == [(CHAT, REPLY_MID, f"{PID}: {EXPECTED['opened']}")]
+
+
+def test_an_edit_error_is_final_only_for_telegrams_refusals_for_good():
+    assert botmod.edit_is_final(BadRequest("Message is not modified"))
+    assert botmod.edit_is_final(type("Forbidden", (Exception,), {})("bot was blocked by the user"))
+    assert not botmod.edit_is_final(TimedOut("Timed out"))
+    assert not botmod.edit_is_final(RetryAfter("Flood control exceeded"))
+    assert not botmod.edit_is_final(RuntimeError("database is locked"))
 
 
 def test_an_outbox_failure_while_editing_never_stops_the_reports(tmp_path, monkeypatch):

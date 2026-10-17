@@ -65,6 +65,6 @@ def test_migration_9_adds_the_outbox_watch_and_is_additive_so_a_rollback_still_o
     with sqlite3.connect(tmp_path / "aux.db") as conn:
         migrate(conn, "aux")
         assert {r[1] for r in conn.execute("PRAGMA table_info(outbox_watch)")} == {
-            "proposal_id", "messages", "shown", "since_ns"}
+            "proposal_id", "messages", "shown", "since_ns", "tries", "retry_ns"}
         conn.commit()
         assert migrate(conn, "aux", migrations=AUX[:8]) == []          # the older code accepts the newer file
