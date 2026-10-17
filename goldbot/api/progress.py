@@ -16,6 +16,7 @@ Design rules this module keeps:
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -80,21 +81,32 @@ T = TypeVar("T")
 # ---------------------------------------------------------------------------------------------- shared
 class GatesCache:
     """One gate evaluation served for `ttl_s` seconds (the design's 60 s, as Health's own cadence), so a phone polling
-    every minute and a refocused tab never re-read the whole record twice. Thread-safe: one build at a time."""
+    every minute and a refocused tab never re-read the whole record twice. The build runs outside the lock: while one
+    rebuild runs, other callers get the previous value at once instead of queueing behind it (only callers before the
+    first value exists build alongside it). A failed build leaves the previous value in place."""
 
     def __init__(self, ttl_s: float = GATES_TTL_S, clock: Callable[[], float] = time.monotonic):
         self._ttl, self._clock = ttl_s, clock
         self._lock = threading.Lock()
         self._at: float | None = None
         self._value: Any = None
+        self._building = False
 
     def get(self, build: Callable[[], T]) -> T:
         with self._lock:
-            now = self._clock()
-            if self._at is None or now - self._at >= self._ttl:
-                self._value, self._at = build(), now
-            value: T = self._value
-            return value
+            fresh = self._at is not None and self._clock() - self._at < self._ttl
+            if fresh or (self._building and self._at is not None):
+                value: T = self._value
+                return value
+            self._building = True
+        try:
+            new = build()
+            with self._lock:
+                self._value, self._at = new, self._clock()
+            return new
+        finally:
+            with self._lock:
+                self._building = False
 
 
 class _Names:
@@ -111,11 +123,19 @@ class _Names:
 
 
 def _known_accounts(state_dir: Path, engines: list[dict[str, Any]]) -> list[str]:
-    """Account ids that can appear in gate evidence: the cost tables, closed-trade files and engines."""
+    """Account ids that can appear in gate evidence: the cost tables (by file name and by the `account_id` inside,
+    which the evidence prints and a hand-edited or legacy file can make differ), closed-trade files and engines."""
     ids = [str(e.get("account") or "") for e in engines]
     for pattern, prefix, suffix in (("costs_*.json", "costs_", ".json"), ("closed_trades_*.jsonl", "closed_trades_", ".jsonl"),
                                     ("engine_*.json", "engine_", ".json")):
         ids += [f.name[len(prefix):-len(suffix)] for f in state_dir.glob(pattern)]
+    for f in state_dir.glob("costs_*.json"):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue                                # gates_phase skips it too, so it reaches no evidence
+        if isinstance(d, dict) and d.get("account_id") is not None:
+            ids.append(str(d["account_id"]))
     return ids
 
 
@@ -170,12 +190,15 @@ def gates_view(state_dir: str | Path, settings: Settings, now: pd.Timestamp, eng
     stop_cant = [c for c in cant if c in (CANT_TRADES, CANT_PHASE)]
     if any(e.get("closed_records_lost") for e in engines):
         stop_cant.append(CANT_LOST)
-    gates = [GateView(gate=g.gate, met=g.met, recorded=g.recorded, recorded_utc=_utc(g.recorded_utc), items=[
-        GateItemView(name=i.name, met=i.met, required=i.required, need=names(i.need), evidence=names(i.evidence),
-                     proposed=i.threshold in pending,
-                     progress=GateProgressView(**i.progress.model_dump()) if i.progress else None,
-                     earliest_utc=_utc(i.earliest_utc), ci95=i.ci95)
-        for i in g.items]) for g in rep.gates]
+    gates = []
+    for g in rep.gates:
+        items = [GateItemView(name=i.name, met=i.met, required=i.required, need=names(i.need),
+                              evidence=names(i.evidence), proposed=i.threshold in pending,
+                              progress=GateProgressView(**i.progress.model_dump()) if i.progress else None,
+                              earliest_utc=_utc(i.earliest_utc), ci95=i.ci95)
+                 for i in g.items]
+        gates.append(GateView(gate=g.gate, met=g.met, recorded=g.recorded, recorded_utc=_utc(g.recorded_utc),
+                              items=items, met_on_proposed=g.met and any(i.required and i.proposed for i in items)))
     return GatesView(generated_utc=now.to_pydatetime(), phase=rep.phase, gates=gates,
                      stop_rule=_stop_view(rep.stop_rule, settings, stop_cant),
                      proposed_count=len(pending),
@@ -197,10 +220,12 @@ def gates_unavailable(now: pd.Timestamp, settings: Settings | None) -> GatesView
 
 # ---------------------------------------------------------------------------------------------- GET /api/attribution
 def _cell(c: Cell, *, fixed: bool = False) -> dict[str, Any]:
-    """A cell for the screen; `fixed` (an exit target or stop row) reads "by construction" with no range."""
+    """A cell for the screen; `fixed` (an exit target or stop row) reads "by construction" with no statistic that
+    could be read as evidence: no t, no se and neither range (quant F2, F-a)."""
     d = c.model_dump()
     if fixed:
-        d.update(verdict="by construction", verdict_adj="by construction", ci_adj=None)
+        d.update(verdict="by construction", verdict_adj="by construction", ci_adj=None, ci95_net=None, t_stat=None,
+                 se=None)
     return d
 
 
@@ -273,7 +298,7 @@ def trades_summary(state_dir: str | Path, now: pd.Timestamp, engines: list[dict[
         out.append(TradesSummary(
             account=account_name(acc), mode=_mode(e.get("mode")) or last_mode.get(acc), currency=ccy,
             days=days, first_day=first, last_day=last, net=round(sum(t.pnl for t in money), 2), n=len(ts),
-            net_n=len(money), days_traded=len(per_day), trading_days=weekdays(first, last), target=NORTH_STAR_DAY_GBP,
+            net_n=len(money), days_traded=sum(date.fromisoformat(d.day).weekday() < 5 for d in per_day), trading_days=weekdays(first, last), target=NORTH_STAR_DAY_GBP,
             days_at_target=sum(d.net >= NORTH_STAR_DAY_GBP for d in per_day) if ccy == "GBP" else None,
             best_day=max(per_day, key=lambda d: d.net) if per_day else None,
             worst_day=min(per_day, key=lambda d: d.net) if per_day else None, by_day=per_day,

@@ -1365,6 +1365,11 @@ export interface components {
                 number,
                 number
             ] | null;
+            /**
+             * Ci95 Basis
+             * @default per-trade iid, return
+             */
+            ci95_basis: string;
             /** Earliest Utc */
             earliest_utc?: string | null;
             /** Evidence */
@@ -1401,6 +1406,11 @@ export interface components {
             items: components["schemas"]["GateItemView"][];
             /** Met */
             met: boolean;
+            /**
+             * Met On Proposed
+             * @default false
+             */
+            met_on_proposed: boolean;
             /** Recorded */
             recorded: boolean;
             /** Recorded Utc */

@@ -1844,6 +1844,11 @@
       ],
       "title": "Ci95"
      },
+     "ci95_basis": {
+      "default": "per-trade iid, return",
+      "title": "Ci95 Basis",
+      "type": "string"
+     },
      "earliest_utc": {
       "anyOf": [
        {
@@ -1944,6 +1949,11 @@
      },
      "met": {
       "title": "Met",
+      "type": "boolean"
+     },
+     "met_on_proposed": {
+      "default": false,
+      "title": "Met On Proposed",
       "type": "boolean"
      },
      "recorded": {

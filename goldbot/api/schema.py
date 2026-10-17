@@ -712,6 +712,9 @@ class GateItemView(BaseModel):
     progress: GateProgressView | None = None
     earliest_utc: datetime | None = None    # a day item: the calendar date the count is reached (never a forecast)
     ci95: tuple[float, float] | None = None # an expectancy item: 95% interval of the phase's mean return per trade
+    # how `ci95` is computed: on per-trade returns as independent draws (the gates' convention), not clustered by day
+    # like the Results rows (ADR 0022), so the screen can say so
+    ci95_basis: str = "per-trade iid, return"
 
 
 class GateView(BaseModel):
@@ -720,6 +723,7 @@ class GateView(BaseModel):
     recorded: bool
     recorded_utc: datetime | None = None
     items: list[GateItemView]
+    met_on_proposed: bool = False           # met, but a required item's threshold is PROPOSED and not signed off
 
 
 class StopIncidentView(BaseModel):

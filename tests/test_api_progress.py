@@ -2,6 +2,8 @@
 /api/trades/summary. Read-only for every signed-in role; nothing is written; accounts by config name with any run of
 5+ digits cut to its last two; no operator-typed text, no raw exception text."""
 import json
+import re
+import threading
 from pathlib import Path
 
 import pandas as pd
@@ -85,6 +87,7 @@ def test_paper_items_carry_progress_the_earliest_calendar_date_and_the_paper_int
     assert days.earliest_utc == (start + pd.Timedelta(days=SETTINGS.gates.paper_min_days)).to_pydatetime()
     exp = item(v, "paper_to_tiny_live", "paper_expectancy")
     assert exp.ci95 is not None and exp.ci95[0] < 0.000233 < exp.ci95[1]
+    assert exp.ci95_basis == "per-trade iid, return"           # not day-clustered: the screen labels it (quant 3)
     assert item(v, "paper_to_tiny_live", "chaos_drill").progress is None
     # live days not started: no earliest date (a calendar fact only once its clock has started)
     assert item(v, "tiny_live_to_full_size", "live_days").earliest_utc is None
@@ -115,6 +118,20 @@ def test_proposed_thresholds_are_counted_from_the_settings_and_drop_out_when_sig
     assert item(w, "tiny_live_to_full_size", "live_days").proposed
 
 
+def test_a_gate_met_on_a_threshold_not_yet_signed_off_says_so(tmp_path):
+    state, trials = full_state(tmp_path)
+    v = view(state, trials)
+    assert all(g.met for g in v.gates)
+    # gate 1 meets backtest_min_dsr and gate 2 paper_min_days, both PROPOSED and unsigned by default
+    assert gate(v, "backtest_to_paper").met_on_proposed and gate(v, "paper_to_tiny_live").met_on_proposed
+    signed = SETTINGS.model_copy(update={"gates": SETTINGS.gates.model_copy(
+        update={"signed_off": list(GateSettings.PROPOSED)})})
+    assert not any(g.met_on_proposed for g in view(state, trials, settings=signed).gates)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert not any(g.met_on_proposed for g in view(empty).gates)    # not met: nothing to qualify
+
+
 def test_signed_off_only_names_a_proposed_threshold_and_ships_empty():
     assert load_settings().gates.signed_off == []
     assert GateSettings(signed_off=["paper_min_days"]).signed_off == ["paper_min_days"]
@@ -127,6 +144,15 @@ def test_signed_off_only_names_a_proposed_threshold_and_ships_empty():
 def test_account_names_in_gate_evidence_have_their_digits_cut(tmp_path):
     state, trials = full_state(tmp_path)
     write_costs(state, account=ACC)
+    body = view(state, trials).model_dump_json()
+    assert LOGIN not in body and CUT in body
+
+
+def test_a_cost_table_naming_another_account_than_its_file_still_has_its_digits_cut(tmp_path):
+    state, trials = full_state(tmp_path)
+    write_costs(state, account="icm-demo")                         # costs_icm-demo.json ...
+    f = state / "costs_icm-demo.json"
+    f.write_text(json.dumps({**json.loads(f.read_text()), "account_id": ACC}))   # ... hand-edited: names the login
     body = view(state, trials).model_dump_json()
     assert LOGIN not in body and CUT in body
 
@@ -218,6 +244,30 @@ def test_gates_cache_serves_one_evaluation_for_60_seconds():
     assert cache.get(build) == 2
 
 
+def test_gates_cache_serves_the_old_value_while_one_rebuild_runs():
+    clock = [0.0]
+    cache = progress.GatesCache(ttl_s=60.0, clock=lambda: clock[0])
+    assert cache.get(lambda: "old") == "old"
+    clock[0] = 61.0
+    started, release = threading.Event(), threading.Event()
+
+    def slow() -> str:
+        started.set()
+        release.wait(5)
+        return "new"
+    rebuild = threading.Thread(target=lambda: cache.get(slow))
+    rebuild.start()
+    assert started.wait(5)
+    got: list[str] = []
+    other = threading.Thread(target=lambda: got.append(cache.get(lambda: "second build")))
+    other.start()
+    other.join(2)                                       # never blocked behind the running rebuild
+    assert got == ["old"]
+    release.set()
+    rebuild.join(5)
+    assert cache.get(lambda: "unused") == "new"
+
+
 # ------------------------------------------------------------------------------------------------ GET /api/attribution
 def _report_with_exits(state: Path) -> None:
     trades = (_book(40, 20, hour=8) + [_trade(100 + i, r=0.3, barrier="time", day=i % 30) for i in range(31)]
@@ -250,7 +300,8 @@ def test_exit_target_and_stop_rows_read_by_construction(tmp_path):
     for rows in (v.report.exits, v.report.breakdowns["exit"]):
         for k in ("target", "stop"):
             assert rows[k].verdict_adj == "by construction" and rows[k].verdict == "by construction"
-            assert rows[k].ci_adj is None
+            assert rows[k].ci_adj is None and rows[k].ci95_net is None and rows[k].t_stat is None
+            assert rows[k].se is None
         assert rows["time"].verdict_adj != "by construction"
 
 
@@ -312,6 +363,15 @@ def test_trades_summary_is_the_last_30_opportunity_days_per_account(tmp_path):
     assert [d.day for d in s.by_day] == ["2026-10-09", "2026-10-13"]
 
 
+def test_a_close_on_a_weekend_report_day_counts_in_the_money_but_not_as_a_day_traded(tmp_path):
+    now = pd.Timestamp("2026-10-16 12:00", tz="UTC")
+    write_trades(tmp_path, [_gbp(10.0, pd.Timestamp("2026-10-09 22:30", tz="UTC")),    # winter-style close: Sat 10 Oct
+                            _gbp(5.0, pd.Timestamp("2026-10-13 10:00", tz="UTC"))])
+    (s,) = progress.trades_summary(tmp_path, now, [{"account": ACC, "mode": "demo", "currency": "GBP"}])
+    assert s.net == 15.0 and [d.day for d in s.by_day] == ["2026-10-10", "2026-10-13"]
+    assert s.days_traded == 1 and s.trading_days == 22
+
+
 def test_an_engine_account_without_trades_is_listed_empty(tmp_path):
     (s,) = progress.trades_summary(tmp_path, NOW, [{"account": ACC, "mode": "demo", "currency": "USD"}])
     assert s.n == 0 and s.net == 0 and s.best_day is None and s.by_day == [] and s.account == CUT
@@ -336,6 +396,35 @@ def test_progress_routes_need_a_sign_in_and_serve_a_viewer_without_identifiers(c
     r = c.get(path, headers=h["viewer"])
     assert r.status_code == 200
     assert LOGIN not in r.text and "o@x.io" not in r.text and "v@x.io" not in r.text
+    assert identifiers_in(r.json()) == []
+
+
+ALLOWED_RUNS = {"50,000"}                               # fixture counts written with separators are not runs anyway
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+RUN = re.compile(r"(?<![\d.])\d{5,}")                    # a 5+ digit run that is not the tail of a decimal
+AGENT = re.compile(r"^[a-z_]+-g\d+-[0-9a-f]{10}$")      # a strategy agent id (`<family>-g<gen>-<hash>`): code, not a person
+
+
+def identifiers_in(body: object) -> list[str]:
+    """Every string in a response that holds an email or a bare 5+ digit run (a login, a ticket): JSON numbers are
+    values, not text, and decimals like 0.00123 are not runs."""
+    out: list[str] = []
+    if isinstance(body, dict):
+        for k, v in body.items():
+            out += identifiers_in(k) + identifiers_in(v)
+    elif isinstance(body, list):
+        for v in body:
+            out += identifiers_in(v)
+    elif (isinstance(body, str) and body not in ALLOWED_RUNS and not AGENT.match(body)
+          and (EMAIL.search(body) or RUN.search(body))):
+        out.append(body)
+    return out
+
+
+def test_the_identifier_check_catches_a_login_or_an_email_but_not_a_decimal():
+    assert identifiers_in({"a": ["paper 0.00123 vs 0.00200", "50,000 ticks", 51234567],
+                           "breakout-g1-2222222222": 1}) == []
+    assert identifiers_in({"a": "icm-demo-51234567 ticks"}) and identifiers_in(["me@x.io"])
 
 
 def test_gates_route_writes_nothing_and_is_cached(client):
