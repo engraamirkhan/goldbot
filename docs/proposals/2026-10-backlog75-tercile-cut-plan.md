@@ -73,3 +73,27 @@ test).
 
 **Reviews.** quant-reviewer on this plan (risk 1 and the no-floor reading) before the build; then implementer,
 test-engineer, quant-reviewer and code-reviewer on the code; security before push. **Owner-only decisions:** none.
+
+## Conditions from the quant plan review (APPROVE-WITH-CONDITIONS, 8753ad6, 2026-10-17)
+
+Rulings: (1) CPCV path leakage through the quantile is second-order (label-free scalar; the calibrator has the larger
+exposure; CPCV is a veto only, ADR 0003) — no purged variant; record in the E-2 row. (2) No floor is sound (below-break-even
+trades bias the mean down); but live trading keeps break-even + 0.02, so a tercile result does not carry to live. (3)
+Earlier folds' out-of-fold p_raw meets "never in-sample training p". (4) K accounting correct; **`q` is part of the
+rule — any other `q` is a new trial.** (5) `>=` and the NaN cut are correct but must be guarded explicitly.
+
+Binding on the build:
+1. **Prior set = earlier folds' test rows ∩ fold k's `train_idx`** (on 15m the 24-month rolling window would otherwise
+   let "prior" reach past the training window and skip the first 24 months) — or amend the pre-registration text to
+   "all earlier out-of-fold rows"; either way the text is committed before O-4's candidate count is known.
+2. `fold_cuts` raises if fold test sets overlap (specialist overrides allow `step_months < test_months`);
+   `test_overlapping_test_folds_raise`.
+3. For `tercile_inner`, **replace** the "(cross-fitted, break-even + margin)" clause rather than append; the default
+   string stays byte-identical; add "promotion needs a separate trial under the live rule".
+4. Pin `np.quantile(..., method="linear")`, recorded as `tercile_method`.
+5. Strike "retention fixed at ~33%" (each fold's raw-p scale differs); record actual retention, never read it.
+6. Point-in-time truncation test end to end through `_walk_forward`: labels cut at fold k's `test_start` vs the full
+   set give identical `fold_cuts[:k+1]`.
+7. Add `test_cpcv_cut_ignores_nan_filled_rows` (quantile from `p_raw` BEFORE `nan_to_num(..., nan=0.5)` at
+   cpcv.py:239; only finite rows count toward the 50; guard with `np.isfinite(cut)`) and
+   `test_threshold_rule_change_after_preregistration_is_refused_by_director`.
