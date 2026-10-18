@@ -411,3 +411,29 @@ def test_a_malformed_status_file_is_an_exit_of_minus_one_not_a_crashed_merge(tmp
     (arts / "cell-0" / "status.json").write_text(status)
     out = cells.record(plan, arts, registry.path)
     assert out.recorded == 2 and out.failed == 0
+
+
+def test_a_deeply_nested_rows_file_fails_that_cell_alone_not_the_record_job(tmp_path: Path) -> None:
+    plan, arts, registry = _two_cell_plan_with(tmp_path, "[" * 1_000_000)
+    out = cells.record(plan, arts, registry.path)
+    assert out.failed == 1 and out.recorded == 1
+
+
+def test_a_deeply_nested_or_undecodable_status_file_is_an_exit_of_minus_one(tmp_path: Path) -> None:
+    plan, arts, registry = _two_cell_plan_with(tmp_path, [_planned_row(tmp_path, "a")])
+    (arts / "cell-0" / "status.json").write_text("[" * 1_000_000)
+    (arts / "cell-1" / "status.json").write_bytes(b"\xff\xfe\x00")
+    assert cells.record(plan, arts, registry.path).failed == 0
+
+
+def test_a_symlinked_artifact_file_is_never_followed(tmp_path: Path) -> None:
+    secret = tmp_path / "outside.jsonl"
+    secret.write_text(json.dumps(_planned_row(tmp_path, "a")) + "\n")
+    plan, arts, registry = _two_cell_plan_with(tmp_path, [_planned_row(tmp_path, "b")])
+    (arts / "cell-0" / "rows.jsonl").unlink()
+    (arts / "cell-0" / "rows.jsonl").symlink_to(secret)
+    (arts / "cell-0" / "report.md").unlink()
+    (arts / "cell-0" / "report.md").symlink_to(secret)
+    out = cells.record(plan, arts, registry.path)
+    assert out.failed == 1 and "symlink" in next(r for r in read_rows(registry.path) if r["status"] == "failed")["results"]["error"]
+    assert all("outside" not in rep["body"] for rep in out.reports)

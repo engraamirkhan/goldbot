@@ -285,16 +285,21 @@ def _failed_row(cell: Mapping[str, Any], error: str) -> dict[str, Any]:
                           status=FAILED, budget_quarter=quarter_of())
 
 
+def _plain_file(path: Path) -> bool:
+    """A regular file that is not a symlink (a cell's artifact is untrusted: a link could point anywhere on the runner)."""
+    return path.is_file() and not path.is_symlink()
+
+
 def _read(path: Path) -> str:
     """A cell's text file, "" when absent or larger than MAX_CELL_FILE (never read whole into memory)."""
-    return path.read_text(errors="replace") if path.is_file() and path.stat().st_size <= MAX_CELL_FILE else ""
+    return path.read_text(errors="replace") if _plain_file(path) and path.stat().st_size <= MAX_CELL_FILE else ""
 
 
 def _exit_code(path: Path) -> int:
     """The cell's exit code from status.json; -1 (the cell failed) when it is missing, oversized or malformed."""
     try:
         return int(json.loads(_read(path) or "{}").get("exit", -1))
-    except (ValueError, TypeError, AttributeError):
+    except (ValueError, TypeError, AttributeError, RecursionError):
         return -1
 
 
@@ -329,11 +334,13 @@ def _read_cell_rows(path: Path, cell: Mapping[str, Any]) -> tuple[list[dict[str,
     input: a truncated or foreign `rows.jsonl` fails that cell alone (a failed trial, counted in K), never the job.
     Each row needs the registry row fields, a status a cell may write (no verdict or withdrawal) and the agent and
     family the plan gave the cell (a discovery row names its own family)."""
+    if path.is_symlink():
+        return [], "rows.jsonl is a symlink: not read"
     if path.is_file() and path.stat().st_size > MAX_CELL_FILE:
         return [], f"rows.jsonl exceeds {MAX_CELL_FILE} bytes: not parsed"
     try:
         rows: list[Any] = read_rows(path)
-    except (ValueError, OSError) as e:
+    except (ValueError, OSError, RecursionError) as e:
         return [], f"rows.jsonl unreadable: {type(e).__name__}: {e}"
     agent, family, _, resolved = _planned(cell)
     for i, r in enumerate(rows):
