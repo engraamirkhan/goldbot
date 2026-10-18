@@ -237,7 +237,7 @@ def test_quarter_usage_holdout_and_budget_defaults():
     assert quarter_usage(rows, NOW, 20) == ("2026Q4", 2, 18)
     assert quarter_usage(rows * 20, NOW, 20)[2] == 0
     s = load_settings().research
-    assert quarter_budget(s) == getattr(s, "trial_budget_quarter", DEFAULT_QUARTER_BUDGET)
+    assert quarter_budget(s, "2027Q1") == getattr(s, "trial_budget_quarter", DEFAULT_QUARTER_BUDGET)
     assert quarter_budget(object()) == DEFAULT_QUARTER_BUDGET
     assert holdout_window(object()) == (pd.Timestamp("2025-10-01", tz="UTC"), pd.Timestamp("2026-10-01", tz="UTC"))
     # trials scored on the held-out year are never evidence

@@ -286,7 +286,7 @@ def _h16(args: argparse.Namespace, b1: pd.DataFrame, reg: TrialRegistry, setting
             "day_type": day_type_info(True, macro, us_calendar)}
     try:
         row, res = h16.run_trial(reg, bars, macro, us_calendar, holdout_from=holdout_from,
-                                 cap=settings.research.trial_budget_quarter,
+                                 cap=settings.research.budget_for(quarter_of()),
                                  reserved=settings.research.reserved_for(quarter_of()),
                                  retired={e.family for e in settings.research.retired_families},
                                  rationale=args.rationale, min_rows=day_type_features.MIN_FIT_ROWS, input_info=info)
@@ -713,7 +713,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
     # budget (QueuedConfigMismatch)
     try:
         quarter, preregs = reg.check_budget_reserved([(j.family, j.config) for j in jobs],
-                                                     settings.research.trial_budget_quarter,
+                                                     settings.research.budget_for(quarter_of()),
                                                      settings.research.reserved_for(quarter_of()),
                                                      retired={e.family for e in settings.research.retired_families},
                                                      agents=agents)
@@ -841,7 +841,7 @@ def _discover(args: argparse.Namespace, variants: list[dict[str, Any]], b1: pd.D
     try:
         cfg = DiscoveryConfig(**json.loads(args.discover_config))
         row, text = discovery_pass(spec, b1, reg,
-                                   budget_cap=settings.research.trial_budget_quarter,
+                                   budget_cap=settings.research.budget_for(quarter_of()),
                                    reserved_setting=settings.research.reserved_for(quarter_of()), cfg=cfg,
                                    group_mode=args.families,
                                    extra_cost_usd=extra_cost, swap=swap, holdout=holdout,
