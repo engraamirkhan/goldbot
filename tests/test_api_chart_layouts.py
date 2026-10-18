@@ -73,3 +73,5 @@ def test_every_response_carries_the_csp_with_only_the_tradingview_frames(app_cli
     assert "script-src 'self';" in csp
     assert "frame-src https://www.tradingview-widget.com https://www.tradingview.com;" in csp
     assert "unsafe-inline" not in csp and "unsafe-eval" not in csp
+    # the MT5 chart panel shows the PNG through a same-origin blob: URL (web/src Mt5Chart); without it the image is blocked
+    assert "img-src 'self' data: blob:;" in csp
