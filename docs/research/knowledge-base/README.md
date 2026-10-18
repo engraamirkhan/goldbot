@@ -57,9 +57,8 @@ example, simple technical rules after data-snooping control and costs).
 - **tested: #n / R-xx**: a registry trial or a retired row in `hypotheses.md` section B.
 - **study: file**: a descriptive study in `docs/research/` (no trial).
 - **feature: module**: built as a point-in-time feature, not yet screened.
-- **pending: pa-claims**: the descriptive check is in
-  [`../pa-claims-2026-10-18.md`](../pa-claims-2026-10-18.md) *(not yet landed when this was written; update the
-  row when it does)*.
+- **checked: pa-claims**: the descriptive check is in
+  [`../pa-claims-2026-10-18.md`](../pa-claims-2026-10-18.md) (landed 2026-10-18; results in "Results fed back" below).
 - **not checked**.
 
 ## Naming and confidentiality rules
@@ -223,8 +222,20 @@ fair-value-gap rules (H-TVR1/2; R-09), mfi and box rules (A7 "not trialled, by d
 floor pivots as a standalone signal, short-horizon oscillator fades (R-01), 15m/1h breakouts (R-04, B03), tight
 structural stops at £1,000 (tight-stop study).
 
+## Results fed back (2026-10-18)
+
+| Result | Source | Effect on the base |
+|---|---|---|
+| EMA20 (1h) touched on 92.8% of trading days (87.5%-95.4% by year; 4,046 days) | `../pa-claims-2026-10-18.md` §1 | Near-certain by construction: "price returns to the EMA20" carries no information; R6 stays grade D, no trial |
+| Reversal attempts that fail: 30.7% (1h) and 33.0% (4h) against the trend vs shuffled-bar null 30.3% / 30.2% (null 5-95% 28.4-32.3 / 26.7-33.7) | same §2 | Course "most reversals fail" (S3) is a null-level frequency: **none found**; CHoCH continuation is not a standalone edge |
+| EMA10 to EMA50 gap > 1-3 ATR touches EMA50 at the matched every-bar rate (e.g. 48.4% vs 47.8% at N=16, gap > 1 ATR) | same §3 | Mean reversion after a wide MA gap = null; retired as a rule (R-01, R-09 cover it) |
+| Gap fill = null (director summary of the claims check) | `../pa-claims-2026-10-18.md` | Gap-fill folklore retired; no FVG rule (R-09) |
+| H-40 FAIL: no flag group survived fold-internal selection; pooled OOF AUC 0.503; K now 90 | `../hypotheses.md` A11 | All box/price-action flags retired as filters on the 2010..2025-09 candidates: S-GATE, R-GATE, D-MFI, volume veto/break-with-volume (M-rows), engulfing/pin flags (C-rows), premium/discount (S9), fib-50. KB-3's volume-veto half is read as "no signal on boxes"; the activity_tod group stays only as an O-4 feature |
+| KB-1, KB-2 (shallow arm), KB-5 pre-registered with counts | `../prereg-kb-2026-10-18.md`, `../hypotheses.md` A12 | H-48, H-49, D-KB1: counts 3,349 / 2,079 / 2,327; none dispatched (budget override owner-only) |
+
 ## Change log
 
 | Date | Change |
 |---|---|
 | 2026-10-18 | Created: seven topic files from the owner's nine local note sets, about 30 external sources, data status from the registry and dated studies; KB-1..KB-7 proposed (0 trials) |
+| 2026-10-18 (cycle 2) | Results fed back from pa-claims and H-40 FAIL; KB-1/KB-2/KB-5 moved to `hypotheses.md` A12 as D-KB1/H-48/H-49 with counts; KB-3/4/6/7 stay features/exits. No grade changed |
