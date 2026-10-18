@@ -36,6 +36,7 @@ VALID_BODIES: dict[str, dict[str, Any]] = {
     "/api/halt": {"reason": "test"},
     "/api/rearm": {"totp": "000000"},
     "/api/automode": {"mode": "propose", "totp": ""},
+    "/api/chart/layouts": {"layouts": []},
 }
 
 

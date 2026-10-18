@@ -117,6 +117,7 @@ from goldbot.research import h16  # noqa: E402
 from goldbot.research.director import cited_rule, queued_rows_for, survivor_full_coverage  # noqa: E402
 from goldbot.research.gates import DSR_BAR  # noqa: E402
 from goldbot.research.generator import loop_refusal  # noqa: E402
+from goldbot.research.lot_fit import LotFitSpec, lot_fit_lines  # noqa: E402
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR, DaySummedDsr  # noqa: E402
 from goldbot.research.pipeline import (  # noqa: E402
     POOLED_FEATURES,
@@ -400,6 +401,7 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
     lines += _rule_gates_lines(m.get("rule_only_gates")) + _holdout_lines(m.get("holdout_verdict")) + _rule_only_lines(m.get("rule_only"))
     lines += rule_only_split_lines(m.get("rule_only_split"))
     lines += _by_family_lines(m.get("by_family"))
+    lines += lot_fit_lines(m.get("lot_fit"))
     if "all_candidates" in m:
         lines += ["### Out of fold", "",
                   "| set | n | hit rate | mean ret | profit factor | Sharpe (ann.) | max DD | deflated SR |",
@@ -605,6 +607,9 @@ def main() -> int:
                     help="round-trip slippage + commission per oz beyond the spread (default: settings prior + commission)")
     ap.add_argument("--cost-table", default="",
                     help="measured cost table JSON (release costs-v1 asset costs_measured.json); default: the settings priors")
+    ap.add_argument("--lot-fit", action="store_true",
+                    help="H-27 overlay: report the share of trades the account can take at the gate's own sizing and the "
+                         "GBP and R at the actual lots (settings research.lot_fit_*; reporting only; not with --discover/--cpcv/--h16)")
     ap.add_argument("--score-holdout", action="store_true",
                     help="score the configurations on the held-out window (once per configuration, ever)")
     ap.add_argument("--skip-screen", action="store_true",
@@ -634,6 +639,8 @@ def main() -> int:
     if args.pooled and json.loads(args.variants) not in ([{}], {}):
         raise SystemExit("--pooled runs every member family at its defaults; --variants does not apply")
     variants = [{}] if args.pooled else parse_variants(args.specialist, args.variants)
+    if args.lot_fit and (args.discover or args.cpcv or args.h16):
+        raise SystemExit("--lot-fit reports on the walk-forward; it is not wired into --discover, --cpcv or --h16")
     settings = load_settings()
     table = None
     if args.cost_table:
@@ -684,6 +691,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
          macro: pd.DataFrame | None = None, macro_info: dict[str, Any] | None = None,
          positioning: pd.DataFrame | None = None, positioning_info: dict[str, Any] | None = None,
          us_calendar: pd.DataFrame | None = None, us_calendar_info: dict[str, Any] | None = None) -> int:
+    lot_fit = LotFitSpec.from_settings(settings) if getattr(args, "lot_fit", False) else None
     day_type = bool(getattr(args, "day_type", False))
     feat_ctx, feat_names = feature_ctx(macro, positioning, us_calendar,
                                        calendar_features=bool(getattr(args, "us_calendar_features", False)),
@@ -798,11 +806,11 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         else:
             if job.pooled:
                 res = run_pool(preps, tf, n_trials=n_trials, extra_cost_usd=extra_cost, holdout=holdout,
-                               score_holdout=args.score_holdout)
+                               score_holdout=args.score_holdout, lot_fit=lot_fit)
             else:
                 res = evaluate(preps[0], n_trials=n_trials, extra_cost_usd=extra_cost, holdout=holdout,
                                score_holdout=args.score_holdout,
-                               full_coverage_columns=survivor_full_coverage(reg._rows(), job.config))
+                               full_coverage_columns=survivor_full_coverage(reg._rows(), job.config), lot_fit=lot_fit)
             n = res.n_candidates
             print(f"{json.dumps(job.overrides) or 'defaults'}: candidates {n}  folds {res.n_folds}  "
                   f"[{time.time() - t0:.0f}s]", flush=True)

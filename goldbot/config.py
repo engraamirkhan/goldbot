@@ -374,6 +374,11 @@ class ResearchSettings(_Section):
     recal_prior_trades: float = Field(200.0, gt=0)    # the current calibration counts as this many trades
     recal_max_shift: float = Field(0.05, gt=0, le=0.2)   # most a probability may move in one run
     recal_window_days: int = Field(182, ge=7)         # outcomes exited within this many days
+    # H-27 lot-fit overlay (research/lot_fit.py, opt-in): the account the research sizes trades for
+    lot_fit_equity: float = Field(1000.0, gt=0)          # account currency
+    lot_fit_acct_per_usd: float = Field(0.75, gt=0)      # account currency per USD (GBP at GBPUSD ~1.33)
+    lot_fit_spread_points: float = Field(20.0, ge=0)     # the gate's stop floor: spread prior, points (0.01 USD each)
+    lot_fit_stops_level_points: float = Field(0.0, ge=0)  # ...and the broker's stops level (IC Markets: 0)
     registry: str = "state/research_registry.jsonl"
     models_dir: str = "models"
 

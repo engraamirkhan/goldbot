@@ -1,0 +1,5 @@
+id: F25
+requirement: 'Read the values the owner''s TradingView indicators plot (invite-only included), one bar alert per indicator and timeframe, every plot stored point in time and joinable only on available_utc (owner, 2026-10-18)'
+status: partial
+code: goldbot/webhook/app.py (Alert.plots/price, caller_ip, 503 on a failed write), goldbot/webhook/inbox.py (SQLite inbox, durable idempotency, tv_indicators sync), goldbot/features/tradingview.py (opt-in reader and feature), goldbot/api/tv_status.py (GET /api/tradingview); not yet - CSV history backfill, repaint check, plot-name map, a dashboard screen
+test: tests/test_tv_webhook.py

@@ -75,7 +75,7 @@ def test_cell_arguments_pass_every_value_in_the_equals_form_so_a_value_can_never
     assert {"--discover", "--families=family", "--discover-config={\"k\": 1}", "--rule-ref=p.md#r", "--score-holdout",
             "--skip-screen", "--macro=macro", "--specialist=session_open", "--variants=[{}]"} <= set(argv)
     for a in argv:
-        assert a.startswith("--") and ("=" in a or a in {"--discover", "--score-holdout", "--skip-screen"})
+        assert a.startswith("--") and ("=" in a or a in {"--discover", "--score-holdout", "--skip-screen", "--lot-fit"})
 
 
 # ------------------------------------------------------------------------------------------- the cell's own rows
@@ -220,9 +220,9 @@ def test_a_refusal_before_any_look_is_reported_but_charges_no_trial(tmp_path: Pa
 
 def test_a_cell_that_recorded_a_row_and_then_failed_keeps_its_row_and_adds_no_failed_one(tmp_path: Path) -> None:
     registry = TrialRegistry(tmp_path / "registry.jsonl")
-    plan = cells.plan(_env())
+    plan = cells.plan(_env(VARIANTS=_VARIANTS))[:1]
     arts = tmp_path / "arts"
-    _cell_dir(arts, 0, [_one_row(tmp_path, "a")], exit_code=1, log="Traceback ...")
+    _cell_dir(arts, 0, [_planned_row(tmp_path, "a")], exit_code=1, log="Traceback ...")
     out = cells.record(plan, arts, registry.path)
     assert [r["status"] for r in read_rows(registry.path)] == ["evaluated"] and out.failed == 0
 
@@ -294,3 +294,91 @@ def test_inputs_reach_the_shell_only_through_env_and_actions_are_pinned() -> Non
                 assert re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", s["uses"]), s["uses"]
     inputs = WF[True]["workflow_dispatch"]["inputs"]
     assert {"specialist", "variants", "pooled", "batch", "discover", "rule_ref", "macro"} <= set(inputs)
+
+
+# ------------------------------------------------------------------------------ untrusted artifacts (hardening)
+_VARIANTS = '[{"stop_atr": 1}, {"stop_atr": 2}]'      # settings the specialist resolves, so the plan names its agent
+
+
+def _two_cell_plan_with(tmp: Path, first: str | list[dict[str, Any]]) -> tuple[Any, Path, TrialRegistry]:
+    registry = TrialRegistry(tmp / "registry.jsonl")
+    plan = cells.plan(_env(VARIANTS=_VARIANTS))
+    arts = tmp / "arts"
+    _cell_dir(arts, 1, [_planned_row(tmp, "b", 2, cell=1)])
+    if isinstance(first, str):
+        _cell_dir(arts, 0, None)
+        (arts / "cell-0" / "rows.jsonl").write_text(first)
+    else:
+        _cell_dir(arts, 0, first)
+    return plan, arts, registry
+
+
+def _planned_row(tmp: Path, name: str, n: int = 1, cell: int = 0, **override: Any) -> dict[str, Any]:
+    """A row as the cell's research_pass would write it: the agent and family the plan resolves for the cell."""
+    agent, family, _, resolved = cells._planned(cells.plan(_env(VARIANTS=_VARIANTS))[cell])
+    assert resolved
+    row = TrialRegistry(tmp / f"{name}.jsonl").record(
+        agent_id=agent, family=family, config={"stop_atr": n}, feature_version="fv", rationale="r",
+        results=_evaluated_results(k_run=3, seed=n + 1), status="evaluated")
+    row.update(override)
+    return row
+
+
+def test_a_truncated_rows_file_fails_that_cell_only_and_the_other_cells_still_record(tmp_path: Path) -> None:
+    plan, arts, registry = _two_cell_plan_with(tmp_path, '{"trial": 1, "ts": "2026-01-01T00:0')
+    out = cells.record(plan, arts, registry.path)
+    rows = read_rows(registry.path)
+    assert sorted(r["status"] for r in rows) == ["evaluated", "failed"] and out.failed == 1 and out.recorded == 1
+    assert n_trials_effective(rows) == 2                                     # the bad cell still counts toward K
+    assert "unreadable" in next(r for r in rows if r["status"] == "failed")["results"]["error"]
+
+
+def test_a_rows_file_that_is_not_a_list_of_objects_is_a_failed_cell_not_a_crash(tmp_path: Path) -> None:
+    plan, arts, registry = _two_cell_plan_with(tmp_path, "[1, 2]\n")
+    out = cells.record(plan, arts, registry.path)
+    assert out.failed == 1 and sorted(r["status"] for r in read_rows(registry.path)) == ["evaluated", "failed"]
+
+
+def test_a_row_missing_registry_fields_fails_the_cell_with_the_reason(tmp_path: Path) -> None:
+    row = _planned_row(tmp_path, "a")
+    del row["config_hash"]
+    plan, arts, registry = _two_cell_plan_with(tmp_path, [row])
+    cells.record(plan, arts, registry.path)
+    failed = [r for r in read_rows(registry.path) if r["status"] == "failed"]
+    assert len(failed) == 1 and "config_hash" in failed[0]["results"]["error"]
+
+
+def test_a_row_with_a_status_a_cell_may_not_write_is_rejected_and_the_cell_failed(tmp_path: Path) -> None:
+    plan, arts, registry = _two_cell_plan_with(tmp_path, [_planned_row(tmp_path, "a", status="verdict")])
+    out = cells.record(plan, arts, registry.path)
+    rows = read_rows(registry.path)
+    assert out.failed == 1 and "verdict" in next(r for r in rows if r["status"] == "failed")["results"]["error"]
+    assert not any(r["status"] == "verdict" for r in rows)
+
+
+@pytest.mark.parametrize("bad", [{"family": "other_family"}, {"agent_id": "someone-else"}])
+def test_a_row_for_another_family_or_agent_than_the_cell_was_planned_for_is_rejected(
+        tmp_path: Path, bad: dict[str, Any]) -> None:
+    plan, arts, registry = _two_cell_plan_with(tmp_path, [_planned_row(tmp_path, "a", **bad)])
+    out = cells.record(plan, arts, registry.path)
+    rows = read_rows(registry.path)
+    assert out.failed == 1 and "planned as" in next(r for r in rows if r["status"] == "failed")["results"]["error"]
+    assert not any(r.get(k) == v for r in rows for k, v in bad.items())
+
+
+def test_a_valid_row_for_the_planned_cell_is_accepted(tmp_path: Path) -> None:
+    plan, arts, registry = _two_cell_plan_with(tmp_path, [_planned_row(tmp_path, "a")])
+    out = cells.record(plan, arts, registry.path)
+    assert out.failed == 0 and out.recorded == 2
+
+def test_lot_fit_is_an_optional_validated_flag_off_by_default_and_passed_as_a_bare_option() -> None:
+    assert "--lot-fit" not in cells.argv(cells.plan(_env())[0])
+    assert cells.plan(_env())[0]["lot_fit"] is False
+    on = cells.plan(_env(LOT_FIT="true"))
+    assert on[0]["lot_fit"] is True and "--lot-fit" in cells.argv(on[0])
+    item = cells.plan(_env(BATCH=json.dumps([{"specialist": "tsmom", "lot_fit": True}, {"specialist": "tsmom"}])))
+    assert [c["lot_fit"] for c in item] == [True, False]
+    inputs = WF[True]["workflow_dispatch"]["inputs"]
+    assert "lot_fit" in inputs and inputs["lot_fit"]["default"] is False
+    env = next(s for s in WF["jobs"]["plan"]["steps"] if s.get("id") == "plan")["env"]
+    assert env["LOT_FIT"] == "${{ inputs.lot_fit }}"

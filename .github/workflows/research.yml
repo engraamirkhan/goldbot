@@ -22,7 +22,8 @@ on:
       families:   { description: "with discover: feature grouping (column, feature, family, cluster; empty = column)", default: "" }
       discover_config: { description: "with discover: JSON overrides of DiscoveryConfig, exactly as pre-registered", default: "{}" }
       rule_ref:   { description: "the pre-registered rule this run follows (e.g. preregistration-2027Q1.md#reserve); empty = none", default: "" }
-      batch:      { description: "many trials at once: JSON list of objects {specialist, variants, pooled, timeframe, from_year, to_year, rationale, score_holdout, skip_screen, macro, discover, families, discover_config, rule_ref}; a missing key takes the input above; one cell per variant (max 64, 10 at a time); empty = the single-trial inputs", default: "" }
+      lot_fit:    { description: "H-27: add the lot-fit overlay to the report (what the account can take at the gate's own sizing; settings research.lot_fit_*); reporting only", type: boolean, default: false }
+      batch:      { description: "many trials at once: JSON list of objects {specialist, variants, pooled, timeframe, from_year, to_year, rationale, score_holdout, skip_screen, macro, discover, families, discover_config, rule_ref, lot_fit}; a missing key takes the input above; one cell per variant (max 64, 10 at a time); empty = the single-trial inputs", default: "" }
 # Least privilege: no scopes by default; each job grants itself what it needs. Inputs reach the shell only via env:.
 permissions: {}
 jobs:
@@ -56,6 +57,7 @@ jobs:
           FAMILIES: ${{ inputs.families }}
           DISCOVER_CONFIG: ${{ inputs.discover_config }}
           RULE_REF: ${{ inputs.rule_ref }}
+          LOT_FIT: ${{ inputs.lot_fit }}
           BATCH: ${{ inputs.batch }}
         run: |
           python -m goldbot.research.cells plan > cells.json

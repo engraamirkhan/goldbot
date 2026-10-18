@@ -5,6 +5,7 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- Chart tab (web/src/screens/Chart.tsx): live TradingView chart on OANDA:XAUUSD as a sandboxed cross-origin iframe from www.tradingview-widget.com (no third-party script in our origin; referrerpolicy no-referrer; plain-text fallback after 15 s without load) and links to the owner's up to 3 saved TradingView layouts (new tab, noopener noreferrer). Layout URLs are stored in aux.db table chart_layouts (migration 11), shown to the owner only, validated as https://www.tradingview.com/chart/..., never in the repo or audit row. POST /api/chart/layouts is owner-only and stepped up like the other owner writes. API responses now carry a Content-Security-Policy (script-src and style-src self, frame-src the two TradingView origins, frame-ancestors none). Invite-only indicator signals need TradingView alerts (not built).
 - Account type no longer blocks entries for a week: `nightly_costs` re-runs the classifier every night while the stored
   class is unknown (missing file or "unknown"; `PersistentClassifier.is_known`) and on Fridays only once a class is
   known (evidence thresholds and the two-disagreement rule unchanged). New optional `account_class: raw|standard` per
@@ -19,6 +20,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   gained `account_class_declared` and `account_class_measured` (golden hashes regenerated).
   A torn classifier file is recorded as `classifier_error` in the nightly row; the other accounts and the costs publish go on.
 - **Deploy status false alarm fixed (SRE).** `goldbot-deploy` leaves the engine-derived checks (engine, engine_loop, tick_errors; reconcile stays compared, it also reports ledger mismatches) of an engine unit that is disabled/inactive at the baseline out of the worse-comparison and records "engine stopped for the deploy: <account>"; other worsened checks still give `deployed_degraded`. `check_deploy` reports a `deployed_degraded` as ok ("degraded at deploy time (...), now ok") when all named checks read ok in the fresh `health_last.json`; deploys.jsonl is untouched.
+- **H-27 lot-fit overlay in research (implementer, 2026-10-18; opt-in, not yet reviewed by quant).** Playbook
+  small-account-playbook-2026-10-18 section 3: research no longer claims £ from trades the account cannot take.
+  `goldbot/research/lot_fit.py` sizes every trade with the gate's own `risk.sizing.size_lots`, the gate's exception cap
+  (`RiskGate.min_lot_cap`) and its stop floor (stops level plus spread); the min-lot exception (`risk.min_lot_risk_cap`,
+  off by default, never tiny-live), the 8% size-down stage and the model multiplier are LotFitSpec fields. Unfit = the gate
+  would refuse `min_lot_exceeds_risk`: excluded from P&L, counted; fitting trades are scaled by the actual lot.
+  tests/test_lot_fit_overlay.py runs `RiskGate.check` over a 1,500-case grid and requires the same verdict.
+  `run_specialist`/`evaluate`/`run_pool(..., lot_fit=LotFitSpec)` add `metrics.lot_fit` (model_filtered and
+  all_candidates: n, fit fraction, unfit, mean lots, £ P&L, R at lots, net R of the fit subset) and the report a
+  "Lot fit" table. `research_pass.py --lot-fit` (account from `research.lot_fit_equity` 1000 and `lot_fit_acct_per_usd`
+  0.75, a research assumption); research.yml optional boolean input `lot_fit` (and a batch key) -> env LOT_FIT -> plan
+  validation -> `--lot-fit`. Default off: no key, outputs and registry rows unchanged (tested). Not done: routing before
+  RiskGate (ATR stop, else H-25, else skip); `--lot-fit` with --discover/--cpcv/--h16 is refused; margin and the other
+  gate checks are not part of "unfit".
 - **Attended MT5 box upgrade scripted (sre, 2026-10-18; for Sat 24 Oct 10:00 UK; not yet reviewed).**
   `goldbot/ops/linux/mt5-box-upgrade.sh` has phases `precheck`, `install`, `post-reboot`, each re-runnable, printing a
   PASS/FAIL table of states only. It refuses unless the market is closed (UTC window), no engine unit is active on the
@@ -54,6 +69,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   windows need the full N observations; 5-day staleness cap; `slot_ret_over_atr` = latest observation / (ATR14 / close
   at that slot's last bar); columns are SIGNED (neutral 0, hit rate 0.5). Pin `tod_periodicity` into O-4's feature list
   by 2026-12-11 or it drops. Tests: `tests/test_tod_periodicity.py`.
+- TradingView alerts now carry every indicator plot (owner, 2026-10-18). `Alert` takes `plots` (up to 64, `NaN`/`n/a`/empty -> None, infinity or out-of-bounds refused), `price` and an optional `signal` (default `plot`); old bodies still parse. Alerts are committed to a SQLite inbox (`state/tv.db`) before the 200 (503 if the write fails, so TradingView retries), idempotent on (indicator, version, symbol, tf, bar_time), then copied to the `tv_indicators` dataset (long format, source `indicator@version`, `available_utc = max(bar close, receipt)`). The unconsumed queue is gone. `goldbot/features/tradingview.py` (`tv_features`, opt-in feature `tradingview`) joins through `asof_join`; `GET /api/tradingview` shows last bar, alerts in 24 h, plots seen and gaps per indicator and timeframe (counts only). The webhook binds 127.0.0.1 (reverse proxy in front; the allow-list reads only the right-most `X-Forwarded-For` entry, only from loopback; `GOLDBOT_TV_ENFORCE_IP=0` turns it off) and `goldbot/ops/linux/systemd/goldbot-webhook.service` exists. Plan: docs/plans/tradingview-integration.md. Owner steps and the alert body template: RUNBOOK "TradingView alerts".
 - **Per-quarter trial budget override** (owner directive 2026-10-18): `research.trial_budget_overrides: {"2026Q4": 53}` raises one quarter's budget (`ResearchSettings.budget_for`, validated YYYYQn keys, values >= the base); research_pass, discovery, H-16, the director, the job runner, pre-registration, digest and API read it, other quarters keep `trial_budget_quarter`. Every trial is still recorded; deflated Sharpe counts the full K. Unblocks batch-2026-10-18.md.
 - An approval whose send raises is archived NOT CONFIRMED, never left placing (BACKLOG 84, implementer, 2026-10-17;
   trading-safety residual on BACKLOG 72).

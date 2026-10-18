@@ -197,3 +197,22 @@ def test_the_real_hypotheses_file_parses():
     tables = parse_tables(md)
     assert tables and tables[0].columns[:2] == ["Rank", "ID"]
     assert any(r[1] == "H-01" for r in tables[0].rows)
+
+
+def test_tradingview_status_is_for_any_signed_in_role_and_shows_no_values(client, tmp_path):
+    from goldbot.data.store import Store
+    from goldbot.webhook.app import Alert, to_row
+    from goldbot.webhook.inbox import TvInbox, sync_to_store
+    c, h, _, _ = client
+    assert c.get("/api/tradingview").status_code == 401
+    assert c.get("/api/tradingview", headers=h["viewer"]).json()["indicators"] == []
+    box = TvInbox(tmp_path / "tv.db")
+    bar = pd.Timestamp.now(tz="UTC").floor("15min") - pd.Timedelta(minutes=30)
+    a = Alert.model_validate({"indicator": "K-Indi", "version": "2", "symbol": "XAUUSD", "tf": "15",
+                              "bar_time": bar.isoformat(), "fired_at": (bar + pd.Timedelta(minutes=15)).isoformat(),
+                              "secret": "x", "plots": {"plot_0": "123.456"}})
+    box.put(to_row(a, (bar + pd.Timedelta(minutes=16)).to_pydatetime()))
+    sync_to_store(box, Store(tmp_path / "data"))
+    body = c.get("/api/tradingview", headers=h["viewer"]).json()
+    assert body["indicators"][0]["plots_seen"] == ["plot_0"] and body["indicators"][0]["alerts_24h"] == 1
+    assert "123.456" not in json.dumps(body)

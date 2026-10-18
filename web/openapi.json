@@ -986,6 +986,98 @@
     "title": "ChangePasswordRequest",
     "type": "object"
    },
+   "ChartLayout": {
+    "properties": {
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Url"
+     }
+    },
+    "required": [
+     "name",
+     "url"
+    ],
+    "title": "ChartLayout",
+    "type": "object"
+   },
+   "ChartLayoutIn": {
+    "additionalProperties": false,
+    "properties": {
+     "name": {
+      "maxLength": 40,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+     },
+     "url": {
+      "maxLength": 200,
+      "title": "Url",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name",
+     "url"
+    ],
+    "title": "ChartLayoutIn",
+    "type": "object"
+   },
+   "ChartLayoutsRequest": {
+    "additionalProperties": false,
+    "properties": {
+     "layouts": {
+      "items": {
+       "$ref": "#/components/schemas/ChartLayoutIn"
+      },
+      "maxItems": 3,
+      "title": "Layouts",
+      "type": "array"
+     },
+     "totp": {
+      "default": "",
+      "maxLength": 16,
+      "title": "Totp",
+      "type": "string"
+     }
+    },
+    "required": [
+     "layouts"
+    ],
+    "title": "ChartLayoutsRequest",
+    "type": "object"
+   },
+   "ChartLayoutsView": {
+    "properties": {
+     "can_edit": {
+      "title": "Can Edit",
+      "type": "boolean"
+     },
+     "layouts": {
+      "items": {
+       "$ref": "#/components/schemas/ChartLayout"
+      },
+      "title": "Layouts",
+      "type": "array"
+     }
+    },
+    "required": [
+     "layouts",
+     "can_edit"
+    ],
+    "title": "ChartLayoutsView",
+    "type": "object"
+   },
    "CodeSignIn": {
     "properties": {
      "at_utc": {
@@ -5609,6 +5701,79 @@
     "title": "TrialRow",
     "type": "object"
    },
+   "TvIndicatorStatus": {
+    "description": "One TradingView indicator at one timeframe: arrival of its bar alerts (counts only, never plotted values).",
+    "properties": {
+     "alerts_24h": {
+      "title": "Alerts 24H",
+      "type": "integer"
+     },
+     "gaps_24h": {
+      "title": "Gaps 24H",
+      "type": "integer"
+     },
+     "indicator": {
+      "title": "Indicator",
+      "type": "string"
+     },
+     "last_bar_time": {
+      "title": "Last Bar Time",
+      "type": "string"
+     },
+     "plots_seen": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Plots Seen",
+      "type": "array"
+     },
+     "symbol": {
+      "title": "Symbol",
+      "type": "string"
+     },
+     "tf": {
+      "title": "Tf",
+      "type": "string"
+     },
+     "version": {
+      "title": "Version",
+      "type": "string"
+     }
+    },
+    "required": [
+     "indicator",
+     "version",
+     "symbol",
+     "tf",
+     "last_bar_time",
+     "alerts_24h",
+     "plots_seen",
+     "gaps_24h"
+    ],
+    "title": "TvIndicatorStatus",
+    "type": "object"
+   },
+   "TvStatusView": {
+    "properties": {
+     "indicators": {
+      "items": {
+       "$ref": "#/components/schemas/TvIndicatorStatus"
+      },
+      "title": "Indicators",
+      "type": "array"
+     },
+     "now": {
+      "title": "Now",
+      "type": "string"
+     }
+    },
+    "required": [
+     "now",
+     "indicators"
+    ],
+    "title": "TvStatusView",
+    "type": "object"
+   },
    "UserRef": {
     "additionalProperties": false,
     "description": "A user for reset-link, disable, enable and revoke-sessions.",
@@ -6707,6 +6872,70 @@
     "summary": "Calendar"
    }
   },
+  "/api/chart/layouts": {
+   "get": {
+    "operationId": "chart_layouts_get_api_chart_layouts_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ChartLayoutsView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Chart Layouts Get"
+   },
+   "post": {
+    "operationId": "chart_layouts_put_api_chart_layouts_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ChartLayoutsRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ChartLayoutsView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Chart Layouts Put"
+   }
+  },
   "/api/decisions": {
    "post": {
     "operationId": "decide_api_decisions_post",
@@ -7144,6 +7373,29 @@
      }
     ],
     "summary": "Trades Summary"
+   }
+  },
+  "/api/tradingview": {
+   "get": {
+    "operationId": "tradingview_status_api_tradingview_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TvStatusView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Tradingview Status"
    }
   },
   "/api/users": {

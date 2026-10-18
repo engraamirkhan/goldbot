@@ -28,6 +28,8 @@ export type Headline = Schemas["Headline"];
 export type AutoModeView = Schemas["AutoModeView"];
 export type ModeChangeResult = Schemas["ModeChangeResult"];
 export type ApprovalMode = Schemas["ModeChangeRequest"]["mode"];
+export type ChartLayoutsView = Schemas["ChartLayoutsView"];
+export type ChartLayoutIn = Schemas["ChartLayoutIn"];
 export type GatesView = Schemas["GatesView"];
 export type GateView = Schemas["GateView"];
 export type GateItemView = Schemas["GateItemView"];
@@ -146,6 +148,8 @@ export const api = {
   status: () => req<Status>("/api/status"),
   automode: () => req<AutoModeView>("/api/automode"),
   setMode: (mode: ApprovalMode, totp = "") => req<ModeChangeResult>("/api/automode", { method: "POST", body: JSON.stringify({ mode, totp }) }),
+  chartLayouts: () => req<ChartLayoutsView>("/api/chart/layouts"),
+  setChartLayouts: (layouts: ChartLayoutIn[], totp = "") => req<ChartLayoutsView>("/api/chart/layouts", { method: "POST", body: JSON.stringify({ layouts, totp }) }),
   accounts: () => req<AccountSummary[]>("/api/accounts"),
   proposals: () => req<Proposal[]>("/api/proposals"),
   recentProposals: () => req<DecidedProposal[]>("/api/proposals/recent"),
