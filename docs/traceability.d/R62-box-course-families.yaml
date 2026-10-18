@@ -1,0 +1,5 @@
+id: R62
+requirement: Pre-registered box and price-action course families (H-37 box break, H-38 RIP, H-39 retest, H-44 fakey, H-45 trend-level-signal) and the H-40 filter discovery, runnable through research.yml exactly per their rungs (docs/research/box-mfi-families-2026-10-18.md sections 3-5; research director ruling, section 10)
+status: implemented
+code: 'goldbot/specialists/box_course.py (families, rungs, H-40 union and flags), goldbot/features/box_course.py (point-in-time building blocks), goldbot/labels/triple_barrier.py (per-candidate max_bars), goldbot/research/pipeline.py (entry_at_next_open, candidate features), goldbot/research/discovery.py (pool candidate), goldbot/research/screen.py (cost gate), scripts/research_pass.py (cost gate, lot fit on screen-only trials); ADR 0034'
+test: tests/test_box_course.py; tests/test_box_course_plumbing.py

@@ -117,7 +117,7 @@ from goldbot.research import h16, tv_grid  # noqa: E402
 from goldbot.research.director import cited_rule, queued_rows_for, survivor_full_coverage  # noqa: E402
 from goldbot.research.gates import DSR_BAR  # noqa: E402
 from goldbot.research.generator import loop_refusal, read_registry  # noqa: E402
-from goldbot.research.lot_fit import LotFitSpec, lot_fit_lines  # noqa: E402
+from goldbot.research.lot_fit import LotFitSpec, lot_fit_lines, lot_fit_overlay  # noqa: E402
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR, DaySummedDsr  # noqa: E402
 from goldbot.research.pipeline import (  # noqa: E402
     POOLED_FEATURES,
@@ -140,6 +140,7 @@ from goldbot.research.registry import (  # noqa: E402
     quarter_of,
 )
 from goldbot.research.screen import (  # noqa: E402
+    cost_gate,
     is_inconclusive,
     rule_only_split,
     rule_only_split_lines,
@@ -811,11 +812,14 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         cand_ctx = {**(feat_ctx or {}), "tv_indicators": tv_long} if tv_jobs else feat_ctx
         preps = [prepare(s, b_dec, context, ctx=cand_ctx, extra_cost_usd=extra_cost, holdout=holdout,
                          score_holdout=args.score_holdout, frame=frame, swap=swap,
-                         bars_1m=b1 if s.entry_delay_s else None) for s in job.specs]
+                         bars_1m=b1 if s.entry_delay_s or s.entry_at_next_open else None) for s in job.specs]
         # event floors: research.screen_min_events, or the daily-signal override (owner ruling A), set before the run;
         # the daily override is retire-only, so a pass still needs research.screen_min_events
         floors = screen_floors(tf if job.pooled else signal_timeframe(job.specs[0]), settings.research)
         scr = None if args.score_holdout else screen(preps if job.pooled else preps[0], *floors)
+        gate_r = None if job.pooled else job.specs[0].cost_gate_r
+        if scr is not None and gate_r is not None:      # a pre-registered cost gate (H-37), read on this charged screen
+            scr["cost_gate"] = cost_gate(scr, gate_r)
         # a family under its pre-registered rule-only screen (Specialist.screening, e.g. asia_drift) never reaches the
         # model stage, pass or fail, with or without --skip-screen: the screen row records the look (quant review M2)
         screen_only = scr is not None and not job.pooled and job.specs[0].screening
@@ -837,13 +841,17 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
             n = int(sum(len(p.labels) for p in preps))
             metrics: dict[str, Any] = {"n_candidates": n, "rule_only": scr["rule_only"], "swap": swap.model_dump(),
                                        "trades_per_year": n / years_span if years_span > 0 else 0.0, **common}
+            screen_fit = screen_lot_fit(preps, lot_fit)
+            if screen_fit is not None:
+                metrics["lot_fit"] = screen_fit
             row = reg.record(agent_id=agent_id, family=job.family, config=job.config, feature_version=version,
                              rationale=rationale, results=metrics, status="screened", budget_quarter=quarter,
                              preregistration=prereg, rule_ref=rule_ref)
             print(f"{json.dumps(job.overrides) or 'defaults'}: screen {scr['verdict']} ({n} events) [{time.time() - t0:.0f}s]", flush=True)
             text = render_screen_failed(scr, leak, {**meta, "trial": row["trial"], "seconds": time.time() - t0, "n": n,
                                                     "swap": swap.model_dump(), "cost_source": cost_source,
-                                                    "macro": macro_info, "rule_only_split": split})
+                                                    "macro": macro_info, "rule_only_split": split,
+                                                    "lot_fit": screen_fit})
         else:
             if job.pooled:
                 res = run_pool(preps, tf, n_trials=n_trials, extra_cost_usd=extra_cost, holdout=holdout,
@@ -981,6 +989,16 @@ def _cpcv(args: argparse.Namespace, b1: pd.DataFrame, reg: TrialRegistry, extra_
     return 0
 
 
+def screen_lot_fit(preps: list[Any], lot_fit: LotFitSpec | None) -> dict[str, Any] | None:
+    """H-27's lot-fit overlay on every screened candidate (a screen-only trial has no model-filtered set): what the
+    account can take at the gate's own sizing; an unfit trade is counted and never sized up. None without --lot-fit."""
+    if lot_fit is None:
+        return None
+    labels = [p.labels for p in preps if not p.labels.empty]
+    trades = pd.concat(labels, ignore_index=True) if labels else pd.DataFrame(columns=["entry", "ret", "risk"])
+    return {"all_candidates": lot_fit_overlay(trades, lot_fit)}
+
+
 def render_screen_failed(scr: dict[str, Any], leak: dict[str, Any], meta: dict[str, Any]) -> str:
     lines = [f"## {meta['specialist']} primary-signal screen on real bars ({meta['from_year']}-{meta['to_year']})", "",
              f"- bars: {meta['n_1m']:,} 1m -> {meta['n_dec']:,} {meta['tf']} decision bars",
@@ -992,6 +1010,7 @@ def render_screen_failed(scr: dict[str, Any], leak: dict[str, Any], meta: dict[s
              _macro_line(meta.get("macro")),
              f"- runtime {meta['seconds']:.0f}s", ""]
     lines += screen_lines(scr) + _rule_only_lines(scr["rule_only"]) + rule_only_split_lines(meta.get("rule_only_split"))
+    lines += lot_fit_lines(meta.get("lot_fit"))
     if scr["passed"]:
         lines += ["Screen passed; rule-only screen: no model was fitted. The family is under its pre-registered screen "
                   "(`Specialist.screening`); model research on it needs its own pre-registration."]

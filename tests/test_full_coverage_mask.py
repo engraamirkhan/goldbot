@@ -215,7 +215,7 @@ def test_discover_builds_its_pool_with_the_configs_full_coverage_columns(monkeyp
     monkeypatch.setattr(discovery, "uniqueness_weights", lambda *a, **k: pd.Series(1.0, index=labels.index))
     monkeypatch.setattr(discovery, "splits_for", lambda *a, **k: [])
     monkeypatch.setattr(discovery, "window_for", lambda *a, **k: WINDOW)
-    monkeypatch.setattr(discovery, "discovery_pool", lambda p, cover=(): seen.update(cover=cover) or [])
+    monkeypatch.setattr(discovery, "discovery_pool", lambda p, cover=(), pool="frame": seen.update(cover=cover, pool=pool) or [])
     monkeypatch.setattr(discovery, "run_discovery", lambda *a, **k: SENTINEL)
     assert discovery.discover(prep, DiscoveryConfig(full_coverage_columns=(SPX,))) is SENTINEL
     assert seen["cover"] == (SPX,)
