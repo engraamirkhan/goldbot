@@ -655,3 +655,12 @@ def test_service_listing_uses_plain_so_a_failed_or_activating_unit_bullet_is_nev
     src = (Path(__file__).resolve().parents[1] / "goldbot/ops/linux/goldbot-deploy.sh").read_text()
     listings = [ln for ln in src.splitlines() if "systemctl list-units" in ln and "awk '{print $1}'" in ln]
     assert listings and all("--plain" in ln for ln in listings)
+
+
+def test_the_stability_check_skips_timer_driven_oneshot_units():
+    # goldbot-chart-fetch.service is a static oneshot fired every 60 s; requiring it "active" for 90 s rolled back
+    # every brain deploy (2026-10-18 13:51, 13:55, 14:13 UTC)
+    src = (REPO / "goldbot/ops/linux/goldbot-deploy.sh").read_text()
+    body = src.split("healthy() {", 1)[1].split("\n}\n", 1)[0]
+    assert 'systemctl show -p Type --value "$s")" = oneshot ] && continue' in body
+    assert body.index("= oneshot ] && continue") < body.index('systemctl is-active --quiet "$s"')

@@ -435,6 +435,8 @@ healthy() {  # every enabled service up, and not restarted by systemd since our 
   sleep 90
   local s; for s in $(services); do
     enabled "$s" || continue
+    # a timer-driven oneshot (e.g. goldbot-chart-fetch, every 60 s) is "static" and only briefly active: not a daemon
+    [ "$(systemctl show -p Type --value "$s")" = oneshot ] && continue
     systemctl is-active --quiet "$s" || return 1
     [ "$(systemctl show -p NRestarts --value "$s")" = "${RESTARTS[$s]:-0}" ] || return 1   # a crash loop restarts
   done
