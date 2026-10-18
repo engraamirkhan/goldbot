@@ -82,6 +82,18 @@ class Specialist(ABC):
     # research labels enter at the open of the first 1m bar at/after close + this (`triple_barrier_delayed`, needs the
     # 1m bars: `pipeline.prepare(bars_1m=)`); 0: at the close, as every other family
     entry_delay_s: int = 0
+    # True for a rule whose pre-registration enters at the next bar's open rather than at the signal close (H-45, "E:
+    # entry at the **next** 1h bar's open"): research labels fill at the first 1m open at/after the signal close
+    # (`triple_barrier_delayed` with no delay, needs the 1m bars), so a weekend or session gap is in the fill
+    entry_at_next_open: bool = False
+    # columns the candidates frame carries that are inputs too (a value fixed at the signal, e.g. H-40's flags of the
+    # candidate's own box and side): `pipeline.prepare` adds them to the candidate features, and a discovery with
+    # DiscoveryConfig pool "candidate" screens exactly them, grouped by `candidate_feature_groups` (column -> group)
+    candidate_features: tuple[str, ...] = ()
+    candidate_feature_groups: dict[str, str] = {}
+    # a pre-registered cost gate (H-37, research director ruling 2026-10-18): the screen reports whether the rule's gross
+    # mean R reaches this many R per trade (`research.screen.cost_gate`); None: no gate
+    cost_gate_r: float | None = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Every subclass's own `candidates` and `candidates_in_context` pass through the loop's optional filters

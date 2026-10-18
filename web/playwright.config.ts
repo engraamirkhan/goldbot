@@ -24,6 +24,9 @@ export default defineConfig({
   // project must be made serial (workers: 1), or two files would share one owner, one clock and one set of spent codes.
   workers: 2,
   retries: process.env.CI ? 1 : 0,
+  // The retry only labels a test "flaky"; in CI a flaky test still fails the build (no retry masking). CI runs one
+  // job per project (.github/workflows/ci.yml e2e matrix, tests/test_ci_workflow.py).
+  failOnFlakyTests: !!process.env.CI,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
     trace: "retain-on-failure",

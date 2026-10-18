@@ -134,7 +134,8 @@ def test_winners_are_cloned_into_mutated_shadow_children(tmp_path):
 
 
 def test_shadow_and_live_caps(tmp_path, monkeypatch):
-    cap = len(SPECIALISTS) + 2                                         # the founders plus s0, s1: already full
+    # the founders (every family but a screening or TradingView one: ensure_founders) plus s0, s1: already full
+    cap = sum(1 for c in SPECIALISTS.values() if not c.screening and not c.requires_tv) + 2
     monkeypatch.setattr(P, "SHADOW_CAP", cap)
     monkeypatch.setattr(P, "LIVE_CAP", 1)
     pop, book = Population(tmp_path / "p.json"), ShadowBook(tmp_path)

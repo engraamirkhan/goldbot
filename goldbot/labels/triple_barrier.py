@@ -83,7 +83,9 @@ def triple_barrier(bars: pd.DataFrame, signals: pd.DataFrame, spec: BarrierSpec,
                    swap: SwapSpec | None = None, policy: ExitPolicy | None = None) -> pd.DataFrame:
     """
     bars: ts_utc, bid_high, bid_low, bid_close, ask_high, ask_low, ask_close (store schema), positional index 0..n-1
-    signals: frame with columns `idx` (position of signal bar) and `side` (+1 long / -1 short)
+    signals: frame with columns `idx` (position of signal bar) and `side` (+1 long / -1 short), optionally `max_bars`
+             (that candidate's time barrier, e.g. a pooled rung whose 4h signals keep their 4h exit on 1h bars;
+             absent: `spec.max_bars` for every candidate, the output unchanged)
     atr: ATR per bar (same index as bars)
     Returns one row per signal: label (+1 target, -1 stop, 0 time-out), ret (signed net return), t_exit (position),
     bars_held, entry, exit, barrier_hit. With `swap`, also swap_nights (nights charged, triple counted three times)
@@ -99,14 +101,15 @@ def triple_barrier(bars: pd.DataFrame, signals: pd.DataFrame, spec: BarrierSpec,
     rows = []
     use_policy = policy is not None and policy.active
     close_ts = _bar_close_times(bars) if use_policy else None
-    for idx, side in zip(signals["idx"].to_numpy().astype(int), signals["side"].to_numpy().astype(int)):
+    for idx, side, hold in zip(signals["idx"].to_numpy().astype(int), signals["side"].to_numpy().astype(int),
+                               _max_bars(signals, spec)):
         e = idx + 1
         if e >= n or not np.isfinite(a[idx]) or a[idx] <= 0:
             continue
         entry = ask_c[idx] if side > 0 else bid_c[idx]  # fill at next bar open ~ signal close + spread side
         tgt = entry + side * spec.target_atr * a[idx]
         stp = entry - side * spec.stop_atr * a[idx]
-        last = min(e + spec.max_bars, n - 1)
+        last = min(e + hold, n - 1)
         if use_policy:
             assert policy is not None and close_ts is not None
             rows.append(_policy_row(policy, idx, side, e, last, entry, tgt, stp, float(a[idx]), close_ts,
@@ -153,6 +156,13 @@ def triple_barrier(bars: pd.DataFrame, signals: pd.DataFrame, spec: BarrierSpec,
     return out
 
 
+def _max_bars(signals: pd.DataFrame, spec: BarrierSpec) -> np.ndarray:
+    """Each candidate's time barrier: its own `max_bars` column when the signals carry one, else the spec's."""
+    if "max_bars" in signals.columns:
+        return signals["max_bars"].to_numpy().astype(int)
+    return np.full(len(signals), spec.max_bars, dtype=int)
+
+
 def _policy_row(policy: ExitPolicy, idx: int, side: int, e: int, last: int, entry: float, tgt: float, stp: float,
                 atr: float, close_ts: pd.DatetimeIndex, px: tuple[np.ndarray, np.ndarray, np.ndarray]) -> dict:
     """One label under an exit policy: bars e..last through `policy_step` (fav/adv/close on the exit side), then the
@@ -192,14 +202,16 @@ def triple_barrier_delayed(bars: pd.DataFrame, bars_1m: pd.DataFrame, signals: p
     up to max_lag later; quant review 2026-10-18, finding a). Entry is at the open of the first 1m bar at or after
     close + delay (ask for longs, bid for shorts) and the barrier clock starts there: the decision bar that holds the
     entry is rebuilt from its 1m bars from the entry on, so no price between the close and the entry reaches the label.
-    The time barrier still counts `spec.max_bars` decision bars, the entry's own (partial) bar first. Columns as
-    `triple_barrier`, positions in `bars`; a signal whose entry falls after the last bar is dropped."""
+    The time barrier still counts `spec.max_bars` decision bars (or the candidate's own `max_bars`), the entry's own
+    (partial) bar first. Columns as `triple_barrier`, positions in `bars`; a signal whose entry falls after the last bar
+    is dropped. A zero `delay` is an entry at the next bar's open (its first 1m bar)."""
     close = _bar_close_times(bars)
     b1 = bars_1m.sort_values("ts_utc").reset_index(drop=True)
     t1 = pd.DatetimeIndex(pd.to_datetime(b1["ts_utc"], utc=True))
     a = atr.to_numpy(dtype=float)
     out = []
-    for idx, side in zip(signals["idx"].to_numpy().astype(int), signals["side"].to_numpy().astype(int)):
+    for idx, side, hold in zip(signals["idx"].to_numpy().astype(int), signals["side"].to_numpy().astype(int),
+                               _max_bars(signals, spec)):
         k = int(t1.searchsorted(close[idx] + delay, side="left"))
         if k >= len(b1):
             continue
@@ -212,9 +224,9 @@ def triple_barrier_delayed(bars: pd.DataFrame, bars_1m: pd.DataFrame, signals: p
             stub[f"{c}_high"], stub[f"{c}_low"] = part[f"{c}_high"].max(), part[f"{c}_low"].min()
         sig = bars.iloc[[idx]].copy()
         sig["ask_close" if side > 0 else "bid_close"] = float(b1[f"{'ask' if side > 0 else 'bid'}_open"].iloc[k])
-        mini = pd.concat([sig, stub, bars.iloc[j + 1:j + 1 + spec.max_bars]], ignore_index=True)
-        res = triple_barrier(mini, pd.DataFrame({"idx": [0], "side": [side]}), spec, pd.Series(a[idx], index=mini.index),
-                             swap=swap, policy=policy)
+        mini = pd.concat([sig, stub, bars.iloc[j + 1:j + 1 + hold]], ignore_index=True)
+        res = triple_barrier(mini, pd.DataFrame({"idx": [0], "side": [side], "max_bars": [hold]}), spec,
+                             pd.Series(a[idx], index=mini.index), swap=swap, policy=policy)
         if res.empty:
             continue
         res["idx"] = idx

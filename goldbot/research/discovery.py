@@ -205,6 +205,10 @@ class DiscoveryConfig(FrozenRecord):
     # rows do not all carry a finite value ("full coverage"; `pipeline.uncovered_columns`), e.g. ("macro_spx_dd20",)
     # so H-07 is VIX-only there; in the dump and the config hash only when set, so every existing hash holds
     full_coverage_columns: tuple[str, ...] = ()
+    # what is screened: "frame" (the coded rule: every eligible decision-frame column) or "candidate" (H-40, section
+    # 5.1 of box-mfi-families-2026-10-18.md: exactly the specialist's pre-registered candidate features, grouped by its
+    # `candidate_feature_groups`, "K_eff = groups screened"); in the dump and the hash only when "candidate"
+    pool: Literal["frame", "candidate"] = "frame"
 
     @model_validator(mode="after")
     def _q_only_under_tercile(self) -> DiscoveryConfig:
@@ -229,6 +233,8 @@ class DiscoveryConfig(FrozenRecord):
             out.pop("context_groups", None)
         if not self.full_coverage_columns:
             out.pop("full_coverage_columns", None)
+        if self.pool == "frame":
+            out.pop("pool", None)
         return out
 
 
@@ -718,12 +724,36 @@ def run_discovery(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
                            survivor_unit=cfg.survivor_unit, k_eff=k_eff, group_mode=group_mode, verdict=verdict)
 
 
-def discovery_pool(prep: Prepared, full_coverage_columns: tuple[str, ...] = ()) -> list[str]:
+def candidate_groups(spec: Any, group_mode: str) -> dict[str, str]:
+    """Pool "candidate": the group of each declared candidate feature, from the specialist's own pre-registered map
+    (`candidate_feature_groups`; an unmapped column is its own group). The map is the specialist's, so only the default
+    group mode "column" is accepted (a family/feature/cluster mode would claim a grouping it does not apply)."""
+    if group_mode != "column":
+        raise ValueError(f"pool 'candidate' takes its groups from the specialist; group mode must be 'column', "
+                         f"not {group_mode!r} (leave research.yml `families` empty)")
+    if not spec.candidate_features:
+        raise ValueError(f"pool 'candidate': {spec.family} declares no candidate features")
+    return {c: spec.candidate_feature_groups.get(c, c) for c in spec.candidate_features}
+
+
+def discovery_pool(prep: Prepared, full_coverage_columns: tuple[str, ...] = (),
+                   pool: Literal["frame", "candidate"] = "frame") -> list[str]:
     """Every eligible column of a prepared configuration except `side` (always an input).
 
     Design rule (preregistration-2027Q1.md, H-02 pin 2026-10-17, item 2): "columns named in `full_coverage_columns`
     are exempt from the 80% pool rule; the per-fold full-coverage mask governs them ... Every other column keeps the
-    80% rule." A named column the frame lacks is not added here; the mask refuses it before any look."""
+    80% rule." A named column the frame lacks is not added here; the mask refuses it before any look.
+
+    `pool` "candidate" (H-40): exactly the specialist's declared `candidate_features`, however sparse (a flag the
+    pre-registration applies to one family is NaN on the others; the screened set is fixed in advance, so K_eff is the
+    pre-registered count); a declared column the frame lacks is refused."""
+    if pool == "candidate":
+        declared = list(prep.spec.candidate_features)
+        missing = [c for c in declared if c not in prep.feats.columns]
+        if not declared or missing:
+            raise ValueError(f"pool 'candidate' needs the specialist's declared candidate features; missing: "
+                             f"{missing or 'none declared'}")
+        return declared
     keep = set(eligible_columns(prep.feats)) | {c for c in full_coverage_columns if c in prep.feats.columns}
     return [c for c in prep.feats.columns if c in keep and c != "side"]
 
@@ -737,7 +767,7 @@ def discover(prep: Prepared, cfg: DiscoveryConfig, groups: dict[str, str] | None
     labels["weight"] = uniqueness_weights(labels, prep.n_bars).to_numpy()
     window = window_for(spec.timeframe, **spec.walkforward)
     folds = splits_for(labels, spec.timeframe, **spec.walkforward)
-    pool = discovery_pool(prep, cfg.full_coverage_columns)
+    pool = discovery_pool(prep, cfg.full_coverage_columns, cfg.pool)
     return run_discovery(spec.agent_id, labels, prep.gross, prep.feats, folds, prep.feature_version, window, pool, cfg,
                          groups, group_mode, n_trials=n_trials, trades_per_year=trades_per_year,
                          extra_cost_usd=extra_cost_usd, holdout=holdout, swap=prep.swap)
@@ -886,9 +916,12 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
     # BACKLOG 81: the group map of every frame column (context included; prices only, no label) and its size check
     # come before the pre-registration row, so a refused config writes no row and spends no trial. The pool is a
     # subset of the frame's columns, so a map that passes here passes on the pool in run_discovery.
-    frame_groups = column_groups([c for c in frame[1].columns if c != "ts_utc"], group_mode, frame[0], names, ctx,
-                                 holdout_start=None if holdout is None else pd.Timestamp(holdout[0]),
-                                 clusters=cfg.clusters, context_groups=cfg.context_groups)
+    if cfg.pool == "candidate":
+        frame_groups = candidate_groups(spec, group_mode)
+    else:
+        frame_groups = column_groups([c for c in frame[1].columns if c != "ts_utc"], group_mode, frame[0], names, ctx,
+                                     holdout_start=None if holdout is None else pd.Timestamp(holdout[0]),
+                                     clusters=cfg.clusters, context_groups=cfg.context_groups)
     check_group_sizes(frame_groups, cfg, group_mode)
     if prereg is None:
         prereg = reg.preregister(agent_id=spec.agent_id, family=family, config=config,
@@ -900,7 +933,7 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
     prep = prepare(spec, b_dec, context, extra_cost_usd=extra_cost_usd, holdout=holdout, frame=frame, swap=swap)
     if prep.labels.empty:
         raise ValueError(f"{spec.family} produced no labelled candidates; nothing to discover")
-    pool = discovery_pool(prep, cfg.full_coverage_columns)
+    pool = discovery_pool(prep, cfg.full_coverage_columns, cfg.pool)
     groups = {c: frame_groups[c] for c in pool}
     n_eff = reg.n_trials_effective + 1
     d = discover(prep, cfg, groups, group_mode, n_trials=n_eff, extra_cost_usd=extra_cost_usd, holdout=holdout)
