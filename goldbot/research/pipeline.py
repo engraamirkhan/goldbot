@@ -15,6 +15,7 @@ from goldbot.config import tf_seconds
 from goldbot.data.resample import mid
 from goldbot.features import FEATURES, build_features
 from goldbot.features.mtf import merge_higher_tf
+from goldbot.features.registry import FULL_HISTORY
 from goldbot.features.technical import atr
 from goldbot.labels import SwapSpec, one_at_a_time, triple_barrier, uniqueness_weights
 from goldbot.labels.triple_barrier import BarrierSpec, triple_barrier_delayed
@@ -58,8 +59,12 @@ def build_decision_frame(bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame
                          versions: dict[str, str] | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Features on the decision timeframe plus higher-TF context merged without lookahead. Without `feature_names`:
     research_feature_names(ctx) (the macro drivers join in when ctx carries macro rows). `versions`: per-feature legacy
-    overrides (`registry.versions_for`), to rebuild the frame an older model was trained on."""
+    overrides (`registry.versions_for`), to rebuild the frame an older model was trained on. Research builds on the
+    whole series it is given, so the frame is declared to start the series (`registry.FULL_HISTORY`) and carried-state
+    features (smc_replica) are allowed; the engine's tail build in `engine.runner` does not pass through here and is
+    still refused them."""
     names = feature_names or research_feature_names(ctx)
+    ctx = {**(ctx or {}), FULL_HISTORY: True}
     m = mid(bars_dec).reset_index(drop=True)
     X = build_features(m, names, ctx, versions=versions)
     version = X.attrs["feature_version"]
