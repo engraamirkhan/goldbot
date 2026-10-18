@@ -350,3 +350,6 @@ ticks:                               # broker tick record (goldbot/data/ticks.py
   pause_s: 0.2                       # pause between pages so the engine's quote reads get the bridge
   page_limit_s: 2.0                  # a slower page stops the run (engine orders older than 10 s are refused)
   run_budget_s: 300                  # per account per run; an unfinished day is not written and is pulled next run
+
+webhook:                             # TradingView receiver (goldbot/webhook/app.py)
+  max_rows_per_hour: 5000            # inbox rows in the last hour; beyond it 429 (bounds what a leaked secret can write)
