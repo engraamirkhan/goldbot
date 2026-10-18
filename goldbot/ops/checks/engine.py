@@ -145,7 +145,10 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
         elif cls == "standard":
             parts.append("account class standard: 15m families off except session_open, edge must exceed 1.5x cost")
         declared, measured = e.get("account_class_declared"), e.get("account_class_measured")
-        if class_mismatch(declared, measured):
+        if declared in ("raw", "standard") and measured == "unreadable":
+            statuses.append("warn")
+            parts.append(f"declared {declared}, classifier file unreadable: trading as standard until it is fixed")
+        elif class_mismatch(declared, measured):
             statuses.append("warn")
             parts.append(f"declared {declared}, measured {measured}: check the account type "
                          f"(the stricter class is in force)")

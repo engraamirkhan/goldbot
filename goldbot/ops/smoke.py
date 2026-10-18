@@ -64,7 +64,7 @@ from goldbot.execution.broker import (
     SymbolInfo,
     Tick,
 )
-from goldbot.execution.classifier import effective_class, read_stored_class
+from goldbot.execution.classifier import effective_class, read_stored
 from goldbot.ops.accounts import Account, verify_terminal_account
 from goldbot.ops.watchdog import loop_heartbeat_path
 from goldbot.risk.gate import (
@@ -125,7 +125,7 @@ STATE_SOURCES: dict[str, str] = {
     "other_notional": "Supervisor.read_state(state) exposure of the other accounts",
     "other_equity": "Supervisor.read_state(state) exposure of the other accounts",
     "combined_size_down": "Supervisor.read_state(state)['size_down']; a missing key refuses",
-    "account_class": "effective_class(declared account_class, classifier_<account>.json class); neither known is unknown (refused)",
+    "account_class": "effective_class(declared account_class, classifier_<account>.json); neither known is unknown (refused)",
     "drift_halt": "drift.json system_halt; unreadable is a halt",
     "tick_ahead_s": "last_tick(): how far the tick is stamped ahead of now",
     "clock_mismatch": "server_clock.assess on the tick; no tick is a mismatch",
@@ -353,7 +353,7 @@ def _supervisor(state_dir: Path, account_id: str) -> tuple[bool, dict[str, float
 
 def _account_class(state_dir: Path, acc: Any) -> str:
     """The same effective class the engine uses: declared baseline, measured cross-check, stricter wins."""
-    return effective_class(acc.account_class, read_stored_class(state_dir / f"classifier_{acc.account_id}.json"))
+    return effective_class(acc.account_class, read_stored(state_dir / f"classifier_{acc.account_id}.json"))
 
 
 def _unconfirmed_order(state_dir: Path, account_id: str) -> bool:

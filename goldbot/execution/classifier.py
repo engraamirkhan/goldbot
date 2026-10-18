@@ -1,10 +1,11 @@
 """Account classifier: Raw / Standard / Unknown. A declared class is the baseline, the measurement the cross-check,
 and when the two disagree the stricter one (Standard) wins.
 
-The owner may declare the class per account (`account_class` in config/accounts.yaml). Until a measured class is
-stored, the declared class is the effective one, so a new account is not blocked as "unknown" for a week; the
-measurement keeps running (`effective_class`, the ONE function every consumer uses). A measured class that disagrees
-with the declared one never loosens the account: Standard wins and health warns (`class_mismatch`).
+The owner may declare the class per account (`account_class` in config/accounts.yaml). Until a class has ever been
+measured, the declared class is the effective one, so a new account is not blocked as "unknown" for a week; the
+measurement keeps running (`effective_class`, the ONE function every consumer uses). It never loosens the account:
+a known measurement (the stored one, or the last known one behind a stored unknown) that disagrees with the declared
+class makes Standard win and health warn (`class_mismatch`); an unreadable file with a declared class is Standard.
 
 Measurement. Decisive test: commission on past deals => Raw. Otherwise session-filtered median spread:
 < $0.20 floating with no deal history => Raw, >= $0.30 => Standard, between => Unknown. The last classification is
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -63,23 +65,64 @@ def classify(ticks: pd.DataFrame, deals: pd.DataFrame, *, raw_spread_max: float 
 KNOWN_CLASSES = ("raw", "standard")
 
 
-def read_stored_class(path: str | Path) -> str:
-    """The class stored in state/classifier_<account>.json: raw | standard | unknown (missing, torn or odd is unknown)."""
+def _last_known(state: dict) -> str | None:
+    """`state["last_known"]`: the last raw/standard class actually stored. Legacy files (no key): a known stored class
+    is it; a stored unknown with any standard run in the kept runs is taken as last stored Standard (the restrictive
+    reading); otherwise none."""
+    lk = state.get("last_known")
+    if lk in KNOWN_CLASSES:
+        return str(lk)
+    cur = state.get("class")
+    if cur in KNOWN_CLASSES:
+        return str(cur)
+    if cur == "unknown" and any(isinstance(r, dict) and r.get("account_class") == "standard" for r in state.get("runs") or []):
+        return "standard"
+    return None
+
+
+class StoredClass(NamedTuple):
+    """What state/classifier_<account>.json says: the stored class, the last known one ever stored, and whether the
+    file exists but cannot be read (torn, wrong shape)."""
+    cls: str = "unknown"
+    last_known: str | None = None
+    unreadable: bool = False
+
+    @property
+    def known(self) -> str | None:
+        """The measured class in force: the stored one when known, else the last known one (a stored unknown is a
+        thin run, not a release from the last measurement)."""
+        return self.cls if self.cls in KNOWN_CLASSES else self.last_known
+
+
+def read_stored(path: str | Path) -> StoredClass:
+    """Missing file: nothing measured yet. Unreadable file: `unreadable` (the declared class then falls to the
+    stricter one in `effective_class`)."""
     p = Path(path)
+    if not p.exists():
+        return StoredClass()
     try:
-        c = str(json.loads(p.read_text()).get("class") or "unknown") if p.exists() else "unknown"
-    except (OSError, ValueError, AttributeError):
-        return "unknown"
-    return c if c in ("raw", "standard", "unknown") else "unknown"
+        d = json.loads(p.read_text())
+        c = str(d.get("class") or "unknown")
+        return StoredClass(c if c in ("raw", "standard", "unknown") else "unknown", _last_known(d))
+    except (OSError, ValueError, AttributeError, TypeError):
+        return StoredClass(unreadable=True)
 
 
-def effective_class(declared: str | None, measured: str | None) -> str:
-    """The class the account trades by: the measured one when known and agreeing or alone; the declared one while
-    nothing is measured; the stricter (standard) when both are known and disagree, never the looser one."""
+def effective_class(declared: str | None, stored: StoredClass) -> str:
+    """The class the account trades by (the ONE function every consumer uses). Never looser than any evidence:
+    * undeclared: the stored class (unknown while unmeasured, unreadable or a thin run) as before;
+    * declared and nothing ever measured: the declared class (the baseline);
+    * declared and a known measurement exists (stored, or the last known one behind a stored unknown): the stricter
+      of the two (standard wins);
+    * declared and the file is unreadable: standard, the stricter class."""
     d = declared if declared in KNOWN_CLASSES else None
-    m = measured if measured in KNOWN_CLASSES else None
-    if d is None or m is None:
-        return m or d or "unknown"
+    if d is None:
+        return stored.cls if stored.cls in KNOWN_CLASSES else "unknown"
+    if stored.unreadable:
+        return "standard"
+    m = stored.known
+    if m is None:
+        return d
     return "standard" if "standard" in (d, m) else d
 
 
@@ -106,17 +149,7 @@ class PersistentClassifier:
         self.path = Path(path)
         self.state = json.loads(self.path.read_text()) if self.path.exists() else {"class": None, "pending": None, "runs": []}
         if "last_known" not in self.state:
-            self.state["last_known"] = self._migrated_last_known()
-
-    def _migrated_last_known(self) -> str | None:
-        """Legacy files (no `last_known`): a known stored class is it; a stored unknown with any standard run in
-        the kept runs is taken as last stored Standard (the restrictive reading); otherwise none."""
-        cur = self.state["class"]
-        if cur in ("raw", "standard"):
-            return str(cur)
-        if cur == "unknown" and any(r.get("account_class") == "standard" for r in self.state["runs"]):
-            return "standard"
-        return None
+            self.state["last_known"] = _last_known(self.state)
 
     def is_known(self) -> bool:
         """A raw or standard class is stored (a missing file or a stored unknown is not)."""

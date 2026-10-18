@@ -195,11 +195,15 @@ def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         row: dict[str, Any] = {"ticks": len(ticks), "fills": len(fills),
                                "round_trip_usd": {s: table.round_trip_usd_per_oz(s) for s in ("asia", "london", "newyork")},
                                "swap_measured": swap is not None, "commission_measured": measured}
-        persistent = PersistentClassifier(ctx.state_dir / f"classifier_{acc.account_id}.json")
-        if slot.dayofweek == CLASSIFIER_WEEKDAY or not persistent.is_known():
-            c = classify(ticks, fills)
-            row["account_class"] = persistent.update(c)
-            row["classifier_reason"] = c.reason
+        try:
+            persistent = PersistentClassifier(ctx.state_dir / f"classifier_{acc.account_id}.json")
+            if slot.dayofweek == CLASSIFIER_WEEKDAY or not persistent.is_known():
+                c = classify(ticks, fills)
+                row["account_class"] = persistent.update(c)
+                row["classifier_reason"] = c.reason
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:   # a torn file: not the other accounts
+            log.exception("classifier for %s failed", acc.account_id)
+            row["classifier_error"] = f"{type(exc).__name__}: classifier file unreadable or invalid"
         out[acc.account_id] = row
     if ctx.upload_costs is not None:            # costs.publish_release and a github-token: research reads it
         out["publish"] = publish_costs(ctx.settings, ctx.accounts, ctx.state_dir, ctx.upload_costs, slot)
