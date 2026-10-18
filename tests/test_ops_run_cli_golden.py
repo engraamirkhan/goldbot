@@ -229,7 +229,16 @@ def _dispatch(argv: list[str], stop: bool = True) -> dict[str, Any]:
     return hit
 
 
-def test_every_command_reaches_the_same_function_with_the_same_arguments():
+def test_every_command_reaches_the_same_function_with_the_same_arguments(tmp_path, monkeypatch):
+    monkeypatch.setenv("GOLDBOT_STATE", str(tmp_path / "state"))        # the ledger must not write the repo's state/
+    existed = (ROOT / "state" / "program.db").exists()
+    try:
+        _check_dispatch()
+    finally:
+        assert (ROOT / "state" / "program.db").exists() == existed
+
+
+def _check_dispatch() -> None:
     _check("dispatch", {name: _dispatch(argv) for name, argv in DISPATCH.items()})
 
 
