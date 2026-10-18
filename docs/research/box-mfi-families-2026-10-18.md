@@ -107,7 +107,9 @@ keep the column and document 1.0 as the arrow threshold). No variant uses the in
 ## 4. Families and their pre-registered count ladders
 
 Each family is **one trial**, running **exactly one rung**: the first rung, in the order below, whose candidate
-count (2010-01-01..2025-09-30, both sides, after one-at-a-time and the placeable rule) is **≥ 1,500** (gate 1,
+count (2010-01-01..2025-09-30, both sides, after the placeable rule and a timestamp-only one-at-a-time: a candidate
+is dropped when it falls within the time exit of the previous kept candidate, which is the fewest trades the real
+one-at-a-time can leave and reads no price after entry) is **≥ 1,500** (gate 1,
 `MIN_CANDIDATES`; above P4's 1,000). If no rung reaches 1,500 the family is **withdrawn, 0 trials**. Rungs relax
 only in the order fixed here: first pooling the owner's own timeframes, then the owner's own documented looser
 threshold, then dropping the condition with the weakest mechanism. Counts select the rung; nothing else does.
