@@ -183,10 +183,12 @@ from goldbot.ops.checks.services import (
     check_approvals,
     check_deadman,
     check_heartbeat,
+    check_optional_heartbeat,
     check_scheduler,
     check_schema_skew,
     check_service_schema_skew,
 )
+from goldbot.ops.limits_job import check_limits_controller
 from goldbot.ops.tv_pull_health import check_tv_pull
 
 # the public surface: every name this module exposed before the checks moved to goldbot/ops/checks/ (callers and
@@ -299,7 +301,9 @@ __all__ = [
     "check_feature_versions",
     "check_halt",
     "check_heartbeat",
+    "check_optional_heartbeat",
     "check_kill_switch",
+    "check_limits_controller",
     "check_loss_caps",
     "check_model_watch",
     "check_news",
@@ -376,7 +380,9 @@ class HealthContext(Record):
         except Exception as exc:
             s_err = f"{type(exc).__name__}: {exc}"
         try:
-            accs = [AccountRef(account_id=a.account_id, server_tz=a.server_tz, symbol=a.symbol)
+            from goldbot.ops.limits_job import adaptive_enabled
+            accs = [AccountRef(account_id=a.account_id, server_tz=a.server_tz, symbol=a.symbol,
+                               adaptive=settings is not None and adaptive_enabled(settings, a))
                     for a in accounts.enabled_accounts()]
         except Exception as exc:
             a_err = f"{type(exc).__name__}: {exc}"
@@ -534,7 +540,8 @@ MAX_ALERT = 3900                   # Telegram's limit is 4096 characters
 
 # warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
 NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "object_storage", "tick_errors:",
-                  "throttle:", "entry_windows:", "open_risk:", "schema_skew:", "kill_switch:")
+                  "throttle:", "entry_windows:", "open_risk:", "schema_skew:", "kill_switch:",
+                  "heartbeat:webhook", "heartbeat:tv-pull")      # opt-in TradingView services: WARN, still told
 
 
 def _alerting(name: str, status: str) -> bool:

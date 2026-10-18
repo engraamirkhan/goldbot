@@ -4,6 +4,7 @@ from goldbot.specialists import (  # noqa: F401  (registers specialists)
     intraday_momentum,
     mean_reversion,
     session_open,
+    smc_structure,
     time_series_momentum,
     trend,
 )

@@ -113,10 +113,10 @@ from goldbot.features import positioning as positioning_features  # noqa: E402
 from goldbot.features import us_calendar as us_calendar_features  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
 from goldbot.features.registry import feature_version  # noqa: E402
-from goldbot.research import h16  # noqa: E402
+from goldbot.research import h16, tv_grid  # noqa: E402
 from goldbot.research.director import cited_rule, queued_rows_for, survivor_full_coverage  # noqa: E402
 from goldbot.research.gates import DSR_BAR  # noqa: E402
-from goldbot.research.generator import loop_refusal  # noqa: E402
+from goldbot.research.generator import loop_refusal, read_registry  # noqa: E402
 from goldbot.research.lot_fit import LotFitSpec, lot_fit_lines  # noqa: E402
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR, DaySummedDsr  # noqa: E402
 from goldbot.research.pipeline import (  # noqa: E402
@@ -148,7 +148,7 @@ from goldbot.research.screen import (  # noqa: E402
     screen_lines,
     signal_timeframe,
 )
-from goldbot.specialists import SPECIALISTS, Specialist  # noqa: E402
+from goldbot.specialists import SPECIALISTS, Specialist, tv_event  # noqa: E402
 
 
 def load_bars(folder: Path, from_year: int, to_year: int) -> pd.DataFrame:
@@ -157,6 +157,16 @@ def load_bars(folder: Path, from_year: int, to_year: int) -> pd.DataFrame:
         return read_bar_files(folder, from_year, to_year)
     except FileNotFoundError as exc:
         raise SystemExit(str(exc)) from None
+
+
+def load_tv(path: str) -> pd.DataFrame | None:
+    """The `tv_indicators` rows of the store at `path` (--tv-data), or None: a TradingView job is then refused
+    (tv_grid.tv_refusal: nothing to line its bars up with)."""
+    if not path:
+        return None
+    from goldbot.data.store import Store
+    df = Store(Path(path)).read("tv_indicators")
+    return None if df.empty else df
 
 
 def load_macro(path: str) -> tuple[pd.DataFrame | None, dict[str, Any]]:
@@ -634,14 +644,27 @@ def main() -> int:
                     help="adds the opt-in day_type opportunity features (BACKLOG 30a; needs --us-calendar)")
     ap.add_argument("--h16", action="store_true",
                     help="H-16's pre-registered range test, one trial (E-4; needs its pre-registration, --macro, --us-calendar)")
+    ap.add_argument("--tv-data", default="",
+                    help="store root holding tv_indicators (with --specialist tv_event: the TradingView rows its signal reads)")
     _discovery_args(ap)
     args = ap.parse_args()
     if args.pooled and json.loads(args.variants) not in ([{}], {}):
         raise SystemExit("--pooled runs every member family at its defaults; --variants does not apply")
+    tv_run = args.specialist == tv_event.FAMILY and not args.pooled
+    if tv_run:
+        tv_event.enable()                   # opt-in family: registered only for a run of it
+    if tv_run and (args.discover or args.cpcv or args.h16 or args.rule_ref == LOOP_RULE_REF):
+        raise SystemExit("--specialist tv_event runs TV_GRID_V1 walk-forward trials only (research/tv_grid.py)")
     variants = [{}] if args.pooled else parse_variants(args.specialist, args.variants)
     if args.lot_fit and (args.discover or args.cpcv or args.h16):
         raise SystemExit("--lot-fit reports on the walk-forward; it is not wired into --discover, --cpcv or --h16")
     settings = load_settings()
+    if tv_run:
+        # TV_GRID_V1 (grid membership, shadow-forward timeframes, double dispatch) before anything is read or charged;
+        # the bar alignment is checked in _run once the bars are loaded, still before the budget
+        refusal = tv_grid.tv_refusal(read_registry(args.registry), [(args.specialist, v) for v in variants], settings)
+        if refusal:
+            raise SystemExit(refusal)
     table = None
     if args.cost_table:
         table = load_research_cost_table(args.cost_table)
@@ -683,14 +706,16 @@ def main() -> int:
             return _discover(args, variants, b1, reg, settings, extra_cost, swap, holdout, cost_source, macro)
         return _run(args, make_jobs(args, variants), extra_cost, holdout, b1, reg, t0, settings, swap=swap,
                     cost_source=cost_source, macro=macro, macro_info=macro_info, positioning=positioning,
-                    positioning_info=positioning_info, us_calendar=us_calendar, us_calendar_info=us_calendar_info)
+                    positioning_info=positioning_info, us_calendar=us_calendar, us_calendar_info=us_calendar_info,
+                    tv_long=load_tv(args.tv_data) if tv_run else None)
 
 
 def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: tuple[pd.Timestamp, pd.Timestamp] | None,
          b1: pd.DataFrame, reg: TrialRegistry, t0: float, settings: Any, *, swap: SwapSpec, cost_source: str,
          macro: pd.DataFrame | None = None, macro_info: dict[str, Any] | None = None,
          positioning: pd.DataFrame | None = None, positioning_info: dict[str, Any] | None = None,
-         us_calendar: pd.DataFrame | None = None, us_calendar_info: dict[str, Any] | None = None) -> int:
+         us_calendar: pd.DataFrame | None = None, us_calendar_info: dict[str, Any] | None = None,
+         tv_long: pd.DataFrame | None = None) -> int:
     lot_fit = LotFitSpec.from_settings(settings) if getattr(args, "lot_fit", False) else None
     if args.rule_ref == LOOP_RULE_REF:
         # the continuous research loop (ADR 0029): per-run budget, grid membership, no skipped screen, --lot-fit; every
@@ -698,6 +723,14 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         refusal = loop_refusal(reg._rows(), [(j.family, j.config) for j in jobs], settings,
                                score_holdout=args.score_holdout, skip_screen=args.skip_screen,
                                lot_fit=bool(getattr(args, "lot_fit", False)))
+        if refusal:
+            raise SystemExit(refusal)
+    tv_jobs = any(s.requires_tv for j in jobs for s in j.specs)
+    if tv_jobs:
+        # TV_GRID_V1 again, now with the bars: a trial whose decision bars do not line up with TradingView's is refused
+        # here, before the budget check, so it is never charged nor counted in K
+        refusal = tv_grid.tv_refusal(reg._rows(), [(j.family, j.config) for j in jobs], settings, tv_long=tv_long,
+                                     bars_1m=b1)
         if refusal:
             raise SystemExit(refusal)
     day_type = bool(getattr(args, "day_type", False))
@@ -773,8 +806,12 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         # default, recorded as an owner-acknowledged choice in docs/research/preregistration-2027Q1.md
         n_trials = reg.n_trials_effective + 1
         # ctx: the point-in-time tables a candidate rule reads (H-06's macro gate); the frame is already built
-        preps = [prepare(s, b_dec, context, ctx=feat_ctx, extra_cost_usd=extra_cost, holdout=holdout,
-                         score_holdout=args.score_holdout, frame=frame, swap=swap) for s in job.specs]
+        # a TradingView job's candidates read tv_indicators (frame already built: no feature sees it) and its labels
+        # enter after the delay at a 1m open (pipeline._label)
+        cand_ctx = {**(feat_ctx or {}), "tv_indicators": tv_long} if tv_jobs else feat_ctx
+        preps = [prepare(s, b_dec, context, ctx=cand_ctx, extra_cost_usd=extra_cost, holdout=holdout,
+                         score_holdout=args.score_holdout, frame=frame, swap=swap,
+                         bars_1m=b1 if s.entry_delay_s else None) for s in job.specs]
         # event floors: research.screen_min_events, or the daily-signal override (owner ruling A), set before the run;
         # the daily override is retire-only, so a pass still needs research.screen_min_events
         floors = screen_floors(tf if job.pooled else signal_timeframe(job.specs[0]), settings.research)

@@ -7,14 +7,46 @@ bars uses `available_utc`, never the nominal time. `asof_join` enforces this.
 """
 from __future__ import annotations
 
+import os
+import sys
+import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable
+from typing import IO, Iterable, Iterator
 
 import duckdb
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+# Partition locks, held across processes. POSIX: flock, shared for readers, exclusive for a writer. Windows (the VPS
+# runs goldbot natively; there is no fcntl): msvcrt.locking on byte 0 of the lock file, exclusive only, so readers of
+# one partition take turns. LK_LOCK gives up after ten one-second tries, so a non-blocking lock is retried here until
+# it is free, and every handle is unlocked before it is closed (Windows does not promise to release it on close).
+if sys.platform == "win32":
+    import msvcrt
+
+    def _lock(fh: IO[bytes], *, shared: bool) -> None:
+        fh.seek(0)
+        while True:
+            try:
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                return
+            except OSError:
+                time.sleep(0.01)
+
+    def _unlock(fh: IO[bytes]) -> None:
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+else:
+    import fcntl
+
+    def _lock(fh: IO[bytes], *, shared: bool) -> None:
+        fcntl.flock(fh, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+
+    def _unlock(fh: IO[bytes]) -> None:
+        fcntl.flock(fh, fcntl.LOCK_UN)
 
 TABLES = {
     "ticks", "bars_1m", "bars_15m", "bars_1h", "bars_4h", "bars_1d", "bars_1w",
@@ -80,23 +112,77 @@ class Store:
         for (y, m), part in df.groupby([df["ts_utc"].dt.year, df["ts_utc"].dt.month]):
             pdir = self.partition_dir(table, source, symbol, part["ts_utc"].iloc[0])
             pdir.mkdir(parents=True, exist_ok=True)
-            existing = self._read_partition(pdir) if dedupe else None
-            if existing is not None and not existing.empty:
-                merged = pd.concat([existing, part], ignore_index=True)
-                merged = merged.drop_duplicates(subset=[k for k in keys if k in merged.columns], keep="last")
-                for f in pdir.glob("*.parquet"):
-                    f.unlink()
-                part_out = merged.sort_values("ts_utc")
-            else:
-                part_out = part.drop_duplicates(subset=[k for k in keys if k in part.columns], keep="last") \
-                    if dedupe else part
-            pq.write_table(
-                pa.Table.from_pandas(part_out, preserve_index=False),
-                pdir / f"part-{uuid.uuid4().hex[:8]}.parquet",
-                compression="zstd",
-            )
+            with self._partition_lock(pdir):
+                old_files = sorted(pdir.glob("*.parquet"))
+                existing = self._read_partition(pdir) if dedupe else None
+                if existing is not None and not existing.empty:
+                    merged = pd.concat([existing, part], ignore_index=True)
+                    part_out = merged.drop_duplicates(subset=[k for k in keys if k in merged.columns],
+                                                      keep="last").sort_values("ts_utc")
+                else:
+                    part_out = part.drop_duplicates(subset=[k for k in keys if k in part.columns], keep="last") \
+                        if dedupe else part
+                # new file first (temp name, fsync, atomic rename), old files only after: readers never see an empty
+                # partition; a crash leaves old data or old+new (the next append dedupes by key)
+                self._write_atomic(pdir, part_out)
+                if dedupe:
+                    for f in old_files:
+                        f.unlink(missing_ok=True)
             written += len(part)
         return written
+
+    @staticmethod
+    @contextmanager
+    def _partition_lock(pdir: Path) -> Iterator[None]:
+        """Exclusive lock held for the whole read-modify-write of one partition (across processes)."""
+        with open(pdir / ".lock", "ab") as fh:
+            _lock(fh, shared=False)
+            try:
+                yield
+            finally:
+                _unlock(fh)
+
+    @staticmethod
+    @contextmanager
+    def _read_locks(tdir: Path, source: str | None, symbol: str) -> Iterator[None]:
+        """Shared lock on every matching partition while listing+reading: a writer holds its exclusive lock across
+        rename+unlink, so a reader sees exactly the old or the new rows, never both. Fixed order; writers hold one
+        lock: no deadlock."""
+        pat = f"source={source or '*'}/symbol={symbol}/year=*/month=*/.lock"
+        locked: list[IO[bytes]] = []
+        opened: list[IO[bytes]] = []
+        try:
+            for lk in sorted(tdir.glob(pat)):
+                fh: IO[bytes] = open(lk, "ab")
+                opened.append(fh)
+                _lock(fh, shared=True)
+                locked.append(fh)
+            yield
+        finally:
+            for held in locked:
+                try:
+                    _unlock(held)
+                except OSError:      # still released by the close below on POSIX; never mask the reader's own error
+                    pass
+            for f in opened:
+                f.close()
+
+    @staticmethod
+    def _write_atomic(pdir: Path, df: pd.DataFrame) -> None:
+        name = f"part-{uuid.uuid4().hex[:8]}.parquet"
+        tmp = pdir / f".{name}.tmp"           # not *.parquet: invisible to readers until renamed
+        pq.write_table(pa.Table.from_pandas(df, preserve_index=False), tmp, compression="zstd")
+        fd = os.open(tmp, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, pdir / name)
+        dfd = os.open(pdir, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
 
     @staticmethod
     def _read_partition(pdir: Path) -> pd.DataFrame | None:
@@ -142,7 +228,8 @@ class Store:
             where.append("year * 12 + CAST(month AS BIGINT) <= ?")
             params.append(_utc(end).year * 12 + _utc(end).month)
         sql = f"SELECT {cols} FROM {scan} WHERE {' AND '.join(where)} ORDER BY ts_utc"
-        df = con.execute(sql, params).df()
+        with self._read_locks(tdir, source, symbol):
+            df = con.execute(sql, params).df()
         con.close()
         if "ts_utc" in df.columns:
             df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True)

@@ -15,8 +15,10 @@ from goldbot.config import tf_seconds
 from goldbot.data.resample import mid
 from goldbot.features import FEATURES, build_features
 from goldbot.features.mtf import merge_higher_tf
+from goldbot.features.registry import FULL_HISTORY
 from goldbot.features.technical import atr
 from goldbot.labels import SwapSpec, one_at_a_time, triple_barrier, uniqueness_weights
+from goldbot.labels.triple_barrier import BarrierSpec, triple_barrier_delayed
 from goldbot.research.gates import RULE_ONLY_LABEL, holdout_verdict, research_gates
 from goldbot.research.lot_fit import LotFitSpec, lot_fit_overlay
 from goldbot.research.metrics import day_summed_dsr, expectancy, summarize
@@ -26,7 +28,7 @@ from goldbot.specialists.base import FEATURE_SEED_KEY, AgentIdentity, Specialist
 
 # Features that need an external input in ctx. They are not in the default set, so the default feature version (the
 # one the live engine builds) does not depend on whether that data happens to be loaded.
-OPT_IN_FEATURES = ("macro", "macro_drivers", "calendar_events", "tod_periodicity")
+OPT_IN_FEATURES = ("macro", "macro_drivers", "calendar_events", "tod_periodicity", "smc_replica")
 DEFAULT_FEATURE_NAMES = [n for n in FEATURES if n not in OPT_IN_FEATURES]
 MACRO_FEATURE_NAMES = ["macro_drivers"]
 # the only features computed on higher-timeframe context frames (h1_/h4_/d1_ columns), in research and in the engine;
@@ -57,8 +59,12 @@ def build_decision_frame(bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame
                          versions: dict[str, str] | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Features on the decision timeframe plus higher-TF context merged without lookahead. Without `feature_names`:
     research_feature_names(ctx) (the macro drivers join in when ctx carries macro rows). `versions`: per-feature legacy
-    overrides (`registry.versions_for`), to rebuild the frame an older model was trained on."""
+    overrides (`registry.versions_for`), to rebuild the frame an older model was trained on. Research builds on the
+    whole series it is given, so the frame is declared to start the series (`registry.FULL_HISTORY`) and carried-state
+    features (smc_replica) are allowed; the engine's tail build in `engine.runner` does not pass through here and is
+    still refused them."""
     names = feature_names or research_feature_names(ctx)
+    ctx = {**(ctx or {}), FULL_HISTORY: True}
     m = mid(bars_dec).reset_index(drop=True)
     X = build_features(m, names, ctx, versions=versions)
     version = X.attrs["feature_version"]
@@ -131,10 +137,25 @@ TERCILE_METHOD: Literal["linear"] = "linear"
 Window = tuple[pd.Timestamp, pd.Timestamp]   # [start, end) in UTC
 
 
+def _label(spec: Specialist, bars: pd.DataFrame, bars_1m: pd.DataFrame | None, cands: pd.DataFrame,
+           ls: BarrierSpec, a: pd.Series, swap: SwapSpec | None) -> pd.DataFrame:
+    """The labels of `cands`: at the signal close, or for a signal known only `spec.entry_delay_s` later (TradingView)
+    at the first 1m open after it (`triple_barrier_delayed`), which needs the 1m bars: refused without them rather
+    than labelled at the close it could not have traded."""
+    if spec.entry_delay_s <= 0:
+        return triple_barrier(bars, cands, ls, a, swap=swap, policy=spec.exit_spec)
+    if bars_1m is None:
+        raise ValueError(f"{spec.family} enters {spec.entry_delay_s} s after the close: prepare needs its 1m bars "
+                         "(bars_1m=) to label it")
+    return triple_barrier_delayed(bars, bars_1m, cands, ls, a, pd.Timedelta(seconds=spec.entry_delay_s), swap=swap,
+                                  policy=spec.exit_spec)
+
+
 def _zero_spread(bars: pd.DataFrame) -> pd.DataFrame:
-    """Bars with bid = ask = mid: the rule's gross outcome, before any cost."""
+    """Bars with bid = ask = mid: the rule's gross outcome, before any cost (the open too, when the bars carry it:
+    a delayed entry fills at a 1m open)."""
     out = bars.copy()
-    for k in ("high", "low", "close"):
+    for k in ("open", "high", "low", "close") if "bid_open" in bars.columns else ("high", "low", "close"):
         midk = (bars[f"bid_{k}"].astype(float) + bars[f"ask_{k}"].astype(float)) / 2
         out[f"bid_{k}"] = out[f"ask_{k}"] = midk
     return out
@@ -334,7 +355,8 @@ class Prepared(Record):
 def prepare(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame] | None = None,
             feature_names: list[str] | None = None, ctx: dict | None = None, extra_cost_usd: float = 0.0,
             holdout: Window | None = None, score_holdout: bool = False,
-            frame: tuple[pd.DataFrame, pd.DataFrame] | None = None, swap: SwapSpec | None = None) -> Prepared:
+            frame: tuple[pd.DataFrame, pd.DataFrame] | None = None, swap: SwapSpec | None = None,
+            bars_1m: pd.DataFrame | None = None) -> Prepared:
     """Features, candidates and labels (one position at a time) for one configuration. `frame`: the decision frame
     (build_decision_frame's output) when several configurations share a timeframe, so it is built once. Candidates
     and the barrier ATR come from `Specialist.candidates_in_context` / `barrier_atr`, which see the context bars (a
@@ -356,8 +378,9 @@ def prepare(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.Data
     own_atr = spec.barrier_atr(m, context)        # e.g. ATR(1d) for a daily signal executed on 4h bars
     a = atr(m, 14) if own_atr is None else own_atr
     ls = spec.label_spec
-    labels = one_at_a_time(triple_barrier(bars_dec, cands, ls, a, swap=swap, policy=spec.exit_spec))
-    gross = one_at_a_time(triple_barrier(_zero_spread(bars_dec), cands, ls, a, policy=spec.exit_spec))
+    labels = one_at_a_time(_label(spec, bars_dec, bars_1m, cands, ls, a, swap))
+    gross = one_at_a_time(_label(spec, _zero_spread(bars_dec), None if bars_1m is None else _zero_spread(bars_1m),
+                                 cands, ls, a, None))
     if holdout is not None and not score_holdout:
         if not labels.empty:
             labels = labels[_before(labels, holdout[0])].reset_index(drop=True)
@@ -614,7 +637,8 @@ def pooled_members(timeframe: str) -> list[str]:
     """The families a pooled model on `timeframe` unites: every registered family whose default timeframe it is, except
     a family still under its pre-registered screen (`Specialist.screening`), so adding one leaves the pools unchanged."""
     from goldbot.specialists import SPECIALISTS
-    return sorted(f for f, cls in SPECIALISTS.items() if cls.timeframe == timeframe and not cls.screening)
+    return sorted(f for f, cls in SPECIALISTS.items()
+                  if cls.timeframe == timeframe and not cls.screening and not cls.requires_tv)   # TV: shadow only
 
 
 def pooled_inputs(timeframe: str, families: list[str], eligible: list[str]) -> list[str]:

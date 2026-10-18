@@ -2,7 +2,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as apiModule from "./lib/api";
-import { clearLinkTokens, takeLinkTokens } from "./lib/links";
 import { App } from "./App";
 
 // The header says who is signed in by role, never by address: screenshots of the dashboard get shared
@@ -54,6 +53,15 @@ describe("App header", () => {
     },
   );
 
+  it("puts the Limits tab right after Progress, so it stays on screen when the tab row scrolls", () => {
+    apiModule.setUser({ email: "v@x.io", role: "viewer", signed_in_with: "password_totp" });
+    renderApp();
+    const tabs = Array.from(appBanner().querySelectorAll("nav button")).map((b) => b.textContent);
+    expect(tabs.indexOf("Limits")).toBe(tabs.indexOf("Progress") + 1);
+    fireEvent.click(screen.getByRole("button", { name: "Limits" }));
+    expect(screen.getByLabelText("Loading limits")).toBeInTheDocument();
+  });
+
   it("says 'Signed in' when the session record is missing, without throwing", () => {
     apiModule.setUser(null);
     renderApp();
@@ -96,22 +104,31 @@ describe("App when the session is gone server-side", () => {
 // The page was opened on an emailed sign-in link; signing out in that same page load must show the plain sign-in form,
 // not "Finish signing in" with the spent link again (issue #89: the e2e's heading check lost the race to authState).
 describe("App after signing out of a page opened on a sign-in link", () => {
-  beforeEach(() => {
+  let freshApi: typeof apiModule;
+  let FreshApp: typeof App;
+  beforeEach(async () => {
     vi.stubGlobal("WebSocket", SilentSocket);
     const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
     vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(
       url.startsWith("/api/auth/state") ? json({ needs_setup: false, email_link: true })
         : url.startsWith("/api/auth/logout") ? json({ ok: true }) : json({}, 200))));
-    clearLinkTokens();
+    // Fresh modules: the link-token cache is module state that earlier tests in this file may already have filled
+    // (with an empty read), and clearLinkTokens is the very thing under test, so it cannot be used to reset it.
+    vi.resetModules();
     history.replaceState(null, "", "/#signin=spent-link");
-    takeLinkTokens();                                            // what the first Login mount does with the URL
-    apiModule.setToken("session-token");
-    apiModule.setUser({ email: "owner@example.com", role: "owner", signed_in_with: "email_link" });
+    const links = await import("./lib/links");
+    links.takeLinkTokens();                                      // what the first Login mount does with the URL
+    expect(links.takeLinkTokens().signin).toBe("spent-link");
+    freshApi = await import("./lib/api");
+    FreshApp = (await import("./App")).App;
+    freshApi.setToken("session-token");
+    freshApi.setUser({ email: "owner@example.com", role: "owner", signed_in_with: "email_link" });
   });
-  afterEach(() => { vi.unstubAllGlobals(); apiModule.setToken(null); history.replaceState(null, "", "/"); });
+  afterEach(() => { vi.unstubAllGlobals(); freshApi.setToken(null); history.replaceState(null, "", "/"); });
 
   it("shows Sign in, and keeps showing it once the server's auth state has arrived", async () => {
-    renderApp();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={qc}><FreshApp /></QueryClientProvider>);
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument());
     await waitFor(() => expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.some((c) => String(c[0]).startsWith("/api/auth/state"))).toBe(true));

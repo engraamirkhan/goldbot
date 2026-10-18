@@ -9,7 +9,7 @@ the registry and re-exports every name it always had.
   ops.py       backup / restore / restore-drill, setup, preflight, health, monthly-report, perf-report,
                bridge-smoke
   auth.py      revoke-sessions, mail-test
-  research.py  owner-history, ruin, sizing-feasibility, tv-import, tv-repaint-check
+  research.py  owner-history, ruin, sizing-feasibility, tv-import, tv-repaint-check, tv-pull
 
 Adding a command: write its handler in its area module with `@register_command("<name>", pos=...)` (registry.py
 explains the order; lazy imports only), add its line to the usage text in goldbot/ops/run.py, re-export any function

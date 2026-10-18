@@ -556,6 +556,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Limits Get */
+        get: operations["limits_get_api_limits_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/limits/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Limits Changes */
+        get: operations["limits_changes_api_limits_changes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/me": {
         parameters: {
             query?: never;
@@ -1845,6 +1879,154 @@ export interface components {
             /** Runs */
             runs: number;
         };
+        /**
+         * LimitAccount
+         * @description One account's risk limits now, from what its engine publishes (state/engine_<account>.json) and the revert in
+         *     core.db `limits_state`. Money is in `currency`; percentages are fractions. Null = the engine does not say.
+         */
+        LimitAccount: {
+            /** Absolute Daily Limit */
+            absolute_daily_limit: number | null;
+            /** Account Id */
+            account_id: string;
+            /** Adr */
+            adr: string | null;
+            /** Balance */
+            balance: number | null;
+            /**
+             * Cap Hit
+             * @enum {string}
+             */
+            cap_hit: "none" | "daily" | "weekly";
+            /** Currency */
+            currency: string | null;
+            /** Daily Cap Pct */
+            daily_cap_pct: number | null;
+            /** Daily Limit */
+            daily_limit: number | null;
+            /**
+             * Daily Resets Utc
+             * Format: date-time
+             */
+            daily_resets_utc: string;
+            /** Daily Used */
+            daily_used: number | null;
+            /** Day Start Equity */
+            day_start_equity: number | null;
+            /** Error */
+            error: string | null;
+            last_change: components["schemas"]["LimitChange"] | null;
+            /** Min Lot */
+            min_lot: number | null;
+            /** Min Lot Risk */
+            min_lot_risk: number | null;
+            /** Min Lot Risk Cap */
+            min_lot_risk_cap: number | null;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "demo" | "live" | "paper";
+            /** Profile */
+            profile: string;
+            /** Revert Active */
+            revert_active: boolean;
+            /** Revert Reason */
+            revert_reason: string | null;
+            /** Revert Since */
+            revert_since: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "static" | "adaptive" | "revert" | "owner" | "default" | "fault";
+            /** Stale */
+            stale: boolean;
+            /** Updated Utc */
+            updated_utc: string | null;
+            /** Week Start Equity */
+            week_start_equity: number | null;
+            /** Weekly Cap Pct */
+            weekly_cap_pct: number | null;
+            /** Weekly Limit */
+            weekly_limit: number | null;
+            /**
+             * Weekly Resets Utc
+             * Format: date-time
+             */
+            weekly_resets_utc: string;
+            /** Weekly Used */
+            weekly_used: number | null;
+        };
+        /**
+         * LimitChange
+         * @description One limit of one account that moved (goldbot/ops/limits_log.py: core.db ADR 0032 `limits_changes`, diffed per
+         *     field, and ADR 0031 `adaptive_changes`). Values are fractions of equity; null = the minimum-lot exception off.
+         */
+        LimitChange: {
+            /** Account Id */
+            account_id: string;
+            /** Adr */
+            adr: string | null;
+            /**
+             * Field
+             * @enum {string}
+             */
+            field: "daily_cap" | "weekly_cap" | "min_lot_risk_cap" | "supervisor_daily_cap" | "supervisor_weekly_cap";
+            /** New Value */
+            new_value: number | null;
+            /** Old Value */
+            old_value: number | null;
+            /** Reason */
+            reason: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "static" | "adaptive" | "revert" | "owner" | "default" | "fault";
+            /**
+             * Ts
+             * Format: date-time
+             */
+            ts: string;
+            /**
+             * Unit
+             * @default fraction_of_equity
+             * @constant
+             */
+            unit: "fraction_of_equity";
+        };
+        /**
+         * LimitsSupervisorView
+         * @description The supervisor's combined caps (all accounts together; goldbot/risk/supervisor.py), fractions.
+         */
+        LimitsSupervisorView: {
+            /** Daily Cap */
+            daily_cap: number | null;
+            /** Default Daily */
+            default_daily: number;
+            /** Default Weekly */
+            default_weekly: number;
+            /** Envelope Daily */
+            envelope_daily: number;
+            /** Envelope Weekly */
+            envelope_weekly: number;
+            /** Weekly Cap */
+            weekly_cap: number | null;
+        };
+        /** LimitsView */
+        LimitsView: {
+            /** Accounts */
+            accounts: components["schemas"]["LimitAccount"][];
+            /** Error */
+            error: string | null;
+            /**
+             * Generated Utc
+             * Format: date-time
+             */
+            generated_utc: string;
+            supervisor: components["schemas"]["LimitsSupervisorView"];
+        };
         /** LoginRequest */
         LoginRequest: {
             /**
@@ -2391,6 +2573,34 @@ export interface components {
             /** Unallocated */
             unallocated: number;
         };
+        /**
+         * ResearchToday
+         * @description Trials of the current UTC day by verdict (docs/ux/limits-and-tradingview.md C), counted server-side so the day
+         *     boundary lives in one place. A pass counts only with its cost treatment (registry.gate_pass_counts).
+         */
+        ResearchToday: {
+            /**
+             * Date Utc
+             * Format: date
+             */
+            date_utc: string;
+            /** Failed */
+            failed: number;
+            latest: components["schemas"]["TrialRow"] | null;
+            /** No Verdict */
+            no_verdict: number;
+            /** Not Counted */
+            not_counted: number;
+            /** Passed */
+            passed: number;
+            /**
+             * Quarter End
+             * Format: date
+             */
+            quarter_end: string;
+            /** Run */
+            run: number;
+        };
         /** ResearchView */
         ResearchView: {
             budget: components["schemas"]["TrialBudget"];
@@ -2403,6 +2613,7 @@ export interface components {
             plan: components["schemas"]["ResearchPlanView"] | null;
             /** Plan Error */
             plan_error: string | null;
+            today: components["schemas"]["ResearchToday"];
             /** Trials */
             trials: components["schemas"]["TrialRow"][];
             /** Trials Total */
@@ -2877,6 +3088,16 @@ export interface components {
             /** Plots Seen */
             plots_seen: string[];
             /**
+             * Pull History Bars
+             * @default 0
+             */
+            pull_history_bars: number;
+            /**
+             * Pull Live 24H
+             * @default 0
+             */
+            pull_live_24h: number;
+            /**
              * Repaint Status
              * @default none
              * @enum {string}
@@ -2889,12 +3110,41 @@ export interface components {
             /** Version */
             version: string;
         };
-        /** TvStatusView */
+        /**
+         * TvStatusView
+         * @description The TradingView card (docs/ux/limits-and-tradingview.md B). TradingView is an optional second feed and never
+         *     stops trading, so no state here is a failure: the screen shows expired, unknown and stale in amber.
+         */
         TvStatusView: {
+            /** Fix Command */
+            fix_command?: string | null;
+            /**
+             * History Bars
+             * @default 0
+             */
+            history_bars: number;
             /** Indicators */
             indicators: components["schemas"]["TvIndicatorStatus"][];
+            /** Last Pull Utc */
+            last_pull_utc?: string | null;
+            /**
+             * Live Bars 24H
+             * @default 0
+             */
+            live_bars_24h: number;
             /** Now */
             now: string;
+            /**
+             * Signin
+             * @default not_set_up
+             * @enum {string}
+             */
+            signin: "ok" | "expired" | "not_set_up" | "unknown";
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
         };
         /**
          * UserRef
@@ -3886,6 +4136,58 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobRow"][];
+                };
+            };
+        };
+    };
+    limits_get_api_limits_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LimitsView"];
+                };
+            };
+        };
+    };
+    limits_changes_api_limits_changes_get: {
+        parameters: {
+            query?: {
+                account?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LimitChange"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

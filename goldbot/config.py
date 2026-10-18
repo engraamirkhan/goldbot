@@ -165,6 +165,10 @@ class RiskSettings(_Section):
     # stage. Never above the 1% per-trade maximum; never in tiny-live. null = off: the minimum lot only within 1.2x the
     # target (design). The absolute daily loss limit (BACKLOG 29) is per account: config/accounts.yaml
     min_lot_risk_cap: float | None = Field(None, gt=0, le=0.01)
+    # ADR 0031: a demo account with the owner's ceilings (accounts.yaml `risk_overrides`, ADR 0032) trades the limits
+    # the nightly limits_job learns, between these defaults and those ceilings (goldbot/ops/limits_job.py). false: the
+    # ceilings themselves (ADR 0032 StaticController). Every other account trades the defaults either way
+    adaptive_limits: bool = True
     # health: an engine whose broker reads (positions(), deal history) failed this many times in a row FAILs and the
     # owner is alerted on Telegram; fewer is a warning (entries are blocked from the first failure, exits keep trying)
     positions_unreadable_alert: int = Field(5, ge=1)
@@ -199,6 +203,9 @@ class CostSettings(_Section):
     # nightly_costs publishes the canonical broker's table (costs only) to release costs-v1 for research.yml;
     # needs the github-token in the keyring. Health warns when the published table is older than 8 days.
     publish_release: bool = False
+    # recorded broker-tick days (tick_record) in the cost window before nightly_costs builds the spread profile by
+    # hour and session (costs-binding-2026-10-18.md section 1.4 step 4); fewer: no profile, the note says why
+    spread_profile_min_days: int = Field(10, ge=1)
 
 
 class ScheduleSettings(_Section):
@@ -248,6 +255,9 @@ class SchedulerSettings(_Section):
     # into London/NY: max_late_hours stays at most 1
     tick_record: ScheduleSettings = ScheduleSettings(kind="daily", at="21:10", max_late_hours=0.5)
     tick_record_winter: ScheduleSettings = ScheduleSettings(kind="daily", at="22:10", max_late_hours=0.5)
+    # ADR 0031: the adaptive limits decision for the next risk day, after the daily break and before the 00:00 UTC roll;
+    # never caught up past the roll (the engine adopts a decision only at the roll, so a late one waits a day)
+    limits_job: ScheduleSettings = ScheduleSettings(kind="daily", at="23:05", max_late_hours=0.9)
 
 
 class BackupSettings(_Section):
@@ -602,6 +612,51 @@ class WebhookSettings(_Section):
     max_rows_per_hour: int = Field(default=5000, gt=0)   # inbox rows received in the last hour; beyond it the answer is 429
 
 
+class TvPullSettings(_Section):
+    """TradingView direct pull (goldbot/data/tv_pull.py; owner decision 2026-10-18, ADR 0030): the owner's session
+    cookie (keyring only) reads the saved layouts' indicators and their bars from TradingView's chart websocket.
+    "Strictly read-only; polite rate limit with backoff; fail soft": off until the owner turns it on in
+    settings.local.yaml, and the defaults stay well under what one open chart tab sends."""
+    enabled: bool = False
+    symbols: dict[str, str] = Field(default_factory=lambda: {"OANDA:XAUUSD": "XAUUSD"})  # chart symbol -> store symbol
+    timeframes: list[str] = Field(default_factory=lambda: ["15", "60", "240", "1D"])
+    # keyring entry names of the browser cookies `sessionid` and `sessionid_sign` (the values never leave the keyring)
+    sessionid_key: str = "tradingview-sessionid"
+    sessionid_sign_key: str = "tradingview-sessionid-sign"
+    discover: bool = True                              # read the saved layouts for their indicators
+    discover_every_s: float = Field(default=21600, gt=0)
+    max_studies: int = Field(default=20, gt=0)
+    min_interval_s: float = Field(default=5.0, ge=1.0)            # between two requests, whatever kind
+    bars_per_request: int = Field(default=5000, gt=0, le=5000)
+    max_pages_per_tf: int = Field(default=5, ge=0)                # history pages per timeframe and pass
+    max_requests_per_day: int = Field(default=3000, gt=0)         # rolling 24 h; a pass is skipped beyond it
+    study_warmup_bars: int = Field(default=300, ge=0)             # oldest loaded bars whose study values are not kept
+    poll_interval_s: float = Field(default=900, gt=0)
+    poll_offset_s: float = Field(default=60, ge=0)                # after the bar close, so the bar has closed there
+    live_max_lag_s: float = Field(default=1800, gt=0)             # received within this of the close: pull_live
+    history_latency_default_s: float = Field(default=960, ge=0)   # until min_live_samples live bars measure the p95
+    min_live_samples: int = Field(default=20, gt=0)
+    backoff_base_s: float = Field(default=300, gt=0)
+    backoff_max_s: float = Field(default=21600, gt=0)
+    timeout_s: float = Field(default=30, gt=0)
+
+    @model_validator(mode="after")
+    def _backoff_ordered(self) -> TvPullSettings:
+        if self.backoff_max_s < self.backoff_base_s:
+            raise ValueError("tv_pull.backoff_max_s must be at least backoff_base_s")
+        return self
+class TvSettings(_Section):
+    """TradingView values at decision time (plan docs/plans/tradingview-strategies.md, "Live staleness fails closed"):
+    a value counts only when its bar is the decision bar and it arrived no more than `max_lag_s` after that bar's
+    close; otherwise it is NaN and nothing that needs it can trigger. Equal to `features.tv_plots.MAX_LAG` (the
+    training allowance), so live never accepts what training could not see (tests/test_tv_event.py pins both)."""
+    max_lag_s: int = Field(default=60, ge=0)
+    # a TV_GRID_V1 trial is refused (research.tv_grid.tv_refusal, before it is charged) unless at least this share of
+    # our decision bars inside the TradingView history has a TradingView bar of the same open: our 4h bars floor on UTC
+    # and our 1d is the 13:30 New York feature-day, TradingView's gold bars start at its session open
+    min_bar_match: float = Field(default=0.95, gt=0, le=1)
+
+
 class Settings(_Section):
     symbol: str
     data_root: str
@@ -628,6 +683,8 @@ class Settings(_Section):
     ledger: LedgerSettings = Field(default_factory=LedgerSettings)
     ticks: TickRecordSettings = Field(default_factory=TickRecordSettings)
     webhook: WebhookSettings = Field(default_factory=WebhookSettings)
+    tv_pull: TvPullSettings = Field(default_factory=TvPullSettings)
+    tv: TvSettings = Field(default_factory=TvSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")
     @classmethod

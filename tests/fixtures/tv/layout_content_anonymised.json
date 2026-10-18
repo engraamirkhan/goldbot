@@ -1,0 +1,324 @@
+{
+ "charts": [
+  {
+   "panes": [
+    {
+     "sources": [
+      {
+       "type": "MainSeries",
+       "state": {
+        "symbol": "OANDA:XAUUSD",
+        "interval": "15"
+       }
+      },
+      {
+       "type": "Study",
+       "metaInfo": "Script$PUB;script-1@tv-scripting-101[v.2.0]",
+       "state": {
+        "inputs": {
+         "__chart_fgcolor": "str",
+         "__fast_calc": "bool",
+         "in_0": "int",
+         "in_1": "int",
+         "in_10": "str",
+         "in_11": "bool",
+         "in_12": "str",
+         "in_13": "bool",
+         "in_14": "str",
+         "in_15": "str",
+         "in_16": "bool",
+         "in_17": "bool",
+         "in_18": "str",
+         "in_19": "str",
+         "in_2": "int",
+         "in_20": "str",
+         "in_21": "str",
+         "in_22": "str",
+         "in_3": "str",
+         "in_4": "str",
+         "in_5": "str",
+         "in_6": "bool",
+         "in_7": "str",
+         "in_8": "str",
+         "in_9": "str",
+         "pineFeatures": "str",
+         "pineId": "",
+         "pineVersion": ""
+        },
+        "styles": {
+         "plot_0": {
+          "title": "plot_0"
+         },
+         "plot_1": {
+          "title": "plot_1"
+         },
+         "plot_10": {
+          "title": "plot_10"
+         },
+         "plot_12": {
+          "title": "plot_12"
+         },
+         "plot_14": {
+          "title": "plot_14"
+         },
+         "plot_16": {
+          "title": "plot_16"
+         },
+         "plot_18": {
+          "title": "plot_18"
+         },
+         "plot_2": {
+          "title": "plot_2"
+         },
+         "plot_3": {
+          "title": "plot_3"
+         },
+         "plot_4": {
+          "title": "plot_4"
+         },
+         "plot_6": {
+          "title": "plot_6"
+         },
+         "plot_8": {
+          "title": "plot_8"
+         },
+         "plot_5": {
+          "title": "plot_5"
+         },
+         "plot_7": {
+          "title": "plot_7"
+         }
+        }
+       }
+      },
+      {
+       "type": "Study",
+       "metaInfo": "Script$PUB;script-2@tv-scripting-101[v.1.0]",
+       "state": {
+        "inputs": {
+         "__chart_fgcolor": "str",
+         "__fast_calc": "bool",
+         "in_0": "bool",
+         "in_1": "str",
+         "in_10": "str",
+         "in_11": "str",
+         "in_12": "bool",
+         "in_13": "int",
+         "in_14": "bool",
+         "in_15": "bool",
+         "in_16": "int",
+         "in_17": "bool",
+         "in_18": "int",
+         "in_19": "str",
+         "in_2": "str",
+         "in_20": "str",
+         "in_21": "str",
+         "in_22": "str",
+         "in_23": "str",
+         "in_24": "bool",
+         "in_25": "int",
+         "in_26": "float",
+         "in_27": "str",
+         "in_28": "bool",
+         "in_29": "bool",
+         "in_3": "str",
+         "in_30": "str",
+         "in_31": "str",
+         "in_32": "str",
+         "in_33": "int",
+         "in_34": "bool",
+         "in_35": "str",
+         "in_36": "str",
+         "in_37": "bool",
+         "in_38": "str",
+         "in_39": "str",
+         "in_4": "str",
+         "in_40": "bool",
+         "in_41": "str",
+         "in_42": "str",
+         "in_43": "bool",
+         "in_44": "str",
+         "in_45": "str",
+         "in_46": "str",
+         "in_47": "str",
+         "in_48": "bool",
+         "in_49": "str",
+         "in_5": "str",
+         "in_50": "str",
+         "in_51": "str",
+         "in_52": "str",
+         "in_53": "str",
+         "in_54": "bool",
+         "in_55": "bool",
+         "in_56": "str",
+         "in_57": "str",
+         "in_58": "str",
+         "in_59": "str",
+         "in_6": "bool",
+         "in_60": "bool",
+         "in_61": "str",
+         "in_62": "bool",
+         "in_63": "str",
+         "in_64": "bool",
+         "in_65": "str",
+         "in_66": "bool",
+         "in_67": "int",
+         "in_68": "int",
+         "in_69": "float",
+         "in_7": "str",
+         "in_8": "str",
+         "in_9": "str",
+         "pineFeatures": "str",
+         "pineId": "",
+         "pineVersion": ""
+        },
+        "styles": {
+         "plot_23": {
+          "title": "plot_23"
+         },
+         "plot_25": {
+          "title": "plot_25"
+         },
+         "plot_27": {
+          "title": "plot_27"
+         },
+         "plot_29": {
+          "title": "plot_29"
+         },
+         "plot_31": {
+          "title": "plot_31"
+         },
+         "plot_33": {
+          "title": "plot_33"
+         },
+         "plot_35": {
+          "title": "plot_35"
+         },
+         "plot_37": {
+          "title": "plot_37"
+         },
+         "plot_38": {
+          "title": "plot_38"
+         },
+         "plot_39": {
+          "title": "plot_39"
+         },
+         "plot_0": {
+          "title": "plot_0"
+         },
+         "plot_1": {
+          "title": "plot_1"
+         },
+         "plot_2": {
+          "title": "plot_2"
+         },
+         "plot_3": {
+          "title": "plot_3"
+         },
+         "plot_4": {
+          "title": "plot_4"
+         },
+         "plot_5": {
+          "title": "plot_5"
+         },
+         "plot_6": {
+          "title": "plot_6"
+         },
+         "plot_7": {
+          "title": "plot_7"
+         },
+         "plot_8": {
+          "title": "plot_8"
+         },
+         "plot_9": {
+          "title": "plot_9"
+         },
+         "plot_10": {
+          "title": "plot_10"
+         },
+         "plot_11": {
+          "title": "plot_11"
+         },
+         "plot_12": {
+          "title": "plot_12"
+         },
+         "plot_13": {
+          "title": "plot_13"
+         },
+         "plot_14": {
+          "title": "plot_14"
+         },
+         "plot_15": {
+          "title": "plot_15"
+         },
+         "plot_16": {
+          "title": "plot_16"
+         },
+         "plot_17": {
+          "title": "plot_17"
+         },
+         "plot_18": {
+          "title": "plot_18"
+         },
+         "plot_19": {
+          "title": "plot_19"
+         },
+         "plot_20": {
+          "title": "plot_20"
+         },
+         "plot_21": {
+          "title": "plot_21"
+         },
+         "plot_22": {
+          "title": "plot_22"
+         },
+         "plot_24": {
+          "title": "plot_24"
+         },
+         "plot_26": {
+          "title": "plot_26"
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "sources": [
+      {
+       "type": "Study",
+       "metaInfo": "Script$PUB;script-3@tv-scripting-101[v.1.0]",
+       "state": {
+        "inputs": {
+         "__chart_fgcolor": "str",
+         "__fast_calc": "bool",
+         "in_0": "int",
+         "pineFeatures": "str",
+         "pineId": "",
+         "pineVersion": ""
+        },
+        "styles": {
+         "plot_0": {
+          "title": "plot_0"
+         },
+         "plot_2": {
+          "title": "plot_2"
+         },
+         "plot_4": {
+          "title": "plot_4"
+         },
+         "plot_5": {
+          "title": "plot_5"
+         },
+         "plot_6": {
+          "title": "plot_6"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

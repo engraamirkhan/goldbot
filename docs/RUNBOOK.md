@@ -501,7 +501,7 @@ more: the watchdog timer is still off and no floor is set, so a rollback is allo
    disables the terminal unit, puts the previous bridge unit back from root's own clone at the recorded commit, rolls
    the code back (accepted because no floor is set) and restarts the bridge, which starts the terminal itself, as before:
    ```bash
-   P=$(sudo cat /var/lib/goldbot-mt5-upgrade/previous-sha) && sudo systemctl disable --now goldbot-mt5-terminal@icm-demo && sudo env P=$P bash -c 'set -e; d=$(mktemp -d /root/goldbot-ops.XXXXXX); git init -q $d; git -C $d fetch -q --depth 1 https://github.com/engraamirkhan/goldbot.git $P; git -C $d checkout -q --detach FETCH_HEAD; install -m 644 -o root -g root $d/goldbot/ops/linux/systemd/goldbot-bridge@.service /etc/systemd/system/; rm -rf $d; systemctl daemon-reload' && sudo goldbot-deploy --rollback $P && sudo systemctl restart goldbot-bridge@icm-demo
+   P=$(sudo cat /var/lib/goldbot-mt5-upgrade/previous-sha) && sudo systemctl disable --now goldbot-mt5-terminal@icm-demo && sudo env P=$P bash -c 'set -e; [ ${#P} = 40 ]; d=$(mktemp -d /root/goldbot-ops.XXXXXX); trap "rm -rf -- $d" EXIT; git clone -q --filter=blob:none --no-checkout https://github.com/engraamirkhan/goldbot.git $d/r; git -C $d/r merge-base --is-ancestor $P origin/main; git -C $d/r checkout -q --detach $P; install -m 644 -o root -g root $d/r/goldbot/ops/linux/systemd/goldbot-bridge@.service /etc/systemd/system/; systemctl daemon-reload' && sudo goldbot-deploy --rollback $P && sudo systemctl restart goldbot-bridge@icm-demo
    ```
    Then `systemctl is-active goldbot-bridge@icm-demo`, `curl -s 127.0.0.1:8765/health` and, on the brain, preflight.
    Keep the engine stopped until `/health` shows `"terminal": "ok"`. Open a postmortem in `docs/incidents/` and
@@ -701,6 +701,7 @@ Weekdays are Mon-Fri. A job missed while the VPS was down is run once on restart
 | `calendar_archive` | Daily 06:10 | Stores the Forex Factory week in the `calendar_events` table (feeds the news blackout). |
 | `agents_presession` | Mon-Fri 06:30 | Macro and news analyst writes the pre-session briefing. |
 | `nightly_costs` | Mon-Fri 23:10 | Builds each account's spread/slippage cost table `state\costs_<account>.json`, with the swap and commission the terminal reports (`state\broker_terms_<account>.json`, written by the engine every 6 hours); re-runs the account classifier (`state\classifier_<account>.json`) every night while the class is unknown and on Fridays once it is known. Until an account has been classified (1,000+ London/New York ticks logged) or declares `account_class` in `config/accounts.yaml` (icm-demo: `raw`), its engine opens no positions and the health check warns "account class unknown"; a measured class that disagrees with the declared one makes the stricter (Standard) win and the health check warns "declared raw, measured standard: check the account type"; on a Standard account the 15m families except session-open are off. |
+| `limits_job` | Daily 23:05 (never after midnight UTC) | ADR 0031: decides the adaptive risk limits of each demo account with ceilings (`icm-demo`) for the next day, from all its demo trades and the shadow book since each model went live. Stored in `core.db` (`adaptive_state`, append-only `adaptive_changes`); the engine applies it at 00:00 UTC. Every change sends you a Telegram FYI (nothing to approve). Health check `limits_controller:<account>` fails when the last decision is more than 26 h old; the engine then trades the default limits. |
 | `model_watch` | Daily 23:30 | CUSUM check on any newly promoted champion; restores the previous champion on an alarm. |
 | `agents_daily` | Mon-Fri 23:45 | Data steward, risk officer, execution auditor. |
 | `saturday_retrain` | Saturday 06:00 | Refreshes bars from `data-v1` and the macro series from `macro-v1` (a macro failure does not stop the retrain), decides waiting challengers (promote/retire), retrains new challengers. |
@@ -770,6 +771,7 @@ Other secrets: each command asks `value for <key>` and hides what you type.
 | `anthropic-api-key` | `.\.venv\Scripts\python -m goldbot.ops.accounts set anthropic-api-key` | `goldbot-scheduler` (staff agents), `goldbot-news` (headline scoring) | Staff agents are off; headlines are kept but not scored, so there is no news-shock blackout (calendar blackouts still work). |
 | `github-token` | `.\.venv\Scripts\python -m goldbot.ops.accounts set github-token` | `goldbot-scheduler` (bar refresh from `data-v1`, shared trial registry on `research-v1`) | The trial registry stays local to the VPS. Use a GitHub token for `engraamirkhan/goldbot` that can read and write release assets (Contents: read and write). |
 | `tradingview-webhook-secret` | `.\.venv\Scripts\python -m goldbot.ops.accounts set tradingview-webhook-secret` | `goldbot-webhook` | The webhook service cannot start (it needs this value and has no window to ask in). Choose a long random string and use the same one in your TradingView alerts. |
+| `tradingview-sessionid`, `tradingview-sessionid-sign` | `python -m goldbot.ops.accounts set tradingview-sessionid` (and `... set tradingview-sessionid-sign`) | `tv-pull` (2.7c) | The direct pull does not run; health `tv_pull` WARNs once it is enabled. The browser cookies `sessionid` and `sessionid_sign`; they expire when TradingView signs you out. |
 
 `config/accounts.yaml` also names a key `tradingview-ideas-cookie`; no running code reads it yet, so skip it.
 
@@ -854,10 +856,12 @@ use them (opt-in, filter features only until proven). Each bar becomes rows in t
 alert never arrives is simply missing (NaN in features). The alert is saved to `state/tv.db` before goldbot answers, and a
 failed save answers 503 so TradingView retries.
 
-1. Store the shared secret (hidden prompt): `python -m goldbot.ops.accounts set tradingview-webhook-secret`; start
-   `goldbot-webhook`. It listens on 127.0.0.1 only; put your HTTPS reverse proxy (for example Tailscale Funnel, path `/tv`)
-   in front. Keep the public address private. If the proxy cannot pass TradingView's address in `X-Forwarded-For`, set
-   `GOLDBOT_TV_ENFORCE_IP=0` for the service: the secret then authenticates alone.
+1. On the Oracle brain, section 2.7d does this step (secret generated on your Mac and piped, never shown; Tailscale
+   Funnel on `/tv`). Elsewhere: store the shared secret (hidden prompt): `python -m goldbot.ops.accounts set
+   tradingview-webhook-secret`; start `goldbot-webhook`. It listens on 127.0.0.1 only; put your HTTPS reverse proxy (for
+   example Tailscale Funnel, path `/tv`) in front. Keep the public address private. If the proxy cannot pass
+   TradingView's address in `X-Forwarded-For`, set `GOLDBOT_TV_ENFORCE_IP=0` for the service: the secret then
+   authenticates alone.
 2. On the chart (XAUUSD, 15m and 1h first) create one alert per indicator: **Condition** = the indicator (or "Any alert()
    function call" if that is all it offers), **Trigger** = **Once per bar close** (never "once per bar", which sends
    half-formed bars), longest expiry, **Webhook URL** = your address, and this **Message** (every value is quoted because
@@ -865,10 +869,10 @@ failed save answers 503 so TradingView retries.
    has plots, the Data Window lists them):
 
 ```json
-{"indicator":"K-Indi","version":"2.02","symbol":"{{ticker}}","tf":"{{interval}}","bar_time":"{{time}}","fired_at":"{{timenow}}","price":"{{close}}","plots":{"plot_0":"{{plot_0}}","plot_1":"{{plot_1}}","plot_2":"{{plot_2}}","plot_3":"{{plot_3}}","plot_4":"{{plot_4}}","plot_5":"{{plot_5}}","plot_6":"{{plot_6}}","plot_7":"{{plot_7}}","plot_8":"{{plot_8}}","plot_9":"{{plot_9}}","plot_10":"{{plot_10}}","plot_11":"{{plot_11}}","plot_12":"{{plot_12}}","plot_13":"{{plot_13}}","plot_14":"{{plot_14}}","plot_15":"{{plot_15}}","plot_16":"{{plot_16}}","plot_17":"{{plot_17}}","plot_18":"{{plot_18}}","plot_19":"{{plot_19}}"},"secret":"<the stored secret>"}
+{"indicator":"smc","version":"1.0","symbol":"{{ticker}}","tf":"{{interval}}","bar_time":"{{time}}","fired_at":"{{timenow}}","price":"{{close}}","plots":{"plot_0":"{{plot_0}}","plot_1":"{{plot_1}}","plot_2":"{{plot_2}}","plot_3":"{{plot_3}}","plot_4":"{{plot_4}}","plot_5":"{{plot_5}}","plot_6":"{{plot_6}}","plot_7":"{{plot_7}}","plot_8":"{{plot_8}}","plot_9":"{{plot_9}}","plot_10":"{{plot_10}}","plot_11":"{{plot_11}}","plot_12":"{{plot_12}}","plot_13":"{{plot_13}}","plot_14":"{{plot_14}}","plot_15":"{{plot_15}}","plot_16":"{{plot_16}}","plot_17":"{{plot_17}}","plot_18":"{{plot_18}}","plot_19":"{{plot_19}}"},"secret":"<the stored secret>"}
 ```
 
-   Change `indicator` and `version` per indicator (they name the data: `K-Indi@2.02`); type the secret into the alert
+   Change `indicator` and `version` per indicator (they name the data: `smc@1.0`); type the secret into the alert
    yourself, never into chat or a file. Alerts need a TradingView plan with webhooks and two-factor sign-in on.
 3. Check it: the dashboard endpoint `/api/tradingview` lists each indicator and timeframe with its last bar, alerts in the
    last 24 h, plots seen and gaps (a market-closed stretch also counts as missing bars).
@@ -881,7 +885,7 @@ failed save answers 503 so TradingView retries.
 
    ```
    scp ~/Downloads/<file>.csv <brain-ssh-name>:~/goldbot/data/
-   ~/goldbot/.venv/bin/python -m goldbot.ops.run tv-import ~/goldbot/data/<file>.csv --indicator K-Indi --version 2.02 --tf 15
+   ~/goldbot/.venv/bin/python -m goldbot.ops.run tv-import ~/goldbot/data/<file>.csv --indicator smc --version 1.0 --tf 15
    ```
 
    `--indicator` and `--version` must be spelled exactly as in the alert message; `--tf` is 15, 60, 240 or 1D. The
@@ -889,13 +893,154 @@ failed save answers 503 so TradingView retries.
    bar in the future or a cell that is not a number, and writes nothing then. Repeating it is harmless. Imported bars are
    marked `unvalidated (repaint risk)`: a chart export can differ from what the indicator showed live. After about
    three weeks of live alerts (at least 200 bars both ways), export again, import again, and run
-   `~/goldbot/.venv/bin/python -m goldbot.ops.run tv-repaint-check --indicator K-Indi --version 2.02 --tf 15`; it
+   `~/goldbot/.venv/bin/python -m goldbot.ops.run tv-repaint-check --indicator smc --version 1.0 --tf 15`; it
    prints the match per plot and marks the history validated only at 99 % or more. `/api/tradingview` shows each
    indicator's imported bars and its repaint status.
 
 Limits: an invite-only script exposes only the plots and `alert()` calls its author allows. A series that is drawn
 (lines, boxes, labels) or computed but not plotted cannot be read, and a plot set to `display.none` may be missing from
 the alert; check each indicator once. Data stays in `data/` and `state/` (private), never in a public release.
+
+### 2.7c TradingView direct pull (your indicators without alerts; ADR 0030)
+
+goldbot reads your saved TradingView layouts, finds every indicator on them with the inputs you saved, and pulls their
+plots and the bars into `tv_indicators` from TradingView's own chart connection. It only reads: it never creates or
+changes an alert, a layout or anything else on your account. This is not an official TradingView interface; you
+accepted the terms risk (possible account suspension, loss of invite-only access) on 2026-10-18. Your one step:
+
+1. The two browser cookies `sessionid` and `sessionid_sign` go into the secret store as `tradingview-sessionid` and
+   `tradingview-sessionid-sign`. On the Oracle brain, section 2.7d step T1 copies them from your Mac's Keychain without
+   the values appearing anywhere. Elsewhere: in a browser signed in to TradingView, open the developer tools,
+   Application (Chrome) or Storage (Safari/Firefox) > Cookies > `https://www.tradingview.com`, copy each value and store
+   it at the hidden prompt of `python -m goldbot.ops.accounts set tradingview-sessionid` (and `... set
+   tradingview-sessionid-sign`).
+2. Claude switches `tv_pull.enabled: true` in `config/settings.local.yaml` and installs the unit (not part of the
+   bootstrap, not installed by `goldbot-deploy`): section 2.7d steps T2 to T5. `tv-pull follow` runs a pass after every
+   15m bar close; `tv-pull sync` runs one pass; `tv-pull status` shows the last one (bars received per timeframe, new
+   bars, repaints, studies) and reaches no network.
+
+One puller per TradingView account, and that is the brain. Two passes on one host never overlap (`state/tv_pull.lock`:
+the second is skipped with "another tv-pull pass is running"), but a pull on another machine cannot be seen: never run
+`tv-pull follow` on the Mac, and run the Mac probe (`scripts/tv_local`) only by hand, once, outside :01-:05, :16-:20,
+:31-:35 and :46-:50 UTC (the brain's pass minutes). Its requests are not counted in the brain's daily budget
+(`tv_pull.max_requests_per_day`).
+
+When TradingView signs the session out, health shows `tv_pull` WARN and you get one Telegram notice: sign in again in
+the browser, then repeat step 1 (2.7d T1 on the brain; a new cookie is tried at once). Alerts (2.7b) keep working
+whatever the pull does.
+
+### 2.7d TradingView on the Oracle brain: rollout, checks, rollback (Claude runs it)
+
+Order matters: each unit is enabled only after what it needs is in place, because an enabled unit that crash-loops
+(no secret, `tv_pull.enabled: false`) makes every later `goldbot-deploy` fail its 90 s health window and roll back.
+Both units are restarted by every deploy from then on, but their unit files are copies: when a release changes
+`goldbot-tv-pull.service` or `goldbot-webhook.service`, repeat its `install` line (T4 / W3). Root installs a unit only from its own fresh
+clone of the deployed commit `<SHA>` (public: the commit `goldbot-deploy` last recorded as deployed in
+`/var/lib/goldbot-deploy/deploys.jsonl`), never from `/opt/goldbot`, which the service user can write
+(docs/AGENT_STANDARDS.md "Root-run tooling"), and only a full 40-character commit on `main` (forks share GitHub's object store, so a commit id alone does not prove it is ours). Every command that touches
+goldbot's state runs as the `goldbot` user (the `goldbot` wrapper does that): a root-run pull would leave root-owned
+`.lock` files and partitions under `/opt/goldbot/data` that the services then cannot write.
+
+"Mac:" lines run in a goldbot checkout on your Mac at the deployed release (`<checkout>`); "brain:" lines after
+`ssh -F ~/.ssh/goldbot.conf goldbot-brain`. Your Mac may ask whether `python` may use the Keychain item: click Allow, never
+Always Allow (that would let any later script run with that `python` read it without asking).
+That and the two Tailscale sign-in/approval clicks (W4) are your only steps.
+
+**Precondition.** The release that has `accounts set --stdin` / `export` and `state/tv_pull.lock` is deployed and
+healthy (`goldbot run health`; the last line of `/var/lib/goldbot-deploy/deploys.jsonl`).
+
+**TradingView pull**
+
+* T1, Mac (secrets by pipe, never on screen, in argv, history or a log; `export` writes only into a pipe (never a terminal or a file), and an
+  empty pipe stores nothing):
+  `uv run --directory <checkout> python -m goldbot.ops.accounts export tradingview-sessionid | ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-brain goldbot accounts set tradingview-sessionid --stdin`
+  then the same line with `tradingview-sessionid-sign` in both places. Each prints `stored ... in
+  /opt/goldbot/state/.secrets.json (plaintext, owner-only file)`; the brain has no desktop keyring (2.3).
+* T2, brain (switch it on; only appends when the file has no `tv_pull:` key yet, otherwise edit that block by hand):
+  `sudo -u goldbot sh -c 'f=/opt/goldbot/config/settings.local.yaml; grep -q "^tv_pull:" "$f" || printf "tv_pull:\n  enabled: true\n" >> "$f"'`
+  then check the settings still load (a typo stops every service at its next restart):
+  `goldbot run tv-pull status` must print `tv_auth=...`, not a settings error.
+* T3, brain (one pass by hand first, so a fault shows here and not as a crash loop):
+  `goldbot run tv-pull sync` must end with `tv-pull: ok, ...` and per timeframe `N bars received`. A first pass
+  backfills (up to 5 history pages per timeframe at one request per 5 s: a few minutes). `FAILED: ... cookie` means T1
+  stored a stale cookie: sign in again in the browser and repeat T1.
+* T4, brain (install and start the follow service):
+  `sudo env S=<SHA> U=goldbot-tv-pull bash -c 'set -e; [ ${#S} = 40 ]; d=$(mktemp -d /root/goldbot-ops.XXXXXX); trap "rm -rf -- $d" EXIT; git clone -q --filter=blob:none --no-checkout https://github.com/engraamirkhan/goldbot.git $d/r; git -C $d/r merge-base --is-ancestor $S origin/main; git -C $d/r checkout -q --detach $S; install -m 644 -o root -g root $d/r/goldbot/ops/linux/systemd/$U.service /etc/systemd/system/; systemctl daemon-reload' && sudo systemctl enable --now goldbot-tv-pull`
+* T5, brain, checks (right away, then after the next 15m close + 1 min):
+  `systemctl is-active goldbot-tv-pull` = active; `systemctl show -p NRestarts --value goldbot-tv-pull` = 0;
+  `goldbot run tv-pull status` shows a pass newer than T3 with `new` live bars; `goldbot run health` shows
+  `heartbeat:tv-pull` ok and `tv_pull` ok; `journalctl -u goldbot-tv-pull -n 20` has `tv pull ok` lines and no
+  traceback.
+
+**Webhook (alerts, 2.7b)**
+
+* W1, Mac, once (a new 256-bit secret straight into your Mac Keychain; the Keychain is its system of record, so a
+  rebuilt brain gets it back with W2). First check none exists, since a new one breaks every alert already set up:
+  `uv run --directory <checkout> python -m goldbot.ops.accounts export tradingview-webhook-secret | wc -c` prints 0
+  with `refused: ... not stored here` when there is none (a length, never the value). Then:
+  `uv run --directory <checkout> python -c "import secrets; print(secrets.token_urlsafe(32))" | uv run --directory <checkout> python -m goldbot.ops.accounts set tradingview-webhook-secret --stdin`
+* W2, Mac (copy it to the brain):
+  `uv run --directory <checkout> python -m goldbot.ops.accounts export tradingview-webhook-secret | ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-brain goldbot accounts set tradingview-webhook-secret --stdin`
+* W3, brain (the unit needs the secret before it starts: without it the service restarts every 5 s):
+  `sudo env S=<SHA> U=goldbot-webhook bash -c 'set -e; [ ${#S} = 40 ]; d=$(mktemp -d /root/goldbot-ops.XXXXXX); trap "rm -rf -- $d" EXIT; git clone -q --filter=blob:none --no-checkout https://github.com/engraamirkhan/goldbot.git $d/r; git -C $d/r merge-base --is-ancestor $S origin/main; git -C $d/r checkout -q --detach $S; install -m 644 -o root -g root $d/r/goldbot/ops/linux/systemd/$U.service /etc/systemd/system/; systemctl daemon-reload' && sudo systemctl enable --now goldbot-webhook`
+  then `curl -s http://127.0.0.1:8443/health` prints `{"ok":true,"stored":...}`.
+* W4, brain (the public HTTPS address; Tailscale may already be installed: `tailscale status`).
+  If not: the three apt lines of docs/deploy/first-deploy.md section 3 A step 2, whose `sudo tailscale up` prints a sign-in link:
+  you open it and sign in (your click). Then:
+  `sudo tailscale funnel --bg --set-path /tv http://127.0.0.1:8443/tv`
+  The first time it prints an approval link to enable Funnel on your tailnet: you open it and approve (your click).
+  `tailscale funnel status` then shows `https://<brain>.<tailnet>.ts.net/tv`. That address stays private: in your
+  Terminal and TradingView only, never in GitHub, chat or a file in the repository.
+* W5, checks from outside (owner-verified done): from the Mac,
+  `curl -s -o /dev/null -w '%{http_code}\n' -X POST -d '{}' https://<brain>.<tailnet>.ts.net/tv` prints `403`
+  (Funnel reaches the app; your Mac is not a TradingView address). Then create the alerts (2.7b step 2): the Webhook URL
+  is that address; for the message's `secret`, put the secret on the clipboard with
+  `uv run --directory <checkout> python -m goldbot.ops.accounts export tradingview-webhook-secret | pbcopy; (sleep 45; pbcopy </dev/null) &`
+  and paste it in place of `<the stored secret>` within 45 s (the clipboard then empties itself; run the line again
+  for the next alert). A clipboard-history app (Raycast, Alfred, Maccy, Paste) keeps every copy: pause it first, or
+  delete that entry afterwards; Universal Clipboard may also have passed it to your other Apple devices for a few
+  minutes. `export` writes only into a pipe (a terminal or `> file` is refused), but it cannot tell a pipe into a
+  printing command (`| cat`) from one into ssh or pbcopy: pipe it into nothing else. After the alert's first bar close:
+  `journalctl -u goldbot-webhook -n 20` shows `POST /tv ... 200`, and `goldbot run health` shows `heartbeat:webhook` ok.
+  All `403` with "ip not allowed" means Funnel did not pass TradingView's address in `X-Forwarded-For` (not verified
+  yet on this host): `sudo systemctl edit goldbot-webhook`, add `[Service]` and `Environment=GOLDBOT_TV_ENFORCE_IP=0`,
+  `sudo systemctl restart goldbot-webhook`; the 256-bit secret then authenticates alone (2.7b).
+
+**What is watched (and the promise)**
+
+| Failure | Detection | Who hears | Recovery |
+|---|---|---|---|
+| `goldbot-tv-pull` or `goldbot-webhook` dead or hung | `heartbeat:tv-pull` / `heartbeat:webhook` silent > 5 min: WARN | Telegram at the next health poll (NOTIFY_ON_WARN) | `sudo systemctl restart <unit>`; `journalctl -u <unit> -n 50` |
+| Cookie expired or signed out | `tv_pull` WARN (`expired`) | one Telegram notice per expiry | sign in again in the browser, T1 |
+| Pull runs but never succeeds | `tv_pull` WARN after 36 h without a successful pass | Telegram digest | `goldbot run tv-pull status`: the reason |
+| TradingView bars disagree with the reference feed | `tv_reconcile` (daily 23:15): bar flagged `dq`, plots NaN, `dq_events` row | `dq_events` (source tradingview), no alert | none needed (the bar is not used) |
+| Two pulls on the brain at once | `state/tv_pull.lock`: the second pass is skipped, no request | the `sync` output | wait for the running pass |
+
+These are WARNs, never FAILs: TradingView is an optional second feed and must never block trading or exits. Nothing in
+the engine reads it. Both state files are covered by the nightly backup (`state/tv.db`, `state/tv_auth.db`); the secret
+store is not (by design): after a restore, repeat T1 and W2 from the Mac.
+
+Writers into `tv_indicators` (webhook sync, the pull, `tv_reconcile`) are safe together: each append holds the
+partition's exclusive flock for its whole read-merge-write and readers take a shared one (goldbot/data/store.py);
+`origin` is in the key, so an alert row and a pulled row of the same bar never replace each other; `tv_reconcile`
+rewrites only pulled rows, on their own key; the webhook inbox and the pull log share `state/tv.db` (SQLite WAL,
+busy_timeout 5 s).
+
+Budgets to measure after the first day and record in the deploy note (targets, not yet measured):
+`systemctl show -p MemoryCurrent --value goldbot-tv-pull goldbot-webhook` (target under 400 MB and 250 MB),
+`du -sh /opt/goldbot/data/tv_indicators` per day (expected well under 50 MB/day), and
+`goldbot run tv-pull status` requests per pass (the default budget is 3000 a day).
+
+**Rollback** (each line independent; data already pulled stays, marked `pull_live`/`pull_history`, and is harmless):
+
+* Pull: `sudo systemctl disable --now goldbot-tv-pull && sudo -u goldbot rm -f /opt/goldbot/state/heartbeat_tv-pull.json`,
+  then set `tv_pull.enabled: false` in `settings.local.yaml`. To revoke the cookie itself, sign out of TradingView in the
+  browser (that ends the session for every copy).
+* Webhook: `sudo tailscale funnel --set-path /tv off`, then `sudo systemctl disable --now goldbot-webhook && sudo -u goldbot rm -f /opt/goldbot/state/heartbeat_webhook.json`;
+  delete or pause the alerts in TradingView.
+* Before any manual `goldbot-deploy` to a commit older than the release that brought `tv-pull`, disable
+  `goldbot-tv-pull` first (that code has no `tv-pull` command: the unit would crash-loop and fail the deploy's health
+  window).
 
 ### 2.8 Telegram bot with @BotFather
 
@@ -1094,6 +1239,42 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
   check clears when the engine reads the whole account flat. Outside market hours it stays a WARN: the closes go out
   when the market opens.
 
+### Demo risk limits (ADR 0032)
+
+* `icm-demo` trades with higher limits than the defaults: daily loss cap 5% (and never more than the £50 daily limit),
+  weekly cap 10%, and one 0.01 lot allowed when it risks at most 1%. These are the ceilings you approved on
+  2026-10-18. They are set in config/accounts.yaml under `risk_overrides`, apply to demo accounts only, and cannot be
+  set higher there.
+* If the account drops 8% below its high-water mark (the size-down stage), it goes back to the default limits by
+  itself and stays there, restarts included. The trade journal records `limits_reverted`, and the engine state file
+  shows `limits_reverted: true`.
+* To go back to the demo limits, wait until the account is out of size-down (the dashboard shows the stage as
+  normal), then **re-arm** on the dashboard as above. A re-arm while the account is still in size-down or halted is
+  refused (`limits_reset_refused`); re-arm again once the stage is normal.
+* Live and tiny-live accounts never use these limits.
+
+### Adaptive risk limits (ADR 0031)
+
+* On `icm-demo` the approved values above are **ceilings**: the nightly `limits_job` (23:05 UTC) sets the limits for
+  the next day between the defaults (daily 2%, weekly 5%, smallest-trade exception off) and those ceilings, from the
+  account's own demo trades. They rise one small step at a time (after 60 demo trades, 3 good days in a row and 10 new
+  trades; never within 5 days of a cut), only at 00:00 UTC, and they drop at once on a 4% drawdown, 4 big losses in a
+  row, the size-down stage or weak results. The smallest-trade exception starts at 1% for the first 60 such trades
+  and switches off for good if they lose 10R in total.
+* What you see: a Telegram FYI on every change ("Limit change (demo, icm-demo): ..."), with the old and new values in
+  £ and %, the reason and the time. Nothing to approve. The engine state file shows the current values
+  (`limits_current`; its reason starts with `adaptive:`).
+* If `limits_controller:icm-demo` FAILs in health (no decision for over 26 h): the account trades the default limits,
+  which is the safe side. Check the scheduler (`job:limits_job` in health, `python -m goldbot.db scheduler-status`);
+  the next 23:05 run decides again. A run after midnight is not caught up; the limits wait for the next night.
+* The 8% revert (above) still wins: limits go back to the defaults until you re-arm.
+* To switch it off and trade the fixed ceilings again: set `risk: { adaptive_limits: false }` in the server's
+  `config/settings.local.yaml` and restart the engine.
+* Replay (validation only, never a tuning step):
+  `python scripts/replay_limits.py --account icm-demo --from 2026-10-20 --to 2026-11-30 --state state --models models`
+  prints the decision each day would have had. It writes nothing. Each run is recorded in ADR 0031's replay log.
+* Not yet measured: the cost/model rule (BACKLOG 90) cannot fire until a 20-day cost series exists.
+
 
 ### Auto mode (entries without your click)
 
@@ -1186,10 +1367,14 @@ Back up the state folder and `config\` regularly; they are not in Git.
    (`nssm restart goldbot-scheduler`). The `github-token` must be in the keyring
    (`python -m goldbot.ops.accounts set github-token`). From then on, every weekday right after `nightly_costs`, the
    scheduler uploads the IC Markets table as `costs_measured.json` to the GitHub release `costs-v1`. It holds costs
-   only: spread, slippage, commission and swap per lot, with `measured_at` and, per field, "measured" or "prior" and
-   the tick, fill or lot count behind it. It never holds an account id, login, balance or equity. The upload is
-   refused, and nothing is published, while the swap is unmeasured or there are fewer than 50 fills, so a prior is
-   never published as a measurement. To publish at once, or to check the file first:
+   only: spread, slippage, commission and swap per lot, with `measured_at` and, per field, "measured", "prior" or
+   (slippage only) "mixed", and the tick, fill or lot count behind it. After 10 recorded broker-tick days
+   (`tick_record`) it also carries `spread_profile`: the spread's median and p90 by UTC hour and session, aggregates
+   only. It never holds an account id, login, balance or equity, or a single tick. The upload is refused, and
+   nothing is published, while the swap or the spread is unmeasured. Fills are not needed: until a session has 50
+   fills its slippage is published as the prior and labelled so, never as a measurement. On a GBP account the swap
+   and commission are converted to USD at the terminal's own rate (the note in `broker_terms_<account>.json` names
+   it). To publish at once, or to check the file first:
 
    ```powershell
    .\.venv\Scripts\python -m goldbot.ops.run publish-costs                  # upload now

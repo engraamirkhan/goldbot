@@ -10,16 +10,27 @@ Swap and commission are measured by the engine on the terminal (`BrokerTerms`, w
 settings' commission and no swap (research then charges the settings' swap prior).
 The engine converts the round trip for the current session into ATR units for
 the RiskGate and the probability threshold; without a table it keeps its configured fallback.
+
+The broker spread profile (`SpreadProfile`, docs/research/costs-binding-2026-10-18.md section 1.4, K3/K4): the
+recorded broker ticks (`goldbot.data.ticks`, the terminal's complete `copy_ticks` history) give the spread's median
+and p90 by UTC hour and by session over the cost window, with no fill needed. It is an aggregate only (no tick, no
+timestamp of one), reported on release costs-v1 next to the engine's session table; it is not charged (labels keep
+the Dukascopy bar spread, K5) and it does not change what the engine charges the RiskGate.
+Publishing (`publishable`), K3: "Publish once spread and swap are measured, with slippage marked
+`fields.slippage.source = "prior"`". Every component carries its label (`FieldSource`: measured, prior, or mixed when
+some slippage cells are measured and others still the prior) and `PublishedCostTable` refuses a label that disagrees
+with its values, so a prior is never mixed into a measurement silently.
 """
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Iterable, Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from goldbot.base import FrozenRecord, UtcTimestamp, load_record
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
@@ -43,6 +54,71 @@ class SlippageStat(FrozenRecord):
     mean: float          # $/oz, positive = worse than requested
     n: int
     from_prior: bool
+
+
+SPREAD_DECIMALS = 6      # spreads are counted at 1e-6 $/oz (float noise of ask - bid); quotes have 2-3 decimals
+
+
+class SpreadProfile(FrozenRecord):
+    """The broker's spread from its recorded ticks over the cost window: median and p90 of ask - bid ($/oz) by UTC
+    hour ("00".."23", every valid tick, the rollover and the daily break included) and by session (in-session ticks,
+    as `spread_table`). An aggregate only: counts and quantiles, never a tick or the time of one (section 1.4: "Raw
+    ticks never leave the brain")."""
+    source: Literal["broker_ticks"] = "broker_ticks"
+    first_day: date                            # server dates of the oldest and newest day counted
+    last_day: date
+    days: int = Field(ge=1)                    # recorded days with at least one valid tick
+    days_skipped: int = Field(0, ge=0)         # recorded days not read (unreadable, or the sha256 did not match)
+    n_ticks: int = Field(ge=0)
+    by_session: dict[str, SpreadStat]
+    by_hour: dict[str, SpreadStat]
+
+
+def _quantiles(counts: pd.Series) -> SpreadStat:
+    """Median and p90 of the values `counts` indexes (value -> count), exactly as np.percentile's linear
+    interpolation over the expanded sample, without expanding it (a 30-day window is millions of ticks)."""
+    c = counts.sort_index()
+    values, cum = c.index.to_numpy(dtype=float), np.cumsum(c.to_numpy(dtype=np.int64))
+    n = int(cum[-1])
+
+    def at(q: float) -> float:
+        h = (n - 1) * q
+        lo, hi = int(np.floor(h)), int(np.ceil(h))
+        x_lo, x_hi = (float(values[np.searchsorted(cum, k, side="right")]) for k in (lo, hi))
+        return x_lo + (h - lo) * (x_hi - x_lo)
+    return SpreadStat(median=at(0.5), p90=at(0.9), n=n)
+
+
+def spread_profile(days: Iterable[pd.DataFrame], *, first_day: date, last_day: date, days_skipped: int = 0,
+                   sessions: SessionTable = DEFAULT_SESSIONS) -> SpreadProfile | None:
+    """The SpreadProfile of recorded tick days (each ts_utc, bid, ask, as `ticks.load_day` returns), or None when no
+    day has a valid tick (finite, ask >= bid > 0). Each day is reduced to value counts before the next is read, so memory
+    stays at the number of distinct spreads, not ticks."""
+    acc: dict[str, pd.Series] = {}
+    n_days = n_ticks = 0
+    for t in days:
+        t = t[(t["ask"] >= t["bid"]) & (t["bid"] > 0) & np.isfinite(t["ask"] - t["bid"])] if not t.empty else t
+        if t.empty:
+            continue
+        n_days += 1
+        n_ticks += len(t)
+        idx = pd.DatetimeIndex(pd.to_datetime(t["ts_utc"], utc=True))
+        spread = pd.Series((t["ask"] - t["bid"]).to_numpy(dtype=float).round(SPREAD_DECIMALS))
+        hours = [f"h{h:02d}" for h in idx.hour]
+        sess = np.where(sessions.is_open(idx), sessions.session_label(idx), "")
+        for cells in (pd.Series(hours), pd.Series([f"s{x}" for x in sess])):
+            for key, part in spread.groupby(cells.to_numpy()):
+                cell = str(key)
+                if cell == "s":                    # out of session: in the hour profile only
+                    continue
+                vc = part.value_counts()
+                acc[cell] = vc if cell not in acc else acc[cell].add(vc, fill_value=0)
+    if not n_days:
+        return None
+    return SpreadProfile(first_day=first_day, last_day=last_day, days=n_days, days_skipped=days_skipped,
+                         n_ticks=n_ticks,
+                         by_session={k[1:]: _quantiles(v) for k, v in sorted(acc.items()) if k[0] == "s"},
+                         by_hour={k[1:]: _quantiles(v) for k, v in sorted(acc.items()) if k[0] == "h"})
 
 
 class BrokerTerms(FrozenRecord):
@@ -97,6 +173,7 @@ class CostTable(FrozenRecord):
     swap_triple_weekday: int | None = Field(None, ge=0, le=4)
     commission_measured: bool = False          # commission from the terminal's deals (else the settings value)
     commission_lots: float = 0.0               # lots of closed positions the measured commission rests on
+    spread_profile: SpreadProfile | None = None   # the recorded broker ticks by hour and session (reported only)
 
     def extra_cost_usd(self) -> float:
         """Round-trip cost per oz beyond the quoted spread: entry and exit slippage (mean of the market-order cells,
@@ -196,7 +273,7 @@ def slippage_table(fills: pd.DataFrame, *, prior_usd: float, min_fills: int = 50
 def build_cost_table(account_id: str, ticks: pd.DataFrame, fills: pd.DataFrame, *, commission_per_lot_side_usd: float,
                      slippage_prior_usd: float, min_fills: int = 50, now: UtcTimestamp | None = None,
                      swap: SwapSpec | None = None, commission_measured: bool = False,
-                     notes: list[str] | None = None) -> CostTable:
+                     notes: list[str] | None = None, spread_profile: SpreadProfile | None = None) -> CostTable:
     sp = spread_table(ticks)
     notes = list(notes or []) + ([] if sp else ["no in-session ticks: no round-trip cost; the engine keeps its configured fallback"])
     return CostTable(account_id=account_id, built_utc=now or pd.Timestamp.now("UTC"), spread=sp,
@@ -206,7 +283,7 @@ def build_cost_table(account_id: str, ticks: pd.DataFrame, fills: pd.DataFrame, 
                      swap_long_usd_per_lot=None if swap is None else swap.long_usd_per_lot,
                      swap_short_usd_per_lot=None if swap is None else swap.short_usd_per_lot,
                      swap_triple_weekday=None if swap is None else swap.triple_weekday,
-                     commission_measured=commission_measured)
+                     commission_measured=commission_measured, spread_profile=spread_profile)
 
 
 def prior_extra_cost_usd(slippage_prior_usd: float, commission_per_lot_side_usd: float) -> float:
@@ -244,10 +321,13 @@ def research_costs(settings: "Settings", table: CostTable | None) -> tuple[float
             f"PRIORS ONLY: no measured cost table (release {COSTS_TAG} has no {COSTS_ASSET}); slippage prior "
             f"{settings.costs.slippage_prior_usd:.2f} $/oz, commission from settings, swap prior")
     swap = table.swap_spec(prior.server_tz, prior.triple_weekday)
+    n_slip = sum(not s.from_prior for s in table.slippage.values())
     parts = [f"cost table {table.account_id} built {table.built_utc:%Y-%m-%d}",
              "commission measured" if table.commission_measured else "commission from settings",
              "swap measured" if swap is not None else "swap prior (table has no measured swap)",
-             f"slippage from {sum(not s.from_prior for s in table.slippage.values())} measured cells"]
+             f"slippage from {n_slip} measured cells" if n_slip else "slippage prior (no measured cell)"]
+    if table.spread_profile is not None:
+        parts.append(f"broker spread profile {table.spread_profile.days} days (reported, not charged)")
     return table.extra_cost_usd(), swap or prior, ", ".join(parts)
 
 
@@ -257,10 +337,21 @@ COSTS_ASSET = "costs_measured.json"
 
 
 class FieldSource(FrozenRecord):
-    """Where one cost component comes from: the broker's measurement or the settings prior, and the count it rests on
-    (ticks for the spread, fills for slippage, lots for commission; None for swap, the terminal's quoted rate)."""
-    source: Literal["measured", "prior"]
+    """Where one cost component comes from: the broker's measurement, the settings prior, or (slippage only) a mix of
+    measured cells and cells still at the prior, each cell then saying which (`SlippageStat.from_prior`); and the
+    count it rests on (ticks for the spread, fills for slippage, lots for commission, days for the spread profile;
+    None for swap, the terminal's quoted rate)."""
+    source: Literal["measured", "prior", "mixed"]
     n: float | None = None
+
+
+REQUIRED_FIELDS = ("spread", "slippage", "commission", "swap")
+
+
+def slippage_source(slippage: dict[str, SlippageStat]) -> Literal["measured", "prior", "mixed"]:
+    """measured when every cell is, prior when none is, mixed otherwise."""
+    measured = [not s.from_prior for s in slippage.values()]
+    return "measured" if measured and all(measured) else "mixed" if any(measured) else "prior"
 
 
 class PublishedCostTable(FrozenRecord):
@@ -280,22 +371,47 @@ class PublishedCostTable(FrozenRecord):
     swap_triple_weekday: int | None = Field(None, ge=0, le=4)
     n_ticks: int
     n_fills: int
-    fields: dict[str, FieldSource]             # spread, slippage, commission, swap
+    fields: dict[str, FieldSource]             # spread, slippage, commission, swap (+ spread_profile when present)
+    spread_profile: SpreadProfile | None = None   # the recorded broker ticks by hour and session (reported only)
+
+    @model_validator(mode="after")
+    def _labels_match_values(self) -> "PublishedCostTable":
+        """Refuse a component without a label and a label that disagrees with the values it labels (a prior passed
+        off as a measurement, or the reverse). Commission is a number either way: its label is the builder's."""
+        f = self.fields
+        missing = [k for k in REQUIRED_FIELDS if k not in f]
+        if missing:
+            raise ValueError(f"cost components without a label: {missing}")
+        swap_ok = self.swap_long_usd_per_lot is not None and self.swap_short_usd_per_lot is not None
+        want = {"spread": "measured" if self.spread else "prior", "slippage": slippage_source(self.slippage),
+                "swap": "measured" if swap_ok else "prior"}
+        wrong = {k: f[k].source for k, v in want.items() if f[k].source != v}
+        if wrong:
+            raise ValueError(f"labels disagree with the values: {wrong}, expected {want}")
+        if f["commission"].source == "mixed":
+            raise ValueError("commission is measured or the prior, never mixed")
+        if (self.spread_profile is None) != ("spread_profile" not in f):
+            raise ValueError("the spread profile and its label come together")
+        if "spread_profile" in f and f["spread_profile"].source != "measured":
+            raise ValueError("a spread profile is a measurement: its label must say so")
+        return self
 
     @classmethod
     def from_table(cls, table: CostTable, broker: str) -> "PublishedCostTable":
         swap_ok = table.swap_long_usd_per_lot is not None and table.swap_short_usd_per_lot is not None
-        slip_ok = any(not s.from_prior for s in table.slippage.values())
+        fields = {"spread": FieldSource(source="measured" if table.spread else "prior", n=table.n_ticks),
+                  "slippage": FieldSource(source=slippage_source(table.slippage), n=table.n_fills),
+                  "commission": FieldSource(source="measured" if table.commission_measured else "prior",
+                                            n=table.commission_lots),
+                  "swap": FieldSource(source="measured" if swap_ok else "prior")}
+        if table.spread_profile is not None:
+            fields["spread_profile"] = FieldSource(source="measured", n=table.spread_profile.days)
         return cls(broker=broker, measured_at=table.built_utc, spread=table.spread, slippage=table.slippage,
                    slippage_prior_usd=table.slippage_prior_usd,
                    commission_per_lot_side_usd=table.commission_per_lot_side_usd,
                    swap_long_usd_per_lot=table.swap_long_usd_per_lot, swap_short_usd_per_lot=table.swap_short_usd_per_lot,
                    swap_triple_weekday=table.swap_triple_weekday, n_ticks=table.n_ticks, n_fills=table.n_fills,
-                   fields={"spread": FieldSource(source="measured" if table.spread else "prior", n=table.n_ticks),
-                           "slippage": FieldSource(source="measured" if slip_ok else "prior", n=table.n_fills),
-                           "commission": FieldSource(source="measured" if table.commission_measured else "prior",
-                                                     n=table.commission_lots),
-                           "swap": FieldSource(source="measured" if swap_ok else "prior")})
+                   fields=fields, spread_profile=table.spread_profile)
 
     def to_cost_table(self) -> CostTable:
         """The research view: a CostTable labelled with the broker (research_costs names it in the report)."""
@@ -306,16 +422,19 @@ class PublishedCostTable(FrozenRecord):
                          swap_long_usd_per_lot=self.swap_long_usd_per_lot,
                          swap_short_usd_per_lot=self.swap_short_usd_per_lot, swap_triple_weekday=self.swap_triple_weekday,
                          commission_measured=commission is not None and commission.source == "measured",
-                         commission_lots=(commission.n or 0.0) if commission is not None else 0.0)
+                         commission_lots=(commission.n or 0.0) if commission is not None else 0.0,
+                         spread_profile=self.spread_profile)
 
 
-def publishable(table: CostTable, broker: str, *, min_fills: int) -> tuple[PublishedCostTable | None, str]:
-    """The table to publish, or None and why not. Refused while swap is unmeasured or fewer than `min_fills` fills
-    exist, so a prior is never published as a measurement (research then keeps the settings priors and says so)."""
+def publishable(table: CostTable, broker: str) -> tuple[PublishedCostTable | None, str]:
+    """The table to publish, or None and why not. K3 (costs-binding-2026-10-18.md): "Publish once spread and swap are
+    measured, with slippage marked `fields.slippage.source = "prior"`": refused while swap is unmeasured or no spread
+    is (neither the engine's session table nor the recorded-tick profile). Fills are not needed: a slippage cell below
+    `research.min_fills_for_slippage` fills keeps the prior and is labelled so, as is a commission no deal has shown."""
     if table.swap_long_usd_per_lot is None or table.swap_short_usd_per_lot is None:
         return None, "swap not measured by the terminal yet"
-    if table.n_fills < min_fills:
-        return None, f"{table.n_fills} fills, fewer than {min_fills}"
+    if not table.spread and table.spread_profile is None:
+        return None, "no measured spread (no engine tick sample and no recorded broker-tick profile)"
     return PublishedCostTable.from_table(table, broker), "ok"
 
 

@@ -18,6 +18,8 @@ CLI:
   python -m goldbot.ops.accounts add icm-demo          # prompts for login + password, stores in keyring
   python -m goldbot.ops.accounts set tradingview-webhook-secret
   python -m goldbot.ops.accounts set smtp-password      # the SMTP (Gmail App) password for email sign-in links
+  ... set <key> --stdin                                  # the value from a pipe (no prompt; never echoed)
+  ... export <key> | ssh <host> goldbot accounts set <key> --stdin   # copy a secret; refuses a terminal stdout
   python -m goldbot.ops.accounts bridge-serve icm-demo # MT5 box: listen address + a new token (printed once)
   python -m goldbot.ops.accounts bridge-use icm-demo   # engine box: bridge URL + that token
   python -m goldbot.ops.accounts unlock-live icm-live  # refused unless the gate has passed
@@ -36,11 +38,12 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Literal
 
 import yaml
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from goldbot.base import Record, write_private
 from goldbot.config import ROOT
 from goldbot.data.timeutil import server_zone
+from goldbot.risk.limits_profile import RiskOverrides
 
 ACCOUNTS_FILE = ROOT / "config" / "accounts.yaml"
 ACCOUNT_ID_LOGIN = re.compile(r"\d{5,}")      # an account name with this could carry an MT5 login: refused at load
@@ -78,6 +81,9 @@ class Account(Record):
     # the owner's declared account type: the baseline until the classifier stores a measured class (it keeps running;
     # a measured class that disagrees makes the stricter one win and health warns: execution/classifier.effective_class)
     account_class: Literal["raw", "standard"] | None = None
+    # ADR 0032: the owner's demo ceilings ("approve demo risk limits: daily cap £50, min-lot cap 1%, weekly 10%, demo
+    # only", 2026-10-18). Accepted on a demo account only, and only next to daily_loss_limit_abs (which still binds)
+    risk_overrides: RiskOverrides | None = None
 
     # backstop for records built outside load_accounts: validation errors never carry the input (names, logins)
     model_config = ConfigDict(hide_input_in_errors=True)      # merged with Record's config by pydantic
@@ -98,6 +104,17 @@ class Account(Record):
         except Exception as exc:
             raise ValueError(f"server_tz {v!r} is neither NY+7 nor an IANA zone ({type(exc).__name__})") from exc
         return v
+
+    @model_validator(mode="after")
+    def _overrides_demo_only(self) -> Account:
+        """ADR 0032: "demo only". risk_overrides on any other mode is refused at load, never ignored silently; and the
+        5% ceiling is safe only under the account's absolute daily limit (ADR 0004: min of the two applies)."""
+        if self.risk_overrides is not None:
+            if self.mode != "demo":
+                raise ValueError("risk_overrides are allowed on demo accounts only (ADR 0032)")
+            if self.daily_loss_limit_abs is None:
+                raise ValueError("risk_overrides need daily_loss_limit_abs on the same account (ADR 0004, ADR 0032)")
+        return self
 
     @property
     def is_live(self) -> bool:
@@ -287,7 +304,8 @@ def load_accounts(path: Path | None = None) -> dict[str, Account]:
             login = int(stored) if stored and stored.strip().isdigit() else None
         out[aid] = Account(account_id=aid, broker=a["broker"], mode=a["mode"], server=a["server"], login=login, terminal_path=a["terminal_path"],
                            server_tz=a["server_tz"], symbol=a["symbol"], magic_base=a["magic_base"], enabled=bool(a.get("enabled", False)),
-                           daily_loss_limit_abs=a.get("daily_loss_limit_abs"), account_class=a.get("account_class"))
+                           daily_loss_limit_abs=a.get("daily_loss_limit_abs"), account_class=a.get("account_class"),
+                           risk_overrides=a.get("risk_overrides"))
     return out
 
 
@@ -437,6 +455,50 @@ def enabled_accounts(mode: str | None = None) -> list[Account]:
 
 
 # ---------------------------------------------------------------------------- CLI
+MAX_PIPED_SECRET = 8192          # far beyond any cookie or token; a larger input is not one secret
+
+
+def read_piped_secret(stream: Any) -> str:
+    """One secret from a pipe (`set <key> --stdin`): the whole input with surrounding whitespace removed. Refused
+    (ValueError, the value never in the message) when stdin is a terminal (use the hidden prompt), empty (the
+    sending side failed: nothing is stored), more than one line, or oversized."""
+    if stream is None or stream.isatty():
+        raise ValueError("--stdin reads a pipe, not a terminal: drop --stdin to get the hidden prompt")
+    raw = stream.read(MAX_PIPED_SECRET + 1)
+    if len(raw) > MAX_PIPED_SECRET:
+        raise ValueError(f"piped value longer than {MAX_PIPED_SECRET} characters: not stored")
+    value = raw.strip()
+    if not value:
+        raise ValueError("nothing arrived on stdin (the sending side failed?): not stored")
+    if "\n" in value or "\r" in value:
+        raise ValueError("piped value has more than one line: not stored")
+    return value
+
+
+def _is_pipe(out: Any) -> bool:
+    """True only when `out` is a pipe or a socket (os.fstat): a terminal, a regular file (`> file`) or an object
+    without a file descriptor is not."""
+    import stat
+    try:
+        mode = os.fstat(out.fileno()).st_mode
+    except (AttributeError, OSError, ValueError):
+        return False
+    return stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode)
+
+
+def export_secret(key: str, out: Any) -> None:
+    """Write one stored secret to `out` for a pipe (`export <key> | ssh ... set <key> --stdin`) and nowhere else: a
+    terminal or a regular file is refused, so the value cannot land on screen, in scrollback or on disk. A pipe into a
+    printing command (`| cat`) cannot be told apart: pipe it only into ssh (RUNBOOK 2.7d). Missing key: KeyError."""
+    if not _is_pipe(out):
+        raise ValueError("export writes to a pipe only (e.g. `| ssh <host> goldbot accounts set <key> --stdin`)")
+    value = get_secret(key)
+    if not value:
+        raise KeyError(key)
+    out.write(value)
+    out.flush()
+
+
 def main(argv: list[str]) -> int:
     fallback_note()
     if not argv or argv[0] == "list":
@@ -472,9 +534,27 @@ def main(argv: list[str]) -> int:
         print(f"engine for {aid} will use the bridge")
         return 0
     if cmd == "set":
-        where = set_secret(argv[1], _prompt(f"value for {argv[1]}", secret=True))
+        if "--stdin" in argv[2:]:
+            try:
+                value = read_piped_secret(sys.stdin)
+            except ValueError as exc:
+                print(f"refused: {exc}", file=sys.stderr)
+                return 1
+        else:
+            value = _prompt(f"value for {argv[1]}", secret=True)
+        where = set_secret(argv[1], value)
         print(f"stored {argv[1]} in the OS keyring" if where == "keyring"
               else f"stored {argv[1]} in {_fallback_file()} (plaintext, owner-only file)")
+        return 0
+    if cmd == "export":
+        try:
+            export_secret(argv[1], sys.stdout)
+        except KeyError:
+            print(f"refused: {argv[1]} is not stored here", file=sys.stderr)
+            return 1
+        except ValueError as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 1
         return 0
     if cmd == "migrate":
         print(f"moved {migrate_fallback()} secret(s) from state/.secrets.json into the OS keyring")

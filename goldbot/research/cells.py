@@ -90,6 +90,21 @@ def _variants(raw: Any) -> list[Any]:
     return out
 
 
+def canonical(value: Any) -> Any:
+    """`value` in the one form that survives the matrix: a whole float as an int, at every nesting level (bools and
+    strings untouched). GitHub's expressions hold numbers as doubles and `toJSON(matrix.cell)` writes 3.0 as 3, so a
+    plan that kept 3.0 named an agent the cell never ran (the agent id hashes the JSON of its config) and the record
+    step refused the cell's rows as foreign (research readout 2026-10-18, D-1). `plan` emits canonical variants, so the
+    cell runs exactly what the plan names; `_planned` canonicalises too, so a plan written before this still matches."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, dict):
+        return {k: canonical(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [canonical(v) for v in value]
+    return value
+
+
 def _json_object(raw: str, what: str) -> str:
     try:
         ok = isinstance(json.loads(raw), dict)
@@ -104,7 +119,8 @@ def plan(env: Mapping[str, str]) -> list[dict[str, Any]]:
     """The cells of one dispatch: the single-trial inputs (SPECIALIST, VARIANTS, POOLED, ... as research.yml's inputs), or
     each object of BATCH (a JSON list; a key it leaves out takes the dispatch input's value). One cell per variant; a
     pooled object is one cell (it ignores specialist and variants). Every value is validated here, before a runner
-    starts: a name is [a-z0-9_]+, a timeframe is like 15m, flags are booleans, years are integers. ValueError otherwise."""
+    starts: a name is [a-z0-9_]+, a timeframe is like 15m, flags are booleans, years are integers. ValueError otherwise.
+    Variants are `canonical`: the matrix hands each cell back exactly the variant planned here."""
     defaults: dict[str, Any] = {
         "specialist": env.get("SPECIALIST", "session_open"), "variants": env.get("VARIANTS", "[{}]") or "[{}]",
         "pooled": env.get("POOLED", ""), "from_year": env.get("FROM_YEAR", "2010"), "to_year": env.get("TO_YEAR", "2026"),
@@ -144,7 +160,7 @@ def plan(env: Mapping[str, str]) -> list[dict[str, Any]]:
         spec["from_year"], spec["to_year"] = int(spec["from_year"]), int(spec["to_year"])
         spec["discover_config"] = _json_object(str(spec["discover_config"]), "discover_config")
         spec["rationale"], spec["rule_ref"] = str(spec["rationale"]), str(spec["rule_ref"])
-        variants = [{}] if spec["pooled"] else _variants(spec["variants"])
+        variants = [{}] if spec["pooled"] else canonical(_variants(spec["variants"]))
         for v in variants:
             if spec["timeframe"] and not spec["pooled"]:
                 if not isinstance(v, dict):
@@ -274,7 +290,7 @@ def _planned(cell: Mapping[str, Any]) -> tuple[str, str, dict[str, Any], bool]:
                                                             "families": {s.family: s.config for s in specs}}
             agent = f"pooled-{cell['pooled']}"
         else:
-            spec = SPECIALISTS[cell["specialist"]](**resolve_variant(cell["specialist"], cell["variant"]))
+            spec = SPECIALISTS[cell["specialist"]](**resolve_variant(cell["specialist"], canonical(cell["variant"])))
             agent, config = spec.agent_id, spec.config
     except (ValueError, KeyError, TypeError):
         return agent, family, config, False
@@ -367,16 +383,31 @@ def _read_cell_rows(path: Path, cell: Mapping[str, Any]) -> tuple[list[dict[str,
     return rows, ""
 
 
+CELL_FILES = ("rows.jsonl", "status.json", "research.log", "report.md")
+
+
+def cell_dir(artifacts: Path, cell: Mapping[str, Any], n_cells: int) -> Path:
+    """Where the record job finds a cell's files: `artifacts/cell-<idx>/`, except that actions/download-artifact
+    extracts a lone match of `pattern: cell-*` straight into `path` (no `cell-0/`), so a single-cell run's files sit in
+    `artifacts` itself. That layout is taken only when the plan has one cell, so flat files are never guessed onto one
+    of several cells (B08, run 39106099459: a one-cell `[{}]` run recorded as failed although it left its rows)."""
+    d = artifacts / f"cell-{cell['idx']}"
+    if not d.is_dir() and n_cells == 1 and any((artifacts / f).is_file() for f in CELL_FILES):
+        return artifacts
+    return d
+
+
 def record(cells_plan: list[dict[str, Any]], artifacts: Path, registry: Path) -> Recorded:
     """Merge every planned cell's rows into `registry` (the fresh copy, fetched under the lock) and restate their DSR
     on the final count. `artifacts/cell-<idx>/` holds `rows.jsonl`, `status.json` ({"exit": code}), `research.log` and
-    `report.md` of a cell that ran; a missing directory is a cell that never reported."""
+    `report.md` of a cell that ran (`cell_dir`: `artifacts/` itself for a one-cell run); a missing directory is a cell
+    that never reported."""
     published = read_rows(registry)
     added: list[dict[str, Any]] = []
     notes: dict[int, tuple[str, str]] = {}          # idx -> (outcome, text)
     n_failed = n_refused = 0
     for cell in cells_plan:
-        d = artifacts / f"cell-{cell['idx']}"
+        d = cell_dir(artifacts, cell, len(cells_plan))
         rows, bad_rows = _read_cell_rows(d / "rows.jsonl", cell)
         log = _read(d / "research.log")
         if bad_rows:
@@ -422,7 +453,7 @@ def _reports(cells_plan: list[dict[str, Any]], artifacts: Path, notes: dict[int,
              mine: dict[Any, dict[str, Any]], k: int, used: int) -> list[dict[str, str]]:
     by_cell: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for cell in cells_plan:
-        for r in _read_cell_rows(artifacts / f"cell-{cell['idx']}" / "rows.jsonl", cell)[0]:
+        for r in _read_cell_rows(cell_dir(artifacts, cell, len(cells_plan)) / "rows.jsonl", cell)[0]:
             if _key(r) in mine:
                 by_cell[cell["idx"]].append(mine[_key(r)])
     bodies: dict[str, list[str]] = defaultdict(list)
@@ -439,7 +470,7 @@ def _reports(cells_plan: list[dict[str, Any]], artifacts: Path, notes: dict[int,
             lines.append(f"- registry trial #{failed_row['trial']} (failed)")
         if text:
             lines += ["", "```", text, "```"]
-        report = _read(artifacts / f"cell-{cell['idx']}" / "report.md")
+        report = _read(cell_dir(artifacts, cell, len(cells_plan)) / "report.md")
         if report:
             lines += ["", "<details><summary>cell report (provisional figures)</summary>", "", report, "", "</details>"]
         bodies[_title(cell)].append("\n".join(lines))

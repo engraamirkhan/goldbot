@@ -26,6 +26,7 @@ from goldbot.ops.checks._base import (
     _worst,
 )
 from goldbot.ops.checks.registry import BLOCK_ACCOUNT, BLOCK_CORE, register_check
+from goldbot.ops.limits_job import check_limits_controller
 
 if TYPE_CHECKING:
     from goldbot.ops.health import HealthContext
@@ -455,3 +456,8 @@ def check_entry_windows(ctx: HealthContext, account_id: str) -> list[Check]:
                                 + ("; extend config/holidays_cme_metals.yaml or every entry is refused after it"
                                    if near else "")))
     return out
+
+
+# ADR 0031: the nightly adaptive-limits decision lives with its job (goldbot/ops/limits_job.py); per account, right
+# after the risk state, nothing for an account that is not adaptive
+register_check("account", block=BLOCK_ACCOUNT, pos=22)(check_limits_controller)

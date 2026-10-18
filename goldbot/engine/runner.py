@@ -37,7 +37,8 @@ from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resamp
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
 from goldbot.engine import unconfirmed
-from goldbot.engine.shadow import ShadowBook, ShadowTrade
+from goldbot.engine.limits_apply import EngineLimits, daily_allowance, min_lot_risk, published_limits
+from goldbot.engine.shadow import ShadowBook, ShadowTrade, record_candidate
 from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, SentOrder: re-exported, ADR 0023 step 1)
     EngineStore,
     JsonEngineStore,
@@ -49,6 +50,7 @@ from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, Sent
     orders_file,
     risk_file,
 )
+from goldbot.engine.tv_context import TvShadowWatch
 from goldbot.execution.bridge import CEILING_REFUSAL, UNREADABLE_REFUSAL
 from goldbot.execution.broker import AccountInfo, Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 from goldbot.execution.classifier import StoredClass, effective_class, read_stored
@@ -69,6 +71,7 @@ from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import CONTEXT_FEATURES, DEFAULT_FEATURE_NAMES
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, hwm, open_risk, sizing
 from goldbot.risk.gate import PER_TRADE_REFUSALS, REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
+from goldbot.risk.limits_profile import LimitsPolicy, RiskLimitsCurrent
 from goldbot.risk.supervisor import Supervisor, write_startup_error
 from goldbot.risk.throttle import AgentThrottle, agent_throttle, latest_shadow_win
 from goldbot.risk.windows import (
@@ -152,16 +155,6 @@ class Model(Protocol):
     def predict(self, X: pd.DataFrame) -> np.ndarray: ...
 
 
-def _score(model: Model, X: pd.DataFrame) -> tuple[float, float | None]:
-    """(calibrated p, raw score or None) for one row: a MetaLabelModel exposes its raw score, so the shadow book can
-    keep it for later recalibration; any other model gives p only."""
-    raw_fn, cal_fn = getattr(model, "predict_raw", None), getattr(model, "calibrated", None)
-    if raw_fn is None or cal_fn is None:
-        return float(model.predict(X)[0]), None
-    raw = np.asarray(raw_fn(X), dtype=float)
-    return float(np.asarray(cal_fn(raw), dtype=float)[0]), float(raw[0])
-
-
 class ConstantModel(Record):
     """Stand-in until a trained MetaLabelModel is loaded: returns a fixed probability."""
     p: float = 0.6
@@ -233,6 +226,7 @@ class EngineConfig(Record):
     # time) and written to state/broker_terms_<account>.json for the nightly cost job; commission from this many days
     broker_terms_every_s: int = 6 * 3600
     commission_window_days: int = 90
+    tv_max_lag_s: int = Field(60, ge=0)      # settings tv.max_lag_s: a TradingView value later than this is NaN (tv_context)
     # BACKLOG 36: the swap the daily projection charges for a rollover before the risk day ends until the cost table
     # measures the broker's own (`cost_imputation.account_swap`); production passes `settings_swap(settings)`, the
     # default is the shipped prior. Read on the engine's server clock (`server_tz`), whatever zone it names
@@ -259,7 +253,8 @@ class Engine:
     def __init__(self, cfg: EngineConfig, broker: Broker, agents: list[Specialist], models: dict[str, Model],
                  center: ApprovalCenter | None = None, allocator: RuleAllocator | None = None,
                  limits: RiskLimits | None = None, shadow_models: dict[str, tuple[str, Model]] | None = None,
-                 live_shares: dict[str, float] | None = None, live_versions: dict[str, str] | None = None):
+                 live_shares: dict[str, float] | None = None, live_versions: dict[str, str] | None = None,
+                 limits_policy: LimitsPolicy | None = None):
         self.cfg = cfg
         self.broker = broker
         self.agents = {a.agent_id: a for a in agents}
@@ -274,6 +269,7 @@ class Engine:
         # deliberately stricter than the RiskGate's -15/+30 entry block (blackout_before_min/after_min); changing the
         # allocator rule is the owner's decision (allocator/promotion.py), so the gate window never narrows it
         self.allocator = allocator or RuleAllocator()
+        self._tv = TvShadowWatch()           # TradingView agents: shadow entries between the close and close + max_lag
         self.gate = RiskGate(limits)
         self.ticks: list[Tick] = []
         self.bars_1m = pd.DataFrame()
@@ -376,6 +372,10 @@ class Engine:
         self._hwm_store = hwm.HwmStore(cfg.state_dir)
         self._hwm = self._load_hwm()
         self._reread_hwm = self._hwm.pending_balance is not None
+        # ADR 0032 (engine/limits_apply.py): the policy (ops.services.engine.engine_limits_policy), its revert and change
+        # log (core.db). The loaded stage reverts too (trading-safety review of 156cfbf, LOW)
+        self._limits = EngineLimits(limits_policy, cfg.state_dir, cfg.account_id, self.gate.limits)
+        self._limits.after_stage(self, pd.Timestamp.now("UTC"))
         # closed-trade record (state/closed_trades.jsonl, read by the phase gates and the stop rule): positions already
         # recorded (key: this account + position id, so a restart never records one twice), closes waiting to be
         # written, and broker-side closes waiting for their exit deal (position -> bar closes asked)
@@ -572,6 +572,7 @@ class Engine:
             self._kill_switch(everything=False)   # until its book is flat (the whole account while _kill_everything)
         self._scale_out(t)
         self._track_excursions(t)          # reporting only, after every exit; never raises
+        self._guard(lambda: self._tv.poll(self, self._now(t), t))      # TradingView shadow re-checks, after the exits
         if not repeat:
             self._guard(lambda: self._log_tick(t))      # a full disk is a tick error, never a skipped exit
         self._refresh_broker_terms(t.ts_utc)
@@ -1017,14 +1018,7 @@ class Engine:
                 "risk_cap": self.gate.min_lot_cap(size_down) if exc else None}
 
     def _note_min_lot_risk(self, terms: dict[str, Any], stop_distance: float) -> None:
-        """The minimum lot's stop risk in the account currency at the latest ATR stop (volume_min x stop x contract x
-        fx), published as `limits.min_lot_risk_account`; None when the terms or the conversion are unknown."""
-        fx = sizing.account_fx(str(terms.get("account_currency", "")), terms.get("acct_per_usd"))
-        vmin, contract = terms.get("volume_min"), terms.get("contract_oz")
-        if fx is None or vmin is None or contract is None or not (math.isfinite(stop_distance) and stop_distance > 0):
-            self._min_lot_risk = None
-            return
-        self._min_lot_risk = float(vmin) * stop_distance * float(contract) * fx
+        self._min_lot_risk = min_lot_risk(terms, stop_distance)      # published as `limits.min_lot_risk_account`
 
     def _note_open_risk(self, positions: list[Position], tick: Tick) -> None:
         """BACKLOG 19/35: the account's open positions by side and what each can still lose down to its stop, account
@@ -1063,30 +1057,15 @@ class Engine:
         self._open_fx[side] = (minute, fx)
         return fx
 
-    def _published_limits(self) -> dict[str, Any]:
-        """`limits` in engine_<account>.json, the RiskGate limits the dashboard's account view reads (loss budget,
-        ladder): risk per trade and its maximum, multiplier bounds, daily and weekly caps; the account's absolute daily
-        loss limit (accounts.yaml through ops.run.engine_limits, account currency; null when off), the minimum-lot
-        exception cap (null when off, always null in tiny-live) and the minimum lot's stop risk in the account currency
-        at the latest ATR stop (null when unknown)."""
-        lim = self.gate.limits
-        mlr = self._min_lot_risk
-        return {"risk_per_trade": lim.risk_per_trade, "max_risk_per_trade": lim.max_risk_per_trade,
-                "multiplier_bounds": list(lim.multiplier_bounds), "daily_cap": lim.daily_cap,
-                "weekly_cap": lim.weekly_cap, "daily_loss_limit_abs": lim.daily_loss_limit_abs,
-                "min_lot_risk_cap": lim.min_lot_risk_cap,
-                # BACKLOG 19/35: the open-risk heat cap and whether the daily projection counts open risk (both off by default)
-                "heat": lim.heat.model_dump(), "project_open_risk": lim.project_open_risk,
-                "min_lot_risk_account": round(mlr, 2) if mlr is not None and math.isfinite(mlr) else None}
-
     def _decide(self, tf: str, fr: _Frame, agents: list[Specialist], fam_w: dict[str, float], close_ts: pd.Timestamp,
                 last_tick: Tick) -> list[dict]:
-        dec, m, X, a = fr.dec, fr.m, fr.X, fr.atr
+        dec, X, a = fr.dec, fr.X, fr.atr
         decisions = []
         last = len(dec) - 1
         cost_atr = self._cost_atr(float(a.iloc[last]), close_ts)            # full round trip: the RiskGate's checks
         hurdle_atr = self._cost_atr(float(a.iloc[last]), close_ts, ex_spread=True)   # p already pays the spread
-        cands_by_agent = {agent.agent_id: agent.candidates(m, X) for agent in agents}
+        # a requires_tv agent proposes nothing here; its shadow entry is re-checked until close + max_lag (tv_context)
+        cands_by_agent = self._tv.candidates(self, tf, fr, agents, self._now(last_tick), last_tick, float(a.iloc[last]), hurdle_atr)
         if self.shadow is not None:
             self._shadow_step(tf, fr, agents, cands_by_agent, float(a.iloc[last]), hurdle_atr)
         for agent in agents:
@@ -1097,9 +1076,11 @@ class Engine:
             model = self.models.get(agent.agent_id) or self.models.get(agent.family)
             if model is None:
                 continue
-            share = 1.0 if self.live_shares is None else self.live_shares.get(agent.agent_id, 0.0)
+            # DESIGN: TradingView signals are "filter features only" until the promotion rule: a requires_tv agent is
+            # shadow only (share 0) like a shadow-only member of the population: the shadow book trades it, not the broker
+            share = 0.0 if agent.requires_tv else 1.0 if self.live_shares is None else self.live_shares.get(agent.agent_id, 0.0)
             if share <= 0:
-                continue      # shadow-only member of the population: the shadow book trades it, not the broker
+                continue
             if self._busy(agent.agent_id):
                 continue      # one position (or pending proposal) per agent, as its labels were built
             drift = self._drift()
@@ -1157,7 +1138,7 @@ class Engine:
                                                   scored_fv=sfv))
                     continue
                 try:
-                    res = self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd)
+                    res = self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd, gd=gd)
                 except Exception as exc:
                     # review LOW-C: the order may or may not be at the broker. Its pending_orders row stays "sending"
                     # (the restart reconciliation resolves it), entries are blocked (tick_error), no further auto
@@ -1231,7 +1212,7 @@ class Engine:
                 price = tick.ask if prop.side > 0 else tick.bid
                 res = self._execute(prop, agent, lots, price - prop.side * gd.stop_distance,
                                     price + prop.side * agent.label_spec.target_atr * intent.atr_usd, requested=price,
-                                    atr_usd=intent.atr_usd)
+                                    atr_usd=intent.atr_usd, gd=gd)      # the re-check's decision (exception)
                 code = None if res is None else refusal_code(res, paper=self.cfg.mode == "paper",
                                                              definite=DEFINITE_REJECT_RETCODES)
                 if res is not None and code is not None:      # the card says "NOT PLACED" (docs/ux/order-not-placed.md)
@@ -1349,7 +1330,7 @@ class Engine:
             st.open_risk += gd.risk_amount * lots / gd.lots if gd.lots > 0 else gd.risk_amount
 
     def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float, *, requested: float,
-                 atr_usd: float | None = None) -> OrderResult | None:
+                 atr_usd: float | None = None, gd: Any = None) -> OrderResult | None:
         """Sends the order (pending_orders row first) and returns the broker's result; None when the proposal was sent
         before and nothing is sent now."""
         if prop.proposal_id in self.sent_ids:       # sent before (this process or before a restart): never again
@@ -1361,7 +1342,7 @@ class Engine:
         audit = EntryAudit(decision_price=prop.entry, decision_spread_points=prop.spread_points,
                            decision_utc=pd.Timestamp(prop.created, unit="s", tz="UTC"), requested_price=requested,
                            timeframe=agent.timeframe, family=agent.family,
-                           model_version=self.live_versions.get(agent.agent_id))
+                           model_version=self.live_versions.get(agent.agent_id), **self._entry_limits(prop, gd))
         oi = OrderIntent(client_order_id=prop.proposal_id, symbol=self.cfg.symbol, side=prop.side, lots=lots, sl=round(stop, 2), tp=round(target, 2), magic=magic,
                          comment=prop.proposal_id[-31:])
         # pending_orders row persisted BEFORE sending: a crash between send and result is reconciled on restart
@@ -2071,6 +2052,7 @@ class Engine:
             self._save_risk_state_now("the stage change")
         if st.stage == Stage.HALTED:
             self._kill_switch(everything=stage != Stage.HALTED)
+        self._limits.after_stage(self, now)
         if self._propose_only_until is not None and now < self._propose_only_until:
             self.cfg.approval_mode = "propose"  # 30 days propose-and-approve after a re-arm
 
@@ -2452,6 +2434,7 @@ class Engine:
         if c.rearm_id is None or c.rearm_id == self._rearm_seen:
             return
         self._rearm_seen = c.rearm_id
+        was_normal = self.state.stage == Stage.NORMAL and not self.state.combined_size_down
         if self.state.stage == Stage.HALTED:
             refused = self._rearm_conditions(now)
             if refused is not None:
@@ -2466,6 +2449,8 @@ class Engine:
                     self.cfg.approval_mode = "propose"
                     self.decisions.append({"ts": time.time(), "action": "rearm", "by": c.rearm_by, "rearm_id": c.rearm_id,
                                            "propose_only_until": self._propose_only_until.isoformat()})
+        if self._limits.reverted:
+            self._limits.reset(self, now, by=c.rearm_by, rearm_id=c.rearm_id, normal=was_normal)
         self._save_risk_state()
 
     def _rearm_conditions(self, now: pd.Timestamp) -> str | None:
@@ -2868,6 +2853,21 @@ class Engine:
             log.warning("MAE/MFE not recorded for position %s; the trade is recorded without it", pid, exc_info=True)
             return {}
 
+    # ---------------------------------------------------------------- ADR 0032 (engine/limits_apply.py)
+    @property
+    def limits_current(self) -> RiskLimitsCurrent:
+        return self._limits.current
+
+    @property
+    def _limits_reverted(self) -> bool:
+        return self._limits.reverted
+
+    def _tag_decisions(self) -> None:
+        self._limits.tag(self)
+
+    def _entry_limits(self, prop: Any = None, gd: Any = None) -> dict[str, Any]:
+        return self._limits.entry(prop, gd)
+
     def _risk_path(self) -> Path:
         return risk_file(self.cfg.state_dir, self.cfg.account_id)
 
@@ -3140,30 +3140,19 @@ class Engine:
                 cands = cands_by_agent[agent.agent_id]
                 if agent_key not in (agent.agent_id, agent.family) or cands.empty or int(cands["idx"].iloc[-1]) != last:
                     continue
-                side = int(cands["side"].iloc[-1])
                 Xm = self._scoring_frame(fr, model)
                 if Xm is None:
                     continue          # a model only scores the frame version it was trained on, in shadow too
-                feats = Xm.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
-                feats["side"] = side
-                cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
-                p, p_raw = _score(model, feats[cols])
-                ls = agent.label_spec
-                threshold = breakeven_prob(ls.target_atr, ls.stop_atr, cost_atr) + 0.02
-                # every candidate is recorded (P9 counterfactual shadow): the ones below the threshold too, flagged
-                # not taken, so a recalibration sees an unbiased sample; only taken ones count as shadow trades
-                self.shadow.open_trade(version=version, agent_id=agent.agent_id, side=side, bar_ts=pd.Timestamp(bar["ts_utc"]),
-                                       entry=float(bar["ask_close"] if side > 0 else bar["bid_close"]), atr_usd=atr_usd,
-                                       target_atr=ls.target_atr, stop_atr=ls.stop_atr, max_bars=ls.max_bars, p=p, timeframe=tf,
-                                       threshold=threshold, taken=p > threshold, p_raw=p_raw, policy=agent.exit_spec,
-                                       signal_close=pd.Timestamp(bar["visible_at"]),
-                                       scored_feature_version=str(Xm.attrs.get("feature_version", "")))
+                record_candidate(self.shadow, version=version, model=model, agent=agent, tf=tf, bar=bar, Xm=Xm, last=last,
+                                 side=int(cands["side"].iloc[-1]), atr_usd=atr_usd, cost_atr=cost_atr,
+                                 limits_profile=self.limits_current.profile)
 
     def flush_journal(self) -> None:
         """Append new decisions (proposals, gate blocks, below-threshold scores, orders, exits, orphans) to the
         store's `decisions` table: the trade journal the agents and reviews read. One part file per flush."""
         if self.store is None or self._journaled >= len(self.decisions):
             return
+        self._tag_decisions()
         rows = []
         for d in self.decisions[self._journaled:]:
             ts = d.get("ts")
@@ -3289,16 +3278,6 @@ class Engine:
         st = self._stored_class()
         return "unreadable" if st.unreadable else (st.known or "unknown")
 
-    def _daily_allowance(self) -> dict[str, float | None]:
-        """min(daily cap x day-start equity, risk.daily_loss_limit_abs) and that limit less today's loss so far, for the
-        engine state and health; None while unknown (no day start yet and no absolute limit)."""
-        st = self.state
-        limit = self.gate.daily_loss_limit(st)
-        if not math.isfinite(limit):
-            return {"daily_loss_limit": None, "daily_loss_remaining": None}
-        lost = max(0.0, st.day_start_equity - st.equity) if st.day_start_equity > 0 else 0.0
-        return {"daily_loss_limit": round(limit, 2), "daily_loss_remaining": round(max(0.0, limit - lost), 2)}
-
     def _agent_throttle(self, agent_id: str, timeframe: str, now: pd.Timestamp) -> AgentThrottle | None:
         """The agent's throttle facts at `now` (BACKLOG 21), derived from durable records only (goldbot/risk/throttle.py):
         this account's closed-trade record, the open book and the queued closes (one entry per position), and the shadow
@@ -3393,7 +3372,7 @@ class Engine:
             # the deposit currency: the supervisor refuses to combine engines in different currencies (BACKLOG 28, A8)
             "currency": self._account_currency() or None,
             # BACKLOG 29: the effective daily loss limit (account currency) and what is left of it today
-            **self._daily_allowance(),
+            **daily_allowance(self.gate, self.state),
             # this account's absolute limit (accounts.yaml): the supervisor applies the smallest published one
             "daily_loss_limit_abs": self.gate.limits.daily_loss_limit_abs,
             "equity": st.equity, "day_start_equity": st.day_start_equity, "week_start_equity": st.week_start_equity,
@@ -3423,7 +3402,7 @@ class Engine:
             # the dashboard's account view (goldbot/ops/account_view.py): the broker's balance, currency and margin,
             # the gate's limits, the price, lot terms and ATR(14) per ladder timeframe; no login or server
             **self._account_view, "price": self._price, "ladder_atr": dict(self._ladder["ladder_atr"]),
-            "lot_terms": self._ladder["lot_terms"], "limits": self._published_limits(),
+            "lot_terms": self._ladder["lot_terms"], "limits": published_limits(self.gate.limits, self._min_lot_risk),
             "tick_ahead_s": st.tick_ahead_s, "market_closed": st.market_closed, "session_source": self.sessions.source,
             "tick_error": st.tick_error, "tick_error_detail": self._tick_error_detail,
             # host clock; None while quotes are valid (health FAILs after QUOTE_INVALID_FAIL_S of invalid quotes)
@@ -3442,6 +3421,7 @@ class Engine:
         # one `currency` key: the broker's deposit currency the gate sized with, read once (BACKLOG 28); the account
         # view's copy (None until the first refresh) must not blank it for the supervisor's currency check
         payload["currency"] = self._account_currency() or self._account_view.get("currency") or None
+        payload.update(self._limits.published())   # ADR 0032: the current limits, for the supervisor's combined caps
         # BACKLOG 59: a heartbeat publishes the feed as it is now, not as the last account refresh saw it
         feed = self._heartbeat_feed() if heartbeat else {}
         payload.update(feed)

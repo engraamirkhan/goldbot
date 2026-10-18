@@ -71,8 +71,15 @@ risk:
   # 0.82%), put `risk: { min_lot_risk_cap: 0.01 }` in that server's config/settings.local.yaml (not in the repo).
   # Maximum 0.01 (the per-trade hard limit); halved in the 8% size-down stage; never applied in tiny-live.
   # The absolute daily loss limit (ADR 0004, the owner's £50) is per account, in that account's currency:
-  # `daily_loss_limit_abs` in config/accounts.yaml.
+  # `daily_loss_limit_abs` in config/accounts.yaml. ADR 0032: a demo account's own ceilings (`risk_overrides` in
+  # config/accounts.yaml) can raise this, the daily and the weekly cap for that account alone; these values stay the
+  # floor, and the defaults for every other account.
   min_lot_risk_cap: null
+  # ADR 0031: on a demo account with the owner's ceilings (`risk_overrides` in config/accounts.yaml) the daily, weekly
+  # and minimum-lot caps (and the supervisor's combined caps) are learnt by the nightly `limits_job` from the account's
+  # own demo trades, between the defaults above (floors) and those ceilings; they rise only at the 00:00 UTC roll and
+  # tighten at once. false: that account trades the ceilings themselves (ADR 0032). Other accounts: the defaults.
+  adaptive_limits: true
   positions_unreadable_alert: 5      # failed broker reads in a row before health fails and Telegram alerts
   # Per-agent throttle (BACKLOG 21, playbook G-6), counted per agent per account and checked at every entry
   # decision: after `loss_streak` consecutive full losses (R <= -0.9) RiskGate refuses the agent's entries
@@ -129,8 +136,13 @@ costs:
   swap_triple_weekday: 2
   # After nightly_costs, publish the canonical broker's measured table (costs only: no account id, login, balance or
   # equity) as costs_measured.json on release costs-v1, which research.yml downloads. Needs the github-token in the
-  # keyring; refused while swap is unmeasured or fewer than 50 fills exist. Turn on once the demo terminal runs.
+  # keyring; refused while swap or the spread is unmeasured. Below 50 fills a slippage cell is published as the prior
+  # and labelled so (fields.slippage: prior or mixed; K3). Turn on once the demo terminal runs.
   publish_release: false
+  # Recorded broker-tick days (tick_record, state/ticks/) in the 30-day cost window before nightly_costs builds the
+  # spread profile (median and p90 by UTC hour and session, aggregates only; reported, not charged). 10 trading days
+  # with all three sessions: docs/research/costs-binding-2026-10-18.md section 1.4 step 4.
+  spread_profile_min_days: 10
 
 # Research scheduler (VPS service `goldbot-scheduler`). Times are UTC; gold's daily break is 21:00-22:00 UTC in
 # summer and 22:00-23:00 in winter, so the nightly job sits after both. Weekdays 0=Mon .. 6=Sun.
@@ -159,6 +171,7 @@ scheduler:
   broker_ledger:    { kind: daily,   at: "23:25", max_late_hours: 20 }                  # GAP-07/08: balance snapshot, positions + balance vs broker
   tick_record:      { kind: daily,   at: "21:10", max_late_hours: 0.5 }                 # BACKLOG 79: broker ticks -> state/ticks/, in the daily break (US summer time)
   tick_record_winter: { kind: daily, at: "22:10", max_late_hours: 0.5 }                 #   ... and in the winter break; outside the break or weekend a run skips
+  limits_job:       { kind: daily,   at: "23:05", max_late_hours: 0.9 }                 # ADR 0031: adaptive limits for the next risk day; never after the roll
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
@@ -354,3 +367,31 @@ ticks:                               # broker tick record (goldbot/data/ticks.py
 
 webhook:                             # TradingView receiver (goldbot/webhook/app.py)
   max_rows_per_hour: 5000            # inbox rows in the last hour; beyond it 429 (bounds what a leaked secret can write)
+
+tv_pull:                             # TradingView direct pull (goldbot/data/tv_pull.py, ADR 0030): read-only, cookie in the keyring
+  enabled: false                     # the owner turns it on in settings.local.yaml once both cookies are in the keyring (RUNBOOK 2.8)
+  symbols: {"OANDA:XAUUSD": XAUUSD}  # chart symbol -> store symbol; layouts are read for indicators, only these are pulled
+  timeframes: ["15", "60", "240", "1D"]
+  sessionid_key: tradingview-sessionid            # keyring entry names only (browser cookies sessionid and
+  sessionid_sign_key: tradingview-sessionid-sign  #   sessionid_sign); the values never appear in a file
+  discover: true                     # read the saved layouts for their indicators (no owner naming or listing)
+  discover_every_s: 21600            # layouts re-read every 6 h
+  max_studies: 20                    # indicators pulled per pass at most
+  min_interval_s: 5.0                # between any two requests (GET, series, history page, study)
+  bars_per_request: 5000             # bars per series load and per history page (TradingView serves up to 5000)
+  max_pages_per_tf: 5                # history pages per timeframe and pass (Premium measured: ~11k bars 15m, 1h, 4h)
+  max_requests_per_day: 3000         # rolling 24 h; a pass beyond it is skipped, never queued
+  study_warmup_bars: 300             # the oldest loaded bars' study values are dropped (an EMA needs its warm-up)
+  poll_interval_s: 900               # `tv-pull follow`: one pass per 15m bar ...
+  poll_offset_s: 60                  #   ... this long after the close
+  live_max_lag_s: 1800               # a bar received within this of its close is pull_live (available_utc = received)
+  history_latency_default_s: 960     # pull_history available_utc = close + p95 live latency; this until measured
+  min_live_samples: 20               # live bars needed before the p95 is measured rather than the default
+  backoff_base_s: 300                # after a failed pass: 5 min, doubling ...
+  backoff_max_s: 21600               #   ... to 6 h; an expired cookie waits the full 6 h unless a new cookie is stored
+  timeout_s: 30                      # per request
+tv:                                  # TradingView values at decision time (goldbot/engine/tv_context.py, specialists/tv_event.py)
+  max_lag_s: 60                      # a value counts only for the decision bar and when it arrived <= this after its close,
+                                     #   else NaN and no TradingView entry (fails closed); equals features.tv_plots.MAX_LAG
+  min_bar_match: 0.95                # share of our decision bars with a TradingView bar of the same open, else the TV
+                                     #   trial is refused before it is charged (research/tv_grid.py: 4h/1d grids differ)

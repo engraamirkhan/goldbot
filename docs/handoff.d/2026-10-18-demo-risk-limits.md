@@ -1,0 +1,8 @@
+- **Demo risk limits as ceilings** (ADR 0032; the owner's approval of 2026-10-18 was relayed and needs confirming at merge).
+  - `icm-demo` has `risk_overrides.ceilings` in config/accounts.yaml: daily 5% (the £50 still binds), weekly 10%, min-lot cap 1%. The overrides are refused on any account that is not demo and can never exceed the approval.
+  - `LimitsController` / `StaticController` / `clamp` are in `goldbot/risk/limits_profile.py`. On a demo account each limit is held within [default .. ceiling]. On live and tiny-live no limit can go above its default. The engine re-reads the limits on every refresh and logs each change to core.db `limits_changes`.
+  - The supervisor's combined caps rise in lockstep only when every enabled account is demo.
+  - Entering the 8% size-down stage reverts the account to the defaults. The revert survives restarts (core.db `limits_state`) until the owner re-arms at a normal stage.
+  - Trades, decisions and shadow trades carry `limits_profile`.
+  - The supervisor's combined caps are capped by the CFO envelope (3.75% daily, 7.5% weekly).
+  - **Phase gate:** only default-limit trades count as paper evidence (`counts_as_default_evidence` wired into `gates_phase.py`; excluded count shown in the gate evidence; stop rule still sees all trades).

@@ -1,0 +1,203 @@
+{
+ "pine_id": "STD;RSI",
+ "pine_version": "47.0",
+ "description": "Relative strength index",
+ "short": "RSI",
+ "is_strategy": false,
+ "is_price_study": false,
+ "plots": [
+  {
+   "id": "plot_0",
+   "type": "line",
+   "title": "RSI"
+  },
+  {
+   "id": "plot_1",
+   "type": "line",
+   "title": "Plot"
+  },
+  {
+   "id": "plot_2",
+   "type": "line",
+   "title": "RSI-based MA"
+  },
+  {
+   "id": "plot_3",
+   "type": "line",
+   "title": "Upper Bollinger Band"
+  },
+  {
+   "id": "plot_4",
+   "type": "line",
+   "title": "Lower Bollinger Band"
+  },
+  {
+   "id": "plot_5",
+   "type": "colorer",
+   "title": "plot_5",
+   "target": "fill_3"
+  },
+  {
+   "id": "plot_6",
+   "type": "line",
+   "title": "Regular Bullish"
+  },
+  {
+   "id": "plot_7",
+   "type": "colorer",
+   "title": "plot_7",
+   "target": "plot_6"
+  },
+  {
+   "id": "plot_8",
+   "type": "shapes",
+   "title": "Regular Bullish Label"
+  },
+  {
+   "id": "plot_9",
+   "type": "line",
+   "title": "Regular Bearish"
+  },
+  {
+   "id": "plot_10",
+   "type": "colorer",
+   "title": "plot_10",
+   "target": "plot_9"
+  },
+  {
+   "id": "plot_11",
+   "type": "shapes",
+   "title": "Regular Bearish Label"
+  },
+  {
+   "id": "plot_12",
+   "type": "alertcondition",
+   "title": "Regular Bullish Divergence"
+  },
+  {
+   "id": "plot_13",
+   "type": "alertcondition",
+   "title": "Regular Bearish Divergence"
+  }
+ ],
+ "inputs": [
+  {
+   "defval": "",
+   "id": "pineId",
+   "isHidden": true,
+   "name": "pineId",
+   "type": "text"
+  },
+  {
+   "defval": "",
+   "id": "pineVersion",
+   "isHidden": true,
+   "name": "pineVersion",
+   "type": "text"
+  },
+  {
+   "defval": "{\"indicator\":1,\"plot\":1,\"ta\":1,\"math\":1,\"alertcondition\":1}",
+   "id": "pineFeatures",
+   "isFake": true,
+   "isHidden": true,
+   "name": "pineFeatures",
+   "type": "text"
+  },
+  {
+   "defval": 14,
+   "id": "in_0",
+   "isFake": true,
+   "max": 1000000000000,
+   "min": 1,
+   "name": "RSI Length",
+   "type": "integer"
+  },
+  {
+   "defval": "close",
+   "id": "in_1",
+   "isFake": true,
+   "name": "Source",
+   "options": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "hl2",
+    "hlc3",
+    "hlcc4",
+    "ohlc4",
+    "volume"
+   ],
+   "type": "source"
+  },
+  {
+   "defval": false,
+   "id": "in_2",
+   "isFake": true,
+   "name": "Calculate Divergence",
+   "type": "bool"
+  },
+  {
+   "defval": "SMA",
+   "id": "in_3",
+   "isFake": true,
+   "name": "Type",
+   "options": [
+    "None",
+    "SMA",
+    "SMA + Bollinger Bands",
+    "EMA",
+    "SMMA (RMA)",
+    "WMA",
+    "VWMA"
+   ],
+   "type": "text"
+  },
+  {
+   "defval": 14,
+   "id": "in_4",
+   "isFake": true,
+   "name": "Length",
+   "type": "integer"
+  },
+  {
+   "defval": 2,
+   "id": "in_5",
+   "isFake": true,
+   "max": 50,
+   "min": 0.001,
+   "name": "BB StdDev",
+   "type": "float"
+  },
+  {
+   "defval": "",
+   "id": "in_6",
+   "isFake": true,
+   "name": "Timeframe",
+   "type": "resolution"
+  },
+  {
+   "defval": true,
+   "id": "in_7",
+   "isFake": true,
+   "name": "Wait for timeframe closes",
+   "type": "bool"
+  },
+  {
+   "defval": false,
+   "id": "__fast_calc",
+   "isFake": true,
+   "isHidden": true,
+   "name": "Fast calculation",
+   "type": "bool"
+  },
+  {
+   "defval": false,
+   "id": "__profile",
+   "isFake": true,
+   "isHidden": true,
+   "name": "",
+   "type": "bool"
+  }
+ ]
+}

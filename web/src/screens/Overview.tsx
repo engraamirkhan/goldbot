@@ -6,10 +6,13 @@ import { AutoModeCard } from "./AutoMode";
 import { BalanceCard, BalanceCardSkeleton } from "./BalanceCard";
 import { EntryStatusPanel } from "./EntryStatus";
 import { ProgressLine } from "./Progress";
+import { LimitsStrip } from "./Limits";
+import { ResearchLine } from "./ResearchToday";
+import { TradingViewChip } from "./TradingViewCard";
 
 const pct = (x: number) => `${(x * 100).toFixed(2)}%`;
 
-export function Overview({ onOpenProgress }: { onOpenProgress?: () => void } = {}) {
+export function Overview({ onOpenProgress, onOpenLimits }: { onOpenProgress?: () => void; onOpenLimits?: () => void } = {}) {
   const status = useQuery({ queryKey: ["status"], queryFn: api.status });
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts });
   return (
@@ -27,6 +30,9 @@ export function Overview({ onOpenProgress }: { onOpenProgress?: () => void } = {
       {accounts.isLoading ? <div className="accts"><BalanceCardSkeleton /></div> : (accounts.data?.length ?? 0) > 0 && (
         <div className="accts">{accounts.data!.map((a) => <BalanceCard key={a.account_id} a={a} />)}</div>
       )}
+      {onOpenLimits && <LimitsStrip onOpen={onOpenLimits} />}
+      <div className="strip feeds-strip"><TradingViewChip /></div>
+      <ResearchLine />
       <div className="scroll"><table>
         <thead><tr><th>Account</th><th>Mode</th><th>Class</th><th>Equity</th><th>Today</th><th>Week</th><th>Drawdown</th><th>Stage</th><th>Open</th></tr></thead>
         <tbody>

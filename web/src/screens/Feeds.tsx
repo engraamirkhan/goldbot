@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api, type JobRow } from "../lib/api";
+import { TradingViewCard } from "./TradingViewCard";
 
 const fmt = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleString() : "—");
 
@@ -16,6 +17,7 @@ export function Feeds() {
   const rows = q.data ?? [];
   return (
     <section>
+      <TradingViewCard />
       {rows.length === 0 ? <p className="muted">No feeds reporting yet.</p> : (
         <table>
           <thead><tr><th>Account</th><th>Terminal</th><th>Last tick</th><th>Spread</th><th>Webhook p99</th><th>Supervisor heartbeat</th></tr></thead>

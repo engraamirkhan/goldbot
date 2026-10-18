@@ -43,8 +43,20 @@ def run_supervisor() -> None:
     from goldbot.config import load_settings
     from goldbot.ops.health import Heartbeat
     from goldbot.risk.supervisor import Supervisor, SupervisorLimits
-    sup = Supervisor("state", SupervisorLimits.from_settings(load_settings().risk))
+    sup = Supervisor("state", SupervisorLimits.from_settings(load_settings().risk, ceilings=resolve(demo_ceilings)()))
     hb = Heartbeat("state", "supervisor")          # S5: every service writes state/heartbeat_<service>.json
     while True:
         resolve(supervisor_pass)(sup, hb)
         time.sleep(5)
+
+
+def demo_ceilings() -> Any:
+    """ADR 0032: the combined caps' ceilings when every enabled account in config/accounts.yaml is demo with the owner's
+    ceilings, else None (the defaults). An unreadable registry gives None: the strict side."""
+    from goldbot.ops.accounts import load_accounts
+    from goldbot.risk.limits_profile import supervisor_ceilings
+    try:
+        return supervisor_ceilings(list(load_accounts().values()))
+    except Exception as exc:
+        log.error("account registry unreadable (%s): the supervisor keeps its default caps", type(exc).__name__)
+        return None
