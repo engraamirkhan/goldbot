@@ -115,7 +115,7 @@ export function ProposalCard({ p, now, canDecide, blockers, busy = false, error,
       {error && <p className="err" role="alert">{error}</p>}
 
       <footer className="card-foot muted">
-        <span>{p.account_id}</span><span>{p.agent_id}</span>
+        <span>{p.account_id}</span>
         <span>expires <time dateTime={p.expires_at} title={exp.utc}>{exp.text}</time></span>
         {p.tradingview_url && <a href={p.tradingview_url} target="_blank" rel="noreferrer">Chart</a>}
       </footer>

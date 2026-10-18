@@ -96,7 +96,7 @@ export function signed(x: number, digits = 2): string {
 /** Local wall time for display, UTC for the hover title. */
 export function localTime(iso: string): { text: string; utc: string } {
   const d = new Date(iso);
-  return { text: d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+  return { text: d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }),
            utc: d.toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC") };
 }
 
