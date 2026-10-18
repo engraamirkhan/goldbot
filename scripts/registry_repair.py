@@ -132,10 +132,10 @@ def _candidates(failed: dict[str, Any], runs: list[Path], known: set[tuple[str, 
     return found, notes
 
 
-def repair(published: list[dict[str, Any]], runs: list[Path], verify: RunInfo = run_info) -> Repair:
+def repair(published: list[dict[str, Any]], runs: list[Path], verify: RunInfo | None = None) -> Repair:
     """The registry with every repairable failed row replaced (see the module docstring); `published` is not mutated.
     Every run folder must be a successful research.yml run (`verify`, gh by default)."""
-    heads = _verified(runs, verify)
+    heads = _verified(runs, verify if verify is not None else run_info)   # looked up at call time (tests patch it)
     known = {_key(r) for r in published}
     fixes: list[dict[str, Any]] = []
     replaced: list[Outcome] = []
