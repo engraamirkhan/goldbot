@@ -17,7 +17,8 @@ def _ci() -> dict:
 
 
 def _on(wf: dict) -> dict:
-    return wf.get("on", wf.get(True))       # YAML 1.1 reads a bare `on:` key as True
+    on: dict = wf["on"] if "on" in wf else wf[True]     # YAML 1.1 reads a bare `on:` key as True
+    return on
 
 
 def test_required_checks_exist_and_match_the_deploy_gate():

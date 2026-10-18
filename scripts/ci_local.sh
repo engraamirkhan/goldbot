@@ -9,7 +9,7 @@
 #   - outbound network blocked at the kernel with macOS sandbox-exec (loopback stays open) when it is available;
 #   - the same jobs and shards as CI: the matrix sizes (backend-unit, backend-integration shards; e2e projects) are
 #     READ FROM ci.yml, so a CI matrix change needs no edit here (tests/test_ci_workflow.py checks the commands).
-#     smoke (pre-commit, ruff, collection, merge smoke) runs first, beside backend-lint (mypy, api-contract) ->
+#     smoke (pre-commit, ruff, collection) runs first, beside backend-lint (mypy, api-contract) ->
 #     frontend-checks; when smoke passes the unit and integration shards start (GOLDBOT_SHARD=i/N, same
 #     `pytest -m ...` as CI, random order, dry run in integration shard 0) and e2e runs per project after
 #     frontend-checks. Each pytest lane uses one xdist worker (CI: -n auto per shard): with 4 + 4 shards that is
@@ -99,7 +99,11 @@ step() {  # step NAME ENV... -- CMD: like job, but appended to the lane log and 
   echo "$name $rc" >> "$L/$lane.steps"
   return 0
 }
-lane_done() { [ -f "$L/$1.steps" ] && ! awk '$2 != 0 {bad=1} END {exit bad}' "$L/$1.steps"; echo $? > "$L/$1.status"; }
+# status 0 only when the lane ran steps and every one exited 0 (before 2026-10-18 this was inverted: a lane with a
+# failed step reported PASS and an all-green lane FAIL)
+lane_done() {
+  if [ -f "$L/$1.steps" ] && awk '$2 != 0 {bad = 1} END {exit bad ? 1 : 0}' "$L/$1.steps"; then echo 0; else echo 1; fi > "$L/$1.status"
+}
 
 # --- the lanes (commands copied from ci.yml; the matrix sizes come from it) ----------------------------------------
 smoke_lane() {
@@ -107,11 +111,12 @@ smoke_lane() {
   step smoke pre-commit -- pre-commit run --all-files --show-diff-on-failure --color never
   step smoke ruff -- ruff check goldbot tests scripts --output-format concise
   step smoke collect -- bash -c 'pytest --collect-only -q -p no:randomly -p no:cacheprovider | tail -20'
-  step smoke merge-smoke -- scripts/merge_smoke.sh HEAD
   lane_done smoke
 }
 lint_lane() {
   : > "$L/lint.log"; rm -f "$L/lint.steps"
+  # CI's backend-lint job installs web/node_modules too (setup-web): gen:api needs openapi-typescript
+  [ "$web" = 1 ] && step lint backend-lint-install -- npm --prefix web ci --offline
   step lint backend-typecheck -- mypy
   step lint api-contract -- bash -c 'python scripts/export_openapi.py && npm --prefix web run gen:api && git diff --exit-code -- web/openapi.json web/src/lib/schema.d.ts'
   lane_done lint

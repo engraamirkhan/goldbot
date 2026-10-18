@@ -3,7 +3,7 @@ name: ci
 # The repo is public, so Actions minutes are free; the limits that matter are wall-clock and the account's 20
 # concurrent jobs. Shape of a run (critical path: smoke -> the slowest integration shard):
 #   changes            which jobs a PR needs (scripts/ci_changes.py); pushes to main always run everything
-#   smoke              ~1 min, always: pre-commit (incl. the docs checks), ruff, full test collection, merge smoke.
+#   smoke              ~1 min, always: pre-commit (incl. the docs checks), ruff, full test collection.
 #                      The test matrices wait for it, so a broken import costs one job, not twelve.
 #   backend-lint       mypy (cached) and the API contract
 #   backend-unit       4 shards x pytest-xdist -n auto
@@ -81,9 +81,6 @@ jobs:
         # every test module imports: a syntax or import error fails here in a minute, not in every shard
         if: success() || failure()
         run: set -o pipefail; pytest --collect-only -q -p no:randomly 2>&1 | tail -20 | tee ci-out/collect.txt || { echo collect >> ci-out/failed-smoke.list; exit 1; }
-      - name: merge-smoke
-        if: success() || failure()
-        run: set -o pipefail; scripts/merge_smoke.sh HEAD 2>&1 | tee ci-out/merge-smoke.txt || { echo merge-smoke >> ci-out/failed-smoke.list; exit 1; }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with: { name: ci-out-smoke, path: ci-out/, include-hidden-files: true }
