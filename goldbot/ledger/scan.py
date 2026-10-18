@@ -13,7 +13,13 @@ _RULES: tuple[tuple[str, re.Pattern[str]], ...] = tuple((n, re.compile(p, re.IGN
     ("cloud-or-api-key", r"\b(?:AKIA[0-9A-Z]{12,}|sk-[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})"),
     ("private-key", r"-----BEGIN [A-Z ]*PRIVATE KEY"),
     ("telegram-bot-token", r"\b\d{8,10}:[A-Za-z0-9_-]{30,}"),
-    ("credential-assignment", r"\b(?:password|passwd|pwd|secret|token|api[_ -]?key|access[_ -]?key)\b\s*[:=]\s*\S{6,}"),
+    ("credential-assignment", r"\b(?:password|passwd|pwd|secret|token|api[_ -]?key|access[_ -]?key)\b"
+                              r"(?:\s*[:=]\s*|\s+is\s+)\S{6,}"),
+    ("cookie", r"\b(?:cookie\s*:|sessionid(?:_sign)?\s*[:=]|tv_ecuid\s*[:=])"),
+    ("jwt-or-tunnel-token", r"\beyJ[A-Za-z0-9_-]{10,}"),
+    ("totp-seed", r"\b(?:totp|otp|2fa|seed|authenticator)\b\W{0,12}[A-Z2-7]{16,}\b"),
+    ("ipv6-address", r"(?<![\w:])(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}(?![\w:])|(?<![\w:])(?:[0-9a-f]{1,4}:){1,6}:"
+                     r"(?:[0-9a-f]{1,4})?(?![\w:])"),
     ("mt5-login", r"\b(?:mt5|metatrader|account|login)\b\D{0,12}\d{6,}"),
     ("telegram-id", r"\b(?:telegram|chat[_ ]?id|tg)\b\D{0,12}-?\d{6,}"),
     ("ip-address", r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),

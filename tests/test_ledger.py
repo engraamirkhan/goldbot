@@ -190,3 +190,66 @@ def test_program_db_staged_and_restored(tmp_path):
     assert bk.verify_restore(stage) == []
     restored = Ledger(Database(stage / "state" / "program.db", "program", migrate=False))
     assert restored.query("knowledge_entries")[0]["body"] == "Gold trends after NFP."
+
+
+# ------------------------------------------------------------------ security review of c5e29c0
+def test_insert_or_replace_cannot_overwrite_a_row(ledger):
+    rid = ledger.add(_knowledge())
+    for sql in ("INSERT OR REPLACE INTO knowledge_entries (id, key, version, body, sha256, created_ns, source, privacy, "
+                "topic, evidence_grade) VALUES (%d, 'other', 1, 'forged', 'h', 1, 's', 'public', 't', 'A')" % rid,
+                "INSERT OR REPLACE INTO knowledge_entries (key, version, body, sha256, created_ns, source, privacy, "
+                "topic, evidence_grade) VALUES ('k1', 1, 'forged', 'h', 1, 's', 'public', 't', 'A')"):
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"), ledger.db.write() as c:
+            c.execute(sql)
+    assert ledger.get("knowledge_entries", rid)["body"] == "Gold trends after NFP."
+
+
+def test_program_connections_turn_recursive_triggers_on(ledger):
+    with ledger.db.connection() as c:
+        assert c.execute("PRAGMA recursive_triggers").fetchone()[0] == 1
+
+
+def test_a_database_missing_a_ledger_trigger_refuses_to_open(tmp_path):
+    led = Ledger.open(tmp_path / "state")
+    con = sqlite3.connect(led.db.path, isolation_level=None)
+    con.execute("DROP TRIGGER decisions_no_delete")
+    con.close()
+    with pytest.raises(LedgerRefused, match="decisions_no_delete"):
+        Ledger.open(tmp_path / "state")
+
+
+def test_superseded_by_must_be_a_row_of_the_same_key(ledger):
+    a = ledger.add(_knowledge("ka"))
+    b = ledger.add(_knowledge("kb"))
+    for target in (b, 9999):
+        with pytest.raises(sqlite3.IntegrityError), ledger.db.write() as c:
+            c.execute("UPDATE knowledge_entries SET superseded_by_id = ? WHERE id = ?", (target, a))
+
+
+@pytest.mark.parametrize("body", [
+    "cookie: abc123",
+    "sessionid=abcdef1234567890",
+    "sessionid_sign: v3:abcdef",
+    "tunnel eyJhIjoiYWJjZGVmMTIzNDU2Nzg5MCIsInQiOiJ4In0",
+    "totp seed JBSWY3DPEHPK3PXPJBSWY3DP",
+    "host 2001:db8:85a3:0:0:8a2e:370:7334 up",
+    "the password is correcthorse",
+    "password = correcthorse",
+])
+def test_secret_scan_rejects_cookies_jwt_totp_ipv6_and_password_is(body):
+    assert scan.scan(body)
+
+
+def test_cli_blob_file_over_the_cap_is_refused_before_reading(tmp_path, monkeypatch):
+    big = tmp_path / "big.bin"
+    big.write_bytes(b"x" * 100)
+    monkeypatch.setattr(cli, "MAX_BLOB_FILE_BYTES", 10)
+    assert cli.main(["--state", str(tmp_path / "s"), "add", "artifacts", "--key", "a", "--body", "b", "--source", "t",
+                     "--field", "path=big.bin", "--blob-file", str(big)]) == 2
+
+
+def test_cli_export_only_writes_under_docs_ledger(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["--state", "s", "export", "--out", "elsewhere"]) == 2
+    assert cli.main(["--state", "s", "export", "--out", "../docs/ledger"]) == 2
+    assert cli.main(["--state", "s", "export", "--out", "docs/ledger"]) == 0

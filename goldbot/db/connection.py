@@ -98,6 +98,10 @@ def connect(path: str | Path, kind: DbKind, *, busy_timeout_ms: int = DEFAULT_BU
         conn.execute(f"PRAGMA synchronous={SYNCHRONOUS[kind]}")
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA trusted_schema=OFF")
+        if kind == "program":
+            # INSERT OR REPLACE deletes the conflicting row, and SQLite fires delete triggers for that only with
+            # recursive_triggers on: the ledger's append-only rule depends on it (also guarded by BEFORE INSERT triggers)
+            conn.execute("PRAGMA recursive_triggers=ON")
     except BaseException:
         conn.close()
         raise

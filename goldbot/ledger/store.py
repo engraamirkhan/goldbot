@@ -45,6 +45,17 @@ def _check_clean(texts: Iterable[str]) -> None:
 class Ledger:
     def __init__(self, db: Database):
         self.db = db
+        self._check_triggers()
+
+    def _check_triggers(self) -> None:
+        """Refuse to open a program.db that lacks any append-only trigger: without them nothing stops an UPDATE."""
+        from goldbot.db.migrations import ledger_trigger_names
+        with self.db.read() as c:
+            have = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'")}
+        missing = sorted(set(ledger_trigger_names()) - have)
+        if missing:
+            raise LedgerRefused(f"program.db is missing append-only triggers ({', '.join(missing)}); "
+                                "restore it from a backup")
 
     @classmethod
     def open(cls, state_dir: str | Path, *, migrate: bool = True) -> Ledger:

@@ -18,6 +18,9 @@ from pathlib import Path
 from goldbot.ledger.models import TABLE_FIELDS, NewEntry
 from goldbot.ledger.store import Ledger, LedgerRefused
 
+MAX_BLOB_FILE_BYTES = 8 * 1024 * 1024        # a larger file is refused before it is read (only <= 256 KB is stored)
+EXPORT_DIR = Path("docs/ledger")
+
 
 def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="run.py ledger", description="The program ledger (state/program.db).")
@@ -66,7 +69,12 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             print(text)
             return 0
-        for p in ledger.export(a.out):
+        out = Path(a.out).resolve()
+        root = EXPORT_DIR.resolve()
+        if out != root and root not in out.parents:
+            print(f"refused: export only writes under {EXPORT_DIR}/", file=sys.stderr)
+            return 2
+        for p in ledger.export(out):
             print(p)
         return 0
     except LedgerRefused as exc:
@@ -81,6 +89,9 @@ def _add(ledger: Ledger, a: argparse.Namespace) -> int:
         return 2
     body = a.body if a.body is not None else (sys.stdin.read() if a.body_file == "-"
                                               else Path(a.body_file).read_text(encoding="utf-8"))
+    if a.blob_file and Path(a.blob_file).stat().st_size > MAX_BLOB_FILE_BYTES:
+        print(f"refused: --blob-file is larger than {MAX_BLOB_FILE_BYTES} bytes", file=sys.stderr)
+        return 2
     blob = Path(a.blob_file).read_bytes() if a.blob_file else None
     try:
         entry = NewEntry(table=a.table, key=a.key, body=body, source=a.source,

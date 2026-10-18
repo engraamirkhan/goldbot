@@ -434,14 +434,26 @@ def _ledger_statements() -> tuple[str, ...]:
                  *checks]
         out.append(f"CREATE TABLE {table} ({', '.join(lines)}) STRICT")
         out.append(f"CREATE INDEX {table}_key ON {table}(key)")
-        # an UPDATE passes only when it sets superseded_by_id from NULL and changes no other column
+        # an UPDATE passes only when it sets superseded_by_id from NULL to a row of the same table and key, and
+        # changes no other column
         unchanged = " AND ".join(f"OLD.{c} IS NEW.{c}" for c in cols if c != "superseded_by_id")
         out.append(f"""CREATE TRIGGER {table}_no_update BEFORE UPDATE ON {table}
-           WHEN NOT (OLD.superseded_by_id IS NULL AND NEW.superseded_by_id IS NOT NULL AND {unchanged})
+           WHEN NOT (OLD.superseded_by_id IS NULL AND NEW.superseded_by_id IS NOT NULL AND {unchanged}
+                     AND EXISTS (SELECT 1 FROM {table} WHERE id = NEW.superseded_by_id AND key = OLD.key))
+           BEGIN SELECT RAISE(ABORT, '{table} is append-only'); END""")
+        # INSERT OR REPLACE would delete the conflicting row without firing the delete trigger: refuse any insert
+        # that collides on id or (key, version), whatever the conflict clause
+        out.append(f"""CREATE TRIGGER {table}_no_replace BEFORE INSERT ON {table}
+           WHEN EXISTS (SELECT 1 FROM {table} WHERE id = NEW.id OR (key = NEW.key AND version = NEW.version))
            BEGIN SELECT RAISE(ABORT, '{table} is append-only'); END""")
         out.append(f"""CREATE TRIGGER {table}_no_delete BEFORE DELETE ON {table}
            BEGIN SELECT RAISE(ABORT, '{table} is append-only'); END""")
     return tuple(out)
+
+
+def ledger_trigger_names() -> tuple[str, ...]:
+    """Every trigger the ledger's append-only rule rests on (checked every time the ledger opens)."""
+    return tuple(f"{t}_{k}" for t in _LEDGER_TABLES for k in ("no_update", "no_delete", "no_replace"))
 
 
 PROGRAM: tuple[Migration, ...] = (
