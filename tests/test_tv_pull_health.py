@@ -38,7 +38,8 @@ def test_expiry_notifies_once_across_restart(tmp_path: Path):
     assert record_expired(tmp_path, NOW + pd.Timedelta(hours=3)) is False
     notes = _notices(tmp_path)
     assert len(notes) == 1 and notes[0]["detail"] == NOTICE_TEXT
-    assert "goldbot accounts set tradingview-session" in NOTICE_TEXT
+    assert "goldbot.ops.accounts set tradingview-sessionid`" in NOTICE_TEXT
+    assert "goldbot.ops.accounts set tradingview-sessionid-sign`" in NOTICE_TEXT
 
 
 def test_next_expiry_after_a_successful_pull_notifies_again(tmp_path: Path):

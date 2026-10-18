@@ -5,8 +5,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 OUT = Path(sys.argv[1])
-NOTE = ("Hand-built from the community-documented TradingView chart protocol (~m~len~m~json frames, ~h~ heartbeats, "
-        "1e100 = na) and page shapes; synthetic values, not captured from a live session.")
+NOTE = ("Synthetic scenario (values made up) in the wire shapes verified against TradingView on 2026-10-18 (series "
+        "sds_1, studies st<k>, chart-page initData.content with a Script$PUB;<id> metaInfo string, 1e100 = na). "
+        "Captured frames: tests/fixtures/tv/.")
 
 
 def frame(obj):
@@ -44,31 +45,31 @@ META = {
               {"id": "plot_2", "type": "shapes"}, {"id": "plot_3", "type": "colorer", "target": "plot_0"}],
     "styles": {"plot_0": {"title": "EMA"}, "plot_1": {"title": "RSI"}, "plot_2": {"title": "Buy"}},
 }
-LAYOUT_TOKEN = "JWT-fixture-layout-token-xyz"
+LAYOUT = {"charts": [{"panes": [{"sources": [
+    {"type": "MainSeries", "state": {"symbol": "OANDA:XAUUSD", "interval": "15"}},
+    {"type": "Study", "metaInfo": "Script$PUB;fixture123@tv-scripting-101[v.7.0]",
+     "state": {"inputs": {"in_0": 21, "in_1": True, "pineId": "", "pineVersion": "", "__fast_calc": False}}},
+    {"type": "LineToolTrendLine", "state": {"points": []}}]}]}]}
 HTTP = {
     "https://www.tradingview.com/": '<html><script>window.user = {"username":"owner","id":4242,'
                                     '"auth_token":"AUTHTOKEN-fixture-abcdef123456"};</script></html>',
     "https://www.tradingview.com/my-charts/": json.dumps([
         {"image_url": "LayOut01", "name": "Gold 15m", "symbol": "OANDA:XAUUSD", "interval": "15"}]),
-    "https://www.tradingview.com/chart-token/?image_url=LayOut01&user_id=4242": json.dumps({"token": LAYOUT_TOKEN}),
-    f"https://charts-storage.tradingview.com/charts-storage/get/layout/LayOut01/sources?chart_id=_shared&jwt={LAYOUT_TOKEN}":
-        json.dumps({"success": True, "payload": {"sources": {
-            "s1": {"type": "Study", "state": {"shortDescription": "K-Indi", "inputs": {
-                "text": "x", "pineId": "PUB;fixture123", "pineVersion": "7.0", "in_0": 21, "in_1": True}}},
-            "d1": {"type": "LineToolTrendLine", "state": {"points": []}}}}}),
+    "https://www.tradingview.com/chart/LayOut01/": "<html><script>window.initData = {};\ninitData.content = "
+                                                   + json.dumps(LAYOUT) + ";\n</script></html>",
     "https://pine-facade.tradingview.com/pine-facade/translate/PUB%3Bfixture123/7.0": json.dumps(
         {"success": True, "result": {"ilTemplate": "bmI9Ks46_fixture_il", "metaInfo": META}}),
 }
-COMPLETED = frame({"m": "series_completed", "p": [CS, "$prices", "streaming", "s1", {}]})
+COMPLETED = frame({"m": "series_completed", "p": [CS, "sds_1", "streaming", "s1", {}]})
 
 
 def series(rows):
-    return frame({"m": "timescale_update", "p": [CS, {"$prices": {"node": "n", "s": rows, "t": "s1", "lbs": {}}}, {}]})
+    return frame({"m": "timescale_update", "p": [CS, {"sds_1": {"node": "n", "s": rows, "t": "s1", "lbs": {}}}, {}]})
 
 
 def study_reply(times):
-    return [frame({"m": "du", "p": [CS, {"st_1": {"node": "n", "st": study(times), "t": "s1"}}]}),
-            frame({"m": "study_completed", "p": [CS, "st_1", "st1_x", {}]})]
+    return [frame({"m": "du", "p": [CS, {"st1": {"node": "n", "st": study(times), "t": "s1"}}]}),
+            frame({"m": "study_completed", "p": [CS, "st1", "s1_st1", {}]})]
 
 
 def times_of(rows):

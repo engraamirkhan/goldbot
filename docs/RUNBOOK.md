@@ -910,10 +910,11 @@ accepted the terms risk (possible account suspension, loss of invite-only access
    ~/goldbot/.venv/bin/python -m goldbot.ops.accounts set tradingview-sessionid-sign
    ```
 
-2. Claude switches `tv_pull.enabled: true` in `config/settings.local.yaml` and starts
-   `~/goldbot/.venv/bin/python -m goldbot.ops.run tv-pull follow` (a pass after every 15m bar close); `tv-pull sync` runs
-   one pass, `tv-pull status` shows the last one (bars received per timeframe, new bars, repaints, studies) and reaches
-   no network.
+2. Claude switches `tv_pull.enabled: true` in `config/settings.local.yaml` and installs the unit (not part of the
+   bootstrap): `sudo install -m 644 goldbot/ops/linux/systemd/goldbot-tv-pull.service /etc/systemd/system/ && sudo
+   systemctl daemon-reload && sudo systemctl enable --now goldbot-tv-pull` (`tv-pull follow`: a pass after every 15m
+   bar close). `tv-pull sync` runs one pass, `tv-pull status` shows the last one (bars received per timeframe, new
+   bars, repaints, studies) and reaches no network.
 
 When TradingView signs the session out, health shows `tv_pull` WARN and you get one Telegram notice: repeat step 1 (a
 new cookie is tried at once). Alerts (2.7b) keep working whatever the pull does.

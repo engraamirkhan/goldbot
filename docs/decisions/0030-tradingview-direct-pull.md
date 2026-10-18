@@ -13,11 +13,13 @@ the primary TradingView source, with discovery of the saved layouts and automati
 ## Decision
 - `goldbot/data/tv_pull.py` reads the saved layouts, their Pine studies and inputs, each script's metadata and the
   bars and plot values from TradingView's chart websocket, into `tv_indicators` (`inbox.long_rows` schema plus `origin`
-  `pull_live`/`pull_history`), study metadata in `state/tv.db` `tv_study_meta` keyed by `meta_hash8`.
+  `pull_live`/`pull_history` and the catalog's `meta_hash`), study metadata in `state/tv.db` `tv_study_meta`.
+  Studies are found on each layout's chart page (`initData.content`); the socket is `?type=chart` on `prodata` for a
+  paid plan (`data` serves about half the depth).
 - Credentials: the browser cookies `sessionid` and `sessionid_sign`, each in the keyring (`tradingview-sessionid`,
   `tradingview-sessionid-sign`), read per pass and held in memory only; no automated login, no password stored.
 - Read-only by construction (goldbot/data/tv_wire.py): the network interface has a GET and a websocket only; GETs are
-  allowed to five read endpoints and websocket frames to the methods a chart tab sends to draw itself.
+  allowed to six read endpoints and websocket frames to the methods a chart tab sends to draw itself.
 - Polite: one request per `min_interval_s` (5 s), capped history pages, polling only when a new bar can have closed, a
   rolling daily request budget, exponential backoff, the full 6 h backoff after a refused cookie.
 - Fail soft: a pass never raises; the alert webhook does not import the pull. Sign-in state goes through
@@ -29,9 +31,10 @@ the primary TradingView source, with discovery of the saved layouts and automati
 ## Consequences
 - The account can be suspended and invite-only access lost at TradingView's discretion; the alerts path (and the CSV
   import) stays as the fallback, so losing the pull loses convenience, not the system.
-- The protocol is undocumented and can change without notice. The test fixtures (tests/data/tv_pull) are hand-built
-  from the community-documented protocol, not captured traffic; real sanitised frames from the local probe
-  (tests/fixtures/tv/) should replace them, and the first live pass is the first real test of the endpoints.
+- The protocol is undocumented and can change without notice. Parsing is tested on sanitised frames captured from
+  TradingView (tests/fixtures/tv/, public STD;RSI only); the pass behaviours on a small synthetic scenario in the same
+  verified wire shapes (tests/data/tv_pull). A real read-only pass from the owner's Mac on 2026-10-18 matched the
+  probe's depths (15m 11,080, 1h 10,614, 4h 10,509 bars).
 - Invite-only outputs are the author's work: the compiled script source is never stored, and the pulled rows stay in
   gitignored `data/` and `state/`, never in a public release.
 - Backfilled rows are history (`pull_history`, available at close + p95 live latency) and carry repaint risk like

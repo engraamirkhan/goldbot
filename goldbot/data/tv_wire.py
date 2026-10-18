@@ -26,15 +26,21 @@ from collections.abc import Iterable, Mapping
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
+# `type=chart` is required: without it every create_study is refused ("Study not allowed in this connection").
+# A paid plan's history depth is served by `prodata` only (measured 2026-10-18, Premium, 15m: data 5,050 bars,
+# prodata 11,080); the free/unauthenticated data host is `data`.
 WS_URL = "wss://data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart"
+PRO_WS_URL = "wss://prodata.tradingview.com/socket.io/websocket?from=chart%2F&type=chart"
 SITE = "https://www.tradingview.com"
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
 
 # (host, path prefix) of every URL the pull may GET: the signed-in home page (auth token), the saved-layout list, a
-# layout's read token, a layout's saved sources (its indicators and their inputs) and a script's compiled source.
+# layout's chart page (its indicators and their inputs), a layout's read token and saved sources (fallback) and a
+# script's compiled source.
 READ_URLS: tuple[tuple[str, str], ...] = (
     ("www.tradingview.com", "/"),                                  # exact: the home page only (see _url_allowed)
     ("www.tradingview.com", "/my-charts/"),
+    ("www.tradingview.com", "/chart/"),                            # a saved layout's page (initData.content)
     ("www.tradingview.com", "/chart-token/"),
     ("charts-storage.tradingview.com", "/charts-storage/get/layout/"),
     ("pine-facade.tradingview.com", "/pine-facade/translate/"),
@@ -130,8 +136,8 @@ def cookie_header(cookie: str) -> str:
     return c if "=" in c else f"sessionid={c}"
 
 
-def secret_parts(*secrets: str | None) -> list[str]:
-    """Every string worth redacting: each secret whole and each cookie value (at least 8 characters)."""
+def secret_parts(*secrets: str | None, min_len: int = 8) -> list[str]:
+    """Every string worth redacting: each secret whole and each cookie value (at least `min_len` characters)."""
     parts: set[str] = set()
     for s in secrets:
         if not s:
@@ -140,7 +146,7 @@ def secret_parts(*secrets: str | None) -> list[str]:
         for piece in s.split(";"):
             _, _, value = piece.partition("=")
             parts.add(value.strip())
-    return sorted((p for p in parts if len(p) >= 8), key=len, reverse=True)
+    return sorted((p for p in parts if len(p) >= min_len), key=len, reverse=True)
 
 
 def redact(text: str, secrets: Iterable[str]) -> str:
@@ -200,14 +206,17 @@ class ReadOnlyNetwork:
     def __init__(self, inner: TvNetwork, cookie: str, secrets: list[str]):
         self._inner, self._cookie, self.secrets = inner, cookie_header(cookie), secrets
 
-    def add_secret(self, value: str) -> None:
-        self.secrets[:] = secret_parts(*self.secrets, value)
+    def add_secret(self, value: str, *, min_len: int = 8) -> None:
+        """Redact `value` from now on (in place: the sockets share the list); `min_len` 1 for an account id."""
+        self.secrets[:] = sorted(set(self.secrets) | set(secret_parts(value, min_len=min_len)), key=len, reverse=True)
 
-    def get(self, url: str, *, with_cookie: bool = True) -> str:
+    def get(self, url: str, *, with_cookie: bool = True, xhr: bool = False) -> str:
         if not _url_allowed(url):
             raise ReadOnlyViolation(f"refused GET {urlsplit(url).hostname}{urlsplit(url).path}: not a read endpoint")
         headers = {"User-Agent": USER_AGENT, "Accept": "application/json, text/html", "Origin": SITE,
                    "Referer": SITE + "/"}
+        if xhr:
+            headers.update({"X-Requested-With": "XMLHttpRequest", "Accept": "application/json"})
         if with_cookie:
             headers["Cookie"] = self._cookie
         try:
@@ -218,9 +227,9 @@ class ReadOnlyNetwork:
             msg = f"GET {urlsplit(url).hostname}{urlsplit(url).path} failed: {type(exc).__name__}: {exc}"
             raise TvPullError(redact(msg, self.secrets)[:300]) from None
 
-    def open_socket(self) -> GuardedSocket:
+    def open_socket(self, *, pro: bool = False) -> GuardedSocket:
         try:
-            inner = self._inner.open_socket(WS_URL, {"Origin": SITE, "User-Agent": USER_AGENT})
+            inner = self._inner.open_socket(PRO_WS_URL if pro else WS_URL, {"Origin": SITE, "User-Agent": USER_AGENT})
         except Exception as exc:
             raise TvPullError(redact(f"websocket connect failed: {type(exc).__name__}: {exc}", self.secrets)[:300]) \
                 from None

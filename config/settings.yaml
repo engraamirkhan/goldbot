@@ -365,8 +365,8 @@ tv_pull:                             # TradingView direct pull (goldbot/data/tv_
   discover_every_s: 21600            # layouts re-read every 6 h
   max_studies: 20                    # indicators pulled per pass at most
   min_interval_s: 5.0                # between any two requests (GET, series, history page, study)
-  bars_per_request: 1000             # bars per series load and per history page
-  max_pages_per_tf: 10               # history pages per timeframe and pass (backfill reaches what the plan serves)
+  bars_per_request: 5000             # bars per series load and per history page (TradingView serves up to 5000)
+  max_pages_per_tf: 5                # history pages per timeframe and pass (Premium measured: ~11k bars 15m, 1h, 4h)
   max_requests_per_day: 3000         # rolling 24 h; a pass beyond it is skipped, never queued
   study_warmup_bars: 300             # the oldest loaded bars' study values are dropped (an EMA needs its warm-up)
   poll_interval_s: 900               # `tv-pull follow`: one pass per 15m bar ...

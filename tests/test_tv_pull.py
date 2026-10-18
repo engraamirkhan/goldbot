@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
 import subprocess
 import sys
@@ -21,14 +22,14 @@ import pytest
 from pydantic import SecretStr
 
 from goldbot.config import TvPullSettings, load_settings
-from goldbot.data import tv_pull, tv_wire
+from goldbot.data import tv_catalog, tv_pull, tv_wire
 from goldbot.data.store import Store, asof_join
 from goldbot.webhook.inbox import TABLE, source_of
 
 FIX = Path(__file__).parent / "data" / "tv_pull"
 COOKIE = "sessionid=abcdefgh12345678secret; sessionid_sign=v2:SIGNsecret987654"
 AUTH = "AUTHTOKEN-fixture-abcdef123456"
-LAYOUT_TOKEN = "JWT-fixture-layout-token-xyz"
+CAPTURED = Path(__file__).parent / "fixtures" / "tv"
 T_BACKFILL = pd.Timestamp("2026-10-16T11:55:00Z")
 T_LIVE = pd.Timestamp("2026-10-16T12:01:00Z")
 
@@ -67,6 +68,7 @@ class ReplayNetwork:
         self.gets: list[tuple[str, dict[str, str]]] = []
         self.sent: list[str] = []
         self.sockets: list[ReplaySocket] = []
+        self.urls: list[str] = []
         self.fail_get = fail_get
 
     def get(self, url: str, headers: Mapping[str, str]) -> str:
@@ -78,7 +80,9 @@ class ReplayNetwork:
         return self.http[url]
 
     def open_socket(self, url: str, headers: Mapping[str, str]) -> ReplaySocket:
-        assert url == tv_wire.WS_URL and "Cookie" not in headers      # the socket never carries the cookie
+        assert url in (tv_wire.WS_URL, tv_wire.PRO_WS_URL) and "type=chart" in url
+        assert "Cookie" not in headers                                # the socket never carries the cookie
+        self.urls.append(url)
         s = ReplaySocket(self.script, self.sent)
         self.sockets.append(s)
         return s
@@ -150,6 +154,67 @@ def test_heartbeats_are_echoed(backfilled):
     assert beats == ["~h~1", "~h~2"]
 
 
+# ------------------------------------------------------------------------------------------------- captured frames
+def captured_replies(name: str) -> dict[str, Any]:
+    """A sanitised capture (tests/fixtures/tv, recorded by the local probe against TradingView on 2026-10-18, public
+    STD;RSI only) as a replay script: the server frames that followed each client method."""
+    script: dict[str, Any] = {"hello": [], "replies": {}}
+    current: list[str] | None = None
+    for line in (CAPTURED / name).read_text().splitlines():
+        f = json.loads(line)
+        if f["dir"] == "out":
+            methods = tv_wire.methods_in(f["frame"])
+            if methods:
+                current = []
+                script["replies"].setdefault(methods[0], []).append(current)
+        elif current is not None:
+            current.append(f["frame"])
+    return script
+
+
+def rsi_meta() -> tv_pull.StudyMeta:
+    raw = json.loads((CAPTURED / "study_meta_std_rsi.json").read_text())
+    declared = [i for i in raw["inputs"] if i["id"] not in ("text", "pineId", "pineVersion")]
+    return tv_pull.StudyMeta.build(
+        study_id=raw["pine_id"], name=raw["short"], version=raw["pine_version"],
+        inputs={i["id"]: i.get("defval") for i in declared}, input_types={i["id"]: i["type"] for i in declared},
+        plots=[tv_pull.PlotMeta(**p) for p in raw["plots"]])
+
+
+def test_a_captured_tradingview_session_parses_into_bars_and_study_plots():
+    sock = tv_wire.GuardedSocket(ReplaySocket(captured_replies("ws_auth_oanda_xauusd_60_rsi.jsonl"), []), [])
+    clock = Clock(T_BACKFILL)
+    chart = tv_pull._Chart(sock, tv_pull.Pacer(1.0, clock.monotonic, clock.sleep), clock.monotonic, 30.0)
+    pages = chart.load("OANDA:XAUUSD", "60", 300, None, 1)
+    rsi = chart.study(rsi_meta(), "IL", 1)
+    assert pages == 1 and len(chart.bars) >= 400
+    times = sorted(chart.bars)
+    assert 1.5e9 < times[0] < 2.5e9 and all(b - a >= 3600 for a, b in zip(times, times[1:]))   # open, seconds
+    assert len(set(rsi) & set(chart.bars)) >= 300
+    row = rsi[times[-1]]
+    assert len(row) == 14 and 0.0 <= row[0] <= 100.0                  # RSI plot_0
+    values = [v for r in rsi.values() for v in r]
+    assert any(math.isnan(v) for v in values) and max(abs(v) for v in values if not math.isnan(v)) < 1e99
+
+
+def test_the_layout_page_s_metainfo_string_names_the_script_and_keeps_the_owner_s_inputs():
+    content = json.loads((CAPTURED / "layout_content_anonymised.json").read_text())
+    specs = tv_pull._studies_in(content)
+    assert specs and specs[0].study_id == "PUB;script-1" and specs[0].version == "2.0"
+    assert "in_0" in specs[0].inputs and "pineId" not in specs[0].inputs
+    page = "<script>initData.content = " + json.dumps(content) + ";</script>"
+    assert tv_pull._layout_content(page) == content
+
+
+def test_the_daily_series_keeps_only_daily_bars_after_its_yearly_and_monthly_start():
+    day = 86400
+    yearly = [-1_700_000_000 + 365 * day * k for k in range(3)]            # before 1921
+    monthly = [-1_500_000_000 + day * k for k in (0, 2)] + [-1_500_000_000 + 30 * day * k for k in range(1, 6)]
+    daily = [1_700_000_000 + day * k for k in range(5)] + [1_700_000_000 + 9 * day]   # a long weekend stays
+    assert tv_pull._drop_sparse_start(yearly + monthly + daily) == daily
+    assert tv_pull._drop_sparse_start(daily) == daily
+
+
 # ------------------------------------------------------------------------------------------------- read-only
 def test_the_socket_refuses_any_method_that_is_not_a_read_only_chart_method():
     sent: list[str] = []
@@ -189,11 +254,11 @@ def test_closed_bars_land_in_tv_indicators_and_the_forming_bar_is_dropped(backfi
     assert (tf.tf, tf.bars_received, tf.dropped_forming, tf.new_bars) == ("15", 10, 1, 9)
 
 
-def test_rows_keep_the_inbox_long_row_schema_plus_origin(backfilled):
+def test_rows_keep_the_inbox_long_row_schema_plus_origin_and_meta_hash(backfilled):
     tmp_path, *_ = backfilled
     cols = set(chart_rows(tmp_path).columns) - {"source", "symbol", "year", "month"}
     assert cols == {"ts_utc", "bar_time", "available_utc", "fired_at", "received_at", "indicator", "version", "tf",
-                    "price", "intrabar", "plot", "value", "origin"}
+                    "price", "intrabar", "plot", "value", "origin", "meta_hash"}
 
 
 def test_available_utc_is_receipt_for_live_bars_and_close_plus_latency_for_history(backfilled):
@@ -250,7 +315,11 @@ def test_study_metadata_is_persisted_and_keyed_by_its_hash(backfilled):
     metas = tv_pull.PullLog(tmp_path / "tv.db").metas()
     assert len(metas) == 1
     m = metas[0]
-    assert len(m.meta_hash8) == 8 and study_rows(tmp_path)["version"].iloc[0] == m.meta_hash8
+    rows = study_rows(tmp_path)
+    assert len(m.meta_hash8) == 8 and set(rows["meta_hash"]) == {m.meta_hash8} and set(rows["version"]) == {"7.0"}
+    # the catalog (lane A) derives the same hash from the persisted metadata: one feature id for rows and catalog
+    assert tv_catalog.StudyMeta.from_metainfo(m.metainfo, tf="15").meta_hash == m.meta_hash8
+    assert m.history_recomputed
     assert m.study_id == "PUB;fixture123" and m.name == "K-Indi" and m.version == "7.0"
     assert m.inputs == {"in_0": 21, "in_1": True}                      # the layout's saved inputs, not the defaults
     assert [(p.id, p.title, p.type) for p in m.plots] == [("plot_0", "EMA", "line"), ("plot_1", "RSI", "line"),
@@ -260,7 +329,7 @@ def test_study_metadata_is_persisted_and_keyed_by_its_hash(backfilled):
 
 
 def test_the_same_study_with_other_inputs_is_a_different_series():
-    base: dict[str, Any] = dict(study_id="PUB;x", name="K", version="1", plots=[], colourers={})
+    base: dict[str, Any] = dict(study_id="PUB;x", name="K", version="1", plots=[], input_types={"in_0": "integer"})
     a = tv_pull.StudyMeta.build(**base, inputs={"in_0": 21})
     b = tv_pull.StudyMeta.build(**base, inputs={"in_0": 50})
     assert a.meta_hash8 != b.meta_hash8 and a.meta_hash8 == tv_pull.StudyMeta.build(**base, inputs={"in_0": 21}).meta_hash8
@@ -289,6 +358,17 @@ def test_requests_are_spaced_by_the_minimum_interval(backfilled):
     _, _, clock, rep = backfilled
     assert rep.requests >= 8 and len(clock.sleeps) >= rep.requests - 1
     assert all(s == pytest.approx(5.0) for s in clock.sleeps)
+
+
+def test_a_paid_plan_reads_from_the_prodata_host_and_a_free_one_from_data(tmp_path):
+    free = ReplayNetwork("backfill_15m.json")
+    run(tmp_path / "free", free, Clock(T_BACKFILL))
+    http = dict(free.script["http"])
+    http["https://www.tradingview.com/"] = http["https://www.tradingview.com/"].replace(
+        '"username"', '"pro_plan":"pro_premium","username"')
+    paid = ReplayNetwork("backfill_15m.json", http=http)
+    assert run(tmp_path / "paid", paid, Clock(T_BACKFILL)).ok
+    assert free.urls == [tv_wire.WS_URL] and paid.urls == [tv_wire.PRO_WS_URL]
 
 
 def test_history_paging_stops_at_the_page_cap(tmp_path):
@@ -386,7 +466,7 @@ class LeakyNetwork(ReplayNetwork):
     """Its socket fails with a message quoting every secret the pass holds by then."""
 
     def open_socket(self, url: str, headers: Mapping[str, str]) -> ReplaySocket:
-        raise ConnectionError(f"upstream echoed {COOKIE} auth={AUTH} jwt={LAYOUT_TOKEN}")
+        raise ConnectionError(f"upstream echoed {COOKIE} auth={AUTH} user=4242")
 
 
 def test_the_cookie_and_tokens_never_appear_in_reports_logs_or_files(tmp_path, caplog):
@@ -399,7 +479,7 @@ def test_the_cookie_and_tokens_never_appear_in_reports_logs_or_files(tmp_path, c
     text = "".join(r.model_dump_json() for r in reps) + caplog.text
     for f in [*tmp_path.rglob("*.db"), *tmp_path.rglob("*.db-wal"), *tmp_path.rglob("*.parquet")]:
         text += f.read_bytes().decode("latin-1")
-    for secret in ("abcdefgh12345678secret", "v2:SIGNsecret987654", AUTH, LAYOUT_TOKEN):
+    for secret in ("abcdefgh12345678secret", "v2:SIGNsecret987654", AUTH, "user=4242"):
         assert secret not in text
     assert "[redacted]" in reps[0].reason and "[redacted]" in reps[1].reason
 

@@ -617,8 +617,8 @@ class TvPullSettings(_Section):
     discover_every_s: float = Field(default=21600, gt=0)
     max_studies: int = Field(default=20, gt=0)
     min_interval_s: float = Field(default=5.0, ge=1.0)            # between two requests, whatever kind
-    bars_per_request: int = Field(default=1000, gt=0, le=5000)
-    max_pages_per_tf: int = Field(default=10, ge=0)               # history pages per timeframe and pass
+    bars_per_request: int = Field(default=5000, gt=0, le=5000)
+    max_pages_per_tf: int = Field(default=5, ge=0)                # history pages per timeframe and pass
     max_requests_per_day: int = Field(default=3000, gt=0)         # rolling 24 h; a pass is skipped beyond it
     study_warmup_bars: int = Field(default=300, ge=0)             # oldest loaded bars whose study values are not kept
     poll_interval_s: float = Field(default=900, gt=0)

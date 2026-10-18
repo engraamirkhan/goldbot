@@ -46,3 +46,6 @@ owner_history_*
 
 # performance reports (python -m goldbot.ops.run perf-report, default --out reports): account P&L, never in this public repo
 /reports/
+
+# pytest-testmon database (local iteration only)
+.testmondata

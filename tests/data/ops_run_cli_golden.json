@@ -302,6 +302,9 @@
   "goldbot/ops/linux/systemd/goldbot-telegram.service": [
    "telegram"
   ],
+  "goldbot/ops/linux/systemd/goldbot-tv-pull.service": [
+   "tv-pull follow --state /opt/goldbot/state"
+  ],
   "goldbot/ops/linux/systemd/goldbot-webhook.service": [
    "webhook"
   ],

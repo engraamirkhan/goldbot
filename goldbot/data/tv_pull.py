@@ -9,16 +9,22 @@ The only owner step is storing the two browser cookies (`python -m goldbot.ops.a
 and `... set tradingview-sessionid-sign`, hidden prompts) and switching `tv_pull.enabled` on in settings.local.yaml.
 Everything else is automatic:
 
-* Discovery. The saved layouts (`/my-charts/`) are read, and every Pine study on them with its saved inputs
-  (charts-storage `sources`) becomes a `StudySpec`; re-read every `discover_every_s`, cached in the pull log between.
+* Discovery. The saved layouts (`/my-charts/`) are listed and each layout's chart page read: its `initData.content`
+  holds every study with the owner's input values, the script id in the metaInfo string (`Script$PUB;<id>@...[v.2.0]`);
+  `/chart-token/` + charts-storage is a fallback only (it answered 403 to the probe). Re-read every
+  `discover_every_s`, cached in the pull log between.
 * Metadata. The script's metaInfo (pine-facade) names each plot (`plots[].id`, the style title, the plot type and a
-  colourer's target). It is kept in `tv_study_meta` keyed by `meta_hash8` (sha256 of the study id, version, inputs and
-  plots), so a catalog derives `tv_{study}_{meta_hash8}_{tf}_{plot_id}` with no dashboard naming. The script's compiled
-  source (`ilTemplate`, the author's work) is sent to TradingView to compute the study and never stored.
+  colourer's target). It is kept in `tv_study_meta` with the catalog's view of it (`metainfo`) and the catalog's
+  `meta_hash` (goldbot/data/tv_catalog.py: study, version, input values), so the feature id
+  `tv_{study}_{meta_hash}_{tf}_{plot_id}` needs no dashboard naming. The script's compiled source (`ilTemplate`, the
+  author's work) is sent to TradingView to compute the study and never stored.
 * Rows. "Output lands in the same store the plots reader uses": `tv_indicators`, the `inbox.long_rows` schema plus
-  `origin`; bars as indicator `chart` (version = the chart symbol, plots open/high/low/close/volume), each study as
-  indicator = its short name, version = `meta_hash8`, plot = the plot id. Closed bars only: a bar still forming at
-  receipt is dropped, a bar opening after now fails the pass (wrong clock), nothing written for that timeframe.
+  `origin` and `meta_hash`; bars as indicator `chart` (version = the chart symbol, plots open/high/low/close/volume,
+  `meta_hash` ""), each study as indicator = its short name, version = the script version, plot = the plot id
+  (TradingView's na, 1e100, is NaN; a colourer's value is a packed colour int). Closed bars only: a bar still forming
+  at receipt is dropped, a bar opening after now fails the pass (wrong clock), nothing written for that timeframe;
+  the 1D series' leading yearly bars (before 1921) are dropped. Study values over a loaded window are recomputed by
+  TradingView (`StudyMeta.history_recomputed`): only `pull_live` rows were seen as they were.
 * "Every join to bars via asof_join on available_utc". `pull_live` (received within `live_max_lag_s` of the close):
   `available_utc` = the receipt time. `pull_history` (backfill): bar close + the p95 latency of the live bars over
   the last 30 days (`history_latency_s`), `history_latency_default_s` until `min_live_samples` exist. First receipt
@@ -38,7 +44,6 @@ Everything else is automatic:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import math
@@ -77,6 +82,7 @@ from goldbot.data.tv_wire import (
     secret_parts,
 )
 from goldbot.db.connection import connect, write
+from goldbot.ops.tv_pull_health import DB_FILE as TV_AUTH_DB
 from goldbot.ops.tv_pull_health import record_expired, record_ok
 from goldbot.webhook.app import tf_seconds
 from goldbot.webhook.inbox import TABLE, safe_symbol, source_of
@@ -89,11 +95,13 @@ CHART = "chart"
 OHLCV = ("open", "high", "low", "close", "volume")
 NA_ABOVE = 1e99                         # TradingView sends na as 1e100
 STUDY_TYPE = "Script@tv-scripting-101!"
+STRATEGY_TYPE = "StrategyScript@tv-scripting-101!"
+SERIES = "sds_1"
+SPARSE_START_S = 14 * 86400          # bars before the last gap this long are dropped (1D: yearly/monthly early bars)
 STORAGE = "https://charts-storage.tradingview.com/charts-storage/get/layout"
 PINE = "https://pine-facade.tradingview.com/pine-facade/translate"
 LATENCY_WINDOW = pd.Timedelta(days=30)
 _ERRORS = {"critical_error", "protocol_error", "symbol_error", "series_error", "study_error"}
-_INPUT = re.compile(r"in_\d+")
 _REFUSED = re.compile(r"unauthori[sz]ed|forbidden|auth[_ ]?token|not[_ ]logged|sign[_ ]?in required", re.I)
 
 
@@ -123,23 +131,40 @@ class PlotMeta(FrozenRecord):
 
 
 class StudyMeta(FrozenRecord):
-    """What the study is, from its metaInfo and the layout's saved inputs; `meta_hash8` keys its rows and catalog."""
+    """What the study is, from its metaInfo and the layout's saved inputs. `metainfo` is the catalog's view of it
+    (goldbot/data/tv_catalog.py `StudyMeta.from_metainfo`), and `meta_hash8` is the catalog's `meta_hash` of it, so the
+    rows, this record and the feature id `tv_{study}_{meta_hash}_{tf}_{plot_id}` agree."""
 
-    study_id: str                         # pine id, e.g. PUB;abc
+    study_id: str                         # pine id, e.g. PUB;abc or STD;RSI
     name: str
     version: str                          # the script's own version
-    inputs: dict[str, Any]
+    inputs: dict[str, Any]                # every declared input but the source and ids: the layout's value, else default
+    input_types: dict[str, str]
+    input_fake: dict[str, bool] = Field(default_factory=dict)
+    colour_index: dict[str, int] = Field(default_factory=dict)   # colour inputs are sent as their input index
     plots: list[PlotMeta]
-    colourers: dict[str, str]             # colourer plot id -> the plot it colours
+    colourers: dict[str, str]             # colourer plot id -> the plot it colours (its values are packed colour ints)
+    is_strategy: bool = False
+    # every value of a loaded window is recomputed by TradingView over the history (repaint risk): only a bar first
+    # received live (origin pull_live) was seen as it was
+    history_recomputed: bool = True
+    metainfo: dict[str, Any]
     meta_hash8: str
 
     @classmethod
-    def build(cls, *, study_id: str, name: str, version: str, inputs: dict[str, Any], plots: list[PlotMeta],
-              colourers: dict[str, str]) -> StudyMeta:
-        body = {"study_id": study_id, "version": version, "inputs": inputs, "plots": [p.model_dump() for p in plots]}
-        digest = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:8]
-        return cls(study_id=study_id, name=name, version=version, inputs=inputs, plots=plots, colourers=colourers,
-                   meta_hash8=digest)
+    def build(cls, *, study_id: str, name: str, version: str, inputs: dict[str, Any], input_types: dict[str, str],
+              plots: list[PlotMeta], input_fake: dict[str, bool] | None = None,
+              colour_index: dict[str, int] | None = None, is_strategy: bool = False) -> StudyMeta:
+        from goldbot.data.tv_catalog import StudyMeta as CatalogMeta
+        metainfo = {"id": study_id, "shortDescription": name, "pine": {"version": version},
+                    "plots": [{k: v for k, v in p.model_dump().items() if k != "title" and v is not None} for p in plots],
+                    "styles": {p.id: {"title": p.title} for p in plots},
+                    "inputs": [{"id": k, "value": v, "type": input_types.get(k, "")} for k, v in inputs.items()]}
+        return cls(study_id=study_id, name=name, version=version, inputs=inputs, input_types=input_types,
+                   input_fake=input_fake or {}, colour_index=colour_index or {}, plots=plots,
+                   colourers={p.id: p.target for p in plots if "colorer" in p.type and p.target},
+                   is_strategy=is_strategy, metainfo=metainfo,
+                   meta_hash8=CatalogMeta.from_metainfo(metainfo, tf="15").meta_hash)
 
 
 class StudySpec(FrozenRecord):
@@ -205,7 +230,7 @@ class FollowState(Record):
     """In-memory state of a `follow` loop: compiled study sources (never written anywhere) and the cookie that failed
     sign-in, so a newly stored cookie is tried at once instead of after the expiry backoff."""
 
-    compiled: dict[str, tuple[StudyMeta, str, dict[str, str], float]] = Field(default_factory=dict)
+    compiled: dict[str, tuple[StudyMeta, str, float]] = Field(default_factory=dict)
     failed_cookie: str | None = None
 
 
@@ -305,7 +330,10 @@ class PullLog:
 
     def auth_state(self) -> str | None:
         """The sign-in state goldbot/ops/tv_pull_health.py keeps in `tv_auth` ("ok" | "expired"; None: never ran)."""
-        conn = self._conn()
+        path = self.path.parent / TV_AUTH_DB
+        if not path.exists():
+            return None
+        conn = connect(path, "core")
         try:
             if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'tv_auth'").fetchone() is None:
                 return None
@@ -354,7 +382,12 @@ class Pacer:
 
 
 # ------------------------------------------------------------------------------------------------- pages
-def _auth(net: ReadOnlyNetwork, pacer: Pacer, hint: str) -> tuple[str, str | None]:
+_SCRIPT_ID = re.compile(r"^\w+\$([A-Z]+;[^@]+)@[\w-]+(?:\[v\.([\d.]+)\])?")
+_SKIP_INPUTS = ("text", "pineId", "pineVersion")
+
+
+def _auth(net: ReadOnlyNetwork, pacer: Pacer, hint: str) -> tuple[str, str | None, str]:
+    """(websocket auth token, account id, plan: "" free, else e.g. "pro_premium") from the signed-in home page."""
     pacer.wait()
     page = net.get(SITE + "/")
     m = re.search(r'"auth_token"\s*:\s*"([^"]+)"', page)
@@ -362,24 +395,65 @@ def _auth(net: ReadOnlyNetwork, pacer: Pacer, hint: str) -> tuple[str, str | Non
         raise TvAuthError(f"TradingView did not accept the session cookie (expired or signed out): store fresh "
                           f"ones with {hint}")
     net.add_secret(m.group(1))
-    uid = re.search(r'"id"\s*:\s*(\d+)', page)
-    return m.group(1), uid.group(1) if uid else None
+    uid = re.search(r'"user"\s*:\s*\{[^{}]*?"id"\s*:\s*(\d+)', page) or \
+        re.search(r'"id"\s*:\s*(\d+)\s*,\s*"username"', page) or re.search(r'"id"\s*:\s*(\d+)', page)
+    if uid:
+        net.add_secret(uid.group(1), min_len=1)            # the account id is an identifier: never in a report
+    plan = re.search(r'"pro_plan"\s*:\s*"([^"]*)"', page)
+    return m.group(1), uid.group(1) if uid else None, plan.group(1) if plan else ""
 
 
-def _studies_in(obj: Any) -> Iterator[StudySpec]:
-    """Pine studies in a layout's saved sources: any object whose `inputs` carry a `pineId`."""
+def _walk(obj: Any) -> Iterator[dict[str, Any]]:
     if isinstance(obj, dict):
-        inputs = obj.get("inputs")
-        if isinstance(inputs, dict) and isinstance(inputs.get("pineId"), str):
-            yield StudySpec(study_id=inputs["pineId"], version=str(inputs.get("pineVersion") or "last"),
-                            inputs={k: v for k, v in inputs.items() if _INPUT.fullmatch(k)},
-                            name=obj.get("shortDescription") or obj.get("description"))
-            return
+        yield obj
         for v in obj.values():
-            yield from _studies_in(v)
+            yield from _walk(v)
     elif isinstance(obj, list):
         for v in obj:
-            yield from _studies_in(v)
+            yield from _walk(v)
+    elif isinstance(obj, str) and obj[:1] in "{[" and "pineId" in obj:
+        try:
+            yield from _walk(json.loads(obj))
+        except ValueError:
+            pass
+
+
+def _studies_in(obj: Any) -> list[StudySpec]:
+    """Pine studies in a saved layout. The chart page's `initData.content` keeps each study's script id in its
+    metaInfo STRING (`Script$PUB;<id>@tv-scripting-101[v.2.0]`) with `state.inputs.pineId` empty, and the inputs there
+    are the owner's settings; charts-storage keeps it in `inputs.pineId` (verified by the local probe, 2026-10-18)."""
+    out: list[StudySpec] = []
+    for d in _walk(obj):
+        st = d.get("state")
+        state: dict[str, Any] = st if isinstance(st, dict) else d
+        raw_inputs = state.get("inputs")
+        inputs: dict[str, Any] = raw_inputs if isinstance(raw_inputs, dict) else {}
+        mi_raw = d.get("metaInfo")
+        mi: dict[str, Any] = mi_raw if isinstance(mi_raw, dict) else {}
+        if isinstance(mi_raw, str):
+            ms = _SCRIPT_ID.match(mi_raw)
+            if ms:
+                mi = {"scriptIdPart": ms.group(1), "pine": {"version": ms.group(2) or "last"}}
+        pid = inputs.get("pineId") or mi.get("scriptIdPart") or d.get("pineId")
+        if not isinstance(pid, str) or ";" not in pid:
+            continue
+        ver = str(inputs.get("pineVersion") or (mi.get("pine") or {}).get("version") or "last")
+        out.append(StudySpec(study_id=pid, version=ver,
+                             inputs={k: v for k, v in inputs.items() if k not in _SKIP_INPUTS},
+                             name=str(mi.get("shortDescription") or mi.get("description") or "") or None))
+    return out
+
+
+def _layout_content(html: str) -> Any:
+    """The saved layout the chart page embeds: `initData.content = {...};` (JSON)."""
+    m = re.search(r"initData\.content\s*=\s*", html)
+    if not m:
+        return None
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(html, m.end())
+    except ValueError:
+        return None
+    return obj
 
 
 def _spec_key(s: StudySpec) -> str:
@@ -387,34 +461,40 @@ def _spec_key(s: StudySpec) -> str:
 
 
 def discover(net: ReadOnlyNetwork, pacer: Pacer, user_id: str | None, max_studies: int) -> list[StudySpec]:
-    """Every Pine study on the owner's saved layouts, with the layout's inputs (read-only GETs)."""
+    """Every Pine study on the owner's saved layouts with the layout's inputs (read-only GETs): the layout list, then
+    each layout's chart page; `/chart-token/` + charts-storage only when a page shows none (it answered 403 in the
+    probe, so it is a fallback)."""
     pacer.wait()
-    listing = json.loads(net.get(SITE + "/my-charts/"))
+    listing = json.loads(net.get(SITE + "/my-charts/", xhr=True))
     layouts = listing if isinstance(listing, list) else (listing.get("results") or listing.get("charts") or [])
     found: dict[str, StudySpec] = {}
-    if user_id is None:
-        log.info("tv pull: no user id on the signed-in page; layouts not read")
-        return []
     for lay in layouts:
-        lid = str(lay.get("image_url") or "") if isinstance(lay, dict) else ""
+        lid = str(lay.get("image_url") or lay.get("short_url") or lay.get("id") or "") if isinstance(lay, dict) else ""
         if not lid:
             continue
         pacer.wait()
-        token = json.loads(net.get(f"{SITE}/chart-token/?image_url={quote(lid)}&user_id={user_id}")).get("token")
-        if not token:
-            continue
-        net.add_secret(str(token))
-        pacer.wait()
-        sources = json.loads(net.get(f"{STORAGE}/{quote(lid)}/sources?chart_id=_shared&jwt={token}"))
-        for spec in _studies_in(sources):
+        content = _layout_content(net.get(f"{SITE}/chart/{quote(lid)}/"))
+        specs = _studies_in(content) if content is not None else []
+        if not specs and user_id is not None:
+            pacer.wait()
+            token = json.loads(net.get(f"{SITE}/chart-token/?image_url={quote(lid)}&user_id={user_id}")).get("token")
+            if token:
+                net.add_secret(str(token))
+                pacer.wait()
+                specs = _studies_in(json.loads(net.get(f"{STORAGE}/{quote(lid)}/sources?chart_id=_shared&jwt={token}")))
+        for spec in specs:
             found.setdefault(_spec_key(spec), spec)
         if len(found) >= max_studies:
             break
     return list(found.values())[:max_studies]
 
 
-def fetch_meta(net: ReadOnlyNetwork, pacer: Pacer, spec: StudySpec) -> tuple[StudyMeta, str, dict[str, str]]:
-    """(metadata, compiled source, input types) of one study. The compiled source is the author's: memory only."""
+def _unwrap(v: Any) -> Any:
+    return v["v"] if isinstance(v, dict) and "v" in v else v           # layout state sometimes stores {v: ...}
+
+
+def fetch_meta(net: ReadOnlyNetwork, pacer: Pacer, spec: StudySpec) -> tuple[StudyMeta, str]:
+    """(metadata, compiled source) of one study. The compiled source is the author's work: memory only."""
     pacer.wait()
     body = json.loads(net.get(f"{PINE}/{quote(spec.study_id, safe='')}/{quote(spec.version, safe='')}"))
     res = body.get("result") if isinstance(body, dict) else None
@@ -423,24 +503,28 @@ def fetch_meta(net: ReadOnlyNetwork, pacer: Pacer, spec: StudySpec) -> tuple[Stu
         raise TvPullError(f"no compiled source for {spec.study_id} (access revoked or the script was removed)")
     il: str = res["ilTemplate"]
     meta = res.get("metaInfo") or {}
-    declared = [i for i in meta.get("inputs") or [] if isinstance(i, dict) and _INPUT.fullmatch(str(i.get("id")))]
-    defaults = {str(i["id"]): i.get("defval") for i in declared}
-    types = {str(i["id"]): str(i.get("type") or "") for i in declared}
-    inputs = {**defaults, **{k: v for k, v in spec.inputs.items() if k in defaults}}
+    raw = [i for i in meta.get("inputs") or [] if isinstance(i, dict) and i.get("id")]
+    declared = [(n, i) for n, i in enumerate(raw) if str(i["id"]) not in _SKIP_INPUTS]
+    inputs = {str(i["id"]): _unwrap(spec.inputs.get(str(i["id"]), i.get("defval"))) for _, i in declared}
     styles = meta.get("styles") or {}
     plots = [PlotMeta(id=str(p["id"]), title=str((styles.get(p["id"]) or {}).get("title") or p["id"]),
                       type=str(p.get("type") or ""), target=p.get("target"))
              for p in meta.get("plots") or [] if isinstance(p, dict) and p.get("id")]
-    colourers = {p.id: p.target for p in plots if "colorer" in p.type and p.target}
-    name = str(meta.get("shortDescription") or meta.get("description") or spec.name or spec.study_id)
-    version = str((meta.get("pine") or {}).get("version") or spec.version)
-    return (StudyMeta.build(study_id=spec.study_id, name=name, version=version, inputs=inputs, plots=plots,
-                            colourers=colourers), il, types)
+    return StudyMeta.build(
+        study_id=str(meta.get("scriptIdPart") or spec.study_id),
+        name=str(meta.get("shortDescription") or meta.get("description") or spec.name or spec.study_id),
+        version=str((meta.get("pine") or {}).get("version") or spec.version), inputs=inputs,
+        input_types={str(i["id"]): str(i.get("type") or "") for _, i in declared},
+        input_fake={str(i["id"]): bool(i.get("isFake")) for _, i in declared},
+        colour_index={str(i["id"]): n for n, i in declared if i.get("type") == "color"},
+        plots=plots, is_strategy=bool(meta.get("isTVScriptStrategy")) or "strategy" in str(meta.get("id", "")).lower(),
+    ), il
 
 
 # ------------------------------------------------------------------------------------------------- the chart
 class _Chart:
-    """One chart session on the socket: a series, its history pages and its studies."""
+    """One chart session on the socket: series `sds_1` on symbol `sds_sym_1`, its history pages and its studies
+    `st<k>` (the ids and sequence the probe verified against TradingView, 2026-10-18)."""
 
     def __init__(self, sock: GuardedSocket, pacer: Pacer, monotonic: Callable[[], float], timeout_s: float):
         self.sock, self.pacer, self._mono, self.timeout_s = sock, pacer, monotonic, timeout_s
@@ -483,7 +567,7 @@ class _Chart:
             for sid, data in p[1].items():
                 if not isinstance(data, dict):
                     continue
-                if sid == "$prices":
+                if sid == SERIES:
                     for row in data.get("s") or []:
                         v = list(row.get("v") or [])
                         if v:
@@ -494,7 +578,7 @@ class _Chart:
                         if v:
                             self.studies[sid][int(v[0])] = [_num(x) for x in v[1:]]
         elif m == "series_completed":
-            self.done.add("$prices")
+            self.done.add(SERIES)
         elif m == "study_completed" and len(p) > 1:
             self.done.add(str(p[1]))
 
@@ -502,33 +586,37 @@ class _Chart:
         """The newest `n` bars, then history pages until the store's newest bar is reached (`stop_at`), history
         ends, or `max_pages`. Returns the pages requested."""
         self._send("chart_create_session", [self.cs, ""])
-        self._send("switch_timezone", [self.cs, "Etc/UTC"])
-        self._send("resolve_symbol", [self.cs, "ser_1", "=" + json.dumps({"adjustment": "splits", "symbol": symbol})])
+        self._send("resolve_symbol", [self.cs, "sds_sym_1",
+                                      "=" + json.dumps({"symbol": symbol, "adjustment": "splits", "session": "regular"})])
         self.pacer.wait()
-        self._send("create_series", [self.cs, "$prices", "s1", "ser_1", tf, n, ""])
-        self._pump("$prices", f"create_series {symbol} {tf}")
+        self._send("create_series", [self.cs, SERIES, "s1", "sds_sym_1", tf, n, ""])
+        self._pump(SERIES, f"create_series {symbol} {tf}")
         pages = 0
         while pages < max_pages and self.bars:
             if stop_at is not None and min(self.bars) <= stop_at:
                 break
             before = len(self.bars)
-            self.done.discard("$prices")
+            self.done.discard(SERIES)
             self.pacer.wait()
-            self._send("request_more_data", [self.cs, "$prices", n])
-            self._pump("$prices", f"request_more_data {symbol} {tf}")
+            self._send("request_more_data", [self.cs, SERIES, n])
+            self._pump(SERIES, f"request_more_data {symbol} {tf}")
             pages += 1
             if len(self.bars) == before:
                 break                                       # the start of the history this plan serves
         return pages
 
-    def study(self, meta: StudyMeta, il: str, types: dict[str, str], idx: int) -> dict[int, list[float]]:
-        sid = f"st_{idx}"
+    def study(self, meta: StudyMeta, il: str, idx: int) -> dict[int, list[float]]:
+        sid = f"st{idx}"
         self.studies[sid] = {}
         inputs: dict[str, Any] = {"text": il, "pineId": meta.study_id, "pineVersion": meta.version}
-        inputs.update({k: {"v": v, "f": True, "t": types.get(k, "")} for k, v in meta.inputs.items()})
+        for k, v in meta.inputs.items():
+            value = meta.colour_index[k] if k in meta.colour_index else v
+            inputs[k] = {"v": value, "f": meta.input_fake.get(k, False), "t": meta.input_types.get(k, "")}
         self.pacer.wait()
-        self._send("create_study", [self.cs, sid, "st1", "$prices", STUDY_TYPE, inputs])
+        kind = STRATEGY_TYPE if meta.is_strategy else STUDY_TYPE
+        self._send("create_study", [self.cs, sid, "st1", SERIES, kind, inputs])
         self._pump(sid, f"create_study {meta.name}")
+        self._send("remove_study", [self.cs, sid])
         return self.studies[sid]
 
     def close(self) -> None:
@@ -545,10 +633,22 @@ def _read(store: Store, source: str, symbol: str, start: pd.Timestamp | None = N
     return store.read(TABLE, source=source, symbol=symbol, start=start)
 
 
-def _pulled(df: pd.DataFrame, tf: str) -> pd.DataFrame:
+def _pulled(df: pd.DataFrame, tf: str, meta_hash: str = "") -> pd.DataFrame:
+    """The pulled rows of one timeframe and input set (`meta_hash`; "" for the bars)."""
     if df.empty or "origin" not in df.columns:
         return df.iloc[0:0]
-    return df[(df["tf"].astype(str) == tf) & df["origin"].isin(ORIGINS)]
+    hashes = df["meta_hash"].fillna("").astype(str) if "meta_hash" in df.columns else pd.Series("", index=df.index)
+    return df[(df["tf"].astype(str) == tf) & df["origin"].isin(ORIGINS) & hashes.eq(meta_hash)]
+
+
+def _drop_sparse_start(times: list[int]) -> list[int]:
+    """Keep only the bars after the last gap longer than SPARSE_START_S. TradingView's 1D gold series starts with
+    yearly bars before 1921, monthly ones to 1970 and a patchy 1997-98 (real pass, 2026-10-18): daily bars are kept
+    from 1998-10-14.
+    Gold has no two-week gap in its real bars at any timeframe, so the cost is only history before an outage that
+    long, never a wrong bar."""
+    gaps = [i for i in range(len(times) - 1) if times[i + 1] - times[i] > SPARSE_START_S]
+    return times[gaps[-1] + 1:] if gaps else times
 
 
 def history_latency_s(store: Store, cfg: TvPullSettings, *, now: pd.Timestamp) -> tuple[float, bool]:
@@ -578,7 +678,8 @@ class _Written(FrozenRecord):
     rows: int
 
 
-def _write(store: Store, *, indicator: str, version: str, symbol: str, tf: str, values: dict[int, list[float]],
+def _write(store: Store, *, indicator: str, version: str, meta_hash: str, symbol: str, tf: str,
+           values: dict[int, list[float]],
            names: Sequence[str], closes: dict[int, float], received: pd.Timestamp, cfg: TvPullSettings,
            latency_s: float) -> _Written:
     """Append the bars of `values` not yet stored (first receipt wins) and count the stored ones that changed."""
@@ -587,7 +688,7 @@ def _write(store: Store, *, indicator: str, version: str, symbol: str, tf: str, 
     source = source_of(indicator, version)
     times = sorted(values)
     start = pd.Timestamp(times[0], unit="s", tz="UTC")
-    held = _pulled(_read(store, source, symbol, start), tf)
+    held = _pulled(_read(store, source, symbol, start), tf, meta_hash)
     mismatched = 0
     stored: set[int] = set()
     if not held.empty:
@@ -610,7 +711,7 @@ def _write(store: Store, *, indicator: str, version: str, symbol: str, tf: str, 
     base = pd.DataFrame({
         "ts_utc": bar, "bar_time": bar, "available_utc": available, "fired_at": close, "received_at": received, "indicator": indicator, "version": version, "tf": tf,
         "price": [closes.get(t, math.nan) for t in new], "intrabar": False,
-        "origin": np.where(live, ORIGIN_LIVE, ORIGIN_HISTORY)})
+        "origin": np.where(live, ORIGIN_LIVE, ORIGIN_HISTORY), "meta_hash": meta_hash})
     frames = []
     for k, name in enumerate(names):
         frames.append(base.assign(plot=name, value=[values[t][k] if k < len(values[t]) else math.nan for t in new]))
@@ -646,36 +747,36 @@ def _specs(cfg: TvPullSettings, net: ReadOnlyNetwork, pacer: Pacer, plog: PullLo
 
 
 def _compiled(net: ReadOnlyNetwork, pacer: Pacer, spec: StudySpec, cfg: TvPullSettings, state: FollowState | None,
-              mono: float) -> tuple[StudyMeta, str, dict[str, str]]:
+              mono: float) -> tuple[StudyMeta, str]:
     key = _spec_key(spec)
-    if state is not None and key in state.compiled and mono - state.compiled[key][3] < cfg.discover_every_s:
-        meta, il, types, _ = state.compiled[key]
-        return meta, il, types
-    meta, il, types = fetch_meta(net, pacer, spec)
+    if state is not None and key in state.compiled and mono - state.compiled[key][2] < cfg.discover_every_s:
+        meta, il, _ = state.compiled[key]
+        return meta, il
+    meta, il = fetch_meta(net, pacer, spec)
     if state is not None:
-        state.compiled = {**state.compiled, key: (meta, il, types, mono)}
-    return meta, il, types
+        state.compiled = {**state.compiled, key: (meta, il, mono)}
+    return meta, il
 
 
 def _pass(cfg: TvPullSettings, *, store: Store, plog: PullLog, net: ReadOnlyNetwork, pacer: Pacer,
           now: Callable[[], pd.Timestamp], monotonic: Callable[[], float], started: pd.Timestamp, hint: str,
           state: FollowState | None, extra: Sequence[StudySpec], timeframes: Sequence[str]) -> PassReport:
-    token, uid = _auth(net, pacer, hint)
+    token, uid, plan = _auth(net, pacer, hint)
     studies = []
     unavailable: list[str] = []
     for spec in _specs(cfg, net, pacer, plog, uid, started, extra):
         try:
-            meta, il, types = _compiled(net, pacer, spec, cfg, state, monotonic())
+            meta, il = _compiled(net, pacer, spec, cfg, state, monotonic())
         except (TvAuthError, ReadOnlyViolation):
             raise
         except (TvPullError, ValueError, KeyError) as exc:   # one revoked or removed script never stops the others
             unavailable.append(f"{spec.study_id}: {redact(str(exc), net.secrets)[:120]}")
             continue
         plog.save_meta(meta, _utc(now()))
-        studies.append((meta, il, types))
+        studies.append((meta, il))
     latency, measured = history_latency_s(store, cfg, now=started)
     per_tf: list[TfReport] = []
-    sock = net.open_socket()
+    sock = net.open_socket(pro=bool(plan))                  # a paid plan's depth is on prodata
     try:
         sock.send(encode("set_auth_token", [token]))
         for chart_sym, store_sym in cfg.symbols.items():
@@ -688,14 +789,14 @@ def _pass(cfg: TvPullSettings, *, store: Store, plog: PullLog, net: ReadOnlyNetw
     finally:
         sock.close()
     return PassReport(ok=True, started_utc=started, finished_utc=_utc(now()), requests=pacer.count,
-                      studies=[f"{m.name}@{m.meta_hash8}" for m, _, _ in studies], unavailable=unavailable,
+                      studies=[f"{m.name}@{m.meta_hash8}" for m, _ in studies], unavailable=unavailable,
                       per_tf=per_tf,
                       history_latency_s=latency, history_latency_measured=measured)
 
 
 def _pull_tf(cfg: TvPullSettings, *, store: Store, plog: PullLog, sock: GuardedSocket, pacer: Pacer,
              now: Callable[[], pd.Timestamp], monotonic: Callable[[], float], started: pd.Timestamp, chart_sym: str,
-             symbol: str, tf: str, studies: list[tuple[StudyMeta, str, dict[str, str]]],
+             symbol: str, tf: str, studies: list[tuple[StudyMeta, str]],
              latency: float) -> TfReport | None:
     width = tf_seconds(tf)
     newest = _newest(store, source_of(CHART, chart_sym), symbol, tf)
@@ -706,12 +807,12 @@ def _pull_tf(cfg: TvPullSettings, *, store: Store, plog: PullLog, sock: GuardedS
     chart = _Chart(sock, pacer, monotonic, cfg.timeout_s)
     try:
         pages = chart.load(chart_sym, tf, cfg.bars_per_request, newest, cfg.max_pages_per_tf)
-        values = [(m, chart.study(m, il, types, i + 1)) for i, (m, il, types) in enumerate(studies)]
+        values = [(m, chart.study(m, il, i + 1)) for i, (m, il) in enumerate(studies)]
     finally:
         chart.close()
     received = _utc(now())
     rs = int(_epoch_s(pd.DatetimeIndex([received]))[0])
-    times = sorted(chart.bars)
+    times = _drop_sparse_start(sorted(chart.bars))
     if times and times[-1] > rs:
         raise TvPullError(f"future bar: the {chart_sym} {tf} bar opening "
                           f"{pd.Timestamp(times[-1], unit='s', tz='UTC').isoformat()} is after now "
@@ -719,18 +820,19 @@ def _pull_tf(cfg: TvPullSettings, *, store: Store, plog: PullLog, sock: GuardedS
     closed = [t for t in times if t + width <= rs]
     closes = {t: chart.bars[t][3] for t in closed}
 
-    def put(indicator: str, version: str, vals: dict[int, list[float]], names: Sequence[str]) -> _Written:
-        return _write(store, indicator=indicator, version=version, symbol=symbol, tf=tf, values=vals, names=names,
-                      closes=closes, received=received, cfg=cfg, latency_s=latency)
+    def put(indicator: str, version: str, meta_hash: str, vals: dict[int, list[float]],
+            names: Sequence[str]) -> _Written:
+        return _write(store, indicator=indicator, version=version, meta_hash=meta_hash, symbol=symbol, tf=tf,
+                      values=vals, names=names, closes=closes, received=received, cfg=cfg, latency_s=latency)
 
-    bars = put(CHART, chart_sym, {t: chart.bars[t] for t in closed}, OHLCV)
+    bars = put(CHART, chart_sym, "", {t: chart.bars[t] for t in closed}, OHLCV)
     rows, mismatched = bars.rows, bars.mismatched
     cut = times[cfg.study_warmup_bars] if len(times) > cfg.study_warmup_bars else None
     for meta, vals in values:
         if cut is None:
             continue
         keep = {t: vals[t] for t in closed if t in vals and t >= cut}
-        w = put(meta.name, meta.meta_hash8, keep, [p.id for p in meta.plots])
+        w = put(meta.name, meta.version, meta.meta_hash8, keep, [p.id for p in meta.plots])
         rows, mismatched = rows + w.rows, mismatched + w.mismatched
     plog.set_state(f"empty:{chart_sym}:{tf}", "" if bars.new else str(t0), started)   # a fruitless look waits a bar
     return TfReport(symbol=chart_sym, tf=tf, bars_received=len(times), pages=pages,
@@ -796,6 +898,14 @@ def run_pass(cfg: TvPullSettings, *, store: Store, log: PullLog, network: TvNetw
     return rep
 
 
+def stored_secret(key: str) -> str | None:
+    """A cookie from the secret store every goldbot service uses (goldbot.ops.accounts: the OS keyring, or on the
+    headless brain, where the units force the `fail` keyring backend, the owner-only state/.secrets.json)."""
+    from goldbot.ops.accounts import get_secret
+    value = get_secret(key)
+    return value.strip() if value else None
+
+
 def set_hint(cfg: TvPullSettings) -> str:
     return (f"python -m goldbot.ops.accounts set {cfg.sessionid_key} and set {cfg.sessionid_sign_key} (hidden "
             f"prompts; the browser cookies sessionid and sessionid_sign)")
@@ -845,13 +955,12 @@ def main(argv: list[str] | None = None) -> int:
         print("tv-pull: tv_pull.enabled is false (set it in config/settings.local.yaml)", file=sys.stderr)
         return 2
     from goldbot.data.tv_wire import LiveNetwork
-    from goldbot.ops.accounts import get_secret
     store = Store(a.data_root or settings.data_root)
     extra = [_parse_spec(s) for s in a.study]
     network = LiveNetwork(cfg.timeout_s)
 
     def once(state: FollowState | None) -> PassReport:
-        sid, sign = get_secret(cfg.sessionid_key), get_secret(cfg.sessionid_sign_key)
+        sid, sign = stored_secret(cfg.sessionid_key), stored_secret(cfg.sessionid_sign_key)
         cookie = SecretStr(f"sessionid={sid}" + (f"; sessionid_sign={sign}" if sign else "")) if sid else None
         return run_pass(cfg, store=store, log=plog, network=network, cookie=cookie,
                         state=state, extra=extra, timeframes=a.tf or None)
