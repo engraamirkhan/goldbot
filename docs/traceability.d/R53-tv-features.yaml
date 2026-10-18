@@ -1,0 +1,5 @@
+id: R53
+requirement: 'TradingView plots as point-in-time features (`tv_plots` v1, opt-in): joined only via asof_join on available_utc; a missing bar is NaN, never stale-forward; pulled or CSV history trains only for plots with a passed repaint check, unverified rows never train; at most 8 TradingView columns per model and 40 inputs in all, refused otherwise (plan tradingview-strategies, lane A; DESIGN "TradingView signals")'
+status: implemented
+code: 'goldbot/features/tv_plots.py (`f_tv_plots`, `enable`, `check_model_columns`, MAX_LAG); goldbot/research/model.py (`check_feature_cap`, MAX_TV_FEATURES, called by `MetaLabelModel.fit`)'
+test: 'tests/test_tv_plots.py::test_visible_at_available_utc_not_1ns_before; ::test_unverified_history_never_trains; ::test_missing_bar_is_nan_not_stale; ::test_more_than_8_tv_columns_refused; ::test_tv_plus_others_capped_at_40; ::test_tv_plots_is_opt_in_and_registered_as_v1'

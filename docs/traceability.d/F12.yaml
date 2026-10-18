@@ -1,5 +1,5 @@
 id: F12
 requirement: '"about 1% of alerts randomly blanked" in training; "a missed alert sets the feature to NaN"'
 status: partial
-code: opt-in tradingview feature, NaN before the first alert (goldbot/features/tradingview.py); 1% blanking and the 40-feature accounting still missing
-test: tests/test_tv_webhook.py::test_tradingview_feature_is_opt_in_and_versioned
+code: 'goldbot/features/tv_plots.py (`tv_plots`: 1 % seeded per-bar blanking with ctx["tv_training"], NaN for a bar missing or more than one bar + 60 s late, TradingView columns counted in the 40 and capped at 8 by goldbot/research/model.py `check_feature_cap`); the older opt-in `tradingview` feature (goldbot/features/tradingview.py) has no blanking and is superseded for models by `tv_plots`; missing: no research run passes `tv_catalog` / `tv_training` yet (lanes B/C wire the pull and the trials)'
+test: 'tests/test_tv_plots.py::test_missing_bar_is_nan_not_stale; ::test_tv_plus_others_capped_at_40; tests/test_tv_webhook.py::test_tradingview_feature_is_opt_in_and_versioned'
