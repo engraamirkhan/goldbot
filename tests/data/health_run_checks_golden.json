@@ -211,6 +211,11 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
+   "job:tv_reconcile",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
    "costs:icm-demo",
    "ok",
    "built 0.6 d ago"
@@ -274,6 +279,11 @@
    "restore_drill",
    "ok",
    "last drill 3.0 d ago verified 9 files"
+  ],
+  [
+   "tv_pull",
+   "ok",
+   "no TradingView pull yet (opt-in)"
   ],
   [
    "news",
@@ -630,6 +640,11 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
+   "job:tv_reconcile",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
    "costs:icm-demo",
    "ok",
    "built 0.6 d ago"
@@ -718,6 +733,11 @@
    "restore_drill",
    "ok",
    "last drill 3.0 d ago verified 9 files"
+  ],
+  [
+   "tv_pull",
+   "ok",
+   "no TradingView pull yet (opt-in)"
   ],
   [
    "news",

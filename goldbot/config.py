@@ -226,6 +226,8 @@ class SchedulerSettings(_Section):
     drift_watch: ScheduleSettings
     feed_reconcile: ScheduleSettings
     gap_watch: ScheduleSettings = ScheduleSettings(kind="daily", at="23:55", max_late_hours=20)
+    # TradingView bars (second feed) against the reference M1, after the day's pulls and before the feed reconcile
+    tv_reconcile: ScheduleSettings = ScheduleSettings(kind="daily", at="23:15", max_late_hours=20)
     # encrypted off-host backup (goldbot/ops/backup.py) next to the daily break, before the nightly jobs start (no CPU
     # contention with them on the 4-core brain), and its weekly restore drill
     # on Sunday while the market is closed
