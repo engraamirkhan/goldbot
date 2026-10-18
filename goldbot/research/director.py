@@ -674,11 +674,21 @@ def linked_preregistration(rows: list[dict[str, Any]], trial: dict[str, Any]) ->
                  and link.get("config_hash") in (None, r.get("config_hash"))), None)
 
 
+def is_degenerate(row: dict[str, Any]) -> bool:
+    """A screened row with no events at all (0 events, so no net R): a broken configuration, not evidence about its
+    family. Its "stop" is flagged `family_evidence: False` so retirement logic never counts it against the family."""
+    scr = (row.get("results") or {}).get("screen") or {}
+    return row.get("status") == "screened" and _num(scr.get("net_mean_r")) is None and not (_num(scr.get("n")) or 0)
+
+
 def preregistered_decisions(row: dict[str, Any], rows: list[dict[str, Any]] | None = None,
                             cited_rule: str = "") -> tuple[set[str], str]:
     """The decisions the pre-registered reading rule allows for a `screened` row, from its recorded results, and which
     rule was applied (preregistration-2027Q1.md). The rule is the `rule_id` of the pre-registration the row is
     linked to (never guessed from the config's shape):
+      * below the event floor every rule also allows "stop" when the rule-only net mean R <= 0 (the FAIL clause has
+        no event floor; the verdict cites the rule), never "continue"; a degenerate row (`is_degenerate`) allows
+        "stop" or "inconclusive";
       * H-04: continue iff the screen passed (gross t >= 2.0 on >= the floor's events) AND net mean R > 0;
         inconclusive below the event floor; otherwise stop;
       * H-01: inconclusive below the floor; stop if the screen failed or net mean R <= 0; continue only if net t >=
@@ -697,13 +707,18 @@ def preregistered_decisions(row: dict[str, Any], rows: list[dict[str, Any]] | No
     pre = linked_preregistration(rows or [], row)
     rule_id = (pre or {}).get("rule_id")
     below_floor = verdict not in (SCREEN_PASS, SCREEN_FAIL)
+    # the FAIL clause ("net <= 0") has no event floor (research director ruling, batch 2026-10-18 D-2): below the
+    # floor a non-positive rule-only net mean R may also be read "stop"; "continue" never is
+    below_stop = {"inconclusive", "stop"} if below_floor and net is not None and net <= 0 else {"inconclusive"}
+    if is_degenerate(row):
+        return {"stop", "inconclusive"}, str(rule_id or "screen")
     if rule_id == "H-04":
         if below_floor:
-            return {"inconclusive"}, "H-04"
+            return below_stop, "H-04"
         return ({"continue"} if verdict == SCREEN_PASS and net is not None and net > 0 else {"stop"}), "H-04"
     if rule_id == "H-01":
         if below_floor:
-            return {"inconclusive"}, "H-01"
+            return below_stop, "H-01"
         if verdict == SCREEN_FAIL or net is None or net <= 0:
             return {"stop"}, "H-01"
         split = res.get("rule_only_split") or {}
@@ -722,7 +737,7 @@ def preregistered_decisions(row: dict[str, Any], rows: list[dict[str, Any]] | No
     if verdict == SCREEN_FAIL:
         return {"stop"}, "screen"
     if below_floor:
-        return {"inconclusive"}, "screen"
+        return below_stop, "screen"
     cites = pre is not None and bool(cited_rule) and cited_rule == pre.get("reading_rule")
     return ({"continue", "stop", "inconclusive"} if cites else {"stop", "inconclusive"}), "screen"
 

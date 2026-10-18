@@ -503,11 +503,17 @@ class TrialRegistry:
         this row's "continue" (`director._Ledger.slot_state`); a discovery's own recorded reading verdict is never
         replaced by one: a discovery row is refused. For a `screened` row the decision must be the one its
         pre-registered rule gives on the recorded results (`director.preregistered_decisions`: H-01, H-04, tsmom 4h,
-        else the screen itself), and for an evaluated trial linked to an O-5/O-6 pre-registration the one the survivors'
+        else the screen itself; "stop" is also allowed below the event floor when net mean R <= 0, and on a
+        0-event row, where it records `family_evidence: False`), and for an evaluated trial linked to an O-5/O-6 pre-registration the one the survivors'
         rule gives (`director.survivor_decisions`: "continue" only with the gates AND the day-summed DSR reading
         passed); a mismatch is refused and the row records `rule_checked`. The first verdict of a
         trial is final (ValueError for a second, an unknown trial or decision, or an empty reason)."""
-        from goldbot.research.director import preregistered_decisions, survivor_decisions, verdict_of
+        from goldbot.research.director import (
+            is_degenerate,
+            preregistered_decisions,
+            survivor_decisions,
+            verdict_of,
+        )
         if decision not in VERDICT_DECISIONS:
             raise ValueError(f"a verdict decision is one of {VERDICT_DECISIONS}, got {decision!r}")
         if not reason.strip():
@@ -528,6 +534,9 @@ class TrialRegistry:
                 raise ValueError(f"trial #{target.get('trial')}: {decision!r} is not the pre-registered decision; "
                                  f"the {which} rule gives {sorted(allowed)} on the recorded results")
             rule = rule or which
+        degenerate = checked and is_degenerate(target)
+        if degenerate and decision == "stop":
+            reason = f"degenerate config (0 events): {reason}"
         survivor = survivor_decisions(target, rows)
         if survivor is not None:
             allowed, which, why = survivor
@@ -541,6 +550,8 @@ class TrialRegistry:
             "verdict_of": row_ref(target), "decision": decision, "reason": reason, "rule": rule,
             "rule_checked": checked, "results": {},
         }
+        if degenerate:
+            row["family_evidence"] = False  # a 0-event config says nothing about its family (no retirement count)
         self._append(row)
         return row
 
