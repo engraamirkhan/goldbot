@@ -608,6 +608,10 @@ class TvSettings(_Section):
     close; otherwise it is NaN and nothing that needs it can trigger. Equal to `features.tv_plots.MAX_LAG` (the
     training allowance), so live never accepts what training could not see (tests/test_tv_event.py pins both)."""
     max_lag_s: int = Field(default=60, ge=0)
+    # a TV_GRID_V1 trial is refused (research.tv_grid.tv_refusal, before it is charged) unless at least this share of
+    # our decision bars inside the TradingView history has a TradingView bar of the same open: our 4h bars floor on UTC
+    # and our 1d is the 13:30 New York feature-day, TradingView's gold bars start at its session open
+    min_bar_match: float = Field(default=0.95, gt=0, le=1)
 
 
 class Settings(_Section):

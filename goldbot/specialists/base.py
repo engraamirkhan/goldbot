@@ -78,6 +78,10 @@ class Specialist(ABC):
     # (research.tv_grid), never by the loop grid (`generator._eligible`, `loop_refusal`), and trades in shadow only
     # ("TradingView indicators: filter features only" until the DESIGN promotion rule is met; engine `_decide`)
     requires_tv: bool = False
+    # seconds after the signal bar's close before the signal is known (a TradingView value: up to tv.max_lag_s). > 0:
+    # research labels enter at the open of the first 1m bar at/after close + this (`triple_barrier_delayed`, needs the
+    # 1m bars: `pipeline.prepare(bars_1m=)`); 0: at the close, as every other family
+    entry_delay_s: int = 0
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Every subclass's own `candidates` and `candidates_in_context` pass through the loop's optional filters

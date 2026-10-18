@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -36,8 +37,11 @@ from goldbot.base import Record, UtcTimestamp, load_record
 from goldbot.config import tf_seconds
 from goldbot.labels.excursion import Excursion, bar_prices, exit_bar_extremes
 from goldbot.labels.exit_policy import ExitPolicy, PolicyState, new_state, policy_return, policy_step
-from goldbot.research.metrics import summarize
+from goldbot.research.metrics import breakeven_prob, summarize
 from goldbot.research.promotion import PerfStats
+
+if TYPE_CHECKING:
+    from goldbot.specialists.base import Specialist
 
 
 class ShadowTrade(Record):
@@ -241,3 +245,34 @@ class ShadowBook:
         tmp.replace(self.path)
         for version in self.books:
             (self.dir / f"shadow_{version}.json").write_text(self.stats(version, now).model_dump_json())
+
+
+def score(model: Any, X: pd.DataFrame) -> tuple[float, float | None]:
+    """(calibrated p, raw score or None) for one row: a MetaLabelModel exposes its raw score, so the shadow book can
+    keep it for later recalibration; any other model gives p only."""
+    raw_fn, cal_fn = getattr(model, "predict_raw", None), getattr(model, "calibrated", None)
+    if raw_fn is None or cal_fn is None:
+        return float(model.predict(X)[0]), None
+    raw = np.asarray(raw_fn(X), dtype=float)
+    return float(np.asarray(cal_fn(raw), dtype=float)[0]), float(raw[0])
+
+
+def record_candidate(book: ShadowBook, *, version: str, model: Any, agent: Specialist, tf: str, bar: pd.Series,
+                     Xm: pd.DataFrame, last: int, side: int, atr_usd: float, cost_atr: float,
+                     entry: float | None = None) -> ShadowTrade | None:
+    """Score `agent`'s candidate on the decision bar `bar` (row `last` of the scoring frame `Xm`) with `version`'s model
+    and record it. Every candidate is recorded (P9 counterfactual shadow): the ones below the threshold too, flagged not
+    taken, so a recalibration sees an unbiased sample; only taken ones count as shadow trades. Entry: the bar's close
+    on the trade's side, or `entry` (a TradingView agent's: the price when its value arrived, engine/tv_context.py)."""
+    feats = Xm.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
+    feats["side"] = side
+    cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
+    p, p_raw = score(model, feats[cols])
+    ls = agent.label_spec
+    threshold = breakeven_prob(ls.target_atr, ls.stop_atr, cost_atr) + 0.02
+    px = float(bar["ask_close"] if side > 0 else bar["bid_close"]) if entry is None else float(entry)
+    return book.open_trade(version=version, agent_id=agent.agent_id, side=side, bar_ts=pd.Timestamp(bar["ts_utc"]),
+                           entry=px, atr_usd=atr_usd, target_atr=ls.target_atr, stop_atr=ls.stop_atr,
+                           max_bars=ls.max_bars, p=p, timeframe=tf, threshold=threshold, taken=p > threshold,
+                           p_raw=p_raw, policy=agent.exit_spec, signal_close=pd.Timestamp(bar["visible_at"]),
+                           scored_feature_version=str(Xm.attrs.get("feature_version", "")))

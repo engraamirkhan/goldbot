@@ -10,9 +10,13 @@ performance-analyst, and 4h/1d are searched pre-holdout under TV_GRID_V1 (resear
 * Signal. On the decision bar (open `t`, close `c`), the plot's TradingView bar with `bar_time == t` counts only when it
   arrived (`available_utc`) no later than `c + max_lag` (settings `tv.max_lag_s`, 60 s = tv_plots.MAX_LAG) and no
   later than the decision itself; the join is `asof_join` on `available_utc`. Anything else (late by 1 s, not yet
-  arrived, another bar, a store outage) is NaN and makes no candidate: staleness fails closed. Live decides at `now`;
-  research decides as if at `c + max_lag`, the latest the live rule accepts, and enters at the bar's close as every
-  label does (a <= 60 s timing assumption the quant review weighs). The mark on the bar enters on the plot's side.
+  arrived, another bar, a store outage) is NaN and makes no candidate: staleness fails closed. The mark on the bar
+  enters on the plot's side. Research decides as if at `c + max_lag`, the latest the live rule accepts, and its labels
+  enter at the open of the first 1m bar at/after it (`entry_delay_s`, `labels.triple_barrier_delayed`): nothing
+  between the close and the entry reaches a label. The engine never delays the close: the shadow book re-checks the
+  agent until `c + max_lag` and enters at the price when the value is seen (engine/tv_context.py, `TvShadowWatch`).
+* Bars. The TradingView bar must open with our decision bar; research refuses a trial whose bars do not line up
+  (research.tv_grid `bar_match`, `tv.min_bar_match`): our 4h/1d grids are not TradingView's session grid.
 * Which rows. Those `tv_plots` may read (`tv_plots.eligible_rows`: this study, version, timeframe and input set;
   live rows, or repaint-validated history; a live row wins on its bar), so research and live read one rule.
 * Barriers. ATR(14) of the decision bars, target / stop / time as configured (TV_GRID_V1 moves them +-25 %).
@@ -57,6 +61,7 @@ class TvEventSpecialist(Specialist):
     timeframe = "4h"
     timeframes = ("15m", "1h", "1d")
     requires_tv = True
+    entry_delay_s = int(MAX_LAG.total_seconds())     # research enters at the first 1m open after close + max_lag
     default_config = {"study": "", "version": "", "meta_hash": "", "plot_id": "", "side": 0,
                       "target_atr": 2.0, "stop_atr": 1.0, "max_bars": 12}       # 4h: two days
     timeframe_defaults = {"15m": {"max_bars": 32}, "1h": {"max_bars": 24}, "1d": {"max_bars": 10}}

@@ -335,3 +335,186 @@ def test_tv_outage_never_blocks_an_exit(tmp_path, monkeypatch):
     assert (deals["type"] == "entry").sum() >= 1
     assert (deals["type"] != "entry").sum() >= 1, "positions of other agents still exit during a TradingView outage"
     assert eng.shadow is not None and not (eng.shadow.books["tv-v1"].open + eng.shadow.books["tv-v1"].closed)
+
+
+# ---------------------------------------------------------------- review round 1
+
+
+def _bars_1m(days: int = 6) -> pd.DataFrame:
+    from goldbot.data.resample import ticks_to_1m
+    from goldbot.data.synthetic import synthetic_ticks
+    return ticks_to_1m(synthetic_ticks("2025-03-03", f"2025-03-{3 + days:02d}", ticks_per_minute=1, seed=5))
+
+
+def _spiked(b1: pd.DataFrame, at: pd.Timestamp) -> pd.DataFrame:
+    """b1 with the 1m bar opening at `at` blown out by $500 both ways (any barrier inside it would be hit)."""
+    out = b1.copy()
+    hit = pd.to_datetime(out["ts_utc"], utc=True) == at
+    assert hit.sum() == 1
+    for k in ("bid", "ask"):
+        out.loc[hit, f"{k}_high"] += 500.0
+        out.loc[hit, f"{k}_low"] -= 500.0
+    return out
+
+
+def test_a_price_jump_inside_the_first_minute_never_reaches_the_label():
+    """Quant review (a): a TradingView label enters at the open of the first 1m bar at/after close + max_lag and the
+    barrier clock starts there, so nothing in [close, close + 60 s) can reach it."""
+    from goldbot.data.resample import resample_bars
+    from goldbot.labels.triple_barrier import triple_barrier, triple_barrier_delayed
+    b1 = _bars_1m()
+    b4 = resample_bars(b1, "4h")
+    idx = 8
+    close = pd.Timestamp(b4["visible_at"].iloc[idx])
+    spec = BarrierSpec(target_atr=2.0, stop_atr=1.0, max_bars=3, name="t")
+    atr4 = pd.Series(3.0, index=b4.index)
+    sig = pd.DataFrame({"idx": [idx], "side": [1]})
+    clean = triple_barrier_delayed(b4, b1, sig, spec, atr4, MAX_LAG)
+    s1 = _spiked(b1, close)
+    s4 = resample_bars(s1, "4h")
+    assert triple_barrier(s4, sig, spec, atr4)["barrier_hit"].iloc[0] == "stop"     # the old entry would see the spike
+    spiked = triple_barrier_delayed(s4, s1, sig, spec, atr4, MAX_LAG)
+    cols = ["idx", "t_entry", "t_exit", "entry", "exit", "ret", "label", "barrier_hit", "ts_exit"]
+    pd.testing.assert_frame_equal(spiked[cols], clean[cols])
+    first = b1[pd.to_datetime(b1["ts_utc"], utc=True) >= close + MAX_LAG].iloc[0]
+    assert clean["entry"].iloc[0] == first["ask_open"]
+
+
+def test_prepare_labels_a_tradingview_specialist_from_its_delayed_entry():
+    from goldbot.data.resample import resample_bars
+    from goldbot.research.pipeline import prepare
+    b1 = _bars_1m()
+    b4 = resample_bars(b1, "4h").reset_index(drop=True)
+    spec = TvEventSpecialist.from_plot(buy(), lot_fit=LotFitSpec(equity=1_000_000.0))
+    opens = pd.DatetimeIndex(pd.to_datetime(b4["ts_utc"], utc=True))
+    tv = pd.concat([tv_rows(o, pd.Timedelta(seconds=5)) for o in opens[20:22]], ignore_index=True)
+    with pytest.raises(ValueError, match="1m bars"):
+        prepare(spec, b4, ctx={"tv_indicators": tv})
+    prep = prepare(spec, b4, ctx={"tv_indicators": tv}, bars_1m=b1)
+    assert not prep.labels.empty and set(prep.labels["idx"]) <= {20, 21}
+    i = int(prep.labels["idx"].iloc[0])
+    close = pd.Timestamp(b4["visible_at"].iloc[i])
+    first = b1[pd.to_datetime(b1["ts_utc"], utc=True) >= close + MAX_LAG].iloc[0]
+    assert prep.labels["entry"].iloc[0] == first["ask_open"]
+
+
+def _watch_engine(tmp_path: Path) -> tuple[Any, TvEventSpecialist, Any, Store]:
+    from types import SimpleNamespace
+
+    from goldbot.engine import ConstantModel
+    from goldbot.engine.shadow import ShadowBook
+    shadow = ShadowBook(tmp_path / "state")
+    shadow.track("tv-v1", T0)
+    store = Store(tmp_path / "data")
+    tv = TvEventSpecialist.from_plot(buy())
+    eng = SimpleNamespace(shadow=shadow, shadow_models={"tv-v1": (tv.agent_id, ConstantModel(p=0.9))}, store=store,
+                          cfg=SimpleNamespace(tv_max_lag_s=60), _scoring_frame=lambda fr, model: fr.X)
+    m = bars()
+    dec = m.assign(bid_close=m["close"] - 0.1, ask_close=m["close"] + 0.1)
+    fr = SimpleNamespace(dec=dec, m=m, X=pd.DataFrame({"ts_utc": m["ts_utc"]}), atr=pd.Series(3.0, index=m.index))
+    return eng, tv, fr, store
+
+
+def _tick(at: pd.Timestamp, bid: float) -> Any:
+    from goldbot.execution.broker import Tick
+    return Tick(ts_utc=at, bid=bid, ask=bid + 0.2)
+
+
+def test_shadow_records_a_late_value_at_the_price_when_it_arrives(tmp_path):
+    """Research decides at close + max_lag; the shadow book, never delaying the close decision, re-checks a
+    TradingView agent until then and enters at the price of the tick that saw the value (shadow only)."""
+    from goldbot.engine.tv_context import TvShadowWatch
+    eng, tv, fr, store = _watch_engine(tmp_path)
+    w = TvShadowWatch()
+    s1 = LAST_CLOSE + pd.Timedelta(seconds=1)
+    out = w.candidates(eng, "4h", fr, [tv], s1, _tick(s1, 2600.0), 3.0, 0.1)
+    assert out[tv.agent_id].empty and w.pending == [tv.agent_id]          # nothing at the close: never a live entry
+    store.append("tv_indicators", tv_rows(LAST_OPEN, pd.Timedelta(seconds=30)), source="tv_pull")
+    s20 = LAST_CLOSE + pd.Timedelta(seconds=20)
+    w.poll(eng, s20, _tick(s20, 2601.0))
+    assert not eng.shadow.books["tv-v1"].open
+    s31 = LAST_CLOSE + pd.Timedelta(seconds=31)
+    w.poll(eng, s31, _tick(s31, 2603.0))
+    [t] = eng.shadow.books["tv-v1"].open
+    assert t.entry == pytest.approx(2603.2) and t.side == 1 and t.entry_ts == LAST_OPEN and not w.pending
+
+
+def test_shadow_drops_a_value_later_than_max_lag(tmp_path):
+    from goldbot.engine.tv_context import TvShadowWatch
+    eng, tv, fr, store = _watch_engine(tmp_path)
+    w = TvShadowWatch()
+    w.candidates(eng, "4h", fr, [tv], LAST_CLOSE, _tick(LAST_CLOSE, 2600.0), 3.0, 0.1)
+    store.append("tv_indicators", tv_rows(LAST_OPEN, MAX_LAG + pd.Timedelta(seconds=1)), source="tv_pull")
+    late = LAST_CLOSE + MAX_LAG + pd.Timedelta(seconds=2)
+    w.poll(eng, late, _tick(late, 2601.0))
+    assert not eng.shadow.books["tv-v1"].open and not w.pending
+
+
+def _aligned_rows(opens: pd.DatetimeIndex, tf: str, mh: str) -> pd.DataFrame:
+    return pd.DataFrame({"ts_utc": opens, "bar_time": opens, "available_utc": opens + pd.Timedelta(days=2),
+                         "indicator": "K-Indi", "version": "2.02", "tf": tf, "plot": "plot_1", "value": 1.0,
+                         "origin": "pull_live", "meta_hash": mh, "intrabar": False})
+
+
+def test_tv_refusal_refuses_bars_that_do_not_line_up_with_ours():
+    """Safety review 2 / quant (c): our 4h bars floor on UTC and our 1d is the 13:30 New York feature-day; TradingView's
+    gold bars start at its session open. A trial whose decision bars mostly have no TradingView bar is refused before
+    it is charged (tested on bars built by the real resample_bars)."""
+    from goldbot.data.resample import resample_bars
+    s = load_settings()
+    b1 = _bars_1m(10)
+    ours = pd.DatetimeIndex(pd.to_datetime(resample_bars(b1, "4h")["ts_utc"], utc=True))
+    cfg = TvEventSpecialist.from_plot(buy()).config
+    mh = meta().meta_hash
+    assert tv_grid.tv_refusal([], [("tv_event", cfg)], s, tv_long=_aligned_rows(ours, "240", mh), bars_1m=b1) is None
+    tv_session = pd.date_range("2025-03-02 22:00", "2025-03-13 22:00", freq="4h", tz="UTC")     # 17:00 New York grid
+    why = tv_grid.tv_refusal([], [("tv_event", cfg)], s, tv_long=_aligned_rows(tv_session, "240", mh), bars_1m=b1)
+    assert why is not None and "line up" in why
+    d1 = TvEventSpecialist.from_plot(buy("1D"), timeframe="1d").config
+    tv_days = pd.date_range("2025-03-02 22:00", "2025-03-13 22:00", freq="1D", tz="UTC")
+    why = tv_grid.tv_refusal([], [("tv_event", d1)], s, tv_long=_aligned_rows(tv_days, "1D", meta("1D").meta_hash),
+                             bars_1m=b1)
+    assert why is not None and "line up" in why
+    assert tv_grid.tv_refusal([], [("tv_event", cfg)], s, tv_long=None, bars_1m=b1) is not None
+
+
+def _research_pass() -> Any:
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / "scripts" / "research_pass.py"
+    spec = importlib.util.spec_from_file_location("research_pass_tv", path)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_research_pass_refuses_a_shadow_forward_tv_job_before_anything_is_read(tmp_path, monkeypatch):
+    import json
+    import sys
+    monkeypatch.setitem(SPECIALISTS, "tv_event", TvEventSpecialist)
+    rp = _research_pass()
+    cfg = TvEventSpecialist.from_plot(buy("15"), timeframe="15m").config
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--specialist", "tv_event", "--bars", str(tmp_path / "none"),
+                                      "--registry", str(tmp_path / "reg.jsonl"), "--variants", json.dumps([cfg])])
+    with pytest.raises(SystemExit, match="shadow-forward only"):
+        rp.main()
+    assert not (tmp_path / "reg.jsonl").exists()
+
+
+def test_research_pass_refuses_misaligned_tv_bars_before_the_budget(tmp_path, monkeypatch):
+    import json
+    import sys
+    monkeypatch.setitem(SPECIALISTS, "tv_event", TvEventSpecialist)
+    b1 = _bars_1m(10)
+    (tmp_path / "bars").mkdir()
+    b1.to_parquet(tmp_path / "bars" / "xauusd_1m_dukascopy_2025.parquet")
+    tv_session = pd.date_range("2025-03-02 22:00", "2025-03-13 22:00", freq="4h", tz="UTC")
+    Store(tmp_path / "tv").append("tv_indicators", _aligned_rows(tv_session, "240", meta().meta_hash), source="tv_pull")
+    rp = _research_pass()
+    cfg = TvEventSpecialist.from_plot(buy()).config
+    monkeypatch.setattr(sys, "argv", ["research_pass.py", "--specialist", "tv_event", "--bars", str(tmp_path / "bars"),
+                                      "--registry", str(tmp_path / "reg.jsonl"), "--variants", json.dumps([cfg]),
+                                      "--from-year", "2025", "--to-year", "2025", "--tv-data", str(tmp_path / "tv")])
+    with pytest.raises(SystemExit, match="line up"):
+        rp.main()
+    assert not TrialRegistry(tmp_path / "reg.jsonl")._rows()

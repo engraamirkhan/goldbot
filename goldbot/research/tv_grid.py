@@ -16,14 +16,26 @@ the computed set, fails tests/test_tv_event.py and needs a new dated TV_GRID_V2,
   a loop trial, which skips the quarterly count. The loop never runs a TradingView family (`generator.loop_refusal`).
 * Refusal (`tv_refusal`): membership is checked on the effective configuration (the timeframe's defaults filled in,
   as the registry hashes it), so a job is judged by what it runs, not by how its overrides are spelled.
+* Bar alignment (safety review 2, quant c). The signal is the TradingView bar whose `bar_time` is our decision bar's
+  open. Our 4h bars floor on the UTC clock and our 1d is the 13:30 New York feature-day (data/resample.py); TradingView's
+  gold bars start at its session open (17:00 New York), so its 4h bars sit 1-2 h off ours and its daily bar closes
+  3.5 h after our feature-day. A tolerance mapping (TradingView close near our close) is not clean: the bars hold
+  different hours, so a "match" would read another bar's mark. So nothing is mapped: with the data at hand
+  (`tv_long`, `bars_1m`), a trial is refused unless at least `tv.min_bar_match` of our decision bars inside the
+  TradingView history have a TradingView bar of the same open (`bar_match`), before anything is charged.
 """
 from __future__ import annotations
 
 from typing import Any
 
+import pandas as pd
+
 from goldbot.base import FrozenRecord
 from goldbot.config import Settings
+from goldbot.data.resample import resample_bars
+from goldbot.data.timeutil import utc_index
 from goldbot.data.tv_catalog import PlotSpec
+from goldbot.features.tv_plots import eligible_rows, plot_name
 from goldbot.research.generator import EXIT_KEYS, FROM_YEAR, GRID_STEPS
 from goldbot.research.registry import config_hash, is_trial
 from goldbot.specialists.base import TIMEFRAME_KEY
@@ -113,11 +125,32 @@ def tv_grid(catalog: list[PlotSpec], settings: Settings) -> list[TvCandidate]:
     return out
 
 
-def tv_refusal(rows: list[dict[str, Any]], jobs: list[tuple[str, dict[str, Any]]], settings: Settings) -> str | None:
+def bar_match(long: pd.DataFrame | None, spec: TvEventSpecialist, dec: pd.DataFrame) -> float | None:
+    """The share of our decision bars (`dec`, as resample_bars builds them) inside the span of the plot's usable
+    TradingView rows that have a TradingView bar of the same open; None when the plot has no usable row."""
+    if long is None or len(long) == 0 or len(dec) == 0:
+        return None
+    plot = spec.plot
+    d = eligible_rows(long, plot)
+    d = d[d["plot"] == plot_name(plot.plot_id)]
+    if d.empty:
+        return None
+    tv = utc_index(d["bar_time"])
+    ours = utc_index(dec["ts_utc"])
+    inside = ours[(ours >= tv.min()) & (ours <= tv.max())]
+    return float(inside.isin(tv).mean()) if len(inside) else 0.0
+
+
+def tv_refusal(rows: list[dict[str, Any]], jobs: list[tuple[str, dict[str, Any]]], settings: Settings, *,
+               tv_long: pd.DataFrame | None = None, bars_1m: pd.DataFrame | None = None) -> str | None:
     """Why a run of TradingView trials is refused, or None: every job is a `tv_event` configuration (overrides or
     effective config; judged on the effective one) on a searchable timeframe whose point is in TV_GRID_V1, and not
-    already a trial in the registry (no double dispatch). Budget and pre-registration are the quarter's usual checks."""
+    already a trial in the registry (no double dispatch). With the research bars (`bars_1m`), also the bar alignment
+    (module docstring): at least `tv.min_bar_match` of our decision bars line up with a TradingView bar of `tv_long`.
+    Called before any budget check, so a refused job is never charged. Budget and pre-registration are the quarter's
+    usual checks."""
     tried = {(r.get("family"), r.get("config_hash")) for r in rows if is_trial(r)}
+    dec_by_tf: dict[str, pd.DataFrame] = {}
     for family, config in jobs:
         if family != FAMILY:
             return f"TV_GRID_V1: {family} is not a TradingView family"
@@ -134,4 +167,13 @@ def tv_refusal(rows: list[dict[str, Any]], jobs: list[tuple[str, dict[str, Any]]
         h = config_hash(spec.config)
         if (family, h) in tried:
             return f"TV_GRID_V1: {family} config {h} is already in the registry (no double dispatch of one trial)"
+        if bars_1m is not None:
+            if spec.timeframe not in dec_by_tf:
+                dec_by_tf[spec.timeframe] = resample_bars(bars_1m, spec.timeframe)
+            share = bar_match(tv_long, spec, dec_by_tf[spec.timeframe])
+            floor = settings.tv.min_bar_match
+            if share is None or share < floor:
+                got = "no usable TradingView rows" if share is None else f"{share:.1%}"
+                return (f"TV_GRID_V1: {spec.column} does not line up with our {spec.timeframe} bars ({got} of our "
+                        f"decision bars have a TradingView bar of the same open; at least {floor:.0%} needed)")
     return None
