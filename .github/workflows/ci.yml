@@ -1,6 +1,6 @@
 name: ci
 # Gates every PR and every push to main. GitHub's free tier gives a private repo 2,000 runner-minutes a month and bills
-# each job rounded up to the minute, so the checks run in two jobs (backend, frontend) instead of ten, once per change
+# each job rounded up to the minute, so the checks run in few jobs (backend-lint, a 4-shard backend-unit matrix, backend-integration, frontend; `backend` aggregates the first three for branch protection), once per change
 # (pull_request, plus push to main for the merge commit) and not for docs-only changes. Every check step runs even
 # after an earlier one failed, so one run reports all failures; install steps are captured the same way (<job>-install). Any failure is posted as one GitHub issue labelled
 # `ci` with the tail of each failed check's output, because Claude sandboxes cannot download Actions logs.
@@ -28,10 +28,11 @@ env:
   NODE_VERSION: "22"
 
 jobs:
-  backend:
-    # pre-commit, lint, types, unit, API contract, integration and the research dry run
+  backend-lint:
+    # pre-commit, ruff, mypy and the API contract (the dashboard's types are generated from the backend's OpenAPI
+    # schema; both must be committed in sync)
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 40
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
@@ -46,36 +47,95 @@ jobs:
           set -o pipefail
           mkdir -p ci-out
           { pip install -e ".[dev]" pre-commit && npm --prefix web ci; } 2>&1 | tee ci-out/backend-install.txt \
-            || { echo backend-install >> ci-out/failed-backend.list; exit 1; }
+            || { echo backend-install >> ci-out/failed-backend-lint.list; exit 1; }
       - name: pre-commit
         if: success() || failure()
-        run: set -o pipefail; pre-commit run --all-files --show-diff-on-failure --color never 2>&1 | tee ci-out/pre-commit.txt || { echo pre-commit >> ci-out/failed-backend.list; exit 1; }
+        run: set -o pipefail; pre-commit run --all-files --show-diff-on-failure --color never 2>&1 | tee ci-out/pre-commit.txt || { echo pre-commit >> ci-out/failed-backend-lint.list; exit 1; }
       - name: backend-lint
         if: success() || failure()
-        run: set -o pipefail; ruff check goldbot tests scripts --output-format concise 2>&1 | tee ci-out/backend-lint.txt || { echo backend-lint >> ci-out/failed-backend.list; exit 1; }
+        run: set -o pipefail; ruff check goldbot tests scripts --output-format concise 2>&1 | tee ci-out/backend-lint.txt || { echo backend-lint >> ci-out/failed-backend-lint.list; exit 1; }
       - name: backend-typecheck
         if: success() || failure()
-        run: set -o pipefail; mypy 2>&1 | tee ci-out/backend-typecheck.txt || { echo backend-typecheck >> ci-out/failed-backend.list; exit 1; }
-      - name: backend-unit
-        if: success() || failure()
-        run: set -o pipefail; pytest -m "not integration" -q -n auto --tb=short --cov=goldbot --cov-report=term:skip-covered 2>&1 | tee ci-out/backend-unit.txt || { echo backend-unit >> ci-out/failed-backend.list; exit 1; }
+        run: set -o pipefail; mypy 2>&1 | tee ci-out/backend-typecheck.txt || { echo backend-typecheck >> ci-out/failed-backend-lint.list; exit 1; }
       - name: api-contract
-        # the dashboard's types are generated from the backend's OpenAPI schema; both must be committed in sync
         if: success() || failure()
         run: |
           set -o pipefail
           { python scripts/export_openapi.py && npm --prefix web run gen:api && git diff --exit-code -- web/openapi.json web/src/lib/schema.d.ts \
             || { echo "API contract drift: run 'python scripts/export_openapi.py && npm --prefix web run gen:api' and commit"; exit 1; }; } 2>&1 | tee ci-out/api-contract.txt \
-            || { echo api-contract >> ci-out/failed-backend.list; exit 1; }
+            || { echo api-contract >> ci-out/failed-backend-lint.list; exit 1; }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with: { name: ci-out-backend-lint, path: ci-out/, include-hidden-files: true }
+
+  backend-unit:
+    # the unit suite split over a free matrix: each shard runs the tests whose node-id hash falls in it
+    # (GOLDBOT_SHARD=i/n, tests/conftest.py), so every test runs exactly once. Coverage is not collected: it was a
+    # report with no threshold, and per-shard numbers are meaningless without a combine step.
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    env:
+      GOLDBOT_SHARD: ${{ matrix.shard }}/4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
+      - name: backend-install
+        run: |
+          set -o pipefail
+          mkdir -p ci-out
+          pip install -e ".[dev]" 2>&1 | tee ci-out/backend-install-${{ matrix.shard }}.txt \
+            || { echo backend-install-${{ matrix.shard }} >> ci-out/failed-backend-unit-${{ matrix.shard }}.list; exit 1; }
+      - name: backend-unit
+        if: success() || failure()
+        run: set -o pipefail; pytest -m "not integration" -q -n auto --tb=short 2>&1 | tee ci-out/backend-unit-${{ matrix.shard }}.txt || { echo backend-unit-${{ matrix.shard }} >> ci-out/failed-backend-unit-${{ matrix.shard }}.list; exit 1; }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with: { name: "ci-out-backend-unit-${{ matrix.shard }}", path: ci-out/, include-hidden-files: true }
+
+  backend-integration:
+    # the integration tests (a handful; sharding them would cost more in setup than it saves) and the research dry run
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
+      - name: backend-install
+        run: |
+          set -o pipefail
+          mkdir -p ci-out
+          pip install -e ".[dev]" 2>&1 | tee ci-out/backend-install-integration.txt \
+            || { echo backend-install-integration >> ci-out/failed-backend-integration.list; exit 1; }
       - name: backend-integration
         if: success() || failure()
         run: |
           set -o pipefail
           { pytest -m integration -q -n auto --tb=short && python scripts/dry_run.py 1 | tail -40; } 2>&1 | tee ci-out/backend-integration.txt \
-            || { echo backend-integration >> ci-out/failed-backend.list; exit 1; }
+            || { echo backend-integration >> ci-out/failed-backend-integration.list; exit 1; }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
-        with: { name: ci-out-backend, path: ci-out/, include-hidden-files: true }
+        with: { name: ci-out-backend-integration, path: ci-out/, include-hidden-files: true }
+
+  backend:
+    # aggregate: the required status check on main is named `backend`, so it stays one job that passes only when
+    # lint, every unit shard and integration all passed (a skipped or cancelled dependency fails it too)
+    needs: [backend-lint, backend-unit, backend-integration]
+    if: always()
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "$RESULTS"
+          [ "$(echo "$RESULTS" | tr -d '[:space:]')" = '["success","success","success"]' ]
 
   frontend:
     # lint, types, unit, and e2e: the real FastAPI backend serving the production build, driven by Playwright
@@ -120,7 +180,7 @@ jobs:
         with: { name: e2e-report, path: "web/playwright-report/\nweb/test-results/" }
 
   report-failure:
-    needs: [backend, frontend]
+    needs: [backend-lint, backend-unit, backend-integration, frontend]
     if: failure()
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     permissions:
