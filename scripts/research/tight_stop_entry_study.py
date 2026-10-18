@@ -252,6 +252,7 @@ def one_at_a_time(sig: pd.DataFrame, tr: pd.DataFrame) -> pd.DataFrame:
     res = []
     for (fam, var), g in tr.groupby(["family", "variant"]):
         s = sig[sig["family"] == fam].sort_values("t0")
+        var = str(var)
         n = int(var.rsplit("_N", 1)[1]) if "_N" in var else 0
         by_t = g.set_index("t0")
         busy = -1
