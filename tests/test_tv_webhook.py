@@ -2,6 +2,7 @@
 import json
 import math
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
@@ -77,6 +78,40 @@ def test_bad_secret_writes_nothing(box):
     assert box.count() == 0
 
 
+def test_unauthenticated_caller_gets_the_same_403_whether_or_not_the_body_is_valid(box):
+    c = client(box)
+    answers = [c.post("/tv", json={**BODY, "secret": "nope"}),
+               c.post("/tv", json={**BODY, "secret": "nope", "tf": ""}),
+               c.post("/tv", json={"secret": "nope"}),
+               c.post("/tv", json={"tf": ""}),
+               c.post("/tv", content=b"not json", headers={"content-type": "application/json"}),
+               c.post("/tv", json=["secret"])]
+    assert {(r.status_code, r.text) for r in answers} == {(403, answers[0].text)}
+    assert box.count() == 0
+
+
+def test_schema_errors_are_only_shown_after_the_secret_is_right(box):
+    assert client(box).post("/tv", json={**BODY, "tf": ""}).status_code == 422
+
+
+def test_inbox_row_cap_per_hour_answers_429_and_logs_without_the_body(box, caplog):
+    c = client(box, max_rows_per_hour=2)
+    for i in range(2):
+        assert c.post("/tv", json={**BODY, "bar_time": f"2026-10-16T1{i}:00:00Z"}).status_code == 200
+    with caplog.at_level("WARNING"):
+        r = c.post("/tv", json={**BODY, "bar_time": "2026-10-16T12:00:00Z", "price": "123.456"})
+    assert r.status_code == 429 and box.count() == 2
+    assert "inbox row cap" in caplog.text
+    assert "s3cret" not in caplog.text and "123.456" not in caplog.text
+
+
+def test_rows_older_than_the_hour_do_not_count_against_the_cap(box):
+    now = datetime.now(timezone.utc)
+    assert client(box, max_rows_per_hour=1).post("/tv", json=BODY).status_code == 200
+    assert box.count_since(now - timedelta(hours=1)) == 1
+    assert box.count_since(now + timedelta(hours=1)) == 0
+
+
 def test_bar_alert_with_plots_is_stored_before_the_ack(box):
     assert client(box).post("/tv", json={**BODY, "plots": {"plot_0": "1.5", "plot_1": "NaN"}}).status_code == 200
     assert json.loads(box.rows_after(0)[0]["plots"]) == {"plot_0": 1.5, "plot_1": None}
@@ -97,6 +132,9 @@ def test_inbox_write_failure_returns_503_so_tradingview_retries():
             raise sqlite3.OperationalError("disk full")
 
         def count(self) -> int:
+            return 0
+
+        def count_since(self, since: datetime) -> int:
             return 0
 
     c = TestClient(create_app(secret="s3cret", inbox=Broken(), enforce_ip=False))  # type: ignore[arg-type]

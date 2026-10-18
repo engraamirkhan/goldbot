@@ -271,6 +271,10 @@ and the rest still arrives. It never contains account numbers or emails.
      `systemctl is-active goldbot-bridge@icm-demo` must print `active` and `systemctl show -p NRestarts
      goldbot-bridge@icm-demo` must not have gone up (the unit restarts itself every 10 s, so `active` alone can hide a
      crash loop). Finally run preflight on the brain: it checks the bridge answers through the tunnel.
+* The Linux units set `GOLDBOT_ALLOW_PLAINTEXT=1` (the file secret store is deliberate there: no desktop keyring).
+  `goldbot-deploy` does not install units: after this change, reinstall them (copy `goldbot/ops/linux/systemd/*` to
+  `/etc/systemd/system`, `daemon-reload`, restart). Until then nothing breaks for reads of existing secrets; only a
+  new `accounts set` from a unit environment would be refused.
 * By hand on either VM: `sudo goldbot-deploy latest` (or a specific commit id). Same checks, same rollback.
   Run it inside `tmux` (`tmux new -s deploy`; after a dropped connection, `tmux attach -t deploy`), or as
   `sudo systemd-run --wait --pty --unit goldbot-deploy-manual /usr/local/sbin/goldbot-deploy <args>`. The script
@@ -868,6 +872,26 @@ failed save answers 503 so TradingView retries.
    yourself, never into chat or a file. Alerts need a TradingView plan with webhooks and two-factor sign-in on.
 3. Check it: the dashboard endpoint `/api/tradingview` lists each indicator and timeframe with its last bar, alerts in the
    last 24 h, plots seen and gaps (a market-closed stretch also counts as missing bars).
+
+4. History from a chart export (optional, lets research use the indicator before weeks of alerts have collected). On the
+   XAUUSD chart at the timeframe you want (15, 60, 240 or 1D), with the indicator visible and the chart scrolled back to
+   load all its bars, open the **chart's top-bar menu next to the layout name** (the ... or cloud menu) and choose
+   **Export chart data...** (time format ISO, all indicator plots ticked). Copy the file to the brain with one line from
+   your Mac (placeholders: your file, your brain's SSH name), then import it on the brain with one line:
+
+   ```
+   scp ~/Downloads/<file>.csv <brain-ssh-name>:~/goldbot/data/
+   ~/goldbot/.venv/bin/python -m goldbot.ops.run tv-import ~/goldbot/data/<file>.csv --indicator K-Indi --version 2.02 --tf 15
+   ```
+
+   `--indicator` and `--version` must be spelled exactly as in the alert message; `--tf` is 15, 60, 240 or 1D. The
+   import refuses a file with no `time` column, times out of order, spacing that is not whole bars of that timeframe, a
+   bar in the future or a cell that is not a number, and writes nothing then. Repeating it is harmless. Imported bars are
+   marked `unvalidated (repaint risk)`: a chart export can differ from what the indicator showed live. After about
+   three weeks of live alerts (at least 200 bars both ways), export again, import again, and run
+   `~/goldbot/.venv/bin/python -m goldbot.ops.run tv-repaint-check --indicator K-Indi --version 2.02 --tf 15`; it
+   prints the match per plot and marks the history validated only at 99 % or more. `/api/tradingview` shows each
+   indicator's imported bars and its repaint status.
 
 Limits: an invite-only script exposes only the plots and `alert()` calls its author allows. A series that is drawn
 (lines, boxes, labels) or computed but not plotted cannot be read, and a plot set to `display.none` may be missing from

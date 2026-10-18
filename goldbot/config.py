@@ -226,6 +226,8 @@ class SchedulerSettings(_Section):
     drift_watch: ScheduleSettings
     feed_reconcile: ScheduleSettings
     gap_watch: ScheduleSettings = ScheduleSettings(kind="daily", at="23:55", max_late_hours=20)
+    # TradingView bars (second feed) against the reference M1, after the day's pulls and before the feed reconcile
+    tv_reconcile: ScheduleSettings = ScheduleSettings(kind="daily", at="23:15", max_late_hours=20)
     # encrypted off-host backup (goldbot/ops/backup.py) next to the daily break, before the nightly jobs start (no CPU
     # contention with them on the 4-core brain), and its weekly restore drill
     # on Sunday while the market is closed
@@ -346,10 +348,9 @@ class ResearchSettings(_Section):
     trial_budget_overrides: dict[str, int] = Field(default_factory=dict)
     # continuous research loop (owner, 2026-10-18; docs/plans/continuous-research-loop.md): trials one scheduled batch may
     # run, SEPARATE from the quarterly budget above (which is not changed). Every loop trial is still a registry row, so
-    # the deflated Sharpe counts the full running K. 0 turns the loop off.
+    # the deflated Sharpe counts the full running K. 0 turns the loop off. Owner-recorded in
+    # docs/decisions/0029-continuous-research-loop-budget.md; a loop trial cites rule_ref=loop (registry.LOOP_RULE_REF)
     loop_trials_per_run: int = Field(16, ge=0, le=256)
-    # account size the loop's sizing pre-filter uses (ATR only, no returns): GBP 1,000 at about 1.30 USD per GBP
-    loop_equity_usd: float = Field(1300.0, gt=0)
     # trials held for the pre-registered queue (director.reserved_trials), PER QUARTER ({"2027Q1": 9}; a quarter not
     # listed holds none): the research director, the label grid and the analyst spend only budget - used - reserved
     reserved_trials_quarter: dict[str, int] = Field(default_factory=dict)
@@ -596,6 +597,11 @@ class GateSettings(_Section):
         return [n for n in self.PROPOSED if n not in self.signed_off]
 
 
+class WebhookSettings(_Section):
+    """TradingView webhook (goldbot/webhook/app.py). The inbox is the only thing a caller with the secret can write to."""
+    max_rows_per_hour: int = Field(default=5000, gt=0)   # inbox rows received in the last hour; beyond it the answer is 429
+
+
 class Settings(_Section):
     symbol: str
     data_root: str
@@ -621,6 +627,7 @@ class Settings(_Section):
     attribution: AttributionSettings = Field(default_factory=AttributionSettings)
     ledger: LedgerSettings = Field(default_factory=LedgerSettings)
     ticks: TickRecordSettings = Field(default_factory=TickRecordSettings)
+    webhook: WebhookSettings = Field(default_factory=WebhookSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")
     @classmethod

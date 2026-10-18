@@ -387,6 +387,8 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/ops/setup_wizard.py", "merge_local_settings", "Settings"): "strict: Settings",
     ("goldbot/api/auth.py", "AuthStore.session_user", "User"):
         "strict: credentials (a newer lock or MFA flag must not be ignored)",
+    ("goldbot/research/cells.py", "_read_cell_rows", "CellRow"):
+        "strict: untrusted matrix-cell artifacts; a bad row becomes a failed trial (security review 2026-10-18)",
     ("goldbot/webhook/app.py", "create_app.tv", "Alert"):
         "strict: an inbound request body, not persisted state (a malformed alert is refused, TradingView sees 422)",
     ("goldbot/telegram/bus.py", "ApprovalBus.control", "Control"): "strict: the owner's halt; unreadable means halted",

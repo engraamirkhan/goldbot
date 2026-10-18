@@ -25,7 +25,20 @@ except ImportError:  # pragma: no cover
     lgb = None  # type: ignore[assignment]
 
 MAX_FEATURES = 40                 # design: at most 40 features per live model (`side` included)
+MAX_TV_FEATURES = 8               # TradingView plot columns (`tv_` prefix) per model, inside the 40 (plan tradingview-strategies)
 MIN_ISOTONIC_ROWS = 500           # isotonic regression overfits small calibration sets; Platt scaling below this
+
+
+def check_feature_cap(names: list[str]) -> None:
+    """Refuse a model input list over the caps: "max 40 features per live model" (`side` included), and at most
+    MAX_TV_FEATURES TradingView columns (`tv_` prefix) among them, so third-party chart values stay filters and never
+    crowd out the features built from our own bars."""
+    if len(names) > MAX_FEATURES:
+        raise ValueError(f"live models are capped at {MAX_FEATURES} features (design: Features and labels); "
+                         f"got {len(names)}")
+    tv = [n for n in names if n.startswith("tv_")]
+    if len(tv) > MAX_TV_FEATURES:
+        raise ValueError(f"at most {MAX_TV_FEATURES} TradingView columns per model; got {len(tv)}")
 
 
 class PlattCalibrator:
@@ -174,8 +187,7 @@ class MetaLabelModel(Record):
         return side_align(Z) if self.side_aligned else Z
 
     def fit(self, X: pd.DataFrame, y: pd.Series, w: pd.Series | None = None) -> "MetaLabelModel":
-        if len(self.feature_names) > MAX_FEATURES:
-            raise ValueError(f"live models are capped at {MAX_FEATURES} features (design: Features and labels)")
+        check_feature_cap(self.feature_names)
         if lgb is None:
             raise RuntimeError("lightgbm not installed")
         self.model = lgb.LGBMClassifier(**{"n_jobs": FIT_THREADS, **self.params})

@@ -216,3 +216,24 @@ def test_tradingview_status_is_for_any_signed_in_role_and_shows_no_values(client
     body = c.get("/api/tradingview", headers=h["viewer"]).json()
     assert body["indicators"][0]["plots_seen"] == ["plot_0"] and body["indicators"][0]["alerts_24h"] == 1
     assert "123.456" not in json.dumps(body)
+
+
+def test_tradingview_status_counts_csv_history_apart_from_alerts_and_shows_the_repaint_status(client, tmp_path):
+    from goldbot.data import tv_csv
+    from goldbot.data.store import Store
+    from goldbot.research import tv_repaint
+    c, h, _, _ = client
+    store = Store(tmp_path / "data")
+    t0 = pd.Timestamp("2026-01-05T08:00:00Z")
+    p = tmp_path / "e.csv"
+    p.write_text("time,open,high,low,close,A,B\n" + "".join(
+        f"{int((t0 + pd.Timedelta(minutes=15 * i)).timestamp())},1,2,1,1,{i},{i}\n" for i in range(10)))
+    tv_csv.import_tv_csv(p, store=store, indicator="K-Indi", version="2", tf="15")
+    row = c.get("/api/tradingview", headers=h["viewer"]).json()["indicators"][0]
+    assert (row["csv_bars"], row["csv_rows"], row["repaint_status"]) == (10, 20, "unvalidated")
+    assert row["alerts_24h"] == 0 and row["last_bar_time"] == ""      # the CSV is history, not a live alert
+    assert tv_repaint.validate(store, indicator="K-Indi", version="2", tf="15", min_bars=0).validated is False   # no live bars
+    df = store.read("tv_indicators", source="K-Indi@2")
+    df["repaint_validated"] = True
+    store.append("tv_indicators", df.drop(columns=["source", "symbol", "year", "month"]), source="K-Indi@2")
+    assert c.get("/api/tradingview", headers=h["viewer"]).json()["indicators"][0]["repaint_status"] == "validated"

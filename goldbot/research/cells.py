@@ -42,13 +42,15 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from pydantic import ValidationError
+from pydantic import ConfigDict, ValidationError
 
 from goldbot.base import FrozenRecord, load_record
+from goldbot.config import load_settings
 from goldbot.research.gates import dsr_check
 from goldbot.research.metrics import DaySummedDsr, DsrInputs
 from goldbot.research.registry import (
     DISCOVERY,
+    LOOP_RULE_REF,
     PREREGISTERED,
     TrialRegistry,
     n_trials_effective,
@@ -60,6 +62,7 @@ from goldbot.research.registry_sync import _key, merge_rows, read_rows, write_ro
 MAX_CELLS = 64                  # one dispatch; GitHub allows 256 matrix jobs, the quarter's trial budget far fewer
 MAX_COMMENT = 60_000            # GitHub's issue comment limit is 65,536 characters
 ERROR_TAIL = 4_000
+MAX_CELL_FILE = 5_000_000       # bytes: an artifact file larger than this is untrusted noise, never parsed or quoted
 FAILED = "failed"
 ITEM_KEYS = frozenset({"specialist", "variants", "pooled", "timeframe", "from_year", "to_year", "rationale",
                        "score_holdout", "skip_screen", "macro", "discover", "families", "discover_config", "rule_ref",
@@ -152,6 +155,8 @@ def plan(env: Mapping[str, str]) -> list[dict[str, Any]]:
             raise ValueError(f"bad families {spec['families']!r}")
         for k in _FLAGS:
             spec[k] = _truthy(spec[k])
+        if str(spec["rule_ref"]) == LOOP_RULE_REF:
+            spec["lot_fit"] = True                 # every loop trial reports account fit (ADR 0029, quant ruling)
         spec["from_year"], spec["to_year"] = int(spec["from_year"]), int(spec["to_year"])
         spec["discover_config"] = _json_object(str(spec["discover_config"]), "discover_config")
         spec["rationale"], spec["rule_ref"] = str(spec["rationale"]), str(spec["rule_ref"])
@@ -164,6 +169,11 @@ def plan(env: Mapping[str, str]) -> list[dict[str, Any]]:
             out.append({**{k: spec[k] for k in ("specialist", "pooled", "timeframe", "from_year", "to_year", "rationale",
                                                 "families", "discover_config", "rule_ref", *_FLAGS)},
                         "variant": v, "idx": len(out)})
+    loop_cells = sum(c["rule_ref"] == LOOP_RULE_REF for c in out)
+    if loop_cells:
+        cap = load_settings().research.loop_trials_per_run
+        if loop_cells > cap:
+            raise ValueError(f"{loop_cells} loop cells; research.loop_trials_per_run allows {cap} per dispatch (ADR 0029)")
     if len(out) > MAX_CELLS:
         raise ValueError(f"{len(out)} cells; a dispatch runs at most {MAX_CELLS} (the quarter's trial budget is the real cap)")
     return out
@@ -300,8 +310,22 @@ def _failed_row(cell: Mapping[str, Any], error: str) -> dict[str, Any]:
                           status=FAILED, budget_quarter=quarter_of())
 
 
+def _plain_file(path: Path) -> bool:
+    """A regular file that is not a symlink (a cell's artifact is untrusted: a link could point anywhere on the runner)."""
+    return path.is_file() and not path.is_symlink()
+
+
 def _read(path: Path) -> str:
-    return path.read_text(errors="replace") if path.is_file() else ""
+    """A cell's text file, "" when absent or larger than MAX_CELL_FILE (never read whole into memory)."""
+    return path.read_text(errors="replace") if _plain_file(path) and path.stat().st_size <= MAX_CELL_FILE else ""
+
+
+def _exit_code(path: Path) -> int:
+    """The cell's exit code from status.json; -1 (the cell failed) when it is missing, oversized or malformed."""
+    try:
+        return int(json.loads(_read(path) or "{}").get("exit", -1))
+    except (ValueError, TypeError, AttributeError, RecursionError):
+        return -1
 
 
 def _tail(text: str, n: int) -> str:
@@ -309,9 +333,25 @@ def _tail(text: str, n: int) -> str:
 
 
 CELL_STATUSES = frozenset({"evaluated", "screened", "holdout", DISCOVERY, PREREGISTERED, FAILED})
-_ROW_TYPES: dict[str, type] = {"trial": int, "ts": str, "agent_id": str, "family": str, "config_hash": str,
-                               "config": dict, "feature_version": str, "rationale": str, "results": dict,
-                               "status": str}
+
+
+class CellRow(FrozenRecord):
+    """The registry row schema (`TrialRegistry.record`) a cell may hand back: exact types, no unknown fields. Strict, so
+    a string is never coerced into an int and an artifact cannot smuggle extra keys into the registry."""
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+    trial: int
+    ts: str
+    agent_id: str
+    family: str
+    config_hash: str
+    config: dict[str, Any]
+    feature_version: str
+    rationale: str
+    results: dict[str, Any]
+    status: str
+    budget_quarter: str | None = None
+    rule_ref: str | None = None
+    preregistration: dict[str, Any] | None = None
 
 
 def _read_cell_rows(path: Path, cell: Mapping[str, Any]) -> tuple[list[dict[str, Any]], str]:
@@ -319,16 +359,22 @@ def _read_cell_rows(path: Path, cell: Mapping[str, Any]) -> tuple[list[dict[str,
     input: a truncated or foreign `rows.jsonl` fails that cell alone (a failed trial, counted in K), never the job.
     Each row needs the registry row fields, a status a cell may write (no verdict or withdrawal) and the agent and
     family the plan gave the cell (a discovery row names its own family)."""
+    if path.is_symlink():
+        return [], "rows.jsonl is a symlink: not read"
+    if path.is_file() and path.stat().st_size > MAX_CELL_FILE:
+        return [], f"rows.jsonl exceeds {MAX_CELL_FILE} bytes: not parsed"
     try:
         rows: list[Any] = read_rows(path)
-    except (ValueError, OSError) as e:
+    except (ValueError, OSError, RecursionError) as e:
         return [], f"rows.jsonl unreadable: {type(e).__name__}: {e}"
     agent, family, _, resolved = _planned(cell)
     for i, r in enumerate(rows):
         if not isinstance(r, dict):
             return [], f"row {i} is not an object"
-        bad = [k for k, t in _ROW_TYPES.items() if not isinstance(r.get(k), t) or isinstance(r.get(k), bool)]
-        if bad:
+        try:
+            CellRow.model_validate(r)
+        except ValidationError as e:
+            bad = sorted({str(x["loc"][0]) if x["loc"] else "?" for x in e.errors()})
             return [], f"row {i} fails the registry row schema: {', '.join(bad)}"
         if "repair" in r:                  # only scripts/registry_repair.py may replace a row (registry_sync._superseded)
             return [], f"row {i} carries a repair, which a cell may not write"
@@ -353,10 +399,7 @@ def record(cells_plan: list[dict[str, Any]], artifacts: Path, registry: Path) ->
         log = _read(d / "research.log")
         if bad_rows:
             log = f"{bad_rows}\n{log}"
-        try:
-            code = int(json.loads(_read(d / "status.json") or "{}").get("exit", -1))
-        except ValueError:
-            code = -1
+        code = _exit_code(d / "status.json")
         if rows:
             added += rows
             notes[cell["idx"]] = ("ok" if code == 0 else "recorded, then failed", "")

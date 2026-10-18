@@ -2858,6 +2858,16 @@ export interface components {
         TvIndicatorStatus: {
             /** Alerts 24H */
             alerts_24h: number;
+            /**
+             * Csv Bars
+             * @default 0
+             */
+            csv_bars: number;
+            /**
+             * Csv Rows
+             * @default 0
+             */
+            csv_rows: number;
             /** Gaps 24H */
             gaps_24h: number;
             /** Indicator */
@@ -2866,6 +2876,12 @@ export interface components {
             last_bar_time: string;
             /** Plots Seen */
             plots_seen: string[];
+            /**
+             * Repaint Status
+             * @default none
+             * @enum {string}
+             */
+            repaint_status: "none" | "unvalidated" | "validated";
             /** Symbol */
             symbol: string;
             /** Tf */
