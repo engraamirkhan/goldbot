@@ -187,12 +187,88 @@ including 2024 and 2025, cost stress at 0.71 $/oz). There is one change. **K for
 gh workflow run research.yml --ref main -f specialist=smc_structure -f from_year=2010 -f to_year=2025 -f variants='["tvr1","tvr2"]' -f lot_fit=true -f rule_ref='prereg-tv-replica-2026-10-18.md#b3-reading-rule-fixed-now' -f rationale='TVR owner-indicator replica: internal CHoCH + FVG with swing trend (TVR-1), swing BOS continuation (TVR-2); 15m, 1.0/2.0 ATR15, 32 bars'
 ```
 
+### B4a. Research-director ruling (2026-10-18, before any count or outcome)
+
+Signed by the research director under the PD + PO + research-director rule for routine research decisions. These
+items supersede B4's recommendation where they differ. Nothing in B2's configurations or B3's thresholds changes.
+
+1. **Funding: option (a), under the owner's standing directive of 2026-10-18.** `research.trial_budget_overrides`
+   goes from `{"2026Q4": 53}` to `{"2026Q4": 55}` (implementer lane, `chore:` with a handoff fragment). The owner's
+   directive ("backtest as much as needed; no quarterly waiting") already covers raising the Q4 override, so no new
+   owner decision is needed. Q1's free reserve (3) is **not** used: it is held for H-02/H-14 survivor follow-ups,
+   and spending next quarter's slots now would be spending reserved budget early. K is counted in full either way.
+   TVR-3, if TVR-1 unlocks it, is funded by a written note raising the override to 56 at that time; it is not
+   pre-funded.
+2. **D-TVR: adopted into both O-4 (H-14, 15m) and H-02 (4h), one group `smc_replica` each, 0 registry trials,
+   K_eff +1 per discovery run (+2 total).** Allowed now: neither group map nor `DiscoveryConfig` is pinned and
+   `preregistration-2027Q1.md` is not frozen (`freeze_commit: null`). Conditions: (i) the group is written into
+   both maps **before TVR-1/TVR-2 are dispatched**, so no TVR outcome can influence inclusion; (ii) the group holds
+   only `smc_replica` columns, never columns already in `structure` (`bos_*`, `sweep_*`), so a survival measures
+   what the replica adds; (iii) its size is at most `max_selected` (39) or it is split into two pre-named groups,
+   each counted in K_eff; (iv) a TVR FAIL does not remove the group (features are not rules; R-09 stands for
+   rules only). The amendment lines go into `preregistration-2027Q1.md` under O-4 and H-02 by the strategy
+   researcher, with quant-reviewer sign-off, by 2026-10-25.
+3. **Fixes before dispatch (each is a dispatch precondition, owned by the `smc_structure` implementer lane unless
+   stated):**
+   - **Causality.** A prefix-invariance test: every replica column at bar t is identical when computed on bars
+     ..t and on bars ..t+n (n ≥ 200), on Dukascopy 15m and 1h samples. Leg pivots confirm `length` bars late; the
+     break event must fire only on the bar where it is knowable. This replaces D-1 for the backtest; D-1 is still
+     needed before any shadow or live use.
+   - **Series start pinned.** The FVG running-mean threshold and the seeded ATR/EMAs start at the first bar of the
+     2010-01-01 Dukascopy series for each timeframe. Recorded in the report.
+   - **One position total, not per side.** At 0.01 lot on £1,000 the account holds one trade; an opposite signal
+     while in a trade is skipped. (This tightens B2's "per side" wording before any data; the event count rule is
+     unchanged.)
+   - **Bars are ours, not OANDA's.** The replica is exact on OANDA bars; on Dukascopy bars event timing can
+     differ. The trial tests the rule on our data; a PASS is not evidence that the owner's chart signals carry it.
+     D-1 must also compare replica events on our live 15m bars against the chart before shadow.
+   - **Count before dispatch** (B2) is pasted here by the strategy researcher, with TVR-1/TVR-2 overlap (share of
+     TVR-2 events within 4 bars of a TVR-1 event). Overlap above 50% is reported, not acted on.
+   - **Intrabar order.** If stop and target both fall inside one bar, the stop is taken first (the engine's
+     pessimistic convention, as in `batch-2026-10-18.md`).
+4. **Dispatch** follows `batch-2026-10-18.md` §0.2 (one run at a time) once the override, the specialist and the
+   fixes above are merged. Target: dispatched by 2026-10-22; verdict by the evaluator before any neighbour or
+   TVR-3 is written.
+
+### B4b. Counts before dispatch (2026-10-18, counts only, no outcome)
+
+Counted by `python scripts/smc_counts.py --bars raw` on the `smc_structure` code (presets `tvr1`, `tvr2`, through
+`candidates_in_context`, the call research makes). Dukascopy 1m (release data-v1) → 15m mid bars 2010-01-01 ..
+2025-09-30, 369,786 bars. The 2025 file is read whole, so its holdout rows (from `research.holdout_from`,
+2025-10-01) are read from disk (`scripts/smc_counts.py`, `read_bar_files`) and then cut before anything is resampled
+or computed (`count`, `cut_before_holdout`): no holdout bar reaches a count. Series start pinned to the first 2010
+bar (B4a). No label, return or outcome was computed.
+
+| Row | Events | Long | Short |
+|---|---:|---:|---:|
+| TVR-1 | 441 | 246 | 195 |
+| TVR-2 | 1,196 | 630 | 566 |
+
+TVR-2 events within 4 bars of a TVR-1 event: 3.5% (below the 50% reporting line).
+
+| Year | 2010 | 2011 | 2012 | 2013 | 2014 | 2015 | 2016 | 2017 | 2018 | 2019 | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| TVR-1 | 19 | 54 | 16 | 41 | 22 | 32 | 27 | 10 | 8 | 14 | 47 | 25 | 29 | 24 | 34 | 39 |
+| TVR-2 | 84 | 81 | 72 | 74 | 71 | 85 | 65 | 75 | 74 | 82 | 78 | 77 | 70 | 83 | 72 | 53 |
+
+Funnel for TVR-1 (counts only): 8,385 internal CHoCHs (2.27% of bars, as the pulled sample's 2.2%), 3,616 with the
+swing trend at t-1, 441 with a gap on t-2..t. B2 estimated a 4× cut from the two filters; the gap filter alone cuts
+about 8×. Under B2 ("a row whose count is below 1,000 is withdrawn before it runs and costs nothing"), TVR-1 is
+withdrawn as written, and TVR-3, which depends on it, is moot. TVR-2 (1,196) clears B2's 1,000 floor but not the
+walk-forward gate's event minimum (1,500 candidates, `research/gates.py` MIN_CANDIDATES), so it would spend a trial on
+a known gate failure.
+
+**Decision (program director + research director, under the owner's delegation, 2026-10-18).** TVR-2 is **withdrawn
+before dispatch: below the gate-1 event minimum**. TVR-1 is withdrawn under B2's floor. **0 trials are used.** No
+reworded TVR-1 or TVR-2 is written from these counts (that would be a configuration chosen after seeing them). The
+SMC topic continues only through the replica feature group (D-TVR) inside O-4 and H-02, not as standalone rules.
+
 ### B5. Ledger
 
 | Item | Count |
 |---|---|
 | Registry trials before this file (Q4 batch allocated) | 53 |
-| New pre-registered trials here | 2 (TVR-1, TVR-2) + 1 conditional (TVR-3) |
-| K for DSR at verdict | ≥ 55 (registry `n_trials_effective` at the time) |
-| Feature-discovery K_eff (if D-TVR is accepted) | +1 group inside H-02 |
+| New pre-registered trials here | 2 written (TVR-1, TVR-2) + 1 conditional (TVR-3); **0 dispatched**: TVR-1 withdrawn at 0 cost (441 < 1,000), TVR-2 withdrawn before dispatch (1,196 < the gate-1 minimum 1,500), TVR-3 moot (B4b) |
+| K for DSR at verdict | no verdict is read. The floor of 55 (B3) stands for any later SMC rule trial; no budget override is needed, because 0 trials were used |
+| Feature-discovery K_eff (D-TVR adopted, B4a) | +1 group inside O-4, +1 inside H-02 |
 | Holdout touched | no (match work read no returns; trials end 2025-09-30) |

@@ -233,11 +233,12 @@ def test_opt_in_registration_leaves_the_default_set_unchanged():
 def test_lookahead_check_reports_no_column():
     from goldbot.data.resample import resample_bars, ticks_to_1m
     from goldbot.data.synthetic import synthetic_ticks
+    from goldbot.features.registry import FULL_HISTORY
     from goldbot.research.pipeline import lookahead_check
     name = R.enable()
     ticks = synthetic_ticks("2025-03-03", "2025-04-18", ticks_per_minute=2, seed=5)
     bars = resample_bars(ticks_to_1m(ticks), "15m").reset_index(drop=True)
-    out = lookahead_check(bars, None, feature_names=[name])
+    out = lookahead_check(bars, None, feature_names=[name], ctx={FULL_HISTORY: True})     # the whole series
     assert out["lookahead_columns"] == [] and out["columns_checked"] >= len(R.COLUMNS) - 2
 
 
