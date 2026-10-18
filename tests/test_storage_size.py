@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 import pytest
@@ -75,36 +73,76 @@ def test_alerts_reach_telegram():
 
 
 # ---------------------------------------------------------------------------------------------------- probe
-def _runner(out: Any, rc: int = 0, calls: list | None = None):
-    def run(cmd, **kw):
+KEYS = {"restic-repository": REPO, "restic-s3-access-key": "AKSECRET0123", "restic-s3-secret-key": "sk/SECRET+abc"}
+NS = "http://s3.amazonaws.com/doc/2006-03-01/"
+
+
+def _page(versions: list[int | None], markers: tuple[str, str] | None = None) -> str:
+    body = "".join(f"<Version><Key>k{i}</Key><Size>{n}</Size></Version>" if n is not None
+                   else f"<DeleteMarker><Key>k{i}</Key></DeleteMarker>" for i, n in enumerate(versions))
+    more = (f"<IsTruncated>true</IsTruncated><NextKeyMarker>{markers[0]}</NextKeyMarker>"
+            f"<NextVersionIdMarker>{markers[1]}</NextVersionIdMarker>") if markers else "<IsTruncated>false</IsTruncated>"
+    return f'<ListVersionsResult xmlns="{NS}"><Name>b</Name>{more}{body}</ListVersionsResult>'
+
+
+def _fetcher(pages: list[tuple[int, str]], calls: list | None = None):
+    it = iter(pages)
+
+    def fetch(url, headers):
         if calls is not None:
-            calls.append(cmd)
-        return subprocess.CompletedProcess(cmd, rc, stdout=out if isinstance(out, str) else json.dumps(out), stderr="")
-    return run
+            calls.append((url, headers))
+        return next(it)
+    return fetch
 
 
-def test_record_sums_every_version(tmp_path):
+def test_sigv4_matches_aws_published_vectors():
+    """AWS Signature V4 test suite: get-vanilla and get-vanilla-query-order-key-case."""
+    kw = dict(region="us-east-1", service="service", access_key="AKIDEXAMPLE",
+              secret_key="wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", amz_date="20150830T123600Z")
+    h = {"host": "example.amazonaws.com", "x-amz-date": "20150830T123600Z"}
+    empty = storage_size.hashlib.sha256(b"").hexdigest()
+    a = storage_size.sigv4_authorization("GET", "/", {}, h, empty, **kw)
+    assert a == ("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, "
+                 "SignedHeaders=host;x-amz-date, Signature="
+                 "5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31")
+    q = storage_size.sigv4_authorization("GET", "/", {"Param2": "value2", "Param1": "value1"}, h, empty, **kw)
+    assert q.endswith("Signature=b97d918cfa904a5beff61c982a1b6f458b799221646efd99d3219ec94cdf2500")
+
+
+def test_record_sums_every_version_over_pages(tmp_path):
     calls: list = []
-    data = {"data": [{"size": 5_000_000_000}, {"size": 4_000_000_000}, {"size": None}]}
-    rec = storage_size.record_size(tmp_path, lambda k: REPO, runner=_runner(data, calls=calls), now=NOW)
+    pages = [(200, _page([5_000_000_000, None], ("k1", "v9"))), (200, _page([4_000_000_000]))]
+    rec = storage_size.record_size(tmp_path, lambda k: KEYS[k], fetch=_fetcher(pages, calls), now=NOW)
     assert rec["bytes"] == 9_000_000_000
-    assert "list-object-versions" in calls[0] and "--all" in calls[0]
     assert json.loads((tmp_path / storage_size.SIZE_FILE).read_text())["bytes"] == 9_000_000_000
+    (u1, h1), (u2, _) = calls
+    assert "versions=" in u1 and "key-marker" not in u1
+    assert "key-marker=k1" in u2 and "version-id-marker=v9" in u2
+    assert h1["Authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKSECRET0123/20261007/eu-frankfurt-1/s3/")
+    assert "SECRET+abc" not in str(h1)                      # the secret key itself is never sent
 
 
-@pytest.mark.parametrize("secret,runner", [
-    (None, _runner({"data": []})),
-    ("s3:https://example.com/bucket", _runner({"data": []})),
-    (REPO, _runner("", rc=1)),
-    (REPO, _runner("not json")),
+@pytest.mark.parametrize("secrets,pages", [
+    ({**KEYS, "restic-s3-secret-key": None}, [(200, _page([1]))]),
+    ({**KEYS, "restic-repository": "s3:https://example.com/bucket"}, [(200, _page([1]))]),
+    (KEYS, [(403, "<Error>SECRET bucketSECRET</Error>")]),
+    (KEYS, [(200, "not xml")]),
 ])
-def test_record_failure_is_unknown_and_leaks_nothing(tmp_path, secret, runner):
-    rec = storage_size.record_size(tmp_path, lambda k: secret, runner=runner, now=NOW)
+def test_record_failure_is_unknown_and_leaks_nothing(tmp_path, secrets, pages):
+    rec = storage_size.record_size(tmp_path, lambda k: secrets[k], fetch=_fetcher(pages), now=NOW)
     assert rec["bytes"] is None
     text = (tmp_path / storage_size.SIZE_FILE).read_text()
     assert "SECRET" not in text and "bucket" not in text.lower()
     assert health.check_object_storage(_ctx(tmp_path)).status == "warn"
 
 
+def test_fetch_exception_is_masked(tmp_path, caplog):
+    def boom(url, headers):
+        raise OSError(f"cannot reach {url} {headers}")
+    rec = storage_size.record_size(tmp_path, lambda k: KEYS[k], fetch=boom, now=NOW)
+    assert rec["bytes"] is None and rec["error"] == "OSError"
+    assert "SECRET" not in caplog.text and "AWS4" not in caplog.text
+
+
 def test_parse_repository():
-    assert storage_size.parse_repository(REPO) == ("nsSECRET", "bucketSECRET")
+    assert storage_size.parse_repository(REPO) == ("nsSECRET", "eu-frankfurt-1", "bucketSECRET")

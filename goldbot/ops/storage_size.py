@@ -1,21 +1,26 @@
 """Object Storage size of the backup bucket, previous versions included (BACKLOG 67, ADR 0002).
 
 restic's own `stats` is the logical size and misses the previous versions the bucket keeps for 30 days, so the size is
-the sum of every object version, listed with the OCI CLI (credentials: the CLI's own config on the box; the bucket and
-namespace come from the `restic-repository` secret, so nothing new is stored and nothing is written to the repo).
+the sum of every object version, listed through the bucket's S3-compatible ListObjectVersions call, signed (SigV4,
+httpx) with the restic keys already in the keyring: no new credential, and the bucket and namespace come from the
+`restic-repository` secret.
 The result goes to state/object_storage_size.json; health (`object_storage`) warns at 15 GB, fails at 19 GB, and
 treats a missing or stale reading as unknown (warn), never ok.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
+from xml.etree import ElementTree
 
+import httpx
 import pandas as pd
 
 from goldbot.base import write_atomic
@@ -23,40 +28,106 @@ from goldbot.base import write_atomic
 log = logging.getLogger("goldbot.ops.storage_size")
 
 SIZE_FILE = "object_storage_size.json"
-_REPO = re.compile(r"^s3:https?://([a-z0-9]+)\.compat\.objectstorage\.[a-z0-9-]+\.oraclecloud\.com/([^/]+)", re.I)
-Runner = Callable[..., "subprocess.CompletedProcess[str]"]
+MAX_PAGES = 2000                      # 1000 versions a page: a runaway listing stops at two million
+_REPO = re.compile(r"^s3:https://([a-z0-9]+)\.compat\.objectstorage\.([a-z0-9-]+)\.oraclecloud\.com/([^/]+)", re.I)
+# fetch(url, headers) -> (status, body); the default is httpx, tests pass a fake
+Fetch = Callable[[str, dict[str, str]], "tuple[int, str]"]
 
 
-def parse_repository(url: str) -> tuple[str, str]:
-    """(namespace, bucket) from the restic repository URL; ValueError (without the URL) when it is not an OCI one."""
+def parse_repository(url: str) -> tuple[str, str, str]:
+    """(namespace, region, bucket) from the restic repository URL; ValueError (without the URL) when it is not an OCI
+    one. Path-style addressing (https://<ns>.compat...<region>.../<bucket>) is what restic itself uses."""
     m = _REPO.match(url.strip())
     if not m:
         raise ValueError("restic-repository is not an Oracle Object Storage s3 URL")
-    return m.group(1), m.group(2)
+    return m.group(1), m.group(2), m.group(3)
 
 
-def bucket_bytes(namespace: str, bucket: str, runner: Runner = subprocess.run, timeout_s: float = 300) -> int:
-    """Sum of the size of every object version (and delete marker) in the bucket."""
-    cmd = ["oci", "os", "object", "list-object-versions", "--namespace-name", namespace, "--bucket-name", bucket,
-           "--fields", "size", "--all", "--output", "json"]
-    proc = runner(cmd, capture_output=True, text=True, timeout=timeout_s, check=False)
-    if proc.returncode != 0:
-        raise RuntimeError(f"oci exited {proc.returncode}")
-    data = json.loads(proc.stdout or "{}").get("data") or []
-    return int(sum(int(o.get("size") or 0) for o in data))
+# ------------------------------------------------------------------------------------------------- AWS SigV4
+def _hmac(key: bytes, msg: str) -> bytes:
+    return hmac.new(key, msg.encode(), hashlib.sha256).digest()
 
 
-def record_size(state_dir: Path, get_secret: Callable[[str], str | None], *, runner: Runner = subprocess.run,
+def sigv4_authorization(method: str, path: str, query: dict[str, str], headers: dict[str, str], payload_hash: str, *,
+                        region: str, service: str, access_key: str, secret_key: str, amz_date: str) -> str:
+    """The `Authorization` header value (AWS Signature Version 4). `headers` are all the headers to sign (lower-case
+    names, including host and x-amz-date); `path` is already URI-encoded; `amz_date` is YYYYMMDDTHHMMSSZ."""
+    enc = lambda v: quote(v, safe="-_.~")   # noqa: E731
+    cq = "&".join(f"{enc(k)}={enc(v)}" for k, v in sorted(query.items()))
+    names = sorted(headers)
+    ch = "".join(f"{n}:{' '.join(headers[n].split())}\n" for n in names)
+    signed = ";".join(names)
+    creq = "\n".join([method, path, cq, ch, signed, payload_hash])
+    scope = f"{amz_date[:8]}/{region}/{service}/aws4_request"
+    sts = "\n".join(["AWS4-HMAC-SHA256", amz_date, scope, hashlib.sha256(creq.encode()).hexdigest()])
+    k = _hmac(("AWS4" + secret_key).encode(), amz_date[:8])
+    for part in (region, service, "aws4_request"):
+        k = _hmac(k, part)
+    sig = hmac.new(k, sts.encode(), hashlib.sha256).hexdigest()
+    return f"AWS4-HMAC-SHA256 Credential={access_key}/{scope}, SignedHeaders={signed}, Signature={sig}"
+
+
+def _httpx_fetch(url: str, headers: dict[str, str]) -> tuple[int, str]:
+    r = httpx.get(url, headers=headers, timeout=60.0, follow_redirects=False)
+    return r.status_code, r.text
+
+
+def _local(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def bucket_bytes(namespace: str, region: str, bucket: str, access_key: str, secret_key: str, *,
+                 fetch: Fetch = _httpx_fetch, now: pd.Timestamp | None = None) -> int:
+    """Sum of the size of every object version in the bucket (delete markers count 0), from the S3-compatible
+    ListObjectVersions call, paginated. Read-only; the restic keys are used for signing only, never logged."""
+    host = f"{namespace}.compat.objectstorage.{region}.oraclecloud.com"
+    total, key_marker, ver_marker = 0, "", ""
+    for _ in range(MAX_PAGES):
+        query = {"versions": "", "max-keys": "1000"}
+        if key_marker:
+            query["key-marker"] = key_marker
+        if ver_marker:
+            query["version-id-marker"] = ver_marker
+        t = now if now is not None else pd.Timestamp.now("UTC")
+        amz = t.strftime("%Y%m%dT%H%M%SZ")
+        empty = hashlib.sha256(b"").hexdigest()
+        hdrs = {"host": host, "x-amz-content-sha256": empty, "x-amz-date": amz}
+        auth = sigv4_authorization("GET", f"/{bucket}", query, hdrs, empty, region=region, service="s3",
+                                   access_key=access_key, secret_key=secret_key, amz_date=amz)
+        qs = "&".join(f"{quote(k, safe='-_.~')}={quote(v, safe='-_.~')}" for k, v in sorted(query.items()))
+        status, body = fetch(f"https://{host}/{bucket}?{qs}", {**{k: v for k, v in hdrs.items() if k != "host"},
+                                                                 "Authorization": auth})
+        if status != 200:
+            raise RuntimeError(f"object storage answered HTTP {status}")
+        root = ElementTree.fromstring(body)
+        truncated, next_key, next_ver = False, "", ""
+        for el in root:
+            tag = _local(el.tag)
+            if tag == "Version":
+                total += sum(int(c.text or 0) for c in el if _local(c.tag) == "Size")
+            elif tag == "IsTruncated":
+                truncated = (el.text or "").strip().lower() == "true"
+            elif tag == "NextKeyMarker":
+                next_key = el.text or ""
+            elif tag == "NextVersionIdMarker":
+                next_ver = el.text or ""
+        if not truncated:
+            return total
+        key_marker, ver_marker = next_key, next_ver
+    raise RuntimeError("object storage listing did not end")
+
+
+def record_size(state_dir: Path, get_secret: Callable[[str], str | None], *, fetch: Fetch = _httpx_fetch,
                 now: pd.Timestamp | None = None) -> dict[str, Any]:
-    """Measure and write state/object_storage_size.json. Never raises and never records the bucket, namespace or the
-    tool's output: a failure is recorded as `bytes: null` with the exception class only (health: unknown)."""
+    """Measure and write state/object_storage_size.json. Never raises and never records the bucket, namespace, keys or
+    any response text: a failure is recorded as `bytes: null` with the exception class only (health: unknown)."""
     ts = (now if now is not None else pd.Timestamp.now("UTC")).isoformat()
     try:
-        url = get_secret("restic-repository")
-        if not url:
-            raise ValueError("restic-repository not set")
-        ns, bucket = parse_repository(url)
-        rec: dict[str, Any] = {"ts": ts, "bytes": bucket_bytes(ns, bucket, runner)}
+        url, ak, sk = (get_secret(k) for k in ("restic-repository", "restic-s3-access-key", "restic-s3-secret-key"))
+        if not (url and ak and sk):
+            raise ValueError("restic secrets not set")
+        ns, region, bucket = parse_repository(url)
+        rec: dict[str, Any] = {"ts": ts, "bytes": bucket_bytes(ns, region, bucket, ak, sk, fetch=fetch, now=now)}
     except Exception as exc:
         log.warning("object storage size unreadable: %s", type(exc).__name__)
         rec = {"ts": ts, "bytes": None, "error": type(exc).__name__}
