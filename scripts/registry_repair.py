@@ -39,7 +39,7 @@ sys.path.insert(0, str(ROOT))
 
 from goldbot.base import FrozenRecord  # noqa: E402
 from goldbot.research.cells import FAILED, _read_cell_rows, restate_dsr  # noqa: E402
-from goldbot.research.registry import DISCOVERY, discovery_k_eff, is_trial, n_trials_effective  # noqa: E402
+from goldbot.research.registry import is_trial, n_trials_effective  # noqa: E402
 from goldbot.research.registry_sync import KEY_FIELDS, _key, merge_rows, read_rows, write_rows  # noqa: E402
 
 REASON = ("the record step refused this cell's rows: its plan said a whole float (e.g. 3.0) that the matrix handed the "
@@ -132,13 +132,31 @@ def _candidates(failed: dict[str, Any], runs: list[Path], known: set[tuple[str, 
     return found, notes
 
 
-def repair(published: list[dict[str, Any]], runs: list[Path], verify: RunInfo | None = None) -> Repair:
+Digests = Callable[[str], dict[str, str]]
+
+
+def artifact_digests(run_id: str) -> dict[str, str]:
+    """{artifact name: digest} the run uploaded (`gh api .../actions/runs/<id>/artifacts`); {} when gh cannot say. GitHub
+    digests the artifact zip, not rows.jsonl, so it is recorded on the repair row for the reviewer, not compared."""
+    out = subprocess.run(["gh", "api", f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts"],
+                         capture_output=True, text=True, check=False, timeout=60)
+    if out.returncode != 0:
+        return {}
+    try:
+        return {str(a["name"]): str(a["digest"]) for a in json.loads(out.stdout).get("artifacts", []) if a.get("digest")}
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return {}
+
+
+def repair(published: list[dict[str, Any]], runs: list[Path], verify: RunInfo | None = None,
+           expect_k: int | None = None, digests: Digests | None = None) -> Repair:
     """The registry with every repairable failed row replaced (see the module docstring); `published` is not mutated.
-    Every run folder must be a successful research.yml run (`verify`, gh by default)."""
+    Every run folder must be a successful research.yml run (`verify`, gh by default). K may never fall, and with
+    `expect_k` (the operator's figure from the evaluator's reading, never derived from the artifact) it must land on
+    it exactly: a discovery row's own K_eff is not evidence of what K should be."""
     heads = _verified(runs, verify if verify is not None else run_info)   # looked up at call time (tests patch it)
     known = {_key(r) for r in published}
     fixes: list[dict[str, Any]] = []
-    k_eff = 0                       # what the replaced discovery rows add to K: the failed rows hid their selection
     replaced: list[Outcome] = []
     left: list[Outcome] = []
     for f in published:
@@ -161,12 +179,11 @@ def repair(published: list[dict[str, Any]], runs: list[Path], verify: RunInfo | 
         # a pre-registration the cell wrote before its look (a discovery run's) is not a trial: it comes along under
         # its own timestamp and takes no slot (merge_rows numbers it after the trial before it)
         fixes += [r for r in rows if not is_trial(r)]
-        if row["status"] == DISCOVERY:
-            k_eff += discovery_k_eff((row.get("results") or {}).get("discovery") or {})
         fixes.append({**row, "ts": f["ts"], "trial": f["trial"],
                       "repair": {"replaces": {k: f[k] for k in KEY_FIELDS}, "trial": f["trial"],
                                  "cell_ts": row["ts"], "source": source, "run_id": run.name,
                                  "head_sha": heads[run], "rows_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                                 "artifact_digest": (digests(run.name) if digests else {}).get(path.parent.name, ""),
                                  "reason": REASON}})
         replaced.append(Outcome(trial=trial, failed_agent_id=was, agent_id=str(row["agent_id"]), source=source,
                                 status=str(row["status"])))
@@ -180,9 +197,11 @@ def repair(published: list[dict[str, Any]], runs: list[Path], verify: RunInfo | 
     numbers = {_key(r): r["trial"] for r in final}
     swapped = [r for r in fixes if is_trial(r)]
     moved = [o.trial for o, r in zip(replaced, swapped, strict=True) if numbers[_key(r)] != o.trial]
-    if moved or sum(map(is_trial, final)) != sum(map(is_trial, published)) or k != k_before + k_eff:
-        raise ValueError(f"the repair would renumber trials {moved} or change the trial count or K ({k_before} -> {k}, "
-                         f"expected {k_before + k_eff}): refusing")
+    if moved or sum(map(is_trial, final)) != sum(map(is_trial, published)) or k < k_before:
+        raise ValueError(f"the repair would renumber trials {moved}, change the trial count or lower K "
+                         f"({k_before} -> {k}): refusing")
+    if expect_k is not None and k != expect_k:
+        raise ValueError(f"K would be {k} after the repair, not the expected {expect_k}: refusing")
     return Repair(rows=final, replaced=replaced, left=left, k_before=k_before, k_after=k)
 
 
@@ -199,9 +218,13 @@ def main() -> None:
     ap.add_argument("registry", type=Path, help="a local copy (scripts/registry_release.sh fetch REGISTRY)")
     ap.add_argument("runs", type=Path, nargs="+", help="downloaded research.yml run artifacts (cell-<idx>/)")
     ap.add_argument("--apply", action="store_true", help="write the repaired rows to REGISTRY (default: dry run)")
+    ap.add_argument("--expect-k", type=int, default=None,
+                    help="the registry K the repair must land on (from the evaluator's reading); required with --apply")
     a = ap.parse_args()
+    if a.apply and a.expect_k is None:
+        sys.exit("::error::--apply needs --expect-k N: the K after the repair, taken from the evaluator, not the artifact")
     try:
-        out = repair(read_rows(a.registry), a.runs)
+        out = repair(read_rows(a.registry), a.runs, expect_k=a.expect_k, digests=artifact_digests)
     except ValueError as exc:
         sys.exit(f"::error::{exc}")
     print(summary(out))

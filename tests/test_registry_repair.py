@@ -83,6 +83,7 @@ def test_a_dry_run_reports_the_replacement_and_changes_nothing(
     registry, arts, ran = _published(tmp_path)
     before = registry.read_text()
     monkeypatch.setattr(repair, "run_info", _research_run)
+    monkeypatch.setattr(repair, "artifact_digests", lambda run_id: {})
     monkeypatch.setattr(sys, "argv", ["registry_repair", str(registry), str(arts)])
     repair.main()
     out = capsys.readouterr().out
@@ -191,6 +192,50 @@ def test_a_failed_discovery_row_is_replaced_by_the_discovery_row_with_its_prereg
     assert (result.k_before, result.k_after) == (2, 2 + 4)
     for merged in (merge_rows(result.rows, published), merge_rows(published, result.rows)):
         assert [r["status"] for r in merged] == ["screened", "preregistered", "discovery"]
+
+
+def _discovery_case(tmp_path: Path, disc_results: dict[str, Any]) -> tuple[Path, Path]:
+    cell = {"idx": 0, "specialist": "box_course", "pooled": "", "variant": {}, "rationale": "H-40"}
+    real = _cell_row(tmp_path, {"confirm_bars": 1})
+    agent, _, config, _ = cells._planned(cell)
+    disc = TrialRegistry(tmp_path / "disc.jsonl").record(
+        agent_id=agent, family="discovery_box_course", config=config, feature_version="f-1", rationale="H-40",
+        results=disc_results, status="discovery")
+    return _failed_registry(tmp_path, real, cell, [disc])
+
+
+@pytest.mark.parametrize("k_eff", [0, 400], ids=["k_eff-zeroed", "k_eff-inflated"])
+def test_a_tampered_k_eff_in_the_artifact_is_refused_because_k_must_match_the_operators_expectation(
+        tmp_path: Path, repair: ModuleType, k_eff: int) -> None:
+    registry, arts = _discovery_case(tmp_path, {"discovery": {"k_eff": k_eff}})
+    published = read_rows(registry)
+    with pytest.raises(ValueError, match="not the expected 6"):
+        repair.repair(published, [arts], verify=_research_run, expect_k=2 + 4)
+    assert repair.repair(published, [arts], verify=_research_run, expect_k=2 + k_eff).k_after == 2 + k_eff
+
+
+def test_a_repair_that_would_lower_k_is_refused(
+        tmp_path: Path, repair: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    registry, arts, _ = _published(tmp_path)
+    counts = iter([10, 5])
+    monkeypatch.setattr(repair, "n_trials_effective", lambda rows: next(counts))
+    with pytest.raises(ValueError, match="lower K"):
+        repair.repair(read_rows(registry), [arts], verify=_research_run)
+
+
+def test_apply_without_expect_k_is_refused_and_writes_nothing(
+        tmp_path: Path, repair: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    registry, arts, _ = _published(tmp_path)
+    before = registry.read_text()
+    monkeypatch.setattr(repair, "run_info", _research_run)
+    monkeypatch.setattr(repair, "artifact_digests", lambda run_id: {"cell-0": "sha256:abc"})
+    monkeypatch.setattr(sys, "argv", ["registry_repair", str(registry), str(arts), "--apply"])
+    with pytest.raises(SystemExit, match="--expect-k"):
+        repair.main()
+    assert registry.read_text() == before
+    monkeypatch.setattr(sys, "argv", ["registry_repair", str(registry), str(arts), "--apply", "--expect-k", "3"])
+    repair.main()
+    assert read_rows(registry)[1]["repair"]["artifact_digest"] == "sha256:abc"
 
 
 def test_a_failed_pooled_row_is_replaced_by_the_pooled_cells_row(tmp_path: Path, repair: ModuleType) -> None:
