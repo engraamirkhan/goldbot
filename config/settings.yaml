@@ -354,3 +354,7 @@ ticks:                               # broker tick record (goldbot/data/ticks.py
 
 webhook:                             # TradingView receiver (goldbot/webhook/app.py)
   max_rows_per_hour: 5000            # inbox rows in the last hour; beyond it 429 (bounds what a leaked secret can write)
+
+tv:                                  # TradingView values at decision time (goldbot/engine/tv_context.py, specialists/tv_event.py)
+  max_lag_s: 60                      # a value counts only for the decision bar and when it arrived <= this after its close,
+                                     #   else NaN and no TradingView entry (fails closed); equals features.tv_plots.MAX_LAG

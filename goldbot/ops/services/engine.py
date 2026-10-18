@@ -300,6 +300,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               shock_blackout_min=settings.news.shock_blackout_min,
                               shock_min_relevance=settings.news.shock_min_relevance, live_clock=True,
                               approval_window_s=settings.risk.approval_window_seconds,
+                              tv_max_lag_s=settings.tv.max_lag_s,
                               swap_prior=settings_swap(settings)), broker, agents,
                  champions(), center, limits=limits, shadow_models=shadow_set() if shadow_host else None,
                  live_shares=live_shares, live_versions=live_versions())

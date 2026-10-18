@@ -49,6 +49,7 @@ from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, Sent
     orders_file,
     risk_file,
 )
+from goldbot.engine.tv_context import with_tv
 from goldbot.execution.bridge import CEILING_REFUSAL, UNREADABLE_REFUSAL
 from goldbot.execution.broker import AccountInfo, Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 from goldbot.execution.classifier import StoredClass, effective_class, read_stored
@@ -233,6 +234,7 @@ class EngineConfig(Record):
     # time) and written to state/broker_terms_<account>.json for the nightly cost job; commission from this many days
     broker_terms_every_s: int = 6 * 3600
     commission_window_days: int = 90
+    tv_max_lag_s: int = Field(60, ge=0)      # settings tv.max_lag_s: a TradingView value later than this is NaN (tv_context)
     # BACKLOG 36: the swap the daily projection charges for a rollover before the risk day ends until the cost table
     # measures the broker's own (`cost_imputation.account_swap`); production passes `settings_swap(settings)`, the
     # default is the shipped prior. Read on the engine's server clock (`server_tz`), whatever zone it names
@@ -1086,7 +1088,8 @@ class Engine:
         last = len(dec) - 1
         cost_atr = self._cost_atr(float(a.iloc[last]), close_ts)            # full round trip: the RiskGate's checks
         hurdle_atr = self._cost_atr(float(a.iloc[last]), close_ts, ex_spread=True)   # p already pays the spread
-        cands_by_agent = {agent.agent_id: agent.candidates(m, X) for agent in agents}
+        now, lag = self._now(last_tick), self.cfg.tv_max_lag_s      # TradingView agents: their signal, fail closed
+        cands_by_agent = {a.agent_id: a.candidates(m, with_tv(a, m, X, self.store, now, lag)) for a in agents}
         if self.shadow is not None:
             self._shadow_step(tf, fr, agents, cands_by_agent, float(a.iloc[last]), hurdle_atr)
         for agent in agents:
@@ -1097,9 +1100,11 @@ class Engine:
             model = self.models.get(agent.agent_id) or self.models.get(agent.family)
             if model is None:
                 continue
-            share = 1.0 if self.live_shares is None else self.live_shares.get(agent.agent_id, 0.0)
+            # DESIGN: TradingView signals are "filter features only" until the promotion rule: a requires_tv agent is
+            # shadow only (share 0) like a shadow-only member of the population: the shadow book trades it, not the broker
+            share = 0.0 if agent.requires_tv else 1.0 if self.live_shares is None else self.live_shares.get(agent.agent_id, 0.0)
             if share <= 0:
-                continue      # shadow-only member of the population: the shadow book trades it, not the broker
+                continue
             if self._busy(agent.agent_id):
                 continue      # one position (or pending proposal) per agent, as its labels were built
             drift = self._drift()

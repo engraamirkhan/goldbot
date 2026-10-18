@@ -74,6 +74,10 @@ class Specialist(ABC):
     # (`Population.ensure_founders`) and is not a member of the pooled models (`pipeline.pooled_members`). A passed
     # walk-forward trial of its exact configuration still becomes a shadow founder (gap_watch `research_ready`)
     screening: bool = False
+    # True for a family whose signal needs TradingView values (e.g. tv_event): it is searched only under TV_GRID_V1
+    # (research.tv_grid), never by the loop grid (`generator._eligible`, `loop_refusal`), and trades in shadow only
+    # ("TradingView indicators: filter features only" until the DESIGN promotion rule is met; engine `_decide`)
+    requires_tv: bool = False
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Every subclass's own `candidates` and `candidates_in_context` pass through the loop's optional filters

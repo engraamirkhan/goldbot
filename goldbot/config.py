@@ -602,6 +602,14 @@ class WebhookSettings(_Section):
     max_rows_per_hour: int = Field(default=5000, gt=0)   # inbox rows received in the last hour; beyond it the answer is 429
 
 
+class TvSettings(_Section):
+    """TradingView values at decision time (plan docs/plans/tradingview-strategies.md, "Live staleness fails closed"):
+    a value counts only when its bar is the decision bar and it arrived no more than `max_lag_s` after that bar's
+    close; otherwise it is NaN and nothing that needs it can trigger. Equal to `features.tv_plots.MAX_LAG` (the
+    training allowance), so live never accepts what training could not see (tests/test_tv_event.py pins both)."""
+    max_lag_s: int = Field(default=60, ge=0)
+
+
 class Settings(_Section):
     symbol: str
     data_root: str
@@ -628,6 +636,7 @@ class Settings(_Section):
     ledger: LedgerSettings = Field(default_factory=LedgerSettings)
     ticks: TickRecordSettings = Field(default_factory=TickRecordSettings)
     webhook: WebhookSettings = Field(default_factory=WebhookSettings)
+    tv: TvSettings = Field(default_factory=TvSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")
     @classmethod
