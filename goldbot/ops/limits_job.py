@@ -442,14 +442,14 @@ def check_limits_controller(ctx: HealthContext, account_id: str) -> list[Check]:
     name = f"limits_controller:{account_id}"
     floors = "the engine trades the default limits (floors) until the nightly limits_job decides"
     if not (Path(ctx.state_dir) / "core.db").exists():
-        return [Check(name=name, status="fail", reason=f"no adaptive limits decision yet: {floors}")]
+        return [Check(name=name, status="warn", reason=f"no adaptive limits decision yet: {floors}")]   # safe: floors
     try:
         st = AdaptiveStore(ctx.state_dir).load(account_id)
     except Exception as exc:
         return [Check(name=name, status="fail",
                       reason=f"adaptive limits state unreadable in core.db ({type(exc).__name__}): {floors}")]
     if st is None or st.decided_ns is None:
-        return [Check(name=name, status="fail", reason=f"no adaptive limits decision yet: {floors}")]
+        return [Check(name=name, status="warn", reason=f"no adaptive limits decision yet: {floors}")]   # safe: floors
     age_h = (_ns(ctx.now) - st.decided_ns) / 3.6e12
     # no decision is made for a weekend day (Friday's and Saturday's nights): two nights more on Saturday and Sunday
     limit = STALE_DECISION_H + (48.0 if ctx.now.tz_convert("UTC").weekday() >= 5 else 0.0)

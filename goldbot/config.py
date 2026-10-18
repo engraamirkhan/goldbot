@@ -639,6 +639,9 @@ class TvPullSettings(_Section):
     backoff_base_s: float = Field(default=300, gt=0)
     backoff_max_s: float = Field(default=21600, gt=0)
     timeout_s: float = Field(default=30, gt=0)
+    # display names (goldbot/data/tv_alias.py): key_of(name | plot fingerprint) -> our name, e.g. "Structure (smc)";
+    # empty here (no vendor name in the repo), the owner's keys sit in settings.local.yaml
+    aliases: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _backoff_ordered(self) -> TvPullSettings:
