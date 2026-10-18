@@ -8,6 +8,11 @@ site's own bars (15m/1h/4h/1D); the per-plot match table is in the pre-registrat
 a value at bar t uses bars that closed at or before t only (bar t's close included), and every event is stamped on
 the bar whose close makes it known (a pivot `length` bars after its extreme, a break on the closing bar).
 
+Ownership. Once fitted, these indicators are goldbot's own: computed from our bars in research and live, with no
+dependency on the charting site. Every tunable sits in the typed block `ReplicaParams`, whose defaults are the owner's
+current chart settings. `goldbot.research.replica_parity` compares the replica with pulled chart values over a window;
+it is an optional health check, never an input.
+
 Building blocks (all arrays are numpy float/bool, one value per bar):
 
 * `ema_seeded(x, n)` - the charting site's EMA: NaN for the first n-1 bars, seeded with the SMA of the first n values,
@@ -53,9 +58,14 @@ Building blocks (all arrays are numpy float/bool, one value per bar):
 """
 from __future__ import annotations
 
+import hashlib
+import json
+
 import numpy as np
 import pandas as pd
+from pydantic import Field
 
+from goldbot.base import FrozenRecord
 from goldbot.features.columns import Columns
 from goldbot.features.registry import FEATURES, FeatureCtx, feature
 
@@ -379,42 +389,83 @@ def sr_channel_breaks(open_: Arr, high: Arr, low: Arr, close: Arr, pivot_len: in
 
 
 # --------------------------------------------------------------------------- the opt-in feature
-COLUMNS = (*STRUCTURE_EVENTS, "trend_swing", "trend_internal", "eqh", "eql", "fvg_bull", "fvg_bear", "mfi_12",
-           "mfi_os_cross", "mfi_ob_cross", "gz50_dist_atr", "gz618_dist_atr", "sr_break_up", "sr_break_dn",
+class ReplicaParams(FrozenRecord):
+    """Every tunable of the replica in one typed block. The defaults are the owner's current chart settings, so
+    `ReplicaParams()` reproduces the chart. Changing a value produces a different indicator, which the system owns
+    and may evolve. `enable(params)` stamps a non-default block into the feature version, so a model trained on one
+    block is never scored on another."""
+
+    swing_len: int = Field(50, ge=2)                   # leg-pivot length, swing structure
+    internal_len: int = Field(5, ge=2)                 # leg-pivot length, internal structure
+    internal_candle_filter: bool = True                # the asymmetric wick test on internal breaks
+    equal_len: int = Field(3, ge=1)                    # classic pivot length for equal highs/lows
+    equal_threshold: float = Field(0.1, ge=0.0)        # x ATR(equal_atr_len)
+    equal_atr_len: int = Field(200, ge=1)
+    fvg_auto_threshold: bool = True
+    mfi_len: int = Field(12, ge=2)
+    mfi_oversold: float = 20.0
+    mfi_overbought: float = 80.0
+    range_len: int = Field(50, ge=2)                   # retracement range window
+    range_fracs: tuple[float, float] = (0.5, 0.618)
+    sr_pivot_len: int = Field(5, ge=1)
+    sr_width_pct: float = Field(1.0, gt=0.0)           # channel width, % of the lookback range
+    sr_max_channels: int = Field(15, ge=1)
+    sr_lookback: int = Field(300, ge=10)
+    candle_vol_len: int = Field(20, ge=1)
+    candle_high_mult: float = 1.5
+    candle_low_mult: float = 0.5
+    candle_traverse: bool = False                      # the MA-traverse candle code (off in the feature frame)
+    atr_len: int = Field(14, ge=1)                     # ATR used to scale the distance columns
+
+    def tag(self) -> str:
+        """'' for the defaults, else a short hash of the non-default fields (used in the feature version)."""
+        diff = self.model_dump(exclude_defaults=True)
+        if not diff:
+            return ""
+        return hashlib.sha1(json.dumps(diff, sort_keys=True, default=str).encode()).hexdigest()[:8]
+
+
+DEFAULT_PARAMS = ReplicaParams()
+
+COLUMNS = (*STRUCTURE_EVENTS, "trend_swing", "trend_internal", "eqh", "eql", "fvg_bull", "fvg_bear", "mfi",
+           "mfi_os_cross", "mfi_ob_cross", "range_f1_dist_atr", "range_f2_dist_atr", "sr_break_up", "sr_break_dn",
            "candle_class", "ma_stack_sma_ema")
-SIGNED = {"trend_swing": 0.0, "trend_internal": 0.0, "gz50_dist_atr": 0.0, "gz618_dist_atr": 0.0, "ma_stack_sma_ema": 0.0}
+SIGNED = {"trend_swing": 0.0, "trend_internal": 0.0, "range_f1_dist_atr": 0.0, "range_f2_dist_atr": 0.0,
+          "ma_stack_sma_ema": 0.0}
 
 
-def replica_frame(df: pd.DataFrame, ctx: FeatureCtx | None = None) -> pd.DataFrame:
+def replica_frame(df: pd.DataFrame, params: ReplicaParams = DEFAULT_PARAMS) -> pd.DataFrame:
     """All replica columns on mid bars (open/high/low/close plus `tick_count`, or `volume`, as the volume proxy).
-    Events are 0/1, trends -1/0/+1, distances (close - level) / ATR14 (seeded Wilder), `mfi_12` 0..100,
-    `candle_class` the code above, `ma_stack_sma_ema` = +1 when SMA10 > SMA20 > EMA50 > SMA200, -1 when the reverse, else 0."""
-    ctx = ctx or {}
+    Events are 0/1, trends -1/0/+1. The distances are (close - level) / ATR (seeded Wilder, `atr_len`) to the two
+    range levels. `mfi` is 0..100, `candle_class` uses the codes above, and `ma_stack_sma_ema` is +1 when
+    SMA10 > SMA20 > EMA50 > SMA200, -1 when the reverse holds, else 0."""
+    p = params
     o, h, lo, c = (df[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close"))
     vol = df["tick_count"] if "tick_count" in df.columns else df["volume"]
     v = vol.to_numpy(dtype=float)
     out = Columns(df.index)
-    st = structure_breaks(o, h, lo, c, int(ctx.get("smc_swing_len", 50)), int(ctx.get("smc_internal_len", 5)))
+    st = structure_breaks(o, h, lo, c, p.swing_len, p.internal_len, p.internal_candle_filter)
     for k in STRUCTURE_EVENTS:
         out[k] = st[k].astype(np.int64)
     out["trend_swing"] = st["trend_swing"]
     out["trend_internal"] = st["trend_internal"]
-    eqh, eql = equal_levels(h, lo, c)
+    eqh, eql = equal_levels(h, lo, c, p.equal_len, p.equal_threshold, p.equal_atr_len)
     out["eqh"], out["eql"] = eqh.astype(np.int64), eql.astype(np.int64)
-    fb, fs = fair_value_gaps(o, h, lo, c)
+    fb, fs = fair_value_gaps(o, h, lo, c, p.fvg_auto_threshold)
     out["fvg_bull"], out["fvg_bear"] = fb.astype(np.int64), fs.astype(np.int64)
-    m = money_flow(h, lo, c, v, 12)
-    out["mfi_12"] = m
-    out["mfi_os_cross"] = cross_under(m, np.full(len(m), 20.0)).astype(np.int64)
-    out["mfi_ob_cross"] = cross_over(m, np.full(len(m), 80.0)).astype(np.int64)
-    a = atr_seeded(h, lo, c, 14)
-    g50, g618 = range_retracement(h, lo, 50, (0.5, 0.618))
+    m = money_flow(h, lo, c, v, p.mfi_len)
+    out["mfi"] = m
+    out["mfi_os_cross"] = cross_under(m, np.full(len(m), p.mfi_oversold)).astype(np.int64)
+    out["mfi_ob_cross"] = cross_over(m, np.full(len(m), p.mfi_overbought)).astype(np.int64)
+    a = atr_seeded(h, lo, c, p.atr_len)
+    f1, f2 = range_retracement(h, lo, p.range_len, p.range_fracs)
     with np.errstate(invalid="ignore", divide="ignore"):
-        out["gz50_dist_atr"] = (c - g50) / a
-        out["gz618_dist_atr"] = (c - g618) / a
-    up, dn = sr_channel_breaks(o, h, lo, c)
+        out["range_f1_dist_atr"] = (c - f1) / a
+        out["range_f2_dist_atr"] = (c - f2) / a
+    up, dn = sr_channel_breaks(o, h, lo, c, p.sr_pivot_len, p.sr_width_pct, p.sr_max_channels, p.sr_lookback)
     out["sr_break_up"], out["sr_break_dn"] = up.astype(np.int64), dn.astype(np.int64)
-    out["candle_class"] = candle_class(o, c, v)
+    out["candle_class"] = candle_class(o, c, v, p.candle_vol_len, p.candle_high_mult, p.candle_low_mult,
+                                       p.candle_traverse)
     r = ma_ribbon(c, "sma_ema")
     with np.errstate(invalid="ignore"):
         bull = (r["ma10"] > r["ma20"]) & (r["ma20"] > r["ma50"]) & (r["ma50"] > r["ma200"])
@@ -423,13 +474,19 @@ def replica_frame(df: pd.DataFrame, ctx: FeatureCtx | None = None) -> pd.DataFra
     return out.frame()
 
 
-def f_smc_replica(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
-    return replica_frame(df, ctx)
+def enable(params: ReplicaParams = DEFAULT_PARAMS) -> str:
+    """Register the opt-in `smc_replica` feature with `params` and return its name. It is idempotent for the same
+    block and refuses a different block in the same process. It is not imported by goldbot.features and is listed
+    in pipeline.OPT_IN_FEATURES, so the default feature set and its version hash are unchanged. A non-default block
+    makes the version `1+<hash>`."""
+    version = VERSION + (f"+{params.tag()}" if params.tag() else "")
+    if NAME in FEATURES:
+        if FEATURES[NAME].version != version:
+            raise ValueError(f"{NAME} already enabled at version {FEATURES[NAME].version}, not {version}")
+        return NAME
 
+    def f_smc_replica(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
+        return replica_frame(df, params)
 
-def enable() -> str:
-    """Register the opt-in `smc_replica` feature (idempotent) and return its name. Not imported by goldbot.features,
-    and listed in pipeline.OPT_IN_FEATURES, so the default feature set and its version hash are unchanged."""
-    if NAME not in FEATURES:
-        feature(NAME, FAMILY, version=VERSION, lookback=600, signed=SIGNED)(f_smc_replica)
+    feature(NAME, FAMILY, version=version, lookback=max(600, 2 * params.sr_lookback), signed=SIGNED)(f_smc_replica)
     return NAME

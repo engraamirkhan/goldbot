@@ -73,7 +73,7 @@ def test_money_flow_by_hand_and_first_bar_counts_for_neither_side():
 
 def test_money_flow_alert_crosses_on_the_feature_frame():
     X = R.replica_frame(_walk(600, seed=11))
-    m = X["mfi_12"].to_numpy()
+    m = X["mfi"].to_numpy()
     prev = np.concatenate(([np.nan], m[:-1]))
     with np.errstate(invalid="ignore"):
         assert (X["mfi_os_cross"].to_numpy() == ((m < 20) & (prev >= 20))).all()
@@ -239,3 +239,24 @@ def test_lookahead_check_reports_no_column():
     bars = resample_bars(ticks_to_1m(ticks), "15m").reset_index(drop=True)
     out = lookahead_check(bars, None, feature_names=[name])
     assert out["lookahead_columns"] == [] and out["columns_checked"] >= len(R.COLUMNS) - 2
+
+
+# --------------------------------------------------------------------------- typed parameters
+def test_params_defaults_are_the_chart_settings_and_change_the_version_tag():
+    p = R.ReplicaParams()
+    assert (p.swing_len, p.internal_len, p.equal_len, p.equal_threshold, p.mfi_len) == (50, 5, 3, 0.1, 12)
+    assert (p.sr_pivot_len, p.sr_width_pct, p.sr_max_channels, p.sr_lookback) == (5, 1.0, 15, 300)
+    assert p.tag() == "" and R.ReplicaParams(swing_len=40).tag() != ""
+    with pytest.raises(ValueError):
+        R.ReplicaParams(swing_len=1)
+    df = _walk(500, seed=9)
+    a = R.replica_frame(df)
+    b = R.replica_frame(df, R.ReplicaParams(swing_len=20, mfi_len=14))
+    assert not a["mfi"].equals(b["mfi"])
+    assert (a["fvg_bull"] == b["fvg_bull"]).all()                     # untouched blocks are unchanged
+
+
+def test_enable_refuses_a_second_block_in_the_same_process():
+    R.enable()
+    with pytest.raises(ValueError):
+        R.enable(R.ReplicaParams(swing_len=40))
