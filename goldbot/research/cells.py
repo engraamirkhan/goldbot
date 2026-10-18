@@ -45,10 +45,12 @@ from typing import Any
 from pydantic import ValidationError
 
 from goldbot.base import FrozenRecord, load_record
+from goldbot.config import load_settings
 from goldbot.research.gates import dsr_check
 from goldbot.research.metrics import DaySummedDsr, DsrInputs
 from goldbot.research.registry import (
     DISCOVERY,
+    LOOP_RULE_REF,
     PREREGISTERED,
     TrialRegistry,
     n_trials_effective,
@@ -136,6 +138,8 @@ def plan(env: Mapping[str, str]) -> list[dict[str, Any]]:
             raise ValueError(f"bad families {spec['families']!r}")
         for k in _FLAGS:
             spec[k] = _truthy(spec[k])
+        if str(spec["rule_ref"]) == LOOP_RULE_REF:
+            spec["lot_fit"] = True                 # every loop trial reports account fit (ADR 0029, quant ruling)
         spec["from_year"], spec["to_year"] = int(spec["from_year"]), int(spec["to_year"])
         spec["discover_config"] = _json_object(str(spec["discover_config"]), "discover_config")
         spec["rationale"], spec["rule_ref"] = str(spec["rationale"]), str(spec["rule_ref"])
@@ -148,6 +152,11 @@ def plan(env: Mapping[str, str]) -> list[dict[str, Any]]:
             out.append({**{k: spec[k] for k in ("specialist", "pooled", "timeframe", "from_year", "to_year", "rationale",
                                                 "families", "discover_config", "rule_ref", *_FLAGS)},
                         "variant": v, "idx": len(out)})
+    loop_cells = sum(c["rule_ref"] == LOOP_RULE_REF for c in out)
+    if loop_cells:
+        cap = load_settings().research.loop_trials_per_run
+        if loop_cells > cap:
+            raise ValueError(f"{loop_cells} loop cells; research.loop_trials_per_run allows {cap} per dispatch (ADR 0029)")
     if len(out) > MAX_CELLS:
         raise ValueError(f"{len(out)} cells; a dispatch runs at most {MAX_CELLS} (the quarter's trial budget is the real cap)")
     return out

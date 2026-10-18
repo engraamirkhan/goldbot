@@ -293,6 +293,7 @@ def resolve_variant(family: str, variant: str | dict[str, Any]) -> dict[str, Any
     specialist must accept them (e.g. its timeframe). ValueError otherwise. Shared with `research_pass.py`."""
     from goldbot.specialists import SPECIALISTS
     from goldbot.specialists.base import FEATURE_SEED_KEY, TIMEFRAME_KEY
+    from goldbot.specialists.loop_filters import FILTER_KEYS
     if family not in SPECIALISTS:
         raise ValueError(f"unknown specialist {family!r}")
     cls = SPECIALISTS[family]
@@ -300,7 +301,7 @@ def resolve_variant(family: str, variant: str | dict[str, Any]) -> dict[str, Any
         if variant not in cls.presets:
             raise ValueError(f"unknown {family} preset {variant!r}; presets: {sorted(cls.presets)}")
         variant = dict(cls.presets[variant])
-    allowed = set(cls.default_config) | set(cls.optional_config) | {TIMEFRAME_KEY, FEATURE_SEED_KEY}
+    allowed = set(cls.default_config) | set(cls.optional_config) | {TIMEFRAME_KEY, FEATURE_SEED_KEY, *FILTER_KEYS}
     bad = sorted(set(variant) - allowed)
     if bad:
         raise ValueError(f"unknown {family} settings {bad}; allowed: {sorted(allowed)}")
