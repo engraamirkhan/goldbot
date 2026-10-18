@@ -71,7 +71,9 @@ risk:
   # 0.82%), put `risk: { min_lot_risk_cap: 0.01 }` in that server's config/settings.local.yaml (not in the repo).
   # Maximum 0.01 (the per-trade hard limit); halved in the 8% size-down stage; never applied in tiny-live.
   # The absolute daily loss limit (ADR 0004, the owner's £50) is per account, in that account's currency:
-  # `daily_loss_limit_abs` in config/accounts.yaml.
+  # `daily_loss_limit_abs` in config/accounts.yaml. ADR 0032: a demo account's own ceilings (`risk_overrides` in
+  # config/accounts.yaml) can raise this, the daily and the weekly cap for that account alone; these values stay the
+  # floor, and the defaults for every other account.
   min_lot_risk_cap: null
   positions_unreadable_alert: 5      # failed broker reads in a row before health fails and Telegram alerts
   # Per-agent throttle (BACKLOG 21, playbook G-6), counted per agent per account and checked at every entry
