@@ -19,9 +19,10 @@ const shots: string[] = [];
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "x";
 
-async function snap(page: Page, name: string) {
+async function snap(page: Page, name: string, prep?: () => Promise<void>) {
   for (const [device, w, h] of DEVICES) {
     await page.setViewportSize({ width: w, height: h });
+    if (prep) await prep();
     for (const theme of THEMES) {
       await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
       await page.waitForTimeout(150);
@@ -35,6 +36,25 @@ async function snap(page: Page, name: string) {
 
 type Mode = "real" | "loading" | "error" | "empty" | "populated" | "halted";
 let mode: Mode = "real";
+let mt5Png: Buffer | null = null;   // a stand-in MT5 terminal picture, drawn at the start of the run
+
+/** A sample "MT5 terminal" PNG (candles on a dark grid) so the Chart screen's second panel has a picture. */
+async function drawMt5(page: Page): Promise<Buffer> {
+  const candles = Array.from({ length: 48 }, (_, i) => {
+    const o = 200 + 60 * Math.sin(i / 5) + (i % 7) * 4, c = o + (i % 3 === 0 ? -18 : 14);
+    const x = 20 + i * 19, top = Math.min(o, c), h = Math.max(3, Math.abs(c - o));
+    const col = c > o ? "#26a69a" : "#ef5350";
+    return `<line x1="${x + 5}" x2="${x + 5}" y1="${top - 12}" y2="${top + h + 12}" stroke="${col}"/><rect x="${x}" y="${top}" width="10" height="${h}" fill="${col}"/>`;
+  }).join("");
+  const p = await page.context().newPage();
+  await p.setViewportSize({ width: 960, height: 540 });
+  await p.setContent(`<body style="margin:0;background:#000"><svg width="960" height="540" style="font:12px monospace">
+    ${Array.from({ length: 9 }, (_, i) => `<line x1="0" x2="960" y1="${i * 60}" y2="${i * 60}" stroke="#222"/>`).join("")}
+    <text x="10" y="20" fill="#ddd">XAUUSD,M15 (sample capture)</text>${candles}</svg></body>`);
+  const buf = await p.screenshot();
+  await p.close();
+  return buf;
+}
 const json = (body: unknown, status = 200) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
 
 async function installRoutes(page: Page) {
@@ -59,6 +79,11 @@ async function installRoutes(page: Page) {
                       blackout: { kind: "calendar", title: "US CPI", accounts: ["icm-demo"], ts_utc: new Date(Date.now() + 25 * 60_000).toISOString(), received_utc: null } })
         : fx.status(),
     };
+    if (path === "/api/chart/mt5") {
+      if (!populated || !mt5Png) return route.fulfill({ status: 404, body: "" });
+      return route.fulfill({ status: 200, contentType: "image/png", body: mt5Png,
+                             headers: { "X-Captured-At": new Date(Date.now() - 40_000).toISOString() } });
+    }
     const table = populated ? full : empty;
     if (path in table) return route.fulfill(json(table[path]));
     return route.fallback();
@@ -141,7 +166,21 @@ test("capture every screen", async ({ page }) => {
   await page.waitForTimeout(1500);
 
   // ------------------------------------------------------------------ every page, sub-tab and state
+  mt5Png = await drawMt5(page);
   await installRoutes(page);
+  // the header's status pill and its safety / Halt menu, in the live, populated and halted states
+  for (const m of ["real", "populated", "halted"] as const) {
+    mode = m;
+    await page.reload();
+    const pill = page.locator("[data-status-pill]:visible");
+    if (!(await pill.count())) break;                                  // a version without the pill
+    await page.waitForTimeout(1500);
+    await snap(page, `status-pill__menu__${m === "real" ? "live" : m}`, async () => {
+      await page.keyboard.press("Escape");                            // close the other viewport's menu
+      await page.locator("[data-status-pill]:visible").first().click();
+    });
+  }
+  mode = "real";
   const pages = await navItems(page);
   for (const name of pages) {
     const p = slug(name);

@@ -105,3 +105,19 @@ Gates: `npm run lint && npm run typecheck && npm test && npm run build && npm ru
   update both spec files in the same commit.
 - Text-asserting unit tests (~40 files) will need copy updates where plain-English wording changes; safety wording
   (approval card, refusal, not-confirmed) stays word-for-word (shared with Telegram).
+
+## 6. Review of v2 as deployed (2026-10-18, ~/tmp/ui-audit/v2/index.html and the owner's live Chart screenshot)
+Ranked by impact; [x] = fixed in this pass.
+1. [x] Safety chips squeezed to 7 columns in Home's right column ("norma l", "£42.0 0 left"): grid now fills by width.
+2. [x] Header pill shouted red for a normal weekend close: market closed / weekend alone is grey "Market closed · opens Sun 23:00"; any other blocker stays red.
+3. [x] Halt button in dark mode was white on light pink (fails AA): uses the fixed red fill.
+4. [x] Chart: two titles, unlabeled panels, MT5 box shorter than TradingView, alt text "15 timeframe": one page title,
+   a label per panel, equal fixed heights (420 / 560 px, no layout shift), "15-minute" in words.
+5. [x] Uppercase micro-labels (RISK, LOSS BUDGET, OWNER HALT) mixed with sentence case: sentence case throughout.
+6. [x] Desktop content centred with an empty gutter beside the rail: left-aligned to the rail.
+7. [ ] Home still repeats safety (strip + entry status + pill) and Halt; next: one Safety card that is a single line when clear.
+8. [ ] Approval card footer shows the strategy id and a 12-hour clock ("03:40:52 PM"); needs plain names and 24 h local
+   time (shared copy with Telegram: change both together).
+9. [ ] Account card "Today" sub-line wraps to 3 lines in a quarter-width tile; shorten to "+1.24% since 01:00".
+10. [ ] Chart: the page's timeframe buttons duplicate TradingView's own toolbar; hide the widget's interval bar or label ours "Both charts".
+11. [ ] The MT5 terminal shows a default FX layout (SRE lane: gold chart template on the box).

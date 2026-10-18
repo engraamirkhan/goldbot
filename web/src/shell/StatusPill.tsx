@@ -3,13 +3,20 @@
 // Red only when something stops new entries; amber when the dashboard can't tell; never "fine" from stale data.
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { api } from "../lib/api";
+import { api, type AccountSummary, type Status } from "../lib/api";
 import { blockers } from "../lib/approval";
 import { STALE_MS } from "../lib/entry";
 import { useNow } from "../lib/useNow";
 import { HaltControl } from "../screens/HaltControl";
 
 type Tone = "ok" | "warn" | "bad" | "idle";
+
+const SHUT = new Set(["market_closed", "weekend"]);
+/** Every account is blocked only because the market is shut, and nothing else (no halt, no blackout) is on. */
+function marketShut(s: Status, a: AccountSummary[]): boolean {
+  if (s.halted || s.supervisor_halt || s.drift_halt || s.blackout || a.length === 0) return false;
+  return a.every((x) => (x.entry_status?.blocks.length ?? 0) > 0 && x.entry_status!.blocks.every((b) => SHUT.has(b.code)));
+}
 
 export function StatusPill({ onOpenTrades }: { onOpenTrades?: () => void }) {
   const status = useQuery({ queryKey: ["status"], queryFn: api.status });
@@ -37,6 +44,11 @@ export function StatusPill({ onOpenTrades }: { onOpenTrades?: () => void }) {
     [tone, text] = status.isError || accounts.isError ? ["warn", "Can't reach goldbot"] : ["idle", "Checking safety…"];
   } else if (stale) {
     [tone, text] = ["warn", "Status not up to date"];
+  } else if (blocked.length && marketShut(s, a)) {
+    // the market is shut (weeknight close or weekend): expected, nothing to do, so calm grey, not red
+    const at = a.flatMap((x) => x.entry_status?.blocks ?? []).find((b) => b.at && b.at_label === "opens")?.at;
+    const opens = at ? new Date(at).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }) : null;
+    [tone, text] = ["idle", opens ? `Market closed · opens ${opens}` : "Market closed"];
   } else if (blocked.length) {
     [tone, text] = ["bad", `Entries blocked: ${blocked.join(", ")}`];
   } else if (a.length === 0) {
