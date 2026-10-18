@@ -10,7 +10,7 @@ timeframe the family allows, one dimension at a time moved off the default (neve
 * `session_filter` (asia, london, newyork) on the 15m and 1h timeframes only (a session says nothing on 4h or 1d);
 * `regime_filter` (low_vol, not_high_vol, trending, ranging) on every timeframe: point-in-time features of the decision
   bar (`specialists.loop_filters`).
-`grid` is that set, a pure function of the settings; `grid_members` its (family, config hash) pairs. `research_pass`
+`grid` is that set, a pure function of the settings; `grid_members` its (family, config hash) pairs, frozen as GRID_V1. `research_pass`
 refuses any `rule_ref=loop` job that is not a member (`loop_refusal`).
 
 The only pre-filters, none of which reads a return: the configuration (its full effective config hash, as
@@ -43,6 +43,49 @@ from goldbot.specialists.loop_filters import FILTER_KEYS, REGIME_FILTER, REGIMES
 
 EXIT_KEYS = ("target_atr", "stop_atr", "max_bars")     # the numeric exit settings the grid moves
 GRID_STEPS = (0.75, 1.25)                              # +-25% of the timeframe's default (DESIGN: bounded search)
+
+# Loop grid v1, frozen (docs/plans/continuous-research-loop.md "never a silent edit"): the (family, config hash)
+# pairs `grid_members` computes today. `loop_refusal` checks against this, not the computed set; a new specialist,
+# an un-retired family or an edited default changes the computed grid, fails tests/test_research_generator.py and
+# needs a new dated grid version (GRID_V2) in the plan, never an edit here.
+GRID_V1: frozenset[tuple[str, str]] = frozenset({
+    ("tsmom", "1c787d000a00"),
+    ("tsmom", "1d724544cd69"),
+    ("tsmom", "22485e6307fd"),
+    ("tsmom", "23655a291dbd"),
+    ("tsmom", "2ddd0fe33968"),
+    ("tsmom", "2ecb8c6af93c"),
+    ("tsmom", "2f1891403cb1"),
+    ("tsmom", "323d9e230bd5"),
+    ("tsmom", "3796868a2f03"),
+    ("tsmom", "3930af6b2a5d"),
+    ("tsmom", "5645b2af4294"),
+    ("tsmom", "5a0fc09328b3"),
+    ("tsmom", "5de96511309c"),
+    ("tsmom", "5e4cd684825f"),
+    ("tsmom", "5ea375684769"),
+    ("tsmom", "677fc43a6818"),
+    ("tsmom", "789f199c8e6f"),
+    ("tsmom", "7d417d935828"),
+    ("tsmom", "814d6703543e"),
+    ("tsmom", "87d73acc6194"),
+    ("tsmom", "8f71acf7c993"),
+    ("tsmom", "9127c45681bd"),
+    ("tsmom", "931f837482b1"),
+    ("tsmom", "9396bdab4ca9"),
+    ("tsmom", "a4bc9f017ee6"),
+    ("tsmom", "b62398d2c7bc"),
+    ("tsmom", "ba75413ac2a8"),
+    ("tsmom", "c68c8101d05b"),
+    ("tsmom", "c7bed6ff5cc1"),
+    ("tsmom", "cea78634c6f1"),
+    ("tsmom", "e2b460d0b150"),
+    ("tsmom", "e3704b7b5a2f"),
+    ("tsmom", "f7e5383cb4e6"),
+    ("tsmom", "f9a276bc709e"),
+    ("tsmom", "fbecfe1397de"),
+    ("tsmom", "fc1eacdc2f2b"),
+})
 SESSION_TFS = ("15m", "1h")                          # a session filter means something only on intraday bars
 FROM_YEAR = 2010                                       # the research window starts with the published bars
 
@@ -168,7 +211,7 @@ def loop_refusal(rows: list[dict[str, Any]], jobs: list[tuple[str, dict[str, Any
     the checks the quarterly budget would otherwise make: the run has at most `research.loop_trials_per_run` jobs
     (0 turns the loop off); no job's config is in the registry already (no double dispatch of one trial); no family is
     retired or under its screen; no config is one a pre-registration queued (it must run against its own row); and a
-    loop run never scores the holdout nor runs a discovery (both stay pre-registered, owner-gated trials). A job's (family, config hash) must be a member of `grid` (the
+    loop run never scores the holdout nor runs a discovery (both stay pre-registered, owner-gated trials). A job's (family, config hash) must be a member of `GRID_V1`, the frozen `grid` (the
     loop varies nothing the grid did not declare), a loop run never skips the screen and always runs `--lot-fit`."""
     res = settings.research
     if res.loop_trials_per_run <= 0:
@@ -183,7 +226,7 @@ def loop_refusal(rows: list[dict[str, Any]], jobs: list[tuple[str, dict[str, Any
         return "research loop: a loop run never skips the screen"
     if not lot_fit:
         return "research loop: a loop run needs --lot-fit (account fit is reported with every loop trial)"
-    members = grid_members(settings)
+    members = GRID_V1
     retired = {r.family for r in res.retired_families}
     tried = {(r.get("family"), r.get("config_hash")) for r in rows if is_trial(r)}
     quarter = quarter_of()

@@ -106,3 +106,19 @@ def test_unreadable_registry_yields_no_batch(tmp_path: Path, capsys):
     rc = _queue_script().main(["--registry", str(bad)])
     assert rc != 0
     assert json.loads(capsys.readouterr().out) == []
+
+
+def test_computed_grid_equals_the_frozen_grid_v1():
+    """Registering a specialist, un-retiring a family or editing a default changes the computed grid; that must fail
+    here and force a new dated grid version (plan: never a silent edit)."""
+    from goldbot.research.generator import GRID_V1, grid_members
+    assert grid_members(load_settings()) == GRID_V1
+
+
+def test_loop_refusal_checks_membership_against_the_frozen_grid_not_the_computed_one(monkeypatch):
+    from goldbot.research import generator
+    s = load_settings()
+    cand = generator.grid(s)[0]
+    monkeypatch.setattr(generator, "GRID_V1", frozenset())
+    why = generator.loop_refusal([], [(cand.family, cand.overrides)], s)
+    assert why is not None and "not a member of the loop grid" in why
