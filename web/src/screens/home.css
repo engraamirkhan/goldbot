@@ -1,0 +1,10 @@
+/* Home and Trades layout (slice B). Uses the design-system tokens, with fallbacks until tokens.css lands. */
+.home { display: grid; gap: var(--s4, 16px); }
+.home-col { display: grid; gap: var(--s4, 16px); align-content: start; min-width: 0; }
+@media (min-width: 1080px) { .home { grid-template-columns: 1fr 1fr; } }
+.home-none { padding: var(--s4, 16px); border: 1px solid var(--border, #e2e5ea); border-radius: var(--r-lg, 14px); }
+.seg { display: flex; gap: var(--s1, 4px); padding: var(--s1, 4px); background: var(--surface-2, #f0f2f5); border-radius: var(--r-md, 10px); width: fit-content; }
+.seg button { min-height: 44px; padding: 0 var(--s4, 16px); border: 0; border-radius: var(--r-sm, 6px); background: transparent; color: var(--text-2, #5b6270); font: inherit; cursor: pointer; }
+.seg button[aria-selected="true"] { background: var(--surface, #fff); color: var(--text, #14171c); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .06); }
+.seg button:focus-visible { outline: 2px solid var(--accent, #1d5fd1); outline-offset: 2px; }
+.decided .card { padding: var(--s3, 12px) var(--s4, 16px); }

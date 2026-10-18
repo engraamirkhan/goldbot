@@ -50,3 +50,34 @@ Recommendation: C for 2020-2025 (21 days of about 1,500 is 1.4%, history only), 
 loader and tested. For the 2026 holdout use A (broker M1 same-feed as live execution) if run 39097230486 leaves gaps;
 B only as a cross-check. Any patched day carries `source` and a dq_events row. Owner decides; G1 wording would change
 to "0 unexplained gaps".
+
+## Update: pre-2010 extension (data-engineer, 2026-10-18)
+Run 39097230486 finished success (5h21m). Dispatched one run for the earlier years:
+`gh workflow run data-dukascopy.yml --ref main -f from_year=2003 -f to_year=2009` -> run 39117170589 (2003 and 2004
+first; matrix max-parallel 2, up to 340 min per year, so expect roughly 20 h end to end). Input is from_year/to_year,
+no month list needed. Dukascopy's earliest XAUUSD date could not be probed from here (market-data hosts blocked); the
+2003 job reports it (a year with no bars publishes nothing and opens a failure issue). Per-year bar counts, gap days
+and bid-imputation status: PENDING, fill from coverage issues "data coverage 2003..2009" once published, then run
+`python scripts/check_coverage.py xauusd_1m_dukascopy_<year>.parquet`.
+
+### What hardcodes 2010 (change before research can start earlier)
+| where | what | action |
+|---|---|---|
+| `.github/workflows/research.yml` L13 | from_year default 2010 | dispatch with explicit from_year; change default only after the earliest good year is known |
+| `scripts/research_pass.py` L599, `scripts/count_owed_events.py` L594, `goldbot/research/cells.py` L110, `goldbot/research/generator.py` L90 `FROM_YEAR` | default 2010 | same; generator FROM_YEAR also feeds cell metadata/pre-registration, so change deliberately |
+| `scripts/research_pass.py` L221 `DAY_TYPE_MAX_FROM_YEAR = 2010` | day_type/h16 need from-year "2010 or earlier" | already allows earlier; H-16 "OOS from ~2012-04" shifts earlier with more warm-up data |
+| `scripts/dukascopy_months.py` `FIRST_YEAR = 2010` + workflow error text | `months=` refetch rejects pre-2010 months (test in tests/test_dukascopy_year.py) | raise to the earliest published year, update test, so pre-2010 gap repair works |
+| `goldbot/data/us_calendar.py` `COVERAGE_START = 2010-01-01` | US calendar has no pre-2010 events | must be extended (and FRED release dates checked) or pre-2010 event features are silently absent |
+| macro (`goldbot/data/macro.py`) | FRED fetch starts 2003-01-01; GVZ starts 2008-06 | covered from 2003; GVZ NaN before mid-2008 |
+| `scripts/count_owed_events.py` L548/556 | year columns 2010-2025 | cosmetic |
+| `scripts/check_coverage.py` | closure rules, no year floor | OK; first year taken from the data |
+| holdout (`research.holdout_from` 2025-10-01, `director.DEFAULT_HOLDOUT_FROM`) and walk-forward (`walkforward.py`, rolling by months) | no year floor | no change; more folds appear automatically. Pre-registration `data_digests` pin the yearly files, so an old row still refuses a different --from-year (intended) |
+| `smc_structure` 2010 pin (research-director ruling) | not present in this branch's tree | listed only; not changed |
+
+### Quality caveats for pre-2010 gold (expectation, verify against the coverage reports)
+Spreads were wider and stepped (several dollars ask-bid in 2003-2007 versus cents now), so cost models fitted on
+2010+ understate old costs; liquidity and 1m bar density are thinner (many zero-volume or flat minutes, more empty
+minutes overnight); the gold regime (2003-2008 bull, 2008 crisis, 2011 peak) differs from the 2010+ sample and
+older bars are likely bid-only imputed where the ask side is missing; expect more gap days. Use per-year
+flags (gap days, imputed share) to choose the earliest good year; treat pre-2010 as a separate regime in
+walk-forward reporting and do not blend its cost assumptions with the live model.

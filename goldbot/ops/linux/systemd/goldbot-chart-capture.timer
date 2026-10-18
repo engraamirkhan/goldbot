@@ -1,0 +1,10 @@
+[Unit]
+Description=goldbot MT5 chart screenshot every 60 s
+
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=60
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

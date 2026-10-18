@@ -1,0 +1,13 @@
+[Unit]
+Description=goldbot pull the MT5 chart screenshot from the MT5 box
+After=goldbot-bridge-tunnel.service
+
+[Service]
+Type=oneshot
+User=goldbot
+ExecStart=/opt/goldbot/goldbot/ops/linux/goldbot-chart-fetch.sh
+TimeoutStartSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/goldbot/state
+PrivateTmp=true
