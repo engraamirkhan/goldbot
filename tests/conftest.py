@@ -1,4 +1,5 @@
 """Shared fixtures."""
+import os
 from datetime import timedelta
 from typing import Any, Callable
 
@@ -84,6 +85,101 @@ def base_trial_budget(monkeypatch) -> None:
     from goldbot.config import load_settings
     for quarter in list(load_settings().research.trial_budget_overrides):       # the dict is mutable though the model is frozen
         monkeypatch.delitem(load_settings().research.trial_budget_overrides, quarter)
+
+
+_BLOCKED_CLIS = {"gh", "ssh", "curl"}
+
+
+def _blocked_cli(args: Any) -> str | None:
+    """The blocked CLI a subprocess argv (or shell string) would run, else None."""
+    import os
+    import shlex
+    if isinstance(args, (str, bytes, os.PathLike)):
+        text = os.fsdecode(args)
+        try:
+            words = shlex.split(text)
+        except ValueError:
+            words = text.split()
+        candidates = words      # a shell line: any word may be a command
+    else:
+        try:
+            candidates = [os.fsdecode(a) for a in args]
+        except TypeError:
+            return None
+    if candidates and os.path.basename(candidates[0]) in {"sh", "bash", "zsh"}:
+        candidates = [w for c in candidates[1:] for w in c.split()]     # only a shell's argv can hide a command word
+    elif not isinstance(args, (str, bytes, os.PathLike)):
+        candidates = candidates[:1]
+    import tempfile
+    tmp = os.path.realpath(tempfile.gettempdir())
+    for word in candidates:
+        if os.path.basename(word) in _BLOCKED_CLIS:
+            if os.sep in word and os.path.realpath(word).startswith(tmp + os.sep):
+                continue                # a fake `gh` script a test wrote under tmp_path, not the real tool
+            return os.path.basename(word)
+    return None
+
+
+@pytest.fixture(autouse=True)
+def no_real_network_or_cli(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CI has no `gh` token, no ssh keys and no network, a Mac has all three, so a test that reaches for them passes
+    locally and fails in CI (a test that called the real `gh` did exactly that). Any test that runs `gh`/`ssh`/`curl`
+    as a subprocess or connects a socket beyond loopback / unix sockets fails here, on every machine, unless it is
+    marked `@pytest.mark.network`. Stub the call instead (monkeypatch `subprocess.run` or the module's wrapper)."""
+    if request.node.get_closest_marker("network"):
+        return
+    import socket
+    import subprocess
+
+    real_init = subprocess.Popen.__init__
+
+    def popen_init(self: Any, args: Any, *a: Any, **kw: Any) -> None:
+        cli = _blocked_cli(args)
+        if cli:
+            raise AssertionError(f"test ran the real `{cli}` ({args!r}): stub it or mark the test @pytest.mark.network")
+        real_init(self, args, *a, **kw)
+
+    monkeypatch.setattr(subprocess.Popen, "__init__", popen_init)
+
+    def local(address: Any) -> bool:
+        host = address[0] if isinstance(address, tuple) and address else address
+        return isinstance(host, str) and (host in {"localhost", "::1", "", "0.0.0.0"} or host.startswith("127."))
+
+    real_connect, real_connect_ex = socket.socket.connect, socket.socket.connect_ex
+
+    def refuse(address: Any) -> None:
+        raise AssertionError(f"test opened a network socket to {address!r}: stub it or mark the test @pytest.mark.network")
+
+    def connect(self: socket.socket, address: Any) -> None:
+        if self.family in (socket.AF_INET, socket.AF_INET6) and not local(address):
+            refuse(address)
+        return real_connect(self, address)
+
+    def connect_ex(self: socket.socket, address: Any) -> int:
+        if self.family in (socket.AF_INET, socket.AF_INET6) and not local(address):
+            refuse(address)
+        return real_connect_ex(self, address)
+
+    monkeypatch.setattr(socket.socket, "connect", connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)
+
+    real_gai = socket.getaddrinfo
+
+    def getaddrinfo(host: Any, *a: Any, **kw: Any) -> Any:
+        if isinstance(host, (str, bytes)) and not local((os.fsdecode(host),)) and not _is_ip(os.fsdecode(host)):
+            refuse((host,))
+        return real_gai(host, *a, **kw)
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+
+
+def _is_ip(host: str) -> bool:
+    import ipaddress
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
 
 
 def shard_of(nodeid: str, count: int) -> int:
