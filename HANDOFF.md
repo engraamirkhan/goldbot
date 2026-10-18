@@ -84,6 +84,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (`EngineLimits`), with the published `limits`, minimum-lot stop risk and daily loss allowance as pure functions there;
   no behaviour change. runner.py 3,547 -> 3,443 lines, `LINE_CAP` lowered to 3443. `tv_grid.tv_refusal` also refuses
   one grid point listed twice in one `--variants` run (code review LOW).
+- D-TVR executed (research director, B4a): the 23 `smc_replica` columns are one feature group in the O-4 (15m, family mode) and H-02 (4h, cluster mode) discovery group maps: K_eff +1 each, no registry trial, no `structure` column, replica computed on our own bars. No production code change (the opt-in family is its own group); `tests/test_smc_replica_group.py` pins it; amendment notes in `preregistration-2027Q1.md`. Owed by the research director before H-02 runs: re-pin H-02's feature version (`f-51ac5ebabb`) if it includes the group.
 - **BACKLOG 89 (N1 `tod_periodicity`, implemented; awaiting quant-reviewer review).** Opt-in family in
   `goldbot/features/tod_periodicity.py` (`enable()`, as `day_type`), also listed in `pipeline.OPT_IN_FEATURES` so
   `DEFAULT_FEATURE_NAMES` and `f-079deacc61` / `f-51ac5ebabb` are unchanged. Six columns from the same 30-minute UTC
