@@ -2,7 +2,8 @@
 
   uv run --with websocket-client --with keyring python -m scripts.tv_local.run unauth
   uv run --with websocket-client --with keyring python -m scripts.tv_local.run auth [--layout ID ...]
-  uv run --with websocket-client --with keyring python -m scripts.tv_local.run record   # small fixture session
+  uv run --with websocket-client --with keyring python -m scripts.tv_local.run record        # unauth fixture
+  uv run --with websocket-client --with keyring python -m scripts.tv_local.run fixture-auth  # auth fixture (public study)
 
 Outputs go to ~/tmp/tv. Prints counts and metadata only, never cookie/token/user id values.
 """
@@ -102,7 +103,7 @@ def cmd_auth(args: argparse.Namespace) -> int:
                 studies.append((m, r.inputs or None))
                 _print({"study": m.pine_id, "version": m.pine_version, "short": m.short, "desc": m.description,
                         "plots": [(p["id"], p["type"], p["title"]) for p in m.plots]})
-            tfs = [_interval(lo.interval)] if lo.interval else TFS
+            tfs = list(dict.fromkeys(([_interval(lo.interval)] if lo.interval else []) + TFS))
             sym = args.symbol or lo.symbol or "OANDA:XAUUSD"
             for tf in tfs:
                 n += 1
@@ -134,6 +135,30 @@ def cmd_record(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fixture_auth(args: argparse.Namespace) -> int:
+    """Public fixtures from an authenticated session: the frames of a small pull with a PUBLIC built-in (STD;RSI;
+    invite-only scripts' IL and outputs never go in the repo) and the anonymised structure of the first layout."""
+    http = Http()
+    sess = auth.login(http)
+    rsi = discovery.translate(http, "STD;RSI", "last", sess)
+    rec = Recorder(secrets=sess.secrets())
+    with TvSocket(PRO_URL if sess.plan else URL, recorder=rec) as sock:
+        sock.send("set_auth_token", [sess.auth_token])
+        res = pull(sock, "cs_fixauth01", "OANDA:XAUUSD", "60", [(rsi, None)], first=300, more=100, cap=400)
+    FIXTURES.mkdir(parents=True, exist_ok=True)
+    rec.dump(FIXTURES / "ws_auth_oanda_xauusd_60_rsi.jsonl")
+    layouts = discovery.list_layouts(http, sess, [])
+    if layouts:
+        content = discovery.fetch_layout_content(http, sess, layouts[0])
+        if content is not None:
+            (FIXTURES / "layout_content_anonymised.json").write_text(
+                json.dumps(discovery.anonymise_content(content), indent=1) + "\n")
+    _print({"frames": len(rec.frames), "bars": len(res.bars),
+            "rsi_points": len(res.studies[0].values) if res.studies else 0,
+            "rsi_error": res.studies[0].error if res.studies else ""})
+    return 0
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="tv_local")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -146,8 +171,10 @@ def main(argv: list[str]) -> int:
     a.add_argument("--cap", type=int, default=100_000)
     a.add_argument("--record", action="store_true", help="save sanitised frames to ~/tmp/tv")
     sub.add_parser("record")
+    sub.add_parser("fixture-auth")
     args = ap.parse_args(argv)
-    return {"unauth": cmd_unauth, "auth": cmd_auth, "record": cmd_record}[args.cmd](args)
+    return {"unauth": cmd_unauth, "auth": cmd_auth, "record": cmd_record,
+            "fixture-auth": cmd_fixture_auth}[args.cmd](args)
 
 
 if __name__ == "__main__":

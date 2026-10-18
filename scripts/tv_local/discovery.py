@@ -114,22 +114,15 @@ def list_layouts(http: Http, session: Session, report: list[dict[str, Any]]) -> 
 
 
 def layout_studies(http: Http, session: Session, layout: Layout, report: list[dict[str, Any]]) -> list[StudyRef]:
-    """Studies on one layout: charts-storage sources (JWT from /chart-token/), then the chart page as fallback."""
+    """Studies on one layout: the chart page's embedded layout (initData.content), charts-storage as fallback."""
     found: dict[str, StudyRef] = {}
-    status, tok = http.get_json(f"{WWW}/chart-token/", cookies=session.cookies,
-                                params={"image_url": layout.layout_id, "user_id": session.user_id})
-    report.append({"call": "chart-token", "layout": layout.layout_id, "status": status, "shape": _shape(tok)})
-    jwt = tok.get("token") if isinstance(tok, dict) else None
-    if jwt:
-        st, src = http.get_json(f"{STORAGE}/get/layout/{layout.layout_id}/sources",
-                                params={"chart_id": "_shared", "jwt": jwt})
-        report.append({"call": "charts-storage sources", "layout": layout.layout_id, "status": st, "shape": _shape(src)})
-        for ref in _studies_in(src, "charts-storage"):
-            found.setdefault(ref.pine_id, ref)
     try:
         html = http.get_text(f"{WWW}/chart/{layout.layout_id}/", cookies=session.cookies)
         report.append({"call": "chart page", "layout": layout.layout_id, "status": 200, "bytes": len(html)})
-        for blob in _json_blobs(html):
+        content = _layout_content(html)
+        if content is not None:
+            report.append({"call": "initData.content", "layout": layout.layout_id, "shape": _shape(content)})
+        for blob in ([content] if content is not None else list(_json_blobs(html))):
             for ref in _studies_in(blob, "chart page"):
                 found.setdefault(ref.pine_id, ref)
             if not layout.symbol:
@@ -143,7 +136,65 @@ def layout_studies(http: Http, session: Session, layout: Layout, report: list[di
             found.setdefault(pid, StudyRef(pine_id=pid, pine_version=ver or "last", found_in="chart page regex"))
     except Exception as exc:                       # noqa: BLE001 - discovery is best effort, reported
         report.append({"call": "chart page", "layout": layout.layout_id, "error": type(exc).__name__})
+    if not found and session.user_id:
+        # fallback (TradingView-API route). 403 "token for different user" when user_id is wrong: the home-page
+        # user id extraction is not reliable, which is why the chart page is the primary source
+        status, tok = http.get_json(f"{WWW}/chart-token/", cookies=session.cookies,
+                                    params={"image_url": layout.layout_id, "user_id": session.user_id})
+        report.append({"call": "chart-token", "layout": layout.layout_id, "status": status, "shape": _shape(tok)})
+        jwt = tok.get("token") if isinstance(tok, dict) else None
+        if jwt:
+            st, src = http.get_json(f"{STORAGE}/get/layout/{layout.layout_id}/sources",
+                                    params={"chart_id": "_shared", "jwt": jwt})
+            report.append({"call": "charts-storage sources", "layout": layout.layout_id, "status": st, "shape": _shape(src)})
+            for ref in _studies_in(src, "charts-storage"):
+                found.setdefault(ref.pine_id, ref)
     return list(found.values())
+
+
+def fetch_layout_content(http: Http, session: Session, layout: Layout) -> Any:
+    return _layout_content(http.get_text(f"{WWW}/chart/{layout.layout_id}/", cookies=session.cookies))
+
+
+def anonymise_content(content: Any) -> dict[str, Any]:
+    """Structure-only copy of a layout for a public fixture: script ids -> PUB;<script-N>, no IL, no names/ids,
+    input values kept only for their types (an invite-only script's settings and outputs stay private)."""
+    out: dict[str, Any] = {"charts": []}
+    n = 0
+    for ch in content.get("charts", []):
+        panes = []
+        for pane in ch.get("panes", []):
+            srcs = []
+            for src in pane.get("sources", []):
+                st = src.get("state", {}) or {}
+                if src.get("type") == "MainSeries":
+                    srcs.append({"type": "MainSeries", "state": {"symbol": st.get("symbol"),
+                                                                 "interval": st.get("interval")}})
+                elif src.get("type") == "Study" and isinstance(src.get("metaInfo"), str):
+                    n += 1
+                    mi = re.sub(r"\$[A-Z]+;[^@]+@", f"$PUB;script-{n}@", src["metaInfo"])
+                    ins = {k: type(v).__name__ for k, v in (st.get("inputs") or {}).items()}
+                    srcs.append({"type": "Study", "metaInfo": mi,
+                                 "state": {"inputs": {**ins, "pineId": "", "pineVersion": ""},
+                                           "styles": {k: {"title": (v or {}).get("title")}
+                                                      for k, v in (st.get("styles") or {}).items()}}})
+            panes.append({"sources": srcs})
+        out["charts"].append({"panes": panes})
+    return out
+
+
+def _layout_content(html: str) -> Any:
+    """The saved layout as the chart page embeds it: `initData.content = {...};` (JSON). Verified 2026-10-18:
+    content.charts[].panes[].sources[] with type MainSeries (state.symbol/interval) and Study (metaInfo string,
+    state.inputs = the owner's input values, state.styles = plot styles)."""
+    m = re.search(r"initData\.content\s*=\s*", html)
+    if not m:
+        return None
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(html, m.end())
+        return obj
+    except ValueError:
+        return None
 
 
 def _walk(obj: Any) -> Iterator[dict[str, Any]]:
@@ -170,6 +221,12 @@ def _studies_in(obj: Any, where: str) -> list[StudyRef]:
         inputs: dict[str, Any] = in_raw if isinstance(in_raw, dict) else {}
         mi_raw = d.get("metaInfo")
         mi: dict[str, Any] = mi_raw if isinstance(mi_raw, dict) else {}
+        # saved layouts (initData.content) store metaInfo as a STRING: "Script$PUB;<id>@tv-scripting-101[v.2.0]"
+        # and leave state.inputs.pineId/pineVersion empty
+        if isinstance(mi_raw, str):
+            ms = re.match(r"^(?:\w+)\$([A-Z]+;[^@]+)@[\w-]+(?:\[v\.([\d.]+)\])?", mi_raw)
+            if ms:
+                mi = {"scriptIdPart": ms.group(1), "pine": {"version": ms.group(2) or "last"}}
         pid = inputs.get("pineId") or mi.get("scriptIdPart") or d.get("pineId")
         if not isinstance(pid, str) or ";" not in pid:
             continue

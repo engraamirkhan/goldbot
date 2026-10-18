@@ -56,7 +56,7 @@ def plots_long(res: SeriesResult) -> pd.DataFrame:
     for st in res.studies:
         ids = [p for p in st.meta.plots]
         for t, vals in st.values.items():
-            if t + tf_s > res.received_at:
+            if t + tf_s > res.received_at or t not in res.bars:     # closed bars we hold only
                 continue
             for k, v in enumerate(vals):
                 pid = ids[k]["id"] if k < len(ids) else f"plot_{k}"

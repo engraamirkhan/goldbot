@@ -15,8 +15,9 @@ import websocket  # type: ignore[import-not-found,unused-ignore]  # websocket-cl
 
 from . import framing
 
-URL = "wss://data.tradingview.com/socket.io/websocket"
-PRO_URL = "wss://prodata.tradingview.com/socket.io/websocket"   # paid plans; the free/unauth data host is URL
+# `?type=chart` matters: without it every create_study fails "Study not allowed in this connection"
+URL = "wss://data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart"
+PRO_URL = "wss://prodata.tradingview.com/socket.io/websocket?from=chart%2F&type=chart"  # paid plans; the free/unauth data host is URL
 ORIGIN = "https://www.tradingview.com"
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129 Safari/537.36"
 MIN_GAP_S = 1.0

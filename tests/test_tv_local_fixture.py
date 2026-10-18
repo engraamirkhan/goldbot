@@ -55,3 +55,30 @@ def test_no_secrets_or_ips() -> None:
     assert re.search(r"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?![\d.])", text) is None
     assert "sessionid" not in text
     assert re.search(r'set_auth_token\\?",\\?"p\\?":\[\\?"(unauthorized_user_token|<TOKEN>)', text)
+
+
+AUTH = REPO / "tests" / "fixtures" / "tv" / "ws_auth_oanda_xauusd_60_rsi.jsonl"
+
+
+def test_auth_fixture_has_study_rows_aligned_to_bar_times() -> None:
+    bars: set[float] = set()
+    plots: dict[float, list[object]] = {}
+    methods: set[str] = set()
+    text = AUTH.read_text()
+    for line in text.splitlines():
+        f = json.loads(line)
+        for p in framing.split_packets(str(f["frame"])):
+            if framing.is_heartbeat(p):
+                continue
+            msg = framing.parse(p)
+            methods.add(msg["m"])
+            if msg["m"] in ("timescale_update", "du"):
+                blob = msg["p"][1]
+                bars |= {float(r["v"][0]) for r in blob.get("sds_1", {}).get("s", [])}
+                for r in blob.get("st1", {}).get("st", []):
+                    plots[float(r["v"][0])] = r["v"][1:]
+    assert {"study_completed", "series_completed"} <= methods
+    assert plots and len(next(iter(plots.values()))) == 14            # STD;RSI v47: plot_0..plot_13
+    assert len(set(plots) & bars) >= 300
+    assert "<TOKEN>" in text and "sessionid" not in text              # the real token is never recorded
+    assert re.search(r"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?![\d.])", text) is None
