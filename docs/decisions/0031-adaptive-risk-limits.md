@@ -86,8 +86,10 @@ The quant review of 17b0616 changed two rules. Both are frozen like the rest; no
 2. **Minimum-lot cold start: a fixed exploration budget, DEMO only.** The cap is 1.0% (the top rung) for the first 60
    exception trades; the account daily and weekly floors still apply.
    - Every demo exception trade after its strategy's freeze counts toward the 60, including today's.
-   - Pre-registered stop: when the cumulative net R of those trades is at or below −10R, the cap is off for good.
-     A re-test is a new trial, so a new state row.
+   - Pre-registered stop: when the running cumulative net R of those trades, in exit order, is at or below −10R
+     at any point, the cap is off for good, even if later trades recover. A re-test is a new trial, so a new state
+     row. (Trading-safety review of ab060e9: the first version checked only the final total, so the stop depended on
+     when an evaluation ran.)
    - Pauses (not a permanent off): the ATR rule (20-day median ATR15 at or above the 1-year p90), SIZE_DOWN/HALTED
      and cost/model above 1.25 pause it while they hold. Drawdown and the loss streak pause it only for their stated
      duration.
