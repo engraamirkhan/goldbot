@@ -84,6 +84,15 @@ def served() -> Iterator[tuple[str, FakeTerminal, list[str]]]:
     httpd.server_close()
 
 
+def _health(url: str) -> requests.Response:
+    """GET /health, then wait until the handler has fully finished. The handler replies BEFORE it counts not_running
+    reads and calls on_terminal_lost, and HTTPServer is single-threaded, so a second request (a 404 that touches no
+    state) is only served after that tail ran: no sleep, no polling, and the test cannot move CLOCK underneath it."""
+    r = requests.get(f"{url}/health", timeout=5)
+    requests.get(f"{url}/_barrier", timeout=5)
+    return r
+
+
 STATES = {"ok": "ok", "dead": "not_running", "ipc_error": "not_running", "disconnected": "not_connected",
           "logged_out": "not_logged_in", "other_account": "wrong_account"}
 
@@ -108,22 +117,18 @@ def test_t9_health_maps_the_terminal_to_one_fixed_token(served, mode):
 def test_t9_two_consecutive_not_running_reads_30_s_apart_exit_the_bridge(served):
     url, term, lost = served
     term.mode = "dead"
-    requests.get(f"{url}/health", timeout=5)
+    _health(url)
     assert lost == []
     CLOCK.t += 40
     term.mode = "ok"                                                  # an answer in between resets the count
-    requests.get(f"{url}/health", timeout=5)
+    _health(url)
     term.mode = "ipc_error"
-    requests.get(f"{url}/health", timeout=5)
+    _health(url)
     assert lost == []
     CLOCK.t += bridge_mod.TERMINAL_LOST_MIN_SPAN_S
     term.mode = "dead"
-    r = requests.get(f"{url}/health", timeout=5)
+    r = _health(url)
     assert r.status_code == 503 and r.json()["terminal"] == "not_running"
-    for _ in range(200):                                              # the handler exits AFTER writing the reply, so
-        if lost:                                                      # the client can see the reply first (CI #91)
-            break
-        threading.Event().wait(0.01)
     assert lost == ["lost"]                                           # replied, then exit
 
 
@@ -134,11 +139,11 @@ def test_not_running_reads_within_30_s_never_exit_the_bridge(served):
     assert bridge_mod.TERMINAL_LOST_MIN_SPAN_S == 30
     term.mode = "dead"
     for _ in range(5):
-        requests.get(f"{url}/health", timeout=5)
+        _health(url)
         CLOCK.t += 5
     assert lost == []                                                 # 20 s of not_running so far
     CLOCK.t += 10
-    requests.get(f"{url}/health", timeout=5)
+    _health(url)
     assert lost == ["lost"]
 
 
