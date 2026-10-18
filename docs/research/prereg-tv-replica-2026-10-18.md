@@ -223,6 +223,32 @@ items supersede B4's recommendation where they differ. Nothing in B2's configura
    fixes above are merged. Target: dispatched by 2026-10-22; verdict by the evaluator before any neighbour or
    TVR-3 is written.
 
+### B4b. Counts before dispatch (2026-10-18, counts only, no outcome)
+
+Counted by `python scripts/smc_counts.py --bars raw` on the `smc_structure` code (presets `tvr1`, `tvr2`, through
+`candidates_in_context`, the call research makes). Dukascopy 1m (release data-v1) → 15m mid bars 2010-01-01 ..
+2025-09-30, 369,786 bars; rows from `research.holdout_from` (2025-10-01) are cut before resampling, so no holdout
+row was loaded. Series start pinned to the first 2010 bar (B4a). No label, return or outcome was computed.
+
+| Row | Events | Long | Short |
+|---|---:|---:|---:|
+| TVR-1 | 441 | 246 | 195 |
+| TVR-2 | 1,196 | 630 | 566 |
+
+TVR-2 events within 4 bars of a TVR-1 event: 3.5% (below the 50% reporting line).
+
+| Year | 2010 | 2011 | 2012 | 2013 | 2014 | 2015 | 2016 | 2017 | 2018 | 2019 | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| TVR-1 | 19 | 54 | 16 | 41 | 22 | 32 | 27 | 10 | 8 | 14 | 47 | 25 | 29 | 24 | 34 | 39 |
+| TVR-2 | 84 | 81 | 72 | 74 | 71 | 85 | 65 | 75 | 74 | 82 | 78 | 77 | 70 | 83 | 72 | 53 |
+
+Funnel for TVR-1 (counts only): 8,385 internal CHoCHs (2.27% of bars, as the pulled sample's 2.2%), 3,616 with the
+swing trend at t-1, 441 with a gap on t-2..t. B2 estimated a 4× cut from the two filters; the gap filter alone cuts
+about 8×. Under B2 ("a row whose count is below 1,000 is withdrawn before it runs and costs nothing"), TVR-1 is
+withdrawn as written, and TVR-3, which depends on it, cannot be unlocked. TVR-2 (1,196) clears the floor; one trade at
+a time (B4a) will leave fewer labelled trades than events. Any reworded TVR-1 (a wider gap window, say) would be a new
+configuration chosen after seeing this count: that is the research director's call, not this lane's.
+
 ### B5. Ledger
 
 | Item | Count |

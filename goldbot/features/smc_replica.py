@@ -266,7 +266,18 @@ def equal_levels(high: Arr, low: Arr, close: Arr, length: int = 3, threshold: fl
     return eqh, eql
 
 
-def fair_value_gaps(open_: Arr, high: Arr, low: Arr, close: Arr, auto_threshold: bool = True) -> tuple[Arr, Arr]:
+def body_abs_pct(open_: Arr, close: Arr) -> Arr:
+    """|close - open| / open in %, per bar: the quantity the FVG auto threshold averages."""
+    o, c = _f(open_), _f(close)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.abs((c - o) / o * 100.0)
+
+
+def fair_value_gaps(open_: Arr, high: Arr, low: Arr, close: Arr, auto_threshold: bool = True,
+                    prior_sum: float = 0.0, prior_n: int = 0) -> tuple[Arr, Arr]:
+    """`prior_sum`, `prior_n`: the sum of `body_abs_pct` over the bars of the series before these bars and their
+    number (0, 0: these bars start the series). With them a window continues the full series' running-mean
+    threshold exactly, so a live window decides as research does on the whole series (goldbot.features.smc_live)."""
     o, h, lo, c = _f(open_), _f(high), _f(low), _f(close)
     n = len(c)
     c1, o1 = _prev(c), _prev(o)
@@ -275,7 +286,7 @@ def fair_value_gaps(open_: Arr, high: Arr, low: Arr, close: Arr, auto_threshold:
     with np.errstate(divide="ignore", invalid="ignore"):
         body = (c1 - o1) / o1 * 100.0
         if auto_threshold:
-            thr = np.nancumsum(np.abs(body)) / np.arange(n) * 2.0      # bar 0: 0/0 -> NaN, never a gap
+            thr = (prior_sum + np.nancumsum(np.abs(body))) / (prior_n + np.arange(n)) * 2.0   # bar 0 of a series: 0/0
         else:
             thr = np.zeros(n)
         bull = (lo > h2) & (c1 > h2) & (body > thr)
@@ -401,7 +412,9 @@ def replica_frame(df: pd.DataFrame, ctx: FeatureCtx | None = None) -> pd.DataFra
     out["trend_internal"] = st["trend_internal"]
     eqh, eql = equal_levels(h, lo, c)
     out["eqh"], out["eql"] = eqh.astype(np.int64), eql.astype(np.int64)
-    fb, fs = fair_value_gaps(o, h, lo, c)
+    prior = ctx.get("smc_fvg_prior")                 # (sum, n) of the bars before `df` (smc_live.FvgAnchor.prior)
+    fb, fs = fair_value_gaps(o, h, lo, c, prior_sum=float(prior[0]), prior_n=int(prior[1])) if prior \
+        else fair_value_gaps(o, h, lo, c)
     out["fvg_bull"], out["fvg_bear"] = fb.astype(np.int64), fs.astype(np.int64)
     m = money_flow(h, lo, c, v, 12)
     out["mfi_12"] = m
