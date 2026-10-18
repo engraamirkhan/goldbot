@@ -420,6 +420,18 @@ other family it is (a) an H-40 flag (K_eff +1) and (b) a pre-registered contrast
 verdict: the gross mean R of the candidates inside vs outside the gate (Welch t), read-only and selecting nothing.
 A family's rung is never re-run with the gate unless the gate survives H-40.
 
+### 4.13 Regime filters (note 13, "no-trade is valid"; every family, 0 trials)
+
+Each is an H-40 flag (K_eff +1 each) **and** a read-only contrast the evaluator reports with every verdict: the share
+of candidates removed and the gross mean R kept vs removed (Welch t). Fixed now:
+
+| Flag | Rule at entry (removes the candidate when true) |
+|---|---|
+| `chop` | in the last 24 1h bars there was both an up-sweep (high above the prior 50-bar 1h high, close back below it) and a down-sweep (mirrored) |
+| `stretch` | the entry is in the direction of a stretch: `(close − EMA50_1h) / ATR1h > 3` for a long (< −3 for a short) |
+| `atr_expansion` | 4h ATR(14) > 1.3 × the mean of its last 14 values. The note sizes ×2/3 here; at our 0.01-lot minimum a smaller size does not exist, so the rule becomes **skip**. Flagged to the CFO / adaptive-limits owner as a candidate tighten rule (ADR 0031): it would reduce, never raise, exposure |
+| `news` | the engine's calendar blackout, already applied to every family (section 3) |
+
 ### 4.9 Ranking (expected information per trial)
 
 | Rank | Row | Why |
@@ -465,9 +477,9 @@ are diagnostics, section 7.
 
 - **Candidates:** the union of the rungs that run for H-45, H-37, H-38, H-39, H-42, H-43, H-44, H-46 and H-47 (their own labels, same exits). If a
   family is withdrawn, its candidates are absent; if all are withdrawn, H-40 is withdrawn.
-- **Features:** the ten flags of section 5, the four family flags of 4.6-4.7 (`pin_ema20`, `pin_retest`, `pin_inside`, `ema8_21`), the ordinal `tls_count`, `daily_with` (H-46), `session_ln_ny`, plus the `mfi_signals` group (4.4), each a group.
+- **Features:** the ten flags of section 5, the four family flags of 4.6-4.7 (`pin_ema20`, `pin_retest`, `pin_inside`, `ema8_21`), the ordinal `tls_count`, `daily_with` (H-46), `session_ln_ny`, `chop`, `stretch`, `atr_expansion`, plus the `mfi_signals` group (4.4), each a group.
 - **Method:** `research.yml -f discover=true`, `DiscoveryConfig` defaults as pre-registered for O-4
-  (`survivor_unit: group`, fold-internal stability selection on training folds only). K_eff = groups screened (18).
+  (`survivor_unit: group`, fold-internal stability selection on training folds only). K_eff = groups screened (21).
 - **Survivor rule:** a flag survives when it is selected in ≥ 60% of training folds **and** its kept-vs-rejected gross
   difference has Welch t ≥ 2 inside the training folds. At most **two** survivors may go forward, each as its own
   pre-registered trial (the family's rung + the flag), read by section 6 at the K of that date. No survivor: the
@@ -510,7 +522,7 @@ topic is closed; only the owner's own trades (H-36) may reopen it.
 | H-45 (one rung, after K-X or with the TP1 proxy) | 1 |
 | H-46, H-47, H-37, H-38, H-39, H-42, H-44 (one rung each, if ≥ 1,500 and not folded into H-45) | up to 7 |
 | H-43 (after K-S) | 1 |
-| H-40 filter discovery | 1 (K_eff 18) |
+| H-40 filter discovery | 1 (K_eff 21) |
 | H-40 survivors | up to 2, conditional |
 | H-41 | 1, conditional on H-37 PASS/LEAD |
 | `mfi_signals` group in O-4 | 0 (K_eff +1) |
@@ -521,6 +533,6 @@ topic is closed; only the owner's own trades (H-36) may reopen it.
   reserve (3), which B4a held for H-02/H-14 survivors; (c) the continuous loop budget (ADR 0029) is **not** suitable:
   loop trials are generator-grid trials with `rule_ref=loop`, not hand pre-registrations. **Raising the budget is an
   owner decision under my brief**; recommendation in section 9.4 once the counts are known.
-- **K.** Every trial is charged in full; H-40 adds K_eff 18. Floor 80 at any verdict.
+- **K.** Every trial is charged in full; H-40 adds K_eff 21. Floor 80 at any verdict.
 - **Sizing.** Nothing here changes risk per trade, the daily limit or the minimum-lot rule.
 - **Holdout.** Untouched; counts end 2025-09-30.
