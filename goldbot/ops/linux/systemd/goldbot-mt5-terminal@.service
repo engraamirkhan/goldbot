@@ -15,7 +15,8 @@ Environment=DISPLAY=:99 WINEDEBUG=-all
 ExecStartPre=/bin/sh -c 'if /usr/bin/pgrep -u mt5 -f "[t]erminal64[.]exe" >/dev/null; then echo "a terminal64.exe already runs for mt5: refusing a second one"; exit 1; fi'
 # The install path the bootstrap uses (C:\MT5\ICMarkets, config/accounts.yaml terminal_path). The terminal keeps its
 # saved login in its own Config/; nothing about the account is in this file.
-ExecStart=/usr/bin/wine /home/mt5/.wine/drive_c/MT5/ICMarkets/terminal64.exe
+# /profile:goldbot: open on the one XAUUSD M15 chart (goldbot/ops/linux/mt5/, docs/deploy/mt5-default-gold-chart.md).
+ExecStart=/usr/bin/wine /home/mt5/.wine/drive_c/MT5/ICMarkets/terminal64.exe /profile:goldbot
 Restart=always
 RestartSec=15
 # Hardening staged, NOT on until the cold-restart test (RUNBOOK) shows the terminal still starts, logs in and is
