@@ -1,0 +1,34 @@
+name: research-loop
+# Continuous research loop, phase 1 (docs/plans/continuous-research-loop.md; owner 2026-10-18: backtest in parallel on
+# several timeframes, indefinitely). Every 6 hours: build the next batch of candidate configurations (generator: fixed
+# grid, no returns read, nothing tried before) and print it. Runs on main only (it reads the shared registry).
+# TODO(phase 2, after the research.yml rewrite lands on main): dispatch research.yml with the batch (up to 16 parallel
+# jobs, `research.loop_trials_per_run` trials). research.yml has no `batch` input on this base, so this workflow does
+# NOT dispatch yet: it only reports what it would run. scripts/research_pass.py also still refuses runs beyond
+# `trial_budget_quarter`, which the loop budget path must replace first.
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch: {}
+permissions: {}
+jobs:
+  queue:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -e .
+      - name: fetch bars and the trial registry
+        run: |
+          gh release download data-v1 -p 'xauusd_1m_dukascopy_*.parquet' -D raw
+          scripts/registry_release.sh fetch registry.jsonl
+      - name: next batch
+        run: python scripts/research_queue.py --registry registry.jsonl --bars raw | tee batch.json
