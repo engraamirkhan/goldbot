@@ -15,7 +15,10 @@ has a live alert always uses the alert's values; a bar only the CSV has uses the
 close. A chart export can repaint (the history is redrawn with hindsight), so until `tv-repaint-check` has flagged the
 indicator x timeframe `repaint_validated`, `tv_features` marks its frame `attrs["tv_label"] = UNVALIDATED` and every
 research result built on it must carry that label (`label_for`); the registered feature leaves unvalidated CSV rows
-out (plan F11: unverified rows never train) unless ctx["tv_include_unvalidated"] is set.
+out (plan F11: unverified rows never train) unless ctx["tv_include_unvalidated"] is set. History pulled directly
+(`pull_history`) is treated exactly as the CSV, `pull_live` exactly as an alert, and any other origin is never read
+(goldbot/data/tv_catalog.py). Columns are kept apart per input set: rows with a `meta_hash` (the direct pull) become
+`tv_<indicator>_<meta_hash>_<tf>_<plot>`, and two versions without one in the same context are refused.
 
 Opt-in: this module is NOT imported by goldbot.features and registers nothing on import; `enable()` registers the
 `tradingview` feature, so the default feature set and its feature version (what the live engine builds) do not change.
@@ -30,6 +33,7 @@ import numpy as np
 import pandas as pd
 
 from goldbot.data.store import Store, asof_join
+from goldbot.data.tv_catalog import input_set_of, is_history, is_live, origin_of
 from goldbot.features.registry import FEATURES, FeatureCtx, feature
 from goldbot.webhook.inbox import TABLE, safe_symbol, source_of
 
@@ -52,7 +56,8 @@ def _long_for(store: Store, indicator: str, tf: str, symbol: str, version: str |
 
 
 def _is_csv(d: pd.DataFrame) -> pd.Series:
-    return d["origin"].eq("csv") if "origin" in d.columns else pd.Series(False, index=d.index)
+    """History rows (the CSV export or `pull_history`): drawn after the fact, so they may repaint."""
+    return is_history(origin_of(d))
 
 
 def _csv_validated(d: pd.DataFrame) -> pd.Series:
@@ -61,11 +66,11 @@ def _csv_validated(d: pd.DataFrame) -> pd.Series:
 
 
 def _csv_rows_used(d: pd.DataFrame) -> pd.DataFrame:
-    """Drop every CSV row of a bar that has a live alert: the alert wins, whole bar."""
+    """Drop every history row of a bar that has a live row (alert or `pull_live`): live wins, whole bar."""
     csv = _is_csv(d)
     if not csv.any():
         return d
-    alert_bars = set(d.loc[~csv, "bar_time"])
+    alert_bars = set(d.loc[is_live(origin_of(d)), "bar_time"])
     return d[~csv | ~d["bar_time"].isin(alert_bars)]
 
 
@@ -79,6 +84,7 @@ def wide(long: pd.DataFrame, tf: str, plots: Iterable[str] | None = None, *, inc
     if long.empty:
         return pd.DataFrame(columns=cols)
     d = long[(long["tf"].astype(str) == str(tf)) & (~long["intrabar"].astype(bool)) & (long["plot"] != "")]
+    d = d[is_live(origin_of(d)) | _is_csv(d)]                 # an origin nobody declared is never read
     if not include_unvalidated:
         d = d[~_is_csv(d) | _csv_validated(d)]
     d = _csv_rows_used(d)
@@ -130,11 +136,18 @@ def f_tradingview(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     if long is None or len(long) == 0:
         return out
     bars = pd.DataFrame({"ts_utc": df["ts_utc"].to_numpy(), "_row": np.arange(len(df))})
-    for (indicator, tf), grp in long.groupby(["indicator", "tf"]):
+    long = long.assign(_input_set=input_set_of(long))
+    seen: dict[str, str] = {}
+    for (indicator, version, input_set, tf), grp in long.groupby(["indicator", "version", "_input_set", "tf"]):
+        # one column set per indicator x input set x tf: rows of two versions or input sets are never mixed
+        prefix = f"tv_{_slug(str(indicator))}_" + (f"{input_set}_" if input_set else "") + f"{_slug(str(tf))}_"
+        if prefix in seen and seen[prefix] != str(version):
+            raise ValueError(f"{indicator!r} {tf} has rows of several versions ({seen[prefix]}, {version}) without an "
+                             f"input set to tell them apart; pass one version")
+        seen[prefix] = str(version)
         frame = wide(grp, str(tf), include_unvalidated=bool(ctx.get("tv_include_unvalidated", False)))
         if frame.empty:
             continue
-        prefix = f"tv_{_slug(str(indicator))}_{_slug(str(tf))}_"
         joined = asof_join(bars, frame, prefix=prefix).sort_values("_row")
         for c in frame.columns:
             if c != "available_utc":

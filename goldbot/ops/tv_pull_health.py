@@ -3,8 +3,8 @@
 Design rule: TradingView is a second, optional feed ("never a primary bar source"), so it must never block trading or
 exits. Every bad state here is therefore a WARN, never a FAIL, and nothing in the engine reads it.
 
-State (robust-storage rule: SQLite, no new JSON state file): one row in the table `tv_auth` of state/tv.db (the file of
-the webhook inbox, `core` pragmas; created here with IF NOT EXISTS, so no schema migration is shared with the pull):
+State (robust-storage rule: SQLite, no new JSON state file): one row in the table `tv_auth` of state/tv_auth.db (its own file: never tv.db,
+the webhook's durable alert inbox, which this module never opens or moves; WAL, `core` pragmas; created here with IF NOT EXISTS, so no schema migration is shared with the pull):
 
     status        "ok" | "expired"      written by the pull: `record_ok` after a successful pull, `record_expired` when
                                         TradingView refused the session cookie
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-DB_FILE = "tv.db"
+DB_FILE = "tv_auth.db"
 STALE_HOURS = 36                      # the pull runs at least daily; a day and a half without success is a fault
 NOTICE_TEXT = "TradingView sign-in expired — run `goldbot accounts set tradingview-session` on the brain"
 _SCHEMA = """CREATE TABLE IF NOT EXISTS tv_auth (
@@ -81,14 +81,14 @@ def record_ok(state_dir: Path, now: pd.Timestamp) -> None:
 
 def record_expired(state_dir: Path, now: pd.Timestamp) -> bool:
     """The pull was refused: mark the sign-in expired and tell the owner once. True when this call sent the notice.
-    Called by the TradingView pull (goldbot/data/tv_pull*). A corrupt tv.db is moved aside (tv.db.corrupt-<ts>) and
+    Called by the TradingView pull (goldbot/data/tv_pull*). A corrupt tv_auth.db is moved aside (tv_auth.db.corrupt-<ts>) and
     recreated, so the expiry is still recorded and notified once. Never raises: a store or notice failure is logged and leaves the expiry un-notified, to be tried again."""
     try:
         try:
             conn = _open(state_dir)
         except sqlite3.DatabaseError as exc:          # corrupt file: keep it for inspection, start a fresh state
             aside = Path(state_dir) / f"{DB_FILE}.corrupt-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
-            log.warning("tv.db unreadable (%s): moved to %s", exc, aside.name)
+            log.warning("tv_auth.db unreadable (%s): moved to %s", exc, aside.name)
             (Path(state_dir) / DB_FILE).rename(aside)
             conn = _open(state_dir)
     except (sqlite3.Error, OSError, RuntimeError) as exc:

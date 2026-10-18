@@ -348,10 +348,9 @@ class ResearchSettings(_Section):
     trial_budget_overrides: dict[str, int] = Field(default_factory=dict)
     # continuous research loop (owner, 2026-10-18; docs/plans/continuous-research-loop.md): trials one scheduled batch may
     # run, SEPARATE from the quarterly budget above (which is not changed). Every loop trial is still a registry row, so
-    # the deflated Sharpe counts the full running K. 0 turns the loop off.
+    # the deflated Sharpe counts the full running K. 0 turns the loop off. Owner-recorded in
+    # docs/decisions/0029-continuous-research-loop-budget.md; a loop trial cites rule_ref=loop (registry.LOOP_RULE_REF)
     loop_trials_per_run: int = Field(16, ge=0, le=256)
-    # account size the loop's sizing pre-filter uses (ATR only, no returns): GBP 1,000 at about 1.30 USD per GBP
-    loop_equity_usd: float = Field(1300.0, gt=0)
     # trials held for the pre-registered queue (director.reserved_trials), PER QUARTER ({"2027Q1": 9}; a quarter not
     # listed holds none): the research director, the label grid and the analyst spend only budget - used - reserved
     reserved_trials_quarter: dict[str, int] = Field(default_factory=dict)

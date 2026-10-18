@@ -1,34 +1,112 @@
 name: research-loop
-# Continuous research loop, phase 1 (docs/plans/continuous-research-loop.md; owner 2026-10-18: backtest in parallel on
-# several timeframes, indefinitely). Every 6 hours: build the next batch of candidate configurations (generator: fixed
-# grid, no returns read, nothing tried before) and print it. Runs on main only (it reads the shared registry).
-# TODO(phase 2, after the research.yml rewrite lands on main): dispatch research.yml with the batch (up to 16 parallel
-# jobs, `research.loop_trials_per_run` trials). research.yml has no `batch` input on this base, so this workflow does
-# NOT dispatch yet: it only reports what it would run. scripts/research_pass.py also still refuses runs beyond
-# `trial_budget_quarter`, which the loop budget path must replace first.
+# Continuous research loop, phase 2 (docs/plans/continuous-research-loop.md; ADR 0029; owner 2026-10-18: backtest in
+# parallel on several timeframes, indefinitely). Every 6 hours: build the next batch of candidate configurations
+# (generator: fixed grid, no returns read, nothing tried before; at most research.loop_trials_per_run) and dispatch
+# research.yml with it as `batch`, every entry carrying rule_ref=loop (charged per run, not against the quarter's
+# budget; every trial is still a registry row and counts in K; research_pass runs each with --lot-fit). Skipped while a
+# research run is queued or running. When every member of loop grid v1 is already tried the queue says "grid exhausted"
+# (job summary, plus a comment for the research director from the `exhausted` job, the only one with issues: write).
+# Runs on main only. The registry is written by research.yml's record job, never here. `keepalive` fails the run before
+# GitHub disables the schedule (60 days without a commit).
 on:
   schedule:
     - cron: "23 */6 * * *"
   workflow_dispatch: {}
 permissions: {}
+concurrency:
+  group: research-loop          # NOT research-registry: GitHub cancels an older pending run of a group, which could drop
+  cancel-in-progress: false     # research.yml's record job and lose rows; the busy check below keeps runs apart
 jobs:
-  queue:
+  keepalive:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - name: the schedule is disabled after 60 days without a commit; fail at 50
+        run: python3 scripts/loop_keepalive.py --last-commit "$(git log -1 --format=%ct)"
+  dispatch:
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
+      actions: write            # only to start research.yml (gh workflow run); no other write scope
+    outputs:
+      exhausted: ${{ steps.queue.outputs.exhausted }}
     env:
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false }
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with: { python-version: "3.11", cache: pip }
-      - run: pip install -e .
-      - name: fetch bars and the trial registry
+      - name: skip while a research run is queued or in progress
+        id: busy
         run: |
-          gh release download data-v1 -p 'xauusd_1m_dukascopy_*.parquet' -D raw
-          scripts/registry_release.sh fetch registry.jsonl
-      - name: next batch
-        run: python scripts/research_queue.py --registry registry.jsonl --bars raw | tee batch.json
+          n=0
+          for status in queued in_progress; do
+            c=$(gh run list --workflow research.yml --status "$status" --json databaseId --jq 'length')
+            n=$((n + c))
+          done
+          echo "busy=$n" >> "$GITHUB_OUTPUT"
+          echo "research.yml runs queued or in progress: $n"
+      - if: ${{ steps.busy.outputs.busy == '0' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - if: ${{ steps.busy.outputs.busy == '0' }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: "3.11", cache: pip }
+      - if: ${{ steps.busy.outputs.busy == '0' }}
+        run: pip install -e .
+      - name: fetch the trial registry
+        if: ${{ steps.busy.outputs.busy == '0' }}
+        run: scripts/registry_release.sh fetch registry.jsonl
+      - name: next batch (exit 3 = the grid is exhausted, reported below; any other failure fails the run)
+        id: queue
+        if: ${{ steps.busy.outputs.busy == '0' }}
+        run: |
+          set +e
+          python scripts/research_queue.py --registry registry.jsonl > batch.json 2> queue.log
+          rc=$?
+          set -e
+          cat queue.log
+          { echo '### research loop queue'; echo '```'; cat queue.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" = "3" ]; then
+            echo "exhausted=true" >> "$GITHUB_OUTPUT"
+          elif [ "$rc" != "0" ]; then
+            exit "$rc"
+          fi
+      - name: dispatch research.yml with the batch
+        if: ${{ steps.busy.outputs.busy == '0' }}
+        run: |
+          if [ "$(python -c 'import json; print(len(json.load(open("batch.json"))))')" = "0" ]; then
+            echo "empty batch: nothing to dispatch"
+            exit 0
+          fi
+          BATCH="$(python -c 'import json; print(json.dumps(json.load(open("batch.json")), separators=(",", ":")))')"
+          gh workflow run research.yml --ref main -f "batch=$BATCH"
+  exhausted:
+    needs: dispatch
+    if: ${{ needs.dispatch.outputs.exhausted == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write             # only to comment on the status issue; no actions or contents write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ISSUE: "34"               # the program status issue, read by the research director
+      MARKER: "<!-- research-loop-grid-exhausted -->"
+    steps:
+      - name: comment once a week at most
+        run: |
+          last=$(gh api "repos/$GH_REPO/issues/$ISSUE/comments?per_page=100" \
+            --jq "[.[] | select(.body | contains(\"$MARKER\")) | .created_at] | last // empty")
+          if [ -n "$last" ] && [ "$(date -u -d "$last" +%s)" -gt "$(date -u -d '7 days ago' +%s)" ]; then
+            echo "already reported on $last"
+            exit 0
+          fi
+          gh issue comment "$ISSUE" --body "$MARKER
+          research director: research loop grid v1 is exhausted. Every member is already a trial in the registry, so the scheduled loop dispatches nothing until a new grid is pre-declared in docs/plans/continuous-research-loop.md (run $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$GITHUB_RUN_ID)."

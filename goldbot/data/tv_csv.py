@@ -15,7 +15,11 @@ plots are named by position (`plot_0..N`, the same names the alert template uses
 * Fail closed on: no `time` column, a time that does not parse, a cell that is not a number (empty and `NaN` are fine:
   they mean the plot had no value), times that do not strictly increase, spacing that is not a whole number of
   timeframes (gaps for weekends and holidays are allowed), an unknown timeframe. Nothing is written on an error.
-* Idempotent: importing the same file again rewrites the same rows. A time without a zone is read as UTC.
+* A time without a zone is ambiguous (the chart's own timezone, which the file does not say) and is REFUSED: read as UTC
+  a chart behind UTC (New York) would stamp bars earlier than real, so `available_utc` would precede the data = look-ahead,
+  which the spacing and future-row checks cannot see. Say `--tz <IANA zone>` (converted DST-aware; a time in the repeated
+  or skipped DST hour is an error) or `--assume-utc` when the chart is set to UTC. Epoch and zone-carrying times are exact.
+* Idempotent: importing the same file again rewrites the same rows. A file over `MAX_BYTES` is refused.
 """
 from __future__ import annotations
 
@@ -26,6 +30,7 @@ import io
 import math
 import sys
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
 from pydantic import Field
@@ -36,6 +41,7 @@ from goldbot.webhook.app import tf_seconds
 from goldbot.webhook.inbox import TABLE, safe_symbol, source_of
 
 ORIGIN = "csv"
+MAX_BYTES = 50 * 1024 * 1024        # a 1m export of several years is a few MB; this only stops a wrong file
 _OHLC = ("open", "high", "low", "close")
 _EMPTY = {"", "nan", "n/a", "na", "none", "null"}
 
@@ -63,7 +69,19 @@ def normalize_tf(tf: str) -> str:
     return t
 
 
-def _parse_time(raw: str, line: int) -> pd.Timestamp:
+def _zone(tz: str | None, assume_utc: bool) -> ZoneInfo | None:
+    if tz and assume_utc:
+        raise ValueError("give --tz or --assume-utc, not both")
+    if not tz:
+        return None
+    try:
+        return ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"unknown timezone {tz!r}: use an IANA name such as America/New_York") from exc
+
+
+def _parse_time(raw: str, line: int, tz: ZoneInfo | None, assume_utc: bool) -> pd.Timestamp:
+    """Epoch and zone-carrying times are exact; a zoneless time needs `tz` or `assume_utc` (see the module doc)."""
     s = raw.strip()
     try:
         if s.lstrip("-").isdigit():
@@ -72,7 +90,17 @@ def _parse_time(raw: str, line: int) -> pd.Timestamp:
         t = pd.Timestamp(s)
     except (ValueError, OverflowError) as exc:
         raise ValueError(f"line {line}: time {raw!r} does not parse") from exc
-    return t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
+    if t.tzinfo is not None:
+        return t.tz_convert("UTC")
+    if assume_utc:
+        return t.tz_localize("UTC")
+    if tz is None:
+        raise ValueError(f"line {line}: time {raw!r} has no timezone; say which zone the chart was set to with "
+                         f"--tz <IANA zone, e.g. America/New_York>, or --assume-utc if it is UTC")
+    try:
+        return t.tz_localize(tz, ambiguous="raise", nonexistent="raise").tz_convert("UTC")
+    except ValueError as exc:
+        raise ValueError(f"line {line}: time {raw!r} is ambiguous or does not exist in {tz.key} (DST change)") from exc
 
 
 def _number(raw: str, line: int, col: str) -> float:
@@ -88,7 +116,7 @@ def _number(raw: str, line: int, col: str) -> float:
     return v
 
 
-def parse_export(text: str) -> tuple[list[str], list[pd.Timestamp], list[float], list[list[float]]]:
+def parse_export(text: str, *, tz: ZoneInfo | None = None, assume_utc: bool = False) -> tuple[list[str], list[pd.Timestamp], list[float], list[list[float]]]:
     """(plot labels, bar-open times, closes, plot values per bar) from the export's text."""
     rows = list(csv.reader(io.StringIO(text.lstrip("﻿"))))
     rows = [r for r in rows if any(c.strip() for c in r)]
@@ -108,19 +136,23 @@ def parse_export(text: str) -> tuple[list[str], list[pd.Timestamp], list[float],
     for n, r in enumerate(rows[1:], start=2):
         if len(r) < len(header):
             r = r + [""] * (len(header) - len(r))
-        times.append(_parse_time(r[ti], n))
+        times.append(_parse_time(r[ti], n, tz, assume_utc))
         closes.append(_number(r[ci], n, "close") if ci is not None else math.nan)
         values.append([_number(r[i], n, header[i]) for i in plot_cols])
     return [header[i] for i in plot_cols], times, closes, values
 
 
 def import_tv_csv(path: str | Path, *, store: Store, indicator: str, version: str, tf: str, symbol: str = "XAUUSD",
-                  now: pd.Timestamp | None = None) -> ImportReport:
+                  tz: str | None = None, assume_utc: bool = False, now: pd.Timestamp | None = None) -> ImportReport:
     """Validate the export and write its closed bars to `tv_indicators` beside the live alerts (see the module doc)."""
     tf = normalize_tf(tf)
     sec = tf_seconds(tf)
+    zone = _zone(tz, assume_utc)
+    size = Path(path).stat().st_size
+    if size > MAX_BYTES:
+        raise ValueError(f"{path} is {size} bytes, larger than the {MAX_BYTES} byte cap: is this a chart export?")
     raw = Path(path).read_bytes()
-    labels, times, closes, values = parse_export(raw.decode("utf-8-sig"))
+    labels, times, closes, values = parse_export(raw.decode("utf-8-sig"), tz=zone, assume_utc=assume_utc)
     if not times:
         raise ValueError("the file has a header but no bars")
     now = pd.Timestamp.now(tz="UTC") if now is None else (now.tz_convert("UTC") if now.tzinfo else now.tz_localize("UTC"))
@@ -166,6 +198,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--version", required=True)
     ap.add_argument("--tf", required=True, help="chart timeframe: 15, 60, 240, 1D")
     ap.add_argument("--symbol", default="XAUUSD")
+    ap.add_argument("--tz", default=None, help="IANA timezone of the chart's times when the file has none "
+                    "(America/New_York); DST-aware")
+    ap.add_argument("--assume-utc", action="store_true", help="the file's zoneless times are UTC (chart set to UTC)")
     ap.add_argument("--data-root", default=None, help="store root (default: settings data_root)")
     ap.add_argument("--now", default=None, help="clock override for tests (ISO time)")
     a = ap.parse_args(argv)
@@ -174,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
         a.data_root = load_settings().data_root
     try:
         rep = import_tv_csv(a.csv, store=Store(a.data_root), indicator=a.indicator, version=a.version, tf=a.tf,
-                            symbol=a.symbol, now=pd.Timestamp(a.now) if a.now else None)
+                            symbol=a.symbol, tz=a.tz, assume_utc=a.assume_utc, now=pd.Timestamp(a.now) if a.now else None)
     except (ValueError, OSError) as exc:
         print(f"tv-import: {exc}", file=sys.stderr)
         return 2

@@ -50,7 +50,7 @@ def test_next_expiry_after_a_successful_pull_notifies_again(tmp_path: Path):
 
 def test_corrupt_state_counts_as_expired(tmp_path: Path):
     record_ok(tmp_path, NOW)
-    con = sqlite3.connect(tmp_path / "tv.db")
+    con = sqlite3.connect(tmp_path / "tv_auth.db")
     con.execute("UPDATE tv_auth SET status = 'garbage'")
     con.commit()
     con.close()
@@ -59,7 +59,7 @@ def test_corrupt_state_counts_as_expired(tmp_path: Path):
 
 
 def test_unreadable_database_counts_as_expired_and_warns(tmp_path: Path):
-    (tmp_path / "tv.db").write_bytes(b"not a sqlite file" * 50)
+    (tmp_path / "tv_auth.db").write_bytes(b"not a sqlite file" * 50)
     c = check_tv_pull(_ctx(tmp_path))
     assert c.status == "warn" and "expired" in c.reason
 
@@ -82,9 +82,11 @@ def test_no_state_yet_is_ok(tmp_path: Path):
 
 
 def test_corrupt_database_is_moved_aside_and_the_expiry_still_notifies_once(tmp_path: Path):
-    (tmp_path / "tv.db").write_bytes(b"not a sqlite file" * 50)
+    (tmp_path / "tv.db").write_bytes(b"webhook inbox bytes")
+    (tmp_path / "tv_auth.db").write_bytes(b"not a sqlite file" * 50)
     assert record_expired(tmp_path, NOW) is True
     assert record_expired(tmp_path, NOW + pd.Timedelta(hours=1)) is False
     assert len(_notices(tmp_path)) == 1
-    assert len(list(tmp_path.glob("tv.db.corrupt-*"))) == 1
+    assert len(list(tmp_path.glob("tv_auth.db.corrupt-*"))) == 1
+    assert (tmp_path / "tv.db").read_bytes() == b"webhook inbox bytes"      # the inbox is never touched
     assert check_tv_pull(_ctx(tmp_path)).status == "warn"

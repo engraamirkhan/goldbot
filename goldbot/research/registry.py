@@ -171,11 +171,16 @@ def n_trials_effective(rows: list[dict[str, Any]]) -> int:
     return len(trials) + k_eff
 
 
+LOOP_RULE_REF = "loop"      # rule_ref of a trial the continuous research loop ran (ADR 0029): charged per run, not per quarter
+
+
 def quarter_trials(rows: list[dict[str, Any]], quarter: str) -> int:
-    """Trial rows (`is_trial`) stamped (`ts`, UTC) in `quarter`, whatever their status: the one count the budget uses."""
+    """Trial rows (`is_trial`) stamped (`ts`, UTC) in `quarter`, whatever their status: the one count the budget uses.
+    A loop trial (`rule_ref` == LOOP_RULE_REF) is not in it: it is charged against `research.loop_trials_per_run` for
+    its run (ADR 0029), but it is still a row, so `n_trials_effective` (the deflated Sharpe's K) counts it."""
     n = 0
     for r in rows:
-        if not is_trial(r):
+        if not is_trial(r) or r.get("rule_ref") == LOOP_RULE_REF:
             continue
         try:
             ts = datetime.fromisoformat(str(r.get("ts")))

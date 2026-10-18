@@ -182,8 +182,8 @@ research:
   trial_budget_quarter: 20           # pre-registered trials per calendar quarter across all families (P2); raising it is an owner decision
   trial_budget_overrides: {"2026Q4": 53}   # owner directive 2026-10-18: backtest as much as needed; batch-2026-10-18.md
   loop_trials_per_run: 16            # continuous research loop (owner 2026-10-18): trials per scheduled batch, separate from the
-                                     #   quarterly budget (ADR 0029); every one is a registry row and the deflated Sharpe counts the full K. 0 = off
-  loop_equity_usd: 1300              # the loop drops a configuration whose 0.01 lot would risk > 1.2x target at this equity (GBP 1,000)
+                                     #   quarterly budget; every one is a registry row and the deflated Sharpe counts the full K. 0 = off
+                                     #   (ADR 0029; a loop trial cites rule_ref=loop, the quarterly count skips it, K counts it)
   reserved_trials_quarter:           # held for each quarter's pre-registered queue; a quarter not listed holds none
     "2027Q1": 8                      #   preregistration-2027Q1.md: 4 queued rows + 4 contingent H-02 survivor slots (ADR
                                      #   0007; H-06 withdrawn by its rule 2026-10-16, run 38931951849). The director,

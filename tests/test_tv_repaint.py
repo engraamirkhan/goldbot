@@ -100,3 +100,70 @@ def test_cli_prints_the_report(tmp_path, capsys):
                           "--data-root", str(tmp_path / "data")])
     out = capsys.readouterr().out
     assert rc == 0 and "100.0%" in out and "VALIDATED" in out
+
+
+def test_only_plots_the_alerts_carried_are_flagged_validated_and_the_report_states_the_limit(tmp_path):
+    seed(tmp_path, 300)
+    store = Store(tmp_path / "d2")
+    tv_csv.import_tv_csv(tmp_path / "e.csv", store=store, indicator="K-Indi", version="2.02", tf="15", now=NOW)
+    box = TvInbox(tmp_path / "tv2.db")                    # alerts that carry plot_0 only
+    for i in range(300):
+        bar = T0 + pd.Timedelta(minutes=15 * i)
+        a = Alert.model_validate({"indicator": "K-Indi", "version": "2.02", "symbol": "XAUUSD", "tf": "15",
+                                  "bar_time": bar.isoformat(), "fired_at": (bar + pd.Timedelta(minutes=15)).isoformat(),
+                                  "secret": "x", "plots": {"plot_0": str(i)}})
+        box.put(to_row(a, (bar + pd.Timedelta(minutes=16)).to_pydatetime()))
+    sync_to_store(box, store)
+    r = check(store)
+    df = store.read(TABLE, source="K-Indi@2.02")
+    by_plot = df[df["origin"] == "csv"].groupby("plot")["repaint_validated"].all().to_dict()
+    assert by_plot == {"plot_0": True, "plot_1": False}
+    assert "plot_1" in r.text() and "older than the overlap" in r.text()
+
+
+def _as_pull_history(store, rows):
+    hist = rows.assign(origin="pull_history", repaint_validated=False)
+    store.append(TABLE, hist.drop(columns=["source", "symbol", "year", "month"], errors="ignore"), source="K-Indi@2.02",
+                 symbol="XAUUSD")
+
+
+def test_pulled_history_is_checked_against_live_rows_and_flagged_on_its_own(tmp_path):
+    store = seed(tmp_path, 300)
+    df = store.read(TABLE, source="K-Indi@2.02")
+    _as_pull_history(store, df[df["origin"] == "csv"])
+    r = check(store, history_origin="pull_history")
+    df = store.read(TABLE, source="K-Indi@2.02")
+    assert r.validated and r.overlap_bars == 300
+    assert set(df[df["origin"] == "pull_history"]["repaint_validated"]) == {True}
+    assert set(df[df["origin"] == "csv"]["repaint_validated"]) == {False}         # the CSV is checked separately
+
+
+def test_history_is_never_the_live_side_of_a_repaint_check(tmp_path):
+    p = tmp_path / "e.csv"
+    p.write_text("time,open,high,low,close,A\n" + "".join(
+        f"{int((T0 + pd.Timedelta(minutes=15 * i)).timestamp())},1,2,1,1,{i}\n" for i in range(300)))
+    store = Store(tmp_path / "data")
+    tv_csv.import_tv_csv(p, store=store, indicator="K-Indi", version="2.02", tf="15", now=NOW)
+    _as_pull_history(store, store.read(TABLE, source="K-Indi@2.02"))     # same values, but drawn afterwards too
+    for origin in ("csv", "pull_history"):
+        r = check(store, history_origin=origin)
+        assert r.overlap_bars == 0 and r.validated is False, origin
+
+
+def test_history_of_another_input_set_is_not_compared_and_stays_unvalidated(tmp_path):
+    store = seed(tmp_path, 300)
+    df = store.read(TABLE, source="K-Indi@2.02")
+    live = df[df["origin"].isna()].assign(origin="pull_live", meta_hash="aaaaaaaa")
+    store.append(TABLE, live.drop(columns=["source", "symbol", "year", "month"], errors="ignore"),
+                 source="K-Indi@2.02", symbol="XAUUSD")
+    hist = df[df["origin"] == "csv"]
+    _as_pull_history(store, hist.assign(meta_hash="bbbbbbbb"))          # pulled with other inputs
+    r = check(store, history_origin="pull_history", meta_hash="bbbbbbbb")
+    assert r.overlap_bars == 0 and not r.validated
+    _as_pull_history(store, hist.assign(meta_hash="aaaaaaaa"))          # the store keeps both input sets apart
+    assert check(store, history_origin="pull_history", meta_hash="aaaaaaaa").validated
+    df = store.read(TABLE, source="K-Indi@2.02")
+    ph = df[df["origin"] == "pull_history"].groupby("meta_hash")["repaint_validated"].all().to_dict()
+    assert ph == {"aaaaaaaa": True, "bbbbbbbb": False}
+    # rows without an input set (alerts, CSV) are compared only with each other: the CSV is not validated by pull_live
+    assert check(store).validated and check(store, meta_hash="aaaaaaaa").overlap_bars == 0
