@@ -5,7 +5,7 @@ Owner 2026-10-18: "backtesting can be used to validate and verify" the replica. 
 trial: no registry row, and no outcome is printed or ranked. The table shows parity only (signal and trade counts,
 mismatched trades, |dR| between the two runs); profit and loss never leaves `compare_trades`.
 
-Local only: reads the pull in ~/tmp/tv (via scripts/replica_match.py `load`), which never enters the repo; prints to
+Local only: reads the pull in ~/tmp/tv (loaded by `_load_pull` below), which never enters the repo; prints to
 stdout and writes nothing.
 
 Rules, fixed before any run (simple on purpose; they exercise the plots, they are not candidates):
@@ -41,7 +41,6 @@ row is UNEXPLAINED.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -56,10 +55,26 @@ from goldbot.config import load_settings  # noqa: E402
 from goldbot.features import smc_replica as R  # noqa: E402
 from goldbot.labels.triple_barrier import BarrierSpec, one_at_a_time, triple_barrier  # noqa: E402
 
-_spec = importlib.util.spec_from_file_location("replica_match", Path(__file__).resolve().parent / "replica_match.py")
-assert _spec and _spec.loader
-replica_match = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(replica_match)
+PULLS = {"15": "auth01_OANDA_XAUUSD_15", "60": "auth02_OANDA_XAUUSD_60", "240": "auth03_OANDA_XAUUSD_240",
+         "1D": "auth04_OANDA_XAUUSD_1D"}
+DAILY_FROM = "1921-01-01"                                                    # earlier daily rows are yearly/monthly
+
+
+def _study_letter(n_plots: int) -> str:
+    """A (structure overlay), B (S/R boxes), C (money flow), told apart by how many plots carry values."""
+    return "a" if n_plots >= 25 else ("b" if n_plots >= 10 else "c")
+
+
+def _load_pull(root: Path, tf: str) -> pd.DataFrame:
+    bars = pd.read_parquet(root / f"bars_{PULLS[tf]}.parquet").set_index("bar_time")
+    bars = bars[["open", "high", "low", "close", "volume"]]
+    p = pd.read_parquet(root / f"plots_{PULLS[tf]}.parquet")
+    used = p[p["value"].notna()].groupby("pine_id")["plot_id"].nunique()
+    letter = {pid: _study_letter(int(n)) for pid, n in used.items()}
+    p["col"] = p["pine_id"].map(letter) + "_" + p["plot_id"].str.replace("plot_", "p")
+    wide = p.pivot_table(index="bar_time", columns="col", values="value", aggfunc="first", dropna=False)
+    return bars.join(wide).reset_index()
+
 
 Arr = np.ndarray
 Holdout = tuple[pd.Timestamp, pd.Timestamp] | None
@@ -68,7 +83,7 @@ SPEC = BarrierSpec(target_atr=2.0, stop_atr=1.0, max_bars=48, name="replica_pari
 ATR_LEN = 14
 R_TOL = 1e-9
 
-# generic input name -> the chart's plot column (column names as built by replica_match.load)
+# generic input name -> the chart's plot column (column names as built by _load_pull)
 TV_EVENTS = {k: f"a_p{7 + i}" for i, k in enumerate(R.STRUCTURE_EVENTS)} | {
     "fvg_bull": "a_p21", "fvg_bear": "a_p22", "mfi_os": "c_p4", "mfi_ob": "c_p5",
     "ema10_x_up": "b_p4", "ema10_x_dn": "b_p6", "sr_up": "b_p2", "sr_dn": "b_p3"}
@@ -226,7 +241,7 @@ class ParityRow(FrozenRecord):
 
 def _mask(d: pd.DataFrame, tf: str) -> Arr:
     if tf == "1D":
-        return (d["bar_time"] >= pd.Timestamp(replica_match.DAILY_FROM, tz="UTC")).to_numpy()
+        return (d["bar_time"] >= pd.Timestamp(DAILY_FROM, tz="UTC")).to_numpy()
     return np.ones(len(d), dtype=bool)
 
 
@@ -274,7 +289,7 @@ def render(res: dict[str, list[ParityRow]]) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     ap.add_argument("--dir", default=str(Path.home() / "tmp" / "tv"))
-    ap.add_argument("--tf", nargs="*", default=list(replica_match.PULLS))
+    ap.add_argument("--tf", nargs="*", default=list(PULLS))
     args = ap.parse_args()
     root = Path(args.dir).expanduser()
     holdout = load_settings().research.holdout_window()
@@ -282,7 +297,7 @@ def main() -> int:
     sr_lines: list[str] = []
     diff_lines: list[str] = []
     for tf in args.tf:
-        d = replica_match.load(root, tf).reset_index(drop=True)
+        d = _load_pull(root, tf).reset_index(drop=True)
         bt = d["bar_time"]
         res[tf] = parity(d, tf, holdout)
         if tf not in NO_SR_TF:
