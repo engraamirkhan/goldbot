@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -24,7 +25,7 @@ EXPORT_DIR = Path("docs/ledger")
 
 def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="run.py ledger", description="The program ledger (state/program.db).")
-    ap.add_argument("--state", default="state", help="state directory (program.db)")
+    ap.add_argument("--state", default=os.environ.get("GOLDBOT_STATE", "state"), help="state directory (program.db; default $GOLDBOT_STATE or state)")
     sub = ap.add_subparsers(dest="action", required=True)
     add = sub.add_parser("add", help="append a row")
     add.add_argument("table", choices=sorted(TABLE_FIELDS))

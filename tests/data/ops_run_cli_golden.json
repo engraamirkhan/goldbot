@@ -358,7 +358,7 @@
   },
   "ledger": {
    "rc": 0,
-   "stdout": "usage: run.py ledger [-h] [--state STATE] {add,query,resume,export} ...\n\nThe program ledger (state/program.db).\n\npositional arguments:\n  {add,query,resume,export}\n    add                 append a row\n    query               show latest rows\n    resume              print the latest resume snapshot\n    export              write public rows to docs/ledger\n\noptions:\n  -h, --help            show this help message and exit\n  --state STATE         state directory (program.db)\n"
+   "stdout": "usage: run.py ledger [-h] [--state STATE] {add,query,resume,export} ...\n\nThe program ledger (state/program.db).\n\npositional arguments:\n  {add,query,resume,export}\n    add                 append a row\n    query               show latest rows\n    resume              print the latest resume snapshot\n    export              write public rows to docs/ledger\n\noptions:\n  -h, --help            show this help message and exit\n  --state STATE         state directory (program.db; default $GOLDBOT_STATE or state)\n"
   },
   "monthly-report": {
    "rc": 0,
