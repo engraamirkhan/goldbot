@@ -35,6 +35,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   validation -> `--lot-fit`. Default off: no key, outputs and registry rows unchanged (tested). Not done: routing before
   RiskGate (ATR stop, else H-25, else skip); `--lot-fit` with --discover/--cpcv/--h16 is refused; margin and the other
   gate checks are not part of "unfit".
+- Secrets no longer fall back silently to plaintext `state/.secrets.json`: `keyring` is now a base dependency; `set_secret` refuses unless no keyring backend works AND `GOLDBOT_ALLOW_PLAINTEXT=1` on a non-macOS/Windows host (set in CI); `accounts set` prints which store was used; an existing fallback file is migrated into the keyring on first read (`accounts migrate` on demand) and the moved keys deleted. Owner: run `uv sync` once on the Mac.
 - fix: `research/min_lot.py` now agrees with RiskGate sizing exactly: account-currency conversion (`sizing.account_fx`, GBP no longer overstated 1.33x; no conversion = `fx_conversion_unavailable`) and the minimum-lot exception (`min_lot_risk_cap`, halved in size-down). New CLI flags `--currency`, `--acct-per-usd`, `--min-lot-risk-cap`; equities are account currency. Parity grid in `tests/test_min_lot_gate_parity.py`. No limit loosened; gate untouched. Earlier sizability figures that used USD risk understate feasibility on the GBP account.
 - **Attended MT5 box upgrade scripted (sre, 2026-10-18; for Sat 24 Oct 10:00 UK; not yet reviewed).**
   `goldbot/ops/linux/mt5-box-upgrade.sh` has phases `precheck`, `install`, `post-reboot`, each re-runnable, printing a

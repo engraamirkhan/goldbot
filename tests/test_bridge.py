@@ -136,6 +136,8 @@ def test_the_engine_trades_through_the_bridge_and_survives_a_restart(bridge, tmp
 def test_the_bridge_endpoint_comes_from_the_keyring(tmp_path, monkeypatch):
     monkeypatch.setattr(acc_mod, "ROOT", tmp_path)
     monkeypatch.setattr(acc_mod, "keyring", None)
+    monkeypatch.setattr(acc_mod, "_PLATFORM", "linux")                # the file stands in only on headless Linux, opted in
+    monkeypatch.setenv("GOLDBOT_ALLOW_PLAINTEXT", "1")
     assert acc_mod.bridge_endpoint("icm-demo") is None                # terminal on this machine
     acc_mod.set_secret("mt5-bridge-url-icm-demo", "http://10.0.0.5:8765")
     assert acc_mod.bridge_endpoint("icm-demo") is None                # no token yet: not used

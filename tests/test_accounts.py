@@ -17,6 +17,8 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(acc_mod, "PHASE_FILE", tmp_path / "phase_state.json")
     monkeypatch.setattr(acc_mod, "ROOT", tmp_path)
     monkeypatch.setattr(acc_mod, "keyring", None)
+    monkeypatch.setattr(acc_mod, "_PLATFORM", "linux")                       # headless Linux CI: the one place a file may stand in
+    monkeypatch.setenv("GOLDBOT_ALLOW_PLAINTEXT", "1")
     acc_mod.register_prompter(lambda msg, secret: "pw-from-owner" if secret else "12345")
     yield cfg
     acc_mod.register_prompter(None)
@@ -103,4 +105,117 @@ def test_secret_and_user_files_are_never_readable_by_others(isolated, tmp_path, 
     for f in (tmp_path / "state" / ".secrets.json", *db_files):
         assert stat.S_IMODE(f.stat().st_mode) & 0o077 == 0, f
     assert json.loads((tmp_path / "state" / ".secrets.json").read_text()) == {"mt5-icm-demo": "pw1", "telegram-bot-token": "tok"}
-    assert not [p for p in (tmp_path / "state").iterdir() if p.name != ".secrets.json"]     # no temp files left behind
+    assert not [p for p in (tmp_path / "state").iterdir() if p.name not in (".secrets.json", ".secrets.lock")]     # no temp files left behind
+
+
+class _FakeKeyring:
+    """A working backend in a dict (class name outside the `fail` module, like macOS/Windows backends)."""
+    def __init__(self): self.d = {}
+    def set_password(self, svc, k, v): self.d[k] = v
+    def get_password(self, svc, k): return self.d.get(k)
+    def get_keyring(self): return type("Keyring", (), {"__module__": "keyring.backends.macOS"})()
+
+
+def test_set_secret_refuses_plaintext_without_the_opt_in(isolated, monkeypatch, tmp_path):
+    monkeypatch.delenv("GOLDBOT_ALLOW_PLAINTEXT")
+    with pytest.raises(RuntimeError, match="GOLDBOT_ALLOW_PLAINTEXT"):
+        acc_mod.set_secret("k", "v")
+    assert not (tmp_path / "state" / ".secrets.json").exists()
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32"])
+def test_set_secret_never_falls_back_to_a_file_on_macos_or_windows(isolated, monkeypatch, tmp_path, platform):
+    monkeypatch.setattr(acc_mod, "_PLATFORM", platform)             # opt-in is still set by the fixture
+    with pytest.raises(RuntimeError, match="keyring"):
+        acc_mod.set_secret("k", "v")
+    assert not (tmp_path / "state" / ".secrets.json").exists()
+
+
+def test_set_command_says_which_store_it_used(isolated, capsys):
+    assert acc_mod.main(["set", "some-key"]) == 0
+    assert "state/.secrets.json" in capsys.readouterr().out.replace("\\", "/")
+
+
+def test_set_command_says_keyring_when_the_keyring_took_it(isolated, monkeypatch, capsys):
+    monkeypatch.setattr(acc_mod, "keyring", _FakeKeyring())
+    assert acc_mod.main(["set", "some-key"]) == 0
+    assert "in the OS keyring" in capsys.readouterr().out
+
+
+def test_get_secret_reads_an_existing_fallback_file_silently(isolated, monkeypatch, tmp_path, capsys):
+    f = tmp_path / "state" / ".secrets.json"
+    f.parent.mkdir()
+    f.write_text(json.dumps({"old": "v"}))
+    monkeypatch.setattr(acc_mod, "_PLATFORM", "darwin")
+    assert acc_mod.get_secret("old") == "v"
+    assert capsys.readouterr().err == ""                           # a service reads all day: no journal noise
+
+
+def test_existing_fallback_file_moves_into_the_keyring_and_is_deleted(isolated, monkeypatch, tmp_path, capsys):
+    f = tmp_path / "state" / ".secrets.json"
+    f.parent.mkdir()
+    f.write_text(json.dumps({"a": "secret-a", "b": "secret-b"}))
+    kr = _FakeKeyring()
+    monkeypatch.setattr(acc_mod, "keyring", kr)
+    monkeypatch.setattr(acc_mod.sys.stdin, "isatty", lambda: True, raising=False)
+    assert acc_mod.get_secret("a") == "secret-a"
+    assert kr.d == {"a": "secret-a", "b": "secret-b"}
+    assert not f.exists()                                           # emptied, so removed
+    out = capsys.readouterr()
+    assert "secret-a" not in out.out + out.err                      # values are never printed
+
+
+def test_a_keyring_that_fails_a_write_keeps_the_fallback_key(isolated, monkeypatch, tmp_path):
+    f = tmp_path / "state" / ".secrets.json"
+    f.parent.mkdir()
+    f.write_text(json.dumps({"a": "x", "b": "y"}))
+    kr = _FakeKeyring()
+    real = kr.set_password
+    def flaky(s, k, v):
+        if k != "a":
+            raise OSError("locked")
+        real(s, k, v)
+    monkeypatch.setattr(kr, "set_password", flaky)
+    monkeypatch.setattr(acc_mod, "keyring", kr)
+    acc_mod.migrate_fallback()
+    assert json.loads(f.read_text()) == {"b": "y"}
+
+
+def test_secret_store_reports_keyring_for_a_failing_backend_as_file(isolated, monkeypatch):
+    class Fail(_FakeKeyring):
+        def get_keyring(self): return type("Keyring", (), {"__module__": "keyring.backends.fail"})()
+    monkeypatch.setattr(acc_mod, "keyring", Fail())
+    assert acc_mod.secret_store() == "file"
+
+
+def test_a_service_without_a_terminal_does_not_migrate_the_file(isolated, monkeypatch, tmp_path):
+    f = tmp_path / "state" / ".secrets.json"
+    f.parent.mkdir()
+    f.write_text(json.dumps({"a": "x"}))
+    monkeypatch.setattr(acc_mod, "keyring", _FakeKeyring())
+    monkeypatch.setattr(acc_mod.sys.stdin, "isatty", lambda: False, raising=False)
+    assert acc_mod.get_secret("a") == "x"
+    assert f.exists()
+
+
+def test_brain_path_fail_backend_with_opt_in_stores_and_reads_without_noise(isolated, monkeypatch, tmp_path, capsys):
+    class Fail(_FakeKeyring):
+        def get_keyring(self): return type("Keyring", (), {"__module__": "keyring.backends.fail"})()
+        def get_password(self, *a): raise RuntimeError("no backend")
+        def set_password(self, *a): raise RuntimeError("no backend")
+    monkeypatch.setattr(acc_mod, "keyring", Fail())
+    assert acc_mod.set_secret("k", "v") == "file"
+    for _ in range(3):
+        assert acc_mod.get_secret("k") == "v"
+    assert acc_mod.main(["set", "k2"]) == 0
+    assert "k2" in json.loads((tmp_path / "state" / ".secrets.json").read_text())
+    assert capsys.readouterr().err == ""
+
+
+def test_an_explicit_fail_keyring_backend_on_linux_counts_as_the_opt_in(isolated, monkeypatch):
+    monkeypatch.delenv("GOLDBOT_ALLOW_PLAINTEXT")
+    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
+    assert acc_mod.set_secret("k", "v") == "file"
+    monkeypatch.setattr(acc_mod, "_PLATFORM", "darwin")
+    with pytest.raises(RuntimeError):
+        acc_mod.set_secret("k2", "v")                               # never on macOS

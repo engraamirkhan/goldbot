@@ -416,6 +416,7 @@ dependencies = [
     { name = "duckdb" },
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "keyring" },
     { name = "lightgbm" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -445,7 +446,6 @@ dev = [
     { name = "types-requests" },
 ]
 live = [
-    { name = "keyring" },
     { name = "metatrader5", marker = "sys_platform == 'win32'" },
     { name = "python-telegram-bot" },
 ]
@@ -456,7 +456,7 @@ requires-dist = [
     { name = "duckdb", specifier = ">=1.0" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "keyring", marker = "extra == 'live'", specifier = ">=25" },
+    { name = "keyring", specifier = ">=25" },
     { name = "lightgbm", specifier = ">=4.3" },
     { name = "metatrader5", marker = "sys_platform == 'win32' and extra == 'live'", specifier = ">=5.0.45" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
