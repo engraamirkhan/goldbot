@@ -596,6 +596,11 @@ class GateSettings(_Section):
         return [n for n in self.PROPOSED if n not in self.signed_off]
 
 
+class WebhookSettings(_Section):
+    """TradingView webhook (goldbot/webhook/app.py). The inbox is the only thing a caller with the secret can write to."""
+    max_rows_per_hour: int = Field(default=5000, gt=0)   # inbox rows received in the last hour; beyond it the answer is 429
+
+
 class Settings(_Section):
     symbol: str
     data_root: str
@@ -621,6 +626,7 @@ class Settings(_Section):
     attribution: AttributionSettings = Field(default_factory=AttributionSettings)
     ledger: LedgerSettings = Field(default_factory=LedgerSettings)
     ticks: TickRecordSettings = Field(default_factory=TickRecordSettings)
+    webhook: WebhookSettings = Field(default_factory=WebhookSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")
     @classmethod

@@ -10,6 +10,13 @@ never on the bar's nominal time. Intrabar alerts are excluded (the bar's final v
 * `f_tradingview(df, ctx)`: the registered feature; ctx["tv_indicators"] is the long table, columns are
   `tv_<indicator>_<tf>_<plot>`; a bar with no alert yet is NaN, never a stale value filled forward past the join.
 
+History from the owner's chart export (goldbot/data/tv_csv.py, `origin="csv"`) sits beside the live alerts. A bar that
+has a live alert always uses the alert's values; a bar only the CSV has uses the CSV's, with `available_utc` = bar
+close. A chart export can repaint (the history is redrawn with hindsight), so until `tv-repaint-check` has flagged the
+indicator x timeframe `repaint_validated`, `tv_features` marks its frame `attrs["tv_label"] = UNVALIDATED` and every
+research result built on it must carry that label (`label_for`); the registered feature leaves unvalidated CSV rows
+out (plan F11: unverified rows never train) unless ctx["tv_include_unvalidated"] is set.
+
 Opt-in: this module is NOT imported by goldbot.features and registers nothing on import; `enable()` registers the
 `tradingview` feature, so the default feature set and its feature version (what the live engine builds) do not change.
 TradingView indicators stay filter features until proven (DESIGN promotion table); they count toward the 40-feature cap.
@@ -28,6 +35,7 @@ from goldbot.webhook.inbox import TABLE, safe_symbol, source_of
 
 NAME = "tradingview"
 VERSION = "1"
+UNVALIDATED = "unvalidated (repaint risk)"
 
 
 def _long_for(store: Store, indicator: str, tf: str, symbol: str, version: str | None) -> pd.DataFrame:
@@ -43,15 +51,40 @@ def _long_for(store: Store, indicator: str, tf: str, symbol: str, version: str |
     return store.read(TABLE, source=found[0], symbol=safe_symbol(symbol))
 
 
-def wide(long: pd.DataFrame, tf: str, plots: Iterable[str] | None = None) -> pd.DataFrame:
+def _is_csv(d: pd.DataFrame) -> pd.Series:
+    return d["origin"].eq("csv") if "origin" in d.columns else pd.Series(False, index=d.index)
+
+
+def _csv_validated(d: pd.DataFrame) -> pd.Series:
+    return d["repaint_validated"].fillna(False).astype(bool) if "repaint_validated" in d.columns \
+        else pd.Series(False, index=d.index)
+
+
+def _csv_rows_used(d: pd.DataFrame) -> pd.DataFrame:
+    """Drop every CSV row of a bar that has a live alert: the alert wins, whole bar."""
+    csv = _is_csv(d)
+    if not csv.any():
+        return d
+    alert_bars = set(d.loc[~csv, "bar_time"])
+    return d[~csv | ~d["bar_time"].isin(alert_bars)]
+
+
+def wide(long: pd.DataFrame, tf: str, plots: Iterable[str] | None = None, *, include_unvalidated: bool = False) -> pd.DataFrame:
     """Long rows of one indicator -> DataFrame(available_utc, <plot>...): bar-close alerts only, one row per bar (the
-    first receipt), the plots that were never numeric on any bar dropped, `plots` selecting and ordering columns."""
+    first receipt), the plots that were never numeric on any bar dropped, `plots` selecting and ordering columns.
+    A bar with a live alert uses only the alert; chart-export (CSV) rows fill the bars without one, and only those
+    whose indicator x timeframe passed the repaint check unless `include_unvalidated` (then `attrs["tv_label"]` says
+    so when any such row is in the frame)."""
     cols = ["available_utc"]
     if long.empty:
         return pd.DataFrame(columns=cols)
     d = long[(long["tf"].astype(str) == str(tf)) & (~long["intrabar"].astype(bool)) & (long["plot"] != "")]
+    if not include_unvalidated:
+        d = d[~_is_csv(d) | _csv_validated(d)]
+    d = _csv_rows_used(d)
     if d.empty:
         return pd.DataFrame(columns=cols)
+    unvalidated = bool((_is_csv(d) & ~_csv_validated(d)).any())
     d = d.assign(available_utc=pd.to_datetime(d["available_utc"], utc=True))
     # a bar's availability is the earliest receipt of any of its plots (they arrive in one alert, so they agree)
     d = d.sort_values("available_utc").drop_duplicates(["bar_time", "plot"], keep="first")
@@ -65,13 +98,25 @@ def wide(long: pd.DataFrame, tf: str, plots: Iterable[str] | None = None) -> pd.
             if p not in out.columns:
                 out[p] = np.nan
         names = wanted
-    return out[["available_utc", *names]]
+    res = out[["available_utc", *names]]
+    if unvalidated:
+        res.attrs["tv_label"] = UNVALIDATED
+    return res
 
 
 def tv_features(store: Store, indicator: str, tf: str, plots: Iterable[str] | None = None, *,
-                symbol: str = "XAUUSD", version: str | None = None) -> pd.DataFrame:
-    """The indicator's plots at timeframe `tf`, keyed by `available_utc`, ready for `asof_join` (research reader)."""
-    return wide(_long_for(store, indicator, tf, symbol, version), tf, plots)
+                symbol: str = "XAUUSD", version: str | None = None, include_unvalidated: bool = True) -> pd.DataFrame:
+    """The indicator's plots at timeframe `tf`, keyed by `available_utc`, ready for `asof_join` (research reader).
+    Chart-export rows not yet repaint-validated are included by default and then the frame carries
+    `attrs["tv_label"] == UNVALIDATED`: put `label_for(frame)` on every result (`include_unvalidated=False` leaves
+    them out)."""
+    return wide(_long_for(store, indicator, tf, symbol, version), tf, plots, include_unvalidated=include_unvalidated)
+
+
+def label_for(frame: pd.DataFrame) -> str | None:
+    """The label a research result must carry when it reads `frame` (None: live alerts and validated history only)."""
+    label = frame.attrs.get("tv_label")
+    return str(label) if label else None
 
 
 def _slug(x: str) -> str:
@@ -86,7 +131,7 @@ def f_tradingview(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
         return out
     bars = pd.DataFrame({"ts_utc": df["ts_utc"].to_numpy(), "_row": np.arange(len(df))})
     for (indicator, tf), grp in long.groupby(["indicator", "tf"]):
-        frame = wide(grp, str(tf))
+        frame = wide(grp, str(tf), include_unvalidated=bool(ctx.get("tv_include_unvalidated", False)))
         if frame.empty:
             continue
         prefix = f"tv_{_slug(str(indicator))}_{_slug(str(tf))}_"

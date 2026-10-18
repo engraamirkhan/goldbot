@@ -1,0 +1,1 @@
+- TradingView webhook: the shared secret is checked before schema validation (one uniform 403 for any unauthenticated body, no schema oracle), and the SQLite inbox takes at most `webhook.max_rows_per_hour` (default 5000) rows an hour, then 429 (logged without the body).
