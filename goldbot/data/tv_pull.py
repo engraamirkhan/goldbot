@@ -4,6 +4,7 @@ websocket with the owner's session cookie (owner decision 2026-10-18, ADR 0030).
     python -m goldbot.ops.run tv-pull sync      # one pass: discover, backfill what is missing, add the new closed bars
     python -m goldbot.ops.run tv-pull follow    # a pass after every 15m bar close (poll_interval_s + poll_offset_s)
     python -m goldbot.ops.run tv-pull status    # last pass, cookie state, studies seen; no network
+    python -m goldbot.ops.run tv-pull graphics --tf 60 --from 2026-10-01   # export saved study graphics; no network
 
 The only owner step is storing the two browser cookies (`python -m goldbot.ops.accounts set tradingview-sessionid`
 and `... set tradingview-sessionid-sign`, hidden prompts) and switching `tv_pull.enabled` on in settings.local.yaml.
@@ -40,6 +41,10 @@ Everything else is automatic:
   TradingView refuses the cookie (no auth token on the page, 401/403, an "unauthorized" protocol answer) or none is
   stored; that module owns the `tv_auth` row, the health WARN and the single owner notice per expiry. The webhook and
   alert inbox never import this module.
+* Graphics. A study that draws boxes, lines or labels has them in the frames it already sends: after each pass the
+  set it holds is saved in `tv_graphics` (tv.db) for `graphics_timeframes`, keyed by study, symbol, timeframe and the
+  newest closed bar (no extra request; append-only, identical consecutive sets stored once, size-capped). It is the
+  state at receipt, a poll offset after the close, so a bar that has begun forming may already have shaped it.
 * Read-only and private: see goldbot/data/tv_wire.py (allow lists, redaction). The cookie is read from the keyring at
   each pass and held only in memory.
 """
@@ -354,6 +359,52 @@ class PullLog:
         finally:
             conn.close()
 
+    def save_graphics(self, *, meta_hash8: str, symbol: str, tf: str, bar_time: pd.Timestamp, received: pd.Timestamp,
+                      objects: list[dict[str, Any]], truncated: bool, max_snapshots: int) -> bool:
+        """Append the graphics the study held at the closed bar `bar_time`. Append-only: a bar already recorded is never
+        rewritten (first receipt wins), a set identical to the previous snapshot is not stored again (the replica
+        reads "the set at bar t" as the latest snapshot at or before t), and nothing is added beyond `max_snapshots`
+        for the study and timeframe. True when a row was written."""
+        body = json.dumps(objects, separators=(",", ":"), sort_keys=True)
+        digest = hashlib.sha256(body.encode()).hexdigest()[:16]
+        conn = self._conn()
+        try:
+            with write(conn):
+                key = (meta_hash8, symbol, tf)
+                last = conn.execute("SELECT obj_hash FROM tv_graphics WHERE meta_hash8=? AND symbol=? AND tf=? "
+                                    "ORDER BY bar_time DESC LIMIT 1", key).fetchone()
+                if last is not None and last[0] == digest:
+                    return False
+                n = conn.execute("SELECT COUNT(*) FROM tv_graphics WHERE meta_hash8=? AND symbol=? AND tf=?",
+                                 key).fetchone()[0]
+                if n >= max_snapshots:
+                    return False
+                cur = conn.execute("INSERT OR IGNORE INTO tv_graphics (meta_hash8, symbol, tf, bar_time, received_utc, "
+                                   "objects, n_objects, truncated, obj_hash) VALUES (?,?,?,?,?,?,?,?,?)",
+                                   (*key, _utc(bar_time).isoformat(), _utc(received).isoformat(), body, len(objects),
+                                    int(truncated), digest))
+                return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    def graphics(self, tf: str, start: pd.Timestamp | None = None, end: pd.Timestamp | None = None,
+                 meta_hash8: str | None = None) -> list[dict[str, Any]]:
+        """Stored snapshots of `tf` with bar_time in [start, end], oldest first (the `tv-pull graphics` export)."""
+        sql, args = "SELECT * FROM tv_graphics WHERE tf = ?", [tf]
+        if start is not None:
+            sql, args = sql + " AND bar_time >= ?", [*args, _utc(start).isoformat()]
+        if end is not None:
+            sql, args = sql + " AND bar_time <= ?", [*args, _utc(end).isoformat()]
+        if meta_hash8:
+            sql, args = sql + " AND meta_hash8 = ?", [*args, meta_hash8]
+        conn = self._conn()
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(sql + " ORDER BY bar_time, meta_hash8, symbol", args).fetchall()
+        finally:
+            conn.close()
+        return [{**{k: r[k] for k in r.keys() if k != "objects"}, "objects": json.loads(r["objects"])} for r in rows]
+
     def metas(self) -> list[StudyMeta]:
         conn = self._conn()
         try:
@@ -522,6 +573,88 @@ def fetch_meta(net: ReadOnlyNetwork, pacer: Pacer, spec: StudySpec) -> tuple[Stu
     ), il
 
 
+# ------------------------------------------------------------------------------------------------- graphics
+# A study's boxes, lines and labels arrive in the `ns` of its `du` frames as a JSON string: `graphicsCmds.create` holds
+# `dwgboxes`, `dwglines`, `dwglabels` ... (each a list of `{"data": [object, ...]}`; an object has `id`, `x1`/`x2` or
+# `x`, `y1`/`y2` or `y`) and `graphicsCmds.erase` holds `{"action": "all"}` or `{"action": "one", "type", "id"}`.
+# The shape is reproduced from the community-documented client (no TradingView contract), so it is read tolerantly:
+# what does not fit is skipped, never an error. The state after the last frame is the set the study holds on the
+# newest bar; history only ever shows that final set, which is why it is recorded at every closed bar.
+GRAPHIC_KEYS = ("id", "x1", "x2", "x", "y1", "y2", "y", "text")
+
+
+def _graphic_type(key: str) -> str:
+    k = key.removeprefix("dwg")
+    return k[:-2] if k.endswith("xes") else k.removesuffix("s")          # boxes -> box, lines -> line, labels -> label
+
+
+def apply_graphics(state: dict[tuple[str, Any], dict[str, Any]], ns: Any) -> bool:
+    """Apply one `ns` (a dict with `d`, a JSON string, or nothing) to `state`: erase first, then create. True when it
+    carried graphics commands at all (a study that never does is not a drawing study)."""
+    if not isinstance(ns, dict) or not isinstance(ns.get("d"), str):
+        return False
+    try:
+        cmds = json.loads(ns["d"]).get("graphicsCmds")
+    except (ValueError, AttributeError):
+        return False
+    if not isinstance(cmds, dict):
+        return False
+    for e in cmds.get("erase") or []:
+        if not isinstance(e, dict):
+            continue
+        if e.get("action") == "all":
+            state.clear()
+        elif e.get("action") == "one":
+            state.pop((_graphic_type(str(e.get("type", ""))), e.get("id")), None)
+    for key, groups in (cmds.get("create") or {}).items():
+        if not isinstance(groups, list):
+            continue
+        for g in groups:
+            objs = g.get("data") if isinstance(g, dict) and "data" in g else [g]
+            for obj in objs if isinstance(objs, list) else []:
+                if isinstance(obj, dict) and obj.get("id") is not None:
+                    state[(_graphic_type(key), obj["id"])] = {k: obj[k] for k in GRAPHIC_KEYS if k in obj}
+    return True
+
+
+def _bound(x: Any, index_time: dict[int, int]) -> tuple[Any, int | None]:
+    """A left/right value as sent and, when it is a bar index the series knows, that bar's open (epoch s); a value
+    that already is a time (epoch s) is returned as is."""
+    if not isinstance(x, (int, float)) or isinstance(x, bool):
+        return None, None
+    if x > 1e9:
+        return x, int(x)
+    return x, index_time.get(int(x))
+
+
+def _order(oid: Any) -> tuple[int, float, str]:
+    return (0, float(oid), "") if isinstance(oid, (int, float)) else (1, 0.0, str(oid))
+
+
+def graphics_snapshot(state: dict[tuple[str, Any], dict[str, Any]], index_time: dict[int, int],
+                      max_objects: int) -> tuple[list[dict[str, Any]], bool]:
+    """The objects as plain records (id, type, top, bottom, left, right, left_time, right_time; a label's text), ordered
+    by type and id so identical sets serialise identically; at most `max_objects`, the highest ids kept, and whether
+    any were dropped."""
+    items = sorted(state.items(), key=lambda kv: _order(kv[0][1]))
+    cut = len(items) > max_objects
+    if cut:
+        items = items[len(items) - max_objects:] if max_objects else []
+    out = []
+    for (kind, oid), o in items:
+        left, left_t = _bound(o.get("x1", o.get("x")), index_time)
+        right, right_t = _bound(o.get("x2", o.get("x")), index_time)
+        ys = [y for y in (o.get("y1", o.get("y")), o.get("y2", o.get("y"))) if isinstance(y, (int, float))]
+        rec: dict[str, Any] = {"id": oid, "type": kind, "top": max(ys) if ys else None,
+                               "bottom": min(ys) if ys else None, "left": left, "right": right,
+                               "left_time": left_t, "right_time": right_t}
+        if isinstance(o.get("text"), str):
+            rec["text"] = o["text"]
+        out.append(rec)
+    out.sort(key=lambda r: (r["type"], _order(r["id"])))
+    return out, cut
+
+
 # ------------------------------------------------------------------------------------------------- the chart
 class _Chart:
     """One chart session on the socket: series `sds_1` on symbol `sds_sym_1`, its history pages and its studies
@@ -532,6 +665,8 @@ class _Chart:
         self.cs = "cs_" + secrets.token_hex(6)
         self.bars: dict[int, list[float]] = {}
         self.studies: dict[str, dict[int, list[float]]] = {}
+        self.index_time: dict[int, int] = {}                # series bar index ("i") -> bar open, epoch s
+        self.graphics: dict[str, dict[tuple[str, Any], dict[str, Any]]] = {}   # study -> (type, id) -> object
         self.done: set[str] = set()
 
     def _send(self, method: str, params: list[Any]) -> None:
@@ -573,7 +708,12 @@ class _Chart:
                         v = list(row.get("v") or [])
                         if v:
                             self.bars[int(v[0])] = [_num(x) for x in (v[1:6] + [None] * 5)[:5]]
+                            if isinstance(row.get("i"), int):
+                                self.index_time[row["i"]] = int(v[0])
                 elif sid in self.studies:
+                    held = self.graphics.get(sid, {})
+                    if apply_graphics(held, data.get("ns")):
+                        self.graphics[sid] = held
                     for row in data.get("st") or []:
                         v = list(row.get("v") or [])
                         if v:
@@ -838,6 +978,15 @@ def _pull_tf(cfg: TvPullSettings, *, store: Store, plog: PullLog, sock: GuardedS
         keep = {t: vals[t] for t in closed if t in vals and t >= cut}
         w = put(meta.name, meta.version, meta.meta_hash8, keep, [p.id for p in meta.plots])
         rows, mismatched = rows + w.rows, mismatched + w.mismatched
+    if closed and tf in {normalize_tf(t) for t in cfg.graphics_timeframes}:
+        for i, (meta, _) in enumerate(studies):
+            held = chart.graphics.get(f"st{i + 1}")
+            if held is None:
+                continue                                    # this study draws nothing
+            objs, cut_off = graphics_snapshot(held, chart.index_time, cfg.graphics_max_objects)
+            plog.save_graphics(meta_hash8=meta.meta_hash8, symbol=symbol, tf=tf,
+                               bar_time=pd.Timestamp(closed[-1], unit="s", tz="UTC"), received=received,
+                               objects=objs, truncated=cut_off, max_snapshots=cfg.graphics_max_snapshots)
     plog.set_state(f"empty:{chart_sym}:{tf}", "" if bars.new else str(t0), started)   # a fruitless look waits a bar
     return TfReport(symbol=chart_sym, tf=tf, bars_received=len(times), pages=pages,
                     oldest_bar=pd.Timestamp(times[0], unit="s", tz="UTC") if times else None,
@@ -1005,10 +1154,14 @@ def follow(once: Callable[[FollowState], PassReport], cfg: TvPullSettings, *,
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="run.py tv-pull", description="TradingView direct pull (read-only): saved "
                                  "layouts' indicators and bars into tv_indicators.")
-    ap.add_argument("action", choices=("sync", "follow", "status"))
+    ap.add_argument("action", choices=("sync", "follow", "status", "graphics"))
     ap.add_argument("--study", action="append", default=[], metavar="PINE_ID[@VERSION]",
                     help="also pull this script (e.g. 'PUB;abc@last'), beside the ones on the saved layouts")
     ap.add_argument("--tf", action="append", default=[], help="timeframe(s) instead of settings tv_pull.timeframes")
+    ap.add_argument("--from", dest="start", default=None, help="graphics: first bar_time (UTC)")
+    ap.add_argument("--to", dest="end", default=None, help="graphics: last bar_time (UTC)")
+    ap.add_argument("--meta-hash", default=None, help="graphics: only this study (its meta_hash8)")
+    ap.add_argument("--out", default=None, help="graphics: write the JSON lines here instead of stdout")
     ap.add_argument("--state", default="state", help="state directory (tv.db)")
     ap.add_argument("--data-root", default=None, help="store root (default: settings data_root)")
     a = ap.parse_args(argv)
@@ -1020,6 +1173,18 @@ def main(argv: list[str] | None = None) -> int:
         last = plog.last()
         print(f"tv_auth={plog.auth_state() or 'never run'}; studies seen: {len(plog.metas())}")
         print(last.text() if last else "no pass yet")
+        return 0
+    if a.action == "graphics":
+        if len(a.tf) != 1:
+            print("tv-pull graphics: give exactly one --tf (15, 60 or 240)", file=sys.stderr)
+            return 2
+        snaps = plog.graphics(normalize_tf(a.tf[0]), _utc(a.start) if a.start else None,
+                              _utc(a.end) if a.end else None, a.meta_hash)
+        text = "".join(json.dumps(x, separators=(",", ":")) + "\n" for x in snaps)
+        if a.out:
+            Path(a.out).write_text(text, encoding="utf-8")
+        else:
+            sys.stdout.write(text)
         return 0
     if not cfg.enabled:
         print("tv-pull: tv_pull.enabled is false (set it in config/settings.local.yaml)", file=sys.stderr)

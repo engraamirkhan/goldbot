@@ -639,6 +639,11 @@ class TvPullSettings(_Section):
     backoff_base_s: float = Field(default=300, gt=0)
     backoff_max_s: float = Field(default=21600, gt=0)
     timeout_s: float = Field(default=30, gt=0)
+    # "TradingView gives only the final box set in history": the graphics a study holds (boxes, lines, labels) are kept
+    # per closed bar of these timeframes in tv.db `tv_graphics`, from the frames the study already sends (no request)
+    graphics_timeframes: list[str] = Field(default_factory=lambda: ["15", "60", "240"])
+    graphics_max_objects: int = Field(default=500, ge=0)         # per snapshot; the highest ids are kept, `truncated` set
+    graphics_max_snapshots: int = Field(default=50000, ge=0)     # per study, symbol and timeframe; none are added beyond
 
     @model_validator(mode="after")
     def _backoff_ordered(self) -> TvPullSettings:

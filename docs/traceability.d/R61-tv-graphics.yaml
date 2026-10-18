@@ -1,0 +1,5 @@
+id: R61
+requirement: '"TradingView gives only the final box set in history": record a study''s graphics at each closed bar for the S/R replica parity'
+status: implemented (synthetic frames; not yet seen on a live drawing study)
+code: 'goldbot/data/tv_pull.py apply_graphics / graphics_snapshot / PullLog.save_graphics / `tv-pull graphics`; goldbot/db/migrations.py TV v3 tv_graphics; settings tv_pull.graphics_*'
+test: tests/test_tv_graphics.py
