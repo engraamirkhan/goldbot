@@ -68,3 +68,25 @@ def test_reader_never_sees_empty_partition_during_append(tmp_path: Path):
     stop.set()
     t.join()
     assert not empty
+
+
+def test_reader_during_append_sees_exactly_old_or_new_rows(tmp_path: Path):
+    """Rows are only ever added, so every read must be a prefix 1..n with no duplicates (never old+new together)."""
+    s = Store(tmp_path)
+    s.append("bars_1m", _mk(0), source="t")
+    stop = threading.Event()
+    bad: list[int] = []
+
+    def rd() -> None:
+        while not stop.is_set():
+            ts = s.read("bars_1m", source="t")["ts_utc"]
+            if ts.duplicated().any() or len(ts) == 0:
+                bad.append(len(ts))
+
+    t = threading.Thread(target=rd)
+    t.start()
+    for i in range(1, 40):
+        s.append("bars_1m", _mk(i), source="t")
+    stop.set()
+    t.join()
+    assert not bad

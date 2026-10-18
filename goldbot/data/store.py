@@ -114,6 +114,23 @@ class Store:
                 fcntl.flock(fh, fcntl.LOCK_UN)
 
     @staticmethod
+    @contextmanager
+    def _read_locks(tdir: Path, source: str | None, symbol: str) -> Iterator[None]:
+        """Shared flock on every matching partition while listing+reading: a writer holds LOCK_EX across rename+unlink,
+        so a reader sees exactly the old or the new rows, never both. Fixed order; writers hold one lock: no deadlock."""
+        pat = f"source={source or '*'}/symbol={symbol}/year=*/month=*/.lock"
+        fhs = []
+        try:
+            for lk in sorted(tdir.glob(pat)):
+                fh = open(lk, "a")
+                fhs.append(fh)
+                fcntl.flock(fh, fcntl.LOCK_SH)
+            yield
+        finally:
+            for fh in fhs:
+                fh.close()           # closing releases the flock
+
+    @staticmethod
     def _write_atomic(pdir: Path, df: pd.DataFrame) -> None:
         name = f"part-{uuid.uuid4().hex[:8]}.parquet"
         tmp = pdir / f".{name}.tmp"           # not *.parquet: invisible to readers until renamed
@@ -174,7 +191,8 @@ class Store:
             where.append("year * 12 + CAST(month AS BIGINT) <= ?")
             params.append(_utc(end).year * 12 + _utc(end).month)
         sql = f"SELECT {cols} FROM {scan} WHERE {' AND '.join(where)} ORDER BY ts_utc"
-        df = con.execute(sql, params).df()
+        with self._read_locks(tdir, source, symbol):
+            df = con.execute(sql, params).df()
         con.close()
         if "ts_utc" in df.columns:
             df["ts_utc"] = pd.to_datetime(df["ts_utc"], utc=True)
