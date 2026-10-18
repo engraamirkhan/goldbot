@@ -103,7 +103,7 @@ def test_diversity_penalty_and_losing_agents_get_no_capital():
 
 def test_weekly_returns_bucket_by_monday_and_correlation_needs_four_weeks():
     t = pd.DataFrame({"ret": [0.01, 0.02, -0.01],
-                      "exit_ts": pd.to_datetime(["2026-10-04 23:00", "2026-10-05 01:00", "2026-10-11 12:00"], utc=True)})
+                      "exit_utc": pd.to_datetime(["2026-10-04 23:00", "2026-10-05 01:00", "2026-10-11 12:00"], utc=True)})
     w = weekly_returns(t)
     assert list(w.index) == list(pd.to_datetime(["2026-09-28", "2026-10-05"], utc=True))
     assert list(w.round(6)) == [0.01, 0.01]
@@ -111,6 +111,15 @@ def test_weekly_returns_bucket_by_monday_and_correlation_needs_four_weeks():
     long = pd.Series([0.01, -0.02, 0.03, 0.0, 0.01], index=pd.date_range("2026-08-03", periods=5, freq="7D", tz="UTC"))
     assert correlation_with(long, [long]) == pytest.approx(1.0)
     assert correlation_with(long, []) == 0.0
+
+
+def test_sunday_2345_15m_exit_falls_in_mondays_week():
+    """BACKLOG 80: exit_ts is the exit bar's OPEN; the real exit is open + tf, so 23:45 on Sunday exits Monday 00:00."""
+    from goldbot.data.timeutil import bar_close_utc
+    exit_utc = bar_close_utc(pd.Timestamp("2026-10-04 23:45", tz="UTC"), "15m")
+    assert exit_utc == pd.Timestamp("2026-10-05 00:00", tz="UTC")
+    w = weekly_returns(pd.DataFrame({"ret": [0.01], "exit_utc": [exit_utc]}))
+    assert list(w.index) == [pd.Timestamp("2026-10-05", tz="UTC")]
 
 
 # ---------------------------------------------------------------------------------------------- mutations

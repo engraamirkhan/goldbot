@@ -285,8 +285,12 @@ def test_every_candidate_is_recorded_with_its_decision_and_only_taken_ones_count
     now = bars["ts_utc"].iloc[-1]
     assert book.stats("v1", now).n_trades == len(taken)
     assert book.returns_since("v1", bars["ts_utc"].iloc[0]) == [t.ret for t in taken]
+    from goldbot.data.timeutil import bar_close_utc
     from goldbot.research.population import agent_trades
-    assert len(agent_trades(book)["a"]) == len(taken)
+    rows = agent_trades(book)["a"]
+    assert len(rows) == len(taken)
+    # BACKLOG 80: the population's week bucketing reads exit_utc = exit bar open + timeframe (attribution's rule)
+    assert list(rows["exit_utc"] - pd.to_datetime(rows["exit_ts"], utc=True)) == [bar_close_utc(pd.Timestamp(0, tz="UTC"), taken[0].timeframe) - pd.Timestamp(0, tz="UTC")] * len(taken)
 
 
 def test_an_older_book_loads_as_taken_and_only_candidates_with_a_threshold_are_outcomes(tmp_path):

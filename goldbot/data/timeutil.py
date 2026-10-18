@@ -187,6 +187,14 @@ def floor_tf(utc_ts: pd.DatetimeIndex, tf_sec: int) -> pd.DatetimeIndex:
     return pd.DatetimeIndex(pd.to_datetime((vals // ns) * ns, unit="ns", utc=True))
 
 
+def bar_close_utc(open_ts: Any, timeframe: str) -> pd.Timestamp:
+    """Real time of a bar-stamped event. Bars are stamped at their OPEN and a shadow trade enters/exits at that bar's
+    close, so the real time is open + timeframe (a Sunday 23:45 15m exit happens at Monday 00:00). One helper for
+    every day/week bucketing of shadow trades (attribution day clustering, population weekly returns)."""
+    from goldbot.config import tf_seconds
+    return pd.Timestamp(open_ts) + pd.Timedelta(seconds=tf_seconds(timeframe))
+
+
 def now_utc() -> datetime:
     return datetime.now(tz=UTC)
 
