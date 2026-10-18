@@ -67,7 +67,8 @@ def _queue_notice(state_dir: Path) -> None:
 
 
 def record_ok(state_dir: Path, now: pd.Timestamp) -> None:
-    """A pull succeeded: the sign-in works, and the next expiry notifies again."""
+    """A pull succeeded: the sign-in works, and the next expiry notifies again. Called by the TradingView pull
+    (goldbot/data/tv_pull*)."""
     conn = _open(state_dir)
     try:
         with write(conn):
@@ -80,9 +81,16 @@ def record_ok(state_dir: Path, now: pd.Timestamp) -> None:
 
 def record_expired(state_dir: Path, now: pd.Timestamp) -> bool:
     """The pull was refused: mark the sign-in expired and tell the owner once. True when this call sent the notice.
-    Never raises: a store or notice failure is logged and leaves the expiry un-notified, to be tried again."""
+    Called by the TradingView pull (goldbot/data/tv_pull*). A corrupt tv.db is moved aside (tv.db.corrupt-<ts>) and
+    recreated, so the expiry is still recorded and notified once. Never raises: a store or notice failure is logged and leaves the expiry un-notified, to be tried again."""
     try:
-        conn = _open(state_dir)
+        try:
+            conn = _open(state_dir)
+        except sqlite3.DatabaseError as exc:          # corrupt file: keep it for inspection, start a fresh state
+            aside = Path(state_dir) / f"{DB_FILE}.corrupt-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+            log.warning("tv.db unreadable (%s): moved to %s", exc, aside.name)
+            (Path(state_dir) / DB_FILE).rename(aside)
+            conn = _open(state_dir)
     except (sqlite3.Error, OSError, RuntimeError) as exc:
         log.warning("tv_auth state unavailable, cannot record the expiry: %s", exc)
         return False

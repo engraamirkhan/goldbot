@@ -79,3 +79,12 @@ def test_stale_pull_is_warn_not_fail(tmp_path: Path):
 
 def test_no_state_yet_is_ok(tmp_path: Path):
     assert check_tv_pull(_ctx(tmp_path)).status == "ok"
+
+
+def test_corrupt_database_is_moved_aside_and_the_expiry_still_notifies_once(tmp_path: Path):
+    (tmp_path / "tv.db").write_bytes(b"not a sqlite file" * 50)
+    assert record_expired(tmp_path, NOW) is True
+    assert record_expired(tmp_path, NOW + pd.Timedelta(hours=1)) is False
+    assert len(_notices(tmp_path)) == 1
+    assert len(list(tmp_path.glob("tv.db.corrupt-*"))) == 1
+    assert check_tv_pull(_ctx(tmp_path)).status == "warn"
