@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 import pytest
@@ -205,4 +206,4 @@ def test_backup_error_survives_a_failing_probe(monkeypatch):
     monkeypatch.setattr(backup_mod, "backup_job", bad_backup)
     monkeypatch.setattr(storage_size, "record_size", bad_probe)
     with pytest.raises(backup_mod.BackupError, match="backup itself failed"):
-        jobs.backup(ctx, NOW)
+        jobs.backup(cast(jobs.JobContext, ctx), NOW)
