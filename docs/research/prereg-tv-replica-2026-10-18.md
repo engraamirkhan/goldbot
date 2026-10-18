@@ -84,8 +84,8 @@ The fitted rules are recorded in the module docstring. These are the non-obvious
    B's final drawn boxes on 15m, 1h and 4h** (15 of 15 each, checked on the box drawings in the pull). The support-break
    test is empirical: a close reaching down through the top of the highest channel, or through the bottom of any
    channel except the lowest. The resistance test is the plain one.
-7. **Unresolved:** 14 break events in three short clusters (15m 2026-06-17; 1h 2025-12-11 and 2025-12-19; 4h
-   2024-01-30..02-07). In each cluster the vendor's channel grouping differs for a few days. Alternatives tested and
+7. **Unresolved:** 14 break events in five short episodes: 15m 2026-06-17 (1 event); 1h 2025-12-11 (3),
+   2025-12-19 (2) and 2026-10-09 (1); 4h 2024-01-30..02-07 (7). In each episode the vendor's channel grouping differs for a few days. Alternatives tested and
    rejected: pivot-array order, tie-breaking, pruning at ≥, touch-window ±1 bar, recompute every bar, width from closes,
    and an "inside a channel" gate. The likely cause is internal bookkeeping in B (the box draw order differs between
    timeframes: strength order on 15m, price order on 1h and 4h). It cannot be pinned from plot values.
@@ -95,8 +95,10 @@ The fitted rules are recorded in the module docstring. These are the non-obvious
 - **D-1 (repaint).** A forward capture of live bars for 5 or more trading days on 15m and 1h. Each bar's plot values
   are recorded at its close and compared with the later `history_recomputed` values. This tells us whether any plot
   repaints.
-- **D-2 (B clusters).** B's box drawings on 1h at the bar closes 2025-12-11 03:00-10:00 UTC and 2025-12-19 00:00-05:00
-  UTC, and on 4h at 2024-01-30..02-07, through bar replay if the pull supports it. This would settle item 7.
+- **D-2 (B episodes).** B's box drawings (bar-open times, UTC) from the last pivot bar before each episode to its last
+  mismatch: 15m 2026-06-17 19:00-19:15; 1h 2025-12-11 01:00-10:00, 2025-12-18 21:00-2025-12-19 05:00 and
+  2026-10-08 23:00-2026-10-09 00:00; 4h 2024-01-26 06:00-2024-02-07 22:00. Through bar replay if the pull supports
+  it. This would settle item 7.
 - **D-3 (order blocks).** Optional. A's order-block alerts are off in the owner's settings, so they cannot be fitted.
   A pull of the same study with order blocks on, from a separate layout (never the owner's chart), would let the OB
   rules be replicated. This is not needed for Part B.
