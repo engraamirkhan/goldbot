@@ -298,6 +298,33 @@ CORE: tuple[Migration, ...] = (
                {_BODY}
            ) STRICT""",
     )),
+    # additive (ADR 0031): the adaptive risk limits (goldbot/risk/adaptive.py), applied after ADR 0032's limits_profile.
+    # adaptive_state: one row per account, its current limits and the counters the frozen rules need. adaptive_changes:
+    # every change of a limit (field, old, new, reason codes, the ids of the trades it used), append-only like aux.db's
+    # audit. A release without them never reads them and uses the configured caps
+    Migration(version=4, name="adaptive_limits", additive=True, statements=(
+        f"""CREATE TABLE IF NOT EXISTS adaptive_state (
+               account_id TEXT PRIMARY KEY,
+               day TEXT NOT NULL,
+               {_BODY}
+           ) STRICT""",
+        """CREATE TABLE IF NOT EXISTS adaptive_changes (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               account_id TEXT NOT NULL,
+               day TEXT NOT NULL,
+               field TEXT NOT NULL,
+               old REAL,
+               new REAL,
+               reasons TEXT NOT NULL CHECK (json_valid(reasons)),
+               evidence_ids TEXT NOT NULL CHECK (json_valid(evidence_ids)),
+               ts_ns INTEGER NOT NULL
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS adaptive_changes_account ON adaptive_changes(account_id, ts_ns)",
+        """CREATE TRIGGER IF NOT EXISTS adaptive_changes_no_update BEFORE UPDATE ON adaptive_changes
+           BEGIN SELECT RAISE(ABORT, 'adaptive_changes is append-only'); END""",
+        """CREATE TRIGGER IF NOT EXISTS adaptive_changes_no_delete BEFORE DELETE ON adaptive_changes
+           BEGIN SELECT RAISE(ABORT, 'adaptive_changes is append-only'); END""",
+    )),
 )
 
 MIGRATIONS: dict[DbKind, tuple[Migration, ...]] = {"core": CORE, "aux": AUX}

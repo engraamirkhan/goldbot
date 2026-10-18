@@ -44,7 +44,7 @@ from goldbot.research.metrics import DaySummedDsr, DsrInputs
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.population import Member, Population
 from goldbot.research.promotion import PerfStats
-from goldbot.risk import hwm, limits_profile
+from goldbot.risk import adaptive, hwm, limits_profile
 from goldbot.telegram import automode
 from goldbot.telegram.approvals import Outcome, Proposal
 from goldbot.telegram.bus import ApprovalBus
@@ -304,6 +304,22 @@ def case_limits_profile(tmp: Path) -> None:
     assert store.load("icm-demo") == state and store.changes("icm-demo") == [change]
 
 
+def case_limits_state(tmp: Path) -> None:
+    """core.db adaptive-limits row (ADR 0031) with a field from a newer release, at the top level and in the limits."""
+    from datetime import date
+
+    state = adaptive.AdaptiveState(account_id="icm-demo", day=date(2026, 11, 2), up_streak={"daily_cap": 2},
+                                 limits=adaptive.Limits(daily_cap=0.025, weekly_cap=0.06, supervisor_daily_cap=0.015,
+                                                        supervisor_weekly_cap=0.04, min_lot_risk_cap=0.006))
+    store = adaptive.AdaptiveStore(tmp)
+    store.save(state, [])
+    with sqlite3.connect(tmp / "core.db") as conn:
+        body = json.loads(conn.execute("SELECT body FROM adaptive_state").fetchone()[0])
+        body = {**_newer(body), "limits": _newer(body["limits"])}
+        conn.execute("UPDATE adaptive_state SET body = ?", (json.dumps(body),))
+    assert adaptive.AdaptiveStore(tmp).load("icm-demo") == state
+
+
 def case_trial_dsr_inputs(tmp: Path) -> None:
     """A trial row's stored deflated-Sharpe inputs (results.model_filtered.dsr_inputs, metrics.DsrInputs; quant review
     2026-10-16) with a field from a newer release: gate 1 still recomputes the DSR from them."""
@@ -343,6 +359,7 @@ CASES = [case_closed_trade, case_closed_trade_from_before_ret_basis, case_closed
          case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
          case_shadow_stats, case_model_registry_and_backtest, case_population, case_research_plan, case_costs,
          case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_hwm_confirmation, case_limits_profile,
+         case_limits_state,
          case_trial_dsr_inputs, case_trial_day_summed_dsr, case_attribution_report, case_tick_index]
 
 
@@ -381,7 +398,7 @@ def test_every_persisted_record_model_has_a_compat_case():
                BrokerTerms, CostTable, PublishedCostTable, scheduler.JobState, health.WatchState, health.HealthReport,
                DigestState, OutboxState, crossfeed.ReconcileReport, ledger.LedgerReport,
                ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation, limits_profile.LimitsState,
-               limits_profile.LimitsChange, DsrInputs, DaySummedDsr,
+               limits_profile.LimitsChange, adaptive.AdaptiveState, DsrInputs, DaySummedDsr,
                AttributionReport, TickIndex,
                # the engine's orders file: tests/test_engine_safety.py::
                # test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote
@@ -428,6 +445,8 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/api/app.py", "create_app.calendar", "CalendarEvent"):
         "not persisted: API response from code-selected columns",
     ("goldbot/api/app.py", "create_app.news", "Headline"): "not persisted: API response from code-selected columns",
+    ("goldbot/risk/adaptive.py", "AdaptiveController.current", "Evidence"):
+        "not persisted, strict: the evidence for a risk decision (ADR 0031: corrupt evidence gives the floors)",
     ("goldbot/api/explain.py", "_plan", "PlanReservation"):
         "API schema model (pydantic default extra='ignore'): tolerant",
 }
