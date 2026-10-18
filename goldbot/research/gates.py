@@ -42,6 +42,16 @@ HOLDOUT_MIN_T = 1.65            # one-sided 5% on the held-out year's mean R
 RULE_ONLY_LABEL = "rule-only (informational; promotion still requires the model path)"
 
 
+def dsr_check(model_filtered: dict[str, Any] | None, subject: str = "model-filtered") -> dict[str, Any]:
+    """The gate's deflated-Sharpe check on a trade summary (n, dsr): MIN_TRADES_FOR_DSR trades and DSR_BAR. One place,
+    so a reading restated on a later trial count (research.cells) is judged exactly as the run judged it."""
+    mf = model_filtered or {}
+    n_mf, dsr = int(mf.get("n") or 0), mf.get("dsr")
+    return {"name": "dsr", "passed": n_mf >= MIN_TRADES_FOR_DSR and dsr is not None and float(dsr) >= DSR_BAR,
+            "detail": f"deflated Sharpe {'n/a' if dsr is None else f'{float(dsr):.3f}'} on {n_mf} {subject} "
+                      f"trades (need {MIN_TRADES_FOR_DSR}+ trades and {DSR_BAR})"}
+
+
 def research_gates(n_candidates: int, fold_test_sizes: list[int], taken: pd.DataFrame,
                    model_filtered: dict[str, Any] | None = None, subject: str = "model-filtered") -> dict[str, Any]:
     """fold_test_sizes: candidates per complete test fold; taken: the model-filtered out-of-fold trades (ts_utc, ret);
@@ -64,11 +74,7 @@ def research_gates(n_candidates: int, fold_test_sizes: list[int], taken: pd.Data
     checks.append({"name": "positive_years", "passed": len(positive) >= MIN_POSITIVE_YEARS and chop,
                    "detail": f"positive {subject} years (>= {MIN_TRADES_PER_YEAR} trades each): "
                              f"{positive or 'none'}; need {MIN_POSITIVE_YEARS} incl. one of {list(CHOP_YEARS)}"})
-    mf = model_filtered or {}
-    n_mf, dsr = int(mf.get("n") or 0), mf.get("dsr")
-    checks.append({"name": "dsr", "passed": n_mf >= MIN_TRADES_FOR_DSR and dsr is not None and float(dsr) >= DSR_BAR,
-                   "detail": f"deflated Sharpe {'n/a' if dsr is None else f'{float(dsr):.3f}'} on {n_mf} {subject} "
-                             f"trades (need {MIN_TRADES_FOR_DSR}+ trades and {DSR_BAR})"})
+    checks.append(dsr_check(model_filtered, subject))
     return {"passed": all(c["passed"] for c in checks), "checks": checks}
 
 

@@ -1,0 +1,5 @@
+id: R48
+requirement: Research trials run in parallel; the registry stays the single, serialized source of N (every trial counted, deflated Sharpe restated on the final count)
+status: implemented (in review)
+code: .github/workflows/research.yml, goldbot/research/cells.py, goldbot/research/gates.py (dsr_check)
+test: tests/test_research_cells.py, tests/test_registry_release.py
