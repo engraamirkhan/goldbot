@@ -5,6 +5,10 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- Speed-up (CTO docs/process/speedup-2026-10-18.md items 1-2, implementer, 2026-10-18): `f_order_blocks` is vectorised
+  (`_order_block_report`, pure numpy, no new dependency) and byte-identical to the old loop (golden test); feature VERSION
+  unchanged. `lookahead_check(full=...)` reuses the frame `research_pass` already built: two feature builds per run, not three.
+  1h 2024 trial 7.0 s -> 4.2 s; registry row identical. Quant review: features feed live models.
 - An approval whose send raises is archived NOT CONFIRMED, never left placing (BACKLOG 84, implementer, 2026-10-17;
   trading-safety residual on BACKLOG 72).
   - `ApprovalCenter._finish`: if `on_decision` raises, the card's `placing` flag is cleared and it is archived with

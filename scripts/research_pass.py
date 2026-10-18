@@ -736,9 +736,9 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         if tf not in frames:                       # bars, context, decision frame and lookahead check once per timeframe
             b_dec = resample_bars(b1, tf)
             context = {TF_LABEL[x]: resample_bars(b1, x) for x in context_tfs(tf)}
-            leak = lookahead_check(b_dec, context, feature_names=feat_names, ctx=feat_ctx)
-            frames[tf] = (b_dec, context, leak, build_decision_frame(b_dec.reset_index(drop=True), context,
-                                                                     feature_names=feat_names, ctx=feat_ctx))
+            frame = build_decision_frame(b_dec.reset_index(drop=True), context, feature_names=feat_names, ctx=feat_ctx)
+            leak = lookahead_check(b_dec, context, feature_names=feat_names, ctx=feat_ctx, full=frame[1])
+            frames[tf] = (b_dec, context, leak, frame)
             sizes = "  ".join(f"{k} {len(v):,}" for k, v in context.items())
             print(f"{tf} {len(b_dec):,}  {sizes}; lookahead check: {len(leak['lookahead_columns'])} of "
                   f"{leak['columns_checked']} columns differ [{time.time() - t0:.0f}s]", flush=True)
