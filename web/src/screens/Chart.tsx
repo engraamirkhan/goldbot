@@ -122,15 +122,16 @@ export function Chart() {
 
   return (
     <section className="chart-tab" aria-labelledby="chart-h">
-      <h2 id="chart-h">Gold chart (OANDA XAU/USD, live)</h2>
-      <div className="intervals" role="group" aria-label="Chart interval">
+      <h2 id="chart-h" className="sr-only">Gold chart, live</h2>
+      <div className="intervals" role="group" aria-label="Chart interval, both charts">
         {INTERVALS.map((i) => (
           <button key={i.value} aria-pressed={interval === i.value} onClick={() => setIntervalValue(i.value)}>{i.label}</button>
         ))}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 480px), 1fr))", gap: "var(--s4, 16px)" }}>
-        <TradingViewWidget interval={interval} dark={dark} />
-        <Mt5Chart key={interval} tf={interval === "D" ? "1D" : interval} />
+      <div className="chart-panels">
+        <div className="chart-panel"><h3>TradingView · OANDA XAU/USD</h3><TradingViewWidget interval={interval} dark={dark} /></div>
+        <div className="chart-panel"><h3>MT5 · IC Markets (the broker goldbot trades on)</h3>
+          <Mt5Chart key={interval} tf={interval === "D" ? "1D" : interval} /></div>
       </div>
       <p className="muted">Times on the chart are in your local time zone. The chart is TradingView's own and may be delayed or unavailable; goldbot does not use it to trade.</p>
 

@@ -83,6 +83,7 @@ def test_a_dry_run_reports_the_replacement_and_changes_nothing(
     registry, arts, ran = _published(tmp_path)
     before = registry.read_text()
     monkeypatch.setattr(repair, "run_info", _research_run)
+    monkeypatch.setattr(repair, "artifact_digests", lambda run_id: {})
     monkeypatch.setattr(sys, "argv", ["registry_repair", str(registry), str(arts)])
     repair.main()
     out = capsys.readouterr().out
@@ -158,6 +159,97 @@ def test_a_run_that_is_not_a_successful_research_run_is_refused(
     registry, arts, _ = _published(tmp_path)
     with pytest.raises(ValueError, match="39101594107"):
         repair.repair(read_rows(registry), [arts], verify=lambda run_id: {**_research_run(run_id), **info})
+
+
+def _failed_registry(tmp: Path, real: dict[str, Any], cell: dict[str, Any],
+                     cell_rows: list[dict[str, Any]]) -> tuple[Path, Path]:
+    """A registry holding one real trial then the failed row the record step wrote for `cell`, and the run's artifact."""
+    registry = tmp / "registry.jsonl"
+    write_rows(registry, merge_rows([real], [cells._failed_row(cell, "refused")]))
+    arts = tmp / "39129559408"
+    _artifact(arts, 0, cell_rows)
+    return registry, arts
+
+
+def test_a_failed_discovery_row_is_replaced_by_the_discovery_row_with_its_preregistration_and_k_rises_by_k_eff(
+        tmp_path: Path, repair: ModuleType) -> None:
+    """Trial #69 (H-40): the cell wrote a pre-registration and a discovery row; the failed row hid the discovery's K_eff."""
+    cell = {"idx": 0, "specialist": "box_course", "pooled": "", "variant": {}, "rationale": "H-40"}
+    real = _cell_row(tmp_path, {"confirm_bars": 1})
+    agent, _, config, _ = cells._planned(cell)
+    reg =TrialRegistry(tmp_path / "disc.jsonl")
+    pre = reg.preregister(agent_id=agent, family="discovery_box_course", config=config, feature_version="f-1",
+                          rationale="H-40", reading_rule="continue if AUC >= 0.53", plan={"n": 4})
+    disc = reg.record(agent_id=agent, family="discovery_box_course", config=config, feature_version="f-1",
+                      rationale="H-40", results={"discovery": {"survivor_unit": "group", "n_groups_screened": 4}},
+                      status="discovery", preregistration=pre)
+    registry, arts = _failed_registry(tmp_path, real, cell, [pre, disc])
+    published = read_rows(registry)
+    result = repair.repair(published, [arts], verify=_research_run)
+    assert [(r["trial"], r["status"]) for r in result.rows] == [(1, "screened"), (2, "preregistered"), (2, "discovery")]
+    assert result.rows[2]["preregistration"]["trial"] == 2 and result.rows[2]["repair"]["trial"] == 2
+    assert [s.trial for s in result.replaced] == [2] and not result.left
+    assert (result.k_before, result.k_after) == (2, 2 + 4)
+    for merged in (merge_rows(result.rows, published), merge_rows(published, result.rows)):
+        assert [r["status"] for r in merged] == ["screened", "preregistered", "discovery"]
+
+
+def _discovery_case(tmp_path: Path, disc_results: dict[str, Any]) -> tuple[Path, Path]:
+    cell = {"idx": 0, "specialist": "box_course", "pooled": "", "variant": {}, "rationale": "H-40"}
+    real = _cell_row(tmp_path, {"confirm_bars": 1})
+    agent, _, config, _ = cells._planned(cell)
+    disc = TrialRegistry(tmp_path / "disc.jsonl").record(
+        agent_id=agent, family="discovery_box_course", config=config, feature_version="f-1", rationale="H-40",
+        results=disc_results, status="discovery")
+    return _failed_registry(tmp_path, real, cell, [disc])
+
+
+@pytest.mark.parametrize("k_eff", [0, 400], ids=["k_eff-zeroed", "k_eff-inflated"])
+def test_a_tampered_k_eff_in_the_artifact_is_refused_because_k_must_match_the_operators_expectation(
+        tmp_path: Path, repair: ModuleType, k_eff: int) -> None:
+    registry, arts = _discovery_case(tmp_path, {"discovery": {"k_eff": k_eff}})
+    published = read_rows(registry)
+    with pytest.raises(ValueError, match="not the expected 6"):
+        repair.repair(published, [arts], verify=_research_run, expect_k=2 + 4)
+    assert repair.repair(published, [arts], verify=_research_run, expect_k=2 + k_eff).k_after == 2 + k_eff
+
+
+def test_a_repair_that_would_lower_k_is_refused(
+        tmp_path: Path, repair: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    registry, arts, _ = _published(tmp_path)
+    counts = iter([10, 5])
+    monkeypatch.setattr(repair, "n_trials_effective", lambda rows: next(counts))
+    with pytest.raises(ValueError, match="lower K"):
+        repair.repair(read_rows(registry), [arts], verify=_research_run)
+
+
+def test_apply_without_expect_k_is_refused_and_writes_nothing(
+        tmp_path: Path, repair: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    registry, arts, _ = _published(tmp_path)
+    before = registry.read_text()
+    monkeypatch.setattr(repair, "run_info", _research_run)
+    monkeypatch.setattr(repair, "artifact_digests", lambda run_id: {"cell-0": "sha256:abc"})
+    monkeypatch.setattr(sys, "argv", ["registry_repair", str(registry), str(arts), "--apply"])
+    with pytest.raises(SystemExit, match="--expect-k"):
+        repair.main()
+    assert registry.read_text() == before
+    monkeypatch.setattr(sys, "argv", ["registry_repair", str(registry), str(arts), "--apply", "--expect-k", "3"])
+    repair.main()
+    assert read_rows(registry)[1]["repair"]["artifact_digest"] == "sha256:abc"
+
+
+def test_a_failed_pooled_row_is_replaced_by_the_pooled_cells_row(tmp_path: Path, repair: ModuleType) -> None:
+    """Trial #52 (B12): the pooled row's agent id is `pooled_15m-g0-<hash>`, not the `pooled-15m` the plan once named."""
+    cell = {"idx": 0, "specialist": "session_open", "pooled": "15m", "variant": {}, "rationale": "B12"}
+    real = _cell_row(tmp_path, {"confirm_bars": 1})
+    agent, family, config, _ = cells._planned(cell)
+    row =TrialRegistry(tmp_path / "pool.jsonl").record(agent_id=agent, family=family, config=config,
+                                                        feature_version="f-1", rationale="B12", results={"n": 1},
+                                                        status="screened")
+    registry, arts = _failed_registry(tmp_path, real, cell, [row])
+    result = repair.repair(read_rows(registry), [arts], verify=_research_run)
+    assert [(r["trial"], r["status"], r["agent_id"]) for r in result.rows][1] == (2, "screened", agent)
+    assert agent.startswith("pooled_15m-g0-") and (result.k_before, result.k_after) == (2, 2)
 
 
 def test_a_folder_not_named_by_its_run_id_is_refused(tmp_path: Path, repair: ModuleType) -> None:

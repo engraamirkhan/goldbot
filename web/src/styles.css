@@ -52,7 +52,7 @@ form.inline button { padding: 6px 12px; border-radius: 6px; border: 0; backgroun
 .halt form { display: flex; gap: 8px; }
 .halt input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--fg); }
 .halt button { padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); background: none; color: var(--fg); cursor: pointer; }
-.halt button.danger { background: var(--bad); border-color: var(--bad); color: white; }
+.halt button.danger { background: var(--bad-fill); border-color: var(--bad-fill); color: #fff; }
 
 .banner { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
 .banner.bad { border-color: var(--bad); color: var(--bad); }
@@ -81,9 +81,7 @@ td a { color: inherit; }
 .strip-summary.bad { background: var(--bad-tint); color: var(--bad-fg); }
 .strip-summary.warn { background: var(--warn-tint); color: var(--warn-fg); }
 .strip-summary.idle { color: var(--muted); border: 1px solid var(--line); }
-.strip { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
-@media (min-width: 720px) { .strip { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-@media (min-width: 1080px) { .strip { grid-template-columns: repeat(7, minmax(0, 1fr)); } }
+.strip { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--s2); }
 .chip { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; display: flex; flex-direction: column; min-height: 44px; min-width: 0; background: var(--surface); }
 .chip .k { font-size: 12px; color: var(--muted); }
 .chip strong { font-size: 14px; overflow-wrap: anywhere; }
@@ -113,7 +111,7 @@ td a { color: inherit; }
 .bar span { display: block; height: 100%; background: var(--accent); transform-origin: left; transition: transform 1s linear; }
 .card.expiring .bar span { background: var(--warn-fg); }
 @media (prefers-reduced-motion: reduce) { .bar span { transition: none; } }
-.k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.k { font-size: var(--fs-small); color: var(--muted); }
 .risk strong { font-size: 20px; font-variant-numeric: tabular-nums; }
 .levels, .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
 .levels div, .metrics div { min-width: 0; }
@@ -419,3 +417,27 @@ td a { color: inherit; }
 .research-today { min-height: 150px; display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
 .research-today p { margin: 0; }
 .research-line { margin: 0 0 12px; }
+/* restyle of the shared legacy pieces onto the tokens */
+.tile, .chip, .acct, .card, .pcard, .mode-card, .entry-row, .hyp-card, .budget, .progress-line, .empty {
+  border-color: var(--border); border-radius: var(--r-lg); }
+.card, .acct, .mode-card, .pcard, .entry-row { box-shadow: var(--shadow); }
+.entry-row, .pcard { border-left-width: 1px; }
+.entry-row.ok, .pcard.ok { border-left-color: var(--border); }
+.entry-row.warn, .pcard.warn { box-shadow: inset 3px 0 0 var(--warn), var(--shadow); border-left-color: var(--border); }
+.entry-row.bad { box-shadow: inset 3px 0 0 var(--bad), var(--shadow); border-left-color: var(--border); }
+.card { border-left-width: 1px; }
+.card.long { box-shadow: inset 3px 0 0 var(--long), var(--shadow); border-left-color: var(--border); }
+.card.short { box-shadow: inset 3px 0 0 var(--short), var(--shadow); border-left-color: var(--border); }
+.k { text-transform: none; letter-spacing: 0; font-size: var(--fs-small); }
+.halt button, .halt input, form.inline input, form.inline select, form.inline button { min-height: 40px; border-radius: var(--r-md); font: inherit; }
+
+/* v2 review fixes (docs/ux/dashboard-v2.md section 6) */
+@media (min-width: 720px) { main { margin: 0; } }
+.chart-panels { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s4); }
+@media (min-width: 1080px) { .chart-panels { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.chart-panel { min-width: 0; }
+.chart-panel h3 { font-size: var(--fs-small); line-height: var(--lh-small); color: var(--text-2); font-weight: 600; margin: 0 0 var(--s2); }
+.mt5-box { height: 420px; }
+@media (min-width: 900px) { .mt5-box { height: 560px; } }
+.chart-tab .note, .chart-tab > p.muted { font-size: var(--fs-small); line-height: var(--lh-small); }
+.halt { gap: var(--s2); }

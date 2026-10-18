@@ -143,17 +143,3 @@ main { padding: var(--s4); max-width: var(--content-max); margin: 0 auto; paddin
 .state-box.error strong { color: var(--warn); }
 .skeleton-box { border-radius: var(--r-lg); background: var(--surface-2); margin-bottom: var(--s4); }
 @media (prefers-reduced-motion: no-preference) { .skeleton-box { animation: sk-pulse 1.4s ease-in-out infinite; } }
-
-/* restyle of the shared legacy pieces onto the tokens */
-.tile, .chip, .acct, .card, .pcard, .mode-card, .entry-row, .hyp-card, .budget, .progress-line, .empty {
-  border-color: var(--border); border-radius: var(--r-lg); }
-.card, .acct, .mode-card, .pcard, .entry-row { box-shadow: var(--shadow); }
-.entry-row, .pcard { border-left-width: 1px; }
-.entry-row.ok, .pcard.ok { border-left-color: var(--border); }
-.entry-row.warn, .pcard.warn { box-shadow: inset 3px 0 0 var(--warn), var(--shadow); border-left-color: var(--border); }
-.entry-row.bad { box-shadow: inset 3px 0 0 var(--bad), var(--shadow); border-left-color: var(--border); }
-.card { border-left-width: 1px; }
-.card.long { box-shadow: inset 3px 0 0 var(--long), var(--shadow); border-left-color: var(--border); }
-.card.short { box-shadow: inset 3px 0 0 var(--short), var(--shadow); border-left-color: var(--border); }
-.k { text-transform: none; letter-spacing: 0; font-size: var(--fs-small); }
-.halt button, .halt input, form.inline input, form.inline select, form.inline button { min-height: 40px; border-radius: var(--r-md); font: inherit; }

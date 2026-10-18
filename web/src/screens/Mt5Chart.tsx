@@ -4,7 +4,9 @@ import { api } from "../lib/api";
 // MT5 (IC Markets) terminal picture beside the TradingView chart. Refetched every 60 s and on timeframe change; the
 // server answers 404 when its capture is older than 5 minutes. The blob URL is revoked on every refresh and on unmount.
 
-type Shot = { url: string; capturedAt: string | null } | "none" | "error" | null;
+const TF_WORDS: Record<string, string> = { "15": "15-minute", "60": "1-hour", "240": "4-hour", "1D": "daily" };
+
+type Shot ={ url: string; capturedAt: string | null } | "none" | "error" | null;
 
 function when(iso: string | null): string {
   const d = iso ? new Date(iso) : null;
@@ -35,14 +37,14 @@ export function Mt5Chart({ tf }: { tf: string }) {
     return () => { live = false; clearInterval(t); drop(); };
   }, [tf]);
 
-  const box = { height: 420, border: "1px solid var(--border, var(--line))", borderRadius: "var(--r-lg, 8px)", overflow: "hidden", background: "var(--surface-2, var(--surface))", display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center" as const, padding: "var(--s3, 12px)" };
+  const box = { border: "1px solid var(--border, var(--line))", borderRadius: "var(--r-lg, 8px)", overflow: "hidden", background: "var(--surface-2, var(--surface))", display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center" as const, padding: "var(--s3, 12px)" };
   return (
     <div data-testid="mt5-chart">
-      <div style={box} aria-live="polite">
+      <div className="mt5-box" style={box} aria-live="polite">
         {shot === null && <p className="muted" role="status">Loading the MT5 chart...</p>}
         {shot === "none" && <p className="muted">The MT5 chart has not updated for over 5 minutes, so it is hidden. The TradingView chart still works.</p>}
         {shot === "error" && <p className="muted" role="status">MT5 chart unavailable; the TradingView chart still works.</p>}
-        {shot && typeof shot === "object" && <img src={shot.url} alt={`MT5 gold chart, ${tf} timeframe`} style={{ width: "100%", height: "100%", objectFit: "contain" }} />}
+        {shot && typeof shot === "object" && <img src={shot.url} alt={`MT5 gold chart, ${TF_WORDS[tf] ?? tf}`} style={{ width: "100%", height: "100%", objectFit: "contain" }} />}
       </div>
       {shot && typeof shot === "object" && <p className="muted" style={{ fontSize: "var(--fs-small, 13px)" }}>MT5 chart, IC Markets{when(shot.capturedAt)}</p>}
     </div>
