@@ -201,7 +201,7 @@ evidence of an edge, so the prior stays low. Both TVR-1 and TVR-2 failing closes
 **Tested universe (features, no trial).** These are opt-in `smc_replica` columns and reach a model only through
 D-TVR or a pre-registered row: `bos/choch_{bull,bear}_{internal,swing}`, `trend_swing`, `trend_internal`, `eqh`,
 `eql`, `fvg_bull`, `fvg_bear`, `mfi_12`, `mfi_os_cross`, `mfi_ob_cross`, `gz50_dist_atr`, `gz618_dist_atr`,
-`sr_break_up`, `sr_break_dn`, `candle_class`, `ma_stack_kog`.
+`sr_break_up`, `sr_break_dn`, `candle_class`, `ma_stack_sma_ema`.
 
 **Not trialled, by decision:** money-flow cross rules (R-01 reversion, or no mechanism) and box-break rules (R-04
 breakout). The order blocks cannot be replicated: they are off in the owner's settings (data request D-3).

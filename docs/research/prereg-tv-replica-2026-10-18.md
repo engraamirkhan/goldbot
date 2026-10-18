@@ -29,6 +29,7 @@ They were used only to match plot values. No outcome on them was computed, and t
   the owner's A settings, and so are A's MA-cross shapes and EMA5.
 - **Fit.** Each plot was matched bar by bar on the chart's own bars. Lines were compared by maximum absolute and
   relative error, events by precision and recall at ±0 bars, and states (packed colour indices) by exact equality.
+- **Reproduce.** Run `python scripts/replica_match.py` (reads `~/tmp/tv` locally and prints aggregates only).
 - **Repaint.** Every pulled value is tagged `history_recomputed`, so no bar in the pull was live. A repaint check
   (live versus recomputed) needs a forward capture. That is data request D-1 in A4.
 

@@ -381,14 +381,14 @@ def sr_channel_breaks(open_: Arr, high: Arr, low: Arr, close: Arr, pivot_len: in
 # --------------------------------------------------------------------------- the opt-in feature
 COLUMNS = (*STRUCTURE_EVENTS, "trend_swing", "trend_internal", "eqh", "eql", "fvg_bull", "fvg_bear", "mfi_12",
            "mfi_os_cross", "mfi_ob_cross", "gz50_dist_atr", "gz618_dist_atr", "sr_break_up", "sr_break_dn",
-           "candle_class", "ma_stack_kog")
-SIGNED = {"trend_swing": 0.0, "trend_internal": 0.0, "gz50_dist_atr": 0.0, "gz618_dist_atr": 0.0, "ma_stack_kog": 0.0}
+           "candle_class", "ma_stack_sma_ema")
+SIGNED = {"trend_swing": 0.0, "trend_internal": 0.0, "gz50_dist_atr": 0.0, "gz618_dist_atr": 0.0, "ma_stack_sma_ema": 0.0}
 
 
 def replica_frame(df: pd.DataFrame, ctx: FeatureCtx | None = None) -> pd.DataFrame:
     """All replica columns on mid bars (open/high/low/close plus `tick_count`, or `volume`, as the volume proxy).
     Events are 0/1, trends -1/0/+1, distances (close - level) / ATR14 (seeded Wilder), `mfi_12` 0..100,
-    `candle_class` the code above, `ma_stack_kog` = +1 when SMA10 > SMA20 > EMA50 > SMA200, -1 when the reverse, else 0."""
+    `candle_class` the code above, `ma_stack_sma_ema` = +1 when SMA10 > SMA20 > EMA50 > SMA200, -1 when the reverse, else 0."""
     ctx = ctx or {}
     o, h, lo, c = (df[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close"))
     vol = df["tick_count"] if "tick_count" in df.columns else df["volume"]
@@ -419,7 +419,7 @@ def replica_frame(df: pd.DataFrame, ctx: FeatureCtx | None = None) -> pd.DataFra
     with np.errstate(invalid="ignore"):
         bull = (r["ma10"] > r["ma20"]) & (r["ma20"] > r["ma50"]) & (r["ma50"] > r["ma200"])
         bear = (r["ma10"] < r["ma20"]) & (r["ma20"] < r["ma50"]) & (r["ma50"] < r["ma200"])
-    out["ma_stack_kog"] = np.where(bull, 1, np.where(bear, -1, 0)).astype(np.int64)
+    out["ma_stack_sma_ema"] = np.where(bull, 1, np.where(bear, -1, 0)).astype(np.int64)
     return out.frame()
 
 
