@@ -14,6 +14,7 @@ const EMPTY: ResearchView = {
   generated_utc: "2026-10-10T08:00:00Z", budget: { quarter: "2026Q4", budget: 20, used: 0, left: 20 }, trials: [], trials_total: 0,
   plan: null, plan_error: null,
   hypotheses: { path: "docs/research/hypotheses.md", updated_utc: null, tables: [], note: "hypotheses.md not found next to the API" },
+  today: { date_utc: "2026-10-10", run: 0, passed: 0, not_counted: 0, failed: 0, no_verdict: 0, latest: null, quarter_end: "2026-12-31" },
 };
 
 const gates = [{ name: "dsr", passed: false, detail: "deflated Sharpe n/a" }, { name: "events", passed: true, detail: "1498 events" }];

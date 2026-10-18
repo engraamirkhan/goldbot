@@ -53,6 +53,15 @@ describe("App header", () => {
     },
   );
 
+  it("puts the Limits tab right after Progress, so it stays on screen when the tab row scrolls", () => {
+    apiModule.setUser({ email: "v@x.io", role: "viewer", signed_in_with: "password_totp" });
+    renderApp();
+    const tabs = Array.from(appBanner().querySelectorAll("nav button")).map((b) => b.textContent);
+    expect(tabs.indexOf("Limits")).toBe(tabs.indexOf("Progress") + 1);
+    fireEvent.click(screen.getByRole("button", { name: "Limits" }));
+    expect(screen.getByLabelText("Loading limits")).toBeInTheDocument();
+  });
+
   it("says 'Signed in' when the session record is missing, without throwing", () => {
     apiModule.setUser(null);
     renderApp();

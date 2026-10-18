@@ -25,6 +25,7 @@ from goldbot.telegram import automode
 from goldbot.telegram.approvals import Proposal, decision_callbacks, decision_channel, parse_decision_callback
 from goldbot.telegram.bus import ApprovalBus
 from goldbot.telegram.digest import DigestSchedule, digest_from_runtime
+from goldbot.telegram.limits_notices import LimitsNotices
 from goldbot.telegram.outbox import NOT_CONFIRMED_OUTCOME, Outbox, ReportRetry, SendGuard
 
 log = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ except ImportError:  # pragma: no cover
 
 DEPLOY_EVERY_S = 600             # new version on main with CI passed -> offered to the owner (one click)
 AUTOMODE_EVERY_S = 900           # auto-mode evidence (A10): offered once per mode epoch when it holds
+LIMITS_EVERY_S = 30              # risk-limit change FYI (goldbot/telegram/limits_notices.py)
 DIGEST_EVERY_S = 60              # daily owner digest due check (telegram.digest_at; once a day, late <= 6 h)
 HEALTH_EVERY_S = 60               # health checks + alert dedupe: a silent service is reported within ~6 min (S5)
 AUDIT_DRAIN_S = 10.0              # at shutdown, wait this long at most for audit rows still being written
@@ -154,6 +156,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
         self.bus = ApprovalBus(state_dir)
         # opened lazily inside the pump: a broken aux.db must not stop the service (halt, health alerts, decisions)
         self.outbox: Outbox | None = None
+        self.limits_notices: LimitsNotices | None = None   # opened lazily in the pump, like the outbox
         self.send_guard = SendGuard()           # a sent proposal whose mark_sent failed is retried, never re-sent
         self.report_retry = ReportRetry()       # a report batch failing for one recipient is not resent forever
         self.owner_ids = owner_ids
@@ -201,6 +204,8 @@ class TelegramBot:  # pragma: no cover - needs network + token
                 await self._automode_pass()
             if n % max(int(DIGEST_EVERY_S / self.poll_s), 1) == 0:     # n == 0: a missed slot is sent on start
                 await self._digest_pass()
+            if n % max(int(LIMITS_EVERY_S / self.poll_s), 1) == 0:
+                await self._limits_pass()
             if self.deploy is not None:
                 await self._deploy_pass(offer=n % max(int(DEPLOY_EVERY_S / self.poll_s), 1) == 0,
                                         report=n % max(int(30 / self.poll_s), 1) == 0)
@@ -241,6 +246,21 @@ class TelegramBot:  # pragma: no cover - needs network + token
             self.digest.record(now)             # only after delivery: a failed send is retried next pass
         except Exception:
             log.exception("digest pass")
+
+    async def _limits_pass(self) -> None:
+        """FYI to the owner when an account's risk limits changed (docs/ux/limits-and-tradingview.md): no buttons; a
+        raise is silent, a tighten or a safety revert has sound. The cursor moves only after every message went out."""
+        try:
+            if self.limits_notices is None:
+                self.limits_notices = await asyncio.to_thread(LimitsNotices, self.state_dir, self.settings.owner_tz)
+            msgs, ack = await asyncio.to_thread(self.limits_notices.pending)
+            for m in msgs:
+                for uid in self.owner_ids:
+                    await self.app.bot.send_message(uid, m.text, disable_notification=m.silent)
+            if ack is not None:
+                await asyncio.to_thread(self.limits_notices.ack, ack)    # only after delivery: retried next pass
+        except Exception:
+            log.exception("limits pass")
 
     def _eligibility(self) -> automode.Eligibility:
         return automode.auto_mode_eligibility_from_state(self.state_dir, self.settings)

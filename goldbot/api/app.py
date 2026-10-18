@@ -34,7 +34,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
-from goldbot.api import chart_layouts, entry_status, explain, progress
+from goldbot.api import chart_layouts, entry_status, explain, limits, progress
 from goldbot.api.auth import (
     EMAIL_CODE_TTL_S,
     EMAIL_LINK_TTL_S,
@@ -98,6 +98,8 @@ from goldbot.api.schema import (
     InviteRequest,
     InviteResponse,
     JobRow,
+    LimitChange,
+    LimitsView,
     LoginRequest,
     LoginResponse,
     Me,
@@ -907,7 +909,24 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
 
     @app.get("/api/tradingview", response_model=TvStatusView)
     def tradingview_status(_: User = Depends(auth)) -> TvStatusView:
-        return tv_status(st.store(), pd.Timestamp.now(tz="UTC"))
+        s = view_settings()
+        keys = (s.tv_pull.sessionid_key, s.tv_pull.sessionid_sign_key) if s is not None else None
+        return tv_status(st.store(), pd.Timestamp.now(tz="UTC"), state_dir=st.dir, cookie_keys=keys)
+
+    # ============================================================== Limits card (read-only, any signed-in role)
+    # goldbot/api/limits.py: what the engines publish, the supervisor's combined caps and core.db's change logs
+    # (docs/ux/limits-and-tradingview.md A). Nothing here changes a limit; the revert is cleared only by the re-arm.
+    @app.get("/api/limits", response_model=LimitsView)
+    def limits_get(_: User = Depends(auth)) -> LimitsView:
+        try:                                   # a torn supervisor.json only drops the combined caps
+            sup = st.supervisor()
+        except (OSError, ValueError):
+            sup = {}
+        return limits.limits_view(st.dir, st.engines(), sup if isinstance(sup, dict) else {}, view_settings())
+
+    @app.get("/api/limits/changes", response_model=list[LimitChange])
+    def limits_changes(account: str | None = None, limit: int = 20, _: User = Depends(auth)) -> list[LimitChange]:
+        return limits.changes_view(st.dir, account, limit)
 
     @app.get("/api/jobs", response_model=list[JobRow])
     def jobs(u: User = Depends(auth)) -> list[JobRow]:

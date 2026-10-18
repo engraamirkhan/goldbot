@@ -22,7 +22,7 @@ import json
 import logging
 import math
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -48,6 +48,7 @@ from goldbot.api.schema import (
     ReliabilityBin,
     ReliabilityCurve,
     ResearchPlanView,
+    ResearchToday,
     ResearchView,
     RetiredFamilyView,
     SystemHaltView,
@@ -501,6 +502,23 @@ def _hypotheses(docs_dir: Path) -> HypothesisDoc:
     return HypothesisDoc(path=rel, updated_utc=updated, tables=parse_tables(text), note=None)
 
 
+def _today(rows: list[dict[str, Any]], tfs: dict[str, str], now: datetime) -> ResearchToday:
+    """Trial rows (`registry.is_trial`) stamped on the current UTC day, by verdict as the trial table reads them: a
+    recorded pass without its cost treatment is `not_counted`, a row with no gate verdict `no_verdict`."""
+    from goldbot.research.registry import is_trial, quarter_of, quarter_start
+    day = now.astimezone(timezone.utc).date()
+    today = [t for r in rows if is_trial(r) and (t := _trial(r, tfs)).ts is not None
+             and t.ts.astimezone(timezone.utc).date() == day]
+    q = quarter_of(now)
+    y, qn = int(q[:4]), int(q[5])
+    end = (quarter_start(f"{y + 1}Q1" if qn == 4 else f"{y}Q{qn + 1}") - timedelta(days=1)).date()
+    latest = max(today, key=lambda t: (t.ts or now, t.trial), default=None)
+    return ResearchToday(date_utc=day, run=len(today), passed=sum(t.gates_passed is True for t in today),
+                         not_counted=sum(t.pre_swap for t in today),
+                         failed=sum(t.gates_passed is False and not t.pre_swap for t in today),
+                         no_verdict=sum(t.gates_passed is None for t in today), latest=latest, quarter_end=end)
+
+
 def research_view(state: Path, settings: Settings | None, docs_dir: Path) -> ResearchView:
     from goldbot.research.registry import quarter_of, quarter_trials
     from goldbot.specialists import SPECIALISTS
@@ -514,7 +532,7 @@ def research_view(state: Path, settings: Settings | None, docs_dir: Path) -> Res
     plan, plan_err = _plan(state, docs_dir)
     return ResearchView(generated_utc=now, budget=TrialBudget(quarter=q, budget=cap, used=used, left=max(cap - used, 0)),
                         trials=trials, trials_total=len(rows), plan=plan, plan_error=plan_err,
-                        hypotheses=_hypotheses(docs_dir))
+                        hypotheses=_hypotheses(docs_dir), today=_today(rows, tfs, now))
 
 
 # ---------------------------------------------------------------------------------------------- auto mode (A10)

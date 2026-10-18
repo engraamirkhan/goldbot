@@ -5,8 +5,16 @@ TradingView link works, (c) how research is going. Nothing here has a button tha
 `approval-card.md` and `health-research.md`: red only for things that stop trading, state in words as well as colour,
 every number with unit and time (owner's zone, UTC on hover), fixed-height cards so live updates never shift layout.
 
-Source note: ADR 0031/0032 and the `limit_changes` / `adaptive_*` tables are not on this branch. Field names below are
-the proposal; the implementer maps them to the real columns and corrects this note.
+Source note (corrected at implementation, 2026-10-18): the change log is core.db ADR 0032 `limits_changes` (id,
+account_id, ts_ns, body = a snapshot of the current limits; diffed per field in goldbot/ops/limits_log.py) and ADR 0031
+`adaptive_changes` (id, account_id, day, field, old, new, reasons, evidence_ids, ts_ns). The served names are in
+goldbot/api/schema.py (`LimitsView`, `LimitAccount`, `LimitChange`, `TvStatusView`, `ResearchToday`); the main
+differences from the proposal below: money fields carry the account `currency` instead of a `_gbp` suffix
+(`daily_limit`, `daily_used`, ...), `account_class` is `mode` (the existing `account_class` means raw/standard), the
+week resets Sunday 00:00 UTC (the gate's rule), the fix command is the two real keyring entries
+(`python -m goldbot.ops.accounts set tradingview-sessionid && ... set tradingview-sessionid-sign`), the sign-in
+expiry time is not stored (the card says "expired" without a date), the registry has no "running" trials and the repaint
+check records no "failed" state, so neither is shown, and K is the quarter's trial budget (`ResearchView.budget`).
 
 ## Placement
 
