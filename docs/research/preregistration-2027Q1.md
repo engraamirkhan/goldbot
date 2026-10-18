@@ -814,6 +814,16 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
     `tests/test_group_size_before_preregister.py`). The two new families `liquidity` and `activity` bring it to about
     16, so "about 16" stands. The exact K_eff and `group_map_sha256` (the pool map) are written here when the
     liquidity/activity feature version merges, before the count.
+  - **Amendment 2026-10-18 (strategy researcher; before any H-14 count, label or outcome; group map not yet
+    pinned): one more feature group, `tod_periodicity` (N1, `candidates/next-2026-10-18.md`).** Six columns
+    (`slot_mean_ret_{5,10,20}d`, `slot_hit_rate_20d`, `slot_t_20d`, `slot_ret_over_atr`), a separate group, **not**
+    inside `activity` (C-5/C-6 overlap). Slots are 30-minute UTC bins; a 15m bar maps to the slot containing its open
+    (both 15m bars of a slot map to it). Each column uses only the same slot on earlier days, so
+    `available_utc` = the prior day's slot close; joined by `asof_join`; `lookahead_check` must report 0 columns.
+    **K_eff about 16 -> about 17; the adopted gate-1 case about 66 -> about 67** (40 + H-02 ~10 + H-14 ~17; the "Gate-1
+    power" table is re-read at that case before the count). The group must be coded before the pin (due 2026-12-11).
+    Mechanism: Heston, Korajczyk & Sadka 2010, *J. Finance* 65(4) (equities, gross; untested on gold). No registry
+    trial; no extra event or trade-rate pre-check (a slot summary of past returns is an outcome read).
 - Threshold (amended 2026-10-17, E-2; quant review R1): `threshold_rule: tercile_inner`,
   `tercile_q: 0.6666666666666666` and `tercile_method: linear` in the pinned `DiscoveryConfig` dump (so in the config
   hash: another q is another trial). The coded verdict needs at least 1,000 taken trades for "continue", as the
