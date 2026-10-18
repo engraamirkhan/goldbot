@@ -122,7 +122,8 @@ def _fetch(start: dt.date, end: dt.date, side: str, outdir: Path, salvage: bool 
     return df[["ts_utc", "open", "high", "low", "close", "volume"]], ""
 
 
-def download_side(start: dt.date, end: dt.date, side: str, outdir: Path, attempts: int = 4) -> pd.DataFrame | None:
+def download_side(start: dt.date, end: dt.date, side: str, outdir: Path, attempts: int = 4,
+                  day_attempts: int = 3) -> pd.DataFrame | None:
     frames = []
     for a, b in week_chunks(start, end):
         df, err = None, ""
@@ -137,7 +138,24 @@ def download_side(start: dt.date, end: dt.date, side: str, outdir: Path, attempt
             frames.append(df)
     if not frames:
         return None
-    return pd.concat(frames).drop_duplicates("ts_utc").sort_values("ts_utc").reset_index(drop=True)
+    got = pd.concat(frames).drop_duplicates("ts_utc").sort_values("ts_utc").reset_index(drop=True)
+    # The last attempt of a week runs with -fr, which skips a throttled (HTTP 429) day without failing: the week
+    # "succeeds" minus that day (root cause of the 0-bar weekdays). Ask for each such day again on its own, slowly.
+    for day in missing_weekdays(got, start, end):
+        for i in range(day_attempts):
+            df, _err = _fetch(day, day + dt.timedelta(days=1), side, outdir)
+            if df is not None:
+                got = pd.concat([got, df]).drop_duplicates("ts_utc").sort_values("ts_utc").reset_index(drop=True)
+                break
+            time.sleep(30 * (i + 1))
+    return got
+
+
+def missing_weekdays(df: pd.DataFrame, start: dt.date, end: dt.date) -> list[dt.date]:
+    """Weekdays in [start, end) with no bar at all (closures included: a refetch of those is cheap and returns empty)."""
+    have = set(pd.DatetimeIndex(df["ts_utc"]).date)
+    days = (start + dt.timedelta(days=i) for i in range((end - start).days))
+    return [d for d in days if d.weekday() < 5 and d not in have]
 
 
 def month_bars(start: dt.date, end: dt.date, tmp: Path, attempts: int = 2) -> pd.DataFrame | None:

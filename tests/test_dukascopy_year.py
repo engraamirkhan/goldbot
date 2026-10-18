@@ -369,3 +369,34 @@ def test_plan_step_without_months_keeps_the_year_range(tmp_path):
 def test_plan_step_rejects_bad_or_conflicting_month_lists(tmp_path, env):
     rc, got, _ = _run_plan(tmp_path, **env)
     assert rc != 0 and "years" not in got
+
+
+def _day_frame(days: list[dt.date]) -> pd.DataFrame:
+    ts = [pd.Timestamp(d, tz="UTC") + pd.Timedelta(hours=10) for d in days]
+    return pd.DataFrame({"ts_utc": ts, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1.0})
+
+
+def test_missing_weekdays_lists_only_empty_weekdays():
+    have = _day_frame([dt.date(2020, 5, 25), dt.date(2020, 5, 29)])
+    miss = dy.missing_weekdays(have, dt.date(2020, 5, 25), dt.date(2020, 6, 1))
+    assert miss == [dt.date(2020, 5, 26), dt.date(2020, 5, 27), dt.date(2020, 5, 28)]
+
+
+def test_download_side_refetches_days_a_salvage_pass_silently_dropped(monkeypatch, tmp_path):
+    """dukascopy-node -fr skips a throttled (429) day without failing; those days must be asked for again one by one."""
+    week = [dt.date(2020, 5, 25) + dt.timedelta(days=i) for i in range(5)]
+    calls: list[tuple[dt.date, dt.date]] = []
+
+    def fake_fetch(a, b, side, outdir, salvage=False):
+        calls.append((a, b))
+        if (b - a).days > 1:                       # the week call lost the 3 throttled days
+            return _day_frame([week[0], week[4]]), ""
+        return _day_frame([a]), ""                 # a single-day call succeeds
+
+    monkeypatch.setattr(dy, "_fetch", fake_fetch)
+    monkeypatch.setattr(dy.time, "sleep", lambda s: None)
+    out = dy.download_side(dt.date(2020, 5, 25), dt.date(2020, 5, 30), "bid", tmp_path)
+    assert out is not None
+    assert sorted(out["ts_utc"].dt.date.unique()) == week
+    one_day = [c for c in calls if (c[1] - c[0]).days == 1]
+    assert one_day == [(w, w + dt.timedelta(days=1)) for w in week[1:4]]
