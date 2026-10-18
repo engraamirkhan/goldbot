@@ -1,0 +1,155 @@
+"""Automatic entries: who may enter without the owner's tap, and what an automatic entry does after the order.
+
+ADR 0036, the owner 2026-10-18: "for the demo account, the trades will be opened and closed by the system, no
+confirmation is needed, for real account with real money, stick to original plan of confirming from me".
+
+The lock (`refusal`) is the same rule at every layer: an automatic entry needs an account whose mode is demo AND a
+terminal that itself reports a demo account (MT5 `account_info().trade_mode`); the paper broker (no terminal, no money)
+may run auto for replays and tests. It is checked when the account is loaded (`accounts.Account`), when the engine
+starts (`check_start`), on every account refresh (`locked`, after the owner's /mode) and once more at the order itself
+(`permitted`, a fresh broker read). A refusal means propose: the owner is asked, nothing is placed without him. The
+re-arm propose window and the 12% kill switch still force propose on demo; the RiskGate is still the only path to an
+order and exits are never gated.
+
+The post-order bookkeeping (`after_order`, `action`) moved here from runner.py (ADR 0023: runner.py only shrinks).
+"""
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING
+
+import pandas as pd
+
+from goldbot.execution.broker import OrderResult
+from goldbot.telegram.entry_text import account_name
+
+if TYPE_CHECKING:
+    from goldbot.engine.runner import Engine
+    from goldbot.risk.gate import GateDecision
+    from goldbot.telegram.approvals import Proposal
+
+log = logging.getLogger(__name__)
+
+
+def refusal(mode: str, trade_mode: str | None) -> str | None:
+    """Why automatic entries are refused for an engine of `mode` (paper | demo | live) on a terminal reporting
+    `trade_mode` (demo | real | contest; None = no terminal), or None when they are allowed. Demo needs the terminal to
+    say demo; paper needs no terminal or a demo one; anything else (live above all) is always refused."""
+    if mode == "demo" and trade_mode == "demo":
+        return None
+    if mode == "paper" and trade_mode in (None, "demo"):
+        return None
+    return f"auto entries need a demo account on a demo terminal (account {mode}, terminal {trade_mode or 'unknown'})"
+
+
+def check_start(mode: str, approval_mode: str) -> None:
+    """The engine's start: a non-demo account configured auto fails loudly (ADR 0036), never runs as propose quietly."""
+    if approval_mode == "auto" and mode not in ("demo", "paper"):
+        raise ValueError(f"auto entries are for demo accounts only (ADR 0036): a {mode} account always asks the owner")
+
+
+def locked(mode: str, cfg_mode: str, trade_mode: str | None) -> str:
+    """The approval mode after the lock, on every refresh: `mode` (the owner's /mode, else the account's) unless it is
+    auto and `refusal` refuses it, which gives propose."""
+    if mode == "auto" and (why := refusal(cfg_mode, trade_mode)) is not None:
+        log.warning("approval mode auto refused: %s; entries are proposed to the owner", why)
+        return "propose"
+    return mode
+
+
+def permitted(eng: Engine, close_ts: pd.Timestamp) -> bool:
+    """The check at the order itself: the engine is in auto and a fresh broker read still passes `refusal`. A refusal
+    or an unreadable account sets the engine to propose (the entry is proposed instead) and is journalled. Auto
+    entries paused for this bar close (`after_order`) stay on the auto path, which journals the pause and sends
+    nothing: no proposal either, as before ADR 0036."""
+    if eng.cfg.approval_mode != "auto":
+        return False
+    if eng._auto_paused is not None and eng._auto_paused[0] == close_ts:
+        return True
+    try:
+        why = refusal(eng.cfg.mode, getattr(eng.broker.account(), "trade_mode", None))
+    except Exception as exc:                # unread: the owner decides (fail closed)
+        why = f"account unreadable ({type(exc).__name__})"
+    if why is None:
+        return True
+    eng.cfg.approval_mode = "propose"
+    eng.decisions.append({"ts": pd.Timestamp.now("UTC").timestamp(), "action": "auto_refused", "reason": why})
+    log.warning("auto entry refused at the order: %s; proposed to the owner", why)
+    return False
+
+
+def action(res: OrderResult | None) -> str:
+    """The journal's word for an auto entry (review LOW-B): `executed:auto` only for a fill (or a duplicate, sent
+    before); `auto_rejected:<retcode>` for a definite reject (nothing placed); `auto_unconfirmed:<retcode>` for
+    anything else (`after_order` then stops auto entries for the rest of the bar close)."""
+    from goldbot.engine.runner import DEFINITE_REJECT_RETCODES
+    if res is None or (res.ok and res.position_id is not None):
+        return "executed:auto"
+    kind = "auto_rejected" if res.retcode in DEFINITE_REJECT_RETCODES else "auto_unconfirmed"
+    return f"{kind}:{res.retcode}"
+
+
+def opened_text(prop: Proposal, res: OrderResult, symbol: str, account: str) -> str:
+    """The owner's notice for a filled automatic entry: information only, no buttons (ADR 0036)."""
+    side = "LONG" if prop.side > 0 else "SHORT"
+    entry = res.price if res.price is not None else prop.entry
+    return (f"Opened automatically (demo): {side} {res.filled_lots:g} lots {symbol} on {account} at {entry:.2f}. "
+            f"Stop {prop.stop:.2f}, target {prop.target:.2f}; exits are automatic.")
+
+
+def _tell_opened(eng: Engine, prop: Proposal, res: OrderResult) -> None:
+    """Best effort: a notice that cannot be queued is logged and never changes the outcome."""
+    if eng.center.bus is None:
+        return
+    try:
+        eng.center.bus.notify_owner(opened_text(prop, res, eng.cfg.symbol, account_name(eng.cfg.account_id)))
+    except Exception as exc:                # noqa: BLE001 - the entry stands either way
+        log.warning("auto-entry notice not queued (%s)", type(exc).__name__)
+
+
+def after_order(eng: Engine, res: OrderResult | None, gd: GateDecision, prop: Proposal, close_ts: pd.Timestamp) -> None:
+    """Trading-safety review HIGH (BACKLOG 19 review): every auto entry at one bar close must see the previous
+    one, or `max_positions`, the combined cap, the heat cap and the same-direction cap can each be passed within a
+    bar close. After an order the account is read again (`_refresh_account` on the broker's last tick). A fill the
+    positions read does not show yet is added conservatively: one more position on its side, its lots and notional,
+    the gate's margin, and its stop risk scaled to the filled lots (unknown open risk stays unknown). An ambiguous
+    result (neither a fill nor a definite reject, `DEFINITE_REJECT_RETCODES`) or a failed re-read stops auto entries
+    for the rest of this bar close. `res` None: nothing was sent (a duplicate), nothing changes. A fill tells the owner
+    it opened on a demo account (ADR 0036)."""
+    from goldbot.engine.runner import DEFINITE_REJECT_RETCODES, bridge_refused
+    if res is None:
+        return
+    filled = res.ok and res.position_id is not None
+    if filled and eng.cfg.mode == "demo":           # a demo account's broker fill; paper replays stay quiet
+        _tell_opened(eng, prop, res)
+    if bridge_refused(res):                         # BACKLOG 66 (trading-safety C2): nothing placed, but the brain
+        eng._auto_paused = (close_ts, "bridge_refused")   # sized above the bridge's ceiling: no more this close
+        return
+    if not filled and res.retcode in DEFINITE_REJECT_RETCODES:
+        return                                      # nothing placed: the facts are unchanged
+    if not filled:
+        eng._auto_paused = (close_ts, "unconfirmed_order")
+        log.warning("auto entry result unconfirmed (retcode %s): auto entries stop for this bar close", res.retcode)
+    try:
+        eng._refresh_account(eng.broker.last_tick(eng.cfg.symbol))
+        seen = eng._position_ids is not None and res.position_id in eng._position_ids
+    except Exception as exc:                        # fail closed: no further auto entry on unknown facts
+        log.warning("account re-read after an auto entry failed (%s): auto entries stop for this bar close",
+                    type(exc).__name__)
+        eng._auto_paused = eng._auto_paused or (close_ts, "account_unread")
+        seen = False
+    if not filled or seen:
+        return
+    st, lots = eng.state, float(res.filled_lots)
+    st.open_positions += 1
+    st.open_lots = round(st.open_lots + lots, 6)
+    px = eng._price or res.price            # USD notional at the mid, as `_refresh_account` publishes it
+    if px:
+        st.open_notional = st.open_lots * eng._contract_size() * px
+    if prop.side > 0:
+        st.open_long += 1
+    else:
+        st.open_short += 1
+    st.margin_used += gd.margin_needed
+    if st.open_risk is not None:
+        st.open_risk += gd.risk_amount * lots / gd.lots if gd.lots > 0 else gd.risk_amount

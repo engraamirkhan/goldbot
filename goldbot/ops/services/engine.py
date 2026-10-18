@@ -297,7 +297,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     shadow_host = bool(broker_cfg and broker_cfg.canonical_costs)   # one shadow book: the canonical-cost broker
 
     agents, live_shares = population_view()
-    eng = Engine(EngineConfig(account_id=account_id, broker_name=acc.broker, mode=acc.mode, declared_class=acc.account_class, approval_mode="propose", symbol=acc.symbol,
+    eng = Engine(EngineConfig(account_id=account_id, broker_name=acc.broker, mode=acc.mode, declared_class=acc.account_class, approval_mode=acc.approval_mode, symbol=acc.symbol,
                               magic_base=acc.magic_base, server_tz=acc.server_tz, state_dir="state", data_root=settings.data_root,
                               shadow_host=shadow_host, halt_checks=True, news_blackout=True,
                               blackout_before_min=settings.risk.blackout.before_min,
