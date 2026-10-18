@@ -173,6 +173,13 @@ including 2024 and 2025, cost stress at 0.71 $/oz). There is one change. **K for
   before dispatch: `smc_structure`, `screening = True`, 15m, with presets `tvr1` and `tvr2` exactly as in B2. Its
   candidates come from `smc_replica.structure_breaks` and `fair_value_gaps` computed on the decision bars, with a
   test that the candidate bars equal B2's definitions. That needs quant and code review. Dispatch waits for it.
+- **Engine path (shadow and live; quant review 2026-10-18).** Several replica pieces remember the whole history: the
+  running FVG threshold, the seeded averages, the structure trend and its levels, and the channel book. A fixed
+  800-bar tail therefore does not reproduce them. `smc_replica.replica_run` returns a `ReplicaState` (JSON). Given
+  that state, every column on a tail of at least `context_bars()` = 312 bars is bit-identical to the full-history
+  value. This is tested on every column at the engine's N = 800, on synthetic and on the pulled chart bars (0 of 120
+  sampled bars differ). The engine must bootstrap the state once from research history, carry it bar to bar and
+  persist it. That integration is an implementer task, and no shadow or live use comes before it.
 - **Dispatch (after both are cleared; not run by this lane):**
 
 ```bash

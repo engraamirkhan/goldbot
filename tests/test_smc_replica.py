@@ -256,6 +256,57 @@ def test_params_defaults_are_the_chart_settings_and_change_the_version_tag():
     assert (a["fvg_bull"] == b["fvg_bull"]).all()                     # untouched blocks are unchanged
 
 
+# --------------------------------------------------------------------------- tail invariance (engine path)
+ENGINE_N = 800          # EngineConfig.feature_window: decision bars the engine computes features on
+
+
+def test_every_column_is_exact_on_an_engine_tail_with_the_carried_state():
+    df = _walk(2600, seed=21)
+    full = R.replica_frame(df)
+    for t in (1100, 1777, 2599):
+        _, state = R.replica_run(df.iloc[:t])                      # the state after bar t-1, as the engine carries it
+        tail = df.iloc[t + 1 - ENGINE_N: t + 1]
+        last = R.replica_frame(tail, state=state).iloc[-1]
+        np.testing.assert_array_equal(last.to_numpy(dtype=float), full.iloc[t].to_numpy(dtype=float),
+                                      err_msg=f"bar {t}")
+    assert (full[[*R.STRUCTURE_EVENTS, "fvg_bull", "fvg_bear", "eqh", "sr_break_up", "sr_break_dn"]].sum() > 0).all()
+
+
+def test_state_carried_bar_by_bar_equals_full_history_and_survives_json():
+    df = _walk(1500, seed=22)
+    full = R.replica_frame(df)
+    _, state = R.replica_run(df.iloc[:1200])
+    rows = []
+    for t in range(1200, 1260):
+        tail = df.iloc[t + 1 - ENGINE_N: t + 1]
+        frame, state = R.replica_run(tail, state=R.state_from_json(R.state_json(state)))
+        assert len(frame) == 1
+        rows.append(frame.iloc[0].to_numpy(dtype=float))
+    np.testing.assert_array_equal(np.vstack(rows), full.iloc[1200:1260].to_numpy(dtype=float))
+
+
+def test_a_plain_tail_without_state_is_not_the_full_history_value():
+    """Why the engine needs the state: the running FVG threshold, the seeded averages and the structure trend all
+    remember more than any fixed tail."""
+    df = _walk(2600, seed=21)
+    full = R.replica_frame(df)
+    plain = R.replica_frame(df.iloc[-ENGINE_N:].reset_index(drop=True))
+    diff = (plain.to_numpy(dtype=float) != full.iloc[-ENGINE_N:].to_numpy(dtype=float))
+    assert diff.any()
+
+
+def test_resume_refuses_a_short_or_misaligned_tail_and_other_params():
+    df = _walk(1200, seed=23)
+    _, state = R.replica_run(df.iloc[:1000])
+    with pytest.raises(ValueError, match="need"):
+        R.replica_run(df.iloc[1000 - 50:1010], state=state)
+    with pytest.raises(ValueError, match="not in the frame"):
+        R.replica_run(df.iloc[1001:1100], state=state)
+    with pytest.raises(ValueError, match="params"):
+        R.replica_run(df.iloc[:1010], R.ReplicaParams(swing_len=40), state=state)
+    assert R.context_bars() == 312
+
+
 def test_enable_refuses_a_second_block_in_the_same_process():
     R.enable()
     with pytest.raises(ValueError):
