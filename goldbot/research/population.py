@@ -40,6 +40,7 @@ from scipy import stats
 
 from goldbot.base import Record, UtcTimestamp, load_record
 from goldbot.config import tf_seconds
+from goldbot.data.timeutil import bar_close_utc
 from goldbot.engine.shadow import ShadowBook
 from goldbot.research.metrics import calibration_ece, deflated_sharpe, max_drawdown
 from goldbot.specialists import SPECIALISTS
@@ -94,7 +95,8 @@ class Member(Record):
 
 # ---------------------------------------------------------------------------------------------- measurements
 def agent_trades(book: ShadowBook) -> dict[str, pd.DataFrame]:
-    """Closed shadow trades per agent across all of its model versions: ret, r (in units of risk), p, target_hit, exit_ts."""
+    """Closed shadow trades per agent across all of its model versions: ret, r (in units of risk), p, target_hit, exit_ts (the exit bar's open),
+    exit_utc (the real exit time, open + timeframe)."""
     rows: dict[str, list[dict[str, Any]]] = {}
     for vb in book.books.values():
         for t in vb.closed:
@@ -102,16 +104,18 @@ def agent_trades(book: ShadowBook) -> dict[str, pd.DataFrame]:
                 continue          # counterfactual (not-taken) candidates are not trades
             risk = abs(t.entry - t.stop) / t.entry
             rows.setdefault(t.agent_id, []).append({"ret": t.ret, "r": t.ret / risk if risk > 0 else 0.0, "p": t.p,
-                                                    "target_hit": int(t.barrier == "target"), "exit_ts": t.exit_ts})
+                                                    "target_hit": int(t.barrier == "target"), "exit_ts": t.exit_ts,
+                                                    "exit_utc": bar_close_utc(t.exit_ts, t.timeframe)})
     return {a: pd.DataFrame(r).sort_values("exit_ts").reset_index(drop=True) for a, r in rows.items()}
 
 
 
 
 def weekly_returns(trades: pd.DataFrame) -> pd.Series:
+    """Return summed per Monday-00:00-UTC week of the REAL exit (exit_utc = exit bar open + timeframe)."""
     if trades.empty:
         return pd.Series(dtype=float)
-    ts = pd.DatetimeIndex(pd.to_datetime(trades["exit_ts"], utc=True))
+    ts = pd.DatetimeIndex(pd.to_datetime(trades["exit_utc"], utc=True))
     week_start = ts.normalize() - pd.to_timedelta(ts.dayofweek, unit="D")     # Monday 00:00 UTC, tz kept
     return trades["ret"].groupby(week_start).sum()
 
@@ -340,7 +344,7 @@ class Population:
 
         scores: dict[str, Score] = {}
         for m in self.members.values():
-            t = trades.get(m.agent_id, pd.DataFrame(columns=["ret", "r", "p", "target_hit", "exit_ts"]))
+            t = trades.get(m.agent_id, pd.DataFrame(columns=["ret", "r", "p", "target_hit", "exit_ts", "exit_utc"]))
             others = [weekly[a] for a in live_ids if a != m.agent_id and a in weekly]
             scores[m.agent_id] = s = score_agent(t, correlation_with(weekly.get(m.agent_id, pd.Series(dtype=float)), others), n_pop)
             m.fitness = s.fitness
