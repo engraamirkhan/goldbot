@@ -31,6 +31,10 @@
   python -m goldbot.ops.run bridge-smoke <account_id> [--state DIR]
                                                          # demo only: one minimum-lot round trip after one owner click
                                                          # (engine stopped, supervisor running; RUNBOOK "bridge smoke")
+  python -m goldbot.ops.run tv-import <csv> --indicator NAME --version V --tf 15|60|240|1D [--symbol XAUUSD]
+                                                         # TradingView "Export chart data" CSV -> tv_indicators (unvalidated)
+  python -m goldbot.ops.run tv-repaint-check --indicator NAME --version V --tf TF [--report-only]
+                                                         # CSV vs live alerts on the same bars; flags repaint_validated
 """
 # The services live in goldbot/ops/services/ and the commands in goldbot/ops/commands/ (registry.py), one module each,
 # so lanes stop colliding on this file. This module stays the public surface: it re-exports every name it always had,
