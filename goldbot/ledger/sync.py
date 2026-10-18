@@ -15,15 +15,18 @@ import base64
 import hashlib
 import json
 import subprocess
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TextIO
 
 from goldbot.ledger.models import MAX_BLOB_BYTES, TABLE_FIELDS, NewEntry
 from goldbot.ledger.store import Ledger, LedgerRefused
 
 SENT_FILE = "ledger_sync_sent.txt"           # in the state dir: one sha256 per acknowledged line
 MAX_LINE_BYTES = 2 * MAX_BLOB_BYTES          # a longer line is rejected before it is parsed (blob is base64: +1/3)
+MAX_INGEST_LINES = 2000                      # one sync batch is 200 lines; more than this on stdin is not read
+MAX_INGEST_BYTES = 32 * 1024 * 1024
 Runner = Callable[[bytes], tuple[int, str]]  # payload -> (exit code, stdout)
 
 
@@ -68,6 +71,26 @@ def pending(ledger: Ledger, state: Path) -> list[tuple[str, str]]:
                 seen.add(sha)
                 out.append((sha, line))
     return out
+
+
+def read_lines(stream: TextIO) -> Iterator[str]:
+    """Lines of `stream`, bounded: a line over MAX_LINE_BYTES comes back cut at that length + 1 (ingest rejects it)
+    and the rest of it is drained in bounded pieces; reading stops after MAX_INGEST_LINES or MAX_INGEST_BYTES."""
+    total = 0
+    for _ in range(MAX_INGEST_LINES):
+        line = stream.readline(MAX_LINE_BYTES + 1)
+        if not line:
+            return
+        total += len(line)
+        if total > MAX_INGEST_BYTES:
+            return
+        if len(line) > MAX_LINE_BYTES and not line.endswith("\n"):
+            while True:
+                rest = stream.readline(MAX_LINE_BYTES + 1)
+                total += len(rest)
+                if not rest or rest.endswith("\n") or total > MAX_INGEST_BYTES:
+                    break
+        yield line
 
 
 @dataclass(frozen=True)

@@ -62,11 +62,17 @@ def _parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _project_slug() -> str:
+    """Claude's per-project directory name: the repo root path with '/' as '-' (a worktree maps to its repo)."""
+    root = str(Path.cwd()).split("/.claude/worktrees/")[0]
+    return root.replace("/", "-")
+
+
 IMPORTS = ("registry", "adrs", "directives", "owner-notes", "resume", "artifacts")
 HOME = Path.home()
 DEFAULT_PATHS: dict[str, Path] = {
     "adrs": Path("docs/decisions"), "resume": Path("state/RESUME.md"), "owner-notes": HOME / "tmp" / "owner-notes",
-    "directives": HOME / ".claude" / "projects" / "-Users-aamirkhan-myproject-goldbot" / "memory",
+    "directives": HOME / ".claude" / "projects" / _project_slug() / "memory",
 }
 ARTIFACT_DIRS = (HOME / "tmp" / "ui-audit", HOME / "tmp" / "research")
 
@@ -116,7 +122,7 @@ def _sync(ledger: Ledger, a: argparse.Namespace) -> int:
 
 def _ingest(ledger: Ledger) -> int:
     from goldbot.ledger import sync as lsync
-    res = lsync.ingest(ledger, sys.stdin)
+    res = lsync.ingest(ledger, lsync.read_lines(sys.stdin))
     for r in res.reasons:
         print(r, file=sys.stderr)
     print(f"ack {res.acked}")

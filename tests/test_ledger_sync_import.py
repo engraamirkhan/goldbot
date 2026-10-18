@@ -241,3 +241,33 @@ def test_cli_ingest_reads_stdin_and_prints_the_ack_count(tmp_path, monkeypatch, 
 def test_cli_sync_without_a_remote_is_refused(tmp_path, monkeypatch):
     monkeypatch.delenv("GOLDBOT_LEDGER_REMOTE", raising=False)
     assert cli.main(["--state", str(tmp_path / "s"), "sync"]) == 2
+
+
+def test_ingest_stdin_reader_cuts_an_overlong_line_and_caps_the_line_count(brain):
+    import io
+    long = "x" * (sync.MAX_LINE_BYTES * 3)
+    lines = list(sync.read_lines(io.StringIO(long + "\nshort\n")))
+    assert len(lines[0]) <= sync.MAX_LINE_BYTES + 1 and lines[1] == "short\n"
+    assert sync.ingest(brain, lines[:1]).rejected == 1
+    many = io.StringIO("a\n" * (sync.MAX_INGEST_LINES + 50))
+    assert len(list(sync.read_lines(many))) == sync.MAX_INGEST_LINES
+
+
+def test_ingest_stdin_reader_stops_at_the_total_byte_cap(monkeypatch):
+    import io
+    monkeypatch.setattr(sync, "MAX_INGEST_BYTES", 100)
+    assert len(list(sync.read_lines(io.StringIO(("y" * 49 + "\n") * 10)))) == 2
+
+
+def test_artifact_import_skips_symlinks(brain, tmp_path):
+    d = tmp_path / "research"
+    d.mkdir()
+    (tmp_path / "outside.txt").write_text("outside")
+    (d / "link.txt").symlink_to(tmp_path / "outside.txt")
+    (d / "real.txt").write_text("real")
+    assert importers.import_artifacts(brain, d).added == 1
+
+
+def test_no_local_username_path_in_the_ledger_code():
+    for f in ("cli.py", "sync.py", "importers.py"):
+        assert "aamirkhan" not in (ROOT / "goldbot/ledger" / f).read_text()

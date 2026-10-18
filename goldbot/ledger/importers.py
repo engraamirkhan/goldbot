@@ -141,7 +141,7 @@ def import_artifacts(ledger: Ledger, *directories: Path) -> ImportResult:
     skipped unread."""
     res = ImportResult()
     for root in directories:
-        for p in sorted(x for x in root.rglob("*") if x.is_file()):
+        for p in sorted(x for x in root.rglob("*") if x.is_file() and not x.is_symlink()):
             if p.stat().st_size > MAX_ARTIFACT_READ:
                 res.refused += 1
                 continue
