@@ -3,7 +3,7 @@ number: 22
 title: Min-lot sizing-feasibility report (G-7)
 stage: Position sizing · RUN
 size: S
-status: 'done, tool (PR #68, main e00af06; 08e654a); results wait for data'
+status: 'done, tool (PR #68, main e00af06; 08e654a); ATR measured 2026-10-18 (docs/research/atr-measured-2026-10-18.md); ADR 0004 estimate row and equity thresholds still to be replaced with the measured values'
 ---
 - **22 (G-7).** `run.py sizing-feasibility`: per agent, the minimum equity at which the minimum lot stays within
   1.2× target risk at the current ATR and phase risk rate. Written as phase-gate evidence.
