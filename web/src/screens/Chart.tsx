@@ -37,7 +37,7 @@ function TradingViewWidget({ interval, dark }: { interval: string; dark: boolean
   // A cross-origin iframe, never a script in our origin: it cannot read this page's storage (the session token).
   const src = `${WIDGET_ORIGIN}/embed-widget/advanced-chart/?locale=en#` + encodeURIComponent(JSON.stringify({
     autosize: true, symbol: SYMBOL, interval, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Etc/UTC",
-    theme: dark ? "dark" : "light", style: "1", allow_symbol_change: false, hide_side_toolbar: true,
+    theme: dark ? "dark" : "light", style: "1", allow_symbol_change: false, hide_side_toolbar: true, hide_top_toolbar: true,
     support_host: "https://www.tradingview.com",
   }));
   // an iframe reports no error across origins (blocked or offline just stays empty): no load within 15 s shows the text

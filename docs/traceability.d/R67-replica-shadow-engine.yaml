@@ -1,0 +1,5 @@
+id: R67
+requirement: 'Replica columns on the engine decision frame via ReplicaFeed, shadow only (quant review 2026-10-18: no plain tail; trading-safety: no live entries)'
+status: partial (engine side done; host wiring of the 2010 series loader pending)
+code: goldbot/engine/replica_context.py, goldbot/engine/tv_context.py, goldbot/specialists/base.py (shadow_only), goldbot/engine/runner.py
+test: tests/test_replica_context.py

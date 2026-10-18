@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as apiModule from "../lib/api";
 import { Home } from "./Home";
@@ -83,37 +83,16 @@ describe("Home waiting trade", () => {
   });
 });
 
-describe("Home halt control", () => {
+describe("Home says safety once", () => {
   afterEach(() => { vi.restoreAllMocks(); apiModule.setUser(null); });
 
-  it("lets an approver halt new entries with a reason", async () => {
+  it("has no safety strip and no halt form: the entry status block and the header pill carry them", async () => {
     vi.spyOn(apiModule.api, "status").mockResolvedValue(status({}));
-    const halt = vi.spyOn(apiModule.api, "halt").mockResolvedValue(status({ halted: true, halted_by: "dashboard", halt_reason: "fomc" }));
-    renderHome("approver");
-    fireEvent.change(await screen.findByLabelText("Halt reason"), { target: { value: "fomc" } });
-    fireEvent.click(screen.getByRole("button", { name: "Halt new entries" }));
-    await waitFor(() => expect(halt).toHaveBeenCalledWith("fomc"));
-    expect(await screen.findByText("Entries halted via the dashboard: fomc.")).toBeInTheDocument();
-    expect(screen.getByText("Only the owner can re-arm.")).toBeInTheDocument();
-  });
-
-  it("re-arms only for the owner with an authenticator code", async () => {
-    vi.spyOn(apiModule.api, "status").mockResolvedValue(status({ halted: true, halted_by: "telegram" }));
-    const rearm = vi.spyOn(apiModule.api, "rearm").mockResolvedValue(status({}));
+    vi.spyOn(apiModule.api, "proposals").mockResolvedValue([]);
+    vi.spyOn(apiModule.api, "recentProposals").mockResolvedValue([]);
     renderHome("owner");
-    expect(await screen.findByText("Entries halted via Telegram.")).toBeInTheDocument();
-    const button = await screen.findByRole("button", { name: "Re-arm" });
-    expect(button).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Authenticator code"), { target: { value: "123456" } });
-    fireEvent.click(button);
-    await waitFor(() => expect(rearm).toHaveBeenCalledWith("123456"));
-    expect(await screen.findByRole("button", { name: "Halt new entries" })).toBeInTheDocument();
-  });
-
-  it("shows viewers no halt button", async () => {
-    vi.spyOn(apiModule.api, "status").mockResolvedValue(status({}));
-    renderHome("viewer");
-    expect(await screen.findByLabelText("Safety state")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Entry status" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Safety state")).toBeNull();
     expect(screen.queryByRole("button", { name: "Halt new entries" })).toBeNull();
   });
 });

@@ -84,6 +84,10 @@ class Account(Record):
     # ADR 0032: the owner's demo ceilings ("approve demo risk limits: daily cap £50, min-lot cap 1%, weekly 10%, demo
     # only", 2026-10-18). Accepted on a demo account only, and only next to daily_loss_limit_abs (which still binds)
     risk_overrides: RiskOverrides | None = None
+    # ADR 0036, the owner 2026-10-18: "for the demo account, the trades will be opened and closed by the system, no
+    # confirmation is needed, for real account with real money, stick to original plan of confirming from me".
+    # auto on a demo account only (refused at load otherwise); the engine re-checks the terminal's own trade mode
+    approval_mode: Literal["propose", "auto"] = "propose"
 
     # backstop for records built outside load_accounts: validation errors never carry the input (names, logins)
     model_config = ConfigDict(hide_input_in_errors=True)      # merged with Record's config by pydantic
@@ -114,6 +118,14 @@ class Account(Record):
                 raise ValueError("risk_overrides are allowed on demo accounts only (ADR 0032)")
             if self.daily_loss_limit_abs is None:
                 raise ValueError("risk_overrides need daily_loss_limit_abs on the same account (ADR 0004, ADR 0032)")
+        return self
+
+    @model_validator(mode="after")
+    def _auto_demo_only(self) -> Account:
+        """ADR 0036: "for real account with real money, stick to original plan of confirming from me". A live account
+        configured auto fails at load, loudly; it is never run as propose quietly."""
+        if self.approval_mode == "auto" and self.mode != "demo":
+            raise ValueError("approval_mode auto is allowed on demo accounts only (ADR 0036): real money asks the owner")
         return self
 
     @property
@@ -305,7 +317,7 @@ def load_accounts(path: Path | None = None) -> dict[str, Account]:
         out[aid] = Account(account_id=aid, broker=a["broker"], mode=a["mode"], server=a["server"], login=login, terminal_path=a["terminal_path"],
                            server_tz=a["server_tz"], symbol=a["symbol"], magic_base=a["magic_base"], enabled=bool(a.get("enabled", False)),
                            daily_loss_limit_abs=a.get("daily_loss_limit_abs"), account_class=a.get("account_class"),
-                           risk_overrides=a.get("risk_overrides"))
+                           risk_overrides=a.get("risk_overrides"), approval_mode=a.get("approval_mode", "propose"))
     return out
 
 

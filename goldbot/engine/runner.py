@@ -36,7 +36,7 @@ from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
 from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
-from goldbot.engine import unconfirmed
+from goldbot.engine import auto_entry, unconfirmed
 from goldbot.engine.limits_apply import EngineLimits, daily_allowance, min_lot_risk, published_limits
 from goldbot.engine.shadow import ShadowBook, ShadowTrade, record_candidate
 from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, SentOrder: re-exported, ADR 0023 step 1)
@@ -255,8 +255,8 @@ class Engine:
                  limits: RiskLimits | None = None, shadow_models: dict[str, tuple[str, Model]] | None = None,
                  live_shares: dict[str, float] | None = None, live_versions: dict[str, str] | None = None,
                  limits_policy: LimitsPolicy | None = None):
-        self.cfg = cfg
-        self.broker = broker
+        auto_entry.check_start(cfg.mode, cfg.approval_mode)     # ADR 0036: a non-demo account in auto never starts
+        self.cfg, self.broker, self._account_approval = cfg, broker, cfg.approval_mode   # the account's own mode
         self.agents = {a.agent_id: a for a in agents}
         self.models = models                 # agent_id (or family, for a single-agent setup) -> model
         # population: agent_id -> share of its family's capital; None = every agent trades at the family weight
@@ -1076,9 +1076,9 @@ class Engine:
             model = self.models.get(agent.agent_id) or self.models.get(agent.family)
             if model is None:
                 continue
-            # DESIGN: TradingView signals are "filter features only" until the promotion rule: a requires_tv agent is
+            # DESIGN: TradingView signals are "filter features only" until the promotion rule: a shadow_only agent (TV, replica) is
             # shadow only (share 0) like a shadow-only member of the population: the shadow book trades it, not the broker
-            share = 0.0 if agent.requires_tv else 1.0 if self.live_shares is None else self.live_shares.get(agent.agent_id, 0.0)
+            share = 0.0 if agent.shadow_only else 1.0 if self.live_shares is None else self.live_shares.get(agent.agent_id, 0.0)
             if share <= 0:
                 continue
             if self._busy(agent.agent_id):
@@ -1132,7 +1132,7 @@ class Engine:
                             top_features=self._top_features(model, feats), window_s=self.cfg.approval_window_s,
                             risk_usd=round(gd.lots * gd.stop_distance * intent.contract_oz, 2),
                             **self._card_money(gd, intent))
-            if self.cfg.approval_mode == "auto":
+            if auto_entry.permitted(self, close_ts):    # ADR 0036: demo account on a demo terminal, read at the order
                 if self._auto_paused is not None and self._auto_paused[0] == close_ts:
                     decisions.append(self._record(agent, close_ts, p, mult, f"auto_paused:{self._auto_paused[1]}",
                                                   scored_fv=sfv))
@@ -1148,8 +1148,8 @@ class Engine:
                     decisions.append(self._record(agent, close_ts, p, mult, f"auto_unconfirmed:{type(exc).__name__}",
                                                   pid, scored_fv=sfv))
                     continue
-                decisions.append(self._record(agent, close_ts, p, mult, self._auto_action(res), pid, scored_fv=sfv))
-                self._after_auto_order(res, gd, side, close_ts)
+                decisions.append(self._record(agent, close_ts, p, mult, auto_entry.action(res), pid, scored_fv=sfv))
+                auto_entry.after_order(self, res, gd, prop, close_ts)
             else:
                 self.pending[pid] = (intent, prop, agent)   # until the owner decides or the window expires
                 self.center.propose(prop)
@@ -1276,59 +1276,6 @@ class Engine:
             return gd.model_copy(update={"allowed": False, "reasons": ["risk_above_approved"]}), lots
         return gd, lots
 
-    @staticmethod
-    def _auto_action(res: OrderResult | None) -> str:
-        """The journal's word for an auto entry (review LOW-B): `executed:auto` only for a fill (or a duplicate, sent
-        before); `auto_rejected:<retcode>` for a definite reject (nothing placed); `auto_unconfirmed:<retcode>` for
-        anything else (`_after_auto_order` then stops auto entries for the rest of the bar close)."""
-        if res is None or (res.ok and res.position_id is not None):
-            return "executed:auto"
-        kind = "auto_rejected" if res.retcode in DEFINITE_REJECT_RETCODES else "auto_unconfirmed"
-        return f"{kind}:{res.retcode}"
-
-    def _after_auto_order(self, res: OrderResult | None, gd: GateDecision, side: int, close_ts: pd.Timestamp) -> None:
-        """Trading-safety review HIGH (BACKLOG 19 review): every auto entry at one bar close must see the previous
-        one, or `max_positions`, the combined cap, the heat cap and the same-direction cap can each be passed within a
-        bar close. After an order the account is read again (`_refresh_account` on the broker's last tick). A fill the
-        positions read does not show yet is added conservatively: one more position on its side, its lots and notional,
-        the gate's margin, and its stop risk scaled to the filled lots (unknown open risk stays unknown). An ambiguous
-        result (neither a fill nor a definite reject, `DEFINITE_REJECT_RETCODES`) or a failed re-read stops auto entries
-        for the rest of this bar close. `res` None: nothing was sent (a duplicate), nothing changes."""
-        if res is None:
-            return
-        filled = res.ok and res.position_id is not None
-        if bridge_refused(res):                         # BACKLOG 66 (trading-safety C2): nothing placed, but the brain
-            self._auto_paused = (close_ts, "bridge_refused")   # sized above the bridge's ceiling: no more this close
-            return
-        if not filled and res.retcode in DEFINITE_REJECT_RETCODES:
-            return                                      # nothing placed: the facts are unchanged
-        if not filled:
-            self._auto_paused = (close_ts, "unconfirmed_order")
-            log.warning("auto entry result unconfirmed (retcode %s): auto entries stop for this bar close", res.retcode)
-        try:
-            self._refresh_account(self.broker.last_tick(self.cfg.symbol))
-            seen = self._position_ids is not None and res.position_id in self._position_ids
-        except Exception as exc:                        # fail closed: no further auto entry on unknown facts
-            log.warning("account re-read after an auto entry failed (%s): auto entries stop for this bar close",
-                        type(exc).__name__)
-            self._auto_paused = self._auto_paused or (close_ts, "account_unread")
-            seen = False
-        if not filled or seen:
-            return
-        st, lots = self.state, float(res.filled_lots)
-        st.open_positions += 1
-        st.open_lots = round(st.open_lots + lots, 6)
-        px = self._price or res.price           # USD notional at the mid, as `_refresh_account` publishes it
-        if px:
-            st.open_notional = st.open_lots * self._contract_size() * px
-        if side > 0:
-            st.open_long += 1
-        else:
-            st.open_short += 1
-        st.margin_used += gd.margin_needed
-        if st.open_risk is not None:
-            st.open_risk += gd.risk_amount * lots / gd.lots if gd.lots > 0 else gd.risk_amount
-
     def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float, *, requested: float,
                  atr_usd: float | None = None, gd: Any = None) -> OrderResult | None:
         """Sends the order (pending_orders row first) and returns the broker's result; None when the proposal was sent
@@ -1382,7 +1329,7 @@ class Engine:
         """BACKLOG 66 (trading-safety C2): the bridge's notional ceiling refused the order, so the brain sized above
         6x this terminal's equity (or the terminal could not be read). Nothing was placed. It is journalled
         (`bridge_refused`) and the owner is told on Telegram; the auto path then pauses auto entries for the rest of the
-        bar close (`_after_auto_order`) and the approval path shows the card as refused by the bridge (`_on_decision`).
+        bar close (`auto_entry.after_order`) and the approval path shows the card as refused by the bridge (`_on_decision`).
         The notice is plain words (ui-ux review): the trade, the masked account name and which of the two causes,
         never the proposal id or the raw message, which stay in the journal and the log. Best effort: a notice that
         cannot be queued is logged and never changes the outcome."""
@@ -2040,8 +1987,9 @@ class Engine:
         st.drift_halt = bool(self._drift().get("system_halt"))
         self._server_clock(now, tick)
         owner_mode = self.center.bus.control().approval_mode if self.center.bus is not None else None
-        if owner_mode is not None:
-            self.cfg.approval_mode = owner_mode  # the owner's /mode (A10); the kill switch and re-arm lock win below
+        # the owner's /mode (A10), else the account's; ADR 0036 lock; the kill switch and re-arm window win below
+        self.cfg.approval_mode = auto_entry.locked(owner_mode or self._account_approval, self.cfg.mode,
+                                                    getattr(acc, "trade_mode", None))
         st.equity_unconfirmed = self._equity_unconfirmed(acc, now)
         stage = st.stage
         if self.gate.update_stage(st) != stage:

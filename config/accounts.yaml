@@ -41,6 +41,12 @@ accounts:
     risk_overrides:
       profile: demo-2026-10-18
       ceilings: { daily: 0.05, weekly: 0.10, min_lot_risk_cap: 0.01 }
+    # ADR 0036, the owner 2026-10-18: "for the demo account, the trades will be opened and closed by the system, no
+    # confirmation is needed, for real account with real money, stick to original plan of confirming from me".
+    # propose | auto (default propose). auto is refused at load on any account that is not mode: demo, and the engine
+    # enters automatically only while the MT5 terminal itself reports a demo account. The re-arm 30-day window, the
+    # 12% kill switch and the owner's /mode propose still return it to propose; exits are never gated either way.
+    approval_mode: auto
   vantage-demo:
     broker: vantage
     mode: demo

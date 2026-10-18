@@ -6,7 +6,7 @@ Owner: Aamir (engraamirkhan on GitHub). Personal project; keep everything inside
 ## Non-negotiables
 - Never ask the owner for passwords or tokens in chat. Credentials go into the OS keyring via `goldbot.ops.accounts` prompts.
 - Demo accounts until the paper->tiny-live gate is recorded in `state/phase_state.json`; live needs `unlock_live` + typed phrase.
-- Owner confirms entries (Telegram/dashboard, 90 s); everything after entry is automatic. Exits are never gated.
+- Real-money accounts: owner confirms entries (Telegram/dashboard, 90 s). Demo accounts enter automatically (ADR 0036). Everything after entry is automatic. Exits are never gated.
 - RiskGate is the only path to an order. Max 40 features per live model. Every join to bars via `asof_join` on `available_utc`.
 - Every change goes through CI (`.github/workflows/ci.yml`); failures are posted as GitHub issues labelled `ci` — read those, the log host is blocked from Claude sandboxes.
 

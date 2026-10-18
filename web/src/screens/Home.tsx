@@ -4,12 +4,10 @@ import { blockers } from "../lib/approval";
 import { useNow } from "../lib/useNow";
 import { BalanceCard, BalanceCardSkeleton } from "./BalanceCard";
 import { EntryStatusPanel } from "./EntryStatus";
-import { HaltControl } from "./HaltControl";
 import { ProgressLine } from "./Progress";
 import { LimitsStrip } from "./Limits";
 import { ProposalCard } from "./ProposalCard";
 import { ResearchLine } from "./ResearchToday";
-import { SafetyStrip } from "./SafetyStrip";
 import { useDecide } from "./useDecide";
 import "./home.css";
 
@@ -43,15 +41,12 @@ export function Home({ onOpenProgress, onOpenLimits }: { onOpenProgress?: () => 
         )}
         <EntryStatusPanel loading={accounts.isLoading} error={accounts.isError} accounts={accounts.data}
                           updatedAt={accounts.dataUpdatedAt || undefined} />
+      </div>
+      <div className="home-col">
+        {/* Safety is said once: the entry status block (left) and the header pill, which also holds Halt */}
         {accounts.isLoading ? <div className="accts"><BalanceCardSkeleton /></div> : (accounts.data?.length ?? 0) > 0 && (
           <div className="accts">{accounts.data!.map((a) => <BalanceCard key={a.account_id} a={a} />)}</div>
         )}
-      </div>
-      <div className="home-col">
-        <SafetyStrip status={status.data} accounts={accounts.data} error={status.isError || accounts.isError}
-                     updatedAt={status.dataUpdatedAt && accounts.dataUpdatedAt
-                       ? Math.min(status.dataUpdatedAt, accounts.dataUpdatedAt) : undefined} now={now} />
-        {status.data && <HaltControl status={status.data} />}
         {onOpenLimits && <LimitsStrip onOpen={onOpenLimits} />}
         {onOpenProgress && <ProgressLine onOpen={onOpenProgress} />}
         <ResearchLine />
