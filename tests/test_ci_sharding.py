@@ -15,7 +15,10 @@ def test_every_test_id_lands_in_exactly_one_shard():
 
 
 def _collect(shard: str | None) -> set[str]:
-    env = {**os.environ, **({"GOLDBOT_SHARD": shard} if shard else {})}
+    # CI exports GOLDBOT_SHARD for the whole job; the unsharded baseline must not inherit it
+    env = {k: v for k, v in os.environ.items() if k != "GOLDBOT_SHARD"}
+    if shard:
+        env["GOLDBOT_SHARD"] = shard
     cmd = [sys.executable, "-m", "pytest", "tests/test_min_lot_exception.py", "tests/test_data_pipeline_integration.py",
            "--collect-only", "-q", "-p", "no:randomly", "-p", "no:cacheprovider"]
     out = subprocess.run(cmd, capture_output=True, text=True, env=env).stdout
