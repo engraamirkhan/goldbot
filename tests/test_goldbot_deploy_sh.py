@@ -647,3 +647,11 @@ def test_the_root_reads_the_sha_only_approval_file_the_bot_writes(tmp_path):
               'read_approval\n')
     out = subprocess.run([BASH, "-c", script], capture_output=True, text=True, timeout=60)
     assert out.stdout.strip() == sha, out.stderr
+
+
+def test_service_listing_uses_plain_so_a_failed_or_activating_unit_bullet_is_never_read_as_a_name():
+    # systemctl prefixes non-active units with "●"; without --plain, awk '{print $1}' returned "●" as a unit name and
+    # every deploy was judged unstable and rolled back (2026-10-18, chart-fetch oneshot "activating" every 60 s)
+    src = (Path(__file__).resolve().parents[1] / "goldbot/ops/linux/goldbot-deploy.sh").read_text()
+    listings = [ln for ln in src.splitlines() if "systemctl list-units" in ln and "awk '{print $1}'" in ln]
+    assert listings and all("--plain" in ln for ln in listings)

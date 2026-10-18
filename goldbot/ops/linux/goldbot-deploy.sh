@@ -371,9 +371,9 @@ guard_scheduler() {  # brain: refuse while a job runs; stop the scheduler first,
 # ---------------------------------------------------------------- switch, check
 services() {
   if [ "$ROLE" = mt5 ]; then
-    systemctl list-units --type=service --all --no-legend 'goldbot-bridge@*' | awk '{print $1}'
+    systemctl list-units --type=service --all --no-legend --plain 'goldbot-bridge@*' | awk '{print $1}'
   else
-    systemctl list-units --type=service --all --no-legend 'goldbot-*' | awk '{print $1}' \
+    systemctl list-units --type=service --all --no-legend --plain 'goldbot-*' | awk '{print $1}' \
       | grep -v -e '^goldbot-deploy' -e '^goldbot-bridge-tunnel' -e '^goldbot-vnc' || true
   fi
 }
