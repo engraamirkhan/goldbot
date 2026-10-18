@@ -674,6 +674,15 @@ def linked_preregistration(rows: list[dict[str, Any]], trial: dict[str, Any]) ->
                  and link.get("config_hash") in (None, r.get("config_hash"))), None)
 
 
+BELOW_FLOOR_STOP_RULE = "batch-2026-10-18.md#2-reading-rule"   # the ruling that lets net <= 0 stop below the floor
+
+
+def is_below_floor(row: dict[str, Any]) -> bool:
+    """A screened row whose screen verdict is neither pass nor fail (under the event floor)."""
+    scr = (row.get("results") or {}).get("screen") or {}
+    return row.get("status") == "screened" and str(scr.get("verdict") or "") not in (SCREEN_PASS, SCREEN_FAIL)
+
+
 def is_degenerate(row: dict[str, Any]) -> bool:
     """A screened row with no events at all (0 events, so no net R): a broken configuration, not evidence about its
     family. Its "stop" is flagged `family_evidence: False` so retirement logic never counts it against the family."""
@@ -686,8 +695,9 @@ def preregistered_decisions(row: dict[str, Any], rows: list[dict[str, Any]] | No
     """The decisions the pre-registered reading rule allows for a `screened` row, from its recorded results, and which
     rule was applied (preregistration-2027Q1.md). The rule is the `rule_id` of the pre-registration the row is
     linked to (never guessed from the config's shape):
-      * below the event floor every rule also allows "stop" when the rule-only net mean R <= 0 (the FAIL clause has
-        no event floor; the verdict cites the rule), never "continue"; a degenerate row (`is_degenerate`) allows
+      * below the event floor every rule also allows "stop" when the rule-only net mean R <= 0, only if the verdict
+        cites BELOW_FLOOR_STOP_RULE (research director ruling: the FAIL clause has no event floor), never "continue";
+        without that citation it stays "inconclusive"; a degenerate row (`is_degenerate`) allows
         "stop" or "inconclusive";
       * H-04: continue iff the screen passed (gross t >= 2.0 on >= the floor's events) AND net mean R > 0;
         inconclusive below the event floor; otherwise stop;
@@ -707,9 +717,11 @@ def preregistered_decisions(row: dict[str, Any], rows: list[dict[str, Any]] | No
     pre = linked_preregistration(rows or [], row)
     rule_id = (pre or {}).get("rule_id")
     below_floor = verdict not in (SCREEN_PASS, SCREEN_FAIL)
-    # the FAIL clause ("net <= 0") has no event floor (research director ruling, batch 2026-10-18 D-2): below the
-    # floor a non-positive rule-only net mean R may also be read "stop"; "continue" never is
-    below_stop = {"inconclusive", "stop"} if below_floor and net is not None and net <= 0 else {"inconclusive"}
+    # the FAIL clause ("net <= 0") has no event floor, but only under the research director ruling
+    # BELOW_FLOOR_STOP_RULE (batch 2026-10-18 D-2) and only when the verdict cites it: below the floor a non-positive
+    # rule-only net mean R may then also be read "stop"; "continue" never is
+    below_stop = ({"inconclusive", "stop"} if below_floor and net is not None and net <= 0
+                  and cited_rule == BELOW_FLOOR_STOP_RULE else {"inconclusive"})
     if is_degenerate(row):
         return {"stop", "inconclusive"}, str(rule_id or "screen")
     if rule_id == "H-04":

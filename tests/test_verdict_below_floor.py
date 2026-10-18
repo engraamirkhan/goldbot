@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from goldbot.research.director import BELOW_FLOOR_STOP_RULE
 from goldbot.research.registry import TrialRegistry
 from tests.test_trial_slots import H01, _scr, _screened
 
@@ -14,9 +15,9 @@ def test_below_the_event_floor_a_non_positive_net_mean_r_may_be_read_stop_but_ne
     reg = TrialRegistry(tmp_path / "r.jsonl")
     row = _screened(reg, family, config, _scr("inconclusive (event floor)", 40, 0.5, -0.02, -0.3), rule_id=rule_id)
     with pytest.raises(ValueError, match="pre-registered decision"):
-        reg.record_verdict(row, "continue", "x")
-    v = reg.record_verdict(row, "stop", "net mean R <= 0 (rule_ref)")
-    assert v["decision"] == "stop" and v["rule_checked"] is True and "family_evidence" not in v
+        reg.record_verdict(row, "continue", "x", rule=BELOW_FLOOR_STOP_RULE)
+    v = reg.record_verdict(row, "stop", "net mean R <= 0", rule=BELOW_FLOOR_STOP_RULE)
+    assert v["decision"] == "stop" and v["rule_checked"] is True and v["family_evidence"] is False
 
 
 def test_below_the_event_floor_a_positive_net_mean_r_is_still_only_inconclusive(tmp_path):
@@ -37,3 +38,13 @@ def test_a_zero_event_degenerate_row_may_be_stopped_and_is_flagged_not_family_ev
     v = reg.record_verdict(row, "stop", "no trades generated")
     assert v["decision"] == "stop" and v["family_evidence"] is False
     assert v["reason"].startswith("degenerate config (0 events)")
+
+
+def test_h04_below_the_floor_without_citing_the_directors_ruling_is_still_only_inconclusive(tmp_path):
+    from goldbot.research.director import preregistered_decisions
+    reg = TrialRegistry(tmp_path / "r.jsonl")
+    row = _screened(reg, "asia_drift", {"stop_atr": 1.5}, _scr("inconclusive (event floor)", 40, 0.5, -0.02, -0.3),
+                    rule_id="H-04")
+    assert preregistered_decisions(row, reg._rows())[0] == {"inconclusive"}
+    with pytest.raises(ValueError, match="pre-registered decision"):
+        reg.record_verdict(row, "stop", "net mean R <= 0")
