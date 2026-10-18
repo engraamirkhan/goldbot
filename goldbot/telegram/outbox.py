@@ -82,6 +82,24 @@ EDIT_RETRY_S = 2.0
 EDIT_RETRY_MAX_S = 300.0
 
 
+def placing_abandoned(state_dir: Path, done_dir: Path, p: Proposal) -> bool:
+    """An approval still `placing` whose engine stopped beating (its loop heartbeat missing or older than
+    PLACING_SILENT_S) or that has been placing for PLACING_MAX_S (a send that raised): shown NOT CONFIRMED. The one
+    test both the outbox and the engine's late-fill notice (BACKLOG 86) use, so they cannot drift."""
+    now = time.time()
+    try:
+        since = (done_dir / f"{p.proposal_id}.json").stat().st_mtime
+    except OSError:
+        since = now
+    if now - since >= PLACING_MAX_S:
+        return True
+    try:
+        beat = float(json.loads(loop_heartbeat_path(state_dir, p.account_id).read_text())["ts"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return True
+    return not now - beat < PLACING_SILENT_S
+
+
 class OutboxState(Record):
     """The pre-database file format (state/telegram_outbox.json): imported once, then exported for a rollback."""
     sent: dict[str, list[tuple[int, int]]] = Field(default_factory=dict)    # proposal id -> [(chat id, message id)]
@@ -201,20 +219,7 @@ class Outbox:
         return out
 
     def _placing_abandoned(self, p: Proposal) -> bool:
-        """An approval still `placing` whose engine stopped beating (its loop heartbeat missing or older than
-        PLACING_SILENT_S) or that has been placing for PLACING_MAX_S (a send that raised): reported NOT CONFIRMED."""
-        now = time.time()
-        try:
-            since = (self.bus.done_dir / f"{p.proposal_id}.json").stat().st_mtime
-        except OSError:
-            since = now
-        if now - since >= PLACING_MAX_S:
-            return True
-        try:
-            beat = float(json.loads(loop_heartbeat_path(self.dir, p.account_id).read_text())["ts"])
-        except (OSError, ValueError, KeyError, TypeError):
-            return True
-        return not now - beat < PLACING_SILENT_S
+        return placing_abandoned(self.dir, self.bus.done_dir, p)
 
     # ------------------------------------------------------------------ NOT CONFIRMED cards (BACKLOG 87)
     @property
