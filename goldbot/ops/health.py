@@ -148,6 +148,7 @@ from goldbot.ops.checks.operations import (
     check_backup_prune,
     check_deploy,
     check_disk,
+    check_object_storage,
     check_restore_drill,
     check_settings,
 )
@@ -279,6 +280,7 @@ __all__ = [
     "check_approvals",
     "check_backup_age",
     "check_backup_prune",
+    "check_object_storage",
     "check_bridge",
     "check_bridge_compat",
     "check_costs",
@@ -529,7 +531,7 @@ MAX_ALERT = 3900                   # Telegram's limit is 4096 characters
 
 
 # warnings the owner is told about (R11, X6; a missed backup night, so a broken backup is not first seen at 72 h)
-NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "tick_errors:",
+NOTIFY_ON_WARN = ("daily_cap:", "weekly_cap:", "order_failed:", "backup_age", "backup_prune", "object_storage", "tick_errors:",
                   "throttle:", "entry_windows:", "open_risk:", "schema_skew:", "kill_switch:")
 
 

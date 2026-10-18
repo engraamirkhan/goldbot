@@ -261,6 +261,10 @@ class BackupSettings(_Section):
     data_exclude_tables: list[str] = Field(default_factory=lambda: ["features", "labels"])   # derived
     check_subset: str = Field("5%", pattern=r"^\d{1,2}(\.\d+)?%$")   # restore drill: restic check --read-data-subset
     timeout_s: int = Field(3600, ge=60)
+    # Object Storage size, previous versions included (health: object_storage; the free tier is 20 GB, BACKLOG 67)
+    storage_warn_gb: float = Field(15.0, gt=0)
+    storage_fail_gb: float = Field(19.0, gt=0)
+    storage_max_age_h: float = Field(48.0, gt=0)      # an older reading counts as unknown (warn)
 
 
 class GapSettings(_Section):

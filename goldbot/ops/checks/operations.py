@@ -151,6 +151,41 @@ def check_backup_prune(ctx: HealthContext) -> Check:
     return Check(name=name, status="ok", reason=msg)
 
 
+@register_check("global", block=BLOCK_TAIL, pos=75)
+def check_object_storage(ctx: HealthContext) -> Check:
+    """Size of the backup bucket, previous versions included (state/object_storage_size.json, goldbot/ops/storage_size.py,
+    written after each backup): warn at 15 GB, fail at 19 GB of the 20 GB free tier (settings.backup). A missing,
+    stale or unreadable reading is unknown (warn), never ok."""
+    name = "object_storage"
+    b = ctx.settings.backup if ctx.settings is not None else None
+    warn_gb, fail_gb, max_h = (b.storage_warn_gb, b.storage_fail_gb, b.storage_max_age_h) if b else (15.0, 19.0, 48.0)
+    how = "RUNBOOK 0.6 'Object Storage size'"
+    f = ctx.state_dir / "object_storage_size.json"
+    if not f.exists():
+        if not (ctx.state_dir / "backup_last.json").exists():
+            return Check(name=name, status="ok", reason="no backup yet, nothing to measure")
+        return Check(name=name, status="warn", reason=f"size unknown: never read ({how})")
+    try:
+        rec = _read_json(f)
+        ts = pd.Timestamp(rec["ts"])
+        size = rec["bytes"]
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        return Check(name=name, status="warn", reason=f"size unknown: object_storage_size.json unreadable: {exc}"[:300])
+    if isinstance(size, bool) or not isinstance(size, (int, float)) or size < 0:
+        why = str(rec.get("error") or "no number")[:80]
+        return Check(name=name, status="warn", reason=f"size unknown: last read failed ({why}); {how}")
+    age_h = (ctx.now - ts).total_seconds() / 3600
+    gb = size / 1e9
+    msg = f"{gb:.1f} GB with previous versions (read {_age(age_h * 3600)} ago; free tier 20 GB)"
+    if age_h > max_h:
+        return Check(name=name, status="warn", reason="size unknown: reading is stale; last " + msg)
+    if gb >= fail_gb:
+        return Check(name=name, status="fail", reason=msg + f" >= {fail_gb:g} GB: {how}")
+    if gb >= warn_gb:
+        return Check(name=name, status="warn", reason=msg + f" >= {warn_gb:g} GB: {how}")
+    return Check(name=name, status="ok", reason=msg)
+
+
 @register_check("global", block=BLOCK_TAIL, pos=80)
 def check_restore_drill(ctx: HealthContext) -> Check:
     """The weekly restore drill (state/restore_drill_last.json): a failed drill fails, a stale one warns."""
