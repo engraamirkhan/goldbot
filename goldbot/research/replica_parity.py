@@ -96,7 +96,7 @@ def _mfi_cross(x: dict[str, Any], p: R.ReplicaParams, which: str) -> np.ndarray:
 def _channels(x: dict[str, Any], p: R.ReplicaParams) -> tuple[np.ndarray, np.ndarray]:
     o, h, lo, c, _ = _ohlcv(x)
     return _memo(x, "sr", lambda: R.sr_channel_breaks(o, h, lo, c, p.sr_pivot_len, p.sr_width_pct, p.sr_max_channels,
-                                                      p.sr_lookback))
+                                                      p.sr_lookback, p.sr_range_window))
 
 
 def _ma(x: dict[str, Any], scheme: str, key: str) -> np.ndarray:
