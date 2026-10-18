@@ -1,17 +1,26 @@
 import json
-import queue
 from typing import Any
 
 import numpy as np
 import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
 
 from goldbot.execution.broker import OrderIntent, Tick
-from goldbot.execution.classifier import Classification, PersistentClassifier, classify
+from goldbot.execution.classifier import (
+    Classification,
+    PersistentClassifier,
+    StoredClass,
+    class_mismatch,
+    classify,
+    effective_class,
+    read_stored,
+)
 from goldbot.execution.paper import PaperBroker
 from goldbot.risk import AccountState, Intent, RiskGate
 from goldbot.risk.gate import Stage
 from goldbot.webhook.app import create_app
+from goldbot.webhook.inbox import TvInbox
 
 
 def _state(**kw: Any) -> AccountState:
@@ -191,9 +200,9 @@ def test_a_known_class_does_not_fall_back_to_unknown_on_one_thin_week(tmp_path):
     assert pc.state["pending"] is None
 
 
-def test_webhook_auth_hash_and_intrabar():
-    q: queue.Queue[dict[str, Any]] = queue.Queue()
-    app = create_app(secret="s3cret", sink=q, enforce_ip=False)
+def test_webhook_auth_hash_and_intrabar(tmp_path):
+    box = TvInbox(tmp_path / "tv.db")
+    app = create_app(secret="s3cret", inbox=box, enforce_ip=False)
     c = TestClient(app)
     body = {"indicator": "K-Indi", "version": "2.02", "symbol": "XAUUSD", "tf": "15",
             "bar_time": "2025-03-05T10:00:00Z", "fired_at": "2025-03-05T10:15:01Z", "signal": "long",
@@ -203,17 +212,78 @@ def test_webhook_auth_hash_and_intrabar():
     assert c.post("/tv", json={**body, "secret": "nope"}).status_code == 403
     early = {**body, "bar_time": "2025-03-05T10:15:00Z", "fired_at": "2025-03-05T10:20:00Z"}
     assert c.post("/tv", json=early).json()["intrabar"] is True
-    assert q.qsize() == 2
+    assert box.count() == 2
 
 
-def test_webhook_ip_allow_list_uses_the_peer_address_not_a_forwarded_header():
-    q: queue.Queue[dict[str, Any]] = queue.Queue()
-    app = create_app(secret="s3cret", sink=q)
+def test_webhook_ip_allow_list_uses_the_peer_address_not_a_forwarded_header(tmp_path):
+    box = TvInbox(tmp_path / "tv.db")
+    app = create_app(secret="s3cret", inbox=box)
     body = {"indicator": "K-Indi", "symbol": "XAUUSD", "tf": "15", "bar_time": "2025-03-05T10:00:00Z",
             "fired_at": "2025-03-05T10:15:01Z", "signal": "long", "secret": "s3cret"}
     outsider = TestClient(app, client=("203.0.113.9", 40000))
     assert outsider.post("/tv", json=body, headers={"X-Forwarded-For": "52.89.214.238"}).status_code == 403
-    assert q.empty()
+    assert box.count() == 0
     tradingview = TestClient(app, client=("52.89.214.238", 40000))
     assert tradingview.post("/tv", json={**body, "secret": "s3crët"}).status_code == 403   # non-ASCII: refused, not a 500
-    assert tradingview.post("/tv", json=body).json()["ok"] is True and q.qsize() == 1
+    assert tradingview.post("/tv", json=body).json()["ok"] is True and box.count() == 1
+
+
+def test_is_known_is_false_until_a_raw_or_standard_class_is_stored(tmp_path):
+    pc = PersistentClassifier(tmp_path / "acct.json")
+    assert not pc.is_known()                                             # no file yet
+    pc.update(_cls("unknown"))
+    assert not pc.is_known() and not PersistentClassifier(tmp_path / "acct.json").is_known()
+    pc.update(_cls("standard"))
+    assert PersistentClassifier(tmp_path / "acct.json").is_known()
+
+
+@pytest.mark.parametrize("declared, stored, expected", [
+    (None, StoredClass(), "unknown"),
+    (None, StoredClass("unknown", "standard"), "unknown"),                  # undeclared: as before, a thin run blocks
+    (None, StoredClass("raw", "raw"), "raw"),
+    (None, StoredClass("standard", "standard"), "standard"),
+    (None, StoredClass(unreadable=True), "unknown"),
+    ("raw", StoredClass(), "raw"),                                          # never measured: the declared baseline
+    ("raw", StoredClass("unknown", None), "raw"),
+    ("raw", StoredClass("raw", "raw"), "raw"),
+    ("raw", StoredClass("standard", "standard"), "standard"),               # the stricter wins
+    ("standard", StoredClass("raw", "raw"), "standard"),                    # never the looser one
+    ("raw", StoredClass("unknown", "standard"), "standard"),                # standard -> unknown -> unknown stays strict
+    ("raw", StoredClass("unknown", "raw"), "raw"),
+    ("raw", StoredClass(unreadable=True), "standard"),                      # torn file: the stricter class
+    ("standard", StoredClass(unreadable=True), "standard"),
+])
+def test_effective_class_is_never_looser_than_the_declared_or_any_known_measurement(declared, stored, expected):
+    assert effective_class(declared, stored) == expected
+
+
+def test_class_mismatch_needs_two_known_classes_that_differ():
+    assert class_mismatch("raw", "standard") and class_mismatch("standard", "raw")
+    assert not class_mismatch("raw", "raw") and not class_mismatch("raw", "unknown") and not class_mismatch(None, "raw")
+
+
+def test_the_stored_class_is_read_with_its_last_known_class(tmp_path):
+    f = tmp_path / "c.json"
+    assert read_stored(f) == StoredClass()                                   # missing: nothing measured, not unreadable
+    f.write_text('{"class": "standard"}')
+    assert read_stored(f) == StoredClass("standard", "standard")
+    f.write_text('{"class": "unknown", "last_known": "standard"}')
+    assert read_stored(f) == StoredClass("unknown", "standard") and read_stored(f).known == "standard"
+    f.write_text('{"class": "unknown", "runs": [{"account_class": "standard"}]}')    # a legacy file
+    assert read_stored(f).known == "standard"
+    f.write_text("{torn")
+    assert read_stored(f).unreadable
+    f.write_text("[1]")
+    assert read_stored(f).unreadable
+    f.write_text('{"class": "weird"}')
+    assert read_stored(f) == StoredClass("unknown", None)
+
+
+def test_standard_then_two_thin_runs_keeps_a_declared_raw_account_standard(tmp_path):
+    pc = PersistentClassifier(tmp_path / "acct.json")
+    pc.update(_cls("standard"))
+    pc.update(_cls("unknown"))
+    pc.update(_cls("unknown"))
+    stored = read_stored(tmp_path / "acct.json")
+    assert stored.cls == "unknown" and stored.last_known == "standard"
+    assert effective_class("raw", stored) == "standard"

@@ -261,6 +261,10 @@ class BackupSettings(_Section):
     data_exclude_tables: list[str] = Field(default_factory=lambda: ["features", "labels"])   # derived
     check_subset: str = Field("5%", pattern=r"^\d{1,2}(\.\d+)?%$")   # restore drill: restic check --read-data-subset
     timeout_s: int = Field(3600, ge=60)
+    # Object Storage size, previous versions included (health: object_storage; the free tier is 20 GB, BACKLOG 67)
+    storage_warn_gb: float = Field(15.0, gt=0)
+    storage_fail_gb: float = Field(19.0, gt=0)
+    storage_max_age_h: float = Field(48.0, gt=0)      # an older reading counts as unknown (warn)
 
 
 class GapSettings(_Section):
@@ -337,6 +341,15 @@ class ResearchSettings(_Section):
     trial_budget_per_month: int = Field(12, ge=1, le=200)
     label_grid_paused: bool = True        # the monthly label-grid loop runs only when this is false (proposal P2)
     trial_budget_quarter: int = Field(20, ge=1, le=500)   # pre-registered trials per calendar quarter, all families
+    # raises the budget of ONE quarter ({"2026Q4": 53}); a quarter not listed keeps trial_budget_quarter, a value must
+    # be >= it. Every trial is still recorded and the deflated Sharpe still counts the full K (an owner decision)
+    trial_budget_overrides: dict[str, int] = Field(default_factory=dict)
+    # continuous research loop (owner, 2026-10-18; docs/plans/continuous-research-loop.md): trials one scheduled batch may
+    # run, SEPARATE from the quarterly budget above (which is not changed). Every loop trial is still a registry row, so
+    # the deflated Sharpe counts the full running K. 0 turns the loop off.
+    loop_trials_per_run: int = Field(16, ge=0, le=256)
+    # account size the loop's sizing pre-filter uses (ATR only, no returns): GBP 1,000 at about 1.30 USD per GBP
+    loop_equity_usd: float = Field(1300.0, gt=0)
     # trials held for the pre-registered queue (director.reserved_trials), PER QUARTER ({"2027Q1": 9}; a quarter not
     # listed holds none): the research director, the label grid and the analyst spend only budget - used - reserved
     reserved_trials_quarter: dict[str, int] = Field(default_factory=dict)
@@ -360,6 +373,11 @@ class ResearchSettings(_Section):
     recal_prior_trades: float = Field(200.0, gt=0)    # the current calibration counts as this many trades
     recal_max_shift: float = Field(0.05, gt=0, le=0.2)   # most a probability may move in one run
     recal_window_days: int = Field(182, ge=7)         # outcomes exited within this many days
+    # H-27 lot-fit overlay (research/lot_fit.py, opt-in): the account the research sizes trades for
+    lot_fit_equity: float = Field(1000.0, gt=0)          # account currency
+    lot_fit_acct_per_usd: float = Field(0.75, gt=0)      # account currency per USD (GBP at GBPUSD ~1.33)
+    lot_fit_spread_points: float = Field(20.0, ge=0)     # the gate's stop floor: spread prior, points (0.01 USD each)
+    lot_fit_stops_level_points: float = Field(0.0, ge=0)  # ...and the broker's stops level (IC Markets: 0)
     registry: str = "state/research_registry.jsonl"
     models_dir: str = "models"
 
@@ -371,6 +389,19 @@ class ResearchSettings(_Section):
             if not re.fullmatch(r"\d{4}Q[1-4]", q) or not 0 <= n <= 500:
                 raise ValueError(f"reserved_trials_quarter maps a quarter like 2027Q1 to 0..500 trials, got {q!r}: {n!r}")
         return v
+
+    @model_validator(mode="after")
+    def _budget_overrides(self) -> ResearchSettings:
+        import re
+        for q, n in self.trial_budget_overrides.items():
+            if not re.fullmatch(r"\d{4}Q[1-4]", q) or not self.trial_budget_quarter <= n <= 500:
+                raise ValueError(f"trial_budget_overrides maps a quarter like 2026Q4 to trial_budget_quarter "
+                                 f"({self.trial_budget_quarter})..500 trials, got {q!r}: {n!r}")
+        return self
+
+    def budget_for(self, quarter: str) -> int:
+        """The quarter's pre-registered trial budget: its override when it has one, else trial_budget_quarter."""
+        return int(self.trial_budget_overrides.get(quarter, self.trial_budget_quarter))
 
     @field_validator("open_budget_preregistered_only")
     @classmethod

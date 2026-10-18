@@ -301,9 +301,13 @@ class ResearchPlan(FrozenRecord):
 
 
 # ---------------------------------------------------------------------------------------------- budget and holdout
-def quarter_budget(research: Any) -> int:
-    """research.trial_budget_quarter when the settings have it, else DEFAULT_QUARTER_BUDGET (read defensively: the
+def quarter_budget(research: Any, quarter: str | None = None) -> int:
+    """The budget of `quarter` (default the current one): research.budget_for (the per-quarter override, else
+    research.trial_budget_quarter) when the settings have it, else DEFAULT_QUARTER_BUDGET (read defensively: the
     setting arrives with the P2 change)."""
+    per_quarter = getattr(research, "budget_for", None)
+    if callable(per_quarter):
+        return int(per_quarter(quarter or quarter_of()))
     v = getattr(research, "trial_budget_quarter", None)
     return int(v) if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else DEFAULT_QUARTER_BUDGET
 
@@ -842,6 +846,18 @@ def pending_preregistration(rows: list[dict[str, Any]], quarter: str, family: st
     prereg, matched = _prereg_matches(rows, quarter)
     return next((p for i, p in enumerate(prereg) if i not in matched and p.get("family") == family
                  and p.get("config_hash") == config_hash), None)
+
+
+def survivor_full_coverage(rows: list[dict[str, Any]], config: dict[str, Any]) -> tuple[str, ...]:
+    """The `full_coverage_columns` a trial runs with: those of its parent discovery row when `config` is tagged
+    `from_discovery`, else none. Design rule (preregistration-2027Q1.md, H-02 pin 2026-10-17, item 3): "a survivor
+    trial whose inputs include a `full_coverage_columns` column runs with the same per-fold mask ... because a survivor
+    trial is H-02's configuration with cluster k's inputs." Read from the parent's recorded config, never typed at the
+    call site, so the mask cannot be dropped or changed there."""
+    parent = next((r for r in rows if refers_to(config.get(FROM_DISCOVERY_KEY), r)), None)
+    if parent is None:
+        return ()
+    return tuple(str(c) for c in (_cfg(parent).get("discovery") or {}).get("full_coverage_columns") or ())
 
 
 def queued_rows_for(rows: list[dict[str, Any]], quarter: str, family: str,

@@ -545,6 +545,57 @@ def test_a_deploy_that_worsens_health_is_reported_degraded_not_rolled_back(tmp_p
     assert "goldbot bash -c" in log and "health --out" in log                       # run as the service user
 
 
+def _stop_engine(box: Box) -> None:
+    st = json.loads((box.t / "units.json").read_text())
+    st["units"]["goldbot-engine@icm-demo.service"] = {"enabled": False, "active": False}
+    (box.t / "units.json").write_text(json.dumps(st))
+
+
+def test_an_engine_stopped_on_purpose_for_the_deploy_is_not_a_degradation(tmp_path):
+    """S13: the engine unit is disabled before goldbot-deploy; its heartbeat reads ok in the baseline, stale 90 s later."""
+    box = Box(tmp_path, running="c1", aux=4)
+    _stop_engine(box)
+    _health(tmp_path / "health_before.json", **{"engine_loop:icm-demo": "ok", "engine:icm-demo": "ok", "supervisor": "ok"})
+    _health(tmp_path / "health_after.json", **{"engine_loop:icm-demo": "fail", "engine:icm-demo": "warn", "supervisor": "ok"})
+    p = box.run(box.c2)
+    assert p.returncode == 0, p.stdout + p.stderr
+    rec = box.records()[-1]
+    assert rec["result"] == "deployed" and "engine stopped for the deploy: icm-demo" in rec["detail"]
+
+
+def test_a_stopped_engine_does_not_hide_another_degraded_check(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    _stop_engine(box)
+    _health(tmp_path / "health_before.json", **{"engine_loop:icm-demo": "ok", "supervisor": "ok"})
+    _health(tmp_path / "health_after.json", **{"engine_loop:icm-demo": "fail", "supervisor": "warn"})
+    p = box.run(box.c2)
+    assert p.returncode == 0, p.stdout + p.stderr
+    rec = box.records()[-1]
+    assert rec["result"] == "deployed_degraded" and "(degraded: supervisor)" in rec["detail"]
+    assert "engine stopped for the deploy: icm-demo" in rec["detail"]
+
+
+def test_a_stopped_engines_reconcile_failure_is_still_degraded(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    _stop_engine(box)
+    _health(tmp_path / "health_before.json", **{"engine_loop:icm-demo": "ok", "reconcile:icm-demo": "ok"})
+    _health(tmp_path / "health_after.json", **{"engine_loop:icm-demo": "fail", "reconcile:icm-demo": "fail"})
+    p = box.run(box.c2)
+    assert p.returncode == 0, p.stdout + p.stderr
+    rec = box.records()[-1]
+    assert rec["result"] == "deployed_degraded" and "(degraded: reconcile:icm-demo)" in rec["detail"]
+
+
+def test_a_running_engine_that_goes_stale_is_still_degraded(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    _health(tmp_path / "health_before.json", **{"engine_loop:icm-demo": "ok"})
+    _health(tmp_path / "health_after.json", **{"engine_loop:icm-demo": "fail"})
+    p = box.run(box.c2)
+    assert p.returncode == 0, p.stdout + p.stderr
+    rec = box.records()[-1]
+    assert rec["result"] == "deployed_degraded" and "degraded: engine_loop:icm-demo" in rec["detail"]
+
+
 def test_an_unchanged_or_better_health_is_a_plain_deploy(tmp_path):
     box = Box(tmp_path, running="c1", aux=4)
     _health(tmp_path / "health_before.json", supervisor="warn", news="fail")

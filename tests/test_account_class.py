@@ -10,6 +10,7 @@ import pytest
 
 from goldbot.engine import Engine, EngineConfig
 from goldbot.execution.broker import Tick
+from goldbot.execution.classifier import StoredClass
 from goldbot.execution.paper import PaperBroker
 from goldbot.ops import health
 from goldbot.risk import AccountState, Intent, RiskGate
@@ -78,7 +79,7 @@ def test_engine_reads_the_class_for_a_broker_account_and_ignores_it_on_paper(tmp
     demo._refresh_account(tick)
     assert demo.state.account_class == "standard"
     (tmp_path / "classifier_icm-demo.json").write_text("{torn")
-    demo._class_cache = (-2.0, "standard")                                   # force a re-read of the torn file
+    demo._class_cache = (-2.0, StoredClass("standard", "standard"))                                   # force a re-read of the torn file
     demo._refresh_account(tick)
     assert demo.state.account_class == "unknown"
     paper = _engine(tmp_path, "paper")

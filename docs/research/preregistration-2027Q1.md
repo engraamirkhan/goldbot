@@ -170,6 +170,7 @@ above is the queued part only.
   ```yaml
   clusters: discovery.H02_CLUSTERS   # the full map, written out in the spec: H-03, H-05, H-07, H-08, H-10 as listed above
   freq_threshold: 0.6
+  full_coverage_columns: [macro_spx_dd20]   # pinned 2026-10-17 (BACKLOG 88): exempt from the 80% pool rule, per-fold mask
   group_top_k: 3
   inner_val_frac: 0.2
   l1_c: 0.05
@@ -813,6 +814,39 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
     `tests/test_group_size_before_preregister.py`). The two new families `liquidity` and `activity` bring it to about
     16, so "about 16" stands. The exact K_eff and `group_map_sha256` (the pool map) are written here when the
     liquidity/activity feature version merges, before the count.
+  - **Amendment 2026-10-18 (strategy researcher; before any H-14 count, label or outcome; group map not yet
+    pinned): one more feature group, `tod_periodicity` (N1, `candidates/next-2026-10-18.md`).** Six columns
+    (`slot_mean_ret_{5,10,20}d`, `slot_hit_rate_20d`, `slot_t_20d`, `slot_ret_over_atr`), a separate group, **not**
+    inside `activity` (C-5/C-6 overlap). Slots are 30-minute UTC bins; a 15m bar maps to the slot containing its open
+    (both 15m bars of a slot map to it). Each column uses only the same slot on earlier days, so
+    `available_utc` = the prior day's slot close; joined by `asof_join`; `lookahead_check` must report 0 columns.
+    **K_eff about 16 -> about 17; the adopted gate-1 case about 66 -> about 67** (40 + H-02 ~10 + H-14 ~17; the "Gate-1
+    power" table is re-read at that case before the count). The group must be coded before the pin (due 2026-12-11).
+    Mechanism: Heston, Korajczyk & Sadka 2010, *J. Finance* 65(4) (equities, gross; untested on gold). No registry
+    trial; no extra event or trade-rate pre-check (a slot summary of past returns is an outcome read).
+    - **Signed 2026-10-18, research director: ADOPTED into O-4 (Q1), 0 registry trials, K_eff +1.** Checked before
+      signing: (1) **allowed now.** O-4's group map and `DiscoveryConfig` dump are not pinned (due 2026-12-11), the
+      file is not frozen (`freeze_commit: null`, freeze 2026-12-14), O-4 has no registry row and no row in
+      `preregistration-2027Q1.yaml`, and no H-14 count, label or outcome exists; O-4's own condition date
+      (2027-02-12) is later still. (2) **No hashed row changes.** The YAML rows stay as they are: H-02's pinned
+      `DiscoveryConfig` dump and `f-51ac5ebabb`, H-01 `561030150146`, H-04 `3d33124f210c`, C4H `184bddf12019`, the
+      withdrawn H-06 `5650ad206bda`, and the default version `f-079deacc61`, **on one condition, pinned here: `tod_periodicity` is an opt-in family, never
+      in `DEFAULT_FEATURE_NAMES`** (as `day_type`), because `features.registry.feature_version` hashes the family
+      list. A build that adds it to the default set is refused at review. Only O-4's own (superseded, not yet
+      pinned) feature version and `group_map_sha256` include it. (3) **Drop, not delay.** If the group is not merged
+      with `lookahead_check` reporting 0 columns and the group-size test passing by 2026-12-11, O-4 is pinned
+      without it (K_eff back to about 16) and N1 waits for the next 15m discovery; O-4 never waits for N1.
+      (4) **Budget.** The Q1 table is unchanged: 8 reserved, 12 open (9 conditional rows + 3 free reserve). Code:
+      BACKLOG item `tod-periodicity-feature-group` (implementer; quant-reviewer, code-reviewer).
+    - **Pinned 2026-10-18 (implementer, BACKLOG 89, quant condition on 2c000ef; before any H-14 count, label or
+      outcome).** `feature_version` hashes names, versions and signed patterns, not code, so the open choices of
+      `goldbot/features/tod_periodicity.py` (VERSION "1") are fixed here; any later change bumps VERSION:
+      (1) only complete slots are observations (a slot missing a bar is left out); (2) a window is the last N complete
+      observations of the slot, with no calendar cap, NaN with fewer than N; (3) the hit rate counts ret > 0 only (ties
+      are misses); (4) `slot_t_20d` = mean / (sample sd, ddof=1, / sqrt(20)), NaN at sd 0; (5) a bar reads the latest
+      observation at most 5 days old (`MAX_STALE`), else NaN; (6) `slot_ret_over_atr` = the latest observation /
+      (ATR14 / close at that observed slot's last bar); (7) a slot return is log(last close / first open) of the slot,
+      the gap from the previous close is excluded; (8) neutrals: mean 0, hit rate 0.5, t 0, ret_over_atr 0.
 - Threshold (amended 2026-10-17, E-2; quant review R1): `threshold_rule: tercile_inner`,
   `tercile_q: 0.6666666666666666` and `tercile_method: linear` in the pinned `DiscoveryConfig` dump (so in the config
   hash: another q is another trial). The coded verdict needs at least 1,000 taken trades for "continue", as the

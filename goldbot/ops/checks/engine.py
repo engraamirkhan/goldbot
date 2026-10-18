@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 
 from goldbot.data.timeutil import heartbeat_problem
+from goldbot.execution.classifier import class_mismatch
 from goldbot.execution.not_confirmed import AMBIGUOUS_ALERT_S, health_line
 from goldbot.ops.checks._base import (
     ENGINE_FAIL_S,
@@ -140,9 +141,17 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
     if e.get("mode", "paper") != "paper":
         if cls == "unknown":
             statuses.append("warn")
-            parts.append("account class unknown: entries blocked until the Friday classifier reads raw or standard")
+            parts.append("account class unknown: entries blocked until the nightly classifier reads raw or standard")
         elif cls == "standard":
             parts.append("account class standard: 15m families off except session_open, edge must exceed 1.5x cost")
+        declared, measured = e.get("account_class_declared"), e.get("account_class_measured")
+        if declared in ("raw", "standard") and measured == "unreadable":
+            statuses.append("warn")
+            parts.append(f"declared {declared}, classifier file unreadable: trading as standard until it is fixed")
+        elif class_mismatch(declared, measured):
+            statuses.append("warn")
+            parts.append(f"declared {declared}, measured {measured}: check the account type "
+                         f"(the stricter class is in force)")
     b = e.get("blackout")
     if isinstance(b, dict) and b:
         parts.append(f"news blackout: {b.get('title', '?')}")

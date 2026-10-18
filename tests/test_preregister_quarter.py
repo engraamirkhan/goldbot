@@ -567,10 +567,12 @@ def test_the_spec_carries_h02s_full_pinned_discovery_config_with_the_cluster_map
     block = DOC.read_text().split("**Pinned discovery config.**", 1)[1].split("```yaml", 1)[1].split("```", 1)[0]
     pinned = yaml.safe_load(block)
     assert pinned["clusters"] == "discovery.H02_CLUSTERS"
-    want = {**pinned, "clusters": H02_CLUSTERS}
+    assert pinned["full_coverage_columns"] == ["macro_spx_dd20"]       # pinned 2026-10-17 (BACKLOG 88)
+    # the coded dump returns a tuple where the doc and the YAML hold a list: compared alike
+    want = {**pinned, "clusters": H02_CLUSTERS, "full_coverage_columns": tuple(pinned["full_coverage_columns"])}
     spec = yaml.safe_load(SPEC.read_text())
     h02 = next(r for r in spec["rows"] if r["id"] == "H-02")
-    assert h02["discovery"] == want                                     # verbatim, the map written out
+    assert {**h02["discovery"], "full_coverage_columns": tuple(h02["discovery"]["full_coverage_columns"])} == want
     assert DiscoveryConfig(**h02["discovery"]).model_dump() == want      # the whole dump: no default left implicit
     research = load_settings().research
     plan = plan_quarter(QuarterSpec.model_validate(spec), research=research, doc_text=DOC.read_text(), quarter=Q)
@@ -627,5 +629,12 @@ def test_research_yml_can_run_a_preregistered_discovery_and_a_macro_run_never_ru
     inputs = wf[True]["workflow_dispatch"]["inputs"]                     # yaml reads the key `on` as True
     assert {"discover", "families", "discover_config", "rule_ref"} <= set(inputs)
     assert "no macro-v1 release yet" not in raw                          # no silent run without macro
-    run = "\n".join(s.get("run", "") for s in wf["jobs"]["walk-forward"]["steps"])
-    assert "--discover" in run and "--discover-config" in run and "--rule-ref" in run
+    plan_env = next(s for s in wf["jobs"]["plan"]["steps"] if s.get("id") == "plan")["env"]
+    assert {"DISCOVER", "FAMILIES", "DISCOVER_CONFIG", "RULE_REF"} <= set(plan_env)
+    from goldbot.research.cells import argv, plan
+    argv_ = argv(plan({"DISCOVER": "true", "DISCOVER_CONFIG": "{}", "RULE_REF": "x"})[0])
+    assert "--discover" in argv_ and "--discover-config={}" in argv_ and "--rule-ref=x" in argv_
+    macro_on = argv(plan({"MACRO": "true"})[0])
+    assert "--macro=macro" in macro_on
+    fetch = next(s for s in wf["jobs"]["trials"]["steps"] if "WANT_MACRO" in str(s.get("env", {})))
+    assert 'gh release download macro-v1' in fetch["run"] and '"$WANT_MACRO" = "true"' in fetch["run"]

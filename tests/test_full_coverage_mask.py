@@ -8,6 +8,7 @@ config without `full_coverage_columns` (the default) dumps, hashes and runs exac
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import numpy as np
@@ -21,6 +22,7 @@ from goldbot.research.walkforward import Fold, walk_forward_splits
 from tests.test_tercile_cut import WINDOW, StubModel, _wf_frames
 
 SPX = "macro_spx_dd20"
+SENTINEL: Any = object()
 SPX_FROM = pd.Timestamp("2021-09-01", tz="UTC")       # the column is NaN before this (FRED's SP500 window, in small)
 
 
@@ -184,3 +186,78 @@ def test_the_default_discovery_config_dumps_and_hashes_as_before_and_the_field_i
     dump = pinned.model_dump()
     assert dump["full_coverage_columns"] == (SPX,) and DiscoveryConfig(**json.loads(json.dumps(dump))) == pinned
     assert config_hash({"discovery": dump}) != config_hash({"discovery": default.model_dump()})
+
+
+# ---------------------------------------------------------------------------------------------- BACKLOG 88
+def _coverage_feats(n: int = 100, share: float = 0.57) -> pd.DataFrame:
+    """`side`, a fully populated column and two columns finite on only `share` of the candidates."""
+    k = int(n * share)
+    part = np.r_[np.full(n - k, np.nan), np.ones(k)]
+    return pd.DataFrame({"side": 1.0, "x": 1.0, SPX: part, "macro_other_57": part})
+
+
+def test_discovery_pool_keeps_a_named_column_at_57_percent_coverage_and_drops_an_unnamed_one():
+    """Pre-registration pin 2026-10-17 (item 2): columns named in `full_coverage_columns` are exempt from the 80%
+    pool rule; every other column keeps the 80% rule."""
+    prep: Any = SimpleNamespace(feats=_coverage_feats())
+    pool = discovery.discovery_pool(prep, (SPX,))
+    assert SPX in pool and "macro_other_57" not in pool and "x" in pool and "side" not in pool
+    assert SPX not in discovery.discovery_pool(prep)            # no field, no exemption: the 80% rule as before
+    assert pipeline.eligible_columns(prep.feats) == ["side", "x"]
+
+
+def test_discover_builds_its_pool_with_the_configs_full_coverage_columns(monkeypatch: pytest.MonkeyPatch):
+    labels, gross, feats, _ = _frames()
+    spec = SimpleNamespace(agent_id="a", timeframe="4h", walkforward={})
+    prep: Any = SimpleNamespace(feats=feats, labels=labels, gross=gross, n_bars=len(labels), swap=None,
+                                feature_version="f-test", spec=spec)
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(discovery, "uniqueness_weights", lambda *a, **k: pd.Series(1.0, index=labels.index))
+    monkeypatch.setattr(discovery, "splits_for", lambda *a, **k: [])
+    monkeypatch.setattr(discovery, "window_for", lambda *a, **k: WINDOW)
+    monkeypatch.setattr(discovery, "discovery_pool", lambda p, cover=(): seen.update(cover=cover) or [])
+    monkeypatch.setattr(discovery, "run_discovery", lambda *a, **k: SENTINEL)
+    assert discovery.discover(prep, DiscoveryConfig(full_coverage_columns=(SPX,))) is SENTINEL
+    assert seen["cover"] == (SPX,)
+
+
+def test_run_specialist_passes_full_coverage_columns_to_evaluate(monkeypatch: pytest.MonkeyPatch):
+    """Pin item 3: survivor trials run with the same per-fold mask, so `run_specialist` forwards the field."""
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(pipeline, "prepare", lambda *a, **k: "prep")
+    monkeypatch.setattr(pipeline, "evaluate", lambda prep, **k: seen.update(k) or SENTINEL)
+    out = pipeline.run_specialist(None, None, full_coverage_columns=(SPX,))     # type: ignore[arg-type]
+    assert out is SENTINEL and seen["full_coverage_columns"] == (SPX,)
+    pipeline.run_specialist(None, None)                                          # type: ignore[arg-type]
+    assert seen["full_coverage_columns"] == ()
+
+
+def test_evaluate_hands_full_coverage_columns_to_the_walk_forward(monkeypatch: pytest.MonkeyPatch):
+    from goldbot.specialists import SPECIALISTS
+    labels, gross, feats, _ = _frames()
+    prep = pipeline.Prepared(spec=SPECIALISTS["tsmom"](), labels=labels, gross=gross, feats=feats,
+                             feature_version="f-test", n_bars=len(labels))
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(pipeline, "_walk_forward", lambda *a, **k: seen.update(k) or SENTINEL)
+    monkeypatch.setattr(pipeline, "uniqueness_weights", lambda *a, **k: pd.Series(1.0, index=labels.index))
+    monkeypatch.setattr(pipeline, "splits_for", lambda *a, **k: [])
+    assert pipeline.evaluate(prep, model_features=["side", "x"], full_coverage_columns=(SPX,)) is SENTINEL
+    assert seen["full_coverage_columns"] == (SPX,)
+    pipeline.evaluate(prep, model_features=["side", "x"])
+    assert seen["full_coverage_columns"] == ()
+
+
+def test_a_survivor_trial_takes_its_full_coverage_columns_from_the_parent_discovery_row():
+    """Pin item 3: a survivor trial (config tagged `from_discovery`) runs with the parent discovery's mask; any other
+    config (no tag, a parent without the field, an unknown parent) runs with none."""
+    from goldbot.research.director import survivor_full_coverage
+    parent = {"ts": "2027-01-05T00:00:00+00:00", "config_hash": "abc", "trial": 21, "status": "discovery",
+              "config": {"discovery": DiscoveryConfig(full_coverage_columns=(SPX,)).model_dump()}}
+    plain = {"ts": "2027-01-06T00:00:00+00:00", "config_hash": "def", "trial": 22, "status": "discovery",
+             "config": {"discovery": DiscoveryConfig().model_dump()}}
+    ref = {"ts": parent["ts"], "config_hash": "abc", "trial": 21}
+    rows = [parent, plain]
+    assert survivor_full_coverage(rows, {"from_discovery": ref, "survivor": "H-07"}) == (SPX,)
+    assert survivor_full_coverage(rows, {"from_discovery": {**ref, "ts": plain["ts"], "config_hash": "def"}}) == ()
+    assert survivor_full_coverage(rows, {"survivor": "H-07"}) == ()
+    assert survivor_full_coverage(rows, {"from_discovery": {**ref, "config_hash": "zzz"}}) == ()

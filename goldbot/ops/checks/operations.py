@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pandas as pd
 
+from goldbot.base import load_record_json
 from goldbot.ops.checks._base import (
     BACKUP_FAIL_H,
     BACKUP_REPO_WARN_BYTES,
@@ -19,8 +21,11 @@ from goldbot.ops.checks._base import (
     DRILL_WARN_DAYS,
     PRUNE_WARN_DAYS,
     SPEND_WARN_FRACTION,
+    WATCH_FILE,
+    WATCH_STALE_S,
     Check,
     Status,
+    WatchState,
     _age,
     _read_json,
     _skipped,
@@ -67,6 +72,23 @@ def check_disk(ctx: HealthContext) -> Check:
     return Check(name="disk", status="ok", reason=msg)
 
 
+def _degraded_now_ok(ctx: HealthContext, detail: str) -> str:
+    """The check names of a `deployed_degraded` record ("deployed (degraded: a,b); ...") when every one reads ok in the
+    last recorded health run (state/health_last.json, fresh within WATCH_STALE_S); "" otherwise. A degradation is a
+    point-in-time note from the deploy (it is never rewritten: deploys.jsonl is append-only); it must not warn forever."""
+    m = re.search(r"\(degraded: ([^)]*)\)", detail)
+    names = [n for n in (m.group(1).split(",") if m else []) if n]
+    if not names:
+        return ""
+    try:
+        w = load_record_json(WatchState, (ctx.state_dir / WATCH_FILE).read_text(encoding="utf-8"), source=WATCH_FILE)
+    except (ValueError, OSError):
+        return ""
+    if w.ts is None or (ctx.now - w.ts).total_seconds() > WATCH_STALE_S:
+        return ""
+    return ",".join(names) if all(w.statuses.get(n) == "ok" for n in names) else ""
+
+
 @register_check("global", block=BLOCK_TAIL, pos=50)
 def check_deploy(ctx: HealthContext) -> Check:
     """The last deploy attempt (state/deploys.jsonl, written by goldbot-deploy): a rollback warns, a failed rollback
@@ -82,6 +104,11 @@ def check_deploy(ctx: HealthContext) -> Check:
     msg = f"{last.get('result')} {str(last.get('to', ''))[:8]} on {last.get('role')} at {last.get('ts')}: {last.get('detail', '')}"
     status = {"failed": "fail", "rolled_back": "warn", "refused": "warn", "rolled_back_manual": "warn",
               "rollback_reverted": "warn", "deployed_degraded": "warn"}.get(str(last.get("result")), "ok")
+    if last.get("result") == "deployed_degraded":
+        cleared = _degraded_now_ok(ctx, str(last.get("detail", "")))
+        if cleared:
+            return Check(name="deploy", status="ok", reason=f"deployed {str(last.get('to', ''))[:8]}; degraded at "
+                                                            f"deploy time ({cleared}), now ok")
     return Check(name="deploy", status=cast(Status, status), reason=msg)
 
 
@@ -148,6 +175,41 @@ def check_backup_prune(ctx: HealthContext) -> Check:
     msg = f"last retention run {_age(age_d * 86400)} ago"
     if age_d > PRUNE_WARN_DAYS:
         return Check(name=name, status="warn", reason=msg + f" (> {PRUNE_WARN_DAYS:.0f} d): {how}")
+    return Check(name=name, status="ok", reason=msg)
+
+
+@register_check("global", block=BLOCK_TAIL, pos=75)
+def check_object_storage(ctx: HealthContext) -> Check:
+    """Size of the backup bucket, previous versions included (state/object_storage_size.json, goldbot/ops/storage_size.py,
+    written after each backup): warn at 15 GB, fail at 19 GB of the 20 GB free tier (settings.backup). A missing,
+    stale or unreadable reading is unknown (warn), never ok."""
+    name = "object_storage"
+    b = ctx.settings.backup if ctx.settings is not None else None
+    warn_gb, fail_gb, max_h = (b.storage_warn_gb, b.storage_fail_gb, b.storage_max_age_h) if b else (15.0, 19.0, 48.0)
+    how = "RUNBOOK 0.6 'Object Storage size'"
+    f = ctx.state_dir / "object_storage_size.json"
+    if not f.exists():
+        if not (ctx.state_dir / "backup_last.json").exists():
+            return Check(name=name, status="ok", reason="no backup yet, nothing to measure")
+        return Check(name=name, status="warn", reason=f"size unknown: never read ({how})")
+    try:
+        rec = _read_json(f)
+        ts = pd.Timestamp(rec["ts"])
+        size = rec["bytes"]
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        return Check(name=name, status="warn", reason=f"size unknown: object_storage_size.json unreadable: {exc}"[:300])
+    if isinstance(size, bool) or not isinstance(size, (int, float)) or size < 0:
+        why = str(rec.get("error") or "no number")[:80]
+        return Check(name=name, status="warn", reason=f"size unknown: last read failed ({why}); {how}")
+    age_h = (ctx.now - ts).total_seconds() / 3600
+    gb = size / 1e9
+    msg = f"{gb:.1f} GB with previous versions (read {_age(age_h * 3600)} ago; free tier 20 GB)"
+    if age_h > max_h:
+        return Check(name=name, status="warn", reason="size unknown: reading is stale; last " + msg)
+    if gb >= fail_gb:
+        return Check(name=name, status="fail", reason=msg + f" >= {fail_gb:g} GB: {how}")
+    if gb >= warn_gb:
+        return Check(name=name, status="warn", reason=msg + f" >= {warn_gb:g} GB: {how}")
     return Check(name=name, status="ok", reason=msg)
 
 

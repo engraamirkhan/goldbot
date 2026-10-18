@@ -439,10 +439,10 @@ def plan_quarter(qs: QuarterSpec, *, research: Any, doc_text: str, quarter: str,
     if n != qs.reservation:
         raise SpecError(f"rows + slots = {n} (withdrawn rows left out), but the spec's reservation is "
                         f"{qs.reservation}")
-    budget = int(research.trial_budget_quarter)
+    budget = research.budget_for(quarter)
     if n > budget:
         raise SpecError(f"{n} queued rows and slots exceed the {quarter} trial budget of {budget} "
-                        f"(research.trial_budget_quarter, an owner decision)")
+                        f"(research.trial_budget_quarter / trial_budget_overrides, an owner decision)")
     return QuarterPlan(quarter=quarter, source=qs.source, freeze_commit=qs.freeze_commit, reservation=qs.reservation,
                        setting=research.reserved_for(quarter), budget=budget, rows=rows, slots=slots,
                        data_digests=dict(data_digests) if data_digests else None)

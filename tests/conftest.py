@@ -75,3 +75,12 @@ def pytest_terminal_summary(terminalreporter: Any, config: Any) -> None:
     seed = getattr(config.option, "randomly_seed", None)
     if isinstance(seed, int) and config.pluginmanager.hasplugin("randomly"):
         terminalreporter.write_line(f"pytest-randomly seed {seed}: reproduce with -p randomly --randomly-seed={seed}")
+
+
+@pytest.fixture(autouse=True)
+def base_trial_budget(monkeypatch) -> None:
+    """The shipped settings carry a dated owner override (research.trial_budget_overrides, 2026Q4 = 53); tests that
+    pin the base quarterly budget of 20 run without it. tests/test_config.py reads the shipped override from the yaml."""
+    from goldbot.config import load_settings
+    for quarter in list(load_settings().research.trial_budget_overrides):       # the dict is mutable though the model is frozen
+        monkeypatch.delitem(load_settings().research.trial_budget_overrides, quarter)

@@ -57,7 +57,7 @@ from scipy.stats import t as student_t
 from goldbot.base import FrozenRecord, UtcTimestamp, write_atomic
 from goldbot.config import AttributionSettings, Settings, tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS
-from goldbot.data.timeutil import epoch_ns
+from goldbot.data.timeutil import bar_close_utc, epoch_ns
 from goldbot.engine.shadow import ShadowTrade
 from goldbot.execution.costs import CONTRACT_OZ, CostTable
 from goldbot.labels.triple_barrier import SwapSpec, rollover_nights
@@ -395,7 +395,7 @@ def trade_rows(trades: list[ShadowTrade], *, costs: CostModel, daily_vol: pd.Ser
         if not np.isfinite(risk) or risk <= 0:
             continue
         tf = pd.Timedelta(seconds=tf_seconds(t.timeframe))
-        entry_utc, exit_utc = pd.Timestamp(t.entry_ts) + tf, pd.Timestamp(t.exit_ts) + tf
+        entry_utc, exit_utc = bar_close_utc(t.entry_ts, t.timeframe), bar_close_utc(t.exit_ts, t.timeframe)
         if not since <= exit_utc <= now + tf:
             continue
         keep.append((t, risk, entry_utc, exit_utc, t.barrier, float(t.ret)))

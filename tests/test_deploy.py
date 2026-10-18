@@ -102,6 +102,31 @@ def test_health_reports_the_last_deploy(tmp_path):
         assert health.check_deploy(ctx).status == status
 
 
+def test_a_degraded_deploy_whose_checks_are_ok_now_reads_ok(tmp_path):
+    """deployed_degraded is a point-in-time note: once the named checks read ok in the last health run it is ok."""
+    import pandas as pd
+
+    from goldbot.ops import health
+    from goldbot.ops.checks._base import WATCH_FILE
+    from tests.test_health import NOW, make_ctx
+    ctx = make_ctx(tmp_path)
+    rec = {"result": "deployed_degraded", "to": B, "role": "brain", "ts": "t",
+           "detail": "engine stopped for the deploy: x; deployed (degraded: engine_loop:icm-demo,tick_errors:icm-demo); all ok"}
+    (tmp_path / "deploys.jsonl").write_text(json.dumps(rec) + "\n")
+    assert health.check_deploy(ctx).status == "warn"                       # no health run recorded
+    watch = tmp_path / WATCH_FILE
+
+    def run(ts, **st):
+        watch.write_text(json.dumps({"ts": str(ts), "statuses": st}))
+        return health.check_deploy(ctx)
+    c = run(NOW, **{"engine_loop:icm-demo": "ok", "tick_errors:icm-demo": "ok"})
+    assert c.status == "ok" and c.reason.startswith(f"deployed {B[:8]}; degraded at deploy time (engine_loop:icm-demo,"
+                                                    "tick_errors:icm-demo), now ok")
+    assert run(NOW, **{"engine_loop:icm-demo": "ok", "tick_errors:icm-demo": "warn"}).status == "warn"
+    assert run(NOW, **{"engine_loop:icm-demo": "ok"}).status == "warn"      # a named check is missing
+    assert run(NOW - pd.Timedelta(hours=2), **{"engine_loop:icm-demo": "ok", "tick_errors:icm-demo": "ok"}).status == "warn"
+
+
 def _engine_state(tmp_path, account: str, compat: dict[str, Any] | None) -> None:
     (tmp_path / f"engine_{account}.json").write_text(json.dumps({"bridge_compat": compat}))
 

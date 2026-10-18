@@ -507,7 +507,7 @@ def research_view(state: Path, settings: Settings | None, docs_dir: Path) -> Res
     rows = _registry(state)
     now = _now()
     q = quarter_of(now)
-    cap = settings.research.trial_budget_quarter if settings is not None else DEFAULT_QUARTER_BUDGET
+    cap = settings.research.budget_for(q) if settings is not None else DEFAULT_QUARTER_BUDGET
     used = quarter_trials(rows, q)
     tfs = {k: str(v.timeframe) for k, v in SPECIALISTS.items()}
     trials = sorted((_trial(r, tfs) for r in rows), key=lambda t: -t.trial)[:MAX_TRIALS]

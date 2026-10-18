@@ -1,0 +1,5 @@
+id: R48
+requirement: 'The N1 `tod_periodicity` feature group is opt-in and point in time (O-4 amendment 2026-10-18, BACKLOG 89): six columns (`slot_mean_ret_{5,10,20}d`, `slot_hit_rate_20d`, `slot_t_20d`, `slot_ret_over_atr`) from the same 30-minute UTC slot on earlier days only (a 15m bar maps to the slot containing its open), `available_utc` = the prior day''s slot close, joined with `asof_join`; `lookahead_check` reports 0 columns; its own family (own group, not inside `activity`); never in `DEFAULT_FEATURE_NAMES`, so `f-079deacc61`, `f-51ac5ebabb` and every hashed row are unchanged'
+status: implemented
+code: 'goldbot/features/tod_periodicity.py (`enable`, `f_tod_periodicity`, `slot_start`, `slot_of_day`); goldbot/research/pipeline.py `OPT_IN_FEATURES`'
+test: 'tests/test_tod_periodicity.py (mapping and DST, own-day exclusion, Monday/Friday, missing bar, truncation, lookahead_check, default list and hashes unchanged, group map and group size)'

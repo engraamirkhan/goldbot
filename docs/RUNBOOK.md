@@ -181,7 +181,9 @@ Before you start, check all of these:
 * the engine has run once on this account: `state/risk_icm-demo.json` exists (the day start and high-water mark the
   limits are judged by);
 * `state/classifier_icm-demo.json` shows `"class": "raw"` or `"standard"`. While it is missing or `unknown` the
-  RiskGate refuses (exit 7) until the Friday `nightly_costs` run classifies the account;
+  RiskGate refuses (exit 7) until a nightly `nightly_costs` run classifies the account (it runs every night while the
+  class is unknown), unless the account declares `account_class` in `config/accounts.yaml` (icm-demo: `raw`), which
+  is then the class from the first run;
 * the supervisor is running (`systemctl is-active goldbot-supervisor` says `active`);
 * no deploy is waiting for you: do **not** approve a Telegram *Deploy* until the smoke has finished.
 
@@ -418,6 +420,89 @@ and the rest still arrives. It never contains account numbers or emails.
   did not recover every service. Run `journalctl -u 'goldbot-*' -n 200` and `goldbot run health`, then start the
   units by hand (supervisor first). For aux.db errors, see docs/deploy/2026-10-batch.md 5.1.
 
+#### Attended MT5 box upgrade (Sat 24 Oct, 10:00 UK, owner on VNC)
+
+One checked script, `goldbot/ops/linux/mt5-box-upgrade.sh`, runs the plan in three phases and prints a PASS/FAIL
+table of states only (never Config/ contents, a login, a host or a token). Each phase can be run again. It refuses
+unless the market is closed (Friday from 22:30 UTC, Saturday, Sunday until 21:00 UTC), no engine unit is active on the
+box, and you attest the book is flat and the engine is stopped (the box cannot see the brain's engine or the
+account's positions itself). Run every step inside `tmux new -s upgrade`. `<SHA>` is the approved commit on `main`
+and `<HASH>` the script's hash (step 2); both go in the deploy note. Root runs the script, so it never runs from
+`/opt/goldbot`, which the mt5 user can write.
+
+1. **Brain: stop the engine and check the book is flat.** `is-active` must print `inactive`, and the dashboard (or
+   Telegram) must show no open positions. If a position is open, stop here; do not close it by hand to make the test possible.
+   ```bash
+   sudo systemctl stop goldbot-engine@icm-demo && systemctl is-active goldbot-engine@icm-demo
+   ```
+2. **Mac: check the commit and note the script's hash.** Without `on-main`, stop.
+   ```bash
+   git -C <your goldbot clone> fetch -q origin && git -C <your goldbot clone> merge-base --is-ancestor <SHA> origin/main && echo on-main && git -C <your goldbot clone> show <SHA>:goldbot/ops/linux/mt5-box-upgrade.sh | shasum -a 256
+   ```
+3. **MT5 box: download it into a root-only folder and check the hash** (`sha256sum -c` must print `OK`).
+   ```bash
+   sudo install -d -m 700 -o root -g root /root/mt5-upgrade && sudo curl -fsSL -o /root/mt5-upgrade/mt5-box-upgrade https://raw.githubusercontent.com/engraamirkhan/goldbot/<SHA>/goldbot/ops/linux/mt5-box-upgrade.sh && echo "<HASH>  /root/mt5-upgrade/mt5-box-upgrade" | sudo sha256sum -c - && sudo chmod 700 /root/mt5-upgrade/mt5-box-upgrade
+   ```
+4. **Precheck** (plan step 1: market closed, book flat, engine stopped, `Config/` backed up). All rows must be PASS.
+   ```bash
+   sudo /root/mt5-upgrade/mt5-box-upgrade precheck <SHA> --book-flat --engine-stopped
+   ```
+5. **Install** (plan steps 2 to 5): `goldbot-deploy <SHA>`, then the four units and the watchdog/probe scripts from
+   root's own clone at exactly `<SHA>`, then it stops the transient `goldbot-mt5-terminal-check`, kills the stray
+   terminal, enables `goldbot-mt5-terminal@icm-demo` and leaves the watchdog timer **off**. It records the previous
+   commit in `/var/lib/goldbot-mt5-upgrade/previous-sha` (root-only) and the boot id. The last row says `run: sudo reboot`.
+   ```bash
+   sudo /root/mt5-upgrade/mt5-box-upgrade install <SHA> --book-flat --engine-stopped
+   ```
+6. **Cold restart** (plan step 6). Have the VNC tunnel ready (0.3) and note the time. Wait 3 minutes, then log in again.
+   ```bash
+   sudo reboot
+   ```
+7. **Post-reboot** (plan steps 7 and 8). It checks that the machine really rebooted, that xvfb, the terminal and the
+   bridge are active, that exactly one `terminal64.exe` runs, that `/health` is `ok` and that the bridge's restart
+   count stays steady for 30 s. Only if every row passes does it enable `goldbot-bridge-watchdog@icm-demo.timer` and
+   write the rollback floor (`/etc/goldbot/rollback-floor`) = `<SHA>`. A floor that already holds another commit is
+   never overwritten (the row FAILs; change it deliberately).
+   ```bash
+   sudo /root/mt5-upgrade/mt5-box-upgrade post-reboot <SHA>
+   ```
+   The pass criteria of "Cold-restart test of the saved login" still apply on top: within 10 min of the reboot, on the
+   brain `bridge:icm-demo` and `terminal:icm-demo` are ok, and Telegram showed the down alert within 6 min and then
+   the recovery. Its steps 4 to 6 (kill test, wineserver owner, hardening check, write-up) follow.
+8. **Clean up and resume.** Delete the download and, once you no longer need it, the `Config/` copy; then start the
+   engine on the brain. Record unit states and times in the deploy note (no login, server name or host).
+   ```bash
+   sudo rm -rf /root/mt5-upgrade && sudo -u mt5 -H rm -rf /home/mt5/config-backup
+   ```
+   ```bash
+   sudo systemctl start goldbot-engine@icm-demo
+   ```
+
+**If the cold-restart test fails** (any FAIL row in step 7, or no pass within 10 min). The script has changed nothing
+more: the watchdog timer is still off and no floor is set, so a rollback is allowed. The market is closed until Sunday
+22:00 UTC and the engine stays stopped, so there is time; do not hurry.
+1. Read why, states only: `sudo journalctl -u goldbot-mt5-terminal@icm-demo -u goldbot-bridge@icm-demo -b -n 100 --no-pager`
+   and `systemctl status goldbot-mt5-terminal@icm-demo goldbot-bridge@icm-demo --no-pager`.
+2. `not_logged_in` or `wrong_account`: log in over VNC (0.3), or restore the `Config/` copy:
+   ```bash
+   sudo systemctl stop goldbot-mt5-terminal@icm-demo && sudo -u mt5 -H cp -a /home/mt5/config-backup/Config/. /home/mt5/.wine/drive_c/MT5/ICMarkets/Config/ && sudo systemctl start goldbot-mt5-terminal@icm-demo
+   ```
+   Then run step 7 again (reboot once more first if the test is to be repeated from cold).
+3. More than one `terminal64.exe`, or a unit stuck:
+   ```bash
+   sudo systemctl stop goldbot-bridge@icm-demo goldbot-mt5-terminal@icm-demo && sudo pkill -u mt5 -f 'terminal64[.]exe'; sudo systemctl start goldbot-mt5-terminal@icm-demo
+   ```
+   then step 7 again.
+4. Still failing after 30 minutes, or the terminal cannot be made to log in: go back to the previous version. This
+   disables the terminal unit, puts the previous bridge unit back from root's own clone at the recorded commit, rolls
+   the code back (accepted because no floor is set) and restarts the bridge, which starts the terminal itself, as before:
+   ```bash
+   P=$(sudo cat /var/lib/goldbot-mt5-upgrade/previous-sha) && sudo systemctl disable --now goldbot-mt5-terminal@icm-demo && sudo env P=$P bash -c 'set -e; d=$(mktemp -d /root/goldbot-ops.XXXXXX); git init -q $d; git -C $d fetch -q --depth 1 https://github.com/engraamirkhan/goldbot.git $P; git -C $d checkout -q --detach FETCH_HEAD; install -m 644 -o root -g root $d/goldbot/ops/linux/systemd/goldbot-bridge@.service /etc/systemd/system/; rm -rf $d; systemctl daemon-reload' && sudo goldbot-deploy --rollback $P && sudo systemctl restart goldbot-bridge@icm-demo
+   ```
+   Then `systemctl is-active goldbot-bridge@icm-demo`, `curl -s 127.0.0.1:8765/health` and, on the brain, preflight.
+   Keep the engine stopped until `/health` shows `"terminal": "ok"`. Open a postmortem in `docs/incidents/` and
+   tell the program director within 24 h what failed and the new date.
+
 ### 0.6 Backups and restore (brain)
 The scheduler backs up the brain's state every day at 22:15 UTC with `restic`. The backup is encrypted on the
 brain and sent to **Oracle Object Storage** (free tier, 20 GB). It never goes to GitHub. Each backup holds:
@@ -433,6 +518,17 @@ a temporary folder and checks it. Health shows `backup_age` (warn after 26 h, fa
 at the first warning; it also warns when a backup took 10 min or more, because restic cancels a backup near 20 min
 under the brain's no-delete key, ADR 0002), `restore_drill` (fail when the drill fails) and `backup_prune` (warn when the monthly
 retention run from your Mac is older than 45 days).
+
+**Object Storage size (`object_storage`).** After each nightly backup (also a failed one) the brain sums every object
+version in the bucket, previous versions included, through the bucket's S3-compatible API signed with the restic
+keys already in the keyring (no new credential; nothing to install), and writes `state/object_storage_size.json`.
+Health warns at 15 GB and fails at 19 GB of the 20 GB free tier (`backup.storage_warn_gb`, `storage_fail_gb`);
+Telegram tells you at the first warning. A missing, older-than-48-h or unreadable reading shows "size unknown" as a
+warning, never OK (usually the restic keys cannot list the bucket: run `python -m goldbot.ops.storage_size` once, it
+prints the size or the error class).
+When it warns on size: nothing is lost yet; run the monthly retention from your Mac (`scripts/backup_retention.sh`);
+previous versions then leave after the 30-day expiry (ADR 0002), so usage falls about a month later. If it fails,
+tell the sre the same day: the next backup could be refused.
 
 **Why two keys.** The brain only adds backups; it never deletes old ones (no `restic forget` or `prune` on the
 brain). Old backups are thinned once a month **from your Mac** with a second key. If the brain is ever compromised,
@@ -600,7 +696,7 @@ Weekdays are Mon-Fri. A job missed while the VPS was down is run once on restart
 | --- | --- | --- |
 | `calendar_archive` | Daily 06:10 | Stores the Forex Factory week in the `calendar_events` table (feeds the news blackout). |
 | `agents_presession` | Mon-Fri 06:30 | Macro and news analyst writes the pre-session briefing. |
-| `nightly_costs` | Mon-Fri 23:10 | Builds each account's spread/slippage cost table `state\costs_<account>.json`, with the swap and commission the terminal reports (`state\broker_terms_<account>.json`, written by the engine every 6 hours); on Fridays also re-runs the account classifier (`state\classifier_<account>.json`). Until an account has been classified (the first Friday with 1,000+ London/New York ticks logged) its engine opens no positions and the health check warns "account class unknown"; on a Standard account the 15m families except session-open are off. |
+| `nightly_costs` | Mon-Fri 23:10 | Builds each account's spread/slippage cost table `state\costs_<account>.json`, with the swap and commission the terminal reports (`state\broker_terms_<account>.json`, written by the engine every 6 hours); re-runs the account classifier (`state\classifier_<account>.json`) every night while the class is unknown and on Fridays once it is known. Until an account has been classified (1,000+ London/New York ticks logged) or declares `account_class` in `config/accounts.yaml` (icm-demo: `raw`), its engine opens no positions and the health check warns "account class unknown"; a measured class that disagrees with the declared one makes the stricter (Standard) win and the health check warns "declared raw, measured standard: check the account type"; on a Standard account the 15m families except session-open are off. |
 | `model_watch` | Daily 23:30 | CUSUM check on any newly promoted champion; restores the previous champion on an alarm. |
 | `agents_daily` | Mon-Fri 23:45 | Data steward, risk officer, execution auditor. |
 | `saturday_retrain` | Saturday 06:00 | Refreshes bars from `data-v1` and the macro series from `macro-v1` (a macro failure does not stop the retrain), decides waiting challengers (promote/retire), retrains new challengers. |
@@ -744,8 +840,38 @@ cd C:\goldbot
    secret: type it on the VPS only.
 3. The dashboard enforces its own login (email, password, authenticator code) and roles on the public URL.
 
-The tunnel only carries the dashboard. TradingView alerts go to the webhook service on port 8443, which the
-bootstrap script does not expose; set that up only when you start using TradingView alerts.
+The tunnel only carries the dashboard. TradingView alerts go to the webhook service, which listens on 127.0.0.1:8443
+only; see "TradingView alerts: reading your indicators" below.
+
+### 2.7b TradingView alerts: reading your indicators
+
+The webhook records every value your indicators plot, one alert per indicator per timeframe, so research and features can
+use them (opt-in, filter features only until proven). Each bar becomes rows in the `tv_indicators` dataset; a bar whose
+alert never arrives is simply missing (NaN in features). The alert is saved to `state/tv.db` before goldbot answers, and a
+failed save answers 503 so TradingView retries.
+
+1. Store the shared secret (hidden prompt): `python -m goldbot.ops.accounts set tradingview-webhook-secret`; start
+   `goldbot-webhook`. It listens on 127.0.0.1 only; put your HTTPS reverse proxy (for example Tailscale Funnel, path `/tv`)
+   in front. Keep the public address private. If the proxy cannot pass TradingView's address in `X-Forwarded-For`, set
+   `GOLDBOT_TV_ENFORCE_IP=0` for the service: the secret then authenticates alone.
+2. On the chart (XAUUSD, 15m and 1h first) create one alert per indicator: **Condition** = the indicator (or "Any alert()
+   function call" if that is all it offers), **Trigger** = **Once per bar close** (never "once per bar", which sends
+   half-formed bars), longest expiry, **Webhook URL** = your address, and this **Message** (every value is quoted because
+   TradingView writes `NaN` for an empty plot, which is not valid JSON; use `plot_0` to `plot_19` as far as the indicator
+   has plots, the Data Window lists them):
+
+```json
+{"indicator":"K-Indi","version":"2.02","symbol":"{{ticker}}","tf":"{{interval}}","bar_time":"{{time}}","fired_at":"{{timenow}}","price":"{{close}}","plots":{"plot_0":"{{plot_0}}","plot_1":"{{plot_1}}","plot_2":"{{plot_2}}","plot_3":"{{plot_3}}","plot_4":"{{plot_4}}","plot_5":"{{plot_5}}","plot_6":"{{plot_6}}","plot_7":"{{plot_7}}","plot_8":"{{plot_8}}","plot_9":"{{plot_9}}","plot_10":"{{plot_10}}","plot_11":"{{plot_11}}","plot_12":"{{plot_12}}","plot_13":"{{plot_13}}","plot_14":"{{plot_14}}","plot_15":"{{plot_15}}","plot_16":"{{plot_16}}","plot_17":"{{plot_17}}","plot_18":"{{plot_18}}","plot_19":"{{plot_19}}"},"secret":"<the stored secret>"}
+```
+
+   Change `indicator` and `version` per indicator (they name the data: `K-Indi@2.02`); type the secret into the alert
+   yourself, never into chat or a file. Alerts need a TradingView plan with webhooks and two-factor sign-in on.
+3. Check it: the dashboard endpoint `/api/tradingview` lists each indicator and timeframe with its last bar, alerts in the
+   last 24 h, plots seen and gaps (a market-closed stretch also counts as missing bars).
+
+Limits: an invite-only script exposes only the plots and `alert()` calls its author allows. A series that is drawn
+(lines, boxes, labels) or computed but not plotted cannot be read, and a plot set to `display.none` may be missing from
+the alert; check each indicator once. Data stays in `data/` and `state/` (private), never in a public release.
 
 ### 2.8 Telegram bot with @BotFather
 

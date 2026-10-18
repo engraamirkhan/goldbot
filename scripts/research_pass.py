@@ -114,8 +114,9 @@ from goldbot.features import us_calendar as us_calendar_features  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
 from goldbot.features.registry import feature_version  # noqa: E402
 from goldbot.research import h16  # noqa: E402
-from goldbot.research.director import cited_rule, queued_rows_for  # noqa: E402
+from goldbot.research.director import cited_rule, queued_rows_for, survivor_full_coverage  # noqa: E402
 from goldbot.research.gates import DSR_BAR  # noqa: E402
+from goldbot.research.lot_fit import LotFitSpec, lot_fit_lines  # noqa: E402
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR, DaySummedDsr  # noqa: E402
 from goldbot.research.pipeline import (  # noqa: E402
     POOLED_FEATURES,
@@ -286,7 +287,7 @@ def _h16(args: argparse.Namespace, b1: pd.DataFrame, reg: TrialRegistry, setting
             "day_type": day_type_info(True, macro, us_calendar)}
     try:
         row, res = h16.run_trial(reg, bars, macro, us_calendar, holdout_from=holdout_from,
-                                 cap=settings.research.trial_budget_quarter,
+                                 cap=settings.research.budget_for(quarter_of()),
                                  reserved=settings.research.reserved_for(quarter_of()),
                                  retired={e.family for e in settings.research.retired_families},
                                  rationale=args.rationale, min_rows=day_type_features.MIN_FIT_ROWS, input_info=info)
@@ -398,6 +399,7 @@ def render_report(res: ResearchResult, years: pd.DataFrame, leak: dict[str, Any]
     lines += _rule_gates_lines(m.get("rule_only_gates")) + _holdout_lines(m.get("holdout_verdict")) + _rule_only_lines(m.get("rule_only"))
     lines += rule_only_split_lines(m.get("rule_only_split"))
     lines += _by_family_lines(m.get("by_family"))
+    lines += lot_fit_lines(m.get("lot_fit"))
     if "all_candidates" in m:
         lines += ["### Out of fold", "",
                   "| set | n | hit rate | mean ret | profit factor | Sharpe (ann.) | max DD | deflated SR |",
@@ -603,6 +605,9 @@ def main() -> int:
                     help="round-trip slippage + commission per oz beyond the spread (default: settings prior + commission)")
     ap.add_argument("--cost-table", default="",
                     help="measured cost table JSON (release costs-v1 asset costs_measured.json); default: the settings priors")
+    ap.add_argument("--lot-fit", action="store_true",
+                    help="H-27 overlay: report the share of trades the account can take at the gate's own sizing and the "
+                         "GBP and R at the actual lots (settings research.lot_fit_*; reporting only; not with --discover/--cpcv/--h16)")
     ap.add_argument("--score-holdout", action="store_true",
                     help="score the configurations on the held-out window (once per configuration, ever)")
     ap.add_argument("--skip-screen", action="store_true",
@@ -632,6 +637,8 @@ def main() -> int:
     if args.pooled and json.loads(args.variants) not in ([{}], {}):
         raise SystemExit("--pooled runs every member family at its defaults; --variants does not apply")
     variants = [{}] if args.pooled else parse_variants(args.specialist, args.variants)
+    if args.lot_fit and (args.discover or args.cpcv or args.h16):
+        raise SystemExit("--lot-fit reports on the walk-forward; it is not wired into --discover, --cpcv or --h16")
     settings = load_settings()
     table = None
     if args.cost_table:
@@ -680,6 +687,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
          macro: pd.DataFrame | None = None, macro_info: dict[str, Any] | None = None,
          positioning: pd.DataFrame | None = None, positioning_info: dict[str, Any] | None = None,
          us_calendar: pd.DataFrame | None = None, us_calendar_info: dict[str, Any] | None = None) -> int:
+    lot_fit = LotFitSpec.from_settings(settings) if getattr(args, "lot_fit", False) else None
     day_type = bool(getattr(args, "day_type", False))
     feat_ctx, feat_names = feature_ctx(macro, positioning, us_calendar,
                                        calendar_features=bool(getattr(args, "us_calendar_features", False)),
@@ -713,7 +721,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
     # budget (QueuedConfigMismatch)
     try:
         quarter, preregs = reg.check_budget_reserved([(j.family, j.config) for j in jobs],
-                                                     settings.research.trial_budget_quarter,
+                                                     settings.research.budget_for(quarter_of()),
                                                      settings.research.reserved_for(quarter_of()),
                                                      retired={e.family for e in settings.research.retired_families},
                                                      agents=agents)
@@ -784,10 +792,11 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         else:
             if job.pooled:
                 res = run_pool(preps, tf, n_trials=n_trials, extra_cost_usd=extra_cost, holdout=holdout,
-                               score_holdout=args.score_holdout)
+                               score_holdout=args.score_holdout, lot_fit=lot_fit)
             else:
                 res = evaluate(preps[0], n_trials=n_trials, extra_cost_usd=extra_cost, holdout=holdout,
-                               score_holdout=args.score_holdout)
+                               score_holdout=args.score_holdout,
+                               full_coverage_columns=survivor_full_coverage(reg._rows(), job.config), lot_fit=lot_fit)
             n = res.n_candidates
             print(f"{json.dumps(job.overrides) or 'defaults'}: candidates {n}  folds {res.n_folds}  "
                   f"[{time.time() - t0:.0f}s]", flush=True)
@@ -840,7 +849,7 @@ def _discover(args: argparse.Namespace, variants: list[dict[str, Any]], b1: pd.D
     try:
         cfg = DiscoveryConfig(**json.loads(args.discover_config))
         row, text = discovery_pass(spec, b1, reg,
-                                   budget_cap=settings.research.trial_budget_quarter,
+                                   budget_cap=settings.research.budget_for(quarter_of()),
                                    reserved_setting=settings.research.reserved_for(quarter_of()), cfg=cfg,
                                    group_mode=args.families,
                                    extra_cost_usd=extra_cost, swap=swap, holdout=holdout,

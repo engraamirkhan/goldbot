@@ -161,6 +161,23 @@ class FeedHealth(BaseModel):
     supervisor_heartbeat_age_s: float
 
 
+class TvIndicatorStatus(BaseModel):
+    """One TradingView indicator at one timeframe: arrival of its bar alerts (counts only, never plotted values)."""
+    indicator: str
+    version: str
+    symbol: str
+    tf: str
+    last_bar_time: str
+    alerts_24h: int
+    plots_seen: list[str]
+    gaps_24h: int
+
+
+class TvStatusView(BaseModel):
+    now: str
+    indicators: list[TvIndicatorStatus]
+
+
 # ----------------------------------------------------------------------------- auth and users
 Role = Literal["owner", "approver", "viewer"]
 GrantableRole = Literal["approver", "viewer"]     # the owner role belongs to auth.owner_email and is never granted
@@ -752,6 +769,28 @@ class ModeChangeResult(BaseModel):
     message: str
     view: AutoModeView
 # ============================================================================= end auto mode
+
+
+# ============================================================================= Chart tab (saved TradingView layouts)
+class ChartLayout(BaseModel):
+    name: str
+    url: str | None         # the owner's layout URL; None for every other role (it identifies the owner's account)
+
+
+class ChartLayoutsView(BaseModel):
+    layouts: list[ChartLayout]
+    can_edit: bool
+
+
+class ChartLayoutIn(ApiRequest):
+    name: str = Field(min_length=1, max_length=40)
+    url: str = Field(max_length=200)
+
+
+class ChartLayoutsRequest(ApiRequest):
+    layouts: list[ChartLayoutIn] = Field(max_length=3)
+    totp: str = Field("", max_length=16)    # the step-up after an email-code sign-in (ADR 0028)
+# ============================================================================= end Chart tab
 
 
 # ============================================================================= Progress tab (W2-3, read-only)

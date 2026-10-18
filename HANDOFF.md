@@ -5,6 +5,71 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- Chart tab (web/src/screens/Chart.tsx): live TradingView chart on OANDA:XAUUSD as a sandboxed cross-origin iframe from www.tradingview-widget.com (no third-party script in our origin; referrerpolicy no-referrer; plain-text fallback after 15 s without load) and links to the owner's up to 3 saved TradingView layouts (new tab, noopener noreferrer). Layout URLs are stored in aux.db table chart_layouts (migration 11), shown to the owner only, validated as https://www.tradingview.com/chart/..., never in the repo or audit row. POST /api/chart/layouts is owner-only and stepped up like the other owner writes. API responses now carry a Content-Security-Policy (script-src and style-src self, frame-src the two TradingView origins, frame-ancestors none). Invite-only indicator signals need TradingView alerts (not built).
+- Account type no longer blocks entries for a week: `nightly_costs` re-runs the classifier every night while the stored
+  class is unknown (missing file or "unknown"; `PersistentClassifier.is_known`) and on Fridays only once a class is
+  known (evidence thresholds and the two-disagreement rule unchanged). New optional `account_class: raw|standard` per
+  account in `config/accounts.yaml` (set for icm-demo only) is the baseline until a measured class is stored;
+  `execution/classifier.effective_class` is the one function the engine, smoke and state use; effective = the stricter of declared and the last
+  KNOWN measurement (a stored unknown falls back to `last_known`; an unreadable classifier file with a declared class
+  is standard); a disagreeing
+  measurement makes the stricter class (standard) win and the engine health check warns "declared raw, measured
+  standard: check the account type". Entry status: "only N London/NY ticks" is a self-clearing wait ("N of 1,000
+  market ticks recorded; checked every night"), a declared class with no measurement is an info note, every other
+  unknown reason still "Needs you". RiskGate logic and thresholds unchanged; unknown still blocks. The engine state
+  gained `account_class_declared` and `account_class_measured` (golden hashes regenerated).
+  A torn classifier file is recorded as `classifier_error` in the nightly row; the other accounts and the costs publish go on.
+- **Deploy status false alarm fixed (SRE).** `goldbot-deploy` leaves the engine-derived checks (engine, engine_loop, tick_errors; reconcile stays compared, it also reports ledger mismatches) of an engine unit that is disabled/inactive at the baseline out of the worse-comparison and records "engine stopped for the deploy: <account>"; other worsened checks still give `deployed_degraded`. `check_deploy` reports a `deployed_degraded` as ok ("degraded at deploy time (...), now ok") when all named checks read ok in the fresh `health_last.json`; deploys.jsonl is untouched.
+- **H-27 lot-fit overlay in research (implementer, 2026-10-18; opt-in, not yet reviewed by quant).** Playbook
+  small-account-playbook-2026-10-18 section 3: research no longer claims £ from trades the account cannot take.
+  `goldbot/research/lot_fit.py` sizes every trade with the gate's own `risk.sizing.size_lots`, the gate's exception cap
+  (`RiskGate.min_lot_cap`) and its stop floor (stops level plus spread); the min-lot exception (`risk.min_lot_risk_cap`,
+  off by default, never tiny-live), the 8% size-down stage and the model multiplier are LotFitSpec fields. Unfit = the gate
+  would refuse `min_lot_exceeds_risk`: excluded from P&L, counted; fitting trades are scaled by the actual lot.
+  tests/test_lot_fit_overlay.py runs `RiskGate.check` over a 1,500-case grid and requires the same verdict.
+  `run_specialist`/`evaluate`/`run_pool(..., lot_fit=LotFitSpec)` add `metrics.lot_fit` (model_filtered and
+  all_candidates: n, fit fraction, unfit, mean lots, £ P&L, R at lots, net R of the fit subset) and the report a
+  "Lot fit" table. `research_pass.py --lot-fit` (account from `research.lot_fit_equity` 1000 and `lot_fit_acct_per_usd`
+  0.75, a research assumption); research.yml optional boolean input `lot_fit` (and a batch key) -> env LOT_FIT -> plan
+  validation -> `--lot-fit`. Default off: no key, outputs and registry rows unchanged (tested). Not done: routing before
+  RiskGate (ATR stop, else H-25, else skip); `--lot-fit` with --discover/--cpcv/--h16 is refused; margin and the other
+  gate checks are not part of "unfit".
+- **Attended MT5 box upgrade scripted (sre, 2026-10-18; for Sat 24 Oct 10:00 UK; not yet reviewed).**
+  `goldbot/ops/linux/mt5-box-upgrade.sh` has phases `precheck`, `install`, `post-reboot`, each re-runnable, printing a
+  PASS/FAIL table of states only. It refuses unless the market is closed (UTC window), no engine unit is active on the
+  box and the PD attests `--book-flat --engine-stopped` (the box cannot see the brain's engine or positions). Install
+  runs `goldbot-deploy <sha>`, then the four units and watchdog/probe scripts from root's own clone at exactly the sha,
+  stops the transient `goldbot-mt5-terminal-check`, enables the terminal unit and leaves the watchdog off; post-reboot
+  enables the watchdog timer and writes `/etc/goldbot/rollback-floor` only when the cold restart passes. RUNBOOK 0.5
+  "Attended MT5 box upgrade" has the single-line commands and the rollback if the test fails. Tests:
+  tests/test_mt5_box_upgrade_sh.py (29, fake systemctl/sudo/install, local git remote); shellcheck clean. Reviews due:
+  security (root-run, hash-checked download), SRE. Not run on a server.
+- Parallel research trials, serialized registry record (`research.yml`, `goldbot/research/cells.py`). The workflow is now
+  `plan` -> `trials` (matrix, `max-parallel: 10`, `contents: read` only) -> `record` (`concurrency: research-registry`,
+  the only job that writes the registry or an issue). Inputs: the existing single-trial ones (one cell per variant, so
+  `variants` now runs in parallel) and a new `batch` (JSON list of `{specialist, variants, pooled, timeframe, ...}`, a
+  missing key takes the dispatch input; max 64 cells). Each cell fetches bars and a read-only registry snapshot, runs
+  `research_pass.py` on a copy of it and uploads only the rows it added. `record` fetches the fresh registry under the
+  lock, merges the rows (registry_sync's keyed union, idempotent on a re-run), restates every deflated Sharpe and the
+  gate's DSR verdict on the FINAL `n_trials_effective` (`cells.restate_dsr`; the run's own value stays in
+  `results.dsr_at_run`), saves by the usual compare-and-swap and posts one comment per `research: <family>` issue.
+  - A cell's own report is provisional: its DSR and trial numbers use the snapshot count, not its siblings; the posted
+    report says so and shows `at run -> restated on K`.
+  - A cell that crashed, timed out or left no artifact records a `failed` trial row (counted in N, never passes a gate).
+    A cell refused before any look (budget, queue, holdout rule; a message, no traceback) records nothing and is listed.
+  - Known limit: each cell checks the quarter's budget on its snapshot, so a batch can overshoot it by up to its size;
+    the report states the quarter's count after the record. Size a batch to the remaining budget.
+- Continuous research loop, phase 1 (plan: docs/plans/continuous-research-loop.md; owner 2026-10-18 overrides: loop not bound by the quarterly 20, every 6 h, up to 16 parallel). `goldbot/research/generator.py` builds a deterministic grid (family x timeframe x exit settings at 75%/125%, each through `check_founder_config`) and drops tried hashes, screening/retired families and configs whose 0.01 lot would risk > 1.2x target at `research.loop_equity_usd` (ATR only). `scripts/research_queue.py` prints the batch JSON (max `research.loop_trials_per_run`, default 16, SEPARATE from `trial_budget_quarter`, unchanged; every trial is still a registry row so DSR uses the full K). The search window ends at the holdout start. `.github/workflows/research-loop.yml` runs every 6 h but only prints the batch: TODO phase 2 to dispatch research.yml once its `batch` input is on main, and `research_pass.py` still refuses beyond the quarterly budget, so a loop-budget path is needed there (lane ae61 area). At today's ATR only few 1h+ configs are sizable, so batches will be small. Not done: cost-stress, holdout requirement for loop configs, health job (phases 2-3).
+- **BACKLOG 89 (N1 `tod_periodicity`, implemented; awaiting quant-reviewer review).** Opt-in family in
+  `goldbot/features/tod_periodicity.py` (`enable()`, as `day_type`), also listed in `pipeline.OPT_IN_FEATURES` so
+  `DEFAULT_FEATURE_NAMES` and `f-079deacc61` / `f-51ac5ebabb` are unchanged. Six columns from the same 30-minute UTC
+  slot on earlier days, `available_utc` = slot close, joined with `asof_join`; own family, so its own group under O-4's
+  `family` map. Choices the amendment left open, for the quant reviewer: observations only from complete slots;
+  windows need the full N observations; 5-day staleness cap; `slot_ret_over_atr` = latest observation / (ATR14 / close
+  at that slot's last bar); columns are SIGNED (neutral 0, hit rate 0.5). Pin `tod_periodicity` into O-4's feature list
+  by 2026-12-11 or it drops. Tests: `tests/test_tod_periodicity.py`.
+- TradingView alerts now carry every indicator plot (owner, 2026-10-18). `Alert` takes `plots` (up to 64, `NaN`/`n/a`/empty -> None, infinity or out-of-bounds refused), `price` and an optional `signal` (default `plot`); old bodies still parse. Alerts are committed to a SQLite inbox (`state/tv.db`) before the 200 (503 if the write fails, so TradingView retries), idempotent on (indicator, version, symbol, tf, bar_time), then copied to the `tv_indicators` dataset (long format, source `indicator@version`, `available_utc = max(bar close, receipt)`). The unconsumed queue is gone. `goldbot/features/tradingview.py` (`tv_features`, opt-in feature `tradingview`) joins through `asof_join`; `GET /api/tradingview` shows last bar, alerts in 24 h, plots seen and gaps per indicator and timeframe (counts only). The webhook binds 127.0.0.1 (reverse proxy in front; the allow-list reads only the right-most `X-Forwarded-For` entry, only from loopback; `GOLDBOT_TV_ENFORCE_IP=0` turns it off) and `goldbot/ops/linux/systemd/goldbot-webhook.service` exists. Plan: docs/plans/tradingview-integration.md. Owner steps and the alert body template: RUNBOOK "TradingView alerts".
+- **Per-quarter trial budget override** (owner directive 2026-10-18): `research.trial_budget_overrides: {"2026Q4": 53}` raises one quarter's budget (`ResearchSettings.budget_for`, validated YYYYQn keys, values >= the base); research_pass, discovery, H-16, the director, the job runner, pre-registration, digest and API read it, other quarters keep `trial_budget_quarter`. Every trial is still recorded; deflated Sharpe counts the full K. Unblocks batch-2026-10-18.md.
 - An approval whose send raises is archived NOT CONFIRMED, never left placing (BACKLOG 84, implementer, 2026-10-17;
   trading-safety residual on BACKLOG 72).
   - `ApprovalCenter._finish`: if `on_decision` raises, the card's `placing` flag is cleared and it is archived with

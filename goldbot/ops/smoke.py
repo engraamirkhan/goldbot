@@ -64,6 +64,7 @@ from goldbot.execution.broker import (
     SymbolInfo,
     Tick,
 )
+from goldbot.execution.classifier import effective_class, read_stored
 from goldbot.ops.accounts import Account, verify_terminal_account
 from goldbot.ops.watchdog import loop_heartbeat_path
 from goldbot.risk.gate import (
@@ -124,7 +125,7 @@ STATE_SOURCES: dict[str, str] = {
     "other_notional": "Supervisor.read_state(state) exposure of the other accounts",
     "other_equity": "Supervisor.read_state(state) exposure of the other accounts",
     "combined_size_down": "Supervisor.read_state(state)['size_down']; a missing key refuses",
-    "account_class": "classifier_<account>.json class; missing or unreadable is unknown (refused)",
+    "account_class": "effective_class(declared account_class, classifier_<account>.json); neither known is unknown (refused)",
     "drift_halt": "drift.json system_halt; unreadable is a halt",
     "tick_ahead_s": "last_tick(): how far the tick is stamped ahead of now",
     "clock_mismatch": "server_clock.assess on the tick; no tick is a mismatch",
@@ -350,13 +351,9 @@ def _supervisor(state_dir: Path, account_id: str) -> tuple[bool, dict[str, float
     return bool(halt), other, bool(sup["size_down"])
 
 
-def _account_class(state_dir: Path, account_id: str) -> str:
-    path = state_dir / f"classifier_{account_id}.json"
-    try:
-        c = str(json.loads(path.read_text()).get("class") or "unknown") if path.exists() else "unknown"
-    except (OSError, ValueError, AttributeError):
-        c = "unknown"
-    return c if c in ("raw", "standard", "unknown") else "unknown"
+def _account_class(state_dir: Path, acc: Any) -> str:
+    """The same effective class the engine uses: declared baseline, measured cross-check, stricter wins."""
+    return effective_class(acc.account_class, read_stored(state_dir / f"classifier_{acc.account_id}.json"))
 
 
 def _unconfirmed_order(state_dir: Path, account_id: str) -> bool:
@@ -383,9 +380,12 @@ def _drift_halt(state_dir: Path) -> bool:
     return not isinstance(d, dict) or bool(d.get("system_halt"))
 
 
-def _open_book(positions: list[Position], sym: SymbolInfo, tick: Tick | None, fx: float | None
-               ) -> dict[str, Any]:
+def _open_book(positions: list[Position], sym: SymbolInfo, tick: Tick | None, fx: float | None,
+               symbol: str | None = None) -> dict[str, Any]:
+    """Lots, notional and stop risk of the account's own gold positions only: a foreign symbol (a manual EURUSD) is
+    neither gold lots nor an unknowable stop risk; it still counts through equity in the gate."""
     from goldbot.risk.open_risk import remaining_stop_risk
+    positions = [p for p in positions if p.symbol in {sym.name, symbol}]
     lots = round(sum(p.lots for p in positions), 6)
     mid = (tick.bid + tick.ask) / 2 if tick is not None else math.nan
     risk: float | None = 0.0
@@ -492,12 +492,12 @@ def smoke_state(broker: Any, bus: ApprovalBus, acc: Account, state_dir: Path, *,
         data_recovering=False,   # engine-only state (runner: healthy_resume_s after an engine data error)
         in_rollover=in_rollover, weekend=weekend,
         other_lots=other["lots"], other_notional=other["notional"], other_equity=other["equity"],
-        combined_size_down=size_down, account_class=_account_class(state_dir, acc.account_id),
+        combined_size_down=size_down, account_class=_account_class(state_dir, acc),
         drift_halt=_drift_halt(state_dir), clock_mismatch=clock is None or clock.status == "mismatch",
         market_closed=closed, tick_error=tick is None, bridge_incompatible=getattr(compat, "status", None) != "ok",
         unconfirmed_order=_unconfirmed_order(state_dir, acc.account_id),
         **_windows(cfg.limits, sessions, events, tick_ts, now),
-        **_open_book(positions, sym, tick, fx))
+        **_open_book(positions, sym, tick, fx, acc.symbol))
     new_day(st, now, risk["last_reset"])        # in memory only (S5)
     return st
 
