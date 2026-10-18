@@ -603,6 +603,9 @@ def _approved_through(tmp_path: Path, pb: PaperBroker, **cfg: Any) -> tuple[Any,
     from tests.test_engine_clock import _tick as _clock_tick
     tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "classifier_icm-demo.json").write_text(json.dumps({"class": "raw"}))   # a demo terminal's class
+    # a live engine beats its loop heartbeat; without one outbox.placing_abandoned (BACKLOG 86) is true
+    from goldbot.ops.watchdog import loop_heartbeat_path
+    loop_heartbeat_path(tmp_path, "icm-demo").write_text(json.dumps({"ts": time.time()}))
     pb.on_tick(_clock_tick(WED))
     eng, _, _ = _clock_engine(tmp_path, pb=pb, **cfg)
     bus = eng.center.bus = ApprovalBus(tmp_path)
