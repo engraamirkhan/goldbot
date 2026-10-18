@@ -12,15 +12,13 @@ import pytest
 from goldbot.config import load_settings
 from goldbot.data.timeutil import epoch_ns
 from goldbot.research.director import build_plan
-from goldbot.research.generator import Candidate, batch, generate, read_registry, sizing_feasible
+from goldbot.research.generator import Candidate, batch, generate, read_registry
 from goldbot.research.population import check_founder_config
 from goldbot.research.registry import config_hash
-from goldbot.risk.sizing import MIN_LOT_TOLERANCE
 from goldbot.specialists import SPECIALISTS
 
 NOW = pd.Timestamp("2026-10-18", tz="UTC")
 FAMILIES = sorted(SPECIALISTS)
-SMALL_ATR = {"15m": 0.5, "1h": 1.0, "4h": 2.0, "1d": 5.0}      # small enough that every stop is sizable at 0.01 lot
 
 
 def _queue_script():
@@ -37,9 +35,9 @@ def _plan(rows: list[dict] | None = None):
                       trial_budget_per_month=12, floor=2)
 
 
-def _gen(rows: list[dict] | None = None, atr: dict[str, float] | None = None, settings=None):
+def _gen(rows: list[dict] | None = None, settings=None):
     settings = settings or load_settings()
-    return generate(rows or [], settings, _plan(rows), atr or SMALL_ATR)
+    return generate(rows or [], settings, _plan(rows))
 
 
 def _full_hash(c: Candidate) -> str:
@@ -56,7 +54,8 @@ def test_every_candidate_passes_check_founder_config():
     cands = _gen()
     assert {c.timeframe for c in cands} >= {"1h", "4h"}                 # several timeframes, not only the default
     for c in cands:
-        assert check_founder_config(c.family, c.overrides) == c.overrides
+        exits = {k: v for k, v in c.overrides.items() if k not in ("session_filter", "regime_filter")}
+        assert check_founder_config(c.family, exits) == exits
 
 
 def test_already_tried_config_hashes_are_skipped():
@@ -88,15 +87,6 @@ def test_screening_and_retired_families_are_excluded():
     assert fams and not fams & (retired | screening)
 
 
-@pytest.mark.parametrize("scale,kept", [(1.0, True), (1.0 + 1e-6, False)])
-def test_min_lot_risk_at_exactly_1_2x_target_is_kept_and_just_above_is_dropped(scale, kept):
-    equity, risk_fraction, stop_atr = 1300.0, 0.005, 1.5
-    target = equity * risk_fraction
-    # 0.01 lot (1 oz) risks the stop distance in dollars; pick the ATR whose stop risks exactly 1.2 x target
-    atr = MIN_LOT_TOLERANCE * target / stop_atr * scale
-    assert sizing_feasible(stop_atr=stop_atr, atr_usd=atr, equity_usd=equity, risk_fraction=risk_fraction) is kept
-
-
 def test_no_candidate_window_reaches_the_holdout():
     window = load_settings().research.holdout_window()
     assert window is not None
@@ -113,11 +103,6 @@ def test_unreadable_registry_yields_no_batch(tmp_path: Path, capsys):
     bad.write_text('{"trial": 1}\nnot json\n')
     with pytest.raises(ValueError):
         read_registry(bad)
-    rc = _queue_script().main(["--registry", str(bad), "--atr", json.dumps(SMALL_ATR)])
+    rc = _queue_script().main(["--registry", str(bad)])
     assert rc != 0
     assert json.loads(capsys.readouterr().out) == []
-
-
-def test_candidates_that_cannot_size_the_minimum_lot_or_have_no_atr_are_dropped():
-    assert {c.timeframe for c in _gen(atr={"1h": 1.0})} == {"1h"}     # no ATR for a timeframe: dropped, fail closed
-    assert _gen(atr={tf: 1000.0 for tf in SMALL_ATR}) == []

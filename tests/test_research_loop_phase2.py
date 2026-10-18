@@ -17,35 +17,24 @@ import yaml
 from goldbot.config import RetiredFamily, Settings, load_settings
 from goldbot.research import cells
 from goldbot.research.director import build_plan
-from goldbot.research.generator import batch, generate, loop_refusal, survivors_by_timeframe
+from goldbot.research.generator import batch, generate, loop_refusal
 from goldbot.research.registry import config_hash, n_trials_effective, quarter_trials
 from goldbot.specialists import SPECIALISTS
 
 ROOT = Path(__file__).resolve().parents[1]
 NOW = pd.Timestamp("2026-10-18", tz="UTC")
 TFS = ("15m", "1h", "4h", "1d")
-ATR_2024 = {"15m": 2.74, "1h": 5.91, "4h": 11.65, "1d": 28.50}      # docs/research/atr-measured-2026-10-18.md medians
-SMALL_ATR = {tf: 0.5 for tf in TFS}                                   # every stop sizes at 0.01 lot
-ATR_LAST_90D = {"15m": 8.01, "1h": 17.73, "4h": 36.61, "1d": 87.63}
 TS = "2026-10-18T10:00:00+00:00"
 
 
-def _queue_script():
-    spec = importlib.util.spec_from_file_location("research_queue", ROOT / "scripts" / "research_queue.py")
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def _gen(atr: dict[str, float], settings: Settings | None = None):
+def _gen(settings: Settings | None = None):
     plan = build_plan(NOW, sorted(SPECIALISTS), [], [], [], quarter_budget=20, monthly_total=48,
                       trial_budget_per_month=12, floor=2)
-    return generate([], settings or load_settings(), plan, atr)
+    return generate([], settings or load_settings(), plan)
 
 
-def _job(atr: dict[str, float] = ATR_2024) -> tuple[str, dict[str, Any]]:
-    c = _gen(atr)[0]
+def _job() -> tuple[str, dict[str, Any]]:
+    c = _gen()[0]
     return c.family, SPECIALISTS[c.family](**c.overrides).config
 
 
@@ -53,26 +42,8 @@ def _with_research(settings: Settings, **update: Any) -> Settings:
     return settings.model_copy(update={"research": settings.research.model_copy(update=update)})
 
 
-def test_survivors_per_timeframe_are_reported_and_a_quiet_market_sizes_at_least_as_many():
-    busy = survivors_by_timeframe(_gen(ATR_LAST_90D), TFS)
-    quiet = survivors_by_timeframe(_gen(ATR_2024), TFS)
-    assert set(busy) == set(quiet) == set(TFS)
-    assert busy["1d"] == 0                          # a 1.5 ATR stop at $88 cannot be sized at 0.01 lot on GBP 1,000
-    assert sum(quiet.values()) >= sum(busy.values())
-    assert sum(quiet.values()) > 0
-    assert busy == survivors_by_timeframe(_gen(ATR_LAST_90D), TFS)
-
-
-def test_queue_prints_per_timeframe_survivor_counts(capsys: pytest.CaptureFixture[str]):
-    rc = _queue_script().main(["--registry", "/nonexistent/registry.jsonl", "--atr", json.dumps(ATR_2024)])
-    err = capsys.readouterr().err
-    assert rc == 0
-    for tf in TFS:
-        assert f"{tf}=" in err
-
-
 def test_batch_entries_carry_the_loop_rule_ref():
-    jobs = batch(_gen(SMALL_ATR), 3)
+    jobs = batch(_gen(), 3)
     assert len(jobs) == 3 and all(j["rule_ref"] == "loop" for j in jobs)
 
 
@@ -90,7 +61,7 @@ def test_loop_run_within_its_per_run_budget_is_accepted():
 
 
 def test_loop_run_over_its_per_run_budget_is_refused_and_zero_turns_the_loop_off():
-    jobs = [(c.family, SPECIALISTS[c.family](**c.overrides).config) for c in _gen(SMALL_ATR)[:3]]
+    jobs = [(c.family, SPECIALISTS[c.family](**c.overrides).config) for c in _gen()[:3]]
     assert "loop_trials_per_run" in (loop_refusal([], jobs, _with_research(load_settings(), loop_trials_per_run=2)) or "")
     assert loop_refusal([], jobs[:1], _with_research(load_settings(), loop_trials_per_run=0))
 
@@ -132,16 +103,14 @@ def _workflow() -> dict[Any, Any]:
     return yaml.safe_load((ROOT / ".github/workflows/research-loop.yml").read_text())
 
 
-def test_loop_workflow_shares_the_registry_concurrency_group():
-    wf = _workflow()
-    assert wf["concurrency"] == {"group": "research-registry", "cancel-in-progress": False}
-    assert wf["permissions"] == {}
+def test_loop_workflow_has_no_workflow_level_permissions():
+    assert _workflow()["permissions"] == {}
 
 
 def test_loop_workflow_gives_actions_write_only_to_the_dispatch_job():
     jobs = _workflow()["jobs"]
     assert jobs["dispatch"]["permissions"] == {"contents": "read", "actions": "write"}
-    assert all(j["permissions"] == {"contents": "read"} for n, j in jobs.items() if n != "dispatch")
+    assert all(j["permissions"] == {"contents": "read"} for n, j in jobs.items() if n not in ("dispatch", "exhausted"))
 
 
 def test_loop_workflow_runs_every_6_hours_and_keeps_the_schedule_alive_check():

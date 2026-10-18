@@ -692,6 +692,14 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
          positioning: pd.DataFrame | None = None, positioning_info: dict[str, Any] | None = None,
          us_calendar: pd.DataFrame | None = None, us_calendar_info: dict[str, Any] | None = None) -> int:
     lot_fit = LotFitSpec.from_settings(settings) if getattr(args, "lot_fit", False) else None
+    if args.rule_ref == LOOP_RULE_REF:
+        # the continuous research loop (ADR 0029): per-run budget, grid membership, no skipped screen, --lot-fit; every
+        # row is still written, so the deflated Sharpe counts it in K
+        refusal = loop_refusal(reg._rows(), [(j.family, j.config) for j in jobs], settings,
+                               score_holdout=args.score_holdout, skip_screen=args.skip_screen,
+                               lot_fit=bool(getattr(args, "lot_fit", False)))
+        if refusal:
+            raise SystemExit(refusal)
     day_type = bool(getattr(args, "day_type", False))
     feat_ctx, feat_names = feature_ctx(macro, positioning, us_calendar,
                                        calendar_features=bool(getattr(args, "us_calendar_features", False)),
@@ -724,11 +732,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
     # whose family and agent have a pending queued row with another config hash is refused, never charged to the open
     # budget (QueuedConfigMismatch)
     if args.rule_ref == LOOP_RULE_REF:
-        # the continuous research loop (ADR 0029): charged per run against research.loop_trials_per_run, not against
-        # the quarter's budget; every row is still written, so the deflated Sharpe counts it in K
-        refusal = loop_refusal(reg._rows(), [(j.family, j.config) for j in jobs], settings, score_holdout=args.score_holdout)
-        if refusal:
-            raise SystemExit(refusal)
+        # the continuous research loop (ADR 0029): refused above; charged per run, not against the quarter's budget
         quarter = quarter_of()
         preregs: list[dict[str, Any] | None] = [None] * len(jobs)
         rule_refs: list[str | None] = [LOOP_RULE_REF] * len(jobs)
