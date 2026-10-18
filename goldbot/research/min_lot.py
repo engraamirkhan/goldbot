@@ -11,7 +11,11 @@ presets and `atr_tf`) this reports:
 * min_equity_strict: the equity at which the minimum lot risks no more than the target risk;
 * min_equity_gate:   the equity at which the gate accepts it (within its 1.2x tolerance);
 * at a given equity: the raw and rounded lots, the risk the trade really takes and whether the gate would allow it
-  (sizing rule only: caps, margin and the other gate checks are not evaluated here).
+  (sizing rule only: margin and the other gate checks are not evaluated here). It agrees with the gate exactly
+(tests/test_min_lot_gate_parity.py): risk is in the account currency through `sizing.account_fx` (a non-USD account
+without a conversion is `fx_conversion_unavailable`, never a guess) and the minimum-lot exception (`min_lot_risk_cap`,
+`RiskGate.min_lot_cap`: clamped to the per-trade maximum, halved in size-down, off when null) places exactly the
+minimum lot where the 1.2x tolerance would refuse it. Equities are in the account currency.
 Price basis: the store's bars are Dukascopy bid/ask; price and ATR here are on the mid (as research and the labels
 use), so the broker's own bid/ask ATR and stop can differ by about a spread.
 """
@@ -47,14 +51,6 @@ class LotSpec(FrozenRecord):
     volume_max: float = Field(50.0, gt=0)
 
 
-class _Limits(FrozenRecord):
-    """The sizing bounds (gate.RiskLimits fields that sizing reads)."""
-
-    risk_per_trade: float = Field(gt=0)
-    max_risk_per_trade: float = Field(gt=0)
-    multiplier_bounds: tuple[float, float]
-
-
 class Feasibility(FrozenRecord):
     family: str | None = None
     preset: str | None = None               # a registered preset (e.g. tsmom "slow", H-01)
@@ -71,9 +67,15 @@ class Feasibility(FrozenRecord):
     size_down: bool = False                 # 8% stage: risk halved and multiplier capped at 0.5
     risk_fraction: float                    # the gate's target: risk per trade x multiplier after all of the above
     lot: LotSpec
+    account_currency: str = "USD"
+    acct_per_usd: float | None = None       # the conversion the gate uses (None on USD: 1)
+    min_lot_risk_cap: float | None = None   # the gate's exception cap after the clamp and size-down halving (None: off)
     min_lot_risk_usd: float                 # what the minimum lot loses at the stop
-    min_equity_strict: float                # minimum lot risk <= risk_fraction
-    min_equity_gate: float                  # minimum lot risk <= 1.2 x risk_fraction (the gate's rule)
+    min_lot_risk_acct: float | None = None  # the same in the account currency (None: no usable conversion)
+    min_equity_strict: float | None = None  # account currency: minimum lot risk <= risk_fraction
+    min_equity_gate: float | None = None    # minimum lot risk <= 1.2 x risk_fraction (the gate's tolerance)
+    min_equity_exception: float | None = None   # minimum lot risk <= the exception cap (None: exception off)
+    min_lot_exception: bool = False         # the lot is placed by the exception, not by the tolerance
     equity: float | None = None
     lots_raw: float | None = None
     lots: float | None = None
@@ -89,10 +91,12 @@ def min_lot_feasibility(*, price: float, risk_fraction: float, stop_distance: fl
                         stops_level_points: float = 0.0, spread_points: float = 0.0, point: float = 0.01,
                         family: str | None = None, preset: str | None = None, timeframe: str | None = None,
                         atr_timeframe: str | None = None, as_of_utc: pd.Timestamp | None = None,
-                        price_basis: str = "as given") -> Feasibility:
+                        price_basis: str = "as given", account_currency: str = "USD",
+                        acct_per_usd: float | None = None, min_lot_risk_cap: float | None = None) -> Feasibility:
     """Feasibility of the minimum lot for one stop. `risk_fraction` is the phase's risk per trade; `stop_distance` in
-    $/oz, or `atr_usd` x `stop_atr`, floored at the stops level plus the spread as the gate does."""
-    from goldbot.risk import sizing
+    $/oz, or `atr_usd` x `stop_atr`, floored at the stops level plus the spread as the gate does. `account_currency`
+and `acct_per_usd` are the gate's conversion; `min_lot_risk_cap` is `risk.min_lot_risk_cap` (the gate's exception)."""
+    from goldbot.risk import RiskGate, RiskLimits, sizing
     lot = lot or LotSpec()
     if stop_distance is None:
         if atr_usd is None or stop_atr is None:
@@ -103,21 +107,39 @@ def min_lot_feasibility(*, price: float, risk_fraction: float, stop_distance: fl
         stop = max(stop_distance, stops_level_points * point + spread_points * point)
     if not (math.isfinite(stop) and stop > 0 and risk_fraction > 0 and multiplier > 0):
         raise ValueError(f"stop distance {stop}, risk {risk_fraction} and multiplier {multiplier} must be > 0")
-    limits = _Limits(risk_per_trade=risk_fraction, max_risk_per_trade=max_risk_per_trade,
-                     multiplier_bounds=multiplier_bounds)
+    limits = RiskLimits(risk_per_trade=risk_fraction, max_risk_per_trade=max_risk_per_trade,
+                        multiplier_bounds=multiplier_bounds, min_lot_risk_cap=min_lot_risk_cap)
     eff = effective_risk(limits, size_down, multiplier)
+    cap = RiskGate(limits).min_lot_cap(size_down)
+    fx = sizing.account_fx(account_currency, acct_per_usd)
     min_risk_usd = lot.volume_min * stop * lot.contract_oz
+    min_risk_acct = None if fx is None else min_risk_usd * fx
     out: dict[str, Any] = dict(
         family=family, preset=preset, timeframe=timeframe, atr_timeframe=atr_timeframe, as_of_utc=as_of_utc,
         price_basis=price_basis, price=price, atr_usd=atr_usd, stop_atr=stop_atr, stop_distance=stop,
         risk_per_trade=risk_fraction, multiplier=eff.mult, size_down=size_down, risk_fraction=eff.target, lot=lot,
-        min_lot_risk_usd=min_risk_usd, min_equity_strict=min_risk_usd / eff.target,
-        min_equity_gate=min_risk_usd / min(MIN_LOT_TOLERANCE * eff.target, eff.max_risk))   # the gate's tolerance
+        account_currency=account_currency, acct_per_usd=acct_per_usd, min_lot_risk_cap=cap,
+        min_lot_risk_usd=min_risk_usd, min_lot_risk_acct=min_risk_acct)
+    if min_risk_acct is not None:
+        out.update(min_equity_strict=min_risk_acct / eff.target,
+                   min_equity_gate=min_risk_acct / min(MIN_LOT_TOLERANCE * eff.target, eff.max_risk),   # the gate's
+                   min_equity_exception=None if cap is None else min_risk_acct / cap)
     if equity is not None:
-        sz = size_lots(equity=equity, risk=eff, stop_distance=stop, contract_oz=lot.contract_oz,
-                       volume_min=lot.volume_min, volume_step=lot.volume_step, volume_max=lot.volume_max)
-        out.update(equity=equity, lots_raw=sz.lots_raw, lots=round(sz.lots, 2), actual_risk_fraction=sz.realised_risk,
-                   allowed=not sz.refused, reason="min_lot_exceeds_risk" if sz.refused else None)
+        out["equity"] = equity
+        if fx is None:
+            out.update(allowed=False, reason="fx_conversion_unavailable")
+        else:
+            sz = size_lots(equity=equity, risk=eff, stop_distance=stop, contract_oz=lot.contract_oz,
+                           volume_min=lot.volume_min, volume_step=lot.volume_step, volume_max=lot.volume_max,
+                           acct_per_usd=fx)
+            lots, realised, refused, exc = sz.lots, sz.realised_risk, sz.refused, False
+            if refused:                      # gate.check: the minimum-lot exception, exactly the minimum lot
+                lots = lot.volume_min
+                realised = lots * sz.risk_per_lot / equity
+                refused = cap is None or lots > lot.volume_max or realised > cap
+                exc = not refused
+            out.update(lots_raw=sz.lots_raw, lots=round(lots, 2), actual_risk_fraction=realised, allowed=not refused,
+                       min_lot_exception=exc, reason="min_lot_exceeds_risk" if refused else None)
     return Feasibility.model_validate(out)
 
 
@@ -192,24 +214,26 @@ def specialist_configs(timeframes: list[str] | None = None) -> list[tuple[str, s
     return out
 
 
-def _fmt_usd(x: float | None) -> str:
-    return "-" if x is None else f"${x:,.0f}"
+def _fmt_usd(x: float | None, sym: str = "$") -> str:
+    return "-" if x is None else f"{sym}{x:,.0f}"
 
 
 def format_rows(rows: list[Feasibility]) -> str:
     head = (f"{'family':<18} {'tf':<4} {'atr tf':<6} {'price':>9} {'ATR':>7} {'stop':>7} {'0.01 lot risk':>13} "
             f"{'min equity (<=risk)':>20} {'min equity (gate 1.2x)':>23}")
+    sym = "£" if rows and rows[0].account_currency.upper() == "GBP" else "$"      # equities are account currency
     eq = next((r.equity for r in rows if r.equity is not None), None)
     if eq is not None:
-        head += f"   at {_fmt_usd(eq)}: lots  risk    gate"
+        head += f"   at {_fmt_usd(eq, sym)}: lots  risk    gate"
     lines = [head]
     for r in rows:
         name = (r.family or "-") + (f":{r.preset}" if r.preset else "")
         line = (f"{name:<18} {(r.timeframe or '-'):<4} {(r.atr_timeframe or '-'):<6} {r.price:>9.2f} "
                 f"{(f'{r.atr_usd:.2f}' if r.atr_usd is not None else '-'):>7} {r.stop_distance:>7.2f} "
-                f"{_fmt_usd(r.min_lot_risk_usd):>13} {_fmt_usd(r.min_equity_strict):>20} {_fmt_usd(r.min_equity_gate):>23}")
+                f"{_fmt_usd(r.min_lot_risk_usd):>13} {_fmt_usd(r.min_equity_strict, sym):>20} "
+                f"{_fmt_usd(r.min_equity_gate, sym):>23}")
         if r.equity is not None and r.actual_risk_fraction is not None:
-            line += f"   {r.lots:>13.2f} {r.actual_risk_fraction:>5.2%}  {'ok' if r.allowed else 'refused'}"
+            line += f"   {r.lots:>13.2f} {r.actual_risk_fraction:>5.2%}  {'exception' if r.min_lot_exception else 'ok' if r.allowed else r.reason or 'refused'}"
         lines.append(line)
     if rows:
         r0 = rows[0]
@@ -234,6 +258,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--size-down", action="store_true", help="the 8%% stage: risk halved, multiplier capped at 0.5")
     ap.add_argument("--equity", type=float, default=None, help="also report lots and real risk at this equity")
     ap.add_argument("--contract", type=float, default=CONTRACT_OZ)
+    ap.add_argument("--currency", default="USD", help="account deposit currency (the gate's conversion)")
+    ap.add_argument("--acct-per-usd", type=float, default=None,
+                    help="account currency per USD (the broker's conversion; required for a non-USD account)")
+    ap.add_argument("--min-lot-risk-cap", type=float, default=None,
+                    help="the minimum-lot exception cap (default: settings risk.min_lot_risk_cap; none in tiny-live)")
     ap.add_argument("--min-lot", type=float, default=0.01)
     ap.add_argument("--lot-step", type=float, default=0.01)
     ap.add_argument("--stops-level-points", type=float, default=0.0, help="broker stops level (stop floor)")
@@ -253,7 +282,10 @@ def main(argv: list[str] | None = None) -> int:
     lot = LotSpec(contract_oz=args.contract, volume_min=args.min_lot, volume_step=args.lot_step)
     common: dict[str, Any] = dict(equity=args.equity, lot=lot, multiplier=args.multiplier, size_down=args.size_down,
                                   multiplier_bounds=gl.multiplier_bounds, max_risk_per_trade=gl.max_risk_per_trade,
-                                  stops_level_points=args.stops_level_points, point=gl.point)
+                                  stops_level_points=args.stops_level_points, point=gl.point,
+                                  account_currency=args.currency, acct_per_usd=args.acct_per_usd,
+                                  min_lot_risk_cap=(args.min_lot_risk_cap if args.min_lot_risk_cap is not None
+                                                    else gl.min_lot_risk_cap))
     rows: list[Feasibility] = []
     if args.price is not None:
         rows.append(min_lot_feasibility(price=args.price, stop_distance=args.stop_distance, atr_usd=args.atr,

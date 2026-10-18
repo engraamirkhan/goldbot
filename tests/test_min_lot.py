@@ -72,7 +72,7 @@ def test_agrees_with_the_risk_gate_on_whether_the_minimum_lot_is_allowed(equity:
     assert f.allowed == d.allowed
     if d.allowed:
         assert f.lots == pytest.approx(d.lots) and f.actual_risk_fraction == pytest.approx(d.risk_fraction)
-    assert (equity >= f.min_equity_gate) == d.allowed
+    assert f.min_equity_gate is not None and (equity >= f.min_equity_gate) == d.allowed
 
 
 def _bars(n: int, close: float, rng_usd: float) -> pd.DataFrame:
