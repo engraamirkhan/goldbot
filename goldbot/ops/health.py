@@ -187,6 +187,7 @@ from goldbot.ops.checks.services import (
     check_schema_skew,
     check_service_schema_skew,
 )
+from goldbot.ops.tv_pull_health import check_tv_pull
 
 # the public surface: every name this module exposed before the checks moved to goldbot/ops/checks/ (callers and
 # tests import and patch them here)
@@ -321,6 +322,7 @@ __all__ = [
     "check_throttle",
     "check_tick_errors",
     "check_tick_record",
+    "check_tv_pull",
     "exit_code",
     "heartbeat_path",
     "log",

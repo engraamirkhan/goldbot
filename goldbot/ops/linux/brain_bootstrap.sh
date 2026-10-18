@@ -100,7 +100,7 @@ cat > /usr/local/bin/goldbot <<'WRAP'
 # e.g. goldbot accounts bridge-use icm-demo   |   goldbot run health
 set -euo pipefail
 mod=$1; shift
-cd /opt/goldbot && exec sudo -u goldbot -H env PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring \
+cd /opt/goldbot && exec sudo -u goldbot -H env PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring GOLDBOT_ALLOW_PLAINTEXT=1 \
   /opt/goldbot/.venv/bin/python -m "goldbot.ops.$mod" "$@"
 WRAP
 chmod 755 /usr/local/bin/goldbot

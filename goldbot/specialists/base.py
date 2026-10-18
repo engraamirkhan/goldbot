@@ -6,6 +6,7 @@ P(target hit before stop) for each candidate. Nothing here predicts direction on
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 from abc import ABC, abstractmethod
@@ -17,6 +18,7 @@ from pydantic import Field
 from goldbot.base import FrozenRecord, Record
 from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.labels.triple_barrier import BarrierSpec
+from goldbot.specialists.loop_filters import apply_filters, validate
 
 
 class AgentIdentity(FrozenRecord):
@@ -73,6 +75,16 @@ class Specialist(ABC):
     # walk-forward trial of its exact configuration still becomes a shadow founder (gap_watch `research_ready`)
     screening: bool = False
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Every subclass's own `candidates` and `candidates_in_context` pass through the loop's optional filters
+        (`specialists.loop_filters`; no filter set: unchanged), so research, the shadow book and the live engine see the
+        same candidates whatever entry point they use."""
+        super().__init_subclass__(**kwargs)
+        for name in ("candidates", "candidates_in_context"):
+            fn = cls.__dict__.get(name)
+            if fn is not None:
+                setattr(cls, name, _filtered(fn))
+
     def __init__(self, identity: AgentIdentity | None = None, **overrides: Any) -> None:
         asked = (identity.config if identity is not None else overrides).get(TIMEFRAME_KEY, type(self).timeframe)
         base = {**self.default_config, **self.timeframe_defaults.get(asked, {})}
@@ -81,6 +93,7 @@ class Specialist(ABC):
         cfg = {k: v for k, v in {**base, **overrides}.items() if k not in unused}
         self.identity = identity or AgentIdentity(family=self.family, config=cfg)
         self.config = {**base, **self.identity.config}
+        validate(self.config)
         tf = self.config.get(TIMEFRAME_KEY, type(self).timeframe)
         if tf != type(self).timeframe and tf not in self.timeframes:
             raise ValueError(f"{self.family} does not run on {tf}; allowed: {(type(self).timeframe, *self.timeframes)}")
@@ -136,6 +149,13 @@ class Specialist(ABC):
         return {"agent_id": self.agent_id, "family": self.family, "timeframe": self.timeframe,
                 "config": self.config, "label_spec": self.label_spec.model_dump(), "exit": self.exit_policy(),
                 "parent": self.identity.parent_id, "generation": self.identity.generation}
+
+
+def _filtered(fn: Any) -> Any:
+    @functools.wraps(fn)
+    def wrapper(self: Specialist, mid_bars: pd.DataFrame, features: pd.DataFrame, *args: Any, **kwargs: Any) -> pd.DataFrame:
+        return apply_filters(self.config, fn(self, mid_bars, features, *args, **kwargs), features)
+    return wrapper
 
 
 SPECIALISTS: dict[str, type[Specialist]] = {}

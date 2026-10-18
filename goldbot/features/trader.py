@@ -263,6 +263,79 @@ def f_fair_value_gaps(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------- order blocks
+def _order_block_report_loop(disp: np.ndarray, opposite: np.ndarray, lo: np.ndarray, h: np.ndarray, c: np.ndarray,
+                             a: np.ndarray, search: int, max_age: int, bullish: bool) -> dict[str, np.ndarray]:
+    """The per-bar book `_order_block_report` replaces. Used only when a high, low or close is not finite: min() over
+    NaN keys depends on list order, which the sorted version does not reproduce, so those bars keep the old loop."""
+    n = len(c)
+    rep = _nearest_report(n)
+    book: list[tuple[float, float, int, int]] = []     # (low, high, candle, born)
+    for i in range(n):
+        book = [b for b in book if (c[i] >= b[0] if bullish else c[i] <= b[1]) and b[3] >= i - max_age]
+        if disp[i]:
+            for j in range(i - 1, max(i - 1 - search, -1), -1):
+                if opposite[j]:
+                    if all(b[2] != j for b in book):
+                        book.append((float(lo[j]), float(h[j]), j, i))
+                    break
+        if book:
+            if bullish:
+                b = min(book, key=lambda x: (max(c[i] - x[1], 0.0), -x[3]))
+                rep["dist"][i] = (c[i] - b[1]) / a[i]
+            else:
+                b = min(book, key=lambda x: (max(x[0] - c[i], 0.0), -x[3]))
+                rep["dist"][i] = (b[0] - c[i]) / a[i]
+            rep["age"][i] = i - b[3]
+        rep["count"][i] = len(book)
+    return rep
+
+
+def _order_block_report(disp: np.ndarray, opposite: np.ndarray, lo: np.ndarray, h: np.ndarray, c: np.ndarray,
+                        a: np.ndarray, search: int, max_age: int, bullish: bool) -> dict[str, np.ndarray]:
+    """One side's order-block book without a per-bar loop. A displacement at bar i adds the nearest opposite candle j
+    within `search` bars back, unless a block for j is still active. A block is active from its birth bar until the
+    first later bar that closes through it (below its low for a bullish block, above its high for a bearish one) or
+    is more than `max_age` bars after birth. Active blocks are expanded to (block, bar) pairs, and the nearest block
+    per bar (smallest distance from the close to the zone, ties to the newest) is the first pair in a lexsort."""
+    if not (np.isfinite(h).all() and np.isfinite(lo).all() and np.isfinite(c).all()):
+        return _order_block_report_loop(disp, opposite, lo, h, c, a, search, max_age, bullish)
+    n = len(c)
+    rep = _nearest_report(n)
+    born_l: list[int] = []
+    cand_l: list[int] = []
+    death_l: list[int] = []
+    dies_at: dict[int, int] = {}                     # candle -> bar at which its latest block stops being active
+    for i in map(int, np.flatnonzero(disp)):
+        for j in range(i - 1, max(i - 1 - search, -1), -1):
+            if opposite[j]:
+                if dies_at.get(j, -1) <= i:          # no active block for this candle
+                    stop = min(i + max_age + 1, n)
+                    seg = c[i + 1: stop]
+                    dead = ~(seg >= lo[j]) if bullish else ~(seg <= h[j])
+                    k = int(np.argmax(dead)) if dead.any() else -1
+                    death = i + 1 + k if k >= 0 else i + max_age + 1
+                    dies_at[j] = death
+                    born_l.append(i)
+                    cand_l.append(j)
+                    death_l.append(death)
+                break
+    if not born_l:
+        return rep
+    born, cand, death = np.array(born_l), np.array(cand_l), np.minimum(np.array(death_l), n)
+    length = death - born
+    blk = np.repeat(np.arange(len(born)), length)
+    bar = np.arange(int(length.sum())) - np.repeat(np.cumsum(length) - length, length) + born[blk]
+    rep["count"] = np.bincount(bar, minlength=n).astype(float)
+    ref = h[cand] if bullish else lo[cand]
+    gap = np.maximum(c[bar] - ref[blk], 0.0) if bullish else np.maximum(ref[blk] - c[bar], 0.0)
+    best = np.lexsort((-born[blk], gap, bar))        # per bar: smallest gap, newest first
+    first = best[np.concatenate(([True], bar[best][1:] != bar[best][:-1]))]
+    i, b = bar[first], blk[first]
+    rep["dist"][i] = ((c[i] - ref[b]) if bullish else (ref[b] - c[i])) / a[i]
+    rep["age"][i] = i - born[b]
+    return rep
+
+
 @feature("order_blocks", "smc", lookback=1000)
 def f_order_blocks(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     """Nearest active bullish and bearish order block: (close - block high) / ATR for a bullish block (negative when
@@ -275,33 +348,13 @@ def f_order_blocks(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     max_age = int(ctx.get("smc_max_age", 400))
     o, h, lo, c = _hlo(df)
     a = atr(df, 14).to_numpy(dtype=float)
-    n = len(df)
     hf, hp, lf, lp = _confirmed_swing_levels(df, lag)
     prev_sh, prev_sl = _last_known_before(hf, hp), _last_known_before(lf, lp)
     body = c - o
     bull_disp = (body > k * a) & (c > prev_sh)       # NaN ATR or no swing yet compare False
     bear_disp = (-body > k * a) & (c < prev_sl)
-    bull, bear = _nearest_report(n), _nearest_report(n)
-    up: list[tuple[float, float, int, int]] = []     # (low, high, candle, born)
-    dn: list[tuple[float, float, int, int]] = []
-    for i in range(n):
-        up = [b for b in up if c[i] >= b[0] and b[3] >= i - max_age]      # closed below its low: invalidated
-        dn = [b for b in dn if c[i] <= b[1] and b[3] >= i - max_age]
-        for disp, book, opposite in ((bull_disp, up, body < 0), (bear_disp, dn, body > 0)):
-            if not disp[i]:
-                continue
-            for j in range(i - 1, max(i - 1 - search, -1), -1):
-                if opposite[j]:
-                    if all(b[2] != j for b in book):
-                        book.append((float(lo[j]), float(h[j]), j, i))
-                    break
-        if up:
-            b = min(up, key=lambda x: (max(c[i] - x[1], 0.0), -x[3]))
-            bull["dist"][i], bull["age"][i] = (c[i] - b[1]) / a[i], i - b[3]
-        if dn:
-            b = min(dn, key=lambda x: (max(x[0] - c[i], 0.0), -x[3]))
-            bear["dist"][i], bear["age"][i] = (b[0] - c[i]) / a[i], i - b[3]
-        bull["count"][i], bear["count"][i] = len(up), len(dn)
+    bull = _order_block_report(bull_disp, body < 0, lo, h, c, a, search, max_age, bullish=True)
+    bear = _order_block_report(bear_disp, body > 0, lo, h, c, a, search, max_age, bullish=False)
     out = Columns(df.index)
     for side, r in (("bull", bull), ("bear", bear)):
         out[f"ob_{side}_dist_atr"] = r["dist"]

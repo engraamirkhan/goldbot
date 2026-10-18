@@ -184,7 +184,7 @@ def test_build_scheduler_registers_every_job(tmp_path):
                    "monthly_research": "2026-10-04T08:00:00+00:00", "calendar_archive": "2026-10-03T06:10:00+00:00",
                    "agents_presession": "2026-10-05T06:30:00+00:00", "recalibrate": "2026-10-03T11:30:00+00:00", "drift_watch": "2026-10-02T23:40:00+00:00",
                    "gap_watch": "2026-10-02T23:55:00+00:00", "feed_reconcile": "2026-10-02T23:20:00+00:00",
-                   "broker_ledger": "2026-10-02T23:25:00+00:00",
+                   "broker_ledger": "2026-10-02T23:25:00+00:00", "tv_reconcile": "2026-10-02T23:15:00+00:00",
                    "backup": "2026-10-02T22:15:00+00:00", "restore_drill": "2026-10-04T10:00:00+00:00",
                    "attribution": "2026-10-02T23:50:00+00:00", "tick_record": "2026-10-02T21:10:00+00:00",
                    "tick_record_winter": "2026-10-02T22:10:00+00:00",

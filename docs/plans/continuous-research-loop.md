@@ -154,3 +154,25 @@ continue doing it indefinitely and adding to system as a strategy is proven to b
 - Open item for phase 2 (lane ae61 owns `research.yml`, `cells.py`): `scripts/research_pass.py` still refuses runs beyond
   `trial_budget_quarter` (TrialRegistry.check_budget), so a loop batch needs a loop-budget path there before the
   schedule can run. Phase 1 (generator, queue script, settings) does not touch it.
+
+## Loop grid v1 (declared 2026-10-18, before the first loop run; quant ruling on phase 2)
+
+This section is the pre-declaration. The generator (`goldbot/research/generator.py`) builds exactly this set, and
+`research_pass.py` refuses any `rule_ref=loop` job whose configuration is not a member (recomputed from the code and
+settings at run time). Changing the grid is a new dated section here before it runs, never a silent edit.
+
+- **Families:** every registered specialist that is neither under its pre-registered screen (`screening`: the loop never
+  runs or varies a screen; asia_drift today) nor in `research.retired_families`. Today that is `tsmom` only.
+- **Timeframes:** the family's own plus its `timeframes` (15m, 1h, 4h, 1d where it allows them).
+- **One dimension at a time, never combined**, each on every (family, timeframe): the default; `target_atr`, `stop_atr`,
+  `max_bars` at 75% and 125% of the timeframe's default; `session_filter` asia, london, newyork (15m and 1h only);
+  `regime_filter` low_vol (`vol_tercile` == 0), not_high_vol (`vol_tercile` <= 1), trending (`adx14` >= 25), ranging
+  (`adx14` < 20). Filters read only the decision bar's own trailing features (`goldbot/specialists/loop_filters.py`).
+- **No sizing pre-filter.** Every loop trial runs with `--lot-fit`: account fit is reported with the result, and RiskGate
+  still refuses what cannot be sized at execution. Skipping the screen (`--skip-screen`), scoring the holdout and
+  discovery are refused for loop runs.
+- **Size today:** 15m 0, 1h 14, 4h 11, 1d 11 (36 trials; 15m is empty because every 15m family is retired).
+- **Exhausted:** when every member is a trial in the registry the queue prints `grid exhausted`, exits 3, the workflow
+  writes it to the job summary and comments once a week on the status issue for the research director. It never ends
+  as a silent empty batch.
+- K: gates keep the raw running K; cluster K_eff is information only (ADR 0029).

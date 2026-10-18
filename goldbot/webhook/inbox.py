@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +74,15 @@ class TvInbox:
         conn = self._conn()
         try:
             return int(conn.execute("SELECT COUNT(*) FROM tv_alerts").fetchone()[0])
+        finally:
+            conn.close()
+
+    def count_since(self, since: datetime) -> int:
+        """Rows received at or after `since` (the webhook's per-hour cap)."""
+        conn = self._conn()
+        try:
+            return int(conn.execute("SELECT COUNT(*) FROM tv_alerts WHERE received_utc >= ?",
+                                    (_iso(pd.Timestamp(since)),)).fetchone()[0])
         finally:
             conn.close()
 

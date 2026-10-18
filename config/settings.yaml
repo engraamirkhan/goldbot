@@ -155,6 +155,7 @@ scheduler:
   attribution:      { kind: daily,   at: "23:50", max_late_hours: 20 }                  # R by family/session/regime/cost -> state/attribution.json
 
   feed_reconcile:   { kind: daily,   at: "23:20", weekdays: [0, 1, 2, 3, 4], max_late_hours: 8 }   # D12: engine bars vs broker M1, last day
+  tv_reconcile:     { kind: daily,   at: "23:15", max_late_hours: 20 }                  # TradingView bars (OANDA, second feed) vs Dukascopy/broker M1: >2 points -> dq + NaN plots
   broker_ledger:    { kind: daily,   at: "23:25", max_late_hours: 20 }                  # GAP-07/08: balance snapshot, positions + balance vs broker
   tick_record:      { kind: daily,   at: "21:10", max_late_hours: 0.5 }                 # BACKLOG 79: broker ticks -> state/ticks/, in the daily break (US summer time)
   tick_record_winter: { kind: daily, at: "22:10", max_late_hours: 0.5 }                 #   ... and in the winter break; outside the break or weekend a run skips
@@ -181,8 +182,8 @@ research:
   trial_budget_quarter: 20           # pre-registered trials per calendar quarter across all families (P2); raising it is an owner decision
   trial_budget_overrides: {"2026Q4": 53}   # owner directive 2026-10-18: backtest as much as needed; batch-2026-10-18.md
   loop_trials_per_run: 16            # continuous research loop (owner 2026-10-18): trials per scheduled batch, separate from the
-                                     #   quarterly budget (ADR 0029); every one is a registry row and the deflated Sharpe counts the full K. 0 = off
-  loop_equity_usd: 1300              # the loop drops a configuration whose 0.01 lot would risk > 1.2x target at this equity (GBP 1,000)
+                                     #   quarterly budget; every one is a registry row and the deflated Sharpe counts the full K. 0 = off
+                                     #   (ADR 0029; a loop trial cites rule_ref=loop, the quarterly count skips it, K counts it)
   reserved_trials_quarter:           # held for each quarter's pre-registered queue; a quarter not listed holds none
     "2027Q1": 8                      #   preregistration-2027Q1.md: 4 queued rows + 4 contingent H-02 survivor slots (ADR
                                      #   0007; H-06 withdrawn by its rule 2026-10-16, run 38931951849). The director,
@@ -350,3 +351,6 @@ ticks:                               # broker tick record (goldbot/data/ticks.py
   pause_s: 0.2                       # pause between pages so the engine's quote reads get the bridge
   page_limit_s: 2.0                  # a slower page stops the run (engine orders older than 10 s are refused)
   run_budget_s: 300                  # per account per run; an unfinished day is not written and is pulled next run
+
+webhook:                             # TradingView receiver (goldbot/webhook/app.py)
+  max_rows_per_hour: 5000            # inbox rows in the last hour; beyond it 429 (bounds what a leaked secret can write)
