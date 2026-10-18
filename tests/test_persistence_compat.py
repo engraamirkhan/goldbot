@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from goldbot.base import Record, SkewSummary
 from goldbot.config import load_settings
-from goldbot.data import crossfeed
+from goldbot.data import crossfeed, tv_pull
 from goldbot.data.ticks import TickIndex
 from goldbot.engine.runner import OpenTrade, PendingClose, SentOrder
 from goldbot.engine.shadow import ShadowBook, VersionBook
@@ -372,7 +372,9 @@ def test_every_persisted_record_model_has_a_compat_case():
                SentOrder, OpenTrade, PendingClose,
                # engine_<account>.json `schema_skew`: tests/test_schema_skew_health.py::
                # test_health_reads_a_skew_block_a_newer_engine_wrote
-               SkewSummary}
+               SkewSummary,
+               # state/tv.db pull log: tests/test_tv_pull.py::test_pull_log_rows_a_newer_release_wrote_still_read
+               tv_pull.PassReport, tv_pull.StudyMeta, tv_pull.StudySpec}
     loaded = {f.model for f in _tolerant_finds() if f.model not in GENERIC_MODEL_ARGS.values()}
     assert loaded - {m.__name__ for m in covered} == set()
 

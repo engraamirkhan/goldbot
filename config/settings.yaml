@@ -354,3 +354,26 @@ ticks:                               # broker tick record (goldbot/data/ticks.py
 
 webhook:                             # TradingView receiver (goldbot/webhook/app.py)
   max_rows_per_hour: 5000            # inbox rows in the last hour; beyond it 429 (bounds what a leaked secret can write)
+
+tv_pull:                             # TradingView direct pull (goldbot/data/tv_pull.py, ADR 0030): read-only, cookie in the keyring
+  enabled: false                     # the owner turns it on in settings.local.yaml once both cookies are in the keyring (RUNBOOK 2.8)
+  symbols: {"OANDA:XAUUSD": XAUUSD}  # chart symbol -> store symbol; layouts are read for indicators, only these are pulled
+  timeframes: ["15", "60", "240", "1D"]
+  sessionid_key: tradingview-sessionid            # keyring entry names only (browser cookies sessionid and
+  sessionid_sign_key: tradingview-sessionid-sign  #   sessionid_sign); the values never appear in a file
+  discover: true                     # read the saved layouts for their indicators (no owner naming or listing)
+  discover_every_s: 21600            # layouts re-read every 6 h
+  max_studies: 20                    # indicators pulled per pass at most
+  min_interval_s: 5.0                # between any two requests (GET, series, history page, study)
+  bars_per_request: 1000             # bars per series load and per history page
+  max_pages_per_tf: 10               # history pages per timeframe and pass (backfill reaches what the plan serves)
+  max_requests_per_day: 3000         # rolling 24 h; a pass beyond it is skipped, never queued
+  study_warmup_bars: 300             # the oldest loaded bars' study values are dropped (an EMA needs its warm-up)
+  poll_interval_s: 900               # `tv-pull follow`: one pass per 15m bar ...
+  poll_offset_s: 60                  #   ... this long after the close
+  live_max_lag_s: 1800               # a bar received within this of its close is pull_live (available_utc = received)
+  history_latency_default_s: 960     # pull_history available_utc = close + p95 live latency; this until measured
+  min_live_samples: 20               # live bars needed before the p95 is measured rather than the default
+  backoff_base_s: 300                # after a failed pass: 5 min, doubling ...
+  backoff_max_s: 21600               #   ... to 6 h; an expired cookie waits the full 6 h unless a new cookie is stored
+  timeout_s: 30                      # per request
