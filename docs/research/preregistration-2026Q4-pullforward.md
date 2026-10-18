@@ -112,6 +112,78 @@ The following stay exactly as written in `preregistration-2027Q1.md`:
 
 If P1-P4 do not hold by **2026-11-27**, H-02 returns to Q1 unchanged and B13's trial stays unspent.
 
+### 2.4a Readiness re-check and feature-version ruling (research director, 2026-10-18 about 07:40 UTC; no H-02 outcome exists)
+
+**Feature version: H-02 runs WITHOUT the `smc_replica` group, on `f-51ac5ebabb` (unchanged).** The D-TVR amendment in
+`preregistration-2027Q1.md` (7ee992e) left this choice to the research director: re-pin, or run without the group
+with K_eff unchanged. The ruling is to run without it:
+- The group cannot be included today. `smc_replica` is not on `main` (it exists only on `claude/gifted-goldberg-lcb7pl`),
+  and neither `research.yml` nor `research_pass.py` has any input that enables an opt-in family other than macro.
+  Including it would need new code, a quant review and a new config, which is a delay, and O-4's rule for feature
+  groups is "drop, not delay" (3.3 item 1). The same rule is applied to H-02.
+- Recomputed with `goldbot.features.registry.feature_version` on both `main` (a327699) and the branch (91dc9cf):
+  default + macro drivers = **`f-51ac5ebabb`** (unchanged; the replica is opt-in, so it does not move the default
+  set); default alone = `f-079deacc61`. With the replica group added the version would be `f-9a074bd2f8`. That id is
+  recorded for reference only. No H-02 run uses it.
+- Consequences: H-02's K_eff is unchanged (about 10 groups, recorded by the run). D-TVR's total falls from +2 to +1:
+  the group stays in O-4's 15m map, which is the owner's own timeframe. The YAML row's `feature_version` stays
+  `f-51ac5ebabb`, and nothing in `preregistration-2027Q1.yaml` changes. A later H-02-like screen that wants the
+  group is a new pre-registration.
+
+**Conditions (2.4), status at this time:**
+
+| # | Status | Evidence |
+|---|---|---|
+| P1 | **met** | `53f38b7` (BACKLOG 88), `566d90e` (override 53), `batch-2026-10-18.md` and `2de420b` (this file) are ancestors of `origin/main` (a327699) |
+| P2 | **open**: quant-reviewer signature on 2.2, 2.3, section 5 and this 2.4a | due 2026-10-21; the only open condition |
+| P3 | **met** | B12 run 39107483173 completed 07:26 UTC; every batch trial #21-#52 has its verdict (`batch-2026-10-18-readout.md` section 6) |
+| P4 | **met**, no data defect | D4 below |
+| P5 | at dispatch | `gh run list --workflow research.yml` showed nothing in progress or queued at 07:30 UTC |
+
+**P4: D4 cluster coverage, 4h** (`candidates/intraday_diag_2026-10-17.py`, `d4_cluster_coverage` only; feature values
+only, no label, no price after a decision bar; bars and macro cut at `research.holdout_from`; run on the pinned
+data-v1 files, sha256 matching 2.2 for every year, and `macro_fred.parquet` sha256 `47473d2c…eaa2ed`; output
+`~/tmp/research/h02/d4.json`, sha256 `fa496a52abd51bd55ba1b20c2394a278ccab20c428ae77894dd21342c22f7f44`). The
+strategy-researcher owned P4. The research director ran the script so that the condition would not hold up the
+dispatch. The script is not promoted (its docstring), and its only use here is this defect check. No count from it
+enters any rule.
+
+| Cluster | Columns | Coverage, 24 test folds (min / median) | Folds with 0 coverage |
+|---|---:|---|---|
+| H-03 | 3 | 1.00 / 1.00 | none |
+| H-05 | 19 | 1.00 / 1.00 | none |
+| H-07 | 3 | 1.00 / 1.00 | none |
+| H-08 | 11 | 1.00 / 1.00 | none |
+| H-10 | 4 | 1.00 / 1.00 | none |
+
+`macro_spx_dd20` is fully NaN in the six test folds 2014-01 .. 2016-07 (FRED's rolling ten-year SP500 window). That is
+the case `full_coverage_columns` masks, and it was expected when the mask was pinned. Every other macro column has a
+NaN share of 0 in every fold.
+
+**Data and macro digests re-checked 2026-10-18.** All 16 data-v1 research-window files match the table in 2.2 (no G1
+repair has been published). `macro_fred.parquet` on `macro-v1` matches the reference digest, so the window hash
+`ed98cbe4…c89596` holds.
+
+**Budget and K.** The registry (`research-v1`, fetched 07:30 UTC) holds 52 trial rows, all in 2026Q4. H-02 will be
+**#53 = the 2026Q4 override (53)**. B13 stays withdrawn. Spare after H-02: 0. Reading K for H-02's own verdict:
+`registry.n_trials_effective` at that time (53), and its `k_eff` is recorded on the discovery row. Every later trial's
+DSR then uses 53 + about 10.
+
+**Single-cell warning (dispatch path).** H-02 has one variant and `discover=true`, so it is a **one-cell run**.
+`research.yml` on `main` still has the one-cell artifact-layout defect: `download-artifact` flattens the lone
+artifact, `record` finds no rows and writes a `failed` trial. B12 (#52) was the latest case. The fix, `bb81934`
+(`cells.cell_dir`), is on the branch only. Two ways to dispatch:
+- **(a) Recommended: merge `bb81934` to `main` first, then dispatch.** P2 is open until 2026-10-21 in any case, so
+  this costs no time if the fix merges by then.
+- **(b) If H-02 is dispatched on today's `main`:** the trial is spent (#53) and the row reads `failed` with no
+  results. The discovery result survives only in the run's artifact (`cell-0/rows.jsonl`, `report.md`; kept 90
+  days). A reviewed repair must then attach it to the row, keeping the trial number, ts and config_hash, the same way
+  as D-1(b). For a discovery the repair also sets the status to `discovery` and its recorded reading verdict.
+  `record_verdict` refuses discovery rows, so no separate verdict row is written. This is untested for a discovery
+  row: implementer plus quant-reviewer, before anything reads H-02.
+
+The dispatch command (2.5) is unchanged. It does not add `lot_fit`, because lot fit is not used with `--discover`.
+
 ### 2.5 Dispatch command (one line)
 
 ```bash

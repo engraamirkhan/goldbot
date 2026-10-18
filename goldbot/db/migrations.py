@@ -1,4 +1,4 @@
-"""Forward-only schema migrations for core.db and aux.db (docs/proposals/2026-10-state-store.md, section 3).
+"""Forward-only schema migrations for core.db, aux.db, tv.db and tv_auth.db (docs/proposals/2026-10-state-store.md, section 3).
 
 "Each migration runs in one BEGIN IMMEDIATE transaction that also records its version; forward-only, never edited
 after merge." Applied versions are rows of `schema_version` (version, name, applied_ns), mirrored in
@@ -266,6 +266,24 @@ AUX: tuple[Migration, ...] = (
                url TEXT NOT NULL
            ) STRICT""",
     )),
+    # additive (quant review 2026-10-18): the structure replica's carried state per feed and bar
+    # (goldbot/features/smc_live.py), written on every bar; the last few bars' states are kept (a rule that reads the
+    # bars before the decision bar resumes from an earlier snapshot). Derived data, rebuilt from the series start on any doubt, so aux (NORMAL) is enough; a
+    # release without the table never reads it. `state` is the ReplicaState JSON (NaN written as a constant, so it is
+    # not checked with json_valid)
+    Migration(version=12, name="replica_state", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS replica_state (
+               feed TEXT NOT NULL,
+               code_version TEXT NOT NULL,
+               params_hash TEXT NOT NULL,
+               bar_index INTEGER NOT NULL,
+               bar_time TEXT NOT NULL,
+               context_digest TEXT NOT NULL,
+               state TEXT NOT NULL,
+               updated_ns INTEGER NOT NULL,
+               PRIMARY KEY (feed, bar_index)
+           ) STRICT""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (
@@ -327,7 +345,52 @@ CORE: tuple[Migration, ...] = (
     )),
 )
 
-MIGRATIONS: dict[DbKind, tuple[Migration, ...]] = {"core": CORE, "aux": AUX}
+# tv.db: the TradingView webhook's durable alert inbox (goldbot/webhook/inbox.py) and the direct pull's log
+# (goldbot/data/tv_pull.py), one file shared by both. Steps 1 and 2 are the schemas those modules created ad hoc before
+# this file knew tv.db, verbatim and IF NOT EXISTS: a file the ad-hoc code built (either half, or both) upgrades in
+# place with every row kept, and that code still opens a migrated file (a rollback). A step that is not additive would
+# make an older release refuse the file and the webhook fail closed: keep every tv step additive.
+TV: tuple[Migration, ...] = (
+    Migration(version=1, name="tv_inbox", statements=(
+        """CREATE TABLE IF NOT EXISTS tv_alerts (
+    id INTEGER PRIMARY KEY,
+    indicator TEXT NOT NULL, version TEXT NOT NULL, symbol TEXT NOT NULL, tf TEXT NOT NULL,
+    bar_time TEXT NOT NULL, fired_at TEXT NOT NULL, received_utc TEXT NOT NULL, available_utc TEXT NOT NULL,
+    signal TEXT NOT NULL, strength REAL NOT NULL, price REAL, plots TEXT NOT NULL, payload TEXT NOT NULL,
+    intrabar INTEGER NOT NULL, signal_hash TEXT NOT NULL,
+    UNIQUE (indicator, version, symbol, tf, bar_time)
+) STRICT""",
+        "CREATE TABLE IF NOT EXISTS tv_sync (id INTEGER PRIMARY KEY CHECK (id = 1), last_id INTEGER NOT NULL) STRICT",
+    )),
+    Migration(version=2, name="tv_pull_log", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS tv_pull_runs (
+    id INTEGER PRIMARY KEY, started_utc TEXT NOT NULL, finished_utc TEXT NOT NULL, ok INTEGER NOT NULL,
+    auth_expired INTEGER NOT NULL, requests INTEGER NOT NULL, reason TEXT NOT NULL, report TEXT NOT NULL
+) STRICT""",
+        "CREATE TABLE IF NOT EXISTS tv_pull_state (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_utc TEXT NOT NULL)"
+        " STRICT",
+        """CREATE TABLE IF NOT EXISTS tv_study_meta (
+    meta_hash8 TEXT PRIMARY KEY, study_id TEXT NOT NULL, name TEXT NOT NULL, version TEXT NOT NULL,
+    meta TEXT NOT NULL, first_seen_utc TEXT NOT NULL, last_seen_utc TEXT NOT NULL
+) STRICT""",
+    )),
+)
+
+# tv_auth.db: the TradingView sign-in state (goldbot/ops/tv_pull_health.py), its own file so a corrupt one can be moved
+# aside without touching the alert inbox. Step 1 is the ad-hoc schema, verbatim (same rules as TV). An earlier release
+# (5a819f4) kept this table in tv.db; that copy is left where it is and never read.
+TV_AUTH: tuple[Migration, ...] = (
+    Migration(version=1, name="tv_auth", statements=(
+        """CREATE TABLE IF NOT EXISTS tv_auth (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    status TEXT NOT NULL,
+    last_ok_utc TEXT,
+    notified INTEGER NOT NULL DEFAULT 0
+) STRICT""",
+    )),
+)
+
+MIGRATIONS: dict[DbKind, tuple[Migration, ...]] = {"core": CORE, "aux": AUX, "tv": TV, "tv_auth": TV_AUTH}
 
 
 def _check_sequence(kind: DbKind, migs: tuple[Migration, ...]) -> None:

@@ -264,6 +264,20 @@ above is the queued part only.
   the 21 G1 gap weekdays for H-02 (no re-run on repaired data). It funds the trial by withdrawing batch B13. The four
   survivor slots become Q1 open-budget rows S-1..S-4. H-02 is not written as a Q1 queued row, and the reservation
   goes to 1 (C4H) in the change owed there (section 5).
+- **Amendment 2026-10-18 (implementer, executing the research director's D-TVR ruling, `prereg-tv-replica-2026-10-18.md`
+  B4a item 2; before any H-02 outcome; quant-reviewer sign-off due 2026-10-25): one more feature group,
+  `smc_replica`.** The 23 `smc_replica` columns form one group in the cluster map (no `H02_CLUSTERS` entry names them,
+  so they stay in their family's group, as `structure` does; `H02_CLUSTERS` itself is unchanged), at most 39, no
+  `structure` column in it, computed on our own bars. **K_eff +1 (groups screened); no registry trial.** A TVR FAIL
+  does not remove it. **Owed before H-02 runs (not done here):** the replica is an opt-in family, so an H-02 run that
+  includes it has a feature version other than the pinned `f-51ac5ebabb`; the YAML row and
+  `preregistration-2026Q4-pullforward.md` pin must be re-pinned by the research director before dispatch, or H-02 runs
+  without the group (K_eff unchanged). Pinned by `tests/test_smc_replica_group.py`.
+  - **Ruling 2026-10-18 (research director, before any H-02 outcome): H-02 runs without the group.** The feature
+    version stays `f-51ac5ebabb` (recomputed on `main` a327699 and on the branch 91dc9cf; with the group it would be
+    `f-9a074bd2f8`) and H-02's K_eff is unchanged. The reason: no `research.yml` input enables the replica, and the
+    replica is not on `main`. O-4 keeps the group, so D-TVR adds +1 in total, not +2. Details are in
+    `preregistration-2026Q4-pullforward.md` 2.4a.
 
 ### H-01 Slow TSMOM
 - Config: `specialist=tsmom`, signal from 1d bars (20/60/120-day vol-scaled returns, 60-day vol), execution and
@@ -853,6 +867,16 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
       observation at most 5 days old (`MAX_STALE`), else NaN; (6) `slot_ret_over_atr` = the latest observation /
       (ATR14 / close at that observed slot's last bar); (7) a slot return is log(last close / first open) of the slot,
       the gap from the previous close is excluded; (8) neutrals: mean 0, hit rate 0.5, t 0, ret_over_atr 0.
+  - **Amendment 2026-10-18 (implementer, executing the research director's D-TVR ruling, `prereg-tv-replica-2026-10-18.md`
+    B4a item 2; before any H-14 count, label or outcome; group map not yet pinned; quant-reviewer sign-off due
+    2026-10-25): one more feature group, `smc_replica`.** The 23 columns of `goldbot.features.smc_replica.COLUMNS` form
+    one group (family `smc_replica`, an opt-in family, never in `DEFAULT_FEATURE_NAMES`; 23 <= 39, so no split). No
+    `structure` column is in it (`bos_*` and `sweep_*` of `market_structure` stay in `structure`; the replica's
+    `bos_*_{internal,swing}` are different columns, and a test pins that no name is shared), so a survival measures what
+    the replica adds. Computed by our own code on our own Dukascopy bars; no charting-site data is read. A TVR FAIL
+    does not remove the group (features are not rules). **K_eff about 17 -> about 18; the adopted gate-1 case about 67
+    -> about 68** (t still about 4.0). No registry trial. Pinned by `tests/test_smc_replica_group.py`. As for `tod_periodicity`,
+    O-4's own feature version and `group_map_sha256` include it; no hashed row changes.
 - Threshold (amended 2026-10-17, E-2; quant review R1): `threshold_rule: tercile_inner`,
   `tercile_q: 0.6666666666666666` and `tercile_method: linear` in the pinned `DiscoveryConfig` dump (so in the config
   hash: another q is another trial). The coded verdict needs at least 1,000 taken trades for "continue", as the

@@ -12,6 +12,7 @@ its services the same way. A (block, pos) pair is taken once; a block has one sc
   BLOCK_ACCOUNT          per account: engine ... server clock
   BLOCK_SERVICE_SKEW     per service in SKEW_SERVICES: schema_skew:svc
   BLOCK_HEARTBEATS       per service in HEARTBEAT_SERVICES: heartbeat
+  BLOCK_OPTIONAL_HEARTBEATS  webhook, tv-pull: heartbeat (only once one ran on this host; WARN)
   BLOCK_SCHEDULER        scheduler and its jobs
   BLOCK_COSTS            per account: cost table, P&L basis
   BLOCK_RECONCILIATION   per account: feed reconciliation (D12)
@@ -38,6 +39,7 @@ BLOCK_CORE = 20
 BLOCK_ACCOUNT = 30
 BLOCK_SERVICE_SKEW = 40
 BLOCK_HEARTBEATS = 50
+BLOCK_OPTIONAL_HEARTBEATS = 55
 BLOCK_SCHEDULER = 60
 BLOCK_COSTS = 70
 BLOCK_RECONCILIATION = 80

@@ -151,6 +151,8 @@ jobs:
       - run: pip install -e .
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         continue-on-error: true   # no cell reported at all: every cell is then recorded as failed below
+        # a lone match is extracted into cells/ itself, not cells/cell-0/: `record` reads that layout for a one-cell
+        # plan (cells.cell_dir)
         with:
           pattern: cell-*
           path: cells
