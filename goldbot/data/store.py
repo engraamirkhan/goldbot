@@ -7,17 +7,46 @@ bars uses `available_utc`, never the nominal time. `asof_join` enforces this.
 """
 from __future__ import annotations
 
-import fcntl
 import os
+import sys
+import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import IO, Iterable, Iterator
 
 import duckdb
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+# Partition locks, held across processes. POSIX: flock, shared for readers, exclusive for a writer. Windows (the VPS
+# runs goldbot natively; there is no fcntl): msvcrt.locking on byte 0 of the lock file, exclusive only, so readers of
+# one partition take turns. LK_LOCK gives up after ten one-second tries, so a non-blocking lock is retried here until
+# it is free, and every handle is unlocked before it is closed (Windows does not promise to release it on close).
+if sys.platform == "win32":
+    import msvcrt
+
+    def _lock(fh: IO[bytes], *, shared: bool) -> None:
+        fh.seek(0)
+        while True:
+            try:
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                return
+            except OSError:
+                time.sleep(0.01)
+
+    def _unlock(fh: IO[bytes]) -> None:
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+else:
+    import fcntl
+
+    def _lock(fh: IO[bytes], *, shared: bool) -> None:
+        fcntl.flock(fh, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+
+    def _unlock(fh: IO[bytes]) -> None:
+        fcntl.flock(fh, fcntl.LOCK_UN)
 
 TABLES = {
     "ticks", "bars_1m", "bars_15m", "bars_1h", "bars_4h", "bars_1d", "bars_1w",
@@ -105,30 +134,38 @@ class Store:
     @staticmethod
     @contextmanager
     def _partition_lock(pdir: Path) -> Iterator[None]:
-        """Exclusive flock held for the whole read-modify-write of one partition (across processes)."""
-        with open(pdir / ".lock", "a") as fh:
-            fcntl.flock(fh, fcntl.LOCK_EX)
+        """Exclusive lock held for the whole read-modify-write of one partition (across processes)."""
+        with open(pdir / ".lock", "ab") as fh:
+            _lock(fh, shared=False)
             try:
                 yield
             finally:
-                fcntl.flock(fh, fcntl.LOCK_UN)
+                _unlock(fh)
 
     @staticmethod
     @contextmanager
     def _read_locks(tdir: Path, source: str | None, symbol: str) -> Iterator[None]:
-        """Shared flock on every matching partition while listing+reading: a writer holds LOCK_EX across rename+unlink,
-        so a reader sees exactly the old or the new rows, never both. Fixed order; writers hold one lock: no deadlock."""
+        """Shared lock on every matching partition while listing+reading: a writer holds its exclusive lock across
+        rename+unlink, so a reader sees exactly the old or the new rows, never both. Fixed order; writers hold one
+        lock: no deadlock."""
         pat = f"source={source or '*'}/symbol={symbol}/year=*/month=*/.lock"
-        fhs = []
+        locked: list[IO[bytes]] = []
+        opened: list[IO[bytes]] = []
         try:
             for lk in sorted(tdir.glob(pat)):
-                fh = open(lk, "a")
-                fhs.append(fh)
-                fcntl.flock(fh, fcntl.LOCK_SH)
+                fh: IO[bytes] = open(lk, "ab")
+                opened.append(fh)
+                _lock(fh, shared=True)
+                locked.append(fh)
             yield
         finally:
-            for fh in fhs:
-                fh.close()           # closing releases the flock
+            for held in locked:
+                try:
+                    _unlock(held)
+                except OSError:      # still released by the close below on POSIX; never mask the reader's own error
+                    pass
+            for f in opened:
+                f.close()
 
     @staticmethod
     def _write_atomic(pdir: Path, df: pd.DataFrame) -> None:
