@@ -81,12 +81,10 @@ phrase; the demo-terminal check at start and per order; the trial budget, the ho
     untagged trade closed after the cutover is not counted: adopted orphans carry no tag;
   * when its limits are recorded, none of them is above settings.yaml `risk:` (daily, weekly, min-lot).
 
-  `goldbot/ops/gates_phase.evaluate_gates` (the `paper = ...` line) still counts every `mode == "demo"` trade. Wiring
-  it in is about three lines: filter `paper` with the rule, report the excluded count in the gate's evidence, and
-  keep `evaluate_stop_rule` on all trades. That change belongs to someone with authority over phase-gate code: the
-  owner's go-ahead, then quant-reviewer verifies it. The implementer role is barred from editing phase-gate code, and
-  a delegation relayed by another agent does not lift that bar. Until the wiring lands, `paper_to_tiny_live` must
-  not be recorded over a window that contains `demo-2026-10-18` trades.
+  Wired in `goldbot/ops/gates_phase.evaluate_gates` (2026-10-18, by the program director under the owner's written
+  delegation of limit decisions to the expert panel, as specified by trading-safety; a tightening): `paper` keeps only
+  trades for which `counts_as_default_evidence` holds, the paper_trades evidence reports how many were left out, and
+  `evaluate_stop_rule` still reads every trade. Tests: tests/test_phase_gate_limits_profile.py. Quant-reviewer verifies.
 * **The approval was relayed.** The approval came to the implementer through the program director, not from the
   owner directly. The owner confirms it when merging; the PR description quotes the words above.
 * **A stale engine file** with no `limits_current` (an old file from a disabled account, say) keeps the combined

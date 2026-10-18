@@ -5,4 +5,4 @@
   - Entering the 8% size-down stage reverts the account to the defaults. The revert survives restarts (core.db `limits_state`) until the owner re-arms at a normal stage.
   - Trades, decisions and shadow trades carry `limits_profile`.
   - The supervisor's combined caps are capped by the CFO envelope (3.75% daily, 7.5% weekly).
-  - **Open:** the phase gate still counts demo-profile trades. The rule is built and tested (`counts_as_default_evidence`); wiring it into `gates_phase.py` needs owner go-ahead and a quant review (ADR 0032, Consequences).
+  - **Phase gate:** only default-limit trades count as paper evidence (`counts_as_default_evidence` wired into `gates_phase.py`; excluded count shown in the gate evidence; stop rule still sees all trades).
