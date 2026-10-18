@@ -1,5 +1,6 @@
 """Golden test: the vectorised f_order_blocks is byte-identical to the per-bar loop it replaced (values, NaN positions,
-dtypes, column order). `_reference` is that loop, kept verbatim as the oracle."""
+dtypes, column order), on finite OHLC and on bars with NaN highs, lows or closes (those use the retained loop).
+`_reference` is that loop, kept verbatim as the oracle."""
 import numpy as np
 import pandas as pd
 import pytest
@@ -97,3 +98,27 @@ def test_vectorised_order_blocks_equal_the_per_bar_loop_exactly(name, ctx):
         want = _reference(df, ctx)
     assert want[["ob_bull_count", "ob_bear_count"]].to_numpy().max() > 0     # the fixture exercises blocks
     assert_frame_equal(got[list(want.columns)].reset_index(drop=True), want.reset_index(drop=True), check_exact=True)
+
+
+def test_random_inputs_match_the_per_bar_loop_and_ignore_later_bars():
+    """Fixed-seed property test: float32 prices, dropped bars, NaN gaps, early bars, varied max_age and search; and a
+    cut history gives exactly the full run's values before the cut (no look-ahead)."""
+    rng = np.random.default_rng(0)
+    for t in range(40):
+        n = int(rng.integers(20, 700))
+        df = _choppy(max(n, 400), int(rng.integers(1_000_000_000))).iloc[:n].copy()
+        if t % 3 == 0:
+            df.loc[rng.choice(n, size=max(1, n // 50), replace=False), str(rng.choice(["open", "high", "low", "close"]))] = np.nan
+        if t % 4 == 0:
+            for col in ("open", "high", "low", "close"):
+                df[col] = df[col].astype("float32")
+        if t % 5 == 0:
+            df = df.drop(index=list(rng.choice(n, size=n // 10, replace=False))).reset_index(drop=True)
+        ctx = {"swing_lag": int(rng.integers(1, 6)), "ob_displacement_atr": float(rng.choice([0.2, 0.5, 1.0])),
+               "ob_search": int(rng.integers(1, 30)), "smc_max_age": int(rng.choice([0, 1, 5, 50, 400, 5000]))}
+        with np.errstate(all="ignore"):
+            want = _reference(df, ctx).reset_index(drop=True)
+            got = build_features(df, ["order_blocks"], ctx=ctx)[list(want.columns)].reset_index(drop=True)
+            part = build_features(df.iloc[: len(df) // 2], ["order_blocks"], ctx=ctx)[list(want.columns)].reset_index(drop=True)
+        assert_frame_equal(got, want, check_exact=True)
+        assert_frame_equal(part, got.iloc[: len(df) // 2].reset_index(drop=True), check_exact=True)

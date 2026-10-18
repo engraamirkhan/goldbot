@@ -263,6 +263,33 @@ def f_fair_value_gaps(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------- order blocks
+def _order_block_report_loop(disp: np.ndarray, opposite: np.ndarray, lo: np.ndarray, h: np.ndarray, c: np.ndarray,
+                             a: np.ndarray, search: int, max_age: int, bullish: bool) -> dict[str, np.ndarray]:
+    """The per-bar book `_order_block_report` replaces. Used only when a high, low or close is not finite: min() over
+    NaN keys depends on list order, which the sorted version does not reproduce, so those bars keep the old loop."""
+    n = len(c)
+    rep = _nearest_report(n)
+    book: list[tuple[float, float, int, int]] = []     # (low, high, candle, born)
+    for i in range(n):
+        book = [b for b in book if (c[i] >= b[0] if bullish else c[i] <= b[1]) and b[3] >= i - max_age]
+        if disp[i]:
+            for j in range(i - 1, max(i - 1 - search, -1), -1):
+                if opposite[j]:
+                    if all(b[2] != j for b in book):
+                        book.append((float(lo[j]), float(h[j]), j, i))
+                    break
+        if book:
+            if bullish:
+                b = min(book, key=lambda x: (max(c[i] - x[1], 0.0), -x[3]))
+                rep["dist"][i] = (c[i] - b[1]) / a[i]
+            else:
+                b = min(book, key=lambda x: (max(x[0] - c[i], 0.0), -x[3]))
+                rep["dist"][i] = (b[0] - c[i]) / a[i]
+            rep["age"][i] = i - b[3]
+        rep["count"][i] = len(book)
+    return rep
+
+
 def _order_block_report(disp: np.ndarray, opposite: np.ndarray, lo: np.ndarray, h: np.ndarray, c: np.ndarray,
                         a: np.ndarray, search: int, max_age: int, bullish: bool) -> dict[str, np.ndarray]:
     """One side's order-block book without a per-bar loop. A displacement at bar i adds the nearest opposite candle j
@@ -270,6 +297,8 @@ def _order_block_report(disp: np.ndarray, opposite: np.ndarray, lo: np.ndarray, 
     first later bar that closes through it (below its low for a bullish block, above its high for a bearish one) or
     is more than `max_age` bars after birth. Active blocks are expanded to (block, bar) pairs, and the nearest block
     per bar (smallest distance from the close to the zone, ties to the newest) is the first pair in a lexsort."""
+    if not (np.isfinite(h).all() and np.isfinite(lo).all() and np.isfinite(c).all()):
+        return _order_block_report_loop(disp, opposite, lo, h, c, a, search, max_age, bullish)
     n = len(c)
     rep = _nearest_report(n)
     born_l: list[int] = []
