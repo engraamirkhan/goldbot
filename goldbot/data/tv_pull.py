@@ -46,6 +46,7 @@ Everything else is automatic:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -228,12 +229,19 @@ class PassReport(FrozenRecord):
         return "\n".join(lines)
 
 
+def cookie_fingerprint(cookie: str) -> str:
+    """A short one-way fingerprint of the cookie, to notice that a new one was stored (the cookie itself is never kept
+    beyond the pass, not even in a repr)."""
+    return hashlib.sha256(cookie.encode()).hexdigest()[:12] if cookie else ""
+
+
 class FollowState(Record):
-    """In-memory state of a `follow` loop: compiled study sources (never written anywhere) and the cookie that failed
-    sign-in, so a newly stored cookie is tried at once instead of after the expiry backoff."""
+    """In-memory state of a `follow` loop: compiled study sources (never written anywhere) and the fingerprint of the
+    cookie that failed sign-in ("" when none was stored), so a newly stored cookie is tried at once instead of after
+    the expiry backoff."""
 
     compiled: dict[str, tuple[StudyMeta, str, float]] = Field(default_factory=dict)
-    failed_cookie: str | None = None
+    failed_cookie: str | None = None              # cookie_fingerprint, never the cookie
 
 
 # ------------------------------------------------------------------------------------------------- the pull log
@@ -474,6 +482,7 @@ def discover(net: ReadOnlyNetwork, pacer: Pacer, user_id: str | None, max_studie
         lid = str(lay.get("image_url") or lay.get("short_url") or lay.get("id") or "") if isinstance(lay, dict) else ""
         if not lid:
             continue
+        net.add_secret(lid, min_len=1)                      # a layout id names the owner's chart: never in a report
         pacer.wait()
         content = _layout_content(net.get(f"{SITE}/chart/{quote(lid)}/"))
         specs = _studies_in(content) if content is not None else []
@@ -872,7 +881,7 @@ def run_pass(cfg: TvPullSettings, *, store: Store, log: PullLog, network: TvNetw
     if blocked is not None and started < blocked:
         last = log.last()
         fresh = (state is not None and last is not None and last.auth_expired and state.failed_cookie is not None
-                 and state.failed_cookie != secret)
+                 and state.failed_cookie != cookie_fingerprint(secret))
         if not fresh:
             return PassReport(ok=False, skipped=True, started_utc=started, finished_utc=started,
                               reason=f"backing off after a failed pass until {blocked.isoformat()}")
@@ -890,7 +899,7 @@ def run_pass(cfg: TvPullSettings, *, store: Store, log: PullLog, network: TvNetw
                                 auth_expired=True)
         record_expired(log.path.parent, rep.finished_utc)   # one owner notice per expiry (ops/tv_pull_health.py)
         if state is not None:
-            state.failed_cookie = secret
+            state.failed_cookie = cookie_fingerprint(secret)
     except Exception as exc:  # fail soft (the alert path is independent); the message is redacted, never chained
         rep = PassReport.failed(started, _utc(clock()), redact(f"{type(exc).__name__}: {exc}", net.secrets)[:400],
                                 requests=pacer.count)

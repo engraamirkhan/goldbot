@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import sqlite3
 import subprocess
 import sys
@@ -499,6 +500,39 @@ def test_the_cookie_and_tokens_never_appear_in_reports_logs_or_files(tmp_path, c
     for secret in ("abcdefgh12345678secret", "v2:SIGNsecret987654", AUTH, "user=4242"):
         assert secret not in text
     assert "[redacted]" in reps[0].reason and "[redacted]" in reps[1].reason
+
+
+def test_a_layout_id_never_appears_in_a_failure_reason(tmp_path):
+    http = dict(json.loads((FIX / "backfill_15m.json").read_text())["http"])
+    del http["https://www.tradingview.com/chart/LayOut01/"]           # the chart page GET fails
+    rep = run(tmp_path, ReplayNetwork("backfill_15m.json", http=http), Clock(T_BACKFILL))
+    assert not rep.ok and "LayOut01" not in rep.reason and "[redacted]" in rep.reason
+    assert b"LayOut01" not in (tmp_path / "tv.db").read_bytes()
+
+
+def test_a_failed_cookie_is_kept_only_as_a_fingerprint():
+    state = tv_pull.FollowState(failed_cookie=tv_pull.cookie_fingerprint(COOKIE))
+    assert "secret" not in repr(state) and len(state.failed_cookie or "") == 12
+
+
+def test_oversized_answers_are_refused_before_they_are_parsed():
+    big = "x" * (tv_wire.MAX_HTTP_BYTES + 1)
+    net = tv_wire.ReadOnlyNetwork(ReplayNetwork("backfill_15m.json", http={"https://www.tradingview.com/": big}),
+                                  COOKIE, [])
+    with pytest.raises(tv_wire.TvPullError, match="cap"):
+        net.get("https://www.tradingview.com/")
+    huge = tv_wire.encode_raw("x" * tv_wire.MAX_WS_BYTES)
+    sock = tv_wire.GuardedSocket(ReplaySocket({"hello": [huge], "replies": {}}, []), [])
+    with pytest.raises(tv_wire.TvPullError, match="cap"):
+        sock.recv(1.0)
+    assert tv_wire.MAX_WS_BYTES < 32 * 2**20
+
+
+def test_no_fixture_keeps_a_script_s_compiled_source():
+    """Compiled Pine source (`ilTemplate`, `bmI9Ks46_...`) is the author's work: never stored, fixtures included."""
+    blob = re.compile(r"bmI9Ks46_[A-Za-z0-9+/=]{20,}")
+    files = [*CAPTURED.glob("*"), *FIX.glob("*")]
+    assert files and not [f.name for f in files if blob.search(f.read_text(errors="replace"))]
 
 
 def test_a_protocol_error_fails_the_pass_softly(tmp_path):
