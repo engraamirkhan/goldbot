@@ -4,8 +4,9 @@
   the keyring under `mt5-login-<account_id>`, next to the password `mt5-<account_id>`; a login left in the yaml is
   still read, but nothing writes one there.
 * Secrets live in the OS keyring (macOS Keychain / Windows Credential Manager) via `keyring`, falling back
-  to state/.secrets.json only when no keyring backend exists (headless Linux CI). That file is plaintext, owner-only
-  (created 0600, replaced atomically); it is not encrypted, so a keyring is required on the VPS.
+  to state/.secrets.json only when no keyring backend exists AND GOLDBOT_ALLOW_PLAINTEXT=1 (headless Linux CI; never
+  on macOS/Windows). That file is plaintext, owner-only (0600, replaced atomically), not encrypted; an existing one is
+  moved into the keyring on first read once a keyring works (`migrate` does it on demand).
 * `get_credential()` asks the user when a secret is missing: on a terminal it prompts with getpass; when
   running headless it calls the registered `prompter` (the Telegram bot), which sends the request to the
   allow-listed owner and waits. The value is stored and never logged.
@@ -50,10 +51,13 @@ SERVICE = "goldbot"
 
 try:
     import keyring
-    _kr_ok: bool = keyring.get_keyring().__class__.__name__ not in ("fail.Keyring", "Keyring") or True
 except Exception:  # pragma: no cover
-    keyring = None
-    _kr_ok = False
+    keyring = None  # type: ignore[assignment]
+
+_PLATFORM = sys.platform
+# Opt-in for the plaintext fallback (state/.secrets.json): CI / headless Linux only, and only when no keyring backend
+# exists. macOS and Windows never fall back (a missing keyring there is a broken install: fix it, do not write plaintext).
+ALLOW_PLAINTEXT_ENV = "GOLDBOT_ALLOW_PLAINTEXT"
 
 
 class Account(Record):
@@ -125,6 +129,39 @@ def _fallback_file() -> Path:
     return p
 
 
+def _plaintext_allowed() -> bool:
+    return _PLATFORM not in ("darwin", "win32") and os.environ.get(ALLOW_PLAINTEXT_ENV) == "1"
+
+
+def _read_fallback() -> dict[str, str]:
+    f = _fallback_file()
+    return json.loads(f.read_text()) if f.exists() else {}
+
+
+def migrate_fallback() -> int:
+    """Move every key of state/.secrets.json into the OS keyring and delete the moved keys (the file when empty).
+    A key the keyring refuses stays in the file. Values are never printed. Returns how many keys moved."""
+    if secret_store() != "keyring":
+        return 0
+    data = _read_fallback()
+    moved = 0
+    for k, v in list(data.items()):
+        try:
+            keyring.set_password(SERVICE, k, v)
+        except Exception:
+            continue
+        del data[k]
+        moved += 1
+    f = _fallback_file()
+    if not moved:
+        return 0
+    if data:
+        write_private(f, json.dumps(data))
+    else:
+        f.unlink()
+    return moved
+
+
 def get_secret(key: str) -> str | None:
     if keyring is not None:
         try:
@@ -133,23 +170,33 @@ def get_secret(key: str) -> str | None:
                 return v
         except Exception:
             pass
-    f = _fallback_file()
-    if f.exists():
-        return json.loads(f.read_text()).get(key)
-    return None
+    if key not in _read_fallback():
+        return None
+    if migrate_fallback():
+        return get_secret(key)
+    print(f"note: {key} is read from the plaintext {_fallback_file()}; install a keyring and run "
+          "`python -m goldbot.ops.accounts migrate` to move it", file=sys.stderr)
+    return _read_fallback().get(key)
 
 
-def set_secret(key: str, value: str) -> None:
-    if keyring is not None:
+def set_secret(key: str, value: str) -> str:
+    """Store a secret; returns "keyring" or "file". The file is used only when no keyring backend works AND
+    GOLDBOT_ALLOW_PLAINTEXT=1 on a non-macOS/Windows host; otherwise RuntimeError (nothing written)."""
+    if secret_store() == "keyring":
         try:
             keyring.set_password(SERVICE, key, value)
-            return
+            return "keyring"
         except Exception:
             pass
+    if not _plaintext_allowed():
+        raise RuntimeError(f"no working OS keyring to store {key}: install/unlock it (`uv sync`; macOS Keychain, Windows "
+                           f"Credential Manager). Plaintext fallback is refused on macOS/Windows and elsewhere needs "
+                           f"{ALLOW_PLAINTEXT_ENV}=1 (CI only)")
     f = _fallback_file()
-    data = json.loads(f.read_text()) if f.exists() else {}
+    data = _read_fallback()
     data[key] = value
     write_private(f, json.dumps(data))
+    return "file"
 
 
 def get_credential(key: str, message: str, *, secret: bool = True) -> str:
@@ -395,8 +442,12 @@ def main(argv: list[str]) -> int:
         print(f"engine for {aid} will use the bridge")
         return 0
     if cmd == "set":
-        set_secret(argv[1], _prompt(f"value for {argv[1]}", secret=True))
-        print(f"stored {argv[1]}")
+        where = set_secret(argv[1], _prompt(f"value for {argv[1]}", secret=True))
+        print(f"stored {argv[1]} in the OS keyring" if where == "keyring"
+              else f"stored {argv[1]} in {_fallback_file()} (plaintext, owner-only file)")
+        return 0
+    if cmd == "migrate":
+        print(f"moved {migrate_fallback()} secret(s) from state/.secrets.json into the OS keyring")
         return 0
     if cmd == "unlock-live":
         phrase = _prompt(f"type exactly: ENABLE LIVE {argv[1]}", secret=False)

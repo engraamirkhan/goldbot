@@ -34,6 +34,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   validation -> `--lot-fit`. Default off: no key, outputs and registry rows unchanged (tested). Not done: routing before
   RiskGate (ATR stop, else H-25, else skip); `--lot-fit` with --discover/--cpcv/--h16 is refused; margin and the other
   gate checks are not part of "unfit".
+- Secrets no longer fall back silently to plaintext `state/.secrets.json`: `keyring` is now a base dependency; `set_secret` refuses unless no keyring backend works AND `GOLDBOT_ALLOW_PLAINTEXT=1` on a non-macOS/Windows host (set in CI); `accounts set` prints which store was used; an existing fallback file is migrated into the keyring on first read (`accounts migrate` on demand) and the moved keys deleted. Owner: run `uv sync` once on the Mac.
 - **Attended MT5 box upgrade scripted (sre, 2026-10-18; for Sat 24 Oct 10:00 UK; not yet reviewed).**
   `goldbot/ops/linux/mt5-box-upgrade.sh` has phases `precheck`, `install`, `post-reboot`, each re-runnable, printing a
   PASS/FAIL table of states only. It refuses unless the market is closed (UTC window), no engine unit is active on the

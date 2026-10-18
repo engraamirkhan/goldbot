@@ -26,6 +26,7 @@ defaults:
 env:
   PYTHON_VERSION: "3.11"
   NODE_VERSION: "22"
+  GOLDBOT_ALLOW_PLAINTEXT: "1"   # headless runners have no keyring: the only place the plaintext secrets fallback is allowed
 
 jobs:
   backend:
