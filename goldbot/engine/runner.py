@@ -397,7 +397,9 @@ class Engine:
                                                 min_lot_risk_cap=L0.min_lot_risk_cap,
                                                 project_open_risk=L0.project_open_risk, reason="default")
         self._limits_logged = False                  # the first resolve is logged as a change from nothing
-        self._apply_limits(pd.Timestamp.now("UTC"))
+        # the stage loaded from the risk file reverts too (a size-down saved without its revert row never restarts on
+        # the raised limits: trading-safety review of 156cfbf, LOW)
+        self._limits_after_stage(pd.Timestamp.now("UTC"))
         # closed-trade record (state/closed_trades.jsonl, read by the phase gates and the stop rule): positions already
         # recorded (key: this account + position id, so a restart never records one twice), closes waiting to be
         # written, and broker-side closes waiting for their exit deal (position -> bar closes asked)

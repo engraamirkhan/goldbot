@@ -34,7 +34,9 @@ from goldbot.db.connection import Database, connect, write
 from goldbot.db.repo import RecordRepo
 
 if TYPE_CHECKING:
+    from goldbot.config import RiskSettings
     from goldbot.ops.accounts import Account
+    from goldbot.ops.gates_phase import ClosedTrade
     from goldbot.risk.gate import RiskLimits
 
 log = logging.getLogger(__name__)
@@ -56,6 +58,12 @@ class RiskCeilings(FrozenRecord):
 
 #: "daily cap £50 (5% of £1,000), min-lot cap 1%, weekly 10%, demo only" (the owner, 2026-10-18)
 DEMO_ENVELOPE = RiskCeilings(daily=0.05, weekly=0.10, min_lot_risk_cap=0.01)
+#: the most the supervisor's COMBINED (daily, weekly) caps may rise to: the CFO's envelope, deliberately below the
+#: per-account ceilings (trading-safety review of 156cfbf, HIGH), so the combined cap still binds before an account's
+SUPERVISOR_DEMO_ENVELOPE = (0.0375, 0.075)
+#: records closed before this carry no limits_profile and all traded the defaults (no release before it had
+#: overrides); an untagged record closed after it (an adopted orphan, a lost audit) is not default-profile evidence
+ADR0032_CUTOVER = pd.Timestamp("2026-10-18", tz="UTC")
 
 
 class RiskOverrides(FrozenRecord):
@@ -314,8 +322,9 @@ class LimitsStore:
 
 
 def supervisor_ceilings(accounts: list[Account]) -> RiskCeilings | None:
-    """The combined caps may rise only when every enabled account is demo with overrides: the smallest ceiling of
-    each limit across them (a limit some account leaves at its default stays at the default). None otherwise."""
+    """The combined caps may rise only when every enabled account is demo with overrides: the smallest of the CFO
+    envelope (`SUPERVISOR_DEMO_ENVELOPE`) and each account's ceiling, per limit (a limit some account leaves at its
+    default stays at the default). None otherwise."""
     enabled = [a for a in accounts if a.enabled]
     ovs = [active_overrides(a) for a in enabled]
     if not enabled or any(o is None for o in ovs):
@@ -323,5 +332,28 @@ def supervisor_ceilings(accounts: list[Account]) -> RiskCeilings | None:
     cs = [o.ceilings for o in ovs if o is not None]
     daily = [c.daily for c in cs]
     weekly = [c.weekly for c in cs]
-    return RiskCeilings(daily=None if any(v is None for v in daily) else min(v for v in daily if v is not None),
-                        weekly=None if any(v is None for v in weekly) else min(v for v in weekly if v is not None))
+    env_daily, env_weekly = SUPERVISOR_DEMO_ENVELOPE
+    return RiskCeilings(
+        daily=None if any(v is None for v in daily) else min([env_daily] + [v for v in daily if v is not None]),
+        weekly=None if any(v is None for v in weekly) else min([env_weekly] + [v for v in weekly if v is not None]))
+
+
+def counts_as_default_evidence(t: ClosedTrade, risk: RiskSettings) -> bool:
+    """ADR 0032: a closed trade counts as paper evidence for the phase gates only when it is a demo trade decided under
+    the default limits: tagged `default` (and, when its limits are recorded, none above settings.yaml `risk:`), or
+    untagged and closed before `ADR0032_CUTOVER`. A demo-profile trade, and an untagged one after the cutover, never
+    count. The stop rule still reads every trade."""
+    if t.mode != "demo":
+        return False
+    if t.limits_profile is None:
+        return t.exit_utc < ADR0032_CUTOVER
+    if t.limits_profile != DEFAULT_PROFILE:
+        return False
+    lim = t.limits
+    if lim is None:
+        return True
+    if lim.daily_cap > risk.daily_cap + 1e-12 or lim.weekly_cap > risk.weekly_cap + 1e-12:
+        return False
+    if lim.min_lot_risk_cap is not None:
+        return risk.min_lot_risk_cap is not None and lim.min_lot_risk_cap <= risk.min_lot_risk_cap + 1e-12
+    return True

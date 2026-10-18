@@ -49,8 +49,11 @@ Panel views:
    `daily_loss_limit_abs`): 5% of £1,000 is £50, and above £1,000 the £50 wins. With `project_open_risk` on, the
    open trades' stop risk counts toward the £50.
 5. **Supervisor lockstep.** The combined caps rise only when every enabled account in accounts.yaml is demo with
-   ceilings (`supervisor_ceilings`). Even then, they follow the engines' published `limits_current`: the smallest
-   published cap, clamped to [supervisor default .. ceiling]. Any engine on the default profile (reverted, say), any
+   ceilings (`supervisor_ceilings`). Their ceiling is the CFO envelope, `SUPERVISOR_DEMO_ENVELOPE` = 3.75% daily and
+   7.5% weekly, or an account's own ceiling if that is lower. The envelope sits deliberately below the per-account
+   5% / 10%, so the combined caps still bind first (trading-safety review of 156cfbf, HIGH). Within that, the caps
+   follow the engines' published `limits_current`: the smallest published cap, clamped to [supervisor default ..
+   ceiling]. Any engine on the default profile (reverted, say), any
    non-demo engine file, and any engine that publishes nothing put the combined caps back at 1.5% / 4%.
 6. **Revert.** When the account enters the 8% size-down stage (also the 12% halt, or the supervisor's combined
    size-down), the account goes back to the default limits. The revert is saved in core.db `limits_state` and
@@ -70,12 +73,20 @@ phrase; the demo-terminal check at start and per order; the trial budget, the ho
 
 * The ICM demo can place a 0.01-lot trade at a 1.0 x ATR15 stop when ATR15 is $8 (about 0.6% risk); live and
   tiny-live still refuse it.
-* **Phase-gate evidence (not done here, escalated).** `goldbot/ops/gates_phase.evaluate_gates` still counts every
-  `mode == "demo"` closed trade as paper evidence, whatever its profile. The records now carry `limits_profile`, so
-  the separation is one filter: count only `limits_profile in (None, "default")`, where None means a record from
-  before this change, all of which traded the defaults. The implementer is barred from changing phase-gate code, so
-  that filter needs the owner's go-ahead and a quant-reviewer review. Until it lands, `paper_to_tiny_live` must not
-  be recorded on a window that contains `demo-2026-10-18` trades.
+* **Phase-gate evidence: the rule is built and tested, the wiring is not.** Trading safety specified the rule:
+  `limits_profile.counts_as_default_evidence(t, settings.risk)` counts a closed trade as paper evidence only when
+  all of these hold:
+  * it is a demo trade;
+  * it is tagged `default`, or it is untagged and closed before `ADR0032_CUTOVER` (2026-10-18 00:00 UTC). An
+    untagged trade closed after the cutover is not counted: adopted orphans carry no tag;
+  * when its limits are recorded, none of them is above settings.yaml `risk:` (daily, weekly, min-lot).
+
+  `goldbot/ops/gates_phase.evaluate_gates` (the `paper = ...` line) still counts every `mode == "demo"` trade. Wiring
+  it in is about three lines: filter `paper` with the rule, report the excluded count in the gate's evidence, and
+  keep `evaluate_stop_rule` on all trades. That change belongs to someone with authority over phase-gate code: the
+  owner's go-ahead, then quant-reviewer verifies it. The implementer role is barred from editing phase-gate code, and
+  a delegation relayed by another agent does not lift that bar. Until the wiring lands, `paper_to_tiny_live` must
+  not be recorded over a window that contains `demo-2026-10-18` trades.
 * **The approval was relayed.** The approval came to the implementer through the program director, not from the
   owner directly. The owner confirms it when merging; the PR description quotes the words above.
 * **A stale engine file** with no `limits_current` (an old file from a disabled account, say) keeps the combined

@@ -31,12 +31,14 @@ from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits
 from goldbot.risk.gate import Stage
 from goldbot.risk.limits_profile import (
     DEFAULT_PROFILE,
+    SUPERVISOR_DEMO_ENVELOPE,
     LimitsEvidence,
     LimitsPolicy,
     LimitsStore,
     RiskCeilings,
     RiskLimitsCurrent,
     RiskOverrides,
+    counts_as_default_evidence,
     supervisor_ceilings,
 )
 from goldbot.risk.supervisor import Supervisor, SupervisorLimits
@@ -259,8 +261,11 @@ DEF_CUR = {**DEMO_CUR, "profile": "default", "daily_cap": 0.02, "weekly_cap": 0.
 
 
 def test_supervisor_ceilings_rise_only_when_every_enabled_account_is_demo_with_ceilings():
+    # the combined caps' ceiling is the CFO envelope, below the account ceilings (trading-safety HIGH on 156cfbf)
     assert supervisor_ceilings([_acc("demo"), _acc("live", overrides=None, enabled=False)]) == RiskCeilings(
-        daily=0.05, weekly=0.10)
+        daily=0.0375, weekly=0.075)
+    tight = RiskOverrides(profile=PROFILE, ceilings=RiskCeilings(daily=0.03, weekly=0.10, min_lot_risk_cap=0.01))
+    assert supervisor_ceilings([_acc("demo", overrides=tight)]) == RiskCeilings(daily=0.03, weekly=0.075)
     assert supervisor_ceilings([_acc("demo"), _acc("live", overrides=None)]) is None
     assert supervisor_ceilings([_acc("demo"), _acc("demo", overrides=None, name="vantage-demo")]) is None
     assert supervisor_ceilings([]) is None
@@ -271,7 +276,9 @@ def test_supervisor_caps_follow_the_engines_current_limits_in_lockstep(tmp_path)
     lim = SupervisorLimits.from_settings(s, ceilings=supervisor_ceilings([_acc("demo")]))
     _engine_file(tmp_path, "icm-demo", DEMO_CUR, eq=970.0)           # 3% down: under 5%, over the default 1.5%
     st = Supervisor(tmp_path, lim).evaluate()
-    assert st["daily_cap"] == 0.05 and st["weekly_cap"] == 0.10 and "combined_daily_cap" not in st["reasons"]
+    assert (st["daily_cap"], st["weekly_cap"]) == SUPERVISOR_DEMO_ENVELOPE and "combined_daily_cap" not in st["reasons"]
+    _engine_file(tmp_path, "icm-demo", DEMO_CUR, eq=960.0)           # 4% down: over the 3.75% combined envelope
+    assert "combined_daily_cap" in Supervisor(tmp_path, lim).evaluate()["reasons"]
     _engine_file(tmp_path, "icm-demo", DEF_CUR, eq=970.0)            # the engine reverted: defaults at once
     st = Supervisor(tmp_path, lim).evaluate()
     assert st["daily_cap"] == s.supervisor_daily_cap and "combined_daily_cap" in st["reasons"]
@@ -289,7 +296,7 @@ def test_supervisor_caps_stay_at_the_defaults_or_ceilings_when_any_engine_is_not
         _engine_file(tmp_path, a, cur, mode=mode)
     st = Supervisor(tmp_path, lim).evaluate()
     if len(files) == 1:
-        assert (st["daily_cap"], st["weekly_cap"]) == (0.05, 0.10)
+        assert (st["daily_cap"], st["weekly_cap"]) == SUPERVISOR_DEMO_ENVELOPE
     else:
         assert (st["daily_cap"], st["weekly_cap"]) == (s.supervisor_daily_cap, s.supervisor_weekly_cap)
 
@@ -349,6 +356,21 @@ def test_the_8_percent_size_down_reverts_to_defaults_and_the_revert_survives_a_r
     again._refresh_account(_tick(3))
     assert again.limits_current.profile == DEFAULT_PROFILE and again.gate.limits.daily_cap == 0.02
     assert not (tmp_path / "limits_icm-demo.json").exists()     # no new JSON state file
+    assert LimitsStore(tmp_path).load("icm-demo").reverted
+
+
+def test_a_saved_size_down_stage_without_a_revert_row_starts_on_the_defaults(tmp_path, phase_file):
+    # trading-safety LOW on 156cfbf: the risk file says size-down but core.db has no revert (a lost write, or a stage
+    # saved before this release): the engine must start on the defaults, not the ceilings, before any refresh
+    pb = _Equity()
+    pb.on_tick(_tick())
+    old = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path), mode="demo"), pb,
+                 [], {}, ApprovalCenter({1}, bus=ApprovalBus(tmp_path)))
+    old.state.stage = Stage.SIZE_DOWN
+    old._save_risk_state()
+    eng = _engine(tmp_path, pb, phase_file)
+    assert eng._limits_reverted and eng.limits_current.profile == DEFAULT_PROFILE
+    assert eng.gate.limits.daily_cap == load_settings().risk.daily_cap and eng.gate.limits.min_lot_risk_cap is None
     assert LimitsStore(tmp_path).load("icm-demo").reverted
 
 
@@ -468,3 +490,29 @@ def test_shadow_trades_carry_the_limits_profile(tmp_path):
     t = book.open_trade(version="v1", agent_id="a", side=1, bar_ts=T0, entry=2400.0, atr_usd=8.0, target_atr=2.0,
                         stop_atr=1.0, max_bars=8, p=0.6, limits_profile=PROFILE)
     assert t is not None and t.limits_profile == PROFILE
+
+
+# ---------------------------------------------------------------------------------------------- paper evidence
+def _closed(profile: str | None, exit_utc: pd.Timestamp, limits: dict | None = None, mode: str = "demo") -> ClosedTrade:
+    return ClosedTrade.model_validate({"account_id": "icm-demo", "broker": "icm", "mode": mode, "exit_utc": exit_utc,
+                                       "ret": 0.001, "pnl": 1.0, "equity_before": 1_000.0, "limits_profile": profile,
+                                       "limits": limits})
+
+
+CUT = pd.Timestamp("2026-10-18", tz="UTC")
+DEF_TAG = {"daily_cap": 0.02, "weekly_cap": 0.05, "min_lot_risk_cap": None, "project_open_risk": False}
+
+
+@pytest.mark.parametrize("profile, exit_utc, limits, mode, counts", [
+    (PROFILE, CUT + pd.Timedelta(days=1), None, "demo", False),                    # demo profile: excluded
+    (None, CUT - pd.Timedelta(days=1), None, "demo", True),                        # untagged before the cutover
+    (None, CUT + pd.Timedelta(days=1), None, "demo", False),                       # untagged after it (an orphan)
+    (DEFAULT_PROFILE, CUT + pd.Timedelta(days=1), DEF_TAG, "demo", True),          # default profile, default values
+    (DEFAULT_PROFILE, CUT + pd.Timedelta(days=1), None, "demo", True),             # default profile, no values
+    (DEFAULT_PROFILE, CUT + pd.Timedelta(days=1), {**DEF_TAG, "daily_cap": 0.05}, "demo", False),   # values above
+    (DEFAULT_PROFILE, CUT + pd.Timedelta(days=1), {**DEF_TAG, "min_lot_risk_cap": 0.01}, "demo", False),
+    (DEFAULT_PROFILE, CUT + pd.Timedelta(days=1), DEF_TAG, "live", False),         # not a paper trade at all
+])
+def test_paper_evidence_counts_only_default_profile_trades(profile, exit_utc, limits, mode, counts):
+    risk = load_settings().risk
+    assert counts_as_default_evidence(_closed(profile, exit_utc, limits, mode), risk) is counts
