@@ -1,0 +1,5 @@
+id: R50
+requirement: '"bounded feature and parameter search, not discovery of novel strategies" (DESIGN Bounded research loop); owner 2026-10-18: backtest strategies on multiple timeframes in parallel, continuously, keeping those that work'
+status: 'partial: phase 1 generator and queue; the schedule only reports until research.yml takes a batch'
+code: goldbot/research/generator.py `generate`, `batch`, `sizing_feasible`; scripts/research_queue.py; goldbot/config.py `ResearchSettings.loop_trials_per_run`, `loop_equity_usd`; .github/workflows/research-loop.yml; docs/plans/continuous-research-loop.md
+test: tests/test_research_generator.py (grid determinism, check_founder_config, tried hashes skipped, batch size, screening/retired excluded, min-lot 1.2x boundary, window ends at the holdout, unreadable registry yields no batch)
