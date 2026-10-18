@@ -258,6 +258,12 @@ above is the queued part only.
        (`evaluate(..., full_coverage_columns=...)`), because a survivor trial is H-02's configuration with cluster
        k's inputs. `run_specialist` passes the field through to `evaluate`, in the same BACKLOG item and with a
        test. Without it, a slot whose cluster contains `macro_spx_dd20` (H-07) does not run under the slot.
+- **Amendment 2026-10-18 (research director, owner directive ADR 0029; before any H-02 outcome): H-02 is pulled
+  forward into 2026Q4** by `preregistration-2026Q4-pullforward.md`. Its config, cluster map, reading rule and slot
+  derivation rule are unchanged. That file pins the variant, the bars and the data-v1 and macro digests, and accepts
+  the 21 G1 gap weekdays for H-02 (no re-run on repaired data). It funds the trial by withdrawing batch B13. The four
+  survivor slots become Q1 open-budget rows S-1..S-4. H-02 is not written as a Q1 queued row, and the reservation
+  goes to 1 (C4H) in the change owed there (section 5).
 
 ### H-01 Slow TSMOM
 - Config: `specialist=tsmom`, signal from 1d bars (20/60/120-day vol-scaled returns, 60-day vol), execution and
@@ -877,6 +883,15 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
   bars), O-4 is **withdrawn before it runs**: no trial is spent and nothing is added to K.
 - Kill: AUC < 0.52 (above). The 15m lane is then H-17 alone, and research-plan §7 applies if H-17 also fails.
 - Data first: `calendar-v1`, G1/G4; engineering E-2 and BACKLOG 31.
+- **Amendment 2026-10-18 (research director; before any H-14 count, label or outcome; for quant-reviewer review).**
+  O-4 is **not** pulled forward. Its group map cannot be pinned yet: `liquidity` and `activity` are not coded, and
+  the candidate generator, BACKLOG 31 and `calendar-v1` are missing. `preregistration-2026Q4-pullforward.md`
+  section 3.3 adds three rules:
+  - **Drop, not delay:** `liquidity` and `activity` are dropped if they are not merged by 2026-12-11.
+  - O-4 runs as soon as its conditions hold from 2027-01-04, without waiting for O-1..O-3.
+  - O-4 may run in 2026Q4 only if all its conditions hold by 2026-12-18 and the owner raises the Q4 override by 1.
+
+  Its map may not change citing H-02's result.
 
 #### O-5, O-6 H-14 survivor groups (<= 2 trials)
 - Config: a walk-forward model on H-14's label and candidates, inputs = the surviving group's recorded columns +
