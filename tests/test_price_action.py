@@ -14,6 +14,7 @@ from goldbot.features import price_action as PA
 from goldbot.features.smc_replica import equal_levels
 
 P2 = PA.PAParams(pivot_len=2)
+P2C = PA.PAParams(pivot_len=2, eq_atr_len=14)       # short paths: equal pivots judged on a 14-bar ATR
 
 
 def _walk(n: int, seed: int = 7, sd: float = 0.002, freq: str = "15min") -> pd.DataFrame:
@@ -63,6 +64,63 @@ def test_no_column_changes_when_later_bars_are_appended(params: PA.PAParams, fre
                                       check_exact=True)
 
 
+# crafted 4h paths on which the rare patterns fire (pivot_len 2)
+CRAFTED: dict[str, list[float]] = {
+    "head_and_shoulders": [100, 105, 100, 110, 100, 105, 100, 99, 92, 99.5, 80],
+    "inverse_head_and_shoulders": [110, 105, 110, 100, 110, 105, 110, 111, 118, 110.5, 130],
+    "triple_top": [100, 110, 104, 110, 104, 110, 103, 95],
+    "triple_bottom": [110, 100, 106, 100, 106, 100, 107, 115],
+    "descending_triangle": [90, 104, 100, 110, 100, 106, 100, 103, 95, 99.7, 90],
+    "ascending_triangle": [120, 106, 110, 100, 110, 104, 110, 107, 115, 110.3, 120],
+    "symmetrical_triangle": [90, 112, 94, 110, 97, 107, 100, 104, 112, 104.3, 115],
+    "abcd": [100, 110, 105, 112, 108, 120],
+    "down_trendline": [120, 112, 100, 108, 97, 104, 96, 115],
+}
+
+
+def _crafted_frames() -> list[tuple[pd.DataFrame, pd.DataFrame]]:
+    out = []
+    for path in CRAFTED.values():
+        df = _bars(_path(path, flat=30, start=path[0]))
+        out.append((df, PA.price_action_frame(df, P2C, tf="4h")))
+    channel = 100 + 0.5 * np.arange(200) + np.tile([0.0, 0.6, -0.3, 0.2], 50)
+    out.append((_bars(channel), PA.price_action_frame(_bars(channel), P2C, tf="4h")))
+    return out
+
+
+def test_crafted_patterns_fire_and_are_prefix_invariant():
+    fired = {name: PA.price_action_frame(_bars(_path(p, flat=30, start=p[0])), P2C, tf="4h")
+             for name, p in CRAFTED.items()}
+    assert (fired["head_and_shoulders"]["pa_hs_break"] == -1).any()
+    assert (fired["inverse_head_and_shoulders"]["pa_hs_break"] == 1).any()
+    assert (fired["triple_top"]["pa_tpl"] == -1).any() and (fired["triple_bottom"]["pa_tpl"] == 1).any()
+    assert (fired["descending_triangle"]["pa_tri_desc"] == 1).any()
+    assert (fired["ascending_triangle"]["pa_tri_asc"] == 1).any()
+    assert (fired["ascending_triangle"]["pa_tri_breakout_close"] == 1).any()
+    assert (fired["symmetrical_triangle"]["pa_tri_sym"] == 1).any()
+    assert (fired["abcd"]["pa_abcd_d"] == 1).any()
+    for df, full in _crafted_frames():
+        for k in range(40, len(df), 7):
+            part = PA.price_action_frame(df.iloc[:k], P2C, tf="4h")
+            pd.testing.assert_frame_equal(part.reset_index(drop=True), full.iloc[:k].reset_index(drop=True),
+                                          check_exact=True)
+
+
+def test_every_column_varies_over_the_test_frames():
+    frames = [f for _, f in _crafted_frames()]
+    frames += [PA.price_action_frame(_walk(6000, freq=q, seed=s), P2) for q, s in (("15min", 7), ("1h", 11))]
+    allf = pd.concat(frames, ignore_index=True)
+    constant = [c for c in PA.COLUMNS if allf[c].nunique(dropna=True) < 2]
+    assert constant == []
+
+
+def test_preregistration_groups_partition_the_columns_within_the_group_cap():
+    groups = PA.PREREG_GROUPS
+    cols = [c for g in groups.values() for c in g]
+    assert sorted(cols) == sorted(PA.COLUMNS) and len(cols) == len(set(cols))
+    assert max(len(g) for g in groups.values()) <= 39 and len(groups) == 6
+
+
 def test_a_higher_timeframe_bucket_is_available_only_from_the_row_that_closes_it():
     df = _walk(40, freq="15min")
     ts = pd.DatetimeIndex(df["ts_utc"])
@@ -79,12 +137,15 @@ def test_lookahead_check_reports_no_column():
     from goldbot.data.resample import resample_bars, ticks_to_1m
     from goldbot.data.synthetic import synthetic_ticks
     from goldbot.features.registry import FULL_HISTORY
-    from goldbot.research.pipeline import lookahead_check
+    from goldbot.research.pipeline import build_decision_frame, lookahead_check
     names = PA.enable()
     ticks = synthetic_ticks("2025-03-03", "2025-04-04", ticks_per_minute=2, seed=5)
     bars = resample_bars(ticks_to_1m(ticks), "15m").reset_index(drop=True)
-    out = lookahead_check(bars, None, feature_names=names, ctx={FULL_HISTORY: True})
-    assert out["lookahead_columns"] == [] and out["columns_checked"] >= len(PA.COLUMNS) - 10
+    ctx = {FULL_HISTORY: True}
+    _, full = build_decision_frame(bars, None, names, ctx)
+    assert set(PA.COLUMNS) <= set(full.columns)                            # every one of the columns is compared
+    out = lookahead_check(bars, None, feature_names=names, ctx=ctx, full=full)
+    assert out["lookahead_columns"] == [] and out["columns_checked"] == full.shape[1] - 1 >= len(PA.COLUMNS)
 
 
 # --------------------------------------------------------------------------- opt-in wiring

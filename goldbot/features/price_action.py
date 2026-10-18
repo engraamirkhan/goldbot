@@ -205,6 +205,21 @@ CANDLE_COLUMNS = (
     "pa_off_the_line", "pa_sr_reject", "pa_confluence")
 COLUMNS = (*LEVEL_COLUMNS, *PATTERN_COLUMNS, *CANDLE_COLUMNS)
 
+# The split a pre-registration uses (quant review 2026-10-18): six groups, each within the 39-column group cap
+# (`DiscoveryConfig.max_selected`), together every column exactly once (tests/test_price_action.py).
+_CANDLE_RAW_CONF = tuple(c for c in CANDLE_COLUMNS if c.startswith("pa_cs_") and not c.endswith("_lvl")
+                         and c not in ("pa_cs_three_best", "pa_cs_at_level"))
+PREREG_GROUPS: dict[str, tuple[str, ...]] = {
+    "pa_levels": (*LEVEL_COLUMNS[:12], "pa_vol_ratio", "pa_vol_veto"),
+    "pa_dynamic": tuple(c for c in LEVEL_COLUMNS
+                        if c.startswith(("pa_ema", "pa_h1_")) or c in ("pa_daily_mom",)),
+    "pa_geometry": tuple(c for c in LEVEL_COLUMNS if c.startswith(("pa_chan_", "pa_tl_", "pa_fib"))),
+    "pa_patterns": PATTERN_COLUMNS,
+    "pa_candles": (*_CANDLE_RAW_CONF, "pa_cs_three_best", "pa_cs_at_level"),
+    "pa_candle_context": (*(c for c in CANDLE_COLUMNS if c.endswith("_lvl")), "pa_reversal_rank", "pa_reversal_dir",
+                          "pa_wick_rejection", "pa_off_the_line", "pa_sr_reject", "pa_confluence"),
+}
+
 # directional columns (positive favours a long): side-aligned for meta-label models (registry.SIGNED)
 SIGNED = {
     r"pa_ema\d+_(dist|slope)_atr": 0.0, r"pa_ema10_(20|50)_gap_atr": 0.0, "pa_h1_ma10_dist_atr": 0.0,
