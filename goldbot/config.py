@@ -642,6 +642,11 @@ class TvPullSettings(_Section):
     # display names (goldbot/data/tv_alias.py): key_of(name | plot fingerprint) -> our name, e.g. "Structure (smc)";
     # empty here (no vendor name in the repo), the owner's keys sit in settings.local.yaml
     aliases: dict[str, str] = Field(default_factory=dict)
+    # "TradingView gives only the final box set in history": the graphics a study holds (boxes, lines, labels) are kept
+    # per closed bar of these timeframes in tv.db `tv_graphics`, from the frames the study already sends (no request)
+    graphics_timeframes: list[str] = Field(default_factory=lambda: ["15", "60", "240"])
+    graphics_max_objects: int = Field(default=500, ge=0)         # per snapshot; the highest ids are kept, `truncated` set
+    graphics_max_snapshots: int = Field(default=50000, ge=0)     # per study, symbol and timeframe; none are added beyond
 
     @model_validator(mode="after")
     def _backoff_ordered(self) -> TvPullSettings:

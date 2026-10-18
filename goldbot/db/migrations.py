@@ -384,6 +384,17 @@ TV: tuple[Migration, ...] = (
     meta TEXT NOT NULL, first_seen_utc TEXT NOT NULL, last_seen_utc TEXT NOT NULL
 ) STRICT""",
     )),
+    # the graphics (boxes, lines, labels) a study held at each closed bar, as the follow pass saw them: append-only,
+    # first receipt wins; TradingView serves only the final set in history, so this is the only record of the sets
+    # the study had AT each bar (goldbot/data/tv_pull.py `PullLog.save_graphics`)
+    Migration(version=3, name="tv_graphics", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS tv_graphics (
+    meta_hash8 TEXT NOT NULL, symbol TEXT NOT NULL, tf TEXT NOT NULL, bar_time TEXT NOT NULL,
+    received_utc TEXT NOT NULL, objects TEXT NOT NULL, n_objects INTEGER NOT NULL, truncated INTEGER NOT NULL,
+    obj_hash TEXT NOT NULL,
+    PRIMARY KEY (meta_hash8, symbol, tf, bar_time)
+) STRICT""",
+    )),
 )
 
 # tv_auth.db: the TradingView sign-in state (goldbot/ops/tv_pull_health.py), its own file so a corrupt one can be moved

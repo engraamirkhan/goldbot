@@ -392,6 +392,9 @@ tv_pull:                             # TradingView direct pull (goldbot/data/tv_
   timeout_s: 30                      # per request
   aliases: {}                        # our display names: key_of(name | plot fingerprint) -> "Structure (smc)", "S/R channels",
                                      #   "Money flow (mfi)" (goldbot/data/tv_alias.py); unmatched -> "Indicator N"
+  graphics_timeframes: ["15", "60", "240"]  # a study's boxes/lines/labels are saved per closed bar here (tv.db tv_graphics); [] = off
+  graphics_max_objects: 500          # per snapshot (highest ids kept, flagged truncated)
+  graphics_max_snapshots: 50000      # per study, symbol and timeframe; append-only, nothing added beyond it
 tv:                                  # TradingView values at decision time (goldbot/engine/tv_context.py, specialists/tv_event.py)
   max_lag_s: 60                      # a value counts only for the decision bar and when it arrived <= this after its close,
                                      #   else NaN and no TradingView entry (fails closed); equals features.tv_plots.MAX_LAG
