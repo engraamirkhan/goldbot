@@ -1205,7 +1205,11 @@ def backup(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     from goldbot.ops import backup as backup_mod
     paths, get_secret = _backup_args(ctx)
     b = ctx.settings.backup
-    return backup_mod.backup_job(paths, get_secret, host=b.host, timeout_s=b.timeout_s)
+    try:
+        return backup_mod.backup_job(paths, get_secret, host=b.host, timeout_s=b.timeout_s)
+    finally:   # also after a failed backup: a full bucket is a likely cause (health: object_storage, BACKLOG 67)
+        from goldbot.ops import storage_size
+        storage_size.record_size(ctx.state_dir, get_secret)
 
 
 def restore_drill(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:

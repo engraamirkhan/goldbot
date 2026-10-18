@@ -4,7 +4,7 @@ rank: 8
 title: Object Storage size alert at 15 GB (restic and versioning vs the 20 GB free limit)
 stage: Operations (backups, cost guard) · RUN
 size: S
-status: 'ready (decided 2026-10-16 from the CFO budget revision) · accountable: sre · due 2026-10-23 (before the scheduler runs the nightly backup)'
+status: 'built 2026-10-18 (check object_storage, probe goldbot/ops/storage_size.py, RUNBOOK 0.6); open: reviews, install + sign in the oci CLI on the brain, one recorded run on #34 · accountable: sre · due 2026-10-23'
 ---
 - **67. Object Storage size alert at 15 GB.** Decided 2026-10-16 by program director + product owner from
   `docs/finance/budget-2026-10.md` (Backups row and the follow-ups table). Value (RUN, cost and safety): restic to

@@ -266,6 +266,11 @@
    "no retention run yet (monthly; run scripts/backup_retention.sh on your Mac (RUNBOOK 0.6))"
   ],
   [
+   "object_storage",
+   "ok",
+   "3.0 GB with previous versions (read 16.0 h ago; free tier 20 GB)"
+  ],
+  [
    "restore_drill",
    "ok",
    "last drill 3.0 d ago verified 9 files"
@@ -703,6 +708,11 @@
    "backup_prune",
    "ok",
    "no retention run yet (monthly; run scripts/backup_retention.sh on your Mac (RUNBOOK 0.6))"
+  ],
+  [
+   "object_storage",
+   "ok",
+   "3.0 GB with previous versions (read 16.0 h ago; free tier 20 GB)"
   ],
   [
    "restore_drill",

@@ -434,6 +434,16 @@ at the first warning; it also warns when a backup took 10 min or more, because r
 under the brain's no-delete key, ADR 0002), `restore_drill` (fail when the drill fails) and `backup_prune` (warn when the monthly
 retention run from your Mac is older than 45 days).
 
+**Object Storage size (`object_storage`).** After each nightly backup (also a failed one) the brain sums every object
+version in the bucket, previous versions included, with the OCI CLI (`oci`, configured on the brain; the bucket comes
+from the `restic-repository` secret) and writes `state/object_storage_size.json`. Health warns at 15 GB and fails at
+19 GB of the 20 GB free tier (`backup.storage_warn_gb`, `storage_fail_gb`); Telegram tells you at the first warning. A
+missing, older-than-48-h or unreadable reading shows "size unknown" as a warning, never OK (usually the `oci` CLI is
+not installed or not signed in: install it and run `python -m goldbot.ops.storage_size` once, it prints the size).
+When it warns on size: nothing is lost yet; run the monthly retention from your Mac (`scripts/backup_retention.sh`);
+previous versions then leave after the 30-day expiry (ADR 0002), so usage falls about a month later. If it fails,
+tell the sre the same day: the next backup could be refused.
+
 **Why two keys.** The brain only adds backups; it never deletes old ones (no `restic forget` or `prune` on the
 brain). Old backups are thinned once a month **from your Mac** with a second key. If the brain is ever compromised,
 its key cannot wipe the backup history, and the bucket keeps every overwritten or deleted object for 30 more days
