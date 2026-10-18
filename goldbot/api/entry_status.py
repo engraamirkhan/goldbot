@@ -614,9 +614,9 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
                     continue
                 add(_engine_block(code, e, now, limits))
         declared = e.get("account_class_declared")
-        if declared in ("raw", "standard") and e.get("account_class_measured") not in ("raw", "standard"):
-            notes.append(f"Account type: {str(declared).capitalize()} (from the account settings; measurement "
-                         f"confirms it over the week).")
+        if declared in ("raw", "standard") and e.get("account_class_measured") == "unknown":
+            notes.append(f"Account type: {str(declared).capitalize()} (from the account settings; not measured yet, "
+                         f"checked every night).")
         for b in _refusal_blocks(e.get("entry_refusals")):
             add(b)
         last_err = _ts(e.get("last_tick_error_at"))

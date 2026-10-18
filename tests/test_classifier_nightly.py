@@ -78,3 +78,16 @@ def test_a_declared_class_does_not_stop_the_measurement(tmp_path):
     declared = ACC.model_copy(update={"account_class": "raw"})
     wed = nightly_costs(_ctx(root, tmp_path, declared), pd.Timestamp("2025-09-24 23:10", tz="UTC"))["icm-demo"]
     assert "account_class" in wed
+
+
+def test_a_torn_classifier_file_is_recorded_and_the_next_account_still_gets_its_costs(tmp_path):
+    root = tmp_path / "data"
+    _log_ticks(root, "2025-09-24 12:00", "2025-09-24 14:00", 4)
+    (tmp_path / "classifier_icm-demo.json").write_text("{torn")
+    other = ACC.model_copy(update={"account_id": "other-demo"})
+    ctx = _ctx(root, tmp_path)
+    ctx.accounts = [ACC, other]
+    out = nightly_costs(ctx, pd.Timestamp("2025-09-24 23:10", tz="UTC"))
+    assert "classifier_error" in out["icm-demo"] and "account_class" not in out["icm-demo"]
+    assert "other-demo" in out and (tmp_path / "costs_icm-demo.json").exists()
+    assert (tmp_path / "classifier_icm-demo.json").read_text() == "{torn"       # never overwritten blindly

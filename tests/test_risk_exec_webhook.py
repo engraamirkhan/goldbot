@@ -4,10 +4,19 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
 
 from goldbot.execution.broker import OrderIntent, Tick
-from goldbot.execution.classifier import Classification, PersistentClassifier, classify
+from goldbot.execution.classifier import (
+    Classification,
+    PersistentClassifier,
+    StoredClass,
+    class_mismatch,
+    classify,
+    effective_class,
+    read_stored,
+)
 from goldbot.execution.paper import PaperBroker
 from goldbot.risk import AccountState, Intent, RiskGate
 from goldbot.risk.gate import Stage
@@ -228,28 +237,53 @@ def test_is_known_is_false_until_a_raw_or_standard_class_is_stored(tmp_path):
     assert PersistentClassifier(tmp_path / "acct.json").is_known()
 
 
-def test_a_declared_class_is_the_baseline_until_a_measured_class_is_stored():
-    from goldbot.execution.classifier import effective_class
-    assert effective_class("raw", None) == "raw" and effective_class("raw", "unknown") == "raw"
-    assert effective_class(None, None) == "unknown" and effective_class(None, "unknown") == "unknown"
-    assert effective_class(None, "raw") == "raw" and effective_class(None, "standard") == "standard"
+@pytest.mark.parametrize("declared, stored, expected", [
+    (None, StoredClass(), "unknown"),
+    (None, StoredClass("unknown", "standard"), "unknown"),                  # undeclared: as before, a thin run blocks
+    (None, StoredClass("raw", "raw"), "raw"),
+    (None, StoredClass("standard", "standard"), "standard"),
+    (None, StoredClass(unreadable=True), "unknown"),
+    ("raw", StoredClass(), "raw"),                                          # never measured: the declared baseline
+    ("raw", StoredClass("unknown", None), "raw"),
+    ("raw", StoredClass("raw", "raw"), "raw"),
+    ("raw", StoredClass("standard", "standard"), "standard"),               # the stricter wins
+    ("standard", StoredClass("raw", "raw"), "standard"),                    # never the looser one
+    ("raw", StoredClass("unknown", "standard"), "standard"),                # standard -> unknown -> unknown stays strict
+    ("raw", StoredClass("unknown", "raw"), "raw"),
+    ("raw", StoredClass(unreadable=True), "standard"),                      # torn file: the stricter class
+    ("standard", StoredClass(unreadable=True), "standard"),
+])
+def test_effective_class_is_never_looser_than_the_declared_or_any_known_measurement(declared, stored, expected):
+    assert effective_class(declared, stored) == expected
 
 
-def test_when_declared_and_measured_classes_disagree_the_stricter_one_wins():
-    from goldbot.execution.classifier import class_mismatch, effective_class
-    assert effective_class("raw", "standard") == "standard"
-    assert effective_class("standard", "raw") == "standard"              # never the looser one
-    assert effective_class("raw", "raw") == "raw"
+def test_class_mismatch_needs_two_known_classes_that_differ():
     assert class_mismatch("raw", "standard") and class_mismatch("standard", "raw")
     assert not class_mismatch("raw", "raw") and not class_mismatch("raw", "unknown") and not class_mismatch(None, "raw")
 
 
-def test_the_stored_class_is_read_from_the_classifier_file_unknown_when_missing_or_torn(tmp_path):
-    from goldbot.execution.classifier import read_stored_class
-    assert read_stored_class(tmp_path / "c.json") == "unknown"
-    (tmp_path / "c.json").write_text('{"class": "standard"}')
-    assert read_stored_class(tmp_path / "c.json") == "standard"
-    (tmp_path / "c.json").write_text("{torn")
-    assert read_stored_class(tmp_path / "c.json") == "unknown"
-    (tmp_path / "c.json").write_text('{"class": "weird"}')
-    assert read_stored_class(tmp_path / "c.json") == "unknown"
+def test_the_stored_class_is_read_with_its_last_known_class(tmp_path):
+    f = tmp_path / "c.json"
+    assert read_stored(f) == StoredClass()                                   # missing: nothing measured, not unreadable
+    f.write_text('{"class": "standard"}')
+    assert read_stored(f) == StoredClass("standard", "standard")
+    f.write_text('{"class": "unknown", "last_known": "standard"}')
+    assert read_stored(f) == StoredClass("unknown", "standard") and read_stored(f).known == "standard"
+    f.write_text('{"class": "unknown", "runs": [{"account_class": "standard"}]}')    # a legacy file
+    assert read_stored(f).known == "standard"
+    f.write_text("{torn")
+    assert read_stored(f).unreadable
+    f.write_text("[1]")
+    assert read_stored(f).unreadable
+    f.write_text('{"class": "weird"}')
+    assert read_stored(f) == StoredClass("unknown", None)
+
+
+def test_standard_then_two_thin_runs_keeps_a_declared_raw_account_standard(tmp_path):
+    pc = PersistentClassifier(tmp_path / "acct.json")
+    pc.update(_cls("standard"))
+    pc.update(_cls("unknown"))
+    pc.update(_cls("unknown"))
+    stored = read_stored(tmp_path / "acct.json")
+    assert stored.cls == "unknown" and stored.last_known == "standard"
+    assert effective_class("raw", stored) == "standard"

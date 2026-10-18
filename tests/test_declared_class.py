@@ -8,6 +8,7 @@ import pytest
 
 from goldbot.engine import Engine, EngineConfig
 from goldbot.execution.broker import Tick
+from goldbot.execution.classifier import StoredClass
 from goldbot.execution.paper import PaperBroker
 from goldbot.ops import health
 from goldbot.ops.accounts import Account, load_accounts
@@ -48,13 +49,40 @@ def test_a_declared_raw_account_is_not_blocked_as_unknown_before_any_measurement
     eng._refresh_account(TICK)
     assert eng.state.account_class == "raw"                                  # no classifier file yet
     _stored(tmp_path, "unknown")
-    eng._class_cache = (-2.0, "unknown")
+    eng._class_cache = (-2.0, StoredClass())
     eng._refresh_account(TICK)
     assert eng.state.account_class == "raw"
 
 
 def test_an_undeclared_account_with_no_measurement_stays_unknown(tmp_path):
     eng = _engine(tmp_path, None)
+    eng._refresh_account(TICK)
+    assert eng.state.account_class == "unknown"
+
+
+def test_standard_then_unknown_stays_standard_for_a_declared_raw_account(tmp_path):
+    eng = _engine(tmp_path, "raw")
+    (tmp_path / "classifier_icm-demo.json").write_text(
+        json.dumps({"class": "unknown", "pending": None, "last_known": "standard", "runs": []}))
+    eng._refresh_account(TICK)
+    assert eng.state.account_class == "standard" and eng._measured_class() == "standard"
+
+
+def test_a_torn_classifier_file_makes_a_declared_account_standard_and_health_warns(tmp_path):
+    eng = _engine(tmp_path, "raw")
+    (tmp_path / "classifier_icm-demo.json").write_text("{torn")
+    eng._refresh_account(TICK)
+    assert eng.state.account_class == "standard" and eng._measured_class() == "unreadable"
+    ctx = make_ctx(tmp_path)
+    engine_file(tmp_path, 60, mode="demo", account_class="standard", account_class_declared="raw",
+                account_class_measured="unreadable")
+    c = health.check_engine(ctx, "icm-demo")
+    assert c.status == "warn" and "classifier file unreadable" in c.reason
+
+
+def test_a_torn_classifier_file_on_an_undeclared_account_stays_unknown(tmp_path):
+    eng = _engine(tmp_path, None)
+    (tmp_path / "classifier_icm-demo.json").write_text("{torn")
     eng._refresh_account(TICK)
     assert eng.state.account_class == "unknown"
 

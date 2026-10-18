@@ -54,9 +54,15 @@ def test_a_declared_class_with_no_measurement_shows_an_info_note_and_no_account_
     e = engine(account_class="raw", account_class_declared="raw", account_class_measured="unknown")
     s = status(e)
     assert s.state == "open" and codes(s) == []
-    assert any("Account type: Raw (from the account settings" in n for n in s.notes)
+    assert any("Account type: Raw (from the account settings" in n and "confirms" not in n for n in s.notes)
 
 
 def test_a_measured_class_that_confirms_the_declared_one_shows_no_note():
     e = engine(account_class="raw", account_class_declared="raw", account_class_measured="raw")
     assert status(e).notes == []
+
+
+def test_a_mismatch_or_unreadable_file_never_claims_the_declared_class_is_confirmed():
+    for measured in ("standard", "unreadable"):
+        e = engine(account_class="standard", account_class_declared="raw", account_class_measured=measured)
+        assert status(e).notes == []
