@@ -211,8 +211,15 @@ def test_the_daily_series_keeps_only_daily_bars_after_its_yearly_and_monthly_sta
     yearly = [-1_700_000_000 + 365 * day * k for k in range(3)]            # before 1921
     monthly = [-1_500_000_000 + day * k for k in (0, 2)] + [-1_500_000_000 + 30 * day * k for k in range(1, 6)]
     daily = [1_700_000_000 + day * k for k in range(5)] + [1_700_000_000 + 9 * day]   # a long weekend stays
-    assert tv_pull._drop_sparse_start(yearly + monthly + daily) == daily
-    assert tv_pull._drop_sparse_start(daily) == daily
+    assert tv_pull._drop_sparse_start(yearly + monthly + daily, "1D") == daily
+    assert tv_pull._drop_sparse_start(daily, "1D") == daily
+
+
+def test_weekly_and_intraday_series_are_never_truncated_by_the_daily_rule():
+    week = 7 * 86400
+    monthly_then_weekly = [1_000_000_000 + 30 * 86400 * k for k in range(5)] + [1_200_000_000 + week * k for k in range(5)]
+    for tf in ("1W", "240", "15"):
+        assert tv_pull._drop_sparse_start(monthly_then_weekly, tf) == monthly_then_weekly
 
 
 # ------------------------------------------------------------------------------------------------- read-only
@@ -286,16 +293,26 @@ def test_asof_join_sees_a_pulled_value_at_available_utc_not_one_ns_before(backfi
     assert pd.isna(j["tv_close"].iloc[0]) and j["tv_close"].iloc[1] == row["value"]
 
 
-def test_history_latency_is_the_measured_p95_once_enough_live_bars_exist(tmp_path):
-    store = Store(tmp_path / "data")
-    bars = pd.date_range("2026-10-15T00:00Z", periods=40, freq="15min")
-    lag = [60.0 + i for i in range(40)]
+def live_rows(store: Store, n: int) -> list[float]:
+    bars = pd.date_range("2026-10-15T00:00Z", periods=n, freq="15min")
+    lag = [60.0 + i for i in range(n)]
     rows = pd.DataFrame({"ts_utc": bars, "bar_time": bars, "plot": "close", "value": 1.0, "tf": "15",
                          "indicator": "chart", "version": "OANDA:XAUUSD", "origin": "pull_live", "intrabar": False,
                          "received_at": bars + pd.Timedelta(minutes=15) + pd.to_timedelta(lag, unit="s")})
     rows["available_utc"] = rows["received_at"]
     store.append(TABLE, rows, source=source_of("chart", "OANDA:XAUUSD"))
-    s, measured = tv_pull.history_latency_s(store, cfg(), now=pd.Timestamp("2026-10-16T00:00Z"))
+    return lag
+
+
+def test_history_latency_is_the_960_s_default_until_20_live_bars_then_their_p95(tmp_path):
+    assert (TvPullSettings().history_latency_default_s, TvPullSettings().min_live_samples) == (960, 20)
+    now = pd.Timestamp("2026-10-16T00:00Z")
+    few = Store(tmp_path / "few")
+    live_rows(few, 19)
+    assert tv_pull.history_latency_s(few, TvPullSettings(), now=now) == (960.0, False)
+    enough = Store(tmp_path / "enough")
+    lag = live_rows(enough, 20)
+    s, measured = tv_pull.history_latency_s(enough, TvPullSettings(), now=now)
     assert measured and s == pytest.approx(pd.Series(lag).quantile(0.95))
 
 

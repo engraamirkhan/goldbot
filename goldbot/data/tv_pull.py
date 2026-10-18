@@ -27,7 +27,9 @@ Everything else is automatic:
   TradingView (`StudyMeta.history_recomputed`): only `pull_live` rows were seen as they were.
 * "Every join to bars via asof_join on available_utc". `pull_live` (received within `live_max_lag_s` of the close):
   `available_utc` = the receipt time. `pull_history` (backfill): bar close + the p95 latency of the live bars over
-  the last 30 days (`history_latency_s`), `history_latency_default_s` until `min_live_samples` exist. First receipt
+  the last 30 days (`history_latency_s`), `history_latency_default_s` (960 s) until `min_live_samples` (20) exist.
+  The default is conservative: a backfilled row becomes available about 900 s later than a live pull of the same bar
+  will be (one poll interval plus the offset), so research on history never sees a value earlier than live would. First receipt
   wins: a bar already stored is never rewritten; a re-read bar whose values differ is counted as a repaint.
 * Polite. One request at most every `min_interval_s`; history pages capped per timeframe; a timeframe is polled
   only once a new bar can have closed; `max_requests_per_day` over a rolling 24 h; after a failed pass the next waits
@@ -641,12 +643,15 @@ def _pulled(df: pd.DataFrame, tf: str, meta_hash: str = "") -> pd.DataFrame:
     return df[(df["tf"].astype(str) == tf) & df["origin"].isin(ORIGINS) & hashes.eq(meta_hash)]
 
 
-def _drop_sparse_start(times: list[int]) -> list[int]:
+def _drop_sparse_start(times: list[int], tf: str) -> list[int]:
     """Keep only the bars after the last gap longer than SPARSE_START_S. TradingView's 1D gold series starts with
     yearly bars before 1921, monthly ones to 1970 and a patchy 1997-98 (real pass, 2026-10-18): daily bars are kept
     from 1998-10-14.
     Gold has no two-week gap in its real bars at any timeframe, so the cost is only history before an outage that
-    long, never a wrong bar."""
+    long, never a wrong bar. 1D only: a weekly or monthly series has gaps this long by nature, and the intraday
+    series showed no such start (quant/data review, 2026-10-18)."""
+    if tf != "1D":
+        return times
     gaps = [i for i in range(len(times) - 1) if times[i + 1] - times[i] > SPARSE_START_S]
     return times[gaps[-1] + 1:] if gaps else times
 
@@ -812,7 +817,7 @@ def _pull_tf(cfg: TvPullSettings, *, store: Store, plog: PullLog, sock: GuardedS
         chart.close()
     received = _utc(now())
     rs = int(_epoch_s(pd.DatetimeIndex([received]))[0])
-    times = _drop_sparse_start(sorted(chart.bars))
+    times = _drop_sparse_start(sorted(chart.bars), tf)
     if times and times[-1] > rs:
         raise TvPullError(f"future bar: the {chart_sym} {tf} bar opening "
                           f"{pd.Timestamp(times[-1], unit='s', tz='UTC').isoformat()} is after now "
