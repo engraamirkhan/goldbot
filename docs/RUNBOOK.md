@@ -1280,6 +1280,12 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
 
 * By default every entry waits for your click (propose-and-approve). **Auto mode** means an entry that passes the
   RiskGate is placed without asking you. Every cap, stop and exit works exactly as before; only the click goes.
+* **Demo accounts enter automatically** (ADR 0036, your 2026-10-18 instruction): `icm-demo` has `approval_mode: auto`
+  in `config/accounts.yaml`, so its entries are placed without a click while the MT5 terminal reports a demo account.
+  Telegram sends "Opened automatically (demo): ..." for each (information only, no buttons). Real-money accounts
+  always wait for your click: `approval_mode: auto` on a live account stops the engine at start, and `/mode auto` or
+  the dashboard never make a live account automatic. `/mode propose` also returns the demo account to asking you;
+  the 12% kill switch and the 30-day window after a re-arm do too.
 * It is never switched on by itself. Telegram sends one message, "Auto mode can be enabled: evidence ...; reply
   /mode auto <TOTP>", only after at least 100 proposals you approved or rejected since the last mode change, with no
   RiskGate breach (no 8% size-down, no 12% kill switch) and no measurable difference between the outcomes of the
