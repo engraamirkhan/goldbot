@@ -131,8 +131,13 @@ costs:
   swap_triple_weekday: 2
   # After nightly_costs, publish the canonical broker's measured table (costs only: no account id, login, balance or
   # equity) as costs_measured.json on release costs-v1, which research.yml downloads. Needs the github-token in the
-  # keyring; refused while swap is unmeasured or fewer than 50 fills exist. Turn on once the demo terminal runs.
+  # keyring; refused while swap or the spread is unmeasured. Below 50 fills a slippage cell is published as the prior
+  # and labelled so (fields.slippage: prior or mixed; K3). Turn on once the demo terminal runs.
   publish_release: false
+  # Recorded broker-tick days (tick_record, state/ticks/) in the 30-day cost window before nightly_costs builds the
+  # spread profile (median and p90 by UTC hour and session, aggregates only; reported, not charged). 10 trading days
+  # with all three sessions: docs/research/costs-binding-2026-10-18.md section 1.4 step 4.
+  spread_profile_min_days: 10
 
 # Research scheduler (VPS service `goldbot-scheduler`). Times are UTC; gold's daily break is 21:00-22:00 UTC in
 # summer and 22:00-23:00 in winter, so the nightly job sits after both. Weekdays 0=Mon .. 6=Sun.

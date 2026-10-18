@@ -7,6 +7,9 @@
                     It also re-runs the account classifier: every night while the stored class is unknown (so a thin
                     first Friday does not block entries for a week), on Fridays only once a class is known (two
                     consecutive disagreements to change).
+                    With at least `costs.spread_profile_min_days` recorded broker-tick days in the cost window
+                    (tick_record) the table also carries their spread profile by UTC hour and session
+                    (`recorded_spread_profile`, aggregates only, reported and not charged).
                     With `costs.publish_release` and a github-token it then publishes the canonical broker's table
                     (costs only) to release costs-v1 for research.yml (`publish_costs`).
 * saturday_retrain  refresh bars from the data release (best effort), then per specialist: evaluate any challenger
@@ -93,7 +96,14 @@ from goldbot.data.release import store_macro
 from goldbot.data.store import Store
 from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.classifier import PersistentClassifier, classify
-from goldbot.execution.costs import BrokerTerms, CostTable, build_cost_table, publishable
+from goldbot.execution.costs import (
+    BrokerTerms,
+    CostTable,
+    SpreadProfile,
+    build_cost_table,
+    publishable,
+    spread_profile,
+)
 from goldbot.features.mtf import TF_LABEL, context_tfs
 from goldbot.features.registry import versions_for
 from goldbot.labels.triple_barrier import SwapSpec
@@ -189,16 +199,20 @@ def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         if terms is not None and terms.commission_per_lot_round_trip_usd is not None:
             commission = terms.commission_per_lot_round_trip_usd / 2
         swap = terms.swap_spec(acc.server_tz, ctx.settings.costs.swap_triple_weekday) if terms is not None else None
+        profile, profile_note = recorded_spread_profile(ctx.state_dir, acc.account_id, slot,
+                                                        window_days=r.cost_window_days,
+                                                        min_days=ctx.settings.costs.spread_profile_min_days)
         table = build_cost_table(acc.account_id, ticks, fills, commission_per_lot_side_usd=commission,
                                  slippage_prior_usd=ctx.settings.costs.slippage_prior_usd,
                                  min_fills=r.min_fills_for_slippage, now=slot, swap=swap, commission_measured=measured,
-                                 notes=notes)
+                                 notes=[*notes, profile_note], spread_profile=profile)
         if measured and terms is not None:
             table = table.model_copy(update={"commission_lots": terms.commission_lots})
         table.save(ctx.state_dir / f"costs_{acc.account_id}.json")
         row: dict[str, Any] = {"ticks": len(ticks), "fills": len(fills),
                                "round_trip_usd": {s: table.round_trip_usd_per_oz(s) for s in ("asia", "london", "newyork")},
-                               "swap_measured": swap is not None, "commission_measured": measured}
+                               "swap_measured": swap is not None, "commission_measured": measured,
+                               "spread_profile_days": profile.days if profile is not None else 0}
         try:
             persistent = PersistentClassifier(ctx.state_dir / f"classifier_{acc.account_id}.json")
             if slot.dayofweek == CLASSIFIER_WEEKDAY or not persistent.is_known():
@@ -220,10 +234,11 @@ COSTS_PUBLISHED_FILE = "costs_published.json"    # state: when the table last re
 def publish_costs(settings: Settings, accounts: list[Account], state_dir: Path, upload: Callable[[bytes], str],
                   now: pd.Timestamp) -> dict[str, Any]:
     """Upload the canonical broker's cost table to release costs-v1 (asset costs_measured.json) for research.yml.
-    Costs only (`PublishedCostTable`: no account id, login, balance or equity). Refused while swap is unmeasured or
-    there are fewer than `research.min_fills_for_slippage` fills, so a prior is never published as a measurement; an
-    upload failure is recorded, never raised (the cost table itself is already saved). state/costs_published.json
-    keeps the last success and the last attempt for the health check."""
+    Costs only (`PublishedCostTable`: no account id, login, balance or equity). Refused while swap or the spread is
+    unmeasured (`publishable`); without enough fills the slippage is published as the prior and labelled so
+    (costs-binding-2026-10-18.md K3), never as a measurement. An upload failure is recorded, never raised (the cost
+    table itself is already saved). state/costs_published.json keeps the last success and the last attempt for the
+    health check."""
     path = state_dir / COSTS_PUBLISHED_FILE
     try:
         rec: dict[str, Any] = json.loads(path.read_text()) if path.exists() else {}
@@ -233,7 +248,7 @@ def publish_costs(settings: Settings, accounts: list[Account], state_dir: Path, 
     if found is None:
         pub, reason = None, "no cost table on the canonical-cost broker yet"
     else:
-        pub, reason = publishable(found[0], found[1].broker, min_fills=settings.research.min_fills_for_slippage)
+        pub, reason = publishable(found[0], found[1].broker)
     result: dict[str, Any] = {"published": False, "reason": reason}
     if pub is not None:
         try:
@@ -246,6 +261,39 @@ def publish_costs(settings: Settings, accounts: list[Account], state_dir: Path, 
     rec.update(last_attempt_utc=now.isoformat(), last_result=result["reason"])
     write_atomic(path, json.dumps(rec), durable=False)
     return result
+
+
+def recorded_spread_profile(state_dir: Path, account_id: str, slot: pd.Timestamp, *, window_days: int,
+                            min_days: int) -> tuple[SpreadProfile | None, str]:
+    """The spread profile of the broker ticks `tick_record` recorded (state/ticks/<account>/, read with
+    `ticks.load_day`, sha256 checked) for the closed server dates of the last `window_days` days (the slot's own date is
+    partial and never counted), and a note; None below
+    `min_days` usable days (costs-binding-2026-10-18.md section 1.4 step 4: read only after >= 10 trading days, so the
+    medians are not one quiet week's). A day that cannot be read or fails its digest is skipped and counted, never
+    used. Only the aggregate leaves this function."""
+    from goldbot.data.ticks import load_day, recorded_days
+    first = (slot - pd.Timedelta(days=window_days)).date()
+    try:
+        days = [d for d in recorded_days(account_id, state_dir=state_dir) if first <= d < slot.date()]   # today: partial
+    except (ValueError, OSError) as exc:                 # no such label, or an unreadable index: no profile
+        return None, f"spread profile: tick record index unreadable ({type(exc).__name__})"
+    skipped: list[str] = []
+
+    def frames() -> Any:
+        for d in days:
+            try:
+                yield load_day(account_id, d, state_dir=state_dir)
+            except (ValueError, OSError, KeyError) as exc:   # digest mismatch, torn, missing file or column
+                skipped.append(d.isoformat())
+                log.warning("tick record %s %s not used for the spread profile: %s", account_id, d, exc)
+    prof = spread_profile(frames(), first_day=days[0], last_day=days[-1]) if days else None
+    used = prof.days if prof is not None else 0
+    tail = f", {len(skipped)} skipped (unreadable or digest mismatch)" if skipped else ""
+    if prof is None or used < min_days:
+        return None, f"spread profile: {used} recorded days in {window_days} d{tail}, fewer than {min_days}: not built"
+    kept = [d for d in days if d.isoformat() not in skipped]
+    prof = prof.model_copy(update={"days_skipped": len(skipped), "first_day": kept[0], "last_day": kept[-1]})
+    return prof, f"spread profile: {used} recorded days {kept[0]}..{kept[-1]}{tail}"
 
 
 def _broker_terms(ctx: JobContext, account_id: str, slot: pd.Timestamp) -> tuple[BrokerTerms | None, list[str]]:

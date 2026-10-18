@@ -28,7 +28,7 @@ def publish_costs_cli(argv: list[str], accounts: list[Account] | None = None, st
     """publish-costs [--out FILE]: publish the canonical-cost broker's nightly cost table (costs only, no account id,
     login, balance or equity) to release costs-v1 with the keyring's github-token, as nightly_costs does when
     `costs.publish_release` is on. `--out FILE` writes the same JSON locally instead (no upload; never commit it).
-    Exit 1 when refused (no table, swap unmeasured, too few fills) or the upload fails."""
+    Exit 1 when refused (no table, swap or spread unmeasured) or the upload fails."""
     import argparse
 
     import pandas as pd
@@ -45,7 +45,7 @@ def publish_costs_cli(argv: list[str], accounts: list[Account] | None = None, st
     if args.out:
         found = canonical_cost_table(settings, accs, Path(state_dir))
         pub, reason = (None, "no cost table on the canonical-cost broker yet: run the scheduler's nightly_costs first") \
-            if found is None else publishable(found[0], found[1].broker, min_fills=settings.research.min_fills_for_slippage)
+            if found is None else publishable(found[0], found[1].broker)
         if pub is None:
             print(f"refused: {reason}")
             return 1
