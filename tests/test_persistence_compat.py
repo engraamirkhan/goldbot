@@ -422,6 +422,8 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/ops/setup_wizard.py", "merge_local_settings", "Settings"): "strict: Settings",
     ("goldbot/api/auth.py", "AuthStore.session_user", "User"):
         "strict: credentials (a newer lock or MFA flag must not be ignored)",
+    ("goldbot/features/smc_replica.py", "state_from_json", "ReplicaState"):
+        "strict: carried indicator state; a field mismatch must refuse the state and force a re-bootstrap, never a silent default",
     ("goldbot/research/cells.py", "_read_cell_rows", "CellRow"):
         "strict: untrusted matrix-cell artifacts; a bad row becomes a failed trial (security review 2026-10-18)",
     ("goldbot/webhook/app.py", "create_app.tv", "Alert"):
