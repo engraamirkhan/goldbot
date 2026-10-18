@@ -142,7 +142,7 @@ log = logging.getLogger("goldbot.api")
 
 # The dashboard runs only its own scripts; the one third party is TradingView's chart, a cross-origin iframe that cannot
 # reach our storage (the session token lives in sessionStorage), so script-src stays 'self'.
-CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; "
        "frame-src https://www.tradingview-widget.com https://www.tradingview.com; object-src 'none'; "
        "base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 
