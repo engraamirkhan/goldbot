@@ -75,6 +75,11 @@ risk:
   # config/accounts.yaml) can raise this, the daily and the weekly cap for that account alone; these values stay the
   # floor, and the defaults for every other account.
   min_lot_risk_cap: null
+  # ADR 0031: on a demo account with the owner's ceilings (`risk_overrides` in config/accounts.yaml) the daily, weekly
+  # and minimum-lot caps (and the supervisor's combined caps) are learnt by the nightly `limits_job` from the account's
+  # own demo trades, between the defaults above (floors) and those ceilings; they rise only at the 00:00 UTC roll and
+  # tighten at once. false: that account trades the ceilings themselves (ADR 0032). Other accounts: the defaults.
+  adaptive_limits: true
   positions_unreadable_alert: 5      # failed broker reads in a row before health fails and Telegram alerts
   # Per-agent throttle (BACKLOG 21, playbook G-6), counted per agent per account and checked at every entry
   # decision: after `loss_streak` consecutive full losses (R <= -0.9) RiskGate refuses the agent's entries
@@ -161,6 +166,7 @@ scheduler:
   broker_ledger:    { kind: daily,   at: "23:25", max_late_hours: 20 }                  # GAP-07/08: balance snapshot, positions + balance vs broker
   tick_record:      { kind: daily,   at: "21:10", max_late_hours: 0.5 }                 # BACKLOG 79: broker ticks -> state/ticks/, in the daily break (US summer time)
   tick_record_winter: { kind: daily, at: "22:10", max_late_hours: 0.5 }                 #   ... and in the winter break; outside the break or weekend a run skips
+  limits_job:       { kind: daily,   at: "23:05", max_late_hours: 0.9 }                 # ADR 0031: adaptive limits for the next risk day; never after the roll
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)

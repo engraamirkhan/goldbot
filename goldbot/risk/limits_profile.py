@@ -14,8 +14,9 @@ Rules this module enforces (trading-safety conditions, ADR 0032):
 * every record carries the profile and the values it was decided under (`LimitsTag`), so gate evidence under the demo
   profile is never mixed with default-profile evidence.
 
-`StaticController` returns the ceilings, so behaviour today is exactly what the owner approved. An adaptive controller
-plugs in through `LimitsController` later; no adaptive logic lives here.
+`StaticController` returns the ceilings, so behaviour is exactly what the owner approved. ADR 0031's adaptive controller
+plugs in through `LimitsController` (engine/limits_apply.py `AdaptiveLimitsController`, chosen by
+ops/services/engine.py `engine_limits_policy`); no adaptive logic lives here, and `clamp` bounds whatever it returns.
 """
 from __future__ import annotations
 
@@ -93,6 +94,10 @@ class RiskLimitsCurrent(FrozenRecord):
     project_open_risk: bool = False
     reason: str
     evidence_ids: tuple[str, ...] = ()
+    # ADR 0031: the adaptive supervisor caps this account's controller decided (None: none decided). The supervisor
+    # takes the smaller of them and the account caps, within its own [default .. envelope]: they only tighten
+    supervisor_daily_cap: float | None = None
+    supervisor_weekly_cap: float | None = None
 
     def tag(self) -> LimitsTag:
         return LimitsTag(daily_cap=self.daily_cap, weekly_cap=self.weekly_cap, min_lot_risk_cap=self.min_lot_risk_cap,
@@ -100,10 +105,14 @@ class RiskLimitsCurrent(FrozenRecord):
 
 
 class LimitsEvidence(FrozenRecord):
-    """What the controller may decide on. `reverted`: the 8% revert holds (the defaults are forced, see `clamp`)."""
+    """What the controller may decide on. `reverted`: the 8% revert holds (the defaults are forced, see `clamp`).
+    `drawdown`: from the high-water mark, fraction, None while unknown or unconfirmed; `now_ns`: the engine's clock
+    (epoch ns), None = the controller's own (ADR 0031 adaptive controller; the static one reads neither)."""
 
     reverted: bool = False
     evidence_ids: tuple[str, ...] = ()
+    drawdown: float | None = None
+    now_ns: int | None = None
 
 
 class LimitsController(Protocol):
@@ -175,7 +184,8 @@ def clamp(cur: RiskLimitsCurrent, defaults: RiskLimits, account: Account, eviden
         weekly = _cap(cur.weekly_cap, 0.0, defaults.weekly_cap)
         mlr = _bounded(cur.min_lot_risk_cap, None, defaults.min_lot_risk_cap)
         return cur.model_copy(update={"profile": DEFAULT_PROFILE, "daily_cap": daily, "weekly_cap": weekly,
-                                      "min_lot_risk_cap": mlr,
+                                      "min_lot_risk_cap": mlr, "supervisor_daily_cap": None,
+                                      "supervisor_weekly_cap": None,
                                       "project_open_risk": cur.project_open_risk or defaults.project_open_risk})
     c = ov.ceilings
     daily = _cap(cur.daily_cap, defaults.daily_cap, max(defaults.daily_cap, c.daily or defaults.daily_cap))

@@ -1342,7 +1342,7 @@ class Engine:
         audit = EntryAudit(decision_price=prop.entry, decision_spread_points=prop.spread_points,
                            decision_utc=pd.Timestamp(prop.created, unit="s", tz="UTC"), requested_price=requested,
                            timeframe=agent.timeframe, family=agent.family,
-                           model_version=self.live_versions.get(agent.agent_id), **self._entry_limits())
+                           model_version=self.live_versions.get(agent.agent_id), **self._entry_limits(prop.min_lot_exception))
         oi = OrderIntent(client_order_id=prop.proposal_id, symbol=self.cfg.symbol, side=prop.side, lots=lots, sl=round(stop, 2), tp=round(target, 2), magic=magic,
                          comment=prop.proposal_id[-31:])
         # pending_orders row persisted BEFORE sending: a crash between send and result is reconciled on restart
@@ -2865,8 +2865,8 @@ class Engine:
     def _tag_decisions(self) -> None:
         self._limits.tag(self)
 
-    def _entry_limits(self) -> dict[str, Any]:
-        return self._limits.entry()
+    def _entry_limits(self, min_lot_exception: bool = False) -> dict[str, Any]:
+        return self._limits.entry(min_lot_exception)
 
     def _risk_path(self) -> Path:
         return risk_file(self.cfg.state_dir, self.cfg.account_id)

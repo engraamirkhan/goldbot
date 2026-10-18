@@ -701,6 +701,7 @@ Weekdays are Mon-Fri. A job missed while the VPS was down is run once on restart
 | `calendar_archive` | Daily 06:10 | Stores the Forex Factory week in the `calendar_events` table (feeds the news blackout). |
 | `agents_presession` | Mon-Fri 06:30 | Macro and news analyst writes the pre-session briefing. |
 | `nightly_costs` | Mon-Fri 23:10 | Builds each account's spread/slippage cost table `state\costs_<account>.json`, with the swap and commission the terminal reports (`state\broker_terms_<account>.json`, written by the engine every 6 hours); re-runs the account classifier (`state\classifier_<account>.json`) every night while the class is unknown and on Fridays once it is known. Until an account has been classified (1,000+ London/New York ticks logged) or declares `account_class` in `config/accounts.yaml` (icm-demo: `raw`), its engine opens no positions and the health check warns "account class unknown"; a measured class that disagrees with the declared one makes the stricter (Standard) win and the health check warns "declared raw, measured standard: check the account type"; on a Standard account the 15m families except session-open are off. |
+| `limits_job` | Daily 23:05 (never after midnight UTC) | ADR 0031: decides the adaptive risk limits of each demo account with ceilings (`icm-demo`) for the next day, from all its demo trades and the shadow book since each model went live. Stored in `core.db` (`adaptive_state`, append-only `adaptive_changes`); the engine applies it at 00:00 UTC. Every change sends you a Telegram FYI (nothing to approve). Health check `limits_controller:<account>` fails when the last decision is more than 26 h old; the engine then trades the default limits. |
 | `model_watch` | Daily 23:30 | CUSUM check on any newly promoted champion; restores the previous champion on an alarm. |
 | `agents_daily` | Mon-Fri 23:45 | Data steward, risk officer, execution auditor. |
 | `saturday_retrain` | Saturday 06:00 | Refreshes bars from `data-v1` and the macro series from `macro-v1` (a macro failure does not stop the retrain), decides waiting challengers (promote/retire), retrains new challengers. |
@@ -1133,6 +1134,28 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
   normal), then **re-arm** on the dashboard as above. A re-arm while the account is still in size-down or halted is
   refused (`limits_reset_refused`); re-arm again once the stage is normal.
 * Live and tiny-live accounts never use these limits.
+
+### Adaptive risk limits (ADR 0031)
+
+* On `icm-demo` the approved values above are **ceilings**: the nightly `limits_job` (23:05 UTC) sets the limits for
+  the next day between the defaults (daily 2%, weekly 5%, smallest-trade exception off) and those ceilings, from the
+  account's own demo trades. They rise one small step at a time (after 60 demo trades, 3 good days in a row and 10 new
+  trades; never within 5 days of a cut), only at 00:00 UTC, and they drop at once on a 4% drawdown, 4 big losses in a
+  row, the size-down stage or weak results. The smallest-trade exception starts at 1% for the first 60 such trades
+  and switches off for good if they lose 10R in total.
+* What you see: a Telegram FYI on every change ("Limit change (demo, icm-demo): ..."), with the old and new values in
+  £ and %, the reason and the time. Nothing to approve. The engine state file shows the current values
+  (`limits_current`; its reason starts with `adaptive:`).
+* If `limits_controller:icm-demo` FAILs in health (no decision for over 26 h): the account trades the default limits,
+  which is the safe side. Check the scheduler (`job:limits_job` in health, `python -m goldbot.db scheduler-status`);
+  the next 23:05 run decides again. A run after midnight is not caught up; the limits wait for the next night.
+* The 8% revert (above) still wins: limits go back to the defaults until you re-arm.
+* To switch it off and trade the fixed ceilings again: set `risk: { adaptive_limits: false }` in the server's
+  `config/settings.local.yaml` and restart the engine.
+* Replay (validation only, never a tuning step):
+  `python scripts/replay_limits.py --account icm-demo --from 2026-10-20 --to 2026-11-30 --state state --models models`
+  prints the decision each day would have had. It writes nothing. Each run is recorded in ADR 0031's replay log.
+* Not yet measured: the cost/model rule (BACKLOG 90) cannot fire until a 20-day cost series exists.
 
 
 ### Auto mode (entries without your click)

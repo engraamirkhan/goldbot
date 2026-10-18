@@ -170,6 +170,9 @@ class ClosedTrade(FrozenRecord):
     # on adopted orphans; gate evidence must never mix profiles
     limits_profile: str | None = None
     limits: LimitsTag | None = None
+    # ADR 0031 (A1): the entry was the minimum-lot exception (BACKLOG 25), so the adaptive controller counts it toward
+    # the 60-trade exploration budget. None on records from before the field and on adopted orphans
+    min_lot_exception: bool | None = None
 
 
 class EntryAudit(FrozenRecord):
@@ -189,6 +192,9 @@ class EntryAudit(FrozenRecord):
     # on adopted orphans; gate evidence must never mix profiles
     limits_profile: str | None = None
     limits: LimitsTag | None = None
+    # ADR 0031 (A1): the entry was the minimum-lot exception (BACKLOG 25), so the adaptive controller counts it toward
+    # the 60-trade exploration budget. None on records from before the field and on adopted orphans
+    min_lot_exception: bool | None = None
 
 
 class GateProgress(FrozenRecord):

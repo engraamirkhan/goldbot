@@ -3,6 +3,26 @@
 Status: proposed (implementer, 2026-10-18; rules frozen before any replay; Amendment A1 from the quant review the same
 day, before any replay; needs trading-safety, quant re-review and CFO review). Lane A: the controller (`goldbot/risk/adaptive.py`) and its tables; lane B wires it into the runner.
 
+Status note, lane B (implementer, 2026-10-18; needs trading-safety, quant and code review): wired in. The nightly
+`limits_job` (goldbot/ops/limits_job.py, 23:05 UTC) decides the next risk day for each demo account with ceilings from
+the full history since each strategy's freeze (a strategy is a registered model version, its freeze its
+`promoted_utc`; demo fills without a version form one `unattributed` strategy, frozen at 0). The engine reads the
+decision through ADR 0032's seam (engine/limits_apply.py `AdaptiveLimitsController`): it takes the decision at the roll
+and only tightens within the day, restarts included. A decision that is not today's gives the floors, and so does a
+drawdown of 4%. ADR 0032's `clamp` and 8% revert still bind. `risk.adaptive_limits: false` restores the static
+ceilings. Readings made in lane B, each on the strict side:
+(a) shadow trades count only when taken, of versions that went live, in R less the measured extra cost and the paid
+swap;
+(b) a demo fill without a net R, an unreadable record, or an engine file that is missing, older than 2 h or without an
+equity and a mark gives no evidence (floors + dq_event);
+(c) the ATR inputs need a year of 15m bars whose last bar is at most 9 days old (the weekly data refresh); else the
+minimum-lot cap is off;
+(d) no 20-day measured cost/model series exists yet, so `cost_ratio_20d` is None and the cost rule cannot fire
+(BACKLOG 90).
+
+Replay log (each run of scripts/replay_limits.py is a validation, never a tuning step; record date, range and what
+it showed): none run yet.
+
 ## Context
 The owner wants the account limits to be "learnt over time" instead of fixed. Owner-approved DEMO ceilings: account
 daily 5%, weekly 10%, `min_lot_risk_cap` 1%; supervisor all-demo ceilings 3.75% / 7.5% (CFO). Floors are today's

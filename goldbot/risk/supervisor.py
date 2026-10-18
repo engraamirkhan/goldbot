@@ -50,7 +50,8 @@ class SupervisorLimits(Record):
         smallest published cap, clamped to [default .. ceiling]. One engine on the default profile (reverted, or a
         controller at its defaults) brings the combined caps back to their own defaults at once (never to that
         engine's per-account cap, which is wider than the combined one). Any other file (live, silent, not a finite
-        number) keeps the defaults."""
+        number) keeps the defaults. An engine's published adaptive supervisor caps (ADR 0031, `supervisor_daily_cap` /
+        `supervisor_weekly_cap`) count among the smallest too, so they only tighten."""
         c = self.ceilings
         if c is None or not engines:
             return self.daily_cap, self.weekly_cap
@@ -62,6 +63,10 @@ class SupervisorLimits(Record):
                 return self.daily_cap, self.weekly_cap
             daily.append(float(cur["daily_cap"]))
             weekly.append(float(cur["weekly_cap"]))
+            # ADR 0031: the account's adaptive supervisor caps, when it publishes them, can only lower these
+            for out, key in ((daily, "supervisor_daily_cap"), (weekly, "supervisor_weekly_cap")):
+                if _finite_number(cur.get(key)):
+                    out.append(float(cur[key]))
 
         def bounded(v: float, floor: float, ceiling: float | None) -> float:
             return min(max(v, floor), max(floor, ceiling if ceiling is not None else floor))
