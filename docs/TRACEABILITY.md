@@ -18,12 +18,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 213 |
+| implemented | 214 |
 | partial | 19 |
 | missing | 2 |
 | deviates | 6 |
 | in review | 10 |
-| **total** | **250** |
+| **total** | **251** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -84,6 +84,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | R49 | Research trials run in parallel; the registry stays the single, serialized source of N (every trial counted, deflated Sharpe restated on the final count) | implemented (in review) | .github/workflows/research.yml, goldbot/research/cells.py, goldbot/research/gates.py (dsr_check) | tests/test_research_cells.py, tests/test_registry_release.py |
 | R50 | "bounded feature and parameter search, not discovery of novel strategies" (DESIGN Bounded research loop); owner 2026-10-18: backtest strategies on multiple timeframes in parallel, continuously, keeping those that work | partial: phase 1 generator and queue; the schedule only reports until research.yml takes a batch | goldbot/research/generator.py `generate`, `batch`, `sizing_feasible`; scripts/research_queue.py; goldbot/config.py `ResearchSettings.loop_trials_per_run`, `loop_equity_usd`; .github/workflows/research-loop.yml; docs/plans/continuous-research-loop.md | tests/test_research_generator.py (grid determinism, check_founder_config, tried hashes skipped, batch size, screening/retired excluded, min-lot 1.2x boundary, window ends at the holdout, unreadable registry yields no batch) |
 | R51 | TradingView phase 2: the owner's "Export chart data" CSV is imported as history beside the live alerts (never over them, available at the bar close), labelled "unvalidated (repaint risk)" until a repaint check of CSV against live alerts passes (>= 99 % of >= 200 overlapping bars) | implemented | goldbot/data/tv_csv.py; goldbot/research/tv_repaint.py; goldbot/features/tradingview.py (`wide`, `tv_features`, `label_for`); goldbot/data/store.py (`tv_indicators` key with `origin`); goldbot/api/tv_status.py; goldbot/ops/commands/research.py (`tv-import`, `tv-repaint-check`) | tests/test_tv_csv.py::test_asof_join_sees_a_plot_at_the_bar_close_not_one_ns_before; ::test_a_live_alert_is_never_overwritten_and_wins_on_the_same_bar; ::test_reimport_is_idempotent; ::test_missing_time_column_fails_closed; ::test_unvalidated_csv_is_labelled_by_the_reader_and_kept_out_of_the_feature; tests/test_tv_repaint.py::test_99_percent_agreement_over_200_bars_verifies_and_flips_the_flag; ::test_below_99_percent_marks_repaints_and_leaves_the_flag_false; ::test_199_overlapping_bars_stay_unvalidated_however_good; tests/test_api_views.py::test_tradingview_status_counts_csv_history_apart_from_alerts_and_shows_the_repaint_status |
+| R52 | Two price sources kept separate and compared, never blended (Data architecture, D12/D20); TradingView is optional and must never block trading or exits | implemented | goldbot/data/tv_reconcile.py: pulled TradingView bars (origin pull_live/pull_history; chart feed is OANDA) are a second feed only; a close more than 2 points (strictly) from the Dukascopy/broker M1 resampled flags the bar `dq` = tv_close_diff and sets its plots NaN; `confirm_spikes_with_tv` adds TV to D20. Job `tv_reconcile` (goldbot/ops/jobs.py, daily 23:15, settings scheduler.tv_reconcile) rewrites flagged rows in tv_indicators and writes dq_events (source tradingview). goldbot/ops/tv_pull_health.py: `tv_auth` table in state/tv.db written by the pull (`record_ok`, `record_expired`); health check `tv_pull` WARNs (never FAIL) when expired, stale (36 h) or corrupt (counts as expired); one Telegram notice per expiry, persisted across restarts and re-armed by the next successful pull | tests/test_tv_reconcile.py::test_close_diff_over_2_points_flags_and_nans_plot, ::test_exactly_2_points_is_kept, ::test_job_rewrites_flagged_rows_in_the_store; tests/test_tv_pull_health.py::test_expiry_notifies_once_across_restart, ::test_corrupt_state_counts_as_expired, ::test_expired_state_is_warn_not_fail, ::test_stale_pull_is_warn_not_fail |
 
 Risk analytics (reporting tools, not design rows, so the counts are unchanged): `goldbot/research/ruin.py`
 (`run.py ruin`, playbook G-5) simulates R against the R9/R11/R13/R14 limits read from `config/settings.yaml`, applying
