@@ -1076,9 +1076,9 @@ class Engine:
             model = self.models.get(agent.agent_id) or self.models.get(agent.family)
             if model is None:
                 continue
-            # DESIGN: TradingView signals are "filter features only" until the promotion rule: a requires_tv agent is
+            # DESIGN: TradingView signals are "filter features only" until the promotion rule: a shadow_only agent (TV, replica) is
             # shadow only (share 0) like a shadow-only member of the population: the shadow book trades it, not the broker
-            share = 0.0 if agent.requires_tv else 1.0 if self.live_shares is None else self.live_shares.get(agent.agent_id, 0.0)
+            share = 0.0 if agent.shadow_only else 1.0 if self.live_shares is None else self.live_shares.get(agent.agent_id, 0.0)
             if share <= 0:
                 continue
             if self._busy(agent.agent_id):
