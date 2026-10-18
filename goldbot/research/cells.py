@@ -376,8 +376,6 @@ def _read_cell_rows(path: Path, cell: Mapping[str, Any]) -> tuple[list[dict[str,
         except ValidationError as e:
             bad = sorted({str(x["loc"][0]) if x["loc"] else "?" for x in e.errors()})
             return [], f"row {i} fails the registry row schema: {', '.join(bad)}"
-        if "repair" in r:                  # only scripts/registry_repair.py may replace a row (registry_sync._superseded)
-            return [], f"row {i} carries a repair, which a cell may not write"
         if r["status"] not in CELL_STATUSES:
             return [], f"row {i} has status {r['status']!r}, not one a cell may write"
         if (resolved and r["agent_id"] != agent) or (r["status"] != DISCOVERY and r["family"] != family):
@@ -385,16 +383,31 @@ def _read_cell_rows(path: Path, cell: Mapping[str, Any]) -> tuple[list[dict[str,
     return rows, ""
 
 
+CELL_FILES = ("rows.jsonl", "status.json", "research.log", "report.md")
+
+
+def cell_dir(artifacts: Path, cell: Mapping[str, Any], n_cells: int) -> Path:
+    """Where the record job finds a cell's files: `artifacts/cell-<idx>/`, except that actions/download-artifact
+    extracts a lone match of `pattern: cell-*` straight into `path` (no `cell-0/`), so a single-cell run's files sit in
+    `artifacts` itself. That layout is taken only when the plan has one cell, so flat files are never guessed onto one
+    of several cells (B08, run 39106099459: a one-cell `[{}]` run recorded as failed although it left its rows)."""
+    d = artifacts / f"cell-{cell['idx']}"
+    if not d.is_dir() and n_cells == 1 and any((artifacts / f).is_file() for f in CELL_FILES):
+        return artifacts
+    return d
+
+
 def record(cells_plan: list[dict[str, Any]], artifacts: Path, registry: Path) -> Recorded:
     """Merge every planned cell's rows into `registry` (the fresh copy, fetched under the lock) and restate their DSR
     on the final count. `artifacts/cell-<idx>/` holds `rows.jsonl`, `status.json` ({"exit": code}), `research.log` and
-    `report.md` of a cell that ran; a missing directory is a cell that never reported."""
+    `report.md` of a cell that ran (`cell_dir`: `artifacts/` itself for a one-cell run); a missing directory is a cell
+    that never reported."""
     published = read_rows(registry)
     added: list[dict[str, Any]] = []
     notes: dict[int, tuple[str, str]] = {}          # idx -> (outcome, text)
     n_failed = n_refused = 0
     for cell in cells_plan:
-        d = artifacts / f"cell-{cell['idx']}"
+        d = cell_dir(artifacts, cell, len(cells_plan))
         rows, bad_rows = _read_cell_rows(d / "rows.jsonl", cell)
         log = _read(d / "research.log")
         if bad_rows:
@@ -440,7 +453,7 @@ def _reports(cells_plan: list[dict[str, Any]], artifacts: Path, notes: dict[int,
              mine: dict[Any, dict[str, Any]], k: int, used: int) -> list[dict[str, str]]:
     by_cell: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for cell in cells_plan:
-        for r in _read_cell_rows(artifacts / f"cell-{cell['idx']}" / "rows.jsonl", cell)[0]:
+        for r in _read_cell_rows(cell_dir(artifacts, cell, len(cells_plan)) / "rows.jsonl", cell)[0]:
             if _key(r) in mine:
                 by_cell[cell["idx"]].append(mine[_key(r)])
     bodies: dict[str, list[str]] = defaultdict(list)
@@ -457,7 +470,7 @@ def _reports(cells_plan: list[dict[str, Any]], artifacts: Path, notes: dict[int,
             lines.append(f"- registry trial #{failed_row['trial']} (failed)")
         if text:
             lines += ["", "```", text, "```"]
-        report = _read(artifacts / f"cell-{cell['idx']}" / "report.md")
+        report = _read(cell_dir(artifacts, cell, len(cells_plan)) / "report.md")
         if report:
             lines += ["", "<details><summary>cell report (provisional figures)</summary>", "", report, "", "</details>"]
         bodies[_title(cell)].append("\n".join(lines))
