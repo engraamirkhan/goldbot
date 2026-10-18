@@ -88,7 +88,7 @@ def test_pulled_bars_count_as_live_or_history_per_indicator_and_the_chart_series
     pulled(store, "chart", 50, "pull_live")
     v = tv_status(store, NOW, state_dir=tmp_path)
     (row,) = v.indicators
-    assert row.indicator == "Supertrend" and row.pull_live_24h == 10 and row.pull_history_bars == 200
+    assert row.indicator == "Indicator 1" and row.pull_live_24h == 10 and row.pull_history_bars == 200
     assert row.repaint_status == "unvalidated"
     assert v.live_bars_24h == 10 and v.history_bars == 200
 
@@ -103,3 +103,13 @@ def test_the_card_never_carries_plot_values(tmp_path, store):
     pulled(store, "Supertrend", 10, "pull_live")
     text = tv_status(store, NOW, state_dir=tmp_path).model_dump_json()
     assert "abc12345" not in text and '"value"' not in text
+
+
+def test_the_card_shows_our_name_by_key_and_indicator_n_otherwise_while_stored_data_keeps_the_raw_name(tmp_path, store):
+    from goldbot.data.tv_alias import key_of
+    pulled(store, "Vendor Alpha", 3, "pull_live")
+    pulled(store, "Vendor Beta", 3, "pull_live")
+    view = tv_status(store, NOW, tmp_path, aliases={key_of("Vendor Alpha"): "Structure (smc)"})
+    assert sorted(r.indicator for r in view.indicators) == ["Indicator 1", "Structure (smc)"]
+    assert "Vendor" not in view.model_dump_json()
+    assert {*store.sql("SELECT DISTINCT indicator FROM tv_indicators")["indicator"]} == {"Vendor Alpha", "Vendor Beta"}
