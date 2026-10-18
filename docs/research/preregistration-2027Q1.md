@@ -273,6 +273,11 @@ above is the queued part only.
   includes it has a feature version other than the pinned `f-51ac5ebabb`; the YAML row and
   `preregistration-2026Q4-pullforward.md` pin must be re-pinned by the research director before dispatch, or H-02 runs
   without the group (K_eff unchanged). Pinned by `tests/test_smc_replica_group.py`.
+  - **Ruling 2026-10-18 (research director, before any H-02 outcome): H-02 runs without the group.** The feature
+    version stays `f-51ac5ebabb` (recomputed on `main` a327699 and on the branch 91dc9cf; with the group it would be
+    `f-9a074bd2f8`) and H-02's K_eff is unchanged. The reason: no `research.yml` input enables the replica, and the
+    replica is not on `main`. O-4 keeps the group, so D-TVR adds +1 in total, not +2. Details are in
+    `preregistration-2026Q4-pullforward.md` 2.4a.
 
 ### H-01 Slow TSMOM
 - Config: `specialist=tsmom`, signal from 1d bars (20/60/120-day vol-scaled returns, 60-day vol), execution and
