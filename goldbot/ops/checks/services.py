@@ -15,6 +15,7 @@ from goldbot.ops.checks._base import (
     HEARTBEAT_SILENT_S,
     JOB_OVERDUE_GRACE_S,
     JOB_RUNNING_FAIL_H,
+    OPTIONAL_HEARTBEAT_SERVICES,
     SCHEDULER_HEARTBEAT_FAIL_S,
     STUCK_APPROVAL_GRACE_S,
     WATCH_FILE,
@@ -32,6 +33,7 @@ from goldbot.ops.checks._base import (
 from goldbot.ops.checks.registry import (
     BLOCK_ACCOUNT,
     BLOCK_HEARTBEATS,
+    BLOCK_OPTIONAL_HEARTBEATS,
     BLOCK_SCHEDULER,
     BLOCK_SERVICE_SKEW,
     BLOCK_TAIL,
@@ -218,6 +220,23 @@ def check_heartbeat(ctx: HealthContext, service: str) -> Check:
         return Check(name=name, status="fail",
                      reason=f"{service} silent for {_age(age)} (> {HEARTBEAT_SILENT_S // 60} min): service down?")
     return Check(name=name, status="ok", reason=f"heartbeat {_age(age)}")
+
+
+def _optional_heartbeat_ran(ctx: HealthContext) -> bool:
+    return any(heartbeat_path(ctx.state_dir, s).exists() for s in OPTIONAL_HEARTBEAT_SERVICES)
+
+
+@register_check("service", block=BLOCK_OPTIONAL_HEARTBEATS, pos=10, services=OPTIONAL_HEARTBEAT_SERVICES,
+                when=_optional_heartbeat_ran, guard="heartbeat")
+def check_optional_heartbeat(ctx: HealthContext, service: str) -> Check:
+    """The opt-in TradingView services (webhook, tv-pull follow; RUNBOOK 2.7b/2.7c): the same heartbeat rule as S5,
+    but a silent one WARNs (NOTIFY_ON_WARN tells the owner), never FAILs, and one that never ran on this host is ok.
+    The whole block is skipped until either has written a heartbeat here (hosts that run neither see no change).
+    A service switched off for good: delete its state/heartbeat_<service>.json (RUNBOOK 2.7c rollback)."""
+    if not heartbeat_path(ctx.state_dir, service).exists():
+        return Check(name=f"heartbeat:{service}", status="ok", reason=f"{service} not running on this host (opt-in)")
+    c = resolve(check_heartbeat)(ctx, service)
+    return c if c.status != "fail" else Check(name=c.name, status="warn", reason=c.reason)
 
 
 SKEW_SERVICES = HEARTBEAT_SERVICES   # schema_skew:svc:<service> from heartbeat_<service>.json (engines: per account)
