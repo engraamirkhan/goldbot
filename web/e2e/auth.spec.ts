@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
+import { go } from "./nav";
 import { totp, totpClock } from "./totp";
 
 // The sign-in story on its own server (playwright.config.ts project "auth"), whose emails are captured by the
@@ -133,7 +134,7 @@ test("login: the owner is created, a wrong code is refused, the right one signs 
   expect(await page.evaluate(() => sessionStorage.getItem("goldbot_token"))).toBeTruthy();
 
   // a second account for the later steps
-  await page.getByRole("button", { name: "Users", exact: true }).click();
+  await go(page, "Users");
   await page.getByPlaceholder("email to invite").fill(VIEWER.email);
   await page.getByRole("button", { name: "Create invite link", exact: true }).click();
   inviteLink = (await page.locator("code.mono").textContent()) ?? "";
@@ -177,7 +178,7 @@ test("forgot password: an unknown account is answered like a wrong code; the rig
 test("password reset link: the owner's link sets a new password and authenticator, and works once", async ({ page, browser }) => {
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
-  await page.getByRole("button", { name: "Users", exact: true }).click();
+  await go(page, "Users");
   await page.locator("tr", { hasText: VIEWER.email }).getByRole("button", { name: "Reset link", exact: true }).click();
   const resetLink = (await page.locator("code.mono").textContent()) ?? "";
   expect(resetLink).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/#reset=[A-Za-z0-9_-]+$/);
@@ -286,7 +287,7 @@ test("sign-in code: the owner signs in with the password and a code sent to Tele
   expect(stored.all).not.toContain(OWNER.password);
 
   // ADR 0028 ruling 2: this session was opened with an emailed code, so an invite also needs the authenticator
-  await page.getByRole("button", { name: "Users", exact: true }).click();
+  await go(page, "Users");
   const stepup = page.getByLabel("Authenticator code (or a recovery code)", { exact: true });
   await expect(stepup).toBeVisible();
   await page.getByPlaceholder("email to invite").fill("approver@example.com");

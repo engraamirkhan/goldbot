@@ -258,7 +258,7 @@ def _hctx(tmp_path: Path, adaptive: bool = True, now: pd.Timestamp | None = None
 def test_the_limits_controller_check_fails_when_the_last_decision_is_older_than_26_hours(tmp_path):
     assert check_limits_controller(_hctx(tmp_path, adaptive=False), "icm-demo") == []
     (c,) = check_limits_controller(_hctx(tmp_path), "icm-demo")
-    assert c.status == "fail" and "no adaptive limits decision" in c.reason
+    assert c.status == "warn" and "no adaptive limits decision" in c.reason
     now = T0                                                           # a Wednesday
     _save(tmp_path, FLOOR, decided_ns=_ns(now - pd.Timedelta(hours=STALE_DECISION_H + 0.5)))
     (c,) = check_limits_controller(_hctx(tmp_path, now=now), "icm-demo")

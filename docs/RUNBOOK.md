@@ -2060,3 +2060,21 @@ fail it rolls back to the previous commit. Exit codes: 0 healthy, 1 rolled back,
   a Claude session for a 6 -> 4 step-back.
 * The script stops the scheduler first and checks again that no job started in between; if one did, it was
   interrupted by the stop: the script starts the scheduler again, stops nothing else and refuses the update.
+
+### MT5 terminal chart on the dashboard (`GET /api/chart/mt5`)
+
+The terminal's own IC Markets chart, screenshotted, not rebuilt. On the MT5 box `goldbot-chart-capture.timer` (user `mt5`, every 60 s)
+runs `import -window root` on display `:99` into `/home/mt5/chart/mt5.png` (atomic; it never touches the terminal or the bridge). The brain's
+`goldbot-chart-fetch.timer` (user `goldbot`, every 60 s) pulls it with its own SSH key, which may run one command only
+(`goldbot-chart-serve.sh`, a `tar` of that file; no shell, no forwarding), into `/opt/goldbot/state/chart/mt5.png`. The API returns the PNG
+with an `X-Captured-At` header to any signed-in role, and 404 when the file is missing or older than 5 minutes (dashboard: show a placeholder).
+It shows whatever chart window the terminal has open (one timeframe, as configured; switching timeframes from the dashboard is out of scope).
+
+Install (owner runs, after the update to this version, section 0.5). On the MT5 box:
+`sudo env S=<SHA> bash -c 'set -e; [ ${#S} = 40 ]; d=$(mktemp -d /root/goldbot-ops.XXXXXX); trap "rm -rf -- $d" EXIT; git clone -q --filter=blob:none --no-checkout https://github.com/engraamirkhan/goldbot.git $d/r; git -C $d/r merge-base --is-ancestor $S origin/main; git -C $d/r checkout -q --detach $S; for u in goldbot-chart-capture.service goldbot-chart-capture.timer; do install -m 644 -o root -g root $d/r/goldbot/ops/linux/systemd/$u /etc/systemd/system/; done; systemctl daemon-reload' && sudo systemctl enable --now goldbot-chart-capture.timer` (`<SHA>` is the merged commit; root installs from its own clone, never from `/opt/goldbot`)
+On the brain: `sudo -u goldbot ssh-keygen -t ed25519 -N '' -C goldbot-chart -f /var/lib/goldbot/.ssh/chart_ed25519 && sudo env S=<SHA> bash -c 'set -e; [ ${#S} = 40 ]; d=$(mktemp -d /root/goldbot-ops.XXXXXX); trap "rm -rf -- $d" EXIT; git clone -q --filter=blob:none --no-checkout https://github.com/engraamirkhan/goldbot.git $d/r; git -C $d/r merge-base --is-ancestor $S origin/main; git -C $d/r checkout -q --detach $S; for u in goldbot-chart-fetch.service goldbot-chart-fetch.timer; do install -m 644 -o root -g root $d/r/goldbot/ops/linux/systemd/$u /etc/systemd/system/; done; systemctl daemon-reload' && sudo -u goldbot cat /var/lib/goldbot/.ssh/chart_ed25519.pub`
+Then on the MT5 box, with that public key line in place of `<pubkey>`: `echo 'restrict,command="/opt/goldbot/goldbot/ops/linux/goldbot-chart-serve.sh" <pubkey>' | sudo -u mt5 tee -a /home/mt5/.ssh/authorized_keys`
+Last, on the brain: `sudo systemctl enable --now goldbot-chart-fetch.timer`.
+Check: `sudo -u goldbot /opt/goldbot/goldbot/ops/linux/goldbot-chart-fetch.sh && ls -l /opt/goldbot/state/chart/mt5.png`.
+Remove: `sudo systemctl disable --now goldbot-chart-fetch.timer` (brain) and `goldbot-chart-capture.timer` (MT5 box); delete the `goldbot-chart` line from `/home/mt5/.ssh/authorized_keys`.
+Failure: a stale or missing picture is a 404 only; nothing trading depends on it. Look at `journalctl -u goldbot-chart-fetch` (brain) and `-u goldbot-chart-capture` (MT5 box).

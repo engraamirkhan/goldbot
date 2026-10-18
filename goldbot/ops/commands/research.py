@@ -41,3 +41,9 @@ def _tv_repaint_check(cmd: str, args: list[str]) -> None:
 def _tv_pull(cmd: str, args: list[str]) -> None:
     from goldbot.data.tv_pull import main as tv_pull_main
     sys.exit(tv_pull_main(args))
+
+
+@register_command("ledger", pos=290)
+def _ledger(cmd: str, args: list[str]) -> None:
+    from goldbot.ledger.cli import main as ledger_main
+    sys.exit(ledger_main(args))

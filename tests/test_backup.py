@@ -534,6 +534,31 @@ def test_restore_drill_restores_and_verifies(brain):
     assert not any(brain.work_dir.glob("drill-*"))                # temp restore removed
 
 
+def test_restore_drill_restores_program_db_and_its_rows(brain, monkeypatch):
+    from goldbot.db import Database
+    from goldbot.ledger.models import NewEntry
+    from goldbot.ledger.store import Ledger
+    Ledger.open(brain.state_dir).add(NewEntry(table="resume_snapshots", key="resume", body="where we are", source="t"))
+    seen: list[str | None] = []
+    real = bk.verify_restore
+
+    def spy(root):
+        db = root / "state" / "program.db"
+        if db.is_file():                              # read a copy: opening the restored file would change its checksum
+            shutil.copy(db, db.parent.parent / "copy.db")
+            seen.append(Ledger(Database(db.parent.parent / "copy.db", "program", migrate=False)).latest_resume())
+            (db.parent.parent / "copy.db").unlink()
+        else:
+            seen.append(None)
+        return real(root)
+    monkeypatch.setattr(bk, "verify_restore", spy)
+    fake = FakeRestic(brain.work_dir.parent / "repo")
+    _job(brain, fake)
+    bk.drill_job(brain, SECRETS.get, host=HOST, runner=fake)
+    assert seen == ["where we are"]
+    assert _record(brain, bk.DRILL_FILE)["ok"] is True
+
+
 def test_restore_drill_runs_after_a_backup_under_the_no_delete_key(brain):
     """Incident 2026-10-16 (docs/incidents/2026-10-16-restic-lock-no-delete-key.md): the first drill on the brain
     failed with `restic check exited 1: unable to create lock in backend: repository is already locked`, because the

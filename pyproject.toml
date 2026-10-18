@@ -42,7 +42,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["integration: crosses component boundaries (HTTP API, engine loop, data pipeline); CI runs these in their own job"]
+markers = ["integration: crosses component boundaries (HTTP API, engine loop, data pipeline); CI runs these in their own job", "network: may run gh/ssh/curl or reach beyond loopback (default: blocked by tests/conftest.py)"]
 addopts = "--strict-markers"
 
 [tool.ruff]

@@ -603,3 +603,13 @@ def test_settings_keep_the_pull_off_and_conservative_by_default():
     s = load_settings().tv_pull
     assert s == TvPullSettings() and not s.enabled
     assert s.min_interval_s >= 5 and s.bars_per_request <= 5000 and s.backoff_max_s >= 3600
+
+
+def test_the_pass_report_shows_our_names_never_the_study_name_and_unmatched_are_numbered():
+    from goldbot.data.tv_alias import key_of
+    t = pd.Timestamp("2026-10-16T12:00:00Z")
+    rep = tv_pull.PassReport(ok=True, started_utc=t, finished_utc=t,
+                             studies=["Vendor Alpha@abc12345", "Vendor Beta@def67890"])
+    text = rep.text({key_of("Vendor Alpha"): "Money flow (mfi)"})
+    assert "Money flow (mfi), Indicator 1" in text
+    assert "Vendor" not in text

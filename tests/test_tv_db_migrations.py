@@ -105,7 +105,7 @@ def test_a_fresh_tv_db_gets_exactly_the_ad_hoc_schema(tmp_path):
     _old_db(old, OLD_INBOX, OLD_PULL)
     TvInbox(tmp_path / "tv.db")
     tv_pull.PullLog(tmp_path / "tv.db")
-    assert _schema(tmp_path / "tv.db") == _schema(old)
+    assert _schema(tmp_path / "tv.db", skip=("schema_version", "tv_graphics")) == _schema(old)   # v3 is newer
     assert _version(tmp_path / "tv.db") == latest_version("tv")
 
 
