@@ -95,3 +95,81 @@ def test_default_walk_forward_output_is_unchanged_and_the_overlay_only_adds_a_me
         lf = with_fit.metrics["lot_fit"]
         assert lf["model_filtered"]["n"] == plain.metrics["model_filtered"]["n"]
         assert lf["all_candidates"]["n"] == plain.metrics["all_candidates"]["n"]
+
+
+# ------------------------------------------------------------------------ "unfit" is exactly what the live gate refuses
+import itertools  # noqa: E402
+
+from goldbot.risk.gate import AccountState, Intent, RiskGate, RiskLimits, Stage  # noqa: E402
+
+
+def _gate_allows(*, stop: float, equity: float, fx: float, risk: float, cap: float | None, size_down: bool,
+                 mult: float, spread_points: float, stops_level: float) -> bool:
+    """RiskGate.check on an intent whose planned stop is `stop` USD/oz (atr 1, stop_atr = stop), sizing-only."""
+    limits = RiskLimits(risk_per_trade=risk, min_lot_risk_cap=cap)
+    hwm = equity / 0.94 if size_down else equity
+    st = AccountState(equity=equity, balance_closed_hwm=hwm, day_start_equity=equity, week_start_equity=equity,
+                      open_positions=0, margin_used=0.0, last_tick_age_s=1.0, spread_points=spread_points,
+                      stage=Stage.SIZE_DOWN if size_down else Stage.NORMAL)
+    it = Intent(agent_id="x", side=1, p=0.7, target_atr=3.0 * stop, stop_atr=stop, atr_usd=1.0, cost_atr=0.0,
+                multiplier=mult, price=100.0, stops_level_points=stops_level,
+                account_currency="USD" if fx == 1.0 else "GBP", acct_per_usd=None if fx == 1.0 else fx)
+    d = RiskGate(limits).check(it, st)
+    return "min_lot_exceeds_risk" not in d.reasons
+
+
+GRID = list(itertools.product([0.3, 1.0, 2.5, 4.2, 6.0, 12.0, 30.0], [500.0, 1000.0, 5000.0], [1.0, 0.75],
+                              [None, 0.01, 0.004], [False, True], [0.5, 1.0, 1.5], [(25.0, 0.0), (0.0, 800.0)]))
+
+
+@pytest.mark.parametrize("stop,equity,fx,cap,size_down,mult,floor", GRID)
+def test_unfit_is_exactly_what_the_gate_refuses_min_lot_exceeds_risk(stop, equity, fx, cap, size_down, mult, floor):
+    spread, level = floor
+    spec = _spec(equity=equity, acct_per_usd=fx, min_lot_risk_cap=cap, size_down=size_down, multiplier=mult,
+                 spread_points=spread, stops_level_points=level)
+    out = lot_fit_overlay(_trades([stop], [1.0], entry=100.0), spec)
+    assert (out["n_fit"] == 1) == _gate_allows(stop=stop, equity=equity, fx=fx, risk=0.005, cap=cap,
+                                               size_down=size_down, mult=mult, spread_points=spread,
+                                               stops_level=level)
+
+
+def test_pooled_walk_forward_takes_the_overlay_too_and_without_it_is_unchanged():
+    from goldbot.data.resample import resample_bars, ticks_to_1m
+    from goldbot.data.synthetic import synthetic_ticks
+    from goldbot.research.pipeline import build_decision_frame, prepare, run_pool
+    from goldbot.specialists import SPECIALISTS
+
+    b1 = ticks_to_1m(synthetic_ticks("2023-01-01", "2023-09-01", ticks_per_minute=1, seed=5))
+    dec = resample_bars(b1, "15m").reset_index(drop=True)
+    frame = build_decision_frame(dec, {})
+    specs = [SPECIALISTS["session_open"](asia_range_max_atr_d=1.2), SPECIALISTS["session_open"]()]
+    preps = [prepare(s, dec, {}, frame=frame) for s in specs]
+    plain = run_pool(preps, "15m", compare_local=False)
+    with_fit = run_pool(preps, "15m", compare_local=False, lot_fit=_spec())
+    assert "lot_fit" not in plain.metrics and "lot_fit" in with_fit.metrics
+    assert repr({k: v for k, v in with_fit.metrics.items() if k != "lot_fit"}) == repr(plain.metrics)
+
+
+def test_the_report_lines_show_fit_fraction_unfit_count_pounds_and_r_at_lots():
+    from goldbot.research.lot_fit import lot_fit_lines
+    out = lot_fit_overlay(_trades([2.5, 20.0, 2.5, 30.0], [5.0, 40.0, -2.5, 60.0]), _spec())
+    text = "\n".join(lot_fit_lines({"model_filtered": out, "all_candidates": out}))
+    assert "fit fraction 50.0%" in text and "2 unfit" in text and "£5.00" in text and "R at lots" in text
+    assert lot_fit_lines(None) == []
+
+
+def test_the_minimum_lot_exception_makes_a_refused_trade_fit_at_exactly_the_minimum_lot():
+    # 20 USD stop on 1000: min lot risks 2% > 1% cap: still unfit; 8 USD stop risks 0.8% <= 1% cap: fits at 0.01
+    off = lot_fit_overlay(_trades([8.0], [16.0]), _spec())
+    on = lot_fit_overlay(_trades([8.0, 20.0], [16.0, 40.0]), _spec(min_lot_risk_cap=0.01))
+    assert off["n_fit"] == 0 and on["n_fit"] == 1 and on["mean_lots"] == pytest.approx(0.01)
+    assert on["pnl_gbp"] == pytest.approx(16.0)
+    assert on["n_min_lot_exception"] == 1
+
+
+def test_tiny_live_never_takes_the_exception_and_uses_its_own_risk_rate():
+    base = load_settings()
+    s = base.model_copy(update={"risk": base.risk.model_copy(update={"min_lot_risk_cap": 0.01})})
+    assert LotFitSpec.from_settings(s).min_lot_risk_cap == 0.01
+    tiny = LotFitSpec.from_settings(s, tiny_live=True)
+    assert tiny.min_lot_risk_cap is None and tiny.risk_per_trade == s.risk.risk_per_trade_tiny_live

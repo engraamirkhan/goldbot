@@ -660,7 +660,7 @@ MIN_LOCAL_TRAIN = 100            # a family's own model in a pooled fold needs t
 
 def run_pool(preps: list[Prepared], timeframe: str, n_trials: int = 1, trades_per_year: float | None = None,
              extra_cost_usd: float = 0.0, holdout: Window | None = None, score_holdout: bool = False,
-             compare_local: bool = True) -> ResearchResult:
+             compare_local: bool = True, lot_fit: LotFitSpec | None = None) -> ResearchResult:
     """Walk-forward ONE meta-model over the union of every member's candidates on `timeframe` (proposal P5), with
     family indicators and `side` among its inputs, and the same cross-fitted calibration, thresholds (each candidate's
     own barriers) and gates as a single family (`_walk_forward`). Uniqueness weights are computed across the pool (all
@@ -684,7 +684,7 @@ def run_pool(preps: list[Prepared], timeframe: str, n_trials: int = 1, trades_pe
     res = _walk_forward(ident.agent_id, labels, gross, feats, cols, folds, version, n_trials=n_trials,
                         trades_per_year=trades_per_year, extra_cost_usd=extra_cost_usd, holdout=holdout,
                         score_holdout=score_holdout, window=window_for(timeframe), timeframe=timeframe,
-                        swap=preps[0].swap if preps else None)
+                        swap=preps[0].swap if preps else None, lot_fit=lot_fit)
     local = _local_predictions(preps, labels, feats, folds, version) if compare_local else {}
     res.metrics["by_family"] = _by_family(res.oof, gross, local, holdout if score_holdout else None)
     res.metrics["families"] = families

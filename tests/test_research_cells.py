@@ -75,7 +75,7 @@ def test_cell_arguments_pass_every_value_in_the_equals_form_so_a_value_can_never
     assert {"--discover", "--families=family", "--discover-config={\"k\": 1}", "--rule-ref=p.md#r", "--score-holdout",
             "--skip-screen", "--macro=macro", "--specialist=session_open", "--variants=[{}]"} <= set(argv)
     for a in argv:
-        assert a.startswith("--") and ("=" in a or a in {"--discover", "--score-holdout", "--skip-screen"})
+        assert a.startswith("--") and ("=" in a or a in {"--discover", "--score-holdout", "--skip-screen", "--lot-fit"})
 
 
 # ------------------------------------------------------------------------------------------- the cell's own rows
@@ -294,3 +294,16 @@ def test_inputs_reach_the_shell_only_through_env_and_actions_are_pinned() -> Non
                 assert re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", s["uses"]), s["uses"]
     inputs = WF[True]["workflow_dispatch"]["inputs"]
     assert {"specialist", "variants", "pooled", "batch", "discover", "rule_ref", "macro"} <= set(inputs)
+
+
+def test_lot_fit_is_an_optional_validated_flag_off_by_default_and_passed_as_a_bare_option() -> None:
+    assert "--lot-fit" not in cells.argv(cells.plan(_env())[0])
+    assert cells.plan(_env())[0]["lot_fit"] is False
+    on = cells.plan(_env(LOT_FIT="true"))
+    assert on[0]["lot_fit"] is True and "--lot-fit" in cells.argv(on[0])
+    item = cells.plan(_env(BATCH=json.dumps([{"specialist": "tsmom", "lot_fit": True}, {"specialist": "tsmom"}])))
+    assert [c["lot_fit"] for c in item] == [True, False]
+    inputs = WF[True]["workflow_dispatch"]["inputs"]
+    assert "lot_fit" in inputs and inputs["lot_fit"]["default"] is False
+    env = next(s for s in WF["jobs"]["plan"]["steps"] if s.get("id") == "plan")["env"]
+    assert env["LOT_FIT"] == "${{ inputs.lot_fit }}"
