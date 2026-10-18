@@ -55,6 +55,10 @@
 * feed_reconcile    daily (D12): per account, the engine's tick-built 1m bars against the broker's own M1 for the last
                     day; divergence and unconfirmed spikes -> dq_events, broker M1 -> bars_1m_broker, report ->
                     state/reconcile_<account>.json (health check reconcile:<account>). Skipped without a broker.
+* tv_reconcile      daily (goldbot/data/tv_reconcile.py): the TradingView bars the direct pull read (a second feed, OANDA,
+                    never a primary bar source) against the Dukascopy/broker M1 resampled, last 3 days; a close more than
+                    2 points off flags the bar (`dq`) and sets its plots NaN in tv_indicators, an event to dq_events
+                    (source tradingview). Reporting and data quality only; never blocks an entry or an exit.
 * broker_ledger     daily (finance audit GAP-07/GAP-08, RC-8/RC-9): per account, read-only, a balance snapshot (balance,
                     equity, margin, currency) and the deposits, withdrawals and adjustments in the broker's deal history,
                     the balance tied out against the deals, and goldbot's closed records and open trades reconciled
@@ -1129,6 +1133,67 @@ def feed_reconcile(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return out
 
 
+# ---------------------------------------------------------------------------------------------- TradingView cross-feed
+TV_RECONCILE_DAYS = 3                 # lookback: late-arriving history bars and a missed run are still caught
+TV_DROP_COLUMNS = ["source", "symbol", "year", "month"]      # hive columns Store.read adds; not part of the rows
+
+
+def _tv_reference(ctx: JobContext, start: pd.Timestamp, end: pd.Timestamp) -> tuple[pd.DataFrame, str]:
+    """The reference M1: Dukascopy, else the first account's broker M1 (bars_1m_broker) that has the window."""
+    for table, source in (("bars_1m", "dukascopy"), *(("bars_1m_broker", a.account_id) for a in ctx.accounts)):
+        ref = ctx.store.read(table, source=source, start=start, end=end)
+        if not ref.empty:
+            return ref, source
+    return pd.DataFrame(), ""
+
+
+def tv_reconcile(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Daily: the pulled TradingView bars (second feed) against the reference M1 over the last TV_RECONCILE_DAYS days.
+    A bar more than 2 points off is flagged `dq` and its plots set NaN in `tv_indicators` (a rewrite on the store key,
+    so a flagged bar stays NaN); each is one dq_events row (source tradingview). Reporting only: no order path."""
+    from goldbot.data.crossfeed import CLOSE_TOL_POINTS, POINT_DEFAULT
+    from goldbot.data.quality import DQEvent, events_frame
+    from goldbot.data.tv_reconcile import PULL_ORIGINS, apply_dq, compare_closes, reconcile_counts
+    end = pd.Timestamp(slot).tz_convert("UTC").floor("min")
+    start = end - pd.Timedelta(days=TV_RECONCILE_DAYS)
+    ref, ref_source = _tv_reference(ctx, start - pd.Timedelta(hours=8), end)
+    out: dict[str, Any] = {"reference": ref_source or None, "flagged": 0, "compared": 0}
+    tdir = ctx.store.table_dir("tv_indicators")
+    if ref.empty or not tdir.exists():
+        out["skipped"] = "no reference M1 bars" if ref.empty else "no TradingView rows"
+        return out
+    tol = CLOSE_TOL_POINTS * POINT_DEFAULT
+    events: list[DQEvent] = []
+    for d in sorted(tdir.glob("source=*")):
+        source = d.name.removeprefix("source=")
+        long = ctx.store.read("tv_indicators", source=source, start=start - pd.Timedelta(hours=8), end=end)
+        if long.empty or "origin" not in long.columns:
+            continue
+        flagged_rows: list[pd.DataFrame] = []
+        for tf in sorted(set(long.loc[long["origin"].isin(PULL_ORIGINS), "tf"].astype(str))):
+            cmp = compare_closes(long, ref, tf=tf, tolerance=tol, start=start, end=end)
+            counts = reconcile_counts(long, ref, tf=tf, tolerance=tol, start=start, end=end)
+            out["compared"] += len(cmp)
+            out.setdefault("by_source", {})[f"{source}:{tf}"] = {
+                "compared": len(cmp), "matched": counts["matched"], "max_close_diff": counts["max_close_diff"]}
+            bad = cmp[cmp["dq"]]
+            if bad.empty:
+                continue
+            fixed = apply_dq(long[long["tf"].astype(str) == tf], cmp)
+            flagged_rows.append(fixed[fixed["dq"] == "tv_close_diff"])
+            for r in bad.itertuples():
+                events.append(DQEvent(ts_utc=cast(pd.Timestamp, r.ts_utc), check="tv_close_diff", severity="warning",
+                                      detail=f"{source} {tf}: TradingView close {r.tv_close:.2f} vs {ref_source} "
+                                             f"{r.ref_close:.2f} ({r.diff:.2f} off, limit {tol:.2f}); plots set NaN"))
+        if flagged_rows:
+            rows = pd.concat(flagged_rows, ignore_index=True)
+            ctx.store.append("tv_indicators", rows.drop(columns=TV_DROP_COLUMNS, errors="ignore"), source=source)
+            out["flagged"] += int(rows["bar_time"].nunique())
+    if events:
+        ctx.store.append("dq_events", events_frame(events), source="tradingview", dedupe=False)
+    return out
+
+
 # ---------------------------------------------------------------------------------------------- broker ledger (GAP-07/08)
 def broker_ledger(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Daily, per enabled account (goldbot/ops/ledger.py): RC-9 "Opening balance + net closed P&L + deposits -
@@ -1248,6 +1313,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "drift_watch": drift_watch,
     "gap_watch": gap_watch,
     "feed_reconcile": feed_reconcile,             # D12 daily reconciliation against the broker's M1
+    "tv_reconcile": tv_reconcile,                 # TradingView bars (second feed) vs the reference M1; dq flag + NaN plots
     "broker_ledger": broker_ledger,               # GAP-07/08: balance snapshot, positions and balance vs the broker
     "backup": backup,                             # encrypted off-host backup (ops/backup.py)
     "restore_drill": restore_drill,               # weekly restore + verification of the latest backup
