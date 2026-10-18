@@ -16,6 +16,7 @@ no cookie, layout or user id is read.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
@@ -23,6 +24,7 @@ import pandas as pd
 
 from goldbot.api.schema import TvIndicatorStatus, TvStatusView
 from goldbot.data.store import Store
+from goldbot.data.tv_alias import alias_map, name_keys
 from goldbot.ops.tv_pull_health import fix_command, signin_state
 from goldbot.webhook.app import tf_seconds
 from goldbot.webhook.inbox import TABLE
@@ -102,8 +104,10 @@ def _view(now: pd.Timestamp, rows: list[TvIndicatorStatus], state_dir: Path | No
 
 
 def tv_status(store: Store, now: pd.Timestamp, state_dir: str | Path | None = None,
-              cookie_keys: tuple[str, str] | None = None) -> TvStatusView:
-    """`state_dir`: where tv_auth.db lives (None: the sign-in is not read). `cookie_keys`: settings tv_pull
+              cookie_keys: tuple[str, str] | None = None,
+              aliases: Mapping[str, str] | None = None) -> TvStatusView:
+    """`aliases`: settings tv_pull.aliases; every indicator is shown under our name (goldbot/data/tv_alias.py), never
+    the vendor's. `state_dir`: where tv_auth.db lives (None: the sign-in is not read). `cookie_keys`: settings tv_pull
     sessionid_key and sessionid_sign_key, for the fix command (the defaults otherwise)."""
     now = now.tz_convert("UTC") if now.tzinfo else now.tz_localize("UTC")
     sdir = Path(state_dir) if state_dir is not None else None
@@ -135,4 +139,8 @@ def tv_status(store: Store, now: pd.Timestamp, state_dir: str | Path | None = No
         if key[0].partition("@")[0] != CHART:
             rows.append(_row(key, hist.get(key, {}), pull.get(key, 0)))
     rows.sort(key=lambda r: (r.indicator, r.tf))
-    return _view(now, rows, sdir, cookie_keys)
+    plots: dict[str, set[str]] = {}
+    for r in rows:
+        plots.setdefault(r.indicator, set()).update(r.plots_seen)
+    shown = alias_map(aliases or {}, {n: name_keys(n, sorted(p)) for n, p in plots.items()})
+    return _view(now, [r.model_copy(update={"indicator": shown[r.indicator]}) for r in rows], sdir, cookie_keys)

@@ -911,7 +911,8 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     def tradingview_status(_: User = Depends(auth)) -> TvStatusView:
         s = view_settings()
         keys = (s.tv_pull.sessionid_key, s.tv_pull.sessionid_sign_key) if s is not None else None
-        return tv_status(st.store(), pd.Timestamp.now(tz="UTC"), state_dir=st.dir, cookie_keys=keys)
+        return tv_status(st.store(), pd.Timestamp.now(tz="UTC"), state_dir=st.dir, cookie_keys=keys,
+                         aliases=s.tv_pull.aliases if s is not None else None)
 
     # ============================================================== Limits card (read-only, any signed-in role)
     # goldbot/api/limits.py: what the engines publish, the supervisor's combined caps and core.db's change logs

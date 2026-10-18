@@ -55,7 +55,7 @@ import secrets
 import sqlite3
 import sys
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -69,6 +69,7 @@ from goldbot.base import FrozenRecord, Record, UtcTimestamp, load_record, load_r
 from goldbot.config import TvPullSettings
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns
+from goldbot.data.tv_alias import alias_map, key_of, name_keys
 from goldbot.data.tv_csv import normalize_tf
 from goldbot.data.tv_wire import (
     SITE,
@@ -217,11 +218,13 @@ class PassReport(FrozenRecord):
         return cls(ok=False, reason=reason, started_utc=started, finished_utc=finished, requests=requests,
                    auth_expired=auth_expired)
 
-    def text(self) -> str:
+    def text(self, aliases: Mapping[str, str] | None = None) -> str:
+        """The pass as the owner reads it: studies under our names (goldbot/data/tv_alias.py), never the vendor's."""
         if not self.ok:
             return f"tv-pull: {'skipped' if self.skipped else 'FAILED'}: {self.reason}"
+        shown = alias_map(aliases or {}, {s: name_keys(s.rpartition("@")[0]) for s in self.studies})
         lines = [f"tv-pull: ok, {self.requests} requests, {len(self.studies)} studies "
-                 f"({', '.join(self.studies) or 'none'}); history latency {self.history_latency_s:.0f} s "
+                 f"({', '.join(shown[s] for s in self.studies) or 'none'}); history latency {self.history_latency_s:.0f} s "
                  f"({'measured' if self.history_latency_measured else 'default'})"]
         lines += [f"  {t.symbol} {t.tf}: {t.bars_received} bars received ({t.pages} history pages, "
                   f"{t.oldest_bar.isoformat() if t.oldest_bar is not None else '-'} .. "
@@ -616,7 +619,7 @@ class _Chart:
         self.pacer.wait()
         kind = STRATEGY_TYPE if meta.is_strategy else STUDY_TYPE
         self._send("create_study", [self.cs, sid, "st1", SERIES, kind, inputs])
-        self._pump(sid, f"create_study {meta.name}")
+        self._pump(sid, f"create_study {key_of(meta.study_id)}")
         self._send("remove_study", [self.cs, sid])
         return self.studies[sid]
 
@@ -1019,7 +1022,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.action == "status":
         last = plog.last()
         print(f"tv_auth={plog.auth_state() or 'never run'}; studies seen: {len(plog.metas())}")
-        print(last.text() if last else "no pass yet")
+        print(last.text(cfg.aliases) if last else "no pass yet")
         return 0
     if not cfg.enabled:
         print("tv-pull: tv_pull.enabled is false (set it in config/settings.local.yaml)", file=sys.stderr)
@@ -1037,7 +1040,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.action == "sync":
         rep = once(None)
-        print(rep.text())
+        print(rep.text(cfg.aliases))
         return 0 if rep.ok else 1
     from goldbot.ops.health import start_heartbeat
     start_heartbeat(a.state, "tv-pull")      # state/heartbeat_tv-pull.json: health `heartbeat:tv-pull` (RUNBOOK 2.7c)
