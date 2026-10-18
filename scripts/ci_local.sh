@@ -110,6 +110,7 @@ smoke_lane() {
   : > "$L/smoke.log"; rm -f "$L/smoke.steps"
   step smoke pre-commit -- pre-commit run --all-files --show-diff-on-failure --color never
   step smoke ruff -- ruff check goldbot tests scripts --output-format concise
+  step smoke uv-lock -- uv lock --check --offline
   step smoke collect -- bash -c 'pytest --collect-only -q -p no:randomly -p no:cacheprovider | tail -20'
   lane_done smoke
 }

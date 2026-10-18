@@ -57,10 +57,10 @@ report-failure: any failure -> one `ci` issue (unchanged), now with FLAKY/FAIL v
 | shard the critical path | integration 1 -> 4 shards, each `-n auto`; heavy tests spread first by `tests/shard_weights.json` (LPT): local shard sums 208 / 205 / 199 / 201 s |
 | unit | stays 4 shards: under 3 min already, and the account has 20 concurrent jobs (two overlapping runs at peak 13 jobs each already queue) |
 | smoke first | pre-commit (docs checks), ruff and full test collection in about 1 min (merge_smoke.sh stays a local post-merge tool: its structural tests are unit tests); the test matrices and e2e wait for it, so a broken import costs one job instead of twelve |
-| caches | uv wheel cache (key: pyproject.toml; main writes, PRs read), `web/node_modules` keyed on package-lock.json (npm ci only on a miss), mypy cache (content-hash checked), pre-commit cache. Playwright uses the runner's preinstalled Chrome: no browser download, nothing to cache |
+| caches | installs are `uv sync --frozen` from uv.lock (smoke runs `uv lock --check`); uv cache keyed on uv.lock (main writes, PRs read), `web/node_modules` keyed on package-lock.json (npm ci only on a miss), mypy cache (content-hash checked), pre-commit cache. Playwright uses the runner's preinstalled Chrome: no browser download, nothing to cache |
 | e2e | one job per Playwright project (each has its own server and TOTP clock) |
 | concurrency | PRs: a new push cancels the PR's older run; main: one group per commit, never cancelled |
-| path filter | PRs only, fail-safe: prose-only (docs/** and *.md, except docs/research/**) skip lint, integration and the frontend jobs; smoke and the unit suite still run. Pushes to main always run everything. The required checks always report |
+| path filter | PRs only, fail-safe: prose-only (docs/** and *.md, except RUNTIME_DOCS in scripts/ci_changes.py: docs/research/, docs/ROADMAP.md, docs/RUNBOOK.md, found by an audit test of what runtime code, integration tests and e2e read) skip lint, integration and the frontend jobs; smoke and the unit suite still run. The filter runs from the PR's base commit, so a PR cannot change it for itself. Pushes to main always run everything. The required checks always report |
 | flaky report | a failed shard re-runs its failed tests once, alone; each is FLAKY (passed) or FAIL (failed again) in the job summary and the CI issue; the job stays failed. Playwright `failOnFlakyTests` in CI |
 | summaries | every pytest shard writes counts, wall time and its 10 slowest tests to the job summary (`scripts/ci_summary.py`) |
 | CD | `deployable` (main, both aggregates green): commit status `goldbot/deployable` and the owner's one-line `sudo goldbot-deploy <sha>` in the summary. It never deploys and holds no secret |
@@ -73,12 +73,8 @@ about 4 min on a runner), so **about 6 min per run instead of a 16.7 min median*
 Not done, with reasons:
 
 - No more unit shards: not on the critical path; concurrency cap (above).
-- No dependency lock file (`uv.lock`): CI resolves the newest versions on each run as before, so an upstream
-  release can still break an unrelated PR. Adopting `uv lock` + `uv sync --locked` is a dev-workflow change
-  (CLAUDE.md says `pip install -e`); recommended to the CTO as a follow-up.
 - No nightly scheduled run: a scheduled failure would mark the main head's `backend` check failed, which
-  goldbot-deploy reads (filter=latest), and so block an owner deploy on dependency drift alone. Revisit with the
-  lock file.
+  goldbot-deploy reads (filter=latest), and so block an owner deploy on dependency drift alone. Revisit now that CI installs from uv.lock.
 - The engine replay tests set the integration floor: profiling `_run` in tests/test_engine.py (a 5-day replay at 1
   tick per minute) is the next speed-up after this one (implementer).
 

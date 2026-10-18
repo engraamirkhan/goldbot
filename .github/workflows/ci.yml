@@ -46,8 +46,15 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
     steps:
+      # the filter comes from the PR's BASE commit (already on main), never from the PR: a PR cannot edit
+      # ci_changes.py to skip its own jobs. Pushes to main and manual runs do not use it (they run everything).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false, sparse-checkout: scripts/ci_changes.py, sparse-checkout-cone-mode: false }
+        if: github.event_name == 'pull_request'
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci_changes.py
+          sparse-checkout-cone-mode: false
       - id: filter
         env:
           GH_TOKEN: ${{ github.token }}
@@ -58,7 +65,10 @@ jobs:
           if ! gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > changed.txt; then
             echo "could not list the PR's files: running everything"; echo "code=true" | tee -a "$GITHUB_OUTPUT"; exit 0
           fi
-          python3 scripts/ci_changes.py < changed.txt | tee -a "$GITHUB_OUTPUT"
+          if [ ! -f scripts/ci_changes.py ]; then   # base predates the filter: run everything
+            echo "code=true" | tee -a "$GITHUB_OUTPUT"; exit 0
+          fi
+          python3 -I scripts/ci_changes.py < changed.txt | tee -a "$GITHUB_OUTPUT"
 
   smoke:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
@@ -77,6 +87,10 @@ jobs:
       - name: ruff
         if: success() || failure()
         run: set -o pipefail; ruff check goldbot tests scripts --output-format concise 2>&1 | tee ci-out/ruff.txt || { echo ruff >> ci-out/failed-smoke.list; exit 1; }
+      - name: uv-lock
+        # every job installs uv.lock as written (--frozen); a lock that no longer matches pyproject.toml fails here
+        if: success() || failure()
+        run: set -o pipefail; uv lock --check 2>&1 | tee ci-out/uv-lock.txt || { echo "uv.lock is stale - run uv lock and commit"; echo uv-lock >> ci-out/failed-smoke.list; exit 1; }
       - name: collect
         # every test module imports: a syntax or import error fails here in a minute, not in every shard
         if: success() || failure()

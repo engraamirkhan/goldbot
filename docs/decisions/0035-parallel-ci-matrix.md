@@ -1,6 +1,6 @@
 # 0035: Parallel CI matrix: weighted integration shards, smoke gate, deployable signal
 
-Status: proposed (sre, 2026-10-18; CTO to accept)
+Status: accepted with conditions (CTO, 2026-10-18; conditions met in this change)
 
 ## Context
 CI took a 16.7 min median (p90 19.8 min, 28 runs, docs/process/ci-performance-2026-10-18.md). One job,
@@ -16,7 +16,7 @@ read docs, and Playwright retries let a flaky e2e test pass.
    existing node-id hash. Unit stays 4 shards (not on the critical path; concurrency cap).
 2. A 1-minute `smoke` job (pre-commit including the docs checks, ruff, full test collection) gates the test matrices
    and e2e.
-3. Path filtering only on pull requests and fail-safe: prose-only (docs/** and *.md, except docs/research/**) skips
+3. Path filtering only on pull requests and fail-safe: prose-only (docs/** and *.md, except the RUNTIME_DOCS that runtime code, integration tests or e2e read, audited by a test) skips
    lint, integration and the frontend jobs; smoke and the unit suite always run; pushes to main run everything; the
    required `backend` / `frontend` aggregates always report.
 4. Flakiness is reported, never masked: a failed shard re-runs its failed tests once, alone, and labels them FLAKY or
@@ -31,7 +31,9 @@ read docs, and Playwright retries let a flaky e2e test pass.
   test, so profiling tests/test_engine.py `_run` is the next lever.
 - The weights file can go stale; that costs balance only, never a test. Refresh with `scripts/ci_summary.py weights`.
 - Peak 13 concurrent jobs per run: two overlapping runs can queue briefly under the 20-job cap.
-- Dependencies are still unlocked (no uv.lock): an upstream release can break an unrelated PR. Recommended follow-up:
-  `uv lock` + `uv sync --locked`, then a nightly run (deferred: a scheduled failure would block goldbot-deploy on the
-  main head through the `backend` check).
+- Every job installs uv.lock as written (`uv sync --frozen`); smoke fails a stale lock (`uv lock --check`). The
+  change filter runs from the PR's base commit. A nightly run stays deferred: a scheduled failure would block goldbot-deploy on
+  the main head through the `backend` check.
+- Status: accepted with conditions by the CTO on 8b6941e3 (lock-file installs, base-commit filter, docs-read audit);
+  all three are in this change.
 - What would change this: a self-hosted runner (CI_RUNNER) with more cores would favour fewer, larger shards.

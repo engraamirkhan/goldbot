@@ -102,3 +102,16 @@ def test_ci_never_deploys():
     text = CI.read_text().lower()
     assert "ssh " not in text and "scp " not in text
     assert "sudo goldbot-deploy" in text      # it prints the owner's command; it never runs it
+
+
+def test_the_change_filter_runs_from_the_base_commit_never_the_pr():
+    steps = _ci()["jobs"]["changes"]["steps"]
+    checkout = next(s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@"))
+    assert checkout["with"]["ref"] == "${{ github.event.pull_request.base.sha }}"
+    assert checkout["if"] == "github.event_name == 'pull_request'"
+
+
+def test_backend_installs_come_from_the_lock_file():
+    action = (ROOT / ".github" / "actions" / "setup-backend" / "action.yml").read_text()
+    assert "uv sync --frozen" in action and "cache-dependency-glob: uv.lock" in action and "pip install" not in action
+    assert "uv lock --check" in CI.read_text() and "uv lock --check" in (ROOT / "scripts" / "ci_local.sh").read_text()
