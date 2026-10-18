@@ -234,8 +234,10 @@ items supersede B4's recommendation where they differ. Nothing in B2's configura
 
 Counted by `python scripts/smc_counts.py --bars raw` on the `smc_structure` code (presets `tvr1`, `tvr2`, through
 `candidates_in_context`, the call research makes). Dukascopy 1m (release data-v1) → 15m mid bars 2010-01-01 ..
-2025-09-30, 369,786 bars; rows from `research.holdout_from` (2025-10-01) are cut before resampling, so no holdout
-row was loaded. Series start pinned to the first 2010 bar (B4a). No label, return or outcome was computed.
+2025-09-30, 369,786 bars. The 2025 file is read whole, so its holdout rows (from `research.holdout_from`,
+2025-10-01) are read from disk (`scripts/smc_counts.py`, `read_bar_files`) and then cut before anything is resampled
+or computed (`count`, `cut_before_holdout`): no holdout bar reaches a count. Series start pinned to the first 2010
+bar (B4a). No label, return or outcome was computed.
 
 | Row | Events | Long | Short |
 |---|---:|---:|---:|
@@ -252,16 +254,21 @@ TVR-2 events within 4 bars of a TVR-1 event: 3.5% (below the 50% reporting line)
 Funnel for TVR-1 (counts only): 8,385 internal CHoCHs (2.27% of bars, as the pulled sample's 2.2%), 3,616 with the
 swing trend at t-1, 441 with a gap on t-2..t. B2 estimated a 4× cut from the two filters; the gap filter alone cuts
 about 8×. Under B2 ("a row whose count is below 1,000 is withdrawn before it runs and costs nothing"), TVR-1 is
-withdrawn as written, and TVR-3, which depends on it, cannot be unlocked. TVR-2 (1,196) clears the floor; one trade at
-a time (B4a) will leave fewer labelled trades than events. Any reworded TVR-1 (a wider gap window, say) would be a new
-configuration chosen after seeing this count: that is the research director's call, not this lane's.
+withdrawn as written, and TVR-3, which depends on it, is moot. TVR-2 (1,196) clears B2's 1,000 floor but not the
+walk-forward gate's event minimum (1,500 candidates, `research/gates.py` MIN_CANDIDATES), so it would spend a trial on
+a known gate failure.
+
+**Decision (program director + research director, under the owner's delegation, 2026-10-18).** TVR-2 is **withdrawn
+before dispatch: below the gate-1 event minimum**. TVR-1 is withdrawn under B2's floor. **0 trials are used.** No
+reworded TVR-1 or TVR-2 is written from these counts (that would be a configuration chosen after seeing them). The
+SMC topic continues only through the replica feature group (D-TVR) inside O-4 and H-02, not as standalone rules.
 
 ### B5. Ledger
 
 | Item | Count |
 |---|---|
 | Registry trials before this file (Q4 batch allocated) | 53 |
-| New pre-registered trials here | 2 (TVR-1, TVR-2) + 1 conditional (TVR-3) |
-| K for DSR at verdict | ≥ 55 (registry `n_trials_effective` at the time); funded by the 2026Q4 override 53 → 55 (B4a) |
+| New pre-registered trials here | 2 written (TVR-1, TVR-2) + 1 conditional (TVR-3); **0 dispatched**: TVR-1 withdrawn at 0 cost (441 < 1,000), TVR-2 withdrawn before dispatch (1,196 < the gate-1 minimum 1,500), TVR-3 moot (B4b) |
+| K for DSR at verdict | no verdict is read. The floor of 55 (B3) stands for any later SMC rule trial; no budget override is needed, because 0 trials were used |
 | Feature-discovery K_eff (D-TVR adopted, B4a) | +1 group inside O-4, +1 inside H-02 |
 | Holdout touched | no (match work read no returns; trials end 2025-09-30) |

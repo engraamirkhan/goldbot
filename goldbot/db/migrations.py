@@ -266,6 +266,24 @@ AUX: tuple[Migration, ...] = (
                url TEXT NOT NULL
            ) STRICT""",
     )),
+    # additive (quant review 2026-10-18): the structure replica's carried state per feed and bar
+    # (goldbot/features/smc_live.py), written on every bar; the last few bars' states are kept (a rule that reads the
+    # bars before the decision bar resumes from an earlier snapshot). Derived data, rebuilt from the series start on any doubt, so aux (NORMAL) is enough; a
+    # release without the table never reads it. `state` is the ReplicaState JSON (NaN written as a constant, so it is
+    # not checked with json_valid)
+    Migration(version=12, name="replica_state", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS replica_state (
+               feed TEXT NOT NULL,
+               code_version TEXT NOT NULL,
+               params_hash TEXT NOT NULL,
+               bar_index INTEGER NOT NULL,
+               bar_time TEXT NOT NULL,
+               context_digest TEXT NOT NULL,
+               state TEXT NOT NULL,
+               updated_ns INTEGER NOT NULL,
+               PRIMARY KEY (feed, bar_index)
+           ) STRICT""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

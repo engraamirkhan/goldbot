@@ -18,9 +18,10 @@ sets the trend, so a break the other way on the same bar is a CHoCH, not a BOS).
 
 Series start (B4a). The FVG threshold is a running mean from the first bar and the leg states depend on it, so the
 events depend on where the series starts. They are pinned to the first bar of the 2010 Dukascopy 15m series
-(SERIES_START): research (`candidates_in_context`) refuses bars that start later. `candidates` computes on the bars
-it is given (tests, counts). A live window passes the sum and count of the bars before it as
-`ctx["smc_fvg_prior"]` (`features.smc_live.FvgAnchor`): everything is computed from our own bars, never from
+(`features.smc_live.SERIES_START`): research (`candidates_in_context`) refuses bars that start later. `candidates`
+computes on the bars it is given (tests, counts). Live, a window resumes from a carried `ReplicaState`
+(`ctx["smc_replica_state"]`, kept by `features.smc_live.ReplicaFeed` in SQLite) of the bar `state_lag` bars before
+the decision bar, so every value equals the full-history run: everything is computed from our own bars, never from
 TradingView (owner directive 2026-10-18).
 
 One trade at a time in total, not one per side (B4a: the account holds one 0.01 lot trade): `labels.one_at_a_time`,
@@ -41,15 +42,12 @@ import pandas as pd
 from pydantic import Field, ValidationError
 
 from goldbot.base import FrozenRecord
-from goldbot.data.timeutil import utc_index
 from goldbot.features import smc_replica as smc
-from goldbot.features.smc_live import PRIOR_KEY
+from goldbot.features.smc_live import STATE_KEY, check_series_start
 from goldbot.labels.triple_barrier import BarrierSpec
 from goldbot.specialists.base import AgentIdentity, Specialist, register
 
 FAMILY = "smc_structure"
-SERIES_START = pd.Timestamp("2010-01-01", tz="UTC")     # B4a: the replica's state starts at the 2010 series' first bar
-START_SLACK = pd.Timedelta(days=7)                       # the first 2010 bar is the first Sunday open (3 January)
 INERT_FOR_TVR2 = ("internal_len", "fvg_lookback")
 
 
@@ -120,45 +118,71 @@ class SmcStructureSpecialist(Specialist):
     def exit_policy(self) -> dict[str, Any]:
         return {"type": "barrier"}
 
+    @property
+    def replica_params(self) -> smc.ReplicaParams:
+        """The replica block this rule reads (the owner's chart settings but for the configured pivot lengths)."""
+        return smc.ReplicaParams(swing_len=self.params.swing_len, internal_len=self.params.internal_len)
+
+    @property
+    def state_lag(self) -> int:
+        """Bars between the carried snapshot and the decision bar: the rule reads the gaps of bars t - fvg_lookback..t
+        and the swing trend after bar t - 1, all of which a resumed run computes only after its snapshot."""
+        return (self.params.fvg_lookback if self.params.rule == "tvr1" else 0) + 1
+
     def candidates(self, mid_bars: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
         """The bars where the configured rule fires (module docstring), on the replica computed over `mid_bars` as
         the start of the series."""
-        return self._signals(mid_bars, None)
-
-    def _signals(self, mid_bars: pd.DataFrame, prior: tuple[float, int] | None) -> pd.DataFrame:
         if len(mid_bars) == 0:
             return _empty()
-        p = self.params
         o, h, lo, c = (mid_bars[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close"))
+        p = self.params
         st = smc.structure_breaks(o, h, lo, c, p.swing_len, p.internal_len)
+        fb, fs = smc.fair_value_gaps(o, h, lo, c) if p.rule == "tvr1" else (None, None)
+        trend_prev = np.concatenate(([0.0], st["trend_swing"][:-1]))
+        return self._rule(st, fb, fs, trend_prev, 0)
+
+    def _rule(self, ev: Any, fb: Any, fs: Any, trend_prev: np.ndarray, first: int) -> pd.DataFrame:
+        """Candidates from the replica's event arrays (`ev[...]`, one value per row); rows before `first` lack the
+        bars the rule reads and make none."""
+        p = self.params
         if p.rule == "tvr2":
-            long, short = st["bos_bull_swing"], st["bos_bear_swing"]
+            long = np.asarray(ev["bos_bull_swing"], dtype=bool)
+            short = np.asarray(ev["bos_bear_swing"], dtype=bool)
         else:
-            ps, pn = prior if prior is not None else (0.0, 0)
-            fb, fs = smc.fair_value_gaps(o, h, lo, c, prior_sum=ps, prior_n=pn)
             w = p.fvg_lookback + 1
-            gap_b = pd.Series(fb).rolling(w, min_periods=1).max().to_numpy().astype(bool)
-            gap_s = pd.Series(fs).rolling(w, min_periods=1).max().to_numpy().astype(bool)
-            trend_prev = np.concatenate(([0.0], st["trend_swing"][:-1]))
-            long = st["choch_bull_internal"] & (trend_prev == 1) & gap_b
-            short = st["choch_bear_internal"] & (trend_prev == -1) & gap_s
+            gap_b = pd.Series(np.asarray(fb, dtype=float)).rolling(w, min_periods=1).max().to_numpy() > 0
+            gap_s = pd.Series(np.asarray(fs, dtype=float)).rolling(w, min_periods=1).max().to_numpy() > 0
+            long = np.asarray(ev["choch_bull_internal"], dtype=bool) & (trend_prev == 1) & gap_b
+            short = np.asarray(ev["choch_bear_internal"], dtype=bool) & (trend_prev == -1) & gap_s
         side = np.where(long, 1, np.where(short, -1, 0))
+        side[:first] = 0
         idx = np.flatnonzero(side)
         return pd.DataFrame({"idx": idx.astype(int), "side": side[idx].astype(int)})
+
+    def _resumed(self, mid_bars: pd.DataFrame, state: smc.ReplicaState) -> pd.DataFrame:
+        """Candidates on the rows after the snapshot whose read bars all follow it; idx positional in `mid_bars`."""
+        bars = mid_bars.reset_index(drop=True)
+        frame, _ = smc.replica_run(bars, self.replica_params, state)       # refuses stale or foreign state
+        if frame.empty:
+            return _empty()
+        offset = len(bars) - len(frame)
+        trend = frame["trend_swing"].to_numpy(dtype=float)
+        trend_prev = np.concatenate(([float(state.structure.trend_swing)], trend[:-1]))
+        out = self._rule(frame, frame.get("fvg_bull"), frame.get("fvg_bear"), trend_prev, self.state_lag - 1)
+        return out.assign(idx=out["idx"] + offset)
 
     def candidates_in_context(self, mid_bars: pd.DataFrame, features: pd.DataFrame,
                               context: dict[str, pd.DataFrame] | None,
                               ctx: dict[str, Any] | None = None) -> pd.DataFrame:
-        """Research's and the engine's entry point. Without `ctx["smc_fvg_prior"]` the bars must start the series at
-        the pinned SERIES_START (B4a, research); with it (the engine's window, `features.smc_live.FvgAnchor.ctx_for`)
-        the FVG threshold continues the series' running mean from the bars before the window."""
-        prior = (ctx or {}).get(PRIOR_KEY)
-        if prior is not None:
-            return self._signals(mid_bars, (float(prior[0]), int(prior[1])))
+        """Research's and the engine's entry point. Without `ctx["smc_replica_state"]` the bars must start the series
+        at the pinned SERIES_START (B4a, research: run with --from-year 2010); with it (the engine's window and the
+        snapshot `state_lag` bars before its decision bar) the replica resumes from the carried state."""
+        state = (ctx or {}).get(STATE_KEY)
+        if state is not None:
+            return self._resumed(mid_bars, state)
         if len(mid_bars):
-            first = utc_index(mid_bars["ts_utc"])[0]
-            if not SERIES_START <= first < SERIES_START + START_SLACK:
-                raise ValueError(f"{FAMILY}: the replica's state is pinned to a series starting "
-                                 f"{SERIES_START:%Y-%m-%d} (B4a); these bars start {first:%Y-%m-%d} "
-                                 "(run research with --from-year 2010)")
-        return self._signals(mid_bars, None)
+            try:
+                check_series_start(mid_bars)
+            except ValueError as exc:
+                raise ValueError(f"{FAMILY}: {exc} (run research with --from-year 2010)") from None
+        return self.candidates(mid_bars, features)

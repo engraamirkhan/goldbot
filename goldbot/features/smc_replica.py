@@ -270,13 +270,23 @@ class ChannelState(FrozenRecord):
     bottoms: tuple[float, ...] = ()
 
 
+class StaleReplicaState(ValueError):
+    """A carried state that this code must not resume: written by another code VERSION or for another parameter
+    block. The caller re-bootstraps from the series start (`goldbot.features.smc_live`)."""
+
+
 class ReplicaState(FrozenRecord):
-    """Snapshot after bar `bar_index` (global index from the series' first bar) at `bar_time`, for `params_tag`."""
+    """Snapshot after bar `bar_index` (global index from the series' first bar) at `bar_time`, for `params_tag`.
+    `code_version` (the module's VERSION) and `params_hash` (`ReplicaParams.digest`, every field, defaults included)
+    are required, so a state written before they existed, by other code or for other parameters never loads as current
+    (quant review 2026-10-18: "refuse stale state on mismatch")."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", ser_json_inf_nan="constants")
     bar_time: str
     bar_index: int
     params_tag: str = ""
+    code_version: str
+    params_hash: str
     structure: StructureState = StructureState()
     eq_last_high: float = np.nan
     eq_last_low: float = np.nan
@@ -544,6 +554,10 @@ class ReplicaParams(FrozenRecord):
     candle_traverse: bool = False                      # the MA-traverse candle code (off in the feature frame)
     atr_len: int = Field(14, ge=1)                     # ATR used to scale the distance columns
 
+    def digest(self) -> str:
+        """A hash of every field, defaults included: a state is resumed only by the exact block that wrote it."""
+        return hashlib.sha1(json.dumps(self.model_dump(), sort_keys=True, default=str).encode()).hexdigest()[:16]
+
     def tag(self) -> str:
         """'' for the defaults, else a short hash of the non-default fields (used in the feature version)."""
         diff = self.model_dump(exclude_defaults=True)
@@ -589,8 +603,13 @@ def replica_run(df: pd.DataFrame, params: ReplicaParams = DEFAULT_PARAMS,
     p = params
     ts = _times(df)
     if state is None:
-        start, base, s = 0, 0, ReplicaState(bar_time="", bar_index=-1, params_tag=p.tag())
+        start, base, s = 0, 0, ReplicaState(bar_time="", bar_index=-1, params_tag=p.tag(), code_version=VERSION,
+                                            params_hash=p.digest())
     else:
+        if state.code_version != VERSION:
+            raise StaleReplicaState(f"state was written by replica code {state.code_version!r}, not {VERSION!r}")
+        if state.params_hash != p.digest():
+            raise StaleReplicaState(f"state was built for params {state.params_hash!r}, not {p.digest()!r}")
         if state.params_tag != p.tag():
             raise ValueError(f"state was built for params {state.params_tag!r}, not {p.tag()!r}")
         hit = np.flatnonzero(ts == pd.Timestamp(state.bar_time))
@@ -641,7 +660,7 @@ def replica_run(df: pd.DataFrame, params: ReplicaParams = DEFAULT_PARAMS,
     n = len(df)
     end = ReplicaState(
         bar_time=ts[-1].isoformat() if n else s.bar_time, bar_index=base + n - 1 if n else s.bar_index,
-        params_tag=p.tag(), structure=st_end, eq_last_high=last_h, eq_last_low=last_l,
+        params_tag=p.tag(), code_version=VERSION, params_hash=p.digest(), structure=st_end, eq_last_high=last_h, eq_last_low=last_l,
         seeds={**s.seeds, "atr": s_atr, "atr_eq": s_atr_eq, "ema50": s_e50, **s_candle}, fvg_cum=cum,
         channels=ch_end)
     return frame, end

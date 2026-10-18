@@ -1,6 +1,7 @@
 """Count the TVR events before dispatch (docs/research/prereg-tv-replica-2026-10-18.md, B2 "Count before dispatch" and
 B4a): per preset of `smc_structure`, the candidate bars on our Dukascopy 15m bars from the pinned 2010 series start to
-`research.holdout_from` (cut before resampling: no holdout row is loaded), per year and in total, and the TVR-1/TVR-2
+`research.holdout_from` (the 2025 file is read whole and its holdout rows are cut before resampling, so none
+reaches a count), per year and in total, and the TVR-1/TVR-2
 overlap (the share of TVR-2 events within 4 bars of a TVR-1 event).
 
 Counts only: no label, return or outcome is computed or imported. The candidates come from
@@ -25,8 +26,9 @@ from goldbot.config import load_settings  # noqa: E402
 from goldbot.data.release import read_bar_files  # noqa: E402
 from goldbot.data.resample import mid, resample_bars  # noqa: E402
 from goldbot.data.timeutil import utc_index  # noqa: E402
+from goldbot.features.smc_live import SERIES_START  # noqa: E402
 from goldbot.research import h16  # noqa: E402
-from goldbot.specialists.smc_structure import SERIES_START, SmcStructureSpecialist  # noqa: E402
+from goldbot.specialists.smc_structure import SmcStructureSpecialist  # noqa: E402
 
 OVERLAP_BARS = 4
 

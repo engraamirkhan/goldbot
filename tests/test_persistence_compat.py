@@ -449,6 +449,9 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
         "not persisted, strict: the evidence for a risk decision (ADR 0031: corrupt evidence gives the floors)",
     ("goldbot/api/explain.py", "_plan", "PlanReservation"):
         "API schema model (pydantic default extra='ignore'): tolerant",
+    ("goldbot/features/smc_replica.py", "state_from_json", "ReplicaState"):
+        "strict: a carried replica state another release wrote must not resume (quant review 2026-10-18); a failed "
+        "read re-bootstraps from the series start (features.smc_live.ReplicaFeed)",
 }
 # Models that fail closed: never read tolerantly, by load_record or by RecordRepo(..., tolerant=True).
 STRICT_MODELS = {"User", "Invite", "PasswordReset", "Control", "Settings", "BusDecision"}

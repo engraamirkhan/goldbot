@@ -32,6 +32,12 @@ class FeatureSpec(Record):
 
 
 FEATURES: dict[str, FeatureSpec] = {}
+# A feature tagged NEEDS_STATE carries unbounded memory (e.g. smc_replica's running FVG threshold and structure
+# machine), so a fixed tail of bars cannot reproduce its full-history value. It is built only on a frame the caller
+# declares to start the series (ctx[FULL_HISTORY] True: research on the whole series); the engine computes it with a
+# carried state instead (goldbot.features.smc_live) and a plain tail is refused (quant review 2026-10-18).
+NEEDS_STATE = "needs_state"
+FULL_HISTORY = "series_from_start"
 # Superseded implementations, kept so a model trained on them still scores exactly the frame it was trained on
 # (`versions_for`, `with_versions`): (name, version) -> spec. Not in FEATURES, so research and retrains never build them.
 LEGACY_FEATURES: dict[tuple[str, str], FeatureSpec] = {}
@@ -107,13 +113,22 @@ def with_versions(X: pd.DataFrame, mid_bars: pd.DataFrame, names: list[str], ver
     building the frame at those versions; only the overridden features are recomputed."""
     out = X.copy()
     for n, v in versions.items():
-        cols = spec_of(n, v).fn(mid_bars, ctx or {})
+        spec = spec_of(n, v)
+        refuse_plain_tail(spec, ctx or {})
+        cols = spec.fn(mid_bars, ctx or {})
         cols.index = out.index
         for c in cols.columns:
             out[c] = cols[c].to_numpy()
     out.attrs = dict(X.attrs)
     out.attrs["feature_version"] = feature_version(names, versions)
     return out
+
+
+def refuse_plain_tail(spec: FeatureSpec, ctx: FeatureCtx) -> None:
+    """ValueError for a NEEDS_STATE feature on a frame not declared to start the series (see NEEDS_STATE)."""
+    if NEEDS_STATE in spec.tags and ctx.get(FULL_HISTORY) is not True:
+        raise ValueError(f"feature {spec.name!r} needs a carried state: it is built only on the whole series "
+                         f"(ctx[{FULL_HISTORY!r}] = True) or live through goldbot.features.smc_live, never on a tail")
 
 
 def build_features(mid_bars: pd.DataFrame, names: list[str] | None = None, ctx: FeatureCtx | None = None,
@@ -125,7 +140,9 @@ def build_features(mid_bars: pd.DataFrame, names: list[str] | None = None, ctx: 
     vs = versions or {}
     parts = [pd.DataFrame({"ts_utc": pd.DatetimeIndex(pd.to_datetime(mid_bars["ts_utc"], utc=True))}, index=mid_bars.index)]
     for n in names:
-        cols = spec_of(n, vs.get(n)).fn(mid_bars, ctx)
+        spec = spec_of(n, vs.get(n))
+        refuse_plain_tail(spec, ctx)
+        cols = spec.fn(mid_bars, ctx)
         cols.index = mid_bars.index
         parts.append(cols)
     out = pd.concat(parts, axis=1)

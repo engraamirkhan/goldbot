@@ -14,9 +14,8 @@ import pytest
 from goldbot.config import load_settings
 from goldbot.data.resample import mid, resample_bars, ticks_to_1m
 from goldbot.data.synthetic import synthetic_ticks
-from goldbot.data.timeutil import utc_index
 from goldbot.features import smc_replica as smc
-from goldbot.features.smc_live import PRIOR_KEY, FvgAnchor
+from goldbot.features.smc_live import SERIES_START, STATE_KEY
 from goldbot.features.technical import atr
 from goldbot.labels.triple_barrier import one_at_a_time, triple_barrier
 from goldbot.ops.jobs import research_families
@@ -25,7 +24,7 @@ from goldbot.research.pipeline import pooled_members
 from goldbot.research.population import Population
 from goldbot.research.preregistration import resolve_variant
 from goldbot.specialists import SPECIALISTS
-from goldbot.specialists.smc_structure import SERIES_START, SmcStructureConfig, SmcStructureSpecialist
+from goldbot.specialists.smc_structure import SmcStructureConfig, SmcStructureSpecialist
 
 TVR1 = SmcStructureSpecialist(**resolve_variant("smc_structure", "tvr1"))
 TVR2 = SmcStructureSpecialist(**resolve_variant("smc_structure", "tvr2"))
@@ -237,47 +236,24 @@ def test_the_count_script_reads_no_holdout_row_and_imports_no_label_or_return_co
     assert "TVR-1" in mod.markdown(r)
 
 
-def test_a_live_window_with_the_anchor_decides_as_research_does_on_the_whole_series(bars):
-    """Owner directive 2026-10-18: computed from our own bars live. The engine's 800-bar window continues the FVG
-    running mean from the bars before it (`FvgAnchor`), so TVR-1/TVR-2 fire on the window's last bar exactly when
+def test_a_live_window_with_the_carried_state_decides_as_research_does_on_the_whole_series(bars):
+    """Owner directive 2026-10-18: computed from our own bars live. The engine resumes the replica from the state
+    `state_lag` bars back (`features.smc_live.ReplicaFeed`), so TVR-1/TVR-2 fire on the decision bar exactly when
     they fire there on the whole series."""
     _, m = bars
-    w = 800
-    ts = utc_index(m["ts_utc"])
+    cb = smc.context_bars()
     for spec in (TVR1, TVR2):
         full = set(spec.candidates(m, pd.DataFrame(index=m.index))["idx"])
-        ends = sorted(i for i in full if i >= 3 * w)[:25] + list(range(3 * w, len(m), 97))
-        assert len(ends) > 50
+        ends = sorted(i for i in full if i >= 3 * cb)[:15] + list(range(3 * cb, len(m), 211))
+        assert len(ends) > 30
         for e in ends:
-            window = m.iloc[e - w + 1:e + 1].reset_index(drop=True)
-            anchor = FvgAnchor.from_bars(m.iloc[:e + 1], ts[e])
-            got = spec.candidates_in_context(window, pd.DataFrame(index=window.index), None, anchor.ctx_for(window))
-            assert (len(got) > 0 and got["idx"].iloc[-1] == w - 1) == (e in full), (spec.config["rule"], e)
+            snap = e - spec.state_lag                                           # the snapshot the feed keeps
+            state = smc.replica_run(m.iloc[:snap + 1], spec.replica_params)[1]
+            window = m.iloc[snap + 1 - cb:e + 1].reset_index(drop=True)
+            got = spec.candidates_in_context(window, pd.DataFrame(index=window.index), None, {STATE_KEY: state})
+            assert (len(got) > 0 and got["idx"].iloc[-1] == len(window) - 1) == (e in full), (spec.config["rule"], e)
+            assert (got["idx"] >= len(window) - 1).all()                         # only bars after the snapshot
 
-
-def test_the_anchor_advances_to_the_state_it_would_be_built_with_and_continues_the_replica_frame(bars):
-    _, m = bars
-    ts = utc_index(m["ts_utc"])
-    a = FvgAnchor.from_bars(m, ts[1000]).advance(m.iloc[900:3000], ts[2500])
-    b = FvgAnchor.from_bars(m, ts[2500])
-    assert a.n_bars == b.n_bars == 2500 and a.abs_body_pct_sum == pytest.approx(b.abs_body_pct_sum, rel=1e-12)
-    with pytest.raises(ValueError, match="missing"):
-        b.advance(m.iloc[2600:], ts[3000])
-    with pytest.raises(ValueError, match="advance the anchor"):
-        FvgAnchor.from_bars(m, ts[100]).prior_for(m.iloc[200:900])
-    # early bars with five times the body: the series' running mean is far above a fresh window's
-    s = m.iloc[:2800].copy()
-    early = s.index < 2000
-    s.loc[early, "close"] = s["open"] + 5.0 * (s["close"] - s["open"])
-    s.loc[early, "high"] = s[["high", "open", "close"]].max(axis=1)
-    s.loc[early, "low"] = s[["low", "open", "close"]].min(axis=1)
-    window = s.iloc[2000:].reset_index(drop=True)
-    full = smc.replica_frame(s)
-    anchored = smc.replica_frame(window, {PRIOR_KEY: FvgAnchor.from_bars(s, ts[2000]).prior_for(window)})
-    fresh = smc.replica_frame(window)
-    for col in ("fvg_bull", "fvg_bear"):
-        assert (anchored[col].to_numpy()[2:] == full[col].to_numpy()[2002:]).all()
-        assert (fresh[col].to_numpy()[2:] != full[col].to_numpy()[2002:]).any()      # without it: another rule
 
 
 def test_the_specialist_reads_no_tradingview_value():
