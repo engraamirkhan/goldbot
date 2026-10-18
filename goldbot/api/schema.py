@@ -772,6 +772,7 @@ class ChartLayoutIn(ApiRequest):
 
 class ChartLayoutsRequest(ApiRequest):
     layouts: list[ChartLayoutIn] = Field(max_length=3)
+    totp: str = Field("", max_length=16)    # the step-up after an email-code sign-in (ADR 0028)
 # ============================================================================= end Chart tab
 
 

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as apiModule from "../lib/api";
 import { validLayoutUrl } from "../lib/chart";
@@ -12,7 +12,8 @@ function renderChart() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={qc}><Chart /></QueryClientProvider>);
 }
-const widgetScript = () => document.querySelector<HTMLScriptElement>("[data-testid=tv-widget] script");
+const frame = () => screen.getByTestId("tv-widget") as HTMLIFrameElement;
+const config = () => JSON.parse(decodeURIComponent(new URL(frame().src).hash.slice(1)));
 
 describe("Chart tab", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -21,20 +22,30 @@ describe("Chart tab", () => {
     vi.spyOn(apiModule.api, "chartLayouts").mockResolvedValue(view());
     renderChart();
     expect(screen.getByTestId("tv-widget")).toBeInTheDocument();
-    expect(widgetScript()?.src).toBe("https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js");
-    expect(JSON.parse(widgetScript()!.text)).toMatchObject({ symbol: "OANDA:XAUUSD", interval: "15" });
+    expect(frame().src).toMatch(/^https:\/\/www\.tradingview-widget\.com\/embed-widget\/advanced-chart\//);
+    expect(frame().getAttribute("sandbox")).toBe("allow-scripts allow-same-origin allow-popups");
+    expect(frame().getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(document.querySelector("script[src*=tradingview]")).toBeNull();
+    expect(config()).toMatchObject({ symbol: "OANDA:XAUUSD", interval: "15" });
     fireEvent.click(screen.getByRole("button", { name: "4h" }));
     expect(screen.getByRole("button", { name: "4h" })).toHaveAttribute("aria-pressed", "true");
-    expect(JSON.parse(widgetScript()!.text).interval).toBe("240");
+    expect(config().interval).toBe("240");
     expect(screen.getByText(/Your invite-only indicators show in TradingView itself; their signals appear here once alerts are connected\./)).toBeInTheDocument();
     await screen.findByRole("button", { name: "Open my TradingView chart" });
   });
 
   it("shows plain text when the widget script is blocked", async () => {
     vi.spyOn(apiModule.api, "chartLayouts").mockResolvedValue(view());
-    renderChart();
-    widgetScript()!.onerror!(new Event("error"));
-    expect(await screen.findByText(/The live chart could not load/)).toBeInTheDocument();
+    vi.useFakeTimers();
+    try {
+      renderChart();
+      act(() => { vi.advanceTimersByTime(1000); });
+      expect(screen.queryByText(/The live chart could not load/)).toBeNull();
+      act(() => { vi.advanceTimersByTime(15000); });
+      expect(screen.getByText(/The live chart could not load/)).toBeInTheDocument();
+      fireEvent.load(frame());
+      expect(screen.queryByText(/The live chart could not load/)).toBeNull();
+    } finally { vi.useRealTimers(); }
   });
 
   it("keeps the open button disabled until a layout is saved, then opens it safely", async () => {
@@ -50,7 +61,7 @@ describe("Chart tab", () => {
     expect(link).toHaveAttribute("href", GOOD);
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
-    expect(apiModule.api.setChartLayouts).toHaveBeenCalledWith([{ name: "Gold", url: GOOD }]);
+    expect(apiModule.api.setChartLayouts).toHaveBeenCalledWith([{ name: "Gold", url: GOOD }], "");
   });
 
   it("rejects a link that is not a TradingView chart before calling the server", async () => {

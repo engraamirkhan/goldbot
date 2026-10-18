@@ -149,7 +149,7 @@ export const api = {
   automode: () => req<AutoModeView>("/api/automode"),
   setMode: (mode: ApprovalMode, totp = "") => req<ModeChangeResult>("/api/automode", { method: "POST", body: JSON.stringify({ mode, totp }) }),
   chartLayouts: () => req<ChartLayoutsView>("/api/chart/layouts"),
-  setChartLayouts: (layouts: ChartLayoutIn[]) => req<ChartLayoutsView>("/api/chart/layouts", { method: "POST", body: JSON.stringify({ layouts }) }),
+  setChartLayouts: (layouts: ChartLayoutIn[], totp = "") => req<ChartLayoutsView>("/api/chart/layouts", { method: "POST", body: JSON.stringify({ layouts, totp }) }),
   accounts: () => req<AccountSummary[]>("/api/accounts"),
   proposals: () => req<Proposal[]>("/api/proposals"),
   recentProposals: () => req<DecidedProposal[]>("/api/proposals/recent"),

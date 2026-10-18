@@ -509,7 +509,7 @@ def test_login_reports_the_sign_in_method(api):
 
 # ----------------------------------------------------------------------------- every owner admin route is gated
 STEPUP_ROUTES = {"/api/auth/invite", "/api/auth/reset-link", "/api/users/role", "/api/users/disable",
-                 "/api/users/enable", "/api/users/revoke-sessions"}
+                 "/api/users/enable", "/api/users/revoke-sessions", "/api/chart/layouts"}
 TOTP_GATED = {"/api/rearm", "/api/automode", "/api/auth/password/change", "/api/auth/recovery/codes"}
 
 
@@ -530,7 +530,9 @@ def test_every_owner_route_is_stepped_up_or_already_needs_an_authenticator_code(
             f"{path}: owner-only routes must be stepped up (STEPUP_ROUTES) or ask for an authenticator code (TOTP_GATED)"
     assert owner_only or path not in STEPUP_ROUTES | {"/api/rearm", "/api/automode", "/api/auth/recovery/codes"}
     if path in STEPUP_ROUTES:
-        body = {"email": "v@x.io", **({"role": "viewer"} if path in ("/api/auth/invite", "/api/users/role") else {})}
+        body: dict = {"email": "v@x.io", **({"role": "viewer"} if path in ("/api/auth/invite", "/api/users/role") else {})}
+        if path == "/api/chart/layouts":
+            body = {"layouts": []}
         r = api.c.post(path, json=body, headers=api.code_session())
         assert r.status_code == 403 and r.json()["detail"] == STEPUP, (path, r.text)
     elif path in TOTP_GATED:                    # an email-code session without an authenticator code gets nothing

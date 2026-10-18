@@ -1158,6 +1158,11 @@ export interface components {
         ChartLayoutsRequest: {
             /** Layouts */
             layouts: components["schemas"]["ChartLayoutIn"][];
+            /**
+             * Totp
+             * @default
+             */
+            totp: string;
         };
         /** ChartLayoutsView */
         ChartLayoutsView: {

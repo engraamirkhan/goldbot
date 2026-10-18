@@ -65,3 +65,11 @@ def test_bad_url_and_too_many_layouts_are_rejected_and_nothing_is_saved(app_clie
     four = {"layouts": [{"name": str(i), "url": GOOD} for i in range(4)]}
     assert c.post("/api/chart/layouts", json=four, headers=owner).status_code == 422
     assert c.get("/api/chart/layouts", headers=owner).json()["layouts"] == []
+
+
+def test_every_response_carries_the_csp_with_only_the_tradingview_frames(app_client):
+    _, c = app_client
+    csp = c.get("/api/auth/state").headers["Content-Security-Policy"]
+    assert "script-src 'self';" in csp
+    assert "frame-src https://www.tradingview-widget.com https://www.tradingview.com;" in csp
+    assert "unsafe-inline" not in csp and "unsafe-eval" not in csp

@@ -1043,6 +1043,12 @@
       "maxItems": 3,
       "title": "Layouts",
       "type": "array"
+     },
+     "totp": {
+      "default": "",
+      "maxLength": 16,
+      "title": "Totp",
+      "type": "string"
      }
     },
     "required": [

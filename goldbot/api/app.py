@@ -135,6 +135,13 @@ from goldbot.telegram.bus import ApprovalBus
 log = logging.getLogger("goldbot.api")
 
 
+# The dashboard runs only its own scripts; the one third party is TradingView's chart, a cross-origin iframe that cannot
+# reach our storage (the session token lives in sessionStorage), so script-src stays 'self'.
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
+       "frame-src https://www.tradingview-widget.com https://www.tradingview.com; object-src 'none'; "
+       "base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+
+
 def supervisor_heartbeat_age_s(sup: dict[str, Any], now: float) -> float:
     """The Feeds page's supervisor heartbeat age: 1e9 (not reporting, the page marks it bad) when missing, not a
     finite number or stamped more than a few seconds in the future, which would otherwise show as fresh for ever
@@ -459,6 +466,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         # invite and reset links carry their token in the URL fragment; this also keeps any URL out of Referer
         response: Response = await call_next(request)
         response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Content-Security-Policy"] = CSP
         if request.url.path.startswith("/api/"):
             # session tokens, recovery codes, TOTP enrolment URIs and invite/reset tokens must never sit in a cache
             response.headers["Cache-Control"] = "no-store"
@@ -1041,7 +1049,9 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                                          for n, url in chart_layouts.read_layouts(st.auth.db)], can_edit=owner)
 
     @app.post("/api/chart/layouts", response_model=ChartLayoutsView)
-    def chart_layouts_put(body: ChartLayoutsRequest, u: User = Depends(need("owner"))) -> ChartLayoutsView:
+    def chart_layouts_put(body: ChartLayoutsRequest, request: Request, u: User = Depends(need("owner")),
+                          creds: HTTPAuthorizationCredentials | None = Depends(bearer)) -> ChartLayoutsView:
+        stepup(u, creds, body.totp, request)
         for item in body.layouts:
             if not chart_layouts.valid_layout_url(item.url):
                 raise HTTPException(422, "a layout link must look like https://www.tradingview.com/chart/<id>/")

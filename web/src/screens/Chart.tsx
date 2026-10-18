@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { validLayoutUrl } from "../lib/chart";
 import { api, type ChartLayoutIn, type ChartLayoutsView } from "../lib/api";
 
@@ -12,7 +12,7 @@ const INTERVALS = [
   { label: "1h", value: "60" }, { label: "4h", value: "240" }, { label: "1D", value: "D" },
 ] as const;
 
-const WIDGET_SRC = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
+const WIDGET_ORIGIN = "https://www.tradingview-widget.com";
 const SYMBOL = "OANDA:XAUUSD";
 
 function prefersDark(): boolean {
@@ -32,31 +32,27 @@ function useDark(): boolean {
 }
 
 function TradingViewWidget({ interval, dark }: { interval: string; dark: boolean }) {
-  const host = useRef<HTMLDivElement>(null);
-  const [failed, setFailed] = useState(false);
+  const [loaded, setLoaded] = useState<string | null>(null);
+  const [slow, setSlow] = useState<string | null>(null);
+  // A cross-origin iframe, never a script in our origin: it cannot read this page's storage (the session token).
+  const src = `${WIDGET_ORIGIN}/embed-widget/advanced-chart/?locale=en#` + encodeURIComponent(JSON.stringify({
+    autosize: true, symbol: SYMBOL, interval, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Etc/UTC",
+    theme: dark ? "dark" : "light", style: "1", allow_symbol_change: false, hide_side_toolbar: true,
+    support_host: "https://www.tradingview.com",
+  }));
+  // an iframe reports no error across origins (blocked or offline just stays empty): no load within 15 s shows the text
   useEffect(() => {
-    const el = host.current;
-    if (!el) return;
-    setFailed(false);
-    el.replaceChildren();
-    const inner = document.createElement("div");
-    inner.className = "tradingview-widget-container__widget";
-    el.appendChild(inner);
-    const s = document.createElement("script");
-    s.src = WIDGET_SRC;
-    s.async = true;
-    s.onerror = () => setFailed(true);
-    s.text = JSON.stringify({
-      autosize: true, symbol: SYMBOL, interval, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Etc/UTC",
-      theme: dark ? "dark" : "light", style: "1", locale: "en", allow_symbol_change: false, hide_side_toolbar: true,
-      support_host: "https://www.tradingview.com",
-    });
-    el.appendChild(s);
-    return () => { el.replaceChildren(); };
-  }, [interval, dark]);
+    const t = setTimeout(() => setSlow(src), 15000);
+    return () => clearTimeout(t);
+  }, [src]);
+  const failed = slow === src && loaded !== src;
   return (
     <div className="chart-box">
-      <div className="tradingview-widget-container" ref={host} data-testid="tv-widget" />
+      <iframe
+        key={src} src={src} title="Live XAU/USD chart from TradingView (OANDA)" data-testid="tv-widget" loading="lazy"
+        sandbox="allow-scripts allow-same-origin allow-popups" referrerPolicy="no-referrer"
+        onLoad={() => setLoaded(src)}
+      />
       {failed && (
         <p className="fallback muted" role="alert">
           The live chart could not load. TradingView may be blocked on this network or you may be offline. Your trading is not affected.
@@ -75,6 +71,7 @@ function LayoutEditor({ view, onSaved }: { view: ChartLayoutsView; onSaved: (v: 
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [code, setCode] = useState("");
   const set = (i: number, k: keyof Row, v: string) => { setSaved(false); setRows((r) => r.map((x, j) => (j === i ? { ...x, [k]: v } : x))); };
 
   async function save() {
@@ -88,7 +85,7 @@ function LayoutEditor({ view, onSaved }: { view: ChartLayoutsView; onSaved: (v: 
       out.push({ name, url });
     }
     setBusy(true);
-    try { onSaved(await api.setChartLayouts(out)); setSaved(true); }
+    try { onSaved(await api.setChartLayouts(out, code.trim())); setSaved(true); }
     catch (e) { setErr((e as Error).message || "Could not save."); }
     finally { setBusy(false); }
   }
@@ -105,6 +102,7 @@ function LayoutEditor({ view, onSaved }: { view: ChartLayoutsView; onSaved: (v: 
             <label>TradingView link<input value={r.url} maxLength={200} inputMode="url" autoComplete="off" onChange={(e) => set(i, "url", e.target.value)} placeholder="https://www.tradingview.com/chart/..." /></label>
           </fieldset>
         ))}
+        <label>Authenticator code (only if you signed in with an emailed code)<input value={code} inputMode="numeric" autoComplete="one-time-code" maxLength={16} onChange={(e) => setCode(e.target.value)} /></label>
         <div aria-live="polite">
           {err && <p className="err" role="alert">{err}</p>}
           {saved && <p>Saved.</p>}
