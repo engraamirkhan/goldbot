@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { validLayoutUrl } from "../lib/chart";
+import { Mt5Chart } from "./Mt5Chart";
 import { api, type ChartLayoutIn, type ChartLayoutsView } from "../lib/api";
 
 // Chart tab: TradingView's free Advanced Chart widget on OANDA:XAUUSD, plus links to the owner's own saved TradingView
@@ -8,8 +9,7 @@ import { api, type ChartLayoutIn, type ChartLayoutsView } from "../lib/api";
 // URL identifies the owner's TradingView account: it lives server-side (owner-only) and is never in the repo.
 
 const INTERVALS = [
-  { label: "1m", value: "1" }, { label: "5m", value: "5" }, { label: "15m", value: "15" },
-  { label: "1h", value: "60" }, { label: "4h", value: "240" }, { label: "1D", value: "D" },
+  { label: "15m", value: "15" }, { label: "1h", value: "60" }, { label: "4h", value: "240" }, { label: "1D", value: "D" },
 ] as const;
 
 const WIDGET_ORIGIN = "https://www.tradingview-widget.com";
@@ -128,7 +128,10 @@ export function Chart() {
           <button key={i.value} aria-pressed={interval === i.value} onClick={() => setIntervalValue(i.value)}>{i.label}</button>
         ))}
       </div>
-      <TradingViewWidget interval={interval} dark={dark} />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 480px), 1fr))", gap: "var(--s4, 16px)" }}>
+        <TradingViewWidget interval={interval} dark={dark} />
+        <Mt5Chart key={interval} tf={interval === "D" ? "1D" : interval} />
+      </div>
       <p className="muted">Times on the chart are in your local time zone. The chart is TradingView's own and may be delayed or unavailable; goldbot does not use it to trade.</p>
 
       <div className="layout-links">

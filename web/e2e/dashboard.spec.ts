@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { go } from "./nav";
 import { totpClock } from "./totp";
 
 const info = () => JSON.parse(readFileSync("e2e/.server.json", "utf8")) as { setup_code: string; state_dir: string };
@@ -63,9 +64,9 @@ test("first run creates the owner with an authenticator, then signs in", async (
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
   await expectRoleNotEmail(page, "Owner", OWNER.email);
   expect(await page.title()).not.toContain("@");
-  await page.getByRole("button", { name: "Approvals" }).click();
+  await go(page, "Approvals");
   await expect(page.getByRole("region", { name: "Safety state" })).not.toContainText("@");   // persistent chrome
-  await page.getByRole("button", { name: "Account", exact: true }).click();
+  await go(page, "Account");
   await expect(page.getByRole("region", { name: "Your sign-in" })).toContainText(OWNER.email);   // the one place it shows
 });
 
@@ -78,7 +79,7 @@ test("owner approves one proposal and rejects the other with a reason", async ({
   expect(ws.url()).toMatch(/\/ws$/);
   await page.waitForTimeout(500);
   expect(ws.isClosed()).toBe(false);
-  await page.getByRole("button", { name: "Approvals" }).click();
+  await go(page, "Approvals");
   await expect(page.getByText("No engines reporting")).toBeVisible();         // safety strip above the cards
   const waiting = page.getByRole("region", { name: "Waiting for your decision" }).locator("article.card");
   await expect(waiting).toHaveCount(2);
@@ -99,12 +100,15 @@ test("owner approves one proposal and rejects the other with a reason", async ({
   await long.getByRole("button", { name: "Approve" }).click();
   await expect(waiting).toHaveCount(1);
   const decided = page.getByRole("region", { name: "Decided in the last 10 minutes" });
+  await page.getByRole("tab", { name: /^Recent/ }).click();                    // Trades: Waiting | Recent
   await expect(decided.getByText("Approval sent.")).toBeVisible();             // the engine applies it on its next tick
+  await page.getByRole("tab", { name: /^Waiting/ }).click();
   const short = waiting.and(page.locator(".short"));
   await short.getByRole("button", { name: "Reject…" }).click();
   await short.getByRole("group", { name: "Reason for rejecting" }).getByRole("button", { name: "Cost" }).click();
-  await expect(decided.getByText(/Rejected · Cost/)).toBeVisible();
   await expect(page.getByText(/No proposals waiting/)).toBeVisible();
+  await page.getByRole("tab", { name: /^Recent/ }).click();
+  await expect(decided.getByText(/Rejected · Cost/)).toBeVisible();
 });
 
 test("owner halts new entries and re-arms with an authenticator code", async ({ page }) => {
@@ -125,6 +129,7 @@ test("owner enables auto mode with an authenticator code on the evidence, then s
   await page.setViewportSize({ width: 360, height: 800 });                     // phone first
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  await go(page, "Entry mode");
   const card = page.getByRole("region", { name: /Entry mode/ });
   await expect(card.getByRole("heading", { name: /Entry mode: Propose-and-approve/ })).toBeVisible();
   await expect(card.getByText("auto mode offered")).toBeVisible();             // 100 seeded decided proposals, no difference
@@ -145,7 +150,7 @@ test("owner enables auto mode with an authenticator code on the evidence, then s
 test("owner regenerates the recovery codes with password and authenticator code; they are shown once", async ({ page }) => {
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
-  await page.getByRole("button", { name: "Account", exact: true }).click();
+  await go(page, "Account");
   await page.getByLabel("Your password").fill(OWNER.password);
   await page.getByLabel("Code from your authenticator app").fill(clock.fresh(ownerSecret));
   const generate = page.getByRole("button", { name: "Generate new recovery codes" });
@@ -161,7 +166,7 @@ test("owner regenerates the recovery codes with password and authenticator code;
 test("news tab shows the calendar with blackout windows and the scored headlines", async ({ page }) => {
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
-  await page.getByRole("button", { name: "News", exact: true }).click();
+  await go(page, "News");
   await expect(page.getByRole("heading", { name: "Economic calendar" })).toBeVisible();
   const cpi = page.locator("tr", { hasText: "CPI m/m" });
   await expect(cpi.locator(".badge.tier1")).toHaveText("T1");
@@ -179,7 +184,7 @@ test("news tab shows the calendar with blackout windows and the scored headlines
 test("health tab shows agent halts, PSI bands and the charts; research tab the budget, trials and hypotheses", async ({ page }) => {
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
-  await page.getByRole("button", { name: "Health", exact: true }).click();
+  await go(page, "Health");
   const agents = page.locator("table.agents-health");
   await expect(agents.locator("tr", { hasText: "tsmom-g0" })).toContainText("50%: sized down");
   await expect(agents.locator("tr", { hasText: "trend-g1" })).toContainText(/Halted since/);
@@ -191,7 +196,7 @@ test("health tab shows agent halts, PSI bands and the charts; research tab the b
   await expect(page.getByRole("list", { name: "Health checks" })).toContainText("Deploy");
   await expect(page.getByRole("alert")).toHaveCount(0);                       // no system halt seeded
 
-  await page.getByRole("button", { name: "Research", exact: true }).click();
+  await go(page, "Research");
   await expect(page.getByRole("meter", { name: /trials used/ })).toBeVisible();
   const trials = page.locator("table.trials");
   await expect(trials.locator("tbody tr")).toHaveCount(2);
@@ -208,7 +213,7 @@ test("health tab shows agent halts, PSI bands and the charts; research tab the b
 test("owner invites a viewer", async ({ page }) => {
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
-  await page.getByRole("button", { name: "Users" }).click();
+  await go(page, "Users");
   await page.getByPlaceholder("email to invite").fill(VIEWER.email);
   await page.getByRole("button", { name: "Create invite link" }).click();
   inviteLink = (await page.locator("code.mono").textContent()) ?? "";
@@ -228,16 +233,17 @@ test("viewer accepts the invite and can watch but not approve or manage users", 
 
   await signIn(page, VIEWER.email, VIEWER.password, secret);
   await expectRoleNotEmail(page, "Viewer", VIEWER.email);
-  await expect(page.getByRole("button", { name: "Users" })).toHaveCount(0);
+  await go(page, "Settings");
+  await expect(page.getByRole("tab", { name: "Users" })).toHaveCount(0);
   for (const tab of ["Overview", "News", "Agents", "Health", "Research", "Feeds", "Approvals"]) {
-    await page.getByRole("button", { name: tab, exact: true }).click();
+    await go(page, tab);
   }
   await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
 
   // Progress (docs/ux/progress-screens.md) is read-only for every role: on a fresh state nothing is recorded, the stop
   // rule has not started and the daily results job has not run; nobody sees a record-gate command here
   await page.setViewportSize({ width: 360, height: 800 });
-  await page.getByRole("button", { name: "Progress", exact: true }).click();
+  await go(page, "Progress");
   await expect(page.getByRole("heading", { name: "Road to live" })).toBeVisible();
   await expect(page.getByTestId("gate-foundation_to_backtest")).toContainText("Not met");
   await expect(page.getByTestId("stop-rule")).toContainText("Not started");
@@ -270,7 +276,7 @@ test("viewer resets a forgotten password with an authenticator code, then change
   await expect(page.getByText("Password changed. Sign in with the new password.")).toBeVisible();
   await signIn(page, VIEWER.email, "forgotten viewer pw 1", viewerSecret);
 
-  await page.getByRole("button", { name: "Account", exact: true }).click();
+  await go(page, "Account");
   await page.getByLabel("Current password").fill("forgotten viewer pw 1");
   await page.getByLabel("Authenticator code").fill(clock.fresh(viewerSecret));
   await page.getByLabel("New password (12+ characters)").fill(VIEWER.password);
@@ -281,7 +287,7 @@ test("viewer resets a forgotten password with an authenticator code, then change
 test("owner manages a user's access and never offers the owner role", async ({ page }) => {
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
-  await page.getByRole("button", { name: "Users" }).click();
+  await go(page, "Users");
   await expect(page.locator("form.inline option[value=owner]")).toHaveCount(0);
   const row = page.locator("tr", { hasText: VIEWER.email });
   await row.getByRole("button", { name: "Reset link" }).click();
@@ -320,7 +326,7 @@ test("once the engine reports, Overview shows the live balance, today's loss bud
   const box = await card.boundingBox();
   expect(box && box.x >= 0 && box.x + box.width <= 360).toBe(true);           // fits the phone
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);   // no sideways scroll
-  await page.getByRole("button", { name: "Approvals" }).click();
+  await go(page, "Approvals");
   await expect(page.getByText("Loss budget", { exact: true })).toBeVisible();   // safety strip chip
 });
 
@@ -356,6 +362,6 @@ test("entry status says in plain words why an account can't trade, when it resum
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
   const link = await row.getByRole("link").first().boundingBox();
   expect(link && link.height >= 44).toBe(true);                                // a thumb-sized tap target
-  await page.getByRole("button", { name: "Approvals" }).click();                // the strip agrees with the panel
+  await go(page, "Approvals");                // the strip agrees with the panel
   await expect(page.getByRole("status").filter({ hasText: "New entries blocked" })).toContainText("Market closed");
 });

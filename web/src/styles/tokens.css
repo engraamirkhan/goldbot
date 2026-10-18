@@ -1,0 +1,42 @@
+/* goldbot design tokens (docs/ux/design-system.md). The only place colours, type, space and radii are defined.
+   Every text pair is WCAG AA in both themes. Red (--bad) only for what stops trading. */
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f0f2f5; --border: #e2e5ea;
+  --text: #14171c; --text-2: #5b6270;
+  --accent: #1d5fd1; --on-accent: #ffffff; --accent-bg: #e8effc;
+  --ok: #12784a; --ok-bg: #e6f4ec; --warn: #8a5a00; --warn-bg: #fdf3dc; --bad: #b42318; --bad-bg: #fdecea;
+  --info: #1d4fa8; --info-bg: #e8effc;
+  --long: #12784a; --short: #1d4fa8; --brand: #b8860b;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --fs-display: 32px; --lh-display: 40px; --fs-title: 20px; --lh-title: 28px; --fs-heading: 16px; --lh-heading: 24px;
+  --fs-body: 15px; --lh-body: 22px; --fs-small: 13px; --lh-small: 18px;
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
+  --r-sm: 6px; --r-md: 10px; --r-lg: 14px;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 1px 1px rgb(0 0 0 / 0.03);
+  --tap: 44px; --nav-h: 56px; --rail-w: 220px; --content-max: 1120px;
+  --ease: 150ms ease;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1115; --surface: #171a21; --surface-2: #1f232c; --border: #2a2f3a;
+    --text: #e8eaee; --text-2: #a3aab8;
+    --accent: #6ea2ff; --on-accent: #0f1115; --accent-bg: #18243b;
+    --ok: #4cc38a; --ok-bg: #12301f; --warn: #f2c46d; --warn-bg: #33270d; --bad: #ff8a80; --bad-bg: #3a1614;
+    --info: #8fb3ff; --info-bg: #18243b;
+    --long: #4cc38a; --short: #8fb3ff;
+    --shadow: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) { :root { --ease: 0ms linear; } }
+
+/* Aliases for the names screens used before v2, so every existing class picks up the new palette at once.
+   New code uses the token names above. */
+:root {
+  --fg: var(--text); --muted: var(--text-2); --line: var(--border); --focus: var(--accent);
+  --ok-fg: var(--ok); --ok-fill: #12784a; --ok-tint: var(--ok-bg);
+  --bad-fg: var(--bad); --bad-fill: #b42318; --bad-tint: var(--bad-bg);
+  --warn-fg: var(--warn); --warn-tint: var(--warn-bg);
+  --info-fg: var(--info); --info-tint: var(--info-bg);
+}

@@ -53,13 +53,37 @@ describe("App header", () => {
     },
   );
 
-  it("puts the Limits tab right after Progress, so it stays on screen when the tab row scrolls", () => {
+  it("has seven destinations; the phone bar holds Home, Trades, Chart, Limits and More", () => {
     apiModule.setUser({ email: "v@x.io", role: "viewer", signed_in_with: "password_totp" });
     renderApp();
-    const tabs = Array.from(appBanner().querySelectorAll("nav button")).map((b) => b.textContent);
-    expect(tabs.indexOf("Limits")).toBe(tabs.indexOf("Progress") + 1);
-    fireEvent.click(screen.getByRole("button", { name: "Limits" }));
+    const rail = screen.getByRole("navigation", { name: "Main" });
+    expect(Array.from(rail.querySelectorAll("button")).map((b) => b.textContent))
+      .toEqual(["Home", "Trades", "Chart", "Limits", "Research", "Feeds", "Settings"]);
+    const bar = screen.getByRole("navigation", { name: "Main, phone" });
+    expect(Array.from(bar.querySelectorAll("button")).map((b) => b.textContent)).toEqual(["Home", "Trades", "Chart", "Limits", "More"]);
+    fireEvent.click(rail.querySelector('[data-nav-item="Limits"]')!);
     expect(screen.getByLabelText("Loading limits")).toBeInTheDocument();
+    expect(window.location.hash).toBe("#/limits");
+  });
+
+  it("opens a section and sub-tab from the address (#/feeds/news) and hides Users from a viewer", () => {
+    apiModule.setUser({ email: "v@x.io", role: "viewer", signed_in_with: "password_totp" });
+    history.replaceState(null, "", "/#/settings");
+    renderApp();
+    expect(screen.queryByRole("tab", { name: "Users" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Entry mode and halt" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByRole("tab", { name: "Your sign-in" }));
+    expect(window.location.hash).toBe("#/settings/account");
+    history.replaceState(null, "", "/");
+  });
+
+  it("puts Halt two taps away on every screen: the status pill opens the halt control", () => {
+    apiModule.setUser({ email: "o@x.io", role: "owner", signed_in_with: "password_totp" });
+    renderApp();
+    const pill = appBanner().querySelector("[data-status-pill]") as HTMLElement;
+    expect(pill).toHaveTextContent("Checking safety…");
+    fireEvent.click(pill);
+    expect(screen.getByRole("group", { name: "Safety and halt" })).toBeInTheDocument();
   });
 
   it("says 'Signed in' when the session record is missing, without throwing", () => {

@@ -112,7 +112,24 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return r.json() as Promise<T>;
 }
 
+/** The MT5 terminal picture (PNG) for one timeframe, fetched with the session token so it can become a blob URL.
+ * null = no fresh capture (404, older than 5 minutes). The caller owns the URL and must revoke it. */
+async function mt5Chart(tf: string): Promise<{ url: string; capturedAt: string | null } | null> {
+  const sent = token;
+  let r: Response;
+  try {
+    r = await fetch(`/api/chart/mt5?tf=${encodeURIComponent(tf)}`, { headers: sent ? { authorization: `Bearer ${sent}` } : {} });
+  } catch {
+    throw new ApiError(0, NETWORK_TEXT);
+  }
+  if (r.status === 401) { endSession(sent); throw new ApiError(401, "login required"); }
+  if (r.status === 404) return null;
+  if (!r.ok) throw new ApiError(r.status, r.statusText);
+  return { url: URL.createObjectURL(await r.blob()), capturedAt: r.headers.get("X-Captured-At") };
+}
+
 export const api = {
+  mt5Chart,
   authState: () => req<Schemas["AuthState"]>("/api/auth/state"),
   setup: (setup_code: string, email: string, password: string) => req<Schemas["SetupResponse"]>("/api/auth/setup", { method: "POST", body: JSON.stringify({ setup_code, email, password }) }),
   login: (email: string, password: string, totp: string) => req<Schemas["LoginResponse"]>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password, totp }) }),
