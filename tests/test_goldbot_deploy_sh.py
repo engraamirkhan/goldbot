@@ -575,6 +575,17 @@ def test_a_stopped_engine_does_not_hide_another_degraded_check(tmp_path):
     assert "engine stopped for the deploy: icm-demo" in rec["detail"]
 
 
+def test_a_stopped_engines_reconcile_failure_is_still_degraded(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    _stop_engine(box)
+    _health(tmp_path / "health_before.json", **{"engine_loop:icm-demo": "ok", "reconcile:icm-demo": "ok"})
+    _health(tmp_path / "health_after.json", **{"engine_loop:icm-demo": "fail", "reconcile:icm-demo": "fail"})
+    p = box.run(box.c2)
+    assert p.returncode == 0, p.stdout + p.stderr
+    rec = box.records()[-1]
+    assert rec["result"] == "deployed_degraded" and "(degraded: reconcile:icm-demo)" in rec["detail"]
+
+
 def test_a_running_engine_that_goes_stale_is_still_degraded(tmp_path):
     box = Box(tmp_path, running="c1", aux=4)
     _health(tmp_path / "health_before.json", **{"engine_loop:icm-demo": "ok"})

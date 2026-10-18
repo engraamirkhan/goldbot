@@ -42,7 +42,7 @@
 # 90 s check. A check that got worse (ok < warn < fail) is reported as `deployed_degraded` with its name, on
 # Telegram too; it is not rolled back automatically (exits are never gated; the owner decides).
 # An engine unit that is disabled or inactive at the baseline (the S13 procedure stops it on purpose) has its
-# engine-derived checks (engine, engine_loop, tick_errors, reconcile for that account) left out of the comparison: the
+# engine-derived checks (engine, engine_loop, tick_errors for that account; reconcile stays compared, it also reports ledger mismatches) left out of the comparison: the
 # baseline still read them from a heartbeat that was fresh a moment before the stop. The detail says "engine stopped
 # for the deploy: <account>"; every other worsened check still yields deployed_degraded.
 set -euo pipefail
@@ -479,7 +479,7 @@ def load(path):
         return {str(c["name"]): RANK.get(c.get("status"), 0) for c in json.loads(fh.read(8388608))["checks"]}
 before, after = load(sys.argv[1]), load(sys.argv[2])
 stopped = [a for a in (sys.argv[3].split(",") if len(sys.argv) > 3 else []) if re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", a)]
-SKIP = {p + ":" + a for a in stopped for p in ("engine", "engine_loop", "tick_errors", "reconcile")}
+SKIP = {p + ":" + a for a in stopped for p in ("engine", "engine_loop", "tick_errors")}
 worse = sorted(n for n, r in after.items() if r > before.get(n, 0))
 skipped = [n for n in worse if n in SKIP]
 worse = [n for n in worse if n not in SKIP]
