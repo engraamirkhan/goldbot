@@ -310,3 +310,23 @@ a quarter (to the one with the best post-retirement evidence, else by rotation) 
 - Owner decisions still pending:
   - D+ data pulls.
   - Event-family floor for H-18 and projected percentage daily caps (`opportunity-days.md` section 6).
+
+## A10. Owner-style multi-timeframe confluence (strategy researcher, 2026-10-18)
+
+Source: `owner-style-mtf-2026-10-18.md`. Owner, 2026-10-18: he used the three replicated chart indicators across
+15m, 1h and 4h together. Written before any count of these rules; counts only are added later (its section 10). The
+TVR withdrawal ruling (B4b: no reworded TVR rule from its counts) is answered in that file's section 0 and needs the
+research director's ruling before dispatch. Prior low; P(PASS) about 1-2%.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| H-34 | `smc_mtf` `omtf_c`, 15m: 4h and 1h swing trend = side, 15m internal CHoCH with the trend, pullback into the 1h discount/premium half, same-side 15m FVG; structure stop beyond the 4-hour pullback extreme (0.75-1.5 ATR15, else skipped), 2R target inside the 1h 50-bar range, 32 bars. Count ladder L0-L3 drops gap, discount, 1h in turn; first rung with ≥ 1,500 candidates runs | **withdrawn before dispatch** 2026-10-18 by its own count ladder: 0 / 7 / 11 / 16 candidates at L0-L3 (< 1,500). The structure stop is a median 3.3 ATR15, so only 34 of 8,385 CHoCHs fit the 1.5 × ATR15 lot cap. No reworded rule (B4b) | 0 (was 1) | batch §2 rules 1-6 at K ≥ 77, plus a context-lift check (vs the bare 15m trigger) that can only downgrade. Both H-34 and H-35 FAIL closes the SMC rule topic, multi-timeframe included |
+| H-35 | `smc_mtf` `omtf_r`, 15m: 4h trend = side, a 1h box break against the side in the last 4 hours with 1h MFI at the extreme (≤ 20 / ≥ 80), then a 15m internal CHoCH back with the side (liquidity sweep and reclaim); same exits. Ladder L0-L2 drops MFI, then 4h. Withdrawn if > 50% of its candidates are H-34's | **withdrawn before dispatch** 2026-10-18: 0 / 9 / 18 candidates at L0-L2 (< 1,500), same stop-cap cause | 0 (was 1) | as H-34 |
+| H-36 | The owner's own setup, inferred from his MT5 export mapped to the replica state at entry on 15m/1h/4h (`owner-replica-map`, lift vs base rate at Bonferroni 5%/K_map; his P&L per state is never computed) | proposed, **conditional** on his export and ≥ 30 mapped XAUUSD trades; holdout-dated trades flagged `holdout_informed` | 1 + K_map | written as its own pre-registration after the map |
+| D-OMTF | 1h and 4h replica columns as one group `ctx_smc` in O-4's 15m map (H-14), beside D-TVR | proposed; research director + quant sign-off before O-4 runs | 0 (K_eff +1, O-4) | group survival only |
+
+Ledger (to be moved into section C by the integrator): **0 registry trials** (H-34/H-35 withdrawn by count before
+dispatch); +1 + K_map if H-36 runs; D-OMTF K_eff +1 inside O-4 if adopted. Holdout untouched (counts end
+2025-09-30). Sizing fact recorded so it is not re-derived: a structure stop on a 15m CHoCH (median 3.3 ATR15, about
+$27/oz today) is about 2% of £1,000 at 0.01 lot, so structure-stop 15m rules are not placeable at £1,000 under the
+rails; a 1.0 × ATR15 stop version is TVR-like and closed by B4b.
