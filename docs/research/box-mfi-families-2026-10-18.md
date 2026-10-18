@@ -126,7 +126,7 @@ one-at-a-time can leave and reads no price after entry) is **≥ 1,500** (gate 1
 only in the order fixed here: first pooling the owner's own timeframes, then the owner's own documented looser
 threshold, then dropping the condition with the weakest mechanism. Counts select the rung; nothing else does.
 
-### 4.0 H-45 `tls` — the master family: Trend + Level + Signal (note 6, the course's entry checklists)
+### 4.0 H-45 `trend_level_signal` — the master family: Trend + Level + Signal (note 6, the course's entry checklists)
 
 The course's core framework requires a trend, a level and a 1h-close signal together; its "Long A / Short A"
 checklists are the exact with-trend entries. H-45 encodes them as **one configuration**; the box, pin-bar and
@@ -180,7 +180,7 @@ only).
 retest; event area (*not built*: origin zones of impulse moves, counted 0 until a feature exists); volume declining
 (mean tick count of t−3..t−1 below that of t−13..t−4); closes off the line (`l < L < c` long); trendline touch (*not
 built*, 0). The thresholds ≥ 3, ≥ 4 and ≥ 6 are **subsets** of the run rung, so they are not separate trials: the
-count enters H-40 as one ordinal group `tls_count` (K_eff +1), and section 9 reports the candidates at each
+count enters H-40 as one ordinal group `tlv_count` (K_eff +1), and section 9 reports the candidates at each
 threshold. A threshold whose subset has ≥ 1,500 candidates and survives H-40 may go forward as one of H-40's two
 survivor trials.
 
@@ -436,7 +436,7 @@ of candidates removed and the gross mean R kept vs removed (Welch t). Fixed now:
 
 | Rank | Row | Why |
 |---|---|---|
-| 0 | H-45 TLS (Long A / Short A) | the course's master framework and exact checklists; trend + level + signal combines the one mechanism with own evidence (trend) and the S/R order-clustering mechanism; sub-families fold into it |
+| 0 | H-45 trend-level-signal (Long A / Short A) | the course's master framework and exact checklists; trend + level + signal combines the one mechanism with own evidence (trend) and the S/R order-clustering mechanism; sub-families fold into it |
 | 1 | H-46 liquidity sweep | the owner's gold-specific setup; stop-cascade mechanism (Osler 2005); fully specified entry, stop and two targets |
 | 1a | H-47 sweep + displacement | owner's pre-entry checklist (session liquidity, displacement); same mechanism as H-46 with a wider stop |
 | 1b | H-37 box break | owner's primary trade; continuation (the owner's default) with a stop-cluster mechanism; the only family with a link to our one gross edge (trend) |
@@ -477,7 +477,7 @@ are diagnostics, section 7.
 
 - **Candidates:** the union of the rungs that run for H-45, H-37, H-38, H-39, H-42, H-43, H-44, H-46 and H-47 (their own labels, same exits). If a
   family is withdrawn, its candidates are absent; if all are withdrawn, H-40 is withdrawn.
-- **Features:** the ten flags of section 5, the four family flags of 4.6-4.7 (`pin_ema20`, `pin_retest`, `pin_inside`, `ema8_21`), the ordinal `tls_count`, `daily_with` (H-46), `session_ln_ny`, `chop`, `stretch`, `atr_expansion`, plus the `mfi_signals` group (4.4), each a group.
+- **Features:** the ten flags of section 5, the four family flags of 4.6-4.7 (`pin_ema20`, `pin_retest`, `pin_inside`, `ema8_21`), the ordinal `tlv_count`, `daily_with` (H-46), `session_ln_ny`, `chop`, `stretch`, `atr_expansion`, plus the `mfi_signals` group (4.4), each a group.
 - **Method:** `research.yml -f discover=true`, `DiscoveryConfig` defaults as pre-registered for O-4
   (`survivor_unit: group`, fold-internal stability selection on training folds only). K_eff = groups screened (21).
 - **Survivor rule:** a flag survives when it is selected in ≥ 60% of training folds **and** its kept-vs-rejected gross
@@ -557,7 +557,7 @@ the default gate (stop ≤ $8.00) and the demo exception (≤ $13.33). Cost/R = 
 
 | Family | L0 | L1 | L2 | L3 | L4 | L5 | L6 | Selected |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
-| H-45 TLS | 49 | 155 | 250 | 514 | — | — | — | none |
+| H-45 trend-level-signal | 49 | 155 | 250 | 514 | — | — | — | none |
 | H-46 sweep | 16 | 21 | 116 | 108 | — | — | — | none |
 | H-47 sweep + displacement | 13 | 19 | 54 | 320 | — | — | — | none |
 | H-37 box break | 47 | 59 | 297 | 340 | 616 | 1,122 | **2,327** | **L6** |
@@ -618,7 +618,7 @@ What this says, before any outcome:
    +1 R per trade, against R-04's +0.015 R for 1h breakouts. **Expectation, stated now: FAIL on rule 2 by cost,
    whatever the gross.** The trial's information is the P4 gross screen: do the owner's levels carry any gross
    continuation? H-41 (15m) is worse (1.06 R historical).
-2. **The 1h pattern stops (TLS, pin, retest, RIP, fakey) are the opposite case:** 0.30-0.44 R historical cost,
+2. **The 1h pattern stops (trend-level-signal, pin, retest, RIP, fakey) are the opposite case:** 0.30-0.44 R historical cost,
    0.05-0.07 R today, but a median £6-9 at 0.01 lot today, so only 14-49% fit the default gate and 59-82% the demo
    exception.
 3. **Sweep and inside-bar stops are not placeable at £1,000.** H-46's stop above the sweep high is a median $18.5
@@ -659,7 +659,7 @@ For the research director, ranked (owner decisions flagged, not taken):
    the expectation above written into the dispatch rationale. It is the one owner baseline testable on our data.
 3. **H-40 (1 trial, K_eff 21) only if at least two families run.** With one family it screens nine usable flags on
    one candidate set and its information is low; the flags are then reported as read-only contrasts only.
-4. **Zero-trial route now:** D-MFI and a `box_pa` group (box distances, TLS level/signal/confluence count, pin,
+4. **Zero-trial route now:** D-MFI and a `box_pa` group (box distances, trend-level-signal level/signal/confluence count, pin,
    inside bar, fakey, sweep and displacement flags, session gate, chop, stretch, ATR expansion) in O-4's 15m map and
    H-02's 4h map, K_eff +1 each. That is where the owner's full confluence can be screened without a 1,500-event
    floor per rule.
