@@ -146,3 +146,63 @@ def test_fetch_exception_is_masked(tmp_path, caplog):
 
 def test_parse_repository():
     assert storage_size.parse_repository(REPO) == ("nsSECRET", "eu-frankfurt-1", "bucketSECRET")
+
+
+def test_truncated_with_unchanged_or_missing_markers_is_unknown_fast(tmp_path):
+    calls: list = []
+    same = (200, _page([1], ("k1", "v1")))
+    rec = storage_size.record_size(tmp_path, lambda k: KEYS[k], fetch=_fetcher([same] * 50, calls), now=NOW)
+    assert rec["bytes"] is None and len(calls) == 2           # the second page repeats the markers: stop
+    calls.clear()
+    nomark = (200, '<ListVersionsResult><IsTruncated>true</IsTruncated></ListVersionsResult>')
+    rec = storage_size.record_size(tmp_path, lambda k: KEYS[k], fetch=_fetcher([nomark] * 50, calls), now=NOW)
+    assert rec["bytes"] is None and len(calls) == 1
+
+
+def test_deadline_across_pages_is_unknown(tmp_path):
+    t = iter(range(0, 10_000, 100))                            # each clock read is 100 s later
+    pages = [(200, _page([1], (f"k{i}", f"v{i}"))) for i in range(50)]
+    calls: list = []
+    rec = storage_size.record_size(tmp_path, lambda k: KEYS[k], fetch=_fetcher(pages, calls), now=NOW,
+                                   monotonic=lambda: float(next(t)))
+    assert rec["bytes"] is None and len(calls) < 5
+
+
+def test_oversized_body_is_refused(tmp_path):
+    big = (200, "<a>" + "x" * (storage_size.MAX_BODY_BYTES + 1) + "</a>")
+    rec = storage_size.record_size(tmp_path, lambda k: KEYS[k], fetch=_fetcher([big]), now=NOW)
+    assert rec["bytes"] is None
+
+
+def test_record_size_never_raises_on_write_error(tmp_path):
+    blocker = tmp_path / "file"
+    blocker.write_text("x")                                    # state_dir is a file: the write fails
+    rec = storage_size.record_size(blocker, lambda k: KEYS[k], fetch=_fetcher([(200, _page([1]))]), now=NOW)
+    assert rec["bytes"] == 1
+
+
+def test_httpx_logger_is_quiet():
+    import logging
+    assert logging.getLogger("httpx").level >= logging.WARNING
+
+
+def test_backup_error_survives_a_failing_probe(monkeypatch):
+    from types import SimpleNamespace
+
+    from goldbot.ops import backup as backup_mod
+    from goldbot.ops import jobs
+
+    class Boom(Exception):
+        pass
+
+    def bad_backup(*a, **k):
+        raise backup_mod.BackupError("backup itself failed")
+
+    def bad_probe(*a, **k):
+        raise OSError("probe failed")
+    ctx = SimpleNamespace(settings=SimpleNamespace(backup=SimpleNamespace(host="h", timeout_s=60)), state_dir=Path("."))
+    monkeypatch.setattr(jobs, "_backup_args", lambda c: (None, lambda k: None))
+    monkeypatch.setattr(backup_mod, "backup_job", bad_backup)
+    monkeypatch.setattr(storage_size, "record_size", bad_probe)
+    with pytest.raises(backup_mod.BackupError, match="backup itself failed"):
+        jobs.backup(ctx, NOW)

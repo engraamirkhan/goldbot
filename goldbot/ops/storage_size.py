@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
@@ -26,8 +27,12 @@ import pandas as pd
 from goldbot.base import write_atomic
 
 log = logging.getLogger("goldbot.ops.storage_size")
+logging.getLogger("httpx").setLevel(logging.WARNING)   # httpx logs request URLs (namespace, bucket) at INFO
 
 SIZE_FILE = "object_storage_size.json"
+MAX_BODY_BYTES = 8_000_000            # one page of 1000 versions is ~500 kB
+DEADLINE_S = 120.0                    # across all pages: the probe runs inside the backup job
+REQUEST_TIMEOUT_S = 20.0
 MAX_PAGES = 2000                      # 1000 versions a page: a runaway listing stops at two million
 _REPO = re.compile(r"^s3:https://([a-z0-9]+)\.compat\.objectstorage\.([a-z0-9-]+)\.oraclecloud\.com/([^/]+)", re.I)
 # fetch(url, headers) -> (status, body); the default is httpx, tests pass a fake
@@ -68,7 +73,7 @@ def sigv4_authorization(method: str, path: str, query: dict[str, str], headers: 
 
 
 def _httpx_fetch(url: str, headers: dict[str, str]) -> tuple[int, str]:
-    r = httpx.get(url, headers=headers, timeout=60.0, follow_redirects=False)
+    r = httpx.get(url, headers=headers, timeout=REQUEST_TIMEOUT_S, follow_redirects=False)
     return r.status_code, r.text
 
 
@@ -77,12 +82,16 @@ def _local(tag: str) -> str:
 
 
 def bucket_bytes(namespace: str, region: str, bucket: str, access_key: str, secret_key: str, *,
-                 fetch: Fetch = _httpx_fetch, now: pd.Timestamp | None = None) -> int:
+                 fetch: Fetch = _httpx_fetch, now: pd.Timestamp | None = None,
+                 monotonic: Callable[[], float] = time.monotonic) -> int:
     """Sum of the size of every object version in the bucket (delete markers count 0), from the S3-compatible
     ListObjectVersions call, paginated. Read-only; the restic keys are used for signing only, never logged."""
     host = f"{namespace}.compat.objectstorage.{region}.oraclecloud.com"
     total, key_marker, ver_marker = 0, "", ""
+    start = monotonic()
     for _ in range(MAX_PAGES):
+        if monotonic() - start > DEADLINE_S:
+            raise RuntimeError("object storage listing too slow")
         query = {"versions": "", "max-keys": "1000"}
         if key_marker:
             query["key-marker"] = key_marker
@@ -99,6 +108,8 @@ def bucket_bytes(namespace: str, region: str, bucket: str, access_key: str, secr
                                                                  "Authorization": auth})
         if status != 200:
             raise RuntimeError(f"object storage answered HTTP {status}")
+        if len(body) > MAX_BODY_BYTES:
+            raise RuntimeError("object storage response too large")
         root = ElementTree.fromstring(body)
         truncated, next_key, next_ver = False, "", ""
         for el in root:
@@ -113,12 +124,14 @@ def bucket_bytes(namespace: str, region: str, bucket: str, access_key: str, secr
                 next_ver = el.text or ""
         if not truncated:
             return total
+        if not (next_key or next_ver) or (next_key, next_ver) == (key_marker, ver_marker):
+            raise RuntimeError("object storage listing does not advance")
         key_marker, ver_marker = next_key, next_ver
     raise RuntimeError("object storage listing did not end")
 
 
 def record_size(state_dir: Path, get_secret: Callable[[str], str | None], *, fetch: Fetch = _httpx_fetch,
-                now: pd.Timestamp | None = None) -> dict[str, Any]:
+                now: pd.Timestamp | None = None, monotonic: Callable[[], float] = time.monotonic) -> dict[str, Any]:
     """Measure and write state/object_storage_size.json. Never raises and never records the bucket, namespace, keys or
     any response text: a failure is recorded as `bytes: null` with the exception class only (health: unknown)."""
     ts = (now if now is not None else pd.Timestamp.now("UTC")).isoformat()
@@ -127,11 +140,15 @@ def record_size(state_dir: Path, get_secret: Callable[[str], str | None], *, fet
         if not (url and ak and sk):
             raise ValueError("restic secrets not set")
         ns, region, bucket = parse_repository(url)
-        rec: dict[str, Any] = {"ts": ts, "bytes": bucket_bytes(ns, region, bucket, ak, sk, fetch=fetch, now=now)}
+        rec: dict[str, Any] = {"ts": ts, "bytes": bucket_bytes(ns, region, bucket, ak, sk, fetch=fetch, now=now,
+                                                                    monotonic=monotonic)}
     except Exception as exc:
         log.warning("object storage size unreadable: %s", type(exc).__name__)
         rec = {"ts": ts, "bytes": None, "error": type(exc).__name__}
-    write_atomic(Path(state_dir) / SIZE_FILE, json.dumps(rec))
+    try:
+        write_atomic(Path(state_dir) / SIZE_FILE, json.dumps(rec))
+    except Exception as exc:   # never replace the backup's own result
+        log.warning("object storage size not saved: %s", type(exc).__name__)
     return rec
 
 
