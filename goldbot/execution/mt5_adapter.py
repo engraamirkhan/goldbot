@@ -9,21 +9,27 @@ Measured costs (`broker_terms`, written by the engine to state/broker_terms_<acc
 * swap from symbol_info (swap_long/swap_short in the unit `swap_mode` names, triple day `swap_rollover3days`),
   converted to USD per lot per night by `swap_usd_per_lot`:
     0 disabled            -> 0 (no swap charged)
-    1 points              -> swap x point x tick_value / tick_size   (tick_value is per lot in the deposit currency;
-                             needs a USD deposit)
+    1 points              -> swap x point x tick_value / tick_size / fx   (tick_value is per lot in the deposit
+                             currency; fx below)
     2 base currency       -> as is when the base is USD, x price when the profit currency is USD (XAU -> USD)
     3 margin currency     -> as is when USD, x price when it is the base currency and the profit currency is USD
-    4 deposit currency    -> as is with a USD deposit
+    4 deposit currency    -> swap / fx
     5 interest (current)  -> swap% / 100 / 360 x price x contract size (MT5 counts interest on a 360-day year)
     6 interest (open)     -> as 5 at the current price (a position's own open price is not known here; for a
                              trade of a few days the difference is the price change, negligible next to the rate)
-    7/8 reopen modes, any other mode, or a non-USD deposit where one is needed: not converted. The swap stays None,
-    the reason is logged and noted, and the cost table falls back to the settings prior (`costs.swap_*`).
+    7/8 reopen modes, any other mode, or a deposit-currency amount without a usable fx: not converted. The swap stays
+    None, the reason is logged and noted, and the cost table falls back to the settings prior (`costs.swap_*`).
+  fx is the gate's conversion (BACKLOG 28; costs-binding-2026-10-18.md K1/K2): `sizing.account_fx` of the broker's
+  account currency per USD of XAUUSD P&L (`loss_per_lot` over $1 / contract), so a USD account is 1 and a GBP account
+  is the terminal's own GBPUSD figure, named in the note; a blank currency, a missing figure, or a USD figure more
+  than 1% off 1 leaves the amount unconverted, as the gate refuses to size on it.
   swap_rollover3days uses MT5's ENUM_DAY_OF_WEEK (0 = Sunday); it becomes the label's 0 = Monday weekday, and a
   weekend value is not used (the settings' triple day applies).
 * commission from the deals of recent closed positions on the symbol: -(commission + fee) summed over every deal of
   each position that was opened and closed inside the window (reversals excluded), divided by the lots opened:
-  USD per lot round trip. Swap and profit are not commission. Needs a USD deposit.
+  deposit currency per lot round trip, / fx for USD. Swap and profit are not commission. The deals carry no rate of
+  their own: the measurement-time fx is used (commission is a fixed rate a lot; the GBPUSD move across the deal window
+  is a few per cent of about 0.07 $/oz).
 
 Trading sessions (TRACEABILITY D13): the MetaTrader5 Python package has no equivalent of MQL5's
 SymbolInfoSessionTrade/SymbolInfoSessionQuote, and `symbol_info()` carries no schedule: `session_deals`,
@@ -55,6 +61,7 @@ from goldbot.execution.broker import (
     tick_key,
 )
 from goldbot.execution.costs import BrokerTerms
+from goldbot.risk.sizing import account_fx
 
 try:  # pragma: no cover - Windows only
     import MetaTrader5 as mt5
@@ -114,33 +121,43 @@ DEAL_TYPES = (0, 1)              # DEAL_TYPE_BUY, DEAL_TYPE_SELL (balance, credi
 DEAL_ENTRY_IN, DEAL_ENTRY_INOUT = 0, 2
 
 
-def swap_usd_per_lot(info: Any, *, account_currency: str, price: float) -> tuple[float | None, float | None, str]:
+def _fx_note(account_currency: str, fx: float) -> str:
+    cur = account_currency.strip().upper()
+    return "" if cur == "USD" else f" (converted at {fx:.4f} {cur} per USD, the broker's conversion)"
+
+
+def swap_usd_per_lot(info: Any, *, account_currency: str, price: float,
+                     acct_per_usd: float | None = None) -> tuple[float | None, float | None, str]:
     """(long, short, note): the terminal's swap rates in USD per lot per night, broker sign; (None, None, reason) for
-    a mode this conversion does not support (the caller keeps the settings prior)."""
+    a mode this conversion does not support (the caller keeps the settings prior). `acct_per_usd`: the broker's account
+    currency per USD (module docstring, fx), needed only where the rate is in the deposit currency (modes 1 and 4)."""
     mode = int(info.swap_mode)
     name = SWAP_MODES.get(mode, f"unknown mode {mode}")
     lng, sht = float(info.swap_long), float(info.swap_short)
-    usd_deposit = account_currency.upper() == "USD"
+    fx = account_fx(account_currency, acct_per_usd)
     base, profit, margin = (str(getattr(info, f"currency_{k}", "")).upper() for k in ("base", "profit", "margin"))
     factor: float | None = None
+    fx_note = ""
     if mode == 0:
         return 0.0, 0.0, "swap mode disabled: no swap charged"
-    if mode == 1 and usd_deposit and info.trade_tick_size > 0:
-        factor = float(info.point) * float(info.trade_tick_value) / float(info.trade_tick_size)
+    if mode == 1 and fx is not None and info.trade_tick_size > 0:
+        factor = float(info.point) * float(info.trade_tick_value) / float(info.trade_tick_size) / fx
+        fx_note = _fx_note(account_currency, fx)
     elif mode in (2, 3):
         cur = base if mode == 2 else margin
         if cur == "USD":
             factor = 1.0
         elif cur == base and profit == "USD" and price > 0:
             factor = float(price)
-    elif mode == 4 and usd_deposit:
-        factor = 1.0
+    elif mode == 4 and fx is not None:
+        factor = 1.0 / fx
+        fx_note = _fx_note(account_currency, fx)
     elif mode in (5, 6) and profit == "USD" and price > 0:
         factor = float(price) * float(info.trade_contract_size) / 100.0 / INTEREST_DAYS
     if factor is None:
         return None, None, (f"swap mode {name} (deposit {account_currency}, base {base}, profit {profit}, margin {margin}) "
                             "is not converted: the settings prior applies")
-    note = f"swap mode {name}" + (" (current price used for the open price)" if mode == 6 else "")
+    note = f"swap mode {name}" + (" (current price used for the open price)" if mode == 6 else "") + fx_note
     return lng * factor, sht * factor, note
 
 
@@ -169,20 +186,26 @@ def commission_round_trip_per_lot(deals: pd.DataFrame, symbol: str) -> tuple[flo
 
 
 def measure_broker_terms(account_id: str, info: Any, *, account_currency: str, price: float, deals: pd.DataFrame,
-                         now: pd.Timestamp) -> BrokerTerms:
+                         now: pd.Timestamp, acct_per_usd: float | None = None) -> BrokerTerms:
     """The terminal's swap and recent commission as BrokerTerms; whatever cannot be measured stays None with a note
-    (logged), so the cost table keeps the settings value for it."""
-    lng, sht, swap_note = swap_usd_per_lot(info, account_currency=account_currency, price=price)
+    (logged), so the cost table keeps the settings value for it. Deposit-currency amounts are converted with
+    `acct_per_usd` through `sizing.account_fx`, as the gate converts the stop (module docstring)."""
+    lng, sht, swap_note = swap_usd_per_lot(info, account_currency=account_currency, price=price,
+                                           acct_per_usd=acct_per_usd)
     notes = [swap_note]
     if lng is None:
         log.warning("%s: %s", account_id, swap_note)
     triple = triple_weekday(info.swap_rollover3days)
     if triple is None:
         notes.append(f"swap_rollover3days={info.swap_rollover3days} is a weekend day: the settings' triple day applies")
-    if account_currency.upper() == "USD":
+    fx = account_fx(account_currency, acct_per_usd)
+    if fx is not None:
         rt, lots, c_note = commission_round_trip_per_lot(deals, str(info.name))
+        if rt is not None:
+            rt, c_note = rt / fx, c_note + _fx_note(account_currency, fx)
     else:
-        rt, lots, c_note = None, 0.0, f"deposit currency {account_currency}: commission from settings"
+        rt, lots, c_note = None, 0.0, (f"deposit currency {account_currency or 'unknown'} without the broker's "
+                                       "conversion: commission from settings")
     notes.append(c_note)
     return BrokerTerms(account_id=account_id, measured_utc=now, swap_long_usd_per_lot=lng, swap_short_usd_per_lot=sht,
                        swap_triple_weekday=triple, swap_mode=int(info.swap_mode),
@@ -433,12 +456,25 @@ class MT5Broker:
         return df
 
     def broker_terms(self, account_id: str, since_utc: pd.Timestamp, now: pd.Timestamp) -> BrokerTerms:
-        """Swap and commission as this terminal reports them (see the module docstring for the conversions)."""
+        """Swap and commission as this terminal reports them (see the module docstring for the conversions). The
+        account conversion is the gate's: the broker's loss on one lot over $1 (`loss_per_lot`) per contract ounce."""
         info = mt5.symbol_info(self.symbol)
         tick = mt5.symbol_info_tick(self.symbol)
         price = (float(tick.bid) + float(tick.ask)) / 2 if tick is not None else 0.0
         return measure_broker_terms(account_id, info, account_currency=str(mt5.account_info().currency), price=price,
-                                    deals=self.deals_since(since_utc), now=now)
+                                    deals=self.deals_since(since_utc), now=now,
+                                    acct_per_usd=self._acct_per_usd(info, price))
+
+    def _acct_per_usd(self, info: Any, price: float) -> float | None:
+        """Account currency per USD of XAUUSD P&L for the cost terms; None when the terminal cannot say (the terms then
+        keep the settings values), never a guess and never a failed reading."""
+        try:
+            contract = float(info.trade_contract_size)
+            loss = self.loss_per_lot(self.symbol, 1, price, 1.0) if price > 0 else None
+        except Exception as exc:                                    # noqa: BLE001 - a terminal fault: no conversion
+            log.warning("%s: no account conversion for the cost terms (%s)", self.symbol, exc)
+            return None
+        return loss / contract if loss is not None and contract > 0 else None
 
     def shutdown(self) -> None:  # pragma: no cover
         mt5.shutdown()

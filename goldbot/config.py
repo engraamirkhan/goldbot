@@ -199,6 +199,9 @@ class CostSettings(_Section):
     # nightly_costs publishes the canonical broker's table (costs only) to release costs-v1 for research.yml;
     # needs the github-token in the keyring. Health warns when the published table is older than 8 days.
     publish_release: bool = False
+    # recorded broker-tick days (tick_record) in the cost window before nightly_costs builds the spread profile by
+    # hour and session (costs-binding-2026-10-18.md section 1.4 step 4); fewer: no profile, the note says why
+    spread_profile_min_days: int = Field(10, ge=1)
 
 
 class ScheduleSettings(_Section):

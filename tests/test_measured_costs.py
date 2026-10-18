@@ -229,14 +229,14 @@ def test_the_published_cost_table_holds_costs_only_no_account_identifier_or_equi
     assert "icm-demo" not in text and "51234567" not in text and "ICMarketsSC" not in text
     assert raw["broker"] == "icm" and raw["measured_at"].startswith("2026-10-08")
     assert {k: v["source"] for k, v in raw["fields"].items()} == {
-        "spread": "measured", "slippage": "measured", "commission": "measured", "swap": "measured"}
+        "spread": "measured", "slippage": "mixed", "commission": "measured", "swap": "measured"}   # asia: prior
     assert raw["fields"]["slippage"]["n"] == 84 and raw["fields"]["commission"]["n"] == 3.0
     rec = json.loads((tmp_path / "costs_published.json").read_text())
     assert rec["published_utc"] == NOW.isoformat() and rec["last_result"] == "ok"
 
 
 @pytest.mark.parametrize("kw, why", [({"swap_long_usd_per_lot": None}, "swap not measured"),
-                                     ({"n_fills": 49}, "49 fills, fewer than 50")])
+                                     ({"spread": {}}, "no measured spread")])
 def test_publishing_is_refused_while_a_prior_would_pass_as_a_measurement(tmp_path, kw, why):
     from goldbot.ops.jobs import publish_costs
     _measured_table(**kw).save(tmp_path / "costs_icm-demo.json")
@@ -255,8 +255,8 @@ def test_an_upload_failure_is_recorded_and_the_cost_job_stays_green(tmp_path):
         raise OSError("network unreachable")
     ctx.upload_costs = down
     _terms().save(tmp_path / "broker_terms_icm-demo.json")
-    out = nightly_costs(ctx, NOW)        # rebuilds the table from the empty store (0 fills): refused, no upload
-    assert out["publish"]["published"] is False and "fewer than 50" in out["publish"]["reason"]
+    out = nightly_costs(ctx, NOW)        # rebuilds the table from the empty store (no ticks): refused, no upload
+    assert out["publish"]["published"] is False and "no measured spread" in out["publish"]["reason"]
     from goldbot.ops.jobs import publish_costs
     _measured_table().save(tmp_path / "costs_icm-demo.json")
     res = publish_costs(SETTINGS, [ACC], tmp_path, down, NOW)
@@ -306,7 +306,7 @@ def test_publish_costs_uploads_with_the_given_uploader(tmp_path):
     sent: list[bytes] = []
     assert publish_costs_cli([], accounts=[ACC], state_dir=tmp_path, upload=_sink(sent)) == 0
     assert json.loads(sent[0])["broker"] == "icm"
-    _measured_table(n_fills=3).save(tmp_path / "costs_icm-demo.json")
+    _measured_table(spread={}).save(tmp_path / "costs_icm-demo.json")
     assert publish_costs_cli([], accounts=[ACC], state_dir=tmp_path, upload=_sink(sent)) == 1
     assert len(sent) == 1
 

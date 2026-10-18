@@ -1226,10 +1226,14 @@ Back up the state folder and `config\` regularly; they are not in Git.
    (`nssm restart goldbot-scheduler`). The `github-token` must be in the keyring
    (`python -m goldbot.ops.accounts set github-token`). From then on, every weekday right after `nightly_costs`, the
    scheduler uploads the IC Markets table as `costs_measured.json` to the GitHub release `costs-v1`. It holds costs
-   only: spread, slippage, commission and swap per lot, with `measured_at` and, per field, "measured" or "prior" and
-   the tick, fill or lot count behind it. It never holds an account id, login, balance or equity. The upload is
-   refused, and nothing is published, while the swap is unmeasured or there are fewer than 50 fills, so a prior is
-   never published as a measurement. To publish at once, or to check the file first:
+   only: spread, slippage, commission and swap per lot, with `measured_at` and, per field, "measured", "prior" or
+   (slippage only) "mixed", and the tick, fill or lot count behind it. After 10 recorded broker-tick days
+   (`tick_record`) it also carries `spread_profile`: the spread's median and p90 by UTC hour and session, aggregates
+   only. It never holds an account id, login, balance or equity, or a single tick. The upload is refused, and
+   nothing is published, while the swap or the spread is unmeasured. Fills are not needed: until a session has 50
+   fills its slippage is published as the prior and labelled so, never as a measurement. On a GBP account the swap
+   and commission are converted to USD at the terminal's own rate (the note in `broker_terms_<account>.json` names
+   it). To publish at once, or to check the file first:
 
    ```powershell
    .\.venv\Scripts\python -m goldbot.ops.run publish-costs                  # upload now
