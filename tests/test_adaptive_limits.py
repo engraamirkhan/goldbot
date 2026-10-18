@@ -22,11 +22,11 @@ from goldbot.db.migrations import CORE, compat_back_to
 from goldbot.risk.adaptive import (
     FIELDS,
     AdaptiveController,
+    AdaptiveState,
+    AdaptiveStore,
     Evidence,
     LimitBounds,
     Limits,
-    LimitsState,
-    LimitsStore,
     TradeEvidence,
     changes_between,
     combined_lcb,
@@ -43,7 +43,8 @@ FLOOR = Limits(daily_cap=0.02, weekly_cap=0.05, supervisor_daily_cap=0.015, supe
                min_lot_risk_cap=None)
 DEMO_CEILING = Limits(daily_cap=0.05, weekly_cap=0.10, supervisor_daily_cap=0.0375, supervisor_weekly_cap=0.075,
                       min_lot_risk_cap=0.01)
-DEMO = LimitBounds.build(FLOOR, DEMO_CEILING, mode="demo", supervisor_all_demo=True)
+DEMO_A1 = LimitBounds.build(FLOOR, DEMO_CEILING, mode="demo", supervisor_all_demo=True)     # production
+DEMO = DEMO_A1.model_copy(update={"explore_min_lot": False})     # the caps rules alone (amendment A1 exploration off)
 LIVE = LimitBounds.build(FLOOR, DEMO_CEILING, mode="live", supervisor_all_demo=False)
 
 
@@ -93,14 +94,14 @@ def _at(limits: Limits, **kw: float | None) -> Limits:
     return limits.model_copy(update=kw)
 
 
-def _state(limits: Limits, day: date, **kw: object) -> LimitsState:
-    return LimitsState(account_id="icm-demo", day=day, limits=limits, **kw)  # type: ignore[arg-type]
+def _state(limits: Limits, day: date, **kw: object) -> AdaptiveState:
+    return AdaptiveState(account_id="icm-demo", day=day, limits=limits, **kw)  # type: ignore[arg-type]
 
 
-def _run(trades: list[TradeEvidence], first: date, days: int, prev: LimitsState | None = None,
-         bounds: LimitBounds = DEMO, **ev_kw: object) -> list[LimitsState]:
+def _run(trades: list[TradeEvidence], first: date, days: int, prev: AdaptiveState | None = None,
+         bounds: LimitBounds = DEMO, **ev_kw: object) -> list[AdaptiveState]:
     """Evaluate at each risk-day roll from `first` for `days` days; returns the state after each."""
-    out: list[LimitsState] = []
+    out: list[AdaptiveState] = []
     for i in range(days):
         d = first + timedelta(days=i)
         prev, _ = step(prev, _ev(trades, d, **ev_kw), d, bounds)  # type: ignore[arg-type]
@@ -136,15 +137,50 @@ def test_strategies_combine_by_the_minimum_per_strategy_lcb():
     assert combined_lcb(a + b) == pytest.approx(lb.lcb)
 
 
-def test_quarter_kelly_uses_the_per_trade_equivalent_lcb_and_clamps_q_to_0_1():
-    trades = _good_days(D0, 30)
-    s = daily_lcb(trades)
-    assert s is not None
+def _q_s(trades: list[TradeEvidence]) -> float:
+    """Amendment A1 by hand: min(LCB/(4·E[r²]), N̄·LCB/(4·E[D²])) / 3%, clamped to [0, 1]."""
+    st = daily_lcb(trades)
+    assert st is not None
+    sums: dict[date, float] = {}
+    for t in trades:
+        k = date(1970, 1, 1) + timedelta(days=t.exit_ns // (86_400 * 10**9))
+        sums[k] = sums.get(k, 0.0) + t.net_r
     e_r2 = float(np.mean([t.net_r ** 2 for t in trades]))
-    daily_fraction = (s.lcb / 2.0) / (4 * e_r2) * 2.0           # f = (LCB / trades_per_day) / 4E[r2], x trades/day
-    assert quarter_kelly_q(trades) == pytest.approx(min(1.0, daily_fraction / 0.03))
+    e_d2 = float(np.mean([v ** 2 for v in sums.values()]))
+    nbar = len(trades) / len(sums)
+    return min(1.0, max(0.0, min(st.lcb / (4 * e_r2), nbar * st.lcb / (4 * e_d2)) / 0.03))
+
+
+def _days_of(first: date, pairs: list[tuple[float, float]], days: int, strategy: str = "A") -> list[TradeEvidence]:
+    return [_t(first + timedelta(days=i), r, strategy=strategy) for i in range(days) for r in pairs[i % len(pairs)]]
+
+
+W, L = 1.2, -0.9
+INDEPENDENT = [(W, L), (L, W), (W, W), (L, L)]       # wins and losses spread over the days
+CLUSTERED = [(W, W), (L, L)]                         # the same trades, losses bunched on the same days
+
+
+def test_quarter_kelly_is_per_strategy_the_smaller_of_the_trade_and_day_terms():
+    trades = _days_of(D0, CLUSTERED, 200)
+    assert 0.0 < quarter_kelly_q(trades) < 1.0
+    assert quarter_kelly_q(trades) == pytest.approx(_q_s(trades))
     assert quarter_kelly_q(_bad_days(D0, 30)) == 0.0
     assert quarter_kelly_q([]) == 0.0
+
+
+def test_clustered_same_day_losses_lower_q_against_the_same_trades_spread_out():
+    spread, clustered = _days_of(D0, INDEPENDENT, 200), _days_of(D0, CLUSTERED, 200)
+    assert sorted(t.net_r for t in spread) == sorted(t.net_r for t in clustered)
+    q_spread, q_clustered = quarter_kelly_q(spread), quarter_kelly_q(clustered)
+    assert 0.0 < q_clustered < q_spread
+    assert q_clustered < 1.0                             # the day term binds, not the clamp
+
+
+def test_q_is_the_minimum_over_strategies_and_e_r2_is_not_pooled():
+    a = _days_of(D0, CLUSTERED, 200, strategy="A")
+    b = _days_of(D0, [(0.4, 0.3), (0.2, 0.3)], 200, strategy="B")      # tiny r: pooled with A it would shrink E[r²]
+    assert quarter_kelly_q(a + b) == pytest.approx(min(_q_s(a), _q_s(b)))
+    assert quarter_kelly_q(a + b) == pytest.approx(_q_s(a))
 
 
 # ---- loosening ------------------------------------------------------------------------------------------------------
@@ -206,7 +242,7 @@ def test_loosening_happens_only_at_the_risk_day_roll_never_intraday():
 
 def test_the_ceiling_is_never_exceeded_and_the_floor_never_undershot():
     trades = _good_days(D0, 30)
-    prev: LimitsState | None = None
+    prev: AdaptiveState | None = None
     seen: list[Limits] = []
     for i in range(80):
         d = D0 + timedelta(days=30 + i)
@@ -225,7 +261,7 @@ def test_the_ceiling_is_never_exceeded_and_the_floor_never_undershot():
 
 def test_random_evidence_never_leaves_the_bounds():
     rng = random.Random(7)
-    prev: LimitsState | None = None
+    prev: AdaptiveState | None = None
     trades: list[TradeEvidence] = []
     for i in range(200):
         d = D0 + timedelta(days=i)
@@ -256,6 +292,8 @@ def test_a_live_account_never_rises_above_the_defaults():
 
 def test_live_bounds_equal_the_defaults_whatever_the_demo_ceilings():
     assert LIVE.ceiling == FLOOR
+    assert DEMO_A1.explore_min_lot and not LIVE.explore_min_lot
+    assert not LimitBounds(floor=FLOOR, ceiling=DEMO_CEILING).explore_min_lot      # only `build` turns exploration on
     assert LimitBounds.build(FLOOR, DEMO_CEILING, mode="demo", supervisor_all_demo=False).ceiling == \
         DEMO_CEILING.model_copy(update={"supervisor_daily_cap": 0.015, "supervisor_weekly_cap": 0.04})
 
@@ -268,7 +306,7 @@ def test_a_ceiling_below_the_floor_is_the_floor():
 
 # ---- tightening -----------------------------------------------------------------------------------------------------
 
-def _loose(day: date) -> LimitsState:
+def _loose(day: date) -> AdaptiveState:
     return _state(_at(DEMO_CEILING), day)
 
 
@@ -394,11 +432,79 @@ def test_trades_closed_on_the_decision_day_are_not_in_the_statistic():
 
 # ---- min-lot exception ----------------------------------------------------------------------------------------------
 
-def test_min_lot_cap_stays_off_without_positive_exception_evidence():
-    trades = _good_days(D0, 30) + _bad_days(D0, 10, strategy="A", source="demo")
-    for t in trades[-20:]:
-        trades.append(t.model_copy(update={"id": t.id + "-x", "min_lot_exception": True}))
-    states = _run(trades, D0 + timedelta(days=30), 12)
+def _exc_days(first: date, days: int, pairs: list[tuple[float, float]]) -> list[TradeEvidence]:
+    return [_t(first + timedelta(days=i), r, exc=True) for i in range(days) for r in pairs[i % len(pairs)]]
+
+
+def test_min_lot_exploration_gives_1_percent_on_demo_from_the_first_day_and_never_on_live():
+    trades = _good_days(D0, 5)
+    d = D0 + timedelta(days=5)
+    s, reasons = step(None, _ev(trades, d), d, DEMO_A1)
+    assert s.limits.min_lot_risk_cap == 0.01 and "minlot_explore" in reasons
+    assert s.limits.daily_cap == FLOOR.daily_cap and s.limits.weekly_cap == FLOOR.weekly_cap   # caps at the floors
+    assert step(None, _ev(trades, d), d, LIVE)[0].limits.min_lot_risk_cap is None
+
+
+def test_exploration_ends_at_60_exception_trades_and_then_the_lcb_rule_decides():
+    weak = _exc_days(D0, 29, [(1.0, -1.05), (1.1, -1.2)]) + [_t(D0 + timedelta(days=29), 1.0, exc=True)]   # 59
+    d = D0 + timedelta(days=30)
+    s59, _ = step(_state(_at(FLOOR, min_lot_risk_cap=0.01), d - timedelta(days=1)), _ev(weak, d), d, DEMO_A1)
+    assert s59.limits.min_lot_risk_cap == 0.01                           # still exploring: 59 exception trades
+    weak.append(_t(d, -1.05, hour=0, minute=1, exc=True))                # the 60th; cumulative R about -2.6
+    s60, reasons = step(s59, _ev(weak, d, hour=1), d, DEMO_A1)
+    assert s60.limits.min_lot_risk_cap is None and "target_below" in reasons
+
+
+def test_exploration_stops_for_good_at_minus_10R_cumulative():
+    losers = [_t(D0 + timedelta(days=i // 2), -0.5, exc=True) for i in range(19)]    # -9.5R: keeps exploring
+    d = D0 + timedelta(days=10)
+    s, _ = step(None, _ev(losers, d), d, DEMO_A1)
+    assert s.limits.min_lot_risk_cap == 0.01
+    losers.append(_t(d, -0.5, hour=0, minute=1, exc=True))               # exactly -10R
+    s, reasons = step(s, _ev(losers, d, hour=1), d, DEMO_A1)
+    assert s.limits.min_lot_risk_cap is None and "minlot_explore_stop" in reasons and s.minlot_explore_stopped
+    losers += [_t(d + timedelta(days=k), 2.0, exc=True) for k in range(5)]          # recovers above -10R
+    later = _run(losers, d + timedelta(days=5), 5, prev=s, bounds=DEMO_A1)
+    assert all(x.limits.min_lot_risk_cap is None for x in later)       # a re-test is a new trial
+
+
+@pytest.mark.parametrize("kw,code", [({"atr_med": 9.0}, "atr_minlot_off"), ({"stage": Stage.SIZE_DOWN}, "stage_floor"),
+                                     ({"cost": 1.3}, "cost_floor"), ({"dd": 0.05}, "dd_floor")])
+def test_exploration_pauses_while_a_condition_holds_and_resumes_at_the_next_roll(kw: dict, code: str):
+    trades = _good_days(D0, 5)
+    d = D0 + timedelta(days=5)
+    s, _ = step(None, _ev(trades, d), d, DEMO_A1)
+    paused, reasons = step(s, _ev(trades, d, hour=10, **kw), d, DEMO_A1)
+    assert paused.limits.min_lot_risk_cap is None and code in reasons
+    same_day, _ = step(paused, _ev(trades, d, hour=11), d, DEMO_A1)
+    assert same_day.limits.min_lot_risk_cap is None                      # intraday only tightens
+    nxt = d + timedelta(days=1)
+    resumed, reasons = step(same_day, _ev(trades, nxt), nxt, DEMO_A1)
+    assert resumed.limits.min_lot_risk_cap == 0.01 and "minlot_explore" in reasons   # no 5-day cooldown
+
+
+def test_exploration_pauses_for_the_loss_streak_today_and_tomorrow_only():
+    d = D0 + timedelta(days=5)
+    trades = _good_days(D0, 5) + [_t(d, -1.0, hour=8, minute=m) for m in range(4)]
+    s, _ = step(_state(_at(FLOOR, min_lot_risk_cap=0.01), d - timedelta(days=1)), _ev(trades, d, hour=9), d, DEMO_A1)
+    assert s.limits.min_lot_risk_cap is None
+    trades.append(_t(d, 1.0, hour=10))
+    s, _ = step(s, _ev(trades, d + timedelta(days=1)), d + timedelta(days=1), DEMO_A1)
+    assert s.limits.min_lot_risk_cap is None                             # tomorrow still paused
+    s, _ = step(s, _ev(trades, d + timedelta(days=2)), d + timedelta(days=2), DEMO_A1)
+    assert s.limits.min_lot_risk_cap == 0.01
+
+
+def test_exploration_keeps_its_fixed_cap_through_a_cost_step():
+    trades = _good_days(D0, 5)
+    d = D0 + timedelta(days=5)
+    s, _ = step(_state(_at(FLOOR, min_lot_risk_cap=0.01), d - timedelta(days=1)), _ev(trades, d, cost=1.2), d, DEMO_A1)
+    assert s.limits.min_lot_risk_cap == 0.01
+
+
+def test_min_lot_cap_stays_off_after_exploration_without_positive_exception_evidence():
+    trades = _good_days(D0, 30) + _exc_days(D0, 30, [(0.5, -1.0), (0.3, -0.5)])     # 60 exception trades, LCB < 0
+    states = _run(trades, D0 + timedelta(days=30), 12, bounds=DEMO_A1)
     assert all(s.limits.min_lot_risk_cap is None for s in states)
 
 
@@ -406,7 +512,7 @@ def test_min_lot_cap_steps_0_6_then_0_8_then_1_0_and_is_forced_off_by_high_atr()
     trades = _good_days(D0, 30, exc=True)
     start = D0 + timedelta(days=30)
     seen: list[float | None] = []
-    prev: LimitsState | None = None
+    prev: AdaptiveState | None = None
     for i in range(12):
         d = start + timedelta(days=i)
         trades += [_t(d - timedelta(days=1), r, exc=True) for r in (1.5, -0.5, 1.0, -0.5, 1.2)]
@@ -455,10 +561,10 @@ def test_backtest_or_oof_sources_are_refused_by_the_evidence_record():
 
 # ---- determinism and persistence ------------------------------------------------------------------------------------
 
-def _replay() -> list[tuple[LimitsState, tuple[str, ...]]]:
+def _replay() -> list[tuple[AdaptiveState, tuple[str, ...]]]:
     rng = random.Random(11)
     trades: list[TradeEvidence] = []
-    prev: LimitsState | None = None
+    prev: AdaptiveState | None = None
     out = []
     for i in range(60):
         d = D0 + timedelta(days=i)
@@ -496,7 +602,7 @@ def test_the_limits_tables_are_an_additive_core_migration():
 
 
 def test_state_and_changes_round_trip_through_core_db_and_changes_are_append_only(tmp_path: Path):
-    store = LimitsStore(tmp_path)
+    store = AdaptiveStore(tmp_path)
     trades = _good_days(D0, 30)
     states = _run(trades, D0 + timedelta(days=30), 3)
     ev = _ev(trades, D0 + timedelta(days=32))
@@ -531,7 +637,15 @@ def test_the_controller_persists_each_step_and_loosens_across_restarts(tmp_path:
         ctl = AdaptiveController(tmp_path, DEMO, dq=_Sink())                # a fresh process each day
         out.append(ctl.current("icm-demo", _ev(trades, start + timedelta(days=i))))
     assert out[0] == FLOOR and out[2].daily_cap == pytest.approx(0.025)
-    assert {c.field for c in LimitsStore(tmp_path).changes("icm-demo")} >= {"daily_cap", "weekly_cap"}
+    assert {c.field for c in AdaptiveStore(tmp_path).changes("icm-demo")} >= {"daily_cap", "weekly_cap"}
+
+
+def test_the_controller_logs_the_first_day_exploration_cap_against_the_floors(tmp_path: Path):
+    d = D0 + timedelta(days=5)
+    ctl = AdaptiveController(tmp_path, DEMO_A1, dq=_Sink())
+    assert ctl.current("icm-demo", _ev(_good_days(D0, 5), d)).min_lot_risk_cap == 0.01
+    (row,) = AdaptiveStore(tmp_path).changes("icm-demo")
+    assert (row.field, row.old, row.new) == ("min_lot_risk_cap", None, 0.01) and "minlot_explore" in row.reasons
 
 
 def test_the_controller_gives_floors_and_a_dq_event_for_evidence_that_does_not_validate(tmp_path: Path):

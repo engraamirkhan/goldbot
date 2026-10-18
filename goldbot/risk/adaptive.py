@@ -41,7 +41,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import date, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import Field, ValidationError, model_validator
 from scipy import stats
@@ -76,6 +76,9 @@ WEEKLY_STEP = 0.01
 SUPERVISOR_STEPS = {"supervisor_daily_cap": 6, "supervisor_weekly_cap": 5}   # as the account demo ladders (2-5%, 5-10%)
 MIN_LOT_RUNGS = (0.006, 0.008, 0.010)
 MIN_LOT_MAX = 0.01               # the per-trade hard limit
+# Amendment A1 (quant review, before any replay): the demo minimum-lot exploration budget
+EXPLORE_TRADES = 60              # the cap is the top rung (1.0%) for the first 60 exception trades
+EXPLORE_STOP_R = -10.0           # cumulative net R of those trades at or below this: off for good (a re-test = new trial)
 
 CAP_FIELDS = ("daily_cap", "weekly_cap", "supervisor_daily_cap", "supervisor_weekly_cap")
 FIELDS = (*CAP_FIELDS, "min_lot_risk_cap")
@@ -117,6 +120,8 @@ class LimitBounds(FrozenRecord):
 
     floor: Limits
     ceiling: Limits
+    # Amendment A1: the minimum-lot exploration budget runs on demo only (`build` sets it; live never explores)
+    explore_min_lot: bool = False
 
     @model_validator(mode="after")
     def _ordered(self) -> LimitBounds:
@@ -135,14 +140,15 @@ class LimitBounds(FrozenRecord):
         ceilings are the floors, so the limits may only stay or tighten. The supervisor ceilings apply only when every
         account it watches is demo."""
         if mode != "demo":
-            return cls(floor=floor, ceiling=floor)
+            return cls(floor=floor, ceiling=floor, explore_min_lot=False)
         up: dict[str, float | None] = {}
         for f in CAP_FIELDS:
             sup = f.startswith("supervisor_")
             up[f] = getattr(floor, f) if sup and not supervisor_all_demo else max(getattr(floor, f), getattr(demo_ceiling, f))
         up["min_lot_risk_cap"] = demo_ceiling.min_lot_risk_cap if demo_ceiling.min_lot_risk_cap is not None \
             else floor.min_lot_risk_cap
-        return cls(floor=floor, ceiling=floor.model_copy(update=up))
+        ceiling = floor.model_copy(update=up)
+        return cls(floor=floor, ceiling=ceiling, explore_min_lot=ceiling.min_lot_risk_cap is not None)
 
     def rungs(self, f: str) -> tuple[float | None, ...]:
         """The field's ladder, floor first. One rung (the floor) when the ceiling is not above it."""
@@ -229,7 +235,7 @@ class Evidence(FrozenRecord):
         return sorted(keep, key=lambda t: (t.exit_ns, t.id))
 
 
-class LimitsState(FrozenRecord):
+class AdaptiveState(FrozenRecord):
     """One account's adaptive limits and the counters the rules need (core.db `adaptive_state`)."""
 
     account_id: str
@@ -241,9 +247,10 @@ class LimitsState(FrozenRecord):
     tightened_day: date | None = None                # the last risk day with any tighten
     floors_until: date | None = None                 # loss streak: floors through this risk day
     loss_streak_ns: int | None = None                # exit of the last trade of the streak that fired (fires once)
+    minlot_explore_stopped: bool = False             # A1: the exploration hit -10R; off until a new trial resets it
 
 
-class LimitChange(FrozenRecord):
+class AdaptiveChange(FrozenRecord):
     """One row of the append-only `adaptive_changes` log."""
 
     account_id: str
@@ -297,18 +304,30 @@ def combined_lcb(trades: Iterable[TradeEvidence]) -> float | None:
     return min(lcbs) if lcbs else None
 
 
-def quarter_kelly_q(trades: Sequence[TradeEvidence]) -> float:
-    """q in [0, 1]. f = (LCB / trades_per_day) / (4·E[r²]) per trade (the per-trade equivalent of the daily LCB,
-    ADR 0031 reading 1); daily_fraction = f · trades_per_day; q = clamp(daily_fraction / 3%, 0, 1)."""
-    lcb = combined_lcb(trades)
-    if lcb is None or lcb <= 0:
+def strategy_q(trades: Sequence[TradeEvidence]) -> float | None:
+    """Amendment A1, one strategy s: q_s = min(LCB_s/(4·E[r²]_s), N̄_s·LCB_s/(4·E[D_s²])) / 3%, clamped to [0, 1].
+    D_s are its daily net-R sums and N̄_s its mean trades per day. The day term binds when losses cluster on the same
+    days (correlated trades), which the per-trade term cannot see. None without evidence (fewer than 2 days)."""
+    st = daily_lcb(trades)
+    if st is None:
+        return None
+    if st.lcb <= 0:
         return 0.0
+    sums: dict[date, float] = defaultdict(float)
+    for t in trades:
+        sums[day_of_ns(t.exit_ns)] += t.net_r
     e_r2 = sum(t.net_r ** 2 for t in trades) / len(trades)
-    if e_r2 <= 0:
-        return 0.0
-    per_day = len(trades) / len({day_of_ns(t.exit_ns) for t in trades})
-    f = (lcb / per_day) / (KELLY_DIVISOR * e_r2)
-    return min(1.0, max(0.0, f * per_day / Q_SCALE))
+    e_d2 = sum(v ** 2 for v in sums.values()) / len(sums)
+    per_trade = st.lcb / (KELLY_DIVISOR * e_r2)
+    per_day = (len(trades) / len(sums)) * st.lcb / (KELLY_DIVISOR * e_d2)
+    return min(1.0, max(0.0, min(per_trade, per_day) / Q_SCALE))
+
+
+def quarter_kelly_q(trades: Sequence[TradeEvidence]) -> float:
+    """q = the minimum of `strategy_q` over the strategies with evidence (E[r²] is never pooled across strategies);
+    0 when none has evidence."""
+    qs = [q for q in (strategy_q(ts) for ts in _by_strategy(trades).values()) if q is not None]
+    return min(qs) if qs else 0.0
 
 
 def _demo_sufficient(demo: Sequence[TradeEvidence]) -> bool:
@@ -328,20 +347,21 @@ def _lower(a: float | None, b: float | None) -> bool:
 
 # ---- one evaluation --------------------------------------------------------------------------------------------------
 
-def _floored(prev: LimitsState | None, account_id: str, day: date, bounds: LimitBounds, reasons: list[str], *,
-             floors_until: date | None, loss_streak_ns: int | None) -> tuple[LimitsState, tuple[str, ...]]:
+def _floored(prev: AdaptiveState | None, account_id: str, day: date, bounds: LimitBounds, reasons: list[str], *,
+             floors_until: date | None, loss_streak_ns: int | None,
+             explore_stopped: bool) -> tuple[AdaptiveState, tuple[str, ...]]:
     """Every field at its floor, the 3-day counts reset, and today recorded as a tighten (the 5-day cooldown)."""
     last = prev.tightened_day if prev else None
-    state = LimitsState(account_id=account_id, day=max(day, prev.day) if prev else day, limits=bounds.floor,
+    state = AdaptiveState(account_id=account_id, day=max(day, prev.day) if prev else day, limits=bounds.floor,
                         up_streak={f: 0 for f in FIELDS}, loosened_day=dict(prev.loosened_day) if prev else {},
                         demo_n_at_loosen=dict(prev.demo_n_at_loosen) if prev else {},
                         tightened_day=max(day, last) if last else day, floors_until=floors_until,
-                        loss_streak_ns=loss_streak_ns)
+                        loss_streak_ns=loss_streak_ns, minlot_explore_stopped=explore_stopped)
     return state, tuple(dict.fromkeys(reasons))
 
 
-def step(prev: LimitsState | None, ev: Evidence | None, day: date, bounds: LimitBounds, *,
-         account_id: str | None = None) -> tuple[LimitsState, tuple[str, ...]]:
+def step(prev: AdaptiveState | None, ev: Evidence | None, day: date, bounds: LimitBounds, *,
+         account_id: str | None = None) -> tuple[AdaptiveState, tuple[str, ...]]:
     """One evaluation for risk day `day`. Pure: the same inputs always give the same state and reasons.
 
     Reasons are codes (`dd_floor`, `loss_streak_floor`, `floors_until`, `cost_floor`, `cost_step`, `stage_floor`,
@@ -358,7 +378,8 @@ def step(prev: LimitsState | None, ev: Evidence | None, day: date, bounds: Limit
     if problems or ev is None:
         return _floored(prev, acct, day, bounds, ["evidence_invalid", *(f"evidence_invalid:{p}" for p in problems)],
                         floors_until=prev.floors_until if prev else None,
-                        loss_streak_ns=prev.loss_streak_ns if prev else None)
+                        loss_streak_ns=prev.loss_streak_ns if prev else None,
+                        explore_stopped=prev.minlot_explore_stopped if prev else False)
 
     roll = prev is None or day > prev.day
     reasons: list[str] = []
@@ -373,6 +394,15 @@ def step(prev: LimitsState | None, ev: Evidence | None, day: date, bounds: Limit
     cut = day_start_ns(day)
     in_stat = [t for t in used if t.exit_ns < cut]
     demo = [t for t in in_stat if t.source == "demo"]
+
+    # -- Amendment A1: the demo minimum-lot exploration budget. Every demo exception trade counts (today's too) --
+    exc_trades = [t for t in used if t.source == "demo" and t.min_lot_exception]
+    stopped = prev.minlot_explore_stopped if prev else False
+    if (bounds.explore_min_lot and not stopped
+            and sum(t.net_r for t in exc_trades[:EXPLORE_TRADES]) <= EXPLORE_STOP_R + _EPS):
+        stopped = True
+        reasons.append("minlot_explore_stop")
+    exploring = bounds.explore_min_lot and not stopped and len(exc_trades) < EXPLORE_TRADES
 
     # -- tighten to the floors (any time) --
     floors_until = prev.floors_until if prev else None
@@ -394,7 +424,7 @@ def step(prev: LimitsState | None, ev: Evidence | None, day: date, bounds: Limit
     if floor_codes:
         moved = [f"{f}:{floor_codes[0]}" for f in FIELDS if lvl[f] > 0]
         return _floored(prev, acct, day, bounds, [*reasons, *floor_codes, *moved], floors_until=floors_until,
-                        loss_streak_ns=streak_ns)
+                        loss_streak_ns=streak_ns, explore_stopped=stopped)
 
     # -- the statistic: loosening on demo only, tightening on demo + shadow too --
     demo_ok = _demo_sufficient(demo)
@@ -409,7 +439,10 @@ def step(prev: LimitsState | None, ev: Evidence | None, day: date, bounds: Limit
     qualifies: dict[str, bool] = {}
     for f in FIELDS:
         n = len(bounds.rungs(f)) - 1
-        if f == "min_lot_risk_cap":
+        if f == "min_lot_risk_cap" and (exploring or stopped):
+            target[f] = n if exploring and not atr_off else 0          # A1: the fixed budget, paused by the ATR rule
+            qualifies[f] = False                                       # never through the loosening rule
+        elif f == "min_lot_risk_cap":
             target[f] = n if minlot_ok else 0
             qualifies[f] = target[f] > lvl[f]
         else:
@@ -419,17 +452,24 @@ def step(prev: LimitsState | None, ev: Evidence | None, day: date, bounds: Limit
     tightened = False
     for f in FIELDS:
         if target[f] < lvl[f]:
-            code = "atr_minlot_off" if f == "min_lot_risk_cap" and atr_off else "target_below"
+            code = "target_below"
+            if f == "min_lot_risk_cap":
+                code = "minlot_explore_stop" if stopped else "atr_minlot_off" if atr_off else code
             lvl[f] = target[f]
             reasons += [code, f"{f}:{code}"]
     if roll and ev.cost_ratio_20d is not None and COST_STEP <= ev.cost_ratio_20d <= COST_FLOOR:
         reasons.append("cost_step")
         tightened = True
         for f in FIELDS:
-            if lvl[f] > 0:
+            if lvl[f] > 0:                  # an exploring minimum-lot cap is put back by the resume below (A1: fixed)
                 lvl[f] -= 1
                 reasons.append(f"{f}:cost_step")
     tightened = tightened or clamped_down or any(lvl[f] < old[f] for f in FIELDS)
+    # A1: a paused exploration resumes at the next risk-day roll once nothing pauses it (no cooldown, no 3-day count)
+    top = len(bounds.rungs("min_lot_risk_cap")) - 1
+    if exploring and roll and target["min_lot_risk_cap"] == top and lvl["min_lot_risk_cap"] < top:
+        lvl["min_lot_risk_cap"] = top
+        reasons += ["minlot_explore", "min_lot_risk_cap:minlot_explore"]
 
     # -- loosening: at the roll only, one step, after 3 qualifying days and 10 new demo trades, not in the cooldown --
     streak = {f: (prev.up_streak.get(f, 0) if prev else 0) for f in FIELDS}
@@ -450,39 +490,41 @@ def step(prev: LimitsState | None, ev: Evidence | None, day: date, bounds: Limit
                 n_at[f] = len(demo)
                 reasons += ["loosen", f"{f}:loosen"]
 
-    state = LimitsState(account_id=acct, day=day, limits=bounds.limits_at(lvl), up_streak=streak,
+    state = AdaptiveState(account_id=acct, day=day, limits=bounds.limits_at(lvl), up_streak=streak,
                         loosened_day=loosened_day, demo_n_at_loosen=n_at, tightened_day=last_tight,
-                        floors_until=floors_until, loss_streak_ns=streak_ns)
+                        floors_until=floors_until, loss_streak_ns=streak_ns, minlot_explore_stopped=stopped)
     return state, tuple(dict.fromkeys(reasons))
 
 
-def changes_between(prev: LimitsState | None, new: LimitsState, reasons: Sequence[str], ev: Evidence | None, *,
-                    ts_ns: int) -> list[LimitChange]:
+def changes_between(prev: AdaptiveState | None, new: AdaptiveState, reasons: Sequence[str], ev: Evidence | None, *,
+                    ts_ns: int, baseline: Limits | None = None) -> list[AdaptiveChange]:
     """One `adaptive_changes` row per field whose value changed: old, new, the reason codes that apply to it (the plain
-    codes plus its own `<field>:<code>` ones) and the ids of the trades the evaluation used."""
-    if prev is None:
+    codes plus its own `<field>:<code>` ones) and the ids of the trades the evaluation used. A first evaluation
+    (no `prev`) is compared with `baseline` (the floors), so a first-day exploration cap is logged too."""
+    before = prev.limits if prev is not None else baseline
+    if before is None:
         return []
     ids = tuple(t.id for t in ev.used()) if ev is not None else ()
     plain = [r for r in reasons if r.split(":", 1)[0] not in FIELDS]
-    rows: list[LimitChange] = []
+    rows: list[AdaptiveChange] = []
     for f in FIELDS:
-        a, b = getattr(prev.limits, f), getattr(new.limits, f)
+        a, b = getattr(before, f), getattr(new.limits, f)
         if a == b:
             continue
         own = [r.split(":", 1)[1] for r in reasons if r.startswith(f + ":")]
-        rows.append(LimitChange(account_id=new.account_id, day=new.day, field=f, old=a, new=b,
+        rows.append(AdaptiveChange(account_id=new.account_id, day=new.day, field=f, old=a, new=b,
                                 reasons=tuple(dict.fromkeys([*plain, *own])), evidence_ids=ids, ts_ns=ts_ns))
     return rows
 
 
 # ---- persistence (core.db migration 4) -------------------------------------------------------------------------------
 
-STATE: RecordRepo[LimitsState] = RecordRepo(
-    "adaptive_state", LimitsState, key="account_id", tolerant=True,
+STATE: RecordRepo[AdaptiveState] = RecordRepo(
+    "adaptive_state", AdaptiveState, key="account_id", tolerant=True,
     columns={"account_id": lambda s: s.account_id, "day": lambda s: s.day.isoformat()})
 
 
-class LimitsStore:
+class AdaptiveStore:
     """core.db `adaptive_state` and `adaptive_changes`, opened (and migrated) on first use. Errors propagate: the
     controller turns them into the floors and a dq_event."""
 
@@ -496,11 +538,11 @@ class LimitsStore:
             self._db = Database.open(self.state_dir, "core")
         return self._db
 
-    def load(self, account_id: str) -> LimitsState | None:
+    def load(self, account_id: str) -> AdaptiveState | None:
         with self.db.connection() as conn:
             return STATE.get(conn, account_id)
 
-    def save(self, state: LimitsState, changes: Sequence[LimitChange]) -> None:
+    def save(self, state: AdaptiveState, changes: Sequence[AdaptiveChange]) -> None:
         """The state and its change rows in one transaction (synchronous FULL)."""
         with self.db.write() as conn:
             STATE.upsert(conn, state)
@@ -510,11 +552,11 @@ class LimitsStore:
                 [(c.account_id, c.day.isoformat(), c.field, c.old, c.new, json.dumps(list(c.reasons)),
                   json.dumps(list(c.evidence_ids)), c.ts_ns) for c in changes])
 
-    def changes(self, account_id: str) -> list[LimitChange]:
+    def changes(self, account_id: str) -> list[AdaptiveChange]:
         with self.db.connection() as conn:
             rows = conn.execute("SELECT account_id, day, field, old, new, reasons, evidence_ids, ts_ns FROM adaptive_changes "
                                 "WHERE account_id = ? ORDER BY id", (account_id,)).fetchall()
-        return [LimitChange(account_id=a, day=date.fromisoformat(d), field=f, old=o, new=n,
+        return [AdaptiveChange(account_id=a, day=date.fromisoformat(d), field=f, old=o, new=n,
                             reasons=tuple(json.loads(r)), evidence_ids=tuple(json.loads(e)), ts_ns=ts)
                 for a, d, f, o, n, r, e, ts in rows]
 
@@ -528,25 +570,21 @@ def _log_dq(code: str, detail: str) -> None:
     log.warning("dq_event %s: %s", code, detail)
 
 
-class LimitsController(Protocol):
-    """The seam RiskGate's caller reads limits through (lane B adds a StaticController behind the same call)."""
-
-    def current(self, account_id: str, evidence: Any) -> Limits: ...
-
-
 class AdaptiveController:
     """ADR 0031 per account: `current` loads the state, runs one `step`, records any change and returns the limits.
     Fails closed: evidence that is missing or does not validate, a state that cannot be read, or a change that cannot
-    be written gives the floors and a dq_event (`dq(code, detail)`; lane B routes it to the dq_events store)."""
+    be written gives the floors and a dq_event (`dq(code, detail)`; lane B routes it to the dq_events store).
+    ADR 0032's seam (`limits_profile.LimitsController.current(account, LimitsEvidence)`) reaches this through an adapter
+    lane B writes: it builds `Evidence` and maps `Limits` onto `RiskLimitsCurrent`."""
 
     def __init__(self, state_dir: str | Path, bounds: LimitBounds, *, dq: DqSink | None = None,
                  clock: Callable[[], int] = time.time_ns):
         self.bounds = bounds
-        self.store = LimitsStore(state_dir)
+        self.store = AdaptiveStore(state_dir)
         self.dq: DqSink = dq or _log_dq
         self.clock = clock
 
-    def step(self, prev: LimitsState | None, ev: Evidence | None, day: date) -> tuple[LimitsState, tuple[str, ...]]:
+    def step(self, prev: AdaptiveState | None, ev: Evidence | None, day: date) -> tuple[AdaptiveState, tuple[str, ...]]:
         return step(prev, ev, day, self.bounds)
 
     def current(self, account_id: str, evidence: Evidence | Mapping[str, Any] | None) -> Limits:
@@ -569,13 +607,13 @@ class AdaptiveController:
             self.dq("adaptive_limits_evidence_invalid", f"{account_id}: {detail or why}")
         if new != prev:
             try:
-                self.store.save(new, changes_between(prev, new, reasons, ev, ts_ns=now))
+                self.store.save(new, changes_between(prev, new, reasons, ev, ts_ns=now, baseline=self.bounds.floor))
             except Exception as exc:      # an unrecorded change never applies
                 self.dq("adaptive_limits_state_unwritable", f"{account_id}: {type(exc).__name__}")
                 return self.bounds.floors()
         return new.limits
 
 
-__all__ = ["AdaptiveController", "DailyStat", "Evidence", "FIELDS", "LimitBounds", "LimitChange", "Limits",
-           "LimitsController", "LimitsState", "LimitsStore", "TradeEvidence", "changes_between", "combined_lcb",
-           "daily_lcb", "day_of_ns", "day_start_ns", "quarter_kelly_q", "step"]
+__all__ = ["AdaptiveChange", "AdaptiveController", "AdaptiveState", "AdaptiveStore", "DailyStat", "Evidence", "FIELDS",
+           "LimitBounds", "Limits", "TradeEvidence", "changes_between", "combined_lcb", "daily_lcb", "day_of_ns",
+           "day_start_ns", "quarter_kelly_q", "step", "strategy_q"]

@@ -1,5 +1,5 @@
 id: R52
-requirement: 'Adaptive risk limits (ADR 0031): account daily/weekly caps, supervisor caps and the minimum-lot cap learnt from demo fills after each strategy''s freeze, between floors (defaults) and owner-approved demo ceilings; live never above the defaults; tighten at once, loosen one step at the risk-day roll; fail closed to the floors'
-status: 'partial: controller, rules and core.db tables (lane A); runner wiring and ceilings config are lane B; trading-safety, quant and CFO review pending'
-code: goldbot/risk/adaptive.py (`step`, `AdaptiveController`, `LimitsStore`); goldbot/db/migrations.py core migration 4 `adaptive_limits` (`adaptive_state`, append-only `adaptive_changes`)
+requirement: 'Adaptive risk limits (ADR 0031): account daily/weekly caps, supervisor caps and the minimum-lot cap learnt from demo fills after each strategy''s freeze, between floors (defaults) and owner-approved demo ceilings; live never above the defaults; tighten at once, loosen one step at the risk-day roll; demo minimum-lot exploration budget (Amendment A1); fail closed to the floors'
+status: 'partial: controller, rules and core.db tables (lane A); runner wiring through ADR 0032''s seam is lane B; Amendment A1 applied; trading-safety, quant re-review and CFO review pending'
+code: goldbot/risk/adaptive.py (`step`, `strategy_q`, `AdaptiveController`, `AdaptiveStore`); goldbot/db/migrations.py core migration 4 `adaptive_limits` (`adaptive_state`, append-only `adaptive_changes`)
 test: tests/test_adaptive_limits.py; tests/test_persistence_compat.py::test_the_older_release_reads_a_file_the_newer_release_wrote[limits_state]

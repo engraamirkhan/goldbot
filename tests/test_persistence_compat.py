@@ -308,16 +308,16 @@ def case_limits_state(tmp: Path) -> None:
     """core.db adaptive-limits row (ADR 0031) with a field from a newer release, at the top level and in the limits."""
     from datetime import date
 
-    state = adaptive.LimitsState(account_id="icm-demo", day=date(2026, 11, 2), up_streak={"daily_cap": 2},
+    state = adaptive.AdaptiveState(account_id="icm-demo", day=date(2026, 11, 2), up_streak={"daily_cap": 2},
                                  limits=adaptive.Limits(daily_cap=0.025, weekly_cap=0.06, supervisor_daily_cap=0.015,
                                                         supervisor_weekly_cap=0.04, min_lot_risk_cap=0.006))
-    store = adaptive.LimitsStore(tmp)
+    store = adaptive.AdaptiveStore(tmp)
     store.save(state, [])
     with sqlite3.connect(tmp / "core.db") as conn:
         body = json.loads(conn.execute("SELECT body FROM adaptive_state").fetchone()[0])
         body = {**_newer(body), "limits": _newer(body["limits"])}
         conn.execute("UPDATE adaptive_state SET body = ?", (json.dumps(body),))
-    assert adaptive.LimitsStore(tmp).load("icm-demo") == state
+    assert adaptive.AdaptiveStore(tmp).load("icm-demo") == state
 
 
 def case_trial_dsr_inputs(tmp: Path) -> None:
@@ -398,7 +398,7 @@ def test_every_persisted_record_model_has_a_compat_case():
                BrokerTerms, CostTable, PublishedCostTable, scheduler.JobState, health.WatchState, health.HealthReport,
                DigestState, OutboxState, crossfeed.ReconcileReport, ledger.LedgerReport,
                ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation, limits_profile.LimitsState,
-               limits_profile.LimitsChange, adaptive.LimitsState, DsrInputs, DaySummedDsr,
+               limits_profile.LimitsChange, adaptive.AdaptiveState, DsrInputs, DaySummedDsr,
                AttributionReport, TickIndex,
                # the engine's orders file: tests/test_engine_safety.py::
                # test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote

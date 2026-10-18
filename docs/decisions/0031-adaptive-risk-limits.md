@@ -1,7 +1,7 @@
 # 0031: Adaptive risk limits
 
-Status: proposed (implementer, 2026-10-18; rules frozen before any replay; needs trading-safety, quant and CFO
-review). Lane A: the controller (`goldbot/risk/adaptive.py`) and its tables; lane B wires it into the runner.
+Status: proposed (implementer, 2026-10-18; rules frozen before any replay; Amendment A1 from the quant review the same
+day, before any replay; needs trading-safety, quant re-review and CFO review). Lane A: the controller (`goldbot/risk/adaptive.py`) and its tables; lane B wires it into the runner.
 
 ## Context
 The owner wants the account limits to be "learnt over time" instead of fixed. Owner-approved DEMO ceilings: account
@@ -75,18 +75,43 @@ The frozen rules, verbatim:
 13. **Bounds can only tighten a stored value.** A stored value is mapped to the highest rung at or below it, so a
     changed ceiling (or a demo account turned live) never raises a limit.
 
+### Amendment A1 (quant review, 2026-10-18, before any replay)
+The quant review of 17b0616 changed two rules. Both are frozen like the rest; no replay had been run.
+
+1. **Kelly, per strategy (replaces reading 1 and the pooled E[r²]).** For each strategy s,
+   q_s = min(LCB_s / (4·E[r²]_s), N̄_s·LCB_s / (4·E[D_s²])) / 3%. Here D_s are its daily net-R sums, N̄_s its mean
+   trades per day and E[r²]_s its own per-trade mean square, never pooled across strategies. Then
+   q = min over strategies with evidence, clamped to [0, 1]. The day term binds when losses cluster on the same days.
+   Same-day correlated trades then lower q, which the per-trade term alone cannot see.
+2. **Minimum-lot cold start: a fixed exploration budget, DEMO only.** The cap is 1.0% (the top rung) for the first 60
+   exception trades; the account daily and weekly floors still apply.
+   - Every demo exception trade after its strategy's freeze counts toward the 60, including today's.
+   - Pre-registered stop: when the cumulative net R of those trades is at or below −10R, the cap is off for good.
+     A re-test is a new trial, so a new state row.
+   - Pauses (not a permanent off): the ATR rule (20-day median ATR15 at or above the 1-year p90), SIZE_DOWN/HALTED
+     and cost/model above 1.25 pause it while they hold. Drawdown and the loss streak pause it only for their stated
+     duration.
+   - A paused budget resumes at the next risk-day roll once nothing pauses it, without the 5-day cooldown or the 3-day
+     count (intraday only tightens).
+   - The 1.10–1.25 cost step does not lower the budget, because its cap is fixed.
+   - From n = 60 the LCB rule decides in both directions: off unless demo n ≥ 60 and the exception-trade LCB is above
+     0, then up the 0.6 → 0.8 → 1.0 ladder.
+   - Live and tiny-live are unaffected (`LimitBounds.build` enables exploration on demo only).
+   - The first-day cap is logged in `adaptive_changes` against the floors.
+
+This resolves the deadlock flagged under Consequences: the demo can collect the exception-trade evidence.
+
 ### Persistence
 core.db migration 4 (additive, after ADR 0032's migration 3): `adaptive_state` (one row per account: values and the
-hysteresis counters) and `adaptive_changes` (append-only: account, risk day, field, old, new, reason codes, evidence ids, epoch_ns). No JSON
-state file.
+hysteresis counters) and `adaptive_changes` (append-only: account, risk day, field, old, new, reason codes, evidence
+ids, epoch_ns). The table names differ from ADR 0032's `limits_state` and `limits_changes`. No JSON state file.
 
 ## Consequences
 - Limits rise only on demo evidence after a strategy's freeze, slowly (3 days, 10 new trades, one step), and fall at
   once. Live accounts never rise above the defaults.
-- Risk flagged for the owner: the minimum-lot floor is "off". The £1,000 demo needs the exception to trade 15m at
-  0.01 lot, and the exception unlocks only on exception-trade evidence. Wired as specified, the demo would stop taking
-  minimum-lot trades and never collect that evidence (a deadlock). Lane B must decide, with the owner, whether the
-  minimum-lot floor on that demo is today's server setting.
+- Flagged in the first version: the minimum-lot floor is "off", so the £1,000 demo would stop taking minimum-lot
+  trades and never collect the evidence that unlocks the cap (a deadlock). Resolved by Amendment A1's exploration
+  budget, which risks at most about 10R of exception trades before it stops for good.
 - The supervisor fields are computed with the same q as the account; a fleet with any live account uses default
   supervisor ceilings.
 - Any change to a frozen rule, a ceiling or a floor is an owner decision and a new ADR.
