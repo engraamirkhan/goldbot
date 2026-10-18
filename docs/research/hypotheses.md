@@ -237,6 +237,26 @@ Known low value, recorded as **not proposed** so they are not re-proposed:
 - cost-filtered entry as a research-window trial (about 70 events at today's cost level);
 - further 15m wide-target variants of R-01, R-02 and R-05.
 
+## A9. Next generation after the batch (strategy-researcher, 2026-10-18)
+
+Source: `next-gen-2026-10-18.md`. Event counts were computed by counting only (no outcome). The gates were chosen
+after the published side tables were seen, so each row is charged in full and carries controls that can only
+downgrade the verdict. P(PASS) is 1-2% by construction: t ≈ 3.97 needs a net annual Sharpe of about 1.0 on gold
+alone. All rows are shadow-only at £1,000.
+
+| ID | Hypothesis | Status | Events (count only) | Trials | Reading |
+|---|---|---|---:|---|---|
+| H-32 | 1h tsmom (#16 defaults) + H-06 macro gate (`macro_gate: true`, `2af4a90fa439`) | **pre-registered**, not dispatched, unfunded | 1,686 (188 in 2024-25) | 1 | batch §2 at K ≥ 55; plus G1 (net ≥ #16's −0.079 R + 0.03 R), G2 (2022-24 net > 0) and the filter lift (kept vs rejected gross, Welch t ≥ 1). FAIL retires the macro gate on 1h-4h tsmom |
+| H-31 | 1h tsmom (#16 defaults) with side = sign(d1 close − SMA200) (`trend_align: d1_sma200`, `7a677f1dab2e`) | **pre-registered**, not dispatched; needs the key implemented (lookahead test) and funding | 2,527 (345) | 1 | batch §2 at K ≥ 55; plus the filter lift and a drift control on the long side (at most LEAD if long ≤ the drift baseline). FAIL retires daily-regime alignment as a 1h-4h tsmom filter |
+| H-33 | Owner's structure (`trend_swing`) as a filter on momentum | **routed into H-02** (D-TVR group); 0 trials | 2,709 at 1h (reference only) | 0 | The group survives H-02: one survivor-slot trial (4h, same rule as H-31). It does not: R-09 extended to structure-as-filter |
+
+Not proposed, so they are not re-proposed without new evidence:
+- long-only 1h/4h trend (side picked from seen tables; mostly drift beta, per Huang et al. 2020);
+- 4h regime-aligned tsmom (about 1,190 events, PASS needs about +0.30 R gross);
+- any 1d trend (≤ 454 events);
+- volatility-scaled exposure (R-08);
+- cost-amortising exit variants beyond H-28 (worth about 0.02 R under the constant swap prior).
+
 ## B. Retired: do not re-test without new evidence
 
 The governing list is `research.retired_families` in `config/settings.yaml` (family, row id, retired date, reason,
@@ -269,6 +289,7 @@ a quarter (to the one with the best post-retirement evidence, else by rotation) 
 | Owner-indicator replica (2026-10-18; `prereg-tv-replica-2026-10-18.md`; pre-registered, **not dispatched**, unfunded) | +2 (H-TVR1, H-TVR2) if funded; +1 if H-TVR3 triggers | D-TVR: K_eff +1 inside H-02 if adopted | Registry `n_trials_effective` at the verdict date, **never below 55** |
 | Q2 2027 (draft) | #41–#60 at most | SW-0 if it runs: K_eff ≈ 16 (about 8 groups × 2 sides, `survivor_unit: group`); H-14 survivors and Q1 follow-ups add 1 each | **About 77 + the other Q2 trials** (the swing lane's projection: 60 + SW-0's row + its K_eff ≈ 16). On the updated Q1 base of about 66 the same sum is about 83 + the other Q2 trials. Either way the gate-1 bar is a t of about 4.1. Nothing in the lane lists adds to K until a row runs |
 | Q4 2026, H-25 (pre-registered 2026-10-18, **not dispatched**; `prereg-h25-precision-stop-2026-10-18.md`) | +1 (#56 in budget order; needs the override 55 -> 56) | `k_eff: 19` on its row (tight-stop study's 19 entry variants) | **Registry `n_trials_effective` at the verdict, never below 75** (about 85 once H-02's K_eff is recorded); gate-1 t about 4.1 |
+| Next generation (2026-10-18; `next-gen-2026-10-18.md`; pre-registered, **not dispatched**, unfunded) | +2 (H-31, H-32) if funded | H-33: 0 (inside H-02's D-TVR K_eff) | Registry `n_trials_effective` at the verdict, **never below 55** (t ≈ 3.97; ≈ 4.09 once H-25's K_eff is recorded) |
 
 ## Next generation (after Q1 verdicts)
 
