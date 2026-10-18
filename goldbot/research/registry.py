@@ -598,7 +598,7 @@ class TrialRegistry:
             raise TrialBudgetExceeded(
                 f"trial budget exceeded: {q} allows {cap} pre-registered trials, {used} already run, {n_new} requested. "
                 f"Every trial raises the deflated-Sharpe bar for all later ones; pre-register fewer variants, wait for "
-                f"next quarter, or raise research.trial_budget_quarter in config/settings.yaml (an owner decision).")
+                f"next quarter, or raise research.trial_budget_quarter / trial_budget_overrides in config/settings.yaml (an owner decision).")
         return q
 
     def check_budget_reserved(self, jobs: Sequence[tuple[str, dict[str, Any]]], cap: int, reserved_setting: int,

@@ -402,14 +402,16 @@ def test_research_yml_passes_discovery_values_only_in_equals_form_after_a_famili
     """A value given as a separate argument after `--families` (nargs="?") can be an option itself, e.g.
     families=--registry=/tmp/x would move where the trial row is written: values go in the equals form only."""
     wf = yaml.safe_load((ROOT / ".github/workflows/research.yml").read_text())
-    run = "\n".join(s.get("run", "") for s in wf["jobs"]["walk-forward"]["steps"])
-    assert '--families="$FAMILIES"' in run and '--discover-config="$DISCOVER_CONFIG"' in run
-    assert '--rule-ref="$RULE_REF"' in run
+    run = "\n".join(s.get("run", "") for s in wf["jobs"]["trials"]["steps"])
+    assert 'cells argv "$CELL"' in run                     # the cell's arguments come from cells.argv, validated by the plan
     assert not re.search(r'--(families|discover-config|rule-ref) "\$', run)        # never a separate argument
-    guard = 'case "$FAMILIES" in ""|column|feature|family|cluster) ;;'
-    assert guard in run and run.index(guard) < run.index('--families="$FAMILIES"')
+    from goldbot.research.cells import argv, plan
+    cell = plan({"DISCOVER": "true", "FAMILIES": "family", "DISCOVER_CONFIG": "{}", "RULE_REF": "x"})[0]
+    assert {"--families=family", "--discover-config={}", "--rule-ref=x"} <= set(argv(cell))
+    with pytest.raises(ValueError):                         # the guard of the old `case "$FAMILIES"`
+        plan({"DISCOVER": "true", "FAMILIES": "--registry=/tmp/x"})
 
 
 def test_research_yml_writes_the_registry_only_from_main() -> None:
     wf = yaml.safe_load((ROOT / ".github/workflows/research.yml").read_text())
-    assert "github.ref == 'refs/heads/main'" in wf["jobs"]["walk-forward"]["if"]
+    assert all("github.ref == 'refs/heads/main'" in job["if"] for job in wf["jobs"].values())

@@ -2,6 +2,10 @@ name: research
 # Walk-forward research on the published 1m bars (release data-v1). Runs on GitHub's runners because Claude
 # sandboxes cannot download release assets. The trial registry lives on release research-v1 so the deflated
 # Sharpe counts every trial ever run; the report is posted to the issue "research: <specialist>".
+# Trials run in parallel, the registry is written once: `plan` turns the inputs into cells (one trial each), `trials`
+# runs the cells side by side on a read-only registry snapshot (no write scope, no lock), `record` merges their rows
+# into the fresh registry under the lock, restates every deflated Sharpe on the final trial count and posts the reports
+# (goldbot.research.cells). A cell that failed still records a "failed" trial row, so no trial vanishes from the count.
 on:
   workflow_dispatch:
     inputs:
@@ -9,7 +13,7 @@ on:
       from_year:  { description: "first year of bars", default: "2010" }
       to_year:    { description: "last year of bars", default: "2026" }
       rationale:  { description: "why this trial (recorded in the registry)", default: "baseline walk-forward on Dukascopy 1m bars" }
-      variants:   { description: "JSON list of config overrides, one trial each (charged to the quarter's trial budget)", default: "[{}]" }
+      variants:   { description: "JSON list of config overrides, one trial each, run in parallel (charged to the quarter's trial budget)", default: "[{}]" }
       score_holdout: { description: "score these configurations on the held-out year (once per configuration, final)", type: boolean, default: false }
       skip_screen: { description: "fit the model even if the rule fails the primary-signal screen (recorded as skipped)", type: boolean, default: false }
       pooled:     { description: "15m or 1h: one pooled meta-model over every family on that timeframe (ignores specialist and variants)", default: "" }
@@ -18,36 +22,78 @@ on:
       families:   { description: "with discover: feature grouping (column, feature, family, cluster; empty = column)", default: "" }
       discover_config: { description: "with discover: JSON overrides of DiscoveryConfig, exactly as pre-registered", default: "{}" }
       rule_ref:   { description: "the pre-registered rule this run follows (e.g. preregistration-2027Q1.md#reserve); empty = none", default: "" }
-# Least privilege: no scopes by default; walk-forward grants itself what it needs. Inputs reach the shell only via env:.
+      batch:      { description: "many trials at once: JSON list of objects {specialist, variants, pooled, timeframe, from_year, to_year, rationale, score_holdout, skip_screen, macro, discover, families, discover_config, rule_ref}; a missing key takes the input above; one cell per variant (max 64, 10 at a time); empty = the single-trial inputs", default: "" }
+# Least privilege: no scopes by default; each job grants itself what it needs. Inputs reach the shell only via env:.
 permissions: {}
 jobs:
-  walk-forward:
-    if: ${{ github.ref == 'refs/heads/main' }}   # writes the shared registry: only reviewed, merged code
+  plan:
+    if: ${{ github.ref == 'refs/heads/main' }}   # only reviewed, merged code reaches the registry
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    concurrency:
-      group: research-registry   # one writer at a time for registry.jsonl, shared with preregister-quarter.yml
-      cancel-in-progress: false
+    timeout-minutes: 10
     permissions:
-      contents: write   # registry upload to release research-v1
-      issues: write     # report issue / comment
-    env:
-      GH_TOKEN: ${{ github.token }}
+      contents: read
+    outputs:
+      cells: ${{ steps.plan.outputs.cells }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: { python-version: "3.11", cache: pip }
       - run: pip install -e .
-      - name: fetch bars and the trial registry
+      - name: plan the cells (every value is validated before a runner starts)
+        id: plan
         env:
-          WANT_MACRO: ${{ inputs.macro }}
+          SPECIALIST: ${{ inputs.specialist }}
+          FROM_YEAR: ${{ inputs.from_year }}
+          TO_YEAR: ${{ inputs.to_year }}
+          RATIONALE: ${{ inputs.rationale }}
+          VARIANTS: ${{ inputs.variants }}
+          SCORE_HOLDOUT: ${{ inputs.score_holdout }}
+          SKIP_SCREEN: ${{ inputs.skip_screen }}
+          POOLED: ${{ inputs.pooled }}
+          MACRO: ${{ inputs.macro }}
+          DISCOVER: ${{ inputs.discover }}
+          FAMILIES: ${{ inputs.families }}
+          DISCOVER_CONFIG: ${{ inputs.discover_config }}
+          RULE_REF: ${{ inputs.rule_ref }}
+          BATCH: ${{ inputs.batch }}
+        run: |
+          python -m goldbot.research.cells plan > cells.json
+          echo "cells=$(cat cells.json)" >> "$GITHUB_OUTPUT"
+          python -c 'import json; [print(c["idx"], c["pooled"] or c["specialist"], json.dumps(c["variant"])) for c in json.load(open("cells.json"))]'
+
+  trials:
+    needs: plan
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false        # one crashed cell must not cancel the others: each leaves its own rows or a failed trial
+      max-parallel: 10
+      matrix:
+        cell: ${{ fromJSON(needs.plan.outputs.cells) }}
+    permissions:
+      contents: read          # downloads from releases of this public repo; nothing here writes the registry or an issue
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CELL: ${{ toJSON(matrix.cell) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -e .
+      - name: fetch bars and a read-only registry snapshot
+        env:
+          WANT_MACRO: ${{ matrix.cell.macro }}
         run: |
           gh release download data-v1 -p 'xauusd_1m_dukascopy_*.parquet' -D raw
           ls -la raw
-          # the published registry; fails the job if it exists but cannot be read (never an empty start that would
-          # overwrite it on save); empty only when research-v1 or its registry.jsonl does not exist yet
-          scripts/registry_release.sh fetch registry.jsonl
+          # the published registry, READ ONLY: this job has no write scope and never uploads it. Fails the job if it exists
+          # but cannot be read (never an empty start); empty only when research-v1 or its registry.jsonl does not exist yet
+          scripts/registry_release.sh fetch snapshot.jsonl
+          # the cell works on a copy; its own rows are the difference (cells.py delta)
+          mkdir -p cell out && cp snapshot.jsonl cell/registry.jsonl
           # the canonical broker's measured costs, published by the VPS after nightly_costs (costs only)
           gh release download costs-v1 -p costs_measured.json -D costs \
             || echo "no measured cost table on release costs-v1; research charges the settings priors (stated in the report)"
@@ -56,68 +102,87 @@ jobs:
             gh release download macro-v1 -p '*.parquet' -D macro
           fi
       - name: walk-forward
-        env:
-          SPECIALIST: ${{ inputs.specialist }}
-          FROM_YEAR: ${{ inputs.from_year }}
-          TO_YEAR: ${{ inputs.to_year }}
-          RATIONALE: ${{ inputs.rationale }}
-          VARIANTS: ${{ inputs.variants }}
-          SCORE_HOLDOUT: ${{ inputs.score_holdout && '--score-holdout' || '' }}
-          SKIP_SCREEN: ${{ inputs.skip_screen && '--skip-screen' || '' }}
-          POOLED: ${{ inputs.pooled }}
-          MACRO: ${{ inputs.macro && '--macro macro' || '' }}
-          DISCOVER: ${{ inputs.discover }}
-          FAMILIES: ${{ inputs.families }}
-          DISCOVER_CONFIG: ${{ inputs.discover_config }}
-          RULE_REF: ${{ inputs.rule_ref }}
         run: |
-          set -o pipefail
-          if [ -n "$POOLED" ]; then TARGET=(--pooled "$POOLED"); else TARGET=(--specialist "$SPECIALIST" --variants "$VARIANTS"); fi
-          # a pre-registered discovery (e.g. H-02) and the rule a run cites. Values go in the equals form only: as a
-          # separate argument a value could itself be an option (--families takes an optional value, so
-          # families=--registry=/tmp/x would move where the trial row is written)
-          case "$FAMILIES" in ""|column|feature|family|cluster) ;; *) echo "::error::bad families"; exit 1;; esac
-          EXTRA=()
-          if [ "$DISCOVER" = "true" ]; then
-            EXTRA+=(--discover --discover-config="$DISCOVER_CONFIG")
-            if [ -n "$FAMILIES" ]; then EXTRA+=(--families="$FAMILIES"); fi
-          fi
-          if [ -n "$RULE_REF" ]; then EXTRA+=(--rule-ref="$RULE_REF"); fi
-          TARGET+=("${EXTRA[@]}")
+          # the cell's arguments, built from the validated plan (values in the equals form only; see cells.argv). A failure
+          # here stops the step before research_pass.py can run with defaults
+          python -m goldbot.research.cells argv "$CELL" > args.bin
+          mapfile -d '' TARGET < args.bin
           # the measured cost table from release costs-v1 (docs/RUNBOOK.md section 4); the settings priors without it
           COSTS=(); if [ -f costs/costs_measured.json ]; then COSTS=(--cost-table costs/costs_measured.json); fi
-          # SCORE_HOLDOUT/SKIP_SCREEN/MACRO are constant flags or empty (set by expressions above), so they stay unquoted
-          # shellcheck disable=SC2086
-          python scripts/research_pass.py --bars raw --registry registry.jsonl --report report.md \
-            "${TARGET[@]}" --from-year "$FROM_YEAR" --to-year "$TO_YEAR" --rationale "$RATIONALE" \
-            "${COSTS[@]}" $SCORE_HOLDOUT $SKIP_SCREEN $MACRO 2>&1 | tee research.log
+          set +e
+          python scripts/research_pass.py --bars raw --registry cell/registry.jsonl --report out/report.md \
+            "${TARGET[@]}" "${COSTS[@]}" > out/research.log 2>&1
+          RC=$?
+          echo "{\"exit\": $RC}" > out/status.json
+          tail -n 40 out/research.log
+          # the rows this cell added; the record job merges them into the fresh registry
+          python -m goldbot.research.cells delta snapshot.jsonl cell/registry.jsonl out/rows.jsonl
+          exit "$RC"
+      - name: hand the cell's rows, report and log to the record job
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cell-${{ matrix.cell.idx }}
+          path: out/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  record:
+    needs: [plan, trials]
+    if: ${{ always() && github.ref == 'refs/heads/main' && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: research-registry   # one writer at a time for registry.jsonl, shared with preregister-quarter.yml
+      cancel-in-progress: false
+    permissions:
+      contents: write   # registry upload to release research-v1
+      issues: write     # report issue / comment
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CELLS: ${{ needs.plan.outputs.cells }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -e .
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true   # no cell reported at all: every cell is then recorded as failed below
+        with:
+          pattern: cell-*
+          path: cells
+      - name: merge the cells into the fresh registry
+        run: |
+          # the registry as it is now, under the lock: fails the job if it exists but cannot be read
+          scripts/registry_release.sh fetch registry.jsonl
+          echo "$CELLS" > plan.json
+          # append every cell's rows (a cell that left nothing gets a "failed" row), restate each deflated Sharpe on the
+          # final trial count, write the reports
+          python -m goldbot.research.cells record plan.json cells registry.jsonl reports.json
       - name: save the registry
         # union with whatever the VPS monthly loop or another workflow pushed while this ran, so no trial is dropped;
         # a failed read or a union shorter than the published copy fails the job instead of uploading
         run: scripts/registry_release.sh save registry.jsonl
-      - name: post the report to an issue
+      - name: post the reports to the issues
         if: always()
-        env:
-          SPECIALIST: ${{ inputs.pooled != '' && format('pooled_{0}', inputs.pooled) || inputs.specialist }}
         run: |
           python - <<'EOF'
           import json, os, pathlib, urllib.request
-          repo = os.environ["GITHUB_REPOSITORY"]; spec = os.environ["SPECIALIST"]
+          repo = os.environ["GITHUB_REPOSITORY"]
           hdr = {"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"}
           run_url = f"https://github.com/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
-          rep = pathlib.Path("report.md")
-          if rep.exists():
-              body = f"Run: {run_url}\n\n{rep.read_text()}"
-          else:
-              log = pathlib.Path("research.log").read_text(errors="replace")[-50000:] if pathlib.Path("research.log").exists() else "(no log)"
-              body = f"Run: {run_url}\n\n**The research pass failed.**\n\n```\n{log}\n```"
-          title = f"research: {spec}"
-          q = urllib.request.Request(f"https://api.github.com/repos/{repo}/issues?labels=research&state=open&per_page=50", headers=hdr)
-          existing = [i for i in json.load(urllib.request.urlopen(q)) if i["title"] == title]
-          if existing:   # one issue per specialist; each run is a comment so the history of trials stays readable
-              req = urllib.request.Request(existing[0]["comments_url"], data=json.dumps({"body": body}).encode(), headers=hdr)
-          else:
-              req = urllib.request.Request(f"https://api.github.com/repos/{repo}/issues",
-                                           data=json.dumps({"title": title, "body": body, "labels": ["research"]}).encode(), headers=hdr)
-          print(urllib.request.urlopen(req).status)
+          p = pathlib.Path("reports.json")
+          reports = json.loads(p.read_text()) if p.exists() else [
+              {"title": "research: run failed", "body": "The record job failed before it wrote the reports."}]
+          for rep in reports:
+              title, body = rep["title"], f"Run: {run_url}\n\n{rep['body']}"
+              q = urllib.request.Request(f"https://api.github.com/repos/{repo}/issues?labels=research&state=open&per_page=50", headers=hdr)
+              existing = [i for i in json.load(urllib.request.urlopen(q)) if i["title"] == title]
+              if existing:   # one issue per specialist; each run is a comment so the history of trials stays readable
+                  req = urllib.request.Request(existing[0]["comments_url"], data=json.dumps({"body": body}).encode(), headers=hdr)
+              else:
+                  req = urllib.request.Request(f"https://api.github.com/repos/{repo}/issues",
+                                               data=json.dumps({"title": title, "body": body, "labels": ["research"]}).encode(), headers=hdr)
+              print(title, urllib.request.urlopen(req).status)
           EOF

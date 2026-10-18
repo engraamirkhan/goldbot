@@ -154,3 +154,40 @@ def test_settings_without_any_holdout_window_still_load(tmp_path):
     (tmp_path / "settings.local.yaml").write_text(
         yaml.safe_dump({"research": {"holdout_from": None, "holdout_to": None}}), encoding="utf-8")
     assert load_settings(tmp_path / "settings.yaml").research.holdout_from is None
+
+
+# ---- per-quarter trial budget override (owner directive 2026-10-18)
+def _research(**kw):
+    raw = _raw()
+    raw["research"].update(kw)
+    return Settings.model_validate(raw).research
+
+
+def test_a_quarter_override_raises_the_budget_of_that_quarter_only():
+    r = _research(trial_budget_quarter=20, trial_budget_overrides={"2026Q4": 53})
+    assert r.budget_for("2026Q4") == 53
+    assert r.budget_for("2027Q1") == 20
+
+
+def test_an_override_below_the_base_budget_is_rejected():
+    with pytest.raises(ValidationError, match="trial_budget_overrides"):
+        _research(trial_budget_quarter=20, trial_budget_overrides={"2026Q4": 19})
+
+
+@pytest.mark.parametrize("key", ["2026-Q4", "2026Q5", "Q4"])
+def test_an_override_with_a_malformed_quarter_key_is_rejected(key):
+    with pytest.raises(ValidationError, match="trial_budget_overrides"):
+        _research(trial_budget_overrides={key: 53})
+
+
+def test_the_shipped_settings_raise_2026q4_to_53_and_leave_other_quarters_at_the_base():
+    r = Settings.model_validate(_raw()).research      # the yaml itself: conftest's base_trial_budget clears the cached copy
+    assert r.budget_for("2026Q4") == 53
+    assert r.budget_for("2027Q1") == r.trial_budget_quarter
+
+
+def test_the_director_quarter_budget_follows_the_override():
+    from goldbot.research.director import quarter_budget
+    r = _research(trial_budget_quarter=20, trial_budget_overrides={"2026Q4": 53})
+    assert quarter_budget(r, "2026Q4") == 53
+    assert quarter_budget(r, "2027Q1") == 20

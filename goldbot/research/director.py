@@ -301,9 +301,13 @@ class ResearchPlan(FrozenRecord):
 
 
 # ---------------------------------------------------------------------------------------------- budget and holdout
-def quarter_budget(research: Any) -> int:
-    """research.trial_budget_quarter when the settings have it, else DEFAULT_QUARTER_BUDGET (read defensively: the
+def quarter_budget(research: Any, quarter: str | None = None) -> int:
+    """The budget of `quarter` (default the current one): research.budget_for (the per-quarter override, else
+    research.trial_budget_quarter) when the settings have it, else DEFAULT_QUARTER_BUDGET (read defensively: the
     setting arrives with the P2 change)."""
+    per_quarter = getattr(research, "budget_for", None)
+    if callable(per_quarter):
+        return int(per_quarter(quarter or quarter_of()))
     v = getattr(research, "trial_budget_quarter", None)
     return int(v) if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else DEFAULT_QUARTER_BUDGET
 
