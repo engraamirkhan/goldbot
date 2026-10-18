@@ -17,6 +17,10 @@ does four things:
    ladder (sections 3-5);
 4. lists the zero-trial routes, the ranking, the owner decisions and the ledger (sections 6-9).
 
+**Status after the count (section 10).** H-34 and H-35 are **withdrawn before dispatch, 0 trials**: a structure
+stop on a 15m CHoCH is a median 3.3 ATR15, so almost no candidate fits 0.01 lot at £1,000 (16 and 18 candidates at
+the widest rungs). Open: the owner's export and its mapping (section 1, H-36) and D-OMTF (section 6).
+
 **Outcome-blind attestation.** No return, R, hit rate, label or outcome of any configuration here has been computed
 or read. Sections 1-5 and 7-9 were written and committed **before** any event count of these rules was computed
 (the commit that adds this file holds no counts). Section 10 adds counts only, in a later commit. No holdout bar
@@ -347,6 +351,48 @@ If funding is scarce: rank 1 and 2 first, and H-34 and H-35 wait for the owner m
 | Holdout | untouched: counts end 2025-09-30; the owner map flags holdout-dated trades (1.3) |
 | Rungs | count-selected, not outcome-selected; only one rung per trial is ever labelled, so no K_eff is added for the ladder |
 
-## 10. Event counts (counts only, no outcome)
+## 10. Event counts (counts only, no outcome; added after the design commit)
 
-*To be filled in a later commit, after this design is committed.*
+Computed 2026-10-18 by a scratch script (not committed) on the integration branch's code (`smc_replica`,
+`resample_bars`, `mid`, `h16.cut_before_holdout`): Dukascopy 1m (release `data-v1`) 2010-01-01..2025-09-30, cut at
+`research.holdout_from` before resampling; 369,786 15m bars, 92,500 1h bars, 25,077 4h bars; replica with
+`ReplicaParams()` from each series' first bar; 1h/4h joined as of `visible_at <= t + 15m` (asserted). No label,
+return or outcome was computed.
+
+| Trial | Rung | Conditions | Before stop cap and room | **Candidates** | Long | Short |
+|---|---|---|---:|---:|---:|---:|
+| H-34 | L0 | C1 C2 C3 C4 C5 | 214 | **0** | 0 | 0 |
+| H-34 | L1 | C1 C2 C3 C4 | 1,614 | **7** | 3 | 4 |
+| H-34 | L2 | C1 C2 C3 | 2,574 | **11** | 3 | 8 |
+| H-34 | L3 | C1 C3 | 4,110 | **16** | 4 | 12 |
+| H-35 | L0 | R1 R2 R3 R4 | 214 | **0** | 0 | 0 |
+| H-35 | L1 | R1 R3 R4 | 1,687 | **9** | 2 | 7 |
+| H-35 | L2 | R1 R3 | 3,370 | **18** | 8 | 10 |
+
+None in 2024-2025 at any rung. **What binds is the stop cap, not the conditions.** Across all 8,385 15m internal
+CHoCHs (the bare trigger), the structure stop of section 3.2 (beyond the 4-hour pullback extreme, + 0.1 ATR15) is
+2.29 / 2.71 / **3.32** / 4.04 / 4.86 ATR15 at the 10th / 25th / 50th / 75th / 90th percentile. Only 34 of 8,385 fit
+the 1.5 × ATR15 cap. The room filter alone keeps 4,395 (median room to the 1h 50-bar extreme: 7.1 ATR15).
+
+**Decision under section 4.3 (fixed before the count).** No rung of either trial reaches 1,500 candidates.
+**H-34 and H-35 are withdrawn before dispatch: 0 trials used, 0 added to K.** The overlap rule is moot. No reworded
+rule is written from these counts: a wider stop cap would be chosen after seeing them, and it would not be placeable
+anyway (next paragraph).
+
+**What the counts teach (a sizing fact, not an edge).** A stop placed where a structure trader places it on a 15m
+CHoCH, beyond the pullback, is typically about 3.3 ATR15: about $27 per ounce at today's median ATR15 of $8.01. At
+0.01 lot that is about £20, i.e. **2% of £1,000, the whole effective daily loss limit in one trade**, and twice the
+demo minimum-lot exception (1%). On a £50 account the same 0.01-lot stop is about 40% of equity per trade, which
+matches section 2. So the owner's style, done with structure stops, is not placeable at £1,000 under the rails: at
+0.5% risk the 0.01 lot needs about £4,000 of equity, at 1% about £2,000. Changing equity or risk per trade is an
+owner decision; nothing here proposes it. With a tight ATR stop instead, the rule becomes TVR-like, which the B4b
+ruling closes.
+
+**What stays open.** D-OMTF (the 1h/4h replica context as one O-4 group, 0 trials) and H-36 (the owner's own trades,
+section 1). Both are unaffected by this count: features are not rules, and H-36's evidence is his own record.
+
+### 10.1 Sections superseded by the count
+
+- Section 0's "ruling needed" and section 8's funding request lapse: nothing is left to dispatch.
+- Section 7's ranking becomes: 1. owner export + `owner-replica-map`; 2. D-OMTF in O-4; 3. H-36 when his map exists.
+- Ledger (section 9): **0 registry trials**; D-OMTF K_eff +1 in O-4 if adopted; H-36 1 + K_map if it runs.
