@@ -147,6 +147,9 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' 
        "base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 
 
+MT5_CHART_MAX_AGE_S = 300.0
+
+
 def supervisor_heartbeat_age_s(sup: dict[str, Any], now: float) -> float:
     """The Feeds page's supervisor heartbeat age: 1e9 (not reporting, the page marks it bad) when missing, not a
     finite number or stamped more than a few seconds in the future, which would otherwise show as fresh for ever
@@ -1073,6 +1076,22 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
 
     # ============================================================== Chart tab: saved TradingView layouts
     # The URL identifies the owner's TradingView layout: only the owner reads it back, and the audit row never holds it.
+    # The MT5 terminal's own chart (IC Markets, Wine/Xvfb), screenshotted every 60 s on the MT5 box and pulled by the
+    # brain (docs/RUNBOOK.md "MT5 terminal chart on the dashboard"). Read-only; the file's mtime is the capture time.
+    @app.get("/api/chart/mt5", responses={200: {"content": {"image/png": {}}}, 404: {"description": "no fresh capture"}})
+    def chart_mt5(_: User = Depends(auth)) -> Response:
+        png = Path(st.dir) / "chart" / "mt5.png"
+        try:
+            captured = png.stat().st_mtime
+            body = png.read_bytes()
+        except OSError:
+            raise HTTPException(404, "no MT5 chart capture yet") from None
+        age = time.time() - captured
+        if age > MT5_CHART_MAX_AGE_S:
+            raise HTTPException(404, f"the MT5 chart capture is stale ({int(age)} s old)")
+        iso = datetime.fromtimestamp(captured, tz=timezone.utc).isoformat()
+        return Response(body, media_type="image/png", headers={"X-Captured-At": iso, "Cache-Control": "no-store"})
+
     @app.get("/api/chart/layouts", response_model=ChartLayoutsView)
     def chart_layouts_get(u: User = Depends(auth)) -> ChartLayoutsView:
         owner = st.auth.is_owner(u)
