@@ -2,7 +2,7 @@
 # Merge smoke (<= 60 s): the cross-cutting structural checks that targeted lane tests miss and only the full suite caught.
 #   scripts/merge_smoke.sh [BASE]    BASE: ref to diff against for "changed files" (default: HEAD^1 when HEAD is a merge
 #                                    commit, else the merge-base with $INTEGRATION_BRANCH)
-# Steps: structural tests (runner LINE_CAP, persistence strict allowlist, CLI help golden, GRID_V1/loop grid),
+# Steps: structural tests (program ledger + sync/import,runner LINE_CAP, persistence strict allowlist, CLI help golden, GRID_V1/loop grid),
 # migration numbers unique and gap-free, settings.yaml loads, ruff on changed files, mypy on changed modules.
 # Runs every step, prints which failed, exits 1 if any did. Env: MERGE_SMOKE_DRY_RUN=1 prints the steps only.
 # `scripts/docs_assemble.py merge` runs this after a successful merge (it warns, it never reverts).
@@ -29,7 +29,7 @@ step() {  # step NAME CMD...
   "$@" || FAILED+=("$name")
 }
 
-STRUCTURAL_TESTS=(tests/test_engine_structure.py tests/test_persistence_compat.py tests/test_ops_run_cli_golden.py
+STRUCTURAL_TESTS=(tests/test_ledger.py tests/test_ledger_sync_import.py tests/test_engine_structure.py tests/test_persistence_compat.py tests/test_ops_run_cli_golden.py
   tests/test_loop_grid.py tests/test_migrations.py tests/test_config.py)
 structural() { pytest -q -p no:cacheprovider -m "not integration" "${STRUCTURAL_TESTS[@]}"; }
 migrations_unique() {
