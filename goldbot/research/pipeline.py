@@ -86,15 +86,18 @@ def _auc(y: np.ndarray, p: np.ndarray) -> float | None:
 
 
 def lookahead_check(bars_dec: pd.DataFrame, context: dict[str, pd.DataFrame] | None, cut_frac: float = 0.7,
-                    feature_names: list[str] | None = None, ctx: dict | None = None) -> dict[str, Any]:
+                    feature_names: list[str] | None = None, ctx: dict | None = None,
+                    full: pd.DataFrame | None = None) -> dict[str, Any]:
     """Leakage check on the data actually used: build the decision frame on the full history and on the history
     truncated at `cut_frac` (context bars only those visible by then, ctx tables such as macro only the rows available
     by then). A feature whose value on a bar before the cut differs between the two used data from after the cut.
-    Returns the offending columns (empty = clean)."""
+    `full`: the decision frame (second item of build_decision_frame) already built on these bars, context, names and
+    ctx, reused instead of building it again; the result is the same. Returns the offending columns (empty = clean)."""
     bars_dec = bars_dec.reset_index(drop=True)
     cut = int(len(bars_dec) * cut_frac)
     cut_ts = pd.Timestamp(bars_dec["visible_at"].iloc[cut - 1])
-    _, full = build_decision_frame(bars_dec, context, feature_names, ctx)
+    if full is None:
+        _, full = build_decision_frame(bars_dec, context, feature_names, ctx)
     ctx_cut = {k: v[pd.to_datetime(v["visible_at"], utc=True) <= cut_ts] for k, v in (context or {}).items()}
     feat_ctx_cut = {k: v[pd.to_datetime(v["available_utc"], utc=True) <= cut_ts]
                     if isinstance(v, pd.DataFrame) and "available_utc" in v.columns else v for k, v in (ctx or {}).items()}
