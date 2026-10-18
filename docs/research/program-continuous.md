@@ -27,7 +27,7 @@ These rules are the program. A lane that breaks one has produced nothing, whatev
    bar `max(2.0, t⁻¹_{G−1}(1 − 0.025/m))`. The overall cell needs `max(2.0, t⁻¹_{G−1}(0.975))`. A row is a lead, not a
    licence: changing a strategy because of a row is a new registry trial.
 3. **K is honest and never resets.** `registry.n_trials_effective` counts every registry row ever recorded, plus each
-   discovery's K_eff (H-02 at `survivor_unit: group`, about 10; H-14 about 12). The owner-confirmed conservative
+   discovery's K_eff (H-02 at `survivor_unit: group`, about 10; H-14 about 17 since the O-4 amendments of 2026-10-17/18). The owner-confirmed conservative
    default adds every discovery's K_eff to every later trial. Gate 1 recomputes the deflated Sharpe on the K of the
    day it is read, so run order cannot lower the bar.
 4. **The budget is 20 trials a quarter and is never loosened to reach a result.** The state on 2026-10-17:
@@ -154,7 +154,7 @@ until a discovery screens them).
 | Point | K = `n_trials_effective` (projected) | Gate-1 t needed (approx.) | Net R needed at 1,000 trades (SD 1.4 R) |
 |---|---|---|---|
 | Today | 20 | about 3.5 | about 0.16 R |
-| End of Q1 2027 (40 rows + H-02 ~10 + H-14 ~12) | about 60 | about 4.0 | about 0.18 R |
+| End of Q1 2027 (40 rows + H-02 ~10 + H-14 ~17; was ~12 before the 2026-10-17/18 O-4 amendments) | about 67 | about 4.0 | about 0.18 R |
 | End of Q2 2027 (about 20 more rows) | about 80-100 | about 4.2 | about 0.19 R |
 | Two years at the full budget | about 200 | about 4.4 | about 0.20 R |
 

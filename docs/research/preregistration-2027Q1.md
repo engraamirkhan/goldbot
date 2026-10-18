@@ -824,6 +824,20 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
     power" table is re-read at that case before the count). The group must be coded before the pin (due 2026-12-11).
     Mechanism: Heston, Korajczyk & Sadka 2010, *J. Finance* 65(4) (equities, gross; untested on gold). No registry
     trial; no extra event or trade-rate pre-check (a slot summary of past returns is an outcome read).
+    - **Signed 2026-10-18, research director: ADOPTED into O-4 (Q1), 0 registry trials, K_eff +1.** Checked before
+      signing: (1) **allowed now.** O-4's group map and `DiscoveryConfig` dump are not pinned (due 2026-12-11), the
+      file is not frozen (`freeze_commit: null`, freeze 2026-12-14), O-4 has no registry row and no row in
+      `preregistration-2027Q1.yaml`, and no H-14 count, label or outcome exists; O-4's own condition date
+      (2027-02-12) is later still. (2) **No hashed row changes.** The YAML rows stay as they are: H-02's pinned
+      `DiscoveryConfig` dump and `f-51ac5ebabb`, H-01 `561030150146`, H-04 `3d33124f210c`, C4H `184bddf12019`, the
+      withdrawn H-06 `5650ad206bda`, and the default version `f-079deacc61`, **on one condition, pinned here: `tod_periodicity` is an opt-in family, never
+      in `DEFAULT_FEATURE_NAMES`** (as `day_type`), because `features.registry.feature_version` hashes the family
+      list. A build that adds it to the default set is refused at review. Only O-4's own (superseded, not yet
+      pinned) feature version and `group_map_sha256` include it. (3) **Drop, not delay.** If the group is not merged
+      with `lookahead_check` reporting 0 columns and the group-size test passing by 2026-12-11, O-4 is pinned
+      without it (K_eff back to about 16) and N1 waits for the next 15m discovery; O-4 never waits for N1.
+      (4) **Budget.** The Q1 table is unchanged: 8 reserved, 12 open (9 conditional rows + 3 free reserve). Code:
+      BACKLOG item `tod-periodicity-feature-group` (implementer; quant-reviewer, code-reviewer).
 - Threshold (amended 2026-10-17, E-2; quant review R1): `threshold_rule: tercile_inner`,
   `tercile_q: 0.6666666666666666` and `tercile_method: linear` in the pinned `DiscoveryConfig` dump (so in the config
   hash: another q is another trial). The coded verdict needs at least 1,000 taken trades for "continue", as the
