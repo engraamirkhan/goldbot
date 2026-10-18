@@ -19,11 +19,11 @@ Status values:
 | Status | Rows |
 | --- | --- |
 | implemented | 228 |
-| partial | 20 |
+| partial | 21 |
 | missing | 2 |
 | deviates | 6 |
 | in review | 10 |
-| **total** | **266** |
+| **total** | **267** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -99,6 +99,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | R64 | Owner request 2026-10-18 - reproduce every information element of the three chart indicators (box channels, structure, money flow) as our own point-in-time features, with a coverage map and a local render of our replica | implemented | goldbot/features/smc_levels.py (trend table, swing zones, period levels, pivots, MA crosses, swing labels, lower-tf FVG), goldbot/features/smc_boxes.py (box break depth / rip, next box, order blocks), goldbot/features/mfi_signals.py (money-flow signals), scripts/replica_render.py (local render), docs/research/indicator-coverage-2026-10-18.md; ReplicaParams.sr_range_window | tests/test_smc_levels.py; tests/test_smc_boxes.py; tests/test_mfi_signals.py |
 | R65 | Pre-registered box and price-action course families (H-37 box break, H-38 RIP, H-39 retest, H-44 fakey, H-45 trend-level-signal) and the H-40 filter discovery, runnable through research.yml exactly per their rungs (docs/research/box-mfi-families-2026-10-18.md sections 3-5; research director ruling, section 10) | implemented | goldbot/specialists/box_course.py (families, rungs, H-40 union and flags), goldbot/features/box_course.py (point-in-time building blocks), goldbot/labels/triple_barrier.py (per-candidate max_bars), goldbot/research/pipeline.py (entry_at_next_open, candidate features), goldbot/research/discovery.py (pool candidate), goldbot/research/screen.py (cost gate), scripts/research_pass.py (cost gate, lot fit on screen-only trials); ADR 0034 | tests/test_box_course.py; tests/test_box_course_plumbing.py |
 | R66 | The ledger reaches the brain append-only through a forced-command ssh key (idempotent, secret-scanned, bad rows rejected) and is backfilled from the research registry, ADRs, owner directives, owner notes (private), resume snapshots and an artifacts index | implemented | goldbot/ledger/{sync,importers,cli}.py; goldbot/ops/linux/goldbot-ledger-ingest.sh; scripts/merge_smoke.sh | tests/test_ledger_sync_import.py (sync once, versions, short ack stays pending, ingest idempotent and rejects bad rows, private never exported, forced command ignores the requested command, each importer idempotent and fail closed) |
+| R67 | Replica columns on the engine decision frame via ReplicaFeed, shadow only (quant review 2026-10-18: no plain tail; trading-safety: no live entries) | partial (engine side done; host wiring of the 2010 series loader pending) | goldbot/engine/replica_context.py, goldbot/engine/tv_context.py, goldbot/specialists/base.py (shadow_only), goldbot/engine/runner.py | tests/test_replica_context.py |
 
 Risk analytics (reporting tools, not design rows, so the counts are unchanged): `goldbot/research/ruin.py`
 (`run.py ruin`, playbook G-5) simulates R against the R9/R11/R13/R14 limits read from `config/settings.yaml`, applying

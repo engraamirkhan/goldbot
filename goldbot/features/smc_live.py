@@ -23,8 +23,9 @@ The digest covers the context window (`context_bars`, 312 bars with the defaults
 same bar count is not seen by it; the store's data-quality checks own revisions of old bars, and a re-bootstrap
 (a new feed name, or deleting its row) rebuilds from scratch.
 
-Not wired into the engine yet (runner.py is another lane's): the engine calls `update` on each closed decision bar
-with its tail, the store's bar count before the tail and a loader of the series from SERIES_START.
+The engine calls `update` on each closed decision bar with its tail, the store's bar count before the tail and a loader
+of the series from SERIES_START, through `engine.replica_context.ReplicaShadow` (shadow only; the host supplies the
+loader).
 """
 from __future__ import annotations
 
