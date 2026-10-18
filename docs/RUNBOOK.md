@@ -936,12 +936,13 @@ Both units are restarted by every deploy from then on, but their unit files are 
 `goldbot-tv-pull.service` or `goldbot-webhook.service`, repeat its `install` line (T4 / W3). Root installs a unit only from its own fresh
 clone of the deployed commit `<SHA>` (public: the commit `goldbot-deploy` last recorded as deployed in
 `/var/lib/goldbot-deploy/deploys.jsonl`), never from `/opt/goldbot`, which the service user can write
-(docs/AGENT_STANDARDS.md "Root-run tooling"). Every command that touches
+(docs/AGENT_STANDARDS.md "Root-run tooling"), and only a full 40-character commit on `main` (forks share GitHub's object store, so a commit id alone does not prove it is ours). Every command that touches
 goldbot's state runs as the `goldbot` user (the `goldbot` wrapper does that): a root-run pull would leave root-owned
 `.lock` files and partitions under `/opt/goldbot/data` that the services then cannot write.
 
 "Mac:" lines run in a goldbot checkout on your Mac at the deployed release (`<checkout>`); "brain:" lines after
-`ssh -F ~/.ssh/goldbot.conf goldbot-brain`. Your Mac may ask whether `python` may use the Keychain item: click Allow.
+`ssh -F ~/.ssh/goldbot.conf goldbot-brain`. Your Mac may ask whether `python` may use the Keychain item: click Allow, never
+Always Allow (that would let any later script run with that `python` read it without asking).
 That and the two Tailscale sign-in/approval clicks (W4) are your only steps.
 
 **Precondition.** The release that has `accounts set --stdin` / `export` and `state/tv_pull.lock` is deployed and
@@ -949,7 +950,7 @@ healthy (`goldbot run health`; the last line of `/var/lib/goldbot-deploy/deploys
 
 **TradingView pull**
 
-* T1, Mac (secrets by pipe, never on screen, in argv, history or a log; `export` refuses to write to a terminal, and an
+* T1, Mac (secrets by pipe, never on screen, in argv, history or a log; `export` writes only into a pipe (never a terminal or a file), and an
   empty pipe stores nothing):
   `uv run --directory <checkout> python -m goldbot.ops.accounts export tradingview-sessionid | ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-brain goldbot accounts set tradingview-sessionid --stdin`
   then the same line with `tradingview-sessionid-sign` in both places. Each prints `stored ... in
@@ -963,7 +964,7 @@ healthy (`goldbot run health`; the last line of `/var/lib/goldbot-deploy/deploys
   backfills (up to 5 history pages per timeframe at one request per 5 s: a few minutes). `FAILED: ... cookie` means T1
   stored a stale cookie: sign in again in the browser and repeat T1.
 * T4, brain (install and start the follow service):
-  `sudo env S=<SHA> U=goldbot-tv-pull bash -c 'set -e; d=$(mktemp -d /root/goldbot-ops.XXXXXX); git init -q $d; git -C $d fetch -q --depth 1 https://github.com/engraamirkhan/goldbot.git $S; git -C $d checkout -q --detach FETCH_HEAD; install -m 644 -o root -g root $d/goldbot/ops/linux/systemd/$U.service /etc/systemd/system/; rm -rf $d; systemctl daemon-reload' && sudo systemctl enable --now goldbot-tv-pull`
+  `sudo env S=<SHA> U=goldbot-tv-pull bash -c 'set -e; [ ${#S} = 40 ]; d=$(mktemp -d /root/goldbot-ops.XXXXXX); trap "rm -rf -- $d" EXIT; git clone -q --filter=blob:none --no-checkout https://github.com/engraamirkhan/goldbot.git $d/r; git -C $d/r merge-base --is-ancestor $S origin/main; git -C $d/r checkout -q --detach $S; install -m 644 -o root -g root $d/r/goldbot/ops/linux/systemd/$U.service /etc/systemd/system/; systemctl daemon-reload' && sudo systemctl enable --now goldbot-tv-pull`
 * T5, brain, checks (right away, then after the next 15m close + 1 min):
   `systemctl is-active goldbot-tv-pull` = active; `systemctl show -p NRestarts --value goldbot-tv-pull` = 0;
   `goldbot run tv-pull status` shows a pass newer than T3 with `new` live bars; `goldbot run health` shows
@@ -980,7 +981,7 @@ healthy (`goldbot run health`; the last line of `/var/lib/goldbot-deploy/deploys
 * W2, Mac (copy it to the brain):
   `uv run --directory <checkout> python -m goldbot.ops.accounts export tradingview-webhook-secret | ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-brain goldbot accounts set tradingview-webhook-secret --stdin`
 * W3, brain (the unit needs the secret before it starts: without it the service restarts every 5 s):
-  `sudo env S=<SHA> U=goldbot-webhook bash -c 'set -e; d=$(mktemp -d /root/goldbot-ops.XXXXXX); git init -q $d; git -C $d fetch -q --depth 1 https://github.com/engraamirkhan/goldbot.git $S; git -C $d checkout -q --detach FETCH_HEAD; install -m 644 -o root -g root $d/goldbot/ops/linux/systemd/$U.service /etc/systemd/system/; rm -rf $d; systemctl daemon-reload' && sudo systemctl enable --now goldbot-webhook`
+  `sudo env S=<SHA> U=goldbot-webhook bash -c 'set -e; [ ${#S} = 40 ]; d=$(mktemp -d /root/goldbot-ops.XXXXXX); trap "rm -rf -- $d" EXIT; git clone -q --filter=blob:none --no-checkout https://github.com/engraamirkhan/goldbot.git $d/r; git -C $d/r merge-base --is-ancestor $S origin/main; git -C $d/r checkout -q --detach $S; install -m 644 -o root -g root $d/r/goldbot/ops/linux/systemd/$U.service /etc/systemd/system/; systemctl daemon-reload' && sudo systemctl enable --now goldbot-webhook`
   then `curl -s http://127.0.0.1:8443/health` prints `{"ok":true,"stored":...}`.
 * W4, brain (the public HTTPS address; Tailscale may already be installed: `tailscale status`).
   If not: the three apt lines of docs/deploy/first-deploy.md section 3 A step 2, whose `sudo tailscale up` prints a sign-in link:
@@ -993,9 +994,12 @@ healthy (`goldbot run health`; the last line of `/var/lib/goldbot-deploy/deploys
   `curl -s -o /dev/null -w '%{http_code}\n' -X POST -d '{}' https://<brain>.<tailnet>.ts.net/tv` prints `403`
   (Funnel reaches the app; your Mac is not a TradingView address). Then create the alerts (2.7b step 2): the Webhook URL
   is that address; for the message's `secret`, put the secret on the clipboard with
-  `uv run --directory <checkout> python -m goldbot.ops.accounts export tradingview-webhook-secret | pbcopy`, paste it
-  in place of `<the stored secret>`, and afterwards clear the clipboard with `pbcopy < /dev/null` (Universal Clipboard
-  may have copied it to your other Apple devices for a few minutes). After the alert's first bar close:
+  `uv run --directory <checkout> python -m goldbot.ops.accounts export tradingview-webhook-secret | pbcopy; (sleep 45; pbcopy </dev/null) &`
+  and paste it in place of `<the stored secret>` within 45 s (the clipboard then empties itself; run the line again
+  for the next alert). A clipboard-history app (Raycast, Alfred, Maccy, Paste) keeps every copy: pause it first, or
+  delete that entry afterwards; Universal Clipboard may also have passed it to your other Apple devices for a few
+  minutes. `export` writes only into a pipe (a terminal or `> file` is refused), but it cannot tell a pipe into a
+  printing command (`| cat`) from one into ssh or pbcopy: pipe it into nothing else. After the alert's first bar close:
   `journalctl -u goldbot-webhook -n 20` shows `POST /tv ... 200`, and `goldbot run health` shows `heartbeat:webhook` ok.
   All `403` with "ip not allowed" means Funnel did not pass TradingView's address in `X-Forwarded-For` (not verified
   yet on this host): `sudo systemctl edit goldbot-webhook`, add `[Service]` and `Environment=GOLDBOT_TV_ENFORCE_IP=0`,

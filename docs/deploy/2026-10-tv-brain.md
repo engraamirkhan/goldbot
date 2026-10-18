@@ -15,12 +15,12 @@ watches.
 
 | Step | What | Who | Owner action |
 |---|---|---|---|
-| T1 | Cookies Mac Keychain -> brain secret store, by pipe | Claude | click Allow if macOS asks about the Keychain |
+| T1 | Cookies Mac Keychain -> brain secret store, by pipe | Claude | click Allow (never Always Allow) if macOS asks about the Keychain |
 | T2 | `tv_pull.enabled: true` in `settings.local.yaml`, settings still load | Claude | none |
 | T3 | one `tv-pull sync` by hand (backfill) | Claude | none |
 | T4 | install + enable `goldbot-tv-pull` | Claude | none |
 | T5 | checks: active, 0 restarts, live bars, `heartbeat:tv-pull` and `tv_pull` ok | Claude | none |
-| W1 | new webhook secret on the Mac (Keychain), only if none exists | Claude | click Allow if asked |
+| W1 | new webhook secret on the Mac (Keychain), only if none exists | Claude | click Allow (never Always Allow) if asked |
 | W2 | secret Mac -> brain, by pipe | Claude | none |
 | W3 | install + enable `goldbot-webhook`, loopback `/health` | Claude | none |
 | W4 | Tailscale Funnel on `/tv` | Claude | sign in (if Tailscale is new on the brain) and approve Funnel: two links |

@@ -265,24 +265,38 @@ def test_set_stdin_refuses_empty_multiline_oversized_or_a_terminal_and_stores_no
     assert "refused" in out.err and (not text.strip() or text.strip()[:20] not in out.out + out.err)
 
 
-def test_export_writes_the_secret_only_to_a_pipe(isolated, monkeypatch, capsys):
+def _export_through_a_real_pipe(monkeypatch, key: str) -> tuple[int, str]:
+    r, w = os.pipe()
+    with os.fdopen(w, "w") as wf, monkeypatch.context() as m:
+        m.setattr(acc_mod.sys, "stdout", wf)
+        rc = acc_mod.main(["export", key])
+    with os.fdopen(r) as rf:
+        return rc, rf.read()
+
+
+def test_export_writes_the_secret_only_to_a_pipe(isolated, monkeypatch):
     acc_mod.set_secret("tradingview-sessionid-sign", "v2:SIGN-abc")
-    pipe = _Pipe()
-    monkeypatch.setattr(acc_mod.sys, "stdout", pipe)
-    assert acc_mod.main(["export", "tradingview-sessionid-sign"]) == 0
-    assert pipe.getvalue() == "v2:SIGN-abc"
-    term = _Pipe(tty=True)
+    assert _export_through_a_real_pipe(monkeypatch, "tradingview-sessionid-sign") == (0, "v2:SIGN-abc")
+    assert _export_through_a_real_pipe(monkeypatch, "not-stored") == (1, "")
+
+
+def test_export_refuses_a_terminal_a_regular_file_and_a_stream_without_a_descriptor(isolated, monkeypatch, tmp_path):
+    acc_mod.set_secret("k-exp", "v2:SIGN-abc")
+    term = _Pipe(tty=True)                                   # no file descriptor at all
     monkeypatch.setattr(acc_mod.sys, "stdout", term)
-    assert acc_mod.main(["export", "tradingview-sessionid-sign"]) == 1
-    assert term.getvalue() == ""
-    assert acc_mod.main(["export", "not-stored"]) == 1
+    assert acc_mod.main(["export", "k-exp"]) == 1 and term.getvalue() == ""
+    f = tmp_path / "out.txt"                                 # `export k > file`
+    with open(f, "w") as fh, monkeypatch.context() as m:
+        m.setattr(acc_mod.sys, "stdout", fh)
+        assert acc_mod.main(["export", "k-exp"]) == 1
+    assert f.read_text() == ""
+    assert not acc_mod._is_pipe(term)
 
 
 def test_export_piped_into_set_stdin_round_trips(isolated, monkeypatch):
     acc_mod.set_secret("src", "token-123")
-    pipe = _Pipe()
-    monkeypatch.setattr(acc_mod.sys, "stdout", pipe)
-    assert acc_mod.main(["export", "src"]) == 0
-    monkeypatch.setattr(acc_mod.sys, "stdin", _Pipe(pipe.getvalue()))
+    rc, value = _export_through_a_real_pipe(monkeypatch, "src")
+    assert rc == 0
+    monkeypatch.setattr(acc_mod.sys, "stdin", _Pipe(value))
     assert acc_mod.main(["set", "dst", "--stdin"]) == 0
     assert acc_mod.get_secret("dst") == "token-123"

@@ -475,10 +475,22 @@ def read_piped_secret(stream: Any) -> str:
     return value
 
 
+def _is_pipe(out: Any) -> bool:
+    """True only when `out` is a pipe or a socket (os.fstat): a terminal, a regular file (`> file`) or an object
+    without a file descriptor is not."""
+    import stat
+    try:
+        mode = os.fstat(out.fileno()).st_mode
+    except (AttributeError, OSError, ValueError):
+        return False
+    return stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode)
+
+
 def export_secret(key: str, out: Any) -> None:
-    """Write one stored secret to `out` for a pipe (`export <key> | ssh ... set <key> --stdin`), never to a terminal:
-    a terminal stdout is refused so the value cannot land on screen or in scrollback. Missing key: KeyError."""
-    if out.isatty():
+    """Write one stored secret to `out` for a pipe (`export <key> | ssh ... set <key> --stdin`) and nowhere else: a
+    terminal or a regular file is refused, so the value cannot land on screen, in scrollback or on disk. A pipe into a
+    printing command (`| cat`) cannot be told apart: pipe it only into ssh (RUNBOOK 2.7d). Missing key: KeyError."""
+    if not _is_pipe(out):
         raise ValueError("export writes to a pipe only (e.g. `| ssh <host> goldbot accounts set <key> --stdin`)")
     value = get_secret(key)
     if not value:
