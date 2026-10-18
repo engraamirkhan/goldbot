@@ -13,6 +13,12 @@ indicator x version x timeframe this compares the CSV rows with the alert rows o
   is never compared at all: the report says so, and the reader keeps its "unvalidated" label while any plot is unflagged. A new indicator version has its own
   rows, so it starts unvalidated whatever the old one earned.
 
+The same check covers history from the direct pull (`history_origin="pull_history"`, `--origin pull_history`): each
+history origin is compared with, and flagged against, the live rows (webhook alerts and `pull_live`) only, never with
+the other history (goldbot/data/tv_catalog.py: LIVE_ORIGINS, HISTORY_ORIGINS). One input set at a time
+(`meta_hash`, `--meta-hash`; none = the rows without one, i.e. webhook alerts and the CSV export): history pulled with
+other inputs is never compared with these live rows, so it stays unvalidated.
+
 Until then every research result that reads the CSV rows is labelled "unvalidated (repaint risk)"
 (goldbot/features/tradingview.py). This is research tooling: it reads and flags `tv_indicators`, nothing else.
 """
@@ -28,6 +34,7 @@ from pydantic import Field
 
 from goldbot.base import FrozenRecord
 from goldbot.data.store import Store
+from goldbot.data.tv_catalog import HISTORY_ORIGINS, input_set_of, is_live, origin_of
 from goldbot.data.tv_csv import normalize_tf
 from goldbot.features.tradingview import UNVALIDATED, _long_for
 from goldbot.webhook.inbox import TABLE, safe_symbol, source_of
@@ -87,8 +94,13 @@ def _matrix(d: pd.DataFrame) -> pd.DataFrame:
 
 
 def validate(store: Store, *, indicator: str, version: str, tf: str, symbol: str = "XAUUSD", min_bars: int = MIN_BARS,
-             agree: float = AGREE, abs_tol: float = ABS_TOL, apply: bool = True) -> RepaintReport:
-    """Compare the CSV history with the live alerts and (with `apply`) set `repaint_validated` on the CSV rows."""
+             agree: float = AGREE, abs_tol: float = ABS_TOL, apply: bool = True,
+             history_origin: str = "csv", meta_hash: str | None = None) -> RepaintReport:
+    """Compare the history of `history_origin` (the CSV export, or `pull_history`) with the live rows of the same
+    input set (`meta_hash`; None = rows without one: webhook alerts and the CSV export) and (with `apply`) set
+    `repaint_validated` on that history's rows of that input set only."""
+    if history_origin not in HISTORY_ORIGINS:
+        raise ValueError(f"history_origin must be one of {sorted(HISTORY_ORIGINS)}, not {history_origin!r}")
     tf = normalize_tf(tf)
     long = _long_for(store, indicator, tf, symbol, version)
     base: dict[str, Any] = dict(indicator=indicator, version=version, symbol=symbol, tf=tf, min_bars=min_bars, agree=agree,
@@ -96,9 +108,10 @@ def validate(store: Store, *, indicator: str, version: str, tf: str, symbol: str
     if long.empty:
         return RepaintReport(**base, csv_bars=0, overlap_bars=0, matched_bars=0, match_pct=0.0, per_plot={},
                              validated=False, reason="nothing is stored for this indicator and version")
-    long = long[(long["tf"].astype(str) == tf) & (~long["intrabar"].astype(bool))]
-    is_csv = long["origin"].eq("csv") if "origin" in long.columns else pd.Series(False, index=long.index)
-    csv, live = _matrix(long[is_csv]), _matrix(long[~is_csv])
+    long = long[(long["tf"].astype(str) == tf) & (~long["intrabar"].astype(bool))
+                & input_set_of(long).eq(meta_hash or "")]
+    origin = origin_of(long)
+    csv, live = _matrix(long[origin.eq(history_origin)]), _matrix(long[is_live(origin)])
     shared = [p for p in csv.columns if p in live.columns]
     bars = csv.index.intersection(live.index)
     per_plot: dict[str, float] = {}
@@ -120,21 +133,24 @@ def validate(store: Store, *, indicator: str, version: str, tf: str, symbol: str
     else:
         validated, reason = True, "history matches what was live"
     if not csv.shape[0]:
-        reason = "no CSV rows are stored for this indicator and version: run tv-import first"
+        reason = (f"no {history_origin} rows are stored for this indicator and version: "
+                  + ("run tv-import first" if history_origin == "csv" else "pull the history first"))
     uncompared = [p for p in csv.columns if p not in shared]
     if validated and uncompared:
         reason += f"; plots {', '.join(uncompared)} were not in the alerts, so they stay unvalidated"
     if apply and csv.shape[0]:
-        _set_flag(store, indicator, version, tf, symbol, set(shared) if validated else set())
+        _set_flag(store, indicator, version, tf, symbol, set(shared) if validated else set(), history_origin,
+                  meta_hash or "")
     return RepaintReport(**base, csv_bars=int(csv.shape[0]), overlap_bars=overlap, matched_bars=matched,
                          match_pct=pct, per_plot=per_plot, validated=validated, reason=reason,
                          uncompared_plots=uncompared)
 
 
-def _set_flag(store: Store, indicator: str, version: str, tf: str, symbol: str, validated_plots: set[str]) -> None:
+def _set_flag(store: Store, indicator: str, version: str, tf: str, symbol: str, validated_plots: set[str],
+              history_origin: str = "csv", meta_hash: str = "") -> None:
     source, sym = source_of(indicator, version), safe_symbol(symbol)
     df = store.read(TABLE, source=source, symbol=sym)
-    rows = df[(df["origin"].eq("csv")) & (df["tf"].astype(str) == tf)].copy()
+    rows = df[origin_of(df).eq(history_origin) & (df["tf"].astype(str) == tf) & input_set_of(df).eq(meta_hash)].copy()
     flag = rows["plot"].map(_plot_name).isin(validated_plots)
     if rows.empty or bool(rows["repaint_validated"].fillna(False).astype(bool).eq(flag).all()):
         return
@@ -153,6 +169,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--min-bars", type=int, default=MIN_BARS)
     ap.add_argument("--agree", type=float, default=AGREE, help="share of overlapping bars that must match (0.99)")
     ap.add_argument("--abs-tol", type=float, default=ABS_TOL)
+    ap.add_argument("--origin", default="csv", choices=sorted(HISTORY_ORIGINS),
+                    help="which history to check: the chart export (csv) or the direct pull (pull_history)")
+    ap.add_argument("--meta-hash", default=None, help="the input set of pulled rows (default: rows without one)")
     ap.add_argument("--report-only", action="store_true", help="do not change repaint_validated")
     ap.add_argument("--data-root", default=None, help="store root (default: settings data_root)")
     a = ap.parse_args(argv)
@@ -161,7 +180,8 @@ def main(argv: list[str] | None = None) -> int:
         a.data_root = load_settings().data_root
     try:
         rep = validate(Store(a.data_root), indicator=a.indicator, version=a.version, tf=a.tf, symbol=a.symbol,
-                       min_bars=a.min_bars, agree=a.agree, abs_tol=a.abs_tol, apply=not a.report_only)
+                       min_bars=a.min_bars, agree=a.agree, abs_tol=a.abs_tol, apply=not a.report_only,
+                       history_origin=a.origin, meta_hash=a.meta_hash)
     except ValueError as exc:
         print(f"tv-repaint-check: {exc}", file=sys.stderr)
         return 2

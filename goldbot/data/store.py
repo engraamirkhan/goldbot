@@ -30,8 +30,9 @@ KEY_COLUMNS = {
     "ticks": ["ts_utc", "bid", "ask"],
     "tv_signals": ["signal_hash"],
     # one row per plot of an indicator's bar alert (source=indicator@version): idempotent on the bar and the plot.
-    # `origin` ("csv" for a chart export, absent for a live alert) keeps an import from ever replacing an alert row.
-    "tv_indicators": ["indicator", "version", "tf", "bar_time", "plot", "origin"],
+    # `origin` ("csv" for a chart export, absent for a live alert) keeps an import from ever replacing an alert row;
+    # `meta_hash` (the direct pull's input set, absent elsewhere) keeps two input sets of one version apart.
+    "tv_indicators": ["indicator", "version", "tf", "bar_time", "plot", "origin", "meta_hash"],
     "macro": ["series", "value_date", "vintage"],
     "positioning": ["series", "value_date", "vintage"],
     "fills": ["ts_utc", "client_order_id"],
