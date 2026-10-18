@@ -18,6 +18,8 @@
   "include": [
     "e2e",
     "playwright.config.ts",
+    "playwright.shots.config.ts",
+    "shots",
     "vite.config.ts",
     "eslint.config.js"
   ]
