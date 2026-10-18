@@ -59,6 +59,3 @@ export function Home({ onOpenProgress, onOpenLimits }: { onOpenProgress?: () => 
     </section>
   );
 }
-
-/** Alias so App.tsx (slice A) keeps compiling until it imports Home. */
-export const Overview = Home;
