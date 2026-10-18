@@ -330,3 +330,24 @@ dispatch); +1 + K_map if H-36 runs; D-OMTF K_eff +1 inside O-4 if adopted. Holdo
 2025-09-30). Sizing fact recorded so it is not re-derived: a structure stop on a 15m CHoCH (median 3.3 ATR15, about
 $27/oz today) is about 2% of £1,000 at 0.01 lot, so structure-stop 15m rules are not placeable at £1,000 under the
 rails; a 1.0 × ATR15 stop version is TVR-like and closed by B4b.
+
+## A11. Box and money-flow families from the owner's course notes (strategy researcher, 2026-10-18)
+
+Source: `box-mfi-families-2026-10-18.md`. Owner, 2026-10-18: his notes on the box (`sr_channels`), money-flow (`mfi`)
+and structure (`smc`) indicators and a price-action course are "baselines, not rules to obey". Each family runs one
+count-selected rung (first rung with ≥ 1,500 candidates on 2010..2025-09; else withdrawn, 0 trials). Written before
+any count. A7/B4b answered in that file's section 0; research-director ruling needed before dispatch. Prior low
+(P(PASS) about 1-2% each).
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| H-37 | `box_break`: 1h box body-close ≥ 0.2 box heights beyond the far edge, 1h and 15m money flow from the opposite extreme, 15m break same way, pullback to the farther of the broken box and 15m EMA20, stop beyond the box, target next 1h box (≥ 2R), not in the golden zone. Ladder: pool 4h/1h, 70/30, drop golden zone, drop 15m, drop MFI | pre-registered, not funded | 1 | batch §2 at K ≥ 80 + baseline lift (vs the bare box break). FAIL retires box-break rules (R-10) |
+| H-38 | `box_rip`: 1h touch of a box without a close through, opposite candle closes back outside, 1h or 4h money flow at the extreme, stop beyond the wick, target next box (≥ 2R), not in the golden zone. Ladder: pool 4h, 70/30, drop golden zone, drop MFI | pre-registered, not funded | 1 | as H-37; FAIL retires box-rejection rules (R-11) |
+| H-39 | `box_retest` (price-action note): 1h close beyond a box, first retest from the other side within 24 bars rejected, stop beyond the retest wick, target next box (≥ 2R). Ladder: pool 4h, double window | pre-registered, not funded | 1 | batch §2 at K ≥ 80. FAIL retires retest rules (R-12) |
+| H-40 | `box_filter_discovery`: one discovery trial over the H-37..H-39 candidates with nine variation flags (trend-with, counter-trend only at major levels, volume veto / break-with-volume, depth 0.3, reward 3, day bias, premium/discount, engulfing, box-only anchor) plus the `mfi_signals` group; fold-internal stability selection, ≤ 2 survivors go forward | pre-registered, conditional on ≥ 1 of H-37..H-39 running | 1 (K_eff 10) + ≤ 2 | survivor = selected in ≥ 60% of training folds and Welch t ≥ 2 inside them |
+| H-41 | `box_break_15m`: H-37 on 15m boxes alone (owner: "15m boxes = scalping") | proposed, conditional on H-37 PASS/LEAD | 1 if triggered | as H-37 |
+| D-MFI | `mfi_signals` (regime, extreme circle, double circle, 50-cross, 40/60 pullback hold, divergence) on 15m/1h/4h as one group in O-4 | proposed; quant sign-off with D-TVR | 0 (K_eff +1) | group survival only; no standalone money-flow rule (owner: "never a signal alone"; R-01) |
+
+Not run, with reason (do not re-propose without new evidence): reward floor 1.5 (worse target per cost); a
+money-flow-only rule (R-01); break depth read as penetration *into* the box (that is a touch, not a break; flagged
+to the indicator lane, section 3.1 of the source file).
