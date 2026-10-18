@@ -485,3 +485,26 @@ def test_a_symlinked_artifact_file_is_never_followed(tmp_path: Path) -> None:
     out = cells.record(plan, arts, registry.path)
     assert out.failed == 1 and "symlink" in next(r for r in read_rows(registry.path) if r["status"] == "failed")["results"]["error"]
     assert all("outside" not in rep["body"] for rep in out.reports)
+
+
+def test_a_single_cell_run_keeps_its_rows_when_the_download_puts_its_files_straight_into_the_artifacts_folder(
+        tmp_path: Path) -> None:
+    """actions/download-artifact extracts a lone match of `pattern: cell-*` into `path` itself, not into cells/cell-0
+    (B08, run 39106099459: a single `[{}]` cell recorded as failed although its artifact held its rows)."""
+    plan = cells.plan(_env(VARIANTS="[{}]"))
+    assert len(plan) == 1
+    arts = tmp_path / "arts"
+    _cell_dir(tmp_path, 0, [_row_as_the_cell_runs_it(tmp_path, plan[0])])
+    (tmp_path / "cell-0").rename(arts)                       # the single artifact's files, flat in `cells/`
+    registry = TrialRegistry(tmp_path / "registry.jsonl")
+    out = cells.record(plan, arts, registry.path)
+    assert out.failed == 0 and out.recorded == 1 and "cell report" in out.reports[0]["body"]
+
+
+def test_flat_artifact_files_are_not_guessed_onto_a_cell_when_the_plan_has_several(tmp_path: Path) -> None:
+    plan = cells.plan(_env(VARIANTS=_VARIANTS))
+    arts = tmp_path / "arts"
+    _cell_dir(tmp_path, 0, [_planned_row(tmp_path, "a")])
+    (tmp_path / "cell-0").rename(arts)
+    out = cells.record(plan, arts, TrialRegistry(tmp_path / "registry.jsonl").path)
+    assert out.failed == 2 and out.recorded == 0
