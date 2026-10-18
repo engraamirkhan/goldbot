@@ -7,8 +7,10 @@ indicator x version x timeframe this compares the CSV rows with the alert rows o
 
 * a bar matches when every plot the two sources share agrees;
 * the match % is matching bars over overlapping bars;
-* `repaint_validated` is set on the CSV rows only when the overlap is at least `min_bars` (200) AND the match is at
-  least `agree` (99 %); otherwise (or on a later failing re-check) it is cleared. A new indicator version has its own
+* `repaint_validated` is set only on the CSV rows of plots the alerts also carried (those were compared), and only when
+  the overlap is at least `min_bars` (200) AND the match is at least `agree` (99 %); otherwise (or on a later failing
+  re-check) it is cleared. A CSV plot the alerts never carried stays unvalidated, and the history older than the overlap
+  is never compared at all: the report says so, and the reader keeps its "unvalidated" label while any plot is unflagged. A new indicator version has its own
   rows, so it starts unvalidated whatever the old one earned.
 
 Until then every research result that reads the CSV rows is labelled "unvalidated (repaint risk)"
@@ -50,6 +52,7 @@ class RepaintReport(FrozenRecord):
     abs_tol: float
     validated: bool
     reason: str
+    uncompared_plots: list[str] = Field(default_factory=list)     # CSV plots no live alert carried: stay unvalidated
 
     @property
     def label(self) -> str | None:
@@ -63,7 +66,11 @@ class RepaintReport(FrozenRecord):
             f"  csv bars {self.csv_bars}, overlapping live-alert bars {self.overlap_bars}, matching {self.matched_bars} "
             f"= {self.match_pct:.1f}% (need >= {self.agree * 100:g}% over >= {self.min_bars}, tolerance {self.abs_tol:g})",
             f"  per plot: {plots}",
-            f"  {self.reason}"])
+            f"  {self.reason}",
+            *([f"  not compared, left unvalidated (the alerts did not carry them): {', '.join(self.uncompared_plots)}"]
+              if self.uncompared_plots else []),
+            f"  limit: only the {self.overlap_bars} bars since the alerts began were compared; CSV history older than "
+            f"the overlap is unvalidated (it is trusted by extension, not checked)"])
 
 
 def _plot_name(p: str) -> str:
@@ -114,19 +121,24 @@ def validate(store: Store, *, indicator: str, version: str, tf: str, symbol: str
         validated, reason = True, "history matches what was live"
     if not csv.shape[0]:
         reason = "no CSV rows are stored for this indicator and version: run tv-import first"
+    uncompared = [p for p in csv.columns if p not in shared]
+    if validated and uncompared:
+        reason += f"; plots {', '.join(uncompared)} were not in the alerts, so they stay unvalidated"
     if apply and csv.shape[0]:
-        _set_flag(store, indicator, version, tf, symbol, validated)
+        _set_flag(store, indicator, version, tf, symbol, set(shared) if validated else set())
     return RepaintReport(**base, csv_bars=int(csv.shape[0]), overlap_bars=overlap, matched_bars=matched,
-                         match_pct=pct, per_plot=per_plot, validated=validated, reason=reason)
+                         match_pct=pct, per_plot=per_plot, validated=validated, reason=reason,
+                         uncompared_plots=uncompared)
 
 
-def _set_flag(store: Store, indicator: str, version: str, tf: str, symbol: str, validated: bool) -> None:
+def _set_flag(store: Store, indicator: str, version: str, tf: str, symbol: str, validated_plots: set[str]) -> None:
     source, sym = source_of(indicator, version), safe_symbol(symbol)
     df = store.read(TABLE, source=source, symbol=sym)
     rows = df[(df["origin"].eq("csv")) & (df["tf"].astype(str) == tf)].copy()
-    if rows.empty or bool(rows["repaint_validated"].fillna(False).astype(bool).eq(validated).all()):
+    flag = rows["plot"].map(_plot_name).isin(validated_plots)
+    if rows.empty or bool(rows["repaint_validated"].fillna(False).astype(bool).eq(flag).all()):
         return
-    rows["repaint_validated"] = validated
+    rows["repaint_validated"] = flag
     # same key (origin is part of it), later write wins: only the flag changes; the alert rows are not touched
     store.append(TABLE, rows.drop(columns=["source", "symbol", "year", "month"], errors="ignore"), source=source, symbol=sym)
 

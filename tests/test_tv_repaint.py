@@ -100,3 +100,22 @@ def test_cli_prints_the_report(tmp_path, capsys):
                           "--data-root", str(tmp_path / "data")])
     out = capsys.readouterr().out
     assert rc == 0 and "100.0%" in out and "VALIDATED" in out
+
+
+def test_only_plots_the_alerts_carried_are_flagged_validated_and_the_report_states_the_limit(tmp_path):
+    seed(tmp_path, 300)
+    store = Store(tmp_path / "d2")
+    tv_csv.import_tv_csv(tmp_path / "e.csv", store=store, indicator="K-Indi", version="2.02", tf="15", now=NOW)
+    box = TvInbox(tmp_path / "tv2.db")                    # alerts that carry plot_0 only
+    for i in range(300):
+        bar = T0 + pd.Timedelta(minutes=15 * i)
+        a = Alert.model_validate({"indicator": "K-Indi", "version": "2.02", "symbol": "XAUUSD", "tf": "15",
+                                  "bar_time": bar.isoformat(), "fired_at": (bar + pd.Timedelta(minutes=15)).isoformat(),
+                                  "secret": "x", "plots": {"plot_0": str(i)}})
+        box.put(to_row(a, (bar + pd.Timedelta(minutes=16)).to_pydatetime()))
+    sync_to_store(box, store)
+    r = check(store)
+    df = store.read(TABLE, source="K-Indi@2.02")
+    by_plot = df[df["origin"] == "csv"].groupby("plot")["repaint_validated"].all().to_dict()
+    assert by_plot == {"plot_0": True, "plot_1": False}
+    assert "plot_1" in r.text() and "older than the overlap" in r.text()

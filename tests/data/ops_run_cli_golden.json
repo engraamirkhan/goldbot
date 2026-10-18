@@ -391,7 +391,7 @@
   },
   "tv-import": {
    "rc": 0,
-   "stdout": "usage: run.py tv-import [-h] --indicator INDICATOR --version VERSION --tf TF [--symbol SYMBOL]\n                        [--data-root DATA_ROOT] [--now NOW]\n                        csv\n\nImport a TradingView 'Export chart data' CSV (history for backtests; unvalidated until tv-repaint-\ncheck passes).\n\npositional arguments:\n  csv\n\noptions:\n  -h, --help            show this help message and exit\n  --indicator INDICATOR\n  --version VERSION\n  --tf TF               chart timeframe: 15, 60, 240, 1D\n  --symbol SYMBOL\n  --data-root DATA_ROOT\n                        store root (default: settings data_root)\n  --now NOW             clock override for tests (ISO time)\n"
+   "stdout": "usage: run.py tv-import [-h] --indicator INDICATOR --version VERSION --tf TF [--symbol SYMBOL]\n                        [--tz TZ] [--assume-utc] [--data-root DATA_ROOT] [--now NOW]\n                        csv\n\nImport a TradingView 'Export chart data' CSV (history for backtests; unvalidated until tv-repaint-\ncheck passes).\n\npositional arguments:\n  csv\n\noptions:\n  -h, --help            show this help message and exit\n  --indicator INDICATOR\n  --version VERSION\n  --tf TF               chart timeframe: 15, 60, 240, 1D\n  --symbol SYMBOL\n  --tz TZ               IANA timezone of the chart's times when the file has none\n                        (America/New_York); DST-aware\n  --assume-utc          the file's zoneless times are UTC (chart set to UTC)\n  --data-root DATA_ROOT\n                        store root (default: settings data_root)\n  --now NOW             clock override for tests (ISO time)\n"
   },
   "tv-repaint-check": {
    "rc": 0,

@@ -1,6 +1,8 @@
 """The owner's TradingView "Export chart data" CSV becomes `tv_indicators` rows that never reach a bar early, never
 displace a live alert, and are labelled unvalidated until the repaint check passes (docs/plans/tradingview-integration.md).
 Fixtures are synthetic: no real indicator output."""
+from typing import Any
+
 import pandas as pd
 import pytest
 
@@ -163,3 +165,71 @@ def test_cli_imports_and_prints_the_counts(tmp_path, capsys):
     assert tv_csv.main([str(p), *args, "--now", "2026-10-18T00:00:00Z"]) == 0
     assert "4 bars" in capsys.readouterr().out
     assert tv_csv.main([str(tmp_path / "nope.csv"), *args]) == 2
+
+
+def ny_csv():
+    """Chart set to New York (EDT, UTC-4 in October): 04:00 local is the 08:00 UTC bar open."""
+    rows = ["time,open,high,low,close,Fast"]
+    for i in range(4):
+        t = (T0 - pd.Timedelta(hours=4) + pd.Timedelta(minutes=15 * i)).tz_localize(None)
+        rows.append(f"{t.strftime('%Y-%m-%d %H:%M:%S')},1,2,0.5,1.5,{i}")
+    return "\n".join(rows) + "\n"
+
+
+def test_a_time_without_a_zone_is_refused_unless_the_zone_is_stated(tmp_path):
+    with pytest.raises(ValueError, match="no timezone.*--tz.*--assume-utc"):
+        imp(tmp_path, ny_csv())
+
+
+def test_new_york_chart_time_is_converted_with_the_given_zone(tmp_path):
+    p = tmp_path / "ny.csv"
+    p.write_text(ny_csv(), encoding="utf-8")
+    store = Store(tmp_path / "data")
+    tv_csv.import_tv_csv(p, store=store, indicator="K-Indi", version="2.02", tf="15", now=LATER, tz="America/New_York")
+    df = store.read(TABLE, source="K-Indi@2.02")
+    assert df["bar_time"].min() == T0
+    assert df["available_utc"].min() == T0 + pd.Timedelta(minutes=15)
+
+
+def test_assume_utc_reads_a_zoneless_time_as_utc(tmp_path):
+    p = tmp_path / "u.csv"
+    p.write_text(ny_csv(), encoding="utf-8")
+    store = Store(tmp_path / "data")
+    tv_csv.import_tv_csv(p, store=store, indicator="K-Indi", version="2.02", tf="15", now=LATER, assume_utc=True)
+    assert store.read(TABLE, source="K-Indi@2.02")["bar_time"].min() == T0 - pd.Timedelta(hours=4)
+
+
+def test_tz_and_assume_utc_together_or_an_unknown_zone_are_refused(tmp_path):
+    p = tmp_path / "ny.csv"
+    p.write_text(ny_csv(), encoding="utf-8")
+    store = Store(tmp_path / "data")
+    kw: dict[str, Any] = dict(store=store, indicator="K-Indi", version="2.02", tf="15", now=LATER)
+    with pytest.raises(ValueError, match="not both"):
+        tv_csv.import_tv_csv(p, tz="America/New_York", assume_utc=True, **kw)
+    with pytest.raises(ValueError, match="unknown timezone"):
+        tv_csv.import_tv_csv(p, tz="Mars/Base", **kw)
+
+
+def test_a_time_in_the_repeated_dst_hour_is_refused(tmp_path):
+    text = "time,open,high,low,close,A\n2026-11-01 01:30:00,1,2,1,1,3\n"
+    p = tmp_path / "d.csv"
+    p.write_text(text, encoding="utf-8")
+    with pytest.raises(ValueError, match="ambiguous"):
+        tv_csv.import_tv_csv(p, store=Store(tmp_path / "data"), indicator="K-Indi", version="2.02", tf="15", now=LATER,
+                             tz="America/New_York")
+
+
+def test_a_file_over_the_size_cap_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(tv_csv, "MAX_BYTES", 100)
+    with pytest.raises(ValueError, match="larger than"):
+        imp(tmp_path, csv_text(50))
+
+
+def test_cli_takes_tz_and_refuses_a_zoneless_file_without_it(tmp_path, capsys):
+    p = tmp_path / "ny.csv"
+    p.write_text(ny_csv(), encoding="utf-8")
+    args = ["--indicator", "K-Indi", "--version", "2.02", "--tf", "15", "--data-root", str(tmp_path / "data"),
+            "--now", "2026-10-18T00:00:00Z"]
+    assert tv_csv.main([str(p), *args]) == 2
+    assert "--tz" in capsys.readouterr().err
+    assert tv_csv.main([str(p), *args, "--tz", "America/New_York"]) == 0
