@@ -46,7 +46,7 @@ from goldbot.features.registry import FEATURES, FeatureCtx, feature
 from goldbot.features.technical import atr
 
 NAME = FAMILY = "tod_periodicity"
-VERSION = "1"
+VERSION = "1"       # the open choices are pinned in preregistration-2027Q1.md (O-4, N1 amendment, "Pinned 2026-10-18"); change one, bump this
 SLOT_MIN = 30
 WINDOWS = (5, 10, 20)
 LONG = 20                                   # window of the hit rate and the t statistic
