@@ -532,7 +532,148 @@ topic is closed; only the owner's own trades (H-36) may reopen it.
   research director read the owner's "backtest as much as needed" as covering this in B4a); (b) 2027Q1's free
   reserve (3), which B4a held for H-02/H-14 survivors; (c) the continuous loop budget (ADR 0029) is **not** suitable:
   loop trials are generator-grid trials with `rule_ref=loop`, not hand pre-registrations. **Raising the budget is an
-  owner decision under my brief**; recommendation in section 9.4 once the counts are known.
-- **K.** Every trial is charged in full; H-40 adds K_eff 21. Floor 80 at any verdict.
+  owner decision under my brief**; recommendation in section 9.6 once the counts are known.
+- **K.** Every trial is charged in full; H-40 adds K_eff 21. Floor 86 at any verdict.
 - **Sizing.** Nothing here changes risk per trade, the daily limit or the minimum-lot rule.
 - **Holdout.** Untouched; counts end 2025-09-30.
+
+## 9. Event counts, stops and costs (counts only; added after the design commits)
+
+Computed 2026-10-18 by scratch scripts (not committed) on this branch's `smc_replica` (owner's settings,
+`ReplicaParams()` defaults), `resample_bars`, `mid` and `h16.cut_before_holdout`: Dukascopy 1m (release `data-v1`;
+the 2003-2009 extension, run 39117170589, is still queued and not in the release), cut at 2025-10-01 before
+resampling: 369,786 15m, 92,500 1h, 25,077 4h and 4,881 daily bars, 2010-01-01..2025-09-30. Box sets per bar come
+from the replica's channel loop (a trace with identical rules). No label, exit, return or outcome was computed; the
+only bars read after a signal are the inside bar's fill/cancel window (H-43), which defines its entry. The calendar
+blackout is not applied (no `calendar-v1` locally); it removes a few percent at most.
+
+"Kept" = after the placeable rule and the timestamp-only one-at-a-time bound (section 4). Stops: actual 2010-2025
+dollars, in ATR of the entry timeframe, and **today-scaled** (stop in ATR × the last-90-day median ATR: 15m $8.01,
+1h $17.73, 4h $36.61), with £ at 0.75 per $ for 0.01 lot (1 oz). Fit = share placeable at 0.01 lot on £1,000 under
+the default gate (stop ≤ $8.00) and the demo exception (≤ $13.33). Cost/R = (bar spread + 0.37 $/oz) / stop
+(historical); today = (0.20 + 0.37) / today-scaled stop.
+
+### 9.1 Ladders (kept candidates; gate 1 needs 1,500)
+
+| Family | L0 | L1 | L2 | L3 | L4 | L5 | L6 | Selected |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| H-45 TLS | 49 | 155 | 250 | 514 | — | — | — | none |
+| H-46 sweep | 16 | 21 | 116 | 108 | — | — | — | none |
+| H-47 sweep + displacement | 13 | 19 | 54 | 320 | — | — | — | none |
+| H-37 box break | 47 | 59 | 297 | 340 | 616 | 1,122 | **2,327** | **L6** |
+| H-42 pin bar | 223 | 277 | 354 | 387 | 743 | — | — | none |
+| H-44 fakey | 90 | 344 | 345 | 573 | 1,206 | — | — | none |
+| H-39 retest | 391 | 653 | 665 | 1,437 | — | — | — | none |
+| H-38 RIP | 54 | 122 | 180 | 440 | 478 | 925 | 1,303 | none |
+| H-43 inside bar: fills (setups) | 28 (1,150) | 30 (1,572) | 94 (3,997) | 238 (12,844) | — | — | — | none |
+| H-41 15m box break | 335 | — | — | — | — | — | — | conditional |
+
+H-45 at its confluence thresholds (L0): ≥ 3: 49, ≥ 4: 44, ≥ 6: 18. Its L0 signals: false break 26, hammer 9,
+shooting star 6, engulfing 6, inverted hammer 5, piercing 4, stars 4, dark cloud 1. Its L1 course-B setups: 113, all
+Short B (Long B's double-circle condition never coincides with the rest). Raw counts (before one-at-a-time) are about
+1.3-3× larger, e.g. H-37 L6 7,229, H-39 L3 4,145, H-44 L4 3,729, H-38 L6 3,215.
+
+**Decision under section 4 (fixed before the counts).** On 2010-01..2025-09 only **H-37 reaches 1,500, at its last
+rung L6**: 2,327 kept (1,194 long, 1,133 short; 109-163 a year; 254 in 2024..2025-09). That is a bare 1h/4h box
+break with the pullback entry, the box stop and the next-box target, **without the owner's money-flow, 15m
+confirmation, golden-zone and daily rules**; its verdict carries "without the daily rule", and the baseline-lift
+check is moot (the run rung is the bare rule). Every other family is below 1,500 at every rung. The overlap rules
+are moot (H-45 has no run rung). No rung, threshold or rule is changed from these counts.
+
+**The extension rule (section 3) applies before any dispatch.** When the 2003-2009 files are in `data-v1` and pass
+data QA, every ladder is re-counted once on the longer sample and re-applied. Seven more years at the 2010-2025 rate
+would add about 45%: H-39 L3 ≈ 2,080, H-38 L6 ≈ 1,890 and H-44 L4 ≈ 1,750 would cross 1,500 (each at its last,
+no-daily rung); H-42, H-45, H-46 and H-47 would not. A projection, not a selection: the recount decides.
+
+### 9.2 Why the full baselines are rare: box geometry
+
+With the owner's settings (width 1% of the 300-bar range, 15 boxes, lookback 300) the boxes are nearly lines on our
+bars: median height 0.03 ATR (15m 0.031, 1h 0.026, 4h 0.043), p90 0.18-0.20 ATR, and 41-44% are single-pivot lines.
+So "close 20-30% through the box" is almost any close beyond its edge, and "stop just beyond the broken box" sits a
+few tenths of an ATR from a pullback entry. The scarcity comes from the conjunction (daily trend, money flow from the
+opposite extreme, 15m confirmation, golden zone), not from the levels.
+
+### 9.3 Stops, placeability and cost per R (kept candidates; p10 / p25 / **p50** / p75 / p90, or **p50** only)
+
+| Rung | Stop $ (2010-25) | Stop in ATR | Stop $ today | Stop £ today | Fit ≤ $8 | Fit ≤ $13.33 | Cost/R hist | Cost/R today |
+|---|---|---|---|---|---:|---:|---|---|
+| H-37 L6 (15m ∪ 1h entry) | 0.32 / 0.50 / **0.83** / 1.40 / 2.26 | 0.17 / 0.26 / **0.42** / 0.63 / 0.87 | 1.5 / 2.3 / **3.9** / 5.9 / 8.6 | 1.1 / 1.7 / **2.9** / 4.4 / 6.5 | 88% | 97% | 0.34 / 0.53 / **0.85** / 1.45 / 2.21 | 0.07 / 0.10 / **0.15** / 0.25 / 0.39 |
+| H-41 L0 (15m) | **0.70** | **0.32** | **2.5** | **1.9** | 99% | 100% | **1.06** | **0.23** |
+| H-45 L0 (1h) | 0.81 / 1.22 / **1.96** / 3.47 / 5.04 | **0.50** | 4.4 / 7.4 / **8.9** / 12.4 / 16.1 | **6.6** | 33% | 80% | **0.36** | **0.06** |
+| H-39 L3 (1h) | **2.05** | **0.57** | **10.1** | **7.6** | 28% | 74% | **0.35** | **0.06** |
+| H-42 L4 (1h ∪ 4h) | **2.39** | **0.60** | 7.3 / 9.2 / **11.8** / 16.1 / 21.9 | **8.9** | 14% | 62% | **0.30** | **0.05** |
+| H-38 L6 (1h) | **2.41** | **0.68** | **12.0** | **9.0** | 16% | 59% | **0.30** | **0.05** |
+| H-44 L4 (4h ∪ 1h) | **1.68** | **0.39** | **8.1** | **6.1** | 49% | 82% | **0.44** | **0.07** |
+| H-46 L2 (1h) | **4.15** | **1.04** | **18.5** | **13.9** | 4% | 25% | **0.18** | **0.03** |
+| H-47 L3 (15m ∪ 1h) | **6.01** | **2.59** | **22.3** | **16.8** | 0% | 5% | **0.11** | **0.03** |
+| H-43 L3 (4h ∪ 1d) | **6.74** | **0.86** | **31.5** | **23.6** | 0% | 1% | **0.11** | **0.02** |
+
+Median reward to the next box: H-37 L6 5.7R; H-45 L0 3.5R; H-38, H-39, H-42, H-44 2.8-3.7R; H-46, H-47 2.7R.
+
+What this says, before any outcome:
+
+1. **The box-edge stop is placeable but expensive per R.** H-37's stop is a median 0.42 ATR15, £2.9 today, so
+   0.01 lot fits 88% of the time. But the cost prior is a median **0.85 R per trade over 2010-2025** (0.15 R today),
+   because gold's 15m ATR was $1.5-3 then. Rule 2 (net over every candidate, 2010-2025) would need a gross edge near
+   +1 R per trade, against R-04's +0.015 R for 1h breakouts. **Expectation, stated now: FAIL on rule 2 by cost,
+   whatever the gross.** The trial's information is the P4 gross screen: do the owner's levels carry any gross
+   continuation? H-41 (15m) is worse (1.06 R historical).
+2. **The 1h pattern stops (TLS, pin, retest, RIP, fakey) are the opposite case:** 0.30-0.44 R historical cost,
+   0.05-0.07 R today, but a median £6-9 at 0.01 lot today, so only 14-49% fit the default gate and 59-82% the demo
+   exception.
+3. **Sweep and inside-bar stops are not placeable at £1,000.** H-46's stop above the sweep high is a median $18.5
+   today (4% fit), H-47's displacement stop $22 (0%), H-43's mother-bar stop $31 (0%). This repeats H-34's finding:
+   a stop at the sweep extreme needs about £3,000-4,000 of equity at 0.5% risk. Equity and risk per trade are owner
+   decisions; nothing here proposes a change.
+
+### 9.4 Flags and gates on the selected rung (H-37 L6, counts only)
+
+Share of the 2,327 candidates where the flag holds, and the kept count if it were applied (the one-at-a-time bound
+re-run): `daily_with` 31% → 1,122; `session_ln_ny` 61% → 2,021; `trend_with_1h` 28% → 1,191; `rr_3` 83% → 2,190;
+`day_bias` 46% → 1,653; `vol_with` 16% → 854. Removal filters: `chop` 3% → 2,286, `stretch` 4% → 2,293,
+`atr_expansion` 1% → 2,318. **Survivor floor (a clarification written after these counts, counts only):** an H-40
+survivor goes forward only if its subset keeps ≥ 1,500 candidates, the same gate-1 floor as the ladders; so
+`daily_with`, `trend_with_1h` and `vol_with` cannot, whatever H-40 finds. The regime filters remove so few here that
+their contrasts are weak by construction.
+
+### 9.5 Money-flow signals (the D-MFI universe, events 2010..2025-09)
+
+| Signal | 15m | 1h | 4h |
+|---|---:|---:|---:|
+| extreme circle (into ≤ 20 / ≥ 80) | 10,290 | 3,119 | 805 |
+| double circle (lane: back inside) | 10,290 | 3,118 | 805 |
+| 50-cross | 48,708 | 12,201 | 2,612 |
+| 40/60 pullback hold | 30,701 | 7,033 | 1,931 |
+| divergence (pivot 5) | 7,793 | 1,995 | 563 |
+
+The lane's double circle fires once per extreme visit (equal counts): it is the exit from the extreme, not the
+owner's second circle (a second visit), which would be rarer. Flagged to the indicator lane, with 3.1.
+
+### 9.6 Recommendation and ledger
+
+For the research director, ranked (owner decisions flagged, not taken):
+
+1. **Dispatch nothing now (0 trials).** Wait for the 2003-2009 extension and re-count every ladder once (section 3):
+   the recount may bring H-39, H-38 and H-44 over 1,500, so the batch is decided once, not twice.
+2. **Then H-37 at its selected rung, 1 trial**, after blocker K-T (per-candidate next-box target; fallback 2R), with
+   the expectation above written into the dispatch rationale. It is the one owner baseline testable on our data.
+3. **H-40 (1 trial, K_eff 21) only if at least two families run.** With one family it screens nine usable flags on
+   one candidate set and its information is low; the flags are then reported as read-only contrasts only.
+4. **Zero-trial route now:** D-MFI and a `box_pa` group (box distances, TLS level/signal/confluence count, pin,
+   inside bar, fakey, sweep and displacement flags, session gate, chop, stretch, ATR expansion) in O-4's 15m map and
+   H-02's 4h map, K_eff +1 each. That is where the owner's full confluence can be screened without a 1,500-event
+   floor per rule.
+5. **Owner decisions:** budget for up to 5 trials after the recount (2026Q4 override 53 is fully allocated; raise it,
+   or use the 2027Q1 free reserve); equity or risk per trade for the sweep and inside-bar stops (not placeable at
+   £1,000); and the box width setting (1 gives near-lines; a wider box is a new indicator and a new
+   pre-registration). Flag to the CFO: the ATR-expansion skip (4.13) as a candidate tighten rule.
+
+| Item | Count |
+|---|---|
+| Registry trials used | **0** |
+| Selected on 2010-2025 | H-37 L6 (1 trial, deferred to the recount) |
+| Below the floor; re-counted once after the extension, withdrawn if still below | H-45, H-46, H-47, H-42, H-44, H-39, H-38, H-43 |
+| Conditional | H-40 (1, K_eff 21); ≤ 2 H-40 survivors; H-41 (1) |
+| K floor at any verdict | registry `n_trials_effective`, never below 86 (gate-1 t about 4.1) |
+| Zero-trial groups | D-MFI and `box_pa`: K_eff +1 each in O-4 and H-02 |
+| Holdout | untouched (cut at 2025-10-01 before resampling) |
