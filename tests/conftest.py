@@ -84,3 +84,25 @@ def base_trial_budget(monkeypatch) -> None:
     from goldbot.config import load_settings
     for quarter in list(load_settings().research.trial_budget_overrides):       # the dict is mutable though the model is frozen
         monkeypatch.delitem(load_settings().research.trial_budget_overrides, quarter)
+
+
+def shard_of(nodeid: str, count: int) -> int:
+    """Shard (0..count-1) a test belongs to: a stable hash of its node id, so every test lands in exactly one shard
+    on every machine and run (no pytest-split dependency, no timing file to keep fresh)."""
+    import zlib
+    return zlib.crc32(nodeid.encode()) % count
+
+
+def pytest_collection_modifyitems(config, items) -> None:
+    """CI runs the unit suite as a matrix: GOLDBOT_SHARD=i/n keeps only the tests of shard i (0-based) of n and
+    deselects the rest. Unset (local runs) selects everything."""
+    import os
+    spec = os.environ.get("GOLDBOT_SHARD")
+    if not spec:
+        return
+    index, count = (int(x) for x in spec.split("/"))
+    if not 0 <= index < count:
+        raise pytest.UsageError(f"GOLDBOT_SHARD={spec!r}: need 0 <= i < n")
+    keep = [i for i in items if shard_of(i.nodeid, count) == index]
+    config.hook.pytest_deselected(items=[i for i in items if i not in keep])
+    items[:] = keep

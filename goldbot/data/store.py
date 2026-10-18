@@ -32,8 +32,10 @@ TABLES = {
 KEY_COLUMNS = {
     "ticks": ["ts_utc", "bid", "ask"],
     "tv_signals": ["signal_hash"],
-    # one row per plot of an indicator's bar alert (source=indicator@version): idempotent on the bar and the plot
-    "tv_indicators": ["indicator", "version", "tf", "bar_time", "plot"],
+    # one row per plot of an indicator's bar alert (source=indicator@version): idempotent on the bar and the plot.
+    # `origin` ("csv" for a chart export, absent for a live alert) keeps an import from ever replacing an alert row;
+    # `meta_hash` (the direct pull's input set, absent elsewhere) keeps two input sets of one version apart.
+    "tv_indicators": ["indicator", "version", "tf", "bar_time", "plot", "origin", "meta_hash"],
     "macro": ["series", "value_date", "vintage"],
     "positioning": ["series", "value_date", "vintage"],
     "fills": ["ts_utc", "client_order_id"],
@@ -152,6 +154,7 @@ class Store:
         con = duckdb.connect()
         cols = ", ".join(columns) if columns else "*"
         glob = str(tdir / "**" / "*.parquet")
+        scan = _scan(glob, table)
         where = ["symbol = ?"]
         params: list = [symbol]
         if source:
@@ -170,7 +173,7 @@ class Store:
             params.append(_utc(end).to_pydatetime())
             where.append("year * 12 + CAST(month AS BIGINT) <= ?")
             params.append(_utc(end).year * 12 + _utc(end).month)
-        sql = f"SELECT {cols} FROM read_parquet('{glob}', hive_partitioning=true) WHERE {' AND '.join(where)} ORDER BY ts_utc"
+        sql = f"SELECT {cols} FROM {scan} WHERE {' AND '.join(where)} ORDER BY ts_utc"
         df = con.execute(sql, params).df()
         con.close()
         if "ts_utc" in df.columns:
@@ -184,11 +187,18 @@ class Store:
             tdir = self.table_dir(t)
             if tdir.exists() and any(tdir.rglob("*.parquet")):
                 con.execute(
-                    f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{tdir / '**' / '*.parquet'}', hive_partitioning=true)"
+                    f"CREATE VIEW {t} AS SELECT * FROM {_scan(str(tdir / '**' / '*.parquet'), t)}"
                 )
         df = con.execute(query).df()
         con.close()
         return df
+
+
+def _scan(glob: str, table: str) -> str:
+    """The DuckDB scan of a table's files. `tv_indicators` mixes live-alert files and chart-export files that carry more
+    columns (origin, repaint_validated, ...): read by column name so an older file gets NULL there."""
+    extra = ", union_by_name=true" if table == "tv_indicators" else ""
+    return f"read_parquet('{glob}', hive_partitioning=true{extra})"
 
 
 def asof_join(bars: pd.DataFrame, other: pd.DataFrame, *, on: str = "ts_utc", available_col: str = "available_utc",

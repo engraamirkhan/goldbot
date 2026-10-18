@@ -10,7 +10,8 @@ Sources: DESIGN "TradingView signals", "Aamir's indicator suite", "Account integ
    (`{{plot_0}}..{{plot_N}}` or `{{plot("Title")}}`, plus `{{time}}`, `{{interval}}`, `{{ticker}}`, `{{close}}`).
    Each bar becomes one row. The bar alert is its own heartbeat: a missing bar means NaN.
 2. **History: the owner's "Export chart data" CSV** (visible plots, bars limited by plan).
-No scraping, no automated TradingView login, no stored TradingView credentials.
+No scraping, no automated TradingView login, no stored TradingView credentials. (Superseded for the direct pull by
+ADR 0030, owner decision 2026-10-18: the session cookies in the keyring, read-only; see RUNBOOK 2.7c.)
 
 **What invite-only authors can hide.** Only plotted series are readable; anything computed but not plotted is
 unreachable. Authors can also: plot with `display.none` (may drop from the alert plot list or the CSV: check each

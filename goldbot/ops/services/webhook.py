@@ -18,8 +18,9 @@ def run_webhook() -> None:
     from goldbot.ops import accounts
     from goldbot.webhook.app import create_app
     secret = accounts.get_credential("tradingview-webhook-secret", "TradingView webhook shared secret")
+    cfg = load_settings()
     enforce = os.environ.get("GOLDBOT_TV_ENFORCE_IP", "1") != "0"
     # uvicorn's own proxy-header rewriting is off: the app reads the header itself, from loopback only
     uvicorn.run(create_app(secret, enforce_ip=enforce, state_dir=os.environ.get("GOLDBOT_STATE", "state"),
-                           store=Store(load_settings().data_root)),
+                           store=Store(cfg.data_root), max_rows_per_hour=cfg.webhook.max_rows_per_hour),
                 host="127.0.0.1", port=8443, proxy_headers=False)

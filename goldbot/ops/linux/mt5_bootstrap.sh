@@ -166,7 +166,7 @@ cat > /usr/local/bin/goldbot-mt5 <<'WRAP'
 set -euo pipefail
 mod=$1; shift
 # the interpreter by absolute path ($WINPY in mt5_bootstrap.sh): a bare `python` would run a python.exe in /opt/goldbot
-cd /opt/goldbot && exec sudo -u mt5 -H env DISPLAY=:99 WINEDEBUG=-all PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring \
+cd /opt/goldbot && exec sudo -u mt5 -H env DISPLAY=:99 WINEDEBUG=-all PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring GOLDBOT_ALLOW_PLAINTEXT=1 \
   wine /home/mt5/.wine/drive_c/users/mt5/AppData/Local/Programs/Python/Python311/python.exe -m "goldbot.ops.$mod" "$@"
 WRAP
 chmod 755 /usr/local/bin/goldbot-mt5

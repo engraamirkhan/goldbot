@@ -41,7 +41,7 @@ WRITE = os.environ.get("GOLDBOT_WRITE_RUN_GOLDEN") == "1"
 # subcommands whose --help only prints (argparse) or, for drift-review, only reads state/drift.json in the cwd
 HELP_COMMANDS = ("record-gate", "gates", "gate-evidence", "publish-costs", "restore", "setup", "preflight",
                  "revoke-sessions", "owner-history", "health", "ruin", "monthly-report", "perf-report",
-                 "sizing-feasibility", "drift-review", "bridge-smoke")
+                 "sizing-feasibility", "drift-review", "bridge-smoke", "tv-import", "tv-repaint-check", "tv-pull")
 
 # every command the dispatcher knows, with sample arguments (the trace stops before anything runs)
 DISPATCH: dict[str, list[str]] = {
@@ -73,6 +73,9 @@ DISPATCH: dict[str, list[str]] = {
     "monthly-report": ["monthly-report", "--json"],
     "perf-report": ["perf-report", "--json"],
     "sizing-feasibility": ["sizing-feasibility", "--tiny-live"],
+    "tv-import": ["tv-import", "e.csv", "--indicator", "K", "--version", "1", "--tf", "15"],
+    "tv-repaint-check": ["tv-repaint-check", "--indicator", "K", "--version", "1", "--tf", "15"],
+    "tv-pull": ["tv-pull", "status"],
     "bridge-smoke": ["bridge-smoke", "icm-demo"],
     "no-command": [],
     "help": ["--help"],
@@ -150,6 +153,7 @@ def _entry_functions() -> dict[tuple[str, int, str], str]:
     labelled `goldbot.ops.run:<name>` wherever they are defined, so the label survives the move."""
     import goldbot.ops.run as run_mod
     from goldbot.api import auth, mailer
+    from goldbot.data import tv_csv
     from goldbot.ops import (
         backup,
         gates_phase,
@@ -160,7 +164,7 @@ def _entry_functions() -> dict[tuple[str, int, str], str]:
         setup_wizard,
         smoke,
     )
-    from goldbot.research import min_lot, owner_history, ruin
+    from goldbot.research import min_lot, owner_history, ruin, tv_repaint
     out: dict[tuple[str, int, str], str] = {}
 
     def add(fn: Callable[..., Any], label: str) -> None:
@@ -170,7 +174,7 @@ def _entry_functions() -> dict[tuple[str, int, str], str]:
         add(getattr(run_mod, name), f"goldbot.ops.run:{name}")
     for fn in (gates_phase.main, gates_phase.evidence_main, backup.main, setup_wizard.main, preflight.main,
                auth.revoke_sessions_cli, mailer.main, owner_history.main, health.main, ruin.main, monthly_report.main,
-               perf_report.main, min_lot.main, smoke.main):
+               perf_report.main, min_lot.main, smoke.main, tv_csv.main, tv_repaint.main):
         add(fn, f"{fn.__module__}:{fn.__qualname__}")
     return out
 
@@ -251,6 +255,9 @@ ONE_SHOT: dict[str, tuple[str, str]] = {
     "perf-report": ("goldbot.ops.perf_report", "main"),
     "sizing-feasibility": ("goldbot.research.min_lot", "main"),
     "bridge-smoke": ("goldbot.ops.smoke", "main"),
+    "tv-import": ("goldbot.data.tv_csv", "main"),
+    "tv-repaint-check": ("goldbot.research.tv_repaint", "main"),
+    "tv-pull": ("goldbot.data.tv_pull", "main"),             # `follow` loops, but exits with main()'s value
 }
 # Services are exempt from the exit-code rule: each loops forever (supervisor, engine, scheduler, telegram, news) or
 # serves until stopped (api and webhook under uvicorn, bridge under serve), and the dispatcher never passed a return

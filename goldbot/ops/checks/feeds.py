@@ -27,6 +27,7 @@ from goldbot.ops.checks.registry import (
     BLOCK_TAIL,
     register_check,
 )
+from goldbot.ops.tv_pull_health import check_tv_pull
 
 if TYPE_CHECKING:
     from goldbot.ops.health import HealthContext
@@ -258,3 +259,5 @@ def check_news(ctx: HealthContext) -> Check:
 register_check("account", block=BLOCK_RECONCILIATION, pos=10)(check_reconciliation)
 # BACKLOG 79: the broker tick record lives with the record (goldbot/data/ticks.py); WARN only, research data
 register_check("account", block=BLOCK_RECONCILIATION, pos=20)(check_tick_record)
+# TradingView sign-in / pull state lives with the pull's health module (goldbot/ops/tv_pull_health.py); WARN only
+register_check("global", block=BLOCK_TAIL, pos=85)(check_tv_pull)

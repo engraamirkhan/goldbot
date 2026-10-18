@@ -229,3 +229,22 @@ def test_tsmom_daily_fires_on_every_settled_bar_without_lookahead():
     cut = 300
     part = spec.candidates(m.iloc[:cut].reset_index(drop=True), none.iloc[:cut])
     pd.testing.assert_frame_equal(part, c[c["idx"] < cut].reset_index(drop=True), check_dtype=False)
+
+
+def test_lookahead_check_reuses_a_prebuilt_full_frame_and_returns_the_same_result(bars_1m, monkeypatch):
+    from goldbot.research import pipeline
+    dec = resample_bars(bars_1m, "15m").reset_index(drop=True)
+    context = {TF_LABEL[x]: resample_bars(bars_1m, x) for x in context_tfs("15m")}
+    frame = pipeline.build_decision_frame(dec, context)
+    before = frame[1].copy()
+    calls: list[int] = []
+    real = pipeline.build_decision_frame
+
+    def counting(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+    monkeypatch.setattr(pipeline, "build_decision_frame", counting)
+    reused = pipeline.lookahead_check(dec, context, full=frame[1])
+    assert len(calls) == 1                                  # only the history cut is built
+    assert reused == pipeline.lookahead_check(dec, context) and len(calls) == 3
+    pd.testing.assert_frame_equal(frame[1], before)         # the check does not touch the shared frame

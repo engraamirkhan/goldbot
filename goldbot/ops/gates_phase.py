@@ -74,6 +74,7 @@ from goldbot.research.registry import (
     promotion_refusal,
     row_hash,
 )
+from goldbot.risk.limits_profile import LimitsTag, counts_as_default_evidence
 
 CLOSED_TRADES_FILE = "closed_trades.jsonl"
 EVIDENCE_FILE = "gate_evidence.json"
@@ -164,6 +165,11 @@ class ClosedTrade(FrozenRecord):
     # return side * (exit - entry) / entry, which carries no commission or swap whatever pnl_basis says (the broker's
     # deals on a non-USD account with no conversion). None on records from before the field (read by pnl_basis alone)
     ret_basis: Literal["pnl", "price"] | None = None
+    # ADR 0032: the limits profile the entry was decided under ("default" or the owner's demo profile, e.g.
+    # "demo-2026-10-18") and its limits. None on records from before the field (all of which traded the defaults) and
+    # on adopted orphans; gate evidence must never mix profiles
+    limits_profile: str | None = None
+    limits: LimitsTag | None = None
 
 
 class EntryAudit(FrozenRecord):
@@ -178,6 +184,11 @@ class EntryAudit(FrozenRecord):
     timeframe: str | None = None
     family: str | None = None
     model_version: str | None = None
+    # ADR 0032: the limits profile the entry was decided under ("default" or the owner's demo profile, e.g.
+    # "demo-2026-10-18") and its limits. None on records from before the field (all of which traded the defaults) and
+    # on adopted orphans; gate evidence must never mix profiles
+    limits_profile: str | None = None
+    limits: LimitsTag | None = None
 
 
 class GateProgress(FrozenRecord):
@@ -573,7 +584,10 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     bt_dd = float(mf["max_dd"]) if best_ok and mf.get("max_dd") is not None else None
 
     paper_start, live_start = when.get("backtest_to_paper"), when.get("paper_to_tiny_live")
-    paper = [t for t in trades if t.mode == "demo" and (paper_start is None or t.exit_utc >= paper_start)]
+    demo = [t for t in trades if t.mode == "demo" and (paper_start is None or t.exit_utc >= paper_start)]
+    # ADR 0032: only trades decided under the default limits are paper evidence; demo-profile ones never count
+    paper = [t for t in demo if counts_as_default_evidence(t, settings.risk)]
+    excluded = len(demo) - len(paper)
     live = [t for t in trades if t.mode == "live" and (live_start is None or t.exit_utc >= live_start)]
     imputer = CostImputer.from_state(state_dir, settings)
     stop = evaluate_stop_rule(trades, paper_start, cap, cfg, now, imputer=imputer)
@@ -636,6 +650,7 @@ def evaluate_gates(state_dir: Path, settings: Settings, now: pd.Timestamp, trial
     items = _previous(2, passed) + [
         GateItem(name="paper_trades", met=len(paper) >= cfg.paper_min_trades,
                  evidence=f"{len(paper)} closed demo trades"
+                 + (f" ({excluded} under raised demo limits not counted, ADR 0032)" if excluded else "")
                  + ("" if closed_trade_files(state_dir) else " (no closed-trade record yet)"),
                  need=f">= {cfg.paper_min_trades}", threshold="paper_min_trades",
                  progress=GateProgress(value=len(paper), target=cfg.paper_min_trades, unit="trades")),

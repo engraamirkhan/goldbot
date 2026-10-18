@@ -171,6 +171,11 @@ class TvIndicatorStatus(BaseModel):
     alerts_24h: int
     plots_seen: list[str]
     gaps_24h: int
+    # history imported from the owner's chart export (counts only): bars and plot rows, and whether the repaint check has
+    # passed; `last_bar_time` and `alerts_24h` count live alerts only ("" when only an export exists)
+    csv_bars: int = 0
+    csv_rows: int = 0
+    repaint_status: Literal["none", "unvalidated", "validated"] = "none"
 
 
 class TvStatusView(BaseModel):

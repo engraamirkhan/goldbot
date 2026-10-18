@@ -226,6 +226,8 @@ class SchedulerSettings(_Section):
     drift_watch: ScheduleSettings
     feed_reconcile: ScheduleSettings
     gap_watch: ScheduleSettings = ScheduleSettings(kind="daily", at="23:55", max_late_hours=20)
+    # TradingView bars (second feed) against the reference M1, after the day's pulls and before the feed reconcile
+    tv_reconcile: ScheduleSettings = ScheduleSettings(kind="daily", at="23:15", max_late_hours=20)
     # encrypted off-host backup (goldbot/ops/backup.py) next to the daily break, before the nightly jobs start (no CPU
     # contention with them on the 4-core brain), and its weekly restore drill
     # on Sunday while the market is closed
@@ -346,10 +348,9 @@ class ResearchSettings(_Section):
     trial_budget_overrides: dict[str, int] = Field(default_factory=dict)
     # continuous research loop (owner, 2026-10-18; docs/plans/continuous-research-loop.md): trials one scheduled batch may
     # run, SEPARATE from the quarterly budget above (which is not changed). Every loop trial is still a registry row, so
-    # the deflated Sharpe counts the full running K. 0 turns the loop off.
+    # the deflated Sharpe counts the full running K. 0 turns the loop off. Owner-recorded in
+    # docs/decisions/0029-continuous-research-loop-budget.md; a loop trial cites rule_ref=loop (registry.LOOP_RULE_REF)
     loop_trials_per_run: int = Field(16, ge=0, le=256)
-    # account size the loop's sizing pre-filter uses (ATR only, no returns): GBP 1,000 at about 1.30 USD per GBP
-    loop_equity_usd: float = Field(1300.0, gt=0)
     # trials held for the pre-registered queue (director.reserved_trials), PER QUARTER ({"2027Q1": 9}; a quarter not
     # listed holds none): the research director, the label grid and the analyst spend only budget - used - reserved
     reserved_trials_quarter: dict[str, int] = Field(default_factory=dict)
@@ -596,6 +597,46 @@ class GateSettings(_Section):
         return [n for n in self.PROPOSED if n not in self.signed_off]
 
 
+class WebhookSettings(_Section):
+    """TradingView webhook (goldbot/webhook/app.py). The inbox is the only thing a caller with the secret can write to."""
+    max_rows_per_hour: int = Field(default=5000, gt=0)   # inbox rows received in the last hour; beyond it the answer is 429
+
+
+class TvPullSettings(_Section):
+    """TradingView direct pull (goldbot/data/tv_pull.py; owner decision 2026-10-18, ADR 0030): the owner's session
+    cookie (keyring only) reads the saved layouts' indicators and their bars from TradingView's chart websocket.
+    "Strictly read-only; polite rate limit with backoff; fail soft": off until the owner turns it on in
+    settings.local.yaml, and the defaults stay well under what one open chart tab sends."""
+    enabled: bool = False
+    symbols: dict[str, str] = Field(default_factory=lambda: {"OANDA:XAUUSD": "XAUUSD"})  # chart symbol -> store symbol
+    timeframes: list[str] = Field(default_factory=lambda: ["15", "60", "240", "1D"])
+    # keyring entry names of the browser cookies `sessionid` and `sessionid_sign` (the values never leave the keyring)
+    sessionid_key: str = "tradingview-sessionid"
+    sessionid_sign_key: str = "tradingview-sessionid-sign"
+    discover: bool = True                              # read the saved layouts for their indicators
+    discover_every_s: float = Field(default=21600, gt=0)
+    max_studies: int = Field(default=20, gt=0)
+    min_interval_s: float = Field(default=5.0, ge=1.0)            # between two requests, whatever kind
+    bars_per_request: int = Field(default=5000, gt=0, le=5000)
+    max_pages_per_tf: int = Field(default=5, ge=0)                # history pages per timeframe and pass
+    max_requests_per_day: int = Field(default=3000, gt=0)         # rolling 24 h; a pass is skipped beyond it
+    study_warmup_bars: int = Field(default=300, ge=0)             # oldest loaded bars whose study values are not kept
+    poll_interval_s: float = Field(default=900, gt=0)
+    poll_offset_s: float = Field(default=60, ge=0)                # after the bar close, so the bar has closed there
+    live_max_lag_s: float = Field(default=1800, gt=0)             # received within this of the close: pull_live
+    history_latency_default_s: float = Field(default=960, ge=0)   # until min_live_samples live bars measure the p95
+    min_live_samples: int = Field(default=20, gt=0)
+    backoff_base_s: float = Field(default=300, gt=0)
+    backoff_max_s: float = Field(default=21600, gt=0)
+    timeout_s: float = Field(default=30, gt=0)
+
+    @model_validator(mode="after")
+    def _backoff_ordered(self) -> TvPullSettings:
+        if self.backoff_max_s < self.backoff_base_s:
+            raise ValueError("tv_pull.backoff_max_s must be at least backoff_base_s")
+        return self
+
+
 class Settings(_Section):
     symbol: str
     data_root: str
@@ -621,6 +662,8 @@ class Settings(_Section):
     attribution: AttributionSettings = Field(default_factory=AttributionSettings)
     ledger: LedgerSettings = Field(default_factory=LedgerSettings)
     ticks: TickRecordSettings = Field(default_factory=TickRecordSettings)
+    webhook: WebhookSettings = Field(default_factory=WebhookSettings)
+    tv_pull: TvPullSettings = Field(default_factory=TvPullSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")
     @classmethod

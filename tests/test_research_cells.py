@@ -382,3 +382,105 @@ def test_lot_fit_is_an_optional_validated_flag_off_by_default_and_passed_as_a_ba
     assert "lot_fit" in inputs and inputs["lot_fit"]["default"] is False
     env = next(s for s in WF["jobs"]["plan"]["steps"] if s.get("id") == "plan")["env"]
     assert env["LOT_FIT"] == "${{ inputs.lot_fit }}"
+
+
+def test_a_row_with_an_unknown_field_is_rejected_and_the_cell_failed(tmp_path: Path) -> None:
+    plan, arts, registry = _two_cell_plan_with(tmp_path, [_planned_row(tmp_path, "a", injected="x")])
+    out = cells.record(plan, arts, registry.path)
+    rows = read_rows(registry.path)
+    assert out.failed == 1 and "injected" in next(r for r in rows if r["status"] == "failed")["results"]["error"]
+    assert not any("injected" in r for r in rows)
+
+
+def test_a_row_with_a_wrong_typed_field_is_rejected_and_counted_as_a_failed_trial(tmp_path: Path) -> None:
+    plan, arts, registry = _two_cell_plan_with(tmp_path, [_planned_row(tmp_path, "a", results=[1])])
+    out = cells.record(plan, arts, registry.path)
+    rows = read_rows(registry.path)
+    assert out.failed == 1 and n_trials_effective(rows) == 2
+
+
+def test_an_oversized_rows_file_fails_that_cell_alone_without_being_parsed(tmp_path: Path) -> None:
+    plan, arts, registry = _two_cell_plan_with(tmp_path, "x" * (cells.MAX_CELL_FILE + 1))
+    out = cells.record(plan, arts, registry.path)
+    assert out.failed == 1 and any("exceeds" in r["results"].get("error", "") for r in read_rows(registry.path))
+
+
+@pytest.mark.parametrize("status", ["[1]", "not json", '{"exit": "x"}', '{"exit": [1]}', "\x00"])
+def test_a_malformed_status_file_is_an_exit_of_minus_one_not_a_crashed_merge(tmp_path: Path, status: str) -> None:
+    plan, arts, registry = _two_cell_plan_with(tmp_path, [_planned_row(tmp_path, "a")])
+    (arts / "cell-0" / "status.json").write_text(status)
+    out = cells.record(plan, arts, registry.path)
+    assert out.recorded == 2 and out.failed == 0
+
+
+def test_a_deeply_nested_rows_file_fails_that_cell_alone_not_the_record_job(tmp_path: Path) -> None:
+    plan, arts, registry = _two_cell_plan_with(tmp_path, "[" * 1_000_000)
+    out = cells.record(plan, arts, registry.path)
+    assert out.failed == 1 and out.recorded == 1
+
+
+def test_a_deeply_nested_or_undecodable_status_file_is_an_exit_of_minus_one(tmp_path: Path) -> None:
+    plan, arts, registry = _two_cell_plan_with(tmp_path, [_planned_row(tmp_path, "a")])
+    (arts / "cell-0" / "status.json").write_text("[" * 1_000_000)
+    (arts / "cell-1" / "status.json").write_bytes(b"\xff\xfe\x00")
+    assert cells.record(plan, arts, registry.path).failed == 0
+
+
+def test_a_symlinked_artifact_file_is_never_followed(tmp_path: Path) -> None:
+    secret = tmp_path / "outside.jsonl"
+    secret.write_text(json.dumps(_planned_row(tmp_path, "a")) + "\n")
+    plan, arts, registry = _two_cell_plan_with(tmp_path, [_planned_row(tmp_path, "b")])
+    (arts / "cell-0" / "rows.jsonl").unlink()
+    (arts / "cell-0" / "rows.jsonl").symlink_to(secret)
+    (arts / "cell-0" / "report.md").unlink()
+    (arts / "cell-0" / "report.md").symlink_to(secret)
+    out = cells.record(plan, arts, registry.path)
+    assert out.failed == 1 and "symlink" in next(r for r in read_rows(registry.path) if r["status"] == "failed")["results"]["error"]
+    assert all("outside" not in rep["body"] for rep in out.reports)
+
+# ----------------------------------------------------------------------------------------------- the matrix round trip
+def _github_matrix(obj: Any) -> Any:
+    """What `fromJSON` then `toJSON(matrix.cell)` hands a cell: GitHub's expression numbers are doubles, written back
+    without a fraction when whole (3.0 -> 3)."""
+    return json.loads(json.dumps(obj), parse_float=lambda s: int(float(s)) if float(s).is_integer() else float(s))
+
+
+def _row_as_the_cell_runs_it(tmp: Path, cell: dict[str, Any]) -> dict[str, Any]:
+    """The row research_pass.py writes for the cell it was handed: the agent built from the variant in its argv."""
+    from goldbot.research.preregistration import resolve_variant
+    from goldbot.specialists import SPECIALISTS
+    variant = json.loads(next(a for a in cells.argv(cell) if a.startswith("--variants=")).split("=", 1)[1])[0]
+    spec = SPECIALISTS[cell["specialist"]](**resolve_variant(cell["specialist"], variant))
+    return TrialRegistry(tmp / "cell.jsonl").record(
+        agent_id=spec.agent_id, family=spec.family, config=spec.config, feature_version="fv", rationale="r",
+        results=_evaluated_results(k_run=3), status="evaluated")
+
+
+def test_the_plan_hands_the_matrix_the_form_the_matrix_hands_back_so_a_whole_float_cannot_change_the_agent() -> None:
+    plan = cells.plan(_env(VARIANTS='[{"stop_atr": 3.0, "target_atr": 2.5}]'))
+    assert _github_matrix(plan) == plan and plan[0]["variant"] == {"stop_atr": 3, "target_atr": 2.5}
+    assert cells.argv(_github_matrix(plan)[0]) == cells.argv(plan[0])
+
+
+@pytest.mark.parametrize("plan_variant", [{"stop_atr": 3.0}, {"stop_atr": 3}],
+                         ids=["plan-written-before-the-fix", "canonical-plan"])
+def test_a_whole_float_round_tripped_through_the_matrix_still_matches_its_plan_and_keeps_its_rows(
+        tmp_path: Path, plan_variant: dict[str, Any]) -> None:
+    plan = cells.plan(_env(VARIANTS='[{"stop_atr": 3.0}]'))
+    plan[0]["variant"] = plan_variant                   # the record job reads the plan, the cell ran the matrix's copy
+    arts = tmp_path / "arts"
+    _cell_dir(arts, 0, [_row_as_the_cell_runs_it(tmp_path, _github_matrix(plan[0]))])
+    registry = TrialRegistry(tmp_path / "registry.jsonl")
+    out = cells.record(plan, arts, registry.path)
+    assert out.failed == 0 and out.recorded == 1
+    assert [r["status"] for r in read_rows(registry.path)] == ["evaluated"]
+
+
+def test_a_cell_row_may_not_carry_a_repair_so_an_artifact_can_never_supersede_a_registry_row(tmp_path: Path) -> None:
+    row = _planned_row(tmp_path, "a", repair={"replaces": {"ts": "t", "agent_id": "a", "config_hash": "h",
+                                                          "feature_version": "unknown"}})
+    plan, arts, registry = _two_cell_plan_with(tmp_path, [row])
+    out = cells.record(plan, arts, registry.path)
+    rows = read_rows(registry.path)
+    assert out.failed == 1 and "repair" in next(r for r in rows if r["status"] == "failed")["results"]["error"]
+    assert not any("repair" in r for r in rows)

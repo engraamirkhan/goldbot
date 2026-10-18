@@ -8,7 +8,9 @@ template). Every value is a quoted string because TradingView writes `NaN` for a
 
 Security: TradingView IP allow-list (the TCP peer; behind the local proxy only the proxy's own, right-most
 X-Forwarded-For entry) + constant-time shared-secret check + a body size limit + non-finite values refused. The secret
-is never logged or echoed (validation errors list the field and the reason, never the input).
+is never logged or echoed (validation errors list the field and the reason, never the input). The secret is checked
+before the schema: an unauthenticated caller always gets the same 403. A per-hour row cap on the inbox (429) bounds
+what a leaked secret can write.
 
 "Persist before the ack": the alert is committed to the SQLite inbox (goldbot/webhook/inbox.py) before the 200; if
 the write fails the answer is 503 so TradingView retries. Idempotency is durable, on (indicator, version, symbol, tf,
@@ -18,11 +20,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 import math
 import os
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
@@ -31,6 +34,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from starlette.concurrency import run_in_threadpool
 
+from goldbot.config import WebhookSettings
 from goldbot.data.store import Store
 from goldbot.webhook.inbox import TvInbox, sync_to_store
 
@@ -152,8 +156,11 @@ def caller_ip(req: Request, trust_local_proxy: bool) -> str:
 
 
 def create_app(secret: str | None = None, inbox: TvInbox | None = None, enforce_ip: bool = True,
-               trust_local_proxy: bool = True, state_dir: str = "state", store: Store | None = None) -> FastAPI:
-    """`store`: when given, each new alert is also copied into the `tv_indicators` dataset after the answer has gone."""
+               trust_local_proxy: bool = True, state_dir: str = "state", store: Store | None = None,
+               max_rows_per_hour: int = WebhookSettings().max_rows_per_hour) -> FastAPI:
+    """`store`: when given, each new alert is also copied into the `tv_indicators` dataset after the answer has gone.
+    `max_rows_per_hour`: settings.webhook; the inbox takes at most this many rows an hour, then 429."""
+    row_cap = max_rows_per_hour
     secret = secret or os.environ.get("TV_WEBHOOK_SECRET", "")
     if not secret:
         raise RuntimeError("TV_WEBHOOK_SECRET not set")
@@ -183,6 +190,15 @@ def create_app(secret: str | None = None, inbox: TvInbox | None = None, enforce_
             body += chunk
             if len(body) > MAX_BODY_BYTES:
                 raise HTTPException(413, "body too large")
+        # authenticate first: read only "secret" from the parsed JSON, constant-time compare, one uniform 403 for
+        # anything that does not carry it (bad JSON, wrong shape, missing or wrong secret), so no schema oracle
+        try:
+            parsed = json.loads(body)
+            given = parsed.get("secret") if isinstance(parsed, dict) else None
+        except ValueError:
+            given = None
+        if not isinstance(given, str) or not hmac.compare_digest(given.encode(), secret.encode()):
+            raise HTTPException(403, "bad secret")
         try:
             alert = Alert.model_validate_json(body)
         except ValidationError as exc:
@@ -190,8 +206,11 @@ def create_app(secret: str | None = None, inbox: TvInbox | None = None, enforce_
             detail = [{"loc": [str(p) for p in e["loc"]], "msg": e["msg"]}
                       for e in exc.errors(include_input=False, include_url=False)]
             return JSONResponse({"detail": detail}, status_code=422)
-        if not hmac.compare_digest(alert.secret.encode(), secret.encode()):
-            raise HTTPException(403, "bad secret")
+        since = datetime.now(timezone.utc) - timedelta(hours=1)
+        if await run_in_threadpool(box.count_since, since) >= row_cap:
+            # the body is never logged: it carries the secret
+            log.warning("tv inbox row cap reached (%d rows in the last hour): alert refused with 429", row_cap)
+            raise HTTPException(429, "inbox row cap reached")
         row = to_row(alert, datetime.now(timezone.utc))
         try:
             new = await run_in_threadpool(box.put, row)

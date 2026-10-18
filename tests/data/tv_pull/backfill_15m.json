@@ -1,0 +1,36 @@
+{
+ "comment": "Synthetic scenario (values made up) in the wire shapes verified against TradingView on 2026-10-18 (series sds_1, studies st<k>, chart-page initData.content with a Script$PUB;<id> metaInfo string, 1e100 = na). Captured frames: tests/fixtures/tv/.",
+ "http": {
+  "https://www.tradingview.com/": "<html><script>window.user = {\"username\":\"owner\",\"id\":4242,\"auth_token\":\"AUTHTOKEN-fixture-abcdef123456\"};</script></html>",
+  "https://www.tradingview.com/my-charts/": "[{\"image_url\": \"LayOut01\", \"name\": \"Gold 15m\", \"symbol\": \"OANDA:XAUUSD\", \"interval\": \"15\"}]",
+  "https://www.tradingview.com/chart/LayOut01/": "<html><script>window.initData = {};\ninitData.content = {\"charts\": [{\"panes\": [{\"sources\": [{\"type\": \"MainSeries\", \"state\": {\"symbol\": \"OANDA:XAUUSD\", \"interval\": \"15\"}}, {\"type\": \"Study\", \"metaInfo\": \"Script$PUB;fixture123@tv-scripting-101[v.7.0]\", \"state\": {\"inputs\": {\"in_0\": 21, \"in_1\": true, \"pineId\": \"\", \"pineVersion\": \"\", \"__fast_calc\": false}}}, {\"type\": \"LineToolTrendLine\", \"state\": {\"points\": []}}]}]}]};\n</script></html>",
+  "https://pine-facade.tradingview.com/pine-facade/translate/PUB%3Bfixture123/7.0": "{\"success\": true, \"result\": {\"ilTemplate\": \"bmI9Ks46_fixture_il\", \"metaInfo\": {\"description\": \"K-Indi Pro\", \"shortDescription\": \"K-Indi\", \"pine\": {\"version\": \"7.0\"}, \"inputs\": [{\"id\": \"text\", \"defval\": \"x\", \"type\": \"text\"}, {\"id\": \"pineId\", \"defval\": \"PUB;fixture123\", \"type\": \"text\"}, {\"id\": \"pineVersion\", \"defval\": \"7.0\", \"type\": \"text\"}, {\"id\": \"in_0\", \"defval\": 50, \"type\": \"integer\", \"name\": \"Length\"}, {\"id\": \"in_1\", \"defval\": true, \"type\": \"bool\", \"name\": \"Show\"}], \"plots\": [{\"id\": \"plot_0\", \"type\": \"line\"}, {\"id\": \"plot_1\", \"type\": \"line\"}, {\"id\": \"plot_2\", \"type\": \"shapes\"}, {\"id\": \"plot_3\", \"type\": \"colorer\", \"target\": \"plot_0\"}], \"styles\": {\"plot_0\": {\"title\": \"EMA\"}, \"plot_1\": {\"title\": \"RSI\"}, \"plot_2\": {\"title\": \"Buy\"}}}}}"
+ },
+ "hello": [
+  "~m~69~m~{\"session_id\":\"<0.1.2>_fixture\",\"timestamp\":1760600000,\"release\":\"x\"}",
+  "~m~4~m~~h~1"
+ ],
+ "replies": {
+  "create_series": [
+   [
+    "~m~465~m~{\"m\":\"timescale_update\",\"p\":[\"cs_fixture\",{\"sds_1\":{\"node\":\"n\",\"s\":[{\"i\":0,\"v\":[1792146600.0,2400.0,2402.0,2398.5,2400.5,1004.0]},{\"i\":1,\"v\":[1792147500.0,2401.0,2403.0,2399.5,2401.5,1005.0]},{\"i\":2,\"v\":[1792148400.0,2402.0,2404.0,2400.5,2402.5,1006.0]},{\"i\":3,\"v\":[1792149300.0,2403.0,2405.0,2401.5,2403.5,1007.0]},{\"i\":4,\"v\":[1792150200.0,2404.0,2406.0,2402.5,2404.5,1008.0]},{\"i\":5,\"v\":[1792151100.0,2405.0,2407.0,2403.5,2405.5,1009.0]}],\"t\":\"s1\",\"lbs\":{}}},{}]}~m~71~m~{\"m\":\"series_completed\",\"p\":[\"cs_fixture\",\"sds_1\",\"streaming\",\"s1\",{}]}"
+   ]
+  ],
+  "request_more_data": [
+   [
+    "~m~341~m~{\"m\":\"timescale_update\",\"p\":[\"cs_fixture\",{\"sds_1\":{\"node\":\"n\",\"s\":[{\"i\":0,\"v\":[1792143000.0,2396.0,2398.0,2394.5,2396.5,1000.0]},{\"i\":1,\"v\":[1792143900.0,2397.0,2399.0,2395.5,2397.5,1001.0]},{\"i\":2,\"v\":[1792144800.0,2398.0,2400.0,2396.5,2398.5,1002.0]},{\"i\":3,\"v\":[1792145700.0,2399.0,2401.0,2397.5,2399.5,1003.0]}],\"t\":\"s1\",\"lbs\":{}}},{}]}",
+    "~m~4~m~~h~2",
+    "~m~71~m~{\"m\":\"series_completed\",\"p\":[\"cs_fixture\",\"sds_1\",\"streaming\",\"s1\",{}]}"
+   ],
+   [
+    "~m~71~m~{\"m\":\"series_completed\",\"p\":[\"cs_fixture\",\"sds_1\",\"streaming\",\"s1\",{}]}"
+   ]
+  ],
+  "create_study": [
+   [
+    "~m~554~m~{\"m\":\"du\",\"p\":[\"cs_fixture\",{\"st1\":{\"node\":\"n\",\"st\":[{\"i\":0,\"v\":[1792143000.0,2395.0,50.0,1.0,0.0]},{\"i\":1,\"v\":[1792143900.0,2396.0,51.0,1e+100,0.0]},{\"i\":2,\"v\":[1792144800.0,2397.0,52.0,1e+100,0.0]},{\"i\":3,\"v\":[1792145700.0,2398.0,53.0,1.0,0.0]},{\"i\":4,\"v\":[1792146600.0,2399.0,54.0,1e+100,0.0]},{\"i\":5,\"v\":[1792147500.0,2400.0,55.0,1e+100,0.0]},{\"i\":6,\"v\":[1792148400.0,2401.0,56.0,1.0,0.0]},{\"i\":7,\"v\":[1792149300.0,2402.0,57.0,1e+100,0.0]},{\"i\":8,\"v\":[1792150200.0,2403.0,58.0,1e+100,0.0]},{\"i\":9,\"v\":[1792151100.0,2404.0,59.0,1.0,0.0]}],\"t\":\"s1\"}}]}",
+    "~m~60~m~{\"m\":\"study_completed\",\"p\":[\"cs_fixture\",\"st1\",\"s1_st1\",{}]}"
+   ]
+  ]
+ }
+}

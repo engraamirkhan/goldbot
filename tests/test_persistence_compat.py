@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from goldbot.base import Record, SkewSummary
 from goldbot.config import load_settings
-from goldbot.data import crossfeed
+from goldbot.data import crossfeed, tv_pull
 from goldbot.data.ticks import TickIndex
 from goldbot.engine.runner import OpenTrade, PendingClose, SentOrder
 from goldbot.engine.shadow import ShadowBook, VersionBook
@@ -44,7 +44,7 @@ from goldbot.research.metrics import DaySummedDsr, DsrInputs
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.population import Member, Population
 from goldbot.research.promotion import PerfStats
-from goldbot.risk import hwm
+from goldbot.risk import hwm, limits_profile
 from goldbot.telegram import automode
 from goldbot.telegram.approvals import Outcome, Proposal
 from goldbot.telegram.bus import ApprovalBus
@@ -289,6 +289,21 @@ def case_hwm_confirmation(tmp: Path) -> None:
     assert hwm.read_only_confirmation(tmp, "icm-demo") == conf
 
 
+def case_limits_profile(tmp: Path) -> None:
+    """core.db demo-limits revert row and change log (ADR 0032) with a field from a newer release."""
+    store = limits_profile.LimitsStore(tmp)
+    state = limits_profile.LimitsState(account_id="icm-demo", reverted=True, since_utc=T0, reason="stage size_down")
+    cur = limits_profile.RiskLimitsCurrent(profile="default", daily_cap=0.02, weekly_cap=0.05, reason="reverted")
+    change = limits_profile.LimitsChange(account_id="icm-demo", ts_utc=T0, previous_profile="demo-2026-10-18",
+                                         current=cur)
+    assert store.save(state) and store.log_change(change)
+    with sqlite3.connect(tmp / "core.db") as conn:
+        for table in ("limits_state", "limits_changes"):
+            body = conn.execute(f"SELECT body FROM {table}").fetchone()[0]
+            conn.execute(f"UPDATE {table} SET body = ?", (json.dumps(_newer(json.loads(body))),))
+    assert store.load("icm-demo") == state and store.changes("icm-demo") == [change]
+
+
 def case_trial_dsr_inputs(tmp: Path) -> None:
     """A trial row's stored deflated-Sharpe inputs (results.model_filtered.dsr_inputs, metrics.DsrInputs; quant review
     2026-10-16) with a field from a newer release: gate 1 still recomputes the DSR from them."""
@@ -327,7 +342,7 @@ def case_attribution_report(tmp: Path) -> None:
 CASES = [case_closed_trade, case_closed_trade_from_before_ret_basis, case_closed_trade_price_return_without_ret_basis,
          case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
          case_shadow_stats, case_model_registry_and_backtest, case_population, case_research_plan, case_costs,
-         case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_hwm_confirmation,
+         case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_hwm_confirmation, case_limits_profile,
          case_trial_dsr_inputs, case_trial_day_summed_dsr, case_attribution_report, case_tick_index]
 
 
@@ -365,14 +380,17 @@ def test_every_persisted_record_model_has_a_compat_case():
     covered = {ClosedTrade, Proposal, VersionBook, PerfStats, ModelEntry, Member, ResearchPlan,
                BrokerTerms, CostTable, PublishedCostTable, scheduler.JobState, health.WatchState, health.HealthReport,
                DigestState, OutboxState, crossfeed.ReconcileReport, ledger.LedgerReport,
-               ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation, DsrInputs, DaySummedDsr,
+               ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation, limits_profile.LimitsState,
+               limits_profile.LimitsChange, DsrInputs, DaySummedDsr,
                AttributionReport, TickIndex,
                # the engine's orders file: tests/test_engine_safety.py::
                # test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote
                SentOrder, OpenTrade, PendingClose,
                # engine_<account>.json `schema_skew`: tests/test_schema_skew_health.py::
                # test_health_reads_a_skew_block_a_newer_engine_wrote
-               SkewSummary}
+               SkewSummary,
+               # state/tv.db pull log: tests/test_tv_pull.py::test_pull_log_rows_a_newer_release_wrote_still_read
+               tv_pull.PassReport, tv_pull.StudyMeta, tv_pull.StudySpec}
     loaded = {f.model for f in _tolerant_finds() if f.model not in GENERIC_MODEL_ARGS.values()}
     assert loaded - {m.__name__ for m in covered} == set()
 
@@ -387,6 +405,8 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/ops/setup_wizard.py", "merge_local_settings", "Settings"): "strict: Settings",
     ("goldbot/api/auth.py", "AuthStore.session_user", "User"):
         "strict: credentials (a newer lock or MFA flag must not be ignored)",
+    ("goldbot/research/cells.py", "_read_cell_rows", "CellRow"):
+        "strict: untrusted matrix-cell artifacts; a bad row becomes a failed trial (security review 2026-10-18)",
     ("goldbot/webhook/app.py", "create_app.tv", "Alert"):
         "strict: an inbound request body, not persisted state (a malformed alert is refused, TradingView sees 422)",
     ("goldbot/telegram/bus.py", "ApprovalBus.control", "Control"): "strict: the owner's halt; unreadable means halted",

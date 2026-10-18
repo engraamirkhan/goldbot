@@ -23,6 +23,7 @@ from typing import Any
 from goldbot.base import Record, write_atomic
 from goldbot.config import RiskSettings
 from goldbot.data.timeutil import heartbeat_problem
+from goldbot.risk.limits_profile import DEFAULT_PROFILE, RiskCeilings
 
 
 class SupervisorLimits(Record):
@@ -34,11 +35,37 @@ class SupervisorLimits(Record):
     # BACKLOG 29: an explicit combined day-loss limit (account currency); the effective one is the smallest of this and
     # the per-account limits the engines publish (accounts.yaml). None and none published = off
     daily_loss_limit_abs: float | None = None
+    # ADR 0032: the most the combined caps may rise to, set only when every enabled account is demo with the owner's
+    # ceilings (`limits_profile.supervisor_ceilings`); None = the caps above, always
+    ceilings: RiskCeilings | None = None
 
     @classmethod
-    def from_settings(cls, risk: RiskSettings) -> SupervisorLimits:
+    def from_settings(cls, risk: RiskSettings, ceilings: RiskCeilings | None = None) -> SupervisorLimits:
         return cls(daily_cap=risk.supervisor_daily_cap, weekly_cap=risk.supervisor_weekly_cap,
-                   dd_stage1=risk.drawdown_stage1, dd_stage2=risk.drawdown_stage2)
+                   dd_stage1=risk.drawdown_stage1, dd_stage2=risk.drawdown_stage2, ceilings=ceilings)
+
+    def caps(self, engines: list[dict]) -> tuple[float, float]:
+        """(daily, weekly) combined caps now. ADR 0032 lockstep: above the defaults only with `ceilings` set and every
+        engine file a demo publishing raised current limits (`limits_current`, a profile other than default); then the
+        smallest published cap, clamped to [default .. ceiling]. One engine on the default profile (reverted, or a
+        controller at its defaults) brings the combined caps back to their own defaults at once (never to that
+        engine's per-account cap, which is wider than the combined one). Any other file (live, silent, not a finite
+        number) keeps the defaults."""
+        c = self.ceilings
+        if c is None or not engines:
+            return self.daily_cap, self.weekly_cap
+        daily, weekly = [], []
+        for e in engines:
+            cur = e.get("limits_current")
+            if e.get("mode") != "demo" or not isinstance(cur, dict) or cur.get("profile") in (None, DEFAULT_PROFILE) \
+                    or not (_finite_number(cur.get("daily_cap")) and _finite_number(cur.get("weekly_cap"))):
+                return self.daily_cap, self.weekly_cap
+            daily.append(float(cur["daily_cap"]))
+            weekly.append(float(cur["weekly_cap"]))
+
+        def bounded(v: float, floor: float, ceiling: float | None) -> float:
+            return min(max(v, floor), max(floor, ceiling if ceiling is not None else floor))
+        return bounded(min(daily), self.daily_cap, c.daily), bounded(min(weekly), self.weekly_cap, c.weekly)
 
 
 # the engine-file numbers the supervisor reads: `ts` must be present, the rest may be absent (read as 0 / off) but when
@@ -163,9 +190,10 @@ class Supervisor:
         week_loss = 1 - eq / wk0 if wk0 else 0.0
         dd = 1 - eq / hwm if hwm else 0.0
         reasons = []
-        if day_loss >= self.limits.daily_cap:
+        daily_cap, weekly_cap = self.limits.caps(engines)
+        if day_loss >= daily_cap:
             reasons.append("combined_daily_cap")
-        if week_loss >= self.limits.weekly_cap:
+        if week_loss >= weekly_cap:
             reasons.append("combined_weekly_cap")
         # the owner's absolute daily limit on the combined loss so far (one currency: mixed currencies halt below)
         day_loss_amount = day0 - eq
@@ -206,8 +234,8 @@ class Supervisor:
                  "currencies": currencies, "currency_files": currency_files,
                  "money_excluded": excluded, "no_fresh_engine": bool(engines) and not fresh, "day_loss_amount": day_loss_amount, "daily_loss_limit_abs": abs_limit,
                  # the dashboard's loss budget (goldbot/ops/account_view.py): the combined caps and their (one-currency) bases
-                 "daily_cap": self.limits.daily_cap, "combined_day_start_equity": day0,
-                 "weekly_cap": self.limits.weekly_cap, "combined_week_start_equity": wk0}
+                 "daily_cap": daily_cap, "combined_day_start_equity": day0,
+                 "weekly_cap": weekly_cap, "combined_week_start_equity": wk0}
         write_atomic(self.dir / "supervisor.json", json.dumps(state), durable=False)   # heartbeat: never half-written
         return state
 
