@@ -74,7 +74,7 @@ tool space: the owner's trader toolkit, plus what the owner asked us to find bey
 | # | Name | Definition | Evidence | Gold rationale | Horizon | Data | In goldbot | PIT risk |
 |---|---|---|---|---|---|---|---|---|
 | 36 | Tick count / z-score | Quote updates per bar | W as a volume proxy (FX ρ ≈ 0.9, secondary) [R39] | Activity and news | all | D | `microstructure`, `breakout` | **Medium**: Dukascopy ticks ≠ VPS broker ticks (train/serve skew) |
-| 37 | MFI(12) | RSI weighted by volume | N | The owner's KOG indicator | 15m–1h | D | `money_flow` | Low |
+| 37 | MFI(12) | RSI weighted by volume | N | The owner's chart indicator | 15m–1h | D | `money_flow` | Low |
 | 38 | OBV / Chaikin A/D | Cumulative volume signed by close location | N | None | 1h–1d | D | no | Low |
 | 39 | Signed tick imbalance (tick rule) | (upticks − downticks) / ticks per bar | S at seconds horizon (OFI) [R16]; decays fast | Order-flow pressure | 15m | D (raw ticks) | no | Low; needs a tick-level job |
 | 40 | Amihud-style illiquidity | \|return\| / tick count | M for liquidity pricing [R34] *(unverified)* | Thin-market moves revert | 1h–1d | D | no | Low |

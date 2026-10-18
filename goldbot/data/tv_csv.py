@@ -1,6 +1,6 @@
 """Import the owner's TradingView "Export chart data" CSV into the `tv_indicators` dataset (opt-in research history).
 
-    python -m goldbot.ops.run tv-import <csv> --indicator K-Indi --version 2.02 --tf 15
+    python -m goldbot.ops.run tv-import <csv> --indicator smc --version 1.0 --tf 15
 
 The export has `time, open, high, low, close` and then one column per visible plot, often with repeated names, so the
 plots are named by position (`plot_0..N`, the same names the alert template uses) and the header text is kept as

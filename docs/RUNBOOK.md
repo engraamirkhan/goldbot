@@ -865,10 +865,10 @@ failed save answers 503 so TradingView retries.
    has plots, the Data Window lists them):
 
 ```json
-{"indicator":"K-Indi","version":"2.02","symbol":"{{ticker}}","tf":"{{interval}}","bar_time":"{{time}}","fired_at":"{{timenow}}","price":"{{close}}","plots":{"plot_0":"{{plot_0}}","plot_1":"{{plot_1}}","plot_2":"{{plot_2}}","plot_3":"{{plot_3}}","plot_4":"{{plot_4}}","plot_5":"{{plot_5}}","plot_6":"{{plot_6}}","plot_7":"{{plot_7}}","plot_8":"{{plot_8}}","plot_9":"{{plot_9}}","plot_10":"{{plot_10}}","plot_11":"{{plot_11}}","plot_12":"{{plot_12}}","plot_13":"{{plot_13}}","plot_14":"{{plot_14}}","plot_15":"{{plot_15}}","plot_16":"{{plot_16}}","plot_17":"{{plot_17}}","plot_18":"{{plot_18}}","plot_19":"{{plot_19}}"},"secret":"<the stored secret>"}
+{"indicator":"smc","version":"1.0","symbol":"{{ticker}}","tf":"{{interval}}","bar_time":"{{time}}","fired_at":"{{timenow}}","price":"{{close}}","plots":{"plot_0":"{{plot_0}}","plot_1":"{{plot_1}}","plot_2":"{{plot_2}}","plot_3":"{{plot_3}}","plot_4":"{{plot_4}}","plot_5":"{{plot_5}}","plot_6":"{{plot_6}}","plot_7":"{{plot_7}}","plot_8":"{{plot_8}}","plot_9":"{{plot_9}}","plot_10":"{{plot_10}}","plot_11":"{{plot_11}}","plot_12":"{{plot_12}}","plot_13":"{{plot_13}}","plot_14":"{{plot_14}}","plot_15":"{{plot_15}}","plot_16":"{{plot_16}}","plot_17":"{{plot_17}}","plot_18":"{{plot_18}}","plot_19":"{{plot_19}}"},"secret":"<the stored secret>"}
 ```
 
-   Change `indicator` and `version` per indicator (they name the data: `K-Indi@2.02`); type the secret into the alert
+   Change `indicator` and `version` per indicator (they name the data: `smc@1.0`); type the secret into the alert
    yourself, never into chat or a file. Alerts need a TradingView plan with webhooks and two-factor sign-in on.
 3. Check it: the dashboard endpoint `/api/tradingview` lists each indicator and timeframe with its last bar, alerts in the
    last 24 h, plots seen and gaps (a market-closed stretch also counts as missing bars).
@@ -881,7 +881,7 @@ failed save answers 503 so TradingView retries.
 
    ```
    scp ~/Downloads/<file>.csv <brain-ssh-name>:~/goldbot/data/
-   ~/goldbot/.venv/bin/python -m goldbot.ops.run tv-import ~/goldbot/data/<file>.csv --indicator K-Indi --version 2.02 --tf 15
+   ~/goldbot/.venv/bin/python -m goldbot.ops.run tv-import ~/goldbot/data/<file>.csv --indicator smc --version 1.0 --tf 15
    ```
 
    `--indicator` and `--version` must be spelled exactly as in the alert message; `--tf` is 15, 60, 240 or 1D. The
@@ -889,7 +889,7 @@ failed save answers 503 so TradingView retries.
    bar in the future or a cell that is not a number, and writes nothing then. Repeating it is harmless. Imported bars are
    marked `unvalidated (repaint risk)`: a chart export can differ from what the indicator showed live. After about
    three weeks of live alerts (at least 200 bars both ways), export again, import again, and run
-   `~/goldbot/.venv/bin/python -m goldbot.ops.run tv-repaint-check --indicator K-Indi --version 2.02 --tf 15`; it
+   `~/goldbot/.venv/bin/python -m goldbot.ops.run tv-repaint-check --indicator smc --version 1.0 --tf 15`; it
    prints the match per plot and marks the history validated only at 99 % or more. `/api/tradingview` shows each
    indicator's imported bars and its repaint status.
 

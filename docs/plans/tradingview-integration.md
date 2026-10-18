@@ -43,11 +43,11 @@ day with nothing exposed but `/tv`; switch to DuckDNS + Caddy only if the securi
 4. For each saved chart (XAUUSD, 15m and 1h first) and each indicator: Alert, condition = the indicator (or "Any
    alert() function call" if that is all it offers), **Once per bar close**, longest expiry, Webhook URL = the
    address, message (values quoted because TradingView writes `NaN`, which is not JSON):
-   `{"indicator":"K-Indi","version":"2.02","symbol":"{{ticker}}","tf":"{{interval}}","bar_time":"{{time}}","fired_at":"{{timenow}}","signal":"bar","close":"{{close}}","plots":{"0":"{{plot_0}}","1":"{{plot_1}}","2":"{{plot_2}}"},"secret":"<secret>"}`
+   `{"indicator":"smc","version":"1.0","symbol":"{{ticker}}","tf":"{{interval}}","bar_time":"{{time}}","fired_at":"{{timenow}}","signal":"bar","close":"{{close}}","plots":{"0":"{{plot_0}}","1":"{{plot_1}}","2":"{{plot_2}}"},"secret":"<secret>"}`
    (list as many `plot_N` as the indicator has; the Data Window shows the count.)
 5. CSV history per timeframe: indicators visible, scroll back to load everything, Export chart data, ISO time, name
    `<indicator>_<version>_<tf>_<yyyymmdd>.csv`, then on the Mac:
-   `scp ~/Downloads/K-Indi_2.02_15_20261018.csv goldbot-brain:~/goldbot/data/inbox/tv/`
+   `scp ~/Downloads/smc_1.0_15_20261018.csv goldbot-brain:~/goldbot/data/inbox/tv/`
 6. In the dashboard, name each plot once (e.g. 0 = "ema50", 3 = "buy_large", kind level/oscillator/event/state).
 7. After three weeks of live bars, export the CSVs again for the repaint check.
 

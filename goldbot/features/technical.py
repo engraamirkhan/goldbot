@@ -183,7 +183,7 @@ def f_mas(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     for n in (50, 200):
         out[f"dist_sma{n}_atr"] = (c - sm[n]) / a
     out["dist_hma55_atr"] = (c - hma(c, 55)) / a
-    # EMA stack / ribbon state (K-RB style): +1 fully bullish order, -1 fully bearish, 0 mixed
+    # EMA stack / ribbon state (EMA ribbon style): +1 fully bullish order, -1 fully bearish, 0 mixed
     e = [em[n] for n in (8, 21, 50, 100, 200)]
     bull = np.all([e[i] > e[i + 1] for i in range(4)], axis=0)
     bear = np.all([e[i] < e[i + 1] for i in range(4)], axis=0)
@@ -231,7 +231,7 @@ def f_mr(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
 @feature("money_flow", "mean_reversion", version="2", lookback=50,
          signed={"mfi12": 50.0, "mfi_zone": 2.0, "mfi_slope": 0.0})   # v2: fractional volumes keep their weight
 def f_mfi(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
-    """KOG-MFI replica: MFI(12) with zones 20/40/60/80."""
+    """Money-flow (MFI) replica: MFI(12) with zones 20/40/60/80."""
     m = mfi(df, 12)
     out = Columns(df.index, {"mfi12": m})
     out["mfi_zone"] = pd.cut(m, [-1, 20, 40, 60, 80, 101], labels=False)

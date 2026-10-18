@@ -14,7 +14,7 @@ M15 = pd.Timedelta(minutes=15)
 
 
 def meta():
-    return cat.StudyMeta(study="K-Indi", version="2.02", tf="15", inputs={"in_0": 50},
+    return cat.StudyMeta(study="smc", version="1.0", tf="15", inputs={"in_0": 50},
                          plots=[cat.StudyPlot(id="plot_0", type="line", title="MFI"),
                                 cat.StudyPlot(id="plot_1", type="shapes", title="Buy large")])
 
@@ -31,7 +31,7 @@ def rows(bars, *, origin="pull_live", validated=None, lag=pd.Timedelta(seconds=5
     for i in bars:
         bar = T0 + i * M15
         for plot, v in (("plot_0", 10.0 + i if value is None else value), ("plot_1", 1.0 if i % 2 == 0 else np.nan)):
-            out.append({"indicator": "K-Indi", "version": "2.02", "tf": "15", "bar_time": bar,
+            out.append({"indicator": "smc", "version": "1.0", "tf": "15", "bar_time": bar,
                         "available_utc": bar + M15 + lag, "intrabar": False, "plot": plot, "value": v,
                         "origin": origin, "repaint_validated": validated,
                         "meta_hash": meta_hash or meta().meta_hash})
@@ -99,7 +99,7 @@ def test_missing_bar_is_nan_not_stale():
 
 
 def test_more_than_8_tv_columns_refused():
-    nine = cat.StudyMeta(study="K-Indi", version="2.02", tf="15",
+    nine = cat.StudyMeta(study="smc", version="1.0", tf="15",
                          plots=[cat.StudyPlot(id=f"plot_{i}", type="shapes", title="Buy") for i in range(9)])
     many = cat.catalog(nine)
     with pytest.raises(ValueError, match="8"):
@@ -159,7 +159,7 @@ def test_rows_without_intrabar_and_digit_plot_ids_are_read():
     t = T0 + M15 + pd.Timedelta(minutes=2)
     out = tvp.f_tv_plots(frame([t]), {"tv_indicators": long, "tv_catalog": specs()})
     assert out[col()].tolist() == [10.0] and out[col("plot_1")].tolist() == [1.0]
-    digit = cat.StudyMeta(study="K-Indi", version="2.02", tf="15", inputs={"in_0": 50},
+    digit = cat.StudyMeta(study="smc", version="1.0", tf="15", inputs={"in_0": 50},
                           plots=[cat.StudyPlot(id="1", type="shapes", title="Buy")])
     (spec,) = cat.catalog(digit)
     out = tvp.f_tv_plots(frame([t]), {"tv_indicators": long.assign(meta_hash=digit.meta_hash), "tv_catalog": [spec]})
@@ -168,7 +168,7 @@ def test_rows_without_intrabar_and_digit_plot_ids_are_read():
 
 def test_an_unknown_timeframe_is_refused():
     with pytest.raises(ValueError, match="timeframe"):
-        cat.StudyMeta(study="K-Indi", version="2.02", tf="4H")
+        cat.StudyMeta(study="smc", version="1.0", tf="4H")
     bad = specs()[0].model_copy(update={"tf": "4H"})
     with pytest.raises(ValueError, match="timeframe"):
         tvp.f_tv_plots(frame([T0]), {"tv_indicators": rows([0]), "tv_catalog": [bad]})
@@ -194,8 +194,8 @@ def test_legacy_tradingview_feature_keeps_input_sets_and_versions_apart():
     t = T0 + 2 * M15 + pd.Timedelta(minutes=2)
     long = pd.concat([rows([1], meta_hash="aaaaaaaa"), rows([1], meta_hash="bbbbbbbb", value=50.0)])
     out = tvf.f_tradingview(frame([t]), {"tv_indicators": long})
-    assert out["tv_k_indi_aaaaaaaa_15_plot_0"].tolist() == [11.0]
-    assert out["tv_k_indi_bbbbbbbb_15_plot_0"].tolist() == [50.0]
+    assert out["tv_smc_aaaaaaaa_15_plot_0"].tolist() == [11.0]
+    assert out["tv_smc_bbbbbbbb_15_plot_0"].tolist() == [50.0]
     alerts = pd.concat([rows([1]).assign(meta_hash=None, origin=None),
                         rows([1], value=50.0).assign(meta_hash=None, origin=None, version="2.03")])
     with pytest.raises(ValueError, match="version"):
