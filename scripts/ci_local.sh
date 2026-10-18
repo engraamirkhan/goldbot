@@ -7,14 +7,18 @@
 #   - exactly the env CI sets (GOLDBOT_ALLOW_PLAINTEXT=1, CI=true, TZ=UTC), PYTHON_KEYRING_BACKEND=fail, no GH_TOKEN,
 #     no proxies, GOLDBOT_NO_NETWORK=1 (tests/conftest.py also fails any test that runs gh/ssh/curl or leaves loopback);
 #   - outbound network blocked at the kernel with macOS sandbox-exec (loopback stays open) when it is available;
-#   - the jobs side by side: backend-lint (pre-commit, ruff, mypy, api-contract) then frontend, 4 unit shards
-#     (GOLDBOT_SHARD=i/4, `pytest -m "not integration" -q --tb=short`, random order like CI) and integration + dry run.
-#     Six lanes, each pytest on one xdist worker: at most 6 workers in total.
-# Every failing pytest test is re-run alone 5 times with different `-p randomly` seeds: it is reported FLAKY when any
-# re-run passes and FAIL when all fail. Exit status is non-zero on any FAIL or FLAKY.
+#   - the same jobs and shards as CI: the matrix sizes (backend-unit, backend-integration shards; e2e projects) are
+#     READ FROM ci.yml, so a CI matrix change needs no edit here (tests/test_ci_workflow.py checks the commands).
+#     smoke (pre-commit, ruff, collection, merge smoke) runs first, beside backend-lint (mypy, api-contract) ->
+#     frontend-checks; when smoke passes the unit and integration shards start (GOLDBOT_SHARD=i/N, same
+#     `pytest -m ...` as CI, random order, dry run in integration shard 0) and e2e runs per project after
+#     frontend-checks. Each pytest lane uses one xdist worker (CI: -n auto per shard): with 4 + 4 shards that is
+#     at most 9 busy processes. A failed smoke skips the shards and e2e, as in CI.
+# Every failing pytest test is re-run alone 5 times with different `-p randomly` seeds (CI re-runs once): it is
+# reported FLAKY when any re-run passes and FAIL when all fail. Exit status is non-zero on any FAIL or FLAKY.
 # Usage: scripts/ci_local.sh [--no-web] [--no-e2e]   Logs: ${CI_LOCAL_LOG:-~/tmp/ci_local/<worktree>}
-# Not reproduced: the pip install steps (the repo's .venv is used), Linux itself, GitHub's runner speed. `npm ci` runs
-# --offline from the local npm cache.
+# Not reproduced: the install steps (the repo's .venv is used), Linux itself, GitHub's runner speed, and the PR
+# prose-only skip (locally everything runs, as on main). `npm ci` runs --offline from the local npm cache.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 ROOT=$PWD
@@ -28,8 +32,18 @@ for arg in "$@"; do
 done
 
 [ -x .venv/bin/python ] || { echo "ci_local: no .venv; run: uv venv --python 3.11 && uv pip install -e '.[dev]'" >&2; exit 2; }
+# The CI matrix, from ci.yml itself: "<unit shards> <integration shards> <e2e projects, comma-separated>"
+matrix=$(.venv/bin/python - <<'PY'
+import yaml
+jobs = yaml.safe_load(open(".github/workflows/ci.yml"))["jobs"]
+print(len(jobs["backend-unit"]["strategy"]["matrix"]["shard"]), len(jobs["backend-integration"]["strategy"]["matrix"]["shard"]),
+      ",".join(jobs["e2e"]["strategy"]["matrix"]["project"]))
+PY
+) || { echo "ci_local: cannot read the matrix from .github/workflows/ci.yml" >&2; exit 2; }
+read -r N_UNIT N_INTEG E2E_PROJECTS <<< "$matrix"
+echo "ci_local: ci.yml matrix: $N_UNIT unit shards, $N_INTEG integration shards, e2e projects $E2E_PROJECTS"
 L=${CI_LOCAL_LOG:-$HOME/tmp/ci_local/$(basename "$ROOT")}
-mkdir -p "$L" "$HOME/tmp"; rm -f "$L"/*.log "$L"/*.status
+mkdir -p "$L" "$HOME/tmp"; rm -f "$L"/*.log "$L"/*.status "$L"/*.steps "$L"/*.xml
 T=$(mktemp -d "$HOME/tmp/ci_local_home.XXXXXX")   # the fake HOME
 trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin" "$T/tmp"
@@ -87,11 +101,17 @@ step() {  # step NAME ENV... -- CMD: like job, but appended to the lane log and 
 }
 lane_done() { [ -f "$L/$1.steps" ] && ! awk '$2 != 0 {bad=1} END {exit bad}' "$L/$1.steps"; echo $? > "$L/$1.status"; }
 
-# --- the lanes (commands copied from ci.yml) -----------------------------------------------------------------------
+# --- the lanes (commands copied from ci.yml; the matrix sizes come from it) ----------------------------------------
+smoke_lane() {
+  : > "$L/smoke.log"; rm -f "$L/smoke.steps"
+  step smoke pre-commit -- pre-commit run --all-files --show-diff-on-failure --color never
+  step smoke ruff -- ruff check goldbot tests scripts --output-format concise
+  step smoke collect -- bash -c 'pytest --collect-only -q -p no:randomly -p no:cacheprovider | tail -20'
+  step smoke merge-smoke -- scripts/merge_smoke.sh HEAD
+  lane_done smoke
+}
 lint_lane() {
   : > "$L/lint.log"; rm -f "$L/lint.steps"
-  step lint pre-commit -- pre-commit run --all-files --show-diff-on-failure --color never
-  step lint backend-lint -- ruff check goldbot tests scripts --output-format concise
   step lint backend-typecheck -- mypy
   step lint api-contract -- bash -c 'python scripts/export_openapi.py && npm --prefix web run gen:api && git diff --exit-code -- web/openapi.json web/src/lib/schema.d.ts'
   lane_done lint
@@ -102,37 +122,62 @@ frontend_lane() {
   step frontend frontend-lint -- npm --prefix web run lint
   step frontend frontend-typecheck -- npm --prefix web run typecheck
   step frontend frontend-unit -- npm --prefix web test -- --reporter=verbose
-  if [ "$e2e" = 1 ]; then
-    chrome=${PW_CHROMIUM_PATH:-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}
-    if [ -x "$chrome" ]; then
-      step frontend e2e CI=1 PYTHON=python "PW_CHROMIUM_PATH=$chrome" -- bash -c 'cd web && npm run build && npm run test:e2e'
-    else
-      echo "=== e2e SKIPPED: no Chrome at $chrome (set PW_CHROMIUM_PATH)" >> "$L/frontend.log"
-    fi
-  else
-    echo "=== e2e SKIPPED (--no-e2e)" >> "$L/frontend.log"
-  fi
   lane_done frontend
 }
+e2e_lane() {  # one step per Playwright project, as the CI e2e matrix; sequential (both write web/e2e/.server*.json)
+  : > "$L/e2e.log"; rm -f "$L/e2e.steps"
+  chrome=${PW_CHROMIUM_PATH:-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}
+  if [ ! -x "$chrome" ]; then echo "=== e2e SKIPPED: no Chrome at $chrome (set PW_CHROMIUM_PATH)" >> "$L/e2e.log"; echo 0 > "$L/e2e.status"; return; fi
+  step e2e build -- npm --prefix web run build
+  local p
+  for p in ${E2E_PROJECTS//,/ }; do
+    step e2e "e2e-$p" CI=1 PYTHON=python "PW_CHROMIUM_PATH=$chrome" -- bash -c "cd web && npx playwright test --project=$p"
+  done
+  lane_done e2e
+}
+skip_lane() { echo "SKIPPED: smoke failed (CI skips this job too)" > "$L/$1.log"; echo skipped > "$L/$1.status"; }
 
 start=$(date +%s)
-lanes=(unit0 unit1 unit2 unit3 integration lint)
-for i in 0 1 2 3; do
-  job "unit$i" "GOLDBOT_SHARD=$i/4" -- pytest -m "not integration" -q -n 1 --tb=short -p no:cacheprovider &
-done
-job integration -- bash -c 'pytest -m integration -q -n 1 --tb=short -p no:cacheprovider && python scripts/dry_run.py 1 | tail -40' &
-# the sixth worker: lint, then the frontend (kept sequential so six lanes is the ceiling)
-( lint_lane; [ "$web" = 1 ] && frontend_lane ) &
+unit_lanes=(); integ_lanes=()
+for ((i = 0; i < N_UNIT; i++)); do unit_lanes+=("unit$i"); done
+for ((i = 0; i < N_INTEG; i++)); do integ_lanes+=("integration$i"); done
+lanes=(smoke lint)
 [ "$web" = 1 ] && lanes+=(frontend)
+lanes+=("${unit_lanes[@]}" "${integ_lanes[@]}")
+[ "$web" = 1 ] && [ "$e2e" = 1 ] && lanes+=(e2e)
+
+# backend-lint -> frontend-checks -> (once smoke passed) e2e, beside smoke and then the shards
+(
+  lint_lane
+  if [ "$web" = 1 ]; then
+    frontend_lane
+    if [ "$e2e" = 1 ]; then
+      while [ ! -f "$L/smoke.status" ]; do sleep 2; done
+      if [ "$(cat "$L/smoke.status")" = 0 ]; then e2e_lane; else skip_lane e2e; fi
+    fi
+  fi
+) &
+smoke_lane
+if [ "$(cat "$L/smoke.status")" = 0 ]; then
+  for ((i = 0; i < N_UNIT; i++)); do
+    job "unit$i" "GOLDBOT_SHARD=$i/$N_UNIT" -- pytest -m "not integration" -q -n 1 --tb=short -p no:cacheprovider --junitxml="$L/unit$i.xml" &
+  done
+  for ((i = 0; i < N_INTEG; i++)); do
+    dry=true; [ "$i" = 0 ] && dry='python scripts/dry_run.py 1 | tail -40'
+    job "integration$i" "GOLDBOT_SHARD=$i/$N_INTEG" -- bash -c "set -o pipefail; pytest -m integration -q -n 1 --tb=short -p no:cacheprovider --junitxml='$L/integration$i.xml'; rc=\$?; $dry || rc=1; exit \$rc" &
+  done
+else
+  for lane in "${unit_lanes[@]}" "${integ_lanes[@]}"; do skip_lane "$lane"; done
+fi
 wait
 
 # --- reruns -----------------------------------------------------------------------------------------------------
 rerun_log=$L/reruns.log; : > "$rerun_log"
 verdicts=()
-for lane in unit0 unit1 unit2 unit3 integration; do
-  [ "$(cat "$L/$lane.status" 2>/dev/null)" = 0 ] && continue
+for lane in "${unit_lanes[@]}" "${integ_lanes[@]}"; do
+  case "$(cat "$L/$lane.status" 2>/dev/null)" in 0|skipped) continue ;; esac
   ids=$(grep -E '^(FAILED|ERROR) tests/' "$L/$lane.log" | sed -E 's/^(FAILED|ERROR) //; s/ - .*$//' | sort -u)
-  if [ -z "$ids" ]; then verdicts+=("FAIL  $lane (no failing test id found: collection, crash or timeout; see $L/$lane.log)"); continue; fi
+  if [ -z "$ids" ]; then verdicts+=("FAIL  $lane (no failing test id found: collection, crash, timeout or the dry run; see $L/$lane.log)"); continue; fi
   while IFS= read -r id; do
     pass=0; fail=0
     for seed in 11 222 3333 44444 555555; do
@@ -149,11 +194,14 @@ done
 status=0
 for lane in "${lanes[@]}"; do
   code=$(cat "$L/$lane.status" 2>/dev/null || echo missing)
-  summary=$(grep -E ' passed| failed|Success|error' "$L/$lane.log" | tail -1)
-  printf '%-12s %s  %s\n' "$lane" "$([ "$code" = 0 ] && echo PASS || echo FAIL)" "$summary"
+  summary=$(grep -E ' passed| failed|Success|error|SKIPPED' "$L/$lane.log" 2>/dev/null | tail -1)
+  verdict=FAIL; [ "$code" = 0 ] && verdict=PASS; [ "$code" = skipped ] && verdict=SKIP
+  printf '%-14s %s  %s\n' "$lane" "$verdict" "$summary"
   [ "$code" = 0 ] || status=1
-  if [ -f "$L/$lane.steps" ]; then awk '$2 != 0 {print "             failed step: " $1}' "$L/$lane.steps"; fi
+  if [ -f "$L/$lane.steps" ]; then awk '$2 != 0 {print "               failed step: " $1}' "$L/$lane.steps"; fi
 done
 for ((n = 0; n < ${#verdicts[@]}; n++)); do echo "${verdicts[$n]}"; done
+slowest=$(for f in "$L"/integration*.xml; do [ -f "$f" ] && .venv/bin/python scripts/ci_summary.py summary --title "$(basename "$f" .xml)" "$f" --top 1 | grep -E 'in [0-9]+ s|^\| [0-9]'; done)
+[ -n "$slowest" ] && printf 'integration shards (tests, wall, slowest test):\n%s\n' "$slowest"
 echo "total $(( $(date +%s) - start )) s, logs in $L (re-runs: $rerun_log)"
 exit $status
