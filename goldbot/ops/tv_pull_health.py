@@ -4,7 +4,8 @@ Design rule: TradingView is a second, optional feed ("never a primary bar source
 exits. Every bad state here is therefore a WARN, never a FAIL, and nothing in the engine reads it.
 
 State (robust-storage rule: SQLite, no new JSON state file): one row in the table `tv_auth` of state/tv_auth.db (its own file: never tv.db,
-the webhook's durable alert inbox, which this module never opens or moves; WAL, `core` pragmas; created here with IF NOT EXISTS, so no schema migration is shared with the pull):
+the webhook's durable alert inbox, which this module never opens or moves; WAL, FULL; its own versioned schema,
+goldbot/db/migrations.py TV_AUTH, applied by the writers here; the health check only reads):
 
     status        "ok" | "expired"      written by the pull: `record_ok` after a successful pull, `record_expired` when
                                         TradingView refused the session cookie
@@ -31,6 +32,7 @@ import pandas as pd
 
 from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.db.connection import connect, write
+from goldbot.db.migrations import migrate
 
 if TYPE_CHECKING:
     from goldbot.ops.health import Check, HealthContext
@@ -44,21 +46,19 @@ SESSIONID_KEY, SESSIONID_SIGN_KEY = "tradingview-sessionid", "tradingview-sessio
 SET_COOKIES = ("python -m goldbot.ops.accounts set tradingview-sessionid` and "
                "`python -m goldbot.ops.accounts set tradingview-sessionid-sign")
 NOTICE_TEXT = f"TradingView sign-in expired — on the brain run `{SET_COOKIES}` (hidden prompts, fresh browser cookies)"
-_SCHEMA = """CREATE TABLE IF NOT EXISTS tv_auth (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    status TEXT NOT NULL,
-    last_ok_utc TEXT,
-    notified INTEGER NOT NULL DEFAULT 0
-) STRICT"""
-
-
 def _iso(t: pd.Timestamp) -> str:
     return pd.Timestamp(t).tz_convert("UTC").isoformat()
 
 
 def _open(state_dir: Path) -> sqlite3.Connection:
-    conn = connect(Path(state_dir) / DB_FILE, "core")
-    conn.execute(_SCHEMA)
+    """tv_auth.db with its schema brought up to date (goldbot/db/migrations.py TV_AUTH). Closed again on failure, so a
+    corrupt file can be moved aside."""
+    conn = connect(Path(state_dir) / DB_FILE, "tv_auth")
+    try:
+        migrate(conn, "tv_auth")
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 
@@ -139,7 +139,7 @@ def signin_state(state_dir: str | Path, now: pd.Timestamp) -> TvSignin:
         return TvSignin(signin="not_set_up")
     last: pd.Timestamp | None = None
     try:
-        conn = connect(path, "core")
+        conn = connect(path, "tv_auth")                # read only: the writers above migrate
         try:
             has = conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'tv_auth'").fetchone()
             row = conn.execute("SELECT status, last_ok_utc FROM tv_auth WHERE id = 1").fetchone() if has else None

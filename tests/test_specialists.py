@@ -27,7 +27,7 @@ def _frame(bars_1m: pd.DataFrame, tf: str) -> tuple[pd.DataFrame, pd.DataFrame]:
 def test_every_design_family_is_registered_on_its_timeframe():
     assert {k: v.timeframe for k, v in SPECIALISTS.items()} == {
         "breakout": "1h", "mean_reversion": "15m", "session_open": "15m", "trend": "1h",
-        "tsmom": "1h", "intraday_momentum": "15m", "asia_drift": "1h"}
+        "tsmom": "1h", "intraday_momentum": "15m", "asia_drift": "1h", "smc_structure": "15m"}
 
 
 def test_context_is_every_longer_timeframe():

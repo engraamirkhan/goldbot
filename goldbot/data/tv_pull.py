@@ -56,6 +56,7 @@ import sqlite3
 import sys
 import time
 from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -85,6 +86,7 @@ from goldbot.data.tv_wire import (
     secret_parts,
 )
 from goldbot.db.connection import connect, write
+from goldbot.db.migrations import migrate
 from goldbot.ops.tv_pull_health import DB_FILE as TV_AUTH_DB
 from goldbot.ops.tv_pull_health import record_expired, record_ok
 from goldbot.webhook.app import tf_seconds
@@ -245,33 +247,21 @@ class FollowState(Record):
 
 
 # ------------------------------------------------------------------------------------------------- the pull log
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS tv_pull_runs (
-    id INTEGER PRIMARY KEY, started_utc TEXT NOT NULL, finished_utc TEXT NOT NULL, ok INTEGER NOT NULL,
-    auth_expired INTEGER NOT NULL, requests INTEGER NOT NULL, reason TEXT NOT NULL, report TEXT NOT NULL
-) STRICT;
-CREATE TABLE IF NOT EXISTS tv_pull_state (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_utc TEXT NOT NULL) STRICT;
-CREATE TABLE IF NOT EXISTS tv_study_meta (
-    meta_hash8 TEXT PRIMARY KEY, study_id TEXT NOT NULL, name TEXT NOT NULL, version TEXT NOT NULL,
-    meta TEXT NOT NULL, first_seen_utc TEXT NOT NULL, last_seen_utc TEXT NOT NULL
-) STRICT;
-"""
-
-
 class PullLog:
-    """The pull's durable record in state/tv.db (SQLite WAL, beside the alert inbox; no JSON state files)."""
+    """The pull's durable record in state/tv.db (SQLite WAL, beside the alert inbox; no JSON state files). Its tables
+    are tv.db's versioned schema (goldbot/db/migrations.py TV), brought up to date on open."""
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         conn = self._conn()
         try:
-            conn.executescript(_SCHEMA)
+            migrate(conn, "tv")
         finally:
             conn.close()
 
     def _conn(self) -> sqlite3.Connection:
-        return connect(self.path, "core")
+        return connect(self.path, "tv")
 
     def record(self, rep: PassReport) -> None:
         conn = self._conn()
@@ -343,7 +333,7 @@ class PullLog:
         path = self.path.parent / TV_AUTH_DB
         if not path.exists():
             return None
-        conn = connect(path, "core")
+        conn = connect(path, "tv_auth")              # read only: goldbot/ops/tv_pull_health.py migrates it
         try:
             if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'tv_auth'").fetchone() is None:
                 return None
@@ -857,7 +847,50 @@ def _pull_tf(cfg: TvPullSettings, *, store: Store, plog: PullLog, sock: GuardedS
                     rows=rows)
 
 
+LOCK_FILE = "tv_pull.lock"
+
+
+@contextmanager
+def single_pass(state_dir: Path) -> Iterator[bool]:
+    """One pass at a time per state directory (one pull per TradingView account): a non-blocking flock on
+    state/tv_pull.lock, held for the pass. Yields False when another pass holds it (the `follow` service while a
+    manual `sync` runs, or the reverse); the lock goes with the process, so a crash never leaves it held. No-op where
+    fcntl is missing (Windows never runs the pull)."""
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover
+        yield True
+        return
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with open(state_dir / LOCK_FILE, "a") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
 def run_pass(cfg: TvPullSettings, *, store: Store, log: PullLog, network: TvNetwork, cookie: SecretStr | None,
+             now: Callable[[], pd.Timestamp] | None = None, monotonic: Callable[[], float] = time.monotonic,
+             sleep: Callable[[float], None] = time.sleep, state: FollowState | None = None,
+             extra: Sequence[StudySpec] = (), timeframes: Sequence[str] | None = None) -> PassReport:
+    """One pass under the single-pass lock (`single_pass`): when another pass holds it, a skipped report, nothing
+    recorded and no request (two pulls on one account would double the requests TradingView sees and race the
+    first-receipt rule). Otherwise `_run_pass`."""
+    with single_pass(log.path.parent) as mine:
+        if not mine:
+            t = _utc((now or (lambda: pd.Timestamp.now(tz="UTC")))())
+            return PassReport(ok=False, skipped=True, started_utc=t, finished_utc=t,
+                              reason="another tv-pull pass is running on this host (state/tv_pull.lock): try later")
+        return _run_pass(cfg, store=store, log=log, network=network, cookie=cookie, now=now, monotonic=monotonic,
+                         sleep=sleep, state=state, extra=extra, timeframes=timeframes)
+
+
+def _run_pass(cfg: TvPullSettings, *, store: Store, log: PullLog, network: TvNetwork, cookie: SecretStr | None,
              now: Callable[[], pd.Timestamp] | None = None, monotonic: Callable[[], float] = time.monotonic,
              sleep: Callable[[float], None] = time.sleep, state: FollowState | None = None,
              extra: Sequence[StudySpec] = (), timeframes: Sequence[str] | None = None) -> PassReport:
@@ -1006,6 +1039,8 @@ def main(argv: list[str] | None = None) -> int:
         rep = once(None)
         print(rep.text())
         return 0 if rep.ok else 1
+    from goldbot.ops.health import start_heartbeat
+    start_heartbeat(a.state, "tv-pull")      # state/heartbeat_tv-pull.json: health `heartbeat:tv-pull` (RUNBOOK 2.7c)
     try:
         follow(once, cfg)
     except KeyboardInterrupt:

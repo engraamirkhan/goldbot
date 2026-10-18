@@ -18,6 +18,8 @@ CLI:
   python -m goldbot.ops.accounts add icm-demo          # prompts for login + password, stores in keyring
   python -m goldbot.ops.accounts set tradingview-webhook-secret
   python -m goldbot.ops.accounts set smtp-password      # the SMTP (Gmail App) password for email sign-in links
+  ... set <key> --stdin                                  # the value from a pipe (no prompt; never echoed)
+  ... export <key> | ssh <host> goldbot accounts set <key> --stdin   # copy a secret; refuses a terminal stdout
   python -m goldbot.ops.accounts bridge-serve icm-demo # MT5 box: listen address + a new token (printed once)
   python -m goldbot.ops.accounts bridge-use icm-demo   # engine box: bridge URL + that token
   python -m goldbot.ops.accounts unlock-live icm-live  # refused unless the gate has passed
@@ -453,6 +455,50 @@ def enabled_accounts(mode: str | None = None) -> list[Account]:
 
 
 # ---------------------------------------------------------------------------- CLI
+MAX_PIPED_SECRET = 8192          # far beyond any cookie or token; a larger input is not one secret
+
+
+def read_piped_secret(stream: Any) -> str:
+    """One secret from a pipe (`set <key> --stdin`): the whole input with surrounding whitespace removed. Refused
+    (ValueError, the value never in the message) when stdin is a terminal (use the hidden prompt), empty (the
+    sending side failed: nothing is stored), more than one line, or oversized."""
+    if stream is None or stream.isatty():
+        raise ValueError("--stdin reads a pipe, not a terminal: drop --stdin to get the hidden prompt")
+    raw = stream.read(MAX_PIPED_SECRET + 1)
+    if len(raw) > MAX_PIPED_SECRET:
+        raise ValueError(f"piped value longer than {MAX_PIPED_SECRET} characters: not stored")
+    value = raw.strip()
+    if not value:
+        raise ValueError("nothing arrived on stdin (the sending side failed?): not stored")
+    if "\n" in value or "\r" in value:
+        raise ValueError("piped value has more than one line: not stored")
+    return value
+
+
+def _is_pipe(out: Any) -> bool:
+    """True only when `out` is a pipe or a socket (os.fstat): a terminal, a regular file (`> file`) or an object
+    without a file descriptor is not."""
+    import stat
+    try:
+        mode = os.fstat(out.fileno()).st_mode
+    except (AttributeError, OSError, ValueError):
+        return False
+    return stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode)
+
+
+def export_secret(key: str, out: Any) -> None:
+    """Write one stored secret to `out` for a pipe (`export <key> | ssh ... set <key> --stdin`) and nowhere else: a
+    terminal or a regular file is refused, so the value cannot land on screen, in scrollback or on disk. A pipe into a
+    printing command (`| cat`) cannot be told apart: pipe it only into ssh (RUNBOOK 2.7d). Missing key: KeyError."""
+    if not _is_pipe(out):
+        raise ValueError("export writes to a pipe only (e.g. `| ssh <host> goldbot accounts set <key> --stdin`)")
+    value = get_secret(key)
+    if not value:
+        raise KeyError(key)
+    out.write(value)
+    out.flush()
+
+
 def main(argv: list[str]) -> int:
     fallback_note()
     if not argv or argv[0] == "list":
@@ -488,9 +534,27 @@ def main(argv: list[str]) -> int:
         print(f"engine for {aid} will use the bridge")
         return 0
     if cmd == "set":
-        where = set_secret(argv[1], _prompt(f"value for {argv[1]}", secret=True))
+        if "--stdin" in argv[2:]:
+            try:
+                value = read_piped_secret(sys.stdin)
+            except ValueError as exc:
+                print(f"refused: {exc}", file=sys.stderr)
+                return 1
+        else:
+            value = _prompt(f"value for {argv[1]}", secret=True)
+        where = set_secret(argv[1], value)
         print(f"stored {argv[1]} in the OS keyring" if where == "keyring"
               else f"stored {argv[1]} in {_fallback_file()} (plaintext, owner-only file)")
+        return 0
+    if cmd == "export":
+        try:
+            export_secret(argv[1], sys.stdout)
+        except KeyError:
+            print(f"refused: {argv[1]} is not stored here", file=sys.stderr)
+            return 1
+        except ValueError as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 1
         return 0
     if cmd == "migrate":
         print(f"moved {migrate_fallback()} secret(s) from state/.secrets.json into the OS keyring")

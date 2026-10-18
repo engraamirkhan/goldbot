@@ -219,3 +219,84 @@ def test_an_explicit_fail_keyring_backend_on_linux_counts_as_the_opt_in(isolated
     monkeypatch.setattr(acc_mod, "_PLATFORM", "darwin")
     with pytest.raises(RuntimeError):
         acc_mod.set_secret("k2", "v")                               # never on macOS
+
+
+# ---------------------------------------------------------------- set --stdin / export (secrets copied by pipe)
+class _Pipe:
+    """A stdin/stdout stand-in: a pipe unless `tty`."""
+
+    def __init__(self, text: str = "", tty: bool = False):
+        import io
+        self._buf, self._tty = io.StringIO(text), tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+    def read(self, n: int = -1) -> str:
+        return self._buf.read(n)
+
+    def write(self, s: str) -> int:
+        return self._buf.write(s)
+
+    def flush(self) -> None:
+        pass
+
+    def getvalue(self) -> str:
+        return self._buf.getvalue()
+
+
+def test_set_stdin_stores_the_piped_value_without_a_prompt_or_echo(isolated, monkeypatch, capsys):
+    acc_mod.register_prompter(lambda m, s: (_ for _ in ()).throw(AssertionError("--stdin must not prompt")))
+    monkeypatch.setattr(acc_mod.sys, "stdin", _Pipe("v2:cookie-value-xyz\n"))
+    assert acc_mod.main(["set", "tradingview-sessionid", "--stdin"]) == 0
+    assert acc_mod.get_secret("tradingview-sessionid") == "v2:cookie-value-xyz"
+    out = capsys.readouterr()
+    assert "cookie-value-xyz" not in out.out + out.err
+
+
+@pytest.mark.parametrize("text,tty", [("", False), ("   \n", False), ("a\nb\n", False), ("x" * 9000, False),
+                                      ("v", True)])
+def test_set_stdin_refuses_empty_multiline_oversized_or_a_terminal_and_stores_nothing(isolated, monkeypatch, capsys,
+                                                                                       text, tty):
+    monkeypatch.setattr(acc_mod.sys, "stdin", _Pipe(text, tty=tty))
+    assert acc_mod.main(["set", "k-stdin", "--stdin"]) == 1
+    assert acc_mod.get_secret("k-stdin") is None
+    out = capsys.readouterr()
+    assert "refused" in out.err and (not text.strip() or text.strip()[:20] not in out.out + out.err)
+
+
+def _export_through_a_real_pipe(monkeypatch, key: str) -> tuple[int, str]:
+    r, w = os.pipe()
+    with os.fdopen(w, "w") as wf, monkeypatch.context() as m:
+        m.setattr(acc_mod.sys, "stdout", wf)
+        rc = acc_mod.main(["export", key])
+    with os.fdopen(r) as rf:
+        return rc, rf.read()
+
+
+def test_export_writes_the_secret_only_to_a_pipe(isolated, monkeypatch):
+    acc_mod.set_secret("tradingview-sessionid-sign", "v2:SIGN-abc")
+    assert _export_through_a_real_pipe(monkeypatch, "tradingview-sessionid-sign") == (0, "v2:SIGN-abc")
+    assert _export_through_a_real_pipe(monkeypatch, "not-stored") == (1, "")
+
+
+def test_export_refuses_a_terminal_a_regular_file_and_a_stream_without_a_descriptor(isolated, monkeypatch, tmp_path):
+    acc_mod.set_secret("k-exp", "v2:SIGN-abc")
+    term = _Pipe(tty=True)                                   # no file descriptor at all
+    monkeypatch.setattr(acc_mod.sys, "stdout", term)
+    assert acc_mod.main(["export", "k-exp"]) == 1 and term.getvalue() == ""
+    f = tmp_path / "out.txt"                                 # `export k > file`
+    with open(f, "w") as fh, monkeypatch.context() as m:
+        m.setattr(acc_mod.sys, "stdout", fh)
+        assert acc_mod.main(["export", "k-exp"]) == 1
+    assert f.read_text() == ""
+    assert not acc_mod._is_pipe(term)
+
+
+def test_export_piped_into_set_stdin_round_trips(isolated, monkeypatch):
+    acc_mod.set_secret("src", "token-123")
+    rc, value = _export_through_a_real_pipe(monkeypatch, "src")
+    assert rc == 0
+    monkeypatch.setattr(acc_mod.sys, "stdin", _Pipe(value))
+    assert acc_mod.main(["set", "dst", "--stdin"]) == 0
+    assert acc_mod.get_secret("dst") == "token-123"

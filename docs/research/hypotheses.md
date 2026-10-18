@@ -8,8 +8,11 @@ updates it every quarter after the evaluator's verdicts. It is seeded 2026-10-10
 without new evidence; a reason is always given.
 
 **Cost yardstick:**
-- Measured round-trip cost is about **0.14–0.39 R per trade**. Examples: tsmom 1h, gross +0.061 → net −0.079 (0.14 R);
-  intraday_momentum, 0.16–0.23 R; shorter targets cost more.
+- *Corrected 2026-10-18 (`costs-binding-2026-10-18.md`).* No broker cost has been measured yet. Every figure here is
+  a **prior**: the Dukascopy bar spread + 0.37 $/oz + the swap prior. The charged round trip has been about
+  **0.14–0.39 R per trade over 2010–2025**. Examples: tsmom 1h, gross +0.061 → net −0.079 (0.14 R);
+  intraday_momentum, 0.16–0.23 R; shorter targets cost more. At today's ATR the same priors are 3–5 times smaller in
+  R. For a 1h 1.5 × ATR stop it is about 0.04 R, against 0.17 R in 2010–2019.
 - Long holds also pay swap, about −60 USD/lot/night for longs (prior). Shorts pay 0.
 - A hypothesis is worth a trial only if its plausible gross edge is several times its cost in R. That means a larger
   target, a longer hold, or the short side.
@@ -25,10 +28,10 @@ and does not follow this column.
 
 | Rank | ID | Hypothesis | Status | Rationale | Data | Horizon | Expected gross edge vs cost | Trial cost |
 |---|---|---|---|---|---|---|---|---|
-| 7 | H-01 | **Slow TSMOM**: 1d vol-scaled trend signal (1–12 months), 4h execution, 5–20-day hold, long and short, measured swap | queued in the Q1 pre-registration (AT RISK until the 2026-11-13 recount); **retire-only**: its lower bound (152) is below the 1,000 pass floor, so it can read at best inconclusive and no H-01 follow-up can arise (2026-10-17) | The only trend horizon with replicated support (MOP 2012, Hurst et al. 2017). The target dwarfs the spread | D | 1d signal, 4h bars | +0.05–0.10 R gross vs about 0.05 R spread at this target size, plus swap on longs (≈0.05–0.10 R over 10 nights). Likely depends on the short side | 1 |
+| 7 | H-01 | **Slow TSMOM**: 1d vol-scaled trend signal (1–12 months), 4h execution, 5–20-day hold, long and short, measured swap | queued in the Q1 pre-registration (AT RISK until the 2026-11-13 recount); **retire-only**: its lower bound (152) is below the 1,000 pass floor, so it can read at best inconclusive and no H-01 follow-up can arise (2026-10-17). **Run 2026-10-18 as batch B10, trial #48: inconclusive, held** (294 events, gross +0.166 R at t 2.04, rule-only net +0.002 R). No re-run unless a pre-registered power gain is written first | The only trend horizon with replicated support (MOP 2012, Hurst et al. 2017). The target dwarfs the spread | D | 1d signal, 4h bars | +0.05–0.10 R gross vs about 0.05 R spread at this target size, plus swap on longs (≈0.05–0.10 R over 10 nights). Likely depends on the short side | 1 |
 | 6 | H-02 | **Feature discovery**: one pre-registered screen of ~120 bulk point-in-time features (survey §4a) on a 4h triple-barrier label, with fold-internal stability selection and permutation importance | proposed (survey §4b); **tooling ready** (`research_pass.py --discover`, M37/M38; not yet run) | Tests the whole indicator universe for the price of one trial instead of about 35 | D, D+, F, C, E | 4h | Unknown. Continue if out-of-sample AUC ≥ 0.53 (lower bound > 0.50) and the pre-set rule gives net mean R > 0 on ≥ 1,000 events | 1 (later survivor trials use N = registry + K_eff ≈ 35 in the DSR) |
 | 14 | H-03 | **Gold VRP**: long when GVZ² − HAR-RV² is high (sign fixed in advance from Nguyen et al. 2017), 5–20-day hold | proposed; trial only if it survives H-02 | Jump/crash-risk premium; documented out of sample for gold at 1–24 months (survey #72) | F (GVZCLS, free) + D | 1d signal, 4h bars | Literature effect at monthly horizon; haircut 50% (McLean–Pontiff). Target ≫ costs; long side pays swap | 1 if it survives |
-| 9 | H-04 | **Asia-session drift**: long about 00:00–07:00 UTC, flat before London | pre-registered (SoA C1-2); implemented as `asia_drift`, active (not in `research.retired_families`), not a founder until it passes; no trial run. If it reads **continue**, the Q1 open budget funds O-7 (H-24), O-8 (model research) and O-9 (H-C) (2026-10-17) | Asian physical/ETF demand vs Western selling; intraday, so no swap | D | 1h | ≤ 0.03% per session vs about 0.01% round trip. Thin: 2–3× costs at best; about 4,000 events | 1 |
+| 9 | H-04 | **Asia-session drift**: long about 00:00–07:00 UTC, flat before London | pre-registered (SoA C1-2); implemented as `asia_drift`, active (not in `research.retired_families`), not a founder until it passes. **Run 2026-10-18 as batch B08, trial #44: stop** (screen pass, gross +0.043 R at t 3.09 on 4,025 events; rule-only net -0.093 R, so costs decide it). O-7/O-8/O-9 therefore lapse by their own condition. Before that verdict the row read: if it reads **continue**, the Q1 open budget funds O-7 (H-24), O-8 (model research) and O-9 (H-C) (2026-10-17) | Asian physical/ETF demand vs Western selling; intraday, so no swap | D | 1h | ≤ 0.03% per session vs about 0.01% round trip. Thin: 2–3× costs at best; about 4,000 events | 1 |
 | 12 | H-05 | **Stop-cluster levels**: round numbers ($10/$50/$100) and previous day/week extremes. Continuation on a close beyond them, reversal at a touch (Osler) | proposed; trial only if it survives H-02 | Take-profits cluster at round numbers, stops just beyond them (Osler 2003, 2005, FX) | D | 15m–4h | Unknown in gold. Cascades move several ATR, enough to clear 0.2–0.4 R if real | 1 if it survives |
 | 10 | H-06 | **Macro-conditioned slow TSMOM**: H-01 gated on 20-day ΔDFII10 and Δbroad USD | proposed (SoA C1-3) | Opportunity cost and USD pricing, but the relation broke in 2022. Reading rule requires 2022–24 positive | D, F | 1d / 4h | Small increment over H-01 | 1 (variant of H-01) |
 | 18 | H-07 | **Equity-stress haven**: long gold for 5–15 days after a USA500 drawdown shock or VIX jump | proposed (screen in H-02 first) | Baur & Lucey 2010: haven lasts about 15 days | D+ (USA500), F (VIXCLS) | 1d | Few events (< 1,000 likely). Needs the owner's ruling on the event minimum for daily families | 1 if it survives |
@@ -178,9 +181,62 @@ filed their first candidate lists the same day. None ran a trial or read an outc
 | Intraday (1h/4h) | `candidates/intraday-2026-10-17.md` | **0** | H-24 (O-7) entry pinned at the **09:00 New York** 1h bar close, estimand 09:00–16:00 New York, withdrawn before the run if D3's median cost exceeds 0.10 R (amendment under O-7). O-8 inputs pinned (IC-2). `macro_spx_dd20` masked in folds without full SP500 coverage (amendment under H-02). London→New York transition is covered by R-05 | **IC-5** Asia→London transition continuation: **1 conditional Q2 trial**, Q2 draft follow-up item 7, from the Q2 free reserve only by a written note; withdrawn if neither H-04 nor H-24 continues, if D2's count is < 1,000, or if it agrees with `tsmom_z_24` on > 70% of events. IC-4 (vol-regime tsmom 4h) forward shadow only. IC-6 ≤ 2 Q2 follow-ups of a surviving H-02 cluster |
 | Next three (2026-10-18) | `candidates/next-2026-10-18.md` | **0** | **N1** `tod_periodicity` adopted as an O-4 group (K_eff +1, opt-in family, dropped if not coded by 2026-12-11). **N2** edge-decay exit queued for Q2. **N3** H-17 V2 breadth gate parked on the owner's D+ ruling | N2: 1 conditional Q2 trial (after O-5/O-6 pass, Q2 free reserve, written note). N3: 1 conditional Q2 trial if the owner approves the pull and H-17 V0 passes P4 |
 | Swing (1d/1w) | `candidates/swing-2026-10-17.md` | **0** (H-01 is the lane's Q1 trial) | No swing trade can be placed at £1,000, and as the rails stand none at any equity while ATR(1d) > ~$43 at a 1.5 × ATR stop: **ADR 0004 §4 amended 2026-10-17** (M4 conditional on volatility; 1d research and shadow only; no limit loosened). Gate 1 is unreachable for holds ≥ 8 days on 2010-2025, so swing yields **context features and retirements, not a book** | **SW-0** 1d swing feature discovery (groups SW-1..SW-6, SW-8, SW-9; `survivor_unit: group`, K_eff ≈ 16): **1 trial from the Q2 free reserve, conditional**, else Q3. **Forward-shadow rule:** a surviving swing group's forward shadow only decides whether it stays as a context input or is retired. It is never a promotion route (25-40 trades a year) |
+| Small-account follow-ups (2026-10-18) | `prereg-h25-precision-stop-2026-10-18.md`, `feature-groups-s1-s2-2026-10-18.md` | **0 in Q1** (H-25 asks 1 in 2026Q4: override 55 -> 56, research director to rule; fallback 1 unallocated Q1 trial) | **H-25 pre-registered 2026-10-18** (not dispatched): 15m breakout parent, limit at the broken level, stop 0.6 x ATR15 (the cost bound c* = 0.15 R at today's 0.09 ATR15 round trip), target 2R, barrier exits; in-sample charged 0.15 R + swap because the live S-1 gate passes 0.21% of 2010-2025Q3 bars; K_eff +19 (tight-stop looks); prior P(continue) ~5%. **S-1/S-2:** already in `f-079deacc61` (`em_atr_cost`, `atr14`, `spread_atr` in `volatility`/`microstructure`; `hour_utc`, `session_id` in `calendar`): K_eff +0, no new group; `atr_regime` considered and not recommended; cost-driven-AUC risk raised for O-4 (mid-label AUC diagnostic proposed) | A STOP on H-25 withdraws O-11 and H-26 before they are written (0 trials). A CONTINUE allows forward shadow under the live gate (kill read at 100 fills, pass read at 300 = 1 trial) |
 
 **Status of these IDs.** IC-1..IC-9, SW-0..SW-9 and C-1..C-10 are recorded here as **proposed**. Proposed rows are not
 tests and add nothing to K. K grows only when a registry row runs (or a discovery records its `k_eff`).
+
+## A7. Owner's chart indicators, replicated (strategy researcher, 2026-10-18)
+
+Owner request, 2026-10-18: backtest the three chart indicators the owner trades from. They are rebuilt clean-room from
+their pulled outputs as the opt-in feature family `smc_replica` (`goldbot/features/smc_replica.py`). Every observable
+plot matches exactly on 15m/1h/4h/1D, except the box indicator's break shapes (99.86%). The match table and the
+pre-registration are in `prereg-tv-replica-2026-10-18.md`. These rows are tested **as an exception to R-09**, which
+was retired from the literature with no trial run. The reason for the exception is the owner's directive, not new
+evidence of an edge, so the prior stays low. Both TVR-1 and TVR-2 failing closes the SMC topic.
+
+| ID | Hypothesis | Status | Trial cost |
+|---|---|---|---|
+| H-TVR1 | 15m: internal CHoCH in the swing-trend direction with a same-side FVG in the last 3 bars; stop 1.0 / target 2.0 ATR15, 32 bars | **pre-registered** 2026-10-18; funded 2026-10-18 (research director, B4a: 2026Q4 override 53 → 55 under the owner's standing directive); blocked on the `smc_structure` specialist and B4a's dispatch preconditions; target dispatch 2026-10-22 | 1 |
+| H-TVR2 | 15m: swing BOS continuation (50-bar leg pivots); stop 1.0 / target 2.0 ATR15, 32 bars | **pre-registered** 2026-10-18; same blockers | 1 |
+| H-TVR3 | H-TVR1 on 1h (stop 1.0 ATR1h, 24 bars; needs M2 sizing) | proposed, **conditional** on H-TVR1 PASS or LEAD | 1 if triggered |
+| D-TVR | Add the `smc_replica` columns to H-02 as one group (amendment before H-02 runs) | **O-4 only**: the group is in O-4's 15m map (7ee992e; quant sign-off due 2026-10-25). The research director ruled on 2026-10-18 that H-02 runs without it, on `f-51ac5ebabb`: the replica is not on `main` and no run input enables it (`preregistration-2026Q4-pullforward.md` 2.4a) | 0 (K_eff +1, O-4) |
+| D-TVR | Add the `smc_replica` columns as one group to O-4 (H-14, 15m) and H-02 (4h), before TVR dispatch; no `structure` columns duplicated | **adopted** by the research director 2026-10-18 (B4a); amendment text + quant sign-off due 2026-10-25 | 0 (K_eff +1 per run, +2) |
+
+**Tested universe (features, no trial).** These are opt-in `smc_replica` columns and reach a model only through
+D-TVR or a pre-registered row: `bos/choch_{bull,bear}_{internal,swing}`, `trend_swing`, `trend_internal`, `eqh`,
+`eql`, `fvg_bull`, `fvg_bear`, `mfi`, `mfi_os_cross`, `mfi_ob_cross`, `range_f1_dist_atr`, `range_f2_dist_atr`,
+`sr_break_up`, `sr_break_dn`, `candle_class`, `ma_stack_sma_ema`.
+
+**Not trialled, by decision:** money-flow cross rules (R-01 reversion, or no mechanism) and box-break rules (R-04
+breakout). The order blocks cannot be replicated: they are off in the owner's settings (data request D-3).
+
+## A8. Cost-aware proposals (strategy-researcher, 2026-10-18)
+
+Sources: `costs-binding-2026-10-18.md` (evidence) and `preregistration-costs-2026-10-18.md` (rules). The key finding
+is about gate 3 at K = 53, which needs a per-trade t of about 3.94. No known signal clears it **even at zero
+cost**:
+
+| Signal | Net R needed for t 3.94 |
+|---|---|
+| H-04 | +0.055 |
+| tsmom 1h #36 | +0.136 |
+| tsmom 1h #16 | +0.091 |
+
+So cost work fixes the net sign, but a pass needs a larger gross t: more events or bigger edges.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| H-28 (CB-T1) | tsmom 1h cost-amortised: `min_score` 1.0, stop 2.0, target 4.0, `max_bars` 96 (`7f60182a4559`). The cheapest 1h market-order config today (0.030 R, scenario A) | pre-registered; not dispatched; needs 1 slot (2027Q1 free reserve, or the owner raises Q4 to 54) | 1 | batch §2 at the K of the verdict (≥ 54). FAIL closes the tsmom 1h exit variants (R-06 reconfirmed) |
+| H-29 (CB-T2) | Limit entry at the signal price on H-28's signal | pre-registered, **conditional** on H-28 LEAD/PASS + CB-D2 "build" + tooling | 1 if its conditions hold | adopt only if net per signal ≥ H-28's |
+| H-30 (CB-D2) | Limit-fill economics on the broker's recorded ticks (forward shadow candidates) | pre-registered diagnostic; starts when the tick record has 20 days | 0 | ≥ 0.25 $/oz saving per candidate → build H-29 tooling; < 0.10 → retire limit entry |
+| CB-0 / CB-D1 | `costs-v1` build plus GBP fixes K1-K3; forward-cost quantities reported on new trials | proposed (engineering) / pre-registered (reporting) | 0 | measurement only |
+
+Known low value, recorded as **not proposed** so they are not re-proposed:
+- an H-04 re-test with new stops or holds (cannot pass at any cost);
+- tight-spread-hours trials (worth 0.03–0.05 R at 15m, under 0.005 R at 1h);
+- cost-filtered entry as a research-window trial (about 70 events at today's cost level);
+- further 15m wide-target variants of R-01, R-02 and R-05.
 
 ## B. Retired: do not re-test without new evidence
 
@@ -207,8 +263,14 @@ a quarter (to the one with the best post-retirement evidence, else by rotation) 
 |---|---|---|---|
 | Q4 2026 | #1–#20 | 0 | 20 |
 | Q4 2026, owner-directed batch (2026-10-18; **dispatched**, B01-B04 = #21-#35 run; B01-B03 12/12 FAIL, R-02/R-05 retirement reconfirmed 2026-10-18; readout and registry defect D-1 in `batch-2026-10-18-readout.md`) | #21–#53 if all 33 run (2026Q4 budget override 53, settings) | 0 | **53** (gate-1 t ≈ 3.94). H-04 and H-01 move here from Q1, so the Q1 reservation becomes 6 and the end-of-Q1 projection is about 116 (t ≈ 4.2) |
+
+| Q4 2026, owner-directed batch (2026-10-18; planned, **not dispatched**; `batch-2026-10-18.md`) | #21–#53 if all 33 run (needs the 2026Q4 budget raised to 53: owner) | 0 | **53** (gate-1 t ≈ 3.94). H-04 and H-01 move here from Q1, so the Q1 reservation becomes 6 and the end-of-Q1 projection is about 116 (t ≈ 4.2) |
+| Q4 2026 batch, **closed** 2026-10-18 about 07:30 UTC (`research-v1`) | #21–#52 recorded, each with its verdict: 31 stop and 1 inconclusive (#48 H-01, held); 0 PASS, 0 LEAD; B13 withdrawn to fund H-02 (`batch-2026-10-18-readout.md` section 6) | 0 | **52 now; 53 when H-02 runs** (it is #53, the last 2026Q4 slot). H-02's K_eff (about 10 groups, no `smc_replica`) then adds to every later trial's DSR |
+| Q4 2026 batch, status 2026-10-18 about 07:10 UTC (`research-v1` snapshot; superseded by the row above) | #21–#47 recorded, the batch still running | 0 | 47 now, 53 when the batch and H-02 finish. Cost proposals (A7): +1 if H-28 runs (≥ 54), +1 more only if H-29's conditions hold. CB-0/CB-D1/CB-D2 add 0 |
 | Q1 2027 (planned) | #21–#40 at most (8 reserved: 4 queued + 4 contingent H-02 survivor slots; 12 open under the E-5 cap, allocated 2026-10-17 as 9 conditional trial rows (O-1..O-10 without O-9, now a 0-trial diagnostic) + 3 free reserve; corrected 2026-10-17 to settings) | H-02: K_eff = features screened when survivors go forward as features, groups screened only for whole-group survivors (recorded as `k_eff` on the discovery row; `registry.n_trials_effective` adds it) | 20 + trials run so far + K_eff for any survivor of H-02. Projection, end of Q1: up to 40 registry rows + H-02 K_eff (about 10: **H-02 moved to `survivor_unit: group`, quant ruling Q-H02U 2026-10-17**; it was about 300 at the feature unit) + H-14 K_eff (about 12) ≈ 60; the gate-1 DSR then needs a model-filtered t of about 4.0 (was about 4.6). *Updated 2026-10-17:* H-14's K_eff is about 16 under the O-4 group-map amendment (14 groups verified on `f-079deacc61`, plus `liquidity` and `activity`), so the adopted end-of-Q1 case is about 66 (t ≈ 4.03, still 4.0). *Updated 2026-10-18 (research director):* N1 `tod_periodicity` adopted as one more O-4 group, so H-14 about 17 and the end-of-Q1 case about 67 (t still about 4.0); no registry trial |
+| Owner-indicator replica (2026-10-18; `prereg-tv-replica-2026-10-18.md`; pre-registered, **not dispatched**, funded by the 2026Q4 override 53 → 55) | +2 (H-TVR1, H-TVR2); +1 if H-TVR3 triggers (override → 56 by note) | D-TVR adopted: K_eff +1 in O-4, +1 in H-02 | Registry `n_trials_effective` at the verdict date, **never below 55** |
 | Q2 2027 (draft) | #41–#60 at most | SW-0 if it runs: K_eff ≈ 16 (about 8 groups × 2 sides, `survivor_unit: group`); H-14 survivors and Q1 follow-ups add 1 each | **About 77 + the other Q2 trials** (the swing lane's projection: 60 + SW-0's row + its K_eff ≈ 16). On the updated Q1 base of about 66 the same sum is about 83 + the other Q2 trials. Either way the gate-1 bar is a t of about 4.1. Nothing in the lane lists adds to K until a row runs |
+| Q4 2026, H-25 (pre-registered 2026-10-18, **not dispatched**; `prereg-h25-precision-stop-2026-10-18.md`) | +1 (#56 in budget order; needs the override 55 -> 56) | `k_eff: 19` on its row (tight-stop study's 19 entry variants) | **Registry `n_trials_effective` at the verdict, never below 75** (about 85 once H-02's K_eff is recorded); gate-1 t about 4.1 |
 
 ## Next generation (after Q1 verdicts)
 

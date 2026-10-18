@@ -181,3 +181,120 @@ Shadow of FAIL configurations: a FAIL is retired, and only a LEAD may shadow.
 **Honest scorecard line:** 0 of 32 trials have passed to date (20 Q4 + 12 batch read). K for reading is 53. No profit
 is forecast. The north-star (£50 on opportunity days) has no strategy behind it yet. The nearest route is rank 2,
 read on forward data.
+
+## 6. Batch close-out, B04-B12 (research director, 2026-10-18 about 07:40 UTC)
+
+All 32 batch trials (#21-#52) have run and each has a recorded verdict. B13 was withdrawn before it ran, to fund H-02
+(`preregistration-2026Q4-pullforward.md`). **Batch result: 0 PASS, 0 LEAD, 31 stop, 1 inconclusive.** K is 52 now
+and 53 once H-02 runs.
+
+Verdicts #44-#52 were recorded on 2026-10-18 at 07:30 UTC through the sanctioned path:
+- the published registry was fetched, `TrialRegistry.record_verdict` was applied (code 91dc9cf, with D-2 and
+  `BELOW_FLOOR_STOP_RULE`), and the compare-and-swap was saved with `goldbot.research.registry_sync save`;
+- the race guard was checked twice: `gh run list --workflow research.yml` and `preregister-quarter.yml` showed
+  nothing in progress or queued before the fetch and again before the save;
+- the registry was then re-fetched: 84 rows, 52 trials;
+- a dry run on a copy came first. The files are under `~/tmp/research/verdicts2/` (`record3.py`, `dry/`, `live/`,
+  `verify/`).
+
+Verdicts #33-#43 were recorded earlier the same day by the same path. Gross is rule-only at mid prices. Net charges
+the bar spread, 0.37 $/oz and the swap prior. "Evidence" is the registry's `family_evidence`: a below-floor stop is
+not counted against its family.
+
+| Trial | Batch row, config | Events | Gross R (t) | Net R (t) | Verdict (rule) | Evidence |
+|---|---|---:|---|---|---|---|
+| #33 | B04 mean_reversion 1h, band 2.5, terc <= 2 | 889 | -0.039 (-1.47) | -0.185 (-6.9) | stop (batch, below floor) | no |
+| #34 | B04 mean_reversion 1h defaults | 699 | +0.009 (0.30) | -0.156 (-5.1) | stop (batch, below floor) | no |
+| #35 | B04 mean_reversion 15m, band 2.5, stop 1.0 | 3,268 | -0.004 (-0.20) | -0.384 (-19.2) | stop | yes |
+| #36 | B05 tsmom 1h, min_score 1 | 1,691 | +0.084 (2.43) | -0.104 (-3.1) | stop (screen pass, net <= 0) | yes |
+| #37 | B05 tsmom 1h, schedule 24 h, target 4, 96 bars | 1,740 | +0.031 (0.80) | -0.118 (-3.1) | stop | yes |
+| #38 | B05 tsmom 1h, target 4, 96 bars | 3,055 | +0.053 (1.77) | -0.133 (-4.6) | stop | yes |
+| #39 | B06 trend 1h, stop 1, target 3 | 1,784 | +0.049 (1.44) | -0.186 (-5.7) | stop | yes |
+| #40 | B06 trend 1h, ADX 30, pullback 1, target 4 | 573 | +0.013 (0.26) | -0.146 (-3.0) | stop (below floor) | no |
+| #41 | B06 trend 1h, ADX 25, target 4 | 784 | +0.067 (1.38) | -0.128 (-2.7) | stop (below floor) | no |
+| #42 | B07 breakout 1h, one-day range | 0 | — | — | stop (degenerate) | no |
+| #43 | B07 breakout 1h, looser compression | 4,783 | +0.010 (0.63) | -0.215 (-14.3) | stop | yes |
+| #44 | **B08 H-04** asia_drift as pre-registered | 4,025 | **+0.043 (3.09)** | -0.093 (-6.8) | **stop** (H-04 rule: screen pass, net <= 0) | yes |
+| #45 | B09 tsmom 4h, min_score 1, 12 bars | 1,192 | +0.053 (1.45) | -0.077 (-2.1) | stop | yes |
+| #46 | B09 tsmom 4h, target 5, stop 2, 30 bars | 1,247 | +0.080 (1.97) | -0.048 (-1.2) | stop | yes |
+| #47 | B09 tsmom 4h, target 4, 24 bars (model fitted) | 1,655 | +0.090 (2.37) | -0.065 (-1.8) | stop (net <= 0; design gates fail: per_fold, positive_years, DSR n/a on 85 model trades) | yes |
+| #48 | **B10 H-01** slow tsmom as pre-registered | 294 | +0.166 (2.04) | +0.002 (0.03) | **inconclusive, held** (H-01 rule: below floor, net > 0) | — |
+| #49 | B11 tsmom 1d, 10 bars | 457 | +0.123 (2.12) | -0.024 (-0.4) | stop (daily retire-only band 150-999, net <= 0) | no |
+| #50 | B11 tsmom 1d, target 4, 20 bars | 309 | +0.179 (2.02) | -0.023 (-0.3) | stop (daily band, net <= 0) | no |
+| #51 | B11 tsmom 4h on the H-01 1d signal, 10-day hold (62 bars) | 509 | +0.124 (2.03) | -0.030 (-0.5) | stop (ruling 6.1) | no |
+| #52 | B12 pooled 15m (intraday_momentum, mean_reversion, session_open) | 9,116 | -0.004 (-0.48) | -0.250 (-27.1) | stop, not rule-checked (row is `failed`; numbers from run 39107483173's artifact) | yes |
+
+### 6.1 Ruling on #51 (retire-only)
+
+#51 executes the H-01 daily signal on 4h bars. That is the same construction as B10, which rule 2.1 places in the
+daily-signal band. The rule text lists only "the two 1d rows of B11", so #51's band is ambiguous. **The ambiguity
+does not change the verdict.**
+- Read as a daily-signal row: 509 events fall in the 150-999 band, which can retire a row but never pass it. Net mean
+  R is -0.030 <= 0, so the row is retired.
+- Read as a 4h row: 509 events are below the 1,000 floor. The FAIL clause (net <= 0) has no floor (ruling 1.1), so
+  the row stops.
+
+**Verdict: stop.** The configuration is retired. Because it is below the 1,000 floor, the registry records
+`family_evidence: false`. It is **not** evidence against H-01 or slow trend as a family. Its gross t of 2.03 cannot
+pass below 1,000 events under either reading, and no re-run is allowed. For later pre-registrations, any row on a 1d
+signal is in the daily band, whatever bars it executes on.
+
+**Erratum (the verdict rows' reason text, not the decisions).** The reason strings written for #49-#51 swap the
+variant labels:
+- #49 is the 1d, 10-bar row (not "4h on 1d signal");
+- #50 is the 1d, 20-bar, target-4 row;
+- #51 is the 4h-on-1d-signal row.
+
+The registry configs above are authoritative. Each decision is `stop` under every reading (net <= 0 in all three).
+The first verdict is final, so the rows stay as written, and this erratum is the record.
+
+### 6.2 What the batch says (no new test; statements about rule-required tables)
+1. **15m: no gross edge.** 0 of 13 15m trials and the pooled 15m model have gross t >= 2. The best is #25 at 1.80.
+   The pooled screen is gross -0.004 R on 9,116 events. At 15m the problem is signal, not cost.
+2. **1h, 4h and 1d momentum: a small gross edge that costs remove.** Gross ranges from +0.04 to +0.18 R, with t about
+   2.0-2.4 in 7 trials (#36, #47, #48-#51, plus H-04 at 3.09). Every one is rule-only net <= 0 under the cost priors.
+   The evaluator tables show the edge mostly on the long side. The short side carries a zero-swap prior, so long and short are not symmetric
+   evidence.
+3. **H-04 is the strongest gross signal so far:** t 3.09 on 4,025 events. That is still below 3.94 at K = 53 even at
+   zero cost (`costs-binding-2026-10-18.md` section 3), and it is net -0.093 R on priors. It is stopped by its own
+   rule. No H-04 re-test is funded, and any revisit needs measured costs and a new pre-registration. O-7, O-8 and O-9
+   lapse.
+4. **No known signal reaches t about 3.94 at K = 53, even at zero cost.** Trials spent on cost tweaks of these signals
+   can at best produce a LEAD. The research order below follows from that.
+
+### 6.3 Defects found at close-out (accountable, date)
+- **#52 is a `failed` row with no results.** It is the same one-cell artifact defect, fixed by `bb81934` on the branch
+  only. A reviewed repair attaches run 39107483173's `cell-0/rows.jsonl` to #52, keeping the trial number, ts and
+  config_hash, as in D-1(b). Implementer and quant-reviewer, **2026-10-25**.
+- **`bb81934` must reach `main` before any one-cell run.** H-02 and CB-T1 are both one-cell runs. Release-manager,
+  **2026-10-21**, the same date as H-02's P2.
+
+## 7. Next research order (ranked against the north-star; written before any of their outcomes)
+
+| Rank | Item | Trials | Why this order | Status / gate | Accountable, date |
+|---|---|---:|---|---|---|
+| 1 | **H-02** 4h feature discovery (one trial, ~120 features in 5 clusters plus families, `f-51ac5ebabb`, no `smc_replica`) | 1 (#53, the last 2026Q4 slot) | Highest information per trial: it screens H-03/05/07/08/10 together and may find a gross signal stronger than the momentum family's t of about 2. Only a signal with gross t of about 4.2 or more can pass | Ready. Open: P2 (quant sign), and preferably `bb81934` on `main` (pull-forward 2.4a). Command in pull-forward 2.5, unchanged | research director dispatches; quant-reviewer P2 2026-10-21 |
+| 2 | **CB-0: `costs-v1` with the measured broker spread** (K1 GBP swap, K2 GBP commission, K3 publish with slippage = prior; hourly spread profile after 20 days) | 0 | Every net figure so far charges priors (about 1.07 $/oz against perhaps 0.3-0.5 on Raw). Measuring costs cannot pass a trial, but it decides which LEADs are worth a holdout look and whether 15m stops become affordable | K1-K3 by 2026-10-30. First publication about 2026-11-06 if the MT5 login lands by 2026-10-22. Profile about 2026-11-20 | implementer + quant-reviewer (K1-K3); sre/owner (publish token); data-engineer (profile) |
+| 3 | **CB-T1** tsmom 1h, cost-amortised (stop 2.0, target 4.0, 96 bars, min_score 1.0; `preregistration-costs-2026-10-18.md`) | 1 | It closes 1h tsmom exits for good if it fails, and it is the only cost-aware market-order trial pre-registered. The stated prior is PASS <= 2% and LEAD about 15-20%, and a 2 x ATR1h stop is unsizable at £1,000, so any LEAD is shadow only | **No 2026Q4 slot** (53 = 52 + H-02). Either (a) Q1 free reserve, dispatch from 2027-01-04, or (b) the owner raises `trial_budget_overrides."2026Q4"` 53 -> 54 (K at its verdict >= 54, gate-1 t still about 3.95). It is also a one-cell run, so it needs `bb81934` on `main` | owner decision via the program-director (24 h); research director dispatches |
+
+**Owner decision (via the program-director, with a recommendation).** CB-T1's slot:
+- **(b) Raise 2026Q4 to 54 and run CB-T1 the week after H-02 is dispatched.** This fits the owner's 2026-10-18
+  directive (no waiting), and one more trial moves the gate-1 bar by less than 0.01 in t.
+- **(a) Wait for Q1.** This keeps the quarter at 53, and the batch shows little is lost by waiting.
+
+**Research recommendation: (b), but only after H-02 is dispatched, so that H-02 keeps #53.** Expectation is stated
+plainly: the most likely CB-T1 reading is FAIL or LEAD, not PASS.
+
+**Not funded, and why:**
+- any neighbour of a batch trial (batch rule);
+- an H-04 or H-01 re-run (stopped / inconclusive with no pre-registered power gain);
+- 15m cost variants (no gross edge to keep);
+- TVR-1/TVR-2 (withdrawn before running: TVR-1 has 441 events, below the floor, and TVR-2 is below its gate-1
+  minimum; 0 trials). The SMC replica lives on only as an O-4 feature group.
+
+H-25 (precision stop with the S-1 regime gate) and O-4 stay as ranked in section 5 and the pull-forward file. Neither
+gets a slot in 2026Q4.
+
+**Honest scorecard line (updated):** 0 of 52 trials have passed (20 Q4 + 32 batch). K = 52 now and 53 with H-02. No
+strategy exists yet behind the north-star (£50 on opportunity days). No profit is forecast. The next information is
+H-02's verdict and the first measured broker spread.
