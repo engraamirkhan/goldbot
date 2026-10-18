@@ -148,7 +148,12 @@ def _fallback_lock() -> Iterator[None]:
 
 
 def _plaintext_allowed() -> bool:
-    return _PLATFORM not in ("darwin", "win32") and os.environ.get(ALLOW_PLAINTEXT_ENV) == "1"
+    """Linux only. The opt-in is GOLDBOT_ALLOW_PLAINTEXT=1, or the deliberate PYTHON_KEYRING_BACKEND=...fail.Keyring a
+    server unit sets (so units installed before the opt-in existed keep working)."""
+    if _PLATFORM in ("darwin", "win32"):
+        return False
+    return (os.environ.get(ALLOW_PLAINTEXT_ENV) == "1"
+            or os.environ.get("PYTHON_KEYRING_BACKEND") == "keyring.backends.fail.Keyring")
 
 
 def _read_fallback() -> dict[str, str]:

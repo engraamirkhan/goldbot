@@ -210,3 +210,12 @@ def test_brain_path_fail_backend_with_opt_in_stores_and_reads_without_noise(isol
     assert acc_mod.main(["set", "k2"]) == 0
     assert "k2" in json.loads((tmp_path / "state" / ".secrets.json").read_text())
     assert capsys.readouterr().err == ""
+
+
+def test_an_explicit_fail_keyring_backend_on_linux_counts_as_the_opt_in(isolated, monkeypatch):
+    monkeypatch.delenv("GOLDBOT_ALLOW_PLAINTEXT")
+    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
+    assert acc_mod.set_secret("k", "v") == "file"
+    monkeypatch.setattr(acc_mod, "_PLATFORM", "darwin")
+    with pytest.raises(RuntimeError):
+        acc_mod.set_secret("k2", "v")                               # never on macOS
