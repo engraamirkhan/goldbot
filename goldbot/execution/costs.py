@@ -92,12 +92,12 @@ def _quantiles(counts: pd.Series) -> SpreadStat:
 def spread_profile(days: Iterable[pd.DataFrame], *, first_day: date, last_day: date, days_skipped: int = 0,
                    sessions: SessionTable = DEFAULT_SESSIONS) -> SpreadProfile | None:
     """The SpreadProfile of recorded tick days (each ts_utc, bid, ask, as `ticks.load_day` returns), or None when no
-    day has a valid tick (ask >= bid > 0). Each day is reduced to value counts before the next is read, so memory
+    day has a valid tick (finite, ask >= bid > 0). Each day is reduced to value counts before the next is read, so memory
     stays at the number of distinct spreads, not ticks."""
     acc: dict[str, pd.Series] = {}
     n_days = n_ticks = 0
     for t in days:
-        t = t[(t["ask"] >= t["bid"]) & (t["bid"] > 0)] if not t.empty else t
+        t = t[(t["ask"] >= t["bid"]) & (t["bid"] > 0) & np.isfinite(t["ask"] - t["bid"])] if not t.empty else t
         if t.empty:
             continue
         n_days += 1

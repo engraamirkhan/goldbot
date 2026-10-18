@@ -266,14 +266,15 @@ def publish_costs(settings: Settings, accounts: list[Account], state_dir: Path, 
 def recorded_spread_profile(state_dir: Path, account_id: str, slot: pd.Timestamp, *, window_days: int,
                             min_days: int) -> tuple[SpreadProfile | None, str]:
     """The spread profile of the broker ticks `tick_record` recorded (state/ticks/<account>/, read with
-    `ticks.load_day`, sha256 checked) for the server dates of the last `window_days` days, and a note; None below
+    `ticks.load_day`, sha256 checked) for the closed server dates of the last `window_days` days (the slot's own date is
+    partial and never counted), and a note; None below
     `min_days` usable days (costs-binding-2026-10-18.md section 1.4 step 4: read only after >= 10 trading days, so the
     medians are not one quiet week's). A day that cannot be read or fails its digest is skipped and counted, never
     used. Only the aggregate leaves this function."""
     from goldbot.data.ticks import load_day, recorded_days
     first = (slot - pd.Timedelta(days=window_days)).date()
     try:
-        days = [d for d in recorded_days(account_id, state_dir=state_dir) if first <= d <= slot.date()]
+        days = [d for d in recorded_days(account_id, state_dir=state_dir) if first <= d < slot.date()]   # today: partial
     except (ValueError, OSError) as exc:                 # no such label, or an unreadable index: no profile
         return None, f"spread profile: tick record index unreadable ({type(exc).__name__})"
     skipped: list[str] = []
@@ -282,7 +283,7 @@ def recorded_spread_profile(state_dir: Path, account_id: str, slot: pd.Timestamp
         for d in days:
             try:
                 yield load_day(account_id, d, state_dir=state_dir)
-            except (ValueError, OSError) as exc:          # digest mismatch, torn or missing file
+            except (ValueError, OSError, KeyError) as exc:   # digest mismatch, torn, missing file or column
                 skipped.append(d.isoformat())
                 log.warning("tick record %s %s not used for the spread profile: %s", account_id, d, exc)
     prof = spread_profile(frames(), first_day=days[0], last_day=days[-1]) if days else None

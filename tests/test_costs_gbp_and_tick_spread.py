@@ -178,6 +178,13 @@ def test_no_valid_tick_gives_no_spread_profile():
                           last_day=date(2026, 11, 3)) is None
 
 
+def test_a_tick_with_a_non_finite_price_never_reaches_the_spread_profile():
+    day = _day_ticks(date(2026, 11, 3), {9: [0.2] * 10})
+    bad = day.iloc[:3].assign(ask=[np.nan, np.inf, 2500.3], bid=[2500.0, 2500.0, np.inf])
+    prof = spread_profile([pd.concat([day, bad])], first_day=date(2026, 11, 3), last_day=date(2026, 11, 3))
+    assert prof is not None and prof.n_ticks == 10 and prof.by_hour["09"].p90 == pytest.approx(0.2)
+
+
 def _record(state: Path, days: list[date]) -> None:
     for d in days:
         tk.write_day(state, "icm-demo", d, _day_ticks(d, {9: [0.15] * 40, 15: [0.20] * 40}), symbol="XAUUSD",
@@ -205,6 +212,27 @@ def test_recorded_ticks_in_the_window_build_the_profile_and_a_tampered_day_is_sk
     assert prof.first_day == days[1] and prof.last_day == days[-1]
     assert prof.by_hour["09"].median == pytest.approx(0.15) and prof.by_hour["15"].median == pytest.approx(0.20)
     assert "11 recorded days" in note and "1 skipped" in note
+
+
+def test_the_current_server_day_is_partial_and_never_counted(tmp_path):
+    days = _weekdays(10)
+    _record(tmp_path, [*days, NOW.date()])                                     # today's file: an incomplete day
+    prof, _ = recorded_spread_profile(tmp_path, "icm-demo", NOW, window_days=30, min_days=10)
+    assert prof is not None and prof.days == 10 and prof.last_day == days[-1]
+
+
+def test_a_day_file_missing_a_column_is_skipped_not_fatal(tmp_path, monkeypatch):
+    days = _weekdays(11)
+    _record(tmp_path, days)
+    real = tk.load_day
+
+    def load(account: str, day: date, **kw: Any) -> pd.DataFrame:
+        if day == days[3]:
+            raise KeyError("ask")                                              # a file without the ask column
+        return real(account, day, **kw)
+    monkeypatch.setattr(tk, "load_day", load)
+    prof, note = recorded_spread_profile(tmp_path, "icm-demo", NOW, window_days=30, min_days=10)
+    assert prof is not None and prof.days == 10 and prof.days_skipped == 1 and "1 skipped" in note
 
 
 def test_fewer_recorded_days_than_the_minimum_give_no_profile_and_say_why(tmp_path):
