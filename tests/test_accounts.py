@@ -118,6 +118,7 @@ class _FakeKeyring:
 
 def test_set_secret_refuses_plaintext_without_the_opt_in(isolated, monkeypatch, tmp_path):
     monkeypatch.delenv("GOLDBOT_ALLOW_PLAINTEXT")
+    monkeypatch.delenv("PYTHON_KEYRING_BACKEND", raising=False)     # the deliberate fail-backend is also an opt-in (CI sets it)
     with pytest.raises(RuntimeError, match="GOLDBOT_ALLOW_PLAINTEXT"):
         acc_mod.set_secret("k", "v")
     assert not (tmp_path / "state" / ".secrets.json").exists()

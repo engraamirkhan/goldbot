@@ -85,7 +85,7 @@ step() {  # step NAME ENV... -- CMD: like job, but appended to the lane log and 
   echo "$name $rc" >> "$L/$lane.steps"
   return 0
 }
-lane_done() { [ -f "$L/$1.steps" ] && ! awk '$2 != 0 {bad=1} END {exit bad}' "$L/$1.steps"; echo $? > "$L/$1.status"; }
+lane_done() { [ -f "$L/$1.steps" ] && awk '$2 != 0 {bad=1} END {exit bad}' "$L/$1.steps"; echo $? > "$L/$1.status"; }
 
 # --- the lanes (commands copied from ci.yml) -----------------------------------------------------------------------
 lint_lane() {
