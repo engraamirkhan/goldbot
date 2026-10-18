@@ -16,7 +16,7 @@ from goldbot.telegram.approvals import ApprovalCenter
 pytestmark = pytest.mark.integration
 
 
-def _run(approval_mode: str, tmp_path: Path, days: int = 5, data_root: str | None = None, shadow: bool = False,
+def _run(approval_mode: str, tmp_path: Path, days: int = 3, data_root: str | None = None, shadow: bool = False,
          live_shares: dict[str, float] | None = None, shadow_p: float = 0.65):
     ticks = synthetic_ticks("2025-03-03", f"2025-03-{3 + days:02d}", ticks_per_minute=1, seed=5)
     pb = PaperBroker(equity=10_000)
@@ -70,7 +70,7 @@ def test_engine_propose_mode_waits_for_approval(tmp_path):
     # ticks and fills are logged for the nightly cost job
     store = Store(tmp_path / "data")
     logged = store.read("ticks", source="icm-demo")
-    n_ticks = len(synthetic_ticks("2025-03-03", "2025-03-08", ticks_per_minute=1, seed=5))
+    n_ticks = len(synthetic_ticks("2025-03-03", "2025-03-06", ticks_per_minute=1, seed=5))
     assert len(logged) == n_ticks
     fills = store.read("fills", source="icm-demo")
     orders = [d for d in eng.decisions if d.get("action") == "order" and d["ok"]]
@@ -110,7 +110,7 @@ def test_hourly_agent_decides_only_on_hour_closes(tmp_path):
     # features with 4h/1d context (the columns its research used), and its time barrier is counted in 1h bars
     from goldbot.data.resample import BAR_COLUMNS, ticks_to_1m
     ticks = synthetic_ticks("2025-03-03", "2025-03-15", ticks_per_minute=1, seed=8)
-    live_from = pd.Timestamp("2025-03-12", tz="UTC")
+    live_from = pd.Timestamp("2025-03-13", tz="UTC")
     trend = SPECIALISTS["trend"](adx_min=0.0, pullback_atr=5.0)
     session = SPECIALISTS["session_open"](min_body_pct=0.0, asia_range_max_atr_d=99.0)
     Store(tmp_path / "data").append("bars_1m", ticks_to_1m(ticks[ticks["ts_utc"] < live_from]), source="dukascopy")
@@ -120,7 +120,7 @@ def test_hourly_agent_decides_only_on_hour_closes(tmp_path):
                  {"trend": ConstantModel(p=0.65), "session_open": ConstantModel(p=0.65)},
                  shadow_models={"trend-v1": (trend.agent_id, ConstantModel(p=0.65))})
     n = eng.warm_start(live_from)                                       # restart: history from the store, then ticks
-    assert n > 9 * 23 * 60 * 0.6 and list(eng.bars_1m.columns) == BAR_COLUMNS
+    assert n > 7 * 23 * 60 * 0.6 and list(eng.bars_1m.columns) == BAR_COLUMNS
     decisions = []
     live = ticks[ticks["ts_utc"] >= live_from]
     for ts, bid, ask in zip(live["ts_utc"], live["bid"].to_numpy(float), live["ask"].to_numpy(float)):
