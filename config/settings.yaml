@@ -179,6 +179,7 @@ research:
   trial_budget_per_month: 12         # bounded loop: trials per specialist per month (feeds the deflated Sharpe)
   label_grid_paused: true            # monthly label-grid loop off until a family passes the primary-signal screen
   trial_budget_quarter: 20           # pre-registered trials per calendar quarter across all families (P2); raising it is an owner decision
+  trial_budget_overrides: {"2026Q4": 53}   # owner directive 2026-10-18: backtest as much as needed; batch-2026-10-18.md
   reserved_trials_quarter:           # held for each quarter's pre-registered queue; a quarter not listed holds none
     "2027Q1": 8                      #   preregistration-2027Q1.md: 4 queued rows + 4 contingent H-02 survivor slots (ADR
                                      #   0007; H-06 withdrawn by its rule 2026-10-16, run 38931951849). The director,

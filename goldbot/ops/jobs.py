@@ -796,7 +796,7 @@ def make_trial_runner(ctx: JobContext, now: Callable[[], pd.Timestamp] | None = 
             if later is not None:
                 return {"error": later_refusal(family, later)}
             reserved = reserved_trials(rows, q_now, r.reserved_for(q_now)).reserved
-            cap = quarter_budget(r) if prereg is not None else max(quarter_budget(r) - reserved, 0)
+            cap = quarter_budget(r, q_now) if prereg is not None else max(quarter_budget(r, q_now) - reserved, 0)
             try:
                 quarter = ctx.trials.check_budget(1, cap)
             except TrialBudgetExceeded as exc:

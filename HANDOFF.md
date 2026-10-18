@@ -5,6 +5,7 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- **Per-quarter trial budget override** (owner directive 2026-10-18): `research.trial_budget_overrides: {"2026Q4": 53}` raises one quarter's budget (`ResearchSettings.budget_for`, validated YYYYQn keys, values >= the base); research_pass, discovery, H-16, the director, the job runner, pre-registration, digest and API read it, other quarters keep `trial_budget_quarter`. Every trial is still recorded; deflated Sharpe counts the full K. Unblocks batch-2026-10-18.md.
 - An approval whose send raises is archived NOT CONFIRMED, never left placing (BACKLOG 84, implementer, 2026-10-17;
   trading-safety residual on BACKLOG 72).
   - `ApprovalCenter._finish`: if `on_decision` raises, the card's `placing` flag is cleared and it is archived with

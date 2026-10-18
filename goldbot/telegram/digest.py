@@ -363,7 +363,7 @@ def _trial_line(settings: Settings | None, registry_path: Path | None, now: pd.T
     hash, so a run recorded without the link (research_pass) is not shown as still waiting."""
     from goldbot.research.director import _prereg_matches, reserved_trials
     from goldbot.research.registry import quarter_of, quarter_start, quarter_trials
-    budget = settings.research.trial_budget_quarter if settings is not None else 20
+    budget = settings.research.budget_for(quarter_of()) if settings is not None else 20
     rows: list[dict[str, Any]] = []
     if registry_path is not None and registry_path.exists():
         rows = [json.loads(x) for x in registry_path.read_text(encoding="utf-8").splitlines() if x.strip()]

@@ -337,6 +337,9 @@ class ResearchSettings(_Section):
     trial_budget_per_month: int = Field(12, ge=1, le=200)
     label_grid_paused: bool = True        # the monthly label-grid loop runs only when this is false (proposal P2)
     trial_budget_quarter: int = Field(20, ge=1, le=500)   # pre-registered trials per calendar quarter, all families
+    # raises the budget of ONE quarter ({"2026Q4": 53}); a quarter not listed keeps trial_budget_quarter, a value must
+    # be >= it. Every trial is still recorded and the deflated Sharpe still counts the full K (an owner decision)
+    trial_budget_overrides: dict[str, int] = Field(default_factory=dict)
     # trials held for the pre-registered queue (director.reserved_trials), PER QUARTER ({"2027Q1": 9}; a quarter not
     # listed holds none): the research director, the label grid and the analyst spend only budget - used - reserved
     reserved_trials_quarter: dict[str, int] = Field(default_factory=dict)
@@ -371,6 +374,19 @@ class ResearchSettings(_Section):
             if not re.fullmatch(r"\d{4}Q[1-4]", q) or not 0 <= n <= 500:
                 raise ValueError(f"reserved_trials_quarter maps a quarter like 2027Q1 to 0..500 trials, got {q!r}: {n!r}")
         return v
+
+    @model_validator(mode="after")
+    def _budget_overrides(self) -> ResearchSettings:
+        import re
+        for q, n in self.trial_budget_overrides.items():
+            if not re.fullmatch(r"\d{4}Q[1-4]", q) or not self.trial_budget_quarter <= n <= 500:
+                raise ValueError(f"trial_budget_overrides maps a quarter like 2026Q4 to trial_budget_quarter "
+                                 f"({self.trial_budget_quarter})..500 trials, got {q!r}: {n!r}")
+        return self
+
+    def budget_for(self, quarter: str) -> int:
+        """The quarter's pre-registered trial budget: its override when it has one, else trial_budget_quarter."""
+        return int(self.trial_budget_overrides.get(quarter, self.trial_budget_quarter))
 
     @field_validator("open_budget_preregistered_only")
     @classmethod
