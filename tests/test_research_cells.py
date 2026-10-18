@@ -437,3 +437,50 @@ def test_a_symlinked_artifact_file_is_never_followed(tmp_path: Path) -> None:
     out = cells.record(plan, arts, registry.path)
     assert out.failed == 1 and "symlink" in next(r for r in read_rows(registry.path) if r["status"] == "failed")["results"]["error"]
     assert all("outside" not in rep["body"] for rep in out.reports)
+
+# ----------------------------------------------------------------------------------------------- the matrix round trip
+def _github_matrix(obj: Any) -> Any:
+    """What `fromJSON` then `toJSON(matrix.cell)` hands a cell: GitHub's expression numbers are doubles, written back
+    without a fraction when whole (3.0 -> 3)."""
+    return json.loads(json.dumps(obj), parse_float=lambda s: int(float(s)) if float(s).is_integer() else float(s))
+
+
+def _row_as_the_cell_runs_it(tmp: Path, cell: dict[str, Any]) -> dict[str, Any]:
+    """The row research_pass.py writes for the cell it was handed: the agent built from the variant in its argv."""
+    from goldbot.research.preregistration import resolve_variant
+    from goldbot.specialists import SPECIALISTS
+    variant = json.loads(next(a for a in cells.argv(cell) if a.startswith("--variants=")).split("=", 1)[1])[0]
+    spec = SPECIALISTS[cell["specialist"]](**resolve_variant(cell["specialist"], variant))
+    return TrialRegistry(tmp / "cell.jsonl").record(
+        agent_id=spec.agent_id, family=spec.family, config=spec.config, feature_version="fv", rationale="r",
+        results=_evaluated_results(k_run=3), status="evaluated")
+
+
+def test_the_plan_hands_the_matrix_the_form_the_matrix_hands_back_so_a_whole_float_cannot_change_the_agent() -> None:
+    plan = cells.plan(_env(VARIANTS='[{"stop_atr": 3.0, "target_atr": 2.5}]'))
+    assert _github_matrix(plan) == plan and plan[0]["variant"] == {"stop_atr": 3, "target_atr": 2.5}
+    assert cells.argv(_github_matrix(plan)[0]) == cells.argv(plan[0])
+
+
+@pytest.mark.parametrize("plan_variant", [{"stop_atr": 3.0}, {"stop_atr": 3}],
+                         ids=["plan-written-before-the-fix", "canonical-plan"])
+def test_a_whole_float_round_tripped_through_the_matrix_still_matches_its_plan_and_keeps_its_rows(
+        tmp_path: Path, plan_variant: dict[str, Any]) -> None:
+    plan = cells.plan(_env(VARIANTS='[{"stop_atr": 3.0}]'))
+    plan[0]["variant"] = plan_variant                   # the record job reads the plan, the cell ran the matrix's copy
+    arts = tmp_path / "arts"
+    _cell_dir(arts, 0, [_row_as_the_cell_runs_it(tmp_path, _github_matrix(plan[0]))])
+    registry = TrialRegistry(tmp_path / "registry.jsonl")
+    out = cells.record(plan, arts, registry.path)
+    assert out.failed == 0 and out.recorded == 1
+    assert [r["status"] for r in read_rows(registry.path)] == ["evaluated"]
+
+
+def test_a_cell_row_may_not_carry_a_repair_so_an_artifact_can_never_supersede_a_registry_row(tmp_path: Path) -> None:
+    row = _planned_row(tmp_path, "a", repair={"replaces": {"ts": "t", "agent_id": "a", "config_hash": "h",
+                                                          "feature_version": "unknown"}})
+    plan, arts, registry = _two_cell_plan_with(tmp_path, [row])
+    out = cells.record(plan, arts, registry.path)
+    rows = read_rows(registry.path)
+    assert out.failed == 1 and "repair" in next(r for r in rows if r["status"] == "failed")["results"]["error"]
+    assert not any("repair" in r for r in rows)

@@ -491,7 +491,8 @@ def test_a_candidate_the_deals_after_it_carry_to_a_higher_read_raises_the_mark_t
 
 
 def test_the_hwm_table_is_an_additive_core_migration_an_older_release_still_opens():
-    assert CORE[-1].name == "hwm_confirmation" and CORE[-1].additive
+    (m,) = [m for m in CORE if m.name == "hwm_confirmation"]
+    assert m.additive and all(n.additive for n in CORE[m.version - 1:])   # every later core migration additive too
     assert compat_back_to(CORE, len(CORE)) == 1
 
 

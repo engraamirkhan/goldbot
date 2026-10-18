@@ -38,7 +38,10 @@ log = logging.getLogger(__name__)
 
 DB_FILE = "tv_auth.db"
 STALE_HOURS = 36                      # the pull runs at least daily; a day and a half without success is a fault
-NOTICE_TEXT = "TradingView sign-in expired — run `goldbot accounts set tradingview-session` on the brain"
+# the two keyring entries the pull reads (settings tv_pull.sessionid_key / sessionid_sign_key; RUNBOOK 2.7c)
+SET_COOKIES = ("python -m goldbot.ops.accounts set tradingview-sessionid` and "
+               "`python -m goldbot.ops.accounts set tradingview-sessionid-sign")
+NOTICE_TEXT = f"TradingView sign-in expired — on the brain run `{SET_COOKIES}` (hidden prompts, fresh browser cookies)"
 _SCHEMA = """CREATE TABLE IF NOT EXISTS tv_auth (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     status TEXT NOT NULL,
@@ -119,7 +122,7 @@ def check_tv_pull(ctx: HealthContext) -> Check:
     path = Path(ctx.state_dir) / DB_FILE
     if not path.exists():
         return Check(name=name, status="ok", reason="no TradingView pull yet (opt-in)")
-    expired = "TradingView sign-in expired: run `goldbot accounts set tradingview-session` on the brain"
+    expired = f"TradingView sign-in expired: on the brain run `{SET_COOKIES}`"
     try:
         conn = connect(path, "core")
         try:

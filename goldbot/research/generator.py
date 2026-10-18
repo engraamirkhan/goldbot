@@ -3,7 +3,8 @@
 
 DESIGN "Bounded research loop": "bounded feature and parameter search, not discovery of novel strategies". So this is
 a fixed, pre-declared grid, no model and no LLM. For every registered family that is neither under its pre-registered
-screen (`Specialist.screening`: the loop never runs or varies a screen) nor in `research.retired_families`, and for each
+screen (`Specialist.screening`: the loop never runs or varies a screen) nor in `research.retired_families` nor
+TradingView-dependent (`Specialist.requires_tv`: searched only under its own TV_GRID_V1, research.tv_grid), and for each
 timeframe the family allows, one dimension at a time moved off the default (never combined):
 * the exit settings `target_atr`, `stop_atr`, `max_bars` at 75% and 125% of the timeframe's default (each through
   `population.check_founder_config`, so a survivor can later be spawned as a founder);
@@ -142,7 +143,8 @@ def _grid(family: str, tf: str) -> list[dict[str, Any]]:
 
 def _eligible(settings: Settings) -> list[str]:
     retired = {r.family for r in settings.research.retired_families}
-    return [f for f in sorted(SPECIALISTS) if not SPECIALISTS[f].screening and f not in retired]
+    return [f for f in sorted(SPECIALISTS)
+            if not SPECIALISTS[f].screening and not SPECIALISTS[f].requires_tv and f not in retired]
 
 
 def _window_to(settings: Settings) -> str:
@@ -210,7 +212,8 @@ def loop_refusal(rows: list[dict[str, Any]], jobs: list[tuple[str, dict[str, Any
     """Why a run citing `rule_ref=loop` is refused, or None (ADR 0029). The loop spends its own budget, so these are
     the checks the quarterly budget would otherwise make: the run has at most `research.loop_trials_per_run` jobs
     (0 turns the loop off); no job's config is in the registry already (no double dispatch of one trial); no family is
-    retired or under its screen; no config is one a pre-registration queued (it must run against its own row); and a
+    retired, under its screen or TradingView-dependent (those run under TV_GRID_V1 and the quarter's budget, so they
+    are counted there); no config is one a pre-registration queued (it must run against its own row); and a
     loop run never scores the holdout nor runs a discovery (both stay pre-registered, owner-gated trials). A job's (family, config hash) must be a member of `GRID_V1`, the frozen `grid` (the
     loop varies nothing the grid did not declare), a loop run never skips the screen and always runs `--lot-fit`."""
     res = settings.research
@@ -237,6 +240,8 @@ def loop_refusal(rows: list[dict[str, Any]], jobs: list[tuple[str, dict[str, Any
         cls = SPECIALISTS.get(family)
         if cls is None or cls.screening:
             return f"research loop: {family} is unknown or still under its pre-registered screen"
+        if cls.requires_tv:
+            return f"research loop: {family} needs TradingView values; it is searched only under TV_GRID_V1"
         if (family, h) not in members:
             return f"research loop: {family} config {h} is not a member of the loop grid"
         if (family, h) in tried:

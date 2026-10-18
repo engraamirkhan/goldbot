@@ -602,6 +602,51 @@ class WebhookSettings(_Section):
     max_rows_per_hour: int = Field(default=5000, gt=0)   # inbox rows received in the last hour; beyond it the answer is 429
 
 
+class TvPullSettings(_Section):
+    """TradingView direct pull (goldbot/data/tv_pull.py; owner decision 2026-10-18, ADR 0030): the owner's session
+    cookie (keyring only) reads the saved layouts' indicators and their bars from TradingView's chart websocket.
+    "Strictly read-only; polite rate limit with backoff; fail soft": off until the owner turns it on in
+    settings.local.yaml, and the defaults stay well under what one open chart tab sends."""
+    enabled: bool = False
+    symbols: dict[str, str] = Field(default_factory=lambda: {"OANDA:XAUUSD": "XAUUSD"})  # chart symbol -> store symbol
+    timeframes: list[str] = Field(default_factory=lambda: ["15", "60", "240", "1D"])
+    # keyring entry names of the browser cookies `sessionid` and `sessionid_sign` (the values never leave the keyring)
+    sessionid_key: str = "tradingview-sessionid"
+    sessionid_sign_key: str = "tradingview-sessionid-sign"
+    discover: bool = True                              # read the saved layouts for their indicators
+    discover_every_s: float = Field(default=21600, gt=0)
+    max_studies: int = Field(default=20, gt=0)
+    min_interval_s: float = Field(default=5.0, ge=1.0)            # between two requests, whatever kind
+    bars_per_request: int = Field(default=5000, gt=0, le=5000)
+    max_pages_per_tf: int = Field(default=5, ge=0)                # history pages per timeframe and pass
+    max_requests_per_day: int = Field(default=3000, gt=0)         # rolling 24 h; a pass is skipped beyond it
+    study_warmup_bars: int = Field(default=300, ge=0)             # oldest loaded bars whose study values are not kept
+    poll_interval_s: float = Field(default=900, gt=0)
+    poll_offset_s: float = Field(default=60, ge=0)                # after the bar close, so the bar has closed there
+    live_max_lag_s: float = Field(default=1800, gt=0)             # received within this of the close: pull_live
+    history_latency_default_s: float = Field(default=960, ge=0)   # until min_live_samples live bars measure the p95
+    min_live_samples: int = Field(default=20, gt=0)
+    backoff_base_s: float = Field(default=300, gt=0)
+    backoff_max_s: float = Field(default=21600, gt=0)
+    timeout_s: float = Field(default=30, gt=0)
+
+    @model_validator(mode="after")
+    def _backoff_ordered(self) -> TvPullSettings:
+        if self.backoff_max_s < self.backoff_base_s:
+            raise ValueError("tv_pull.backoff_max_s must be at least backoff_base_s")
+        return self
+class TvSettings(_Section):
+    """TradingView values at decision time (plan docs/plans/tradingview-strategies.md, "Live staleness fails closed"):
+    a value counts only when its bar is the decision bar and it arrived no more than `max_lag_s` after that bar's
+    close; otherwise it is NaN and nothing that needs it can trigger. Equal to `features.tv_plots.MAX_LAG` (the
+    training allowance), so live never accepts what training could not see (tests/test_tv_event.py pins both)."""
+    max_lag_s: int = Field(default=60, ge=0)
+    # a TV_GRID_V1 trial is refused (research.tv_grid.tv_refusal, before it is charged) unless at least this share of
+    # our decision bars inside the TradingView history has a TradingView bar of the same open: our 4h bars floor on UTC
+    # and our 1d is the 13:30 New York feature-day, TradingView's gold bars start at its session open
+    min_bar_match: float = Field(default=0.95, gt=0, le=1)
+
+
 class Settings(_Section):
     symbol: str
     data_root: str
@@ -628,6 +673,8 @@ class Settings(_Section):
     ledger: LedgerSettings = Field(default_factory=LedgerSettings)
     ticks: TickRecordSettings = Field(default_factory=TickRecordSettings)
     webhook: WebhookSettings = Field(default_factory=WebhookSettings)
+    tv_pull: TvPullSettings = Field(default_factory=TvPullSettings)
+    tv: TvSettings = Field(default_factory=TvSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")
     @classmethod

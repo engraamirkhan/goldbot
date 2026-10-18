@@ -22,6 +22,7 @@ if TYPE_CHECKING:   # service entry points import lazily; these are for annotati
     from goldbot.ops.accounts import Account
     from goldbot.ops.watchdog import LoopWatch
     from goldbot.risk import RiskLimits
+    from goldbot.risk.limits_profile import LimitsPolicy
 
 
 SESSIONS_TIMEOUT_S = 5.0     # a session read slower than this keeps the last table (the bridge RPC times out at 10 s)
@@ -262,7 +263,9 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         from goldbot.execution.paper import PaperBroker
         broker = PaperBroker(symbol=acc.symbol)
         log.warning("not on Windows: running %s against the paper broker", account_id)
-    limits = resolve(engine_limits)(settings, acc, paper=resolve(paper_stand_in)(broker))
+    paper = resolve(paper_stand_in)(broker)
+    policy = resolve(engine_limits_policy)(settings, acc, paper=paper)
+    limits = policy.defaults
     # proposals go to the approval bus in state/; the dashboard and the Telegram service decide through it
     center = ApprovalCenter(set(settings.telegram.allowed_user_ids), bus=ApprovalBus("state"))
     registry_file = Path(settings.research.models_dir) / "registry.json"
@@ -300,8 +303,9 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               shock_blackout_min=settings.news.shock_blackout_min,
                               shock_min_relevance=settings.news.shock_min_relevance, live_clock=True,
                               approval_window_s=settings.risk.approval_window_seconds,
+                              tv_max_lag_s=settings.tv.max_lag_s,
                               swap_prior=settings_swap(settings)), broker, agents,
-                 champions(), center, limits=limits, shadow_models=shadow_set() if shadow_host else None,
+                 champions(), center, limits=limits, limits_policy=policy, shadow_models=shadow_set() if shadow_host else None,
                  live_shares=live_shares, live_versions=live_versions())
     from goldbot.data.calendar import BrokerSessions, SessionTable
     # the session read runs on its own thread: through the bridge it gets its own client (a requests.Session is not
@@ -322,8 +326,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         compat = BridgeCompatChecker(lambda: check_bridge(url, tz, brain_commit))
         resolve(begin_bridge_check)(eng, compat)   # blocked (unchecked) first, then one check before the loop starts
     warm = eng.warm_start(pd.Timestamp.now("UTC"))
-    log.info("engine %s started (%s), models: %s, %d 1m bars of history, risk per trade %.4f", account_id,
-             type(broker).__name__, sorted(eng.models), warm, limits.risk_per_trade)
+    log.info("engine %s started (%s), models: %s, %d 1m bars of history, risk per trade %.4f, limits %s", account_id,
+             type(broker).__name__, sorted(eng.models), warm, limits.risk_per_trade, eng.limits_current.profile)
     def mtimes() -> tuple[float, ...]:
         return tuple(f.stat().st_mtime if f.exists() else -1.0 for f in (registry_file, population_file))
 
@@ -387,3 +391,13 @@ def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> R
     from goldbot.risk import RiskLimits
     limits = RiskLimits.from_settings(settings.risk, tiny_live=accounts.tiny_live_risk(acc))
     return limits.model_copy(update={"daily_loss_limit_abs": None if paper else acc.daily_loss_limit_abs})
+
+
+def engine_limits_policy(settings: Settings, acc: Account, *, paper: bool = False) -> LimitsPolicy:
+    """ADR 0032: the account's limits policy, which the engine resolves every account refresh: the defaults
+    (`engine_limits`) and the controller (today `StaticController`: the owner's demo ceilings), clamped to [default ..
+    ceiling] on a demo account with `risk_overrides`, never above the defaults on any other account. The paper stand-in
+    (`paper=True`) keeps the defaults: paper and shadow evidence are not changed by a demo profile."""
+    from goldbot.risk.limits_profile import LimitsPolicy
+    defaults = resolve(engine_limits)(settings, acc, paper=paper)
+    return LimitsPolicy(acc.model_copy(update={"risk_overrides": None}) if paper else acc, defaults)

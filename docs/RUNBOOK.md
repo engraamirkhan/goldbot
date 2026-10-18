@@ -770,6 +770,7 @@ Other secrets: each command asks `value for <key>` and hides what you type.
 | `anthropic-api-key` | `.\.venv\Scripts\python -m goldbot.ops.accounts set anthropic-api-key` | `goldbot-scheduler` (staff agents), `goldbot-news` (headline scoring) | Staff agents are off; headlines are kept but not scored, so there is no news-shock blackout (calendar blackouts still work). |
 | `github-token` | `.\.venv\Scripts\python -m goldbot.ops.accounts set github-token` | `goldbot-scheduler` (bar refresh from `data-v1`, shared trial registry on `research-v1`) | The trial registry stays local to the VPS. Use a GitHub token for `engraamirkhan/goldbot` that can read and write release assets (Contents: read and write). |
 | `tradingview-webhook-secret` | `.\.venv\Scripts\python -m goldbot.ops.accounts set tradingview-webhook-secret` | `goldbot-webhook` | The webhook service cannot start (it needs this value and has no window to ask in). Choose a long random string and use the same one in your TradingView alerts. |
+| `tradingview-sessionid`, `tradingview-sessionid-sign` | `python -m goldbot.ops.accounts set tradingview-sessionid` (and `... set tradingview-sessionid-sign`) | `tv-pull` (2.7c) | The direct pull does not run; health `tv_pull` WARNs once it is enabled. The browser cookies `sessionid` and `sessionid_sign`; they expire when TradingView signs you out. |
 
 `config/accounts.yaml` also names a key `tradingview-ideas-cookie`; no running code reads it yet, so skip it.
 
@@ -896,6 +897,31 @@ failed save answers 503 so TradingView retries.
 Limits: an invite-only script exposes only the plots and `alert()` calls its author allows. A series that is drawn
 (lines, boxes, labels) or computed but not plotted cannot be read, and a plot set to `display.none` may be missing from
 the alert; check each indicator once. Data stays in `data/` and `state/` (private), never in a public release.
+
+### 2.7c TradingView direct pull (your indicators without alerts; ADR 0030)
+
+goldbot reads your saved TradingView layouts, finds every indicator on them with the inputs you saved, and pulls their
+plots and the bars into `tv_indicators` from TradingView's own chart connection. It only reads: it never creates or
+changes an alert, a layout or anything else on your account. This is not an official TradingView interface; you
+accepted the terms risk (possible account suspension, loss of invite-only access) on 2026-10-18. Your one step:
+
+1. In a browser signed in to TradingView, open the developer tools, Application (Chrome) or Storage (Safari/Firefox) >
+   Cookies > `https://www.tradingview.com`, and copy the values of `sessionid` and `sessionid_sign`. On the brain, store
+   each at its hidden prompt (paste, Enter; nothing is shown or saved anywhere else):
+
+   ```
+   ~/goldbot/.venv/bin/python -m goldbot.ops.accounts set tradingview-sessionid
+   ~/goldbot/.venv/bin/python -m goldbot.ops.accounts set tradingview-sessionid-sign
+   ```
+
+2. Claude switches `tv_pull.enabled: true` in `config/settings.local.yaml` and installs the unit (not part of the
+   bootstrap): `sudo install -m 644 goldbot/ops/linux/systemd/goldbot-tv-pull.service /etc/systemd/system/ && sudo
+   systemctl daemon-reload && sudo systemctl enable --now goldbot-tv-pull` (`tv-pull follow`: a pass after every 15m
+   bar close). `tv-pull sync` runs one pass, `tv-pull status` shows the last one (bars received per timeframe, new
+   bars, repaints, studies) and reaches no network.
+
+When TradingView signs the session out, health shows `tv_pull` WARN and you get one Telegram notice: repeat step 1 (a
+new cookie is tried at once). Alerts (2.7b) keep working whatever the pull does.
 
 ### 2.8 Telegram bot with @BotFather
 
@@ -1093,6 +1119,20 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
   `engine:<account>` for a broker or quote fault, then close the listed positions by hand in the MT5 terminal. The
   check clears when the engine reads the whole account flat. Outside market hours it stays a WARN: the closes go out
   when the market opens.
+
+### Demo risk limits (ADR 0032)
+
+* `icm-demo` trades with higher limits than the defaults: daily loss cap 5% (and never more than the £50 daily limit),
+  weekly cap 10%, and one 0.01 lot allowed when it risks at most 1%. These are the ceilings you approved on
+  2026-10-18. They are set in config/accounts.yaml under `risk_overrides`, apply to demo accounts only, and cannot be
+  set higher there.
+* If the account drops 8% below its high-water mark (the size-down stage), it goes back to the default limits by
+  itself and stays there, restarts included. The trade journal records `limits_reverted`, and the engine state file
+  shows `limits_reverted: true`.
+* To go back to the demo limits, wait until the account is out of size-down (the dashboard shows the stage as
+  normal), then **re-arm** on the dashboard as above. A re-arm while the account is still in size-down or halted is
+  refused (`limits_reset_refused`); re-arm again once the stage is normal.
+* Live and tiny-live accounts never use these limits.
 
 
 ### Auto mode (entries without your click)
