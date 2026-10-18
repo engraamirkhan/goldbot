@@ -66,3 +66,27 @@ def test_read_rows_tolerates_missing_and_blank_lines(tmp_path, missing):
     if not missing:
         p.write_text('{"ts": "1", "agent_id": "a"}\n\n')
     assert len(rs.read_rows(p)) == (0 if missing else 1)
+
+
+def _failed_and_repair(tmp_path):
+    rows = _rows(tmp_path, "reg.jsonl", [("a", {"x": 1}), ("planned-b", {"x": 2.0}), ("c", {"x": 3})])
+    failed = {**rows[1], "status": "failed", "feature_version": "unknown"}
+    repaired = {**rows[1], "agent_id": "b", "config_hash": "h-b", "status": "screened",
+                "repair": {"replaces": {k: failed[k] for k in rs.KEY_FIELDS}}}
+    return [rows[0], failed, rows[2]], repaired
+
+
+def test_a_repair_row_supersedes_the_failed_row_it_names_in_every_union_and_keeps_its_trial_number(tmp_path):
+    published, repaired = _failed_and_repair(tmp_path)
+    stale = list(published)                              # e.g. the VPS copy, pulled before the repair
+    fixed = [published[0], repaired, published[2]]
+    for merged in (rs.merge_rows(fixed, stale), rs.merge_rows(stale, fixed), rs.merge_rows(stale, [repaired])):
+        assert [(r["trial"], r["agent_id"], r["status"]) for r in merged] == \
+            [(1, "a", "evaluated"), (2, "b", "screened"), (3, "c", "evaluated")]
+
+
+def test_a_repair_can_only_supersede_a_failed_row_never_a_real_trial(tmp_path):
+    published, repaired = _failed_and_repair(tmp_path)
+    rogue = {**repaired, "repair": {"replaces": {k: published[0][k] for k in rs.KEY_FIELDS}}}
+    merged = rs.merge_rows(published, [rogue])
+    assert len(merged) == 4 and [r["agent_id"] for r in merged].count("a") == 1   # nothing dropped, one trial added

@@ -87,6 +87,21 @@ def _variants(raw: Any) -> list[Any]:
     return out
 
 
+def canonical(value: Any) -> Any:
+    """`value` in the one form that survives the matrix: a whole float as an int, at every nesting level (bools and
+    strings untouched). GitHub's expressions hold numbers as doubles and `toJSON(matrix.cell)` writes 3.0 as 3, so a
+    plan that kept 3.0 named an agent the cell never ran (the agent id hashes the JSON of its config) and the record
+    step refused the cell's rows as foreign (research readout 2026-10-18, D-1). `plan` emits canonical variants, so the
+    cell runs exactly what the plan names; `_planned` canonicalises too, so a plan written before this still matches."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, dict):
+        return {k: canonical(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [canonical(v) for v in value]
+    return value
+
+
 def _json_object(raw: str, what: str) -> str:
     try:
         ok = isinstance(json.loads(raw), dict)
@@ -101,7 +116,8 @@ def plan(env: Mapping[str, str]) -> list[dict[str, Any]]:
     """The cells of one dispatch: the single-trial inputs (SPECIALIST, VARIANTS, POOLED, ... as research.yml's inputs), or
     each object of BATCH (a JSON list; a key it leaves out takes the dispatch input's value). One cell per variant; a
     pooled object is one cell (it ignores specialist and variants). Every value is validated here, before a runner
-    starts: a name is [a-z0-9_]+, a timeframe is like 15m, flags are booleans, years are integers. ValueError otherwise."""
+    starts: a name is [a-z0-9_]+, a timeframe is like 15m, flags are booleans, years are integers. ValueError otherwise.
+    Variants are `canonical`: the matrix hands each cell back exactly the variant planned here."""
     defaults: dict[str, Any] = {
         "specialist": env.get("SPECIALIST", "session_open"), "variants": env.get("VARIANTS", "[{}]") or "[{}]",
         "pooled": env.get("POOLED", ""), "from_year": env.get("FROM_YEAR", "2010"), "to_year": env.get("TO_YEAR", "2026"),
@@ -139,7 +155,7 @@ def plan(env: Mapping[str, str]) -> list[dict[str, Any]]:
         spec["from_year"], spec["to_year"] = int(spec["from_year"]), int(spec["to_year"])
         spec["discover_config"] = _json_object(str(spec["discover_config"]), "discover_config")
         spec["rationale"], spec["rule_ref"] = str(spec["rationale"]), str(spec["rule_ref"])
-        variants = [{}] if spec["pooled"] else _variants(spec["variants"])
+        variants = [{}] if spec["pooled"] else canonical(_variants(spec["variants"]))
         for v in variants:
             if spec["timeframe"] and not spec["pooled"]:
                 if not isinstance(v, dict):
@@ -264,7 +280,7 @@ def _planned(cell: Mapping[str, Any]) -> tuple[str, str, dict[str, Any], bool]:
                                                             "families": {s.family: s.config for s in specs}}
             agent = f"pooled-{cell['pooled']}"
         else:
-            spec = SPECIALISTS[cell["specialist"]](**resolve_variant(cell["specialist"], cell["variant"]))
+            spec = SPECIALISTS[cell["specialist"]](**resolve_variant(cell["specialist"], canonical(cell["variant"])))
             agent, config = spec.agent_id, spec.config
     except (ValueError, KeyError, TypeError):
         return agent, family, config, False
@@ -314,6 +330,8 @@ def _read_cell_rows(path: Path, cell: Mapping[str, Any]) -> tuple[list[dict[str,
         bad = [k for k, t in _ROW_TYPES.items() if not isinstance(r.get(k), t) or isinstance(r.get(k), bool)]
         if bad:
             return [], f"row {i} fails the registry row schema: {', '.join(bad)}"
+        if "repair" in r:                  # only scripts/registry_repair.py may replace a row (registry_sync._superseded)
+            return [], f"row {i} carries a repair, which a cell may not write"
         if r["status"] not in CELL_STATUSES:
             return [], f"row {i} has status {r['status']!r}, not one a cell may write"
         if (resolved and r["agent_id"] != agent) or (r["status"] != DISCOVERY and r["family"] != family):
