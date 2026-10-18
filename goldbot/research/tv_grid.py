@@ -145,11 +145,13 @@ def tv_refusal(rows: list[dict[str, Any]], jobs: list[tuple[str, dict[str, Any]]
                tv_long: pd.DataFrame | None = None, bars_1m: pd.DataFrame | None = None) -> str | None:
     """Why a run of TradingView trials is refused, or None: every job is a `tv_event` configuration (overrides or
     effective config; judged on the effective one) on a searchable timeframe whose point is in TV_GRID_V1, and not
-    already a trial in the registry (no double dispatch). With the research bars (`bars_1m`), also the bar alignment
-    (module docstring): at least `tv.min_bar_match` of our decision bars line up with a TradingView bar of `tv_long`.
+    already a trial in the registry or earlier in `jobs` (no double dispatch). With the research bars (`bars_1m`), also
+    the bar alignment (module docstring): at least `tv.min_bar_match` of our decision bars line up with a TradingView
+    bar of `tv_long`.
     Called before any budget check, so a refused job is never charged. Budget and pre-registration are the quarter's
     usual checks."""
     tried = {(r.get("family"), r.get("config_hash")) for r in rows if is_trial(r)}
+    listed: set[tuple[str, str]] = set()       # this run's jobs so far: one grid point twice is a double dispatch
     dec_by_tf: dict[str, pd.DataFrame] = {}
     for family, config in jobs:
         if family != FAMILY:
@@ -167,6 +169,9 @@ def tv_refusal(rows: list[dict[str, Any]], jobs: list[tuple[str, dict[str, Any]]
         h = config_hash(spec.config)
         if (family, h) in tried:
             return f"TV_GRID_V1: {family} config {h} is already in the registry (no double dispatch of one trial)"
+        if (family, h) in listed:
+            return f"TV_GRID_V1: {family} config {h} is listed twice in this run (no double dispatch of one trial)"
+        listed.add((family, h))
         if bars_1m is not None:
             if spec.timeframe not in dec_by_tf:
                 dec_by_tf[spec.timeframe] = resample_bars(bars_1m, spec.timeframe)

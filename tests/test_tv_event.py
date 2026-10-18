@@ -258,6 +258,16 @@ def test_tv_refusal_refuses_off_grid_shadow_timeframes_and_double_dispatch():
     assert other is not None and "not a TradingView family" in other
 
 
+def test_tv_refusal_refuses_one_grid_point_listed_twice_in_one_run():
+    # code review LOW: the same trial twice in one --variants list (here once as overrides, once effective) would be
+    # dispatched and charged twice; the second is refused as a double dispatch before anything runs
+    s = load_settings()
+    effective = TvEventSpecialist.from_plot(buy("1D"), timeframe="1d").config
+    raw = {k: effective[k] for k in tv_grid.PLOT_KEYS} | {"timeframe": "1d"}
+    twice = tv_grid.tv_refusal([], [("tv_event", raw), ("tv_event", effective)], s)
+    assert twice is not None and "listed twice" in twice
+
+
 def test_tv_trials_counted_in_k(tmp_path):
     reg = TrialRegistry(tmp_path / "registry.jsonl")
     reg.record(agent_id="tsmom-x", family="tsmom", config={"a": 1}, feature_version="v", rationale="core",
