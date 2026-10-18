@@ -383,9 +383,12 @@ def _drift_halt(state_dir: Path) -> bool:
     return not isinstance(d, dict) or bool(d.get("system_halt"))
 
 
-def _open_book(positions: list[Position], sym: SymbolInfo, tick: Tick | None, fx: float | None
-               ) -> dict[str, Any]:
+def _open_book(positions: list[Position], sym: SymbolInfo, tick: Tick | None, fx: float | None,
+               symbol: str | None = None) -> dict[str, Any]:
+    """Lots, notional and stop risk of the account's own gold positions only: a foreign symbol (a manual EURUSD) is
+    neither gold lots nor an unknowable stop risk; it still counts through equity in the gate."""
     from goldbot.risk.open_risk import remaining_stop_risk
+    positions = [p for p in positions if p.symbol in {sym.name, symbol}]
     lots = round(sum(p.lots for p in positions), 6)
     mid = (tick.bid + tick.ask) / 2 if tick is not None else math.nan
     risk: float | None = 0.0
@@ -497,7 +500,7 @@ def smoke_state(broker: Any, bus: ApprovalBus, acc: Account, state_dir: Path, *,
         market_closed=closed, tick_error=tick is None, bridge_incompatible=getattr(compat, "status", None) != "ok",
         unconfirmed_order=_unconfirmed_order(state_dir, acc.account_id),
         **_windows(cfg.limits, sessions, events, tick_ts, now),
-        **_open_book(positions, sym, tick, fx))
+        **_open_book(positions, sym, tick, fx, acc.symbol))
     new_day(st, now, risk["last_reset"])        # in memory only (S5)
     return st
 
