@@ -995,3 +995,85 @@ def test_a_raise_after_the_order_row_exists_keeps_not_confirmed_never_not_sent(t
     assert stored is not None and stored.gate_refusal == ["not_confirmed"]
     assert eng._orders[prop.proposal_id].status == "sending"
     assert not [n for n in _notices(tmp_path) if "could not be sent" in n]
+
+
+# ---------------------------------------------------------------------------------------------- BACKLOG 86
+class _SlowFill(PaperBroker):
+    """A send that takes `took_s` of wall time (`offset`, added to the clock the outbox and the engine read) and then
+    returns a plain fill; the outbox is polled meanwhile."""
+
+    def __init__(self, took_s: float, offset: list[float], **kw: Any) -> None:
+        super().__init__(**kw)
+        self.took_s, self.offset = took_s, offset
+        self.poll: Any = None
+        self.seen: list[str] = []
+
+    def place_order(self, intent: OrderIntent) -> OrderResult:
+        self.offset[0] += self.took_s
+        if self.poll is not None:
+            self.seen += self.poll()
+        return super().place_order(intent)
+
+
+def _slow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, took_s: float, beat_age_s: float
+          ) -> tuple[Any, Any, Any, Any]:
+    import time
+    offset = [0.0]
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + offset[0])
+    pb = _SlowFill(took_s, offset, equity=10_000)
+    eng, prop, outbox = _through_finish(tmp_path, pb)
+    _beat(tmp_path, age_s=beat_age_s)                              # the last loop beat before the send
+    pb.poll = lambda: [o for pid, o, _ in outbox.finished() if pid == prop.proposal_id]
+    return eng, prop, outbox, pb
+
+
+def _opened(tmp_path: Path) -> list[str]:
+    return [n for n in _notices(tmp_path) if n.startswith("Order confirmed")]
+
+
+def test_a_plain_fill_after_the_outbox_showed_not_confirmed_sends_one_opened_notice_and_updates_the_card(
+        tmp_path, monkeypatch):
+    """BACKLOG 86: the beat was 40 s old when the send began and the send took 25 s, so the outbox (heartbeat age
+    >= PLACING_SILENT_S) showed the card NOT CONFIRMED; the send then returned a plain fill: exactly one "opened"
+    notice and the card says so. Send duration alone (25 s) would have missed it."""
+    eng, prop, outbox, pb = _slow(tmp_path, monkeypatch, 25.0, 40.0)
+    eng.center.decide(prop.proposal_id, OWNER, True)
+    assert pb.seen == ["GATE_REFUSED: not_confirmed"]
+    [pos] = pb.positions()
+    rec = eng._orders[prop.proposal_id]
+    assert _opened(tmp_path) == [
+        f"Order confirmed: LONG {rec.lots} lots XAUUSD on icm-demo is open at {pos.open_price:.2f} (the broker "
+        f"confirmed it late). Stop {rec.sl:.2f}, target {rec.tp:.2f}; exits are automatic."]
+    card = eng.center.bus.get(prop.proposal_id)
+    assert card is not None and not card.placing and card.gate_refusal == ["not_confirmed"]
+    assert card.not_confirmed is not None and card.not_confirmed.outcome == "opened"
+    eng._reconcile(None)                                          # the reconcile loop adds no second notice
+    assert len(_opened(tmp_path)) == 1
+
+
+def test_a_70_s_send_from_a_fresh_beat_under_placing_max_is_noticed_because_the_outbox_would_show_it(
+        tmp_path, monkeypatch):
+    from goldbot.telegram.outbox import PLACING_MAX_S
+    eng, prop, _, pb = _slow(tmp_path, monkeypatch, 70.0, 0.0)
+    assert 70.0 < PLACING_MAX_S
+    eng.center.decide(prop.proposal_id, OWNER, True)
+    # the loop beat 70 s ago is >= PLACING_SILENT_S by the time the send returns: the outbox would show it
+    assert len(_opened(tmp_path)) == 1
+
+
+def test_a_fill_whose_outbox_test_stays_false_sends_no_notice_and_the_card_stays_approved(tmp_path, monkeypatch):
+    eng, prop, _, pb = _slow(tmp_path, monkeypatch, 5.0, 0.0)
+    eng.center.decide(prop.proposal_id, OWNER, True)
+    assert pb.seen == [] and _opened(tmp_path) == []
+    card = eng.center.bus.get(prop.proposal_id)
+    assert card is not None and not card.placing and card.gate_refusal is None and card.not_confirmed is None
+
+
+def test_the_notice_follows_the_outbox_test_at_the_exact_heartbeat_age_boundary(tmp_path, monkeypatch):
+    from goldbot.telegram.outbox import PLACING_SILENT_S
+    for took_s, expect in ((PLACING_SILENT_S - 2.0, 0), (PLACING_SILENT_S + 2.0, 1)):
+        sub = tmp_path / str(expect)
+        eng, prop, _, _ = _slow(sub, monkeypatch, took_s, 0.0)
+        eng.center.decide(prop.proposal_id, OWNER, True)
+        assert len(_opened(sub)) == expect, took_s

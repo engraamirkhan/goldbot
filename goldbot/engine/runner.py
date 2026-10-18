@@ -1178,12 +1178,14 @@ class Engine:
 
     # ------------------------------------------------------------------ approvals -> orders
     def _on_decision(self, p: Proposal) -> None:
-        """BACKLOG 85: a raise before the order row exists is archived "not sent" (`unconfirmed.archive_not_sent`)."""
+        """BACKLOG 85: a raise before the order row exists is archived "not sent" (`unconfirmed.archive_not_sent`).
+        BACKLOG 86: a plain fill after a send that lasted PLACING_SILENT_S or more sends the "opened" notice."""
         try:
             self._apply_decision(p)
         except BaseException as exc:
             unconfirmed.archive_not_sent(self, p, exc)
             raise
+        unconfirmed.silent_fill(self, p)   # BACKLOG 86
 
     def _apply_decision(self, p: Proposal) -> None:
         entry = self.pending.pop(p.proposal_id, None)

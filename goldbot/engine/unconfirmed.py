@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import pandas as pd
@@ -55,6 +56,7 @@ from goldbot.execution.not_confirmed import (
 from goldbot.execution.not_placed import not_placed, not_sent_code, refusal_code
 from goldbot.execution.not_placed import notice_text as not_placed_notice
 from goldbot.telegram.entry_text import account_name
+from goldbot.telegram.outbox import placing_abandoned
 
 if TYPE_CHECKING:
     from goldbot.engine.runner import Engine
@@ -212,6 +214,32 @@ def archive_pending(eng: Engine, p: Proposal) -> None:
     p.not_confirmed = Confirmation(symbol=eng.cfg.symbol)
     if eng.center.bus is not None:
         eng.center.bus.archive(p)
+
+
+def silent_fill(eng: Engine, p: Proposal) -> None:
+    """BACKLOG 86 (trading-safety residual 2 on 84): "when placing lasted >= PLACING_SILENT_S and the order filled,
+    exactly one "opened" notice is sent and the card updated". "Lasted" is the outbox's own test
+    (`outbox.placing_abandoned`, evaluated now, when the send returned): an approval it would have reported
+    NOT CONFIRMED by the silent-engine fallback; the send then returned a plain fill, which `_finish` would
+    archive as an ordinary approval, leaving the card NOT CONFIRMED with no notice. The row is already `filled`, so the
+    reconcile loop never tells the owner. Called by `_on_decision` after a send that returned: the card is marked
+    NOT CONFIRMED -> opened on `p` itself (`_finish` archives it next) and the notice goes out once. Notification
+    only: nothing here sends, sizes or gates an order. Best effort, logged."""
+    if p.gate_refusal is not None or p.not_confirmed is not None:
+        return
+    bus, rec = eng.center.bus, eng._orders.get(p.proposal_id)
+    pos = eng.open.get(rec.position_id) if rec is not None and rec.position_id is not None else None
+    if bus is None or rec is None or rec.status != "filled" or pos is None or rec.notified is not None:
+        return
+    try:
+        if not placing_abandoned(Path(eng.cfg.state_dir), bus.done_dir, p):
+            return
+        p.gate_refusal = [NOT_CONFIRMED]
+        p.not_confirmed = Confirmation(symbol=eng.cfg.symbol, outcome="opened", digits=_digits(eng))
+        _journal(eng, rec, "opened", position=pos.position_id)
+        _tell(eng, rec, "opened", notified="opened", dealt=pos.lots, entry=pos.open_price)
+    except Exception as exc:            # noqa: BLE001 - the fill stands either way
+        log.warning("late-fill notice not queued (%s)", type(exc).__name__)
 
 
 def archive_not_sent(eng: Engine, p: Proposal, exc: BaseException) -> None:
