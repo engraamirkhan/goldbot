@@ -119,6 +119,10 @@ def test_loop_refusal_checks_membership_against_the_frozen_grid_not_the_computed
     from goldbot.research import generator
     s = load_settings()
     cand = generator.grid(s)[0]
-    monkeypatch.setattr(generator, "GRID_V1", frozenset())
-    why = generator.loop_refusal([], [(cand.family, cand.overrides)], s)
+    config = SPECIALISTS[cand.family](**cand.overrides).config
+    assert generator.loop_refusal([], [(cand.family, config)], s) is None
+    key = (cand.family, cand.config_hash)
+    monkeypatch.setattr(generator, "GRID_V1", generator.GRID_V1 - {key})
+    assert key in generator.grid_members(s)
+    why = generator.loop_refusal([], [(cand.family, config)], s)
     assert why is not None and "not a member of the loop grid" in why
