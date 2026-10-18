@@ -22,7 +22,8 @@ Commands (all take --root, default the repo):
   new-item --slug S --title T    create the next free BACKLOG number, ranked last
   fix-ids                        renumber clashing ids: the fragment that landed first on this branch keeps its id
   absorb BRANCH                  turn an old-style branch's edits to the rendered files into fragments
-  merge BRANCH                   git merge --no-commit + absorb + fix-ids + render + commit, in one go
+  merge BRANCH                   git merge --no-commit + absorb + fix-ids + render + commit, in one go, then
+                                 scripts/merge_smoke.sh (warns loudly on failure, never reverts; GOLDBOT_MERGE_SMOKE=0 skips)
   migrate                        one-off split of the old rendered files into fragments (kept: absorb parses the
                                  old format with the same code, and the lossless test replays it)
   install-merge-driver           register the `goldbot-docs` git merge driver in this repo's git config, so a plain
@@ -903,7 +904,25 @@ def cmd_merge(root: Path, ref: str) -> int:
         return 1
     git(root, "commit", "--no-edit")
     print(f"merged {ref}")
+    smoke_after_merge(root)
     return 0
+
+
+def smoke_after_merge(root: Path) -> bool:
+    """Run scripts/merge_smoke.sh on the fresh merge commit. "Never auto-revert": a failure leaves the merge committed
+    and prints which checks failed, loudly. GOLDBOT_MERGE_SMOKE=0 skips it; a repo without the script skips it."""
+    script = root / "scripts" / "merge_smoke.sh"
+    if os.environ.get("GOLDBOT_MERGE_SMOKE") == "0" or not script.exists():
+        return True
+    r = subprocess.run(["bash", str(script)], cwd=root, capture_output=True, text=True)
+    if r.returncode == 0:
+        print("merge smoke ok")
+        return True
+    print((r.stdout + r.stderr).rstrip(), file=sys.stderr)
+    bar = "!" * 72
+    print(f"{bar}\nMERGE SMOKE FAILED: the merge is committed (not reverted); fix forward or `git reset --hard HEAD^`."
+          f"\n{bar}", file=sys.stderr)
+    return False
 
 
 # --------------------------------------------------------------------------------------------------- merge driver
