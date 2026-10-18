@@ -7575,6 +7575,31 @@
     "summary": "Chart Layouts Put"
    }
   },
+  "/api/chart/mt5": {
+   "get": {
+    "operationId": "chart_mt5_api_chart_mt5_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       },
+       "image/png": {}
+      },
+      "description": "Successful Response"
+     },
+     "404": {
+      "description": "no fresh capture"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Chart Mt5"
+   }
+  },
   "/api/decisions": {
    "post": {
     "operationId": "decide_api_decisions_post",
