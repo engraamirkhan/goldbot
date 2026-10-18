@@ -1,9 +1,16 @@
-"""Account classifier: Raw / Standard / Unknown, measured not assumed.
+"""Account classifier: Raw / Standard / Unknown. A declared class is the baseline, the measurement the cross-check,
+and when the two disagree the stricter one (Standard) wins.
 
-Decisive test: commission on past deals => Raw. Otherwise session-filtered median spread:
+The owner may declare the class per account (`account_class` in config/accounts.yaml). Until a measured class is
+stored, the declared class is the effective one, so a new account is not blocked as "unknown" for a week; the
+measurement keeps running (`effective_class`, the ONE function every consumer uses). A measured class that disagrees
+with the declared one never loosens the account: Standard wins and health warns (`class_mismatch`).
+
+Measurement. Decisive test: commission on past deals => Raw. Otherwise session-filtered median spread:
 < $0.20 floating with no deal history => Raw, >= $0.30 => Standard, between => Unknown. The last classification is
 persisted and only changes after two consecutive disagreeing runs; a stored Unknown counts as never classified, so
-the first known class is adopted on its first run. On Standard, 15m specialists are
+the first known class is adopted on its first run. The nightly job re-runs it every night while the stored class is
+Unknown (`PersistentClassifier.is_known`), on Fridays only once a class is known. On Standard, 15m specialists are
 disabled; on Unknown, the engine trades paper and alerts.
 """
 from __future__ import annotations
@@ -17,6 +24,8 @@ import pandas as pd
 from goldbot.base import Record
 from goldbot.data.calendar import DEFAULT_SESSIONS
 
+MIN_TICKS = 1000        # London/NY ticks needed before the spread is read
+
 
 class Classification(Record):
     account_class: str      # raw | standard | unknown
@@ -28,7 +37,7 @@ class Classification(Record):
 
 
 def classify(ticks: pd.DataFrame, deals: pd.DataFrame, *, raw_spread_max: float = 0.20, std_spread_min: float = 0.30,
-             min_ticks: int = 1000) -> Classification:
+             min_ticks: int = MIN_TICKS) -> Classification:
     commission_seen = bool(not deals.empty and "commission" in deals.columns and (deals["commission"].abs() > 0).any())
     if commission_seen:
         med = float(np.median(ticks["ask"] - ticks["bid"])) if not ticks.empty else None
@@ -49,6 +58,34 @@ def classify(ticks: pd.DataFrame, deals: pd.DataFrame, *, raw_spread_max: float 
         return Classification(account_class="standard", median_spread=med, p90_spread=p90, commission_seen=False, n_ticks=len(t), reason="wide spread, no commission")
     reason = "tight spread but zero-commission deal history" if med < raw_spread_max else "spread in dead band"
     return Classification(account_class="unknown", median_spread=med, p90_spread=p90, commission_seen=False, n_ticks=len(t), reason=reason)
+
+
+KNOWN_CLASSES = ("raw", "standard")
+
+
+def read_stored_class(path: str | Path) -> str:
+    """The class stored in state/classifier_<account>.json: raw | standard | unknown (missing, torn or odd is unknown)."""
+    p = Path(path)
+    try:
+        c = str(json.loads(p.read_text()).get("class") or "unknown") if p.exists() else "unknown"
+    except (OSError, ValueError, AttributeError):
+        return "unknown"
+    return c if c in ("raw", "standard", "unknown") else "unknown"
+
+
+def effective_class(declared: str | None, measured: str | None) -> str:
+    """The class the account trades by: the measured one when known and agreeing or alone; the declared one while
+    nothing is measured; the stricter (standard) when both are known and disagree, never the looser one."""
+    d = declared if declared in KNOWN_CLASSES else None
+    m = measured if measured in KNOWN_CLASSES else None
+    if d is None or m is None:
+        return m or d or "unknown"
+    return "standard" if "standard" in (d, m) else d
+
+
+def class_mismatch(declared: str | None, measured: str | None) -> bool:
+    """A declared and a measured class that are both known and differ (health warns; the stricter one is in force)."""
+    return declared in KNOWN_CLASSES and measured in KNOWN_CLASSES and declared != measured
 
 
 class PersistentClassifier:
@@ -80,6 +117,10 @@ class PersistentClassifier:
         if cur == "unknown" and any(r.get("account_class") == "standard" for r in self.state["runs"]):
             return "standard"
         return None
+
+    def is_known(self) -> bool:
+        """A raw or standard class is stored (a missing file or a stored unknown is not)."""
+        return self.state["class"] in KNOWN_CLASSES
 
     def _store(self, account_class: str) -> None:
         self.state["class"] = account_class

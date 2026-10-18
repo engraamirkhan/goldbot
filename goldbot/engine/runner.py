@@ -51,6 +51,7 @@ from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, Sent
 )
 from goldbot.execution.bridge import CEILING_REFUSAL, UNREADABLE_REFUSAL
 from goldbot.execution.broker import AccountInfo, Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
+from goldbot.execution.classifier import effective_class, read_stored_class
 from goldbot.execution.costs import CostTable
 from goldbot.execution.not_placed import not_placed, notice_text, refusal_code
 from goldbot.features import build_features
@@ -175,6 +176,7 @@ class EngineConfig(Record):
     account_id: str
     broker_name: str
     mode: str = "paper"              # paper | demo | live (what the broker is); approvals are separate
+    declared_class: str | None = None    # raw | standard from config/accounts.yaml: the baseline (effective_class)
     approval_mode: str = "propose"   # propose | auto
     symbol: str = "XAUUSD"
     decision_tf: str = "15m"
@@ -3268,17 +3270,17 @@ class Engine:
             self._drift_cache = (mtime, d if isinstance(d, dict) else {"system_halt": {"reasons": ["drift.json invalid"]}})
         return self._drift_cache[1]
 
-    def _account_class(self) -> str:
+    def _measured_class(self) -> str:
         """The classifier's stored class (state/classifier_<account>.json); unknown when missing or unreadable."""
         path = Path(self.cfg.state_dir, f"classifier_{self.cfg.account_id}.json")
         mtime = path.stat().st_mtime if path.exists() else -1.0
         if mtime != self._class_cache[0]:
-            try:
-                c = str(json.loads(path.read_text()).get("class") or "unknown") if path.exists() else "unknown"
-            except (ValueError, OSError):
-                c = "unknown"
-            self._class_cache = (mtime, c if c in ("raw", "standard", "unknown") else "unknown")
+            self._class_cache = (mtime, read_stored_class(path))
         return self._class_cache[1]
+
+    def _account_class(self) -> str:
+        """The class the account trades by: declared baseline, measured cross-check, stricter wins (effective_class)."""
+        return effective_class(self.cfg.declared_class, self._measured_class())
 
     def _daily_allowance(self) -> dict[str, float | None]:
         """min(daily cap x day-start equity, risk.daily_loss_limit_abs) and that limit less today's loss so far, for the
@@ -3394,7 +3396,9 @@ class Engine:
             "open_risk": round(st.open_risk, 2) if st.open_risk is not None else None,
             "open_risk_positions": self._open_risk_rows, "open_long": st.open_long, "open_short": st.open_short,
             "combined_size_down": st.combined_size_down, "spread_points": st.spread_points, "last_tick_age_s": st.last_tick_age_s,
-            "terminal_connected": True, "account_class": self._account_class(), "pending": len(self.center.pending),
+            "terminal_connected": True, "account_class": self._account_class(),
+            "account_class_declared": self.cfg.declared_class, "account_class_measured": self._measured_class(),
+            "pending": len(self.center.pending),
             "approval_mode": self.cfg.approval_mode, "blackout": self._blackout_event,
             "dq_error": st.dq_error, "stale_bars": st.stale_bars, "data_recovering": st.data_recovering,
             "dq_checks": sorted({e.check for e in self._dq_errors()} | self._dq_blocking()

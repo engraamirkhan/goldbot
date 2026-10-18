@@ -26,6 +26,10 @@ accounts:
     # ADR 0004: the owner's absolute daily loss limit, in this account's deposit currency (GBP: £50). Entries only;
     # exits are never gated. Per account, never global: one number read in two currencies is not one limit.
     daily_loss_limit_abs: 50
+    # the owner's declared account type (raw spread + commission): the baseline from the first run, so entries are not
+    # blocked as "unknown" while the classifier gathers ticks. Measurement keeps running; if it reads standard the
+    # stricter class wins and health warns. Leave unset (null) for an account whose type is not known.
+    account_class: raw
   vantage-demo:
     broker: vantage
     mode: demo

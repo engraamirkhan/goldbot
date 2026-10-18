@@ -181,7 +181,9 @@ Before you start, check all of these:
 * the engine has run once on this account: `state/risk_icm-demo.json` exists (the day start and high-water mark the
   limits are judged by);
 * `state/classifier_icm-demo.json` shows `"class": "raw"` or `"standard"`. While it is missing or `unknown` the
-  RiskGate refuses (exit 7) until the Friday `nightly_costs` run classifies the account;
+  RiskGate refuses (exit 7) until a nightly `nightly_costs` run classifies the account (it runs every night while the
+  class is unknown), unless the account declares `account_class` in `config/accounts.yaml` (icm-demo: `raw`), which
+  is then the class from the first run;
 * the supervisor is running (`systemctl is-active goldbot-supervisor` says `active`);
 * no deploy is waiting for you: do **not** approve a Telegram *Deploy* until the smoke has finished.
 
@@ -600,7 +602,7 @@ Weekdays are Mon-Fri. A job missed while the VPS was down is run once on restart
 | --- | --- | --- |
 | `calendar_archive` | Daily 06:10 | Stores the Forex Factory week in the `calendar_events` table (feeds the news blackout). |
 | `agents_presession` | Mon-Fri 06:30 | Macro and news analyst writes the pre-session briefing. |
-| `nightly_costs` | Mon-Fri 23:10 | Builds each account's spread/slippage cost table `state\costs_<account>.json`, with the swap and commission the terminal reports (`state\broker_terms_<account>.json`, written by the engine every 6 hours); on Fridays also re-runs the account classifier (`state\classifier_<account>.json`). Until an account has been classified (the first Friday with 1,000+ London/New York ticks logged) its engine opens no positions and the health check warns "account class unknown"; on a Standard account the 15m families except session-open are off. |
+| `nightly_costs` | Mon-Fri 23:10 | Builds each account's spread/slippage cost table `state\costs_<account>.json`, with the swap and commission the terminal reports (`state\broker_terms_<account>.json`, written by the engine every 6 hours); re-runs the account classifier (`state\classifier_<account>.json`) every night while the class is unknown and on Fridays once it is known. Until an account has been classified (1,000+ London/New York ticks logged) or declares `account_class` in `config/accounts.yaml` (icm-demo: `raw`), its engine opens no positions and the health check warns "account class unknown"; a measured class that disagrees with the declared one makes the stricter (Standard) win and the health check warns "declared raw, measured standard: check the account type"; on a Standard account the 15m families except session-open are off. |
 | `model_watch` | Daily 23:30 | CUSUM check on any newly promoted champion; restores the previous champion on an alarm. |
 | `agents_daily` | Mon-Fri 23:45 | Data steward, risk officer, execution auditor. |
 | `saturday_retrain` | Saturday 06:00 | Refreshes bars from `data-v1` and the macro series from `macro-v1` (a macro failure does not stop the retrain), decides waiting challengers (promote/retire), retrains new challengers. |
