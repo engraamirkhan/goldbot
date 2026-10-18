@@ -417,13 +417,13 @@ def test_every_persisted_record_model_has_a_compat_case():
 # Everything else must use load_record / load_record_json. Keep each entry's reason; remove it when its call goes away.
 STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/config.py", "load_settings", "Settings"): "strict: Settings (a misspelt key must fail)",
+    ("goldbot/features/smc_replica.py", "state_from_json", "ReplicaState"):
+        "strict: research replica state snapshot, not persisted operational state (restart of a replica run only)",
     ("goldbot/ops/health.py", "HealthContext.from_runtime", "Settings"): "strict: Settings",
     ("goldbot/ops/preflight.py", "run_preflight", "Settings"): "strict: Settings",
     ("goldbot/ops/setup_wizard.py", "merge_local_settings", "Settings"): "strict: Settings",
     ("goldbot/api/auth.py", "AuthStore.session_user", "User"):
         "strict: credentials (a newer lock or MFA flag must not be ignored)",
-    ("goldbot/features/smc_replica.py", "state_from_json", "ReplicaState"):
-        "strict: carried indicator state; a field mismatch must refuse the state and force a re-bootstrap, never a silent default",
     ("goldbot/research/cells.py", "_read_cell_rows", "CellRow"):
         "strict: untrusted matrix-cell artifacts; a bad row becomes a failed trial (security review 2026-10-18)",
     ("goldbot/webhook/app.py", "create_app.tv", "Alert"):
