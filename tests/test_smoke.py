@@ -370,6 +370,14 @@ def _state(w: SimpleNamespace) -> AccountState:
                              sessions=SessionTable(server_tz="Europe/Athens"), fx=1.0)
 
 
+def test_a_foreign_symbol_position_is_not_counted_as_gold_lots_or_blind_open_risk(w):
+    _position(w, position_id=7, lots=0.01)
+    _position(w, position_id=8, symbol="EURUSD", lots=0.01, sl=None)
+    st = _state(w)
+    assert st.open_lots == 0.01 and st.open_positions == 1 and st.open_risk is not None
+    assert RiskGate().account_reasons(st, T0) == []
+
+
 def test_smoke_state_sets_every_account_state_field(w):
     st = _state(w)
     fields = set(AccountState.model_fields)
