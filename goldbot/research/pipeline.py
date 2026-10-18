@@ -18,6 +18,7 @@ from goldbot.features.mtf import merge_higher_tf
 from goldbot.features.technical import atr
 from goldbot.labels import SwapSpec, one_at_a_time, triple_barrier, uniqueness_weights
 from goldbot.research.gates import RULE_ONLY_LABEL, holdout_verdict, research_gates
+from goldbot.research.lot_fit import LotFitSpec, lot_fit_overlay
 from goldbot.research.metrics import day_summed_dsr, expectancy, summarize
 from goldbot.research.model import MAX_FEATURES, MetaLabelModel, fit_calibrator
 from goldbot.research.walkforward import Fold, splits_for, window_for
@@ -391,19 +392,20 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
                    n_trials: int = 1, trades_per_year: float | None = None, ctx: dict | None = None,
                    extra_cost_usd: float = 0.0, holdout: Window | None = None,
                    score_holdout: bool = False, swap: SwapSpec | None = None,
-                   full_coverage_columns: tuple[str, ...] = ()) -> ResearchResult:
+                   full_coverage_columns: tuple[str, ...] = (), lot_fit: LotFitSpec | None = None) -> ResearchResult:
     """Walk-forward one specialist configuration: `prepare` then `evaluate` (see both). `full_coverage_columns` goes
     through to `evaluate`: a survivor trial of H-02 runs with the same per-fold mask (pre-registration pin 2026-10-17,
-    item 3: "`run_specialist` passes the field through to `evaluate`")."""
+    item 3: "`run_specialist` passes the field through to `evaluate`"). `lot_fit` likewise (H-27)."""
     prep = prepare(spec, bars_dec, context, feature_names, ctx, extra_cost_usd, holdout, score_holdout, swap=swap)
     return evaluate(prep, model_features=model_features, n_trials=n_trials, trades_per_year=trades_per_year,
                     extra_cost_usd=extra_cost_usd, holdout=holdout, score_holdout=score_holdout,
-                    full_coverage_columns=full_coverage_columns)
+                    full_coverage_columns=full_coverage_columns, lot_fit=lot_fit)
 
 
 def evaluate(prep: Prepared, model_features: list[str] | None = None, n_trials: int = 1,
              trades_per_year: float | None = None, extra_cost_usd: float = 0.0, holdout: Window | None = None,
-             score_holdout: bool = False, full_coverage_columns: tuple[str, ...] = ()) -> ResearchResult:
+             score_holdout: bool = False, full_coverage_columns: tuple[str, ...] = (),
+             lot_fit: LotFitSpec | None = None) -> ResearchResult:
     """Purged walk-forward of one prepared configuration with the specialist's declared inputs and its walk-forward
     windows (the timeframe's, with the specialist's `walkforward` overrides).
 
@@ -414,7 +416,8 @@ def evaluate(prep: Prepared, model_features: list[str] | None = None, n_trials: 
     candidates only, judged by the holdout rule (gates.holdout_verdict) instead of the walk-forward gates (scored once
     per configuration; see TrialRegistry.holdout_scored).
 
-    full_coverage_columns: the per-fold mask of `_walk_forward` (H-02 amendment 2026-10-17); empty = no mask."""
+    full_coverage_columns: the per-fold mask of `_walk_forward` (H-02 amendment 2026-10-17); empty = no mask.
+    lot_fit: the H-27 overlay of `_walk_forward`; None (the default) = no overlay, every output as before."""
     spec = prep.spec
     if prep.labels.empty:
         return ResearchResult(agent_id=spec.agent_id, n_candidates=0, n_folds=0, oof=prep.labels, metrics={"n": 0},
@@ -427,7 +430,7 @@ def evaluate(prep: Prepared, model_features: list[str] | None = None, n_trials: 
     return _walk_forward(spec.agent_id, labels, prep.gross, prep.feats, cols, folds, prep.feature_version,
                          n_trials=n_trials, trades_per_year=trades_per_year, extra_cost_usd=extra_cost_usd,
                          holdout=holdout, score_holdout=score_holdout, window=window, timeframe=spec.timeframe,
-                         swap=prep.swap, full_coverage_columns=full_coverage_columns)
+                         swap=prep.swap, full_coverage_columns=full_coverage_columns, lot_fit=lot_fit)
 
 
 def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feats: pd.DataFrame, cols: list[str],
@@ -437,7 +440,8 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
                   fold_cols: dict[int, list[str]] | None = None,
                   threshold_rule: ThresholdRule = DEFAULT_THRESHOLD_RULE,
                   tercile_q: float = TERCILE_Q,
-                  full_coverage_columns: tuple[str, ...] = ()) -> ResearchResult:
+                  full_coverage_columns: tuple[str, ...] = (),
+                  lot_fit: LotFitSpec | None = None) -> ResearchResult:
     """Shared by the per-family and the pooled walk-forward: fit per fold, cross-fitted calibration, per-candidate
     threshold from its own barriers, metrics, rule-only expectancy and the design's gates (or the holdout rule).
     `labels` carries ret (net), risk, weight, target_atr, stop_atr and atr_sig; `feats` is row-aligned with it.
@@ -450,7 +454,10 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
     full_coverage_columns (H-02 amendment 2026-10-17, BACKLOG 82): in a fold where one of them lacks full coverage
     (`uncovered_columns`, from the fold's training rows only) it is NaN in both the fold's training and test rows;
     fully covered folds are untouched; `metrics.full_coverage` records the columns masked per fold. Empty (the
-    default): every output as before."""
+    default): every output as before.
+    lot_fit (H-27, `research.lot_fit`): reports `metrics.lot_fit` for the model-filtered trades and for every scored
+    candidate: the fraction the account can take at the gate's own sizing, and the £ and R at the actual lots, trades
+    that do not fit excluded. Reporting only: no gate, rule or other metric reads it. None (the default): no key."""
     y = labels["target_hit"].astype(int)
     oof_pred = np.full(len(labels), np.nan)
     last_model = None
@@ -512,6 +519,9 @@ def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
         metrics["gates"] = research_gates(int(len(labels)), metrics["complete_fold_test_sizes"], taken[["ts_utc", "ret"]],
                                           metrics.get("model_filtered"))
         metrics["rule_only_gates"] = rule_only_gates(oof, metrics["complete_fold_test_sizes"], n_trials, trades_per_year)
+    if lot_fit is not None:
+        metrics["lot_fit"] = {"model_filtered": lot_fit_overlay(taken, lot_fit),
+                              "all_candidates": lot_fit_overlay(scored, lot_fit)}
     imp = last_model.importance() if last_model is not None else None
     return ResearchResult(agent_id=agent_id, n_candidates=len(labels), n_folds=len(folds), oof=oof, metrics=metrics,
                           feature_version=version, importance=imp, model=last_model if "threshold" in metrics else None)
