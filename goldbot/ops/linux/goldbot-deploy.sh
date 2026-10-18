@@ -41,6 +41,10 @@
 # Health baseline (brain): `goldbot run health --out` runs as the service user before the switch and again after the
 # 90 s check. A check that got worse (ok < warn < fail) is reported as `deployed_degraded` with its name, on
 # Telegram too; it is not rolled back automatically (exits are never gated; the owner decides).
+# An engine unit that is disabled or inactive at the baseline (the S13 procedure stops it on purpose) has its
+# engine-derived checks (engine, engine_loop, tick_errors for that account; reconcile stays compared, it also reports ledger mismatches) left out of the comparison: the
+# baseline still read them from a heartbeat that was fresh a moment before the stop. The detail says "engine stopped
+# for the deploy: <account>"; every other worsened check still yields deployed_degraded.
 set -euo pipefail
 ROOT=/opt/goldbot
 REPO_API=https://api.github.com/repos/engraamirkhan/goldbot
@@ -474,8 +478,14 @@ def load(path):
     with open(path, encoding="utf-8") as fh:
         return {str(c["name"]): RANK.get(c.get("status"), 0) for c in json.loads(fh.read(8388608))["checks"]}
 before, after = load(sys.argv[1]), load(sys.argv[2])
+stopped = [a for a in (sys.argv[3].split(",") if len(sys.argv) > 3 else []) if re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", a)]
+SKIP = {p + ":" + a for a in stopped for p in ("engine", "engine_loop", "tick_errors")}
 worse = sorted(n for n, r in after.items() if r > before.get(n, 0))
+skipped = [n for n in worse if n in SKIP]
+worse = [n for n in worse if n not in SKIP]
 print(",".join(n if re.fullmatch(r"[A-Za-z0-9_.:@-]{1,64}", n) else "<check>" for n in worse))
+if skipped:
+    print("engine stopped for the deploy: " + ",".join(sorted({n.split(":", 1)[1] for n in skipped})))
 PY
 )
 HEALTH_BEFORE=logs/health_before_deploy.json
@@ -487,11 +497,28 @@ health_out() {  # $1 file under $ROOT: `goldbot run health --out`, as the servic
     _ "$ROOT" "$PY_BRAIN" "$1" "${t[@]}"
 }
 
-health_worse() {  # names of checks worse after than before ("" when none or when either report is missing)
-  local out
-  out=$(as_owner bash -c 'cd -- "$1" && python3 -I -c "$2" "$3" "$4"' _ "$ROOT" "$WORSE_PY" "$HEALTH_BEFORE" "$HEALTH_AFTER" \
+ENGINES_PY=$(cat <<'PY'
+import json, re, sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    names = [str(c["name"]) for c in json.loads(fh.read(8388608))["checks"]]
+print(" ".join(sorted({n.split(":", 1)[1] for n in names if n.startswith("engine_loop:") and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", n.split(":", 1)[1])})))
+PY
+)
+STOPPED=""
+stopped_engines() {  # accounts whose engine unit is disabled or inactive now (comma list); called at the baseline
+  local a out=""
+  for a in $(as_owner bash -c 'cd -- "$1" && python3 -I -c "$2" "$3"' _ "$ROOT" "$ENGINES_PY" "$HEALTH_BEFORE" 2>/dev/null | head -c 2000); do
+    [[ "$a" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || continue
+    if ! enabled "goldbot-engine@$a.service" || ! systemctl is-active --quiet "goldbot-engine@$a.service"; then out+="${out:+,}$a"; fi
+  done
+  echo "$out"
+}
+
+health_worse() {  # names of checks worse after than before ("" when none or when either report is missing); a second
+  local out       # line "engine stopped for the deploy: <accounts>" when stopped engines hid a worsened check
+  out=$(as_owner bash -c 'cd -- "$1" && python3 -I -c "$2" "$3" "$4" "$5"' _ "$ROOT" "$WORSE_PY" "$HEALTH_BEFORE" "$HEALTH_AFTER" "$STOPPED" \
     2>/dev/null | head -c 2000) || return 0
-  [[ "$out" =~ ^[A-Za-z0-9_.:@,\<\>-]*$ ]] && echo "$out"
+  [[ "$out" =~ ^[A-Za-z0-9_.:@,\<\>\ $'\n'-]*$ ]] && echo "$out"
 }
 
 main() {
@@ -570,7 +597,7 @@ main() {
   check_settings
   BASELINE=0
   if [ "$ROLE" = brain ]; then
-    if health_out "$HEALTH_BEFORE"; then BASELINE=1; else echo "note: no health baseline (health did not run); no comparison after the deploy"; fi
+    if health_out "$HEALTH_BEFORE"; then BASELINE=1; STOPPED=$(stopped_engines); else echo "note: no health baseline (health did not run); no comparison after the deploy"; fi
   fi
   guard_scheduler
   if [ "$MODE" = rollback ] && as_owner test -e "$APPROVED"; then   # a newer approved version must not follow
@@ -583,14 +610,18 @@ main() {
   local ok=$?
   drop_approval
   if [ "$ok" = 0 ]; then
-    local worse=""
-    if [ "$BASELINE" = 1 ]; then health_out "$HEALTH_AFTER" && worse=$(health_worse); fi
+    local worse="" note="" raw=""
+    if [ "$BASELINE" = 1 ]; then
+      health_out "$HEALTH_AFTER" && raw=$(health_worse)
+      worse=${raw%%$'\n'*}
+      [ "$raw" = "$worse" ] || note="${raw#*$'\n'}; "
+    fi
     if [ "$MODE" = rollback ]; then
-      log rolled_back_manual "$CUR" "$TARGET" "${DROPPED}${worse:+degraded: $worse; }older version restored on the owner's request; all services stable for 90 s"
+      log rolled_back_manual "$CUR" "$TARGET" "${DROPPED}${note}${worse:+degraded: $worse; }older version restored on the owner's request; all services stable for 90 s"
     elif [ -n "$worse" ]; then
-      log deployed_degraded "$CUR" "$TARGET" "${DROPPED}deployed (degraded: $worse); all services stable for 90 s${MANUAL:+ (manual)}; not rolled back: goldbot run health"
+      log deployed_degraded "$CUR" "$TARGET" "${DROPPED}${note}deployed (degraded: $worse); all services stable for 90 s${MANUAL:+ (manual)}; not rolled back: goldbot run health"
     else
-      log deployed "$CUR" "$TARGET" "${DROPPED}all services stable for 90 s${MANUAL:+ (manual)}"
+      log deployed "$CUR" "$TARGET" "${DROPPED}${note}all services stable for 90 s${MANUAL:+ (manual)}"
     fi
     exit 0
   fi

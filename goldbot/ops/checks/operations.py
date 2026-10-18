@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pandas as pd
 
+from goldbot.base import load_record_json
 from goldbot.ops.checks._base import (
     BACKUP_FAIL_H,
     BACKUP_REPO_WARN_BYTES,
@@ -19,8 +21,11 @@ from goldbot.ops.checks._base import (
     DRILL_WARN_DAYS,
     PRUNE_WARN_DAYS,
     SPEND_WARN_FRACTION,
+    WATCH_FILE,
+    WATCH_STALE_S,
     Check,
     Status,
+    WatchState,
     _age,
     _read_json,
     _skipped,
@@ -67,6 +72,23 @@ def check_disk(ctx: HealthContext) -> Check:
     return Check(name="disk", status="ok", reason=msg)
 
 
+def _degraded_now_ok(ctx: HealthContext, detail: str) -> str:
+    """The check names of a `deployed_degraded` record ("deployed (degraded: a,b); ...") when every one reads ok in the
+    last recorded health run (state/health_last.json, fresh within WATCH_STALE_S); "" otherwise. A degradation is a
+    point-in-time note from the deploy (it is never rewritten: deploys.jsonl is append-only); it must not warn forever."""
+    m = re.search(r"\(degraded: ([^)]*)\)", detail)
+    names = [n for n in (m.group(1).split(",") if m else []) if n]
+    if not names:
+        return ""
+    try:
+        w = load_record_json(WatchState, (ctx.state_dir / WATCH_FILE).read_text(encoding="utf-8"), source=WATCH_FILE)
+    except (ValueError, OSError):
+        return ""
+    if w.ts is None or (ctx.now - w.ts).total_seconds() > WATCH_STALE_S:
+        return ""
+    return ",".join(names) if all(w.statuses.get(n) == "ok" for n in names) else ""
+
+
 @register_check("global", block=BLOCK_TAIL, pos=50)
 def check_deploy(ctx: HealthContext) -> Check:
     """The last deploy attempt (state/deploys.jsonl, written by goldbot-deploy): a rollback warns, a failed rollback
@@ -82,6 +104,11 @@ def check_deploy(ctx: HealthContext) -> Check:
     msg = f"{last.get('result')} {str(last.get('to', ''))[:8]} on {last.get('role')} at {last.get('ts')}: {last.get('detail', '')}"
     status = {"failed": "fail", "rolled_back": "warn", "refused": "warn", "rolled_back_manual": "warn",
               "rollback_reverted": "warn", "deployed_degraded": "warn"}.get(str(last.get("result")), "ok")
+    if last.get("result") == "deployed_degraded":
+        cleared = _degraded_now_ok(ctx, str(last.get("detail", "")))
+        if cleared:
+            return Check(name="deploy", status="ok", reason=f"deployed {str(last.get('to', ''))[:8]}; degraded at "
+                                                            f"deploy time ({cleared}), now ok")
     return Check(name="deploy", status=cast(Status, status), reason=msg)
 
 
