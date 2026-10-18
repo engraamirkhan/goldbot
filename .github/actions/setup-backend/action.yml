@@ -1,0 +1,32 @@
+name: setup-backend
+description: >-
+  Python 3.11 + uv (wheel cache keyed on pyproject.toml) and an activated .venv with goldbot installed editable.
+  A failed install is written to ci-out/<check>-install.txt and listed in ci-out/failed-<check>.list for report-failure.
+inputs:
+  check:
+    description: name used for the ci-out files (e.g. backend-unit-2)
+    required: true
+  extras:
+    description: pip extras, e.g. "[dev]" or "" for the runtime only
+    default: "[dev]"
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with: { python-version: "3.11" }
+    - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      with:
+        python-version: "3.11"                 # the interpreter setup-python just put on PATH (no download)
+        activate-environment: true            # .venv on PATH for every later step (merge_smoke.sh also finds it)
+        enable-cache: true
+        cache-dependency-glob: pyproject.toml   # no lock file yet: the key changes when the dependency list does
+        cache-suffix: py311
+        save-cache: ${{ github.ref == 'refs/heads/main' }}   # main writes the cache, PRs read it (no cache thrash)
+    - name: install
+      shell: bash
+      env: { CHECK: "${{ inputs.check }}", EXTRAS: "${{ inputs.extras }}" }
+      run: |
+        set -o pipefail
+        mkdir -p ci-out
+        uv pip install -e ".${EXTRAS}" 2>&1 | tee "ci-out/${CHECK}-install.txt" \
+          || { echo "${CHECK}-install" >> "ci-out/failed-${CHECK}.list"; exit 1; }
