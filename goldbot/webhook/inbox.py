@@ -21,19 +21,9 @@ import pandas as pd
 
 from goldbot.data.store import Store
 from goldbot.db.connection import connect, write
+from goldbot.db.migrations import migrate
 
 TABLE = "tv_indicators"
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS tv_alerts (
-    id INTEGER PRIMARY KEY,
-    indicator TEXT NOT NULL, version TEXT NOT NULL, symbol TEXT NOT NULL, tf TEXT NOT NULL,
-    bar_time TEXT NOT NULL, fired_at TEXT NOT NULL, received_utc TEXT NOT NULL, available_utc TEXT NOT NULL,
-    signal TEXT NOT NULL, strength REAL NOT NULL, price REAL, plots TEXT NOT NULL, payload TEXT NOT NULL,
-    intrabar INTEGER NOT NULL, signal_hash TEXT NOT NULL,
-    UNIQUE (indicator, version, symbol, tf, bar_time)
-) STRICT;
-CREATE TABLE IF NOT EXISTS tv_sync (id INTEGER PRIMARY KEY CHECK (id = 1), last_id INTEGER NOT NULL) STRICT;
-"""
 
 
 def _iso(t: pd.Timestamp) -> str:
@@ -42,15 +32,16 @@ def _iso(t: pd.Timestamp) -> str:
 
 class TvInbox:
     def __init__(self, path: str | Path):
+        """Opens state/tv.db and brings its schema up to date (goldbot/db/migrations.py TV; the pull log shares it)."""
         self.path = Path(path)
         conn = self._conn()
         try:
-            conn.executescript(_SCHEMA)
+            migrate(conn, "tv")
         finally:
             conn.close()
 
     def _conn(self) -> sqlite3.Connection:
-        return connect(self.path, "core")
+        return connect(self.path, "tv")
 
     def put(self, row: dict[str, Any]) -> bool:
         """Commit one alert row (webhook.app.to_row). True when new, False for a bar already held. Raises on a
