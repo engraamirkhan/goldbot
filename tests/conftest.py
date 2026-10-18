@@ -1,6 +1,7 @@
 """Shared fixtures."""
 import os
 from datetime import timedelta
+from pathlib import Path
 from typing import Any, Callable
 
 import pytest
@@ -184,14 +185,43 @@ def _is_ip(host: str) -> bool:
 
 def shard_of(nodeid: str, count: int) -> int:
     """Shard (0..count-1) a test belongs to: a stable hash of its node id, so every test lands in exactly one shard
-    on every machine and run (no pytest-split dependency, no timing file to keep fresh)."""
+    on every machine and run (no pytest-split dependency)."""
     import zlib
     return zlib.crc32(nodeid.encode()) % count
 
 
+WEIGHTS_FILE = Path(__file__).resolve().parent / "shard_weights.json"
+
+
+def load_shard_weights() -> dict[str, float]:
+    """Seconds of the known-heavy tests (tests/shard_weights.json; refresh with `scripts/ci_summary.py weights`).
+    The file only steers balance: a stale or missing entry costs shard balance, never a test (every collected test
+    is still assigned to exactly one shard)."""
+    import json
+    try:
+        return {str(k): float(v) for k, v in json.loads(WEIGHTS_FILE.read_text())["seconds"].items()}
+    except (OSError, ValueError, KeyError):
+        return {}
+
+
+def shard_assignment(nodeids: list[str], count: int, weights: dict[str, float]) -> dict[str, int]:
+    """Shard of every test: the weighted (heavy) tests first, longest first, each onto the currently lightest shard
+    (LPT); every other test by `shard_of`. Depends only on the set of ids and the weights, never on collection
+    order, so every shard and every xdist worker computes the same answer."""
+    loads = [0.0] * count
+    out: dict[str, int] = {}
+    for n in sorted((n for n in set(nodeids) if n in weights), key=lambda n: (-weights[n], n)):
+        s = min(range(count), key=lambda k: (loads[k], k))
+        out[n] = s
+        loads[s] += weights[n]
+    for n in nodeids:
+        out.setdefault(n, shard_of(n, count))
+    return out
+
+
 def pytest_collection_modifyitems(config, items) -> None:
-    """CI runs the unit suite as a matrix: GOLDBOT_SHARD=i/n keeps only the tests of shard i (0-based) of n and
-    deselects the rest. Unset (local runs) selects everything."""
+    """CI runs the unit and integration suites as matrices: GOLDBOT_SHARD=i/n keeps only the tests of shard i
+    (0-based) of n and deselects the rest. Unset (local runs) selects everything."""
     import os
     spec = os.environ.get("GOLDBOT_SHARD")
     if not spec:
@@ -199,6 +229,7 @@ def pytest_collection_modifyitems(config, items) -> None:
     index, count = (int(x) for x in spec.split("/"))
     if not 0 <= index < count:
         raise pytest.UsageError(f"GOLDBOT_SHARD={spec!r}: need 0 <= i < n")
-    keep = [i for i in items if shard_of(i.nodeid, count) == index]
+    owner = shard_assignment([i.nodeid for i in items], count, load_shard_weights())
+    keep = [i for i in items if owner[i.nodeid] == index]
     config.hook.pytest_deselected(items=[i for i in items if i not in keep])
     items[:] = keep
