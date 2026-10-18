@@ -234,7 +234,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     from goldbot.research.population import Population
     from goldbot.telegram.approvals import ApprovalCenter
     from goldbot.telegram.bus import ApprovalBus
-    acc = accounts.load_accounts()[account_id]
+    configured = accounts.load_accounts()
+    acc = configured[account_id]
     if why := approval_ids_problem(account_id):
         resolve(refuse_start)(account_id, f"refusing to start {account_id}: {why}")
     settings = load_settings()
@@ -264,7 +265,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         broker = PaperBroker(symbol=acc.symbol)
         log.warning("not on Windows: running %s against the paper broker", account_id)
     paper = resolve(paper_stand_in)(broker)
-    policy = resolve(engine_limits_policy)(settings, acc, paper=paper)
+    policy = resolve(engine_limits_policy)(settings, acc, paper=paper, state_dir="state",
+                                           accounts=list(configured.values()))
     limits = policy.defaults
     # proposals go to the approval bus in state/; the dashboard and the Telegram service decide through it
     center = ApprovalCenter(set(settings.telegram.allowed_user_ids), bus=ApprovalBus("state"))
@@ -393,11 +395,22 @@ def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> R
     return limits.model_copy(update={"daily_loss_limit_abs": None if paper else acc.daily_loss_limit_abs})
 
 
-def engine_limits_policy(settings: Settings, acc: Account, *, paper: bool = False) -> LimitsPolicy:
+def engine_limits_policy(settings: Settings, acc: Account, *, paper: bool = False, state_dir: str | Path = "state",
+                         accounts: list[Account] | None = None) -> LimitsPolicy:
     """ADR 0032: the account's limits policy, which the engine resolves every account refresh: the defaults
-    (`engine_limits`) and the controller (today `StaticController`: the owner's demo ceilings), clamped to [default ..
-    ceiling] on a demo account with `risk_overrides`, never above the defaults on any other account. The paper stand-in
-    (`paper=True`) keeps the defaults: paper and shadow evidence are not changed by a demo profile."""
+    (`engine_limits`) and the controller, clamped to [default .. ceiling] on a demo account with `risk_overrides`,
+    never above the defaults on any other account. The controller is ADR 0031's `AdaptiveLimitsController` (the
+    nightly limits_job's decision, read from `state_dir`) on a demo account with ceilings while `risk.adaptive_limits`
+    is on, else `StaticController` (the ceilings on such an account, the defaults elsewhere). `accounts`: every
+    configured account, for the supervisor envelope (default: this one alone). The paper stand-in (`paper=True`)
+    keeps the defaults: paper and shadow evidence are not changed by a demo profile."""
+    from goldbot.engine.limits_apply import AdaptiveLimitsController
+    from goldbot.ops.limits_job import adaptive_enabled, bounds_for
     from goldbot.risk.limits_profile import LimitsPolicy
     defaults = resolve(engine_limits)(settings, acc, paper=paper)
-    return LimitsPolicy(acc.model_copy(update={"risk_overrides": None}) if paper else acc, defaults)
+    if paper:
+        return LimitsPolicy(acc.model_copy(update={"risk_overrides": None}), defaults)
+    if not adaptive_enabled(settings, acc):
+        return LimitsPolicy(acc, defaults)
+    bounds = bounds_for(settings, acc, accounts if accounts is not None else [acc])
+    return LimitsPolicy(acc, defaults, AdaptiveLimitsController(state_dir, acc.account_id, bounds))

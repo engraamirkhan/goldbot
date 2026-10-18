@@ -26,7 +26,7 @@ from goldbot.execution.paper import PaperBroker
 from goldbot.ops import accounts as acc_mod
 from goldbot.ops.gates_phase import ClosedTrade, EntryAudit
 from goldbot.ops.run import engine_limits
-from goldbot.ops.services.engine import engine_limits_policy
+from goldbot.ops.services.engine import engine_limits_policy as _policy
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits
 from goldbot.risk.gate import Stage
 from goldbot.risk.limits_profile import (
@@ -49,6 +49,13 @@ PROFILE = "demo-2026-10-18"
 OVERRIDES = RiskOverrides(profile=PROFILE, ceilings=RiskCeilings(daily=0.05, weekly=0.10, min_lot_risk_cap=0.01))
 GBP = 1 / 1.33
 T0 = pd.Timestamp("2026-10-28 12:00", tz="UTC")
+
+
+def engine_limits_policy(settings: Any, acc: acc_mod.Account, **kw: Any) -> LimitsPolicy:
+    """ADR 0032's mechanics under its StaticController: ADR 0031's adaptive controller off (tests/
+    test_adaptive_limits_wiring.py covers it on)."""
+    static = settings.model_copy(update={"risk": settings.risk.model_copy(update={"adaptive_limits": False})})
+    return _policy(static, acc, **kw)
 
 
 @pytest.fixture
@@ -474,7 +481,7 @@ def test_records_carry_the_limits_profile_and_values(tmp_path, phase_file):
     eng = _engine(tmp_path, pb, phase_file)
     eng._refresh_account(_tick())
     audit = eng._entry_limits()
-    assert audit == {"limits_profile": PROFILE, "limits": eng.limits_current.tag()}
+    assert audit == {"limits_profile": PROFILE, "limits": eng.limits_current.tag(), "min_lot_exception": False}
     eng.decisions.append({"ts": time.time(), "action": "probe"})
     pb.eq = 915.0
     eng._refresh_account(_tick(1))                              # the change tags what was decided before it

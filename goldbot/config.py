@@ -165,6 +165,10 @@ class RiskSettings(_Section):
     # stage. Never above the 1% per-trade maximum; never in tiny-live. null = off: the minimum lot only within 1.2x the
     # target (design). The absolute daily loss limit (BACKLOG 29) is per account: config/accounts.yaml
     min_lot_risk_cap: float | None = Field(None, gt=0, le=0.01)
+    # ADR 0031: a demo account with the owner's ceilings (accounts.yaml `risk_overrides`, ADR 0032) trades the limits
+    # the nightly limits_job learns, between these defaults and those ceilings (goldbot/ops/limits_job.py). false: the
+    # ceilings themselves (ADR 0032 StaticController). Every other account trades the defaults either way
+    adaptive_limits: bool = True
     # health: an engine whose broker reads (positions(), deal history) failed this many times in a row FAILs and the
     # owner is alerted on Telegram; fewer is a warning (entries are blocked from the first failure, exits keep trying)
     positions_unreadable_alert: int = Field(5, ge=1)
@@ -251,6 +255,9 @@ class SchedulerSettings(_Section):
     # into London/NY: max_late_hours stays at most 1
     tick_record: ScheduleSettings = ScheduleSettings(kind="daily", at="21:10", max_late_hours=0.5)
     tick_record_winter: ScheduleSettings = ScheduleSettings(kind="daily", at="22:10", max_late_hours=0.5)
+    # ADR 0031: the adaptive limits decision for the next risk day, after the daily break and before the 00:00 UTC roll;
+    # never caught up past the roll (the engine adopts a decision only at the roll, so a late one waits a day)
+    limits_job: ScheduleSettings = ScheduleSettings(kind="daily", at="23:05", max_late_hours=0.9)
 
 
 class BackupSettings(_Section):

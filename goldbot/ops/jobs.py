@@ -71,6 +71,10 @@
                     day not yet recorded (copy_ticks, read-only, paged; missed days back-filled) ->
                     state/ticks/<account>/<date>.parquet + index.json, older than ticks.retain_days pruned (health
                     check ticks:<account>). Research data for the H-A holiday diagnostic. Skipped without a broker.
+* limits_job        daily before the risk-day roll (ADR 0031, goldbot/ops/limits_job.py): per demo account with the
+                    owner's ceilings, the adaptive limits for the next risk day from its demo fills and the shadow book
+                    since each strategy's freeze (core.db adaptive_state / adaptive_changes; health check
+                    limits_controller:<account>); an FYI to the owner on every change. Places nothing.
 * cpcv_quarterly    first Sunday of each quarter (M16): combinatorial purged CV (6 groups, 2 test: 15 splits, 5 paths)
                     of every trial that passed the gates, PBO against its family's other trials, attached to the
                     trial as evidence (not a trial) -> state/cpcv_<quarter>.md (research/cpcv.py).
@@ -1345,6 +1349,11 @@ def restore_drill(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------------------------- wiring
+def _limits_job(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    from goldbot.ops.limits_job import limits_job
+    return limits_job(ctx, slot)
+
+
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "nightly_costs": nightly_costs,
     "saturday_retrain": saturday_retrain,
@@ -1369,6 +1378,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "attribution": attribution,                   # BACKLOG 12: daily attribution for the staff agents (reporting only)
     "tick_record": tick_record,                   # BACKLOG 79: broker ticks per server day for research (H-A)
     "tick_record_winter": tick_record,            # ... the same job in the winter daily break (one slot skips)
+    "limits_job": _limits_job,                    # ADR 0031: adaptive limits for the next risk day (ops/limits_job.py)
 }
 
 

@@ -86,6 +86,7 @@ class AccountRef(FrozenRecord):
     account_id: str
     server_tz: str | None = None      # for the server-clock check; None skips it
     symbol: str = "XAUUSD"
+    adaptive: bool = False            # ADR 0031: the nightly limits_job decides its limits (check limits_controller)
 
 
 # --------------------------------------------------------------------------------------------- helpers

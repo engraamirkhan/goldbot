@@ -249,6 +249,9 @@ class AdaptiveState(FrozenRecord):
     floors_until: date | None = None                 # loss streak: floors through this risk day
     loss_streak_ns: int | None = None                # exit of the last trade of the streak that fired (fires once)
     minlot_explore_stopped: bool = False             # A1: the exploration hit -10R; off until a new trial resets it
+    # lane B: when the controller last decided (epoch ns; health `limits_controller` FAILs past 26 h). Set by
+    # `AdaptiveController.current`, never by `step`, so a replay from the same inputs still gives the same states
+    decided_ns: int | None = None
 
 
 class AdaptiveChange(FrozenRecord):
@@ -590,7 +593,10 @@ class AdaptiveController:
     def step(self, prev: AdaptiveState | None, ev: Evidence | None, day: date) -> tuple[AdaptiveState, tuple[str, ...]]:
         return step(prev, ev, day, self.bounds)
 
-    def current(self, account_id: str, evidence: Evidence | Mapping[str, Any] | None) -> Limits:
+    def current(self, account_id: str, evidence: Evidence | Mapping[str, Any] | None, *,
+                day: date | None = None) -> Limits:
+        """`day`: the risk day decided (default: the evidence's, else the clock's). The nightly job passes it, so a
+        night without evidence still records the floors for the day it decides."""
         ev: Evidence | None
         detail = ""
         try:
@@ -603,12 +609,13 @@ class AdaptiveController:
             self.dq("adaptive_limits_state_unreadable", f"{account_id}: {type(exc).__name__}")
             return self.bounds.floors()
         now = self.clock()
-        day = ev.day() if ev is not None else day_of_ns(now)
+        day = day if day is not None else ev.day() if ev is not None else day_of_ns(now)
         new, reasons = step(prev, ev, day, self.bounds, account_id=account_id)
+        new = new.model_copy(update={"decided_ns": now})
         if "evidence_invalid" in reasons:
             why = ", ".join(r.split(":", 1)[1] for r in reasons if r.startswith("evidence_invalid:"))
             self.dq("adaptive_limits_evidence_invalid", f"{account_id}: {detail or why}")
-        if new != prev:
+        if new != prev:                   # always, with `decided_ns`: every decision is recorded
             try:
                 self.store.save(new, changes_between(prev, new, reasons, ev, ts_ns=now, baseline=self.bounds.floor))
             except Exception as exc:      # an unrecorded change never applies
