@@ -933,7 +933,10 @@ whatever the pull does.
 Order matters: each unit is enabled only after what it needs is in place, because an enabled unit that crash-loops
 (no secret, `tv_pull.enabled: false`) makes every later `goldbot-deploy` fail its 90 s health window and roll back.
 Both units are restarted by every deploy from then on, but their unit files are copies: when a release changes
-`goldbot-tv-pull.service` or `goldbot-webhook.service`, repeat its `install` line (T3 / W3). Every command that touches
+`goldbot-tv-pull.service` or `goldbot-webhook.service`, repeat its `install` line (T4 / W3). Root installs a unit only from its own fresh
+clone of the deployed commit `<SHA>` (public: the commit `goldbot-deploy` last recorded as deployed in
+`/var/lib/goldbot-deploy/deploys.jsonl`), never from `/opt/goldbot`, which the service user can write
+(docs/AGENT_STANDARDS.md "Root-run tooling"). Every command that touches
 goldbot's state runs as the `goldbot` user (the `goldbot` wrapper does that): a root-run pull would leave root-owned
 `.lock` files and partitions under `/opt/goldbot/data` that the services then cannot write.
 
@@ -960,7 +963,7 @@ healthy (`goldbot run health`; the last line of `/var/lib/goldbot-deploy/deploys
   backfills (up to 5 history pages per timeframe at one request per 5 s: a few minutes). `FAILED: ... cookie` means T1
   stored a stale cookie: sign in again in the browser and repeat T1.
 * T4, brain (install and start the follow service):
-  `sudo install -m 644 /opt/goldbot/goldbot/ops/linux/systemd/goldbot-tv-pull.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now goldbot-tv-pull`
+  `sudo env S=<SHA> U=goldbot-tv-pull bash -c 'set -e; d=$(mktemp -d /root/goldbot-ops.XXXXXX); git init -q $d; git -C $d fetch -q --depth 1 https://github.com/engraamirkhan/goldbot.git $S; git -C $d checkout -q --detach FETCH_HEAD; install -m 644 -o root -g root $d/goldbot/ops/linux/systemd/$U.service /etc/systemd/system/; rm -rf $d; systemctl daemon-reload' && sudo systemctl enable --now goldbot-tv-pull`
 * T5, brain, checks (right away, then after the next 15m close + 1 min):
   `systemctl is-active goldbot-tv-pull` = active; `systemctl show -p NRestarts --value goldbot-tv-pull` = 0;
   `goldbot run tv-pull status` shows a pass newer than T3 with `new` live bars; `goldbot run health` shows
@@ -977,7 +980,7 @@ healthy (`goldbot run health`; the last line of `/var/lib/goldbot-deploy/deploys
 * W2, Mac (copy it to the brain):
   `uv run --directory <checkout> python -m goldbot.ops.accounts export tradingview-webhook-secret | ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-brain goldbot accounts set tradingview-webhook-secret --stdin`
 * W3, brain (the unit needs the secret before it starts: without it the service restarts every 5 s):
-  `sudo install -m 644 /opt/goldbot/goldbot/ops/linux/systemd/goldbot-webhook.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now goldbot-webhook`
+  `sudo env S=<SHA> U=goldbot-webhook bash -c 'set -e; d=$(mktemp -d /root/goldbot-ops.XXXXXX); git init -q $d; git -C $d fetch -q --depth 1 https://github.com/engraamirkhan/goldbot.git $S; git -C $d checkout -q --detach FETCH_HEAD; install -m 644 -o root -g root $d/goldbot/ops/linux/systemd/$U.service /etc/systemd/system/; rm -rf $d; systemctl daemon-reload' && sudo systemctl enable --now goldbot-webhook`
   then `curl -s http://127.0.0.1:8443/health` prints `{"ok":true,"stored":...}`.
 * W4, brain (the public HTTPS address; Tailscale may already be installed: `tailscale status`).
   If not: the three apt lines of docs/deploy/first-deploy.md section 3 A step 2, whose `sudo tailscale up` prints a sign-in link:
