@@ -182,6 +182,30 @@ filed their first candidate lists the same day. None ran a trial or read an outc
 **Status of these IDs.** IC-1..IC-9, SW-0..SW-9 and C-1..C-10 are recorded here as **proposed**. Proposed rows are not
 tests and add nothing to K. K grows only when a registry row runs (or a discovery records its `k_eff`).
 
+## A7. Owner's chart indicators, replicated (strategy researcher, 2026-10-18)
+
+Owner request, 2026-10-18: backtest the three chart indicators the owner trades from. They are rebuilt clean-room from
+their pulled outputs as the opt-in feature family `smc_replica` (`goldbot/features/smc_replica.py`). Every observable
+plot matches exactly on 15m/1h/4h/1D, except the box indicator's break shapes (99.86%). The match table and the
+pre-registration are in `prereg-tv-replica-2026-10-18.md`. These rows are tested **as an exception to R-09**, which
+was retired from the literature with no trial run. The reason for the exception is the owner's directive, not new
+evidence of an edge, so the prior stays low. Both TVR-1 and TVR-2 failing closes the SMC topic.
+
+| ID | Hypothesis | Status | Trial cost |
+|---|---|---|---|
+| H-TVR1 | 15m: internal CHoCH in the swing-trend direction with a same-side FVG in the last 3 bars; stop 1.0 / target 2.0 ATR15, 32 bars | **pre-registered** 2026-10-18; blocked on the `smc_structure` specialist (implementer) and on funding (owner: 2026Q4 53 → 55, or director: Q1 free reserve 2 of 3) | 1 |
+| H-TVR2 | 15m: swing BOS continuation (50-bar leg pivots); stop 1.0 / target 2.0 ATR15, 32 bars | **pre-registered** 2026-10-18; same blockers | 1 |
+| H-TVR3 | H-TVR1 on 1h (stop 1.0 ATR1h, 24 bars; needs M2 sizing) | proposed, **conditional** on H-TVR1 PASS or LEAD | 1 if triggered |
+| D-TVR | Add the `smc_replica` columns to H-02 as one group (amendment before H-02 runs) | proposed; needs research-director and quant-reviewer sign-off | 0 (K_eff +1) |
+
+**Tested universe (features, no trial).** These are opt-in `smc_replica` columns and reach a model only through
+D-TVR or a pre-registered row: `bos/choch_{bull,bear}_{internal,swing}`, `trend_swing`, `trend_internal`, `eqh`,
+`eql`, `fvg_bull`, `fvg_bear`, `mfi_12`, `mfi_os_cross`, `mfi_ob_cross`, `gz50_dist_atr`, `gz618_dist_atr`,
+`sr_break_up`, `sr_break_dn`, `candle_class`, `ma_stack_sma_ema`.
+
+**Not trialled, by decision:** money-flow cross rules (R-01 reversion, or no mechanism) and box-break rules (R-04
+breakout). The order blocks cannot be replicated: they are off in the owner's settings (data request D-3).
+
 ## B. Retired: do not re-test without new evidence
 
 The governing list is `research.retired_families` in `config/settings.yaml` (family, row id, retired date, reason,
@@ -208,6 +232,7 @@ a quarter (to the one with the best post-retirement evidence, else by rotation) 
 | Q4 2026 | #1–#20 | 0 | 20 |
 | Q4 2026, owner-directed batch (2026-10-18; **dispatched**, B01-B04 = #21-#35 run; B01-B03 12/12 FAIL, R-02/R-05 retirement reconfirmed 2026-10-18; readout and registry defect D-1 in `batch-2026-10-18-readout.md`) | #21–#53 if all 33 run (2026Q4 budget override 53, settings) | 0 | **53** (gate-1 t ≈ 3.94). H-04 and H-01 move here from Q1, so the Q1 reservation becomes 6 and the end-of-Q1 projection is about 116 (t ≈ 4.2) |
 | Q1 2027 (planned) | #21–#40 at most (8 reserved: 4 queued + 4 contingent H-02 survivor slots; 12 open under the E-5 cap, allocated 2026-10-17 as 9 conditional trial rows (O-1..O-10 without O-9, now a 0-trial diagnostic) + 3 free reserve; corrected 2026-10-17 to settings) | H-02: K_eff = features screened when survivors go forward as features, groups screened only for whole-group survivors (recorded as `k_eff` on the discovery row; `registry.n_trials_effective` adds it) | 20 + trials run so far + K_eff for any survivor of H-02. Projection, end of Q1: up to 40 registry rows + H-02 K_eff (about 10: **H-02 moved to `survivor_unit: group`, quant ruling Q-H02U 2026-10-17**; it was about 300 at the feature unit) + H-14 K_eff (about 12) ≈ 60; the gate-1 DSR then needs a model-filtered t of about 4.0 (was about 4.6). *Updated 2026-10-17:* H-14's K_eff is about 16 under the O-4 group-map amendment (14 groups verified on `f-079deacc61`, plus `liquidity` and `activity`), so the adopted end-of-Q1 case is about 66 (t ≈ 4.03, still 4.0). *Updated 2026-10-18 (research director):* N1 `tod_periodicity` adopted as one more O-4 group, so H-14 about 17 and the end-of-Q1 case about 67 (t still about 4.0); no registry trial |
+| Owner-indicator replica (2026-10-18; `prereg-tv-replica-2026-10-18.md`; pre-registered, **not dispatched**, unfunded) | +2 (H-TVR1, H-TVR2) if funded; +1 if H-TVR3 triggers | D-TVR: K_eff +1 inside H-02 if adopted | Registry `n_trials_effective` at the verdict date, **never below 55** |
 | Q2 2027 (draft) | #41–#60 at most | SW-0 if it runs: K_eff ≈ 16 (about 8 groups × 2 sides, `survivor_unit: group`); H-14 survivors and Q1 follow-ups add 1 each | **About 77 + the other Q2 trials** (the swing lane's projection: 60 + SW-0's row + its K_eff ≈ 16). On the updated Q1 base of about 66 the same sum is about 83 + the other Q2 trials. Either way the gate-1 bar is a t of about 4.1. Nothing in the lane lists adds to K until a row runs |
 
 ## Next generation (after Q1 verdicts)
