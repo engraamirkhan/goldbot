@@ -108,3 +108,12 @@ def test_the_replica_is_computed_from_our_bars_alone_with_no_charting_site_depen
         a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
     assert not [m for m in imported if "tv_" in m or "replica_parity" in m or "requests" in m or "http" in m], imported
     assert list(inspect.signature(smc_replica.replica_frame).parameters)[:1] == ["df"]     # bars in, columns out
+
+
+def test_research_decision_frame_builds_smc_replica_while_a_plain_tail_build_still_raises(b1, names):
+    """The research frame is built on the whole series (declared FULL_HISTORY); a plain tail build is refused."""
+    from goldbot.features.registry import build_features
+    m, cols = _frame(b1, "1h", names[1])
+    assert cols and len(m) > 100
+    with pytest.raises(ValueError, match="needs a carried state"):
+        build_features(m.tail(200).reset_index(drop=True), [smc_replica.NAME])
