@@ -170,6 +170,7 @@ above is the queued part only.
   ```yaml
   clusters: discovery.H02_CLUSTERS   # the full map, written out in the spec: H-03, H-05, H-07, H-08, H-10 as listed above
   freq_threshold: 0.6
+  full_coverage_columns: [macro_spx_dd20]   # pinned 2026-10-17 (BACKLOG 88): exempt from the 80% pool rule, per-fold mask
   group_top_k: 3
   inner_val_frac: 0.2
   l1_c: 0.05

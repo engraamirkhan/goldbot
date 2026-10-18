@@ -390,16 +390,20 @@ def run_specialist(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, 
                    feature_names: list[str] | None = None, model_features: list[str] | None = None,
                    n_trials: int = 1, trades_per_year: float | None = None, ctx: dict | None = None,
                    extra_cost_usd: float = 0.0, holdout: Window | None = None,
-                   score_holdout: bool = False, swap: SwapSpec | None = None) -> ResearchResult:
-    """Walk-forward one specialist configuration: `prepare` then `evaluate` (see both)."""
+                   score_holdout: bool = False, swap: SwapSpec | None = None,
+                   full_coverage_columns: tuple[str, ...] = ()) -> ResearchResult:
+    """Walk-forward one specialist configuration: `prepare` then `evaluate` (see both). `full_coverage_columns` goes
+    through to `evaluate`: a survivor trial of H-02 runs with the same per-fold mask (pre-registration pin 2026-10-17,
+    item 3: "`run_specialist` passes the field through to `evaluate`")."""
     prep = prepare(spec, bars_dec, context, feature_names, ctx, extra_cost_usd, holdout, score_holdout, swap=swap)
     return evaluate(prep, model_features=model_features, n_trials=n_trials, trades_per_year=trades_per_year,
-                    extra_cost_usd=extra_cost_usd, holdout=holdout, score_holdout=score_holdout)
+                    extra_cost_usd=extra_cost_usd, holdout=holdout, score_holdout=score_holdout,
+                    full_coverage_columns=full_coverage_columns)
 
 
 def evaluate(prep: Prepared, model_features: list[str] | None = None, n_trials: int = 1,
              trades_per_year: float | None = None, extra_cost_usd: float = 0.0, holdout: Window | None = None,
-             score_holdout: bool = False) -> ResearchResult:
+             score_holdout: bool = False, full_coverage_columns: tuple[str, ...] = ()) -> ResearchResult:
     """Purged walk-forward of one prepared configuration with the specialist's declared inputs and its walk-forward
     windows (the timeframe's, with the specialist's `walkforward` overrides).
 
@@ -408,7 +412,9 @@ def evaluate(prep: Prepared, model_features: list[str] | None = None, n_trials: 
 
     holdout: with score_holdout=True the walk-forward runs over everything and the metrics are computed on the holdout
     candidates only, judged by the holdout rule (gates.holdout_verdict) instead of the walk-forward gates (scored once
-    per configuration; see TrialRegistry.holdout_scored)."""
+    per configuration; see TrialRegistry.holdout_scored).
+
+    full_coverage_columns: the per-fold mask of `_walk_forward` (H-02 amendment 2026-10-17); empty = no mask."""
     spec = prep.spec
     if prep.labels.empty:
         return ResearchResult(agent_id=spec.agent_id, n_candidates=0, n_folds=0, oof=prep.labels, metrics={"n": 0},
@@ -421,7 +427,7 @@ def evaluate(prep: Prepared, model_features: list[str] | None = None, n_trials: 
     return _walk_forward(spec.agent_id, labels, prep.gross, prep.feats, cols, folds, prep.feature_version,
                          n_trials=n_trials, trades_per_year=trades_per_year, extra_cost_usd=extra_cost_usd,
                          holdout=holdout, score_holdout=score_holdout, window=window, timeframe=spec.timeframe,
-                         swap=prep.swap)
+                         swap=prep.swap, full_coverage_columns=full_coverage_columns)
 
 
 def _walk_forward(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feats: pd.DataFrame, cols: list[str],

@@ -114,7 +114,7 @@ from goldbot.features import us_calendar as us_calendar_features  # noqa: E402
 from goldbot.features.mtf import TF_LABEL, context_tfs  # noqa: E402
 from goldbot.features.registry import feature_version  # noqa: E402
 from goldbot.research import h16  # noqa: E402
-from goldbot.research.director import cited_rule, queued_rows_for  # noqa: E402
+from goldbot.research.director import cited_rule, queued_rows_for, survivor_full_coverage  # noqa: E402
 from goldbot.research.gates import DSR_BAR  # noqa: E402
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR, DaySummedDsr  # noqa: E402
 from goldbot.research.pipeline import (  # noqa: E402
@@ -787,7 +787,8 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
                                score_holdout=args.score_holdout)
             else:
                 res = evaluate(preps[0], n_trials=n_trials, extra_cost_usd=extra_cost, holdout=holdout,
-                               score_holdout=args.score_holdout)
+                               score_holdout=args.score_holdout,
+                               full_coverage_columns=survivor_full_coverage(reg._rows(), job.config))
             n = res.n_candidates
             print(f"{json.dumps(job.overrides) or 'defaults'}: candidates {n}  folds {res.n_folds}  "
                   f"[{time.time() - t0:.0f}s]", flush=True)

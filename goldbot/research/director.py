@@ -844,6 +844,18 @@ def pending_preregistration(rows: list[dict[str, Any]], quarter: str, family: st
                  and p.get("config_hash") == config_hash), None)
 
 
+def survivor_full_coverage(rows: list[dict[str, Any]], config: dict[str, Any]) -> tuple[str, ...]:
+    """The `full_coverage_columns` a trial runs with: those of its parent discovery row when `config` is tagged
+    `from_discovery`, else none. Design rule (preregistration-2027Q1.md, H-02 pin 2026-10-17, item 3): "a survivor
+    trial whose inputs include a `full_coverage_columns` column runs with the same per-fold mask ... because a survivor
+    trial is H-02's configuration with cluster k's inputs." Read from the parent's recorded config, never typed at the
+    call site, so the mask cannot be dropped or changed there."""
+    parent = next((r for r in rows if refers_to(config.get(FROM_DISCOVERY_KEY), r)), None)
+    if parent is None:
+        return ()
+    return tuple(str(c) for c in (_cfg(parent).get("discovery") or {}).get("full_coverage_columns") or ())
+
+
 def queued_rows_for(rows: list[dict[str, Any]], quarter: str, family: str,
                     agent_id: str | None = None) -> list[dict[str, Any]]:
     """The pending queued rows (no slots) of `quarter` for `family`, and for `agent_id` when given (None: any agent),

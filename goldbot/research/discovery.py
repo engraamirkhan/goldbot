@@ -718,9 +718,14 @@ def run_discovery(agent_id: str, labels: pd.DataFrame, gross: pd.DataFrame, feat
                            survivor_unit=cfg.survivor_unit, k_eff=k_eff, group_mode=group_mode, verdict=verdict)
 
 
-def discovery_pool(prep: Prepared) -> list[str]:
-    """Every eligible column of a prepared configuration except `side` (always an input)."""
-    return [c for c in eligible_columns(prep.feats) if c != "side"]
+def discovery_pool(prep: Prepared, full_coverage_columns: tuple[str, ...] = ()) -> list[str]:
+    """Every eligible column of a prepared configuration except `side` (always an input).
+
+    Design rule (preregistration-2027Q1.md, H-02 pin 2026-10-17, item 2): "columns named in `full_coverage_columns`
+    are exempt from the 80% pool rule; the per-fold full-coverage mask governs them ... Every other column keeps the
+    80% rule." A named column the frame lacks is not added here; the mask refuses it before any look."""
+    keep = set(eligible_columns(prep.feats)) | {c for c in full_coverage_columns if c in prep.feats.columns}
+    return [c for c in prep.feats.columns if c in keep and c != "side"]
 
 
 def discover(prep: Prepared, cfg: DiscoveryConfig, groups: dict[str, str] | None = None, group_mode: str = "column",
@@ -732,7 +737,7 @@ def discover(prep: Prepared, cfg: DiscoveryConfig, groups: dict[str, str] | None
     labels["weight"] = uniqueness_weights(labels, prep.n_bars).to_numpy()
     window = window_for(spec.timeframe, **spec.walkforward)
     folds = splits_for(labels, spec.timeframe, **spec.walkforward)
-    pool = discovery_pool(prep)
+    pool = discovery_pool(prep, cfg.full_coverage_columns)
     return run_discovery(spec.agent_id, labels, prep.gross, prep.feats, folds, prep.feature_version, window, pool, cfg,
                          groups, group_mode, n_trials=n_trials, trades_per_year=trades_per_year,
                          extra_cost_usd=extra_cost_usd, holdout=holdout, swap=prep.swap)
@@ -895,7 +900,7 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
     prep = prepare(spec, b_dec, context, extra_cost_usd=extra_cost_usd, holdout=holdout, frame=frame, swap=swap)
     if prep.labels.empty:
         raise ValueError(f"{spec.family} produced no labelled candidates; nothing to discover")
-    pool = discovery_pool(prep)
+    pool = discovery_pool(prep, cfg.full_coverage_columns)
     groups = {c: frame_groups[c] for c in pool}
     n_eff = reg.n_trials_effective + 1
     d = discover(prep, cfg, groups, group_mode, n_trials=n_eff, extra_cost_usd=extra_cost_usd, holdout=holdout)
