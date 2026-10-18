@@ -7,7 +7,11 @@ OUT=${CHART_DIR:-/home/mt5/chart}
 mkdir -p "$OUT"
 tmp=$(mktemp "$OUT/.mt5.XXXXXX.png")
 trap 'rm -f "$tmp"' EXIT
-DISPLAY=${DISPLAY:-:99} /usr/bin/import -window root "$tmp"
+# CHART_CROP=WxH+X+Y (optional, set in the unit): crop to the chart area when the terminal is not full screen
+# (docs/deploy/mt5-default-gold-chart.md). Anything not matching the geometry pattern is ignored (full screen shot).
+crop=()
+if [[ ${CHART_CROP:-} =~ ^[0-9]+x[0-9]+[+][0-9]+[+][0-9]+$ ]]; then crop=(-crop "$CHART_CROP" +repage); fi
+DISPLAY=${DISPLAY:-:99} /usr/bin/import -window root "${crop[@]}" "$tmp"
 [ -s "$tmp" ]
 mv -f "$tmp" "$OUT/mt5.png"
 trap - EXIT
