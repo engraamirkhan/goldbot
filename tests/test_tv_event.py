@@ -31,7 +31,7 @@ LAST_CLOSE = LAST_OPEN + H4
 
 
 def meta(tf: str = "240") -> cat.StudyMeta:
-    return cat.StudyMeta(study="K-Indi", version="2.02", tf=tf, inputs={"in_0": 50},
+    return cat.StudyMeta(study="smc", version="2.02", tf=tf, inputs={"in_0": 50},
                          plots=[cat.StudyPlot(id="plot_1", type="shapes", title="Buy large"),
                                 cat.StudyPlot(id="plot_2", type="shapes", title="Signal")])
 
@@ -55,7 +55,7 @@ def bars() -> pd.DataFrame:
 def tv_rows(bar_open: pd.Timestamp, lag: pd.Timedelta, *, value: float = 1.0, plot: str = "plot_1",
             origin: str = "pull_live") -> pd.DataFrame:
     return pd.DataFrame([{"ts_utc": bar_open, "bar_time": bar_open, "available_utc": bar_open + H4 + lag,
-                          "indicator": "K-Indi", "version": "2.02", "tf": "240", "plot": plot, "value": value,
+                          "indicator": "smc", "version": "2.02", "tf": "240", "plot": plot, "value": value,
                           "origin": origin, "meta_hash": meta().meta_hash, "intrabar": False,
                           "repaint_validated": False}])
 
@@ -462,7 +462,7 @@ def test_shadow_drops_a_value_later_than_max_lag(tmp_path):
 
 def _aligned_rows(opens: pd.DatetimeIndex, tf: str, mh: str) -> pd.DataFrame:
     return pd.DataFrame({"ts_utc": opens, "bar_time": opens, "available_utc": opens + pd.Timedelta(days=2),
-                         "indicator": "K-Indi", "version": "2.02", "tf": tf, "plot": "plot_1", "value": 1.0,
+                         "indicator": "smc", "version": "2.02", "tf": tf, "plot": "plot_1", "value": 1.0,
                          "origin": "pull_live", "meta_hash": mh, "intrabar": False})
 
 

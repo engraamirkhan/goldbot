@@ -129,7 +129,7 @@ def chart_rows(tmp_path: Path) -> pd.DataFrame:
 
 def study_rows(tmp_path: Path) -> pd.DataFrame:
     store = Store(tmp_path / "data")
-    srcs = [d.name.removeprefix("source=") for d in store.table_dir(TABLE).glob("source=K-Indi@*")]
+    srcs = [d.name.removeprefix("source=") for d in store.table_dir(TABLE).glob("source=smc@*")]
     assert len(srcs) == 1
     return store.read(TABLE, source=srcs[0])
 
@@ -321,7 +321,7 @@ def test_study_plots_are_stored_by_plot_id_with_na_as_nan_and_warmup_dropped(bac
     tmp_path, *_ = backfilled
     df = study_rows(tmp_path)
     assert set(df["plot"]) == {"plot_0", "plot_1", "plot_2", "plot_3"}
-    assert df["indicator"].iloc[0] == "K-Indi"
+    assert df["indicator"].iloc[0] == "smc"
     bars = sorted(df["bar_time"].unique())
     assert bars[0] == pd.Timestamp("2026-10-16T10:00:00Z")    # 09:30 and 09:45 were warm-up
     ev = df[df["plot"] == "plot_2"].set_index("bar_time")["value"]
@@ -338,7 +338,7 @@ def test_study_metadata_is_persisted_and_keyed_by_its_hash(backfilled):
     # the catalog (lane A) derives the same hash from the persisted metadata: one feature id for rows and catalog
     assert tv_catalog.StudyMeta.from_metainfo(m.metainfo, tf="15").meta_hash == m.meta_hash8
     assert m.history_recomputed
-    assert m.study_id == "PUB;fixture123" and m.name == "K-Indi" and m.version == "7.0"
+    assert m.study_id == "PUB;fixture123" and m.name == "smc" and m.version == "7.0"
     assert m.inputs == {"in_0": 21, "in_1": True}                      # the layout's saved inputs, not the defaults
     assert [(p.id, p.title, p.type) for p in m.plots] == [("plot_0", "EMA", "line"), ("plot_1", "RSI", "line"),
                                                           ("plot_2", "Buy", "shapes"), ("plot_3", "plot_3", "colorer")]
@@ -593,7 +593,7 @@ def test_pull_log_rows_a_newer_release_wrote_still_read(backfilled):
                      (json.dumps([{**x, "added_later": 1} for x in specs]),))
     conn.close()
     last = log.last()
-    assert last is not None and last.ok and log.metas()[0].name == "K-Indi"
+    assert last is not None and last.ok and log.metas()[0].name == "smc"
     rep = run(tmp_path, ReplayNetwork("live_15m.json"), Clock(T_LIVE), settings=cfg(discover_every_s=10**6))
     assert rep.ok and rep.studies
 

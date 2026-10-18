@@ -34,7 +34,7 @@ def study(times):
 
 
 META = {
-    "description": "K-Indi Pro", "shortDescription": "K-Indi",
+    "description": "Structure Pro", "shortDescription": "smc",
     "pine": {"version": "7.0"},
     "inputs": [{"id": "text", "defval": "x", "type": "text"},
                {"id": "pineId", "defval": "PUB;fixture123", "type": "text"},
