@@ -995,3 +995,61 @@ def test_a_raise_after_the_order_row_exists_keeps_not_confirmed_never_not_sent(t
     assert stored is not None and stored.gate_refusal == ["not_confirmed"]
     assert eng._orders[prop.proposal_id].status == "sending"
     assert not [n for n in _notices(tmp_path) if "could not be sent" in n]
+
+
+# ---------------------------------------------------------------------------------------------- BACKLOG 86
+class _SlowFill(PaperBroker):
+    """A send that takes `took_s` (on the placing clock) and then returns a plain fill; the outbox is polled while the
+    engine is silent."""
+
+    def __init__(self, took_s: float, mono: list[float], **kw: Any) -> None:
+        super().__init__(**kw)
+        self.took_s, self.mono = took_s, mono
+        self.poll: Any = None
+        self.seen: list[str] = []
+
+    def place_order(self, intent: OrderIntent) -> OrderResult:
+        self.mono[0] += self.took_s
+        if self.poll is not None:
+            self.seen += self.poll()
+        return super().place_order(intent)
+
+
+def _slow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, took_s: float) -> tuple[Any, Any, Any, Any]:
+    mono = [1000.0]
+    monkeypatch.setattr(unconfirmed, "placing_clock", lambda: mono[0])
+    pb = _SlowFill(took_s, mono, equity=10_000)
+    eng, prop, outbox = _through_finish(tmp_path, pb)
+    _beat(tmp_path, age_s=600)                                     # the engine's loop went silent while it sent
+    pb.poll = lambda: [o for pid, o, _ in outbox.finished() if pid == prop.proposal_id]
+    return eng, prop, outbox, pb
+
+
+def test_a_plain_fill_after_a_silent_engine_window_sends_one_opened_notice_and_updates_the_card(tmp_path,
+                                                                                               monkeypatch):
+    """BACKLOG 86: placing lasted >= PLACING_SILENT_S, the outbox showed the card NOT CONFIRMED, then the send
+    returned a plain fill: exactly one "opened" notice goes out and the card says so (it never stays NOT CONFIRMED)."""
+    from goldbot.telegram.outbox import PLACING_SILENT_S
+    eng, prop, outbox, pb = _slow(tmp_path, monkeypatch, PLACING_SILENT_S)
+    eng.center.decide(prop.proposal_id, OWNER, True)
+    assert pb.seen == ["GATE_REFUSED: not_confirmed"]             # the silent-engine fallback reported it meanwhile
+    [pos] = pb.positions()
+    rec = eng._orders[prop.proposal_id]
+    assert [n for n in _notices(tmp_path) if n.startswith("Order confirmed: LONG")] == [
+        f"Order confirmed: LONG {rec.lots} lots XAUUSD on icm-demo is open at {pos.open_price:.2f} (the broker "
+        f"confirmed it late). Stop {rec.sl:.2f}, target {rec.tp:.2f}; exits are automatic."]
+    card = eng.center.bus.get(prop.proposal_id)
+    assert card is not None and not card.placing and card.gate_refusal == ["not_confirmed"]
+    assert card.not_confirmed is not None and card.not_confirmed.outcome == "opened"
+    eng._reconcile(None)                                          # the reconcile loop adds no second notice
+    assert len([n for n in _notices(tmp_path) if n.startswith("Order confirmed")]) == 1
+
+
+def test_a_plain_fill_after_a_short_placing_window_sends_no_notice_and_the_card_stays_approved(tmp_path,
+                                                                                               monkeypatch):
+    from goldbot.telegram.outbox import PLACING_SILENT_S
+    eng, prop, _, pb = _slow(tmp_path, monkeypatch, PLACING_SILENT_S - 1)
+    eng.center.decide(prop.proposal_id, OWNER, True)
+    assert [n for n in _notices(tmp_path) if n.startswith("Order confirmed")] == []
+    card = eng.center.bus.get(prop.proposal_id)
+    assert card is not None and not card.placing and card.gate_refusal is None and card.not_confirmed is None
