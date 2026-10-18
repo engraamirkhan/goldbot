@@ -13,12 +13,13 @@ import { Research } from "./screens/Research";
 import { News } from "./screens/News";
 import { Users } from "./screens/Users";
 import { Account } from "./screens/Account";
+import { Chart } from "./screens/Chart";
 import { Progress } from "./screens/Progress";
 import { CodeSignInsBanner } from "./screens/CodeSignInsBanner";
 
 // Progress is third: on a phone the tab row scrolls sideways, so a tab at the end would be off-screen
 // (docs/ux/progress-screens.md "Placement")
-const TABS = ["Overview", "Approvals", "Progress", "News", "Agents", "Health", "Research", "Feeds", "Users", "Account"] as const;
+const TABS = ["Overview", "Approvals", "Progress", "Chart", "News", "Agents", "Health", "Research", "Feeds", "Users", "Account"] as const;
 type Tab = (typeof TABS)[number];
 
 export function App() {
@@ -61,6 +62,7 @@ export function App() {
         {tab === "Overview" && <Overview onOpenProgress={() => setTab("Progress")} />}
         {tab === "Approvals" && <Approvals />}
         {tab === "Progress" && <Progress onOpenOverview={() => setTab("Overview")} />}
+        {tab === "Chart" && <Chart />}
         {tab === "News" && <News />}
         {tab === "Agents" && <Agents />}
         {tab === "Health" && <Health />}

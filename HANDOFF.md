@@ -5,6 +5,7 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- Chart tab (web/src/screens/Chart.tsx): live TradingView Advanced Chart widget on OANDA:XAUUSD (1m-1D, follows system light/dark, plain-text fallback if blocked) and links to the owner's up to 3 saved TradingView layouts (new tab, noopener noreferrer). Layout URLs are owner-entered, stored in aux.db table chart_layouts (migration 11), shown to the owner only, validated as https://www.tradingview.com/chart/..., never in the repo or the audit row. API: GET/POST /api/chart/layouts. No CSP exists in the app, so none changed; if a proxy adds one later it needs script-src https://s3.tradingview.com and frame-src https://www.tradingview-widget.com https://www.tradingview.com. Signals from invite-only indicators need TradingView alerts (not built).
 - An approval whose send raises is archived NOT CONFIRMED, never left placing (BACKLOG 84, implementer, 2026-10-17;
   trading-safety residual on BACKLOG 72).
   - `ApprovalCenter._finish`: if `on_decision` raises, the card's `placing` flag is cleared and it is archived with

@@ -436,6 +436,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/chart/layouts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Chart Layouts Get */
+        get: operations["chart_layouts_get_api_chart_layouts_get"];
+        put?: never;
+        /** Chart Layouts Put */
+        post: operations["chart_layouts_put_api_chart_layouts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/decisions": {
         parameters: {
             query?: never;
@@ -1121,6 +1139,32 @@ export interface components {
              * @default
              */
             totp: string;
+        };
+        /** ChartLayout */
+        ChartLayout: {
+            /** Name */
+            name: string;
+            /** Url */
+            url: string | null;
+        };
+        /** ChartLayoutIn */
+        ChartLayoutIn: {
+            /** Name */
+            name: string;
+            /** Url */
+            url: string;
+        };
+        /** ChartLayoutsRequest */
+        ChartLayoutsRequest: {
+            /** Layouts */
+            layouts: components["schemas"]["ChartLayoutIn"][];
+        };
+        /** ChartLayoutsView */
+        ChartLayoutsView: {
+            /** Can Edit */
+            can_edit: boolean;
+            /** Layouts */
+            layouts: components["schemas"]["ChartLayout"][];
         };
         /** CodeSignIn */
         CodeSignIn: {
@@ -3567,6 +3611,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CalendarResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chart_layouts_get_api_chart_layouts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChartLayoutsView"];
+                };
+            };
+        };
+    };
+    chart_layouts_put_api_chart_layouts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChartLayoutsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChartLayoutsView"];
                 };
             };
             /** @description Validation Error */

@@ -986,6 +986,92 @@
     "title": "ChangePasswordRequest",
     "type": "object"
    },
+   "ChartLayout": {
+    "properties": {
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Url"
+     }
+    },
+    "required": [
+     "name",
+     "url"
+    ],
+    "title": "ChartLayout",
+    "type": "object"
+   },
+   "ChartLayoutIn": {
+    "additionalProperties": false,
+    "properties": {
+     "name": {
+      "maxLength": 40,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+     },
+     "url": {
+      "maxLength": 200,
+      "title": "Url",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name",
+     "url"
+    ],
+    "title": "ChartLayoutIn",
+    "type": "object"
+   },
+   "ChartLayoutsRequest": {
+    "additionalProperties": false,
+    "properties": {
+     "layouts": {
+      "items": {
+       "$ref": "#/components/schemas/ChartLayoutIn"
+      },
+      "maxItems": 3,
+      "title": "Layouts",
+      "type": "array"
+     }
+    },
+    "required": [
+     "layouts"
+    ],
+    "title": "ChartLayoutsRequest",
+    "type": "object"
+   },
+   "ChartLayoutsView": {
+    "properties": {
+     "can_edit": {
+      "title": "Can Edit",
+      "type": "boolean"
+     },
+     "layouts": {
+      "items": {
+       "$ref": "#/components/schemas/ChartLayout"
+      },
+      "title": "Layouts",
+      "type": "array"
+     }
+    },
+    "required": [
+     "layouts",
+     "can_edit"
+    ],
+    "title": "ChartLayoutsView",
+    "type": "object"
+   },
    "CodeSignIn": {
     "properties": {
      "at_utc": {
@@ -6705,6 +6791,70 @@
      }
     ],
     "summary": "Calendar"
+   }
+  },
+  "/api/chart/layouts": {
+   "get": {
+    "operationId": "chart_layouts_get_api_chart_layouts_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ChartLayoutsView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Chart Layouts Get"
+   },
+   "post": {
+    "operationId": "chart_layouts_put_api_chart_layouts_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ChartLayoutsRequest"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ChartLayoutsView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Chart Layouts Put"
    }
   },
   "/api/decisions": {

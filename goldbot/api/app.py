@@ -34,7 +34,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
-from goldbot.api import entry_status, explain, progress
+from goldbot.api import chart_layouts, entry_status, explain, progress
 from goldbot.api.auth import (
     EMAIL_CODE_TTL_S,
     EMAIL_LINK_TTL_S,
@@ -74,6 +74,9 @@ from goldbot.api.schema import (
     CalendarEvent,
     CalendarResponse,
     ChangePasswordRequest,
+    ChartLayout,
+    ChartLayoutsRequest,
+    ChartLayoutsView,
     CodeSignIn,
     CodeSignIns,
     DecidedProposal,
@@ -1028,6 +1031,24 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         await st.broadcast({"type": "mode", "mode": body.mode})
         return ModeChangeResult(message=msg, view=explain.automode_view(st.dir, s, True))
     # ============================================================== end auto mode
+
+    # ============================================================== Chart tab: saved TradingView layouts
+    # The URL identifies the owner's TradingView layout: only the owner reads it back, and the audit row never holds it.
+    @app.get("/api/chart/layouts", response_model=ChartLayoutsView)
+    def chart_layouts_get(u: User = Depends(auth)) -> ChartLayoutsView:
+        owner = st.auth.is_owner(u)
+        return ChartLayoutsView(layouts=[ChartLayout(name=n, url=url if owner else None)
+                                         for n, url in chart_layouts.read_layouts(st.auth.db)], can_edit=owner)
+
+    @app.post("/api/chart/layouts", response_model=ChartLayoutsView)
+    def chart_layouts_put(body: ChartLayoutsRequest, u: User = Depends(need("owner"))) -> ChartLayoutsView:
+        for item in body.layouts:
+            if not chart_layouts.valid_layout_url(item.url):
+                raise HTTPException(422, "a layout link must look like https://www.tradingview.com/chart/<id>/")
+        chart_layouts.write_layouts(st.auth.db, [(i.name.strip(), i.url.strip()) for i in body.layouts])
+        st.auth.audit("chart_layouts_set", actor=u.email, count=len(body.layouts))
+        return chart_layouts_get(u)
+    # ============================================================== end Chart tab
 
     def current_status() -> Status:
         modes = sorted({str(e.get("approval_mode", "propose")) for e in st.engines()})
