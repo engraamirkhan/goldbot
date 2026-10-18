@@ -282,13 +282,14 @@ def _planned(cell: Mapping[str, Any]) -> tuple[str, str, dict[str, Any], bool]:
     from goldbot.research.pipeline import pooled_family, pooled_members
     from goldbot.research.preregistration import resolve_variant
     from goldbot.specialists import SPECIALISTS
-    agent, family, config = f"cell-{cell['specialist']}", cell["specialist"], {"variant": cell["variant"]}
+    from goldbot.specialists.base import AgentIdentity
+    agent, family, config =f"cell-{cell['specialist']}", cell["specialist"], {"variant": cell["variant"]}
     try:
         if cell["pooled"]:
             specs = [SPECIALISTS[f]() for f in pooled_members(cell["pooled"])]
             family, config = pooled_family(cell["pooled"]), {"timeframe": cell["pooled"],
                                                             "families": {s.family: s.config for s in specs}}
-            agent = f"pooled-{cell['pooled']}"
+            agent = AgentIdentity(family=family, config=config).agent_id    # as pipeline.pool_identity: "pooled_15m-g0-<hash>"
         else:
             spec = SPECIALISTS[cell["specialist"]](**resolve_variant(cell["specialist"], canonical(cell["variant"])))
             agent, config = spec.agent_id, spec.config
@@ -352,13 +353,20 @@ class CellRow(FrozenRecord):
     budget_quarter: str | None = None
     rule_ref: str | None = None
     preregistration: dict[str, Any] | None = None
+    # the run's own pre-registration (TrialRegistry.preregister, queue=False), which a discovery cell writes before its
+    # discovery row: a registry row of its own kind, so its fields are part of the schema (still no unknown keys)
+    reading_rule: str | None = None
+    plan: dict[str, Any] | None = None
+    queue: bool | None = None
+    rule_id: str | None = None
+    slot_ref: dict[str, Any] | None = None
 
 
 def _read_cell_rows(path: Path, cell: Mapping[str, Any]) -> tuple[list[dict[str, Any]], str]:
     """A cell's rows and, when the artifact cannot be trusted, why (the rows are then []). The artifact is untrusted
     input: a truncated or foreign `rows.jsonl` fails that cell alone (a failed trial, counted in K), never the job.
     Each row needs the registry row fields, a status a cell may write (no verdict or withdrawal) and the agent and
-    family the plan gave the cell (a discovery row names its own family)."""
+    family the plan gave the cell (a discovery run's pre-registration and discovery rows name `discovery_<family>`)."""
     if path.is_symlink():
         return [], "rows.jsonl is a symlink: not read"
     if path.is_file() and path.stat().st_size > MAX_CELL_FILE:
@@ -378,7 +386,8 @@ def _read_cell_rows(path: Path, cell: Mapping[str, Any]) -> tuple[list[dict[str,
             return [], f"row {i} fails the registry row schema: {', '.join(bad)}"
         if r["status"] not in CELL_STATUSES:
             return [], f"row {i} has status {r['status']!r}, not one a cell may write"
-        if (resolved and r["agent_id"] != agent) or (r["status"] != DISCOVERY and r["family"] != family):
+        own = f"discovery_{family}" if r["status"] in (DISCOVERY, PREREGISTERED) else family
+        if (resolved and r["agent_id"] != agent) or r["family"] != own:
             return [], f"row {i} is {r['agent_id']}/{r['family']}, the cell was planned as {agent}/{family}"
     return rows, ""
 
