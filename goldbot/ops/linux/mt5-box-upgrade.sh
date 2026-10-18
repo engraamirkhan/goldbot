@@ -119,8 +119,8 @@ phase_install() {
   [ "$FAILED" -eq 0 ] || return 0
   prev=$(mt5_head)
   install -d -m 700 -o root -g root "$STATE_DIR"
-  # the version to go back to; a re-run on the new version never overwrites it
-  if [ ! -s "$STATE_DIR/previous-sha" ] && valid_sha "$prev" && [ "$prev" != "$SHA" ]; then
+  # the version to go back to: renewed by each new upgrade (the recorded sha differs), kept on a re-run of the same one
+  if [ "$(cat "$STATE_DIR/sha" 2>/dev/null || true)" != "$SHA" ] && valid_sha "$prev" && [ "$prev" != "$SHA" ]; then
     printf '%s\n' "$prev" > "$STATE_DIR/previous-sha"
   fi
 
@@ -159,7 +159,7 @@ phase_install() {
 }
 
 phase_post_reboot() {
-  local s h nr1 nr2 n u
+  local s h nr1 nr2 n u floor
   if is_root; then row PASS "running as root"; else row FAIL "running as root" "use sudo"; fi
   if [ -f "$STATE_DIR/sha" ] && [ "$(cat "$STATE_DIR/sha")" = "$SHA" ]; then row PASS "install phase recorded for sha"; else row FAIL "install phase recorded for sha" "run install first"; fi
   if [ -s "$STATE_DIR/install-boot-id" ] && [ "$(cat "$STATE_DIR/install-boot-id")" != "$(boot_id)" ]; then row PASS "machine rebooted since install"; else row FAIL "machine rebooted since install" "reboot first"; fi
@@ -178,14 +178,21 @@ phase_post_reboot() {
   if [ "$s" = "$SHA" ]; then row PASS "deployed commit is the sha"; else row FAIL "deployed commit is the sha" "differs"; fi
   [ "$FAILED" -eq 0 ] || return 0
 
-  systemctl enable --now "goldbot-bridge-watchdog@$ACCOUNT.timer" >/dev/null
-  row PASS "watchdog timer enabled" "$ACCOUNT"
+  # the floor is judged before anything is enabled: a conflicting floor leaves the watchdog off
+  floor=none
   if [ -e "$ROLLBACK_FLOOR" ] || [ -L "$ROLLBACK_FLOOR" ]; then
     if [ -f "$ROLLBACK_FLOOR" ] && [ ! -L "$ROLLBACK_FLOOR" ] && [ "$(head -c 41 "$ROLLBACK_FLOOR" | tr -d '[:space:]')" = "$SHA" ]; then
-      row PASS "rollback floor" "already set"
+      floor=same
     else
-      row FAIL "rollback floor" "a different floor exists: change it deliberately"
+      floor=other
     fi
+  fi
+  if [ "$floor" = other ]; then row FAIL "rollback floor" "a different floor exists: change it deliberately"; return 0; fi
+
+  systemctl enable --now "goldbot-bridge-watchdog@$ACCOUNT.timer" >/dev/null
+  row PASS "watchdog timer enabled" "$ACCOUNT"
+  if [ "$floor" = same ]; then
+    row PASS "rollback floor" "already set"
   else
     install -d -m 755 -o root -g root "$(dirname "$ROLLBACK_FLOOR")"
     printf '%s\n' "$SHA" > "$ROLLBACK_FLOOR.new"

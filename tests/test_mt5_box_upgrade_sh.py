@@ -284,6 +284,29 @@ def test_post_reboot_inactive_unit_fails(box):
     assert not (tmp / "etc" / "rollback-floor").exists()
 
 
+def test_conflicting_floor_leaves_watchdog_off(box):
+    tmp, sha = box
+    _installed(box)
+    (tmp / "etc" / "rollback-floor").write_text("c" * 40 + "\n")
+    run(box, "post-reboot", sha)
+    assert "enable --now goldbot-bridge-watchdog" not in calls(tmp)
+
+
+def test_successive_upgrades_renew_previous_sha(box):
+    tmp, sha_b = box
+    assert run(box, "install", sha_b, *FLAGS)[0] == 0           # A (OLD) -> B
+    assert (tmp / "state" / "previous-sha").read_text().strip() == OLD
+    (tmp / "mt5head").write_text(sha_b + "\n")
+    remote = str(tmp / "remote")
+    (tmp / "remote" / "x").write_text("2")
+    for c in (["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "y"]):
+        subprocess.run(["git", "-C", remote, *c], check=True, capture_output=True)
+    sha_c = subprocess.run(["git", "-C", remote, "rev-parse", "HEAD"], check=True, capture_output=True,
+                           text=True).stdout.strip()
+    assert run(box, "install", sha_c, *FLAGS)[0] == 0           # B -> C
+    assert (tmp / "state" / "previous-sha").read_text().strip() == sha_b
+
+
 def test_existing_different_floor_is_not_overwritten(box):
     tmp, sha = box
     _installed(box)
