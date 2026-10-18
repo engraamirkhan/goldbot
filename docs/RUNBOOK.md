@@ -2079,3 +2079,14 @@ Last, on the brain: `sudo systemctl enable --now goldbot-chart-fetch.timer`. The
 Check: `sudo -u goldbot /opt/goldbot/goldbot/ops/linux/goldbot-chart-fetch.sh && ls -l /opt/goldbot/state/chart/mt5.png`.
 Remove: `sudo systemctl disable --now goldbot-chart-fetch.timer` (brain) and `goldbot-chart-capture.timer` (MT5 box); delete the `goldbot-chart` line from `/home/mt5/.ssh/authorized_keys` (`sudo -u mt5 sed -i '/goldbot-chart/d' /home/mt5/.ssh/authorized_keys`) and `sudo rm -f /usr/local/libexec/goldbot/goldbot-chart-*.sh`.
 Failure: a stale or missing picture is a 404 only; nothing trading depends on it. Look at `journalctl -u goldbot-chart-fetch` (brain) and `-u goldbot-chart-capture` (MT5 box).
+
+### Program ledger sync (Mac -> brain)
+
+`python -m goldbot.ops.run ledger sync` sends the Mac's new ledger rows to the brain's `state/program.db` over ssh with its own key, which may run one
+command only (`goldbot-ledger-ingest.sh`, which ignores what the client asks for and runs `ledger ingest`: append-only, secret-scanned, bad rows rejected,
+prints `ack N`). Install (owner steps, once): on the Mac `ssh-keygen -t ed25519 -f ~/.ssh/goldbot_ledger -N ''`; on the brain install the script as root
+(`install -m 755 -o root -g root goldbot/ops/linux/goldbot-ledger-ingest.sh /usr/local/libexec/goldbot/`, same pinned-SHA pattern as the chart scripts) and then
+`echo 'restrict,command="/usr/local/libexec/goldbot/goldbot-ledger-ingest.sh" <pubkey>' | sudo -u goldbot tee -a /var/lib/goldbot/.ssh/authorized_keys`.
+Run: `GOLDBOT_LEDGER_REMOTE=goldbot@<brain> GOLDBOT_LEDGER_KEY=~/.ssh/goldbot_ledger python -m goldbot.ops.run ledger sync` (the host stays in your shell, never in the repo).
+A rejected or unacknowledged batch stays pending and is retried on the next run (exit 1). Backfill once with `ledger import all` (the registry is fetched
+from release `research-v1` with `gh`). Remove: delete the key line from the brain's `authorized_keys`.
