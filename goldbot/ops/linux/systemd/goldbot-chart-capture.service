@@ -5,7 +5,7 @@ After=goldbot-xvfb.service
 [Service]
 Type=oneshot
 User=mt5
-ExecStart=/opt/goldbot/goldbot/ops/linux/goldbot-chart-capture.sh
+ExecStart=/usr/local/libexec/goldbot/goldbot-chart-capture.sh
 TimeoutStartSec=30
 Nice=10
 NoNewPrivileges=true
