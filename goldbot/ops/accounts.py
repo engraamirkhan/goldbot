@@ -31,8 +31,9 @@ import os
 import re
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Iterator, Literal
 
 import yaml
 from pydantic import ConfigDict, Field, field_validator
@@ -129,6 +130,23 @@ def _fallback_file() -> Path:
     return p
 
 
+@contextmanager
+def _fallback_lock() -> Iterator[None]:
+    """flock on state/.secrets.lock so a migration and a service's `set` never interleave their read-modify-write of the
+    plaintext file. No-op where fcntl is missing (Windows never uses the file)."""
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover
+        yield
+        return
+    with open(_fallback_file().with_name(".secrets.lock"), "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lk, fcntl.LOCK_UN)
+
+
 def _plaintext_allowed() -> bool:
     return _PLATFORM not in ("darwin", "win32") and os.environ.get(ALLOW_PLAINTEXT_ENV) == "1"
 
@@ -143,22 +161,21 @@ def migrate_fallback() -> int:
     A key the keyring refuses stays in the file. Values are never printed. Returns how many keys moved."""
     if secret_store() != "keyring":
         return 0
-    data = _read_fallback()
-    moved = 0
-    for k, v in list(data.items()):
-        try:
-            keyring.set_password(SERVICE, k, v)
-        except Exception:
-            continue
-        del data[k]
-        moved += 1
-    f = _fallback_file()
-    if not moved:
-        return 0
-    if data:
-        write_private(f, json.dumps(data))
-    else:
-        f.unlink()
+    with _fallback_lock():
+        data = _read_fallback()
+        moved = 0
+        for k, v in list(data.items()):
+            try:
+                keyring.set_password(SERVICE, k, v)
+            except Exception:
+                continue
+            del data[k]
+            moved += 1
+        f = _fallback_file()
+        if moved and data:
+            write_private(f, json.dumps(data))
+        elif moved:
+            f.unlink()
     return moved
 
 
@@ -172,11 +189,18 @@ def get_secret(key: str) -> str | None:
             pass
     if key not in _read_fallback():
         return None
-    if migrate_fallback():
+    # automatic migration only for a person at a terminal: a service (fail backend, no TTY) just reads the file
+    if sys.stdin is not None and sys.stdin.isatty() and migrate_fallback():
         return get_secret(key)
-    print(f"note: {key} is read from the plaintext {_fallback_file()}; install a keyring and run "
-          "`python -m goldbot.ops.accounts migrate` to move it", file=sys.stderr)
     return _read_fallback().get(key)
+
+
+def fallback_note() -> None:
+    """CLI only, once per process: say that secrets sit in the plaintext file and how to move them. Never called from
+    get_secret (a service reads secrets all day; the journal must not fill with it)."""
+    if _read_fallback() and secret_store() == "keyring":
+        print(f"note: secrets are in the plaintext {_fallback_file()}; run `python -m goldbot.ops.accounts migrate` "
+              "to move them into the OS keyring", file=sys.stderr)
 
 
 def set_secret(key: str, value: str) -> str:
@@ -192,10 +216,10 @@ def set_secret(key: str, value: str) -> str:
         raise RuntimeError(f"no working OS keyring to store {key}: install/unlock it (`uv sync`; macOS Keychain, Windows "
                            f"Credential Manager). Plaintext fallback is refused on macOS/Windows and elsewhere needs "
                            f"{ALLOW_PLAINTEXT_ENV}=1 (CI only)")
-    f = _fallback_file()
-    data = _read_fallback()
-    data[key] = value
-    write_private(f, json.dumps(data))
+    with _fallback_lock():
+        data = _read_fallback()
+        data[key] = value
+        write_private(_fallback_file(), json.dumps(data))
     return "file"
 
 
@@ -409,6 +433,7 @@ def enabled_accounts(mode: str | None = None) -> list[Account]:
 
 # ---------------------------------------------------------------------------- CLI
 def main(argv: list[str]) -> int:
+    fallback_note()
     if not argv or argv[0] == "list":
         for a in load_accounts().values():
             has_pw = "yes" if get_secret(f"mt5-{a.account_id}") else "no"

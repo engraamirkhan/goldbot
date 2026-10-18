@@ -105,7 +105,7 @@ def test_secret_and_user_files_are_never_readable_by_others(isolated, tmp_path, 
     for f in (tmp_path / "state" / ".secrets.json", *db_files):
         assert stat.S_IMODE(f.stat().st_mode) & 0o077 == 0, f
     assert json.loads((tmp_path / "state" / ".secrets.json").read_text()) == {"mt5-icm-demo": "pw1", "telegram-bot-token": "tok"}
-    assert not [p for p in (tmp_path / "state").iterdir() if p.name != ".secrets.json"]     # no temp files left behind
+    assert not [p for p in (tmp_path / "state").iterdir() if p.name not in (".secrets.json", ".secrets.lock")]     # no temp files left behind
 
 
 class _FakeKeyring:
@@ -142,13 +142,13 @@ def test_set_command_says_keyring_when_the_keyring_took_it(isolated, monkeypatch
     assert "in the OS keyring" in capsys.readouterr().out
 
 
-def test_get_secret_reads_an_existing_fallback_file_with_a_migration_hint(isolated, monkeypatch, tmp_path, capsys):
+def test_get_secret_reads_an_existing_fallback_file_silently(isolated, monkeypatch, tmp_path, capsys):
     f = tmp_path / "state" / ".secrets.json"
     f.parent.mkdir()
     f.write_text(json.dumps({"old": "v"}))
     monkeypatch.setattr(acc_mod, "_PLATFORM", "darwin")
     assert acc_mod.get_secret("old") == "v"
-    assert "migrate" in capsys.readouterr().err
+    assert capsys.readouterr().err == ""                           # a service reads all day: no journal noise
 
 
 def test_existing_fallback_file_moves_into_the_keyring_and_is_deleted(isolated, monkeypatch, tmp_path, capsys):
@@ -157,6 +157,7 @@ def test_existing_fallback_file_moves_into_the_keyring_and_is_deleted(isolated, 
     f.write_text(json.dumps({"a": "secret-a", "b": "secret-b"}))
     kr = _FakeKeyring()
     monkeypatch.setattr(acc_mod, "keyring", kr)
+    monkeypatch.setattr(acc_mod.sys.stdin, "isatty", lambda: True, raising=False)
     assert acc_mod.get_secret("a") == "secret-a"
     assert kr.d == {"a": "secret-a", "b": "secret-b"}
     assert not f.exists()                                           # emptied, so removed
@@ -185,3 +186,27 @@ def test_secret_store_reports_keyring_for_a_failing_backend_as_file(isolated, mo
         def get_keyring(self): return type("Keyring", (), {"__module__": "keyring.backends.fail"})()
     monkeypatch.setattr(acc_mod, "keyring", Fail())
     assert acc_mod.secret_store() == "file"
+
+
+def test_a_service_without_a_terminal_does_not_migrate_the_file(isolated, monkeypatch, tmp_path):
+    f = tmp_path / "state" / ".secrets.json"
+    f.parent.mkdir()
+    f.write_text(json.dumps({"a": "x"}))
+    monkeypatch.setattr(acc_mod, "keyring", _FakeKeyring())
+    monkeypatch.setattr(acc_mod.sys.stdin, "isatty", lambda: False, raising=False)
+    assert acc_mod.get_secret("a") == "x"
+    assert f.exists()
+
+
+def test_brain_path_fail_backend_with_opt_in_stores_and_reads_without_noise(isolated, monkeypatch, tmp_path, capsys):
+    class Fail(_FakeKeyring):
+        def get_keyring(self): return type("Keyring", (), {"__module__": "keyring.backends.fail"})()
+        def get_password(self, *a): raise RuntimeError("no backend")
+        def set_password(self, *a): raise RuntimeError("no backend")
+    monkeypatch.setattr(acc_mod, "keyring", Fail())
+    assert acc_mod.set_secret("k", "v") == "file"
+    for _ in range(3):
+        assert acc_mod.get_secret("k") == "v"
+    assert acc_mod.main(["set", "k2"]) == 0
+    assert "k2" in json.loads((tmp_path / "state" / ".secrets.json").read_text())
+    assert capsys.readouterr().err == ""

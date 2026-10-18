@@ -297,7 +297,7 @@ journalctl -u goldbot-engine@icm-demo -n 20 --no-pager
 Seed the news calendar now. Otherwise the tier-1 blackout has no calendar until the scheduler's 06:10 UTC run
 tomorrow. The scheduler only waits for the next slot after its first start:
 ```bash
-cd /opt/goldbot && sudo -u goldbot -H env PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring .venv/bin/python -c "
+cd /opt/goldbot && sudo -u goldbot -H env PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring GOLDBOT_ALLOW_PLAINTEXT=1 .venv/bin/python -c "
 import pandas as pd; from goldbot.config import load_settings; from goldbot.data.store import Store
 from goldbot.data.econ_calendar import parse_ff_week, fetch_ff_week
 s = load_settings(); df = parse_ff_week(fetch_ff_week(), pd.Timestamp.now('UTC'), s.risk.blackout.events)

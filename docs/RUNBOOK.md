@@ -271,6 +271,10 @@ and the rest still arrives. It never contains account numbers or emails.
      `systemctl is-active goldbot-bridge@icm-demo` must print `active` and `systemctl show -p NRestarts
      goldbot-bridge@icm-demo` must not have gone up (the unit restarts itself every 10 s, so `active` alone can hide a
      crash loop). Finally run preflight on the brain: it checks the bridge answers through the tunnel.
+* The Linux units set `GOLDBOT_ALLOW_PLAINTEXT=1` (the file secret store is deliberate there: no desktop keyring).
+  `goldbot-deploy` does not install units: after this change, reinstall them (copy `goldbot/ops/linux/systemd/*` to
+  `/etc/systemd/system`, `daemon-reload`, restart). Until then nothing breaks for reads of existing secrets; only a
+  new `accounts set` from a unit environment would be refused.
 * By hand on either VM: `sudo goldbot-deploy latest` (or a specific commit id). Same checks, same rollback.
   Run it inside `tmux` (`tmux new -s deploy`; after a dropped connection, `tmux attach -t deploy`), or as
   `sudo systemd-run --wait --pty --unit goldbot-deploy-manual /usr/local/sbin/goldbot-deploy <args>`. The script
