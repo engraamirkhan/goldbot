@@ -15,7 +15,8 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 MT5_DIR=${MT5_DIR:-$HOME/.wine/drive_c/MT5/ICMarkets}
 BACKUP_ROOT=${BACKUP_ROOT:-$HOME}
 CFG=$MT5_DIR/Config
-PROF=$MT5_DIR/Profiles
+# newer builds read profiles from MQL5/Profiles (the top-level Profiles/ is a leftover and is ignored)
+PROF=$MT5_DIR/MQL5/Profiles; [ -d "$PROF/Charts" ] || PROF=$MT5_DIR/Profiles
 
 die() { echo "refused: $*" >&2; exit 2; }
 [ "$(id -u)" -ne 0 ] || die "run as user mt5, not root"
