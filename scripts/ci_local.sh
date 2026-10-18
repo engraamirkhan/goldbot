@@ -93,6 +93,8 @@ lint_lane() {
   step lint pre-commit -- pre-commit run --all-files --show-diff-on-failure --color never
   step lint backend-lint -- ruff check goldbot tests scripts --output-format concise
   step lint backend-typecheck -- mypy
+  # api-contract needs openapi-typescript; a fresh worktree has no web/node_modules until the frontend lane installs
+  [ "$web" = 1 ] && [ ! -x web/node_modules/.bin/openapi-typescript ] && step lint web-install -- npm --prefix web ci --offline
   step lint api-contract -- bash -c 'python scripts/export_openapi.py && npm --prefix web run gen:api && git diff --exit-code -- web/openapi.json web/src/lib/schema.d.ts'
   lane_done lint
 }
