@@ -217,3 +217,39 @@ def test_webhook_ip_allow_list_uses_the_peer_address_not_a_forwarded_header():
     tradingview = TestClient(app, client=("52.89.214.238", 40000))
     assert tradingview.post("/tv", json={**body, "secret": "s3crët"}).status_code == 403   # non-ASCII: refused, not a 500
     assert tradingview.post("/tv", json=body).json()["ok"] is True and q.qsize() == 1
+
+
+def test_is_known_is_false_until_a_raw_or_standard_class_is_stored(tmp_path):
+    pc = PersistentClassifier(tmp_path / "acct.json")
+    assert not pc.is_known()                                             # no file yet
+    pc.update(_cls("unknown"))
+    assert not pc.is_known() and not PersistentClassifier(tmp_path / "acct.json").is_known()
+    pc.update(_cls("standard"))
+    assert PersistentClassifier(tmp_path / "acct.json").is_known()
+
+
+def test_a_declared_class_is_the_baseline_until_a_measured_class_is_stored():
+    from goldbot.execution.classifier import effective_class
+    assert effective_class("raw", None) == "raw" and effective_class("raw", "unknown") == "raw"
+    assert effective_class(None, None) == "unknown" and effective_class(None, "unknown") == "unknown"
+    assert effective_class(None, "raw") == "raw" and effective_class(None, "standard") == "standard"
+
+
+def test_when_declared_and_measured_classes_disagree_the_stricter_one_wins():
+    from goldbot.execution.classifier import class_mismatch, effective_class
+    assert effective_class("raw", "standard") == "standard"
+    assert effective_class("standard", "raw") == "standard"              # never the looser one
+    assert effective_class("raw", "raw") == "raw"
+    assert class_mismatch("raw", "standard") and class_mismatch("standard", "raw")
+    assert not class_mismatch("raw", "raw") and not class_mismatch("raw", "unknown") and not class_mismatch(None, "raw")
+
+
+def test_the_stored_class_is_read_from_the_classifier_file_unknown_when_missing_or_torn(tmp_path):
+    from goldbot.execution.classifier import read_stored_class
+    assert read_stored_class(tmp_path / "c.json") == "unknown"
+    (tmp_path / "c.json").write_text('{"class": "standard"}')
+    assert read_stored_class(tmp_path / "c.json") == "standard"
+    (tmp_path / "c.json").write_text("{torn")
+    assert read_stored_class(tmp_path / "c.json") == "unknown"
+    (tmp_path / "c.json").write_text('{"class": "weird"}')
+    assert read_stored_class(tmp_path / "c.json") == "unknown"

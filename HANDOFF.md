@@ -5,6 +5,16 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- Account type no longer blocks entries for a week: `nightly_costs` re-runs the classifier every night while the stored
+  class is unknown (missing file or "unknown"; `PersistentClassifier.is_known`) and on Fridays only once a class is
+  known (evidence thresholds and the two-disagreement rule unchanged). New optional `account_class: raw|standard` per
+  account in `config/accounts.yaml` (set for icm-demo only) is the baseline until a measured class is stored;
+  `execution/classifier.effective_class` is the one function the engine, smoke and state use; a disagreeing
+  measurement makes the stricter class (standard) win and the engine health check warns "declared raw, measured
+  standard: check the account type". Entry status: "only N London/NY ticks" is a self-clearing wait ("N of 1,000
+  market ticks recorded; checked every night"), a declared class with no measurement is an info note, every other
+  unknown reason still "Needs you". RiskGate logic and thresholds unchanged; unknown still blocks. The engine state
+  gained `account_class_declared` and `account_class_measured` (golden hashes regenerated).
 - **Deploy status false alarm fixed (SRE).** `goldbot-deploy` leaves the engine-derived checks (engine, engine_loop, tick_errors; reconcile stays compared, it also reports ledger mismatches) of an engine unit that is disabled/inactive at the baseline out of the worse-comparison and records "engine stopped for the deploy: <account>"; other worsened checks still give `deployed_degraded`. `check_deploy` reports a `deployed_degraded` as ok ("degraded at deploy time (...), now ok") when all named checks read ok in the fresh `health_last.json`; deploys.jsonl is untouched.
 - **Attended MT5 box upgrade scripted (sre, 2026-10-18; for Sat 24 Oct 10:00 UK; not yet reviewed).**
   `goldbot/ops/linux/mt5-box-upgrade.sh` has phases `precheck`, `install`, `post-reboot`, each re-runnable, printing a

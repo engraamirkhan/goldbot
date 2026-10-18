@@ -4,7 +4,9 @@
                     swap and commission as the terminal reports them (state/broker_terms_<account>.json, written by
                     the engine; settings commission and the swap prior while missing or older than
                     BROKER_TERMS_MAX_AGE_DAYS) -> state/costs_<account>.json (read by the engine every bar).
-                    On Fridays it also re-runs the account classifier (two consecutive disagreements to change).
+                    It also re-runs the account classifier: every night while the stored class is unknown (so a thin
+                    first Friday does not block entries for a week), on Fridays only once a class is known (two
+                    consecutive disagreements to change).
                     With `costs.publish_release` and a github-token it then publishes the canonical broker's table
                     (costs only) to release costs-v1 for research.yml (`publish_costs`).
 * saturday_retrain  refresh bars from the data release (best effort), then per specialist: evaluate any challenger
@@ -141,7 +143,7 @@ from goldbot.specialists.base import Specialist
 log = logging.getLogger("goldbot.jobs")
 
 CHALLENGER_MAX_WEEKS = 8
-CLASSIFIER_WEEKDAY = 4          # Friday's nightly run re-classifies (design: weekly, from the nightly cost job)
+CLASSIFIER_WEEKDAY = 4          # Friday's nightly run re-classifies a known class (design: weekly, nightly cost job)
 CONTEXT_EXTRA_MONTHS = 2        # daily/4h/1h context needs history before the decision window starts
 WATCH_GRACE = pd.Timedelta(days=1)   # the daily job evaluates a champion watch once more after it closes
 MODEL_WATCH_FILE = "model_watch.json"   # the last run's per-agent watch status (health: ops/health.check_model_watch)
@@ -193,9 +195,10 @@ def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         row: dict[str, Any] = {"ticks": len(ticks), "fills": len(fills),
                                "round_trip_usd": {s: table.round_trip_usd_per_oz(s) for s in ("asia", "london", "newyork")},
                                "swap_measured": swap is not None, "commission_measured": measured}
-        if slot.dayofweek == CLASSIFIER_WEEKDAY:
+        persistent = PersistentClassifier(ctx.state_dir / f"classifier_{acc.account_id}.json")
+        if slot.dayofweek == CLASSIFIER_WEEKDAY or not persistent.is_known():
             c = classify(ticks, fills)
-            row["account_class"] = PersistentClassifier(ctx.state_dir / f"classifier_{acc.account_id}.json").update(c)
+            row["account_class"] = persistent.update(c)
             row["classifier_reason"] = c.reason
         out[acc.account_id] = row
     if ctx.upload_costs is not None:            # costs.publish_release and a github-token: research reads it

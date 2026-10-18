@@ -38,6 +38,7 @@ from goldbot.data.calendar import (
     session_table_from_cache,
 )
 from goldbot.data.timeutil import floor_tf, server_to_utc, server_wall
+from goldbot.execution.classifier import MIN_TICKS
 from goldbot.execution.not_confirmed import PENDING_REFUSAL, PENDING_REFUSAL_CODE
 from goldbot.ops.account_view import LossBudget, loss_budget
 from goldbot.ops.health import ENGINE_FAIL_S
@@ -354,14 +355,15 @@ def _open_at(sessions: Any, *ts: pd.Timestamp) -> bool | None:
 
 
 def block(code: str, *, text: str | None = None, agent: str | None = None, at: pd.Timestamp | None = None,
-          at_label: Literal["opens", "until", "resets", "since"] | None = None, fix: str | None = None) -> EntryBlock:
+          at_label: Literal["opens", "until", "resets", "since"] | None = None, fix: str | None = None,
+          kind: Literal["act", "wait"] | None = None) -> EntryBlock:
     r = REASONS.get(code)
     if r is None:                           # a newer engine's reason: shown, never dropped
         r = Reason(text=f"New entries paused ({code.replace('_', ' ')})",
                    fix="See the Runbook; the Health tab may say more.", kind="act")
     body = text if text is not None else r.text.replace("{agent}", agent_label(agent) if agent else "a strategy")
     return EntryBlock(code=code, scope="agent" if agent else "account", agent_id=agent, text=body,
-                      fix=fix if fix is not None else r.fix, kind=r.kind, at=_dt(at) if at_label else None,
+                      fix=fix if fix is not None else r.fix, kind=kind or r.kind, at=_dt(at) if at_label else None,
                       at_label=at_label if at is not None else None, runbook=r.runbook, runbook_url=runbook_url(r.runbook))
 
 
@@ -535,8 +537,8 @@ def unknown_status() -> EntryStatus:
 def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: str | None,
                          supervisor_reasons: list[str] | None, drift_reasons: list[str] | None,
                          budget: LossBudget | None, limits: RiskLimits, is_owner: bool = True,
-                         combined_dd: float | None = None) -> EntryStatus:
-    """owner_halt: the channel that halted (None: not halted); supervisor_reasons: the supervisor's halt as the engine reads it
+                         combined_dd: float | None = None, class_ticks: int | None = None) -> EntryStatus:
+    """class_ticks: the classifier's London/NY tick count while it lacks ticks (`class_ticks_pending`); owner_halt: the channel that halted (None: not halted); supervisor_reasons: the supervisor's halt as the engine reads it
     (None: no halt; empty: a halt without reasons); drift_reasons: the drift watch's system halt (None: none);
     budget: the account's loss budget (account_view.loss_budget); is_owner: the viewer may re-arm; combined_dd: the
     supervisor's combined drawdown halt (SupervisorLimits)."""
@@ -604,7 +606,17 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
                     continue                # BACKLOG 59: a closed market has no fresh prices by design; never a fault
                 if code == "supervisor_halt" and supervisor_reasons is not None:
                     continue                # the supervisor's own reasons, named above, say more
+                if code == "account_class_unknown" and class_ticks is not None:
+                    add(block(code, text=f"Account type not identified yet: {class_ticks:,} of {MIN_TICKS:,} "
+                                         f"market ticks recorded",
+                              fix="Checked every night; clears by itself once enough ticks are recorded.",
+                              kind="wait"))
+                    continue
                 add(_engine_block(code, e, now, limits))
+        declared = e.get("account_class_declared")
+        if declared in ("raw", "standard") and e.get("account_class_measured") not in ("raw", "standard"):
+            notes.append(f"Account type: {str(declared).capitalize()} (from the account settings; measurement "
+                         f"confirms it over the week).")
         for b in _refusal_blocks(e.get("entry_refusals")):
             add(b)
         last_err = _ts(e.get("last_tick_error_at"))
@@ -645,6 +657,20 @@ def account_entry_status(e: dict[str, Any], *, now: pd.Timestamp, owner_halt: st
 
 
 # ----------------------------------------------------------------------------- from the state directory
+def class_ticks_pending(state_dir: str | Path, account_id: str) -> int | None:
+    """The London/NY tick count while the account's classifier is unknown only for lack of ticks ("only N London/NY
+    ticks (< 1000)", execution/classifier.classify); None for a known class, any other reason, or an unreadable file."""
+    if not AGENT.fullmatch(account_id):
+        return None
+    try:
+        d = json.loads((Path(state_dir) / f"classifier_{account_id}.json").read_text())
+        run = d["runs"][-1]
+        m = re.fullmatch(r"only (\d+) London/NY ticks \(< \d+\)", str(run["reason"]))
+        return int(m.group(1)) if d.get("class") == "unknown" and m else None
+    except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
+        return None
+
+
 def read_drift_halt(state_dir: str | Path) -> list[str] | None:
     """Reasons for the drift watch's system halt (state/drift.json), None when there is none. Read the way the
     engines read it: missing restricts nothing, unreadable or invalid halts entries (fail closed)."""
@@ -713,7 +739,8 @@ def statuses_from_state(state_dir: str | Path, now: pd.Timestamp, settings: Sett
         status: EntryStatus | None = None
         if inputs is not None:
             try:
-                status = account_entry_status(e, now=now, budget=_quiet(loss_budget, e, sup, engines), **inputs)
+                status = account_entry_status(e, now=now, budget=_quiet(loss_budget, e, sup, engines),
+                                              class_ticks=class_ticks_pending(sd, str(e.get("account") or "")), **inputs)
             except Exception:              # noqa: BLE001
                 log.exception("entry status failed")
         mode = e.get("mode")

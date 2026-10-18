@@ -23,7 +23,6 @@ READ_ALLOWED: dict[str, Counter[str]] = {
     # step 5, engine/sizing.py (state/drift.json, drift_watch job)
     "Engine._drift": Counter({"json.loads": 1, "read_text": 1}),
     # step 5, engine/sizing.py (state/classifier_<account>.json, classifier job)
-    "Engine._account_class": Counter({"json.loads": 1, "read_text": 1}),
 }
 
 
