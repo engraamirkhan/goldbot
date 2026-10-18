@@ -482,13 +482,15 @@ def _channels_now(pv: Arr, h_win: Arr, l_win: Arr, cw: float, max_channels: int)
 
 
 def _channel_run(h: Arr, lo: Arr, c: Arr, pivot_len: int, width_pct: float, max_channels: int, lookback: int,
-                 init: ChannelState, base: int, start: int) -> tuple[Arr, Arr, ChannelState]:
+                 init: ChannelState, base: int, start: int, range_window: int | None = None,
+                 trace: list[tuple[Arr, Arr]] | None = None) -> tuple[Arr, Arr, ChannelState]:
     n = len(c)
     up = np.zeros(n, dtype=bool)
     dn = np.zeros(n, dtype=bool)
     ph, pl = pivot_points(h, lo, pivot_len)
-    hh = pd.Series(h).rolling(lookback, min_periods=lookback).max().to_numpy()
-    ll = pd.Series(lo).rolling(lookback, min_periods=lookback).min().to_numpy()
+    rw = range_window or lookback                       # the width is a % of the last `rw` bars' range (own input)
+    hh = pd.Series(h).rolling(rw, min_periods=rw).max().to_numpy()
+    ll = pd.Series(lo).rolling(rw, min_periods=rw).min().to_numpy()
     pv = list(init.pivots)                              # pivot values, newest first
     loc = list(init.pivot_bars)                         # their global bar indices
     tops, bots = np.asarray(init.tops, dtype=float), np.asarray(init.bottoms, dtype=float)
@@ -504,6 +506,8 @@ def _channel_run(h: Arr, lo: Arr, c: Arr, pivot_len: int, width_pct: float, max_
             cw = (hh[i] - ll[i]) * width_pct / 100.0
             a0 = max(0, i - lookback)
             tops, bots = _channels_now(np.asarray(pv), h[a0:i + 1], lo[a0:i + 1], cw, max_channels)
+        if trace is not None:
+            trace.append((tops, bots))                    # the boxes in force at bar i (research / render only)
         if g == 0 or i == 0 or not len(tops):
             continue
         cp, ci = c[i - 1], c[i]
@@ -518,10 +522,11 @@ def _channel_run(h: Arr, lo: Arr, c: Arr, pivot_len: int, width_pct: float, max_
 
 
 def sr_channel_breaks(open_: Arr, high: Arr, low: Arr, close: Arr, pivot_len: int = 5, width_pct: float = 1.0,
-                      max_channels: int = 15, lookback: int = 300) -> tuple[Arr, Arr]:
+                      max_channels: int = 15, lookback: int = 300, range_window: int | None = None,
+                      trace: list[tuple[Arr, Arr]] | None = None) -> tuple[Arr, Arr]:
     """(resistance break, support break) events per bar (rules in the module docstring)."""
     up, dn, _ = _channel_run(_f(high), _f(low), _f(close), pivot_len, width_pct, max_channels, lookback,
-                             ChannelState(), 0, 0)
+                             ChannelState(), 0, 0, range_window, trace)
     return up, dn
 
 
@@ -547,7 +552,8 @@ class ReplicaParams(FrozenRecord):
     sr_pivot_len: int = Field(5, ge=1)
     sr_width_pct: float = Field(1.0, gt=0.0)           # channel width, % of the lookback range
     sr_max_channels: int = Field(15, ge=1)
-    sr_lookback: int = Field(300, ge=10)
+    sr_lookback: int = Field(300, ge=10)               # loopback: bars of pivots/touches used to build the boxes
+    sr_range_window: int = Field(300, ge=10)           # width is a % of the high-low range of the last N bars
     candle_vol_len: int = Field(20, ge=1)
     candle_high_mult: float = 1.5
     candle_low_mult: float = 0.5
@@ -573,7 +579,7 @@ def context_bars(params: ReplicaParams = DEFAULT_PARAMS) -> int:
     """Bars a resumed tail must hold up to and including the snapshot bar: the longest window of a windowed piece
     (channel lookback + pivot bars + the previous close; SMA200; range; money flow; pivots), plus one."""
     p = params
-    return max(p.sr_lookback + 2 * p.sr_pivot_len + 1, 200, p.range_len, p.mfi_len + 1, 2 * p.equal_len + 1,
+    return max(p.sr_lookback + 2 * p.sr_pivot_len + 1, p.sr_range_window, 200, p.range_len, p.mfi_len + 1, 2 * p.equal_len + 1,
                p.swing_len + 1, p.internal_len + 1) + 1
 
 
@@ -645,7 +651,7 @@ def replica_run(df: pd.DataFrame, params: ReplicaParams = DEFAULT_PARAMS,
         out["range_f1_dist_atr"] = (c - f1) / a
         out["range_f2_dist_atr"] = (c - f2) / a
     up, dn, ch_end = _channel_run(h, lo, c, p.sr_pivot_len, p.sr_width_pct, p.sr_max_channels, p.sr_lookback,
-                                  s.channels, base, start)
+                                  s.channels, base, start, p.sr_range_window)
     out["sr_break_up"], out["sr_break_dn"] = up.astype(np.int64), dn.astype(np.int64)
     cc, s_candle = _candle_run(o, c, v, p.candle_vol_len, p.candle_high_mult, p.candle_low_mult, p.candle_traverse,
                                s.seeds, start)
