@@ -535,6 +535,23 @@ def test_no_fixture_keeps_a_script_s_compiled_source():
     assert files and not [f.name for f in files if blob.search(f.read_text(errors="replace"))]
 
 
+def test_follow_survives_a_pass_that_raises_and_backs_off(caplog):
+    calls: list[int] = []
+    sleeps: list[float] = []
+
+    def once(state: tv_pull.FollowState) -> tv_pull.PassReport:
+        calls.append(1)
+        if len(calls) <= 2:
+            raise sqlite3.OperationalError(f"database is locked {COOKIE}")
+        return tv_pull.PassReport(ok=True, started_utc=T_LIVE, finished_utc=T_LIVE)
+
+    tv_pull.follow(once, cfg(), now=lambda: T_LIVE, sleep=sleeps.append, max_passes=3)
+    assert len(calls) == 3
+    assert sleeps[:2] == [300, 600]                                   # backoff_base_s, doubling
+    assert sleeps[2] == (tv_pull.next_poll(T_LIVE, cfg()) - T_LIVE).total_seconds()
+    assert "OperationalError" in caplog.text and "secret" not in caplog.text
+
+
 def test_a_protocol_error_fails_the_pass_softly(tmp_path):
     net = ReplayNetwork("backfill_15m.json")
     net.script["replies"]["create_series"] = [[tv_wire.encode("series_error", ["cs", "$prices", "no data"])]]

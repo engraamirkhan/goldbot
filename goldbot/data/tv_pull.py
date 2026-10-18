@@ -946,6 +946,29 @@ def next_poll(now: pd.Timestamp, cfg: TvPullSettings) -> pd.Timestamp:
     return t if t > now else t + step
 
 
+def follow(once: Callable[[FollowState], PassReport], cfg: TvPullSettings, *,
+           now: Callable[[], pd.Timestamp] | None = None, sleep: Callable[[float], None] = time.sleep,
+           max_passes: int | None = None) -> None:
+    """The `follow` loop: a pass after every poll. A pass already fails soft; anything that still raises around it
+    (the secret store, the pull log) is logged by type only (its text could quote a secret) and the loop waits
+    `backoff_base_s`, doubling to `backoff_max_s`, instead of ending the service."""
+    clock = now or (lambda: pd.Timestamp.now(tz="UTC"))
+    state = FollowState()
+    errors = 0
+    passes = 0
+    while max_passes is None or passes < max_passes:
+        passes += 1
+        try:
+            print(once(state).text(), flush=True)
+            errors = 0
+            wait = (next_poll(clock(), cfg) - clock()).total_seconds()
+        except Exception as exc:  # the loop must outlive any one pass (fail soft; the alerts path is independent)
+            errors += 1
+            wait = min(cfg.backoff_base_s * 2 ** min(errors - 1, 30), cfg.backoff_max_s)
+            log.warning("tv pull follow: pass raised %s; next try in %.0f s", type(exc).__name__, wait)
+        sleep(max(wait, 1.0))
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="run.py tv-pull", description="TradingView direct pull (read-only): saved "
                                  "layouts' indicators and bars into tv_indicators.")
@@ -983,15 +1006,11 @@ def main(argv: list[str] | None = None) -> int:
         rep = once(None)
         print(rep.text())
         return 0 if rep.ok else 1
-    state = FollowState()
     try:
-        while True:
-            rep = once(state)
-            print(rep.text(), flush=True)
-            wait = (next_poll(pd.Timestamp.now(tz="UTC"), cfg) - pd.Timestamp.now(tz="UTC")).total_seconds()
-            time.sleep(max(wait, 1.0))
+        follow(once, cfg)
     except KeyboardInterrupt:
         return 0
+    return 0
 
 
 if __name__ == "__main__":
