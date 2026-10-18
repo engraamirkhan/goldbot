@@ -32,7 +32,7 @@ BEFORE_SPLIT = (
 ORDER = ("supervisor", "engine", "drift-review", "bridge", "api", "webhook", "scheduler", "telegram", "news",
          "record-gate", "gates", "gate-evidence", "publish-costs", "backup", "restore", "restore-drill", "setup",
          "preflight", "revoke-sessions", "mail-test", "owner-history", "health", "ruin", "monthly-report",
-         "perf-report", "sizing-feasibility", "bridge-smoke", "tv-import", "tv-repaint-check", "tv-pull")
+         "perf-report", "sizing-feasibility", "bridge-smoke", "tv-import", "tv-repaint-check", "tv-pull", "ledger")
 
 
 def test_the_registry_lists_every_command_in_the_old_dispatcher_order():

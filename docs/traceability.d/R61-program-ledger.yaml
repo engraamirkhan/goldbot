@@ -1,0 +1,5 @@
+id: R61
+requirement: The program's knowledge, decisions and hand-backs live in an append-only, secret-scanned ledger that survives restarts and is backed up; only public rows are exported to the repo
+status: implemented
+code: 'goldbot/ledger/{models,store,scan,cli}.py; goldbot/db/migrations.py `PROGRAM`; goldbot/db/connection.py `DbKind` "program" (FULL); `ledger` command in goldbot/ops/commands/research.py'
+test: tests/test_ledger.py (append-only triggers, supersede once, owner_notes private, secret scan fail closed, resume, export excludes private, migration and backup/restore of program.db)

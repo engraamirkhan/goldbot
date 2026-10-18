@@ -41,7 +41,7 @@ WRITE = os.environ.get("GOLDBOT_WRITE_RUN_GOLDEN") == "1"
 # subcommands whose --help only prints (argparse) or, for drift-review, only reads state/drift.json in the cwd
 HELP_COMMANDS = ("record-gate", "gates", "gate-evidence", "publish-costs", "restore", "setup", "preflight",
                  "revoke-sessions", "owner-history", "health", "ruin", "monthly-report", "perf-report",
-                 "sizing-feasibility", "drift-review", "bridge-smoke", "tv-import", "tv-repaint-check", "tv-pull")
+                 "sizing-feasibility", "drift-review", "bridge-smoke", "tv-import", "tv-repaint-check", "tv-pull", "ledger")
 
 # every command the dispatcher knows, with sample arguments (the trace stops before anything runs)
 DISPATCH: dict[str, list[str]] = {
@@ -76,6 +76,7 @@ DISPATCH: dict[str, list[str]] = {
     "tv-import": ["tv-import", "e.csv", "--indicator", "K", "--version", "1", "--tf", "15"],
     "tv-repaint-check": ["tv-repaint-check", "--indicator", "K", "--version", "1", "--tf", "15"],
     "tv-pull": ["tv-pull", "status"],
+    "ledger": ["ledger", "resume"],
     "bridge-smoke": ["bridge-smoke", "icm-demo"],
     "no-command": [],
     "help": ["--help"],
@@ -257,6 +258,7 @@ ONE_SHOT: dict[str, tuple[str, str]] = {
     "bridge-smoke": ("goldbot.ops.smoke", "main"),
     "tv-import": ("goldbot.data.tv_csv", "main"),
     "tv-repaint-check": ("goldbot.research.tv_repaint", "main"),
+    "ledger": ("goldbot.ledger.cli", "main"),
     "tv-pull": ("goldbot.data.tv_pull", "main"),             # `follow` loops, but exits with main()'s value
 }
 # Services are exempt from the exit-code rule: each loops forever (supervisor, engine, scheduler, telegram, news) or

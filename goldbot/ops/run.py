@@ -37,6 +37,9 @@
                                                          # CSV vs live alerts on the same bars; flags repaint_validated
   python -m goldbot.ops.run tv-pull sync|follow|status [--study PINE_ID[@V]] [--tf TF]
                                                          # TradingView direct pull (read-only, cookie in the keyring)
+  python -m goldbot.ops.run ledger add|query|resume|export [--state DIR]
+                                                         # program ledger (state/program.db): append-only decisions,
+                                                         # knowledge, hand-backs; export writes public rows to docs/ledger
 """
 # The services live in goldbot/ops/services/ and the commands in goldbot/ops/commands/ (registry.py), one module each,
 # so lanes stop colliding on this file. This module stays the public surface: it re-exports every name it always had,

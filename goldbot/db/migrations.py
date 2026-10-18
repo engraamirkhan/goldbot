@@ -1,4 +1,4 @@
-"""Forward-only schema migrations for core.db, aux.db, tv.db and tv_auth.db (docs/proposals/2026-10-state-store.md, section 3).
+"""Forward-only schema migrations for core.db, aux.db, tv.db, tv_auth.db and program.db (docs/proposals/2026-10-state-store.md, section 3).
 
 "Each migration runs in one BEGIN IMMEDIATE transaction that also records its version; forward-only, never edited
 after merge." Applied versions are rows of `schema_version` (version, name, applied_ns), mirrored in
@@ -400,7 +400,56 @@ TV_AUTH: tuple[Migration, ...] = (
     )),
 )
 
-MIGRATIONS: dict[DbKind, tuple[Migration, ...]] = {"core": CORE, "aux": AUX, "tv": TV, "tv_auth": TV_AUTH}
+# program.db: the program ledger (goldbot/ledger). Every table has the same common columns and is append-only: a row
+# is never updated or deleted; the only permitted UPDATE sets `superseded_by_id` once, from NULL, when a newer version
+# of the same key is appended. `owner_notes` can only hold private rows (docs/ledger exports public rows only).
+_LEDGER_COMMON = ("id", "key", "version", "body", "sha256", "created_ns", "source", "supersedes_id",
+                  "superseded_by_id", "privacy")
+# table -> (extra column declarations, CHECK/extra table constraints)
+_LEDGER_TABLES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "knowledge_entries": (("topic TEXT NOT NULL", "evidence_grade TEXT NOT NULL"), ()),
+    "owner_notes": ((), ("CHECK (privacy = 'private')",)),
+    "decisions": (("kind TEXT NOT NULL CHECK (kind IN ('adr', 'owner_directive'))", "ref TEXT NOT NULL",
+                   "title TEXT NOT NULL", "verbatim_quote TEXT NOT NULL", "dated TEXT NOT NULL"), ()),
+    # the trial registry's mirror: key = run_id, sha256 = the registry line's sha256 (re-importing a line is a no-op)
+    "research_runs": (("run_id TEXT NOT NULL",), ()),
+    "research_verdicts": (("run_id TEXT NOT NULL",), ()),
+    "work_log": (("lane TEXT NOT NULL", "branch TEXT NOT NULL", "commit_sha TEXT NOT NULL",
+                  "hand_back TEXT NOT NULL", "deploy TEXT NOT NULL"), ()),
+    "resume_snapshots": ((), ()),
+    # blob only when the file is at most 256 KB; always the sha256 of the content and its size
+    "artifacts": (("path TEXT NOT NULL", "size INTEGER NOT NULL", "blob BLOB"), ()),
+}
+
+
+def _ledger_statements() -> tuple[str, ...]:
+    out: list[str] = []
+    for table, (extra, checks) in _LEDGER_TABLES.items():
+        cols = [*_LEDGER_COMMON, *(d.split()[0] for d in extra)]
+        lines = ["id INTEGER PRIMARY KEY AUTOINCREMENT", "key TEXT NOT NULL",
+                 "version INTEGER NOT NULL CHECK (version >= 1)", "body TEXT NOT NULL", "sha256 TEXT NOT NULL",
+                 "created_ns INTEGER NOT NULL", "source TEXT NOT NULL",
+                 f"supersedes_id INTEGER REFERENCES {table}(id)", f"superseded_by_id INTEGER REFERENCES {table}(id)",
+                 "privacy TEXT NOT NULL CHECK (privacy IN ('public', 'private'))", *extra, "UNIQUE (key, version)",
+                 *checks]
+        out.append(f"CREATE TABLE {table} ({', '.join(lines)}) STRICT")
+        out.append(f"CREATE INDEX {table}_key ON {table}(key)")
+        # an UPDATE passes only when it sets superseded_by_id from NULL and changes no other column
+        unchanged = " AND ".join(f"OLD.{c} IS NEW.{c}" for c in cols if c != "superseded_by_id")
+        out.append(f"""CREATE TRIGGER {table}_no_update BEFORE UPDATE ON {table}
+           WHEN NOT (OLD.superseded_by_id IS NULL AND NEW.superseded_by_id IS NOT NULL AND {unchanged})
+           BEGIN SELECT RAISE(ABORT, '{table} is append-only'); END""")
+        out.append(f"""CREATE TRIGGER {table}_no_delete BEFORE DELETE ON {table}
+           BEGIN SELECT RAISE(ABORT, '{table} is append-only'); END""")
+    return tuple(out)
+
+
+PROGRAM: tuple[Migration, ...] = (
+    Migration(version=1, name="program_ledger", statements=_ledger_statements()),
+)
+
+MIGRATIONS: dict[DbKind, tuple[Migration, ...]] = {"core": CORE, "aux": AUX, "tv": TV, "tv_auth": TV_AUTH,
+                                                   "program": PROGRAM}
 
 
 def _check_sequence(kind: DbKind, migs: tuple[Migration, ...]) -> None:

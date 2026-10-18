@@ -28,8 +28,10 @@ log = logging.getLogger(__name__)
 
 # tv / tv_auth: the TradingView feed's own files (state/tv.db: the webhook's alert inbox and the direct pull's log;
 # state/tv_auth.db: the pull's sign-in state). FULL like core: the webhook acknowledges an alert only once it is durable
-DbKind = Literal["core", "aux", "tv", "tv_auth"]
-SYNCHRONOUS: dict[DbKind, str] = {"core": "FULL", "aux": "NORMAL", "tv": "FULL", "tv_auth": "FULL"}
+# program: the program ledger (goldbot/ledger, state/program.db): append-only knowledge, decisions and hand-backs; FULL,
+# because a recorded decision or resume snapshot must survive power loss
+DbKind = Literal["core", "aux", "tv", "tv_auth", "program"]
+SYNCHRONOUS: dict[DbKind, str] = {"core": "FULL", "aux": "NORMAL", "tv": "FULL", "tv_auth": "FULL", "program": "FULL"}
 DEFAULT_BUSY_TIMEOUT_MS = 5000
 MIN_SQLITE = (3, 37, 0)          # STRICT tables
 
