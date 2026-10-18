@@ -5708,6 +5708,16 @@
       "title": "Alerts 24H",
       "type": "integer"
      },
+     "csv_bars": {
+      "default": 0,
+      "title": "Csv Bars",
+      "type": "integer"
+     },
+     "csv_rows": {
+      "default": 0,
+      "title": "Csv Rows",
+      "type": "integer"
+     },
      "gaps_24h": {
       "title": "Gaps 24H",
       "type": "integer"
@@ -5726,6 +5736,16 @@
       },
       "title": "Plots Seen",
       "type": "array"
+     },
+     "repaint_status": {
+      "default": "none",
+      "enum": [
+       "none",
+       "unvalidated",
+       "validated"
+      ],
+      "title": "Repaint Status",
+      "type": "string"
      },
      "symbol": {
       "title": "Symbol",
