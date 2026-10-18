@@ -1,0 +1,293 @@
+"""mt5-box-upgrade (goldbot/ops/linux/mt5-box-upgrade.sh): the attended MT5 box upgrade, with fake systemctl, sudo,
+install, pgrep and a local git repository standing in for GitHub. It refuses when the market may be open, a flat book or a
+stopped engine is not attested, or an engine unit is active; backs up Config/ once; installs the four units and two
+watchdog scripts from a clone at exactly the sha; leaves the watchdog timer off until post-reboot passes; sets the
+rollback floor only after the cold restart passes; each phase can be run again; and prints no secrets.
+
+The script is sourced (its `main` runs only when executed), as in tests/test_goldbot_deploy_sh.py."""
+from __future__ import annotations
+
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[1]
+LINUX = REPO / "goldbot" / "ops" / "linux"
+SCRIPT = LINUX / "mt5-box-upgrade.sh"
+UNITS = [
+    "goldbot-mt5-terminal@.service", "goldbot-bridge@.service",
+    "goldbot-bridge-watchdog@.service", "goldbot-bridge-watchdog@.timer",
+]
+SCRIPTS = {"goldbot-bridge-watchdog.sh": "goldbot-bridge-watchdog", "goldbot-bridge-probe.sh": "goldbot-bridge-probe"}
+SECRET = "SECRETLOGIN-12345"
+OLD = "a" * 40
+FLAGS = ("--book-flat", "--engine-stopped")
+
+pytestmark = pytest.mark.skipif(shutil.which("git") is None or shutil.which("bash") is None,
+                                reason="needs git and bash")
+
+HARNESS = r"""
+set -euo pipefail
+source "$SCRIPT"
+REPO=$T/remote; STATE_DIR=$T/state; ROLLBACK_FLOOR=$T/etc/rollback-floor; ROLE_FILE=$T/etc/role
+UNIT_DIR=$T/units; SBIN=$T/sbin; DEPLOY=$T/deploy; CONFIG_DIR=$T/mt5/Config; BACKUP_DIR=$T/mt5/config-backup
+mkdir -p "$UNIT_DIR" "$T/en" "$T/act"
+now_dowhm() { echo "${NOW:-60900}"; }                     # Saturday 09:00 UTC
+boot_id() { cat "$T/bootid"; }
+is_root() { [ -z "${NOT_ROOT:-}" ]; }
+mktemp() { mkdir -p "$T/ops"; echo "$T/ops"; }
+df() { printf 'Filesystem 1M-blocks Used Available Capacity Mounted\n/dev/x 9999 1 %s 1%% /\n' "${FREE_MB:-5000}"; }
+sleep() { :; }
+mt5_head() { cat "$T/mt5head"; }
+sudo() {
+  while [ $# -gt 0 ]; do case "$1" in -u) shift 2 ;; -H) shift ;; *) break ;; esac; done
+  if [ "${1-}" = sh ]; then
+    [ "${BACKUP_RC:-0}" = 0 ] || return 1
+    mkdir -p "$T/mt5/config-backup" && cp -a "$CONFIG_DIR" "$T/mt5/config-backup/"; return 0
+  fi
+  "$@"
+}
+install() {
+  local a=() d=0
+  while [ $# -gt 0 ]; do
+    case "$1" in -m|-o|-g) shift 2 ;; -d) d=1; shift ;; *) a+=("$1"); shift ;; esac
+  done
+  if [ "$d" = 1 ]; then mkdir -p "${a[@]}"; else cp -f "${a[0]}" "${a[1]}"; fi
+}
+pkill() { echo "pkill $*" >> "$T/calls.log"; }
+pgrep() { echo "${TERMINALS:-1}"; }
+chmod() { :; }
+unit() { local n=$1; [[ $n == *.* ]] || n=$n.service; echo "$n"; }
+systemctl() {
+  echo "$*" >> "$T/calls.log"
+  case "$1" in
+    list-units) [ -z "${ENGINE_ACTIVE:-}" ] || echo "goldbot-engine@icm-demo.service loaded active running x" ;;
+    is-active) [ -e "$T/act/$(unit "${@: -1}")" ] || return 3 ;;
+    is-enabled) [ -e "$T/en/$(unit "${@: -1}")" ] || return 1 ;;
+    enable) shift; [ "${1-}" != "--now" ] || shift; touch "$T/en/$(unit "$1")" ;;
+    disable) rm -f "$T/en/$(unit "${@: -1}")" ;;
+    show) echo "${NRESTARTS:-0}" ;;
+  esac
+  return 0
+}
+touch "$T/en/goldbot-bridge@icm-demo.service"
+main "$@"
+"""
+
+
+def _remote(tmp: Path) -> str:
+    r = tmp / "remote"
+    ops = r / "goldbot" / "ops" / "linux"
+    (ops / "systemd").mkdir(parents=True)
+    for u in UNITS:
+        shutil.copy(LINUX / "systemd" / u, ops / "systemd" / u)
+    for s in SCRIPTS:
+        shutil.copy(LINUX / s, ops / s)
+    for c in (["init", "-q"], ["add", "-A"],
+              ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"]):
+        subprocess.run(["git", "-C", str(r), *c], check=True, capture_output=True)
+    return subprocess.run(["git", "-C", str(r), "rev-parse", "HEAD"], check=True, capture_output=True,
+                          text=True).stdout.strip()
+
+
+@pytest.fixture()
+def box(tmp_path: Path):
+    sha = _remote(tmp_path)
+    (tmp_path / "mt5" / "Config").mkdir(parents=True)
+    (tmp_path / "mt5" / "Config" / "accounts.ini").write_text(SECRET)
+    (tmp_path / "etc").mkdir()
+    (tmp_path / "etc" / "role").write_text("mt5\n")
+    (tmp_path / "deploy").write_text('#!/bin/sh\necho "deployed $*" >> "$T/calls.log"\nexit ${DEPLOY_RC:-0}\n')
+    (tmp_path / "deploy").chmod(0o755)
+    (tmp_path / "bootid").write_text("boot-1\n")
+    (tmp_path / "mt5head").write_text(OLD + "\n")
+    (tmp_path / "sbin").mkdir()
+    probe = tmp_path / "sbin" / "goldbot-bridge-probe"
+    probe.write_text('#!/bin/sh\necho "${PROBE:-ok}"\n')
+    probe.chmod(0o755)
+    return tmp_path, sha
+
+
+def run(box, *args, **env):
+    tmp, _ = box
+    e = {"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "SCRIPT": str(SCRIPT), "T": str(tmp), **env}
+    p = subprocess.run(["bash", "-c", HARNESS, "h", *args], capture_output=True, text=True, env=e)
+    return p.returncode, p.stdout + p.stderr
+
+
+def calls(tmp: Path) -> str:
+    f = tmp / "calls.log"
+    return f.read_text() if f.exists() else ""
+
+
+def test_shellcheck_clean():
+    sc = shutil.which("shellcheck")
+    if sc is None:
+        pytest.skip("shellcheck not installed")
+    assert subprocess.run([sc, str(SCRIPT)], capture_output=True).returncode == 0
+
+
+def test_bad_arguments_refused(box):
+    _, sha = box
+    assert run(box, "nonsense", sha)[0] == 2
+    assert run(box, "precheck", "abc")[0] == 2
+    assert run(box, "precheck", sha, "--force")[0] == 2
+
+
+@pytest.mark.parametrize("now", ["11000", "11200", "50100", "52229", "72100", "72359", "10900"])
+def test_market_open_refuses(box, now):
+    tmp, sha = box
+    rc, out = run(box, "precheck", sha, *FLAGS, NOW=now)
+    assert rc == 1 and "FAIL   market closed" in out
+    assert not (tmp / "mt5" / "config-backup").exists()
+
+
+@pytest.mark.parametrize("now", ["60000", "62359", "52230", "70000", "72059"])
+def test_market_closed_passes(box, now):
+    assert run(box, "precheck", box[1], *FLAGS, NOW=now)[0] == 0
+
+
+def test_attestations_and_active_engine_refuse(box):
+    tmp, sha = box
+    rc, out = run(box, "precheck", sha, "--engine-stopped")
+    assert rc == 1 and "FAIL   book flat" in out
+    rc, out = run(box, "precheck", sha, "--book-flat")
+    assert rc == 1 and "FAIL   engine stopped" in out
+    rc, out = run(box, "precheck", sha, *FLAGS, ENGINE_ACTIVE="1")
+    assert rc == 1 and "FAIL   no engine unit active" in out
+    assert not (tmp / "mt5" / "config-backup").exists()
+
+
+def test_not_root_and_wrong_role_and_low_disk_refuse(box):
+    tmp, sha = box
+    assert "FAIL   running as root" in run(box, "precheck", sha, *FLAGS, NOT_ROOT="1")[1]
+    assert "FAIL   free disk" in run(box, "precheck", sha, *FLAGS, FREE_MB="10")[1]
+    (tmp / "etc" / "role").write_text("brain\n")
+    assert "FAIL   goldbot-deploy installed" in run(box, "precheck", sha, *FLAGS)[1]
+
+
+def test_precheck_backs_up_once_and_prints_no_secret(box):
+    tmp, sha = box
+    rc, out = run(box, "precheck", sha, *FLAGS)
+    assert rc == 0 and "ALL PASS" in out and "made" in out
+    assert (tmp / "mt5" / "config-backup" / "Config" / "accounts.ini").read_text() == SECRET
+    (tmp / "mt5" / "Config" / "accounts.ini").write_text("changed")
+    rc, out2 = run(box, "precheck", sha, *FLAGS)
+    assert rc == 0 and "exists, kept" in out2
+    assert (tmp / "mt5" / "config-backup" / "Config" / "accounts.ini").read_text() == SECRET
+    assert SECRET not in out + out2
+
+
+def test_install_order_and_results(box):
+    tmp, sha = box
+    rc, out = run(box, "install", sha, *FLAGS)
+    assert rc == 0, out
+    c = calls(tmp)
+    assert f"deployed {sha}" in c
+    assert (c.index("deployed") < c.index("daemon-reload") < c.index("pkill")
+            < c.index("enable goldbot-mt5-terminal@icm-demo"))
+    assert "stop goldbot-mt5-terminal-check.service" in c
+    assert "pkill -u mt5 -f terminal64[.]exe" in c
+    for u in UNITS:
+        assert (tmp / "units" / u).read_text() == (LINUX / "systemd" / u).read_text()
+    for src, dst in SCRIPTS.items():
+        assert (tmp / "sbin" / dst).read_text() == (LINUX / src).read_text()
+    assert "enable --now goldbot-bridge-watchdog" not in c          # the timer stays off until post-reboot
+    assert (tmp / "state" / "previous-sha").read_text().strip() == OLD
+    assert "sudo reboot" in out and SECRET not in out
+
+
+def test_install_twice_keeps_previous_sha(box):
+    tmp, sha = box
+    assert run(box, "install", sha, *FLAGS)[0] == 0
+    (tmp / "mt5head").write_text(sha + "\n")
+    assert run(box, "install", sha, *FLAGS)[0] == 0
+    assert (tmp / "state" / "previous-sha").read_text().strip() == OLD
+
+
+def test_install_refusal_changes_nothing(box):
+    tmp, sha = box
+    assert run(box, "install", sha, "--book-flat")[0] == 1
+    assert "deployed" not in calls(tmp)
+    assert not (tmp / "units" / "goldbot-bridge@.service").exists()
+
+
+def test_deploy_failure_stops_before_units(box):
+    tmp, sha = box
+    rc, out = run(box, "install", sha, *FLAGS, DEPLOY_RC="1")
+    assert rc == 1 and "FAIL   goldbot-deploy" in out
+    assert not (tmp / "units" / "goldbot-bridge@.service").exists()
+
+
+def test_install_refuses_a_sha_the_remote_lacks(box):
+    tmp, _ = box
+    rc, out = run(box, "install", "b" * 40, *FLAGS)
+    assert rc == 1 and "FAIL   root clone at sha" in out
+    assert not (tmp / "units" / "goldbot-bridge@.service").exists()
+
+
+def _installed(box):
+    tmp, sha = box
+    assert run(box, "install", sha, *FLAGS)[0] == 0
+    probe = tmp / "sbin" / "goldbot-bridge-probe"          # install put the real probe there; the fake answers instead
+    probe.write_text('#!/bin/sh\necho "${PROBE:-ok}"\n')
+    for u in ("goldbot-xvfb", "goldbot-mt5-terminal@icm-demo", "goldbot-bridge@icm-demo"):
+        (tmp / "act" / f"{u}.service").touch()
+    (tmp / "mt5head").write_text(sha + "\n")
+    (tmp / "bootid").write_text("boot-2\n")
+
+
+def test_post_reboot_needs_install_and_a_reboot(box):
+    tmp, sha = box
+    rc, out = run(box, "post-reboot", sha)
+    assert rc == 1 and "FAIL   install phase recorded" in out
+    assert not (tmp / "etc" / "rollback-floor").exists()
+    assert run(box, "install", sha, *FLAGS)[0] == 0
+    rc, out = run(box, "post-reboot", sha)
+    assert rc == 1 and "FAIL   machine rebooted" in out
+    assert not (tmp / "etc" / "rollback-floor").exists()
+
+
+def test_post_reboot_pass_enables_timer_and_sets_floor(box):
+    tmp, sha = box
+    _installed(box)
+    rc, out = run(box, "post-reboot", sha)
+    assert rc == 0, out
+    assert (tmp / "etc" / "rollback-floor").read_text().strip() == sha
+    assert "enable --now goldbot-bridge-watchdog@icm-demo.timer" in calls(tmp)
+    rc, out = run(box, "post-reboot", sha)                                   # idempotent
+    assert rc == 0 and "already set" in out
+
+
+@pytest.mark.parametrize("env,row", [
+    ({"TERMINALS": "2"}, "exactly one terminal64.exe"),
+    ({"TERMINALS": "0"}, "exactly one terminal64.exe"),
+    ({"PROBE": "not_logged_in"}, "bridge /health"),
+])
+def test_post_reboot_failure_changes_nothing(box, env, row):
+    tmp, sha = box
+    _installed(box)
+    rc, out = run(box, "post-reboot", sha, **env)
+    assert rc == 1 and f"FAIL   {row}" in out
+    assert not (tmp / "etc" / "rollback-floor").exists()
+    assert "enable --now goldbot-bridge-watchdog" not in calls(tmp)
+
+
+def test_post_reboot_inactive_unit_fails(box):
+    tmp, sha = box
+    _installed(box)
+    (tmp / "act" / "goldbot-bridge@icm-demo.service").unlink()
+    rc, out = run(box, "post-reboot", sha)
+    assert rc == 1 and "FAIL   active: goldbot-bridge@icm-demo" in out
+    assert not (tmp / "etc" / "rollback-floor").exists()
+
+
+def test_existing_different_floor_is_not_overwritten(box):
+    tmp, sha = box
+    _installed(box)
+    (tmp / "etc" / "rollback-floor").write_text("c" * 40 + "\n")
+    rc, out = run(box, "post-reboot", sha)
+    assert rc == 1 and "FAIL   rollback floor" in out
+    assert (tmp / "etc" / "rollback-floor").read_text().strip() == "c" * 40
