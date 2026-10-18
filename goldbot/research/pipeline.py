@@ -28,7 +28,8 @@ from goldbot.specialists.base import FEATURE_SEED_KEY, AgentIdentity, Specialist
 
 # Features that need an external input in ctx. They are not in the default set, so the default feature version (the
 # one the live engine builds) does not depend on whether that data happens to be loaded.
-OPT_IN_FEATURES = ("macro", "macro_drivers", "calendar_events", "tod_periodicity", "smc_replica")
+OPT_IN_FEATURES = ("macro", "macro_drivers", "calendar_events", "tod_periodicity", "smc_replica", "price_action",
+                   "price_action_patterns", "price_action_candles")
 DEFAULT_FEATURE_NAMES = [n for n in FEATURES if n not in OPT_IN_FEATURES]
 MACRO_FEATURE_NAMES = ["macro_drivers"]
 # the only features computed on higher-timeframe context frames (h1_/h4_/d1_ columns), in research and in the engine;
