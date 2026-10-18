@@ -1,0 +1,5 @@
+id: R61
+requirement: Owner request 2026-10-18 - reproduce every information element of the three chart indicators (box channels, structure, money flow) as our own point-in-time features, with a coverage map and a local render of our replica
+status: implemented
+code: 'goldbot/features/smc_levels.py (trend table, swing zones, period levels, pivots, MA crosses, swing labels, lower-tf FVG), goldbot/features/smc_boxes.py (box break depth / rip, next box, order blocks), goldbot/features/mfi_signals.py (money-flow signals), scripts/replica_render.py (local render), docs/research/indicator-coverage-2026-10-18.md; ReplicaParams.sr_range_window'
+test: tests/test_smc_levels.py; tests/test_smc_boxes.py; tests/test_mfi_signals.py

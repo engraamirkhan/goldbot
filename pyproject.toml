@@ -26,6 +26,8 @@ dependencies = [
 [project.optional-dependencies]
 # Windows VPS only: the official MetaTrader5 package talks to a running terminal.
 live = ["MetaTrader5>=5.0.45; sys_platform == 'win32'", "python-telegram-bot>=21"]
+# Local-only chart rendering (scripts/replica_render.py); never imported by goldbot/.
+viz = ["matplotlib>=3.8"]
 dev = [
     "pytest>=8",
     "pytest-xdist>=3.5",
@@ -78,7 +80,7 @@ strict_equality = true
 
 [[tool.mypy.overrides]]
 # third-party packages without type information
-module = ["lightgbm.*", "sklearn.*", "duckdb.*", "MetaTrader5.*", "keyring.*", "telegram.*", "pyotp.*", "polars.*", "structlog.*", "scipy.*", "pyarrow.*", "uvicorn.*"]
+module = ["lightgbm.*", "sklearn.*", "duckdb.*", "MetaTrader5.*", "keyring.*", "telegram.*", "pyotp.*", "polars.*", "structlog.*", "scipy.*", "pyarrow.*", "uvicorn.*", "matplotlib.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
