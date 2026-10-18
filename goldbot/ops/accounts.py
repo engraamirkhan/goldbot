@@ -34,11 +34,12 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 import yaml
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from goldbot.base import Record, write_private
 from goldbot.config import ROOT
 from goldbot.data.timeutil import server_zone
+from goldbot.risk.limits_profile import RiskOverrides
 
 ACCOUNTS_FILE = ROOT / "config" / "accounts.yaml"
 ACCOUNT_ID_LOGIN = re.compile(r"\d{5,}")      # an account name with this could carry an MT5 login: refused at load
@@ -73,6 +74,9 @@ class Account(Record):
     # the owner's declared account type: the baseline until the classifier stores a measured class (it keeps running;
     # a measured class that disagrees makes the stricter one win and health warns: execution/classifier.effective_class)
     account_class: Literal["raw", "standard"] | None = None
+    # ADR 0032: the owner's demo ceilings ("approve demo risk limits: daily cap £50, min-lot cap 1%, weekly 10%, demo
+    # only", 2026-10-18). Accepted on a demo account only, and only next to daily_loss_limit_abs (which still binds)
+    risk_overrides: RiskOverrides | None = None
 
     # backstop for records built outside load_accounts: validation errors never carry the input (names, logins)
     model_config = ConfigDict(hide_input_in_errors=True)      # merged with Record's config by pydantic
@@ -93,6 +97,17 @@ class Account(Record):
         except Exception as exc:
             raise ValueError(f"server_tz {v!r} is neither NY+7 nor an IANA zone ({type(exc).__name__})") from exc
         return v
+
+    @model_validator(mode="after")
+    def _overrides_demo_only(self) -> Account:
+        """ADR 0032: "demo only". risk_overrides on any other mode is refused at load, never ignored silently; and the
+        5% ceiling is safe only under the account's absolute daily limit (ADR 0004: min of the two applies)."""
+        if self.risk_overrides is not None:
+            if self.mode != "demo":
+                raise ValueError("risk_overrides are allowed on demo accounts only (ADR 0032)")
+            if self.daily_loss_limit_abs is None:
+                raise ValueError("risk_overrides need daily_loss_limit_abs on the same account (ADR 0004, ADR 0032)")
+        return self
 
     @property
     def is_live(self) -> bool:
@@ -211,7 +226,8 @@ def load_accounts(path: Path | None = None) -> dict[str, Account]:
             login = int(stored) if stored and stored.strip().isdigit() else None
         out[aid] = Account(account_id=aid, broker=a["broker"], mode=a["mode"], server=a["server"], login=login, terminal_path=a["terminal_path"],
                            server_tz=a["server_tz"], symbol=a["symbol"], magic_base=a["magic_base"], enabled=bool(a.get("enabled", False)),
-                           daily_loss_limit_abs=a.get("daily_loss_limit_abs"), account_class=a.get("account_class"))
+                           daily_loss_limit_abs=a.get("daily_loss_limit_abs"), account_class=a.get("account_class"),
+                           risk_overrides=a.get("risk_overrides"))
     return out
 
 

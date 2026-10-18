@@ -19,6 +19,13 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   unknown reason still "Needs you". RiskGate logic and thresholds unchanged; unknown still blocks. The engine state
   gained `account_class_declared` and `account_class_measured` (golden hashes regenerated).
   A torn classifier file is recorded as `classifier_error` in the nightly row; the other accounts and the costs publish go on.
+- **Demo risk limits as ceilings** (ADR 0032; the owner's approval of 2026-10-18 was relayed and needs confirming at merge).
+  - `icm-demo` has `risk_overrides.ceilings` in config/accounts.yaml: daily 5% (the £50 still binds), weekly 10%, min-lot cap 1%. The overrides are refused on any account that is not demo and can never exceed the approval.
+  - `LimitsController` / `StaticController` / `clamp` are in `goldbot/risk/limits_profile.py`. On a demo account each limit is held within [default .. ceiling]. On live and tiny-live no limit can go above its default. The engine re-reads the limits on every refresh and logs each change to core.db `limits_changes`.
+  - The supervisor's combined caps rise in lockstep only when every enabled account is demo.
+  - Entering the 8% size-down stage reverts the account to the defaults. The revert survives restarts (core.db `limits_state`) until the owner re-arms at a normal stage.
+  - Trades, decisions and shadow trades carry `limits_profile`.
+  - **Open:** the phase gate still counts demo-profile trades. The filter needs owner approval and a quant review (ADR 0032, Consequences).
 - **Deploy status false alarm fixed (SRE).** `goldbot-deploy` leaves the engine-derived checks (engine, engine_loop, tick_errors; reconcile stays compared, it also reports ledger mismatches) of an engine unit that is disabled/inactive at the baseline out of the worse-comparison and records "engine stopped for the deploy: <account>"; other worsened checks still give `deployed_degraded`. `check_deploy` reports a `deployed_degraded` as ok ("degraded at deploy time (...), now ok") when all named checks read ok in the fresh `health_last.json`; deploys.jsonl is untouched.
 - **H-27 lot-fit overlay in research (implementer, 2026-10-18; opt-in, not yet reviewed by quant).** Playbook
   small-account-playbook-2026-10-18 section 3: research no longer claims £ from trades the account cannot take.

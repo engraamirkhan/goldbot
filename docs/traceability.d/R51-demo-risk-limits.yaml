@@ -1,0 +1,5 @@
+id: R51
+requirement: 'ADR 0032: demo-only risk ceilings (daily 5% under the £50, weekly 10%, min-lot cap 1%), clamped to [default .. ceiling]; never above the defaults on live or tiny-live; supervisor caps in lockstep; 8% size-down reverts until the owner re-arms; records tagged with limits_profile'
+status: implemented
+code: goldbot/risk/limits_profile.py; goldbot/ops/accounts.py Account._overrides_demo_only; goldbot/ops/services/engine.py engine_limits_policy; goldbot/engine/runner.py Engine._apply_limits, _limits_after_stage, _reset_limits; goldbot/risk/supervisor.py SupervisorLimits.caps; goldbot/db/migrations.py CORE v3; config/accounts.yaml icm-demo.risk_overrides
+test: tests/test_demo_risk_limits.py

@@ -281,6 +281,23 @@ CORE: tuple[Migration, ...] = (
                {_BODY}
            ) STRICT""",
     )),
+    # additive (ADR 0032): the demo limits' revert (one row per account: set at the 8% size-down stage, cleared only by
+    # the owner's re-arm) and the append-only log of every change of an account's current limits
+    # (goldbot/risk/limits_profile.py). A release without them never reads them; its loader also never reads
+    # accounts.yaml's risk_overrides, so a rollback trades the default limits (the strict side)
+    Migration(version=3, name="limits_profile", additive=True, statements=(
+        f"""CREATE TABLE IF NOT EXISTS limits_state (
+               account_id TEXT PRIMARY KEY,
+               ts_ns INTEGER NOT NULL,
+               {_BODY}
+           ) STRICT""",
+        f"""CREATE TABLE IF NOT EXISTS limits_changes (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               account_id TEXT NOT NULL,
+               ts_ns INTEGER NOT NULL,
+               {_BODY}
+           ) STRICT""",
+    )),
 )
 
 MIGRATIONS: dict[DbKind, tuple[Migration, ...]] = {"core": CORE, "aux": AUX}

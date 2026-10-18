@@ -1070,6 +1070,20 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
   check clears when the engine reads the whole account flat. Outside market hours it stays a WARN: the closes go out
   when the market opens.
 
+### Demo risk limits (ADR 0032)
+
+* `icm-demo` trades with higher limits than the defaults: daily loss cap 5% (and never more than the £50 daily limit),
+  weekly cap 10%, and one 0.01 lot allowed when it risks at most 1%. These are the ceilings you approved on
+  2026-10-18. They are set in config/accounts.yaml under `risk_overrides`, apply to demo accounts only, and cannot be
+  set higher there.
+* If the account drops 8% below its high-water mark (the size-down stage), it goes back to the default limits by
+  itself and stays there, restarts included. The trade journal records `limits_reverted`, and the engine state file
+  shows `limits_reverted: true`.
+* To go back to the demo limits, wait until the account is out of size-down (the dashboard shows the stage as
+  normal), then **re-arm** on the dashboard as above. A re-arm while the account is still in size-down or halted is
+  refused (`limits_reset_refused`); re-arm again once the stage is normal.
+* Live and tiny-live accounts never use these limits.
+
 
 ### Auto mode (entries without your click)
 

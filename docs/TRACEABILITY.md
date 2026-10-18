@@ -18,12 +18,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 212 |
+| implemented | 213 |
 | partial | 19 |
 | missing | 2 |
 | deviates | 6 |
 | in review | 10 |
-| **total** | **249** |
+| **total** | **250** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -83,6 +83,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | R48 | The N1 `tod_periodicity` feature group is opt-in and point in time (O-4 amendment 2026-10-18, BACKLOG 89): six columns (`slot_mean_ret_{5,10,20}d`, `slot_hit_rate_20d`, `slot_t_20d`, `slot_ret_over_atr`) from the same 30-minute UTC slot on earlier days only (a 15m bar maps to the slot containing its open), `available_utc` = the prior day's slot close, joined with `asof_join`; `lookahead_check` reports 0 columns; its own family (own group, not inside `activity`); never in `DEFAULT_FEATURE_NAMES`, so `f-079deacc61`, `f-51ac5ebabb` and every hashed row are unchanged | implemented | goldbot/features/tod_periodicity.py (`enable`, `f_tod_periodicity`, `slot_start`, `slot_of_day`); goldbot/research/pipeline.py `OPT_IN_FEATURES` | tests/test_tod_periodicity.py (mapping and DST, own-day exclusion, Monday/Friday, missing bar, truncation, lookahead_check, default list and hashes unchanged, group map and group size) |
 | R49 | Research trials run in parallel; the registry stays the single, serialized source of N (every trial counted, deflated Sharpe restated on the final count) | implemented (in review) | .github/workflows/research.yml, goldbot/research/cells.py, goldbot/research/gates.py (dsr_check) | tests/test_research_cells.py, tests/test_registry_release.py |
 | R50 | "bounded feature and parameter search, not discovery of novel strategies" (DESIGN Bounded research loop); owner 2026-10-18: backtest strategies on multiple timeframes in parallel, continuously, keeping those that work | partial: phase 1 generator and queue; the schedule only reports until research.yml takes a batch | goldbot/research/generator.py `generate`, `batch`, `sizing_feasible`; scripts/research_queue.py; goldbot/config.py `ResearchSettings.loop_trials_per_run`, `loop_equity_usd`; .github/workflows/research-loop.yml; docs/plans/continuous-research-loop.md | tests/test_research_generator.py (grid determinism, check_founder_config, tried hashes skipped, batch size, screening/retired excluded, min-lot 1.2x boundary, window ends at the holdout, unreadable registry yields no batch) |
+| R51 | ADR 0032: demo-only risk ceilings (daily 5% under the £50, weekly 10%, min-lot cap 1%), clamped to [default .. ceiling]; never above the defaults on live or tiny-live; supervisor caps in lockstep; 8% size-down reverts until the owner re-arms; records tagged with limits_profile | implemented | goldbot/risk/limits_profile.py; goldbot/ops/accounts.py Account._overrides_demo_only; goldbot/ops/services/engine.py engine_limits_policy; goldbot/engine/runner.py Engine._apply_limits, _limits_after_stage, _reset_limits; goldbot/risk/supervisor.py SupervisorLimits.caps; goldbot/db/migrations.py CORE v3; config/accounts.yaml icm-demo.risk_overrides | tests/test_demo_risk_limits.py |
 
 Risk analytics (reporting tools, not design rows, so the counts are unchanged): `goldbot/research/ruin.py`
 (`run.py ruin`, playbook G-5) simulates R against the R9/R11/R13/R14 limits read from `config/settings.yaml`, applying

@@ -73,6 +73,9 @@ class ShadowTrade(Record):
     mfe_utc: UtcTimestamp | None = None
     mae_r: float | None = None
     mfe_r: float | None = None
+    # ADR 0032: the host engine's limits profile when the candidate fired (shadow trades are unsized, so the limits do
+    # not change them; tagged so no evidence set mixes profiles). None: an older book
+    limits_profile: str | None = None
 
 
 class VersionBook(Record):
@@ -101,7 +104,8 @@ class ShadowBook:
                    target_atr: float, stop_atr: float, max_bars: int, p: float, timeframe: str = "15m",
                    threshold: float | None = None, taken: bool = True, p_raw: float | None = None,
                    policy: ExitPolicy | None = None, signal_close: pd.Timestamp | None = None,
-                   scored_feature_version: str | None = None) -> ShadowTrade | None:
+                   scored_feature_version: str | None = None,
+                   limits_profile: str | None = None) -> ShadowTrade | None:
         """signal_close: when the signal bar closed (its visible_at; default bar_ts + timeframe), which the hard-flat
         deadline counts from, as the labels do."""
         if not np.isfinite(atr_usd) or atr_usd <= 0:
@@ -120,7 +124,8 @@ class ShadowBook:
                         stop=stop, target=entry + side * target_atr * atr_usd,
                         max_bars=max_bars, p=p, timeframe=timeframe, threshold=threshold, taken=taken, p_raw=p_raw,
                         policy=policy if state is not None else None, atr_usd=atr_usd if state is not None else None,
-                        state=state, scored_feature_version=scored_feature_version)
+                        state=state, scored_feature_version=scored_feature_version,
+                        limits_profile=limits_profile)
         book.open.append(t)
         return t
 

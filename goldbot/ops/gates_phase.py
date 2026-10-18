@@ -74,6 +74,7 @@ from goldbot.research.registry import (
     promotion_refusal,
     row_hash,
 )
+from goldbot.risk.limits_profile import LimitsTag
 
 CLOSED_TRADES_FILE = "closed_trades.jsonl"
 EVIDENCE_FILE = "gate_evidence.json"
@@ -164,6 +165,11 @@ class ClosedTrade(FrozenRecord):
     # return side * (exit - entry) / entry, which carries no commission or swap whatever pnl_basis says (the broker's
     # deals on a non-USD account with no conversion). None on records from before the field (read by pnl_basis alone)
     ret_basis: Literal["pnl", "price"] | None = None
+    # ADR 0032: the limits profile the entry was decided under ("default" or the owner's demo profile, e.g.
+    # "demo-2026-10-18") and its limits. None on records from before the field (all of which traded the defaults) and
+    # on adopted orphans; gate evidence must never mix profiles
+    limits_profile: str | None = None
+    limits: LimitsTag | None = None
 
 
 class EntryAudit(FrozenRecord):
@@ -178,6 +184,11 @@ class EntryAudit(FrozenRecord):
     timeframe: str | None = None
     family: str | None = None
     model_version: str | None = None
+    # ADR 0032: the limits profile the entry was decided under ("default" or the owner's demo profile, e.g.
+    # "demo-2026-10-18") and its limits. None on records from before the field (all of which traded the defaults) and
+    # on adopted orphans; gate evidence must never mix profiles
+    limits_profile: str | None = None
+    limits: LimitsTag | None = None
 
 
 class GateProgress(FrozenRecord):

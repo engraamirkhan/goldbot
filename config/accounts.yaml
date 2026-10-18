@@ -30,6 +30,17 @@ accounts:
     # blocked as "unknown" while the classifier gathers ticks. Measurement keeps running; if it reads standard the
     # stricter class wins and health warns. Leave unset (null) for an account whose type is not known.
     account_class: raw
+    # ADR 0032, the owner 2026-10-18: "approve demo risk limits: daily cap £50, min-lot cap 1%, weekly 10%, demo only".
+    # CEILINGS, not targets: the RiskGate reads the controller's current limits, each clamped to [settings default ..
+    # ceiling]; today's controller (StaticController) returns the ceilings. daily 0.05 = £50 at £1,000 and never above
+    # daily_loss_limit_abs (the smaller of the two applies); min_lot_risk_cap lets the £1,000 account place 0.01 lot.
+    # The open positions' stop risk counts toward the £50 under this profile. The 8% size-down stage drops back to the
+    # defaults until the owner re-arms (TOTP) at a normal stage. Refused on any account that is not mode: demo; the
+    # values cannot exceed the owner's approval (goldbot/risk/limits_profile.py RiskCeilings). Records are tagged
+    # `limits_profile: demo-2026-10-18`, kept apart from default-profile gate evidence.
+    risk_overrides:
+      profile: demo-2026-10-18
+      ceilings: { daily: 0.05, weekly: 0.10, min_lot_risk_cap: 0.01 }
   vantage-demo:
     broker: vantage
     mode: demo
