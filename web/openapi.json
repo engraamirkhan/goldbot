@@ -2826,6 +2826,504 @@
     "title": "JobRow",
     "type": "object"
    },
+   "LimitAccount": {
+    "description": "One account's risk limits now, from what its engine publishes (state/engine_<account>.json) and the revert in\ncore.db `limits_state`. Money is in `currency`; percentages are fractions. Null = the engine does not say.",
+    "properties": {
+     "absolute_daily_limit": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Absolute Daily Limit"
+     },
+     "account_id": {
+      "title": "Account Id",
+      "type": "string"
+     },
+     "adr": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Adr"
+     },
+     "balance": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Balance"
+     },
+     "cap_hit": {
+      "enum": [
+       "none",
+       "daily",
+       "weekly"
+      ],
+      "title": "Cap Hit",
+      "type": "string"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
+     "daily_cap_pct": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Daily Cap Pct"
+     },
+     "daily_limit": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Daily Limit"
+     },
+     "daily_resets_utc": {
+      "format": "date-time",
+      "title": "Daily Resets Utc",
+      "type": "string"
+     },
+     "daily_used": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Daily Used"
+     },
+     "day_start_equity": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Day Start Equity"
+     },
+     "error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Error"
+     },
+     "last_change": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/LimitChange"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "min_lot": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Min Lot"
+     },
+     "min_lot_risk": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Min Lot Risk"
+     },
+     "min_lot_risk_cap": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Min Lot Risk Cap"
+     },
+     "mode": {
+      "enum": [
+       "demo",
+       "live",
+       "paper"
+      ],
+      "title": "Mode",
+      "type": "string"
+     },
+     "profile": {
+      "title": "Profile",
+      "type": "string"
+     },
+     "revert_active": {
+      "title": "Revert Active",
+      "type": "boolean"
+     },
+     "revert_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Revert Reason"
+     },
+     "revert_since": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Revert Since"
+     },
+     "source": {
+      "enum": [
+       "static",
+       "adaptive",
+       "revert",
+       "owner",
+       "default",
+       "fault"
+      ],
+      "title": "Source",
+      "type": "string"
+     },
+     "stale": {
+      "title": "Stale",
+      "type": "boolean"
+     },
+     "updated_utc": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Updated Utc"
+     },
+     "week_start_equity": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Week Start Equity"
+     },
+     "weekly_cap_pct": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Weekly Cap Pct"
+     },
+     "weekly_limit": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Weekly Limit"
+     },
+     "weekly_resets_utc": {
+      "format": "date-time",
+      "title": "Weekly Resets Utc",
+      "type": "string"
+     },
+     "weekly_used": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Weekly Used"
+     }
+    },
+    "required": [
+     "account_id",
+     "mode",
+     "profile",
+     "source",
+     "adr",
+     "updated_utc",
+     "stale",
+     "currency",
+     "balance",
+     "day_start_equity",
+     "week_start_equity",
+     "daily_cap_pct",
+     "daily_limit",
+     "daily_used",
+     "daily_resets_utc",
+     "absolute_daily_limit",
+     "weekly_cap_pct",
+     "weekly_limit",
+     "weekly_used",
+     "weekly_resets_utc",
+     "min_lot",
+     "min_lot_risk",
+     "min_lot_risk_cap",
+     "revert_active",
+     "revert_since",
+     "revert_reason",
+     "cap_hit",
+     "last_change",
+     "error"
+    ],
+    "title": "LimitAccount",
+    "type": "object"
+   },
+   "LimitChange": {
+    "description": "One limit of one account that moved (goldbot/ops/limits_log.py: core.db ADR 0032 `limits_changes`, diffed per\nfield, and ADR 0031 `adaptive_changes`). Values are fractions of equity; null = the minimum-lot exception off.",
+    "properties": {
+     "account_id": {
+      "title": "Account Id",
+      "type": "string"
+     },
+     "adr": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Adr"
+     },
+     "field": {
+      "enum": [
+       "daily_cap",
+       "weekly_cap",
+       "min_lot_risk_cap",
+       "supervisor_daily_cap",
+       "supervisor_weekly_cap"
+      ],
+      "title": "Field",
+      "type": "string"
+     },
+     "new_value": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "New Value"
+     },
+     "old_value": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Old Value"
+     },
+     "reason": {
+      "title": "Reason",
+      "type": "string"
+     },
+     "source": {
+      "enum": [
+       "static",
+       "adaptive",
+       "revert",
+       "owner",
+       "default",
+       "fault"
+      ],
+      "title": "Source",
+      "type": "string"
+     },
+     "ts": {
+      "format": "date-time",
+      "title": "Ts",
+      "type": "string"
+     },
+     "unit": {
+      "const": "fraction_of_equity",
+      "default": "fraction_of_equity",
+      "title": "Unit",
+      "type": "string"
+     }
+    },
+    "required": [
+     "account_id",
+     "ts",
+     "field",
+     "old_value",
+     "new_value",
+     "source",
+     "reason",
+     "adr"
+    ],
+    "title": "LimitChange",
+    "type": "object"
+   },
+   "LimitsSupervisorView": {
+    "description": "The supervisor's combined caps (all accounts together; goldbot/risk/supervisor.py), fractions.",
+    "properties": {
+     "daily_cap": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Daily Cap"
+     },
+     "default_daily": {
+      "title": "Default Daily",
+      "type": "number"
+     },
+     "default_weekly": {
+      "title": "Default Weekly",
+      "type": "number"
+     },
+     "envelope_daily": {
+      "title": "Envelope Daily",
+      "type": "number"
+     },
+     "envelope_weekly": {
+      "title": "Envelope Weekly",
+      "type": "number"
+     },
+     "weekly_cap": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Weekly Cap"
+     }
+    },
+    "required": [
+     "daily_cap",
+     "weekly_cap",
+     "default_daily",
+     "default_weekly",
+     "envelope_daily",
+     "envelope_weekly"
+    ],
+    "title": "LimitsSupervisorView",
+    "type": "object"
+   },
+   "LimitsView": {
+    "properties": {
+     "accounts": {
+      "items": {
+       "$ref": "#/components/schemas/LimitAccount"
+      },
+      "title": "Accounts",
+      "type": "array"
+     },
+     "error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Error"
+     },
+     "generated_utc": {
+      "format": "date-time",
+      "title": "Generated Utc",
+      "type": "string"
+     },
+     "supervisor": {
+      "$ref": "#/components/schemas/LimitsSupervisorView"
+     }
+    },
+    "required": [
+     "generated_utc",
+     "accounts",
+     "supervisor",
+     "error"
+    ],
+    "title": "LimitsView",
+    "type": "object"
+   },
    "LoginRequest": {
     "additionalProperties": false,
     "properties": {
@@ -4228,6 +4726,63 @@
     "title": "ResearchPlanView",
     "type": "object"
    },
+   "ResearchToday": {
+    "description": "Trials of the current UTC day by verdict (docs/ux/limits-and-tradingview.md C), counted server-side so the day\nboundary lives in one place. A pass counts only with its cost treatment (registry.gate_pass_counts).",
+    "properties": {
+     "date_utc": {
+      "format": "date",
+      "title": "Date Utc",
+      "type": "string"
+     },
+     "failed": {
+      "title": "Failed",
+      "type": "integer"
+     },
+     "latest": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/TrialRow"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "no_verdict": {
+      "title": "No Verdict",
+      "type": "integer"
+     },
+     "not_counted": {
+      "title": "Not Counted",
+      "type": "integer"
+     },
+     "passed": {
+      "title": "Passed",
+      "type": "integer"
+     },
+     "quarter_end": {
+      "format": "date",
+      "title": "Quarter End",
+      "type": "string"
+     },
+     "run": {
+      "title": "Run",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "date_utc",
+     "run",
+     "passed",
+     "not_counted",
+     "failed",
+     "no_verdict",
+     "latest",
+     "quarter_end"
+    ],
+    "title": "ResearchToday",
+    "type": "object"
+   },
    "ResearchView": {
     "properties": {
      "budget": {
@@ -4262,6 +4817,9 @@
       ],
       "title": "Plan Error"
      },
+     "today": {
+      "$ref": "#/components/schemas/ResearchToday"
+     },
      "trials": {
       "items": {
        "$ref": "#/components/schemas/TrialRow"
@@ -4281,7 +4839,8 @@
      "trials_total",
      "plan",
      "plan_error",
-     "hypotheses"
+     "hypotheses",
+     "today"
     ],
     "title": "ResearchView",
     "type": "object"
@@ -5737,6 +6296,16 @@
       "title": "Plots Seen",
       "type": "array"
      },
+     "pull_history_bars": {
+      "default": 0,
+      "title": "Pull History Bars",
+      "type": "integer"
+     },
+     "pull_live_24h": {
+      "default": 0,
+      "title": "Pull Live 24H",
+      "type": "integer"
+     },
      "repaint_status": {
       "default": "none",
       "enum": [
@@ -5774,7 +6343,24 @@
     "type": "object"
    },
    "TvStatusView": {
+    "description": "The TradingView card (docs/ux/limits-and-tradingview.md B). TradingView is an optional second feed and never\nstops trading, so no state here is a failure: the screen shows expired, unknown and stale in amber.",
     "properties": {
+     "fix_command": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fix Command"
+     },
+     "history_bars": {
+      "default": 0,
+      "title": "History Bars",
+      "type": "integer"
+     },
      "indicators": {
       "items": {
        "$ref": "#/components/schemas/TvIndicatorStatus"
@@ -5782,9 +6368,42 @@
       "title": "Indicators",
       "type": "array"
      },
+     "last_pull_utc": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Pull Utc"
+     },
+     "live_bars_24h": {
+      "default": 0,
+      "title": "Live Bars 24H",
+      "type": "integer"
+     },
      "now": {
       "title": "Now",
       "type": "string"
+     },
+     "signin": {
+      "default": "not_set_up",
+      "enum": [
+       "ok",
+       "expired",
+       "not_set_up",
+       "unknown"
+      ],
+      "title": "Signin",
+      "type": "string"
+     },
+     "stale": {
+      "default": false,
+      "title": "Stale",
+      "type": "boolean"
      }
     },
     "required": [
@@ -7140,6 +7759,94 @@
      }
     ],
     "summary": "Jobs"
+   }
+  },
+  "/api/limits": {
+   "get": {
+    "operationId": "limits_get_api_limits_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/LimitsView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Limits Get"
+   }
+  },
+  "/api/limits/changes": {
+   "get": {
+    "operationId": "limits_changes_api_limits_changes_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "account",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Account"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 20,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/LimitChange"
+         },
+         "title": "Response Limits Changes Api Limits Changes Get",
+         "type": "array"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Limits Changes"
    }
   },
   "/api/me": {

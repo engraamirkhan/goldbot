@@ -412,3 +412,28 @@ td a { color: inherit; }
 .chart-tab .layout-edit label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
 .chart-tab .layout-edit input { box-sizing: border-box; width: 100%; min-height: 44px; padding: 10px; font-size: 16px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--fg); }
 .chart-tab .layout-edit .err { margin: 0; }
+
+/* Limits, TradingView and Research-today cards (docs/ux/limits-and-tradingview.md): fixed minimum heights so a live
+   update never shifts the layout; red only for a spent cap; TradingView states amber at worst */
+.limit-card { min-height: 380px; display: flex; flex-direction: column; gap: 8px; }
+.limit-card.bad { border-left-color: var(--bad-fill); }
+.limit-card .banner { margin: 0; }
+.limit-row p { margin: 0; }
+.limit-bar { margin: 4px 0; }
+.limit-last { margin-top: auto; border-top: 1px solid var(--line); padding-top: 8px; }
+.limit-last button.link { min-height: 44px; padding: 0; }
+.limit-changes { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 6px; }
+.limits-strip { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 720px) { .limits-strip { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); } }
+.limits-strip .chip { width: 100%; text-align: left; cursor: pointer; color: var(--fg); font: inherit; }
+.feeds-strip { margin-bottom: 8px; }
+.tv-card { min-height: 220px; display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; border-left-color: var(--info-fg); }
+.tv-card p { margin: 0; }
+.tv-counts { display: flex; flex-wrap: wrap; gap: 4px 16px; font-variant-numeric: tabular-nums; }
+.warn-text { color: var(--warn-fg); }
+.tv-cards { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.tv-table { display: none; }
+@media (min-width: 720px) { .tv-table { display: block; } .tv-cards { display: none; } }
+.research-today { min-height: 150px; display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+.research-today p { margin: 0; }
+.research-line { margin: 0 0 12px; }

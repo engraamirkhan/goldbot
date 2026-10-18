@@ -25,10 +25,11 @@ import logging
 import sqlite3
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import pandas as pd
 
+from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.db.connection import connect, write
 
 if TYPE_CHECKING:
@@ -39,6 +40,7 @@ log = logging.getLogger(__name__)
 DB_FILE = "tv_auth.db"
 STALE_HOURS = 36                      # the pull runs at least daily; a day and a half without success is a fault
 # the two keyring entries the pull reads (settings tv_pull.sessionid_key / sessionid_sign_key; RUNBOOK 2.7c)
+SESSIONID_KEY, SESSIONID_SIGN_KEY = "tradingview-sessionid", "tradingview-sessionid-sign"
 SET_COOKIES = ("python -m goldbot.ops.accounts set tradingview-sessionid` and "
                "`python -m goldbot.ops.accounts set tradingview-sessionid-sign")
 NOTICE_TEXT = f"TradingView sign-in expired — on the brain run `{SET_COOKIES}` (hidden prompts, fresh browser cookies)"
@@ -114,15 +116,28 @@ def record_expired(state_dir: Path, now: pd.Timestamp) -> bool:
         conn.close()
 
 
-def check_tv_pull(ctx: HealthContext) -> Check:
-    """tv_pull: WARN when the TradingView sign-in is expired, the pull is stale, or its state is corrupt (counts as
-    expired). Never FAIL: TradingView must never block trading or exits."""
-    from goldbot.ops.health import Check
-    name = "tv_pull"
-    path = Path(ctx.state_dir) / DB_FILE
+class TvSignin(FrozenRecord):
+    """The sign-in as the dashboard and the health check read it. `signin`: not_set_up = no state (the pull never
+    ran, opt-in); unknown = a corrupt state (unreadable file, unknown status, unparsable time), treated as expired."""
+
+    signin: Literal["ok", "expired", "not_set_up", "unknown"]
+    last_ok_utc: UtcTimestamp | None = None
+    age_h: float | None = None            # hours since the last successful pull
+    stale: bool = False                   # ok, but no successful pull for over STALE_HOURS
+    problem: str | None = None            # why the state is unknown
+
+
+def fix_command(sessionid_key: str = SESSIONID_KEY, sign_key: str = SESSIONID_SIGN_KEY) -> str:
+    """The one line the owner runs on the brain to store fresh cookies (two hidden prompts, values never echoed)."""
+    return f"python -m goldbot.ops.accounts set {sessionid_key} && python -m goldbot.ops.accounts set {sign_key}"
+
+
+def signin_state(state_dir: str | Path, now: pd.Timestamp) -> TvSignin:
+    """Read-only: the `tv_auth` row of state/tv_auth.db (never tv.db). Never raises."""
+    path = Path(state_dir) / DB_FILE
     if not path.exists():
-        return Check(name=name, status="ok", reason="no TradingView pull yet (opt-in)")
-    expired = f"TradingView sign-in expired: on the brain run `{SET_COOKIES}`"
+        return TvSignin(signin="not_set_up")
+    last: pd.Timestamp | None = None
     try:
         conn = connect(path, "core")
         try:
@@ -131,17 +146,34 @@ def check_tv_pull(ctx: HealthContext) -> Check:
         finally:
             conn.close()
         if row is None:
-            return Check(name=name, status="ok", reason="no TradingView pull yet (opt-in)")
+            return TvSignin(signin="not_set_up")
         status, last_ok = str(row[0]), row[1]
         if status not in ("ok", "expired"):
             raise ValueError(f"unknown status {status!r}")
+        last = pd.Timestamp(last_ok) if last_ok is not None else None
         if status == "expired":
-            return Check(name=name, status="warn", reason=expired)
-        if last_ok is None:
+            return TvSignin(signin="expired", last_ok_utc=last)
+        if last is None:
             raise ValueError("no last successful pull time")
-        age_h = (pd.Timestamp(ctx.now) - pd.Timestamp(last_ok)).total_seconds() / 3600
+        age_h = (pd.Timestamp(now) - last).total_seconds() / 3600
     except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError) as exc:
-        return Check(name=name, status="warn", reason=f"{expired} (state unreadable: {exc})")
-    if age_h > STALE_HOURS:
-        return Check(name=name, status="warn", reason=f"last successful TradingView pull {age_h:.0f} h ago")
-    return Check(name=name, status="ok", reason=f"last successful TradingView pull {age_h:.1f} h ago")
+        return TvSignin(signin="unknown", last_ok_utc=last, problem=str(exc))
+    return TvSignin(signin="ok", last_ok_utc=last, age_h=age_h, stale=age_h > STALE_HOURS)
+
+
+def check_tv_pull(ctx: HealthContext) -> Check:
+    """tv_pull: WARN when the TradingView sign-in is expired, the pull is stale, or its state is corrupt (counts as
+    expired). Never FAIL: TradingView must never block trading or exits."""
+    from goldbot.ops.health import Check
+    name = "tv_pull"
+    expired = f"TradingView sign-in expired: on the brain run `{SET_COOKIES}`"
+    st = signin_state(ctx.state_dir, ctx.now)
+    if st.signin == "not_set_up":
+        return Check(name=name, status="ok", reason="no TradingView pull yet (opt-in)")
+    if st.signin == "expired":
+        return Check(name=name, status="warn", reason=expired)
+    if st.signin == "unknown":
+        return Check(name=name, status="warn", reason=f"{expired} (state unreadable: {st.problem})")
+    if st.stale:
+        return Check(name=name, status="warn", reason=f"last successful TradingView pull {st.age_h:.0f} h ago")
+    return Check(name=name, status="ok", reason=f"last successful TradingView pull {st.age_h:.1f} h ago")

@@ -266,6 +266,16 @@ AUX: tuple[Migration, ...] = (
                url TEXT NOT NULL
            ) STRICT""",
     )),
+    # additive: how far the Telegram service has announced core.db's limit logs (goldbot/telegram/limits_notices.py:
+    # the last limits_changes and adaptive_changes ids it relayed). A release without it never reads it; one with it
+    # starts at the end of both logs on first start (no replay)
+    Migration(version=12, name="limits_notice_cursor", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS limits_notice_cursor (
+               id INTEGER PRIMARY KEY CHECK (id = 1),
+               limits_id INTEGER NOT NULL,
+               adaptive_id INTEGER NOT NULL
+           ) STRICT""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

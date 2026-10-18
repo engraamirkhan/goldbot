@@ -2,7 +2,7 @@
 Phase 1 fills the routers; the shapes are fixed here so the frontend can start in parallel."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -175,12 +175,98 @@ class TvIndicatorStatus(BaseModel):
     # passed; `last_bar_time` and `alerts_24h` count live alerts only ("" when only an export exists)
     csv_bars: int = 0
     csv_rows: int = 0
+    # whether every history row (chart export and pull_history) has passed the repaint check; "none": no history
     repaint_status: Literal["none", "unvalidated", "validated"] = "none"
+    # the direct pull (ADR 0030; goldbot/data/tv_pull.py): closed bars received live in the last 24 h (pull_live) and
+    # backfilled history (pull_history), counted apart from the webhook alerts above
+    pull_live_24h: int = 0
+    pull_history_bars: int = 0
 
 
 class TvStatusView(BaseModel):
+    """The TradingView card (docs/ux/limits-and-tradingview.md B). TradingView is an optional second feed and never
+    stops trading, so no state here is a failure: the screen shows expired, unknown and stale in amber."""
     now: str
     indicators: list[TvIndicatorStatus]
+    # the direct pull's sign-in (state/tv_auth.db, goldbot/ops/tv_pull_health.py): not_set_up = the pull never ran
+    # (opt-in); unknown = the state is unreadable, treated as expired
+    signin: Literal["ok", "expired", "not_set_up", "unknown"] = "not_set_up"
+    last_pull_utc: datetime | None = None   # the last successful pull
+    stale: bool = False                     # signed in, but no successful pull for over 36 h (one is expected daily)
+    fix_command: str | None = None          # with expired / unknown: the one line to run on the brain (hidden prompts)
+    live_bars_24h: int = 0                  # every indicator: webhook alerts + pull_live bars, last 24 h
+    history_bars: int = 0                   # every indicator: chart-export + pull_history bars
+
+
+# ----------------------------------------------------------------------------- Limits card (read-only)
+LimitSource = Literal["static", "adaptive", "revert", "owner", "default", "fault"]
+
+
+class LimitChange(BaseModel):
+    """One limit of one account that moved (goldbot/ops/limits_log.py: core.db ADR 0032 `limits_changes`, diffed per
+    field, and ADR 0031 `adaptive_changes`). Values are fractions of equity; null = the minimum-lot exception off."""
+    account_id: str
+    ts: datetime
+    field: Literal["daily_cap", "weekly_cap", "min_lot_risk_cap", "supervisor_daily_cap", "supervisor_weekly_cap"]
+    old_value: float | None
+    new_value: float | None
+    unit: Literal["fraction_of_equity"] = "fraction_of_equity"
+    # static: the owner's ADR 0032 ceilings; adaptive: the ADR 0031 rule; revert: the drawdown revert; owner: the
+    # owner's re-arm after a revert; default: the defaults; fault: a controller failure (the defaults, fail safe)
+    source: LimitSource
+    reason: str                             # one plain sentence
+    adr: str | None
+
+
+class LimitAccount(BaseModel):
+    """One account's risk limits now, from what its engine publishes (state/engine_<account>.json) and the revert in
+    core.db `limits_state`. Money is in `currency`; percentages are fractions. Null = the engine does not say."""
+    account_id: str
+    mode: Literal["demo", "live", "paper"]
+    profile: str                            # "default" or the ADR 0032 profile ("demo-2026-10-18")
+    source: LimitSource                     # what set the current values (ADR 0032 static ceilings now)
+    adr: str | None
+    updated_utc: datetime | None            # the engine file's time
+    stale: bool                             # the engine file is over 60 s old
+    currency: str | None
+    balance: float | None
+    day_start_equity: float | None          # what the daily cap is a percentage of (00:00 UTC)
+    week_start_equity: float | None         # what the weekly cap is a percentage of (Sunday 00:00 UTC)
+    daily_cap_pct: float | None
+    daily_limit: float | None               # the gate's: min(daily cap x day-start equity, absolute daily limit)
+    daily_used: float | None                # lost since 00:00 UTC, floating P&L included (gains add room)
+    daily_resets_utc: datetime
+    absolute_daily_limit: float | None      # ADR 0004 (accounts.yaml daily_loss_limit_abs), null when off
+    weekly_cap_pct: float | None
+    weekly_limit: float | None              # weekly cap x week-start equity
+    weekly_used: float | None
+    weekly_resets_utc: datetime             # Sunday 00:00 UTC
+    min_lot: float | None                   # the broker's smallest trade (lots)
+    min_lot_risk: float | None              # that trade's stop risk now, account currency
+    min_lot_risk_cap: float | None          # the minimum-lot exception: most it may risk (fraction); null = off
+    revert_active: bool                     # the 8% revert holds: the defaults until the owner re-arms
+    revert_since: datetime | None
+    revert_reason: str | None
+    cap_hit: Literal["none", "daily", "weekly"]   # a spent cap: new entries stopped, exits keep working
+    last_change: LimitChange | None
+    error: str | None                       # why the limits cannot be shown (the engines fail closed on it)
+
+
+class LimitsSupervisorView(BaseModel):
+    """The supervisor's combined caps (all accounts together; goldbot/risk/supervisor.py), fractions."""
+    daily_cap: float | None                 # now (state/supervisor.json); null when it is not reporting
+    weekly_cap: float | None
+    default_daily: float                    # settings.yaml risk.supervisor_daily_cap / _weekly_cap
+    default_weekly: float
+    envelope_daily: float                   # the CFO's demo envelope (ADR 0032 SUPERVISOR_DEMO_ENVELOPE)
+    envelope_weekly: float
+
+
+class LimitsView(BaseModel):
+    generated_utc: datetime
+    accounts: list[LimitAccount]
+    supervisor: LimitsSupervisorView
+    error: str | None                       # core.db's change log or revert could not be read
 
 
 # ----------------------------------------------------------------------------- auth and users
@@ -711,6 +797,19 @@ class HypothesisDoc(BaseModel):
     note: str | None
 
 
+class ResearchToday(BaseModel):
+    """Trials of the current UTC day by verdict (docs/ux/limits-and-tradingview.md C), counted server-side so the day
+    boundary lives in one place. A pass counts only with its cost treatment (registry.gate_pass_counts)."""
+    date_utc: date
+    run: int                                # trial rows stamped today
+    passed: int                             # passed every gate, costs recorded
+    not_counted: int                        # recorded a pass without its cost treatment
+    failed: int
+    no_verdict: int                         # no gate verdict recorded
+    latest: TrialRow | None
+    quarter_end: date                       # the trial budget (ResearchView.budget) renews the day after
+
+
 class ResearchView(BaseModel):
     generated_utc: datetime
     budget: TrialBudget
@@ -719,6 +818,7 @@ class ResearchView(BaseModel):
     plan: ResearchPlanView | None
     plan_error: str | None
     hypotheses: HypothesisDoc
+    today: ResearchToday
 # ============================================================================= end Health and Research screens
 
 

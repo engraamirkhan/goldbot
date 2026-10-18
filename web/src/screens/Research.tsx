@@ -4,6 +4,7 @@ import {
   failedGates, localDay, localTime, num, signed, utcTitle,
   type HypothesisTable, type ResearchPlanView, type ResearchView, type TrialRow,
 } from "../lib/explain";
+import { ResearchTodayCard } from "./ResearchToday";
 
 function Budget({ b }: { b: ResearchView["budget"] }) {
   const share = b.budget ? Math.min(1, b.used / b.budget) : 1;
@@ -227,6 +228,7 @@ export function Research() {
   const h = v.hypotheses;
   return (
     <section className="explain">
+      <ResearchTodayCard v={v} />
       <Budget b={v.budget} />
       <h2>Research director's plan</h2>
       {v.plan_error && <p className="warn-note">{v.plan_error}</p>}

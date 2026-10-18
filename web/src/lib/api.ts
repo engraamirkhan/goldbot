@@ -38,13 +38,17 @@ export type AttributionView = Schemas["AttributionView"];
 export type AttributionReportView = Schemas["AttributionReportView"];
 export type ResultCell = Schemas["ResultCell"];
 export type TradesSummary = Schemas["TradesSummary"];
+export type LimitsView = Schemas["LimitsView"];
+export type LimitChange = Schemas["LimitChange"];
+export type TvStatusView = Schemas["TvStatusView"];
+export type LimitChangesQuery = NonNullable<operations["limits_changes_api_limits_changes_get"]["parameters"]["query"]>;
 export type CalendarQuery = NonNullable<operations["calendar_api_calendar_get"]["parameters"]["query"]>;
 export type NewsQuery = NonNullable<operations["news_api_news_get"]["parameters"]["query"]>;
 
-/** `?a=1&b=2` from the defined values of a typed query object (the server clamps out-of-range values). */
-function qs(q: Record<string, number | string | undefined>): string {
+/** `?a=1&b=2` from the defined, non-null values of a typed query object (the server clamps out-of-range values). */
+function qs(q: Record<string, number | string | null | undefined>): string {
   const p = new URLSearchParams();
-  for (const [k, v] of Object.entries(q)) if (v !== undefined) p.set(k, String(v));
+  for (const [k, v] of Object.entries(q)) if (v != null) p.set(k, String(v));
   const s = p.toString();
   return s ? `?${s}` : "";
 }
@@ -170,6 +174,10 @@ export const api = {
   gates: () => req<GatesView>("/api/gates"),
   attribution: () => req<AttributionView>("/api/attribution"),
   tradesSummary: () => req<TradesSummary[]>("/api/trades/summary"),
+  // read-only cards (docs/ux/limits-and-tradingview.md): nothing here changes a limit or the TradingView link
+  limits: () => req<LimitsView>("/api/limits"),
+  limitChanges: (q: LimitChangesQuery = {}) => req<LimitChange[]>(`/api/limits/changes${qs(q)}`),
+  tradingview: () => req<TvStatusView>("/api/tradingview"),
 };
 
 export function liveSocket(onEvent: (e: { type: string } & Record<string, unknown>) => void): () => void {
