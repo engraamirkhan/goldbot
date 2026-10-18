@@ -141,13 +141,14 @@ Window = tuple[pd.Timestamp, pd.Timestamp]   # [start, end) in UTC
 def _label(spec: Specialist, bars: pd.DataFrame, bars_1m: pd.DataFrame | None, cands: pd.DataFrame,
            ls: BarrierSpec, a: pd.Series, swap: SwapSpec | None) -> pd.DataFrame:
     """The labels of `cands`: at the signal close, or for a signal known only `spec.entry_delay_s` later (TradingView)
-    at the first 1m open after it (`triple_barrier_delayed`), which needs the 1m bars: refused without them rather
+    at the first 1m open after it (`triple_barrier_delayed`), or for a rule entering at the next bar's open
+    (`spec.entry_at_next_open`, H-45) at that bar's first 1m open; both need the 1m bars: refused without them rather
     than labelled at the close it could not have traded."""
-    if spec.entry_delay_s <= 0:
+    if spec.entry_delay_s <= 0 and not spec.entry_at_next_open:
         return triple_barrier(bars, cands, ls, a, swap=swap, policy=spec.exit_spec)
     if bars_1m is None:
-        raise ValueError(f"{spec.family} enters {spec.entry_delay_s} s after the close: prepare needs its 1m bars "
-                         "(bars_1m=) to label it")
+        when = "at the next bar's open" if spec.entry_delay_s <= 0 else f"{spec.entry_delay_s} s after the close"
+        raise ValueError(f"{spec.family} enters {when}: prepare needs its 1m bars (bars_1m=) to label it")
     return triple_barrier_delayed(bars, bars_1m, cands, ls, a, pd.Timedelta(seconds=spec.entry_delay_s), swap=swap,
                                   policy=spec.exit_spec)
 
@@ -395,12 +396,27 @@ def prepare(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.Data
         labels["atr_sig"] = a.to_numpy()[labels["idx"].to_numpy()]
         labels["target_atr"], labels["stop_atr"], labels["family"] = ls.target_atr, ls.stop_atr, spec.family
         feats = X.drop(columns=["ts_utc"]).iloc[labels["idx"].to_numpy()].reset_index(drop=True)
+        feats = _with_candidate_features(spec, feats, cands, labels)
         feats = feats.replace([np.inf, -np.inf], np.nan)
         feats["side"] = labels["side"].to_numpy()
     if not gross.empty:
         gross["risk"] = _risk_fraction(gross, a, ls.stop_atr)
     return Prepared(spec=spec, labels=labels, gross=gross, feats=feats, feature_version=version, n_bars=len(bars_dec),
                     swap=swap)
+
+
+def _with_candidate_features(spec: Specialist, feats: pd.DataFrame, cands: pd.DataFrame,
+                             labels: pd.DataFrame) -> pd.DataFrame:
+    """`feats` plus the specialist's candidate-borne columns (`Specialist.candidate_features`, fixed at the signal) at
+    each labelled candidate; a declared column the candidates lack is refused (fail closed, never a silent NaN)."""
+    if not spec.candidate_features:
+        return feats
+    missing = [c for c in spec.candidate_features if c not in cands.columns]
+    if missing:
+        raise ValueError(f"{spec.family} declares candidate features its candidates lack: {missing}")
+    by_idx = cands.drop_duplicates("idx").set_index("idx")
+    rows = labels["idx"].to_numpy()
+    return feats.assign(**{c: by_idx[c].reindex(rows).to_numpy(dtype=float) for c in spec.candidate_features})
 
 
 def rule_only(gross: pd.DataFrame, net: pd.DataFrame) -> dict[str, Any]:

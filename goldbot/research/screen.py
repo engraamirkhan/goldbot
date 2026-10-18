@@ -105,6 +105,15 @@ def screen_verdict(rule: dict[str, Any], min_events: int = MIN_EVENTS,
             "gross_t": t, "net_mean_r": n_.get("mean_r"), "net_t": n_.get("t_stat"), "rule_only": rule}
 
 
+def cost_gate(scr: dict[str, Any], threshold_r: float) -> dict[str, Any]:
+    """A pre-registered cost gate read on the screen (H-37, research director ruling 2026-10-18, item 2: "if gross
+    expectancy per trade is below 0.85R on the pre-registered feature screen, retire it"). The threshold is the cost
+    per trade stated before the run, never re-derived from it. Reported with the screen of the same charged trial: a
+    gross mean R is a look at outcomes, and every look that selects rules is a trial (module docstring)."""
+    g = float(scr.get("gross_mean_r", 0.0))
+    return {"threshold_r": float(threshold_r), "gross_mean_r": g, "retire": g < threshold_r}
+
+
 def screen(prep: Prepared | list[Prepared], min_events: int = MIN_EVENTS,
            pass_min_events: int | None = None) -> dict[str, Any]:
     """Screen one prepared configuration, or the union of several (a pooled trial: every member's candidates), with the
@@ -197,4 +206,10 @@ def screen_lines(s: dict[str, Any] | None, skipped: bool = False) -> list[str]:
     for fam, m in (s.get("members") or {}).items():
         out.append(f"- member {fam}: {m['n']:,} events, gross mean R {m['gross_mean_r']:+.3f}, t {m['gross_t']:.2f} "
                    f"({'would pass' if m['passed'] else 'would fail'} alone)")
+    gate = s.get("cost_gate")
+    if gate:
+        verdict = ("**RETIRE** (below the pre-stated cost per trade; no follow-up trial)" if gate["retire"]
+                   else "passes (read the screen and the gates as usual)")
+        out.append(f"- Cost gate (research director ruling 2026-10-18): gross mean R {gate['gross_mean_r']:+.3f} vs "
+                   f"{gate['threshold_r']:.2f} R per trade: {verdict}")
     return out + [""]
