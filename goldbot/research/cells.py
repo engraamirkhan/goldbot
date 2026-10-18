@@ -47,7 +47,14 @@ from pydantic import ValidationError
 from goldbot.base import FrozenRecord, load_record
 from goldbot.research.gates import dsr_check
 from goldbot.research.metrics import DaySummedDsr, DsrInputs
-from goldbot.research.registry import TrialRegistry, n_trials_effective, quarter_of, quarter_trials
+from goldbot.research.registry import (
+    DISCOVERY,
+    PREREGISTERED,
+    TrialRegistry,
+    n_trials_effective,
+    quarter_of,
+    quarter_trials,
+)
 from goldbot.research.registry_sync import _key, merge_rows, read_rows, write_rows
 
 MAX_CELLS = 64                  # one dispatch; GitHub allows 256 matrix jobs, the quarter's trial budget far fewer
@@ -239,10 +246,9 @@ def _label(cell: Mapping[str, Any]) -> str:
     return f"cell {cell['idx']}: {what}"
 
 
-def _failed_row(cell: Mapping[str, Any], error: str) -> dict[str, Any]:
-    """A `failed` trial row for a cell that left no row: the family and config it would have run when they resolve (the
-    queue and `passed_gates` match on them), else the cell's own description. Never passes a gate (status is not
-    "evaluated") and carries no results to read, only the error."""
+def _planned(cell: Mapping[str, Any]) -> tuple[str, str, dict[str, Any], bool]:
+    """The (agent, family, config) a cell was planned to run, and whether they resolved (False: the cell's own
+    description stands in, so it says nothing about what a row should carry)."""
     from goldbot.research.pipeline import pooled_family, pooled_members
     from goldbot.research.preregistration import resolve_variant
     from goldbot.specialists import SPECIALISTS
@@ -257,7 +263,15 @@ def _failed_row(cell: Mapping[str, Any], error: str) -> dict[str, Any]:
             spec = SPECIALISTS[cell["specialist"]](**resolve_variant(cell["specialist"], cell["variant"]))
             agent, config = spec.agent_id, spec.config
     except (ValueError, KeyError, TypeError):
-        pass
+        return agent, family, config, False
+    return agent, family, config, True
+
+
+def _failed_row(cell: Mapping[str, Any], error: str) -> dict[str, Any]:
+    """A `failed` trial row for a cell that left no row: the family and config it would have run when they resolve (the
+    queue and `passed_gates` match on them), else the cell's own description. Never passes a gate (status is not
+    "evaluated") and carries no results to read, only the error."""
+    agent, family, config, _ = _planned(cell)
     with tempfile.TemporaryDirectory() as tmp:
         reg = TrialRegistry(Path(tmp) / "registry.jsonl")
         return reg.record(agent_id=agent, family=family, config=config, feature_version="unknown",
@@ -274,6 +288,35 @@ def _tail(text: str, n: int) -> str:
     return text[-n:] if len(text) > n else text
 
 
+CELL_STATUSES = frozenset({"evaluated", "screened", "holdout", DISCOVERY, PREREGISTERED, FAILED})
+_ROW_TYPES: dict[str, type] = {"trial": int, "ts": str, "agent_id": str, "family": str, "config_hash": str,
+                               "config": dict, "feature_version": str, "rationale": str, "results": dict,
+                               "status": str}
+
+
+def _read_cell_rows(path: Path, cell: Mapping[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    """A cell's rows and, when the artifact cannot be trusted, why (the rows are then []). The artifact is untrusted
+    input: a truncated or foreign `rows.jsonl` fails that cell alone (a failed trial, counted in K), never the job.
+    Each row needs the registry row fields, a status a cell may write (no verdict or withdrawal) and the agent and
+    family the plan gave the cell (a discovery row names its own family)."""
+    try:
+        rows: list[Any] = read_rows(path)
+    except (ValueError, OSError) as e:
+        return [], f"rows.jsonl unreadable: {type(e).__name__}: {e}"
+    agent, family, _, resolved = _planned(cell)
+    for i, r in enumerate(rows):
+        if not isinstance(r, dict):
+            return [], f"row {i} is not an object"
+        bad = [k for k, t in _ROW_TYPES.items() if not isinstance(r.get(k), t) or isinstance(r.get(k), bool)]
+        if bad:
+            return [], f"row {i} fails the registry row schema: {', '.join(bad)}"
+        if r["status"] not in CELL_STATUSES:
+            return [], f"row {i} has status {r['status']!r}, not one a cell may write"
+        if (resolved and r["agent_id"] != agent) or (r["status"] != DISCOVERY and r["family"] != family):
+            return [], f"row {i} is {r['agent_id']}/{r['family']}, the cell was planned as {agent}/{family}"
+    return rows, ""
+
+
 def record(cells_plan: list[dict[str, Any]], artifacts: Path, registry: Path) -> Recorded:
     """Merge every planned cell's rows into `registry` (the fresh copy, fetched under the lock) and restate their DSR
     on the final count. `artifacts/cell-<idx>/` holds `rows.jsonl`, `status.json` ({"exit": code}), `research.log` and
@@ -284,8 +327,10 @@ def record(cells_plan: list[dict[str, Any]], artifacts: Path, registry: Path) ->
     n_failed = n_refused = 0
     for cell in cells_plan:
         d = artifacts / f"cell-{cell['idx']}"
-        rows = read_rows(d / "rows.jsonl")
+        rows, bad_rows = _read_cell_rows(d / "rows.jsonl", cell)
         log = _read(d / "research.log")
+        if bad_rows:
+            log = f"{bad_rows}\n{log}"
         try:
             code = int(json.loads(_read(d / "status.json") or "{}").get("exit", -1))
         except ValueError:
@@ -293,7 +338,7 @@ def record(cells_plan: list[dict[str, Any]], artifacts: Path, registry: Path) ->
         if rows:
             added += rows
             notes[cell["idx"]] = ("ok" if code == 0 else "recorded, then failed", "")
-        elif code > 0 and log and "Traceback" not in log:
+        elif code > 0 and log and "Traceback" not in log and not bad_rows:
             n_refused += 1                         # a SystemExit message: refused before any look at the data
             notes[cell["idx"]] = ("refused (no look, no trial)", _tail(log, ERROR_TAIL))
         else:
@@ -330,7 +375,7 @@ def _reports(cells_plan: list[dict[str, Any]], artifacts: Path, notes: dict[int,
              mine: dict[Any, dict[str, Any]], k: int, used: int) -> list[dict[str, str]]:
     by_cell: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for cell in cells_plan:
-        for r in read_rows(artifacts / f"cell-{cell['idx']}" / "rows.jsonl"):
+        for r in _read_cell_rows(artifacts / f"cell-{cell['idx']}" / "rows.jsonl", cell)[0]:
             if _key(r) in mine:
                 by_cell[cell["idx"]].append(mine[_key(r)])
     bodies: dict[str, list[str]] = defaultdict(list)
