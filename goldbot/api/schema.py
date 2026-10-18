@@ -754,6 +754,28 @@ class ModeChangeResult(BaseModel):
 # ============================================================================= end auto mode
 
 
+# ============================================================================= Chart tab (saved TradingView layouts)
+class ChartLayout(BaseModel):
+    name: str
+    url: str | None         # the owner's layout URL; None for every other role (it identifies the owner's account)
+
+
+class ChartLayoutsView(BaseModel):
+    layouts: list[ChartLayout]
+    can_edit: bool
+
+
+class ChartLayoutIn(ApiRequest):
+    name: str = Field(min_length=1, max_length=40)
+    url: str = Field(max_length=200)
+
+
+class ChartLayoutsRequest(ApiRequest):
+    layouts: list[ChartLayoutIn] = Field(max_length=3)
+    totp: str = Field("", max_length=16)    # the step-up after an email-code sign-in (ADR 0028)
+# ============================================================================= end Chart tab
+
+
 # ============================================================================= Progress tab (W2-3, read-only)
 # docs/ux/progress-screens.md "API gaps", built by goldbot/api/progress.py. Accounts appear by config name with any run
 # of 5+ digits cut to its last two; no operator-typed text, no email, login or host; every time is UTC.

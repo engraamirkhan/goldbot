@@ -390,3 +390,25 @@ td a { color: inherit; }
   background: var(--surface); color: var(--fg); font-size: 14px; cursor: pointer; }
 .entry-banner .pbutton { margin-left: 8px; }
 .banner button { min-height: 44px; min-width: 44px; }   /* sign-in banner: Sign out everywhere and Hide are tap targets at 360 px */
+
+/* Chart tab: the widget box has a fixed height per breakpoint, so the page never shifts as the chart loads */
+.chart-tab h2 { font-size: 18px; margin: 0 0 8px; }
+.chart-tab .intervals { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.chart-tab .intervals button, .chart-tab .layout-links a, .chart-tab .layout-links button, .chart-tab .layout-edit button {
+  min-height: 44px; min-width: 44px; padding: 10px 14px; border-radius: 6px; border: 1px solid var(--line); background: none;
+  color: var(--fg); font-size: 15px; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; cursor: pointer; }
+.chart-tab .intervals button[aria-pressed="true"] { background: var(--info-tint); color: var(--info-fg); border-color: var(--info-fg); font-weight: 600; }
+.chart-tab .layout-links button:disabled { opacity: 0.6; cursor: not-allowed; }
+.chart-tab .layout-links { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+.chart-tab .layout-links a { background: var(--accent); color: #fff; border: 0; font-weight: 600; }
+.chart-tab .layout-links a:focus-visible, .chart-tab button:focus-visible, .chart-tab input:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.chart-box { height: 420px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); position: relative; }
+@media (min-width: 900px) { .chart-box { height: 560px; } }
+.chart-box iframe { height: 100%; width: 100%; border: 0; display: block; }
+.chart-box .fallback { position: absolute; inset: 0; padding: 16px; display: flex; align-items: center; justify-content: center; text-align: center; }
+.chart-tab .note { margin: 12px 0; line-height: 1.45; }
+.chart-tab .layout-edit { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+.chart-tab .layout-edit fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.chart-tab .layout-edit label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.chart-tab .layout-edit input { box-sizing: border-box; width: 100%; min-height: 44px; padding: 10px; font-size: 16px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--fg); }
+.chart-tab .layout-edit .err { margin: 0; }

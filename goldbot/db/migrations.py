@@ -257,6 +257,15 @@ AUX: tuple[Migration, ...] = (
     # the API can delete the message on use, burn, resend and expiry. A release without it never names the column
     Migration(version=10, name="code_message_id", additive=True, statements=(),
               add_columns=(("email_codes", "message_id", "TEXT"),)),
+    # additive: the owner's saved TradingView chart layouts (up to 3, named). The URL identifies the owner's TradingView
+    # layout, so it lives only here (never in the repo or config); a release without the table never reads it
+    Migration(version=11, name="chart_layouts", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS chart_layouts (
+               slot INTEGER PRIMARY KEY CHECK (slot BETWEEN 1 AND 3),
+               name TEXT NOT NULL,
+               url TEXT NOT NULL
+           ) STRICT""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

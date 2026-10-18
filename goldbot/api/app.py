@@ -34,7 +34,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
-from goldbot.api import entry_status, explain, progress
+from goldbot.api import chart_layouts, entry_status, explain, progress
 from goldbot.api.auth import (
     EMAIL_CODE_TTL_S,
     EMAIL_LINK_TTL_S,
@@ -74,6 +74,9 @@ from goldbot.api.schema import (
     CalendarEvent,
     CalendarResponse,
     ChangePasswordRequest,
+    ChartLayout,
+    ChartLayoutsRequest,
+    ChartLayoutsView,
     CodeSignIn,
     CodeSignIns,
     DecidedProposal,
@@ -130,6 +133,13 @@ from goldbot.telegram.approvals import Proposal as BusProposal
 from goldbot.telegram.bus import ApprovalBus
 
 log = logging.getLogger("goldbot.api")
+
+
+# The dashboard runs only its own scripts; the one third party is TradingView's chart, a cross-origin iframe that cannot
+# reach our storage (the session token lives in sessionStorage), so script-src stays 'self'.
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
+       "frame-src https://www.tradingview-widget.com https://www.tradingview.com; object-src 'none'; "
+       "base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 
 
 def supervisor_heartbeat_age_s(sup: dict[str, Any], now: float) -> float:
@@ -456,6 +466,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         # invite and reset links carry their token in the URL fragment; this also keeps any URL out of Referer
         response: Response = await call_next(request)
         response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Content-Security-Policy"] = CSP
         if request.url.path.startswith("/api/"):
             # session tokens, recovery codes, TOTP enrolment URIs and invite/reset tokens must never sit in a cache
             response.headers["Cache-Control"] = "no-store"
@@ -1028,6 +1039,26 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         await st.broadcast({"type": "mode", "mode": body.mode})
         return ModeChangeResult(message=msg, view=explain.automode_view(st.dir, s, True))
     # ============================================================== end auto mode
+
+    # ============================================================== Chart tab: saved TradingView layouts
+    # The URL identifies the owner's TradingView layout: only the owner reads it back, and the audit row never holds it.
+    @app.get("/api/chart/layouts", response_model=ChartLayoutsView)
+    def chart_layouts_get(u: User = Depends(auth)) -> ChartLayoutsView:
+        owner = st.auth.is_owner(u)
+        return ChartLayoutsView(layouts=[ChartLayout(name=n, url=url if owner else None)
+                                         for n, url in chart_layouts.read_layouts(st.auth.db)], can_edit=owner)
+
+    @app.post("/api/chart/layouts", response_model=ChartLayoutsView)
+    def chart_layouts_put(body: ChartLayoutsRequest, request: Request, u: User = Depends(need("owner")),
+                          creds: HTTPAuthorizationCredentials | None = Depends(bearer)) -> ChartLayoutsView:
+        stepup(u, creds, body.totp, request)
+        for item in body.layouts:
+            if not chart_layouts.valid_layout_url(item.url):
+                raise HTTPException(422, "a layout link must look like https://www.tradingview.com/chart/<id>/")
+        chart_layouts.write_layouts(st.auth.db, [(i.name.strip(), i.url.strip()) for i in body.layouts])
+        st.auth.audit("chart_layouts_set", actor=u.email, count=len(body.layouts))
+        return chart_layouts_get(u)
+    # ============================================================== end Chart tab
 
     def current_status() -> Status:
         modes = sorted({str(e.get("approval_mode", "propose")) for e in st.engines()})
