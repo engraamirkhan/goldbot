@@ -838,6 +838,15 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
       without it (K_eff back to about 16) and N1 waits for the next 15m discovery; O-4 never waits for N1.
       (4) **Budget.** The Q1 table is unchanged: 8 reserved, 12 open (9 conditional rows + 3 free reserve). Code:
       BACKLOG item `tod-periodicity-feature-group` (implementer; quant-reviewer, code-reviewer).
+    - **Pinned 2026-10-18 (implementer, BACKLOG 89, quant condition on 2c000ef; before any H-14 count, label or
+      outcome).** `feature_version` hashes names, versions and signed patterns, not code, so the open choices of
+      `goldbot/features/tod_periodicity.py` (VERSION "1") are fixed here; any later change bumps VERSION:
+      (1) only complete slots are observations (a slot missing a bar is left out); (2) a window is the last N complete
+      observations of the slot, with no calendar cap, NaN with fewer than N; (3) the hit rate counts ret > 0 only (ties
+      are misses); (4) `slot_t_20d` = mean / (sample sd, ddof=1, / sqrt(20)), NaN at sd 0; (5) a bar reads the latest
+      observation at most 5 days old (`MAX_STALE`), else NaN; (6) `slot_ret_over_atr` = the latest observation /
+      (ATR14 / close at that observed slot's last bar); (7) a slot return is log(last close / first open) of the slot,
+      the gap from the previous close is excluded; (8) neutrals: mean 0, hit rate 0.5, t 0, ret_over_atr 0.
 - Threshold (amended 2026-10-17, E-2; quant review R1): `threshold_rule: tercile_inner`,
   `tercile_q: 0.6666666666666666` and `tercile_method: linear` in the pinned `DiscoveryConfig` dump (so in the config
   hash: another q is another trial). The coded verdict needs at least 1,000 taken trades for "continue", as the

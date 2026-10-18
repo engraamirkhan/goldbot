@@ -102,7 +102,7 @@ trim), and 62 must hold the cap too. 11 ranked rows.
 | 86 | A fill after a silent-engine window still sends one "opened" notice | Execution and reconciliation (entry outcome truth) · PROTECT | S | done, awaiting trading-safety review (silent_fill in engine/unconfirmed.py, called from Engine._on_decision; notification only) · accountable: implementer · reviews: trading-safety · due 2026-11-06 |
 | 87 | The Telegram card is edited once more when a NOT CONFIRMED order resolves | Owner interface (Telegram cards) · RUN | S | ready (ui-ux follow-up on BACKLOG 72, 2026-10-17) · accountable: implementer · reviews: ui-ux, code-reviewer · due 2026-10-31 |
 | 88 | H-02: full-coverage columns are exempt from the 80% pool rule; survivors carry the mask; field in the dump | Research (discovery pipeline, pre-registration H-02) · LEARN | S | done (implemented 2026-10-18; awaiting quant-reviewer review; pin 3a0d25d) · accountable: implementer · reviews: quant-reviewer, code-reviewer · due 2026-12-11 |
-| 89 | Opt-in tod_periodicity feature group for O-4 (N1) | Research (features) · LEARN | S | ready (research-director ruling 2026-10-18) · accountable: implementer · reviews: quant-reviewer, code-reviewer · due 2026-12-11 (O-4 group-map pin) |
+| 89 | Opt-in tod_periodicity feature group for O-4 (N1) | Research (features) · LEARN | S | done (implemented 2026-10-18; awaiting quant-reviewer review) · accountable: implementer · reviews: quant-reviewer, code-reviewer · due 2026-12-11 (O-4 group-map pin) |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
