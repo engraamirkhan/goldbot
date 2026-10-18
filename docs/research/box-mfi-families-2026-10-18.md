@@ -184,7 +184,7 @@ count enters H-40 as one ordinal group `tls_count` (K_eff +1), and section 9 rep
 threshold. A threshold whose subset has ≥ 1,500 candidates and survives H-40 may go forward as one of H-40's two
 survivor trials.
 
-**Overlap rule (sub-families fold into H-45).** For each of H-37, H-38, H-39, H-42 and H-44: if more than 50% of
+**Overlap rule (sub-families fold into H-45).** For each of H-37, H-38, H-39, H-42, H-44 and H-46: if more than 50% of
 its run-rung candidates are also H-45 run-rung candidates (same side, H-45 bar within ±2 1h bars of the
 sub-family's entry), the sub-family is **withdrawn** (0 trials) and survives only as an H-40 flag on H-45's
 candidates. Below 50%, it runs on its own.
@@ -360,12 +360,41 @@ Signal timeframe 4h, entry at the close of the false-break bar (no stop order ne
 | L3 | L2 without the EMA8/21 condition |
 | L4 | L3 without D0 |
 
+### 4.10 H-46 `liquidity_sweep` (note 7: false breakout of tested resistance, structure break, retest)
+
+Trigger and entry on the 1h close; boxes 1h (pooled rung: 4h boxes, 1h candles). Short (long mirrored):
+
+| Code | Condition |
+|---|---|
+| W1 | tested resistance: a box above the prior close whose range was touched by the high of ≥ 2 of the last 100 1h bars |
+| W2 | sweep: bar t trades above the box top (`c[t−1] ≤ T`, `h[t] > T`) |
+| W3 | failure: a close back below the box bottom within 4 bars (bar f); sweep high SH = max high t..f |
+| W4 | structure break: within 12 bars of f, a close below the last confirmed 1h swing low before t (`pivot_points`, length 3), with no high above SH first |
+| W5 | retest: within 12 bars of the break, the first bar with `high ≥ level − 0.1 ATR1h`, close below the level and bearish (rejection); no close above SH first. Entry at its close |
+| W6 | stop = SH + max(0.25 ATR1h, 2 × bar spread) ("not exactly on the level; allow for overshoot") |
+| W7 | TP1 = next 1h box edge below; TP2 = the new low of the bearish move (if beyond TP1, else TP1); reward to TP1 ≥ 2; placeable; calendar |
+| Exit | the owner's risk rules (note 6): 80% at TP1, stop to breakeven, runner to TP2 (K-X; fallback TP1 only) |
+
+| Rung | Content |
+|---|---|
+| L0 | 1h boxes, W1-W7 |
+| L1 | 1h ∪ 4h boxes pooled |
+| L2 | L1 without W1 (any box) |
+| L3 | L2 with the windows doubled (8 / 24 / 24 bars) |
+
+The note gives no daily-trend rule for this setup, so D0 is not in the ladder; it enters H-40 as the flag
+`daily_with` (K_eff +1). **Disclosure:** H-35 (withdrawn) was a 15m CHoCH after a 1h box break with a structure
+stop; H-46 differs in timeframe, entry (retest of the broken swing, not the CHoCH) and stop (above the sweep high).
+I knew H-35's counts when writing this. Rank: 2, after H-45 (gold-specific mechanism: stop runs above obvious
+levels, Osler 2005 cascades; no gold study).
+
 ### 4.9 Ranking (expected information per trial)
 
 | Rank | Row | Why |
 |---|---|---|
 | 0 | H-45 TLS (Long A / Short A) | the course's master framework and exact checklists; trend + level + signal combines the one mechanism with own evidence (trend) and the S/R order-clustering mechanism; sub-families fold into it |
-| 1 | H-37 box break | owner's primary trade; continuation (the owner's default) with a stop-cluster mechanism; the only family with a link to our one gross edge (trend) |
+| 1 | H-46 liquidity sweep | the owner's gold-specific setup; stop-cascade mechanism (Osler 2005); fully specified entry, stop and two targets |
+| 1b | H-37 box break | owner's primary trade; continuation (the owner's default) with a stop-cluster mechanism; the only family with a link to our one gross edge (trend) |
 | 2 | H-42 pin bar | owner's top-ranked signal, at levels (S/R mechanism); the wick stop is small, so cost per R decides it (section 9) |
 | 3 | H-44 fakey (with trend) | with-trend entry at a failed counter-move; closes on a bar (no new infrastructure); 4h events are few |
 | 4 | H-39 retest | S/R role reversal; practitioner evidence only |
@@ -401,11 +430,11 @@ are diagnostics, section 7.
 
 ### 5.1 H-40 `box_filter_discovery` (one trial)
 
-- **Candidates:** the union of the rungs that run for H-45, H-37, H-38, H-39, H-42, H-43 and H-44 (their own labels, same exits). If a
+- **Candidates:** the union of the rungs that run for H-45, H-37, H-38, H-39, H-42, H-43, H-44 and H-46 (their own labels, same exits). If a
   family is withdrawn, its candidates are absent; if all are withdrawn, H-40 is withdrawn.
-- **Features:** the ten flags of section 5, the four family flags of 4.6-4.7 (`pin_ema20`, `pin_retest`, `pin_inside`, `ema8_21`), the ordinal `tls_count`, plus the `mfi_signals` group (4.4), each a group.
+- **Features:** the ten flags of section 5, the four family flags of 4.6-4.7 (`pin_ema20`, `pin_retest`, `pin_inside`, `ema8_21`), the ordinal `tls_count`, `daily_with` (H-46), plus the `mfi_signals` group (4.4), each a group.
 - **Method:** `research.yml -f discover=true`, `DiscoveryConfig` defaults as pre-registered for O-4
-  (`survivor_unit: group`, fold-internal stability selection on training folds only). K_eff = groups screened (16).
+  (`survivor_unit: group`, fold-internal stability selection on training folds only). K_eff = groups screened (17).
 - **Survivor rule:** a flag survives when it is selected in ≥ 60% of training folds **and** its kept-vs-rejected gross
   difference has Welch t ≥ 2 inside the training folds. At most **two** survivors may go forward, each as its own
   pre-registered trial (the family's rung + the flag), read by section 6 at the K of that date. No survivor: the
@@ -418,8 +447,8 @@ gross mean R > 0, t ≥ 2 on ≥ 1,000 events; rule-only net mean R > 0 with day
 out-of-fold trades with ≥ 30 in 2024-01..2025-09; year stability incl. 2024 and 2025; cost stress at 0.71 $/oz).
 Changes:
 
-- **K** for rule 3 is the registry's `n_trials_effective` at the verdict date, **never below 84** (the highest floor
-  already pre-registered, 77, plus H-37..H-39 and H-42..H-45). Gate-1 per-trade t about 4.1.
+- **K** for rule 3 is the registry's `n_trials_effective` at the verdict date, **never below 85** (the highest floor
+  already pre-registered, 77, plus H-37..H-39 and H-42..H-46). Gate-1 per-trade t about 4.1.
 - **Baseline lift (can only downgrade).** For H-37 and H-38 the evaluator also reports the gross mean R of rung L5 /
   L4 (the bare level rule, same exits). If the run rung does not beat it with Welch t ≥ 1, the verdict carries
   "owner's confirmations add nothing" and a PASS becomes a LEAD.
@@ -446,19 +475,19 @@ topic is closed; only the owner's own trades (H-36) may reopen it.
 | Item | Trials |
 |---|---|
 | H-45 (one rung, after K-X or with the TP1 proxy) | 1 |
-| H-37, H-38, H-39, H-42, H-44 (one rung each, if ≥ 1,500 and not folded into H-45) | up to 5 |
+| H-46, H-37, H-38, H-39, H-42, H-44 (one rung each, if ≥ 1,500 and not folded into H-45) | up to 6 |
 | H-43 (after K-S) | 1 |
-| H-40 filter discovery | 1 (K_eff 16) |
+| H-40 filter discovery | 1 (K_eff 17) |
 | H-40 survivors | up to 2, conditional |
 | H-41 | 1, conditional on H-37 PASS/LEAD |
 | `mfi_signals` group in O-4 | 0 (K_eff +1) |
 
 - **Budget.** 2026Q4's override is 53 in settings and fully allocated (B4a's raise to 55 for TVR lapsed when TVR was
-  withdrawn). These need up to 7 unconditional trials (H-45, five sub-families unless folded, H-40); H-43 after K-S. Options: (a) the owner raises the 2026Q4 override (the
+  withdrawn). These need up to 8 unconditional trials (H-45, six sub-families unless folded, H-40); H-43 after K-S. Options: (a) the owner raises the 2026Q4 override (the
   research director read the owner's "backtest as much as needed" as covering this in B4a); (b) 2027Q1's free
   reserve (3), which B4a held for H-02/H-14 survivors; (c) the continuous loop budget (ADR 0029) is **not** suitable:
   loop trials are generator-grid trials with `rule_ref=loop`, not hand pre-registrations. **Raising the budget is an
   owner decision under my brief**; recommendation in section 9.4 once the counts are known.
-- **K.** Every trial is charged in full; H-40 adds K_eff 16. Floor 80 at any verdict.
+- **K.** Every trial is charged in full; H-40 adds K_eff 17. Floor 80 at any verdict.
 - **Sizing.** Nothing here changes risk per trade, the daily limit or the minimum-lot rule.
 - **Holdout.** Untouched; counts end 2025-09-30.
