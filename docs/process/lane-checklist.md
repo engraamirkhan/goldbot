@@ -28,6 +28,8 @@ Agent: <agent id>                  Item: BACKLOG <NN> / TD-<n>          Due: <da
 3. Files you may touch: <list>. Leave every other file alone.
 4. Tests first, iterate narrow (`scripts/lane_test.sh iter` or the touched test files at `-n 2`), then the full gates
    once at the end on a tree nobody edits. GATES_WORKERS=<n>, within ≤ 12 workers in total across lanes.
+   Run `scripts/merge_smoke.sh` before handing back (about 40 s: runner LINE_CAP, persistence allowlist, CLI golden,
+   loop grid, migration numbers, settings load, ruff and mypy on changed files); `docs_assemble.py merge` runs it too.
 5. Commit in `<type>: <description>` form. Every commit message ends with the trailer
    `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Do not push. Do not spawn subagents.
 6. Docs as fragments (ADR 0012): `scripts/docs_assemble.py new-handoff <slug>` / `new-row` / `new-item`, then

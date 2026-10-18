@@ -455,6 +455,15 @@ def test_exploration_ends_at_60_exception_trades_and_then_the_lcb_rule_decides()
     assert s60.limits.min_lot_risk_cap is None and "target_below" in reasons
 
 
+def test_exploration_stops_when_the_running_cumulative_r_touches_minus_10R_even_if_it_recovers():
+    # 12 x -1R then 7 x +1R, never evaluated in between: the total is -5R but the running low was -12R
+    path = [-1.0] * 12 + [1.0] * 7
+    trades = [_t(D0 + timedelta(days=i // 3), r, exc=True, minute=i) for i, r in enumerate(path)]
+    d = D0 + timedelta(days=10)
+    s, reasons = step(_state(_at(FLOOR, min_lot_risk_cap=0.01), d - timedelta(days=1)), _ev(trades, d), d, DEMO_A1)
+    assert s.limits.min_lot_risk_cap is None and s.minlot_explore_stopped and "minlot_explore_stop" in reasons
+
+
 def test_exploration_stops_for_good_at_minus_10R_cumulative():
     losers = [_t(D0 + timedelta(days=i // 2), -0.5, exc=True) for i in range(19)]    # -9.5R: keeps exploring
     d = D0 + timedelta(days=10)

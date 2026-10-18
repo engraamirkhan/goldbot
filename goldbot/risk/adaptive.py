@@ -40,6 +40,7 @@ import time
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import date, timedelta
+from itertools import accumulate
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -398,8 +399,10 @@ def step(prev: AdaptiveState | None, ev: Evidence | None, day: date, bounds: Lim
     # -- Amendment A1: the demo minimum-lot exploration budget. Every demo exception trade counts (today's too) --
     exc_trades = [t for t in used if t.source == "demo" and t.min_lot_exception]
     stopped = prev.minlot_explore_stopped if prev else False
+    # the running low, in exit order, of the budget's trades: a dip to -10R stops it even if later trades recover
+    # (a stop must not depend on when the controller happened to evaluate)
     if (bounds.explore_min_lot and not stopped
-            and sum(t.net_r for t in exc_trades[:EXPLORE_TRADES]) <= EXPLORE_STOP_R + _EPS):
+            and min(accumulate((t.net_r for t in exc_trades[:EXPLORE_TRADES]), initial=0.0)) <= EXPLORE_STOP_R + _EPS):
         stopped = True
         reasons.append("minlot_explore_stop")
     exploring = bounds.explore_min_lot and not stopped and len(exc_trades) < EXPLORE_TRADES

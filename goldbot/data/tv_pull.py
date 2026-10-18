@@ -85,6 +85,7 @@ from goldbot.data.tv_wire import (
     secret_parts,
 )
 from goldbot.db.connection import connect, write
+from goldbot.db.migrations import migrate
 from goldbot.ops.tv_pull_health import DB_FILE as TV_AUTH_DB
 from goldbot.ops.tv_pull_health import record_expired, record_ok
 from goldbot.webhook.app import tf_seconds
@@ -245,33 +246,21 @@ class FollowState(Record):
 
 
 # ------------------------------------------------------------------------------------------------- the pull log
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS tv_pull_runs (
-    id INTEGER PRIMARY KEY, started_utc TEXT NOT NULL, finished_utc TEXT NOT NULL, ok INTEGER NOT NULL,
-    auth_expired INTEGER NOT NULL, requests INTEGER NOT NULL, reason TEXT NOT NULL, report TEXT NOT NULL
-) STRICT;
-CREATE TABLE IF NOT EXISTS tv_pull_state (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_utc TEXT NOT NULL) STRICT;
-CREATE TABLE IF NOT EXISTS tv_study_meta (
-    meta_hash8 TEXT PRIMARY KEY, study_id TEXT NOT NULL, name TEXT NOT NULL, version TEXT NOT NULL,
-    meta TEXT NOT NULL, first_seen_utc TEXT NOT NULL, last_seen_utc TEXT NOT NULL
-) STRICT;
-"""
-
-
 class PullLog:
-    """The pull's durable record in state/tv.db (SQLite WAL, beside the alert inbox; no JSON state files)."""
+    """The pull's durable record in state/tv.db (SQLite WAL, beside the alert inbox; no JSON state files). Its tables
+    are tv.db's versioned schema (goldbot/db/migrations.py TV), brought up to date on open."""
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         conn = self._conn()
         try:
-            conn.executescript(_SCHEMA)
+            migrate(conn, "tv")
         finally:
             conn.close()
 
     def _conn(self) -> sqlite3.Connection:
-        return connect(self.path, "core")
+        return connect(self.path, "tv")
 
     def record(self, rep: PassReport) -> None:
         conn = self._conn()
@@ -343,7 +332,7 @@ class PullLog:
         path = self.path.parent / TV_AUTH_DB
         if not path.exists():
             return None
-        conn = connect(path, "core")
+        conn = connect(path, "tv_auth")              # read only: goldbot/ops/tv_pull_health.py migrates it
         try:
             if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'tv_auth'").fetchone() is None:
                 return None

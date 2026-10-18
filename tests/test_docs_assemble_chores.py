@@ -298,3 +298,53 @@ def test_the_committed_reservation_file_lists_the_cto_registers_0023_to_0026():
     data = yaml.safe_load((ROOT / "docs" / "decisions" / "reserved.yaml").read_text(encoding="utf-8"))
     assert {e["number"] for e in data["reserved"]} >= {23, 24, 25, 26}
     assert da.adr_errors(da.FsTree(ROOT)) == []
+
+
+# ------------------------------------------------------------------------------------------------ merge smoke
+
+def smoke_merge_repo(root: Path, exit_code: int) -> Path:
+    """A migrated repo with a fake scripts/merge_smoke.sh and one lane to merge."""
+    old_repo(root)
+    assert da.main(["--root", str(root), "migrate"]) == 0
+    (root / "scripts").mkdir()
+    (root / "scripts" / "merge_smoke.sh").write_text(
+        f"#!/usr/bin/env bash\necho 'structural tests: the runner is over its cap' >&2\nexit {exit_code}\n", encoding="utf-8")
+    commit_all(root, "migrate + smoke")
+    lane(root, "lane-a", "R")
+    git(root, "checkout", "-q", "main")
+    return root
+
+
+def test_merge_runs_the_merge_smoke_after_committing_and_stays_quiet_when_it_passes(tmp_path, git_env, capsys):
+    root = smoke_merge_repo(tmp_path, 0)
+    assert da.main(["--root", str(root), "merge", "lane-a"]) == 0
+    assert "merge smoke ok" in capsys.readouterr().out
+
+
+def test_a_failing_merge_smoke_warns_loudly_names_the_failure_and_leaves_the_merge_committed(tmp_path, git_env, capsys):
+    root = smoke_merge_repo(tmp_path, 1)
+    before = git(root, "rev-parse", "HEAD")
+    assert da.main(["--root", str(root), "merge", "lane-a"]) == 0
+    err = capsys.readouterr().err
+    assert "MERGE SMOKE FAILED" in err and "structural tests: the runner is over its cap" in err
+    assert git(root, "rev-parse", "HEAD^1") == before            # the merge commit is still there: no auto-revert
+    assert git(root, "status", "--porcelain") == ""
+
+
+def test_the_merge_smoke_can_be_skipped_with_the_environment_switch(tmp_path, git_env, monkeypatch, capsys):
+    root = smoke_merge_repo(tmp_path, 1)
+    monkeypatch.setenv("GOLDBOT_MERGE_SMOKE", "0")
+    assert da.main(["--root", str(root), "merge", "lane-a"]) == 0
+    assert "MERGE SMOKE" not in capsys.readouterr().err
+
+
+def test_the_merge_smoke_script_runs_the_structural_checks_the_full_suite_used_to_catch():
+    r = subprocess.run(["bash", str(ROOT / "scripts" / "merge_smoke.sh")], env={**os.environ, "MERGE_SMOKE_DRY_RUN": "1"},
+                       capture_output=True, text=True, check=True)
+    for needle in ("test_engine_structure.py", "test_persistence_compat.py", "test_ops_run_cli_golden.py",
+                   "test_loop_grid.py", "migration numbers", "settings load", "ruff", "mypy"):
+        assert needle in r.stdout
+
+
+def test_the_lane_checklist_tells_lanes_to_run_the_merge_smoke_before_handing_back():
+    assert "scripts/merge_smoke.sh" in (ROOT / "docs" / "process" / "lane-checklist.md").read_text(encoding="utf-8")
