@@ -158,6 +158,22 @@ def test_the_report_lines_show_fit_fraction_unfit_count_pounds_and_r_at_lots():
     assert lot_fit_lines(None) == []
 
 
+def test_settings_spec_applies_the_stop_floor_and_the_report_states_it_and_the_multiplier_assumption():
+    from goldbot.research.lot_fit import lot_fit_lines
+    s = load_settings()
+    spec = LotFitSpec.from_settings(s)
+    assert spec.spread_points == s.research.lot_fit_spread_points > 0
+    assert spec.stops_level_points == s.research.lot_fit_stops_level_points
+    # a 0.05 USD label stop is floored at the 0.20 USD spread: 5 / (0.20 x 100) = 0.25 lot, not 1.0 lot
+    out = lot_fit_overlay(_trades([0.05], [0.1]), spec.model_copy(update={"acct_per_usd": 1.0}))
+    assert out["mean_lots"] == pytest.approx(0.25)
+    text = "\n".join(lot_fit_lines({"model_filtered": out}))
+    assert "stop floor: spread prior only (20 points)" in text
+    assert "model multiplier fixed at 1.0 (live varies with p; fit fraction optimistic for low-p trades)" in text
+    lvl = lot_fit_overlay(_trades([0.05], [0.1]), spec.model_copy(update={"stops_level_points": 50.0}))
+    assert "stops level 50 + spread 20 points" in "\n".join(lot_fit_lines({"model_filtered": lvl}))
+
+
 def test_the_minimum_lot_exception_makes_a_refused_trade_fit_at_exactly_the_minimum_lot():
     # 20 USD stop on 1000: min lot risks 2% > 1% cap: still unfit; 8 USD stop risks 0.8% <= 1% cap: fits at 0.01
     off = lot_fit_overlay(_trades([8.0], [16.0]), _spec())

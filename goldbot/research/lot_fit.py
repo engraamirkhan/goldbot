@@ -55,7 +55,9 @@ class LotFitSpec(FrozenRecord):
         gl = RiskLimits.from_settings(settings.risk, tiny_live=tiny_live)
         return cls(equity=settings.research.lot_fit_equity, acct_per_usd=settings.research.lot_fit_acct_per_usd,
                    risk_per_trade=gl.risk_per_trade, max_risk_per_trade=gl.max_risk_per_trade,
-                   multiplier_bounds=gl.multiplier_bounds, min_lot_risk_cap=gl.min_lot_risk_cap, size_down=size_down)
+                   multiplier_bounds=gl.multiplier_bounds, min_lot_risk_cap=gl.min_lot_risk_cap, size_down=size_down,
+                   spread_points=settings.research.lot_fit_spread_points,
+                   stops_level_points=settings.research.lot_fit_stops_level_points)
 
     def limits(self) -> RiskLimits:
         return RiskLimits(risk_per_trade=self.risk_per_trade, max_risk_per_trade=self.max_risk_per_trade,
@@ -74,10 +76,16 @@ def lot_fit_lines(lf: dict[str, Any] | None) -> list[str]:
         return "n/a" if x is None else format(x, fmt)
 
     ref = lf.get("model_filtered") or lf.get("all_candidates") or {}
+    spread, level = ref.get("spread_points", 0.0), ref.get("stops_level_points", 0.0)
+    floor = (f"stop floor: spread prior only ({spread:g} points)" if not level
+             else f"stop floor: stops level {level:g} + spread {spread:g} points")
     lines = ["### Lot fit (H-27: what the account can take at the gate's own sizing)", "",
              f"Account {money(ref.get('equity'))} at {ref.get('acct_per_usd')} per USD, risk {num(ref.get('risk_fraction'), '.3%')}"
              f" per trade, min-lot exception cap {ref.get('min_lot_risk_cap')}, size-down {ref.get('size_down')}. A trade "
              "the gate would refuse `min_lot_exceeds_risk` is unfit: no P&L is claimed for it.", "",
+             "Fixed assumptions: equity (no compounding) and the account conversion; "
+             f"model multiplier fixed at {ref.get('multiplier', 1.0):.1f} (live varies with p; fit fraction optimistic "
+             f"for low-p trades); {floor}.", "",
              "| set | n | fit fraction | unfit | mean lots | £ P&L at lots | £ per fit trade | R at lots | net R (fit) |",
              "|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for name in ("all_candidates", "model_filtered"):
@@ -134,5 +142,6 @@ def lot_fit_overlay(trades: pd.DataFrame, spec: LotFitSpec) -> dict[str, Any]:
         "r_at_lots": float((pnl[fit] / intended).mean()) if n_fit else None,
         "net_r_fit": float((ret[fit] / risk[fit]).mean()) if n_fit else None,
         "equity": spec.equity, "acct_per_usd": spec.acct_per_usd, "risk_fraction": eff.target,
-        "min_lot_risk_cap": cap, "size_down": spec.size_down,
+        "min_lot_risk_cap": cap, "size_down": spec.size_down, "spread_points": spec.spread_points,
+        "stops_level_points": spec.stops_level_points, "multiplier": spec.multiplier,
     }

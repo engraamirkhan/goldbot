@@ -370,6 +370,8 @@ class ResearchSettings(_Section):
     # H-27 lot-fit overlay (research/lot_fit.py, opt-in): the account the research sizes trades for
     lot_fit_equity: float = Field(1000.0, gt=0)          # account currency
     lot_fit_acct_per_usd: float = Field(0.75, gt=0)      # account currency per USD (GBP at GBPUSD ~1.33)
+    lot_fit_spread_points: float = Field(20.0, ge=0)     # the gate's stop floor: spread prior, points (0.01 USD each)
+    lot_fit_stops_level_points: float = Field(0.0, ge=0)  # ...and the broker's stops level (IC Markets: 0)
     registry: str = "state/research_registry.jsonl"
     models_dir: str = "models"
 
