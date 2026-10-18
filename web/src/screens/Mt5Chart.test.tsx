@@ -34,4 +34,19 @@ describe("MT5 chart panel", () => {
     render(<Mt5Chart tf="60" />);
     expect(await screen.findByText(/has not updated for over 5 minutes/)).toBeInTheDocument();
   });
+
+  it("links to the full image, shows 24-hour update time and a stale badge after 3 minutes", async () => {
+    vi.spyOn(apiModule.api, "mt5Chart").mockResolvedValue({ url: "blob:s", capturedAt: new Date(Date.now() - 4 * 60000).toISOString() });
+    render(<Mt5Chart tf="15" />);
+    expect(await screen.findByRole("link", { name: /full size/ })).toHaveAttribute("href", "blob:s");
+    expect(screen.getByText(/updated \d\d:\d\d/)).toBeInTheDocument();
+    expect(screen.getByText(/STALE/)).toBeInTheDocument();
+  });
+
+  it("shows no stale badge for a fresh capture", async () => {
+    vi.spyOn(apiModule.api, "mt5Chart").mockResolvedValue({ url: "blob:f", capturedAt: new Date(Date.now() - 30000).toISOString() });
+    render(<Mt5Chart tf="15" />);
+    await screen.findByRole("img");
+    expect(screen.queryByText(/STALE/)).toBeNull();
+  });
 });
