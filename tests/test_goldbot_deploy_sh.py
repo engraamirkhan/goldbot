@@ -34,6 +34,16 @@ BASH = _bash()
 pytestmark = pytest.mark.skipif(BASH is None or shutil.which("git") is None,
                                 reason="needs bash >= 4 (associative arrays, mapfile) and git, as on the VMs")
 
+def _ps_works() -> bool:
+    """The kill-the-filter harness lists processes with ps; sandboxes (CI-parity sandbox-exec, some containers) forbid it."""
+    try:
+        r = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,comm="], capture_output=True, text=True,
+                           env={"PATH": "/usr/bin:/bin"}, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0 and bool(r.stdout.strip())
+
+
 HARNESS = r"""
 set -euo pipefail
 export HARNESS_PID=$$
@@ -504,6 +514,7 @@ def test_service_user_output_reaches_roots_terminal_without_escapes(tmp_path):
     assert "svc" in p.stdout + p.stderr and "\x1b" not in p.stdout + p.stderr and "\x07" not in p.stdout + p.stderr
 
 
+@pytest.mark.skipif(not _ps_works(), reason="needs `ps` to find and kill the output filter; the sandbox forbids it")
 def test_a_dropped_session_does_not_kill_a_deploy_midway(tmp_path):
     box = Box(tmp_path, running="c2", aux=5)
     p = box.run("--rollback", box.c1, env={"KILL_FILTER": "1"})
