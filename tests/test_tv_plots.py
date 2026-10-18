@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from goldbot.data import tv_catalog as cat
+from goldbot.features import tradingview as tvf
 from goldbot.features import tv_plots as tvp
 from goldbot.features.registry import FEATURES
 from goldbot.research.model import MAX_FEATURES, MetaLabelModel
@@ -127,3 +128,75 @@ def test_tv_plots_is_opt_in_and_registered_as_v1():
         assert tvp.f_tv_plots(frame([T0]), {}).shape == (1, 0)
     finally:
         FEATURES.pop("tv_plots", None)
+
+
+def test_history_and_live_rows_of_the_same_bar_give_equal_values_at_the_bar_open():
+    # decision rows are stamped at the bar open (= the TradingView bar's close); history is available exactly at the
+    # close, live a few seconds later: both must show the same (previous) bar there, or training sees what live cannot
+    opens = [T0 + (i + 1) * M15 for i in range(1, 6)]
+    hist = rows(range(6), origin="pull_history", validated=True, lag=pd.Timedelta(0))
+    live = rows(range(6), lag=pd.Timedelta(seconds=5))
+    a = tvp.f_tv_plots(frame(opens), {"tv_indicators": hist, "tv_catalog": specs()})
+    b = tvp.f_tv_plots(frame(opens), {"tv_indicators": live, "tv_catalog": specs()})
+    pd.testing.assert_frame_equal(a, b)
+    assert a[col()].tolist() == [10.0, 11.0, 12.0, 13.0, 14.0]
+
+
+def test_a_blanked_bar_is_nan_at_the_bar_open_not_the_previous_bar():
+    many = rows(range(4000), lag=pd.Timedelta(0))
+    opens = [T0 + (i + 1) * M15 for i in range(4000)]
+    ctx = {"tv_indicators": many, "tv_catalog": specs()}
+    live = tvp.f_tv_plots(frame(opens), ctx)
+    train = tvp.f_tv_plots(frame(opens), {**ctx, "tv_training": True})
+    blank = train[col()].isna() & live[col()].notna()
+    assert 0.005 < blank.mean() < 0.02
+    assert train.loc[~blank, col()].equals(live.loc[~blank, col()])        # never another bar's value
+    assert train.loc[blank, col("plot_1")].isna().all()                    # an event is NaN too, not "did not fire"
+
+
+def test_rows_without_intrabar_and_digit_plot_ids_are_read():
+    long = rows([0]).drop(columns=["intrabar"]).assign(plot=lambda d: d["plot"].str.removeprefix("plot_"))
+    t = T0 + M15 + pd.Timedelta(minutes=2)
+    out = tvp.f_tv_plots(frame([t]), {"tv_indicators": long, "tv_catalog": specs()})
+    assert out[col()].tolist() == [10.0] and out[col("plot_1")].tolist() == [1.0]
+    digit = cat.StudyMeta(study="K-Indi", version="2.02", tf="15", inputs={"in_0": 50},
+                          plots=[cat.StudyPlot(id="1", type="shapes", title="Buy")])
+    (spec,) = cat.catalog(digit)
+    out = tvp.f_tv_plots(frame([t]), {"tv_indicators": long.assign(meta_hash=digit.meta_hash), "tv_catalog": [spec]})
+    assert out[spec.feature_id].tolist() == [1.0]
+
+
+def test_an_unknown_timeframe_is_refused():
+    with pytest.raises(ValueError, match="timeframe"):
+        cat.StudyMeta(study="K-Indi", version="2.02", tf="4H")
+    bad = specs()[0].model_copy(update={"tf": "4H"})
+    with pytest.raises(ValueError, match="timeframe"):
+        tvp.f_tv_plots(frame([T0]), {"tv_indicators": rows([0]), "tv_catalog": [bad]})
+
+
+def test_rows_without_this_input_set_never_feed_the_column():
+    t = T0 + M15 + pd.Timedelta(minutes=2)
+    for h in (None, "deadbeef"):
+        long = rows([0]).assign(meta_hash=h)
+        assert tvp.f_tv_plots(frame([t]), {"tv_indicators": long, "tv_catalog": specs()})[col()].isna().all(), h
+
+
+def test_legacy_tradingview_feature_reads_pulled_history_as_history_not_live():
+    hist = rows([0, 1], origin="pull_history", validated=False, lag=pd.Timedelta(0))
+    assert tvf.wide(hist, "15").empty                                    # unverified: left out
+    assert tvf.label_for(tvf.wide(hist, "15", include_unvalidated=True)) == tvf.UNVALIDATED
+    both = pd.concat([rows([1], origin="pull_history", validated=True, value=99.0, lag=pd.Timedelta(0)), rows([1])])
+    assert tvf.wide(both, "15")["plot_0"].tolist() == [11.0]             # the live row wins its bar
+    assert tvf.wide(rows([1], origin="scraped", validated=True), "15").empty
+
+
+def test_legacy_tradingview_feature_keeps_input_sets_and_versions_apart():
+    t = T0 + 2 * M15 + pd.Timedelta(minutes=2)
+    long = pd.concat([rows([1], meta_hash="aaaaaaaa"), rows([1], meta_hash="bbbbbbbb", value=50.0)])
+    out = tvf.f_tradingview(frame([t]), {"tv_indicators": long})
+    assert out["tv_k_indi_aaaaaaaa_15_plot_0"].tolist() == [11.0]
+    assert out["tv_k_indi_bbbbbbbb_15_plot_0"].tolist() == [50.0]
+    alerts = pd.concat([rows([1]).assign(meta_hash=None, origin=None),
+                        rows([1], value=50.0).assign(meta_hash=None, origin=None, version="2.03")])
+    with pytest.raises(ValueError, match="version"):
+        tvf.f_tradingview(frame([t]), {"tv_indicators": alerts})

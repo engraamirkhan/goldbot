@@ -148,3 +148,22 @@ def test_history_is_never_the_live_side_of_a_repaint_check(tmp_path):
     for origin in ("csv", "pull_history"):
         r = check(store, history_origin=origin)
         assert r.overlap_bars == 0 and r.validated is False, origin
+
+
+def test_history_of_another_input_set_is_not_compared_and_stays_unvalidated(tmp_path):
+    store = seed(tmp_path, 300)
+    df = store.read(TABLE, source="K-Indi@2.02")
+    live = df[df["origin"].isna()].assign(origin="pull_live", meta_hash="aaaaaaaa")
+    store.append(TABLE, live.drop(columns=["source", "symbol", "year", "month"], errors="ignore"),
+                 source="K-Indi@2.02", symbol="XAUUSD")
+    hist = df[df["origin"] == "csv"]
+    _as_pull_history(store, hist.assign(meta_hash="bbbbbbbb"))          # pulled with other inputs
+    r = check(store, history_origin="pull_history", meta_hash="bbbbbbbb")
+    assert r.overlap_bars == 0 and not r.validated
+    _as_pull_history(store, hist.assign(meta_hash="aaaaaaaa"))          # the store keeps both input sets apart
+    assert check(store, history_origin="pull_history", meta_hash="aaaaaaaa").validated
+    df = store.read(TABLE, source="K-Indi@2.02")
+    ph = df[df["origin"] == "pull_history"].groupby("meta_hash")["repaint_validated"].all().to_dict()
+    assert ph == {"aaaaaaaa": True, "bbbbbbbb": False}
+    # rows without an input set (alerts, CSV) are compared only with each other: the CSV is not validated by pull_live
+    assert check(store).validated and check(store, meta_hash="aaaaaaaa").overlap_bars == 0

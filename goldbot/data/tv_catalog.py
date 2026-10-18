@@ -15,7 +15,9 @@ with each plot's title, `inputs` with their values), checked against a sample of
   ("Short EMA" names a length).
 * Feature id `tv_{study}_{meta_hash}_{tf}_{plot_id}`. `meta_hash` is 8 hex characters of SHA-256 over the study, its
   version and its input values (sorted by input id), so an input or version change is a new feature id: a model trained
-  on EMA 50 is never fed EMA 55. Rows of `tv_indicators` written by the direct pull carry `meta_hash`.
+  on EMA 50 is never fed EMA 55. Rows of `tv_indicators` written by the direct pull carry `meta_hash` (part of the store
+  key, so two input sets never overwrite each other); `tv_plots` reads only rows of its own `meta_hash`, and the repaint
+  check compares and flags one input set at a time.
 
 Origins of `tv_indicators` rows: the webhook alert (no `origin`, or "alert") and `pull_live` are recorded at the bar
 close and are live; `csv` (goldbot/data/tv_csv.py) and `pull_history` are history drawn afterwards, which may repaint,
@@ -31,9 +33,10 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from goldbot.base import FrozenRecord
+from goldbot.data.tv_csv import normalize_tf
 
 PlotKind = Literal["level", "oscillator", "event", "state"]
 LEVEL_BAND = 0.05                    # a line within 5 % of the close is a price level
@@ -57,6 +60,11 @@ class StudyMeta(FrozenRecord):
     tf: str
     inputs: dict[str, Any] = Field(default_factory=dict)
     plots: list[StudyPlot] = Field(default_factory=list)
+
+    @field_validator("tf")
+    @classmethod
+    def _known_tf(cls, v: str) -> str:
+        return normalize_tf(v)          # the alert's spelling (15, 60, 240, 1D); an unknown timeframe is refused
 
     @classmethod
     def from_metainfo(cls, raw: Mapping[str, Any], *, tf: str) -> "StudyMeta":
@@ -154,3 +162,13 @@ def is_live(origin: pd.Series) -> pd.Series:
 
 def is_history(origin: pd.Series) -> pd.Series:
     return origin.fillna("").astype(str).isin(HISTORY_ORIGINS)
+
+
+def origin_of(long: pd.DataFrame) -> pd.Series:
+    """Each row's origin ("" for a webhook alert, which writes none)."""
+    return long["origin"].fillna("").astype(str) if "origin" in long.columns else pd.Series("", index=long.index)
+
+
+def input_set_of(long: pd.DataFrame) -> pd.Series:
+    """Each row's `meta_hash` ("" when the source does not know the study's inputs: webhook alert, CSV export)."""
+    return long["meta_hash"].fillna("").astype(str) if "meta_hash" in long.columns else pd.Series("", index=long.index)

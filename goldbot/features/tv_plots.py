@@ -7,17 +7,20 @@ per catalogued plot, named by its feature id `tv_{study}_{meta_hash}_{tf}_{plot_
 * level -> (close - level) / close (signed distance of our close from the line); oscillator and state -> the value;
   event -> 1 when the mark is on the bar, 0 when the bar arrived without it.
 * "Every join to bars via asof_join on available_utc": a TradingView bar reaches a row only from its `available_utc`
-  (bar close, or the alert's receipt), never 1 ns before.
+  (the live row's receipt), never 1 ns before. A history row is available no earlier than its bar close + MAX_LAG
+  (the same delivery allowance live gets): decision rows are stamped at the bar open, which is the TradingView bar's
+  close, and live cannot have that bar there yet, so neither may training (no train/serve skew).
 * "A missed alert sets the feature to NaN rather than a stale value": the joined TradingView bar must have closed less
   than one TradingView bar plus MAX_LAG before the row (one bar of delivery latency is normal; two is a missing bar).
   Older is NaN, never carried forward. A weekend or session gap is NaN until the first new bar.
 * "Unverified rows never train" (plan F11): live rows (webhook alert, `pull_live`) always count; history rows (`csv`,
   `pull_history`) only when the repaint check flagged that plot `repaint_validated`; any other origin never. A live row
-  wins over history on the same bar. Rows that carry a `meta_hash` must carry this study's (another input set is a
-  different feature).
+  wins over history on the same bar. Only rows of this study's `meta_hash` are read: a row of another input set, or
+  without one (webhook alert, CSV export: their inputs are unknown), never feeds a catalogued column; those feed the
+  older `tradingview` feature.
 * "Training data has about 1% of alerts randomly blanked so the model has seen the NaN path before production"
-  (DESIGN, TradingView signals): with ctx["tv_training"] set, BLANK_RATE of each study's bars are blanked, all of its
-  plots at once, chosen by a hash of (study, meta hash, tf, bar time, ctx["tv_blank_seed"]) so a rerun or another
+  (DESIGN, TradingView signals): with ctx["tv_training"] set, BLANK_RATE of each study's bars are blanked (NaN at
+  every row that would have read the bar, never the bar before it, an event included), all of its plots at once, chosen by a hash of (study, meta hash, tf, bar time, ctx["tv_blank_seed"]) so a rerun or another
   window blanks the same bars. Live scoring never sets it.
 * At most MAX_TV_FEATURES columns (goldbot.research.model.check_feature_cap also refuses a model with more, or with
   more than 40 inputs in all).
@@ -57,11 +60,13 @@ def _plot_name(p: object) -> str:
 def _eligible(long: pd.DataFrame, spec: PlotSpec) -> pd.DataFrame:
     """The study's rows that may be used: this indicator, version, timeframe and input set; bar close only; live, or
     repaint-validated history."""
+    if "meta_hash" not in long.columns:
+        return long.iloc[0:0].assign(_live=False)
+    intrabar = long["intrabar"].fillna(False).astype(bool) if "intrabar" in long.columns \
+        else pd.Series(False, index=long.index)
     d = long[(long["indicator"].astype(str) == spec.study) & (long["version"].astype(str) == spec.version)
-             & (long["tf"].astype(str) == spec.tf) & ~long["intrabar"].fillna(False).astype(bool)]
-    if "meta_hash" in d.columns:
-        h = d["meta_hash"].fillna("").astype(str)
-        d = d[h.eq("") | h.eq(spec.meta_hash)]
+             & (long["tf"].astype(str) == spec.tf) & ~intrabar
+             & long["meta_hash"].fillna("").astype(str).eq(spec.meta_hash)]
     origin = d["origin"] if "origin" in d.columns else pd.Series("", index=d.index)
     validated = d["repaint_validated"].fillna(False).astype(bool) if "repaint_validated" in d.columns \
         else pd.Series(False, index=d.index)
@@ -70,11 +75,15 @@ def _eligible(long: pd.DataFrame, spec: PlotSpec) -> pd.DataFrame:
     return d.assign(plot=d["plot"].map(_plot_name))
 
 
-def _wide(d: pd.DataFrame) -> pd.DataFrame:
-    """bar_time, available_utc and one column per plot; a bar with any live row uses its live rows only."""
+def _wide(d: pd.DataFrame, width: pd.Timedelta) -> pd.DataFrame:
+    """bar_time, available_utc and one column per plot; a bar with any live row uses its live rows only; a history
+    row is available no earlier than its bar close + MAX_LAG."""
     live_bars = set(d.loc[d["_live"], "bar_time"])
     d = d[d["_live"] | ~d["bar_time"].isin(live_bars)]
-    d = d.assign(available_utc=utc_index(d["available_utc"]), bar_time=utc_index(d["bar_time"]))
+    bar = utc_index(d["bar_time"])
+    got = epoch_ns(utc_index(d["available_utc"]))
+    ns = np.where(d["_live"].to_numpy(dtype=bool), got, np.maximum(got, epoch_ns(bar + width + MAX_LAG)))
+    d = d.assign(available_utc=pd.to_datetime(ns, utc=True), bar_time=bar)
     d = d.sort_values("available_utc").drop_duplicates(["bar_time", "plot"], keep="first")
     vals = d.pivot(index="bar_time", columns="plot", values="value")
     avail = d.groupby("bar_time")["available_utc"].max()          # the bar is complete when its last plot is known
@@ -109,19 +118,25 @@ def f_tv_plots(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
     training = bool(ctx.get("tv_training", False))
     seed = int(ctx.get("tv_blank_seed", 0))
     for spec in specs:
+        sec = tf_seconds(spec.tf)
+        if sec <= 0:
+            raise ValueError(f"unknown timeframe {spec.tf!r} for {spec.feature_id}: use minutes (15, 60, 240) or 1D, 1W")
+        width = pd.Timedelta(seconds=sec)
+        plot = _plot_name(spec.plot_id)
         d = _eligible(long, spec)
-        d = d[d["plot"] == spec.plot_id]
+        d = d[d["plot"] == plot]
         if d.empty:
             continue
-        frame = _wide(d)
-        if training:
-            key = f"{spec.study}|{spec.meta_hash}|{spec.tf}"
-            frame = frame[~_blanked(frame["bar_time"], key, seed)]
+        frame = _wide(d, width)
+        # a blanked bar stays in the frame (so the join lands on it) and reads NaN: never the bar before it
+        blank = _blanked(frame["bar_time"], f"{spec.study}|{spec.meta_hash}|{spec.tf}", seed) if training \
+            else np.zeros(len(frame), dtype=bool)
+        frame = frame.assign(blank=blank.astype(float))
         joined = asof_join(bars, frame.rename(columns={"bar_time": "bar"}), prefix="_tv_").sort_values("_row")
-        width = pd.Timedelta(seconds=tf_seconds(spec.tf))
         bar_close = utc_index(joined["_tv_bar"]) + width
-        fresh = np.asarray((t - bar_close) < width + MAX_LAG) & joined["_tv_bar"].notna().to_numpy()
-        v = pd.to_numeric(joined[f"_tv_{spec.plot_id}"], errors="coerce").to_numpy(dtype=float)
+        blanked = joined["_tv_blank"].fillna(0.0).to_numpy(dtype=float) > 0
+        fresh = np.asarray((t - bar_close) < width + MAX_LAG) & joined["_tv_bar"].notna().to_numpy() & ~blanked
+        v = pd.to_numeric(joined[f"_tv_{plot}"], errors="coerce").to_numpy(dtype=float)
         if spec.kind == "event":
             v = (np.isfinite(v) & (v != 0)).astype(float)
         elif spec.kind == "level":

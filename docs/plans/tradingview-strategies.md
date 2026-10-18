@@ -32,11 +32,14 @@ R51-R53; ADR 0004.
   the close = level, else oscillator. Side from an event's title (buy/long/bull +1; sell/short/bear -1), else none.
   Origins: live = alert, `pull_live`; history = `csv`, `pull_history`.
 - `goldbot/features/tv_plots.py`: `tv_plots` v1, opt-in (`enable()`), family `tradingview`. asof_join on
-  `available_utc` only; missing bar -> NaN; history only when repaint-validated; 1 % seeded per-bar blanking with
-  ctx `tv_training`; <= 8 columns. `goldbot/research/model.py` `check_feature_cap` refuses a model over 8 `tv_`
-  columns or 40 inputs.
-- `goldbot/research/tv_repaint.py`: `history_origin` (`--origin pull_history`): each history is compared with the live
-  rows only, and flagged on its own.
+  `available_utc` only, history no earlier than bar close + 60 s (the live allowance: decision rows are stamped at
+  the bar open, so training must not see a bar live cannot); missing bar -> NaN; history only when
+  repaint-validated; only rows of the study's `meta_hash`; 1 % seeded per-bar blanking with ctx `tv_training` (a
+  blanked bar reads NaN, never the bar before); <= 8 columns. `goldbot/research/model.py` `check_feature_cap`
+  refuses a model over 8 `tv_` columns or 40 inputs.
+- `goldbot/research/tv_repaint.py`: `history_origin` (`--origin pull_history`) and `meta_hash` (`--meta-hash`): each
+  history and input set is compared with the live rows of the same input set only, and flagged on its own.
+  `meta_hash` is part of the `tv_indicators` store key.
 
 ## Lane B: the direct pull (data-engineer, security-reviewer)
 - Read-only websocket client, cookie from the keyring via `goldbot.ops.accounts`, polite rate limit, fails soft (the
@@ -57,7 +60,7 @@ Nothing here imports the engine, RiskGate or broker; exits untouched; demo only.
 `/data/` and `/state/`, never in a release. Cookies and secrets only in the keyring.
 
 ## Known gaps
-- The older `tradingview` feature (goldbot/features/tradingview.py) treats any origin other than `csv` as live, so
-  `pull_history` rows would be read as live there; models should use `tv_plots`. Fix in that file's owner lane.
+- `tv_plots` reads only rows carrying its study's `meta_hash`, so webhook alerts and CSV exports (inputs unknown) feed
+  the older `tradingview` feature only, until lane B pulls the same study with its metadata.
 - Live staleness on the engine side (bar_time == decision bar, lag <= 60 s) is lane C's when a TradingView value first
   reaches a specialist.
