@@ -116,6 +116,7 @@ from goldbot.features.registry import feature_version  # noqa: E402
 from goldbot.research import h16  # noqa: E402
 from goldbot.research.director import cited_rule, queued_rows_for, survivor_full_coverage  # noqa: E402
 from goldbot.research.gates import DSR_BAR  # noqa: E402
+from goldbot.research.generator import loop_refusal  # noqa: E402
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR, DaySummedDsr  # noqa: E402
 from goldbot.research.pipeline import (  # noqa: E402
     POOLED_FEATURES,
@@ -131,6 +132,7 @@ from goldbot.research.pipeline import (  # noqa: E402
     run_pool,
 )
 from goldbot.research.registry import (  # noqa: E402
+    LOOP_RULE_REF,
     TrialBudgetExceeded,
     TrialRegistry,
     gate_pass_counts,
@@ -664,6 +666,8 @@ def main() -> int:
         raise SystemExit("--us-calendar is not wired into --discover or --cpcv yet; run it without them")
     if args.us_calendar_features and us_calendar is None:
         raise SystemExit("--us-calendar-features needs --us-calendar")
+    if args.rule_ref == LOOP_RULE_REF and (args.discover or args.cpcv or args.h16):
+        raise SystemExit(f"--rule-ref {LOOP_RULE_REF}: the research loop runs walk-forward trials only (ADR 0029)")
     reg = TrialRegistry(args.registry)
     with reg.locked():                    # budget check, runs and records as one step
         if args.cpcv:
@@ -711,19 +715,29 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
     # pre-registered queue's reservation only when it matches a pending preregistered row (linked to it below); a job
     # whose family and agent have a pending queued row with another config hash is refused, never charged to the open
     # budget (QueuedConfigMismatch)
-    try:
-        quarter, preregs = reg.check_budget_reserved([(j.family, j.config) for j in jobs],
-                                                     settings.research.budget_for(quarter_of()),
-                                                     settings.research.reserved_for(quarter_of()),
-                                                     retired={e.family for e in settings.research.retired_families},
-                                                     agents=agents)
-    except TrialBudgetExceeded as exc:
-        raise SystemExit(str(exc)) from None
-    # E-5 cap: a manual row cites its pre-registered rule (recorded as rule_ref; refused when a capped run cites none)
-    try:
-        rule_refs = [cited_rule(p, args.rule_ref, capped=settings.research.open_budget_capped(quarter)) for p in preregs]
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from None
+    if args.rule_ref == LOOP_RULE_REF:
+        # the continuous research loop (ADR 0029): charged per run against research.loop_trials_per_run, not against
+        # the quarter's budget; every row is still written, so the deflated Sharpe counts it in K
+        refusal = loop_refusal(reg._rows(), [(j.family, j.config) for j in jobs], settings, score_holdout=args.score_holdout)
+        if refusal:
+            raise SystemExit(refusal)
+        quarter = quarter_of()
+        preregs: list[dict[str, Any] | None] = [None] * len(jobs)
+        rule_refs: list[str | None] = [LOOP_RULE_REF] * len(jobs)
+    else:
+        try:
+            quarter, preregs = reg.check_budget_reserved([(j.family, j.config) for j in jobs],
+                                                         settings.research.budget_for(quarter_of()),
+                                                         settings.research.reserved_for(quarter_of()),
+                                                         retired={e.family for e in settings.research.retired_families},
+                                                         agents=agents)
+        except TrialBudgetExceeded as exc:
+            raise SystemExit(str(exc)) from None
+        # E-5 cap: a manual row cites its pre-registered rule (recorded as rule_ref; refused when a capped run cites none)
+        try:
+            rule_refs = [cited_rule(p, args.rule_ref, capped=settings.research.open_budget_capped(quarter)) for p in preregs]
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from None
     years_span = (b1["ts_utc"].iloc[-1] - b1["ts_utc"].iloc[0]).days / 365.25
     zero_volume = float((b1["tick_count"].astype(float) <= 0).mean())
     print(f"1m bars: {len(b1):,} ({b1['ts_utc'].iloc[0]:%Y-%m-%d} -> {b1['ts_utc'].iloc[-1]:%Y-%m-%d}), "

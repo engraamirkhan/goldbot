@@ -1,34 +1,74 @@
 name: research-loop
-# Continuous research loop, phase 1 (docs/plans/continuous-research-loop.md; owner 2026-10-18: backtest in parallel on
-# several timeframes, indefinitely). Every 6 hours: build the next batch of candidate configurations (generator: fixed
-# grid, no returns read, nothing tried before) and print it. Runs on main only (it reads the shared registry).
-# TODO(phase 2, after the research.yml rewrite lands on main): dispatch research.yml with the batch (up to 16 parallel
-# jobs, `research.loop_trials_per_run` trials). research.yml has no `batch` input on this base, so this workflow does
-# NOT dispatch yet: it only reports what it would run. scripts/research_pass.py also still refuses runs beyond
-# `trial_budget_quarter`, which the loop budget path must replace first.
+# Continuous research loop, phase 2 (docs/plans/continuous-research-loop.md; ADR 0029; owner 2026-10-18: backtest in
+# parallel on several timeframes, indefinitely). Every 6 hours: build the next batch of candidate configurations
+# (generator: fixed grid, no returns read, nothing tried before; at most research.loop_trials_per_run) and dispatch
+# research.yml with it as `batch`, every entry carrying rule_ref=loop (charged per run, not against the quarter's
+# budget; every trial is still a registry row and counts in K). Skipped while a research run is queued or running, and
+# when the batch is empty. Runs on main only. The registry is written by research.yml's record job, never here.
+# `keepalive` fails the run before GitHub disables the schedule (60 days without a commit).
 on:
   schedule:
     - cron: "23 */6 * * *"
   workflow_dispatch: {}
 permissions: {}
+concurrency:
+  group: research-registry      # the same writer lock as research.yml's record job and preregister-quarter.yml
+  cancel-in-progress: false
 jobs:
-  queue:
+  keepalive:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - name: the schedule is disabled after 60 days without a commit; fail at 50
+        run: python3 scripts/loop_keepalive.py --last-commit "$(git log -1 --format=%ct)"
+  dispatch:
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
+      actions: write            # only to start research.yml (gh workflow run); no other write scope
     env:
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: skip while a research run is queued or in progress
+        id: busy
+        run: |
+          n=0
+          for status in queued in_progress; do
+            c=$(gh run list --workflow research.yml --status "$status" --json databaseId --jq 'length')
+            n=$((n + c))
+          done
+          echo "busy=$n" >> "$GITHUB_OUTPUT"
+          echo "research.yml runs queued or in progress: $n"
+      - if: ${{ steps.busy.outputs.busy == '0' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - if: ${{ steps.busy.outputs.busy == '0' }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: { python-version: "3.11", cache: pip }
-      - run: pip install -e .
+      - if: ${{ steps.busy.outputs.busy == '0' }}
+        run: pip install -e .
       - name: fetch bars and the trial registry
+        if: ${{ steps.busy.outputs.busy == '0' }}
         run: |
           gh release download data-v1 -p 'xauusd_1m_dukascopy_*.parquet' -D raw
           scripts/registry_release.sh fetch registry.jsonl
       - name: next batch
-        run: python scripts/research_queue.py --registry registry.jsonl --bars raw | tee batch.json
+        if: ${{ steps.busy.outputs.busy == '0' }}
+        run: python scripts/research_queue.py --registry registry.jsonl --bars raw > batch.json
+      - name: dispatch research.yml with the batch
+        if: ${{ steps.busy.outputs.busy == '0' }}
+        run: |
+          if [ "$(python -c 'import json; print(len(json.load(open("batch.json"))))')" = "0" ]; then
+            echo "empty batch: nothing to dispatch"
+            exit 0
+          fi
+          BATCH="$(python -c 'import json; print(json.dumps(json.load(open("batch.json")), separators=(",", ":")))')"
+          gh workflow run research.yml --ref main -f "batch=$BATCH"

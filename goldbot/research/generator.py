@@ -29,9 +29,9 @@ from typing import Any
 from goldbot.base import FrozenRecord
 from goldbot.config import Settings
 from goldbot.execution.costs import CONTRACT_OZ
-from goldbot.research.director import ResearchPlan
+from goldbot.research.director import ResearchPlan, later_preregistration, pending_preregistration
 from goldbot.research.population import SpawnRefused, check_founder_config, founder_base
-from goldbot.research.registry import config_hash
+from goldbot.research.registry import LOOP_RULE_REF, config_hash, is_trial, quarter_of
 from goldbot.risk.sizing import MIN_LOT_TOLERANCE
 from goldbot.specialists import SPECIALISTS
 from goldbot.specialists.base import TIMEFRAME_KEY
@@ -135,5 +135,44 @@ def generate(rows: list[dict[str, Any]], settings: Settings, plan: ResearchPlan,
 def batch(cands: list[Candidate], remaining: int) -> list[dict[str, Any]]:
     """The first `remaining` candidates as research.yml dispatch inputs (one trial each); none when remaining <= 0."""
     return [{"specialist": c.family, "variants": json.dumps([c.overrides]), "rationale": c.rationale,
-             "from_year": str(FROM_YEAR), "to_year": c.window_to[:4]}
+             "from_year": str(FROM_YEAR), "to_year": c.window_to[:4], "rule_ref": LOOP_RULE_REF}
             for c in cands[:max(remaining, 0)]]
+
+
+def survivors_by_timeframe(cands: list[Candidate], timeframes: tuple[str, ...]) -> dict[str, int]:
+    """How many candidates survived the pre-filters on each timeframe, 0 for one nothing survived on: the report that
+    shows whether the sizing filter has emptied a timeframe (quant review of phase 1)."""
+    return {tf: sum(c.timeframe == tf for c in cands) for tf in timeframes}
+
+
+def loop_refusal(rows: list[dict[str, Any]], jobs: list[tuple[str, dict[str, Any]]], settings: Settings, *,
+                 score_holdout: bool = False, discover: bool = False) -> str | None:
+    """Why a run citing `rule_ref=loop` is refused, or None (ADR 0029). The loop spends its own budget, so these are
+    the checks the quarterly budget would otherwise make: the run has at most `research.loop_trials_per_run` jobs
+    (0 turns the loop off); no job's config is in the registry already (no double dispatch of one trial); no family is
+    retired or under its screen; no config is one a pre-registration queued (it must run against its own row); and a
+    loop run never scores the holdout nor runs a discovery (both stay pre-registered, owner-gated trials)."""
+    res = settings.research
+    if res.loop_trials_per_run <= 0:
+        return "research loop: research.loop_trials_per_run is 0 (the loop is off)"
+    if len(jobs) > res.loop_trials_per_run:
+        return f"research loop: {len(jobs)} trials but research.loop_trials_per_run is {res.loop_trials_per_run}"
+    if score_holdout:
+        return "research loop: a loop run never scores the holdout (a pre-registered, spent-once trial)"
+    if discover:
+        return "research loop: a loop run never runs a discovery (a pre-registered trial charged at K_eff)"
+    retired = {r.family for r in res.retired_families}
+    tried = {(r.get("family"), r.get("config_hash")) for r in rows if is_trial(r)}
+    quarter = quarter_of()
+    for family, config in jobs:
+        h = config_hash(config)
+        if family in retired:
+            return f"research loop: {family} is retired"
+        cls = SPECIALISTS.get(family)
+        if cls is None or cls.screening:
+            return f"research loop: {family} is unknown or still under its pre-registered screen"
+        if (family, h) in tried:
+            return f"research loop: {family} config {h} is already in the registry (no double dispatch of one trial)"
+        if pending_preregistration(rows, quarter, family, h) or later_preregistration(rows, quarter, family, h):
+            return f"research loop: {family} config {h} is pre-registered; it runs against its own row, not the loop"
+    return None

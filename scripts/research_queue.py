@@ -3,9 +3,9 @@
     python scripts/research_queue.py --registry registry.jsonl --bars raw [--limit N] > batch.json
 
 Prints a JSON list of research.yml inputs (specialist, variants, rationale, from_year, to_year), one trial each, at
-most `research.loop_trials_per_run` (the loop's own budget, separate from `trial_budget_quarter`). ATR for the sizing
+most `research.loop_trials_per_run` (ADR 0029) (the loop's own budget, separate from `trial_budget_quarter`). ATR for the sizing
 pre-filter comes from the last bars before the held-out year (`--bars`), or is given as `--atr '{"15m": 8.0, ...}'`
-($/oz per timeframe). Nothing is written and nothing is a trial. An unreadable registry or missing ATR prints `[]` and
+($/oz per timeframe). Each job carries rule_ref=loop. stderr reports the ATR used and the candidates surviving the pre-filters per timeframe. Nothing is written and nothing is a trial. An unreadable registry or missing ATR prints `[]` and
 exits non-zero: the scheduled workflow must then dispatch nothing."""
 from __future__ import annotations
 
@@ -22,7 +22,13 @@ from goldbot.data.release import read_bar_files  # noqa: E402
 from goldbot.data.resample import mid, resample_bars  # noqa: E402
 from goldbot.features.technical import atr as atr_series  # noqa: E402
 from goldbot.research.director import build_plan  # noqa: E402
-from goldbot.research.generator import FROM_YEAR, batch, generate, read_registry  # noqa: E402
+from goldbot.research.generator import (  # noqa: E402
+    FROM_YEAR,
+    batch,
+    generate,
+    read_registry,
+    survivors_by_timeframe,
+)
 from goldbot.research.min_lot import ATR_BARS  # noqa: E402
 from goldbot.research.registry import quarter_of  # noqa: E402
 from goldbot.specialists import SPECIALISTS  # noqa: E402
@@ -70,7 +76,12 @@ def main(argv: list[str] | None = None) -> int:
                           retired=settings.research.retired_families,
                           reserved_setting=settings.research.reserved_for(quarter_of(now.to_pydatetime())))
         limit = settings.research.loop_trials_per_run if args.limit is None else args.limit
-        jobs = batch(generate(rows, settings, plan, atr), limit)
+        cands = generate(rows, settings, plan, atr)
+        jobs = batch(cands, limit)
+        counts = survivors_by_timeframe(cands, TIMEFRAMES)
+        print("research_queue: ATR $/oz " + " ".join(f"{tf}={atr.get(tf, float('nan')):.2f}" for tf in TIMEFRAMES)
+              + " | candidates surviving the pre-filters " + " ".join(f"{tf}={n}" for tf, n in counts.items()),
+              file=sys.stderr)
     except (ValueError, OSError, FileNotFoundError, SystemExit) as exc:
         print(f"research_queue: no batch: {exc}", file=sys.stderr)
         print("[]")

@@ -45,9 +45,16 @@ from typing import Any
 from pydantic import ValidationError
 
 from goldbot.base import FrozenRecord, load_record
+from goldbot.config import load_settings
 from goldbot.research.gates import dsr_check
 from goldbot.research.metrics import DaySummedDsr, DsrInputs
-from goldbot.research.registry import TrialRegistry, n_trials_effective, quarter_of, quarter_trials
+from goldbot.research.registry import (
+    LOOP_RULE_REF,
+    TrialRegistry,
+    n_trials_effective,
+    quarter_of,
+    quarter_trials,
+)
 from goldbot.research.registry_sync import _key, merge_rows, read_rows, write_rows
 
 MAX_CELLS = 64                  # one dispatch; GitHub allows 256 matrix jobs, the quarter's trial budget far fewer
@@ -139,6 +146,11 @@ def plan(env: Mapping[str, str]) -> list[dict[str, Any]]:
             out.append({**{k: spec[k] for k in ("specialist", "pooled", "timeframe", "from_year", "to_year", "rationale",
                                                 "families", "discover_config", "rule_ref", *_FLAGS)},
                         "variant": v, "idx": len(out)})
+    loop_cells = sum(c["rule_ref"] == LOOP_RULE_REF for c in out)
+    if loop_cells:
+        cap = load_settings().research.loop_trials_per_run
+        if loop_cells > cap:
+            raise ValueError(f"{loop_cells} loop cells; research.loop_trials_per_run allows {cap} per dispatch (ADR 0029)")
     if len(out) > MAX_CELLS:
         raise ValueError(f"{len(out)} cells; a dispatch runs at most {MAX_CELLS} (the quarter's trial budget is the real cap)")
     return out
