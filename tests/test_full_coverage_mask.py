@@ -245,3 +245,19 @@ def test_evaluate_hands_full_coverage_columns_to_the_walk_forward(monkeypatch: p
     assert seen["full_coverage_columns"] == (SPX,)
     pipeline.evaluate(prep, model_features=["side", "x"])
     assert seen["full_coverage_columns"] == ()
+
+
+def test_a_survivor_trial_takes_its_full_coverage_columns_from_the_parent_discovery_row():
+    """Pin item 3: a survivor trial (config tagged `from_discovery`) runs with the parent discovery's mask; any other
+    config (no tag, a parent without the field, an unknown parent) runs with none."""
+    from goldbot.research.director import survivor_full_coverage
+    parent = {"ts": "2027-01-05T00:00:00+00:00", "config_hash": "abc", "trial": 21, "status": "discovery",
+              "config": {"discovery": DiscoveryConfig(full_coverage_columns=(SPX,)).model_dump()}}
+    plain = {"ts": "2027-01-06T00:00:00+00:00", "config_hash": "def", "trial": 22, "status": "discovery",
+             "config": {"discovery": DiscoveryConfig().model_dump()}}
+    ref = {"ts": parent["ts"], "config_hash": "abc", "trial": 21}
+    rows = [parent, plain]
+    assert survivor_full_coverage(rows, {"from_discovery": ref, "survivor": "H-07"}) == (SPX,)
+    assert survivor_full_coverage(rows, {"from_discovery": {**ref, "ts": plain["ts"], "config_hash": "def"}}) == ()
+    assert survivor_full_coverage(rows, {"survivor": "H-07"}) == ()
+    assert survivor_full_coverage(rows, {"from_discovery": {**ref, "config_hash": "zzz"}}) == ()
