@@ -697,6 +697,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tradingview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Tradingview Status */
+        get: operations["tradingview_status_api_tradingview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/users": {
         parameters: {
             query?: never;
@@ -2835,6 +2852,35 @@ export interface components {
             ts: string | null;
         };
         /**
+         * TvIndicatorStatus
+         * @description One TradingView indicator at one timeframe: arrival of its bar alerts (counts only, never plotted values).
+         */
+        TvIndicatorStatus: {
+            /** Alerts 24H */
+            alerts_24h: number;
+            /** Gaps 24H */
+            gaps_24h: number;
+            /** Indicator */
+            indicator: string;
+            /** Last Bar Time */
+            last_bar_time: string;
+            /** Plots Seen */
+            plots_seen: string[];
+            /** Symbol */
+            symbol: string;
+            /** Tf */
+            tf: string;
+            /** Version */
+            version: string;
+        };
+        /** TvStatusView */
+        TvStatusView: {
+            /** Indicators */
+            indicators: components["schemas"]["TvIndicatorStatus"][];
+            /** Now */
+            now: string;
+        };
+        /**
          * UserRef
          * @description A user for reset-link, disable, enable and revoke-sessions.
          */
@@ -4009,6 +4055,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TradesSummary"][];
+                };
+            };
+        };
+    };
+    tradingview_status_api_tradingview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TvStatusView"];
                 };
             };
         };

@@ -18,7 +18,7 @@ import pyarrow.parquet as pq
 
 TABLES = {
     "ticks", "bars_1m", "bars_15m", "bars_1h", "bars_4h", "bars_1d", "bars_1w",
-    "macro", "calendar_events", "news", "tv_signals", "tv_ideas", "features", "labels",
+    "macro", "calendar_events", "news", "tv_signals", "tv_indicators", "tv_ideas", "features", "labels",
     "trades", "decisions", "dq_events", "cost_tables", "fills",
     "exit_fills",                              # every exit leg against the price it was asked at (finance GAP-04)
     "bars_quarantine",                         # 1m rows with an error-severity dq_flag, kept out of the bar tables
@@ -29,6 +29,8 @@ TABLES = {
 KEY_COLUMNS = {
     "ticks": ["ts_utc", "bid", "ask"],
     "tv_signals": ["signal_hash"],
+    # one row per plot of an indicator's bar alert (source=indicator@version): idempotent on the bar and the plot
+    "tv_indicators": ["indicator", "version", "tf", "bar_time", "plot"],
     "macro": ["series", "value_date", "vintage"],
     "positioning": ["series", "value_date", "vintage"],
     "fills": ["ts_utc", "client_order_id"],

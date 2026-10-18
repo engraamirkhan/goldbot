@@ -840,8 +840,38 @@ cd C:\goldbot
    secret: type it on the VPS only.
 3. The dashboard enforces its own login (email, password, authenticator code) and roles on the public URL.
 
-The tunnel only carries the dashboard. TradingView alerts go to the webhook service on port 8443, which the
-bootstrap script does not expose; set that up only when you start using TradingView alerts.
+The tunnel only carries the dashboard. TradingView alerts go to the webhook service, which listens on 127.0.0.1:8443
+only; see "TradingView alerts: reading your indicators" below.
+
+### 2.7b TradingView alerts: reading your indicators
+
+The webhook records every value your indicators plot, one alert per indicator per timeframe, so research and features can
+use them (opt-in, filter features only until proven). Each bar becomes rows in the `tv_indicators` dataset; a bar whose
+alert never arrives is simply missing (NaN in features). The alert is saved to `state/tv.db` before goldbot answers, and a
+failed save answers 503 so TradingView retries.
+
+1. Store the shared secret (hidden prompt): `python -m goldbot.ops.accounts set tradingview-webhook-secret`; start
+   `goldbot-webhook`. It listens on 127.0.0.1 only; put your HTTPS reverse proxy (for example Tailscale Funnel, path `/tv`)
+   in front. Keep the public address private. If the proxy cannot pass TradingView's address in `X-Forwarded-For`, set
+   `GOLDBOT_TV_ENFORCE_IP=0` for the service: the secret then authenticates alone.
+2. On the chart (XAUUSD, 15m and 1h first) create one alert per indicator: **Condition** = the indicator (or "Any alert()
+   function call" if that is all it offers), **Trigger** = **Once per bar close** (never "once per bar", which sends
+   half-formed bars), longest expiry, **Webhook URL** = your address, and this **Message** (every value is quoted because
+   TradingView writes `NaN` for an empty plot, which is not valid JSON; use `plot_0` to `plot_19` as far as the indicator
+   has plots, the Data Window lists them):
+
+```json
+{"indicator":"K-Indi","version":"2.02","symbol":"{{ticker}}","tf":"{{interval}}","bar_time":"{{time}}","fired_at":"{{timenow}}","price":"{{close}}","plots":{"plot_0":"{{plot_0}}","plot_1":"{{plot_1}}","plot_2":"{{plot_2}}","plot_3":"{{plot_3}}","plot_4":"{{plot_4}}","plot_5":"{{plot_5}}","plot_6":"{{plot_6}}","plot_7":"{{plot_7}}","plot_8":"{{plot_8}}","plot_9":"{{plot_9}}","plot_10":"{{plot_10}}","plot_11":"{{plot_11}}","plot_12":"{{plot_12}}","plot_13":"{{plot_13}}","plot_14":"{{plot_14}}","plot_15":"{{plot_15}}","plot_16":"{{plot_16}}","plot_17":"{{plot_17}}","plot_18":"{{plot_18}}","plot_19":"{{plot_19}}"},"secret":"<the stored secret>"}
+```
+
+   Change `indicator` and `version` per indicator (they name the data: `K-Indi@2.02`); type the secret into the alert
+   yourself, never into chat or a file. Alerts need a TradingView plan with webhooks and two-factor sign-in on.
+3. Check it: the dashboard endpoint `/api/tradingview` lists each indicator and timeframe with its last bar, alerts in the
+   last 24 h, plots seen and gaps (a market-closed stretch also counts as missing bars).
+
+Limits: an invite-only script exposes only the plots and `alert()` calls its author allows. A series that is drawn
+(lines, boxes, labels) or computed but not plotted cannot be read, and a plot set to `display.none` may be missing from
+the alert; check each indicator once. Data stays in `data/` and `state/` (private), never in a public release.
 
 ### 2.8 Telegram bot with @BotFather
 
