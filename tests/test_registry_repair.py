@@ -3,6 +3,7 @@ matrix turned 3.0 into 3, so the planned agent id no longer matched) is replaced
 trial number and the deflated-Sharpe count K. Dry run by default; never publishes."""
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -55,6 +56,14 @@ def _artifact(root: Path, idx: int, rows: list[dict[str, Any]]) -> None:
     (d / "status.json").write_text('{"exit": 0}')
 
 
+HEAD = "239d8660c159be3c582bdb1e94c23388b6a49b50"
+
+
+def _research_run(run_id: str) -> dict[str, Any]:
+    """`gh run view <id> --json headSha,conclusion,workflowName` of a successful research.yml run."""
+    return {"headSha": HEAD, "conclusion": "success", "workflowName": "research"}
+
+
 def _published(tmp: Path) -> tuple[Path, Path, dict[str, Any]]:
     """A registry with one real trial, then a batch whose cell 0 ran (its row rejected, so a failed row stands in) and
     whose cell 1 left nothing (a genuinely failed trial). Returns (registry, artifacts of the run, the cell's row)."""
@@ -73,6 +82,7 @@ def test_a_dry_run_reports_the_replacement_and_changes_nothing(
         tmp_path: Path, repair: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     registry, arts, ran = _published(tmp_path)
     before = registry.read_text()
+    monkeypatch.setattr(repair, "run_info", _research_run)
     monkeypatch.setattr(sys, "argv", ["registry_repair", str(registry), str(arts)])
     repair.main()
     out = capsys.readouterr().out
@@ -85,7 +95,7 @@ def test_apply_replaces_the_failed_row_with_the_cells_row_at_the_same_trial_numb
         tmp_path: Path, repair: ModuleType) -> None:
     registry, arts, ran = _published(tmp_path)
     published = read_rows(registry)
-    result = repair.repair(published, [arts])
+    result = repair.repair(published, [arts], verify=_research_run)
     rows = result.rows
     assert [(r["trial"], r["status"]) for r in rows] == [(1, "screened"), (2, "screened"), (3, "failed")]
     fixed = rows[1]
@@ -102,7 +112,7 @@ def test_the_repair_survives_the_union_with_a_stale_copy_that_still_holds_the_fa
         tmp_path: Path, repair: ModuleType) -> None:
     registry, arts, _ = _published(tmp_path)
     published = read_rows(registry)
-    rows = repair.repair(published, [arts]).rows
+    rows = repair.repair(published, [arts], verify=_research_run).rows
     for merged in (merge_rows(rows, published), merge_rows(published, rows)):
         assert [(r["trial"], r["status"]) for r in merged] == [(1, "screened"), (2, "screened"), (3, "failed")]
 
@@ -111,7 +121,7 @@ def test_a_cell_matched_by_two_runs_is_left_failed_with_the_reason(tmp_path: Pat
     registry, arts, ran = _published(tmp_path)
     other = tmp_path / "39102627317"
     _artifact(other, 0, [{**ran, "ts": _earlier(ran["ts"], 1)}])
-    result = repair.repair(read_rows(registry), [arts, other])
+    result = repair.repair(read_rows(registry), [arts, other], verify=_research_run)
     assert not result.replaced and "2 runs" in result.left[0].why
     assert result.rows == read_rows(registry)
 
@@ -121,7 +131,7 @@ def test_a_cell_row_written_after_the_failed_row_belongs_to_a_later_run_and_is_n
     registry, _, _ = _published(tmp_path)
     later = tmp_path / "39999999999"
     _artifact(later, 0, [_cell_row(tmp_path, {"stop_atr": 3})])      # written now, after the failed row
-    assert not repair.repair(read_rows(registry), [later]).replaced
+    assert not repair.repair(read_rows(registry), [later], verify=_research_run).replaced
 
 
 def test_a_cell_that_left_more_rows_than_its_failed_row_is_not_replaced_because_k_would_change(
@@ -129,5 +139,29 @@ def test_a_cell_that_left_more_rows_than_its_failed_row_is_not_replaced_because_
     registry, arts, ran = _published(tmp_path)
     (arts / "cell-0" / "rows.jsonl").write_text(json.dumps(ran) + "\n" + json.dumps({**ran, "ts": _earlier(ran["ts"], 2)})
                                                 + "\n")
-    result = repair.repair(read_rows(registry), [arts])
+    result = repair.repair(read_rows(registry), [arts], verify=_research_run)
     assert not result.replaced and "2 rows" in result.left[0].why
+
+
+def test_every_repair_row_carries_its_run_the_runs_commit_and_the_digest_of_the_rows_file(
+        tmp_path: Path, repair: ModuleType) -> None:
+    registry, arts, _ = _published(tmp_path)
+    fixed = repair.repair(read_rows(registry), [arts], verify=_research_run).rows[1]["repair"]
+    digest = hashlib.sha256((arts / "cell-0" / "rows.jsonl").read_bytes()).hexdigest()
+    assert (fixed["run_id"], fixed["head_sha"], fixed["rows_sha256"]) == ("39101594107", HEAD, digest)
+
+
+@pytest.mark.parametrize("info", [{"conclusion": "failure"}, {"workflowName": "ci"}, {"headSha": ""}],
+                         ids=["unsuccessful", "another-workflow", "no-commit"])
+def test_a_run_that_is_not_a_successful_research_run_is_refused(
+        tmp_path: Path, repair: ModuleType, info: dict[str, Any]) -> None:
+    registry, arts, _ = _published(tmp_path)
+    with pytest.raises(ValueError, match="39101594107"):
+        repair.repair(read_rows(registry), [arts], verify=lambda run_id: {**_research_run(run_id), **info})
+
+
+def test_a_folder_not_named_by_its_run_id_is_refused(tmp_path: Path, repair: ModuleType) -> None:
+    registry, arts, _ = _published(tmp_path)
+    renamed = arts.rename(tmp_path / "B01")
+    with pytest.raises(ValueError, match="run id"):
+        repair.repair(read_rows(registry), [renamed], verify=_research_run)

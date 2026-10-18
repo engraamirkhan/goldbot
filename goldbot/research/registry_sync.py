@@ -43,16 +43,19 @@ def _key(row: dict[str, Any]) -> tuple[str, str, str, str]:
     return (str(row.get("ts")), str(row.get("agent_id")), str(row.get("config_hash")), str(row.get("feature_version")))
 
 
-def _superseded(rows: list[dict[str, Any]]) -> set[tuple[str, str, str, str]]:
-    """Keys of the `failed` rows a repair row replaces (`repair.replaces`, scripts/registry_repair.py): the record step
-    wrote a failed row for a cell whose real row it wrongly refused, and the repair puts that row in its place under the
-    same timestamp, so the trial keeps its number and K is unchanged. A union drops the replaced row from every copy
-    (a stale one, e.g. the VPS's, cannot bring it back); only a failed row can be replaced, never a real trial."""
-    out: set[tuple[str, str, str, str]] = set()
+def _superseded(rows: list[dict[str, Any]]) -> dict[tuple[str, str, str, str], Any]:
+    """Keys of the `failed` rows a repair row replaces (`repair.replaces`, scripts/registry_repair.py), each with the
+    trial number the repair names: the record step wrote a failed row for a cell whose real row it wrongly refused, and
+    the repair puts that row in its place under the same timestamp, so the trial keeps its number and K is unchanged.
+    A union drops the replaced row from every copy (a stale one, e.g. the VPS's, cannot bring it back). Honoured only
+    when the repair row takes the failed row's own slot (its `ts` is `replaces.ts`); `merge_rows` also requires the
+    failed row's status and trial number (quant review of ADR 0033)."""
+    out: dict[tuple[str, str, str, str], Any] = {}
     for r in rows:
         rep = r.get("repair")
-        if isinstance(rep, dict) and isinstance(rep.get("replaces"), dict):
-            out.add(_key(rep["replaces"]))
+        if isinstance(rep, dict) and isinstance(rep.get("replaces"), dict) and \
+                str(r.get("ts")) == str(rep["replaces"].get("ts")):
+            out[_key(rep["replaces"])] = rep.get("trial")
     return out
 
 
@@ -67,8 +70,10 @@ def merge_rows(*sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for rows in sources:
         for r in rows:
             seen.setdefault(_key(r), r)
-    for k in _superseded(list(seen.values())):
-        if k in seen and seen[k].get("status") == FAILED and "repair" not in seen[k]:
+    for k, trial in _superseded(list(seen.values())).items():
+        dropped = seen.get(k)
+        if dropped is not None and dropped.get("status") == FAILED and "repair" not in dropped \
+                and dropped.get("trial") == trial:
             del seen[k]
     merged = sorted(seen.values(), key=lambda r: (str(r.get("ts")), str(r.get("agent_id"))))
     out, n = [], 0

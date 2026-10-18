@@ -22,8 +22,12 @@ founders, the queue, `passed_gates` all match on it) and there is no typed per-s
    CI cells already ran the int form, so no agent id of a recorded row changes.
 2. Repair: a repaired row takes the failed row's timestamp (its slot in the time-ordered numbering, so the trial
    number and K hold) and carries `repair: {replaces: <failed row key>, trial, cell_ts, source, reason}`.
-   `merge_rows` drops a row named by a `repair.replaces` only if that row is `failed` and is not itself a repair, so a
-   union of any copies is still idempotent and order-free, and a repair can never remove a real trial.
+   `merge_rows` drops a row named by a `repair.replaces` only if that row is `failed`, is not itself a repair, carries
+   the trial number `repair.trial` names, and the repair row's own `ts` is `replaces.ts` (it takes the failed row's
+   slot), so a union of any copies is still idempotent and order-free, and a repair can never remove a real trial
+   or move one in the numbering (quant review).
+   Every repair row records its provenance: `run_id` (checked with `gh run view`: a successful `research` run),
+   the run's `head_sha` and the `rows_sha256` of the cell's rows file; the script refuses a run that fails the check.
 3. A cell's artifact may not carry `repair` (the record step fails such a cell), so only `scripts/registry_repair.py`
    writes one; it replaces one failed row with exactly one cell row from exactly one run that finished before the
    failed row was written, and refuses if any trial number or K would change. It never publishes.

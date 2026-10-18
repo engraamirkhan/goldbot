@@ -17,13 +17,19 @@ The deflated Sharpe of a replaced row is restated on the registry's K, as the re
   python scripts/registry_repair.py REGISTRY RUN_DIR [RUN_DIR ...]            dry run: prints the diff, writes nothing
   python scripts/registry_repair.py REGISTRY RUN_DIR [RUN_DIR ...] --apply    writes the repaired rows to REGISTRY
 
-RUN_DIR is `gh run download <run id> -D RUN_DIR` of a research.yml run (cell-<idx>/rows.jsonl); its name (the run id)
-is recorded as the row's source. Publishing is a separate, reviewed step: `scripts/registry_release.sh save REGISTRY`.
+RUN_DIR is `gh run download <run id> -D <dir>/<run id>` of a research.yml run (cell-<idx>/rows.jsonl), named by its run
+id. Each run is checked with `gh run view` (a successful `research` run) and every repair row records `run_id`, the
+run's `head_sha` and the `rows_sha256` of the rows file it came from; a run that fails the check refuses the repair. Publishing is a separate, reviewed step: `scripts/registry_release.sh save REGISTRY`.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
+import re
+import subprocess
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -38,6 +44,38 @@ from goldbot.research.registry_sync import KEY_FIELDS, _key, merge_rows, read_ro
 
 REASON = ("the record step refused this cell's rows: its plan said a whole float (e.g. 3.0) that the matrix handed the "
           "cell as an int, so the planned agent id differed (readout 2026-10-18, D-1)")
+
+
+WORKFLOW = "research"           # .github/workflows/research.yml `name:`
+_RUN_ID = re.compile(r"^[0-9]+$")
+_SHA = re.compile(r"^[0-9a-f]{40}$")
+RunInfo = Callable[[str], dict[str, Any]]
+
+
+def run_info(run_id: str) -> dict[str, Any]:
+    """`gh run view <id> --json headSha,conclusion,workflowName` of the run an artifact came from."""
+    out = subprocess.run(["gh", "run", "view", run_id, "--json", "headSha,conclusion,workflowName"],
+                         capture_output=True, text=True, check=False, timeout=60)
+    if out.returncode != 0:
+        raise ValueError(f"run {run_id}: gh run view failed: {out.stderr.strip()}")
+    info: dict[str, Any] = json.loads(out.stdout)
+    return info
+
+
+def _verified(runs: list[Path], verify: RunInfo) -> dict[Path, str]:
+    """Each run folder's head commit, once its name is the run id of a successful research.yml run (quant review of
+    ADR 0033: a repair row names the run, its commit and the digest of the rows file it came from). ValueError
+    otherwise: nothing is repaired from an artifact of unknown origin."""
+    out: dict[Path, str] = {}
+    for run in runs:
+        if not _RUN_ID.match(run.name):
+            raise ValueError(f"{run}: the folder must be named by its run id (gh run download <run id> -D <run id>)")
+        info = verify(run.name)
+        sha = str(info.get("headSha") or "")
+        if info.get("workflowName") != WORKFLOW or info.get("conclusion") != "success" or not _SHA.match(sha):
+            raise ValueError(f"run {run.name} is not a successful {WORKFLOW} run with a commit: {info}")
+        out[run] = sha
+    return out
 
 
 class Outcome(FrozenRecord):
@@ -66,14 +104,14 @@ def _when(ts: Any) -> datetime | None:
 
 
 def _candidates(failed: dict[str, Any], runs: list[Path], known: set[tuple[str, str, str, str]]
-                ) -> tuple[dict[str, tuple[str, list[dict[str, Any]]]], list[str]]:
+                ) -> tuple[dict[str, tuple[Path, Path, list[dict[str, Any]]]], list[str]]:
     """The valid rows each run left for the failed row's cell, keyed by row keys (the same artifact downloaded twice is
     one candidate), and why the other runs were not taken."""
     cell = (failed.get("results") or {}).get("cell")
     if not isinstance(cell, dict) or not {"idx", "specialist", "pooled", "variant"} <= set(cell):
         return {}, ["the failed row names no cell"]
     written = _when(failed.get("ts"))
-    found: dict[str, tuple[str, list[dict[str, Any]]]] = {}
+    found: dict[str, tuple[Path, Path, list[dict[str, Any]]]] = {}
     notes: list[str] = []
     for run in runs:
         path = run / f"cell-{cell['idx']}" / "rows.jsonl"
@@ -90,12 +128,14 @@ def _candidates(failed: dict[str, Any], runs: list[Path], known: set[tuple[str, 
         if any(_key(r) in known for r in rows):
             notes.append(f"{run.name}: already in the registry")
             continue
-        found.setdefault("|".join(sorted("/".join(_key(r)) for r in rows)), (f"{run.name}/cell-{cell['idx']}", rows))
+        found.setdefault("|".join(sorted("/".join(_key(r)) for r in rows)), (run, path, rows))
     return found, notes
 
 
-def repair(published: list[dict[str, Any]], runs: list[Path]) -> Repair:
-    """The registry with every repairable failed row replaced (see the module docstring); `published` is not mutated."""
+def repair(published: list[dict[str, Any]], runs: list[Path], verify: RunInfo = run_info) -> Repair:
+    """The registry with every repairable failed row replaced (see the module docstring); `published` is not mutated.
+    Every run folder must be a successful research.yml run (`verify`, gh by default)."""
+    heads = _verified(runs, verify)
     known = {_key(r) for r in published}
     fixes: list[dict[str, Any]] = []
     replaced: list[Outcome] = []
@@ -109,7 +149,8 @@ def repair(published: list[dict[str, Any]], runs: list[Path]) -> Repair:
             why = f"cell rows in {len(found)} runs" if found else ("; ".join(notes) or "no artifact for its cell")
             left.append(Outcome(trial=trial, failed_agent_id=was, why=why))
             continue
-        source, rows = next(iter(found.values()))
+        run, path, rows = next(iter(found.values()))
+        source = f"{run.name}/{path.parent.name}"
         if len(rows) != 1:
             left.append(Outcome(trial=trial, failed_agent_id=was, why=f"the cell left {len(rows)} rows; replacing one "
                                                                          "failed row with them would change K"))
@@ -117,7 +158,9 @@ def repair(published: list[dict[str, Any]], runs: list[Path]) -> Repair:
         row = rows[0]
         fixes.append({**row, "ts": f["ts"], "trial": f["trial"],
                       "repair": {"replaces": {k: f[k] for k in KEY_FIELDS}, "trial": f["trial"],
-                                 "cell_ts": row["ts"], "source": source, "reason": REASON}})
+                                 "cell_ts": row["ts"], "source": source, "run_id": run.name,
+                                 "head_sha": heads[run], "rows_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                                 "reason": REASON}})
         replaced.append(Outcome(trial=trial, failed_agent_id=was, agent_id=str(row["agent_id"]), source=source,
                                 status=str(row["status"])))
     k_before = n_trials_effective(published)
