@@ -379,3 +379,8 @@ tv_pull:                             # TradingView direct pull (goldbot/data/tv_
   backoff_base_s: 300                # after a failed pass: 5 min, doubling ...
   backoff_max_s: 21600               #   ... to 6 h; an expired cookie waits the full 6 h unless a new cookie is stored
   timeout_s: 30                      # per request
+tv:                                  # TradingView values at decision time (goldbot/engine/tv_context.py, specialists/tv_event.py)
+  max_lag_s: 60                      # a value counts only for the decision bar and when it arrived <= this after its close,
+                                     #   else NaN and no TradingView entry (fails closed); equals features.tv_plots.MAX_LAG
+  min_bar_match: 0.95                # share of our decision bars with a TradingView bar of the same open, else the TV
+                                     #   trial is refused before it is charged (research/tv_grid.py: 4h/1d grids differ)

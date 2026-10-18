@@ -635,6 +635,16 @@ class TvPullSettings(_Section):
         if self.backoff_max_s < self.backoff_base_s:
             raise ValueError("tv_pull.backoff_max_s must be at least backoff_base_s")
         return self
+class TvSettings(_Section):
+    """TradingView values at decision time (plan docs/plans/tradingview-strategies.md, "Live staleness fails closed"):
+    a value counts only when its bar is the decision bar and it arrived no more than `max_lag_s` after that bar's
+    close; otherwise it is NaN and nothing that needs it can trigger. Equal to `features.tv_plots.MAX_LAG` (the
+    training allowance), so live never accepts what training could not see (tests/test_tv_event.py pins both)."""
+    max_lag_s: int = Field(default=60, ge=0)
+    # a TV_GRID_V1 trial is refused (research.tv_grid.tv_refusal, before it is charged) unless at least this share of
+    # our decision bars inside the TradingView history has a TradingView bar of the same open: our 4h bars floor on UTC
+    # and our 1d is the 13:30 New York feature-day, TradingView's gold bars start at its session open
+    min_bar_match: float = Field(default=0.95, gt=0, le=1)
 
 
 class Settings(_Section):
@@ -664,6 +674,7 @@ class Settings(_Section):
     ticks: TickRecordSettings = Field(default_factory=TickRecordSettings)
     webhook: WebhookSettings = Field(default_factory=WebhookSettings)
     tv_pull: TvPullSettings = Field(default_factory=TvPullSettings)
+    tv: TvSettings = Field(default_factory=TvSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")
     @classmethod

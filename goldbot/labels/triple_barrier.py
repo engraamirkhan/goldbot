@@ -185,6 +185,45 @@ def uniqueness_weights(labels: pd.DataFrame, n_bars: int) -> pd.Series:
     return pd.Series(w, index=labels.index, name="weight")
 
 
+def triple_barrier_delayed(bars: pd.DataFrame, bars_1m: pd.DataFrame, signals: pd.DataFrame, spec: BarrierSpec,
+                           atr: pd.Series, delay: pd.Timedelta, swap: SwapSpec | None = None,
+                           policy: ExitPolicy | None = None) -> pd.DataFrame:
+    """`triple_barrier` for a signal that is only known `delay` after its bar's close (a TradingView value may arrive
+    up to max_lag later; quant review 2026-10-18, finding a). Entry is at the open of the first 1m bar at or after
+    close + delay (ask for longs, bid for shorts) and the barrier clock starts there: the decision bar that holds the
+    entry is rebuilt from its 1m bars from the entry on, so no price between the close and the entry reaches the label.
+    The time barrier still counts `spec.max_bars` decision bars, the entry's own (partial) bar first. Columns as
+    `triple_barrier`, positions in `bars`; a signal whose entry falls after the last bar is dropped."""
+    close = _bar_close_times(bars)
+    b1 = bars_1m.sort_values("ts_utc").reset_index(drop=True)
+    t1 = pd.DatetimeIndex(pd.to_datetime(b1["ts_utc"], utc=True))
+    a = atr.to_numpy(dtype=float)
+    out = []
+    for idx, side in zip(signals["idx"].to_numpy().astype(int), signals["side"].to_numpy().astype(int)):
+        k = int(t1.searchsorted(close[idx] + delay, side="left"))
+        if k >= len(b1):
+            continue
+        j = int(close.searchsorted(t1[k], side="right"))        # the decision bar the entry minute falls in
+        if j >= len(bars):
+            continue
+        part = b1[(t1 >= t1[k]) & (t1 < close[j])]
+        stub = bars.iloc[[j]].copy()
+        for c in ("bid", "ask"):
+            stub[f"{c}_high"], stub[f"{c}_low"] = part[f"{c}_high"].max(), part[f"{c}_low"].min()
+        sig = bars.iloc[[idx]].copy()
+        sig["ask_close" if side > 0 else "bid_close"] = float(b1[f"{'ask' if side > 0 else 'bid'}_open"].iloc[k])
+        mini = pd.concat([sig, stub, bars.iloc[j + 1:j + 1 + spec.max_bars]], ignore_index=True)
+        res = triple_barrier(mini, pd.DataFrame({"idx": [0], "side": [side]}), spec, pd.Series(a[idx], index=mini.index),
+                             swap=swap, policy=policy)
+        if res.empty:
+            continue
+        res["idx"] = idx
+        res["t_entry"] = j + res["t_entry"] - 1
+        res["t_exit"] = j + res["t_exit"] - 1
+        out.append(res)
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
+
+
 def one_at_a_time(labels: pd.DataFrame) -> pd.DataFrame:
     """Keep a candidate only once the previously kept one has exited (one position per agent, as the engine and
     the shadow book trade). Rules that fire on runs of consecutive bars otherwise yield heavily overlapping labels:

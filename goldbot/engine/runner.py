@@ -37,7 +37,7 @@ from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resamp
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
 from goldbot.engine import unconfirmed
-from goldbot.engine.shadow import ShadowBook, ShadowTrade
+from goldbot.engine.shadow import ShadowBook, ShadowTrade, record_candidate
 from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, SentOrder: re-exported, ADR 0023 step 1)
     EngineStore,
     JsonEngineStore,
@@ -49,6 +49,7 @@ from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, Sent
     orders_file,
     risk_file,
 )
+from goldbot.engine.tv_context import TvShadowWatch
 from goldbot.execution.bridge import CEILING_REFUSAL, UNREADABLE_REFUSAL
 from goldbot.execution.broker import AccountInfo, Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 from goldbot.execution.classifier import StoredClass, effective_class, read_stored
@@ -161,16 +162,6 @@ class Model(Protocol):
     def predict(self, X: pd.DataFrame) -> np.ndarray: ...
 
 
-def _score(model: Model, X: pd.DataFrame) -> tuple[float, float | None]:
-    """(calibrated p, raw score or None) for one row: a MetaLabelModel exposes its raw score, so the shadow book can
-    keep it for later recalibration; any other model gives p only."""
-    raw_fn, cal_fn = getattr(model, "predict_raw", None), getattr(model, "calibrated", None)
-    if raw_fn is None or cal_fn is None:
-        return float(model.predict(X)[0]), None
-    raw = np.asarray(raw_fn(X), dtype=float)
-    return float(np.asarray(cal_fn(raw), dtype=float)[0]), float(raw[0])
-
-
 class ConstantModel(Record):
     """Stand-in until a trained MetaLabelModel is loaded: returns a fixed probability."""
     p: float = 0.6
@@ -242,6 +233,7 @@ class EngineConfig(Record):
     # time) and written to state/broker_terms_<account>.json for the nightly cost job; commission from this many days
     broker_terms_every_s: int = 6 * 3600
     commission_window_days: int = 90
+    tv_max_lag_s: int = Field(60, ge=0)      # settings tv.max_lag_s: a TradingView value later than this is NaN (tv_context)
     # BACKLOG 36: the swap the daily projection charges for a rollover before the risk day ends until the cost table
     # measures the broker's own (`cost_imputation.account_swap`); production passes `settings_swap(settings)`, the
     # default is the shipped prior. Read on the engine's server clock (`server_tz`), whatever zone it names
@@ -284,6 +276,7 @@ class Engine:
         # deliberately stricter than the RiskGate's -15/+30 entry block (blackout_before_min/after_min); changing the
         # allocator rule is the owner's decision (allocator/promotion.py), so the gate window never narrows it
         self.allocator = allocator or RuleAllocator()
+        self._tv = TvShadowWatch()           # TradingView agents: shadow entries between the close and close + max_lag
         self.gate = RiskGate(limits)
         self.ticks: list[Tick] = []
         self.bars_1m = pd.DataFrame()
@@ -596,6 +589,7 @@ class Engine:
             self._kill_switch(everything=False)   # until its book is flat (the whole account while _kill_everything)
         self._scale_out(t)
         self._track_excursions(t)          # reporting only, after every exit; never raises
+        self._guard(lambda: self._tv.poll(self, self._now(t), t))      # TradingView shadow re-checks, after the exits
         if not repeat:
             self._guard(lambda: self._log_tick(t))      # a full disk is a tick error, never a skipped exit
         self._refresh_broker_terms(t.ts_utc)
@@ -1105,12 +1099,13 @@ class Engine:
 
     def _decide(self, tf: str, fr: _Frame, agents: list[Specialist], fam_w: dict[str, float], close_ts: pd.Timestamp,
                 last_tick: Tick) -> list[dict]:
-        dec, m, X, a = fr.dec, fr.m, fr.X, fr.atr
+        dec, X, a = fr.dec, fr.X, fr.atr
         decisions = []
         last = len(dec) - 1
         cost_atr = self._cost_atr(float(a.iloc[last]), close_ts)            # full round trip: the RiskGate's checks
         hurdle_atr = self._cost_atr(float(a.iloc[last]), close_ts, ex_spread=True)   # p already pays the spread
-        cands_by_agent = {agent.agent_id: agent.candidates(m, X) for agent in agents}
+        # a requires_tv agent proposes nothing here; its shadow entry is re-checked until close + max_lag (tv_context)
+        cands_by_agent = self._tv.candidates(self, tf, fr, agents, self._now(last_tick), last_tick, float(a.iloc[last]), hurdle_atr)
         if self.shadow is not None:
             self._shadow_step(tf, fr, agents, cands_by_agent, float(a.iloc[last]), hurdle_atr)
         for agent in agents:
@@ -1121,9 +1116,11 @@ class Engine:
             model = self.models.get(agent.agent_id) or self.models.get(agent.family)
             if model is None:
                 continue
-            share = 1.0 if self.live_shares is None else self.live_shares.get(agent.agent_id, 0.0)
+            # DESIGN: TradingView signals are "filter features only" until the promotion rule: a requires_tv agent is
+            # shadow only (share 0) like a shadow-only member of the population: the shadow book trades it, not the broker
+            share = 0.0 if agent.requires_tv else 1.0 if self.live_shares is None else self.live_shares.get(agent.agent_id, 0.0)
             if share <= 0:
-                continue      # shadow-only member of the population: the shadow book trades it, not the broker
+                continue
             if self._busy(agent.agent_id):
                 continue      # one position (or pending proposal) per agent, as its labels were built
             drift = self._drift()
@@ -3233,25 +3230,12 @@ class Engine:
                 cands = cands_by_agent[agent.agent_id]
                 if agent_key not in (agent.agent_id, agent.family) or cands.empty or int(cands["idx"].iloc[-1]) != last:
                     continue
-                side = int(cands["side"].iloc[-1])
                 Xm = self._scoring_frame(fr, model)
                 if Xm is None:
                     continue          # a model only scores the frame version it was trained on, in shadow too
-                feats = Xm.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
-                feats["side"] = side
-                cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
-                p, p_raw = _score(model, feats[cols])
-                ls = agent.label_spec
-                threshold = breakeven_prob(ls.target_atr, ls.stop_atr, cost_atr) + 0.02
-                # every candidate is recorded (P9 counterfactual shadow): the ones below the threshold too, flagged
-                # not taken, so a recalibration sees an unbiased sample; only taken ones count as shadow trades
-                self.shadow.open_trade(version=version, agent_id=agent.agent_id, side=side, bar_ts=pd.Timestamp(bar["ts_utc"]),
-                                       entry=float(bar["ask_close"] if side > 0 else bar["bid_close"]), atr_usd=atr_usd,
-                                       target_atr=ls.target_atr, stop_atr=ls.stop_atr, max_bars=ls.max_bars, p=p, timeframe=tf,
-                                       threshold=threshold, taken=p > threshold, p_raw=p_raw, policy=agent.exit_spec,
-                                       signal_close=pd.Timestamp(bar["visible_at"]),
-                                       scored_feature_version=str(Xm.attrs.get("feature_version", "")),
-                                       limits_profile=self.limits_current.profile)
+                record_candidate(self.shadow, version=version, model=model, agent=agent, tf=tf, bar=bar, Xm=Xm, last=last,
+                                 side=int(cands["side"].iloc[-1]), atr_usd=atr_usd, cost_atr=cost_atr,
+                                 limits_profile=self.limits_current.profile)
 
     def flush_journal(self) -> None:
         """Append new decisions (proposals, gate blocks, below-threshold scores, orders, exits, orphans) to the

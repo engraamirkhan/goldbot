@@ -661,7 +661,7 @@ def research_families() -> list[str]:
     trials on: every registered family except one under its pre-registered rule-only screen (`Specialist.screening`,
     e.g. asia_drift / H-04), whose only trial is the pre-registered one (research.yml), as it is kept out of the
     default founders and the pools (quant review M1)."""
-    return sorted(f for f, cls in SPECIALISTS.items() if not cls.screening)
+    return sorted(f for f, cls in SPECIALISTS.items() if not cls.screening and not cls.requires_tv)   # TV: TV_GRID_V1 only
 
 
 def research_budget(ctx: JobContext) -> tuple[int, int]:

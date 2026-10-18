@@ -52,12 +52,12 @@ def check_model_columns(names: list[str]) -> None:
     check_feature_cap(names)
 
 
-def _plot_name(p: object) -> str:
+def plot_name(p: object) -> str:
     s = str(p)
     return f"plot_{s}" if s.isdigit() else s
 
 
-def _eligible(long: pd.DataFrame, spec: PlotSpec) -> pd.DataFrame:
+def eligible_rows(long: pd.DataFrame, spec: PlotSpec) -> pd.DataFrame:
     """The study's rows that may be used: this indicator, version, timeframe and input set; bar close only; live, or
     repaint-validated history."""
     if "meta_hash" not in long.columns:
@@ -72,10 +72,10 @@ def _eligible(long: pd.DataFrame, spec: PlotSpec) -> pd.DataFrame:
         else pd.Series(False, index=d.index)
     live = is_live(origin)
     d = d[live | (is_history(origin) & validated)].assign(_live=live)
-    return d.assign(plot=d["plot"].map(_plot_name))
+    return d.assign(plot=d["plot"].map(plot_name))
 
 
-def _wide(d: pd.DataFrame, width: pd.Timedelta) -> pd.DataFrame:
+def bar_frame(d: pd.DataFrame, width: pd.Timedelta) -> pd.DataFrame:
     """bar_time, available_utc and one column per plot; a bar with any live row uses its live rows only; a history
     row is available no earlier than its bar close + MAX_LAG."""
     live_bars = set(d.loc[d["_live"], "bar_time"])
@@ -122,12 +122,12 @@ def f_tv_plots(df: pd.DataFrame, ctx: FeatureCtx) -> pd.DataFrame:
         if sec <= 0:
             raise ValueError(f"unknown timeframe {spec.tf!r} for {spec.feature_id}: use minutes (15, 60, 240) or 1D, 1W")
         width = pd.Timedelta(seconds=sec)
-        plot = _plot_name(spec.plot_id)
-        d = _eligible(long, spec)
+        plot = plot_name(spec.plot_id)
+        d = eligible_rows(long, spec)
         d = d[d["plot"] == plot]
         if d.empty:
             continue
-        frame = _wide(d, width)
+        frame = bar_frame(d, width)
         # a blanked bar stays in the frame (so the join lands on it) and reads NaN: never the bar before it
         blank = _blanked(frame["bar_time"], f"{spec.study}|{spec.meta_hash}|{spec.tf}", seed) if training \
             else np.zeros(len(frame), dtype=bool)
