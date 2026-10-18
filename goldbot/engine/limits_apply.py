@@ -114,6 +114,14 @@ class AdaptiveLimitsController:
         else:
             if st is None:
                 out = (None, "no adaptive decision yet")
+            elif st.day > today:
+                # the nightly job has decided tomorrow (it runs before the roll) and the row now holds that: tomorrow's
+                # applies from tomorrow's roll only; today keeps today's (as read before, or as applied before a
+                # restart), else the floors
+                kept = r[2] if r is not None and r[1] == today else \
+                    self._seed[1] if self._seed is not None and self._seed[0] == today else None
+                out = (kept, f"today's decision (tomorrow's, for {st.day.isoformat()}, waits for the roll)") \
+                    if kept is not None else (None, f"only tomorrow's decision ({st.day.isoformat()}) is stored")
             elif st.day != today:
                 out = (None, f"the adaptive decision is for {st.day.isoformat()}, not today ({today.isoformat()})")
             else:                                  # reading 13: a changed ceiling never raises a stored value
@@ -250,11 +258,12 @@ class EngineLimits:
         for d in eng.decisions[eng._journaled:]:
             d.setdefault("limits_profile", self.current.profile)
 
-    def entry(self, min_lot_exception: bool = False) -> dict[str, Any]:
+    def entry(self, prop: Any = None, gd: Any = None) -> dict[str, Any]:
         """The EntryAudit (and so the closed-trade record) fields of ADR 0032, the profile and the limits at entry, and
-        of ADR 0031 (A1): whether the minimum-lot exception sized it (the exploration budget counts these)."""
+        of ADR 0031 (A1): whether the minimum-lot exception sized the order sent (`entry_exception`; the exploration
+        budget counts these)."""
         return {"limits_profile": self.current.profile, "limits": self.current.tag(),
-                "min_lot_exception": bool(min_lot_exception)}
+                "min_lot_exception": entry_exception(prop, gd)}
 
     def published(self) -> dict[str, Any]:
         """The engine file's ADR 0032 keys: the current limits and their profile; the supervisor's combined caps follow
@@ -262,6 +271,15 @@ class EngineLimits:
         if self.policy is None:
             return {}
         return {"limits_current": self.current.model_dump(mode="json"), "limits_reverted": self.reverted}
+
+
+def entry_exception(prop: Any, gd: Any) -> bool:
+    """ADR 0031 (A1): whether the order sent was the minimum-lot exception. The gate decision the order is sent on (the
+    re-check at approval, or the auto-mode decision) wins over the proposal card, which was sized earlier: an entry
+    that became an exception at the click must count toward the 60-trade budget and the -10R stop."""
+    if gd is not None:
+        return "min_lot_exception" in (getattr(gd, "reasons", None) or [])
+    return bool(getattr(prop, "min_lot_exception", False))
 
 
 def published_limits(lim: RiskLimits, min_lot_risk: float | None) -> dict[str, Any]:

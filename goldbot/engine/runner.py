@@ -1138,7 +1138,7 @@ class Engine:
                                                   scored_fv=sfv))
                     continue
                 try:
-                    res = self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd)
+                    res = self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd, gd=gd)
                 except Exception as exc:
                     # review LOW-C: the order may or may not be at the broker. Its pending_orders row stays "sending"
                     # (the restart reconciliation resolves it), entries are blocked (tick_error), no further auto
@@ -1212,7 +1212,7 @@ class Engine:
                 price = tick.ask if prop.side > 0 else tick.bid
                 res = self._execute(prop, agent, lots, price - prop.side * gd.stop_distance,
                                     price + prop.side * agent.label_spec.target_atr * intent.atr_usd, requested=price,
-                                    atr_usd=intent.atr_usd)
+                                    atr_usd=intent.atr_usd, gd=gd)      # the re-check's decision (exception)
                 code = None if res is None else refusal_code(res, paper=self.cfg.mode == "paper",
                                                              definite=DEFINITE_REJECT_RETCODES)
                 if res is not None and code is not None:      # the card says "NOT PLACED" (docs/ux/order-not-placed.md)
@@ -1330,7 +1330,7 @@ class Engine:
             st.open_risk += gd.risk_amount * lots / gd.lots if gd.lots > 0 else gd.risk_amount
 
     def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float, *, requested: float,
-                 atr_usd: float | None = None) -> OrderResult | None:
+                 atr_usd: float | None = None, gd: Any = None) -> OrderResult | None:
         """Sends the order (pending_orders row first) and returns the broker's result; None when the proposal was sent
         before and nothing is sent now."""
         if prop.proposal_id in self.sent_ids:       # sent before (this process or before a restart): never again
@@ -1342,7 +1342,7 @@ class Engine:
         audit = EntryAudit(decision_price=prop.entry, decision_spread_points=prop.spread_points,
                            decision_utc=pd.Timestamp(prop.created, unit="s", tz="UTC"), requested_price=requested,
                            timeframe=agent.timeframe, family=agent.family,
-                           model_version=self.live_versions.get(agent.agent_id), **self._entry_limits(prop.min_lot_exception))
+                           model_version=self.live_versions.get(agent.agent_id), **self._entry_limits(prop, gd))
         oi = OrderIntent(client_order_id=prop.proposal_id, symbol=self.cfg.symbol, side=prop.side, lots=lots, sl=round(stop, 2), tp=round(target, 2), magic=magic,
                          comment=prop.proposal_id[-31:])
         # pending_orders row persisted BEFORE sending: a crash between send and result is reconciled on restart
@@ -2865,8 +2865,8 @@ class Engine:
     def _tag_decisions(self) -> None:
         self._limits.tag(self)
 
-    def _entry_limits(self, min_lot_exception: bool = False) -> dict[str, Any]:
-        return self._limits.entry(min_lot_exception)
+    def _entry_limits(self, prop: Any = None, gd: Any = None) -> dict[str, Any]:
+        return self._limits.entry(prop, gd)
 
     def _risk_path(self) -> Path:
         return risk_file(self.cfg.state_dir, self.cfg.account_id)

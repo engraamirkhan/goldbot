@@ -385,6 +385,14 @@ def decision_day_of(slot: pd.Timestamp) -> date:
     return day_of_ns(_ns(slot)) + timedelta(days=1)
 
 
+def market_closed_day(day: date) -> bool:
+    """A UTC Saturday or Sunday: gold is closed (Friday 21:00/22:00 UTC to Sunday 22:00/23:00 UTC), nothing trades on
+    the day decided and the engine file of the night before can be stale. No decision is made for it, so a weekend
+    neither floors the limits nor resets the 3-day loosening count (a risk-day count of trading days). The engine
+    trades the floors on such a day (no decision for it), when nothing can be entered anyway."""
+    return day.weekday() >= 5
+
+
 def limits_job(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """Nightly, before the risk-day roll: one decision per adaptive account (ADR 0031). A failing account never stops
     the others; a dq_event goes to the dq_events table."""
@@ -400,6 +408,8 @@ def limits_job(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 
     out: dict[str, Any] = {}
     day = decision_day_of(slot)
+    if market_closed_day(day):
+        return {"skipped": f"{day.isoformat()} is a weekend day: no decision (the 3-day counts and cooldown keep)"}
     for acc in ctx.accounts:
         if not adaptive_enabled(ctx.settings, acc):
             continue
@@ -441,9 +451,11 @@ def check_limits_controller(ctx: HealthContext, account_id: str) -> list[Check]:
     if st is None or st.decided_ns is None:
         return [Check(name=name, status="fail", reason=f"no adaptive limits decision yet: {floors}")]
     age_h = (_ns(ctx.now) - st.decided_ns) / 3.6e12
-    if age_h > STALE_DECISION_H:
+    # no decision is made for a weekend day (Friday's and Saturday's nights): two nights more on Saturday and Sunday
+    limit = STALE_DECISION_H + (48.0 if ctx.now.tz_convert("UTC").weekday() >= 5 else 0.0)
+    if age_h > limit:
         return [Check(name=name, status="fail",
-                      reason=f"last adaptive limits decision {age_h:.0f} h ago (limit {STALE_DECISION_H:.0f} h): {floors}")]
+                      reason=f"last adaptive limits decision {age_h:.0f} h ago (limit {limit:.0f} h): {floors}")]
     L = st.limits
     return [Check(name=name, status="ok",
                   reason=f"decided {age_h:.1f} h ago for {st.day.isoformat()}: daily {_pct(L.daily_cap)}, weekly "
@@ -452,4 +464,5 @@ def check_limits_controller(ctx: HealthContext, account_id: str) -> list[Check]:
 
 __all__ = ["UNATTRIBUTED", "EngineFacts", "adaptive_enabled", "atr15_stats", "bounds_for", "build_evidence",
            "change_notice", "check_limits_controller", "decide_account", "decision_day_of", "demo_evidence",
+           "market_closed_day",
            "engine_facts", "limits_job", "shadow_evidence", "strategy_freezes"]

@@ -33,6 +33,7 @@ from goldbot.ops.limits_job import (
     bounds_for,
     build_evidence,
     demo_evidence,
+    market_closed_day,
     shadow_evidence,
     strategy_freezes,
 )
@@ -95,6 +96,9 @@ def replay(settings: Settings, acc: Account, accounts: Sequence[Account], *, sta
     prev: AdaptiveState | None = None
     day = start
     while day <= end:
+        if market_closed_day(day):                     # as the nightly job: no decision for a weekend day
+            day += timedelta(days=1)
+            continue
         as_of = day_start_ns(day)
         demo, problems = demo_evidence(trades, acc.account_id, imputer, freezes, as_of)
         if err:

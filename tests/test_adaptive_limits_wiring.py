@@ -259,7 +259,7 @@ def test_the_limits_controller_check_fails_when_the_last_decision_is_older_than_
     assert check_limits_controller(_hctx(tmp_path, adaptive=False), "icm-demo") == []
     (c,) = check_limits_controller(_hctx(tmp_path), "icm-demo")
     assert c.status == "fail" and "no adaptive limits decision" in c.reason
-    now = pd.Timestamp.now("UTC")
+    now = T0                                                           # a Wednesday
     _save(tmp_path, FLOOR, decided_ns=_ns(now - pd.Timedelta(hours=STALE_DECISION_H + 0.5)))
     (c,) = check_limits_controller(_hctx(tmp_path, now=now), "icm-demo")
     assert c.name == "limits_controller:icm-demo" and c.status == "fail" and "26 h" in c.reason
@@ -267,6 +267,12 @@ def test_the_limits_controller_check_fails_when_the_last_decision_is_older_than_
     (c,) = check_limits_controller(_hctx(tmp_path, now=now), "icm-demo")
     assert c.status == "ok"
     assert health.check_limits_controller is check_limits_controller
+    # no decision is made for Saturday and Sunday: Friday 23:05's (for Friday) is still fresh enough on Sunday night
+    sun = pd.Timestamp("2026-11-01 22:30", tz="UTC")
+    _save(tmp_path, FLOOR, decided_ns=_ns(pd.Timestamp("2026-10-29 23:05", tz="UTC")))
+    assert check_limits_controller(_hctx(tmp_path, now=sun), "icm-demo")[0].status == "ok"
+    mon = pd.Timestamp("2026-11-02 01:30", tz="UTC")                   # Sunday night's run missed: fails again
+    assert check_limits_controller(_hctx(tmp_path, now=mon), "icm-demo")[0].status == "fail"
 
 
 # ---------------------------------------------------------------------------------------------- the engine side
@@ -460,12 +466,24 @@ def test_exits_pass_while_the_adaptive_floors_and_caps_bind(tmp_path, phase_file
 
 
 # ---------------------------------------------------------------------------------------------- exception trades
-def test_a_minimum_lot_exception_entry_is_recorded_for_the_exploration_count(tmp_path, phase_file):
+@pytest.mark.parametrize("card, sent, recorded", [(False, ["min_lot_exception"], True), (True, [], False),
+                                                   (True, None, True)])
+def test_the_order_records_the_exception_of_the_decision_it_was_sent_on(tmp_path, card, sent, recorded):
+    # the gate re-runs at the click: an entry that became an exception there counts toward the 60 and the -10R stop
+    from goldbot.risk.gate import GateDecision
+    from goldbot.specialists.trend import TrendSpecialist
+    from goldbot.telegram.approvals import Proposal
+    from tests.test_engine_clock import _engine as clock_engine
     assert "min_lot_exception" in EntryAudit.model_fields and "min_lot_exception" in ClosedTrade.model_fields
-    pb = _Equity()
-    pb.on_tick(_tick())
-    eng = _engine(tmp_path, pb)
-    assert eng._entry_limits(True)["min_lot_exception"] is True and eng._entry_limits()["min_lot_exception"] is False
+    eng, pb, _ = clock_engine(tmp_path)
+    agent = TrendSpecialist()
+    prop = Proposal(proposal_id="icm-demo-1-x", account_id="icm-demo", agent_id=agent.agent_id, side=1, lots=0.01,
+                    entry=2_400.2, stop=2_390.0, target=2_430.0, p=0.6, ev_r=0.1, spread_points=20.0, top_features=[],
+                    min_lot_exception=card)
+    gd = None if sent is None else GateDecision(allowed=True, lots=0.01, reasons=sent)
+    eng._execute(prop, agent, 0.01, 2_390.0, 2_430.0, requested=2_400.2, atr_usd=10.0, gd=gd)
+    (tr,) = eng.open.values()
+    assert tr.audit is not None and tr.audit.min_lot_exception is recorded
 
 
 def test_an_exception_trades_stop_risk_counts_against_the_daily_limit(phase_file, tmp_path):
@@ -482,9 +500,12 @@ def test_an_exception_trades_stop_risk_counts_against_the_daily_limit(phase_file
 
     ok = RiskGate(lim).check(intent, state(1_000.0))
     assert ok.allowed and ok.reasons == ["min_lot_exception"]
+    assert RiskGate(lim).daily_loss_limit(state(970.0)) == pytest.approx(35.0)   # the 3.5% cap binds, not the £50
     # £30 lost today (3% < the 3.5% cap, under the £35 limit): the ~£6 minimum-lot stop risk would pass the limit
     late = RiskGate(lim).check(intent, state(970.0))
-    assert not late.allowed and late.reasons == ["daily_loss_limit_abs"]
+    assert not late.allowed and late.reasons == ["daily_loss_limit_abs"] and late.risk_amount > 5.0
+    wider = RiskGate(lim.model_copy(update={"daily_cap": 0.05})).check(intent, state(970.0))   # 5%: £50 room
+    assert wider.allowed and wider.reasons == ["min_lot_exception"]
 
 
 # ---------------------------------------------------------------------------------------------- the replay
@@ -497,10 +518,10 @@ def test_the_replay_is_deterministic_writes_nothing_and_prints_one_line_per_day(
     a = _acc()
     runs = [replay(S, a, [a], state_dir=tmp_path, models=MODELS, start=date(2026, 10, 1), end=date(2026, 10, 20))
             for _ in range(2)]
-    assert runs[0] == runs[1] and len(runs[0]) == 20
+    assert runs[0] == runs[1] and len(runs[0]) == 14                  # 20 days less 3 weekends' 6 days
     assert sorted(p.name for p in tmp_path.iterdir() if p.name != "shadow_book.json") == before   # no core.db
     lines = render(runs[0], "not given")
-    assert "never a tuning step" in lines[0] and len(lines) == 3 + 20 and lines[3].startswith("2026-10-01")
+    assert "never a tuning step" in lines[0] and len(lines) == 3 + 14 and lines[3].startswith("2026-10-01")
     assert any(d.limits.daily_cap > 0.02 for d in runs[0])            # the replay does move on good demo fills
 
 
@@ -525,3 +546,30 @@ def test_the_first_night_opens_the_minimum_lot_exploration_unless_atr_is_at_its_
         assert notices[0].startswith("Limit change (demo, icm-demo): smallest-trade cap off -> 1%")
     else:
         assert notices == []
+
+
+def test_a_weekend_night_makes_no_decision_and_keeps_the_loosening_count(tmp_path, phase_file):
+    fri = date(2026, 10, 30)
+    AdaptiveStore(tmp_path).save(AdaptiveState(account_id="icm-demo", day=fri, limits=FLOOR,
+                                               up_streak={"daily_cap": 2}, decided_ns=1), [])
+    ctx = SimpleNamespace(settings=S, accounts=[_acc()], state_dir=tmp_path, models=MODELS, clock=None,
+                          store=SimpleNamespace(append=lambda *a, **k: 0))
+    for slot in ("2026-10-30 23:05", "2026-10-31 23:05"):            # Friday's and Saturday's nights, engine stale
+        out = limits_job(ctx, pd.Timestamp(slot, tz="UTC"))           # type: ignore[arg-type]
+        assert "skipped" in out
+    st = AdaptiveStore(tmp_path).load("icm-demo")
+    assert st is not None and st.day == fri and st.up_streak == {"daily_cap": 2} and st.tightened_day is None
+
+
+def test_tomorrows_decision_written_before_the_roll_waits_for_it(tmp_path, phase_file):
+    _save(tmp_path, UP)
+    pol = _policy(tmp_path)
+    pol.controller.RELOAD_S = 0.0                                      # type: ignore[attr-defined]
+    assert pol.resolve(_ev(T0))[0].daily_cap == 0.035
+    top = FLOOR.model_copy(update={"daily_cap": 0.05, "weekly_cap": 0.10})
+    _save(tmp_path, top, DAY + timedelta(days=1))                      # the 23:05 run decides tomorrow
+    late = pd.Timestamp("2026-10-28 23:30", tz="UTC")
+    assert pol.resolve(_ev(late))[0].daily_cap == 0.035                 # the last hour of today: today's, not floors
+    assert pol.resolve(_ev(late + pd.Timedelta(minutes=31)))[0].daily_cap == 0.05   # from the roll: tomorrow's
+    fresh = _policy(tmp_path)                                          # a restart in the last hour, nothing logged
+    assert fresh.resolve(_ev(late))[0].daily_cap == 0.02               # today's is gone: the floors, never tomorrow's
