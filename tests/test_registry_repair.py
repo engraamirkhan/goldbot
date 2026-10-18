@@ -160,6 +160,53 @@ def test_a_run_that_is_not_a_successful_research_run_is_refused(
         repair.repair(read_rows(registry), [arts], verify=lambda run_id: {**_research_run(run_id), **info})
 
 
+def _failed_registry(tmp: Path, real: dict[str, Any], cell: dict[str, Any],
+                     cell_rows: list[dict[str, Any]]) -> tuple[Path, Path]:
+    """A registry holding one real trial then the failed row the record step wrote for `cell`, and the run's artifact."""
+    registry = tmp / "registry.jsonl"
+    write_rows(registry, merge_rows([real], [cells._failed_row(cell, "refused")]))
+    arts = tmp / "39129559408"
+    _artifact(arts, 0, cell_rows)
+    return registry, arts
+
+
+def test_a_failed_discovery_row_is_replaced_by_the_discovery_row_with_its_preregistration_and_k_rises_by_k_eff(
+        tmp_path: Path, repair: ModuleType) -> None:
+    """Trial #69 (H-40): the cell wrote a pre-registration and a discovery row; the failed row hid the discovery's K_eff."""
+    cell = {"idx": 0, "specialist": "box_course", "pooled": "", "variant": {}, "rationale": "H-40"}
+    real = _cell_row(tmp_path, {"confirm_bars": 1})
+    agent, _, config, _ = cells._planned(cell)
+    reg =TrialRegistry(tmp_path / "disc.jsonl")
+    pre = reg.preregister(agent_id=agent, family="discovery_box_course", config=config, feature_version="f-1",
+                          rationale="H-40", reading_rule="continue if AUC >= 0.53", plan={"n": 4})
+    disc = reg.record(agent_id=agent, family="discovery_box_course", config=config, feature_version="f-1",
+                      rationale="H-40", results={"discovery": {"survivor_unit": "group", "n_groups_screened": 4}},
+                      status="discovery", preregistration=pre)
+    registry, arts = _failed_registry(tmp_path, real, cell, [pre, disc])
+    published = read_rows(registry)
+    result = repair.repair(published, [arts], verify=_research_run)
+    assert [(r["trial"], r["status"]) for r in result.rows] == [(1, "screened"), (2, "preregistered"), (2, "discovery")]
+    assert result.rows[2]["preregistration"]["trial"] == 2 and result.rows[2]["repair"]["trial"] == 2
+    assert [s.trial for s in result.replaced] == [2] and not result.left
+    assert (result.k_before, result.k_after) == (2, 2 + 4)
+    for merged in (merge_rows(result.rows, published), merge_rows(published, result.rows)):
+        assert [r["status"] for r in merged] == ["screened", "preregistered", "discovery"]
+
+
+def test_a_failed_pooled_row_is_replaced_by_the_pooled_cells_row(tmp_path: Path, repair: ModuleType) -> None:
+    """Trial #52 (B12): the pooled row's agent id is `pooled_15m-g0-<hash>`, not the `pooled-15m` the plan once named."""
+    cell = {"idx": 0, "specialist": "session_open", "pooled": "15m", "variant": {}, "rationale": "B12"}
+    real = _cell_row(tmp_path, {"confirm_bars": 1})
+    agent, family, config, _ = cells._planned(cell)
+    row =TrialRegistry(tmp_path / "pool.jsonl").record(agent_id=agent, family=family, config=config,
+                                                        feature_version="f-1", rationale="B12", results={"n": 1},
+                                                        status="screened")
+    registry, arts = _failed_registry(tmp_path, real, cell, [row])
+    result = repair.repair(read_rows(registry), [arts], verify=_research_run)
+    assert [(r["trial"], r["status"], r["agent_id"]) for r in result.rows][1] == (2, "screened", agent)
+    assert agent.startswith("pooled_15m-g0-") and (result.k_before, result.k_after) == (2, 2)
+
+
 def test_a_folder_not_named_by_its_run_id_is_refused(tmp_path: Path, repair: ModuleType) -> None:
     registry, arts, _ = _published(tmp_path)
     renamed = arts.rename(tmp_path / "B01")

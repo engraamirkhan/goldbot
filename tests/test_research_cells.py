@@ -509,3 +509,64 @@ def test_flat_artifact_files_are_not_guessed_onto_a_cell_when_the_plan_has_sever
     (tmp_path / "cell-0").rename(arts)
     out = cells.record(plan, arts, TrialRegistry(tmp_path / "registry.jsonl").path)
     assert out.failed == 2 and out.recorded == 0
+
+
+# ------------------------------------------------------------- discovery and pooled cells (trials #69 and #52, 2026-10-18)
+def _discovery_rows(tmp: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """A discovery cell as research_pass writes it: the run's own pre-registration (reading_rule, plan, queue), then
+    the discovery row linked to it, both under the family `discovery_<specialist>`."""
+    plan = cells.plan(_env(SPECIALIST="box_course", DISCOVER="true"))[0]
+    agent, _, config, resolved = cells._planned(plan)
+    assert resolved
+    reg = TrialRegistry(tmp / "disc.jsonl")
+    pre = reg.preregister(agent_id=agent, family="discovery_box_course", config=config, feature_version="fv",
+                          rationale="r", reading_rule="continue if AUC >= 0.53", plan={"n_features": 3})
+    row = reg.record(agent_id=agent, family="discovery_box_course", config=config, feature_version="fv", rationale="r",
+                     results={"discovery": {"survivor_unit": "group", "n_groups_screened": 4}}, status="discovery",
+                     preregistration=pre)
+    return plan, [pre, row]
+
+
+def test_a_discovery_cells_preregistration_and_discovery_rows_are_both_accepted_and_recorded(tmp_path: Path) -> None:
+    plan, rows = _discovery_rows(tmp_path)
+    assert rows[0]["status"] == "preregistered" and {"reading_rule", "plan", "queue"} <= set(rows[0])
+    arts = tmp_path / "arts"
+    _cell_dir(arts, 0, rows)
+    registry = TrialRegistry(tmp_path / "registry.jsonl")
+    out = cells.record([plan], arts, registry.path)
+    assert out.failed == 0
+    assert [r["status"] for r in read_rows(registry.path)] == ["preregistered", "discovery"]
+
+
+def test_a_discovery_cell_row_with_a_field_the_registry_never_writes_is_still_rejected(tmp_path: Path) -> None:
+    plan, rows = _discovery_rows(tmp_path)
+    arts = tmp_path / "arts"
+    _cell_dir(arts, 0, [{**rows[0], "smuggled": 1}, rows[1]])
+    out = cells.record([plan], arts, TrialRegistry(tmp_path / "registry.jsonl").path)
+    assert out.failed == 1
+
+
+def test_a_discovery_cells_rows_for_another_family_than_discovery_of_its_specialist_are_rejected(tmp_path: Path) -> None:
+    plan, rows = _discovery_rows(tmp_path)
+    arts = tmp_path / "arts"
+    _cell_dir(arts, 0, [{**rows[0], "family": "other"}, rows[1]])
+    assert cells.record([plan], arts, TrialRegistry(tmp_path / "registry.jsonl").path).failed == 1
+
+
+def test_a_pooled_cell_is_planned_under_the_agent_id_the_pooled_run_gives_its_row(tmp_path: Path) -> None:
+    from goldbot.research.pipeline import pooled_family, pooled_members
+    from goldbot.specialists import SPECIALISTS
+    from goldbot.specialists.base import AgentIdentity
+    plan = cells.plan(_env(POOLED="15m"))[0]
+    specs = [SPECIALISTS[f]() for f in pooled_members("15m")]
+    ident = AgentIdentity(family=pooled_family("15m"),
+                          config={"timeframe": "15m", "families": {s.family: s.config for s in specs}})
+    agent, family, config, resolved = cells._planned(plan)
+    assert resolved and (agent, family) == (ident.agent_id, "pooled_15m")
+    row = TrialRegistry(tmp_path / "pool.jsonl").record(agent_id=agent, family=family, config=config,
+                                                        feature_version="fv", rationale="r", results={"screen": {}},
+                                                        status="screened")
+    arts = tmp_path / "arts"
+    _cell_dir(arts, 0, [row])
+    out = cells.record([plan], arts, TrialRegistry(tmp_path / "registry.jsonl").path)
+    assert out.failed == 0 and out.recorded == 1

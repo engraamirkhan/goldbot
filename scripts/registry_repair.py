@@ -39,7 +39,7 @@ sys.path.insert(0, str(ROOT))
 
 from goldbot.base import FrozenRecord  # noqa: E402
 from goldbot.research.cells import FAILED, _read_cell_rows, restate_dsr  # noqa: E402
-from goldbot.research.registry import n_trials_effective  # noqa: E402
+from goldbot.research.registry import DISCOVERY, discovery_k_eff, is_trial, n_trials_effective  # noqa: E402
 from goldbot.research.registry_sync import KEY_FIELDS, _key, merge_rows, read_rows, write_rows  # noqa: E402
 
 REASON = ("the record step refused this cell's rows: its plan said a whole float (e.g. 3.0) that the matrix handed the "
@@ -138,6 +138,7 @@ def repair(published: list[dict[str, Any]], runs: list[Path], verify: RunInfo | 
     heads = _verified(runs, verify if verify is not None else run_info)   # looked up at call time (tests patch it)
     known = {_key(r) for r in published}
     fixes: list[dict[str, Any]] = []
+    k_eff = 0                       # what the replaced discovery rows add to K: the failed rows hid their selection
     replaced: list[Outcome] = []
     left: list[Outcome] = []
     for f in published:
@@ -151,11 +152,17 @@ def repair(published: list[dict[str, Any]], runs: list[Path], verify: RunInfo | 
             continue
         run, path, rows = next(iter(found.values()))
         source = f"{run.name}/{path.parent.name}"
-        if len(rows) != 1:
-            left.append(Outcome(trial=trial, failed_agent_id=was, why=f"the cell left {len(rows)} rows; replacing one "
+        trials = [r for r in rows if is_trial(r)]
+        if len(trials) != 1:
+            left.append(Outcome(trial=trial, failed_agent_id=was, why=f"the cell left {len(trials)} rows; replacing one "
                                                                          "failed row with them would change K"))
             continue
-        row = rows[0]
+        row = trials[0]
+        # a pre-registration the cell wrote before its look (a discovery run's) is not a trial: it comes along under
+        # its own timestamp and takes no slot (merge_rows numbers it after the trial before it)
+        fixes += [r for r in rows if not is_trial(r)]
+        if row["status"] == DISCOVERY:
+            k_eff += discovery_k_eff((row.get("results") or {}).get("discovery") or {})
         fixes.append({**row, "ts": f["ts"], "trial": f["trial"],
                       "repair": {"replaces": {k: f[k] for k in KEY_FIELDS}, "trial": f["trial"],
                                  "cell_ts": row["ts"], "source": source, "run_id": run.name,
@@ -171,9 +178,11 @@ def repair(published: list[dict[str, Any]], runs: list[Path], verify: RunInfo | 
     mine = {_key(r) for r in fixes}
     final = [restate_dsr(r, k) if _key(r) in mine else r for r in merged]
     numbers = {_key(r): r["trial"] for r in final}
-    moved = [o.trial for o, r in zip(replaced, fixes, strict=True) if numbers[_key(r)] != o.trial]
-    if moved or len(final) != len(published) or k != k_before:
-        raise ValueError(f"the repair would renumber trials {moved} or change K ({k_before} -> {k}): refusing")
+    swapped = [r for r in fixes if is_trial(r)]
+    moved = [o.trial for o, r in zip(replaced, swapped, strict=True) if numbers[_key(r)] != o.trial]
+    if moved or sum(map(is_trial, final)) != sum(map(is_trial, published)) or k != k_before + k_eff:
+        raise ValueError(f"the repair would renumber trials {moved} or change the trial count or K ({k_before} -> {k}, "
+                         f"expected {k_before + k_eff}): refusing")
     return Repair(rows=final, replaced=replaced, left=left, k_before=k_before, k_after=k)
 
 
