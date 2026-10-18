@@ -208,7 +208,7 @@ def test_tradingview_status_is_for_any_signed_in_role_and_shows_no_values(client
     assert c.get("/api/tradingview", headers=h["viewer"]).json()["indicators"] == []
     box = TvInbox(tmp_path / "tv.db")
     bar = pd.Timestamp.now(tz="UTC").floor("15min") - pd.Timedelta(minutes=30)
-    a = Alert.model_validate({"indicator": "K-Indi", "version": "2", "symbol": "XAUUSD", "tf": "15",
+    a = Alert.model_validate({"indicator": "smc", "version": "2", "symbol": "XAUUSD", "tf": "15",
                               "bar_time": bar.isoformat(), "fired_at": (bar + pd.Timedelta(minutes=15)).isoformat(),
                               "secret": "x", "plots": {"plot_0": "123.456"}})
     box.put(to_row(a, (bar + pd.Timedelta(minutes=16)).to_pydatetime()))
@@ -228,12 +228,12 @@ def test_tradingview_status_counts_csv_history_apart_from_alerts_and_shows_the_r
     p = tmp_path / "e.csv"
     p.write_text("time,open,high,low,close,A,B\n" + "".join(
         f"{int((t0 + pd.Timedelta(minutes=15 * i)).timestamp())},1,2,1,1,{i},{i}\n" for i in range(10)))
-    tv_csv.import_tv_csv(p, store=store, indicator="K-Indi", version="2", tf="15")
+    tv_csv.import_tv_csv(p, store=store, indicator="smc", version="2", tf="15")
     row = c.get("/api/tradingview", headers=h["viewer"]).json()["indicators"][0]
     assert (row["csv_bars"], row["csv_rows"], row["repaint_status"]) == (10, 20, "unvalidated")
     assert row["alerts_24h"] == 0 and row["last_bar_time"] == ""      # the CSV is history, not a live alert
-    assert tv_repaint.validate(store, indicator="K-Indi", version="2", tf="15", min_bars=0).validated is False   # no live bars
-    df = store.read("tv_indicators", source="K-Indi@2")
+    assert tv_repaint.validate(store, indicator="smc", version="2", tf="15", min_bars=0).validated is False   # no live bars
+    df = store.read("tv_indicators", source="smc@2")
     df["repaint_validated"] = True
-    store.append("tv_indicators", df.drop(columns=["source", "symbol", "year", "month"]), source="K-Indi@2")
+    store.append("tv_indicators", df.drop(columns=["source", "symbol", "year", "month"]), source="smc@2")
     assert c.get("/api/tradingview", headers=h["viewer"]).json()["indicators"][0]["repaint_status"] == "validated"

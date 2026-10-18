@@ -2,7 +2,7 @@
 
 Alert message body (set in the TradingView alert dialog, trigger "Once per bar close"; docs/RUNBOOK.md has the full
 template). Every value is a quoted string because TradingView writes `NaN` for an empty plot, which is not JSON:
-{"indicator":"K-Indi","version":"2.02","symbol":"{{ticker}}","tf":"{{interval}}","bar_time":"{{time}}",
+{"indicator":"smc","version":"1.0","symbol":"{{ticker}}","tf":"{{interval}}","bar_time":"{{time}}",
  "fired_at":"{{timenow}}","price":"{{close}}","plots":{"plot_0":"{{plot_0}}","plot_1":"{{plot_1}}"},"secret":"<shared secret>"}
 `signal` is optional (default "plot"); a body with only `signal`/`strength`/`payload` (the first format) still parses.
 

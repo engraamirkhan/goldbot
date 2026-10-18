@@ -18,7 +18,7 @@ from goldbot.webhook import app as app_mod
 from goldbot.webhook.app import Alert, caller_ip, create_app
 from goldbot.webhook.inbox import TvInbox, sync_to_store
 
-BODY: dict[str, Any] = {"indicator": "K-Indi", "version": "2.02", "symbol": "XAUUSD", "tf": "15",
+BODY: dict[str, Any] = {"indicator": "smc", "version": "1.0", "symbol": "XAUUSD", "tf": "15",
                         "bar_time": "2026-10-16T10:00:00Z", "fired_at": "2026-10-16T10:15:01Z", "secret": "s3cret"}
 TV = ("52.89.214.238", 40000)
 
@@ -189,25 +189,25 @@ def test_every_alert_lands_in_the_tv_indicators_dataset_idempotently(tmp_path, b
     c = client(box, store=store)
     _post_bars(c, 4)
     _post_bars(c, 4)                                                    # a full re-send: nothing doubles
-    df = store.read("tv_indicators", source="K-Indi@2.02")
+    df = store.read("tv_indicators", source="smc@1.0")
     assert len(df) == 8 and set(df["plot"]) == {"plot_0", "plot_1"}
     assert sync_to_store(box, store) == 0
-    assert len(store.read("tv_indicators", source="K-Indi@2.02")) == 8
+    assert len(store.read("tv_indicators", source="smc@1.0")) == 8
     assert (pd.to_datetime(df["available_utc"], utc=True) >= pd.to_datetime(df["received_at"], utc=True)).all()
 
 
 def test_tv_features_joins_through_asof_on_available_utc_not_bar_time(tmp_path, box):
     store = Store(tmp_path / "data")
     _post_bars(client(box, store=store), 4)
-    f = tvf.tv_features(store, "K-Indi", "15", ["plot_0", "plot_1"])
+    f = tvf.tv_features(store, "smc", "15", ["plot_0", "plot_1"])
     assert list(f.columns) == ["available_utc", "plot_0", "plot_1"] and len(f) == 4
     # the alerts were received now: a bar stamped before that sees none (not even the 08:15 close), a later one sees the last
     bars = pd.DataFrame({"ts_utc": pd.to_datetime(["2026-10-16T08:14:00Z", "2100-01-01T00:00:00Z"], utc=True)})
     j = asof_join(bars, f, prefix="tv_")
     assert math.isnan(j["tv_plot_0"].iloc[0]) and j["tv_plot_0"].iloc[1] == 3.0
-    assert set(tvf.tv_features(store, "K-Indi", "15", ["plot_9"]).columns) == {"available_utc", "plot_9"}
+    assert set(tvf.tv_features(store, "smc", "15", ["plot_9"]).columns) == {"available_utc", "plot_9"}
     assert tvf.tv_features(store, "Nope", "15").empty
-    assert tvf.tv_features(store, "K-Indi", "60").empty
+    assert tvf.tv_features(store, "smc", "60").empty
 
 
 def test_tradingview_feature_is_opt_in_and_versioned():
@@ -224,7 +224,7 @@ def test_status_reports_last_bar_plots_and_gaps(tmp_path, box):
     store = Store(tmp_path / "data")
     _post_bars(client(box, store=store), 6, skip=(3,))
     (row,) = tv_status(store, pd.Timestamp("2026-10-16T12:00:00Z")).indicators
-    assert (row.indicator, row.version, row.tf) == ("K-Indi", "2.02", "15")
+    assert (row.indicator, row.version, row.tf) == ("smc", "1.0", "15")
     assert row.alerts_24h == 5 and row.gaps_24h == 1 and row.plots_seen == ["plot_0", "plot_1"]
     assert row.last_bar_time.startswith("2026-10-16T09:15")
     assert tv_status(Store(tmp_path / "empty"), pd.Timestamp("2026-10-16T12:00:00Z")).indicators == []

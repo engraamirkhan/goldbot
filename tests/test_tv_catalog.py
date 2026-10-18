@@ -6,9 +6,9 @@ import pytest
 from goldbot.data import tv_catalog as cat
 
 
-def meta(inputs=None, version="2.02", plots=None):
+def meta(inputs=None, version="1.0", plots=None):
     return cat.StudyMeta.from_metainfo({
-        "shortDescription": "K-Indi", "pine": {"version": version},
+        "shortDescription": "smc", "pine": {"version": version},
         "inputs": [{"id": k, "defval": v} for k, v in (inputs or {"in_0": 50, "in_1": "close"}).items()],
         "plots": plots or [
             {"id": "plot_0", "type": "line"}, {"id": "plot_1", "type": "line"},
@@ -41,7 +41,7 @@ def test_input_change_gives_new_feature_id():
     a, b = meta(), meta(inputs={"in_0": 55, "in_1": "close"})
     c = meta(version="2.03")
     ida = cat.feature_id(a, "plot_0")
-    assert ida.startswith("tv_k_indi_") and ida.endswith("_15_plot_0") and len(a.meta_hash) == 8
+    assert ida.startswith("tv_smc_") and ida.endswith("_15_plot_0") and len(a.meta_hash) == 8
     assert ida == cat.feature_id(meta(), "plot_0")              # deterministic
     assert ida != cat.feature_id(b, "plot_0") and ida != cat.feature_id(c, "plot_0")
     # the input order on the wire does not matter, only the values
