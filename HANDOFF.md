@@ -5,6 +5,7 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- **Deploy status false alarm fixed (SRE).** `goldbot-deploy` leaves the engine-derived checks (engine, engine_loop, tick_errors, reconcile) of an engine unit that is disabled/inactive at the baseline out of the worse-comparison and records "engine stopped for the deploy: <account>"; other worsened checks still give `deployed_degraded`. `check_deploy` reports a `deployed_degraded` as ok ("degraded at deploy time (...), now ok") when all named checks read ok in the fresh `health_last.json`; deploys.jsonl is untouched.
 - An approval whose send raises is archived NOT CONFIRMED, never left placing (BACKLOG 84, implementer, 2026-10-17;
   trading-safety residual on BACKLOG 72).
   - `ApprovalCenter._finish`: if `on_decision` raises, the card's `placing` flag is cleared and it is archived with
