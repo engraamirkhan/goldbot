@@ -382,3 +382,32 @@ def test_lot_fit_is_an_optional_validated_flag_off_by_default_and_passed_as_a_ba
     assert "lot_fit" in inputs and inputs["lot_fit"]["default"] is False
     env = next(s for s in WF["jobs"]["plan"]["steps"] if s.get("id") == "plan")["env"]
     assert env["LOT_FIT"] == "${{ inputs.lot_fit }}"
+
+
+def test_a_row_with_an_unknown_field_is_rejected_and_the_cell_failed(tmp_path: Path) -> None:
+    plan, arts, registry = _two_cell_plan_with(tmp_path, [_planned_row(tmp_path, "a", injected="x")])
+    out = cells.record(plan, arts, registry.path)
+    rows = read_rows(registry.path)
+    assert out.failed == 1 and "injected" in next(r for r in rows if r["status"] == "failed")["results"]["error"]
+    assert not any("injected" in r for r in rows)
+
+
+def test_a_row_with_a_wrong_typed_field_is_rejected_and_counted_as_a_failed_trial(tmp_path: Path) -> None:
+    plan, arts, registry = _two_cell_plan_with(tmp_path, [_planned_row(tmp_path, "a", results=[1])])
+    out = cells.record(plan, arts, registry.path)
+    rows = read_rows(registry.path)
+    assert out.failed == 1 and n_trials_effective(rows) == 2
+
+
+def test_an_oversized_rows_file_fails_that_cell_alone_without_being_parsed(tmp_path: Path) -> None:
+    plan, arts, registry = _two_cell_plan_with(tmp_path, "x" * (cells.MAX_CELL_FILE + 1))
+    out = cells.record(plan, arts, registry.path)
+    assert out.failed == 1 and any("exceeds" in r["results"].get("error", "") for r in read_rows(registry.path))
+
+
+@pytest.mark.parametrize("status", ["[1]", "not json", '{"exit": "x"}', '{"exit": [1]}', "\x00"])
+def test_a_malformed_status_file_is_an_exit_of_minus_one_not_a_crashed_merge(tmp_path: Path, status: str) -> None:
+    plan, arts, registry = _two_cell_plan_with(tmp_path, [_planned_row(tmp_path, "a")])
+    (arts / "cell-0" / "status.json").write_text(status)
+    out = cells.record(plan, arts, registry.path)
+    assert out.recorded == 2 and out.failed == 0
