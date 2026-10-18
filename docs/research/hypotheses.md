@@ -8,8 +8,11 @@ updates it every quarter after the evaluator's verdicts. It is seeded 2026-10-10
 without new evidence; a reason is always given.
 
 **Cost yardstick:**
-- Measured round-trip cost is about **0.14–0.39 R per trade**. Examples: tsmom 1h, gross +0.061 → net −0.079 (0.14 R);
-  intraday_momentum, 0.16–0.23 R; shorter targets cost more.
+- *Corrected 2026-10-18 (`costs-binding-2026-10-18.md`).* No broker cost has been measured yet. Every figure here is
+  a **prior**: the Dukascopy bar spread + 0.37 $/oz + the swap prior. The charged round trip has been about
+  **0.14–0.39 R per trade over 2010–2025**. Examples: tsmom 1h, gross +0.061 → net −0.079 (0.14 R);
+  intraday_momentum, 0.16–0.23 R; shorter targets cost more. At today's ATR the same priors are 3–5 times smaller in
+  R. For a 1h 1.5 × ATR stop it is about 0.04 R, against 0.17 R in 2010–2019.
 - Long holds also pay swap, about −60 USD/lot/night for longs (prior). Shorts pay 0.
 - A hypothesis is worth a trial only if its plausible gross edge is several times its cost in R. That means a larger
   target, a longer hold, or the short side.
@@ -182,6 +185,33 @@ filed their first candidate lists the same day. None ran a trial or read an outc
 **Status of these IDs.** IC-1..IC-9, SW-0..SW-9 and C-1..C-10 are recorded here as **proposed**. Proposed rows are not
 tests and add nothing to K. K grows only when a registry row runs (or a discovery records its `k_eff`).
 
+## A7. Cost-aware proposals (strategy-researcher, 2026-10-18)
+
+Sources: `costs-binding-2026-10-18.md` (evidence) and `preregistration-costs-2026-10-18.md` (rules). The key finding
+is about gate 3 at K = 53, which needs a per-trade t of about 3.94. No known signal clears it **even at zero
+cost**:
+
+| Signal | Net R needed for t 3.94 |
+|---|---|
+| H-04 | +0.055 |
+| tsmom 1h #36 | +0.136 |
+| tsmom 1h #16 | +0.091 |
+
+So cost work fixes the net sign, but a pass needs a larger gross t: more events or bigger edges.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| H-28 (CB-T1) | tsmom 1h cost-amortised: `min_score` 1.0, stop 2.0, target 4.0, `max_bars` 96 (`7f60182a4559`). The cheapest 1h market-order config today (0.030 R, scenario A) | pre-registered; not dispatched; needs 1 slot (2027Q1 free reserve, or the owner raises Q4 to 54) | 1 | batch §2 at the K of the verdict (≥ 54). FAIL closes the tsmom 1h exit variants (R-06 reconfirmed) |
+| H-29 (CB-T2) | Limit entry at the signal price on H-28's signal | pre-registered, **conditional** on H-28 LEAD/PASS + CB-D2 "build" + tooling | 1 if its conditions hold | adopt only if net per signal ≥ H-28's |
+| H-30 (CB-D2) | Limit-fill economics on the broker's recorded ticks (forward shadow candidates) | pre-registered diagnostic; starts when the tick record has 20 days | 0 | ≥ 0.25 $/oz saving per candidate → build H-29 tooling; < 0.10 → retire limit entry |
+| CB-0 / CB-D1 | `costs-v1` build plus GBP fixes K1-K3; forward-cost quantities reported on new trials | proposed (engineering) / pre-registered (reporting) | 0 | measurement only |
+
+Known low value, recorded as **not proposed** so they are not re-proposed:
+- an H-04 re-test with new stops or holds (cannot pass at any cost);
+- tight-spread-hours trials (worth 0.03–0.05 R at 15m, under 0.005 R at 1h);
+- cost-filtered entry as a research-window trial (about 70 events at today's cost level);
+- further 15m wide-target variants of R-01, R-02 and R-05.
+
 ## B. Retired: do not re-test without new evidence
 
 The governing list is `research.retired_families` in `config/settings.yaml` (family, row id, retired date, reason,
@@ -207,6 +237,7 @@ a quarter (to the one with the best post-retirement evidence, else by rotation) 
 |---|---|---|---|
 | Q4 2026 | #1–#20 | 0 | 20 |
 | Q4 2026, owner-directed batch (2026-10-18; planned, **not dispatched**; `batch-2026-10-18.md`) | #21–#53 if all 33 run (needs the 2026Q4 budget raised to 53: owner) | 0 | **53** (gate-1 t ≈ 3.94). H-04 and H-01 move here from Q1, so the Q1 reservation becomes 6 and the end-of-Q1 projection is about 116 (t ≈ 4.2) |
+| Q4 2026 batch, status 2026-10-18 about 07:10 UTC (`research-v1` snapshot) | #21–#47 recorded, the batch still running | 0 | 47 now, 53 when the batch and H-02 finish. Cost proposals (A7): +1 if H-28 runs (≥ 54), +1 more only if H-29's conditions hold. CB-0/CB-D1/CB-D2 add 0 |
 | Q1 2027 (planned) | #21–#40 at most (8 reserved: 4 queued + 4 contingent H-02 survivor slots; 12 open under the E-5 cap, allocated 2026-10-17 as 9 conditional trial rows (O-1..O-10 without O-9, now a 0-trial diagnostic) + 3 free reserve; corrected 2026-10-17 to settings) | H-02: K_eff = features screened when survivors go forward as features, groups screened only for whole-group survivors (recorded as `k_eff` on the discovery row; `registry.n_trials_effective` adds it) | 20 + trials run so far + K_eff for any survivor of H-02. Projection, end of Q1: up to 40 registry rows + H-02 K_eff (about 10: **H-02 moved to `survivor_unit: group`, quant ruling Q-H02U 2026-10-17**; it was about 300 at the feature unit) + H-14 K_eff (about 12) ≈ 60; the gate-1 DSR then needs a model-filtered t of about 4.0 (was about 4.6). *Updated 2026-10-17:* H-14's K_eff is about 16 under the O-4 group-map amendment (14 groups verified on `f-079deacc61`, plus `liquidity` and `activity`), so the adopted end-of-Q1 case is about 66 (t ≈ 4.03, still 4.0). *Updated 2026-10-18 (research director):* N1 `tod_periodicity` adopted as one more O-4 group, so H-14 about 17 and the end-of-Q1 case about 67 (t still about 4.0); no registry trial |
 | Q2 2027 (draft) | #41–#60 at most | SW-0 if it runs: K_eff ≈ 16 (about 8 groups × 2 sides, `survivor_unit: group`); H-14 survivors and Q1 follow-ups add 1 each | **About 77 + the other Q2 trials** (the swing lane's projection: 60 + SW-0's row + its K_eff ≈ 16). On the updated Q1 base of about 66 the same sum is about 83 + the other Q2 trials. Either way the gate-1 bar is a t of about 4.1. Nothing in the lane lists adds to K until a row runs |
 
