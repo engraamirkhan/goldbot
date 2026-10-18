@@ -25,6 +25,7 @@ rows:
                asia_high_dist_atr, asia_low_dist_atr, london_high_dist_atr, london_low_dist_atr]
         H-10: [jumps]
       freq_threshold: 0.6
+      full_coverage_columns: [macro_spx_dd20]   # pinned 2026-10-17 (BACKLOG 88)
       group_top_k: 3
       inner_val_frac: 0.2
       l1_c: 0.05
