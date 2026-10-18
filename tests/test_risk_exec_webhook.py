@@ -1,5 +1,4 @@
 import json
-import queue
 from typing import Any
 
 import numpy as np
@@ -12,6 +11,7 @@ from goldbot.execution.paper import PaperBroker
 from goldbot.risk import AccountState, Intent, RiskGate
 from goldbot.risk.gate import Stage
 from goldbot.webhook.app import create_app
+from goldbot.webhook.inbox import TvInbox
 
 
 def _state(**kw: Any) -> AccountState:
@@ -191,9 +191,9 @@ def test_a_known_class_does_not_fall_back_to_unknown_on_one_thin_week(tmp_path):
     assert pc.state["pending"] is None
 
 
-def test_webhook_auth_hash_and_intrabar():
-    q: queue.Queue[dict[str, Any]] = queue.Queue()
-    app = create_app(secret="s3cret", sink=q, enforce_ip=False)
+def test_webhook_auth_hash_and_intrabar(tmp_path):
+    box = TvInbox(tmp_path / "tv.db")
+    app = create_app(secret="s3cret", inbox=box, enforce_ip=False)
     c = TestClient(app)
     body = {"indicator": "K-Indi", "version": "2.02", "symbol": "XAUUSD", "tf": "15",
             "bar_time": "2025-03-05T10:00:00Z", "fired_at": "2025-03-05T10:15:01Z", "signal": "long",
@@ -203,17 +203,17 @@ def test_webhook_auth_hash_and_intrabar():
     assert c.post("/tv", json={**body, "secret": "nope"}).status_code == 403
     early = {**body, "bar_time": "2025-03-05T10:15:00Z", "fired_at": "2025-03-05T10:20:00Z"}
     assert c.post("/tv", json=early).json()["intrabar"] is True
-    assert q.qsize() == 2
+    assert box.count() == 2
 
 
-def test_webhook_ip_allow_list_uses_the_peer_address_not_a_forwarded_header():
-    q: queue.Queue[dict[str, Any]] = queue.Queue()
-    app = create_app(secret="s3cret", sink=q)
+def test_webhook_ip_allow_list_uses_the_peer_address_not_a_forwarded_header(tmp_path):
+    box = TvInbox(tmp_path / "tv.db")
+    app = create_app(secret="s3cret", inbox=box)
     body = {"indicator": "K-Indi", "symbol": "XAUUSD", "tf": "15", "bar_time": "2025-03-05T10:00:00Z",
             "fired_at": "2025-03-05T10:15:01Z", "signal": "long", "secret": "s3cret"}
     outsider = TestClient(app, client=("203.0.113.9", 40000))
     assert outsider.post("/tv", json=body, headers={"X-Forwarded-For": "52.89.214.238"}).status_code == 403
-    assert q.empty()
+    assert box.count() == 0
     tradingview = TestClient(app, client=("52.89.214.238", 40000))
     assert tradingview.post("/tv", json={**body, "secret": "s3crët"}).status_code == 403   # non-ASCII: refused, not a 500
-    assert tradingview.post("/tv", json=body).json()["ok"] is True and q.qsize() == 1
+    assert tradingview.post("/tv", json=body).json()["ok"] is True and box.count() == 1

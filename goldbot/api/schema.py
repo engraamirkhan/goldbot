@@ -161,6 +161,23 @@ class FeedHealth(BaseModel):
     supervisor_heartbeat_age_s: float
 
 
+class TvIndicatorStatus(BaseModel):
+    """One TradingView indicator at one timeframe: arrival of its bar alerts (counts only, never plotted values)."""
+    indicator: str
+    version: str
+    symbol: str
+    tf: str
+    last_bar_time: str
+    alerts_24h: int
+    plots_seen: list[str]
+    gaps_24h: int
+
+
+class TvStatusView(BaseModel):
+    now: str
+    indicators: list[TvIndicatorStatus]
+
+
 # ----------------------------------------------------------------------------- auth and users
 Role = Literal["owner", "approver", "viewer"]
 GrantableRole = Literal["approver", "viewer"]     # the owner role belongs to auth.owner_email and is never granted

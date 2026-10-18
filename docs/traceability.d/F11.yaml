@@ -1,5 +1,5 @@
 id: F11
 requirement: TradingView alerts "with fired_at - bar_time < tf are flagged intrabar and excluded from training"
 status: partial
-code: flagged (goldbot/webhook/app.py:56); no TV features reach training yet, so exclusion is moot
-test: tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar
+code: flagged (goldbot/webhook/app.py to_row); tv_features and the tradingview feature exclude intrabar rows (goldbot/features/tradingview.py)
+test: tests/test_risk_exec_webhook.py::test_webhook_auth_hash_and_intrabar, tests/test_tv_webhook.py

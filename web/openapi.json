@@ -5609,6 +5609,79 @@
     "title": "TrialRow",
     "type": "object"
    },
+   "TvIndicatorStatus": {
+    "description": "One TradingView indicator at one timeframe: arrival of its bar alerts (counts only, never plotted values).",
+    "properties": {
+     "alerts_24h": {
+      "title": "Alerts 24H",
+      "type": "integer"
+     },
+     "gaps_24h": {
+      "title": "Gaps 24H",
+      "type": "integer"
+     },
+     "indicator": {
+      "title": "Indicator",
+      "type": "string"
+     },
+     "last_bar_time": {
+      "title": "Last Bar Time",
+      "type": "string"
+     },
+     "plots_seen": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Plots Seen",
+      "type": "array"
+     },
+     "symbol": {
+      "title": "Symbol",
+      "type": "string"
+     },
+     "tf": {
+      "title": "Tf",
+      "type": "string"
+     },
+     "version": {
+      "title": "Version",
+      "type": "string"
+     }
+    },
+    "required": [
+     "indicator",
+     "version",
+     "symbol",
+     "tf",
+     "last_bar_time",
+     "alerts_24h",
+     "plots_seen",
+     "gaps_24h"
+    ],
+    "title": "TvIndicatorStatus",
+    "type": "object"
+   },
+   "TvStatusView": {
+    "properties": {
+     "indicators": {
+      "items": {
+       "$ref": "#/components/schemas/TvIndicatorStatus"
+      },
+      "title": "Indicators",
+      "type": "array"
+     },
+     "now": {
+      "title": "Now",
+      "type": "string"
+     }
+    },
+    "required": [
+     "now",
+     "indicators"
+    ],
+    "title": "TvStatusView",
+    "type": "object"
+   },
    "UserRef": {
     "additionalProperties": false,
     "description": "A user for reset-link, disable, enable and revoke-sessions.",
@@ -7144,6 +7217,29 @@
      }
     ],
     "summary": "Trades Summary"
+   }
+  },
+  "/api/tradingview": {
+   "get": {
+    "operationId": "tradingview_status_api_tradingview_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TvStatusView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Tradingview Status"
    }
   },
   "/api/users": {

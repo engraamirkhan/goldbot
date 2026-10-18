@@ -1,5 +1,5 @@
 id: F12
 requirement: '"about 1% of alerts randomly blanked" in training; "a missed alert sets the feature to NaN"'
-status: missing
-code: no TradingView feature family in the registry
-test: untested
+status: partial
+code: opt-in tradingview feature, NaN before the first alert (goldbot/features/tradingview.py); 1% blanking and the 40-feature accounting still missing
+test: tests/test_tv_webhook.py::test_tradingview_feature_is_opt_in_and_versioned

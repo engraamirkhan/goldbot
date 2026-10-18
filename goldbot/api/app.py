@@ -117,10 +117,13 @@ from goldbot.api.schema import (
     SetupResponse,
     Status,
     TradesSummary,
+    TvStatusView,
     UserRef,
     UserRow,
 )
+from goldbot.api.tv_status import tv_status
 from goldbot.config import MailSettings
+from goldbot.data.store import Store
 from goldbot.data.timeutil import heartbeat_problem
 from goldbot.execution.not_confirmed import note as not_confirmed_note
 from goldbot.execution.not_placed import first_not_placed
@@ -163,10 +166,15 @@ class State:
         if self._tools is None:
             from goldbot.agents.tools import ReadOnlyTools
             from goldbot.config import load_settings
-            from goldbot.data.store import Store
             root = self._data_root if self._data_root is not None else load_settings().data_root
             self._tools = ReadOnlyTools(self.dir, Store(root))
         return self._tools
+
+    def store(self) -> Store:
+        """The Parquet store (same root as `tools()`)."""
+        from goldbot.config import load_settings
+        root = self._data_root if self._data_root is not None else load_settings().data_root
+        return Store(root)
 
     def active_blackout(self) -> ActiveBlackout | None:
         """The entry blackout the engines report (calendar event or news shock), with the accounts enforcing it."""
@@ -885,6 +893,10 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return [FeedHealth(account_id=e["account"], last_tick_age_s=e.get("last_tick_age_s", 1e9), spread_points=e.get("spread_points", 0),
                            terminal_connected=e.get("terminal_connected", False), webhook_p99_latency_s=e.get("webhook_p99_latency_s"),
                            supervisor_heartbeat_age_s=age) for e in st.engines()]
+
+    @app.get("/api/tradingview", response_model=TvStatusView)
+    def tradingview_status(_: User = Depends(auth)) -> TvStatusView:
+        return tv_status(st.store(), pd.Timestamp.now(tz="UTC"))
 
     @app.get("/api/jobs", response_model=list[JobRow])
     def jobs(u: User = Depends(auth)) -> list[JobRow]:
