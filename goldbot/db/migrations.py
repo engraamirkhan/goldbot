@@ -253,6 +253,10 @@ AUX: tuple[Migration, ...] = (
                retry_ns INTEGER NOT NULL DEFAULT 0
            ) STRICT""",
     )),
+    # additive (BACKLOG 77 Telegram amendment, ADR 0028): the Telegram message id of a sign-in code (NEVER the code), so
+    # the API can delete the message on use, burn, resend and expiry. A release without it never names the column
+    Migration(version=10, name="code_message_id", additive=True, statements=(),
+              add_columns=(("email_codes", "message_id", "TEXT"),)),
 )
 
 CORE: tuple[Migration, ...] = (

@@ -14,6 +14,7 @@ import { News } from "./screens/News";
 import { Users } from "./screens/Users";
 import { Account } from "./screens/Account";
 import { Progress } from "./screens/Progress";
+import { CodeSignInsBanner } from "./screens/CodeSignInsBanner";
 
 // Progress is third: on a phone the tab row scrolls sideways, so a tab at the end would be off-screen
 // (docs/ux/progress-screens.md "Placement")
@@ -56,6 +57,7 @@ export function App() {
         <button className="link" onClick={async () => { try { await api.logout(); } catch { /* session already gone server-side */ } setToken(null); clearLinkTokens(); setAuthed(false); }}>Sign out</button>
       </header>
       <main>
+        {hasRole("owner") && <CodeSignInsBanner onSignedOut={() => { clearLinkTokens(); setAuthed(false); }} />}
         {tab === "Overview" && <Overview onOpenProgress={() => setTab("Progress")} />}
         {tab === "Approvals" && <Approvals />}
         {tab === "Progress" && <Progress onOpenOverview={() => setTab("Overview")} />}

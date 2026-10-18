@@ -14,7 +14,7 @@ const ROWS: UserRow[] = [
   { email: "old@example.com", role: "approver", enabled: false, last_login: null },
 ];
 const FIELD = "Authenticator code (or a recovery code)";
-const HINT = "Signed in with an email code: this action also needs your authenticator.";
+const HINT = "Signed in with a sign-in code: this action also needs your authenticator.";
 
 function renderAs(signedInWith: Me["signed_in_with"]) {
   apiModule.setUser({ email: "owner@example.com", role: "owner", signed_in_with: signedInWith });
@@ -72,7 +72,7 @@ describe("Users step-up after an email-code sign-in", () => {
     fireEvent.click(within(row("viewer@example.com")).getByRole("button", { name: "Disable" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "This action needs a current code from your authenticator app (or a recovery code), because you signed in " +
-      "with an email code. Type it above and try again.");
+      "with a sign-in code. Type it above and try again.");
     expect(screen.getByLabelText(FIELD)).toHaveAttribute("aria-describedby", screen.getByRole("alert").id);
   });
 

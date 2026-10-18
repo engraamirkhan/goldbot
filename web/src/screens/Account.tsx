@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api, currentUser, hasRole } from "../lib/api";
+import { CODE_COPY, CodeChannel } from "../lib/codeCopy";
 import { roleLabel } from "../lib/roles";
 
 // Change password (any signed-in user): current password + authenticator code. Other sessions are signed out.
@@ -104,17 +105,16 @@ function RecoveryCodes() {
 // never red: email codes do not stop trading.
 function EmailCodes() {
   const [on, setOn] = useState<boolean | null>(null);
+  const [channel, setChannel] = useState<CodeChannel>("telegram");
   useEffect(() => {
     let mounted = true;
-    api.authState().then((s) => { if (mounted) setOn(s.email_code); }).catch(() => {});
+    api.authState().then((s) => { if (mounted) { setOn(s.code_sign_in); setChannel(s.code_channel); } }).catch(() => {});
     return () => { mounted = false; };
   }, []);
   if (on === null) return null;
   return (
     <p className="muted">
-      {on
-        ? "Email codes: on. You can sign in with your password and a code sent to your email. Re-arm, auto mode, password change, recovery codes and managing users still need your authenticator."
-        : 'Email codes: off. Mail is not set up on the server (RUNBOOK 2.10, "Email sign-in"). Sign-in uses your authenticator app.'}
+      {on ? CODE_COPY[channel].accountOn : CODE_COPY[channel].accountOff}
     </p>
   );
 }

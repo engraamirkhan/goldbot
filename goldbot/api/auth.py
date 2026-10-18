@@ -61,7 +61,11 @@
   is ready. Accepted trade-off: password + mailbox can view, approve/reject and halt (the RiskGate still checks every
   order), but cannot keep access: the session records `method = email_code`, and invite, reset link, role change,
   disable, enable and revoke-sessions then need the authenticator or a recovery code (`verify_stepup`); re-arm, auto
-  mode, password change and new recovery codes ask for the authenticator as before. The request answers the same for
+  mode, password change and new recovery codes ask for the authenticator as before. Since 2026-10-17 the code goes by
+  default to the owner's private Telegram chat instead (`auth.code_channel`, goldbot/api/code_delivery.py; ADR 0028
+  amendment): the same rules, `AuthStore.code_channel` names the channel, a Telegram-code sign-in is audited
+  `tg_code_login` and listed by `code_sign_ins`, and only the Telegram message id (never the code) is kept. The
+  request answers the same for
   every input (scrypt always runs; a decoy challenge for anything else); the code comes from `secrets.randbelow`, is
   stored only as HMAC-SHA-256(keyring key, challenge|code), works once for 10 minutes, 3 wrong tries burn it, only
   the newest works, and it is never logged, audited or put in a URL. Mail shares the email link's 3-an-hour limit per
@@ -115,6 +119,7 @@ EMAIL_LINK_ABUSE_WARN = 3                # owner-address requests refused by the
 RECOVERY_CODES = 10
 # emailed sign-in codes (BACKLOG 77, ADR 0028; docs/ux/sign-in-email-code.md security conditions 1-11)
 EMAIL_CODE_TTL_S, EMAIL_CODE_TRIES, RESEND_AFTER_S = 600, 3, 60
+CODE_SIGN_IN_DAYS = 7                    # the owner's banner lists Telegram-code sign-ins this far back
 EMAIL_CODE_KEEP_S = 3600                 # a burned or expired challenge stays findable by Resend this long
 EMAIL_CODE_BURNS, EMAIL_CODE_SUSPEND_WINDOW_S = 3, 86400     # 3 burned challenges in 24 h suspend email codes
 EMAIL_CODE_KEY = "email-code-hmac-key"   # the keyring entry of the codes' HMAC key (32 random bytes, hex)
@@ -503,6 +508,8 @@ class AuthStore:
         self.dir = Path(state_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.owner_email = _norm_email(owner_email)
+        # how the sign-in code is delivered (goldbot/api/code_delivery.py); create_app sets it from auth.code_channel
+        self.code_channel = "mail"
         self.legacy_users_path = self.dir / "users.json"
         self.legacy_audit_path = self.dir / "audit.jsonl"
         self.db = Database.open(self.dir, "aux")
@@ -1160,6 +1167,42 @@ class AuthStore:
         return (self.owner_email is not None and self.is_owner(self.get_user(self.owner_email))
                 and email_code_key() is not None)
 
+    def code_message(self, challenge: str) -> tuple[str | None, bool]:
+        """(Telegram message id or None, whether the code is still live) of a challenge; (None, False) when there is
+        no row. Read before and after a verify or resend so the delivered message can be deleted once it is spent."""
+        with self.db.connection() as conn:
+            row = conn.execute("SELECT message_id, consumed, expires_ns FROM email_codes WHERE challenge_sha256 = ?",
+                               (_token_hash(challenge),)).fetchone()
+        if row is None:
+            return None, False
+        return (None if row[0] is None else str(row[0])), not row[1] and int(row[2]) > time.time_ns()
+
+    def take_expired_code_messages(self) -> list[str]:
+        """The Telegram message ids of codes that have expired, forgotten here as they are returned: the API start
+        deletes them so a restart does not leave a spent code in the chat (best effort, caller's)."""
+        with self.db.write() as conn:
+            ids = [str(r[0]) for r in conn.execute(
+                "SELECT message_id FROM email_codes WHERE message_id IS NOT NULL AND expires_ns <= ?", (time.time_ns(),))]
+            conn.execute("UPDATE email_codes SET message_id = NULL WHERE message_id IS NOT NULL AND expires_ns <= ?",
+                         (time.time_ns(),))
+        return ids
+
+    def set_code_message(self, challenge: str, message_id: str) -> None:
+        """Keep the id of the message that carries this challenge's code (never the code itself)."""
+        with self.db.write() as conn:
+            conn.execute("UPDATE email_codes SET message_id = ? WHERE challenge_sha256 = ?",
+                         (message_id, _token_hash(challenge)))
+
+    def code_sign_ins(self, days: int = CODE_SIGN_IN_DAYS) -> list[dict[str, str]]:
+        """The Telegram-code sign-ins of the last `days` days, newest first: {"at_utc", "network"} (a coarse network
+        hint, never the address). The owner sees them after every sign-in (security condition 6)."""
+        since = time.time() - days * 86400
+        with self.db.connection() as conn:
+            rows = [json.loads(b) for (b,) in conn.execute(
+                "SELECT body FROM audit WHERE event = 'tg_code_login' ORDER BY id DESC LIMIT 200")]
+        return [{"at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(r["ts"])), "network": coarse_ip(r.get("ip"))}
+                for r in rows if r["ts"] >= since]
+
     @staticmethod
     def _send_wait(conn: sqlite3.Connection, keys: list[str], now: int, *, pace: bool) -> int:
         """Seconds before another mail may go to these keys: the shared hourly limit (EMAIL_LINK_PER_HOUR per address
@@ -1310,7 +1353,8 @@ class AuthStore:
                     conn.execute("DELETE FROM email_codes WHERE email = ?", (email,))
                     tok = self._new_session(conn, email, ttl_h, "email_code")
                     self._release(conn, r)
-                    _audit(conn, "email_code_login", email=email, **({"ip": ip} if ip else {}))
+                    _audit(conn, "tg_code_login" if self.code_channel == "telegram" else "email_code_login",
+                           email=email, **({"ip": ip} if ip else {}))
                 else:
                     tries = int(row[1]) + 1
                     tries_left = max(EMAIL_CODE_TRIES - tries, 0)
@@ -1325,11 +1369,19 @@ class AuthStore:
                 self._suspension_notice(f"{EMAIL_CODE_BURNS} codes were burned by wrong guesses within 24 hours")
             self._suspend_if_locked(email)
             raise PermissionError(EMAIL_CODE_REFUSED)
-        self._notify_owner(f"Signed in to the dashboard as the owner with the password and an emailed code at "
-                           f"{time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}, from {coarse_ip(ip)}. If this was "
-                           f"not you, someone has your password and your mailbox: on the server run `python -m "
-                           f"goldbot.ops.run revoke-sessions`, set auth.mail.enabled to false, then change your "
-                           f"password and your email password and check the audit trail.")
+        when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+        if self.code_channel == "telegram":
+            self._notify_owner(f"Signed in to the dashboard as the owner with the password and a Telegram code at "
+                               f"{when}, from {coarse_ip(ip)}. If this was not you, someone has your password: on the "
+                               f"dashboard use \"Sign out everywhere\" (or on the server run `python -m "
+                               f"goldbot.ops.run revoke-sessions`), then change your password and check the audit "
+                               f"trail.")
+        else:
+            self._notify_owner(f"Signed in to the dashboard as the owner with the password and an emailed code at "
+                               f"{when}, from {coarse_ip(ip)}. If this was "
+                               f"not you, someone has your password and your mailbox: on the server run `python -m "
+                               f"goldbot.ops.run revoke-sessions`, set auth.mail.enabled to false, then change your "
+                               f"password and your email password and check the audit trail.")
         return tok
 
     def verify_stepup(self, email: str, code: str, ip: str | None = None) -> bool:

@@ -858,10 +858,23 @@ an App Password (Google Account -> Security -> 2-Step Verification -> App passwo
    open link), set `enabled: false`, then change your password and your email password. The accepted risk and its
    limits are in [ADR 0013](decisions/0013-email-sign-in-link-accepted-risk.md).
 
-**Email sign-in code (owner only; uses the same mail setup)**
+**Sign-in code by Telegram (owner only; no mail needed)**
 
-With mail set up (steps 1-3 above), the owner can sign in with the password and a 6-digit code sent by email instead
-of the authenticator ([ADR 0028](decisions/0028-email-code-sign-in.md)). Nothing else to configure:
+The owner can sign in with the password and a 6-digit code sent to the goldbot Telegram chat instead of the
+authenticator ([ADR 0028](decisions/0028-email-code-sign-in.md), amended 2026-10-17). Setup, once:
+
+0. Store your Telegram user id (the same number as in `telegram.allowed_user_ids`; you can see it by sending `/start` to
+   `@userinfobot`) in the server's keyring, never in a file or this chat: on the brain
+   `goldbot accounts set telegram-owner-chat-id` (VPS:
+   `.\.venv\Scripts\python.exe -m goldbot.ops.accounts set telegram-owner-chat-id`), paste the number at the hidden
+   prompt (a prompt needs a terminal; piped input is not accepted), and restart the API (`sudo systemctl restart goldbot-api`, VPS: `nssm restart goldbot-api`). The bot token is the one the
+   Telegram service already uses (`telegram-bot-token`). Turn on Telegram's two-step verification
+   (Settings -> Privacy and Security) first: it is what protects this path. The chat must be your private chat with
+   the bot (send it `/start` once); a group never works, and nothing is sent if the id is missing, not allowed or not
+   a private chat (audit `code_channel_unavailable`). The login page then offers "Send me a code".
+   `auth.code_channel: mail` switches back to the email path described in the previous section's steps 1-3.
+
+The rest applies to either channel:
 
 1. The code is checked with a secret key kept in the server's keyring as `email-code-hmac-key` (32 random bytes,
    created on the first request; never in `aux.db` or a backup). The VPS needs a real keyring: the
@@ -880,11 +893,14 @@ of the authenticator ([ADR 0028](decisions/0028-email-code-sign-in.md)). Nothing
 4. Three codes killed by wrong guesses, or one sign-in lockout, within 24 h **suspend email codes** (one Telegram
    notice; audit `email_code_suspended`): the page still answers but no email is sent. Sign in once with the password
    and the authenticator code to switch them back on (audit `email_code_resumed`).
-5. Every email-code sign-in sends a Telegram notice and an email ("new sign-in with an emailed code"). If it was not
-   you, someone has your password and your mailbox: run `python -m goldbot.ops.run revoke-sessions` on the server
-   (signs everyone out and cancels every open code), set `enabled: false`, change your password and your email
-   password. Turn email codes off at once (set `enabled: false`, restart the API) on any live-money incident or if
-   the Gmail account loses 2-Step Verification (ADR 0028's revert trigger).
+5. Every Telegram-code sign-in sends a Telegram notice, writes the audit row `tg_code_login`, and shows a banner on the
+   dashboard after every owner sign-in (time, a rough network such as `203.0.x.x`, last 7 days) with **Sign out
+   everywhere** (after a code sign-in it asks for your authenticator code). If it was not you, someone has your
+   password: sign out everywhere (or run `python -m goldbot.ops.run revoke-sessions` on the server), change your
+   password. The code message is deleted from the chat once used, replaced or expired. Turn codes off at once (remove
+   `telegram-owner-chat-id` from the keyring, restart the API) on any live-money incident or if Telegram two-step
+   verification is off on your account (ADR 0028's revert trigger). With `auth.code_channel: mail` the notice is also
+   emailed and the trigger is the Gmail account losing 2-Step Verification.
 
 ---
 

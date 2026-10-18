@@ -6,7 +6,7 @@ async function setup(hash = "", emailLink = true, emailCode = false) {
   history.replaceState(null, "", `/${hash}`);
   vi.resetModules();
   const apiModule = await import("../lib/api");
-  vi.spyOn(apiModule.api, "authState").mockResolvedValue({ needs_setup: false, users: 2, email_link: emailLink, email_code: emailCode });
+  vi.spyOn(apiModule.api, "authState").mockResolvedValue({ needs_setup: false, users: 2, email_link: emailLink, code_sign_in: emailCode, code_channel: "mail" });
   const { Login } = await import("./Login");
   const onLogin = vi.fn();
   render(<Login onLogin={onLogin} />);
@@ -476,13 +476,13 @@ describe("Login with an emailed code", () => {
     history.replaceState(null, "", "/");
     vi.resetModules();
     const { api } = await import("../lib/api");
-    let answer: (s: { needs_setup: boolean; users: number; email_link: boolean; email_code: boolean }) => void = () => {};
+    let answer: (s: { needs_setup: boolean; users: number; email_link: boolean; code_sign_in: boolean; code_channel: "telegram" | "mail" }) => void = () => {};
     vi.spyOn(api, "authState").mockReturnValue(new Promise((r) => { answer = r; }));
     const { Login } = await import("./Login");
     render(<Login onLogin={vi.fn()} />);
     expect(screen.queryByLabelText("Email")).toBeNull();
     expect(screen.getByText("goldbot")).toBeInTheDocument();
-    await act(async () => answer({ needs_setup: false, users: 1, email_link: false, email_code: true }));
+    await act(async () => answer({ needs_setup: false, users: 1, email_link: false, code_sign_in: true, code_channel: "mail" }));
     expect(screen.getByLabelText("Email")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Email me a code" })).toBeChecked();
   });
@@ -501,7 +501,7 @@ describe("Login with an emailed code", () => {
     history.replaceState(null, "", "/");
     vi.resetModules();
     const { api } = await import("../lib/api");
-    const state = vi.spyOn(api, "authState").mockResolvedValue({ needs_setup: true, users: 0, email_link: false, email_code: false });
+    const state = vi.spyOn(api, "authState").mockResolvedValue({ needs_setup: true, users: 0, email_link: false, code_sign_in: false, code_channel: "mail" });
     vi.spyOn(api, "setup").mockResolvedValue({ totp_uri: "otpauth://totp/goldbot?secret=ABC&issuer=goldbot", recovery_codes: ["r-1"] });
     const { Login } = await import("./Login");
     render(<Login onLogin={vi.fn()} />);
@@ -513,7 +513,7 @@ describe("Login with an emailed code", () => {
     expect(await screen.findByText(/You will need it to re-arm after a halt/)).toHaveTextContent(
       "Add goldbot to your authenticator app. You will need it to re-arm after a halt, switch auto mode and manage " +
       "users. Day-to-day sign-in can use a code sent to your email once mail is set up.");
-    state.mockResolvedValue({ needs_setup: false, users: 1, email_link: false, email_code: true });
+    state.mockResolvedValue({ needs_setup: false, users: 1, email_link: false, code_sign_in: true, code_channel: "mail" });
     fireEvent.click(screen.getByRole("button", { name: "Continue to sign in" }));
     expect(await screen.findByRole("radio", { name: "Email me a code" })).toBeChecked();
   });
@@ -526,5 +526,28 @@ describe("Login with an emailed code", () => {
     expect(screen.queryByRole("radio")).toBeNull();
     expect(screen.getByLabelText("Authenticator code")).toBeVisible();
     expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
+  });
+});
+
+// ADR 0028 as amended 2026-10-17: with the Telegram channel the code is "sent", to the goldbot chat; no email is named.
+describe("Login with a Telegram code", () => {
+  beforeEach(() => { sessionStorage.clear(); localStorage.clear(); });
+  afterEach(() => { vi.restoreAllMocks(); history.replaceState(null, "", "/"); });
+
+  it("offers Send me a code and says the code went to the goldbot Telegram chat, without naming the mailbox", async () => {
+    history.replaceState(null, "", "/");
+    vi.resetModules();
+    const apiModule = await import("../lib/api");
+    vi.spyOn(apiModule.api, "authState").mockResolvedValue({ needs_setup: false, users: 1, email_link: false, code_sign_in: true, code_channel: "telegram" });
+    const { Login } = await import("./Login");
+    render(<Login onLogin={vi.fn()} />);
+    await screen.findByRole("radio", { name: "Send me a code" });
+    vi.spyOn(apiModule.api, "emailCode").mockResolvedValue({ challenge: "c", expires_in_s: 600, resend_after_s: 60 });
+    type("Email", "o@x.io");
+    type("Password", "a long password here");
+    fireEvent.click(screen.getByRole("button", { name: "Send me a code" }));
+    await screen.findByRole("heading", { name: "Enter the code we sent" });
+    expect(screen.getByText(/a 6-digit code is on its way to your goldbot Telegram chat/)).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/emailed|mailbox|o•••@/i);
   });
 });
