@@ -62,11 +62,12 @@ MAX_COMMENT = 60_000            # GitHub's issue comment limit is 65,536 charact
 ERROR_TAIL = 4_000
 FAILED = "failed"
 ITEM_KEYS = frozenset({"specialist", "variants", "pooled", "timeframe", "from_year", "to_year", "rationale",
-                       "score_holdout", "skip_screen", "macro", "discover", "families", "discover_config", "rule_ref"})
+                       "score_holdout", "skip_screen", "macro", "discover", "families", "discover_config", "rule_ref",
+                       "lot_fit"})
 FAMILIES = ("", "column", "feature", "family", "cluster")
 _NAME = re.compile(r"^[a-z0-9_]+$")
 _TF = re.compile(r"^[0-9]+[mhd]$")
-_FLAGS = ("score_holdout", "skip_screen", "macro", "discover")
+_FLAGS = ("score_holdout", "skip_screen", "macro", "discover", "lot_fit")
 
 
 def _truthy(v: Any) -> bool:
@@ -108,6 +109,7 @@ def plan(env: Mapping[str, str]) -> list[dict[str, Any]]:
         "discover_config": env.get("DISCOVER_CONFIG", "{}") or "{}", "rule_ref": env.get("RULE_REF", ""),
         "score_holdout": env.get("SCORE_HOLDOUT", "false"), "skip_screen": env.get("SKIP_SCREEN", "false"),
         "macro": env.get("MACRO", "false"), "discover": env.get("DISCOVER", "false"), "timeframe": "",
+        "lot_fit": env.get("LOT_FIT", "false"),
     }
     raw_batch = (env.get("BATCH") or "").strip()
     if raw_batch:
@@ -167,6 +169,8 @@ def argv(cell: Mapping[str, Any]) -> list[str]:
     out += [f for f, on in (("--score-holdout", cell["score_holdout"]), ("--skip-screen", cell["skip_screen"])) if on]
     if cell["macro"]:
         out.append("--macro=macro")
+    if cell["lot_fit"]:                    # H-27 overlay, reporting only; the account comes from settings
+        out.append("--lot-fit")
     return out
 
 

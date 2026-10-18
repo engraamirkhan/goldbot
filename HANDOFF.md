@@ -20,6 +20,20 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   gained `account_class_declared` and `account_class_measured` (golden hashes regenerated).
   A torn classifier file is recorded as `classifier_error` in the nightly row; the other accounts and the costs publish go on.
 - **Deploy status false alarm fixed (SRE).** `goldbot-deploy` leaves the engine-derived checks (engine, engine_loop, tick_errors; reconcile stays compared, it also reports ledger mismatches) of an engine unit that is disabled/inactive at the baseline out of the worse-comparison and records "engine stopped for the deploy: <account>"; other worsened checks still give `deployed_degraded`. `check_deploy` reports a `deployed_degraded` as ok ("degraded at deploy time (...), now ok") when all named checks read ok in the fresh `health_last.json`; deploys.jsonl is untouched.
+- **H-27 lot-fit overlay in research (implementer, 2026-10-18; opt-in, not yet reviewed by quant).** Playbook
+  small-account-playbook-2026-10-18 section 3: research no longer claims £ from trades the account cannot take.
+  `goldbot/research/lot_fit.py` sizes every trade with the gate's own `risk.sizing.size_lots`, the gate's exception cap
+  (`RiskGate.min_lot_cap`) and its stop floor (stops level plus spread); the min-lot exception (`risk.min_lot_risk_cap`,
+  off by default, never tiny-live), the 8% size-down stage and the model multiplier are LotFitSpec fields. Unfit = the gate
+  would refuse `min_lot_exceeds_risk`: excluded from P&L, counted; fitting trades are scaled by the actual lot.
+  tests/test_lot_fit_overlay.py runs `RiskGate.check` over a 1,500-case grid and requires the same verdict.
+  `run_specialist`/`evaluate`/`run_pool(..., lot_fit=LotFitSpec)` add `metrics.lot_fit` (model_filtered and
+  all_candidates: n, fit fraction, unfit, mean lots, £ P&L, R at lots, net R of the fit subset) and the report a
+  "Lot fit" table. `research_pass.py --lot-fit` (account from `research.lot_fit_equity` 1000 and `lot_fit_acct_per_usd`
+  0.75, a research assumption); research.yml optional boolean input `lot_fit` (and a batch key) -> env LOT_FIT -> plan
+  validation -> `--lot-fit`. Default off: no key, outputs and registry rows unchanged (tested). Not done: routing before
+  RiskGate (ATR stop, else H-25, else skip); `--lot-fit` with --discover/--cpcv/--h16 is refused; margin and the other
+  gate checks are not part of "unfit".
 - **Attended MT5 box upgrade scripted (sre, 2026-10-18; for Sat 24 Oct 10:00 UK; not yet reviewed).**
   `goldbot/ops/linux/mt5-box-upgrade.sh` has phases `precheck`, `install`, `post-reboot`, each re-runnable, printing a
   PASS/FAIL table of states only. It refuses unless the market is closed (UTC window), no engine unit is active on the

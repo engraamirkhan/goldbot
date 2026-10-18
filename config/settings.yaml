@@ -229,6 +229,12 @@ research:
   recal_prior_trades: 200            #   the validated calibration counts as this many trades (prior weight)
   recal_max_shift: 0.05              #   a probability is at most this far from the validated calibrator
   recal_window_days: 182             #   outcomes (every candidate, taken or not) exited within this window
+  lot_fit_equity: 1000               # H-27 lot-fit overlay (research/lot_fit.py, opt-in, reporting only): the account the
+  lot_fit_acct_per_usd: 0.75         #   research sizes trades for, in its currency; GBP per USD (GBPUSD ~1.33), a research
+                                     #   assumption (the engine reads the broker's figure). Trades the gate would refuse
+                                     #   min_lot_exceeds_risk are `unfit` and earn nothing in the overlay
+  lot_fit_spread_points: 20          #   the gate floors every stop at stops level + spread: a spread prior (points of 0.01
+  lot_fit_stops_level_points: 0      #   USD; the typical London/NY spread) and the broker's stops level (0 at IC Markets)
   registry: state/research_registry.jsonl
   models_dir: models
 
