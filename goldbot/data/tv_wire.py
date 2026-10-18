@@ -31,6 +31,10 @@ from urllib.parse import urlsplit
 # prodata 11,080); the free/unauthenticated data host is `data`.
 WS_URL = "wss://data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart"
 PRO_WS_URL = "wss://prodata.tradingview.com/socket.io/websocket?from=chart%2F&type=chart"
+# response caps, about twice the largest seen on a real pass (2026-10-18, Premium, 3 layout studies, 5000-bar pages):
+# a websocket message 3.66 MB (a study's history), a GET body 1.31 MB (a chart page)
+MAX_WS_BYTES = 8 * 2**20
+MAX_HTTP_BYTES = 4 * 2**20
 SITE = "https://www.tradingview.com"
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
 
@@ -187,11 +191,14 @@ class GuardedSocket:
 
     def recv(self, timeout: float) -> str:
         try:
-            return self._inner.recv(timeout)
+            msg = self._inner.recv(timeout)
         except TimeoutError:
             raise
         except Exception as exc:
             raise TvPullError(redact(f"websocket receive failed: {type(exc).__name__}: {exc}", self._secrets)) from None
+        if len(msg) > MAX_WS_BYTES:
+            raise TvPullError(f"a websocket message of {len(msg)} characters exceeds the {MAX_WS_BYTES} cap")
+        return msg
 
     def close(self) -> None:
         try:
@@ -220,12 +227,16 @@ class ReadOnlyNetwork:
         if with_cookie:
             headers["Cookie"] = self._cookie
         try:
-            return self._inner.get(url, headers)
+            body = self._inner.get(url, headers)
         except TvPullError:
             raise
         except Exception as exc:
             msg = f"GET {urlsplit(url).hostname}{urlsplit(url).path} failed: {type(exc).__name__}: {exc}"
             raise TvPullError(redact(msg, self.secrets)[:300]) from None
+        if len(body) > MAX_HTTP_BYTES:
+            raise TvPullError(redact(f"GET {urlsplit(url).hostname}{urlsplit(url).path}: a {len(body)}-character body "
+                                     f"exceeds the {MAX_HTTP_BYTES} cap", self.secrets))
+        return body
 
     def open_socket(self, *, pro: bool = False) -> GuardedSocket:
         try:
@@ -247,15 +258,20 @@ class LiveNetwork:
 
     def get(self, url: str, headers: Mapping[str, str]) -> str:  # pragma: no cover - network
         import httpx
-        r = httpx.get(url, headers=dict(headers), timeout=self.timeout_s, follow_redirects=False)
-        if r.status_code in (401, 403):
-            raise TvAuthError(f"TradingView answered {r.status_code}: the session cookie was refused")
-        r.raise_for_status()
-        return r.text
+        with httpx.stream("GET", url, headers=dict(headers), timeout=self.timeout_s, follow_redirects=False) as r:
+            if r.status_code in (401, 403):
+                raise TvAuthError(f"TradingView answered {r.status_code}: the session cookie was refused")
+            r.raise_for_status()
+            body = bytearray()
+            for chunk in r.iter_bytes():
+                body += chunk
+                if len(body) > MAX_HTTP_BYTES:
+                    raise TvPullError(f"a GET body over the {MAX_HTTP_BYTES}-byte cap")
+            return body.decode(r.encoding or "utf-8", errors="replace")
 
     def open_socket(self, url: str, headers: Mapping[str, str]) -> TvSocket:  # pragma: no cover - network
         from websockets.sync.client import connect
-        ws = connect(url, additional_headers=dict(headers), open_timeout=self.timeout_s, max_size=2**25)
+        ws = connect(url, additional_headers=dict(headers), open_timeout=self.timeout_s, max_size=MAX_WS_BYTES)
         return _WsSocket(ws)
 
 

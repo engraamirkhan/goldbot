@@ -27,7 +27,9 @@ Everything else is automatic:
   TradingView (`StudyMeta.history_recomputed`): only `pull_live` rows were seen as they were.
 * "Every join to bars via asof_join on available_utc". `pull_live` (received within `live_max_lag_s` of the close):
   `available_utc` = the receipt time. `pull_history` (backfill): bar close + the p95 latency of the live bars over
-  the last 30 days (`history_latency_s`), `history_latency_default_s` until `min_live_samples` exist. First receipt
+  the last 30 days (`history_latency_s`), `history_latency_default_s` (960 s) until `min_live_samples` (20) exist.
+  The default is conservative: a backfilled row becomes available about 900 s later than a live pull of the same bar
+  will be (one poll interval plus the offset), so research on history never sees a value earlier than live would. First receipt
   wins: a bar already stored is never rewritten; a re-read bar whose values differ is counted as a repaint.
 * Polite. One request at most every `min_interval_s`; history pages capped per timeframe; a timeframe is polled
   only once a new bar can have closed; `max_requests_per_day` over a rolling 24 h; after a failed pass the next waits
@@ -44,6 +46,7 @@ Everything else is automatic:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -226,12 +229,19 @@ class PassReport(FrozenRecord):
         return "\n".join(lines)
 
 
+def cookie_fingerprint(cookie: str) -> str:
+    """A short one-way fingerprint of the cookie, to notice that a new one was stored (the cookie itself is never kept
+    beyond the pass, not even in a repr)."""
+    return hashlib.sha256(cookie.encode()).hexdigest()[:12] if cookie else ""
+
+
 class FollowState(Record):
-    """In-memory state of a `follow` loop: compiled study sources (never written anywhere) and the cookie that failed
-    sign-in, so a newly stored cookie is tried at once instead of after the expiry backoff."""
+    """In-memory state of a `follow` loop: compiled study sources (never written anywhere) and the fingerprint of the
+    cookie that failed sign-in ("" when none was stored), so a newly stored cookie is tried at once instead of after
+    the expiry backoff."""
 
     compiled: dict[str, tuple[StudyMeta, str, float]] = Field(default_factory=dict)
-    failed_cookie: str | None = None
+    failed_cookie: str | None = None              # cookie_fingerprint, never the cookie
 
 
 # ------------------------------------------------------------------------------------------------- the pull log
@@ -472,6 +482,7 @@ def discover(net: ReadOnlyNetwork, pacer: Pacer, user_id: str | None, max_studie
         lid = str(lay.get("image_url") or lay.get("short_url") or lay.get("id") or "") if isinstance(lay, dict) else ""
         if not lid:
             continue
+        net.add_secret(lid, min_len=1)                      # a layout id names the owner's chart: never in a report
         pacer.wait()
         content = _layout_content(net.get(f"{SITE}/chart/{quote(lid)}/"))
         specs = _studies_in(content) if content is not None else []
@@ -641,12 +652,15 @@ def _pulled(df: pd.DataFrame, tf: str, meta_hash: str = "") -> pd.DataFrame:
     return df[(df["tf"].astype(str) == tf) & df["origin"].isin(ORIGINS) & hashes.eq(meta_hash)]
 
 
-def _drop_sparse_start(times: list[int]) -> list[int]:
+def _drop_sparse_start(times: list[int], tf: str) -> list[int]:
     """Keep only the bars after the last gap longer than SPARSE_START_S. TradingView's 1D gold series starts with
     yearly bars before 1921, monthly ones to 1970 and a patchy 1997-98 (real pass, 2026-10-18): daily bars are kept
     from 1998-10-14.
     Gold has no two-week gap in its real bars at any timeframe, so the cost is only history before an outage that
-    long, never a wrong bar."""
+    long, never a wrong bar. 1D only: a weekly or monthly series has gaps this long by nature, and the intraday
+    series showed no such start (quant/data review, 2026-10-18)."""
+    if tf != "1D":
+        return times
     gaps = [i for i in range(len(times) - 1) if times[i + 1] - times[i] > SPARSE_START_S]
     return times[gaps[-1] + 1:] if gaps else times
 
@@ -812,7 +826,7 @@ def _pull_tf(cfg: TvPullSettings, *, store: Store, plog: PullLog, sock: GuardedS
         chart.close()
     received = _utc(now())
     rs = int(_epoch_s(pd.DatetimeIndex([received]))[0])
-    times = _drop_sparse_start(sorted(chart.bars))
+    times = _drop_sparse_start(sorted(chart.bars), tf)
     if times and times[-1] > rs:
         raise TvPullError(f"future bar: the {chart_sym} {tf} bar opening "
                           f"{pd.Timestamp(times[-1], unit='s', tz='UTC').isoformat()} is after now "
@@ -867,7 +881,7 @@ def run_pass(cfg: TvPullSettings, *, store: Store, log: PullLog, network: TvNetw
     if blocked is not None and started < blocked:
         last = log.last()
         fresh = (state is not None and last is not None and last.auth_expired and state.failed_cookie is not None
-                 and state.failed_cookie != secret)
+                 and state.failed_cookie != cookie_fingerprint(secret))
         if not fresh:
             return PassReport(ok=False, skipped=True, started_utc=started, finished_utc=started,
                               reason=f"backing off after a failed pass until {blocked.isoformat()}")
@@ -885,7 +899,7 @@ def run_pass(cfg: TvPullSettings, *, store: Store, log: PullLog, network: TvNetw
                                 auth_expired=True)
         record_expired(log.path.parent, rep.finished_utc)   # one owner notice per expiry (ops/tv_pull_health.py)
         if state is not None:
-            state.failed_cookie = secret
+            state.failed_cookie = cookie_fingerprint(secret)
     except Exception as exc:  # fail soft (the alert path is independent); the message is redacted, never chained
         rep = PassReport.failed(started, _utc(clock()), redact(f"{type(exc).__name__}: {exc}", net.secrets)[:400],
                                 requests=pacer.count)
