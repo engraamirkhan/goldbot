@@ -4283,6 +4283,17 @@
       ],
       "title": "Mode"
      },
+     "open_risk": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Open Risk"
+     },
      "opened_utc": {
       "format": "date-time",
       "title": "Opened Utc",

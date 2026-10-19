@@ -1228,6 +1228,7 @@ class OpenPosition(BaseModel):
     floating_pnl: float | None
     currency: str | None
     r_now: float | None                     # the move from entry over the risk at entry
+    open_risk: float | None = None          # the loss if the stop held now, in the account currency; 0 once locked in
     age_s: float | None                     # how old the engine's figures are
     stale: bool                             # older than 60 s (or unknown): never shown as current
 
