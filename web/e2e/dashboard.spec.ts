@@ -114,6 +114,7 @@ test("owner approves one proposal and rejects the other with a reason", async ({
 test("owner halts new entries and re-arms with an authenticator code", async ({ page }) => {
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  await page.locator("[data-status-pill]:visible").click();                   // Halt: two taps from any screen
   await page.getByLabel("Halt reason").fill("fomc surprise");
   await page.getByRole("button", { name: "Halt new entries" }).click();
   await expect(page.getByText("Entries halted via the dashboard: fomc surprise.")).toBeVisible();   // the channel, never who (A15)

@@ -29,6 +29,7 @@ import pandas as pd
 from goldbot.base import Record, UtcTimestamp
 from goldbot.data.store import Store
 from goldbot.data.timeutil import utc_index
+from goldbot.engine.replica_context import ReplicaShadow
 from goldbot.engine.shadow import record_candidate
 from goldbot.execution.broker import Tick
 from goldbot.specialists.base import Specialist
@@ -79,6 +80,7 @@ class TvShadowWatch:
 
     def __init__(self) -> None:
         self._pending: dict[str, _Pending] = {}
+        self.replica: ReplicaShadow | None = None      # set by the host (ops.run) to serve replica agents, shadow only
 
     @property
     def pending(self) -> list[str]:
@@ -91,6 +93,9 @@ class TvShadowWatch:
         (first check now)."""
         out: dict[str, pd.DataFrame] = {}
         for ag in agents:
+            if getattr(ag, "replica_params", None) is not None:      # carried state, or nothing (ReplicaShadow)
+                out[ag.agent_id] = self.replica.candidates(ag, fr) if self.replica is not None else _empty()
+                continue
             if not ag.requires_tv:
                 out[ag.agent_id] = ag.candidates(fr.m, fr.X)
                 continue

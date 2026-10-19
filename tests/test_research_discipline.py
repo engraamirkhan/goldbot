@@ -330,6 +330,8 @@ def bars_1m() -> pd.DataFrame:
 @pytest.mark.parametrize("family", sorted(SPECIALISTS))
 def test_declared_feature_lists_exist_and_fit_the_cap(family, bars_1m):
     cls = SPECIALISTS[family]
+    if getattr(cls, "frozen_config", False) and not cls.model_features:
+        pytest.skip("a rule agent (RuleModel, ADR 0038): no model features, scored by its rule")
     dec = resample_bars(bars_1m, cls.timeframe).reset_index(drop=True)
     context = {TF_LABEL[x]: resample_bars(bars_1m, x) for x in context_tfs(cls.timeframe)}
     _, X = build_decision_frame(dec, context)

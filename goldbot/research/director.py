@@ -98,7 +98,7 @@ from goldbot.config import RetiredFamily
 from goldbot.research.attribution import T_SIGNIFICANT
 from goldbot.research.gates import day_summed_check
 from goldbot.research.population import DSR_PROMOTE, MIN_RANK_TRADES
-from goldbot.research.promotion import MIN_SHADOW_TRADES, PerfStats
+from goldbot.research.promotion import MIN_SHADOW_TRADES, PerfStats, effective_n
 from goldbot.research.registry import (
     DAY_SUMMED_RULE_IDS,
     DEFAULT_SLOT_RULE,
@@ -1016,6 +1016,8 @@ def _clip01(x: float) -> float:
 
 
 def _shadow_z(stats: PerfStats) -> float | None:
+    if stats.t_stat is not None:        # ruling 2026-10-19: the cluster-robust t (agent x session day)
+        return stats.t_stat
     if stats.mean_ret is not None and stats.std_ret:
         return stats.mean_ret / stats.std_ret * math.sqrt(stats.n_trades)
     if stats.trades_per_week > 0:       # annualised Sharpe -> per trade
@@ -1067,7 +1069,7 @@ def score_family(family: str, trials: list[dict[str, Any]], shadow: list[ShadowE
         if s.family != family:
             continue
         sh_n = max(sh_n, s.stats.n_trades)
-        sz = _shadow_z(s.stats) if s.stats.n_trades >= MIN_SHADOW_TRADES else None
+        sz = _shadow_z(s.stats) if effective_n(s.stats) >= MIN_SHADOW_TRADES else None
         if sz is not None and (sh_z is None or sz > sh_z):
             sh_z, sh_src = sz, s.version
     best_fit, best_fit_ece = 0.0, None

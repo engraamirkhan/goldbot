@@ -21,6 +21,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Activity Feed */
+        get: operations["activity_feed_api_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agent-runs": {
         parameters: {
             query?: never;
@@ -731,6 +748,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/trades/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Trades Overview View */
+        get: operations["trades_overview_view_api_trades_overview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/trades/summary": {
         parameters: {
             query?: never;
@@ -935,6 +969,64 @@ export interface components {
             title: string;
             /** Ts Utc */
             ts_utc: string | null;
+        };
+        /**
+         * ActivityEvent
+         * @description One thing the system did (goldbot/api/activity.py): a shadow trade, an account position or a cost-probe order
+         *     opened or closed, or an entry the engine refused. Fields a kind does not have are null.
+         */
+        ActivityEvent: {
+            /** Account */
+            account?: string | null;
+            /** Agent Id */
+            agent_id?: string | null;
+            /** Currency */
+            currency?: string | null;
+            /** Entry */
+            entry?: number | null;
+            /** Exit */
+            exit?: number | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "shadow_opened" | "shadow_closed" | "position_opened" | "position_closed" | "probe_opened" | "probe_closed" | "refused";
+            /** Lots */
+            lots?: number | null;
+            /** Mode */
+            mode?: ("demo" | "live" | "paper") | null;
+            /** P */
+            p?: number | null;
+            /** Pnl */
+            pnl?: number | null;
+            /** R */
+            r?: number | null;
+            /** Reason */
+            reason?: string | null;
+            /** Ret */
+            ret?: number | null;
+            /** Side */
+            side?: ("long" | "short") | null;
+            /** Stop */
+            stop?: number | null;
+            /** Target */
+            target?: number | null;
+            /** Timeframe */
+            timeframe?: string | null;
+            /**
+             * Ts
+             * Format: date-time
+             */
+            ts: string;
+            /** Version */
+            version?: string | null;
+        };
+        /** ActivityView */
+        ActivityView: {
+            /** Events */
+            events: components["schemas"]["ActivityEvent"][];
+            /** Unreadable */
+            unreadable: ("shadow" | "positions" | "probes" | "journal")[];
         };
         /**
          * AgentHealthRow
@@ -1582,6 +1674,29 @@ export interface components {
              * @enum {string}
              */
             state: "open" | "partial" | "waiting" | "blocked";
+        };
+        /** ExitCounts */
+        ExitCounts: {
+            /**
+             * Other
+             * @default 0
+             */
+            other: number;
+            /**
+             * Stop
+             * @default 0
+             */
+            stop: number;
+            /**
+             * Target
+             * @default 0
+             */
+            target: number;
+            /**
+             * Time
+             * @default 0
+             */
+            time: number;
         };
         /** FeedHealth */
         FeedHealth: {
@@ -2988,6 +3103,97 @@ export interface components {
             since: string | null;
         };
         /**
+         * TradeRef
+         * @description One closed trade named by a summary (its best or worst).
+         */
+        TradeRef: {
+            /** Agent Id */
+            agent_id: string | null;
+            /** Currency */
+            currency: string | null;
+            /** Pnl */
+            pnl: number | null;
+            /** R */
+            r: number | null;
+            /** Timeframe */
+            timeframe: string | null;
+            /**
+             * Ts
+             * Format: date-time
+             */
+            ts: string;
+        };
+        /**
+         * TradeStats
+         * @description Closed trades of the period, and the trades open now (open is the same in every period).
+         */
+        TradeStats: {
+            /** Avg R */
+            avg_r: number | null;
+            best: components["schemas"]["TradeRef"] | null;
+            /** Closed */
+            closed: number;
+            exits: components["schemas"]["ExitCounts"];
+            /** Losses */
+            losses: number;
+            /** N R */
+            n_r: number;
+            /** Net Pnl */
+            net_pnl: {
+                [key: string]: number;
+            };
+            /** Open */
+            open: number;
+            /** Total R */
+            total_r: number | null;
+            /** Win Rate */
+            win_rate: number | null;
+            /** Wins */
+            wins: number;
+            worst: components["schemas"]["TradeRef"] | null;
+        };
+        /** TradeTypeSummary */
+        TradeTypeSummary: {
+            /** By Family */
+            by_family: {
+                [key: string]: components["schemas"]["TradeStats"];
+            };
+            /** By Timeframe */
+            by_timeframe: {
+                [key: string]: components["schemas"]["TradeStats"];
+            };
+            stats: components["schemas"]["TradeStats"];
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "shadow_taken" | "shadow_all" | "demo" | "live" | "probe";
+        };
+        /** TradesOverview */
+        TradesOverview: {
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
+            /** Periods */
+            periods: components["schemas"]["TradesPeriodView"][];
+            /** Unreadable */
+            unreadable: ("shadow" | "positions" | "probes" | "journal")[];
+        };
+        /** TradesPeriodView */
+        TradesPeriodView: {
+            /**
+             * Period
+             * @enum {string}
+             */
+            period: "today" | "7d" | "all";
+            /** Since */
+            since: string | null;
+            /** Types */
+            types: components["schemas"]["TradeTypeSummary"][];
+        };
+        /**
          * TradesSummary
          * @description Your account's closed trades over the last `days` opportunity days (ops/report_days.py, the monthly report's
          *     day and P&L basis: net rows in the account currency only; other rows are counted and flagged, never summed).
@@ -3254,6 +3460,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountSummary"][];
+                };
+            };
+        };
+    };
+    activity_feed_api_activity_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -4398,6 +4635,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Status"];
+                };
+            };
+        };
+    };
+    trades_overview_view_api_trades_overview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradesOverview"];
                 };
             };
         };

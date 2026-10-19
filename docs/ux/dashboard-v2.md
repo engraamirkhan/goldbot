@@ -115,9 +115,9 @@ Ranked by impact; [x] = fixed in this pass.
    a label per panel, equal fixed heights (420 / 560 px, no layout shift), "15-minute" in words.
 5. [x] Uppercase micro-labels (RISK, LOSS BUDGET, OWNER HALT) mixed with sentence case: sentence case throughout.
 6. [x] Desktop content centred with an empty gutter beside the rail: left-aligned to the rail.
-7. [ ] Home still repeats safety (strip + entry status + pill) and Halt; next: one Safety card that is a single line when clear.
-8. [ ] Approval card footer shows the strategy id and a 12-hour clock ("03:40:52 PM"); needs plain names and 24 h local
+7. [x] Home still repeats safety (strip + entry status + pill) and Halt; next: one Safety card that is a single line when clear.
+8. [x] Approval card footer shows the strategy id and a 12-hour clock ("03:40:52 PM"); needs plain names and 24 h local
    time (shared copy with Telegram: change both together).
-9. [ ] Account card "Today" sub-line wraps to 3 lines in a quarter-width tile; shorten to "+1.24% since 01:00".
-10. [ ] Chart: the page's timeframe buttons duplicate TradingView's own toolbar; hide the widget's interval bar or label ours "Both charts".
+9. [x] Account card "Today" sub-line wraps to 3 lines in a quarter-width tile; shorten to "+1.24% since 01:00".
+10. [x] Chart: the page's timeframe buttons duplicate TradingView's own toolbar; hide the widget's interval bar or label ours "Both charts".
 11. [ ] The MT5 terminal shows a default FX layout (SRE lane: gold chart template on the box).

@@ -240,6 +240,261 @@
     "title": "ActiveBlackout",
     "type": "object"
    },
+   "ActivityEvent": {
+    "description": "One thing the system did (goldbot/api/activity.py): a shadow trade, an account position or a cost-probe order\nopened or closed, or an entry the engine refused. Fields a kind does not have are null.",
+    "properties": {
+     "account": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Account"
+     },
+     "agent_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Agent Id"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
+     "entry": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Entry"
+     },
+     "exit": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Exit"
+     },
+     "kind": {
+      "enum": [
+       "shadow_opened",
+       "shadow_closed",
+       "position_opened",
+       "position_closed",
+       "probe_opened",
+       "probe_closed",
+       "refused"
+      ],
+      "title": "Kind",
+      "type": "string"
+     },
+     "lots": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Lots"
+     },
+     "mode": {
+      "anyOf": [
+       {
+        "enum": [
+         "demo",
+         "live",
+         "paper"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mode"
+     },
+     "p": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "P"
+     },
+     "pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Pnl"
+     },
+     "r": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "R"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     },
+     "ret": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ret"
+     },
+     "side": {
+      "anyOf": [
+       {
+        "enum": [
+         "long",
+         "short"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Side"
+     },
+     "stop": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Stop"
+     },
+     "target": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Target"
+     },
+     "timeframe": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Timeframe"
+     },
+     "ts": {
+      "format": "date-time",
+      "title": "Ts",
+      "type": "string"
+     },
+     "version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Version"
+     }
+    },
+    "required": [
+     "ts",
+     "kind"
+    ],
+    "title": "ActivityEvent",
+    "type": "object"
+   },
+   "ActivityView": {
+    "properties": {
+     "events": {
+      "items": {
+       "$ref": "#/components/schemas/ActivityEvent"
+      },
+      "title": "Events",
+      "type": "array"
+     },
+     "unreadable": {
+      "items": {
+       "enum": [
+        "shadow",
+        "positions",
+        "probes",
+        "journal"
+       ],
+       "type": "string"
+      },
+      "title": "Unreadable",
+      "type": "array"
+     }
+    },
+    "required": [
+     "events",
+     "unreadable"
+    ],
+    "title": "ActivityView",
+    "type": "object"
+   },
    "AgentHealthRow": {
     "description": "One champion's drift and health (state/drift.json, research/drift.py AgentHealth) with its halt state.",
     "properties": {
@@ -1932,6 +2187,32 @@
      "exits"
     ],
     "title": "EntryStatus",
+    "type": "object"
+   },
+   "ExitCounts": {
+    "properties": {
+     "other": {
+      "default": 0,
+      "title": "Other",
+      "type": "integer"
+     },
+     "stop": {
+      "default": 0,
+      "title": "Stop",
+      "type": "integer"
+     },
+     "target": {
+      "default": 0,
+      "title": "Target",
+      "type": "integer"
+     },
+     "time": {
+      "default": 0,
+      "title": "Time",
+      "type": "integer"
+     }
+    },
+    "title": "ExitCounts",
     "type": "object"
    },
    "FeedHealth": {
@@ -5948,6 +6229,300 @@
     "title": "SystemHaltView",
     "type": "object"
    },
+   "TradeRef": {
+    "description": "One closed trade named by a summary (its best or worst).",
+    "properties": {
+     "agent_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Agent Id"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
+     "pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Pnl"
+     },
+     "r": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "R"
+     },
+     "timeframe": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Timeframe"
+     },
+     "ts": {
+      "format": "date-time",
+      "title": "Ts",
+      "type": "string"
+     }
+    },
+    "required": [
+     "ts",
+     "agent_id",
+     "timeframe",
+     "r",
+     "pnl",
+     "currency"
+    ],
+    "title": "TradeRef",
+    "type": "object"
+   },
+   "TradeStats": {
+    "description": "Closed trades of the period, and the trades open now (open is the same in every period).",
+    "properties": {
+     "avg_r": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Avg R"
+     },
+     "best": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/TradeRef"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "closed": {
+      "title": "Closed",
+      "type": "integer"
+     },
+     "exits": {
+      "$ref": "#/components/schemas/ExitCounts"
+     },
+     "losses": {
+      "title": "Losses",
+      "type": "integer"
+     },
+     "n_r": {
+      "title": "N R",
+      "type": "integer"
+     },
+     "net_pnl": {
+      "additionalProperties": {
+       "type": "number"
+      },
+      "title": "Net Pnl",
+      "type": "object"
+     },
+     "open": {
+      "title": "Open",
+      "type": "integer"
+     },
+     "total_r": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Total R"
+     },
+     "win_rate": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Win Rate"
+     },
+     "wins": {
+      "title": "Wins",
+      "type": "integer"
+     },
+     "worst": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/TradeRef"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "open",
+     "closed",
+     "wins",
+     "losses",
+     "win_rate",
+     "n_r",
+     "total_r",
+     "avg_r",
+     "net_pnl",
+     "best",
+     "worst",
+     "exits"
+    ],
+    "title": "TradeStats",
+    "type": "object"
+   },
+   "TradeTypeSummary": {
+    "properties": {
+     "by_family": {
+      "additionalProperties": {
+       "$ref": "#/components/schemas/TradeStats"
+      },
+      "title": "By Family",
+      "type": "object"
+     },
+     "by_timeframe": {
+      "additionalProperties": {
+       "$ref": "#/components/schemas/TradeStats"
+      },
+      "title": "By Timeframe",
+      "type": "object"
+     },
+     "stats": {
+      "$ref": "#/components/schemas/TradeStats"
+     },
+     "type": {
+      "enum": [
+       "shadow_taken",
+       "shadow_all",
+       "demo",
+       "live",
+       "probe"
+      ],
+      "title": "Type",
+      "type": "string"
+     }
+    },
+    "required": [
+     "type",
+     "stats",
+     "by_family",
+     "by_timeframe"
+    ],
+    "title": "TradeTypeSummary",
+    "type": "object"
+   },
+   "TradesOverview": {
+    "properties": {
+     "as_of": {
+      "format": "date-time",
+      "title": "As Of",
+      "type": "string"
+     },
+     "periods": {
+      "items": {
+       "$ref": "#/components/schemas/TradesPeriodView"
+      },
+      "title": "Periods",
+      "type": "array"
+     },
+     "unreadable": {
+      "items": {
+       "enum": [
+        "shadow",
+        "positions",
+        "probes",
+        "journal"
+       ],
+       "type": "string"
+      },
+      "title": "Unreadable",
+      "type": "array"
+     }
+    },
+    "required": [
+     "as_of",
+     "periods",
+     "unreadable"
+    ],
+    "title": "TradesOverview",
+    "type": "object"
+   },
+   "TradesPeriodView": {
+    "properties": {
+     "period": {
+      "enum": [
+       "today",
+       "7d",
+       "all"
+      ],
+      "title": "Period",
+      "type": "string"
+     },
+     "since": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Since"
+     },
+     "types": {
+      "items": {
+       "$ref": "#/components/schemas/TradeTypeSummary"
+      },
+      "title": "Types",
+      "type": "array"
+     }
+    },
+    "required": [
+     "period",
+     "since",
+     "types"
+    ],
+    "title": "TradesPeriodView",
+    "type": "object"
+   },
    "TradesSummary": {
     "description": "Your account's closed trades over the last `days` opportunity days (ops/report_days.py, the monthly report's\nday and P&L basis: net rows in the account currency only; other rows are counted and flagged, never summed).",
     "properties": {
@@ -6653,6 +7228,53 @@
      }
     ],
     "summary": "Accounts"
+   }
+  },
+  "/api/activity": {
+   "get": {
+    "operationId": "activity_feed_api_activity_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 50,
+       "maximum": 200,
+       "minimum": 1,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ActivityView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Activity Feed"
    }
   },
   "/api/agent-runs": {
@@ -8098,6 +8720,29 @@
      }
     ],
     "summary": "Status"
+   }
+  },
+  "/api/trades/overview": {
+   "get": {
+    "operationId": "trades_overview_view_api_trades_overview_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TradesOverview"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Trades Overview View"
    }
   },
   "/api/trades/summary": {

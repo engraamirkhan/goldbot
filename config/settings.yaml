@@ -193,7 +193,7 @@ research:
   trial_budget_per_month: 12         # bounded loop: trials per specialist per month (feeds the deflated Sharpe)
   label_grid_paused: true            # monthly label-grid loop off until a family passes the primary-signal screen
   trial_budget_quarter: 20           # pre-registered trials per calendar quarter across all families (P2); raising it is an owner decision
-  trial_budget_overrides: {"2026Q4": 53}   # owner directive 2026-10-18: backtest as much as needed; batch-2026-10-18.md
+  trial_budget_overrides: {"2026Q4": 55}   # owner directive 2026-10-18: backtest as much as needed; batch-2026-10-18.md. +2 (53->55) for H-48 + H-49 stage 2: RD ruling 2026-10-18 (prereg-kb-2026-10-18.md), owner approved 2026-10-18
   loop_trials_per_run: 16            # continuous research loop (owner 2026-10-18): trials per scheduled batch, separate from the
                                      #   quarterly budget; every one is a registry row and the deflated Sharpe counts the full K. 0 = off
                                      #   (ADR 0029; a loop trial cites rule_ref=loop, the quarterly count skips it, K counts it)
@@ -398,5 +398,11 @@ tv_pull:                             # TradingView direct pull (goldbot/data/tv_
 tv:                                  # TradingView values at decision time (goldbot/engine/tv_context.py, specialists/tv_event.py)
   max_lag_s: 60                      # a value counts only for the decision bar and when it arrived <= this after its close,
                                      #   else NaN and no TradingView entry (fails closed); equals features.tv_plots.MAX_LAG
+  replica_series_start: "2016-01-01" # live replica state (smc/boxes/mfi) bootstraps from the store's bars from here
+                                     #   (engine/replica_context.py; the brain's store holds 2016-2026)
   min_bar_match: 0.95                # share of our decision bars with a TradingView bar of the same open, else the TV
                                      #   trial is refused before it is charged (research/tv_grid.py: 4h/1d grids differ)
+shadow:                              # shadow book (goldbot/engine/shadow.py; research director ruling 2026-10-19)
+  max_open_per_agent: 3              # every signal its own shadow trade, up to 3 open per agent and version; beyond the
+                                     #   cap a signal is counted "skipped: cap", never traded. Promotion's 40 counts
+                                     #   independent clusters (one per agent per session day), not raw trades

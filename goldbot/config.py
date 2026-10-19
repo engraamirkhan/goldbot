@@ -659,10 +659,21 @@ class TvSettings(_Section):
     close; otherwise it is NaN and nothing that needs it can trigger. Equal to `features.tv_plots.MAX_LAG` (the
     training allowance), so live never accepts what training could not see (tests/test_tv_event.py pins both)."""
     max_lag_s: int = Field(default=60, ge=0)
+    # the live replica's pinned series start (engine/replica_context.py StoreHistory): the store's first bar year; the
+    # carried state bootstraps from here (research keeps B4a's 2010 pin, features/smc_live.SERIES_START)
+    replica_series_start: str = "2016-01-01"
     # a TV_GRID_V1 trial is refused (research.tv_grid.tv_refusal, before it is charged) unless at least this share of
     # our decision bars inside the TradingView history has a TradingView bar of the same open: our 4h bars floor on UTC
     # and our 1d is the 13:30 New York feature-day, TradingView's gold bars start at its session open
     min_bar_match: float = Field(default=0.95, gt=0, le=1)
+
+
+class ShadowSettings(_Section):
+    """Shadow book (goldbot/engine/shadow.py; research director ruling 2026-10-19, "the system needs to learn, so more
+    trades need to be opened and closed"): every signal is its own shadow trade, up to `max_open_per_agent` open at once
+    per agent and version; a signal beyond the cap is counted as "skipped: cap", never traded. Promotion counts
+    independent clusters (one per agent per session day), not raw trades (research/promotion.py)."""
+    max_open_per_agent: int = Field(default=3, ge=1, le=10)
 
 
 class Settings(_Section):
@@ -693,6 +704,7 @@ class Settings(_Section):
     webhook: WebhookSettings = Field(default_factory=WebhookSettings)
     tv_pull: TvPullSettings = Field(default_factory=TvPullSettings)
     tv: TvSettings = Field(default_factory=TvSettings)
+    shadow: ShadowSettings = Field(default_factory=ShadowSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")
     @classmethod

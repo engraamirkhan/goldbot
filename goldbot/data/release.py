@@ -311,9 +311,11 @@ def sync_release_us_calendar(*, raw_dir: Path = Path("raw-calendar"), token: str
 def sync_release(store: Store, *, token: str | None = None) -> dict[str, int]:
     """Bars from data-v1 and macro series from macro-v1 (the Saturday retrain's refresh). A macro failure is logged
     and leaves the bar refresh standing."""
-    counts = sync_release_bars(store, token=token)
+    # downloads go inside the store, never the working directory: the services run under ProtectSystem=strict with only
+    # state/, logs/, data/ and models/ writable, so a cwd-relative raw/ fails the Saturday refresh ("Read-only file system")
+    counts = sync_release_bars(store, token=token, raw_dir=store.root / "_raw" / "bars")
     try:
-        counts["macro"] = sync_release_macro(store, token=token)
+        counts["macro"] = sync_release_macro(store, token=token, raw_dir=store.root / "_raw" / "macro")
     except Exception as exc:     # macro is optional input; bars are what the retrain needs
         log.warning("macro release sync failed: %s", exc)
     return counts

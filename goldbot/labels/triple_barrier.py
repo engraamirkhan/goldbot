@@ -45,6 +45,15 @@ class SwapSpec(FrozenRecord):
         """Swap per oz per night for each side (+1 long / -1 short)."""
         return np.where(np.asarray(side) > 0, self.long_usd_per_lot, self.short_usd_per_lot) / self.contract_oz
 
+    @classmethod
+    def shipped(cls) -> SwapSpec:
+        """The settings defaults (`costs.swap_*`): what an engine built without settings charges until a table
+        measures (moved from engine/runner.py, ADR 0023: runner.py only shrinks)."""
+        from goldbot.config import CostSettings
+        f = CostSettings.model_fields
+        return cls(long_usd_per_lot=f["swap_long_usd_per_lot"].default,
+                   short_usd_per_lot=f["swap_short_usd_per_lot"].default, triple_weekday=f["swap_triple_weekday"].default)
+
 
 def _server_days(ts: pd.DatetimeIndex, server_tz: str) -> np.ndarray:
     """Server calendar day of each UTC stamp; `server_tz` is an IANA name or NY+7 (goldbot.data.timeutil)."""

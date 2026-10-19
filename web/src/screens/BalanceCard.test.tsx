@@ -30,7 +30,7 @@ describe("BalanceCard", () => {
     expect(within(card).getByText("Equity").nextSibling).toHaveTextContent("£990.00");
     expect(within(card).getByText("Equity").nextSibling).toHaveTextContent("−£10.00 open");
     expect(within(card).getByText("Today").nextSibling).toHaveTextContent("−£10.00");
-    expect(within(card).getByText("Today").nextSibling).toHaveTextContent("(00:00 UTC)");
+    expect(within(card).getByText("Today").nextElementSibling?.querySelector("small")).toHaveAttribute("title", "The risk day starts at 00:00 UTC");
     expect(within(card).getByText("Margin level").nextSibling).toHaveTextContent("641%");
   });
 

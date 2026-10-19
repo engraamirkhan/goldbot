@@ -36,7 +36,7 @@ from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
 from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
-from goldbot.engine import unconfirmed
+from goldbot.engine import auto_entry, cost_probe, unconfirmed
 from goldbot.engine.limits_apply import EngineLimits, daily_allowance, min_lot_risk, published_limits
 from goldbot.engine.shadow import ShadowBook, ShadowTrade, record_candidate
 from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, SentOrder: re-exported, ADR 0023 step 1)
@@ -51,7 +51,7 @@ from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, Sent
     risk_file,
 )
 from goldbot.engine.tv_context import TvShadowWatch
-from goldbot.execution.bridge import CEILING_REFUSAL, UNREADABLE_REFUSAL
+from goldbot.execution.bridge import CEILING_REFUSAL
 from goldbot.execution.broker import AccountInfo, Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 from goldbot.execution.classifier import StoredClass, effective_class, read_stored
 from goldbot.execution.costs import CostTable
@@ -69,6 +69,7 @@ from goldbot.ops.cost_imputation import account_swap, paid_swap_per_oz
 from goldbot.ops.gates_phase import ClosedTrade, EntryAudit, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import CONTEXT_FEATURES, DEFAULT_FEATURE_NAMES
+from goldbot.research.rule_model import is_uncalibrated
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, hwm, open_risk, sizing
 from goldbot.risk.gate import PER_TRADE_REFUSALS, REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
 from goldbot.risk.limits_profile import LimitsPolicy, RiskLimitsCurrent
@@ -171,6 +172,11 @@ class EngineConfig(Record):
     mode: str = "paper"              # paper | demo | live (what the broker is); approvals are separate
     declared_class: str | None = None    # raw | standard from config/accounts.yaml: the baseline (effective_class)
     approval_mode: str = "propose"   # propose | auto
+    cost_probe: bool = False         # ADR 0037: min-lot demo orders mirroring challengers' shadow entries
+    cost_probe_budget: float = Field(0.2, gt=0, le=1)   # ADR 0037: the probes' share of the day's loss allowance
+    cost_probe_max_open: int = Field(2, ge=1, le=2)     # ADR 0037 amendment: concurrent probe positions at most
+    cost_probe_max_loss: float = Field(4.0, gt=0)       # ADR 0037 amendment: a probe's loss at its stop, account ccy
+    shadow_max_open: int = Field(3, ge=1)               # settings shadow.max_open_per_agent (ruling 2026-10-19)
     symbol: str = "XAUUSD"
     decision_tf: str = "15m"
     magic_base: int = 260100
@@ -230,15 +236,7 @@ class EngineConfig(Record):
     # BACKLOG 36: the swap the daily projection charges for a rollover before the risk day ends until the cost table
     # measures the broker's own (`cost_imputation.account_swap`); production passes `settings_swap(settings)`, the
     # default is the shipped prior. Read on the engine's server clock (`server_tz`), whatever zone it names
-    swap_prior: SwapSpec = Field(default_factory=lambda: _shipped_swap_prior())
-
-
-def _shipped_swap_prior() -> SwapSpec:
-    """The settings defaults (`costs.swap_*`): what an engine built without settings charges until a table measures."""
-    from goldbot.config import CostSettings
-    f = CostSettings.model_fields
-    return SwapSpec(long_usd_per_lot=f["swap_long_usd_per_lot"].default, short_usd_per_lot=f["swap_short_usd_per_lot"].default,
-                    triple_weekday=f["swap_triple_weekday"].default)
+    swap_prior: SwapSpec = Field(default_factory=lambda: SwapSpec.shipped())
 
 
 class _Frame(Record):
@@ -255,8 +253,8 @@ class Engine:
                  limits: RiskLimits | None = None, shadow_models: dict[str, tuple[str, Model]] | None = None,
                  live_shares: dict[str, float] | None = None, live_versions: dict[str, str] | None = None,
                  limits_policy: LimitsPolicy | None = None):
-        self.cfg = cfg
-        self.broker = broker
+        auto_entry.check_start(cfg.mode, cfg.approval_mode)     # ADR 0036: a non-demo account in auto never starts
+        self.cfg, self.broker, self._account_approval = cfg, broker, cfg.approval_mode   # the account's own mode
         self.agents = {a.agent_id: a for a in agents}
         self.models = models                 # agent_id (or family, for a single-agent setup) -> model
         # population: agent_id -> share of its family's capital; None = every agent trades at the family weight
@@ -314,11 +312,12 @@ class Engine:
         self._ladder: dict = {"ladder_atr": {tf: None for tf in LADDER_TIMEFRAMES}, "lot_terms": None}
         self._news: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
         # shadow book: version -> (family, model); champions and challengers paper-trade without orders
-        self.shadow = ShadowBook(cfg.state_dir) if cfg.shadow_host else None
+        self.shadow = ShadowBook(cfg.state_dir, cfg.shadow_max_open) if cfg.shadow_host else None
         self.shadow_models: dict[str, tuple[str, Model]] = {}
         self.set_shadow_models(shadow_models or {})
         Path(cfg.state_dir).mkdir(parents=True, exist_ok=True)
         self.state_store: EngineStore = JsonEngineStore(Path(cfg.state_dir), cfg.account_id)   # ADR 0023 step 1
+        self.probe = cost_probe.CostProbe.start(self)      # ADR 0037: demo accounts only (refused at start otherwise)
         self.center.on_decision = self._on_decision
         # data quality: errors since the last bar close, and those the last bar close was decided with
         self._last_tick: Tick | None = None
@@ -911,6 +910,7 @@ class Engine:
             agents = [a for a in self.agents.values() if a.timeframe == tf]
             decisions += self._decide(tf, fr, agents, fam_w, close_ts, last_tick)
         self._blackout_close(complete, close_ts, frames)
+        cost_probe.step(self, close_ts, last_tick)       # ADR 0037: at most one min-lot probe, on a flat demo account
         if self.shadow is not None:
             self.shadow.save(close_ts)
         self._write_state()
@@ -1068,6 +1068,7 @@ class Engine:
         cands_by_agent = self._tv.candidates(self, tf, fr, agents, self._now(last_tick), last_tick, float(a.iloc[last]), hurdle_atr)
         if self.shadow is not None:
             self._shadow_step(tf, fr, agents, cands_by_agent, float(a.iloc[last]), hurdle_atr)
+        cost_probe.yield_to_live(self, agents, cands_by_agent, last, close_ts)   # ADR 0037: real trades first
         for agent in agents:
             cands = cands_by_agent[agent.agent_id]
             if cands.empty or int(cands["idx"].iloc[-1]) != last:
@@ -1076,10 +1077,13 @@ class Engine:
             model = self.models.get(agent.agent_id) or self.models.get(agent.family)
             if model is None:
                 continue
-            # DESIGN: TradingView signals are "filter features only" until the promotion rule: a requires_tv agent is
+            # DESIGN: TradingView signals are "filter features only" until the promotion rule: a shadow_only agent (TV, replica) is
             # shadow only (share 0) like a shadow-only member of the population: the shadow book trades it, not the broker
-            share = 0.0 if agent.requires_tv else 1.0 if self.live_shares is None else self.live_shares.get(agent.agent_id, 0.0)
+            share = 0.0 if agent.shadow_only else 1.0 if self.live_shares is None else self.live_shares.get(agent.agent_id, 0.0)
             if share <= 0:
+                continue
+            if is_uncalibrated(model):       # ADR 0038: a rule model's p means "fired": it never sizes a live entry
+                decisions.append(self._record(agent, close_ts, 0.0, 0.0, "uncalibrated_rule_model"))
                 continue
             if self._busy(agent.agent_id):
                 continue      # one position (or pending proposal) per agent, as its labels were built
@@ -1132,7 +1136,7 @@ class Engine:
                             top_features=self._top_features(model, feats), window_s=self.cfg.approval_window_s,
                             risk_usd=round(gd.lots * gd.stop_distance * intent.contract_oz, 2),
                             **self._card_money(gd, intent))
-            if self.cfg.approval_mode == "auto":
+            if auto_entry.permitted(self, close_ts):    # ADR 0036: demo account on a demo terminal, read at the order
                 if self._auto_paused is not None and self._auto_paused[0] == close_ts:
                     decisions.append(self._record(agent, close_ts, p, mult, f"auto_paused:{self._auto_paused[1]}",
                                                   scored_fv=sfv))
@@ -1148,8 +1152,8 @@ class Engine:
                     decisions.append(self._record(agent, close_ts, p, mult, f"auto_unconfirmed:{type(exc).__name__}",
                                                   pid, scored_fv=sfv))
                     continue
-                decisions.append(self._record(agent, close_ts, p, mult, self._auto_action(res), pid, scored_fv=sfv))
-                self._after_auto_order(res, gd, side, close_ts)
+                decisions.append(self._record(agent, close_ts, p, mult, auto_entry.action(res), pid, scored_fv=sfv))
+                auto_entry.after_order(self, res, gd, prop, close_ts)
             else:
                 self.pending[pid] = (intent, prop, agent)   # until the owner decides or the window expires
                 self.center.propose(prop)
@@ -1276,59 +1280,6 @@ class Engine:
             return gd.model_copy(update={"allowed": False, "reasons": ["risk_above_approved"]}), lots
         return gd, lots
 
-    @staticmethod
-    def _auto_action(res: OrderResult | None) -> str:
-        """The journal's word for an auto entry (review LOW-B): `executed:auto` only for a fill (or a duplicate, sent
-        before); `auto_rejected:<retcode>` for a definite reject (nothing placed); `auto_unconfirmed:<retcode>` for
-        anything else (`_after_auto_order` then stops auto entries for the rest of the bar close)."""
-        if res is None or (res.ok and res.position_id is not None):
-            return "executed:auto"
-        kind = "auto_rejected" if res.retcode in DEFINITE_REJECT_RETCODES else "auto_unconfirmed"
-        return f"{kind}:{res.retcode}"
-
-    def _after_auto_order(self, res: OrderResult | None, gd: GateDecision, side: int, close_ts: pd.Timestamp) -> None:
-        """Trading-safety review HIGH (BACKLOG 19 review): every auto entry at one bar close must see the previous
-        one, or `max_positions`, the combined cap, the heat cap and the same-direction cap can each be passed within a
-        bar close. After an order the account is read again (`_refresh_account` on the broker's last tick). A fill the
-        positions read does not show yet is added conservatively: one more position on its side, its lots and notional,
-        the gate's margin, and its stop risk scaled to the filled lots (unknown open risk stays unknown). An ambiguous
-        result (neither a fill nor a definite reject, `DEFINITE_REJECT_RETCODES`) or a failed re-read stops auto entries
-        for the rest of this bar close. `res` None: nothing was sent (a duplicate), nothing changes."""
-        if res is None:
-            return
-        filled = res.ok and res.position_id is not None
-        if bridge_refused(res):                         # BACKLOG 66 (trading-safety C2): nothing placed, but the brain
-            self._auto_paused = (close_ts, "bridge_refused")   # sized above the bridge's ceiling: no more this close
-            return
-        if not filled and res.retcode in DEFINITE_REJECT_RETCODES:
-            return                                      # nothing placed: the facts are unchanged
-        if not filled:
-            self._auto_paused = (close_ts, "unconfirmed_order")
-            log.warning("auto entry result unconfirmed (retcode %s): auto entries stop for this bar close", res.retcode)
-        try:
-            self._refresh_account(self.broker.last_tick(self.cfg.symbol))
-            seen = self._position_ids is not None and res.position_id in self._position_ids
-        except Exception as exc:                        # fail closed: no further auto entry on unknown facts
-            log.warning("account re-read after an auto entry failed (%s): auto entries stop for this bar close",
-                        type(exc).__name__)
-            self._auto_paused = self._auto_paused or (close_ts, "account_unread")
-            seen = False
-        if not filled or seen:
-            return
-        st, lots = self.state, float(res.filled_lots)
-        st.open_positions += 1
-        st.open_lots = round(st.open_lots + lots, 6)
-        px = self._price or res.price           # USD notional at the mid, as `_refresh_account` publishes it
-        if px:
-            st.open_notional = st.open_lots * self._contract_size() * px
-        if side > 0:
-            st.open_long += 1
-        else:
-            st.open_short += 1
-        st.margin_used += gd.margin_needed
-        if st.open_risk is not None:
-            st.open_risk += gd.risk_amount * lots / gd.lots if gd.lots > 0 else gd.risk_amount
-
     def _execute(self, prop: Proposal, agent: Specialist, lots: float, stop: float, target: float, *, requested: float,
                  atr_usd: float | None = None, gd: Any = None) -> OrderResult | None:
         """Sends the order (pending_orders row first) and returns the broker's result; None when the proposal was sent
@@ -1337,7 +1288,7 @@ class Engine:
             self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "duplicate_suppressed",
                                    "proposal": prop.proposal_id})
             return None
-        magic = self._magic(agent.family)
+        magic = cost_probe.magic(self, agent)        # ADR 0037: a probe has its own magic
         # finance audit GAP-01/02/13: the signal's quote and spread (the proposal) next to the quote priced from now
         audit = EntryAudit(decision_price=prop.entry, decision_spread_points=prop.spread_points,
                            decision_utc=pd.Timestamp(prop.created, unit="s", tz="UTC"), requested_price=requested,
@@ -1369,39 +1320,15 @@ class Engine:
                                "retcode": res.retcode, "price": res.price, "lots": res.filled_lots,
                                "message": res.message})
         if bridge_refused(res):
-            self._note_bridge_refusal(prop, agent, res, lots)
-        if self.store is not None and res.ok and res.price is not None:
+            auto_entry.note_bridge_refusal(self, prop, agent, res, lots)
+        if self.store is not None and res.ok and res.price is not None \
+                and not cost_probe.is_probe(agent.agent_id):     # ADR 0037: a probe's fill feeds its own ledger only
             # requested vs filled feeds the nightly slippage table
             fill = pd.DataFrame([{"ts_utc": self.broker.last_tick(self.cfg.symbol).ts_utc, "client_order_id": prop.proposal_id,
                                   "agent_id": agent.agent_id, "side": prop.side, "lots": res.filled_lots, "requested": requested,
                                   "filled": res.price, "order_type": "market", "retcode": res.retcode, "commission": np.nan}])
             self.store.append("fills", fill, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
         return res
-
-    def _note_bridge_refusal(self, prop: Proposal, agent: Specialist, res: OrderResult, lots: float) -> None:
-        """BACKLOG 66 (trading-safety C2): the bridge's notional ceiling refused the order, so the brain sized above
-        6x this terminal's equity (or the terminal could not be read). Nothing was placed. It is journalled
-        (`bridge_refused`) and the owner is told on Telegram; the auto path then pauses auto entries for the rest of the
-        bar close (`_after_auto_order`) and the approval path shows the card as refused by the bridge (`_on_decision`).
-        The notice is plain words (ui-ux review): the trade, the masked account name and which of the two causes,
-        never the proposal id or the raw message, which stay in the journal and the log. Best effort: a notice that
-        cannot be queued is logged and never changes the outcome."""
-        log.warning("order %s refused by the bridge: %s", prop.proposal_id, res.message)
-        self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "bridge_refused",
-                               "proposal": prop.proposal_id, "message": res.message})
-        auto = " Automatic entries pause until the next bar." if self.cfg.approval_mode == "auto" else ""
-        why = ("(it couldn't read the account figures it checks)" if res.message.startswith(UNREADABLE_REFUSAL)
-               else "(open gold would be worth more than 6× equity)")
-        if self.center.bus is None:
-            return
-        try:
-            self.center.bus.notify_owner(
-                f"Order not placed: the MT5 box's safety limit refused {'LONG' if prop.side > 0 else 'SHORT'} "
-                f"{lots:g} lots {self.cfg.symbol} on {account_name(self.cfg.account_id)} {why}. Nothing was sent; open "
-                f"trades keep their stops.{auto} If this repeats, the trade sizing and the MT5 box's limit disagree: "
-                f"ask Claude to check.")
-        except Exception as exc:                        # noqa: BLE001 - the refusal stands either way
-            log.warning("bridge refusal notice not queued (%s)", type(exc).__name__)
 
     @staticmethod
     def _attach_policy(tr: OpenTrade, agent: Specialist, *, entry: float, atr_usd: float | None,
@@ -1879,8 +1806,7 @@ class Engine:
             next((o for o in self._orders.values() if p.comment and p.comment in (o.client_order_id, o.client_order_id[-31:])), None)
         # BACKLOG 72: a row never confirmed keeps the tighter of the stop sent and the broker's, and the target sent
         late = rec is not None and rec.status in unconfirmed.NEVER_CONFIRMED
-        agent = self.agents.get(rec.agent_id) if rec is not None else self._agent_for_magic(p.magic)
-        agent_id = rec.agent_id if rec is not None else "orphan" if agent is None else agent.agent_id
+        agent, agent_id = cost_probe.adoption(self, p, rec)     # ADR 0037: a probe is never adopted as a live trade
         max_bars = rec.max_bars if rec is not None else 48 if agent is None else self._base_bars(agent)
         tr = OpenTrade(position_id=p.position_id, agent_id=agent_id, side=p.side, lots=p.lots,
                        entry_bar_ts=p.open_time_utc, max_bars=max_bars,
@@ -1902,12 +1828,6 @@ class Engine:
             self.open[p.position_id] = tr
             unconfirmed.adopted(self, rec, p)
         return tr
-
-    def _agent_for_magic(self, magic: int) -> Specialist | None:
-        """The agent an orphan belongs to: magic numbers are per family, so only a family with exactly one agent here
-        identifies it."""
-        hits = [a for a in self.agents.values() if self._magic(a.family) == magic]
-        return hits[0] if len(hits) == 1 else None
 
     def _atr_now(self) -> float | None:
         """Decision-timeframe ATR(14): the last bar close's, else computed from the 1m history (after a restart)."""
@@ -2040,8 +1960,9 @@ class Engine:
         st.drift_halt = bool(self._drift().get("system_halt"))
         self._server_clock(now, tick)
         owner_mode = self.center.bus.control().approval_mode if self.center.bus is not None else None
-        if owner_mode is not None:
-            self.cfg.approval_mode = owner_mode  # the owner's /mode (A10); the kill switch and re-arm lock win below
+        # the owner's /mode (A10), else the account's; ADR 0036 lock; the kill switch and re-arm window win below
+        self.cfg.approval_mode = auto_entry.locked(owner_mode or self._account_approval, self.cfg.mode,
+                                                    getattr(acc, "trade_mode", None))
         st.equity_unconfirmed = self._equity_unconfirmed(acc, now)
         stage = st.stage
         if self.gate.update_stage(st) != stage:
@@ -2680,7 +2601,7 @@ class Engine:
         conversion: quant review 2026-10-12, finding B); the stops (GAP-03) and the entry facts (`OpenTrade.audit`:
         GAP-01/02/13) go on the record, and a broker stop or target fill is logged against its level in `exit_fills`
         (GAP-04)."""
-        if pid in self._recorded:
+        if pid in self._recorded or cost_probe.record_close(self, pid, tr, reason, px, at):   # ADR 0037: own ledger
             return
         try:
             info, _ = self._exit_deals(pid, tr)

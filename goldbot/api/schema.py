@@ -1086,5 +1086,101 @@ class TradesSummary(BaseModel):
 # ============================================================================= end Progress tab
 
 
+# ============================================================================= Home activity feed (GET /api/activity)
+ActivityKind = Literal["shadow_opened", "shadow_closed", "position_opened", "position_closed", "probe_opened",
+                       "probe_closed", "refused"]
+ActivitySource = Literal["shadow", "positions", "probes", "journal"]
+
+
+class ActivityEvent(BaseModel):
+    """One thing the system did (goldbot/api/activity.py): a shadow trade, an account position or a cost-probe order
+    opened or closed, or an entry the engine refused. Fields a kind does not have are null."""
+    ts: datetime                            # when it happened, UTC (a shadow trade: its bar's close)
+    kind: ActivityKind
+    account: str | None = None              # config name, any run of 5+ digits cut; None for shadow trades (paper)
+    mode: Literal["demo", "live", "paper"] | None = None
+    agent_id: str | None = None
+    version: str | None = None              # the model version (shadow trades, probes, probe refusals)
+    timeframe: str | None = None
+    side: Literal["long", "short"] | None = None
+    lots: float | None = None
+    p: float | None = None
+    entry: float | None = None              # USD per oz
+    exit: float | None = None
+    stop: float | None = None               # the stop and the take-profit target the trade was opened with (shadow
+    target: float | None = None             # trades, open positions); null where the record does not keep them
+    reason: str | None = None               # exit: target | stop | time | ...; refused: the journal's action code
+    r: float | None = None                  # result in R of the initial risk
+    ret: float | None = None                # return, side x (exit - entry) / entry (shadow: gross of costs)
+    pnl: float | None = None                # account currency (`currency`)
+    currency: str | None = None
+
+
+class ActivityView(BaseModel):
+    events: list[ActivityEvent]             # newest first
+    unreadable: list[ActivitySource]        # sources that could not be read: their events are missing, not zero
+# ============================================================================= end Home activity feed
+
+
+# ============================================================================= Home trades summary (GET /api/trades/overview)
+# shadow_taken: shadow trades that cleared the threshold; shadow_all: those plus the counterfactual candidates;
+# demo / live: the accounts' positions by mode; probe: cost-probe orders (demo)
+TradeType = Literal["shadow_taken", "shadow_all", "demo", "live", "probe"]
+TradePeriod = Literal["today", "7d", "all"]
+
+
+class TradeRef(BaseModel):
+    """One closed trade named by a summary (its best or worst)."""
+    ts: datetime                            # its close, UTC
+    agent_id: str | None
+    timeframe: str | None
+    r: float | None
+    pnl: float | None
+    currency: str | None
+
+
+class ExitCounts(BaseModel):
+    target: int = 0
+    stop: int = 0
+    time: int = 0
+    other: int = 0                          # trail, hard flat, engine stop close, manual, not recorded, ...
+
+
+class TradeStats(BaseModel):
+    """Closed trades of the period, and the trades open now (open is the same in every period)."""
+    open: int
+    closed: int
+    wins: int                               # result > 0 (R, else P&L, else return); a zero result is neither
+    losses: int
+    win_rate: float | None                  # wins / closed; None with nothing closed
+    n_r: int                                # closed trades with an R
+    total_r: float | None                   # over those n_r; None when there are none
+    avg_r: float | None
+    net_pnl: dict[str, float]               # by currency, net-of-cost rows only (nothing gross is labelled net)
+    best: TradeRef | None                   # by R when the bucket has any, else by net P&L
+    worst: TradeRef | None
+    exits: ExitCounts
+
+
+class TradeTypeSummary(BaseModel):
+    type: TradeType
+    stats: TradeStats
+    by_family: dict[str, TradeStats]        # strategy family (the agent id without its generation and hash)
+    by_timeframe: dict[str, TradeStats]     # 15m / 1h / 4h / 1d; "unknown" when the record has none (cost probes)
+
+
+class TradesPeriodView(BaseModel):
+    period: TradePeriod
+    since: datetime | None                  # the first opportunity day's start (D-1 22:00 UTC); None for all time
+    types: list[TradeTypeSummary]           # every type, in TradeType order, empty ones included
+
+
+class TradesOverview(BaseModel):
+    as_of: datetime
+    periods: list[TradesPeriodView]         # today, 7d, all
+    unreadable: list[ActivitySource]        # sources that could not be read: their trades are missing, not zero
+# ============================================================================= end Home trades summary
+
+
 ResearchPlanView.model_rebuild()   # refers to models defined after it
 Status.model_rebuild()          # `blackout` refers to ActiveBlackout, defined after Status

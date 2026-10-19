@@ -13,7 +13,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from goldbot.engine import Engine, EngineConfig, unconfirmed
+from goldbot.engine import Engine, EngineConfig, auto_entry, unconfirmed
 from goldbot.engine.runner import DEFINITE_REJECT_RETCODES
 from goldbot.execution.broker import OrderIntent, OrderResult
 from goldbot.execution.not_confirmed import (
@@ -445,9 +445,9 @@ def test_an_auto_unconfirmed_result_is_resolved_the_same_way_and_auto_entries_st
     eng, _ = _engine(tmp_path, pb, approval_mode="auto")
     res = eng._execute(_prop(PID), AGENT, 0.1, SL, TP, requested=2400.2)
     close_ts = T0.floor("15min")
-    eng._after_auto_order(res, GateDecision(allowed=True, lots=0.1, stop_distance=4.0), 1, close_ts)
+    auto_entry.after_order(eng, res, GateDecision(allowed=True, lots=0.1, stop_distance=4.0), _prop(PID), close_ts)
     assert eng._auto_paused == (close_ts, "unconfirmed_order") and eng._orders[PID].status == "ambiguous"
-    assert eng._auto_action(res) == "auto_unconfirmed:10012"
+    assert auto_entry.action(res) == "auto_unconfirmed:10012"
     assert "unconfirmed_order_pending" in eng.gate.account_reasons(eng.state)
     _look(eng)
     assert eng._orders[PID].status == "filled" and len(_notices(tmp_path)) == 1

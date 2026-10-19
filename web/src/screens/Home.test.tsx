@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as apiModule from "../lib/api";
 import { Home } from "./Home";
@@ -13,6 +13,8 @@ function renderHome(role: apiModule.Role) {
   apiModule.setUser({ email: "a@x.io", role, signed_in_with: "password_totp" });
   vi.spyOn(apiModule.api, "accounts").mockResolvedValue([]);
   vi.spyOn(apiModule.api, "automode").mockRejectedValue(new Error("not under test"));   // AutoMode.test.tsx covers the card
+  if (!vi.isMockFunction(apiModule.api.activity)) vi.spyOn(apiModule.api, "activity").mockResolvedValue({ events: [], unreadable: [] });
+  if (!vi.isMockFunction(apiModule.api.tradesOverview)) vi.spyOn(apiModule.api, "tradesOverview").mockResolvedValue({ as_of: "2026-10-19T10:00:00Z", periods: [], unreadable: [] });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={qc}><Home /></QueryClientProvider>);
 }
@@ -83,37 +85,41 @@ describe("Home waiting trade", () => {
   });
 });
 
-describe("Home halt control", () => {
+describe("Home says safety once", () => {
   afterEach(() => { vi.restoreAllMocks(); apiModule.setUser(null); });
 
-  it("lets an approver halt new entries with a reason", async () => {
+  it("has no safety strip and no halt form: the entry status block and the header pill carry them", async () => {
     vi.spyOn(apiModule.api, "status").mockResolvedValue(status({}));
-    const halt = vi.spyOn(apiModule.api, "halt").mockResolvedValue(status({ halted: true, halted_by: "dashboard", halt_reason: "fomc" }));
-    renderHome("approver");
-    fireEvent.change(await screen.findByLabelText("Halt reason"), { target: { value: "fomc" } });
-    fireEvent.click(screen.getByRole("button", { name: "Halt new entries" }));
-    await waitFor(() => expect(halt).toHaveBeenCalledWith("fomc"));
-    expect(await screen.findByText("Entries halted via the dashboard: fomc.")).toBeInTheDocument();
-    expect(screen.getByText("Only the owner can re-arm.")).toBeInTheDocument();
-  });
-
-  it("re-arms only for the owner with an authenticator code", async () => {
-    vi.spyOn(apiModule.api, "status").mockResolvedValue(status({ halted: true, halted_by: "telegram" }));
-    const rearm = vi.spyOn(apiModule.api, "rearm").mockResolvedValue(status({}));
+    vi.spyOn(apiModule.api, "proposals").mockResolvedValue([]);
+    vi.spyOn(apiModule.api, "recentProposals").mockResolvedValue([]);
     renderHome("owner");
-    expect(await screen.findByText("Entries halted via Telegram.")).toBeInTheDocument();
-    const button = await screen.findByRole("button", { name: "Re-arm" });
-    expect(button).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Authenticator code"), { target: { value: "123456" } });
-    fireEvent.click(button);
-    await waitFor(() => expect(rearm).toHaveBeenCalledWith("123456"));
-    expect(await screen.findByRole("button", { name: "Halt new entries" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Entry status" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Safety state")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Halt new entries" })).toBeNull();
+  });
+});
+
+describe("Home activity feed", () => {
+  afterEach(() => { vi.restoreAllMocks(); apiModule.setUser(null); });
+
+  it("shows what the system is doing on the front page", async () => {
+    vi.spyOn(apiModule.api, "status").mockResolvedValue(status({}));
+    vi.spyOn(apiModule.api, "proposals").mockResolvedValue([]);
+    vi.spyOn(apiModule.api, "recentProposals").mockResolvedValue([]);
+    vi.spyOn(apiModule.api, "activity").mockResolvedValue({ unreadable: [], events: [
+      { ts: "2026-10-19T10:00:00Z", kind: "shadow_opened", agent_id: "box_break_close-g0", timeframe: "1h", side: "long", entry: 2400 },
+    ] });
+    renderHome("viewer");
+    expect(await screen.findByRole("heading", { name: "Activity" })).toBeInTheDocument();
+    expect(await screen.findByRole("list", { name: "Activity" })).toHaveTextContent("Shadow opened");
   });
 
-  it("shows viewers no halt button", async () => {
+  it("summarises every type of trade under the feed", async () => {
     vi.spyOn(apiModule.api, "status").mockResolvedValue(status({}));
+    vi.spyOn(apiModule.api, "proposals").mockResolvedValue([]);
+    vi.spyOn(apiModule.api, "recentProposals").mockResolvedValue([]);
     renderHome("viewer");
-    expect(await screen.findByLabelText("Safety state")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Halt new entries" })).toBeNull();
+    expect(await screen.findByRole("heading", { name: "Trades summary" })).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "7 days" })).toBeInTheDocument();
   });
 });

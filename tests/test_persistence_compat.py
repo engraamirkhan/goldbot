@@ -25,6 +25,7 @@ from goldbot.base import Record, SkewSummary
 from goldbot.config import load_settings
 from goldbot.data import crossfeed, tv_pull
 from goldbot.data.ticks import TickIndex
+from goldbot.engine import cost_probe
 from goldbot.engine.runner import OpenTrade, PendingClose, SentOrder
 from goldbot.engine.shadow import ShadowBook, VersionBook
 from goldbot.execution.costs import (
@@ -277,6 +278,20 @@ def case_ledger(tmp: Path) -> None:
     assert ledger.latest_report(tmp, "icm-demo") == rep
 
 
+def case_cost_probe(tmp: Path) -> None:
+    """aux.db cost_probes row (ADR 0037) with a field from a newer release: the costs reader still reads it."""
+    from goldbot.db import Database
+    db = Database.open(tmp, "aux")
+    rec = cost_probe.ProbeRecord(client_order_id="icm-demo-1-a", account_id="icm-demo", agent_id="a", version="a-v2",
+                                 side=1, lots=0.01, signal_price=2400.0, requested_price=2400.2, fill_price=2400.3,
+                                 sent_utc=T0)
+    row = cost_probe.LEDGER.row(rec)
+    row["body"] = json.dumps(_newer(json.loads(row["body"])))
+    with db.write() as conn:
+        conn.execute(f"INSERT INTO cost_probes ({', '.join(row)}) VALUES ({', '.join(':' + c for c in row)})", row)
+    assert cost_probe.probes(tmp, "icm-demo") == [rec]
+
+
 def case_hwm_confirmation(tmp: Path) -> None:
     """core.db high-water-mark confirmation row (BACKLOG 54, ADR 0018) with a field from a newer release."""
     conf = hwm.HwmConfirmation(account_id="icm-demo", mark=10_000.0, mark_utc=T0, pending_balance=10_500.0,
@@ -358,7 +373,7 @@ def case_attribution_report(tmp: Path) -> None:
 CASES = [case_closed_trade, case_closed_trade_from_before_ret_basis, case_closed_trade_price_return_without_ret_basis,
          case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
          case_shadow_stats, case_model_registry_and_backtest, case_population, case_research_plan, case_costs,
-         case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_hwm_confirmation, case_limits_profile,
+         case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_cost_probe, case_hwm_confirmation, case_limits_profile,
          case_limits_state,
          case_trial_dsr_inputs, case_trial_day_summed_dsr, case_attribution_report, case_tick_index]
 
@@ -399,7 +414,7 @@ def test_every_persisted_record_model_has_a_compat_case():
                DigestState, OutboxState, crossfeed.ReconcileReport, ledger.LedgerReport,
                ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation, limits_profile.LimitsState,
                limits_profile.LimitsChange, adaptive.AdaptiveState, DsrInputs, DaySummedDsr,
-               AttributionReport, TickIndex,
+               AttributionReport, TickIndex, cost_probe.ProbeRecord,
                # the engine's orders file: tests/test_engine_safety.py::
                # test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote
                SentOrder, OpenTrade, PendingClose,

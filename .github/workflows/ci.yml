@@ -1,14 +1,15 @@
 name: ci
 # Gates every PR and every push to main (docs/process/ci-performance-2026-10-18.md has the measurements and design).
-# The repo is public, so Actions minutes are free; the limits that matter are wall-clock and the account's 20
-# concurrent jobs. Shape of a run (critical path: smoke -> the slowest integration shard):
+# The repo is public, so Actions minutes are free; the limits that matter are wall-clock (target: the whole run in
+# about 3 min) and the account's 20 concurrent jobs (this file peaks at exactly 20: smoke, lint, e2e x2, unit x6,
+# integration x10; `changes` has finished before the test shards start). Shape of a run:
 #   changes            which jobs a PR needs (scripts/ci_changes.py); pushes to main always run everything
-#   smoke              ~1 min, always: pre-commit (incl. the docs checks), ruff, full test collection.
-#                      The test matrices wait for it, so a broken import costs one job, not twelve.
-#   backend-lint       mypy (cached) and the API contract
-#   backend-unit       4 shards x pytest-xdist -n auto
-#   backend-integration 4 shards x -n auto; known-heavy tests spread first (tests/shard_weights.json); dry run in shard 0
-#   frontend-checks    eslint, tsc, vitest
+#   smoke              ~1 min, always, in parallel with everything else: pre-commit (incl. the docs checks), ruff, uv
+#                      lock check, full test collection. Nothing waits for it; it fails the run (via `backend`).
+#   lint               mypy (cached), the API contract, then eslint, tsc and vitest (one job: fewer runners)
+#   backend-unit       6 shards x pytest-xdist -n auto
+#   backend-integration 10 shards x -n auto; known-heavy tests spread first (tests/shard_weights.json, about 135 s of
+#                      serial test time per shard, ~35 s at 4 workers); dry run in the lightest shard (5)
 #   e2e                one job per Playwright project (each has its own server); flaky = failed (failOnFlakyTests)
 #   backend, frontend  aggregates: the REQUIRED checks on main and the checks goldbot-deploy reads; keep these names
 #   deployable         main only, when both aggregates are green: commit status `goldbot/deployable` + the owner's
@@ -99,7 +100,7 @@ jobs:
         if: failure()
         with: { name: ci-out-smoke, path: ci-out/, include-hidden-files: true }
 
-  backend-lint:
+  lint:
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
@@ -109,9 +110,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
       - uses: ./.github/actions/setup-backend
-        with: { check: backend-lint }
+        with: { check: lint }
       - uses: ./.github/actions/setup-web
-        with: { check: backend-lint }
+        with: { check: lint }
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         # mypy re-checks by content hash when mtimes differ (fresh checkout), so a restored cache is never trusted blindly
         with:
@@ -120,7 +121,7 @@ jobs:
           restore-keys: "mypy-py311-${{ hashFiles('pyproject.toml') }}-"
       - name: backend-typecheck
         if: success() || failure()
-        run: set -o pipefail; mypy 2>&1 | tee ci-out/backend-typecheck.txt || { echo backend-typecheck >> ci-out/failed-backend-lint.list; exit 1; }
+        run: set -o pipefail; mypy 2>&1 | tee ci-out/backend-typecheck.txt || { echo backend-typecheck >> ci-out/failed-lint.list; exit 1; }
       - name: api-contract
         # the dashboard's types are generated from the backend's OpenAPI schema; both must be committed in sync
         if: success() || failure()
@@ -128,24 +129,35 @@ jobs:
           set -o pipefail
           { python scripts/export_openapi.py && npm --prefix web run gen:api && git diff --exit-code -- web/openapi.json web/src/lib/schema.d.ts \
             || { echo "API contract drift: run 'python scripts/export_openapi.py && npm --prefix web run gen:api' and commit"; exit 1; }; } 2>&1 | tee ci-out/api-contract.txt \
-            || { echo api-contract >> ci-out/failed-backend-lint.list; exit 1; }
+            || { echo api-contract >> ci-out/failed-lint.list; exit 1; }
+      - name: frontend-lint
+        if: success() || failure()
+        working-directory: web
+        run: set -o pipefail; npm run lint 2>&1 | tee ../ci-out/frontend-lint.txt || { echo frontend-lint >> ../ci-out/failed-lint.list; exit 1; }
+      - name: frontend-typecheck
+        if: success() || failure()
+        working-directory: web
+        run: set -o pipefail; npm run typecheck 2>&1 | tee ../ci-out/frontend-typecheck.txt || { echo frontend-typecheck >> ../ci-out/failed-lint.list; exit 1; }
+      - name: frontend-unit
+        if: success() || failure()
+        working-directory: web
+        run: set -o pipefail; npm test -- --reporter=verbose 2>&1 | tee ../ci-out/frontend-unit.txt || { echo frontend-unit >> ../ci-out/failed-lint.list; exit 1; }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
-        with: { name: ci-out-backend-lint, path: ci-out/, include-hidden-files: true }
+        with: { name: ci-out-lint, path: ci-out/, include-hidden-files: true }
 
   backend-unit:
     # each shard runs the tests tests/conftest.py assigns to GOLDBOT_SHARD=i/n, so every test runs exactly once;
     # the denominator must equal the matrix length (tests/test_ci_workflow.py checks it)
-    needs: [smoke]
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 20
     permissions: { contents: read }
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5]
     env:
-      GOLDBOT_SHARD: ${{ matrix.shard }}/4
+      GOLDBOT_SHARD: ${{ matrix.shard }}/6
       CHECK: backend-unit-${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -167,7 +179,7 @@ jobs:
         with: { name: "ci-out-backend-unit-${{ matrix.shard }}", path: ci-out/, include-hidden-files: true }
 
   backend-integration:
-    needs: [changes, smoke]
+    needs: [changes]
     if: needs.changes.outputs.code == 'true'
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 20
@@ -175,9 +187,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     env:
-      GOLDBOT_SHARD: ${{ matrix.shard }}/4
+      GOLDBOT_SHARD: ${{ matrix.shard }}/10
       CHECK: backend-integration-${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -192,7 +204,7 @@ jobs:
         if: failure() && steps.tests.outcome == 'failure'
         run: pytest -m integration --last-failed --last-failed-no-failures none -q -n 0 --tb=short --junitxml="ci-out/rerun-$CHECK.xml" 2>&1 | tail -60 || true
       - name: dry-run
-        if: (success() || failure()) && matrix.shard == 0
+        if: (success() || failure()) && matrix.shard == 5   # the lightest shard (tests/test_ci_workflow.py checks it)
         run: set -o pipefail; python scripts/dry_run.py 1 2>&1 | tail -40 | tee ci-out/dry-run.txt || { echo dry-run >> "ci-out/failed-$CHECK.list"; exit 1; }
       - name: summary
         if: ${{ !cancelled() }}
@@ -208,7 +220,7 @@ jobs:
   backend:
     # REQUIRED check (branch protection) and one of the two checks goldbot-deploy requires: keep the name. Passes only
     # when every backend job passed; lint and integration may be skipped only for a prose-only PR.
-    needs: [changes, smoke, backend-lint, backend-unit, backend-integration]
+    needs: [changes, smoke, lint, backend-unit, backend-integration]
     if: always()
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
@@ -218,45 +230,18 @@ jobs:
           CODE: ${{ needs.changes.outputs.code }}
           CHANGES: ${{ needs.changes.result }}
           ALWAYS: ${{ needs.smoke.result }} ${{ needs.backend-unit.result }}
-          CODE_ONLY: ${{ needs.backend-lint.result }} ${{ needs.backend-integration.result }}
+          CODE_ONLY: ${{ needs.lint.result }} ${{ needs.backend-integration.result }}
         run: |
           echo "changes=$CHANGES code=$CODE smoke,unit=$ALWAYS lint,integration=$CODE_ONLY"
           [ "$CHANGES" = success ] || exit 1
           for r in $ALWAYS; do [ "$r" = success ] || exit 1; done
           for r in $CODE_ONLY; do [ "$r" = success ] || { [ "$CODE" = false ] && [ "$r" = skipped ]; } || exit 1; done
 
-  frontend-checks:
-    needs: [changes]
-    if: needs.changes.outputs.code == 'true'
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 15
-    permissions: { contents: read }
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false }
-      - uses: ./.github/actions/setup-web
-        with: { check: frontend-checks }
-      - name: frontend-lint
-        if: success() || failure()
-        working-directory: web
-        run: mkdir -p ../ci-out; set -o pipefail; npm run lint 2>&1 | tee ../ci-out/frontend-lint.txt || { echo frontend-lint >> ../ci-out/failed-frontend-checks.list; exit 1; }
-      - name: frontend-typecheck
-        if: success() || failure()
-        working-directory: web
-        run: set -o pipefail; npm run typecheck 2>&1 | tee ../ci-out/frontend-typecheck.txt || { echo frontend-typecheck >> ../ci-out/failed-frontend-checks.list; exit 1; }
-      - name: frontend-unit
-        if: success() || failure()
-        working-directory: web
-        run: set -o pipefail; npm test -- --reporter=verbose 2>&1 | tee ../ci-out/frontend-unit.txt || { echo frontend-unit >> ../ci-out/failed-frontend-checks.list; exit 1; }
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure()
-        with: { name: ci-out-frontend-checks, path: ci-out/, include-hidden-files: true }
-
   e2e:
     # the real FastAPI backend serving the production build, driven by Playwright with the runner's preinstalled
     # Google Chrome (no browser download to cache; `playwright install --with-deps` stalled on apt). One job per
     # project: each project's spec has its own server and TOTP clock (web/playwright.config.ts).
-    needs: [changes, smoke]
+    needs: [changes]
     if: needs.changes.outputs.code == 'true'
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 15
@@ -294,7 +279,7 @@ jobs:
   frontend:
     # REQUIRED check and one of the two checks goldbot-deploy requires: keep the name. Skipped jobs pass only for a
     # prose-only PR.
-    needs: [changes, frontend-checks, e2e]
+    needs: [changes, lint, e2e]
     if: always()
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
@@ -303,9 +288,9 @@ jobs:
       - env:
           CODE: ${{ needs.changes.outputs.code }}
           CHANGES: ${{ needs.changes.result }}
-          CODE_ONLY: ${{ needs.frontend-checks.result }} ${{ needs.e2e.result }}
+          CODE_ONLY: ${{ needs.lint.result }} ${{ needs.e2e.result }}
         run: |
-          echo "changes=$CHANGES code=$CODE checks,e2e=$CODE_ONLY"
+          echo "changes=$CHANGES code=$CODE lint,e2e=$CODE_ONLY"
           [ "$CHANGES" = success ] || exit 1
           for r in $CODE_ONLY; do [ "$r" = success ] || { [ "$CODE" = false ] && [ "$r" = skipped ]; } || exit 1; done
 
@@ -328,7 +313,7 @@ jobs:
             echo '```'; echo "sudo goldbot-deploy $GITHUB_SHA"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
   report-failure:
-    needs: [changes, smoke, backend-lint, backend-unit, backend-integration, frontend-checks, e2e]
+    needs: [changes, smoke, lint, backend-unit, backend-integration, e2e]
     if: failure()
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5

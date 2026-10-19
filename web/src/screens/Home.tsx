@@ -1,20 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
 import { api, hasRole } from "../lib/api";
+import { ActivityFeed } from "./Activity";
+import { TradesSummaryCard } from "./TradesOverview";
 import { blockers } from "../lib/approval";
 import { useNow } from "../lib/useNow";
 import { BalanceCard, BalanceCardSkeleton } from "./BalanceCard";
 import { EntryStatusPanel } from "./EntryStatus";
-import { HaltControl } from "./HaltControl";
 import { ProgressLine } from "./Progress";
 import { LimitsStrip } from "./Limits";
 import { ProposalCard } from "./ProposalCard";
 import { ResearchLine } from "./ResearchToday";
-import { SafetyStrip } from "./SafetyStrip";
 import { useDecide } from "./useDecide";
 import "./home.css";
 
 /** Home answers three questions in this order: is anything waiting for me, how am I doing today, is it safe.
- *  A waiting trade is the card itself (same Approve / Reject wording as Trades), not a count. */
+ *  A waiting trade is the card itself (same Approve / Reject wording as Trades), not a count. Below, full width, what
+ *  the system is doing (the activity feed) and a summary of every type of trade (owner requests 2026-10-19). */
 export function Home({ onOpenProgress, onOpenLimits }: { onOpenProgress?: () => void; onOpenLimits?: () => void } = {}) {
   const status = useQuery({ queryKey: ["status"], queryFn: api.status, refetchInterval: 5000 });
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts, refetchInterval: 5000 });
@@ -43,19 +44,18 @@ export function Home({ onOpenProgress, onOpenLimits }: { onOpenProgress?: () => 
         )}
         <EntryStatusPanel loading={accounts.isLoading} error={accounts.isError} accounts={accounts.data}
                           updatedAt={accounts.dataUpdatedAt || undefined} />
+      </div>
+      <div className="home-col">
+        {/* Safety is said once: the entry status block (left) and the header pill, which also holds Halt */}
         {accounts.isLoading ? <div className="accts"><BalanceCardSkeleton /></div> : (accounts.data?.length ?? 0) > 0 && (
           <div className="accts">{accounts.data!.map((a) => <BalanceCard key={a.account_id} a={a} />)}</div>
         )}
-      </div>
-      <div className="home-col">
-        <SafetyStrip status={status.data} accounts={accounts.data} error={status.isError || accounts.isError}
-                     updatedAt={status.dataUpdatedAt && accounts.dataUpdatedAt
-                       ? Math.min(status.dataUpdatedAt, accounts.dataUpdatedAt) : undefined} now={now} />
-        {status.data && <HaltControl status={status.data} />}
         {onOpenLimits && <LimitsStrip onOpen={onOpenLimits} />}
         {onOpenProgress && <ProgressLine onOpen={onOpenProgress} />}
         <ResearchLine />
       </div>
+      <div className="home-wide"><ActivityFeed /></div>
+      <div className="home-wide"><TradesSummaryCard /></div>
     </section>
   );
 }

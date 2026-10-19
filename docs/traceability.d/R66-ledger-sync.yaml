@@ -1,0 +1,5 @@
+id: R66
+requirement: The ledger reaches the brain append-only through a forced-command ssh key (idempotent, secret-scanned, bad rows rejected) and is backfilled from the research registry, ADRs, owner directives, owner notes (private), resume snapshots and an artifacts index
+status: implemented
+code: goldbot/ledger/{sync,importers,cli}.py; goldbot/ops/linux/goldbot-ledger-ingest.sh; scripts/merge_smoke.sh
+test: tests/test_ledger_sync_import.py (sync once, versions, short ack stays pending, ingest idempotent and rejects bad rows, private never exported, forced command ignores the requested command, each importer idempotent and fail closed)

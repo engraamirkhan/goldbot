@@ -11,9 +11,11 @@
 #     READ FROM ci.yml, so a CI matrix change needs no edit here (tests/test_ci_workflow.py checks the commands).
 #     smoke (pre-commit, ruff, collection) runs first, beside backend-lint (mypy, api-contract) ->
 #     frontend-checks; when smoke passes the unit and integration shards start (GOLDBOT_SHARD=i/N, same
-#     `pytest -m ...` as CI, random order, dry run in integration shard 0) and e2e runs per project after
-#     frontend-checks. Each pytest lane uses one xdist worker (CI: -n auto per shard): with 4 + 4 shards that is
-#     at most 9 busy processes. A failed smoke skips the shards and e2e, as in CI.
+#     `pytest -m ...` as CI, random order, dry run in the integration shard CI names) and e2e runs per project after
+#     frontend-checks. Each pytest lane uses one xdist worker (CI: -n auto per shard). CI runs 6 + 10 shards at once;
+#     here at most CI_LOCAL_MAX_JOBS (default 12, the Mac's core count) background lanes run at a time and the rest
+#     wait for a free slot, so the machine is never oversubscribed. A failed smoke skips the shards and e2e (CI
+#     itself no longer waits for smoke: it runs beside the shards and fails the run).
 # Every failing pytest test is re-run alone 5 times with different `-p randomly` seeds (CI re-runs once): it is
 # reported FLAKY when any re-run passes and FAIL when all fail. Exit status is non-zero on any FAIL or FLAKY.
 # Usage: scripts/ci_local.sh [--no-web] [--no-e2e]   Logs: ${CI_LOCAL_LOG:-~/tmp/ci_local/<worktree>}
@@ -36,12 +38,14 @@ done
 matrix=$(.venv/bin/python - <<'PY'
 import yaml
 jobs = yaml.safe_load(open(".github/workflows/ci.yml"))["jobs"]
+dry = next(s["if"] for s in jobs["backend-integration"]["steps"] if s.get("name") == "dry-run")
 print(len(jobs["backend-unit"]["strategy"]["matrix"]["shard"]), len(jobs["backend-integration"]["strategy"]["matrix"]["shard"]),
-      ",".join(jobs["e2e"]["strategy"]["matrix"]["project"]))
+      ",".join(jobs["e2e"]["strategy"]["matrix"]["project"]), dry.split("matrix.shard ==")[1].split()[0])
 PY
 ) || { echo "ci_local: cannot read the matrix from .github/workflows/ci.yml" >&2; exit 2; }
-read -r N_UNIT N_INTEG E2E_PROJECTS <<< "$matrix"
-echo "ci_local: ci.yml matrix: $N_UNIT unit shards, $N_INTEG integration shards, e2e projects $E2E_PROJECTS"
+read -r N_UNIT N_INTEG E2E_PROJECTS DRY_SHARD <<< "$matrix"
+MAX_JOBS=${CI_LOCAL_MAX_JOBS:-12}
+echo "ci_local: ci.yml matrix: $N_UNIT unit shards, $N_INTEG integration shards (dry run in $DRY_SHARD), e2e projects $E2E_PROJECTS; at most $MAX_JOBS lanes at once"
 L=${CI_LOCAL_LOG:-$HOME/tmp/ci_local/$(basename "$ROOT")}
 mkdir -p "$L" "$HOME/tmp"; rm -f "$L"/*.log "$L"/*.status "$L"/*.steps "$L"/*.xml
 T=$(mktemp -d "$HOME/tmp/ci_local_home.XXXXXX")   # the fake HOME
@@ -165,12 +169,15 @@ lanes+=("${unit_lanes[@]}" "${integ_lanes[@]}")
 ) &
 smoke_lane
 if [ "$(cat "$L/smoke.status")" = 0 ]; then
-  for ((i = 0; i < N_UNIT; i++)); do
-    job "unit$i" "GOLDBOT_SHARD=$i/$N_UNIT" -- pytest -m "not integration" -q -n 1 --tb=short -p no:cacheprovider --junitxml="$L/unit$i.xml" &
-  done
-  for ((i = 0; i < N_INTEG; i++)); do
-    dry=true; [ "$i" = 0 ] && dry='python scripts/dry_run.py 1 | tail -40'
+  slot() { while [ "$(jobs -rp | wc -l)" -ge "$MAX_JOBS" ]; do sleep 1; done; }   # a free core before each lane starts
+  for ((i = 0; i < N_INTEG; i++)); do   # the heavier lanes first
+    slot
+    dry=true; [ "$i" = "$DRY_SHARD" ] && dry='python scripts/dry_run.py 1 | tail -40'
     job "integration$i" "GOLDBOT_SHARD=$i/$N_INTEG" -- bash -c "set -o pipefail; pytest -m integration -q -n 1 --tb=short -p no:cacheprovider --junitxml='$L/integration$i.xml'; rc=\$?; $dry || rc=1; exit \$rc" &
+  done
+  for ((i = 0; i < N_UNIT; i++)); do
+    slot
+    job "unit$i" "GOLDBOT_SHARD=$i/$N_UNIT" -- pytest -m "not integration" -q -n 1 --tb=short -p no:cacheprovider --junitxml="$L/unit$i.xml" &
   done
 else
   for lane in "${unit_lanes[@]}" "${integ_lanes[@]}"; do skip_lane "$lane"; done

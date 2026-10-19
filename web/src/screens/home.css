@@ -8,3 +8,25 @@
 .seg button[aria-selected="true"] { background: var(--surface, #fff); color: var(--text, #14171c); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .06); }
 .seg button:focus-visible { outline: 2px solid var(--accent, #1d5fd1); outline-offset: 2px; }
 .decided .card { padding: var(--s3, 12px) var(--s4, 16px); }
+
+/* Activity feed (Home): newest first, one row per event; the line wraps under the badge on a phone. */
+.activity { list-style: none; margin: 0; padding: 0; display: grid; max-height: 480px; overflow-y: auto; }
+.activity-row { display: grid; grid-template-columns: auto auto 1fr; align-items: baseline; gap: var(--s2, 8px);
+  padding: var(--s2, 8px) 0; border-top: 1px solid var(--border, #e2e5ea); min-width: 0; }
+.activity-row:first-child { border-top: 0; }
+.activity-time { white-space: nowrap; }
+.activity-line { min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-small, 13px); line-height: var(--lh-small, 18px); }
+@media (max-width: 600px) {
+  .activity-row { grid-template-columns: auto 1fr; }
+  .activity-line { grid-column: 1 / -1; }
+}
+.home-wide { min-width: 0; }
+@media (min-width: 1080px) { .home-wide { grid-column: 1 / -1; } }
+
+/* Trades summary (Home): one tile per trade type; the table scrolls sideways on a phone instead of squeezing. */
+.trades-tiles { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.trades-table { overflow-x: auto; margin-top: var(--s2, 8px); }
+.trades-table table { font-size: var(--fs-small, 13px); }
+.trades-table th, .trades-table td { white-space: nowrap; padding: var(--s1, 4px) var(--s2, 8px); }
+.trades-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) { .trades-exits { display: none; } }

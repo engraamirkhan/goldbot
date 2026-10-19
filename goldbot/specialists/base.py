@@ -129,6 +129,12 @@ class Specialist(ABC):
     def agent_id(self) -> str:
         return self.identity.agent_id
 
+    @property
+    def shadow_only(self) -> bool:
+        """True for an agent the engine never sends to the broker (share 0; the shadow book trades it): one that needs
+        TradingView values (`requires_tv`) or a carried replica state (`replica_params`, engine/replica_context.py)."""
+        return self.requires_tv or getattr(self, "replica_params", None) is not None
+
     @abstractmethod
     def candidates(self, mid_bars: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
         """Return frame with columns idx, side (and optional diagnostics) for signal bars."""

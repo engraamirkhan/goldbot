@@ -420,6 +420,28 @@ and the rest still arrives. It never contains account numbers or emails.
      ```
      Never install it from `/opt/goldbot` or from `sudo -u goldbot git show`. The service user can write that tree and
      its `.git` (`git replace` can swap the file), so a hash computed there proves nothing.
+* **Release (Mac): `scripts/release.sh "<PR title>" <body-file>`** on `claude/gifted-goldberg-lcb7pl`. It merges
+  origin/main, runs ruff + mypy, pushes, opens the PR with auto-merge, stages the commit on the brain, runs
+  `scripts/ci_local.sh` beside GitHub's checks (GitHub is the gate), deploys the merge commit as soon as it merges
+  (its tree is the tested PR head's, which the brain's CI check verifies itself), and checks the deploy record and
+  the engine. Logs in `~/tmp/release/`.
+* **Fast deploy (staging, adaptive window, watcher).** `sudo goldbot-deploy --stage <sha>` (run by `scripts/release.sh`
+  right after the push, over SSH) pre-builds a commit under `/opt/goldbot-stage/<sha>` as the service user in a
+  512 MB cgroup (`MemoryMax`; an out-of-memory kill ends the build, never the engine): it warms the uv cache and
+  builds `web/dist`, with a manifest. It touches no service, is idempotent, refuses a non-sha, a non-brain box and a
+  commit that is not a fast-forward of what runs, and the two newest stages are kept. The deploy reuses a stage only
+  when its web tree equals the target's and the files hash to the manifest, else it builds as before (`staging
+  failed` is harmless). Measured 2026-10-19 (b5b6c107): stable with fresh heartbeats after 34 s, engine down 3 s
+  (was about 2 min 20 s with the fixed 90 s window).
+  Health passes once every daemon has been active and un-restarted for 30 s, each service with a heartbeat
+  (supervisor, scheduler, telegram, news, api, webhook, tv-pull) has written a fresh one since its restart and
+  `supervisor.json` is new (engines are judged by "active, not restarted", they write only on ticks). A restart in
+  the first 90 s rolls back: before the report at once, after it by `goldbot-deploy-watch-*` (check
+  `journalctl -u 'goldbot-deploy-watch-*'` and the last line of `deploys.jsonl` 90 s after a deploy). A manual
+  rollback and the recovery after a failed deploy still wait the full 90 s. Restart order: supervisor, engines, the
+  rest. Failure modes: stage dir full (`rm -rf /opt/goldbot-stage/*` as the service user, then `git worktree prune`),
+  watcher missing (`systemd-run` failed: the health checks still alert within 6 minutes). First use needs the new
+  root script installed with the hash-checked steps above.
 * **If a deploy says `refused`:** the detail says why and nothing was changed. **If it says `failed`:** the rollback
   did not recover every service. Run `journalctl -u 'goldbot-*' -n 200` and `goldbot run health`, then start the
   units by hand (supervisor first). For aux.db errors, see docs/deploy/2026-10-batch.md 5.1.
@@ -686,7 +708,7 @@ Tailscale is optional.
 | `data-macro.yml` | Tuesdays 04:41 UTC, or by hand | Downloads the FRED macro series (10y real yield, breakeven, broad dollar, gold VIX, 2y yield) and publishes `macro_fred.parquet` to the release `macro-v1`. | Failures as issue `data-macro failure` (labels `ci`, `data`). |
 | `data-positioning.yml` | Saturdays 05:23 UTC, or by hand (input `from_year` re-downloads COT from that year) | Downloads COMEX gold Commitments of Traders (CFTC) and GLD holdings (SPDR archive) and publishes `positioning.parquet` to the release `positioning-v1`, each row with a conservative `available_utc`. If the GLD archive is blocked, the run stays green, keeps the published GLD rows and says `GLD SOURCE UNAVAILABLE` in its summary. | Failures (COT download or upload) as issue `data-positioning failure` (labels `ci`, `data`). |
 | `research.yml` | By hand only (Actions -> research -> Run workflow; inputs `specialist`, `from_year`, `to_year`, `rationale`, `macro`) | Walk-forward research for one specialist family (`session_open`, `mean_reversion`, `trend`, `breakout`) on the `data-v1` bars; with `macro` ticked, adds the macro features from `macro-v1`. Keeps the trial registry on release `research-v1`. | Issue `research: <specialist>` (label `research`). |
-| `ci.yml` | Every push, pull request, or by hand | Pre-commit, backend lint/types/unit/integration, frontend lint/types/unit, API contract, browser end-to-end tests. | On a failed push, one issue `CI failure on <commit> (<jobs>)` labelled `ci`, with each failed job's output. |
+| `ci.yml` | Every push, pull request, or by hand | Pre-commit, backend lint/types, unit (6 shards) and integration (10 shards), frontend lint/types/unit, API contract, browser end-to-end tests, all in parallel (about 3 min; ADR 0035). Locally: `scripts/ci_local.sh` (at most `CI_LOCAL_MAX_JOBS`, default 12, lanes at once). | On a failed push, one issue `CI failure on <commit> (<jobs>)` labelled `ci`, with each failed job's output. |
 
 The VPS does not depend on GitHub to trade. It uses GitHub only to refresh bars (Saturday retrain) and to share
 the research trial registry, both through the `github-token` secret (section 2.3).
@@ -1280,6 +1302,21 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
 
 * By default every entry waits for your click (propose-and-approve). **Auto mode** means an entry that passes the
   RiskGate is placed without asking you. Every cap, stop and exit works exactly as before; only the click goes.
+* **Demo accounts enter automatically** (ADR 0036, your 2026-10-18 instruction): `icm-demo` has `approval_mode: auto`
+  in `config/accounts.yaml`, so its entries are placed without a click while the MT5 terminal reports a demo account.
+  Telegram sends "Opened automatically (demo): ..." for each (information only, no buttons). Real-money accounts
+  always wait for your click: `approval_mode: auto` on a live account stops the engine at start, and `/mode auto` or
+  the dashboard never make a live account automatic. `/mode propose` also returns the demo account to asking you;
+  the 12% kill switch and the 30-day window after a re-arm do too.
+* **Cost probes on demo** (ADR 0037): while `icm-demo` holds no position, the engine may open one 0.01-lot trade that
+  copies a challenger's shadow entry, only to measure real costs (slippage, spread, latency, swap). One at a time,
+  challengers taken in turn, never chosen by results; a real trade always comes first (an open probe is closed to make
+  way). They pass the RiskGate and count toward the demo daily limit, but stop for the day once they have lost 20% of
+  it (£10 of £50; `budget_share`) or less than 20% of it is left. Exits are automatic and no Telegram message is
+  sent for them. In MT5 they show magic number base + 97 and a comment starting `cp-`. They never count as trades for the phase gate or the tournament: they are kept apart in
+  `state\aux.db` (table `cost_probes`; the journal shows `cost_probe:` rows). To stop them: set
+  `cost_probe: { enabled: false }` under `icm-demo` in `config/accounts.yaml` and restart the engine service;
+  `/mode propose` or `/halt` stops them too. A live account with probes enabled refuses to load.
 * It is never switched on by itself. Telegram sends one message, "Auto mode can be enabled: evidence ...; reply
   /mode auto <TOTP>", only after at least 100 proposals you approved or rejected since the last mode change, with no
   RiskGate breach (no 8% size-down, no 12% kill switch) and no measurable difference between the outcomes of the
@@ -2079,3 +2116,14 @@ Last, on the brain: `sudo systemctl enable --now goldbot-chart-fetch.timer`. The
 Check: `sudo -u goldbot /opt/goldbot/goldbot/ops/linux/goldbot-chart-fetch.sh && ls -l /opt/goldbot/state/chart/mt5.png`.
 Remove: `sudo systemctl disable --now goldbot-chart-fetch.timer` (brain) and `goldbot-chart-capture.timer` (MT5 box); delete the `goldbot-chart` line from `/home/mt5/.ssh/authorized_keys` (`sudo -u mt5 sed -i '/goldbot-chart/d' /home/mt5/.ssh/authorized_keys`) and `sudo rm -f /usr/local/libexec/goldbot/goldbot-chart-*.sh`.
 Failure: a stale or missing picture is a 404 only; nothing trading depends on it. Look at `journalctl -u goldbot-chart-fetch` (brain) and `-u goldbot-chart-capture` (MT5 box).
+
+### Program ledger sync (Mac -> brain)
+
+`python -m goldbot.ops.run ledger sync` sends the Mac's new ledger rows to the brain's `state/program.db` over ssh with its own key, which may run one
+command only (`goldbot-ledger-ingest.sh`, which ignores what the client asks for and runs `ledger ingest`: append-only, secret-scanned, bad rows rejected,
+prints `ack N`). Install (owner steps, once): on the Mac `ssh-keygen -t ed25519 -f ~/.ssh/goldbot_ledger -N ''`; on the brain install the script as root
+(`install -m 755 -o root -g root goldbot/ops/linux/goldbot-ledger-ingest.sh /usr/local/libexec/goldbot/`, same pinned-SHA pattern as the chart scripts) and then
+`echo 'restrict,command="/usr/local/libexec/goldbot/goldbot-ledger-ingest.sh" <pubkey>' | sudo -u goldbot tee -a /var/lib/goldbot/.ssh/authorized_keys`.
+Run: `GOLDBOT_LEDGER_REMOTE=goldbot@<brain> GOLDBOT_LEDGER_KEY=~/.ssh/goldbot_ledger python -m goldbot.ops.run ledger sync` (the host stays in your shell, never in the repo).
+A rejected or unacknowledged batch stays pending and is retried on the next run (exit 1). Backfill once with `ledger import all` (the registry is fetched
+from release `research-v1` with `gh`). Remove: delete the key line from the brain's `authorized_keys`.

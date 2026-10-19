@@ -29,7 +29,7 @@ export function BalanceCard({ a }: { a: AccountSummary }) {
         <div><dt>Balance</dt><dd>{a.balance != null ? cash(a.balance, ccy) : <span className="muted">not reported</span>}</dd></div>
         <div><dt>Equity</dt><dd>{cash(a.equity, ccy)}{open != null && <small>{signedCash(open, ccy)} open</small>}</dd></div>
         <div><dt>Today</dt><dd>{a.day_pnl != null ? signedCash(a.day_pnl, ccy) : signedPct(a.day_pnl_pct)}
-          <small>{a.day_pnl != null ? `${signedPct(a.day_pnl_pct)} ` : ""}since {dayStartLocal()} your time (00:00 UTC)</small></dd></div>
+          <small title="The risk day starts at 00:00 UTC">{a.day_pnl != null ? `${signedPct(a.day_pnl_pct)} ` : ""}since {dayStartLocal()}</small></dd></div>
         <div><dt>Margin level</dt><dd>{a.margin_level_pct != null ? `${Math.round(a.margin_level_pct)}%`
           : <span className="muted">{a.balance == null ? "not reported" : "no margin in use"}</span>}</dd></div>
       </dl>

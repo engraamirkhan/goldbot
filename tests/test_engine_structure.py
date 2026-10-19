@@ -12,7 +12,7 @@ from collections import Counter
 from pathlib import Path
 
 RUNNER = Path(__file__).parents[1] / "goldbot" / "engine" / "runner.py"
-LINE_CAP = 3443             # measured after step 1 (3471), lowered by moves out; <= 1,500 after step 7 (ADR 0023)
+LINE_CAP = 3365             # measured after step 1 (3471), lowered by moves out; <= 1,500 after step 7 (ADR 0023)
 
 # A1 (ADR 0023 addendum): after step 1 runner.py writes no state file. The reads left are of files other jobs write, each
 # allowed only in its named function, at today's count, until that function moves: a second read inside an allowed
