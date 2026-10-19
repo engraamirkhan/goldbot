@@ -138,7 +138,19 @@ print(sha if re.fullmatch(r"[0-9a-f]{40}", sha) else "")
 PY
 }
 
-ci_passed() {  # yes / no: the latest backend and frontend GitHub Actions runs of $1 succeeded
+ci_passed() {  # yes / no: the latest backend and frontend runs of $1 succeeded, or $1 is a PR merge commit on main
+  # whose tree is byte-identical to its second parent (the PR head) and that head passed (the same code: release.sh
+  # does not run CI a second time on main). Trees are compared by git here, never taken from the network.
+  local own; own=$(ci_runs_passed "$1")
+  if [ "$own" = yes ]; then echo yes; return; fi
+  local head tree htree
+  head=$(g rev-parse -q --verify "$1^2^{commit}" 2>/dev/null) || { echo no; return; }
+  tree=$(g rev-parse -q --verify "$1^{tree}") && htree=$(g rev-parse -q --verify "$head^{tree}") || { echo no; return; }
+  if is_sha "$head" && [ "$tree" = "$htree" ]; then ci_runs_passed "$head"; else echo no; fi
+}
+
+ci_runs_passed() {  # yes / no: the latest backend and frontend GitHub Actions runs of $1 succeeded
+  is_sha "$1" || { echo no; return; }
   curl -fsS -H "Accept: application/vnd.github+json" \
     "$REPO_API/commits/$1/check-runs?per_page=100&filter=latest&app_id=$ACTIONS_APP_ID" | python3 -I -c "
 import json, sys
