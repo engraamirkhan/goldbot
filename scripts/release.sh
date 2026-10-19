@@ -2,7 +2,8 @@
 # release.sh: integration branch -> PR -> main -> brain deploy, in about 10 minutes instead of 25.
 #   scripts/release.sh "<PR title>" <body-file>      (run from the repo root on claude/gifted-goldberg-lcb7pl)
 # 1. pushes the branch and opens (or reuses) the PR with auto-merge;
-# 2. runs scripts/ci_local.sh (clean worktree of HEAD) AT THE SAME TIME as GitHub's PR checks; either failing stops;
+# 2. runs scripts/ci_local.sh (clean worktree of HEAD) AT THE SAME TIME as GitHub's PR checks; GitHub is the gate
+#    (a local failure before the merge still stops the release; after it, the local run is advisory);
 # 3. after the merge, deploys at once when main's tree equals the PR head's tree that passed CI (the same code: a
 #    second full run on main tells nothing new); if main moved in between, it waits for main CI on the merge commit;
 # 4. deploys the FULL main SHA on the brain and checks deploys.jsonl says "deployed". Right after the push the brain
@@ -25,7 +26,10 @@ die() { say "STOP: $*"; exit 1; }
 [ "$(git rev-parse --abbrev-ref HEAD)" = "$BRANCH" ] || die "not on $BRANCH"
 [ -z "$(git status --porcelain --untracked-files=no)" ] || die "uncommitted changes"
 git fetch -q origin
-git merge-base --is-ancestor origin/main HEAD || die "origin/main is not merged into $BRANCH (merge it first)"
+if ! git merge-base --is-ancestor origin/main HEAD; then   # main's merge commit from the last release, usually
+  git merge -q --no-edit origin/main || { git merge --abort 2>/dev/null || true; die "merging origin/main conflicts: resolve it first"; }
+  say "merged origin/main into $BRANCH"
+fi
 # seconds-cheap checks before anything is pushed (mypy is incremental): a type error costs a 2-min GitHub round trip
 uv run -q --extra dev ruff check goldbot tests scripts || die "ruff"
 uv run -q --extra dev mypy >/dev/null || { uv run -q --extra dev mypy | tail -5; die "mypy"; }
@@ -72,11 +76,12 @@ while :; do
     -q '.state + " " + ([.statusCheckRollup[] | select(.conclusion=="FAILURE" or .conclusion=="CANCELLED")] | length | tostring)')
   case "$pr_state" in
     "OPEN "[1-9]*) kill $LOCAL 2>/dev/null || true; die "GitHub PR checks failed (gh pr checks $PR)";;
-    MERGED*) [ $local_done = 1 ] && break;;
+    MERGED*) break;;   # GitHub's checks are the gate; the local run carries on and reports (see below)
   esac
   sleep 20
 done
 say "PR #$PR merged"
+[ $local_done = 1 ] || say "local CI still running (advisory; log $LOG/ci_local.log): the deploy does not wait for it"
 
 git fetch -q origin
 MAIN=$(git rev-parse origin/main)
