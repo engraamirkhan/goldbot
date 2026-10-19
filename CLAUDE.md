@@ -31,7 +31,8 @@ each agent in its own git worktree. Quality bar: every agent's "Definition of do
 review routing and acceptance scorecard in `docs/AGENT_STANDARDS.md`.
 Trading improvement loop, led by the `research-director` (north-star: £50+ a day on opportunity days, less or none
 when conditions are poor; ADR 0004): `performance-analyst` (shadow/live trades by timeframe, family, session, costs) ->
-`strategy-researcher` (pre-registered trials across 15m/1h/4h/1d within the quarter's budget) -> `evaluator`
+`strategy-researcher` with the specialist principal researchers (`opportunity-`, `exits-`, `macro-`, `microstructure-`,
+`ml-researcher`; pre-registered trials across 15m/1h/4h/1d within the quarter's budget) -> `evaluator`
 (verdict against the pre-registered rule and the gates). Reviewers and evaluators are independent and read-only;
 subagents do not spawn subagents. Money and audit: the `finance-auditor` keeps the monthly GBP ledger (all costs,
 reconciled to the broker), budget and break-even, and audits profitability, rule compliance, costs and learning
