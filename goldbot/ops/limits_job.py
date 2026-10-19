@@ -25,6 +25,11 @@ roll and never loosens intraday. The owner gets an FYI on every change (docs/ux/
 account, units on every number, no buttons, no approval). Health check `limits_controller:<account>` FAILs when the
 last decision is older than STALE_DECISION_H.
 
+ADR 0039 (dynamic per-strategy limits): on an account with `dynamic_limits` (accounts.yaml, default off) the same
+decision also sets each strategy's risk per trade (`Limits.strategy_risk`, its why in `AdaptiveState.risk_terms`) and
+steps the daily allowance down once when the 20-day median ATR15 reaches its 1-year p90 (the ATR regime is already in
+the evidence, `atr15_stats`). Bounds: demo [0.25%, the 1% per-trade hard limit], live the default (tighten only).
+
 Known gap (reported, not guessed): no 20-day measured cost/model series exists yet, so `cost_ratio_20d` is None and the
 cost rule cannot fire. The engine's own drawdown, stage and revert rules still tighten.
 """
@@ -47,6 +52,7 @@ from goldbot.data.timeutil import epoch_ns
 from goldbot.risk.adaptive import (
     AdaptiveChange,
     AdaptiveController,
+    AdaptiveState,
     Evidence,
     LimitBounds,
     Limits,
@@ -85,6 +91,12 @@ DQ_SOURCE = "adaptive_limits"
 
 
 # ---------------------------------------------------------------------------------------------- bounds
+def dynamic_enabled(acc: Account) -> bool:
+    """ADR 0039: the account's `dynamic_limits` flag (accounts.yaml; off when absent, so this module works before and
+    after the field exists)."""
+    return getattr(acc, "dynamic_limits", False) is True
+
+
 def adaptive_enabled(settings: Settings, acc: Account) -> bool:
     """ADR 0031 runs on a demo account with the owner's ceilings, when `risk.adaptive_limits` is on."""
     return bool(settings.risk.adaptive_limits) and active_overrides(acc) is not None
@@ -94,14 +106,17 @@ def bounds_for(settings: Settings, acc: Account, accounts: Iterable[Account]) ->
     """[floor, ceiling] per field. Floors: the account's defaults (`engine_limits`, settings.yaml `risk:`), so the
     adaptive floor is exactly the ADR 0032 default. Ceilings: the owner's demo ceilings (`risk_overrides`) and, when
     every enabled account is demo with ceilings, the supervisor envelope (`supervisor_ceilings`). Any other account:
-    "live/tiny-live ceiling = default"."""
+    "live/tiny-live ceiling = default". ADR 0039: the per-strategy risk around the account's own risk per trade, up to
+    its per-trade hard limit on demo, only when the account's `dynamic_limits` is on."""
     from goldbot.ops.services.engine import engine_limits
     d = engine_limits(settings, acc)
     floor = Limits.defaults(settings.risk).model_copy(update={"daily_cap": d.daily_cap, "weekly_cap": d.weekly_cap,
                                                               "min_lot_risk_cap": d.min_lot_risk_cap})
     ov = active_overrides(acc)
+    dyn, base, r_max = dynamic_enabled(acc), d.risk_per_trade, d.max_risk_per_trade
     if ov is None:
-        return LimitBounds.build(floor, floor, mode="live", supervisor_all_demo=False)
+        return LimitBounds.build(floor, floor, mode="live", supervisor_all_demo=False, dynamic=dyn, risk_base=base,
+                                 risk_max=r_max)
     sup = supervisor_ceilings(list(accounts))
     c = ov.ceilings
     ceiling = floor.model_copy(update={
@@ -109,7 +124,8 @@ def bounds_for(settings: Settings, acc: Account, accounts: Iterable[Account]) ->
         "supervisor_daily_cap": (sup.daily if sup is not None else None) or floor.supervisor_daily_cap,
         "supervisor_weekly_cap": (sup.weekly if sup is not None else None) or floor.supervisor_weekly_cap,
         "min_lot_risk_cap": c.min_lot_risk_cap})
-    return LimitBounds.build(floor, ceiling, mode="demo", supervisor_all_demo=sup is not None)
+    return LimitBounds.build(floor, ceiling, mode="demo", supervisor_all_demo=sup is not None, dynamic=dyn,
+                             risk_base=base, risk_max=r_max)
 
 
 # ---------------------------------------------------------------------------------------------- evidence
@@ -259,11 +275,18 @@ _WHY = {"loosen": "3 qualifying days on demo trades", "dd_floor": "account 4% or
         "minlot_explore": "minimum-lot trial (first 60 trades)",
         "minlot_explore_stop": "minimum-lot trial lost 10R: off for good",
         "evidence_invalid": "evidence missing or unreadable: back to the defaults",
-        "bounds": "limits outside their bounds"}
+        "bounds": "limits outside their bounds",
+        "vol_step": "gold unusually volatile (ATR15 at its 1-year high): one step down",
+        "tighten": "a strategy's measured edge is weaker", "floors": "account-wide floors"}
+_RISK_FIELD = "strategy_risk:"
 
 
 def _pct(v: float | None) -> str:
     return "off" if v is None else f"{v * 100:.4g}%"
+
+
+def _risk_pct(v: float | None) -> str:
+    return "the default" if v is None else _pct(v)
 
 
 def _money(frac: float, equity: float | None, currency: str | None) -> str | None:
@@ -279,7 +302,13 @@ def change_notice(account_id: str, changes: Sequence[AdaptiveChange], *, equity:
     % together, local time with its zone, the account masked, no ids, no buttons."""
     from goldbot.telegram.entry_text import account_name, clock
     parts: list[str] = []
+    risk = [c for c in changes if c.field.startswith(_RISK_FIELD)]
+    if risk:                                 # ADR 0039: one part for every strategy, no version ids (UX: no ids)
+        moves = ", ".join(f"{_risk_pct(c.old)} -> {_risk_pct(c.new)}" for c in risk)
+        parts.append(f"per-trade risk {moves} ({len(risk)} {'strategy' if len(risk) == 1 else 'strategies'})")
     for c in changes:
+        if c.field.startswith(_RISK_FIELD):
+            continue
         if c.field in ("daily_cap", "weekly_cap") and c.old is not None and c.new is not None:
             a, b = _money(c.old, equity, currency), _money(c.new, equity, currency)
             base = _money(1.0, equity, currency)
@@ -369,8 +398,20 @@ def decide_account(settings: Settings, acc: Account, accounts: Sequence[Account]
         queue_notice(state_dir, change_notice(acc.account_id, new, equity=eq, currency=ccy, limits=limits,
                                               at=pd.Timestamp(now_ns, unit="ns", tz="UTC"),
                                               tz=settings.telegram.owner_tz))
-    return {"day": decision_day.isoformat(), "limits": limits.model_dump(), "changes": len(new),
-            "demo_trades": len(demo), "shadow_trades": len(shadow), "problems": problems[:10]}
+    out: dict[str, Any] = {"day": decision_day.isoformat(), "limits": limits.model_dump(), "changes": len(new),
+                           "demo_trades": len(demo), "shadow_trades": len(shadow), "problems": problems[:10]}
+    if bounds.dynamic:                       # ADR 0039: the why per strategy and the ATR regime
+        st = _state(ctl, acc.account_id)
+        out["risk_terms"] = {k: t.model_dump() for k, t in st.risk_terms.items()} if st is not None else {}
+        out["vol_high"] = st.vol_high if st is not None else None
+    return out
+
+
+def _state(ctl: AdaptiveController, account_id: str) -> AdaptiveState | None:
+    try:
+        return ctl.store.load(account_id)
+    except Exception:                        # unreadable: the controller reported it and gave the floors
+        return None
 
 
 def _changes(ctl: AdaptiveController, account_id: str) -> list[AdaptiveChange]:
@@ -462,7 +503,7 @@ def check_limits_controller(ctx: HealthContext, account_id: str) -> list[Check]:
                          f"{_pct(L.weekly_cap)}, minimum-lot cap {_pct(L.min_lot_risk_cap)}")]
 
 
-__all__ = ["UNATTRIBUTED", "EngineFacts", "adaptive_enabled", "atr15_stats", "bounds_for", "build_evidence",
+__all__ = ["UNATTRIBUTED", "EngineFacts", "adaptive_enabled", "dynamic_enabled", "atr15_stats", "bounds_for", "build_evidence",
            "change_notice", "check_limits_controller", "decide_account", "decision_day_of", "demo_evidence",
            "market_closed_day",
            "engine_facts", "limits_job", "shadow_evidence", "strategy_freezes"]
