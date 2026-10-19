@@ -107,6 +107,12 @@ class BrokerRates:
     def __init__(self, broker: Any, symbol: str, pace: Pace):
         self.broker, self.symbol, self.pace = broker, symbol, pace
         self.frame: pd.DataFrame | None = None
+        self.ok = False                  # a good pull (safety review MEDIUM: a failed pull never vouches for a day)
+
+    def vouches(self, day: pd.Timestamp, since: pd.Timestamp) -> bool:
+        """True when a good pull reached back to `day`, so a day it has no minutes for really had none (a closure)."""
+        f = self._load(since)
+        return self.ok and not f.empty and pd.Timestamp(f["ts_utc"].iloc[0]) <= day
 
     def _load(self, since: pd.Timestamp) -> pd.DataFrame:
         if self.frame is not None:
@@ -139,6 +145,7 @@ class BrokerRates:
         out["spread_mean"] = spread
         out["spread_max"] = spread
         out = out[np.asarray(DEFAULT_SESSIONS.is_open(ts), dtype=bool)]
+        self.ok = True
         self.frame = out[BAR_COLUMNS].drop_duplicates("ts_utc").sort_values("ts_utc").reset_index(drop=True)
         return self.frame
 
@@ -177,7 +184,10 @@ def pull_bars(broker: Any, symbol: str, span: Span, *, page_ticks: int, pace: Pa
             return bars, covered, type(exc).__name__
         if keep and not b.empty:
             bars.append(b)
-        if keep or b.empty:
+        # covered (explains missing minutes to the gap check): only a day with no minutes at all, and only when a good
+        # broker-bar pull reaching back to it shows the broker had none (a closure). A day with minutes is judged by
+        # them; a failed or too-short pull never vouches (safety review MEDIUM: fail closed)
+        if b.empty and rates is not None and rates.vouches(day, since):
             covered.append((day, nxt))
         day = nxt
     return bars, covered, None

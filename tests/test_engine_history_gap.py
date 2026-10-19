@@ -129,7 +129,8 @@ class ShortTicksLongBars(TickHistory):
 
     def __init__(self, ticks: pd.DataFrame, rates: pd.DataFrame):
         super().__init__(ticks)
-        self.rates, self.bar_calls = rates.reset_index(drop=True), []
+        self.rates = rates.reset_index(drop=True)
+        self.bar_calls: list[int] = []
 
     def get_bars(self, symbol: str, tf: str, n: int) -> pd.DataFrame:
         assert tf == "1m"
@@ -335,3 +336,21 @@ def test_warm_start_without_a_store_pulls_nothing(tmp_path):
     eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path)),
                  PaperBroker(equity=10_000), [], {})
     assert eng.warm_start(LIVE_FROM, broker) == 0 and broker.calls == 0 and eng.history.fill is None
+
+
+def test_a_failed_broker_bar_pull_never_covers_a_hole(tmp_path):
+    """Safety review MEDIUM: a day with no ticks counts as a closure only when a GOOD bar pull reaching back to it shows
+    no bars; a failed pull (here get_bars raises) vouches for nothing, so the hole stays a hole (fail closed)."""
+
+    class BarsFail(ShortTicksLongBars):
+        def get_bars(self, symbol: str, tf: str, n: int) -> pd.DataFrame:
+            raise ConnectionError("bridge down")
+
+    broker = BarsFail(TICKS.iloc[:0], _mt5_rates(TICKS))
+    span = (pd.Timestamp("2025-03-05", tz="UTC"), pd.Timestamp("2025-03-07", tz="UTC"))
+    pace = history._Deadline(lambda: pd.Timestamp("2025-03-15 12:00", tz="UTC"), lambda s: None, pause_s=0,
+                             page_limit_s=30, budget_s=60)
+    for keep in (True, False):
+        bars, covered, err = history.pull_bars(broker, "XAUUSD", span, page_ticks=2000, pace=pace, keep=keep,
+                                               rates=history.BrokerRates(broker, "XAUUSD", pace))
+        assert err is None and bars == [] and covered == [], keep
