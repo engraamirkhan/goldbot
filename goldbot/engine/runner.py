@@ -1290,11 +1290,7 @@ class Engine:
             self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "duplicate_suppressed",
                                    "proposal": prop.proposal_id})
             return None
-        if self.cfg.probe_only and not cost_probe.is_probe(agent.agent_id):
-            # ADR 0037 amendment 4: "probes must never consume the real trades' allowance", and the probe account never
-            # sends a real trade either: whatever reached here (a live share, an approval), nothing is sent (fail closed)
-            self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "probe_only_refused",
-                                   "proposal": prop.proposal_id})
+        if cost_probe.refuse_non_probe(self, agent.agent_id, prop.proposal_id):   # ADR 0037 amendment 4
             return None
         magic = cost_probe.magic(self, agent)        # ADR 0037: a probe has its own magic
         # finance audit GAP-01/02/13: the signal's quote and spread (the proposal) next to the quote priced from now
@@ -2440,9 +2436,8 @@ class Engine:
             # terminal instead of a merely stale engine (trading-safety review)
             # (review LOW-D) merged into the last engine file, so its exposure keeps counting at the supervisor
             write_startup_error(self.cfg.state_dir, self.cfg.account_id, f"{type(exc).__name__}: {exc}",
-                                dq_checks=["positions_unreadable"],
-                                currency=self._account_currency() or None,   # the supervisor's currency check
-                                probe_only=self.cfg.probe_only)      # ADR 0037 amendment 4: halts no real account
+                                dq_checks=["positions_unreadable"], currency=self._account_currency() or None,
+                                probe_only=self.cfg.probe_only)      # currency: the supervisor's check; ADR 0037 am. 4
             raise
         for cid, rec in self._orders.items():
             if rec.status == "sending":
@@ -3024,14 +3019,12 @@ class Engine:
             any(a.agent_id == agent_id for _, _, a in self.pending.values())
 
     def _magic(self, family: str) -> int:
-        """Per-family magic number; crc32 is stable across processes (str hash() is salted per process), so a
-        restarted engine reconciles its own positions to the same family."""
+        """Per-family magic: crc32 is stable across restarts (str hash() is salted), so positions reconcile to a family."""
         return self.cfg.magic_base + zlib.crc32(family.encode()) % 100
 
     def _base_bars(self, agent: Specialist) -> int:
-        """The agent's time barrier in base bars (position management runs on the decision_tf clock). The labels
-        (triple_barrier) exit at the close of the (max_bars + 1)-th bar after the signal bar, so the live trade is
-        held for max_bars + 1 bars of the agent's timeframe, as the models were trained."""
+        """The agent's time barrier in base bars (positions run on the decision_tf clock): the labels exit at the close of
+        the (max_bars + 1)-th bar after the signal bar, so a live trade is held max_bars + 1 of the agent's bars."""
         return int((agent.label_spec.max_bars + 1) * tf_seconds(agent.timeframe) // tf_seconds(self.cfg.decision_tf))
 
     def _proposal_id(self, agent_id: str, close_ts: pd.Timestamp) -> str:
@@ -3299,8 +3292,7 @@ class Engine:
             "account": self.cfg.account_id, "broker": self.cfg.broker_name, "mode": self.cfg.mode, "ts": time.time(),
             # the deposit currency: the supervisor refuses to combine engines in different currencies (BACKLOG 28, A8)
             "currency": self._account_currency() or None,
-            # ADR 0037 amendment 4: a probe account stays out of the supervisor's combined limits (literal true only)
-            "probe_only": self.cfg.probe_only,
+            "probe_only": self.cfg.probe_only,      # ADR 0037 amendment 4: out of the supervisor's combined limits
             # BACKLOG 29: the effective daily loss limit (account currency) and what is left of it today
             **daily_allowance(self.gate, self.state),
             # this account's absolute limit (accounts.yaml): the supervisor applies the smallest published one

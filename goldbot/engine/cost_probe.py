@@ -94,6 +94,16 @@ def probe_id(agent_id: str) -> str:
     return PREFIX + agent_id
 
 
+def refuse_non_probe(eng: Engine, agent_id: str, proposal_id: str) -> bool:
+    """ADR 0037 amendment 4: "probes must never consume the real trades' allowance", and a dedicated probe account
+    (`probe_only`) never sends a real trade either: whatever reached the order path there (a live share, an approval)
+    is refused and journalled, fail closed. True when refused."""
+    if not eng.cfg.probe_only or is_probe(agent_id):
+        return False
+    eng.decisions.append({"ts": time.time(), "agent": agent_id, "action": "probe_only_refused", "proposal": proposal_id})
+    return True
+
+
 def is_probe(agent_id: str | None) -> bool:
     return bool(agent_id) and str(agent_id).startswith(PREFIX)
 
