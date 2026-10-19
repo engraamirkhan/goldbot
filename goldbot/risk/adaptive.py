@@ -28,6 +28,18 @@ The readings made where the text left a choice (units in the Kelly step, ladders
 ADR 0031; each takes the conservative side. `step` is pure (a replay from the same inputs gives the same states);
 `AdaptiveController` adds the core.db state (`adaptive_state`) and the append-only change log (`adaptive_changes`).
 
+ADR 0039 (dynamic per-strategy limits, docs/design/dynamic-limits-2026-10-19.md) adds, behind the account's
+`dynamic_limits` flag (`LimitBounds.dynamic`; off = exactly the ADR 0031 behaviour above), quoted:
+
+* "Per-trade risk r_s ... f_s = the existing A1 per-trade/per-day quarter-Kelly fraction (before /Q_SCALE). Shrinkage
+  w = n_days/(n_days+20) (cluster count = trading days). r_s = base + w(f_s - base), quantised to 0.1% steps, clamped
+  [0.25%, ceiling]. base = today's 0.5%. Loosen only with demo n >= 20 and the 0031 3-day/cooldown rules; shadow may
+  only tighten; LCB <= 0 gives 0.25%."
+* "Daily allowance: the existing 0031 ladder plus one new tighten rule, vol regime >= p90 -> one step down."
+* "Fail closed: missing or corrupt evidence/ATR/state gives today's fixed values (0.5%)."
+* The intraday factors k_vol, k_dd, k_day (`k_vol`, `k_dd`, `k_day`) are applied by the engine at each decision
+  (engine/limits_apply.py); they only ever lower r.
+
 Entries only: these are caps on new risk. Nothing here gates an exit, and nothing here places an order (RiskGate reads
 the limits; lane B wires it).
 """
@@ -42,7 +54,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import date, timedelta
 from itertools import accumulate
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import Field, ValidationError, model_validator
 from scipy import stats
@@ -81,6 +93,15 @@ MIN_LOT_MAX = 0.01               # the per-trade hard limit
 EXPLORE_TRADES = 60              # the cap is the top rung (1.0%) for the first 60 exception trades
 EXPLORE_STOP_R = -10.0           # cumulative net R of those trades at or below this: off for good (a re-test = new trial)
 
+# ---- ADR 0039, dynamic per-strategy limits (frozen with it; a change is a new ADR) --------------------------------------
+RISK_MIN = 0.0025                # r_s floor: also the value for LCB <= 0
+RISK_STEP = 0.001                # quantisation and the loosening step (0.1%)
+RISK_SHRINK_DAYS = 20            # w = n_days / (n_days + 20)
+RISK_BASE = 0.005                # today's fixed risk per trade (settings.yaml risk.risk_per_trade)
+K_VOL = 0.5                      # 20-day median ATR15 >= 1-year p90
+K_DD_START, K_DD_END, K_DD_MIN = 0.02, 0.04, 0.5    # 1 -> 0.5 linearly as the drawdown goes 2% -> 4%
+K_DAY_AT, K_DAY = 0.5, 0.5       # 0.5 once today's loss >= 50% of the daily allowance
+
 CAP_FIELDS = ("daily_cap", "weekly_cap", "supervisor_daily_cap", "supervisor_weekly_cap")
 FIELDS = (*CAP_FIELDS, "min_lot_risk_cap")
 _EPS = 1e-9
@@ -107,6 +128,9 @@ class Limits(FrozenRecord):
     supervisor_daily_cap: float = Field(gt=0, lt=1)
     supervisor_weekly_cap: float = Field(gt=0, lt=1)
     min_lot_risk_cap: float | None = Field(None, gt=0, le=MIN_LOT_MAX)
+    # ADR 0039: per-trade risk per strategy (model version), fraction of equity. A version not in it trades the base
+    # (today's 0.5%); empty = today's fixed values. Never above the 1% per-trade hard limit
+    strategy_risk: dict[str, Annotated[float, Field(gt=0, le=MIN_LOT_MAX)]] = {}
 
     @classmethod
     def defaults(cls, risk: RiskSettings) -> Limits:
@@ -123,6 +147,10 @@ class LimitBounds(FrozenRecord):
     ceiling: Limits
     # Amendment A1: the minimum-lot exploration budget runs on demo only (`build` sets it; live never explores)
     explore_min_lot: bool = False
+    # ADR 0039: the account's `dynamic_limits` flag. Off: no per-strategy risk and no volatility step (ADR 0031 alone)
+    dynamic: bool = False
+    risk_base: float = Field(RISK_BASE, gt=0, le=MIN_LOT_MAX)      # the account's fixed risk per trade today
+    risk_ceiling: float = Field(RISK_BASE, gt=0, le=MIN_LOT_MAX)   # demo: the 1% hard limit; live: the base
 
     @model_validator(mode="after")
     def _ordered(self) -> LimitBounds:
@@ -132,16 +160,27 @@ class LimitBounds(FrozenRecord):
         lo, hi = self.floor.min_lot_risk_cap, self.ceiling.min_lot_risk_cap
         if lo is not None and (hi is None or hi < lo - _EPS):
             raise ValueError("min_lot_risk_cap: ceiling below floor")
+        if self.risk_ceiling < self.risk_base - _EPS:
+            raise ValueError("risk_ceiling below risk_base")
         return self
+
+    @property
+    def risk_floor(self) -> float:
+        """The lowest r_s: 0.25%, or the base when the base is below it (tiny-live's 0.1%: never raised)."""
+        return min(RISK_MIN, self.risk_base)
 
     @classmethod
     def build(cls, floor: Limits, demo_ceiling: Limits, *, mode: Literal["demo", "live"],
-              supervisor_all_demo: bool) -> LimitBounds:
+              supervisor_all_demo: bool, dynamic: bool = False, risk_base: float = RISK_BASE,
+              risk_max: float = MIN_LOT_MAX) -> LimitBounds:
         """Demo: the owner-approved ceilings (a ceiling below its floor is the floor). Live (tiny-live included): the
         ceilings are the floors, so the limits may only stay or tighten. The supervisor ceilings apply only when every
-        account it watches is demo."""
+        account it watches is demo. ADR 0039: `dynamic` turns the per-strategy risk on; its ceiling is `risk_max`
+        (the per-trade hard limit, 1%) on demo and the base on live ("live/tiny-live bounds = defaults")."""
+        r_hi = max(risk_base, min(risk_max, MIN_LOT_MAX)) if mode == "demo" else risk_base
         if mode != "demo":
-            return cls(floor=floor, ceiling=floor, explore_min_lot=False)
+            return cls(floor=floor, ceiling=floor, explore_min_lot=False, dynamic=dynamic, risk_base=risk_base,
+                       risk_ceiling=r_hi)
         up: dict[str, float | None] = {}
         for f in CAP_FIELDS:
             sup = f.startswith("supervisor_")
@@ -149,7 +188,8 @@ class LimitBounds(FrozenRecord):
         up["min_lot_risk_cap"] = demo_ceiling.min_lot_risk_cap if demo_ceiling.min_lot_risk_cap is not None \
             else floor.min_lot_risk_cap
         ceiling = floor.model_copy(update=up)
-        return cls(floor=floor, ceiling=ceiling, explore_min_lot=ceiling.min_lot_risk_cap is not None)
+        return cls(floor=floor, ceiling=ceiling, explore_min_lot=ceiling.min_lot_risk_cap is not None,
+                   dynamic=dynamic, risk_base=risk_base, risk_ceiling=r_hi)
 
     def rungs(self, f: str) -> tuple[float | None, ...]:
         """The field's ladder, floor first. One rung (the floor) when the ceiling is not above it."""
@@ -236,6 +276,42 @@ class Evidence(FrozenRecord):
         return sorted(keep, key=lambda t: (t.exit_ns, t.id))
 
 
+_RISK_WHY = {
+    "no_evidence": "fewer than 2 trading days of evidence: the base risk",
+    "lcb_not_positive": "no proven edge yet (lower confidence bound at or below 0): the 0.25% minimum",
+    "shrunk": "quarter-Kelly of the measured edge, shrunk toward the base by the number of trading days",
+    "hold": "the measured target is close to the current risk: unchanged",
+    "waiting": "the target is higher: rises one 0.1% step after 3 qualifying days and 10 new demo trades",
+    "cooldown": "the target is higher, but a limit was tightened within 5 days: no rise yet",
+    "demo_too_few": "fewer than 20 demo trades: the risk may fall but not rise above the base",
+    "loosen": "3 qualifying days on demo trades: one 0.1% step up",
+    "tighten": "the measured edge is weaker (demo and shadow trades): lowered at once",
+    "bounds": "outside its bounds: clamped",
+    "floors": "account-wide floors (drawdown, loss streak, costs or stage): at most the base",
+    "evidence_invalid": "evidence missing or unreadable: at most the base",
+}
+
+
+class RiskTerm(FrozenRecord):
+    """ADR 0039: one strategy's per-trade risk and why (published in `adaptive_state.risk_terms`, the `limits_change`
+    journal and the dashboard). `r`: the decided risk; `target`: where the evidence points; `f`: the quarter-Kelly
+    fraction (A1 math before /Q_SCALE); `w`: the shrinkage n_days/(n_days+20); the k factors are 1 here and set by the
+    engine at each decision (they only lower r)."""
+
+    r: float = Field(gt=0, le=MIN_LOT_MAX)
+    target: float | None = None
+    f: float | None = None
+    n_days: int = 0
+    n_demo: int = 0
+    lcb: float | None = None
+    w: float = 0.0
+    k_vol: float = 1.0
+    k_dd: float = 1.0
+    k_day: float = 1.0
+    reason: str
+    why: str = ""
+
+
 class AdaptiveState(FrozenRecord):
     """One account's adaptive limits and the counters the rules need (core.db `adaptive_state`)."""
 
@@ -252,6 +328,13 @@ class AdaptiveState(FrozenRecord):
     # lane B: when the controller last decided (epoch ns; health `limits_controller` FAILs past 26 h). Set by
     # `AdaptiveController.current`, never by `step`, so a replay from the same inputs still gives the same states
     decided_ns: int | None = None
+    # ADR 0039 (additive JSON: a row written before it reads with the defaults). The per-strategy decided risk is in
+    # `limits.strategy_risk`; these are its why and the 3-day / cooldown counters, per strategy
+    risk_terms: dict[str, RiskTerm] = {}
+    risk_up_streak: dict[str, int] = {}
+    risk_demo_n_at_loosen: dict[str, int] = {}
+    risk_tightened_day: dict[str, date] = {}
+    vol_high: bool | None = None                     # 20-day median ATR15 >= 1-year p90; None = unknown
 
 
 class AdaptiveChange(FrozenRecord):
@@ -308,13 +391,7 @@ def combined_lcb(trades: Iterable[TradeEvidence]) -> float | None:
     return min(lcbs) if lcbs else None
 
 
-def strategy_q(trades: Sequence[TradeEvidence]) -> float | None:
-    """Amendment A1, one strategy s: q_s = min(LCB_s/(4·E[r²]_s), N̄_s·LCB_s/(4·E[D_s²])) / 3%, clamped to [0, 1].
-    D_s are its daily net-R sums and N̄_s its mean trades per day. The day term binds when losses cluster on the same
-    days (correlated trades), which the per-trade term cannot see. None without evidence (fewer than 2 days)."""
-    st = daily_lcb(trades)
-    if st is None:
-        return None
+def _strategy_f(trades: Sequence[TradeEvidence], st: DailyStat) -> float:
     if st.lcb <= 0:
         return 0.0
     sums: dict[date, float] = defaultdict(float)
@@ -324,7 +401,22 @@ def strategy_q(trades: Sequence[TradeEvidence]) -> float | None:
     e_d2 = sum(v ** 2 for v in sums.values()) / len(sums)
     per_trade = st.lcb / (KELLY_DIVISOR * e_r2)
     per_day = (len(trades) / len(sums)) * st.lcb / (KELLY_DIVISOR * e_d2)
-    return min(1.0, max(0.0, min(per_trade, per_day) / Q_SCALE))
+    return max(0.0, min(per_trade, per_day))
+
+
+def strategy_f(trades: Sequence[TradeEvidence]) -> float | None:
+    """Amendment A1, one strategy s: the quarter-Kelly per-trade fraction f_s = min(LCB_s/(4·E[r²]_s),
+    N̄_s·LCB_s/(4·E[D_s²])), 0 when LCB_s <= 0. D_s are its daily net-R sums and N̄_s its mean trades per day. The day
+    term binds when losses cluster on the same days (correlated trades), which the per-trade term cannot see. None
+    without evidence (fewer than 2 days)."""
+    st = daily_lcb(trades)
+    return None if st is None else _strategy_f(trades, st)
+
+
+def strategy_q(trades: Sequence[TradeEvidence]) -> float | None:
+    """Amendment A1: q_s = f_s / 3%, clamped to [0, 1] (`strategy_f`). None without evidence."""
+    f = strategy_f(trades)
+    return None if f is None else min(1.0, max(0.0, f / Q_SCALE))
 
 
 def quarter_kelly_q(trades: Sequence[TradeEvidence]) -> float:
@@ -332,6 +424,61 @@ def quarter_kelly_q(trades: Sequence[TradeEvidence]) -> float:
     0 when none has evidence."""
     qs = [q for q in (strategy_q(ts) for ts in _by_strategy(trades).values()) if q is not None]
     return min(qs) if qs else 0.0
+
+
+def _quantise(r: float) -> float:
+    """Down to the 0.1% step: quantisation never raises risk."""
+    return round(math.floor(r / RISK_STEP + _EPS) * RISK_STEP, 10)
+
+
+def strategy_risk(trades: Sequence[TradeEvidence], base: float, *, ceiling: float = MIN_LOT_MAX,
+                  floor: float = RISK_MIN) -> RiskTerm:
+    """ADR 0039, one strategy's target per-trade risk from these trades (no 3-day rule here, see `step`):
+    "r_s = base + w(f_s - base), w = n_days/(n_days+20), quantised to 0.1% steps, clamped [0.25%, ceiling]; LCB <= 0
+    gives 0.25%". Fewer than 2 trading days: the base. Never above the 1% per-trade hard limit."""
+    hi = max(min(ceiling, MIN_LOT_MAX), floor)
+    n_demo = sum(1 for t in trades if t.source == "demo")
+    st = daily_lcb(trades)
+    if st is None:
+        return RiskTerm(r=min(max(base, floor), hi), target=base, n_days=len({day_of_ns(t.exit_ns) for t in trades}),
+                        n_demo=n_demo, reason="no_evidence")
+    if st.lcb <= 0:
+        return RiskTerm(r=floor, target=floor, f=0.0, n_days=st.n_days, n_demo=n_demo, lcb=st.lcb, reason="lcb_not_positive")
+    f = _strategy_f(trades, st)
+    w = st.n_days / (st.n_days + RISK_SHRINK_DAYS)
+    r = min(max(_quantise(base + w * (f - base)), floor), hi)
+    return RiskTerm(r=r, target=r, f=f, n_days=st.n_days, n_demo=n_demo, lcb=st.lcb, w=w, reason="shrunk")
+
+
+def k_vol(vol_high: bool | None) -> float:
+    """ADR 0039: 0.5 when the 20-day median ATR15 is at or above its 1-year p90; 1 otherwise or when unknown (today's
+    fixed values: fail closed never goes below them)."""
+    return K_VOL if vol_high else 1.0
+
+
+def k_dd(drawdown: float | None) -> float:
+    """ADR 0039: 1 -> 0.5 linearly as the drawdown from the high-water mark goes 2% -> 4%; 1 when unknown (the stage
+    and ADR 0031's 4% floors still apply)."""
+    if drawdown is None or not math.isfinite(drawdown) or drawdown <= K_DD_START:
+        return 1.0
+    if drawdown >= K_DD_END:
+        return K_DD_MIN
+    return 1.0 - (1.0 - K_DD_MIN) * (drawdown - K_DD_START) / (K_DD_END - K_DD_START)
+
+
+def k_day(loss_today: float, allowance: float) -> float:
+    """ADR 0039: 0.5 once today's loss is at least 50% of the daily allowance (same units). An allowance that is not a
+    finite number > 0 is no allowance (1; the gate refuses on it); a loss that cannot be read is the strict side."""
+    if not (math.isfinite(allowance) and allowance > 0):
+        return 1.0
+    if not math.isfinite(loss_today):
+        return K_DAY
+    return K_DAY if loss_today >= K_DAY_AT * allowance - _EPS else 1.0
+
+
+def stricter_risk(a: Mapping[str, float], b: Mapping[str, float], base: float) -> dict[str, float]:
+    """Per strategy the smaller of two `strategy_risk` maps, a missing one being the base (intraday only lowers)."""
+    return {k: min(a.get(k, base), b.get(k, base)) for k in sorted({*a, *b})}
 
 
 def _demo_sufficient(demo: Sequence[TradeEvidence]) -> bool:
@@ -351,17 +498,107 @@ def _lower(a: float | None, b: float | None) -> bool:
 
 # ---- one evaluation --------------------------------------------------------------------------------------------------
 
+class _RiskDecision(FrozenRecord):
+    """ADR 0039: the per-strategy part of one evaluation (merged into `AdaptiveState` by `step`)."""
+
+    strategy_risk: dict[str, float] = {}
+    terms: dict[str, RiskTerm] = {}
+    up_streak: dict[str, int] = {}
+    demo_n_at_loosen: dict[str, int] = {}
+    tightened_day: dict[str, date] = {}
+    reasons: tuple[str, ...] = ()
+
+    def state_fields(self) -> dict[str, Any]:
+        return {"risk_terms": self.terms, "risk_up_streak": self.up_streak,
+                "risk_demo_n_at_loosen": self.demo_n_at_loosen, "risk_tightened_day": self.tightened_day}
+
+
+def _risk_floored(prev: AdaptiveState | None, bounds: LimitBounds, day: date, code: str) -> _RiskDecision:
+    """Floors or invalid evidence: "fail closed ... gives today's fixed values". Each strategy at most the base (a
+    tightened one stays down: the strict side), the 3-day counts reset. Flag off: none at all (ADR 0031 alone)."""
+    if not bounds.dynamic or prev is None:
+        return _RiskDecision()
+    base, lo = bounds.risk_base, bounds.risk_floor
+    risk = {s: max(lo, min(r, base)) for s, r in prev.limits.strategy_risk.items()}
+    tight = dict(prev.risk_tightened_day)
+    tight.update({s: day for s, r in risk.items() if r < prev.limits.strategy_risk[s] - _EPS})
+    terms = {s: RiskTerm(r=r, target=None, reason=code, why=_RISK_WHY[code]) for s, r in risk.items()}
+    moved = tuple(f"strategy_risk:{s}:{code}" for s, r in risk.items() if r != prev.limits.strategy_risk[s])
+    return _RiskDecision(strategy_risk=risk, terms=terms, up_streak={s: 0 for s in risk},
+                         demo_n_at_loosen=dict(prev.risk_demo_n_at_loosen), tightened_day=tight, reasons=moved)
+
+
+def _strategy_risks(prev: AdaptiveState | None, in_stat: Sequence[TradeEvidence], day: date, bounds: LimitBounds, *,
+                    roll: bool, last_tight: date | None) -> _RiskDecision:
+    """ADR 0039 per strategy: the target is `strategy_risk` on its demo fills (never above the base with fewer than
+    20 of them), lowered by the same on demo + shadow ("shadow may only tighten"). Below the current risk: lowered at
+    once, any time. Above it by at least half a step: one 0.1% step up at the roll after 3 consecutive qualifying
+    risk-days and 10 new demo trades since its last rise, never within 5 days of a tighten (its own or any account
+    limit's: ADR 0031's cooldown). Kept within [0.25% (or a lower base), ceiling]."""
+    if not bounds.dynamic:
+        return _RiskDecision()
+    base, lo, hi = bounds.risk_base, bounds.risk_floor, bounds.risk_ceiling
+    cur_map = prev.limits.strategy_risk if prev else {}
+    streak = dict(prev.risk_up_streak) if prev else {}
+    n_at = dict(prev.risk_demo_n_at_loosen) if prev else {}
+    tight = dict(prev.risk_tightened_day) if prev else {}
+    by = _by_strategy(in_stat)
+    risk: dict[str, float] = {}
+    terms: dict[str, RiskTerm] = {}
+    reasons: list[str] = []
+    for s in sorted({*by, *cur_map}):
+        ts = by.get(s, [])
+        demo = [t for t in ts if t.source == "demo"]
+        t_demo = strategy_risk(demo, base, ceiling=hi, floor=lo)
+        t_all = strategy_risk(ts, base, ceiling=hi, floor=lo)
+        up_ok = len(demo) >= MIN_TRADES_PER_STRATEGY
+        demo_target = t_demo.r if up_ok else min(base, t_demo.r)
+        binding = t_all if t_all.r < demo_target - _EPS else t_demo
+        target = min(demo_target, t_all.r)
+        raw = cur_map.get(s, base)
+        cur = min(max(raw, lo), hi)
+        new, code = cur, "bounds" if abs(cur - raw) > _EPS else "hold"
+        if target < cur - _EPS:
+            new, code = target, "tighten"
+        elif roll:
+            qualifies = up_ok and target >= cur + RISK_STEP / 2 - _EPS
+            streak[s] = streak.get(s, 0) + 1 if qualifies else 0
+            cooling = any(d is not None and (day - d).days <= COOLDOWN_DAYS for d in (last_tight, tight.get(s)))
+            if qualifies and cooling:
+                code = "cooldown"
+            elif qualifies and streak[s] >= LOOSEN_DAYS and len(demo) - n_at.get(s, 0) >= LOOSEN_NEW_TRADES:
+                new, code = round(min(cur + RISK_STEP, target), 10), "loosen"
+                streak[s], n_at[s] = 0, len(demo)
+            elif qualifies:
+                code = "waiting"
+            elif not up_ok and t_demo.r > cur + _EPS:
+                code = "demo_too_few"
+        if new < raw - _EPS:
+            tight[s], streak[s] = day, 0
+        risk[s] = new
+        terms[s] = binding.model_copy(update={"r": new, "target": target, "n_demo": len(demo), "reason": code,
+                                              "why": _RISK_WHY[code]})
+        if s not in cur_map or abs(new - cur_map[s]) > _EPS:
+            reasons.append(f"strategy_risk:{s}:{code}")
+    return _RiskDecision(strategy_risk=risk, terms=terms, up_streak=streak, demo_n_at_loosen=n_at, tightened_day=tight,
+                         reasons=tuple(reasons))
+
+
 def _floored(prev: AdaptiveState | None, account_id: str, day: date, bounds: LimitBounds, reasons: list[str], *,
-             floors_until: date | None, loss_streak_ns: int | None,
-             explore_stopped: bool) -> tuple[AdaptiveState, tuple[str, ...]]:
-    """Every field at its floor, the 3-day counts reset, and today recorded as a tighten (the 5-day cooldown)."""
+             floors_until: date | None, loss_streak_ns: int | None, explore_stopped: bool,
+             vol_high: bool | None = None, risk_code: str = "floors") -> tuple[AdaptiveState, tuple[str, ...]]:
+    """Every field at its floor, the 3-day counts reset, and today recorded as a tighten (the 5-day cooldown). ADR
+    0039: each strategy's risk at most the base (`_risk_floored`)."""
     last = prev.tightened_day if prev else None
-    state = AdaptiveState(account_id=account_id, day=max(day, prev.day) if prev else day, limits=bounds.floor,
-                        up_streak={f: 0 for f in FIELDS}, loosened_day=dict(prev.loosened_day) if prev else {},
-                        demo_n_at_loosen=dict(prev.demo_n_at_loosen) if prev else {},
-                        tightened_day=max(day, last) if last else day, floors_until=floors_until,
-                        loss_streak_ns=loss_streak_ns, minlot_explore_stopped=explore_stopped)
-    return state, tuple(dict.fromkeys(reasons))
+    rd = _risk_floored(prev, bounds, day, risk_code)
+    state = AdaptiveState(account_id=account_id, day=max(day, prev.day) if prev else day,
+                          limits=bounds.floor.model_copy(update={"strategy_risk": rd.strategy_risk}),
+                          up_streak={f: 0 for f in FIELDS}, loosened_day=dict(prev.loosened_day) if prev else {},
+                          demo_n_at_loosen=dict(prev.demo_n_at_loosen) if prev else {},
+                          tightened_day=max(day, last) if last else day, floors_until=floors_until,
+                          loss_streak_ns=loss_streak_ns, minlot_explore_stopped=explore_stopped,
+                          vol_high=vol_high if bounds.dynamic else None, **rd.state_fields())
+    return state, tuple(dict.fromkeys([*reasons, *rd.reasons]))
 
 
 def step(prev: AdaptiveState | None, ev: Evidence | None, day: date, bounds: LimitBounds, *,
@@ -383,7 +620,11 @@ def step(prev: AdaptiveState | None, ev: Evidence | None, day: date, bounds: Lim
         return _floored(prev, acct, day, bounds, ["evidence_invalid", *(f"evidence_invalid:{p}" for p in problems)],
                         floors_until=prev.floors_until if prev else None,
                         loss_streak_ns=prev.loss_streak_ns if prev else None,
-                        explore_stopped=prev.minlot_explore_stopped if prev else False)
+                        explore_stopped=prev.minlot_explore_stopped if prev else False,
+                        risk_code="evidence_invalid")
+    # ADR 0039: "vol regime >= p90"; unknown ATR = no regime (today's rules: fail closed never below them)
+    vol_high = None if ev.atr15_median_20d is None or ev.atr15_p90_1y is None \
+        else ev.atr15_median_20d >= ev.atr15_p90_1y
 
     roll = prev is None or day > prev.day
     reasons: list[str] = []
@@ -430,7 +671,7 @@ def step(prev: AdaptiveState | None, ev: Evidence | None, day: date, bounds: Lim
     if floor_codes:
         moved = [f"{f}:{floor_codes[0]}" for f in FIELDS if lvl[f] > 0]
         return _floored(prev, acct, day, bounds, [*reasons, *floor_codes, *moved], floors_until=floors_until,
-                        loss_streak_ns=streak_ns, explore_stopped=stopped)
+                        loss_streak_ns=streak_ns, explore_stopped=stopped, vol_high=vol_high)
 
     # -- the statistic: loosening on demo only, tightening on demo + shadow too --
     demo_ok = _demo_sufficient(demo)
@@ -470,6 +711,13 @@ def step(prev: AdaptiveState | None, ev: Evidence | None, day: date, bounds: Lim
             if lvl[f] > 0:                  # an exploring minimum-lot cap is put back by the resume below (A1: fixed)
                 lvl[f] -= 1
                 reasons.append(f"{f}:cost_step")
+    # ADR 0039: "vol regime >= p90 -> one step down" of the daily allowance, once on entering the regime (no ratchet);
+    # no daily loosening while it holds
+    if bounds.dynamic and vol_high:
+        qualifies["daily_cap"] = False
+        if not (prev is not None and prev.vol_high) and lvl["daily_cap"] > 0:
+            lvl["daily_cap"] -= 1
+            reasons += ["vol_step", "daily_cap:vol_step"]
     tightened = tightened or clamped_down or any(lvl[f] < old[f] for f in FIELDS)
     # A1: a paused exploration resumes at the next risk-day roll once nothing pauses it (no cooldown, no 3-day count)
     top = len(bounds.rungs("min_lot_risk_cap")) - 1
@@ -496,22 +744,28 @@ def step(prev: AdaptiveState | None, ev: Evidence | None, day: date, bounds: Lim
                 n_at[f] = len(demo)
                 reasons += ["loosen", f"{f}:loosen"]
 
-    state = AdaptiveState(account_id=acct, day=day, limits=bounds.limits_at(lvl), up_streak=streak,
-                        loosened_day=loosened_day, demo_n_at_loosen=n_at, tightened_day=last_tight,
-                        floors_until=floors_until, loss_streak_ns=streak_ns, minlot_explore_stopped=stopped)
-    return state, tuple(dict.fromkeys(reasons))
+    rd = _strategy_risks(prev, in_stat, day, bounds, roll=roll, last_tight=last_tight)
+    state = AdaptiveState(account_id=acct, day=day,
+                          limits=bounds.limits_at(lvl).model_copy(update={"strategy_risk": rd.strategy_risk}),
+                          up_streak=streak, loosened_day=loosened_day, demo_n_at_loosen=n_at, tightened_day=last_tight,
+                          floors_until=floors_until, loss_streak_ns=streak_ns, minlot_explore_stopped=stopped,
+                          vol_high=vol_high if bounds.dynamic else None, **rd.state_fields())
+    return state, tuple(dict.fromkeys([*reasons, *rd.reasons]))
 
 
 def changes_between(prev: AdaptiveState | None, new: AdaptiveState, reasons: Sequence[str], ev: Evidence | None, *,
-                    ts_ns: int, baseline: Limits | None = None) -> list[AdaptiveChange]:
+                    ts_ns: int, baseline: Limits | None = None,
+                    risk_base: float | None = None) -> list[AdaptiveChange]:
     """One `adaptive_changes` row per field whose value changed: old, new, the reason codes that apply to it (the plain
     codes plus its own `<field>:<code>` ones) and the ids of the trades the evaluation used. A first evaluation
-    (no `prev`) is compared with `baseline` (the floors), so a first-day exploration cap is logged too."""
+    (no `prev`) is compared with `baseline` (the floors), so a first-day exploration cap is logged too. ADR 0039: one
+    `strategy_risk:<version>` row per strategy whose risk changed (None = not in the map, i.e. the base; a strategy
+    that appears or goes at exactly `risk_base` is no change)."""
     before = prev.limits if prev is not None else baseline
     if before is None:
         return []
     ids = tuple(t.id for t in ev.used()) if ev is not None else ()
-    plain = [r for r in reasons if r.split(":", 1)[0] not in FIELDS]
+    plain = [r for r in reasons if r.split(":", 1)[0] not in (*FIELDS, "strategy_risk")]
     rows: list[AdaptiveChange] = []
     for f in FIELDS:
         a, b = getattr(before, f), getattr(new.limits, f)
@@ -520,6 +774,19 @@ def changes_between(prev: AdaptiveState | None, new: AdaptiveState, reasons: Seq
         own = [r.split(":", 1)[1] for r in reasons if r.startswith(f + ":")]
         rows.append(AdaptiveChange(account_id=new.account_id, day=new.day, field=f, old=a, new=b,
                                 reasons=tuple(dict.fromkeys([*plain, *own])), evidence_ids=ids, ts_ns=ts_ns))
+    a_map, b_map = before.strategy_risk, new.limits.strategy_risk
+    for s in sorted({*a_map, *b_map}):
+        a_r, b_r = a_map.get(s), b_map.get(s)
+        same = a_r is not None and b_r is not None and abs(a_r - b_r) <= _EPS
+        at_base = risk_base is not None and (a_r if a_r is not None else risk_base) == \
+            (b_r if b_r is not None else risk_base)
+        if same or at_base:
+            continue
+        key = f"strategy_risk:{s}:"
+        own = [r[len(key):] for r in reasons if r.startswith(key)]
+        rows.append(AdaptiveChange(account_id=new.account_id, day=new.day, field=f"strategy_risk:{s}", old=a_r,
+                                   new=b_r, reasons=tuple(dict.fromkeys([*plain, *own])), evidence_ids=ids,
+                                   ts_ns=ts_ns))
     return rows
 
 
@@ -617,13 +884,15 @@ class AdaptiveController:
             self.dq("adaptive_limits_evidence_invalid", f"{account_id}: {detail or why}")
         if new != prev:                   # always, with `decided_ns`: every decision is recorded
             try:
-                self.store.save(new, changes_between(prev, new, reasons, ev, ts_ns=now, baseline=self.bounds.floor))
+                self.store.save(new, changes_between(prev, new, reasons, ev, ts_ns=now, baseline=self.bounds.floor,
+                                                     risk_base=self.bounds.risk_base))
             except Exception as exc:      # an unrecorded change never applies
                 self.dq("adaptive_limits_state_unwritable", f"{account_id}: {type(exc).__name__}")
                 return self.bounds.floors()
         return new.limits
 
 
-__all__ = ["AdaptiveChange", "AdaptiveController", "AdaptiveState", "AdaptiveStore", "DailyStat", "Evidence", "FIELDS",
-           "LimitBounds", "Limits", "TradeEvidence", "changes_between", "combined_lcb", "daily_lcb", "day_of_ns",
-           "day_start_ns", "quarter_kelly_q", "step", "strategy_q"]
+__all__ = ["FIELDS", "RISK_BASE", "RISK_MIN", "AdaptiveChange", "AdaptiveController", "AdaptiveState", "AdaptiveStore",
+           "DailyStat", "Evidence", "LimitBounds", "Limits", "RiskTerm", "TradeEvidence", "changes_between",
+           "combined_lcb", "daily_lcb", "day_of_ns", "day_start_ns", "k_day", "k_dd", "k_vol", "quarter_kelly_q", "step",
+           "strategy_f", "strategy_q", "strategy_risk", "stricter_risk"]
