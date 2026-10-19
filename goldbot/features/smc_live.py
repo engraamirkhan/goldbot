@@ -50,11 +50,11 @@ STATE_KEY = "smc_replica_state"                          # ctx key: a ReplicaSta
 KEEP_STATES = 16                                         # snapshots kept per feed (the latest and the bars before it)
 
 
-def check_series_start(bars: pd.DataFrame) -> None:
-    """ValueError unless `bars` start at the pinned SERIES_START (within START_SLACK)."""
+def check_series_start(bars: pd.DataFrame, start: pd.Timestamp = SERIES_START) -> None:
+    """ValueError unless `bars` start at the pinned `start` (default SERIES_START, research) within START_SLACK."""
     first = utc_index(bars["ts_utc"])[0] if len(bars) else None
-    if first is None or not SERIES_START <= first < SERIES_START + START_SLACK:
-        raise ValueError(f"the replica's state is pinned to a series starting {SERIES_START:%Y-%m-%d} (B4a); these "
+    if first is None or not start <= first < start + START_SLACK:
+        raise ValueError(f"the replica's state is pinned to a series starting {start:%Y-%m-%d} (B4a); these "
                          f"bars start {first:%Y-%m-%d}" if first is not None else "no bars")
 
 
@@ -77,8 +77,10 @@ class FeedUpdate(Record):
 class ReplicaFeed:
     """One persisted replica state per feed (e.g. "xauusd-15m") in aux.db's `replica_state`."""
 
-    def __init__(self, db: Database, feed: str, params: R.ReplicaParams = R.DEFAULT_PARAMS):
-        self.db, self.feed, self.params = db, feed, params
+    def __init__(self, db: Database, feed: str, params: R.ReplicaParams = R.DEFAULT_PARAMS,
+                 series_start: pd.Timestamp = SERIES_START):
+        # the live host pins the store's own first year (settings replica.series_start); research keeps SERIES_START
+        self.db, self.feed, self.params, self.series_start = db, feed, params, series_start
 
     def stored(self) -> dict[str, Any] | None:
         """The latest snapshot's row (None: no state)."""
@@ -147,7 +149,7 @@ class ReplicaFeed:
 
     def _bootstrap(self, tail: pd.DataFrame, full_series: pd.DataFrame, reason: str) -> FeedUpdate:
         log.info("replica feed %s: re-bootstrap from the series start (%s)", self.feed, reason)
-        check_series_start(full_series)
+        check_series_start(full_series, self.series_start)
         full_series = full_series.reset_index(drop=True)
         ts_tail, ts_full = utc_index(tail["ts_utc"]), utc_index(full_series["ts_utc"])
         if ts_full[-1] != ts_tail[-1]:

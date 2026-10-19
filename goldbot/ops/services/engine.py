@@ -232,6 +232,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     from goldbot.ops import accounts
     from goldbot.research.model_registry import ModelRegistry
     from goldbot.research.population import Population
+    from goldbot.specialists import SPECIALISTS
     from goldbot.telegram.approvals import ApprovalCenter
     from goldbot.telegram.bus import ApprovalBus
     configured = accounts.load_accounts()
@@ -284,7 +285,13 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         return {aid: ch.version for aid in reg.agent_ids() if (ch := reg.champion(aid)) is not None}
 
     def shadow_set() -> dict:
-        return ModelRegistry(settings.research.models_dir).shadow_models()
+        reg = ModelRegistry(settings.research.models_dir)
+        pop = Population(population_file)
+        pop.ensure_founders(pd.Timestamp.now("UTC"))
+        for m in pop.in_book():                           # ADR 0038: a roster rule agent shadow-trades a RuleModel
+            if getattr(SPECIALISTS.get(m.family), "frozen_config", False):
+                reg.ensure_rule_challenger(family=m.family, agent_id=m.agent_id)
+        return reg.shadow_models()
 
     def population_view() -> tuple[list, dict[str, float]]:
         """Agents in the shadow book (live, shadow, recently retired) and the live agents' capital shares."""
@@ -310,6 +317,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               swap_prior=settings_swap(settings)), broker, agents,
                  champions(), center, limits=limits, limits_policy=policy, shadow_models=shadow_set() if shadow_host else None,
                  live_shares=live_shares, live_versions=live_versions())
+    if shadow_host and eng.store is not None:      # replica agents (box_break_close): carried state, shadow only
+        resolve(attach_replica)(eng, settings)
     from goldbot.data.calendar import BrokerSessions, SessionTable
     # the session read runs on its own thread: through the bridge it gets its own client (a requests.Session is not
     # shared across threads); MT5Broker.trading_sessions makes no terminal call (documented hours)
@@ -376,6 +385,22 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                 except (ValueError, TypeError, OSError) as exc:
                     log.error("model reload refused, keeping current models: %s", exc)
         time.sleep(0.25)
+
+
+def attach_replica(eng: Any, settings: Settings) -> None:
+    """Serve replica-reading agents (smc boxes, money flow, structure) from the carried state in state/aux.db
+    (`engine.replica_context.ReplicaShadow`), bootstrapped from the store's bars since `tv.replica_series_start`.
+    Shadow only; any failure leaves the replica unset, so those agents propose nothing (fail closed)."""
+    import pandas as pd
+
+    from goldbot.db.connection import Database
+    from goldbot.engine.replica_context import ReplicaShadow, StoreHistory
+    try:
+        start = pd.Timestamp(settings.tv.replica_series_start, tz="UTC")
+        eng._tv.replica = ReplicaShadow(Database.open(Path(eng.cfg.state_dir), "aux"), symbol=eng.cfg.symbol.lower(),
+                                        history=StoreHistory(eng.store, eng.cfg.symbol, start), series_start=start)
+    except Exception:
+        log.exception("replica state not attached: replica agents propose nothing")
 
 
 def paper_stand_in(broker: Any) -> bool:
