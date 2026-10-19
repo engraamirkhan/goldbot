@@ -395,7 +395,7 @@ test("Home shows the status card stack in order on a phone and a desktop, light 
         const tops = await Promise.all(names.map(async (name) => (await page.getByRole("region", { name }).boundingBox())!.y));
         expect([...tops].sort((a, b) => a - b)).toEqual(tops);                   // one column, in the decided order
       }
-      const wide = await page.evaluate((w) => [...document.querySelectorAll("body *")].filter((e) => e.getBoundingClientRect().right > w + 1)
+      const wide = await page.evaluate((w) => Array.from(document.querySelectorAll("body *")).filter((e) => e.getBoundingClientRect().right > w + 1)
         .slice(0, 5).map((e) => `${e.tagName}.${e.className}`), width);
       expect(wide).toEqual([]);                                                  // nothing scrolls sideways
     }
