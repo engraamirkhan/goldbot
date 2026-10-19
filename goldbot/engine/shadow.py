@@ -52,7 +52,7 @@ from goldbot.data.timeutil import opportunity_day
 from goldbot.labels.excursion import Excursion, bar_prices, exit_bar_extremes
 from goldbot.labels.exit_policy import ExitPolicy, PolicyState, new_state, policy_return, policy_step
 from goldbot.research.metrics import breakeven_prob, sharpe_annualised, summarize
-from goldbot.research.promotion import PerfStats, cluster_sums, cluster_t_stat
+from goldbot.research.promotion import PerfStats, cluster_sums, cluster_t_stat, quarantine_reason
 
 if TYPE_CHECKING:
     from goldbot.specialists.base import Specialist
@@ -296,10 +296,13 @@ class ShadowBook:
             t.ret = t.side * (t.exit - t.entry) / t.entry
 
     # ------------------------------------------------------------------ results
-    def stats(self, version: str, now: pd.Timestamp) -> PerfStats:
+    def stats(self, version: str, now: pd.Timestamp, evidence_start: pd.Timestamp | None = None) -> PerfStats:
+        """Clustered record of `version`'s taken trades. evidence_start (H-52, promotion.EVIDENCE_START_UTC): trades
+        opened before it are quarantined (`promotion.quarantine_reason`) and left out of the trades and clusters."""
         book = self.books[version]
         weeks = max((now - book.started_utc).total_seconds() / (7 * 86400), 0.0)
-        taken = [t for t in book.closed if t.taken and t.ret is not None]
+        taken = [t for t in book.closed if t.taken and t.ret is not None
+                 and quarantine_reason(t.entry_ts, evidence_start) is None]
         rets = pd.DataFrame({"ret": [t.ret for t in taken]})
         if rets.empty:
             return PerfStats(n_trades=0, sharpe_ann=0.0, hit_rate=0.0, max_dd=0.0, trades_per_week=0.0, weeks=weeks,
