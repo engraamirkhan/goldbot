@@ -520,13 +520,30 @@ def test_settings_and_the_hypotheses_doc_agree_on_the_retired_families():
     s = load_settings().research
     text = load_hypotheses()
     assert text is not None and retired_drift(s.retired_families, text, FAMILIES) == []
-    doc, problems = hypotheses_retired(text, FAMILIES)
-    assert not problems and set(doc) == {"breakout", "intraday_momentum", "mean_reversion", "session_open", "trend"}
+    doc, problems = hypotheses_retired(text, sorted(SPECIALISTS))
+    assert not problems and set(doc) == {"breakout", "intraday_momentum", "mean_reversion", "session_open", "trend",
+                                         "sweep_absorb", "box_break_close"}       # H-48 / H-50 STOP, 2026-10-19
     assert {e.family for e in s.retired_families} == set(doc) and "tsmom" not in doc
     assert s.reserved_trials_quarter == {"2027Q1": 8}    # preregistration-2027Q1.md: 4 queued + 4 H-02 survivor slots (ADR 0007)
     assert s.reserved_for("2027Q1") == 8 and s.reserved_for("2026Q4") == 0 == s.reserved_for("2027Q2")
     assert s.open_budget_preregistered_only == ["2027Q1"]                   # the E-5 cap (R-06: no more fast tsmom)
     assert load_hypotheses("/nonexistent/hypotheses.md") is None and ATTRIBUTION_FILE == REPORT_FILE
+
+
+def test_a_retired_screening_family_is_a_specialist_family_for_the_consistency_check():
+    """A rule under its pre-registered screen (box_break_close, H-50) is retired by its own trial's rule: the check
+    accepts it when the doc agrees, though the director never allocates to it (not in research_families)."""
+    assert "box_break_close" in SPECIALISTS and "box_break_close" not in FAMILIES
+    box = RetiredFamily(family="box_break_close", hypothesis_id="R-15", retired=RETIRED_ON, reason="H-50 STOP",
+                        trials=[89])
+    row = "| R-15 | box_break_close (15m frozen rule) | retired | #89 | none | H-50 STOP |\n"
+    doc = HYP.replace("| R-04 |", row + "| R-04 |", 1)
+    assert retired_drift([*RETIRED, box], doc, FAMILIES) == []
+    assert retired_drift([*RETIRED, box], HYP, FAMILIES) == [
+        "box_break_close: in research.retired_families (R-15) but not retired in hypotheses.md section B"]
+    ghost = RetiredFamily(family="no_such_family", hypothesis_id="R-99", retired=RETIRED_ON, reason="x", trials=[])
+    assert retired_drift([*RETIRED, ghost], HYP, FAMILIES) == [
+        "no_such_family: in research.retired_families but not a specialist family"]
 
 
 def test_the_consistency_check_catches_drift_and_a_doc_edit_never_moves_a_trial():
