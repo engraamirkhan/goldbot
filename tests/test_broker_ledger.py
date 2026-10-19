@@ -445,3 +445,19 @@ def test_balance_operations_after_a_cancelled_deal_are_tagged_and_warn(tmp_path)
     rep = _run(tmp_path, FakeBroker(960.0, deals))
     assert rep.status == "warn" and "cancelled" in rep.note
     assert [(d.kind, d.follows_cancel) for d in ledger.balance_deals(_db(tmp_path), ACC_ID)] == [("withdrawal", True)]
+
+
+def test_closed_cost_probes_are_reconciled_in_the_probe_ledger_not_counted_missing(tmp_path):
+    """ADR 0037: a closed cost probe has no closed-trade record by design (aux.db cost_probes is its record), so RC-8
+    names it in the note instead of counting it missing; the engine's own trade still counts and RC-9 still ties out."""
+    from goldbot.engine import cost_probe
+    probe = _trade(31, 1, 0.01, 2400.0, 2400.5, "2026-10-07 10:00", "2026-10-07 12:00", ticket=600)
+    engine = _trade(7, 1, 0.1, 2400.0, 2410.0, "2026-10-07 10:00", "2026-10-07 15:00", ticket=100)
+    _baseline(tmp_path)
+    with _db(tmp_path).write() as conn:
+        cost_probe.LEDGER.upsert(conn, cost_probe.ProbeRecord(
+            client_order_id="icm-demo-1-p", account_id=ACC_ID, agent_id="a", side=1, lots=0.01, position_id=31,
+            sent_utc=pd.Timestamp("2026-10-07 10:00", tz="UTC"), exit_utc=pd.Timestamp("2026-10-07 12:00", tz="UTC")))
+    rep = _run(tmp_path, FakeBroker(1000.0 + _net(probe + engine), probe + engine))
+    assert [(d.position_id, d.kind) for d in rep.diffs] == [(7, "missing")]
+    assert "1 cost probe position(s)" in rep.note and rep.summary()["balance"] == "ties out"

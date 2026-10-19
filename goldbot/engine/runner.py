@@ -36,7 +36,7 @@ from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
 from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
-from goldbot.engine import auto_entry, unconfirmed
+from goldbot.engine import auto_entry, cost_probe, unconfirmed
 from goldbot.engine.limits_apply import EngineLimits, daily_allowance, min_lot_risk, published_limits
 from goldbot.engine.shadow import ShadowBook, ShadowTrade, record_candidate
 from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, SentOrder: re-exported, ADR 0023 step 1)
@@ -51,7 +51,7 @@ from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, Sent
     risk_file,
 )
 from goldbot.engine.tv_context import TvShadowWatch
-from goldbot.execution.bridge import CEILING_REFUSAL, UNREADABLE_REFUSAL
+from goldbot.execution.bridge import CEILING_REFUSAL
 from goldbot.execution.broker import AccountInfo, Broker, OrderIntent, OrderResult, Position, SymbolInfo, Tick
 from goldbot.execution.classifier import StoredClass, effective_class, read_stored
 from goldbot.execution.costs import CostTable
@@ -171,6 +171,7 @@ class EngineConfig(Record):
     mode: str = "paper"              # paper | demo | live (what the broker is); approvals are separate
     declared_class: str | None = None    # raw | standard from config/accounts.yaml: the baseline (effective_class)
     approval_mode: str = "propose"   # propose | auto
+    cost_probe: bool = False         # ADR 0037: min-lot demo orders mirroring challengers' shadow entries
     symbol: str = "XAUUSD"
     decision_tf: str = "15m"
     magic_base: int = 260100
@@ -319,6 +320,7 @@ class Engine:
         self.set_shadow_models(shadow_models or {})
         Path(cfg.state_dir).mkdir(parents=True, exist_ok=True)
         self.state_store: EngineStore = JsonEngineStore(Path(cfg.state_dir), cfg.account_id)   # ADR 0023 step 1
+        self.probe = cost_probe.CostProbe.start(self)      # ADR 0037: demo accounts only (refused at start otherwise)
         self.center.on_decision = self._on_decision
         # data quality: errors since the last bar close, and those the last bar close was decided with
         self._last_tick: Tick | None = None
@@ -911,6 +913,7 @@ class Engine:
             agents = [a for a in self.agents.values() if a.timeframe == tf]
             decisions += self._decide(tf, fr, agents, fam_w, close_ts, last_tick)
         self._blackout_close(complete, close_ts, frames)
+        cost_probe.step(self, close_ts, last_tick)       # ADR 0037: at most one min-lot probe, on a flat demo account
         if self.shadow is not None:
             self.shadow.save(close_ts)
         self._write_state()
@@ -1068,6 +1071,7 @@ class Engine:
         cands_by_agent = self._tv.candidates(self, tf, fr, agents, self._now(last_tick), last_tick, float(a.iloc[last]), hurdle_atr)
         if self.shadow is not None:
             self._shadow_step(tf, fr, agents, cands_by_agent, float(a.iloc[last]), hurdle_atr)
+        cost_probe.yield_to_live(self, agents, cands_by_agent, last, close_ts)   # ADR 0037: real trades first
         for agent in agents:
             cands = cands_by_agent[agent.agent_id]
             if cands.empty or int(cands["idx"].iloc[-1]) != last:
@@ -1316,39 +1320,15 @@ class Engine:
                                "retcode": res.retcode, "price": res.price, "lots": res.filled_lots,
                                "message": res.message})
         if bridge_refused(res):
-            self._note_bridge_refusal(prop, agent, res, lots)
-        if self.store is not None and res.ok and res.price is not None:
+            auto_entry.note_bridge_refusal(self, prop, agent, res, lots)
+        if self.store is not None and res.ok and res.price is not None \
+                and not cost_probe.is_probe(agent.agent_id):     # ADR 0037: a probe's fill feeds its own ledger only
             # requested vs filled feeds the nightly slippage table
             fill = pd.DataFrame([{"ts_utc": self.broker.last_tick(self.cfg.symbol).ts_utc, "client_order_id": prop.proposal_id,
                                   "agent_id": agent.agent_id, "side": prop.side, "lots": res.filled_lots, "requested": requested,
                                   "filled": res.price, "order_type": "market", "retcode": res.retcode, "commission": np.nan}])
             self.store.append("fills", fill, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
         return res
-
-    def _note_bridge_refusal(self, prop: Proposal, agent: Specialist, res: OrderResult, lots: float) -> None:
-        """BACKLOG 66 (trading-safety C2): the bridge's notional ceiling refused the order, so the brain sized above
-        6x this terminal's equity (or the terminal could not be read). Nothing was placed. It is journalled
-        (`bridge_refused`) and the owner is told on Telegram; the auto path then pauses auto entries for the rest of the
-        bar close (`auto_entry.after_order`) and the approval path shows the card as refused by the bridge (`_on_decision`).
-        The notice is plain words (ui-ux review): the trade, the masked account name and which of the two causes,
-        never the proposal id or the raw message, which stay in the journal and the log. Best effort: a notice that
-        cannot be queued is logged and never changes the outcome."""
-        log.warning("order %s refused by the bridge: %s", prop.proposal_id, res.message)
-        self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "bridge_refused",
-                               "proposal": prop.proposal_id, "message": res.message})
-        auto = " Automatic entries pause until the next bar." if self.cfg.approval_mode == "auto" else ""
-        why = ("(it couldn't read the account figures it checks)" if res.message.startswith(UNREADABLE_REFUSAL)
-               else "(open gold would be worth more than 6× equity)")
-        if self.center.bus is None:
-            return
-        try:
-            self.center.bus.notify_owner(
-                f"Order not placed: the MT5 box's safety limit refused {'LONG' if prop.side > 0 else 'SHORT'} "
-                f"{lots:g} lots {self.cfg.symbol} on {account_name(self.cfg.account_id)} {why}. Nothing was sent; open "
-                f"trades keep their stops.{auto} If this repeats, the trade sizing and the MT5 box's limit disagree: "
-                f"ask Claude to check.")
-        except Exception as exc:                        # noqa: BLE001 - the refusal stands either way
-            log.warning("bridge refusal notice not queued (%s)", type(exc).__name__)
 
     @staticmethod
     def _attach_policy(tr: OpenTrade, agent: Specialist, *, entry: float, atr_usd: float | None,
@@ -2628,7 +2608,7 @@ class Engine:
         conversion: quant review 2026-10-12, finding B); the stops (GAP-03) and the entry facts (`OpenTrade.audit`:
         GAP-01/02/13) go on the record, and a broker stop or target fill is logged against its level in `exit_fills`
         (GAP-04)."""
-        if pid in self._recorded:
+        if pid in self._recorded or cost_probe.record_close(self, pid, tr, reason, px, at):   # ADR 0037: own ledger
             return
         try:
             info, _ = self._exit_deals(pid, tr)

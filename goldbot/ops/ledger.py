@@ -33,7 +33,9 @@ The daily `broker_ledger` job (goldbot/ops/jobs.py) calls `run_ledger` per accou
 * Trades (RC-8), by position id, over closes since the previous snapshot (at least the last day) less the grace:
   goldbot's positions are those whose deals or position carry a magic in magic_base .. magic_base + 99 (as
   `GuardedBroker`), less the bridge smoke's magic_base + 99 (ADR 0021: it has no engine record by design, so its
-  positions are listed in `smoke_positions` and the note, never reconciled; RC-9 still counts their P&L). Against the closed-trade records (`gates_phase.load_closed_trades`) and the engine's open trades
+  positions are listed in `smoke_positions` and the note, never reconciled; RC-9 still counts their P&L) and less
+  the closed cost probes found in the probe ledger (ADR 0037: aux.db cost_probes is their record; named in the note).
+  Against the closed-trade records (`gates_phase.load_closed_trades`) and the engine's open trades
   (state/orders_<account>.json "open"):
       missing   at the broker (open, or fully closed by its deals) but not in goldbot's records
       extra     in goldbot's records but neither open at the broker nor in its deals
@@ -263,6 +265,12 @@ def _ours(magic: int, magic_base: int) -> bool:
 
 def _smoke(magic: int, magic_base: int) -> bool:
     return int(magic) == magic_base + SMOKE_MAGIC_OFFSET
+
+
+def probe_note(probes: set[int]) -> str:
+    """ADR 0037: closed cost probes have no closed-trade record by design (the probe ledger, aux.db cost_probes, is
+    theirs), so RC-8 does not count them missing; RC-9 still counts their P&L."""
+    return f"{len(probes)} cost probe position(s) reconciled in the cost-probe ledger (ADR 0037)"
 
 
 def smoke_positions(deals: pd.DataFrame, positions: list[Position], magic_base: int) -> list[int]:
@@ -522,8 +530,13 @@ def run_ledger(db: Database, broker: Any, account: Account, state_dir: Path, slo
     notes = [e for e in (open_err, records_err) if e] + notes
 
     broker_open = {p.position_id: p for p in positions if _ours(p.magic, account.magic_base)}
+    from goldbot.engine.cost_probe import closed_position_ids
+    trades = broker_trades(deals, account.magic_base)
+    probes = closed_position_ids(db, acc_id) & set(trades)          # ADR 0037: recorded in the probe ledger
+    if probes:
+        notes.append(probe_note(probes))
     diffs, checked, matched, pending = reconcile_trades(
-        broker_trades(deals, account.magic_base), broker_open, None if open_err else sys_open, records,
+        {p: b for p, b in trades.items() if p not in probes}, broker_open, None if open_err else sys_open, records,
         window_from=window_from, now=read_at, currency=snap.currency, cfg=cfg)
     if status == "ok" and (diffs or open_err or records_err):
         status = "warn"
