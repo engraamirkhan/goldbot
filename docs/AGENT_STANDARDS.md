@@ -118,6 +118,17 @@ Each delivered item is scored; it is accepted only with every row "yes".
 - Agents commit on their branch and never push; the integrator merges, runs the gates, routes reviews, and ships.
 - Free lanes are refilled immediately from the ranked backlog (`docs/BACKLOG.md`).
 
+## Staff delegation
+Every principal has a bench of staff agents (`.claude/agents/<role>-staff.md`, staff level with 10+ years, sonnet), to
+move faster by running many bounded pieces at once. Subagents cannot start subagents, so the orchestrator (the main
+session, acting for the program-director) runs the bench:
+1. A principal's hand-back ends with a `## Delegation plan`: one line per brief,
+   `<role>-staff | scope | acceptance check | read-only or worktree`.
+2. The orchestrator launches every brief in one message, in parallel. A writing brief gets its own worktree, and no two
+   briefs write the same file. Staff count toward the lane cap (CPU load and the 12-lane ceiling).
+3. The orchestrator resumes the principal (SendMessage) with the staff hand-backs. The principal checks each against
+   its Definition of done, integrates, and signs off. Staff never decide, merge, push or deploy.
+
 ## Accountability and cadence
 
 Why (review of 2026-10-16, `docs/process/scorecards/2026-W42.md`): the 13 Oct demo deploy never happened and nobody
