@@ -1410,7 +1410,7 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
   `/mode propose` or `/halt` stops them too. A live account with probes enabled refuses to load.
 * **Moving probes to their own account `icm-probe`** (ADR 0037 amendment 4): probes then stop using icm-demo's £50
   day and the combined limits; icm-probe has its own £20 day and never sends a real trade. On the MT5 box, open the IC
-  Markets GBP demo in its own terminal (`C:\MT5\ICMarkets-Probe\terminal64.exe`) with its bridge, and run
+  Markets GBP demo in its own terminal on its own box (`goldbot-mt5-probe`, `C:\MT5\ICMarkets\terminal64.exe`) with its bridge, and run
   `python -m goldbot.ops.accounts add icm-probe` (login, password and bridge keys go to the keyring, never the file).
   Then in `config/accounts.yaml`: under `icm-probe` set `enabled: true`; under `icm-demo` set `shadow_host: false` and
   `cost_probe: { enabled: false, ... }`; enable `goldbot-engine@icm-probe` and restart both engine services. Doing only the first edit makes every service

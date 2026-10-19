@@ -70,7 +70,7 @@ accounts:
     mode: demo
     server: ICMarketsSC-Demo
     login: null  # never here (public repo): `python -m goldbot.ops.accounts add icm-probe` keeps it in the keyring
-    terminal_path: C:\MT5\ICMarkets-Probe\terminal64.exe
+    terminal_path: C:\MT5\ICMarkets\terminal64.exe   # its own box (goldbot-mt5-probe), same layout as icm-demo
     server_tz: Europe/Athens
     symbol: XAUUSD
     magic_base: 260500
