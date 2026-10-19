@@ -2493,6 +2493,8 @@ export interface components {
             lots: number;
             /** Mode */
             mode: ("demo" | "live" | "paper") | null;
+            /** Open Risk */
+            open_risk?: number | null;
             /**
              * Opened Utc
              * Format: date-time

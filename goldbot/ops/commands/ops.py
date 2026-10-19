@@ -32,6 +32,13 @@ def _health(cmd: str, args: list[str]) -> None:
     sys.exit(health_main(args))
 
 
+@register_command("positions", pos=205)
+def _positions(cmd: str, args: list[str]) -> None:
+    """Open trades per enabled account, read-only (state files), for an operator without the dashboard login."""
+    from goldbot.ops.positions import main as positions_main
+    sys.exit(positions_main(args))
+
+
 @register_command("monthly-report", pos=220)
 def _monthly_report(cmd: str, args: list[str]) -> None:
     from goldbot.ops.monthly_report import main as monthly_main
