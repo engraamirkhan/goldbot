@@ -2441,7 +2441,8 @@ class Engine:
             # (review LOW-D) merged into the last engine file, so its exposure keeps counting at the supervisor
             write_startup_error(self.cfg.state_dir, self.cfg.account_id, f"{type(exc).__name__}: {exc}",
                                 dq_checks=["positions_unreadable"],
-                                currency=self._account_currency() or None)   # the supervisor's currency check
+                                currency=self._account_currency() or None,   # the supervisor's currency check
+                                probe_only=self.cfg.probe_only)      # ADR 0037 amendment 4: halts no real account
             raise
         for cid, rec in self._orders.items():
             if rec.status == "sending":

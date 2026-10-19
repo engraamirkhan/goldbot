@@ -98,3 +98,82 @@ def test_the_owner_text_for_a_refused_start_offers_retiring_the_account():
     from goldbot.api import entry_status as es
     r = es.REASONS["engine_startup_refused"]
     assert "retire that account" in r.fix
+
+
+# trading-safety MEDIUM on f09e3002 (ADR 0037 amendment 4): a probe_only account's startup error was written without
+# `probe_only`, so the supervisor counted it as a real account and halted every account (`engine_startup_refused`)
+
+def test_a_probe_accounts_start_error_does_not_halt_the_real_accounts(tmp_path):
+    _running_file(tmp_path, "icm-demo")
+    _running_file(tmp_path, "icm-probe", probe_only=True)
+    write_startup_error(tmp_path, "icm-probe", "refusing to trade icm-probe: margin", dq_checks=["startup_refused"],
+                        probe_only=True)
+    assert _read(tmp_path, "icm-probe")["probe_only"] is True
+    s = Supervisor(tmp_path, SupervisorLimits()).evaluate()
+    assert not s["halt"] and "engine_startup_refused" not in s["reasons"], s["reasons"]
+    assert s["probe_engines"]["icm-probe"]["startup_error"] is True              # still reported, apart
+
+
+def test_the_probe_flag_on_a_start_error_comes_from_the_account_config_not_the_old_file(tmp_path):
+    _running_file(tmp_path, "icm-probe")                       # an old file without the flag
+    write_startup_error(tmp_path, "icm-probe", "boom", dq_checks=["startup_refused"], probe_only=True)
+    assert _read(tmp_path, "icm-probe")["probe_only"] is True
+    _running_file(tmp_path, "icm-demo", probe_only=True)       # a stale flag on a real account's old file
+    write_startup_error(tmp_path, "icm-demo", "boom", dq_checks=["startup_refused"])
+    assert _read(tmp_path, "icm-demo")["probe_only"] is False
+
+
+def test_a_real_accounts_start_error_still_halts_every_account(tmp_path):
+    _running_file(tmp_path, "icm-demo")
+    _running_file(tmp_path, "icm-probe", probe_only=True)
+    write_startup_error(tmp_path, "icm-demo", "refusing to trade icm-demo: margin", dq_checks=["startup_refused"],
+                        probe_only=False)
+    s = Supervisor(tmp_path, SupervisorLimits()).evaluate()
+    assert s["halt"] and "engine_startup_refused" in s["reasons"]
+    assert s["startup_refused_engines"] == ["engine_icm-demo.json"]
+
+
+def test_a_halt_raised_by_the_real_accounts_stops_the_probe_engine(tmp_path):
+    _running_file(tmp_path, "icm-demo", startup_error="refusing to trade icm-demo: margin")
+    _running_file(tmp_path, "icm-probe", probe_only=True)
+    Supervisor(tmp_path, SupervisorLimits()).evaluate()
+    halt, reasons = Supervisor.engine_should_halt(tmp_path)    # what every engine, the probe's too, reads before entry
+    assert halt and "engine_startup_refused" in reasons
+
+
+def test_a_refused_start_of_a_probe_account_writes_the_probe_flag(tmp_path):
+    with pytest.raises(SystemExit):
+        run_mod.refuse_start("icm-probe", "refusing to trade icm-probe: margin", None, state_dir=tmp_path,
+                             probe_only=True)
+    assert _read(tmp_path, "icm-probe")["probe_only"] is True
+
+
+def test_the_engine_service_passes_the_configured_probe_flag_to_a_refused_start(monkeypatch):
+    from types import SimpleNamespace
+
+    from goldbot.ops import accounts
+    from goldbot.ops.services import engine as svc
+    seen: dict[str, Any] = {}
+
+    def refuse(account_id: str, why: str, info: Any = None, state_dir: Any = "state", *, probe_only: bool = False):
+        seen["probe_only"] = probe_only
+        raise SystemExit(why)
+
+    monkeypatch.setattr(accounts, "load_accounts", lambda: {"icm-probe": SimpleNamespace(probe_only=True)})
+    monkeypatch.setattr(svc, "approval_ids_problem", lambda account_id: "ids clash")
+    monkeypatch.setattr(run_mod, "refuse_start", refuse)
+    with pytest.raises(SystemExit):
+        svc._run_engine("icm-probe", None)  # type: ignore[arg-type]
+    assert seen == {"probe_only": True}
+
+
+def test_an_unreadable_positions_read_on_a_probe_engine_writes_the_probe_flag(tmp_path):
+    class Dead(GbpPaper):
+        def positions(self, magic_prefix: int | None = None) -> list:
+            raise RuntimeError("terminal down")
+
+    (tmp_path / "orders_icm-probe.json").write_text(json.dumps({"sent": {}, "open": {}}))
+    with pytest.raises(RuntimeError):
+        Engine(EngineConfig(account_id="icm-probe", broker_name="icm", state_dir=str(tmp_path), probe_only=True),
+               Dead(), [], {})
+    assert _read(tmp_path, "icm-probe")["probe_only"] is True
