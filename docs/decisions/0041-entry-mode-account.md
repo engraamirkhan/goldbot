@@ -31,4 +31,11 @@ account with nobody clicking also produce no evidence, so the evidence gate coul
 - After a 12% kill switch with the override at None, the engine writes nothing to `control.json` (it resets only an
   owner `auto`); the account halts, the re-arm window forces propose for 30 days, then a demo account returns to its
   configured auto, as ADR 0036 already specified.
+- The 12% kill switch resets the owner's override only when it is `auto` (`goldbot/engine/runner.py`
+  `_reset_owner_mode`). With the override cleared, a trip on one demo account halts that account and leaves other demo
+  accounts on their own auto. Demo only (real money never runs auto); accepted.
+- A stolen owner session can switch demo accounts to automatic entries through `account` without a TOTP. Real money
+  stays locked by the ADR 0036 engine lock, and `/halt` and `/mode propose` stop it at once; accepted for demo.
+- `account` and `auto` are audited before the mode is written (a failed audit write leaves the mode unchanged);
+  `propose` is written first, so lowering authority never waits on the audit log.
 - Changing which accounts may enter automatically still needs a new owner decision and ADR; the lock is code.

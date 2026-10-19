@@ -228,6 +228,34 @@ def test_mode_account_never_checks_a_code_or_the_evidence_so_a_code_lockout_cann
     assert text.startswith("Mode: each account's own setting") and bus.control().approval_mode is None
 
 
+def _broken_audit(ev: str, **kw: Any) -> None:
+    raise OSError("aux.db full")
+
+
+def test_a_failed_audit_write_leaves_the_mode_unchanged_for_a_change_that_can_grant_authority(tmp_path):
+    bus = ApprovalBus(tmp_path)
+    bus.set_mode("propose", by="telegram:111")
+    with pytest.raises(OSError):
+        mode_command(bus, "account", "telegram:111", totp_ok=lambda c: False,
+                     eligibility=lambda: pytest.fail("not read"), audit=_broken_audit)
+    assert bus.control().approval_mode == "propose"
+    a, r = _same(100)
+    e = auto_mode_eligibility(*_evidence(100, a, r))
+    with pytest.raises(OSError):
+        mode_command(bus, "auto 123456", "telegram:111", totp_ok=lambda c: True, eligibility=lambda: e,
+                     audit=_broken_audit)
+    assert bus.control().approval_mode == "propose"
+
+
+def test_mode_propose_still_lowers_authority_when_the_audit_write_fails(tmp_path):
+    bus = ApprovalBus(tmp_path)
+    bus.set_mode("auto", by="telegram:111")
+    with pytest.raises(OSError):
+        mode_command(bus, "propose", "telegram:111", totp_ok=lambda c: False,
+                     eligibility=lambda: pytest.fail("not read"), audit=_broken_audit)
+    assert bus.control().approval_mode == "propose"
+
+
 def test_unreadable_control_reads_as_propose(tmp_path):
     bus = ApprovalBus(tmp_path)
     bus.control_path.write_text("{not json")

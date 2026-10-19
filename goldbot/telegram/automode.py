@@ -280,13 +280,15 @@ def mode_command(bus: ApprovalBus, arg: str | None, by: str, *, totp_ok: Callabl
     """`/mode propose` (always allowed: it lowers authority), `/mode account` (always allowed: it clears the owner's
     override, ADR 0041; a real-money account cannot gain authority from it, the engine's ADR 0036 lock keeps it on
     propose) or `/mode auto <code>` (TOTP, then the evidence check). The caller has already checked the owner
-    (Telegram allow-list, dashboard owner role). Every outcome is audited."""
+    (Telegram allow-list, dashboard owner role). Every outcome is audited. A change that can grant authority (`account`,
+    `auto`) is audited before it is written, so a failed audit write leaves the mode as it was; `propose` is written
+    first, because lowering authority must never wait on the audit log (as /halt)."""
     parts = (arg or "").split()
     mode = parts[0].lower() if parts else ""
     if mode == "account":
         prev = bus.control().approval_mode
-        bus.set_mode(None, by=by, reason="owner: each account's setting")
         audit("mode", by=by, to="account", previous=prev)
+        bus.set_mode(None, by=by, reason="owner: each account's setting")
         return MODE_ACCOUNT_TEXT
     if mode == "propose":
         prev = bus.control().approval_mode
@@ -309,7 +311,7 @@ def mode_command(bus: ApprovalBus, arg: str | None, by: str, *, totp_ok: Callabl
         audit("mode_refused", by=by, to="auto", reason="evidence", reasons=e.reasons, **e.numbers())
         return "Auto mode not available:\n• " + "\n• ".join(e.reasons)
     prev = bus.control().approval_mode
-    bus.set_mode("auto", by=by, reason="owner, evidence held")
     audit("mode", by=by, to="auto", previous=prev, **e.numbers())
+    bus.set_mode("auto", by=by, reason="owner, evidence held")
     return ("Mode: AUTO. Entries that pass the RiskGate are placed without asking you; exits stay automatic. "
             "A 12% drawdown or a re-arm returns to propose. Turn it off any time with /mode propose (or /halt).")
