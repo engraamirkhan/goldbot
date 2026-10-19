@@ -199,7 +199,9 @@ def load_shard_weights() -> dict[str, float]:
     is still assigned to exactly one shard)."""
     import json
     try:
-        return {str(k): float(v) for k, v in json.loads(WEIGHTS_FILE.read_text())["seconds"].items()}
+        data = json.loads(WEIGHTS_FILE.read_text())
+        # integration and unit ids never overlap, so one map serves both suites
+        return {str(k): float(v) for k, v in {**data.get("unit_seconds", {}), **data["seconds"]}.items()}
     except (OSError, ValueError, KeyError):
         return {}
 

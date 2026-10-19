@@ -45,7 +45,7 @@ class Source:
 
 
 def _shadow(tmp_path, src: Source) -> ReplicaShadow:
-    return ReplicaShadow(Database.open(tmp_path, "aux"), src.load, src.before)
+    return ReplicaShadow(Database.open(tmp_path, "aux"), src.load, src.before, warm_wait_s=120)
 
 
 def _frame(src: Source, end: int):

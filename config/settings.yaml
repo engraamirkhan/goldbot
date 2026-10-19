@@ -398,5 +398,11 @@ tv_pull:                             # TradingView direct pull (goldbot/data/tv_
 tv:                                  # TradingView values at decision time (goldbot/engine/tv_context.py, specialists/tv_event.py)
   max_lag_s: 60                      # a value counts only for the decision bar and when it arrived <= this after its close,
                                      #   else NaN and no TradingView entry (fails closed); equals features.tv_plots.MAX_LAG
+  replica_series_start: "2016-01-01" # live replica state (smc/boxes/mfi) bootstraps from the store's bars from here
+                                     #   (engine/replica_context.py; the brain's store holds 2016-2026)
   min_bar_match: 0.95                # share of our decision bars with a TradingView bar of the same open, else the TV
                                      #   trial is refused before it is charged (research/tv_grid.py: 4h/1d grids differ)
+shadow:                              # shadow book (goldbot/engine/shadow.py; research director ruling 2026-10-19)
+  max_open_per_agent: 3              # every signal its own shadow trade, up to 3 open per agent and version; beyond the
+                                     #   cap a signal is counted "skipped: cap", never traded. Promotion's 40 counts
+                                     #   independent clusters (one per agent per session day), not raw trades

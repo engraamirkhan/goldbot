@@ -62,6 +62,10 @@ FOUNDER_MAX_CHANGE = 0.5            # a founder's numeric setting stays within +
 DD_HAIRCUT_AT = 0.30                # a 30% shadow drawdown halves fitness
 
 AgentStatus = Literal["shadow", "live", "retired"]
+# the frozen shadow roster (docs/research/shadow-roster-2026-10-19.md): (family, timeframe), one parameter set each,
+# shadow with capital 0; every roster member is a population member, so the tournament's DSR counts it in K (n_pop)
+SHADOW_ROSTER: tuple[tuple[str, str], ...] = (
+    ("box_break_close", "15m"), ("box_break_close", "1h"), ("box_break_close", "4h"))
 
 
 class Member(Record):
@@ -275,6 +279,14 @@ class Population:
                 self.members[ident.agent_id] = Member(agent_id=ident.agent_id, family=fam, config=dict(cls.default_config),
                                                       created_utc=now, status_since_utc=now, notes=["founder"])
                 added.append(ident.agent_id)
+        for fam, tf in SHADOW_ROSTER:            # docs/research/shadow-roster-2026-10-19.md: frozen, one config each
+            cls = SPECIALISTS[fam]
+            cfg = {} if tf == cls.timeframe else {TIMEFRAME_KEY: tf}
+            aid = AgentIdentity(family=fam, config=cfg).agent_id
+            if aid not in self.members:
+                self.members[aid] = Member(agent_id=aid, family=fam, config=cfg, created_utc=now, status_since_utc=now,
+                                           notes=["roster founder (shadow-roster-2026-10-19)"])
+                added.append(aid)
         return added
 
     def clone_slot_free(self) -> bool:
@@ -393,6 +405,8 @@ class Population:
                              key=lambda m: -scores[m.agent_id].score)
         winners = live_ranked[: max(1, len(live_ranked) // 4)] if live_ranked else []
         for w in winners:
+            if getattr(SPECIALISTS[w.family], "frozen_config", False):
+                continue                       # a roster family runs one parameter set: never cloned with mutations
             alive_children = [c for c in self.members.values() if c.parent_id == w.agent_id and c.status != "retired"]
             want = rng.randint(*CHILDREN_PER_WINNER)
             for _ in range(max(0, min(want, MAX_LIVE_CHILDREN - len(alive_children)))):

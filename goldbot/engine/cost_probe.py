@@ -6,11 +6,11 @@ signal by a fixed round-robin rotation over agent_ids (never by P&L/score). At m
 real (live-agent) trades take priority". A cost probe, not a population status: probes feed only the costs pipeline.
 
 * Which signal: a taken shadow entry opened at this bar close by a challenger (a shadow version that is no agent's
-  champion, `Engine.live_versions`) of an agent the broker may trade (not shadow only: TradingView and replica agents
-  stay "filter features only"). One signal per agent (its versions in name order); among the agents the next agent id
+  champion, `Engine.live_versions`) of an agent the broker may trade (not shadow only; TradingView agents never, and
+  a frozen roster rule agent on a RuleModel by the ruling of 2026-10-19, `_mirrorable`). One signal per agent (its versions in name order); among the agents the next agent id
   after the last one probed, wrapping (`rotate`). p, score and P&L never reach the choice.
-* When: on the shadow host with `cost_probe` on, on a flat account: no position at the broker, no engine trade, no
-  pending proposal and no order in flight, so at most one probe position at a time. A live agent's candidate closes an
+* When: on the shadow host with `cost_probe` on, while the account holds probes only (up to `cost_probe_max_open`):
+  no other position at the broker, no engine trade, no pending proposal and no order in flight. A live agent's candidate closes an
   open probe before that agent's decision (`yield_to_live`) and any other position closes it at the bar close (`step`):
   the probe never holds the slot, the heat or the daily allowance a real trade needs. An ambiguous probe order still
   refuses every entry (`unconfirmed_order_pending`): an unknown order state outranks the priority rule.
@@ -28,6 +28,13 @@ real (live-agent) trades take priority". A cost probe, not a population status: 
 * Budget (trading-safety review): no new probe once today's realised probe loss reaches `cost_probe_budget` of the
   day's loss allowance, nor while less than that share of the allowance remains (`budget_refusal`): probes never use
   the part of the £50 a real trade needs. An unknown allowance or an unknown probe P&L today refuses (fail closed).
+* Amendment (the research director's ruling 2026-10-19, "the system needs to learn, so more trades need to be opened
+  and closed"): up to `cost_probe_max_open` (2) probe positions at once, at most one new probe per bar close, never
+  two on one agent; still 0.01 lot and round-robin. Each probe's stop is clamped so its loss at the stop, from the
+  broker's `loss_per_lot` at the minimum lot in the account currency, is at most `cost_probe_max_loss` (£4); a probe
+  whose loss cannot be computed is refused. No new probe once today's realised probe loss + the open probes' risk
+  (loss at their stops) + the new probe's would exceed `cost_probe_budget` x the day's loss limit (0.2 x £50 = £10).
+  The bound is at the stop: a gap through it, commission and swap are outside it (the realised P&L counts them).
 * The record: one `ProbeRecord` per order in aux.db `cost_probes` (purpose cost_probe, with the agent id and version):
   signal, requested and fill price, spread, send latency and retcode; at the close the exit, swap, commission and P&L
   from the broker's deals. A probe's close never goes to closed_trades.jsonl (phase gate, throttle, broker-ledger
@@ -37,6 +44,7 @@ real (live-agent) trades take priority". A cost probe, not a population status: 
 from __future__ import annotations
 
 import logging
+import math
 import sqlite3
 import time
 from pathlib import Path
@@ -147,6 +155,7 @@ class ProbeRecord(FrozenRecord):
     swap: float | None = None               # broker's deals (None: not reported)
     commission: float | None = None         # paid, positive (None: not reported)
     pnl: float | None = None                # net, from the broker's deals (None: the deals were not readable)
+    stop_loss: float | None = None          # the loss at the (clamped) stop when sent, account currency
 
     @property
     def slippage_usd(self) -> float | None:
@@ -215,6 +224,18 @@ def _open_keys(eng: Engine) -> set[tuple[str, str, pd.Timestamp]]:
     return {(v, t.agent_id, t.entry_ts) for v, b in eng.shadow.books.items() for t in b.open}
 
 
+def _mirrorable(eng: Engine, version: str, agent: Specialist) -> bool:
+    """Trading-safety ruling 2026-10-19: a TradingView agent is never mirrored; another shadow-only agent only when it
+    is a frozen roster rule agent whose shadow version is a RuleModel (ADR 0038). Its probe measures cost only (never
+    the agent's evidence: probes stay out of closed_trades); demo only, RiskGate, own magic and budget as every probe."""
+    if agent.requires_tv:
+        return False
+    if not agent.shadow_only:
+        return True
+    from goldbot.research.rule_model import is_uncalibrated
+    return bool(getattr(agent, "frozen_config", False)) and is_uncalibrated(eng.shadow_models[version][1])
+
+
 def _signals(eng: Engine, probe: CostProbe) -> dict[str, tuple[str, ShadowTrade, Specialist]]:
     """agent id -> (version, shadow entry, specialist): this close's new taken challenger entries, one per agent."""
     assert eng.shadow is not None
@@ -227,7 +248,7 @@ def _signals(eng: Engine, probe: CostProbe) -> dict[str, tuple[str, ShadowTrade,
             continue
         for t in eng.shadow.books[version].open:
             agent = eng.agents.get(t.agent_id)
-            if (version, t.agent_id, t.entry_ts) in new and t.taken and agent is not None and not agent.shadow_only:
+            if (version, t.agent_id, t.entry_ts) in new and t.taken and agent is not None and _mirrorable(eng, version, agent):
                 out.setdefault(t.agent_id, (version, t, agent))
     return out
 
@@ -294,50 +315,95 @@ def step(eng: Engine, close_ts: pd.Timestamp, tick: Tick) -> None:
 
 def _step(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick: Tick) -> None:
     signals = _signals(eng, probe)
+    probes_open = _probes_open(eng)
     others = any(not is_probe(t.agent_id) for t in eng.open.values()) or bool(eng.pending) or _in_flight(eng, False)
-    if _probes_open(eng):
-        if others or eng.state.open_positions > len(_probes_open(eng)):
+    if others or eng.state.open_positions > len(probes_open):
+        if probes_open:
             _make_way(eng, close_ts)
         return
-    if others or eng.state.open_positions > 0 or _in_flight(eng, True) or not signals:
+    if len(probes_open) >= eng.cfg.cost_probe_max_open or _in_flight(eng, True):
+        return
+    busy = {eng.open[pid].agent_id.removeprefix(PREFIX) for pid in probes_open}
+    signals = {a: sig for a, sig in signals.items() if a not in busy}       # never two probes on one agent
+    if not signals:
         return
     if eng._auto_paused is not None and eng._auto_paused[0] == close_ts:
         return
     if eng.cfg.mode != "demo" or not auto_entry.permitted(eng, close_ts):
         return
-    if (why := budget_refusal(eng, probe, close_ts)) is not None:
+    why, headroom = budget_refusal(eng, probe, close_ts)
+    if why is not None:
         eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": f"cost_probe_budget:{why}"})
         return
     version, t, agent = signals[rotate(list(signals), probe.last_agent)]
     probe.last_agent = agent.agent_id
-    _send(eng, probe, version, t, agent, close_ts, tick)
+    _send(eng, probe, version, t, agent, close_ts, tick, headroom)
 
 
-def budget_refusal(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp) -> str | None:
-    """Why the probe budget refuses a new probe now, or None: the day's loss allowance unknown, less than
-    `cost_probe_budget` of it remaining, today's probe P&L unknown, or today's realised probe loss at that share or more.
-    Today is the engine's risk day (from its last reset; the UTC day before the first)."""
+def stop_loss(eng: Engine, side: int, price: float, distance: float, lots: float) -> float | None:
+    """The account-currency loss of `lots` when the price moves `distance` against `side` from `price`: the broker's
+    `loss_per_lot` (MT5 order_calc_profit, else tick value / tick size). None when the broker cannot say (fail closed)."""
+    fn = getattr(eng.broker, "loss_per_lot", None)
+    if not callable(fn) or not (math.isfinite(distance) and distance >= 0 and math.isfinite(lots) and lots > 0):
+        return None
+    if distance == 0:
+        return 0.0
+    try:
+        v = fn(eng.cfg.symbol, side, price, distance)
+        loss = float(v) * lots if v is not None else math.nan
+    except Exception as exc:
+        log.warning("cost probe loss unavailable (%s)", type(exc).__name__)
+        return None
+    return loss if math.isfinite(loss) and loss > 0 else None
+
+
+def open_risk(eng: Engine) -> float | None:
+    """The open probes' loss at their current stops (0 for one whose stop is at or past its entry); None when any is
+    unknown (no stop, no fill price or no broker figure)."""
+    total = 0.0
+    for pid in _probes_open(eng):
+        tr = eng.open[pid]
+        entry = tr.open_price if tr.open_price is not None else tr.entry
+        if tr.sl is None or entry is None:
+            return None
+        loss = stop_loss(eng, tr.side, entry, max(0.0, tr.side * (entry - tr.sl)), tr.lots)
+        if loss is None:
+            return None
+        total += loss
+    return total
+
+
+def budget_refusal(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp) -> tuple[str | None, float]:
+    """(why the probe budget refuses a new probe now or None, the loss a new probe may still add). The budget is
+    `cost_probe_budget` x the day's loss limit (0.2 x £50 = £10): refused when the allowance is unknown or less than
+    the budget remains, today's probe P&L or the open probes' risk is unknown, or today's realised probe loss + the
+    open probes' risk leaves nothing. Today is the engine's risk day (from its last reset; the UTC day before the
+    first). A probe profit never adds headroom."""
     from goldbot.engine.limits_apply import daily_allowance
     allowance = daily_allowance(eng.gate, eng.state)
     limit, remaining = allowance["daily_loss_limit"], allowance["daily_loss_remaining"]
     if limit is None or remaining is None or limit <= 0:
-        return "allowance_unknown"
+        return "allowance_unknown", 0.0
     share = eng.cfg.cost_probe_budget * limit
     if remaining < share:
-        return "allowance_low"
+        return "allowance_low", 0.0
     since = eng._last_reset if eng._last_reset is not None else close_ts.floor("D")
     with probe.db.connection() as conn:
         today = [r for r in LEDGER.select(conn, "account_id = ? AND closed = 1", (eng.cfg.account_id,))
                  if r.exit_utc is not None and r.exit_utc >= since]
     if any(r.pnl is None for r in today):
-        return "probe_pnl_unknown"
-    if -sum(float(r.pnl or 0.0) for r in today) >= share:
-        return "probe_loss_reached"
-    return None
+        return "probe_pnl_unknown", 0.0
+    held = open_risk(eng)
+    if held is None:
+        return "open_risk_unknown", 0.0
+    headroom = share - max(0.0, -sum(float(r.pnl or 0.0) for r in today)) - held
+    if headroom <= 0:
+        return "probe_loss_reached", 0.0
+    return None, headroom
 
 
 def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Specialist, close_ts: pd.Timestamp,
-          tick: Tick) -> None:
+          tick: Tick, headroom: float) -> None:
     from goldbot.risk import Intent
     from goldbot.risk.gate import broker_margin
     from goldbot.telegram.approvals import Proposal
@@ -347,16 +413,33 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
         return
     atr_usd = abs(t.entry - t.stop) / ls.stop_atr              # the signal bar's ATR, as the shadow entry used it
     price = tick.ask if side > 0 else tick.bid
+
+    def refuse(why: str) -> None:
+        eng.decisions.append({"ts": close_ts.isoformat(), "agent": tag, "version": version,
+                              "action": "cost_probe_refused:" + why})
+
     terms = eng._sizing_terms(side, price, ls.stop_atr * atr_usd, cycle=close_ts)
-    terms["volume_max"] = terms.get("volume_min", Intent.model_fields["volume_min"].default)   # the minimum lot only
-    intent = Intent(agent_id=tag, side=side, p=t.p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=atr_usd,
+    lot = terms.get("volume_min")
+    per_usd = stop_loss(eng, side, price, 1.0, float(lot)) if lot is not None else None
+    if per_usd is None:
+        return refuse("probe_loss_unknown")
+    # the amendment: the stop is clamped so the loss at it is at most cost_probe_max_loss (£4) at the minimum lot
+    stop_atr = min(ls.stop_atr, eng.cfg.cost_probe_max_loss / per_usd / atr_usd)
+    terms["volume_max"] = lot                                    # the minimum lot only
+    intent = Intent(agent_id=tag, side=side, p=t.p, target_atr=ls.target_atr, stop_atr=stop_atr, atr_usd=atr_usd,
                     cost_atr=eng._cost_atr(atr_usd, close_ts), multiplier=1.0, price=price, timeframe=t.timeframe,
                     family=agent.family, swap_usd_per_oz=eng._swap_usd_per_oz(side, close_ts), **terms)
     gd = eng.gate.check(intent, eng.state, close_ts, margin_required=broker_margin(eng.broker, eng.cfg.symbol),
                         throttle=eng._agent_throttle(tag, t.timeframe, close_ts))
     if not gd.allowed or gd.lots > intent.volume_min + 1e-9:
-        eng.decisions.append({"ts": close_ts.isoformat(), "agent": tag, "version": version,
-                              "action": "cost_probe_refused:" + ",".join(gd.reasons or ["above_minimum_lot"])})
+        return refuse(",".join(gd.reasons or ["above_minimum_lot"]))
+    loss = stop_loss(eng, side, price, gd.stop_distance, gd.lots)   # at the stop the gate set (stops level floored)
+    if loss is None:
+        return refuse("probe_loss_unknown")
+    if loss > eng.cfg.cost_probe_max_loss + 1e-9:
+        return refuse("probe_loss_above_cap")
+    if loss > headroom + 1e-9:
+        eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": "cost_probe_budget:probe_budget_full"})
         return
     stop, target = price - side * gd.stop_distance, price + side * ls.target_atr * atr_usd
     prop = Proposal(proposal_id=pid, account_id=eng.cfg.account_id, agent_id=tag, side=side, lots=gd.lots,
@@ -384,7 +467,8 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
                       signal_price=t.entry, requested_price=price, spread_usd=round(tick.ask - tick.bid, 6),
                       sent_utc=sent, latency_ms=round(latency_ms, 3), retcode=res.retcode,
                       position_id=res.position_id if filled else None,
-                      fill_price=(res.price if res.price is not None else price) if filled else None)
+                      fill_price=(res.price if res.price is not None else price) if filled else None,
+                      stop_loss=round(loss, 2))
     try:
         with probe.db.write() as conn:
             LEDGER.upsert(conn, rec)

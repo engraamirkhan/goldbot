@@ -97,7 +97,7 @@ def test_retrain_challenger_shadow_promotion_cycle(bars_store, tmp_path):
     # the shadow book reports a record that passes every gate -> automatic promotion; the engine can load it
     bt = PerfStats.model_validate(ctx.models.get(version).backtest)
     good = PerfStats(n_trades=max(bt.n_trades, 60), sharpe_ann=max(bt.sharpe_ann, 1.0), hit_rate=bt.hit_rate,
-                     max_dd=bt.max_dd * 0.5, trades_per_week=bt.trades_per_week, weeks=6.0)
+                     max_dd=bt.max_dd * 0.5, trades_per_week=bt.trades_per_week, weeks=6.0, n_clusters=60)
     (tmp_path / f"shadow_{version}.json").write_text(good.model_dump_json())
     third = saturday_retrain(ctx, sat + pd.Timedelta(weeks=6))[founder]
     assert third["challengers"][0] == {"version": version, "action": "promoted"}

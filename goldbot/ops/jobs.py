@@ -429,7 +429,8 @@ def _decide_challengers(ctx: JobContext, agent_id: str, slot: pd.Timestamp) -> l
             ctx.models.retire(ch.version, f"no decision after {CHALLENGER_MAX_WEEKS} weeks in shadow")
             out.append({"version": ch.version, "action": "expired"})
         else:
-            out.append({"version": ch.version, "action": "waiting", "shadow_trades": sh.n_trades if sh else 0})
+            out.append({"version": ch.version, "action": "waiting", "shadow_trades": sh.n_trades if sh else 0,
+                        "shadow_clusters": sh.n_clusters if sh else 0})
     return out
 
 

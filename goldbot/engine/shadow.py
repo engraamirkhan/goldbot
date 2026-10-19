@@ -18,7 +18,12 @@ Counterfactual outcomes (proposal P9): every candidate a version scores is recor
 time and whether the version would trade it (`taken`), so its calibration can be refitted on an unbiased sample
 (`outcomes`; research/model.py `recalibrate`). One position per agent applies over every candidate, taken or not,
 exactly as research thins candidates (`labels.one_at_a_time`) before the model filters them, so the taken trades are
-the backtest's model-filtered set. Trading statistics (`stats`, `returns_since`, the population) count taken trades
+the backtest's model-filtered set. Concurrency (research director ruling 2026-10-19, "the system needs to learn, so
+more trades need to be opened and closed"): every signal is its own shadow trade, up to `max_open_per_agent` open at
+once per agent and version (settings shadow.max_open_per_agent: 3 in production; 1, the labels' one-at-a-time, by
+default), over every candidate taken or not so the counterfactual thinning never depends on p; a signal beyond the cap
+is counted (`VersionBook.skipped_cap`) and logged "skipped: cap", never traded. Each trade's outcome is still its own
+triple-barrier label. `stats` clusters taken trades by agent and session day (promotion.py). Trading statistics (`stats`, `returns_since`, the population) count taken trades
 only. A book written before this change loads unchanged: its trades are taken (they were only ever the selected
 ones) and carry no threshold, which keeps them out of `outcomes` (a selected-only sample is biased); a candidate
 recorded with its threshold comes from a book that records every candidate.
@@ -26,6 +31,7 @@ recorded with its threshold comes from a book that records every candidate.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -35,13 +41,16 @@ from pydantic import Field
 
 from goldbot.base import Record, UtcTimestamp, load_record
 from goldbot.config import tf_seconds
+from goldbot.data.timeutil import opportunity_day
 from goldbot.labels.excursion import Excursion, bar_prices, exit_bar_extremes
 from goldbot.labels.exit_policy import ExitPolicy, PolicyState, new_state, policy_return, policy_step
-from goldbot.research.metrics import breakeven_prob, summarize
-from goldbot.research.promotion import PerfStats
+from goldbot.research.metrics import breakeven_prob, sharpe_annualised, summarize
+from goldbot.research.promotion import PerfStats, cluster_sums, cluster_t_stat
 
 if TYPE_CHECKING:
     from goldbot.specialists.base import Specialist
+
+log = logging.getLogger(__name__)
 
 
 class ShadowTrade(Record):
@@ -87,10 +96,12 @@ class VersionBook(Record):
     started_utc: UtcTimestamp
     open: list[ShadowTrade] = Field(default_factory=list)
     closed: list[ShadowTrade] = Field(default_factory=list)
+    skipped_cap: int = 0              # signals not traded because the agent already had max_open_per_agent open
 
 
 class ShadowBook:
-    def __init__(self, state_dir: str | Path):
+    def __init__(self, state_dir: str | Path, max_open_per_agent: int = 1):
+        self.max_open_per_agent = max_open_per_agent
         self.dir = Path(state_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.path = self.dir / "shadow_book.json"
@@ -117,8 +128,10 @@ class ShadowBook:
         book = self.books[version]
         if any(t.entry_ts == bar_ts for t in book.open) or any(t.entry_ts == bar_ts for t in book.closed[-5:]):
             return None   # one shadow entry per version per signal bar, even if the bar is replayed
-        if any(t.agent_id == agent_id for t in book.open):
-            return None   # one position per agent at a time (taken or not), as the labels it was trained on
+        if sum(t.agent_id == agent_id for t in book.open) >= self.max_open_per_agent:
+            book.skipped_cap += 1     # ruling 2026-10-19: counted, not traded (taken or not: thinning never reads p)
+            log.info("shadow %s %s at %s skipped: cap (%d open)", version, agent_id, bar_ts, self.max_open_per_agent)
+            return None
         stop = entry - side * stop_atr * atr_usd
         state = None
         if policy is not None and policy.active:
@@ -219,13 +232,22 @@ class ShadowBook:
     def stats(self, version: str, now: pd.Timestamp) -> PerfStats:
         book = self.books[version]
         weeks = max((now - book.started_utc).total_seconds() / (7 * 86400), 0.0)
-        rets = pd.DataFrame({"ret": [t.ret for t in book.closed if t.taken]})
+        taken = [t for t in book.closed if t.taken and t.ret is not None]
+        rets = pd.DataFrame({"ret": [t.ret for t in taken]})
         if rets.empty:
-            return PerfStats(n_trades=0, sharpe_ann=0.0, hit_rate=0.0, max_dd=0.0, trades_per_week=0.0, weeks=weeks)
-        per_week = len(rets) / max(weeks, 1 / 7)
+            return PerfStats(n_trades=0, sharpe_ann=0.0, hit_rate=0.0, max_dd=0.0, trades_per_week=0.0, weeks=weeks,
+                             n_clusters=0)
+        span = max(weeks, 1 / 7)
+        per_week = len(rets) / span
         s = summarize(rets, trades_per_year=per_week * 52)
-        return PerfStats(n_trades=s["n"], sharpe_ann=s["sharpe_ann"], hit_rate=s["hit_rate"], max_dd=s["max_dd"],
-                         trades_per_week=per_week, weeks=weeks, mean_ret=s["mean_ret"], std_ret=s["std_ret"])
+        # ruling 2026-10-19: one cluster per agent per session day; Sharpe on the cluster sums, a robust t
+        days = opportunity_day(pd.DatetimeIndex([t.entry_ts for t in taken]))
+        keys = [(t.agent_id, d) for t, d in zip(taken, days, strict=True)]
+        sums = cluster_sums(rets["ret"].tolist(), keys)
+        sharpe = sharpe_annualised(sums, len(sums) / span * 52)
+        return PerfStats(n_trades=s["n"], sharpe_ann=sharpe, hit_rate=s["hit_rate"], max_dd=s["max_dd"],
+                         trades_per_week=per_week, weeks=weeks, mean_ret=s["mean_ret"], std_ret=s["std_ret"],
+                         n_clusters=len(sums), t_stat=cluster_t_stat(rets["ret"].tolist(), keys))
 
     def returns_since(self, version: str, since: pd.Timestamp) -> list[float]:
         book = self.books.get(version)

@@ -337,3 +337,93 @@ def test_the_shadow_book_loads_a_file_written_by_a_newer_release(tmp_path):
     (tmp_path / "shadow_book.json").write_text(json.dumps(raw))
     again = ShadowBook(tmp_path)
     assert again.books["v1"] == book.books["v1"]
+
+
+# ---------------------------------------------------------------------------------------------- ruling 2026-10-19
+def test_every_signal_is_its_own_shadow_trade_up_to_the_cap_and_each_outcome_is_its_own_label(tmp_path):
+    """Up to max_open_per_agent concurrent shadow trades per agent; a signal beyond the cap is counted, not traded,
+    and every trade taken still exits exactly as its own (unthinned) triple-barrier label."""
+    bars = _bars(seed=2, vol=0.15)                         # quiet: trades run long, so the cap binds
+    atr = pd.Series(np.full(len(bars), 2.0))
+    spec = BarrierSpec(target_atr=1.5, stop_atr=1.0, max_bars=16)
+    idx = np.arange(20, 360, 3)
+    signals = pd.DataFrame({"idx": idx, "side": np.where(idx % 2 == 0, 1, -1)})
+    labels = triple_barrier(bars, signals, spec, atr).set_index("idx")
+    book = ShadowBook(tmp_path, max_open_per_agent=3)
+    book.track("v1", bars["ts_utc"].iloc[0])
+    sig = dict(zip(signals["idx"], signals["side"]))
+    opened, peak = {}, 0
+    for i in range(len(bars)):
+        bar = bars.iloc[i]
+        book.on_bar(bar)
+        if i in sig:
+            opened[i] = book.open_trade(version="v1", agent_id="a", side=int(sig[i]), bar_ts=bar["ts_utc"],
+                                        entry=float(bar["ask_close"] if sig[i] > 0 else bar["bid_close"]),
+                                        atr_usd=2.0, target_atr=1.5, stop_atr=1.0, max_bars=16, p=0.6)
+        peak = max(peak, len(book.books["v1"].open))
+    taken = {i for i, t in opened.items() if t is not None}
+    assert peak == 3                                       # concurrency reached the cap, never more
+    skipped = len(opened) - len(taken)
+    assert skipped > 0 and book.books["v1"].skipped_cap == skipped
+    one = one_at_a_time(triple_barrier(bars, signals, spec, atr))
+    assert len(taken) > len(one)                           # more trades than one at a time: the point of the ruling
+    for i in taken:
+        t = opened[i]
+        assert t is not None
+        if t.exit is None:
+            continue                                       # still open at the end of the path
+        assert t.barrier == labels.loc[i, "barrier_hit"] and t.ret == pytest.approx(labels.loc[i, "ret"])
+
+
+def test_the_shipped_shadow_cap_is_three_per_agent():
+    assert load_settings().shadow.max_open_per_agent == 3
+
+
+def _closed_trade(ts: pd.Timestamp, ret: float, agent_id: str = "a"):
+    from goldbot.engine.shadow import ShadowTrade
+    return ShadowTrade(version="v1", agent_id=agent_id, side=1, entry_ts=ts, entry=2400.0, stop=2398.0, target=2403.0,
+                       max_bars=4, p=0.6, exit_ts=ts + pd.Timedelta(minutes=15), exit=2400.0 * (1 + ret),
+                       barrier="time", ret=ret)
+
+
+def test_promotion_counts_independent_clusters_one_per_agent_per_session_day_not_raw_trades(tmp_path):
+    from goldbot.research.promotion import evaluate_promotion
+    book = ShadowBook(tmp_path, max_open_per_agent=3)
+    t0 = pd.Timestamp("2025-03-03 08:00", tz="UTC")
+    book.track("v1", t0)
+    rng = np.random.default_rng(3)
+    for d in range(20):                                    # 3 trades a session day for 20 days: 60 trades
+        for k in range(3):
+            r = float(rng.normal(0.001, 0.004))
+            book.books["v1"].closed.append(_closed_trade(t0 + pd.Timedelta(days=d, minutes=15 * k), r))
+    st = book.stats("v1", t0 + pd.Timedelta(weeks=5))
+    assert st.n_trades == 60 and st.n_clusters == 20 and st.t_stat is not None
+    bt = PerfStats(n_trades=300, sharpe_ann=1.0, hit_rate=0.6, max_dd=0.5, trades_per_week=10.0)
+    dec = evaluate_promotion(bt, st)
+    assert not dec.ready and dec.failed == ["shadow_length"]   # 60 trades but 20 clusters after 5 weeks: not ready
+    assert "20 independent clusters" in dec.checks[0].detail
+    # a shadow record without a cluster count (written before clustering) is never ready: fail closed
+    assert not evaluate_promotion(bt, st.model_copy(update={"n_clusters": None, "weeks": 9.0})).ready
+
+
+def test_trades_either_side_of_the_22_utc_rollover_or_of_two_agents_are_separate_clusters(tmp_path):
+    book = ShadowBook(tmp_path)
+    t0 = pd.Timestamp("2025-03-03 21:00", tz="UTC")
+    book.track("v1", t0)
+    book.books["v1"].closed += [_closed_trade(t0, 0.001), _closed_trade(t0 + pd.Timedelta(minutes=30), 0.001),
+                                _closed_trade(t0 + pd.Timedelta(hours=2), 0.001),
+                                _closed_trade(t0 + pd.Timedelta(hours=2), 0.001, agent_id="b")]
+    assert book.stats("v1", t0 + pd.Timedelta(weeks=1)).n_clusters == 3
+
+
+def test_the_cluster_robust_t_does_not_count_same_day_copies_as_new_evidence():
+    from goldbot.research.promotion import cluster_t_stat
+    rng = np.random.default_rng(0)
+    day = rng.normal(0.003, 0.01, 40)
+    r = np.repeat(day, 3)                                  # three identical trades a day: one piece of evidence
+    naive = r.mean() / (r.std(ddof=1) / np.sqrt(len(r)))
+    t = cluster_t_stat(r.tolist(), np.repeat(np.arange(40), 3).tolist())
+    indep = cluster_t_stat(day.tolist(), list(range(40)))
+    assert t is not None and indep is not None
+    assert t == pytest.approx(indep, rel=1e-9) and abs(t) < abs(naive) / 1.5
+    assert cluster_t_stat([0.1, 0.2], ["a", "a"]) is None  # one cluster: no t

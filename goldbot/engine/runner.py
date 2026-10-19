@@ -69,6 +69,7 @@ from goldbot.ops.cost_imputation import account_swap, paid_swap_per_oz
 from goldbot.ops.gates_phase import ClosedTrade, EntryAudit, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import CONTEXT_FEATURES, DEFAULT_FEATURE_NAMES
+from goldbot.research.rule_model import is_uncalibrated
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, hwm, open_risk, sizing
 from goldbot.risk.gate import PER_TRADE_REFUSALS, REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
 from goldbot.risk.limits_profile import LimitsPolicy, RiskLimitsCurrent
@@ -173,6 +174,9 @@ class EngineConfig(Record):
     approval_mode: str = "propose"   # propose | auto
     cost_probe: bool = False         # ADR 0037: min-lot demo orders mirroring challengers' shadow entries
     cost_probe_budget: float = Field(0.2, gt=0, le=1)   # ADR 0037: the probes' share of the day's loss allowance
+    cost_probe_max_open: int = Field(2, ge=1, le=2)     # ADR 0037 amendment: concurrent probe positions at most
+    cost_probe_max_loss: float = Field(4.0, gt=0)       # ADR 0037 amendment: a probe's loss at its stop, account ccy
+    shadow_max_open: int = Field(3, ge=1)               # settings shadow.max_open_per_agent (ruling 2026-10-19)
     symbol: str = "XAUUSD"
     decision_tf: str = "15m"
     magic_base: int = 260100
@@ -232,15 +236,7 @@ class EngineConfig(Record):
     # BACKLOG 36: the swap the daily projection charges for a rollover before the risk day ends until the cost table
     # measures the broker's own (`cost_imputation.account_swap`); production passes `settings_swap(settings)`, the
     # default is the shipped prior. Read on the engine's server clock (`server_tz`), whatever zone it names
-    swap_prior: SwapSpec = Field(default_factory=lambda: _shipped_swap_prior())
-
-
-def _shipped_swap_prior() -> SwapSpec:
-    """The settings defaults (`costs.swap_*`): what an engine built without settings charges until a table measures."""
-    from goldbot.config import CostSettings
-    f = CostSettings.model_fields
-    return SwapSpec(long_usd_per_lot=f["swap_long_usd_per_lot"].default, short_usd_per_lot=f["swap_short_usd_per_lot"].default,
-                    triple_weekday=f["swap_triple_weekday"].default)
+    swap_prior: SwapSpec = Field(default_factory=lambda: SwapSpec.shipped())
 
 
 class _Frame(Record):
@@ -316,7 +312,7 @@ class Engine:
         self._ladder: dict = {"ladder_atr": {tf: None for tf in LADDER_TIMEFRAMES}, "lot_terms": None}
         self._news: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
         # shadow book: version -> (family, model); champions and challengers paper-trade without orders
-        self.shadow = ShadowBook(cfg.state_dir) if cfg.shadow_host else None
+        self.shadow = ShadowBook(cfg.state_dir, cfg.shadow_max_open) if cfg.shadow_host else None
         self.shadow_models: dict[str, tuple[str, Model]] = {}
         self.set_shadow_models(shadow_models or {})
         Path(cfg.state_dir).mkdir(parents=True, exist_ok=True)
@@ -1085,6 +1081,9 @@ class Engine:
             # shadow only (share 0) like a shadow-only member of the population: the shadow book trades it, not the broker
             share = 0.0 if agent.shadow_only else 1.0 if self.live_shares is None else self.live_shares.get(agent.agent_id, 0.0)
             if share <= 0:
+                continue
+            if is_uncalibrated(model):       # ADR 0038: a rule model's p means "fired": it never sizes a live entry
+                decisions.append(self._record(agent, close_ts, 0.0, 0.0, "uncalibrated_rule_model"))
                 continue
             if self._busy(agent.agent_id):
                 continue      # one position (or pending proposal) per agent, as its labels were built

@@ -121,6 +121,9 @@ OUT=$("${SSH_BRAIN[@]}" "
   $RESUME
   echo engine=\$(systemctl is-active goldbot-engine@icm-demo)")
 echo "$OUT" | cut -c1-220
-echo "$OUT" | grep -q "\"result\":\"deployed\".*\"to\":\"$MAIN\"" || die "deploy record does not say deployed $MAIN"
+echo "$OUT" | grep -qE "\"result\":\"deployed(_degraded)?\".*\"to\":\"$MAIN\"" || die "deploy record does not say deployed $MAIN (refused, failed or rolled_back)"
+if echo "$OUT" | grep -q "\"result\":\"deployed_degraded\""; then   # running and not rolled back: a warning, not a failure
+  say "WARNING deployed with a degraded check: $(echo "$OUT" | grep -o '"detail":"[^"]*"' | head -1 | cut -c1-200)"
+fi
 echo "$OUT" | grep -q "engine=active" || die "engine not active after the deploy"
 say "DEPLOYED $MAIN"

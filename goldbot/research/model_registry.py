@@ -21,6 +21,7 @@ from pydantic import Field
 
 from goldbot.base import Record, UtcTimestamp, load_record
 from goldbot.research.model import MetaLabelModel
+from goldbot.research.rule_model import RuleModel
 
 Status = Literal["challenger", "champion", "previous", "retired"]
 
@@ -70,17 +71,18 @@ class ModelRegistry:
                 return e
         raise KeyError(version)
 
-    def load(self, entry: ModelEntry) -> MetaLabelModel:
+    def load(self, entry: ModelEntry) -> Any:
+        """The checked artefact: a MetaLabelModel, or a RuleModel (ADR 0038)."""
         data = (self.root / entry.artefact).read_bytes()
         digest = hashlib.sha256(data).hexdigest()
         if digest != entry.sha256:
             raise ValueError(f"artefact {entry.artefact} does not match its registered checksum; refusing to load")
         model = pickle.loads(data)
-        if not isinstance(model, MetaLabelModel):
-            raise TypeError(f"{entry.artefact} is not a MetaLabelModel")
+        if not isinstance(model, (MetaLabelModel, RuleModel)):
+            raise TypeError(f"{entry.artefact} is not a MetaLabelModel or a RuleModel")
         return model
 
-    def champion_models(self) -> dict[str, MetaLabelModel]:
+    def champion_models(self) -> dict[str, Any]:
         """agent_id -> champion model."""
         out = {}
         for aid in self.agent_ids():
@@ -89,12 +91,20 @@ class ModelRegistry:
                 out[aid] = self.load(ch)
         return out
 
-    def shadow_models(self) -> dict[str, tuple[str, MetaLabelModel]]:
+    def shadow_models(self) -> dict[str, tuple[str, Any]]:
         """version -> (agent_id, model) for every champion and challenger: what the shadow book paper-trades."""
         return {e.version: (e.agent_id, self.load(e)) for e in self.entries if e.status in ("champion", "challenger")}
 
     # ------------------------------------------------------------------ changes
-    def add_challenger(self, model: MetaLabelModel, *, family: str, agent_id: str, backtest: dict[str, Any],
+    def ensure_rule_challenger(self, *, family: str, agent_id: str, now: UtcTimestamp | None = None) -> ModelEntry | None:
+        """ADR 0038: a `RuleModel` challenger for a rule agent with no registry entry yet (any status), so it
+        shadow-trades; None (nothing written) when the agent has one. No backtest, so the weekly gate never promotes it."""
+        if self.by_agent(agent_id):
+            return None
+        return self.add_challenger(RuleModel(rule=family), family=family, agent_id=agent_id, backtest={}, now=now,
+                                   notes=["rule model (ADR 0038): p = rule fired, uncalibrated; shadow only"])
+
+    def add_challenger(self, model: MetaLabelModel | RuleModel, *, family: str, agent_id: str, backtest: dict[str, Any],
                        now: UtcTimestamp | None = None, notes: list[str] | None = None) -> ModelEntry:
         now = now or pd.Timestamp.now("UTC")
         version = f"{agent_id}-{now:%Y%m%dT%H%M%S}"
