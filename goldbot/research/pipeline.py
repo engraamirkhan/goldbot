@@ -18,7 +18,7 @@ from goldbot.features.mtf import merge_higher_tf
 from goldbot.features.registry import FULL_HISTORY
 from goldbot.features.technical import atr
 from goldbot.labels import SwapSpec, one_at_a_time, triple_barrier, uniqueness_weights
-from goldbot.labels.triple_barrier import BarrierSpec, triple_barrier_delayed
+from goldbot.labels.triple_barrier import BarrierSpec, triple_barrier_1m, triple_barrier_delayed
 from goldbot.research.gates import RULE_ONLY_LABEL, holdout_verdict, research_gates
 from goldbot.research.lot_fit import LotFitSpec, lot_fit_overlay
 from goldbot.research.metrics import day_summed_dsr, expectancy, summarize
@@ -143,7 +143,15 @@ def _label(spec: Specialist, bars: pd.DataFrame, bars_1m: pd.DataFrame | None, c
     """The labels of `cands`: at the signal close, or for a signal known only `spec.entry_delay_s` later (TradingView)
     at the first 1m open after it (`triple_barrier_delayed`), or for a rule entering at the next bar's open
     (`spec.entry_at_next_open`, H-45) at that bar's first 1m open; both need the 1m bars: refused without them rather
-    than labelled at the close it could not have traded."""
+    than labelled at the close it could not have traded. A rule pre-registered on 1m barriers (`spec.barriers_on_1m`,
+    H-48/H-49) enters at the close and searches its barriers on the 1m bars (`triple_barrier_1m`): refused without them
+    rather than labelled with the decision bar's stop-first tie."""
+    if spec.barriers_on_1m:
+        if spec.entry_delay_s > 0 or spec.entry_at_next_open:
+            raise ValueError(f"{spec.family}: 1m barriers with a delayed or next-open entry are not implemented")
+        if bars_1m is None:
+            raise ValueError(f"{spec.family} reads its barriers on 1m bars: prepare needs its 1m bars (bars_1m=)")
+        return triple_barrier_1m(bars, bars_1m, cands, ls, a, swap=swap, policy=spec.exit_spec)
     if spec.entry_delay_s <= 0 and not spec.entry_at_next_open:
         return triple_barrier(bars, cands, ls, a, swap=swap, policy=spec.exit_spec)
     if bars_1m is None:

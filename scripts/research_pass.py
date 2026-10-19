@@ -97,7 +97,8 @@ from typing import Any, NamedTuple
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 from goldbot.config import load_settings  # noqa: E402
 from goldbot.data.release import (  # noqa: E402
     bar_digest_refusal,
@@ -588,6 +589,16 @@ class Job(NamedTuple):
     pooled: bool
 
 
+def dispatch_refusal(specialist: str, pooled: str) -> str | None:
+    """Why a trial of `specialist` may not be dispatched now (`Specialist.dispatch_refusal`, read from the committed
+    tree at ROOT), or None: checked before any bar is read or any trial charged. A staged pre-registration refuses its
+    later stage until the earlier stage's committed result passes (H-49 stage 2, prereg-kb-2026-10-18.md section 2;
+    quant review 2026-10-19). A pooled run (`pooled`) never includes a screening family."""
+    if pooled or specialist not in SPECIALISTS:
+        return None
+    return SPECIALISTS[specialist].dispatch_refusal(ROOT)
+
+
 def make_jobs(args: argparse.Namespace, variants: list[dict[str, Any]]) -> list[Job]:
     if args.pooled:
         tf = args.pooled
@@ -657,6 +668,9 @@ def main() -> int:
     if tv_run and (args.discover or args.cpcv or args.h16 or args.rule_ref == LOOP_RULE_REF):
         raise SystemExit("--specialist tv_event runs TV_GRID_V1 walk-forward trials only (research/tv_grid.py)")
     variants = [{}] if args.pooled else parse_variants(args.specialist, args.variants)
+    refusal = None if args.cpcv else dispatch_refusal(args.specialist, args.pooled)
+    if refusal:
+        raise SystemExit(refusal)
     if args.lot_fit and (args.discover or args.cpcv or args.h16):
         raise SystemExit("--lot-fit reports on the walk-forward; it is not wired into --discover, --cpcv or --h16")
     settings = load_settings()
@@ -812,7 +826,7 @@ def _run(args: argparse.Namespace, jobs: list[Job], extra_cost: float, holdout: 
         cand_ctx = {**(feat_ctx or {}), "tv_indicators": tv_long} if tv_jobs else feat_ctx
         preps = [prepare(s, b_dec, context, ctx=cand_ctx, extra_cost_usd=extra_cost, holdout=holdout,
                          score_holdout=args.score_holdout, frame=frame, swap=swap,
-                         bars_1m=b1 if s.entry_delay_s or s.entry_at_next_open else None) for s in job.specs]
+                         bars_1m=b1 if s.needs_bars_1m else None) for s in job.specs]
         # event floors: research.screen_min_events, or the daily-signal override (owner ruling A), set before the run;
         # the daily override is retire-only, so a pass still needs research.screen_min_events
         floors = screen_floors(tf if job.pooled else signal_timeframe(job.specs[0]), settings.research)

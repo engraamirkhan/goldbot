@@ -152,21 +152,27 @@ def triple_barrier(bars: pd.DataFrame, signals: pd.DataFrame, spec: BarrierSpec,
         rows.append({"idx": idx, "side": side, "t_entry": e, "t_exit": t_exit, "bars_held": t_exit - e + 1,
                      "entry": entry, "exit": exit_px, "ret": ret, "label": label, "barrier_hit": hit,
                      "target_hit": int(hit == "target")})
-    out = pd.DataFrame(rows)
-    if not out.empty:
-        bar_ts = pd.DatetimeIndex(pd.to_datetime(bars["ts_utc"], utc=True))
-        out["ts_utc"] = bar_ts[out["idx"].to_numpy()]
-        out["ts_exit"] = bar_ts[out["t_exit"].to_numpy()]
-        if "target_atr" in signals.columns:
-            out["target_atr"] = signals.set_index("idx")["target_atr"].groupby(level=0).first().reindex(
-                out["idx"]).to_numpy(dtype=float)
-        if swap is not None:
-            close = _bar_close_times(bars)
-            nights = rollover_nights(close[out["idx"].to_numpy()], close[out["t_exit"].to_numpy()], swap.server_tz,
-                                     swap.triple_weekday)
-            out["swap_nights"] = nights
-            out["swap_ret"] = nights * swap.usd_per_oz(out["side"].to_numpy()) / out["entry"].to_numpy(dtype=float)
-            out["ret"] = out["ret"] + out["swap_ret"]
+    return _finish(pd.DataFrame(rows), bars, signals, swap)
+
+
+def _finish(out: pd.DataFrame, bars: pd.DataFrame, signals: pd.DataFrame, swap: SwapSpec | None) -> pd.DataFrame:
+    """The label rows (positions in `bars`) plus their bar stamps, the candidate's own `target_atr` when the signals
+    carry one, and the swap (see `triple_barrier`)."""
+    if out.empty:
+        return out
+    bar_ts = pd.DatetimeIndex(pd.to_datetime(bars["ts_utc"], utc=True))
+    out["ts_utc"] = bar_ts[out["idx"].to_numpy()]
+    out["ts_exit"] = bar_ts[out["t_exit"].to_numpy()]
+    if "target_atr" in signals.columns:
+        out["target_atr"] = signals.set_index("idx")["target_atr"].groupby(level=0).first().reindex(
+            out["idx"]).to_numpy(dtype=float)
+    if swap is not None:
+        close = _bar_close_times(bars)
+        nights = rollover_nights(close[out["idx"].to_numpy()], close[out["t_exit"].to_numpy()], swap.server_tz,
+                                 swap.triple_weekday)
+        out["swap_nights"] = nights
+        out["swap_ret"] = nights * swap.usd_per_oz(out["side"].to_numpy()) / out["entry"].to_numpy(dtype=float)
+        out["ret"] = out["ret"] + out["swap_ret"]
     return out
 
 
@@ -225,14 +231,15 @@ def triple_barrier_delayed(bars: pd.DataFrame, bars_1m: pd.DataFrame, signals: p
     entry is rebuilt from its 1m bars from the entry on, so no price between the close and the entry reaches the label.
     The time barrier still counts `spec.max_bars` decision bars (or the candidate's own `max_bars`), the entry's own
     (partial) bar first. Columns as `triple_barrier`, positions in `bars`; a signal whose entry falls after the last bar
-    is dropped. A zero `delay` is an entry at the next bar's open (its first 1m bar)."""
+    is dropped. A zero `delay` is an entry at the next bar's open (its first 1m bar). A candidate's own `target_atr`
+    (signals column) is its target, as in `triple_barrier`."""
     close = _bar_close_times(bars)
     b1 = bars_1m.sort_values("ts_utc").reset_index(drop=True)
     t1 = pd.DatetimeIndex(pd.to_datetime(b1["ts_utc"], utc=True))
     a = atr.to_numpy(dtype=float)
     out = []
-    for idx, side, hold in zip(signals["idx"].to_numpy().astype(int), signals["side"].to_numpy().astype(int),
-                               _max_bars(signals, spec)):
+    for idx, side, hold, tmult in zip(signals["idx"].to_numpy().astype(int), signals["side"].to_numpy().astype(int),
+                                      _max_bars(signals, spec), _target_atr(signals, spec)):
         k = int(t1.searchsorted(close[idx] + delay, side="left"))
         if k >= len(b1):
             continue
@@ -246,15 +253,57 @@ def triple_barrier_delayed(bars: pd.DataFrame, bars_1m: pd.DataFrame, signals: p
         sig = bars.iloc[[idx]].copy()
         sig["ask_close" if side > 0 else "bid_close"] = float(b1[f"{'ask' if side > 0 else 'bid'}_open"].iloc[k])
         mini = pd.concat([sig, stub, bars.iloc[j + 1:j + 1 + hold]], ignore_index=True)
-        res = triple_barrier(mini, pd.DataFrame({"idx": [0], "side": [side], "max_bars": [hold]}), spec,
-                             pd.Series(a[idx], index=mini.index), swap=swap, policy=policy)
+        res = triple_barrier(mini, pd.DataFrame({"idx": [0], "side": [side], "max_bars": [hold], "target_atr": [tmult]}),
+                             spec, pd.Series(a[idx], index=mini.index), swap=swap, policy=policy)
         if res.empty:
             continue
         res["idx"] = idx
         res["t_entry"] = j + res["t_entry"] - 1
         res["t_exit"] = j + res["t_exit"] - 1
-        out.append(res)
+        out.append(res if "target_atr" in signals.columns else res.drop(columns=["target_atr"]))
     return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
+
+
+def triple_barrier_1m(bars: pd.DataFrame, bars_1m: pd.DataFrame, signals: pd.DataFrame, spec: BarrierSpec,
+                      atr: pd.Series, swap: SwapSpec | None = None, policy: ExitPolicy | None = None) -> pd.DataFrame:
+    """`triple_barrier` with the barriers read on 1m bars, for a rule pre-registered with "entries/exits on 1m barriers"
+    (prereg-kb-2026-10-18.md section 1; quant review 2026-10-19, finding 1). Entry as `triple_barrier`, at the signal
+    bar's close (ask for longs, bid for shorts); the barriers are then searched minute by minute from that close, so a
+    decision bar that touches both is resolved by the minute that reached one first, and the stop counts first only
+    when both fall inside one minute. The time barrier is `triple_barrier`'s, the close of decision bar
+    idx + 1 + max_bars (the candidate's own `max_bars`/`target_atr` when the signals carry them). Columns as `triple_barrier`; t_entry/t_exit
+    are positions in `bars` (the exit's is the decision bar holding the exit minute). Plain barriers only: an active
+    exit `policy` is refused (ValueError), it is not implemented on 1m bars."""
+    if policy is not None and policy.active:
+        raise ValueError("triple_barrier_1m reads plain barriers only: an exit policy on 1m bars is not implemented")
+    n = len(bars)
+    close = _bar_close_times(bars)
+    b1 = bars_1m.sort_values("ts_utc").reset_index(drop=True)
+    t1 = pd.DatetimeIndex(pd.to_datetime(b1["ts_utc"], utc=True))
+    cols = ["ts_utc", "bid_high", "bid_low", "bid_close", "ask_high", "ask_low", "ask_close"]
+    a = atr.to_numpy(dtype=float)
+    rows = []
+    for idx, side, hold, tmult in zip(signals["idx"].to_numpy().astype(int), signals["side"].to_numpy().astype(int),
+                                      _max_bars(signals, spec), _target_atr(signals, spec)):
+        if idx + 1 >= n:
+            continue
+        last = min(idx + 1 + int(hold), n - 1)                    # the time barrier of `triple_barrier`
+        k0 = int(t1.searchsorted(close[idx], side="left"))       # the first minute after the signal's close
+        k1 = int(t1.searchsorted(close[last], side="left"))      # ... up to the time barrier's close
+        if k1 <= k0:
+            continue
+        mini = pd.concat([bars.iloc[[idx]][cols], b1.iloc[k0:k1][cols]], ignore_index=True)
+        res = triple_barrier(mini, pd.DataFrame({"idx": [0], "side": [side], "max_bars": [k1 - k0],
+                                                 "target_atr": [tmult]}), spec, pd.Series(a[idx], index=mini.index))
+        if res.empty:
+            continue
+        r = res.iloc[0]
+        minute = t1[k0 + int(r["t_exit"]) - 1]
+        t_exit = min(int(close.searchsorted(minute, side="right")), last)
+        rows.append({"idx": idx, "side": side, "t_entry": idx + 1, "t_exit": t_exit, "bars_held": t_exit - idx,
+                     "entry": float(r["entry"]), "exit": float(r["exit"]), "ret": float(r["ret"]),
+                     "label": int(r["label"]), "barrier_hit": str(r["barrier_hit"]), "target_hit": int(r["target_hit"])})
+    return _finish(pd.DataFrame(rows), bars, signals, swap)
 
 
 def one_at_a_time(labels: pd.DataFrame) -> pd.DataFrame:
