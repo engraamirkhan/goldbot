@@ -49,6 +49,7 @@ import pandas as pd
 
 from goldbot.base import FrozenRecord
 from goldbot.data.timeutil import epoch_ns
+from goldbot.research.promotion import EVIDENCE_START_UTC
 from goldbot.risk.adaptive import (
     AdaptiveChange,
     AdaptiveController,
@@ -147,10 +148,12 @@ def demo_trade_id(t: ClosedTrade) -> str:
 
 
 def demo_evidence(trades: Iterable[ClosedTrade], account_id: str, imputer: CostImputer, freezes: dict[str, int],
-                  before_ns: int) -> tuple[list[TradeEvidence], list[str]]:
+                  before_ns: int, *, evidence_start: pd.Timestamp | None = EVIDENCE_START_UTC,
+                  ) -> tuple[list[TradeEvidence], list[str]]:
     """The account's demo fills that closed before `before_ns`, in net R (the record's R less the imputed cost of a
     gross row). A fill whose net R cannot be known is a problem (fail closed), never dropped: dropping could hide a
-    loss."""
+    loss. ADR 0039: a fill opened before `evidence_start` (H-52, the history-gap fix) is `quarantined`; without an
+    entry time, when it closed before it."""
     out: list[TradeEvidence] = []
     problems: list[str] = []
     for t in trades:
@@ -164,16 +167,24 @@ def demo_evidence(trades: Iterable[ClosedTrade], account_id: str, imputer: CostI
             problems.append(f"no_net_r:{demo_trade_id(t)}")
             continue
         strategy = t.model_version if t.model_version in freezes else UNATTRIBUTED
+        opened = t.entry_utc if t.entry_utc is not None else t.exit_utc
         out.append(TradeEvidence(id=demo_trade_id(t), strategy=strategy, source="demo", exit_ns=exit_ns,
-                                 net_r=float(t.r - charge.r), min_lot_exception=bool(t.min_lot_exception)))
+                                 net_r=float(t.r - charge.r), min_lot_exception=bool(t.min_lot_exception),
+                                 quarantined=_quarantined(opened, evidence_start)))
     return out, problems
 
 
+def _quarantined(opened: pd.Timestamp, evidence_start: pd.Timestamp | None) -> bool:
+    from goldbot.research.promotion import quarantine_reason
+    return quarantine_reason(opened, evidence_start) is not None
+
+
 def shadow_evidence(book: ShadowBook, freezes: dict[str, int], *, extra_cost_usd: float, swap: SwapSpec,
-                    before_ns: int) -> list[TradeEvidence]:
+                    before_ns: int, evidence_start: pd.Timestamp | None = EVIDENCE_START_UTC) -> list[TradeEvidence]:
     """Closed shadow trades the version would have taken (`taken`), of versions that went live, closed before
     `before_ns`, in R of the initial stop less the measured extra cost (slippage both sides + commission, USD per oz)
-    and the paid swap. Shadow trades only tighten (the controller's rule), so they need no lot fit to be safe."""
+    and the paid swap. Shadow trades only tighten (the controller's rule), so they need no lot fit to be safe. ADR
+    0039: one opened before `evidence_start` (H-52) is `quarantined`."""
     from goldbot.ops.cost_imputation import paid_swap_per_oz
     out: list[TradeEvidence] = []
     for version, vb in sorted(book.books.items()):
@@ -188,17 +199,17 @@ def shadow_evidence(book: ShadowBook, freezes: dict[str, int], *, extra_cost_usd
                 continue
             cost = max(0.0, extra_cost_usd) + paid_swap_per_oz(swap, t.side, t.entry_ts, t.exit_ts)
             out.append(TradeEvidence(id=f"shadow:{version}:{_ns(t.entry_ts)}", strategy=version, source="shadow",
-                                     exit_ns=exit_ns, net_r=float(t.ret * t.entry / risk - cost / risk)))
+                                     exit_ns=exit_ns, net_r=float(t.ret * t.entry / risk - cost / risk),
+                                     quarantined=_quarantined(t.entry_ts, evidence_start)))
     return out
 
 
-def atr15_stats(bars: pd.DataFrame, before_ns: int) -> tuple[float | None, float | None]:
-    """(20-day median, 1-year 90th percentile) of ATR(14) on 15m bars closed before `before_ns`. None for both
-    without a year of bars or with the last bar more than ATR_MAX_LAG_DAYS old: the minimum-lot cap is then off
-    (ADR 0031 reading 11, fail closed)."""
+def _atr15(bars: pd.DataFrame, before_ns: int) -> tuple[np.ndarray, np.ndarray] | None:
+    """(bar times in epoch ns, ATR(14)) of the 15m bars closed before `before_ns`; None without a year of bars or
+    with the last bar more than ATR_MAX_LAG_DAYS old."""
     from goldbot.features.technical import atr
     if bars.empty or not {"ts_utc", "high", "low", "close"} <= set(bars.columns):
-        return None, None
+        return None
     b = bars.drop_duplicates("ts_utc", keep="last").sort_values("ts_utc")
     ts = epoch_ns(pd.DatetimeIndex(b["ts_utc"]))
     bar_ns = 15 * 60 * 10**9
@@ -206,13 +217,44 @@ def atr15_stats(bars: pd.DataFrame, before_ns: int) -> tuple[float | None, float
     b, ts = b[keep], ts[keep]
     day = 86_400 * 10**9
     if len(ts) < ATR_N + 1 or ts[0] > before_ns - ATR_MIN_SPAN_DAYS * day or ts[-1] < before_ns - ATR_MAX_LAG_DAYS * day:
+        return None
+    return ts, atr(b.reset_index(drop=True), ATR_N).to_numpy()
+
+
+def atr15_stats(bars: pd.DataFrame, before_ns: int) -> tuple[float | None, float | None]:
+    """(20-day median, 1-year 90th percentile) of ATR(14) on 15m bars closed before `before_ns`. None for both
+    without a year of bars or with the last bar more than ATR_MAX_LAG_DAYS old: the minimum-lot cap is then off
+    (ADR 0031 reading 11, fail closed)."""
+    got = _atr15(bars, before_ns)
+    if got is None:
         return None, None
-    a = atr(b.reset_index(drop=True), ATR_N).to_numpy()
+    ts, a = got
+    day = 86_400 * 10**9
     year = (ts >= before_ns - ATR_P90_DAYS * day) & np.isfinite(a)
     recent = (ts >= before_ns - ATR_MEDIAN_DAYS * day) & np.isfinite(a)
     if not recent.any() or not year.any():
         return None, None
     return float(np.median(a[recent])), float(np.quantile(a[year], 0.9))
+
+
+def atr15_daily_stats(bars: pd.DataFrame, before_ns: int) -> tuple[float | None, float | None]:
+    """ADR 0039's volatility regime, like with like (quant review 2026-10-19): each UTC day's median ATR15, then the
+    median of the last ATR_MEDIAN_DAYS of them and the 90th percentile of the last year's. A per-bar p90 is set by
+    the busiest session hour, which a 20-day median never reaches. None for both on the same data rules as
+    `atr15_stats` (unknown: no regime)."""
+    got = _atr15(bars, before_ns)
+    if got is None:
+        return None, None
+    ts, a = got
+    day = 86_400 * 10**9
+    ok = np.isfinite(a)
+    daily = pd.Series(a[ok]).groupby(ts[ok] // day).median()
+    days = daily.index.to_numpy() * day
+    year = daily[days >= before_ns - ATR_P90_DAYS * day]
+    recent = daily[days >= before_ns - ATR_MEDIAN_DAYS * day]
+    if recent.empty or year.empty:
+        return None, None
+    return float(recent.median()), float(year.quantile(0.9))
 
 
 class EngineFacts(FrozenRecord):
@@ -253,13 +295,15 @@ def engine_facts(state_dir: Path, account_id: str, now_ns: int) -> EngineFacts |
 
 def build_evidence(account_id: str, as_of_ns: int, *, demo: Sequence[TradeEvidence], shadow: Sequence[TradeEvidence],
                    freezes: dict[str, int], drawdown: float, stage: Stage, cost_ratio_20d: float | None,
-                   atr15: tuple[float | None, float | None]) -> Evidence:
+                   atr15: tuple[float | None, float | None],
+                   vol: tuple[float | None, float | None] = (None, None)) -> Evidence:
     """One Evidence for the decision at `as_of_ns` (the start of the decision day): every trade since its strategy's
     freeze, closed before it."""
     used = {t.strategy for t in (*demo, *shadow)}
     return Evidence(account_id=account_id, as_of_ns=as_of_ns, trades=(*demo, *shadow),
                     freeze_ns={s: n for s, n in freezes.items() if s in used}, drawdown=drawdown, stage=stage,
-                    cost_ratio_20d=cost_ratio_20d, atr15_median_20d=atr15[0], atr15_p90_1y=atr15[1])
+                    cost_ratio_20d=cost_ratio_20d, atr15_median_20d=atr15[0], atr15_p90_1y=atr15[1],
+                    vol_median_20d=vol[0], vol_p90_1y=vol[1])
 
 
 # ---------------------------------------------------------------------------------------------- the owner's FYI
@@ -375,16 +419,18 @@ def decide_account(settings: Settings, acc: Account, accounts: Sequence[Account]
     if isinstance(facts, str):
         problems.append(facts)
     atr15: tuple[float | None, float | None] = (None, None)
+    vol: tuple[float | None, float | None] = (None, None)
     if bars_15m is not None:
         end = pd.Timestamp(as_of, unit="ns", tz="UTC")
         try:
-            atr15 = atr15_stats(bars_15m(end - pd.Timedelta(days=ATR_P90_DAYS + 2), end), as_of)
+            bars = bars_15m(end - pd.Timedelta(days=ATR_P90_DAYS + 2), end)
+            atr15, vol = atr15_stats(bars, as_of), atr15_daily_stats(bars, as_of)
         except Exception as exc:             # the store unreadable: the minimum-lot cap is off (fail closed)
             log.warning("limits_job: 15m bars unreadable (%s): ATR unknown", type(exc).__name__)
     ev: Evidence | None = None
     if not problems and not isinstance(facts, str):
         ev = build_evidence(acc.account_id, as_of, demo=demo, shadow=shadow, freezes=freezes,
-                            drawdown=facts.drawdown, stage=facts.stage, cost_ratio_20d=None, atr15=atr15)
+                            drawdown=facts.drawdown, stage=facts.stage, cost_ratio_20d=None, atr15=atr15, vol=vol)
     if problems:
         dq("adaptive_limits_evidence_missing", f"{acc.account_id}: {', '.join(problems[:10])}")
     ctl = AdaptiveController(state_dir, bounds, dq=dq, clock=lambda: now_ns)
@@ -503,7 +549,7 @@ def check_limits_controller(ctx: HealthContext, account_id: str) -> list[Check]:
                          f"{_pct(L.weekly_cap)}, minimum-lot cap {_pct(L.min_lot_risk_cap)}")]
 
 
-__all__ = ["UNATTRIBUTED", "EngineFacts", "adaptive_enabled", "dynamic_enabled", "atr15_stats", "bounds_for", "build_evidence",
+__all__ = ["UNATTRIBUTED", "EngineFacts", "adaptive_enabled", "dynamic_enabled", "atr15_daily_stats", "atr15_stats", "bounds_for", "build_evidence",
            "change_notice", "check_limits_controller", "decide_account", "decision_day_of", "demo_evidence",
            "market_closed_day",
            "engine_facts", "limits_job", "shadow_evidence", "strategy_freezes"]

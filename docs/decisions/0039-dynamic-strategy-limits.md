@@ -14,18 +14,22 @@ One new decided field in the nightly ADR 0031 decision (`goldbot/risk/adaptive.p
 account's `dynamic_limits` flag (accounts.yaml, default off; off = ADR 0031 exactly):
 
 1. Per strategy (model version) s, on demo fills and taken shadow trades after its freeze, closed before the decision
-   day: f_s = ADR 0031 A1's quarter-Kelly per-trade fraction (min of the trade and day terms, before /3%);
-   w = n_days/(n_days+20); r_s = base + w(f_s - base), base = the account's risk per trade (0.5%). Quantised DOWN to
-   0.1% (rounding never raises risk), clamped to [0.25%, ceiling]. LCB <= 0 gives 0.25%; fewer than 2 trading days
-   gives the base (`strategy_risk`).
+   day, and opened after the H-52 history-gap fix (`EVIDENCE_START_UTC`, 2026-10-19 13:49 UTC; earlier trades are
+   `quarantined`, still read by ADR 0031): f_s = the quarter-Kelly PER-TRADE fraction, A1's daily fraction over the
+   mean trades per day N̄_s, i.e. min((LCB_s/N̄_s)/(4·E[r²]_s), LCB_s/(4·E[D_s²])) with LCB_s on the daily sums;
+   w = n_days/(n_days+20); r_s = base + w(min(f_s, ceiling) - base) (f is clamped BEFORE shrinking, so a few very
+   good days cannot reach the cap), base = the account's risk per trade (0.5%). Quantised DOWN to 0.1% (rounding
+   never raises risk), clamped to [0.25%, ceiling]. LCB <= 0 gives 0.25%; fewer than 2 trading days gives the base
+   (`strategy_risk`). Quant review 2026-10-19 (before any replay) fixed the units, the clamp order and the quarantine.
 2. The target is r_s on demo fills (at most the base with fewer than 20 demo fills of s), lowered by r_s on demo +
    shadow: shadow only tightens. Below the current value: lowered at once, any time. Above it by half a step: one
    0.1% step up at the risk-day roll after 3 consecutive qualifying days and 10 new demo fills of s since its last
    rise, never within 5 days of a tighten of s or of any account limit (ADR 0031's cooldown).
 3. Ceilings: demo = the 1% per-trade hard limit (RiskSettings `le=0.01`); live/tiny-live = the base (tighten only;
    dynamic limits on live stay owner-only).
-4. Daily allowance: one new tighten rule on ADR 0031's ladder: when the 20-day median ATR15 is >= its 1-year p90
-   (the boundary included) the daily cap steps down one rung, once on entering the regime (no ratchet), and does not
+4. Daily allowance: one new tighten rule on ADR 0031's ladder: when the 20-day median of the DAILY median ATR15 is
+   >= the 1-year p90 of the same daily series (like with like: a per-bar p90 is set by the busiest session hour and
+   would almost never be reached; `atr15_daily_stats`; the boundary included) the daily cap steps down one rung, once on entering the regime (no ratchet), and does not
    loosen while the regime holds. Unknown ATR is no regime.
 5. Intraday factors for the engine (lane B applies them at each decision; they only lower r): k_vol = 0.5 in the
    regime; k_dd = 1 -> 0.5 linearly as the drawdown from the high-water mark goes 2% -> 4%; k_day = 0.5 once today's
