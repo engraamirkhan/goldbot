@@ -758,8 +758,10 @@ def _dynamic(eng: Engine) -> cost_probe.CostProbe:
     return eng.probe
 
 
-def _history(eng: Engine, *losses: float) -> None:
-    """Closed probes from an earlier day, each with its loss at the stop (no P&L today, no open slot)."""
+def _history(eng: Engine, *losses: float, native: bool = True) -> None:
+    """Closed probes from an earlier day (no P&L today, no open slot), each with its loss at the strategy's own stop
+    (`native_stop_loss`) and, as sent, that loss clamped to the £4 ceiling (`stop_loss`). `native=False`: rows written
+    before the native loss was recorded."""
     assert eng.probe is not None
     old = pd.Timestamp("2025-03-01 12:00", tz="UTC")
     with eng.probe.db.write() as conn:
@@ -767,7 +769,7 @@ def _history(eng: Engine, *losses: float) -> None:
             cost_probe.LEDGER.upsert(conn, cost_probe.ProbeRecord(
                 client_order_id=f"cp-hist-{i}", account_id="icm-demo", agent_id="h", side=1, lots=0.01,
                 sent_utc=old + pd.Timedelta(minutes=i), exit_utc=old + pd.Timedelta(minutes=i), pnl=0.0,
-                stop_loss=loss))
+                stop_loss=min(loss, 4.0), native_stop_loss=loss if native else None))
 
 
 def test_with_dynamic_limits_a_probe_inside_the_ceiling_keeps_its_own_stop_and_records_its_native_loss(tmp_path):
@@ -822,9 +824,9 @@ def test_with_dynamic_limits_off_the_configured_values_apply_and_the_record_says
 
 
 @pytest.mark.parametrize(("losses", "want", "why"), [
-    ((6.0, 6.0, 7.0), 3, "budget"),                 # floor(0.4 x 50 / 6) = 3
-    ((1.0, 1.0, 1.0), 4, "config_cap"),             # floor(20 / 1) = 20, never above the configured 4
-    ((50.0, 60.0, 70.0), 1, "budget"),              # floor(20 / 60) = 0, never below one
+    ((6.0, 6.0, 6.0, 7.0, 7.0), 3, "budget"),       # floor(0.4 x 50 / 6) = 3, though each was sent clamped to £4
+    ((1.0, 1.0, 1.0, 1.0, 1.0), 4, "config_cap"),   # floor(20 / 1) = 20, never above the configured 4
+    ((50.0, 60.0, 60.0, 70.0, 70.0), 1, "budget"),  # floor(20 / 60) = 0, never below one
 ])
 def test_the_dynamic_probe_count_comes_from_the_budget_over_the_median_probe_stop_loss_and_never_above_the_config(
         tmp_path, monkeypatch, losses, want, why):
@@ -851,7 +853,7 @@ def test_the_dynamic_probe_limits_fail_closed_to_the_configured_values(tmp_path,
     monkeypatch.setattr(cost_probe, "_limit", lambda e: 50.0)
     lim = cost_probe.probe_limits(eng, probe)                                       # no probe history yet
     assert (lim.max_open, lim.open_basis) == (4, "fixed:no_history")
-    _history(eng, 60.0)
+    _history(eng, *[60.0] * cost_probe.PROBE_LOSS_MIN_ROWS)
 
     def unreadable() -> Any:
         raise sqlite3.OperationalError("disk I/O error")
@@ -864,11 +866,46 @@ def test_the_dynamic_probe_limits_fail_closed_to_the_configured_values(tmp_path,
                                                                             "fixed:limit_unknown")
 
 
-def test_with_dynamic_limits_a_lower_probe_count_holds_back_the_second_probe_at_a_close(tmp_path, monkeypatch):
+def test_the_dynamic_probe_count_reads_the_strategies_own_stops_not_the_clamped_ones(tmp_path, monkeypatch):
+    """Quant review: the loss as sent is clamped to budget / max_open, so a median of it can never tighten the count.
+    Rows without the native loss (written before) and fewer than PROBE_LOSS_MIN_ROWS with it give the configured
+    count."""
+    eng, pb, tick, close = _two_agents(tmp_path)
+    probe = _dynamic(eng)
+    monkeypatch.setattr(cost_probe, "_limit", lambda e: 50.0)
+    _history(eng, *[60.0] * 10, native=False)                                       # sent at £4, native unknown
+    assert (cost_probe.probe_limits(eng, probe).max_open, cost_probe.probe_limits(eng, probe).open_basis) == \
+        (4, "fixed:no_history")
+    with probe.db.write() as conn:
+        for i in range(cost_probe.PROBE_LOSS_MIN_ROWS - 1):
+            cost_probe.LEDGER.upsert(conn, cost_probe.ProbeRecord(
+                client_order_id=f"cp-new-{i}", account_id="icm-demo", agent_id="h", side=1, lots=0.01,
+                sent_utc=close - pd.Timedelta(days=1, minutes=-i), stop_loss=4.0, native_stop_loss=60.0))
+    assert cost_probe.probe_limits(eng, probe).open_basis == "fixed:no_history"      # one row short
+    with probe.db.write() as conn:
+        cost_probe.LEDGER.upsert(conn, cost_probe.ProbeRecord(
+            client_order_id="cp-new-last", account_id="icm-demo", agent_id="h", side=1, lots=0.01,
+            sent_utc=close - pd.Timedelta(hours=1), stop_loss=4.0, native_stop_loss=60.0))
+    assert cost_probe.probe_limits(eng, probe).max_open == 1                         # floor(20 / 60), at least one
+
+
+def test_a_clamped_probe_records_the_loss_at_its_strategys_own_stop(tmp_path):
+    eng, pb, tick, close = _engine(tmp_path, max_loss=0.5)
+    eng.on_bar_close(close, tick)
+    eng2, *_ = _engine(tmp_path / "wide", max_loss=1_000.0)
+    eng2.on_bar_close(close, _bars_until(eng2, eng2.broker, close))                 # type: ignore[arg-type]
+    [clamped] = cost_probe.probes(tmp_path, "icm-demo")
+    [own] = cost_probe.probes(tmp_path / "wide", "icm-demo")
+    assert clamped.stop_loss is not None and clamped.stop_loss <= 0.5 + 1e-6
+    assert clamped.native_stop_loss is not None and clamped.native_stop_loss > clamped.stop_loss
+    assert clamped.native_stop_loss == pytest.approx(own.stop_loss, abs=0.02)       # the unclamped stop's loss
+
+
+def test_with_dynamic_limits_a_strategy_with_wide_stops_gets_fewer_probes(tmp_path, monkeypatch):
     eng, pb, tick, close = _two_agents(tmp_path)
     _dynamic(eng)
     monkeypatch.setattr(cost_probe, "_limit", lambda e: 50.0)
-    _history(eng, 50.0, 60.0, 70.0)                                                 # wide stops: one probe at a time
+    _history(eng, 50.0, 60.0, 60.0, 70.0, 70.0)                     # wide own stops, each sent clamped to £4
     eng.on_bar_close(close, tick)
     assert len(pb.positions()) == 1
     [order] = _probe_orders(eng)

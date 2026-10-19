@@ -86,8 +86,10 @@ MAX_SAME_SIDE = 2                   # amendment 3: open probes on one side at mo
 # amendment 3: no new probe once the day's allowance left after the open probes' risk and the new probe's max loss
 # would fall below this share of the day's loss limit (0.6 x £50 = £30: three real trades at the 1% cap)
 REAL_TRADE_RESERVE = 0.6
-# dynamic limits: the median loss at the stop of this many most recent probes sets the dynamic probe count
+# dynamic limits: the median loss at the strategy's own (unclamped) stop of this many most recent probes sets the
+# dynamic probe count, once at least PROBE_LOSS_MIN_ROWS probes have recorded it (fewer: the configured count)
 PROBE_LOSS_WINDOW = 20
+PROBE_LOSS_MIN_ROWS = 5
 
 
 def real_trade_reserve(probe_only: bool) -> float:
@@ -199,6 +201,9 @@ class ProbeRecord(FrozenRecord):
     probe_max_loss: float | None = None
     probe_max_open: int | None = None
     basis: str | None = None
+    # the loss at the strategy's own (unclamped) stop at the lots sent, account currency: what the dynamic probe count
+    # reads (`stop_loss` is clamped to the ceiling, so its median could never tighten the count). None on rows before
+    native_stop_loss: float | None = None
 
     @property
     def slippage_usd(self) -> float | None:
@@ -439,9 +444,11 @@ class ProbeLimits(FrozenRecord):
 def probe_limits(eng: Engine, probe: CostProbe) -> ProbeLimits:
     """Design item 4 (docs/design/dynamic-limits-2026-10-19.md): the per-probe ceiling is min(cfg max_loss,
     budget_share x the day's loss limit / cfg max_open) and the count clamp(floor(budget_share x limit / the median loss
-    at the stop of the last PROBE_LOSS_WINDOW probes), 1, cfg max_open). The day's limit is already dynamic (ADR 0031),
-    so both tighten with it; budget_share stays static. Fail closed: an unknown limit, an unreadable ledger or no probe
-    history gives the configured value."""
+    at the strategy's own stop of the last PROBE_LOSS_WINDOW probes), 1, cfg max_open). The median is of the native
+    (unclamped) loss: the loss as sent is clamped to the ceiling, so it could never tighten the count (quant review).
+    The day's limit is already dynamic (ADR 0031), so both tighten with it; budget_share stays static. Fail closed: an
+    unknown limit, an unreadable ledger or fewer than PROBE_LOSS_MIN_ROWS probes with a native loss gives the
+    configured value."""
     cfg_open, cfg_loss = eng.cfg.cost_probe_max_open, eng.cfg.cost_probe_max_loss
     if not probe.dynamic:
         return ProbeLimits(max_open=cfg_open, max_loss=cfg_loss, loss_basis="fixed", open_basis="fixed")
@@ -463,8 +470,9 @@ def probe_limits(eng: Engine, probe: CostProbe) -> ProbeLimits:
         log.warning("cost probe ledger unreadable (%s): the configured probe count", type(exc).__name__)
         return ProbeLimits(max_open=cfg_open, max_loss=max_loss, loss_basis=loss_basis,
                            open_basis="fixed:ledger_unreadable")
-    recent = [float(r.stop_loss) for r in rows if r.stop_loss is not None and r.stop_loss > 0][-PROBE_LOSS_WINDOW:]
-    if not recent:
+    recent = [float(r.native_stop_loss) for r in rows
+              if r.native_stop_loss is not None and r.native_stop_loss > 0][-PROBE_LOSS_WINDOW:]
+    if len(recent) < PROBE_LOSS_MIN_ROWS:
         return ProbeLimits(max_open=cfg_open, max_loss=max_loss, loss_basis=loss_basis, open_basis="fixed:no_history")
     n = math.floor(budget / statistics.median(recent))
     max_open, open_basis = (cfg_open, "config_cap") if n >= cfg_open else (max(1, n), "budget")
@@ -662,7 +670,7 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
                       position_id=res.position_id if filled else None,
                       fill_price=(res.price if res.price is not None else price) if filled else None,
                       stop_loss=round(loss, 2), taken=t.taken, probe_max_loss=applied["probe_max_loss"],
-                      probe_max_open=lim.max_open, basis=applied["basis"])
+                      probe_max_open=lim.max_open, basis=applied["basis"], native_stop_loss=round(native, 2))
     try:
         with probe.db.write() as conn:
             LEDGER.upsert(conn, rec)
