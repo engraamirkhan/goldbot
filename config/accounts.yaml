@@ -65,6 +65,11 @@ accounts:
     # until icm-probe is enabled. Switch-over (config only, reversible): icm-probe `enabled: true`; here
     # `shadow_host: false` and `cost_probe.enabled: false`; restart both engines. Two enabled shadow hosts fail at load.
     shadow_host: false        # the shadow book moved to icm-probe (2026-10-19 switch-over)
+    # owner 2026-10-19 ("loss per trade, daily loss ... dynamic according to strategy", docs/design/
+    # dynamic-limits-2026-10-19.md): per-strategy risk per trade from the nightly controller, tighten-only intraday
+    # factors; the ceilings above and the RiskGate's caps still bind. Default false; false + restart is the rollback.
+    # A live account stays false until the owner decides (owner-only)
+    dynamic_limits: true
   icm-probe:
     broker: icm
     mode: demo
@@ -92,6 +97,11 @@ accounts:
     shadow_host: true         # counts only once enabled: then icm-demo must drop its own flag
     # never a real trade: no live agents, and the engine refuses any entry that is not a cost probe (fail closed)
     probe_only: true
+    # dynamic limits (design 2026-10-19 item 4): each probe's loss is its own stop's at 0.01 lot, at most max_loss
+    # and budget_share x the day's limit / max_open; the probe count is budget_share x the day's limit / the median
+    # loss at the stop of the last 20 probes, 1 to max_open. max_loss and max_open are the ceilings and the fallback
+    # (an unknown limit or no probe history gives them); every probe row says which applied (basis)
+    dynamic_limits: true
   vantage-demo:
     broker: vantage
     mode: demo
@@ -114,6 +124,7 @@ accounts:
     symbol: XAUUSD
     magic_base: 260300
     enabled: false  # unlocked by the paper -> tiny-live gate
+    dynamic_limits: false     # owner-only on real money (design 2026-10-19); tighten-only if ever turned on
   vantage-live:
     broker: vantage
     mode: live
@@ -124,6 +135,7 @@ accounts:
     symbol: XAUUSD
     magic_base: 260400
     enabled: false
+    dynamic_limits: false     # owner-only on real money (design 2026-10-19)
 
 tradingview:
   # Webhook secret and any session cookie for the ideas fetcher also live in the keyring (keys below).

@@ -748,3 +748,140 @@ def test_the_probe_budget_share_is_configured_per_account_and_bounded():
     assert _account(cost_probe={"enabled": True}).cost_probe.budget_share == 0.2
     with pytest.raises(ValidationError):
         _account(cost_probe={"enabled": True, "budget_share": 1.5})
+
+
+# ------------------------------------------------------------------------------------------------ dynamic limits
+# docs/design/dynamic-limits-2026-10-19.md item 4: "per probe, max_loss = min(loss of 0.01 lot at the challenger's own
+# label-spec stop, budget_share x daily limit / max_open). max_open_dyn = clamp(floor(budget_share x limit / median
+# probe stop loss), 1, cfg.max_open). Config max_loss/max_open become the ceilings and the fallback."
+def _dynamic(eng: Engine) -> cost_probe.CostProbe:
+    assert eng.probe is not None
+    eng.probe.dynamic = True
+    return eng.probe
+
+
+def _history(eng: Engine, *losses: float) -> None:
+    """Closed probes from an earlier day, each with its loss at the stop (no P&L today, no open slot)."""
+    assert eng.probe is not None
+    old = pd.Timestamp("2025-03-01 12:00", tz="UTC")
+    with eng.probe.db.write() as conn:
+        for i, loss in enumerate(losses):
+            cost_probe.LEDGER.upsert(conn, cost_probe.ProbeRecord(
+                client_order_id=f"cp-hist-{i}", account_id="icm-demo", agent_id="h", side=1, lots=0.01,
+                sent_utc=old + pd.Timedelta(minutes=i), exit_utc=old + pd.Timedelta(minutes=i), pnl=0.0,
+                stop_loss=loss))
+
+
+def test_with_dynamic_limits_a_probe_inside_the_ceiling_keeps_its_own_stop_and_records_its_native_loss(tmp_path):
+    eng, pb, tick, close = _engine(tmp_path, max_loss=1_000.0)
+    _dynamic(eng)
+    eng.on_bar_close(close, tick)
+    [tr] = eng.open.values()
+    assert eng.shadow is not None
+    [st] = [t for b in eng.shadow.books.values() for t in b.open]
+    [rec] = cost_probe.probes(tmp_path, "icm-demo")
+    assert tr.sl is not None and rec.requested_price is not None
+    assert abs(rec.requested_price - tr.sl) == pytest.approx(abs(st.entry - st.stop), abs=0.01)   # its own stop
+    assert rec.stop_loss is not None and rec.probe_max_loss == pytest.approx(rec.stop_loss, abs=0.01)
+    assert rec.basis is not None and rec.basis.startswith("max_loss=native_stop")
+    [order] = _probe_orders(eng)
+    assert order["probe_max_loss"] == rec.probe_max_loss and order["probe_max_open"] == 2
+    assert order["basis"] == rec.basis
+
+
+def test_with_dynamic_limits_the_budgets_fair_share_caps_a_probe_below_the_configured_max_loss(tmp_path, monkeypatch):
+    """A day limit tightened to £5: 0.2 x 5 / 2 probes = £0.50 a probe, under the configured £4 ceiling."""
+    eng, pb, tick, close = _engine(tmp_path, max_loss=4.0)
+    _dynamic(eng)
+    monkeypatch.setattr(cost_probe, "_limit", lambda e: 5.0)
+    eng.on_bar_close(close, tick)
+    [rec] = cost_probe.probes(tmp_path, "icm-demo")
+    assert rec.stop_loss is not None and rec.stop_loss <= 0.5 + 1e-6
+    assert rec.probe_max_loss == pytest.approx(0.5) and rec.basis is not None
+    assert rec.basis.startswith("max_loss=budget_cap")
+
+
+def test_with_dynamic_limits_the_configured_max_loss_stays_the_ceiling(tmp_path):
+    """The paper account loses $1 per $1 of stop at 0.01 lot: a $0.5 ceiling clamps a native stop wider than it."""
+    eng, pb, tick, close = _engine(tmp_path, max_loss=0.5)
+    _dynamic(eng)
+    eng.on_bar_close(close, tick)
+    [rec] = cost_probe.probes(tmp_path, "icm-demo")
+    assert rec.stop_loss is not None and rec.stop_loss <= 0.5 + 1e-6
+    assert rec.probe_max_loss == pytest.approx(0.5) and rec.basis is not None
+    assert rec.basis.startswith("max_loss=config_cap")
+
+
+def test_with_dynamic_limits_off_the_configured_values_apply_and_the_record_says_fixed(tmp_path, monkeypatch):
+    eng, pb, tick, close = _engine(tmp_path, max_loss=4.0)
+    assert eng.probe is not None and eng.probe.dynamic is False                    # off unless the account says on
+    monkeypatch.setattr(cost_probe, "_limit", lambda e: 5.0)                         # ignored while off
+    lim = cost_probe.probe_limits(eng, eng.probe)
+    assert (lim.max_open, lim.max_loss, lim.loss_basis, lim.open_basis) == (2, 4.0, "fixed", "fixed")
+    eng.on_bar_close(close, tick)
+    [rec] = cost_probe.probes(tmp_path, "icm-demo")
+    assert rec.probe_max_loss == 4.0 and rec.probe_max_open == 2 and rec.basis == "max_loss=fixed;max_open=fixed"
+
+
+@pytest.mark.parametrize(("losses", "want", "why"), [
+    ((6.0, 6.0, 7.0), 3, "budget"),                 # floor(0.4 x 50 / 6) = 3
+    ((1.0, 1.0, 1.0), 4, "config_cap"),             # floor(20 / 1) = 20, never above the configured 4
+    ((50.0, 60.0, 70.0), 1, "budget"),              # floor(20 / 60) = 0, never below one
+])
+def test_the_dynamic_probe_count_comes_from_the_budget_over_the_median_probe_stop_loss_and_never_above_the_config(
+        tmp_path, monkeypatch, losses, want, why):
+    eng, pb, tick, close = _two_agents(tmp_path)
+    probe = _dynamic(eng)
+    monkeypatch.setattr(cost_probe, "_limit", lambda e: 50.0)
+    _history(eng, *losses)
+    lim = cost_probe.probe_limits(eng, probe)
+    assert lim.max_open == want and lim.open_basis == why
+    assert lim.max_open <= eng.cfg.cost_probe_max_open
+
+
+def test_the_dynamic_probe_count_uses_only_the_most_recent_probes(tmp_path, monkeypatch):
+    eng, pb, tick, close = _two_agents(tmp_path)
+    probe = _dynamic(eng)
+    monkeypatch.setattr(cost_probe, "_limit", lambda e: 50.0)
+    _history(eng, *([60.0] * 5 + [1.0] * cost_probe.PROBE_LOSS_WINDOW))             # the old wide stops have aged out
+    assert cost_probe.probe_limits(eng, probe).max_open == 4
+
+
+def test_the_dynamic_probe_limits_fail_closed_to_the_configured_values(tmp_path, monkeypatch):
+    eng, pb, tick, close = _two_agents(tmp_path)
+    probe = _dynamic(eng)
+    monkeypatch.setattr(cost_probe, "_limit", lambda e: 50.0)
+    lim = cost_probe.probe_limits(eng, probe)                                       # no probe history yet
+    assert (lim.max_open, lim.open_basis) == (4, "fixed:no_history")
+    _history(eng, 60.0)
+
+    def unreadable() -> Any:
+        raise sqlite3.OperationalError("disk I/O error")
+    monkeypatch.setattr(probe.db, "connection", unreadable)
+    lim = cost_probe.probe_limits(eng, probe)
+    assert (lim.max_open, lim.open_basis) == (4, "fixed:ledger_unreadable")
+    monkeypatch.setattr(cost_probe, "_limit", lambda e: 0.0)
+    lim = cost_probe.probe_limits(eng, probe)
+    assert (lim.max_open, lim.max_loss, lim.loss_basis, lim.open_basis) == (4, 4.0, "fixed:limit_unknown",
+                                                                            "fixed:limit_unknown")
+
+
+def test_with_dynamic_limits_a_lower_probe_count_holds_back_the_second_probe_at_a_close(tmp_path, monkeypatch):
+    eng, pb, tick, close = _two_agents(tmp_path)
+    _dynamic(eng)
+    monkeypatch.setattr(cost_probe, "_limit", lambda e: 50.0)
+    _history(eng, 50.0, 60.0, 70.0)                                                 # wide stops: one probe at a time
+    eng.on_bar_close(close, tick)
+    assert len(pb.positions()) == 1
+    [order] = _probe_orders(eng)
+    assert order["probe_max_open"] == 1 and order["basis"].endswith("max_open=budget")
+
+
+def test_with_dynamic_limits_a_probe_whose_loss_cannot_be_computed_is_still_refused(tmp_path):
+    eng, pb, tick, close = _engine(tmp_path)
+    _dynamic(eng)
+    pb.loss_per_lot = lambda *a: None                                    # type: ignore[method-assign]
+    eng.on_bar_close(close, tick)
+    assert not pb.positions()
+    refused = [d for d in eng.decisions if d.get("action") == "cost_probe_refused:probe_loss_unknown"]
+    assert refused and refused[0]["basis"].startswith("max_loss=fixed:probe_loss_unknown")
