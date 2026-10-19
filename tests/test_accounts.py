@@ -132,6 +132,26 @@ def test_set_secret_never_falls_back_to_a_file_on_macos_or_windows(isolated, mon
     assert not (tmp_path / "state" / ".secrets.json").exists()
 
 
+def test_wine_on_a_linux_host_uses_the_linux_rule(isolated, monkeypatch, tmp_path):
+    """The MT5 boxes run Windows Python under Wine (sys.platform win32, no keyring): with the opt-in it stores to the
+    file (found bringing up the icm-probe box 2026-10-19); real Windows stays refused (the test above)."""
+    monkeypatch.setattr(acc_mod, "_PLATFORM", "win32")
+    monkeypatch.setattr(acc_mod, "_under_wine", lambda: True)
+    acc_mod.set_secret("k", "v")
+    assert (tmp_path / "state" / ".secrets.json").exists() and acc_mod.get_secret("k") == "v"
+    monkeypatch.delenv("GOLDBOT_ALLOW_PLAINTEXT")
+    monkeypatch.delenv("PYTHON_KEYRING_BACKEND", raising=False)
+    with pytest.raises(RuntimeError, match="GOLDBOT_ALLOW_PLAINTEXT"):
+        acc_mod.set_secret("k2", "v")                               # Wine without the opt-in: refused, as on Linux
+
+
+def test_under_wine_is_false_off_windows_and_when_unprovable(monkeypatch):
+    monkeypatch.setattr(acc_mod, "_PLATFORM", "linux")
+    assert acc_mod._under_wine() is False
+    monkeypatch.setattr(acc_mod, "_PLATFORM", "win32")              # no ctypes.WinDLL here: not provable -> real Windows
+    assert acc_mod._under_wine() is False
+
+
 def test_set_command_says_which_store_it_used(isolated, capsys):
     assert acc_mod.main(["set", "some-key"]) == 0
     assert "state/.secrets.json" in capsys.readouterr().out.replace("\\", "/")
