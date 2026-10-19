@@ -21,7 +21,7 @@ Point in time: every value is the replica's, stamped on the bar whose close make
 last price read. Research runs `candidates` on the whole series; the engine resumes the replica from the state carried
 one bar back (`state_lag` 1, `engine.replica_context.ReplicaShadow`) and decides on bar t only: both give the same
 decision (tests/test_box_break_close.py, prefix invariance). Shadow only: `replica_params` makes `shadow_only` true, so
-the engine gives it share 0 and only the shadow book trades it; its registry model is a `RuleModel` (ADR 0062).
+the engine gives it share 0 and only the shadow book trades it; its registry model is a `RuleModel` (ADR 0038).
 `screening` keeps it out of the loop grid, the pools and the default founders (the trial budget is untouched); the
 frozen roster (`ROSTER_TIMEFRAMES`) is what makes its three founders.
 """

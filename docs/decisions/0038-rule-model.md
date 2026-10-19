@@ -19,5 +19,6 @@ a live entry from an uncalibrated model (`uncalibrated_rule_model`).
 - No backtest on the entry: the weekly challenger gate cannot promote it. It expires after CHALLENGER_MAX_WEEKS like any
   challenger; the agent then follows the normal retraining path (a trained meta-label model on its candidates).
 - Live trading of a rule needs a passed research trial and a calibrated model through the existing gates; the replica
-  agents stay shadow only (`shadow_only`) regardless, so the demo cost probe does not mirror them (cost_probe.py
-  excludes shadow-only agents; changing that is a trading-safety decision, not taken here).
+  agents stay shadow only (`shadow_only`) regardless. By the trading-safety ruling of 2026-10-19 the demo cost probe
+  may mirror a frozen roster rule agent on a RuleModel (`cost_probe._mirrorable`); TradingView agents never. Such a
+  probe measures cost only and never counts as the agent's evidence.
