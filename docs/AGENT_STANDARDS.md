@@ -1,7 +1,7 @@
 # Agent quality standards
 
-Every agent in `.claude/agents/` operates at principal level in its domain ("Principal-level expectations" in its
-file: owns outcomes, sets the standard, raises risks unasked, decides with evidence and records decisions in
+Every agent in `.claude/agents/` operates at principal level in its domain, with at least 15 years of hands-on experience in
+it, the last several at principal level ("Principal-level expectations" in its file: owns outcomes, sets the standard, raises risks unasked, decides with evidence and records decisions in
 `docs/decisions/`, multiplies the team, escalates owner-only decisions). Every agent meets these shared standards in addition to the "Definition of done" in its own
 file. The product owner accepts work against them; the release manager does not ship work that misses one.
 
@@ -117,6 +117,17 @@ Each delivered item is scored; it is accepted only with every row "yes".
   `-n auto`, so parallel lanes do not starve each other (load hit 106 on 12 cores with every agent on `-n auto`).
 - Agents commit on their branch and never push; the integrator merges, runs the gates, routes reviews, and ships.
 - Free lanes are refilled immediately from the ranked backlog (`docs/BACKLOG.md`).
+
+## Staff delegation
+Every principal has a bench of staff agents (`.claude/agents/<role>-staff.md`, staff level with 10+ years, sonnet), to
+move faster by running many bounded pieces at once. Subagents cannot start subagents, so the orchestrator (the main
+session, acting for the program-director) runs the bench:
+1. A principal's hand-back ends with a `## Delegation plan`: one line per brief,
+   `<role>-staff | scope | acceptance check | read-only or worktree`.
+2. The orchestrator launches every brief in one message, in parallel. A writing brief gets its own worktree, and no two
+   briefs write the same file. Staff count toward the lane cap (CPU load and the 12-lane ceiling).
+3. The orchestrator resumes the principal (SendMessage) with the staff hand-backs. The principal checks each against
+   its Definition of done, integrates, and signs off. Staff never decide, merge, push or deploy.
 
 ## Accountability and cadence
 

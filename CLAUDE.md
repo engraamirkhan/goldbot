@@ -16,7 +16,10 @@ Owner: Aamir (engraamirkhan on GitHub). Personal project; keep everything inside
 
 ## Lifecycle agents (`.claude/agents/`)
 The `program-director` leads the program (roadmap, waves of parallel agents, integration, risks, status on #34).
-All agents operate at principal level in their domain (see each file's "Principal-level expectations").
+All agents operate at principal level in their domain, with at least 15 years of hands-on experience (see each file's "Principal-level expectations").
+Each principal has a bench of `<role>-staff` agents (staff level, sonnet) for parallel bounded pieces; the main session
+launches them from the principal's `## Delegation plan` and hands the results back for sign-off (docs/AGENT_STANDARDS.md
+"Staff delegation").
 Every work cycle starts with the `product-owner` (ranked docs/BACKLOG.md, acceptance criteria) and runs through:
 `architect` (software architect: plan against DESIGN/TRACEABILITY, read-only) -> `ui-ux-designer` for any screen or
 Telegram change -> `implementer`
