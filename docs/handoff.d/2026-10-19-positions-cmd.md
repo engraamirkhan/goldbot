@@ -1,0 +1,1 @@
+- `goldbot run positions [--account <id>] [--json]` (`goldbot/ops/positions.py`): read-only open trades per enabled account without the dashboard login (state files only; same builder as `/api/positions/open`, which now also carries `open_risk`). Over ssh: `bash -lc "goldbot run positions"`. Exit 1 when an orders file or the shadow book is unreadable.
