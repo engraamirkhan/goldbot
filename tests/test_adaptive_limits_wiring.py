@@ -594,21 +594,24 @@ class _TermsCurrent(RiskLimitsCurrent):
 class _Terms:
     """A controller that returns the given per-strategy terms on the account's ceilings (or defaults)."""
 
-    def __init__(self, defaults: Any, strategy_risk: dict[str, float], risk_terms: dict[str, Any] | None = None):
+    def __init__(self, defaults: Any, strategy_risk: dict[str, float], risk_terms: dict[str, Any] | None = None,
+                 vol_high: bool | None = None):
         self.inner, self.sr, self.rt = StaticController(defaults), strategy_risk, risk_terms or {}
+        self.vol_high = vol_high
 
     def current(self, account: Any, evidence: LimitsEvidence) -> RiskLimitsCurrent:
         c = self.inner.current(account, evidence)
-        return _TermsCurrent(**{**c.model_dump(), "strategy_risk": self.sr, "risk_terms": self.rt})
+        return _TermsCurrent(**{**c.model_dump(), "strategy_risk": self.sr, "risk_terms": self.rt,
+                                "vol_high": self.vol_high})
 
 
 def _dyn(tmp_path: Path, sr: dict[str, float], rt: dict[str, Any] | None = None, *, mode: Literal["demo", "live"] = "demo",
-         dynamic: bool = True) -> tuple[EngineLimits, SimpleNamespace]:
+         dynamic: bool = True, vol_high: bool | None = None) -> tuple[EngineLimits, SimpleNamespace]:
     a = _DynAccount(account_id="icm-demo", broker="icm", mode=mode, server="s", login=None, terminal_path="t",
                     server_tz="UTC", symbol="XAUUSD", magic_base=260100, enabled=True, daily_loss_limit_abs=50.0,
                     risk_overrides=OVERRIDES if mode == "demo" else None, dynamic_limits=dynamic)
     defaults = engine_limits(S, a)
-    pol = LimitsPolicy(a, defaults, _Terms(defaults, sr, rt))
+    pol = LimitsPolicy(a, defaults, _Terms(defaults, sr, rt, vol_high))
     eng = SimpleNamespace(state=AccountState(equity=1_000.0, balance_closed_hwm=1_000.0, day_start_equity=1_000.0,
                                              week_start_equity=1_000.0, open_positions=0, margin_used=0.0,
                                              last_tick_age_s=1.0, spread_points=20.0),
@@ -701,6 +704,51 @@ def test_restart_keeps_strategy_risk(tmp_path, phase_file, monkeypatch):
     assert eng.gate.limits.strategy_risk == {"v1": 0.004}
     el.apply(eng, T0 + pd.Timedelta(days=1))                           # type: ignore[arg-type]
     assert eng.gate.limits.strategy_risk == {"v1": 0.009}
+
+
+def test_a_restart_after_an_intraday_recovery_keeps_the_days_cut(tmp_path, phase_file):
+    """Trading-safety review 2026-10-19 (MEDIUM): the day's lowest scale is logged with the limits and a restart the
+    same risk day starts from it, so recovering equity and restarting never loosens the cut intraday."""
+    el, eng = _dyn(tmp_path, {"v1": 0.008})
+    eng.state.equity = 970.0                                           # k_dd 0.75 (3% down) x k_day 0.5 (30 of 50)
+    el.apply(eng, T0)                                                  # type: ignore[arg-type]
+    assert eng.gate.limits.risk_scale == pytest.approx(0.375)
+    assert LimitsStore(tmp_path).changes("icm-demo")[-1].current.risk_scale == pytest.approx(0.375)
+    el2, eng2 = _dyn(tmp_path, {"v1": 0.008})                          # the restart, equity recovered
+    el2.apply(eng2, T0 + pd.Timedelta(hours=1))                        # type: ignore[arg-type]
+    assert eng2.gate.limits.risk_scale == pytest.approx(0.375)
+    el2.apply(eng2, T0 + pd.Timedelta(days=1))                         # type: ignore[arg-type]
+    assert eng2.gate.limits.risk_scale == 1.0                          # the roll clears it
+
+
+@pytest.mark.parametrize("raw, want", [(1.5, 1.0), (math.nan, 1.0), (-0.2, 1.0), (0.4, 0.4)])
+def test_the_logged_scale_is_clamped_to_a_cut(tmp_path, phase_file, raw, want):
+    from goldbot.risk.limits_profile import clamp
+    a = _acc()
+    defaults = engine_limits(S, a)
+    c = StaticController(defaults).current(a, LimitsEvidence()).model_copy(update={"risk_scale": raw})
+    assert clamp(c, defaults, a, LimitsEvidence()).risk_scale == want
+
+
+def test_k_vol_uses_the_account_vol_high_when_no_term_says_so(tmp_path, phase_file):
+    """Trading-safety review 2026-10-19 (LOW): high volatility halves the risk even with no strategy terms yet."""
+    from goldbot.engine.limits_apply import k_vol
+    assert k_vol({}, True) == 0.5 and k_vol({}, None) == k_vol({}, False) == 1.0
+    el, eng = _dyn(tmp_path, {}, vol_high=True)
+    el.apply(eng, T0)                                                  # type: ignore[arg-type]
+    assert eng.gate.limits.risk_scale == 0.5 and eng.gate.limits.risk_for("v1") == S.risk.risk_per_trade * 0.5
+
+
+def test_the_adaptive_controller_carries_vol_high_through_the_floors(tmp_path, phase_file, monkeypatch):
+    st = AdaptiveState(account_id="icm-demo", day=DAY, limits=UP, decided_ns=time.time_ns(), vol_high=True)
+    ctl = AdaptiveLimitsController(tmp_path, "icm-demo", bounds_for(S, _acc(), [_acc()]), clock=lambda: _ns(T0))
+    monkeypatch.setattr(ctl.store, "load", lambda account_id: st)
+    assert ctl.current(_acc(), _ev(T0)).vol_high is True
+    assert ctl.current(_acc(), _ev(T0, drawdown=0.05)).vol_high is True          # the 4% floors keep the vol cut
+    old = st.model_copy(update={"day": DAY - timedelta(days=3)})
+    ctl2 = AdaptiveLimitsController(tmp_path, "icm-demo", bounds_for(S, _acc(), [_acc()]), clock=lambda: _ns(T0))
+    monkeypatch.setattr(ctl2.store, "load", lambda account_id: old)
+    assert ctl2.current(_acc(), _ev(T0)).vol_high is None                     # a stale decision says nothing
 
 
 def test_an_unreadable_change_log_starts_every_strategy_at_most_at_the_base(tmp_path, phase_file, monkeypatch):
