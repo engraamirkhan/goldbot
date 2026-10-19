@@ -335,6 +335,14 @@ def case_limits_state(tmp: Path) -> None:
     assert adaptive.AdaptiveStore(tmp).load("icm-demo") == state
 
 
+def case_risk_term(tmp: Path) -> None:
+    """ADR 0039: a strategy's risk term read back from its dump (the limits change log / a journal) with a field from
+    a newer release: it still loads, at the clamped risk."""
+    term = adaptive.RiskTerm(r=0.004, n_days=3, k_vol=0.5, reason="evidence")
+    got = limits_profile._terms({"v1": _newer(term.model_dump())}, {"v1": 0.003})
+    assert got == {"v1": term.model_copy(update={"r": 0.003})}
+
+
 def case_trial_dsr_inputs(tmp: Path) -> None:
     """A trial row's stored deflated-Sharpe inputs (results.model_filtered.dsr_inputs, metrics.DsrInputs; quant review
     2026-10-16) with a field from a newer release: gate 1 still recomputes the DSR from them."""
@@ -373,7 +381,7 @@ def case_attribution_report(tmp: Path) -> None:
 CASES = [case_closed_trade, case_closed_trade_from_before_ret_basis, case_closed_trade_price_return_without_ret_basis,
          case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
          case_shadow_stats, case_model_registry_and_backtest, case_population, case_research_plan, case_costs,
-         case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_cost_probe, case_hwm_confirmation, case_limits_profile,
+         case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_cost_probe, case_hwm_confirmation, case_limits_profile, case_risk_term,
          case_limits_state,
          case_trial_dsr_inputs, case_trial_day_summed_dsr, case_attribution_report, case_tick_index]
 
@@ -413,7 +421,7 @@ def test_every_persisted_record_model_has_a_compat_case():
                BrokerTerms, CostTable, PublishedCostTable, scheduler.JobState, health.WatchState, health.HealthReport,
                DigestState, OutboxState, crossfeed.ReconcileReport, ledger.LedgerReport,
                ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation, limits_profile.LimitsState,
-               limits_profile.LimitsChange, adaptive.AdaptiveState, DsrInputs, DaySummedDsr,
+               limits_profile.LimitsChange, adaptive.AdaptiveState, adaptive.RiskTerm, DsrInputs, DaySummedDsr,
                AttributionReport, TickIndex, cost_probe.ProbeRecord,
                # the engine's orders file: tests/test_engine_safety.py::
                # test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote

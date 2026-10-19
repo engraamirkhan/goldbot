@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Protocol
 import pandas as pd
 from pydantic import Field
 
-from goldbot.base import FrozenRecord, UtcTimestamp, load_record_json
+from goldbot.base import FrozenRecord, UtcTimestamp, load_record, load_record_json
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db.connection import Database, connect, write
 from goldbot.db.repo import RecordRepo
@@ -209,8 +209,8 @@ def _terms(terms: dict[str, RiskTerm], risk: dict[str, float]) -> dict[str, Risk
         if s not in risk:
             continue
         try:
-            term = t if isinstance(t, RiskTerm) else RiskTerm.model_validate(
-                {"reason": "", **dict(t), "r": risk[s]})
+            term = t if isinstance(t, RiskTerm) else load_record(
+                RiskTerm, {"reason": "", **dict(t), "r": risk[s]}, source="limits risk_terms")
         except Exception:                       # noqa: BLE001 - an unreadable why is dropped, the clamped risk stands
             continue
         out[s] = term.model_copy(update={"r": risk[s]})
