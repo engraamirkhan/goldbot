@@ -11,21 +11,25 @@ starts (`check_start`), on every account refresh (`locked`, after the owner's /m
 re-arm propose window and the 12% kill switch still force propose on demo; the RiskGate is still the only path to an
 order and exits are never gated.
 
-The post-order bookkeeping (`after_order`, `action`) moved here from runner.py (ADR 0023: runner.py only shrinks).
+The post-order bookkeeping (`after_order`, `action`, `note_bridge_refusal`) moved here from runner.py (ADR 0023:
+runner.py only shrinks).
 """
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from goldbot.execution.bridge import UNREADABLE_REFUSAL
 from goldbot.execution.broker import OrderResult
 from goldbot.telegram.entry_text import account_name
 
 if TYPE_CHECKING:
     from goldbot.engine.runner import Engine
     from goldbot.risk.gate import GateDecision
+    from goldbot.specialists.base import Specialist
     from goldbot.telegram.approvals import Proposal
 
 log = logging.getLogger(__name__)
@@ -153,3 +157,29 @@ def after_order(eng: Engine, res: OrderResult | None, gd: GateDecision, prop: Pr
     st.margin_used += gd.margin_needed
     if st.open_risk is not None:
         st.open_risk += gd.risk_amount * lots / gd.lots if gd.lots > 0 else gd.risk_amount
+
+
+def note_bridge_refusal(eng: Engine, prop: Proposal, agent: Specialist, res: OrderResult, lots: float) -> None:
+    """BACKLOG 66 (trading-safety C2): the bridge's notional ceiling refused the order, so the brain sized above
+    6x this terminal's equity (or the terminal could not be read). Nothing was placed. It is journalled
+    (`bridge_refused`) and the owner is told on Telegram; the auto path then pauses auto entries for the rest of the
+    bar close (`after_order`) and the approval path shows the card as refused by the bridge (`Engine._on_decision`).
+    The notice is plain words (ui-ux review): the trade, the masked account name and which of the two causes,
+    never the proposal id or the raw message, which stay in the journal and the log. Best effort: a notice that
+    cannot be queued is logged and never changes the outcome. Moved from runner.py unchanged (ADR 0023)."""
+    log.warning("order %s refused by the bridge: %s", prop.proposal_id, res.message)
+    eng.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "bridge_refused",
+                          "proposal": prop.proposal_id, "message": res.message})
+    auto = " Automatic entries pause until the next bar." if eng.cfg.approval_mode == "auto" else ""
+    why = ("(it couldn't read the account figures it checks)" if res.message.startswith(UNREADABLE_REFUSAL)
+           else "(open gold would be worth more than 6× equity)")
+    if eng.center.bus is None:
+        return
+    try:
+        eng.center.bus.notify_owner(
+            f"Order not placed: the MT5 box's safety limit refused {'LONG' if prop.side > 0 else 'SHORT'} "
+            f"{lots:g} lots {eng.cfg.symbol} on {account_name(eng.cfg.account_id)} {why}. Nothing was sent; open "
+            f"trades keep their stops.{auto} If this repeats, the trade sizing and the MT5 box's limit disagree: "
+            f"ask Claude to check.")
+    except Exception as exc:                        # noqa: BLE001 - the refusal stands either way
+        log.warning("bridge refusal notice not queued (%s)", type(exc).__name__)

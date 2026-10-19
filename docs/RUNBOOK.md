@@ -1286,6 +1286,15 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
   always wait for your click: `approval_mode: auto` on a live account stops the engine at start, and `/mode auto` or
   the dashboard never make a live account automatic. `/mode propose` also returns the demo account to asking you;
   the 12% kill switch and the 30-day window after a re-arm do too.
+* **Cost probes on demo** (ADR 0037): while `icm-demo` holds no position, the engine may open one 0.01-lot trade that
+  copies a challenger's shadow entry, only to measure real costs (slippage, spread, latency, swap). One at a time,
+  challengers taken in turn, never chosen by results; a real trade always comes first (an open probe is closed to make
+  way). They pass the RiskGate and count toward the demo daily limit, but stop for the day once they have lost 20% of
+  it (£10 of £50; `budget_share`) or less than 20% of it is left. Exits are automatic and no Telegram message is
+  sent for them. In MT5 they show magic number base + 97 and a comment starting `cp-`. They never count as trades for the phase gate or the tournament: they are kept apart in
+  `state\aux.db` (table `cost_probes`; the journal shows `cost_probe:` rows). To stop them: set
+  `cost_probe: { enabled: false }` under `icm-demo` in `config/accounts.yaml` and restart the engine service;
+  `/mode propose` or `/halt` stops them too. A live account with probes enabled refuses to load.
 * It is never switched on by itself. Telegram sends one message, "Auto mode can be enabled: evidence ...; reply
   /mode auto <TOTP>", only after at least 100 proposals you approved or rejected since the last mode change, with no
   RiskGate breach (no 8% size-down, no 12% kill switch) and no measurable difference between the outcomes of the

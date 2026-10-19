@@ -47,6 +47,15 @@ accounts:
     # enters automatically only while the MT5 terminal itself reports a demo account. The re-arm 30-day window, the
     # 12% kill switch and the owner's /mode propose still return it to propose; exits are never gated either way.
     approval_mode: auto
+    # ADR 0037, the research director 2026-10-19: a cost probe, demo only. While the book is flat, one challenger's
+    # shadow entry at a time (a fixed round-robin over agent ids, never by score) is mirrored as a 0.01-lot order
+    # through the RiskGate under the caps above, exits automatic; a real trade always comes first (an open probe is
+    # closed to make way). Probes are recorded in aux.db cost_probes for the costs pipeline only: never in the trade
+    # record, the phase gate or the shadow scoring. Refused at load on any account that is not mode: demo, and no
+    # probe is sent unless the MT5 terminal itself reports a demo account and the engine is in auto. budget_share:
+    # no new probe once today's realised probe loss reaches this share of the day's loss allowance (£10 of £50), nor
+    # while less than this share of the allowance remains. Probes trade under their own magic (magic_base + 97).
+    cost_probe: { enabled: true, budget_share: 0.2 }
   vantage-demo:
     broker: vantage
     mode: demo

@@ -222,7 +222,7 @@ def card_text(code: str) -> str | None:
 def notice_text(np: NotPlaced, *, side: int, lots: float, symbol: str, account: str) -> str:
     """The owner notice (a separate Telegram message): the trade, the account, the reason and the next step. `account`
     is already masked (`entry_text.account_name`: a login never reaches the chat). Not used for the ceiling codes,
-    whose shipped notice the engine words itself (`_note_bridge_refusal`)."""
+    whose shipped notice the engine words itself (`auto_entry.note_bridge_refusal`)."""
     trade = f"{'LONG' if side > 0 else 'SHORT'} {lots:g} lots {symbol} on {account}"
     if np.not_sent:
         return (f"Order not placed: {trade} could not be sent: {np.reason}. Nothing was sent; open trades keep their "
