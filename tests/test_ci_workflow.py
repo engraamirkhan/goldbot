@@ -140,9 +140,8 @@ def test_the_dry_run_is_in_the_lightest_integration_shard_and_no_shard_is_heavy(
     import json
     import sys
     sys.path.insert(0, str(ROOT / "tests"))
-    from conftest import (
-        shard_assignment,  # type: ignore[import-not-found]  # tests/ is on sys.path only at run time
-    )
+    import importlib
+    shard_assignment = importlib.import_module("conftest").shard_assignment   # tests/ is on sys.path only at run time
     job = _ci()["jobs"]["backend-integration"]
     count = len(job["strategy"]["matrix"]["shard"])
     weights = json.loads((ROOT / "tests" / "shard_weights.json").read_text())["seconds"]
