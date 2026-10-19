@@ -20,15 +20,34 @@ Written before any shadow trade of these agents. Code: `goldbot.research.populat
   `cost_probe._mirrorable`): cost measurement only, never the agent's evidence.
 - Replica agents stay shadow only (`Specialist.shadow_only`); their registry model is a `RuleModel` (ADR 0038).
 
-## Roster (3 of 40)
+## Roster (4 of 40; 3 as first frozen, 30m added by amendment 2026-10-19b)
 
 | agent | family | timeframe | parameters |
 |---|---|---|---|
 | founder, config `{}` | box_break_close | 15m | module constants of goldbot/specialists/box_break_close.py: BREAK_DEPTH 0.2, mfi 30/70 over 5 bars turning, swing trend not against, not in the golden zone, stop 1.5 ATR(14) beyond the box (structural stop within it), target 3.0 ATR (2R), 96 bars |
 | `{"timeframe": "1h"}` | box_break_close | 1h | same, 48 bars |
 | `{"timeframe": "4h"}` | box_break_close | 4h | same, 24 bars |
+| `{"timeframe": "30m"}` (amendment 2026-10-19b) | box_break_close | 30m | same, 72 bars (36 h) |
 
 Agent ids are `AgentIdentity(family, config).agent_id` (the population lists them as "roster founder").
+
+## Amendment 2026-10-19b (owner directive: more demo learning trades)
+Written before any shadow trade of the new agent. Added: `box_break_close` on 30m, same frozen rule and constants, time
+exit 72 bars (36 h, between the 15m 24 h and the 1h 48 h). Effect on promotion: the roster is now 4 agents, so K for
+the tournament's DSR (`n_pop`) grows by one; the four timeframes of the family still count as one cluster for K_eff,
+and the per-family limit (one promotion per quarter) is unchanged. The 30m agent's shadow trades are its own evidence
+from its own first day; nothing earlier is re-read.
+
+Considered and not admitted:
+- `box_break_close` on 5m. The engine's base clock is 15m (`EngineConfig.decision_tf`): it decides each timeframe
+  only at 15m closes and advances a timeframe's shadow trades one bar per such close, so a 5m agent would decide one
+  bar in three and age its trades three times too slowly (outcomes unlike its research labels). It needs a 5m base
+  clock first, which changes the live trades' `bars_held` and time exits: an engine/exit-path change for its own lane
+  and the trading-safety reviewer. Guarded by tests/test_box_break_close_timeframes.py (every roster timeframe is a
+  multiple of the base clock).
+- A money-flow rule agent: none exists. Money flow is a confirmation inside `box_break_close` and the feature
+  columns of goldbot/features/mfi_signals.py; a standalone agent would be a new rule and needs its own
+  pre-registration.
 
 ## Not admitted yet (TODO, each needs its own lane)
 - box_break, box_retest, box_rip, fakey, trend_level_signal, box_course (H-37..H-45): no live state path. They read
