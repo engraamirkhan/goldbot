@@ -420,6 +420,22 @@ and the rest still arrives. It never contains account numbers or emails.
      ```
      Never install it from `/opt/goldbot` or from `sudo -u goldbot git show`. The service user can write that tree and
      its `.git` (`git replace` can swap the file), so a hash computed there proves nothing.
+* **Fast deploy (staging, adaptive window, watcher).** `sudo goldbot-deploy --stage <sha>` (run by `scripts/release.sh`
+  right after the push, over SSH) pre-builds a commit under `/opt/goldbot-stage/<sha>` as the service user in a
+  512 MB cgroup (`MemoryMax`; an out-of-memory kill ends the build, never the engine): it warms the uv cache and
+  builds `web/dist`, with a manifest. It touches no service, is idempotent, refuses a non-sha, a non-brain box and a
+  commit that is not a fast-forward of what runs, and the two newest stages are kept. The deploy reuses a stage only
+  when its web tree equals the target's and the files hash to the manifest, else it builds as before (`staging
+  failed` is harmless). Deploy time (estimate, to be measured on the first release): about 1 min instead of 2 to 3.
+  Health passes once every daemon has been active and un-restarted for 30 s, each service with a heartbeat
+  (supervisor, scheduler, telegram, news, api, webhook, tv-pull) has written a fresh one since its restart and
+  `supervisor.json` is new (engines are judged by "active, not restarted", they write only on ticks). A restart in
+  the first 90 s rolls back: before the report at once, after it by `goldbot-deploy-watch-*` (check
+  `journalctl -u 'goldbot-deploy-watch-*'` and the last line of `deploys.jsonl` 90 s after a deploy). A manual
+  rollback and the recovery after a failed deploy still wait the full 90 s. Restart order: supervisor, engines, the
+  rest. Failure modes: stage dir full (`rm -rf /opt/goldbot-stage/*` as the service user, then `git worktree prune`),
+  watcher missing (`systemd-run` failed: the health checks still alert within 6 minutes). First use needs the new
+  root script installed with the hash-checked steps above.
 * **If a deploy says `refused`:** the detail says why and nothing was changed. **If it says `failed`:** the rollback
   did not recover every service. Run `journalctl -u 'goldbot-*' -n 200` and `goldbot run health`, then start the
   units by hand (supervisor first). For aux.db errors, see docs/deploy/2026-10-batch.md 5.1.

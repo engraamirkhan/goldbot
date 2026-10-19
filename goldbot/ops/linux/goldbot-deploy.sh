@@ -6,6 +6,7 @@
 #   sudo goldbot-deploy latest                   # manual: deploy origin/main now (the MT5 box is updated only this way)
 #   sudo goldbot-deploy <40-hex sha>             # manual: deploy that commit
 #   sudo goldbot-deploy --rollback <40-hex sha>  # manual: go back to an OLDER commit (owner's decision)
+#   sudo goldbot-deploy --stage <40-hex sha>     # brain: pre-build a commit while CI runs; touches no service (below)
 # Owner flags for the manual forms:
 #   --drop-unknown-local-keys  move settings.local.yaml keys the target code does not know aside (dated backup kept
 #                              next to it) instead of refusing; only unknown keys, never an invalid value
@@ -17,8 +18,23 @@
 # from before schema compatibility gets aux.db stepped back 5 -> 4 with every service stopped and every row kept;
 # any other unknown version is refused), settings.local.yaml must validate with the TARGET's own Settings model, and
 # no scheduler job may be mid-run (the scheduler is stopped first and checked again). After the restart every enabled
-# service must stay up without restarting for 90 s (and on the brain the supervisor must have written a new
-# heartbeat), else the previous commit is restored the same way. Every outcome is appended to deploys.jsonl.
+# service must be active and un-restarted for 30 s AND each service with a heartbeat (supervisor, scheduler, telegram,
+# news, api, webhook, tv-pull) must have written a new one since its restart AND (brain) the supervisor must have
+# written a new supervisor.json, else the previous commit is restored the same way. The deploy is then reported; a
+# background watcher (`--watch`, own systemd unit) keeps checking for restarts until 90 s after the switch and rolls
+# back the same way if one happens (a crash loop restarts every ~10 s, so 30 s of quiet plus 60 s more of watching
+# catches it). A rollback itself, and the recovery after a failed deploy, wait the full 90 s. Every outcome is
+# appended to deploys.jsonl. Restart order: supervisor, engines (so the trading gap is one restart), the rest.
+#
+# Staging (brain): `goldbot-deploy --stage <sha>` (run by scripts/release.sh right after the push, while CI runs)
+# fetches the commit, makes a worktree under /opt/goldbot-stage/<sha> and pre-builds there as the service user,
+# inside a memory-capped cgroup (the 1 GB brain keeps its engine): `uv sync` warms the uv cache (the real sync then
+# only links files) and `npm ci && npm run build` builds web/dist when web/ differs from what runs, with a manifest
+# (web source tree id, sha256 of uv.lock + pyproject.toml, sha256 of the built files). No service is touched, it is
+# idempotent, and it refuses anything but a 40-hex id. The deploy reuses a stage only when the manifest's web tree
+# equals the TARGET's web tree (the merge commit on main has the PR head's tree but another id) and the dist files
+# hash to the manifest and are plain files only; otherwise it builds as before. Root only creates the stage folder
+# (owned by the service user); everything inside is written and read as the service user.
 #
 # Root never writes or follows anything in a directory the service user can write: the log lives in
 # /var/lib/goldbot-deploy (root only) and its copy in state/ is written BY the service user (root only pipes the
@@ -54,6 +70,15 @@ ROLLBACK_FLOOR=/etc/goldbot/rollback-floor
 VAR=/var/lib/goldbot-deploy
 LOG=$VAR/deploys.jsonl
 LOCK=/run/goldbot-deploy.lock
+STAGE=/opt/goldbot-stage                  # owned by the service user; root never writes or reads inside it
+STAGE_LOCK=/run/goldbot-stage.lock
+WATCH_FILE=$VAR/watch                     # root-only: what the post-report restart watcher needs
+UV=/var/lib/goldbot/.local/bin/uv
+BUILD_MEM_MAX=512M                        # cgroup cap for npm/uv builds: an OOM kills the build, never the engine
+STABLE_S=30                               # active + un-restarted this long (and heartbeats fresh) = healthy
+WATCH_S=90                                # a restart within this long of the switch rolls back
+POLL_S=2
+BEAT_SERVICES=" supervisor scheduler telegram news api webhook tv-pull "   # = HEARTBEAT_SERVICES + OPTIONAL_... (tested)
 APPROVED=$ROOT/state/deploy/approved.json
 PY_BRAIN=$ROOT/.venv/bin/python           # run only as the service user
 BRIDGE_REQS=goldbot/ops/linux/mt5-bridge-requirements.txt   # MT5 box: hash-pinned from uv.lock (scripts/bridge_requirements.py)
@@ -64,6 +89,8 @@ MANUAL=""
 MODE=approval
 DROP_KEYS=0
 INTERRUPT_JOBS=0
+STARTED=0
+SETTLED=0
 
 g() { sudo -u "$OWNER" -H env GIT_NO_REPLACE_OBJECTS=1 git -C "$ROOT" "$@"; }
 as_owner() { sudo -u "$OWNER" -H "$@"; }
@@ -85,7 +112,7 @@ log() {  # result from to detail -- every value is a sha, empty, fixed text writ
 drop_approval() { [ -n "${MANUAL:-}" ] || as_owner rm -f -- "$APPROVED"; }
 refuse() { log refused "$CUR" "$TARGET" "$1"; drop_approval; exit 1; }
 usage() {
-  echo "usage: goldbot-deploy [latest | <40-hex commit id> | --rollback <40-hex commit id>]"
+  echo "usage: goldbot-deploy [latest | <40-hex commit id> | --rollback <40-hex commit id> | --stage <40-hex commit id>]"
   echo "                      [--drop-unknown-local-keys] [--interrupt-jobs]"
   exit 2
 }
@@ -386,13 +413,112 @@ stop_all() {  # inputs first, then the supervisor, engines and bridges last (exi
   return 0
 }
 
+# Runs as the SERVICE USER (bash -c): hashing the built dashboard and judging a stage. Root never reads or follows
+# anything in the stage folder; it only gets back a path that matches $STAGE/<40-hex> and re-checks that.
+STAGE_SH='
+h() { if command -v sha256sum > /dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
+dist_hash() {  # sha256 over every file (name and content) in dir $1; non-zero when it holds anything but plain files
+  [ -f "$1/index.html" ] && [ -z "$(find "$1" ! -type f ! -type d | head -1)" ] || return 1
+  ( cd -- "$1" && find . -type f -print0 | LC_ALL=C sort -z | while IFS= read -r -d "" f; do h "$f"; done | h | cut -d" " -f1 )
+}
+manifest_ok() {  # $1 stage dir: finished (manifest written last) and, when it holds a dashboard, the files match it
+  [ -f "$1/manifest" ] || return 1
+  if grep -qx "dist=yes" "$1/manifest"; then
+    local want; want=$(sed -n "s/^dist_sha256=\([0-9a-f]\{64\}\)\$/\1/p" "$1/manifest")
+    [ -n "$want" ] && [ "$(dist_hash "$1/web/dist")" = "$want" ] || return 1
+  fi
+}
+export GIT_NO_REPLACE_OBJECTS=1
+'
+
+# args: ROOT STAGE SHA UV. Fetch, worktree and prune all happen here, inside the memory-capped cgroup.
+STAGE_BUILD_SH='
+set -euo pipefail
+root=$1; stage=$2; sha=$3; uv=$4; d=$stage/$sha
+if manifest_ok "$d"; then echo "already staged: $sha"; exit 0; fi
+# keep the two newest other stages (disk), drop the rest and any half-built one of this commit
+for old in $(ls -1dt "$stage"/*/ 2> /dev/null | tail -n +3); do
+  git -C "$root" worktree remove -f -- "$old" 2> /dev/null || rm -rf -- "$old"
+done
+if [ -e "$d" ]; then git -C "$root" worktree remove -f -- "$d" 2> /dev/null || rm -rf -- "$d"; fi
+git -C "$root" worktree prune
+git -C "$root" worktree add -q --detach "$d" "$sha"
+lock=$( cd "$d" && { cat uv.lock pyproject.toml 2> /dev/null || true; } | h | cut -d" " -f1 )
+blobs() { git -C "$root" rev-parse "$1:uv.lock" "$1:pyproject.toml" 2> /dev/null || echo none; }
+if [ "$(blobs HEAD)" != "$(blobs "$sha")" ]; then
+  # warms the uv cache (wheels downloaded, built and unpacked); the real sync then only links files. The throw-away
+  # environment goes again at once: it is only here so uv has somewhere to install to.
+  ( cd "$d" && UV_PROJECT_ENVIRONMENT="$d/.venv" "$uv" sync -q --frozen --extra live --python 3.11 )
+  rm -rf -- "$d/.venv"
+fi
+webtree=$(git -C "$root" rev-parse "$sha:web" 2> /dev/null || echo none)
+distflag=no; disthash=""
+if [ "$webtree" != "$(git -C "$root" rev-parse HEAD:web 2> /dev/null || echo none)" ]; then
+  ( cd "$d/web" && npm ci --silent && npm run build )
+  rm -rf -- "$d/web/node_modules"                      # only dist is kept (disk)
+  disthash=$(dist_hash "$d/web/dist"); distflag=yes
+fi
+{ echo "sha=$sha"; echo "web_tree=$webtree"; echo "lock_sha256=$lock"; echo "dist=$distflag"; echo "dist_sha256=$disthash"; } \
+  > "$d/manifest.tmp"
+mv -f -- "$d/manifest.tmp" "$d/manifest"
+echo "staged $sha (web: $distflag)"
+'
+
+build_run() {  # run "$@" as the service user in a memory-capped, low-priority cgroup: an OOM kills the build only
+  systemd-run --quiet --wait --collect --pipe -p MemoryMax="$BUILD_MEM_MAX" -p Nice=19 -p IOSchedulingClass=idle -- \
+    sudo -u goldbot -H env NODE_OPTIONS=--max-old-space-size=384 "$@"
+}
+
+stage() {  # $1 sha: pre-build while CI runs. Touches no service and no file under /opt/goldbot except .git (fetch, worktree)
+  local sha=$1
+  [ "$ROLE" = brain ] || { echo "--stage is for the brain (the MT5 box has nothing to pre-build)"; exit 1; }
+  is_sha "$sha" || usage
+  [ ! -L "$STAGE" ] || { echo "$STAGE is a symlink: refused"; exit 1; }
+  install -d -m 755 -o "$OWNER" -g "$OWNER" "$STAGE"
+  exec 8> "$STAGE_LOCK"
+  flock -n 8 || { echo "a stage or a deploy is already running; nothing staged (the deploy builds as before)"; exit 0; }
+  g fetch -q origin "$sha" || g fetch -q origin || { echo "cannot fetch $sha from origin"; exit 1; }
+  g cat-file -e "$sha^{commit}" 2> /dev/null || { echo "$sha is not a commit of this repository"; exit 1; }
+  local cur; cur=$(g rev-parse HEAD)
+  is_sha "$cur" && g merge-base --is-ancestor "$cur" "$sha" \
+    || { echo "$sha is not a fast-forward of the running commit; nothing staged"; exit 1; }
+  build_run bash -c "$STAGE_SH$STAGE_BUILD_SH" _ "$ROOT" "$STAGE" "$sha" "$UV" \
+    || { echo "staging failed (nothing was touched; the deploy builds as before)"; exit 1; }
+}
+
+staged_dist() {  # $1 target: print the stage folder whose finished manifest has the target's web tree and intact files
+  local d
+  d=$(as_owner bash -c "$STAGE_SH"'
+    want=$(git -C "$1" rev-parse --verify -q "$2:web") || exit 0
+    for m in "$3"/*/manifest; do
+      [ -f "$m" ] || continue
+      grep -qx "web_tree=$want" "$m" && grep -qx "dist=yes" "$m" && manifest_ok "$(dirname "$m")" && { dirname "$m"; exit 0; }
+    done' _ "$ROOT" "$1" "$STAGE" 2> /dev/null | head -c 200 | head -1) || true
+  [[ "$d" =~ ^${STAGE}/[0-9a-f]{40}$ ]] && echo "$d"
+  return 0
+}
+
+install_web() {  # $1 target: the staged dashboard when a verified stage matches, else npm ci + build as before
+  local d; d=$(staged_dist "$1")
+  if [ -n "$d" ] && as_owner bash -c 'set -e
+      rm -rf -- "$1/web/dist.new" "$1/web/dist.old"
+      cp -R -- "$2/web/dist" "$1/web/dist.new"
+      if [ -e "$1/web/dist" ]; then mv -- "$1/web/dist" "$1/web/dist.old"; fi
+      mv -- "$1/web/dist.new" "$1/web/dist"
+      rm -rf -- "$1/web/dist.old"' _ "$ROOT" "$d"; then
+    echo "dashboard: reused the verified stage $d"
+    return 0
+  fi
+  build_run bash -c "cd $ROOT/web && npm ci --silent && npm run build"
+}
+
 install_for() {  # reinstall Python deps / rebuild the dashboard only when they changed between $1 and $2
   local changed; changed=$(g diff --name-only "$1" "$2")
   if [ "$ROLE" = brain ]; then
     if grep -qE '^(pyproject.toml|uv.lock)$' <<< "$changed"; then     # exact versions from uv.lock, as the bootstrap
-      sudo -u goldbot -H bash -c "cd $ROOT && /var/lib/goldbot/.local/bin/uv sync -q --frozen --extra live --python 3.11" || return 1
+      build_run bash -c "cd $ROOT && $UV sync -q --frozen --extra live --python 3.11" || return 1
     fi
-    if grep -q '^web/' <<< "$changed"; then sudo -u goldbot -H bash -c "cd $ROOT/web && npm ci --silent && npm run build" || return 1; fi
+    if grep -q '^web/' <<< "$changed"; then install_web "$2" || return 1; fi
   elif grep -qE "^(uv.lock|$BRIDGE_REQS)\$" <<< "$changed" && as_owner test -f "$ROOT/$BRIDGE_REQS"; then
     # MT5 box: exact versions + sha256 from uv.lock, wheels only (scripts/bridge_requirements.py). A commit from before
     # the file existed (a rollback) keeps the installed packages: older code never pinned them anyway. The bridges stop
@@ -405,7 +531,7 @@ install_for() {  # reinstall Python deps / rebuild the dashboard only when they 
   return 0
 }
 
-declare -A RESTARTS
+declare -A RESTARTS RESTARTED_AT
 switch_to() {  # $1 from, $2 to; returns non-zero on any failure (the caller rolls back)
   local aux svcs s
   aux=$(aux_plan "$2")
@@ -418,33 +544,111 @@ switch_to() {  # $1 from, $2 to; returns non-zero on any failure (the caller rol
     aux_step_back || return 1
   fi
   STARTED=$(date +%s)
-  # supervisor first: engines block entries until its heartbeat exists. Restarts are safe: engines reconcile on start.
-  # Only enabled units: a loaded but disabled instance (a stray engine) is never started by a deploy.
-  for s in "${svcs[@]}"; do [[ "$s" == goldbot-supervisor* ]] && enabled "$s" && { systemctl restart "$s" || return 1; }; done
-  for s in "${svcs[@]}"; do [[ "$s" == goldbot-supervisor* ]] || ! enabled "$s" || { systemctl restart "$s" || return 1; }; done
+  # Order: supervisor first (engines block entries until its heartbeat exists), then the engines (a restart stops the
+  # old engine at the moment the new one starts: the trading gap is one restart, not the install), then the rest.
+  # Restarts are safe: engines reconcile on start. Only enabled units: a loaded but disabled instance (a stray
+  # engine) is never started by a deploy.
+  for s in "${svcs[@]}"; do [[ "$s" == goldbot-supervisor* ]] && enabled "$s" && { systemctl restart "$s" || return 1; RESTARTED_AT[$s]=$(date +%s); }; done
+  for s in "${svcs[@]}"; do [[ "$s" == goldbot-engine@* ]] && enabled "$s" && { systemctl restart "$s" || return 1; RESTARTED_AT[$s]=$(date +%s); }; done
+  for s in "${svcs[@]}"; do
+    [[ "$s" == goldbot-supervisor* || "$s" == goldbot-engine@* ]] || ! enabled "$s" \
+      || { systemctl restart "$s" || return 1; RESTARTED_AT[$s]=$(date +%s); }
+  done
+  SETTLED=$(date +%s)
   for s in "${svcs[@]}"; do RESTARTS[$s]=$(systemctl show -p NRestarts --value "$s"); done
   return 0
 }
 
-written_since_restart() {  # the heartbeat file was written by the restarted process (not the old one)
+written_since() {  # $1 file, $2 epoch: the file was written by a process (re)started at or after $2, not the old one
   local t; t=$(mtime "$1" 2>/dev/null) || return 1
-  [[ "$t" =~ ^[0-9]+$ ]] && [ "$t" -gt "${STARTED:-0}" ]
+  [[ "$t" =~ ^[0-9]+$ ]] && [ "$t" -ge "$2" ]
 }
 
-healthy() {  # every enabled service up, and not restarted by systemd since our restart, for 90 s; a new supervisor heartbeat
-  sleep 90
-  local s; for s in $(services); do
-    enabled "$s" || continue
-    # a timer-driven oneshot (e.g. goldbot-chart-fetch, every 60 s) is "static" and only briefly active: not a daemon
-    [ "$(systemctl show -p Type --value "$s")" = oneshot ] && continue
-    systemctl is-active --quiet "$s" || return 1
-    [ "$(systemctl show -p NRestarts --value "$s")" = "${RESTARTS[$s]:-0}" ] || return 1   # a crash loop restarts
+beat_name() {  # unit -> the service name whose heartbeat_<name>.json it writes (nothing for engines, bridges, ...)
+  local n=${1#goldbot-}; n=${n%.service}
+  [[ "$BEAT_SERVICES" == *" $n "* ]] && echo "$n"
+  return 0
+}
+
+# healthy [full]. Polls every POLL_S. Fails at once when an enabled daemon is not active or has been restarted by systemd
+# since our restart. Passes when every one has been active and un-restarted for STABLE_S, every one that writes a
+# heartbeat has written a new one since its restart, and (brain) the supervisor wrote a new supervisor.json. Fails when
+# that is not true WATCH_S after the last restart. Engines write their heartbeat only on ticks (none at weekends), so
+# for them "active and not restarted" (Type=notify: READY=1 comes after the bridge connect and model load) is the check.
+# `full` (the recovery after a failed deploy, a manual rollback) waits the whole WATCH_S as the old fixed sleep did.
+# Window: 30 s is three of the engine's 10 s restart cycles and 30 s of the supervisor's few-second heartbeat, so a
+# service that dies on start shows before it; the 60 s left to 90 s are covered by the watcher (watch_run).
+healthy() {
+  local full=${1:-} now s n el ok
+  while :; do
+    now=$(date +%s); el=$((now - SETTLED)); ok=1
+    for s in $(services); do
+      enabled "$s" || continue
+      # a timer-driven oneshot (e.g. goldbot-chart-fetch, every 60 s) is "static" and only briefly active: not a daemon
+      [ "$(systemctl show -p Type --value "$s")" = oneshot ] && continue
+      systemctl is-active --quiet "$s" || return 1
+      [ "$(systemctl show -p NRestarts --value "$s")" = "${RESTARTS[$s]:-0}" ] || return 1   # a crash loop restarts
+      [ $((now - ${RESTARTED_AT[$s]:-$SETTLED})) -ge "$STABLE_S" ] || ok=0
+      n=$(beat_name "$s")
+      if [ -n "$n" ] && ! written_since "$ROOT/state/heartbeat_$n.json" "${RESTARTED_AT[$s]:-$STARTED}"; then ok=0; fi
+    done
+    # the supervisor writes supervisor.json every few seconds whatever the market
+    if [ "$ROLE" = brain ] && enabled goldbot-supervisor; then
+      written_since "$ROOT/state/supervisor.json" "${RESTARTED_AT[goldbot-supervisor.service]:-$STARTED}" || ok=0
+    fi
+    if [ "$full" = full ]; then
+      [ "$el" -lt "$WATCH_S" ] || return $((1 - ok))
+    elif [ "$ok" = 1 ]; then
+      return 0
+    elif [ "$el" -ge "$WATCH_S" ]; then
+      return 1
+    fi
+    sleep "$POLL_S"
   done
-  # the supervisor writes its heartbeat every few seconds whatever the market; engines write only on ticks (none at
-  # weekends), so for them "active and not restarted for 90 s" is the check
-  if [ "$ROLE" = brain ] && enabled goldbot-supervisor; then
-    written_since_restart "$ROOT/state/supervisor.json" || return 1
+}
+
+write_watch() {  # what the watcher needs, in the root-only folder: target, previous, deadline, then unit + restart count
+  local s
+  {
+    echo "$TARGET $CUR $((SETTLED + WATCH_S))"
+    for s in "${!RESTARTS[@]}"; do
+      enabled "$s" || continue
+      [ "$(systemctl show -p Type --value "$s")" = oneshot ] && continue
+      echo "$s ${RESTARTS[$s]}"
+    done
+  } > "$WATCH_FILE.tmp" && mv -f "$WATCH_FILE.tmp" "$WATCH_FILE"
+}
+
+spawn_watch() {  # its own unit: the report does not wait for it, and it outlives this run
+  write_watch && systemd-run --quiet --collect --no-block --unit "goldbot-deploy-watch-$(date +%s)" \
+    /usr/local/sbin/goldbot-deploy --watch || echo "note: the restart watcher could not start (the health check still watches)"
+}
+
+watch_run() {  # --watch (holds the deploy lock): until WATCH_S after the switch a restart or a stop rolls the deploy back
+  local t c dl s n bad="" line
+  declare -A base=()
+  [ -f "$WATCH_FILE" ] || return 0
+  read -r t c dl < "$WATCH_FILE" || true
+  while read -r s n; do [[ "$s" =~ ^[A-Za-z0-9@._-]+$ && "$n" =~ ^[0-9]+$ ]] && base[$s]=$n; done < <(tail -n +2 "$WATCH_FILE")
+  rm -f "$WATCH_FILE"
+  { is_sha "${t:-}" && is_sha "${c:-}" && [[ "${dl:-}" =~ ^[0-9]+$ ]]; } || return 0
+  [ "$(g rev-parse HEAD)" = "$t" ] || return 0        # another version was applied since: not this watcher's to judge
+  TARGET=$t; CUR=$c
+  while [ -z "$bad" ] && [ "$(date +%s)" -lt "$dl" ]; do
+    for s in "${!base[@]}"; do
+      if ! systemctl is-active --quiet "$s" || [ "$(systemctl show -p NRestarts --value "$s")" != "${base[$s]}" ]; then bad=$s; break; fi
+    done
+    [ -n "$bad" ] || sleep "$POLL_S"
+  done
+  [ -n "$bad" ] || return 0
+  line="$bad restarted or stopped within ${WATCH_S} s of the switch (after the deploy was reported)"
+  echo "$line; restoring $CUR"
+  if switch_to "$TARGET" "$CUR" && healthy full; then
+    log rolled_back "$CUR" "$TARGET" "$line; previous version restored"
+  else
+    log failed "$CUR" "$TARGET" "$line; rollback did not recover every service: check journalctl -u 'goldbot-*'"
   fi
+  return 1
 }
 
 floor_allows() {  # $1 target. 0: no floor, or the floor itself or a descendant of it (git AND GitHub agree);
@@ -540,6 +744,8 @@ main() {
       --rollback) [ $# -ge 2 ] && [ "$MODE" = approval ] || usage; MODE=rollback; TARGET=$2; shift ;;
       --drop-unknown-local-keys) DROP_KEYS=1 ;;
       --interrupt-jobs) INTERRUPT_JOBS=1 ;;
+      --stage) [ $# -ge 2 ] && [ "$MODE" = approval ] || usage; MODE=stage; TARGET=$2; shift ;;
+      --watch) [ $# -eq 1 ] || usage; MODE=watch ;;
       -*) usage ;;
       *) [ "$MODE" = approval ] || usage; MODE=deploy; TARGET=$1 ;;
     esac
@@ -547,10 +753,20 @@ main() {
   done
   if [ "$MODE" = approval ] && { [ "$DROP_KEYS" = 1 ] || [ "$INTERRUPT_JOBS" = 1 ]; }; then usage; fi
   [ "$MODE" = approval ] || MANUAL=1
+  if [ "$MODE" = stage ]; then stage "$TARGET"; exit 0; fi
 
   install -d -m 700 -o root -g root "$VAR"
   exec 9>"$LOCK"
+  if [ "$MODE" = watch ]; then               # started by spawn_watch after the report: wait for the deploy to let go
+    flock -w 30 9 || exit 0
+    set +e
+    watch_run
+    exit $?
+  fi
   if ! flock -n 9; then [ -n "$MANUAL" ] && echo "another deploy is running; try again in a minute"; exit 0; fi
+  # a stage build still running (it started while CI ran) is waited for, then reused; the wait is bounded
+  exec 8> "$STAGE_LOCK"
+  flock -w 240 8 || echo "note: a stage build is still running after 240 s; building here as before"
 
   if [ -n "$MANUAL" ]; then
     g fetch -q origin main
@@ -608,8 +824,10 @@ main() {
   fi
 
   set +e                                              # from here every failure leads to a rollback, never an abort
-  switch_to "$CUR" "$TARGET" && healthy
+  local full=""; [ "$MODE" = deploy ] || full=full     # a manual rollback waits the whole 90 s; a forward deploy does not
+  switch_to "$CUR" "$TARGET" && healthy $full
   local ok=$?
+  local took=$(( $(date +%s) - STARTED ))
   drop_approval
   if [ "$ok" = 0 ]; then
     local worse="" note="" raw=""
@@ -621,13 +839,14 @@ main() {
     if [ "$MODE" = rollback ]; then
       log rolled_back_manual "$CUR" "$TARGET" "${DROPPED}${note}${worse:+degraded: $worse; }older version restored on the owner's request; all services stable for 90 s"
     elif [ -n "$worse" ]; then
-      log deployed_degraded "$CUR" "$TARGET" "${DROPPED}${note}deployed (degraded: $worse); all services stable for 90 s${MANUAL:+ (manual)}; not rolled back: goldbot run health"
+      log deployed_degraded "$CUR" "$TARGET" "${DROPPED}${note}deployed (degraded: $worse); all services stable with fresh heartbeats after ${took} s${MANUAL:+ (manual)}; not rolled back: goldbot run health"
     else
-      log deployed "$CUR" "$TARGET" "${DROPPED}${note}all services stable for 90 s${MANUAL:+ (manual)}"
+      log deployed "$CUR" "$TARGET" "${DROPPED}${note}all services stable with fresh heartbeats after ${took} s${MANUAL:+ (manual)}"
     fi
+    [ "$MODE" = deploy ] && spawn_watch
     exit 0
   fi
-  switch_to "$TARGET" "$CUR" && healthy
+  switch_to "$TARGET" "$CUR" && healthy full
   if [ $? = 0 ]; then
     if [ "$MODE" = rollback ]; then
       log rollback_reverted "$CUR" "$TARGET" "${DROPPED}the rollback failed or a service was unstable; the version that ran before is restored"

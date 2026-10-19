@@ -12,6 +12,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -50,6 +51,7 @@ export HARNESS_PID=$$
 source "$SCRIPT"
 ROOT=$T/root; VAR=$T/var; LOG=$VAR/deploys.jsonl; LOCK=$T/lock; ROLE_FILE=$T/role; ROLLBACK_FLOOR=$T/floor
 APPROVED=$ROOT/state/deploy/approved.json; PY_BRAIN=$PYTHON
+STAGE=$T/stage; STAGE_LOCK=$T/stage.lock; WATCH_FILE=$VAR/watch; UV=$T/bin/uv
 if [ -n "${FAKE_HEAD:-}" ]; then
   eval "$(declare -f g | sed '1s/^g ()/real_g ()/')"
   g() { if [ "$1 ${2:-}" = "rev-parse HEAD" ]; then echo "$FAKE_HEAD"; else real_g "$@"; fi; }
@@ -57,8 +59,16 @@ fi
 id() { echo 0; }
 install() { mkdir -p "${@: -1}"; }
 flock() { return 0; }
-sleep() { :; }
-stat() { echo 9999999999; }                     # GNU stat -c %Y, run only through sudo -u (as the owner)
+sleep() { echo $(( $(cat "$T/clock") + ${1:-1} )) > "$T/clock"; }      # a fake clock: sleeping only advances it
+date() { if [ "${1:-}" = +%s ]; then cat "$T/clock"; else command date "$@"; fi; }
+stat() { echo "${STAT_MTIME:-9999999999}"; }    # GNU stat -c %Y, run only through sudo -u (as the owner)
+systemd-run() {
+  case " $* " in *" --watch "*) echo "$*" >> "$T/watch_spawned"; return 0 ;; esac
+  echo "$*" >> "$T/systemd_run.log"
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
+  shift
+  "$@"
+}
 sudo() {
   local who=root; while [ $# -gt 0 ]; do case "$1" in -u) who=$2; shift 2 ;; -H) shift ;; *) break ;; esac; done
   echo "$who $*" >> "$T/sudo.log"
@@ -93,7 +103,14 @@ elif cmd == "is-active":
     u = st["units"].get(norm(args[1]), {})
     sys.exit(0 if u.get("active") and head() != st.get("fail_at") else 3)
 elif cmd == "show":
-    print(0)
+    if "NRestarts" in sys.argv:
+        calls = os.path.join(T, "show_calls")
+        n = int(open(calls).read()) + 1 if os.path.exists(calls) else 1
+        open(calls, "w").write(str(n))
+        bump = os.path.exists(os.path.join(T, "bump")) or (os.environ.get("BUMP_AFTER") and n > int(os.environ["BUMP_AFTER"]))
+        print(1 if bump else 0)
+    else:
+        print(0)
 elif cmd in ("stop", "start", "restart"):
     marker = os.path.join(T, "killed")
     if cmd == "restart" and os.environ.get("KILL_FILTER") and not os.path.exists(marker):
@@ -187,6 +204,18 @@ if not os.path.exists(src):
 shutil.copy(src, out)
 """
 
+FAKE_NPM = """#!/bin/sh
+echo "$PWD $*" >> "$T/npm.log"
+case "$1" in
+  ci) mkdir -p node_modules ;;
+  run) mkdir -p dist && { cat src.txt 2>/dev/null || echo built; } > dist/index.html ;;
+esac
+"""
+FAKE_UV = """#!/bin/sh
+echo "$PWD env=$UV_PROJECT_ENVIRONMENT $*" >> "$T/uv.log"
+[ -z "$UV_PROJECT_ENVIRONMENT" ] || mkdir -p "$UV_PROJECT_ENVIRONMENT"
+"""
+
 UNITS = {"goldbot-supervisor.service": True, "goldbot-engine@icm-demo.service": True, "goldbot-api.service": True,
          "goldbot-scheduler.service": True, "goldbot-telegram.service": True,
          "goldbot-engine@vantage-demo.service": False}          # a loaded but disabled stray instance
@@ -253,6 +282,12 @@ class Box:
         if aux is not None:
             make_aux(self.aux, aux)
         (tmp / "role").write_text("brain\n")
+        (tmp / "clock").write_text(str(int(time.time())))
+        (tmp / "bin").mkdir()
+        for name, body in (("npm", FAKE_NPM), ("uv", FAKE_UV)):
+            (tmp / "bin" / name).write_text(body)
+            (tmp / "bin" / name).chmod(0o755)
+        self.origin = origin
         (tmp / "harness.sh").write_text(HARNESS)
         (tmp / "systemctl_stub.py").write_text(SYSTEMCTL_STUB)
         self.units({})
@@ -273,7 +308,7 @@ class Box:
 
     def run(self, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         env = {"T": str(self.t), "SCRIPT": str(SCRIPT), "PYTHON": sys.executable,
-               "PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+               "PATH": f"{self.t / 'bin'}:{Path(sys.executable).parent}:/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
                "HOME": str(self.t), **(env or {})}
         assert BASH is not None
         return subprocess.run([BASH, str(self.t / "harness.sh"), *args], capture_output=True, text=True, env=env,
@@ -664,3 +699,177 @@ def test_the_stability_check_skips_timer_driven_oneshot_units():
     body = src.split("healthy() {", 1)[1].split("\n}\n", 1)[0]
     assert 'systemctl show -p Type --value "$s")" = oneshot ] && continue' in body
     assert body.index("= oneshot ] && continue") < body.index('systemctl is-active --quiet "$s"')
+
+
+# ------------------------------------------------------------------ staging, adaptive health window, order
+def _web_commit(box: Box, text: str, lock: str | None = None) -> str:
+    files = {"web/src.txt": text, "web/package.json": "{}"}
+    if lock is not None:
+        files["uv.lock"] = lock
+    return _commit(box.origin, files, f"web {text}")
+
+
+def _clock(box: Box) -> int:
+    return int((box.t / "clock").read_text())
+
+
+def _lines(box: Box, name: str) -> list[str]:
+    f = box.t / name
+    return f.read_text().splitlines() if f.exists() else []
+
+
+def _last(box: Box) -> str:
+    return box.records()[-1]["result"]
+
+
+def test_stage_prebuilds_without_touching_a_service_and_is_idempotent(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    sha = _web_commit(box, "v1", lock="lock-1")
+    before = box.head()
+    p = box.run("--stage", sha)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert box.calls() == [] and box.head() == before and box.records() == []      # no service, no checkout, no log
+    d = tmp_path / "stage" / sha
+    manifest = dict(x.split("=", 1) for x in (d / "manifest").read_text().splitlines())
+    assert manifest["dist"] == "yes" and len(manifest["dist_sha256"]) == 64
+    assert (d / "web" / "dist" / "index.html").read_text().strip() == "v1" and not (d / "web" / "node_modules").exists()
+    uv = _lines(box, "uv.log")
+    assert not (d / ".venv").exists() and len(uv) == 1 and "sync -q --frozen --extra live" in uv[0]
+    # the build ran in a memory-capped cgroup as the service user, and nothing in the stage was written by root
+    assert "MemoryMax=512M" in _lines(box, "systemd_run.log")[0]
+    assert not any(line.startswith("root ") for line in (tmp_path / "sudo.log").read_text().splitlines())
+    builds = len(_lines(box, "npm.log"))
+    again = box.run("--stage", sha)
+    assert again.returncode == 0 and "already staged" in again.stdout and len(_lines(box, "npm.log")) == builds
+
+
+def test_stage_refuses_anything_but_a_sha_and_a_non_brain_box_and_a_non_fast_forward(tmp_path):
+    box = Box(tmp_path, running="c2", aux=5)
+    for bad in ("latest", "abc", "../../etc", "G" * 40, box.c2.upper()):
+        assert box.run("--stage", bad).returncode != 0
+    assert box.run("--stage").returncode == 2                                  # usage
+    assert not (tmp_path / "stage").exists() or not list((tmp_path / "stage").iterdir())
+    p = box.run("--stage", box.c1)                                             # older than what runs
+    assert p.returncode == 1 and "not a fast-forward" in p.stdout
+    (tmp_path / "role").write_text("mt5\n")
+    assert box.run("--stage", box.c2).returncode == 1
+    assert box.calls() == [] and _lines(box, "npm.log") == []
+
+
+def test_the_deploy_reuses_a_verified_stage_even_for_the_merge_commit_with_the_same_tree(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    sha = _web_commit(box, "v1")
+    assert box.run("--stage", sha).returncode == 0
+    _git(box.origin, "commit", "-q", "--allow-empty", "-m", "merge commit with the PR head's tree")
+    merge = _git(box.origin, "rev-parse", "HEAD")
+    assert merge != sha and _git(box.origin, "rev-parse", f"{merge}^{{tree}}") == _git(box.origin, "rev-parse", f"{sha}^{{tree}}")
+    builds = len(_lines(box, "npm.log"))
+    p = box.run(merge)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert _last(box) == "deployed" and box.head() == merge
+    assert len(_lines(box, "npm.log")) == builds                                # no second npm ci / build
+    assert "reused the verified stage" in p.stdout
+    assert (box.root / "web" / "dist" / "index.html").read_text().strip() == "v1"
+
+
+def test_a_tampered_or_missing_stage_is_never_used(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    sha = _web_commit(box, "v1")
+    assert box.run("--stage", sha).returncode == 0
+    (tmp_path / "stage" / sha / "web" / "dist" / "index.html").write_text("evil")      # content no longer matches
+    builds = len(_lines(box, "npm.log"))
+    p = box.run(sha)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "reused" not in p.stdout and len(_lines(box, "npm.log")) == builds + 2         # npm ci + build as before
+    assert (box.root / "web" / "dist" / "index.html").read_text().strip() == "v1"
+    # a symlink inside the stage dist is refused too
+    box2 = Box(tmp_path / "b", running="c1", aux=4)
+    sha2 = _web_commit(box2, "v2")
+    assert box2.run("--stage", sha2).returncode == 0
+    (tmp_path / "b" / "stage" / sha2 / "web" / "dist" / "link").symlink_to("/etc/passwd")
+    p2 = box2.run(sha2)
+    assert p2.returncode == 0 and "reused" not in p2.stdout
+
+
+def test_the_adaptive_window_passes_after_30_s_and_the_deploy_reports_how_long(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    t0 = _clock(box)
+    assert box.run(box.c2).returncode == 0
+    waited = _clock(box) - t0
+    rec = box.records()[-1]
+    assert rec["result"] == "deployed" and 30 <= waited < 45 and "after 3" in rec["detail"]
+    assert "stable for 90 s" not in rec["detail"]
+
+
+def test_a_manual_rollback_and_the_recovery_still_wait_the_full_90_s(tmp_path):
+    box = Box(tmp_path, running="c2", aux=5)
+    t0 = _clock(box)
+    assert box.run("--rollback", box.c1).returncode == 0
+    assert _clock(box) - t0 >= 90
+    assert not (tmp_path / "watch_spawned").exists()                            # no watcher for a rollback
+
+
+def test_a_stale_heartbeat_since_the_restart_fails_the_window_and_rolls_back(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    t0 = _clock(box)
+    p = box.run(box.c2, env={"STAT_MTIME": "1"})                                # nothing writes a fresh heartbeat
+    assert p.returncode == 1
+    assert _last(box) in ("rolled_back", "failed")
+    assert _clock(box) - t0 >= 90                                               # it waited its 90 s before giving up
+
+
+def test_a_restart_inside_the_window_rolls_back_at_once(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    t0 = _clock(box)
+    p = box.run(box.c2, env={"BUMP_AFTER": "9"})                                # NRestarts rises at the first poll
+    assert p.returncode == 1 and _last(box) == "rolled_back" and box.head() == box.c1
+    assert _clock(box) - t0 < 60 + 90                                           # fast fail, then the recovery's full wait
+
+
+def test_the_engine_restarts_right_after_the_supervisor_and_before_the_other_services(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    assert box.run(box.c2).returncode == 0
+    order = [a.split()[1] for a in box.actions() if a.startswith("restart")]
+    assert order[0] == "goldbot-supervisor.service" and order[1] == "goldbot-engine@icm-demo.service"
+    assert set(order[2:]) == {"goldbot-api.service", "goldbot-scheduler.service", "goldbot-telegram.service"}
+    assert "goldbot-engine@vantage-demo.service" not in order                  # a disabled stray is never started
+
+
+def test_the_report_starts_a_watcher_that_rolls_back_a_later_restart_and_otherwise_ends_quietly(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    assert box.run(box.c2).returncode == 0
+    assert "--watch" in (tmp_path / "watch_spawned").read_text()
+    watch = (tmp_path / "var" / "watch").read_text().splitlines()
+    assert watch[0].split()[:2] == [box.c2, box.c1] and "goldbot-engine@icm-demo.service 0" in watch
+    assert not any(w.startswith("goldbot-engine@vantage") for w in watch)
+    saved = (tmp_path / "var" / "watch").read_text()
+    # quiet: the watcher runs to its deadline and changes nothing
+    t0 = _clock(box)
+    assert box.run("--watch").returncode == 0
+    assert _last(box) == "deployed" and box.head() == box.c2 and not (tmp_path / "var" / "watch").exists()
+    assert _clock(box) - t0 >= 50
+    # a restart after the report: rolled back, audited
+    first, rest = saved.split("\n", 1)
+    target, previous, _ = first.split()
+    (tmp_path / "var" / "watch").write_text(f"{target} {previous} {_clock(box) + 60}\n{rest}")      # a fresh deadline
+    (tmp_path / "bump").write_text("")
+    p = box.run("--watch")
+    assert p.returncode == 1, p.stdout + p.stderr
+    assert box.head() == box.c1 and _last(box) in ("rolled_back", "failed")
+
+
+def test_a_watcher_for_a_version_that_no_longer_runs_does_nothing(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    (tmp_path / "var").mkdir()
+    (tmp_path / "var" / "watch").write_text(f"{box.c2} {box.c1} 9999999999\ngoldbot-api.service 0\n")
+    assert box.run("--watch").returncode == 0 and box.actions() == [] and box.records() == []
+    (tmp_path / "var" / "watch").write_text("garbage\n")
+    assert box.run("--watch").returncode == 0 and box.actions() == []
+    assert box.run("--watch", "extra").returncode == 2
+
+
+def test_the_heartbeat_service_list_matches_the_health_checks():
+    src = SCRIPT.read_text()
+    listed = set(next(ln for ln in src.splitlines() if ln.startswith("BEAT_SERVICES=")).split('"')[1].split())
+    from goldbot.ops.checks._base import HEARTBEAT_SERVICES, OPTIONAL_HEARTBEAT_SERVICES
+    assert listed == set(HEARTBEAT_SERVICES) | set(OPTIONAL_HEARTBEAT_SERVICES)
