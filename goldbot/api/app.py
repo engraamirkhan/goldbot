@@ -35,7 +35,16 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
-from goldbot.api import activity, chart_layouts, entry_status, explain, limits, progress, trades_overview
+from goldbot.api import (
+    activity,
+    chart_layouts,
+    entry_status,
+    explain,
+    limits,
+    mt5_crop,
+    progress,
+    trades_overview,
+)
 from goldbot.api.auth import (
     EMAIL_CODE_TTL_S,
     EMAIL_LINK_TTL_S,
@@ -1118,15 +1127,21 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     def chart_mt5(_: User = Depends(auth)) -> Response:
         png = Path(st.dir) / "chart" / "mt5.png"
         try:
-            captured = png.stat().st_mtime
-            body = png.read_bytes()
+            age = time.time() - png.stat().st_mtime
         except OSError:
             raise HTTPException(404, "no MT5 chart capture yet") from None
-        age = time.time() - captured
         if age > MT5_CHART_MAX_AGE_S:
             raise HTTPException(404, f"the MT5 chart capture is stale ({int(age)} s old)")
+        try:
+            res, captured = mt5_crop.cached_crop(Path(st.dir))
+        except OSError:
+            raise HTTPException(404, "no MT5 chart capture yet") from None
         iso = datetime.fromtimestamp(captured, tz=timezone.utc).isoformat()
-        return Response(body, media_type="image/png", headers={"X-Captured-At": iso, "Cache-Control": "no-store"})
+        # only the chart pane is served (goldbot/api/mt5_crop.py); the headers say which chart it is
+        return Response(res.png, media_type="image/png", headers={
+            "X-Captured-At": iso, "Cache-Control": "no-store", "X-Chart-Cropped": str(res.cropped).lower(),
+            "X-Chart-Symbol": res.symbol, "X-Chart-Timeframe": res.timeframe,
+            "X-Chart-Gold": "unknown" if res.gold is None else str(res.gold).lower()})
 
     @app.get("/api/chart/layouts", response_model=ChartLayoutsView)
     def chart_layouts_get(u: User = Depends(auth)) -> ChartLayoutsView:

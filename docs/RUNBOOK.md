@@ -2105,6 +2105,7 @@ runs `import -window root` on display `:99` into `/home/mt5/chart/mt5.png` (atom
 `goldbot-chart-fetch.timer` (user `goldbot`, every 60 s) pulls it with its own SSH key, which may run one command only
 (`goldbot-chart-serve.sh`, a `tar` of that file; no shell, no forwarding), into `/opt/goldbot/state/chart/mt5.png`. The API returns the PNG
 with an `X-Captured-At` header to any signed-in role, and 404 when the file is missing or older than 5 minutes (dashboard: show a placeholder).
+The brain crops the capture to the chart pane (`goldbot/api/mt5_crop.py`: the largest dark plot rectangle plus its price scale and time axis; the XAUUSD pane when its title is readable, which needs the optional `tesseract` binary on the brain, else the largest pane), writes `state/chart/mt5_chart.png` and serves that, with `X-Chart-Cropped`, `X-Chart-Symbol`, `X-Chart-Timeframe` and `X-Chart-Gold` (`true`/`false`/`unknown`) headers; no pane found serves the full image with `X-Chart-Cropped: false`. The dashboard notes "MT5 is showing <SYM>" only when the symbol is known and not gold.
 It shows whatever chart window the terminal has open (one timeframe, as configured; switching timeframes from the dashboard is out of scope).
 
 Install (standalone: needs no `/opt/goldbot` update on the MT5 box, and touches neither the terminal nor the bridge; `<SHA>` is a merged main commit). Root installs the scripts and units from its own hash-checked clone, never from `/opt/goldbot`. On the MT5 box:
