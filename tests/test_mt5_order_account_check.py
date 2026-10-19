@@ -5,6 +5,7 @@ bridge's GuardedBroker (`accounts.verify_terminal_account`) and refuses the entr
 never checked (closing only reduces risk; the kill switch closes everything), exactly as the bridge.
 
 The logins below are made up."""
+import sys
 from collections import namedtuple
 from types import SimpleNamespace
 from typing import Any
@@ -127,3 +128,38 @@ def test_without_a_check_the_adapter_sends_as_before(monkeypatch):
     broker = mt5_adapter.MT5Broker(terminal_path="", login=None, password=None, server=SERVER,
                                    server_tz="Europe/Athens", symbol="XAUUSD", account_label="icm-demo", verify=None)
     assert broker.place_order(_intent()).ok
+
+
+# ------------------------------------------------------------------------------------- the engine's direct terminal
+class _Built(Exception):
+    pass
+
+
+def test_the_engine_builds_its_direct_terminal_broker_with_the_per_order_account_check(monkeypatch, tmp_path):
+    from goldbot.ops import run as run_mod
+    from goldbot.ops.services import engine as engine_service
+    seen: dict[str, Any] = {}
+
+    def built(**kw: Any) -> None:
+        seen.update(kw)
+        raise _Built
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(accounts, "load_accounts", lambda path=None: {"icm-demo": ACC})
+    monkeypatch.setattr(accounts, "bridge_endpoint", lambda aid: None)
+    monkeypatch.setattr(accounts, "ensure_login", lambda acc: acc)
+    monkeypatch.setattr(accounts, "account_password", lambda acc: "not-a-password")
+    monkeypatch.setattr(mt5_adapter, "MT5Broker", built)
+    # the direct-terminal branch, wherever the test runs: only the engine service sees win32 (the store's lock does not)
+    monkeypatch.setattr(engine_service, "sys", SimpleNamespace(**{**vars(sys), "platform": "win32"}))
+    with pytest.raises(_Built):
+        run_mod.run_engine("icm-demo")
+    monkeypatch.undo()
+    verify = seen["verify"]
+    assert callable(verify)
+    def info(login: int = LOGIN, mode: str = "demo") -> SimpleNamespace:   # as MT5Broker.account() reports it
+        return SimpleNamespace(login=login, server=SERVER, trade_mode=mode, margin_mode="hedging")
+
+    assert verify(info()) is None
+    assert "another account" in verify(info(login=OTHER_LOGIN))
+    assert "terminal account is real" in verify(info(mode="real"))

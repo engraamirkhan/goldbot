@@ -6,7 +6,7 @@ import pytest
 
 from goldbot.engine.runner import DEFINITE_REJECT_RETCODES
 from goldbot.execution.bridge import BridgeError, BridgeUnavailable
-from goldbot.execution.broker import OrderResult
+from goldbot.execution.broker import ACCOUNT_REFUSAL, OrderResult
 from goldbot.execution.not_placed import (
     CEILING_CODES,
     NotPlaced,
@@ -26,7 +26,7 @@ RAW = "Request rejected by trade server"
 
 def _codes() -> list[str]:
     return ([f"broker_refused:{r}" for r in sorted(DEFINITE_REJECT_RETCODES)]
-            + ["broker_refused:10027:paper", "bridge_stale_order", *CEILING_CODES])
+            + ["broker_refused:10027:paper", "bridge_stale_order", *CEILING_CODES, ACCOUNT_REFUSAL])
 
 
 def _res(retcode: int, message: str = RAW) -> OrderResult:
@@ -231,3 +231,15 @@ def test_a_not_sent_card_counts_as_not_placed_and_a_refusal_never_reads_not_sent
     assert approval_cause(["not_sent:mt5_box"]) == "not_placed"
     assert all(not (np := not_placed(c)) or not np.not_sent for c in _codes())
     assert not_placed("not_sent:somewhere") is None
+
+
+def test_an_entry_refused_for_a_switched_terminal_account_reads_as_refused_by_the_engine_not_the_broker():
+    # trading-safety follow-up: MT5Broker's per-order account check also answers 10006, which the broker uses too
+    res = _res(10006, f"{ACCOUNT_REFUSAL}: terminal is logged in to another account than icm-demo")
+    assert _code(res) == ACCOUNT_REFUSAL
+    np = not_placed(ACCOUNT_REFUSAL)
+    assert np is not None and np.by == "engine" and np.nothing_sent and not np.not_sent
+    assert card_text(ACCOUNT_REFUSAL) == ("🛑 NOT PLACED: approved, but the engine refused it: the MT5 terminal is "
+                                          "logged in to a different account. Nothing was sent.")
+    assert approval_cause([ACCOUNT_REFUSAL]) == "not_placed"
+    assert _code(_res(10006)) == "broker_refused:10006"          # the broker's own 10006 stays the broker's

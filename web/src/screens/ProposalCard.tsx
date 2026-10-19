@@ -168,13 +168,14 @@ function Outcome({ p, state }: { p: AnyProposal; state: CardState }) {
       return <p className="outcome muted-box" role="status"><strong>Rejected</strong> · {reasonLabel(d?.reason_code)}{tail}</p>;
     case "refused":
       {
-        // docs/ux/order-not-placed.md: the RiskGate allowed it; the MT5 box or the broker refused it. The API words it
+        // docs/ux/order-not-placed.md: the RiskGate allowed it; the MT5 box, the broker or the engine refused it. The API words it
         // (`not_placed`, one table with the Telegram card and notice); the codes are never shown
         const np = d?.not_placed;
         if (np) {
           // BACKLOG 85: `not_sent`, the approval failed before the order existed: nobody refused it
           const heading = np.not_sent ? "Could not be sent"
-            : np.by === "mt5_box" ? "Refused by the MT5 box" : "Refused by the broker";
+            : np.by === "mt5_box" ? "Refused by the MT5 box"
+            : np.by === "engine" ? "Refused by the engine" : "Refused by the broker";   // engine: a switched terminal account
           return (
             <p className="outcome bad" role="status">
               {np.reason != null

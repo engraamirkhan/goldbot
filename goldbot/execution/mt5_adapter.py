@@ -52,6 +52,7 @@ import pandas as pd
 from goldbot.data.calendar import SessionTable, TradingSession, resolve_server_sessions
 from goldbot.data.timeutil import server_to_utc, server_wall
 from goldbot.execution.broker import (
+    ACCOUNT_REFUSAL,
     AccountInfo,
     OrderIntent,
     OrderResult,
@@ -78,7 +79,6 @@ RETCODE_REQUOTE = 10004
 RETCODE_REJECT = 10006
 RETCODE_INVALID_VOLUME = 10014
 RETCODE_PRICE_OFF = 10021        # no quotes: a close the engine retries (not a market-closed backoff code)
-ACCOUNT_REFUSAL = "terminal_account_changed"   # the message prefix of an entry refused by the per-order account check
 
 
 def _positions_get(**kw: Any) -> Any:
