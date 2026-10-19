@@ -106,6 +106,13 @@ class RiskLimitsCurrent(FrozenRecord):
     # default risk per trade. Empty: today's fixed values
     strategy_risk: dict[str, float] = {}
     risk_terms: dict[str, RiskTerm] = {}
+    # trading-safety review 2026-10-19 (MEDIUM): the engine's lowest same-day scale of the risk day (k_vol x k_dd x
+    # k_day, engine/limits_apply.py `DayRisk`), so the change log holds it and a restart the same day keeps the cut.
+    # `clamp` keeps it in (0, 1]; 1 = no cut
+    risk_scale: float = 1.0
+    # ...and (LOW) the nightly decision's account-level volatility regime (`AdaptiveState.vol_high`: the 20-day median
+    # ATR15 at or above its 1-year p90), so the vol cut applies with no strategy terms and at the floors; None = unknown
+    vol_high: bool | None = None
 
     def tag(self) -> LimitsTag:
         return LimitsTag(daily_cap=self.daily_cap, weekly_cap=self.weekly_cap, min_lot_risk_cap=self.min_lot_risk_cap,
@@ -180,6 +187,13 @@ def _bounded(value: float | None, floor: float | None, ceiling: float | None) ->
     return min(max(value, floor if floor is not None else 0.0), ceiling)
 
 
+def _scale(value: float) -> float:
+    """The same-day scale as a cut in (0, 1]; anything else (above 1, not a finite number > 0) is 1, no cut: the
+    engine recomputes today's factors at its next refresh."""
+    ok = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and 0 < value <= 1
+    return float(value) if ok else 1.0
+
+
 def _strategy_risk(risk: dict[str, float], floor: float, ceiling: float) -> dict[str, float]:
     """Each value within [floor, ceiling]; one that is not a finite number > 0 is dropped (its strategy trades the
     default)."""
@@ -208,8 +222,8 @@ def clamp(cur: RiskLimitsCurrent, defaults: RiskLimits, account: Account, eviden
     [default .. ceiling] and open risk projected; any other account -> each limit at most its default (never raised).
     The profile is derived here, never trusted: `default` unless some limit is above its default."""
     ov = None if evidence.reverted else active_overrides(account)
-    if evidence.reverted:
-        return _defaults(defaults, "reverted", evidence)
+    if evidence.reverted:            # the vol regime is a fact, not a limit: it keeps cutting under the defaults
+        return _defaults(defaults, "reverted", evidence).model_copy(update={"vol_high": cur.vol_high})
     base = defaults.risk_per_trade
     if ov is None:
         risk = _strategy_risk(cur.strategy_risk, 0.0, base)     # no overrides (live): tighten only, never raised to a floor
@@ -219,7 +233,7 @@ def clamp(cur: RiskLimitsCurrent, defaults: RiskLimits, account: Account, eviden
         return cur.model_copy(update={"profile": DEFAULT_PROFILE, "daily_cap": daily, "weekly_cap": weekly,
                                       "min_lot_risk_cap": mlr, "supervisor_daily_cap": None,
                                       "supervisor_weekly_cap": None, "strategy_risk": risk,
-                                      "risk_terms": _terms(cur.risk_terms, risk),
+                                      "risk_terms": _terms(cur.risk_terms, risk), "risk_scale": _scale(cur.risk_scale),
                                       "project_open_risk": cur.project_open_risk or defaults.project_open_risk})
     c = ov.ceilings
     daily = _cap(cur.daily_cap, defaults.daily_cap, max(defaults.daily_cap, c.daily or defaults.daily_cap))
@@ -234,7 +248,8 @@ def clamp(cur: RiskLimitsCurrent, defaults: RiskLimits, account: Account, eviden
         any(r > base + 1e-12 for r in risk.values())
     return cur.model_copy(update={"profile": ov.profile if raised else DEFAULT_PROFILE, "daily_cap": daily,
                                   "weekly_cap": weekly, "min_lot_risk_cap": mlr, "project_open_risk": True,
-                                  "strategy_risk": risk, "risk_terms": _terms(cur.risk_terms, risk)})
+                                  "strategy_risk": risk, "risk_terms": _terms(cur.risk_terms, risk),
+                                  "risk_scale": _scale(cur.risk_scale)})
 
 
 def apply(defaults: RiskLimits, cur: RiskLimitsCurrent) -> RiskLimits:
