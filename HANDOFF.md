@@ -51,6 +51,15 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   entries for that timeframe (journal `history_gap:<tf>`, no shadow entry; exits, policies, open shadow trades
   unaffected) and is re-filled every 30 min. `engine_<account>.json` gains `history_gap` and `history_backfill`
   (cut-over, fill status, dropped batches). Not yet: a health check and a dashboard tile reading them.
+- H-48 (`sweep_absorb`, #88) and H-50 (`box_break_close` 15m, #89) read STOP and are retired (R-14, R-15 in
+  `research.retired_families` and hypotheses.md section B). H-51a/b lapse.
+  - The roster agents keep running on demo as parity/cost monitors, with no promotion route.
+  - Probes keep mirroring them (ADR 0040), a disclosed deviation from the STOP clause, per the owner's
+    demo-for-learning directive.
+- The H-50 count gap (5,835 trial events vs 2,404 pre-registered) is a counting-convention error in the
+  pre-registration (time-limit block vs label exit). The trial ran the frozen rule.
+- H-53 (`box_break_close` 1h, about 1,625 events) is pre-registered, not dispatched: first 2027Q1 open slot, or an
+  owner raise 55 → 56. See `docs/research/prereg-2026-10-19-h50-followup.md`.
 - Home live activity feed (owner request 2026-10-19: "no useful information on what is happening"):
   `GET /api/activity?limit=50` (viewer and above, read-only, built at most every 10 s) merges shadow trades opened and
   closed (taken only; state/shadow_book.json, stamped at their bars' close), account positions opened and closed

@@ -108,7 +108,8 @@ order below. No item ranks, tunes or selects by shadow P&L.
 
 **Retire from the roster** (written now, before any clean trade):
 - The research trial reads STOP (H-48, H-50, H-49 stage 2): retired the same day, and probes stop mirroring the
-  agent.
+  agent. *Amended 2026-10-19 by ADR 0040: probes keep mirroring the retired roster agents on demo (owner's
+  demo-for-learning directive); promotion stays shut.*
 - Parity is below 95% on 3 consecutive clean days, or on 5 in any 10: suspended. The fault goes to the implementer
   within 24 h. Reinstated after the fix, with its evidence restarted from the fix.
 - Futility, at 40 clean clusters: the upper bound of the 95% CI of net mean R per trade is below 0. Then the agent is
@@ -145,10 +146,13 @@ order below. No item ranks, tunes or selects by shadow P&L.
 | Row | Owner | Date | Status 10-19 |
 |---|---|---|---|
 | Live-review prereg committed | strategy-researcher / release-manager | 10-19 | untracked: **open** |
-| H-48 dispatched + verdict | research-director / evaluator | 10-20 / 10-21 | funded, 0 runs |
+| H-48 dispatched + verdict | research-director / evaluator | 10-20 / 10-21 | **done 10-19**: run 39279358684, trial #88, STOP; retired R-14 |
 | H-49 stage-1 JSON committed | strategy-researcher | 10-20 | not run |
-| H-50 screening-dispatch precondition | implementer | 10-21 | open |
-| H-50 dispatched + verdict | research-director / evaluator | 10-21 / 10-22 | open (slot: R1) |
+| H-50 screening-dispatch precondition | implementer | 10-21 | **done** (run 39284389371 ran the rule-only screen) |
+| H-50 dispatched + verdict | research-director / evaluator | 10-21 / 10-22 | **done 10-19**: run 39284389371, trial #89, STOP; retired R-15; H-51a/b lapse; probes keep mirroring (ADR 0040) |
+| ADR 0040 + R-14/R-15 reviews (quant, trading-safety) | research-director → program-director | 10-21 | open (branch research/h50-followup) |
+| H-53 funding: owner raise 55 → 56, or first 2027Q1 open slot | program-director (owner ask) / research-director (dispatch) | 10-23 ask / 2027-01-04 dispatch | pre-registered 10-19, not dispatched |
+| Counts-only template: state both one-at-a-time bounds | strategy-researcher | 10-26 | open |
 | Shadow quarantine + daily parity | implementer / data-engineer | 10-23 | not started |
 | icm-probe live, probe budget ruling | sre / trading-safety / CFO | 10-22 | account being brought up |
 | Loop restriction (R4) note | program-director | 10-22 | open |
