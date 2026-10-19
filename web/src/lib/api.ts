@@ -117,9 +117,12 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return r.json() as Promise<T>;
 }
 
+/** The MT5 chart pane cropped on the server; isGold null = the title could not be read. */
+export type Mt5Shot = { url: string; capturedAt: string | null; cropped: boolean; symbol: string; isGold: boolean | null };
+
 /** The MT5 terminal picture (PNG) for one timeframe, fetched with the session token so it can become a blob URL.
  * null = no fresh capture (404, older than 5 minutes). The caller owns the URL and must revoke it. */
-async function mt5Chart(tf: string): Promise<{ url: string; capturedAt: string | null } | null> {
+async function mt5Chart(tf: string): Promise<Mt5Shot | null> {
   const sent = token;
   let r: Response;
   try {
@@ -130,7 +133,12 @@ async function mt5Chart(tf: string): Promise<{ url: string; capturedAt: string |
   if (r.status === 401) { endSession(sent); throw new ApiError(401, "login required"); }
   if (r.status === 404) return null;
   if (!r.ok) throw new ApiError(r.status, r.statusText);
-  return { url: URL.createObjectURL(await r.blob()), capturedAt: r.headers.get("X-Captured-At") };
+  const gold = r.headers.get("X-Chart-Gold");
+  return {
+    url: URL.createObjectURL(await r.blob()), capturedAt: r.headers.get("X-Captured-At"),
+    cropped: r.headers.get("X-Chart-Cropped") === "true", symbol: r.headers.get("X-Chart-Symbol") ?? "unknown",
+    isGold: gold === "true" ? true : gold === "false" ? false : null,
+  };
 }
 
 export const api = {

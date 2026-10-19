@@ -214,6 +214,9 @@ class CostProbe:
             r = conn.execute("SELECT agent_id FROM cost_probes WHERE account_id = ? ORDER BY ts_ns DESC LIMIT 1",
                              (eng.cfg.account_id,)).fetchone()
         self.last_agent: str | None = str(r[0]) if r else None
+        # untaken probes sent by this process (client order id -> sent): counted even when the order raised and no
+        # ledger row was written (safety review LOW-2)
+        self.untaken_sent: dict[str, pd.Timestamp] = {}
 
     @classmethod
     def start(cls, eng: Engine) -> CostProbe | None:
@@ -441,14 +444,18 @@ def untaken_refusal(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, headr
     since = eng._last_reset if eng._last_reset is not None else close_ts.floor("D")
     try:
         with probe.db.connection() as conn:
-            rows = [r for r in LEDGER.select(conn, "account_id = ?", (eng.cfg.account_id,)) if not r.taken]
+            every = LEDGER.select(conn, "account_id = ?", (eng.cfg.account_id,))
     except Exception as exc:
         log.warning("cost probe ledger unreadable (%s): no untaken probe", type(exc).__name__)
         return "ledger_unreadable"
-    if sum(1 for r in rows if r.sent_utc >= since) >= UNTAKEN_PER_DAY:
+    rows = [r for r in every if not r.taken]
+    sent = {r.client_order_id for r in rows if r.sent_utc >= since} | {k for k, ts in probe.untaken_sent.items()
+                                                                        if ts >= since}
+    if len(sent) >= UNTAKEN_PER_DAY:
         return "daily_cap"
-    open_ids = set(_probes_open(eng))
-    if sum(1 for r in rows if r.exit_utc is None and r.position_id in open_ids) >= eng.cfg.cost_probe_max_open // 2:
+    # an open probe the ledger does not know as taken (untaken, or adopted with no row) holds an untaken slot
+    taken_ids = {r.position_id for r in every if r.taken and r.position_id is not None}
+    if sum(1 for pid in _probes_open(eng) if pid not in taken_ids) >= eng.cfg.cost_probe_max_open // 2:
         return "slots_reserved"
     if headroom <= eng.cfg.cost_probe_budget * _limit(eng) / 2:
         return "budget_reserved"
@@ -503,6 +510,8 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
                     entry=t.entry, stop=stop, target=target, p=t.p, ev_r=0.0, spread_points=eng.state.spread_points,
                     top_features=[])
     sent = pd.Timestamp.now("UTC")
+    if not t.taken:
+        probe.untaken_sent[pid] = close_ts
     t0 = time.perf_counter()
     try:
         res = eng._execute(prop, cast("Specialist", _ProbeAgent(agent)), gd.lots, stop, target, requested=price,

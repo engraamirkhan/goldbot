@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
-import { api } from "../lib/api";
+import { api, type Mt5Shot } from "../lib/api";
 
 // MT5 (IC Markets) terminal picture beside the TradingView chart. Refetched every 60 s and on timeframe change; the
 // server answers 404 when its capture is older than 5 minutes. The blob URL is revoked on every refresh and on unmount.
+// The server crops the capture to the chart pane (plot, price scale, time axis); a known non-gold symbol is noted.
 // The image fills the panel width at its own aspect ratio (no fixed height); over 3 minutes old it carries a STALE badge.
 
 const TF_WORDS: Record<string, string> = { "15": "15-minute", "60": "1-hour", "240": "4-hour", "1D": "daily" };
 const STALE_MS = 3 * 60 * 1000;
 
-type Shot = { url: string; capturedAt: string | null } | "none" | "error" | null;
+type Shot = Mt5Shot | "none" | "error" | null;
 
 function hhmm(iso: string | null): { local: string; utc: string; ms: number } | null {
   const d = iso ? new Date(iso) : null;
@@ -56,6 +57,7 @@ export function Mt5Chart({ tf }: { tf: string }) {
           </a>
         )}
       </div>
+      {img && img.isGold === false && <p className="muted" role="status">MT5 is showing {img.symbol} — gold chart not open</p>}
       {img && (
         <p className="muted mt5-cap">
           MT5 chart, IC Markets{t && <> · <span title={`${t.utc} UTC`}>updated {t.local}</span> your time ({t.utc} UTC)</>}

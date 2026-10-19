@@ -94,7 +94,9 @@ def triple_barrier(bars: pd.DataFrame, signals: pd.DataFrame, spec: BarrierSpec,
     bars: ts_utc, bid_high, bid_low, bid_close, ask_high, ask_low, ask_close (store schema), positional index 0..n-1
     signals: frame with columns `idx` (position of signal bar) and `side` (+1 long / -1 short), optionally `max_bars`
              (that candidate's time barrier, e.g. a pooled rung whose 4h signals keep their 4h exit on 1h bars;
-             absent: `spec.max_bars` for every candidate, the output unchanged)
+             absent: `spec.max_bars` for every candidate, the output unchanged) and `target_atr` (that candidate's target
+             in ATR/R units, e.g. a level-run rule whose target is a price level; absent: `spec.target_atr`; the output
+             then also carries it as `target_atr`)
     atr: ATR per bar (same index as bars)
     Returns one row per signal: label (+1 target, -1 stop, 0 time-out), ret (signed net return), t_exit (position),
     bars_held, entry, exit, barrier_hit. With `swap`, also swap_nights (nights charged, triple counted three times)
@@ -110,13 +112,13 @@ def triple_barrier(bars: pd.DataFrame, signals: pd.DataFrame, spec: BarrierSpec,
     rows = []
     use_policy = policy is not None and policy.active
     close_ts = _bar_close_times(bars) if use_policy else None
-    for idx, side, hold in zip(signals["idx"].to_numpy().astype(int), signals["side"].to_numpy().astype(int),
-                               _max_bars(signals, spec)):
+    for idx, side, hold, tmult in zip(signals["idx"].to_numpy().astype(int), signals["side"].to_numpy().astype(int),
+                                      _max_bars(signals, spec), _target_atr(signals, spec)):
         e = idx + 1
         if e >= n or not np.isfinite(a[idx]) or a[idx] <= 0:
             continue
         entry = ask_c[idx] if side > 0 else bid_c[idx]  # fill at next bar open ~ signal close + spread side
-        tgt = entry + side * spec.target_atr * a[idx]
+        tgt = entry + side * tmult * a[idx]
         stp = entry - side * spec.stop_atr * a[idx]
         last = min(e + hold, n - 1)
         if use_policy:
@@ -155,6 +157,9 @@ def triple_barrier(bars: pd.DataFrame, signals: pd.DataFrame, spec: BarrierSpec,
         bar_ts = pd.DatetimeIndex(pd.to_datetime(bars["ts_utc"], utc=True))
         out["ts_utc"] = bar_ts[out["idx"].to_numpy()]
         out["ts_exit"] = bar_ts[out["t_exit"].to_numpy()]
+        if "target_atr" in signals.columns:
+            out["target_atr"] = signals.set_index("idx")["target_atr"].groupby(level=0).first().reindex(
+                out["idx"]).to_numpy(dtype=float)
         if swap is not None:
             close = _bar_close_times(bars)
             nights = rollover_nights(close[out["idx"].to_numpy()], close[out["t_exit"].to_numpy()], swap.server_tz,
@@ -170,6 +175,13 @@ def _max_bars(signals: pd.DataFrame, spec: BarrierSpec) -> np.ndarray:
     if "max_bars" in signals.columns:
         return signals["max_bars"].to_numpy().astype(int)
     return np.full(len(signals), spec.max_bars, dtype=int)
+
+
+def _target_atr(signals: pd.DataFrame, spec: BarrierSpec) -> np.ndarray:
+    """Each candidate's target in ATR units: its own `target_atr` column when the signals carry one, else the spec's."""
+    if "target_atr" in signals.columns:
+        return signals["target_atr"].to_numpy(dtype=float)
+    return np.full(len(signals), spec.target_atr, dtype=float)
 
 
 def _policy_row(policy: ExitPolicy, idx: int, side: int, e: int, last: int, entry: float, tgt: float, stp: float,

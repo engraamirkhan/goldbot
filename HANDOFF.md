@@ -26,6 +26,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   currency on both. An open position whose engine state is missing counts as demo. The Home page shows it under the
   activity feed (web/src/screens/TradesOverview.tsx): a tile per type, Today / 7 days / All, and a table by strategy or
   timeframe, refreshed every 30 s. Code: goldbot/api/trades_overview.py.
+- MQL5 ports of the three indicators for the MT5 chart (`goldbot/ops/linux/mt5/indicators/`: structure, boxes with
+  break-and-close, money flow), same inputs/defaults as `smc_replica`/`mfi_signals`/`box_course`, closed bars only;
+  `tests/test_mql5_ports.py` pins the defaults and the file shape. Not compiled (no MetaEditor) and not installed:
+  RUNBOOK 2.7e, requires owner approval.
 - Research director ruling 2026-10-19 parts B and C ("the system needs to learn, so more trades need to be opened and
   closed"). B: the shadow book records every signal as its own trade, up to `shadow.max_open_per_agent: 3` open per
   agent and version (beyond it: counted in `VersionBook.skipped_cap`, logged "skipped: cap"); `PerfStats` gains
@@ -91,6 +95,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   validation -> `--lot-fit`. Default off: no key, outputs and registry rows unchanged (tested). Not done: routing before
   RiskGate (ATR stop, else H-25, else skip); `--lot-fit` with --discover/--cpcv/--h16 is refused; margin and the other
   gate checks are not part of "unfit".
+- KB hypotheses implemented, not yet run (`docs/research/prereg-kb-2026-10-18.md`): specialists `sweep_absorb` (H-48) and
+  `eq_liquidity_run` (H-49 stage 2), one typed preset `prereg` each, `screening` (out of GRID_V1, the founders and the
+  pools), plus `scripts/kb5_magnet_base_rate.py` (H-49 stage 1, counts and base rates only) and
+  `scripts/kb1_retest_selection.py` (D-KB1). Labels gained an optional per-candidate `target_atr` column (H-49's target is
+  a price level). The prereg text's "reward:risk 1.1-2.3" for H-49 is an arithmetic slip: the fixed distances give
+  0.73-1.67 R (flagged in the specialist docstring). Counts on the pinned series are owed (no market data in the
+  sandbox). Dispatch order: H-49 stage 1 -> H-48 -> (only if stage 1 passes) H-49 stage 2. The 2026Q4 override
+  (53 -> 55) is NOT in this commit (surfaced to the owner).
 - Secrets no longer fall back silently to plaintext `state/.secrets.json`: `keyring` is now a base dependency; `set_secret` refuses unless no keyring backend works AND `GOLDBOT_ALLOW_PLAINTEXT=1` on a non-macOS/Windows host (set in CI); `accounts set` prints which store was used; an existing fallback file is migrated into the keyring on first read (`accounts migrate` on demand) and the moved keys deleted. Owner: run `uv sync` once on the Mac.
 - Program ledger sync and backfill: `ledger sync` sends unacknowledged rows (JSONL, sha256-deduped) Mac -> brain over ssh to a forced command (`goldbot-ledger-ingest.sh` -> `ledger ingest`: append-only, scanned, bad rows rejected, prints `ack N`); `ledger import registry|adrs|directives|owner-notes|resume|artifacts|all` backfills history idempotently (owner notes private, artifacts sha256+size, no blob over 256 KB). Owner steps: RUNBOOK "Program ledger sync (Mac -> brain)". Not done: the key is not yet installed on the brain.
 - Limits, TradingView and research-today cards (docs/ux/limits-and-tradingview.md; read-only, any signed-in role). `GET /api/limits` (goldbot/api/limits.py) shows each account's caps as the gate enforces them (engine file `limits`, `limits_current`, `limits_reverted`, `daily_loss_limit`), the revert's time and cause (core.db `limits_state`), the supervisor's combined caps against the CFO envelope, and the last change; `GET /api/limits/changes` lists changes newest first from goldbot/ops/limits_log.py, which diffs ADR 0032 `limits_changes` snapshots per field (a restart that logs the same limits is not a change) and reads ADR 0031 `adaptive_changes` with its reason codes in words. `TvStatusView` gains the pull's sign-in (state/tv_auth.db via `tv_pull_health.signin_state`, shared with the health check; tv.db never opened), last pull, stale > 36 h, the one-line fix command and pull_live / pull_history counts (the `chart` series is not listed). `ResearchView.today` counts the UTC day's trials by verdict. Web: Limits tab after Progress, Overview limits strip + TradingView chip + research line, TradingView card on Feeds, research-today card on Research. Telegram: `goldbot/telegram/limits_notices.py` sends an FYI per change (silent on a raise, sound on a tighten or revert), cursor in aux.db migration 13, at least once, no replay on first start. Spec corrections: the week resets Sunday 00:00 UTC (gate.py), not 22:00; the fix command is the two real keyring entries; "Running" and a failed repaint state have no source and are not shown.
@@ -106,6 +118,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   "Attended MT5 box upgrade" has the single-line commands and the rollback if the test fails. Tests:
   tests/test_mt5_box_upgrade_sh.py (29, fake systemctl/sudo/install, local git remote); shellcheck clean. Reviews due:
   security (root-run, hash-checked download), SRE. Not run on a server.
+- MT5 chart panel shows only the chart: the brain crops the full-screen capture (`goldbot/api/mt5_crop.py`, Pillow/numpy; largest dark plot pane + price scale + time axis, XAUUSD pane preferred) to `state/chart/mt5_chart.png` and `GET /api/chart/mt5` serves it with `X-Chart-Cropped/Symbol/Timeframe/Gold` headers; no pane = full image, `cropped=false`. The dashboard notes "MT5 is showing <SYM> — gold chart not open" when the symbol is known and not gold. Not done: symbol/timeframe need the optional `tesseract` binary on the brain (otherwise "unknown", largest pane); MT5-box untouched.
 - Parallel research trials, serialized registry record (`research.yml`, `goldbot/research/cells.py`). The workflow is now
   `plan` -> `trials` (matrix, `max-parallel: 10`, `contents: read` only) -> `record` (`concurrency: research-registry`,
   the only job that writes the registry or an issue). Inputs: the existing single-trial ones (one cell per variant, so

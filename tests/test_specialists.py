@@ -29,7 +29,7 @@ def test_every_design_family_is_registered_on_its_timeframe():
         "breakout": "1h", "mean_reversion": "15m", "session_open": "15m", "trend": "1h",
         "tsmom": "1h", "intraday_momentum": "15m", "asia_drift": "1h", "smc_structure": "15m",
         "box_break": "15m", "box_rip": "1h", "box_retest": "1h", "fakey": "1h", "trend_level_signal": "1h",
-        "box_course": "1h", "box_break_close": "15m"}
+        "box_course": "1h", "box_break_close": "15m", "sweep_absorb": "15m", "eq_liquidity_run": "15m"}
 
 
 def test_context_is_every_longer_timeframe():

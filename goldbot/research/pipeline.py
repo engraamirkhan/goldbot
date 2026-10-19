@@ -394,7 +394,9 @@ def prepare(spec: Specialist, bars_dec: pd.DataFrame, context: dict[str, pd.Data
             labels["ret"] = labels["ret"] - extra_cost_usd / labels["entry"].astype(float)
         labels["risk"] = _risk_fraction(labels, a, ls.stop_atr)
         labels["atr_sig"] = a.to_numpy()[labels["idx"].to_numpy()]
-        labels["target_atr"], labels["stop_atr"], labels["family"] = ls.target_atr, ls.stop_atr, spec.family
+        labels["stop_atr"], labels["family"] = ls.stop_atr, spec.family
+        if "target_atr" not in labels:                 # a candidate-borne target (H-49) is already on the labels
+            labels["target_atr"] = ls.target_atr
         feats = X.drop(columns=["ts_utc"]).iloc[labels["idx"].to_numpy()].reset_index(drop=True)
         feats = _with_candidate_features(spec, feats, cands, labels)
         feats = feats.replace([np.inf, -np.inf], np.nan)
