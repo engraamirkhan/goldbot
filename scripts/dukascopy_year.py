@@ -11,6 +11,12 @@ one day that exhausts its retries aborts the whole request with no output. So ea
 week-sized chunks with an exclusive end, retried with backoff, and a last salvage pass runs with
 --no-fail-after-retries so a single bad day costs that day rather than the month.
 
+Source (2026-10-19): days are read straight from Dukascopy's bi5 archive (datafeed.dukascopy.com, one file per day
+per side, `_fetch_datafeed`); dukascopy-node is only the fallback. dukascopy-node 1.50 reads jetta.dukascopy.com, which
+answered HTTP 202 with an empty body for every day after 2026-10-05, so run 39255449249 published October unchanged
+(4,126 bars, ending 10-05) and reported it "ok". A month whose download returns nothing is now reported "stale".
+There is no designed lag: a day is fetched once it has closed (yesterday and earlier).
+
 With --existing (last published Parquet for the year) months that are already complete are kept and only
 missing, partial or still-open months are downloaded again.
 
@@ -25,14 +31,18 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import lzma
 import os
 import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Iterator
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -97,7 +107,69 @@ def _run(cmd: list[str], timeout: int = 1800) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
 
+DATAFEED = "https://datafeed.dukascopy.com/datafeed/XAUUSD"
+POINT = 1000.0   # XAUUSD bi5 prices are integers in 1/1000 of a dollar
+BI5_M1 = np.dtype([("sec", ">i4"), ("open", ">i4"), ("close", ">i4"), ("low", ">i4"), ("high", ">i4"), ("volume", ">f4")])
+
+
+def datafeed_url(day: dt.date, side: str) -> str:
+    """Dukascopy's bi5 archive URL for one day of m1 candles; the archive's month index is zero-based."""
+    return f"{DATAFEED}/{day.year:04d}/{day.month - 1:02d}/{day.day:02d}/{side.upper()}_candles_min_1.bi5"
+
+
+def _http_get(url: str, timeout: int = 30) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": "goldbot-data/1"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 (fixed https host)
+        return bytes(r.read())
+
+
+def _fetch_datafeed(start: dt.date, end: dt.date, side: str) -> tuple[pd.DataFrame | None, str]:
+    """m1 candles for [start, end) straight from the bi5 archive (primary source since 2026-10-19).
+
+    Root cause of the 2026-10 hole: dukascopy-node 1.50 reads jetta.dukascopy.com, which answered HTTP 202 with an
+    empty body for every recent day, and the tool saved that as an empty file; the archive had every day. Records are
+    24 bytes big-endian: seconds from midnight, open, close, low, high (int, 1/1000 $), volume (float). Flat minutes
+    (volume 0, market closed) are dropped as dukascopy-node does. A weekday that errors is left out (missing_weekdays
+    asks for it again); (None, error) only when no day could be read at all."""
+    frames, errors, days = [], [], 0
+    d = start
+    while d < end:
+        if d.weekday() != 5:   # Saturday never trades; Sunday carries the Asian open
+            days += 1
+            try:
+                raw = _http_get(datafeed_url(d, side))
+            except (OSError, urllib.error.URLError) as e:
+                errors.append(f"{d}: {e}")
+                d += dt.timedelta(days=1)
+                continue
+            if raw:
+                data = lzma.decompress(raw)
+                rec = np.frombuffer(data[: len(data) // 24 * 24], dtype=BI5_M1)
+                f = pd.DataFrame({k: rec[k].astype("int64" if k != "volume" else "float64") for k in ("sec", "open", "close", "low", "high", "volume")})
+                f = f[f["volume"] > 0].copy()
+                if not f.empty:
+                    f["ts_utc"] = pd.Timestamp(d, tz="UTC") + pd.to_timedelta(f["sec"], unit="s")
+                    for c in ("open", "high", "low", "close"):
+                        f[c] = f[c] / POINT
+                    frames.append(f[["ts_utc", "open", "high", "low", "close", "volume"]])
+        d += dt.timedelta(days=1)
+    if errors and len(errors) == days:
+        return None, "; ".join(errors)[-200:]
+    if not frames:
+        return None, "empty"
+    return pd.concat(frames).sort_values("ts_utc").reset_index(drop=True), ""
+
+
 def _fetch(start: dt.date, end: dt.date, side: str, outdir: Path, salvage: bool = False) -> tuple[pd.DataFrame | None, str]:
+    """[start, end) from the bi5 archive, falling back to dukascopy-node. Returns (frame or None, error text)."""
+    df, err = _fetch_datafeed(start, end, side)
+    if df is not None:
+        return df, ""
+    df, err2 = _fetch_node(start, end, side, outdir, salvage=salvage)
+    return df, "" if df is not None else f"datafeed: {err}; node: {err2}"
+
+
+def _fetch_node(start: dt.date, end: dt.date, side: str, outdir: Path, salvage: bool = False) -> tuple[pd.DataFrame | None, str]:
     """One dukascopy-node call for [start, end). Returns (frame or None, error text)."""
     outdir.mkdir(parents=True, exist_ok=True)
     for f in outdir.glob(f"xauusd-m1-{side}-*.csv"):
@@ -309,6 +381,7 @@ def main() -> int:
             print(f"{k}: kept {len(kept):,} bars", flush=True)
             continue
         b = month_bars(start, end, Path(args.tmp))
+        download_failed = b is None
         if existing is not None:
             # never publish a day with fewer bars than before: a failed download keeps the published month, a
             # short one keeps every published day it does not improve on (also under --refetch-all)
@@ -320,6 +393,10 @@ def main() -> int:
         n = 0 if b is None else len(b)
         if b is None:
             status = "MISSING"
+        elif download_failed:
+            # the download returned nothing and the published month was kept: not "ok" (2026-10 was reported ok
+            # while every day after the 5th was missing)
+            status = "stale"
         elif (b["dq_flag"] == "warning:partial_month").any():
             status = "partial"
         elif b["dq_flag"].astype(str).str.endswith("_imputed").any():
@@ -332,7 +409,7 @@ def main() -> int:
             frames.append(b)
     report = "| month | 1m bars | status | time |\n|---|---:|---|---|\n" + "\n".join(f"| {m} | {n:,} | {s} | {t} |" for m, n, s, t in rows)
     n_ok = sum(1 for _, _, s, _ in rows if s in ("ok", "kept", "imputed"))
-    report += f"\n\n{n_ok}/{len(rows)} months complete; " + ", ".join(f"{s}: {sum(1 for r in rows if r[2] == s)}" for s in ("ok", "kept", "imputed", "partial", "MISSING"))
+    report += f"\n\n{n_ok}/{len(rows)} months complete; " + ", ".join(f"{s}: {sum(1 for r in rows if r[2] == s)}" for s in ("ok", "kept", "imputed", "partial", "stale", "MISSING"))
     if args.report:
         Path(args.report).write_text(report)
     print(report)

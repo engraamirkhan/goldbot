@@ -400,3 +400,61 @@ def test_download_side_refetches_days_a_salvage_pass_silently_dropped(monkeypatc
     assert sorted(out["ts_utc"].dt.date.unique()) == week
     one_day = [c for c in calls if (c[1] - c[0]).days == 1]
     assert one_day == [(w, w + dt.timedelta(days=1)) for w in week[1:4]]
+
+
+def _bi5(rows: list[tuple[int, int, int, int, int, float]]) -> bytes:
+    import lzma
+    import struct
+    return lzma.compress(b"".join(struct.pack(">5if", *r) for r in rows), format=lzma.FORMAT_ALONE)
+
+
+def test_datafeed_day_url_uses_zero_based_month():
+    # live 2026-10-19: dukascopy-node 1.50 reads jetta.dukascopy.com, which answered 202 with an empty body for every
+    # day after 2026-10-05; the bi5 archive has those days. Its month index is zero-based (October = 09).
+    assert dy.datafeed_url(dt.date(2026, 10, 14), "bid") == \
+        "https://datafeed.dukascopy.com/datafeed/XAUUSD/2026/09/14/BID_candles_min_1.bi5"
+    assert dy.datafeed_url(dt.date(2026, 1, 2), "ask").endswith("/2026/00/02/ASK_candles_min_1.bi5")
+
+
+def test_fetch_datafeed_decodes_bi5_and_drops_flat_minutes(monkeypatch):
+    payload = _bi5([(0, 4154975, 4155975, 4154885, 4156055, 0.0446), (60, 4155995, 4155145, 4154672, 4156228, 0.0),
+                    (120, 4155145, 4155000, 4154900, 4155200, 0.01)])
+    calls = []
+
+    def fake_get(url, timeout=30):
+        calls.append(url)
+        return payload if "/14/" in url else b""   # the 15th has no content
+
+    monkeypatch.setattr(dy, "_http_get", fake_get)
+    df, err = dy._fetch_datafeed(dt.date(2026, 10, 14), dt.date(2026, 10, 16), "bid")
+    assert err == "" and len(calls) == 2
+    assert list(df.columns) == ["ts_utc", "open", "high", "low", "close", "volume"]
+    assert list(df["ts_utc"]) == [pd.Timestamp("2026-10-14 00:00", tz="UTC"), pd.Timestamp("2026-10-14 00:02", tz="UTC")]
+    first = df.iloc[0]
+    assert (first["open"], first["close"], first["low"], first["high"]) == (4154.975, 4155.975, 4154.885, 4156.055)
+
+
+def test_fetch_datafeed_reports_failure_when_every_day_errors(monkeypatch):
+    def boom(url, timeout=30):
+        raise OSError("503")
+
+    monkeypatch.setattr(dy, "_http_get", boom)
+    df, err = dy._fetch_datafeed(dt.date(2026, 10, 14), dt.date(2026, 10, 16), "bid")
+    assert df is None and "503" in err
+
+
+def test_fetch_prefers_datafeed_and_falls_back_to_node(monkeypatch, tmp_path):
+    good = pd.DataFrame({"ts_utc": [pd.Timestamp("2026-10-14", tz="UTC")], "open": [1.0], "high": [1.0], "low": [1.0],
+                         "close": [1.0], "volume": [1.0]})
+
+    def node_unused(*a, **k):
+        raise AssertionError("node not needed")
+
+    monkeypatch.setattr(dy, "_fetch_datafeed", lambda a, b, side: (good, ""))
+    monkeypatch.setattr(dy, "_fetch_node", node_unused)
+    df, _ = dy._fetch(dt.date(2026, 10, 14), dt.date(2026, 10, 15), "bid", tmp_path)
+    assert df is good
+    monkeypatch.setattr(dy, "_fetch_datafeed", lambda a, b, side: (None, "http 503"))
+    monkeypatch.setattr(dy, "_fetch_node", lambda *a, **k: (good, ""))
+    df, _ = dy._fetch(dt.date(2026, 10, 14), dt.date(2026, 10, 15), "bid", tmp_path)
+    assert df is good
