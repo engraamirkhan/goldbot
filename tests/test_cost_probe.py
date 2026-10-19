@@ -203,6 +203,21 @@ def test_a_clamped_probe_opens_when_the_terminal_rounds_its_loss_to_the_cent(tmp
     assert rec.stop_loss is not None and 3.9 <= rec.stop_loss <= 4.0
 
 
+def test_a_challenger_entry_below_its_threshold_is_mirrored_too(tmp_path):
+    """Owner 2026-10-19: learning needs trades, so an untaken shadow entry is probed as well (RiskGate still checks)."""
+    eng, pb, tick, close = _engine(tmp_path)
+    assert eng.shadow is not None
+    opened = eng.shadow.open_trade
+
+    def untaken(**kw: Any) -> Any:
+        return opened(**{**kw, "taken": False})
+    eng.shadow.open_trade = untaken                                      # type: ignore[method-assign]
+    eng.on_bar_close(close, tick)
+    [st] = [t for b in eng.shadow.books.values() for t in b.open]
+    assert not st.taken
+    assert _probe_orders(eng) and pb.positions()
+
+
 def test_a_wide_cap_keeps_the_challengers_own_stop(tmp_path):
     eng, pb, tick, close = _engine(tmp_path, max_loss=1_000.0)
     eng.on_bar_close(close, tick)

@@ -5,8 +5,8 @@ The ruling: "mirror challengers' SHADOW entry signals as minimum-lot (broker min
 signal by a fixed round-robin rotation over agent_ids (never by P&L/score). At most one probe position open at a time;
 real (live-agent) trades take priority". A cost probe, not a population status: probes feed only the costs pipeline.
 
-* Which signal: a taken shadow entry opened at this bar close by a challenger (a shadow version that is no agent's
-  champion, `Engine.live_versions`) of an agent the broker may trade (not shadow only; TradingView agents never, and
+* Which signal: a shadow entry (a taken one first; below its threshold too, owner 2026-10-19) opened at this bar
+  close by a challenger (a shadow version that is no agent's champion, `Engine.live_versions`) of an agent the broker may trade (not shadow only; TradingView agents never, and
   a frozen roster rule agent on a RuleModel by the ruling of 2026-10-19, `_mirrorable`). One signal per agent (its versions in name order); among the agents the next agent id
   after the last one probed, wrapping (`rotate`). p, score and P&L never reach the choice.
 * When: on the shadow host with `cost_probe` on, while the account holds probes only (up to `cost_probe_max_open`):
@@ -238,7 +238,9 @@ def _mirrorable(eng: Engine, version: str, agent: Specialist) -> bool:
 
 
 def _signals(eng: Engine, probe: CostProbe) -> dict[str, tuple[str, ShadowTrade, Specialist]]:
-    """agent id -> (version, shadow entry, specialist): this close's new taken challenger entries, one per agent."""
+    """agent id -> (version, shadow entry, specialist): this close's new challenger entries, one per agent, a taken one
+    first. Owner directive 2026-10-19 (learning needs trades): an entry below its threshold is mirrored too; the
+    RiskGate still checks it as any probe (a negative-EV one is refused there, and the refusal is journalled)."""
     assert eng.shadow is not None
     now = _open_keys(eng)
     new, probe.seen = now - probe.seen, now
@@ -249,8 +251,9 @@ def _signals(eng: Engine, probe: CostProbe) -> dict[str, tuple[str, ShadowTrade,
             continue
         for t in eng.shadow.books[version].open:
             agent = eng.agents.get(t.agent_id)
-            if (version, t.agent_id, t.entry_ts) in new and t.taken and agent is not None and _mirrorable(eng, version, agent):
-                out.setdefault(t.agent_id, (version, t, agent))
+            if (version, t.agent_id, t.entry_ts) in new and agent is not None and _mirrorable(eng, version, agent):
+                if t.agent_id not in out or (t.taken and not out[t.agent_id][1].taken):
+                    out[t.agent_id] = (version, t, agent)
     return out
 
 

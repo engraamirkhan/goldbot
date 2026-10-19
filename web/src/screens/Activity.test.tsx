@@ -71,6 +71,12 @@ describe("eventLine", () => {
       .toBe("mfi-g0 · 15m · short 0.05 lots · 2410.00 → 2405.20 · target · +1.40 R · +£12.50 · icm-demo-…67");
   });
 
+  it("shows an open trade's stop and take-profit target", () => {
+    expect(eventLine(ev({ kind: "shadow_opened", agent_id: "box_break_close-g0", timeframe: "15m", side: "short",
+                          entry: 4172.91, stop: 4184.6, target: 4149.53 })))
+      .toBe("box_break_close-g0 · 15m · short · at 4172.91 · SL 4184.60 · TP 4149.53");
+  });
+
   it("writes a refusal as agent, code and account", () => {
     expect(eventLine(ev({ kind: "refused", agent_id: "tsmom-g0", reason: "gate:market_closed", account: "icm-demo-…67" })))
       .toBe("tsmom-g0 · gate:market_closed · icm-demo-…67");

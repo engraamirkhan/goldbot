@@ -408,6 +408,28 @@
       ],
       "title": "Side"
      },
+     "stop": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Stop"
+     },
+     "target": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Target"
+     },
      "timeframe": {
       "anyOf": [
        {

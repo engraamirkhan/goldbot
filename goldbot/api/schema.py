@@ -1107,6 +1107,8 @@ class ActivityEvent(BaseModel):
     p: float | None = None
     entry: float | None = None              # USD per oz
     exit: float | None = None
+    stop: float | None = None               # the stop and the take-profit target the trade was opened with (shadow
+    target: float | None = None             # trades, open positions); null where the record does not keep them
     reason: str | None = None               # exit: target | stop | time | ...; refused: the journal's action code
     r: float | None = None                  # result in R of the initial risk
     ret: float | None = None                # return, side x (exit - entry) / entry (shadow: gross of costs)
