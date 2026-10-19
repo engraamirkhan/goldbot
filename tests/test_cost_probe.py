@@ -195,7 +195,7 @@ def test_a_clamped_probe_opens_when_the_terminal_rounds_its_loss_to_the_cent(tmp
 
     def lpl(symbol: str, side: int, price: float, distance: float) -> float:
         return round(abs(distance) * 100 * 1.00004, 2)                  # per lot, cent-rounded: $1 reads 100.00, low
-    pb.loss_per_lot = lpl                                                # type: ignore[method-assign,assignment]
+    pb.loss_per_lot = lpl                                                # type: ignore[method-assign]
     eng.on_bar_close(close, tick)
     assert not any(str(d.get("action", "")).startswith("cost_probe_refused") for d in eng.decisions), eng.decisions
     [pos] = pb.positions()
