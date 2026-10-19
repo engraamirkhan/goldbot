@@ -101,8 +101,9 @@ def test_lookahead_blocks_until_a_clean_check_is_recorded_and_other_flags():
 
 
 def test_shadow_evidence_needs_the_minimum_trade_counts():
-    st = PerfStats(n_trades=100, sharpe_ann=1.0, hit_rate=0.5, max_dd=0.05, trades_per_week=2.0, mean_ret=0.002, std_ret=0.01)
-    short = st.model_copy(update={"n_trades": 20})
+    st = PerfStats(n_trades=100, sharpe_ann=1.0, hit_rate=0.5, max_dd=0.05, trades_per_week=2.0, mean_ret=0.002, std_ret=0.01,
+                  n_clusters=100)
+    short = st.model_copy(update={"n_trades": 20, "n_clusters": 20})
     shadow = [ShadowEvidence(family="trend", version="v1", stats=st), ShadowEvidence(family="trend", version="v2", stats=short)]
     s = score_family("trend", [], shadow, [])
     assert s.shadow_z == pytest.approx(0.2 * 10) and s.shadow_source == "v1" and s.shadow_trades == 100

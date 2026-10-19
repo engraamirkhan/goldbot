@@ -299,6 +299,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     agents, live_shares = population_view()
     eng = Engine(EngineConfig(account_id=account_id, broker_name=acc.broker, mode=acc.mode, declared_class=acc.account_class, approval_mode=acc.approval_mode, symbol=acc.symbol,
                               cost_probe=acc.cost_probe.enabled, cost_probe_budget=acc.cost_probe.budget_share,
+                              cost_probe_max_open=acc.cost_probe.max_open, cost_probe_max_loss=acc.cost_probe.max_loss,
+                              shadow_max_open=settings.shadow.max_open_per_agent,
                               magic_base=acc.magic_base, server_tz=acc.server_tz, state_dir="state", data_root=settings.data_root,
                               shadow_host=shadow_host, halt_checks=True, news_blackout=True,
                               blackout_before_min=settings.risk.blackout.before_min,

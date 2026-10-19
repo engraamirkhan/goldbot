@@ -60,3 +60,18 @@ minimum-lot (broker min, 0.01) demo orders, choosing which signal by a fixed rou
   appears among open positions under its `cost_probe:` tag. A labelled "cost probe (demo)" view is a follow-up.
 - Changing the selection rule, the lot or enabling probes on a live account needs a new ADR; the demo-only lock is
   code, not config.
+
+## Amendment 2026-10-19 (research director ruling, part C)
+Owner: "the system needs to learn, so more trades need to be opened and closed". Every guard above stays (demo-only
+lock, own magic, RiskGate, live trades first, 0.01 lot, round-robin never by P&L).
+- Up to `cost_probe.max_open` (2, bounded at 2 in code) probe positions at once, on an account that holds probes only;
+  at most one new probe per bar close and never two on one agent.
+- Each probe's stop is clamped so its loss at the stop, from the broker's `loss_per_lot` at the minimum lot in the
+  account currency, is at most `cost_probe.max_loss` (£4); the stop the RiskGate sets is checked again after the gate
+  (a stops-level floor above the clamp refuses: `probe_loss_above_cap`), and a probe whose loss cannot be computed is
+  refused (`probe_loss_unknown`). The target stays the challenger's.
+- Budget: no new probe once today's realised probe loss (a profit adds nothing) + the open probes' loss at their
+  current stops + the new probe's would exceed `budget_share` x the day's loss limit (0.2 x £50 = £10); an open probe
+  whose risk is unknown refuses (`open_risk_unknown`). `max_loss` must fit inside that budget (checked at load).
+- The bound is at the stop: a gap through the stop, commission and swap are outside it; they reach the realised P&L
+  the budget reads. Revisit 3 probes after 4 weeks of clean data.

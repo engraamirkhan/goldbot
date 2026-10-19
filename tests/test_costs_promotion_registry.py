@@ -65,7 +65,7 @@ BT = PerfStats(n_trades=300, sharpe_ann=1.4, hit_rate=0.45, max_dd=0.10, trades_
 
 
 def _shadow(**kw) -> PerfStats:
-    base = dict(n_trades=60, sharpe_ann=1.2, hit_rate=0.44, max_dd=0.08, trades_per_week=4.2, weeks=6.0)
+    base = dict(n_trades=60, sharpe_ann=1.2, hit_rate=0.44, max_dd=0.08, trades_per_week=4.2, weeks=6.0, n_clusters=60)
     return PerfStats(**{**base, **kw})
 
 
@@ -75,7 +75,7 @@ def test_good_shadow_record_is_promoted():
 
 
 @pytest.mark.parametrize("kw,gate", [
-    (dict(weeks=3.0), "shadow_length"), (dict(n_trades=39), "shadow_length"),
+    (dict(weeks=3.0), "shadow_length"), (dict(n_clusters=39), "shadow_length"),
     (dict(sharpe_ann=0.79), "sharpe_floor"),
     (dict(sharpe_ann=0.85), "sharpe_vs_backtest"),           # 0.55 below a 1.4 backtest
     (dict(hit_rate=0.30), "hit_rate"),                       # 2+ binomial SE below 0.45 at n=60
