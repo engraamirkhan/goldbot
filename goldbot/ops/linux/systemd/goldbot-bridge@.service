@@ -9,6 +9,7 @@ Requires=goldbot-xvfb.service goldbot-mt5-terminal@%i.service
 
 [Service]
 User=mt5
+UMask=0077
 WorkingDirectory=/opt/goldbot
 Environment=DISPLAY=:99 WINEDEBUG=-all PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring GOLDBOT_ALLOW_PLAINTEXT=1
 # Attach only: wait up to 60 s for the terminal process its unit started, so initialize(path=...) never launches a
