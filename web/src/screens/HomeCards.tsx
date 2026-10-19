@@ -11,7 +11,7 @@ import { ageSeconds, type LimitAccount } from "../lib/limits";
 import { type Budget, factorWords, leftState, rateText, riskTodayLine, strategyRows, whyShort } from "../lib/riskToday";
 import { useNow } from "../lib/useNow";
 import { Badge, Button, Card, EmptyState, ErrorState, Meter, MetricTile, Skeleton, TimeText } from "../ui";
-import { lots, money, seconds } from "../ui/format";
+import { lots, money, NBSP, seconds } from "../ui/format";
 
 /** One card's crash shows its own error; the other cards keep working. */
 export class CardBoundary extends Component<{ name: string; children: ReactNode }, { failed: boolean }> {
@@ -38,7 +38,7 @@ const signed = (x: number | null | undefined, ccy: string | null | undefined) =>
 
 function Stale({ age }: { age: number | null | undefined }) {
   return <p className="small state warn" role="status">{age == null ? "Figures of unknown age: not shown as current."
-    : `Figures are ${seconds(Math.round(age))} old (over 60 s): can't reach the engine, not shown as current.`}</p>;
+    : `Figures are ${seconds(Math.round(age))} old (over ${seconds(60)}): can't reach the engine, not shown as current.`}</p>;
 }
 
 // ------------------------------------------------------------------------------------------------ Today
@@ -161,7 +161,7 @@ function LearningBody({ v, onOpenProgress }: { v: TradesOverview; onOpenProgress
   return (
     <>
       <p className="learn-line">Shadow trades, 7 days: every candidate <strong className="num">{signedR(all.avgR)}</strong> per
-        trade (n {all.n}) · taken <strong className="num">{signedR(taken.avgR)}</strong> (n {taken.n}) <span className="muted small">· shadow, not money</span></p>
+        trade ({`n${NBSP}${all.n}`}) · taken <strong className="num">{signedR(taken.avgR)}</strong> ({`n${NBSP}${taken.n}`}) <span className="muted small">· shadow, not money</span></p>
       <p className="small muted">{top ? `Biggest change: ${top.text}.` : "Nothing changed enough to report since last week."}</p>
       {onOpenProgress && <Button variant="ghost" className="home-link" onClick={onOpenProgress}>Road to live ›</Button>}
     </>
@@ -207,7 +207,7 @@ function TodayLine({ a, limits }: { a: TodayAccount; limits?: LimitAccount }) {
           <p className={`small ${m.tone === "ok" ? "muted" : `state ${m.tone}`}`}>{m.text}</p>
         </div>
       ) : <p className="small muted">Loss limit not reported by this engine yet.</p>}
-      {risk && <p className="small num">{risk}{limits?.stale ? " · not current (engine figures over 60 s old)" : ""}</p>}
+      {risk && <p className="small num">{risk}{limits?.stale ? ` · not current (engine figures over ${seconds(60)} old)` : ""}</p>}
     </div>
   );
 }
