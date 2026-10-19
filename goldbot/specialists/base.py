@@ -10,6 +10,8 @@ import functools
 import hashlib
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -86,6 +88,10 @@ class Specialist(ABC):
     # entry at the **next** 1h bar's open"): research labels fill at the first 1m open at/after the signal close
     # (`triple_barrier_delayed` with no delay, needs the 1m bars), so a weekend or session gap is in the fill
     entry_at_next_open: bool = False
+    # True for a rule whose pre-registration reads its barriers on 1m bars (H-48/H-49, prereg-kb-2026-10-18.md section 1:
+    # "entries/exits on 1m barriers"): research labels enter at the signal close as every family, then search the
+    # barriers minute by minute (`triple_barrier_1m`, needs the 1m bars), so the stop counts first only inside a minute
+    barriers_on_1m: bool = False
     # columns the candidates frame carries that are inputs too (a value fixed at the signal, e.g. H-40's flags of the
     # candidate's own box and side): `pipeline.prepare` adds them to the candidate features, and a discovery with
     # DiscoveryConfig pool "candidate" screens exactly them, grouped by `candidate_feature_groups` (column -> group)
@@ -124,6 +130,19 @@ class Specialist(ABC):
         """Keys `config` makes inert (e.g. a schedule a higher-timeframe signal ignores): left out of the configuration
         and its agent id, so a parameter that changes nothing cannot make two ids for one rule. None by default."""
         return set()
+
+    @classmethod
+    def dispatch_refusal(cls, root: Path, tracked: Callable[[Path], bool] | None = None) -> str | None:
+        """Why a research trial of this family may not be dispatched now, or None. `root`: the repository root a
+        committed precondition is read from; `tracked`: whether a path is committed (default: git). Default: None, no
+        precondition (a staged pre-registration, e.g. H-49 stage 2, overrides it)."""
+        return None
+
+    @property
+    def needs_bars_1m(self) -> bool:
+        """The research labels read the 1m bars (`pipeline.prepare(bars_1m=)`): a delayed or next-open entry, or
+        barriers on 1m bars."""
+        return bool(self.entry_delay_s) or self.entry_at_next_open or self.barriers_on_1m
 
     @property
     def agent_id(self) -> str:

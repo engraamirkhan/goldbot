@@ -16,14 +16,22 @@ The rule, fixed now:
 * No trend or session filter (London/New York is a read-only contrast).
 
 Point in time: a level exists from its confirming bar, hit-ness is judged through the entry bar's own high/low, nothing
-after bar t is read (tests: appending bars never changes a past candidate). One trade at a time, the stop first on a
-shared bar, the lot-fit overlay (0.01 lot, unsizable skipped): the shared label and report mechanics.
+after bar t is read (tests: appending bars never changes a past candidate). One trade at a time, the barriers searched
+on 1m bars (`barriers_on_1m`, `triple_barrier_1m`: the stop first only inside one minute), the lot-fit overlay (0.01
+lot, unsizable skipped): the shared label and report mechanics.
+
+Stage gate: `dispatch_refusal` refuses every dispatch until `scripts/kb5_magnet_base_rate.py`'s result is committed at
+STAGE1_RESULT and its stored lifts pass the pre-registered reading (`stage1_refusal`, quant review 2026-10-19).
 
 Research only: `screening` keeps it out of the founders, the pools and the loop grid (GRID_V1 unchanged). Run with
 `research.yml -f specialist=eq_liquidity_run -f variants='["prereg"]' -f lot_fit=true`.
 """
 from __future__ import annotations
 
+import json
+import subprocess
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
@@ -44,12 +52,60 @@ NEAR_ATR, FAR_ATR = 0.3, 1.0      # approach band: the close's distance to the l
 OVERSHOOT_ATR = 0.25              # the target lies this far beyond the level
 STOP_ATR = 0.75
 MAX_BARS = 16
+# The stage-1 gate (prereg section 2: "lift >= 5 percentage points with a 95% CI excluding 0 in both 2010-17 and
+# 2018-2025-09 -> stage 2 runs; otherwise retire"): stage 2 dispatches only on this committed result of
+# `scripts/kb5_magnet_base_rate.py --out-json`, its reading recomputed from the stored lifts (quant review 2026-10-19)
+STAGE1_RESULT = Path("docs/research/kb5-stage1.json")
+STAGE1_RULE_REF = "prereg-kb-2026-10-18.md#2"
+STAGE1_PERIODS = ("2010-2017", "2018-2025-09")
+STAGE1_MIN_LIFT = 0.05
 
 
 class EqLiquidityRunConfig(FrozenRecord):
     """The only setting is the pre-registered configuration's name: nothing else can be tuned."""
 
     rung: Literal["prereg"] = "prereg"
+
+
+def stage1_passes(result: dict[str, Any]) -> bool:
+    """The pre-registered stage-1 reading of a stage-1 result: in both periods the matched cross lift is at least
+    STAGE1_MIN_LIFT and its 95% CI lies above 0. A missing period or value fails."""
+    try:
+        lifts = [result["periods"][p]["cross_lift"] for p in STAGE1_PERIODS]
+        return all(float(c["lift"]) >= STAGE1_MIN_LIFT and float(c["ci95"][0]) > 0 for c in lifts)
+    except (KeyError, TypeError, IndexError, ValueError):
+        return False
+
+
+def _git_tracked(path: Path) -> bool:
+    """`path` is committed in its repository (`git ls-files --error-unmatch`)."""
+    try:
+        done = subprocess.run(["git", "-C", str(path.parent), "ls-files", "--error-unmatch", path.name],
+                              capture_output=True, check=False)
+    except OSError:
+        return False
+    return done.returncode == 0
+
+
+def stage1_refusal(root: Path, tracked: Callable[[Path], bool] | None = None) -> str | None:
+    """Why stage 2 may not run (None: the committed stage-1 result passes): no result at `root`/STAGE1_RESULT, not
+    committed (`tracked`, default git), another rule_ref, `stage2_runs` not true, or stored lifts that do not pass the
+    reading (`stage1_passes`): a hand-set `stage2_runs` alone opens nothing."""
+    path = root / STAGE1_RESULT
+    gate = f"{FAMILY} is H-49 stage 2: it runs only after stage 1 passes ({STAGE1_RULE_REF})"
+    if not path.is_file():
+        return f"{gate}; no stage 1 result at {STAGE1_RESULT} (scripts/kb5_magnet_base_rate.py --out-json, committed)"
+    if not (tracked or _git_tracked)(path):
+        return f"{gate}; {STAGE1_RESULT} is not committed"
+    try:
+        result = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        return f"{gate}; {STAGE1_RESULT} is unreadable: {exc}"
+    if not isinstance(result, dict) or result.get("rule_ref") != STAGE1_RULE_REF:
+        return f"{gate}; {STAGE1_RESULT} records another rule_ref"
+    if result.get("stage2_runs") is not True or not stage1_passes(result):
+        return f"{gate}; stage 1 did not pass ({STAGE1_RESULT}): retire EQH/EQL as magnets, no trial"
+    return None
 
 
 def _empty() -> pd.DataFrame:
@@ -110,6 +166,12 @@ class EqLiquidityRunSpecialist(Specialist):
     # declared meta-model inputs, the 15m level-break set unchanged (a model is pre-registered only after the
     # rule-only screen passes; the prereg fixes no feature, so none is chosen here)
     model_features = SmcStructureSpecialist.model_features
+    barriers_on_1m = True             # "entries/exits on 1m barriers" (the batch convention, prereg section 1)
+
+    @classmethod
+    def dispatch_refusal(cls, root: Path, tracked: Callable[[Path], bool] | None = None) -> str | None:
+        """Stage 2 is dispatched only on a committed, passing stage-1 result (`stage1_refusal`)."""
+        return stage1_refusal(root, tracked)
 
     def __init__(self, identity: AgentIdentity | None = None, **overrides: Any) -> None:
         super().__init__(identity, **overrides)

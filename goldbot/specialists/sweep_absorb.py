@@ -17,8 +17,9 @@ The rule, fixed now ("the depth 0.5, reclaim 2 and stop floor are fixed by arith
 * The tier-1 news blackout drops a candidate (`in_blackout` == 1), as the batch.
 
 Point in time: every value at bar t comes from bars <= t (tests: appending bars never changes a past candidate). One
-trade at a time, the stop first when both fall in one bar and the lot-fit overlay (0.01 lot, unsizable trades skipped)
-are the shared label and report mechanics (`labels.one_at_a_time`, `triple_barrier`, `research_pass.py --lot-fit`).
+trade at a time, the barriers searched on 1m bars from the entry close ("entries/exits on 1m barriers", `barriers_on_1m`:
+the stop first only when both fall in one minute) and the lot-fit overlay (0.01 lot, unsizable trades skipped) are the
+shared label and report mechanics (`labels.one_at_a_time`, `triple_barrier_1m`, `research_pass.py --lot-fit`).
 
 Research only: `screening` keeps it out of the founders, the pools and the loop grid (GRID_V1 unchanged). Run with
 `research.yml -f specialist=sweep_absorb -f variants='["prereg"]' -f lot_fit=true`.
@@ -113,6 +114,7 @@ class SweepAbsorbSpecialist(Specialist):
     # declared meta-model inputs, the 15m level-break set unchanged (a model is pre-registered only after the
     # rule-only screen passes; the prereg fixes no feature, so none is chosen here)
     model_features = SmcStructureSpecialist.model_features
+    barriers_on_1m = True             # "entries/exits on 1m barriers" (prereg section 1)
 
     def __init__(self, identity: AgentIdentity | None = None, **overrides: Any) -> None:
         super().__init__(identity, **overrides)

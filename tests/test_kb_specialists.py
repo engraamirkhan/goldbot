@@ -328,3 +328,200 @@ def test_retest_selection_runs_end_to_end_on_synthetic_bars():
     b1 = ticks_to_1m(synthetic_ticks("2024-01-01", "2024-09-01", ticks_per_minute=1, seed=5))
     r = k.diagnose(b1)
     assert r["breaks"] == r["retested"] + r["never_retested"] and "Reading" in k.markdown(r)
+
+
+# ----------------------------------------------------------------------------------------------- quant review 2026-10-19
+def _quotes(m: pd.DataFrame) -> pd.DataFrame:
+    """Store-schema bars (bid = ask = mid) from mid bars."""
+    return pd.DataFrame({"ts_utc": m["ts_utc"], **{f"{s}_{k}": m[k].astype(float) for s in ("bid", "ask")
+                                                  for k in ("open", "high", "low", "close")}})
+
+
+def _minutes(dec: pd.DataFrame) -> pd.DataFrame:
+    """Flat 1m bars under 15m decision bars: each minute repeats its decision bar's close (range 0)."""
+    rows = []
+    for _, b in dec.iterrows():
+        for k in range(15):
+            rows.append({"ts_utc": b["ts_utc"] + pd.Timedelta(minutes=k),
+                         **{f"{s}_{f}": float(b["bid_close"]) for s in ("bid", "ask")
+                            for f in ("open", "high", "low", "close")}})
+    return pd.DataFrame(rows)
+
+
+def _two_touch(target_first: bool) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Series]:
+    """A long at bar 0's close (100), R = 1, target 2 R: decision bar 1 touches both 98.9 and 102.1; its minutes
+    reach one at minute 3 and the other at minute 9."""
+    m = _flat(n=6)
+    dec = _quotes(m)
+    b1 = _minutes(dec)
+    dec.loc[1, ["bid_high", "ask_high"]] = 102.1
+    dec.loc[1, ["bid_low", "ask_low"]] = 98.9
+    first, second = (("high", 102.1), ("low", 98.9)) if target_first else (("low", 98.9), ("high", 102.1))
+    for minute, (f, px) in ((18, first), (24, second)):
+        b1.loc[minute, [f"bid_{f}", f"ask_{f}"]] = px
+    cands = pd.DataFrame({"idx": [0], "side": [1], "max_bars": [4]})
+    return dec, b1, cands, pd.Series(1.0, index=dec.index)
+
+
+def test_on_1m_barriers_the_minute_that_comes_first_decides_a_decision_bar_touching_both():
+    from goldbot.labels.triple_barrier import BarrierSpec, triple_barrier_1m
+    spec = BarrierSpec(target_atr=2.0, stop_atr=1.0, max_bars=4)
+    dec, b1, cands, a = _two_touch(target_first=True)
+    assert triple_barrier(dec, cands, spec, a)["barrier_hit"].tolist() == ["stop"]     # 15m: stop first on the tie
+    lab = triple_barrier_1m(dec, b1, cands, spec, a)
+    assert lab["barrier_hit"].tolist() == ["target"] and lab["exit"].iloc[0] == pytest.approx(102.0)
+    assert (lab["t_entry"].iloc[0], lab["t_exit"].iloc[0], lab["entry"].iloc[0]) == (1, 1, pytest.approx(100.0))
+    dec, b1, cands, a = _two_touch(target_first=False)
+    assert triple_barrier_1m(dec, b1, cands, spec, a)["barrier_hit"].tolist() == ["stop"]
+
+
+def test_on_1m_barriers_the_time_exit_is_the_last_decision_bars_close_and_the_target_is_the_candidates_own():
+    from goldbot.labels.triple_barrier import BarrierSpec, triple_barrier_1m
+    spec = BarrierSpec(target_atr=9.0, stop_atr=9.0, max_bars=3)
+    m = _flat(n=8)
+    m.loc[4, "close"] = 100.7
+    dec = _quotes(m)
+    b1 = _minutes(dec)
+    one = pd.DataFrame({"idx": [0], "side": [1]})
+    lab = triple_barrier_1m(dec, b1, one, spec, pd.Series(1.0, index=dec.index))
+    plain = triple_barrier(dec, one, spec, pd.Series(1.0, index=dec.index))
+    cols = ["t_entry", "t_exit", "bars_held", "exit", "barrier_hit", "label"]
+    assert lab[cols].to_dict("records") == plain[cols].to_dict("records")
+    assert lab["barrier_hit"].iloc[0] == "time" and (lab["t_exit"].iloc[0], lab["exit"].iloc[0]) == (4, 100.7)
+    b1.loc[20, ["bid_high", "ask_high"]] = 100.6                          # 0.5 R reached on bar 1's 6th minute
+    own = pd.DataFrame({"idx": [0], "side": [1], "target_atr": [0.5]})
+    lab = triple_barrier_1m(dec, b1, own, spec, pd.Series(1.0, index=dec.index))
+    assert lab["barrier_hit"].tolist() == ["target"] and lab["target_atr"].tolist() == [0.5]
+
+
+def test_on_1m_barriers_an_exit_policy_is_refused_loudly():
+    from goldbot.labels.exit_policy import ExitPolicy
+    from goldbot.labels.triple_barrier import BarrierSpec, triple_barrier_1m
+    dec, b1, cands, a = _two_touch(target_first=True)
+    with pytest.raises(ValueError, match="exit policy"):
+        triple_barrier_1m(dec, b1, cands, BarrierSpec(target_atr=2.0, stop_atr=1.0, max_bars=4), a,
+                          policy=ExitPolicy(trail_atr=1.0))
+
+
+@pytest.mark.parametrize("family", NEW)
+def test_both_specialists_label_on_1m_barriers_and_research_refuses_them_without_1m_bars(family, synthetic):
+    from goldbot.research.pipeline import _label
+    spec = SPECIALISTS[family]()
+    assert spec.barriers_on_1m and spec.needs_bars_1m
+    c = pd.DataFrame({"idx": [20], "side": [1]})
+    with pytest.raises(ValueError, match="1m bars"):
+        _label(spec, _quotes(synthetic), None, c, spec.label_spec, pd.Series(1.0, index=synthetic.index), None)
+
+
+@pytest.mark.parametrize("family", NEW)
+def test_prepare_labels_both_on_their_1m_bars_entering_at_the_signal_close(family):
+    from goldbot.research.pipeline import prepare
+    b1 = ticks_to_1m(synthetic_ticks("2024-01-01", "2024-04-01", ticks_per_minute=1, seed=23))
+    dec = resample_bars(b1, "15m").reset_index(drop=True)
+    m = mid(dec).reset_index(drop=True)
+    x = pd.DataFrame({"ts_utc": m["ts_utc"], "f1": np.arange(len(m), dtype=float)})
+    x.attrs["feature_version"] = "t"
+    spec = SPECIALISTS[family]()
+    prep = prepare(spec, dec, frame=(m, x), bars_1m=b1)
+    lab = prep.labels
+    assert len(lab) > 1 and len(prep.gross) > 1
+    longs = lab[lab["side"] > 0]
+    assert (longs["entry"].to_numpy() == dec["ask_close"].to_numpy()[longs["idx"].to_numpy()]).all()
+    assert (lab["t_exit"] <= lab["idx"] + 1 + MAX_HOLD[family]).all()
+
+
+MAX_HOLD = {"sweep_absorb": sa.MAX_BARS, "eq_liquidity_run": eq.MAX_BARS}
+
+
+def test_the_delayed_label_honours_the_candidates_own_target():
+    from goldbot.labels.triple_barrier import BarrierSpec, triple_barrier_delayed
+    spec = BarrierSpec(target_atr=9.0, stop_atr=9.0, max_bars=3)
+    dec = _quotes(_flat(n=8))
+    b1 = _minutes(dec)
+    b1.loc[20, ["bid_high", "ask_high"]] = 100.6
+    own = pd.DataFrame({"idx": [0], "side": [1], "target_atr": [0.5]})
+    lab = triple_barrier_delayed(dec, b1, own, spec, pd.Series(1.0, index=dec.index), pd.Timedelta(0))
+    assert lab["barrier_hit"].tolist() == ["target"] and lab["exit"].iloc[0] == pytest.approx(100.5)
+    assert lab["target_atr"].tolist() == [0.5]
+
+
+# stage-1 gate: stage 2 dispatches only on a committed stage-1 result whose pre-registered reading passes
+def _stage1(lift: float = 0.08, lo: float = 0.02) -> dict:
+    period = {"cross_lift": {"lift": lift, "ci95": [lo, lift + 0.03], "matched": 900}}
+    return {"rule_ref": eq.STAGE1_RULE_REF, "stage2_runs": True,
+            "periods": {"2010-2017": period, "2018-2025-09": period}}
+
+
+def _write_stage1(root, result: dict) -> None:
+    import json
+    path = root / eq.STAGE1_RESULT
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result))
+
+
+def test_stage_2_refuses_to_dispatch_without_a_stage_1_result(tmp_path):
+    why = SPECIALISTS["eq_liquidity_run"].dispatch_refusal(tmp_path, tracked=lambda p: True)
+    assert why is not None and "stage 1" in why and str(eq.STAGE1_RESULT) in why
+
+
+def test_stage_2_refuses_to_dispatch_when_stage_1_failed_or_the_file_claims_a_pass_its_lifts_do_not_show(tmp_path):
+    cls = SPECIALISTS["eq_liquidity_run"]
+    _write_stage1(tmp_path, {**_stage1(), "stage2_runs": False})
+    assert "did not pass" in (cls.dispatch_refusal(tmp_path, tracked=lambda p: True) or "")
+    _write_stage1(tmp_path, _stage1(lift=0.04))                      # stage2_runs true, but lift < 5 points
+    assert "did not pass" in (cls.dispatch_refusal(tmp_path, tracked=lambda p: True) or "")
+    _write_stage1(tmp_path, _stage1(lo=-0.01))                       # CI includes 0
+    assert "did not pass" in (cls.dispatch_refusal(tmp_path, tracked=lambda p: True) or "")
+    _write_stage1(tmp_path, {**_stage1(), "rule_ref": "elsewhere.md#2"})
+    assert "rule_ref" in (cls.dispatch_refusal(tmp_path, tracked=lambda p: True) or "")
+
+
+def test_stage_2_refuses_an_uncommitted_stage_1_result_and_dispatches_on_a_committed_pass(tmp_path):
+    cls = SPECIALISTS["eq_liquidity_run"]
+    _write_stage1(tmp_path, _stage1())
+    assert "committed" in (cls.dispatch_refusal(tmp_path, tracked=lambda p: False) or "")
+    assert cls.dispatch_refusal(tmp_path, tracked=lambda p: True) is None
+    assert SPECIALISTS["sweep_absorb"].dispatch_refusal(tmp_path) is None     # no stage gate on H-48
+
+
+def test_research_pass_refuses_stage_2_before_any_bar_is_read(tmp_path, monkeypatch):
+    rp = _script("research_pass")
+    monkeypatch.setattr(rp, "ROOT", tmp_path)
+    assert "stage 1" in (rp.dispatch_refusal("eq_liquidity_run", "") or "")
+    assert rp.dispatch_refusal("sweep_absorb", "") is None
+    assert rp.dispatch_refusal("eq_liquidity_run", "15m") is None              # a pooled run never includes it
+
+
+def test_the_stage_1_script_records_its_rule_ref_and_reads_its_verdict_with_the_gates_rule(synthetic):
+    k = _script("kb5_magnet_base_rate")
+    r = k.diagnose(synthetic)
+    assert r["rule_ref"] == eq.STAGE1_RULE_REF and r["stage2_runs"] is eq.stage1_passes(r)
+    assert eq.stage1_passes(_stage1()) and not eq.stage1_passes(_stage1(lift=0.049))
+
+
+def test_stage_1_bootstrap_resamples_the_control_too():
+    k = _script("kb5_magnet_base_rate")
+    out = k.matched_lift(_cell_frame([1.0] * 20), _cell_frame([1.0, 0.0] * 10), "cross", np.random.default_rng(1))
+    lo, hi = out["ci95"]
+    assert hi - lo > 0.2               # the control's own sampling error: 2 x 1.96 x sqrt(0.25 / 20) = 0.44 wide
+    assert lo > 0 and out["lift"] == pytest.approx(0.5)
+
+
+# pre-registered counts: the trial's candidates must reproduce 3,349 / 2,079 within 3%, else stop
+def test_the_count_check_passes_within_three_percent_and_stops_outside():
+    k = _script("kb_prereg_counts")
+    assert k.PRE_REGISTERED == {"sweep_absorb": 3349, "eq_liquidity_run": 2079} and k.TOLERANCE == 0.03
+    ok = k.check({"sweep_absorb": round(3349 * 1.029), "eq_liquidity_run": round(2079 * 0.971)})
+    assert all(v["ok"] for v in ok.values())
+    bad = k.check({"sweep_absorb": round(3349 * 1.031), "eq_liquidity_run": 2079})
+    assert not bad["sweep_absorb"]["ok"] and bad["eq_liquidity_run"]["ok"]
+
+
+def test_the_count_script_counts_the_trials_own_candidates(synthetic):
+    k = _script("kb_prereg_counts")
+    r = k.count(synthetic)
+    scans = {"sweep_absorb": sa.SweepAbsorbSpecialist()._scan, "eq_liquidity_run": eq.EqLiquidityRunSpecialist()._scan}
+    for fam in NEW:
+        assert r[fam]["candidates"] == len(scans[fam](synthetic)) > 0
+        assert r[fam]["raw"] >= r[fam]["candidates"]
+    assert "STOP" in k.markdown(r, k.check({f: r[f]["candidates"] for f in NEW}))

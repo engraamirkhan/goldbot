@@ -12,7 +12,10 @@ Reading rule (decided before any outcome): lift >= 5 percentage points with a 95
 2018-2025-09 -> stage 2 (`eq_liquidity_run`) runs; otherwise retire "EQH/EQL as magnets" and stop (no trial).
 
   python scripts/fetch_data_release.py --download-only        # raw/xauusd_1m_dukascopy_<year>.parquet
-  python scripts/kb5_magnet_base_rate.py --bars raw [--out-json kb5.json]
+  python scripts/kb5_magnet_base_rate.py --bars raw --out-json docs/research/kb5-stage1.json
+
+Commit that JSON: stage 2 (`eq_liquidity_run`) dispatches only when it is committed and its stored lifts pass the
+reading (`eq_liquidity_run.stage1_refusal`).
 
 Bars are cut at `research.holdout_from` before resampling: the holdout is never loaded.
 """
@@ -37,7 +40,7 @@ from goldbot.specialists import eq_liquidity_run as eq  # noqa: E402
 
 HORIZON = 16                     # bars after the approach in which the level must trade through
 FORWARD = 4                      # bars after the crossing bar for the forward move
-MIN_LIFT = 0.05
+MIN_LIFT = eq.STAGE1_MIN_LIFT    # the reading is eq.stage1_passes, shared with the stage-2 dispatch gate
 PERIODS = (("2010-2017", pd.Timestamp("2010-01-01", tz="UTC"), pd.Timestamp("2018-01-01", tz="UTC")),
            ("2018-2025-09", pd.Timestamp("2018-01-01", tz="UTC"), pd.Timestamp("2026-01-01", tz="UTC")))
 BOOTSTRAP, SEED = 2000, 20261018
@@ -70,13 +73,17 @@ def outcomes(m: pd.DataFrame, ap: pd.DataFrame) -> pd.DataFrame:
 
 def matched_lift(eqa: pd.DataFrame, ctl: pd.DataFrame, col: str, rng: np.random.Generator) -> dict[str, Any]:
     """Mean of (equal - same-cell control mean) over the equal approaches that have a control in their cell, with a
-    bootstrap 95% interval over those approaches. Cells: 0.1-ATR distance bin x hour x ATR14 tercile."""
+    bootstrap 95% interval. Each draw resamples both sides: the matched equal approaches, and the control approaches
+    within each matched cell (so every cell keeps its size and the control mean's own sampling error is in the
+    interval; quant review 2026-10-19: resampling the equal side alone made it about 10% too narrow). Cells: 0.1-ATR
+    distance bin x hour x ATR14 tercile."""
     cuts = np.nanquantile(np.concatenate([eqa["atr"], ctl["atr"]]), [1 / 3, 2 / 3]) if len(eqa) + len(ctl) else [0, 0]
 
     def cell(df: pd.DataFrame) -> pd.Series:
         tercile = np.searchsorted(cuts, df["atr"].to_numpy(dtype=float))
         return pd.Series(list(zip((df["dist_atr"] / 0.1).astype(int), df["hour"], tercile)), index=df.index)
-    ctl_mean = ctl.assign(cell=cell(ctl)).dropna(subset=[col]).groupby("cell")[col].mean()
+    c = ctl.assign(cell=cell(ctl)).dropna(subset=[col])
+    ctl_mean = c.groupby("cell")[col].mean()
     e = eqa.assign(cell=cell(eqa)).dropna(subset=[col])
     ref = e["cell"].map(ctl_mean)
     ok = ref.notna().to_numpy()
@@ -85,7 +92,14 @@ def matched_lift(eqa: pd.DataFrame, ctl: pd.DataFrame, col: str, rng: np.random.
                            "control_mean": float(ctl[col].mean()) if len(ctl) else float("nan")}
     if not len(diff):
         return {**out, "lift": float("nan"), "ci95": [float("nan"), float("nan")]}
-    boots = rng.choice(diff, size=(BOOTSTRAP, len(diff)), replace=True).mean(axis=1)
+    cells = pd.Index(e["cell"][ok].unique())
+    code = cells.get_indexer(e["cell"][ok])
+    vals = e[col].to_numpy(dtype=float)[ok]
+    by_cell = c.groupby("cell")[col]
+    ctl_boot = np.stack([rng.choice(by_cell.get_group(k).to_numpy(dtype=float), size=(BOOTSTRAP, by_cell.size()[k]),
+                                    replace=True).mean(axis=1) for k in cells])           # (cells, draws)
+    pick = rng.integers(0, len(vals), size=(BOOTSTRAP, len(vals)))
+    boots = (vals[pick] - ctl_boot[code[pick], np.arange(BOOTSTRAP)[:, None]]).mean(axis=1)
     return {**out, "lift": float(diff.mean()), "ci95": [float(np.quantile(boots, 0.025)), float(np.quantile(boots, 0.975))]}
 
 
@@ -108,8 +122,8 @@ def diagnose(m: pd.DataFrame) -> dict[str, Any]:
                                 "cross_rate_equal": float(e["cross"].mean()) if len(e) else float("nan"),
                                 "cross_rate_control": float(k["cross"].mean()) if len(k) else float("nan"),
                                 "cross_lift": cross, "fwd4_lift": matched_lift(e, k, "fwd4", rng)}
-    res["stage2_runs"] = all(p["cross_lift"]["lift"] >= MIN_LIFT and p["cross_lift"]["ci95"][0] > 0
-                             for p in res["periods"].values())
+    res["rule_ref"] = eq.STAGE1_RULE_REF
+    res["stage2_runs"] = eq.stage1_passes(res)        # the same reading the stage-2 dispatch gate recomputes
     return res
 
 
