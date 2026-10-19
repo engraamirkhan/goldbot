@@ -50,6 +50,7 @@ HARNESS = r"""
 set -euo pipefail
 export HARNESS_PID=$$
 source "$SCRIPT"
+[ -z "${TEST_POLL_S:-}" ] || POLL_S=$TEST_POLL_S   # fewer fake-clock polls: each one spawns python stubs
 ROOT=$T/root; VAR=$T/var; LOG=$VAR/deploys.jsonl; LOCK=$T/lock; ROLE_FILE=$T/role; ROLLBACK_FLOOR=$T/floor
 APPROVED=$ROOT/state/deploy/approved.json; PY_BRAIN=$PYTHON
 STAGE=$T/stage; STAGE_LOCK=$T/stage.lock; WATCH_FILE=$VAR/watch; UV=$T/bin/uv
@@ -317,7 +318,9 @@ class Box:
         return p
 
     def run(self, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-        env = {"T": str(self.t), "SCRIPT": str(SCRIPT), "PYTHON": sys.executable,
+        # TEST_POLL_S 10 (script: 2): the 90 s fake window is ~45 polls, twice for a failed deploy's recovery, each poll
+        # spawning python stubs: ~85 s of real CPU per test, past the 120 s timeout under load. Same fake-clock semantics.
+        env = {"T": str(self.t), "TEST_POLL_S": "10", "SCRIPT": str(SCRIPT), "PYTHON": sys.executable,
                "PATH": f"{self.t / 'bin'}:{Path(sys.executable).parent}:/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
                "HOME": str(self.t), **(env or {})}
         assert BASH is not None
