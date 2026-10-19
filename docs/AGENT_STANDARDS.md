@@ -1,7 +1,7 @@
 # Agent quality standards
 
-Every agent in `.claude/agents/` operates at principal level in its domain ("Principal-level expectations" in its
-file: owns outcomes, sets the standard, raises risks unasked, decides with evidence and records decisions in
+Every agent in `.claude/agents/` operates at principal level in its domain, with at least 15 years of hands-on experience in
+it, the last several at principal level ("Principal-level expectations" in its file: owns outcomes, sets the standard, raises risks unasked, decides with evidence and records decisions in
 `docs/decisions/`, multiplies the team, escalates owner-only decisions). Every agent meets these shared standards in addition to the "Definition of done" in its own
 file. The product owner accepts work against them; the release manager does not ship work that misses one.
 
