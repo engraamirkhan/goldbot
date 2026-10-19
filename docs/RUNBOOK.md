@@ -420,13 +420,19 @@ and the rest still arrives. It never contains account numbers or emails.
      ```
      Never install it from `/opt/goldbot` or from `sudo -u goldbot git show`. The service user can write that tree and
      its `.git` (`git replace` can swap the file), so a hash computed there proves nothing.
+* **Release (Mac): `scripts/release.sh "<PR title>" <body-file>`** on `claude/gifted-goldberg-lcb7pl`. It merges
+  origin/main, runs ruff + mypy, pushes, opens the PR with auto-merge, stages the commit on the brain, runs
+  `scripts/ci_local.sh` beside GitHub's checks (GitHub is the gate), deploys the merge commit as soon as it merges
+  (its tree is the tested PR head's, which the brain's CI check verifies itself), and checks the deploy record and
+  the engine. Logs in `~/tmp/release/`.
 * **Fast deploy (staging, adaptive window, watcher).** `sudo goldbot-deploy --stage <sha>` (run by `scripts/release.sh`
   right after the push, over SSH) pre-builds a commit under `/opt/goldbot-stage/<sha>` as the service user in a
   512 MB cgroup (`MemoryMax`; an out-of-memory kill ends the build, never the engine): it warms the uv cache and
   builds `web/dist`, with a manifest. It touches no service, is idempotent, refuses a non-sha, a non-brain box and a
   commit that is not a fast-forward of what runs, and the two newest stages are kept. The deploy reuses a stage only
   when its web tree equals the target's and the files hash to the manifest, else it builds as before (`staging
-  failed` is harmless). Deploy time (estimate, to be measured on the first release): about 1 min instead of 2 to 3.
+  failed` is harmless). Measured 2026-10-19 (b5b6c107): stable with fresh heartbeats after 34 s, engine down 3 s
+  (was about 2 min 20 s with the fixed 90 s window).
   Health passes once every daemon has been active and un-restarted for 30 s, each service with a heartbeat
   (supervisor, scheduler, telegram, news, api, webhook, tv-pull) has written a fresh one since its restart and
   `supervisor.json` is new (engines are judged by "active, not restarted", they write only on ticks). A restart in
