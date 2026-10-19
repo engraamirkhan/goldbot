@@ -115,7 +115,7 @@ def test_the_roster_founders_exist_in_shadow_with_zero_capital(tmp_path):
     pop = Population(tmp_path / "population.json")
     pop.ensure_founders(pd.Timestamp("2026-10-19", tz="UTC"))
     roster = [m for m in pop.members.values() if m.family == "box_break_close"]
-    assert sorted(m.specialist().timeframe for m in roster) == sorted(tf for _, tf in SHADOW_ROSTER)
+    assert sorted(m.specialist().timeframe for m in roster) == sorted(tf for f, tf in SHADOW_ROSTER if f == "box_break_close")
     assert all(m.status == "shadow" and m.capital_weight == 0 for m in roster)
 
 

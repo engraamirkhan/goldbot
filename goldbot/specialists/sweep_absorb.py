@@ -21,6 +21,10 @@ trade at a time, the barriers searched on 1m bars from the entry close ("entries
 the stop first only when both fall in one minute) and the lot-fit overlay (0.01 lot, unsizable trades skipped) are the
 shared label and report mechanics (`labels.one_at_a_time`, `triple_barrier_1m`, `research_pass.py --lot-fit`).
 
+Shadow roster (shadow-roster-2026-10-19.md, amendment of the same day): its pre-registered form runs in the engine's
+shadow book on its own barriers (R = `risk_usd`, 1m barriers: engine/shadow.py `candidate_barriers`, `on_bar(minutes=)`);
+`shadow_only` (a candidate-borne R) keeps it from the broker, and its registry model is a `RuleModel` (ADR 0038).
+
 Research only: `screening` keeps it out of the founders, the pools and the loop grid (GRID_V1 unchanged). Run with
 `research.yml -f specialist=sweep_absorb -f variants='["prereg"]' -f lot_fit=true`.
 """
@@ -115,6 +119,7 @@ class SweepAbsorbSpecialist(Specialist):
     # rule-only screen passes; the prereg fixes no feature, so none is chosen here)
     model_features = SmcStructureSpecialist.model_features
     barriers_on_1m = True             # "entries/exits on 1m barriers" (prereg section 1)
+    frozen_config = True              # one parameter set, a shadow roster member (shadow-roster-2026-10-19.md amendment)
 
     def __init__(self, identity: AgentIdentity | None = None, **overrides: Any) -> None:
         super().__init__(identity, **overrides)

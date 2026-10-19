@@ -63,9 +63,11 @@ DD_HAIRCUT_AT = 0.30                # a 30% shadow drawdown halves fitness
 
 AgentStatus = Literal["shadow", "live", "retired"]
 # the frozen shadow roster (docs/research/shadow-roster-2026-10-19.md): (family, timeframe), one parameter set each,
-# shadow with capital 0; every roster member is a population member, so the tournament's DSR counts it in K (n_pop)
+# shadow with capital 0; every roster member is a population member, so the tournament's DSR counts it in K (n_pop).
+# Amendment 2026-10-19: sweep_absorb (H-48) on 15m, its pre-registered config, on its own barriers (engine/shadow.py)
 SHADOW_ROSTER: tuple[tuple[str, str], ...] = (
-    ("box_break_close", "15m"), ("box_break_close", "1h"), ("box_break_close", "4h"))
+    ("box_break_close", "15m"), ("box_break_close", "1h"), ("box_break_close", "4h"),
+    ("sweep_absorb", "15m"))
 
 
 class Member(Record):
@@ -281,7 +283,8 @@ class Population:
                 added.append(ident.agent_id)
         for fam, tf in SHADOW_ROSTER:            # docs/research/shadow-roster-2026-10-19.md: frozen, one config each
             cls = SPECIALISTS[fam]
-            cfg = {} if tf == cls.timeframe else {TIMEFRAME_KEY: tf}
+            # its pre-registered (default) configuration, as research runs it; box_break_close's is {} (ids unchanged)
+            cfg = {**cls.default_config, **({} if tf == cls.timeframe else {TIMEFRAME_KEY: tf})}
             aid = AgentIdentity(family=fam, config=cfg).agent_id
             if aid not in self.members:
                 self.members[aid] = Member(agent_id=aid, family=fam, config=cfg, created_utc=now, status_since_utc=now,
