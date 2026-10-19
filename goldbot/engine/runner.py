@@ -38,7 +38,7 @@ from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
 from goldbot.engine import auto_entry, cost_probe, unconfirmed
 from goldbot.engine.limits_apply import EngineLimits, daily_allowance, min_lot_risk, published_limits
-from goldbot.engine.shadow import ShadowBook, ShadowTrade, record_candidate
+from goldbot.engine.shadow import ShadowBook, ShadowTrade, minutes_of, record_candidate
 from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, SentOrder: re-exported, ADR 0023 step 1)
     EngineStore,
     JsonEngineStore,
@@ -3055,7 +3055,7 @@ class Engine:
         dec = fr.dec
         last = len(dec) - 1
         bar = dec.iloc[last]
-        self.shadow.on_bar(bar, tf)       # advance open shadow trades of this timeframe; a new entry starts after this bar
+        self.shadow.on_bar(bar, tf, minutes_of(self.bars_1m, bar, tf))   # advance this tf's open shadow trades first
         for version, (agent_key, model) in self.shadow_models.items():
             for agent in agents:
                 cands = cands_by_agent[agent.agent_id]
@@ -3066,7 +3066,7 @@ class Engine:
                     continue          # a model only scores the frame version it was trained on, in shadow too
                 record_candidate(self.shadow, version=version, model=model, agent=agent, tf=tf, bar=bar, Xm=Xm, last=last,
                                  side=int(cands["side"].iloc[-1]), atr_usd=atr_usd, cost_atr=cost_atr,
-                                 limits_profile=self.limits_current.profile)
+                                 limits_profile=self.limits_current.profile, candidate=cands.iloc[-1])
 
     def flush_journal(self) -> None:
         """Append new decisions (proposals, gate blocks, below-threshold scores, orders, exits, orphans) to the

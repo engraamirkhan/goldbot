@@ -49,13 +49,42 @@ Considered and not admitted:
   columns of goldbot/features/mfi_signals.py; a standalone agent would be a new rule and needs its own
   pre-registration.
 
+## Amendment 2026-10-19 (later the same day): candidate-borne barriers, sweep_absorb admitted
+
+Written before any shadow trade of the added agent. The roster is now **5 of 40** (with amendment 2026-10-19b's 30m agent); K for the promotion DSR is
+`n_pop = len(self.members)` as above, so it rises by one with this agent (its own cluster: one family, one timeframe).
+
+- Live state path (`goldbot/engine/shadow.py`): a candidate that carries its own R (`risk_usd`, what its
+  `barrier_atr` gives the labels), target in R (`target_atr`) or time exit (`max_bars`) is shadow-traded on exactly
+  those (`candidate_barriers`; the cost threshold in the same R), and a `barriers_on_1m` family's barriers are read on
+  the decision bar's 1m bars (`ShadowBook.on_bar(minutes=)`, as `triple_barrier_1m`: the stop first only inside one
+  minute; without the minutes, the decision bar with the stop first, the conservative side). Tests reproduce
+  `one_at_a_time(triple_barrier_1m(...))` trade by trade (tests/test_shadow_candidate_barriers.py).
+- Such an agent is `shadow_only` (a candidate-borne R or 1m barriers: the live path sizes with label_spec x ATR(14), so
+  it could not trade live as labelled). A demo cost probe may mirror it under the existing ruling (frozen roster rule
+  agent with a RuleModel); the probe's stop is the shadow trade's structural stop.
+- Admitted: `sweep_absorb` (H-48), 15m, its pre-registered configuration `{"rung": "prereg"}`, frozen
+  (`frozen_config`), RuleModel. Its rule reads only the 15m bars (previous day / previous session levels, ATR(14)
+  converged on the engine's 800-bar tail: tested equal to the whole series) and the `in_blackout` column when the frame
+  has one, so the engine's decision frame is its full input.
+
+| agent | family | timeframe | parameters |
+|---|---|---|---|
+| `{"rung": "prereg"}` | sweep_absorb | 15m | module constants of goldbot/specialists/sweep_absorb.py: pierce < 0.5 ATR(14) of pdh/pdl/previous session extreme, reclaimed within 2 bars, London/New York, stop beyond the sweep extreme + 0.25 ATR (0.6-1.0 ATR), target 2R, 16 bars, 1m barriers |
+
 ## Not admitted yet (TODO, each needs its own lane)
 - box_break, box_retest, box_rip, fakey, trend_level_signal, box_course (H-37..H-45): no live state path. They read
   the 1h/4h/daily context bars (the engine passes none to candidates), seeded ATR/EMA and a whole-year tick-coverage
   flag (research value differs from a live year-to-date one), 4h boxes need >300 4h bars (the engine keeps ~240), and
   their structural R (`barrier_atr`) is not what the engine/shadow book size with (ATR x stop_atr); trend_level_signal
   enters at the next open. Running them now would make shadow outcomes differ from their research labels.
-- sweep_absorb (H-48), eq_liquidity_run (H-49): no code on the branch.
+- sweep_absorb (H-48): admitted by the amendment above.
+- eq_liquidity_run (H-49): its code exists and its barriers would now reach the shadow book, but its pre-registration
+  runs stage 2 only after the stage-1 base-rate result passes (`dispatch_refusal`, docs/research/kb5-stage1.json not
+  committed): it is not shadow-traded before that gate.
+- Box-course families: the candidate-borne R (`risk_usd`, `max_bars`) is no longer a blocker for the shadow book's
+  barriers, but the rest stands (context bars, >300 4h bars, seeded ATR/EMA, the coverage flag, the selected rung, the
+  next-open entry of trend_level_signal).
 - price_action groups: no live state path (research only).
 - The clustered K_eff and the session-day trade clusters above are the rule for the promotion decision; the
   tournament code still uses n_pop and raw trades (stricter on K, looser on trade count): a follow-up lane implements

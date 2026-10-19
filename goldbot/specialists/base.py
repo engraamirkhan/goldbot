@@ -151,8 +151,12 @@ class Specialist(ABC):
     @property
     def shadow_only(self) -> bool:
         """True for an agent the engine never sends to the broker (share 0; the shadow book trades it): one that needs
-        TradingView values (`requires_tv`) or a carried replica state (`replica_params`, engine/replica_context.py)."""
-        return self.requires_tv or getattr(self, "replica_params", None) is not None
+        TradingView values (`requires_tv`) or a carried replica state (`replica_params`, engine/replica_context.py), or
+        whose labels the live path cannot reproduce: a candidate-borne R (`barrier_atr` overridden: the live engine
+        sizes with label_spec x ATR(14)) or barriers read on 1m bars (`barriers_on_1m`). The shadow book trades those on
+        their own barriers (engine/shadow.py `candidate_barriers`, shadow roster amendment 2026-10-19)."""
+        return (self.requires_tv or getattr(self, "replica_params", None) is not None or self.barriers_on_1m
+                or type(self).barrier_atr is not Specialist.barrier_atr)
 
     @abstractmethod
     def candidates(self, mid_bars: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:

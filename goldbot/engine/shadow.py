@@ -27,6 +27,13 @@ triple-barrier label. `stats` clusters taken trades by agent and session day (pr
 only. A book written before this change loads unchanged: its trades are taken (they were only ever the selected
 ones) and carry no threshold, which keeps them out of `outcomes` (a selected-only sample is biased); a candidate
 recorded with its threshold comes from a book that records every candidate.
+
+Candidate-borne barriers (shadow roster amendment 2026-10-19): a family whose candidates carry their own R (`risk_usd`,
+the structural stop distance its `barrier_atr` gives the labels), target in R (`target_atr`) or time exit (`max_bars`)
+is shadow-traded on exactly those (`candidate_barriers`), its cost threshold in the same R; a family whose research
+labels read the barriers on 1m bars (`Specialist.barriers_on_1m`, `triple_barrier_1m`: "the stop first only when both
+fall in one minute") has its trades advanced minute by minute through the decision bar's 1m bars (`on_bar(minutes=)`;
+without them, the decision bar with the stop first, as `triple_barrier`). The time barrier stays the decision bar's.
 """
 from __future__ import annotations
 
@@ -89,6 +96,46 @@ class ShadowTrade(Record):
     # ADR 0032: the host engine's limits profile when the candidate fired (shadow trades are unsized, so the limits do
     # not change them; tagged so no evidence set mixes profiles). None: an older book
     limits_profile: str | None = None
+    # the barriers are read on the 1m bars inside each decision bar (`triple_barrier_1m`); False: on the decision bar
+    barriers_on_1m: bool = False
+
+
+class CandidateBarriers(Record):
+    """A candidate's shadow barriers: R in USD, target and stop in R, time exit in decision bars, round-trip cost in R."""
+
+    r_usd: float
+    target_r: float
+    stop_r: float
+    max_bars: int
+    cost_r: float
+
+
+def candidate_barriers(agent: Specialist, candidate: pd.Series | None, atr_usd: float,
+                       cost_atr: float) -> CandidateBarriers:
+    """The barriers `agent`'s research labels give `candidate` (a row of its candidates frame): its own `risk_usd` as
+    R (the labels' `barrier_atr`), `target_atr` (in R) and `max_bars` when it carries them, else the label spec on the
+    decision bar's ATR(14). The cost moves into the same unit, so the threshold is the labels' break-even."""
+    ls = agent.label_spec
+    r, target, hold = atr_usd, ls.target_atr, ls.max_bars
+    if candidate is not None:
+        if "risk_usd" in candidate.index and np.isfinite(float(candidate["risk_usd"])):
+            r = float(candidate["risk_usd"])
+        if "target_atr" in candidate.index and np.isfinite(float(candidate["target_atr"])):
+            target = float(candidate["target_atr"])
+        if "max_bars" in candidate.index and pd.notna(candidate["max_bars"]):
+            hold = int(candidate["max_bars"])
+    cost = cost_atr * atr_usd / r if r > 0 and np.isfinite(r) else cost_atr
+    return CandidateBarriers(r_usd=r, target_r=target, stop_r=ls.stop_atr, max_bars=hold, cost_r=cost)
+
+
+def minutes_of(bars_1m: pd.DataFrame, bar: pd.Series, timeframe: str) -> pd.DataFrame:
+    """The 1m bars inside the decision bar `bar` (ts_utc in [open, open + timeframe)), oldest first."""
+    if bars_1m.empty:
+        return bars_1m
+    start = pd.Timestamp(bar["ts_utc"])
+    ts = pd.to_datetime(bars_1m["ts_utc"], utc=True)
+    inside = (ts >= start) & (ts < start + pd.Timedelta(seconds=tf_seconds(timeframe)))
+    return bars_1m[inside.to_numpy()].sort_values("ts_utc")
 
 
 class VersionBook(Record):
@@ -119,8 +166,8 @@ class ShadowBook:
                    target_atr: float, stop_atr: float, max_bars: int, p: float, timeframe: str = "15m",
                    threshold: float | None = None, taken: bool = True, p_raw: float | None = None,
                    policy: ExitPolicy | None = None, signal_close: pd.Timestamp | None = None,
-                   scored_feature_version: str | None = None,
-                   limits_profile: str | None = None) -> ShadowTrade | None:
+                   scored_feature_version: str | None = None, limits_profile: str | None = None,
+                   barriers_on_1m: bool = False) -> ShadowTrade | None:
         """signal_close: when the signal bar closed (its visible_at; default bar_ts + timeframe), which the hard-flat
         deadline counts from, as the labels do."""
         if not np.isfinite(atr_usd) or atr_usd <= 0:
@@ -142,13 +189,14 @@ class ShadowBook:
                         max_bars=max_bars, p=p, timeframe=timeframe, threshold=threshold, taken=taken, p_raw=p_raw,
                         policy=policy if state is not None else None, atr_usd=atr_usd if state is not None else None,
                         state=state, scored_feature_version=scored_feature_version,
-                        limits_profile=limits_profile)
+                        limits_profile=limits_profile, barriers_on_1m=barriers_on_1m and state is None)
         book.open.append(t)
         return t
 
-    def on_bar(self, bar: pd.Series, timeframe: str = "15m") -> list[ShadowTrade]:
+    def on_bar(self, bar: pd.Series, timeframe: str = "15m", minutes: pd.DataFrame | None = None) -> list[ShadowTrade]:
         """Advance the open trades of `timeframe` by one completed bar of it (store schema: ts_utc, bid/ask
-        high/low/close). Each trade counts its time barrier in bars of its own agent's timeframe, as its labels do."""
+        high/low/close). Each trade counts its time barrier in bars of its own agent's timeframe, as its labels do.
+        `minutes`: the 1m bars inside `bar` (`minutes_of`), which a `barriers_on_1m` trade reads its barriers on."""
         ts = pd.Timestamp(bar["ts_utc"])
         closed = []
         for book in self.books.values():
@@ -160,6 +208,8 @@ class ShadowBook:
                 t.bars_held += 1
                 if t.state is not None:
                     self._policy_bar(t, bar, ts, timeframe)
+                elif t.barriers_on_1m and minutes is not None and len(minutes):
+                    self._minute_barriers(t, bar, ts, minutes)
                 else:
                     self._barrier_bar(t, bar, ts)
                 self._excursion_bar(t, bar, ts)
@@ -181,6 +231,23 @@ class ShadowBook:
         elif hit_tgt:
             self._close(t, ts, t.target, "target")
         elif t.bars_held >= t.max_bars + 1:
+            self._close(t, ts, float(bar["bid_close"] if t.side > 0 else bar["ask_close"]), "time")
+
+    def _minute_barriers(self, t: ShadowTrade, bar: pd.Series, ts: pd.Timestamp, minutes: pd.DataFrame) -> None:
+        """The barriers minute by minute (`triple_barrier_1m`: the stop first only inside one minute), the exit stamped
+        on the decision bar holding the minute; then the time barrier at the decision bar's close."""
+        for _, mb in minutes.iterrows():
+            if t.side > 0:
+                hit_stop, hit_tgt = mb["bid_low"] <= t.stop, mb["bid_high"] >= t.target
+            else:
+                hit_stop, hit_tgt = mb["ask_high"] >= t.stop, mb["ask_low"] <= t.target
+            if hit_stop:
+                self._close(t, ts, t.stop, "stop")
+                return
+            if hit_tgt:
+                self._close(t, ts, t.target, "target")
+                return
+        if t.bars_held >= t.max_bars + 1:
             self._close(t, ts, float(bar["bid_close"] if t.side > 0 else bar["ask_close"]), "time")
 
     def _policy_bar(self, t: ShadowTrade, bar: pd.Series, ts: pd.Timestamp, timeframe: str) -> None:
@@ -286,21 +353,23 @@ def score(model: Any, X: pd.DataFrame) -> tuple[float, float | None]:
 
 def record_candidate(book: ShadowBook, *, version: str, model: Any, agent: Specialist, tf: str, bar: pd.Series,
                      Xm: pd.DataFrame, last: int, side: int, atr_usd: float, cost_atr: float,
-                     entry: float | None = None, limits_profile: str | None = None) -> ShadowTrade | None:
+                     entry: float | None = None, limits_profile: str | None = None,
+                     candidate: pd.Series | None = None) -> ShadowTrade | None:
     """Score `agent`'s candidate on the decision bar `bar` (row `last` of the scoring frame `Xm`) with `version`'s model
     and record it. Every candidate is recorded (P9 counterfactual shadow): the ones below the threshold too, flagged not
     taken, so a recalibration sees an unbiased sample; only taken ones count as shadow trades. Entry: the bar's close
-    on the trade's side, or `entry` (a TradingView agent's: the price when its value arrived, engine/tv_context.py)."""
+    on the trade's side, or `entry` (a TradingView agent's: the price when its value arrived, engine/tv_context.py).
+    `candidate`: the candidates-frame row, whose own barriers the trade takes (`candidate_barriers`)."""
     feats = Xm.drop(columns=["ts_utc"]).iloc[[last]].replace([np.inf, -np.inf], np.nan)
     feats["side"] = side
     cols = [c for c in model.feature_names if c in feats.columns] if model.feature_names else list(feats.columns)
     p, p_raw = score(model, feats[cols])
-    ls = agent.label_spec
-    threshold = breakeven_prob(ls.target_atr, ls.stop_atr, cost_atr) + 0.02
+    b = candidate_barriers(agent, candidate, atr_usd, cost_atr)
+    threshold = breakeven_prob(b.target_r, b.stop_r, b.cost_r) + 0.02
     px = float(bar["ask_close"] if side > 0 else bar["bid_close"]) if entry is None else float(entry)
     return book.open_trade(version=version, agent_id=agent.agent_id, side=side, bar_ts=pd.Timestamp(bar["ts_utc"]),
-                           entry=px, atr_usd=atr_usd, target_atr=ls.target_atr, stop_atr=ls.stop_atr,
-                           max_bars=ls.max_bars, p=p, timeframe=tf, threshold=threshold, taken=p > threshold,
+                           entry=px, atr_usd=b.r_usd, target_atr=b.target_r, stop_atr=b.stop_r,
+                           max_bars=b.max_bars, p=p, timeframe=tf, threshold=threshold, taken=p > threshold,
                            p_raw=p_raw, policy=agent.exit_spec, signal_close=pd.Timestamp(bar["visible_at"]),
                            scored_feature_version=str(Xm.attrs.get("feature_version", "")),
-                           limits_profile=limits_profile)
+                           limits_profile=limits_profile, barriers_on_1m=agent.barriers_on_1m)
