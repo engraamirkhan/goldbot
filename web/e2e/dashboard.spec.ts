@@ -130,13 +130,13 @@ test("owner halts new entries and re-arms with an authenticator code", async ({ 
   await expect(page.getByRole("button", { name: "Halt new entries" })).toBeVisible();
 });
 
-test("owner enables auto mode with an authenticator code on the evidence, then switches back to propose", async ({ page }) => {
+test("owner enables auto mode with an authenticator code on the evidence, switches back to propose, then to each account's setting", async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 800 });                     // phone first
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
   await go(page, "Entry mode");
   const card = page.getByRole("region", { name: /Entry mode/ });
-  await expect(card.getByRole("heading", { name: /Entry mode: Propose-and-approve/ })).toBeVisible();
+  await expect(card.getByRole("heading", { name: /Entry mode: Each account's setting/ })).toBeVisible();   // no override (ADR 0041)
   await expect(card.getByText("auto mode offered")).toBeVisible();             // 100 seeded decided proposals, no difference
   const box = await card.boundingBox();
   expect(box && box.x >= 0 && box.x + box.width <= 360).toBe(true);           // fits the phone without sideways scroll
@@ -150,6 +150,9 @@ test("owner enables auto mode with an authenticator code on the evidence, then s
   await card.getByRole("button", { name: "Switch to propose" }).click();
   await expect(card.getByRole("heading", { name: /Entry mode: Propose-and-approve/ })).toBeVisible();
   await expect(card.getByText(/Set .* via the dashboard \(owner\)/)).toBeVisible();   // channel and role, never who (A15)
+  await card.getByRole("button", { name: "Use each account's setting" }).click();   // back to no override, no code
+  await expect(card.getByRole("heading", { name: /Entry mode: Each account's setting/ })).toBeVisible();
+  await expect(card.getByRole("button", { name: "Use each account's setting" })).toHaveCount(0);
 });
 
 test("owner regenerates the recovery codes with password and authenticator code; they are shown once", async ({ page }) => {
