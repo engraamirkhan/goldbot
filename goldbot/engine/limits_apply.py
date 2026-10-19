@@ -125,7 +125,9 @@ def k_vol(risk_terms: Any) -> float:
     """The nightly decision's volatility cut: the smallest usable `k_vol` of its `risk_terms` (0.5 when the 20-day
     median ATR15 is at or above its 1-year p90), 1 when none says so."""
     terms = risk_terms.values() if isinstance(risk_terms, dict) else ()
-    return min([1.0, *(float(t["k_vol"]) for t in terms if isinstance(t, dict) and _unit(t.get("k_vol")))])
+    # a term is the nightly RiskTerm (adaptive.py) or its dump (a dict): read k_vol from either
+    vals = (t.get("k_vol") if isinstance(t, dict) else getattr(t, "k_vol", None) for t in terms)
+    return min([1.0, *(float(v) for v in vals if v is not None and _unit(v))])
 
 
 def strategy_terms(raw: Any, ceiling: float) -> dict[str, float]:

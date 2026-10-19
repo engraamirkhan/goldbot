@@ -253,9 +253,23 @@ class CostProbe:
         # untaken probes sent by this process (client order id -> sent): counted even when the order raised and no
         # ledger row was written (safety review LOW-2)
         self.untaken_sent: dict[str, pd.Timestamp] = {}
-        # dynamic limits: the account's `dynamic_limits`, passed as EngineConfig.dynamic_limits; off when the engine
-        # config does not carry it, so the configured values apply (fail closed)
-        self.dynamic: bool = bool(getattr(eng.cfg, "dynamic_limits", False))
+        self._eng = eng
+        self._dynamic: bool | None = None          # set only by tests; None = read the account flag
+
+    @property
+    def dynamic(self) -> bool:
+        """Dynamic limits: the account's `dynamic_limits` (accounts.yaml), read as the engine's limits read it
+        (`EngineLimits.dynamic`), at use: the probe starts before the engine's limits exist. Off when unknown, so
+        the configured values apply (fail closed)."""
+        if self._dynamic is not None:
+            return self._dynamic
+        eng = self._eng
+        return bool(getattr(eng.cfg, "dynamic_limits", False)) or \
+            bool(getattr(getattr(eng, "_limits", None), "dynamic", False))
+
+    @dynamic.setter
+    def dynamic(self, on: bool) -> None:
+        self._dynamic = on
 
     @classmethod
     def start(cls, eng: Engine) -> CostProbe | None:

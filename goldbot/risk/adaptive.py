@@ -508,8 +508,12 @@ class _RiskDecision(FrozenRecord):
     tightened_day: dict[str, date] = {}
     reasons: tuple[str, ...] = ()
 
-    def state_fields(self) -> dict[str, Any]:
-        return {"risk_terms": self.terms, "risk_up_streak": self.up_streak,
+    def state_fields(self, vol_high: bool | None = None) -> dict[str, Any]:
+        """The state's per-strategy fields; each term carries the nightly volatility cut (`k_vol`: 0.5 at or above the
+        1-year p90, else 1), which the engine reads as the day's high-volatility halving (integration 2026-10-19)."""
+        kv = k_vol(vol_high)
+        terms = {v: t.model_copy(update={"k_vol": kv}) for v, t in self.terms.items()} if kv != 1.0 else self.terms
+        return {"risk_terms": terms, "risk_up_streak": self.up_streak,
                 "risk_demo_n_at_loosen": self.demo_n_at_loosen, "risk_tightened_day": self.tightened_day}
 
 
@@ -597,7 +601,8 @@ def _floored(prev: AdaptiveState | None, account_id: str, day: date, bounds: Lim
                           demo_n_at_loosen=dict(prev.demo_n_at_loosen) if prev else {},
                           tightened_day=max(day, last) if last else day, floors_until=floors_until,
                           loss_streak_ns=loss_streak_ns, minlot_explore_stopped=explore_stopped,
-                          vol_high=vol_high if bounds.dynamic else None, **rd.state_fields())
+                          vol_high=vol_high if bounds.dynamic else None,
+                          **rd.state_fields(vol_high if bounds.dynamic else None))
     return state, tuple(dict.fromkeys([*reasons, *rd.reasons]))
 
 
@@ -749,7 +754,8 @@ def step(prev: AdaptiveState | None, ev: Evidence | None, day: date, bounds: Lim
                           limits=bounds.limits_at(lvl).model_copy(update={"strategy_risk": rd.strategy_risk}),
                           up_streak=streak, loosened_day=loosened_day, demo_n_at_loosen=n_at, tightened_day=last_tight,
                           floors_until=floors_until, loss_streak_ns=streak_ns, minlot_explore_stopped=stopped,
-                          vol_high=vol_high if bounds.dynamic else None, **rd.state_fields())
+                          vol_high=vol_high if bounds.dynamic else None,
+                          **rd.state_fields(vol_high if bounds.dynamic else None))
     return state, tuple(dict.fromkeys([*reasons, *rd.reasons]))
 
 

@@ -188,8 +188,19 @@ def _strategy_risk(risk: dict[str, float], floor: float, ceiling: float) -> dict
 
 
 def _terms(terms: dict[str, RiskTerm], risk: dict[str, float]) -> dict[str, RiskTerm]:
-    """The published why, with `r` = the clamped value (a term without a clamped risk is dropped)."""
-    return {s: t.model_copy(update={"r": risk[s]}) for s, t in terms.items() if s in risk}
+    """The published why, with `r` = the clamped value (a term without a clamped risk is dropped). A term may arrive as
+    its dump (a dict, e.g. read back from a journal): it is validated into a RiskTerm, and an invalid one is dropped."""
+    out: dict[str, RiskTerm] = {}
+    for s, t in terms.items():
+        if s not in risk:
+            continue
+        try:
+            term = t if isinstance(t, RiskTerm) else RiskTerm.model_validate(
+                {"reason": "", **dict(t), "r": risk[s]})
+        except Exception:                       # noqa: BLE001 - an unreadable why is dropped, the clamped risk stands
+            continue
+        out[s] = term.model_copy(update={"r": risk[s]})
+    return out
 
 
 def clamp(cur: RiskLimitsCurrent, defaults: RiskLimits, account: Account, evidence: LimitsEvidence) -> RiskLimitsCurrent:
@@ -201,7 +212,7 @@ def clamp(cur: RiskLimitsCurrent, defaults: RiskLimits, account: Account, eviden
         return _defaults(defaults, "reverted", evidence)
     base = defaults.risk_per_trade
     if ov is None:
-        risk = _strategy_risk(cur.strategy_risk, min(RISK_MIN, base), base)
+        risk = _strategy_risk(cur.strategy_risk, 0.0, base)     # no overrides (live): tighten only, never raised to a floor
         daily = _cap(cur.daily_cap, 0.0, defaults.daily_cap)
         weekly = _cap(cur.weekly_cap, 0.0, defaults.weekly_cap)
         mlr = _bounded(cur.min_lot_risk_cap, None, defaults.min_lot_risk_cap)

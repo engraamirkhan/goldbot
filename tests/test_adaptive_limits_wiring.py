@@ -588,7 +588,7 @@ class _DynAccount(acc_mod.Account):
 
 class _TermsCurrent(RiskLimitsCurrent):
     strategy_risk: dict[str, float] = {}
-    risk_terms: dict[str, dict[str, Any]] = {}
+    risk_terms: dict[str, dict[str, Any]] = {}  # type: ignore[assignment]  # the dump form; k_vol reads both
 
 
 class _Terms:
@@ -599,7 +599,7 @@ class _Terms:
 
     def current(self, account: Any, evidence: LimitsEvidence) -> RiskLimitsCurrent:
         c = self.inner.current(account, evidence)
-        return _TermsCurrent(**c.model_dump(), strategy_risk=self.sr, risk_terms=self.rt)
+        return _TermsCurrent(**{**c.model_dump(), "strategy_risk": self.sr, "risk_terms": self.rt})
 
 
 def _dyn(tmp_path: Path, sr: dict[str, float], rt: dict[str, Any] | None = None, *, mode: Literal["demo", "live"] = "demo",
@@ -729,3 +729,15 @@ def test_the_adaptive_controller_carries_the_nightly_terms_of_today_only(tmp_pat
     cur = ctl.current(_acc(), _ev(T0))
     assert getattr(cur, "strategy_risk") == {"v1": 0.008} and getattr(cur, "risk_terms")["v1"]["reason"] == "n=40"
     assert getattr(ctl.current(_acc(), _ev(T0, drawdown=0.05)), "strategy_risk") == {}     # the 4% floors: base
+
+
+def test_the_nightly_volatility_cut_reaches_the_engine_as_risk_term_objects_or_dumps():
+    """Integration 2026-10-19 (lanes A and B): the nightly decision stamps k_vol into each RiskTerm when volatility is
+    high, and the engine's k_vol reads it from the RiskTerm itself or from its dump; neither form was read before."""
+    from goldbot.engine.limits_apply import k_vol
+    from goldbot.risk.adaptive import RiskTerm, _RiskDecision
+    rd = _RiskDecision(strategy_risk={"v1": 0.005}, terms={"v1": RiskTerm(r=0.005, reason="base")})
+    high = rd.state_fields(True)["risk_terms"]
+    calm = rd.state_fields(False)["risk_terms"]
+    assert k_vol(high) == 0.5 and k_vol({v: t.model_dump() for v, t in high.items()}) == 0.5
+    assert k_vol(calm) == 1.0 and k_vol(rd.state_fields(None)["risk_terms"]) == 1.0
