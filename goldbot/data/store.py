@@ -49,7 +49,7 @@ else:
         fcntl.flock(fh, fcntl.LOCK_UN)
 
 TABLES = {
-    "ticks", "bars_1m", "bars_15m", "bars_1h", "bars_4h", "bars_1d", "bars_1w",
+    "ticks", "bars_1m", "bars_15m", "bars_30m", "bars_1h", "bars_4h", "bars_1d", "bars_1w",
     "macro", "calendar_events", "news", "tv_signals", "tv_indicators", "tv_ideas", "features", "labels",
     "trades", "decisions", "dq_events", "cost_tables", "fills",
     "exit_fills",                              # every exit leg against the price it was asked at (finance GAP-04)

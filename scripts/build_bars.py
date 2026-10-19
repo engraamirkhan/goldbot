@@ -46,7 +46,7 @@ def main() -> None:
         store.append("bars_quarantine", held, source=args.source, dedupe=False)
         print(f"quarantined {len(held):,} bars with an error flag (table bars_quarantine)")
     store.append("bars_1m", b1, source=args.source)
-    for tf in ("15m", "1h", "4h", "1d", "1w"):
+    for tf in ("15m", "30m", "1h", "4h", "1d", "1w"):
         b = resample_bars(b1, tf)
         store.append(f"bars_{tf}", b, source=args.source)
         print(f"{tf}: {len(b):,} bars")

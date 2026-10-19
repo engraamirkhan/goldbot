@@ -65,7 +65,7 @@ AgentStatus = Literal["shadow", "live", "retired"]
 # the frozen shadow roster (docs/research/shadow-roster-2026-10-19.md): (family, timeframe), one parameter set each,
 # shadow with capital 0; every roster member is a population member, so the tournament's DSR counts it in K (n_pop)
 SHADOW_ROSTER: tuple[tuple[str, str], ...] = (
-    ("box_break_close", "15m"), ("box_break_close", "1h"), ("box_break_close", "4h"))
+    ("box_break_close", "15m"), ("box_break_close", "30m"), ("box_break_close", "1h"), ("box_break_close", "4h"))
 
 
 class Member(Record):

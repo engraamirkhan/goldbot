@@ -1,5 +1,7 @@
 """`box_break_close`: the owner's own box strategy as a rule agent (owner directive 2026-10-19; pre-registration
-docs/research/shadow-roster-2026-10-19.md), on 15m, 1h and 4h decision bars, SHADOW ONLY.
+docs/research/shadow-roster-2026-10-19.md), on 15m, 30m, 1h and 4h decision bars (30m: amendment 2026-10-19b),
+SHADOW ONLY. Not 5m: the engine decides every timeframe only at its 15m base-clock closes and advances shadow trades
+one bar per such close, so a 5m agent would skip two bars in three and misstate its outcomes.
 
 The rule ("a box breaks AND closes", docs/research/knowledge-base/support-resistance-and-zones.md R3/R4, money flow
 M7: "box = where, mfi = which side carries the risk"), fixed here before any count, one parameter set:
@@ -23,7 +25,7 @@ one bar back (`state_lag` 1, `engine.replica_context.ReplicaShadow`) and decides
 decision (tests/test_box_break_close.py, prefix invariance). Shadow only: `replica_params` makes `shadow_only` true, so
 the engine gives it share 0 and only the shadow book trades it; its registry model is a `RuleModel` (ADR 0038).
 `screening` keeps it out of the loop grid, the pools and the default founders (the trial budget is untouched); the
-frozen roster (`ROSTER_TIMEFRAMES`) is what makes its three founders.
+frozen roster (`ROSTER_TIMEFRAMES`) is what makes its four founders.
 """
 from __future__ import annotations
 
@@ -45,8 +47,8 @@ MFI_WINDOW = 5             # bars t-4..t
 BUFFER_ATR = 0.1           # the structural stop's buffer beyond the box (box_course section 3)
 STOP_ATR = 1.5
 TARGET_ATR = 3.0           # 2R
-HOLD_BARS = {"15m": 96, "1h": 48, "4h": 24}
-ROSTER_TIMEFRAMES = ("15m", "1h", "4h")
+HOLD_BARS = {"15m": 96, "30m": 72, "1h": 48, "4h": 24}    # 24 h, 36 h, 48 h, 96 h
+ROSTER_TIMEFRAMES = ("15m", "30m", "1h", "4h")
 
 
 def _empty() -> pd.DataFrame:
@@ -86,7 +88,7 @@ def decide(t: int, o: np.ndarray, c: np.ndarray, mfi: np.ndarray, a: np.ndarray,
 class BoxBreakCloseSpecialist(Specialist):
     family = FAMILY
     timeframe = "15m"
-    timeframes = ("1h", "4h")
+    timeframes = ("30m", "1h", "4h")
     default_config: dict[str, Any] = {}
     screening = True               # out of the loop grid, pools and default founders: the roster seeds it
     frozen_config = True           # one parameter set: never cloned with mutations (shadow roster rule)
