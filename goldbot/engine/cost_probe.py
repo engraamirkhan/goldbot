@@ -81,6 +81,13 @@ MAX_SAME_SIDE = 2                   # amendment 3: open probes on one side at mo
 REAL_TRADE_RESERVE = 0.6
 
 
+def real_trade_reserve(probe_only: bool) -> float:
+    """The share of the day's loss limit kept for real trades. ADR 0037 amendment 4: a probe_only account sends no
+    real trade (Engine._execute refuses one), so it keeps none and its probe budget alone binds, inside its own daily
+    limit, which the RiskGate enforces unchanged."""
+    return 0.0 if probe_only else REAL_TRADE_RESERVE
+
+
 def probe_id(agent_id: str) -> str:
     """The tag a probe trades under (its open trade, order row and journal): never the agent's own id, so the agent's
     one-position rule, its throttle and its closed-trade record never see the probe."""
@@ -434,7 +441,7 @@ def budget_refusal(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp) -> tup
     headroom = share - max(0.0, -sum(float(r.pnl or 0.0) for r in today)) - held
     if headroom <= 0:
         return "probe_loss_reached", 0.0
-    if remaining - held - min(eng.cfg.cost_probe_max_loss, headroom) < REAL_TRADE_RESERVE * limit:   # real trades' part
+    if remaining - held - min(eng.cfg.cost_probe_max_loss, headroom) < real_trade_reserve(eng.cfg.probe_only) * limit:   # real trades' part
         return "real_trade_reserve", 0.0
     return None, headroom
 

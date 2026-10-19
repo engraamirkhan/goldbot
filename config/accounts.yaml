@@ -61,6 +61,37 @@ accounts:
     # probe once today's realised probe loss + open probe risk + the new probe's would exceed budget_share x the
     # day's loss limit (0.2 x £50 = £10).
     cost_probe: { enabled: true, budget_share: 0.4, max_open: 4, max_loss: 4.0 }   # ADR 0037 amendment 3
+    # ADR 0037 amendment 4 (owner 2026-10-19, a dedicated probe account): icm-demo runs the shadow book and the probes
+    # until icm-probe is enabled. Switch-over (config only, reversible): icm-probe `enabled: true`; here
+    # `shadow_host: false` and `cost_probe.enabled: false`; restart both engines. Two enabled shadow hosts fail at load.
+    shadow_host: true
+  icm-probe:
+    broker: icm
+    mode: demo
+    server: ICMarketsSC-Demo
+    login: null  # never here (public repo): `python -m goldbot.ops.accounts add icm-probe` keeps it in the keyring
+    terminal_path: C:\MT5\ICMarkets-Probe\terminal64.exe
+    server_tz: Europe/Athens
+    symbol: XAUUSD
+    magic_base: 260500
+    # ADR 0037 amendment 4 (owner 2026-10-19: "a dedicated demo account for learning probes", GBP; directors' ruling:
+    # "probes must never consume the real trades' allowance"). Off until its credentials and terminal exist; enable it
+    # together with the switch-over steps on icm-demo above.
+    enabled: false
+    # its OWN day, in GBP: £20 a day (the RiskGate enforces it as on every account); 0.8 of it is the probe budget
+    # (£16 = four probes at £4 each). The supervisor keeps it out of the real accounts' combined limits (probe_only).
+    daily_loss_limit_abs: 20
+    # the owner's approved demo ceilings (ADR 0032, demo only), so a 0.01-lot probe is not refused by the 0.5% cap
+    risk_overrides:
+      profile: demo-2026-10-18
+      ceilings: { daily: 0.05, weekly: 0.10, min_lot_risk_cap: 0.01 }
+    approval_mode: auto       # ADR 0036 (demo); probes are sent only in auto
+    # the account type is measured by the classifier (null = not declared: entries wait for a measured class)
+    account_class: null
+    cost_probe: { enabled: true, budget_share: 0.8, max_open: 4, max_loss: 4.0 }   # ADR 0037 amendment 4
+    shadow_host: true         # counts only once enabled: then icm-demo must drop its own flag
+    # never a real trade: no live agents, and the engine refuses any entry that is not a cost probe (fail closed)
+    probe_only: true
   vantage-demo:
     broker: vantage
     mode: demo

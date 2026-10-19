@@ -49,6 +49,14 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   currency on both. An open position whose engine state is missing counts as demo. The Home page shows it under the
   activity feed (web/src/screens/TradesOverview.tsx): a tile per type, Today / 7 days / All, and a table by strategy or
   timeframe, refreshed every 30 s. Code: goldbot/api/trades_overview.py.
+- **Dedicated probe account `icm-probe` (ADR 0037 amendment 4, R70).** config/accounts.yaml adds `icm-probe` (demo,
+  GBP, `enabled: false`, `probe_only`, `shadow_host`, its own £20 day with `budget_share` 0.8) and gives `icm-demo`
+  an explicit `shadow_host: true`; the shadow host is now that flag (on the canonical-cost broker), not the broker
+  alone, and two enabled hosts fail at load. A probe_only engine trades no live agent and refuses any non-probe entry
+  (`probe_only_refused`); the supervisor keeps engine files with literal `probe_only: true` out of every combined sum,
+  cap, currency check and exposure (reported under `probe_engines`). Switch-over once the owner has stored icm-probe's
+  credentials and the terminal exists: icm-probe `enabled: true`; icm-demo `shadow_host: false` and
+  `cost_probe.enabled: false`; restart both engines. Reverse the three lines to go back.
 - KB specialists, quant review fixes before any dispatch (`docs/research/prereg-kb-2026-10-18.md` §7a): `sweep_absorb`
   and `eq_liquidity_run` label on 1m barriers (`Specialist.barriers_on_1m`, `labels.triple_barrier_1m`: entry at the
   close, the stop first only inside a minute; refused without 1m bars). `eq_liquidity_run` refuses to dispatch

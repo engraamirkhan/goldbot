@@ -73,7 +73,7 @@ from goldbot.research.rule_model import is_uncalibrated
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, hwm, open_risk, sizing
 from goldbot.risk.gate import PER_TRADE_REFUSALS, REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
 from goldbot.risk.limits_profile import LimitsPolicy, RiskLimitsCurrent
-from goldbot.risk.supervisor import Supervisor, write_startup_error
+from goldbot.risk.supervisor import Supervisor, others_exposure, write_startup_error
 from goldbot.risk.throttle import AgentThrottle, agent_throttle, latest_shadow_win
 from goldbot.risk.windows import (
     HolidayList,
@@ -194,7 +194,8 @@ class EngineConfig(Record):
     # passes settings.risk.approval_window_seconds (goldbot/ops/run.py)
     approval_window_s: int = Field(90, gt=0)
     data_root: str | None = None         # when set, ticks and fills are logged to the store for the nightly cost job
-    shadow_host: bool = False            # this engine runs the shadow book (one per deployment: the canonical-cost broker)
+    shadow_host: bool = False            # this engine runs the shadow book (one per deployment: accounts.yaml shadow_host)
+    probe_only: bool = False             # ADR 0037 amendment 4: a dedicated probe account; non-probe entries refused
     tick_flush_s: int = 60               # market seconds between tick-log flushes
     # production: block entries on the supervisor's halt (or a missing/stale heartbeat) and on the owner's halt
     halt_checks: bool = False
@@ -1289,6 +1290,12 @@ class Engine:
             self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "duplicate_suppressed",
                                    "proposal": prop.proposal_id})
             return None
+        if self.cfg.probe_only and not cost_probe.is_probe(agent.agent_id):
+            # ADR 0037 amendment 4: "probes must never consume the real trades' allowance", and the probe account never
+            # sends a real trade either: whatever reached here (a live share, an approval), nothing is sent (fail closed)
+            self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "probe_only_refused",
+                                   "proposal": prop.proposal_id})
+            return None
         magic = cost_probe.magic(self, agent)        # ADR 0037: a probe has its own magic
         # finance audit GAP-01/02/13: the signal's quote and spread (the proposal) next to the quote priced from now
         audit = EntryAudit(decision_price=prop.entry, decision_spread_points=prop.spread_points,
@@ -1946,10 +1953,8 @@ class Engine:
         if self.cfg.halt_checks:
             st.supervisor_halt, _ = Supervisor.engine_should_halt(self.cfg.state_dir)
             sup = Supervisor.read_state(self.cfg.state_dir)
-            others = [v for k, v in (sup.get("exposure") or {}).items() if k != self.cfg.account_id]
-            st.other_lots = sum(float(v.get("lots", 0.0)) for v in others)
-            st.other_notional = sum(float(v.get("notional", 0.0)) for v in others)
-            st.other_equity = sum(float(v.get("equity", 0.0)) for v in others)
+            st.other_lots, st.other_notional, st.other_equity = others_exposure(
+                sup, self.cfg.account_id, probe_only=self.cfg.probe_only)      # ADR 0037 amendment 4
             st.combined_size_down = bool(sup.get("size_down", False))
             st.owner_halt = self.center.bus.control().halted if self.center.bus is not None else False
         if self.cfg.news_blackout:
@@ -3293,6 +3298,8 @@ class Engine:
             "account": self.cfg.account_id, "broker": self.cfg.broker_name, "mode": self.cfg.mode, "ts": time.time(),
             # the deposit currency: the supervisor refuses to combine engines in different currencies (BACKLOG 28, A8)
             "currency": self._account_currency() or None,
+            # ADR 0037 amendment 4: a probe account stays out of the supervisor's combined limits (literal true only)
+            "probe_only": self.cfg.probe_only,
             # BACKLOG 29: the effective daily loss limit (account currency) and what is left of it today
             **daily_allowance(self.gate, self.state),
             # this account's absolute limit (accounts.yaml): the supervisor applies the smallest published one

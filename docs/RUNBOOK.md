@@ -1408,6 +1408,13 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
   `state\aux.db` (table `cost_probes`; the journal shows `cost_probe:` rows). To stop them: set
   `cost_probe: { enabled: false }` under `icm-demo` in `config/accounts.yaml` and restart the engine service;
   `/mode propose` or `/halt` stops them too. A live account with probes enabled refuses to load.
+* **Moving probes to their own account `icm-probe`** (ADR 0037 amendment 4): probes then stop using icm-demo's £50
+  day and the combined limits; icm-probe has its own £20 day and never sends a real trade. On the MT5 box, open the IC
+  Markets GBP demo in its own terminal (`C:\MT5\ICMarkets-Probe\terminal64.exe`) with its bridge, and run
+  `python -m goldbot.ops.accounts add icm-probe` (login, password and bridge keys go to the keyring, never the file).
+  Then in `config/accounts.yaml`: under `icm-probe` set `enabled: true`; under `icm-demo` set `shadow_host: false` and
+  `cost_probe: { enabled: false, ... }`; enable `goldbot-engine@icm-probe` and restart both engine services. Doing only the first edit makes every service
+  refuse to load ("2 enabled accounts are the shadow host"). To go back, reverse the three lines.
 * It is never switched on by itself. Telegram sends one message, "Auto mode can be enabled: evidence ...; reply
   /mode auto <TOTP>", only after at least 100 proposals you approved or rejected since the last mode change, with no
   RiskGate breach (no 8% size-down, no 12% kill switch) and no measurable difference between the outcomes of the

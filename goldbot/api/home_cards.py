@@ -18,7 +18,8 @@ failing source never blanks Home ("each card its own query").
   swap from those records; spread in money where the record keeps it, flagged incomplete otherwise), and the loss meter
   naming the limit that binds first: the probe stop (ADR 0037 amendment 3: no new probe once the day's loss leaves less
   than the real-trade reserve plus one probe's loss, `limit x (1 - REAL_TRADE_RESERVE) - max_loss`, ~£16 of £50, and
-  never past `budget_share x limit`) or the account's daily loss limit. Money older than `STALE_S` is marked stale,
+  never past `budget_share x limit`; a probe_only account keeps no reserve, ADR 0037 amendment 4) or the account's
+  daily loss limit. Money older than `STALE_S` is marked stale,
   never shown as current.
 
 Design rules kept: "accounts appear by config name. Any run of 5 or more digits is cut to its last two"
@@ -213,13 +214,15 @@ class ProbeTerms(FrozenRecord):
     """An account's cost-probe terms (config/accounts.yaml `cost_probe`, ops/accounts.CostProbe), enabled only."""
     budget_share: float
     max_loss: float
+    probe_only: bool = False      # ADR 0037 amendment 4: a dedicated probe account keeps no real-trade reserve
 
 
 def probe_terms_from_config() -> dict[str, ProbeTerms]:
     """Accounts with cost probes on; {} when accounts.yaml cannot be read (the meter then shows the daily limit only)."""
     try:
         from goldbot.ops.accounts import load_accounts
-        return {k: ProbeTerms(budget_share=a.cost_probe.budget_share, max_loss=a.cost_probe.max_loss)
+        return {k: ProbeTerms(budget_share=a.cost_probe.budget_share, max_loss=a.cost_probe.max_loss,
+                              probe_only=a.probe_only)
                 for k, a in load_accounts().items() if a.cost_probe.enabled}
     except Exception as exc:              # noqa: BLE001 - reporting only
         log.warning("today: accounts.yaml unreadable (%s): probe stop not shown", type(exc).__name__)
@@ -234,7 +237,8 @@ def _meter(e: dict[str, Any], probe: ProbeTerms | None) -> LossMeter | None:
     caps = [LossLimit(key="daily_limit", label="daily loss limit: all new entries stop", limit=round(limit, 2),
                       remaining=round(remaining, 2))]
     if probe is not None:
-        stop = round(min(probe.budget_share * limit, limit * (1 - cost_probe.REAL_TRADE_RESERVE) - probe.max_loss), 2)
+        reserve = cost_probe.real_trade_reserve(probe.probe_only)
+        stop = round(min(probe.budget_share * limit, limit * (1 - reserve) - probe.max_loss), 2)
         if stop > 0:
             caps.insert(0, LossLimit(key="probe_stop", label="probe stop: new cost probes stop", limit=stop,
                                      remaining=round(max(0.0, stop - used), 2)))

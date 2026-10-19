@@ -298,10 +298,11 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         pop = Population(population_file)
         pop.ensure_founders(pd.Timestamp.now("UTC"))
         members = pop.in_book()
-        return [m.specialist() for m in members], {m.agent_id: m.capital_weight for m in members if m.status == "live"}
+        # ADR 0037 amendment 4: a probe_only account trades no live agent (the engine refuses one anyway)
+        shares = {} if acc.probe_only else {m.agent_id: m.capital_weight for m in members if m.status == "live"}
+        return [m.specialist() for m in members], shares
 
-    broker_cfg = settings.brokers.get(acc.broker)
-    shadow_host = bool(broker_cfg and broker_cfg.canonical_costs)   # one shadow book: the canonical-cost broker
+    shadow_host = is_shadow_host(acc, settings)
 
     agents, live_shares = population_view()
     eng = Engine(EngineConfig(account_id=account_id, broker_name=acc.broker, mode=acc.mode, declared_class=acc.account_class, approval_mode=acc.approval_mode, symbol=acc.symbol,
@@ -309,7 +310,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               cost_probe_max_open=acc.cost_probe.max_open, cost_probe_max_loss=acc.cost_probe.max_loss,
                               shadow_max_open=settings.shadow.max_open_per_agent,
                               magic_base=acc.magic_base, server_tz=acc.server_tz, state_dir="state", data_root=settings.data_root,
-                              shadow_host=shadow_host, halt_checks=True, news_blackout=True,
+                              shadow_host=shadow_host, probe_only=acc.probe_only, halt_checks=True, news_blackout=True,
                               blackout_before_min=settings.risk.blackout.before_min,
                               blackout_after_min=settings.risk.blackout.after_min,
                               shock_blackout_min=settings.news.shock_blackout_min,
@@ -396,6 +397,19 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
 
 
 REPLICA_HISTORY_YEARS = 2
+
+
+def is_shadow_host(acc: Account, settings: Settings) -> bool:
+    """ADR 0037 amendment 4: one shadow book per deployment, run by the account flagged `shadow_host` in
+    config/accounts.yaml (load_accounts refuses two enabled hosts). The book is priced on the canonical-cost broker, so
+    a flag on another broker's account is logged and not hosted."""
+    if not acc.shadow_host:
+        return False
+    cfg = settings.brokers.get(acc.broker)
+    if not (cfg and cfg.canonical_costs):
+        log.error("shadow_host is set on an account whose broker is not the canonical-cost broker: not hosted")
+        return False
+    return True
 
 
 def attach_replica(eng: Any, settings: Settings) -> None:

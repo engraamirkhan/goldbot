@@ -11,7 +11,13 @@ Currencies (BACKLOG 28, ADR 0004 A8): equities are summed only when every engine
 Engines in different currencies (or one that does not say, next to others) are not combined: the supervisor halts
 (`mixed_account_currencies`), failing closed. Converting would need an FX rate the supervisor does not have, and a
 stale or wrong rate would silently loosen the combined caps; a halt is visible and safe. Running a GBP and a USD
-account together therefore needs a conversion here first (not built)."""
+account together therefore needs a conversion here first (not built).
+
+Probe accounts (ADR 0037 amendment 4, directors' ruling 2026-10-19: "probes must never consume the real trades'
+allowance"): an engine file stating `probe_only: true` (literally) is kept out of every combined sum, cap, currency
+check and the exposure the real engines read; it is reported apart (`probe_engines`) and stays under its own account's
+RiskGate limits. A missing or malformed flag counts the file as a real account (fail closed). An unreadable file or a
+clock fault halts as before, whatever the account."""
 from __future__ import annotations
 
 import json
@@ -134,6 +140,24 @@ def _currency(e: dict) -> str | None:
     return str(e.get("currency") or "").strip().upper() or None
 
 
+def is_probe_engine(e: dict) -> bool:
+    """ADR 0037 amendment 4: only a literal `probe_only: true` makes an engine file a probe account; anything else
+    (missing, false, "true", 1) is a real account inside the combined limits (fail closed)."""
+    return e.get("probe_only") is True
+
+
+def others_exposure(sup: dict, account_id: str, *, probe_only: bool) -> tuple[float, float, float]:
+    """(lots, notional, equity) of the other accounts in the supervisor's `exposure`, for the RiskGate's combined caps.
+    A real engine's view holds the real accounts only (the supervisor leaves probe accounts out). A probe_only engine
+    counts the real accounts' lots and notional (strict) but never their equity, which would widen its own notional
+    cap: it stays under its own account's limits (ADR 0037 amendment 4)."""
+    others = [v for k, v in (sup.get("exposure") or {}).items() if k != account_id and isinstance(v, dict)]
+    lots = sum(float(v.get("lots", 0.0)) for v in others)
+    notional = sum(float(v.get("notional", 0.0)) for v in others)
+    equity = 0.0 if probe_only else sum(float(v.get("equity", 0.0)) for v in others)
+    return lots, notional, equity
+
+
 class Supervisor:
     def __init__(self, state_dir: str | Path, limits: SupervisorLimits | None = None):
         self.dir = Path(state_dir)
@@ -163,7 +187,9 @@ class Supervisor:
         return out
 
     def evaluate(self) -> dict:
-        engines = self.read_engines()
+        every = self.read_engines()
+        probes = [e for e in every if is_probe_engine(e)]
+        engines = [e for e in every if not is_probe_engine(e)]
         # the currency check counts only engines that are running (heartbeat fresh): a file left by an engine that no
         # longer runs must not halt the book (review MEDIUM-1)
         now = time.time()
@@ -222,7 +248,7 @@ class Supervisor:
         # an engine file stamped ahead of this clock (engines and supervisor share the box): a clock fault or a bad
         # write, so the file cannot say whether that engine runs. It stays in `fresh` (its currency and money count,
         # the strict direction) and every entry halts until it is rewritten with a sane clock (found 2026-10-16)
-        future = sorted(str(e.get("_file", "")) for e in engines if heartbeat_problem(e["ts"], now, math.inf) == "future")
+        future = sorted(str(e.get("_file", "")) for e in every if heartbeat_problem(e["ts"], now, math.inf) == "future")
         if future:
             reasons.append("engine_heartbeat_future")
         stale = [e.get("account") for e in engines if time.time() - e["ts"] > self.limits.heartbeat_max_age_s]
@@ -240,7 +266,13 @@ class Supervisor:
                  "money_excluded": excluded, "no_fresh_engine": bool(engines) and not fresh, "day_loss_amount": day_loss_amount, "daily_loss_limit_abs": abs_limit,
                  # the dashboard's loss budget (goldbot/ops/account_view.py): the combined caps and their (one-currency) bases
                  "daily_cap": daily_cap, "combined_day_start_equity": day0,
-                 "weekly_cap": weekly_cap, "combined_week_start_equity": wk0}
+                 "weekly_cap": weekly_cap, "combined_week_start_equity": wk0,
+                 # ADR 0037 amendment 4: probe accounts, reported apart, in none of the sums above
+                 "probe_engines": {str(e.get("account")): {
+                     "lots": float(e.get("open_lots", 0.0)), "notional": float(e.get("open_notional", 0.0)),
+                     "equity": float(e.get("equity", 0.0)), "day_start_equity": float(e.get("day_start_equity", 0.0)),
+                     "currency": _currency(e), "stale": now - e["ts"] > self.limits.heartbeat_max_age_s,
+                     "startup_error": bool(e.get("startup_error"))} for e in probes}}
         write_atomic(self.dir / "supervisor.json", json.dumps(state), durable=False)   # heartbeat: never half-written
         return state
 
