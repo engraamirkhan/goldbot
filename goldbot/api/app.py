@@ -35,7 +35,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
-from goldbot.api import activity, chart_layouts, entry_status, explain, limits, progress
+from goldbot.api import activity, chart_layouts, entry_status, explain, limits, progress, trades_overview
 from goldbot.api.auth import (
     EMAIL_CODE_TTL_S,
     EMAIL_LINK_TTL_S,
@@ -123,6 +123,7 @@ from goldbot.api.schema import (
     SetupRequest,
     SetupResponse,
     Status,
+    TradesOverview,
     TradesSummary,
     TvStatusView,
     UserRef,
@@ -1049,6 +1050,17 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         v = activity_cache.get(build_activity)
         return v.model_copy(update={"events": v.events[:limit]})
     # ============================================================== end Home activity feed
+
+    # ============================================================== Home trades summary (read-only, viewer and above)
+    # goldbot/api/trades_overview.py: every trade type (shadow taken and all, demo, live, cost probes) for today, 7 days
+    # and all time, from the activity feed's readers. One build serves every poll for OVERVIEW_TTL_S. Nothing writes.
+    overview_cache = progress.GatesCache(ttl_s=trades_overview.OVERVIEW_TTL_S)
+
+    @app.get("/api/trades/overview", response_model=TradesOverview)
+    def trades_overview_view(_: User = Depends(need("viewer"))) -> TradesOverview:
+        return overview_cache.get(lambda: trades_overview.trades_overview(st.dir, pd.Timestamp.now("UTC"),
+                                                                          engines_or_none()))
+    # ============================================================== end Home trades summary
 
     # ============================================================== auto mode (A10): card for any role, switch owner-only
     # The switch runs telegram/automode.py `mode_command`, the code behind Telegram's /mode, with the same checks:

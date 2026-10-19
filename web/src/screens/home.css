@@ -22,3 +22,11 @@
 }
 .home-wide { min-width: 0; }
 @media (min-width: 1080px) { .home-wide { grid-column: 1 / -1; } }
+
+/* Trades summary (Home): one tile per trade type; the table scrolls sideways on a phone instead of squeezing. */
+.trades-tiles { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.trades-table { overflow-x: auto; margin-top: var(--s2, 8px); }
+.trades-table table { font-size: var(--fs-small, 13px); }
+.trades-table th, .trades-table td { white-space: nowrap; padding: var(--s1, 4px) var(--s2, 8px); }
+.trades-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) { .trades-exits { display: none; } }

@@ -14,6 +14,7 @@ function renderHome(role: apiModule.Role) {
   vi.spyOn(apiModule.api, "accounts").mockResolvedValue([]);
   vi.spyOn(apiModule.api, "automode").mockRejectedValue(new Error("not under test"));   // AutoMode.test.tsx covers the card
   if (!vi.isMockFunction(apiModule.api.activity)) vi.spyOn(apiModule.api, "activity").mockResolvedValue({ events: [], unreadable: [] });
+  if (!vi.isMockFunction(apiModule.api.tradesOverview)) vi.spyOn(apiModule.api, "tradesOverview").mockResolvedValue({ as_of: "2026-10-19T10:00:00Z", periods: [], unreadable: [] });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={qc}><Home /></QueryClientProvider>);
 }
@@ -111,5 +112,14 @@ describe("Home activity feed", () => {
     renderHome("viewer");
     expect(await screen.findByRole("heading", { name: "Activity" })).toBeInTheDocument();
     expect(await screen.findByRole("list", { name: "Activity" })).toHaveTextContent("Shadow opened");
+  });
+
+  it("summarises every type of trade under the feed", async () => {
+    vi.spyOn(apiModule.api, "status").mockResolvedValue(status({}));
+    vi.spyOn(apiModule.api, "proposals").mockResolvedValue([]);
+    vi.spyOn(apiModule.api, "recentProposals").mockResolvedValue([]);
+    renderHome("viewer");
+    expect(await screen.findByRole("heading", { name: "Trades summary" })).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "7 days" })).toBeInTheDocument();
   });
 });
