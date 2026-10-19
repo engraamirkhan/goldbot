@@ -403,3 +403,17 @@ server", never "allowed" from stale data), pending (waiting card), expiring (und
 "expiring", buttons stay enabled until 0), expired ("Expired at 14:03, not placed"), success ("Approved 14:02, order
 sent" then "Placed at 2,412.10"), refused (red, the refusal in words from `refusal_text` / `not_placed`), halted (status
 line red with who/when and Re-arm path), at 360 px and >= 1080 px, light and dark.
+
+## Decision 2026-10-19 (product owner, program director, CFO: unanimous)
+**Concept 3, the status card stack** (scores: PO 22 vs 17/14, PD 19 vs 15/12, CFO 4/5 vs 2/3), with grafts:
+- From concept 1: a collapsible MT5 chart card (existing PNG), desktop only; entry/stop/target lines later (N3).
+- From concept 2: up to 3 "since you last looked" digest lines in the Learning card (ranked by the largest change in
+  R after costs, computed client-side in v1); the two shadow-vs-taken tiles (all candidates vs taken, 7 days, n),
+  each tagged "shadow, not money".
+Conditions: "Your strategies" (N2) is required (owner's box break-and-close + money flow on 15m/1h/4h, a state in
+words); the open-trades endpoint (N1) returns stop, target, floating P&L and R; ProposalCard stays byte-identical and
+a waiting real-money proposal is always card 1 (56 px Approve); a DEMO/REAL badge on every £ figure, real and demo
+never summed; day P&L after costs split closed/open; today's costs (spread, commission, swap); a loss meter naming
+the limit that binds first (probe stop ≈ £16/day or the £50 daily limit); shadow numbers in R only, with n; money or
+status older than 60 s marked stale, never "allowed"; red only for halt, cap hit or a refused order; each card its
+own query (one failing source never blanks Home); Playwright at 360 and 1080 px, light and dark, axe clean.
