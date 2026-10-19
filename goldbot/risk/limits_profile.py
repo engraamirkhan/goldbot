@@ -12,7 +12,10 @@ Rules this module enforces (trading-safety conditions, ADR 0032):
 * the 8% size-down stage reverts the account to the default limits, sticky until the owner resets it
   (`LimitsStore`, core.db; the engine's re-arm path), whatever the controller says;
 * every record carries the profile and the values it was decided under (`LimitsTag`), so gate evidence under the demo
-  profile is never mixed with default-profile evidence.
+  profile is never mixed with default-profile evidence;
+* ADR 0039: the per-strategy risk per trade (`strategy_risk`, with its why in `risk_terms`) is clamped the same way:
+  on a demo account with ceilings within [0.25%, the 1% per-trade hard limit], anywhere else at most the default;
+  reverted, none (the default for every strategy). A value that is not a finite number > 0 is dropped (the default).
 
 `StaticController` returns the ceilings, so behaviour is exactly what the owner approved. ADR 0031's adaptive controller
 plugs in through `LimitsController` (engine/limits_apply.py `AdaptiveLimitsController`, chosen by
@@ -29,10 +32,11 @@ from typing import TYPE_CHECKING, Protocol
 import pandas as pd
 from pydantic import Field
 
-from goldbot.base import FrozenRecord, UtcTimestamp, load_record_json
+from goldbot.base import FrozenRecord, UtcTimestamp, load_record, load_record_json
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db.connection import Database, connect, write
 from goldbot.db.repo import RecordRepo
+from goldbot.risk.risk_terms import RISK_MIN, RiskTerm
 
 if TYPE_CHECKING:
     from goldbot.config import RiskSettings
@@ -98,6 +102,17 @@ class RiskLimitsCurrent(FrozenRecord):
     # takes the smaller of them and the account caps, within its own [default .. envelope]: they only tighten
     supervisor_daily_cap: float | None = None
     supervisor_weekly_cap: float | None = None
+    # ADR 0039: per model version, the risk per trade (fraction of equity) and why; a version not in it trades the
+    # default risk per trade. Empty: today's fixed values
+    strategy_risk: dict[str, float] = {}
+    risk_terms: dict[str, RiskTerm] = {}
+    # trading-safety review 2026-10-19 (MEDIUM): the engine's lowest same-day scale of the risk day (k_vol x k_dd x
+    # k_day, engine/limits_apply.py `DayRisk`), so the change log holds it and a restart the same day keeps the cut.
+    # `clamp` keeps it in (0, 1]; 1 = no cut
+    risk_scale: float = 1.0
+    # ...and (LOW) the nightly decision's account-level volatility regime (`AdaptiveState.vol_high`: the 20-day median
+    # ATR15 at or above its 1-year p90), so the vol cut applies with no strategy terms and at the floors; None = unknown
+    vol_high: bool | None = None
 
     def tag(self) -> LimitsTag:
         return LimitsTag(daily_cap=self.daily_cap, weekly_cap=self.weekly_cap, min_lot_risk_cap=self.min_lot_risk_cap,
@@ -172,20 +187,53 @@ def _bounded(value: float | None, floor: float | None, ceiling: float | None) ->
     return min(max(value, floor if floor is not None else 0.0), ceiling)
 
 
+def _scale(value: float) -> float:
+    """The same-day scale as a cut in (0, 1]; anything else (above 1, not a finite number > 0) is 1, no cut: the
+    engine recomputes today's factors at its next refresh."""
+    ok = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and 0 < value <= 1
+    return float(value) if ok else 1.0
+
+
+def _strategy_risk(risk: dict[str, float], floor: float, ceiling: float) -> dict[str, float]:
+    """Each value within [floor, ceiling]; one that is not a finite number > 0 is dropped (its strategy trades the
+    default)."""
+    return {s: min(max(float(r), floor), ceiling) for s, r in risk.items()
+            if isinstance(r, (int, float)) and math.isfinite(r) and r > 0}
+
+
+def _terms(terms: dict[str, RiskTerm], risk: dict[str, float]) -> dict[str, RiskTerm]:
+    """The published why, with `r` = the clamped value (a term without a clamped risk is dropped). A term may arrive as
+    its dump (a dict, e.g. read back from a journal): it is validated into a RiskTerm, and an invalid one is dropped."""
+    out: dict[str, RiskTerm] = {}
+    for s, t in terms.items():
+        if s not in risk:
+            continue
+        try:
+            term = t if isinstance(t, RiskTerm) else load_record(
+                RiskTerm, {"reason": "", **dict(t), "r": risk[s]}, source="limits risk_terms")
+        except Exception:                       # noqa: BLE001 - an unreadable why is dropped, the clamped risk stands
+            continue
+        out[s] = term.model_copy(update={"r": risk[s]})
+    return out
+
+
 def clamp(cur: RiskLimitsCurrent, defaults: RiskLimits, account: Account, evidence: LimitsEvidence) -> RiskLimitsCurrent:
     """The controller's answer made safe: reverted -> the defaults; a demo account with overrides -> each limit within
     [default .. ceiling] and open risk projected; any other account -> each limit at most its default (never raised).
     The profile is derived here, never trusted: `default` unless some limit is above its default."""
     ov = None if evidence.reverted else active_overrides(account)
-    if evidence.reverted:
-        return _defaults(defaults, "reverted", evidence)
+    if evidence.reverted:            # the vol regime is a fact, not a limit: it keeps cutting under the defaults
+        return _defaults(defaults, "reverted", evidence).model_copy(update={"vol_high": cur.vol_high})
+    base = defaults.risk_per_trade
     if ov is None:
+        risk = _strategy_risk(cur.strategy_risk, 0.0, base)     # no overrides (live): tighten only, never raised to a floor
         daily = _cap(cur.daily_cap, 0.0, defaults.daily_cap)
         weekly = _cap(cur.weekly_cap, 0.0, defaults.weekly_cap)
         mlr = _bounded(cur.min_lot_risk_cap, None, defaults.min_lot_risk_cap)
         return cur.model_copy(update={"profile": DEFAULT_PROFILE, "daily_cap": daily, "weekly_cap": weekly,
                                       "min_lot_risk_cap": mlr, "supervisor_daily_cap": None,
-                                      "supervisor_weekly_cap": None,
+                                      "supervisor_weekly_cap": None, "strategy_risk": risk,
+                                      "risk_terms": _terms(cur.risk_terms, risk), "risk_scale": _scale(cur.risk_scale),
                                       "project_open_risk": cur.project_open_risk or defaults.project_open_risk})
     c = ov.ceilings
     daily = _cap(cur.daily_cap, defaults.daily_cap, max(defaults.daily_cap, c.daily or defaults.daily_cap))
@@ -194,18 +242,25 @@ def clamp(cur: RiskLimitsCurrent, defaults: RiskLimits, account: Account, eviden
     if mlr_ceiling is not None and defaults.min_lot_risk_cap is not None:
         mlr_ceiling = max(mlr_ceiling, defaults.min_lot_risk_cap)
     mlr = _bounded(cur.min_lot_risk_cap, defaults.min_lot_risk_cap, mlr_ceiling)
+    risk = _strategy_risk(cur.strategy_risk, min(RISK_MIN, base), max(base, defaults.max_risk_per_trade))
     raised = daily > defaults.daily_cap or weekly > defaults.weekly_cap or \
-        (mlr is not None and (defaults.min_lot_risk_cap is None or mlr > defaults.min_lot_risk_cap))
+        (mlr is not None and (defaults.min_lot_risk_cap is None or mlr > defaults.min_lot_risk_cap)) or \
+        any(r > base + 1e-12 for r in risk.values())
     return cur.model_copy(update={"profile": ov.profile if raised else DEFAULT_PROFILE, "daily_cap": daily,
-                                  "weekly_cap": weekly, "min_lot_risk_cap": mlr, "project_open_risk": True})
+                                  "weekly_cap": weekly, "min_lot_risk_cap": mlr, "project_open_risk": True,
+                                  "strategy_risk": risk, "risk_terms": _terms(cur.risk_terms, risk),
+                                  "risk_scale": _scale(cur.risk_scale)})
 
 
 def apply(defaults: RiskLimits, cur: RiskLimitsCurrent) -> RiskLimits:
     """The gate's limits: the defaults with the current caps (everything else, the absolute daily limit included, is
-    the defaults')."""
-    return defaults.model_copy(update={"daily_cap": cur.daily_cap, "weekly_cap": cur.weekly_cap,
-                                       "min_lot_risk_cap": cur.min_lot_risk_cap,
-                                       "project_open_risk": cur.project_open_risk})
+    the defaults'). ADR 0039: the per-strategy risk goes to `RiskLimits.strategy_risk` once the gate has that field
+    (lane B, gate.py); until then the gate sizes every strategy at the default, today's behaviour."""
+    up: dict[str, object] = {"daily_cap": cur.daily_cap, "weekly_cap": cur.weekly_cap,
+                             "min_lot_risk_cap": cur.min_lot_risk_cap, "project_open_risk": cur.project_open_risk}
+    if "strategy_risk" in type(defaults).model_fields:
+        up["strategy_risk"] = dict(cur.strategy_risk)
+    return defaults.model_copy(update=up)
 
 
 class LimitsPolicy:

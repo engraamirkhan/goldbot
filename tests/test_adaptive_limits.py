@@ -19,8 +19,10 @@ from scipy import stats
 from goldbot.config import load_settings
 from goldbot.db.connection import Database
 from goldbot.db.migrations import CORE, compat_back_to
+from goldbot.ops.accounts import Account
 from goldbot.risk.adaptive import (
     FIELDS,
+    AdaptiveChange,
     AdaptiveController,
     AdaptiveState,
     AdaptiveStore,
@@ -31,10 +33,24 @@ from goldbot.risk.adaptive import (
     changes_between,
     combined_lcb,
     daily_lcb,
+    k_day,
+    k_dd,
+    k_vol,
     quarter_kelly_q,
     step,
+    strategy_f,
+    strategy_risk,
+    stricter_risk,
 )
-from goldbot.risk.gate import Stage
+from goldbot.risk.gate import RiskLimits, Stage
+from goldbot.risk.limits_profile import (
+    DEFAULT_PROFILE,
+    LimitsEvidence,
+    RiskCeilings,
+    RiskLimitsCurrent,
+    RiskOverrides,
+    clamp,
+)
 
 D0 = date(2026, 11, 2)                          # a Monday
 FREEZE_NS = int(pd.Timestamp("2026-10-01", tz="UTC").value)
@@ -84,10 +100,12 @@ def _bad_days(first: date, days: int, *, strategy: str = "A", source: str = "dem
 
 def _ev(trades: list[TradeEvidence], day: date, *, hour: int = 0, minute: int = 5, dd: float = 0.0,
         stage: Stage = Stage.NORMAL, cost: float | None = 1.0, atr_med: float | None = 5.0,
-        atr_p90: float | None = 8.0, freeze: dict[str, int] | None = None) -> Evidence:
+        atr_p90: float | None = 8.0, freeze: dict[str, int] | None = None, vol_med: float | None = 5.0,
+        vol_p90: float | None = 8.0) -> Evidence:
     return Evidence(account_id="icm-demo", as_of_ns=_ns(day, hour, minute), trades=tuple(t for t in trades if t.exit_ns <= _ns(day, hour, minute)),
                     freeze_ns=freeze if freeze is not None else {"A": FREEZE_NS, "B": FREEZE_NS},
-                    drawdown=dd, stage=stage, cost_ratio_20d=cost, atr15_median_20d=atr_med, atr15_p90_1y=atr_p90)
+                    drawdown=dd, stage=stage, cost_ratio_20d=cost, atr15_median_20d=atr_med, atr15_p90_1y=atr_p90,
+                    vol_median_20d=vol_med, vol_p90_1y=vol_p90)
 
 
 def _at(limits: Limits, **kw: float | None) -> Limits:
@@ -680,3 +698,331 @@ def test_floors_and_bounds_come_from_the_settings_defaults():
     s = load_settings()
     floor = Limits.defaults(s.risk)
     assert floor == FLOOR
+
+
+# ---- dynamic per-strategy limits (ADR 0039, docs/design/dynamic-limits-2026-10-19.md) -------------------------------
+# "r_s = base + w(f_s - base), w = n_days/(n_days+20), quantised to 0.1% steps, clamped [0.25%, ceiling]; loosen only
+# with demo n >= 20 and the 0031 3-day/cooldown rules; shadow may only tighten; LCB <= 0 gives 0.25%"
+
+DYN = LimitBounds.build(FLOOR, DEMO_CEILING, mode="demo", supervisor_all_demo=True, dynamic=True,
+                        risk_base=0.005, risk_max=0.01).model_copy(update={"explore_min_lot": False})
+DYN_LIVE = LimitBounds.build(FLOOR, DEMO_CEILING, mode="live", supervisor_all_demo=False, dynamic=True,
+                             risk_base=0.005, risk_max=0.01)
+
+
+def _edge_days(first: date, days: int, m: float, *, strategy: str = "A", source: str = "demo") -> list[TradeEvidence]:
+    """A small, steady edge: two trades a day at m+1 and m-1 R (each daily sum 2m), so the per-trade f is about m/4
+    (the per-trade LCB, m, over 4·E[r²])."""
+    return [_t(first + timedelta(days=i), r, strategy=strategy, source=source) for i in range(days)
+            for r in (m + 1.0, m - 1.0)]
+
+
+def test_strategy_risk_shrinks_to_base_with_few_days():
+    few, many = _edge_days(D0, 2, 0.04), _edge_days(D0, 40, 0.04)
+    f = strategy_f(many)
+    assert f is not None and f == pytest.approx(0.01, rel=0.01)
+    t2, t40 = strategy_risk(few, 0.005), strategy_risk(many, 0.005)
+    assert t2.w == pytest.approx(2 / 22) and t40.w == pytest.approx(40 / 60)
+    assert t2.r == pytest.approx(0.005)                       # 0.5% + 0.09 x 0.5% = 0.545%: quantised down to 0.5%
+    assert t40.r == pytest.approx(0.008)                      # 0.5% + 0.667 x 0.5% = 0.833% -> 0.8%
+    assert strategy_risk(_edge_days(D0, 1, 0.04), 0.005).r == 0.005
+    assert strategy_risk([], 0.005).reason == "no_evidence"   # fewer than 2 days: the base
+
+
+def test_strategy_risk_quantises_down_so_rounding_never_raises_risk():
+    lower = strategy_risk(_edge_days(D0, 40, 0.016), 0.005)  # f about 0.4%: 0.5% - 0.667 x 0.1% = 0.433% -> 0.4%
+    assert lower.r == pytest.approx(0.004)
+
+
+def test_negative_lcb_gives_quarter_percent():
+    t = strategy_risk(_bad_days(D0, 30), 0.005)
+    assert t.r == pytest.approx(0.0025) and t.reason == "lcb_not_positive" and t.lcb is not None and t.lcb <= 0
+
+
+def test_strategy_risk_never_above_one_percent():
+    # f is clamped to the 1% limit before shrinking: 0.5% + 0.75 x 0.5% = 0.875% -> 0.8% after 60 days
+    assert strategy_risk(_good_days(D0, 60), 0.005, ceiling=0.05).r == pytest.approx(0.008)
+    rng = random.Random(5)
+    for _ in range(100):
+        trades = [_t(D0 + timedelta(days=rng.randrange(40)), rng.choice((2.0, 1.0, -0.4, -1.0))) for _ in range(60)]
+        r = strategy_risk(trades, 0.005).r
+        assert 0.0025 - 1e-12 <= r <= 0.01 + 1e-12
+
+
+def _run_dyn(trades: list[TradeEvidence], first: date, days: int, bounds: LimitBounds = DYN,
+             prev: AdaptiveState | None = None, **kw: object) -> list[AdaptiveState]:
+    return _run(trades, first, days, prev=prev, bounds=bounds, **kw)
+
+
+def test_strategy_risk_rises_one_step_after_three_qualifying_days_on_demo_fills():
+    trades = _edge_days(D0, 40, 0.04)                                  # target 0.8%
+    states = _run_dyn(trades, D0 + timedelta(days=40), 6)
+    assert [s.limits.strategy_risk["A"] for s in states[:2]] == [0.005, 0.005]
+    assert states[2].limits.strategy_risk["A"] == pytest.approx(0.006)   # one 0.1% step on the 3rd day
+    # no 10 new demo trades since: it holds
+    assert all(s.limits.strategy_risk["A"] == pytest.approx(0.006) for s in states[3:])
+    term = states[2].risk_terms["A"]
+    assert term.reason == "loosen" and term.target == pytest.approx(0.008) and term.n_days == 40 and term.why
+
+
+def test_strategy_risk_never_rises_with_fewer_than_20_demo_trades():
+    trades = _edge_days(D0, 9, 0.04)                                   # 18 demo trades
+    states = _run_dyn(trades, D0 + timedelta(days=9), 8)
+    assert all(s.limits.strategy_risk["A"] == 0.005 for s in states)
+    assert states[-1].risk_terms["A"].reason == "demo_too_few"
+
+
+def test_shadow_only_tightens_strategy_risk():
+    good_shadow = _edge_days(D0, 40, 0.04, strategy="A", source="shadow")
+    assert all(s.limits.strategy_risk["A"] == 0.005 for s in _run_dyn(good_shadow, D0 + timedelta(days=40), 8))
+    bad_shadow = _bad_days(D0, 30, strategy="A", source="shadow")
+    s = _run_dyn(_edge_days(D0, 40, 0.04) + bad_shadow, D0 + timedelta(days=40), 1)[0]
+    assert s.limits.strategy_risk["A"] == pytest.approx(0.0025) and s.risk_terms["A"].reason == "tighten"
+
+
+def test_strategy_risk_tightens_at_once_and_waits_out_the_cooldown_before_rising():
+    d = D0 + timedelta(days=40)
+    prev = _state(FLOOR.model_copy(update={"strategy_risk": {"A": 0.008}}), d - timedelta(days=1))
+    s, reasons = step(prev, _ev(_bad_days(D0, 30), d, hour=10), d, DYN)          # intraday, any time
+    assert s.limits.strategy_risk["A"] == pytest.approx(0.0025) and "strategy_risk:A:tighten" in reasons
+    good = _edge_days(D0, 40, 0.04) + _edge_days(d, 10, 0.04)
+    later = _run_dyn(good, d + timedelta(days=1), 10, prev=s)
+    rises = [i for i, x in enumerate(later) if x.limits.strategy_risk["A"] > 0.0025 + 1e-12]
+    assert rises and (later[rises[0]].day - d).days > 5                          # never within 5 days of the tighten
+
+
+def test_live_strategy_risk_never_above_default():
+    assert DYN_LIVE.risk_ceiling == 0.005
+    states = _run_dyn(_good_days(D0, 40), D0 + timedelta(days=40), 10, bounds=DYN_LIVE)
+    assert all(s.limits.strategy_risk["A"] <= 0.005 for s in states)
+    d = D0 + timedelta(days=70)
+    loose = _state(FLOOR.model_copy(update={"strategy_risk": {"A": 0.009}}), d)
+    s, _ = step(loose, _ev(_good_days(D0, 40), d, hour=10), d, DYN_LIVE)
+    assert s.limits.strategy_risk["A"] == pytest.approx(0.005)
+
+
+def test_flag_off_keeps_todays_fixed_values():
+    states = _run(_edge_days(D0, 40, 0.04) + _bad_days(D0, 30, strategy="B"), D0 + timedelta(days=40), 5, bounds=DEMO)
+    assert all(s.limits.strategy_risk == {} and s.risk_terms == {} for s in states)
+    d = D0 + timedelta(days=41)
+    prev = _state(FLOOR.model_copy(update={"strategy_risk": {"A": 0.008}}), d - timedelta(days=1))
+    s, _ = step(prev, _ev(_edge_days(D0, 40, 0.04), d), d, DEMO)
+    assert s.limits.strategy_risk == {}                                          # the rollback: switch the flag off
+
+
+def test_corrupt_evidence_gives_fixed_values():
+    d = D0 + timedelta(days=40)
+    s, reasons = step(None, None, d, DYN)
+    assert s.limits.strategy_risk == {} and "evidence_invalid" in reasons
+    prev = _state(FLOOR.model_copy(update={"strategy_risk": {"A": 0.008, "B": 0.0025}}), d - timedelta(days=1))
+    s, _ = step(prev, None, d, DYN)
+    assert s.limits.strategy_risk == {"A": 0.005, "B": 0.0025}     # never above today's 0.5%, a tightened one stays
+    s, _ = step(prev, _ev(_good_days(D0, 30), d, dd=0.05), d, DYN)
+    assert s.limits.strategy_risk == {"A": 0.005, "B": 0.0025} and s.risk_terms["A"].reason == "floors"
+
+
+def test_vol_regime_at_p90_steps_daily_down():
+    d = D0 + timedelta(days=40)
+    prev = _state(FLOOR.model_copy(update={"daily_cap": 0.03}), d - timedelta(days=1))
+    trades = LOOSE_TRADES
+    at, reasons = step(prev, _ev(trades, d, vol_med=8.0, vol_p90=8.0), d, DYN)             # >= p90: one step down
+    assert at.limits.daily_cap == pytest.approx(0.025) and "daily_cap:vol_step" in reasons and at.vol_high
+    below, _ = step(prev, _ev(trades, d, vol_med=7.99, vol_p90=8.0), d, DYN)
+    assert below.limits.daily_cap == pytest.approx(0.03) and below.vol_high is False
+    flag_off, _ = step(prev, _ev(trades, d, vol_med=8.0, vol_p90=8.0), d, DEMO)
+    assert flag_off.limits.daily_cap == pytest.approx(0.03)
+    unknown, _ = step(prev, _ev(trades, d, vol_med=None, vol_p90=None), d, DYN)
+    assert unknown.limits.daily_cap == pytest.approx(0.03) and unknown.vol_high is None   # unknown: today's rules
+    # while the regime holds: one step only (no ratchet) and no loosening
+    held = _run_dyn(trades, d + timedelta(days=1), 8, prev=at, vol_med=9.0, vol_p90=8.0)
+    assert all(s.limits.daily_cap == pytest.approx(0.025) for s in held)
+
+
+def test_strategy_risk_changes_are_logged_with_their_reasons():
+    d = D0 + timedelta(days=40)
+    prev = _state(FLOOR.model_copy(update={"strategy_risk": {"A": 0.008}}), d - timedelta(days=1))
+    new, reasons = step(prev, _ev(_bad_days(D0, 30), d), d, DYN)
+    rows = [c for c in changes_between(prev, new, reasons, None, ts_ns=1) if c.field.startswith("strategy_risk:")]
+    assert [(c.field, c.old, c.new) for c in rows] == [("strategy_risk:A", 0.008, 0.0025)]
+    assert "tighten" in rows[0].reasons and not any(r.startswith("A:") for r in rows[0].reasons)
+
+
+def test_restart_keeps_strategy_risk(tmp_path: Path):
+    trades = _edge_days(D0, 40, 0.04)
+    start = D0 + timedelta(days=40)
+    out = [AdaptiveController(tmp_path, DYN, dq=_Sink()).current("icm-demo", _ev(trades, start + timedelta(days=i)))
+           for i in range(4)]
+    assert out[2].strategy_risk["A"] == pytest.approx(0.006) and out[3].strategy_risk["A"] == pytest.approx(0.006)
+    st = AdaptiveStore(tmp_path).load("icm-demo")
+    assert st is not None and st.risk_terms["A"].r == pytest.approx(0.006)
+
+
+def test_intraday_factors_only_ever_tighten():
+    assert k_vol(True) == 0.5 and k_vol(False) == 1.0 and k_vol(None) == 1.0
+    assert k_dd(None) == 1.0 and k_dd(0.0) == 1.0 and k_dd(0.02) == 1.0
+    assert k_dd(0.03) == pytest.approx(0.75) and k_dd(0.04) == 0.5 and k_dd(0.2) == 0.5
+    assert k_day(0.0, 50.0) == 1.0 and k_day(24.99, 50.0) == 1.0 and k_day(25.0, 50.0) == 0.5
+    assert k_day(10.0, 0.0) == 1.0 and k_day(float("nan"), 50.0) == 0.5          # unknown loss: the strict side
+    assert stricter_risk({"A": 0.008, "B": 0.003}, {"A": 0.006, "C": 0.009}, 0.005) == \
+        {"A": 0.006, "B": 0.003, "C": 0.005}
+
+
+# ---- ADR 0039: the published terms and the clamp (limits_profile), the nightly job's bounds and notice -------------
+
+_OV = RiskOverrides(profile="demo-2026-10-18", ceilings=RiskCeilings(daily=0.05, weekly=0.10, min_lot_risk_cap=0.01))
+
+
+def _account(mode: str = "demo", overrides: RiskOverrides | None = _OV, *, dynamic: bool = False) -> Account:
+    a = Account(account_id="icm-demo", broker="icm", mode=mode, server="s", login=1,  # type: ignore[arg-type]
+                terminal_path="t", server_tz="UTC", symbol="XAUUSD", magic_base=260100, enabled=True,
+                daily_loss_limit_abs=50.0, risk_overrides=overrides)
+    # lane C adds `Account.dynamic_limits`; the job reads it with getattr so either merge order works
+    return a.model_copy(update={"dynamic_limits": True}) if dynamic else a
+
+
+def _current(**kw: object) -> RiskLimitsCurrent:
+    return RiskLimitsCurrent(profile="default", daily_cap=0.02, weekly_cap=0.05, reason="t", **kw)  # type: ignore[arg-type]
+
+
+def test_clamp_keeps_demo_strategy_risk_within_quarter_percent_and_the_one_percent_limit():
+    d = RiskLimits()
+    cur = _current(strategy_risk={"A": 0.009, "B": 0.001, "C": 0.004, "D": float("nan")})
+    out = clamp(cur, d, _account(), LimitsEvidence())
+    assert out.strategy_risk == {"A": 0.009, "B": 0.0025, "C": 0.004}           # an unusable value: the base (dropped)
+    assert out.profile == "demo-2026-10-18"                                     # above the base: demo evidence
+    assert clamp(_current(strategy_risk={"C": 0.004}), d, _account(), LimitsEvidence()).profile == DEFAULT_PROFILE
+
+
+def test_clamp_never_raises_strategy_risk_above_the_default_off_demo_or_when_reverted():
+    d = RiskLimits()
+    cur = _current(strategy_risk={"A": 0.009, "B": 0.003})
+    assert clamp(cur, d, _account("live", None), LimitsEvidence()).strategy_risk == {"A": 0.005, "B": 0.003}
+    reverted = clamp(cur, d, _account(), LimitsEvidence(reverted=True))
+    assert reverted.strategy_risk == {} and reverted.risk_terms == {}
+
+
+def test_bounds_for_turns_dynamic_risk_on_only_for_a_flagged_demo_account():
+    from goldbot.ops.limits_job import bounds_for
+    s = load_settings()
+    on = bounds_for(s, _account(dynamic=True), [_account(dynamic=True)])
+    assert on.dynamic and on.risk_base == pytest.approx(0.005) and on.risk_ceiling == pytest.approx(0.01)
+    assert not bounds_for(s, _account(), [_account()]).dynamic                   # the flag defaults off
+    live = bounds_for(s, _account("live", None, dynamic=True), [_account("live", None)])
+    assert live.risk_ceiling == pytest.approx(live.risk_base)                   # live: tighten only
+
+
+def test_the_notice_names_per_trade_risk_changes_without_ids():
+    from goldbot.ops.limits_job import change_notice
+    rows = [AdaptiveChange(account_id="icm-demo", day=D0, field="strategy_risk:v20261019-1", old=0.008, new=0.0025,
+                           reasons=("tighten",), evidence_ids=(), ts_ns=0),
+            AdaptiveChange(account_id="icm-demo", day=D0, field="strategy_risk:v2", old=None, new=0.006,
+                           reasons=("loosen",), evidence_ids=(), ts_ns=0)]
+    text = change_notice("icm-demo", rows, equity=1_000.0, currency="GBP", limits=FLOOR,
+                         at=pd.Timestamp("2026-11-02 23:05", tz="UTC"), tz="Europe/London")
+    assert "per-trade risk 0.8% -> 0.25%" in text and "the default -> 0.6%" in text
+    assert "v20261019" not in text and len(text.splitlines()) <= 2
+
+
+# ---- quant review of the integrated dynamic limits (2026-10-19) -----------------------------------------------------
+
+def _per_day(first: date, days: int, per_day: list[float]) -> list[TradeEvidence]:
+    return [_t(first + timedelta(days=i), r) for i in range(days) for r in per_day]
+
+
+def test_per_trade_f_uses_the_per_trade_lower_bound_not_the_daily_one():
+    # 3 trades a day: A1's day-unit fraction would size every trade as if it were the whole day (3x too high)
+    trades = _per_day(D0, 40, [1.2, -0.9, 0.0]) + _per_day(D0 + timedelta(days=40), 40, [1.0, -1.0, 0.3])
+    st = daily_lcb(trades)
+    assert st is not None and st.lcb > 0
+    nbar = st.n_trades / st.n_days
+    e_r2 = sum(t.net_r ** 2 for t in trades) / len(trades)
+    sums: dict[int, float] = {}
+    for t in trades:
+        k = t.exit_ns // (86_400 * 10**9)
+        sums[k] = sums.get(k, 0.0) + t.net_r
+    e_d2 = sum(v ** 2 for v in sums.values()) / len(sums)
+    expected = min((st.lcb / nbar) / (4 * e_r2), st.lcb / (4 * e_d2))
+    assert strategy_f(trades) == pytest.approx(expected)
+    q = quarter_kelly_q(trades)                                  # ADR 0031's caps keep A1's day-unit fraction
+    assert q * 0.03 == pytest.approx(min(expected * nbar, 0.03))
+
+
+def test_f_is_invariant_when_each_day_is_split_into_more_independent_trades_of_the_same_daily_edge():
+    one = _per_day(D0, 40, [1.1, -0.9])                          # per trade: the edge 0.1R, 2 a day
+    two = _per_day(D0, 40, [1.1, -0.9, 1.1, -0.9])               # the same trades, twice as many a day
+    f1, f2 = strategy_f(one), strategy_f(two)
+    assert f1 is not None and f2 is not None and f2 == pytest.approx(f1, rel=0.05)
+
+
+def test_two_or_three_very_good_days_cannot_reach_the_cap():
+    for days in (2, 3):
+        t = strategy_risk(_good_days(D0, days), 0.005)
+        assert t.f is not None and t.f > 0.01                   # the raw fraction is far above the cap
+        assert t.r == pytest.approx(0.005)                       # clamped before shrinking: 0.5% + w x 0.5% < 0.6%
+
+
+def test_quarantined_trades_are_not_strategy_risk_evidence_but_stay_in_adr_0031():
+    bad_q = [t.model_copy(update={"quarantined": True}) for t in _bad_days(D0, 30)]
+    d = D0 + timedelta(days=40)
+    s, _ = step(None, _ev(_edge_days(D0, 40, 0.04) + bad_q, d), d, DYN)
+    assert s.limits.strategy_risk["A"] == 0.005 and s.risk_terms["A"].reason != "tighten"
+    same, _ = step(None, _ev(_edge_days(D0, 40, 0.04) + _bad_days(D0, 30), d), d, DYN)
+    assert same.limits.strategy_risk["A"] == 0.0025                 # the same trades unquarantined do tighten
+
+
+def test_demo_and_shadow_evidence_mark_trades_opened_before_the_history_fix(tmp_path: Path):
+    from types import SimpleNamespace
+
+    from goldbot.execution.costs import settings_swap
+    from goldbot.ops.gates_phase import ClosedTrade
+    from goldbot.ops.limits_job import EVIDENCE_START_UTC, demo_evidence, shadow_evidence
+    start = EVIDENCE_START_UTC
+    before_ns = int(pd.Timestamp("2026-11-01", tz="UTC").value)
+
+    def closed(entry: pd.Timestamp | None, exit_: pd.Timestamp, n: int) -> ClosedTrade:
+        return ClosedTrade(account_id="icm-demo", broker="icm", mode="demo", exit_utc=exit_, ret=0.001, pnl=1.0,
+                           equity_before=1000.0, position_id=n, entry_utc=entry, r=0.5, model_version="v1")
+
+    trades = [closed(start - pd.Timedelta(minutes=1), start + pd.Timedelta(hours=1), 1),
+              closed(start, start + pd.Timedelta(hours=1), 2),
+              closed(None, start - pd.Timedelta(minutes=5), 3),
+              closed(None, start + pd.Timedelta(hours=2), 4)]
+    imputer = SimpleNamespace(charge=lambda t: SimpleNamespace(r=0.0))
+    demo, problems = demo_evidence(trades, "icm-demo", imputer, {"v1": 0}, before_ns)  # type: ignore[arg-type]
+    assert not problems and [t.quarantined for t in demo] == [True, False, True, False]
+
+    def sh(entry: pd.Timestamp) -> SimpleNamespace:
+        return SimpleNamespace(taken=True, exit_ts=entry + pd.Timedelta(hours=1), ret=0.001, entry=4000.0,
+                               stop=3990.0, side=1, entry_ts=entry)
+
+    book = SimpleNamespace(books={"v1": SimpleNamespace(closed=[sh(start - pd.Timedelta(hours=1)), sh(start)])})
+    out = shadow_evidence(book, {"v1": 0}, extra_cost_usd=0.0, swap=settings_swap(load_settings()),  # type: ignore[arg-type]
+                          before_ns=before_ns)
+    assert [t.quarantined for t in out] == [True, False]
+
+
+def _bars_with_a_session_spike(days: int, end: pd.Timestamp, *, recent_scale: float = 1.0,
+                               recent_days: int = 20) -> pd.DataFrame:
+    """15m bars with a strong intraday pattern: one session hour a day has 5x the range. The last `recent_days`
+    days are scaled by `recent_scale` (a volatile regime)."""
+    ts = pd.date_range(end - pd.Timedelta(days=days), end - pd.Timedelta(minutes=15), freq="15min", tz="UTC")
+    rng = np.random.default_rng(3)
+    spike = np.where(ts.hour == 13, 5.0, 1.0) * rng.uniform(0.9, 1.1, len(ts))
+    spike = np.where(ts >= end - pd.Timedelta(days=recent_days), spike * recent_scale, spike)
+    close = 4000.0 + np.zeros(len(ts))
+    return pd.DataFrame({"ts_utc": ts, "open": close, "high": close + spike, "low": close - spike, "close": close})
+
+
+def test_the_vol_regime_compares_like_with_like_daily_median_atr15():
+    from goldbot.ops.limits_job import atr15_daily_stats, atr15_stats
+    end = pd.Timestamp("2026-11-02", tz="UTC")
+    before = int(end.value)
+    calm = _bars_with_a_session_spike(370, end)
+    med, p90 = atr15_daily_stats(calm, before)
+    assert med is not None and p90 is not None and med < p90                     # an ordinary month: no regime
+    hot = _bars_with_a_session_spike(370, end, recent_scale=1.6)
+    med, p90 = atr15_daily_stats(hot, before)
+    assert med is not None and p90 is not None and med >= p90                    # 60% more volatile: the regime
+    bar_med, bar_p90 = atr15_stats(hot, before)                                  # per-bar p90 is the session hour:
+    assert bar_med is not None and bar_p90 is not None and bar_med < bar_p90     # it would almost never fire
+    assert atr15_daily_stats(calm.iloc[-1000:], before) == (None, None)          # less than a year: unknown

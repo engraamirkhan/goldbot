@@ -71,12 +71,16 @@ def account_fx(account_currency: str, acct_per_usd: float | None) -> float | Non
     return fx
 
 
-def effective_risk(limits: SizingLimits, size_down: bool, mult: float) -> EffectiveRisk:
+def effective_risk(limits: SizingLimits, size_down: bool, mult: float,
+                   risk_frac: float | None = None) -> EffectiveRisk:
     """`size_down`: the account is in the 8% stage or the supervisor's combined size-down flag is set (the gate's
-    `st.stage == Stage.SIZE_DOWN or st.combined_size_down`)."""
+    `st.stage == Stage.SIZE_DOWN or st.combined_size_down`). `risk_frac`: the risk per trade before the multiplier
+    (the gate's `RiskLimits.risk_for`, dynamic limits); None = `limits.risk_per_trade`. The stage, the multiplier and
+    the per-trade maximum apply to it as to the fixed rate ("the multiplier and the 1% hard cap still apply")."""
     lo, hi = limits.multiplier_bounds
     m = min(max(mult, lo), hi)
-    risk_frac = limits.risk_per_trade
+    if risk_frac is None or not (math.isfinite(risk_frac) and risk_frac > 0):
+        risk_frac = limits.risk_per_trade
     if size_down:
         risk_frac *= SIZE_DOWN_RISK
         m = min(m, SIZE_DOWN_MULT_CAP)

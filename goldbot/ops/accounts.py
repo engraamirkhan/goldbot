@@ -111,6 +111,11 @@ class Account(Record):
     # ADR 0037 amendment 4 ("probes must never consume the real trades' allowance"): a dedicated probe account. Its
     # engine has no live agents and refuses any entry that is not a cost probe (fail closed, Engine._execute)
     probe_only: bool = False
+    # owner 2026-10-19 (docs/design/dynamic-limits-2026-10-19.md): "loss per trade, daily loss ... dynamic according to
+    # strategy". On: per-strategy risk per trade from the nightly controller, tighten-only intraday factors and the
+    # probes' loss and count from their own stops and the budget (cost_probe.probe_limits); the configured values stay
+    # the ceilings and the fallback. Off (the default) is today's behaviour; on a live account it is owner-only
+    dynamic_limits: bool = False
 
     # backstop for records built outside load_accounts: validation errors never carry the input (names, logins)
     model_config = ConfigDict(hide_input_in_errors=True)      # merged with Record's config by pydantic
@@ -374,7 +379,8 @@ def load_accounts(path: Path | None = None) -> dict[str, Account]:
                            daily_loss_limit_abs=a.get("daily_loss_limit_abs"), account_class=a.get("account_class"),
                            risk_overrides=a.get("risk_overrides"), approval_mode=a.get("approval_mode", "propose"),
                            cost_probe=CostProbe(**(a.get("cost_probe") or {})),
-                           shadow_host=bool(a.get("shadow_host", False)), probe_only=bool(a.get("probe_only", False)))
+                           shadow_host=bool(a.get("shadow_host", False)), probe_only=bool(a.get("probe_only", False)),
+                           dynamic_limits=a.get("dynamic_limits", False))
     hosts = [a for a in out.values() if a.enabled and a.shadow_host]
     if len(hosts) > 1:      # ADR 0037 amendment 4: one shadow book, one host; two would trade it twice
         raise ValueError(f"{len(hosts)} enabled accounts are the shadow host in config/accounts.yaml: exactly one may "

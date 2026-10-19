@@ -18,7 +18,14 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import pandas as pd
 
-from goldbot.api.schema import LimitAccount, LimitChange, LimitsSupervisorView, LimitsView
+from goldbot.api.schema import (
+    LimitAccount,
+    LimitChange,
+    LimitsSupervisorView,
+    LimitsView,
+    RiskTodayView,
+    StrategyRiskView,
+)
 from goldbot.ops import limits_log
 from goldbot.ops.limits_log import LimitChangeEntry, LimitsLogError
 from goldbot.risk.limits_profile import DEFAULT_PROFILE, SUPERVISOR_DEMO_ENVELOPE
@@ -60,6 +67,33 @@ def changes_view(state_dir: Path, account: str | None, limit: int) -> list[Limit
         log.warning("limit changes unreadable: %s", exc)
         return []
     return [change_view(e) for e in rows]
+
+
+def _why_today(base: float | None, scale: float | None, cuts: list[str], n: int) -> str:
+    rate = f"{base:.2%}" if base is not None else "the fixed rate"
+    head = f"{n} strateg{'y has' if n == 1 else 'ies have'} its own risk per trade" if n else \
+        f"every strategy trades the base {rate}"
+    if not cuts or scale is None or scale >= 1.0:
+        return f"{head}; no same-day cut."
+    return f"{head}; today's cuts ({', '.join(cuts)}) scale it by {scale:g} until the next risk day."
+
+
+def risk_today_view(raw: Any) -> RiskTodayView | None:
+    """Dynamic limits' "why this limit today" from the engine file's `risk_today` (engine/limits_apply.py
+    `DayRisk.why`); None when the engine publishes none (dynamic limits off) or it is not an object."""
+    if not isinstance(raw, dict):
+        return None
+    ks = {k: _pos(raw.get(k)) for k in ("k_vol", "k_dd", "k_day")}
+    labels = {"k_vol": "high volatility", "k_dd": "drawdown", "k_day": "half the daily allowance lost"}
+    cuts = [labels[k] for k, v in ks.items() if v is not None and v < 1.0]
+    s = raw.get("strategies")
+    strategies: dict[Any, Any] = s if isinstance(s, dict) else {}
+    rows = [StrategyRiskView(version=str(v), decided=_pos(t.get("decided")), applied=_pos(t.get("applied")),
+                             reason=str(t["reason"]) if isinstance(t.get("reason"), str) else None)
+            for v, t in sorted(strategies.items()) if isinstance(t, dict)]
+    base, scale = _pos(raw.get("base")), _pos(raw.get("scale"))
+    return RiskTodayView(base=base, ceiling=_pos(raw.get("ceiling")), scale=scale, strategies=rows,
+                         why=_why_today(base, scale, cuts, sum(r.decided is not None for r in rows)), **ks)
 
 
 def _mode(e: dict[str, Any]) -> Literal["demo", "live", "paper"]:
@@ -119,7 +153,7 @@ def _account(e: dict[str, Any], now: pd.Timestamp, state_dir: Path, last: LimitC
         min_lot=_pos(terms.get("volume_min")), min_lot_risk=_pos(gate.get("min_lot_risk_account")),
         min_lot_risk_cap=_pos(gate.get("min_lot_risk_cap")),
         revert_active=reverted, revert_since=since, revert_reason=why, cap_hit=hit if lim else "none",
-        last_change=last, error=error)
+        last_change=last, error=error, risk_today=risk_today_view(e.get("risk_today")))
 
 
 def limits_view(state_dir: Path, engines: list[dict[str, Any]], supervisor: dict[str, Any],

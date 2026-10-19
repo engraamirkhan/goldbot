@@ -2133,6 +2133,7 @@ export interface components {
             revert_reason: string | null;
             /** Revert Since */
             revert_since: string | null;
+            risk_today?: components["schemas"]["RiskTodayView"] | null;
             /**
              * Source
              * @enum {string}
@@ -3102,6 +3103,29 @@ export interface components {
             /** Sessions */
             sessions: number;
         };
+        /**
+         * RiskTodayView
+         * @description Why the risk per trade is what it is today (docs/design/dynamic-limits-2026-10-19.md): the base rate, its
+         *     ceiling and the same-day tighten-only factors (each 1 = no cut). Only on an account with dynamic limits on.
+         */
+        RiskTodayView: {
+            /** Base */
+            base: number | null;
+            /** Ceiling */
+            ceiling: number | null;
+            /** K Day */
+            k_day: number | null;
+            /** K Dd */
+            k_dd: number | null;
+            /** K Vol */
+            k_vol: number | null;
+            /** Scale */
+            scale: number | null;
+            /** Strategies */
+            strategies: components["schemas"]["StrategyRiskView"][];
+            /** Why */
+            why: string;
+        };
         /** RoleChange */
         RoleChange: {
             /** Email */
@@ -3245,6 +3269,21 @@ export interface components {
             weekly_cap?: number | null;
             /** Worst Loss Frac */
             worst_loss_frac?: number | null;
+        };
+        /**
+         * StrategyRiskView
+         * @description One strategy's (model version's) risk per trade today under dynamic limits (fractions of equity, before the
+         *     allocator's multiplier). Null = the engine does not say.
+         */
+        StrategyRiskView: {
+            /** Applied */
+            applied: number | null;
+            /** Decided */
+            decided: number | null;
+            /** Reason */
+            reason: string | null;
+            /** Version */
+            version: string;
         };
         /**
          * StrategyWatch

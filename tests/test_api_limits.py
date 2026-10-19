@@ -79,6 +79,29 @@ def test_the_card_shows_the_current_caps_in_money_and_percent_with_what_is_used(
     assert a["cap_hit"] == "none" and a["revert_active"] is False and a["stale"] is False and a["error"] is None
 
 
+def test_why_this_limit_today_shows_each_strategys_rate_and_the_same_day_cuts(client):
+    c, h, state = client
+    engine_file(state, risk_today={"k_vol": 0.5, "k_dd": 1.0, "k_day": 0.5, "scale": 0.25, "base": 0.005,
+                                   "ceiling": 0.01, "strategies": {"v1": {"decided": 0.008, "applied": 0.002,
+                                                                          "reason": "22 demo days, LCB > 0"},
+                                                                   "v2": {"decided": None, "applied": 0.00125}}})
+    (a,) = c.get("/api/limits", headers=h["viewer"]).json()["accounts"]
+    r = a["risk_today"]
+    assert (r["base"], r["ceiling"], r["k_vol"], r["k_dd"], r["k_day"], r["scale"]) == (0.005, 0.01, 0.5, 1.0, 0.5,
+                                                                                          0.25)
+    assert [(s["version"], s["decided"], s["applied"], s["reason"]) for s in r["strategies"]] == [
+        ("v1", 0.008, 0.002, "22 demo days, LCB > 0"), ("v2", None, 0.00125, None)]
+    assert "high volatility" in r["why"] and "half the daily allowance lost" in r["why"] and "0.25" in r["why"]
+
+
+def test_without_dynamic_limits_or_with_a_corrupt_why_there_is_no_risk_today(client):
+    c, h, state = client
+    engine_file(state)
+    assert c.get("/api/limits", headers=h["viewer"]).json()["accounts"][0]["risk_today"] is None
+    engine_file(state, risk_today=["junk"])
+    assert c.get("/api/limits", headers=h["viewer"]).json()["accounts"][0]["risk_today"] is None
+
+
 def test_the_day_resets_at_midnight_utc_and_the_week_on_sunday_midnight_utc():
     now = pd.Timestamp("2026-10-21 13:05", tz="UTC")              # a Wednesday
     assert limits_log.next_day_reset(now) == pd.Timestamp("2026-10-22", tz="UTC")

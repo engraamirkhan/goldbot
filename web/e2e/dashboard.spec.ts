@@ -314,6 +314,8 @@ test("once the engine reports, Trades > Summary shows the live balance, today's 
     ladder_atr: { "15m": 7.27, "1h": 14.6, "4h": 29.0, "1d": 70.0 },
     lot_terms: { contract_oz: 100, volume_min: 0.01, volume_step: 0.01, volume_max: 50, stops_level_points: 0 },
     entry_blocks: [], entry_refusals: {},                                        // the gate refuses nothing (BACKLOG 43)
+    risk_today: { base: 0.005, ceiling: 0.01, k_vol: 0.5, k_dd: 1, k_day: 1, scale: 0.5,   // dynamic limits (ADR 0039)
+                  strategies: { "box_break_close-1h": { decided: 0.008, applied: 0.004, reason: "strong recent edge" } } },
   }));
   writeFileSync(join(dir, "supervisor.json"), JSON.stringify({
     ts: Date.now() / 1000, halt: false, reasons: [], daily_cap: 0.015, combined_day_start_equity: 1500, weekly_cap: 0.04,
@@ -332,6 +334,14 @@ test("once the engine reports, Trades > Summary shows the live balance, today's 
   const box = await card.boundingBox();
   expect(box && box.x >= 0 && box.x + box.width <= 360).toBe(true);           // fits the phone
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);   // no sideways scroll
+  const risk = page.getByRole("region", { name: "Risk per trade" });     // ADR 0039: risk per strategy in £
+  await expect(risk.getByText("DEMO", { exact: true })).toBeVisible();
+  await expect(risk.getByText(/high volatility: halved/)).toBeVisible();
+  await expect(risk.getByRole("cell", { name: "≈£6.00" })).toBeVisible();     // 0.4% of the £1,500 day-start equity
+  await expect(risk.getByText(/£12\.50 left today before the binding limit/)).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
+  await go(page, "Overview");
+  await expect(page.getByText(/Risk per trade today: ≈£6\.00 \(why: high volatility: halved\)/)).toBeVisible({ timeout: 15_000 });   // /api/today polls every 5 s
   await go(page, "Approvals");
   await expect(page.getByText("Loss budget", { exact: true })).toBeVisible();   // safety strip chip
 });
