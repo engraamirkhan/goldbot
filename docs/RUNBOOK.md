@@ -1064,6 +1064,28 @@ Budgets to measure after the first day and record in the deploy note (targets, n
   `goldbot-tv-pull` first (that code has no `tv-pull` command: the unit would crash-loop and fail the deploy's health
   window).
 
+### 2.7e The three indicators on the MT5 chart (requires owner approval; not installed)
+
+**Status: requires owner approval; not installed.** Nothing copies these files to the MT5 box; the terminal and the
+bridge are untouched. They are display aids only: goldbot's decisions keep coming from the Python code, never from
+these plots.
+
+`goldbot/ops/linux/mt5/indicators/` holds MQL5 ports of the three indicators goldbot computes in Python, with the
+same inputs and defaults (pinned by `tests/test_mql5_ports.py`); each evaluates closed bars only, so nothing repaints:
+
+| File | Mirrors |
+|---|---|
+| `goldbot_structure.mq5` | `features/smc_replica.py` structure (BOS/CHoCH), equal highs/lows, FVG, golden zone |
+| `goldbot_sr_boxes.mq5` | `features/smc_replica.py` boxes and break-and-close, candle class; `features/box_course.py` next box |
+| `goldbot_money_flow.mq5` | `features/smc_replica.py` money flow (tick volume) and `features/mfi_signals.py` signals |
+
+They have not been compiled in CI (no MetaEditor there). Once the owner approves, on the MT5 box over VNC:
+
+1. In MT5: File -> Open Data Folder; copy the three `.mq5` files into `MQL5/Indicators/goldbot/`.
+2. Open each in MetaEditor (F4) and Compile (F7); fix any error in the repo first, never only on the box.
+3. In the Navigator, refresh Indicators and drag each one onto the XAUUSD chart; keep the default inputs.
+4. To remove: delete the indicator from the chart (the box rectangles go with it) and the files from the folder.
+
 ### 2.8 Telegram bot with @BotFather
 
 1. In Telegram, open **@BotFather**, send `/newbot`, choose a name and a username. BotFather replies with the bot
