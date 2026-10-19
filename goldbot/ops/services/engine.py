@@ -160,15 +160,18 @@ def _record_tick_error(eng: Any, exc: BaseException) -> None:
         log.exception("engine tick failed and the error could not be recorded")
 
 
-def refuse_start(account_id: str, why: str, info: Any = None, state_dir: str | Path = "state") -> NoReturn:
+def refuse_start(account_id: str, why: str, info: Any = None, state_dir: str | Path = "state", *,
+                 probe_only: bool = False) -> NoReturn:
     """End an engine start the terminal-account check refused (review LOW-A): `startup_error` goes into
     engine_<account>.json first, so health names the cause instead of showing a stale engine, then SystemExit. The
     deposit currency is kept for the supervisor's currency check; no login, server or balance is written. Merged into
-    the previous engine file (review LOW-D: the last-known exposure keeps counting; `write_startup_error`)."""
+    the previous engine file (review LOW-D: the last-known exposure keeps counting; `write_startup_error`).
+    `probe_only` is the account's configured flag (ADR 0037 amendment 4): a probe account's refusal halts no real one."""
     from goldbot.risk.supervisor import write_startup_error
     currency = str(getattr(info, "currency", "") or "").strip().upper() or None
     try:
-        write_startup_error(state_dir, account_id, why, dq_checks=["startup_refused"], currency=currency)
+        write_startup_error(state_dir, account_id, why, dq_checks=["startup_refused"], currency=currency,
+                            probe_only=probe_only)
     except OSError:
         log.exception("startup refusal not written to the engine state")
     raise SystemExit(why)
@@ -238,7 +241,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     configured = accounts.load_accounts()
     acc = configured[account_id]
     if why := approval_ids_problem(account_id):
-        resolve(refuse_start)(account_id, f"refusing to start {account_id}: {why}")
+        resolve(refuse_start)(account_id, f"refusing to start {account_id}: {why}", probe_only=acc.probe_only)
     settings = load_settings()
     if acc.is_live and acc not in accounts.enabled_accounts("live"):
         raise SystemExit("live account not unlocked by the phase gate")
@@ -251,7 +254,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         info = broker.account()
         why = accounts.verify_terminal_account(acc, info)
         if why:
-            resolve(refuse_start)(account_id, f"refusing to trade {account_id} through the bridge: {why}", info)
+            resolve(refuse_start)(account_id, f"refusing to trade {account_id} through the bridge: {why}", info,
+                                    probe_only=acc.probe_only)
     elif sys.platform == "win32":
         from goldbot.execution.mt5_adapter import MT5Broker
         acc = accounts.ensure_login(acc)
@@ -260,7 +264,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         info = broker.account()
         why = accounts.verify_terminal_account(acc, info)
         if why:
-            resolve(refuse_start)(account_id, f"refusing to trade {account_id}: {why}", info)
+            resolve(refuse_start)(account_id, f"refusing to trade {account_id}: {why}", info,
+                                    probe_only=acc.probe_only)
     else:
         from goldbot.execution.paper import PaperBroker
         broker = PaperBroker(symbol=acc.symbol)

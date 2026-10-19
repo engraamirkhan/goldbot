@@ -113,12 +113,16 @@ STARTUP_KEEP = ("open_lots", "open_notional", "equity", "day_start_equity", "wee
 
 
 def write_startup_error(state_dir: str | Path, account_id: str, why: str, *, dq_checks: list[str],
-                        currency: str | None = None) -> None:
+                        currency: str | None = None, probe_only: bool = False) -> None:
     """engine_<account>.json for an engine start that failed (a refused terminal account, an unreadable positions read):
     `startup_error` and `dq_error` MERGED into the previous file, keeping its last-known exposure and equity
     (`STARTUP_KEEP`, finite numbers only), its currency and its absolute daily limit, so the combined caps still count
     this account (review LOW-D). The supervisor halts entries on such a file (`engine_startup_refused`). An unreadable
-    or missing previous file gives the error payload alone. No login, server or balance is written."""
+    or missing previous file gives the error payload alone. No login, server or balance is written.
+
+    `probe_only` comes from the account's configuration (accounts.yaml), never from the previous file, and is always
+    written (ADR 0037 amendment 4: "probes must never consume the real trades' allowance"): a probe account's failed
+    start is reported apart (`probe_engines`) and does not halt the real accounts; a real account's halts every one."""
     path = Path(state_dir, f"engine_{account_id}.json")
     try:
         prev = json.loads(path.read_text())
@@ -132,7 +136,7 @@ def write_startup_error(state_dir: str | Path, account_id: str, why: str, *, dq_
     path.parent.mkdir(parents=True, exist_ok=True)
     write_atomic(path, json.dumps({**kept, "account": account_id, "ts": time.time(), "dq_error": True,
                                    "dq_checks": list(dq_checks), "stage": "unknown", "currency": cur,
-                                   "startup_error": why[:300]}), durable=False)
+                                   "startup_error": why[:300], "probe_only": probe_only is True}), durable=False)
 
 
 def _currency(e: dict) -> str | None:
@@ -239,7 +243,8 @@ class Supervisor:
         if self.unreadable:
             reasons.append("engine_state_unreadable")     # fail closed: its equity cannot be counted
         # an engine whose start failed (review LOW-D): entries halt as for an unreadable file, but its last-known
-        # exposure and money (kept by write_startup_error) are still summed, the strict direction for the caps
+        # exposure and money (kept by write_startup_error) are still summed, the strict direction for the caps. A probe
+        # account's failed start is in `probe_engines` only (ADR 0037 amendment 4): it never halts the real accounts
         refused = sorted(str(e.get("_file", "")) for e in engines if e.get("startup_error"))
         if refused:
             reasons.append("engine_startup_refused")
