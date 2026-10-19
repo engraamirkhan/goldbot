@@ -40,6 +40,7 @@ from goldbot.api import (
     chart_layouts,
     entry_status,
     explain,
+    home_cards,
     limits,
     mt5_crop,
     progress,
@@ -117,6 +118,7 @@ from goldbot.api.schema import (
     ModeChangeRequest,
     ModeChangeResult,
     Ok,
+    OpenPositionsView,
     Proposal,
     RearmRequest,
     RecoveryCodesRequest,
@@ -132,6 +134,8 @@ from goldbot.api.schema import (
     SetupRequest,
     SetupResponse,
     Status,
+    StrategyWatchView,
+    TodayView,
     TradesOverview,
     TradesSummary,
     TvStatusView,
@@ -1070,6 +1074,28 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         return overview_cache.get(lambda: trades_overview.trades_overview(st.dir, pd.Timestamp.now("UTC"),
                                                                           engines_or_none()))
     # ============================================================== end Home trades summary
+
+    # ============================================================== Home status card stack (read-only, viewer and above)
+    # goldbot/api/home_cards.py (docs/ux/home-redesign-2026-10-19.md): open positions (N1), the strategy agents' states
+    # (N2) and today's money. Each its own route and cache (one failing source never blanks Home). Nothing writes.
+    positions_cache = progress.GatesCache(ttl_s=home_cards.HOME_TTL_S)
+    watch_cache = progress.GatesCache(ttl_s=home_cards.HOME_TTL_S)
+    today_cache = progress.GatesCache(ttl_s=home_cards.HOME_TTL_S)
+
+    @app.get("/api/positions/open", response_model=OpenPositionsView)
+    def positions_open(_: User = Depends(need("viewer"))) -> OpenPositionsView:
+        return positions_cache.get(lambda: home_cards.open_positions(st.dir, pd.Timestamp.now("UTC"),
+                                                                     engines_or_none()))
+
+    @app.get("/api/strategies/watch", response_model=StrategyWatchView)
+    def strategies_watch(_: User = Depends(need("viewer"))) -> StrategyWatchView:
+        return watch_cache.get(lambda: home_cards.strategy_watch(st.dir, pd.Timestamp.now("UTC"), engines_or_none()))
+
+    @app.get("/api/today", response_model=TodayView)
+    def today(_: User = Depends(need("viewer"))) -> TodayView:
+        return today_cache.get(lambda: home_cards.today_money(st.dir, pd.Timestamp.now("UTC"),
+                                                              home_cards.probe_terms_from_config(), engines_or_none()))
+    # ============================================================== end Home status card stack
 
     # ============================================================== auto mode (A10): card for any role, switch owner-only
     # The switch runs telegram/automode.py `mode_command`, the code behind Telegram's /mode, with the same checks:
