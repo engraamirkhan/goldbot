@@ -26,6 +26,9 @@ die() { say "STOP: $*"; exit 1; }
 [ -z "$(git status --porcelain --untracked-files=no)" ] || die "uncommitted changes"
 git fetch -q origin
 git merge-base --is-ancestor origin/main HEAD || die "origin/main is not merged into $BRANCH (merge it first)"
+# seconds-cheap checks before anything is pushed (mypy is incremental): a type error costs a 2-min GitHub round trip
+uv run -q --extra dev ruff check goldbot tests scripts || die "ruff"
+uv run -q --extra dev mypy >/dev/null || { uv run -q --extra dev mypy | tail -5; die "mypy"; }
 HEAD_SHA=$(git rev-parse HEAD)
 HEAD_TREE=$(git rev-parse "HEAD^{tree}")
 
