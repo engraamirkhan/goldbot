@@ -31,7 +31,7 @@ export function Approvals() {
       <SafetyStrip status={status.data} accounts={accounts.data} error={status.isError || accounts.isError}
                    updatedAt={status.dataUpdatedAt && accounts.dataUpdatedAt
                      ? Math.min(status.dataUpdatedAt, accounts.dataUpdatedAt) : undefined} now={now} />
-      <div className="seg" role="tablist" aria-label="Trades">
+      <div className="seg" role="tablist" aria-label="Decisions">
         <button type="button" role="tab" aria-selected={part === "waiting"} onClick={() => setPart("waiting")}>
           Waiting{open.length > 0 ? ` (${open.length})` : ""}
         </button>

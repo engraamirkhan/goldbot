@@ -6,6 +6,10 @@ import { totpClock } from "./totp";
 
 const info = () => JSON.parse(readFileSync("e2e/.server.json", "utf8")) as { setup_code: string; state_dir: string };
 const clock = totpClock(() => info().state_dir);
+/** SHOTS_DIR=<dir> saves full-page screenshots of the screens under test (before/after for design reviews). */
+async function shot(page: Page, name: string) {
+  if (process.env.SHOTS_DIR) await page.screenshot({ path: join(process.env.SHOTS_DIR, `${name}.png`), fullPage: true });
+}
 const OWNER = { email: "owner@example.com", password: "owner password 123" };
 const VIEWER = { email: "viewer@example.com", password: "viewer password 123" };
 
@@ -300,7 +304,7 @@ test("owner manages a user's access and never offers the owner role", async ({ p
 });
 
 // last in the story: an engine starts reporting (earlier steps rely on "No engines reporting")
-test("once the engine reports, Overview shows the live balance, today's loss budget and the next milestone on a phone", async ({ page }) => {
+test("once the engine reports, Trades > Summary shows the live balance, today's loss budget and the next milestone on a phone", async ({ page }) => {
   const dir = info().state_dir;
   writeFileSync(join(dir, "engine_icm-demo.json"), JSON.stringify({
     account: "icm-demo", broker: "icm", mode: "demo", equity: 1490, balance: 1500, currency: "GBP", margin: 0,
@@ -318,6 +322,7 @@ test("once the engine reports, Overview shows the live balance, today's loss bud
   await page.setViewportSize({ width: 360, height: 800 });
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  await go(page, "Trades summary");                                            // the balance card moved off Home (home v2)
   const card = page.getByRole("region", { name: "Account icm-demo" });
   await expect(card.getByText("£1,500.00")).toBeVisible();                     // balance from the broker, in pounds
   await expect(card.getByText("£12.50 left")).toBeVisible();                   // 1.5% of £1,500 less £10 lost today
@@ -367,37 +372,64 @@ test("entry status says in plain words why an account can't trade, when it resum
   await expect(page.getByRole("status").filter({ hasText: "New entries blocked" })).toContainText("Market closed");
 });
 
-// The status card stack (docs/ux/home-redesign-2026-10-19.md, Decision 2026-10-19): the cards in order at 360 and
-// 1080 px, light and dark; today's money carries its DEMO badge and names the limit that binds; the MT5 chart card is
-// desktop only; nothing scrolls sideways.
-test("Home shows the status card stack in order on a phone and a desktop, light and dark", async ({ page }) => {
+// Home v2 (docs/ux/home-v2-2026-10-19.md, owner 2026-10-19): a calm status page of five cards in order at 360 and
+// 1080 px, light and dark, and everything about trades on the Trades screen (Open, Activity, Summary). Today's money
+// carries its DEMO badge and names the limit that binds; Home links to the open trades; nothing scrolls sideways.
+async function noSideways(page: Page, width: number) {
+  const wide = await page.evaluate((w) => Array.from(document.querySelectorAll("body *")).filter((e) => {
+    if (e.getBoundingClientRect().right <= w + 1) return false;
+    for (let p = e.parentElement; p; p = p.parentElement) if (getComputedStyle(p).overflowX === "auto") return false;   // scrolls in its own box
+    return true;
+  }).slice(0, 5).map((e) => `${e.tagName}.${e.className}`), width);
+  expect(wide).toEqual([]);
+}
+
+test("Home is five calm cards and the trades live on Trades, on a phone and a desktop, light and dark", async ({ page }) => {
   const dir = info().state_dir;
   const engine = JSON.parse(readFileSync(join(dir, "engine_icm-demo.json"), "utf8"));
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
   writeFileSync(join(dir, "engine_icm-demo.json"), JSON.stringify({
-    ...engine, ts: Date.now() / 1000, market_closed: false, entry_blocks: [], daily_loss_limit: 50, daily_loss_remaining: 40,
+    ...engine, ts: Date.now() / 1000, market_closed: false, entry_blocks: [], throttle: undefined, server_clock: undefined,
+    daily_loss_limit: 50, daily_loss_remaining: 40,
   }));
-  const names = ["Entry status", "Today", "Open trades", "Your strategies", "Learning", "Activity feed", "Trades summary"];
+  const home = ["Needs you", "System status", "Today", "Your strategies", "Learning"];
   for (const scheme of ["light", "dark"] as const) {
     for (const width of [360, 1080]) {
       await page.emulateMedia({ colorScheme: scheme });
       await page.setViewportSize({ width, height: 900 });
+      await go(page, "Overview");
       await page.reload();
-      for (const name of names) await expect(page.getByRole("region", { name })).toBeVisible();
+      for (const name of home) await expect(page.getByRole("region", { name })).toBeVisible();
+      for (const name of ["Activity feed", "Trades summary", "Open trades", "MT5 chart"]) await expect(page.getByRole("region", { name })).toHaveCount(0);
+      await expect(page.getByRole("heading", { name: "Nothing needs you" })).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByRole("region", { name: "System status" })).toContainText("Engine running · 1 account");
       const today = page.getByRole("group", { name: "Today icm-demo" });
       await expect(today.getByText("DEMO", { exact: true })).toBeVisible({ timeout: 15_000 });
       // config/accounts.yaml runs cost probes on icm-demo (ADR 0037 amendment 3): £10 lost, the ~£16 probe stop binds
       // (15 s: the API's 5 s cache may still hold the report from before the write, and the card polls every 5 s)
       await expect(today.getByText("£6.00 left before the probe stop (£16.00)")).toBeVisible({ timeout: 15_000 });
-      await expect(page.getByRole("region", { name: "MT5 chart" })).toHaveCount(width >= 1080 ? 1 : 0);
       if (width === 360) {
-        const tops = await Promise.all(names.map(async (name) => (await page.getByRole("region", { name }).boundingBox())!.y));
+        const tops = await Promise.all(home.map(async (name) => (await page.getByRole("region", { name }).boundingBox())!.y));
         expect([...tops].sort((a, b) => a - b)).toEqual(tops);                   // one column, in the decided order
       }
-      const wide = await page.evaluate((w) => Array.from(document.querySelectorAll("body *")).filter((e) => e.getBoundingClientRect().right > w + 1)
-        .slice(0, 5).map((e) => `${e.tagName}.${e.className}`), width);
-      expect(wide).toEqual([]);                                                  // nothing scrolls sideways
+      await noSideways(page, width);
+      await shot(page, `home-${width}-${scheme}`);
+
+      await page.getByRole("button", { name: /open trades?( · see trades)? →$/ }).click();   // Home -> Trades > Open
+      await expect(page.getByRole("tab", { name: "Open", exact: true })).toHaveAttribute("aria-selected", "true");
+      await expect(page.getByRole("region", { name: "Open trades" })).toBeVisible();
+      await expect(page.getByRole("region", { name: "Safety state" })).toBeVisible();
+      await noSideways(page, width);
+      await shot(page, `trades-open-${width}-${scheme}`);
+      await go(page, "Trades activity");
+      await expect(page.getByRole("region", { name: "Activity feed" })).toBeVisible();
+      await noSideways(page, width);
+      await shot(page, `trades-activity-${width}-${scheme}`);
+      await go(page, "Trades summary");
+      for (const name of ["Today", "Account icm-demo", "Trades summary"]) await expect(page.getByRole("region", { name })).toBeVisible();
+      await noSideways(page, width);
+      await shot(page, `trades-summary-${width}-${scheme}`);
     }
   }
 });

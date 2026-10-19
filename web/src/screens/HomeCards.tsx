@@ -1,15 +1,15 @@
-// The cards of the Home status card stack (docs/ux/home-redesign-2026-10-19.md, "Decision 2026-10-19"). Each card
-// runs its own query and sits in its own error boundary, so one failing source never blanks Home.
+// The cards of Home (docs/ux/home-v2-2026-10-19.md: a calm status page) and of the Trades screen. Each card runs its
+// own query and sits in its own error boundary, so one failing source never blanks the page.
 import { useQuery } from "@tanstack/react-query";
-import { Component, useEffect, useState, type ReactNode } from "react";
-import { api, type OpenPosition, type TodayAccount } from "../lib/api";
+import { Component, type ReactNode } from "react";
+import { api, type OpenPosition, type TodayAccount, type TradesOverview } from "../lib/api";
 import {
-  digest, HOME_POLL_MS, meterWords, modeBadge, shadowTiles, strategyName, WATCH_POLL_MS,
+  digest, HOME_POLL_MS, meterWords, modeBadge, openTradesWords, shadowTiles, strategyName, systemLine, WATCH_POLL_MS,
 } from "../lib/home";
 import { signedR, TRADES_POLL_MS } from "../lib/tradesOverview";
+import { useNow } from "../lib/useNow";
 import { Badge, Button, Card, EmptyState, ErrorState, Meter, MetricTile, Skeleton, TimeText } from "../ui";
 import { money } from "../ui/format";
-import { Mt5Chart } from "./Mt5Chart";
 
 /** One card's crash shows its own error; the other cards keep working. */
 export class CardBoundary extends Component<{ name: string; children: ReactNode }, { failed: boolean }> {
@@ -139,53 +139,93 @@ export function StrategiesCard() {
   );
 }
 
-// ------------------------------------------------------------------------------------------------ Learning
+// ------------------------------------------------------------------------------------------------ Learning (Home)
+/** One compact card: the shadow book's 7 days (R with n, never money) and the largest change since last week. */
 export function LearningCard({ onOpenProgress }: { onOpenProgress?: () => void }) {
   const q = useQuery({ queryKey: ["tradesOverview"], queryFn: api.tradesOverview, refetchInterval: TRADES_POLL_MS });
   const v = q.data;
   return (
     <Card title="Learning" label="Learning">
-      {q.isLoading ? <Skeleton height={96} label="Loading learning" />
+      {q.isLoading ? <Skeleton height={64} label="Loading learning" />
         : q.isError && !v ? <ErrorState title="Could not load what the system learned." stillWorks="Trading is not affected." onRetry={() => q.refetch()} />
-        : <>
-            <div className="tiles-grid learning-tiles">
-              {shadowTiles(v!).map((t) => (
-                <MetricTile key={t.label} label={t.label} value={signedR(t.avgR)} sub={`n ${t.n} · shadow, not money`} />
-              ))}
-            </div>
-            {(() => {
-              const lines = digest(v!);
-              return lines.length === 0 ? <p className="small muted">Nothing changed enough to report since last week.</p> : (
-                <ul className="digest small" aria-label="Since you last looked">{lines.map((l) => <li key={l.family}>{l.text} (shadow, not money)</li>)}</ul>
-              );
-            })()}
-            {onOpenProgress && <Button variant="ghost" onClick={onOpenProgress}>Road to live ›</Button>}
-          </>}
+        : <LearningBody v={v!} onOpenProgress={onOpenProgress} />}
     </Card>
   );
 }
 
-// ------------------------------------------------------------------------------------------------ MT5 chart
-const WIDE = "(min-width: 1080px)";
-
-/** The broker's own chart (MT5 picture), collapsed by default and only on a desktop: nothing is fetched on a phone. */
-export function ChartCard() {
-  const [wide, setWide] = useState(() => typeof window !== "undefined" && !!window.matchMedia?.(WIDE).matches);
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia?.(WIDE);
-    if (!mq) return;
-    const on = () => setWide(mq.matches);
-    mq.addEventListener?.("change", on);
-    return () => mq.removeEventListener?.("change", on);
-  }, []);
-  if (!wide) return null;
+function LearningBody({ v, onOpenProgress }: { v: TradesOverview; onOpenProgress?: () => void }) {
+  const [all, taken] = shadowTiles(v);
+  const top = digest(v, 1)[0];
   return (
-    <section className="ui-card home-chart" aria-label="MT5 chart">
-      <details open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
-        <summary><h2>MT5 chart, 15-minute</h2></summary>
-        {open && <Mt5Chart tf="15" />}
-      </details>
+    <>
+      <p className="learn-line">Shadow trades, 7 days: every candidate <strong className="num">{signedR(all.avgR)}</strong> per
+        trade (n {all.n}) · taken <strong className="num">{signedR(taken.avgR)}</strong> (n {taken.n}) <span className="muted small">· shadow, not money</span></p>
+      <p className="small muted">{top ? `Biggest change: ${top.text}.` : "Nothing changed enough to report since last week."}</p>
+      {onOpenProgress && <Button variant="ghost" className="home-link" onClick={onOpenProgress}>Road to live ›</Button>}
+    </>
+  );
+}
+
+// ------------------------------------------------------------------------------------------------ Today (Home)
+/** Today in one line per account (DEMO/REAL, never summed), the loss meter, and the way to the trades. */
+export function TodayBrief({ onOpenTrades }: { onOpenTrades?: () => void }) {
+  const q = useQuery({ queryKey: ["today"], queryFn: api.today, refetchInterval: HOME_POLL_MS });
+  const pos = useQuery({ queryKey: ["positionsOpen"], queryFn: api.openPositions, refetchInterval: HOME_POLL_MS });
+  const n = pos.data?.positions.length;
+  const link = n == null ? (pos.isError ? "Open trades not readable · see trades" : "See trades")
+    : n === 0 ? "No open trades · see trades" : openTradesWords(n);
+  return (
+    <Card title="Today" label="Today" aside={q.dataUpdatedAt ? <>updated <TimeText iso={new Date(q.dataUpdatedAt).toISOString()} /></> : undefined}>
+      {q.isLoading ? <Skeleton height={72} label="Loading today's money" />
+        : q.isError && !q.data ? <ErrorState title="Could not load today's money." stillWorks="Trading and the loss limits are not affected." onRetry={() => q.refetch()} />
+        : q.data!.accounts.length === 0 ? <EmptyState title="No engine is reporting">Today's money shows once an engine reports.</EmptyState>
+        : q.data!.accounts.map((a) => <TodayLine key={a.account} a={a} />)}
+      {onOpenTrades && <Button variant="ghost" className="home-link" onClick={onOpenTrades}>{link} →</Button>}
+    </Card>
+  );
+}
+
+function TodayLine({ a }: { a: TodayAccount }) {
+  const ccy = a.currency;
+  const m = a.loss_meter ? meterWords(a.loss_meter, (x) => money(x, ccy)) : null;
+  return (
+    <div className="today-row" aria-label={`Today ${a.account}`} role="group">
+      <p className="today-line"><ModeBadge mode={a.mode} /> <strong>{a.account}</strong>{" "}
+        <span className="today-pnl num">{signed(a.day_pnl, ccy)}</span> <span className="muted small">today after costs</span></p>
+      <p className="small muted num">closed {signed(a.closed_pnl, ccy)} ({a.closed_n} trade{a.closed_n === 1 ? "" : "s"}
+        {a.closed_complete ? "" : ", some left out"}) · open {signed(a.open_pnl, ccy)}</p>
+      {a.stale && <Stale age={a.age_s} />}
+      {a.loss_meter && m ? (
+        <div className="today-meter">
+          <Meter value={a.loss_meter.used} max={m.limit} tone={m.tone} label={`Loss today against the ${a.loss_meter.binding === "probe_stop" ? "probe stop" : "daily loss limit"}`}
+                 text={`${money(a.loss_meter.used, ccy)} lost of ${money(m.limit, ccy)}`} />
+          <p className={`small ${m.tone === "ok" ? "muted" : `state ${m.tone}`}`}>{m.text}</p>
+        </div>
+      ) : <p className="small muted">Loss limit not reported by this engine yet.</p>}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------------------------------------ System status
+/** Engine, prices and market in one line, each a dot plus words (never colour alone); its own queries. Never red. */
+export function SystemStatusLine() {
+  const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts, refetchInterval: HOME_POLL_MS });
+  const feeds = useQuery({ queryKey: ["feeds"], queryFn: api.feeds, refetchInterval: HOME_POLL_MS * 3 });
+  const status = useQuery({ queryKey: ["status"], queryFn: api.status, refetchInterval: HOME_POLL_MS });
+  const now = useNow(5_000);
+  const parts = systemLine({ accounts: accounts.data, accountsError: accounts.isError, feeds: feeds.data,
+                             feedsError: feeds.isError, status: status.data, now });
+  return (
+    <section className="ui-card sys-line" aria-label="System status">
+      <h2 className="sr-only">System status</h2>
+      <ul>
+        {parts.map((p) => (
+          <li key={p.key} className={`sys-part ${p.tone}`}>
+            <span className="sys-dot" aria-hidden="true" />
+            <span className="sys-label">{p.label}</span> <span className="sys-word">{p.word}</span>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
