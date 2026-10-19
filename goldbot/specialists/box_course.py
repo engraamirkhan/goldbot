@@ -869,6 +869,7 @@ def place(events: Sequence[Event], m: pd.DataFrame, dec_tf: str) -> tuple[pd.Dat
 class _CourseSpecialist(Specialist):
     """A course family (module docstring): its rung is its only setting; structural stop as R, 2R target (K-T
     fallback), each signal timeframe's own time exit."""
+    candidate_r = True                # R is the structural stop per candidate (`barrier_atr`)
 
     screening = True
     timeframe = "1h"

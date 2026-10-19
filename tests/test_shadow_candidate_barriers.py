@@ -184,3 +184,11 @@ def test_sweep_absorb_proposes_on_the_engine_tail_what_it_proposes_on_the_whole_
         else:
             assert live.empty
     assert hits > 5
+
+
+def test_a_live_founder_overriding_barrier_atr_is_not_shadow_only():
+    """CI 2026-10-19: tsmom overrides `barrier_atr` (daily ATR when configured) and must stay a live-capable agent."""
+    from goldbot.research.population import founder_base
+    from goldbot.specialists import SPECIALISTS
+    for tf in ("1h", "4h"):
+        assert not SPECIALISTS["tsmom"](**founder_base("tsmom", tf)).shadow_only

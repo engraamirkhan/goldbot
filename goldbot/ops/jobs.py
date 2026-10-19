@@ -450,6 +450,10 @@ def saturday_retrain(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             out[m.agent_id] = agent
             continue
         spec = m.specialist()
+        if getattr(spec, "barriers_on_1m", False):    # labelled on 1m barriers: a frozen rule agent, never retrained
+            agent["retrain"] = "skipped: a frozen rule agent labelled on 1m barriers (scored by its rule, ADR 0038)"
+            out[m.agent_id] = agent
+            continue
         if spec.timeframe not in ctx.settings.walkforward:   # settings.walkforward: 15m, 1h, 4h (1d research-only)
             agent["retrain"] = f"skipped: no walk-forward window configured for {spec.timeframe}"
             out[m.agent_id] = agent
