@@ -29,7 +29,7 @@ describe("Activity feed", () => {
     expect(rows[0]).toHaveTextContent("Refused");
     expect(rows[0]).toHaveTextContent("cost_probe_refused:probe_loss_unknown");
     expect(rows[1]).toHaveTextContent("Shadow closed");
-    expect(rows[1]).toHaveTextContent("+1.50 R");
+    expect(rows[1]).toHaveTextContent("+1.50 R");
     expect(rows[2]).toHaveTextContent("Demo opened");
   });
 
@@ -68,7 +68,7 @@ describe("eventLine", () => {
   it("writes a closed trade as agent, timeframe, side, prices, reason, R and money", () => {
     expect(eventLine(ev({ kind: "position_closed", agent_id: "mfi-g0", timeframe: "15m", side: "short", lots: 0.05,
                           entry: 2410, exit: 2405.2, reason: "target", r: 1.4, pnl: 12.5, currency: "GBP", account: "icm-demo-…67" })))
-      .toBe("mfi-g0 · 15m · short 0.05 lots · 2410.00 → 2405.20 · target · +1.40 R · +£12.50 · icm-demo-…67");
+      .toBe("mfi-g0 · 15m · short 0.05 lots · 2410.00 → 2405.20 · target · +1.40 R · +£12.50 · icm-demo-…67");
   });
 
   it("shows an open trade's stop and take-profit target", () => {

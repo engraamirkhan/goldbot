@@ -11,7 +11,7 @@ import { ageSeconds, type LimitAccount } from "../lib/limits";
 import { type Budget, factorWords, leftState, rateText, riskTodayLine, strategyRows, whyShort } from "../lib/riskToday";
 import { useNow } from "../lib/useNow";
 import { Badge, Button, Card, EmptyState, ErrorState, Meter, MetricTile, Skeleton, TimeText } from "../ui";
-import { money } from "../ui/format";
+import { lots, money, seconds } from "../ui/format";
 
 /** One card's crash shows its own error; the other cards keep working. */
 export class CardBoundary extends Component<{ name: string; children: ReactNode }, { failed: boolean }> {
@@ -38,7 +38,7 @@ const signed = (x: number | null | undefined, ccy: string | null | undefined) =>
 
 function Stale({ age }: { age: number | null | undefined }) {
   return <p className="small state warn" role="status">{age == null ? "Figures of unknown age: not shown as current."
-    : `Figures are ${Math.round(age)} s old (over 60 s): can't reach the engine, not shown as current.`}</p>;
+    : `Figures are ${seconds(Math.round(age))} old (over 60 s): can't reach the engine, not shown as current.`}</p>;
 }
 
 // ------------------------------------------------------------------------------------------------ Today
@@ -105,7 +105,7 @@ function OpenRow({ p }: { p: OpenPosition }) {
   return (
     <li className="open-row">
       <span className="open-what"><ModeBadge mode={p.mode} />{p.probe && <Badge tone="idle">probe</Badge>}
-        <strong className={p.side}>{p.side.toUpperCase()}</strong> {p.lots} lot · {strategyName(p.family, p.timeframe)}</span>
+        <strong className={p.side}>{p.side.toUpperCase()}</strong> {lots(p.lots)} · {strategyName(p.family, p.timeframe)}</span>
       <span className="open-money">{p.floating_pnl == null ? "money not known" : money(p.floating_pnl, p.currency, true)} · {signedR(p.r_now)}{p.stale ? " · stale" : ""}</span>
       <span className="open-levels small muted">entry {price(p.entry)} · stop {price(p.stop)} · target {price(p.target)} USD/oz · opened <TimeText iso={p.opened_utc} /></span>
     </li>

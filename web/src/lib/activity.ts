@@ -1,7 +1,7 @@
 // The activity feed's words and tones (screens/Activity.tsx; GET /api/activity). Presentation only.
 import type { ActivityEvent, ActivityView } from "./api";
 import type { Tone } from "../ui";
-import { money } from "../ui/format";
+import { lots, money, signedR } from "../ui/format";
 
 export const ACTIVITY_POLL_MS = 15_000;
 export const ACTIVITY_LIMIT = 50;
@@ -30,14 +30,13 @@ export function tone(e: ActivityEvent): Tone {
 }
 
 const price = (x: number) => x.toFixed(2);
-const signedR = (r: number) => `${r > 0 ? "+" : r < 0 ? "−" : ""}${Math.abs(r).toFixed(2)} R`;
 
 /** One line of facts, in reading order: who, on what, which way, prices, why, result, where. */
 export function eventLine(e: ActivityEvent): string {
   const parts: string[] = [];
   if (e.agent_id) parts.push(e.agent_id);
   if (e.timeframe) parts.push(e.timeframe);
-  if (e.side) parts.push(e.lots != null ? `${e.side} ${e.lots} lots` : e.side);
+  if (e.side) parts.push(e.lots != null ? `${e.side} ${lots(e.lots)}` : e.side);
   if (e.entry != null) parts.push(e.exit != null ? `${price(e.entry)} → ${price(e.exit)}` : `at ${price(e.entry)}`);
   if (e.stop != null) parts.push(`SL ${price(e.stop)}`);
   if (e.target != null) parts.push(`TP ${price(e.target)}`);
