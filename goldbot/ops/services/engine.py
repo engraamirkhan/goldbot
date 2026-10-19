@@ -339,7 +339,13 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         brain_commit, url, tz = repo_commit(), bridge[0], acc.server_tz
         compat = BridgeCompatChecker(lambda: check_bridge(url, tz, brain_commit))
         resolve(begin_bridge_check)(eng, compat)   # blocked (unchecked) first, then one check before the loop starts
-    warm = eng.warm_start(pd.Timestamp.now("UTC"))
+    # the history fill (engine/history.py) pulls ticks on its own thread, so through the bridge it gets its own client;
+    # a direct MT5 terminal (one module-wide connection) is never called from a second thread: no fill without a bridge
+    history_broker: Any = None
+    if bridge is not None:
+        from goldbot.execution.bridge import RemoteBroker
+        history_broker = RemoteBroker(bridge[0], bridge[1], name=f"mt5-remote-{account_id}-history")
+    warm = eng.warm_start(pd.Timestamp.now("UTC"), history_broker)   # store read only; the fill runs in the background
     log.info("engine %s started (%s), models: %s, %d 1m bars of history, risk per trade %.4f, limits %s", account_id,
              type(broker).__name__, sorted(eng.models), warm, limits.risk_per_trade, eng.limits_current.profile)
     def mtimes() -> tuple[float, ...]:

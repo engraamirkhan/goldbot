@@ -33,10 +33,10 @@ from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_
 from goldbot.data.econ_calendar import blackout_window
 from goldbot.data.news import shock_window
 from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
-from goldbot.data.resample import BAR_COLUMNS, IncrementalResampler, mid, resample_bars, ticks_to_1m
+from goldbot.data.resample import IncrementalResampler, mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
-from goldbot.engine import auto_entry, cost_probe, unconfirmed
+from goldbot.engine import auto_entry, cost_probe, history, unconfirmed
 from goldbot.engine.limits_apply import EngineLimits, daily_allowance, min_lot_risk, published_limits
 from goldbot.engine.shadow import ShadowBook, ShadowTrade, minutes_of, record_candidate
 from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, SentOrder: re-exported, ADR 0023 step 1)
@@ -184,6 +184,11 @@ class EngineConfig(Record):
     cost_atr: float = 0.10           # round-trip cost in ATR until the measured cost table exists
     max_bars_in_memory: int = 60000     # 1m bars kept (~40 trading days)
     feature_window: int = 800            # decision bars the features are computed on
+    # history continuity (engine/history.py): background fill bounds (bridge rows per page, seconds)
+    backfill_max_days: int = Field(30, ge=0, le=30)
+    backfill_page_ticks: int = Field(2000, ge=100, le=10_000)   # ~120 KB of JSON a page, as tick_record
+    backfill_budget_s: float = Field(1800.0, gt=0, le=3600)
+    history_gap_max_min: int = Field(60, ge=1)   # more open minutes missing, not a broker closure: no entry
     owner_user_id: int = 0
     # design (Approvals): the owner confirms an entry within this many seconds or it expires unapproved; production
     # passes settings.risk.approval_window_seconds (goldbot/ops/run.py)
@@ -271,6 +276,7 @@ class Engine:
         self.gate = RiskGate(limits)
         self.ticks: list[Tick] = []
         self.bars_1m = pd.DataFrame()
+        self.history = history.History()     # cut-over, background fill and writer, history_gap
         self.open: dict[int, OpenTrade] = {}
         self.pending: dict[str, tuple[Intent, Proposal, Specialist]] = {}
         self.sent_ids: set[str] = set()
@@ -586,6 +592,7 @@ class Engine:
             self._closed_through = due
             self._rebuild_bars(until=due)   # every minute before the close is complete; none at or after it joins
             out = self.on_bar_close(due, t)
+            history.after_close(self, due)   # a finished background fill joins the bars; never raises
             self._last_state_write = t.ts_utc
             bar_open = due - pd.Timedelta(seconds=sec)   # tick clock, as is _error_tick_ts (never the host clock)
             if self.state.tick_error and not self._error_awaits_tick and self._error_tick_ts is not None \
@@ -752,20 +759,9 @@ class Engine:
             return close
         return None
 
-    def warm_start(self, now: pd.Timestamp) -> int:
-        """Seed the 1m history from the store (release bars synced by the scheduler) so a restarted engine can decide
-        at once instead of rebuilding days of bars from live ticks; 1h agents and the daily context need weeks.
-        Returns the number of bars loaded (0 without a store or bars)."""
-        if self.store is None:
-            return 0
-        days = self.cfg.max_bars_in_memory // (60 * 23) * 7 // 5 + 3     # trading minutes -> calendar days
-        b = self.store.read("bars_1m", symbol=self.cfg.symbol, start=now - pd.Timedelta(days=days), end=now)
-        if b.empty:
-            return 0
-        b = b[[c for c in BAR_COLUMNS if c in b.columns]]
-        b = b[pd.to_datetime(b["visible_at"], utc=True) <= now].sort_values("ts_utc")
-        self.bars_1m = b.drop_duplicates("ts_utc", keep="last").tail(self.cfg.max_bars_in_memory).reset_index(drop=True)
-        return len(self.bars_1m)
+    def warm_start(self, now: pd.Timestamp, history_broker: Any = None) -> int:
+        """The store's 1m history; its holes filled from `history_broker` in the background (history.warm_start)."""
+        return history.warm_start(self, now, history_broker)
 
     def _rebuild_bars(self, until: pd.Timestamp | None = None) -> None:
         """Incremental: only ticks since the last completed minute are aggregated; bars accumulate. Without `until`
@@ -786,7 +782,8 @@ class Engine:
         if not done.empty:
             self._check_new_bars(done)
             self.bars_1m = self._append_bars(done)
-        self.ticks = [x for x in self.ticks if x.ts_utc >= cutoff]
+            history.queue_minutes(self, done)
+        self.ticks =[x for x in self.ticks if x.ts_utc >= cutoff]
 
     def _append_bars(self, done: pd.DataFrame) -> pd.DataFrame:
         """bars_1m + newly completed minutes, de-duplicated on ts_utc (last wins) and capped at max_bars_in_memory.
@@ -899,6 +896,7 @@ class Engine:
         frames: dict[str, _Frame] = {self.cfg.decision_tf: base}
         if self.shadow is not None:            # open shadow trades keep ageing after their agent leaves the set
             tfs |= {t.timeframe for b in self.shadow.books.values() for t in b.open}
+        gaps = history.window_gaps(self, complete)
         for tf in sorted(tfs, key=tf_seconds):
             if tf != "1d" and int(close_ts.timestamp()) % tf_seconds(tf):
                 continue                       # cheap pre-check: this close does not complete an intraday bar of tf
@@ -908,6 +906,9 @@ class Engine:
             frames[tf] = fr
             self._manage_policies(tf, fr.dec, close_ts)
             agents = [a for a in self.agents.values() if a.timeframe == tf]
+            if (refused := history.refuse(self, tf, fr, gaps, agents, close_ts)) is not None:
+                decisions += refused           # a hole in tf's window: no entry, live or shadow
+                continue
             decisions += self._decide(tf, fr, agents, fam_w, close_ts, last_tick)
         self._blackout_close(complete, close_ts, frames)
         cost_probe.step(self, close_ts, last_tick)       # ADR 0037: at most one min-lot probe, on a flat demo account
@@ -3337,7 +3338,7 @@ class Engine:
             "server_clock": self.clock_probe.model_dump(mode="json") if self.clock_probe is not None else None,
             "bridge_compat": self.bridge_compat.model_dump(mode="json") if self.bridge_compat is not None else None,
             # ADR 0010: state from a newer release read by this process, bounded (health: check_schema_skew)
-            "schema_skew": schema_skew_summary().model_dump(mode="json"),
+            "schema_skew": schema_skew_summary().model_dump(mode="json"), **history.published(self),
         }
         # one `currency` key: the broker's deposit currency the gate sized with, read once (BACKLOG 28); the account
         # view's copy (None until the first refresh) must not blank it for the supervisor's currency check
