@@ -13,6 +13,7 @@ function renderHome(role: apiModule.Role) {
   apiModule.setUser({ email: "a@x.io", role, signed_in_with: "password_totp" });
   vi.spyOn(apiModule.api, "accounts").mockResolvedValue([]);
   vi.spyOn(apiModule.api, "automode").mockRejectedValue(new Error("not under test"));   // AutoMode.test.tsx covers the card
+  if (!vi.isMockFunction(apiModule.api.activity)) vi.spyOn(apiModule.api, "activity").mockResolvedValue({ events: [], unreadable: [] });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={qc}><Home /></QueryClientProvider>);
 }
@@ -94,5 +95,21 @@ describe("Home says safety once", () => {
     expect(await screen.findByRole("heading", { name: "Entry status" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Safety state")).toBeNull();
     expect(screen.queryByRole("button", { name: "Halt new entries" })).toBeNull();
+  });
+});
+
+describe("Home activity feed", () => {
+  afterEach(() => { vi.restoreAllMocks(); apiModule.setUser(null); });
+
+  it("shows what the system is doing on the front page", async () => {
+    vi.spyOn(apiModule.api, "status").mockResolvedValue(status({}));
+    vi.spyOn(apiModule.api, "proposals").mockResolvedValue([]);
+    vi.spyOn(apiModule.api, "recentProposals").mockResolvedValue([]);
+    vi.spyOn(apiModule.api, "activity").mockResolvedValue({ unreadable: [], events: [
+      { ts: "2026-10-19T10:00:00Z", kind: "shadow_opened", agent_id: "box_break_close-g0", timeframe: "1h", side: "long", entry: 2400 },
+    ] });
+    renderHome("viewer");
+    expect(await screen.findByRole("heading", { name: "Activity" })).toBeInTheDocument();
+    expect(await screen.findByRole("list", { name: "Activity" })).toHaveTextContent("Shadow opened");
   });
 });

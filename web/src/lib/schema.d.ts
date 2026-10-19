@@ -21,6 +21,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Activity Feed */
+        get: operations["activity_feed_api_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agent-runs": {
         parameters: {
             query?: never;
@@ -935,6 +952,60 @@ export interface components {
             title: string;
             /** Ts Utc */
             ts_utc: string | null;
+        };
+        /**
+         * ActivityEvent
+         * @description One thing the system did (goldbot/api/activity.py): a shadow trade, an account position or a cost-probe order
+         *     opened or closed, or an entry the engine refused. Fields a kind does not have are null.
+         */
+        ActivityEvent: {
+            /** Account */
+            account?: string | null;
+            /** Agent Id */
+            agent_id?: string | null;
+            /** Currency */
+            currency?: string | null;
+            /** Entry */
+            entry?: number | null;
+            /** Exit */
+            exit?: number | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "shadow_opened" | "shadow_closed" | "position_opened" | "position_closed" | "probe_opened" | "probe_closed" | "refused";
+            /** Lots */
+            lots?: number | null;
+            /** Mode */
+            mode?: ("demo" | "live" | "paper") | null;
+            /** P */
+            p?: number | null;
+            /** Pnl */
+            pnl?: number | null;
+            /** R */
+            r?: number | null;
+            /** Reason */
+            reason?: string | null;
+            /** Ret */
+            ret?: number | null;
+            /** Side */
+            side?: ("long" | "short") | null;
+            /** Timeframe */
+            timeframe?: string | null;
+            /**
+             * Ts
+             * Format: date-time
+             */
+            ts: string;
+            /** Version */
+            version?: string | null;
+        };
+        /** ActivityView */
+        ActivityView: {
+            /** Events */
+            events: components["schemas"]["ActivityEvent"][];
+            /** Unreadable */
+            unreadable: ("shadow" | "positions" | "probes" | "journal")[];
         };
         /**
          * AgentHealthRow
@@ -3254,6 +3325,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountSummary"][];
+                };
+            };
+        };
+    };
+    activity_feed_api_activity_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

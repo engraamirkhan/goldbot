@@ -1086,5 +1086,39 @@ class TradesSummary(BaseModel):
 # ============================================================================= end Progress tab
 
 
+# ============================================================================= Home activity feed (GET /api/activity)
+ActivityKind = Literal["shadow_opened", "shadow_closed", "position_opened", "position_closed", "probe_opened",
+                       "probe_closed", "refused"]
+ActivitySource = Literal["shadow", "positions", "probes", "journal"]
+
+
+class ActivityEvent(BaseModel):
+    """One thing the system did (goldbot/api/activity.py): a shadow trade, an account position or a cost-probe order
+    opened or closed, or an entry the engine refused. Fields a kind does not have are null."""
+    ts: datetime                            # when it happened, UTC (a shadow trade: its bar's close)
+    kind: ActivityKind
+    account: str | None = None              # config name, any run of 5+ digits cut; None for shadow trades (paper)
+    mode: Literal["demo", "live", "paper"] | None = None
+    agent_id: str | None = None
+    version: str | None = None              # the model version (shadow trades, probes, probe refusals)
+    timeframe: str | None = None
+    side: Literal["long", "short"] | None = None
+    lots: float | None = None
+    p: float | None = None
+    entry: float | None = None              # USD per oz
+    exit: float | None = None
+    reason: str | None = None               # exit: target | stop | time | ...; refused: the journal's action code
+    r: float | None = None                  # result in R of the initial risk
+    ret: float | None = None                # return, side x (exit - entry) / entry (shadow: gross of costs)
+    pnl: float | None = None                # account currency (`currency`)
+    currency: str | None = None
+
+
+class ActivityView(BaseModel):
+    events: list[ActivityEvent]             # newest first
+    unreadable: list[ActivitySource]        # sources that could not be read: their events are missing, not zero
+# ============================================================================= end Home activity feed
+
+
 ResearchPlanView.model_rebuild()   # refers to models defined after it
 Status.model_rebuild()          # `blackout` refers to ActiveBlackout, defined after Status
