@@ -104,6 +104,13 @@ class Account(Record):
     approval_mode: Literal["propose", "auto"] = "propose"
     # ADR 0037: the demo cost probe (min-lot mirror of challengers' shadow entries); refused at load unless mode: demo
     cost_probe: CostProbe = Field(default_factory=CostProbe)
+    # ADR 0037 amendment 4: this account's engine runs the shadow book (state/shadow_book.json, shared by the state
+    # dir, so a new host continues the books). At most one ENABLED account is the host (refused at load); the engine
+    # hosts only on the canonical-cost broker (goldbot/ops/services/engine.is_shadow_host)
+    shadow_host: bool = False
+    # ADR 0037 amendment 4 ("probes must never consume the real trades' allowance"): a dedicated probe account. Its
+    # engine has no live agents and refuses any entry that is not a cost probe (fail closed, Engine._execute)
+    probe_only: bool = False
 
     # backstop for records built outside load_accounts: validation errors never carry the input (names, logins)
     model_config = ConfigDict(hide_input_in_errors=True)      # merged with Record's config by pydantic
@@ -153,6 +160,14 @@ class Account(Record):
         cap = self.daily_loss_limit_abs
         if self.cost_probe.enabled and cap is not None and self.cost_probe.max_loss > self.cost_probe.budget_share * cap:
             raise ValueError("cost_probe.max_loss must fit inside budget_share x daily_loss_limit_abs (ADR 0037)")
+        return self
+
+    @model_validator(mode="after")
+    def _probe_only_is_a_probe_host(self) -> Account:
+        """ADR 0037 amendment 4: a probe_only account exists to mirror the shadow book's challengers at the minimum
+        lot. Without cost probes or the shadow book it would trade nothing, so the config is refused at load."""
+        if self.probe_only and not (self.cost_probe.enabled and self.shadow_host):
+            raise ValueError("probe_only needs cost_probe.enabled and shadow_host on the same account (ADR 0037)")
         return self
 
     @property
@@ -345,7 +360,12 @@ def load_accounts(path: Path | None = None) -> dict[str, Account]:
                            server_tz=a["server_tz"], symbol=a["symbol"], magic_base=a["magic_base"], enabled=bool(a.get("enabled", False)),
                            daily_loss_limit_abs=a.get("daily_loss_limit_abs"), account_class=a.get("account_class"),
                            risk_overrides=a.get("risk_overrides"), approval_mode=a.get("approval_mode", "propose"),
-                           cost_probe=CostProbe(**(a.get("cost_probe") or {})))
+                           cost_probe=CostProbe(**(a.get("cost_probe") or {})),
+                           shadow_host=bool(a.get("shadow_host", False)), probe_only=bool(a.get("probe_only", False)))
+    hosts = [a for a in out.values() if a.enabled and a.shadow_host]
+    if len(hosts) > 1:      # ADR 0037 amendment 4: one shadow book, one host; two would trade it twice
+        raise ValueError(f"{len(hosts)} enabled accounts are the shadow host in config/accounts.yaml: exactly one may "
+                         f"be (move shadow_host and cost_probe off the other, ADR 0037 amendment 4)")
     return out
 
 
