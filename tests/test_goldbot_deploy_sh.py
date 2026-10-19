@@ -204,6 +204,11 @@ args = sys.argv[1:]
 assert args[0] == "health", args
 out = args[args.index("--out") + 1]
 src = os.path.join(T, "health_after.json" if os.path.exists(os.path.join(T, "restarted")) else "health_before.json")
+if src.endswith("after.json"):                      # health_after_<n>.json: the n-th report after the restart, if given
+    n = int(open(os.path.join(T, "after_calls")).read()) + 1 if os.path.exists(os.path.join(T, "after_calls")) else 1
+    open(os.path.join(T, "after_calls"), "w").write(str(n))
+    nth = os.path.join(T, f"health_after_{n}.json")
+    src = nth if os.path.exists(nth) else src
 if not os.path.exists(src):
     sys.exit(2)
 shutil.copy(src, out)
@@ -941,3 +946,35 @@ def test_the_rollback_stops_before_restoring_the_old_commit_too(tmp_path):
     assert "stop" in second and second.index("stop") < second.index("restart", second.index("stop"))
     heads = [x.split()[0] for x in _lines(box, "stop_heads")]
     assert heads[0] == box.c1 and heads[-1] == box.c2                           # the restore stops on the commit it leaves
+
+
+def test_the_deploy_check_itself_is_never_a_degradation(tmp_path):
+    # the `deploy` check warns about the PREVIOUS deploy record: a degraded deploy made every later one degraded
+    box = Box(tmp_path, running="c1", aux=4)
+    _health(tmp_path / "health_before.json", supervisor="ok", deploy="ok")
+    _health(tmp_path / "health_after.json", supervisor="ok", deploy="warn")
+    assert box.run(box.c2).returncode == 0
+    assert _last(box) == "deployed"
+    box2 = Box(tmp_path / "b", running="c1", aux=4)                                     # a real one is still named
+    _health(tmp_path / "b" / "health_before.json", supervisor="ok", deploy="ok")
+    _health(tmp_path / "b" / "health_after.json", supervisor="warn", deploy="warn")
+    assert box2.run(box2.c2).returncode == 0
+    assert box2.records()[-1]["result"] == "deployed_degraded" and "degraded: supervisor)" in box2.records()[-1]["detail"]
+
+
+def test_a_transient_engine_warn_right_after_the_restart_is_not_a_degradation(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    _health(tmp_path / "health_before.json", supervisor="ok", engine__icm="ok")
+    _health(tmp_path / "health_after_1.json", supervisor="ok", engine__icm="warn")     # stale bars right after restart
+    _health(tmp_path / "health_after_2.json", supervisor="ok", engine__icm="ok")       # a decision bar later
+    _health(tmp_path / "health_after.json", supervisor="ok", engine__icm="ok")
+    assert box.run(box.c2).returncode == 0
+    assert _last(box) == "deployed"
+
+
+def test_an_engine_warn_that_persists_after_the_rechecks_is_still_degraded(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    _health(tmp_path / "health_before.json", supervisor="ok", engine__icm="ok")
+    _health(tmp_path / "health_after.json", supervisor="ok", engine__icm="warn")
+    assert box.run(box.c2).returncode == 0
+    assert _last(box) == "deployed_degraded" and "engine:icm" in box.records()[-1]["detail"]

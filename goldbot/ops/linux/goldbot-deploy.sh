@@ -713,7 +713,9 @@ def load(path):
 before, after = load(sys.argv[1]), load(sys.argv[2])
 stopped = [a for a in (sys.argv[3].split(",") if len(sys.argv) > 3 else []) if re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", a)]
 SKIP = {p + ":" + a for a in stopped for p in ("engine", "engine_loop", "tick_errors")}
-worse = sorted(n for n, r in after.items() if r > before.get(n, 0))
+# `deploy` reads the previous deploy record: after a degraded deploy it warns about that one, so every later deploy
+# would be degraded too (self-perpetuating). It is no signal about this deploy.
+worse = sorted(n for n, r in after.items() if r > before.get(n, 0) and n != "deploy")
 skipped = [n for n in worse if n in SKIP]
 worse = [n for n in worse if n not in SKIP]
 print(",".join(n if re.fullmatch(r"[A-Za-z0-9_.:@-]{1,64}", n) else "<check>" for n in worse))
@@ -861,6 +863,15 @@ main() {
     if [ "$BASELINE" = 1 ]; then
       health_out "$HEALTH_AFTER" && raw=$(health_worse)
       worse=${raw%%$'\n'*}
+      # an engine's stale-bars / entries-blocked warn right after its restart clears within about a minute (it needs
+      # the next decision bar): re-check up to 3 times, 25 s apart; only a worsening that persists is reported
+
+      for _ in 1 2 3; do
+        [[ ",$worse," == *,engine:* ]] || break
+        sleep 25
+        health_out "$HEALTH_AFTER" && raw=$(health_worse)
+        worse=${raw%%$'\n'*}
+      done
       [ "$raw" = "$worse" ] || note="${raw#*$'\n'}; "
     fi
     if [ "$MODE" = rollback ]; then
