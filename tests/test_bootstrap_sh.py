@@ -101,7 +101,8 @@ def test_switching_the_tunnel_target_restarts_a_running_tunnel():
 
 def test_deploys_install_from_the_lockfile_and_react_to_it():
     s = (LINUX / "goldbot-deploy.sh").read_text(encoding="utf-8")
-    assert "uv sync -q --frozen --extra live --python 3.11" in s and "uv pip install" not in s
+    assert "UV=/var/lib/goldbot/.local/bin/uv" in s and "uv pip install" not in s
+    assert "$UV sync -q --frozen --extra live --python 3.11" in s   # through the staged-build cgroup (build_run)
     assert "grep -qE '^(pyproject.toml|uv.lock)$'" in s
 
 

@@ -502,12 +502,12 @@ staged_dist() {  # $1 target: print the stage folder whose finished manifest has
 
 install_web() {  # $1 target: the staged dashboard when a verified stage matches, else npm ci + build as before
   local d; d=$(staged_dist "$1")
-  if [ -n "$d" ] && as_owner bash -c 'set -e
-      rm -rf -- "$1/web/dist.new" "$1/web/dist.old"
-      cp -R -- "$2/web/dist" "$1/web/dist.new"
-      if [ -e "$1/web/dist" ]; then mv -- "$1/web/dist" "$1/web/dist.old"; fi
-      mv -- "$1/web/dist.new" "$1/web/dist"
-      rm -rf -- "$1/web/dist.old"' _ "$ROOT" "$d"; then
+  # one as_owner per command: root never writes the service user's tree (tests/test_root_tooling_rules.py)
+  if [ -n "$d" ] && as_owner rm -rf -- "$ROOT/web/dist.new" "$ROOT/web/dist.old" \
+      && as_owner cp -R -- "$d/web/dist" "$ROOT/web/dist.new" \
+      && { [ ! -e "$ROOT/web/dist" ] || as_owner mv -- "$ROOT/web/dist" "$ROOT/web/dist.old"; } \
+      && as_owner mv -- "$ROOT/web/dist.new" "$ROOT/web/dist" \
+      && as_owner rm -rf -- "$ROOT/web/dist.old"; then
     echo "dashboard: reused the verified stage $d"
     return 0
   fi
