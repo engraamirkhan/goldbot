@@ -156,6 +156,7 @@ def test_today_splits_the_day_into_closed_and_open_after_costs(tmp_path):
     assert a.day_pnl == 12.0                                # equity 1012 - day start 1000
     assert a.open_pnl == 2.0                                # equity - balance: the broker's floating
     assert a.closed_pnl == 4.0 and a.closed_n == 2          # 6.0 + (-2.0), net of costs; yesterday's trade left out
+    assert a.costs is not None
     assert a.costs.commission == 0.8 and a.costs.swap == -0.3
     assert a.costs.spread == 0.16                           # the probe's 0.2 USD x 0.01 lot x 100 oz x 0.8
     assert not a.costs.spread_complete                      # the position record keeps no spread in money
