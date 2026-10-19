@@ -6,9 +6,14 @@
 #
 #   sudo bash mt5_bootstrap.sh <40-hex commit id>     # the commit the owner checked is on GitHub's main (recommended)
 #   sudo bash mt5_bootstrap.sh                        # whatever main is at this moment
+#   sudo bash mt5_bootstrap.sh <sha> --account icm-probe   # a box for another account (default icm-demo)
+#
+# One box per account (docs/ops/icm-probe-account-plan.md, Option B): every box has its own Wine prefix, terminal at
+# C:\MT5\ICMarkets and bridge on its own 127.0.0.1:8765; only the account's unit instances differ. The account comes
+# from --account or the ACCOUNT environment variable (sudo drops it unless given as `sudo ACCOUNT=... bash ...`).
 #
 # No credentials here: the owner logs in to MT5 once through VNC (tunnelled over SSH) with "save password", and stores
-# the bridge listen address + token with `goldbot-mt5 accounts bridge-serve icm-demo` (docs/RUNBOOK.md).
+# the bridge listen address + token with `goldbot-mt5 accounts bridge-serve <account>` (docs/RUNBOOK.md).
 set -euo pipefail
 REPO=https://github.com/engraamirkhan/goldbot.git
 ROOT=/opt/goldbot
@@ -23,10 +28,23 @@ PY_SHA256=5ee42c4eee1e6b4464bb23722f90b45303f79442df63083f05322f1785f5fdde
 # (Wine accepts one) keeps backslashes out of systemd and shell quoting. Bump the PythonXY part with PYVER; the check
 # below and tests/test_bootstrap_sh.py refuse a mismatch.
 WINPY=/home/mt5/.wine/drive_c/users/mt5/AppData/Local/Programs/Python/Python311/python.exe
-REF=${1:-}
+REF=
+ACCOUNT=${ACCOUNT:-icm-demo}
 LOG=/root/goldbot-bootstrap.log
+USAGE="usage: sudo bash mt5_bootstrap.sh [<40-hex commit id on main>] [--account <account id, default icm-demo>]"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --account) [ $# -ge 2 ] || { echo "$USAGE"; exit 2; }; ACCOUNT=$2; shift 2 ;;
+    --account=*) ACCOUNT=${1#--account=}; shift ;;
+    *) [ -z "$REF" ] || { echo "$USAGE"; exit 2; }; REF=$1; [ -n "$REF" ] || { echo "$USAGE"; exit 2; }; shift ;;
+  esac
+done
 if [ -n "$REF" ] && ! [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "usage: sudo bash mt5_bootstrap.sh [<40-hex commit id on main>]"; exit 2
+  echo "$USAGE"; exit 2
+fi
+# the account id goes into unit instance names run by root: lowercase id only, as in config/accounts.yaml
+if ! [[ "$ACCOUNT" =~ ^[a-z][a-z0-9-]{0,31}$ ]]; then
+  echo "$USAGE"; echo "refused: the account id must be lowercase letters, digits and '-'"; exit 2
 fi
 [[ "$WINPY" == */Python"$(echo "$PYVER" | cut -d. -f1,2 | tr -d .)"/python.exe ]] || { echo "WINPY does not match PYVER $PYVER"; exit 1; }
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
@@ -36,7 +54,7 @@ fi
 # terminal is gone, tee keeps writing the log and `cat` drains the pipe, so no write fails.
 trap '' PIPE HUP
 exec > >(tee -a "$LOG" --output-error=warn 2>/dev/null; cat > /dev/null) 2>&1
-echo "== goldbot mt5 bootstrap $(date -u +%FT%TZ) ref=${REF:-main}"
+echo "== goldbot mt5 bootstrap $(date -u +%FT%TZ) ref=${REF:-main} account=$ACCOUNT"
 
 # 1 GB of RAM: a 4 GB swap file keeps Wine + terminal + bridge from being killed (docs/deploy/free-hosting-options.md)
 if ! swapon --show | grep -q /swapfile; then
@@ -170,11 +188,11 @@ cd /opt/goldbot && exec sudo -u mt5 -H env DISPLAY=:99 WINEDEBUG=-all PYTHON_KEY
   wine /home/mt5/.wine/drive_c/users/mt5/AppData/Local/Programs/Python/Python311/python.exe -m "goldbot.ops.$mod" "$@"
 WRAP
 chmod 755 /usr/local/bin/goldbot-mt5
-# the terminal unit is the only launcher of the terminal (the bridge Requires= it); enabled, not started: the owner
-# starts it for the first login over VNC (RUNBOOK 0.3)
-systemctl enable goldbot-mt5-terminal@icm-demo
-systemctl enable goldbot-bridge@icm-demo
-systemctl enable --now goldbot-bridge-watchdog@icm-demo.timer   # idle until the bridge has run 5 min
+# the terminal unit is the only launcher of the terminal (the bridge Requires= it, Restart=always); enabled, not
+# started: the owner starts it for the first login over VNC (RUNBOOK 0.3)
+systemctl enable "goldbot-mt5-terminal@$ACCOUNT"
+systemctl enable "goldbot-bridge@$ACCOUNT"
+systemctl enable --now "goldbot-bridge-watchdog@$ACCOUNT.timer"   # idle until the bridge has run 5 min
 
 # Deploys: only versions the owner approves (Telegram [Deploy] or `sudo goldbot-deploy latest`), never by itself.
 # The script runs as root, so a root-owned copy is installed from root's own clone ($OPS); the repo copy (writable by
@@ -185,7 +203,7 @@ echo mt5 > /etc/goldbot/role
 install -m 755 -o root -g root "$OPS/goldbot-deploy.sh" /usr/local/sbin/goldbot-deploy
 # the MT5 box is updated by hand only (sudo goldbot-deploy latest): no deploy timer here
 
-echo "MT5 box installed. Next: sudo systemctl start goldbot-mt5-terminal@icm-demo, log in to MT5 once over VNC, then"
+echo "MT5 box installed. Next: sudo systemctl start goldbot-mt5-terminal@$ACCOUNT, log in to MT5 once over VNC, then"
 echo "bridge-serve (docs/RUNBOOK.md 0.3)."
 echo "The terminal has no IC Markets servers yet: log in through File > Open an Account > ICMarkets > Raw Trading Ltd,"
 echo "not File > Login (that never connects until the company is added)."
