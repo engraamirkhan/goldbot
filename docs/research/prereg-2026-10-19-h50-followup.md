@@ -166,7 +166,7 @@ Process fix, from now on: a counts-only pre-registration states both bounds, the
     retired family escapes the shared exploration cap.
   - Until BACKLOG 91 is fixed, the research director enforces both by hand: H-53 is the quarter's only
     retired-family trial.
-- **Dispatch command (only on 2027-01-01 or later, and only if no other retired-family trial is stamped in 2027Q1):**
+- **Dispatch command (only on 2027-01-01 or later, only if no other retired-family trial is stamped in 2027Q1, and only after BACKLOG 91 (registry refuses retired-family `rule_ref` runs; director counts them in the exploration cap) is merged and quant-reviewed; if 91 slips, H-53 waits):**
 
   ```
   gh workflow run research.yml --ref main -f specialist=box_break_close -f variants='[{"timeframe": "1h"}]' \
