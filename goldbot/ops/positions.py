@@ -51,7 +51,7 @@ def shadow_open_by_agent(state: Path) -> dict[str, int] | None:
 def _row(p: OpenPosition) -> dict[str, Any]:
     return {"position_id": p.position_id, "agent": p.agent_id, "timeframe": p.timeframe, "side": p.side,
             "lots": p.lots, "entry": p.entry, "opened_utc": p.opened_utc.isoformat(), "stop": p.stop,
-            "target": p.target, "open_risk": p.open_risk, "floating_pnl": p.floating_pnl, "currency": p.currency,
+            "target": p.target, "unbounded": p.stop is None, "open_risk": p.open_risk, "floating_pnl": p.floating_pnl, "currency": p.currency,
             "entered": entered_how(p), "stale": p.stale}
 
 
@@ -63,23 +63,28 @@ def _sum(vals: list[float | None]) -> float | None:
 def build(state: Path, now: pd.Timestamp, enabled: list[str], only: str | None) -> dict[str, Any]:
     view = open_positions(state, now)
     accounts = []
-    for acc in enabled:
+    for acc in [only] if only is not None else enabled:
         name = account_name(acc)
-        if only is not None and acc != only:
-            continue
         mine = [p for p in view.positions if p.account == name]
         ccys = sorted({p.currency for p in mine if p.currency})
         accounts.append({"account": name, "readable": name not in view.unreadable,
+                         "orders_file": (state / f"orders_{acc}.json").exists(),
                          "positions": [_row(p) for p in mine],
                          "totals": {"open": len(mine), "lots": round(sum(p.lots for p in mine), 2),
                                     "open_risk": _sum([p.open_risk for p in mine]),
                                     "floating_pnl": _sum([p.floating_pnl for p in mine]),
-                                    "currency": ccys[0] if len(ccys) == 1 else None}})
+                                    "currency": ccys[0] if len(ccys) == 1 else None,
+                                    "stale": any(p.stale for p in mine),
+                                    "unbounded": any(p.stop is None for p in mine)}})
     return {"as_of": now.isoformat(), "accounts": accounts, "shadow_open": shadow_open_by_agent(state)}
 
 
 def _num(v: float | None, signed: bool = False) -> str:
     return "?" if v is None else (f"{v:+,.2f}" if signed else f"{v:,.2f}")
+
+
+def _risk(v: float | None, unbounded: bool) -> str:
+    return "no stop: risk unbounded" if unbounded else _num(v)
 
 
 def render(doc: dict[str, Any]) -> str:
@@ -88,16 +93,19 @@ def render(doc: dict[str, Any]) -> str:
         t = a["totals"]
         ccy = t["currency"] or ""
         out.append(f"\n{a['account']}: {t['open']} open" + ("" if a["readable"] else "  [orders file UNREADABLE: positions missing]"))
-        if not a["positions"] and a["readable"]:
+        if not a["orders_file"]:
+            out.append("  no engine order file (engine not run yet?)")
+        elif not a["positions"] and a["readable"]:
             out.append("  no open positions")
         for p in a["positions"]:
             out.append(f"  #{p['position_id']} {p['agent']} {p['timeframe'] or '-'} {p['side']} {p['lots']:g} lots "
                        f"entry {_num(p['entry'])} at {p['opened_utc']} stop {_num(p['stop'])} target {_num(p['target'])} "
-                       f"risk {_num(p['open_risk'])} {p['currency'] or ''} pnl {_num(p['floating_pnl'], True)} "
+                       f"risk {_risk(p['open_risk'], p['unbounded'])} {'' if p['unbounded'] else p['currency'] or ''} pnl {_num(p['floating_pnl'], True)} "
                        f"{p['currency'] or ''} [{p['entered']}]" + (" (stale)" if p["stale"] else ""))
         if a["positions"]:
-            out.append(f"  total: {t['open']} open, {t['lots']:g} lots, risk {_num(t['open_risk'])} {ccy}, "
-                       f"floating {_num(t['floating_pnl'], True)} {ccy}")
+            out.append(f"  total: {t['open']} open, {t['lots']:g} lots, risk {_risk(t['open_risk'], t['unbounded'])} "
+                       f"{'' if t['unbounded'] else ccy}, floating {_num(t['floating_pnl'], True)} {ccy}"
+                       + (" (stale)" if t["stale"] else ""))
     sh = doc["shadow_open"]
     if sh is None:
         out.append("\nshadow book: unreadable")
@@ -115,7 +123,7 @@ def main(argv: list[str], now: pd.Timestamp | None = None, enabled: list[str] | 
     if enabled is None:
         from goldbot.ops.accounts import enabled_accounts
         enabled = [a.account_id for a in enabled_accounts()]
-    if args.account is not None and args.account not in enabled:
+    if args.account is not None and args.account not in enabled and not (Path(args.state_dir) / f"orders_{args.account}.json").exists():
         print(f"unknown account {args.account!r}: enabled accounts are {', '.join(account_name(a) for a in enabled) or 'none'}")
         return 2
     doc = build(Path(args.state_dir), now if now is not None else pd.Timestamp.now("UTC"), enabled, args.account)

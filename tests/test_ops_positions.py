@@ -78,7 +78,8 @@ def test_account_filter_shows_only_that_account_and_an_unknown_one_is_refused(tm
     assert code == 2 and "unknown account" in out
 
 
-def test_no_orders_file_means_no_positions_not_a_failure(tmp_path):
+def test_an_empty_orders_file_means_no_positions_not_a_failure(tmp_path):
+    (tmp_path / "orders_icm-demo.json").write_text(json.dumps({"open": {}}))
     code, out = _run(tmp_path, accounts=["icm-demo"])
     assert code == 0 and "no open positions" in out
 
@@ -117,3 +118,36 @@ def test_a_login_number_never_reaches_the_output(tmp_path):
 def test_flags_need_a_value(flag, tmp_path):
     with pytest.raises(SystemExit):
         positions.main([flag], now=NOW, enabled=ACCOUNTS)
+
+
+def test_an_enabled_account_with_no_orders_file_says_the_engine_has_not_run(tmp_path):
+    code, out = _run(tmp_path, accounts=["icm-demo"])
+    assert code == 0 and "no engine order file (engine not run yet?)" in out and "no open positions" not in out
+    doc = json.loads(_run(tmp_path, "--json", accounts=["icm-demo"])[1])
+    assert doc["accounts"][0]["orders_file"] is False
+
+
+def test_an_explicit_account_that_is_not_enabled_but_has_a_torn_file_is_reported(tmp_path):
+    (tmp_path / "orders_old.json").write_text("{torn")
+    code, out = _run(tmp_path, "--account", "old", accounts=["icm-demo"])
+    assert code == 1 and "old" in out and "UNREADABLE" in out
+
+
+def test_totals_from_a_stale_engine_file_are_flagged_stale(tmp_path):
+    _engine(tmp_path, ts=(NOW - pd.Timedelta(seconds=90)).timestamp())
+    _orders(tmp_path)
+    _, out = _run(tmp_path)
+    total = next(x for x in out.splitlines() if "total:" in x)
+    assert "(stale)" in total
+    assert json.loads(_run(tmp_path, "--json")[1])["accounts"][0]["totals"]["stale"] is True
+
+
+def test_a_position_without_a_stop_says_risk_is_unbounded_in_the_row_and_the_total(tmp_path):
+    _engine(tmp_path)
+    p = tmp_path / f"orders_{ACC}.json"
+    d = {"position_id": 20, "agent_id": "mfi-g0-1h", "side": 1, "lots": 0.01, "entry_bar_ts": NOW.isoformat(),
+         "max_bars": 8, "open_price": 2400.0, "opened_utc": NOW.isoformat()}
+    p.write_text(json.dumps({"open": {"20": d}}))
+    _, out = _run(tmp_path)
+    assert "no stop: risk unbounded" in next(x for x in out.splitlines() if "#20" in x)
+    assert "no stop: risk unbounded" in next(x for x in out.splitlines() if "total:" in x)
