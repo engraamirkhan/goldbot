@@ -126,7 +126,7 @@ def test_adapter_reads_swap_and_commission_from_the_terminal(monkeypatch):
              Deal(2, 10, "XAUUSD", 1, 1, 1.0, 2501.0, -3.5, 0.0, -5.5, 100.0, 1_700_000_100_000)]
     monkeypatch.setattr(mt5_adapter, "mt5", fake_mt5(info(swap_mode=5, swap_long=-3.6, swap_short=1.8), deals))
     b = mt5_adapter.MT5Broker(terminal_path="", login=1, password="x", server="s", server_tz="Europe/Athens",
-                              symbol="XAUUSD", account_label="icm-demo")
+                              symbol="XAUUSD", account_label="icm-demo", verify=None)
     t = b.broker_terms("icm-demo", NOW - pd.Timedelta(days=30), NOW)
     assert t.swap_long_usd_per_lot == pytest.approx(-3.6 / 100 / 360 * 2500.0 * 100)
     assert t.commission_per_lot_round_trip_usd == pytest.approx(7.0) and t.swap_mode == 5
