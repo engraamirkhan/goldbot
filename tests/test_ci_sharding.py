@@ -63,4 +63,5 @@ def test_unweighted_tests_keep_their_hash_shard():
 def test_the_committed_weights_file_is_valid():
     data = json.loads(WEIGHTS_FILE.read_text())
     assert data["seconds"] and all("::" in k and v > 0 for k, v in data["seconds"].items())
-    assert load_shard_weights() == data["seconds"]
+    assert data["unit_seconds"] and all("::" in k and v > 0 for k, v in data["unit_seconds"].items())
+    assert load_shard_weights() == {**data["unit_seconds"], **data["seconds"]}

@@ -135,6 +135,8 @@ def main(argv: list[str] | None = None) -> int:
     data = {"comment": "known-heavy tests spread first across CI shards (tests/conftest.py); refresh with "
                        "scripts/ci_summary.py weights. Stale entries cost balance only, never a test.",
             "seconds": dict(sorted(seconds.items(), key=lambda kv: (-kv[1], kv[0])))}
+    if a.out.exists():   # the unit section is refreshed from a unit run, not from this one
+        data = {**json.loads(a.out.read_text()), **data}
     a.out.write_text(json.dumps(data, indent=1) + "\n")
     print(f"{len(seconds)} tests >= {a.min_seconds} s -> {a.out}")
     return 0

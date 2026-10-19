@@ -150,3 +150,15 @@ def test_the_dry_run_is_in_the_lightest_integration_shard_and_no_shard_is_heavy(
     dry = next(s for s in job["steps"] if s.get("name") == "dry-run")["if"]
     assert f"matrix.shard == {loads.index(min(loads))}" in dry
     assert max(loads) / 4 <= 110, "a shard's heavy tests alone exceed ~110 s at 4 workers"
+
+
+def test_unit_shards_are_balanced_by_the_committed_unit_weights():
+    import json
+    import sys
+    sys.path.insert(0, str(ROOT / "tests"))
+    from conftest import shard_assignment
+    count = len(_ci()["jobs"]["backend-unit"]["strategy"]["matrix"]["shard"])
+    weights = json.loads((ROOT / "tests" / "shard_weights.json").read_text())["unit_seconds"]
+    assignment = shard_assignment(list(weights), count, weights)
+    loads = [sum(w for n, w in weights.items() if assignment[n] == s) for s in range(count)]
+    assert max(loads) <= 1.1 * min(loads), loads     # a clustered module (test_goldbot_deploy_sh.py) must not sit in one shard
