@@ -105,7 +105,8 @@ cd /opt/goldbot && exec sudo -u goldbot -H env PYTHON_KEYRING_BACKEND=keyring.ba
 WRAP
 chmod 755 /usr/local/bin/goldbot
 
-for u in supervisor engine@ api scheduler telegram news bridge-tunnel; do install -m 644 "$OPS/systemd/goldbot-$u.service" /etc/systemd/system/; done
+# bridge-tunnel@ (one per further account box) is installed, never enabled here: RUNBOOK 0.3b "Adding an account box"
+for u in supervisor engine@ api scheduler telegram news bridge-tunnel bridge-tunnel@; do install -m 644 "$OPS/systemd/goldbot-$u.service" /etc/systemd/system/; done
 systemctl daemon-reload
 # Rollback floor (review MEDIUM-1): a release older than the engine watchdog never sends READY=1, so under
 # Type=notify it trades for up to TimeoutStartSec (15 min) and is then stopped, over and over. Seeded once with the

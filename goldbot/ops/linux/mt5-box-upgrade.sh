@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# mt5-box-upgrade <phase> <sha> [--book-flat --engine-stopped]
+# mt5-box-upgrade <phase> <sha> [--book-flat --engine-stopped] [--account <id>]
 #   phase: precheck | install | post-reboot       sha: the 40-hex commit on main the owner approved
+#   --account (or ACCOUNT in the environment): the account this box serves, default icm-demo. One box per account
+#   (docs/ops/icm-probe-account-plan.md Option B), so the box layout is the same; only the unit instances differ.
 # The attended upgrade of the MT5 box (RUNBOOK 0.5 "Attended MT5 box upgrade"). Run by root from a copy whose sha256
 # the owner checked off-box, never from /opt/goldbot (the mt5 user can write that tree).
 #   precheck     read-only except the Config/ backup: root, market closed, no engine unit active here, the two
@@ -19,7 +21,7 @@ export LC_ALL=C
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
 REPO=https://github.com/engraamirkhan/goldbot.git
-ACCOUNT=icm-demo
+ACCOUNT=${ACCOUNT:-icm-demo}
 PORT=8765
 ROOT=/opt/goldbot
 MT5_HOME=/home/mt5
@@ -209,15 +211,18 @@ main() {
     case "$1" in
       --book-flat) BOOK_FLAT=1 ;;
       --engine-stopped) ENGINE_STOPPED=1 ;;
+      --account) [ $# -ge 2 ] || die "--account needs an account id"; ACCOUNT=$2; shift ;;
       *) die "unknown option" ;;
     esac
     shift
   done
   case "$PHASE" in
     precheck | install | post-reboot) ;;
-    *) die "usage: mt5-box-upgrade <precheck|install|post-reboot> <40-hex sha> [--book-flat --engine-stopped]" ;;
+    *) die "usage: mt5-box-upgrade <precheck|install|post-reboot> <40-hex sha> [--book-flat --engine-stopped] [--account <id>]" ;;
   esac
   valid_sha "$SHA" || die "the sha must be 40 lowercase hex characters"
+  # it goes into unit instance names run by root: lowercase id only, as in config/accounts.yaml
+  [[ "$ACCOUNT" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || die "the account id must be lowercase letters, digits and '-'"
   trap '' HUP   # a dropped SSH session must not stop it half-way
   case "$PHASE" in
     precheck) phase_precheck ;;
