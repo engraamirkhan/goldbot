@@ -77,7 +77,8 @@ def _shadow(state: Path) -> list[ActivityEvent]:
                 continue
             bar = pd.Timedelta(seconds=tf_seconds(t.timeframe))
             common: dict[str, Any] = dict(mode="paper", agent_id=t.agent_id, version=t.version, timeframe=t.timeframe,
-                                          side=_side(t.side), p=round(t.p, 4), entry=t.entry)
+                                          side=_side(t.side), p=round(t.p, 4), entry=t.entry, stop=t.stop,
+                                          target=t.target)
             out.append(ActivityEvent(ts=t.entry_ts + bar, kind="shadow_opened", **common))
             if t.exit_ts is not None:
                 out.append(ActivityEvent(ts=t.exit_ts + bar, kind="shadow_closed", exit=t.exit, reason=t.barrier,
@@ -111,7 +112,8 @@ def _positions(state: Path, engines: dict[str, dict[str, Any]]) -> list[Activity
             out.append(ActivityEvent(ts=t.opened_utc or t.entry_bar_ts, kind="position_opened",
                                      account=account_name(account), mode=_mode(engines.get(account, {}).get("mode")),
                                      agent_id=t.agent_id, timeframe=t.timeframe, side=_side(t.side), lots=t.lots,
-                                     entry=t.open_price if t.open_price is not None else t.entry))
+                                     entry=t.open_price if t.open_price is not None else t.entry, stop=t.sl,
+                                     target=t.tp))
     return out
 
 

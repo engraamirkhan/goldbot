@@ -990,6 +990,10 @@ export interface components {
             ret?: number | null;
             /** Side */
             side?: ("long" | "short") | null;
+            /** Stop */
+            stop?: number | null;
+            /** Target */
+            target?: number | null;
             /** Timeframe */
             timeframe?: string | null;
             /**

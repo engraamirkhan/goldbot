@@ -39,6 +39,8 @@ export function eventLine(e: ActivityEvent): string {
   if (e.timeframe) parts.push(e.timeframe);
   if (e.side) parts.push(e.lots != null ? `${e.side} ${e.lots} lots` : e.side);
   if (e.entry != null) parts.push(e.exit != null ? `${price(e.entry)} → ${price(e.exit)}` : `at ${price(e.entry)}`);
+  if (e.stop != null) parts.push(`SL ${price(e.stop)}`);
+  if (e.target != null) parts.push(`TP ${price(e.target)}`);
   if (e.reason) parts.push(e.reason);
   if (e.r != null) parts.push(signedR(e.r));
   if (e.pnl != null) parts.push(money(e.pnl, e.currency, true));
