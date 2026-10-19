@@ -73,7 +73,12 @@ COMMENT = "cp-"                     # a probe's client order id, and so its MT5 
 CLAMP_MARGIN = 0.99                 # a clamped probe stop aims at 99% of max_loss (the terminal rounds to the cent)
 # directors' ruling 2026-10-19 (ADR 0037 amendment): below-threshold (untaken) probes at most this many a risk day, at
 # most half the open slots, and only while more than half the probe budget is left: taken entries keep the rest
-UNTAKEN_PER_DAY = 6
+UNTAKEN_PER_DAY = 12                # amendment 3 (2026-10-19): was 6
+PER_CLOSE = 2                       # amendment 3: new probes per bar close at most, from different agents
+MAX_SAME_SIDE = 2                   # amendment 3: open probes on one side at most (one move, correlated losses)
+# amendment 3: no new probe once the day's allowance left after the open probes' risk and the new probe's max loss
+# would fall below this share of the day's loss limit (0.6 x £50 = £30: three real trades at the 1% cap)
+REAL_TRADE_RESERVE = 0.6
 
 
 def probe_id(agent_id: str) -> str:
@@ -334,31 +339,40 @@ def _step(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick: Tick) -> 
         if probes_open:
             _make_way(eng, close_ts)
         return
-    if len(probes_open) >= eng.cfg.cost_probe_max_open or _in_flight(eng, True):
-        return
-    busy = {eng.open[pid].agent_id.removeprefix(PREFIX) for pid in probes_open}
-    signals = {a: sig for a, sig in signals.items() if a not in busy}       # never two probes on one agent
-    if not signals:
-        return
-    if eng._auto_paused is not None and eng._auto_paused[0] == close_ts:
-        return
-    if eng.cfg.mode != "demo" or not auto_entry.permitted(eng, close_ts):
-        return
-    why, headroom = budget_refusal(eng, probe, close_ts)
-    if why is not None:
-        eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": f"cost_probe_budget:{why}"})
-        return
-    untaken_why = untaken_refusal(eng, probe, close_ts, headroom)
-    if untaken_why is not None and not any(sig[1].taken for sig in signals.values()):
-        eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": f"cost_probe_untaken:{untaken_why}"})
-        return
-    if untaken_why is not None:
-        signals = {a: sig for a, sig in signals.items() if sig[1].taken}
-    version, t, agent = signals[rotate(list(signals), probe.last_agent)]
-    if not t.taken:
-        headroom -= eng.cfg.cost_probe_budget * _limit(eng) / 2      # the taken entries' half stays untouched
-    probe.last_agent = agent.agent_id
-    _send(eng, probe, version, t, agent, close_ts, tick, headroom)
+    # amendment 3 (directors' ruling 2026-10-19): up to PER_CLOSE new probes per bar close, from different agents, each
+    # checked afresh (slots, budget, untaken caps, the same-side cap) after the one before it
+    for _ in range(PER_CLOSE):
+        probes_open = _probes_open(eng)
+        if len(probes_open) >= eng.cfg.cost_probe_max_open or _in_flight(eng, True):
+            return
+        busy = {eng.open[pid].agent_id.removeprefix(PREFIX) for pid in probes_open}
+        signals = {a: sig for a, sig in signals.items() if a not in busy}       # never two probes on one agent
+        sides = [eng.open[pid].side for pid in probes_open]
+        signals = {a: sig for a, sig in signals.items() if sides.count(sig[1].side) < MAX_SAME_SIDE}
+        if not signals:
+            return
+        if eng._auto_paused is not None and eng._auto_paused[0] == close_ts:
+            return
+        if eng.cfg.mode != "demo" or not auto_entry.permitted(eng, close_ts):
+            return
+        why, headroom = budget_refusal(eng, probe, close_ts)
+        if why is not None:
+            eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": f"cost_probe_budget:{why}"})
+            return
+        untaken_why = untaken_refusal(eng, probe, close_ts, headroom)
+        if untaken_why is not None and not any(sig[1].taken for sig in signals.values()):
+            eng.decisions.append({"ts": close_ts.isoformat(), "agent": None,
+                                  "action": f"cost_probe_untaken:{untaken_why}"})
+            return
+        if untaken_why is not None:
+            signals = {a: sig for a, sig in signals.items() if sig[1].taken}
+        version, t, agent = signals.pop(rotate(list(signals), probe.last_agent))
+        if not t.taken:
+            headroom -= eng.cfg.cost_probe_budget * _limit(eng) / 2      # the taken entries' half stays untouched
+        probe.last_agent = agent.agent_id
+        _send(eng, probe, version, t, agent, close_ts, tick, headroom)
+        if not signals:
+            return
 
 
 def stop_loss(eng: Engine, side: int, price: float, distance: float, lots: float) -> float | None:
@@ -420,6 +434,8 @@ def budget_refusal(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp) -> tup
     headroom = share - max(0.0, -sum(float(r.pnl or 0.0) for r in today)) - held
     if headroom <= 0:
         return "probe_loss_reached", 0.0
+    if remaining - held - min(eng.cfg.cost_probe_max_loss, headroom) < REAL_TRADE_RESERVE * limit:   # real trades' part
+        return "real_trade_reserve", 0.0
     return None, headroom
 
 

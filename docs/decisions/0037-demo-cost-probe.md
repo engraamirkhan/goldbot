@@ -90,3 +90,15 @@ lock, own magic, RiskGate, live trades first, 0.01 lot, round-robin never by P&L
   `time_exit_ev_unsupported`, every loss limit, heat, margin, exposure and throttle still apply.
 - Evidence: probes stay out of closed_trades, the phase gate and shadow scoring (unchanged); no hypothesis is chosen
   or tuned from probe P&L.
+
+## Amendment 3, 2026-10-19 (owner: learn and test faster on demo; research and program directors' ruling)
+icm-demo: `max_open` 4 (code bound raised from 2 to 4), `budget_share` 0.4 (£20 of the £50 day), `max_loss` £4 per
+probe unchanged; untaken probes at most 12 a risk day (still at most half the slots and half the probe budget).
+- Up to 2 new probes per bar close (`PER_CLOSE`), from different agents, each checked afresh; never two on one agent.
+- At most 2 open probes on one side (`MAX_SAME_SIDE`): one move must not hit four correlated probes.
+- Real trades first: no new probe once the day's allowance left after the open probes' risk and the new probe's loss
+  would fall below 0.6 x the day's loss limit (`REAL_TRADE_RESERVE`, £30: three real trades at the 1% cap); the
+  existing allowance_low rule and `yield_to_live` stay. The account's £50 daily limit is unchanged and probe losses
+  count toward it.
+- Review after 10 risk days (2 weeks of clean data): if simultaneous probes' outcomes correlate above 0.7, return to
+  `max_open` 2.

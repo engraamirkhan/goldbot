@@ -60,7 +60,7 @@ accounts:
     # is at most max_loss (£4, from the broker's loss_per_lot at 0.01 lot; refused when it cannot be computed); no new
     # probe once today's realised probe loss + open probe risk + the new probe's would exceed budget_share x the
     # day's loss limit (0.2 x £50 = £10).
-    cost_probe: { enabled: true, budget_share: 0.2, max_open: 2, max_loss: 4.0 }
+    cost_probe: { enabled: true, budget_share: 0.4, max_open: 4, max_loss: 4.0 }   # ADR 0037 amendment 3
   vantage-demo:
     broker: vantage
     mode: demo

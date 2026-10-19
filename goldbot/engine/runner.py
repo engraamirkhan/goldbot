@@ -174,7 +174,7 @@ class EngineConfig(Record):
     approval_mode: str = "propose"   # propose | auto
     cost_probe: bool = False         # ADR 0037: min-lot demo orders mirroring challengers' shadow entries
     cost_probe_budget: float = Field(0.2, gt=0, le=1)   # ADR 0037: the probes' share of the day's loss allowance
-    cost_probe_max_open: int = Field(2, ge=1, le=2)     # ADR 0037 amendment: concurrent probe positions at most
+    cost_probe_max_open: int = Field(2, ge=1, le=4)     # ADR 0037 amendment 3: concurrent probe positions at most
     cost_probe_max_loss: float = Field(4.0, gt=0)       # ADR 0037 amendment: a probe's loss at its stop, account ccy
     shadow_max_open: int = Field(3, ge=1)               # settings shadow.max_open_per_agent (ruling 2026-10-19)
     symbol: str = "XAUUSD"

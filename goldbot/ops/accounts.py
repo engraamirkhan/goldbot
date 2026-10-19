@@ -71,8 +71,8 @@ class CostProbe(FrozenRecord):
     # trading-safety review: no new probe once today's realised probe loss reaches this share of the day's loss
     # allowance, nor while less than this share of the allowance remains (real trades keep the rest)
     budget_share: float = Field(0.2, gt=0, le=1)
-    # ADR 0037 amendment (ruling 2026-10-19): at most this many probe positions open at once (the rule allows 2)
-    max_open: int = Field(2, ge=1, le=2)
+    # ADR 0037 amendments (rulings 2026-10-19): at most this many probe positions open at once (amendment 3 allows 4)
+    max_open: int = Field(2, ge=1, le=4)
     # each probe's stop is clamped so its loss at the stop (the broker's loss_per_lot at 0.01 lot) is at most this, in
     # the account currency (icm-demo: £4); a probe whose loss cannot be computed is refused
     max_loss: float = Field(4.0, gt=0)
