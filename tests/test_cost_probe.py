@@ -252,6 +252,34 @@ def test_untaken_probes_stop_at_the_daily_cap(tmp_path):
     assert any(d.get("action") == "cost_probe_untaken:daily_cap" for d in eng.decisions)
 
 
+def test_an_untaken_probe_whose_order_raised_still_counts_toward_the_daily_cap(tmp_path):
+    """Safety review LOW-2: a send that raised writes no ledger row; it is counted all the same."""
+    eng, pb, tick, close = _engine(tmp_path)
+    _untaken(eng)
+
+    def boom(*a: Any, **kw: Any) -> Any:
+        raise RuntimeError("bridge gone")
+    eng._execute = boom                                                  # type: ignore[method-assign]
+    eng.on_bar_close(close, tick)
+    assert eng.probe is not None and len(eng.probe.untaken_sent) == 1
+    eng.probe.untaken_sent.update({f"cp-mem-{i}": close for i in range(cost_probe.UNTAKEN_PER_DAY - 1)})
+    assert cost_probe.untaken_refusal(eng, eng.probe, close, 10.0) == "daily_cap"
+
+
+def test_an_open_probe_the_ledger_does_not_know_holds_an_untaken_slot(tmp_path, monkeypatch):
+    """Safety review LOW-2: an adopted probe with no ledger row counts as untaken (fail closed)."""
+    eng, pb, tick, close = _engine(tmp_path)
+    assert eng.probe is not None
+    monkeypatch.setattr(cost_probe, "_probes_open", lambda e: [4242])
+    monkeypatch.setattr(cost_probe, "_limit", lambda e: 50.0)
+    assert cost_probe.untaken_refusal(eng, eng.probe, close, 10.0) == "slots_reserved"
+    with eng.probe.db.write() as conn:
+        cost_probe.LEDGER.upsert(conn, cost_probe.ProbeRecord(
+            client_order_id="cp-known", account_id="icm-demo", agent_id="a", side=1, lots=0.01, sent_utc=close,
+            position_id=4242, taken=True))
+    assert cost_probe.untaken_refusal(eng, eng.probe, close, 10.0) is None
+
+
 def test_a_taken_probe_is_not_held_by_the_untaken_cap(tmp_path):
     eng, pb, tick, close = _engine(tmp_path)
     assert eng.probe is not None
