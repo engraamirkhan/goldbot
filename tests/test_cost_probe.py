@@ -188,6 +188,21 @@ def test_a_probe_stop_is_clamped_so_its_loss_at_the_stop_is_at_most_max_loss(tmp
     assert rec.stop_loss is not None and rec.stop_loss <= 0.5
 
 
+def test_a_clamped_probe_opens_when_the_terminal_rounds_its_loss_to_the_cent(tmp_path):
+    """Live 2026-10-19: the terminal's order_calc_profit is rounded to the cent per lot, so a stop aimed exactly at
+    £4 measured £4.0002 and every box_break_close probe was refused probe_loss_above_cap."""
+    eng, pb, tick, close = _engine(tmp_path, max_loss=4.0)
+
+    def lpl(symbol: str, side: int, price: float, distance: float) -> float:
+        return round(abs(distance) * 100 * 1.00004, 2)                  # per lot, cent-rounded: $1 reads 100.00, low
+    pb.loss_per_lot = lpl                                                # type: ignore[method-assign,assignment]
+    eng.on_bar_close(close, tick)
+    assert not any(str(d.get("action", "")).startswith("cost_probe_refused") for d in eng.decisions), eng.decisions
+    [pos] = pb.positions()
+    [rec] = cost_probe.probes(tmp_path, "icm-demo")
+    assert rec.stop_loss is not None and 3.9 <= rec.stop_loss <= 4.0
+
+
 def test_a_wide_cap_keeps_the_challengers_own_stop(tmp_path):
     eng, pb, tick, close = _engine(tmp_path, max_loss=1_000.0)
     eng.on_bar_close(close, tick)

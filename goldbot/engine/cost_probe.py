@@ -70,6 +70,7 @@ PREFIX = "cost_probe:"
 YIELD = "cost_probe_yield"          # the exit of a probe that makes way for a real trade
 PROBE_MAGIC_OFFSET = 97             # magic_base + 97: no family's crc32 % 100 (tests guard it), not the smoke's 99
 COMMENT = "cp-"                     # a probe's client order id, and so its MT5 comment, starts with this
+CLAMP_MARGIN = 0.99                 # a clamped probe stop aims at 99% of max_loss (the terminal rounds to the cent)
 
 
 def probe_id(agent_id: str) -> str:
@@ -423,8 +424,10 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
     per_usd = stop_loss(eng, side, price, 1.0, float(lot)) if lot is not None else None
     if per_usd is None:
         return refuse("probe_loss_unknown")
-    # the amendment: the stop is clamped so the loss at it is at most cost_probe_max_loss (£4) at the minimum lot
-    stop_atr = min(ls.stop_atr, eng.cfg.cost_probe_max_loss / per_usd / atr_usd)
+    # the amendment: the stop is clamped so the loss at it is at most cost_probe_max_loss (£4) at the minimum lot. The
+    # clamp aims 1% inside the cap: the terminal rounds each loss_per_lot to the cent, so a stop aimed exactly at the
+    # cap measures a fraction of a penny above it about half the time and the check below refused every such probe
+    stop_atr = min(ls.stop_atr, CLAMP_MARGIN * eng.cfg.cost_probe_max_loss / per_usd / atr_usd)
     terms["volume_max"] = lot                                    # the minimum lot only
     intent = Intent(agent_id=tag, side=side, p=t.p, target_atr=ls.target_atr, stop_atr=stop_atr, atr_usd=atr_usd,
                     cost_atr=eng._cost_atr(atr_usd, close_ts), multiplier=1.0, price=price, timeframe=t.timeframe,
