@@ -63,6 +63,11 @@ from goldbot.base import FrozenRecord
 from goldbot.db.connection import Database
 from goldbot.db.repo import RecordRepo
 from goldbot.risk.gate import Stage
+from goldbot.risk.risk_terms import (  # noqa: F401  (re-exported: scipy-free home)
+    MIN_LOT_MAX,
+    RISK_MIN,
+    RiskTerm,
+)
 
 if TYPE_CHECKING:
     from goldbot.config import RiskSettings
@@ -88,13 +93,11 @@ DAILY_STEP = 0.005
 WEEKLY_STEP = 0.01
 SUPERVISOR_STEPS = {"supervisor_daily_cap": 6, "supervisor_weekly_cap": 5}   # as the account demo ladders (2-5%, 5-10%)
 MIN_LOT_RUNGS = (0.006, 0.008, 0.010)
-MIN_LOT_MAX = 0.01               # the per-trade hard limit
 # Amendment A1 (quant review, before any replay): the demo minimum-lot exploration budget
 EXPLORE_TRADES = 60              # the cap is the top rung (1.0%) for the first 60 exception trades
 EXPLORE_STOP_R = -10.0           # cumulative net R of those trades at or below this: off for good (a re-test = new trial)
 
 # ---- ADR 0039, dynamic per-strategy limits (frozen with it; a change is a new ADR) --------------------------------------
-RISK_MIN = 0.0025                # r_s floor: also the value for LCB <= 0
 RISK_STEP = 0.001                # quantisation and the loosening step (0.1%)
 RISK_SHRINK_DAYS = 20            # w = n_days / (n_days + 20)
 RISK_BASE = 0.005                # today's fixed risk per trade (settings.yaml risk.risk_per_trade)
@@ -300,24 +303,6 @@ _RISK_WHY = {
 }
 
 
-class RiskTerm(FrozenRecord):
-    """ADR 0039: one strategy's per-trade risk and why (published in `adaptive_state.risk_terms`, the `limits_change`
-    journal and the dashboard). `r`: the decided risk; `target`: where the evidence points; `f`: the quarter-Kelly
-    fraction (A1 math before /Q_SCALE); `w`: the shrinkage n_days/(n_days+20); the k factors are 1 here and set by the
-    engine at each decision (they only lower r)."""
-
-    r: float = Field(gt=0, le=MIN_LOT_MAX)
-    target: float | None = None
-    f: float | None = None
-    n_days: int = 0
-    n_demo: int = 0
-    lcb: float | None = None
-    w: float = 0.0
-    k_vol: float = 1.0
-    k_dd: float = 1.0
-    k_day: float = 1.0
-    reason: str
-    why: str = ""
 
 
 class AdaptiveState(FrozenRecord):

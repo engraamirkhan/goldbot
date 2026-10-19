@@ -36,7 +36,7 @@ from goldbot.base import FrozenRecord, UtcTimestamp, load_record, load_record_js
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db.connection import Database, connect, write
 from goldbot.db.repo import RecordRepo
-from goldbot.risk.adaptive import RISK_MIN, RiskTerm
+from goldbot.risk.risk_terms import RISK_MIN, RiskTerm
 
 if TYPE_CHECKING:
     from goldbot.config import RiskSettings
