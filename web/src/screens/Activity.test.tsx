@@ -29,7 +29,7 @@ describe("Activity feed", () => {
     expect(rows[0]).toHaveTextContent("Refused");
     expect(rows[0]).toHaveTextContent("cost_probe_refused:probe_loss_unknown");
     expect(rows[1]).toHaveTextContent("Shadow closed");
-    expect(rows[1]).toHaveTextContent("+1.50 R");
+    expect(rows[1]).toHaveTextContent("+1.50 R");
     expect(rows[2]).toHaveTextContent("Demo opened");
   });
 
