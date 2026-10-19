@@ -115,3 +115,38 @@ def test_backend_installs_come_from_the_lock_file():
     action = (ROOT / ".github" / "actions" / "setup-backend" / "action.yml").read_text()
     assert "uv sync --frozen" in action and "cache-dependency-glob: uv.lock" in action and "pip install" not in action
     assert "uv lock --check" in CI.read_text() and "uv lock --check" in (ROOT / "scripts" / "ci_local.sh").read_text()
+
+
+def test_no_test_job_waits_for_smoke_but_smoke_still_fails_the_run():
+    # the whole PR run is as long as its slowest job, not smoke plus its slowest shard
+    jobs = _ci()["jobs"]
+    for name in ("backend-unit", "backend-integration", "e2e", "lint"):
+        assert "smoke" not in jobs[name].get("needs", []), name
+    assert "smoke" in jobs["backend"]["needs"] and "smoke" in jobs["report-failure"]["needs"]
+
+
+def test_the_matrices_fit_the_20_concurrent_job_cap_of_the_free_plan():
+    # `changes` is done before the shards start; the aggregates, deployable and report-failure run after them
+    running = 0
+    for name, spec in _ci()["jobs"].items():
+        if name in NOT_GATED or name == "changes":
+            continue
+        matrix = (spec.get("strategy") or {}).get("matrix") or {}
+        running += len(next(iter(matrix.values()))) if matrix else 1
+    assert running <= 20, f"{running} jobs can run at once; GitHub's free plan allows 20"
+
+
+def test_the_dry_run_is_in_the_lightest_integration_shard_and_no_shard_is_heavy():
+    import json
+    import sys
+    sys.path.insert(0, str(ROOT / "tests"))
+    import importlib
+    shard_assignment = importlib.import_module("conftest").shard_assignment   # tests/ is on sys.path only at run time
+    job = _ci()["jobs"]["backend-integration"]
+    count = len(job["strategy"]["matrix"]["shard"])
+    weights = json.loads((ROOT / "tests" / "shard_weights.json").read_text())["seconds"]
+    assignment = shard_assignment(list(weights), count, weights)
+    loads = [sum(w for n, w in weights.items() if assignment[n] == s) for s in range(count)]
+    dry = next(s for s in job["steps"] if s.get("name") == "dry-run")["if"]
+    assert f"matrix.shard == {loads.index(min(loads))}" in dry
+    assert max(loads) / 4 <= 110, "a shard's heavy tests alone exceed ~110 s at 4 workers"
