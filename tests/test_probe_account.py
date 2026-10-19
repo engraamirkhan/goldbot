@@ -230,3 +230,17 @@ def test_the_engine_file_says_whether_the_account_is_probe_only(tmp_path):
     eng.cfg.probe_only = True
     eng._write_state()
     assert json.loads((tmp_path / "engine_icm-demo.json").read_text())["probe_only"] is True
+
+
+# ------------------------------------------------------------------------------------------------ dynamic limits
+def test_dynamic_limits_are_off_unless_the_account_turns_them_on():
+    assert _account().dynamic_limits is False
+    assert _account(dynamic_limits=True).dynamic_limits is True
+
+
+def test_the_shipped_registry_turns_dynamic_limits_on_for_the_demo_accounts_and_off_for_live(registry):
+    """docs/design/dynamic-limits-2026-10-19.md: "config/accounts.yaml (icm-demo, icm-probe true)"; live stays off
+    (owner-only)."""
+    accs = acc_mod.load_accounts(registry)
+    assert accs["icm-demo"].dynamic_limits and accs["icm-probe"].dynamic_limits
+    assert not any(a.dynamic_limits for a in accs.values() if a.mode == "live")

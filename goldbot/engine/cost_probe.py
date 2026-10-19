@@ -35,6 +35,12 @@ real (live-agent) trades take priority". A cost probe, not a population status: 
   whose loss cannot be computed is refused. No new probe once today's realised probe loss + the open probes' risk
   (loss at their stops) + the new probe's would exceed `cost_probe_budget` x the day's loss limit (0.2 x £50 = £10).
   The bound is at the stop: a gap through it, commission and swap are outside it (the realised P&L counts them).
+* Dynamic limits (owner 2026-10-19, docs/design/dynamic-limits-2026-10-19.md item 4; the account's `dynamic_limits`):
+  "per probe, max_loss = min(loss of 0.01 lot at the challenger's own label-spec stop x ATR, budget_share x daily
+  limit / max_open). max_open_dyn = clamp(floor(budget_share x limit / median probe stop loss), 1, cfg.max_open).
+  Config max_loss/max_open become the ceilings and the fallback" (`probe_limits`). Tighten only: neither value can
+  exceed the configured one, and an unknown limit or an unreadable or empty ledger gives the configured values. Every
+  probe decision and ledger row says which values applied and why (`probe_max_loss`, `probe_max_open`, `basis`).
 * The record: one `ProbeRecord` per order in aux.db `cost_probes` (purpose cost_probe, with the agent id and version):
   signal, requested and fill price, spread, send latency and retcode; at the close the exit, swap, commission and P&L
   from the broker's deals. A probe's close never goes to closed_trades.jsonl (phase gate, throttle, broker-ledger
@@ -46,6 +52,7 @@ from __future__ import annotations
 import logging
 import math
 import sqlite3
+import statistics
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -79,6 +86,8 @@ MAX_SAME_SIDE = 2                   # amendment 3: open probes on one side at mo
 # amendment 3: no new probe once the day's allowance left after the open probes' risk and the new probe's max loss
 # would fall below this share of the day's loss limit (0.6 x £50 = £30: three real trades at the 1% cap)
 REAL_TRADE_RESERVE = 0.6
+# dynamic limits: the median loss at the stop of this many most recent probes sets the dynamic probe count
+PROBE_LOSS_WINDOW = 20
 
 
 def real_trade_reserve(probe_only: bool) -> float:
@@ -185,6 +194,11 @@ class ProbeRecord(FrozenRecord):
     # the mirrored shadow entry cleared its threshold; False = a below-threshold learning probe (owner 2026-10-19),
     # capped by UNTAKEN_PER_DAY and half the slots and budget. Rows written before carry True (they were all taken)
     taken: bool = True
+    # dynamic limits: the per-probe loss ceiling and the probe count that applied, and why (`ProbeLimits.basis`); None
+    # on rows written before
+    probe_max_loss: float | None = None
+    probe_max_open: int | None = None
+    basis: str | None = None
 
     @property
     def slippage_usd(self) -> float | None:
@@ -239,6 +253,9 @@ class CostProbe:
         # untaken probes sent by this process (client order id -> sent): counted even when the order raised and no
         # ledger row was written (safety review LOW-2)
         self.untaken_sent: dict[str, pd.Timestamp] = {}
+        # dynamic limits: the account's `dynamic_limits`, passed as EngineConfig.dynamic_limits; off when the engine
+        # config does not carry it, so the configured values apply (fail closed)
+        self.dynamic: bool = bool(getattr(eng.cfg, "dynamic_limits", False))
 
     @classmethod
     def start(cls, eng: Engine) -> CostProbe | None:
@@ -360,7 +377,8 @@ def _step(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick: Tick) -> 
     # checked afresh (slots, budget, untaken caps, the same-side cap) after the one before it
     for _ in range(PER_CLOSE):
         probes_open = _probes_open(eng)
-        if len(probes_open) >= eng.cfg.cost_probe_max_open or _in_flight(eng, True):
+        lim = probe_limits(eng, probe)
+        if len(probes_open) >= lim.max_open or _in_flight(eng, True):
             return
         busy = {eng.open[pid].agent_id.removeprefix(PREFIX) for pid in probes_open}
         signals = {a: sig for a, sig in signals.items() if a not in busy}       # never two probes on one agent
@@ -376,7 +394,7 @@ def _step(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick: Tick) -> 
         if why is not None:
             eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": f"cost_probe_budget:{why}"})
             return
-        untaken_why = untaken_refusal(eng, probe, close_ts, headroom)
+        untaken_why = untaken_refusal(eng, probe, close_ts, headroom, lim.max_open)
         if untaken_why is not None and not any(sig[1].taken for sig in signals.values()):
             eng.decisions.append({"ts": close_ts.isoformat(), "agent": None,
                                   "action": f"cost_probe_untaken:{untaken_why}"})
@@ -387,9 +405,56 @@ def _step(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick: Tick) -> 
         if not t.taken:
             headroom -= eng.cfg.cost_probe_budget * _limit(eng) / 2      # the taken entries' half stays untouched
         probe.last_agent = agent.agent_id
-        _send(eng, probe, version, t, agent, close_ts, tick, headroom)
+        _send(eng, probe, version, t, agent, close_ts, tick, headroom, lim)
         if not signals:
             return
+
+
+class ProbeLimits(FrozenRecord):
+    """The probe count and the per-probe loss ceiling that apply now, and why. Fixed (the configured values) unless
+    the account has dynamic limits; a dynamic value never exceeds the configured one (it is the ceiling)."""
+    max_open: int
+    max_loss: float              # the ceiling of one probe's loss at its stop; its own stop applies when inside it
+    loss_basis: str              # fixed | config_cap | budget_cap | fixed:<why the dynamic value is unknown>
+    open_basis: str              # fixed | config_cap | budget | fixed:<why the dynamic value is unknown>
+
+    def basis(self, loss_basis: str | None = None) -> str:
+        return f"max_loss={loss_basis or self.loss_basis};max_open={self.open_basis}"
+
+
+def probe_limits(eng: Engine, probe: CostProbe) -> ProbeLimits:
+    """Design item 4 (docs/design/dynamic-limits-2026-10-19.md): the per-probe ceiling is min(cfg max_loss,
+    budget_share x the day's loss limit / cfg max_open) and the count clamp(floor(budget_share x limit / the median loss
+    at the stop of the last PROBE_LOSS_WINDOW probes), 1, cfg max_open). The day's limit is already dynamic (ADR 0031),
+    so both tighten with it; budget_share stays static. Fail closed: an unknown limit, an unreadable ledger or no probe
+    history gives the configured value."""
+    cfg_open, cfg_loss = eng.cfg.cost_probe_max_open, eng.cfg.cost_probe_max_loss
+    if not probe.dynamic:
+        return ProbeLimits(max_open=cfg_open, max_loss=cfg_loss, loss_basis="fixed", open_basis="fixed")
+    try:
+        limit = _limit(eng)
+    except Exception as exc:
+        log.warning("daily loss limit unreadable for the probe limits (%s): configured values", type(exc).__name__)
+        limit = math.nan
+    if not (math.isfinite(limit) and limit > 0):
+        return ProbeLimits(max_open=cfg_open, max_loss=cfg_loss, loss_basis="fixed:limit_unknown",
+                           open_basis="fixed:limit_unknown")
+    budget = eng.cfg.cost_probe_budget * limit
+    share = budget / cfg_open
+    max_loss, loss_basis = (cfg_loss, "config_cap") if cfg_loss <= share else (share, "budget_cap")
+    try:
+        with probe.db.connection() as conn:
+            rows = LEDGER.select(conn, "account_id = ?", (eng.cfg.account_id,), order_by="ts_ns")
+    except Exception as exc:
+        log.warning("cost probe ledger unreadable (%s): the configured probe count", type(exc).__name__)
+        return ProbeLimits(max_open=cfg_open, max_loss=max_loss, loss_basis=loss_basis,
+                           open_basis="fixed:ledger_unreadable")
+    recent = [float(r.stop_loss) for r in rows if r.stop_loss is not None and r.stop_loss > 0][-PROBE_LOSS_WINDOW:]
+    if not recent:
+        return ProbeLimits(max_open=cfg_open, max_loss=max_loss, loss_basis=loss_basis, open_basis="fixed:no_history")
+    n = math.floor(budget / statistics.median(recent))
+    max_open, open_basis = (cfg_open, "config_cap") if n >= cfg_open else (max(1, n), "budget")
+    return ProbeLimits(max_open=max_open, max_loss=max_loss, loss_basis=loss_basis, open_basis=open_basis)
 
 
 def stop_loss(eng: Engine, side: int, price: float, distance: float, lots: float) -> float | None:
@@ -470,10 +535,12 @@ def _limit(eng: Engine) -> float:
     return float(daily_allowance(eng.gate, eng.state)["daily_loss_limit"] or 0.0)
 
 
-def untaken_refusal(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, headroom: float) -> str | None:
+def untaken_refusal(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, headroom: float,
+                    max_open: int | None = None) -> str | None:
     """Why a below-threshold (untaken) probe may not be sent now, or None (directors' ruling 2026-10-19): at most
-    UNTAKEN_PER_DAY sent this risk day, at most half of `cost_probe_max_open` open, and only while more than half the
-    probe budget is left. An unreadable ledger refuses (fail closed)."""
+    UNTAKEN_PER_DAY sent this risk day, at most half of the probe count open (`max_open`, the one `probe_limits`
+    applies; `cost_probe_max_open` when not given), and only while more than half the probe budget is left. An
+    unreadable ledger refuses (fail closed)."""
     since = eng._last_reset if eng._last_reset is not None else close_ts.floor("D")
     try:
         with probe.db.connection() as conn:
@@ -488,7 +555,8 @@ def untaken_refusal(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, headr
         return "daily_cap"
     # an open probe the ledger does not know as taken (untaken, or adopted with no row) holds an untaken slot
     taken_ids = {r.position_id for r in every if r.taken and r.position_id is not None}
-    if sum(1 for pid in _probes_open(eng) if pid not in taken_ids) >= eng.cfg.cost_probe_max_open // 2:
+    slots = eng.cfg.cost_probe_max_open if max_open is None else max_open
+    if sum(1 for pid in _probes_open(eng) if pid not in taken_ids) >= slots // 2:
         return "slots_reserved"
     if headroom <= eng.cfg.cost_probe_budget * _limit(eng) / 2:
         return "budget_reserved"
@@ -496,7 +564,7 @@ def untaken_refusal(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, headr
 
 
 def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Specialist, close_ts: pd.Timestamp,
-          tick: Tick, headroom: float) -> None:
+          tick: Tick, headroom: float, lim: ProbeLimits) -> None:
     from goldbot.risk import Intent
     from goldbot.risk.gate import broker_margin
     from goldbot.telegram.approvals import Proposal
@@ -507,19 +575,30 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
     atr_usd = abs(t.entry - t.stop) / ls.stop_atr              # the signal bar's ATR, as the shadow entry used it
     price = tick.ask if side > 0 else tick.bid
 
+    # which limits applied and why, on every decision and the ledger row (dynamic limits)
+    applied: dict[str, Any] = {"probe_max_loss": lim.max_loss, "probe_max_open": lim.max_open,
+                               "basis": lim.basis("fixed:probe_loss_unknown")}
+
     def refuse(why: str) -> None:
         eng.decisions.append({"ts": close_ts.isoformat(), "agent": tag, "version": version,
-                              "action": "cost_probe_refused:" + why})
+                              "action": "cost_probe_refused:" + why, **applied})
 
     terms = eng._sizing_terms(side, price, ls.stop_atr * atr_usd, cycle=close_ts)
     lot = terms.get("volume_min")
     per_usd = stop_loss(eng, side, price, 1.0, float(lot)) if lot is not None else None
     if per_usd is None:
         return refuse("probe_loss_unknown")
-    # the amendment: the stop is clamped so the loss at it is at most cost_probe_max_loss (£4) at the minimum lot. The
-    # clamp aims 1% inside the cap: the terminal rounds each loss_per_lot to the cent, so a stop aimed exactly at the
-    # cap measures a fraction of a penny above it about half the time and the check below refused every such probe
-    stop_atr = min(ls.stop_atr, CLAMP_MARGIN * eng.cfg.cost_probe_max_loss / per_usd / atr_usd)
+    # dynamic limits: the probe's loss is its own stop's at the minimum lot while that is inside the ceiling
+    max_loss, loss_basis = lim.max_loss, lim.loss_basis
+    native = per_usd * ls.stop_atr * atr_usd
+    if loss_basis in ("config_cap", "budget_cap") and native <= max_loss:
+        max_loss, loss_basis = native, "native_stop"
+    applied = {"probe_max_loss": round(max_loss, 2), "probe_max_open": lim.max_open, "basis": lim.basis(loss_basis)}
+    # the amendment: the stop is clamped so the loss at it is at most the ceiling (cost_probe_max_loss, £4, or the
+    # dynamic one) at the minimum lot. The clamp aims 1% inside the cap: the terminal rounds each loss_per_lot to the
+    # cent, so a stop aimed exactly at the cap measures a fraction of a penny above it about half the time and the
+    # check below refused every such probe
+    stop_atr = min(ls.stop_atr, CLAMP_MARGIN * lim.max_loss / per_usd / atr_usd)
     terms["volume_max"] = lot                                    # the minimum lot only
     intent = Intent(agent_id=tag, side=side, p=t.p, target_atr=ls.target_atr, stop_atr=stop_atr, atr_usd=atr_usd,
                     cost_atr=eng._cost_atr(atr_usd, close_ts), multiplier=1.0, price=price, timeframe=t.timeframe,
@@ -533,10 +612,11 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
     loss = stop_loss(eng, side, price, gd.stop_distance, gd.lots)   # at the stop the gate set (stops level floored)
     if loss is None:
         return refuse("probe_loss_unknown")
-    if loss > eng.cfg.cost_probe_max_loss + 1e-9:
+    if loss > lim.max_loss + 1e-9:
         return refuse("probe_loss_above_cap")
     if loss > headroom + 1e-9:
-        eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": "cost_probe_budget:probe_budget_full"})
+        eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": "cost_probe_budget:probe_budget_full",
+                              **applied})
         return
     stop, target = price - side * gd.stop_distance, price + side * ls.target_atr * atr_usd
     prop = Proposal(proposal_id=pid, account_id=eng.cfg.account_id, agent_id=tag, side=side, lots=gd.lots,
@@ -553,11 +633,11 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
         eng._auto_paused = (close_ts, "order_raised")
         eng.note_tick_error(exc)
         eng.decisions.append({"ts": close_ts.isoformat(), "agent": tag, "version": version, "proposal": pid,
-                              "action": f"cost_probe:auto_unconfirmed:{type(exc).__name__}"})
+                              "action": f"cost_probe:auto_unconfirmed:{type(exc).__name__}", **applied})
         return
     latency_ms = (time.perf_counter() - t0) * 1000.0
     eng.decisions.append({"ts": close_ts.isoformat(), "agent": tag, "version": version, "proposal": pid,
-                          "action": "cost_probe:" + auto_entry.action(res)})
+                          "action": "cost_probe:" + auto_entry.action(res), **applied})
     if res is None:
         return
     filled = res.ok and res.position_id is not None
@@ -567,7 +647,8 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
                       sent_utc=sent, latency_ms=round(latency_ms, 3), retcode=res.retcode,
                       position_id=res.position_id if filled else None,
                       fill_price=(res.price if res.price is not None else price) if filled else None,
-                      stop_loss=round(loss, 2), taken=t.taken)
+                      stop_loss=round(loss, 2), taken=t.taken, probe_max_loss=applied["probe_max_loss"],
+                      probe_max_open=lim.max_open, basis=applied["basis"])
     try:
         with probe.db.write() as conn:
             LEDGER.upsert(conn, rec)
