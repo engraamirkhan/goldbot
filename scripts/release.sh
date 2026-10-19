@@ -5,7 +5,13 @@
 # 2. runs scripts/ci_local.sh (clean worktree of HEAD) AT THE SAME TIME as GitHub's PR checks; either failing stops;
 # 3. after the merge, deploys at once when main's tree equals the PR head's tree that passed CI (the same code: a
 #    second full run on main tells nothing new); if main moved in between, it waits for main CI on the merge commit;
-# 4. deploys the FULL main SHA on the brain (engine paused for the deploy) and checks deploys.jsonl says "deployed".
+# 4. deploys the FULL main SHA on the brain and checks deploys.jsonl says "deployed". Right after the push the brain
+#    pre-builds the PR head (`goldbot-deploy --stage`, uv cache + dashboard, no service touched) while CI runs; the deploy
+#    reuses it when the dashboard sources are identical (the merge commit has the PR head's tree), else builds as before.
+#    The engine is disabled around the deploy only when the installed script has no --stage (first release); the new
+#    script stops every service just before the checkout and starts supervisor, engine, rest (engine down: seconds,
+#    printed) and reports once every service has been stable for 30 s with fresh heartbeats; a watcher keeps checking
+#    restarts until 90 s after the switch and rolls back on one (look at deploys.jsonl again after that).
 # Never deploys a tree that no green CI run tested.
 set -euo pipefail
 BRANCH=claude/gifted-goldberg-lcb7pl
@@ -25,6 +31,10 @@ HEAD_TREE=$(git rev-parse "HEAD^{tree}")
 
 say "push $HEAD_SHA"
 git push -q origin "$BRANCH"
+# pre-build on the brain while CI runs (nothing is touched there; an old goldbot-deploy without --stage just says usage)
+SSH_BRAIN=(ssh -F "$HOME/.ssh/goldbot.conf" -o BatchMode=yes goldbot-brain)
+"${SSH_BRAIN[@]}" "sudo /usr/local/sbin/goldbot-deploy --stage $HEAD_SHA" > "$LOG/stage.log" 2>&1 &
+STAGE=$!
 if ! gh pr view "$BRANCH" --json state -q .state 2>/dev/null | grep -q OPEN; then
   gh pr create --base main --head "$BRANCH" --title "$TITLE" --body-file "$BODY" >/dev/null
 fi
@@ -80,13 +90,27 @@ else
   gh run watch "$RID" --exit-status >/dev/null 2>&1 || die "main CI not green on $MAIN"
 fi
 
+# exit 2 = the installed goldbot-deploy predates --stage (usage): it restarts services only after the install, so
+# the engine must be paused around the whole deploy as before. The new script stops services itself, just in time.
+STOP_ENGINE=0
+wait "$STAGE" && say "brain stage: $(tail -1 "$LOG/stage.log" | cut -c1-120)" || {
+  rc=$?
+  [ "$rc" != 2 ] || STOP_ENGINE=1
+  say "brain stage did not finish (rc $rc, $(tail -1 "$LOG/stage.log" | cut -c1-120)): the deploy builds as before"
+}
+PAUSE=""; RESUME=""
+if [ "$STOP_ENGINE" = 1 ]; then
+  say "old goldbot-deploy on the brain: engine paused around the deploy"
+  PAUSE="sudo systemctl disable --now goldbot-engine@icm-demo"
+  RESUME="sudo systemctl enable --now goldbot-engine@icm-demo >/dev/null 2>&1; sleep 15"
+fi
 say "deploy $MAIN to the brain"
-OUT=$(ssh -F "$HOME/.ssh/goldbot.conf" -o BatchMode=yes goldbot-brain "
+OUT=$("${SSH_BRAIN[@]}" "
   sudo systemctl reset-failed 'goldbot-deploy-manual-*' 2>/dev/null
-  sudo systemctl disable --now goldbot-engine@icm-demo
+  $PAUSE
   sudo systemd-run --wait --unit goldbot-deploy-manual-\$(date +%s) /usr/local/sbin/goldbot-deploy $MAIN >/dev/null 2>&1
   sudo tail -1 /var/lib/goldbot-deploy/deploys.jsonl
-  sudo systemctl enable --now goldbot-engine@icm-demo >/dev/null 2>&1; sleep 15
+  $RESUME
   echo engine=\$(systemctl is-active goldbot-engine@icm-demo)")
 echo "$OUT" | cut -c1-220
 echo "$OUT" | grep -q "\"result\":\"deployed\".*\"to\":\"$MAIN\"" || die "deploy record does not say deployed $MAIN"
