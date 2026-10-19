@@ -546,6 +546,18 @@ def test_a_retired_screening_family_is_a_specialist_family_for_the_consistency_c
         "no_such_family: in research.retired_families but not a specialist family"]
 
 
+def test_retiring_a_family_the_director_does_not_allocate_moves_no_trial_and_no_bonferroni_count():
+    """H-48 / H-50 (2026-10-19) retire sweep_absorb and box_break_close, both under their pre-registered screen and so
+    outside research_families: the allocation, the shared exploration trial and the reinstatement bar
+    (reinstatement_threshold over the allocated retired families) stay exactly as before."""
+    screened = [RetiredFamily(family=f, hypothesis_id=h, retired=RETIRED_ON, reason="STOP", trials=[n])
+                for f, h, n in (("sweep_absorb", "R-14", 88), ("box_break_close", "R-15", 89))]
+    assert all(e.family in SPECIALISTS and e.family not in FAMILIES for e in screened)
+    a, b = _plan_with(retired=RETIRED), _plan_with(retired=[*RETIRED, *screened])
+    assert a.budget == b.budget and a.retired_floor == b.retired_floor and a.retired_explore == b.retired_explore
+    assert a.reinstate_t == b.reinstate_t and set(b.budget) == set(FAMILIES)
+
+
 def test_the_consistency_check_catches_drift_and_a_doc_edit_never_moves_a_trial():
     assert retired_drift(RETIRED, HYP, FAMILIES) == []
     renamed = HYP.replace("| ID | Idea | Status |", "| Ref | Idea | State |")
