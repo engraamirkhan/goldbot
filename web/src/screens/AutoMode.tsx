@@ -6,9 +6,11 @@ import { localTime, num, utcTitle } from "../lib/explain";
 
 // Auto-mode card (design: Operating mode, row A10). Auto mode is only offered, never taken: the card shows the same
 // evidence check Telegram's /mode runs, and the owner decides. Enabling needs the owner's authenticator code; switching
-// back to propose needs nothing. The engines still force propose under the 30-day re-arm lock and the 12% kill switch.
+// back to propose needs nothing, and so does handing entries back to each account's own setting (ADR 0041: demo accounts
+// enter automatically, real money asks). The engines still force propose under the 30-day re-arm lock and the 12% kill
+// switch.
 
-const MODE_WORDS = { auto: "Auto", propose: "Propose-and-approve" } as const;
+const MODE_WORDS = { auto: "Auto", propose: "Propose-and-approve", account: "Each account's setting" } as const;
 // mode_by: the channel ("telegram" | "dashboard") for every role, never who (A15); "engine:<account>" for a kill switch
 const setBy = (by: string | null) => {
   if (!by) return "";
@@ -55,12 +57,16 @@ function OwnerControls({ v }: { v: AutoModeView }) {
   const done = (res: ModeChangeResult) => { qc.setQueryData(["automode"], res.view); qc.invalidateQueries({ queryKey: ["status"] }); setCode(""); setMsg(res.message); };
   const enable = useMutation({ mutationFn: () => api.setMode("auto", code), onSuccess: done, onMutate: () => setMsg(null) });
   const propose = useMutation({ mutationFn: () => api.setMode("propose"), onSuccess: done, onMutate: () => setMsg(null) });
-  const err = (enable.error ?? propose.error) as Error | null;
+  const account = useMutation({ mutationFn: () => api.setMode("account"), onSuccess: done, onMutate: () => setMsg(null) });
+  const err = (enable.error ?? propose.error ?? account.error) as Error | null;
   const autoNow = v.owner_mode === "auto" || Object.values(v.engine_modes).includes("auto");
   return (
     <div className="mode-actions">
       {autoNow && (
         <button type="button" className="secondary" disabled={propose.isPending} onClick={() => propose.mutate()}>Switch to propose</button>
+      )}
+      {v.owner_mode != null && (
+        <button type="button" className="secondary" disabled={account.isPending} onClick={() => account.mutate()}>Use each account's setting</button>
       )}
       {v.can_enable && (
         <form onSubmit={(e) => { e.preventDefault(); enable.mutate(); }}>
@@ -89,11 +95,11 @@ export function AutoModeCard() {
   }
   const v = q.data;
   const engines = Object.entries(v.engine_modes);
-  const mode = v.owner_mode ?? "propose";
+  const mode = v.owner_mode ?? "account";
   return (
     <section className="mode-card" aria-labelledby="mode-h">
       <div className="ddhead">
-        <h2 id="mode-h">Entry mode: {MODE_WORDS[mode]}{v.owner_mode == null && <span className="muted small"> (engine setting)</span>}</h2>
+        <h2 id="mode-h">Entry mode: {MODE_WORDS[mode]}</h2>
         <span className={`state ${v.eligible ? "ok" : "idle"}`}>{v.eligible ? (v.owner_mode === "auto" ? "evidence holds" : "auto mode offered") : "auto mode not offered"}</span>
       </div>
       <p className="muted small">

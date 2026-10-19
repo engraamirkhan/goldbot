@@ -243,3 +243,58 @@ def test_cusum_h_matches_the_real_calibration_when_installed(tmp_path):
         assert src == "fixed"
         return
     assert src == "calibrated" and h == pytest.approx(round(want, 3))
+
+
+# ------------------------------------------------------------------------------- /mode account (ADR 0041)
+def test_owner_clears_the_mode_to_each_accounts_setting_without_a_code_and_it_is_audited(app_client):
+    app, c, state, _ = app_client
+    owner, _ = _owner_secret(c, app)
+    ApprovalBus(state).set_mode("propose", by="telegram:1")
+    r = c.post("/api/automode", json={"mode": "account"}, headers=owner)
+    assert r.status_code == 200 and r.json()["message"].startswith("Mode: each account's own setting")
+    ctl = ApprovalBus(state).control()
+    assert ctl.approval_mode is None and ctl.mode_by == "dashboard"
+    assert r.json()["view"]["owner_mode"] is None
+    (e,) = _audit(app)
+    assert e["event"] == "mode" and e["to"] == "account" and e["previous"] == "propose" and e["by"] == "dashboard:o@x.io"
+
+
+def test_only_the_owner_can_clear_the_mode(app_client, tmp_path):
+    app, c, state, _ = app_client
+    h = _login(c, app)
+    ApprovalBus(state).set_mode("propose", by="telegram:1")
+    assert c.post("/api/automode", json={"mode": "account"}).status_code == 401
+    assert c.post("/api/automode", json={"mode": "account"}, headers=h["viewer"]).status_code == 403
+    assert ApprovalBus(state).control().approval_mode == "propose"
+    other = tmp_path / "other"
+    other.mkdir()
+    app2 = create_app(other, web_dist=tmp_path / "nodist", data_root=tmp_path / "data", owner_email="o@x.io")
+    c2 = TestClient(app2)
+    owner2, _ = _owner_secret(c2, app2)
+    ApprovalBus(other).set_mode("propose", by="telegram:1")
+    app2.state.st.auth.owner_email = "someone-else@x.io"         # owner role, but not the pinned owner
+    assert c2.post("/api/automode", json={"mode": "account"}, headers=owner2).status_code == 403
+    assert ApprovalBus(other).control().approval_mode == "propose"
+
+
+def test_telegram_and_the_dashboard_clear_the_mode_the_same_way(app_client, tmp_path):
+    from goldbot.telegram.automode import mode_command
+    app, c, state, _ = app_client
+    owner, _ = _owner_secret(c, app)
+    ApprovalBus(state).set_mode("propose", by="telegram:1")
+    api = c.post("/api/automode", json={"mode": "account"}, headers=owner).json()["message"]
+    tg_bus, tg_audit = ApprovalBus(tmp_path / "tg"), list[tuple[str, dict]]()
+    tg_bus.set_mode("propose", by="telegram:1")
+    text = mode_command(tg_bus, "account", "telegram:1", totp_ok=lambda code: False,
+                        eligibility=lambda: pytest.fail("no evidence for account"),
+                        audit=lambda ev, **kw: tg_audit.append((ev, kw)))
+    assert text == api and tg_bus.control().approval_mode is None
+    (e,) = _audit(app)
+    assert tg_audit == [("mode", {"by": "telegram:1", "to": e["to"], "previous": e["previous"]})]
+
+
+def test_mode_request_refuses_an_unknown_mode(app_client):
+    app, c, state, _ = app_client
+    owner, _ = _owner_secret(c, app)
+    assert c.post("/api/automode", json={"mode": "none"}, headers=owner).status_code == 422
+    assert ApprovalBus(state).control().approval_mode is None

@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from goldbot.engine import Engine, EngineConfig
 from goldbot.engine.shadow import ShadowTrade
@@ -15,6 +16,7 @@ from goldbot.execution.broker import OrderIntent, Tick
 from goldbot.execution.paper import PaperBroker
 from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal
 from goldbot.telegram.automode import (
+    MODE_USAGE,
     AutoModeOffer,
     Eligibility,
     auto_mode_eligibility,
@@ -200,6 +202,30 @@ def test_downgrade_to_propose_is_always_allowed_without_totp_or_evidence(tmp_pat
     assert ok.command(OWNER, "/mode", "auto", totp="123456").startswith("auto mode not available") and ok.mode == "paper"
     yes = ApprovalCenter({OWNER}, totp_verify=lambda code: code == "123456", auto_eligible=lambda: True)
     assert yes.command(OWNER, "/mode", "auto", totp="123456") == "mode set to auto"
+
+
+def test_mode_account_clears_the_owner_override_without_totp_or_evidence_and_is_audited(tmp_path):
+    bus, audit = ApprovalBus(tmp_path), list[tuple[str, dict]]()
+    bus.set_mode("propose", by="telegram:111")
+    before = bus.control().mode_ts
+    bus.set_halt(True, by="telegram", reason="lunch")
+    text = _mode(bus, "account", False, audit)                   # no code, and the evidence does not hold
+    assert text.startswith("Mode: each account's own setting")
+    c = bus.control()
+    assert c.approval_mode is None and c.mode_by == "telegram" and c.mode_ts >= before and c.halted   # halt kept
+    assert audit[-1] == ("mode", {"by": "telegram:111", "to": "account", "previous": "propose"})
+    assert "/mode account" in MODE_USAGE
+
+
+def test_mode_account_never_checks_a_code_or_the_evidence_so_a_code_lockout_cannot_block_it(tmp_path):
+    bus, audit = ApprovalBus(tmp_path), list[tuple[str, dict]]()
+    bus.set_mode("propose", by="telegram:111")
+
+    def locked(code: str) -> bool:
+        raise PermissionError("locked")
+    text = mode_command(bus, "account", "telegram:111", totp_ok=locked, eligibility=lambda: pytest.fail("no evidence"),
+                        audit=lambda ev, **kw: audit.append((ev, kw)))
+    assert text.startswith("Mode: each account's own setting") and bus.control().approval_mode is None
 
 
 def test_unreadable_control_reads_as_propose(tmp_path):

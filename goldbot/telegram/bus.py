@@ -12,9 +12,9 @@ the state directory:
 `control.json` carries the owner's halt: no new entries on any engine until an owner re-arms. Exits are never gated.
 An owner re-arm (dashboard, owner role + TOTP) also writes a fresh `rearm_id`; each engine that sees a new id clears
 its own 12% drawdown halt (RiskGate.rearm). Nothing else writes a rearm id, so no halt clears without that action.
-`control.json` also carries the owner's approval mode (`/mode auto|propose`, design: Operating mode, row A10): None
-until the owner first sets it (the engine then uses its configured mode), and only the Telegram service writes `auto`,
-after the evidence check and a TOTP (goldbot/telegram/automode.py). An engine's 12% kill switch writes it back to
+`control.json` also carries the owner's approval mode (`/mode auto|propose|account`, design: Operating mode, row A10):
+None until the owner first sets it, and again after `/mode account` (ADR 0041): each engine then uses its account's own
+mode. `auto` is written only after the evidence check and a TOTP (goldbot/telegram/automode.py). An engine's 12% kill switch writes it back to
 `propose`. The re-arm lock and the kill switch still force propose-and-approve inside the engine whatever it says.
 Writers here are authenticated before they call the bus (API role check, Telegram allow-list); the files are only
 reachable on the VPS. Who decided, halted or re-armed is not kept here (A15, the follow-up to BACKLOG 52): a decision
@@ -73,7 +73,7 @@ class Control(Record):
     rearm_id: str | None = None     # new on every owner re-arm; engines clear a drawdown halt once per id
     rearm_by: str | None = None
     rearm_ts: float = 0.0
-    approval_mode: Literal["propose", "auto"] | None = None    # the owner's /mode; None: never set (engine config)
+    approval_mode: Literal["propose", "auto"] | None = None    # the owner's /mode; None: each account's own setting
     mode_by: str | None = None
     mode_ts: float = 0.0            # last mode change: the auto-mode evidence counts from here
     mode_reason: str | None = None
@@ -315,9 +315,11 @@ class ApprovalBus:
         _write_atomic(self.control_path, c.model_dump_json())
         return c
 
-    def set_mode(self, mode: ApprovalMode, by: str, reason: str | None = None) -> Control:
+    def set_mode(self, mode: ApprovalMode | None, by: str, reason: str | None = None) -> Control:
         """The owner's approval mode. Callers check authority first: `auto` only after the evidence check and a TOTP
-        (goldbot/telegram/automode.py); `propose` lowers authority and needs neither. The halt and re-arm are kept.
+        (goldbot/telegram/automode.py); `propose` lowers authority and needs neither; None (`/mode account`, ADR 0041)
+        hands each engine back its account's own mode, which the engine's lock keeps demo-only for auto. The halt and
+        re-arm are kept; the mode epoch (`mode_ts`, the auto-mode evidence) restarts on every change.
         `by` is kept as its channel (A15), except an engine's kill switch, which keeps "engine:<account>"."""
         c = _without_identity(self.control().model_copy(update={"approval_mode": mode, "mode_by": by,
                                                                 "mode_ts": time.time(), "mode_reason": reason}))

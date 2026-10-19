@@ -869,7 +869,7 @@ class ForcedPropose(BaseModel):
 
 
 class AutoModeView(BaseModel):
-    owner_mode: Literal["propose", "auto"] | None    # control.json; None: never set (engines use their configured mode)
+    owner_mode: Literal["propose", "auto"] | None    # control.json; None: each account's own setting (ADR 0041)
     mode_by: str | None
     mode_since: datetime | None             # last mode change: the evidence counts from here
     mode_reason: str | None
@@ -889,7 +889,8 @@ class AutoModeView(BaseModel):
 
 
 class ModeChangeRequest(ApiRequest):
-    mode: Literal["auto", "propose"]
+    # account: clear the owner's override, each engine uses its account's own mode (ADR 0041; owner role, no code)
+    mode: Literal["auto", "propose", "account"]
     totp: str = Field("", max_length=16)    # auto only: the owner's one-time authenticator code
 
 
