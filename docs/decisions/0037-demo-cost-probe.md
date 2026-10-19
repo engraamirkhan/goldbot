@@ -75,3 +75,18 @@ lock, own magic, RiskGate, live trades first, 0.01 lot, round-robin never by P&L
   whose risk is unknown refuses (`open_risk_unknown`). `max_loss` must fit inside that budget (checked at load).
 - The bound is at the stop: a gap through the stop, commission and swap are outside it; they reach the realised P&L
   the budget reads. Revisit 3 probes after 4 weeks of clean data.
+
+## Amendment 2026-10-19 (owner: "the demo account is for learning and testing strategies"; research and program directors' ruling)
+- The clamped stop aims at 99% of `max_loss` (the terminal rounds `loss_per_lot` to the cent; aimed at exactly £4,
+  every box_break_close probe measured a fraction of a penny above and was refused).
+- Below-threshold (untaken) shadow entries are mirrored too, a taken one first for the same agent. They are capped:
+  at most 6 a risk day (`UNTAKEN_PER_DAY`), at most half of `max_open` open, and only while more than half the probe
+  budget is left (`cost_probe_untaken:daily_cap | slots_reserved | budget_reserved`); taken entries keep the rest.
+  The ledger records `taken` per probe.
+- Every probe goes to the RiskGate as a learning probe (`Intent.learning_probe`): the gate skips only the edge after
+  costs (`negative_ev`, `target_below_cost_floor`, `standard_account_edge`, `standard_account_15m`). It checks the demo
+  lock itself (registry mode demo and no live gate in the phase file, F1's rule: `learning_probe_not_demo`), the
+  minimum lot (`learning_probe_not_min_lot`) and a positive edge before costs (`negative_gross_edge`);
+  `time_exit_ev_unsupported`, every loss limit, heat, margin, exposure and throttle still apply.
+- Evidence: probes stay out of closed_trades, the phase gate and shadow scoring (unchanged); no hypothesis is chosen
+  or tuned from probe P&L.

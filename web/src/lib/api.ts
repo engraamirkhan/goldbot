@@ -40,6 +40,9 @@ export type ResultCell = Schemas["ResultCell"];
 export type TradesSummary = Schemas["TradesSummary"];
 export type ActivityView = Schemas["ActivityView"];
 export type ActivityEvent = Schemas["ActivityEvent"];
+export type TradesOverview = Schemas["TradesOverview"];
+export type TradeStats = Schemas["TradeStats"];
+export type TradeTypeSummary = Schemas["TradeTypeSummary"];
 export type LimitsView = Schemas["LimitsView"];
 export type LimitChange = Schemas["LimitChange"];
 export type TvStatusView = Schemas["TvStatusView"];
@@ -195,6 +198,8 @@ export const api = {
   tradesSummary: () => req<TradesSummary[]>("/api/trades/summary"),
   // Home live feed: shadow trades, positions, cost probes and refusals, newest first (read-only, viewer and above)
   activity: (limit = 50) => req<ActivityView>(`/api/activity${qs({ limit })}`),
+  // Home trades summary: every trade type for today, 7 days and all time (read-only, viewer and above)
+  tradesOverview: () => req<TradesOverview>("/api/trades/overview"),
   // read-only cards (docs/ux/limits-and-tradingview.md): nothing here changes a limit or the TradingView link
   limits: () => req<LimitsView>("/api/limits"),
   limitChanges: (q: LimitChangesQuery = {}) => req<LimitChange[]>(`/api/limits/changes${qs(q)}`),

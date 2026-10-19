@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api, hasRole } from "../lib/api";
 import { ActivityFeed } from "./Activity";
+import { TradesSummaryCard } from "./TradesOverview";
 import { blockers } from "../lib/approval";
 import { useNow } from "../lib/useNow";
 import { BalanceCard, BalanceCardSkeleton } from "./BalanceCard";
@@ -14,7 +15,7 @@ import "./home.css";
 
 /** Home answers three questions in this order: is anything waiting for me, how am I doing today, is it safe.
  *  A waiting trade is the card itself (same Approve / Reject wording as Trades), not a count. Below, full width, what
- *  the system is doing (the activity feed, owner request 2026-10-19). */
+ *  the system is doing (the activity feed) and a summary of every type of trade (owner requests 2026-10-19). */
 export function Home({ onOpenProgress, onOpenLimits }: { onOpenProgress?: () => void; onOpenLimits?: () => void } = {}) {
   const status = useQuery({ queryKey: ["status"], queryFn: api.status, refetchInterval: 5000 });
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts, refetchInterval: 5000 });
@@ -54,6 +55,7 @@ export function Home({ onOpenProgress, onOpenLimits }: { onOpenProgress?: () => 
         <ResearchLine />
       </div>
       <div className="home-wide"><ActivityFeed /></div>
+      <div className="home-wide"><TradesSummaryCard /></div>
     </section>
   );
 }

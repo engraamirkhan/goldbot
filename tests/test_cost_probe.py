@@ -203,19 +203,68 @@ def test_a_clamped_probe_opens_when_the_terminal_rounds_its_loss_to_the_cent(tmp
     assert rec.stop_loss is not None and 3.9 <= rec.stop_loss <= 4.0
 
 
-def test_a_challenger_entry_below_its_threshold_is_mirrored_too(tmp_path):
-    """Owner 2026-10-19: learning needs trades, so an untaken shadow entry is probed as well (RiskGate still checks)."""
-    eng, pb, tick, close = _engine(tmp_path)
+def _untaken(eng: Engine) -> None:
+    """Every shadow entry from now on is below its threshold (would not have traded)."""
     assert eng.shadow is not None
     opened = eng.shadow.open_trade
 
     def untaken(**kw: Any) -> Any:
         return opened(**{**kw, "taken": False})
     eng.shadow.open_trade = untaken                                      # type: ignore[method-assign]
+
+
+def test_a_challenger_entry_below_its_threshold_is_mirrored_too(tmp_path):
+    """Owner 2026-10-19: learning needs trades, so an untaken shadow entry is probed as well (RiskGate still checks),
+    as a learning probe on the gate, recorded untaken in the ledger."""
+    eng, pb, tick, close = _engine(tmp_path)
+    _untaken(eng)
+    seen: list[Any] = []
+    check = eng.gate.check
+
+    def spy(intent: Any, *a: Any, **kw: Any) -> Any:
+        seen.append(intent)
+        return check(intent, *a, **kw)
+    eng.gate.check = spy                                                 # type: ignore[method-assign]
     eng.on_bar_close(close, tick)
+    assert eng.shadow is not None
     [st] = [t for b in eng.shadow.books.values() for t in b.open]
     assert not st.taken
     assert _probe_orders(eng) and pb.positions()
+    [probe] = [i for i in seen if cost_probe.is_probe(i.agent_id)]
+    assert probe.learning_probe and probe.account_mode == "demo" and probe.volume_max == probe.volume_min
+    [rec] = cost_probe.probes(tmp_path, "icm-demo")
+    assert rec.taken is False
+
+
+def test_untaken_probes_stop_at_the_daily_cap(tmp_path):
+    """Directors' ruling 2026-10-19: at most UNTAKEN_PER_DAY below-threshold probes a risk day."""
+    eng, pb, tick, close = _engine(tmp_path)
+    _untaken(eng)
+    assert eng.probe is not None
+    with eng.probe.db.write() as conn:
+        for i in range(cost_probe.UNTAKEN_PER_DAY):
+            cost_probe.LEDGER.upsert(conn, cost_probe.ProbeRecord(
+                client_order_id=f"cp-old-{i}", account_id="icm-demo", agent_id="a", side=1, lots=0.01,
+                sent_utc=close, exit_utc=close, pnl=0.0,
+                taken=False))
+    eng.on_bar_close(close, tick)
+    assert not pb.positions()
+    assert any(d.get("action") == "cost_probe_untaken:daily_cap" for d in eng.decisions)
+
+
+def test_a_taken_probe_is_not_held_by_the_untaken_cap(tmp_path):
+    eng, pb, tick, close = _engine(tmp_path)
+    assert eng.probe is not None
+    with eng.probe.db.write() as conn:
+        for i in range(cost_probe.UNTAKEN_PER_DAY):
+            cost_probe.LEDGER.upsert(conn, cost_probe.ProbeRecord(
+                client_order_id=f"cp-old-{i}", account_id="icm-demo", agent_id="a", side=1, lots=0.01,
+                sent_utc=close, exit_utc=close, pnl=0.0,
+                taken=False))
+    eng.on_bar_close(close, tick)
+    assert pb.positions()
+    [rec] = [r for r in cost_probe.probes(tmp_path, "icm-demo") if not r.client_order_id.startswith("cp-old")]
+    assert rec.taken is True
 
 
 def test_a_wide_cap_keeps_the_challengers_own_stop(tmp_path):

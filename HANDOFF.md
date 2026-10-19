@@ -16,6 +16,16 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   below the threshold left out), newest first, with agent, timeframe, side, prices, reason, R and P&L. Accounts by
   config name with digits cut; a source that cannot be read is named in `unreadable`. The Home page shows it full width
   (web/src/screens/Activity.tsx), refreshed every 15 s, coloured by kind. Code: goldbot/api/activity.py.
+- Home trades summary (owner request 2026-10-19: "a summary of all types of trades"): `GET /api/trades/overview`
+  (viewer and above, read-only, built at most every 15 s) counts shadow trades (taken, and all signals with the
+  counterfactual candidates), demo and live positions and cost probes for today, the last 7 days and all time
+  (opportunity days, D-1 22:00 UTC): open now, closed, wins, losses, win rate, total and average R, net P&L by currency
+  (net-of-cost rows only, never summed across currencies), best and worst trade, exit reasons (target/stop/time/other),
+  and the same by strategy family and by timeframe. It reuses the activity feed's readers (goldbot/api/activity.py now
+  returns whole `Trade`s, one parse for both); a closed-trade record without `pnl_currency` now shows in its account's
+  currency on both. An open position whose engine state is missing counts as demo. The Home page shows it under the
+  activity feed (web/src/screens/TradesOverview.tsx): a tile per type, Today / 7 days / All, and a table by strategy or
+  timeframe, refreshed every 30 s. Code: goldbot/api/trades_overview.py.
 - Research director ruling 2026-10-19 parts B and C ("the system needs to learn, so more trades need to be opened and
   closed"). B: the shadow book records every signal as its own trade, up to `shadow.max_open_per_agent: 3` open per
   agent and version (beyond it: counted in `VersionBook.skipped_cap`, logged "skipped: cap"); `PerfStats` gains
