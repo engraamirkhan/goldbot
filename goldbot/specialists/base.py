@@ -92,6 +92,9 @@ class Specialist(ABC):
     # "entries/exits on 1m barriers"): research labels enter at the signal close as every family, then search the
     # barriers minute by minute (`triple_barrier_1m`, needs the 1m bars), so the stop counts first only inside a minute
     barriers_on_1m: bool = False
+    # the candidate carries its own R (a structural stop, `barrier_atr` per candidate): the live path sizes with
+    # label_spec x ATR(14) and cannot reproduce it, so such an agent is shadow only (shadow roster amendment 2026-10-19)
+    candidate_r: bool = False
     # columns the candidates frame carries that are inputs too (a value fixed at the signal, e.g. H-40's flags of the
     # candidate's own box and side): `pipeline.prepare` adds them to the candidate features, and a discovery with
     # DiscoveryConfig pool "candidate" screens exactly them, grouped by `candidate_feature_groups` (column -> group)
@@ -151,8 +154,13 @@ class Specialist(ABC):
     @property
     def shadow_only(self) -> bool:
         """True for an agent the engine never sends to the broker (share 0; the shadow book trades it): one that needs
-        TradingView values (`requires_tv`) or a carried replica state (`replica_params`, engine/replica_context.py)."""
-        return self.requires_tv or getattr(self, "replica_params", None) is not None
+        TradingView values (`requires_tv`) or a carried replica state (`replica_params`, engine/replica_context.py), or
+        whose labels the live path cannot reproduce: a candidate-borne R (`candidate_r`) or barriers read on 1m bars
+        (`barriers_on_1m`). The shadow book trades those on their own barriers (engine/shadow.py `candidate_barriers`,
+        shadow roster amendment 2026-10-19). An overridden `barrier_atr` alone does not make an agent shadow only: the
+        live founder tsmom overrides it (CI 2026-10-19: tsmom 4h went silent when it did)."""
+        return (self.requires_tv or getattr(self, "replica_params", None) is not None or self.barriers_on_1m
+                or self.candidate_r)
 
     @abstractmethod
     def candidates(self, mid_bars: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:

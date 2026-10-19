@@ -168,10 +168,11 @@ def test_at_most_max_open_probe_positions_are_open_at_a_time(tmp_path, max_open)
     assert len(set(open_probes)) == len(open_probes)                           # never two on one agent
 
 
-def test_the_probe_count_is_configured_per_account_and_never_above_two():
+def test_the_probe_count_is_configured_per_account_and_never_above_four():
     assert _account(cost_probe={"enabled": True}).cost_probe.max_open == 2
+    assert _account(cost_probe={"enabled": True, "max_open": 4}).cost_probe.max_open == 4     # amendment 3
     with pytest.raises(ValidationError):
-        _account(cost_probe={"enabled": True, "max_open": 3})
+        _account(cost_probe={"enabled": True, "max_open": 5})
 
 
 # ------------------------------------------------------------------------------------------------ the loss bound
@@ -392,10 +393,10 @@ def test_an_open_probe_whose_risk_is_unknown_refuses_new_probes(tmp_path):
     assert cost_probe.budget_refusal(eng, eng.probe, close)[0] == "open_risk_unknown"
 
 
-def test_the_shipped_icm_demo_probe_terms_are_two_probes_four_pounds_and_a_ten_pound_day(monkeypatch):
+def test_the_shipped_icm_demo_probe_terms_are_four_probes_four_pounds_and_a_twenty_pound_day(monkeypatch):
     monkeypatch.setattr(acc_mod, "get_secret", lambda k: None)
     cp = acc_mod.load_accounts()["icm-demo"].cost_probe
-    assert (cp.max_open, cp.max_loss, cp.budget_share) == (2, 4.0, 0.2)
+    assert (cp.max_open, cp.max_loss, cp.budget_share) == (4, 4.0, 0.4)                     # amendment 3
     with pytest.raises(ValidationError, match="max_loss"):
         _account(daily_loss_limit_abs=50.0, cost_probe={"enabled": True, "max_loss": 11.0})
 
@@ -418,10 +419,49 @@ def test_the_rotation_resumes_after_a_restart_from_the_last_probe_in_the_ledger(
     shadow = {"va": a.agent_id, "vb": b.agent_id}
     eng, pb, tick, close = _engine(tmp_path, agents=[a, b], shadow=shadow, champions={})
     eng.on_bar_close(close, tick)
-    [first] = cost_probe.probes(tmp_path, "icm-demo")
-    assert first.agent_id == min(a.agent_id, b.agent_id)
+    sent = sorted(cost_probe.probes(tmp_path, "icm-demo"), key=lambda r: r.sent_utc)
+    assert sent[0].agent_id == min(a.agent_id, b.agent_id)                # the rotation starts at the first agent
     eng2, _, _, _ = _engine(tmp_path, agents=[a, b], shadow=shadow, champions={})
-    assert eng2.probe is not None and eng2.probe.last_agent == first.agent_id
+    assert eng2.probe is not None and eng2.probe.last_agent == sent[-1].agent_id
+
+
+# ------------------------------------------------------------------------------------------------ amendment 3
+def _two_agents(tmp_path: Path, **kw: Any) -> tuple[Engine, _Terminal, Tick, pd.Timestamp]:
+    a, b = _Long(), _Long(min_body_pct=0.31)
+    return _engine(tmp_path, agents=[a, b], shadow={"va": a.agent_id, "vb": b.agent_id}, champions={},
+                   max_open=4, budget=0.4, **kw)
+
+
+def test_two_agents_signalling_at_one_close_open_two_probes(tmp_path):
+    """Amendment 3 (2026-10-19): up to PER_CLOSE new probes per bar close, from different agents."""
+    eng, pb, tick, close = _two_agents(tmp_path)
+    eng.on_bar_close(close, tick)
+    assert len(pb.positions()) == 2
+    assert len({r.agent_id for r in cost_probe.probes(tmp_path, "icm-demo")}) == 2
+
+
+def test_no_more_than_per_close_probes_open_at_one_close(tmp_path, monkeypatch):
+    monkeypatch.setattr(cost_probe, "PER_CLOSE", 1)
+    eng, pb, tick, close = _two_agents(tmp_path)
+    eng.on_bar_close(close, tick)
+    assert len(pb.positions()) == 1
+
+
+def test_the_same_side_cap_holds_back_a_probe_on_a_crowded_side(tmp_path, monkeypatch):
+    """Amendment 3: at most MAX_SAME_SIDE open probes on one side (both agents here go long)."""
+    monkeypatch.setattr(cost_probe, "MAX_SAME_SIDE", 1)
+    eng, pb, tick, close = _two_agents(tmp_path)
+    eng.on_bar_close(close, tick)
+    assert len(pb.positions()) == 1
+
+
+def test_real_trades_keep_their_reserve_of_the_days_allowance(tmp_path, monkeypatch):
+    """Amendment 3: no new probe once the allowance left after it would fall below REAL_TRADE_RESERVE x the limit."""
+    monkeypatch.setattr(cost_probe, "REAL_TRADE_RESERVE", 0.999)
+    eng, pb, tick, close = _two_agents(tmp_path)
+    eng.on_bar_close(close, tick)
+    assert not pb.positions()
+    assert any(d.get("action") == "cost_probe_budget:real_trade_reserve" for d in eng.decisions)
 
 
 # ------------------------------------------------------------------------------------------------ priority

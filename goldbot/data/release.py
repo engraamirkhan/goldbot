@@ -22,7 +22,7 @@ from goldbot.data.store import Store
 log = logging.getLogger(__name__)
 
 REPO = "engraamirkhan/goldbot"
-HIGHER_TFS = ("15m", "1h", "4h", "1d", "1w")
+HIGHER_TFS = ("15m", "30m", "1h", "4h", "1d", "1w")
 
 
 def _headers(token: str | None) -> dict[str, str]:
