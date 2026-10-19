@@ -20,6 +20,7 @@ import math
 from collections.abc import Hashable, Sequence
 
 import numpy as np
+import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord
@@ -31,6 +32,21 @@ MIN_SHADOW_SHARPE = 0.8
 MAX_SHARPE_SHORTFALL = 0.5
 MAX_DD_RATIO = 1.5
 MAX_TURNOVER_CHANGE = 0.30
+
+# H-52 (docs/research/prereg-2026-10-19-live-review.md 1.1, rollout-plan-2026-10-19.md action 5a): until the engine's
+# history-gap fix was deployed on the brain (2026-10-19 13:49 UTC) the live decision frames had a two-week hole after
+# every restart, so a shadow trade OPENED (entry_ts) before this instant is quarantined as `history_gap`: it stays in
+# the book (no survivorship) but is never clustered, scored or counted as promotion evidence. Dated, never moved
+# forward to admit trades; a later fault gets its own dated marker.
+EVIDENCE_START_UTC = pd.Timestamp("2026-10-19 13:49", tz="UTC")
+QUARANTINE_HISTORY_GAP = "history_gap"
+
+
+def quarantine_reason(entry_ts: pd.Timestamp, evidence_start: pd.Timestamp | None = EVIDENCE_START_UTC) -> str | None:
+    """`history_gap` for a trade opened before `evidence_start`, else None (None evidence_start: nothing quarantined)."""
+    if evidence_start is None:
+        return None
+    return QUARANTINE_HISTORY_GAP if pd.Timestamp(entry_ts) < evidence_start else None
 
 
 class PerfStats(FrozenRecord):
