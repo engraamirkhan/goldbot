@@ -52,3 +52,23 @@ def test_stale_capture_is_404(ctx):
     _put(state, 301)
     r = c.get("/api/chart/mt5", headers=h["owner"])
     assert r.status_code == 404 and "stale" in r.json()["detail"]
+
+
+def test_full_capture_is_cropped_and_headers_say_what_was_detected(ctx, monkeypatch):
+    from goldbot.api import mt5_crop
+    from tests.test_mt5_crop import screen
+    monkeypatch.setattr(mt5_crop, "tesseract_reader", lambda strip: "")   # no OCR: same result with or without tesseract
+    state, c, h = ctx
+    _put(state, 30)
+    (state / "chart" / "mt5.png").write_bytes(screen("b"))
+    r = c.get("/api/chart/mt5", headers=h["viewer"])
+    assert r.status_code == 200 and r.headers["x-chart-cropped"] == "true"
+    assert r.headers["x-chart-symbol"] == "unknown" and r.headers["x-chart-gold"] == "unknown"
+    assert len(r.content) < len(screen("b"))
+
+
+def test_unrecognised_image_is_served_whole_with_cropped_false(ctx):
+    state, c, h = ctx
+    _put(state, 30)
+    r = c.get("/api/chart/mt5", headers=h["viewer"])
+    assert r.content == PNG and r.headers["x-chart-cropped"] == "false"

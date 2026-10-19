@@ -106,6 +106,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   "Attended MT5 box upgrade" has the single-line commands and the rollback if the test fails. Tests:
   tests/test_mt5_box_upgrade_sh.py (29, fake systemctl/sudo/install, local git remote); shellcheck clean. Reviews due:
   security (root-run, hash-checked download), SRE. Not run on a server.
+- MT5 chart panel shows only the chart: the brain crops the full-screen capture (`goldbot/api/mt5_crop.py`, Pillow/numpy; largest dark plot pane + price scale + time axis, XAUUSD pane preferred) to `state/chart/mt5_chart.png` and `GET /api/chart/mt5` serves it with `X-Chart-Cropped/Symbol/Timeframe/Gold` headers; no pane = full image, `cropped=false`. The dashboard notes "MT5 is showing <SYM> — gold chart not open" when the symbol is known and not gold. Not done: symbol/timeframe need the optional `tesseract` binary on the brain (otherwise "unknown", largest pane); MT5-box untouched.
 - Parallel research trials, serialized registry record (`research.yml`, `goldbot/research/cells.py`). The workflow is now
   `plan` -> `trials` (matrix, `max-parallel: 10`, `contents: read` only) -> `record` (`concurrency: research-registry`,
   the only job that writes the registry or an issue). Inputs: the existing single-trial ones (one cell per variant, so
