@@ -668,6 +668,14 @@ class TvSettings(_Section):
     min_bar_match: float = Field(default=0.95, gt=0, le=1)
 
 
+class ShadowSettings(_Section):
+    """Shadow book (goldbot/engine/shadow.py; research director ruling 2026-10-19, "the system needs to learn, so more
+    trades need to be opened and closed"): every signal is its own shadow trade, up to `max_open_per_agent` open at once
+    per agent and version; a signal beyond the cap is counted as "skipped: cap", never traded. Promotion counts
+    independent clusters (one per agent per session day), not raw trades (research/promotion.py)."""
+    max_open_per_agent: int = Field(default=3, ge=1, le=10)
+
+
 class Settings(_Section):
     symbol: str
     data_root: str
@@ -696,6 +704,7 @@ class Settings(_Section):
     webhook: WebhookSettings = Field(default_factory=WebhookSettings)
     tv_pull: TvPullSettings = Field(default_factory=TvPullSettings)
     tv: TvSettings = Field(default_factory=TvSettings)
+    shadow: ShadowSettings = Field(default_factory=ShadowSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")
     @classmethod

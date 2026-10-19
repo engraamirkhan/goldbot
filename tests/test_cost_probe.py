@@ -53,7 +53,8 @@ def _engine(tmp_path: Path, *, agents: list[Any] | None = None, probe: bool = Tr
             approval: str = "auto", trade_mode: str | None = "demo", live_shares: dict[str, float] | None = None,
             shadow: dict[str, str] | None = None, champions: dict[str, str] | None = None,
             data_root: str | None = None, pb: _Terminal | None = None,
-            budget: float = 0.2) -> tuple[Engine, _Terminal, Tick, pd.Timestamp]:
+            budget: float = 0.2, max_open: int = 2,
+            max_loss: float = 4.0) -> tuple[Engine, _Terminal, Tick, pd.Timestamp]:
     """An engine one bar close away from deciding: the 1m bars before CUT, the last tick, the 15m close CUT.
     `shadow`: version -> agent id (the shadow set); `champions`: agent id -> its champion version."""
     agents = agents if agents is not None else [_Long()]
@@ -61,7 +62,8 @@ def _engine(tmp_path: Path, *, agents: list[Any] | None = None, probe: bool = Tr
     shadow = shadow if shadow is not None else {f"{agents[0].agent_id}-v2": agents[0].agent_id}
     eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", mode=mode, approval_mode=approval,
                               declared_class="raw", state_dir=str(tmp_path), owner_user_id=111, shadow_host=True,
-                              cost_probe=probe, cost_probe_budget=budget, data_root=data_root),
+                              cost_probe=probe, cost_probe_budget=budget, cost_probe_max_open=max_open,
+                              cost_probe_max_loss=max_loss, data_root=data_root),
                  pb, agents, {a.family: ConstantModel(p=0.9) for a in agents}, ApprovalCenter({111}),
                  limits=RiskLimits(**BASE), live_shares=live_shares if live_shares is not None else {},
                  shadow_models={v: (aid, ConstantModel(p=0.9)) for v, aid in shadow.items()},
@@ -146,15 +148,149 @@ def test_no_probe_while_any_position_is_open_on_the_account(tmp_path):
     assert not _probe_orders(eng) and len(pb.positions()) == 1
 
 
-def test_at_most_one_probe_position_is_open_at_a_time(tmp_path):
-    a, b = _Long(), _Long(min_body_pct=0.31)
-    eng, pb, tick, close = _engine(tmp_path, agents=[a, b], shadow={"va": a.agent_id}, champions={})
+@pytest.mark.parametrize("max_open", [1, 2])
+def test_at_most_max_open_probe_positions_are_open_at_a_time(tmp_path, max_open):
+    """Amendment 2026-10-19: up to cost_probe.max_open (2) probes at once, one new probe per bar close, never two on
+    one agent."""
+    a, b, c = _Long(), _Long(min_body_pct=0.31), _Long(min_body_pct=0.32)
+    eng, pb, tick, close = _engine(tmp_path, agents=[a, b, c], shadow={"va": a.agent_id}, champions={},
+                                   max_open=max_open)
     eng.on_bar_close(close, tick)
     assert len(_probe_orders(eng)) == 1
+    models: dict[str, Any] = {v: (aid, ConstantModel(p=0.9)) for v, aid in (("va", a.agent_id), ("vb", b.agent_id),
+                                                            ("vc", c.agent_id))}
+    eng.set_shadow_models(models)
+    _next_close(eng, pb, close)
+    assert eng.shadow is not None and [t.agent_id for t in eng.shadow.books["vb"].open] == [b.agent_id]   # signals
+    _next_close(eng, pb, close + pd.Timedelta(minutes=15))
+    open_probes = [t.agent_id for t in eng.open.values() if cost_probe.is_probe(t.agent_id)]
+    assert len(open_probes) == len(pb.positions()) == max_open                 # never more than max_open
+    assert len(set(open_probes)) == len(open_probes)                           # never two on one agent
+
+
+def test_the_probe_count_is_configured_per_account_and_never_above_two():
+    assert _account(cost_probe={"enabled": True}).cost_probe.max_open == 2
+    with pytest.raises(ValidationError):
+        _account(cost_probe={"enabled": True, "max_open": 3})
+
+
+# ------------------------------------------------------------------------------------------------ the loss bound
+def test_a_probe_stop_is_clamped_so_its_loss_at_the_stop_is_at_most_max_loss(tmp_path):
+    """The paper account loses distance x 100 oz x 0.01 lot = $1 per $1: a $0.5 cap puts the stop $0.5 away."""
+    eng, pb, tick, close = _engine(tmp_path, max_loss=0.5)
+    eng.on_bar_close(close, tick)
+    [tr] = eng.open.values()
+    [pos] = pb.positions()
+    assert tr.sl is not None and tr.open_price is not None
+    loss = float(pb.loss_per_lot("XAUUSD", tr.side, tr.open_price, abs(tr.open_price - tr.sl)) or 0) * pos.lots
+    assert loss <= 0.5 + 1e-6
+    [rec] = cost_probe.probes(tmp_path, "icm-demo")
+    assert rec.stop_loss is not None and rec.stop_loss <= 0.5
+
+
+def test_a_wide_cap_keeps_the_challengers_own_stop(tmp_path):
+    eng, pb, tick, close = _engine(tmp_path, max_loss=1_000.0)
+    eng.on_bar_close(close, tick)
+    [tr] = eng.open.values()
+    assert eng.shadow is not None
+    [st] = [t for b in eng.shadow.books.values() for t in b.open]
+    [rec] = cost_probe.probes(tmp_path, "icm-demo")
+    assert tr.sl is not None and rec.requested_price is not None
+    assert abs(rec.requested_price - tr.sl) == pytest.approx(abs(st.entry - st.stop), abs=0.01)   # the shadow stop
+
+
+@pytest.mark.parametrize("answer", [None, float("nan"), 0.0, "raise"])
+def test_a_probe_whose_loss_cannot_be_computed_is_refused(tmp_path, answer):
+    eng, pb, tick, close = _engine(tmp_path)
+
+    def lpl(*a: Any) -> float | None:
+        if answer == "raise":
+            raise RuntimeError("terminal gone")
+        return answer
+
+    pb.loss_per_lot = lpl                                                # type: ignore[method-assign,assignment]
+    eng.on_bar_close(close, tick)
+    assert not pb.positions()
+    assert any(d.get("action") == "cost_probe_refused:probe_loss_unknown" for d in eng.decisions)
+
+
+def test_a_stop_the_gate_floors_wider_than_the_cap_is_refused(tmp_path):
+    from goldbot.risk.gate import GateDecision
+    eng, pb, tick, close = _engine(tmp_path, max_loss=0.5)
+    check = eng.gate.check
+
+    def wide(intent: Any, *a: Any, **kw: Any) -> GateDecision:
+        gd = check(intent, *a, **kw)
+        return gd.model_copy(update={"stop_distance": 5.0})              # e.g. a stops level above the clamp
+    eng.gate.check = wide                                                # type: ignore[method-assign]
+    eng.on_bar_close(close, tick)
+    assert not pb.positions()
+    assert any(d.get("action") == "cost_probe_refused:probe_loss_above_cap" for d in eng.decisions)
+
+
+def _ledger_loss(eng: Engine, ts: pd.Timestamp, pnl: float) -> None:
+    assert eng.probe is not None
+    with eng.probe.db.write() as conn:
+        cost_probe.LEDGER.upsert(conn, cost_probe.ProbeRecord(
+            client_order_id=f"cp-0-{pnl}", account_id="icm-demo", agent_id="x", side=1, lots=0.01, sent_utc=ts,
+            exit_utc=ts, pnl=pnl))
+
+
+def test_no_new_probe_when_realised_loss_plus_open_risk_plus_its_own_would_exceed_the_budget(tmp_path):
+    """Worst case bound: today's realised probe loss + the open probes' loss at their stops + the new probe's never
+    exceeds budget_share x the day's loss limit."""
+    from goldbot.engine.limits_apply import daily_allowance
+    a, b = _Long(), _Long(min_body_pct=0.31)
+    eng, pb, tick, close = _engine(tmp_path, agents=[a, b], shadow={"va": a.agent_id}, champions={}, max_loss=4.0)
+    eng._refresh_account(tick)
+    limit = daily_allowance(eng.gate, eng.state)["daily_loss_limit"]
+    assert limit is not None
+    share = 0.2 * limit
+    _ledger_loss(eng, tick.ts_utc, -(share - 6.0))       # 6.0 of the budget left: room for one $4 probe, not two
+    eng.on_bar_close(close, tick)
+    assert len(pb.positions()) == 1
+    risk = cost_probe.open_risk(eng)
+    assert risk is not None and 0 < risk <= 4.0 + 1e-6
     eng.set_shadow_models({"va": (a.agent_id, ConstantModel(p=0.9)), "vb": (b.agent_id, ConstantModel(p=0.9))})
     _next_close(eng, pb, close)
-    assert eng.shadow is not None and [t.agent_id for t in eng.shadow.books["vb"].open] == [b.agent_id]   # a signal
-    assert len(_probe_orders(eng)) == 1 and len(pb.positions()) == 1                               # but no 2nd probe
+    held = cost_probe.open_risk(eng)
+    assert held is not None and (share - 6.0) + held <= share + 1e-6          # the worst case stays inside the budget
+    if len(pb.positions()) == 1:                                             # the 2nd probe did not fit
+        assert any(str(d.get("action", "")).startswith("cost_probe_budget:") for d in eng.decisions)
+
+
+def test_the_budget_headroom_subtracts_open_probe_risk_and_ignores_profits(tmp_path):
+    from goldbot.engine.limits_apply import daily_allowance
+    eng, pb, tick, close = _engine(tmp_path)
+    eng.on_bar_close(close, tick)
+    assert eng.probe is not None and len(pb.positions()) == 1
+    limit = daily_allowance(eng.gate, eng.state)["daily_loss_limit"]
+    assert limit is not None
+    held = cost_probe.open_risk(eng)
+    assert held is not None
+    why, headroom = cost_probe.budget_refusal(eng, eng.probe, close)
+    assert why is None and headroom == pytest.approx(0.2 * limit - held, abs=0.02)
+    _ledger_loss(eng, tick.ts_utc, 1_000.0)                                  # a probe profit adds no headroom
+    assert cost_probe.budget_refusal(eng, eng.probe, close)[1] == pytest.approx(headroom, abs=0.02)
+    _ledger_loss(eng, tick.ts_utc, -1_000_000.0)
+    assert cost_probe.budget_refusal(eng, eng.probe, close)[0] == "probe_loss_reached"
+
+
+def test_an_open_probe_whose_risk_is_unknown_refuses_new_probes(tmp_path):
+    eng, pb, tick, close = _engine(tmp_path)
+    eng.on_bar_close(close, tick)
+    assert eng.probe is not None
+    [tr] = eng.open.values()
+    tr.sl = None
+    assert cost_probe.budget_refusal(eng, eng.probe, close)[0] == "open_risk_unknown"
+
+
+def test_the_shipped_icm_demo_probe_terms_are_two_probes_four_pounds_and_a_ten_pound_day(monkeypatch):
+    monkeypatch.setattr(acc_mod, "get_secret", lambda k: None)
+    cp = acc_mod.load_accounts()["icm-demo"].cost_probe
+    assert (cp.max_open, cp.max_loss, cp.budget_share) == (2, 4.0, 0.2)
+    with pytest.raises(ValidationError, match="max_loss"):
+        _account(daily_loss_limit_abs=50.0, cost_probe={"enabled": True, "max_loss": 11.0})
 
 
 def test_the_rotation_is_round_robin_over_agent_ids_and_never_reads_p_or_pnl():

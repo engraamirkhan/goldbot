@@ -23,14 +23,14 @@ BT = PerfStats(n_trades=400, sharpe_ann=1.4, hit_rate=0.55, max_dd=0.06, trades_
 
 
 def _shadow(**kw) -> PerfStats:
-    base = dict(n_trades=60, sharpe_ann=1.2, hit_rate=0.55, max_dd=0.05, trades_per_week=10.0, weeks=6.0)
+    base = dict(n_trades=60, sharpe_ann=1.2, hit_rate=0.55, max_dd=0.05, trades_per_week=10.0, weeks=6.0, n_clusters=60)
     base.update(kw)
     return PerfStats(**base)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------------------------- promotion
-@pytest.mark.parametrize("kw, ready", [(dict(weeks=3.99), False), (dict(n_trades=39), False),
-                                       (dict(weeks=4.0, n_trades=40), True)])
+@pytest.mark.parametrize("kw, ready", [(dict(weeks=3.99), False), (dict(n_clusters=39), False),
+                                       (dict(weeks=4.0, n_clusters=40), True)])
 def test_shadow_needs_four_weeks_and_forty_trades_whichever_is_later(kw, ready):
     d = evaluate_promotion(BT, _shadow(**kw))
     assert d.ready is ready
