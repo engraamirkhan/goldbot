@@ -200,3 +200,11 @@ def test_the_routes_need_a_sign_in_serve_a_viewer_and_never_show_the_login(tmp_p
         assert r.status_code == 200, path
         assert LOGIN not in r.text
     assert len(c.get("/api/positions/open", headers=h["viewer"]).json()["positions"]) == 2
+
+
+def test_open_risk_is_the_loss_at_the_current_stop_in_account_money_and_zero_once_locked_in(tmp_path):
+    _engine(tmp_path)
+    _orders(tmp_path)
+    v = {p.position_id: p for p in hc.open_positions(tmp_path, NOW).positions}
+    assert v[12].open_risk == 16.0                          # long 2400, stop 2396: 4 USD x 0.05 x 100 x 0.8
+    assert v[13].open_risk == 3.2                           # short 2412, stop 2416: 4 USD x 0.01 x 100 x 0.8

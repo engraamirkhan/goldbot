@@ -132,6 +132,10 @@
    },
    "target": "goldbot.ops.perf_report:main"
   },
+  "positions": {
+   "exit": 0,
+   "printed_usage": false
+  },
   "preflight": {
    "args": {
     "argv": [
@@ -374,6 +378,10 @@
   "perf-report": {
    "rc": 0,
    "stdout": "usage: goldbot.ops.run perf-report [-h] [--state STATE] [--data-root DATA_ROOT]\n                                   [--bars-source BARS_SOURCE] [--from START] [--to END]\n                                   [--account ACCOUNT] [--out OUT] [--json]\n\nPerformance report for the performance-analyst and finance-auditor agents (north-star: ADR 0004\nsection 6;\n\noptions:\n  -h, --help            show this help message and exit\n  --state STATE         state folder (read only; a copy works)\n  --data-root DATA_ROOT\n                        Parquet store for bars, fills and the journal (read only; optional)\n  --bars-source BARS_SOURCE\n                        bars_1m source for the day types (default dukascopy)\n  --from START          first opportunity day YYYY-MM-DD (default: the month's first)\n  --to END              last opportunity day YYYY-MM-DD (default: today)\n  --account ACCOUNT     one account only\n  --out OUT             folder for the markdown and JSON (not inside the state folder)\n  --json                print the JSON instead of the markdown\n"
+  },
+  "positions": {
+   "rc": 0,
+   "stdout": "usage: goldbot run positions [-h] [--account ACCOUNT] [--json] [--state-dir STATE_DIR]\n\nOpen trades, read-only (state files).\n\noptions:\n  -h, --help            show this help message and exit\n  --account ACCOUNT     one enabled account id (default: every enabled account)\n  --json                print the report as JSON\n  --state-dir STATE_DIR\n"
   },
   "preflight": {
    "rc": 0,
