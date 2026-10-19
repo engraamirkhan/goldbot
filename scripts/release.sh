@@ -26,7 +26,10 @@ die() { say "STOP: $*"; exit 1; }
 [ "$(git rev-parse --abbrev-ref HEAD)" = "$BRANCH" ] || die "not on $BRANCH"
 [ -z "$(git status --porcelain --untracked-files=no)" ] || die "uncommitted changes"
 git fetch -q origin
-git merge-base --is-ancestor origin/main HEAD || die "origin/main is not merged into $BRANCH (merge it first)"
+if ! git merge-base --is-ancestor origin/main HEAD; then   # main's merge commit from the last release, usually
+  git merge -q --no-edit origin/main || { git merge --abort 2>/dev/null || true; die "merging origin/main conflicts: resolve it first"; }
+  say "merged origin/main into $BRANCH"
+fi
 # seconds-cheap checks before anything is pushed (mypy is incremental): a type error costs a 2-min GitHub round trip
 uv run -q --extra dev ruff check goldbot tests scripts || die "ruff"
 uv run -q --extra dev mypy >/dev/null || { uv run -q --extra dev mypy | tail -5; die "mypy"; }
