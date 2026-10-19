@@ -191,6 +191,16 @@ class Intent(Record):
     timeframe: str = ""       # the agent's decision timeframe and family, for the account-class rules
     family: str = ""
     has_target: bool = True   # False: a time-exit label spec (BarrierSpec.has_target); the barrier EV does not apply
+    # owner 2026-10-19 (the demo account is for learning and testing strategies; ADR 0037 amendment, research and
+    # program directors' ruling): a demo cost probe is not judged on the edge AFTER costs. Set only by
+    # goldbot/engine/cost_probe.py after its demo lock. The gate checks the lock again itself (`account_mode` demo and
+    # no live gate in `phase_file`, as F1 for operational orders, else `learning_probe_not_demo`), requires the minimum
+    # lot (`learning_probe_not_min_lot`) and a positive edge BEFORE costs (`negative_gross_edge`); it skips only
+    # negative_ev, target_below_cost_floor and the standard-account edge rules. time_exit_ev_unsupported, every loss
+    # limit, heat, margin, exposure, throttle and account check still apply
+    learning_probe: bool = False
+    account_mode: str | None = None   # the registry's (accounts.yaml); read only for a learning probe
+    phase_file: Path | None = None    # state/phase_state.json; read only for a learning probe
 
 
 class GateDecision(Record):
@@ -230,6 +240,21 @@ OPERATIONAL_MIN_STOP_USD = 1.0
 # phase file edited by hand cannot reopen it. The roadmap gates from paper_to_tiny_live on (goldbot/ops/accounts.py
 # GATES; tests/test_risk_gate_split.py keeps the two equal)
 LIVE_GATES = frozenset({"paper_to_tiny_live", "tiny_live_to_full_size"})
+
+
+def _learning_probe_reasons(intent: Intent) -> list[str]:
+    """The learning probe's own fence (see `Intent.learning_probe`): demo by the registry and the phase file (F1's
+    rule: an unreadable phase file or a missing one on a non-demo account refuses), the minimum lot only, and a
+    positive gross edge (p x target above (1 - p) x stop, before costs)."""
+    out: list[str] = []
+    gates = phase_gates(intent.phase_file) if intent.account_mode == "demo" and intent.phase_file is not None else None
+    if gates is None or LIVE_GATES & set(gates):
+        out.append("learning_probe_not_demo")
+    if intent.volume_max > intent.volume_min + 1e-9:
+        out.append("learning_probe_not_min_lot")
+    if intent.p * intent.target_atr - (1 - intent.p) * intent.stop_atr <= 0:
+        out.append("negative_gross_edge")
+    return out
 
 
 def phase_gates(path: Path) -> list[str] | None:
@@ -607,15 +632,19 @@ class RiskGate:
             return refused
         # a time-exit rule has no reachable target: p x target would be fiction (quant review H1). Fail closed until the
         # EV uses the time-exit outcome (HANDOFF: what must change before live)
+        edge_checked = True
+        if intent.learning_probe:            # a demo learning probe: no edge judgement after costs (see Intent)
+            reasons += _learning_probe_reasons(intent)
+            edge_checked = False
         if not intent.has_target or not _family_has_target(intent):
             reasons.append("time_exit_ev_unsupported")
         # expected value and minimum target over cost
         ev = intent.p * intent.target_atr - (1 - intent.p) * intent.stop_atr - intent.cost_atr
-        if ev <= 0:
+        if edge_checked and ev <= 0:
             reasons.append("negative_ev")
-        if intent.target_atr < L.min_target_over_cost * intent.cost_atr:
+        if edge_checked and intent.target_atr < L.min_target_over_cost * intent.cost_atr:
             reasons.append("target_below_cost_floor")
-        if st.account_class == "standard":
+        if edge_checked and st.account_class == "standard":
             if intent.timeframe == "15m" and intent.family != "session_open":
                 reasons.append("standard_account_15m")
             edge = intent.p * intent.target_atr - (1 - intent.p) * intent.stop_atr      # gross, before costs

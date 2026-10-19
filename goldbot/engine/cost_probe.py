@@ -71,6 +71,9 @@ YIELD = "cost_probe_yield"          # the exit of a probe that makes way for a r
 PROBE_MAGIC_OFFSET = 97             # magic_base + 97: no family's crc32 % 100 (tests guard it), not the smoke's 99
 COMMENT = "cp-"                     # a probe's client order id, and so its MT5 comment, starts with this
 CLAMP_MARGIN = 0.99                 # a clamped probe stop aims at 99% of max_loss (the terminal rounds to the cent)
+# directors' ruling 2026-10-19 (ADR 0037 amendment): below-threshold (untaken) probes at most this many a risk day, at
+# most half the open slots, and only while more than half the probe budget is left: taken entries keep the rest
+UNTAKEN_PER_DAY = 6
 
 
 def probe_id(agent_id: str) -> str:
@@ -157,6 +160,9 @@ class ProbeRecord(FrozenRecord):
     commission: float | None = None         # paid, positive (None: not reported)
     pnl: float | None = None                # net, from the broker's deals (None: the deals were not readable)
     stop_loss: float | None = None          # the loss at the (clamped) stop when sent, account currency
+    # the mirrored shadow entry cleared its threshold; False = a below-threshold learning probe (owner 2026-10-19),
+    # capped by UNTAKEN_PER_DAY and half the slots and budget. Rows written before carry True (they were all taken)
+    taken: bool = True
 
     @property
     def slippage_usd(self) -> float | None:
@@ -339,7 +345,15 @@ def _step(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick: Tick) -> 
     if why is not None:
         eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": f"cost_probe_budget:{why}"})
         return
+    untaken_why = untaken_refusal(eng, probe, close_ts, headroom)
+    if untaken_why is not None and not any(sig[1].taken for sig in signals.values()):
+        eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": f"cost_probe_untaken:{untaken_why}"})
+        return
+    if untaken_why is not None:
+        signals = {a: sig for a, sig in signals.items() if sig[1].taken}
     version, t, agent = signals[rotate(list(signals), probe.last_agent)]
+    if not t.taken:
+        headroom -= eng.cfg.cost_probe_budget * _limit(eng) / 2      # the taken entries' half stays untouched
     probe.last_agent = agent.agent_id
     _send(eng, probe, version, t, agent, close_ts, tick, headroom)
 
@@ -406,6 +420,41 @@ def budget_refusal(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp) -> tup
     return None, headroom
 
 
+def _phase_file(eng: Engine) -> Path:
+    """The roadmap phase file the gate reads for a learning probe (F1): the repo's absolute state/phase_state.json
+    (accounts.PHASE_FILE, as the bridge smoke) when the engine runs on the repo's state dir; else the engine's own
+    state dir resolved (tests, a second state dir). Never relative to the working directory (safety review LOW-1)."""
+    from goldbot.ops import accounts
+    own = Path(eng.cfg.state_dir).resolve()
+    return accounts.PHASE_FILE if own == accounts.PHASE_FILE.parent.resolve() else own / "phase_state.json"
+
+
+def _limit(eng: Engine) -> float:
+    from goldbot.engine.limits_apply import daily_allowance
+    return float(daily_allowance(eng.gate, eng.state)["daily_loss_limit"] or 0.0)
+
+
+def untaken_refusal(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, headroom: float) -> str | None:
+    """Why a below-threshold (untaken) probe may not be sent now, or None (directors' ruling 2026-10-19): at most
+    UNTAKEN_PER_DAY sent this risk day, at most half of `cost_probe_max_open` open, and only while more than half the
+    probe budget is left. An unreadable ledger refuses (fail closed)."""
+    since = eng._last_reset if eng._last_reset is not None else close_ts.floor("D")
+    try:
+        with probe.db.connection() as conn:
+            rows = [r for r in LEDGER.select(conn, "account_id = ?", (eng.cfg.account_id,)) if not r.taken]
+    except Exception as exc:
+        log.warning("cost probe ledger unreadable (%s): no untaken probe", type(exc).__name__)
+        return "ledger_unreadable"
+    if sum(1 for r in rows if r.sent_utc >= since) >= UNTAKEN_PER_DAY:
+        return "daily_cap"
+    open_ids = set(_probes_open(eng))
+    if sum(1 for r in rows if r.exit_utc is None and r.position_id in open_ids) >= eng.cfg.cost_probe_max_open // 2:
+        return "slots_reserved"
+    if headroom <= eng.cfg.cost_probe_budget * _limit(eng) / 2:
+        return "budget_reserved"
+    return None
+
+
 def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Specialist, close_ts: pd.Timestamp,
           tick: Tick, headroom: float) -> None:
     from goldbot.risk import Intent
@@ -434,7 +483,9 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
     terms["volume_max"] = lot                                    # the minimum lot only
     intent = Intent(agent_id=tag, side=side, p=t.p, target_atr=ls.target_atr, stop_atr=stop_atr, atr_usd=atr_usd,
                     cost_atr=eng._cost_atr(atr_usd, close_ts), multiplier=1.0, price=price, timeframe=t.timeframe,
-                    family=agent.family, swap_usd_per_oz=eng._swap_usd_per_oz(side, close_ts), **terms)
+                    family=agent.family, swap_usd_per_oz=eng._swap_usd_per_oz(side, close_ts),
+                    learning_probe=True, account_mode=eng.cfg.mode,
+                    phase_file=_phase_file(eng), **terms)
     gd = eng.gate.check(intent, eng.state, close_ts, margin_required=broker_margin(eng.broker, eng.cfg.symbol),
                         throttle=eng._agent_throttle(tag, t.timeframe, close_ts))
     if not gd.allowed or gd.lots > intent.volume_min + 1e-9:
@@ -474,7 +525,7 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
                       sent_utc=sent, latency_ms=round(latency_ms, 3), retcode=res.retcode,
                       position_id=res.position_id if filled else None,
                       fill_price=(res.price if res.price is not None else price) if filled else None,
-                      stop_loss=round(loss, 2))
+                      stop_loss=round(loss, 2), taken=t.taken)
     try:
         with probe.db.write() as conn:
             LEDGER.upsert(conn, rec)
