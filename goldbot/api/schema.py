@@ -1182,5 +1182,108 @@ class TradesOverview(BaseModel):
 # ============================================================================= end Home trades summary
 
 
+# ============================================================================= Home status card stack
+# goldbot/api/home_cards.py (docs/ux/home-redesign-2026-10-19.md, Decision 2026-10-19); read-only, viewer and above
+class OpenPosition(BaseModel):
+    """One open position (N1): money in the account currency, prices in USD per oz. `floating_pnl` is at the engine's
+    mid price before spread, commission and swap; None when the engine publishes no price or conversion."""
+    account: str                            # config name, any run of 5+ digits cut
+    mode: Literal["demo", "live", "paper"] | None
+    probe: bool                             # a cost-probe order (ADR 0037), not a strategy's trade
+    position_id: int
+    agent_id: str
+    family: str
+    timeframe: str | None
+    side: Literal["long", "short"]
+    lots: float
+    entry: float | None
+    stop: float | None                      # the stop and target the engine holds now
+    target: float | None
+    opened_utc: datetime
+    price: float | None                     # the engine's last mid price
+    floating_pnl: float | None
+    currency: str | None
+    r_now: float | None                     # the move from entry over the risk at entry
+    age_s: float | None                     # how old the engine's figures are
+    stale: bool                             # older than 60 s (or unknown): never shown as current
+
+
+class OpenPositionsView(BaseModel):
+    as_of: datetime
+    positions: list[OpenPosition]           # oldest first
+    unreadable: list[str]                   # accounts whose orders file could not be read: missing, not zero
+
+
+StrategyState = Literal["in_trade", "signal", "watching", "idle", "unknown"]
+
+
+class StrategyWatch(BaseModel):
+    """One strategy agent's state in words (N2). Box edges and MFI are not published by the engine yet: None."""
+    agent_id: str
+    family: str
+    timeframe: str | None
+    state: StrategyState
+    text: str                               # the state in words; the client adds the time of `signal_utc`
+    signal_utc: datetime | None = None      # the last signal bar's close
+    taken: bool | None = None               # the last signal cleared its threshold
+    side: Literal["long", "short"] | None = None
+    entry: float | None = None              # in a trade (shadow): USD per oz
+    stop: float | None = None
+    target: float | None = None
+    box_high: float | None = None
+    box_low: float | None = None
+    mfi: float | None = None
+
+
+class StrategyWatchView(BaseModel):
+    as_of: datetime
+    agents: list[StrategyWatch]             # by family, then timeframe
+    unreadable: list[Literal["agents", "shadow"]]
+
+
+class DayCosts(BaseModel):
+    """Today's costs of the closed records, account currency: commission paid (positive), swap (broker sign), spread
+    where the record keeps it in money (`spread_complete` False: some records keep it only in points)."""
+    spread: float
+    spread_complete: bool
+    commission: float
+    swap: float
+
+
+class LossLimit(BaseModel):
+    key: Literal["probe_stop", "daily_limit"]
+    label: str
+    limit: float                            # account currency
+    remaining: float
+
+
+class LossMeter(BaseModel):
+    used: float                             # today's loss counted by the engine's daily limit, account currency
+    limits: list[LossLimit]                 # smallest first
+    binding: Literal["probe_stop", "daily_limit"]   # the limit with the least left: it stops entries first
+
+
+class TodayAccount(BaseModel):
+    """Today's money for one account (never summed across accounts or modes)."""
+    account: str
+    mode: Literal["demo", "live", "paper"] | None
+    currency: str | None
+    day_pnl: float | None                   # equity - the day's starting equity: after every cost the broker charged
+    open_pnl: float | None                  # equity - balance: the open positions' floating P&L
+    closed_pnl: float | None                # net records closed this opportunity day (positions and cost probes)
+    closed_n: int
+    closed_complete: bool                   # False: a gross or unreadable record is left out of closed_pnl
+    costs: DayCosts | None
+    loss_meter: LossMeter | None            # None: the engine publishes no daily limit
+    age_s: float | None
+    stale: bool                             # older than 60 s (or unknown)
+
+
+class TodayView(BaseModel):
+    as_of: datetime
+    accounts: list[TodayAccount]
+# ============================================================================= end Home status card stack
+
+
 ResearchPlanView.model_rebuild()   # refers to models defined after it
 Status.model_rebuild()          # `blackout` refers to ActiveBlackout, defined after Status

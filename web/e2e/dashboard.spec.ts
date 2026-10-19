@@ -366,3 +366,38 @@ test("entry status says in plain words why an account can't trade, when it resum
   await go(page, "Approvals");                // the strip agrees with the panel
   await expect(page.getByRole("status").filter({ hasText: "New entries blocked" })).toContainText("Market closed");
 });
+
+// The status card stack (docs/ux/home-redesign-2026-10-19.md, Decision 2026-10-19): the cards in order at 360 and
+// 1080 px, light and dark; today's money carries its DEMO badge and names the limit that binds; the MT5 chart card is
+// desktop only; nothing scrolls sideways.
+test("Home shows the status card stack in order on a phone and a desktop, light and dark", async ({ page }) => {
+  const dir = info().state_dir;
+  const engine = JSON.parse(readFileSync(join(dir, "engine_icm-demo.json"), "utf8"));
+  await page.goto("/");
+  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  writeFileSync(join(dir, "engine_icm-demo.json"), JSON.stringify({
+    ...engine, ts: Date.now() / 1000, market_closed: false, entry_blocks: [], daily_loss_limit: 50, daily_loss_remaining: 40,
+  }));
+  const names = ["Entry status", "Today", "Open trades", "Your strategies", "Learning", "Activity feed", "Trades summary"];
+  for (const scheme of ["light", "dark"] as const) {
+    for (const width of [360, 1080]) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.setViewportSize({ width, height: 900 });
+      await page.reload();
+      for (const name of names) await expect(page.getByRole("region", { name })).toBeVisible();
+      const today = page.getByRole("group", { name: "Today icm-demo" });
+      await expect(today.getByText("DEMO", { exact: true })).toBeVisible({ timeout: 15_000 });
+      // config/accounts.yaml runs cost probes on icm-demo (ADR 0037 amendment 3): £10 lost, the ~£16 probe stop binds
+      // (15 s: the API's 5 s cache may still hold the report from before the write, and the card polls every 5 s)
+      await expect(today.getByText("£6.00 left before the probe stop (£16.00)")).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByRole("region", { name: "MT5 chart" })).toHaveCount(width >= 1080 ? 1 : 0);
+      if (width === 360) {
+        const tops = await Promise.all(names.map(async (name) => (await page.getByRole("region", { name }).boundingBox())!.y));
+        expect([...tops].sort((a, b) => a - b)).toEqual(tops);                   // one column, in the decided order
+      }
+      const wide = await page.evaluate((w) => [...document.querySelectorAll("body *")].filter((e) => e.getBoundingClientRect().right > w + 1)
+        .slice(0, 5).map((e) => `${e.tagName}.${e.className}`), width);
+      expect(wide).toEqual([]);                                                  // nothing scrolls sideways
+    }
+  }
+});

@@ -658,6 +658,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/positions/open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Positions Open */
+        get: operations["positions_open_api_positions_open_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/proposals": {
         parameters: {
             query?: never;
@@ -740,6 +757,40 @@ export interface paths {
         };
         /** Status */
         get: operations["status_api_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/strategies/watch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Strategies Watch */
+        get: operations["strategies_watch_api_strategies_watch_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/today": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Today */
+        get: operations["today_api_today_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1395,6 +1446,21 @@ export interface components {
             trades_per_week?: number | null;
             /** Version */
             version: string;
+        };
+        /**
+         * DayCosts
+         * @description Today's costs of the closed records, account currency: commission paid (positive), swap (broker sign), spread
+         *     where the record keeps it in money (`spread_complete` False: some records keep it only in points).
+         */
+        DayCosts: {
+            /** Commission */
+            commission: number;
+            /** Spread */
+            spread: number;
+            /** Spread Complete */
+            spread_complete: boolean;
+            /** Swap */
+            swap: number;
         };
         /** DayNet */
         DayNet: {
@@ -2252,6 +2318,32 @@ export interface components {
             /** Used */
             used: number;
         };
+        /** LossLimit */
+        LossLimit: {
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "probe_stop" | "daily_limit";
+            /** Label */
+            label: string;
+            /** Limit */
+            limit: number;
+            /** Remaining */
+            remaining: number;
+        };
+        /** LossMeter */
+        LossMeter: {
+            /**
+             * Binding
+             * @enum {string}
+             */
+            binding: "probe_stop" | "daily_limit";
+            /** Limits */
+            limits: components["schemas"]["LossLimit"][];
+            /** Used */
+            used: number;
+        };
         /** Me */
         Me: {
             /** Email */
@@ -2375,6 +2467,69 @@ export interface components {
              * @default true
              */
             ok: boolean;
+        };
+        /**
+         * OpenPosition
+         * @description One open position (N1): money in the account currency, prices in USD per oz. `floating_pnl` is at the engine's
+         *     mid price before spread, commission and swap; None when the engine publishes no price or conversion.
+         */
+        OpenPosition: {
+            /** Account */
+            account: string;
+            /** Age S */
+            age_s: number | null;
+            /** Agent Id */
+            agent_id: string;
+            /** Currency */
+            currency: string | null;
+            /** Entry */
+            entry: number | null;
+            /** Family */
+            family: string;
+            /** Floating Pnl */
+            floating_pnl: number | null;
+            /** Lots */
+            lots: number;
+            /** Mode */
+            mode: ("demo" | "live" | "paper") | null;
+            /**
+             * Opened Utc
+             * Format: date-time
+             */
+            opened_utc: string;
+            /** Position Id */
+            position_id: number;
+            /** Price */
+            price: number | null;
+            /** Probe */
+            probe: boolean;
+            /** R Now */
+            r_now: number | null;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "long" | "short";
+            /** Stale */
+            stale: boolean;
+            /** Stop */
+            stop: number | null;
+            /** Target */
+            target: number | null;
+            /** Timeframe */
+            timeframe: string | null;
+        };
+        /** OpenPositionsView */
+        OpenPositionsView: {
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
+            /** Positions */
+            positions: components["schemas"]["OpenPosition"][];
+            /** Unreadable */
+            unreadable: string[];
         };
         /** PlanFamily */
         PlanFamily: {
@@ -3091,6 +3246,55 @@ export interface components {
             /** Worst Loss Frac */
             worst_loss_frac?: number | null;
         };
+        /**
+         * StrategyWatch
+         * @description One strategy agent's state in words (N2). Box edges and MFI are not published by the engine yet: None.
+         */
+        StrategyWatch: {
+            /** Agent Id */
+            agent_id: string;
+            /** Box High */
+            box_high?: number | null;
+            /** Box Low */
+            box_low?: number | null;
+            /** Entry */
+            entry?: number | null;
+            /** Family */
+            family: string;
+            /** Mfi */
+            mfi?: number | null;
+            /** Side */
+            side?: ("long" | "short") | null;
+            /** Signal Utc */
+            signal_utc?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "in_trade" | "signal" | "watching" | "idle" | "unknown";
+            /** Stop */
+            stop?: number | null;
+            /** Taken */
+            taken?: boolean | null;
+            /** Target */
+            target?: number | null;
+            /** Text */
+            text: string;
+            /** Timeframe */
+            timeframe: string | null;
+        };
+        /** StrategyWatchView */
+        StrategyWatchView: {
+            /** Agents */
+            agents: components["schemas"]["StrategyWatch"][];
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
+            /** Unreadable */
+            unreadable: ("agents" | "shadow")[];
+        };
         /** SystemHaltView */
         SystemHaltView: {
             /** Clear Command */
@@ -3101,6 +3305,44 @@ export interface components {
             review_command: string;
             /** Since */
             since: string | null;
+        };
+        /**
+         * TodayAccount
+         * @description Today's money for one account (never summed across accounts or modes).
+         */
+        TodayAccount: {
+            /** Account */
+            account: string;
+            /** Age S */
+            age_s: number | null;
+            /** Closed Complete */
+            closed_complete: boolean;
+            /** Closed N */
+            closed_n: number;
+            /** Closed Pnl */
+            closed_pnl: number | null;
+            costs: components["schemas"]["DayCosts"] | null;
+            /** Currency */
+            currency: string | null;
+            /** Day Pnl */
+            day_pnl: number | null;
+            loss_meter: components["schemas"]["LossMeter"] | null;
+            /** Mode */
+            mode: ("demo" | "live" | "paper") | null;
+            /** Open Pnl */
+            open_pnl: number | null;
+            /** Stale */
+            stale: boolean;
+        };
+        /** TodayView */
+        TodayView: {
+            /** Accounts */
+            accounts: components["schemas"]["TodayAccount"][];
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
         };
         /**
          * TradeRef
@@ -4526,6 +4768,26 @@ export interface operations {
             };
         };
     };
+    positions_open_api_positions_open_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpenPositionsView"];
+                };
+            };
+        };
+    };
     proposals_api_proposals_get: {
         parameters: {
             query?: never;
@@ -4635,6 +4897,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Status"];
+                };
+            };
+        };
+    };
+    strategies_watch_api_strategies_watch_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyWatchView"];
+                };
+            };
+        };
+    };
+    today_api_today_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TodayView"];
                 };
             };
         };

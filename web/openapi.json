@@ -1489,6 +1489,35 @@
     "title": "CusumTrace",
     "type": "object"
    },
+   "DayCosts": {
+    "description": "Today's costs of the closed records, account currency: commission paid (positive), swap (broker sign), spread\nwhere the record keeps it in money (`spread_complete` False: some records keep it only in points).",
+    "properties": {
+     "commission": {
+      "title": "Commission",
+      "type": "number"
+     },
+     "spread": {
+      "title": "Spread",
+      "type": "number"
+     },
+     "spread_complete": {
+      "title": "Spread Complete",
+      "type": "boolean"
+     },
+     "swap": {
+      "title": "Swap",
+      "type": "number"
+     }
+    },
+    "required": [
+     "spread",
+     "spread_complete",
+     "commission",
+     "swap"
+    ],
+    "title": "DayCosts",
+    "type": "object"
+   },
    "DayNet": {
     "properties": {
      "day": {
@@ -3794,6 +3823,68 @@
     "title": "LossCap",
     "type": "object"
    },
+   "LossLimit": {
+    "properties": {
+     "key": {
+      "enum": [
+       "probe_stop",
+       "daily_limit"
+      ],
+      "title": "Key",
+      "type": "string"
+     },
+     "label": {
+      "title": "Label",
+      "type": "string"
+     },
+     "limit": {
+      "title": "Limit",
+      "type": "number"
+     },
+     "remaining": {
+      "title": "Remaining",
+      "type": "number"
+     }
+    },
+    "required": [
+     "key",
+     "label",
+     "limit",
+     "remaining"
+    ],
+    "title": "LossLimit",
+    "type": "object"
+   },
+   "LossMeter": {
+    "properties": {
+     "binding": {
+      "enum": [
+       "probe_stop",
+       "daily_limit"
+      ],
+      "title": "Binding",
+      "type": "string"
+     },
+     "limits": {
+      "items": {
+       "$ref": "#/components/schemas/LossLimit"
+      },
+      "title": "Limits",
+      "type": "array"
+     },
+     "used": {
+      "title": "Used",
+      "type": "number"
+     }
+    },
+    "required": [
+     "used",
+     "limits",
+     "binding"
+    ],
+    "title": "LossMeter",
+    "type": "object"
+   },
    "Me": {
     "properties": {
      "email": {
@@ -4100,6 +4191,220 @@
      }
     },
     "title": "Ok",
+    "type": "object"
+   },
+   "OpenPosition": {
+    "description": "One open position (N1): money in the account currency, prices in USD per oz. `floating_pnl` is at the engine's\nmid price before spread, commission and swap; None when the engine publishes no price or conversion.",
+    "properties": {
+     "account": {
+      "title": "Account",
+      "type": "string"
+     },
+     "age_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Age S"
+     },
+     "agent_id": {
+      "title": "Agent Id",
+      "type": "string"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
+     "entry": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Entry"
+     },
+     "family": {
+      "title": "Family",
+      "type": "string"
+     },
+     "floating_pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Floating Pnl"
+     },
+     "lots": {
+      "title": "Lots",
+      "type": "number"
+     },
+     "mode": {
+      "anyOf": [
+       {
+        "enum": [
+         "demo",
+         "live",
+         "paper"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mode"
+     },
+     "opened_utc": {
+      "format": "date-time",
+      "title": "Opened Utc",
+      "type": "string"
+     },
+     "position_id": {
+      "title": "Position Id",
+      "type": "integer"
+     },
+     "price": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Price"
+     },
+     "probe": {
+      "title": "Probe",
+      "type": "boolean"
+     },
+     "r_now": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "R Now"
+     },
+     "side": {
+      "enum": [
+       "long",
+       "short"
+      ],
+      "title": "Side",
+      "type": "string"
+     },
+     "stale": {
+      "title": "Stale",
+      "type": "boolean"
+     },
+     "stop": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Stop"
+     },
+     "target": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Target"
+     },
+     "timeframe": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Timeframe"
+     }
+    },
+    "required": [
+     "account",
+     "mode",
+     "probe",
+     "position_id",
+     "agent_id",
+     "family",
+     "timeframe",
+     "side",
+     "lots",
+     "entry",
+     "stop",
+     "target",
+     "opened_utc",
+     "price",
+     "floating_pnl",
+     "currency",
+     "r_now",
+     "age_s",
+     "stale"
+    ],
+    "title": "OpenPosition",
+    "type": "object"
+   },
+   "OpenPositionsView": {
+    "properties": {
+     "as_of": {
+      "format": "date-time",
+      "title": "As Of",
+      "type": "string"
+     },
+     "positions": {
+      "items": {
+       "$ref": "#/components/schemas/OpenPosition"
+      },
+      "title": "Positions",
+      "type": "array"
+     },
+     "unreadable": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Unreadable",
+      "type": "array"
+     }
+    },
+    "required": [
+     "as_of",
+     "positions",
+     "unreadable"
+    ],
+    "title": "OpenPositionsView",
     "type": "object"
    },
    "PlanFamily": {
@@ -6190,6 +6495,192 @@
     "title": "StopRuleView",
     "type": "object"
    },
+   "StrategyWatch": {
+    "description": "One strategy agent's state in words (N2). Box edges and MFI are not published by the engine yet: None.",
+    "properties": {
+     "agent_id": {
+      "title": "Agent Id",
+      "type": "string"
+     },
+     "box_high": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Box High"
+     },
+     "box_low": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Box Low"
+     },
+     "entry": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Entry"
+     },
+     "family": {
+      "title": "Family",
+      "type": "string"
+     },
+     "mfi": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mfi"
+     },
+     "side": {
+      "anyOf": [
+       {
+        "enum": [
+         "long",
+         "short"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Side"
+     },
+     "signal_utc": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Signal Utc"
+     },
+     "state": {
+      "enum": [
+       "in_trade",
+       "signal",
+       "watching",
+       "idle",
+       "unknown"
+      ],
+      "title": "State",
+      "type": "string"
+     },
+     "stop": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Stop"
+     },
+     "taken": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Taken"
+     },
+     "target": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Target"
+     },
+     "text": {
+      "title": "Text",
+      "type": "string"
+     },
+     "timeframe": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Timeframe"
+     }
+    },
+    "required": [
+     "agent_id",
+     "family",
+     "timeframe",
+     "state",
+     "text"
+    ],
+    "title": "StrategyWatch",
+    "type": "object"
+   },
+   "StrategyWatchView": {
+    "properties": {
+     "agents": {
+      "items": {
+       "$ref": "#/components/schemas/StrategyWatch"
+      },
+      "title": "Agents",
+      "type": "array"
+     },
+     "as_of": {
+      "format": "date-time",
+      "title": "As Of",
+      "type": "string"
+     },
+     "unreadable": {
+      "items": {
+       "enum": [
+        "agents",
+        "shadow"
+       ],
+       "type": "string"
+      },
+      "title": "Unreadable",
+      "type": "array"
+     }
+    },
+    "required": [
+     "as_of",
+     "agents",
+     "unreadable"
+    ],
+    "title": "StrategyWatchView",
+    "type": "object"
+   },
    "SystemHaltView": {
     "properties": {
      "clear_command": {
@@ -6227,6 +6718,156 @@
      "clear_command"
     ],
     "title": "SystemHaltView",
+    "type": "object"
+   },
+   "TodayAccount": {
+    "description": "Today's money for one account (never summed across accounts or modes).",
+    "properties": {
+     "account": {
+      "title": "Account",
+      "type": "string"
+     },
+     "age_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Age S"
+     },
+     "closed_complete": {
+      "title": "Closed Complete",
+      "type": "boolean"
+     },
+     "closed_n": {
+      "title": "Closed N",
+      "type": "integer"
+     },
+     "closed_pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Closed Pnl"
+     },
+     "costs": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/DayCosts"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
+     "day_pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Day Pnl"
+     },
+     "loss_meter": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/LossMeter"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "mode": {
+      "anyOf": [
+       {
+        "enum": [
+         "demo",
+         "live",
+         "paper"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mode"
+     },
+     "open_pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Open Pnl"
+     },
+     "stale": {
+      "title": "Stale",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "account",
+     "mode",
+     "currency",
+     "day_pnl",
+     "open_pnl",
+     "closed_pnl",
+     "closed_n",
+     "closed_complete",
+     "costs",
+     "loss_meter",
+     "age_s",
+     "stale"
+    ],
+    "title": "TodayAccount",
+    "type": "object"
+   },
+   "TodayView": {
+    "properties": {
+     "accounts": {
+      "items": {
+       "$ref": "#/components/schemas/TodayAccount"
+      },
+      "title": "Accounts",
+      "type": "array"
+     },
+     "as_of": {
+      "format": "date-time",
+      "title": "As Of",
+      "type": "string"
+     }
+    },
+    "required": [
+     "as_of",
+     "accounts"
+    ],
+    "title": "TodayView",
     "type": "object"
    },
    "TradeRef": {
@@ -8578,6 +9219,29 @@
     "summary": "News"
    }
   },
+  "/api/positions/open": {
+   "get": {
+    "operationId": "positions_open_api_positions_open_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/OpenPositionsView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Positions Open"
+   }
+  },
   "/api/proposals": {
    "get": {
     "operationId": "proposals_api_proposals_get",
@@ -8720,6 +9384,52 @@
      }
     ],
     "summary": "Status"
+   }
+  },
+  "/api/strategies/watch": {
+   "get": {
+    "operationId": "strategies_watch_api_strategies_watch_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/StrategyWatchView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Strategies Watch"
+   }
+  },
+  "/api/today": {
+   "get": {
+    "operationId": "today_api_today_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TodayView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Today"
    }
   },
   "/api/trades/overview": {
