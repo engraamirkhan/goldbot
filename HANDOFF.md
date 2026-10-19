@@ -26,6 +26,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   currency on both. An open position whose engine state is missing counts as demo. The Home page shows it under the
   activity feed (web/src/screens/TradesOverview.tsx): a tile per type, Today / 7 days / All, and a table by strategy or
   timeframe, refreshed every 30 s. Code: goldbot/api/trades_overview.py.
+- MQL5 ports of the three indicators for the MT5 chart (`goldbot/ops/linux/mt5/indicators/`: structure, boxes with
+  break-and-close, money flow), same inputs/defaults as `smc_replica`/`mfi_signals`/`box_course`, closed bars only;
+  `tests/test_mql5_ports.py` pins the defaults and the file shape. Not compiled (no MetaEditor) and not installed:
+  RUNBOOK 2.7e, requires owner approval.
 - Research director ruling 2026-10-19 parts B and C ("the system needs to learn, so more trades need to be opened and
   closed"). B: the shadow book records every signal as its own trade, up to `shadow.max_open_per_agent: 3` open per
   agent and version (beyond it: counted in `VersionBook.skipped_cap`, logged "skipped: cap"); `PerfStats` gains
