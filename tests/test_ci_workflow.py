@@ -156,7 +156,8 @@ def test_unit_shards_are_balanced_by_the_committed_unit_weights():
     import json
     import sys
     sys.path.insert(0, str(ROOT / "tests"))
-    from conftest import shard_assignment
+    import importlib
+    shard_assignment = importlib.import_module("conftest").shard_assignment   # tests/ is on sys.path only at run time
     count = len(_ci()["jobs"]["backend-unit"]["strategy"]["matrix"]["shard"])
     weights = json.loads((ROOT / "tests" / "shard_weights.json").read_text())["unit_seconds"]
     assignment = shard_assignment(list(weights), count, weights)
