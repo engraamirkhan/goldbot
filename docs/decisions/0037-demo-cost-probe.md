@@ -102,3 +102,6 @@ probe unchanged; untaken probes at most 12 a risk day (still at most half the sl
   count toward it.
 - Review after 10 risk days (2 weeks of clean data): if simultaneous probes' outcomes correlate above 0.7, return to
   `max_open` 2.
+- In practice (trading-safety review of amendment 3): the reserve needs £30 + the new probe's £4 + the open probes'
+  risk left of the £50, so realised probe losses stop near £16 a day; the full £20 and the fourth slot are reachable
+  only on a day with few losses. Safe by construction; the review after 10 risk days reads the numbers as they are.
