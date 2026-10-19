@@ -8,7 +8,7 @@ import { ErrorState } from "../ui";
 import { ActivityFeed } from "./Activity";
 import { Approvals } from "./Approvals";
 import { BalanceCard, BalanceCardSkeleton } from "./BalanceCard";
-import { CardBoundary, OpenTradesCard, TodayCard } from "./HomeCards";
+import { CardBoundary, OpenTradesCard, RiskTodayCard, TodayCard } from "./HomeCards";
 import { TradesSummaryCard } from "./TradesOverview";
 import "./home.css";
 
@@ -36,6 +36,7 @@ export function TradesSummary() {
     <div className="trades-page">
       <CardBoundary name="Today"><TodayCard /></CardBoundary>
       <CardBoundary name="Balance"><Balances /></CardBoundary>
+      <CardBoundary name="Risk per trade today"><RiskTodayCard /></CardBoundary>
       <CardBoundary name="Trades summary"><TradesSummaryCard /></CardBoundary>
     </div>
   );

@@ -7,6 +7,8 @@ import {
   digest, HOME_POLL_MS, meterWords, modeBadge, openTradesWords, shadowTiles, strategyName, systemLine, WATCH_POLL_MS,
 } from "../lib/home";
 import { signedR, TRADES_POLL_MS } from "../lib/tradesOverview";
+import { ageSeconds, type LimitAccount } from "../lib/limits";
+import { type Budget, factorWords, leftState, rateText, riskTodayLine, strategyRows, whyShort } from "../lib/riskToday";
 import { useNow } from "../lib/useNow";
 import { Badge, Button, Card, EmptyState, ErrorState, Meter, MetricTile, Skeleton, TimeText } from "../ui";
 import { money } from "../ui/format";
@@ -171,6 +173,7 @@ function LearningBody({ v, onOpenProgress }: { v: TradesOverview; onOpenProgress
 export function TodayBrief({ onOpenTrades }: { onOpenTrades?: () => void }) {
   const q = useQuery({ queryKey: ["today"], queryFn: api.today, refetchInterval: HOME_POLL_MS });
   const pos = useQuery({ queryKey: ["positionsOpen"], queryFn: api.openPositions, refetchInterval: HOME_POLL_MS });
+  const limits = useQuery({ queryKey: ["limits"], queryFn: api.limits, refetchInterval: 30000 });
   const n = pos.data?.positions.length;
   const link = n == null ? (pos.isError ? "Open trades not readable · see trades" : "See trades")
     : n === 0 ? "No open trades · see trades" : openTradesWords(n);
@@ -179,14 +182,16 @@ export function TodayBrief({ onOpenTrades }: { onOpenTrades?: () => void }) {
       {q.isLoading ? <Skeleton height={72} label="Loading today's money" />
         : q.isError && !q.data ? <ErrorState title="Could not load today's money." stillWorks="Trading and the loss limits are not affected." onRetry={() => q.refetch()} />
         : q.data!.accounts.length === 0 ? <EmptyState title="No engine is reporting">Today's money shows once an engine reports.</EmptyState>
-        : q.data!.accounts.map((a) => <TodayLine key={a.account} a={a} />)}
+        : q.data!.accounts.map((a) => <TodayLine key={a.account} a={a}
+            limits={limits.data?.accounts.find((l) => l.account_id === a.account)} />)}
       {onOpenTrades && <Button variant="ghost" className="home-link" onClick={onOpenTrades}>{link} →</Button>}
     </Card>
   );
 }
 
-function TodayLine({ a }: { a: TodayAccount }) {
+function TodayLine({ a, limits }: { a: TodayAccount; limits?: LimitAccount }) {
   const ccy = a.currency;
+  const risk = limits ? riskTodayLine(limits, (x) => money(x, limits.currency ?? ccy)) : null;
   const m = a.loss_meter ? meterWords(a.loss_meter, (x) => money(x, ccy)) : null;
   return (
     <div className="today-row" aria-label={`Today ${a.account}`} role="group">
@@ -202,6 +207,67 @@ function TodayLine({ a }: { a: TodayAccount }) {
           <p className={`small ${m.tone === "ok" ? "muted" : `state ${m.tone}`}`}>{m.text}</p>
         </div>
       ) : <p className="small muted">Loss limit not reported by this engine yet.</p>}
+      {risk && <p className="small num">{risk}{limits?.stale ? " · not current (engine figures over 60 s old)" : ""}</p>}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------------------------------------ Risk per trade today
+/** Dynamic limits (ADR 0039): per account and strategy the risk per trade applied today, the day's cuts in plain
+ *  words and the money left before the daily loss limit. Read-only; red only for a spent cap. */
+export function RiskTodayCard() {
+  const q = useQuery({ queryKey: ["limits"], queryFn: api.limits, refetchInterval: 30000 });
+  const budgets = useQuery({ queryKey: ["accounts"], queryFn: api.accounts, refetchInterval: 5000 });
+  const aside = q.dataUpdatedAt ? <>updated <TimeText iso={new Date(q.dataUpdatedAt).toISOString()} /></> : undefined;
+  const accts = q.data?.accounts ?? [];
+  return (
+    <Card title="Risk per trade today" aside={aside} label="Risk per trade">
+      {q.isLoading ? <Skeleton height={120} label="Loading risk per trade today" />
+        : q.isError && !q.data ? <ErrorState title="Could not load today's risk per trade." stillWorks="Trading and the loss limits are not affected." onRetry={() => q.refetch()} />
+        : accts.length === 0 ? <EmptyState title="No engine is reporting">Risk per trade shows once an engine reports.</EmptyState>
+        : accts.map((a) => <RiskTodayAccount key={a.account_id} a={a}
+            budget={budgets.data?.find((b) => b.account_id === a.account_id)?.loss_budget} />)}
+    </Card>
+  );
+}
+
+function RiskTodayAccount({ a, budget }: { a: LimitAccount; budget?: Budget | null }) {
+  const fmt = (x: number) => money(x, a.currency);
+  const r = a.risk_today;
+  const left = leftState(a, fmt, budget);
+  const rows = strategyRows(a);
+  const cuts = r ? factorWords(r) : [];
+  const age = ageSeconds(a.updated_utc, useNow(5_000));
+  return (
+    <div className="today-row" role="group" aria-label={`Risk today ${a.account_id}`}>
+      <p className="today-line"><ModeBadge mode={a.mode} /> <strong>{a.account_id}</strong></p>
+      {a.stale && <Stale age={age} />}
+      <p className={`small num ${left.tone === "ok" || left.tone === "idle" ? "muted" : `state ${left.tone}`}`}>
+        {left.tone === "bad" ? "Stopped: " : left.tone === "warn" ? "Near limit: " : ""}{left.text}</p>
+      {!r ? <p className="small muted">Dynamic limits are off: every strategy risks the fixed rate per trade (see Limits).</p> : (
+        <>
+          <p className="small">{r.base != null && <>Base {rateText(r.base)} per trade{r.ceiling != null && <>, at most {rateText(r.ceiling)}</>}. </>}
+            Today's cuts: {cuts.length ? cuts.join("; ") : "none"}{r.scale != null && r.scale < 1 ? ` (× ${r.scale.toFixed(2)} until the next risk day)` : ""}.</p>
+          {rows.length === 0 ? <p className="small muted">Every strategy trades the base rate ({whyShort(r)}).</p> : (
+            <div className="scroll"><table>
+              <caption className="sr-only">Risk per trade today by strategy, {a.account_id}</caption>
+              <thead><tr><th scope="col">Strategy</th><th scope="col" className="num">Risk</th>
+                <th scope="col" className="num">{a.currency ?? "Money"} per trade</th><th scope="col">Why</th></tr></thead>
+              <tbody>
+                {rows.map((s) => (
+                  <tr key={s.version}>
+                    <th scope="row" className="small">{s.version}</th>
+                    <td className="num">{rateText(s.rate)}</td>
+                    <td className="num">{s.money == null ? "—" : `≈${fmt(s.money)}`}</td>
+                    <td className="small">{s.base ? "base rate" : s.reason ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table></div>
+          )}
+          <p className="small muted">≈ money at the stop on the day-start equity; the allocator's multiplier and lot rounding set the final size.</p>
+        </>
+      )}
     </div>
   );
 }
