@@ -8,8 +8,9 @@
 # 4. deploys the FULL main SHA on the brain and checks deploys.jsonl says "deployed". Right after the push the brain
 #    pre-builds the PR head (`goldbot-deploy --stage`, uv cache + dashboard, no service touched) while CI runs; the deploy
 #    reuses it when the dashboard sources are identical (the merge commit has the PR head's tree), else builds as before.
-#    The engine is NOT disabled: the deploy restarts it right after the supervisor (a gap of one restart, not of the
-#    install) and reports once every service has been stable for 30 s with fresh heartbeats; a watcher keeps checking
+#    The engine is disabled around the deploy only when the installed script has no --stage (first release); the new
+#    script stops every service just before the checkout and starts supervisor, engine, rest (engine down: seconds,
+#    printed) and reports once every service has been stable for 30 s with fresh heartbeats; a watcher keeps checking
 #    restarts until 90 s after the switch and rolls back on one (look at deploys.jsonl again after that).
 # Never deploys a tree that no green CI run tested.
 set -euo pipefail
@@ -89,13 +90,27 @@ else
   gh run watch "$RID" --exit-status >/dev/null 2>&1 || die "main CI not green on $MAIN"
 fi
 
-wait "$STAGE" && say "brain stage: $(tail -1 "$LOG/stage.log" | cut -c1-120)" \
-  || say "brain stage did not finish ($(tail -1 "$LOG/stage.log" | cut -c1-120)): the deploy builds as before"
+# exit 2 = the installed goldbot-deploy predates --stage (usage): it restarts services only after the install, so
+# the engine must be paused around the whole deploy as before. The new script stops services itself, just in time.
+STOP_ENGINE=0
+wait "$STAGE" && say "brain stage: $(tail -1 "$LOG/stage.log" | cut -c1-120)" || {
+  rc=$?
+  [ "$rc" != 2 ] || STOP_ENGINE=1
+  say "brain stage did not finish (rc $rc, $(tail -1 "$LOG/stage.log" | cut -c1-120)): the deploy builds as before"
+}
+PAUSE=""; RESUME=""
+if [ "$STOP_ENGINE" = 1 ]; then
+  say "old goldbot-deploy on the brain: engine paused around the deploy"
+  PAUSE="sudo systemctl disable --now goldbot-engine@icm-demo"
+  RESUME="sudo systemctl enable --now goldbot-engine@icm-demo >/dev/null 2>&1; sleep 15"
+fi
 say "deploy $MAIN to the brain"
 OUT=$("${SSH_BRAIN[@]}" "
   sudo systemctl reset-failed 'goldbot-deploy-manual-*' 2>/dev/null
+  $PAUSE
   sudo systemd-run --wait --unit goldbot-deploy-manual-\$(date +%s) /usr/local/sbin/goldbot-deploy $MAIN >/dev/null 2>&1
   sudo tail -1 /var/lib/goldbot-deploy/deploys.jsonl
+  $RESUME
   echo engine=\$(systemctl is-active goldbot-engine@icm-demo)")
 echo "$OUT" | cut -c1-220
 echo "$OUT" | grep -q "\"result\":\"deployed\".*\"to\":\"$MAIN\"" || die "deploy record does not say deployed $MAIN"

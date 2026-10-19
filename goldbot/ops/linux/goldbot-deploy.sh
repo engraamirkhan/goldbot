@@ -91,6 +91,8 @@ DROP_KEYS=0
 INTERRUPT_JOBS=0
 STARTED=0
 SETTLED=0
+ENGINE_STOPPED=0
+ENGINE_DOWN=0
 
 g() { sudo -u "$OWNER" -H env GIT_NO_REPLACE_OBJECTS=1 git -C "$ROOT" "$@"; }
 as_owner() { sudo -u "$OWNER" -H "$@"; }
@@ -536,9 +538,16 @@ switch_to() {  # $1 from, $2 to; returns non-zero on any failure (the caller rol
   local aux svcs s
   aux=$(aux_plan "$2")
   if [[ "$aux" == refuse* ]]; then echo "aux.db schema ${aux#refuse }: $2 cannot open it and no step-back is known"; return 1; fi
+  mapfile -t svcs < <(services)
+  # Nothing that imports the repo or the venv runs while the files change underneath it (a half-written .venv or
+  # checkout under a live engine): stop every enabled unit first, inputs, then the supervisor, engines and bridges last
+  # (stop_all: exits run until the last moment). With a verified stage the window to the restarts below is seconds.
+  local on=()
+  for s in "${svcs[@]}"; do ! enabled "$s" || on+=("$s"); done
+  stop_all "${on[@]}" || return 1
+  ENGINE_STOPPED=$(date +%s)
   g checkout -q --detach "$2" || return 1
   install_for "$1" "$2" || return 1
-  mapfile -t svcs < <(services)
   if [ "$aux" = step ]; then                          # nothing may hold aux.db open while its version changes
     stop_all "${svcs[@]}" || return 1
     aux_step_back || return 1
@@ -555,6 +564,12 @@ switch_to() {  # $1 from, $2 to; returns non-zero on any failure (the caller rol
       || { systemctl restart "$s" || return 1; RESTARTED_AT[$s]=$(date +%s); }
   done
   SETTLED=$(date +%s)
+  ENGINE_DOWN=0
+  for s in "${svcs[@]}"; do
+    [[ "$s" == goldbot-engine@* && -n "${RESTARTED_AT[$s]:-}" ]] || continue
+    [ $((RESTARTED_AT[$s] - ENGINE_STOPPED)) -le "$ENGINE_DOWN" ] || ENGINE_DOWN=$((RESTARTED_AT[$s] - ENGINE_STOPPED))
+  done
+  echo "engine down for $ENGINE_DOWN s (stopped last, started first after the switch)"
   for s in "${svcs[@]}"; do RESTARTS[$s]=$(systemctl show -p NRestarts --value "$s"); done
   return 0
 }
@@ -839,9 +854,9 @@ main() {
     if [ "$MODE" = rollback ]; then
       log rolled_back_manual "$CUR" "$TARGET" "${DROPPED}${note}${worse:+degraded: $worse; }older version restored on the owner's request; all services stable for 90 s"
     elif [ -n "$worse" ]; then
-      log deployed_degraded "$CUR" "$TARGET" "${DROPPED}${note}deployed (degraded: $worse); all services stable with fresh heartbeats after ${took} s${MANUAL:+ (manual)}; not rolled back: goldbot run health"
+      log deployed_degraded "$CUR" "$TARGET" "${DROPPED}${note}deployed (degraded: $worse); all services stable with fresh heartbeats after ${took} s (engine down ${ENGINE_DOWN} s)${MANUAL:+ (manual)}; not rolled back: goldbot run health"
     else
-      log deployed "$CUR" "$TARGET" "${DROPPED}${note}all services stable with fresh heartbeats after ${took} s${MANUAL:+ (manual)}"
+      log deployed "$CUR" "$TARGET" "${DROPPED}${note}all services stable with fresh heartbeats after ${took} s (engine down ${ENGINE_DOWN} s)${MANUAL:+ (manual)}"
     fi
     [ "$MODE" = deploy ] && spawn_watch
     exit 0

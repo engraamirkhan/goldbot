@@ -8,6 +8,7 @@ The script is sourced (its `main` runs only when executed), so the root-run copy
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -135,6 +136,8 @@ elif cmd in ("stop", "start", "restart"):
                 os.kill(pid, signal.SIGTERM)
                 open(os.path.join(T, "filter_killed"), "w").close()
         os.kill(hp, signal.SIGHUP)
+    if cmd == "stop":
+        open(os.path.join(T, "stop_heads"), "a").write(head() + " " + norm(args[1]) + "\n")   # HEAD when it stopped
     st["units"].setdefault(norm(args[1]), {"enabled": False})["active"] = cmd != "stop"
     if cmd != "stop":
         open(os.path.join(T, "restarted"), "w").close()
@@ -377,7 +380,7 @@ def test_no_step_back_when_the_target_reads_compat_back_to(tmp_path):
     assert p.returncode == 0, p.stdout + p.stderr
     assert box.records()[-1]["result"] == "deployed"
     stops = [a for a in box.actions() if a.startswith("stop")]
-    assert stops == ["stop goldbot-scheduler"]                            # only the job guard's; the rest restart
+    assert stops[0] == "stop goldbot-scheduler" and len(stops) == 6      # the job guard's, then one stop per enabled unit
 
 
 def test_rollback_goes_only_to_an_older_commit_and_a_forward_deploy_only_forward(tmp_path):
@@ -873,3 +876,31 @@ def test_the_heartbeat_service_list_matches_the_health_checks():
     listed = set(next(ln for ln in src.splitlines() if ln.startswith("BEAT_SERVICES=")).split('"')[1].split())
     from goldbot.ops.checks._base import HEARTBEAT_SERVICES, OPTIONAL_HEARTBEAT_SERVICES
     assert listed == set(HEARTBEAT_SERVICES) | set(OPTIONAL_HEARTBEAT_SERVICES)
+
+
+def test_services_stop_before_the_checkout_and_start_after_it_engine_last_out_first_in(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    p = box.run(box.c2)
+    assert p.returncode == 0, p.stdout + p.stderr
+    heads = [x.split() for x in _lines(box, "stop_heads")]
+    assert heads and all(h == box.c1 for h, _ in heads)                         # every stop happened on the OLD commit
+    names = [n for _, n in heads]
+    assert set(names) == {"goldbot-api.service", "goldbot-scheduler.service", "goldbot-telegram.service",
+                          "goldbot-supervisor.service", "goldbot-engine@icm-demo.service"}      # enabled units only
+    assert names[-1] == "goldbot-engine@icm-demo.service" and names.index("goldbot-supervisor.service") > names.index("goldbot-api.service")
+    acts = [a.split()[0] for a in box.actions()]
+    assert acts == ["stop"] * len(names) + ["restart"] * len(acts[len(names):])    # all stops, then all (re)starts
+    m = re.search(r"engine down for (\d+) s", p.stdout)
+    assert m and int(m.group(1)) <= 10 and "engine down" in box.records()[-1]["detail"]
+
+
+def test_the_rollback_stops_before_restoring_the_old_commit_too(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    box.units({"fail_at": box.c2})                                              # the new commit never becomes healthy
+    assert box.run(box.c2).returncode == 1 and _last(box) == "rolled_back"
+    acts = [a.split()[0] for a in box.actions()]
+    n = acts.index("restart")
+    second = acts[n:]
+    assert "stop" in second and second.index("stop") < second.index("restart", second.index("stop"))
+    heads = [x.split()[0] for x in _lines(box, "stop_heads")]
+    assert heads[0] == box.c1 and heads[-1] == box.c2                           # the restore stops on the commit it leaves
