@@ -218,6 +218,28 @@ class LimitChange(BaseModel):
     adr: str | None
 
 
+class StrategyRiskView(BaseModel):
+    """One strategy's (model version's) risk per trade today under dynamic limits (fractions of equity, before the
+    allocator's multiplier). Null = the engine does not say."""
+    version: str
+    decided: float | None                   # the nightly decision's r_s for today, after the ceiling; null: base rate
+    applied: float | None                   # what the gate sizes at now: r_s (or the base) x the same-day scale
+    reason: str | None                      # the nightly decision's why, one sentence
+
+
+class RiskTodayView(BaseModel):
+    """Why the risk per trade is what it is today (docs/design/dynamic-limits-2026-10-19.md): the base rate, its
+    ceiling and the same-day tighten-only factors (each 1 = no cut). Only on an account with dynamic limits on."""
+    base: float | None                      # today's fixed risk per trade (the rate a strategy without a value gets)
+    ceiling: float | None                   # the most any strategy may get (1% demo; the base rate on live)
+    k_vol: float | None                     # 0.5: the 20-day median ATR15 is at or above its 1-year p90
+    k_dd: float | None                      # 1 -> 0.5 as the drawdown from the high-water mark goes 2% -> 4%
+    k_day: float | None                     # 0.5: today's loss reached half the daily allowance
+    scale: float | None                     # the day's lowest k_vol x k_dd x k_day (cuts hold until the next day)
+    strategies: list[StrategyRiskView]
+    why: str                                # one plain sentence
+
+
 class LimitAccount(BaseModel):
     """One account's risk limits now, from what its engine publishes (state/engine_<account>.json) and the revert in
     core.db `limits_state`. Money is in `currency`; percentages are fractions. Null = the engine does not say."""
@@ -250,6 +272,7 @@ class LimitAccount(BaseModel):
     cap_hit: Literal["none", "daily", "weekly"]   # a spent cap: new entries stopped, exits keep working
     last_change: LimitChange | None
     error: str | None                       # why the limits cannot be shown (the engines fail closed on it)
+    risk_today: RiskTodayView | None = None   # dynamic limits: "why this limit today"; null when they are off
 
 
 class LimitsSupervisorView(BaseModel):

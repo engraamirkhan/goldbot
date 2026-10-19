@@ -1117,7 +1117,7 @@ class Engine:
             terms = self._sizing_terms(side, price, ls.stop_atr * float(a.iloc[last]), cycle=close_ts)
             self._note_min_lot_risk(terms, ls.stop_atr * float(a.iloc[last]))
             intent = Intent(agent_id=agent.agent_id, side=side, p=p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=float(a.iloc[last]), cost_atr=cost_atr,
-                            multiplier=mult, price=price, timeframe=tf, family=agent.family,
+                            multiplier=mult, price=price, timeframe=tf, family=agent.family, model_version=self.live_versions.get(agent.agent_id),
                             swap_usd_per_oz=self._swap_usd_per_oz(side, close_ts), **terms)
             gd = self.gate.check(intent, self.state, close_ts, margin_required=broker_margin(self.broker, self.cfg.symbol),
                                  throttle=self._agent_throttle(agent.agent_id, tf, close_ts))

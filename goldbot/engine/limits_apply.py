@@ -28,6 +28,21 @@ reads the nightly decision (goldbot/ops/limits_job.py) and never writes it. Rule
 * the effective limits are the stricter of the controller and ADR 0032's state: `clamp` keeps them within
   [default .. ceiling] and the 8% revert gives the defaults whatever the controller says. Entries only: nothing here
   gates an exit.
+
+Dynamic limits (docs/design/dynamic-limits-2026-10-19.md, lane B), only on an account with `dynamic_limits: true`
+(accounts.yaml; off: every value is today's fixed one). The nightly decision's per-strategy risk per trade r_s
+(`strategy_risk`, by model version, and its why `risk_terms`; ADR 0031's controller carries them) reaches the gate as
+`RiskLimits.strategy_risk`, and the engine applies the design's "intraday tighten-only factors" at every account
+refresh, `r = r_s x k_vol x k_dd x k_day` (`RiskLimits.risk_scale`):
+
+* k_vol = 0.5 when the nightly decision says the 20-day median ATR15 is at or above its 1-year p90 (`risk_terms`
+  `k_vol`; the engine holds no year of ATR); k_dd = 1 -> 0.5 linearly as the drawdown from the high-water mark goes
+  2% -> 4%; k_day = 0.5 once today's loss reaches 50% of the daily allowance;
+* "dynamic values are only ever <= the ceilings": r_s is clamped to the per-trade maximum (1%) on a demo account with
+  ceilings and to the default risk per trade anywhere else ("live may only tighten"); the gate clamps again;
+* like ADR 0031's limits, r_s only loosens at the risk-day roll and the scale is the day's lowest (a restart the same
+  day starts from the r_s logged that day); "missing or corrupt evidence gives today's fixed values": a version with
+  no usable value trades the base rate, a missing factor is 1.
 """
 from __future__ import annotations
 
@@ -76,6 +91,97 @@ def _ns(ts: pd.Timestamp) -> int:
     return int(epoch_ns(pd.DatetimeIndex([ts]))[0])
 
 
+# ---------------------------------------------------------------------------------------------- dynamic limits
+DD_SCALE_FROM, DD_SCALE_TO = 0.02, 0.04   # k_dd: 1 at a 2% drawdown from the high-water mark, 0.5 at 4%, linear
+DD_SCALE_MIN = 0.5
+K_STEP = 0.05          # k_dd is floored to this step (the strict side), so a day's journal holds a few changes only
+DAY_HALF = 0.5         # k_day: once today's loss reaches half the daily allowance ...
+K_DAY = 0.5            # ... the risk per trade is halved for the rest of the day
+
+
+def _unit(x: Any) -> bool:
+    """A usable factor: a real number in (0, 1] (a cut; never a raise)."""
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) and 0 < x <= 1
+
+
+def k_dd(dd: float | None) -> float:
+    """1 up to a 2% drawdown from the high-water mark, 0.5 from 4%, linear between (floored to K_STEP); 1 while the
+    drawdown is unknown (today's fixed values; ADR 0031's 4% floors and the stages still apply)."""
+    if dd is None or not math.isfinite(dd) or dd <= DD_SCALE_FROM:
+        return 1.0
+    if dd >= DD_SCALE_TO:
+        return DD_SCALE_MIN
+    k = 1.0 - (1.0 - DD_SCALE_MIN) * (dd - DD_SCALE_FROM) / (DD_SCALE_TO - DD_SCALE_FROM)
+    return max(DD_SCALE_MIN, math.floor(k / K_STEP + 1e-9) * K_STEP)
+
+
+def k_day(lost: float, allowance: float) -> float:
+    """0.5 once today's loss is at least half the daily allowance (the gate's `daily_loss_limit`), else 1; 1 while
+    the allowance is unknown."""
+    return K_DAY if math.isfinite(allowance) and allowance > 0 and lost >= DAY_HALF * allowance - 1e-9 else 1.0
+
+
+def k_vol(risk_terms: Any) -> float:
+    """The nightly decision's volatility cut: the smallest usable `k_vol` of its `risk_terms` (0.5 when the 20-day
+    median ATR15 is at or above its 1-year p90), 1 when none says so."""
+    terms = risk_terms.values() if isinstance(risk_terms, dict) else ()
+    return min([1.0, *(float(t["k_vol"]) for t in terms if isinstance(t, dict) and _unit(t.get("k_vol")))])
+
+
+def strategy_terms(raw: Any, ceiling: float) -> dict[str, float]:
+    """The usable per-strategy values (a version name -> a finite number > 0), each at most `ceiling`; anything else
+    is dropped, so that version trades the base rate (fail closed to today's fixed values)."""
+    if not isinstance(raw, dict):
+        return {}
+    return {v: min(float(r), ceiling) for v, r in raw.items() if isinstance(v, str) and v
+            and isinstance(r, (int, float)) and not isinstance(r, bool) and math.isfinite(r) and r > 0}
+
+
+def _lane_terms(obj: Any) -> tuple[Any, Any]:
+    """`strategy_risk` and `risk_terms` of a decision or a current (the nightly controller's contract); None when the
+    record does not carry them."""
+    return getattr(obj, "strategy_risk", None), getattr(obj, "risk_terms", None)
+
+
+def _current_terms(strategy_risk: Any, risk_terms: Any) -> dict[str, Any]:
+    """The per-strategy fields for a RiskLimitsCurrent, only those its model has."""
+    fields = RiskLimitsCurrent.model_fields
+    return {k: v for k, v in (("strategy_risk", strategy_risk), ("risk_terms", risk_terms))
+            if k in fields and isinstance(v, dict)}
+
+
+class DayRisk:
+    """One account's dynamic risk for the current risk day: the per-strategy values held (only lowered within the
+    day), the day's lowest scale and the why the engine publishes and journals."""
+
+    def __init__(self) -> None:
+        self.day: date | None = None
+        self.held: dict[str, float] | None = None
+        self.scale = 1.0
+        self.why: dict[str, Any] = {}
+        self.seed: tuple[date, dict[str, float]] | None = None
+
+    def step(self, lim: RiskLimits, cur: RiskLimitsCurrent, *, today: date, ceiling: float, dd: float | None,
+             lost: float, allowance: float) -> RiskLimits:
+        """The gate's limits with today's per-strategy risk and scale (see the module docstring)."""
+        if self.day != today:                                   # the roll, or the first read: may loosen
+            self.day, self.scale = today, 1.0
+            self.held = dict(self.seed[1]) if self.seed is not None and self.seed[0] == today else None
+        base = lim.risk_per_trade
+        raw, terms = _lane_terms(cur)
+        decided = strategy_terms(raw, ceiling)
+        held = decided if self.held is None else \
+            {v: min(self.held.get(v, base), decided.get(v, base)) for v in {*self.held, *decided}}
+        kv, kd, kday = k_vol(terms), k_dd(dd), k_day(lost, allowance)
+        self.held, self.scale = held, min(self.scale, kv * kd * kday)
+        out = lim.model_copy(update={"strategy_risk": held, "risk_scale": self.scale})
+        why_of = terms if isinstance(terms, dict) else {}
+        self.why = {"k_vol": kv, "k_dd": kd, "k_day": kday, "scale": self.scale, "base": base, "ceiling": ceiling,
+                    "strategies": {v: {**(why_of[v] if isinstance(why_of.get(v), dict) else {}),
+                                       "decided": decided.get(v), "applied": out.risk_for(v)} for v in sorted(held)}}
+        return out
+
+
 class AdaptiveLimitsController:
     """ADR 0031 through ADR 0032's seam (`LimitsController`): the nightly decision for today, held through the day and
     only ever lowered within it (see the module docstring). Reads core.db `adaptive_state` at most every RELOAD_S
@@ -95,6 +201,7 @@ class AdaptiveLimitsController:
         self.why = ""
         self._seed: tuple[date, Limits] | None = None
         self._read: tuple[float, date, Limits | None, str] | None = None     # (when, for which day, limits, why)
+        self._terms: tuple[date, Any, Any] | None = None     # today's decision's strategy_risk and risk_terms
 
     def seed(self, day: date, limits: Limits) -> None:
         """What the engine applied on `day` before a restart: that day's first read is never above it."""
@@ -126,6 +233,9 @@ class AdaptiveLimitsController:
                 out = (None, f"the adaptive decision is for {st.day.isoformat()}, not today ({today.isoformat()})")
             else:                                  # reading 13: a changed ceiling never raises a stored value
                 b = self.bounds
+                sr, rt = _lane_terms(st)
+                lim_sr, lim_rt = _lane_terms(st.limits)
+                self._terms = (today, sr if sr is not None else lim_sr, rt if rt is not None else lim_rt)
                 out = (b.limits_at({f: b.level_of(f, getattr(st.limits, f)) for f in FIELDS}),
                        f"the decision for {st.day.isoformat()}")
         self._read = (now, today, *out)
@@ -134,10 +244,13 @@ class AdaptiveLimitsController:
     def current(self, account: Account, evidence: LimitsEvidence) -> RiskLimitsCurrent:
         today = day_of_ns(evidence.now_ns if evidence.now_ns is not None else self.clock())
         target, why = self._stored(today)
+        t = self._terms
+        terms: tuple[Any, Any] = (t[1], t[2]) if target is not None and t is not None and t[0] == today else (None, None)
         if target is None:
             target, why = self.bounds.floors(), f"{why}: the floors"
         if evidence.drawdown is not None and evidence.drawdown >= DD_FLOOR:
             target, why = self.bounds.floors(), f"drawdown {evidence.drawdown:.1%} from the high-water mark: the floors"
+            terms = (None, None)                    # the floors: every strategy at the base rate
         if self.held is None or self.held_day is None or today > self.held_day:     # the roll, or the first read
             if self._seed is not None and self._seed[0] == today:
                 target = stricter(target, self._seed[1])                           # a restart never loosens
@@ -152,7 +265,7 @@ class AdaptiveLimitsController:
                                  weekly_cap=h.weekly_cap, min_lot_risk_cap=h.min_lot_risk_cap, project_open_risk=True,
                                  supervisor_daily_cap=h.supervisor_daily_cap,
                                  supervisor_weekly_cap=h.supervisor_weekly_cap, reason=f"adaptive: {self.why}",
-                                 evidence_ids=evidence.evidence_ids)
+                                 evidence_ids=evidence.evidence_ids, **_current_terms(*terms))
 
 
 def _of_current(cur: RiskLimitsCurrent, floor: Limits) -> Limits | None:
@@ -179,22 +292,32 @@ class EngineLimits:
                                          weekly_cap=built.weekly_cap, min_lot_risk_cap=built.min_lot_risk_cap,
                                          project_open_risk=built.project_open_risk, reason="default")
         self.logged = False                          # the first resolve is logged as a change from nothing
+        # dynamic limits: the account's flag (accounts.yaml `dynamic_limits`, default off: today's fixed values)
+        self.dynamic = policy is not None and getattr(policy.account, "dynamic_limits", False) is True
+        self.risk = DayRisk()
         ctl = policy.controller if policy is not None else None
-        if isinstance(ctl, AdaptiveLimitsController):
-            self._seed(ctl)
+        if isinstance(ctl, AdaptiveLimitsController) or self.dynamic:
+            self._seed(ctl if isinstance(ctl, AdaptiveLimitsController) else None, built)
 
-    def _seed(self, ctl: AdaptiveLimitsController) -> None:
-        """ADR 0031 "intraday only tightening" across a restart: the last limits logged seed the controller (they
-        apply only on their own risk day). Unreadable: the floors seed today (the strict side)."""
+    def _seed(self, ctl: AdaptiveLimitsController | None, built: RiskLimits) -> None:
+        """ADR 0031 "intraday only tightening" across a restart: the last limits logged seed the controller and the
+        day's per-strategy risk (they apply only on their own risk day). Unreadable: the floors seed today and every
+        strategy starts at the base rate (the strict side)."""
         try:
             rows = self.store.changes(self.account_id) if self.store is not None else []
         except Exception as exc:
             log.warning("limits change log unreadable (%s): today starts at the floors", type(exc).__name__)
-            ctl.seed(day_of_ns(ctl.clock()), ctl.bounds.floors())
+            if ctl is not None:
+                ctl.seed(day_of_ns(ctl.clock()), ctl.bounds.floors())
+            self.risk.seed = (day_of_ns(time.time_ns()), {})
             return
-        last = _of_current(rows[-1].current, ctl.bounds.floors()) if rows else None
-        if rows and last is not None:
-            ctl.seed(day_of_ns(_ns(rows[-1].ts_utc)), last)
+        if not rows:
+            return
+        day = day_of_ns(_ns(rows[-1].ts_utc))
+        self.risk.seed = (day, strategy_terms(_lane_terms(rows[-1].current)[0], built.max_risk_per_trade))
+        last = _of_current(rows[-1].current, ctl.bounds.floors()) if ctl is not None else None
+        if ctl is not None and last is not None:
+            ctl.seed(day, last)
 
     def apply(self, eng: Engine, now: pd.Timestamp) -> None:
         """Hand the gate the policy's current limits (every account refresh). A change is tagged on the decisions made
@@ -207,19 +330,51 @@ class EngineLimits:
         dd = 1.0 - st.equity / st.balance_closed_hwm \
             if st.equity > 0 and st.balance_closed_hwm > 0 and not st.equity_unconfirmed else None
         lim, cur = self.policy.resolve(LimitsEvidence(reverted=self.reverted, drawdown=dd, now_ns=_ns(now)))
+        # dynamic limits off: exactly the fixed values, whatever a controller carries
+        lim = lim.model_copy(update={"strategy_risk": {}, "risk_scale": 1.0})
         eng.gate.limits = lim
+        if self.dynamic:
+            lim, cur = self._dynamic(eng, lim, cur, dd, now)
+            eng.gate.limits = lim
         if self.logged and cur == self.current:
             return
         prev = self.current.profile if self.logged else None
         self.tag(eng)                                # what was decided so far was decided under the previous limits
         self.current, self.logged = cur, True
         eng.decisions.append({"ts": time.time(), "action": "limits_change", "previous": prev, "profile": cur.profile,
-                              "reason": cur.reason, "evidence_ids": list(cur.evidence_ids), **cur.tag().model_dump()})
+                              "reason": cur.reason, "evidence_ids": list(cur.evidence_ids), **cur.tag().model_dump(),
+                              **({"risk_terms": self._journal_terms()} if self.dynamic else {})})
         log.warning("limits %s -> %s (%s): daily %.4f, weekly %.4f, min-lot cap %s, open risk projected %s", prev,
                     cur.profile, cur.reason, cur.daily_cap, cur.weekly_cap, cur.min_lot_risk_cap, cur.project_open_risk)
         if self.store is not None:
             self.store.log_change(LimitsChange(account_id=self.account_id, ts_utc=now, previous_profile=prev,
                                                current=cur))
+
+    def _dynamic(self, eng: Engine, lim: RiskLimits, cur: RiskLimitsCurrent, dd: float | None,
+                 now: pd.Timestamp) -> tuple[RiskLimits, RiskLimitsCurrent]:
+        """Dynamic limits (module docstring): today's per-strategy risk and same-day scale on the gate's limits. The
+        ceiling is the per-trade maximum on a demo account with ceilings, the default rate anywhere else. A change of
+        any term is journalled (`risk_terms_change`); the current carries the values applied, so the change log
+        (and a restart the same day) holds them."""
+        st = eng.state
+        has_ceilings = self.policy is not None and self.policy.has_overrides
+        ceiling = lim.max_risk_per_trade if has_ceilings else min(lim.risk_per_trade, lim.max_risk_per_trade)
+        lost = max(0.0, st.day_start_equity - st.equity) if st.day_start_equity > 0 else 0.0
+        before = self.risk.why
+        out = self.risk.step(lim, cur, today=day_of_ns(_ns(now)), ceiling=ceiling, dd=dd, lost=lost,
+                             allowance=eng.gate.daily_loss_limit(st))
+        if self.risk.why != before:
+            eng.decisions.append({"ts": time.time(), "action": "risk_terms_change", "risk_scale": self.risk.scale,
+                                  "risk_terms": self._journal_terms()})
+        if "strategy_risk" in type(cur).model_fields:
+            cur = cur.model_copy(update={"strategy_risk": dict(out.strategy_risk)})
+        return out, cur
+
+    def _journal_terms(self) -> dict[str, Any]:
+        """The journal's `risk_terms`: per version the nightly why with the rate applied and the day's factors."""
+        w = self.risk.why
+        k = {f: w.get(f) for f in ("k_vol", "k_dd", "k_day")}
+        return {v: {**t, "r": t.get("applied"), **k} for v, t in (w.get("strategies") or {}).items()}
 
     def after_stage(self, eng: Engine, now: pd.Timestamp) -> None:
         """ADR 0032 revert: "when the account enters the 8% size-down stage, drop back to default limits and stay
@@ -270,7 +425,10 @@ class EngineLimits:
         them in lockstep (an engine without a policy publishes none, which keeps the combined caps at their defaults)."""
         if self.policy is None:
             return {}
-        return {"limits_current": self.current.model_dump(mode="json"), "limits_reverted": self.reverted}
+        out: dict[str, Any] = {"limits_current": self.current.model_dump(mode="json"), "limits_reverted": self.reverted}
+        if self.dynamic:            # dynamic limits: why the risk per trade is what it is today (off: no key)
+            out["risk_today"] = dict(self.risk.why) or None
+        return out
 
 
 def entry_exception(prop: Any, gd: Any) -> bool:
@@ -295,7 +453,10 @@ def published_limits(lim: RiskLimits, min_lot_risk: float | None) -> dict[str, A
             "min_lot_risk_cap": lim.min_lot_risk_cap,
             # BACKLOG 19/35: the open-risk heat cap and whether the daily projection counts open risk (both off by default)
             "heat": lim.heat.model_dump(), "project_open_risk": lim.project_open_risk,
-            "min_lot_risk_account": round(mlr, 2) if mlr is not None and math.isfinite(mlr) else None}
+            "min_lot_risk_account": round(mlr, 2) if mlr is not None and math.isfinite(mlr) else None,
+            # dynamic limits: the per-strategy risk per trade and the same-day scale, only while a term is in force
+            # (the engine file is unchanged with them off)
+            **({"strategy_risk": dict(lim.strategy_risk), "risk_scale": lim.risk_scale} if lim.dynamic else {})}
 
 
 def min_lot_risk(terms: dict[str, Any], stop_distance: float) -> float | None:

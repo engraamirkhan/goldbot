@@ -3339,6 +3339,16 @@
       ],
       "title": "Revert Since"
      },
+     "risk_today": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/RiskTodayView"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
      "source": {
       "enum": [
        "static",
@@ -6115,6 +6125,100 @@
     "title": "RevokeResponse",
     "type": "object"
    },
+   "RiskTodayView": {
+    "description": "Why the risk per trade is what it is today (docs/design/dynamic-limits-2026-10-19.md): the base rate, its\nceiling and the same-day tighten-only factors (each 1 = no cut). Only on an account with dynamic limits on.",
+    "properties": {
+     "base": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Base"
+     },
+     "ceiling": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ceiling"
+     },
+     "k_day": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "K Day"
+     },
+     "k_dd": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "K Dd"
+     },
+     "k_vol": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "K Vol"
+     },
+     "scale": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Scale"
+     },
+     "strategies": {
+      "items": {
+       "$ref": "#/components/schemas/StrategyRiskView"
+      },
+      "title": "Strategies",
+      "type": "array"
+     },
+     "why": {
+      "title": "Why",
+      "type": "string"
+     }
+    },
+    "required": [
+     "base",
+     "ceiling",
+     "k_vol",
+     "k_dd",
+     "k_day",
+     "scale",
+     "strategies",
+     "why"
+    ],
+    "title": "RiskTodayView",
+    "type": "object"
+   },
    "RoleChange": {
     "additionalProperties": false,
     "properties": {
@@ -6493,6 +6597,56 @@
      "min_trades_for_estimate"
     ],
     "title": "StopRuleView",
+    "type": "object"
+   },
+   "StrategyRiskView": {
+    "description": "One strategy's (model version's) risk per trade today under dynamic limits (fractions of equity, before the\nallocator's multiplier). Null = the engine does not say.",
+    "properties": {
+     "applied": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Applied"
+     },
+     "decided": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Decided"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     },
+     "version": {
+      "title": "Version",
+      "type": "string"
+     }
+    },
+    "required": [
+     "version",
+     "decided",
+     "applied",
+     "reason"
+    ],
+    "title": "StrategyRiskView",
     "type": "object"
    },
    "StrategyWatch": {

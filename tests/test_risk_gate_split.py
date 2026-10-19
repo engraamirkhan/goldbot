@@ -250,3 +250,68 @@ def test_operational_stop_is_at_or_beyond_the_stops_level_plus_spread(tmp_path):
     assert wide.allowed and wide.stop_distance == pytest.approx(1.8)
     floor = gate.check_operational(_op(tmp_path), _state(spread_points=30.0), NOW, None)
     assert floor.stop_distance == pytest.approx(1.0)                  # OPERATIONAL_MIN_STOP_USD
+
+
+# ---------------------------------------------------------------------------------------------- dynamic limits
+# docs/design/dynamic-limits-2026-10-19.md (lane B): the gate sizes an entry at its strategy's risk per trade, only ever
+# within the 1% per-trade maximum; with no dynamic term every decision is the fixed-limits one (the grid above).
+def test_with_dynamic_limits_off_a_model_version_on_every_intent_leaves_the_grid_unchanged():
+    want = json.loads(GRID.read_text())
+    out: dict[str, list[Any]] = {}
+    margins = ("none", "broker_high", "raises")
+    for i, (ln, lkw) in enumerate(LIMITS.items()):
+        gate = RiskGate(RiskLimits(**lkw))
+        for j, (sn, skw) in enumerate(STATES.items()):
+            for k, (iname, ikw) in enumerate(INTENTS.items()):
+                m = margins[(i + j + k) % 3]
+                st = _state(**skw)
+                d = gate.check(_intent(model_version="v1", **ikw), st, NOW, margin_required=_margin(m))
+                assert d.risk_per_trade is None and d.risk_source == ""
+                out[f"{ln}|{sn}|{iname}|{m}"] = [*_row(d), st.stage.value]
+    assert out == want
+
+
+def test_gate_sizes_with_strategy_risk():
+    # stop 1.0 x ATR 4.0 = 4 USD/oz, 100 oz: 400 per lot; 0.8% of 10,000 = 80 -> 0.20 lots (the base 0.5% gives 0.12)
+    d = RiskGate(RiskLimits(strategy_risk={"v2": 0.008})).check(_intent(model_version="v2"), _state(), NOW)
+    assert d.allowed and d.lots == pytest.approx(0.20) and d.risk_fraction == pytest.approx(0.008)
+    assert d.risk_per_trade == pytest.approx(0.008) and d.risk_source == "strategy:v2"
+
+
+@pytest.mark.parametrize("version", ["v9", None])
+def test_unknown_version_uses_base(version):
+    fixed = RiskGate(RiskLimits()).check(_intent(), _state(), NOW)
+    d = RiskGate(RiskLimits(strategy_risk={"v2": 0.008})).check(_intent(model_version=version), _state(), NOW)
+    assert d.allowed and d.lots == fixed.lots == pytest.approx(0.12) and d.risk_source == "base"
+    assert d.risk_per_trade == pytest.approx(0.005)
+
+
+@pytest.mark.parametrize("bad", [0.05, math.inf, math.nan, 0.0, -0.01])
+def test_a_strategy_value_above_one_percent_is_clamped_and_a_corrupt_one_trades_the_base(bad):
+    lim = RiskLimits(strategy_risk={"v2": bad})
+    want = 0.01 if bad == 0.05 else 0.005
+    assert lim.risk_for("v2") == pytest.approx(want)
+    d = RiskGate(lim).check(_intent(model_version="v2", multiplier=1.5), _state(), NOW)
+    assert d.allowed and d.risk_fraction <= 0.01 + 1e-12          # the multiplier never takes it past the 1% maximum
+
+
+def test_the_same_day_scale_cuts_the_strategy_rate_and_the_min_lot_exception_cap():
+    lim = RiskLimits(strategy_risk={"v2": 0.008}, risk_scale=0.5, min_lot_risk_cap=0.01)
+    d = RiskGate(lim).check(_intent(model_version="v2"), _state(), NOW)
+    assert d.lots == pytest.approx(0.10) and d.risk_per_trade == pytest.approx(0.004)
+    assert RiskGate(lim).min_lot_cap(False) == pytest.approx(0.005)
+    assert RiskGate(lim).min_lot_cap(True) == pytest.approx(0.0025)            # and halved again in size-down
+
+
+def test_the_scale_is_never_a_raise():
+    with pytest.raises(ValueError):
+        RiskLimits(risk_scale=1.5)
+    with pytest.raises(ValueError):
+        RiskLimits(risk_scale=0.0)
+
+
+def test_size_down_halves_the_strategy_rate_as_it_halves_the_fixed_one():
+    d = RiskGate(RiskLimits(strategy_risk={"v2": 0.008})).check(_intent(model_version="v2"),
+                                                                _state(balance_closed_hwm=11_000), NOW)
+    assert d.allowed and d.risk_per_trade == pytest.approx(0.004)                   # 0.8% halved
+    assert d.risk_fraction == pytest.approx(0.002)                                  # x the size-down multiplier cap
