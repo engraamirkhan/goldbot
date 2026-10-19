@@ -218,10 +218,23 @@ def _fallback_lock() -> Iterator[None]:
             fcntl.flock(lk, fcntl.LOCK_UN)
 
 
+def _under_wine() -> bool:
+    """True for Windows Python running under Wine on a Linux host (the MT5 boxes): ntdll exports `wine_get_version`,
+    which a real Windows never has. Wine Python has no keyring backend, so it uses the Linux rule below."""
+    if _PLATFORM != "win32":
+        return False
+    try:
+        import ctypes
+        return hasattr(ctypes.WinDLL("ntdll"), "wine_get_version")  # type: ignore[attr-defined]  # Windows-only API
+    except Exception:                       # noqa: BLE001 - not provable: treat as real Windows (refused)
+        return False
+
+
 def _plaintext_allowed() -> bool:
-    """Linux only. The opt-in is GOLDBOT_ALLOW_PLAINTEXT=1, or the deliberate PYTHON_KEYRING_BACKEND=...fail.Keyring a
-    server unit sets (so units installed before the opt-in existed keep working)."""
-    if _PLATFORM in ("darwin", "win32"):
+    """Linux only (Wine on a Linux host counts as Linux: the MT5 boxes, `_under_wine`; found bringing up the icm-probe
+    box 2026-10-19). The opt-in is GOLDBOT_ALLOW_PLAINTEXT=1, or the deliberate PYTHON_KEYRING_BACKEND=...fail.Keyring
+    a server unit sets (so units installed before the opt-in existed keep working). macOS and real Windows: never."""
+    if _PLATFORM == "darwin" or (_PLATFORM == "win32" and not _under_wine()):
         return False
     return (os.environ.get(ALLOW_PLAINTEXT_ENV) == "1"
             or os.environ.get("PYTHON_KEYRING_BACKEND") == "keyring.backends.fail.Keyring")
