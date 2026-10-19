@@ -47,7 +47,8 @@ LIVE_TABLE = "bars_1m_live"         # the traded broker's minutes, source = brok
 PAUSE_S = 0.2                       # between pages: the engine's own requests get the bridge (ticks.py pacing)
 PAGE_LIMIT_S = 30.0                 # one page slower than this stops the fill
 REFILL_EVERY = pd.Timedelta(minutes=30)
-WRITER_QUEUE = 256                  # batches of minutes waiting for the store; the oldest is dropped beyond it
+RATES_MAX = 100_000                 # broker 1m bars per fill (~10 weeks of trading minutes; MT5's chart default)
+WRITER_QUEUE = 256                 # batches of minutes waiting for the store; the oldest is dropped beyond it
 
 Span = tuple[pd.Timestamp, pd.Timestamp]
 
@@ -95,24 +96,85 @@ class _Deadline(Pace):
         return now
 
 
-def pull_bars(broker: Any, symbol: str, span: Span, *, page_ticks: int, pace: Pace,
-              keep: bool) -> tuple[list[pd.DataFrame], list[Span], str | None]:
-    """The broker's ticks in `span`, one UTC day per `pull_day`, as completed 1m bars (the live bar builder). Returns
-    (bars, covered, error): a day pulled whole is covered; with keep=False (a hole before the cut-over, where broker
-    minutes would mix feeds) the bars are not kept and a day counts as covered only when the broker had no bars in it."""
+class BrokerRates:
+    """The broker's own 1m bars (MT5 copy_rates via `get_bars(symbol, "1m", n)`), the fallback for minutes older than
+    the terminal's tick history (brain 2026-10-19: ticks reached ~15 h back, rates weeks). Pulled once per fill, on the
+    fill thread, under the fill's deadline; converted exactly to BAR_COLUMNS: bid_* = the rates (MT5 bars are bid),
+    ask_* = bid_* + spread x point, spread_mean = spread_max = spread x point (MT5 keeps one spread per bar),
+    tick_count = tick volume, visible_at = ts_utc + 1 min, in-session minutes only (DEFAULT_SESSIONS, as the live
+    builder). A broker without get_bars/symbol_info (or a failed pull) yields no minutes: the gap check decides."""
+
+    def __init__(self, broker: Any, symbol: str, pace: Pace):
+        self.broker, self.symbol, self.pace = broker, symbol, pace
+        self.frame: pd.DataFrame | None = None
+
+    def _load(self, since: pd.Timestamp) -> pd.DataFrame:
+        if self.frame is not None:
+            return self.frame
+        empty = pd.DataFrame(columns=BAR_COLUMNS)
+        if not (hasattr(self.broker, "get_bars") and hasattr(self.broker, "symbol_info")):
+            self.frame = empty
+            return empty
+        started = self.pace.before_page()                     # PullDeferred past the deadline, like a tick page
+        n = min(RATES_MAX, int((started - since) / pd.Timedelta(minutes=1)) + 2)
+        try:
+            point = float(self.broker.symbol_info(self.symbol).point)
+            r = self.broker.get_bars(self.symbol, "1m", max(n, 1))
+        except Exception as exc:                              # noqa: BLE001 - fail soft: the gap check decides
+            log.warning("broker 1m bars not available for the history fill: %s", type(exc).__name__)
+            self.frame = empty
+            return empty
+        self.pace.after_page(started)
+        if r is None or len(r) == 0 or not point > 0:
+            self.frame = empty
+            return empty
+        ts = pd.DatetimeIndex(pd.to_datetime(r["ts_utc"], utc=True))
+        spread = pd.to_numeric(r["spread"]).to_numpy(float) * point
+        out = pd.DataFrame({"ts_utc": ts, "visible_at": ts + pd.Timedelta(minutes=1)})
+        for side in ("open", "high", "low", "close"):
+            bid = pd.to_numeric(r[side]).to_numpy(float)
+            out[f"bid_{side}"] = bid
+            out[f"ask_{side}"] = bid + spread
+        out["tick_count"] = pd.to_numeric(r["tick_count"]).to_numpy(float)
+        out["spread_mean"] = spread
+        out["spread_max"] = spread
+        out = out[np.asarray(DEFAULT_SESSIONS.is_open(ts), dtype=bool)]
+        self.frame = out[BAR_COLUMNS].drop_duplicates("ts_utc").sort_values("ts_utc").reset_index(drop=True)
+        return self.frame
+
+    def minutes(self, lo: pd.Timestamp, hi: pd.Timestamp, *, since: pd.Timestamp) -> pd.DataFrame:
+        """Converted broker minutes with lo <= ts_utc < hi (the pull reaches back to `since`)."""
+        f = self._load(since)
+        return f[(f["ts_utc"] >= lo) & (f["ts_utc"] < hi)] if not f.empty else f
+
+
+def pull_bars(broker: Any, symbol: str, span: Span, *, page_ticks: int, pace: Pace, keep: bool,
+              rates: BrokerRates | None = None, since: pd.Timestamp | None = None,
+              ) -> tuple[list[pd.DataFrame], list[Span], str | None]:
+    """The broker's ticks in `span`, one UTC day per `pull_day`, as completed 1m bars (the live bar builder); minutes
+    the ticks do not reach are taken from the broker's 1m bars (`rates`), so a terminal with a short tick history still
+    fills a long hole. Returns (bars, covered, error): a day pulled whole is covered; with keep=False (a hole before the
+    cut-over, where broker minutes would mix feeds) the bars are not kept and a day counts as covered only when the
+    broker had neither ticks nor bars in it."""
     bars: list[pd.DataFrame] = []
     covered: list[Span] = []
     day, end = span
+    since = span[0] if since is None else since
     while day < end:
         nxt = min(day.floor("D") + pd.Timedelta(days=1), end)
         try:
             ticks = pull_day(broker, symbol, day, nxt, chunk=page_ticks, pace=pace)
+            b = ticks_to_1m(ticks[["ts_utc", "bid", "ask"]], DEFAULT_SESSIONS) if not ticks.empty else ticks.iloc[:0]
+            if rates is not None:
+                fb = rates.minutes(day, nxt, since=since)
+                if not fb.empty:
+                    fb = fb[~fb["ts_utc"].isin(b["ts_utc"])] if not b.empty else fb
+                    b = pd.concat([x for x in (b, fb) if not x.empty]).sort_values("ts_utc").reset_index(drop=True)
         except PullDeferred:
             return bars, covered, "budget"
         except Exception as exc:                      # noqa: BLE001 - fail soft: the gap check decides
             log.warning("history fill stopped at %s: %s", day, type(exc).__name__)
             return bars, covered, type(exc).__name__
-        b = ticks_to_1m(ticks[["ts_utc", "bid", "ask"]], DEFAULT_SESSIONS) if not ticks.empty else ticks.iloc[:0]
         if keep and not b.empty:
             bars.append(b)
         if keep or b.empty:
@@ -138,9 +200,11 @@ class HistoryFill:
 
     def _run(self) -> None:
         try:
+            rates = BrokerRates(self.broker, self.symbol, self.pace)
+            since = min(s[0] for s, _ in self.spans) if self.spans else None
             for span, keep in self.spans:
                 bars, covered, err = pull_bars(self.broker, self.symbol, span, page_ticks=self.page_ticks,
-                                               pace=self.pace, keep=keep)
+                                               pace=self.pace, keep=keep, rates=rates, since=since)
                 self.bars += bars
                 self.covered += covered
                 if err:
