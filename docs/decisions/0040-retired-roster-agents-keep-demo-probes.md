@@ -21,7 +21,9 @@ The owner has asked that research decisions not come back to him.
 ## Decision
 - Clauses 1 and 2 are applied as written:
   - `sweep_absorb` (R-14) and `box_break_close` (R-15) are added to `research.retired_families`;
-  - promotion stays shut by the existing `passed_gates` check;
+  - no real-money route opens: these agents are `shadow_only` (live share forced to 0, `goldbot/engine/runner.py:1084`)
+    and a `RuleModel` is refused as `uncalibrated_rule_model` (`runner.py:1088`); `passed_gates` alone would not stop a
+    retired family whose later trial (for example H-53) passed;
   - H-51a/b lapse.
 - Clause 3 is **not applied**. The cost probe keeps mirroring the roster agents' shadow entries, unchanged
   (`cost_probe._mirrorable`).
