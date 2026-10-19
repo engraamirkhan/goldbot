@@ -76,7 +76,9 @@ sudo() {
   [ -z "${EVIL:-}" ] || printf 'svc\033]0;owned\007\033[2Jout\n' >&2   # service-user output with terminal escapes
   "$@"
 }
-curl() { case "$*" in *compare/*) cat "$T/compare.json" 2>/dev/null || return 22 ;; *) cat "$T/ci.json" ;; esac; }
+curl() { case "$*" in *compare/*) cat "$T/compare.json" 2>/dev/null || return 22 ;;
+  *commits/*/check-runs*) local a="$*"; local s=${a#*commits/}; s=${s%%/*}; if [ -f "$T/ci-$s.json" ]; then cat "$T/ci-$s.json"; else cat "$T/ci.json"; fi ;;
+  *) cat "$T/ci.json" ;; esac; }
 systemctl() { echo "$*" >> "$T/systemctl.log"; "$PYTHON" "$T/systemctl_stub.py" "$@"; }
 main "$@"
 """
@@ -391,6 +393,41 @@ def test_rollback_goes_only_to_an_older_commit_and_a_forward_deploy_only_forward
     p = box2.run(box2.c1)
     assert p.returncode == 1 and "--rollback" in box2.records()[-1]["detail"]
     assert box.head() == box.c1 and box2.head() == box2.c2
+
+
+def _pr_merge(box: Box, *, main_moved: bool) -> tuple[str, str]:
+    """A PR head on a branch off c2, merged into main with a merge commit (GitHub's merge method); with main_moved
+    main got another commit first, so the merge's tree is not the PR head's."""
+    o = box.origin
+    _git(o, "checkout", "-q", "-b", "pr", box.c2)
+    head = _commit(o, {"docs/note.md": "pr\n"}, "pr head")
+    _git(o, "checkout", "-q", "main")
+    if main_moved:
+        _commit(o, {"docs/other.md": "main\n"}, "main moved")
+    _git(o, "merge", "-q", "--no-ff", "--no-edit", "pr")
+    return head, _git(o, "rev-parse", "HEAD")
+
+
+def test_a_pr_merge_commit_with_the_heads_tree_deploys_on_the_heads_green_ci(tmp_path):
+    box = Box(tmp_path, running="c2", aux=5)
+    head, merge = _pr_merge(box, main_moved=False)
+    box.ci("failure")                                                    # no CI on the merge commit itself
+    (box.t / f"ci-{head}.json").write_text(json.dumps({"check_runs": [{"name": "backend", "conclusion": "success"},
+                                                                      {"name": "frontend", "conclusion": "success"}]}))
+    p = box.run(merge)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert box.records()[-1]["result"] == "deployed" and box.head() == merge
+
+
+def test_a_merge_commit_whose_tree_differs_from_the_pr_head_needs_its_own_ci(tmp_path):
+    box = Box(tmp_path, running="c2", aux=5)
+    head, merge = _pr_merge(box, main_moved=True)
+    box.ci("failure")
+    (box.t / f"ci-{head}.json").write_text(json.dumps({"check_runs": [{"name": "backend", "conclusion": "success"},
+                                                                      {"name": "frontend", "conclusion": "success"}]}))
+    p = box.run(merge)
+    assert p.returncode == 1 and "CI has not passed" in box.records()[-1]["detail"]
+    assert box.head() == box.c2
 
 
 def test_rollback_needs_ci_or_a_previous_run_here(tmp_path):
