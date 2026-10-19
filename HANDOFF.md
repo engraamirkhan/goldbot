@@ -23,6 +23,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   below the threshold left out), newest first, with agent, timeframe, side, prices, reason, R and P&L. Accounts by
   config name with digits cut; a source that cannot be read is named in `unreadable`. The Home page shows it full width
   (web/src/screens/Activity.tsx), refreshed every 15 s, coloured by kind. Code: goldbot/api/activity.py.
+- Home is the status card stack (docs/ux/home-redesign-2026-10-19.md, Decision 2026-10-19; TRACEABILITY U26): new
+  read-only routes `GET /api/positions/open` (N1), `/api/strategies/watch` (N2) and `/api/today` (goldbot/api/home_cards.py,
+  5 s cache, viewer and above). Floating P&L is at the engine's mid price before costs; the engine publishes no box edges
+  or MFI yet, so N2 says "unknown" rather than guess. Deferred: N3 chart lines (entry/stop/target on the chart), N4
+  digest endpoint, axe scan (no axe dependency in web/), spread in money for position records (kept in points only).
 - Home trades summary (owner request 2026-10-19: "a summary of all types of trades"): `GET /api/trades/overview`
   (viewer and above, read-only, built at most every 15 s) counts shadow trades (taken, and all signals with the
   counterfactual candidates), demo and live positions and cost probes for today, the last 7 days and all time
