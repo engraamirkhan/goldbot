@@ -111,7 +111,7 @@ def test_a_closed_shadow_trade_says_agent_timeframe_side_prices_reason_and_r(tmp
     assert (c.agent_id, c.version, c.timeframe, c.side, c.entry, c.exit, c.reason) == \
         ("box_break_close-g0", "box-v1", "1h", "long", 2400.0, 2406.0, "target")
     assert c.r == pytest.approx(1.5) and c.ret == pytest.approx(6.0 / 2400.0)
-    assert c.stop is not None and c.target is not None and c.stop < c.entry < c.target   # owner: SL and TP shown
+    assert c.stop is not None and c.target is not None and c.entry is not None and c.stop < c.entry < c.target   # owner: SL and TP shown
     # opened at the signal bar's close and closed at the exit bar's close (the book stamps bars by their open time)
     opened = [e for e in v.events if e.kind == "shadow_opened"]
     assert pd.Timestamp(opened[-1].ts) == T0 + pd.Timedelta(hours=1)
