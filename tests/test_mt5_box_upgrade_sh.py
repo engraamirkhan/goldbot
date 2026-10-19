@@ -365,3 +365,15 @@ def test_probe_box_without_its_bridge_unit_enabled_fails(box):
     tmp, sha = box
     rc, out = run(box, "install", sha, *FLAGS, "--account", "icm-probe")
     assert rc == 1 and "FAIL   bridge unit enabled" in out and "icm-probe" in out
+
+
+def test_the_terminal_units_guard_never_matches_its_own_command_line():
+    """Live 2026-10-19 (icm-probe box): the guard's own error text contained "terminal64.exe", so `pgrep -f` matched the
+    guarding shell itself and the unit always refused to start. No ExecStartPre may contain what its pattern matches."""
+    import re
+    from pathlib import Path
+    unit = (Path(__file__).resolve().parents[1] / "goldbot/ops/linux/systemd/goldbot-mt5-terminal@.service").read_text()
+    for line in (ln for ln in unit.splitlines() if ln.startswith("ExecStartPre=") and "pgrep" in ln):
+        m = re.search(r'pgrep[^"]*"([^"]+)"', line)
+        assert m is not None, line
+        assert not re.search(m.group(1), line), line
