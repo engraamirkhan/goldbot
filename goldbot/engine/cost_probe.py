@@ -22,6 +22,12 @@ real (live-agent) trades take priority". A cost probe, not a population status: 
   so the gate sizes and checks exactly the lots sent under the account's demo caps; then `Engine._execute` (the
   pending_orders row first). The trade is tagged `cost_probe:<agent_id>` (`probe_id`), keeps the challenger's stop,
   target, time exit and exit policy, and exits automatically like every trade (exits are never gated).
+* Identity at the broker (trading-safety review): a probe order carries its own magic, magic_base + PROBE_MAGIC_OFFSET
+  (no strategy family's, not the bridge smoke's), and a `cp-` comment, so a probe found with no order row (a lost
+  orders file) is adopted as a probe (`adoption`), never as a live agent's trade, and the broker ledger knows it.
+* Budget (trading-safety review): no new probe once today's realised probe loss reaches `cost_probe_budget` of the
+  day's loss allowance, nor while less than that share of the allowance remains (`budget_refusal`): probes never use
+  the part of the £50 a real trade needs. An unknown allowance or an unknown probe P&L today refuses (fail closed).
 * The record: one `ProbeRecord` per order in aux.db `cost_probes` (purpose cost_probe, with the agent id and version):
   signal, requested and fill price, spread, send latency and retcode; at the close the exit, swap, commission and P&L
   from the broker's deals. A probe's close never goes to closed_trades.jsonl (phase gate, throttle, broker-ledger
@@ -54,6 +60,8 @@ log = logging.getLogger(__name__)
 
 PREFIX = "cost_probe:"
 YIELD = "cost_probe_yield"          # the exit of a probe that makes way for a real trade
+PROBE_MAGIC_OFFSET = 97             # magic_base + 97: no family's crc32 % 100 (tests guard it), not the smoke's 99
+COMMENT = "cp-"                     # a probe's client order id, and so its MT5 comment, starts with this
 
 
 def probe_id(agent_id: str) -> str:
@@ -64,6 +72,41 @@ def probe_id(agent_id: str) -> str:
 
 def is_probe(agent_id: str | None) -> bool:
     return bool(agent_id) and str(agent_id).startswith(PREFIX)
+
+
+def magic(eng: Engine, agent: Specialist) -> int:
+    """The order's magic: a probe's own, else the agent's family magic (`Engine._magic`)."""
+    return eng.cfg.magic_base + PROBE_MAGIC_OFFSET if is_probe(agent.agent_id) else eng._magic(agent.family)
+
+
+def is_probe_magic(m: int, magic_base: int) -> bool:
+    return int(m) == magic_base + PROBE_MAGIC_OFFSET
+
+
+def agent_of(eng: Engine, agent_id: str | None) -> Specialist | None:
+    """The specialist of an agent id, a probe's tag included (its challenger: barriers and exit policy)."""
+    return eng.agents.get(str(agent_id).removeprefix(PREFIX)) if agent_id else None
+
+
+def adoption(eng: Engine, p: Any, rec: Any) -> tuple[Specialist | None, str]:
+    """(specialist, agent id) for a position `Engine._adopt` takes over. With its order row: the row's agent (a probe's
+    tag kept, its challenger's specialist). Without one, an orphan: a probe's magic gives `cost_probe:orphan` (recorded
+    in the probe ledger, never in the trade record), else the agent of the magic number when exactly one agent here
+    has that family's magic."""
+    if rec is not None:
+        return agent_of(eng, rec.agent_id), rec.agent_id
+    if is_probe_magic(p.magic, eng.cfg.magic_base):
+        return None, PREFIX + "orphan"
+    hits = [a for a in eng.agents.values() if eng._magic(a.family) == p.magic]
+    agent = hits[0] if len(hits) == 1 else None
+    return agent, "orphan" if agent is None else agent.agent_id
+
+
+def probe_positions(deals: pd.DataFrame, magic_base: int) -> set[int]:
+    """Position ids with a probe's magic in a deal history (MT5 columns position_id, magic)."""
+    if deals is None or deals.empty or "magic" not in deals.columns:
+        return set()
+    return {int(pid) for pid, m in zip(deals["position_id"], deals["magic"]) if pid and is_probe_magic(m, magic_base)}
 
 
 def check_start(mode: str, enabled: bool) -> None:
@@ -212,7 +255,8 @@ def _reread(eng: Engine, close_ts: pd.Timestamp | None) -> None:
 
 
 def _make_way(eng: Engine, close_ts: pd.Timestamp | None) -> None:
-    closed = [eng._try_close(pid, YIELD, None).ok for pid in _probes_open(eng)]
+    """Close the open probes; one already due to close is left to `_retry_closes` (its reason and backoff kept)."""
+    closed = [eng._try_close(pid, YIELD, None).ok for pid in _probes_open(eng) if pid not in eng._close_due]
     if any(closed):
         _reread(eng, close_ts)
 
@@ -261,9 +305,35 @@ def _step(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick: Tick) -> 
         return
     if eng.cfg.mode != "demo" or not auto_entry.permitted(eng, close_ts):
         return
+    if (why := budget_refusal(eng, probe, close_ts)) is not None:
+        eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": f"cost_probe_budget:{why}"})
+        return
     version, t, agent = signals[rotate(list(signals), probe.last_agent)]
     probe.last_agent = agent.agent_id
     _send(eng, probe, version, t, agent, close_ts, tick)
+
+
+def budget_refusal(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp) -> str | None:
+    """Why the probe budget refuses a new probe now, or None: the day's loss allowance unknown, less than
+    `cost_probe_budget` of it remaining, today's probe P&L unknown, or today's realised probe loss at that share or more.
+    Today is the engine's risk day (from its last reset; the UTC day before the first)."""
+    from goldbot.engine.limits_apply import daily_allowance
+    allowance = daily_allowance(eng.gate, eng.state)
+    limit, remaining = allowance["daily_loss_limit"], allowance["daily_loss_remaining"]
+    if limit is None or remaining is None or limit <= 0:
+        return "allowance_unknown"
+    share = eng.cfg.cost_probe_budget * limit
+    if remaining < share:
+        return "allowance_low"
+    since = eng._last_reset if eng._last_reset is not None else close_ts.floor("D")
+    with probe.db.connection() as conn:
+        today = [r for r in LEDGER.select(conn, "account_id = ? AND closed = 1", (eng.cfg.account_id,))
+                 if r.exit_utc is not None and r.exit_utc >= since]
+    if any(r.pnl is None for r in today):
+        return "probe_pnl_unknown"
+    if -sum(float(r.pnl or 0.0) for r in today) >= share:
+        return "probe_loss_reached"
+    return None
 
 
 def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Specialist, close_ts: pd.Timestamp,
@@ -272,7 +342,7 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
     from goldbot.risk.gate import broker_margin
     from goldbot.telegram.approvals import Proposal
     tag, ls, side = probe_id(agent.agent_id), agent.label_spec, t.side
-    pid = eng._proposal_id(tag, close_ts)
+    pid = _probe_order_id(eng, tag, close_ts)
     if pid in eng.sent_ids:
         return
     atr_usd = abs(t.entry - t.stop) / ls.stop_atr              # the signal bar's ATR, as the shadow entry used it
@@ -322,6 +392,13 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
         log.warning("cost probe %s not written to the ledger (%s)", pid, type(exc).__name__)
     if filled:
         _reread(eng, close_ts)
+
+
+def _probe_order_id(eng: Engine, tag: str, close_ts: pd.Timestamp) -> str:
+    """`cp-<close epoch s>-<hash>`: 24 characters, so the whole id (with its `cp-`) fits MT5's 31-character comment."""
+    import hashlib
+    h = hashlib.sha1(f"{eng.cfg.account_id}|{tag}|{close_ts.isoformat()}".encode()).hexdigest()[:10]
+    return f"{COMMENT}{int(close_ts.timestamp())}-{h}"
 
 
 def record_close(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float | None, at: pd.Timestamp) -> bool:

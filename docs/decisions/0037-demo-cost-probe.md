@@ -27,6 +27,15 @@ minimum-lot (broker min, 0.01) demo orders, choosing which signal by a fixed rou
   the broker's minimum, so the gate sizes and checks exactly the lots sent; then `Engine._execute` (pending_orders row
   first). The trade is tagged `cost_probe:<agent_id>`, keeps the challenger's stop, target, time exit and exit policy
   and exits automatically like every trade (exits are never gated).
+- Identity at the broker (trading-safety review round 1): a probe order carries its own magic, `magic_base + 97`
+  (no strategy family's crc32 % 100, guarded by a test; not the bridge smoke's 99), and a `cp-` client order id, which
+  is its MT5 comment. A probe found without its order row (a lost orders file) is adopted as `cost_probe:orphan` and
+  recorded in the probe ledger, never as a live agent's trade; one recovered from an unconfirmed send keeps its
+  challenger's exit policy.
+- Budget (trading-safety review round 1): `cost_probe.budget_share` (default 0.2) per account. No new probe once
+  today's realised probe loss reaches that share of the day's loss allowance (£10 of £50), nor while less than that
+  share of the allowance remains; an unknown allowance or an unknown probe P&L today refuses (journal
+  `cost_probe_budget:<why>`).
 - Real trades take priority: a live agent's candidate closes an open probe before its decision, and any other position
   closes it at the bar close (exit `cost_probe_yield`). The probe never holds the position slot, the heat or the daily
   allowance a real trade needs. An ambiguous probe order still refuses every entry (`unconfirmed_order_pending`): an
@@ -43,8 +52,8 @@ minimum-lot (broker min, 0.01) demo orders, choosing which signal by a fixed rou
 - Measured slippage, spread at the order, latency and swap accrue on demo from the challengers' own signals, without
   the owner and without touching the evidence the gates and the tournament use.
 - Probe losses are real demo money: they count toward the daily and weekly caps (the gate reads the broker's equity),
-  so a bad day of probes can stop live-agent entries for the day. At 0.01 lot this is bounded by the gate's own
-  minimum-lot cap per probe and one probe at a time.
+  but the budget stops new probes once they have lost their share of the day's allowance (or the allowance left is
+  below it), so probes alone cannot use the part a real trade needs; one open probe can still lose up to its stop.
 - A probe can be cut short when a real trade needs its slot, so its exit facts (and swap) cover fewer full trades than
   its entry facts; the entry-side costs, the purpose of the probe, are unaffected.
 - The trades list on the dashboard does not show probes (they are not in the closed-trade record); an open probe

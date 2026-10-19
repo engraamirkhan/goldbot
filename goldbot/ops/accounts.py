@@ -68,6 +68,9 @@ class CostProbe(FrozenRecord):
     """ADR 0037 (the research director's ruling 2026-10-19): minimum-lot demo orders mirroring challengers' shadow
     entries, for measured costs (goldbot/engine/cost_probe.py). Off unless set; demo accounts only."""
     enabled: bool = False
+    # trading-safety review: no new probe once today's realised probe loss reaches this share of the day's loss
+    # allowance, nor while less than this share of the allowance remains (real trades keep the rest)
+    budget_share: float = Field(0.2, gt=0, le=1)
 
 
 class Account(Record):

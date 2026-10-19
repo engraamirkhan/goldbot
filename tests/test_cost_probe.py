@@ -52,15 +52,16 @@ class _Terminal(PaperBroker):
 def _engine(tmp_path: Path, *, agents: list[Any] | None = None, probe: bool = True, mode: str = "demo",
             approval: str = "auto", trade_mode: str | None = "demo", live_shares: dict[str, float] | None = None,
             shadow: dict[str, str] | None = None, champions: dict[str, str] | None = None,
-            data_root: str | None = None) -> tuple[Engine, _Terminal, Tick, pd.Timestamp]:
+            data_root: str | None = None, pb: _Terminal | None = None,
+            budget: float = 0.2) -> tuple[Engine, _Terminal, Tick, pd.Timestamp]:
     """An engine one bar close away from deciding: the 1m bars before CUT, the last tick, the 15m close CUT.
     `shadow`: version -> agent id (the shadow set); `champions`: agent id -> its champion version."""
     agents = agents if agents is not None else [_Long()]
-    pb = _Terminal(trade_mode, equity=10_000, adverse_slip_points=0.0)
+    pb = pb if pb is not None else _Terminal(trade_mode, equity=10_000, adverse_slip_points=0.0)
     shadow = shadow if shadow is not None else {f"{agents[0].agent_id}-v2": agents[0].agent_id}
     eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", mode=mode, approval_mode=approval,
                               declared_class="raw", state_dir=str(tmp_path), owner_user_id=111, shadow_host=True,
-                              cost_probe=probe, data_root=data_root),
+                              cost_probe=probe, cost_probe_budget=budget, data_root=data_root),
                  pb, agents, {a.family: ConstantModel(p=0.9) for a in agents}, ApprovalCenter({111}),
                  limits=RiskLimits(**BASE), live_shares=live_shares if live_shares is not None else {},
                  shadow_models={v: (aid, ConstantModel(p=0.9)) for v, aid in shadow.items()},
@@ -320,3 +321,145 @@ def test_the_broker_ledger_reconciles_closed_probes_in_the_probe_ledger_not_as_m
     assert cost_probe.closed_position_ids(db, "icm-demo") == {pid}
     assert cost_probe.closed_position_ids(db, "other") == set()
     assert ledger.probe_note({pid}) == "1 cost probe position(s) reconciled in the cost-probe ledger (ADR 0037)"
+
+
+# ------------------------------------------------------------------------------------------------ review round 1
+def test_a_probe_order_carries_its_own_magic_and_a_cp_comment(tmp_path):
+    eng, pb, tick, close = _engine(tmp_path)
+    eng.on_bar_close(close, tick)
+    [pos] = pb.positions()
+    assert pos.magic == eng.cfg.magic_base + cost_probe.PROBE_MAGIC_OFFSET and pos.comment.startswith("cp-")
+
+
+def test_no_strategy_family_shares_the_probe_magic_or_the_smoke_magic():
+    import zlib
+
+    from goldbot.execution.broker import SMOKE_MAGIC_OFFSET
+    from goldbot.specialists import SPECIALISTS
+    assert cost_probe.PROBE_MAGIC_OFFSET != SMOKE_MAGIC_OFFSET
+    reserved = (cost_probe.PROBE_MAGIC_OFFSET, SMOKE_MAGIC_OFFSET)
+    clash = {f for f in SPECIALISTS if zlib.crc32(f.encode()) % 100 in reserved}
+    assert not clash, f"families whose magic is reserved: {clash}"
+
+
+def test_a_probe_found_after_the_orders_file_is_lost_is_adopted_as_a_probe_never_as_the_live_agent(tmp_path):
+    eng, pb, tick, close = _engine(tmp_path)
+    eng.on_bar_close(close, tick)
+    [pid] = list(eng.open)
+    (tmp_path / "orders_icm-demo.json").unlink()
+    eng2, _, _, _ = _engine(tmp_path, pb=pb)
+    assert not eng2.open
+    eng2._reconcile(tick.ts_utc)
+    assert cost_probe.is_probe(eng2.open[pid].agent_id)
+    eng2._try_close(pid, "time_exit", None)
+    eng2._flush_closed()
+    assert load_closed_trades(tmp_path)[0] == []
+    assert [r.position_id for r in cost_probe.probes(tmp_path, "icm-demo") if r.exit_utc is not None] == [pid]
+
+
+def test_a_probe_survives_a_restart_and_its_time_exit_still_runs(tmp_path):
+    eng, pb, tick, close = _engine(tmp_path)
+    eng.on_bar_close(close, tick)
+    [pid] = list(eng.open)
+    eng2, _, _, _ = _engine(tmp_path, pb=pb)
+    tr = eng2.open[pid]
+    assert cost_probe.is_probe(tr.agent_id) and tr.max_bars == eng.open[pid].max_bars
+    tr.bars_held = tr.max_bars - 1
+    eng2._manage_open(pd.DataFrame())
+    eng2._flush_closed()
+    assert pid not in eng2.open and pid not in {p.position_id for p in pb.positions()}
+    [rec] = cost_probe.probes(tmp_path, "icm-demo")
+    assert rec.exit_reason == "time_exit" and load_closed_trades(tmp_path)[0] == []
+
+
+def test_a_probe_recovered_from_an_unconfirmed_send_gets_its_challengers_exit_policy(tmp_path):
+    from goldbot.engine import unconfirmed
+    from goldbot.engine.store import SentOrder
+    from goldbot.execution.broker import Position
+    agent = _Long()
+    eng, pb, tick, close = _engine(tmp_path, agents=[agent])
+    attached: list[Any] = []
+    eng._attach_policy = lambda tr, a, **kw: attached.append(a)          # type: ignore[method-assign]
+    rec = SentOrder(client_order_id="cp-1-a", ts_utc=tick.ts_utc, agent_id=cost_probe.probe_id(agent.agent_id), side=1,
+                    magic=eng.cfg.magic_base + cost_probe.PROBE_MAGIC_OFFSET, lots=0.01, max_bars=8, sl=2390.0,
+                    tp=2420.0, status="ambiguous", atr_usd=5.0)
+    pos = Position(position_id=77, symbol="XAUUSD", side=1, lots=0.01, open_price=2400.0, sl=2390.0, tp=2420.0,
+                   magic=rec.magic, comment="cp-1-a", open_time_utc=tick.ts_utc, profit=0.0)
+    unconfirmed._adopt_row(eng, "cp-1-a", rec, pos)
+    assert attached == [agent] and cost_probe.is_probe(eng.open[77].agent_id)
+
+
+def test_the_kill_switch_closes_an_open_probe_and_no_probe_follows(tmp_path):
+    a, b = _Long(), _Long(min_body_pct=0.31)
+    eng, pb, tick, close = _engine(tmp_path, agents=[a, b], shadow={"va": a.agent_id}, champions={})
+    eng.on_bar_close(close, tick)
+    [pid] = list(eng.open)
+    eng.state.balance_closed_hwm = eng.state.equity / 0.85             # a 15% drawdown: the 12% kill switch trips
+    eng._refresh_account(pb.last_tick("XAUUSD"))
+    eng._flush_closed()
+    assert eng.state.stage.value == "halted"
+    assert not pb.positions()
+    assert [r.position_id for r in cost_probe.probes(tmp_path, "icm-demo") if r.exit_utc is not None] == [pid]
+    eng.set_shadow_models({**eng.shadow_models, "vb": (b.agent_id, ConstantModel(p=0.9))})
+    _next_close(eng, pb, close)
+    assert len(_probe_orders(eng)) == 1 and not pb.positions()          # propose after the trip: no new probe
+
+
+def test_the_owners_halt_blocks_probes_at_the_riskgate(tmp_path):
+    eng, pb, tick, close = _engine(tmp_path)
+    refresh = eng._refresh_account
+
+    def halted(tick: Tick) -> None:
+        refresh(tick)
+        eng.state.owner_halt = True
+
+    eng._refresh_account = halted                                        # type: ignore[method-assign]
+    eng.on_bar_close(close, tick)
+    assert not pb.positions()
+    assert any(str(d.get("action", "")).startswith("cost_probe_refused:") and "owner_halt" in d["action"]
+               for d in eng.decisions)
+
+
+def test_no_probe_once_todays_realised_probe_loss_reaches_its_share_of_the_daily_allowance(tmp_path):
+    eng, pb, tick, close = _engine(tmp_path)
+    assert eng.probe is not None
+    with eng.probe.db.write() as conn:
+        cost_probe.LEDGER.upsert(conn, cost_probe.ProbeRecord(
+            client_order_id="cp-0-x", account_id="icm-demo", agent_id="x", side=1, lots=0.01, sent_utc=tick.ts_utc,
+            exit_utc=tick.ts_utc, pnl=-1_000_000.0))
+    eng.on_bar_close(close, tick)
+    assert not pb.positions()
+    assert any(str(d.get("action", "")).startswith("cost_probe_budget:") for d in eng.decisions)
+
+
+def test_no_probe_while_the_daily_loss_remaining_is_below_the_probe_share(tmp_path):
+    from goldbot.engine.limits_apply import daily_allowance
+    eng, pb, tick, close = _engine(tmp_path, budget=0.2)
+    refresh = eng._refresh_account
+
+    def lossy(tick: Tick) -> None:                                        # 90% of today's allowance already lost
+        refresh(tick)
+        limit = daily_allowance(eng.gate, eng.state)["daily_loss_limit"]
+        assert limit is not None
+        eng.state.day_start_equity = eng.state.equity + 0.9 * limit
+
+    eng._refresh_account = lossy                                         # type: ignore[method-assign]
+    eng.on_bar_close(close, tick)
+    assert not pb.positions()
+    assert any(str(d.get("action", "")).startswith("cost_probe_budget:") for d in eng.decisions)
+
+
+def test_an_open_probe_already_due_to_close_is_not_closed_again_to_make_way(tmp_path):
+    eng, pb, tick, close = _engine(tmp_path)
+    eng.on_bar_close(close, tick)
+    [pid] = list(eng.open)
+    eng._close_due[pid] = ("time_exit", {"symbol": "XAUUSD"}, tick.ts_utc)
+    cost_probe._make_way(eng, close)
+    assert eng._close_due[pid][0] == "time_exit" and pid in eng.open
+    assert not any(d.get("action") == cost_probe.YIELD for d in eng.decisions)
+
+
+def test_the_probe_budget_share_is_configured_per_account_and_bounded():
+    assert _account(cost_probe={"enabled": True}).cost_probe.budget_share == 0.2
+    with pytest.raises(ValidationError):
+        _account(cost_probe={"enabled": True, "budget_share": 1.5})

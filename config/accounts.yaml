@@ -52,8 +52,10 @@ accounts:
     # through the RiskGate under the caps above, exits automatic; a real trade always comes first (an open probe is
     # closed to make way). Probes are recorded in aux.db cost_probes for the costs pipeline only: never in the trade
     # record, the phase gate or the shadow scoring. Refused at load on any account that is not mode: demo, and no
-    # probe is sent unless the MT5 terminal itself reports a demo account and the engine is in auto.
-    cost_probe: { enabled: true }
+    # probe is sent unless the MT5 terminal itself reports a demo account and the engine is in auto. budget_share:
+    # no new probe once today's realised probe loss reaches this share of the day's loss allowance (£10 of £50), nor
+    # while less than this share of the allowance remains. Probes trade under their own magic (magic_base + 97).
+    cost_probe: { enabled: true, budget_share: 0.2 }
   vantage-demo:
     broker: vantage
     mode: demo

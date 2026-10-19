@@ -172,6 +172,7 @@ class EngineConfig(Record):
     declared_class: str | None = None    # raw | standard from config/accounts.yaml: the baseline (effective_class)
     approval_mode: str = "propose"   # propose | auto
     cost_probe: bool = False         # ADR 0037: min-lot demo orders mirroring challengers' shadow entries
+    cost_probe_budget: float = Field(0.2, gt=0, le=1)   # ADR 0037: the probes' share of the day's loss allowance
     symbol: str = "XAUUSD"
     decision_tf: str = "15m"
     magic_base: int = 260100
@@ -1288,7 +1289,7 @@ class Engine:
             self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "duplicate_suppressed",
                                    "proposal": prop.proposal_id})
             return None
-        magic = self._magic(agent.family)
+        magic = cost_probe.magic(self, agent)        # ADR 0037: a probe has its own magic
         # finance audit GAP-01/02/13: the signal's quote and spread (the proposal) next to the quote priced from now
         audit = EntryAudit(decision_price=prop.entry, decision_spread_points=prop.spread_points,
                            decision_utc=pd.Timestamp(prop.created, unit="s", tz="UTC"), requested_price=requested,
@@ -1806,8 +1807,7 @@ class Engine:
             next((o for o in self._orders.values() if p.comment and p.comment in (o.client_order_id, o.client_order_id[-31:])), None)
         # BACKLOG 72: a row never confirmed keeps the tighter of the stop sent and the broker's, and the target sent
         late = rec is not None and rec.status in unconfirmed.NEVER_CONFIRMED
-        agent = self.agents.get(rec.agent_id) if rec is not None else self._agent_for_magic(p.magic)
-        agent_id = rec.agent_id if rec is not None else "orphan" if agent is None else agent.agent_id
+        agent, agent_id = cost_probe.adoption(self, p, rec)     # ADR 0037: a probe is never adopted as a live trade
         max_bars = rec.max_bars if rec is not None else 48 if agent is None else self._base_bars(agent)
         tr = OpenTrade(position_id=p.position_id, agent_id=agent_id, side=p.side, lots=p.lots,
                        entry_bar_ts=p.open_time_utc, max_bars=max_bars,
@@ -1829,12 +1829,6 @@ class Engine:
             self.open[p.position_id] = tr
             unconfirmed.adopted(self, rec, p)
         return tr
-
-    def _agent_for_magic(self, magic: int) -> Specialist | None:
-        """The agent an orphan belongs to: magic numbers are per family, so only a family with exactly one agent here
-        identifies it."""
-        hits = [a for a in self.agents.values() if self._magic(a.family) == magic]
-        return hits[0] if len(hits) == 1 else None
 
     def _atr_now(self) -> float | None:
         """Decision-timeframe ATR(14): the last bar close's, else computed from the 1m history (after a restart)."""

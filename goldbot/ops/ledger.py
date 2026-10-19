@@ -530,10 +530,12 @@ def run_ledger(db: Database, broker: Any, account: Account, state_dir: Path, slo
     notes = [e for e in (open_err, records_err) if e] + notes
 
     broker_open = {p.position_id: p for p in positions if _ours(p.magic, account.magic_base)}
-    from goldbot.engine.cost_probe import closed_position_ids
+    from goldbot.engine.cost_probe import closed_position_ids, probe_positions
     trades = broker_trades(deals, account.magic_base)
-    probes = closed_position_ids(db, acc_id) & set(trades)          # ADR 0037: recorded in the probe ledger
-    if probes:
+    # ADR 0037: probes (their own magic) closed and recorded in the probe ledger are reconciled there; a probe closed
+    # at the broker without a probe record stays missing
+    probes = closed_position_ids(db, acc_id) & set(trades)
+    if probe_positions(deals, account.magic_base) | probes:
         notes.append(probe_note(probes))
     diffs, checked, matched, pending = reconcile_trades(
         {p: b for p, b in trades.items() if p not in probes}, broker_open, None if open_err else sys_open, records,
