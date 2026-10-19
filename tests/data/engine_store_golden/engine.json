@@ -1,145 +1,5 @@
 {
- "0aeece5958b4de92": {
-  "account": "icm-demo",
-  "account_class": "unknown",
-  "account_class_declared": null,
-  "account_class_measured": "unknown",
-  "approval_mode": "propose",
-  "balance": null,
-  "balance_closed_hwm": 10500.0,
-  "bar_close_grace_s": 1.5,
-  "blackout": null,
-  "bridge_compat": null,
-  "broker": "icm",
-  "clock_skew_s": null,
-  "closed_records_lost": [],
-  "closes_due": [],
-  "combined_size_down": false,
-  "currency": "USD",
-  "daily_loss_limit": 198.0,
-  "daily_loss_limit_abs": null,
-  "daily_loss_remaining": 0.0,
-  "data_recovering": false,
-  "day_start_equity": 9900.0,
-  "dq_checks": [],
-  "dq_error": false,
-  "dq_warnings": [],
-  "entry_blocks": [
-   "drawdown_halt",
-   "invalid_state",
-   "invalid:equity"
-  ],
-  "entry_refusals": {},
-  "equity": 0.0,
-  "foreign_positions": [],
-  "ladder_atr": {
-   "15m": null,
-   "1d": null,
-   "1h": null,
-   "4h": null
-  },
-  "last_tick_age_s": 0.0,
-  "last_tick_error_at": null,
-  "late_ticks": 0,
-  "limits": {
-   "daily_cap": 0.02,
-   "daily_loss_limit_abs": null,
-   "heat": {
-    "enabled": false,
-    "max_open_risk": 0.02,
-    "max_same_direction": 2
-   },
-   "max_risk_per_trade": 0.01,
-   "min_lot_risk_account": null,
-   "min_lot_risk_cap": null,
-   "multiplier_bounds": [
-    0.25,
-    1.5
-   ],
-   "project_open_risk": false,
-   "risk_per_trade": 0.005,
-   "weekly_cap": 0.05
-  },
-  "lot_terms": null,
-  "margin": null,
-  "margin_free": null,
-  "market_closed": false,
-  "mode": "paper",
-  "open_long": 0,
-  "open_lots": 0.0,
-  "open_notional": 0.0,
-  "open_positions": 0,
-  "open_risk": null,
-  "open_risk_positions": [],
-  "open_short": 0,
-  "pending": 0,
-  "positions_unreadable": 0,
-  "price": null,
-  "propose_only_until": null,
-  "quote_invalid_since": null,
-  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
-  "schema_skew": {
-   "count": 0,
-   "entries": [],
-   "last_refused_utc": null,
-   "reads": 0,
-   "refused": false,
-   "truncated": 0
-  },
-  "server_clock": null,
-  "session_source": "static",
-  "sessions": {
-   "broker_windows": null,
-   "covers_from": null,
-   "covers_until": null,
-   "note": "",
-   "server_tz": "Europe/Athens",
-   "source": "static"
-  },
-  "spread_points": 0.0,
-  "stage": "halted",
-  "stale_bars": false,
-  "terminal_connected": true,
-  "throttle": {
-   "cooldown_bars": 4,
-   "enabled": false,
-   "loss_streak": 3,
-   "max_entries_per_day_per_agent": 3
-  },
-  "tick_ahead_s": 0.0,
-  "tick_error": false,
-  "tick_error_detail": null,
-  "tick_errors_total": 0,
-  "ticks_dropped": 0,
-  "unconfirmed_orders": {
-   "count": 0,
-   "oldest_utc": null,
-   "symbol": "XAUUSD"
-  },
-  "week_start_equity": 10100.0,
-  "windows": {
-   "calendar_latest_ts_utc": null,
-   "calendar_received_utc": null,
-   "calendar_unavailable": false,
-   "calendar_unavailable_reason": null,
-   "calendar_unavailable_since": null,
-   "enabled": {
-    "holidays": false,
-    "reopen": false,
-    "tier2": false
-   },
-   "holiday_name": null,
-   "holiday_thin": false,
-   "holiday_until": null,
-   "holiday_valid_through": null,
-   "holiday_version": null,
-   "reopen_until": null,
-   "reopen_window": false,
-   "tier2_blackout": false,
-   "tier2_until": null
-  }
- },
- "127d5134078dd73f": {
+ "04bc5ecbda794379": {
   "account": "icm-demo",
   "account_class": "unknown",
   "account_class_declared": null,
@@ -171,6 +31,15 @@
   "entry_refusals": {},
   "equity": 0.0,
   "foreign_positions": [],
+  "history_backfill": {
+   "bars": 0,
+   "cutover": null,
+   "dropped": 0,
+   "error": null,
+   "from": null,
+   "running": false
+  },
+  "history_gap": {},
   "ladder_atr": {
    "15m": null,
    "1d": null,
@@ -278,7 +147,7 @@
    "tier2_until": null
   }
  },
- "137d070f5cb20f6e": {
+ "0ee6568ccb42a7d9": {
   "account": "icm-demo",
   "account_class": "unknown",
   "account_class_declared": null,
@@ -304,13 +173,21 @@
   "dq_error": false,
   "dq_warnings": [],
   "entry_blocks": [
-   "drawdown_halt",
    "invalid_state",
    "invalid:equity"
   ],
   "entry_refusals": {},
   "equity": 0.0,
   "foreign_positions": [],
+  "history_backfill": {
+   "bars": 0,
+   "cutover": null,
+   "dropped": 0,
+   "error": null,
+   "from": null,
+   "running": false
+  },
+  "history_gap": {},
   "ladder_atr": {
    "15m": null,
    "1d": null,
@@ -356,145 +233,6 @@
   "price": null,
   "propose_only_until": null,
   "quote_invalid_since": null,
-  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
-  "schema_skew": {
-   "count": 0,
-   "entries": [],
-   "last_refused_utc": null,
-   "reads": 0,
-   "refused": false,
-   "truncated": 0
-  },
-  "server_clock": null,
-  "session_source": "static",
-  "sessions": {
-   "broker_windows": null,
-   "covers_from": null,
-   "covers_until": null,
-   "note": "",
-   "server_tz": "Europe/Athens",
-   "source": "static"
-  },
-  "spread_points": 0.0,
-  "stage": "halted",
-  "stale_bars": false,
-  "terminal_connected": true,
-  "throttle": {
-   "cooldown_bars": 4,
-   "enabled": false,
-   "loss_streak": 3,
-   "max_entries_per_day_per_agent": 3
-  },
-  "tick_ahead_s": 0.0,
-  "tick_error": false,
-  "tick_error_detail": null,
-  "tick_errors_total": 0,
-  "ticks_dropped": 0,
-  "unconfirmed_orders": {
-   "count": 2,
-   "oldest_utc": "2200-01-06T09:00:00+00:00",
-   "symbol": "XAUUSD"
-  },
-  "week_start_equity": 10100.0,
-  "windows": {
-   "calendar_latest_ts_utc": null,
-   "calendar_received_utc": null,
-   "calendar_unavailable": false,
-   "calendar_unavailable_reason": null,
-   "calendar_unavailable_since": null,
-   "enabled": {
-    "holidays": false,
-    "reopen": false,
-    "tier2": false
-   },
-   "holiday_name": null,
-   "holiday_thin": false,
-   "holiday_until": null,
-   "holiday_valid_through": null,
-   "holiday_version": null,
-   "reopen_until": null,
-   "reopen_window": false,
-   "tier2_blackout": false,
-   "tier2_until": null
-  }
- },
- "65b1997335dd217f": {
-  "account": "icm-demo",
-  "account_class": "unknown",
-  "account_class_declared": null,
-  "account_class_measured": "unknown",
-  "approval_mode": "propose",
-  "balance": null,
-  "balance_closed_hwm": 10500.0,
-  "bar_close_grace_s": 1.5,
-  "blackout": null,
-  "bridge_compat": null,
-  "broker": "icm",
-  "clock_skew_s": null,
-  "closed_records_lost": [],
-  "closes_due": [],
-  "combined_size_down": false,
-  "currency": "USD",
-  "daily_loss_limit": 198.0,
-  "daily_loss_limit_abs": null,
-  "daily_loss_remaining": 0.0,
-  "data_recovering": false,
-  "day_start_equity": 9900.0,
-  "dq_checks": [],
-  "dq_error": false,
-  "dq_warnings": [],
-  "entry_blocks": [
-   "invalid_state",
-   "invalid:equity"
-  ],
-  "entry_refusals": {},
-  "equity": 0.0,
-  "foreign_positions": [],
-  "ladder_atr": {
-   "15m": null,
-   "1d": null,
-   "1h": null,
-   "4h": null
-  },
-  "last_tick_age_s": 0.0,
-  "last_tick_error_at": null,
-  "late_ticks": 0,
-  "limits": {
-   "daily_cap": 0.02,
-   "daily_loss_limit_abs": null,
-   "heat": {
-    "enabled": false,
-    "max_open_risk": 0.02,
-    "max_same_direction": 2
-   },
-   "max_risk_per_trade": 0.01,
-   "min_lot_risk_account": null,
-   "min_lot_risk_cap": null,
-   "multiplier_bounds": [
-    0.25,
-    1.5
-   ],
-   "project_open_risk": false,
-   "risk_per_trade": 0.005,
-   "weekly_cap": 0.05
-  },
-  "lot_terms": null,
-  "margin": null,
-  "margin_free": null,
-  "market_closed": false,
-  "mode": "paper",
-  "open_long": 0,
-  "open_lots": 0.0,
-  "open_notional": 0.0,
-  "open_positions": 0,
-  "open_risk": null,
-  "open_risk_positions": [],
-  "open_short": 0,
-  "pending": 0,
-  "positions_unreadable": 0,
-  "price": null,
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "quote_invalid_since": null,
   "rearm_refused": null,
   "schema_skew": {
    "count": 0,
@@ -515,7 +253,7 @@
    "source": "static"
   },
   "spread_points": 0.0,
-  "stage": "normal",
+  "stage": "size_down",
   "stale_bars": false,
   "terminal_connected": true,
   "throttle": {
@@ -557,7 +295,7 @@
    "tier2_until": null
   }
  },
- "6cc87d4a3cb13741": {
+ "3e9e6c0b6c4a4075": {
   "account": "icm-demo",
   "account_class": "unknown",
   "account_class_declared": null,
@@ -591,6 +329,15 @@
   "entry_refusals": {},
   "equity": 0.0,
   "foreign_positions": [],
+  "history_backfill": {
+   "bars": 0,
+   "cutover": null,
+   "dropped": 0,
+   "error": null,
+   "from": null,
+   "running": false
+  },
+  "history_gap": {},
   "ladder_atr": {
    "15m": null,
    "1d": null,
@@ -698,7 +445,7 @@
    "tier2_until": null
   }
  },
- "6df501a59251d47e": {
+ "4398acb7d3468eb4": {
   "account": "icm-demo",
   "account_class": "unknown",
   "account_class_declared": null,
@@ -733,428 +480,15 @@
   "entry_refusals": {},
   "equity": 0.0,
   "foreign_positions": [],
-  "ladder_atr": {
-   "15m": null,
-   "1d": null,
-   "1h": null,
-   "4h": null
+  "history_backfill": {
+   "bars": 0,
+   "cutover": null,
+   "dropped": 0,
+   "error": null,
+   "from": null,
+   "running": false
   },
-  "last_tick_age_s": 0.0,
-  "last_tick_error_at": null,
-  "late_ticks": 0,
-  "limits": {
-   "daily_cap": 0.02,
-   "daily_loss_limit_abs": null,
-   "heat": {
-    "enabled": false,
-    "max_open_risk": 0.02,
-    "max_same_direction": 2
-   },
-   "max_risk_per_trade": 0.01,
-   "min_lot_risk_account": null,
-   "min_lot_risk_cap": null,
-   "multiplier_bounds": [
-    0.25,
-    1.5
-   ],
-   "project_open_risk": false,
-   "risk_per_trade": 0.005,
-   "weekly_cap": 0.05
-  },
-  "lot_terms": null,
-  "margin": null,
-  "margin_free": null,
-  "market_closed": false,
-  "mode": "paper",
-  "open_long": 0,
-  "open_lots": 0.0,
-  "open_notional": 0.0,
-  "open_positions": 0,
-  "open_risk": null,
-  "open_risk_positions": [],
-  "open_short": 0,
-  "pending": 0,
-  "positions_unreadable": 0,
-  "price": null,
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "quote_invalid_since": null,
-  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
-  "schema_skew": {
-   "count": 0,
-   "entries": [],
-   "last_refused_utc": null,
-   "reads": 0,
-   "refused": false,
-   "truncated": 0
-  },
-  "server_clock": null,
-  "session_source": "static",
-  "sessions": {
-   "broker_windows": null,
-   "covers_from": null,
-   "covers_until": null,
-   "note": "",
-   "server_tz": "Europe/Athens",
-   "source": "static"
-  },
-  "spread_points": 0.0,
-  "stage": "halted",
-  "stale_bars": false,
-  "terminal_connected": true,
-  "throttle": {
-   "cooldown_bars": 4,
-   "enabled": false,
-   "loss_streak": 3,
-   "max_entries_per_day_per_agent": 3
-  },
-  "tick_ahead_s": 0.0,
-  "tick_error": false,
-  "tick_error_detail": null,
-  "tick_errors_total": 0,
-  "ticks_dropped": 0,
-  "unconfirmed_orders": {
-   "count": 1,
-   "oldest_utc": "2020-01-06T09:00:00+00:00",
-   "symbol": "XAUUSD"
-  },
-  "week_start_equity": 10100.0,
-  "windows": {
-   "calendar_latest_ts_utc": null,
-   "calendar_received_utc": null,
-   "calendar_unavailable": false,
-   "calendar_unavailable_reason": null,
-   "calendar_unavailable_since": null,
-   "enabled": {
-    "holidays": false,
-    "reopen": false,
-    "tier2": false
-   },
-   "holiday_name": null,
-   "holiday_thin": false,
-   "holiday_until": null,
-   "holiday_valid_through": null,
-   "holiday_version": null,
-   "reopen_until": null,
-   "reopen_window": false,
-   "tier2_blackout": false,
-   "tier2_until": null
-  }
- },
- "7dea66258db3002e": {
-  "account": "icm-demo",
-  "account_class": "unknown",
-  "account_class_declared": null,
-  "account_class_measured": "unknown",
-  "approval_mode": "propose",
-  "balance": null,
-  "balance_closed_hwm": 10500.0,
-  "bar_close_grace_s": 1.5,
-  "blackout": null,
-  "bridge_compat": null,
-  "broker": "icm",
-  "clock_skew_s": null,
-  "closed_records_lost": [
-   7
-  ],
-  "closes_due": [],
-  "combined_size_down": false,
-  "currency": "USD",
-  "daily_loss_limit": 198.0,
-  "daily_loss_limit_abs": null,
-  "daily_loss_remaining": 0.0,
-  "data_recovering": false,
-  "day_start_equity": 9900.0,
-  "dq_checks": [],
-  "dq_error": false,
-  "dq_warnings": [],
-  "entry_blocks": [
-   "invalid_state",
-   "invalid:equity"
-  ],
-  "entry_refusals": {},
-  "equity": 0.0,
-  "foreign_positions": [],
-  "ladder_atr": {
-   "15m": null,
-   "1d": null,
-   "1h": null,
-   "4h": null
-  },
-  "last_tick_age_s": 0.0,
-  "last_tick_error_at": null,
-  "late_ticks": 0,
-  "limits": {
-   "daily_cap": 0.02,
-   "daily_loss_limit_abs": null,
-   "heat": {
-    "enabled": false,
-    "max_open_risk": 0.02,
-    "max_same_direction": 2
-   },
-   "max_risk_per_trade": 0.01,
-   "min_lot_risk_account": null,
-   "min_lot_risk_cap": null,
-   "multiplier_bounds": [
-    0.25,
-    1.5
-   ],
-   "project_open_risk": false,
-   "risk_per_trade": 0.005,
-   "weekly_cap": 0.05
-  },
-  "lot_terms": null,
-  "margin": null,
-  "margin_free": null,
-  "market_closed": false,
-  "mode": "paper",
-  "open_long": 0,
-  "open_lots": 0.0,
-  "open_notional": 0.0,
-  "open_positions": 0,
-  "open_risk": null,
-  "open_risk_positions": [],
-  "open_short": 0,
-  "pending": 0,
-  "positions_unreadable": 0,
-  "price": null,
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "quote_invalid_since": null,
-  "rearm_refused": null,
-  "schema_skew": {
-   "count": 0,
-   "entries": [],
-   "last_refused_utc": null,
-   "reads": 0,
-   "refused": false,
-   "truncated": 0
-  },
-  "server_clock": null,
-  "session_source": "static",
-  "sessions": {
-   "broker_windows": null,
-   "covers_from": null,
-   "covers_until": null,
-   "note": "",
-   "server_tz": "Europe/Athens",
-   "source": "static"
-  },
-  "spread_points": 0.0,
-  "stage": "size_down",
-  "stale_bars": false,
-  "terminal_connected": true,
-  "throttle": {
-   "cooldown_bars": 4,
-   "enabled": false,
-   "loss_streak": 3,
-   "max_entries_per_day_per_agent": 3
-  },
-  "tick_ahead_s": 0.0,
-  "tick_error": false,
-  "tick_error_detail": null,
-  "tick_errors_total": 0,
-  "ticks_dropped": 0,
-  "unconfirmed_orders": {
-   "count": 1,
-   "oldest_utc": "2020-01-06T09:00:00+00:00",
-   "symbol": "XAUUSD"
-  },
-  "week_start_equity": 10100.0,
-  "windows": {
-   "calendar_latest_ts_utc": null,
-   "calendar_received_utc": null,
-   "calendar_unavailable": false,
-   "calendar_unavailable_reason": null,
-   "calendar_unavailable_since": null,
-   "enabled": {
-    "holidays": false,
-    "reopen": false,
-    "tier2": false
-   },
-   "holiday_name": null,
-   "holiday_thin": false,
-   "holiday_until": null,
-   "holiday_valid_through": null,
-   "holiday_version": null,
-   "reopen_until": null,
-   "reopen_window": false,
-   "tier2_blackout": false,
-   "tier2_until": null
-  }
- },
- "85c29ad394c637af": {
-  "account": "icm-demo",
-  "account_class": "unknown",
-  "account_class_declared": null,
-  "account_class_measured": "unknown",
-  "approval_mode": "propose",
-  "balance": null,
-  "balance_closed_hwm": 10500.0,
-  "bar_close_grace_s": 1.5,
-  "blackout": null,
-  "bridge_compat": null,
-  "broker": "icm",
-  "clock_skew_s": null,
-  "closed_records_lost": [],
-  "closes_due": [],
-  "combined_size_down": false,
-  "currency": "USD",
-  "daily_loss_limit": 198.0,
-  "daily_loss_limit_abs": null,
-  "daily_loss_remaining": 0.0,
-  "data_recovering": false,
-  "day_start_equity": 9900.0,
-  "dq_checks": [],
-  "dq_error": false,
-  "dq_warnings": [],
-  "entry_blocks": [
-   "invalid_state",
-   "invalid:equity"
-  ],
-  "entry_refusals": {},
-  "equity": 0.0,
-  "foreign_positions": [],
-  "ladder_atr": {
-   "15m": null,
-   "1d": null,
-   "1h": null,
-   "4h": null
-  },
-  "last_tick_age_s": 0.0,
-  "last_tick_error_at": null,
-  "late_ticks": 0,
-  "limits": {
-   "daily_cap": 0.02,
-   "daily_loss_limit_abs": null,
-   "heat": {
-    "enabled": false,
-    "max_open_risk": 0.02,
-    "max_same_direction": 2
-   },
-   "max_risk_per_trade": 0.01,
-   "min_lot_risk_account": null,
-   "min_lot_risk_cap": null,
-   "multiplier_bounds": [
-    0.25,
-    1.5
-   ],
-   "project_open_risk": false,
-   "risk_per_trade": 0.005,
-   "weekly_cap": 0.05
-  },
-  "lot_terms": null,
-  "margin": null,
-  "margin_free": null,
-  "market_closed": false,
-  "mode": "paper",
-  "open_long": 0,
-  "open_lots": 0.0,
-  "open_notional": 0.0,
-  "open_positions": 0,
-  "open_risk": null,
-  "open_risk_positions": [],
-  "open_short": 0,
-  "pending": 0,
-  "positions_unreadable": 0,
-  "price": null,
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "quote_invalid_since": null,
-  "rearm_refused": null,
-  "schema_skew": {
-   "count": 0,
-   "entries": [],
-   "last_refused_utc": null,
-   "reads": 0,
-   "refused": false,
-   "truncated": 0
-  },
-  "server_clock": null,
-  "session_source": "static",
-  "sessions": {
-   "broker_windows": null,
-   "covers_from": null,
-   "covers_until": null,
-   "note": "",
-   "server_tz": "Europe/Athens",
-   "source": "static"
-  },
-  "spread_points": 0.0,
-  "stage": "size_down",
-  "stale_bars": false,
-  "terminal_connected": true,
-  "throttle": {
-   "cooldown_bars": 4,
-   "enabled": false,
-   "loss_streak": 3,
-   "max_entries_per_day_per_agent": 3
-  },
-  "tick_ahead_s": 0.0,
-  "tick_error": false,
-  "tick_error_detail": null,
-  "tick_errors_total": 0,
-  "ticks_dropped": 0,
-  "unconfirmed_orders": {
-   "count": 2,
-   "oldest_utc": "2200-01-06T09:00:00+00:00",
-   "symbol": "XAUUSD"
-  },
-  "week_start_equity": 10100.0,
-  "windows": {
-   "calendar_latest_ts_utc": null,
-   "calendar_received_utc": null,
-   "calendar_unavailable": false,
-   "calendar_unavailable_reason": null,
-   "calendar_unavailable_since": null,
-   "enabled": {
-    "holidays": false,
-    "reopen": false,
-    "tier2": false
-   },
-   "holiday_name": null,
-   "holiday_thin": false,
-   "holiday_until": null,
-   "holiday_valid_through": null,
-   "holiday_version": null,
-   "reopen_until": null,
-   "reopen_window": false,
-   "tier2_blackout": false,
-   "tier2_until": null
-  }
- },
- "8bd9391f6bdc954a": {
-  "account": "icm-demo",
-  "account_class": "unknown",
-  "account_class_declared": null,
-  "account_class_measured": "unknown",
-  "approval_mode": "propose",
-  "balance": null,
-  "balance_closed_hwm": 10500.0,
-  "bar_close_grace_s": 1.5,
-  "blackout": null,
-  "bridge_compat": null,
-  "broker": "icm",
-  "clock_skew_s": null,
-  "closed_records_lost": [
-   7
-  ],
-  "closes_due": [],
-  "combined_size_down": false,
-  "currency": "USD",
-  "daily_loss_limit": 198.0,
-  "daily_loss_limit_abs": null,
-  "daily_loss_remaining": 0.0,
-  "data_recovering": false,
-  "day_start_equity": 9900.0,
-  "dq_checks": [],
-  "dq_error": false,
-  "dq_warnings": [],
-  "entry_blocks": [
-   "drawdown_halt",
-   "invalid_state",
-   "invalid:equity"
-  ],
-  "entry_refusals": {},
-  "equity": 0.0,
-  "foreign_positions": [],
+  "history_gap": {},
   "ladder_atr": {
    "15m": null,
    "1d": null,
@@ -1262,7 +596,7 @@
    "tier2_until": null
   }
  },
- "8c50cf477825f29e": {
+ "5082238bf96a9f45": {
   "account": "icm-demo",
   "account_class": "unknown",
   "account_class_declared": null,
@@ -1294,6 +628,15 @@
   "entry_refusals": {},
   "equity": 0.0,
   "foreign_positions": [],
+  "history_backfill": {
+   "bars": 0,
+   "cutover": null,
+   "dropped": 0,
+   "error": null,
+   "from": null,
+   "running": false
+  },
+  "history_gap": {},
   "ladder_atr": {
    "15m": null,
    "1d": null,
@@ -1374,284 +717,6 @@
   "tick_errors_total": 0,
   "ticks_dropped": 0,
   "unconfirmed_orders": {
-   "count": 2,
-   "oldest_utc": "2200-01-06T09:00:00+00:00",
-   "symbol": "XAUUSD"
-  },
-  "week_start_equity": 10100.0,
-  "windows": {
-   "calendar_latest_ts_utc": null,
-   "calendar_received_utc": null,
-   "calendar_unavailable": false,
-   "calendar_unavailable_reason": null,
-   "calendar_unavailable_since": null,
-   "enabled": {
-    "holidays": false,
-    "reopen": false,
-    "tier2": false
-   },
-   "holiday_name": null,
-   "holiday_thin": false,
-   "holiday_until": null,
-   "holiday_valid_through": null,
-   "holiday_version": null,
-   "reopen_until": null,
-   "reopen_window": false,
-   "tier2_blackout": false,
-   "tier2_until": null
-  }
- },
- "a8315843bf00432f": {
-  "account": "icm-demo",
-  "account_class": "unknown",
-  "account_class_declared": null,
-  "account_class_measured": "unknown",
-  "approval_mode": "propose",
-  "balance": null,
-  "balance_closed_hwm": 10500.0,
-  "bar_close_grace_s": 1.5,
-  "blackout": null,
-  "bridge_compat": null,
-  "broker": "icm",
-  "clock_skew_s": null,
-  "closed_records_lost": [],
-  "closes_due": [],
-  "combined_size_down": false,
-  "currency": "USD",
-  "daily_loss_limit": 198.0,
-  "daily_loss_limit_abs": null,
-  "daily_loss_remaining": 0.0,
-  "data_recovering": false,
-  "day_start_equity": 9900.0,
-  "dq_checks": [],
-  "dq_error": false,
-  "dq_warnings": [],
-  "entry_blocks": [
-   "invalid_state",
-   "invalid:equity"
-  ],
-  "entry_refusals": {},
-  "equity": 0.0,
-  "foreign_positions": [],
-  "ladder_atr": {
-   "15m": null,
-   "1d": null,
-   "1h": null,
-   "4h": null
-  },
-  "last_tick_age_s": 0.0,
-  "last_tick_error_at": null,
-  "late_ticks": 0,
-  "limits": {
-   "daily_cap": 0.02,
-   "daily_loss_limit_abs": null,
-   "heat": {
-    "enabled": false,
-    "max_open_risk": 0.02,
-    "max_same_direction": 2
-   },
-   "max_risk_per_trade": 0.01,
-   "min_lot_risk_account": null,
-   "min_lot_risk_cap": null,
-   "multiplier_bounds": [
-    0.25,
-    1.5
-   ],
-   "project_open_risk": false,
-   "risk_per_trade": 0.005,
-   "weekly_cap": 0.05
-  },
-  "lot_terms": null,
-  "margin": null,
-  "margin_free": null,
-  "market_closed": false,
-  "mode": "paper",
-  "open_long": 0,
-  "open_lots": 0.0,
-  "open_notional": 0.0,
-  "open_positions": 0,
-  "open_risk": null,
-  "open_risk_positions": [],
-  "open_short": 0,
-  "pending": 0,
-  "positions_unreadable": 0,
-  "price": null,
-  "propose_only_until": null,
-  "quote_invalid_since": null,
-  "rearm_refused": null,
-  "schema_skew": {
-   "count": 0,
-   "entries": [],
-   "last_refused_utc": null,
-   "reads": 0,
-   "refused": false,
-   "truncated": 0
-  },
-  "server_clock": null,
-  "session_source": "static",
-  "sessions": {
-   "broker_windows": null,
-   "covers_from": null,
-   "covers_until": null,
-   "note": "",
-   "server_tz": "Europe/Athens",
-   "source": "static"
-  },
-  "spread_points": 0.0,
-  "stage": "size_down",
-  "stale_bars": false,
-  "terminal_connected": true,
-  "throttle": {
-   "cooldown_bars": 4,
-   "enabled": false,
-   "loss_streak": 3,
-   "max_entries_per_day_per_agent": 3
-  },
-  "tick_ahead_s": 0.0,
-  "tick_error": false,
-  "tick_error_detail": null,
-  "tick_errors_total": 0,
-  "ticks_dropped": 0,
-  "unconfirmed_orders": {
-   "count": 2,
-   "oldest_utc": "2200-01-06T09:00:00+00:00",
-   "symbol": "XAUUSD"
-  },
-  "week_start_equity": 10100.0,
-  "windows": {
-   "calendar_latest_ts_utc": null,
-   "calendar_received_utc": null,
-   "calendar_unavailable": false,
-   "calendar_unavailable_reason": null,
-   "calendar_unavailable_since": null,
-   "enabled": {
-    "holidays": false,
-    "reopen": false,
-    "tier2": false
-   },
-   "holiday_name": null,
-   "holiday_thin": false,
-   "holiday_until": null,
-   "holiday_valid_through": null,
-   "holiday_version": null,
-   "reopen_until": null,
-   "reopen_window": false,
-   "tier2_blackout": false,
-   "tier2_until": null
-  }
- },
- "aed18049ed715082": {
-  "account": "icm-demo",
-  "account_class": "unknown",
-  "account_class_declared": null,
-  "account_class_measured": "unknown",
-  "approval_mode": "propose",
-  "balance": null,
-  "balance_closed_hwm": 10500.0,
-  "bar_close_grace_s": 1.5,
-  "blackout": null,
-  "bridge_compat": null,
-  "broker": "icm",
-  "clock_skew_s": null,
-  "closed_records_lost": [],
-  "closes_due": [],
-  "combined_size_down": false,
-  "currency": "USD",
-  "daily_loss_limit": 198.0,
-  "daily_loss_limit_abs": null,
-  "daily_loss_remaining": 0.0,
-  "data_recovering": false,
-  "day_start_equity": 9900.0,
-  "dq_checks": [],
-  "dq_error": false,
-  "dq_warnings": [],
-  "entry_blocks": [
-   "invalid_state",
-   "invalid:equity"
-  ],
-  "entry_refusals": {},
-  "equity": 0.0,
-  "foreign_positions": [],
-  "ladder_atr": {
-   "15m": null,
-   "1d": null,
-   "1h": null,
-   "4h": null
-  },
-  "last_tick_age_s": 0.0,
-  "last_tick_error_at": null,
-  "late_ticks": 0,
-  "limits": {
-   "daily_cap": 0.02,
-   "daily_loss_limit_abs": null,
-   "heat": {
-    "enabled": false,
-    "max_open_risk": 0.02,
-    "max_same_direction": 2
-   },
-   "max_risk_per_trade": 0.01,
-   "min_lot_risk_account": null,
-   "min_lot_risk_cap": null,
-   "multiplier_bounds": [
-    0.25,
-    1.5
-   ],
-   "project_open_risk": false,
-   "risk_per_trade": 0.005,
-   "weekly_cap": 0.05
-  },
-  "lot_terms": null,
-  "margin": null,
-  "margin_free": null,
-  "market_closed": false,
-  "mode": "paper",
-  "open_long": 0,
-  "open_lots": 0.0,
-  "open_notional": 0.0,
-  "open_positions": 0,
-  "open_risk": null,
-  "open_risk_positions": [],
-  "open_short": 0,
-  "pending": 0,
-  "positions_unreadable": 0,
-  "price": null,
-  "propose_only_until": "2025-04-04T10:00:00+00:00",
-  "quote_invalid_since": null,
-  "rearm_refused": null,
-  "schema_skew": {
-   "count": 0,
-   "entries": [],
-   "last_refused_utc": null,
-   "reads": 0,
-   "refused": false,
-   "truncated": 0
-  },
-  "server_clock": null,
-  "session_source": "static",
-  "sessions": {
-   "broker_windows": null,
-   "covers_from": null,
-   "covers_until": null,
-   "note": "",
-   "server_tz": "Europe/Athens",
-   "source": "static"
-  },
-  "spread_points": 0.0,
-  "stage": "size_down",
-  "stale_bars": false,
-  "terminal_connected": true,
-  "throttle": {
-   "cooldown_bars": 4,
-   "enabled": false,
-   "loss_streak": 3,
-   "max_entries_per_day_per_agent": 3
-  },
-  "tick_ahead_s": 0.0,
-  "tick_error": false,
-  "tick_error_detail": null,
-  "tick_errors_total": 0,
-  "ticks_dropped": 0,
-  "unconfirmed_orders": {
    "count": 0,
    "oldest_utc": null,
    "symbol": "XAUUSD"
@@ -1679,7 +744,7 @@
    "tier2_until": null
   }
  },
- "c97a050289db71a7": {
+ "52a4f0e0aa9f33c2": {
   "account": "icm-demo",
   "account_class": "unknown",
   "account_class_declared": null,
@@ -1713,6 +778,15 @@
   "entry_refusals": {},
   "equity": 0.0,
   "foreign_positions": [],
+  "history_backfill": {
+   "bars": 0,
+   "cutover": null,
+   "dropped": 0,
+   "error": null,
+   "from": null,
+   "running": false
+  },
+  "history_gap": {},
   "ladder_atr": {
    "15m": null,
    "1d": null,
@@ -1820,7 +894,7 @@
    "tier2_until": null
   }
  },
- "cf58d8ff4c661f7a": {
+ "63579738028e3d6a": {
   "account": "icm-demo",
   "account_class": "unknown",
   "account_class_declared": null,
@@ -1852,6 +926,15 @@
   "entry_refusals": {},
   "equity": 0.0,
   "foreign_positions": [],
+  "history_backfill": {
+   "bars": 0,
+   "cutover": null,
+   "dropped": 0,
+   "error": null,
+   "from": null,
+   "running": false
+  },
+  "history_gap": {},
   "ladder_atr": {
    "15m": null,
    "1d": null,
@@ -1895,7 +978,7 @@
   "pending": 0,
   "positions_unreadable": 0,
   "price": null,
-  "propose_only_until": null,
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
   "quote_invalid_since": null,
   "rearm_refused": null,
   "schema_skew": {
@@ -1918,6 +1001,155 @@
   },
   "spread_points": 0.0,
   "stage": "normal",
+  "stale_bars": false,
+  "terminal_connected": true,
+  "throttle": {
+   "cooldown_bars": 4,
+   "enabled": false,
+   "loss_streak": 3,
+   "max_entries_per_day_per_agent": 3
+  },
+  "tick_ahead_s": 0.0,
+  "tick_error": false,
+  "tick_error_detail": null,
+  "tick_errors_total": 0,
+  "ticks_dropped": 0,
+  "unconfirmed_orders": {
+   "count": 2,
+   "oldest_utc": "2200-01-06T09:00:00+00:00",
+   "symbol": "XAUUSD"
+  },
+  "week_start_equity": 10100.0,
+  "windows": {
+   "calendar_latest_ts_utc": null,
+   "calendar_received_utc": null,
+   "calendar_unavailable": false,
+   "calendar_unavailable_reason": null,
+   "calendar_unavailable_since": null,
+   "enabled": {
+    "holidays": false,
+    "reopen": false,
+    "tier2": false
+   },
+   "holiday_name": null,
+   "holiday_thin": false,
+   "holiday_until": null,
+   "holiday_valid_through": null,
+   "holiday_version": null,
+   "reopen_until": null,
+   "reopen_window": false,
+   "tier2_blackout": false,
+   "tier2_until": null
+  }
+ },
+ "67453326612d3ea6": {
+  "account": "icm-demo",
+  "account_class": "unknown",
+  "account_class_declared": null,
+  "account_class_measured": "unknown",
+  "approval_mode": "propose",
+  "balance": null,
+  "balance_closed_hwm": 10500.0,
+  "bar_close_grace_s": 1.5,
+  "blackout": null,
+  "bridge_compat": null,
+  "broker": "icm",
+  "clock_skew_s": null,
+  "closed_records_lost": [],
+  "closes_due": [],
+  "combined_size_down": false,
+  "currency": "USD",
+  "daily_loss_limit": 198.0,
+  "daily_loss_limit_abs": null,
+  "daily_loss_remaining": 0.0,
+  "data_recovering": false,
+  "day_start_equity": 9900.0,
+  "dq_checks": [],
+  "dq_error": false,
+  "dq_warnings": [],
+  "entry_blocks": [
+   "drawdown_halt",
+   "invalid_state",
+   "invalid:equity"
+  ],
+  "entry_refusals": {},
+  "equity": 0.0,
+  "foreign_positions": [],
+  "history_backfill": {
+   "bars": 0,
+   "cutover": null,
+   "dropped": 0,
+   "error": null,
+   "from": null,
+   "running": false
+  },
+  "history_gap": {},
+  "ladder_atr": {
+   "15m": null,
+   "1d": null,
+   "1h": null,
+   "4h": null
+  },
+  "last_tick_age_s": 0.0,
+  "last_tick_error_at": null,
+  "late_ticks": 0,
+  "limits": {
+   "daily_cap": 0.02,
+   "daily_loss_limit_abs": null,
+   "heat": {
+    "enabled": false,
+    "max_open_risk": 0.02,
+    "max_same_direction": 2
+   },
+   "max_risk_per_trade": 0.01,
+   "min_lot_risk_account": null,
+   "min_lot_risk_cap": null,
+   "multiplier_bounds": [
+    0.25,
+    1.5
+   ],
+   "project_open_risk": false,
+   "risk_per_trade": 0.005,
+   "weekly_cap": 0.05
+  },
+  "lot_terms": null,
+  "margin": null,
+  "margin_free": null,
+  "market_closed": false,
+  "mode": "paper",
+  "open_long": 0,
+  "open_lots": 0.0,
+  "open_notional": 0.0,
+  "open_positions": 0,
+  "open_risk": null,
+  "open_risk_positions": [],
+  "open_short": 0,
+  "pending": 0,
+  "positions_unreadable": 0,
+  "price": null,
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "quote_invalid_since": null,
+  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
+  "schema_skew": {
+   "count": 0,
+   "entries": [],
+   "last_refused_utc": null,
+   "reads": 0,
+   "refused": false,
+   "truncated": 0
+  },
+  "server_clock": null,
+  "session_source": "static",
+  "sessions": {
+   "broker_windows": null,
+   "covers_from": null,
+   "covers_until": null,
+   "note": "",
+   "server_tz": "Europe/Athens",
+   "source": "static"
+  },
+  "spread_points": 0.0,
+  "stage": "halted",
   "stale_bars": false,
   "terminal_connected": true,
   "throttle": {
@@ -1959,7 +1191,7 @@
    "tier2_until": null
   }
  },
- "d4327eef3fea051a": {
+ "69012a4bf48b44b3": {
   "account": "icm-demo",
   "account_class": "unknown",
   "account_class_declared": null,
@@ -1992,6 +1224,15 @@
   "entry_refusals": {},
   "equity": 0.0,
   "foreign_positions": [],
+  "history_backfill": {
+   "bars": 0,
+   "cutover": null,
+   "dropped": 0,
+   "error": null,
+   "from": null,
+   "running": false
+  },
+  "history_gap": {},
   "ladder_atr": {
    "15m": null,
    "1d": null,
@@ -2099,7 +1340,7 @@
    "tier2_until": null
   }
  },
- "df9bee1ba04f46e6": {
+ "719ff1e100a179d9": {
   "account": "icm-demo",
   "account_class": "unknown",
   "account_class_declared": null,
@@ -2132,6 +1373,613 @@
   "entry_refusals": {},
   "equity": 0.0,
   "foreign_positions": [],
+  "history_backfill": {
+   "bars": 0,
+   "cutover": null,
+   "dropped": 0,
+   "error": null,
+   "from": null,
+   "running": false
+  },
+  "history_gap": {},
+  "ladder_atr": {
+   "15m": null,
+   "1d": null,
+   "1h": null,
+   "4h": null
+  },
+  "last_tick_age_s": 0.0,
+  "last_tick_error_at": null,
+  "late_ticks": 0,
+  "limits": {
+   "daily_cap": 0.02,
+   "daily_loss_limit_abs": null,
+   "heat": {
+    "enabled": false,
+    "max_open_risk": 0.02,
+    "max_same_direction": 2
+   },
+   "max_risk_per_trade": 0.01,
+   "min_lot_risk_account": null,
+   "min_lot_risk_cap": null,
+   "multiplier_bounds": [
+    0.25,
+    1.5
+   ],
+   "project_open_risk": false,
+   "risk_per_trade": 0.005,
+   "weekly_cap": 0.05
+  },
+  "lot_terms": null,
+  "margin": null,
+  "margin_free": null,
+  "market_closed": false,
+  "mode": "paper",
+  "open_long": 0,
+  "open_lots": 0.0,
+  "open_notional": 0.0,
+  "open_positions": 0,
+  "open_risk": null,
+  "open_risk_positions": [],
+  "open_short": 0,
+  "pending": 0,
+  "positions_unreadable": 0,
+  "price": null,
+  "propose_only_until": null,
+  "quote_invalid_since": null,
+  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
+  "schema_skew": {
+   "count": 0,
+   "entries": [],
+   "last_refused_utc": null,
+   "reads": 0,
+   "refused": false,
+   "truncated": 0
+  },
+  "server_clock": null,
+  "session_source": "static",
+  "sessions": {
+   "broker_windows": null,
+   "covers_from": null,
+   "covers_until": null,
+   "note": "",
+   "server_tz": "Europe/Athens",
+   "source": "static"
+  },
+  "spread_points": 0.0,
+  "stage": "halted",
+  "stale_bars": false,
+  "terminal_connected": true,
+  "throttle": {
+   "cooldown_bars": 4,
+   "enabled": false,
+   "loss_streak": 3,
+   "max_entries_per_day_per_agent": 3
+  },
+  "tick_ahead_s": 0.0,
+  "tick_error": false,
+  "tick_error_detail": null,
+  "tick_errors_total": 0,
+  "ticks_dropped": 0,
+  "unconfirmed_orders": {
+   "count": 0,
+   "oldest_utc": null,
+   "symbol": "XAUUSD"
+  },
+  "week_start_equity": 10100.0,
+  "windows": {
+   "calendar_latest_ts_utc": null,
+   "calendar_received_utc": null,
+   "calendar_unavailable": false,
+   "calendar_unavailable_reason": null,
+   "calendar_unavailable_since": null,
+   "enabled": {
+    "holidays": false,
+    "reopen": false,
+    "tier2": false
+   },
+   "holiday_name": null,
+   "holiday_thin": false,
+   "holiday_until": null,
+   "holiday_valid_through": null,
+   "holiday_version": null,
+   "reopen_until": null,
+   "reopen_window": false,
+   "tier2_blackout": false,
+   "tier2_until": null
+  }
+ },
+ "80d831606aca01a8": {
+  "account": "icm-demo",
+  "account_class": "unknown",
+  "account_class_declared": null,
+  "account_class_measured": "unknown",
+  "approval_mode": "propose",
+  "balance": null,
+  "balance_closed_hwm": 10500.0,
+  "bar_close_grace_s": 1.5,
+  "blackout": null,
+  "bridge_compat": null,
+  "broker": "icm",
+  "clock_skew_s": null,
+  "closed_records_lost": [],
+  "closes_due": [],
+  "combined_size_down": false,
+  "currency": "USD",
+  "daily_loss_limit": 198.0,
+  "daily_loss_limit_abs": null,
+  "daily_loss_remaining": 0.0,
+  "data_recovering": false,
+  "day_start_equity": 9900.0,
+  "dq_checks": [],
+  "dq_error": false,
+  "dq_warnings": [],
+  "entry_blocks": [
+   "drawdown_halt",
+   "invalid_state",
+   "invalid:equity"
+  ],
+  "entry_refusals": {},
+  "equity": 0.0,
+  "foreign_positions": [],
+  "history_backfill": {
+   "bars": 0,
+   "cutover": null,
+   "dropped": 0,
+   "error": null,
+   "from": null,
+   "running": false
+  },
+  "history_gap": {},
+  "ladder_atr": {
+   "15m": null,
+   "1d": null,
+   "1h": null,
+   "4h": null
+  },
+  "last_tick_age_s": 0.0,
+  "last_tick_error_at": null,
+  "late_ticks": 0,
+  "limits": {
+   "daily_cap": 0.02,
+   "daily_loss_limit_abs": null,
+   "heat": {
+    "enabled": false,
+    "max_open_risk": 0.02,
+    "max_same_direction": 2
+   },
+   "max_risk_per_trade": 0.01,
+   "min_lot_risk_account": null,
+   "min_lot_risk_cap": null,
+   "multiplier_bounds": [
+    0.25,
+    1.5
+   ],
+   "project_open_risk": false,
+   "risk_per_trade": 0.005,
+   "weekly_cap": 0.05
+  },
+  "lot_terms": null,
+  "margin": null,
+  "margin_free": null,
+  "market_closed": false,
+  "mode": "paper",
+  "open_long": 0,
+  "open_lots": 0.0,
+  "open_notional": 0.0,
+  "open_positions": 0,
+  "open_risk": null,
+  "open_risk_positions": [],
+  "open_short": 0,
+  "pending": 0,
+  "positions_unreadable": 0,
+  "price": null,
+  "propose_only_until": null,
+  "quote_invalid_since": null,
+  "rearm_refused": "re-arm needs 10 trading days of positive paper shadow",
+  "schema_skew": {
+   "count": 0,
+   "entries": [],
+   "last_refused_utc": null,
+   "reads": 0,
+   "refused": false,
+   "truncated": 0
+  },
+  "server_clock": null,
+  "session_source": "static",
+  "sessions": {
+   "broker_windows": null,
+   "covers_from": null,
+   "covers_until": null,
+   "note": "",
+   "server_tz": "Europe/Athens",
+   "source": "static"
+  },
+  "spread_points": 0.0,
+  "stage": "halted",
+  "stale_bars": false,
+  "terminal_connected": true,
+  "throttle": {
+   "cooldown_bars": 4,
+   "enabled": false,
+   "loss_streak": 3,
+   "max_entries_per_day_per_agent": 3
+  },
+  "tick_ahead_s": 0.0,
+  "tick_error": false,
+  "tick_error_detail": null,
+  "tick_errors_total": 0,
+  "ticks_dropped": 0,
+  "unconfirmed_orders": {
+   "count": 2,
+   "oldest_utc": "2200-01-06T09:00:00+00:00",
+   "symbol": "XAUUSD"
+  },
+  "week_start_equity": 10100.0,
+  "windows": {
+   "calendar_latest_ts_utc": null,
+   "calendar_received_utc": null,
+   "calendar_unavailable": false,
+   "calendar_unavailable_reason": null,
+   "calendar_unavailable_since": null,
+   "enabled": {
+    "holidays": false,
+    "reopen": false,
+    "tier2": false
+   },
+   "holiday_name": null,
+   "holiday_thin": false,
+   "holiday_until": null,
+   "holiday_valid_through": null,
+   "holiday_version": null,
+   "reopen_until": null,
+   "reopen_window": false,
+   "tier2_blackout": false,
+   "tier2_until": null
+  }
+ },
+ "8c66046571e3ff2f": {
+  "account": "icm-demo",
+  "account_class": "unknown",
+  "account_class_declared": null,
+  "account_class_measured": "unknown",
+  "approval_mode": "propose",
+  "balance": null,
+  "balance_closed_hwm": 10500.0,
+  "bar_close_grace_s": 1.5,
+  "blackout": null,
+  "bridge_compat": null,
+  "broker": "icm",
+  "clock_skew_s": null,
+  "closed_records_lost": [],
+  "closes_due": [],
+  "combined_size_down": false,
+  "currency": "USD",
+  "daily_loss_limit": 198.0,
+  "daily_loss_limit_abs": null,
+  "daily_loss_remaining": 0.0,
+  "data_recovering": false,
+  "day_start_equity": 9900.0,
+  "dq_checks": [],
+  "dq_error": false,
+  "dq_warnings": [],
+  "entry_blocks": [
+   "invalid_state",
+   "invalid:equity"
+  ],
+  "entry_refusals": {},
+  "equity": 0.0,
+  "foreign_positions": [],
+  "history_backfill": {
+   "bars": 0,
+   "cutover": null,
+   "dropped": 0,
+   "error": null,
+   "from": null,
+   "running": false
+  },
+  "history_gap": {},
+  "ladder_atr": {
+   "15m": null,
+   "1d": null,
+   "1h": null,
+   "4h": null
+  },
+  "last_tick_age_s": 0.0,
+  "last_tick_error_at": null,
+  "late_ticks": 0,
+  "limits": {
+   "daily_cap": 0.02,
+   "daily_loss_limit_abs": null,
+   "heat": {
+    "enabled": false,
+    "max_open_risk": 0.02,
+    "max_same_direction": 2
+   },
+   "max_risk_per_trade": 0.01,
+   "min_lot_risk_account": null,
+   "min_lot_risk_cap": null,
+   "multiplier_bounds": [
+    0.25,
+    1.5
+   ],
+   "project_open_risk": false,
+   "risk_per_trade": 0.005,
+   "weekly_cap": 0.05
+  },
+  "lot_terms": null,
+  "margin": null,
+  "margin_free": null,
+  "market_closed": false,
+  "mode": "paper",
+  "open_long": 0,
+  "open_lots": 0.0,
+  "open_notional": 0.0,
+  "open_positions": 0,
+  "open_risk": null,
+  "open_risk_positions": [],
+  "open_short": 0,
+  "pending": 0,
+  "positions_unreadable": 0,
+  "price": null,
+  "propose_only_until": null,
+  "quote_invalid_since": null,
+  "rearm_refused": null,
+  "schema_skew": {
+   "count": 0,
+   "entries": [],
+   "last_refused_utc": null,
+   "reads": 0,
+   "refused": false,
+   "truncated": 0
+  },
+  "server_clock": null,
+  "session_source": "static",
+  "sessions": {
+   "broker_windows": null,
+   "covers_from": null,
+   "covers_until": null,
+   "note": "",
+   "server_tz": "Europe/Athens",
+   "source": "static"
+  },
+  "spread_points": 0.0,
+  "stage": "size_down",
+  "stale_bars": false,
+  "terminal_connected": true,
+  "throttle": {
+   "cooldown_bars": 4,
+   "enabled": false,
+   "loss_streak": 3,
+   "max_entries_per_day_per_agent": 3
+  },
+  "tick_ahead_s": 0.0,
+  "tick_error": false,
+  "tick_error_detail": null,
+  "tick_errors_total": 0,
+  "ticks_dropped": 0,
+  "unconfirmed_orders": {
+   "count": 2,
+   "oldest_utc": "2200-01-06T09:00:00+00:00",
+   "symbol": "XAUUSD"
+  },
+  "week_start_equity": 10100.0,
+  "windows": {
+   "calendar_latest_ts_utc": null,
+   "calendar_received_utc": null,
+   "calendar_unavailable": false,
+   "calendar_unavailable_reason": null,
+   "calendar_unavailable_since": null,
+   "enabled": {
+    "holidays": false,
+    "reopen": false,
+    "tier2": false
+   },
+   "holiday_name": null,
+   "holiday_thin": false,
+   "holiday_until": null,
+   "holiday_valid_through": null,
+   "holiday_version": null,
+   "reopen_until": null,
+   "reopen_window": false,
+   "tier2_blackout": false,
+   "tier2_until": null
+  }
+ },
+ "a92d1db8e955247a": {
+  "account": "icm-demo",
+  "account_class": "unknown",
+  "account_class_declared": null,
+  "account_class_measured": "unknown",
+  "approval_mode": "propose",
+  "balance": null,
+  "balance_closed_hwm": 10500.0,
+  "bar_close_grace_s": 1.5,
+  "blackout": null,
+  "bridge_compat": null,
+  "broker": "icm",
+  "clock_skew_s": null,
+  "closed_records_lost": [
+   7
+  ],
+  "closes_due": [],
+  "combined_size_down": false,
+  "currency": "USD",
+  "daily_loss_limit": 198.0,
+  "daily_loss_limit_abs": null,
+  "daily_loss_remaining": 0.0,
+  "data_recovering": false,
+  "day_start_equity": 9900.0,
+  "dq_checks": [],
+  "dq_error": false,
+  "dq_warnings": [],
+  "entry_blocks": [
+   "invalid_state",
+   "invalid:equity"
+  ],
+  "entry_refusals": {},
+  "equity": 0.0,
+  "foreign_positions": [],
+  "history_backfill": {
+   "bars": 0,
+   "cutover": null,
+   "dropped": 0,
+   "error": null,
+   "from": null,
+   "running": false
+  },
+  "history_gap": {},
+  "ladder_atr": {
+   "15m": null,
+   "1d": null,
+   "1h": null,
+   "4h": null
+  },
+  "last_tick_age_s": 0.0,
+  "last_tick_error_at": null,
+  "late_ticks": 0,
+  "limits": {
+   "daily_cap": 0.02,
+   "daily_loss_limit_abs": null,
+   "heat": {
+    "enabled": false,
+    "max_open_risk": 0.02,
+    "max_same_direction": 2
+   },
+   "max_risk_per_trade": 0.01,
+   "min_lot_risk_account": null,
+   "min_lot_risk_cap": null,
+   "multiplier_bounds": [
+    0.25,
+    1.5
+   ],
+   "project_open_risk": false,
+   "risk_per_trade": 0.005,
+   "weekly_cap": 0.05
+  },
+  "lot_terms": null,
+  "margin": null,
+  "margin_free": null,
+  "market_closed": false,
+  "mode": "paper",
+  "open_long": 0,
+  "open_lots": 0.0,
+  "open_notional": 0.0,
+  "open_positions": 0,
+  "open_risk": null,
+  "open_risk_positions": [],
+  "open_short": 0,
+  "pending": 0,
+  "positions_unreadable": 0,
+  "price": null,
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "quote_invalid_since": null,
+  "rearm_refused": null,
+  "schema_skew": {
+   "count": 0,
+   "entries": [],
+   "last_refused_utc": null,
+   "reads": 0,
+   "refused": false,
+   "truncated": 0
+  },
+  "server_clock": null,
+  "session_source": "static",
+  "sessions": {
+   "broker_windows": null,
+   "covers_from": null,
+   "covers_until": null,
+   "note": "",
+   "server_tz": "Europe/Athens",
+   "source": "static"
+  },
+  "spread_points": 0.0,
+  "stage": "size_down",
+  "stale_bars": false,
+  "terminal_connected": true,
+  "throttle": {
+   "cooldown_bars": 4,
+   "enabled": false,
+   "loss_streak": 3,
+   "max_entries_per_day_per_agent": 3
+  },
+  "tick_ahead_s": 0.0,
+  "tick_error": false,
+  "tick_error_detail": null,
+  "tick_errors_total": 0,
+  "ticks_dropped": 0,
+  "unconfirmed_orders": {
+   "count": 1,
+   "oldest_utc": "2020-01-06T09:00:00+00:00",
+   "symbol": "XAUUSD"
+  },
+  "week_start_equity": 10100.0,
+  "windows": {
+   "calendar_latest_ts_utc": null,
+   "calendar_received_utc": null,
+   "calendar_unavailable": false,
+   "calendar_unavailable_reason": null,
+   "calendar_unavailable_since": null,
+   "enabled": {
+    "holidays": false,
+    "reopen": false,
+    "tier2": false
+   },
+   "holiday_name": null,
+   "holiday_thin": false,
+   "holiday_until": null,
+   "holiday_valid_through": null,
+   "holiday_version": null,
+   "reopen_until": null,
+   "reopen_window": false,
+   "tier2_blackout": false,
+   "tier2_until": null
+  }
+ },
+ "bf9211ad5ee29230": {
+  "account": "icm-demo",
+  "account_class": "unknown",
+  "account_class_declared": null,
+  "account_class_measured": "unknown",
+  "approval_mode": "propose",
+  "balance": null,
+  "balance_closed_hwm": 10500.0,
+  "bar_close_grace_s": 1.5,
+  "blackout": null,
+  "bridge_compat": null,
+  "broker": "icm",
+  "clock_skew_s": null,
+  "closed_records_lost": [
+   7
+  ],
+  "closes_due": [],
+  "combined_size_down": false,
+  "currency": "USD",
+  "daily_loss_limit": 198.0,
+  "daily_loss_limit_abs": null,
+  "daily_loss_remaining": 0.0,
+  "data_recovering": false,
+  "day_start_equity": 9900.0,
+  "dq_checks": [],
+  "dq_error": false,
+  "dq_warnings": [],
+  "entry_blocks": [
+   "drawdown_halt",
+   "invalid_state",
+   "invalid:equity"
+  ],
+  "entry_refusals": {},
+  "equity": 0.0,
+  "foreign_positions": [],
+  "history_backfill": {
+   "bars": 0,
+   "cutover": null,
+   "dropped": 0,
+   "error": null,
+   "from": null,
+   "running": false
+  },
+  "history_gap": {},
   "ladder_atr": {
    "15m": null,
    "1d": null,
@@ -2212,8 +2060,8 @@
   "tick_errors_total": 0,
   "ticks_dropped": 0,
   "unconfirmed_orders": {
-   "count": 0,
-   "oldest_utc": null,
+   "count": 1,
+   "oldest_utc": "2020-01-06T09:00:00+00:00",
    "symbol": "XAUUSD"
   },
   "week_start_equity": 10100.0,
@@ -2239,7 +2087,7 @@
    "tier2_until": null
   }
  },
- "e7b567a6d0ef92e1": {
+ "c28386835b3bf18c": {
   "account": "icm-demo",
   "account_class": "unknown",
   "account_class_declared": null,
@@ -2273,6 +2121,15 @@
   "entry_refusals": {},
   "equity": 0.0,
   "foreign_positions": [],
+  "history_backfill": {
+   "bars": 0,
+   "cutover": null,
+   "dropped": 0,
+   "error": null,
+   "from": null,
+   "running": false
+  },
+  "history_gap": {},
   "ladder_atr": {
    "15m": null,
    "1d": null,
@@ -2380,7 +2237,7 @@
    "tier2_until": null
   }
  },
- "f95aaba772c96639": {
+ "ca06ecc29c76139e": {
   "account": "icm-demo",
   "account_class": "unknown",
   "account_class_declared": null,
@@ -2412,6 +2269,163 @@
   "entry_refusals": {},
   "equity": 0.0,
   "foreign_positions": [],
+  "history_backfill": {
+   "bars": 0,
+   "cutover": null,
+   "dropped": 0,
+   "error": null,
+   "from": null,
+   "running": false
+  },
+  "history_gap": {},
+  "ladder_atr": {
+   "15m": null,
+   "1d": null,
+   "1h": null,
+   "4h": null
+  },
+  "last_tick_age_s": 0.0,
+  "last_tick_error_at": null,
+  "late_ticks": 0,
+  "limits": {
+   "daily_cap": 0.02,
+   "daily_loss_limit_abs": null,
+   "heat": {
+    "enabled": false,
+    "max_open_risk": 0.02,
+    "max_same_direction": 2
+   },
+   "max_risk_per_trade": 0.01,
+   "min_lot_risk_account": null,
+   "min_lot_risk_cap": null,
+   "multiplier_bounds": [
+    0.25,
+    1.5
+   ],
+   "project_open_risk": false,
+   "risk_per_trade": 0.005,
+   "weekly_cap": 0.05
+  },
+  "lot_terms": null,
+  "margin": null,
+  "margin_free": null,
+  "market_closed": false,
+  "mode": "paper",
+  "open_long": 0,
+  "open_lots": 0.0,
+  "open_notional": 0.0,
+  "open_positions": 0,
+  "open_risk": null,
+  "open_risk_positions": [],
+  "open_short": 0,
+  "pending": 0,
+  "positions_unreadable": 0,
+  "price": null,
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "quote_invalid_since": null,
+  "rearm_refused": null,
+  "schema_skew": {
+   "count": 0,
+   "entries": [],
+   "last_refused_utc": null,
+   "reads": 0,
+   "refused": false,
+   "truncated": 0
+  },
+  "server_clock": null,
+  "session_source": "static",
+  "sessions": {
+   "broker_windows": null,
+   "covers_from": null,
+   "covers_until": null,
+   "note": "",
+   "server_tz": "Europe/Athens",
+   "source": "static"
+  },
+  "spread_points": 0.0,
+  "stage": "size_down",
+  "stale_bars": false,
+  "terminal_connected": true,
+  "throttle": {
+   "cooldown_bars": 4,
+   "enabled": false,
+   "loss_streak": 3,
+   "max_entries_per_day_per_agent": 3
+  },
+  "tick_ahead_s": 0.0,
+  "tick_error": false,
+  "tick_error_detail": null,
+  "tick_errors_total": 0,
+  "ticks_dropped": 0,
+  "unconfirmed_orders": {
+   "count": 0,
+   "oldest_utc": null,
+   "symbol": "XAUUSD"
+  },
+  "week_start_equity": 10100.0,
+  "windows": {
+   "calendar_latest_ts_utc": null,
+   "calendar_received_utc": null,
+   "calendar_unavailable": false,
+   "calendar_unavailable_reason": null,
+   "calendar_unavailable_since": null,
+   "enabled": {
+    "holidays": false,
+    "reopen": false,
+    "tier2": false
+   },
+   "holiday_name": null,
+   "holiday_thin": false,
+   "holiday_until": null,
+   "holiday_valid_through": null,
+   "holiday_version": null,
+   "reopen_until": null,
+   "reopen_window": false,
+   "tier2_blackout": false,
+   "tier2_until": null
+  }
+ },
+ "db15d3ef0ed90bcf": {
+  "account": "icm-demo",
+  "account_class": "unknown",
+  "account_class_declared": null,
+  "account_class_measured": "unknown",
+  "approval_mode": "propose",
+  "balance": null,
+  "balance_closed_hwm": 10500.0,
+  "bar_close_grace_s": 1.5,
+  "blackout": null,
+  "bridge_compat": null,
+  "broker": "icm",
+  "clock_skew_s": null,
+  "closed_records_lost": [],
+  "closes_due": [],
+  "combined_size_down": false,
+  "currency": "USD",
+  "daily_loss_limit": 198.0,
+  "daily_loss_limit_abs": null,
+  "daily_loss_remaining": 0.0,
+  "data_recovering": false,
+  "day_start_equity": 9900.0,
+  "dq_checks": [],
+  "dq_error": false,
+  "dq_warnings": [],
+  "entry_blocks": [
+   "invalid_state",
+   "invalid:equity"
+  ],
+  "entry_refusals": {},
+  "equity": 0.0,
+  "foreign_positions": [],
+  "history_backfill": {
+   "bars": 0,
+   "cutover": null,
+   "dropped": 0,
+   "error": null,
+   "from": null,
+   "running": false
+  },
+  "history_gap": {},
   "ladder_atr": {
    "15m": null,
    "1d": null,
@@ -2477,7 +2491,7 @@
    "source": "static"
   },
   "spread_points": 0.0,
-  "stage": "size_down",
+  "stage": "normal",
   "stale_bars": false,
   "terminal_connected": true,
   "throttle": {
@@ -2494,6 +2508,154 @@
   "unconfirmed_orders": {
    "count": 0,
    "oldest_utc": null,
+   "symbol": "XAUUSD"
+  },
+  "week_start_equity": 10100.0,
+  "windows": {
+   "calendar_latest_ts_utc": null,
+   "calendar_received_utc": null,
+   "calendar_unavailable": false,
+   "calendar_unavailable_reason": null,
+   "calendar_unavailable_since": null,
+   "enabled": {
+    "holidays": false,
+    "reopen": false,
+    "tier2": false
+   },
+   "holiday_name": null,
+   "holiday_thin": false,
+   "holiday_until": null,
+   "holiday_valid_through": null,
+   "holiday_version": null,
+   "reopen_until": null,
+   "reopen_window": false,
+   "tier2_blackout": false,
+   "tier2_until": null
+  }
+ },
+ "e55a66a2fe739dc9": {
+  "account": "icm-demo",
+  "account_class": "unknown",
+  "account_class_declared": null,
+  "account_class_measured": "unknown",
+  "approval_mode": "propose",
+  "balance": null,
+  "balance_closed_hwm": 10500.0,
+  "bar_close_grace_s": 1.5,
+  "blackout": null,
+  "bridge_compat": null,
+  "broker": "icm",
+  "clock_skew_s": null,
+  "closed_records_lost": [],
+  "closes_due": [],
+  "combined_size_down": false,
+  "currency": "USD",
+  "daily_loss_limit": 198.0,
+  "daily_loss_limit_abs": null,
+  "daily_loss_remaining": 0.0,
+  "data_recovering": false,
+  "day_start_equity": 9900.0,
+  "dq_checks": [],
+  "dq_error": false,
+  "dq_warnings": [],
+  "entry_blocks": [
+   "invalid_state",
+   "invalid:equity"
+  ],
+  "entry_refusals": {},
+  "equity": 0.0,
+  "foreign_positions": [],
+  "history_backfill": {
+   "bars": 0,
+   "cutover": null,
+   "dropped": 0,
+   "error": null,
+   "from": null,
+   "running": false
+  },
+  "history_gap": {},
+  "ladder_atr": {
+   "15m": null,
+   "1d": null,
+   "1h": null,
+   "4h": null
+  },
+  "last_tick_age_s": 0.0,
+  "last_tick_error_at": null,
+  "late_ticks": 0,
+  "limits": {
+   "daily_cap": 0.02,
+   "daily_loss_limit_abs": null,
+   "heat": {
+    "enabled": false,
+    "max_open_risk": 0.02,
+    "max_same_direction": 2
+   },
+   "max_risk_per_trade": 0.01,
+   "min_lot_risk_account": null,
+   "min_lot_risk_cap": null,
+   "multiplier_bounds": [
+    0.25,
+    1.5
+   ],
+   "project_open_risk": false,
+   "risk_per_trade": 0.005,
+   "weekly_cap": 0.05
+  },
+  "lot_terms": null,
+  "margin": null,
+  "margin_free": null,
+  "market_closed": false,
+  "mode": "paper",
+  "open_long": 0,
+  "open_lots": 0.0,
+  "open_notional": 0.0,
+  "open_positions": 0,
+  "open_risk": null,
+  "open_risk_positions": [],
+  "open_short": 0,
+  "pending": 0,
+  "positions_unreadable": 0,
+  "price": null,
+  "propose_only_until": "2025-04-04T10:00:00+00:00",
+  "quote_invalid_since": null,
+  "rearm_refused": null,
+  "schema_skew": {
+   "count": 0,
+   "entries": [],
+   "last_refused_utc": null,
+   "reads": 0,
+   "refused": false,
+   "truncated": 0
+  },
+  "server_clock": null,
+  "session_source": "static",
+  "sessions": {
+   "broker_windows": null,
+   "covers_from": null,
+   "covers_until": null,
+   "note": "",
+   "server_tz": "Europe/Athens",
+   "source": "static"
+  },
+  "spread_points": 0.0,
+  "stage": "size_down",
+  "stale_bars": false,
+  "terminal_connected": true,
+  "throttle": {
+   "cooldown_bars": 4,
+   "enabled": false,
+   "loss_streak": 3,
+   "max_entries_per_day_per_agent": 3
+  },
+  "tick_ahead_s": 0.0,
+  "tick_error": false,
+  "tick_error_detail": null,
+  "tick_errors_total": 0,
+  "ticks_dropped": 0,
+  "unconfirmed_orders": {
+   "count": 2,
+   "oldest_utc": "2200-01-06T09:00:00+00:00",
    "symbol": "XAUUSD"
   },
   "week_start_equity": 10100.0,
