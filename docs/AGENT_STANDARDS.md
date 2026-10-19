@@ -56,7 +56,8 @@ file. The product owner accepts work against them; the release manager does not 
 The `program-director` leads delivery (roadmap, waves, integration, risk register, owner reporting); the main Claude
 session acts as program-director and answers for its failures (an unchased owner step, idle lanes, stale items). The
 `product-owner` owns what is built and accepts it. The `research-director` leads the research team
-(strategy-researcher, performance-analyst, evaluator) toward the owner's north-star: £50 or more on days the market
+(principal researchers for strategy, opportunity days, exits, macro, microstructure and ML, the performance-analyst
+and the evaluator, each with a staff bench) toward the owner's north-star: £50 or more on days the market
 offers opportunity, less or nothing when it does not (ADR 0004); it owns the research agenda, trial budget and the
 monthly scorecard. The `finance-auditor` owns the money picture and the independent audit: the monthly GBP ledger
 (every trading and running cost, reconciled to the broker), budget and break-even after free trials end, and the
