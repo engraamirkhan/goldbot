@@ -37,3 +37,10 @@ read docs, and Playwright retries let a flaky e2e test pass.
 - Status: accepted with conditions by the CTO on 8b6941e3 (lock-file installs, base-commit filter, docs-read audit);
   all three are in this change.
 - What would change this: a self-hosted runner (CI_RUNNER) with more cores would favour fewer, larger shards.
+
+## Amendment 2026-10-19: a 3-minute run
+- Goal: the whole PR run in about 3 min (release incl. deploy in 5). Measured before: smoke 46 s then the slowest of 4 integration shards 368 s.
+- Nothing waits for smoke any more: it runs beside the shards and still fails the run (`backend` and `report-failure` need it).
+- Integration 4 -> 10 shards, unit 4 -> 6; `frontend-checks` is folded into `lint` (renamed from `backend-lint`) so the run peaks at exactly 20 concurrent jobs (smoke, lint, e2e x2, unit x6, integration x10; `changes` finishes first).
+- `tests/shard_weights.json` was re-measured (`pytest -m integration --durations=0`, 45 tests of 5 s or more): about 135 s of serial test time per integration shard (~35 s at 4 workers). The dry run moved to the lightest shard (5). No unit test exceeds 5 s, so unit shards balance by hash.
+- `scripts/ci_local.sh` caps itself at `CI_LOCAL_MAX_JOBS` (default 12) concurrent lanes. tests/test_ci_workflow.py guards the job cap, smoke not gating shards, and the dry-run shard.
