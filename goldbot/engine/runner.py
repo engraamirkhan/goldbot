@@ -184,11 +184,11 @@ class EngineConfig(Record):
     cost_atr: float = 0.10           # round-trip cost in ATR until the measured cost table exists
     max_bars_in_memory: int = 60000     # 1m bars kept (~40 trading days)
     feature_window: int = 800            # decision bars the features are computed on
-    # history continuity (engine/history.py): warm-start backfill bounds (startup: TimeoutStartSec 15 min)
+    # history continuity (engine/history.py): background fill bounds (bridge rows per page, seconds)
     backfill_max_days: int = Field(30, ge=0, le=30)
-    backfill_page_ticks: int = Field(10_000, ge=100, le=100_000)
-    backfill_budget_s: float = Field(300.0, gt=0, le=600)
-    history_gap_max_min: int = Field(1440, ge=1)   # a window missing more open minutes refuses entries (1 holiday ok)
+    backfill_page_ticks: int = Field(2000, ge=100, le=10_000)   # ~120 KB of JSON a page, as tick_record
+    backfill_budget_s: float = Field(1800.0, gt=0, le=3600)
+    history_gap_max_min: int = Field(60, ge=1)   # more open minutes missing, not a broker closure: no entry
     owner_user_id: int = 0
     # design (Approvals): the owner confirms an entry within this many seconds or it expires unapproved; production
     # passes settings.risk.approval_window_seconds (goldbot/ops/run.py)
@@ -276,7 +276,7 @@ class Engine:
         self.gate = RiskGate(limits)
         self.ticks: list[Tick] = []
         self.bars_1m = pd.DataFrame()
-        self.history = history.History()     # backfill, history_gap per timeframe, minutes not yet stored
+        self.history = history.History()     # cut-over, background fill and writer, history_gap
         self.open: dict[int, OpenTrade] = {}
         self.pending: dict[str, tuple[Intent, Proposal, Specialist]] = {}
         self.sent_ids: set[str] = set()
@@ -592,7 +592,7 @@ class Engine:
             self._closed_through = due
             self._rebuild_bars(until=due)   # every minute before the close is complete; none at or after it joins
             out = self.on_bar_close(due, t)
-            history.store_bars(self)        # the close's minutes, after its exits and decisions; never raises
+            history.after_close(self, due)   # a finished background fill joins the bars; never raises
             self._last_state_write = t.ts_utc
             bar_open = due - pd.Timedelta(seconds=sec)   # tick clock, as is _error_tick_ts (never the host clock)
             if self.state.tick_error and not self._error_awaits_tick and self._error_tick_ts is not None \
@@ -759,9 +759,9 @@ class Engine:
             return close
         return None
 
-    def warm_start(self, now: pd.Timestamp) -> int:
-        """The store's 1m history, its gap to `now` backfilled from the broker's ticks (history.warm_start)."""
-        return history.warm_start(self, now)
+    def warm_start(self, now: pd.Timestamp, history_broker: Any = None) -> int:
+        """The store's 1m history; its holes filled from `history_broker` in the background (history.warm_start)."""
+        return history.warm_start(self, now, history_broker)
 
     def _rebuild_bars(self, until: pd.Timestamp | None = None) -> None:
         """Incremental: only ticks since the last completed minute are aggregated; bars accumulate. Without `until`
@@ -782,7 +782,7 @@ class Engine:
         if not done.empty:
             self._check_new_bars(done)
             self.bars_1m = self._append_bars(done)
-            history.queue(self, done)
+            history.queue_minutes(self, done)
         self.ticks =[x for x in self.ticks if x.ts_utc >= cutoff]
 
     def _append_bars(self, done: pd.DataFrame) -> pd.DataFrame:

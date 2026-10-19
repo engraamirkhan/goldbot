@@ -282,7 +282,7 @@ def test_a_ny7_restart_warm_starts_and_reconciles(tmp_path):
     from goldbot.data.synthetic import synthetic_ticks
     data = tmp_path / "data"
     ticks = synthetic_ticks("2026-10-26", "2026-10-28", ticks_per_minute=1, seed=3)
-    Store(str(data)).append("bars_1m", ticks_to_1m(ticks), source="test", symbol="XAUUSD")
+    Store(str(data)).append("bars_1m", ticks_to_1m(ticks), source="dukascopy", symbol="XAUUSD")
     eng, pb, host = _engine(tmp_path, data_root=str(data))
     agent = SPECIALISTS["session_open"]()
     prop = Proposal(proposal_id="icm-demo-z", account_id="icm-demo", agent_id=agent.agent_id, side=1, lots=0.1,
