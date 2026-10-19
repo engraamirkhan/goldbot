@@ -113,6 +113,81 @@ def test_warm_start_fills_the_gap_from_the_broker_ticks_with_the_live_bar_builde
     assert pd.Timestamp(eng.history.backfill["cutover"]) == expect["ts_utc"].iloc[0]
 
 
+POINT = 0.01
+
+
+def _mt5_rates(ticks: pd.DataFrame) -> pd.DataFrame:
+    """What MT5 copy_rates (get_bars "1m") returns: bid OHLC, tick_count, spread in points (the close's spread)."""
+    b = ticks_to_1m(ticks, DEFAULT_SESSIONS)
+    return pd.DataFrame({"ts_utc": b["ts_utc"], "open": b["bid_open"], "high": b["bid_high"], "low": b["bid_low"],
+                         "close": b["bid_close"], "tick_count": b["tick_count"].astype(int),
+                         "spread": ((b["ask_close"] - b["bid_close"]) / POINT).round().astype(int)})
+
+
+class ShortTicksLongBars(TickHistory):
+    """The live terminal (brain 2026-10-19): copy_ticks reaches back ~15 h, copy_rates 1m reaches weeks."""
+
+    def __init__(self, ticks: pd.DataFrame, rates: pd.DataFrame):
+        super().__init__(ticks)
+        self.rates = rates.reset_index(drop=True)
+        self.bar_calls: list[int] = []
+
+    def get_bars(self, symbol: str, tf: str, n: int) -> pd.DataFrame:
+        assert tf == "1m"
+        self.bar_calls.append(n)
+        return self.rates.tail(n).reset_index(drop=True)          # copy_rates_from_pos(0, n): the latest n bars
+
+    def symbol_info(self, symbol: str) -> Any:
+        from types import SimpleNamespace
+        return SimpleNamespace(point=POINT)
+
+
+def test_a_hole_older_than_the_tick_history_is_filled_from_the_broker_1m_bars(tmp_path):
+    _seed_store(tmp_path)
+    short = TICKS[(TICKS["ts_utc"] >= LIVE_FROM - pd.Timedelta(hours=15)) & (TICKS["ts_utc"] < LIVE_FROM)]
+    rates = _mt5_rates(TICKS[TICKS["ts_utc"] < LIVE_FROM])
+    broker = ShortTicksLongBars(short, rates)
+    eng = _engine(tmp_path, **FAST)
+    eng.warm_start(LIVE_FROM, broker)
+    _settle(eng)
+    assert broker.bar_calls                                         # the fallback ran
+    assert open_gaps(pd.DatetimeIndex(eng.bars_1m["ts_utc"]), eng.sessions, max_open_min=60) == []
+    hole = eng.bars_1m[(eng.bars_1m["ts_utc"] >= STORE_END) & (eng.bars_1m["ts_utc"] < short["ts_utc"].min().floor("min"))]
+    assert len(hole) > 4 * 23 * 60
+    # exact conversion: bid = rates, ask = bid + spread x point, spread_mean = spread_max = spread x point
+    r = rates.set_index("ts_utc").loc[hole["ts_utc"]]
+    h = hole.set_index("ts_utc")
+    for side, col in (("open", "open"), ("high", "high"), ("low", "low"), ("close", "close")):
+        assert (h[f"bid_{side}"] == r[col]).all()
+        assert ((h[f"ask_{side}"] - (r[col] + r["spread"] * POINT)).abs() < 1e-9).all()
+    assert ((h["spread_mean"] - r["spread"] * POINT).abs() < 1e-9).all() and (h["spread_max"] == h["spread_mean"]).all()
+    assert (h["tick_count"] == r["tick_count"]).all()
+    assert ((pd.to_datetime(h["visible_at"], utc=True) - h.index) == pd.Timedelta(minutes=1)).all()
+    assert DEFAULT_SESSIONS.is_open(pd.DatetimeIndex(h.index)).all()
+    # the minutes the ticks reach are the live bar builder's, not the rates'
+    tick_part = eng.bars_1m[eng.bars_1m["ts_utc"] >= short["ts_utc"].min().ceil("min")].reset_index(drop=True)
+    expect = ticks_to_1m(short, DEFAULT_SESSIONS)
+    expect = expect[expect["ts_utc"] >= short["ts_utc"].min().ceil("min")].reset_index(drop=True)
+    pd.testing.assert_frame_equal(tick_part[expect.columns], expect, check_dtype=False)
+    # entries resume: the window is whole
+    decisions = _feed(eng, TICKS[(TICKS["ts_utc"] >= LIVE_FROM) & (TICKS["ts_utc"] < LIVE_FROM + pd.Timedelta(days=2))])
+    assert decisions and not any(d["action"].startswith("history_gap") for d in decisions)
+
+
+def test_a_hole_before_the_cut_over_is_not_covered_when_the_broker_bars_have_it(tmp_path):
+    """keep=False (the hole precedes the broker's stored minutes): no ticks for an old day is not a closure when the
+    broker's 1m bars hold that day, so the span stays a hole (one feed per window: the bars are not merged)."""
+    rates = _mt5_rates(TICKS)
+    broker = ShortTicksLongBars(TICKS.iloc[:0], rates)
+    span = (pd.Timestamp("2025-03-05", tz="UTC"), pd.Timestamp("2025-03-06", tz="UTC"))
+
+    pace = history._Deadline(lambda: pd.Timestamp("2025-03-15 12:00", tz="UTC"), lambda s: None, pause_s=0, page_limit_s=30,
+                budget_s=60)
+    bars, covered, err = history.pull_bars(broker, "XAUUSD", span, page_ticks=2000, pace=pace, keep=False,
+                                           rates=history.BrokerRates(broker, "XAUUSD", pace))
+    assert err is None and bars == [] and covered == []
+
+
 def test_an_exit_check_runs_while_the_fill_is_still_pulling(tmp_path, monkeypatch):
     _seed_store(tmp_path)
     gate = threading.Event()
@@ -261,3 +336,21 @@ def test_warm_start_without_a_store_pulls_nothing(tmp_path):
     eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path)),
                  PaperBroker(equity=10_000), [], {})
     assert eng.warm_start(LIVE_FROM, broker) == 0 and broker.calls == 0 and eng.history.fill is None
+
+
+def test_a_failed_broker_bar_pull_never_covers_a_hole(tmp_path):
+    """Safety review MEDIUM: a day with no ticks counts as a closure only when a GOOD bar pull reaching back to it shows
+    no bars; a failed pull (here get_bars raises) vouches for nothing, so the hole stays a hole (fail closed)."""
+
+    class BarsFail(ShortTicksLongBars):
+        def get_bars(self, symbol: str, tf: str, n: int) -> pd.DataFrame:
+            raise ConnectionError("bridge down")
+
+    broker = BarsFail(TICKS.iloc[:0], _mt5_rates(TICKS))
+    span = (pd.Timestamp("2025-03-05", tz="UTC"), pd.Timestamp("2025-03-07", tz="UTC"))
+    pace = history._Deadline(lambda: pd.Timestamp("2025-03-15 12:00", tz="UTC"), lambda s: None, pause_s=0,
+                             page_limit_s=30, budget_s=60)
+    for keep in (True, False):
+        bars, covered, err = history.pull_bars(broker, "XAUUSD", span, page_ticks=2000, pace=pace, keep=keep,
+                                               rates=history.BrokerRates(broker, "XAUUSD", pace))
+        assert err is None and bars == [] and covered == [], keep

@@ -105,3 +105,33 @@ probe unchanged; untaken probes at most 12 a risk day (still at most half the sl
 - In practice (trading-safety review of amendment 3): the reserve needs £30 + the new probe's £4 + the open probes'
   risk left of the £50, so realised probe losses stop near £16 a day; the full £20 and the fourth slot are reachable
   only on a day with few losses. Safe by construction; the review after 10 risk days reads the numbers as they are.
+
+## Amendment 4, 2026-10-19 (owner approved a dedicated demo account `icm-probe`, GBP; directors' ruling: "probes must never consume the real trades' allowance")
+Context: on icm-demo the probes share the real (champion) demo trades' equity, £50 day, weekly cap and drawdown
+stages, and the supervisor sums every account into one set of combined limits, so a probe loss also tightened the
+real account's combined caps (SRE finding). Decision:
+- `icm-probe` (config/accounts.yaml): mode demo, its own magic base (260500), `approval_mode: auto`, the owner's demo
+  ceilings (ADR 0032), `login: null` (keyring only). Its own day: `daily_loss_limit_abs` £20; `cost_probe`
+  `budget_share` 0.8 (£16 = four probes at £4), `max_open` 4, `max_loss` £4. Proposed by the research and program
+  directors within the owner's approval; the £20 and the 0.8 are revisited with the amendment 3 review.
+- `probe_only: true`: the engine trades no live agent (no live shares) and `Engine._execute` refuses any entry that is
+  not a cost probe (`probe_only_refused`, fail closed). Refused at load unless `cost_probe.enabled` and `shadow_host`
+  are set on the same account. With no real trade to protect, its `REAL_TRADE_RESERVE` is 0
+  (`cost_probe.real_trade_reserve`): its probe budget binds, inside its own daily limit, which the RiskGate enforces
+  unchanged. The RiskGate and every limit's semantics are unchanged.
+- Shadow host: an explicit per-account `shadow_host` flag (on the canonical-cost broker; another broker's flag is
+  logged and not hosted). At most one enabled account may be the host: two fail at load. The shadow book is
+  `state/shadow_book.json` in the shared state dir, so the new host continues the existing books.
+- Supervisor: an engine file stating `probe_only: true` (literally; missing or malformed counts as real, fail closed)
+  is out of every combined sum, cap, currency check and the exposure real engines read; reported under
+  `probe_engines`. A probe engine counts the real accounts' lots and notional against its own combined caps but never
+  their equity. An unreadable engine file or a clock fault still halts every account.
+- Switch-over, config only and reversible: while icm-probe has no credentials or terminal it stays `enabled: false`
+  and icm-demo is host and prober as before. To switch: store icm-probe's credentials
+  (`python -m goldbot.ops.accounts add icm-probe`), then icm-probe `enabled: true`, icm-demo `shadow_host: false` and
+  `cost_probe.enabled: false`, restart both engines. Reverse the same three lines to go back.
+
+Consequences: probe losses no longer touch the real demo account's allowance or combined limits; icm-demo trades
+champions only after the switch. A probe engine whose start fails rewrites its file without the flag and is then
+counted as a real account (`engine_startup_refused` halts), the strict direction. Trading-safety review required
+(order path: `_execute` refusal; limits: supervisor exclusion, reserve 0 on probe accounts).

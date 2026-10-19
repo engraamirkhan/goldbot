@@ -73,7 +73,7 @@ from goldbot.research.rule_model import is_uncalibrated
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, hwm, open_risk, sizing
 from goldbot.risk.gate import PER_TRADE_REFUSALS, REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
 from goldbot.risk.limits_profile import LimitsPolicy, RiskLimitsCurrent
-from goldbot.risk.supervisor import Supervisor, write_startup_error
+from goldbot.risk.supervisor import Supervisor, others_exposure, write_startup_error
 from goldbot.risk.throttle import AgentThrottle, agent_throttle, latest_shadow_win
 from goldbot.risk.windows import (
     HolidayList,
@@ -194,7 +194,8 @@ class EngineConfig(Record):
     # passes settings.risk.approval_window_seconds (goldbot/ops/run.py)
     approval_window_s: int = Field(90, gt=0)
     data_root: str | None = None         # when set, ticks and fills are logged to the store for the nightly cost job
-    shadow_host: bool = False            # this engine runs the shadow book (one per deployment: the canonical-cost broker)
+    shadow_host: bool = False            # this engine runs the shadow book (one per deployment: accounts.yaml shadow_host)
+    probe_only: bool = False             # ADR 0037 amendment 4: a dedicated probe account; non-probe entries refused
     tick_flush_s: int = 60               # market seconds between tick-log flushes
     # production: block entries on the supervisor's halt (or a missing/stale heartbeat) and on the owner's halt
     halt_checks: bool = False
@@ -1289,6 +1290,8 @@ class Engine:
             self.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "duplicate_suppressed",
                                    "proposal": prop.proposal_id})
             return None
+        if cost_probe.refuse_non_probe(self, agent.agent_id, prop.proposal_id):   # ADR 0037 amendment 4
+            return None
         magic = cost_probe.magic(self, agent)        # ADR 0037: a probe has its own magic
         # finance audit GAP-01/02/13: the signal's quote and spread (the proposal) next to the quote priced from now
         audit = EntryAudit(decision_price=prop.entry, decision_spread_points=prop.spread_points,
@@ -1946,10 +1949,8 @@ class Engine:
         if self.cfg.halt_checks:
             st.supervisor_halt, _ = Supervisor.engine_should_halt(self.cfg.state_dir)
             sup = Supervisor.read_state(self.cfg.state_dir)
-            others = [v for k, v in (sup.get("exposure") or {}).items() if k != self.cfg.account_id]
-            st.other_lots = sum(float(v.get("lots", 0.0)) for v in others)
-            st.other_notional = sum(float(v.get("notional", 0.0)) for v in others)
-            st.other_equity = sum(float(v.get("equity", 0.0)) for v in others)
+            st.other_lots, st.other_notional, st.other_equity = others_exposure(
+                sup, self.cfg.account_id, probe_only=self.cfg.probe_only)      # ADR 0037 amendment 4
             st.combined_size_down = bool(sup.get("size_down", False))
             st.owner_halt = self.center.bus.control().halted if self.center.bus is not None else False
         if self.cfg.news_blackout:
@@ -2435,8 +2436,8 @@ class Engine:
             # terminal instead of a merely stale engine (trading-safety review)
             # (review LOW-D) merged into the last engine file, so its exposure keeps counting at the supervisor
             write_startup_error(self.cfg.state_dir, self.cfg.account_id, f"{type(exc).__name__}: {exc}",
-                                dq_checks=["positions_unreadable"],
-                                currency=self._account_currency() or None)   # the supervisor's currency check
+                                dq_checks=["positions_unreadable"], currency=self._account_currency() or None,
+                                probe_only=self.cfg.probe_only)      # currency: the supervisor's check; ADR 0037 am. 4
             raise
         for cid, rec in self._orders.items():
             if rec.status == "sending":
@@ -3018,14 +3019,12 @@ class Engine:
             any(a.agent_id == agent_id for _, _, a in self.pending.values())
 
     def _magic(self, family: str) -> int:
-        """Per-family magic number; crc32 is stable across processes (str hash() is salted per process), so a
-        restarted engine reconciles its own positions to the same family."""
+        """Per-family magic: crc32 is stable across restarts (str hash() is salted), so positions reconcile to a family."""
         return self.cfg.magic_base + zlib.crc32(family.encode()) % 100
 
     def _base_bars(self, agent: Specialist) -> int:
-        """The agent's time barrier in base bars (position management runs on the decision_tf clock). The labels
-        (triple_barrier) exit at the close of the (max_bars + 1)-th bar after the signal bar, so the live trade is
-        held for max_bars + 1 bars of the agent's timeframe, as the models were trained."""
+        """The agent's time barrier in base bars (positions run on the decision_tf clock): the labels exit at the close of
+        the (max_bars + 1)-th bar after the signal bar, so a live trade is held max_bars + 1 of the agent's bars."""
         return int((agent.label_spec.max_bars + 1) * tf_seconds(agent.timeframe) // tf_seconds(self.cfg.decision_tf))
 
     def _proposal_id(self, agent_id: str, close_ts: pd.Timestamp) -> str:
@@ -3293,6 +3292,7 @@ class Engine:
             "account": self.cfg.account_id, "broker": self.cfg.broker_name, "mode": self.cfg.mode, "ts": time.time(),
             # the deposit currency: the supervisor refuses to combine engines in different currencies (BACKLOG 28, A8)
             "currency": self._account_currency() or None,
+            "probe_only": self.cfg.probe_only,      # ADR 0037 amendment 4: out of the supervisor's combined limits
             # BACKLOG 29: the effective daily loss limit (account currency) and what is left of it today
             **daily_allowance(self.gate, self.state),
             # this account's absolute limit (accounts.yaml): the supervisor applies the smallest published one
