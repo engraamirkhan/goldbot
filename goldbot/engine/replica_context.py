@@ -15,6 +15,7 @@ unaffected. The price_action features have no state path yet (research only), so
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -69,10 +70,13 @@ class ReplicaShadow:
 
     def __init__(self, db: Database, series: Callable[[str], pd.DataFrame] | None = None,
                  bars_before: Callable[[str, pd.Timestamp], int] | None = None, symbol: str = "xauusd",
-                 history: BarHistory | None = None, series_start: pd.Timestamp = SERIES_START):
+                 history: BarHistory | None = None, series_start: pd.Timestamp = SERIES_START,
+                 warm_wait_s: float = 0.0):
         self.db, self.series, self.bars_before, self.symbol = db, series, bars_before, symbol
-        self.history, self.series_start = history, series_start
+        # warm_wait_s: how long a bar close waits for a bootstrap it started (production 0: never; tests wait)
+        self.history, self.series_start, self.warm_wait_s = history, series_start, warm_wait_s
         self._feeds: dict[str, ReplicaFeed] = {}
+        self._warming: dict[str, threading.Thread] = {}      # feed -> its background bootstrap
 
     def feed(self, agent: Any) -> ReplicaFeed:
         params: R.ReplicaParams = agent.replica_params
@@ -80,6 +84,30 @@ class ReplicaShadow:
         if name not in self._feeds:
             self._feeds[name] = ReplicaFeed(self.db, name, params, self.series_start)
         return self._feeds[name]
+
+    def _ready(self, feed: ReplicaFeed, m: pd.DataFrame, before: int, series: Callable[[], pd.DataFrame]) -> bool:
+        """True when the stored state continues on this tail (the bar's update is a cheap resume). Otherwise a
+        bootstrap is due: it runs on a background thread (never in the engine loop: a store read and a replica run
+        over years of bars), one per feed at a time, and the agent proposes nothing until a later bar resumes it."""
+        running = self._warming.get(feed.feed)
+        if running is not None and running.is_alive():
+            return False
+        state, _ = feed._resume_point(m.reset_index(drop=True), before)
+        if state is not None:
+            return True
+        tail = m.copy()
+
+        def work() -> None:
+            try:
+                feed.update(tail, before, series)
+            except Exception as exc:                         # noqa: BLE001 - logged; the next bar retries
+                log.warning("replica bootstrap of %s failed (%s: %s)", feed.feed, type(exc).__name__, exc)
+        th = threading.Thread(target=work, name=f"replica-{feed.feed}", daemon=True)
+        self._warming[feed.feed] = th
+        th.start()
+        if self.warm_wait_s > 0:
+            th.join(self.warm_wait_s)
+        return False
 
     def candidates(self, agent: Specialist, fr: Any) -> pd.DataFrame:
         """`agent`'s candidates on the decision frame `fr` (mid bars `fr.m`, features `fr.X`); idx positional in fr.m.
@@ -110,6 +138,8 @@ class ReplicaShadow:
                 src, count = self.series, self.bars_before
                 before, series = count(tf, ts[0]), (lambda: src(tf))
             else:
+                return _empty()
+            if not self._ready(feed, m, before, series):
                 return _empty()
             feed.update(m, before, series)
             state = feed.state_at(ts[-1 - lag])

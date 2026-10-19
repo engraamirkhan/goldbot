@@ -13,6 +13,11 @@ Written before any shadow trade of these agents. Code: `goldbot.research.populat
 - K: every roster agent is a population member, so the tournament's DSR uses `n_pop = len(self.members)`
   (goldbot/research/population.py, `Population.tournament`), which counts every roster config. Promotion to live also
   needs a passed research trial of the exact configuration (`research_passed`, ops/jobs.py `tournament`).
+- DSR K_eff is computed over roster agents clustered by return correlation; the three timeframes of one family count
+  as one cluster for the promotion decision. The 40-trade minimum counts per-agent per-session-day trade clusters
+  (trades of one agent on one session day are one cluster), not raw trades.
+- Demo cost probes may mirror a roster rule agent's taken shadow entries (trading-safety ruling 2026-10-19,
+  `cost_probe._mirrorable`): cost measurement only, never the agent's evidence.
 - Replica agents stay shadow only (`Specialist.shadow_only`); their registry model is a `RuleModel` (ADR 0038).
 
 ## Roster (3 of 40)
@@ -33,5 +38,6 @@ Agent ids are `AgentIdentity(family, config).agent_id` (the population lists the
   enters at the next open. Running them now would make shadow outcomes differ from their research labels.
 - sweep_absorb (H-48), eq_liquidity_run (H-49): no code on the branch.
 - price_action groups: no live state path (research only).
-- Demo cost probe mirroring of box_break_close: cost_probe.py excludes shadow-only agents (trading-safety rule);
-  needs a trading-safety ruling.
+- The clustered K_eff and the session-day trade clusters above are the rule for the promotion decision; the
+  tournament code still uses n_pop and raw trades (stricter on K, looser on trade count): a follow-up lane implements
+  them before any roster promotion is decided.

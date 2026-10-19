@@ -6,8 +6,8 @@ signal by a fixed round-robin rotation over agent_ids (never by P&L/score). At m
 real (live-agent) trades take priority". A cost probe, not a population status: probes feed only the costs pipeline.
 
 * Which signal: a taken shadow entry opened at this bar close by a challenger (a shadow version that is no agent's
-  champion, `Engine.live_versions`) of an agent the broker may trade (not shadow only: TradingView and replica agents
-  stay "filter features only"). One signal per agent (its versions in name order); among the agents the next agent id
+  champion, `Engine.live_versions`) of an agent the broker may trade (not shadow only; TradingView agents never, and
+  a frozen roster rule agent on a RuleModel by the ruling of 2026-10-19, `_mirrorable`). One signal per agent (its versions in name order); among the agents the next agent id
   after the last one probed, wrapping (`rotate`). p, score and P&L never reach the choice.
 * When: on the shadow host with `cost_probe` on, while the account holds probes only (up to `cost_probe_max_open`):
   no other position at the broker, no engine trade, no pending proposal and no order in flight. A live agent's candidate closes an
@@ -224,6 +224,18 @@ def _open_keys(eng: Engine) -> set[tuple[str, str, pd.Timestamp]]:
     return {(v, t.agent_id, t.entry_ts) for v, b in eng.shadow.books.items() for t in b.open}
 
 
+def _mirrorable(eng: Engine, version: str, agent: Specialist) -> bool:
+    """Trading-safety ruling 2026-10-19: a TradingView agent is never mirrored; another shadow-only agent only when it
+    is a frozen roster rule agent whose shadow version is a RuleModel (ADR 0038). Its probe measures cost only (never
+    the agent's evidence: probes stay out of closed_trades); demo only, RiskGate, own magic and budget as every probe."""
+    if agent.requires_tv:
+        return False
+    if not agent.shadow_only:
+        return True
+    from goldbot.research.rule_model import is_uncalibrated
+    return bool(getattr(agent, "frozen_config", False)) and is_uncalibrated(eng.shadow_models[version][1])
+
+
 def _signals(eng: Engine, probe: CostProbe) -> dict[str, tuple[str, ShadowTrade, Specialist]]:
     """agent id -> (version, shadow entry, specialist): this close's new taken challenger entries, one per agent."""
     assert eng.shadow is not None
@@ -236,7 +248,7 @@ def _signals(eng: Engine, probe: CostProbe) -> dict[str, tuple[str, ShadowTrade,
             continue
         for t in eng.shadow.books[version].open:
             agent = eng.agents.get(t.agent_id)
-            if (version, t.agent_id, t.entry_ts) in new and t.taken and agent is not None and not agent.shadow_only:
+            if (version, t.agent_id, t.entry_ts) in new and t.taken and agent is not None and _mirrorable(eng, version, agent):
                 out.setdefault(t.agent_id, (version, t, agent))
     return out
 

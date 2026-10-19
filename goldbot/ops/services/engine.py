@@ -389,6 +389,9 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         time.sleep(0.25)
 
 
+REPLICA_HISTORY_YEARS = 2
+
+
 def attach_replica(eng: Any, settings: Settings) -> None:
     """Serve replica-reading agents (smc boxes, money flow, structure) from the carried state in state/aux.db
     (`engine.replica_context.ReplicaShadow`), bootstrapped from the store's bars since `tv.replica_series_start`.
@@ -398,7 +401,11 @@ def attach_replica(eng: Any, settings: Settings) -> None:
     from goldbot.db.connection import Database
     from goldbot.engine.replica_context import ReplicaShadow, StoreHistory
     try:
-        start = pd.Timestamp(settings.tv.replica_series_start, tz="UTC")
+        # bounded bootstrap: at most the last REPLICA_HISTORY_YEARS full years (fixed per calendar year, so a restart in
+        # the same year resumes the stored state). Enough: the boxes, money flow and range are windows of <= 313 bars;
+        # the swing structure and seeded averages forget their start within a few 50-bar swings (weeks on 4h)
+        floor = pd.Timestamp(f"{pd.Timestamp.now('UTC').year - REPLICA_HISTORY_YEARS}-01-01", tz="UTC")
+        start = max(pd.Timestamp(settings.tv.replica_series_start, tz="UTC"), floor)
         eng._tv.replica = ReplicaShadow(Database.open(Path(eng.cfg.state_dir), "aux"), symbol=eng.cfg.symbol.lower(),
                                         history=StoreHistory(eng.store, eng.cfg.symbol, start), series_start=start)
     except Exception:

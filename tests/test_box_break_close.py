@@ -3,7 +3,10 @@ the carried replica state equals the full-history rule; a rule model is never a 
 live entry, and is registered once; the roster founders exist and are never cloned."""
 from __future__ import annotations
 
+import threading
+import time
 from types import SimpleNamespace
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -11,6 +14,7 @@ import pytest
 from goldbot.data.resample import mid, resample_bars, ticks_to_1m
 from goldbot.data.synthetic import synthetic_ticks
 from goldbot.db.connection import Database
+from goldbot.engine.cost_probe import _mirrorable
 from goldbot.engine.replica_context import ReplicaShadow
 from goldbot.engine.shadow import score
 from goldbot.research.model_registry import ModelRegistry
@@ -62,7 +66,7 @@ def test_the_live_decision_from_the_carried_state_equals_the_full_history_rule_o
     ends = range(1500, len(series))
     want = [truth.get(e, 0) for e in ends]
     assert sum(1 for w in want if w) >= 3, "the window must hold signals or this proves nothing"
-    shadow = ReplicaShadow(Database.open(tmp_path, "aux"), history=History(series))
+    shadow = ReplicaShadow(Database.open(tmp_path, "aux"), history=History(series), warm_wait_s=120)
     got = _walk(shadow, series, agent, ends)
     assert got[2:] == want[2:]           # the bar right after the bootstrap has no state one bar back: none, not wrong
 
@@ -72,7 +76,7 @@ def test_a_tail_shorter_than_the_replica_context_is_extended_from_the_store_and_
     full = agent.candidates(series, pd.DataFrame())
     truth = dict(zip(full["idx"].astype(int), full["side"].astype(int)))
     ends = range(1500, len(series))
-    shadow = ReplicaShadow(Database.open(tmp_path, "aux"), history=History(series))
+    shadow = ReplicaShadow(Database.open(tmp_path, "aux"), history=History(series), warm_wait_s=120)
     got = _walk(shadow, series, agent, ends, tail=240)
     assert got[2:] == [truth.get(e, 0) for e in ends][2:]
 
@@ -113,3 +117,43 @@ def test_the_roster_founders_exist_in_shadow_with_zero_capital(tmp_path):
     roster = [m for m in pop.members.values() if m.family == "box_break_close"]
     assert sorted(m.specialist().timeframe for m in roster) == sorted(tf for _, tf in SHADOW_ROSTER)
     assert all(m.status == "shadow" and m.capital_weight == 0 for m in roster)
+
+
+def test_a_bootstrap_runs_off_the_engine_loop_and_the_agent_proposes_nothing_until_it_is_ready(tmp_path, series):
+    gate = threading.Event()
+
+    class Slow(History):
+        def before(self, tf, first, n=None):
+            if n is None:                      # the bootstrap's full read: held until released
+                gate.wait(30)
+            return super().before(tf, first, n)
+
+    agent = BoxBreakCloseSpecialist()
+    shadow = ReplicaShadow(Database.open(tmp_path, "aux"), history=Slow(series))
+    t0 = time.monotonic()
+    assert shadow.candidates(agent, _frame(series, 2000)).empty
+    assert shadow.candidates(agent, _frame(series, 2001)).empty      # still warming: no decision, no wait
+    assert time.monotonic() - t0 < 5
+    gate.set()
+    shadow._warming[shadow.feed(agent).feed].join(60)
+    assert shadow.feed(agent).stored() is not None                   # the warmed state is in aux.db
+
+
+def test_an_agent_that_raises_proposes_nothing_and_the_bar_close_goes_on(tmp_path, series):
+    class Broken(BoxBreakCloseSpecialist):
+        def candidates_in_context(self, *a, **k):
+            raise RuntimeError("boom")
+
+    shadow = ReplicaShadow(Database.open(tmp_path, "aux"), history=History(series), warm_wait_s=120)
+    agent = Broken()
+    for e in range(2000, 2004):
+        assert shadow.candidates(agent, _frame(series, e)).empty
+
+
+def test_a_cost_probe_mirrors_a_roster_rule_agent_but_never_a_tradingview_one():
+    eng: Any = SimpleNamespace(shadow_models={"v": ("a", RuleModel(rule="box_break_close")),
+                                              "w": ("b", SimpleNamespace())})
+    assert _mirrorable(eng, "v", BoxBreakCloseSpecialist())
+    assert not _mirrorable(eng, "w", BoxBreakCloseSpecialist())           # a shadow-only agent on another model
+    tv: Any = SimpleNamespace(requires_tv=True, shadow_only=True)
+    assert not _mirrorable(eng, "v", tv)
