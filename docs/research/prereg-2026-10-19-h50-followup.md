@@ -75,6 +75,13 @@ convention**. The mismatch is an error in the pre-registration's counting method
   1.05, which is further from 2.
 - Net is negative on both sides and in every year, so no convention rescues criteria 2-3.
 
+**Why gross n (5,684) is 151 below net n (5,835).** `pipeline.prepare` applies `one_at_a_time` separately to the
+net labels (bar spread paid) and to the gross labels (`_zero_spread`). With the spread paid, the long entry is at the
+ask and the exit at the bid, so stops are hit a little sooner. The net trades are therefore shorter (mean 13.4 bars
+against 14.4), they free their slot earlier, and more candidates get in. Reproduced: net 5,835, gross 5,684 (median
+7 against 8 bars). The two sets are different one-at-a-time subsets of the same 9,147 candidates. Neither the screen
+(gross) nor the net criteria mix them.
+
 **What it does change.** The counts for 1h (907) and 4h (319) were made by the same method. On that basis R-11 and
 the live review s.4 ruled the 1h/4h box rules "below the P4 floor, cannot be research-passed alone". Under the
 pipeline's convention:
@@ -86,7 +93,15 @@ Process fix, from now on: a counts-only pre-registration states both bounds, the
 
 ## 3. H-53 `box_break_close` 1h, the frozen roster rule, as a research trial (1 trial)
 
-- **Decision: pre-register now; do not dispatch** until a slot exists (funding below).
+- **What this is, stated plainly (amended after quant review, 2026-10-19).** This is a decision taken **after the
+  H-50 STOP**, on new **feasibility** information: section 2 shows that 1h clears the event floor alone. It is **not
+  new evidence of edge**.
+  - The lower cost share at 1h was known before H-50, and H-51b's timeframe extension was conditional on H-50
+    CONTINUE/LEAD. So the trial is not a pre-registered consequence of H-50.
+  - It is a re-test of a retired family. It is therefore charged as `box_break_close`'s **retired-family exploration
+    trial**: the one trial the retired families share per quarter (`director.RETIRED_EXPLORATION`, settings comment).
+  - This choice is recorded in ADR 0040.
+- **Decision: pre-register now; do not dispatch** until its slot exists (funding below).
 - **Why.** At 1h the stop is wider in dollars (median 1.5 ATR14: $4-8 in 2010-2020, $8.6 in 2024, $15.4 in 2025,
   against $1.9-3.9 and $7.3 at 15m), so the same dollar cost is a smaller share of R.
   - It is the owner's own rule on a timeframe the owner trades, and his stated belief is that it works across
@@ -117,7 +132,9 @@ Process fix, from now on: a counts-only pre-registration states both bounds, the
     owner's rule at the timeframe where costs bind least, for 1 trial.
 - **Reading rule (fixed before any outcome).**
   - **CONTINUE** only if all hold:
-    1. P4: gross mean R t ≥ 2.0 on ≥ 1,000 events;
+    1. P4: gross mean R t ≥ 2.0 on ≥ 1,000 events, **and** the day-clustered t ≥ 2.0. For the clustered t, gross R
+       is summed per entry day (UTC), and the t is taken over the days with a trade (the gates' `day_summed`
+       convention). The evaluator computes it from the run's labels. The screen's plain t alone does not satisfy 1;
     2. rule-only net mean R > 0 under the cost prior (bar spread + $0.37/oz + swap prior);
     3. net mean R > 0 in 2024 and in 2025-01..09;
     4. DSR ≥ 0.95 at the registry `n_trials_effective` at the verdict (≥ 111).
@@ -125,32 +142,43 @@ Process fix, from now on: a counts-only pre-registration states both bounds, the
     Then the holdout is scored once (reserved), and the 1h agent becomes promotable through the normal tournament:
     ≥ 40 clean clusters, the evaluator's verdict, and the owner's confirmation for real money.
   - **LEAD** if 1-3 hold and 4 fails. No promotion. The 1h agent's clean forward shadow becomes the test: a read at
-    300 clean one-at-a-time trades, net mean R > 0 with t ≥ 2. That read is 1 trial, charged when made.
-  - **STOP** if 1 fails or net ≤ 0, at any count. R-15 then covers every box timeframe, R-11's reason is restated
-    with the corrected counts, and no further box timeframe trial is proposed without new evidence (a new mechanism
-    or measured costs below half the prior).
+    300 clean one-at-a-time trades, net mean R > 0 with a day-clustered t ≥ 2. That read is 1 trial, charged when
+    made.
+  - **STOP** if 1 fails or net ≤ 0, at any count.
+    - R-15 then covers every box timeframe.
+    - R-11's reason is restated with the corrected counts.
+    - **No further `box_break_close` trial, on any timeframe or config, without a new mechanism or measured costs
+      below half the prior** (H-52's bootstrap upper bound).
   - **Inconclusive** only if the gross event count comes out below 1,000. That would be a defect of this count,
     escalated, never re-run under another config.
 - **Gates.** P4 screen, net > 0, the per-year rule, DSR at full K, holdout only for a CONTINUE (one look).
-- **Cost and funding.** 1 trial, `k_eff` 0 (one config, no grid). It is a pre-registered exception to R-15: the
-  family is retired, and this row is the only box_break_close trial allowed.
-  - 2026Q4 is full (55 of 55).
-  - **Default funding: the first 2027Q1 open slot** under the E-5 cap (a pre-registered `rule_ref`). It takes one
-    of the two Q1 trials H-51a/b no longer use, so the queued Q1 rows are not displaced.
-  - Earlier only if the owner raises the 2026Q4 override from 55 to 56. That is an owner decision (settings); it is
-    routed to the program-director with a recommendation, not assumed.
-- **Dispatch command (only on 2027-01-01 or later, or after a recorded 55 → 56 raise):**
+- **Cost and funding.** 1 trial, `k_eff` 0 (one config, no grid). It is the **2027Q1 shared retired-family
+  exploration trial**, and it runs in 2027Q1 only.
+  - 2026Q4 cannot fund it, for two reasons: the budget is full (55 of 55), and 2026Q4's retired-family trials
+    already exist (the B01-B03 batch reconfirmations, #21-#52). So no budget raise is asked for.
+  - It spends 1 of the 2027Q1 open budget under the E-5 cap (a pre-registered `rule_ref`). It takes one of the two
+    Q1 trials that H-51a/b no longer use, so the queued Q1 rows are not displaced.
+  - No other retired family gets the 2027Q1 exploration trial.
+- **Code gaps, handled procedurally until BACKLOG 91 lands (due 2026-12-18).**
+  - An open-budget research.yml run with a `rule_ref` on a retired family is not refused: the registry
+    (`registry.py` 640-669) guards only slots.
+  - The director builds `retired_map` from the allocated families only (`director.py` about 1486), so a screened
+    retired family escapes the shared exploration cap.
+  - Until BACKLOG 91 is fixed, the research director enforces both by hand: H-53 is the quarter's only
+    retired-family trial.
+- **Dispatch command (only on 2027-01-01 or later, and only if no other retired-family trial is stamped in 2027Q1):**
 
   ```
   gh workflow run research.yml --ref main -f specialist=box_break_close -f variants='[{"timeframe": "1h"}]' \
     -f from_year=2010 -f to_year=2025 -f lot_fit=true \
     -f rule_ref='prereg-2026-10-19-h50-followup.md#h-53' \
-    -f rationale='H-53: box_break_close 1h, the exact frozen roster rule (prereg-2026-10-19-h50-followup.md s.3); 1 trial, pre-registered exception to R-15'
+    -f rationale='H-53: box_break_close 1h, the exact frozen roster rule (prereg-2026-10-19-h50-followup.md s.3); 1 trial, 2027Q1 retired-family exploration trial (post-STOP feasibility decision)'
   ```
 
 ## 4. Ledger
 
 - K now: 89 registry trials, `n_trials_effective` 110. H-53 makes it 111 or more at its verdict.
-- 2026Q4: 55 of 55 used. 2027Q1: 0 used; 8 reserved for the queue; H-53 takes 1 open slot that H-51 frees.
+- 2026Q4: 55 of 55 used. 2027Q1: 0 used; 8 reserved for the queue; H-53 takes 1 open slot that H-51 frees, and it is the quarter's
+  shared retired-family exploration trial.
 - Survivors seeding the next generation: none. Both STOPs retire their ideas. Nothing is cloned or mutated
   (`frozen_config`).

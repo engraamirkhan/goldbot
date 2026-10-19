@@ -28,6 +28,16 @@ The owner has asked that research decisions not come back to him.
 - Clause 3 is **not applied**. The cost probe keeps mirroring the roster agents' shadow entries, unchanged
   (`cost_probe._mirrorable`).
 - The deviation is disclosed in `prereg-2026-10-19-h50-followup.md` s.1 and in the R-15 row.
+- **H-53 (`box_break_close` 1h), amended after quant review 2026-10-19.**
+  - It is a decision taken after the STOP, on new feasibility information (1h clears the event floor under the
+    pipeline's one-at-a-time convention). It is not new evidence of edge, and it is not a pre-registered consequence
+    of H-50.
+  - It is charged as the 2027Q1 retired-family exploration trial, and no other retired family gets that quarter's
+    trial.
+  - If it reads STOP, no further `box_break_close` trial runs without a new mechanism or measured costs below half
+    the prior.
+  - The two code paths that do not yet enforce the shared cap for screened families are BACKLOG 91 (due 2026-12-18).
+    Until then they are enforced by hand.
 
 ## Consequences
 - **Ambition gained.** More demo fills.
@@ -45,7 +55,12 @@ The owner has asked that research decisions not come back to him.
   trade at full cost). These losses are demo money inside the probe budget.
 - **Integrity.**
   - Probes stay out of `closed_trades`, promotion and every verdict, so no retired rule's probe P&L is ever read as
-    evidence.
+    evidence. Tested on a frozen roster rule agent with a RuleModel:
+    `tests/test_cost_probe.py:599` `test_a_retired_roster_agents_probe_never_reaches_its_shadow_book_closed_trades_or_fills`.
+    It checks that the agent's shadow book is identical with and without the probe, that `load_closed_trades` is
+    empty, and that there are no `cost_probe:` fills. The generic case is `tests/test_cost_probe.py:561`
+    `test_a_closed_probe_goes_to_the_probe_ledger_and_never_to_closed_trades_fills_or_the_shadow_book`.
+    Research verdicts read only registry rows from research.yml, never the probe ledger.
   - If the program-director or CFO later wants the probe budget for a non-retired agent, the round-robin can exclude
     `research.retired_families`. That is a one-line change in `_mirrorable` and needs a trading-safety review.
 - **Reversal.** Set clause 3 back by the change above. No other state depends on this decision.

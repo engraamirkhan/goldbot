@@ -58,8 +58,10 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
     demo-for-learning directive.
 - The H-50 count gap (5,835 trial events vs 2,404 pre-registered) is a counting-convention error in the
   pre-registration (time-limit block vs label exit). The trial ran the frozen rule.
-- H-53 (`box_break_close` 1h, about 1,625 events) is pre-registered, not dispatched: first 2027Q1 open slot, or an
-  owner raise 55 → 56. See `docs/research/prereg-2026-10-19-h50-followup.md`.
+- H-53 (`box_break_close` 1h, about 1,625 events) is pre-registered but not dispatched. It is a post-STOP
+  feasibility decision, charged as the 2027Q1 retired-family exploration trial. See
+  `docs/research/prereg-2026-10-19-h50-followup.md`.
+  - The registry and director gaps that would let a retired screened family take more trials are BACKLOG 91.
 - Home live activity feed (owner request 2026-10-19: "no useful information on what is happening"):
   `GET /api/activity?limit=50` (viewer and above, read-only, built at most every 10 s) merges shadow trades opened and
   closed (taken only; state/shadow_book.json, stamped at their bars' close), account positions opened and closed

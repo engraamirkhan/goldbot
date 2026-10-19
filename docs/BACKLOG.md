@@ -104,6 +104,7 @@ trim), and 62 must hold the cap too. 11 ranked rows.
 | 88 | H-02: full-coverage columns are exempt from the 80% pool rule; survivors carry the mask; field in the dump | Research (discovery pipeline, pre-registration H-02) · LEARN | S | done (implemented 2026-10-18; awaiting quant-reviewer review; pin 3a0d25d) · accountable: implementer · reviews: quant-reviewer, code-reviewer · due 2026-12-11 |
 | 89 | Opt-in tod_periodicity feature group for O-4 (N1) | Research (features) · LEARN | S | done (implemented 2026-10-18; awaiting quant-reviewer review) · accountable: implementer · reviews: quant-reviewer, code-reviewer · due 2026-12-11 (O-4 group-map pin) |
 | 90 | 20-day measured cost/model series for the adaptive limits | Risk (limits) · PROTECT | S | proposed (raised by the ADR 0031 lane B implementer, 2026-10-18) · accountable: implementer · reviews: quant-reviewer, trading-safety-reviewer |
+| 91 | Retired screened families: refuse open-budget rule_ref runs and count them in the shared exploration cap | Research (governance) · PROVE | S | proposed (research director, quant review of research/h50-followup, 2026-10-19) · due 2026-12-18, before any 2027Q1 dispatch · accountable: implementer · reviews: quant-reviewer |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -1352,6 +1353,24 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
 - **89. Opt-in tod_periodicity feature group for O-4 (N1).** Value: adds the N1 hypothesis (`docs/research/candidates/next-2026-10-18.md`) to O-4's 15m discovery at no trial cost (signed amendment under O-4 in `docs/research/preregistration-2027Q1.md`). Acceptance: a new opt-in family `tod_periodicity` with six columns `slot_mean_ret_{5,10,20}d`, `slot_hit_rate_20d`, `slot_t_20d`, `slot_ret_over_atr`, computed per 30-minute UTC slot from the same slot on earlier days only (a 15m bar maps to the slot containing its open), `available_utc` = the prior day's slot close, joined with `asof_join`; `lookahead_check` reports 0 columns; it is **not** in `DEFAULT_FEATURE_NAMES` (test: the H-02/H-01/H-04/C4H feature versions `f-079deacc61` and `f-51ac5ebabb` and the pinned config hashes and H-02 dump in `preregistration-2027Q1.yaml` are unchanged); it is its own group in O-4's map (not inside `activity`) and the group-size test passes. No feature-to-label statistic is computed. Not merged by 2026-12-11 -> O-4 is pinned without it (no delay).
 - **90. 20-day measured cost/model series for the adaptive limits.** Value: ADR 0031's frozen tighten rule "20-day measured cost/model > 1.25 → floors, 1.10–1.25 → one step down" has no input today: no series of measured round-trip cost against the cost the research model charged exists, so `goldbot/ops/limits_job.py` passes `cost_ratio_20d = None` and the rule cannot fire (the drawdown, loss-streak, stage and statistic rules still tighten). Acceptance: a per-account daily measure over the last 20 risk days of demo fills (spread at the fill, slippage against the requested price, commission and swap, USD per oz) divided by what the research labels charge for the same trades (bar spread plus the cost table's extra cost), None below a pre-registered minimum of fills; `limits_job` passes it; a test shows a ratio of 1.3 gives the floors and 1.2 one step down through the job; quant-reviewer signs off the definition before it is wired (it is an input to a frozen rule, so its definition is fixed before any replay).
 - Until then the RUNBOOK says the cost rule is inert, and the nightly job's result row carries no cost ratio.
+- **91. Retired screened families: refuse open-budget rule_ref runs and count them in the shared exploration cap.**
+  - Value: two governance gaps let a retired, screened family (`box_break_close` R-15, `sweep_absorb` R-14) take
+    trials outside the retired families' shared exploration trial.
+    1. `TrialRegistry.check_quarter_budget` (`goldbot/research/registry.py` 640-669) refuses a retired family only on
+       a contingent slot. An open-budget research.yml run citing a `rule_ref` is not refused.
+    2. `build_plan` (`goldbot/research/director.py` about 1486) builds `retired_map` from the allocated
+       `research_families` only. A screened retired family is therefore outside `retired_exploration`, and the
+       director can give the same quarter's shared trial to another retired family.
+  - Until this is fixed, the rule is procedural: H-53 is the 2027Q1 shared retired-family exploration trial
+    (`prereg-2026-10-19-h50-followup.md` s.3). The research director dispatches no other retired-family trial that
+    quarter.
+  - Acceptance:
+    - a research.yml / research_pass run on a family in `research.retired_families` is refused unless no retired-family
+      trial is stamped in the quarter yet (`retired_quarter_trials` < `RETIRED_EXPLORATION`);
+    - the director's `retired_exploration` counts trials on every retired family, allocated or screened, and reports
+      the quarter's shared trial as used once H-53's row exists;
+    - tests cover both paths, including a screened family;
+    - quant-reviewer signs off.
 
 ## Needs the owner
 These are never decided by the product owner or by agents. Since 2026-10-16 (owner rule) only truly owner-only

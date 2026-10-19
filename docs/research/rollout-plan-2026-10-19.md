@@ -151,7 +151,8 @@ order below. No item ranks, tunes or selects by shadow P&L.
 | H-50 screening-dispatch precondition | implementer | 10-21 | **done** (run 39284389371 ran the rule-only screen) |
 | H-50 dispatched + verdict | research-director / evaluator | 10-21 / 10-22 | **done 10-19**: run 39284389371, trial #89, STOP; retired R-15; H-51a/b lapse; probes keep mirroring (ADR 0040) |
 | ADR 0040 + R-14/R-15 reviews (quant, trading-safety) | research-director → program-director | 10-21 | open (branch research/h50-followup) |
-| H-53 funding: owner raise 55 → 56, or first 2027Q1 open slot | program-director (owner ask) / research-director (dispatch) | 10-23 ask / 2027-01-04 dispatch | pre-registered 10-19, not dispatched |
+| H-53 dispatch (2027Q1 retired-family exploration trial; none other that quarter) | research-director | 2027-01-04 | pre-registered 10-19, not dispatched |
+| BACKLOG 91: retired screened families guarded in registry and director | implementer / quant-reviewer | 12-18 | proposed |
 | Counts-only template: state both one-at-a-time bounds | strategy-researcher | 10-26 | open |
 | Shadow quarantine + daily parity | implementer / data-engineer | 10-23 | not started |
 | icm-probe live, probe budget ruling | sre / trading-safety / CFO | 10-22 | account being brought up |
