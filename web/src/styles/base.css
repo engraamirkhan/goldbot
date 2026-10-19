@@ -152,8 +152,10 @@ main { padding: var(--s4); max-width: var(--content-max); margin: 0 auto; paddin
   .safety .strip-toggle { display: block; min-height: var(--tap); margin: 0 0 var(--s2); padding: 0 var(--s3); background: none;
     border: 1px solid var(--border); border-radius: var(--r-lg); color: var(--text); font: inherit; font-size: 14px; cursor: pointer; }
   .safety .strip:not(.open) { display: none; }
-  /* Approve and Reject stay pinned just above the bottom bar while the waiting card is on screen, so the decision never
-     needs a scroll however tall the card is (the card's own markup is unchanged) */
-  .approvals .card .decide { position: sticky; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + var(--s2));
-    z-index: 5; padding: var(--s2) 0; background: var(--surface); box-shadow: 0 -8px 8px -6px rgb(0 0 0 / 0.12); }
+  /* Approve (2/3) and Reject (1/3) stay pinned in one ~60 px row just above the bottom bar while the waiting card is on
+     screen (Trades and Home), so the decision needs no scroll and the stop, target and win chance stay readable */
+  :is(.approvals, .home-waiting) .card .decide { position: sticky; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + var(--s2));
+    z-index: 5; grid-template-columns: 2fr 1fr; padding: var(--s2) 0; background: var(--surface);
+    box-shadow: 0 -8px 8px -6px rgb(0 0 0 / 0.12); }
+  :is(.approvals, .home-waiting) .card .decide button, :is(.approvals, .home-waiting) .card .decide .approve { min-height: 44px; font-size: 16px; }
 }

@@ -103,6 +103,14 @@ test("owner approves one proposal and rejects the other with a reason", async ({
   const abox = await approve.boundingBox();
   const barTop = (await page.locator(".bottombar").boundingBox())?.y ?? 740;
   expect(abox && abox.y >= 0 && abox.y + abox.height <= barTop).toBe(true);
+  await go(page, "Overview");                                                  // the same on Home (the first waiting card)
+  const homeApprove = page.getByRole("region", { name: "Needs you" }).getByRole("button", { name: "Approve" });
+  await expect(homeApprove).toBeVisible();
+  const hbox = await homeApprove.boundingBox();
+  const hBarTop = (await page.locator(".bottombar").boundingBox())?.y ?? 740;
+  expect(hbox && hbox.y >= 0 && hbox.y + hbox.height <= hBarTop).toBe(true);
+  expect(hbox && hbox.height <= 60).toBe(true);                                // one ~60 px row, not the stacked pair
+  await go(page, "Approvals");
   await page.setViewportSize({ width: 360, height: 800 });
   const lbox = await long.boundingBox();
   expect(lbox && lbox.x >= 0 && lbox.x + lbox.width <= 360).toBe(true);        // the card fits the phone

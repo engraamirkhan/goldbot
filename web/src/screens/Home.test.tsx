@@ -113,7 +113,7 @@ describe("Home needs you", () => {
   it("says no engine is reporting when none is", async () => {
     vi.spyOn(apiModule.api, "accounts").mockResolvedValue([]);
     renderHome();
-    expect(await screen.findByText(/No engine is reporting, so no new trades can open/)).toBeInTheDocument();
+    expect(await screen.findByText(/No engine reporting, so no new trades can open/)).toBeInTheDocument();
   });
 });
 

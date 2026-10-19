@@ -32,7 +32,7 @@ describe("EntryStatusPanel", () => {
 
   it("says nothing can trade when no engine reports", () => {
     render(<EntryStatusPanel accounts={[]} />);
-    expect(screen.getByText(/No engine is reporting, so no new trades can open/)).toBeInTheDocument();
+    expect(screen.getByText(/No engine reporting, so no new trades can open/)).toBeInTheDocument();
   });
 
   it("shows an open account with a word badge, its headline and the exits line", () => {
