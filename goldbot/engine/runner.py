@@ -69,6 +69,7 @@ from goldbot.ops.cost_imputation import account_swap, paid_swap_per_oz
 from goldbot.ops.gates_phase import ClosedTrade, EntryAudit, append_closed_trade, load_closed_trades
 from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import CONTEXT_FEATURES, DEFAULT_FEATURE_NAMES
+from goldbot.research.rule_model import is_uncalibrated
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, hwm, open_risk, sizing
 from goldbot.risk.gate import PER_TRADE_REFUSALS, REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
 from goldbot.risk.limits_profile import LimitsPolicy, RiskLimitsCurrent
@@ -1085,6 +1086,9 @@ class Engine:
             # shadow only (share 0) like a shadow-only member of the population: the shadow book trades it, not the broker
             share = 0.0 if agent.shadow_only else 1.0 if self.live_shares is None else self.live_shares.get(agent.agent_id, 0.0)
             if share <= 0:
+                continue
+            if is_uncalibrated(model):       # ADR 0038: a rule model's p means "fired": it never sizes a live entry
+                decisions.append(self._record(agent, close_ts, 0.0, 0.0, "uncalibrated_rule_model"))
                 continue
             if self._busy(agent.agent_id):
                 continue      # one position (or pending proposal) per agent, as its labels were built
