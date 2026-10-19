@@ -233,6 +233,9 @@ class TradeEvidence(FrozenRecord):
     exit_ns: int
     net_r: float
     min_lot_exception: bool = False
+    # ADR 0039 (quant review 2026-10-19): opened before the H-52 history-gap fix (promotion.EVIDENCE_START_UTC). Not
+    # evidence for the per-strategy risk; ADR 0031's frozen statistic and the A1 budget still read it
+    quarantined: bool = False
 
 
 class Evidence(FrozenRecord):
@@ -249,6 +252,10 @@ class Evidence(FrozenRecord):
     cost_ratio_20d: float | None = None
     atr15_median_20d: float | None = None
     atr15_p90_1y: float | None = None
+    # ADR 0039's volatility regime, like with like: the 20-day median and the 1-year p90 of the DAILY median ATR15
+    # (the per-bar p90 above is set by the busiest session hour, so the regime would almost never fire on it)
+    vol_median_20d: float | None = None
+    vol_p90_1y: float | None = None
 
     def day(self) -> date:
         return day_of_ns(self.as_of_ns)
@@ -256,7 +263,8 @@ class Evidence(FrozenRecord):
     def problems(self) -> list[str]:
         """Why this evidence cannot be trusted (empty: it can). Any problem gives the floors (fail closed)."""
         out: list[str] = []
-        for name in ("drawdown", "cost_ratio_20d", "atr15_median_20d", "atr15_p90_1y"):
+        for name in ("drawdown", "cost_ratio_20d", "atr15_median_20d", "atr15_p90_1y", "vol_median_20d",
+                     "vol_p90_1y"):
             v = getattr(self, name)
             if v is not None and not math.isfinite(v):
                 out.append(f"non_finite_{name}")
@@ -391,7 +399,9 @@ def combined_lcb(trades: Iterable[TradeEvidence]) -> float | None:
     return min(lcbs) if lcbs else None
 
 
-def _strategy_f(trades: Sequence[TradeEvidence], st: DailyStat) -> float:
+def _a1_daily_fraction(trades: Sequence[TradeEvidence], st: DailyStat) -> float:
+    """Amendment A1's DAILY risk fraction: min(LCB_s/(4·E[r²]_s), N̄_s·LCB_s/(4·E[D_s²])), LCB_s on daily sums; 0 when
+    LCB_s <= 0."""
     if st.lcb <= 0:
         return 0.0
     sums: dict[date, float] = defaultdict(float)
@@ -405,18 +415,18 @@ def _strategy_f(trades: Sequence[TradeEvidence], st: DailyStat) -> float:
 
 
 def strategy_f(trades: Sequence[TradeEvidence]) -> float | None:
-    """Amendment A1, one strategy s: the quarter-Kelly per-trade fraction f_s = min(LCB_s/(4·E[r²]_s),
-    N̄_s·LCB_s/(4·E[D_s²])), 0 when LCB_s <= 0. D_s are its daily net-R sums and N̄_s its mean trades per day. The day
-    term binds when losses cluster on the same days (correlated trades), which the per-trade term cannot see. None
-    without evidence (fewer than 2 days)."""
+    """ADR 0039, one strategy s: the quarter-Kelly PER-TRADE fraction (quant review 2026-10-19). A1's terms are daily
+    fractions (the LCB is of the daily R sums), so per trade: f_s = min((LCB_s/N̄_s)/(4·E[r²]_s), LCB_s/(4·E[D_s²]))
+    = A1's daily fraction / N̄_s, N̄_s its mean trades per day. The day term binds when losses cluster on the same
+    days. 0 when LCB_s <= 0; None without evidence (fewer than 2 days)."""
     st = daily_lcb(trades)
-    return None if st is None else _strategy_f(trades, st)
+    return None if st is None else _a1_daily_fraction(trades, st) * st.n_days / st.n_trades
 
 
 def strategy_q(trades: Sequence[TradeEvidence]) -> float | None:
-    """Amendment A1: q_s = f_s / 3%, clamped to [0, 1] (`strategy_f`). None without evidence."""
-    f = strategy_f(trades)
-    return None if f is None else min(1.0, max(0.0, f / Q_SCALE))
+    """Amendment A1, one strategy s: q_s = its daily fraction / 3%, clamped to [0, 1]. None without evidence."""
+    st = daily_lcb(trades)
+    return None if st is None else min(1.0, max(0.0, _a1_daily_fraction(trades, st) / Q_SCALE))
 
 
 def quarter_kelly_q(trades: Sequence[TradeEvidence]) -> float:
@@ -444,9 +454,10 @@ def strategy_risk(trades: Sequence[TradeEvidence], base: float, *, ceiling: floa
                         n_demo=n_demo, reason="no_evidence")
     if st.lcb <= 0:
         return RiskTerm(r=floor, target=floor, f=0.0, n_days=st.n_days, n_demo=n_demo, lcb=st.lcb, reason="lcb_not_positive")
-    f = _strategy_f(trades, st)
+    f = _a1_daily_fraction(trades, st) * st.n_days / st.n_trades
     w = st.n_days / (st.n_days + RISK_SHRINK_DAYS)
-    r = min(max(_quantise(base + w * (f - base)), floor), hi)
+    # f is clamped to the ceiling BEFORE shrinking (quant review): a few very good days cannot reach the cap
+    r = min(max(_quantise(base + w * (min(f, hi) - base)), floor), hi)
     return RiskTerm(r=r, target=r, f=f, n_days=st.n_days, n_demo=n_demo, lcb=st.lcb, w=w, reason="shrunk")
 
 
@@ -628,8 +639,8 @@ def step(prev: AdaptiveState | None, ev: Evidence | None, day: date, bounds: Lim
                         explore_stopped=prev.minlot_explore_stopped if prev else False,
                         risk_code="evidence_invalid")
     # ADR 0039: "vol regime >= p90"; unknown ATR = no regime (today's rules: fail closed never below them)
-    vol_high = None if ev.atr15_median_20d is None or ev.atr15_p90_1y is None \
-        else ev.atr15_median_20d >= ev.atr15_p90_1y
+    vol_high = None if ev.vol_median_20d is None or ev.vol_p90_1y is None \
+        else ev.vol_median_20d >= ev.vol_p90_1y
 
     roll = prev is None or day > prev.day
     reasons: list[str] = []
@@ -749,7 +760,8 @@ def step(prev: AdaptiveState | None, ev: Evidence | None, day: date, bounds: Lim
                 n_at[f] = len(demo)
                 reasons += ["loosen", f"{f}:loosen"]
 
-    rd = _strategy_risks(prev, in_stat, day, bounds, roll=roll, last_tight=last_tight)
+    rd = _strategy_risks(prev, [t for t in in_stat if not t.quarantined], day, bounds, roll=roll,
+                         last_tight=last_tight)
     state = AdaptiveState(account_id=acct, day=day,
                           limits=bounds.limits_at(lvl).model_copy(update={"strategy_risk": rd.strategy_risk}),
                           up_streak=streak, loosened_day=loosened_day, demo_n_at_loosen=n_at, tightened_day=last_tight,
