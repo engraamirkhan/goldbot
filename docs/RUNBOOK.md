@@ -98,6 +98,75 @@ until it has seen the terminal logged in to that login on the registered demo se
 answers `GET /health`, with the terminal's state (`not_logged_in`, `wrong_account`, ...). On the box,
 `curl -s 127.0.0.1:8765/health` shows that state, and the brain shows it as `terminal:icm-demo` (see "Terminal down").
 
+### 0.3b Adding an account box (one MT5 box per account; first one `icm-probe` on `goldbot-mt5-probe`)
+Each further MT5 account gets its own E2.1.Micro box built exactly like 0.3 (docs/ops/icm-probe-account-plan.md,
+Option B): its own Wine prefix, terminal at `C:\MT5\ICMarkets`, bridge on the box's own `127.0.0.1:8765`. Only the
+unit instances carry the account. On the brain each box gets its own tunnel, `goldbot-bridge-tunnel@<account>`, on
+its own local port (`icm-probe`: **8766**). `icm-demo` keeps `goldbot-bridge-tunnel.service` on 8765, unchanged.
+Hosts are SSH aliases in `~/.ssh/goldbot.conf`; no address, login or token goes into the repo, a commit or a chat.
+`<SHA>`/`<HASH>` as in 0.3. The `icm-probe` entry in `config/accounts.yaml` must be on `main` at `<SHA>`
+(`enabled: false`) before B8, because the bridge serves only an account it knows.
+
+| Step | What | Who |
+|---|---|---|
+| B4 | Build the box (below) | Claude, after the owner approves the deploy |
+| B5 | Login on the brain: `ssh -F ~/.ssh/goldbot.conf -t goldbot-brain goldbot accounts set mt5-login-icm-probe` (hidden prompt) | **Owner** |
+| B6 | Copy the login to the box without showing it (below) | Claude |
+| B7 | First login over VNC, as 0.3 steps 1 to 5, with `goldbot-mt5-terminal@icm-probe` and the probe account | **Owner** |
+| B8 | Bridge listen address and token (below) | Claude |
+| B9 | Tunnel key, env file and tunnel unit on the brain (below) | Claude (root; security review) |
+| B10 | Enable the box's bridge and watchdog and the brain's tunnel; check `/health` and preflight | Claude |
+| B11 | Cold restart of the box, recorded in the deploy note | Claude |
+
+**B4, build** (on the box, inside `tmux new -s boot`):
+```bash
+curl -fsSLo mt5_bootstrap.sh https://raw.githubusercontent.com/engraamirkhan/goldbot/<SHA>/goldbot/ops/linux/mt5_bootstrap.sh
+echo "<HASH>  mt5_bootstrap.sh" | sha256sum -c - && sudo bash mt5_bootstrap.sh <SHA> --account icm-probe
+```
+It installs the same units as 0.3, including `goldbot-mt5-terminal@.service` (the only launcher, `Restart=always`),
+and enables `goldbot-mt5-terminal@icm-probe`, `goldbot-bridge@icm-probe` and `goldbot-bridge-watchdog@icm-probe.timer`.
+Check: `systemctl is-enabled goldbot-mt5-terminal@icm-probe goldbot-bridge@icm-probe` prints `enabled` twice.
+
+**B6, login to the box** (from the Mac, one line; `export` writes to a pipe only):
+`ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-brain goldbot accounts export mt5-login-icm-probe | ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-mt5-probe goldbot-mt5 accounts set mt5-login-icm-probe --stdin`
+
+**B8, bridge address and token** (from the Mac; the token is made on the Mac, sent to both ends, never printed):
+`printf 127.0.0.1:8765 | ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-mt5-probe goldbot-mt5 accounts set mt5-bridge-listen-icm-probe --stdin`
+`t=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n'); printf %s "$t" | ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-mt5-probe goldbot-mt5 accounts set mt5-bridge-token-icm-probe --stdin && printf %s "$t" | ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-brain goldbot accounts set mt5-bridge-token-icm-probe --stdin; unset t`
+`printf http://127.0.0.1:8766 | ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-brain goldbot accounts set mt5-bridge-url-icm-probe --stdin`
+(Not `bridge-serve`: it prints the token on screen.)
+
+**B9, the brain side** (on the brain, as root):
+1. Nothing listens on 8766 yet: `ss -ltn 'sport = :8766'` shows only the header line.
+2. Authorise the brain's tunnel key on the box (port 8765 only, unchanged):
+   `sudo -u goldbot cat /var/lib/goldbot/.ssh/id_ed25519.pub`, then on the box `sudo goldbot-mt5-authorize '<that line>'`.
+3. The env file, root-owned 0644 (the box's private address from the OCI console, typed on the brain only):
+   `printf 'MT5_HOST=%s\nLOCAL_PORT=8766\n' '<probe box private ip>' | sudo install -m 644 -o root -g root /dev/stdin /etc/goldbot/bridge-icm-probe.env`
+4. The tunnel template, if this brain was built before it existed: root downloads it at `<SHA>` and checks the
+   sha256 you computed on the Mac (as for goldbot-deploy in 0.5), never from `/opt/goldbot`:
+   `curl -fsSLo /root/goldbot-bridge-tunnel@.service https://raw.githubusercontent.com/engraamirkhan/goldbot/<SHA>/goldbot/ops/linux/systemd/goldbot-bridge-tunnel@.service && echo "<UNIT HASH>  /root/goldbot-bridge-tunnel@.service" | sha256sum -c - && sudo install -m 644 -o root -g root /root/goldbot-bridge-tunnel@.service /etc/systemd/system/ && sudo systemctl daemon-reload`
+
+**B10, enable and check.** On the box: `sudo systemctl start goldbot-bridge@icm-probe` and
+`curl -s 127.0.0.1:8765/health` (terminal state `ok`). On the brain:
+`sudo systemctl enable --now goldbot-bridge-tunnel@icm-probe`, then `curl -s 127.0.0.1:8766/health` (the same state,
+through the tunnel) and `goldbot run preflight --account icm-probe` (bridge_server_tz, the terminal's account, hedging all ok;
+its `tunnel_service` line still looks at the icm-demo tunnel unit).
+The tunnel unit refuses a missing or non-numeric `LOCAL_PORT`, and 8765 for any account but `icm-demo`
+(`journalctl -u goldbot-bridge-tunnel@icm-probe -n 20`).
+
+**B11, cold restart.** `sudo reboot` the box. Within 5 minutes, with no hands: `goldbot-xvfb`,
+`goldbot-mt5-terminal@icm-probe` and `goldbot-bridge@icm-probe` active, exactly one `terminal64.exe`
+(`pgrep -c -u mt5 -f '[t]erminal64[.]exe'` prints 1), `/health` ok on the box and through the brain's 8766. Record the
+times in the deploy note. Later upgrades of this box use 0.5 "Attended MT5 box upgrade" with
+`--account icm-probe` on every phase of `mt5-box-upgrade`.
+
+**Failure and recovery on an account box.** Terminal down: "Terminal down" below, with the box's alias and account.
+Tunnel down (`journalctl -u goldbot-bridge-tunnel@<account>`): it restarts every 5 s by itself; a wrong env file is
+fixed by rewriting it (B9 step 3) and `sudo systemctl restart goldbot-bridge-tunnel@<account>`. Box lost (Oracle
+reclaim, disk): rebuild with B4, then B6 to B11; the owner's VNC login (B7) is the only hands-on step.
+`icm-demo` is not touched by any step here; if its engine shows `terminal:icm-demo` during this work, stop and check
+that nothing listens on 8765 except `goldbot-bridge-tunnel.service`.
+
 ### 0.4 The brain
 ```bash
 ssh ubuntu@<brain public ip>

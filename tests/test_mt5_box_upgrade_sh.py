@@ -314,3 +314,54 @@ def test_existing_different_floor_is_not_overwritten(box):
     rc, out = run(box, "post-reboot", sha)
     assert rc == 1 and "FAIL   rollback floor" in out
     assert (tmp / "etc" / "rollback-floor").read_text().strip() == "c" * 40
+
+
+# --- one box per account (docs/ops/icm-probe-account-plan.md Option B, step B3) ---
+
+def test_bad_account_refused(box):
+    _, sha = box
+    for bad in ("ICM", "icm demo", "../x", "-x", "a;id", ""):
+        rc, out = run(box, "precheck", sha, *FLAGS, "--account", bad)
+        assert rc == 2 and "account id" in out, bad
+    assert run(box, "precheck", sha, *FLAGS, "--account")[0] == 2
+
+
+def test_default_account_is_icm_demo_and_env_is_honoured(box):
+    tmp, sha = box
+    assert run(box, "install", sha, *FLAGS)[0] == 0
+    assert "enable goldbot-mt5-terminal@icm-demo.service" in calls(tmp)
+    (tmp / "calls.log").unlink()
+    (tmp / "en").mkdir(exist_ok=True)
+    (tmp / "en" / "goldbot-bridge@icm-probe.service").touch()
+    rc, out = run(box, "install", sha, *FLAGS, ACCOUNT="icm-probe")
+    assert rc == 0, out
+    assert "enable goldbot-mt5-terminal@icm-probe.service" in calls(tmp)
+
+
+def test_probe_box_upgrade_checks_the_probe_units(box):
+    tmp, sha = box
+    (tmp / "en").mkdir(exist_ok=True)
+    (tmp / "en" / "goldbot-bridge@icm-probe.service").touch()
+    rc, out = run(box, "install", sha, *FLAGS, "--account", "icm-probe")
+    assert rc == 0, out
+    c = calls(tmp)
+    assert "enable goldbot-mt5-terminal@icm-probe.service" in c and "icm-demo" not in c
+    assert "disable --now goldbot-bridge-watchdog@icm-probe.timer" in c
+    probe = tmp / "sbin" / "goldbot-bridge-probe"
+    probe.write_text('#!/bin/sh\necho "${PROBE:-ok}"\n')
+    for u in ("goldbot-xvfb", "goldbot-mt5-terminal@icm-probe"):
+        (tmp / "act" / f"{u}.service").touch()
+    (tmp / "mt5head").write_text(sha + "\n")
+    (tmp / "bootid").write_text("boot-2\n")
+    rc, out = run(box, "post-reboot", sha, "--account", "icm-probe")
+    assert rc == 1 and "FAIL   active: goldbot-bridge@icm-probe" in out
+    (tmp / "act" / "goldbot-bridge@icm-probe.service").touch()
+    rc, out = run(box, "post-reboot", sha, "--account", "icm-probe")
+    assert rc == 0, out
+    assert "enable --now goldbot-bridge-watchdog@icm-probe.timer" in calls(tmp)
+
+
+def test_probe_box_without_its_bridge_unit_enabled_fails(box):
+    tmp, sha = box
+    rc, out = run(box, "install", sha, *FLAGS, "--account", "icm-probe")
+    assert rc == 1 and "FAIL   bridge unit enabled" in out and "icm-probe" in out

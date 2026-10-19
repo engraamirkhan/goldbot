@@ -326,7 +326,7 @@ def test_the_bridge_watchdog_is_installed_from_roots_clone_and_enabled():
     boot = (LINUX / "mt5_bootstrap.sh").read_text()
     assert 'install -m 755 -o root -g root "$OPS/goldbot-bridge-watchdog.sh" /usr/local/sbin/goldbot-bridge-watchdog' in boot
     assert '"$OPS"/systemd/goldbot-bridge-watchdog@.service' in boot and '"$OPS"/systemd/goldbot-bridge-watchdog@.timer' in boot
-    assert "systemctl enable --now goldbot-bridge-watchdog@icm-demo.timer" in boot
+    assert 'systemctl enable --now "goldbot-bridge-watchdog@$ACCOUNT.timer"' in boot
     svc = (UNITS / "goldbot-bridge-watchdog@.service").read_text()
     assert _directive(svc, "ExecStart") == "/usr/local/sbin/goldbot-bridge-watchdog %i 8765"
     assert "8765" in (LINUX / "mt5_bootstrap.sh").read_text()        # the one port the tunnel key may forward to
@@ -645,7 +645,7 @@ def test_t8_bootstrap_installs_the_terminal_unit_and_the_probe_from_roots_clone(
     boot = (LINUX / "mt5_bootstrap.sh").read_text()
     assert '"$OPS"/systemd/goldbot-mt5-terminal@.service' in boot
     assert 'install -m 755 -o root -g root "$OPS/goldbot-bridge-probe.sh" /usr/local/sbin/goldbot-bridge-probe' in boot
-    assert "systemctl enable goldbot-mt5-terminal@icm-demo" in boot
+    assert 'systemctl enable "goldbot-mt5-terminal@$ACCOUNT"' in boot
     assert boot.index("goldbot-mt5-terminal@.service") < boot.index("systemctl daemon-reload")
 
 

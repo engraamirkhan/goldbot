@@ -1,0 +1,27 @@
+[Unit]
+Description=SSH tunnel from the brain to the MT5 bridge of account %i (one MT5 box per account)
+# icm-demo keeps the untemplated goldbot-bridge-tunnel.service (local 8765) until an attended window moves it; this
+# template serves every further account box (docs/ops/icm-probe-account-plan.md Option B, RUNBOOK "Adding an account box").
+# never give up restarting (a bridge outage causes fast exits on purpose)
+StartLimitIntervalSec=0
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=goldbot
+# Root-owned 0644, written by hand on the brain (never in the repository):
+#   MT5_HOST=<private ip of this account's MT5 box>
+#   LOCAL_PORT=<the brain's local end, e.g. 8766; mt5-bridge-url-%i is http://127.0.0.1:<LOCAL_PORT>>
+# The box side is always 127.0.0.1:8765 (the only port goldbot-mt5-authorize lets the key forward to).
+EnvironmentFile=/etc/goldbot/bridge-%i.env
+# Refuse a missing or non-numeric port, and 8765 for any account but icm-demo: with icm-demo's tunnel down for a
+# moment, a second tunnel on 8765 would put icm-demo's engine on another account's bridge (that bridge would refuse
+# every call, fail closed, but icm-demo would lose its exits path).
+ExecStartPre=/bin/sh -c 'case "$${LOCAL_PORT:-}" in ""|*[!0-9]*) echo "LOCAL_PORT missing or not a number in /etc/goldbot/bridge-%i.env"; exit 1 ;; esac; if [ "$${LOCAL_PORT}" = 8765 ] && [ "%i" != icm-demo ]; then echo "LOCAL_PORT 8765 belongs to icm-demo: pick another"; exit 1; fi; [ -n "$${MT5_HOST:-}" ] || { echo "MT5_HOST missing in /etc/goldbot/bridge-%i.env"; exit 1; }'
+ExecStart=/usr/bin/ssh -N -i /var/lib/goldbot/.ssh/id_ed25519 -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
+  -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new -L 127.0.0.1:${LOCAL_PORT}:127.0.0.1:8765 mt5@${MT5_HOST}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
