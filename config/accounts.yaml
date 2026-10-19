@@ -60,11 +60,11 @@ accounts:
     # is at most max_loss (£4, from the broker's loss_per_lot at 0.01 lot; refused when it cannot be computed); no new
     # probe once today's realised probe loss + open probe risk + the new probe's would exceed budget_share x the
     # day's loss limit (0.2 x £50 = £10).
-    cost_probe: { enabled: true, budget_share: 0.4, max_open: 4, max_loss: 4.0 }   # ADR 0037 amendment 3
+    cost_probe: { enabled: false, budget_share: 0.4, max_open: 4, max_loss: 4.0 }   # off: probes on icm-probe (am. 4)
     # ADR 0037 amendment 4 (owner 2026-10-19, a dedicated probe account): icm-demo runs the shadow book and the probes
     # until icm-probe is enabled. Switch-over (config only, reversible): icm-probe `enabled: true`; here
     # `shadow_host: false` and `cost_probe.enabled: false`; restart both engines. Two enabled shadow hosts fail at load.
-    shadow_host: true
+    shadow_host: false        # the shadow book moved to icm-probe (2026-10-19 switch-over)
   icm-probe:
     broker: icm
     mode: demo
@@ -77,7 +77,7 @@ accounts:
     # ADR 0037 amendment 4 (owner 2026-10-19: "a dedicated demo account for learning probes", GBP; directors' ruling:
     # "probes must never consume the real trades' allowance"). Off until its credentials and terminal exist; enable it
     # together with the switch-over steps on icm-demo above.
-    enabled: false
+    enabled: true             # switched over 2026-10-19 (its own box, goldbot-mt5-probe)
     # its OWN day, in GBP: £20 a day (the RiskGate enforces it as on every account); 0.8 of it is the probe budget
     # (£16 = four probes at £4 each). The supervisor keeps it out of the real accounts' combined limits (probe_only).
     daily_loss_limit_abs: 20

@@ -406,9 +406,9 @@ test("Home is five calm cards and the trades live on Trades, on a phone and a de
       await expect(page.getByRole("region", { name: "System status" })).toContainText("Engine running · 1 account");
       const today = page.getByRole("group", { name: "Today icm-demo" });
       await expect(today.getByText("DEMO", { exact: true })).toBeVisible({ timeout: 15_000 });
-      // config/accounts.yaml runs cost probes on icm-demo (ADR 0037 amendment 3): £10 lost, the ~£16 probe stop binds
+      // since the switch-over (ADR 0037 amendment 4) icm-demo runs no cost probes: its own daily loss limit binds
       // (15 s: the API's 5 s cache may still hold the report from before the write, and the card polls every 5 s)
-      await expect(today.getByText("£6.00 left before the probe stop (£16.00)")).toBeVisible({ timeout: 15_000 });
+      await expect(today.getByText(/left before the daily loss limit \(£[0-9.,]+\)/)).toBeVisible({ timeout: 15_000 });
       if (width === 360) {
         const tops = await Promise.all(home.map(async (name) => (await page.getByRole("region", { name }).boundingBox())!.y));
         expect([...tops].sort((a, b) => a - b)).toEqual(tops);                   // one column, in the decided order
