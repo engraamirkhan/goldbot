@@ -1,24 +1,47 @@
 /* Home and Trades layout (slice B). Uses the design-system tokens, with fallbacks until tokens.css lands. */
-/* The status card stack (docs/ux/home-redesign-2026-10-19.md): one column in card order on a phone; on a desktop a
-   12-column grid: needs you (6) + can it trade / today (6, the entry status needs the width); open trades and chart (8) + strategies (4); learning (4) +
-   recent (8); the trades summary full width. */
-.home { display: grid; gap: var(--s4, 16px); max-width: 1120px; }
+/* Home, the calm status page (docs/ux/home-v2-2026-10-19.md): one column in card order on a phone; on a desktop a
+   two-column grid: needs you and the status line full width, today (7) beside the strategies (5), learning full width.
+   Generous spacing: the page is read in five seconds. */
+.home { display: grid; gap: var(--s5, 24px); max-width: 1040px; }
 .home > div { min-width: 0; display: grid; align-content: start; gap: var(--s4, 16px); }
 @media (min-width: 1080px) {
-  .home-stack { grid-template-columns: repeat(12, minmax(0, 1fr));
-    grid-template-areas: "needs needs needs needs needs needs side side side side side side"
-                         "open open open open open open open open strat strat strat strat"
-                         "learn learn learn learn recent recent recent recent recent recent recent recent"
-                         "wide wide wide wide wide wide wide wide wide wide wide wide"; }
-  .home-needs { grid-area: needs; } .home-side { grid-area: side; } .home-open { grid-area: open; }
-  .home-strategies { grid-area: strat; } .home-learning { grid-area: learn; } .home-recent { grid-area: recent; }
-  .home-stack .home-wide { grid-area: wide; }
+  .home-calm { grid-template-columns: repeat(12, minmax(0, 1fr));
+    grid-template-areas: "needs needs needs needs needs needs needs needs needs needs needs needs"
+                         "status status status status status status status status status status status status"
+                         "today today today today today today today strat strat strat strat strat"
+                         "learn learn learn learn learn learn learn learn learn learn learn learn"; }
+  .home-needs { grid-area: needs; } .home-status { grid-area: status; } .home-today { grid-area: today; }
+  .home-strategies { grid-area: strat; } .home-learning { grid-area: learn; }
 }
+.needs { display: grid; gap: var(--s3, 12px); min-width: 0; }
+.home-none h2 { margin: 0 0 var(--s1, 4px); }
+.home-none p { margin: 0; }
+.ui-card .home-link, .needs .home-link { justify-self: start; justify-content: flex-start; width: fit-content; min-height: 44px; padding-left: 0; padding-right: 0; }
+
+/* One-line system status: three dots-with-words; wraps to two lines on a phone, fixed min-height (no shift). */
+.sys-line { padding: var(--s3, 12px) var(--s4, 16px); }
+.sys-line ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--s2, 8px) var(--s5, 24px); min-height: 24px; }
+.sys-part { display: inline-flex; align-items: baseline; gap: var(--s1, 6px); min-width: 0; }
+.sys-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--idle, var(--text-2, #5b6270)); flex: none; align-self: center; }
+.sys-part.ok .sys-dot { background: var(--ok, #157f3b); }
+.sys-part.warn .sys-dot { background: var(--warn, #9a5b00); }
+.sys-part.warn .sys-word { color: var(--warn, #9a5b00); }
+.sys-label { color: var(--text-2, #5b6270); font-size: var(--fs-small, 13px); }
+.sys-word { font-weight: 600; overflow-wrap: anywhere; }
+.today-line { margin: 0; display: flex; flex-wrap: wrap; gap: var(--s2, 8px); align-items: baseline; }
+.today-pnl { font-size: 1.25rem; font-weight: 700; }
+.learn-line { margin: 0 0 var(--s1, 4px); }
+
+/* The Trades screen: the cards one under the other; the activity list grows with the page (no scroll trap). */
+.trades-page { display: grid; gap: var(--s4, 16px); max-width: 1120px; min-width: 0; }
+.trades-page .activity { max-height: none; overflow: visible; }
+
 .today-row { display: grid; gap: var(--s2, 8px); padding-top: var(--s2, 8px); border-top: 1px solid var(--border, #e2e5ea); }
 .today-row:first-of-type { border-top: 0; padding-top: 0; }
 .today-head { display: flex; gap: var(--s2, 8px); align-items: center; }
 .today-figs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s2, 8px); }
-.today-figs .metric { padding: var(--s2, 8px); }
+.today-figs .metric { padding: var(--s2, 8px); min-width: 0; }
+.today-figs .metric-value { white-space: nowrap; font-size: clamp(0.95rem, 4vw, 1.25rem); }   /* "−£10.00" never breaks */
 .today-meter { display: grid; gap: var(--s1, 4px); }
 .open-list, .watch-list, .digest { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2, 8px); }
 .open-row { display: grid; gap: 2px; padding: var(--s2, 8px) 0; border-top: 1px solid var(--border, #e2e5ea); }
@@ -27,11 +50,6 @@
 .open-what .long { color: var(--long); } .open-what .short { color: var(--short); }
 .watch-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px var(--s2, 8px); align-items: baseline; }
 .watch-row > .small { grid-column: 1 / -1; overflow-wrap: anywhere; }
-.learning-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 0; }
-.home-chart summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
-.home-chart summary h2 { margin: 0; }
-.home-chart summary:focus-visible { outline: 2px solid var(--accent, #1d5fd1); outline-offset: 2px; }
-.home-none { padding: var(--s4, 16px); border: 1px solid var(--border, #e2e5ea); border-radius: var(--r-lg, 14px); }
 .seg { display: flex; gap: var(--s1, 4px); padding: var(--s1, 4px); background: var(--surface-2, #f0f2f5); border-radius: var(--r-md, 10px); width: fit-content; }
 .seg button { min-height: 44px; padding: 0 var(--s4, 16px); border: 0; border-radius: var(--r-sm, 6px); background: transparent; color: var(--text-2, #5b6270); font: inherit; cursor: pointer; }
 .seg button[aria-selected="true"] { background: var(--surface, #fff); color: var(--text, #14171c); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .06); }

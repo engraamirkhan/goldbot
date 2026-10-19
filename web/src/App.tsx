@@ -8,7 +8,7 @@ import { Segmented } from "./ui";
 import { StatusPill } from "./shell/StatusPill";
 import { Login } from "./screens/Login";
 import { Home } from "./screens/Home";
-import { Approvals } from "./screens/Approvals";
+import { TradesActivity, TradesOpen, TradesSummary } from "./screens/Trades";
 import { Agents } from "./screens/Agents";
 import { Feeds } from "./screens/Feeds";
 import { Health } from "./screens/Health";
@@ -84,6 +84,11 @@ export function App() {
   };
 
   const TABS: Partial<Record<Section, Tab[]>> = {
+    trades: [
+      { id: "open", label: "Open", render: () => <TradesOpen /> },
+      { id: "activity", label: "Activity", render: () => <TradesActivity /> },
+      { id: "summary", label: "Summary", render: () => <TradesSummary /> },
+    ],
     research: [
       { id: "trials", label: "Today and trials", render: () => <Research /> },
       { id: "road", label: "Road to live", render: () => <Progress onOpenOverview={() => go("settings", "safety")} /> },
@@ -101,8 +106,8 @@ export function App() {
     ],
   };
   const SINGLE: Record<string, () => ReactNode> = {
-    home: () => <Home onOpenProgress={() => go("research", "road")} onOpenLimits={() => go("limits")} />,
-    trades: () => <Approvals />,
+    home: () => <Home onOpenProgress={() => go("research", "road")} onOpenLimits={() => go("limits")}
+                      onOpenTrades={() => go("trades", "open")} />,
     chart: () => <Chart />,
     limits: () => <Limits />,
   };

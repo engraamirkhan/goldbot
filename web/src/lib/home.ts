@@ -1,6 +1,6 @@
 // Logic of the Home status card stack (docs/ux/home-redesign-2026-10-19.md, "Decision 2026-10-19"). Pure functions;
 // the cards in screens/HomeCards.tsx only render what these return.
-import type { AccountSummary, LossMeter, Proposal, TradesOverview } from "./api";
+import type { AccountSummary, FeedHealth, LossMeter, Proposal, Status, TradesOverview } from "./api";
 import { signedR } from "./tradesOverview";
 
 /** "Money or status older than 60 s marked stale, never allowed." */
@@ -69,3 +69,76 @@ export function shadowTiles(v: TradesOverview): { label: string; avgR: number | 
     return { label: type === "shadow_all" ? "All candidates, 7 days" : "Taken, 7 days", avgR: s?.avg_r ?? null, n: s?.n_r ?? 0 };
   });
 }
+
+// ------------------------------------------------------------------------------------------------ system status line
+/** One part of Home's one-line system status. Never "bad": red belongs to a halt, a cap hit or a refused order, which
+ *  the Needs-you card and the header pill carry; here amber means "look", grey means "expected, nothing to do". */
+export interface StatusPart { key: "engine" | "prices" | "market"; label: string; word: string; tone: "ok" | "warn" | "idle" }
+
+const ENGINE_DOWN = new Set(["engine_not_reporting", "status_unknown", "engine_state_unreadable", "engine_startup_refused"]);
+const PRICE_CODES = new Set(["stale_data", "tick_error", "data_quality_error", "data_recovering", "tick_from_future"]);
+const SHUT_CODES = new Set(["market_closed", "weekend", "holiday_thin", "reopen_window", "rollover"]);
+/** The tick age the API reports when an engine does not publish one (goldbot/api/app.py feeds: 1e9). */
+const NO_TICK_AGE = 1e8;
+
+const ago = (s: number) => (s < 90 ? `${Math.round(s)} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${Math.round(s / 3600)} h`);
+const dayHm = (iso: string, now: number) => {
+  const d = new Date(iso);
+  const day = new Date(now).toDateString() === d.toDateString() ? "" : `${d.toLocaleDateString("en-GB", { weekday: "short" })} `;
+  return `${day}${d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false })}`;
+};
+
+export interface StatusInputs {
+  accounts?: AccountSummary[]; accountsError?: boolean;
+  feeds?: FeedHealth[]; feedsError?: boolean;
+  status?: Status; now: number;
+}
+
+/** Engine, prices and market in words, from the entry status the API words (goldbot/api/entry_status.py), the feed
+ *  health and the active blackout. Nothing here decides whether an entry is allowed. */
+export function systemLine({ accounts, accountsError, feeds, feedsError, status, now }: StatusInputs): StatusPart[] {
+  const blocks = (accounts ?? []).flatMap((a) => a.entry_status?.blocks ?? []);
+  const has = (set: Set<string>) => blocks.filter((b) => set.has(b.code));
+
+  let engine: StatusPart;
+  if (!accounts) engine = { key: "engine", label: "Engine", word: accountsError ? "can't reach the server" : "checking…", tone: accountsError ? "warn" : "idle" };
+  else if (accounts.length === 0 || has(ENGINE_DOWN).length) engine = { key: "engine", label: "Engine", word: "not reporting", tone: "warn" };
+  else {
+    const ages = accounts.map((a) => (a.entry_status?.as_of ? (now - Date.parse(a.entry_status.as_of)) / 1000 : null));
+    const known = ages.filter((x): x is number => x != null);
+    const oldest = known.length ? Math.max(...known) : null;
+    engine = oldest != null && oldest > HOME_STALE_S
+      ? { key: "engine", label: "Engine", word: `last report ${ago(oldest)} ago`, tone: "warn" }
+      : { key: "engine", label: "Engine", word: `running · ${accounts.length} account${accounts.length === 1 ? "" : "s"}`, tone: "ok" };
+  }
+
+  const shut = has(SHUT_CODES);
+  let market: StatusPart;
+  if (!accounts || accounts.length === 0) market = { key: "market", label: "Market", word: "not known", tone: "idle" };
+  else if (shut.length) {
+    const opens = shut.find((b) => b.at && b.at_label === "opens")?.at;
+    market = { key: "market", label: "Market", word: opens ? `closed · opens ${dayHm(opens, now)}` : shut[0].text, tone: "idle" };
+  } else if (status?.blackout || blocks.some((b) => b.code === "news_blackout")) {
+    market = { key: "market", label: "Market", word: `news blackout${status?.blackout ? `: ${status.blackout.title}` : ""}`, tone: "warn" };
+  } else market = { key: "market", label: "Market", word: "open", tone: "ok" };
+
+  let prices: StatusPart;
+  const priceBlock = has(PRICE_CODES)[0];
+  const ticks = (feeds ?? []).map((f) => f.last_tick_age_s).filter((x) => x < NO_TICK_AGE);
+  if (priceBlock) prices = { key: "prices", label: "Prices", word: priceBlock.text, tone: "warn" };
+  else if (shut.length) prices = { key: "prices", label: "Prices", word: "paused while closed", tone: "idle" };
+  else if (ticks.length === 0) prices = { key: "prices", label: "Prices", word: feedsError ? "feed not readable" : "not reported", tone: "idle" };
+  else {
+    const worst = Math.max(...ticks);
+    prices = worst > HOME_STALE_S
+      ? { key: "prices", label: "Prices", word: `last tick ${ago(worst)} ago`, tone: "warn" }
+      : { key: "prices", label: "Prices", word: `fresh · ${ago(worst)} old`, tone: "ok" };
+  }
+  return [engine, prices, market];
+}
+
+/** "3 open trades" for Home's link to Trades. */
+export const openTradesWords = (n: number) => (n === 0 ? "No open trades" : `${n} open trade${n === 1 ? "" : "s"}`);
+
+/** Accounts that cannot take every new trade now (anything but "open"): what Home's Needs-you card lists. */
+export const notOpen = (accounts: AccountSummary[]) => accounts.filter((a) => a.entry_status?.state !== "open");

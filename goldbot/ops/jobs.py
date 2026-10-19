@@ -152,7 +152,7 @@ from goldbot.research.pipeline import (
     run_specialist,
 )
 from goldbot.research.population import Population
-from goldbot.research.promotion import PerfStats, cusum_alarm, evaluate_promotion
+from goldbot.research.promotion import EVIDENCE_START_UTC, PerfStats, cusum_alarm, evaluate_promotion
 from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry, config_hash, quarter_of
 from goldbot.research.registry_sync import read_rows
 from goldbot.specialists import SPECIALISTS
@@ -704,7 +704,8 @@ def tournament(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     synced = _sync_trials(ctx)            # the research workflow's trials live on the release copy until synced
     summary = ctx.population.tournament(
         ShadowBook(ctx.state_dir), slot,
-        research_passed=lambda m: ctx.trials.passed_gates(m.family, {**SPECIALISTS[m.family].default_config, **m.config}))
+        research_passed=lambda m: ctx.trials.passed_gates(m.family, {**SPECIALISTS[m.family].default_config, **m.config}),
+        evidence_start=EVIDENCE_START_UTC)       # H-52: trades opened before the history-gap fix are quarantined
     for aid in summary["expired"]:
         ctx.models.retire_agent(aid, "retired agent's six months of shadow trading are over")
     ctx.population.save(ctx.state_dir / "agents.json")

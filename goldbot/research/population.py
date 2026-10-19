@@ -43,6 +43,7 @@ from goldbot.config import tf_seconds
 from goldbot.data.timeutil import bar_close_utc
 from goldbot.engine.shadow import ShadowBook
 from goldbot.research.metrics import calibration_ece, deflated_sharpe, max_drawdown
+from goldbot.research.promotion import quarantine_reason
 from goldbot.specialists import SPECIALISTS
 from goldbot.specialists.base import FEATURE_SEED_KEY, TIMEFRAME_KEY, AgentIdentity, Specialist
 
@@ -100,14 +101,17 @@ class Member(Record):
 
 
 # ---------------------------------------------------------------------------------------------- measurements
-def agent_trades(book: ShadowBook) -> dict[str, pd.DataFrame]:
+def agent_trades(book: ShadowBook, evidence_start: pd.Timestamp | None = None) -> dict[str, pd.DataFrame]:
     """Closed shadow trades per agent across all of its model versions: ret, r (in units of risk), p, target_hit, exit_ts (the exit bar's open),
-    exit_utc (the real exit time, open + timeframe)."""
+    exit_utc (the real exit time, open + timeframe). evidence_start (H-52, promotion.EVIDENCE_START_UTC): a trade opened
+    before it is quarantined and is not a trade here (see quarantined_counts)."""
     rows: dict[str, list[dict[str, Any]]] = {}
     for vb in book.books.values():
         for t in vb.closed:
             if not t.taken or t.ret is None or t.exit_ts is None:
                 continue          # counterfactual (not-taken) candidates are not trades
+            if quarantine_reason(t.entry_ts, evidence_start) is not None:
+                continue          # quarantined (history_gap): never fitness, retirement or promotion evidence
             risk = abs(t.entry - t.stop) / t.entry
             rows.setdefault(t.agent_id, []).append({"ret": t.ret, "r": t.ret / risk if risk > 0 else 0.0, "p": t.p,
                                                     "target_hit": int(t.barrier == "target"), "exit_ts": t.exit_ts,
@@ -115,6 +119,17 @@ def agent_trades(book: ShadowBook) -> dict[str, pd.DataFrame]:
     return {a: pd.DataFrame(r).sort_values("exit_ts").reset_index(drop=True) for a, r in rows.items()}
 
 
+
+
+def quarantined_counts(book: ShadowBook, evidence_start: pd.Timestamp | None) -> dict[str, int]:
+    """Closed taken trades per agent quarantined by `evidence_start` (label `history_gap`); agents with none left out."""
+    out: dict[str, int] = {}
+    for vb in book.books.values():
+        for t in vb.closed:
+            if t.taken and t.ret is not None and t.exit_ts is not None \
+                    and quarantine_reason(t.entry_ts, evidence_start) is not None:
+                out[t.agent_id] = out.get(t.agent_id, 0) + 1
+    return out
 
 
 def weekly_returns(trades: pd.DataFrame) -> pd.Series:
@@ -344,14 +359,18 @@ class Population:
             m.capital_weight = 0.0
 
     def tournament(self, book: ShadowBook, now: pd.Timestamp, seed: str | None = None,
-                   research_passed: Callable[[Member], bool] | None = None) -> dict[str, Any]:
+                   research_passed: Callable[[Member], bool] | None = None,
+                   evidence_start: pd.Timestamp | None = None) -> dict[str, Any]:
         """One round: score, record the month's quartiles, retire, promote, clone, weight. Returns a summary.
 
         research_passed: when given, a shadow agent is promoted to live only if its configuration has a research trial
         that passed the design's gates (1,500 candidates, 60 per test fold, three positive years incl. 2021-22); the
-        scheduler passes TrialRegistry.passed_gates. Agents held back are listed under "awaiting_research"."""
+        scheduler passes TrialRegistry.passed_gates. Agents held back are listed under "awaiting_research".
+
+        evidence_start: trades opened before it are quarantined (H-52; the scheduler passes promotion.EVIDENCE_START_UTC)
+        and scored nowhere; their per-agent counts are reported under "quarantined" (label `history_gap`)."""
         self.ensure_founders(now)
-        trades = agent_trades(book)
+        trades = agent_trades(book, evidence_start)
         n_pop = len(self.members)
         weekly = {a: weekly_returns(t) for a, t in trades.items()}
         live_ids = {m.agent_id for m in self.active("live")}
@@ -433,6 +452,8 @@ class Population:
             total = sum(m.fitness for m in live)
             for m in live:
                 m.capital_weight = m.fitness / total if total > 0 else 0.0
+        if evidence_start is not None:
+            summary["quarantined"] = quarantined_counts(book, evidence_start)
         summary["live"] = sorted(m.agent_id for m in self.active("live"))
         summary["shadow"] = sorted(m.agent_id for m in self.active("shadow"))
         return summary

@@ -2,7 +2,8 @@ import type { Page } from "@playwright/test";
 
 /** The screens by their pre-v2 names, mapped to the v2 destination and sub-tab (docs/ux/dashboard-v2.md section 2). */
 const WHERE: Record<string, [string, string?]> = {
-  Overview: ["Home"], Approvals: ["Trades"], Limits: ["Limits"], Chart: ["Chart"],
+  Overview: ["Home"], Approvals: ["Trades"], "Trades open": ["Trades", "Open"], "Trades activity": ["Trades", "Activity"],
+  "Trades summary": ["Trades", "Summary"], Limits: ["Limits"], Chart: ["Chart"],
   Research: ["Research", "Today and trials"], Progress: ["Research", "Road to live"], Agents: ["Research", "Strategies"],
   Feeds: ["Feeds", "Data feeds"], News: ["Feeds", "News"], Health: ["Feeds", "System health"],
   "Entry mode": ["Settings", "Entry mode and halt"], Account: ["Settings", "Your sign-in"], Users: ["Settings", "Users"],

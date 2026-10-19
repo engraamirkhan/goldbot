@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AccountSummary, LossMeter, Proposal, TradeStats, TradesOverview } from "./api";
-import { digest, meterWords, modeBadge, orderWaiting, shadowTiles, strategyName } from "./home";
+import type { AccountSummary, EntryBlock, FeedHealth, LossMeter, Proposal, TradeStats, TradesOverview } from "./api";
+import { digest, meterWords, modeBadge, notOpen, openTradesWords, orderWaiting, shadowTiles, strategyName, systemLine } from "./home";
 
 const gbp = (x: number) => `£${x.toFixed(2)}`;
 
@@ -79,5 +79,46 @@ describe("Home card logic", () => {
 
   it("names a strategy in words with its timeframe", () => {
     expect(strategyName("box_break_close", "1h")).toBe("Box break close 1h");
+  });
+});
+
+describe("system status line", () => {
+  const NOW = Date.parse("2026-10-19T10:00:00Z");
+  const block = (code: string, over: Partial<EntryBlock> = {}): EntryBlock =>
+    ({ code, scope: "account", text: code, fix: "", kind: "wait", ...over });
+  const a = (blocks: EntryBlock[] = [], asOf = "2026-10-19T09:59:55Z") => ({ account_id: "icm-demo", mode: "demo",
+    entry_status: { state: blocks.length ? "waiting" : "open", headline: "", blocks, notes: [], exits: "", as_of: asOf } }) as unknown as AccountSummary;
+  const feed = (age: number) => ({ account_id: "icm-demo", last_tick_age_s: age }) as FeedHealth;
+  const words = (p: ReturnType<typeof systemLine>) => p.map((x) => `${x.label} ${x.word} (${x.tone})`);
+
+  it("reads all well in words, never red", () => {
+    expect(words(systemLine({ accounts: [a()], feeds: [feed(2)], now: NOW })))
+      .toEqual(["Engine running · 1 account (ok)", "Prices fresh · 2 s old (ok)", "Market open (ok)"]);
+  });
+
+  it("says a closed market is expected (grey), with the reopening time, and prices pause", () => {
+    const p = systemLine({ accounts: [a([block("market_closed", { at: "2026-10-19T22:00:00Z", at_label: "opens" })])], feeds: [feed(900)], now: NOW });
+    expect(p[1]).toMatchObject({ word: "paused while closed", tone: "idle" });
+    expect(p[2].tone).toBe("idle");
+    expect(p[2].word).toMatch(/^closed · opens (\w{3} )?\d\d:\d\d$/);
+  });
+
+  it("marks an old engine report and old prices amber, and an unknown feed grey", () => {
+    const old = systemLine({ accounts: [a([], "2026-10-19T09:55:00Z")], feeds: [feed(130)], now: NOW });
+    expect(words(old).slice(0, 2)).toEqual(["Engine last report 5 min ago (warn)", "Prices last tick 2 min ago (warn)"]);
+    expect(systemLine({ accounts: [a()], feeds: [feed(1e9)], now: NOW })[1]).toMatchObject({ word: "not reported", tone: "idle" });
+  });
+
+  it("names a price block and a news blackout; no engine means nothing is known", () => {
+    const p = systemLine({ accounts: [a([block("stale_data", { text: "No fresh prices from the broker" }), block("news_blackout")])], now: NOW });
+    expect(p[1]).toMatchObject({ word: "No fresh prices from the broker", tone: "warn" });
+    expect(p[2]).toMatchObject({ word: "news blackout", tone: "warn" });
+    expect(words(systemLine({ accounts: [], now: NOW }))).toEqual(["Engine not reporting (warn)", "Prices not reported (idle)", "Market not known (idle)"]);
+    expect(systemLine({ accountsError: true, now: NOW })[0]).toMatchObject({ word: "can't reach the server", tone: "warn" });
+  });
+
+  it("counts open trades and lists the accounts that can't take every trade", () => {
+    expect([0, 1, 3].map(openTradesWords)).toEqual(["No open trades", "1 open trade", "3 open trades"]);
+    expect(notOpen([a(), a([block("weekend")])]).length).toBe(1);
   });
 });

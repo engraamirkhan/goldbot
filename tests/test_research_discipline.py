@@ -358,12 +358,13 @@ def test_tournament_sees_a_passed_trial_that_exists_only_in_the_release_registry
     cfg = dict(SPECIALISTS["session_open"].default_config, asia_range_max_atr_d=1.0)
     remote.record(agent_id="x", family="session_open", config=cfg, feature_version="f", rationale="research.yml",
                   results={"gates": {"passed": True, "checks": []}, **COSTS})
-    now = pd.Timestamp(NOW)
+    from goldbot.research.promotion import EVIDENCE_START_UTC
+    now = EVIDENCE_START_UTC + pd.Timedelta(days=60)    # the job quarantines trades opened before the evidence start (H-52)
     pop = Population(tmp_path / "pop.json")
     pop.members["strong"] = Member(agent_id="strong", family="session_open", config=cfg, generation=1,
                                    created_utc=now - pd.Timedelta(days=200), status_since_utc=now - pd.Timedelta(days=200))
     book = ShadowBook(tmp_path)
-    _add_trades(book, "strong", _good(150))
+    _add_trades(book, "strong", _good(150), start=EVIDENCE_START_UTC)
     book.save(now)
 
     def ctx(sync: bool) -> JobContext:

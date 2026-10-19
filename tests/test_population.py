@@ -255,3 +255,38 @@ def test_gap_founders_respect_the_monthly_and_reserved_slot_caps(tmp_path, monke
     monkeypatch.setattr(P, "SHADOW_CAP", len(pop.active("shadow")))
     with pytest.raises(SpawnRefused, match="shadow cap"):
         pop.spawn_founder("trend", cfgs[3], nxt, gap_id="g3", origin="t")
+
+
+# ---------------------------------------------------------------- H-52 quarantine (prereg-2026-10-19-live-review.md)
+def test_trades_opened_before_the_history_gap_fix_are_quarantined_and_never_promotion_evidence(tmp_path):
+    from goldbot.research.promotion import EVIDENCE_START_UTC, QUARANTINE_HISTORY_GAP, quarantine_reason
+    assert EVIDENCE_START_UTC == pd.Timestamp("2026-10-19 13:49", tz="UTC")
+    assert quarantine_reason(EVIDENCE_START_UTC - pd.Timedelta(minutes=1)) == QUARANTINE_HISTORY_GAP == "history_gap"
+    assert quarantine_reason(EVIDENCE_START_UTC) is None            # the fix's minute itself is clean
+    assert quarantine_reason(pd.Timestamp("2020-01-01", tz="UTC"), evidence_start=None) is None
+    book = ShadowBook(tmp_path)
+    _add_trades(book, "a", [0.01, -0.005], start=EVIDENCE_START_UTC - pd.Timedelta(days=2))   # both before
+    _add_trades(book, "b", [0.01, 0.01, -0.005], start=EVIDENCE_START_UTC)                      # all clean
+    trades = P.agent_trades(book, evidence_start=EVIDENCE_START_UTC)
+    assert "a" not in trades and len(trades["b"]) == 3
+    assert len(P.agent_trades(book)["a"]) == 2                      # no evidence start: unchanged behaviour
+    assert P.quarantined_counts(book, EVIDENCE_START_UTC) == {"a": 2}
+    assert P.quarantined_counts(book, None) == {}
+    # the shadow book's clustered stats (session-day clusters) skip them too when given the evidence start
+    assert book.stats("a-v1", EVIDENCE_START_UTC + pd.Timedelta(days=7), evidence_start=EVIDENCE_START_UTC).n_trades == 0
+    assert book.stats("a-v1", EVIDENCE_START_UTC + pd.Timedelta(days=7)).n_trades == 2
+
+
+def test_the_tournament_scores_only_clean_trades_and_reports_the_quarantine(tmp_path):
+    from goldbot.research.promotion import EVIDENCE_START_UTC
+    now = EVIDENCE_START_UTC + pd.Timedelta(days=30)
+    pop = Population(tmp_path / "population.json")
+    m = _member(pop, FOUNDER)
+    book = ShadowBook(tmp_path)
+    _add_trades(book, m.agent_id, [0.01] * 5, start=EVIDENCE_START_UTC - pd.Timedelta(days=3))
+    _add_trades(book, m.agent_id + "x", [0.01], start=EVIDENCE_START_UTC + pd.Timedelta(days=1))
+    book.books[m.agent_id + "x-v1"].closed[0].agent_id = m.agent_id                 # a second version, clean
+    out = pop.tournament(book, now, evidence_start=EVIDENCE_START_UTC)
+    assert pop.members[m.agent_id].stats["n"] == 1
+    assert out["quarantined"] == {m.agent_id: 5}
+    assert "quarantined" not in pop.tournament(book, now)                            # no evidence start: no label
