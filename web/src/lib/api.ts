@@ -44,6 +44,13 @@ export type TradesOverview = Schemas["TradesOverview"];
 export type TradeStats = Schemas["TradeStats"];
 export type TradeTypeSummary = Schemas["TradeTypeSummary"];
 export type LimitsView = Schemas["LimitsView"];
+export type OpenPositionsView = Schemas["OpenPositionsView"];
+export type OpenPosition = Schemas["OpenPosition"];
+export type StrategyWatchView = Schemas["StrategyWatchView"];
+export type StrategyWatch = Schemas["StrategyWatch"];
+export type TodayView = Schemas["TodayView"];
+export type TodayAccount = Schemas["TodayAccount"];
+export type LossMeter = Schemas["LossMeter"];
 export type LimitChange = Schemas["LimitChange"];
 export type TvStatusView = Schemas["TvStatusView"];
 export type LimitChangesQuery = NonNullable<operations["limits_changes_api_limits_changes_get"]["parameters"]["query"]>;
@@ -208,6 +215,10 @@ export const api = {
   activity: (limit = 50) => req<ActivityView>(`/api/activity${qs({ limit })}`),
   // Home trades summary: every trade type for today, 7 days and all time (read-only, viewer and above)
   tradesOverview: () => req<TradesOverview>("/api/trades/overview"),
+  // Home card stack (docs/ux/home-redesign-2026-10-19.md): open positions, strategy states, today's money (read-only)
+  openPositions: () => req<OpenPositionsView>("/api/positions/open"),
+  strategyWatch: () => req<StrategyWatchView>("/api/strategies/watch"),
+  today: () => req<TodayView>("/api/today"),
   // read-only cards (docs/ux/limits-and-tradingview.md): nothing here changes a limit or the TradingView link
   limits: () => req<LimitsView>("/api/limits"),
   limitChanges: (q: LimitChangesQuery = {}) => req<LimitChange[]>(`/api/limits/changes${qs(q)}`),

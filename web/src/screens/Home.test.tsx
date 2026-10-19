@@ -123,3 +123,99 @@ describe("Home activity feed", () => {
     expect(await screen.findByRole("tab", { name: "7 days" })).toBeInTheDocument();
   });
 });
+
+describe("Home status card stack", () => {
+  afterEach(() => { vi.restoreAllMocks(); apiModule.setUser(null); });
+  const today = (): apiModule.TodayView => ({ as_of: "2026-10-19T10:00:00Z", accounts: [{
+    account: "icm-demo", mode: "demo", currency: "GBP", day_pnl: 12, open_pnl: 2, closed_pnl: 4, closed_n: 2,
+    closed_complete: true, costs: { spread: 0.16, spread_complete: false, commission: 0.8, swap: -0.3 },
+    loss_meter: { used: 6, binding: "probe_stop", limits: [
+      { key: "probe_stop", label: "probe stop", limit: 16, remaining: 10 },
+      { key: "daily_limit", label: "daily loss limit", limit: 50, remaining: 44 }] },
+    age_s: 3, stale: false }] });
+  function base() {
+    vi.spyOn(apiModule.api, "status").mockResolvedValue(status({}));
+    vi.spyOn(apiModule.api, "proposals").mockResolvedValue([]);
+    vi.spyOn(apiModule.api, "recentProposals").mockResolvedValue([]);
+  }
+
+  it("shows the cards in the decided order: can it trade, today, open trades, strategies, learning, activity, summary", async () => {
+    base();
+    vi.spyOn(apiModule.api, "today").mockResolvedValue(today());
+    renderHome("viewer");
+    await screen.findByRole("group", { name: "Today icm-demo" });
+    const order = ["Entry status", "Today", "Open trades", "Your strategies", "Learning", "Activity feed", "Trades summary"]
+      .map((name) => screen.getByRole("region", { name }));
+    for (let i = 1; i < order.length; i++) {
+      expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+
+  it("splits today's money into closed and open after costs, with a DEMO badge and the probe stop named", async () => {
+    base();
+    vi.spyOn(apiModule.api, "today").mockResolvedValue(today());
+    renderHome("viewer");
+    const row = await screen.findByRole("group", { name: "Today icm-demo" });
+    expect(row).toHaveTextContent("DEMO");
+    expect(row).toHaveTextContent("Day P&L after costs+£12.00");
+    expect(row).toHaveTextContent("Closed+£4.00");
+    expect(row).toHaveTextContent("Open+£2.00");
+    expect(row).toHaveTextContent("commission £0.80 · swap −£0.30");
+    expect(row).toHaveTextContent("£10.00 left before the probe stop (£16.00)");
+  });
+
+  it("marks money older than 60 s as stale", async () => {
+    base();
+    const v = today();
+    v.accounts[0] = { ...v.accounts[0], stale: true, age_s: 95 };
+    vi.spyOn(apiModule.api, "today").mockResolvedValue(v);
+    renderHome("viewer");
+    expect(await screen.findByText(/95 s old \(over 60 s\)/)).toBeInTheDocument();
+  });
+
+  it("keeps the other cards when one source fails", async () => {
+    base();
+    vi.spyOn(apiModule.api, "today").mockRejectedValue(new Error("down"));
+    vi.spyOn(apiModule.api, "openPositions").mockResolvedValue({ as_of: "2026-10-19T10:00:00Z", unreadable: [], positions: [{
+      account: "icm-live", mode: "live", probe: false, position_id: 1, agent_id: "box_break_close-g0", family: "box_break_close",
+      timeframe: "1h", side: "long", lots: 0.05, entry: 2400, stop: 2396, target: 2420, opened_utc: "2026-10-19T09:00:00Z",
+      price: 2410, floating_pnl: 40, currency: "GBP", r_now: 2.5, age_s: 2, stale: false }] });
+    renderHome("viewer");
+    expect(await screen.findByText("Could not load today's money.")).toBeInTheDocument();
+    const open = await screen.findByRole("list", { name: "Open trades" });
+    expect(open).toHaveTextContent("REAL");
+    expect(open).toHaveTextContent("+£40.00 · +2.50 R");
+    expect(open).toHaveTextContent("entry 2,400.00 · stop 2,396.00 · target 2,420.00 USD/oz");
+  });
+
+  it("says each strategy's state in words and calls an unknown state unknown", async () => {
+    base();
+    vi.spyOn(apiModule.api, "strategyWatch").mockResolvedValue({ as_of: "2026-10-19T10:00:00Z", unreadable: [], agents: [
+      { agent_id: "box_break_close-g0-1h", family: "box_break_close", timeframe: "1h", state: "in_trade",
+        text: "in a trade (shadow): long from 2,400.00, stop 2,394.00, target 2,412.00", signal_utc: "2026-10-19T08:00:00Z" },
+      { agent_id: "box_break_close-g0-4h", family: "box_break_close", timeframe: "4h", state: "unknown",
+        text: "no signal recorded yet; the engine does not publish what it watches" }] });
+    renderHome("viewer");
+    const list = await screen.findByRole("list", { name: "Strategy states" });
+    expect(list).toHaveTextContent("Box break close 1hin a tradein a trade (shadow): long from 2,400.00");
+    expect(list).toHaveTextContent("Box break close 4hunknown");
+  });
+
+  it("puts a waiting real-money proposal in card 1 before a demo one", async () => {
+    vi.spyOn(apiModule.api, "status").mockResolvedValue(status({}));
+    const p = (id: string, account: string, ms: number): apiModule.Proposal => ({
+      proposal_id: id, account_id: account, agent_id: "box_break_close-g0", side: "long", lots: 0.05, entry: 2400,
+      stop: 2396, target: 2406, p: 0.6, ev_r: 0.3, spread_points: 20, risk_usd: 20, min_lot_exception: false,
+      top_features: [], expires_at: new Date(Date.now() + ms).toISOString(), created: 1760000000 });
+    vi.spyOn(apiModule.api, "proposals").mockResolvedValue([p("demo1", "icm-demo", 20_000), p("real1", "icm-live", 80_000)]);
+    vi.spyOn(apiModule.api, "recentProposals").mockResolvedValue([]);
+    apiModule.setUser({ email: "a@x.io", role: "approver", signed_in_with: "password_totp" });
+    vi.spyOn(apiModule.api, "accounts").mockResolvedValue([{ account_id: "icm-live", mode: "live" } as apiModule.AccountSummary,
+      { account_id: "icm-demo", mode: "demo" } as apiModule.AccountSummary]);
+    vi.spyOn(apiModule.api, "automode").mockRejectedValue(new Error("not under test"));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { container } = render(<QueryClientProvider client={qc}><Home /></QueryClientProvider>);
+    expect(await screen.findByRole("heading", { name: "Trade waiting (1 of 2)" })).toBeInTheDocument();
+    await vi.waitFor(() => expect(container.querySelector(".home-needs")).toHaveTextContent("icm-live"));
+  });
+});
