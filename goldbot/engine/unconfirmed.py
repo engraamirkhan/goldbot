@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import pandas as pd
 
+from goldbot.engine import cost_probe
 from goldbot.engine.store import OpenTrade, SentOrder
 from goldbot.execution.broker import OrderResult, Position
 from goldbot.execution.not_confirmed import (
@@ -198,7 +199,7 @@ def _adopt_row(eng: Engine, cid: str, rec: SentOrder, pos: Position) -> OpenTrad
                                                sl=rec.sl, tp=rec.tp, client_order_id=cid, open_price=pos.open_price,
                                                initial_sl=rec.sl, initial_lots=pos.lots,
                                                opened_utc=pos.open_time_utc, excursion_approx=True, audit=rec.audit)
-    agent = eng.agents.get(rec.agent_id)
+    agent = cost_probe.agent_of(eng, rec.agent_id)      # ADR 0037: a probe keeps its challenger's exit policy
     if agent is not None:
         atr_usd = rec.atr_usd if rec.atr_usd is not None else eng._implied_atr(agent, pos.open_price, rec.sl)
         eng._attach_policy(tr, agent, entry=pos.open_price, atr_usd=atr_usd, opened=pos.open_time_utc)

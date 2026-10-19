@@ -294,6 +294,22 @@ AUX: tuple[Migration, ...] = (
                adaptive_id INTEGER NOT NULL
            ) STRICT""",
     )),
+    # additive (ADR 0037): the demo cost probe's ledger (goldbot/engine/cost_probe.py), one row per probe order keyed by
+    # its client order id: signal, requested and fill price, spread, send latency, and at the close the exit, swap,
+    # commission and P&L. Read by the costs pipeline only, never by the tournament, promotion or shadow scoring. A
+    # release without it never reads it (its probes, if any, are recorded at their close by a release that has it)
+    Migration(version=14, name="cost_probes", additive=True, statements=(
+        f"""CREATE TABLE IF NOT EXISTS cost_probes (
+               client_order_id TEXT PRIMARY KEY,
+               account_id TEXT NOT NULL,
+               agent_id TEXT NOT NULL,
+               position_id INTEGER,
+               ts_ns INTEGER NOT NULL,
+               closed INTEGER NOT NULL,
+               {_BODY}
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS cost_probes_account ON cost_probes(account_id, ts_ns)",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (
