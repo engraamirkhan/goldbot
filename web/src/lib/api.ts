@@ -38,6 +38,8 @@ export type AttributionView = Schemas["AttributionView"];
 export type AttributionReportView = Schemas["AttributionReportView"];
 export type ResultCell = Schemas["ResultCell"];
 export type TradesSummary = Schemas["TradesSummary"];
+export type ActivityView = Schemas["ActivityView"];
+export type ActivityEvent = Schemas["ActivityEvent"];
 export type LimitsView = Schemas["LimitsView"];
 export type LimitChange = Schemas["LimitChange"];
 export type TvStatusView = Schemas["TvStatusView"];
@@ -191,6 +193,8 @@ export const api = {
   gates: () => req<GatesView>("/api/gates"),
   attribution: () => req<AttributionView>("/api/attribution"),
   tradesSummary: () => req<TradesSummary[]>("/api/trades/summary"),
+  // Home live feed: shadow trades, positions, cost probes and refusals, newest first (read-only, viewer and above)
+  activity: (limit = 50) => req<ActivityView>(`/api/activity${qs({ limit })}`),
   // read-only cards (docs/ux/limits-and-tradingview.md): nothing here changes a limit or the TradingView link
   limits: () => req<LimitsView>("/api/limits"),
   limitChanges: (q: LimitChangesQuery = {}) => req<LimitChange[]>(`/api/limits/changes${qs(q)}`),

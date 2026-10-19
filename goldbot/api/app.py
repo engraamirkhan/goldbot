@@ -23,6 +23,7 @@ from fastapi import (
     Depends,
     FastAPI,
     HTTPException,
+    Query,
     Request,
     Response,
     WebSocket,
@@ -34,7 +35,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
-from goldbot.api import chart_layouts, entry_status, explain, limits, progress
+from goldbot.api import activity, chart_layouts, entry_status, explain, limits, progress
 from goldbot.api.auth import (
     EMAIL_CODE_TTL_S,
     EMAIL_LINK_TTL_S,
@@ -66,6 +67,7 @@ from goldbot.api.schema import (
     AcceptResponse,
     AccountSummary,
     ActiveBlackout,
+    ActivityView,
     AgentRow,
     AgentRunRow,
     AttributionView,
@@ -1026,6 +1028,27 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     def trades_summary(_: User = Depends(need("viewer"))) -> list[TradesSummary]:
         return progress.trades_summary(st.dir, pd.Timestamp.now("UTC"), engines_or_none())
     # ============================================================== end Progress tab
+
+    # ============================================================== Home activity feed (read-only, viewer and above)
+    # goldbot/api/activity.py: shadow trades, positions, cost probes and refusals, newest first. One build serves every
+    # poll for ACTIVITY_TTL_S; `limit` only slices it. Nothing here writes.
+    activity_cache = progress.GatesCache(ttl_s=activity.ACTIVITY_TTL_S)
+
+    def build_activity() -> ActivityView:
+        try:
+            store: Store | None = st.store()
+        except Exception as exc:               # noqa: BLE001 - no store: the feed shows without refusals
+            log.warning("activity feed: store unavailable (%s)", type(exc).__name__)
+            store = None
+        v = activity.activity_view(st.dir, store, pd.Timestamp.now("UTC"), engines_or_none())
+        return v if store is not None else v.model_copy(update={"unreadable": [*v.unreadable, "journal"]})
+
+    @app.get("/api/activity", response_model=ActivityView)
+    def activity_feed(limit: int = Query(50, ge=1, le=activity.MAX_EVENTS),
+                      _: User = Depends(need("viewer"))) -> ActivityView:
+        v = activity_cache.get(build_activity)
+        return v.model_copy(update={"events": v.events[:limit]})
+    # ============================================================== end Home activity feed
 
     # ============================================================== auto mode (A10): card for any role, switch owner-only
     # The switch runs telegram/automode.py `mode_command`, the code behind Telegram's /mode, with the same checks:

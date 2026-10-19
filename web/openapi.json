@@ -240,6 +240,239 @@
     "title": "ActiveBlackout",
     "type": "object"
    },
+   "ActivityEvent": {
+    "description": "One thing the system did (goldbot/api/activity.py): a shadow trade, an account position or a cost-probe order\nopened or closed, or an entry the engine refused. Fields a kind does not have are null.",
+    "properties": {
+     "account": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Account"
+     },
+     "agent_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Agent Id"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
+     "entry": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Entry"
+     },
+     "exit": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Exit"
+     },
+     "kind": {
+      "enum": [
+       "shadow_opened",
+       "shadow_closed",
+       "position_opened",
+       "position_closed",
+       "probe_opened",
+       "probe_closed",
+       "refused"
+      ],
+      "title": "Kind",
+      "type": "string"
+     },
+     "lots": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Lots"
+     },
+     "mode": {
+      "anyOf": [
+       {
+        "enum": [
+         "demo",
+         "live",
+         "paper"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mode"
+     },
+     "p": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "P"
+     },
+     "pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Pnl"
+     },
+     "r": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "R"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     },
+     "ret": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ret"
+     },
+     "side": {
+      "anyOf": [
+       {
+        "enum": [
+         "long",
+         "short"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Side"
+     },
+     "timeframe": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Timeframe"
+     },
+     "ts": {
+      "format": "date-time",
+      "title": "Ts",
+      "type": "string"
+     },
+     "version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Version"
+     }
+    },
+    "required": [
+     "ts",
+     "kind"
+    ],
+    "title": "ActivityEvent",
+    "type": "object"
+   },
+   "ActivityView": {
+    "properties": {
+     "events": {
+      "items": {
+       "$ref": "#/components/schemas/ActivityEvent"
+      },
+      "title": "Events",
+      "type": "array"
+     },
+     "unreadable": {
+      "items": {
+       "enum": [
+        "shadow",
+        "positions",
+        "probes",
+        "journal"
+       ],
+       "type": "string"
+      },
+      "title": "Unreadable",
+      "type": "array"
+     }
+    },
+    "required": [
+     "events",
+     "unreadable"
+    ],
+    "title": "ActivityView",
+    "type": "object"
+   },
    "AgentHealthRow": {
     "description": "One champion's drift and health (state/drift.json, research/drift.py AgentHealth) with its halt state.",
     "properties": {
@@ -6653,6 +6886,53 @@
      }
     ],
     "summary": "Accounts"
+   }
+  },
+  "/api/activity": {
+   "get": {
+    "operationId": "activity_feed_api_activity_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 50,
+       "maximum": 200,
+       "minimum": 1,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ActivityView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Activity Feed"
    }
   },
   "/api/agent-runs": {
