@@ -261,6 +261,11 @@ def start_fill(eng: Engine, now: pd.Timestamp) -> None:
     floor = now - pd.Timedelta(days=cfg.backfill_max_days)
     last = pd.Timestamp(eng.bars_1m["visible_at"].iloc[-1]) if not eng.bars_1m.empty else floor
     tail = max(last, floor)
+    if h.cutover is None and tail < now.floor("min"):
+        # re-review HIGH: fix the cut-over at the tail start now, so a live minute arriving before the fill finishes
+        # cannot move it later and turn the pulled tail into "covered" minutes that were never merged
+        h.cutover = tail
+        h.backfill["cutover"] = tail.isoformat()
     cut = h.cutover if h.cutover is not None else tail
     spans: list[tuple[Span, bool]] = [((tail, now.floor("min")), True)] if tail < now.floor("min") else []
     if not eng.bars_1m.empty:
@@ -284,7 +289,11 @@ def absorb(eng: Engine) -> bool:
     if f is None or not f.done.is_set():
         return False
     h.fill = None
-    h.covered += f.covered
+    # a span counts as covered only where pulled bars can be merged (at or after the cut-over) or the broker had none
+    # (keep=False spans are added by fill_spans only when empty); never a kept span before the cut-over
+    cut = h.cutover
+    h.covered += [(max(a, cut), b) if cut is not None and a < cut < b else (a, b) for a, b in f.covered
+                  if cut is None or b > cut or not _kept_before(f, (a, b))]
     got = pd.concat(f.bars, ignore_index=True) if f.bars else pd.DataFrame()
     h.backfill.update({"bars": int(h.backfill["bars"]) + len(got), "error": f.error, "running": False})
     if got.empty:
@@ -299,6 +308,11 @@ def absorb(eng: Engine) -> bool:
     eng._resamplers, eng._ctx_cache, eng._bars_clean = {}, {}, None    # bars inserted before the last: rebuild
     _write(eng, got)
     return True
+
+
+def _kept_before(f: HistoryFill, span: Span) -> bool:
+    """True when `span` was pulled with keep=True (its bars, not an empty broker answer, made it covered)."""
+    return any(keep and s[0] <= span[0] and span[1] <= s[1] for s, keep in f.spans)
 
 
 def _write(eng: Engine, bars: pd.DataFrame) -> None:

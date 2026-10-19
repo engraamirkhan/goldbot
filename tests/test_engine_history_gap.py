@@ -135,6 +135,22 @@ def test_an_exit_check_runs_while_the_fill_is_still_pulling(tmp_path, monkeypatc
     _settle(eng)
 
 
+def test_live_minutes_before_the_fill_finishes_never_turn_the_hole_into_covered(tmp_path):
+    """Re-review HIGH (first deploy, empty live table): live minutes arriving while the tail fill still pulls must not
+    move the cut-over past the pulled tail, or the tail would be dropped yet counted covered (entries on the hole)."""
+    _seed_store(tmp_path)
+    gate = threading.Event()
+    eng = _engine(tmp_path, **FAST)
+    eng.warm_start(LIVE_FROM, TickHistory(TICKS[TICKS["ts_utc"] < LIVE_FROM], gate=gate))
+    _feed(eng, TICKS[(TICKS["ts_utc"] >= LIVE_FROM) & (TICKS["ts_utc"] < LIVE_FROM + pd.Timedelta(minutes=30))])
+    assert eng.history.cutover is not None and eng.history.cutover <= STORE_END + pd.Timedelta(minutes=1)
+    gate.set()
+    _settle(eng)
+    filled = eng.bars_1m[(eng.bars_1m["ts_utc"] >= STORE_END) & (eng.bars_1m["ts_utc"] < LIVE_FROM)]
+    assert len(filled) > 4 * 23 * 60                                # the hole's minutes were merged, not dropped
+    assert open_gaps(pd.DatetimeIndex(eng.bars_1m["ts_utc"]), eng.sessions, max_open_min=60) == []   # no "covered"
+
+
 def test_a_failed_fill_keeps_the_store_bars_and_refuses_entries_with_history_gap(tmp_path):
     _seed_store(tmp_path)
     eng = _engine(tmp_path, **FAST)
