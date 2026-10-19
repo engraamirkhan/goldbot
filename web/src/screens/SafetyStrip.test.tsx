@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { AccountSummary, Status } from "../lib/api";
 import { SafetyStrip } from "./SafetyStrip";
@@ -54,8 +54,24 @@ describe("SafetyStrip", () => {
 
   it("says when no engine is reporting", () => {
     render(<SafetyStrip status={status()} accounts={[]} />);
-    expect(screen.getByRole("status")).toHaveTextContent("No engines reporting");
-    expect(chip("Drawdown")).toHaveTextContent("no engines");
+    expect(screen.getByRole("status")).toHaveTextContent("No engine reporting");
+    expect(screen.getByRole("status")).not.toHaveTextContent("engines");
+    expect(chip("Drawdown")).toHaveTextContent("not reported");
+    expect(chip("Account")).toHaveTextContent("not reported");
+    expect(chip("Account")).not.toHaveTextContent("—");
+    expect(chip("Drawdown")).toHaveClass("idle");           // neutral grey; amber stays on the banner alone
+    expect(chip("Account")).toHaveClass("idle");
+    expect(screen.getByRole("list").querySelectorAll(".chip.warn")).toHaveLength(0);
+  });
+
+  it("keeps the safety tiles behind one tap on a phone, collapsed until opened", () => {
+    render(<SafetyStrip status={status()} accounts={[account()]} />);
+    const toggle = screen.getByRole("button", { name: /safety details/i });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("list")).not.toHaveClass("open");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("list")).toHaveClass("open");
   });
 
   it("shows today's loss budget left, amber under a quarter and red when spent", () => {

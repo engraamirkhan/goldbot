@@ -143,3 +143,17 @@ main { padding: var(--s4); max-width: var(--content-max); margin: 0 auto; paddin
 .state-box.error strong { color: var(--warn); }
 .skeleton-box { border-radius: var(--r-lg); background: var(--surface-2); margin-bottom: var(--s4); }
 @media (prefers-reduced-motion: no-preference) { .skeleton-box { animation: sk-pulse 1.4s ease-in-out infinite; } }
+
+/* Safety tiles on a phone (backlog 101): the banner stays, the seven tiles fold behind one tap so the waiting card and
+   Approve sit above the fold in the 90-second window. Desktop and tablet are unchanged. */
+.safety .strip-toggle { display: none; }
+@media (max-width: 719px) {
+  .safety { margin-bottom: var(--s3); }
+  .safety .strip-toggle { display: block; min-height: var(--tap); margin: 0 0 var(--s2); padding: 0 var(--s3); background: none;
+    border: 1px solid var(--border); border-radius: var(--r-lg); color: var(--text); font: inherit; font-size: 14px; cursor: pointer; }
+  .safety .strip:not(.open) { display: none; }
+  /* Approve and Reject stay pinned just above the bottom bar while the waiting card is on screen, so the decision never
+     needs a scroll however tall the card is (the card's own markup is unchanged) */
+  .approvals .card .decide { position: sticky; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + var(--s2));
+    z-index: 5; padding: var(--s2) 0; background: var(--surface); box-shadow: 0 -8px 8px -6px rgb(0 0 0 / 0.12); }
+}

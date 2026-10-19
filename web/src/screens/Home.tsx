@@ -7,7 +7,7 @@ import { EntryStatusPanel } from "./EntryStatus";
 import { CardBoundary, LearningCard, StrategiesCard, SystemStatusLine, TodayBrief } from "./HomeCards";
 import { ProposalCard } from "./ProposalCard";
 import { useDecide } from "./useDecide";
-import { Skeleton } from "../ui";
+import { ErrorState, Skeleton } from "../ui";
 import "./home.css";
 
 type Props = { onOpenProgress?: () => void; onOpenLimits?: () => void; onOpenTrades?: () => void };
@@ -43,7 +43,9 @@ function NeedsYou({ onOpenTrades }: { onOpenTrades?: () => void }) {
   const held = accounts.data ? notOpen(accounts.data) : undefined;
   return (
     <section className="needs" aria-label="Needs you">
-      {pending.isError && <p className="err" role="alert">Could not load waiting trades. Telegram approvals still work.</p>}
+      {/* a failed load does not stop trading: amber, never red (backlog 100) */}
+      {pending.isError && <ErrorState title="Could not load waiting trades." stillWorks="Telegram approvals still work."
+                                      onRetry={() => pending.refetch()} />}
       {first ? (
         <div className="home-waiting">
           <h2 className="section-title">Trade waiting{open.length > 1 ? ` (1 of ${open.length})` : ""}</h2>

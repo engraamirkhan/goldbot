@@ -84,7 +84,7 @@ test("owner approves one proposal and rejects the other with a reason", async ({
   await page.waitForTimeout(500);
   expect(ws.isClosed()).toBe(false);
   await go(page, "Approvals");
-  await expect(page.getByText("No engines reporting")).toBeVisible();         // safety strip above the cards
+  await expect(page.getByRole("region", { name: "Safety state" }).getByText("No engine reporting")).toBeVisible();         // safety strip above the cards
   const waiting = page.getByRole("region", { name: "Waiting for your decision" }).locator("article.card");
   await expect(waiting).toHaveCount(2);
   const long = waiting.and(page.locator(".long"));
@@ -97,6 +97,12 @@ test("owner approves one proposal and rejects the other with a reason", async ({
   const short0 = waiting.and(page.locator(".short"));
   await expect(short0.getByText("$20.00", { exact: true })).toBeVisible();      // an older engine: dollars, labelled
   await expect(short0.getByText("(USD)")).toBeVisible();
+  // backlog 101: with two waiting proposals and the idle strip, Approve is reachable without scrolling on a small phone
+  await page.setViewportSize({ width: 360, height: 740 });
+  const approve = waiting.first().getByRole("button", { name: "Approve" });
+  const abox = await approve.boundingBox();
+  const barTop = (await page.locator(".bottombar").boundingBox())?.y ?? 740;
+  expect(abox && abox.y >= 0 && abox.y + abox.height <= barTop).toBe(true);
   await page.setViewportSize({ width: 360, height: 800 });
   const lbox = await long.boundingBox();
   expect(lbox && lbox.x >= 0 && lbox.x + lbox.width <= 360).toBe(true);        // the card fits the phone
@@ -303,7 +309,7 @@ test("owner manages a user's access and never offers the owner role", async ({ p
   await expect(row.getByRole("button", { name: "Disable" })).toBeVisible();
 });
 
-// last in the story: an engine starts reporting (earlier steps rely on "No engines reporting")
+// last in the story: an engine starts reporting (earlier steps rely on "No engine reporting")
 test("once the engine reports, Trades > Summary shows the live balance, today's loss budget and the next milestone on a phone", async ({ page }) => {
   const dir = info().state_dir;
   writeFileSync(join(dir, "engine_icm-demo.json"), JSON.stringify({
@@ -343,6 +349,8 @@ test("once the engine reports, Trades > Summary shows the live balance, today's 
   await go(page, "Overview");
   await expect(page.getByText(/Risk per trade today: ≈£6\.00 \(why: high volatility: halved\)/)).toBeVisible({ timeout: 15_000 });   // /api/today polls every 5 s
   await go(page, "Approvals");
+  await expect(page.getByText("Loss budget", { exact: true })).toBeHidden();    // phone: the tiles fold behind one tap (101)
+  await page.getByRole("button", { name: "Show safety details" }).click();
   await expect(page.getByText("Loss budget", { exact: true })).toBeVisible();   // safety strip chip
 });
 

@@ -167,6 +167,20 @@ describe("Home today", () => {
   });
 });
 
+describe("Home when the waiting trades fail to load", () => {
+  it("shows an amber Try again state saying Telegram still works, not a red error", async () => {
+    const proposals = vi.spyOn(apiModule.api, "proposals").mockRejectedValue(new Error("down"));
+    const { container } = renderHome();
+    expect(await screen.findByText("Could not load waiting trades.")).toBeInTheDocument();
+    expect(screen.getByText("Telegram approvals still work.")).toBeInTheDocument();
+    expect(container.querySelector(".err")).toBeNull();
+    expect(container.querySelector(".state-box.error")).not.toBeNull();
+    const calls = proposals.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await vi.waitFor(() => expect(proposals.mock.calls.length).toBeGreaterThan(calls));
+  });
+});
+
 describe("Home strategies and learning", () => {
   it("says each strategy's state in words and calls an unknown state unknown", async () => {
     vi.spyOn(apiModule.api, "strategyWatch").mockResolvedValue({ as_of: "2026-10-19T10:00:00Z", unreadable: [], agents: [
