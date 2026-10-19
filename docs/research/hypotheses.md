@@ -279,6 +279,7 @@ a quarter (to the one with the best post-retirement evidence, else by rotation) 
 | R-10 | Re-scoring R-06 tsmom 1h/4h (and further tsmom 1d loop mutations in 2026Q4) under cheaper measured costs | retired 2026-10-19 (live review s.4; rollout plan R4) | none new | — | Gross t 2.4-2.6 cannot clear the DSR bar at t about 4.1; every loop trial raises the bar for H-48/H-50 |
 | R-11 | 1h and 4h box rules (`box_break_close` 1h/4h) as standalone trials | not trialled (live review s.4) | none | 907 / 319 one-at-a-time events in 15.7 years | Below the P4 event floor; they stay parity and cost monitors with no promotion route |
 | R-12 | Reading any shadow trade opened before the history-gap fix (2026-10-19 13:49 UTC) as evidence | rule (live review s.1.1, H-52) | none | — | Decision frames had a two-week hole after each engine restart; such trades are quarantined (`history_gap`) in the roster/promotion code |
+| R-13 | EQH/EQL as magnets (KB-5; `eq_liquidity_run` stage 2, H-49) | retired 2026-10-19 by its pre-registered stage-1 rule | none (stage 1 is a 0-trial diagnostic, K_eff +1) | Cross-rate lift vs matched single pivots -0.3 pts [-2.8, +2.5] (2010-2017, 1,092 approaches) and +0.8 pts [-1.9, +3.6] (2018-2025-09, 987); bar was ≥ 5 pts with CI > 0 in both (`kb5-stage1.json`) | Equal highs/lows are no more likely to be traded through than single pivots in XAUUSD 15m |
 
 ## C. Multiple-testing ledger
 
@@ -376,7 +377,7 @@ P(PASS) about 1% each; chosen for information per trial and because both fit a 0
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | H-48 (KB-2) | `sweep_absorb`, 15m: first pierce of the previous-day or previous-session extreme, shallow (< 0.5 ATR15) and closed back inside within 2 bars, London/NY; fade at the reclaim close; stop = sweep extreme + 0.25 ATR15 (0.6-1.0 ATR15 kept), 2R, 16 bars | pre-registered, **not dispatched**; 3,349 events | 1 | batch §2 at K ≥ 90, P4 gross t ≥ 2 on ≥ 1,000; cascade arm (deep, close beyond) not tested: overlaps R-04/B03 breakouts |
-| H-49 (KB-5) | `eq_liquidity_run`, 15m: approach (0.3-1.0 ATR15) to an unbroken equal high/low aged 4-96 bars, trade toward it; target level + 0.25 ATR15, stop 0.75 ATR15, 16 bars. Stage 1 (0 trials) is the KB-5 magnet base rate vs single pivots | pre-registered, stage 2 **conditional** on stage 1 lift ≥ 5 points; 2,079 events (1,045 London/NY) | 1 (conditional) | as H-48; stage 1 fail retires "EQH/EQL as magnets" |
+| H-49 (KB-5) | `eq_liquidity_run`, 15m: approach (0.3-1.0 ATR15) to an unbroken equal high/low aged 4-96 bars, trade toward it; target level + 0.25 ATR15, stop 0.75 ATR15, 16 bars. Stage 1 (0 trials) is the KB-5 magnet base rate vs single pivots | **failed** stage 1 (2026-10-19, `kb5-stage1.json`): cross-rate lift -0.3 pts [95% CI -2.8, +2.5] in 2010-2017 and +0.8 pts [-1.9, +3.6] in 2018-2025-09, below the 5-point bar in both; stage 2 not run (its slot went to H-50 under R1) | 0 (K_eff +1) | as H-48; stage 1 fail retires "EQH/EQL as magnets" |
 | D-KB1 (KB-1) | Retest selection diagnostic on the H-37 L6 breaks (2,327), retest N = 3 (1h) fixed | pre-registered, 0 trials, K_eff +1 on H-25 | 0 | never-retested share of forward move ≥ 70% lowers H-25's prior; no new trial |
 
 KB-3 (activity_tod), KB-4, KB-6, KB-7 stay features/exits inside O-4, exit library, H-17 and H-16; H-40's failure
