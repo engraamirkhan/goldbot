@@ -94,6 +94,33 @@ class RiskLimits(Record):
     tier2: Tier2Blackout = Field(default_factory=Tier2Blackout)
     reopen: ReopenSettings = Field(default_factory=ReopenSettings)
     holidays: HolidaySettings = Field(default_factory=HolidaySettings)
+    # dynamic limits (docs/design/dynamic-limits-2026-10-19.md; set only by engine/limits_apply.py, behind the
+    # account's `dynamic_limits` flag): the day's risk per trade by model version, before the multiplier (a version
+    # not here, or a value that is not a finite number > 0, trades `risk_per_trade`), and the same-day tighten-only
+    # scale k_vol x k_dd x k_day in (0, 1]. "Dynamic values are only ever <= the ceilings": a version's value is
+    # clamped to `max_risk_per_trade` here whatever the engine sends. Empty and 1.0: today's fixed values
+    strategy_risk: dict[str, float] = Field(default_factory=dict)
+    risk_scale: float = Field(1.0, gt=0, le=1.0)
+
+    @property
+    def dynamic(self) -> bool:
+        """Whether any dynamic term is in force (False: every decision is the fixed-limits one)."""
+        return bool(self.strategy_risk) or self.risk_scale != 1.0
+
+    def risk_source(self, version: str | None) -> str:
+        """Where `risk_for(version)` comes from: `strategy:<version>` for a usable per-strategy value, else `base`."""
+        v = self.strategy_risk.get(version) if version else None
+        return f"strategy:{version}" if v is not None and math.isfinite(v) and v > 0 else "base"
+
+    def risk_for(self, version: str | None) -> float:
+        """The risk per trade (before the multiplier) an entry of model `version` is sized at: the version's dynamic
+        value clamped to the per-trade maximum (design Hard limits: 1%), else `risk_per_trade`; then x `risk_scale`
+        (only ever tightens). With no dynamic term it is exactly `risk_per_trade`."""
+        if self.risk_source(version) == "base":
+            r = self.risk_per_trade
+        else:
+            r = min(self.strategy_risk[version or ""], self.max_risk_per_trade)
+        return r * self.risk_scale
 
     @classmethod
     def from_settings(cls, risk: RiskSettings, *, tiny_live: bool) -> RiskLimits:
@@ -201,6 +228,9 @@ class Intent(Record):
     learning_probe: bool = False
     account_mode: str | None = None   # the registry's (accounts.yaml); read only for a learning probe
     phase_file: Path | None = None    # state/phase_state.json; read only for a learning probe
+    # the live model version the intent comes from (runner `live_versions`): the key of `RiskLimits.strategy_risk`;
+    # None (unknown) trades the base risk per trade
+    model_version: str | None = None
 
 
 class GateDecision(Record):
@@ -213,6 +243,10 @@ class GateDecision(Record):
     risk_amount: float = 0.0       # account currency lost at the stop by the allowed lots
     cost_amount: float = 0.0       # account currency: the round trip (cost_atr) and swap of those lots (BACKLOG 36)
     margin_note: str = ""          # which figure won, or why the broker's could not be used (fallback to 1:20)
+    # dynamic limits: the risk per trade (before the multiplier) the entry was sized at and where it came from
+    # (`RiskLimits.risk_source`); None and "" while no dynamic term is in force (today's fixed values)
+    risk_per_trade: float | None = None
+    risk_source: str = ""
 
 
 class OperationalIntent(Record):
@@ -380,6 +414,7 @@ class RiskGate:
         if cap is None or not cap > 0:
             return None
         cap = min(cap, self.limits.max_risk_per_trade)
+        cap *= self.limits.risk_scale              # dynamic limits: the same-day cuts tighten the exception too (1.0: off)
         return cap * sizing.SIZE_DOWN_RISK if size_down else cap
 
     def throttle_cooldown(self, timeframe: str) -> pd.Timedelta | None:
@@ -661,7 +696,8 @@ class RiskGate:
             return GateDecision(allowed=False, reasons=["fx_conversion_unavailable"])
         # per-trade risk is capped after the multiplier (design Hard limits: 1% max, clamped, not rejected)
         size_down = st.stage == Stage.SIZE_DOWN or st.combined_size_down
-        eff = sizing.effective_risk(L, size_down, intent.multiplier)
+        risk_frac = L.risk_for(intent.model_version)     # dynamic limits: the strategy's risk per trade (base: fixed)
+        eff = sizing.effective_risk(L, size_down, intent.multiplier, risk_frac=risk_frac)
         stop_distance = sizing.stop_distance(intent.stop_atr, intent.atr_usd, stops_level_points=intent.stops_level_points,
                                              spread_points=st.spread_points, point=L.point)
         sz = sizing.size_lots(equity=st.equity, risk=eff, stop_distance=stop_distance, contract_oz=intent.contract_oz,
@@ -679,9 +715,13 @@ class RiskGate:
                 return GateDecision(allowed=False, reasons=["min_lot_exceeds_risk"], stop_distance=stop_distance)
             notes = ["min_lot_exception"]
         per_oz = max(0.0, intent.cost_atr * intent.atr_usd) + max(0.0, intent.swap_usd_per_oz)
-        return self._sized_limits(intent, st, lots=lots, risk_per_lot=sz.risk_per_lot, fx=fx, cost_per_oz=per_oz,
-                                  stop_distance=stop_distance, realised_risk=realised_risk, notes=notes,
-                                  margin_required=margin_required)
+        d = self._sized_limits(intent, st, lots=lots, risk_per_lot=sz.risk_per_lot, fx=fx, cost_per_oz=per_oz,
+                               stop_distance=stop_distance, realised_risk=realised_risk, notes=notes,
+                               margin_required=margin_required)
+        if d.allowed and L.dynamic:          # the entry audit's why: the rate sized at and its source
+            d = d.model_copy(update={"risk_per_trade": eff.risk_frac,
+                                     "risk_source": L.risk_source(intent.model_version)})
+        return d
 
     def check_operational(self, intent: OperationalIntent, st: AccountState, now_utc: pd.Timestamp | None,
                           margin_required: MarginFn | None) -> GateDecision:
