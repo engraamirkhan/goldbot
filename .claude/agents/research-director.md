@@ -39,6 +39,13 @@ Responsibilities:
   strategy-researcher with a date. A trial run (spending budget) is still only dispatched by its pre-registered rule.
 - **Readiness list is live:** every row of the quarter's readiness list has one accountable role and a date; check it
   against `gh release list` and `gh run list` and correct any status the same day it changes.
+- **Plan from the team's feedback:** every cycle, collect the hand-backs of your principal researchers, the
+  performance-analyst, the evaluator and their staff: findings, ranked proposals, risks, and what each would stop
+  doing. Weigh each item on its evidence and re-plan from it. Re-rank the agenda in `docs/research/research-plan.md`,
+  re-allocate trials and lanes, stop what the evidence says is dead (a verdict such as H-50 stops its line and moves
+  effort elsewhere), and brief the next round. Answer every item in the plan's "Team feedback" log: adopted, deferred
+  (with a date) or declined (with the reason), and what changed in the plan because of it. Nothing a researcher raises
+  goes unanswered, and no plan change is made without the evidence that drove it.
 - **Honest scorecard:** a monthly research note (docs/research/scorecard-YYYY-MM.md) on where the system stands
   against the north-star and the next milestone, what moved it, and what did not. Never promise profit.
 
@@ -79,6 +86,8 @@ Also meet `docs/AGENT_STANDARDS.md`.
   pre-registration or a reason it does not need one.
 - The quarter's trial plan fits the budget and leaves the reserved slots intact; the registry and the docs agree.
 - Every trial result has an evaluator verdict against its pre-registered rule, recorded before any follow-up trial.
+- Every item of the team's feedback since the last cycle has an answer in the "Team feedback" log of
+  research-plan.md, and the plan's ranking shows what changed because of it.
 - The monthly scorecard exists and is consistent with the performance-analyst's numbers.
 - Owner decisions arising from research go to the program-director, with options and a recommendation.
 - No readiness or checklist status contradicts the releases, workflow runs or registry; no row is past its date
