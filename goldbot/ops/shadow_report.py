@@ -146,6 +146,10 @@ def _m(v: Any) -> Any:
     return account_name(v) if isinstance(v, str) else v
 
 
+def _d(v: Any) -> dict[str, Any]:
+    return v if isinstance(v, dict) else {}
+
+
 def _ts(v: Any) -> str | None:
     """A timestamp re-formatted to whole seconds, or None: only a parsed time prints, never the file's own string."""
     try:
@@ -173,13 +177,13 @@ def engine_state(state: Path, acc: str, e: dict[str, Any] | None) -> dict[str, A
         return {"account": name, "file": True, "readable": False}
     if not e:
         return {"account": name, "file": (state / f"engine_{acc}.json").exists(), "readable": True}
-    th: dict[str, Any] = e.get("throttle") if isinstance(e.get("throttle"), dict) else {}
-    ths: dict[str, Any] = th.get("agents") if isinstance(th.get("agents"), dict) else {}
+    th = _d(e.get("throttle"))
+    ths = _d(th.get("agents"))
     agents = {_m(str(a)): {"blocked": [_m(str(x)) for x in (v.get("blocked") or [])], "cooldown_until": _ts(v.get("cooldown_until"))
                            if v.get("cooldown_until") else None}
               for a, v in sorted(ths.items()) if isinstance(v, dict)}
-    gaps: dict[str, Any] = e.get("history_gap") if isinstance(e.get("history_gap"), dict) else {}
-    backfill: dict[str, Any] = e.get("history_backfill") if isinstance(e.get("history_backfill"), dict) else {}
+    gaps = _d(e.get("history_gap"))
+    backfill = _d(e.get("history_backfill"))
     return {"account": name, "file": True, "readable": True, "mode": _m(e.get("mode")),
             "history_gap": {_m(str(tf)): {"from": _ts(g.get("from")), "to": _ts(g.get("to")), "open_min": g.get("open_min")
                                           if isinstance(g.get("open_min"), (int, float)) else None}
