@@ -1,4 +1,5 @@
 import type { AccountSummary, EntryBlock } from "../lib/api";
+import { NO_ENGINE } from "./SafetyStrip";
 import { BADGE, STALE_MS, TONE, localHm, utcText, whenText } from "../lib/entry";
 import { useNow } from "../lib/useNow";
 
@@ -24,7 +25,7 @@ export function EntryStatusPanel({ accounts, loading, error, now, updatedAt }: P
         </p>
       ) : (accounts?.length ?? 0) === 0 ? (
         <p className="entry-row warn">
-          No engine is reporting, so no new trades can open. Start the engine; the Health tab shows what is running.
+          {NO_ENGINE}, so no new trades can open. Start the engine; the Health tab shows what is running.
         </p>
       ) : (
         <>

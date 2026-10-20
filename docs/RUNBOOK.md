@@ -929,6 +929,22 @@ npm run build
 cd C:\goldbot
 ```
 
+### 2.6b UI snapshots: before/after shots for every UI change (developer machine)
+
+Every screen and tab, desktop 1440 and phone 390, light and dark, from the seeded e2e server (no real data). Run it
+on the base branch and again on the change, and attach both sets to the review (ui-ux-designer Definition of done):
+
+```bash
+npm --prefix web run build && node scripts/ui_snapshots.mjs before
+# ... the UI change, then:
+npm --prefix web run build && node scripts/ui_snapshots.mjs after
+```
+
+Shots land in `~/tmp/ui-shots/<label>/<viewport>-<theme>/` (nothing is written in the repo). `fold-*.png` is what
+the owner sees on opening Home and Trades; the full-page shots stretch the page, so the phone's bottom bar shows
+mid-page and the desktop rail stops at 900 px there (not a bug in a real browser). `UI_SHOTS_VIEWPORTS=desktop,phone,narrow`
+adds 360 px; `PYTHON`, `UI_SHOTS_PORT` (default 8795) and `PW_CHROMIUM_PATH` as for the e2e tests.
+
 ### 2.7 Cloudflare tunnel (dashboard from your phone, no VPN)
 
 1. In the Cloudflare Zero Trust dashboard create a tunnel and a public hostname for it; route the hostname to
