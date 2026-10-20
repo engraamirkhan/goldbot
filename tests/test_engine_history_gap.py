@@ -9,9 +9,11 @@ import logging
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
+import pytest
 
 from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.resample import ticks_to_1m
@@ -354,3 +356,50 @@ def test_a_failed_broker_bar_pull_never_covers_a_hole(tmp_path):
         bars, covered, err = history.pull_bars(broker, "XAUUSD", span, page_ticks=2000, pace=pace, keep=keep,
                                                rates=history.BrokerRates(broker, "XAUUSD", pace))
         assert err is None and bars == [] and covered == [], keep
+
+
+# ------------------------------------------------------------------------------------------- exchange closures
+# Incident 2026-10-19: the release feed stops at 18:28 UTC on Labor Day 2026 (CME metals halted) and resumes at 22:02;
+# the static session table called ~150 of those minutes open, so every 1h and 4h close since refused `history_gap`.
+LABOR_HALT = (pd.Timestamp("2026-09-07 18:29", tz="UTC"), pd.Timestamp("2026-09-07 22:02", tz="UTC"))
+NOW_1019 = pd.Timestamp("2026-10-19 14:00", tz="UTC")
+
+
+def _feed_minutes(start: str = "2026-08-17", end: pd.Timestamp = NOW_1019) -> pd.DatetimeIndex:
+    """Every minute a feed has from `start` to `end`: the static table's open minutes less the Labor Day halt."""
+    ts = pd.date_range(pd.Timestamp(start, tz="UTC"), end, freq="min", inclusive="left")
+    ts = ts[DEFAULT_SESSIONS.is_open(ts)]
+    return ts[(ts < LABOR_HALT[0]) | (ts >= LABOR_HALT[1])]
+
+
+def test_the_labor_day_2026_halt_is_not_a_history_gap():
+    assert open_gaps(_feed_minutes(), DEFAULT_SESSIONS, max_open_min=60) == []
+
+
+def test_a_hole_on_a_holiday_morning_before_the_halt_is_still_a_history_gap():
+    ts = _feed_minutes()
+    lo = pd.Timestamp("2026-09-07 13:00", tz="UTC")                  # 08:00 CT: the market trades
+    [g] = open_gaps(ts[(ts < lo) | (ts >= lo + pd.Timedelta(hours=2))], DEFAULT_SESSIONS, max_open_min=60)
+    assert g.start == lo and g.open_min == 120
+
+
+def test_a_mid_session_hole_next_to_the_holiday_is_still_a_history_gap():
+    ts = _feed_minutes()
+    lo = pd.Timestamp("2026-09-08 14:00", tz="UTC")
+    [g] = open_gaps(ts[(ts < lo) | (ts >= lo + pd.Timedelta(minutes=90))], DEFAULT_SESSIONS, max_open_min=60)
+    assert g.start == lo and g.open_min == 90
+
+
+@pytest.mark.parametrize("tf", ["1h", "4h"])
+def test_1h_and_4h_windows_over_september_and_october_2026_pass_the_guard(tmp_path, tf):
+    """The engine's own path (window_gaps -> refuse) on its memory (max_bars_in_memory 1m bars) at a 1h and a 4h
+    close: the 1h window (800 bars) and the 4h one (the whole memory) both span Labor Day."""
+    eng = _engine(tmp_path)
+    ts = _feed_minutes()[-eng.cfg.max_bars_in_memory:]
+    assert ts[0] < LABOR_HALT[0]
+    first = ts.floor("h").unique()[-800] if tf == "1h" else ts[0]
+    assert first < LABOR_HALT[0]
+    gaps = history.window_gaps(eng, pd.DataFrame({"ts_utc": ts}))
+    fr = SimpleNamespace(dec=pd.DataFrame({"ts_utc": [first, ts[-1]]}))
+    assert history.refuse(eng, tf, fr, gaps, [], NOW_1019) is None
+    assert tf not in eng.history.gaps

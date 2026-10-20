@@ -74,7 +74,7 @@ def open_gaps(ts_utc: pd.DatetimeIndex, sessions: SessionTable, *, max_open_min:
         start = pd.Timestamp(ns[i] + MINUTE_NS, unit="ns", tz="UTC")
         end = pd.Timestamp(ns[i + 1], unit="ns", tz="UTC")
         minutes = pd.date_range(start, end, freq="min", inclusive="left")
-        missing = np.asarray(sessions.is_open(minutes), dtype=bool)
+        missing = np.asarray(sessions.expected_open(minutes), dtype=bool)     # CME holiday closures are not holes
         for lo, hi in covered:
             missing &= ~((minutes >= lo) & (minutes < hi))
         n = int(missing.sum())
