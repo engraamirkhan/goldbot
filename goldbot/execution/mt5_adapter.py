@@ -45,13 +45,14 @@ import logging
 import math
 import time
 from datetime import datetime
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable
 
 import pandas as pd
 
 from goldbot.data.calendar import SessionTable, TradingSession, resolve_server_sessions
 from goldbot.data.timeutil import server_to_utc, server_wall
 from goldbot.execution.broker import (
+    ACCOUNT_REFUSAL,
     AccountInfo,
     OrderIntent,
     OrderResult,
@@ -213,15 +214,25 @@ def measure_broker_terms(account_id: str, info: Any, *, account_currency: str, p
 
 
 class MT5Broker:
+    """`verify` is the per-order account check (trading-safety MEDIUM; the bridge's GuardedBroker does the same): the
+    engine passes `accounts.verify_terminal_account` for its account, and every `place_order` reads the terminal's
+    account first and refuses the entry when the check names a reason (another login, another server, a real terminal
+    under a demo account or the reverse, not hedging) or when the account cannot be read or checked. A refusal is a
+    definite reject (RETCODE_REJECT, message "terminal_account_changed: <reason>", logged), never a raise and never a
+    send. `close` and `modify` are never checked, exactly as the bridge: closing only reduces risk and the 12% kill
+    switch closes everything on the account (design: Drawdown kill switch). There is no default: every caller decides;
+    None only where nothing above it can be bypassed (the bridge, whose GuardedBroker verifies every order) or nothing
+    is ever ordered (the scheduler's read-only broker)."""
     name = "mt5"
 
     def __init__(self, *, terminal_path: str, login: int | None, password: str | None, server: str, server_tz: str,
-                 symbol: str, account_label: str):
+                 symbol: str, account_label: str, verify: Callable[[Any], str | None] | None):
         if mt5 is None:
             raise RuntimeError("MetaTrader5 package is Windows-only; run this adapter on the VPS")
         self.server_tz = server_tz
         self.symbol = symbol
         self.account_label = account_label
+        self._verify = verify
         # without a login the terminal's own saved account is used (bridge on Wine: no password leaves the terminal)
         creds = {} if login is None else {"login": login, "password": password, "server": server}
         if not mt5.initialize(path=terminal_path, timeout=MT5_INIT_TIMEOUT_MS, **creds):
@@ -357,7 +368,21 @@ class MT5Broker:
                 return getattr(mt5, const)
         return mt5.ORDER_FILLING_RETURN
 
+    def _account_refusal(self) -> str | None:
+        """Why the terminal must not take an entry for this account now (`verify`), or None. Fail closed: an account
+        that cannot be read, or a check that raises, is "unverifiable"."""
+        if self._verify is None:
+            return None
+        try:                                           # account_info() None raises in account(): unverifiable
+            return self._verify(self.account())
+        except Exception as exc:                       # noqa: BLE001 - an IPC error or a malformed record: no send
+            return f"unverifiable: {type(exc).__name__}"
+
     def place_order(self, intent: OrderIntent) -> OrderResult:
+        if (why := self._account_refusal()) is not None:
+            log.warning("order %s refused: %s: %s", intent.client_order_id, ACCOUNT_REFUSAL, why)
+            return OrderResult(ok=False, retcode=RETCODE_REJECT, order_id=None, position_id=None, filled_lots=0.0,
+                               price=None, message=f"{ACCOUNT_REFUSAL}: {why}")
         tick = mt5.symbol_info_tick(intent.symbol)
         price = tick.ask if intent.side > 0 else tick.bid
         req = {

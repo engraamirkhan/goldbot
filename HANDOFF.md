@@ -105,6 +105,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   break-and-close, money flow), same inputs/defaults as `smc_replica`/`mfi_signals`/`box_course`, closed bars only;
   `tests/test_mql5_ports.py` pins the defaults and the file shape. Not compiled (no MetaEditor) and not installed:
   RUNBOOK 2.7e, requires owner approval.
+- Trading-safety (MEDIUM, money path): the direct MT5 adapter now re-checks the terminal's account before every entry,
+  as the bridge does. `MT5Broker(verify=...)` is a required keyword; the engine passes
+  `accounts.verify_terminal_account` for its account, so a terminal switched to another login, server or a real account
+  after start refuses the entry (retcode 10006, "terminal_account_changed: <reason>", logged; an unreadable account or a
+  raising check is "unverifiable" and refused too). Closes and stop changes are never checked (closing only reduces
+  risk; the kill switch closes everything), exactly as GuardedBroker. The bridge (GuardedBroker verifies above it) and
+  the scheduler's read-only broker pass `verify=None`. Tests: tests/test_mt5_order_account_check.py.
+- Follow-up (reviews of d3d091b5): a refused entry for a switched terminal alerts the owner once per streak
+  (`auto_entry.note_refusal` / `note_account_refusal`, on the auto, probe and approval paths; a fill re-arms it; each
+  refusal is journalled `account_refused`); the card, notice and dashboard read "refused by the engine: the MT5
+  terminal is logged in to a different account" (`not_placed`, code `terminal_account_changed`); a test pins the engine
+  building its direct broker with `verify`. BACKLOG 104 holds the remaining LOW (exits/kill switch on a switched terminal).
 - `goldbot run positions [--account <id>] [--json]` (`goldbot/ops/positions.py`): read-only open trades per enabled account without the dashboard login (state files only; same builder as `/api/positions/open`, which now also carries `open_risk`). Over ssh: `bash -lc "goldbot run positions"`. Exit 1 when an orders file or the shadow book is unreadable.
 Known limit: accounts are matched by the digit-cut name (`account_name`), so two configs that differ only inside a 5+ digit run would collide; not handled.
 - Trading-safety MEDIUM on f09e3002 fixed (ADR 0037 amendment 4): a failed engine start (`refuse_start`, unreadable positions read) now writes the account's configured `probe_only` (accounts.yaml / EngineConfig, never the old file) into `engine_<account>.json`, so an icm-probe start error is reported in `probe_engines` and no longer halts the real accounts (`engine_startup_refused`); a real account's start error still halts every engine, the probe's included. Tests: `tests/test_startup_error_exposure.py`.
