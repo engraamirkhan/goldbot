@@ -39,6 +39,13 @@ def _positions(cmd: str, args: list[str]) -> None:
     sys.exit(positions_main(args))
 
 
+@register_command("shadow-report", pos=206)
+def _shadow_report(cmd: str, args: list[str]) -> None:
+    """Shadow trades, cost probes and engine history-gap/guard state, read-only (state files), no shell access needed."""
+    from goldbot.ops.shadow_report import main as shadow_report_main
+    sys.exit(shadow_report_main(args))
+
+
 @register_command("monthly-report", pos=220)
 def _monthly_report(cmd: str, args: list[str]) -> None:
     from goldbot.ops.monthly_report import main as monthly_main
