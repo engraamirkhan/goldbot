@@ -109,7 +109,7 @@ def test_read_unions_parts_when_first_part_has_all_null_column(tmp_path: Path) -
     st._write_atomic(pdir, _dec("2026-10-02", "a1"))
     out = st.read("decisions", source="icm-probe")
     assert len(out) == 2
-    assert out["agent_id"].dtype == object
+    assert pd.api.types.is_string_dtype(out["agent_id"])
     assert pd.isna(out["agent_id"].iloc[0]) and out["agent_id"].iloc[1] == "a1"
 
 
