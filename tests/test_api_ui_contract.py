@@ -363,3 +363,10 @@ def test_combined_money_needs_a_known_currency_never_amounts_without_one(tmp_pat
     assert s["currency"] is None and s["daily_cap"] == 0.015                 # the fraction still shows
     assert all(s[k] is None for k in ("daily_cap_amount", "weekly_cap_amount", "daily_used_amount",
                                       "weekly_used_amount"))
+
+
+def test_without_settings_the_entry_mode_window_is_unknown_not_a_guessed_90(tmp_path):
+    from goldbot.config import load_settings
+    assert explain.automode_view(tmp_path, None, True).window_s is None
+    settings = load_settings()
+    assert explain.automode_view(tmp_path, settings, True).window_s == settings.risk.approval_window_seconds

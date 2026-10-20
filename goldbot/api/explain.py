@@ -98,7 +98,6 @@ MAX_TRIALS = 200
 PLAN_MAX_AGE_DAYS = 21           # ops/jobs.py PLAN_MAX_AGE_DAYS (not imported: jobs pulls in the research stack)
 DEFAULT_QUARTER_BUDGET = 20      # research/director.py DEFAULT_QUARTER_BUDGET
 NORTH_STAR_GBP = 50.0            # settings research.north_star_daily_gbp, when settings cannot be read
-APPROVAL_WINDOW_S = 90           # settings risk.approval_window_seconds, when settings cannot be read
 
 
 def _now() -> datetime:
@@ -683,5 +682,6 @@ def automode_view(state: Path, settings: Settings | None, is_owner: bool) -> Aut
                           mean_r_rejected=t.mean_r_rejected, diff=t.diff, ci_low=t.ci_low, ci_high=t.ci_high,
                           p_value=t.p_value, alpha=t.alpha, indistinguishable=t.indistinguishable),
         forced_propose=_forced_propose(state, datetime.now(timezone.utc).timestamp()), accounts=_entry_accounts(state),
-        window_s=settings.risk.approval_window_seconds if settings is not None else APPROVAL_WINDOW_S,
+        # settings risk.approval_window_seconds; null (unknown, never a guessed 90) when settings cannot be read
+        window_s=settings.risk.approval_window_seconds if settings is not None else None,
         can_enable=is_owner and e.eligible and c.approval_mode != "auto", error=err)

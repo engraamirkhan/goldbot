@@ -968,7 +968,8 @@ class AutoModeView(BaseModel):
     test: VetoTestView
     forced_propose: list[ForcedPropose]
     # backlog 92 (always set by this API; nullable for older clients): one row per reporting engine, and the
-    # approval window real-money rows quote (settings risk.approval_window_seconds: "asks you (90 s)")
+    # approval window real-money rows quote (settings risk.approval_window_seconds: "asks you (90 s)"; null when the
+    # settings cannot be read: the rows then say no window, never a guessed one)
     accounts: list[EntryModeAccount] | None = None
     window_s: int | None = None
     can_enable: bool                        # this user is the owner, the evidence holds and the mode is not auto
