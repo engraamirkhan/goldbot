@@ -316,6 +316,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     eng = Engine(EngineConfig(account_id=account_id, broker_name=acc.broker, mode=acc.mode, declared_class=acc.account_class, approval_mode=acc.approval_mode, symbol=acc.symbol,
                               cost_probe=acc.cost_probe.enabled, cost_probe_budget=acc.cost_probe.budget_share,
                               cost_probe_max_open=acc.cost_probe.max_open, cost_probe_max_loss=acc.cost_probe.max_loss,
+                              cost_probe_scheduled=acc.cost_probe.scheduled,
                               shadow_max_open=settings.shadow.max_open_per_agent,
                               magic_base=acc.magic_base, server_tz=acc.server_tz, state_dir="state", data_root=settings.data_root,
                               shadow_host=shadow_host, probe_only=acc.probe_only, halt_checks=True, news_blackout=True,

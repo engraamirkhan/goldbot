@@ -64,6 +64,34 @@ _PLATFORM = sys.platform
 ALLOW_PLAINTEXT_ENV = "GOLDBOT_ALLOW_PLAINTEXT"
 
 
+_HHMM = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+
+
+class ScheduledProbe(FrozenRecord):
+    """The measured-cost protocol's M1 arm (docs/research/prereg-cost-measurement-2026-10.md, section 1): "0.01 lot at
+    a fixed slot time; side = +1 on even slot index, -1 on odd ... market close after 30 s; server SL at $3 from fill
+    (safety only)", one slot per 15m close (goldbot/engine/cost_probe.py `scheduled_step`). Off unless set; it needs the
+    cost probe on (so a demo account), and it trades through the probes' RiskGate check like every probe."""
+    enabled: bool = False
+    # section 3: "a hold <= 60 s, closed by the engine": closed this many seconds after the fill on the host clock,
+    # whether entries are halted or not (exits are never gated)
+    hold_s: int = Field(30, ge=1, le=60)
+    # section 3: "a stop of at most $3 from the fill", USD per oz; its loss at 0.01 lot stays within max_loss too
+    stop_usd: float = Field(3.0, gt=0, le=3.0)
+    # no slot in this UTC window (HH:MM, start inclusive, end exclusive): the rollover and the daily break; nor after
+    # the Friday weekend cut (server time) or on a UTC weekend day
+    blackout: tuple[str, str] = ("20:45", "22:15")
+    # prereg K10: scheduled probes' realised loss + open risk take at most this share of the day's probe budget
+    budget_share: float = Field(0.5, gt=0, le=0.5)
+
+    @field_validator("blackout")
+    @classmethod
+    def _hhmm(cls, v: tuple[str, str]) -> tuple[str, str]:
+        if not all(_HHMM.fullmatch(x) for x in v):
+            raise ValueError("cost_probe.scheduled.blackout is two HH:MM times (UTC)")
+        return v
+
+
 class CostProbe(FrozenRecord):
     """ADR 0037 (the research director's ruling 2026-10-19): minimum-lot demo orders mirroring challengers' shadow
     entries, for measured costs (goldbot/engine/cost_probe.py). Off unless set; demo accounts only."""
@@ -76,6 +104,14 @@ class CostProbe(FrozenRecord):
     # each probe's stop is clamped so its loss at the stop (the broker's loss_per_lot at 0.01 lot) is at most this, in
     # the account currency (icm-demo: £4); a probe whose loss cannot be computed is refused
     max_loss: float = Field(4.0, gt=0)
+    # the measured-cost protocol's scheduled market probes (M1); off by default
+    scheduled: ScheduledProbe = Field(default_factory=ScheduledProbe)
+
+    @model_validator(mode="after")
+    def _scheduled_needs_probes(self) -> CostProbe:
+        if self.scheduled.enabled and not self.enabled:
+            raise ValueError("cost_probe.scheduled needs cost_probe.enabled (demo accounts only, ADR 0037)")
+        return self
 
 
 class Account(Record):
