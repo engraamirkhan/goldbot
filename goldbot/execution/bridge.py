@@ -384,8 +384,13 @@ class GuardedBroker:
     -> 3.0 lots -> account (one read) -> F4 smoke magic on demo only -> verify -> ceiling -> the order's age again
     (`order_sent_at`) -> send. `close` and `modify` are never sized."""
 
-    def __init__(self, broker: Any, *, magic_base: int, verify: Callable[[Any], str | None] | None = None) -> None:
+    def __init__(self, broker: Any, *, magic_base: int, verify: Callable[[Any], str | None] | None = None,
+                 relogin: Callable[[], bool] | None = None) -> None:
         self._b, self.magic_base, self._verify = broker, magic_base, verify
+        # the bridge's self-heal (goldbot/ops/login.py Relogin; owner directive 2026-10-20): called only when the
+        # terminal has no account at all (not_logged_in), never on wrong_account; it logs in to the configured login
+        # only, paces itself and returns whether it logged in
+        self._relogin = relogin
         # when the brain sent the order being served (the bridge handler sets it; one request at a time): the age is
         # checked again just before the send, after the ceiling's reads. None: not served over the bridge
         self.order_sent_at: float | None = None
@@ -466,7 +471,21 @@ class GuardedBroker:
         """The terminal's state as one token of TERMINAL_STATES, for GET /health; None when the wrapped broker cannot
         say (no `terminal_info`, e.g. the paper broker). Order: no terminal (terminal_info None or an IPC error) ->
         no account -> another account than registered (`verify`) -> not connected to the broker server -> ok. A login
-        or a server never leaves this method."""
+        or a server never leaves this method. On not_logged_in the `relogin` hook (when set) may log the terminal in to
+        the registered login; the state is then read again, so a terminal that came back on another account still
+        answers wrong_account."""
+        state = self._terminal_state()
+        if state == "not_logged_in" and self._relogin is not None:
+            try:
+                healed = self._relogin()
+            except Exception:                            # noqa: BLE001 - a failed heal leaves the state as it was
+                log.warning("terminal self-heal login raised; the terminal stays not_logged_in")
+                healed = False
+            if healed:
+                state = self._terminal_state()
+        return state
+
+    def _terminal_state(self) -> str | None:
         info_fn = getattr(self._b, "terminal_info", None)
         if not callable(info_fn):
             return None

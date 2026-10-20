@@ -505,6 +505,12 @@ def account_password(acc: Account) -> str:
     return get_credential(f"mt5-{acc.account_id}", f"MT5 password for {acc.account_id} (login {acc.login}, {acc.server})")
 
 
+def stored_password(acc: Account) -> str | None:
+    """The account's MT5 password from the keyring (`mt5-<account_id>`, as `add` stores it), or None; never prompts
+    (the MT5 box login in goldbot/ops/login.py runs in services with no one to ask)."""
+    return get_secret(f"mt5-{acc.account_id}")
+
+
 def ensure_login(acc: Account) -> Account:
     if acc.login is None:
         v = _prompt(f"MT5 login number for {acc.account_id} ({acc.server})", secret=False)

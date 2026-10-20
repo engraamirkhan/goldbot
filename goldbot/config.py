@@ -677,6 +677,27 @@ class ShadowSettings(_Section):
     max_open_per_agent: int = Field(default=3, ge=1, le=10)
 
 
+class Mt5LoginSettings(_Section):
+    """MT5 terminal login from the keyring (goldbot/ops/login.py; owner directive 2026-10-20: "MT5 terminal logins on
+    the boxes must happen without the owner (no VNC step)"). Used by `goldbot-mt5 login <account>` and by the bridge
+    when its attach fails or /health finds the terminal not logged in. Always the configured login only; an
+    authorization failure is never retried (a broker locks an account after repeated bad passwords)."""
+    attempts: int = Field(3, ge=1, le=5)                 # tries per login (command, bridge start), timeouts only
+    backoff_s: float = Field(20.0, gt=0)                 # wait before the 2nd try, doubling for each one after
+    backoff_max_s: float = Field(600.0, gt=0)            # longest wait between tries
+    heal_max_attempts: int = Field(5, ge=1, le=10)       # bridge self-heal: failed logins before it stops trying
+    timeout_ms: int = Field(60_000, ge=1_000, le=120_000)  # initialize/login timeout (as MT5_INIT_TIMEOUT_MS)
+    # Escape to the terminal's foreground window before an initialize, for the "Select a company to open an account
+    # with" wizard a terminal without a saved login opens. Best effort, unverified on the box: off by default
+    dismiss_wizard: bool = False
+
+    @model_validator(mode="after")
+    def _ceiling_above_base(self) -> Mt5LoginSettings:
+        if self.backoff_max_s < self.backoff_s:
+            raise ValueError("mt5_login.backoff_max_s must be at least backoff_s")
+        return self
+
+
 class Settings(_Section):
     symbol: str
     data_root: str
@@ -706,6 +727,7 @@ class Settings(_Section):
     tv_pull: TvPullSettings = Field(default_factory=TvPullSettings)
     tv: TvSettings = Field(default_factory=TvSettings)
     shadow: ShadowSettings = Field(default_factory=ShadowSettings)
+    mt5_login: Mt5LoginSettings = Field(default_factory=Mt5LoginSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")
     @classmethod

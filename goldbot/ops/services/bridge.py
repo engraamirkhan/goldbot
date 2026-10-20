@@ -41,11 +41,16 @@ def terminals_in_bridge_cgroup(proc_root: Path) -> int | None:
 
 def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTrader5 package and a terminal
     """Serve the MT5 terminal on this machine to the engine (goldbot/execution/bridge.py). Run under the Wine (or
-    Windows) Python next to the terminal. The terminal's saved login is used; the listen address and token come from
-    the keyring (`mt5-bridge-listen-<account>` as host:port, `mt5-bridge-token-<account>`)."""
+    Windows) Python next to the terminal. The terminal's saved login is used first; when the attach fails, or /health
+    later finds the terminal with no account, the bridge logs it in from the keyring to the configured login only
+    (goldbot/ops/login.py; owner directive 2026-10-20: no VNC step). The listen address and token come from the keyring
+    (`mt5-bridge-listen-<account>` as host:port, `mt5-bridge-token-<account>`)."""
+    from goldbot.config import load_settings
+    from goldbot.execution import mt5_adapter
     from goldbot.execution.bridge import GuardedBroker, serve
     from goldbot.execution.mt5_adapter import MT5Broker
     from goldbot.ops import accounts
+    from goldbot.ops import login as mt5_login
     acc = accounts.load_accounts()[account_id]
     listen = accounts.get_secret(f"mt5-bridge-listen-{account_id}")
     token = accounts.get_secret(accounts.bridge_token_key(account_id))
@@ -56,10 +61,14 @@ def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTra
     if host not in ("127.0.0.1", "localhost"):     # the token must never cross a network in clear text
         raise SystemExit(f"bridge must listen on 127.0.0.1 (reached through the SSH tunnel), not {host}")
     # Attaches to the terminal its own unit started (goldbot-mt5-terminal@.service; the bridge unit waits for the
-    # process first): initialize(path=..., timeout=60 s). A failed attach raises, and Restart=always tries again.
-    broker = MT5Broker(terminal_path=acc.terminal_path, login=None, password=None, server=acc.server,
-                       server_tz=acc.server_tz, symbol=acc.symbol, account_label=account_id,
-                       verify=None)                 # GuardedBroker below verifies every order on its one account read
+    # process first): initialize(path=..., timeout=60 s). A failed attach logs in from the keyring (when stored) and
+    # attaches once more; a second failure raises, and Restart=always tries again.
+    login_settings = load_settings().mt5_login
+    broker = mt5_login.attach_terminal(
+        acc, mt5_adapter.mt5, login_settings,
+        lambda: MT5Broker(terminal_path=acc.terminal_path, login=None, password=None, server=acc.server,
+                          server_tz=acc.server_tz, symbol=acc.symbol, account_label=account_id,
+                          verify=None))     # GuardedBroker below verifies every order on its one account read
     # If the terminal died between the unit's wait and the attach, initialize(path=...) launched one of its own, in
     # this unit's cgroup: never serve it. Exiting lets systemd stop the cgroup (that terminal with it).
     spawned = terminals_in_bridge_cgroup(_proc_root())
@@ -70,7 +79,8 @@ def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTra
     if spawned is None:
         log.warning("could not list processes: a terminal launched by initialize would go unnoticed here")
     guarded = GuardedBroker(broker, magic_base=acc.magic_base,
-                            verify=lambda info: accounts.verify_terminal_account(acc, info))
+                            verify=lambda info: accounts.verify_terminal_account(acc, info),
+                            relogin=mt5_login.Relogin(acc, mt5_adapter.mt5, login_settings))
     # The registered-account check (login, server, demo vs real, hedging) gates every RPC instead of the start:
     # until the terminal is once seen `ok`, /health answers with the token (not_logged_in, wrong_account, ...) and
     # every call is refused, so a lost login shows as such rather than as a bridge that keeps restarting; after that,
