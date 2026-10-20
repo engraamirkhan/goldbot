@@ -51,6 +51,11 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   entries for that timeframe (journal `history_gap:<tf>`, no shadow entry; exits, policies, open shadow trades
   unaffected) and is re-filled every 30 min. `engine_<account>.json` gains `history_gap` and `history_backfill`
   (cut-over, fill status, dropped batches). Not yet: a health check and a dashboard tile reading them.
+- Entry mode `account` (ADR 0041): `/mode account` on Telegram, `{"mode": "account"}` on `POST /api/automode` and the
+  dashboard's "Use each account's setting" clear the owner's global override, so each engine uses its account's own
+  approval mode again (demo auto, real money propose). Owner only, audited (`mode`, `to: account`), no TOTP or
+  evidence; `/mode auto` keeps both. The ADR 0036 lock, the re-arm window and the kill switch still force propose.
+  Fixes a demo account stuck on propose after `/mode propose`. API contract regenerated.
 - H-48 (`sweep_absorb`, #88) and H-50 (`box_break_close` 15m, #89) read STOP and are retired (R-14, R-15 in
   `research.retired_families` and hypotheses.md section B). H-51a/b lapse.
   - The roster agents keep running on demo as parity/cost monitors, with no promotion route.

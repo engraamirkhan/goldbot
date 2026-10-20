@@ -213,3 +213,47 @@ def test_the_owners_mode_propose_keeps_a_demo_account_on_propose(tmp_path):
     eng.center.bus.set_mode("propose", by="telegram", reason="owner")
     decisions = _drive(eng)
     assert "executed:auto" not in _actions(decisions) and "proposed" in _actions(decisions)
+
+
+# ---------------------------------------------------------------------------------------------- /mode account (ADR 0041)
+def _refreshed(eng: Engine, pb: PaperBroker) -> str:
+    tick = Tick(ts_utc=pd.Timestamp("2025-03-03 08:00", tz="UTC"), bid=2400.0, ask=2400.3)
+    pb.on_tick(tick)
+    eng._refresh_account(tick)
+    return eng.cfg.approval_mode
+
+
+def test_clearing_the_owners_mode_gives_a_demo_account_on_a_demo_terminal_automatic_entries_again(tmp_path):
+    eng, pb, _ = _engine(tmp_path)
+    bus = eng.center.bus
+    bus.set_mode("propose", by="telegram", reason="owner")
+    assert _refreshed(eng, pb) == "propose"                     # the global override held the demo account on propose
+    bus.set_mode(None, by="dashboard", reason="owner: each account's setting")
+    assert bus.control().approval_mode is None
+    assert _refreshed(eng, pb) == "auto"
+
+
+def test_clearing_the_owners_mode_leaves_a_live_account_asking_the_owner(tmp_path):
+    eng, pb, _ = _engine(tmp_path, mode="live", approval="propose", trade_mode="real")
+    eng.center.bus.set_mode(None, by="dashboard")
+    assert _refreshed(eng, pb) == "propose"
+
+
+def test_clearing_the_owners_mode_refuses_auto_for_a_demo_config_on_a_real_terminal(tmp_path):
+    eng, pb, _ = _engine(tmp_path, trade_mode="real")
+    eng.center.bus.set_mode(None, by="dashboard")
+    assert _refreshed(eng, pb) == "propose"                     # the refresh lock
+    eng.cfg.approval_mode = "auto"                              # the refresh layer bypassed: the order check still reads
+    assert not auto_entry.permitted(eng, pd.Timestamp("2025-03-03 08:15", tz="UTC"))
+    assert eng.cfg.approval_mode == "propose" and _actions(eng.decisions)[-1] == "auto_refused"
+
+
+def test_after_clearing_the_re_arm_window_and_the_kill_switch_still_force_propose_on_demo(tmp_path):
+    eng, pb, _ = _engine(tmp_path)
+    eng.center.bus.set_mode(None, by="dashboard")
+    eng._propose_only_until = pd.Timestamp("2030-01-01", tz="UTC")
+    assert _refreshed(eng, pb) == "propose"
+    eng._propose_only_until = None
+    assert _refreshed(eng, pb) == "auto"
+    eng.state.stage = Stage.HALTED
+    assert _refreshed(eng, pb) == "propose"

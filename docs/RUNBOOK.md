@@ -1241,7 +1241,7 @@ a service is running; if one keeps restarting, read its `.err` file in the logs 
 | You (the owner) lost the authenticator | No reset link works for the owner account (a stolen session must not be able to reset it). Login page -> **Use a recovery code** -> email, password and one unused recovery code. Enrol the new authenticator it shows; the old one stops working. Then get 10 fresh codes (`POST /api/auth/recovery/codes` with password + new code; there is no button yet). The old codes stop working. |
 | You lost the authenticator and every recovery code, or the password and the authenticator | On the server: stop `goldbot-api` and ask a Claude session to reset the owner in `state\aux.db`. There is no remote path, by design. |
 | A sign-in says "too many attempts" | Wait 15 minutes after the last failure; the counter is kept in `state\aux.db`, so restarting the API does not clear it. Someone who knows your email can keep it locked this way; the audit log shows the failures and their address. |
-| Re-arm or auto mode says "too many attempts" (Telegram notice: wrong authenticator codes) | Five wrong codes lock re-arm and auto mode (dashboard and Telegram) for 15 minutes; sign-in, **/halt** and **/mode propose** still work. If it was not you, someone holds a signed-in session: on the server, from the goldbot directory, run `python -m goldbot.ops.run revoke-sessions` (signs every account out; add `--state <dir>` if state is elsewhere: it refuses a directory without aux.db), then change your password. Failed sign-ins also lock re-arm and auto mode for the same 15 minutes. |
+| Re-arm or auto mode says "too many attempts" (Telegram notice: wrong authenticator codes) | Five wrong codes lock re-arm and auto mode (dashboard and Telegram) for 15 minutes; sign-in, **/halt**, **/mode propose** and **/mode account** still work. If it was not you, someone holds a signed-in session: on the server, from the goldbot directory, run `python -m goldbot.ops.run revoke-sessions` (signs every account out; add `--state <dir>` if state is elsewhere: it refuses a directory without aux.db), then change your password. Failed sign-ins also lock re-arm and auto mode for the same 15 minutes. |
 | Someone should lose access | Owner: **Users** -> **Disable** (signs them out at once) or **Sign out everywhere**; **Enable** restores the account. The owner cannot be disabled or demoted. |
 
 | You (the owner) want to sign in without typing the password | Login page -> **Email me a sign-in link** -> your email -> **Send the link**. The page always says "If this address can use email sign-in, a link is on its way", whatever address is typed. Open the link on the device you want to sign in on, then enter the **authenticator code**: the link replaces the password, never the code. It works once, for 15 minutes; asking again or using a link cancels the others. At most 3 requests an hour per address and per network address. The option only appears once mail is set up (below). |
@@ -1414,7 +1414,9 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
   Telegram sends "Opened automatically (demo): ..." for each (information only, no buttons). Real-money accounts
   always wait for your click: `approval_mode: auto` on a live account stops the engine at start, and `/mode auto` or
   the dashboard never make a live account automatic. `/mode propose` also returns the demo account to asking you;
-  the 12% kill switch and the 30-day window after a re-arm do too.
+  the 12% kill switch and the 30-day window after a re-arm do too. To let the demo account enter automatically again
+  after `/mode propose`: `/mode account` on Telegram, or "Use each account's setting" on the dashboard's entry-mode
+  card (no code needed; real-money accounts keep asking you; ADR 0041).
 * **Cost probes on demo** (ADR 0037): while `icm-demo` holds no position, the engine may open one 0.01-lot trade that
   copies a challenger's shadow entry, only to measure real costs (slippage, spread, latency, swap). One at a time,
   challengers taken in turn, never chosen by results; a real trade always comes first (an open probe is closed to make
@@ -1438,6 +1440,7 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
 * To switch on: `/mode auto 123456` with your current authenticator code (the dashboard one). It is refused if the
   evidence no longer holds or the code is wrong. Telegram deletes the message with the code.
 * To switch off at any time: `/mode propose` (no code needed), or `/halt` to stop new entries altogether.
+  `/mode account` (no code needed) hands entries back to each account's own setting: demo automatic, real money asks.
 * It switches back to propose-and-approve on its own after a 12% kill switch, and stays propose for the 30 days after
   any re-arm. `/status` shows the current approval mode; every change is in `state\audit.jsonl`.
 

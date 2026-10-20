@@ -4056,7 +4056,8 @@
      "mode": {
       "enum": [
        "auto",
-       "propose"
+       "propose",
+       "account"
       ],
       "title": "Mode",
       "type": "string"
