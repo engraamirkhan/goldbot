@@ -222,6 +222,13 @@ research:
         reason: "gross +0.015 R, t 0.38; same reason as trend" }
     - { family: intraday_momentum, hypothesis_id: R-05, retired: 2026-10-10, trials: [18, 19],
         reason: "NY -0.006 R, London -0.028 R gross; mechanism absent in spot XAUUSD" }
+    # H-48 / H-50 STOP by their pre-registered rules (evaluator 2026-10-19; prereg-2026-10-19-h50-followup.md). The
+    #   roster agents keep shadow-trading on demo as parity/cost monitors (owner directive: the owner's box strategy
+    #   keeps running for learning) with no promotion route; retirement here governs research allocation only
+    - { family: sweep_absorb, hypothesis_id: R-14, retired: 2026-10-19, trials: [88],
+        reason: "H-48 STOP: gross -0.028 R, t -1.17 on 3,210; net -0.552 R; no net-positive year" }
+    - { family: box_break_close, hypothesis_id: R-15, retired: 2026-10-19, trials: [89],
+        reason: "H-50 STOP (15m frozen rule): gross +0.030 R, t 1.61 on 5,684; net -0.297 R; no net-positive year" }
   holdout_from: 2025-10-01           # held-out year: research never sees it; a passing config is scored on it once
   holdout_to: 2026-09-30             #   (scripts/research_pass.py --score-holdout), inclusive
   screen_min_events: 1000            # primary-signal screen (P4): events a rule needs; any screen with fewer events
