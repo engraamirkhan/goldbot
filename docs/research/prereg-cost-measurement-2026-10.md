@@ -1,6 +1,6 @@
 # Pre-registration: measured-cost protocol (microstructure researcher, 2026-10-20)
 
-**Status: written, not run. 0 registry trials, 0 to K, no holdout.** Every reading rule below was fixed at this
+**Status: written, not run. 0 registry trials, 0 to K, no holdout. Amendment 1 (2026-10-20, section 8): M1 as deployed.** Every reading rule below was fixed at this
 file's commit, before the author had read any probe fill, probe P&L or broker-tick aggregate. `aux.db` lives on the
 brain VM. I did not query it, nor `state/ticks/`, nor `state/costs_*.json`. Inputs read: `costs-binding-2026-10-18.md`
 ("CB file"), `preregistration-costs-2026-10-18.md` (CB-0, CB-D1, CB-D2, CB-T1, CB-T2), `atr-measured-2026-10-18.md`,
@@ -260,3 +260,84 @@ proposed"):
 
 Accountable: microstructure researcher. Next check: K7 and K9 on the board by Fri 2026-10-23. First M0 read when
 cells reach n.
+
+## 8. Amendment 1 (2026-10-20): the M1 arm as deployed for demo learning volume
+
+**Dated 2026-10-20, written before any scheduled (M1) fill exists and before I read any probe fill, probe P&L or
+tick aggregate.** Cause: owner directive (hundreds of demo fills by Fri 2026-10-23), shipped on the integration
+branch `feat/demo-learning-volume`. This amendment records the parameters as deployed and what they change in the
+schedule. **The reading rules of section 5 and the withdrawal rule of section 6 are unchanged**, word for word.
+
+**M1 as deployed (replaces the M1 row of section 1 and the M1 slot times of section 2):**
+
+| Parameter | Deployed value | Section 1-2 plan |
+|---|---|---|
+| Cadence | one probe at **every 15m bar close** | 2 fixed `:07`/`:37` slots per bucket a day |
+| Side | alternating +1 / -1 by slot | same |
+| Size | 0.01 lot (1 oz) | same |
+| Stop | server SL **$3** from the fill (safety only) | same |
+| Hold | **30 s on the host clock**, then market close | 30 s |
+| Blackout | no slot **20:45-22:15 UTC**, none **after the Friday cut** | rollover bucket B6 scheduled |
+| Account | **icm-probe only** (`probe_only`, `budget_share 0.9`, daily limit **£30**, so a £27 probe budget) | icm-probe, £20 day, £16 budget |
+| L1 (limit) | **not deployed** | slot + 3 min |
+
+**Mirrored probes on icm-probe (M0).** On a `probe_only` account a mirrored probe holds **min(agent's hold, 4 bars)**.
+Its fills count in M0 exactly as section 1 defines (entry at bar-close timing, stop-exit and TP legs, commission).
+The 4-bar cap means most M0 exits there are time exits at market; only SL exits count toward the stop-exit cell.
+
+**Fills are cost and execution evidence only, never edge evidence.** A 30 s probe on an alternating side has no
+signal. Its P&L is not a return of any strategy, family or timeframe. It is never read as a gross edge, never pooled
+with shadow or real trades, never used to rank, select or rescue a hypothesis, and never cited as "demo performance".
+M0 P&L is likewise not the challenger's performance (its hold is capped). Volume does not change this: a thousand
+cost fills are still zero trials and add 0 to K.
+
+**Per-cell 30-fill stop (decision read).** n is still counted per arm-bucket cell. A cell's **decision read happens
+once, at its 30th fill** (N: provisional at 15, decision at 30). The owner's volume directive keeps the scheduler
+sending after a cell reaches 30, so the section 2 rule "the cell stops scheduling at 30" is suspended for M1. Fills
+after the 30th update the published table and its CIs, labelled `post-decision`, and never re-open the decision
+(section 5, unchanged). Bucket counts steer nothing; a fill's cost steers nothing.
+
+**Bucket assignment (fixed now, because 15m closes now fall in overlapping windows).** A fill belongs to exactly one
+bucket, the first that matches in this order: N, B6, B2, B4, B3, B5, B1. Windows stay in local exchange time
+(section 2).
+
+**What the deployed parameters change, by bucket.** At 4 closes an hour, ignoring the budget:
+
+| Bucket | M1 fills a weekday | ETA to 30 (decision read) | Note |
+|---|---|---|---|
+| B1 Asia | about 28-30 | 1-2 trading days | |
+| B2 London open | 8 | 4 trading days | |
+| B3 London morning | about 12-16 | 2-3 trading days | loses 12:00-12:59 UTC to B4 in the 10-26 to 10-31 gap week |
+| B4 NY morning | about 14-16 | 2-3 trading days | |
+| B5 NY afternoon | 18 | 2 trading days | first to be cut when the budget binds (below) |
+| B6 Rollover | about 2 (16:30 NY close in EDT, reopen side only) | about **15 trading days (about 2026-11-10)** | the pre-break half is almost all inside the 20:45-22:15 UTC blackout, and all of it after 11-01. It stays unmeasured by fills; its spread comes from ticks only |
+| N News | 0 if the RiskGate tier-1 blackout (-15/+30 min) applies to probes | none at this cadence | if probes are not blacked out, the 08:30 and 14:00 ET closes fall **at** the print, not at +60 s. Those fills are labelled `N-at-print` and are never pooled with the +60 s design. The 4-month N plan needs its own slot (later amendment) |
+| L1, all buckets | 0 | none | L1 and the CB-D2 calibration wait for K8 and K12 as before |
+
+**The budget binds before the clock does. This is the main risk to the schedule.** About 86-89 closes a weekday
+remain after the blackout and the daily break. At the planning cost of £0.20-0.65 per round trip, that is an
+expected £17-56 a day against a £27 budget. The risk day starts at 00:00 UTC, so budget runs out in time order:
+B1, B2 and B3 are served first, and B4 and B5 lose fills on wide-spread days. Planning case: by Fri 2026-10-23,
+B1-B3 reach 30 and B4/B5 do so only if the days are cheap; otherwise in the week of 10-26. No cap is raised for
+this; the RiskGate stops probes at the budget as on every account. Recommendation to the research director (code,
+not this file): serve the cells with the fewest fills first once the day's spend passes half the budget, as
+section 2 already specified.
+
+**Deviations that bias costs only upward, and are accepted.**
+- 15m bar-close timing. M1 now sends when every bar-close algorithm sends, as M0 does, not at the quiet `:07` minute.
+  Measured slippage is then an upper bound for an off-close entry. This is consistent with decision 3 (demo
+  slippage only ever raises research cost) and with 15m strategies, which enter at the close anyway.
+- The 30 s hold runs on the host clock. Each leg is still measured against its own quote at send, so clock drift
+  changes the hold length, not the cost measure. The host-minus-server offset is logged per fill where the bridge
+  reports it.
+
+**What M1 fills still cannot give until code lands.** Without K11 (exit quote at send) only the entry leg is read;
+the exit leg is reported as "includes market move". Without K9 (fx at send and close) no commission or swap is read
+from these fills. Without K7 the fills do not reach `probe_costs.json`. K10's intent holds: cost-measurement rows
+never enter the mirrored-probe `max_open` median. On icm-probe its 50% budget split is replaced by the account's own
+£30 day (owner-set account limits, unchanged here).
+
+**Owner decisions (flagged, not assumed):** the icm-probe credentials and terminal, and its £30 daily limit, are
+the owner's. This amendment raises no limit and touches no live account.
+
+Multiple testing: 0 trials, 0 to K, no holdout. Section 6 is still read on 2027-01-29.
