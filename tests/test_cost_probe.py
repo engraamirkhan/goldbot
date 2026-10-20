@@ -586,6 +586,46 @@ def test_a_closed_probe_goes_to_the_probe_ledger_and_never_to_closed_trades_fill
     assert not cost_probe.probes(tmp_path / "False", "icm-demo")
 
 
+class _RosterLong(_Long):
+    """A frozen roster rule agent as the probe sees it (box_break_close / sweep_absorb, retired 2026-10-19 by H-50 /
+    H-48 and still mirrored on demo, ADR 0040): shadow only, one frozen config, a RuleModel in the shadow set."""
+    frozen_config = True
+
+    @property
+    def shadow_only(self) -> bool:
+        return True
+
+
+def test_a_retired_roster_agents_probe_never_reaches_its_shadow_book_closed_trades_or_fills(tmp_path):
+    """ADR 0040: probes keep mirroring the retired roster agents. Their probe P&L must stay out of every evidence path:
+    the agent's shadow book (promotion, tournament, attribution), the closed-trade record and the fills table."""
+    from goldbot.research.rule_model import RuleModel
+    runs = {}
+    for probe in (True, False):
+        d = tmp_path / str(probe)
+        d.mkdir()
+        agent = _RosterLong()
+        eng, pb, tick, close = _engine(d, agents=[agent], probe=probe, data_root=str(d / "data"), champions={})
+        version = next(iter(eng.shadow_models))
+        eng.shadow_models[version] = (agent.agent_id, RuleModel(rule=agent.family))
+        assert cost_probe._mirrorable(eng, version, agent)
+        eng.on_bar_close(close, tick)
+        assert bool(eng.open) is probe and all(cost_probe.is_probe(t.agent_id) for t in eng.open.values())
+        for pid in list(eng.open):
+            eng._try_close(pid, "time_exit", None)
+        eng._flush_closed()
+        assert eng.shadow is not None
+        book = eng.shadow.books[version]
+        runs[probe] = [t.model_dump(mode="json") for t in book.open + book.closed]
+        assert all(not cost_probe.is_probe(t.agent_id) for t in book.open + book.closed)
+        assert load_closed_trades(d)[0] == []
+        fills = Store(d / "data").read("fills") if (d / "data").exists() else pd.DataFrame()
+        assert fills.empty or not fills["agent_id"].astype(str).str.startswith("cost_probe:").any()
+    assert runs[True] == runs[False]
+    [rec] = cost_probe.probes(tmp_path / "True", "icm-demo")
+    assert rec.agent_id == agent.agent_id and rec.exit_utc is not None and rec.pnl is not None
+
+
 def test_the_cost_probes_table_is_an_additive_aux_migration_so_a_rollback_still_opens_aux_db(tmp_path):
     with sqlite3.connect(tmp_path / "aux.db") as conn:
         migrate(conn, "aux")

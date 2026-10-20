@@ -56,6 +56,17 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   approval mode again (demo auto, real money propose). Owner only, audited (`mode`, `to: account`), no TOTP or
   evidence; `/mode auto` keeps both. The ADR 0036 lock, the re-arm window and the kill switch still force propose.
   Fixes a demo account stuck on propose after `/mode propose`. API contract regenerated.
+- H-48 (`sweep_absorb`, #88) and H-50 (`box_break_close` 15m, #89) read STOP and are retired (R-14, R-15 in
+  `research.retired_families` and hypotheses.md section B). H-51a/b lapse.
+  - The roster agents keep running on demo as parity/cost monitors, with no promotion route.
+  - Probes keep mirroring them (ADR 0040), a disclosed deviation from the STOP clause, per the owner's
+    demo-for-learning directive.
+- The H-50 count gap (5,835 trial events vs 2,404 pre-registered) is a counting-convention error in the
+  pre-registration (time-limit block vs label exit). The trial ran the frozen rule.
+- H-53 (`box_break_close` 1h, about 1,625 events) is pre-registered but not dispatched. It is a post-STOP
+  feasibility decision, charged as the 2027Q1 retired-family exploration trial. See
+  `docs/research/prereg-2026-10-19-h50-followup.md`.
+  - The registry and director gaps that would let a retired screened family take more trials are BACKLOG 91.
 - Home live activity feed (owner request 2026-10-19: "no useful information on what is happening"):
   `GET /api/activity?limit=50` (viewer and above, read-only, built at most every 10 s) merges shadow trades opened and
   closed (taken only; state/shadow_book.json, stamped at their bars' close), account positions opened and closed
@@ -99,6 +110,18 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   break-and-close, money flow), same inputs/defaults as `smc_replica`/`mfi_signals`/`box_course`, closed bars only;
   `tests/test_mql5_ports.py` pins the defaults and the file shape. Not compiled (no MetaEditor) and not installed:
   RUNBOOK 2.7e, requires owner approval.
+- Trading-safety (MEDIUM, money path): the direct MT5 adapter now re-checks the terminal's account before every entry,
+  as the bridge does. `MT5Broker(verify=...)` is a required keyword; the engine passes
+  `accounts.verify_terminal_account` for its account, so a terminal switched to another login, server or a real account
+  after start refuses the entry (retcode 10006, "terminal_account_changed: <reason>", logged; an unreadable account or a
+  raising check is "unverifiable" and refused too). Closes and stop changes are never checked (closing only reduces
+  risk; the kill switch closes everything), exactly as GuardedBroker. The bridge (GuardedBroker verifies above it) and
+  the scheduler's read-only broker pass `verify=None`. Tests: tests/test_mt5_order_account_check.py.
+- Follow-up (reviews of d3d091b5): a refused entry for a switched terminal alerts the owner once per streak
+  (`auto_entry.note_refusal` / `note_account_refusal`, on the auto, probe and approval paths; a fill re-arms it; each
+  refusal is journalled `account_refused`); the card, notice and dashboard read "refused by the engine: the MT5
+  terminal is logged in to a different account" (`not_placed`, code `terminal_account_changed`); a test pins the engine
+  building its direct broker with `verify`. BACKLOG 104 holds the remaining LOW (exits/kill switch on a switched terminal).
 - `goldbot run positions [--account <id>] [--json]` (`goldbot/ops/positions.py`): read-only open trades per enabled account without the dashboard login (state files only; same builder as `/api/positions/open`, which now also carries `open_risk`). Over ssh: `bash -lc "goldbot run positions"`. Exit 1 when an orders file or the shadow book is unreadable.
 Known limit: accounts are matched by the digit-cut name (`account_name`), so two configs that differ only inside a 5+ digit run would collide; not handled.
 - Trading-safety MEDIUM on f09e3002 fixed (ADR 0037 amendment 4): a failed engine start (`refuse_start`, unreadable positions read) now writes the account's configured `probe_only` (accounts.yaml / EngineConfig, never the old file) into `engine_<account>.json`, so an icm-probe start error is reported in `probe_engines` and no longer halts the real accounts (`engine_startup_refused`); a real account's start error still halts every engine, the probe's included. Tests: `tests/test_startup_error_exposure.py`.

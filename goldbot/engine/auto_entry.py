@@ -11,7 +11,7 @@ starts (`check_start`), on every account refresh (`locked`, after the owner's /m
 re-arm propose window and the 12% kill switch still force propose on demo; the RiskGate is still the only path to an
 order and exits are never gated.
 
-The post-order bookkeeping (`after_order`, `action`, `note_bridge_refusal`) moved here from runner.py (ADR 0023:
+The post-order bookkeeping (`after_order`, `action`, `note_refusal`, `note_bridge_refusal`) moved here from runner.py (ADR 0023:
 runner.py only shrinks).
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from goldbot.execution.bridge import UNREADABLE_REFUSAL
-from goldbot.execution.broker import OrderResult
+from goldbot.execution.broker import ACCOUNT_REFUSAL, OrderResult
 from goldbot.telegram.entry_text import account_name
 
 if TYPE_CHECKING:
@@ -157,6 +157,41 @@ def after_order(eng: Engine, res: OrderResult | None, gd: GateDecision, prop: Pr
     st.margin_used += gd.margin_needed
     if st.open_risk is not None:
         st.open_risk += gd.risk_amount * lots / gd.lots if gd.lots > 0 else gd.risk_amount
+
+
+def note_refusal(eng: Engine, prop: Proposal, agent: Specialist, res: OrderResult, lots: float) -> None:
+    """After every order (`Engine._execute`: the auto, probe and approval paths): the bridge's ceiling refusal
+    (`note_bridge_refusal`), or the direct terminal's per-order account check (`note_account_refusal`); a fill ends
+    an account-refusal streak, so the next refusal alerts the owner again."""
+    from goldbot.engine.runner import bridge_refused
+    if bridge_refused(res):
+        note_bridge_refusal(eng, prop, agent, res, lots)
+    elif not res.ok and res.message.startswith(ACCOUNT_REFUSAL):
+        note_account_refusal(eng, prop, agent, res)
+    elif res.ok and res.position_id is not None:
+        eng._account_alerted = False
+
+
+def note_account_refusal(eng: Engine, prop: Proposal, agent: Specialist, res: OrderResult) -> None:
+    """Trading-safety follow-up (MT5Broker `verify`): the terminal is no longer on the registered account, so every
+    entry is refused (a definite reject, nothing sent; exits are never checked). Each refusal is journalled
+    (`account_refused`, with the raw reason) and logged; the owner is told once per streak, at its first refusal (a
+    fill ends the streak, `note_refusal`), so a switched terminal never refuses entries silently and never floods the
+    chat. Plain words: the masked account name, never the reason (it names the account) or the proposal id. Best
+    effort: a notice that cannot be queued is logged, never changes the outcome, and is tried again next refusal."""
+    log.warning("order %s refused: %s", prop.proposal_id, res.message)
+    eng.decisions.append({"ts": time.time(), "agent": agent.agent_id, "action": "account_refused",
+                          "proposal": prop.proposal_id, "message": res.message})
+    if eng._account_alerted or eng.center.bus is None:
+        return
+    try:
+        eng.center.bus.notify_owner(
+            f"Entries refused: the MT5 terminal for {account_name(eng.cfg.account_id)} is logged in to a different "
+            f"account. Nothing was sent; open trades keep their stops and exits stay automatic. Entries stay refused "
+            f"until the terminal is back on this account; this alert is not repeated until an entry goes through.")
+        eng._account_alerted = True
+    except Exception as exc:                        # noqa: BLE001 - the refusal stands either way
+        log.warning("account refusal notice not queued (%s)", type(exc).__name__)
 
 
 def note_bridge_refusal(eng: Engine, prop: Proposal, agent: Specialist, res: OrderResult, lots: float) -> None:
