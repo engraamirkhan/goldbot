@@ -55,7 +55,9 @@ def test_engine_auto_mode_places_orders_and_writes_state(tmp_path):
     assert shadow_entries >= len(executed) >= 1 and book.closed
     assert all(t.taken and t.threshold is not None and t.p > t.threshold for t in book.open + book.closed)
     st = PerfStats.model_validate_json((tmp_path / "shadow_session_open-test-v1.json").read_text())
-    assert st.n_trades == len(book.closed)
+    # the summary counts only trades opened at or after the H-52 evidence start (these fixture trades are older)
+    from goldbot.research.promotion import EVIDENCE_START_UTC
+    assert st.n_trades == sum(1 for t in book.closed if t.taken and t.entry_ts >= EVIDENCE_START_UTC)
     assert len(pb.deals_since(pd.Timestamp("2025-01-01", tz="UTC"))) == len(deals)   # shadow placed no orders
 
 
