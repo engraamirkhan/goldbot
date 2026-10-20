@@ -28,7 +28,8 @@ BROKER_RETCODES = sorted(r for r in DEFINITE_REJECT_RETCODES if r > 0)
 
 def _codes() -> list[str]:
     return ([f"broker_refused:{r}" for r in BROKER_RETCODES]
-            + ["broker_refused:10027:paper", "bridge_stale_order", *CEILING_CODES, ACCOUNT_REFUSAL, PRECHECK_REFUSAL])
+            + ["broker_refused:10027:paper", "bridge_stale_order", *CEILING_CODES, ACCOUNT_REFUSAL, PRECHECK_REFUSAL,
+               "terminal_autotrading_off"])
 
 
 def _res(retcode: int, message: str = RAW) -> OrderResult:

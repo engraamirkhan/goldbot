@@ -21,6 +21,7 @@ from typing import Literal
 
 from goldbot.base import FrozenRecord
 from goldbot.execution.bridge import (
+    AUTOTRADING_REFUSAL,
     CEILING_REFUSAL,
     ORDER_MAX_AGE_S,
     STALE_REFUSAL,
@@ -103,6 +104,8 @@ _MT5_BOX: dict[str, tuple[str, str]] = {
     STALE_REFUSAL: (f"it took more than {ORDER_MAX_AGE_S:g} s to check the order, so it dropped it rather than trade "
                     f"on an old price",
                     f"{_ONE_OFF} If it repeats, the MT5 box is overloaded or slow: check the Health tab."),
+    AUTOTRADING_REFUSAL: ("Algo Trading is switched off in the MT5 terminal",
+                          "Restart the MT5 terminal on its box: its start turns Algo Trading on (Health tab)."),
     # incident 2026-10-20: the terminal's own pre-send check failed (MT5Broker.place_order); nothing reached the broker
     PRECHECK_REFUSAL: ("the MT5 terminal's own check before sending refused it",
                        f"{_ONE_OFF} If it repeats, ask Claude to check the MT5 box's log."),
@@ -146,6 +149,8 @@ def refusal_code(res: OrderResult, *, paper: bool, definite: frozenset[int]) -> 
         return ACCOUNT_REFUSAL
     if res.message.startswith(STALE_REFUSAL):
         return STALE_REFUSAL
+    if res.message.startswith(AUTOTRADING_REFUSAL):
+        return AUTOTRADING_REFUSAL
     if res.retcode == RETCODE_PRECHECK_FAILED or res.message.startswith(PRECHECK_REFUSAL):
         return PRECHECK_REFUSAL
     return f"{BROKER_REFUSED}:{res.retcode}{PAPER_SUFFIX if paper and res.retcode == 10027 else ''}"

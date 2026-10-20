@@ -410,3 +410,36 @@ def test_the_root_probe_and_watchdog_know_every_terminal_state_the_bridge_report
     arms = [ln.strip().split(")")[0] for ln in wd.splitlines() if re.match(r"\s+[a-z_|]+\)", ln)]
     handled = {t for arm in arms for t in arm.split("|")}
     assert set(bridge_mod.TERMINAL_STATES) <= handled, set(bridge_mod.TERMINAL_STATES) - handled
+
+
+# ---- trading-safety review MEDIUM (item 2): autotrading_off refuses entries on the box and alerts with open positions
+def _ti(trade_allowed: bool) -> Any:
+    return lambda: type("TI", (), {"connected": True, "trade_allowed": trade_allowed})()
+
+
+def test_an_entry_is_refused_on_the_mt5_box_as_a_definite_reject_while_autotrading_is_off():
+    from goldbot.engine.runner import DEFINITE_REJECT_RETCODES
+    from goldbot.execution.not_placed import not_placed, refusal_code
+    from tests.test_bridge import _order, _pos, _Terminal
+    t = _Terminal(equity=100_000.0, positions=[_pos(0.1)])
+    t.terminal_info = _ti(False)                                   # type: ignore[attr-defined]
+    g = GuardedBroker(t, magic_base=260100)
+    res = g.place_order(_order(0.01))
+    assert not res.ok and res.retcode == bridge_mod.REFUSED_RETCODE and t.sent == []
+    assert res.message.startswith(f"{bridge_mod.AUTOTRADING_REFUSAL}: ")
+    assert res.retcode in DEFINITE_REJECT_RETCODES
+    code = refusal_code(res, paper=False, definite=DEFINITE_REJECT_RETCODES)
+    assert code == bridge_mod.AUTOTRADING_REFUSAL and not_placed(code).by == "mt5_box"   # type: ignore[union-attr]
+    assert g.close(7).ok                                           # closes are never gated by it
+    t.terminal_info = _ti(True)                                    # type: ignore[attr-defined]
+    assert g.place_order(_order(0.01)).ok and len(t.sent) == 1
+
+
+def test_autotrading_off_with_open_positions_is_a_critical_failure_naming_them(tmp_path):
+    (tmp_path / "engine_icm-demo.json").write_text(json.dumps({"open_positions": 2}))
+    c = _check(tmp_path, "autotrading_off")
+    assert c.status == "fail" and c.reason.startswith("CRITICAL: 2 open position(s) on this account cannot be closed "
+                                                      "by goldbot")
+    assert "only their broker stop and target protect them" in c.reason and WORDING["autotrading_off"][1] in c.reason
+    (tmp_path / "engine_icm-demo.json").write_text(json.dumps({"open_positions": 0}))
+    assert _check(tmp_path, "autotrading_off").reason == WORDING["autotrading_off"][1]

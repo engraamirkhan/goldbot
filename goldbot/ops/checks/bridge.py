@@ -67,6 +67,10 @@ def check_terminal(ctx: HealthContext, account_id: str) -> Check | None:
     if state == "ok":
         return Check(name=name, status="ok", reason="MT5 terminal running, logged in to the registered account and "
                      "connected")
+    if state == "autotrading_off" and (n := _open_positions(ctx, account_id)):
+        # trading-safety review: goldbot cannot close anything (time barrier, weekend, kill switch) while it is off
+        return Check(name=name, status="fail", reason=f"CRITICAL: {n} open position(s) on this account cannot be "
+                     "closed by goldbot; only their broker stop and target protect them. " + _TERMINAL_FAIL[state])
     if state in _TERMINAL_FAIL:
         return Check(name=name, status="fail", reason=_TERMINAL_FAIL[state])
     if state == "not_connected":
@@ -80,6 +84,15 @@ def check_terminal(ctx: HealthContext, account_id: str) -> Check | None:
                      "this release): deploy the MT5 box (RUNBOOK 0.5)")
     return Check(name=name, status="warn", reason=f"MT5 terminal state unknown: the bridge does not answer /health "
                  f"(see bridge:{account_id})")
+
+
+def _open_positions(ctx: HealthContext, account_id: str) -> int:
+    """The open positions the engine last published (engine_<account>.json); 0 when unknown."""
+    try:
+        n = _read_json(ctx.state_dir / f"engine_{account_id}.json").get("open_positions")
+    except (ValueError, OSError, AttributeError):
+        return 0
+    return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
 
 
 @register_check("account", block=BLOCK_ACCOUNT, pos=120, pass_account=True)
