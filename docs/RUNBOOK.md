@@ -1952,6 +1952,11 @@ blocked, stops and targets stay with the broker, and nothing is lost by waiting:
   its next attended upgrade (0.5) installs it, do it once by hand, with the watchdog timer stopped:
   `sudo systemctl stop goldbot-bridge-watchdog@<account>.timer goldbot-mt5-terminal@<account> && sudo -u mt5 -H bash /opt/goldbot/goldbot/ops/linux/mt5/mt5-experts-enable.sh && sudo systemctl start goldbot-mt5-terminal@<account> goldbot-bridge@<account> goldbot-bridge-watchdog@<account>.timer`
   (`/opt/goldbot` must be at a commit with the script: `sudo goldbot-deploy latest` first). The check then reads ok.
+- **An entry refused `terminal_precheck_failed: order_check: none: (-2, 'Invalid "comment" argument')`**: the
+  terminal's `order_check` rejected the order comment as over 29 characters (measured 2026-10-20, MetaTrader5 package
+  5.0.6231 under Wine; 30 or more is refused, nothing is sent). goldbot sends at most 29 (`MT5_COMMENT_MAX`), so this
+  means the box runs code from before that fix: `sudo goldbot-deploy latest`. Any other `order_check: none: ...` names
+  the request field the terminal refused.
 - **"not connected to the broker server"**: this is a warning for the first 5 minutes, then a FAIL. Check the box's
   network, then check the terminal's corner indicator over VNC. After 10 minutes the watchdog restarts the terminal.
 - **"logged in to a different account than registered"**: while the terminal is on another account, the bridge
