@@ -47,7 +47,7 @@ from goldbot.research.population import Member, Population
 from goldbot.research.promotion import PerfStats
 from goldbot.risk import adaptive, hwm, limits_profile
 from goldbot.telegram import automode
-from goldbot.telegram.approvals import Outcome, Proposal
+from goldbot.telegram.approvals import AskReason, Outcome, Proposal
 from goldbot.telegram.bus import ApprovalBus
 from goldbot.telegram.digest import STATE_FILE as DIGEST_FILE
 from goldbot.telegram.digest import DigestSchedule, DigestState
@@ -430,7 +430,11 @@ def test_every_persisted_record_model_has_a_compat_case():
                # test_health_reads_a_skew_block_a_newer_engine_wrote
                SkewSummary,
                # state/tv.db pull log: tests/test_tv_pull.py::test_pull_log_rows_a_newer_release_wrote_still_read
-               tv_pull.PassReport, tv_pull.StudyMeta, tv_pull.StudySpec}
+               tv_pull.PassReport, tv_pull.StudyMeta, tv_pull.StudySpec,
+               # engine_<account>.json and approval files `ask_reason` (backlog 103; every field defaults, a missing
+               # reason is None): tests/test_api_ui_contract.py::
+               # test_a_newer_engines_reason_with_an_extra_field_is_read_tolerantly
+               AskReason}
     loaded = {f.model for f in _tolerant_finds() if f.model not in GENERIC_MODEL_ARGS.values()}
     assert loaded - {m.__name__ for m in covered} == set()
 

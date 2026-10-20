@@ -61,6 +61,7 @@ from goldbot.api.schema import (
     TrialRow,
     VetoTestView,
 )
+from goldbot.base import load_record
 from goldbot.config import DriftSettings, Settings, TelegramSettings
 from goldbot.ops.accounts import engine_state_files
 from goldbot.research.registry import costs_recorded
@@ -615,8 +616,8 @@ def _published_reason(e: dict[str, Any]) -> AskReason | None:
     raw = e.get("ask_reason")
     if e.get("mode") != "demo" or not isinstance(raw, dict):
         return None
-    try:
-        return AskReason.model_validate(raw)
+    try:                                    # ADR 0010: a newer engine's extra field is dropped, not fatal
+        return load_record(AskReason, raw, source="engine_<account>.json ask_reason")
     except ValueError:
         return None
 

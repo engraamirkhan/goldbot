@@ -382,3 +382,12 @@ def test_a_real_money_card_with_the_engines_90_second_window_carries_it_and_read
     assert r["window_s"] == 90 and window_words(r["window_s"]) == "90 s"
     created, expires = r["created"], pd.Timestamp(r["expires_at"]).timestamp()
     assert expires - created == pytest.approx(90)
+
+
+def test_a_newer_engines_reason_with_an_extra_field_is_read_tolerantly(tmp_path, enabled_accounts):
+    """ADR 0010: persisted state is read tolerantly; a field a newer engine adds never hides the reason."""
+    enabled_accounts("icm-demo")
+    _engine(tmp_path, ask_reason={"kind": "owner_propose", "until": None, "terminal": None, "added_later": 1})
+    c, h = _client(tmp_path)
+    [acct] = c.get("/api/automode", headers=h).json()["accounts"]
+    assert acct["ask_reason"]["kind"] == "owner_propose"
