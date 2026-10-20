@@ -237,3 +237,10 @@ question is answered by the research trials (H-48, H-50), not by the shadow P&L.
   - re-scoring R-06 tsmom 1h/4h under cheaper measured costs (the DSR bar);
   - 1h/4h box rules as standalone trials (below the event floor);
   - reading any shadow trade opened before the history-gap fix.
+
+## Erratum (research director, 2026-10-19, after the H-50 verdict)
+
+The "one at a time" counts in H-50, H-51 and section 4 (15m 2,404; 30m 1,444; 1h 907; 4h 319) hold each slot for
+the full time limit. The research pipeline and the shadow book free the slot at the label exit, which gives 5,835 /
+3,037 / 1,625 / 436. The H-50 trial ran the frozen rule, and its STOP stands. The "1h/4h below the event floor"
+statement is wrong for 1h. See `prereg-2026-10-19-h50-followup.md` s.2. The text above is left as pre-registered.
