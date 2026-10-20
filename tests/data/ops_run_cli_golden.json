@@ -229,6 +229,10 @@
    },
    "target": "goldbot.ops.setup_wizard:main"
   },
+  "shadow-report": {
+   "exit": 0,
+   "printed_usage": false
+  },
   "sizing-feasibility": {
    "args": {
     "argv": [
@@ -410,6 +414,10 @@
   "setup": {
    "rc": 0,
    "stdout": "usage: goldbot run setup [-h] [--account ACCOUNT]\n\nGuided setup of secrets and server settings.\n\noptions:\n  -h, --help         show this help message and exit\n  --account ACCOUNT  the MT5 account this server trades (default icm-demo)\n"
+  },
+  "shadow-report": {
+   "rc": 0,
+   "stdout": "usage: goldbot run shadow-report [-h] [--since SINCE] [--account ACCOUNT] [--include-quarantined]\n                                 [--json] [--state-dir STATE_DIR]\n\nShadow book, cost probes and engine history-gap/guard state, read-only (state files).\n\noptions:\n  -h, --help            show this help message and exit\n  --since SINCE         only rows opened at or after this ISO timestamp (UTC if no zone)\n  --account ACCOUNT     one enabled account id (default: every enabled account)\n  --include-quarantined\n                        also show trades opened before the evidence start (H-52), marked\n  --json                print the report as JSON\n  --state-dir STATE_DIR\n"
   },
   "sizing-feasibility": {
    "rc": 0,

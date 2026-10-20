@@ -1,0 +1,5 @@
+id: R73
+requirement: Operator can read the shadow book, cost-probe ledger and engine history-gap/guard state without state-directory access, with the H-52 evidence cut applied by default
+status: in review (code + security review pending)
+code: goldbot/ops/shadow_report.py, goldbot/ops/commands/ops.py
+test: tests/test_ops_shadow_report.py

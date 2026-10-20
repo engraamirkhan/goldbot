@@ -13,6 +13,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (quant ruling 1). Walk-forward's dead embargo branch is removed and documented as a no-op (F9). The default-rule
   golden (`tests/data/tercile_default_golden.json`) was re-captured: walk-forward p moved by at most 0.021 with no
   selection flipped, CPCV paths took 2,378 trades instead of 2,325. Recorded verdicts are not re-read. Needs quant review.
+- `goldbot run shadow-report [--since ISO] [--account id] [--include-quarantined] [--json]` (goldbot/ops/shadow_report.py): read-only view of shadow trades per agent (entry/exit UTC, side, R gross, exit reason), the cost-probe ledger (requested vs fill, spread, commission, round trip $/oz) and each engine's history_gap / guard state; trades opened before EVIDENCE_START_UTC are hidden unless --include-quarantined (then marked). Accounts masked; no writes, no bridge calls.
 - Owner directive 2026-10-19 (more demo learning trades): `box_break_close` also runs on 30m (shadow roster amendment
   2026-10-19b, docs/research/shadow-roster-2026-10-19.md; roster 4 of 40, K +1). 30m is a known timeframe end to end
   (`TF_SECONDS`, store table `bars_30m`, release resample `HIGHER_TFS`, scripts/build_bars.py); time exit 72 bars
