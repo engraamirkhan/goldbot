@@ -144,8 +144,14 @@ The terminal unit starts every terminal with **AutoTrading on**: before each sta
 runs `/usr/local/libexec/goldbot/mt5-experts-enable.sh` as mt5, which sets the `[Experts]` keys of `Config/common.ini`
 (`AllowDllImport=0 Enabled=1 Account=1 Profile=1 Chart=0 Api=0 WebRequest=0`, the icm-demo terminal's own) while no
 terminal runs, backs the file up to `~mt5/mt5-common-backup-<UTC>.ini` when it changes it, and leaves it alone when they
-are set. A terminal with AutoTrading off refuses every order (10027): the bridge's `/health` then says
-`autotrading_off` (see "Terminal down"). Incident 2026-10-20: icm-probe's common.ini had no `[Experts]` section.
+are set. A terminal with AutoTrading off refuses every order (10027): the bridge refuses entries itself
+(`terminal_autotrading_off`) and its `/health` says `autotrading_off` (see "Terminal down"). Incident 2026-10-20:
+icm-probe's common.ini had no `[Experts]` section. **Any terminal restart (crash, watchdog, reboot, deploy) turns
+AutoTrading back on, so switching it off by hand in the terminal is not a lasting stop**: to stop trading use `/halt`
+(or **Halt new entries** on the Overview); the kill switch closes everything. This script, the bridge probe and the
+watchdog are root-owned copies that `goldbot-deploy` does NOT update (it never installs root-run code from the mt5
+tree): a box picks up new ones only through `mt5-box-upgrade install` (0.5) or a rebuild. A newer bridge's unknown
+`/health` token is logged by an older watchdog and never acted on.
 
 **B6, login to the box** (from the Mac, one line; `export` writes to a pipe only):
 `ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-brain goldbot accounts export mt5-login-icm-probe | ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-mt5-probe goldbot-mt5 accounts set mt5-login-icm-probe --stdin`
@@ -1925,8 +1931,10 @@ blocked, stops and targets stay with the broker, and nothing is lost by waiting:
   answers what it can. Orders still fail the account check on every send.
 - **"AutoTrading is off: the terminal refuses every order (10027)"** (`autotrading_off`): the terminal is on the
   registered account and connected, so reads and closes are served, but its AutoTrading (Algo Trading) button is off
-  and it refuses every order and close with 10027. The watchdog logs it and never restarts for it (it does not
-  override a button switched off by hand). Restart the terminal unit; its start turns AutoTrading on (0.3b B4):
+  and it refuses every order and close with 10027 (the bridge refuses entries first, `terminal_autotrading_off`).
+  goldbot cannot close anything meanwhile (time exits, Friday cut, kill switch): with open positions the check reads
+  **CRITICAL** and only their broker stop and target protect them, so act at once. The watchdog logs it and never
+  restarts for it. Restart the terminal unit; its start turns AutoTrading on (0.3b B4):
   `sudo systemctl restart goldbot-mt5-terminal@<account>` (the bridge restarts with it). If the token stays, the box
   predates the script: `sudo journalctl -u goldbot-mt5-terminal@<account> -n 20` shows no `AutoTrading:` line. Until
   its next attended upgrade (0.5) installs it, do it once by hand, with the watchdog timer stopped:
