@@ -28,7 +28,7 @@ Design rules this command keeps: "RiskGate is the only path to an order", "the o
    owner alert. The order is never sent again.
 
 X7 departure (TRACEABILITY): no `pending_orders` row (the engine's table). The client order id is
-`<account>-<epoch_ns>-smoke`, its last 31 characters the order comment (as the engine's), and the look-ups above find
+`<account>-<epoch_ns>-smoke`, its last MT5_COMMENT_MAX (29) characters the order comment (as the engine's), and the look-ups above find
 the order by magic and comment instead.
 
 Exit codes: 0 round trip done; 1 failed without risk left (broker rejected, or stop/target missing and closed); 2 not
@@ -56,6 +56,7 @@ from goldbot.config import tf_seconds
 from goldbot.data.calendar import SessionTable
 from goldbot.data.timeutil import epoch_ns, server_wall
 from goldbot.execution.broker import (
+    MT5_COMMENT_MAX,
     SMOKE_MAGIC_OFFSET,
     AccountInfo,
     OrderIntent,
@@ -96,7 +97,7 @@ SEND_SLACK_S = 30.0             # LOW-5: a rewritten comment is matched by magic
 ENTRY_IN, ENTRY_OUT = 0, (1, 2, 3)       # MT5 DEAL_ENTRY_IN; OUT, INOUT, OUT_BY (as goldbot/ops/ledger.py)
 BARS_TF, BARS_N = "1m", 5
 SMOKE_AGENT = "bridge-smoke"    # the approval card's agent: not a model, so p and EV are shown as 0
-COMMENT_LEN = 31                # MT5's order comment limit (the engine's comment is `cid[-31:]` too)
+COMMENT_LEN = MT5_COMMENT_MAX   # MT5's order comment limit, 29 (the engine's comment is `cid[-29:]` too)
 FILLED = 10009                  # TRADE_RETCODE_DONE
 
 # S2: every AccountState field and where smoke_state reads it; a constant names its reason. tests/test_smoke.py keeps

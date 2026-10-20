@@ -18,7 +18,15 @@ import pytest
 
 from goldbot.config import HeatSettings, Tier2Blackout
 from goldbot.execution.bridge import BridgeUnavailable
-from goldbot.execution.broker import AccountInfo, OrderIntent, OrderResult, Position, SymbolInfo, Tick
+from goldbot.execution.broker import (
+    MT5_COMMENT_MAX,
+    AccountInfo,
+    OrderIntent,
+    OrderResult,
+    Position,
+    SymbolInfo,
+    Tick,
+)
 from goldbot.ops import smoke
 from goldbot.ops.accounts import Account
 from goldbot.ops.bridge_compat import BridgeCompat
@@ -258,7 +266,7 @@ def test_prints_masked_login_server_balance_and_tick_then_opens_and_closes_the_m
     assert rep.login == "****567" and rep.balance == 1000.0
     assert _done(w)[0]["outcome"] == "APPROVED" and _done(w)[0]["agent_id"] == "bridge-smoke"
     cid = w.broker.sent[0].client_order_id
-    assert cid.startswith("icm-demo-") and cid.endswith("-smoke") and w.broker.sent[0].comment == cid[-31:]
+    assert cid.startswith("icm-demo-") and cid.endswith("-smoke") and w.broker.sent[0].comment == cid[-MT5_COMMENT_MAX:]
 
 
 def test_full_login_never_appears_in_the_output(w):
@@ -812,7 +820,7 @@ def test_a_bridge_on_another_commit_refuses_exit_4(w):
     assert "MT5 box" in "\n".join(w.out)
 
 
-def _run_a_deals(pid: int = 900, comment: str = "icm-demo-1793008790000000000-smoke"[-31:]) -> list[dict[str, Any]]:
+def _run_a_deals(pid: int = 900, comment: str = "icm-demo-1793008790000000000-smoke"[-MT5_COMMENT_MAX:]) -> list[dict[str, Any]]:
     """An earlier smoke (run A) that entered and closed seconds before this run's send."""
     return [{"ts_utc": T0 - pd.Timedelta(seconds=10), "position_id": pid, "magic": SMOKE_MAGIC, "comment": comment,
              "entry": 0, "type": 0, "volume": 0.01, "price": 2400.0},

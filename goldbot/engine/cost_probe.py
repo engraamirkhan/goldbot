@@ -988,14 +988,15 @@ def hold_exits(eng: Engine, now: pd.Timestamp) -> None:
 
 
 def _scheduled_order_id(eng: Engine, close_ts: pd.Timestamp) -> str:
-    """`cm-sched-<slot epoch s>-<hash>`: 30 characters, the whole id fits MT5's 31-character comment."""
+    """`cm-sched-<slot epoch s>-<8 hex>`: 28 characters, the whole id fits MT5's 29-character comment
+    (MT5_COMMENT_MAX; a 30-character id made order_check return None, incident 2026-10-20)."""
     import hashlib
-    h = hashlib.sha1(f"{eng.cfg.account_id}|{SCHEDULED_ID}|{close_ts.isoformat()}".encode()).hexdigest()[:10]
+    h = hashlib.sha1(f"{eng.cfg.account_id}|{SCHEDULED_ID}|{close_ts.isoformat()}".encode()).hexdigest()[:8]
     return f"{SCHEDULED_COMMENT}{int(close_ts.timestamp())}-{h}"
 
 
 def _probe_order_id(eng: Engine, tag: str, close_ts: pd.Timestamp) -> str:
-    """`cp-<close epoch s>-<hash>`: 24 characters, so the whole id (with its `cp-`) fits MT5's 31-character comment."""
+    """`cp-<close epoch s>-<hash>`: 24 characters, so the whole id (with its `cp-`) fits MT5's 29-character comment (MT5_COMMENT_MAX)."""
     import hashlib
     h = hashlib.sha1(f"{eng.cfg.account_id}|{tag}|{close_ts.isoformat()}".encode()).hexdigest()[:10]
     return f"{COMMENT}{int(close_ts.timestamp())}-{h}"

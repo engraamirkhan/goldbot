@@ -54,6 +54,7 @@ from goldbot.data.timeutil import server_to_utc, server_wall
 from goldbot.execution.broker import (
     ACCOUNT_REFUSAL,
     DEFINITE_REJECT_RETCODES,
+    MT5_COMMENT_MAX,
     PRECHECK_REFUSAL,
     RETCODE_PRECHECK_FAILED,
     AccountInfo,
@@ -410,7 +411,7 @@ class MT5Broker:
             "action": mt5.TRADE_ACTION_DEAL, "symbol": intent.symbol, "volume": intent.lots,
             "type": mt5.ORDER_TYPE_BUY if intent.side > 0 else mt5.ORDER_TYPE_SELL, "price": price,
             "sl": intent.sl, "tp": intent.tp, "deviation": intent.deviation_points, "magic": intent.magic,
-            "comment": intent.comment[:31], "type_time": mt5.ORDER_TIME_GTC, "type_filling": self._filling(intent.symbol),
+            "comment": intent.comment[:MT5_COMMENT_MAX], "type_time": mt5.ORDER_TIME_GTC, "type_filling": self._filling(intent.symbol),
         }
         for attempt in range(3):
             chk = mt5.order_check(req)
