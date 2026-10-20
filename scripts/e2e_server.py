@@ -86,14 +86,15 @@ def install_email_code_key() -> None:
 
 def seed_proposals(state: str) -> None:
     """Two proposals as an engine would publish them to the approval bus (backlog 103): the long on a real-money
-    account with the engine's own 90 s window (risk in the account currency, sized by the minimum-lot exception), the
-    short on a demo account forced to ask by the re-arm lock, with a 60-minute window and USD risk only (as an older
-    engine's money). Seeded last, just before the server starts, so the 90 s card is still open when the approval
-    story reaches it."""
+    account (risk in the account currency, sized by the minimum-lot exception), the short on a demo account forced to
+    ask by the re-arm lock, with USD risk only (as an older engine's money). Both keep a 60-minute window (review
+    MEDIUM): the browser expires a card from `expires_at` on its own clock, and server start, first run and sign-in
+    take longer than the engine's 90 s, so a 90 s card would close before the approval story reaches it. The 90 s
+    words are unit-tested (tests/test_api_ui_contract.py, tests/test_card_account_mode.py)."""
     bus = ApprovalBus(state)
     now = time.time()
     cards: dict[str, dict[str, Any]] = {
-        "e2e-long": dict(account_id="icm-live", account_mode="live", window_s=90, currency="GBP", risk_amount=8.2,
+        "e2e-long": dict(account_id="icm-live", account_mode="live", window_s=3600, currency="GBP", risk_amount=8.2,
                          risk_fraction=0.0082, min_lot_exception=True, risk_normal=0.005, risk_cap=0.01),
         "e2e-short": dict(account_id="icm-demo", account_mode="demo", window_s=3600,
                           ask_reason=AskReason(kind="rearm_lock", until=now + 30 * 86400))}
@@ -219,7 +220,7 @@ def main() -> None:
     seed_store(str(Path(state) / "data"))
     seed_health_research(state)
     seed_automode(state)
-    seed_proposals(state)                                         # last: the 90 s window starts as late as it can
+    seed_proposals(state)
     mail, mailer, codes, outbox = None, None, None, None
     if args.fake_mailer:
         # refused (E2EMailerRefused) unless the flag is set and args.host, the address uvicorn binds below, is loopback

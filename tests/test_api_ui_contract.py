@@ -337,7 +337,10 @@ def test_the_research_endpoint_serves_the_summary(research_state):
 
 
 # ---------------------------------------------------------------------------------------------- the e2e seed
-def test_the_e2e_seed_has_a_90_second_real_money_card_and_a_demo_card_forced_to_ask(tmp_path):
+def test_the_e2e_seed_has_a_real_money_card_and_a_demo_card_forced_to_ask_both_open_for_the_whole_run(tmp_path):
+    """Review MEDIUM: the browser expires a card from `expires_at` on its own clock, so a 90 s seed card closes before
+    the approval story reaches it (server start, first run and sign-in take longer) and a retry cannot help. Both
+    cards keep 60 minutes; the 90 s words are held by the unit tests below and in test_card_account_mode."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("e2e_server_seed", Path(__file__).parents[1] / "scripts" / "e2e_server.py")
     assert spec is not None and spec.loader is not None
@@ -346,7 +349,7 @@ def test_the_e2e_seed_has_a_90_second_real_money_card_and_a_demo_card_forced_to_
     mod.seed_proposals(str(tmp_path))
     cards = _cards(tmp_path)
     live, demo = cards["e2e-long"], cards["e2e-short"]
-    assert (live["account_mode"], live["window_s"], live["ask_reason"]) == ("live", 90, None)
+    assert (live["account_mode"], live["window_s"], live["ask_reason"]) == ("live", 3600, None)
     assert (demo["account_mode"], demo["window_s"], demo["ask_reason"]["kind"]) == ("demo", 3600, "rearm_lock")
 
 
@@ -370,3 +373,12 @@ def test_without_settings_the_entry_mode_window_is_unknown_not_a_guessed_90(tmp_
     assert explain.automode_view(tmp_path, None, True).window_s is None
     settings = load_settings()
     assert explain.automode_view(tmp_path, settings, True).window_s == settings.risk.approval_window_seconds
+
+
+def test_a_real_money_card_with_the_engines_90_second_window_carries_it_and_reads_90_s(tmp_path):
+    from goldbot.telegram.approvals import window_words
+    ApprovalBus(tmp_path).publish(_prop(account_id="icm-live", account_mode="live", window_s=90))
+    r = _cards(tmp_path)["icm-1-a"]
+    assert r["window_s"] == 90 and window_words(r["window_s"]) == "90 s"
+    created, expires = r["created"], pd.Timestamp(r["expires_at"]).timestamp()
+    assert expires - created == pytest.approx(90)
