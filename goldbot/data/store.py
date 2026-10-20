@@ -172,12 +172,7 @@ class Store:
     def _write_atomic(pdir: Path, df: pd.DataFrame) -> None:
         name = f"part-{uuid.uuid4().hex[:8]}.parquet"
         tmp = pdir / f".{name}.tmp"           # not *.parquet: invisible to readers until renamed
-        table = pa.Table.from_pandas(df, preserve_index=False)
-        # an all-None object column becomes Arrow null: a NULL-typed column on disk breaks the scan of later parts
-        for i, field in enumerate(table.schema):
-            if pa.types.is_null(field.type):
-                table = table.set_column(i, field.name, table.column(i).cast(pa.string()))
-        pq.write_table(table, tmp, compression="zstd")
+        pq.write_table(pa.Table.from_pandas(df, preserve_index=False), tmp, compression="zstd")
         fd = os.open(tmp, os.O_RDONLY)
         try:
             os.fsync(fd)

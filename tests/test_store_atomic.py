@@ -113,9 +113,17 @@ def test_read_unions_parts_when_first_part_has_all_null_column(tmp_path: Path) -
     assert pd.isna(out["agent_id"].iloc[0]) and out["agent_id"].iloc[1] == "a1"
 
 
-def test_writer_never_lands_a_null_typed_column(tmp_path: Path) -> None:
-    import pyarrow.parquet as pq
-
-    Store(tmp_path).append("decisions", _dec("2026-10-01", None), source="icm-probe", dedupe=False)
-    f = next(tmp_path.rglob("*.parquet"))
-    assert str(pq.read_schema(f).field("agent_id").type) == "string"
+@pytest.mark.parametrize("later", [[1.5], ["s"]])
+def test_all_none_part_unions_with_later_typed_part(tmp_path: Path, later: list) -> None:
+    st = Store(tmp_path)
+    for ts, vals in (("2026-10-01", [None]), ("2026-10-02", later)):
+        pdir = st.partition_dir("decisions", "icm-probe", "XAUUSD", pd.Timestamp(ts, tz="UTC"))
+        pdir.mkdir(parents=True, exist_ok=True)
+        df = pd.DataFrame({"ts_utc": [pd.Timestamp(ts, tz="UTC")], "x": vals})
+        st._write_atomic(pdir, df)
+    out = st.read("decisions", source="icm-probe")
+    assert pd.isna(out["x"].iloc[0])
+    if isinstance(later[0], float):
+        assert out["x"].dtype == "float64" and out["x"].iloc[1] == 1.5
+    else:
+        assert pd.api.types.is_string_dtype(out["x"]) and out["x"].iloc[1] == "s"
