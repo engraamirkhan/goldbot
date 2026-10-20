@@ -17,6 +17,30 @@ SMOKE_MAGIC_OFFSET = 99
 # the message prefix of an entry MT5Broker's per-order account check refused (retcode 10006, a definite reject): the
 # terminal is no longer on the registered account. The engine alerts on it and the card says the engine refused it
 ACCOUNT_REFUSAL = "terminal_account_changed"
+# MT5Broker.place_order: the terminal's order_check refused the request or returned None, so order_send was never
+# called. Negative (no MT5 trade-server code is) and distinct from -1 (a send that may have reached the server)
+RETCODE_PRECHECK_FAILED = -2
+PRECHECK_REFUSAL = "terminal_precheck_failed"
+
+# MT5 trade-server retcodes that mean the order was definitely NOT placed, listed one by one (review LOW-1: only
+# defined codes; 10037 does not exist): 10004 requote, 10006 reject, 10007 cancelled by trader, 10013-10022 invalid
+# request / volume / price / stops, trade disabled, market closed, no money, prices changed, no quotes, invalid
+# expiration, 10024-10030 too many requests, no changes, autotrading off (server, client), locked, frozen, invalid
+# filling, 10032 only real accounts, 10033-10036 order and volume limits, invalid order type, position closed,
+# 10038-10046 close volume, close order exists, position limit, reject cancel, long / short / close only, FIFO, hedge
+# prohibited; the paper broker's duplicate refusal is 10027. Anything else that is not a fill (-1 send failed, 10008
+# placed, 10010 partial, 10011 processing error, 10012 timeout, 10023 order state changed, 10031 no connection, any
+# undefined or future code) is ambiguous: auto entries stop for the rest of that bar close (trading-safety review HIGH).
+# RETCODE_PRECHECK_FAILED: the terminal's own order_check refused it or returned None, BEFORE any send (incident
+# 2026-10-20, trading-safety ruling): definite, whatever MT5 code it came with; a None from order_send stays -1.
+DEFINITE_REJECT_RETCODES = frozenset({
+    RETCODE_PRECHECK_FAILED,
+    10004, 10006, 10007,
+    10013, 10014, 10015, 10016, 10017, 10018, 10019, 10020, 10021, 10022,
+    10024, 10025, 10026, 10027, 10028, 10029, 10030,
+    10032, 10033, 10034, 10035, 10036,
+    10038, 10039, 10040, 10041, 10042, 10043, 10044, 10045, 10046,
+})
 
 
 class Tick(Record):

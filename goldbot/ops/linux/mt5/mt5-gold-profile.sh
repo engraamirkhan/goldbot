@@ -25,28 +25,8 @@ if [ -z "${SKIP_RUNNING_CHECK:-}" ] && pgrep -u "$(id -u)" -f '[t]erminal64[.]ex
   die "terminal64.exe is running: stop it first (it rewrites these files on exit)"
 fi
 
-to_mt5() {  # to_mt5 <utf8-src> <dst>: UTF-16LE + BOM + CRLF, written atomically
-  local tmp
-  tmp=$(mktemp "$2.XXXXXX")
-  { printf '\xff\xfe'; sed 's/$/\r/' "$1" | iconv -f UTF-8 -t UTF-16LE; } >"$tmp"
-  mv -f "$tmp" "$2"
-}
-
-set_ini() {  # set_ini <file> <section> <key> <value>: set key in section (added at the section end if missing)
-  local f=$1 sec=$2 key=$3 val=$4 u tmp
-  u=$(mktemp)
-  iconv -f UTF-16 -t UTF-8 "$f" | tr -d '\r' >"$u"
-  awk -v sec="[$sec]" -v key="$key" -v val="$val" '
-    function flush() { if (insec && !done) { print key "=" val; done = 1 } }
-    /^\[/ { flush(); insec = ($0 == sec) }
-    insec && index($0, key "=") == 1 { if (!done) print key "=" val; done = 1; next }
-    { print }
-    END { flush(); if (!done) { print sec; print key "=" val } }' "$u" >"$u.new"
-  tmp=$(mktemp "$f.XXXXXX")
-  { printf '\xff\xfe'; sed 's/$/\r/' "$u.new" | iconv -f UTF-8 -t UTF-16LE; } >"$tmp"
-  rm -f "$u" "$u.new"
-  mv -f "$tmp" "$f"
-}
+# shellcheck source-path=SCRIPTDIR source=mt5-ini.sh
+. "$HERE/mt5-ini.sh"   # to_mt5, set_ini
 
 case "${1:-}" in
   apply)
