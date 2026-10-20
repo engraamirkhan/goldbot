@@ -94,7 +94,7 @@ accounts:
     approval_mode: auto       # ADR 0036 (demo); probes are sent only in auto
     # the account type is measured by the classifier (null = not declared: entries wait for a measured class)
     account_class: null
-    cost_probe: { enabled: true, budget_share: 0.9, max_open: 4, max_loss: 4.0 }   # ADR 0037 amendment 4
+    cost_probe: { enabled: true, budget_share: 0.9, max_open: 4, max_loss: 4.0, scheduled: { enabled: true } }   # ADR 0037 am. 4 + 5 (owner-approved 2026-10-20: scheduled M1 probes)
     shadow_host: true         # counts only once enabled: then icm-demo must drop its own flag
     # never a real trade: no live agents, and the engine refuses any entry that is not a cost probe (fail closed)
     probe_only: true
