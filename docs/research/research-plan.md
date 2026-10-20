@@ -20,7 +20,9 @@ changes the Q1 2027 pre-registration.** Every number about the account is ADR 00
 |---|---|---|
 | Strategies that passed the research gates | **0** | hypotheses.md B (R-01..R-07): every Q4 2026 family had no gross edge or a gross edge smaller than its costs |
 | Best gross edge found | tsmom 1h/4h, +0.06 R (t 2.6 / 2.4); net −0.079 R (1h), −0.014 R (4h, before swap) | SoA header, R-06 |
-| Trial budget | Q4 2026 spent 20/20; Q1 2027: 8 reserved (4 queued rows + 4 contingent H-02 survivor slots; H-06 withdrawn 2026-10-16), 12 open under the E-5 cap | hypotheses.md C, settings `research.reserved_trials_quarter: "2027Q1": 8` (corrected 2026-10-17; was 13) |
+| Trial budget | Q4 2026 **closed at 55/55** (owner override; #88 H-48 STOP and #89 H-50 STOP were the last two). Q1 2027: **6 reserved** (program decision 2026-10-20: H-02 + C4H queued + 4 contingent H-02 survivor slots; H-01 and H-04 ran in the Q4 batch as #48 and #44, H-06 withdrawn 2026-10-16), **14 open** under the E-5 cap | hypotheses.md C; settings still say `"2027Q1": 8` until the reviewed change owed by 2026-10-27 (section 11.1) |
+| True trial count K | **111** (2026-10-20): 89 trial rows + 21 screens of discovery #69 = 110 by the registry's own count, + 1 for H-49 stage 1's 0-trial look (K_eff +1, pre-registered, never written to the registry). H-53 is read at K ≥ 112; O-2/O-3 at K ≥ 113 | evaluator audit s.1 (audit file dated 10-23, read 10-20), ml-leakage-audit F5, strategy-researcher 2026-10-20 |
+| Forward (shadow/live) evidence | **No H-52-admissible number exists.** The parity job (rollout 5b) is not on main and `perf_report` applies neither the 13:49 UTC quarantine nor parity; demo fills are cost and execution evidence only, never edge | evaluator audit s.3, performance-analyst 2026-10-20 |
 | Account | £1,000 GBP demo (IC Markets SC), read from MT5 | ADR 0004 |
 | What can trade at £1,000 | **15m only**, one 0.01 lot (£8.20 = 0.82% per R), and only after BACKLOG 28 (currency fix) and 25 (min-lot exception), on a Raw-spread account, while ATR(15m) ≤ ~$8.87 | ADR 0004 §2, OD §0 |
 | Positions at once | 1 (combined-notional cap) | ADR 0004 §2 |
@@ -74,7 +76,7 @@ research when the deposit plan brings M2 within reach.** Deposits, not returns, 
 
 ## 4. The ranked agenda
 
-Status as of 2026-10-10. "Rank" is the unified north-star rank now used in `hypotheses.md` (section A3 gives the
+Status as of 2026-10-10; **re-ranked 2026-10-20 in section 11.4** (1-5: H-16, H-13, H-19, H-17, H-14; H-28 withdrawn, H-24 lapsed, H-54 added). "Rank" is the unified north-star rank now used in `hypotheses.md` (section A3 gives the
 reasons for each change). Q1 2027's running order is fixed by its pre-registration and is not changed by this rank.
 
 | Rank | ID | Item | TF | Tradeable at | KPI it serves | Evidence | Trial cost | Where it runs |
@@ -129,7 +131,7 @@ demo this year. Both lanes are kept: Q1 already funds the slow lane; Q2 funds th
 | Quarter | Trials | Content | Status |
 |---|---|---|---|
 | Q4 2026 | 20/20 | Primary-signal screens of the original families | spent; all retired or failed (R-01..R-07) |
-| Q1 2027 | 8 reserved (4 queued + 4 H-02 survivor slots; H-06 withdrawn 2026-10-16) + 12 open (E-5 cap) | Queued: H-02, H-01, H-04, tsmom 4h continuity; Q1 survivor rows. **Open-budget round (2026-10-17):** H-16 (1), H-17 V0/V1 (2), H-14 (1) + ≤ 2 survivors, each only if its inputs land in time; H-24 and H-04 model research only if H-04 continues; a holdout scoring; 3 free reserve. H-13/H-19 overlays; H-A/H-B/H-C 0-trial. **Lane asks (2026-10-17):** scalping O-4 only, with its cost withdrawal rule (0.35 R); intraday 0 trials (H-24 pinned at the 09:00 New York bar close); swing 0 trials | draft, freeze by 2027-01-01 (`preregistration-2027Q1.md`, "Q1 open-budget round") |
+| Q1 2027 | 6 reserved (2 queued: H-02, C4H + 4 H-02 survivor slots; H-01/H-04 ran in Q4, H-06 withdrawn; amended 2026-10-20, section 11.1) + 14 open (E-5 cap: 7 live conditional rows + H-53 + 6 free reserve; O-7/O-8 impossible after H-04's STOP) | Queued: H-02, tsmom 4h continuity (H-01 and H-04 ran in Q4 as #48 and #44); Q1 survivor rows. **Open-budget round (2026-10-17):** H-16 (1), H-17 V0/V1 (2), H-14 (1) + ≤ 2 survivors, each only if its inputs land in time; H-24 and H-04 model research only if H-04 continues; a holdout scoring; 6 free reserve (was 3; section 11.5). H-13/H-19 overlays; H-A/H-B/H-C 0-trial. **Lane asks (2026-10-17):** scalping O-4 only, with its cost withdrawal rule (0.35 R); intraday 0 trials (H-24 pinned at the 09:00 New York bar close); swing 0 trials | draft, freeze by 2027-01-01 (`preregistration-2027Q1.md`, "Q1 open-budget round") |
 | Q2 2027 | 4 planned + 3 conditional + 6 Q1 follow-up reserve + 7 free reserve | H-16, H-17 V0/V1, H-14 (+ ≤ 2 survivors) **only for the rows that did not run in Q1** (2026-10-17); H-18 if ruled; follow-ups of Q1 verdicts; H-13 and H-19 overlays. **Lane asks (2026-10-17), each from the free reserve by a written note and conditional:** IC-5 Asia→London continuation (1h; only if H-04 or H-24 continues) and SW-0 1d swing feature discovery (K_eff ≈ 16; swing is context features and retirements only, forward shadow keeps or retires a group and never promotes). K ≈ 77 + Q2 trials (≈ 83 on the H-14 ≈ 16 base), gate-1 t ≈ 4.1 | DRAFT (`preregistration-2027Q2-draft.md`), freeze by 2027-03-31 |
 | Q3 2027 (outline) | ≤ 20 | Neighbours of Q2 passers only: H-17 with the full H-16 score (if H-16 passes), V2/V3 exits if V1 beats V0, 1h versions of 15m survivors if M2 is near; H-18 with tier-2 events if the calendar archive exists | not drafted |
 | Q4 2027 (outline) | ≤ 20 | Quarterly SoA refresh decides; if every 15m trial through Q3 is null, see section 7 | not drafted |
@@ -194,3 +196,146 @@ only. Items 1-3, 5 and 7 stay open.
 - The ranking scores are judgement, not measurements. ATR, gold price and GBPUSD are ADR 0004's estimates.
 - The research-to-paper lead time (2–3 quarters) is an estimate from the Q1 calendar, not a measured figure.
 - No code, settings, registry rows, budget, holdout or the Q1 pre-registration were touched.
+
+---
+
+## 11. Research cycle 1 (2026-10-20): decisions and re-plan
+
+Integrates the eight researcher hand-backs of 2026-10-20 and the evaluator audit (audit file dated 10-23, read
+10-20; checked on origin/main `9a44bdcb`). Nothing here runs a trial, reads an outcome, the holdout or market data.
+
+### 11.1 Program decisions applied (taken by the program; not re-opened)
+
+| Decision | What changes | Owner, date |
+|---|---|---|
+| **Q1 2027 reserve = 6, not 8.** H-01 (#48, INCONCLUSIVE, held) and H-04 (#44, STOP) already ran in the Q4 batch, so the Q1 queue is H-02 and C4H plus H-02's 4 contingent survivor slots | Q1 open budget 12 → 14. The 2 freed trials go to the **free reserve** (section 11.5 gives the full count: 6 free after H-53 and the O-7/O-8 returns), spent only by a dated note written before the pre-registration. `preregistration-2027Q1.md` carries the amendment; `config/settings.yaml` `reserved_trials_quarter."2027Q1"`, `preregistration-2027Q1.yaml` (`reservation: 6`, H-01/H-04 marked moved) and `tests/test_preregister_quarter.py` change in **one** reviewed change | implementer, quant-reviewer checks; **2026-10-27** |
+| **True K = 111.** Counted as 89 registry trial rows + 21 (discovery #69's `k_eff`) = 110, the figure `registry.n_trials_effective` returns, plus 1 for H-49 stage 1, a pre-registered 0-trial look (K_eff +1, which retired R-13) that has no registry row. Not yet counted and therefore a floor, not an estimate: `k_eff` on non-discovery rows and other 0-trial looks (BACKLOG 107 on the ML branch). D-KB1's pre-registered 0-trial look is not in the 111 because `prereg-kb-2026-10-18.md` s.4 charges its +1 to H-25's row, so it enters K with H-25 (as `k_eff` 19 + 1) if H-25 is ever written, and until then it gates only H-25's own prior. No registry row is added for the H-49 look (it would push 2026Q4 to 56/55); `registry.n_trials_effective` and the coded DSR gate return 111 until BACKLOG 107 lands | Every reading quotes `n_trials_effective` at its verdict date **and** this +1 until BACKLOG 107 lands: H-53 at **K ≥ 112** (was 111), O-2/O-3 at K ≥ 113 (exits pre-registration). Gate-1 DSR t stays about 4.1. **BACKLOG 107 is merged before H-53 dispatch; otherwise the verdict row records `k_used: 112`** | evaluator (every verdict); implementer (BACKLOG 107) |
+| **No FRED API key is needed.** ALFRED serves release dates and first-release vintages without a key; BLS/BEA archives are cross-checks | E-1 (historical tier-1 calendar) is built from ALFRED: loader by **2026-10-30**, `calendar-v1` published by **2026-11-06**. The `FRED_API_KEY` blocker is removed from every readiness row; the blocker for H-16's event inputs, H-17's blackout and H-18 is now `calendar-v1`, not the owner | data-engineer |
+| **H-02 dollar-index revision** (macro point-in-time audit, PR #162, `macro-pit-audit-2026-10.md` A1/A2): DTWEXBGS in `macro-v1` is latest-vintage (20-day change ρ 0.994 with first release, 1.2% sign flips) and is a 2019 construction back-cast before 2019-03 | **Not re-pinned, file not changed** (it is H-02's reference digest). H-02's verdict record carries "A1/A2: DTWEXBGS values are latest-vintage and pre-2019 back-cast (macro-pit-audit-2026-10.md s.3)". Any H-02 survivor slot whose group contains `macro_dollar_chg20` is re-checked before its slot trial (0 trials). **Pass rule, written now, before H-02's pin:** the slot's group is re-scored with the dollar column rebuilt from true first releases (ALFRED DTWEXBGS from its first vintage 2019-03; before that, legacy DTWEXB first releases re-based at the splice date), everything else as pinned; the slot stays live only if it still meets its derivation rule (stability ≥ 0.6, OOF AUC ≥ 0.53, lower 95% bound ≥ 0.5) **and** its OOF AUC falls by no more than 0.01; otherwise the slot is void (not run, not re-derived, not replaced). Of the two issues the pre-2019 back-cast (A2) is the larger look-ahead: about 9 of H-02's 15.75 years use an index construction that did not exist at the time, against 1.2% sign flips from the vintage issue (A1); the splice is what the re-check exists for. SW-0 builds first releases from ALFRED (P-1) | evaluator (verdict note); data-engineer (re-check, only if needed) |
+| **#88 / #89 verdicts** | Recorded here and in `hypotheses.md` C: **#88 H-48 `sweep_absorb` STOP → R-14; #89 H-50 `box_break_close` 15m STOP → R-15** (gross +0.030 R, t 1.61, net −0.297 R). The registry has no verdict row after #52: `record_verdict` for both and a `research-v1` sync | evaluator via release-manager, **2026-10-23** |
+
+### 11.2 Decision: demo probes on retired non-roster families
+
+**Yes, they keep probes, as cost probes only, and no `retired_families` check is added now.** A probe measures
+spread, slippage, stop-exit and GBP commission at a moment; none of that depends on whether the family that chose the
+moment has an edge. Its signal times are **not** a neutral sampling frame, though: slippage depends on entry timing
+(breakout bars cost more), so M0 fills are tagged by the protocol's time/news bucket and by source, and are never
+pooled with M1 or across sources in a cost reading. The owner has asked for hundreds of demo fills this week for
+execution learning. The integrity risk is not the fill but its P&L
+leaking into an edge or reinstatement reading; the evaluator confirmed probes never reach the shadow book,
+`closed_trades`, attribution or promotion (ADR 0040 tests), and H-52 rule c excludes them from every edge number.
+Exposure is demo only, 0.01 lot, about £4 a probe, £10 a day, under the RiskGate. Two conditions: (1) the roster
+ruling and ADR 0040 text are corrected to say mirroring is **additive** to the ADR 0037 base (any non-shadow-only
+agent), owner trading-safety-reviewer with the program-director, by 2026-10-27; (2) family-mirrored probes (M0)
+are a stop-gap: they sample signal times, not the seven time/news buckets, so when the scheduled market probe M1 has
+30 fills in each of its non-news cells (expected about 15 trading days after it starts), M0 mirroring of retired
+non-roster families (today `mean_reversion`, R-01) is switched off by a reviewed change, review date 2026-11-13.
+Retired families' probe fills are never reported per family.
+
+### 11.3 Decision: ML items 110 and 111
+
+**BACKLOG 110 (E-2 tercile cut, O-4): proceed with option (a)**, the cut from fold k's own model on a purged inner
+time split, recorded as an amendment under O-4 before its group map is pinned, due **2026-12-04** (implementer,
+quant-reviewer). The cross-model quantile is not a leak, but it lets scale drift between fold models decide whether
+O-4 reaches its 1,000-trade floor; a floor that reads noise is a reading rule that cannot be trusted either way.
+Option (b)'s retention guard ([0.15, 0.55] per fold, outside it INCONCLUSIVE) is written in **now as the fallback**:
+if (a) is not merged and reviewed by 2026-12-04, (b) applies automatically, so the choice is not made after seeing
+anything. Neither costs a trial; (a) changes the config hash (a new pin). F1 (BACKLOG 105) must land first, since
+without it O-4 has no opt-in groups at all. **BACKLOG 111 (group-importance week buffer, H-02): proceed**, size S,
+merged and reviewed before H-02's config pin on **2026-12-11**. H-02 ranks its four survivor slots by group
+stability, and the audit shows the interleaved scoring favours exactly the slow macro/regime groups that also carry
+the A1/A2 dollar deviation; fixing the ranking before dispatch is cheap, fixing it after is a new trial. Fallback, also
+written now: if not merged by 2026-12-11, H-02 runs as pinned and its verdict records F4 as a known bias. Order stays
+as the ML researcher proposed: 105 → 106 → 107 → 108 → 109, then 110/111, then 112/113.
+
+### 11.4 Re-rank (adopted from the strategy lead, 2026-10-20)
+
+Ranks 1-5 are **H-16, H-13, H-19, H-17, H-14**. H-13 moves above H-19 and H-17 because it is the one item that
+changes net R on every later trial for 0 trials, and the costs lane now has a measurement protocol. Changes:
+**H-28 withdrawn** (it needed a Q4 slot that does not exist and a 1h trade the account cannot place); **H-37 and
+H-41 folded into H-53's verdict** (a STOP there extends R-15 to every box timeframe and retires both at 0 trials; a CONTINUE does not reopen them);
+**H-24 lapsed** (O-7 needed H-04 to continue); **H-54** (forward-only opportunity log, 0 K) added beside H-16 as its
+forward check. The honest statement stands: **no queued hypothesis has a credible £50/day path at £1,000.** The
+route, if any, is H-16 + H-17 V1u on 15m (a correct runner on a flagged day reaching about 6 R); 4h needs about
+£6,900 equity on measured ATR (macro, against ADR 0004's £3,270 estimate) and 1d cannot be placed while ATR(1d)
+> ~$44. Those two sizing numbers go to the CFO and program-director for an ADR 0004 note; they are not research
+variables.
+
+### 11.5 Budget and slots after this cycle
+
+| Quarter | Reserved | Open | Allocation |
+|---|---|---|---|
+| 2026Q4 | — | — | **closed 55/55**. H-28, H-25 and H-49 stage 2 assumed Q4 slots that do not exist: H-28 withdrawn; H-49 stage 2 void (stage 1 retired R-13); H-25 **lapsed in Q4**, eligible to bid for a Q1 free-reserve slot by a new dated note before 2026-12-18, with its `k_eff` 19 stated |
+| 2027Q1 | 6 (H-02, C4H, 4 slots) | 14 | O-1..O-6, O-10 (7 conditional rows; O-7/O-8 impossible, O-9 a 0-trial diagnostic that also lapses), H-53 (the retired-family exploration trial, written as a queued row before 2027-01-01: evaluator M2), **free reserve 6** (the original 3, + 2 from the reserve change, + 2 returned by O-7/O-8, − 1 for H-53) |
+| 2027Q2 | per draft | free reserve 7, or 10 by a dated note moving the 3 slots H-04's STOP and H-01's INCONCLUSIVE made impossible | the note is adopted in principle; written in the Q2 draft by the strategy-researcher by 2026-10-27 |
+
+Note on the Q1 free reserve: 14 open = 7 live conditional rows (O-1..O-6, O-10) + H-53 + 6 free. None of the 6 is spent without a
+dated note in `preregistration-2027Q1.md` written before that row's pre-registration, and the E-5 cap still binds.
+
+### 11.6 Demo fills this week
+
+The owner wants hundreds of demo fills by Fri 2026-10-23. They serve the cost-measurement protocol
+(`prereg-cost-measurement-2026-10.md`: slippage, limit fills, stop exits, GBP commission and swap) and execution
+learning. They are **never** edge evidence: probes are excluded by H-52 rule c, and research costs stay at
+max(0.15, measured) per leg, so demo slippage never lowers a research cost.
+
+## 12. Team feedback log
+
+Every item raised since the last cycle, with the answer. A = adopted, D = deferred (date), X = declined (reason).
+
+| # | From | Item | Answer | What changed in the plan |
+|---|---|---|---|---|
+| 1 | opportunity | H-54 forward opportunity log (fixed equal-weight score, two jobs, hash-chained, one read at n ≥ 120 days ≈ 2027-05-28; 0 K) | **A.** Pre-registration ready for quant review | H-54 row in `hypotheses.md` A13; 11.4 |
+| 2 | opportunity | E-1 without a key (ALFRED) | **A** (program decision) | 11.1; data-engineer 10-30 / 11-06 |
+| 3 | opportunity | Stop waiting on the FRED key | **A** | blocker removed from the plan and Q1 readiness |
+| 4 | opportunity | Backlog items for the two forward jobs and the ALFRED loader | **A**, routed to product-owner; numbers via `fix-ids` against origin/main (the ML branch holds 105-113) | none (backlog) |
+| 5 | performance-analyst | No admissible edge numbers (parity 5b missing, shadow unreadable, 3/30 probes) | **A** as the baseline | section 1 row "Forward evidence" |
+| 6 | performance-analyst | box 1h/4h refuse every close with `history_gap` (Labor Day hole older than backfill 30 d) | **A**, urgent, data-engineer on `fix/holiday-history-gap` with trading-safety review; escalated to the program-director today | none (ops) |
+| 7 | performance-analyst | 10 engine restarts; restart counter owed | **A**, implementer with the parity job, 2026-10-23 (H-52) | — |
+| 8 | performance-analyst | Feed reconcile FAIL (12.16% of closes off broker M1 by > $0.02) | **A, escalated:** if the engine feed differs, H-52 parity can fail on feed alone and no forward number ever becomes admissible. data-engineer diagnoses the source by 2026-10-27 before the parity threshold is read | risk added to H-52 dependencies |
+| 9 | performance-analyst | Spread medians by session | **A** as context only (not a cost reading: below 30 fills, no CI) | — |
+| 10 | performance-analyst | mean_reversion probe mirrored against the roster ruling | **A**, decided | 11.2 |
+| 11 | performance-analyst | H-BR1 bar-close spread excess (Wilcoxon, ≥ 300 closes) | **A** as a 0-K cost diagnostic, written into the cost-measurement protocol by the microstructure-researcher by 2026-10-27, before any bar-close spread is read | — |
+| 12 | performance-analyst | H-BR2 feed parity ≥ 95% both ways, 10 weekdays | **A** as the acceptance of parity job 5b (it is H-52 rule b) | — |
+| 13 | performance-analyst | H-BR3 guard availability after the gap fix | **A** as an ops check after item 6 merges | — |
+| 14 | performance-analyst | Read-only shadow-report and probe-ledger command | **A, done:** `goldbot run shadow-report` is on main (lane `feat/shadow-report-cmd`) | — |
+| 15 | exits | V1 cannot run at £1,000 (0.01 lot skips the 50% partial); V1u pre-registered | **A.** The trial reads the exit the account runs; V1u's K_eff +1 on O-3 is accepted (the bar moves by < 0.01 t at K ≈ 113) | K ≥ 113 at O-2/O-3 |
+| 16 | exits | No follow-up exit trial for H-01, C4H or H-04 | **A** | no exit slots in Q1/Q2 for them |
+| 17 | exits | Copy section 2 under O-2/O-3 as a dated amendment before any event count | **A**, strategy-researcher, by 2026-10-30 | — |
+| 18 | exits | BACKLOG 32 `win_atr` on the exit the account runs | **A**, product-owner amends 32 | — |
+| 19 | exits | Stop V2/V3 diagnostics; split BACKLOG 31, no swing trail until a trial needs it | **A** | Q3 outline keeps V2/V3 only as neighbours of a V1u pass |
+| 20 | exits | Live closes around tier-1 releases; early-close flat rule | **A**, routed to trading-safety (same as item 28) | — |
+| 21 | exits | 0.02 lot ≈ 1.8% risk | **X as a research item:** sizing above the 1% cap is not a research variable; noted for the CFO | — |
+| 22 | microstructure | Measured-cost protocol M0/M1/L1, 7 buckets × 30 fills, floor max(0.15, measured), O-4 withdrawal at 0.10 R on 2027-01-29 | **A** (already on main with amendments 1-2) | 11.6 |
+| 23 | microstructure | Blockers K7-K12 | **A**, product-owner turns them into backlog items; K8 (limit/scheduled path through the RiskGate) needs trading-safety review | — |
+| 24 | microstructure | ADR 0037 amendment 5 (scheduled probe type) + trading-safety review | **A**, in flight on `dv/scheduled-probes`; not merged without trading-safety | — |
+| 25 | microstructure | icm-probe credentials and GitHub token flagged as owner items | **X as an owner ask:** terminal logins are the program's (owner 2026-10-20); routed to the program-director | — |
+| 26 | microstructure | Staff spec/citation check (af81d871: citations, GBP 5.50 RT cross-check, K12) | **A**, no reading rule changed; already merged equivalent | — |
+| 27 | trading-safety | Retired non-roster families mirrorable (cost_probe.py:301) | **A, decided:** keep, additive text fix, M0 switch-off review 2026-11-13 | 11.2 |
+| 28 | trading-safety | No flat-before-close on early-close/holiday days | **A**, queued after `fix/holiday-history-gap` (program-director, trading-safety) | — |
+| 29 | trading-safety | Probes skip the tier-1 news re-score | **A:** document it for M1 (30 s hold); mirrored probes get the re-score, implementer by 2026-11-06 with trading-safety review | — |
+| 30 | strategy lead | P-3/P-6/P-7 ruled; P-4/P-8 drafted for the quant ruling 10-25 | **A**; P-4/P-8 counts wait for `calendar-v1` (11-06) | — |
+| 31 | strategy lead | True K is 111 | **A** (program decision) | 11.1, section 1, `hypotheses.md` C |
+| 32 | strategy lead | Re-rank 1-5; withdraw H-28; fold H-37/H-41 into H-53; H-24 lapsed | **A** | 11.4 |
+| 33 | strategy lead | Q2 free reserve 7, or 10 by a note | **A** in principle; note by 2026-10-27 | 11.5 |
+| 34 | strategy lead | W1-5 (H-13 cost filter) late: rule text 10-23, code 11-06, quant review 11-13 | **A**, re-dated and escalated to the program-director today | — |
+| 35 | strategy lead | Q1 reserve 6 not 8, due 10-27 | **A** (program decision) | 11.1 |
+| 36 | strategy lead | FRED key blocks ranks 1, 4, 5 (conflict with item 2) | **Reconciled, X:** ALFRED is keyless; the blocker is `calendar-v1` (11-06) | 11.1 |
+| 37 | H-13 staff | `costfilter.py` built; waits for the rule text (HAR horizon map, spread charged, planned hold, whether 3.0 is final, report layout) | **A.** The rule text (strategy-researcher, 10-23) answers all five; constraint from the director: the spread charged must be known at the decision bar close (no same-bar realised spread). Quant review only after the rule text | — |
+| 38 | ml | F1 high: `--discover` drops O-4's opt-in groups | **A**, BACKLOG 105 first; O-4 cannot be pinned before it | — |
+| 39 | ml | F2 real leak in cross-fitted calibration | **A**, `fix/crossfit-calibration-purge` with quant review before any Q1 dispatch | — |
+| 40 | ml | F3 / F4 (110 / 111) | **A, decided** | 11.3 |
+| 41 | ml | F5 K honesty; F6-F9 | **A**, 107/108/109/112/113 in the stated order | 11.1 |
+| 42 | ml | Stop hand-typed `shuffle_auc`; stop quoting K without recomputing | **A** | every K in this plan names its count |
+| 43 | ml | Backlog 105-113 may clash | **A**, main session runs `fix-ids` against origin/main when merging | — |
+| 44 | macro | DTWEXBGS revision / back-cast (A1/A2) | **A** (program decision) | 11.1 |
+| 45 | macro | COT pre-2009-09 stamped early; no data-v1 bar affected | **A**, fix after H-02 dispatch (0 trials) | — |
+| 46 | macro | Not yet audited: SP500 revisions, pre-2018 revisions, CFTC corrections | **D to 2027-02-26** (macro-researcher), before SW-0's Q2 freeze; H-02 does not use them beyond what A1/A2 covers | — |
+| 47 | macro | 4h needs ~£6,900; 1d unplaceable while ATR(1d) > ~$44 | **A**, to CFO/program-director for an ADR 0004 note | 11.4 |
+| 48 | evaluator | M1 no verdict rows for #88/#89 | **A**, evaluator via release-manager, 10-23 | 11.1 |
+| 49 | evaluator | M2 H-53's Q1 charge exists only in docs | **A**: H-53 written as a queued row before 2027-01-01 (strategy-researcher, 12-18); pending retired-family rows count against `RETIRED_EXPLORATION` (BACKLOG 91, implementer, 12-18) | 11.5 |
+| 50 | evaluator | M3 contradictory section C rows; H-28/H-25/H-49 stage 2 assume Q4 slots | **A**: the "not dispatched" batch row is marked superseded; H-28 withdrawn, H-49 stage 2 void, H-25 lapsed (may bid for Q1 free reserve) | 11.5, `hypotheses.md` C |
+| 51 | evaluator | M4 Q1 "Order and budget" heading stale | **A**, corrected with the reserve amendment (2026-10-20) | `preregistration-2027Q1.md` |
+| 52 | evaluator | Attribution ignores the 13:49 UTC quarantine | **A**, `fix/attribution-evidence-start`, implementer + quant-reviewer | — |
+| 53 | evaluator | `perf_report` drawdown omits probe losses | **A**, finance-auditor reconciles to the broker | — |
+| 54 | evaluator | H-52 admissibility a-f | **A** as the checklist every forward number is tagged against (performance-analyst) | section 1 |

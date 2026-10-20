@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -85,7 +86,9 @@ main "$@"
 """
 
 # units: name -> {"enabled": bool, "active": bool}; "fail_at": services report inactive while HEAD is that commit;
-# "migrate_at": a (re)start while HEAD is that commit migrates aux.db 4 -> 5, as the new code does on first open
+# "migrate_at": a (re)start while HEAD is that commit migrates aux.db 4 -> 5, as the new code does on first open;
+# "fail_units": unit -> commit ("*" = any): a (re)start of it fails and it stays inactive (an engine whose bridge is
+# not logged in); "fail_after_stop": units that ran before and cannot start again once stopped
 SYSTEMCTL_STUB = r"""
 import fnmatch, json, os, sqlite3, subprocess, sys
 T = os.environ["T"]
@@ -96,6 +99,14 @@ cmd = args[0]
 def norm(n): return n if n.endswith(".service") else n + ".service"
 def head(): return subprocess.run(["git", "-C", os.path.join(T, "root"), "rev-parse", "HEAD"], capture_output=True,
                                   text=True).stdout.strip()
+def failing(n):
+    if n in st.get("fail_after_stop", []) and st["units"].get(n, {}).get("stopped"):
+        return True
+    w = st.get("fail_units", {}).get(n)
+    return w is not None and (w == "*" or w == head())
+def up(n):
+    u = st["units"].get(n, {})
+    return bool(u.get("active")) and head() != st.get("fail_at") and not failing(n)
 if cmd == "list-units":
     pat = norm(sys.argv[-1])
     for n in st["units"]:
@@ -104,10 +115,11 @@ if cmd == "list-units":
 elif cmd == "is-enabled":
     sys.exit(0 if st["units"].get(norm(args[1]), {}).get("enabled") else 1)
 elif cmd == "is-active":
-    u = st["units"].get(norm(args[1]), {})
-    sys.exit(0 if u.get("active") and head() != st.get("fail_at") else 3)
+    sys.exit(0 if up(norm(args[1])) else 3)
 elif cmd == "show":
-    if "NRestarts" in sys.argv:
+    if "ActiveState" in sys.argv:
+        print("active" if up(norm(args[-1])) else "failed")
+    elif "NRestarts" in sys.argv:
         calls = os.path.join(T, "show_calls")
         n = int(open(calls).read()) + 1 if os.path.exists(calls) else 1
         open(calls, "w").write(str(n))
@@ -141,7 +153,8 @@ elif cmd in ("stop", "start", "restart"):
         os.kill(hp, signal.SIGHUP)
     if cmd == "stop":
         open(os.path.join(T, "stop_heads"), "a").write(head() + " " + norm(args[1]) + "\n")   # HEAD when it stopped
-    st["units"].setdefault(norm(args[1]), {"enabled": False})["active"] = cmd != "stop"
+        st["units"].setdefault(norm(args[1]), {"enabled": False})["stopped"] = True
+    st["units"].setdefault(norm(args[1]), {"enabled": False})["active"] = cmd != "stop" and not failing(norm(args[1]))
     if cmd != "stop":
         open(os.path.join(T, "restarted"), "w").close()
     if cmd != "stop" and norm(args[1]) == "goldbot-supervisor.service":
@@ -153,6 +166,8 @@ elif cmd in ("stop", "start", "restart"):
             c.execute("PRAGMA user_version = 5")
             c.commit()
     json.dump(st, open(st_path, "w"))
+    if cmd != "stop" and failing(norm(args[1])) and "--no-block" not in sys.argv:
+        sys.exit(1)                                   # a blocking (re)start of a unit that never becomes ready
 """
 
 CONFIG_OLD = '''
@@ -981,3 +996,125 @@ def test_an_engine_warn_that_persists_after_the_rechecks_is_still_degraded(tmp_p
     _health(tmp_path / "health_after.json", supervisor="ok", engine__icm="warn")
     assert box.run(box.c2).returncode == 0
     assert _last(box) == "deployed_degraded" and "engine:icm" in box.records()[-1]["detail"]
+
+
+# ---------------------------------------------------------------- incident 2026-10-20: a rollback left services stopped
+# (docs/incidents/2026-10-20-deploy-rollback-left-services-stopped.md)
+FULL_BOX = {"goldbot-news.service": True, "goldbot-tv-pull.service": True}
+INPUTS = ("goldbot-api.service", "goldbot-scheduler.service", "goldbot-telegram.service", "goldbot-news.service",
+          "goldbot-tv-pull.service")
+
+
+def _incident_units(box: Box, fail: dict[str, str], probe: bool = True) -> None:
+    """The brain at 11:48: every service running, engine@icm-probe enabled but not yet active (newly enabled)."""
+    st: dict[str, Any] = {"units": {n: {"enabled": e, "active": e} for n, e in {**UNITS, **FULL_BOX}.items()},
+                          "fail_units": fail}
+    if probe:
+        st["units"]["goldbot-engine@icm-probe.service"] = {"enabled": True, "active": False}
+    (box.t / "units.json").write_text(json.dumps(st))
+
+
+def _active(box: Box) -> dict[str, bool]:
+    st = json.loads((box.t / "units.json").read_text())
+    return {n: bool(u.get("active")) and n not in st.get("fail_units", {}) for n, u in st["units"].items()}
+
+
+def test_incident_a_newly_enabled_engine_blocked_by_its_bridge_does_not_roll_back_or_stop_anything(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    _incident_units(box, {"goldbot-engine@icm-probe.service": "*"})
+    _health(tmp_path / "health_before.json", supervisor="ok", **{"engine_loop:icm-demo": "ok", "bridge:icm-demo": "ok"})
+    _health(tmp_path / "health_after.json", supervisor="ok", **{"engine_loop:icm-demo": "ok", "bridge:icm-demo": "ok",
+                                                                 "bridge:icm-probe": "ok", "terminal:icm-probe": "fail",
+                                                                 "bridge_compat:icm-probe": "fail"})
+    p = box.run(box.c2)
+    assert p.returncode == 0, p.stdout + p.stderr
+    rec = box.records()[-1]
+    assert rec["result"] == "deployed_degraded" and box.head() == box.c2
+    assert "engine@icm-probe blocked by its bridge (terminal:icm-probe,bridge_compat:icm-probe)" in rec["detail"]
+    act = _active(box)
+    assert all(act[u] for u in (*INPUTS, "goldbot-supervisor.service", "goldbot-engine@icm-demo.service"))
+    restarts = [a.split()[-1] for a in box.actions() if a.startswith("restart")]
+    assert restarts[-1] == "goldbot-engine@icm-probe.service"                   # the new engine last, never blocking
+    assert "restart --no-block goldbot-engine@icm-probe.service" in box.calls()
+    assert set(INPUTS) <= set(restarts)
+    watch = (tmp_path / "var" / "watch").read_text().splitlines()               # the watcher does not judge it either
+    assert not any(w.startswith("goldbot-engine@icm-probe") for w in watch)
+    assert "pre goldbot-api.service" in watch and "pre goldbot-engine@icm-probe.service" not in watch
+
+
+def test_a_newly_enabled_engine_down_with_its_bridge_ok_rolls_back_without_being_started_again(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    _incident_units(box, {"goldbot-engine@icm-probe.service": "*"})
+    _health(tmp_path / "health_before.json", supervisor="ok")
+    _health(tmp_path / "health_after.json", supervisor="ok", **{"bridge:icm-probe": "ok", "terminal:icm-probe": "ok"})
+    p = box.run(box.c2)
+    assert p.returncode == 1, p.stdout + p.stderr
+    rec = box.records()[-1]
+    assert rec["result"] == "rolled_back" and box.head() == box.c1
+    assert "newly enabled engine@icm-probe did not start and its bridge is ok" in rec["detail"]
+    assert "not running: none" in rec["detail"]
+    probe = [i for i, a in enumerate(box.actions()) if "icm-probe" in a and a.split()[0] in ("start", "restart")]
+    assert len(probe) == 1                                                      # the forward start only, never the rollback's
+    act = _active(box)
+    assert all(act[u] for u in (*INPUTS, "goldbot-supervisor.service", "goldbot-engine@icm-demo.service"))
+
+
+def test_a_rollback_after_a_real_failure_restarts_every_service_that_ran_before(tmp_path):
+    """The incident's rollback: one engine cannot start on either commit. Before the fix the first failed restart
+    ended the start loop, leaving api, scheduler, telegram, news and tv-pull stopped."""
+    box = Box(tmp_path, running="c1", aux=4)
+    _incident_units(box, {}, probe=False)
+    st = json.loads((box.t / "units.json").read_text())
+    st["fail_after_stop"] = ["goldbot-engine@icm-demo.service"]                 # ran before, fails from the stop on
+    (box.t / "units.json").write_text(json.dumps(st))
+    _health(tmp_path / "health_before.json", supervisor="ok")
+    _health(tmp_path / "health_after.json", supervisor="ok")
+    p = box.run(box.c2)
+    assert p.returncode == 1, p.stdout + p.stderr
+    rec = box.records()[-1]
+    assert rec["result"] == "failed" and box.head() == box.c1
+    assert "not running: engine@icm-demo" in rec["detail"]
+    assert "running: supervisor,api,scheduler,telegram,news,tv-pull; not running: engine@icm-demo" in rec["detail"]
+    st = json.loads((box.t / "units.json").read_text())
+    assert all(st["units"][u]["active"] for u in (*INPUTS, "goldbot-supervisor.service"))
+    assert not st["units"]["goldbot-engine@icm-demo.service"]["active"]
+    assert "goldbot-engine@vantage-demo.service" not in " ".join(box.actions())  # a disabled stray stays untouched
+
+
+def test_an_engine_that_was_healthy_before_and_is_not_after_still_rolls_back(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    _incident_units(box, {}, probe=False)
+    st = json.loads((box.t / "units.json").read_text())
+    st["fail_units"] = {"goldbot-engine@icm-demo.service": box.c2}              # only the new code fails
+    (box.t / "units.json").write_text(json.dumps(st))
+    _health(tmp_path / "health_before.json", supervisor="ok", **{"bridge_compat:icm-demo": "ok"})
+    _health(tmp_path / "health_after.json", supervisor="ok", **{"bridge_compat:icm-demo": "fail"})
+    p = box.run(box.c2)
+    assert p.returncode == 1, p.stdout + p.stderr
+    rec = box.records()[-1]
+    assert rec["result"] == "rolled_back" and box.head() == box.c1             # the bridge excuse is for new engines only
+    assert "not running: none" in rec["detail"]
+    st = json.loads((box.t / "units.json").read_text())
+    assert all(st["units"][u]["active"] for u in (*INPUTS, "goldbot-supervisor.service",
+                                                  "goldbot-engine@icm-demo.service"))
+
+
+def test_the_watchers_rollback_brings_back_what_ran_before_and_not_a_new_engine(tmp_path):
+    box = Box(tmp_path, running="c1", aux=4)
+    _incident_units(box, {"goldbot-engine@icm-probe.service": "*"})
+    _health(tmp_path / "health_before.json", supervisor="ok")
+    _health(tmp_path / "health_after.json", supervisor="ok", **{"bridge_compat:icm-probe": "fail"})
+    assert box.run(box.c2).returncode == 0
+    saved = (tmp_path / "var" / "watch").read_text()
+    first, rest = saved.split("\n", 1)
+    target, previous, _ = first.split()
+    (tmp_path / "var" / "watch").write_text(f"{target} {previous} {_clock(box) + 60}\n{rest}")
+    (tmp_path / "bump").write_text("")
+    n = len(box.actions())
+    p = box.run("--watch")
+    assert p.returncode == 1, p.stdout + p.stderr
+    assert box.head() == box.c1 and _last(box) in ("rolled_back", "failed")
+    assert not any("icm-probe" in a for a in box.actions()[n:] if a.split()[0] in ("start", "restart"))
+    st = json.loads((box.t / "units.json").read_text())
+    assert all(st["units"][u]["active"] for u in (*INPUTS, "goldbot-supervisor.service",
+                                                  "goldbot-engine@icm-demo.service"))
