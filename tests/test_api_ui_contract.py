@@ -86,14 +86,15 @@ def test_an_older_engines_card_takes_the_account_mode_from_its_engine_file(tmp_p
     assert _cards(tmp_path)["icm-1-a"]["account_mode"] == "live"
 
 
-def test_the_api_refuses_to_approve_a_terminal_not_demo_card_and_takes_a_rejection(tmp_path):
+@pytest.mark.parametrize("kind, terminal", [("terminal_not_demo", "real"), ("terminal_unknown", None)])
+def test_the_api_refuses_to_approve_a_terminal_fault_card_and_takes_a_rejection(tmp_path, kind, terminal):
     bus = ApprovalBus(tmp_path)
-    bus.publish(_prop(account_mode="demo", ask_reason=AskReason(kind="terminal_not_demo", terminal="real")))
+    bus.publish(_prop(account_mode="demo", ask_reason=AskReason(kind=kind, terminal=terminal)))
     p = bus.get("icm-1-a")
     assert p is not None
     c, h = _client(tmp_path)
     r = c.post("/api/decisions", json={"proposal_id": "icm-1-a", "action": "approve", "created": p.created}, headers=h)
-    assert r.status_code == 400 and "terminal_not_demo" in r.json()["detail"]
+    assert r.status_code == 400 and kind in r.json()["detail"]
     assert not list(bus.decisions_dir.glob("*.json"))
     r = c.post("/api/decisions", json={"proposal_id": "icm-1-a", "action": "reject", "reason_code": "other",
                                        "created": p.created}, headers=h)
@@ -186,7 +187,7 @@ def test_the_entry_mode_card_lists_each_reporting_account_with_its_class_mode_an
     assert v["window_s"] == 90
 
 
-@pytest.mark.parametrize("kind", ["owner_propose", "terminal_not_demo", "config_propose"])
+@pytest.mark.parametrize("kind", ["owner_propose", "terminal_not_demo", "terminal_unknown", "config_propose"])
 def test_a_demo_engines_published_reason_is_a_forced_propose_row(tmp_path, enabled_accounts, kind):
     enabled_accounts("icm-demo")
     reason = AskReason(kind=kind, terminal="real" if kind == "terminal_not_demo" else None)

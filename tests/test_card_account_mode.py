@@ -48,6 +48,8 @@ def test_the_window_reads_in_seconds_up_to_two_minutes_then_in_minutes(seconds, 
     ("owner_propose", None, "you set entry mode to Propose in Settings. Demo normally enters on its own."),
     ("terminal_not_demo", None, "this demo account's terminal does not report a demo account, so it is not "
                                 "allowed to enter on its own. Fix the account setup first."),
+    ("terminal_unknown", None, "the account has not been read yet, so its terminal cannot be confirmed as a demo "
+                               "account; it is not allowed to enter on its own until the next good read."),
     ("risk_unreadable", None, "the risk file could not be read, so automatic entry is off until it is fixed."),
     ("config_propose", None, "this account is set to ask in its configuration.")])
 def test_every_ask_kind_reads_as_one_plain_sentence(kind, until, text):
@@ -62,9 +64,9 @@ def test_a_terminal_that_reports_real_money_is_named_as_one():
         "account setup first.")
 
 
-def test_the_six_ask_kinds_are_the_designed_set():
+def test_the_seven_ask_kinds_are_the_designed_set():
     assert set(ASK_KINDS) == {"rearm_lock", "kill_switch", "risk_unreadable", "owner_propose", "terminal_not_demo",
-                              "config_propose"}
+                              "terminal_unknown", "config_propose"}
 
 
 # ---------------------------------------------------------------------------------------------- Telegram card
@@ -104,19 +106,33 @@ def test_a_demo_card_on_a_real_money_terminal_reads_as_real_money_and_offers_no_
     assert p.approve_label is None and not p.approvable
 
 
+def test_a_demo_card_whose_terminal_is_not_confirmed_says_so_and_offers_no_approve():
+    p = _prop(account_mode="demo", ask_reason=AskReason(kind="terminal_unknown"))
+    lines = p.text().splitlines()
+    assert lines[0] == "🔒 ACCOUNT TYPE UNKNOWN (terminal not confirmed) · icm-demo"
+    assert lines[1].startswith("Asking because: the account has not been read yet")
+    assert lines[-1].startswith("⛔ approving is off for this card")
+    assert p.approve_label is None and not p.approvable
+
+
 # ---------------------------------------------------------------------------------------------- nobody approves it
-def test_the_bus_refuses_an_approval_of_a_terminal_not_demo_card_but_takes_a_rejection(tmp_path):
+FAULTS = [("terminal_not_demo", "real"), ("terminal_unknown", None)]
+
+
+@pytest.mark.parametrize("kind, terminal", FAULTS)
+def test_the_bus_refuses_an_approval_of_a_terminal_fault_card_but_takes_a_rejection(tmp_path, kind, terminal):
     bus = ApprovalBus(tmp_path)
-    bus.publish(_prop(account_mode="demo", ask_reason=AskReason(kind="terminal_not_demo", terminal="real")))
-    with pytest.raises(ValueError, match="terminal_not_demo"):
+    bus.publish(_prop(account_mode="demo", ask_reason=AskReason(kind=kind, terminal=terminal)))
+    with pytest.raises(ValueError, match=kind):
         submit_shown(bus, "icm-1-a", True, None, by="dashboard")
     assert not (tmp_path / "approvals" / "decisions" / "icm-1-a.json").exists()
     assert submit_shown(bus, "icm-1-a", False, "other", by="dashboard").approve is False
 
 
-def test_the_engine_never_applies_an_approval_of_a_terminal_not_demo_card_that_reached_the_bus(tmp_path):
+@pytest.mark.parametrize("kind, terminal", FAULTS)
+def test_the_engine_never_applies_an_approval_of_a_terminal_fault_card_that_reached_the_bus(tmp_path, kind, terminal):
     eng, _, center = _engine(tmp_path, approval="propose")
-    p = center.propose(_prop(account_mode="demo", ask_reason=AskReason(kind="terminal_not_demo", terminal="real")))
+    p = center.propose(_prop(account_mode="demo", ask_reason=AskReason(kind=kind, terminal=terminal)))
     bus = center.bus
     assert bus is not None
     (bus.decisions_dir / f"{p.proposal_id}.json").write_text(BusDecision(   # written past `submit`, as a bad writer
@@ -124,7 +140,7 @@ def test_the_engine_never_applies_an_approval_of_a_terminal_not_demo_card_that_r
         card_created=p.created).model_dump_json())
     assert center.poll_bus() == []
     assert p.proposal_id in center.pending and p.outcome is None
-    with pytest.raises(ValueError, match="terminal_not_demo"):
+    with pytest.raises(ValueError, match=kind):
         center.decide(p.proposal_id, next(iter(center.allowed)), True)
     assert center.decide(p.proposal_id, next(iter(center.allowed)), False, "other").outcome == Outcome.REJECTED
 
@@ -170,12 +186,32 @@ def test_the_re_arm_window_and_the_kill_switch_name_themselves(tmp_path):
     assert auto_entry.ask_reason(eng, NOW) == AskReason(kind="kill_switch")
 
 
-@pytest.mark.parametrize("trade_mode", ["real", "contest", None])
+@pytest.mark.parametrize("trade_mode", ["real", "contest"])
 def test_a_demo_account_on_a_terminal_that_is_not_demo_is_terminal_not_demo_before_anything_else(tmp_path, trade_mode):
     eng, pb, _ = _engine(tmp_path, trade_mode=trade_mode)
     eng.state.stage = Stage.HALTED                                           # the terminal fault still comes first
     _refreshed(eng, pb)
     assert auto_entry.ask_reason(eng, NOW) == AskReason(kind="terminal_not_demo", terminal=trade_mode)
+
+
+def test_a_terminal_that_does_not_say_or_is_not_read_yet_is_terminal_unknown_not_blamed(tmp_path):
+    eng, pb, _ = _engine(tmp_path)
+    assert auto_entry.ask_reason(eng, NOW) == AskReason(kind="terminal_unknown")      # no account read yet
+    eng, pb, _ = _engine(tmp_path / "n", trade_mode=None)
+    eng.state.stage = Stage.HALTED                                           # still before anything else
+    _refreshed(eng, pb)
+    assert auto_entry.ask_reason(eng, NOW) == AskReason(kind="terminal_unknown")
+
+
+def test_an_account_read_that_fails_at_the_order_fails_closed_as_terminal_unknown(tmp_path, monkeypatch):
+    eng, pb, _ = _engine(tmp_path)
+    assert _refreshed(eng, pb) == "auto"
+
+    def broken() -> None:
+        raise OSError("bridge down")
+    monkeypatch.setattr(pb, "account", broken)
+    assert not auto_entry.permitted(eng, NOW) and eng.cfg.approval_mode == "propose"
+    assert auto_entry.ask_reason(eng, NOW) == AskReason(kind="terminal_unknown")
 
 
 def test_a_terminal_that_turns_real_at_the_order_makes_the_card_terminal_not_demo(tmp_path):
@@ -215,9 +251,11 @@ def test_the_telegram_keyboard_names_the_money_class_and_has_no_approve_on_a_ter
     asyncio.run(bot.send_proposal(_prop(account_id="icm-live", account_mode="live")))
     asyncio.run(bot.send_proposal(_prop(account_mode="demo",
                                         ask_reason=AskReason(kind="terminal_not_demo", terminal="real"))))
-    live, fault = sent
+    asyncio.run(bot.send_proposal(_prop(account_mode="demo", ask_reason=AskReason(kind="terminal_unknown"))))
+    live, *faults = sent
     assert live[0] == ["Approve real money"]
-    assert not [b for row in fault for b in row if b.startswith("Approve")] and fault[0][0].startswith("Reject")
+    for fault in faults:
+        assert not [b for row in fault for b in row if b.startswith("Approve")] and fault[0][0].startswith("Reject")
 
 
 @pytest.mark.integration      # drives 5 days of synthetic ticks through the engine (as tests/test_demo_auto_entries.py)

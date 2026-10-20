@@ -71,8 +71,9 @@ class AccountSummary(BaseModel):
 class AskReasonView(BaseModel):
     """Why a demo account asks for this entry instead of entering on its own (backlog 103; ADR 0036: demo enters
     automatically). `text` is one plain sentence (telegram/approvals.py `ask_reason_text`, the Telegram card's words);
-    the card prefixes "Asking because: ". `until`: the re-arm lock's end. A `terminal_not_demo` card is real money:
-    Approve is disabled and the API refuses an approval (sign-off correction 2)."""
+    the card prefixes "Asking because: ". `until`: the re-arm lock's end. A terminal-fault card (`terminal_not_demo`: the
+    terminal says real or contest, shown as real money; `terminal_unknown`: not confirmed yet) has Approve disabled and
+    the API refuses an approval (sign-off correction 2)."""
     kind: AskKind
     text: str
     until: datetime | None = None

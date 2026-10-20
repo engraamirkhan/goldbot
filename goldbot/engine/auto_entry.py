@@ -96,12 +96,15 @@ def ask_reason(eng: Engine, now: pd.Timestamp) -> AskReason | None:
     """Why a demo account asks the owner instead of entering on its own (backlog 103; ADR 0036: demo enters
     automatically, so a demo card is an exception and says why). None on live and paper ("asking is the rule, not an
     exception": design note principle 3) and while auto entries are on. First match wins, the safety fault first:
-    a terminal that does not report demo at the last read (refresh or the order itself; `terminal_not_demo`, which no
-    channel may approve), the 12% kill switch, the re-arm window, the owner's /mode propose over an account configured
+    a terminal not confirmed demo at the last read (refresh or the order itself; `terminal_unknown` when it was not
+    read, could not be read or did not say, `terminal_not_demo` when it says real or contest; no channel approves
+    either), the 12% kill switch, the re-arm window, the owner's /mode propose over an account configured
     auto, else the account's own configuration."""
     from goldbot.risk.gate import Stage
     if eng.cfg.mode != "demo":
         return None
+    if eng._terminal_mode is None:              # not read yet, unreadable, or it did not say: fail closed, unblamed
+        return AskReason(kind="terminal_unknown")
     if eng._terminal_mode != "demo":
         return AskReason(kind="terminal_not_demo", terminal=eng._terminal_mode)
     if eng.state.stage == Stage.HALTED:

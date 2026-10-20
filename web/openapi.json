@@ -777,7 +777,7 @@
     "type": "object"
    },
    "AskReasonView": {
-    "description": "Why a demo account asks for this entry instead of entering on its own (backlog 103; ADR 0036: demo enters\nautomatically). `text` is one plain sentence (telegram/approvals.py `ask_reason_text`, the Telegram card's words);\nthe card prefixes \"Asking because: \". `until`: the re-arm lock's end. A `terminal_not_demo` card is real money:\nApprove is disabled and the API refuses an approval (sign-off correction 2).",
+    "description": "Why a demo account asks for this entry instead of entering on its own (backlog 103; ADR 0036: demo enters\nautomatically). `text` is one plain sentence (telegram/approvals.py `ask_reason_text`, the Telegram card's words);\nthe card prefixes \"Asking because: \". `until`: the re-arm lock's end. A terminal-fault card (`terminal_not_demo`: the\nterminal says real or contest, shown as real money; `terminal_unknown`: not confirmed yet) has Approve disabled and\nthe API refuses an approval (sign-off correction 2).",
     "properties": {
      "kind": {
       "enum": [
@@ -786,6 +786,7 @@
        "risk_unreadable",
        "owner_propose",
        "terminal_not_demo",
+       "terminal_unknown",
        "config_propose"
       ],
       "title": "Kind",
@@ -2505,6 +2506,7 @@
        "risk_unreadable",
        "owner_propose",
        "terminal_not_demo",
+       "terminal_unknown",
        "config_propose"
       ],
       "title": "Kind",
