@@ -246,11 +246,12 @@ def test_a_gain_today_uses_nothing_of_the_combined_cap(tmp_path):
     assert (s["daily_used_amount"], s["weekly_used_amount"]) == (0.0, 0.0)
 
 
-@pytest.mark.parametrize("sup", [
-    _sup(currencies={"icm-demo": "GBP", "vantage-demo": "USD"}),          # pounds are never added to dollars
-    _sup(ts=time.time() - 600),                                            # a silent supervisor shows no money
-    {}])
-def test_combined_money_is_null_with_mixed_currencies_or_no_fresh_supervisor(tmp_path, sup):
+@pytest.mark.parametrize("case", ["mixed", "silent", "missing"])
+def test_combined_money_is_null_with_mixed_currencies_or_no_fresh_supervisor(tmp_path, case):
+    # built here, not in the parametrize list: a report stamped at collection goes stale (STALE_S) in a long shard
+    sup = {"mixed": _sup(currencies={"icm-demo": "GBP", "vantage-demo": "USD"}),   # pounds never added to dollars
+           "silent": _sup(ts=time.time() - 600),                                   # a silent supervisor: no money
+           "missing": {}}[case]
     (tmp_path / "supervisor.json").write_text(json.dumps(sup))
     c, h = _client(tmp_path)
     s = c.get("/api/limits", headers=h).json()["supervisor"]
