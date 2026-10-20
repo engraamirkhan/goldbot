@@ -49,11 +49,11 @@ def _hosts(accs: dict[str, acc_mod.Account]) -> list[str]:
 
 
 # ------------------------------------------------------------------------------------------------ the registry
-def test_the_shipped_registry_keeps_icm_demo_the_only_shadow_host_until_icm_probe_is_enabled(registry):
+def test_the_shipped_registry_makes_icm_probe_the_only_shadow_host_after_the_switch_over(registry):
     accs = acc_mod.load_accounts(registry)
-    assert _hosts(accs) == ["icm-demo"] and accs["icm-demo"].cost_probe.enabled
+    assert _hosts(accs) == ["icm-probe"] and not accs["icm-demo"].cost_probe.enabled
     probe = accs["icm-probe"]
-    assert not probe.enabled and probe.mode == "demo" and probe.probe_only and probe.shadow_host
+    assert probe.enabled and probe.mode == "demo" and probe.probe_only and probe.shadow_host
     assert probe.login is None and probe.cost_probe.enabled and probe.approval_mode == "auto"
     raw = yaml.safe_load(registry.read_text())["accounts"]["icm-probe"]
     assert raw["login"] is None                                   # public repo: never a login here
@@ -62,7 +62,7 @@ def test_the_shipped_registry_keeps_icm_demo_the_only_shadow_host_until_icm_prob
 def test_the_probe_account_has_its_own_day_and_its_probes_fit_inside_it(registry):
     probe = acc_mod.load_accounts(registry)["icm-probe"]
     cp, cap = probe.cost_probe, probe.daily_loss_limit_abs
-    assert cap is not None and (cp.max_open, cp.max_loss, cp.budget_share) == (4, 4.0, 0.8)
+    assert cap == 30 and (cp.max_open, cp.max_loss, cp.budget_share) == (4, 4.0, 0.9)    # raised 2026-10-20 (volume)
     assert cp.max_open * cp.max_loss <= cp.budget_share * cap        # four probes at their stops fit the probe budget
     assert probe.magic_base not in {a.magic_base for k, a in acc_mod.load_accounts(registry).items() if k != "icm-probe"}
 
@@ -74,14 +74,14 @@ def test_the_switch_over_is_config_only_and_leaves_icm_probe_the_only_host(regis
     assert _hosts(accs) == ["icm-probe"] and not accs["icm-demo"].cost_probe.enabled
 
 
-def test_enabling_icm_probe_without_moving_the_host_off_icm_demo_fails_at_load(registry):
-    _edit(registry, **{"icm-probe": {"enabled": True}})
+def test_two_enabled_shadow_hosts_fail_at_load(registry):
+    _edit(registry, **{"icm-demo": {"shadow_host": True}})          # switching back needs icm-probe disabled too
     with pytest.raises(ValueError, match="shadow host"):
         acc_mod.load_accounts(registry)
 
 
 def test_a_disabled_account_flagged_shadow_host_does_not_count_toward_the_one_host(registry):
-    _edit(registry, **{"icm-demo": {"enabled": False}})
+    _edit(registry, **{"icm-probe": {"enabled": False}})
     assert _hosts(acc_mod.load_accounts(registry)) == []
 
 

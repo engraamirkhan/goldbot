@@ -493,10 +493,12 @@ def test_a_live_account_with_the_cost_probe_on_is_refused_at_load():
     assert _account(mode="live").cost_probe.enabled is False
 
 
-def test_the_shipped_config_probes_on_icm_demo_only(monkeypatch):
+def test_the_shipped_config_probes_on_the_dedicated_demo_account_only(monkeypatch):
+    """Switched over 2026-10-19 (ADR 0037 amendment 4): icm-probe probes, icm-demo no longer does."""
     monkeypatch.setattr(acc_mod, "get_secret", lambda k: None)
     accs = acc_mod.load_accounts()
-    assert accs["icm-demo"].cost_probe.enabled is True
+    assert accs["icm-probe"].cost_probe.enabled is True and accs["icm-demo"].cost_probe.enabled is False
+    assert [k for k, a in accs.items() if a.enabled and a.cost_probe.enabled] == ["icm-probe"]
     assert all(not a.cost_probe.enabled for a in accs.values() if a.mode != "demo")
 
 
