@@ -95,7 +95,7 @@ def test_the_absolute_daily_limit_lives_per_account_in_accounts_yaml_not_in_sett
     assert "daily_loss_limit_abs" not in yaml.safe_load(Path("config/settings.yaml").read_text())["risk"]
     raw = yaml.safe_load(Path("config/accounts.yaml").read_text())["accounts"]
     assert raw["icm-demo"]["daily_loss_limit_abs"] == 50
-    assert raw["icm-probe"]["daily_loss_limit_abs"] == 20          # ADR 0037 amendment 4: the probe account's own day
+    assert raw["icm-probe"]["daily_loss_limit_abs"] == 30          # ADR 0037 am. 4, raised 2026-10-20 (demo volume)
     assert all("daily_loss_limit_abs" not in a for k, a in raw.items() if k not in ("icm-demo", "icm-probe"))
     with pytest.raises(ValidationError):
         _acc(daily_loss_limit_abs=0)
