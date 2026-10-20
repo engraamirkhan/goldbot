@@ -105,6 +105,7 @@ trim), and 62 must hold the cap too. 11 ranked rows.
 | 89 | Opt-in tod_periodicity feature group for O-4 (N1) | Research (features) · LEARN | S | done (implemented 2026-10-18; awaiting quant-reviewer review) · accountable: implementer · reviews: quant-reviewer, code-reviewer · due 2026-12-11 (O-4 group-map pin) |
 | 90 | 20-day measured cost/model series for the adaptive limits | Risk (limits) · PROTECT | S | proposed (raised by the ADR 0031 lane B implementer, 2026-10-18) · accountable: implementer · reviews: quant-reviewer, trading-safety-reviewer |
 | 91 | Approval card says demo or real money, why it asks, and uses the proposal's own window | UI (approvals) · PROTECT | M | proposed, severity HIGH (ui-ux review of the 2026-10-19 shots) · accountable: ui-ux-designer (spec) then implementer · reviews: code-reviewer, trading-safety-reviewer |
+| 102 | Retired screened families: refuse open-budget rule_ref runs and count them in the shared exploration cap | Research (governance) · PROVE | S | proposed (research director, quant review of research/h50-followup, 2026-10-19) · due 2026-12-18, before any 2027Q1 dispatch · accountable: implementer · reviews: quant-reviewer |
 | 92 | Settings entry-mode card shows per-account entry mode under ADR 0036 | UI (settings) · PROTECT | S | proposed, severity HIGH · accountable: ui-ux-designer (spec) then implementer · reviews: code-reviewer, trading-safety-reviewer |
 | 93 | Approval card shows spread now vs normal and what else is open | UI (approvals) · PROTECT | M | proposed, severity MEDIUM · accountable: ui-ux-designer (spec) then implementer · reviews: code-reviewer, quant-reviewer (spread normal definition) |
 | 94 | Approval card and trade views in plain words, not p, R, pt or indicator codes | UI (approvals, trades) · UX | S | proposed, severity MEDIUM · accountable: ui-ux-designer (spec) then implementer · reviews: code-reviewer |
@@ -1374,6 +1375,24 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
 - **99. No-engine state said once, consistently, across pill, banner and safety tiles.** Value (found in the shots, not in the review list): with no engine the Trades screen says it four ways at once: pill "No engine reporting" (`web/src/shell/StatusPill.tsx:55`), banner "No engines reporting" (`web/src/screens/SafetyStrip.tsx:39`), Drawdown tile "no engines" (`:74`) and an amber Account tile showing only "—"; Limits says "No engines reporting yet." Singular and plural vary. Acceptance: one canonical phrase ("No engine reporting") from one constant; the banner is the only sentence; tiles that depend on the engine read "not reported" in neutral grey (amber only on the banner); the Account tile reads "not reported", never a bare dash. Vitest on SafetyStrip idle state.
 - **100. Load errors that do not stop trading are amber, not red.** Value (found in the shots): with the API unreachable, Home leads with red "Could not load waiting trades. Telegram approvals still work." (`web/src/screens/Home.tsx:46`, class `err`), while the cards below use amber ErrorState. Red is reserved for things that stop trading; this one does not. Acceptance: the waiting-trades load error uses ErrorState (amber, Try again, "Telegram approvals still work"); a lint/test check lists every `className="err"` use and each is either a trading-stopping state or converted. Vitest for Home with the proposals query failing.
 - **101. Phone Trades: the waiting card and Approve above the fold.** Value (found in the fold shot, `scripts/ui_snapshots.mjs` `00-fold-trades.png` at 390x844): on Trades the seven safety tiles (`web/src/screens/SafetyStrip.tsx`) and the No-engines banner push the waiting card to y≈620, so direction and risk are barely visible and Approve needs a scroll inside a 90-second window. Acceptance: on phone with a waiting proposal, the card's header, risk line and Approve sit above the fold at 390x844 and 360x740; the safety tiles collapse to one summary line ("All clear" / "2 things block entries"), red only for a stop, that expands on tap; on desktop unchanged. e2e asserts Approve's bounding box is inside the viewport at 360x740 with two waiting proposals and the idle strip.
+- **102. Retired screened families: refuse open-budget rule_ref runs and count them in the shared exploration cap.**
+  - Value: two governance gaps let a retired, screened family (`box_break_close` R-15, `sweep_absorb` R-14) take
+    trials outside the retired families' shared exploration trial.
+    1. `TrialRegistry.check_quarter_budget` (`goldbot/research/registry.py` 640-669) refuses a retired family only on
+       a contingent slot. An open-budget research.yml run citing a `rule_ref` is not refused.
+    2. `build_plan` (`goldbot/research/director.py` about 1486) builds `retired_map` from the allocated
+       `research_families` only. A screened retired family is therefore outside `retired_exploration`, and the
+       director can give the same quarter's shared trial to another retired family.
+  - Until this is fixed, the rule is procedural: H-53 is the 2027Q1 shared retired-family exploration trial
+    (`prereg-2026-10-19-h50-followup.md` s.3). The research director dispatches no other retired-family trial that
+    quarter.
+  - Acceptance:
+    - a research.yml / research_pass run on a family in `research.retired_families` is refused unless no retired-family
+      trial is stamped in the quarter yet (`retired_quarter_trials` < `RETIRED_EXPLORATION`);
+    - the director's `retired_exploration` counts trials on every retired family, allocated or screened, and reports
+      the quarter's shared trial as used once H-53's row exists;
+    - tests cover both paths, including a screened family;
+    - quant-reviewer signs off.
 
 ## Needs the owner
 These are never decided by the product owner or by agents. Since 2026-10-16 (owner rule) only truly owner-only

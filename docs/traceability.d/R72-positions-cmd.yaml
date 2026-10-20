@@ -1,0 +1,5 @@
+id: R72
+requirement: An operator can see open trades without the dashboard login; read-only, accounts by config name only
+status: implemented
+code: 'goldbot/ops/positions.py `main` (registered as `positions` in goldbot/ops/commands/ops.py) builds on home_cards.open_positions; `open_risk` added to OpenPosition'
+test: tests/test_ops_positions.py; tests/test_api_home_cards.py::test_open_risk_is_the_loss_at_the_current_stop_in_account_money_and_zero_once_locked_in
