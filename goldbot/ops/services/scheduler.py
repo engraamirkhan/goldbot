@@ -49,7 +49,8 @@ def _job_broker(acc: Any) -> Any:
     if sys.platform == "win32":
         from goldbot.execution.mt5_adapter import MT5Broker
         return MT5Broker(terminal_path=acc.terminal_path, login=None, password=None, server=acc.server,
-                         server_tz=acc.server_tz, symbol=acc.symbol, account_label=acc.account_id)
+                         server_tz=acc.server_tz, symbol=acc.symbol, account_label=acc.account_id,
+                         verify=None)               # read-only: never orders
     return None
 
 

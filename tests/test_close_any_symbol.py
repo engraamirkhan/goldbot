@@ -78,7 +78,7 @@ def _terminal(*, ticks: dict[str, Any] | None = None, infos: dict[str, Any] | No
 def _adapter(monkeypatch: pytest.MonkeyPatch, fake: SimpleNamespace) -> mt5_adapter.MT5Broker:
     monkeypatch.setattr(mt5_adapter, "mt5", fake)
     return mt5_adapter.MT5Broker(terminal_path="", login=None, password=None, server="s", server_tz="Europe/Athens",
-                                 symbol="XAUUSD", account_label="icm-demo")
+                                 symbol="XAUUSD", account_label="icm-demo", verify=None)
 
 
 # ------------------------------------------------------------------ MT5 adapter

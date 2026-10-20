@@ -105,6 +105,7 @@ trim), and 62 must hold the cap too. 11 ranked rows.
 | 89 | Opt-in tod_periodicity feature group for O-4 (N1) | Research (features) · LEARN | S | done (implemented 2026-10-18; awaiting quant-reviewer review) · accountable: implementer · reviews: quant-reviewer, code-reviewer · due 2026-12-11 (O-4 group-map pin) |
 | 90 | 20-day measured cost/model series for the adaptive limits | Risk (limits) · PROTECT | S | proposed (raised by the ADR 0031 lane B implementer, 2026-10-18) · accountable: implementer · reviews: quant-reviewer, trading-safety-reviewer |
 | 91 | Retired screened families: refuse open-budget rule_ref runs and count them in the shared exploration cap | Research (governance) · PROVE | S | proposed (research director, quant review of research/h50-followup, 2026-10-19) · due 2026-12-18, before any 2027Q1 dispatch · accountable: implementer · reviews: quant-reviewer |
+| 104 | Exits, stop changes and the kill switch check the terminal account | Execution · PROTECT | S | proposed (raised by the trading-safety review of the per-order account check, 2026-10-19; severity LOW) · accountable: implementer · reviews: trading-safety-reviewer |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later
@@ -1371,6 +1372,7 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
       the quarter's shared trial as used once H-53's row exists;
     - tests cover both paths, including a screened family;
     - quant-reviewer signs off.
+- **104. Exits, stop changes and the kill switch check the terminal account.** Value: entries are now refused when the MT5 terminal is no longer on the registered account (direct adapter `MT5Broker(verify=...)` and the bridge's GuardedBroker), but `close`, `modify`, reconciliation (orphan adoption, reinstated stops) and the 12% kill switch's "close everything at market" are never checked, on both paths. If the terminal is switched to another account, the engine could close, re-stop or adopt that account's positions (manual trades on a real account included). Severity LOW: it needs a terminal switched while the engine runs, and exits must never be blocked for goldbot's own trades. Acceptance: (1) a close or stop change of a position the engine recorded itself (ticket in its open trades or pending orders, magic in the account's range) is never gated, whatever the terminal reports (test); (2) on a terminal that fails `accounts.verify_terminal_account`, the kill switch's close-all, orphan adoption and stop reinstatement act on no position the engine did not record, and journal plus alert once per streak instead (tests on both the direct adapter and GuardedBroker); (3) an unreadable account counts as failing for (2) only, never for (1); (4) trading-safety-reviewer signs off that no exit of goldbot's own trades can be blocked.
 
 ## Needs the owner
 These are never decided by the product owner or by agents. Since 2026-10-16 (owner rule) only truly owner-only

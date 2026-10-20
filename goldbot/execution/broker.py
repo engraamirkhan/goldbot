@@ -14,6 +14,9 @@ from goldbot.data.calendar import TradingSession
 # (tests/test_magic.py); GuardedBroker refuses it unless the terminal reports a demo account (F4), and the broker ledger
 # lists such positions apart from the RC-8 reconciliation (goldbot/ops/ledger.py)
 SMOKE_MAGIC_OFFSET = 99
+# the message prefix of an entry MT5Broker's per-order account check refused (retcode 10006, a definite reject): the
+# terminal is no longer on the registered account. The engine alerts on it and the card says the engine refused it
+ACCOUNT_REFUSAL = "terminal_account_changed"
 
 
 class Tick(Record):
