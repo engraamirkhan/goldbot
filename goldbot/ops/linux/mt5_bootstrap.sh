@@ -126,6 +126,10 @@ install -m 644 "$OPS"/systemd/goldbot-xvfb.service "$OPS"/systemd/goldbot-bridge
 # and a terminal that stays down. The probe it runs as nobody (it reads the mt5-written /health) is root-owned too.
 install -m 755 -o root -g root "$OPS/goldbot-bridge-watchdog.sh" /usr/local/sbin/goldbot-bridge-watchdog
 install -m 755 -o root -g root "$OPS/goldbot-bridge-probe.sh" /usr/local/sbin/goldbot-bridge-probe
+# run as mt5 by the terminal unit before each start (AutoTrading on); root-owned so mt5 cannot change what its unit runs
+install -d -m 755 -o root -g root /usr/local/libexec/goldbot
+install -m 755 -o root -g root "$OPS/mt5/mt5-experts-enable.sh" /usr/local/libexec/goldbot/mt5-experts-enable.sh
+install -m 755 -o root -g root "$OPS/mt5/mt5-ini.sh" /usr/local/libexec/goldbot/mt5-ini.sh
 systemctl daemon-reload
 systemctl enable --now goldbot-xvfb
 

@@ -630,7 +630,9 @@ def test_t8_the_terminal_unit_is_the_only_launcher_and_the_bridge_requires_it():
     assert _directive(term, "RestartSec") == "15" and _directive(term, "StartLimitIntervalSec") == "0"
     assert _directive(term, "RestartSteps") == "5" and _directive(term, "RestartMaxDelaySec") == "10min"
     assert _directive(term, "ExecStart") == "/usr/bin/wine /home/mt5/.wine/drive_c/MT5/ICMarkets/terminal64.exe /profile:goldbot"
-    pre = _directive(term, "ExecStartPre")
+    pres = [ln.split("=", 1)[1] for ln in term.splitlines() if ln.startswith("ExecStartPre=")]
+    assert pres[1:] == ["-/usr/local/libexec/goldbot/mt5-experts-enable.sh"]      # after the guard (AutoTrading on)
+    pre = pres[0]
     assert "pgrep -u mt5 -f" in pre and "[t]erminal64" in pre and "exit 1" in pre and "$" not in pre
     assert "goldbot-xvfb.service" in _directive(term, "Requires") and "DISPLAY=:99" in term
     bridge = (UNITS / "goldbot-bridge@.service").read_text()
