@@ -55,7 +55,7 @@ def _engine(state: Path) -> None:
     e = {"account": ACC, "mode": "demo",
          "history_gap": {"1h": {"from": "2026-10-19T01:00:00+00:00", "to": "2026-10-19T03:00:00+00:00", "open_min": 120,
                                 "at": "2026-10-19T04:00:00+00:00"}},
-         "history_backfill": {"status": "done"},
+         "history_backfill": {"status": "done"}, "currency": "USD", "lot_terms": {"contract_oz": 100.0},
          "throttle": {"enabled": True, "agents": {"box-g0-1h": {"blocked": ["loss_streak"], "cooldown_until": None},
                                                   "mfi-g0-1h": {"blocked": [], "cooldown_until": None}}}}
     (state / f"engine_{ACC}.json").write_text(json.dumps(e))
@@ -100,7 +100,7 @@ def test_cost_probe_row_shows_requested_vs_fill_spread_commission_exit_and_round
     line = next(x for x in out.splitlines() if "req 2400.00" in x)
     for want in ("fill 2400.30", "spread 0.25", "comm 0.07", "@ 2402.30", "target"):
         assert want in line
-    assert "round trip 0.20 $/oz" in line                       # gross 2.00/oz less net 1.80/oz
+    assert "round trip 0.20 USD/oz" in line                       # gross 2.00/oz less net 1.80/oz
 
 
 def test_engine_history_gap_and_guard_state_are_printed_per_agent(tmp_path):
@@ -149,3 +149,57 @@ def test_the_report_writes_nothing_and_does_not_migrate_the_ledger(tmp_path):
 def test_a_bad_since_or_unknown_account_exits_2(tmp_path):
     assert _run(tmp_path, "--since", "yesterday-ish")[0] == 2
     assert _run(tmp_path, "--account", "nope")[0] == 2
+
+
+def _line(out: str, needle: str) -> str:
+    return next(x for x in out.splitlines() if needle in x)
+
+
+def test_aux_db_is_opened_read_only_journal_mode_and_files_unchanged(tmp_path):
+    import sqlite3
+    _probes(tmp_path)
+    db = tmp_path / "aux.db"
+    c = sqlite3.connect(db)
+    c.execute("PRAGMA journal_mode=DELETE")                     # rollback mode: a WAL-forcing open would change it
+    c.close()
+    _engine(tmp_path)
+    before = sorted(p.name for p in tmp_path.iterdir()), db.stat().st_mtime_ns, db.stat().st_mode
+    code, out = _run(tmp_path)
+    assert code == 0 and "cost probes: 1 row(s)" in out
+    assert (sorted(p.name for p in tmp_path.iterdir()), db.stat().st_mtime_ns, db.stat().st_mode) == before
+    assert sqlite3.connect(db).execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+
+
+def test_round_trip_on_a_gbp_account_uses_the_published_fx_and_contract_and_is_marked_approx(tmp_path):
+    _probes(tmp_path)
+    e = {"account": ACC, "currency": "GBP", "usd_to_account": 0.8, "lot_terms": {"contract_oz": 50.0}}
+    (tmp_path / f"engine_{ACC}.json").write_text(json.dumps(e))
+    _, out = _run(tmp_path, "--include-quarantined")
+    line = _line(out, "req 2400.00")
+    # gross 2.00/oz; pnl 1.80 GBP = 2.25 USD over 0.01 lot x 50 oz = 4.50 USD/oz net -> -2.50
+    assert "round trip ~-2.50 USD/oz (approx: today's fx)" in line and "comm 0.07 GBP" in line
+
+
+def test_round_trip_is_unknown_not_guessed_without_contract_or_fx(tmp_path):
+    _probes(tmp_path)
+    (tmp_path / f"engine_{ACC}.json").write_text(json.dumps({"account": ACC, "currency": "GBP", "lot_terms": {}}))
+    _, out = _run(tmp_path)
+    assert "round trip ? USD/oz" in out
+
+
+def test_a_login_inside_engine_file_strings_is_masked(tmp_path):
+    e = {"account": ACC, "history_backfill": {"status": f"failed for login {LOGIN}"},
+         "history_gap": {f"1h-{LOGIN}": {"from": "2026-10-19T01:00:00.123456+00:00", "to": "bad", "open_min": 5}},
+         "throttle": {"enabled": True, "error": f"KeyError: {LOGIN}",
+                      "agents": {f"a-{LOGIN}": {"blocked": [f"x{LOGIN}"], "cooldown_until": None}}}}
+    (tmp_path / f"engine_{ACC}.json").write_text(json.dumps(e))
+    for argv in ((), ("--json",)):
+        code, out = _run(tmp_path, *argv)
+        assert LOGIN not in out
+
+
+def test_account_argument_is_validated_and_its_echo_masked(tmp_path):
+    code, out = _run(tmp_path, "--account", f"../{LOGIN}/x")
+    assert code == 2 and LOGIN not in out and "invalid --account" in out
+    code, out = _run(tmp_path, "--account", f"nope-{LOGIN}")
+    assert code == 2 and LOGIN not in out

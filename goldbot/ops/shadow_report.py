@@ -12,13 +12,19 @@ with any run of 5+ digits cut (entry_text.account_name); a login number is never
 read is named and the exit code is 1: a missing source is not "no trades".
 
 R gross is the trade's gross return in units of its initial risk, `ret * entry / |entry - stop|` (no costs; the
-shadow book's `ret` already follows the exit policy). Cost-probe $/oz figures are the broker's, in the account
-currency per oz of a 100 oz lot; `round trip` = gross move per oz minus net P&L per oz (commission, swap, exit slip).
+shadow book's `ret` already follows the exit policy). Cost-probe `round trip` = gross move per oz
+minus net P&L per oz (commission, swap, exit slip), in USD per oz: net P&L is converted with the engine's published
+usd_to_account (today's factor, so "approx" off a USD account) and the contract size from its lot_terms; either one
+missing prints "?" (never a guessed rate or a mixed-unit figure). The ledger is opened read-only (`mode=ro`,
+`query_only`), so the report neither switches the journal mode nor creates -wal/-shm files nor changes permissions.
+Every string taken from an engine file is passed through account_name (a login inside it never prints).
 """
 from __future__ import annotations
 
 import argparse
 import json
+import re
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -26,14 +32,16 @@ from typing import Any
 import pandas as pd
 
 from goldbot.base import load_record
+from goldbot.db.migrations import check_version
 from goldbot.engine.cost_probe import LEDGER, ProbeRecord
 from goldbot.engine.shadow import ShadowTrade, VersionBook
+from goldbot.ops.account_view import usd_to_account
 from goldbot.research.promotion import EVIDENCE_START_UTC, quarantine_reason
 from goldbot.telegram.entry_text import account_name
 
 __all__ = ["main"]
 
-OZ_PER_LOT = 100.0
+ACCOUNT_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def _iso(ts: pd.Timestamp | None) -> str | None:
@@ -76,22 +84,31 @@ def shadow_trades(state: Path, since: pd.Timestamp | None, include_quarantined: 
 def _trade_row(t: ShadowTrade, state_name: str, reason: str | None) -> dict[str, Any]:
     risk = abs(t.entry - t.stop)
     r_gross = round(t.ret * t.entry / risk, 3) if t.ret is not None and risk > 0 else None
-    return {"agent": t.agent_id, "version": t.version, "timeframe": t.timeframe, "state": state_name,
+    return {"agent": _m(t.agent_id), "version": _m(t.version), "timeframe": t.timeframe, "state": state_name,
             "side": "long" if t.side > 0 else "short", "entry_utc": _iso(t.entry_ts), "entry": t.entry,
             "exit_utc": _iso(t.exit_ts), "exit": t.exit, "r_gross": r_gross, "exit_reason": t.barrier,
             "quarantined": reason}
 
 
-def probe_rows(state: Path, accounts: list[str], since: pd.Timestamp | None,
-               include_quarantined: bool) -> dict[str, Any] | None:
+def _read_ledger(state: Path) -> list[ProbeRecord]:
+    """The ledger read-only: `mode=ro` + `query_only`, schema version checked (fails closed), nothing created or changed."""
+    uri = f"{(state / 'aux.db').resolve().as_uri()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, isolation_level=None, timeout=5)
+    try:
+        conn.execute("PRAGMA query_only=1")
+        check_version(conn, "aux")
+        return LEDGER.select(conn, order_by="ts_ns")
+    finally:
+        conn.close()
+
+
+def probe_rows(state: Path, accounts: list[str], since: pd.Timestamp | None, include_quarantined: bool,
+               engines: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
     """The cost-probe ledger's rows for `accounts`; None when the ledger cannot be read."""
     if not (state / "aux.db").exists():
         return {"probes": [], "hidden_quarantined": 0}
     try:
-        from goldbot.db.connection import Database
-        db = Database.open(state, "aux", migrate=False)         # never migrates: a report writes nothing
-        with db.connection() as conn:
-            recs: list[ProbeRecord] = LEDGER.select(conn, order_by="ts_ns")
+        recs = _read_ledger(state)
     except Exception:                   # noqa: BLE001 - reporting only
         return None
     rows: list[dict[str, Any]] = []
@@ -103,46 +120,82 @@ def probe_rows(state: Path, accounts: list[str], since: pd.Timestamp | None,
         if not show:
             hidden += reason is not None and (since is None or pd.Timestamp(r.sent_utc) >= since)
             continue
-        rows.append(_probe_row(r, reason))
+        rows.append(_probe_row(r, reason, engines.get(r.account_id, {})))
     return {"probes": rows, "hidden_quarantined": int(hidden)}
 
 
-def _probe_row(r: ProbeRecord, reason: str | None) -> dict[str, Any]:
-    oz = r.lots * OZ_PER_LOT
+def _probe_row(r: ProbeRecord, reason: str | None, engine: dict[str, Any]) -> dict[str, Any]:
+    lot = engine.get("lot_terms")
+    contract = lot.get("contract_oz") if isinstance(lot, dict) else None
+    fx = usd_to_account(engine)
+    ccy = engine.get("currency") if isinstance(engine.get("currency"), str) else None
     round_trip = None
-    if r.fill_price is not None and r.exit_price is not None and r.pnl is not None and oz > 0:
-        round_trip = round(r.side * (r.exit_price - r.fill_price) - r.pnl / oz, 3)
-    return {"account": account_name(r.account_id), "agent": r.agent_id, "side": "long" if r.side > 0 else "short",
+    if (r.fill_price is not None and r.exit_price is not None and r.pnl is not None and isinstance(contract, (int, float))
+            and contract > 0 and fx is not None and fx > 0):
+        round_trip = round(r.side * (r.exit_price - r.fill_price) - r.pnl / fx / (r.lots * contract), 3)
+    return {"account": account_name(r.account_id), "agent": _m(r.agent_id), "side": "long" if r.side > 0 else "short",
             "lots": r.lots, "sent_utc": _iso(r.sent_utc), "requested": r.requested_price, "fill": r.fill_price,
-            "spread_at_fill": r.spread_usd, "commission": r.commission, "swap": r.swap,
-            "exit_utc": _iso(r.exit_utc), "exit": r.exit_price, "exit_reason": r.exit_reason, "pnl": r.pnl,
-            "round_trip_usd_per_oz": round_trip, "quarantined": reason}
+            "spread_at_fill": r.spread_usd, "commission": r.commission, "swap": r.swap, "currency": _m(ccy),
+            "exit_utc": _iso(r.exit_utc), "exit": r.exit_price, "exit_reason": _m(r.exit_reason), "pnl": r.pnl,
+            "round_trip_usd_per_oz": round_trip,
+            "round_trip_approx": round_trip is not None and (ccy or "").upper() != "USD", "quarantined": reason}
 
 
-def engine_state(state: Path, acc: str) -> dict[str, Any]:
-    """History-gap and guard facts from engine_<account>.json (what the engine itself published)."""
-    name = account_name(acc)
+def _m(v: Any) -> Any:
+    """Mask account identifiers in a string taken from a file (account_name); other values pass unchanged."""
+    return account_name(v) if isinstance(v, str) else v
+
+
+def _ts(v: Any) -> str | None:
+    """A timestamp re-formatted to whole seconds, or None: only a parsed time prints, never the file's own string."""
+    try:
+        return pd.Timestamp(v).floor("s").isoformat()
+    except (ValueError, TypeError):
+        return None
+
+
+def read_engine(state: Path, acc: str) -> dict[str, Any] | None:
+    """engine_<account>.json as a dict: {} when absent, None when unreadable."""
     f = state / f"engine_{acc}.json"
     if not f.exists():
-        return {"account": name, "file": False, "readable": True}
+        return {}
     try:
         e = json.loads(f.read_text())
     except Exception:                   # noqa: BLE001 - reporting only
+        return None
+    return e if isinstance(e, dict) else None
+
+
+def engine_state(state: Path, acc: str, e: dict[str, Any] | None) -> dict[str, Any]:
+    """History-gap and guard facts from engine_<account>.json (what the engine itself published)."""
+    name = account_name(acc)
+    if e is None:
         return {"account": name, "file": True, "readable": False}
-    th = e.get("throttle") or {}
-    agents = {a: {"blocked": v.get("blocked") or [], "cooldown_until": v.get("cooldown_until")}
-              for a, v in sorted((th.get("agents") or {}).items())}
-    return {"account": name, "file": True, "readable": True, "mode": e.get("mode"),
-            "history_gap": e.get("history_gap") or {}, "history_backfill": e.get("history_backfill") or {},
-            "throttle_enabled": th.get("enabled"), "throttle_error": th.get("error"), "agents": agents}
+    if not e:
+        return {"account": name, "file": (state / f"engine_{acc}.json").exists(), "readable": True}
+    th: dict[str, Any] = e.get("throttle") if isinstance(e.get("throttle"), dict) else {}
+    ths: dict[str, Any] = th.get("agents") if isinstance(th.get("agents"), dict) else {}
+    agents = {_m(str(a)): {"blocked": [_m(str(x)) for x in (v.get("blocked") or [])], "cooldown_until": _ts(v.get("cooldown_until"))
+                           if v.get("cooldown_until") else None}
+              for a, v in sorted(ths.items()) if isinstance(v, dict)}
+    gaps: dict[str, Any] = e.get("history_gap") if isinstance(e.get("history_gap"), dict) else {}
+    backfill: dict[str, Any] = e.get("history_backfill") if isinstance(e.get("history_backfill"), dict) else {}
+    return {"account": name, "file": True, "readable": True, "mode": _m(e.get("mode")),
+            "history_gap": {_m(str(tf)): {"from": _ts(g.get("from")), "to": _ts(g.get("to")), "open_min": g.get("open_min")
+                                          if isinstance(g.get("open_min"), (int, float)) else None}
+                            for tf, g in sorted(gaps.items()) if isinstance(g, dict)},
+            "history_backfill": json.loads(account_name(json.dumps(backfill, sort_keys=True))) if backfill else {},
+            "throttle_enabled": th.get("enabled"), "throttle_error": _m(th.get("error")), "agents": agents}
 
 
 def build(state: Path, accounts: list[str], since: pd.Timestamp | None, include_quarantined: bool) -> dict[str, Any]:
+    raw = {a: read_engine(state, a) for a in accounts}
     return {"evidence_start_utc": EVIDENCE_START_UTC.isoformat(), "since": _iso(since),
             "include_quarantined": include_quarantined,
             "shadow": shadow_trades(state, since, include_quarantined),
-            "cost_probes": probe_rows(state, accounts, since, include_quarantined),
-            "engines": [engine_state(state, a) for a in accounts]}
+            "cost_probes": probe_rows(state, accounts, since, include_quarantined,
+                                      {a: e for a, e in raw.items() if e}),
+            "engines": [engine_state(state, a, raw[a]) for a in accounts]}
 
 
 def _f(v: float | None, signed: bool = False) -> str:
@@ -176,9 +229,10 @@ def render(doc: dict[str, Any]) -> str:
                    + (f", {cp['hidden_quarantined']} quarantined hidden" if cp["hidden_quarantined"] else ""))
         for r in cp["probes"]:
             out.append(f"  {r['account']} {r['agent']} {r['side']} {r['lots']:g} lots sent {r['sent_utc']} req {_f(r['requested'])} "
-                       f"fill {_f(r['fill'])} spread {_f(r['spread_at_fill'])} comm {_f(r['commission'])} "
+                       f"fill {_f(r['fill'])} spread {_f(r['spread_at_fill'])} comm {_f(r['commission'])} {r['currency'] or '?'} "
                        f"exit {r['exit_utc'] or '-'} @ {_f(r['exit'])} {r['exit_reason'] or '-'} "
-                       f"round trip {_f(r['round_trip_usd_per_oz'])} $/oz"
+                       f"round trip {'~' if r['round_trip_approx'] else ''}{_f(r['round_trip_usd_per_oz'])} USD/oz"
+                       + (" (approx: today's fx)" if r["round_trip_approx"] else "")
                        + (f"  [quarantined: {r['quarantined']}]" if r["quarantined"] else ""))
     for e in doc["engines"]:
         out.append(f"\nengine {e['account']}:")
@@ -189,7 +243,7 @@ def render(doc: dict[str, Any]) -> str:
         else:
             gaps = e["history_gap"]
             out.append("  history_gap: " + ("none (every evaluated window unbroken)" if not gaps else
-                       "; ".join(f"{tf} {g.get('open_min')} min {g.get('from')} -> {g.get('to')}" for tf, g in sorted(gaps.items()))))
+                       "; ".join(f"{tf} {g['open_min']} min {g['from']} -> {g['to']}" for tf, g in sorted(gaps.items()))))
             if e["history_backfill"]:
                 out.append(f"  history_backfill: {json.dumps(e['history_backfill'], sort_keys=True)}")
             if e["throttle_error"]:
@@ -224,8 +278,11 @@ def main(argv: list[str], enabled: list[str] | None = None) -> int:
         from goldbot.ops.accounts import enabled_accounts
         enabled = [a.account_id for a in enabled_accounts()]
     state = Path(args.state_dir)
+    if args.account is not None and not ACCOUNT_ID.match(args.account):
+        print(f"invalid --account {account_name(args.account)[:40]!r}: letters, digits, '-' and '_' only")
+        return 2
     if args.account is not None and args.account not in enabled and not (state / f"engine_{args.account}.json").exists():
-        print(f"unknown account {args.account!r}: enabled accounts are {', '.join(account_name(a) for a in enabled) or 'none'}")
+        print(f"unknown account {account_name(args.account)!r}: enabled accounts are {', '.join(account_name(a) for a in enabled) or 'none'}")
         return 2
     doc = build(state, [args.account] if args.account is not None else enabled, since, args.include_quarantined)
     print(json.dumps(doc, indent=1) if args.json else render(doc))
