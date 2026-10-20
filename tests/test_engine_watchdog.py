@@ -501,8 +501,10 @@ def test_t3_a_young_or_inactive_terminal_unit_is_left_to_its_own_restart(tmp_pat
 
 
 @pytest.mark.skipif(not BASH, reason="needs bash")
-@pytest.mark.parametrize("state", ["not_logged_in", "wrong_account"])
+@pytest.mark.parametrize("state", ["not_logged_in", "wrong_account", "autotrading_off"])
 def test_t4_a_login_problem_is_logged_and_never_restarted(tmp_path, state):
+    """autotrading_off too: the watchdog never overrides an AutoTrading switched off by hand (the brain's check FAILs
+    and says how to restart the terminal unit, whose start turns it on)."""
     rc, out, calls = _bridge_watchdog(tmp_path, bodies=[_health(state)] * 3)
     assert rc == 0 and _restarted(calls) == [], calls
     assert f"terminal {state}" in out and "not restarting" in out

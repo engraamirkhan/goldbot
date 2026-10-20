@@ -125,8 +125,10 @@ CEILING_REFUSAL = "bridge_notional_ceiling"     # the message prefix of every ce
 UNREADABLE_REFUSAL = f"{CEILING_REFUSAL}: unreadable:"   # ... when a figure it checks could not be read (fail closed)
 STALE_REFUSAL = "bridge_stale_order"            # an order that aged past ORDER_MAX_AGE_S during the ceiling's reads
 REFUSED_RETCODE = 10006         # MT5 "request rejected": a definite reject (runner.DEFINITE_REJECT_RETCODES)
-# The terminal's state on GET /health: exactly these tokens (the root watchdog's probe matches them literally).
-TERMINAL_STATES = ("ok", "not_running", "not_connected", "not_logged_in", "wrong_account")
+# The terminal's state on GET /health: exactly these tokens (the root watchdog's probe matches them literally, and
+# lists them in this order; a test pins the two equal). `autotrading_off` (incident 2026-10-20): on the registered
+# account and connected, but the terminal's AutoTrading button is off, so it refuses every order (10027).
+TERMINAL_STATES = ("ok", "not_running", "not_connected", "not_logged_in", "wrong_account", "autotrading_off")
 # The keyring login's state on /health (`login`, beside `terminal`; goldbot/ops/login.py SelfHeal.status): fixed tokens,
 # never a login. Old probes and brains ignore the extra field.
 LOGIN_STATES = ("in_progress", "refused", "rate_limited", "waiting")
@@ -245,7 +247,7 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
             state = "not_running"
         if state != seen["state"]:
             seen["state"], seen["since"] = state, clock()
-        if state == "ok":
+        if state in ("ok", "autotrading_off"):         # both are the registered account, connected
             seen["verified"] = True
         return str(state)
 
@@ -506,8 +508,9 @@ class GuardedBroker:
     def terminal_state(self) -> str | None:
         """The terminal's state as one token of TERMINAL_STATES, for GET /health; None when the wrapped broker cannot
         say (no `terminal_info`, e.g. the paper broker). Order: no terminal (terminal_info None or an IPC error) ->
-        no account -> another account than registered (`verify`) -> not connected to the broker server -> ok. A login
-        or a server never leaves this method."""
+        no account -> another account than registered (`verify`) -> not connected to the broker server -> AutoTrading
+        off (`terminal_info().trade_allowed` False: the terminal refuses every order, 10027; a terminal_info without
+        the field is not judged) -> ok. A login or a server never leaves this method."""
         info_fn = getattr(self._b, "terminal_info", None)
         if not callable(info_fn):
             return None
@@ -531,6 +534,8 @@ class GuardedBroker:
             return "wrong_account"
         if not getattr(term, "connected", False):
             return "not_connected"
+        if getattr(term, "trade_allowed", True) is False:
+            return "autotrading_off"
         return "ok"
 
     @property

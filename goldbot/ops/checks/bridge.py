@@ -39,13 +39,18 @@ _TERMINAL_FAIL = {
                      + " The MT5 box logs it in from the keyring; if it stays: goldbot-mt5 login <account>,"
                      " RUNBOOK 'Terminal down'.",
     "wrong_account": "MT5 terminal logged in to a different account than registered; the bridge refuses orders.",
+    # incident 2026-10-20: the terminal unit's start sets [Experts] Enabled=1 (mt5-experts-enable.sh)
+    "autotrading_off": "MT5 terminal AutoTrading is off: the terminal refuses every order (10027). Restart the terminal"
+                       " unit on the MT5 box (its start enables it): `sudo systemctl restart"
+                       " goldbot-mt5-terminal@<account>`",
 }
 
 
 @register_check("account", block=BLOCK_ACCOUNT, pos=115)
 def check_terminal(ctx: HealthContext, account_id: str) -> Check | None:
     """The MT5 terminal behind the bridge, as the bridge's GET /health reports it: one token (ok, not_running,
-    not_connected, not_logged_in, wrong_account; docs/proposals/2026-10-mt5-terminal-lifecycle.md section 3). The
+    not_connected, not_logged_in, wrong_account, autotrading_off; docs/proposals/2026-10-mt5-terminal-lifecycle.md
+    section 3). An older brain reads autotrading_off as an unknown value: `noanswer`, a warning here. The
     wording never carries a login, a server or a host (security condition 6). Omitted without a bridge URL or a probe;
     a bridge that does not answer is `bridge:<account>`'s FAIL, so here it is a warning."""
     try:

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # goldbot-bridge-probe <port> <timeout_s>: print exactly one fixed token for the bridge's GET /health, one of
-#   ok | not_running | not_connected | not_logged_in | wrong_account | noanswer
+#   ok | not_running | not_connected | not_logged_in | wrong_account | autotrading_off | noanswer
 # and nothing else. The body is written by the bridge, which runs as mt5, so it is untrusted here: this script runs
 # UNPRIVILEGED (goldbot-bridge-watchdog starts it with setpriv as nobody; security condition 1 of
 # docs/proposals/2026-10-mt5-terminal-lifecycle.md), reads at most 1 KiB, never evaluates or prints the body, and
-# matches it only against the five literal `"terminal": "<state>"` forms the bridge writes (json.dumps). Exactly one
+# matches it only against the six literal `"terminal": "<state>"` forms the bridge writes (json.dumps). Exactly one
 # must match; anything else (unknown value, two values, over 1 KiB, a NUL, no answer, curl error) is `noanswer`.
 # A body without any "terminal" key that starts like the bridge's {"ok": true is an older bridge: `ok`, as before.
 set -uo pipefail
@@ -34,7 +34,7 @@ fi
 
 found=noanswer
 n=0
-for state in ok not_running not_connected not_logged_in wrong_account; do
+for state in ok not_running not_connected not_logged_in wrong_account autotrading_off; do
   case "$body" in
     *"\"terminal\": \"$state\""*) found=$state; n=$((n + 1)) ;;
   esac

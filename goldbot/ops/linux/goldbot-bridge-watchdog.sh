@@ -7,7 +7,7 @@
 # the terminal blocks GET /health too, which this probes. Run by goldbot-bridge-watchdog@.timer every 2 minutes, as
 # root (systemctl restart needs it). Root here only reads systemd's own properties and one fixed token: the GET runs in
 # goldbot-bridge-probe as nobody (setpriv), which prints one of ok|not_running|not_connected|not_logged_in|
-# wrong_account|noanswer. Root keeps at most 32 bytes of it, drops every byte outside [a-z_] and matches the rest with
+# wrong_account|autotrading_off|noanswer. Root keeps at most 32 bytes of it, drops every byte outside [a-z_] and matches the rest with
 # an exact `case` on that list; anything else is noanswer. The body never reaches root, the log, a path, a unit name
 # or an argument, and the only actions are restarts of the two literal units named from the validated <account>
 # (docs/proposals/2026-10-mt5-terminal-lifecycle.md, security conditions 1-3). It writes one file, a restart count in
@@ -24,6 +24,8 @@
 # * otherwise PROBES probes PROBE_GAP_S apart (an order the terminal takes 20-30 s to answer must not trip it):
 #   - ok on any probe: nothing;
 #   - not_logged_in or wrong_account: logged, never restarted (a restart cannot restore a login; a loop would hide it);
+#   - autotrading_off: logged, never restarted (AutoTrading switched off by hand is never overridden from here; the
+#     brain's terminal:<account> check FAILs and names the restart that turns it on);
 #   - noanswer on every probe: restart the bridge (as before);
 #   - not_running/not_connected on every probe, terminal unit up TERMINAL_GRACE_S: restart the terminal unit;
 #   - anything mixed: nothing (the next run looks again).
@@ -141,6 +143,9 @@ while :; do
     ok) exit 0 ;;
     not_logged_in|wrong_account)
       log "terminal $tok on $bridge; not restarting (a restart cannot restore a login; RUNBOOK 'Terminal down')"
+      exit 0 ;;
+    autotrading_off)
+      log "terminal $tok on $bridge; not restarting (never overrides AutoTrading switched off; RUNBOOK 0.5 AutoTrading)"
       exit 0 ;;
     not_running|not_connected) down=$((down + 1)); last=$tok ;;
     *) silent=$((silent + 1)) ;;
