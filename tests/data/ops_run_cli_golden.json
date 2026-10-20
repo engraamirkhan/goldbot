@@ -53,6 +53,10 @@
   "engine-no-account": {
    "error": "IndexError"
   },
+  "fill-count": {
+   "exit": 0,
+   "printed_usage": false
+  },
   "gate-evidence": {
    "args": {
     "argv": [
@@ -354,6 +358,10 @@
   "drift-review": {
    "rc": 0,
    "stdout": "{\n  \"ts\": null,\n  \"system_halt\": null,\n  \"halted\": null,\n  \"size_factor\": null,\n  \"errors\": null\n}\n"
+  },
+  "fill-count": {
+   "rc": 0,
+   "stdout": "usage: goldbot run fill-count [-h] [--since SINCE] [--account ACCOUNT] [--json]\n                              [--state-dir STATE_DIR]\n\nDemo fills per account per day against the 300-by-Friday target, read-only (state files).\n\noptions:\n  -h, --help            show this help message and exit\n  --since SINCE         only daily rows at or after this ISO timestamp (UTC if no zone);\n                        cumulative is unaffected\n  --account ACCOUNT     one enabled account id (default: every enabled account)\n  --json                print the report as JSON\n  --state-dir STATE_DIR\n"
   },
   "gate-evidence": {
    "rc": 0,

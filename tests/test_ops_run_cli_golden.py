@@ -40,7 +40,7 @@ WRITE = os.environ.get("GOLDBOT_WRITE_RUN_GOLDEN") == "1"
 
 # subcommands whose --help only prints (argparse) or, for drift-review, only reads state/drift.json in the cwd
 HELP_COMMANDS = ("record-gate", "gates", "gate-evidence", "publish-costs", "restore", "setup", "preflight",
-                 "revoke-sessions", "owner-history", "health", "positions", "shadow-report", "ruin", "monthly-report", "perf-report",
+                 "revoke-sessions", "owner-history", "health", "positions", "shadow-report", "fill-count", "ruin", "monthly-report", "perf-report",
                  "sizing-feasibility", "drift-review", "bridge-smoke", "tv-import", "tv-repaint-check", "tv-pull", "ledger")
 
 # every command the dispatcher knows, with sample arguments (the trace stops before anything runs)
@@ -71,6 +71,7 @@ DISPATCH: dict[str, list[str]] = {
     "health": ["health", "--static"],
     "positions": ["positions"],
     "shadow-report": ["shadow-report"],
+    "fill-count": ["fill-count"],
     "ruin": ["ruin", "--trades-per-week", "5"],
     "monthly-report": ["monthly-report", "--json"],
     "perf-report": ["perf-report", "--json"],
@@ -264,6 +265,7 @@ ONE_SHOT: dict[str, tuple[str, str]] = {
     "health": ("goldbot.ops.health", "main"),
     "positions": ("goldbot.ops.positions", "main"),
     "shadow-report": ("goldbot.ops.shadow_report", "main"),
+    "fill-count": ("goldbot.ops.fill_count", "main"),
     "ruin": ("goldbot.research.ruin", "main"),
     "monthly-report": ("goldbot.ops.monthly_report", "main"),
     "perf-report": ("goldbot.ops.perf_report", "main"),
