@@ -348,3 +348,18 @@ def test_the_e2e_seed_has_a_90_second_real_money_card_and_a_demo_card_forced_to_
     live, demo = cards["e2e-long"], cards["e2e-short"]
     assert (live["account_mode"], live["window_s"], live["ask_reason"]) == ("live", 90, None)
     assert (demo["account_mode"], demo["window_s"], demo["ask_reason"]["kind"]) == ("demo", 3600, "rearm_lock")
+
+
+@pytest.mark.parametrize("currencies", [None, {}, {"icm-demo": None}])
+def test_combined_money_needs_a_known_currency_never_amounts_without_one(tmp_path, currencies):
+    sup = _sup()
+    if currencies is None:
+        del sup["currencies"]
+    else:
+        sup["currencies"] = currencies
+    (tmp_path / "supervisor.json").write_text(json.dumps(sup))
+    c, h = _client(tmp_path)
+    s = c.get("/api/limits", headers=h).json()["supervisor"]
+    assert s["currency"] is None and s["daily_cap"] == 0.015                 # the fraction still shows
+    assert all(s[k] is None for k in ("daily_cap_amount", "weekly_cap_amount", "daily_used_amount",
+                                      "weekly_used_amount"))

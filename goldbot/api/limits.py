@@ -159,16 +159,16 @@ def _account(e: dict[str, Any], now: pd.Timestamp, state_dir: Path, last: LimitC
 def _combined_money(sup: dict[str, Any], daily_cap: float | None, weekly_cap: float | None) -> dict[str, Any]:
     """Backlog 98: the combined caps in money, as the supervisor sums them (goldbot/risk/supervisor.py `evaluate`, one
     currency only): cap x combined day/week-start equity, used = that start - combined equity now, floored at 0 (a
-    gain uses nothing). All amounts null when the accounts report different currencies (ADR 0004: pounds are never
-    added to dollars), when the supervisor has not summed them, or (an empty `sup`: `mixed_currencies` null too) when
-    it is not reporting."""
+    gain uses nothing). All amounts null unless the accounts report one known currency (ADR 0004: pounds are never
+    added to dollars; an amount is never shown without its currency), when the supervisor has not summed them, or
+    (an empty `sup`: `mixed_currencies` null too) when it is not reporting."""
     raw = sup.get("currencies")
     kinds = {c for c in raw.values()} if isinstance(raw, dict) else set()
     mixed = len(kinds) > 1
     ccy = next(iter(kinds)) if len(kinds) == 1 and isinstance(next(iter(kinds)), str) else None
     eq = _num(sup.get("combined_equity"))
     day0, week0 = _pos(sup.get("combined_day_start_equity")), _pos(sup.get("combined_week_start_equity"))
-    money = not mixed and eq is not None
+    money = ccy is not None and eq is not None          # never an amount without its currency (one, known)
 
     def cap(c: float | None, base: float | None) -> float | None:
         return round(c * base, 2) if money and c is not None and base is not None else None
