@@ -84,7 +84,7 @@ test("owner approves one proposal and rejects the other with a reason", async ({
   await page.waitForTimeout(500);
   expect(ws.isClosed()).toBe(false);
   await go(page, "Approvals");
-  await expect(page.getByText("No engines reporting")).toBeVisible();         // safety strip above the cards
+  await expect(page.getByRole("region", { name: "Safety state" }).getByText("No engine reporting")).toBeVisible();         // safety strip above the cards
   const waiting = page.getByRole("region", { name: "Waiting for your decision" }).locator("article.card");
   await expect(waiting).toHaveCount(2);
   const long = waiting.and(page.locator(".long"));
@@ -97,6 +97,20 @@ test("owner approves one proposal and rejects the other with a reason", async ({
   const short0 = waiting.and(page.locator(".short"));
   await expect(short0.getByText("$20.00", { exact: true })).toBeVisible();      // an older engine: dollars, labelled
   await expect(short0.getByText("(USD)")).toBeVisible();
+  // backlog 101: with two waiting proposals and the idle strip, Approve is reachable without scrolling on a small phone
+  await page.setViewportSize({ width: 360, height: 740 });
+  const approve = waiting.first().getByRole("button", { name: "Approve" });
+  const abox = await approve.boundingBox();
+  const barTop = (await page.locator(".bottombar").boundingBox())?.y ?? 740;
+  expect(abox && abox.y >= 0 && abox.y + abox.height <= barTop).toBe(true);
+  await go(page, "Overview");                                                  // the same on Home (the first waiting card)
+  const homeApprove = page.getByRole("region", { name: "Needs you" }).getByRole("button", { name: "Approve" });
+  await expect(homeApprove).toBeVisible();
+  const hbox = await homeApprove.boundingBox();
+  const hBarTop = (await page.locator(".bottombar").boundingBox())?.y ?? 740;
+  expect(hbox && hbox.y >= 0 && hbox.y + hbox.height <= hBarTop).toBe(true);
+  expect(hbox && hbox.height <= 60).toBe(true);                                // one ~60 px row, not the stacked pair
+  await go(page, "Approvals");
   await page.setViewportSize({ width: 360, height: 800 });
   const lbox = await long.boundingBox();
   expect(lbox && lbox.x >= 0 && lbox.x + lbox.width <= 360).toBe(true);        // the card fits the phone
@@ -130,13 +144,13 @@ test("owner halts new entries and re-arms with an authenticator code", async ({ 
   await expect(page.getByRole("button", { name: "Halt new entries" })).toBeVisible();
 });
 
-test("owner enables auto mode with an authenticator code on the evidence, then switches back to propose", async ({ page }) => {
+test("owner enables auto mode with an authenticator code on the evidence, switches back to propose, then to each account's setting", async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 800 });                     // phone first
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
   await go(page, "Entry mode");
   const card = page.getByRole("region", { name: /Entry mode/ });
-  await expect(card.getByRole("heading", { name: /Entry mode: Propose-and-approve/ })).toBeVisible();
+  await expect(card.getByRole("heading", { name: /Entry mode: Each account's setting/ })).toBeVisible();   // no override (ADR 0041)
   await expect(card.getByText("auto mode offered")).toBeVisible();             // 100 seeded decided proposals, no difference
   const box = await card.boundingBox();
   expect(box && box.x >= 0 && box.x + box.width <= 360).toBe(true);           // fits the phone without sideways scroll
@@ -150,6 +164,9 @@ test("owner enables auto mode with an authenticator code on the evidence, then s
   await card.getByRole("button", { name: "Switch to propose" }).click();
   await expect(card.getByRole("heading", { name: /Entry mode: Propose-and-approve/ })).toBeVisible();
   await expect(card.getByText(/Set .* via the dashboard \(owner\)/)).toBeVisible();   // channel and role, never who (A15)
+  await card.getByRole("button", { name: "Use each account's setting" }).click();   // back to no override, no code
+  await expect(card.getByRole("heading", { name: /Entry mode: Each account's setting/ })).toBeVisible();
+  await expect(card.getByRole("button", { name: "Use each account's setting" })).toHaveCount(0);
 });
 
 test("owner regenerates the recovery codes with password and authenticator code; they are shown once", async ({ page }) => {
@@ -303,7 +320,7 @@ test("owner manages a user's access and never offers the owner role", async ({ p
   await expect(row.getByRole("button", { name: "Disable" })).toBeVisible();
 });
 
-// last in the story: an engine starts reporting (earlier steps rely on "No engines reporting")
+// last in the story: an engine starts reporting (earlier steps rely on "No engine reporting")
 test("once the engine reports, Trades > Summary shows the live balance, today's loss budget and the next milestone on a phone", async ({ page }) => {
   const dir = info().state_dir;
   writeFileSync(join(dir, "engine_icm-demo.json"), JSON.stringify({
@@ -343,6 +360,8 @@ test("once the engine reports, Trades > Summary shows the live balance, today's 
   await go(page, "Overview");
   await expect(page.getByText(/Risk per trade today: ≈£6\.00 \(why: high volatility: halved\)/)).toBeVisible({ timeout: 15_000 });   // /api/today polls every 5 s
   await go(page, "Approvals");
+  await expect(page.getByText("Loss budget", { exact: true })).toBeHidden();    // phone: the tiles fold behind one tap (101)
+  await page.getByRole("button", { name: "Show safety details" }).click();
   await expect(page.getByText("Loss budget", { exact: true })).toBeVisible();   // safety strip chip
 });
 

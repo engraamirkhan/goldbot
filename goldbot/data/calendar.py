@@ -26,6 +26,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord
+from goldbot.data.cme_holidays import cme_metals_closed
 from goldbot.data.timeutil import epoch_ns, server_to_utc, server_wall
 
 log = logging.getLogger("goldbot.calendar")
@@ -210,6 +211,12 @@ class SessionTable(FrozenRecord):
         k = np.searchsorted(starts, ns, side="right") - 1       # last window starting at or before each stamp
         inside = (k >= 0) & (ns < ends[np.clip(k, 0, None)])
         return np.where(covered, inside, static)
+
+    def expected_open(self, utc_ts: pd.DatetimeIndex) -> np.ndarray:
+        """Minutes a complete feed has bars for: `is_open` less the CME metals holiday closures (goldbot/data/
+        cme_holidays.py). For judging missing data only (the engine's history gap guard); `is_open` itself, which
+        filters release, resampled and research bars, does not change."""
+        return np.asarray(self.is_open(utc_ts), dtype=bool) & ~cme_metals_closed(pd.DatetimeIndex(utc_ts))
 
     def _static_open(self, utc_ts: pd.DatetimeIndex) -> np.ndarray:
         local = server_wall(pd.DatetimeIndex(utc_ts), self.server_tz)

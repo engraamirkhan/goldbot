@@ -155,7 +155,8 @@ def status_reply(state_dir: str | Path, now: pd.Timestamp, *, tz: str, bus: Any,
         except Exception:                   # noqa: BLE001 - a bad settings edit: the defaults
             settings = None
         c = bus.control()
-        footer = f"Approval mode: {c.approval_mode or 'propose (default)'} · pending proposals: {len(bus.pending())}"
+        mode = c.approval_mode or "each account's setting"        # None: no owner override (ADR 0041)
+        footer = f"Approval mode: {mode} · pending proposals: {len(bus.pending())}"
         return status_message(state_dir, now, tz=tz, settings=settings, footer=footer)
     except Exception:                       # noqa: BLE001
         log.exception("/status reply failed")

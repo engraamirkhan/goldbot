@@ -31,7 +31,7 @@ describe("Auto-mode card", () => {
     vi.spyOn(apiModule.api, "automode").mockResolvedValue(view());
     renderCard("viewer");
     expect(screen.getByRole("status")).toHaveTextContent("Loading entry mode");
-    expect(await screen.findByRole("heading", { name: /Entry mode: Propose-and-approve/ })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /Entry mode: Each account's setting/ })).toBeInTheDocument();
     expect(screen.getByText("auto mode not offered")).toBeInTheDocument();
     expect(screen.getByText("37 decided proposals since the last mode change; 100 needed")).toBeInTheDocument();
     expect(screen.getByText(/37 of 100 needed/)).toBeInTheDocument();
@@ -101,6 +101,24 @@ describe("Auto-mode card", () => {
     await waitFor(() => expect(set).toHaveBeenCalledWith("propose"));
     expect(await screen.findByRole("heading", { name: /Entry mode: Propose-and-approve/ })).toBeInTheDocument();
     expect(screen.queryByLabelText("Code to enable auto mode")).toBeNull();
+  });
+
+  it("lets the owner hand entries back to each account's own setting with no code", async () => {
+    vi.spyOn(apiModule.api, "automode").mockResolvedValue(view({ owner_mode: "propose" }));
+    const set = vi.spyOn(apiModule.api, "setMode").mockResolvedValue({ message: "Mode: each account's own setting.", view: view() });
+    renderCard("owner");
+    fireEvent.click(await screen.findByRole("button", { name: "Use each account's setting" }));
+    await waitFor(() => expect(set).toHaveBeenCalledWith("account"));
+    expect(await screen.findByRole("heading", { name: /Entry mode: Each account's setting/ })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Mode: each account's own setting");
+    expect(screen.queryByRole("button", { name: "Use each account's setting" })).toBeNull();   // already cleared
+  });
+
+  it("offers no account-setting button to a viewer", async () => {
+    vi.spyOn(apiModule.api, "automode").mockResolvedValue(view({ owner_mode: "propose" }));
+    renderCard("viewer");
+    expect(await screen.findByText("Only the owner can change the mode.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Use each account's setting" })).toBeNull();
   });
 
   it("reports a load failure", async () => {

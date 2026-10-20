@@ -227,11 +227,18 @@ def mask_columns(X: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
 def _cross_fitted(p_raw: np.ndarray, y: np.ndarray, folds: list[Any]) -> np.ndarray:
     """Calibrated out-of-fold probabilities where fold k's map is fitted only on the out-of-fold predictions of the
     folds before it (all earlier in time), never on fold k itself. Folds without MIN_CALIBRATION_ROWS earlier rows stay
-    NaN: their trades are scored for AUC but never selected."""
+    NaN: their trades are scored for AUC but never selected.
+
+    Prior set: the earlier folds' test rows that are also in fold k's `train_idx`, as `fold_cuts` does. Design rule
+    (ML leakage audit 2026-10, F2; López de Prado 2018, ch. 7): a calibration outcome must be decided before the fold
+    it selects in, so a row whose label exits inside fold k's test window (or within its purge before it) never fits
+    fold k's map. `train_idx` already carries that purge (the walk-forward's `te < test_start - purge`; CPCV's
+    `purged_train` with the group as the test group), so no second purge is written here. Every fold must carry it."""
     p = np.full(len(p_raw), np.nan)
     seen: list[np.ndarray] = []
     for f in folds:
         prior = np.concatenate(seen) if seen else np.array([], dtype=int)
+        prior = np.intersect1d(prior, np.asarray(f.train_idx, dtype=int))
         if len(prior) >= MIN_CALIBRATION_ROWS:
             cal = fit_calibrator(p_raw[prior], y[prior])
             p[f.test_idx] = cal.predict(p_raw[f.test_idx])

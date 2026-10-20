@@ -2395,7 +2395,7 @@ export interface components {
              * Mode
              * @enum {string}
              */
-            mode: "auto" | "propose";
+            mode: "auto" | "propose" | "account";
             /**
              * Totp
              * @default

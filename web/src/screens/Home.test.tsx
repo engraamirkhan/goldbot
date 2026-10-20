@@ -113,7 +113,7 @@ describe("Home needs you", () => {
   it("says no engine is reporting when none is", async () => {
     vi.spyOn(apiModule.api, "accounts").mockResolvedValue([]);
     renderHome();
-    expect(await screen.findByText(/No engine is reporting, so no new trades can open/)).toBeInTheDocument();
+    expect(await screen.findByText(/No engine reporting, so no new trades can open/)).toBeInTheDocument();
   });
 });
 
@@ -164,6 +164,20 @@ describe("Home today", () => {
     renderHome();
     expect(await screen.findByText("Could not load today's money.")).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "Nothing needs you" })).toBeInTheDocument();
+  });
+});
+
+describe("Home when the waiting trades fail to load", () => {
+  it("shows an amber Try again state saying Telegram still works, not a red error", async () => {
+    const proposals = vi.spyOn(apiModule.api, "proposals").mockRejectedValue(new Error("down"));
+    const { container } = renderHome();
+    expect(await screen.findByText("Could not load waiting trades.")).toBeInTheDocument();
+    expect(screen.getByText("Telegram approvals still work.")).toBeInTheDocument();
+    expect(container.querySelector(".err")).toBeNull();
+    expect(container.querySelector(".state-box.error")).not.toBeNull();
+    const calls = proposals.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await vi.waitFor(() => expect(proposals.mock.calls.length).toBeGreaterThan(calls));
   });
 });
 
