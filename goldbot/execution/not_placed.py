@@ -27,7 +27,7 @@ from goldbot.execution.bridge import (
     UNREADABLE_REFUSAL,
     BridgeError,
 )
-from goldbot.execution.broker import OrderResult
+from goldbot.execution.broker import ACCOUNT_REFUSAL, OrderResult
 from goldbot.execution.not_confirmed import NOT_CONFIRMED
 from goldbot.execution.not_confirmed import card_text as not_confirmed_card
 
@@ -108,6 +108,12 @@ _MT5_BOX: dict[str, tuple[str, str]] = {
                       "over it", _CEILING_STEP),
     CEILING_UNREADABLE: ("it couldn't read the account figures it checks, so it refused to be safe", _CEILING_STEP),
 }
+# trading-safety follow-up (MT5Broker's per-order account check): the engine refused the entry itself, so the card
+# never reads as the broker's 10006
+_ENGINE: dict[str, tuple[str, str]] = {
+    ACCOUNT_REFUSAL: ("the MT5 terminal is logged in to a different account",
+                      "Log the MT5 terminal back in to this account; entries stay refused until then."),
+}
 # BACKLOG 85: the approval path raised before the order row existed: (reason, next_step) by where it failed
 _NOT_SENT: dict[str, tuple[str, str]] = {
     "mt5_box": ("the MT5 box couldn't be reached",
@@ -133,6 +139,8 @@ def refusal_code(res: OrderResult, *, paper: bool, definite: frozenset[int]) -> 
         return CEILING_UNREADABLE if res.message.startswith(UNREADABLE_REFUSAL) else CEILING_REFUSAL
     if res.retcode not in definite:     # never claim "not placed" when the order may exist
         return None
+    if res.message.startswith(ACCOUNT_REFUSAL):
+        return ACCOUNT_REFUSAL
     if res.message.startswith(STALE_REFUSAL):
         return STALE_REFUSAL
     return f"{BROKER_REFUSED}:{res.retcode}{PAPER_SUFFIX if paper and res.retcode == 10027 else ''}"
@@ -162,6 +170,9 @@ def not_placed(code: str) -> NotPlaced | None:
     if code in _MT5_BOX:
         reason, step = _MT5_BOX[code]
         return NotPlaced(by="mt5_box", reason=reason, next_step=step)
+    if code in _ENGINE:
+        reason, step = _ENGINE[code]
+        return NotPlaced(by="engine", reason=reason, next_step=step)
     retcode = broker_code(code)
     if retcode is None:
         return None

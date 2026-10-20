@@ -127,7 +127,7 @@ def test_the_adapter_converts_a_gbp_terminals_swap_and_commission_with_order_cal
                            ORDER_TYPE_BUY=0, ORDER_TYPE_SELL=1, order_calc_profit=calc_profit)
     monkeypatch.setattr(mt5_adapter, "mt5", fake)
     b = mt5_adapter.MT5Broker(terminal_path="", login=1, password="x", server="s", server_tz=TZ, symbol="XAUUSD",
-                              account_label="icm-demo")
+                              account_label="icm-demo", verify=None)
     t = b.broker_terms("icm-demo", NOW - pd.Timedelta(days=30), NOW)
     assert t.swap_long_usd_per_lot == pytest.approx(-55.0) and t.commission_per_lot_round_trip_usd == pytest.approx(7.0)
 

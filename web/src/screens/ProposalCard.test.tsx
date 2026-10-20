@@ -125,12 +125,14 @@ describe("ProposalCard", () => {
   const margin = { by: "broker" as const, reason: "there wasn't enough free margin", code: null, next_step: "Check free margin on the Overview before approving the next trade.", nothing_sent: true, not_sent: false };
   const stops = { by: "broker" as const, reason: "the stop or target wasn't accepted (too close to the price)", code: null, next_step: "x", nothing_sent: true, not_sent: false };
   const stale = { by: "mt5_box" as const, reason: "it took more than 10 s to check the order, so it dropped it rather than trade on an old price", code: null, next_step: "x", nothing_sent: true, not_sent: false };
+  const switched = { by: "engine" as const, reason: "the MT5 terminal is logged in to a different account", code: null, next_step: "x", nothing_sent: true, not_sent: false };
   const generic = { by: "broker" as const, reason: null, code: 10006, next_step: "If it repeats, ask Claude to check (broker code 10006).", nothing_sent: true, not_sent: false };
   it.each([
     [{ refusal: ["broker_refused:10019"], not_placed: margin, decided_channel: "telegram" }, /^Refused by the broker\. There wasn't enough free margin; nothing was sent\. · via Telegram$/],
     [{ refusal: ["broker_refused:10016"], not_placed: stops }, /^Refused by the broker\. The stop or target wasn't accepted \(too close to the price\); nothing was sent\.$/],
     [{ refusal: ["bridge_stale_order"], not_placed: stale }, /^Refused by the MT5 box\. It took more than 10 s to check the order, so it dropped it rather than trade on an old price; nothing was sent\.$/],
     [{ refusal: ["broker_refused:10006"], not_placed: generic }, /^Refused by the broker \(code 10006\); nothing was sent\.$/],
+    [{ refusal: ["terminal_account_changed"], not_placed: switched }, /^Refused by the engine\. The MT5 terminal is logged in to a different account; nothing was sent\.$/],
   ])("shows an order the MT5 box or the broker refused as not placed, in the API's words (%#)", (over, copy) => {
     const { container } = render(<ProposalCard p={decided("refused", over)} now={NOW} canDecide blockers={[]} />);
     expect(screen.getByRole("status")).toHaveTextContent(copy);
