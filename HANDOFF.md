@@ -116,7 +116,7 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   (`auto_entry.note_refusal` / `note_account_refusal`, on the auto, probe and approval paths; a fill re-arms it; each
   refusal is journalled `account_refused`); the card, notice and dashboard read "refused by the engine: the MT5
   terminal is logged in to a different account" (`not_placed`, code `terminal_account_changed`); a test pins the engine
-  building its direct broker with `verify`. BACKLOG 91 holds the remaining LOW (exits/kill switch on a switched terminal).
+  building its direct broker with `verify`. BACKLOG 104 holds the remaining LOW (exits/kill switch on a switched terminal).
 - `goldbot run positions [--account <id>] [--json]` (`goldbot/ops/positions.py`): read-only open trades per enabled account without the dashboard login (state files only; same builder as `/api/positions/open`, which now also carries `open_risk`). Over ssh: `bash -lc "goldbot run positions"`. Exit 1 when an orders file or the shadow book is unreadable.
 Known limit: accounts are matched by the digit-cut name (`account_name`), so two configs that differ only inside a 5+ digit run would collide; not handled.
 - Trading-safety MEDIUM on f09e3002 fixed (ADR 0037 amendment 4): a failed engine start (`refuse_start`, unreadable positions read) now writes the account's configured `probe_only` (accounts.yaml / EngineConfig, never the old file) into `engine_<account>.json`, so an icm-probe start error is reported in `probe_engines` and no longer halts the real accounts (`engine_startup_refused`); a real account's start error still halts every engine, the probe's included. Tests: `tests/test_startup_error_exposure.py`.
