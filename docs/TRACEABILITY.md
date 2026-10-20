@@ -18,12 +18,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 237 |
+| implemented | 238 |
 | partial | 22 |
 | missing | 2 |
 | deviates | 6 |
 | in review | 11 |
-| **total** | **278** |
+| **total** | **279** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -106,6 +106,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | R71 | Dynamic per-strategy limits (ADR 0039, owner 2026-10-19): per-strategy risk per trade r_s = base + w(f_s - base), w = n_days/(n_days+20), 0.1% steps down, [0.25%, 1%] on demo, the default on live; rises only on demo fills with ADR 0031's 3-day/cooldown rules, shadow only tightens, LCB <= 0 gives 0.25%; volatility step on the daily ladder (median ATR15 >= 1-year p90); intraday k_vol/k_dd/k_day only lower; published terms with why; fail closed to today's fixed values; behind `dynamic_limits` (default off); ADR 0004 ceilings unchanged | partial: lane A (controller, published terms, clamp, nightly bounds, owner FYI) done; lane B (gate/sizing/engine/API) and lane C (probe/accounts flag) pending; quant, trading-safety and CFO review pending | goldbot/risk/adaptive.py (`strategy_risk`, `strategy_f`, `RiskTerm`, `k_vol`, `k_dd`, `k_day`, `stricter_risk`, `step` vol step and `_strategy_risks`); goldbot/risk/limits_profile.py (`RiskLimitsCurrent.strategy_risk`/`risk_terms`, `clamp`, `apply`); goldbot/ops/limits_job.py (`dynamic_enabled`, `bounds_for`, `change_notice`, `decide_account`) | tests/test_adaptive_limits.py (strategy risk, vol step, clamp, bounds, notice) |
 | R72 | An operator can see open trades without the dashboard login; read-only, accounts by config name only | implemented | goldbot/ops/positions.py `main` (registered as `positions` in goldbot/ops/commands/ops.py) builds on home_cards.open_positions; `open_risk` added to OpenPosition | tests/test_ops_positions.py; tests/test_api_home_cards.py::test_open_risk_is_the_loss_at_the_current_stop_in_account_money_and_zero_once_locked_in |
 | R73 | Operator can read the shadow book, cost-probe ledger and engine history-gap/guard state without state-directory access, with the H-52 evidence cut applied by default | in review (code + security review pending) | goldbot/ops/shadow_report.py, goldbot/ops/commands/ops.py | tests/test_ops_shadow_report.py |
+| R74 | The dashboard, Telegram /status and health show only enabled accounts; a disabled account's leftover engine state is ignored; health shows the dashboard's entry status per enabled account | implemented | goldbot/ops/accounts.py `engine_state_files`, `enabled_account_ids`; goldbot/api/app.py `State.engines`; goldbot/api/entry_status.py `statuses_from_state`; goldbot/api/activity.py `engines_by_account`; goldbot/api/explain.py `_engine_modes`; goldbot/ops/checks/engine.py `check_entry_status` | tests/test_enabled_engine_files.py::test_a_disabled_accounts_leftover_engine_file_is_ignored_by_every_dashboard_reader; ::test_the_dashboard_accounts_and_banner_leave_out_a_disabled_account; ::test_an_enabled_account_with_a_stale_report_still_shows_engine_not_reporting; ::test_health_entry_status_line_is_the_dashboards_status_for_each_enabled_account; ::test_health_entry_status_fails_when_the_dashboard_shows_engine_not_reporting; ::test_health_entry_status_only_warns_for_the_owners_halt; ::test_the_health_entry_status_check_writes_nothing |
 
 Risk analytics (reporting tools, not design rows, so the counts are unchanged): `goldbot/research/ruin.py`
 (`run.py ruin`, playbook G-5) simulates R against the R9/R11/R13/R14 limits read from `config/settings.yaml`, applying

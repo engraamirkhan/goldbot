@@ -29,13 +29,14 @@ from __future__ import annotations
 import getpass
 import hashlib
 import json
+import logging
 import os
 import re
 import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Iterator, Literal
+from typing import Any, Callable, Collection, Iterator, Literal
 
 import yaml
 from pydantic import ConfigDict, Field, field_validator, model_validator
@@ -51,7 +52,9 @@ ACCOUNT_ID_LOGIN = re.compile(r"\d{5,}")      # an account name with this could 
 # stamp in at most 64 bytes (goldbot.telegram.approvals.decision_callbacks); a longer name is refused at load
 ACCOUNT_ID_MAX_BYTES = 24
 PHASE_FILE = ROOT / "state" / "phase_state.json"
+ENGINE_FILE_PREFIX = "engine_"                # state/engine_<account>.json (goldbot/engine/store.py writes it)
 SERVICE = "goldbot"
+log = logging.getLogger(__name__)
 
 try:
     import keyring
@@ -364,14 +367,16 @@ def _check_account_name(name: str) -> None:
                          f"{ACCOUNT_ID_MAX_BYTES} bytes at most, rename it ({len(name.encode('utf-8'))} bytes)")
 
 
-def load_accounts(path: Path | None = None) -> dict[str, Account]:
+def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str, Account]:
+    """config/accounts.yaml as Account records. `logins` False: a `login: null` stays None (no keyring read), for the
+    readers that need only which accounts exist and are enabled (`enabled_account_ids`, polled by the dashboard)."""
     path = _accounts_path(path)
     raw = yaml.safe_load(path.read_text())
     out = {}
     for aid, a in raw["accounts"].items():
         _check_account_name(str(aid))      # before the keyring lookup and the record: the error never echoes it
         login = a.get("login")
-        if login is None:
+        if login is None and logins:
             stored = get_secret(login_key(aid))
             login = int(stored) if stored and stored.strip().isdigit() else None
         out[aid] = Account(account_id=aid, broker=a["broker"], mode=a["mode"], server=a["server"], login=login, terminal_path=a["terminal_path"],
@@ -523,14 +528,41 @@ def unlock_live(account_id: str, confirmation: str, path: Path | None = None) ->
     return True
 
 
-def enabled_accounts(mode: str | None = None) -> list[Account]:
-    accs = [a for a in load_accounts().values() if a.enabled]
+def enabled_accounts(mode: str | None = None, *, logins: bool = True) -> list[Account]:
+    accs = [a for a in load_accounts(logins=logins).values() if a.enabled]
     if mode:
         accs = [a for a in accs if a.mode == mode]
     # safety: live accounts are never returned unless the gate has passed, whatever the yaml says
     if "paper_to_tiny_live" not in phase_state().get("gates_passed", []):
         accs = [a for a in accs if not a.is_live]
     return accs
+
+
+def enabled_account_ids() -> frozenset[str] | None:
+    """The ids `enabled_accounts` returns (live ones only after the phase gate), without the keyring; None when
+    config/accounts.yaml cannot be read (health's `accounts` check FAILs on that and names the error)."""
+    try:
+        return frozenset(a.account_id for a in enabled_accounts(logins=False))
+    except Exception as exc:               # noqa: BLE001 - any config fault: the callers fall back to every file
+        log.warning("enabled accounts unreadable (%s): engine state files are not filtered", type(exc).__name__)
+        return None
+
+
+def engine_state_files(state_dir: str | Path, enabled: Collection[str] | None = None) -> list[Path]:
+    """state/engine_<account>.json of the ENABLED accounts only, sorted: what the dashboard, Telegram status and
+    health show. A disabled or retired account's leftover file is ignored entirely, never shown, never blocking, never
+    in a loss budget or tile (owner bug 2026-10-20: a stale engine_icm-probe.json from a brief run showed "Entries
+    blocked: Engine not reporting (icm-probe)"). An enabled account whose file is missing or stale is not affected:
+    it still shows "Engine not reporting".
+
+    `enabled` None: `enabled_account_ids()`. When accounts.yaml cannot be read every file is returned (fail open: a
+    config error must not hide a running engine from the risk view). Reporting only: the supervisor keeps reading every
+    file (goldbot/risk/supervisor.py), where a leftover file is handled by its own staleness rules."""
+    ids = enabled_account_ids() if enabled is None else frozenset(enabled)
+    files = sorted(Path(state_dir).glob(f"{ENGINE_FILE_PREFIX}*.json"))
+    if ids is None:
+        return files
+    return [f for f in files if f.stem.removeprefix(ENGINE_FILE_PREFIX) in ids]
 
 
 # ---------------------------------------------------------------------------- CLI

@@ -38,6 +38,7 @@ from goldbot.engine import cost_probe
 from goldbot.engine.shadow import ShadowBook
 from goldbot.engine.store import OpenTrade
 from goldbot.ops import gates_phase as gp
+from goldbot.ops.accounts import engine_state_files
 from goldbot.telegram.entry_text import account_name
 
 log = logging.getLogger(__name__)
@@ -158,10 +159,11 @@ def _probes(state: Path, engines: dict[str, dict[str, Any]]) -> list[Trade]:
 
 
 def engines_by_account(state: Path, engines: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
-    """The engines' own state by account (`engines` None: read state/engine_*.json, as the API's State.engines)."""
+    """The engines' own state by account (`engines` None: the enabled accounts' state/engine_<account>.json, as the
+    API's State.engines)."""
     if engines is None:
         engines = []
-        for f in state.glob("engine_*.json"):
+        for f in engine_state_files(state):
             try:
                 engines.append(json.loads(f.read_text()))
             except (OSError, ValueError):

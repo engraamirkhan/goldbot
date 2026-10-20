@@ -51,6 +51,11 @@
    "state 60 s old; stage normal"
   ],
   [
+   "entry_status:icm-demo",
+   "ok",
+   "OPEN: Can take new trades"
+  ],
+  [
    "risk:icm-demo",
    "ok",
    "stage normal"
@@ -395,6 +400,11 @@
    "state 60 s old; stage normal"
   ],
   [
+   "entry_status:icm-demo",
+   "fail",
+   "BLOCKED: Can't check whether new trades are allowed: this engine version doesn't report it; New entries halted by you or an approver; Trend-0 (trend-0) paused after 3 losses in a row"
+  ],
+  [
    "risk:icm-demo",
    "ok",
    "stage normal"
@@ -478,6 +488,11 @@
    "engine:icm-b",
    "fail",
    "engine state unreadable: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"
+  ],
+  [
+   "entry_status:icm-b",
+   "warn",
+   "no engine report: the dashboard shows no entry status for it"
   ],
   [
    "risk_state:icm-b",

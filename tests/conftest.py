@@ -71,6 +71,17 @@ def queued_prereg(monkeypatch: pytest.MonkeyPatch) -> Callable[..., dict[str, An
     return write
 
 
+@pytest.fixture
+def enabled_accounts(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
+    """`enabled_accounts("a", "b")`: exactly these accounts count as enabled for the readers that list engine state
+    (goldbot.ops.accounts.engine_state_files), whatever config/accounts.yaml says."""
+    from goldbot.ops import accounts
+
+    def enable(*ids: str) -> None:
+        monkeypatch.setattr(accounts, "enabled_account_ids", lambda: frozenset(ids))
+    return enable
+
+
 def pytest_terminal_summary(terminalreporter: Any, config: Any) -> None:
     """The test order is random (pytest-randomly, dev extras); `-q` hides its header, so the seed is printed at the end
     of every run, CI included, to reproduce a failure that depends on the order (trading-safety review LOW-5)."""

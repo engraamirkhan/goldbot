@@ -300,12 +300,13 @@ class Supervisor:
         return d if isinstance(d, dict) else {}
 
     @staticmethod
-    def engine_should_halt(state_dir: str | Path, max_age_s: int = 60) -> tuple[bool, str]:
+    def engine_should_halt(state_dir: str | Path, max_age_s: int = 60, now: float | None = None) -> tuple[bool, str]:
         """(halt, reasons) as every engine reads the supervisor before an entry. Fails closed on a missing file, an
         unreadable one (or not an object, or a `ts` that is not a finite number), a heartbeat older than `max_age_s`
         and one stamped more than CLOCK_AHEAD_TOLERANCE_S in the future: a future stamp made `now - ts` negative, so
         a dead supervisor whose last write carried a fast clock never halted the engines (found 2026-10-16). A file
-        without `ts` reads as the oldest heartbeat (stale), as before."""
+        without `ts` reads as the oldest heartbeat (stale), as before. `now` (epoch seconds): the wall clock unless a
+        report built at another instant passes its own (health's entry_status:<account>); engines never pass it."""
         f = Path(state_dir) / "supervisor.json"
         if not f.exists():
             return True, "no_supervisor_heartbeat"
@@ -315,7 +316,7 @@ class Supervisor:
             return True, "supervisor_state_unreadable"
         if not isinstance(s, dict):
             return True, "supervisor_state_unreadable"
-        problem = heartbeat_problem(s.get("ts", 0), time.time(), max_age_s)
+        problem = heartbeat_problem(s.get("ts", 0), time.time() if now is None else now, max_age_s)
         if problem == "invalid":
             return True, "supervisor_state_unreadable"
         if problem == "future":

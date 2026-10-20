@@ -161,9 +161,11 @@ def test_api_proposal_carries_currency_risk_min_lot_and_the_live_budget(tmp_path
 
 
 @pytest.mark.parametrize("halted, want", [(False, "mixed_currencies"), (True, "mixed_currencies_paused")])
-def test_api_proposal_with_a_gbp_and_a_usd_engine_says_cant_check_without_an_amount(tmp_path, halted, want):
+def test_api_proposal_with_a_gbp_and_a_usd_engine_says_cant_check_without_an_amount(tmp_path, halted, want,
+                                                                                    enabled_accounts):
     """BACKLOG 61: with mixed currencies the combined caps are left out, so the card never shows the account cap's
     roomier figure: "can't check" (amber; red while the supervisor halts on `mixed_account_currencies`)."""
+    enabled_accounts("icm-demo", "vantage-demo")
     bus = ApprovalBus(tmp_path)
     bus.publish(_prop(**GBP_MIN_LOT))
     (tmp_path / "engine_icm-demo.json").write_text(json.dumps(_engine()))

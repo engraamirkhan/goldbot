@@ -24,7 +24,7 @@ import math
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Collection, Literal
 
 import numpy as np
 import pandas as pd
@@ -41,6 +41,7 @@ from goldbot.data.timeutil import floor_tf, server_to_utc, server_wall
 from goldbot.execution.classifier import MIN_TICKS
 from goldbot.execution.not_confirmed import PENDING_REFUSAL, PENDING_REFUSAL_CODE
 from goldbot.ops.account_view import LossBudget, loss_budget
+from goldbot.ops.accounts import engine_state_files
 from goldbot.ops.health import ENGINE_FAIL_S
 from goldbot.risk.gate import RiskLimits
 from goldbot.risk.supervisor import Supervisor, SupervisorLimits
@@ -696,13 +697,15 @@ def read_drift_halt(state_dir: str | Path) -> list[str] | None:
     return [str(r) for r in reasons] if isinstance(reasons, list) and reasons else ["drift system halt"]
 
 
-def entry_inputs(state_dir: str | Path, settings: Settings | None, *, is_owner: bool) -> dict[str, Any]:
+def entry_inputs(state_dir: str | Path, settings: Settings | None, *, is_owner: bool,
+                 now: pd.Timestamp | None = None) -> dict[str, Any]:
     """What every account's entry status shares, for the dashboard and Telegram alike: the owner's halt
     (control.json), the supervisor's halt as the engines read it, the drift watch's system halt, the RiskGate's and the
-    supervisor's limits from settings (the defaults when missing or unreadable) and whether the reader may re-arm."""
-    from goldbot.telegram.bus import ApprovalBus  # lazily: the telegram package imports this module
-    c = ApprovalBus(state_dir).control()
-    halt, why = Supervisor.engine_should_halt(state_dir)
+    supervisor's limits from settings (the defaults when missing or unreadable) and whether the reader may re-arm.
+    `now`: the instant the supervisor heartbeat is judged at (None: the wall clock, as the engines judge it)."""
+    from goldbot.telegram.bus import read_control  # lazily: the telegram package imports this module
+    c = read_control(state_dir)
+    halt, why = Supervisor.engine_should_halt(state_dir, now=None if now is None else pd.Timestamp(now).timestamp())
     try:
         limits = RiskLimits.from_settings(settings.risk, tiny_live=False) if settings is not None else RiskLimits()
         sup_limits = SupervisorLimits.from_settings(settings.risk) if settings is not None else SupervisorLimits()
@@ -716,13 +719,15 @@ def entry_inputs(state_dir: str | Path, settings: Settings | None, *, is_owner: 
 
 
 def statuses_from_state(state_dir: str | Path, now: pd.Timestamp, settings: Settings | None, *,
-                        is_owner: bool = True) -> list[tuple[str, str, EntryStatus]]:
-    """(account id, mode, entry status) for every engine that reports, sorted by account; built exactly as the
-    dashboard's /api/accounts builds it (loss budget, shared inputs). A status that cannot be built is
-    `unknown_status()`, never OPEN; a torn engine file is skipped, as the API skips it."""
+                        is_owner: bool = True, accounts: Collection[str] | None = None
+                        ) -> list[tuple[str, str, EntryStatus]]:
+    """(account id, mode, entry status) for every ENABLED engine that reports, sorted by account; built exactly as
+    the dashboard's /api/accounts builds it (loss budget, shared inputs). A status that cannot be built is
+    `unknown_status()`, never OPEN; a torn engine file is skipped, as the API skips it. `accounts`: the enabled ids
+    (None: config/accounts.yaml, `goldbot.ops.accounts.engine_state_files`); health passes its own."""
     sd = Path(state_dir)
     engines: list[dict[str, Any]] = []
-    for f in sorted(sd.glob("engine_*.json")):
+    for f in engine_state_files(sd, accounts):
         try:
             e = json.loads(f.read_text())
         except (OSError, ValueError):
@@ -736,7 +741,7 @@ def statuses_from_state(state_dir: str | Path, now: pd.Timestamp, settings: Sett
         sup = {}
     sup = sup if isinstance(sup, dict) else {}
     try:
-        inputs: dict[str, Any] | None = entry_inputs(sd, settings, is_owner=is_owner)
+        inputs: dict[str, Any] | None = entry_inputs(sd, settings, is_owner=is_owner, now=now)
     except Exception:                      # noqa: BLE001 - reporting only: every account shows status unknown
         log.exception("entry status inputs failed")
         inputs = None

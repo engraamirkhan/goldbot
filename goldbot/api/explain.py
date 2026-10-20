@@ -57,6 +57,7 @@ from goldbot.api.schema import (
     VetoTestView,
 )
 from goldbot.config import DriftSettings, Settings, TelegramSettings
+from goldbot.ops.accounts import engine_state_files
 from goldbot.research.registry import costs_recorded
 
 log = logging.getLogger(__name__)
@@ -561,7 +562,7 @@ def _forced_propose(state: Path, now: float) -> list[ForcedPropose]:
 
 def _engine_modes(state: Path) -> dict[str, str]:
     out: dict[str, str] = {}
-    for f in sorted(state.glob("engine_*.json")):
+    for f in engine_state_files(state):    # enabled accounts only: a disabled one's leftover is not shown
         try:
             d = _d(_read(f))
         except (ValueError, OSError):

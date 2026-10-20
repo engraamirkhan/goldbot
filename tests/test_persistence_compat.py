@@ -451,7 +451,7 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
         "strict: untrusted matrix-cell artifacts; a bad row becomes a failed trial (security review 2026-10-18)",
     ("goldbot/webhook/app.py", "create_app.tv", "Alert"):
         "strict: an inbound request body, not persisted state (a malformed alert is refused, TradingView sees 422)",
-    ("goldbot/telegram/bus.py", "ApprovalBus.control", "Control"): "strict: the owner's halt; unreadable means halted",
+    ("goldbot/telegram/bus.py", "read_control", "Control"): "strict: the owner's halt; unreadable means halted",
     ("goldbot/telegram/bus.py", "ApprovalBus.decisions_for", "BusDecision"):
         "strict: an owner decision is never applied without a field this release does not know; skipped, it expires",
     ("goldbot/telegram/bus.py", "ApprovalBus.recent", "BusDecision"): "strict: as decisions_for (the decided cards)",
