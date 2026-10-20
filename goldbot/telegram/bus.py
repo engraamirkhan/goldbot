@@ -42,6 +42,7 @@ from goldbot.base import (
 from goldbot.telegram.approvals import (
     INVALID_PROPOSAL_ID,
     REASON_CODES,
+    TERMINAL_NOT_DEMO,
     Outcome,
     Proposal,
     decision_channel,
@@ -185,9 +186,10 @@ class ApprovalBus:
     def submit(self, proposal_id: str, approve: bool, reason_code: str | None, by: str, *,
                card_created: float | None) -> BusDecision:
         """Record a decision; raises KeyError (unknown, expired, already decided, or `card_mismatch`) or ValueError
-        (reason code, `card_missing`, an id `valid_proposal_id` refuses). `by` is the channel; an identity after ":"
-        is dropped, so the file never carries it (A15: "the decision file keeps only the channel; the identity is in
-        the audit log"). `card_created` is the
+        (reason code, `card_missing`, an id `valid_proposal_id` refuses, an approval of a card that is not
+        `approvable`: terminal_not_demo, backlog 103). `by` is the channel; an identity after ":" is dropped, so the
+        file never carries it (A15: "the decision file keeps only the channel; the identity is in the audit log").
+        `card_created` is the
         `created` of the card the owner decided on (BACKLOG 63: "a tap is bound to the exact card the owner saw"):
         None is refused (an old card or client, fail closed), and one that differs from the pending proposal's is
         refused here and again by the engine, which may hold a proposal re-raised after this check."""
@@ -206,6 +208,8 @@ class ApprovalBus:
         if card_created != card.created:
             log.warning("decision on %s refused (card_mismatch): made on another card with the same id", proposal_id)
             raise KeyError("card_mismatch: this card was replaced; decide on the current card")
+        if approve and not card.approvable:            # backlog 103: real money behind a demo account's name
+            raise ValueError(TERMINAL_NOT_DEMO)
         d = BusDecision(proposal_id=proposal_id, approve=approve, reason_code=None if approve else reason_code,
                         by=decision_channel(by), ts=time.time(),     # never the id or email on disk (A15)
                         card_created=card_created)

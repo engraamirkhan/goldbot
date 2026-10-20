@@ -36,10 +36,11 @@ def test_proposal_expires_after_its_window_but_never_once_decided():
 
 def test_proposal_text_carries_what_the_owner_needs_to_decide():
     txt = _prop(side=-1, risk_usd=48.0).text()
-    assert txt.splitlines()[0] == "🔵 SHORT 0.12 lots XAUUSD"                     # direction and size first, then risk
-    assert txt.splitlines()[1] == "risk $48.00 (USD) if the stop is hit, before costs"   # an older engine's figure, labelled USD
+    assert txt.splitlines()[0] == "ACCOUNT TYPE UNKNOWN · icm-demo"   # the money class first (an older engine: unknown)
+    assert txt.splitlines()[1] == "🔵 SHORT 0.12 lots XAUUSD"                     # direction and size, then risk
+    assert txt.splitlines()[2] == "risk $48.00 (USD) if the stop is hit, before costs"   # an older engine's figure, labelled USD
     assert "entry 2400.20" in txt and "stop 2396.20" in txt and "target 2406.20" in txt
-    assert "p=0.62" in txt and "EV=+0.31R" in txt and "spread 22pt" in txt and "90s" in txt
+    assert "p=0.62" in txt and "EV=+0.31R" in txt and "spread 22pt" in txt and "within 90 s" in txt
     assert "adx14 +31.20" in txt and "extra" not in txt              # top three features only
     assert "icm-demo · trend-g0-x" in txt
     assert "risk $" not in _prop().text()                            # proposals without the field still render

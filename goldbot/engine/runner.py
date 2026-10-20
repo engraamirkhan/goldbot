@@ -367,6 +367,7 @@ class Engine:
         self._weekend_done: str | None = None        # server date of the last Friday the weekend rule ran
         self._halted_at: pd.Timestamp | None = None  # when the 12% kill switch tripped (re-arm conditions count from it)
         self._propose_only_until: pd.Timestamp | None = None   # after a re-arm: no auto entries before this
+        self._terminal_mode: str | None = None       # the terminal's own trade mode at the last read (auto_entry.lock)
         self._rearm_refused: str | None = None       # why the last owner re-arm was refused (engine state, dashboard)
         # ADR 0016: an unconfirmed 12% read waiting for confirmation (persisted), the start of the current run of reads
         # below 12% minus the tolerance (in memory: a restart restarts the recovery clock), and a re-read due next tick
@@ -1160,7 +1161,7 @@ class Engine:
                 auto_entry.after_order(self, res, gd, prop, close_ts)
             else:
                 self.pending[pid] = (intent, prop, agent)   # until the owner decides or the window expires
-                self.center.propose(prop)
+                self.center.propose(auto_entry.asking(self, prop, close_ts))   # backlog 103: badge and ask reason
                 decisions.append(self._record(agent, close_ts, p, mult, "proposed", pid, scored_fv=sfv))
             if gd.reasons:      # an allowed decision's notes (BACKLOG 25 min_lot_exception): the journal shows the risk
                 decisions[-1].update(sizing=list(gd.reasons), risk_fraction=round(gd.risk_fraction, 5),
@@ -1963,9 +1964,7 @@ class Engine:
         st.drift_halt = bool(self._drift().get("system_halt"))
         self._server_clock(now, tick)
         owner_mode = self.center.bus.control().approval_mode if self.center.bus is not None else None
-        # the owner's /mode (A10), else the account's; ADR 0036 lock; the kill switch and re-arm window win below
-        self.cfg.approval_mode = auto_entry.locked(owner_mode or self._account_approval, self.cfg.mode,
-                                                    getattr(acc, "trade_mode", None))
+        self.cfg.approval_mode = auto_entry.lock(self, owner_mode or self._account_approval, acc)   # ADR 0036 lock
         st.equity_unconfirmed = self._equity_unconfirmed(acc, now)
         stage = st.stage
         if self.gate.update_stage(st) != stage:
@@ -3307,7 +3306,7 @@ class Engine:
             "terminal_connected": True, "account_class": self._account_class(),
             "account_class_declared": self.cfg.declared_class, "account_class_measured": self._measured_class(),
             "pending": len(self.center.pending),
-            "approval_mode": self.cfg.approval_mode, "blackout": self._blackout_event,
+            "approval_mode": self.cfg.approval_mode, "ask_reason": auto_entry.published_reason(self), "blackout": self._blackout_event,
             "dq_error": st.dq_error, "stale_bars": st.stale_bars, "data_recovering": st.data_recovering,
             "dq_checks": sorted({e.check for e in self._dq_errors()} | self._dq_blocking()
                                 | ({"positions_unreadable"} if self._book_unreadable() else set())),
