@@ -58,7 +58,8 @@ def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTra
     # Attaches to the terminal its own unit started (goldbot-mt5-terminal@.service; the bridge unit waits for the
     # process first): initialize(path=..., timeout=60 s). A failed attach raises, and Restart=always tries again.
     broker = MT5Broker(terminal_path=acc.terminal_path, login=None, password=None, server=acc.server,
-                       server_tz=acc.server_tz, symbol=acc.symbol, account_label=account_id)
+                       server_tz=acc.server_tz, symbol=acc.symbol, account_label=account_id,
+                       verify=None)                 # GuardedBroker below verifies every order on its one account read
     # If the terminal died between the unit's wait and the attach, initialize(path=...) launched one of its own, in
     # this unit's cgroup: never serve it. Exiting lets systemd stop the cgroup (that terminal with it).
     spawned = terminals_in_bridge_cgroup(_proc_root())

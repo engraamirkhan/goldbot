@@ -420,6 +420,7 @@ class Engine:
         # (bar close, why): auto entries stopped for the rest of that bar close after an ambiguous order or a failed
         # account re-read (review HIGH); a later bar close trades again on a fresh read
         self._auto_paused: tuple[pd.Timestamp, str] | None = None
+        self._account_alerted = False   # the owner was told the terminal is on another account; a fill re-arms it
         # BACKLOG 43: each agent's last per-trade refusal (gate.PER_TRADE_REFUSALS) and its time, until the gate next
         # allows that agent (published as `entry_refusals`; in memory: a restart starts empty)
         self._entry_refusals: dict[str, dict[str, str]] = {}
@@ -1323,8 +1324,7 @@ class Engine:
                                "proposal": prop.proposal_id, "ok": res.ok,
                                "retcode": res.retcode, "price": res.price, "lots": res.filled_lots,
                                "message": res.message})
-        if bridge_refused(res):
-            auto_entry.note_bridge_refusal(self, prop, agent, res, lots)
+        auto_entry.note_refusal(self, prop, agent, res, lots)     # the bridge's ceiling or a switched terminal
         if self.store is not None and res.ok and res.price is not None \
                 and not cost_probe.is_probe(agent.agent_id):     # ADR 0037: a probe's fill feeds its own ledger only
             # requested vs filled feeds the nightly slippage table

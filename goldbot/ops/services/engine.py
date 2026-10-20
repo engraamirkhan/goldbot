@@ -260,7 +260,10 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         from goldbot.execution.mt5_adapter import MT5Broker
         acc = accounts.ensure_login(acc)
         broker = MT5Broker(terminal_path=acc.terminal_path, login=acc.login, password=accounts.account_password(acc),
-                           server=acc.server, server_tz=acc.server_tz, symbol=acc.symbol, account_label=account_id)
+                           server=acc.server, server_tz=acc.server_tz, symbol=acc.symbol, account_label=account_id,
+                           # the terminal can be switched to another login after this start check: every entry is
+                           # checked again before it is sent (closes never are), as the bridge does
+                           verify=lambda info: accounts.verify_terminal_account(acc, info))
         info = broker.account()
         why = accounts.verify_terminal_account(acc, info)
         if why:

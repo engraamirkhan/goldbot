@@ -29,7 +29,7 @@ def _fake(calls: list[dict[str, Any]], ok: bool = True) -> SimpleNamespace:
 def _broker(login: int | None) -> mt5_adapter.MT5Broker:
     return mt5_adapter.MT5Broker(terminal_path=TERMINAL, login=login, password="pw" if login else None,
                                  server="ICMarketsSC-Demo", server_tz="Europe/Athens", symbol="XAUUSD",
-                                 account_label="icm-demo")
+                                 account_label="icm-demo", verify=None)
 
 
 @pytest.mark.parametrize("login", [None, 1234], ids=["bridge: the terminal's saved login", "with credentials"])
