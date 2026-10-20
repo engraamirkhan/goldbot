@@ -126,6 +126,8 @@ def _known_accounts(state_dir: Path, engines: list[dict[str, Any]]) -> list[str]
     """Account ids that can appear in gate evidence: the cost tables (by file name and by the `account_id` inside,
     which the evidence prints and a hand-edited or legacy file can make differ), closed-trade files and engines."""
     ids = [str(e.get("account") or "") for e in engines]
+    # every engine file, enabled or not: this only lists names to cut in the evidence text (the gate evidence never
+    # reads engine files), and a longer list can only cut more
     for pattern, prefix, suffix in (("costs_*.json", "costs_", ".json"), ("closed_trades_*.jsonl", "closed_trades_", ".jsonl"),
                                     ("engine_*.json", "engine_", ".json")):
         ids += [f.name[len(prefix):-len(suffix)] for f in state_dir.glob(pattern)]

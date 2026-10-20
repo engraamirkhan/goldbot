@@ -43,6 +43,7 @@ import pandas as pd
 from goldbot.base import Record, load_record_json, write_atomic
 from goldbot.config import ROOT, Settings
 from goldbot.execution.not_placed import CAUSE_PHRASE, approval_cause
+from goldbot.ops.accounts import engine_state_files
 from goldbot.ops.report_days import day_before, day_bounds
 from goldbot.telegram.approvals import window_over
 from goldbot.telegram.entry_text import digest_line as entry_digest_line
@@ -115,8 +116,10 @@ def _plural(n: int, word: str) -> str:
 
 
 def _engines(state_dir: Path) -> list[dict[str, Any]]:
+    """The enabled accounts' engine state (a disabled account's leftover is not reported). A torn file of an enabled
+    account still fails the section ("could not read"): skipping it would report its open positions as none."""
     out = []
-    for f in sorted(state_dir.glob("engine_*.json")):
+    for f in engine_state_files(state_dir):
         try:
             e = _json(f)
         except (ValueError, OSError):

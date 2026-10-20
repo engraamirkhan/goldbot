@@ -45,6 +45,7 @@ from typing import Any, Callable, Literal
 
 from goldbot.base import FrozenRecord
 from goldbot.data.timeutil import heartbeat_problem
+from goldbot.ops.accounts import engine_state_files
 from goldbot.risk.sizing import MIN_LOT_TOLERANCE, effective_risk, stop_distance
 
 LADDER_TIMEFRAMES = ("15m", "1h", "4h", "1d")   # ADR 0004 section 4: M1 15m, M2 1h, M3 4h, M4 1d
@@ -217,15 +218,16 @@ def proposal_budget(engines: list[dict[str, Any]], supervisor: dict[str, Any], a
 
 
 def proposal_budget_from_state(state_dir: str | Path, account_id: str, risk: float | None) -> LossBudget | None:
-    """`proposal_budget` from the state files (engine_*.json, supervisor.json), for the Telegram service. Reporting
-    only: any unreadable file reads as unknown (None), never as a failed proposal message."""
+    """`proposal_budget` from the state files (the enabled accounts' engine_<account>.json, supervisor.json), for the
+    Telegram service. Reporting only: any unreadable file reads as unknown (None), never as a failed proposal
+    message."""
     d = Path(state_dir)
     try:                                   # a torn supervisor.json: the budget can't be checked, as on the dashboard
         sup = json.loads((d / "supervisor.json").read_text()) if (d / "supervisor.json").exists() else {}
     except (OSError, ValueError):
         sup = {}
     try:
-        engines = [e for f in sorted(d.glob("engine_*.json")) if isinstance(e := json.loads(f.read_text()), dict)]
+        engines = [e for f in engine_state_files(d) if isinstance(e := json.loads(f.read_text()), dict)]
         return proposal_budget(engines, sup if isinstance(sup, dict) else {}, account_id, risk)
     except Exception:                      # noqa: BLE001
         return None

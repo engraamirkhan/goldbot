@@ -78,7 +78,8 @@ def enabled_accounts(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
     from goldbot.ops import accounts
 
     def enable(*ids: str) -> None:
-        monkeypatch.setattr(accounts, "enabled_account_ids", lambda: frozenset(ids))
+        monkeypatch.setattr(accounts, "account_ids",
+                            lambda: accounts.AccountIds(listed=frozenset(ids), enabled=frozenset(ids)))
     return enable
 
 

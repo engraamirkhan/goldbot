@@ -52,6 +52,9 @@ ACCOUNT_ID_LOGIN = re.compile(r"\d{5,}")      # an account name with this could 
 # stamp in at most 64 bytes (goldbot.telegram.approvals.decision_callbacks); a longer name is refused at load
 ACCOUNT_ID_MAX_BYTES = 24
 PHASE_FILE = ROOT / "state" / "phase_state.json"
+# an engine file of an account accounts.yaml does not list is shown while written this recently (engines write at
+# least every 15m bar close, and at every tick while trading): a newer engine than the brain's config is never hidden
+UNLISTED_FRESH_S = 10 * 60
 ENGINE_FILE_PREFIX = "engine_"                # state/engine_<account>.json (goldbot/engine/store.py writes it)
 SERVICE = "goldbot"
 log = logging.getLogger(__name__)
@@ -528,8 +531,10 @@ def unlock_live(account_id: str, confirmation: str, path: Path | None = None) ->
     return True
 
 
-def enabled_accounts(mode: str | None = None, *, logins: bool = True) -> list[Account]:
-    accs = [a for a in load_accounts(logins=logins).values() if a.enabled]
+def enabled_accounts(mode: str | None = None, *, logins: bool = True,
+                     loaded: dict[str, Account] | None = None) -> list[Account]:
+    """`loaded`: accounts already read by `load_accounts` (not read again)."""
+    accs = [a for a in (load_accounts(logins=logins) if loaded is None else loaded).values() if a.enabled]
     if mode:
         accs = [a for a in accs if a.mode == mode]
     # safety: live accounts are never returned unless the gate has passed, whatever the yaml says
@@ -538,31 +543,59 @@ def enabled_accounts(mode: str | None = None, *, logins: bool = True) -> list[Ac
     return accs
 
 
-def enabled_account_ids() -> frozenset[str] | None:
-    """The ids `enabled_accounts` returns (live ones only after the phase gate), without the keyring; None when
-    config/accounts.yaml cannot be read (health's `accounts` check FAILs on that and names the error)."""
+class AccountIds(FrozenRecord):
+    """Which accounts config/accounts.yaml lists, and which of them `enabled_accounts` returns."""
+    listed: frozenset[str]
+    enabled: frozenset[str]
+
+
+def account_ids() -> AccountIds | None:
+    """The listed and the enabled ids (as `enabled_accounts`: live ones only after the phase gate), without the
+    keyring; None when config/accounts.yaml cannot be read (health's `accounts` check FAILs on that and names it)."""
     try:
-        return frozenset(a.account_id for a in enabled_accounts(logins=False))
+        accs = load_accounts(logins=False)
+        return AccountIds(listed=frozenset(accs), enabled=frozenset(a.account_id for a in enabled_accounts(loaded=accs)))
     except Exception as exc:               # noqa: BLE001 - any config fault: the callers fall back to every file
-        log.warning("enabled accounts unreadable (%s): engine state files are not filtered", type(exc).__name__)
+        log.warning("accounts.yaml unreadable (%s): engine state files are not filtered", type(exc).__name__)
         return None
 
 
-def engine_state_files(state_dir: str | Path, enabled: Collection[str] | None = None) -> list[Path]:
-    """state/engine_<account>.json of the ENABLED accounts only, sorted: what the dashboard, Telegram status and
-    health show. A disabled or retired account's leftover file is ignored entirely, never shown, never blocking, never
-    in a loss budget or tile (owner bug 2026-10-20: a stale engine_icm-probe.json from a brief run showed "Entries
-    blocked: Engine not reporting (icm-probe)"). An enabled account whose file is missing or stale is not affected:
-    it still shows "Engine not reporting".
+def enabled_account_ids() -> frozenset[str] | None:
+    """The ids `enabled_accounts` returns, without the keyring; None when config/accounts.yaml cannot be read."""
+    ids = account_ids()
+    return None if ids is None else ids.enabled
 
-    `enabled` None: `enabled_account_ids()`. When accounts.yaml cannot be read every file is returned (fail open: a
-    config error must not hide a running engine from the risk view). Reporting only: the supervisor keeps reading every
-    file (goldbot/risk/supervisor.py), where a leftover file is handled by its own staleness rules."""
-    ids = enabled_account_ids() if enabled is None else frozenset(enabled)
+
+def engine_state_files(state_dir: str | Path, enabled: Collection[str] | None = None) -> list[Path]:
+    """state/engine_<account>.json of the ENABLED accounts only, sorted: what the dashboard, Telegram (status,
+    proposal budget, digest), deploy notes and health show. A disabled account's leftover file is ignored entirely,
+    never shown, never blocking, never in a loss budget or tile (owner bug 2026-10-20: a stale engine_icm-probe.json
+    from a brief run showed "Entries blocked: Engine not reporting (icm-probe)"). An enabled account whose file is
+    missing or stale is not affected: it still shows "Engine not reporting".
+
+    An account accounts.yaml does not list at all is shown while its file was written within UNLISTED_FRESH_S (an
+    engine running ahead of the brain's config is never hidden), hidden once older (a retired account's leftover).
+    `enabled` None: accounts.yaml's enabled accounts; health passes its own. When accounts.yaml cannot be read every
+    file is returned (fail open: a config error must not hide a running engine from the risk view). Reporting only:
+    the supervisor keeps reading every file (goldbot/risk/supervisor.py), where a leftover only tightens."""
     files = sorted(Path(state_dir).glob(f"{ENGINE_FILE_PREFIX}*.json"))
+    ids = account_ids()
     if ids is None:
         return files
-    return [f for f in files if f.stem.removeprefix(ENGINE_FILE_PREFIX) in ids]
+    on = ids.enabled if enabled is None else frozenset(enabled)
+    now = time.time()
+
+    def shown(f: Path) -> bool:
+        acct = f.stem.removeprefix(ENGINE_FILE_PREFIX)
+        if acct in on:
+            return True
+        if acct in ids.listed:
+            return False
+        try:
+            return now - f.stat().st_mtime <= UNLISTED_FRESH_S
+        except OSError:                    # removed meanwhile
+            return False
+    return [f for f in files if shown(f)]
 
 
 # ---------------------------------------------------------------------------- CLI

@@ -4,6 +4,7 @@ reporting (icm-probe)" and an extra Account tile. Every reader lists engine file
 `goldbot.ops.accounts.engine_state_files`, which keeps the accounts `enabled_accounts` returns (the source health's
 `accounts` check uses); an enabled account whose report is missing or stale still shows "Engine not reporting"."""
 import json
+import os
 import time
 from pathlib import Path
 
@@ -15,8 +16,10 @@ from goldbot.api import activity, explain
 from goldbot.api import entry_status as es
 from goldbot.api.app import State, create_app
 from goldbot.api.auth import totp_code
-from goldbot.ops import accounts, health
+from goldbot.ops import account_view, accounts, health
+from goldbot.ops.deploy import DeployWatch
 from goldbot.ops.health import AccountRef, HealthContext
+from goldbot.telegram import digest
 from goldbot.telegram.bus import ApprovalBus
 
 WED = pd.Timestamp("2026-10-14 14:00", tz="UTC")     # gold trades
@@ -185,3 +188,47 @@ def test_the_health_entry_status_check_writes_nothing(state):
     before = sorted(p.relative_to(state) for p in state.rglob("*"))
     health.check_entry_status(ctx(state), "icm-demo")
     assert sorted(p.relative_to(state) for p in state.rglob("*")) == before
+
+
+# ------------------------------------------------------------------------- an account accounts.yaml does not list
+def test_a_fresh_file_of_an_account_accounts_yaml_does_not_list_is_shown(state):
+    """An engine running ahead of the brain's config (deployed before the yaml) is never hidden."""
+    (state / "engine_icm-new.json").write_text(json.dumps(engine("icm-new", WED.timestamp())))
+    assert [f.name for f in accounts.engine_state_files(state)] == ["engine_icm-demo.json", "engine_icm-new.json"]
+
+
+def test_a_stale_file_of_an_account_accounts_yaml_does_not_list_is_hidden(state):
+    f = state / "engine_icm-retired.json"
+    f.write_text(json.dumps(engine("icm-retired", WED.timestamp())))
+    old = time.time() - accounts.UNLISTED_FRESH_S - 60
+    os.utime(f, (old, old))
+    assert [f.name for f in accounts.engine_state_files(state)] == ["engine_icm-demo.json"]
+
+
+def test_a_fresh_file_of_a_disabled_account_stays_hidden(state):
+    os.utime(state / "engine_icm-probe.json")
+    assert [f.name for f in accounts.engine_state_files(state)] == ["engine_icm-demo.json"]
+
+
+# ------------------------------------------------------------------------------------- the other owner-facing readers
+def test_the_telegram_proposal_budget_leaves_out_a_disabled_account(state, monkeypatch):
+    seen: list[list[str]] = []
+
+    def capture(engines, sup, account_id, risk):
+        seen.append([e["account"] for e in engines])
+    monkeypatch.setattr(account_view, "proposal_budget", capture)
+    account_view.proposal_budget_from_state(state, "icm-demo", 0.005)
+    assert seen == [["icm-demo"]]
+
+
+def test_the_daily_digest_leaves_out_a_disabled_account(state):
+    (state / "engine_icm-probe.json").write_text("{torn")          # never read: it would fail the section
+    assert [e["account"] for e in digest._engines(state)] == ["icm-demo"]
+
+
+def test_the_deploy_notes_leave_out_a_disabled_accounts_mt5_box(state):
+    compat = {"bridge_compat": {"status": "incompatible", "bridge_commit": None}}
+    (state / "engine_icm-probe.json").write_text(json.dumps(engine("icm-probe", WED.timestamp(), **compat)))
+    (state / "engine_icm-demo.json").write_text(json.dumps(engine("icm-demo", WED.timestamp(), **compat)))
+    notes = DeployWatch(state, state).mt5_notes("a" * 40)
+    assert len(notes) == 1 and "icm-demo" in notes[0]
