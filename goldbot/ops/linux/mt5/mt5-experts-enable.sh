@@ -13,6 +13,9 @@
 set -euo pipefail
 export LC_ALL=C
 HERE=$(cd "$(dirname "$0")" && pwd)
+# MT5_DIR, BACKUP_ROOT and SKIP_RUNNING_CHECK are honoured only under GOLDBOT_TEST=1 (the tests): in the unit the edit
+# always targets mt5's own tree and the running check always runs (security review LOW)
+if [ "${GOLDBOT_TEST:-}" != 1 ]; then unset MT5_DIR BACKUP_ROOT SKIP_RUNNING_CHECK; fi
 MT5_DIR=${MT5_DIR:-${HOME:-/home/mt5}/.wine/drive_c/MT5/ICMarkets}
 BACKUP_ROOT=${BACKUP_ROOT:-${HOME:-/home/mt5}}
 INI=$MT5_DIR/Config/common.ini

@@ -17,14 +17,15 @@ to_mt5() {  # to_mt5 <utf8-src> <dst>: UTF-16LE + BOM + CRLF, written atomically
 
 ini_set() {  # ini_set <utf8-file> <section> <key> <value>: in place; a missing key goes to its section's end, a
              # missing section to the file's end
-  local f=$1 sec=$2 key=$3 val=$4
+  local f=$1 sec=$2 key=$3 val=$4 tmp
+  tmp=$(mktemp "$f.XXXXXX")          # a fresh file beside the target: never follows a planted "$f.new" symlink
   awk -v sec="[$sec]" -v key="$key" -v val="$val" '
     function flush() { if (insec && !done) { print key "=" val; done = 1 } }
     /^\[/ { flush(); insec = ($0 == sec) }
     insec && index($0, key "=") == 1 { if (!done) print key "=" val; done = 1; next }
     { print }
-    END { flush(); if (!done) { print sec; print key "=" val } }' "$f" >"$f.new"
-  mv -f "$f.new" "$f"
+    END { flush(); if (!done) { print sec; print key "=" val } }' "$f" >"$tmp"
+  mv -f "$tmp" "$f"
 }
 
 set_ini() {  # set_ini <mt5-file> <section> <key> <value>: ini_set on an MT5-encoded file

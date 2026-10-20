@@ -38,7 +38,8 @@ def _box(tmp_path: Path, common: str | None) -> tuple[Path, dict[str, str]]:
     (d / "Config").mkdir(parents=True)
     if common is not None:
         _mt5(d / "Config" / "common.ini", common)
-    env = {**os.environ, "MT5_DIR": str(d), "BACKUP_ROOT": str(tmp_path), "SKIP_RUNNING_CHECK": "1"}
+    env = {**os.environ, "MT5_DIR": str(d), "BACKUP_ROOT": str(tmp_path), "SKIP_RUNNING_CHECK": "1",
+           "GOLDBOT_TEST": "1"}
     return d / "Config" / "common.ini", env
 
 
@@ -144,3 +145,29 @@ def test_shellcheck_clean():
     for f in ("mt5-experts-enable.sh", "mt5-ini.sh", "mt5-gold-profile.sh"):
         r = subprocess.run([sc, "-x", str(LINUX / "mt5" / f)], capture_output=True, text=True, cwd=LINUX / "mt5")
         assert r.returncode == 0, r.stdout
+
+
+@needs_tools
+def test_the_path_and_check_overrides_are_ignored_outside_tests(tmp_path):
+    """Security LOW: the unit's environment never redirects the edit (MT5_DIR, BACKUP_ROOT) or skips the running check;
+    only GOLDBOT_TEST=1 honours them, so without it the script works on $HOME's own MT5 tree."""
+    ini, env = _box(tmp_path, "[Common]\nLogin=1\n")
+    env.pop("GOLDBOT_TEST")
+    home = tmp_path / "home"
+    home.mkdir()
+    before = ini.read_bytes()
+    r = _run({**env, "HOME": str(home)})
+    assert r.returncode == 2 and str(home) in r.stderr and ini.read_bytes() == before
+
+
+@needs_tools
+def test_ini_set_never_follows_a_planted_symlink(tmp_path):
+    """Security LOW: ini_set writes through a fresh temp file beside the target (mktemp), never `> $f.new`."""
+    target = tmp_path / "elsewhere"
+    target.write_text("keep\n")
+    f = tmp_path / "x.ini"
+    f.write_text("[A]\nk=1\n")
+    (tmp_path / "x.ini.new").symlink_to(target)
+    helper = LINUX / "mt5" / "mt5-ini.sh"
+    subprocess.run(["bash", "-c", f'. "{helper}"; ini_set "{f}" A k 2'], check=True)
+    assert target.read_text() == "keep\n" and f.read_text() == "[A]\nk=2\n"
