@@ -377,6 +377,18 @@ and the rest still arrives. It never contains account numbers or emails.
   ignores a hang-up and keeps going either way,
   but only then do you see its last lines. `/var/lib/goldbot-deploy/deploys.jsonl` (and Telegram) is the record of
   what happened; the end of the terminal output can be lost.
+* **What ran before runs after (incident 2026-10-20).** Before it stops anything, goldbot-deploy records the units
+  that are active. One unit that fails to start never keeps the others down. A rollback starts only those units, and
+  after any rollback (successful or not) starts each of them again that is not active; the record (and Telegram) ends
+  with `running: ...; not running: ...`. A unit that was not active before (for example a newly enabled
+  `goldbot-engine@<account>`) is not started by a rollback. Such a new engine is started last, without waiting, and
+  judged on its own: if it is down because its bridge is not ok (`bridge:`, `terminal:` or `bridge_compat:<account>`
+  in `goldbot run health`), the deploy stays and reports *deployed_degraded* with `engine@<account> blocked by its
+  bridge (<check>)`: log that MT5 box in (section 0.3b), then `sudo systemctl restart goldbot-engine@<account>`. If
+  its bridge is ok, the deploy rolls back (its journal says why: `journalctl -u goldbot-engine@<account> -n 100`). An
+  engine that was running before and is not after still rolls the deploy back. If a record says `failed` with
+  `not running: <units>`: `systemctl status <unit>` and `journalctl -u <unit> -n 100` for each, fix the cause, then
+  `sudo systemctl start <unit>`; check `goldbot run health` is back to its pre-deploy state.
 * **Going back by hand:** `sudo goldbot-deploy --rollback <older commit id>`. It accepts only an older commit of the
   one that runs, on `main`, that passed CI or ran on this box before (`/var/lib/goldbot-deploy/deploys.jsonl`). Same
   lock, same wait for a pending entry, same restart order and 90 s check. If the rollback is unstable, the version

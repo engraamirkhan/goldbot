@@ -33,7 +33,19 @@ promotion.
   code: `TrialRegistry.passed_gates` requires it for configs tagged `from_discovery`) before it
   can be promoted.
 
-## Order and budget (5 queued + 4 contingent H-02 survivor slots of 20; amended 2026-10-10)
+## Order and budget (2 queued + 4 contingent H-02 survivor slots = 6 reserved of 20; amended 2026-10-20, was 5 + 4 on 2026-10-10)
+
+**Amendment 2026-10-20 (research director, program decision; before the freeze, before any Q1 outcome; no reading
+rule changes).** H-01 and H-04 ran in the 2026Q4 owner-directed batch exactly as pre-registered here (#48 H-01
+INCONCLUSIVE, held; #44 H-04 STOP), and H-06 was withdrawn by its rule on 2026-10-16. The Q1 queue is therefore
+**H-02 and tsmom 4h continuity (C4H)**, plus H-02's 4 contingent survivor slots: `research.reserved_trials_quarter`
+2027Q1 = **6**, and the open budget under the E-5 cap is **14** (7 live conditional rows O-1..O-6 and O-10, as O-7
+and O-8 need H-04 to continue; H-53, the quarter's retired-family exploration trial; 6 free reserve, each spent only
+by a dated note here written before its pre-registration). `config/settings.yaml`, `preregistration-2027Q1.yaml`
+(`reservation: 6`, H-01/H-04 marked moved) and `tests/test_preregister_quarter.py` change together in one reviewed
+change (implementer, quant-reviewer checks; due 2026-10-27). The text below keeps its 2026-10-10 numbers as history.
+The H-01 and H-04 sections stay as the rules their Q4 runs were read by. True K at this date is 111
+(`research-plan.md` 11.1).
 
 **Reserved in code (amendment 2026-10-10, before the freeze; no reading rule changes; ADR 0007):**
 `research.reserved_trials_quarter: {"2027Q1": 9}` (config/settings.yaml; keyed by quarter, so no other quarter holds
@@ -1032,7 +1044,7 @@ holiday proxy) and **H-B** (holiday cost in R on frozen candidate sets, family b
 |---|---|---|---|---|
 | G1 data-v1 2020-2025 repair → G3 merged recount → G4 digests pinned | every row | data-engineer (G1, G4), research-director (G3) | 2026-11-06 / 2026-11-13 / 2026-12-14 | targeted refetch in the release PR of 2026-10-17 (CI running); not on `main` |
 | G2 holdout repair | O-10 | data-engineer | 2026-11-06 (needed before 2027-03-19) | open |
-| `calendar-v1` (owner adds `FRED_API_KEY`; data-engineer dispatches `data-us-calendar`) | O-1, O-2/O-3, O-4 | owner (chaser: program-director) | key by **2026-11-30** (escalated now, 6 weeks ahead) | blocked on the owner; release absent |
+| `calendar-v1` (built from ALFRED vintages, no key: program decision 2026-10-20; was "owner adds `FRED_API_KEY`") | O-1, O-2/O-3, O-4 | data-engineer | ALFRED loader 2026-10-30; release **2026-11-06** | on track (2026-10-20: release absent per `gh release list`; no owner dependency) |
 | `costs-v1` or "priors accepted" | every row (P-5 pin) | owner / research-director | 2026-12-11 / 2026-12-14 | open; fallback likely |
 | E-2 15m discovery candidate spec + BACKLOG 31 `flat_at_local`. E-2 includes the top-tercile cut from inner cross-fitted p, with a test that the cut never sees a test-fold row (quant finding 1) | O-4 (31 also O-2/O-3) | implementer (quant-reviewer) | 2027-01-29 | tercile cut built 2026-10-17 (BACKLOG 75, TRACEABILITY M48), quant and code review pending; the 15m candidate spec still open |
 | E-6 day-summed DSR coded check (`metrics.day_summed_dsr`: daily net-R sums over days with trades, var(SR) = 1/G, skew and kurtosis of the sums, K = `n_trials_effective`; `tests/test_day_summed_dsr.py`) | O-5, O-6 | implementer (quant-reviewer) | 2027-02-26 | new; BACKLOG item owed (program-director to file) |
@@ -1163,9 +1175,9 @@ by the `preregister-quarter` workflow from `preregistration-2027Q1.yaml`)
 | Row | Config (exact) | `rule_id` | Feature version | Accountable | Date | Status |
 |---|---|---|---|---|---|---|
 | H-02 | `--discover --families cluster`, `--specialist tsmom --variants '[{"timeframe": "4h", "max_bars": 12}]'`, the pinned `DiscoveryConfig` dump above (top_k 39, permutation confirmation, freq/stability 0.6, group_top_k 3, survivor_unit group (amended 2026-10-17, Q-H02U), H02_CLUSTERS), label 4h TB 3.0/1.5/12, macro on, bars range 2010-01-01 .. 2025-09-30 written into the config | none (read by the discovery verdict) | `f-51ac5ebabb` (default + macro drivers v5) | strategy-researcher (quant-reviewer checks the config) | config 2026-12-11; row 2026-12-18 .. 12-23 | on track (`macro-v1` now exists) |
-| H-01 | `tsmom`, `variants ["slow"]`, agent `tsmom-g0-c12c9afb24` | **`H-01`** | `f-079deacc61` | strategy-researcher | row 2026-12-18 .. 12-23 | **AT RISK (2026-10-16)**: lower bound 152 vs floor 150, counted on data-v1 with 21 weekdays missing (G1); stays queued (retire-only) until the single recount on repaired data (by 2026-11-13, item 3) is read: < 150 withdraws it by its rule (reservation 8 -> 7) |
+| H-01 | `tsmom`, `variants ["slow"]`, agent `tsmom-g0-c12c9afb24` | **`H-01`** | `f-079deacc61` | strategy-researcher | row 2026-12-18 .. 12-23 | **moved to 2026Q4 and run (2026-10-20 check):** #48, INCONCLUSIVE (held); no Q1 row is written. Earlier status: **AT RISK (2026-10-16)**: lower bound 152 vs floor 150, counted on data-v1 with 21 weekdays missing (G1); stays queued (retire-only) until the single recount on repaired data (by 2026-11-13, item 3) is read: < 150 withdraws it by its rule (reservation 8 -> 7) |
 | H-06 | frozen macro-gate preset `slow_macro` | none | `f-51ac5ebabb` | strategy-researcher | withdrawn 2026-10-16 | **withdrawn by its rule** (lower bound 107 < 150): no row is written |
-| H-04 | `asia_drift`, `variants [{}]`, agent `asia_drift-g0-98dc13a518` | **`H-04`** | `f-079deacc61` | strategy-researcher | row 2026-12-18 .. 12-23 | on track (4,025 entries counted) |
+| H-04 | `asia_drift`, `variants [{}]`, agent `asia_drift-g0-98dc13a518` | **`H-04`** | `f-079deacc61` | strategy-researcher | row 2026-12-18 .. 12-23 | **moved to 2026Q4 and run (2026-10-20 check):** #44, STOP; no Q1 row is written |
 | tsmom 4h continuity | `tsmom`, `variants [{"timeframe": "4h", "max_bars": 12}]` | **`C4H`** | `f-079deacc61` | strategy-researcher | row 2026-12-18 .. 12-23 | on track |
 
 **2. Reserved slot rows.** Four survivor slots on H-02's queued row, written after it:
@@ -1202,7 +1214,7 @@ done)
 |---|---|---|---|
 | Ruling A (daily event floor; recommendation 150, retire-only), B (budget 20, keep), C (consensus feed, decline for now), D (other instruments, out of scope), and the conservative K_eff default: recorded here and `research.screen_min_events_daily` committed | owner (chaser: program-director) | 2026-10-11 | **done** (owner approved; floor committed) |
 | `macro-v1` published | data-engineer | 2026-10-18 | **done 2026-10-13** (scheduled `data-macro` run 38394945106; weekly Tuesday refresh) |
-| `calendar-v1` published (`data-us-calendar` on `main`; needed by Q2, not by Q1) | owner (sets `FRED_API_KEY`; chaser: program-director), then data-engineer dispatches | key 2026-10-18; release 2026-10-19 | **blocked on the owner**: no `FRED_API_KEY` secret (checked 2026-10-16); chase 2026-10-18 |
+| `calendar-v1` published (ALFRED source, no key; program decision 2026-10-20) | data-engineer | loader 2026-10-30; release 2026-11-06 | **re-dated 2026-10-20** (was blocked on the owner's key): the scheduled `data-us-calendar` run 39122091942 of 2026-10-18 finished in 8 s and published nothing; `calendar-v1` absent |
 | `costs-v1` published from the VPS, or "priors accepted" written here | owner (VPS step, BACKLOG 1; chaser: program-director), research-director records the fallback | 2026-12-11 / fallback 2026-12-14 | open; the 13 Oct demo deploy has not happened, so the fallback is likely |
 | Pre-registration writer (BACKLOG 47; `scripts/preregister_quarter.py` + `preregister-quarter` workflow) | implementer | 2026-12-04 | merged to `main` (`ab24d87`); never run. First dry run (`gh workflow run preregister-quarter.yml --ref main -f dry_run=true`) by the research director: not yet dispatched (the 2026-10-16 dispatch was refused by this session's permission policy; to be run with approval), new date 2026-10-20 |
 | H-06 preset merged and counted, or withdrawn by its rule (BACKLOG 48) | research-director | 2026-12-04 | **done 2026-10-16**: preset on `main` (`d2f18c6`), counted, withdrawn (107 < 150) |
