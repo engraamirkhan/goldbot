@@ -762,7 +762,8 @@ def research_director(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
                       attribution=load_attribution(ctx.state_dir), hypotheses=load_hypotheses(),
                       retired=r.retired_families, promoted={e.version: e.promoted_utc for e in ctx.models.entries},
                       reserved_setting=r.reserved_for(quarter_of(slot.tz_convert("UTC").to_pydatetime())),
-                      grid_paused=r.label_grid_paused)
+                      grid_paused=r.label_grid_paused,
+                      evidence_start=EVIDENCE_START_UTC)   # H-52: attribution rows opened before the fix are quarantined
     plan.save(ctx.state_dir / PLAN_FILE)
     return {"quarter": plan.quarter, "quarter_used": plan.quarter_used, "quarter_reserved": plan.quarter_reserved,
             "budget": plan.budget, "grid_budget": plan.grid_budget, "unallocated": plan.unallocated,
@@ -1157,7 +1158,7 @@ def attribution(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         tables[acc.account_id] = CostModel.from_table(table, settings_swap(ctx.settings)) if table is not None else None
     roles = {e.version: VersionRole(status=e.status, promoted_utc=e.promoted_utc) for e in ctx.models.entries}
     rep = build_report(trades, now=slot, costs=costs, settings=a, daily_vol=vol, roles=roles, fills=fills,
-                       orders=orders, tables=tables)
+                       orders=orders, tables=tables, evidence_start=EVIDENCE_START_UTC)   # H-52 quarantine
     save_report(rep, ctx.state_dir)
     return {"taken": rep.n_taken, "candidates": rep.n_candidates, "net_r": rep.overall.mean_r_net,
             "verdict": rep.overall.verdict, "costs": costs.source}

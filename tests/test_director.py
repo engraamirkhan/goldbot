@@ -865,3 +865,77 @@ def test_screening_families_get_no_director_grid_or_analyst_trials(tmp_path):
     ctx = _ctx(tmp_path)
     out = jobs.make_trial_runner(ctx)("asia_drift", {}, "research analyst: try H-04")
     assert "pre-registered screen" in out["error"] and ctx.trials.n_trials == 0
+
+
+# ------------------------------------------------------------------------------------------- H-52 evidence start
+EVIDENCE_CUT = pd.Timestamp("2026-10-19 13:49", tz="UTC")
+AFTER_CUT = pd.Timestamp("2026-10-25 12:00", tz="UTC")
+
+
+def _rows_15m(family: str, n: int, t: float, first_entry: pd.Timestamp) -> list[dict[str, Any]]:
+    """15m attribution rows one minute apart; `entry_utc` is the signal bar's close (its open + 15 minutes)."""
+    m = t / math.sqrt(n - 1)
+    return [{"family": family, "version": "v1", "taken": True, "timeframe": "15m",
+             "entry_utc": (first_entry + pd.Timedelta(minutes=i)).isoformat(), "r_net": m + (1.0 if i % 2 == 0 else -1.0)}
+            for i in range(n)]
+
+
+def _cut_plan(rows: list[dict[str, Any]], evidence_start: pd.Timestamp | None = EVIDENCE_CUT) -> ResearchPlan:
+    retired = [RetiredFamily(family="mean_reversion", hypothesis_id="R-14", retired=date(2026, 10, 19), reason="r")]
+    report = {"as_of": (AFTER_CUT - pd.Timedelta(hours=1)).isoformat(), "min_trades": 30, "n_taken": len(rows),
+              "trades": rows}
+    return build_plan(AFTER_CUT, FAMILIES, _rich_trials(), [], [], quarter_budget=100, monthly_total=60,
+                      trial_budget_per_month=0, floor=2, attribution=report, retired=retired, promoted=PROMOTED,
+                      evidence_start=evidence_start)
+
+
+def test_a_quarantined_trade_after_the_retirement_date_never_counts_towards_reinstatement():
+    """H-52: a retired family counts from its retirement date at 00:00, but trades opened before the evidence start
+    (2026-10-19 13:49 UTC) are quarantined: a strong record entered 00:15-07:54 that day reinstates nothing."""
+    rows = _rows_15m("mean_reversion", 400, 8.0, pd.Timestamp("2026-10-19 00:15", tz="UTC"))
+    plan = _cut_plan(rows)
+    mr = next(s for s in plan.evidence if s.family == "mean_reversion")
+    assert mr.retired and mr.attribution is not None and mr.attribution.n == 0
+    assert mr.attribution.excluded_quarantined == 400 and mr.attribution.excluded_pre_retirement == 0
+    assert plan.budget["mean_reversion"] <= 1
+    assert "400 opened before the evidence start" in (plan.attribution_note or "")
+    # the same record without the cut would reinstate it: the cut is what keeps it out
+    uncut = _cut_plan(rows, evidence_start=None)
+    assert not next(s for s in uncut.evidence if s.family == "mean_reversion").retired
+
+
+def test_a_trade_opened_at_or_after_the_evidence_start_counts_and_the_boundary_is_the_signal_bar_open():
+    """The cut is on the signal bar's OPEN (entry_utc - timeframe, as promotion.quarantine_reason reads entry_ts): a
+    15m row entered 14:03 opened 13:48 (quarantined), one entered 14:04 opened exactly 13:49 (counts)."""
+    boundary = _rows_15m("mean_reversion", 2, 0.0, pd.Timestamp("2026-10-19 14:03", tz="UTC"))
+    a = next(s.attribution for s in _cut_plan(boundary).evidence if s.family == "mean_reversion")
+    assert a is not None and a.n == 1 and a.excluded_quarantined == 1
+    plan = _cut_plan(_rows_15m("mean_reversion", 400, 8.0, pd.Timestamp("2026-10-19 14:04", tz="UTC")))
+    mr = next(s for s in plan.evidence if s.family == "mean_reversion")
+    assert mr.attribution is not None and mr.attribution.n == 400 and mr.attribution.excluded_quarantined == 0
+    assert not mr.retired and mr.new_evidence                    # reinstated by post-cut evidence only
+
+
+def test_quarantined_trades_do_not_tilt_an_active_familys_budget():
+    """Pre-fix trades of an active family are left out of its attribution cell too (budget tilt, not just reinstatement);
+    a row without a readable timeframe is cut against its entry less the longest bar (1w: fail closed)."""
+    pre = _rows_15m("tsmom", 400, 9.0, pd.Timestamp("2026-10-18 00:00", tz="UTC"))
+    no_tf = [{**r, "timeframe": None, "entry_utc": (EVIDENCE_CUT + pd.Timedelta(hours=23)).isoformat()} for r in pre[:2]]
+    plan = _cut_plan(pre + no_tf)
+    a = next(s.attribution for s in plan.evidence if s.family == "tsmom")
+    assert a is not None and a.n == 0 and a.excluded_quarantined == 402 and not a.used
+    assert [m for m in plan.moves if m.source == "attribution"] == []
+
+
+def test_the_research_director_job_applies_the_h52_evidence_start(tmp_path, monkeypatch):
+    from goldbot.research.promotion import EVIDENCE_START_UTC
+    seen: dict[str, Any] = {}
+
+    def spy(*a: Any, **kw: Any) -> Any:
+        seen.update(kw)
+        raise RuntimeError("stop after the call")
+
+    monkeypatch.setattr(jobs, "build_plan", spy)
+    with pytest.raises(RuntimeError, match="stop after the call"):
+        research_director(_ctx(tmp_path), AFTER_CUT)
+    assert seen["evidence_start"] == EVIDENCE_START_UTC

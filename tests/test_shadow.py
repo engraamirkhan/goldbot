@@ -8,7 +8,7 @@ import pytest
 
 from goldbot.config import load_settings
 from goldbot.data.store import Store
-from goldbot.engine.shadow import ShadowBook
+from goldbot.engine.shadow import ShadowBook, ShadowTrade
 from goldbot.labels.triple_barrier import BarrierSpec, one_at_a_time, triple_barrier
 from goldbot.ops.jobs import JobContext, model_watch
 from goldbot.research.model import MetaLabelModel
@@ -77,7 +77,7 @@ def test_book_persists_and_reports_stats(tmp_path):
     assert book.open_trade(version="v1", agent_id="a", side=1, bar_ts=t0, entry=2400.0, atr_usd=2.0, target_atr=1.5,
                            stop_atr=1.0, max_bars=4, p=0.6) is None        # one entry per signal bar
     book.save(t0)
-    restarted = ShadowBook(tmp_path)                                         # engine restart keeps open trades
+    restarted = ShadowBook(tmp_path, evidence_start=None)   # engine restart keeps open trades (2025 bars: no cut)
     assert len(restarted.books["v1"].open) == 1
     for i in range(1, 10):
         restarted.on_bar(bars.iloc[i])
@@ -427,3 +427,22 @@ def test_the_cluster_robust_t_does_not_count_same_day_copies_as_new_evidence():
     assert t is not None and indep is not None
     assert t == pytest.approx(indep, rel=1e-9) and abs(t) < abs(naive) / 1.5
     assert cluster_t_stat([0.1, 0.2], ["a", "a"]) is None  # one cluster: no t
+
+
+def test_the_shadow_record_the_promotion_gate_reads_leaves_out_trades_opened_before_the_evidence_start(tmp_path):
+    """H-52: state/shadow_<version>.json (promotion gate and director shadow_z) is written with the evidence start, so
+    a trade OPENED before 2026-10-19 13:49 UTC is never counted; one opened at exactly 13:49 is."""
+    from goldbot.research.promotion import EVIDENCE_START_UTC
+    book = ShadowBook(tmp_path)
+    assert book.evidence_start == EVIDENCE_START_UTC                        # the engine's book applies the cut by default
+    book.track("v1", pd.Timestamp("2026-10-12", tz="UTC"))
+    for i, opened in enumerate(["2026-10-19 13:30", "2026-10-19 13:45", "2026-10-19 13:49", "2026-10-20 09:00"]):
+        ts = pd.Timestamp(opened, tz="UTC")
+        book.books["v1"].closed.append(ShadowTrade(
+            version="v1", agent_id=f"a{i}", side=1, entry_ts=ts, entry=2400.0, stop=2390.0, target=2420.0, max_bars=4,
+            timeframe="15m", p=0.6, taken=True, exit_ts=ts + pd.Timedelta(minutes=30), exit=2410.0, barrier="time",
+            ret=10.0 / 2400.0))
+    book.save(pd.Timestamp("2026-10-21", tz="UTC"))
+    st = PerfStats.model_validate_json((tmp_path / "shadow_v1.json").read_text())
+    assert st.n_trades == 2
+    assert ShadowBook(tmp_path, evidence_start=None).stats("v1", pd.Timestamp("2026-10-21", tz="UTC")).n_trades == 4

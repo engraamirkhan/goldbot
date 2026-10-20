@@ -44,6 +44,10 @@ Out-of-sample attribution (state/attribution.json, research/attribution.py) is o
 rebuilds each family's cell from the report's per-trade rows (`trades`: taken, champion-path shadow trades), keeping
 only trades entered on or after their model version's promotion (`promoted`, from the model registry; a version with
 no promotion record is not counted), and for a retired family only trades entered on or after its retirement date.
+H-52: a trade OPENED before the evidence start (promotion.EVIDENCE_START_UTC, passed by the job; its signal bar's
+open, entry_utc - timeframe, as promotion.quarantine_reason reads entry_ts) is quarantined: "never clustered, scored or
+counted as promotion evidence", so a retired family's count from its retirement date at 00:00 starts at the later of
+the two (R-14/R-15, retired 2026-10-19). A row without a readable timeframe is cut on entry_utc less the longest bar (1w).
 A cell under the report's `min_trades` is noise; only a report dated at or before the plan and at most
 ATTRIBUTION_MAX_AGE_DAYS old is read. The rows are the report's latest `attribution.trade_rows` taken trades, so a
 truncated report gives a smaller sample, never a selected one. Per family:
@@ -94,11 +98,11 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord, UtcTimestamp, load_record
-from goldbot.config import RetiredFamily
+from goldbot.config import TF_SECONDS, RetiredFamily
 from goldbot.research.attribution import T_SIGNIFICANT
 from goldbot.research.gates import day_summed_check
 from goldbot.research.population import DSR_PROMOTE, MIN_RANK_TRADES
-from goldbot.research.promotion import MIN_SHADOW_TRADES, PerfStats, effective_n
+from goldbot.research.promotion import MIN_SHADOW_TRADES, PerfStats, effective_n, quarantine_reason
 from goldbot.research.registry import (
     DAY_SUMMED_RULE_IDS,
     DEFAULT_SLOT_RULE,
@@ -188,6 +192,7 @@ class AttributionEvidence(FrozenRecord):
     term: float = 0.0                 # clip(t_shrunk / Z_FULL, -1, 1)
     excluded_pre_promotion: int = 0   # trades entered before their version's promotion (or of an unpromoted version)
     excluded_pre_retirement: int = 0  # retired family: trades entered before its retirement date
+    excluded_quarantined: int = 0     # H-52: trades opened before the evidence start (history_gap)
     since: str | None = None          # retired family: the retirement date the cell starts from
     tilts: bool = False               # the term is applied (used, no shadow_z: one shadow source, not two)
 
@@ -1135,10 +1140,12 @@ def _verdict(n: int, t: float | None, min_trades: int) -> str:
 def attribution_evidence(report: dict[str, Any] | None, families: list[str], now: pd.Timestamp,
                          promoted: Mapping[str, pd.Timestamp | None] | None = None,
                          since: Mapping[str, pd.Timestamp] | None = None,
+                         evidence_start: pd.Timestamp | None = None,
                          ) -> tuple[dict[str, AttributionEvidence], str | None, str]:
     """Per family the out-of-sample cell and its bounded term; (evidence, report as_of, note). Cells are rebuilt from
     the report's per-trade rows: a trade counts only when its version has a promotion date in `promoted` and it was
-    entered on or after it, and, for a family in `since` (retired), entered on or after that date. A cell under the
+    entered on or after it, and, for a family in `since` (retired), entered on or after that date; a trade opened
+    before `evidence_start` (H-52) is quarantined whatever the family (None: nothing quarantined). A cell under the
     report's `min_trades` is noise. Only a report dated at or before `now` (point in time) and at most
     ATTRIBUTION_MAX_AGE_DAYS old is read; anything else gives term 0."""
     empty = {f: AttributionEvidence() for f in families}
@@ -1158,6 +1165,7 @@ def attribution_evidence(report: dict[str, Any] | None, families: list[str], now
     rets: dict[str, list[float]] = {f: [] for f in families}
     pre_promo = {f: 0 for f in families}
     pre_ret = {f: 0 for f in families}
+    quarantined = {f: 0 for f in families}
     rows = [r for r in report.get("trades") or [] if isinstance(r, dict)]
     for r in rows:
         fam = str(r.get("family"))
@@ -1165,6 +1173,9 @@ def attribution_evidence(report: dict[str, Any] | None, families: list[str], now
             continue
         entry, x = _ts(r.get("entry_utc")), _num(r.get("r_net"))
         if entry is None or x is None or entry > now:
+            continue
+        if quarantine_reason(_signal_open(entry, r.get("timeframe")), evidence_start) is not None:
+            quarantined[fam] += 1
             continue
         p = promo.get(str(r.get("version")))
         if p is None or entry < p:
@@ -1188,14 +1199,27 @@ def attribution_evidence(report: dict[str, Any] | None, families: list[str], now
             n=n, mean_r_net=None if mean is None else round(mean, 9), t_stat=None if t is None else round(t, 9),
             verdict=verdict if n else "missing", used=used, t_shrunk=round(t_shrunk, 9),
             term=round(min(max(t_shrunk / Z_FULL, -1.0), 1.0), 9), excluded_pre_promotion=pre_promo[f],
-            excluded_pre_retirement=pre_ret[f], since=f"{cut[f]:%Y-%m-%d}" if f in cut else None)
+            excluded_pre_retirement=pre_ret[f], excluded_quarantined=quarantined[f], since=f"{cut[f]:%Y-%m-%d}" if f in cut else None)
     used_n = sum(1 for e in out.values() if e.used)
     n_taken = int(_num(report.get("n_taken")) or 0)
     trunc = (f"; the report keeps the latest {len(rows)} of {n_taken} taken trades (attribution.trade_rows)"
              if n_taken > len(rows) else "")
     return out, stamp, (f"attribution report {stamp}: {used_n} non-noise family cells from its per-trade rows (min "
                         f"{min_trades} trades; {sum(pre_promo.values())} trades before their version's promotion and "
-                        f"{sum(pre_ret.values())} before a retirement date left out{trunc})")
+                        f"{sum(pre_ret.values())} before a retirement date left out"
+                        f"{_quarantine_note(sum(quarantined.values()), evidence_start)}{trunc})")
+
+
+def _signal_open(entry_utc: pd.Timestamp, timeframe: Any) -> pd.Timestamp:
+    """A row's signal bar open (the shadow book's entry_ts): entry_utc less its timeframe; without a readable one, less
+    the longest bar (1w), so an unknown row is quarantined rather than admitted (fail closed)."""
+    seconds = TF_SECONDS.get(timeframe if isinstance(timeframe, str) else "", max(TF_SECONDS.values()))
+    return entry_utc - pd.Timedelta(seconds=seconds)
+
+
+def _quarantine_note(n: int, evidence_start: pd.Timestamp | None) -> str:
+    return f"; {n} opened before the evidence start {evidence_start:%Y-%m-%d %H:%M} UTC (H-52 history_gap)" \
+        if n and evidence_start is not None else ""
 
 
 def _cells(line: str) -> list[str]:
@@ -1472,11 +1496,13 @@ def build_plan(now: pd.Timestamp, families: list[str], trials: list[dict[str, An
                holdout: tuple[pd.Timestamp, pd.Timestamp] | None = None,
                attribution: dict[str, Any] | None = None, hypotheses: str | None = None,
                retired: Sequence[RetiredFamily] = (), promoted: Mapping[str, pd.Timestamp | None] | None = None,
-               reserved_setting: int = 0, grid_paused: bool = False) -> ResearchPlan:
+               reserved_setting: int = 0, grid_paused: bool = False,
+               evidence_start: pd.Timestamp | None = None) -> ResearchPlan:
     """Plan for the rest of the quarter: total = min(quarter budget - used - reserved, monthly_total); evidence never
     includes trials recorded with status "holdout". `attribution` is the parsed state/attribution.json (None: no
     term), `promoted` each model version's promotion time (model registry), `retired` research.retired_families,
-    `reserved_setting` research.reserved_trials_quarter. `hypotheses` (the text of docs/research/hypotheses.md) is
+    `reserved_setting` research.reserved_trials_quarter, `evidence_start` H-52's promotion.EVIDENCE_START_UTC (attribution
+    rows opened before it are quarantined). `hypotheses` (the text of docs/research/hypotheses.md) is
     only hashed and checked against `retired`: it never moves a trial. A pure function of its inputs."""
     quarter, used, _ = quarter_usage(trials, now, quarter_budget)
     reservation = reserved_trials(trials, quarter, reserved_setting)
@@ -1485,7 +1511,7 @@ def build_plan(now: pd.Timestamp, families: list[str], trials: list[dict[str, An
     fams = sorted(families)
     retired_map = {e.family: e for e in retired if e.family in fams}
     since = {f: pd.Timestamp(e.retired).tz_localize("UTC") for f, e in retired_map.items()}
-    attr, attr_as_of, attr_note = attribution_evidence(attribution, fams, now, promoted, since)
+    attr, attr_as_of, attr_note = attribution_evidence(attribution, fams, now, promoted, since, evidence_start)
     reinstate_t = reinstatement_threshold(len(retired_map) * REINSTATE_SOURCES)
     base_scores = score_families(fams, evidence_rows, shadow, agents)
     scores = [_with_inputs(s, attr[s.family], retired_map.get(s.family), reinstate_t) for s in base_scores]
