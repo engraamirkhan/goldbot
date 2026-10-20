@@ -172,7 +172,12 @@ class Store:
     def _write_atomic(pdir: Path, df: pd.DataFrame) -> None:
         name = f"part-{uuid.uuid4().hex[:8]}.parquet"
         tmp = pdir / f".{name}.tmp"           # not *.parquet: invisible to readers until renamed
-        pq.write_table(pa.Table.from_pandas(df, preserve_index=False), tmp, compression="zstd")
+        table = pa.Table.from_pandas(df, preserve_index=False)
+        # an all-None object column becomes Arrow null: a NULL-typed column on disk breaks the scan of later parts
+        for i, field in enumerate(table.schema):
+            if pa.types.is_null(field.type):
+                table = table.set_column(i, field.name, table.column(i).cast(pa.string()))
+        pq.write_table(table, tmp, compression="zstd")
         fd = os.open(tmp, os.O_RDONLY)
         try:
             os.fsync(fd)
@@ -251,10 +256,11 @@ class Store:
 
 
 def _scan(glob: str, table: str) -> str:
-    """The DuckDB scan of a table's files. `tv_indicators` mixes live-alert files and chart-export files that carry more
-    columns (origin, repaint_validated, ...): read by column name so an older file gets NULL there."""
-    extra = ", union_by_name=true" if table == "tv_indicators" else ""
-    return f"read_parquet('{glob}', hive_partitioning=true{extra})"
+    """The DuckDB scan of a table's files, always by column name (union_by_name). Without it DuckDB takes the schema
+    from the first file: an early part with an all-null column (typed NULL) made later string parts fail to cast, and
+    `tv_indicators` mixes live-alert and chart-export files with extra columns (origin, repaint_validated, ...) where
+    an older file must read as NULL."""
+    return f"read_parquet('{glob}', hive_partitioning=true, union_by_name=true)"
 
 
 def asof_join(bars: pd.DataFrame, other: pd.DataFrame, *, on: str = "ts_utc", available_col: str = "available_utc",
