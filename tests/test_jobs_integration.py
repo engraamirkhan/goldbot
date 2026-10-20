@@ -285,7 +285,10 @@ def test_no_spawn_during_system_halt(bars_store, tmp_path):
     assert any(r["action"] == "staff_run" and "anthropic-api-key" in r["reason"] for r in report["refused"])
 
 
-def test_attribution_job_writes_the_report_from_the_shadow_book_and_changes_nothing_else(bars_store, tmp_path):
+def test_attribution_job_writes_the_report_from_the_shadow_book_and_changes_nothing_else(bars_store, tmp_path,
+                                                                                        monkeypatch):
+    from goldbot.ops import jobs
+    monkeypatch.setattr(jobs, "EVIDENCE_START_UTC", None)   # 2025 bars predate H-52's cut (tested in test_attribution)
     ctx = _ctx(bars_store, tmp_path)
     slot = pd.Timestamp("2025-09-30 23:50", tz="UTC")
     book = ShadowBook(tmp_path)

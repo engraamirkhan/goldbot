@@ -29,6 +29,7 @@ from goldbot.research.attribution import (
     render_markdown,
     save_report,
     t_bar,
+    trade_rows,
 )
 from goldbot.research.pipeline import entry_utc
 
@@ -477,3 +478,55 @@ def test_shadow_attribution_and_the_e6_entry_day_derive_the_same_key():
     for tf, open_utc in [("15m", "2026-09-01 23:45"), ("1h", "2026-09-01 23:00"), ("15m", "2026-09-01 12:00")]:
         row = build_report([_signal(open_utc, tf=tf, r=1.0)], now=NOW, costs=FREE, settings=S).trades[0]
         assert row.entry_utc == entry_utc(pd.DatetimeIndex([open_utc], tz="UTC"), tf)[0]
+
+
+# ------------------------------------------------------------------------------------------------ H-52 evidence start
+CUT = pd.Timestamp("2026-10-19 13:49", tz="UTC")
+LATER = pd.Timestamp("2026-10-20 20:00", tz="UTC")
+
+
+def test_a_trade_opened_before_the_evidence_start_is_left_out_of_every_attribution_cell():
+    """H-52: a shadow trade OPENED (entry_ts, its signal bar's open) before the evidence start is quarantined, even when
+    it enters at that bar's close after the cut (15m signal 13:45 enters 14:00); one opened at exactly 13:49 counts."""
+    book = [_signal("2026-10-19 00:00", tf="15m", r=2.0, i=0), _signal("2026-10-19 13:45", tf="15m", r=2.0, i=1),
+            _signal("2026-10-19 13:49", tf="15m", r=-1.0, i=2), _signal("2026-10-19 14:00", tf="15m", r=1.0, i=3)]
+    rows = trade_rows(book, costs=FREE, daily_vol=None, now=LATER, since=LATER - pd.Timedelta(days=180),
+                      evidence_start=CUT)
+    assert [r.entry_utc for r in rows] == [pd.Timestamp("2026-10-19 14:04", tz="UTC"),
+                                           pd.Timestamp("2026-10-19 14:15", tz="UTC")]
+    rep = build_report(book, now=LATER, costs=FREE, settings=S, evidence_start=CUT)
+    assert rep.n_taken == 2 and len(rep.trades) == 2 and rep.overall.n == 2
+    assert any("2 trades opened before 2026-10-19 13:49 UTC" in n and "history_gap" in n for n in rep.notes)
+    # without an evidence start nothing is quarantined (the research default; the attribution job passes the cut)
+    assert build_report(book, now=LATER, costs=FREE, settings=S).n_taken == 4
+
+
+def test_the_attribution_job_applies_the_h52_evidence_start(monkeypatch, tmp_path):
+    """jobs.attribution hands promotion.EVIDENCE_START_UTC to the report, so state/attribution.json (the director's
+    attribution and reinstatement input) never carries a quarantined trade."""
+    from goldbot.ops import jobs
+    from goldbot.research import attribution as attribution_mod
+    from goldbot.research.promotion import EVIDENCE_START_UTC
+
+    seen: dict[str, object] = {}
+
+    def spy(*a, **kw):
+        seen.update(kw)
+        raise RuntimeError("stop after the call")
+
+    monkeypatch.setattr(attribution_mod, "build_report", spy)
+    ctx = _jobs_ctx(tmp_path)
+    with pytest.raises(RuntimeError, match="stop after the call"):
+        jobs.attribution(ctx, LATER)
+    assert seen["evidence_start"] == EVIDENCE_START_UTC
+
+
+def _jobs_ctx(tmp_path):
+    from goldbot.config import load_settings
+    from goldbot.ops.jobs import JobContext
+    from goldbot.research.model_registry import ModelRegistry
+    from goldbot.research.population import Population
+    from goldbot.research.registry import TrialRegistry
+    return JobContext(settings=load_settings(), store=Store(tmp_path / "data"), state_dir=tmp_path,
+                      models=ModelRegistry(tmp_path / "models"), trials=TrialRegistry(tmp_path / "trials.jsonl"),
+                      accounts=[], population=Population(tmp_path / "pop.json"))

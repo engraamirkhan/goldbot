@@ -30,6 +30,9 @@ record, in R).
 Honesty rules (ADR 0022: "Results verdict: day-clustered SE; Bonferroni t_bar for breakdown rows; max(2.0,
 t⁻¹_{G−1}(0.975)) for the overall champion-path cell; frozen from this date; changing a strategy because of a row is a
 new registry trial"):
+* a trade OPENED before `evidence_start` (H-52, promotion.EVIDENCE_START_UTC, passed by the attribution job) is
+  quarantined as `history_gap`: "never clustered, scored or counted as promotion evidence", so it is in no cell, row or
+  calibration bin and the report's notes count it;
 * a cell with fewer than `attribution.min_trades` trades is "noise", whatever its mean;
 * t and both ranges use the standard error clustered by entry UTC day, so same-day trades are not counted as
   independent evidence; a clustered se of exactly 0 while the trades disperse is "no se" (indistinguishable);
@@ -61,6 +64,7 @@ from goldbot.data.timeutil import bar_close_utc, epoch_ns
 from goldbot.engine.shadow import ShadowTrade
 from goldbot.execution.costs import CONTRACT_OZ, CostTable
 from goldbot.labels.triple_barrier import SwapSpec, rollover_nights
+from goldbot.research.promotion import QUARANTINE_HISTORY_GAP, quarantine_reason
 
 REPORT_FILE = "attribution.json"
 SUMMARY_FILE = "attribution.md"
@@ -382,23 +386,30 @@ def _exit_group(barrier: str) -> str:
     return barrier if barrier in ("target", "stop", "time") else "policy"
 
 
+def _in_window(t: ShadowTrade, since: pd.Timestamp, now: pd.Timestamp) -> bool:
+    """A closed trade with a usable risk whose real exit time is in [since, now + tf]: what `trade_rows` prices."""
+    if t.exit_ts is None or t.ret is None or t.exit is None or t.barrier is None:
+        return False
+    risk = abs(t.entry - t.stop)
+    if not np.isfinite(risk) or risk <= 0:
+        return False
+    return since <= bar_close_utc(t.exit_ts, t.timeframe) <= now + pd.Timedelta(seconds=tf_seconds(t.timeframe))
+
+
 def trade_rows(trades: list[ShadowTrade], *, costs: CostModel, daily_vol: pd.Series | None, now: pd.Timestamp,
-               since: pd.Timestamp) -> list[TradeRow]:
+               since: pd.Timestamp, evidence_start: pd.Timestamp | None = None) -> list[TradeRow]:
     """Closed trades exited in [since, now], each priced in R with its cost components, sorted deterministically.
     A shadow trade's `entry_ts` is its signal bar's open; it enters at that bar's close, so `entry_utc` = entry_ts + tf
-    and the ADR 0022 cluster key is that day ("clustered by entry UTC day"; a 15m signal at 23:45 is the next day's)."""
+    and the ADR 0022 cluster key is that day ("clustered by entry UTC day"; a 15m signal at 23:45 is the next day's).
+    evidence_start (H-52): a trade opened (`entry_ts`) before it is quarantined (`promotion.quarantine_reason`) and left
+    out, also when it enters after the cut (a 15m signal opened 13:45 enters 14:00); None quarantines nothing."""
     keep = []
     for t in trades:
-        if t.exit_ts is None or t.ret is None or t.exit is None or t.barrier is None:
+        if not _in_window(t, since, now) or quarantine_reason(t.entry_ts, evidence_start) is not None:
             continue
-        risk = abs(t.entry - t.stop)
-        if not np.isfinite(risk) or risk <= 0:
-            continue
-        tf = pd.Timedelta(seconds=tf_seconds(t.timeframe))
+        assert t.exit_ts is not None and t.barrier is not None and t.ret is not None     # _in_window checked them
         entry_utc, exit_utc = bar_close_utc(t.entry_ts, t.timeframe), bar_close_utc(t.exit_ts, t.timeframe)
-        if not since <= exit_utc <= now + tf:
-            continue
-        keep.append((t, risk, entry_utc, exit_utc, t.barrier, float(t.ret)))
+        keep.append((t, abs(t.entry - t.stop), entry_utc, exit_utc, t.barrier, float(t.ret)))
     keep.sort(key=lambda x: (x[3], x[2], x[0].version, x[0].agent_id, x[0].side, x[0].timeframe, x[4], x[5],
                              x[0].p, x[0].taken))
     if not keep:
@@ -480,10 +491,15 @@ def live_fills(fills: pd.DataFrame, orders: dict[str, Any], prior_usd: float, *,
 def build_report(trades: list[ShadowTrade], *, now: pd.Timestamp, costs: CostModel, settings: AttributionSettings,
                  daily_vol: pd.Series | None = None, roles: dict[str, VersionRole] | None = None,
                  fills: dict[str, pd.DataFrame] | None = None, orders: dict[str, dict[str, Any]] | None = None,
-                 tables: dict[str, CostModel | None] | None = None) -> AttributionReport:
+                 tables: dict[str, CostModel | None] | None = None,
+                 evidence_start: pd.Timestamp | None = None) -> AttributionReport:
+    """evidence_start: H-52's promotion.EVIDENCE_START_UTC (the attribution job passes it); trades opened before it
+    are quarantined (`trade_rows`) and only counted in the notes. Live fills are not shadow evidence: not cut."""
     since = now - pd.Timedelta(days=settings.window_days)
     m = settings.min_trades
-    rows = trade_rows(trades, costs=costs, daily_vol=daily_vol, now=now, since=since)
+    rows = trade_rows(trades, costs=costs, daily_vol=daily_vol, now=now, since=since, evidence_start=evidence_start)
+    quarantined = sum(1 for t in trades if _in_window(t, since, now)
+                      and quarantine_reason(t.entry_ts, evidence_start) is not None)
     champ = _champion_path(roles or {})
     path = [r for r in rows if champ(r)]
     taken = [r for r in path if r.taken]
@@ -539,6 +555,9 @@ def build_report(trades: list[ShadowTrade], *, now: pd.Timestamp, costs: CostMod
             for acc, f in sorted((fills or {}).items())}
 
     notes = [f"costs: {costs.source}"]
+    if quarantined:
+        notes.append(f"{quarantined} trades opened before {evidence_start:%Y-%m-%d %H:%M} UTC are quarantined "
+                     f"({QUARANTINE_HISTORY_GAP}, H-52): in no cell, row or calibration bin")
     if not costs.spread_usd:
         notes.append("spread unknown: gross R equals the shadow R, which already pays the quoted spread")
     if any(r.regime == "unknown" for r in taken):

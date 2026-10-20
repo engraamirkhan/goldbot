@@ -52,7 +52,13 @@ from goldbot.data.timeutil import opportunity_day
 from goldbot.labels.excursion import Excursion, bar_prices, exit_bar_extremes
 from goldbot.labels.exit_policy import ExitPolicy, PolicyState, new_state, policy_return, policy_step
 from goldbot.research.metrics import breakeven_prob, sharpe_annualised, summarize
-from goldbot.research.promotion import PerfStats, cluster_sums, cluster_t_stat, quarantine_reason
+from goldbot.research.promotion import (
+    EVIDENCE_START_UTC,
+    PerfStats,
+    cluster_sums,
+    cluster_t_stat,
+    quarantine_reason,
+)
 
 if TYPE_CHECKING:
     from goldbot.specialists.base import Specialist
@@ -147,8 +153,13 @@ class VersionBook(Record):
 
 
 class ShadowBook:
-    def __init__(self, state_dir: str | Path, max_open_per_agent: int = 1):
+    def __init__(self, state_dir: str | Path, max_open_per_agent: int = 1,
+                 evidence_start: pd.Timestamp | None = EVIDENCE_START_UTC):
+        """evidence_start (H-52): the cut `save` writes each version's record (state/shadow_<version>.json, read by the
+        promotion gate and the research director's shadow_z) with, so a trade opened before the history-gap fix is
+        "never clustered, scored or counted as promotion evidence"; None (tests on older bars) cuts nothing."""
         self.max_open_per_agent = max_open_per_agent
+        self.evidence_start = evidence_start
         self.dir = Path(state_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.path = self.dir / "shadow_book.json"
@@ -341,7 +352,8 @@ class ShadowBook:
         tmp.write_text(json.dumps({k: b.model_dump(mode="json") for k, b in self.books.items()}))
         tmp.replace(self.path)
         for version in self.books:
-            (self.dir / f"shadow_{version}.json").write_text(self.stats(version, now).model_dump_json())
+            (self.dir / f"shadow_{version}.json").write_text(
+                self.stats(version, now, self.evidence_start).model_dump_json())
 
 
 def score(model: Any, X: pd.DataFrame) -> tuple[float, float | None]:
