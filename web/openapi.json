@@ -776,6 +776,45 @@
     "title": "AgentRunRow",
     "type": "object"
    },
+   "AskReasonView": {
+    "description": "Why a demo account asks for this entry instead of entering on its own (backlog 103; ADR 0036: demo enters\nautomatically). `text` is one plain sentence (telegram/approvals.py `ask_reason_text`, the Telegram card's words);\nthe card prefixes \"Asking because: \". `until`: the re-arm lock's end. A `terminal_not_demo` card is real money:\nApprove is disabled and the API refuses an approval (sign-off correction 2).",
+    "properties": {
+     "kind": {
+      "enum": [
+       "rearm_lock",
+       "kill_switch",
+       "risk_unreadable",
+       "owner_propose",
+       "terminal_not_demo",
+       "config_propose"
+      ],
+      "title": "Kind",
+      "type": "string"
+     },
+     "text": {
+      "title": "Text",
+      "type": "string"
+     },
+     "until": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Until"
+     }
+    },
+    "required": [
+     "kind",
+     "text"
+    ],
+    "title": "AskReasonView",
+    "type": "object"
+   },
    "AttributionReportView": {
     "properties": {
      "as_of": {
@@ -956,6 +995,20 @@
    },
    "AutoModeView": {
     "properties": {
+     "accounts": {
+      "anyOf": [
+       {
+        "items": {
+         "$ref": "#/components/schemas/EntryModeAccount"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Accounts"
+     },
      "approved": {
       "title": "Approved",
       "type": "integer"
@@ -1074,6 +1127,17 @@
      },
      "test": {
       "$ref": "#/components/schemas/VetoTestView"
+     },
+     "window_s": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Window S"
      }
     },
     "required": [
@@ -1548,9 +1612,35 @@
       "title": "Account Id",
       "type": "string"
      },
+     "account_mode": {
+      "anyOf": [
+       {
+        "enum": [
+         "demo",
+         "live",
+         "paper"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Account Mode"
+     },
      "agent_id": {
       "title": "Agent Id",
       "type": "string"
+     },
+     "ask_reason": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/AskReasonView"
+       },
+       {
+        "type": "null"
+       }
+      ]
      },
      "created": {
       "title": "Created",
@@ -1674,6 +1764,28 @@
        }
       ]
      },
+     "open_positions": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Open Positions"
+     },
+     "open_risk_amount": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Open Risk Amount"
+     },
      "p": {
       "title": "P",
       "type": "number"
@@ -1790,6 +1902,17 @@
       "title": "Side",
       "type": "string"
      },
+     "spread_normal_points": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Spread Normal Points"
+     },
      "spread_points": {
       "title": "Spread Points",
       "type": "number"
@@ -1840,6 +1963,17 @@
        }
       ],
       "title": "Tradingview Url"
+     },
+     "window_s": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Window S"
      }
     },
     "required": [
@@ -2148,6 +2282,70 @@
     "title": "EntryBlock",
     "type": "object"
    },
+   "EntryModeAccount": {
+    "description": "One reporting engine's entry mode (backlog 92): the account's class and whether it enters on its own or asks.\nReal-money accounts always ask (ADR 0036); `ask_reason` is set on demo only.",
+    "properties": {
+     "account_id": {
+      "title": "Account Id",
+      "type": "string"
+     },
+     "account_mode": {
+      "anyOf": [
+       {
+        "enum": [
+         "demo",
+         "live",
+         "paper"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Account Mode"
+     },
+     "ask_reason": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/AskReasonView"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "effective_mode": {
+      "enum": [
+       "auto",
+       "propose"
+      ],
+      "title": "Effective Mode",
+      "type": "string"
+     },
+     "last_seen_utc": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Seen Utc"
+     }
+    },
+    "required": [
+     "account_id",
+     "account_mode",
+     "effective_mode",
+     "ask_reason",
+     "last_seen_utc"
+    ],
+    "title": "EntryModeAccount",
+    "type": "object"
+   },
    "EntryStatus": {
     "description": "Can this account take a new trade right now? open: yes; partial: yes, except the strategies named; waiting:\nno, and every reason clears by itself; blocked: no, and something needs the owner. Exits never depend on it.",
     "properties": {
@@ -2290,7 +2488,7 @@
     "type": "object"
    },
    "ForcedPropose": {
-    "description": "An engine override that keeps propose-and-approve whatever the owner's mode says.",
+    "description": "Why a demo account asks for its entries now (ADR 0036: demo normally enters on its own), with the same kinds\nand words as the approval card's `ask_reason`: the re-arm lock and the kill switch (read from the risk file), an\nunreadable risk file, and what the engine publishes (`ask_reason`: the owner's /mode propose, a terminal that is\nnot demo, the account's own configuration).",
     "properties": {
      "account_id": {
       "title": "Account Id",
@@ -2304,7 +2502,10 @@
       "enum": [
        "rearm_lock",
        "kill_switch",
-       "risk_unreadable"
+       "risk_unreadable",
+       "owner_propose",
+       "terminal_not_demo",
+       "config_propose"
       ],
       "title": "Kind",
       "type": "string"
@@ -3554,8 +3755,19 @@
     "type": "object"
    },
    "LimitsSupervisorView": {
-    "description": "The supervisor's combined caps (all accounts together; goldbot/risk/supervisor.py), fractions.",
+    "description": "The supervisor's combined caps (all accounts together; goldbot/risk/supervisor.py), fractions, and (backlog 98)\nthe same in money: cap x the combined day/week-start equity, used = that start equity - combined equity now\n(floating P&L included, a gain uses nothing). Money is null while the supervisor is not reporting, has not summed\nthe accounts, or the accounts report different currencies (`mixed_currencies`: pounds are never added to\ndollars, ADR 0004).",
     "properties": {
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
      "daily_cap": {
       "anyOf": [
        {
@@ -3566,6 +3778,40 @@
        }
       ],
       "title": "Daily Cap"
+     },
+     "daily_cap_amount": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Daily Cap Amount"
+     },
+     "daily_used_amount": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Daily Used Amount"
+     },
+     "day_resets_utc": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Day Resets Utc"
      },
      "default_daily": {
       "title": "Default Daily",
@@ -3583,6 +3829,29 @@
       "title": "Envelope Weekly",
       "type": "number"
      },
+     "mixed_currencies": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mixed Currencies"
+     },
+     "week_resets_utc": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Week Resets Utc"
+     },
      "weekly_cap": {
       "anyOf": [
        {
@@ -3593,6 +3862,28 @@
        }
       ],
       "title": "Weekly Cap"
+     },
+     "weekly_cap_amount": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Weekly Cap Amount"
+     },
+     "weekly_used_amount": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Weekly Used Amount"
      }
     },
     "required": [
@@ -4090,6 +4381,49 @@
      "view"
     ],
     "title": "ModeChangeResult",
+    "type": "object"
+   },
+   "NextTrial": {
+    "description": "Where the next trials go: the research plan's top-ranked family. `planned_date` stays null until the plan\ncarries dates (none is invented).",
+    "properties": {
+     "budget": {
+      "title": "Budget",
+      "type": "integer"
+     },
+     "family": {
+      "title": "Family",
+      "type": "string"
+     },
+     "planned_date": {
+      "anyOf": [
+       {
+        "format": "date",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Planned Date"
+     },
+     "timeframe": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Timeframe"
+     }
+    },
+    "required": [
+     "family",
+     "timeframe",
+     "budget"
+    ],
+    "title": "NextTrial",
     "type": "object"
    },
    "NotConfirmed": {
@@ -4631,9 +4965,35 @@
       "title": "Account Id",
       "type": "string"
      },
+     "account_mode": {
+      "anyOf": [
+       {
+        "enum": [
+         "demo",
+         "live",
+         "paper"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Account Mode"
+     },
      "agent_id": {
       "title": "Agent Id",
       "type": "string"
+     },
+     "ask_reason": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/AskReasonView"
+       },
+       {
+        "type": "null"
+       }
+      ]
      },
      "created": {
       "title": "Created",
@@ -4714,6 +5074,28 @@
       "default": false,
       "title": "Min Lot Exception",
       "type": "boolean"
+     },
+     "open_positions": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Open Positions"
+     },
+     "open_risk_amount": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Open Risk Amount"
      },
      "p": {
       "title": "P",
@@ -4797,6 +5179,17 @@
       "title": "Side",
       "type": "string"
      },
+     "spread_normal_points": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Spread Normal Points"
+     },
      "spread_points": {
       "title": "Spread Points",
       "type": "number"
@@ -4836,6 +5229,17 @@
        }
       ],
       "title": "Tradingview Url"
+     },
+     "window_s": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Window S"
      }
     },
     "required": [
@@ -5148,6 +5552,40 @@
     "title": "ReliabilityCurve",
     "type": "object"
    },
+   "ResearchCounts": {
+    "description": "Trials by verdict, counted as the trial table reads them (a pass counts only with its cost treatment).",
+    "properties": {
+     "failed": {
+      "title": "Failed",
+      "type": "integer"
+     },
+     "no_verdict": {
+      "title": "No Verdict",
+      "type": "integer"
+     },
+     "not_counted": {
+      "title": "Not Counted",
+      "type": "integer"
+     },
+     "passed": {
+      "title": "Passed",
+      "type": "integer"
+     },
+     "run": {
+      "title": "Run",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "run",
+     "passed",
+     "failed",
+     "no_verdict",
+     "not_counted"
+    ],
+    "title": "ResearchCounts",
+    "type": "object"
+   },
    "ResearchPlanView": {
     "description": "The research director's latest plan (state/research_plan.json).",
     "properties": {
@@ -5334,6 +5772,66 @@
     "title": "ResearchPlanView",
     "type": "object"
    },
+   "ResearchSummary": {
+    "description": "Backlog 97 (docs/design/ui-97-98-research-limits.md, \"Is research getting us to \u00a350 a day?\"): the first card\nof the Research screen, from the registry and the plan only. No money projection (needs backlog 33 and\nquant-reviewer sign-off); the research-director signs off the wording before release.",
+    "properties": {
+     "best_candidate": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/TrialRow"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "failed_total": {
+      "title": "Failed Total",
+      "type": "integer"
+     },
+     "next_trial": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/NextTrial"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "no_verdict_total": {
+      "title": "No Verdict Total",
+      "type": "integer"
+     },
+     "north_star_gbp": {
+      "title": "North Star Gbp",
+      "type": "number"
+     },
+     "not_counted_total": {
+      "title": "Not Counted Total",
+      "type": "integer"
+     },
+     "passed_total": {
+      "title": "Passed Total",
+      "type": "integer"
+     },
+     "since_last_week": {
+      "$ref": "#/components/schemas/ResearchCounts"
+     }
+    },
+    "required": [
+     "passed_total",
+     "failed_total",
+     "no_verdict_total",
+     "not_counted_total",
+     "since_last_week",
+     "best_candidate",
+     "next_trial",
+     "north_star_gbp"
+    ],
+    "title": "ResearchSummary",
+    "type": "object"
+   },
    "ResearchToday": {
     "description": "Trials of the current UTC day by verdict (docs/ux/limits-and-tradingview.md C), counted server-side so the day\nboundary lives in one place. A pass counts only with its cost treatment (registry.gate_pass_counts).",
     "properties": {
@@ -5424,6 +5922,16 @@
        }
       ],
       "title": "Plan Error"
+     },
+     "summary": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ResearchSummary"
+       },
+       {
+        "type": "null"
+       }
+      ]
      },
      "today": {
       "$ref": "#/components/schemas/ResearchToday"

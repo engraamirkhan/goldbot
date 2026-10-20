@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from goldbot.execution.not_confirmed import NotConfirmed
 from goldbot.execution.not_placed import NotPlaced
 from goldbot.ops.account_view import CantCheck, LossBudget, Milestones
-from goldbot.telegram.approvals import PROPOSAL_ID_PATTERN
+from goldbot.telegram.approvals import PROPOSAL_ID_PATTERN, AskKind
 
 
 class ApiRequest(BaseModel):
@@ -68,6 +68,16 @@ class AccountSummary(BaseModel):
     entry_status: EntryStatus | None = None  # can it take a new trade now, why not and what fixes it (null: not built)
 
 
+class AskReasonView(BaseModel):
+    """Why a demo account asks for this entry instead of entering on its own (backlog 103; ADR 0036: demo enters
+    automatically). `text` is one plain sentence (telegram/approvals.py `ask_reason_text`, the Telegram card's words);
+    the card prefixes "Asking because: ". `until`: the re-arm lock's end. A `terminal_not_demo` card is real money:
+    Approve is disabled and the API refuses an approval (sign-off correction 2)."""
+    kind: AskKind
+    text: str
+    until: datetime | None = None
+
+
 class Proposal(BaseModel):
     proposal_id: str
     account_id: str
@@ -101,6 +111,19 @@ class Proposal(BaseModel):
     # "mixed_currencies" (amber) / "mixed_currencies_paused" (red) when the accounts report different currencies
     # (BACKLOG 61: pounds are never added to dollars)
     loss_cant_check: CantCheck | None = None
+    # backlog 103 (docs/design/ui-91-92-approval-card.md section 1): the money class first; null = neither the
+    # proposal (an older engine) nor its engine's state file says: the card shows "account type unknown", never demo
+    account_mode: Literal["demo", "live", "paper"] | None = None
+    # the proposal's own approval window (bar and expired copy; no literal 90); always set by this API, nullable so
+    # a client built before it keeps compiling (the card then uses expires_at - created)
+    window_s: int | None = None
+    ask_reason: AskReasonView | None = None   # demo only; null on live, paper and an unknown type (asking is the rule)
+    # backlog 93, pending cards only (null on decided ones and when unknown): the median spread for this UTC
+    # hour-of-week over the last 20 recorded trading days (api/spread_normal.py), in the same points as
+    # `spread_points`; and what else is open on the account now, its summed stop risk in `currency`
+    spread_normal_points: float | None = None
+    open_positions: int | None = None
+    open_risk_amount: float | None = None
 
 
 class DecidedProposal(Proposal):
@@ -276,13 +299,26 @@ class LimitAccount(BaseModel):
 
 
 class LimitsSupervisorView(BaseModel):
-    """The supervisor's combined caps (all accounts together; goldbot/risk/supervisor.py), fractions."""
+    """The supervisor's combined caps (all accounts together; goldbot/risk/supervisor.py), fractions, and (backlog 98)
+    the same in money: cap x the combined day/week-start equity, used = that start equity - combined equity now
+    (floating P&L included, a gain uses nothing). Money is null while the supervisor is not reporting, has not summed
+    the accounts, or the accounts report different currencies (`mixed_currencies`: pounds are never added to
+    dollars, ADR 0004)."""
     daily_cap: float | None                 # now (state/supervisor.json); null when it is not reporting
     weekly_cap: float | None
     default_daily: float                    # settings.yaml risk.supervisor_daily_cap / _weekly_cap
     default_weekly: float
     envelope_daily: float                   # the CFO's demo envelope (ADR 0032 SUPERVISOR_DEMO_ENVELOPE)
     envelope_weekly: float
+    currency: str | None = None
+    mixed_currencies: bool | None = None    # null: the supervisor is not reporting
+    daily_cap_amount: float | None = None
+    daily_used_amount: float | None = None
+    weekly_cap_amount: float | None = None
+    weekly_used_amount: float | None = None
+    # always set by this API (nullable only for clients built before it)
+    day_resets_utc: datetime | None = None    # the next 00:00 UTC (the risk day)
+    week_resets_utc: datetime | None = None   # the next Sunday 00:00 UTC
 
 
 class LimitsView(BaseModel):
@@ -833,6 +869,38 @@ class ResearchToday(BaseModel):
     quarter_end: date                       # the trial budget (ResearchView.budget) renews the day after
 
 
+class ResearchCounts(BaseModel):
+    """Trials by verdict, counted as the trial table reads them (a pass counts only with its cost treatment)."""
+    run: int
+    passed: int
+    failed: int
+    no_verdict: int
+    not_counted: int                        # recorded a pass without its cost treatment
+
+
+class NextTrial(BaseModel):
+    """Where the next trials go: the research plan's top-ranked family. `planned_date` stays null until the plan
+    carries dates (none is invented)."""
+    family: str
+    timeframe: str | None
+    budget: int                             # trials the plan gives the family this quarter
+    planned_date: date | None = None
+
+
+class ResearchSummary(BaseModel):
+    """Backlog 97 (docs/design/ui-97-98-research-limits.md, "Is research getting us to £50 a day?"): the first card
+    of the Research screen, from the registry and the plan only. No money projection (needs backlog 33 and
+    quant-reviewer sign-off); the research-director signs off the wording before release."""
+    passed_total: int                       # counted passes, all time (the registry, not the capped trials list)
+    failed_total: int
+    no_verdict_total: int
+    not_counted_total: int
+    since_last_week: ResearchCounts         # trials stamped in the 7 days before now
+    best_candidate: TrialRow | None         # the counted pass with the highest net R per trade; null: none passed
+    next_trial: NextTrial | None            # null without a readable plan
+    north_star_gbp: float                   # settings research.north_star_daily_gbp (ADR 0004)
+
+
 class ResearchView(BaseModel):
     generated_utc: datetime
     budget: TrialBudget
@@ -842,6 +910,7 @@ class ResearchView(BaseModel):
     plan_error: str | None
     hypotheses: HypothesisDoc
     today: ResearchToday
+    summary: ResearchSummary | None = None   # backlog 97; always set by this API (nullable for older clients)
 # ============================================================================= end Health and Research screens
 
 
@@ -861,11 +930,24 @@ class VetoTestView(BaseModel):
 
 
 class ForcedPropose(BaseModel):
-    """An engine override that keeps propose-and-approve whatever the owner's mode says."""
+    """Why a demo account asks for its entries now (ADR 0036: demo normally enters on its own), with the same kinds
+    and words as the approval card's `ask_reason`: the re-arm lock and the kill switch (read from the risk file), an
+    unreadable risk file, and what the engine publishes (`ask_reason`: the owner's /mode propose, a terminal that is
+    not demo, the account's own configuration)."""
     account_id: str
-    kind: Literal["rearm_lock", "kill_switch", "risk_unreadable"]
+    kind: AskKind
     detail: str
     until: datetime | None = None           # rearm_lock: propose-only until then
+
+
+class EntryModeAccount(BaseModel):
+    """One reporting engine's entry mode (backlog 92): the account's class and whether it enters on its own or asks.
+    Real-money accounts always ask (ADR 0036); `ask_reason` is set on demo only."""
+    account_id: str
+    account_mode: Literal["demo", "live", "paper"] | None    # null: the engine file does not say
+    effective_mode: Literal["auto", "propose"]
+    ask_reason: AskReasonView | None
+    last_seen_utc: datetime | None          # the engine file's time (the card marks an old one as stale)
 
 
 class AutoModeView(BaseModel):
@@ -884,6 +966,10 @@ class AutoModeView(BaseModel):
     breaches: list[str]
     test: VetoTestView
     forced_propose: list[ForcedPropose]
+    # backlog 92 (always set by this API; nullable for older clients): one row per reporting engine, and the
+    # approval window real-money rows quote (settings risk.approval_window_seconds: "asks you (90 s)")
+    accounts: list[EntryModeAccount] | None = None
+    window_s: int | None = None
     can_enable: bool                        # this user is the owner, the evidence holds and the mode is not auto
     error: str | None = None                # the evidence could not be read (fails closed: not eligible)
 

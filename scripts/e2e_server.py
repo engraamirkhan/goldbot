@@ -40,7 +40,7 @@ from goldbot.data.econ_calendar import COLUMNS as CALENDAR_COLUMNS  # noqa: E402
 from goldbot.data.news import COLUMNS as NEWS_COLUMNS  # noqa: E402
 from goldbot.data.store import Store  # noqa: E402
 from goldbot.engine.shadow import ShadowBook  # noqa: E402
-from goldbot.telegram.approvals import Proposal  # noqa: E402
+from goldbot.telegram.approvals import AskReason, Proposal  # noqa: E402
 from goldbot.telegram.bus import ApprovalBus  # noqa: E402
 
 
@@ -85,19 +85,23 @@ def install_email_code_key() -> None:
 
 
 def seed_proposals(state: str) -> None:
-    """Two proposals as an engine would publish them to the approval bus: the long from a current engine (risk in
-    the account currency, sized by the minimum-lot exception), the short from an older one (USD risk only)."""
+    """Two proposals as an engine would publish them to the approval bus (backlog 103): the long on a real-money
+    account with the engine's own 90 s window (risk in the account currency, sized by the minimum-lot exception), the
+    short on a demo account forced to ask by the re-arm lock, with a 60-minute window and USD risk only (as an older
+    engine's money). Seeded last, just before the server starts, so the 90 s card is still open when the approval
+    story reaches it."""
     bus = ApprovalBus(state)
-    card_money: dict[str, dict[str, Any]] = {
-        "e2e-long": dict(currency="GBP", risk_amount=8.2, risk_fraction=0.0082, min_lot_exception=True,
-                         risk_normal=0.005, risk_cap=0.01),
-        "e2e-short": {}}
+    now = time.time()
+    cards: dict[str, dict[str, Any]] = {
+        "e2e-long": dict(account_id="icm-live", account_mode="live", window_s=90, currency="GBP", risk_amount=8.2,
+                         risk_fraction=0.0082, min_lot_exception=True, risk_normal=0.005, risk_cap=0.01),
+        "e2e-short": dict(account_id="icm-demo", account_mode="demo", window_s=3600,
+                          ask_reason=AskReason(kind="rearm_lock", until=now + 30 * 86400))}
     for pid, side, entry in (("e2e-long", 1, 2400.25), ("e2e-short", -1, 2410.50)):
         bus.publish(Proposal(
-            proposal_id=pid, account_id="icm-demo", agent_id="session_open-g0-e2e", side=side, lots=0.05,
-            entry=entry, stop=entry - side * 4.0, target=entry + side * 6.0, p=0.62, ev_r=0.31, spread_points=22.0,
-            top_features=[("atr_14", 0.4), ("adx_14", -0.2)], risk_usd=20.0, created=time.time(), window_s=3600,
-            **card_money[pid]))
+            proposal_id=pid, agent_id="session_open-g0-e2e", side=side, lots=0.05, entry=entry,
+            stop=entry - side * 4.0, target=entry + side * 6.0, p=0.62, ev_r=0.31, spread_points=22.0,
+            top_features=[("atr_14", 0.4), ("adx_14", -0.2)], risk_usd=20.0, created=now, **cards[pid]))
 
 
 def seed_store(data_root: str) -> None:
@@ -212,10 +216,10 @@ def main() -> None:
     check_tree()
     state = tempfile.mkdtemp(prefix=STATE_PREFIX)                 # 0700, this user only
     install_totp_clock(state)
-    seed_proposals(state)
     seed_store(str(Path(state) / "data"))
     seed_health_research(state)
     seed_automode(state)
+    seed_proposals(state)                                         # last: the 90 s window starts as late as it can
     mail, mailer, codes, outbox = None, None, None, None
     if args.fake_mailer:
         # refused (E2EMailerRefused) unless the flag is set and args.host, the address uvicorn binds below, is loopback

@@ -1172,6 +1172,24 @@ export interface components {
             /** Turns */
             turns: number;
         };
+        /**
+         * AskReasonView
+         * @description Why a demo account asks for this entry instead of entering on its own (backlog 103; ADR 0036: demo enters
+         *     automatically). `text` is one plain sentence (telegram/approvals.py `ask_reason_text`, the Telegram card's words);
+         *     the card prefixes "Asking because: ". `until`: the re-arm lock's end. A `terminal_not_demo` card is real money:
+         *     Approve is disabled and the API refuses an approval (sign-off correction 2).
+         */
+        AskReasonView: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "rearm_lock" | "kill_switch" | "risk_unreadable" | "owner_propose" | "terminal_not_demo" | "config_propose";
+            /** Text */
+            text: string;
+            /** Until */
+            until?: string | null;
+        };
         /** AttributionReportView */
         AttributionReportView: {
             /**
@@ -1252,6 +1270,8 @@ export interface components {
         };
         /** AutoModeView */
         AutoModeView: {
+            /** Accounts */
+            accounts?: components["schemas"]["EntryModeAccount"][] | null;
             /** Approved */
             approved: number;
             /** Breaches */
@@ -1287,6 +1307,8 @@ export interface components {
             /** Rejected */
             rejected: number;
             test: components["schemas"]["VetoTestView"];
+            /** Window S */
+            window_s?: number | null;
         };
         /**
          * CalendarEvent
@@ -1485,8 +1507,11 @@ export interface components {
         DecidedProposal: {
             /** Account Id */
             account_id: string;
+            /** Account Mode */
+            account_mode?: ("demo" | "live" | "paper") | null;
             /** Agent Id */
             agent_id: string;
+            ask_reason?: components["schemas"]["AskReasonView"] | null;
             /** Created */
             created: number;
             /** Currency */
@@ -1519,6 +1544,10 @@ export interface components {
             min_lot_exception: boolean;
             not_confirmed?: components["schemas"]["NotConfirmed"] | null;
             not_placed?: components["schemas"]["NotPlaced"] | null;
+            /** Open Positions */
+            open_positions?: number | null;
+            /** Open Risk Amount */
+            open_risk_amount?: number | null;
             /** P */
             p: number;
             /** Proposal Id */
@@ -1552,6 +1581,8 @@ export interface components {
              * @enum {string}
              */
             side: "long" | "short";
+            /** Spread Normal Points */
+            spread_normal_points?: number | null;
             /** Spread Points */
             spread_points: number;
             /**
@@ -1570,6 +1601,8 @@ export interface components {
             ][];
             /** Tradingview Url */
             tradingview_url?: string | null;
+            /** Window S */
+            window_s?: number | null;
         };
         /** Decision */
         Decision: {
@@ -1715,6 +1748,25 @@ export interface components {
             text: string;
         };
         /**
+         * EntryModeAccount
+         * @description One reporting engine's entry mode (backlog 92): the account's class and whether it enters on its own or asks.
+         *     Real-money accounts always ask (ADR 0036); `ask_reason` is set on demo only.
+         */
+        EntryModeAccount: {
+            /** Account Id */
+            account_id: string;
+            /** Account Mode */
+            account_mode: ("demo" | "live" | "paper") | null;
+            ask_reason: components["schemas"]["AskReasonView"] | null;
+            /**
+             * Effective Mode
+             * @enum {string}
+             */
+            effective_mode: "auto" | "propose";
+            /** Last Seen Utc */
+            last_seen_utc: string | null;
+        };
+        /**
          * EntryStatus
          * @description Can this account take a new trade right now? open: yes; partial: yes, except the strategies named; waiting:
          *     no, and every reason clears by itself; blocked: no, and something needs the owner. Exits never depend on it.
@@ -1781,7 +1833,10 @@ export interface components {
         };
         /**
          * ForcedPropose
-         * @description An engine override that keeps propose-and-approve whatever the owner's mode says.
+         * @description Why a demo account asks for its entries now (ADR 0036: demo normally enters on its own), with the same kinds
+         *     and words as the approval card's `ask_reason`: the re-arm lock and the kill switch (read from the risk file), an
+         *     unreadable risk file, and what the engine publishes (`ask_reason`: the owner's /mode propose, a terminal that is
+         *     not demo, the account's own configuration).
          */
         ForcedPropose: {
             /** Account Id */
@@ -1792,7 +1847,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "rearm_lock" | "kill_switch" | "risk_unreadable";
+            kind: "rearm_lock" | "kill_switch" | "risk_unreadable" | "owner_propose" | "terminal_not_demo" | "config_propose";
             /** Until */
             until?: string | null;
         };
@@ -2197,11 +2252,23 @@ export interface components {
         };
         /**
          * LimitsSupervisorView
-         * @description The supervisor's combined caps (all accounts together; goldbot/risk/supervisor.py), fractions.
+         * @description The supervisor's combined caps (all accounts together; goldbot/risk/supervisor.py), fractions, and (backlog 98)
+         *     the same in money: cap x the combined day/week-start equity, used = that start equity - combined equity now
+         *     (floating P&L included, a gain uses nothing). Money is null while the supervisor is not reporting, has not summed
+         *     the accounts, or the accounts report different currencies (`mixed_currencies`: pounds are never added to
+         *     dollars, ADR 0004).
          */
         LimitsSupervisorView: {
+            /** Currency */
+            currency?: string | null;
             /** Daily Cap */
             daily_cap: number | null;
+            /** Daily Cap Amount */
+            daily_cap_amount?: number | null;
+            /** Daily Used Amount */
+            daily_used_amount?: number | null;
+            /** Day Resets Utc */
+            day_resets_utc?: string | null;
             /** Default Daily */
             default_daily: number;
             /** Default Weekly */
@@ -2210,8 +2277,16 @@ export interface components {
             envelope_daily: number;
             /** Envelope Weekly */
             envelope_weekly: number;
+            /** Mixed Currencies */
+            mixed_currencies?: boolean | null;
+            /** Week Resets Utc */
+            week_resets_utc?: string | null;
             /** Weekly Cap */
             weekly_cap: number | null;
+            /** Weekly Cap Amount */
+            weekly_cap_amount?: number | null;
+            /** Weekly Used Amount */
+            weekly_used_amount?: number | null;
         };
         /** LimitsView */
         LimitsView: {
@@ -2409,6 +2484,21 @@ export interface components {
             view: components["schemas"]["AutoModeView"];
         };
         /**
+         * NextTrial
+         * @description Where the next trials go: the research plan's top-ranked family. `planned_date` stays null until the plan
+         *     carries dates (none is invented).
+         */
+        NextTrial: {
+            /** Budget */
+            budget: number;
+            /** Family */
+            family: string;
+            /** Planned Date */
+            planned_date?: string | null;
+            /** Timeframe */
+            timeframe: string | null;
+        };
+        /**
          * NotConfirmed
          * @description The dashboard note (API `DecidedProposal.not_confirmed`): a heading word that carries the state, then a
          *     sentence; `tone` picks the colour (amber while unknown: it is not a halt; red only for "Not placed").
@@ -2603,8 +2693,11 @@ export interface components {
         Proposal: {
             /** Account Id */
             account_id: string;
+            /** Account Mode */
+            account_mode?: ("demo" | "live" | "paper") | null;
             /** Agent Id */
             agent_id: string;
+            ask_reason?: components["schemas"]["AskReasonView"] | null;
             /** Created */
             created: number;
             /** Currency */
@@ -2631,6 +2724,10 @@ export interface components {
              * @default false
              */
             min_lot_exception: boolean;
+            /** Open Positions */
+            open_positions?: number | null;
+            /** Open Risk Amount */
+            open_risk_amount?: number | null;
             /** P */
             p: number;
             /** Proposal Id */
@@ -2652,6 +2749,8 @@ export interface components {
              * @enum {string}
              */
             side: "long" | "short";
+            /** Spread Normal Points */
+            spread_normal_points?: number | null;
             /** Spread Points */
             spread_points: number;
             /** Stop */
@@ -2665,6 +2764,8 @@ export interface components {
             ][];
             /** Tradingview Url */
             tradingview_url?: string | null;
+            /** Window S */
+            window_s?: number | null;
         };
         /** ProposedThreshold */
         ProposedThreshold: {
@@ -2789,6 +2890,22 @@ export interface components {
             version: string | null;
         };
         /**
+         * ResearchCounts
+         * @description Trials by verdict, counted as the trial table reads them (a pass counts only with its cost treatment).
+         */
+        ResearchCounts: {
+            /** Failed */
+            failed: number;
+            /** No Verdict */
+            no_verdict: number;
+            /** Not Counted */
+            not_counted: number;
+            /** Passed */
+            passed: number;
+            /** Run */
+            run: number;
+        };
+        /**
          * ResearchPlanView
          * @description The research director's latest plan (state/research_plan.json).
          */
@@ -2864,6 +2981,27 @@ export interface components {
             unallocated: number;
         };
         /**
+         * ResearchSummary
+         * @description Backlog 97 (docs/design/ui-97-98-research-limits.md, "Is research getting us to £50 a day?"): the first card
+         *     of the Research screen, from the registry and the plan only. No money projection (needs backlog 33 and
+         *     quant-reviewer sign-off); the research-director signs off the wording before release.
+         */
+        ResearchSummary: {
+            best_candidate: components["schemas"]["TrialRow"] | null;
+            /** Failed Total */
+            failed_total: number;
+            next_trial: components["schemas"]["NextTrial"] | null;
+            /** No Verdict Total */
+            no_verdict_total: number;
+            /** North Star Gbp */
+            north_star_gbp: number;
+            /** Not Counted Total */
+            not_counted_total: number;
+            /** Passed Total */
+            passed_total: number;
+            since_last_week: components["schemas"]["ResearchCounts"];
+        };
+        /**
          * ResearchToday
          * @description Trials of the current UTC day by verdict (docs/ux/limits-and-tradingview.md C), counted server-side so the day
          *     boundary lives in one place. A pass counts only with its cost treatment (registry.gate_pass_counts).
@@ -2903,6 +3041,7 @@ export interface components {
             plan: components["schemas"]["ResearchPlanView"] | null;
             /** Plan Error */
             plan_error: string | null;
+            summary?: components["schemas"]["ResearchSummary"] | null;
             today: components["schemas"]["ResearchToday"];
             /** Trials */
             trials: components["schemas"]["TrialRow"][];
