@@ -99,6 +99,19 @@ def _without_identity(c: Control) -> Control:
     return c.model_copy(update={k: _stored_by(getattr(c, k)) for k in ("by", "rearm_by", "mode_by")})
 
 
+def read_control(state_dir: str | Path) -> Control:
+    """state/control.json, read only (no approvals directories created, unlike ApprovalBus()): health's
+    entry_status:<account> reads it through goldbot/api/entry_status.py and must never write the state dir."""
+    path = Path(state_dir) / "control.json"
+    # strict on purpose (ADR 0010 allowlist): a field this release does not know could be a halt condition it
+    # cannot honour, so an unknown field reads as unreadable, i.e. halted
+    try:
+        return Control.model_validate_json(path.read_text()) if path.exists() else Control()
+    except ValueError:
+        # fail closed for entries, and back to propose-and-approve for any engine that trades again
+        return Control(halted=True, reason="unreadable control.json", approval_mode="propose")
+
+
 class ApprovalBus:
     def __init__(self, state_dir: str | Path):
         self.root = Path(state_dir) / "approvals"
@@ -286,13 +299,7 @@ class ApprovalBus:
 
     # ------------------------------------------------------------------ owner halt
     def control(self) -> Control:
-        # strict on purpose (ADR 0010 allowlist): a field this release does not know could be a halt condition it
-        # cannot honour, so an unknown field reads as unreadable, i.e. halted
-        try:
-            return Control.model_validate_json(self.control_path.read_text()) if self.control_path.exists() else Control()
-        except ValueError:
-            # fail closed for entries, and back to propose-and-approve for any engine that trades again
-            return Control(halted=True, reason="unreadable control.json", approval_mode="propose")
+        return read_control(self.control_path.parent)
 
     def set_halt(self, halted: bool, by: str, reason: str | None = None) -> Control:
         """`by` is the channel; an identity after ":" is dropped (A15: the identity is in the audit log)."""

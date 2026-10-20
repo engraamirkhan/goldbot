@@ -19,6 +19,12 @@ from tests.test_api_views import _login
 LIVE = "icm-live"
 
 
+@pytest.fixture(autouse=True)
+def _account_enabled(enabled_accounts):
+    """ACC's engine file is read only while ACC is an enabled account (goldbot.ops.accounts.engine_state_files)."""
+    enabled_accounts(ACC)
+
+
 def _more_trades(state: Path) -> None:
     """A net demo loss 3 days back (in 7 days, not today) and a net live win 20 days back (all time only)."""
     gates_phase.append_closed_trade(state, ClosedTrade(

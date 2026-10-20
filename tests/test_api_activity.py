@@ -25,6 +25,12 @@ T0 = pd.Timestamp("2026-10-19 08:00", tz="UTC")
 NOW = T0 + pd.Timedelta(hours=6)
 
 
+@pytest.fixture(autouse=True)
+def _account_enabled(enabled_accounts):
+    """ACC's engine file is read only while ACC is an enabled account (goldbot.ops.accounts.engine_state_files)."""
+    enabled_accounts(ACC)
+
+
 def _shadow(state: Path) -> None:
     """One taken 1h long that hits its target, one taken trade still open, one counterfactual (not taken)."""
     book = ShadowBook(state, max_open_per_agent=3)

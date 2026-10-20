@@ -149,6 +149,7 @@ from goldbot.data.timeutil import heartbeat_problem
 from goldbot.execution.not_confirmed import note as not_confirmed_note
 from goldbot.execution.not_placed import first_not_placed
 from goldbot.ops.account_view import LossBudget, loss_budget, margin_level_pct, milestones, proposal_budget
+from goldbot.ops.accounts import engine_state_files
 from goldbot.telegram.approvals import Outcome, decision_channel
 from goldbot.telegram.approvals import Proposal as BusProposal
 from goldbot.telegram.bus import ApprovalBus
@@ -224,8 +225,10 @@ class State:
                               ts_utc=b.get("ts_utc"), received_utc=b.get("received_utc"), accounts=sorted(accounts))
 
     def engines(self) -> list[dict]:
+        """The ENABLED accounts' engine state (accounts.engine_state_files: a disabled account's leftover file is
+        ignored)."""
         out = []
-        for f in self.dir.glob("engine_*.json"):
+        for f in engine_state_files(self.dir):
             try:                               # torn (ValueError) or unreadable (OSError): skipped, never a 500
                 out.append(json.loads(f.read_text()))
             except (OSError, ValueError):

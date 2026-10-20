@@ -126,10 +126,11 @@ USD_ENGINE = {**ENGINE, "account": "vantage-demo", "broker": "vantage", "currenc
 
 
 @pytest.mark.parametrize("halted", [False, True])
-def test_a_gbp_and_a_usd_engine_show_the_budget_as_cant_check_never_the_account_cap(tmp_path, halted):
+def test_a_gbp_and_a_usd_engine_show_the_budget_as_cant_check_never_the_account_cap(tmp_path, halted, enabled_accounts):
     """BACKLOG 61: the combined caps are left out with mixed currencies, so every account's budget reads "can't
     check" (amber; red while the supervisor halts on `mixed_account_currencies`) with no amount; the account caps stay
     in `caps` for the entry status's spent-cap blocks."""
+    enabled_accounts("icm-demo", "vantage-demo")
     now = time.time()
     (tmp_path / "engine_icm-demo.json").write_text(json.dumps({**ENGINE, "ts": now}))
     (tmp_path / "engine_vantage-demo.json").write_text(json.dumps({**USD_ENGINE, "ts": now}))

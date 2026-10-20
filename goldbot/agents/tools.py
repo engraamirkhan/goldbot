@@ -213,6 +213,7 @@ class ReadOnlyTools:
         from goldbot.execution.costs import CostTable
         if account_id and not account_id.replace("_", "").replace("-", "").isalnum():
             raise ValueError("bad account id")
+        # every account that ever ran, enabled or not: its fills and ticks stay execution evidence (not a live view)
         ids = [account_id] if account_id else sorted(f.stem.removeprefix("engine_") for f in self.state.glob("engine_*.json"))
         since = self._since(max(int(days), 7))
         out = []

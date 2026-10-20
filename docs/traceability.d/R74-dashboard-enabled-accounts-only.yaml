@@ -1,0 +1,5 @@
+id: R74
+requirement: 'The dashboard, Telegram /status and health show only enabled accounts; a disabled account''s leftover engine state is ignored; health shows the dashboard''s entry status per enabled account'
+status: implemented
+code: goldbot/ops/accounts.py `engine_state_files`, `enabled_account_ids`; goldbot/api/app.py `State.engines`; goldbot/api/entry_status.py `statuses_from_state`; goldbot/api/activity.py `engines_by_account`; goldbot/api/explain.py `_engine_modes`; goldbot/ops/checks/engine.py `check_entry_status`
+test: tests/test_enabled_engine_files.py::test_a_disabled_accounts_leftover_engine_file_is_ignored_by_every_dashboard_reader; ::test_the_dashboard_accounts_and_banner_leave_out_a_disabled_account; ::test_an_enabled_account_with_a_stale_report_still_shows_engine_not_reporting; ::test_health_entry_status_line_is_the_dashboards_status_for_each_enabled_account; ::test_health_entry_status_fails_when_the_dashboard_shows_engine_not_reporting; ::test_health_entry_status_only_warns_for_the_owners_halt; ::test_the_health_entry_status_check_writes_nothing

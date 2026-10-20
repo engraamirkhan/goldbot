@@ -46,6 +46,13 @@ def _shadow_report(cmd: str, args: list[str]) -> None:
     sys.exit(shadow_report_main(args))
 
 
+@register_command("fill-count", pos=207)
+def _fill_count(cmd: str, args: list[str]) -> None:
+    """Demo fills per account per day by kind, cumulative and progress against the 300-by-Friday target, read-only."""
+    from goldbot.ops.fill_count import main as fill_count_main
+    sys.exit(fill_count_main(args))
+
+
 @register_command("monthly-report", pos=220)
 def _monthly_report(cmd: str, args: list[str]) -> None:
     from goldbot.ops.monthly_report import main as monthly_main

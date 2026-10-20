@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
 
 from goldbot.api import home_cards as hc
@@ -23,6 +24,12 @@ LOGIN = "51234567"
 ACC = f"icm-demo-{LOGIN}"
 CUT = "icm-demo-…67"
 NOW = pd.Timestamp("2026-10-19 10:00", tz="UTC")
+
+
+@pytest.fixture(autouse=True)
+def _account_enabled(enabled_accounts):
+    """ACC's engine file is read only while ACC is an enabled account (goldbot.ops.accounts.engine_state_files)."""
+    enabled_accounts(ACC)
 
 
 def _engine(state: Path, **over: object) -> None:

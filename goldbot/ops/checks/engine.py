@@ -158,6 +158,35 @@ def check_engine(ctx: HealthContext, account_id: str) -> Check:
     return Check(name=name, status=_worst(statuses), reason="; ".join(parts))
 
 
+# what the owner's halt alone makes of entry_status:<account>: a warning, as owner_halt (the owner chose it)
+OWNER_ONLY_BLOCKS = frozenset({"owner_halt"})
+
+
+@register_check("account", block=BLOCK_ACCOUNT, pos=15)
+def check_entry_status(ctx: HealthContext, account_id: str) -> Check:
+    """entry_status:<account>: the dashboard's own entry status, built by the same builder as /api/accounts and
+    Telegram /status (goldbot/api/entry_status.py statuses_from_state, enabled accounts only), so `goldbot run health`
+    shows exactly what the dashboard banner shows. Reporting only: the engine applies every rule itself.
+
+    Severity: OPEN, PARTIAL (a strategy throttled) and WAITING (every reason clears by itself: market closed, a
+    blackout, a cap that resets) are ok; BLOCKED only by the owner's halt warns, as owner_halt does; BLOCKED for any
+    other reason (engine not reporting, a supervisor or drawdown halt, status unknown) fails. An enabled account with
+    no engine report warns: the dashboard shows no status for it and engine:<account> already fails it while the
+    market is open."""
+    # lazily: goldbot/api/entry_status.py imports goldbot.ops.health
+    from goldbot.api.entry_status import statuses_from_state
+    name = f"entry_status:{account_id}"
+    rows = statuses_from_state(ctx.state_dir, ctx.now, ctx.settings, accounts=[a.account_id for a in ctx.accounts])
+    s = next((s for acct, _, s in rows if acct == account_id), None)
+    if s is None:
+        return Check(name=name, status="warn", reason="no engine report: the dashboard shows no entry status for it")
+    reason = f"{s.state.upper()}: " + ("; ".join(b.text for b in s.blocks) if s.blocks else s.headline)
+    status: Status = "ok"
+    if s.state == "blocked":
+        status = "warn" if {b.code for b in s.blocks if b.kind == "act"} <= OWNER_ONLY_BLOCKS else "fail"
+    return Check(name=name, status=status, reason=reason[:600])
+
+
 TICK_ERROR_RECENT_S = 15 * 60   # a tick error this recent is reported even after it cleared
 
 

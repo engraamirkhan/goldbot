@@ -29,13 +29,14 @@ from __future__ import annotations
 import getpass
 import hashlib
 import json
+import logging
 import os
 import re
 import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Iterator, Literal
+from typing import Any, Callable, Collection, Iterator, Literal
 
 import yaml
 from pydantic import ConfigDict, Field, field_validator, model_validator
@@ -51,7 +52,12 @@ ACCOUNT_ID_LOGIN = re.compile(r"\d{5,}")      # an account name with this could 
 # stamp in at most 64 bytes (goldbot.telegram.approvals.decision_callbacks); a longer name is refused at load
 ACCOUNT_ID_MAX_BYTES = 24
 PHASE_FILE = ROOT / "state" / "phase_state.json"
+# an engine file of an account accounts.yaml does not list is shown while written this recently (engines write at
+# least every 15m bar close, and at every tick while trading): a newer engine than the brain's config is never hidden
+UNLISTED_FRESH_S = 10 * 60
+ENGINE_FILE_PREFIX = "engine_"                # state/engine_<account>.json (goldbot/engine/store.py writes it)
 SERVICE = "goldbot"
+log = logging.getLogger(__name__)
 
 try:
     import keyring
@@ -62,6 +68,47 @@ _PLATFORM = sys.platform
 # Opt-in for the plaintext fallback (state/.secrets.json): CI / headless Linux only, and only when no keyring backend
 # exists. macOS and Windows never fall back (a missing keyring there is a broken install: fix it, do not write plaintext).
 ALLOW_PLAINTEXT_ENV = "GOLDBOT_ALLOW_PLAINTEXT"
+
+
+_HHMM = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+
+
+class ScheduledProbe(FrozenRecord):
+    """The measured-cost protocol's M1 arm (docs/research/prereg-cost-measurement-2026-10.md, section 1): "0.01 lot at
+    a fixed slot time; side = +1 on even slot index, -1 on odd ... market close after 30 s; server SL at $3 from fill
+    (safety only)", one slot per 15m close (goldbot/engine/cost_probe.py `scheduled_step`). Off unless set; it needs the
+    cost probe on (so a demo account), and it trades through the probes' RiskGate check like every probe."""
+    enabled: bool = False
+    # section 3: "a hold <= 60 s, closed by the engine": closed this many seconds after the fill on the host clock,
+    # whether entries are halted or not (exits are never gated)
+    hold_s: int = Field(30, ge=1, le=60)
+    # section 3: "a stop of at most $3 from the fill", USD per oz; its loss at 0.01 lot stays within max_loss too
+    stop_usd: float = Field(3.0, gt=0, le=3.0)
+    # no slot in this window (HH:MM wall time in `blackout_tz`, start inclusive, end exclusive): the rollover, the
+    # daily break (17:00-18:00 New York) and the reopen minute; nor after the Friday weekend cut (server time) or on
+    # a UTC weekend day. In New York time so it moves with US DST (code review 2026-10-20: a fixed UTC window left
+    # winter slots in the break and on the reopen)
+    blackout: tuple[str, str] = ("16:45", "18:15")
+    blackout_tz: str = "America/New_York"
+    # prereg K10: scheduled probes' realised loss + open risk take at most this share of the day's probe budget
+    budget_share: float = Field(0.5, gt=0, le=0.5)
+
+    @field_validator("blackout")
+    @classmethod
+    def _hhmm(cls, v: tuple[str, str]) -> tuple[str, str]:
+        if not all(_HHMM.fullmatch(x) for x in v):
+            raise ValueError("cost_probe.scheduled.blackout is two HH:MM times (in blackout_tz)")
+        return v
+
+    @field_validator("blackout_tz")
+    @classmethod
+    def _tz(cls, v: str) -> str:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"cost_probe.scheduled.blackout_tz is not an IANA time zone: {v!r}") from exc
+        return v
 
 
 class CostProbe(FrozenRecord):
@@ -76,6 +123,14 @@ class CostProbe(FrozenRecord):
     # each probe's stop is clamped so its loss at the stop (the broker's loss_per_lot at 0.01 lot) is at most this, in
     # the account currency (icm-demo: £4); a probe whose loss cannot be computed is refused
     max_loss: float = Field(4.0, gt=0)
+    # the measured-cost protocol's scheduled market probes (M1); off by default
+    scheduled: ScheduledProbe = Field(default_factory=ScheduledProbe)
+
+    @model_validator(mode="after")
+    def _scheduled_needs_probes(self) -> CostProbe:
+        if self.scheduled.enabled and not self.enabled:
+            raise ValueError("cost_probe.scheduled needs cost_probe.enabled (demo accounts only, ADR 0037)")
+        return self
 
 
 class Account(Record):
@@ -364,14 +419,16 @@ def _check_account_name(name: str) -> None:
                          f"{ACCOUNT_ID_MAX_BYTES} bytes at most, rename it ({len(name.encode('utf-8'))} bytes)")
 
 
-def load_accounts(path: Path | None = None) -> dict[str, Account]:
+def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str, Account]:
+    """config/accounts.yaml as Account records. `logins` False: a `login: null` stays None (no keyring read), for the
+    readers that need only which accounts exist and are enabled (`enabled_account_ids`, polled by the dashboard)."""
     path = _accounts_path(path)
     raw = yaml.safe_load(path.read_text())
     out = {}
     for aid, a in raw["accounts"].items():
         _check_account_name(str(aid))      # before the keyring lookup and the record: the error never echoes it
         login = a.get("login")
-        if login is None:
+        if login is None and logins:
             stored = get_secret(login_key(aid))
             login = int(stored) if stored and stored.strip().isdigit() else None
         out[aid] = Account(account_id=aid, broker=a["broker"], mode=a["mode"], server=a["server"], login=login, terminal_path=a["terminal_path"],
@@ -523,14 +580,71 @@ def unlock_live(account_id: str, confirmation: str, path: Path | None = None) ->
     return True
 
 
-def enabled_accounts(mode: str | None = None) -> list[Account]:
-    accs = [a for a in load_accounts().values() if a.enabled]
+def enabled_accounts(mode: str | None = None, *, logins: bool = True,
+                     loaded: dict[str, Account] | None = None) -> list[Account]:
+    """`loaded`: accounts already read by `load_accounts` (not read again)."""
+    accs = [a for a in (load_accounts(logins=logins) if loaded is None else loaded).values() if a.enabled]
     if mode:
         accs = [a for a in accs if a.mode == mode]
     # safety: live accounts are never returned unless the gate has passed, whatever the yaml says
     if "paper_to_tiny_live" not in phase_state().get("gates_passed", []):
         accs = [a for a in accs if not a.is_live]
     return accs
+
+
+class AccountIds(FrozenRecord):
+    """Which accounts config/accounts.yaml lists, and which of them `enabled_accounts` returns."""
+    listed: frozenset[str]
+    enabled: frozenset[str]
+
+
+def account_ids() -> AccountIds | None:
+    """The listed and the enabled ids (as `enabled_accounts`: live ones only after the phase gate), without the
+    keyring; None when config/accounts.yaml cannot be read (health's `accounts` check FAILs on that and names it)."""
+    try:
+        accs = load_accounts(logins=False)
+        return AccountIds(listed=frozenset(accs), enabled=frozenset(a.account_id for a in enabled_accounts(loaded=accs)))
+    except Exception as exc:               # noqa: BLE001 - any config fault: the callers fall back to every file
+        log.warning("accounts.yaml unreadable (%s): engine state files are not filtered", type(exc).__name__)
+        return None
+
+
+def enabled_account_ids() -> frozenset[str] | None:
+    """The ids `enabled_accounts` returns, without the keyring; None when config/accounts.yaml cannot be read."""
+    ids = account_ids()
+    return None if ids is None else ids.enabled
+
+
+def engine_state_files(state_dir: str | Path, enabled: Collection[str] | None = None) -> list[Path]:
+    """state/engine_<account>.json of the ENABLED accounts only, sorted: what the dashboard, Telegram (status,
+    proposal budget, digest), deploy notes and health show. A disabled account's leftover file is ignored entirely,
+    never shown, never blocking, never in a loss budget or tile (owner bug 2026-10-20: a stale engine_icm-probe.json
+    from a brief run showed "Entries blocked: Engine not reporting (icm-probe)"). An enabled account whose file is
+    missing or stale is not affected: it still shows "Engine not reporting".
+
+    An account accounts.yaml does not list at all is shown while its file was written within UNLISTED_FRESH_S (an
+    engine running ahead of the brain's config is never hidden), hidden once older (a retired account's leftover).
+    `enabled` None: accounts.yaml's enabled accounts; health passes its own. When accounts.yaml cannot be read every
+    file is returned (fail open: a config error must not hide a running engine from the risk view). Reporting only:
+    the supervisor keeps reading every file (goldbot/risk/supervisor.py), where a leftover only tightens."""
+    files = sorted(Path(state_dir).glob(f"{ENGINE_FILE_PREFIX}*.json"))
+    ids = account_ids()
+    if ids is None:
+        return files
+    on = ids.enabled if enabled is None else frozenset(enabled)
+    now = time.time()
+
+    def shown(f: Path) -> bool:
+        acct = f.stem.removeprefix(ENGINE_FILE_PREFIX)
+        if acct in on:
+            return True
+        if acct in ids.listed:
+            return False
+        try:
+            return now - f.stat().st_mtime <= UNLISTED_FRESH_S
+        except OSError:                    # removed meanwhile
+            return False
+    return [f for f in files if shown(f)]
 
 
 # ---------------------------------------------------------------------------- CLI

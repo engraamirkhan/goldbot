@@ -1622,7 +1622,12 @@ trade, not a manual workaround):
 ### Engines are running but block every entry
 
 The engine journals every blocked candidate in the `decisions` table as `gate:<reasons>`; the risk officer's
-nightly report explains them. The reasons (from `goldbot/risk/gate.py`) and what to do:
+nightly report explains them. `goldbot run health` shows the dashboard's banner for each enabled account on its
+`entry_status:<account>` line (same builder as the dashboard and `/status`): ok while open or waiting (market closed,
+a blackout, a cap that resets), WARN when only your halt blocks, FAIL for any other block. The dashboard, `/status`
+and health show enabled accounts only (`config/accounts.yaml`): a disabled account's leftover
+`state/engine_<account>.json` is ignored there, but the supervisor still reads it, so move it aside (e.g. to
+`state/retired/`) once that account holds no open position. The reasons (from `goldbot/risk/gate.py`) and what to do:
 
 | Reason | Meaning | What to do |
 | --- | --- | --- |

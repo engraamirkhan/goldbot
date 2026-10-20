@@ -412,7 +412,7 @@ def test_alert_loop_freshness(tmp_path):
 # ------------------------------------------------------------------------------------------------ report + CLI
 def healthy_state(tmp_path: Path) -> None:
     write(tmp_path / "supervisor.json", {"ts": ago(2), "halt": False, "reasons": []})
-    engine(tmp_path, 60)
+    engine(tmp_path, 60, entry_blocks=[])   # a current engine: it publishes its entry reasons (entry_status)
     write(tmp_path / "risk_icm-demo.json", {"last_reset": NOW.isoformat(), "stage": "normal"})
     sch = Scheduler(tmp_path / "scheduler.json", clock=lambda: NOW)
     for name in type(SETTINGS.scheduler).model_fields:

@@ -105,8 +105,10 @@ class DeployWatch:
         """One line per bridged engine whose MT5 box does not run `new` (G6, BACKLOG 42): the one-click deploy updates
         only the brain. Read from the bridge verdict each engine publishes in engine_<account>.json; a commit is
         handed to the VCS only after it matched the SHA pattern. Read-only; never raises."""
+        # lazily: this module has no goldbot import at load
+        from goldbot.ops.accounts import engine_state_files
         notes: list[str] = []
-        for f in sorted(self.log.parent.glob("engine_*.json")):
+        for f in engine_state_files(self.log.parent):     # a disabled account's MT5 box needs no update
             account = f.stem[len("engine_"):]
             try:
                 compat = json.loads(f.read_text()).get("bridge_compat")

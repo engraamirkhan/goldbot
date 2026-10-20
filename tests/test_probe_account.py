@@ -49,11 +49,11 @@ def _hosts(accs: dict[str, acc_mod.Account]) -> list[str]:
 
 
 # ------------------------------------------------------------------------------------------------ the registry
-def test_the_shipped_registry_keeps_icm_demo_the_only_shadow_host_until_icm_probe_is_enabled(registry):
+def test_the_shipped_registry_makes_icm_probe_the_only_shadow_host_after_the_switch_over(registry):
     accs = acc_mod.load_accounts(registry)
-    assert _hosts(accs) == ["icm-demo"] and accs["icm-demo"].cost_probe.enabled
+    assert _hosts(accs) == ["icm-probe"] and not accs["icm-demo"].cost_probe.enabled
     probe = accs["icm-probe"]
-    assert not probe.enabled and probe.mode == "demo" and probe.probe_only and probe.shadow_host
+    assert probe.enabled and probe.mode == "demo" and probe.probe_only and probe.shadow_host
     assert probe.login is None and probe.cost_probe.enabled and probe.approval_mode == "auto"
     raw = yaml.safe_load(registry.read_text())["accounts"]["icm-probe"]
     assert raw["login"] is None                                   # public repo: never a login here
@@ -62,7 +62,7 @@ def test_the_shipped_registry_keeps_icm_demo_the_only_shadow_host_until_icm_prob
 def test_the_probe_account_has_its_own_day_and_its_probes_fit_inside_it(registry):
     probe = acc_mod.load_accounts(registry)["icm-probe"]
     cp, cap = probe.cost_probe, probe.daily_loss_limit_abs
-    assert cap is not None and (cp.max_open, cp.max_loss, cp.budget_share) == (4, 4.0, 0.8)
+    assert cap == 30 and (cp.max_open, cp.max_loss, cp.budget_share) == (4, 4.0, 0.9)    # raised 2026-10-20 (volume)
     assert cp.max_open * cp.max_loss <= cp.budget_share * cap        # four probes at their stops fit the probe budget
     assert probe.magic_base not in {a.magic_base for k, a in acc_mod.load_accounts(registry).items() if k != "icm-probe"}
 
@@ -74,14 +74,14 @@ def test_the_switch_over_is_config_only_and_leaves_icm_probe_the_only_host(regis
     assert _hosts(accs) == ["icm-probe"] and not accs["icm-demo"].cost_probe.enabled
 
 
-def test_enabling_icm_probe_without_moving_the_host_off_icm_demo_fails_at_load(registry):
-    _edit(registry, **{"icm-probe": {"enabled": True}})
+def test_two_enabled_shadow_hosts_fail_at_load(registry):
+    _edit(registry, **{"icm-demo": {"shadow_host": True}})          # switching back needs icm-probe disabled too
     with pytest.raises(ValueError, match="shadow host"):
         acc_mod.load_accounts(registry)
 
 
 def test_a_disabled_account_flagged_shadow_host_does_not_count_toward_the_one_host(registry):
-    _edit(registry, **{"icm-demo": {"enabled": False}})
+    _edit(registry, **{"icm-probe": {"enabled": False}})
     assert _hosts(acc_mod.load_accounts(registry)) == []
 
 
@@ -244,3 +244,34 @@ def test_the_shipped_registry_turns_dynamic_limits_on_for_the_demo_accounts_and_
     accs = acc_mod.load_accounts(registry)
     assert accs["icm-demo"].dynamic_limits and accs["icm-probe"].dynamic_limits
     assert not any(a.dynamic_limits for a in accs.values() if a.mode == "live")
+
+
+def test_a_probe_only_account_down_five_pounds_still_probes_until_its_probe_budget_binds(tmp_path, monkeypatch):
+    """Review fix (trading-safety MEDIUM): the "less than the budget remains" test held back a reserve a probe_only
+    account does not keep, so a £30 day down ~£3 refused every probe. Now the probe budget (0.9 x £30 = £27, less the
+    realised probe loss) and the day's own cap bind; a shared account keeps refusing below its share."""
+    from goldbot.engine import limits_apply
+    monkeypatch.setattr(limits_apply, "daily_allowance",
+                        lambda gate, st: {"daily_loss_limit": 30.0, "daily_loss_remaining": 25.0})
+    own, _, tick, close = _engine(tmp_path / "own", budget=0.9)
+    own.cfg.probe_only = True
+    assert own.probe is not None
+    with own.probe.db.write() as conn:
+        cost_probe.LEDGER.upsert(conn, cost_probe.ProbeRecord(
+            client_order_id="cp-lost", account_id="icm-demo", agent_id="x", side=1, lots=0.01, sent_utc=tick.ts_utc,
+            exit_utc=tick.ts_utc, pnl=-5.0))
+    why, headroom = cost_probe.budget_refusal(own, own.probe, close)
+    assert why is None and headroom == pytest.approx(22.0)                   # £27 budget less the £5 lost
+    shared, _, _, close2 = _engine(tmp_path / "shared", budget=0.9)
+    assert shared.probe is not None
+    assert cost_probe.budget_refusal(shared, shared.probe, close2)[0] == "allowance_low"   # unchanged: 25 < 27
+
+
+def test_a_probe_only_account_stops_probing_when_its_own_day_cannot_take_one_more_probe(tmp_path, monkeypatch):
+    from goldbot.engine import limits_apply
+    monkeypatch.setattr(limits_apply, "daily_allowance",
+                        lambda gate, st: {"daily_loss_limit": 30.0, "daily_loss_remaining": 3.0})
+    own, _, _, close = _engine(tmp_path, budget=0.9)
+    own.cfg.probe_only = True
+    assert own.probe is not None
+    assert cost_probe.budget_refusal(own, own.probe, close)[0] == "allowance_low"          # 3 - 4 < 0

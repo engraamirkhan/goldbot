@@ -135,3 +135,34 @@ Consequences: probe losses no longer touch the real demo account's allowance or 
 champions only after the switch. A probe engine whose start fails rewrites its file without the flag and is then
 counted as a real account (`engine_startup_refused` halts), the strict direction. Trading-safety review required
 (order path: `_execute` refusal; limits: supervisor exclusion, reserve 0 on probe accounts).
+
+## Amendment 5 (2026-10-20, owner-approved)
+Context: the scheduled M1 cost probes (`cm-sched-`, ledger basis `scheduled_m1`, purpose `cost_measurement`;
+docs/research/prereg-cost-measurement-2026-10.md) carry no signal, so the learning-probe fence (amendment 2026-10-19)
+refused every one `time_exit_ev_unsupported,negative_gross_edge`, and the prereg (K8) kept them refused until the gate
+had a cost-measurement purpose. Asked whether scheduled cost probes may get a fenced RiskGate exception, the owner
+answered "Allow, demo only" on 2026-10-20. Goal: hundreds of demo fills for the measured-cost protocol.
+
+Decision: `Intent.purpose = "cost_measurement"` (goldbot/risk/gate.py) skips ONLY the expected-value / gross-edge
+requirement (`time_exit_ev_unsupported`, `negative_gross_edge`; a probe never had `negative_ev`,
+`target_below_cost_floor` or the standard-account edge rules). It is allowed only when ALL of these hold, each a
+named refusal:
+- the order is a learning probe (`cost_measurement_not_probe`: any other order claiming the purpose is refused);
+- the account is demo by the registry and no live gate is in the phase file (the learning probe's lock, F1's rule:
+  `learning_probe_not_demo`), AND the terminal itself reports demo (`account_info().trade_mode`, read fresh at the
+  order by goldbot/engine/cost_probe.py; unreadable is None and refuses: `cost_measurement_terminal_not_demo`);
+- the lot is the symbol's minimum, asked and sized (`learning_probe_not_min_lot`);
+- a protective stop is present (`invalid:stop_atr` otherwise) and at most $3/oz from entry, asked and as sized after
+  the stops-level and spread floor (`cost_measurement_stop_above_cap`);
+- the planned hold is in (0, 60] s (`cost_measurement_hold`);
+- the loss at the stop is within the cost-probe budget headroom and the dynamic per-probe ceiling, both known and
+  positive (`cost_measurement_budget`).
+Every other check is unchanged and runs first: halts (owner, supervisor, drift, the 12% kill switch), the news and
+entry windows, the daily and weekly caps, the open-risk projection, heat, margin, exposure, throttle and the
+same-direction cap. Mirror probes keep the amendment-2026-10-19 fence unchanged. Exits are never gated.
+
+Consequences: scheduled probes now fill on a demo terminal within the probe budget (`_send_scheduled` asks for the
+purpose with its hold, headroom and dynamic ceiling; nothing else in the probe path changed). The gate checks the
+planned hold, not the actual one: the 60 s bound at the close is `hold_exits` (never gated). The purpose is a
+caller-declared field: the fence, not the caller, decides, so a wrong claim refuses rather than widens. Tests:
+tests/test_cost_measurement_gate.py, tests/test_probe_scheduled.py. Trading-safety review required (order path).

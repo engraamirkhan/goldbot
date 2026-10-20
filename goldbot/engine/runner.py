@@ -37,6 +37,7 @@ from goldbot.data.resample import IncrementalResampler, mid, resample_bars, tick
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
 from goldbot.engine import auto_entry, cost_probe, history, unconfirmed
+from goldbot.engine.cost_probe import ScheduledProbe
 from goldbot.engine.limits_apply import EngineLimits, daily_allowance, min_lot_risk, published_limits
 from goldbot.engine.shadow import ShadowBook, ShadowTrade, minutes_of, record_candidate
 from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, SentOrder: re-exported, ADR 0023 step 1)
@@ -176,6 +177,7 @@ class EngineConfig(Record):
     cost_probe_budget: float = Field(0.2, gt=0, le=1)   # ADR 0037: the probes' share of the day's loss allowance
     cost_probe_max_open: int = Field(2, ge=1, le=4)     # ADR 0037 amendment 3: concurrent probe positions at most
     cost_probe_max_loss: float = Field(4.0, gt=0)       # ADR 0037 amendment: a probe's loss at its stop, account ccy
+    cost_probe_scheduled: ScheduledProbe = Field(default_factory=ScheduledProbe)   # prereg M1 arm (cost_probe.scheduled_step)
     shadow_max_open: int = Field(3, ge=1)               # settings shadow.max_open_per_agent (ruling 2026-10-19)
     symbol: str = "XAUUSD"
     decision_tf: str = "15m"
@@ -677,8 +679,7 @@ class Engine:
             self._guard(lambda: self._kill_switch(everything=False))
         self._guard(lambda: self._host_clock_exits(now))
         self._guard(lambda: unconfirmed.no_quote_look(self))     # BACKLOG 72: the look-up needs no quote
-        if self._invalid_state_written is None or \
-                (now - self._invalid_state_written).total_seconds() >= self.cfg.state_every_s:
+        if self._invalid_state_written is None or (now - self._invalid_state_written).total_seconds() >= self.cfg.state_every_s:
             self._invalid_state_written = now
             self._guard(self._write_state)
         self._guard(self._flush_closed)
@@ -1550,8 +1551,7 @@ class Engine:
         if self.store is None or filled is None:
             return
         try:   # never raises: it runs after a confirmed close, outside any try (trading-safety re-check)
-            requested = level if level is not None else \
-                (quote.bid if tr.side > 0 else quote.ask) if quote is not None else np.nan
+            requested = level if level is not None else (quote.bid if tr.side > 0 else quote.ask) if quote is not None else np.nan
             self._exit_fills.append({"ts_utc": at, "position_id": pid, "client_order_id": tr.client_order_id,
                                      "agent_id": tr.agent_id, "side": tr.side, "lots": float(lots), "kind": kind,
                                      "requested": float(requested), "filled": float(filled),
@@ -1598,6 +1598,7 @@ class Engine:
         a book that would list it no longer lists is left to `_sweep_closed`, which records it once its exit deal is
         seen; a close of another symbol missing from the fallback book (the engine's symbol only) stays due (BACKLOG
         62, trading-safety C3). An unreadable book skips this tick (the next one retries)."""
+        cost_probe.hold_exits(self, now)       # the scheduled probes' 30 s close, every pass, never gated; never raises
         due = [pid for pid in self._close_due if not self._retry_wait(pid, now)]
         if not due:
             return
@@ -3015,8 +3016,7 @@ class Engine:
                 "holiday_until": iso(holiday[1]) if holiday and st.holiday_thin else None}
 
     def _busy(self, agent_id: str) -> bool:
-        return any(t.agent_id == agent_id for t in self.open.values()) or \
-            any(a.agent_id == agent_id for _, _, a in self.pending.values())
+        return any(t.agent_id == agent_id for t in self.open.values()) or any(a.agent_id == agent_id for _, _, a in self.pending.values())
 
     def _magic(self, family: str) -> int:
         """Per-family magic: crc32 is stable across restarts (str hash() is salted), so positions reconcile to a family."""
