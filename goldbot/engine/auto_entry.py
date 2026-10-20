@@ -18,12 +18,13 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, cast
 
 import pandas as pd
 
 from goldbot.execution.bridge import UNREADABLE_REFUSAL
 from goldbot.execution.broker import ACCOUNT_REFUSAL, OrderResult
+from goldbot.telegram.approvals import ACCOUNT_MODES, AskReason
 from goldbot.telegram.entry_text import account_name
 
 if TYPE_CHECKING:
@@ -52,6 +53,13 @@ def check_start(mode: str, approval_mode: str) -> None:
         raise ValueError(f"auto entries are for demo accounts only (ADR 0036): a {mode} account always asks the owner")
 
 
+def lock(eng: Engine, mode: str, acc: object) -> str:
+    """`locked` on the account refresh, keeping what the terminal reported (`Engine._terminal_mode`) for `ask_reason`.
+    `mode` is the owner's /mode (A10), else the account's; the kill switch and the re-arm window win after it."""
+    eng._terminal_mode = getattr(acc, "trade_mode", None)
+    return locked(mode, eng.cfg.mode, eng._terminal_mode)
+
+
 def locked(mode: str, cfg_mode: str, trade_mode: str | None) -> str:
     """The approval mode after the lock, on every refresh: `mode` (the owner's /mode, else the account's) unless it is
     auto and `refusal` refuses it, which gives propose."""
@@ -71,8 +79,10 @@ def permitted(eng: Engine, close_ts: pd.Timestamp) -> bool:
     if eng._auto_paused is not None and eng._auto_paused[0] == close_ts:
         return True
     try:
-        why = refusal(eng.cfg.mode, getattr(eng.broker.account(), "trade_mode", None))
-    except Exception as exc:                # unread: the owner decides (fail closed)
+        eng._terminal_mode = getattr(eng.broker.account(), "trade_mode", None)
+        why = refusal(eng.cfg.mode, eng._terminal_mode)
+    except Exception as exc:                # unread: the owner decides (fail closed), and the card says the terminal
+        eng._terminal_mode = None
         why = f"account unreadable ({type(exc).__name__})"
     if why is None:
         return True
@@ -80,6 +90,45 @@ def permitted(eng: Engine, close_ts: pd.Timestamp) -> bool:
     eng.decisions.append({"ts": pd.Timestamp.now("UTC").timestamp(), "action": "auto_refused", "reason": why})
     log.warning("auto entry refused at the order: %s; proposed to the owner", why)
     return False
+
+
+def ask_reason(eng: Engine, now: pd.Timestamp) -> AskReason | None:
+    """Why a demo account asks the owner instead of entering on its own (backlog 103; ADR 0036: demo enters
+    automatically, so a demo card is an exception and says why). None on live and paper ("asking is the rule, not an
+    exception": design note principle 3) and while auto entries are on. First match wins, the safety fault first:
+    a terminal not confirmed demo at the last read (refresh or the order itself; `terminal_unknown` when it was not
+    read, could not be read or did not say, `terminal_not_demo` when it says real or contest; no channel approves
+    either), the 12% kill switch, the re-arm window, the owner's /mode propose over an account configured
+    auto, else the account's own configuration."""
+    from goldbot.risk.gate import Stage
+    if eng.cfg.mode != "demo":
+        return None
+    if eng._terminal_mode is None:              # not read yet, unreadable, or it did not say: fail closed, unblamed
+        return AskReason(kind="terminal_unknown")
+    if eng._terminal_mode != "demo":
+        return AskReason(kind="terminal_not_demo", terminal=eng._terminal_mode)
+    if eng.state.stage == Stage.HALTED:
+        return AskReason(kind="kill_switch")
+    if eng._propose_only_until is not None and now < eng._propose_only_until:
+        return AskReason(kind="rearm_lock", until=eng._propose_only_until.timestamp())
+    if eng.cfg.approval_mode == "auto":
+        return None
+    return AskReason(kind="owner_propose" if eng._account_approval == "auto" else "config_propose")
+
+
+def asking(eng: Engine, prop: Proposal, now: pd.Timestamp) -> Proposal:
+    """Stamp a proposal about to go to the owner with the account's mode and `ask_reason` (the card's badge and its
+    "Asking because" line); returns it, for `ApprovalCenter.propose`."""
+    mode = eng.cfg.mode if eng.cfg.mode in ACCOUNT_MODES else None
+    prop.account_mode = cast("Literal['demo', 'live', 'paper'] | None", mode)
+    prop.ask_reason = ask_reason(eng, now)
+    return prop
+
+
+def published_reason(eng: Engine) -> dict | None:
+    """`ask_reason` for the engine's state file (the dashboard's entry-mode card reads the same reason as the card)."""
+    r = ask_reason(eng, pd.Timestamp.now("UTC"))
+    return r.model_dump() if r is not None else None
 
 
 def action(res: OrderResult | None) -> str:

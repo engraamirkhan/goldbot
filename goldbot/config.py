@@ -378,6 +378,9 @@ class ResearchSettings(_Section):
     director_floor: int = Field(2, ge=0, le=200)        # research director: exploration trials per family per month
     label_grid_step: float = Field(0.25, gt=0, lt=1)
     cost_window_days: int = Field(30, ge=1)
+    # backlog 97: the Research summary's question "are we getting closer to £50 a day?" (ADR 0004 north-star, GBP
+    # a day on opportunity days); shown, never a gate or a trading input
+    north_star_daily_gbp: float = Field(50.0, gt=0)
     fills_window_days: int = Field(180, ge=1)
     min_fills_for_slippage: int = Field(50, ge=1)
     # weekly bounded recalibration (proposal P9): only the probability map, on counterfactual shadow outcomes

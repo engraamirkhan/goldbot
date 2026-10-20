@@ -31,15 +31,18 @@ import pandas as pd
 
 from goldbot.api.schema import (
     AgentHealthRow,
+    AskReasonView,
     AutoModeView,
     CusumPoint,
     CusumTrace,
+    EntryModeAccount,
     ForcedPropose,
     GateCheck,
     HealthCheckRow,
     HealthView,
     HypothesisDoc,
     HypothesisTable,
+    NextTrial,
     PlanFamily,
     PlanFocus,
     PlanMove,
@@ -47,7 +50,9 @@ from goldbot.api.schema import (
     PsiHeatmap,
     ReliabilityBin,
     ReliabilityCurve,
+    ResearchCounts,
     ResearchPlanView,
+    ResearchSummary,
     ResearchToday,
     ResearchView,
     RetiredFamilyView,
@@ -56,9 +61,11 @@ from goldbot.api.schema import (
     TrialRow,
     VetoTestView,
 )
+from goldbot.base import load_record
 from goldbot.config import DriftSettings, Settings, TelegramSettings
 from goldbot.ops.accounts import engine_state_files
 from goldbot.research.registry import costs_recorded
+from goldbot.telegram.approvals import AskReason, ask_reason_text
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +98,7 @@ MAX_CURVES = 6
 MAX_TRIALS = 200
 PLAN_MAX_AGE_DAYS = 21           # ops/jobs.py PLAN_MAX_AGE_DAYS (not imported: jobs pulls in the research stack)
 DEFAULT_QUARTER_BUDGET = 20      # research/director.py DEFAULT_QUARTER_BUDGET
+NORTH_STAR_GBP = 50.0            # settings research.north_star_daily_gbp, when settings cannot be read
 
 
 def _now() -> datetime:
@@ -520,6 +528,32 @@ def _today(rows: list[dict[str, Any]], tfs: dict[str, str], now: datetime) -> Re
                          no_verdict=sum(t.gates_passed is None for t in today), latest=latest, quarter_end=end)
 
 
+def _counts(trials: list[TrialRow]) -> ResearchCounts:
+    return ResearchCounts(run=len(trials), passed=sum(t.gates_passed is True for t in trials),
+                          failed=sum(t.gates_passed is False and not t.pre_swap for t in trials),
+                          no_verdict=sum(t.gates_passed is None for t in trials),
+                          not_counted=sum(t.pre_swap for t in trials))
+
+
+def _summary(rows: list[dict[str, Any]], tfs: dict[str, str], plan: ResearchPlanView | None, now: datetime,
+             settings: Settings | None) -> ResearchSummary:
+    """Backlog 97's summary card from the whole registry (every trial row, not the 200 listed) and the plan. The best
+    candidate is the counted pass (`gates_passed`: costs recorded) with the highest net R per trade: a failed or a
+    pre-swap trial is never offered as one, however high its R. The next trial is the plan's top-ranked family."""
+    from goldbot.research.registry import is_trial
+    trials = [_trial(r, tfs) for r in rows if is_trial(r)]
+    week = [t for t in trials if t.ts is not None and now - timedelta(days=7) <= t.ts <= now]
+    every = _counts(trials)
+    passes = [t for t in trials if t.gates_passed is True and t.net_r is not None]
+    best = max(passes, key=lambda t: (t.net_r or 0.0, t.trial), default=None)
+    top = min(plan.focus, key=lambda x: x.rank, default=None) if plan is not None else None
+    nxt = NextTrial(family=top.family, timeframe=tfs.get(top.family), budget=top.budget) if top is not None else None
+    star = settings.research.north_star_daily_gbp if settings is not None else NORTH_STAR_GBP
+    return ResearchSummary(passed_total=every.passed, failed_total=every.failed, no_verdict_total=every.no_verdict,
+                           not_counted_total=every.not_counted, since_last_week=_counts(week), best_candidate=best,
+                           next_trial=nxt, north_star_gbp=star)
+
+
 def research_view(state: Path, settings: Settings | None, docs_dir: Path) -> ResearchView:
     from goldbot.research.registry import quarter_of, quarter_trials
     from goldbot.specialists import SPECIALISTS
@@ -533,7 +567,8 @@ def research_view(state: Path, settings: Settings | None, docs_dir: Path) -> Res
     plan, plan_err = _plan(state, docs_dir)
     return ResearchView(generated_utc=now, budget=TrialBudget(quarter=q, budget=cap, used=used, left=max(cap - used, 0)),
                         trials=trials, trials_total=len(rows), plan=plan, plan_error=plan_err,
-                        hypotheses=_hypotheses(docs_dir), today=_today(rows, tfs, now))
+                        hypotheses=_hypotheses(docs_dir), today=_today(rows, tfs, now),
+                        summary=_summary(rows, tfs, plan, now, settings))
 
 
 # ---------------------------------------------------------------------------------------------- auto mode (A10)
@@ -557,18 +592,63 @@ def _forced_propose(state: Path, now: float) -> list[ForcedPropose]:
         if d.get("stage") == "halted":
             out.append(ForcedPropose(account_id=acct, kind="kill_switch",
                                      detail="12% drawdown kill switch: halted and back to propose until re-armed"))
+    listed = {(x.account_id, x.kind) for x in out}
+    for acct, d in _engine_files(state):       # what each demo engine publishes: the card's own reason (backlog 92)
+        r = _published_reason(d)
+        if r is not None and (acct, r.kind) not in listed:
+            listed.add((acct, r.kind))
+            out.append(ForcedPropose(account_id=acct, kind=r.kind, detail=ask_reason_text(r),
+                                     until=datetime.fromtimestamp(r.until, tz=timezone.utc) if r.until else None))
     return out
 
 
-def _engine_modes(state: Path) -> dict[str, str]:
-    out: dict[str, str] = {}
+def ask_reason_view(r: AskReason | None) -> AskReasonView | None:
+    """The card's and the entry-mode card's reason, in the Telegram card's words (one source: `ask_reason_text`)."""
+    if r is None:
+        return None
+    until = datetime.fromtimestamp(r.until, tz=timezone.utc) if r.until is not None else None
+    return AskReasonView(kind=r.kind, text=ask_reason_text(r), until=until)
+
+
+def _published_reason(e: dict[str, Any]) -> AskReason | None:
+    """An engine file's `ask_reason` (engine/auto_entry.py `published_reason`), on a demo engine only; None when
+    absent, on live or paper, or not a valid reason (reporting only: never guessed)."""
+    raw = e.get("ask_reason")
+    if e.get("mode") != "demo" or not isinstance(raw, dict):
+        return None
+    try:                                    # ADR 0010: a newer engine's extra field is dropped, not fatal
+        return load_record(AskReason, raw, source="engine_<account>.json ask_reason")
+    except ValueError:
+        return None
+
+
+def _engine_files(state: Path) -> list[tuple[str, dict[str, Any]]]:
+    """(account, engine file) for every enabled account whose file reads; an unreadable one is skipped."""
+    out = []
     for f in engine_state_files(state):    # enabled accounts only: a disabled one's leftover is not shown
         try:
             d = _d(_read(f))
         except (ValueError, OSError):
             continue
-        out[str(d.get("account") or f.stem.removeprefix("engine_"))] = str(d.get("approval_mode") or "propose")
+        out.append((str(d.get("account") or f.stem.removeprefix("engine_")), d))
     return out
+
+
+def _entry_accounts(state: Path) -> list[EntryModeAccount]:
+    """Backlog 92: one row per enabled account's engine file, its class, the mode it runs now and why it asks."""
+    out: list[EntryModeAccount] = []
+    for acct, d in _engine_files(state):
+        mode, ts = d.get("mode"), _f(d.get("ts"))
+        out.append(EntryModeAccount(
+            account_id=acct, account_mode=mode if mode in ("demo", "live", "paper") else None,
+            effective_mode="auto" if d.get("approval_mode") == "auto" else "propose",
+            ask_reason=ask_reason_view(_published_reason(d)),
+            last_seen_utc=datetime.fromtimestamp(ts, tz=timezone.utc) if ts is not None else None))
+    return sorted(out, key=lambda a: a.account_id)
+
+
+def _engine_modes(state: Path) -> dict[str, str]:
+    return {acct: str(d.get("approval_mode") or "propose") for acct, d in _engine_files(state)}
 
 
 def _mode_by(by: str | None) -> str | None:
@@ -602,5 +682,7 @@ def automode_view(state: Path, settings: Settings | None, is_owner: bool) -> Aut
         test=VetoTestView(n_approved=t.n_approved, n_rejected=t.n_rejected, mean_r_approved=t.mean_r_approved,
                           mean_r_rejected=t.mean_r_rejected, diff=t.diff, ci_low=t.ci_low, ci_high=t.ci_high,
                           p_value=t.p_value, alpha=t.alpha, indistinguishable=t.indistinguishable),
-        forced_propose=_forced_propose(state, datetime.now(timezone.utc).timestamp()),
+        forced_propose=_forced_propose(state, datetime.now(timezone.utc).timestamp()), accounts=_entry_accounts(state),
+        # settings risk.approval_window_seconds; null (unknown, never a guessed 90) when settings cannot be read
+        window_s=settings.risk.approval_window_seconds if settings is not None else None,
         can_enable=is_owner and e.eligible and c.approval_mode != "auto", error=err)

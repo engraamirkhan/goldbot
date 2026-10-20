@@ -105,14 +105,14 @@ def test_the_telegram_service_reads_the_budget_from_the_state_files_and_unknown_
 def test_telegram_text_shows_money_in_the_account_currency_with_the_min_lot_note_and_budget():
     p = _prop(**GBP_MIN_LOT)
     b = loss_budget(_engine(), _sup(), [_engine()], trade_risk=8.2)
-    lines = p.text(b).splitlines()
+    lines = p.text(b).splitlines()[1:]                                  # [0]: the money class (test_card_account_mode)
     assert lines[0] == "🔵 SHORT 0.01 lots XAUUSD"
     assert lines[1] == "risk £8.20 (0.82% of equity) if the stop is hit, before costs"
     assert lines[2] == "smallest trade size: above the normal 0.5%, within your 1% cap"
     assert lines[3] == "£11.80 left today if this loses (open trades aside)"
     assert lines[4] == "entry 2400.20  stop 2404.20 (−£8.20)  target 2394.20 (+£12.30)"
     assert lines[5] == "p=0.62  EV=+0.31R  spread 22pt"
-    assert lines[-1] == "⏱ approve within 90s or it expires · exits are automatic"
+    assert lines[-1] == "⏱ approve within 90 s or it expires · exits are automatic"
 
 
 def test_telegram_text_without_the_exception_spent_budget_or_unknown_budget():
@@ -133,7 +133,7 @@ def test_telegram_text_without_the_exception_spent_budget_or_unknown_budget():
 
 
 def test_telegram_text_from_an_older_engine_labels_the_dollar_figure():
-    assert _prop().text().splitlines()[1] == "risk $4.00 (USD) if the stop is hit, before costs"
+    assert _prop().text().splitlines()[2] == "risk $4.00 (USD) if the stop is hit, before costs"
     assert "stop 2404.20 (−$4.00)" in _prop().text()
     txt = _prop(risk_usd=None).text()
     assert "risk: not reported by this engine version" in txt and "stop 2404.20  target" in txt

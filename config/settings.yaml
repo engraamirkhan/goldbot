@@ -244,6 +244,8 @@ research:
                                      # month's trials; the rest of (budget x families) follows evidence of signal
   label_grid_step: 0.25              # +-25% on target/stop/max_bars
   cost_window_days: 30               # ticks used for the nightly spread table
+  north_star_daily_gbp: 50           # ADR 0004 north-star (GBP a day on opportunity days): the Research summary's
+                                     #   question (backlog 97); shown only, never a gate or a trading input
   fills_window_days: 180             # fills used for the slippage table
   min_fills_for_slippage: 50         # below this a session keeps the slippage prior
   recal_min_samples: 50              # weekly recalibration (P9): no update below this many recent shadow outcomes

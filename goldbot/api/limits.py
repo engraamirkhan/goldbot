@@ -156,6 +156,29 @@ def _account(e: dict[str, Any], now: pd.Timestamp, state_dir: Path, last: LimitC
         last_change=last, error=error, risk_today=risk_today_view(e.get("risk_today")))
 
 
+def _combined_money(sup: dict[str, Any], daily_cap: float | None, weekly_cap: float | None) -> dict[str, Any]:
+    """Backlog 98: the combined caps in money, as the supervisor sums them (goldbot/risk/supervisor.py `evaluate`, one
+    currency only): cap x combined day/week-start equity, used = that start - combined equity now, floored at 0 (a
+    gain uses nothing). All amounts null unless the accounts report one known currency (ADR 0004: pounds are never
+    added to dollars; an amount is never shown without its currency), when the supervisor has not summed them, or
+    (an empty `sup`: `mixed_currencies` null too) when it is not reporting."""
+    raw = sup.get("currencies")
+    kinds = {c for c in raw.values()} if isinstance(raw, dict) else set()
+    mixed = len(kinds) > 1
+    ccy = next(iter(kinds)) if len(kinds) == 1 and isinstance(next(iter(kinds)), str) else None
+    eq = _num(sup.get("combined_equity"))
+    day0, week0 = _pos(sup.get("combined_day_start_equity")), _pos(sup.get("combined_week_start_equity"))
+    money = ccy is not None and eq is not None          # never an amount without its currency (one, known)
+
+    def cap(c: float | None, base: float | None) -> float | None:
+        return round(c * base, 2) if money and c is not None and base is not None else None
+
+    def used(base: float | None) -> float | None:
+        return round(max(0.0, base - eq), 2) if money and base is not None and eq is not None else None
+    return dict(currency=ccy, mixed_currencies=mixed if sup else None, daily_cap_amount=cap(daily_cap, day0),
+                daily_used_amount=used(day0), weekly_cap_amount=cap(weekly_cap, week0), weekly_used_amount=used(week0))
+
+
 def limits_view(state_dir: Path, engines: list[dict[str, Any]], supervisor: dict[str, Any],
                 settings: Settings | None, now: pd.Timestamp | None = None) -> LimitsView:
     now = (now if now is not None else pd.Timestamp.now("UTC")).floor("us")
@@ -174,9 +197,13 @@ def limits_view(state_dir: Path, engines: list[dict[str, Any]], supervisor: dict
         else SUPERVISOR_DEFAULTS
     sup_ts = _num(supervisor.get("ts"))
     fresh = sup_ts is not None and abs(now.timestamp() - sup_ts) <= STALE_S     # a silent supervisor shows no caps
-    sup = LimitsSupervisorView(daily_cap=_pos(supervisor.get("daily_cap")) if fresh else None,
-                               weekly_cap=_pos(supervisor.get("weekly_cap")) if fresh else None,
+    daily_cap = _pos(supervisor.get("daily_cap")) if fresh else None
+    weekly_cap = _pos(supervisor.get("weekly_cap")) if fresh else None
+    sup = LimitsSupervisorView(daily_cap=daily_cap, weekly_cap=weekly_cap,
                                default_daily=d_def, default_weekly=w_def, envelope_daily=SUPERVISOR_DEMO_ENVELOPE[0],
-                               envelope_weekly=SUPERVISOR_DEMO_ENVELOPE[1])
+                               envelope_weekly=SUPERVISOR_DEMO_ENVELOPE[1],
+                               day_resets_utc=limits_log.next_day_reset(now).to_pydatetime(),
+                               week_resets_utc=limits_log.next_week_reset(now).to_pydatetime(),
+                               **_combined_money(supervisor if fresh else {}, daily_cap, weekly_cap))
     return LimitsView(generated_utc=now.to_pydatetime(), accounts=accounts, supervisor=sup,
                       error="; ".join(dict.fromkeys(errors)) or None)

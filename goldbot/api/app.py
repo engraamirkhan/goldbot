@@ -44,6 +44,7 @@ from goldbot.api import (
     limits,
     mt5_crop,
     progress,
+    spread_normal,
     trades_overview,
 )
 from goldbot.api.auth import (
@@ -804,8 +805,25 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     def account_entry_status(e: dict, budget: LossBudget | None, inputs: dict[str, Any]) -> Any:
         return entry_status.account_entry_status(e, now=pd.Timestamp.now("UTC"), budget=budget, **inputs)
 
-    def card(p: BusProposal, budget: LossBudget | None = None) -> dict[str, Any]:
-        return dict(proposal_id=p.proposal_id, account_id=p.account_id, agent_id=p.agent_id,
+    def by_account(engines: list[dict]) -> dict[str, dict]:
+        return {str(e.get("account")): e for e in engines if isinstance(e, dict)}
+
+    def card(p: BusProposal, budget: LossBudget | None = None, eng: dict | None = None,
+             pending: bool = False) -> dict[str, Any]:
+        """One card. Backlog 103: the money class (the proposal's, else its engine file's) and, on demo only, why it
+        asks; backlog 93, `pending` only: the usual spread for its hour and what else is open on the account."""
+        e = eng or {}
+        mode = p.account_mode or (e["mode"] if e.get("mode") in ("demo", "live", "paper") else None)
+        extras: dict[str, Any] = {}
+        if pending:
+            n, risk = e.get("open_positions"), e.get("open_risk")
+            extras = dict(open_positions=n if isinstance(n, int) and not isinstance(n, bool) else None,
+                          open_risk_amount=float(risk) if isinstance(risk, (int, float))
+                          and not isinstance(risk, bool) and math.isfinite(risk) else None,
+                          spread_normal_points=usual_spread(p))
+        return dict(account_mode=mode, window_s=p.window_s,
+                    ask_reason=explain.ask_reason_view(p.ask_reason if mode == "demo" else None), **extras,
+                    proposal_id=p.proposal_id, account_id=p.account_id, agent_id=p.agent_id,
                     side="long" if p.side > 0 else "short", lots=p.lots, entry=p.entry, stop=p.stop, target=p.target,
                     p=p.p, ev_r=p.ev_r, spread_points=p.spread_points, top_features=p.top_features, risk_usd=p.risk_usd,
                     currency=p.currency, risk_amount=p.risk_amount, risk_fraction=p.risk_fraction,
@@ -839,7 +857,16 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
             except Exception:                  # noqa: BLE001 - reporting only: a bad state file shows as unknown
                 log.exception("proposal budget failed")
                 return None
-        return [Proposal(**card(p, budget(p))) for p in pending]
+        accounts = by_account(engines)
+        return [Proposal(**card(p, budget(p), accounts.get(p.account_id), pending=True)) for p in pending]
+
+    def usual_spread(p: BusProposal) -> float | None:
+        """Reporting only: an unreadable tick record leaves the usual spread unknown, never fails the list."""
+        try:
+            return spread_normal.normal_spread_points(st.dir, p.account_id, pd.Timestamp(p.created, unit="s", tz="UTC"))
+        except Exception:                      # noqa: BLE001 - the card shows "usual: unknown"
+            log.exception("usual spread failed")
+            return None
 
     @app.get("/api/proposals/recent", response_model=list[DecidedProposal])
     def recent_proposals(_: User = Depends(auth)) -> list[DecidedProposal]:
@@ -847,9 +874,14 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         channel and time only, never who (BACKLOG 52). An approval whose order is not confirmed yet stays listed until
         it resolves (BACKLOG 72: the dashboard never drops an unanswered order)."""
         out = []
-        for p, d in st.bus.recent():
+        recent = st.bus.recent()
+        try:                                        # reporting only: the badge falls back to the engine file's mode
+            accounts = by_account(st.engines()) if recent else {}
+        except (OSError, ValueError):
+            accounts = {}
+        for p, d in recent:
             if d is not None:                       # decided, the engine has not applied it yet
-                out.append(DecidedProposal.model_validate({**card(p), "status": "submitted" if d.approve else "rejected",
+                out.append(DecidedProposal.model_validate({**card(p, eng=accounts.get(p.account_id)), "status": "submitted" if d.approve else "rejected",
                                                            "reason_code": None if d.approve else d.reason_code,
                                                            "decided_channel": decision_channel(d.by),
                                                            "decided_ts": d.ts}))
@@ -865,7 +897,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                 status = "rejected"
             else:
                 status = "expired"
-            out.append(DecidedProposal.model_validate({**card(p), "status": status,
+            out.append(DecidedProposal.model_validate({**card(p, eng=accounts.get(p.account_id)), "status": status,
                                                        "decided_channel": p.decided_channel, "decided_ts": p.decided_ts,
                                                        "reason_code": p.reason_code if status == "rejected" else None,
                                                        "refusal": list(p.gate_refusal or []),

@@ -19,8 +19,9 @@ import math
 import re
 import struct
 import time
+from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Literal, get_args
 
 from pydantic import Field, model_validator
 
@@ -79,6 +80,66 @@ def window_over(created: Any, window_s: Any, now: float) -> bool:
 def decision_channel(by: str) -> str:
     """"telegram:<id>" -> "telegram", "dashboard:<email>" -> "dashboard": the channel without the identity."""
     return by.split(":", 1)[0]
+
+
+def window_words(window_s: float) -> str:
+    """An approval window as the card says it (docs/design/ui-91-92-approval-card.md, `windowWords`): up to 120 s in
+    seconds ("90 s"), longer in minutes ("60 min", "2.5 min"). Every card reads the proposal's own window, never a
+    literal 90."""
+    return f"{window_s:g} s" if window_s <= 120 else f"{window_s / 60:g} min"
+
+
+# Backlog 103 (ADR 0036: "for the demo account, the trades will be opened and closed by the system, no confirmation is
+# needed, for real account with real money, stick to original plan of confirming from me"): a demo card is an exception,
+# so it says why it asks. The engine names the kind (engine/auto_entry.py `ask_reason`), the API's entry-mode card lists
+# the same kinds (ForcedPropose); `risk_unreadable` is the API's own (an unreadable risk file, never a running engine's)
+AskKind = Literal["rearm_lock", "kill_switch", "risk_unreadable", "owner_propose", "terminal_not_demo",
+                  "terminal_unknown", "config_propose"]
+# a demo account whose terminal is not confirmed demo: real money may be behind it (sign-off correction 2), so no
+# channel takes an approval of its card (`Proposal.approve_refusal`); a rejection or the window ends it.
+# terminal_not_demo: the terminal says real or contest; terminal_unknown: not read yet, unreadable, or it did not say
+TERMINAL_FAULTS = ("terminal_not_demo", "terminal_unknown")
+ASK_KINDS: tuple[str, ...] = get_args(AskKind)
+ACCOUNT_MODES = ("demo", "live", "paper")
+
+
+class AskReason(FrozenRecord):
+    """Why a demo account asks the owner for this entry instead of entering on its own. `until`: the re-arm lock's end
+    (epoch s); `terminal`: what the terminal reported for `terminal_not_demo` (real | contest)."""
+    kind: AskKind
+    until: float | None = None
+    terminal: str | None = None
+
+
+def _utc_words(epoch_s: float) -> str:
+    return datetime.fromtimestamp(epoch_s, tz=timezone.utc).strftime("%a %d %b %H:%M UTC")
+
+
+def ask_reason_text(r: AskReason) -> str:
+    """The reason in the owner's words, one sentence (design note section 2; the card prefixes "Asking because: "). A
+    terminal-fault card (TERMINAL_FAULTS) cannot be approved (sign-off correction 2), so it never says "check and
+    approve"; terminal_unknown does not blame the terminal: the account simply could not be confirmed yet."""
+    if r.kind == "rearm_lock":
+        return ("this account was just re-armed; it asks for every entry "
+                + (f"until {_utc_words(r.until)}." if r.until is not None else "for now."))
+    if r.kind == "terminal_unknown":
+        return ("the account has not been read yet, so its terminal cannot be confirmed as a demo account; it is not "
+                "allowed to enter on its own until the next good read.")
+    if r.kind == "terminal_not_demo":
+        what = ("this demo account is connected to a real-money terminal" if r.terminal == "real"
+                else "this demo account's terminal does not report a demo account")
+        return f"{what}, so it is not allowed to enter on its own. Fix the account setup first."
+    return {"kill_switch": "the 12% drawdown stop fired; entries ask you until the account is re-armed.",
+            "owner_propose": "you set entry mode to Propose in Settings. Demo normally enters on its own.",
+            "risk_unreadable": "the risk file could not be read, so automatic entry is off until it is fixed.",
+            "config_propose": "this account is set to ask in its configuration."}[r.kind]
+
+
+def approve_refusal_text(kind: str) -> str:
+    """Why an approval of a terminal-fault card is refused (ApprovalBus.submit, ApprovalCenter); starts with the kind."""
+    what = ("its terminal is not a demo account; fix the account setup first" if kind == "terminal_not_demo"
+            else "its terminal could not be confirmed as a demo account yet")
+    return f"{kind}: this account is set up as demo but {what} (no approval is taken)"
 
 
 # BACKLOG 63: a tap is bound to the exact card the owner saw. Telegram's callback_data is at most 64 bytes, so a card's
@@ -192,6 +253,10 @@ class Proposal(Record):
     risk_cap: float | None = None        # the minimum-lot cap that applied (fraction of equity; halved in size-down)
     created: float = Field(default_factory=time.time)
     window_s: int = 90
+    # backlog 103 (ADR 0036): what the account is (EngineConfig.mode) and, on demo only, why it asks instead of entering
+    # on its own (engine/auto_entry.py `asking`); None from older engines: the card then says the type is unknown
+    account_mode: Literal["demo", "live", "paper"] | None = None
+    ask_reason: AskReason | None = None
     outcome: Outcome | None = None
     reason_code: str | None = None
     # finance audit GAP-10: when the owner decided (epoch s, the decision's own clock) and through which channel
@@ -244,6 +309,45 @@ class Proposal(Record):
         m, dist = self.money, abs(self.entry - self.stop)
         return None if m is None or dist <= 0 else round(m[0] * abs(self.target - self.entry) / dist, 2)
 
+    @property
+    def demo_reason(self) -> AskReason | None:
+        """Why this card asks, on a demo account only (design note principle 3: "Real money NEVER shows an 'asking
+        because' line"); None on live, paper and an unknown account type even if an engine (wrongly) gave one."""
+        return self.ask_reason if self.account_mode == "demo" else None
+
+    @property
+    def approve_refusal(self) -> str | None:
+        """Why no channel may approve this card, or None: a demo account on a terminal that is not confirmed demo
+        (TERMINAL_FAULTS) would place an order on an account that may be real money."""
+        r = self.demo_reason
+        return approve_refusal_text(r.kind) if r is not None and r.kind in TERMINAL_FAULTS else None
+
+    @property
+    def approvable(self) -> bool:
+        """Approve is offered and taken (`approve_refusal` is None)."""
+        return self.approve_refusal is None
+
+    @property
+    def badge(self) -> str:
+        """The money class, first on the card (design note sections 2 and 5): words, never colour alone; an unknown
+        type is a state of its own and never defaults to demo; terminal_not_demo reads as real money, terminal_unknown
+        as unknown (both locked)."""
+        r = self.demo_reason
+        if r is not None and r.kind == "terminal_not_demo":
+            return "🔒 REAL MONEY (terminal)"
+        if r is not None and r.kind == "terminal_unknown":
+            return "🔒 ACCOUNT TYPE UNKNOWN (terminal not confirmed)"
+        return {"live": "🔒 REAL MONEY", "demo": "DEMO · no real money", "paper": "PAPER · simulated"}.get(
+            self.account_mode or "", "ACCOUNT TYPE UNKNOWN")
+
+    @property
+    def approve_label(self) -> str | None:
+        """The Approve button's words, carrying the class (design note section 5); None: no Approve button."""
+        if not self.approvable:
+            return None
+        return {"live": "Approve real money", "demo": "Approve demo", "paper": "Approve paper"}.get(
+            self.account_mode or "", "Approve (account type unknown)")
+
     def money_lines(self, budget: LossBudget | None = None) -> list[str]:
         """Risk, the minimum-lot note and the loss budget left if this loses (docs/ux/approval-card.md)."""
         m = self.money
@@ -268,21 +372,28 @@ class Proposal(Record):
         return lines
 
     def text(self, budget: LossBudget | None = None) -> str:
-        """The Telegram message: the same essentials, in the same order, as the dashboard approval card. `budget` is
-        the account's loss budget if this trade loses (account_view.proposal_budget); None reads as unknown."""
+        """The Telegram message: the same essentials, in the same order, as the dashboard approval card, led by the
+        money class and, on demo, why it asks (backlog 103). `budget` is the account's loss budget if this trade loses
+        (account_view.proposal_budget); None reads as unknown."""
         side = "🟢 LONG" if self.side > 0 else "🔵 SHORT"
         feats = ", ".join(f"{n} {v:+.2f}" for n, v in self.top_features[:3])
         m, reward = self.money, self.reward_amount
         stop_m = f" (−{cash(m[0], m[1])})" if m is not None else ""
         target_m = f" (+{cash(reward, m[1])})" if m is not None and reward is not None else ""
         money = "".join(line + "\n" for line in self.money_lines(budget))
-        return (f"{side} {self.lots:.2f} lots XAUUSD\n"
+        why = f"Asking because: {ask_reason_text(r)}\n" if (r := self.demo_reason) is not None else ""
+        window = window_words(self.window_s)
+        last = (f"⏱ approve within {window} or it expires · exits are automatic" if self.approvable
+                else f"⛔ approving is off for this card: fix the account setup first · it expires in {window}")
+        return (f"{self.badge} · {self.account_id}\n"
+                f"{why}"
+                f"{side} {self.lots:.2f} lots XAUUSD\n"
                 f"{money}"
                 f"entry {self.entry:.2f}  stop {self.stop:.2f}{stop_m}  target {self.target:.2f}{target_m}\n"
                 f"p={self.p:.2f}  EV={self.ev_r:+.2f}R  spread {self.spread_points:.0f}pt\n"
                 f"why: {feats or 'no feature importances'}\n"
                 f"{self.account_id} · {self.agent_id}\n"
-                f"⏱ approve within {self.window_s}s or it expires · exits are automatic")
+                f"{last}")
 
 
 class ApprovalCenter:
@@ -326,7 +437,9 @@ class ApprovalCenter:
         `created` is refused, not accepted (fail closed)"): the Telegram button and the dashboard request carry the
         card's `created`, and one that does not match the proposal held here was a click on an earlier card with the
         same id (a proposal id depends only on account, agent and bar close). Such a decision is discarded, never
-        applied, and the owner is told, so the card shown stays decidable and the dropped click is not silent."""
+        applied, and the owner is told, so the card shown stays decidable and the dropped click is not silent. An
+        approval of a card that is not `approvable` (TERMINAL_FAULTS, backlog 103) is discarded the same way: the bus
+        refuses it at `submit`, and this holds even for a decision file written past it."""
         if self.bus is None or not self.pending:
             return []
         done = []
@@ -344,6 +457,13 @@ class ApprovalCenter:
             if self.expired(p):
                 done.append(self._finish(p, Outcome.EXPIRED))
                 continue
+            if d.approve and not p.approvable:      # sign-off correction 2: never applied, whoever wrote it
+                log.warning("approval of %s refused (%s): discarded, not applied", p.proposal_id,
+                            p.approve_refusal)
+                self.bus.discard_decision(d.proposal_id)
+                self.bus.notify_owner(f"Your approval of proposal {p.proposal_id} was not applied: its demo account's "
+                                      f"terminal is not confirmed as a demo account. No order was placed.")
+                continue
             p.decided_ts, p.decided_channel = d.ts, decision_channel(d.by)     # never the id or email (BACKLOG 52)
             p.reason_code = None if d.approve else d.reason_code
             done.append(self._finish(p, Outcome.APPROVED if d.approve else Outcome.REJECTED))
@@ -357,6 +477,8 @@ class ApprovalCenter:
             raise KeyError("unknown or already decided proposal")
         if self.expired(p):
             return self._finish(p, Outcome.EXPIRED)
+        if approve and (why := p.approve_refusal) is not None:
+            raise ValueError(why)
         if not approve and reason_code not in REASON_CODES:
             raise ValueError(f"rejection needs a reason code from {REASON_CODES}")
         p.decided_ts, p.decided_channel = time.time(), "telegram"     # the in-process path is the Telegram bot

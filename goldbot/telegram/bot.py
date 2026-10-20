@@ -390,7 +390,9 @@ class TelegramBot:  # pragma: no cover - needs network + token
             self.bus.notify_owner(f"A proposal card could not be sent: {exc}. Proposal {p.proposal_id} cannot be "
                                   f"approved and will expire; no order is placed from it.")
             return []
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=cb[None])],
+        # backlog 103: Approve names the money class; a terminal_not_demo card has none (the bus refuses it anyway)
+        approve = [[InlineKeyboardButton(p.approve_label, callback_data=cb[None])]] if p.approve_label else []
+        kb = InlineKeyboardMarkup([*approve,
                                    [InlineKeyboardButton(f"Reject: {r}", callback_data=cb[r])
                                     for r in ("news", "cost", "discretion")],
                                    [InlineKeyboardButton(f"Reject: {r}", callback_data=cb[r])
