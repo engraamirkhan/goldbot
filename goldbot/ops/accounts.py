@@ -354,7 +354,16 @@ def fallback_note() -> None:
 
 def set_secret(key: str, value: str) -> str:
     """Store a secret; returns "keyring" or "file". The file is used only when no keyring backend works AND
-    GOLDBOT_ALLOW_PLAINTEXT=1 on a non-macOS/Windows host; otherwise RuntimeError (nothing written)."""
+    GOLDBOT_ALLOW_PLAINTEXT=1 on a non-macOS/Windows host; otherwise RuntimeError (nothing written). Storing an MT5
+    password or login (`mt5-<account>`, `mt5-login-<account>`) clears that account's refused-password mark and login
+    attempts (goldbot/ops/login_ledger.py): the new credentials may be tried."""
+    where = _store_secret(key, value)
+    from goldbot.ops.login_ledger import clear_for_secret
+    clear_for_secret(key)
+    return where
+
+
+def _store_secret(key: str, value: str) -> str:
     if secret_store() == "keyring":
         try:
             keyring.set_password(SERVICE, key, value)

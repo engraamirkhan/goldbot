@@ -79,14 +79,20 @@ def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTra
     if spawned is None:
         log.warning("could not list processes: a terminal launched by initialize would go unnoticed here")
     guarded = GuardedBroker(broker, magic_base=acc.magic_base,
-                            verify=lambda info: accounts.verify_terminal_account(acc, info),
-                            relogin=mt5_login.Relogin(acc, mt5_adapter.mt5, login_settings))
+                            verify=lambda info: accounts.verify_terminal_account(acc, info))
     # The registered-account check (login, server, demo vs real, hedging) gates every RPC instead of the start:
     # until the terminal is once seen `ok`, /health answers with the token (not_logged_in, wrong_account, ...) and
     # every call is refused, so a lost login shows as such rather than as a bridge that keeps restarting; after that,
     # every call is refused while the terminal is on another account. Orders are checked again on every send
     # (GuardedBroker.verify). The token is logged; the reason (it names the account) is not.
     log.info("MT5 terminal state at start: %s", guarded.terminal_state())
+    # A terminal that answers but has no account is logged in by a background thread, never inside /health or an RPC
+    # (trading-safety review MEDIUM 2); it shares the terminal lock with the server and never acts on wrong_account.
+    import threading
+    lock = threading.Lock()
+    heal = mt5_login.SelfHeal(acc, mt5_adapter.mt5, login_settings, lock,
+                              lambda: guarded.terminal_state() == "not_logged_in")
+    heal.start()
     from goldbot.ops.bridge_compat import repo_commit
-    serve(guarded, host, int(port), token, verify_first=True,
+    serve(guarded, host, int(port), token, verify_first=True, lock=lock, login_status=heal.status,
           commit=repo_commit())           # read once: the code this process runs, reported on /health (BACKLOG 42)

@@ -45,6 +45,7 @@ import hmac
 import json
 import logging
 import math
+import threading
 import time
 from datetime import date
 from datetime import time as dtime
@@ -126,6 +127,12 @@ STALE_REFUSAL = "bridge_stale_order"            # an order that aged past ORDER_
 REFUSED_RETCODE = 10006         # MT5 "request rejected": a definite reject (runner.DEFINITE_REJECT_RETCODES)
 # The terminal's state on GET /health: exactly these tokens (the root watchdog's probe matches them literally).
 TERMINAL_STATES = ("ok", "not_running", "not_connected", "not_logged_in", "wrong_account")
+# The keyring login's state on /health (`login`, beside `terminal`; goldbot/ops/login.py SelfHeal.status): fixed tokens,
+# never a login. Old probes and brains ignore the extra field.
+LOGIN_STATES = ("in_progress", "refused", "rate_limited", "waiting")
+# How long /health and an RPC wait for the terminal lock the self-heal login holds (trading-safety review MEDIUM 2):
+# well under the watchdog's 20 s probe and an order's ORDER_MAX_AGE_S, so neither ever waits out a login.
+LOCK_WAIT_S = 2.0
 TERMINAL_LOST_READS = 2         # consecutive not_running reads after which the bridge exits to be re-attached
 TERMINAL_LOST_MIN_SPAN_S = 30.0  # ... and only when those reads span at least this long (review L1)
 TERMINAL_LOST_EXIT = 75         # EX_TEMPFAIL: systemd's Restart=always starts it again
@@ -203,7 +210,8 @@ def _exit_terminal_lost() -> None:
 
 def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_first: bool = False,
                  on_terminal_lost: Callable[[], None] | None = None,
-                 clock: Callable[[], float] = time.monotonic) -> type[BaseHTTPRequestHandler]:
+                 clock: Callable[[], float] = time.monotonic, lock: threading.Lock | None = None,
+                 login_status: Callable[[], str | None] | None = None) -> type[BaseHTTPRequestHandler]:
     """`commit`: the commit this bridge process runs (read once at start), reported on /health so the brain can see
     when the two boxes run different code. Nothing on /health is a secret: zone, commit (public repo), protocol, and
     the terminal's state token when the broker reports one (`terminal_state()`).
@@ -214,7 +222,13 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
     nothing). Any other state after that lets calls through: exits are never gated, and the terminal answers what it
     can. /health is served throughout, so a lost login shows as `not_logged_in` instead of a bridge that keeps
     restarting. `on_terminal_lost`: called after TERMINAL_LOST_READS consecutive `not_running` reads spanning at
-    least TERMINAL_LOST_MIN_SPAN_S (default: exit, `_exit_terminal_lost`)."""
+    least TERMINAL_LOST_MIN_SPAN_S (default: exit, `_exit_terminal_lost`).
+
+    `lock`: the terminal lock the bridge's background self-heal login holds (goldbot/ops/login.py SelfHeal; the
+    MetaTrader5 package is not thread-safe). /health and every RPC take it for their terminal calls, waiting at most
+    LOCK_WAIT_S: while a login holds it, /health answers not_logged_in with `login: in_progress` without touching the
+    terminal, and an RPC gets a prompt 503 (a definite refusal; the engine sends a close again), never a wait past the
+    watchdog's probe or an order's age limit. `login_status`: the self-heal's token (LOGIN_STATES) for /health."""
     if len(token) < 32:
         raise ValueError("bridge token must be at least 32 characters")
     lost_cb = on_terminal_lost or _exit_terminal_lost
@@ -255,7 +269,21 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
                 self._reply(404, {"error": "not found"})
                 return
             body: dict[str, Any] = {"ok": True}
-            state = terminal_state()
+            state: str | None
+            held = lock is not None and not lock.acquire(timeout=LOCK_WAIT_S)
+            if held:                                         # a login holds the terminal: it has no account now
+                state = "not_logged_in"
+                if state != seen["state"]:
+                    seen["state"], seen["since"] = state, clock()
+            else:
+                try:
+                    state = terminal_state()
+                finally:
+                    if lock is not None:
+                        lock.release()
+            login = "in_progress" if held else (login_status() if login_status is not None else None)
+            if login in LOGIN_STATES and state != "ok":    # a login held back only matters without an account
+                body["login"] = login
             if state is not None:                            # a fixed token and a capped age: no account data
                 body["ok"] = state == "ok"
                 body["terminal"] = state
@@ -296,6 +324,16 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
             if n <= 0 or n > MAX_BODY:
                 self._reply(400, {"error": "bad body"})
                 return
+            if lock is not None and not lock.acquire(timeout=LOCK_WAIT_S):
+                self._reply(503, {"error": "terminal login in progress: refused, send again"})
+                return
+            try:
+                self._rpc(n)
+            finally:
+                if lock is not None:
+                    lock.release()
+
+        def _rpc(self, n: int) -> None:
             if verify_first:                                 # the terminal's CURRENT account, on every call
                 state = terminal_state()
                 if not seen["verified"]:                     # not yet seen on the registered account: no call at all
@@ -330,9 +368,12 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
 
 
 def serve(broker: Any, host: str, port: int, token: str, commit: str | None = None,
-          verify_first: bool = False) -> None:  # pragma: no cover - blocking loop
-    """One request at a time (HTTPServer, not ThreadingHTTPServer): the MetaTrader5 package is not thread-safe."""
-    httpd = HTTPServer((host, port), make_handler(broker, token, commit=commit, verify_first=verify_first))
+          verify_first: bool = False, lock: threading.Lock | None = None,
+          login_status: Callable[[], str | None] | None = None) -> None:  # pragma: no cover - blocking loop
+    """One request at a time (HTTPServer, not ThreadingHTTPServer): the MetaTrader5 package is not thread-safe; the
+    self-heal login thread shares `lock` with it (make_handler)."""
+    httpd = HTTPServer((host, port), make_handler(broker, token, commit=commit, verify_first=verify_first, lock=lock,
+                                                  login_status=login_status))
     log.info("bridge serving %s on %s:%d", type(broker).__name__, host, port)
     httpd.serve_forever()
 
@@ -384,13 +425,8 @@ class GuardedBroker:
     -> 3.0 lots -> account (one read) -> F4 smoke magic on demo only -> verify -> ceiling -> the order's age again
     (`order_sent_at`) -> send. `close` and `modify` are never sized."""
 
-    def __init__(self, broker: Any, *, magic_base: int, verify: Callable[[Any], str | None] | None = None,
-                 relogin: Callable[[], bool] | None = None) -> None:
+    def __init__(self, broker: Any, *, magic_base: int, verify: Callable[[Any], str | None] | None = None) -> None:
         self._b, self.magic_base, self._verify = broker, magic_base, verify
-        # the bridge's self-heal (goldbot/ops/login.py Relogin; owner directive 2026-10-20): called only when the
-        # terminal has no account at all (not_logged_in), never on wrong_account; it logs in to the configured login
-        # only, paces itself and returns whether it logged in
-        self._relogin = relogin
         # when the brain sent the order being served (the bridge handler sets it; one request at a time): the age is
         # checked again just before the send, after the ceiling's reads. None: not served over the bridge
         self.order_sent_at: float | None = None
@@ -471,21 +507,7 @@ class GuardedBroker:
         """The terminal's state as one token of TERMINAL_STATES, for GET /health; None when the wrapped broker cannot
         say (no `terminal_info`, e.g. the paper broker). Order: no terminal (terminal_info None or an IPC error) ->
         no account -> another account than registered (`verify`) -> not connected to the broker server -> ok. A login
-        or a server never leaves this method. On not_logged_in the `relogin` hook (when set) may log the terminal in to
-        the registered login; the state is then read again, so a terminal that came back on another account still
-        answers wrong_account."""
-        state = self._terminal_state()
-        if state == "not_logged_in" and self._relogin is not None:
-            try:
-                healed = self._relogin()
-            except Exception:                            # noqa: BLE001 - a failed heal leaves the state as it was
-                log.warning("terminal self-heal login raised; the terminal stays not_logged_in")
-                healed = False
-            if healed:
-                state = self._terminal_state()
-        return state
-
-    def _terminal_state(self) -> str | None:
+        or a server never leaves this method."""
         info_fn = getattr(self._b, "terminal_info", None)
         if not callable(info_fn):
             return None

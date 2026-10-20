@@ -414,10 +414,11 @@ shadow:                              # shadow book (goldbot/engine/shadow.py; re
                                      #   cap a signal is counted "skipped: cap", never traded. Promotion's 40 counts
                                      #   independent clusters (one per agent per session day), not raw trades
 mt5_login:                           # MT5 terminal login from the keyring (goldbot/ops/login.py; owner directive 2026-10-20: no VNC)
-  attempts: 3                        # tries per login (goldbot-mt5 login, bridge start); timeouts only, never a bad password
-  backoff_s: 20                      # wait before the 2nd try, doubling after (20, 40, ...)
-  backoff_max_s: 600                 # longest wait between tries
-  heal_max_attempts: 5               # bridge self-heal on not_logged_in: failed logins before it stops (restart resets)
-  timeout_ms: 60000                  # initialize/login timeout, as the attach (MT5_INIT_TIMEOUT_MS)
+  attempts: 3                        # tries per login (goldbot-mt5 login, bridge start); timeouts only, never a refused password
+  backoff_s: 20                      # wait after a failed login, doubling for each one in a row (20, 40, ...); kept across restarts
+  backoff_max_s: 600                 # longest wait between logins
+  max_attempts_per_hour: 6           # logins sent per account per hour, across bridge restarts (state/mt5-login/)
+  heal_timeout_ms: 15000             # the bridge's self-heal mt5.login: under the watchdog's 20 s /health probe timeout
+  heal_interval_s: 30                # how often the self-heal thread looks at the terminal
   dismiss_wizard: false              # Escape to the terminal's foreground window before initialize, for the "open an
                                      #   account" wizard; best effort, unverified on the box (RUNBOOK "Terminal down")
