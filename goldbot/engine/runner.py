@@ -55,6 +55,7 @@ from goldbot.engine.tv_context import TvShadowWatch
 from goldbot.execution.bridge import CEILING_REFUSAL
 from goldbot.execution.broker import (  # noqa: F401  (DEFINITE_REJECT_RETCODES: re-exported)
     DEFINITE_REJECT_RETCODES,
+    MT5_COMMENT_MAX,
     AccountInfo,
     Broker,
     OrderIntent,
@@ -62,6 +63,7 @@ from goldbot.execution.broker import (  # noqa: F401  (DEFINITE_REJECT_RETCODES:
     Position,
     SymbolInfo,
     Tick,
+    comment_keys,
 )
 from goldbot.execution.classifier import StoredClass, effective_class, read_stored
 from goldbot.execution.costs import CostTable
@@ -1296,7 +1298,7 @@ class Engine:
                            timeframe=agent.timeframe, family=agent.family,
                            model_version=self.live_versions.get(agent.agent_id), **self._entry_limits(prop, gd))
         oi = OrderIntent(client_order_id=prop.proposal_id, symbol=self.cfg.symbol, side=prop.side, lots=lots, sl=round(stop, 2), tp=round(target, 2), magic=magic,
-                         comment=prop.proposal_id[-31:])
+                         comment=prop.proposal_id[-MT5_COMMENT_MAX:])
         # pending_orders row persisted BEFORE sending: a crash between send and result is reconciled on restart
         self._orders_record(prop.proposal_id, agent_id=agent.agent_id, side=prop.side, magic=magic, lots=lots,
                             max_bars=self._base_bars(agent), sl=oi.sl, tp=oi.tp, ts=pd.Timestamp.now("UTC"),
@@ -1803,7 +1805,7 @@ class Engine:
         signal ATR for its exit policy. Otherwise it is an orphan: its agent from the magic number when that is unique,
         and the broker's current stop as its initial stop."""
         rec = next((o for o in self._orders.values() if o.position_id == p.position_id), None) or \
-            next((o for o in self._orders.values() if p.comment and p.comment in (o.client_order_id, o.client_order_id[-31:])), None)
+            next((o for o in self._orders.values() if p.comment and p.comment in comment_keys(o.client_order_id)), None)
         # BACKLOG 72: a row never confirmed keeps the tighter of the stop sent and the broker's, and the target sent
         late = rec is not None and rec.status in unconfirmed.NEVER_CONFIRMED
         agent, agent_id = cost_probe.adoption(self, p, rec)     # ADR 0037: a probe is never adopted as a live trade
@@ -2449,7 +2451,7 @@ class Engine:
         restart): that trade is kept with its stop, bars held and scale-out state and only the row is marked filled
         (review MEDIUM-2 b). No position: filled and closed (recorded from its deals) or never filled ("unfilled").
         An unreadable deal history without a position leaves the row `sending` for the next look. Never re-sent."""
-        pos = next((p for p in positions.values() if p.comment == cid[-31:] or p.comment == cid), None)
+        pos = next((p for p in positions.values() if p.comment in comment_keys(cid)), None)
         if pos is not None:
             unconfirmed.adopt_sent(self, cid, rec, pos)
         else:     # BACKLOG 72 review: never resolved on one look; the look-up records a closed fill or, after two

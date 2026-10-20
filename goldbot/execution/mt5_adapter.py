@@ -54,6 +54,7 @@ from goldbot.data.timeutil import server_to_utc, server_wall
 from goldbot.execution.broker import (
     ACCOUNT_REFUSAL,
     DEFINITE_REJECT_RETCODES,
+    MT5_COMMENT_MAX,
     PRECHECK_REFUSAL,
     RETCODE_PRECHECK_FAILED,
     AccountInfo,
@@ -404,13 +405,20 @@ class MT5Broker:
             log.warning("order %s refused: %s: %s", intent.client_order_id, ACCOUNT_REFUSAL, why)
             return OrderResult(ok=False, retcode=RETCODE_REJECT, order_id=None, position_id=None, filled_lots=0.0,
                                price=None, message=f"{ACCOUNT_REFUSAL}: {why}")
+        if len(intent.comment) > MT5_COMMENT_MAX:
+            # never cut it here: the caller's slice (runner, smoke: the id's tail) is the key every look-up matches, and
+            # a head cut would file the position under the wrong key; a comment this long is a caller bug, refused
+            # pre-send as a definite reject (trading-safety review LOW 4)
+            log.warning("order %s refused: comment of %d characters exceeds the terminal's %d", intent.client_order_id,
+                        len(intent.comment), MT5_COMMENT_MAX)
+            return _precheck_failed(f"comment of {len(intent.comment)} characters exceeds MT5_COMMENT_MAX {MT5_COMMENT_MAX}")
         tick = mt5.symbol_info_tick(intent.symbol)
         price = tick.ask if intent.side > 0 else tick.bid
         req = {
             "action": mt5.TRADE_ACTION_DEAL, "symbol": intent.symbol, "volume": intent.lots,
             "type": mt5.ORDER_TYPE_BUY if intent.side > 0 else mt5.ORDER_TYPE_SELL, "price": price,
             "sl": intent.sl, "tp": intent.tp, "deviation": intent.deviation_points, "magic": intent.magic,
-            "comment": intent.comment[:31], "type_time": mt5.ORDER_TIME_GTC, "type_filling": self._filling(intent.symbol),
+            "comment": intent.comment, "type_time": mt5.ORDER_TIME_GTC, "type_filling": self._filling(intent.symbol),
         }
         for attempt in range(3):
             chk = mt5.order_check(req)

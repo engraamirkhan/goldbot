@@ -15,7 +15,7 @@ import pytest
 
 from goldbot.engine import Engine, EngineConfig, auto_entry, unconfirmed
 from goldbot.engine.runner import DEFINITE_REJECT_RETCODES
-from goldbot.execution.broker import OrderIntent, OrderResult
+from goldbot.execution.broker import MT5_COMMENT_MAX, OrderIntent, OrderResult
 from goldbot.execution.not_confirmed import (
     Confirmation,
     card_text,
@@ -333,7 +333,7 @@ def _mt5_deals(position: int, *, exit_comment: str = "[sl 2396.00]", with_ids: b
                volume: float = 0.1) -> list[dict]:
     t = pd.Timestamp.now("UTC")
     rows = [{"ts_utc": t, "position_id": position, "entry": 0, "volume": volume, "price": 2400.4, "profit": 0.0,
-             "commission": -0.35, "swap": 0.0, "fee": 0.0, "comment": PID[-31:], "reason": 3},
+             "commission": -0.35, "swap": 0.0, "fee": 0.0, "comment": PID[-MT5_COMMENT_MAX:], "reason": 3},
             {"ts_utc": t + pd.Timedelta(seconds=9), "position_id": position, "entry": 1, "volume": volume,
              "price": 2396.0, "profit": -44.0, "commission": -0.35, "swap": 0.0, "fee": 0.0, "comment": exit_comment,
              "reason": 4}]
@@ -419,7 +419,7 @@ def test_a_fill_after_no_trade_was_reported_sends_one_correction(tmp_path, clock
     _look(eng)
     assert eng._orders[PID].status == "unfilled"
     PaperBroker.place_order(pb, OrderIntent(client_order_id=PID, symbol="XAUUSD", side=1, lots=0.1, sl=SL, tp=TP,
-                                            magic=eng._magic(AGENT.family), comment=PID[-31:]))   # it turns up late
+                                            magic=eng._magic(AGENT.family), comment=PID[-MT5_COMMENT_MAX:]))   # it turns up late
     [pos] = pb.positions()
     _look(eng)
     _look(eng)

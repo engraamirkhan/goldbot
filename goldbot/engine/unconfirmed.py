@@ -44,7 +44,7 @@ import pandas as pd
 
 from goldbot.engine import cost_probe
 from goldbot.engine.store import OpenTrade, SentOrder
-from goldbot.execution.broker import OrderResult, Position
+from goldbot.execution.broker import OrderResult, Position, comment_keys
 from goldbot.execution.not_confirmed import (
     AMBIGUOUS_ALERT_S,
     AMBIGUOUS_SETTLE_S,
@@ -147,7 +147,7 @@ def _entries(deals: pd.DataFrame | None, cid: str) -> pd.DataFrame:
     if "client_order_id" in deals.columns:
         hit |= deals["client_order_id"] == cid
     if "comment" in deals.columns:
-        hit |= deals["comment"].isin([cid, cid[-31:]])
+        hit |= deals["comment"].isin(comment_keys(cid))
     rows = deals[hit]
     if "entry" in rows.columns:
         return rows[rows["entry"] == 0]
@@ -333,7 +333,7 @@ def no_quote_look(eng: Engine) -> None:
 def _look(eng: Engine, cid: str, rec: SentOrder, positions: dict[int, Position], now: pd.Timestamp, *,
           fresh: bool) -> bool:
     age = (now - pd.Timestamp(rec.ts_utc)).total_seconds()
-    pos = next((p for p in positions.values() if p.comment in (cid, cid[-31:])), None)
+    pos = next((p for p in positions.values() if p.comment in comment_keys(cid)), None)
     try:
         deals: pd.DataFrame | None = eng._read_deals(pd.Timestamp(rec.ts_utc) - LOOK_BACK)
     except Exception:                   # counted by _read_deals; never "no deal"

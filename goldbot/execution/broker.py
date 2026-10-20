@@ -21,6 +21,19 @@ ACCOUNT_REFUSAL = "terminal_account_changed"
 # called. Negative (no MT5 trade-server code is) and distinct from -1 (a send that may have reached the server)
 RETCODE_PRECHECK_FAILED = -2
 PRECHECK_REFUSAL = "terminal_precheck_failed"
+# The longest order comment the MT5 terminal accepts, measured 2026-10-20 on icm-probe (MetaTrader5 Python package
+# 5.0.6231 under Wine): a comment of 30 characters or more makes `order_check` return None with
+# `(-2, 'Invalid "comment" argument')`; 29 passes. Every comment the engine sends is at most this long.
+MT5_COMMENT_MAX = 29
+# the comment slice sent before 2026-10-20 (`cid[-31:]`): a position opened then still carries it
+LEGACY_COMMENT_LEN = 31
+
+
+def comment_keys(client_order_id: str) -> tuple[str, str, str]:
+    """The MT5 comments an order `client_order_id` can carry: the whole id (paper, and ids of at most 29 characters),
+    its last MT5_COMMENT_MAX characters (sent since 2026-10-20) and its last 31 (the legacy slice, kept so a position
+    opened before the change is still found by reconciliation and the unconfirmed look-up)."""
+    return client_order_id, client_order_id[-MT5_COMMENT_MAX:], client_order_id[-LEGACY_COMMENT_LEN:]
 
 # MT5 trade-server retcodes that mean the order was definitely NOT placed, listed one by one (review LOW-1: only
 # defined codes; 10037 does not exist): 10004 requote, 10006 reject, 10007 cancelled by trader, 10013-10022 invalid
