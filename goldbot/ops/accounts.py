@@ -84,9 +84,12 @@ class ScheduledProbe(FrozenRecord):
     hold_s: int = Field(30, ge=1, le=60)
     # section 3: "a stop of at most $3 from the fill", USD per oz; its loss at 0.01 lot stays within max_loss too
     stop_usd: float = Field(3.0, gt=0, le=3.0)
-    # no slot in this UTC window (HH:MM, start inclusive, end exclusive): the rollover and the daily break; nor after
-    # the Friday weekend cut (server time) or on a UTC weekend day
-    blackout: tuple[str, str] = ("20:45", "22:15")
+    # no slot in this window (HH:MM wall time in `blackout_tz`, start inclusive, end exclusive): the rollover, the
+    # daily break (17:00-18:00 New York) and the reopen minute; nor after the Friday weekend cut (server time) or on
+    # a UTC weekend day. In New York time so it moves with US DST (code review 2026-10-20: a fixed UTC window left
+    # winter slots in the break and on the reopen)
+    blackout: tuple[str, str] = ("16:45", "18:15")
+    blackout_tz: str = "America/New_York"
     # prereg K10: scheduled probes' realised loss + open risk take at most this share of the day's probe budget
     budget_share: float = Field(0.5, gt=0, le=0.5)
 
@@ -94,7 +97,17 @@ class ScheduledProbe(FrozenRecord):
     @classmethod
     def _hhmm(cls, v: tuple[str, str]) -> tuple[str, str]:
         if not all(_HHMM.fullmatch(x) for x in v):
-            raise ValueError("cost_probe.scheduled.blackout is two HH:MM times (UTC)")
+            raise ValueError("cost_probe.scheduled.blackout is two HH:MM times (in blackout_tz)")
+        return v
+
+    @field_validator("blackout_tz")
+    @classmethod
+    def _tz(cls, v: str) -> str:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"cost_probe.scheduled.blackout_tz is not an IANA time zone: {v!r}") from exc
         return v
 
 

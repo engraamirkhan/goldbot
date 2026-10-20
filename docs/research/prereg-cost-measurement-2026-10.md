@@ -1,6 +1,6 @@
 # Pre-registration: measured-cost protocol (microstructure researcher, 2026-10-20)
 
-**Status: written, not run. 0 registry trials, 0 to K, no holdout. Amendment 1 (2026-10-20, section 8): M1 as deployed.** Every reading rule below was fixed at this
+**Status: written, not run. 0 registry trials, 0 to K, no holdout. Amendment 1 (2026-10-20, section 8): M1 as deployed. Amendment 2 (2026-10-20, section 9): TP exits, the New York blackout.** Every reading rule below was fixed at this
 file's commit, before the author had read any probe fill, probe P&L or broker-tick aggregate. `aux.db` lives on the
 brain VM. I did not query it, nor `state/ticks/`, nor `state/costs_*.json`. Inputs read: `costs-binding-2026-10-18.md`
 ("CB file"), `preregistration-costs-2026-10-18.md` (CB-0, CB-D1, CB-D2, CB-T1, CB-T2), `atr-measured-2026-10-18.md`,
@@ -339,5 +339,37 @@ never enter the mirrored-probe `max_open` median. On icm-probe its 50% budget sp
 
 **Owner decisions (flagged, not assumed):** the icm-probe credentials and terminal, and its £30 daily limit, are
 the owner's. This amendment raises no limit and touches no live account.
+
+Multiple testing: 0 trials, 0 to K, no holdout. Section 6 is still read on 2027-01-29.
+
+## 9. Amendment 2 (2026-10-20, before the first scheduled fill)
+
+**Dated 2026-10-20, written before any scheduled (M1) fill exists and before I read any probe fill, probe P&L or
+tick aggregate.** Cause: the quant and code reviews of `feat/demo-learning-volume`. **The reading rules of section
+5 and the withdrawal rule of section 6 are otherwise unchanged.** 0 trials, 0 to K, no holdout.
+
+**Scheduled M1 probes carry a server take-profit at ±$3 from the fill, for safety only** (the symmetric target set
+in `goldbot/engine/cost_probe.py` `_send_scheduled` and placed with the order by `Engine._execute` in
+`goldbot/engine/runner.py`), beside the $3 server stop. Reading rule, fixed now:
+- **A TP exit is EXCLUDED from the M1 exit-leg cost reading.** A take-profit fills like a resting limit (at the
+  level or better), so counting it would bias the exit leg's slippage down, the unsafe direction. It is reported in
+  the "TP fills" row of section 5 (never credited in research) and counts toward no M1 exit-leg n.
+- **Its entry leg counts** like any M1 entry: it is a market order sent at the slot, filled before the target can act.
+- A 30 s hold exit and an SL exit are read as before (section 8). Nothing else in section 5 changes.
+
+**The mirror 4-bar cap biases the stop-exit cell high (accepted).** On icm-probe a mirrored (M0) probe is held at
+most 4 of its agent's bars (section 8), so only stops hit within those 4 bars reach the "Stop-exit slippage" cell.
+Those are fast stops, taken in fast markets, whose slippage runs higher than a stop's average. The cell therefore
+reads stop-exit slippage biased high, the safe direction (decision 3: demo slippage only ever raises research
+cost). It is labelled `fast-stops (M0 4-bar cap)` and is never read as the average stop's slippage.
+
+**The schedule's blackout is fixed in New York time: no slot 16:45-18:15 America/New_York** (replaces "20:45-22:15
+UTC" in section 8). The section 8 window was fixed in UTC and did not move with US DST: from 2026-11-01 the
+22:15-22:45 UTC slots would fall in the daily break and 23:00 UTC on the reopen. In New York time the window
+covers the rollover, the break (about 16:57-18:01) and the reopen minute in both regimes; it equals the old window
+in EDT. Effect on section 8's table: B6 is served by the 16:30 New York close and the 18:15 and 18:30 closes (the
+reopen to +30 min) in both regimes, about 3 fills a weekday, so its ETA to 30 is about 10 trading days, the same
+before and after 11-01. Its pre-break half stays unmeasured by fills; its spread comes from ticks only. No other
+bucket changes.
 
 Multiple testing: 0 trials, 0 to K, no holdout. Section 6 is still read on 2027-01-29.

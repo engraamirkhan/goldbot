@@ -600,33 +600,75 @@ def open_risk(eng: Engine) -> float | None:
 
 def budget_refusal(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp) -> tuple[str | None, float]:
     """(why the probe budget refuses a new probe now or None, the loss a new probe may still add). The budget is
-    `cost_probe_budget` x the day's loss limit (0.2 x £50 = £10): refused when the allowance is unknown or less than
-    the budget remains, today's probe P&L or the open probes' risk is unknown, or today's realised probe loss + the
-    open probes' risk leaves nothing. Today is the engine's risk day (from its last reset; the UTC day before the
-    first). A probe profit never adds headroom."""
+    `cost_probe_budget` x the day's loss limit (0.2 x £50 = £10): refused when the allowance is unknown, the open
+    probes' risk is unknown, or today's realised probe loss (`realised_loss`) + the open probes' risk leaves nothing.
+    On a shared account also while less than the budget remains or a new probe would cut into the real trades'
+    reserve. A probe_only account keeps no reserve (ADR 0037 amendment 4), so it is refused only when its own day
+    cannot take one more probe at its worst case; "less than the budget remains" no longer applies there (trading-
+    safety review 2026-10-20: it stopped every probe once a £30 day was down ~£3). Today is the engine's risk day
+    (from its last reset; the UTC day before the first). A probe profit never adds headroom."""
     from goldbot.engine.limits_apply import daily_allowance
     allowance = daily_allowance(eng.gate, eng.state)
     limit, remaining = allowance["daily_loss_limit"], allowance["daily_loss_remaining"]
     if limit is None or remaining is None or limit <= 0:
         return "allowance_unknown", 0.0
     share = eng.cfg.cost_probe_budget * limit
-    if remaining < share:
+    reserve = real_trade_reserve(eng.cfg.probe_only) * limit
+    if reserve > 0 and remaining < share:
         return "allowance_low", 0.0
     since = eng._last_reset if eng._last_reset is not None else close_ts.floor("D")
-    with probe.db.connection() as conn:
-        today = [r for r in LEDGER.select(conn, "account_id = ? AND closed = 1", (eng.cfg.account_id,))
-                 if r.exit_utc is not None and r.exit_utc >= since]
-    if any(r.pnl is None for r in today):
-        return "probe_pnl_unknown", 0.0
     held = open_risk(eng)
     if held is None:
         return "open_risk_unknown", 0.0
-    headroom = share - max(0.0, -sum(float(r.pnl or 0.0) for r in today)) - held
+    headroom = share - realised_loss(eng, probe, since) - held
     if headroom <= 0:
         return "probe_loss_reached", 0.0
-    if remaining - held - min(eng.cfg.cost_probe_max_loss, headroom) < real_trade_reserve(eng.cfg.probe_only) * limit:   # real trades' part
-        return "real_trade_reserve", 0.0
+    if remaining - held - min(eng.cfg.cost_probe_max_loss, headroom) < reserve:   # real trades' part (0 on probe_only)
+        return ("real_trade_reserve" if reserve > 0 else "allowance_low"), 0.0
     return None, headroom
+
+
+def realised_loss(eng: Engine, probe: CostProbe, since: pd.Timestamp, agent_id: str | None = None) -> float:
+    """Today's realised probe loss (>= 0; a profit never offsets it) over the rows closed since `since` (one agent's
+    when given). A row closed with no P&L (`record_close` ran before the exit deal reached the broker's history) is
+    read again from the deal history and the P&L written back; one still unknown counts at its worst case, the
+    larger of `cost_probe_max_loss` and its loss at the stop, so an unknown P&L neither under-counts nor freezes every
+    probe until the risk-day reset (code review 2026-10-20). A failed deal read counts the same worst case."""
+    where, args = "account_id = ?" + (" AND agent_id = ?" if agent_id is not None else "") + " AND closed = 1", \
+        tuple(x for x in (eng.cfg.account_id, agent_id) if x is not None)
+    with probe.db.connection() as conn:
+        rows = [r for r in LEDGER.select(conn, where, args) if r.exit_utc is not None and r.exit_utc >= since]
+    pnl = 0.0
+    for r in rows:
+        v = r.pnl if r.pnl is not None else _pnl_from_deals(eng, probe, r)
+        pnl += v if v is not None else -max(eng.cfg.cost_probe_max_loss, r.stop_loss or 0.0)
+    return max(0.0, -pnl)
+
+
+def _pnl_from_deals(eng: Engine, probe: CostProbe, r: ProbeRecord) -> float | None:
+    """A closed row's P&L read again from the broker's deals (written back to the ledger), or None when the exit deal
+    is still not there, the row has no position or the read fails."""
+    if r.position_id is None:
+        return None
+    from goldbot.engine.store import OpenTrade
+    t0 = min(x for x in (r.signal_utc, r.sent_utc, r.exit_utc) if x is not None)     # the deal search starts before it
+    tr = OpenTrade(position_id=r.position_id, agent_id=PREFIX + r.agent_id, side=r.side, lots=r.lots,
+                   entry_bar_ts=t0, max_bars=0, opened_utc=t0)
+    try:
+        info, _ = eng._exit_deals(r.position_id, tr)
+    except Exception as exc:
+        log.warning("cost probe %s: deal history unreadable (%s); counted at its worst case", r.client_order_id,
+                    type(exc).__name__)
+        return None
+    if info is None or info.get("pnl") is None:
+        return None
+    update = {"pnl": info["pnl"], **{k: info[k] for k in ("swap", "commission") if getattr(r, k) is None}}
+    try:
+        with probe.db.write() as conn:
+            LEDGER.upsert(conn, r.model_copy(update=update))
+    except Exception as exc:        # the figure still counts this pass; the write is retried on the next read
+        log.warning("cost probe %s P&L not written back (%s)", r.client_order_id, type(exc).__name__)
+    return float(info["pnl"])
 
 
 def _phase_file(eng: Engine) -> Path:
@@ -804,12 +846,13 @@ def scheduled_side(slot: pd.Timestamp) -> int:
 
 def schedule_skip(eng: Engine, ts: pd.Timestamp) -> str | None:
     """Why no scheduled probe is sent at `ts`, or None: a weekend day (UTC or server), the rollover blackout (the
-    configured UTC window, the daily break inside it) or past the Friday weekend cut (server time, `weekend_cut`)."""
+    configured window in its own zone, New York by default, so it moves with US DST; the daily break and the reopen
+    inside it) or past the Friday weekend cut (server time, `weekend_cut`)."""
     sch: ScheduledProbe = eng.cfg.cost_probe_scheduled
     srv = server_wall(pd.DatetimeIndex([ts]), eng.cfg.server_tz)[0]
     if ts.weekday() >= 5 or srv.weekday() >= 5:
         return "weekend"
-    hm, (a, b) = ts.strftime("%H:%M"), sch.blackout
+    hm, (a, b) = ts.tz_convert(sch.blackout_tz).strftime("%H:%M"), sch.blackout
     if (a <= hm < b) if a <= b else (hm >= a or hm < b):
         return "blackout"
     h, m = (int(x) for x in eng.cfg.weekend_cut.split(":"))
@@ -820,15 +863,11 @@ def schedule_skip(eng: Engine, ts: pd.Timestamp) -> str | None:
 
 def _scheduled_headroom(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp) -> float:
     """Prereg K10: what scheduled probes may still lose today, within `budget_share` of the day's probe budget (their
-    realised loss on this risk day counted; an unknown P&L or limit leaves nothing: fail closed)."""
+    realised loss on this risk day counted, an unknown P&L at its worst case: `realised_loss`; an unknown limit
+    leaves nothing: fail closed)."""
     since = eng._last_reset if eng._last_reset is not None else close_ts.floor("D")
-    with probe.db.connection() as conn:
-        rows = [r for r in LEDGER.select(conn, "account_id = ? AND agent_id = ? AND closed = 1",
-                                         (eng.cfg.account_id, SCHEDULED)) if r.exit_utc is not None and r.exit_utc >= since]
-    if any(r.pnl is None for r in rows):
-        return 0.0
     share = eng.cfg.cost_probe_scheduled.budget_share * eng.cfg.cost_probe_budget * _limit(eng)
-    return share - max(0.0, -sum(float(r.pnl or 0.0) for r in rows))
+    return share - realised_loss(eng, probe, since, SCHEDULED)
 
 
 def scheduled_step(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick: Tick) -> None:

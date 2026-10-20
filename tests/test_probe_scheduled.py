@@ -240,6 +240,46 @@ def test_a_scheduled_probe_is_closed_once_it_has_been_held_hold_s(tmp_path):
     assert load_closed_trades(tmp_path)[0] == []                            # never a closed trade
 
 
+def _closed_with_unknown_pnl(tmp_path: Path) -> tuple[Engine, cost_probe.ProbeRecord]:
+    """A scheduled probe closed by its hold, then its ledger row's P&L set to None, as `record_close` writes it when
+    the exit deal is not in the broker's history yet."""
+    eng, pb, tick, pid = _sent(tmp_path)
+    eng._last_tick = tick
+    eng._retry_closes(eng.probe.held[pid] + pd.Timedelta(seconds=30))       # type: ignore[union-attr]
+    eng._flush_closed()
+    [rec] = _rows(tmp_path)
+    assert rec.pnl is not None and eng.probe is not None
+    with eng.probe.db.write() as conn:
+        cost_probe.LEDGER.upsert(conn, rec.model_copy(update={"pnl": None}))
+    return eng, rec
+
+
+def test_a_closed_probe_with_no_pnl_yet_is_read_again_from_the_deal_history_not_frozen(tmp_path):
+    """Review fix (code-review LOW): a closed row with pnl None no longer leaves no headroom until the risk-day reset;
+    its P&L is read again from the broker's deals and written back."""
+    eng, rec = _closed_with_unknown_pnl(tmp_path)
+    assert eng.probe is not None
+    share = eng.cfg.cost_probe_scheduled.budget_share * eng.cfg.cost_probe_budget * cost_probe._limit(eng)
+    later = CUT + pd.Timedelta(minutes=15)
+    assert cost_probe._scheduled_headroom(eng, eng.probe, later) == pytest.approx(share - max(0.0, -float(rec.pnl or 0)))
+    assert cost_probe.budget_refusal(eng, eng.probe, later)[0] is None
+    [again] = _rows(tmp_path)
+    assert again.pnl == pytest.approx(rec.pnl)                               # written back to the ledger
+
+
+def test_a_closed_probe_whose_pnl_stays_unknown_counts_at_its_worst_case_loss(tmp_path):
+    eng, rec = _closed_with_unknown_pnl(tmp_path)
+    assert eng.probe is not None
+    with eng.probe.db.write() as conn:                      # no deal for this position in the history
+        cost_probe.LEDGER.upsert(conn, rec.model_copy(update={"pnl": None, "position_id": 987654}))
+    share = eng.cfg.cost_probe_scheduled.budget_share * eng.cfg.cost_probe_budget * cost_probe._limit(eng)
+    worst = max(eng.cfg.cost_probe_max_loss, rec.stop_loss or 0.0)
+    later = CUT + pd.Timedelta(minutes=15)
+    assert cost_probe._scheduled_headroom(eng, eng.probe, later) == pytest.approx(share - worst)
+    why, headroom = cost_probe.budget_refusal(eng, eng.probe, later)
+    assert why is None and headroom == pytest.approx(eng.cfg.cost_probe_budget * cost_probe._limit(eng) - worst)
+
+
 def test_the_hold_runs_on_the_host_clock_on_a_live_clock_engine(tmp_path):
     eng, pb, tick, pid = _sent(tmp_path)
     eng.cfg.live_clock = True
@@ -332,7 +372,8 @@ def test_scheduled_probes_take_at_most_their_share_of_the_probe_budget(tmp_path)
 
 
 @pytest.mark.parametrize("ts, why", [
-    ("2025-03-04 20:45", "blackout"), ("2025-03-04 22:00", "blackout"), ("2025-03-04 22:15", None),
+    ("2025-03-04 21:45", "blackout"), ("2025-03-04 23:00", "blackout"), ("2025-03-04 23:15", None),   # EST: UTC-5
+    ("2025-03-04 21:30", None),
     ("2025-03-07 19:15", None), ("2025-03-07 19:45", "friday_cut"),       # Athens UTC+2: the 21:30 cut is 19:30 UTC
     ("2025-03-08 12:00", "weekend"), ("2025-03-09 23:00", "weekend"), ("2025-03-04 20:00", None)])
 def test_the_schedule_skips_the_rollover_blackout_the_friday_cut_and_the_weekend(tmp_path, ts, why):
@@ -340,8 +381,24 @@ def test_the_schedule_skips_the_rollover_blackout_the_friday_cut_and_the_weekend
     assert cost_probe.schedule_skip(eng, pd.Timestamp(ts, tz="UTC")) == why
 
 
+@pytest.mark.parametrize("ts", [
+    "2025-07-08 21:15", "2025-03-04 22:15", "2026-11-03 22:15",             # 17:15 New York (the daily break), EDT and EST
+    "2025-07-08 22:00", "2025-03-04 23:00", "2026-11-03 23:00"])            # 18:00 New York: the reopen minute
+def test_the_blackout_follows_new_york_so_the_break_and_the_reopen_are_blacked_out_in_summer_and_winter(tmp_path, ts):
+    """Review fix (code-review MEDIUM): the window is 16:45-18:15 America/New_York, so it moves with US DST (after
+    2026-11-01 a fixed UTC window left 22:15-22:45 UTC in the break and 23:00 UTC on the reopen)."""
+    eng, _, _ = _engine(tmp_path)
+    assert cost_probe.schedule_skip(eng, pd.Timestamp(ts, tz="UTC")) == "blackout"
+
+
+@pytest.mark.parametrize("ts", ["2025-07-08 20:30", "2025-07-08 22:15", "2026-11-03 21:30", "2026-11-03 23:15"])
+def test_outside_the_new_york_window_slots_are_sent_in_summer_and_winter(tmp_path, ts):
+    eng, _, _ = _engine(tmp_path)
+    assert cost_probe.schedule_skip(eng, pd.Timestamp(ts, tz="UTC")) is None
+
+
 def test_no_scheduled_probe_in_the_configured_blackout(tmp_path):
-    eng, pb, tick = _engine(tmp_path, scheduled=acc_mod.ScheduledProbe(enabled=True, blackout=("19:55", "20:05")))
+    eng, pb, tick = _engine(tmp_path, scheduled=acc_mod.ScheduledProbe(enabled=True, blackout=("14:55", "15:05")))
     _allow(eng)
     eng.on_bar_close(CUT, tick)
     assert not pb.positions() and "cost_probe_scheduled_skip:blackout" in _refusals(eng)
@@ -386,10 +443,11 @@ def test_the_rotation_never_resumes_from_a_scheduled_row(tmp_path):
 # ------------------------------------------------------------------------------------------------ settings
 def test_the_scheduled_settings_default_off_with_the_preregistered_terms():
     s = acc_mod.CostProbe().scheduled
-    assert (s.enabled, s.hold_s, s.stop_usd, s.blackout, s.budget_share) == (False, 30, 3.0, ("20:45", "22:15"), 0.5)
+    assert (s.enabled, s.hold_s, s.stop_usd, s.blackout, s.blackout_tz, s.budget_share) == (
+        False, 30, 3.0, ("16:45", "18:15"), "America/New_York", 0.5)
 
 
-@pytest.mark.parametrize("kw", [{"hold_s": 61}, {"stop_usd": 3.5}, {"blackout": ("25:00", "22:15")},
+@pytest.mark.parametrize("kw", [{"hold_s": 61}, {"stop_usd": 3.5}, {"blackout": ("25:00", "22:15")}, {"blackout_tz": "Mars/Olympus"},
                                 {"budget_share": 0.6}])
 def test_scheduled_settings_outside_the_preregistered_bounds_are_refused(kw):
     with pytest.raises(ValidationError):

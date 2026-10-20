@@ -244,3 +244,34 @@ def test_the_shipped_registry_turns_dynamic_limits_on_for_the_demo_accounts_and_
     accs = acc_mod.load_accounts(registry)
     assert accs["icm-demo"].dynamic_limits and accs["icm-probe"].dynamic_limits
     assert not any(a.dynamic_limits for a in accs.values() if a.mode == "live")
+
+
+def test_a_probe_only_account_down_five_pounds_still_probes_until_its_probe_budget_binds(tmp_path, monkeypatch):
+    """Review fix (trading-safety MEDIUM): the "less than the budget remains" test held back a reserve a probe_only
+    account does not keep, so a £30 day down ~£3 refused every probe. Now the probe budget (0.9 x £30 = £27, less the
+    realised probe loss) and the day's own cap bind; a shared account keeps refusing below its share."""
+    from goldbot.engine import limits_apply
+    monkeypatch.setattr(limits_apply, "daily_allowance",
+                        lambda gate, st: {"daily_loss_limit": 30.0, "daily_loss_remaining": 25.0})
+    own, _, tick, close = _engine(tmp_path / "own", budget=0.9)
+    own.cfg.probe_only = True
+    assert own.probe is not None
+    with own.probe.db.write() as conn:
+        cost_probe.LEDGER.upsert(conn, cost_probe.ProbeRecord(
+            client_order_id="cp-lost", account_id="icm-demo", agent_id="x", side=1, lots=0.01, sent_utc=tick.ts_utc,
+            exit_utc=tick.ts_utc, pnl=-5.0))
+    why, headroom = cost_probe.budget_refusal(own, own.probe, close)
+    assert why is None and headroom == pytest.approx(22.0)                   # £27 budget less the £5 lost
+    shared, _, _, close2 = _engine(tmp_path / "shared", budget=0.9)
+    assert shared.probe is not None
+    assert cost_probe.budget_refusal(shared, shared.probe, close2)[0] == "allowance_low"   # unchanged: 25 < 27
+
+
+def test_a_probe_only_account_stops_probing_when_its_own_day_cannot_take_one_more_probe(tmp_path, monkeypatch):
+    from goldbot.engine import limits_apply
+    monkeypatch.setattr(limits_apply, "daily_allowance",
+                        lambda gate, st: {"daily_loss_limit": 30.0, "daily_loss_remaining": 3.0})
+    own, _, _, close = _engine(tmp_path, budget=0.9)
+    own.cfg.probe_only = True
+    assert own.probe is not None
+    assert cost_probe.budget_refusal(own, own.probe, close)[0] == "allowance_low"          # 3 - 4 < 0

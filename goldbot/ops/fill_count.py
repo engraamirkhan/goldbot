@@ -7,7 +7,9 @@ Read-only, like shadow-report (whose helpers it reuses): the closed-trade record
 A fill is counted on its entry day (UTC): a closed trade by `entry_utc` (else `exit_utc`), a probe by `sent_utc`, and
 only a probe that filled (fill price or position id). Probe trades also sit in the closed-trade files under the
 `cost_probe:` tag; they are counted once, as probes. A position still open is in neither source yet, so the count is
-a floor until it closes. A probe is "scheduled" when its client order id or basis says so, else "mirror".
+a floor until it closes. A probe is "scheduled" when its ledger purpose is `cost_measurement` (the scheduled M1
+arm's own purpose); a row without that purpose falls back to its client order id or basis saying "sched"; else
+"mirror".
 The cumulative count and the progress always run from CAMPAIGN_START_UTC; --since only trims the daily rows.
 Accounts print by config name (entry_text.account_name): a login number is never printed.
 """
@@ -34,7 +36,9 @@ DEADLINE_UTC = pd.Timestamp("2026-10-24", tz="UTC")      # end of Friday 2026-10
 KINDS = ("own_entry", "mirror_probe", "scheduled_probe")
 
 
-def _probe_kind(client_order_id: str, basis: str | None) -> str:
+def _probe_kind(purpose: str, client_order_id: str, basis: str | None) -> str:
+    if purpose == "cost_measurement":
+        return "scheduled_probe"
     return "scheduled_probe" if "sched" in client_order_id.lower() or "sched" in (basis or "").lower() else "mirror_probe"
 
 
@@ -58,7 +62,7 @@ def collect(state: Path, accounts: list[str]) -> tuple[list[tuple[str, str, pd.T
         for r in recs:
             if (r.account_id in accounts and r.sent_utc >= CAMPAIGN_START_UTC
                     and (r.fill_price is not None or r.position_id is not None)):
-                fills.append((r.account_id, _probe_kind(r.client_order_id, r.basis), pd.Timestamp(r.sent_utc)))
+                fills.append((r.account_id, _probe_kind(r.purpose, r.client_order_id, r.basis), pd.Timestamp(r.sent_utc)))
     return fills, bad
 
 

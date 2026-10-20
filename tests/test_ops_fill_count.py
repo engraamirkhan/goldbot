@@ -5,6 +5,7 @@ import io
 import json
 from contextlib import redirect_stdout
 from pathlib import Path
+from typing import Literal
 
 import pandas as pd
 
@@ -31,11 +32,12 @@ def _trade(tmp_path: Path, pid: int, entry: pd.Timestamp, agent: str) -> None:
                                               entry_utc=entry))
 
 
-def _probe(db: Database, cid: str, ts: pd.Timestamp, filled: bool = True, basis: str | None = None) -> None:
+def _probe(db: Database, cid: str, ts: pd.Timestamp, filled: bool = True, basis: str | None = None,
+           purpose: Literal["cost_probe", "cost_measurement"] = "cost_probe") -> None:
     with db.write() as conn:
         cost_probe.LEDGER.upsert(conn, cost_probe.ProbeRecord(
             client_order_id=cid, account_id=ACC, agent_id="mfi-g0", side=1, lots=0.01, sent_utc=ts,
-            fill_price=2400.0 if filled else None, position_id=7 if filled else None, basis=basis))
+            fill_price=2400.0 if filled else None, position_id=7 if filled else None, basis=basis, purpose=purpose))
 
 
 def _seed(tmp_path: Path) -> None:
@@ -99,3 +101,15 @@ def test_read_only_creates_no_files(tmp_path):
 def test_bad_arguments_exit_2(tmp_path):
     assert _run(tmp_path, "--since", "nonsense")[0] == 2
     assert _run(tmp_path, "--account", "nope")[0] == 2
+
+
+def test_a_cost_measurement_row_is_a_scheduled_probe_whatever_its_id_or_basis_say(tmp_path):
+    """Review fix (quant): the purpose is the classification; the "sched" match is only the fallback for rows without
+    one, so a cost_measurement row with a plain id still counts as scheduled."""
+    db = Database.open(tmp_path, "aux")
+    _probe(db, "cp-plain", START + pd.Timedelta(hours=1), purpose="cost_measurement")
+    _probe(db, "cm-sched-1", START + pd.Timedelta(hours=2))                       # fallback: the id says scheduled
+    _probe(db, "cp-mirror", START + pd.Timedelta(hours=3))
+    code, out = _run(tmp_path, "--json")
+    assert code == 0
+    assert json.loads(out)["cumulative"] == {"own_entry": 0, "mirror_probe": 1, "scheduled_probe": 2, "total": 3}
