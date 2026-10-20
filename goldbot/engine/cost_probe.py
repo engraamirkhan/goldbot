@@ -46,6 +46,22 @@ real (live-agent) trades take priority". A cost probe, not a population status: 
   from the broker's deals. A probe's close never goes to closed_trades.jsonl (phase gate, throttle, broker-ledger
   trades, attribution) and its fill never to the store's `fills` (the nightly slippage table, attribution's live
   fills): costs-v2 reads `probes`, and refitting costs on them is a later preregistered step.
+* Learning volume on a probe_only account (owner directive 2026-10-20, hundreds of demo fills): a mirror probe is held
+  at most PROBE_ONLY_MAX_BARS of its agent's bars (`_ProbeAgent`), and UNTAKEN_PER_DAY_PROBE_ONLY below-threshold probes
+  a risk day are allowed (`untaken_cap`): such an account sends no real trade to keep a share for.
+* Scheduled probes, the measured-cost protocol's M1 arm (docs/research/prereg-cost-measurement-2026-10.md, section 1:
+  "0.01 lot at a fixed slot time; side = +1 on even slot index, -1 on odd ... market close after 30 s; server SL at $3
+  from fill (safety only)"), one per 15m close when `cost_probe.scheduled.enabled` (`scheduled_step`). Same lock
+  (demo terminal, auto mode), the same order core as a mirror probe (`_place`: `RiskGate.check`, then
+  `Engine._execute`), its own magic (magic_base + SCHEDULED_MAGIC_OFFSET), a `cm-sched-` order id and the
+  `scheduled_m1` basis, purpose `cost_measurement` on its ledger row. Not in the rollover blackout, after the Friday cut
+  or on a weekend; one open at a time; within the probe budget (counted fully) and at most `budget_share` of it.
+  Excluded from the dynamic probe count and from the mirror slots (prereg K10). Its close after `hold_s` on the host
+  clock (`hold_exits`, every pass of `Engine._retry_closes`) is never gated: halted entries, probes switched off and a
+  restart (the trade's open time) all still close it. Its row records the quote the close was sent on (K11) and the
+  broker's account-currency rate at send and close (K9). The RiskGate's learning-probe fence asks for a positive edge
+  that a signal-less probe cannot honestly show, so until the gate has a cost-measurement purpose (prereg K8) every
+  scheduled probe is refused there and journalled; no p is invented to pass it.
 """
 from __future__ import annotations
 
@@ -55,20 +71,24 @@ import sqlite3
 import statistics
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Callable, Literal, cast
 
 import pandas as pd
 
 from goldbot.base import FrozenRecord, UtcTimestamp
-from goldbot.data.timeutil import epoch_ns
+from goldbot.data.timeutil import epoch_ns, server_wall
 from goldbot.db import Database, RecordRepo
 from goldbot.engine import auto_entry
+from goldbot.labels.triple_barrier import BarrierSpec
+from goldbot.ops.accounts import ScheduledProbe
 
 if TYPE_CHECKING:
     from goldbot.engine.runner import Engine
     from goldbot.engine.shadow import ShadowTrade
     from goldbot.engine.store import OpenTrade
-    from goldbot.execution.broker import Tick
+    from goldbot.execution.broker import OrderResult, Tick
+    from goldbot.risk import Intent
+    from goldbot.risk.gate import GateDecision
     from goldbot.specialists.base import Specialist
 
 log = logging.getLogger(__name__)
@@ -81,6 +101,8 @@ CLAMP_MARGIN = 0.99                 # a clamped probe stop aims at 99% of max_lo
 # directors' ruling 2026-10-19 (ADR 0037 amendment): below-threshold (untaken) probes at most this many a risk day, at
 # most half the open slots, and only while more than half the probe budget is left: taken entries keep the rest
 UNTAKEN_PER_DAY = 12                # amendment 3 (2026-10-19): was 6
+UNTAKEN_PER_DAY_PROBE_ONLY = 48     # owner directive 2026-10-20 (learning volume): a probe_only account keeps no reserve
+PROBE_ONLY_MAX_BARS = 4             # owner directive 2026-10-20: a probe_only mirror probe holds min(agent's, 4) bars
 PER_CLOSE = 2                       # amendment 3: new probes per bar close at most, from different agents
 MAX_SAME_SIDE = 2                   # amendment 3: open probes on one side at most (one move, correlated losses)
 # amendment 3: no new probe once the day's allowance left after the open probes' risk and the new probe's max loss
@@ -90,6 +112,15 @@ REAL_TRADE_RESERVE = 0.6
 # dynamic probe count, once at least PROBE_LOSS_MIN_ROWS probes have recorded it (fewer: the configured count)
 PROBE_LOSS_WINDOW = 20
 PROBE_LOSS_MIN_ROWS = 5
+# the measured-cost protocol's M1 arm (scheduled probes)
+SCHEDULED = "scheduled"                     # the ledger's agent id of a scheduled probe
+SCHEDULED_ID = PREFIX + SCHEDULED           # its trade tag
+SCHEDULED_MAGIC_OFFSET = 96                 # magic_base + 96: no family's crc32 % 100 (tests guard it), not 97 or 99
+SCHEDULED_COMMENT = "cm-sched-"             # its order id and MT5 comment (the prereg's `cm-`; "sched" for the counter)
+SCHEDULED_BASIS = "scheduled_m1"            # its ledger rows' basis
+SCHEDULED_FAMILY = "cost_measurement"       # its Intent's family and its ledger rows' purpose
+HOLD_EXIT = "cost_probe_hold"               # the exit of a scheduled probe held hold_s
+SLOT_S = 900                                # one slot per 15m close; the side alternates with the slot index
 
 
 def real_trade_reserve(probe_only: bool) -> float:
@@ -97,6 +128,12 @@ def real_trade_reserve(probe_only: bool) -> float:
     real trade (Engine._execute refuses one), so it keeps none and its probe budget alone binds, inside its own daily
     limit, which the RiskGate enforces unchanged."""
     return 0.0 if probe_only else REAL_TRADE_RESERVE
+
+
+def untaken_cap(probe_only: bool) -> int:
+    """Below-threshold probes a risk day: UNTAKEN_PER_DAY, or UNTAKEN_PER_DAY_PROBE_ONLY on a probe_only account (owner
+    directive 2026-10-20: the demo is for learning; that account has no real trade whose share they could take)."""
+    return UNTAKEN_PER_DAY_PROBE_ONLY if probe_only else UNTAKEN_PER_DAY
 
 
 def probe_id(agent_id: str) -> str:
@@ -120,12 +157,15 @@ def is_probe(agent_id: str | None) -> bool:
 
 
 def magic(eng: Engine, agent: Specialist) -> int:
-    """The order's magic: a probe's own, else the agent's family magic (`Engine._magic`)."""
+    """The order's magic: a scheduled probe's or a mirror probe's own, else the agent's family magic (`Engine._magic`)."""
+    if agent.agent_id == SCHEDULED_ID:
+        return eng.cfg.magic_base + SCHEDULED_MAGIC_OFFSET
     return eng.cfg.magic_base + PROBE_MAGIC_OFFSET if is_probe(agent.agent_id) else eng._magic(agent.family)
 
 
 def is_probe_magic(m: int, magic_base: int) -> bool:
-    return int(m) == magic_base + PROBE_MAGIC_OFFSET
+    """A mirror probe's magic or a scheduled probe's: the broker ledger reconciles both in the probe ledger."""
+    return int(m) in (magic_base + PROBE_MAGIC_OFFSET, magic_base + SCHEDULED_MAGIC_OFFSET)
 
 
 def agent_of(eng: Engine, agent_id: str | None) -> Specialist | None:
@@ -140,6 +180,8 @@ def adoption(eng: Engine, p: Any, rec: Any) -> tuple[Specialist | None, str]:
     has that family's magic."""
     if rec is not None:
         return agent_of(eng, rec.agent_id), rec.agent_id
+    if int(p.magic) == eng.cfg.magic_base + SCHEDULED_MAGIC_OFFSET:
+        return None, SCHEDULED_ID                   # its hold exit still closes it (`hold_exits`)
     if is_probe_magic(p.magic, eng.cfg.magic_base):
         return None, PREFIX + "orphan"
     hits = [a for a in eng.agents.values() if eng._magic(a.family) == p.magic]
@@ -172,7 +214,7 @@ class ProbeRecord(FrozenRecord):
     currency as the broker reports it."""
     client_order_id: str
     account_id: str
-    purpose: Literal["cost_probe"] = "cost_probe"
+    purpose: Literal["cost_probe", "cost_measurement"] = "cost_probe"     # cost_measurement: a scheduled probe
     agent_id: str                           # the challenger's agent id (the trade's tag is probe_id(agent_id))
     version: str | None = None              # the shadow version mirrored (None: recorded from the trade alone)
     side: int
@@ -204,6 +246,13 @@ class ProbeRecord(FrozenRecord):
     # the loss at the strategy's own (unclamped) stop at the lots sent, account currency: what the dynamic probe count
     # reads (`stop_loss` is clamped to the ceiling, so its median could never tighten the count). None on rows before
     native_stop_loss: float | None = None
+    # prereg K11: the quote the engine's own close was sent on (a scheduled probe's hold exit); None otherwise
+    exit_bid: float | None = None
+    exit_ask: float | None = None
+    exit_quote_utc: UtcTimestamp | None = None
+    # prereg K9: the broker's account currency per USD of XAUUSD P&L at send and at close (None: not read)
+    fx_acct_per_usd: float | None = None
+    exit_fx_acct_per_usd: float | None = None
 
     @property
     def slippage_usd(self) -> float | None:
@@ -231,17 +280,37 @@ LEDGER: RecordRepo[ProbeRecord] = RecordRepo("cost_probes", ProbeRecord, key="cl
 
 
 class _ProbeAgent:
-    """The challenger's specialist under the probe's tag: its family (magic), timeframe, barriers and exit policy."""
+    """The challenger's specialist under the probe's tag: its family (magic), timeframe, barriers and exit policy;
+    with `max_bars`, its time barrier capped at that many of its bars (a probe_only account's learning volume)."""
 
-    def __init__(self, agent: Specialist):
+    def __init__(self, agent: Specialist, max_bars: int | None = None):
         self._agent = agent
+        self._max_bars = max_bars
 
     @property
     def agent_id(self) -> str:
         return probe_id(self._agent.agent_id)
 
+    @property
+    def label_spec(self) -> BarrierSpec:
+        ls = self._agent.label_spec
+        if self._max_bars is None or ls.max_bars <= self._max_bars:
+            return ls
+        return ls.model_copy(update={"max_bars": self._max_bars})
+
     def __getattr__(self, name: str) -> Any:
         return getattr(self._agent, name)
+
+
+class _ScheduledAgent:
+    """What `Engine._execute` reads of an agent, for a scheduled probe: its tag (own magic), its family, the base
+    timeframe and a time barrier of one base bar (a backstop: the hold exit closes it after hold_s), no exit policy."""
+
+    def __init__(self, timeframe: str):
+        self.agent_id, self.family, self.timeframe = SCHEDULED_ID, SCHEDULED_FAMILY, timeframe
+        self.label_spec = BarrierSpec(target_atr=1.0, stop_atr=1.0, max_bars=0, name=SCHEDULED_FAMILY, has_target=False)
+        self.exit_spec = None
+        self.shadow_only = self.requires_tv = False
 
 
 class CostProbe:
@@ -252,14 +321,17 @@ class CostProbe:
         self.db = Database.open(eng.cfg.state_dir, "aux")
         self.seen = _open_keys(eng)             # entries open at the start are old: never probed after a restart
         with self.db.connection() as conn:
-            r = conn.execute("SELECT agent_id FROM cost_probes WHERE account_id = ? ORDER BY ts_ns DESC LIMIT 1",
-                             (eng.cfg.account_id,)).fetchone()
+            r = conn.execute("SELECT agent_id FROM cost_probes WHERE account_id = ? AND agent_id != ? "
+                             "ORDER BY ts_ns DESC LIMIT 1", (eng.cfg.account_id, SCHEDULED)).fetchone()
         self.last_agent: str | None = str(r[0]) if r else None
         # untaken probes sent by this process (client order id -> sent): counted even when the order raised and no
         # ledger row was written (safety review LOW-2)
         self.untaken_sent: dict[str, pd.Timestamp] = {}
         self._eng = eng
         self._dynamic: bool | None = None          # set only by tests; None = read the account flag
+        # scheduled probes: position id -> when its hold began (the hold clock); position id -> the close's quote
+        self.held: dict[int, pd.Timestamp] = {}
+        self.exit_quotes: dict[int, tuple[float, float, pd.Timestamp]] = {}
 
     @property
     def dynamic(self) -> bool:
@@ -328,6 +400,12 @@ def _probes_open(eng: Engine) -> list[int]:
     return [pid for pid, t in eng.open.items() if is_probe(t.agent_id)]
 
 
+def _mirror_probes_open(eng: Engine) -> list[int]:
+    """The open probes that hold a mirror slot: every probe but a scheduled one (prereg K10: scheduled probes stay out
+    of `max_open`; their risk still counts in the budget, `open_risk`)."""
+    return [pid for pid in _probes_open(eng) if (t := eng.open.get(pid)) is None or t.agent_id != SCHEDULED_ID]
+
+
 def _in_flight(eng: Engine, probes: bool) -> bool:
     from goldbot.engine import unconfirmed
     return any(o.status in ("sending", unconfirmed.AMBIGUOUS) and is_probe(o.agent_id) == probes
@@ -382,6 +460,12 @@ def step(eng: Engine, close_ts: pd.Timestamp, tick: Tick) -> None:
         log.exception("cost probe step failed at %s; no probe this bar close", close_ts)
         eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": "cost_probe_error",
                               "error": type(exc).__name__})
+    try:
+        scheduled_step(eng, probe, close_ts, tick)
+    except Exception as exc:
+        log.exception("scheduled cost probe failed at %s; none this bar close", close_ts)
+        eng.decisions.append({"ts": close_ts.isoformat(), "agent": SCHEDULED_ID, "action": "cost_probe_scheduled_error",
+                              "error": type(exc).__name__})
 
 
 def _step(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick: Tick) -> None:
@@ -395,7 +479,7 @@ def _step(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick: Tick) -> 
     # amendment 3 (directors' ruling 2026-10-19): up to PER_CLOSE new probes per bar close, from different agents, each
     # checked afresh (slots, budget, untaken caps, the same-side cap) after the one before it
     for _ in range(PER_CLOSE):
-        probes_open = _probes_open(eng)
+        probes_open = _mirror_probes_open(eng)          # prereg K10: a scheduled probe holds no mirror slot
         lim = probe_limits(eng, probe)
         if len(probes_open) >= lim.max_open or _in_flight(eng, True):
             return
@@ -470,8 +554,8 @@ def probe_limits(eng: Engine, probe: CostProbe) -> ProbeLimits:
         log.warning("cost probe ledger unreadable (%s): the configured probe count", type(exc).__name__)
         return ProbeLimits(max_open=cfg_open, max_loss=max_loss, loss_basis=loss_basis,
                            open_basis="fixed:ledger_unreadable")
-    recent = [float(r.native_stop_loss) for r in rows
-              if r.native_stop_loss is not None and r.native_stop_loss > 0][-PROBE_LOSS_WINDOW:]
+    recent = [float(r.native_stop_loss) for r in rows if r.purpose == "cost_probe"      # prereg K10: never scheduled
+              and r.native_stop_loss is not None and r.native_stop_loss > 0][-PROBE_LOSS_WINDOW:]
     if len(recent) < PROBE_LOSS_MIN_ROWS:
         return ProbeLimits(max_open=cfg_open, max_loss=max_loss, loss_basis=loss_basis, open_basis="fixed:no_history")
     n = math.floor(budget / statistics.median(recent))
@@ -560,7 +644,7 @@ def _limit(eng: Engine) -> float:
 def untaken_refusal(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, headroom: float,
                     max_open: int | None = None) -> str | None:
     """Why a below-threshold (untaken) probe may not be sent now, or None (directors' ruling 2026-10-19): at most
-    UNTAKEN_PER_DAY sent this risk day, at most half of the probe count open (`max_open`, the one `probe_limits`
+    `untaken_cap` sent this risk day, at most half of the probe count open (`max_open`, the one `probe_limits`
     applies; `cost_probe_max_open` when not given), and only while more than half the probe budget is left. An
     unreadable ledger refuses (fail closed)."""
     since = eng._last_reset if eng._last_reset is not None else close_ts.floor("D")
@@ -573,12 +657,12 @@ def untaken_refusal(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, headr
     rows = [r for r in every if not r.taken]
     sent = {r.client_order_id for r in rows if r.sent_utc >= since} | {k for k, ts in probe.untaken_sent.items()
                                                                         if ts >= since}
-    if len(sent) >= UNTAKEN_PER_DAY:
+    if len(sent) >= untaken_cap(eng.cfg.probe_only):
         return "daily_cap"
     # an open probe the ledger does not know as taken (untaken, or adopted with no row) holds an untaken slot
     taken_ids = {r.position_id for r in every if r.taken and r.position_id is not None}
     slots = eng.cfg.cost_probe_max_open if max_open is None else max_open
-    if sum(1 for pid in _probes_open(eng) if pid not in taken_ids) >= slots // 2:
+    if sum(1 for pid in _mirror_probes_open(eng) if pid not in taken_ids) >= slots // 2:
         return "slots_reserved"
     if headroom <= eng.cfg.cost_probe_budget * _limit(eng) / 2:
         return "budget_reserved"
@@ -588,8 +672,6 @@ def untaken_refusal(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, headr
 def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Specialist, close_ts: pd.Timestamp,
           tick: Tick, headroom: float, lim: ProbeLimits) -> None:
     from goldbot.risk import Intent
-    from goldbot.risk.gate import broker_margin
-    from goldbot.telegram.approvals import Proposal
     tag, ls, side = probe_id(agent.agent_id), agent.label_spec, t.side
     pid = _probe_order_id(eng, tag, close_ts)
     if pid in eng.sent_ids:
@@ -627,57 +709,237 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
                     family=agent.family, swap_usd_per_oz=eng._swap_usd_per_oz(side, close_ts),
                     learning_probe=True, account_mode=eng.cfg.mode,
                     phase_file=_phase_file(eng), **terms)
+    # owner directive 2026-10-20: on a probe_only account the probe holds at most PROBE_ONLY_MAX_BARS of its agent's bars
+    order_agent = _ProbeAgent(agent, PROBE_ONLY_MAX_BARS if eng.cfg.probe_only else None)
+
+    def record(res: OrderResult, gd: GateDecision, filled: bool, loss: float, sent: pd.Timestamp,
+               latency_ms: float) -> ProbeRecord:
+        return ProbeRecord(client_order_id=pid, account_id=eng.cfg.account_id, agent_id=agent.agent_id, version=version,
+                           side=side, lots=float(res.filled_lots if filled else gd.lots), signal_utc=close_ts,
+                           signal_price=t.entry, requested_price=price, spread_usd=round(tick.ask - tick.bid, 6),
+                           sent_utc=sent, latency_ms=round(latency_ms, 3), retcode=res.retcode,
+                           position_id=res.position_id if filled else None,
+                           fill_price=(res.price if res.price is not None else price) if filled else None,
+                           stop_loss=round(loss, 2), taken=t.taken, probe_max_loss=applied["probe_max_loss"],
+                           probe_max_open=lim.max_open, basis=applied["basis"], native_stop_loss=round(native, 2),
+                           fx_acct_per_usd=terms.get("acct_per_usd"))
+
+    _place(eng, probe, intent, cast("Specialist", order_agent), pid=pid, close_ts=close_ts, entry=t.entry,
+           target=price + side * ls.target_atr * atr_usd, max_loss=lim.max_loss, headroom=headroom,
+           applied=lambda: applied, refuse=refuse, action="cost_probe:", journal={"agent": tag, "version": version},
+           record=record, before_send=None if t.taken else lambda: probe.untaken_sent.__setitem__(pid, close_ts))
+
+
+def _place(eng: Engine, probe: CostProbe, intent: Intent, agent: Specialist, *, pid: str, close_ts: pd.Timestamp,
+           entry: float, target: float, max_loss: float, headroom: float, applied: Callable[[], dict[str, Any]],
+           refuse: Callable[[str], None], action: str, journal: dict[str, Any],
+           record: Callable[[OrderResult, GateDecision, bool, float, pd.Timestamp, float], ProbeRecord],
+           max_stop: float | None = None, before_send: Callable[[], None] | None = None) -> int | None:
+    """Every probe's order core, mirror and scheduled: `RiskGate.check` (the only path to an order) on the minimum-lot
+    intent, the loss at the stop the gate set within `max_loss` and the budget `headroom`, then `Engine._execute`
+    (pending_orders row first), the journal and the ledger row. `before_send` runs once the order is going out (an
+    untaken probe's count, even when the send raises). The position id of a fill, else None."""
+    from goldbot.risk.gate import broker_margin
+    from goldbot.telegram.approvals import Proposal
+    side, price = intent.side, intent.price
     gd = eng.gate.check(intent, eng.state, close_ts, margin_required=broker_margin(eng.broker, eng.cfg.symbol),
-                        throttle=eng._agent_throttle(tag, t.timeframe, close_ts))
+                        throttle=eng._agent_throttle(intent.agent_id, intent.timeframe, close_ts))
     if not gd.allowed or gd.lots > intent.volume_min + 1e-9:
-        return refuse(",".join(gd.reasons or ["above_minimum_lot"]))
+        refuse(",".join(gd.reasons or ["above_minimum_lot"]))
+        return None
+    if max_stop is not None and gd.stop_distance > max_stop + 1e-9:     # the gate floored it wider than allowed
+        refuse("stop_above_cap")
+        return None
     loss = stop_loss(eng, side, price, gd.stop_distance, gd.lots)   # at the stop the gate set (stops level floored)
     if loss is None:
-        return refuse("probe_loss_unknown")
-    if loss > lim.max_loss + 1e-9:
-        return refuse("probe_loss_above_cap")
+        refuse("probe_loss_unknown")
+        return None
+    if loss > max_loss + 1e-9:
+        refuse("probe_loss_above_cap")
+        return None
     if loss > headroom + 1e-9:
         eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": "cost_probe_budget:probe_budget_full",
-                              **applied})
-        return
-    stop, target = price - side * gd.stop_distance, price + side * ls.target_atr * atr_usd
-    prop = Proposal(proposal_id=pid, account_id=eng.cfg.account_id, agent_id=tag, side=side, lots=gd.lots,
-                    entry=t.entry, stop=stop, target=target, p=t.p, ev_r=0.0, spread_points=eng.state.spread_points,
+                              **applied()})
+        return None
+    stop = price - side * gd.stop_distance
+    prop = Proposal(proposal_id=pid, account_id=eng.cfg.account_id, agent_id=intent.agent_id, side=side, lots=gd.lots,
+                    entry=entry, stop=stop, target=target, p=intent.p, ev_r=0.0, spread_points=eng.state.spread_points,
                     top_features=[])
     sent = pd.Timestamp.now("UTC")
-    if not t.taken:
-        probe.untaken_sent[pid] = close_ts
+    if before_send is not None:
+        before_send()
     t0 = time.perf_counter()
     try:
-        res = eng._execute(prop, cast("Specialist", _ProbeAgent(agent)), gd.lots, stop, target, requested=price,
-                           atr_usd=atr_usd, gd=gd)
+        res = eng._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd, gd=gd)
     except Exception as exc:        # as an auto entry (review LOW-C): the row stays "sending", reconciliation resolves it
         eng._auto_paused = (close_ts, "order_raised")
         eng.note_tick_error(exc)
-        eng.decisions.append({"ts": close_ts.isoformat(), "agent": tag, "version": version, "proposal": pid,
-                              "action": f"cost_probe:auto_unconfirmed:{type(exc).__name__}", **applied})
-        return
+        eng.decisions.append({"ts": close_ts.isoformat(), **journal, "proposal": pid,
+                              "action": f"{action}auto_unconfirmed:{type(exc).__name__}", **applied()})
+        return None
     latency_ms = (time.perf_counter() - t0) * 1000.0
-    eng.decisions.append({"ts": close_ts.isoformat(), "agent": tag, "version": version, "proposal": pid,
-                          "action": "cost_probe:" + auto_entry.action(res), **applied})
+    eng.decisions.append({"ts": close_ts.isoformat(), **journal, "proposal": pid,
+                          "action": action + auto_entry.action(res), **applied()})
     if res is None:
-        return
+        return None
     filled = res.ok and res.position_id is not None
-    rec = ProbeRecord(client_order_id=pid, account_id=eng.cfg.account_id, agent_id=agent.agent_id, version=version,
-                      side=side, lots=float(res.filled_lots if filled else gd.lots), signal_utc=close_ts,
-                      signal_price=t.entry, requested_price=price, spread_usd=round(tick.ask - tick.bid, 6),
-                      sent_utc=sent, latency_ms=round(latency_ms, 3), retcode=res.retcode,
-                      position_id=res.position_id if filled else None,
-                      fill_price=(res.price if res.price is not None else price) if filled else None,
-                      stop_loss=round(loss, 2), taken=t.taken, probe_max_loss=applied["probe_max_loss"],
-                      probe_max_open=lim.max_open, basis=applied["basis"], native_stop_loss=round(native, 2))
     try:
         with probe.db.write() as conn:
-            LEDGER.upsert(conn, rec)
+            LEDGER.upsert(conn, record(res, gd, filled, loss, sent, latency_ms))
     except Exception as exc:        # the order stands; its close is recorded from the trade (`record_close`)
         log.warning("cost probe %s not written to the ledger (%s)", pid, type(exc).__name__)
     if filled:
         _reread(eng, close_ts)
+    return res.position_id if filled else None
+
+
+# ------------------------------------------------------------------------------------------- scheduled probes (M1)
+def scheduled_side(slot: pd.Timestamp) -> int:
+    """The prereg's side rule: +1 on an even slot index (15m slots since the epoch), -1 on an odd one. The clock
+    alone chooses it, never a fill or an outcome."""
+    return 1 if (int(slot.timestamp()) // SLOT_S) % 2 == 0 else -1
+
+
+def schedule_skip(eng: Engine, ts: pd.Timestamp) -> str | None:
+    """Why no scheduled probe is sent at `ts`, or None: a weekend day (UTC or server), the rollover blackout (the
+    configured UTC window, the daily break inside it) or past the Friday weekend cut (server time, `weekend_cut`)."""
+    sch: ScheduledProbe = eng.cfg.cost_probe_scheduled
+    srv = server_wall(pd.DatetimeIndex([ts]), eng.cfg.server_tz)[0]
+    if ts.weekday() >= 5 or srv.weekday() >= 5:
+        return "weekend"
+    hm, (a, b) = ts.strftime("%H:%M"), sch.blackout
+    if (a <= hm < b) if a <= b else (hm >= a or hm < b):
+        return "blackout"
+    h, m = (int(x) for x in eng.cfg.weekend_cut.split(":"))
+    if srv.weekday() == 4 and srv.hour * 60 + srv.minute >= h * 60 + m:
+        return "friday_cut"
+    return None
+
+
+def _scheduled_headroom(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp) -> float:
+    """Prereg K10: what scheduled probes may still lose today, within `budget_share` of the day's probe budget (their
+    realised loss on this risk day counted; an unknown P&L or limit leaves nothing: fail closed)."""
+    since = eng._last_reset if eng._last_reset is not None else close_ts.floor("D")
+    with probe.db.connection() as conn:
+        rows = [r for r in LEDGER.select(conn, "account_id = ? AND agent_id = ? AND closed = 1",
+                                         (eng.cfg.account_id, SCHEDULED)) if r.exit_utc is not None and r.exit_utc >= since]
+    if any(r.pnl is None for r in rows):
+        return 0.0
+    share = eng.cfg.cost_probe_scheduled.budget_share * eng.cfg.cost_probe_budget * _limit(eng)
+    return share - max(0.0, -sum(float(r.pnl or 0.0) for r in rows))
+
+
+def scheduled_step(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick: Tick) -> None:
+    """At a 15m close, after the mirror probes: one scheduled market probe (the module docstring), when enabled.
+    Skipped (journalled `cost_probe_scheduled_skip:<why>`) in the schedule's blackouts, while anything else is open,
+    pending or in flight, outside a demo terminal in auto mode, or past the probe budget or the scheduled share of it;
+    silently while one is still open (one at a time)."""
+    sch: ScheduledProbe = eng.cfg.cost_probe_scheduled
+    if not sch.enabled:
+        return
+
+    def skip(why: str) -> None:
+        eng.decisions.append({"ts": close_ts.isoformat(), "agent": SCHEDULED_ID, "action": "cost_probe_scheduled_skip:" + why})
+
+    if (why := schedule_skip(eng, close_ts)) is not None:
+        return skip(why)
+    if any(t.agent_id == SCHEDULED_ID for t in eng.open.values()):
+        return
+    if any(not is_probe(t.agent_id) for t in eng.open.values()) or eng.pending or _in_flight(eng, False) \
+            or _in_flight(eng, True) or eng.state.open_positions > len(_probes_open(eng)):
+        return skip("busy")
+    if eng._auto_paused is not None and eng._auto_paused[0] == close_ts:
+        return skip("paused")
+    if eng.cfg.mode != "demo" or not auto_entry.permitted(eng, close_ts):
+        return skip("not_auto")
+    why, headroom = budget_refusal(eng, probe, close_ts)
+    if why is not None:
+        return skip("budget:" + why)
+    own = _scheduled_headroom(eng, probe, close_ts)
+    if own <= 1e-9:
+        return skip("scheduled_budget")
+    _send_scheduled(eng, probe, close_ts, tick, min(headroom, own))
+
+
+def _send_scheduled(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick: Tick, headroom: float) -> None:
+    """The M1 order: 0.01 lot, the slot's side, a $3 server stop (and a symmetric $3 safety target), through `_place`.
+    The Intent is what the probe is: no signal (p 0.5), a time exit (`has_target` False) of hold_s; no swap (the
+    blackout keeps the 30 s hold off the rollover)."""
+    from goldbot.risk import Intent
+    sch: ScheduledProbe = eng.cfg.cost_probe_scheduled
+    pid = _scheduled_order_id(eng, close_ts)
+    if pid in eng.sent_ids:
+        return
+    side = scheduled_side(close_ts)
+    price = tick.ask if side > 0 else tick.bid
+    lim = probe_limits(eng, probe)
+    applied: dict[str, Any] = {"probe_max_loss": round(lim.max_loss, 2), "basis": SCHEDULED_BASIS}
+
+    def refuse(why: str) -> None:
+        eng.decisions.append({"ts": close_ts.isoformat(), "agent": SCHEDULED_ID,
+                              "action": "cost_probe_scheduled_refused:" + why, **applied})
+
+    terms = eng._sizing_terms(side, price, sch.stop_usd, cycle=close_ts)
+    if terms.get("volume_min") is None:
+        return refuse("probe_loss_unknown")
+    terms["volume_max"] = terms["volume_min"]                    # the minimum lot only
+    intent = Intent(agent_id=SCHEDULED_ID, side=side, p=0.5, target_atr=1.0, stop_atr=1.0, atr_usd=sch.stop_usd,
+                    cost_atr=eng._cost_atr(sch.stop_usd, close_ts), multiplier=1.0, price=price,
+                    timeframe=eng.cfg.decision_tf, family=SCHEDULED_FAMILY, has_target=False, learning_probe=True,
+                    account_mode=eng.cfg.mode, phase_file=_phase_file(eng), **terms)
+
+    def record(res: OrderResult, gd: GateDecision, filled: bool, loss: float, sent: pd.Timestamp,
+               latency_ms: float) -> ProbeRecord:
+        return ProbeRecord(client_order_id=pid, account_id=eng.cfg.account_id, purpose="cost_measurement",
+                           agent_id=SCHEDULED, side=side, lots=float(res.filled_lots if filled else gd.lots),
+                           signal_utc=close_ts, requested_price=price, spread_usd=round(tick.ask - tick.bid, 6),
+                           sent_utc=sent, latency_ms=round(latency_ms, 3), retcode=res.retcode,
+                           position_id=res.position_id if filled else None,
+                           fill_price=(res.price if res.price is not None else price) if filled else None,
+                           stop_loss=round(loss, 2), probe_max_loss=applied["probe_max_loss"], basis=SCHEDULED_BASIS,
+                           fx_acct_per_usd=terms.get("acct_per_usd"))
+
+    pos = _place(eng, probe, intent, cast("Specialist", _ScheduledAgent(eng.cfg.decision_tf)), pid=pid,
+                 close_ts=close_ts, entry=price, target=price + side * sch.stop_usd, max_loss=lim.max_loss,
+                 headroom=headroom, applied=lambda: applied, refuse=refuse, action="cost_probe_scheduled:",
+                 journal={"agent": SCHEDULED_ID}, record=record, max_stop=sch.stop_usd)
+    if pos is not None:
+        probe.held[pos] = _hold_clock(eng, tick.ts_utc)
+
+
+def _hold_clock(eng: Engine, now: pd.Timestamp) -> pd.Timestamp:
+    """The hold's clock: the host clock on a live engine, else the time the caller passes (replays and tests)."""
+    return eng.clock() if eng.cfg.live_clock else now
+
+
+def hold_exits(eng: Engine, now: pd.Timestamp) -> None:
+    """Close every scheduled probe held `hold_s` (from its fill on the hold clock; after a restart, from the broker's
+    open time), at market, `HOLD_EXIT`. Runs on every pass that retries closes (`Engine._retry_closes`, with a quote
+    or without one) whatever the entry state: not gated by halts, the mode, the budget or probes being switched off.
+    A refused close stays due and is retried like any close. Never raises (it runs outside any guard)."""
+    try:
+        at = _hold_clock(eng, now)
+        hold = eng.cfg.cost_probe_scheduled.hold_s
+        probe = eng.probe
+        for pid, tr in list(eng.open.items()):
+            if tr.agent_id != SCHEDULED_ID or pid in eng._close_due:
+                continue
+            since = (probe.held.get(pid) if probe is not None else None) or tr.opened_utc or tr.entry_bar_ts
+            if (at - since).total_seconds() < hold:
+                continue
+            q = eng._last_tick
+            if probe is not None and q is not None:
+                probe.exit_quotes[pid] = (q.bid, q.ask, q.ts_utc)     # prereg K11: the quote the close is sent on
+            eng._try_close(pid, HOLD_EXIT, now)
+    except Exception:
+        log.exception("scheduled probe hold exits failed; retried next pass")
+
+
+def _scheduled_order_id(eng: Engine, close_ts: pd.Timestamp) -> str:
+    """`cm-sched-<slot epoch s>-<hash>`: 30 characters, the whole id fits MT5's 31-character comment."""
+    import hashlib
+    h = hashlib.sha1(f"{eng.cfg.account_id}|{SCHEDULED_ID}|{close_ts.isoformat()}".encode()).hexdigest()[:10]
+    return f"{SCHEDULED_COMMENT}{int(close_ts.timestamp())}-{h}"
 
 
 def _probe_order_id(eng: Engine, tag: str, close_ts: pd.Timestamp) -> str:
@@ -701,15 +963,26 @@ def record_close(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float | 
     known = info or {}
     cid = tr.client_order_id or f"position-{pid}"
     db = eng.probe.db if eng.probe is not None else Database.open(eng.cfg.state_dir, "aux")
+    quote = eng.probe.exit_quotes.pop(pid, None) if eng.probe is not None else None
+    exit_px = known.get("exit_price", px)
+    at_px = exit_px if exit_px is not None else tr.open_price
+    try:                            # prereg K9: the conversion at the close, read after the exit (never before it)
+        fx = eng._usd_to_account(tr.side, float(at_px), 1.0) if at_px is not None else None
+    except Exception:
+        fx = None
+    scheduled = tr.agent_id == SCHEDULED_ID
     with db.write() as conn:
         rec = LEDGER.get(conn, cid) or ProbeRecord(
             client_order_id=cid, account_id=eng.cfg.account_id, agent_id=tr.agent_id.removeprefix(PREFIX),
             side=tr.side, lots=float(tr.initial_lots or tr.lots), sent_utc=tr.opened_utc or tr.entry_bar_ts,
-            fill_price=tr.open_price)
+            fill_price=tr.open_price, purpose="cost_measurement" if scheduled else "cost_probe",
+            basis=SCHEDULED_BASIS if scheduled else None)
         LEDGER.upsert(conn, rec.model_copy(update={
             "position_id": pid, "exit_utc": known.get("exit_utc", at),
-            "exit_price": known.get("exit_price", px), "exit_reason": known.get("reason") or reason,
-            "swap": known.get("swap"), "commission": known.get("commission"), "pnl": known.get("pnl")}))
+            "exit_price": exit_px, "exit_reason": known.get("reason") or reason,
+            "swap": known.get("swap"), "commission": known.get("commission"), "pnl": known.get("pnl"),
+            "exit_fx_acct_per_usd": fx,
+            **({"exit_bid": quote[0], "exit_ask": quote[1], "exit_quote_utc": quote[2]} if quote else {})}))
     eng._recorded.add(pid)
     return True
 
