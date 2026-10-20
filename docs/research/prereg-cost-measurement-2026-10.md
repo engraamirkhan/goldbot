@@ -40,10 +40,17 @@ decision it may take is withdrawing O-4 before it runs (section 6), and that sav
 
 **Why join the touch.** It is the canonical passive order. On a retail CFD book a buy limit fills when the **ask**
 reaches it. So a buy limit at the bid fills only after the ask falls by a full spread, and adverse selection is
-built in mechanically. Harris and Hasbrouck 1996 (*JFQA* 31(2), NYSE SuperDOT 1990-91, equities) and Linnainmaa 2010
-(*J. Finance* 65(4), Finnish equities 1995-2002) find limit orders save the spread but are adversely selected. Both
-are execution-cost studies on equities and are replicated in direction. Their size on IC Markets XAUUSD is unknown,
-which is why L1 exists. A mid-price limit (CB-T2's design) is a later variant. It is not run here, because one
+built in mechanically. Two sources bear on this, from different angles:
+- Harris and Hasbrouck 1996 (*JFQA* 31(2): 213-231, NYSE SuperDOT, equities) is an execution-cost study. It finds
+  that limit orders placed at or better than the quote outperform market orders. It does not frame the result as
+  adverse selection. *(Partly verified: abstract read; the sample period, about 1990-91, is behind the paywall and
+  unverified.)*
+- Linnainmaa 2010 (*J. Finance* 65(4): 1473-1506, Finnish equities) is not an execution-cost study. It infers
+  investor behaviour, and adverse selection of limit orders is its mechanism. *(Sample period, about 1995-2002,
+  unverified.)*
+
+So the saving at the quote is a single-paper equity finding, and adverse selection is a mechanism, not a measured
+cost. Neither is gold-specific, and their size on IC Markets XAUUSD is unknown, which is why L1 exists. A mid-price limit (CB-T2's design) is a later variant. It is not run here, because one
 variant answers whether the broker's fill rule matches the simulator at all.
 
 **What counts as cost.** Each leg is measured against its own quote at send, so the 30 s market move is not cost:
@@ -51,8 +58,9 @@ variant answers whether the broker's fill rule matches the simulator at all.
 - exit leg = side x (quote mid at send - fill);
 - the round trip = the two legs + commission per oz (in USD at the deal-time rate, K9).
 
-The realised cost, after Huang and Stoll 1996 (*J. Financial Economics* 41(3), NASDAQ/NYSE 1991, equities, the
-standard "realised spread" measure), is side x (fill - mid 5 min after the fill). It is reported for both M1 and L1
+The realised cost follows the realised-spread measure used by Huang and Stoll 1996 (*J. Financial Economics*
+41(3): 313-357), a paired NASDAQ-versus-NYSE comparison of execution costs in equities *(sample year, about 1991,
+unverified)*. It is side x (fill - mid 5 min after the fill). It is reported for both M1 and L1
 so that a limit fill's adverse selection is visible.
 
 ## 2. Buckets and schedule
@@ -61,7 +69,8 @@ Buckets are anchored to **local exchange time** (Europe/London, America/New_York
 the 2026-10-25 to 11-01 US/EU clock gap does not smear them. ICM XAUUSD trading hours are read from the terminal
 (`Broker.trading_sessions`) when the schedule is built. A slot that falls outside a session moves to the first
 minute inside it, and the move is logged. *(The ICM daily break, about 16:57-18:01 New York, is unverified until
-read from the terminal.)*
+read from the terminal; IC Markets does not publish it. Verified from IC's Commodity Specification Sheet and DST
+notice: 100 oz a lot, minimum 0.01 lot, stops level 0, pending orders GTC, server time GMT+2/+3 (Europe/Athens).)*
 
 | Bucket | Window | M1 slot times | L1 slot times |
 |---|---|---|---|
@@ -141,6 +150,7 @@ New blockers found for this protocol:
 | K8 | No limit-order or scheduled path. The adapter sends only `TRADE_ACTION_DEAL` market orders, and the gate's probe fence needs a p | `mt5_adapter.place_order` (ORDER_TYPE_BUY/SELL only); `gate._learning_probe_reasons` | M1 and L1 cannot run | `cost_measurement` purpose (section 3); `TRADE_ACTION_PENDING` buy/sell limit with expiry and cancel in the adapter and bridge; the pending order reconciled like any order (unconfirmed handling) (implementer; trading-safety-reviewer, code-reviewer) | 2026-11-13 |
 | K9 | **GBP: probe commission, swap and P&L are stored in account currency with no conversion rate** | `ProbeRecord` has `commission`, `swap`, `pnl`, but no fx field | Probe commission cannot be turned into USD/oz without a re-read of GBPUSD after the fact | Add `fx_acct_per_usd` at send and at close (the gate's `account_fx` of `loss_per_lot`, as K1/K2 use), nullable on old rows. A row with no fx is excluded from commission and swap, never converted at a later rate (implementer; quant-reviewer) | 2026-11-06 |
 | K10 | **The dynamic probe count would loosen if scheduled probes joined its median** | `probe_limits` sets `max_open` from the median `native_stop_loss` of the last 20 probe rows | Scheduled probes' native loss (about £2.3) would pull the median down and raise `max_open` for the wide-stop mirrored probes: a loosening by accident | The `cost_measurement` rows are excluded from `PROBE_LOSS_WINDOW` and from `max_open`. They take at most 50% of the day's probe budget and count fully in `budget_refusal` (implementer; trading-safety-reviewer). Test: adding cost_measurement rows never raises `max_open` | with K8 |
+| K12 | **The freeze level and the session hours are not captured.** IC Markets publishes neither for XAUUSD | The repo has no `symbol_info` capture of `trade_freeze_level`; `trading_sessions` is not yet used by any schedule | A limit at the touch inside the freeze level cannot be modified or cancelled, so L1's 120 s expiry and cancel could fail, and a slot could fall in the daily break | Read `trade_freeze_level` and `trading_sessions` from the terminal and record them in `broker_terms`. L1 places no order within the freeze level of the quote. A freeze level > 0 is logged, and L1 joins the touch at that distance instead (implementer; trading-safety-reviewer). **L1 does not start until this is merged** | with K8 |
 | K11 | Quote-at-send is recorded for entries only | `ProbeRecord.requested_price`, `spread_usd` exist; the exit's quote at send does not | Exit-leg slippage (and stop slippage) cannot be separated from the market move | Record bid/ask at close send and the server stop/TP trigger price (from the deal) on the probe row (implementer) | with K8 |
 
 Build sequence (who; where; when):
@@ -150,7 +160,7 @@ Build sequence (who; where; when):
    costs-v1 publishes spread and swap measured, and commission measured once one deal is seen. Target **2026-11-06**,
    after ≥ 10 trading days that include the clock-gap week and one tier-1 day (CB-0 step 4).
 3. K7 + K9 merged: probe aggregates published as `probe_costs.json`. **2026-11-06.**
-4. K8 + K10 + K11 merged and reviewed; icm-probe enabled (owner credentials); phase B starts. **2026-11-13 target.**
+4. K8 + K10 + K11 + K12 merged and reviewed; icm-probe enabled (owner credentials); phase B starts. **2026-11-13 target.**
 5. First full reading (section 5): M1 cells at 30 fills, about 15 trading days after phase B starts, so about
    **2026-12-04**. This is before O-4's pin (2026-12-11).
 6. CB-0 step 7 basis check (broker against Dukascopy by hour) at ≥ 20 tick days. Reported only (K5).
@@ -171,7 +181,7 @@ General rules:
 | Market-leg slippage (M1 by bucket; M0 entry, reported separately as "bar-close timing") | 30 fills | research slippage per leg = **max(0.15, mean)** (K3). If the mean's CI lower bound is > 0.15, the prior is raised for that bucket in costs-v1 from the next dispatch on |
 | Stop-exit slippage (M0 SL exits) | 30 SL exits | Same max rule, charged to stop exits only |
 | TP fills | 30 TP exits | Reported. A TP leg with price improvement is never credited in research |
-| Commission | 3 deals agreeing within 1% in USD (K9 fx) | Measured, replaces 3.5 USD/lot/side; else the prior stays |
+| Commission | 3 deals agreeing within 1% in USD (K9 fx) | Measured, replaces 3.5 USD/lot/side; else the prior stays. Reported cross-check only (it decides nothing): the GBP amount booked against IC's published 5.50 GBP/lot round turn for GBP accounts (USD accounts: $7.00 round turn, $3.50 a side; both verified from IC's Commodity Specification Sheet). A gap > 5% is flagged to the data-engineer as a K9 conversion check |
 | Swap | terminal value + both overnight checks within 5% | Measured; else flagged to the data-engineer, and the terminal value is used |
 | L1 fill rate and realised cost | 30 L1 fills per bucket (attempts counted) | **Limit is a cost lever on this broker** if the fill rate's Wilson lower bound ≥ 30% AND (realised cost M1 - realised cost L1, 5-min mid) ≥ **$0.10/oz** with its CI above 0. **No saving** if that difference is ≤ 0. Otherwise undecided, reported at 60 fills, then closed as undecided. "Lever" makes scenario D a reported CB-D1 scenario; it does not adopt limit entries anywhere (CB-T2's own rule does that) |
 | CB-D2 simulator calibration | 30 L1 attempts per bucket, all buckets pooled for the decision | For each attempt, CB-D2's rule (fill when ask ≤ limit - through, through = $0.05) is run on the same recorded ticks. **Validated** if it agrees with the real fill/no-fill on ≥ 90% of attempts. Else `through` is set to the smallest of {0, 0.02, 0.05, 0.10} that reaches 90%, written into CB-D2 before CB-D2 reads any candidate. None reaching 90%: CB-D2 is marked "simulator not valid on IC Markets", and its reading rule cannot say "build" |
