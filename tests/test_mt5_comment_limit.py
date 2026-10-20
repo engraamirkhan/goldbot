@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from goldbot.engine import cost_probe, unconfirmed
-from goldbot.execution.broker import MT5_COMMENT_MAX, OrderIntent, comment_keys
+from goldbot.execution.broker import MT5_COMMENT_MAX, RETCODE_PRECHECK_FAILED, OrderIntent, comment_keys
 from goldbot.execution.paper import PaperBroker
 from tests.test_engine_safety import _prop
 from tests.test_mt5_order_account_check import _broker as _mt5_broker
@@ -64,11 +64,20 @@ def test_the_mt5_adapter_never_passes_a_comment_over_29_characters_to_order_chec
         return check(req)
 
     term.order_check = order_check
-    intent = OrderIntent(client_order_id=LONG_PID, symbol="XAUUSD", side=1, lots=0.01, sl=2390.0, tp=2430.0,
-                         magic=260177, comment=LONG_PID)
-    res = _mt5_broker(monkeypatch, term).place_order(intent)
+    broker = _mt5_broker(monkeypatch, term)
+    # an over-long comment is a caller bug: refused pre-send as a definite reject, never cut (a head cut would file the
+    # position under a key no look-up matches; the runner and smoke send the id's tail)
+    too_long = OrderIntent(client_order_id=LONG_PID, symbol="XAUUSD", side=1, lots=0.01, sl=2390.0, tp=2430.0,
+                           magic=260177, comment=LONG_PID)
+    res = broker.place_order(too_long)
+    assert not res.ok and res.retcode == RETCODE_PRECHECK_FAILED and "exceeds" in res.message
+    assert checked == [] and term.sent == []
+    # exactly 29 characters goes through whole
+    fits = OrderIntent(client_order_id=LONG_PID, symbol="XAUUSD", side=1, lots=0.01, sl=2390.0, tp=2430.0,
+                       magic=260177, comment=LONG_PID[-MT5_COMMENT_MAX:])
+    res = broker.place_order(fits)
     assert res.ok
-    assert checked[0]["comment"] == LONG_PID[:MT5_COMMENT_MAX] and term.sent[0]["comment"] == LONG_PID[:MT5_COMMENT_MAX]
+    assert checked[0]["comment"] == LONG_PID[-MT5_COMMENT_MAX:] and term.sent[0]["comment"] == LONG_PID[-MT5_COMMENT_MAX:]
 
 
 def test_comment_keys_accept_the_whole_id_the_29_slice_and_the_legacy_31_slice():
