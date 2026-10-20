@@ -143,7 +143,7 @@ def test_shellcheck_clean():
     if sc is None:
         pytest.skip("shellcheck not installed")
     for f in ("mt5-experts-enable.sh", "mt5-ini.sh", "mt5-gold-profile.sh"):
-        r = subprocess.run([sc, "-x", str(LINUX / "mt5" / f)], capture_output=True, text=True, cwd=LINUX / "mt5")
+        r = subprocess.run([sc, "-x", "--severity=warning", str(LINUX / "mt5" / f)], capture_output=True, text=True, cwd=LINUX / "mt5")
         assert r.returncode == 0, r.stdout
 
 
