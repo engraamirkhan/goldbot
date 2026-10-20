@@ -1244,9 +1244,13 @@ def hypotheses_retired(text: str, families: list[str]) -> tuple[dict[str, tuple[
 
 def retired_drift(retired: Sequence[RetiredFamily], text: str | None, families: list[str]) -> list[str]:
     """Where research.retired_families (the governance) and hypotheses.md section B (its mirror) disagree: family,
-    row id or registry trials. Empty when they agree. Reported in the plan; never changes the allocation."""
+    row id or registry trials. Empty when they agree. Reported in the plan; never changes the allocation.
+    `families` are the allocated ones; a registered family outside them (a rule under its pre-registered screen,
+    e.g. box_break_close retired by H-50's own rule) is still a specialist family here."""
     if text is None:
         return ["docs/research/hypotheses.md missing: research.retired_families cannot be checked against it"]
+    from goldbot.specialists import SPECIALISTS  # local: keeps this module's import graph as it was
+    families = sorted(set(families) | set(SPECIALISTS))
     doc, problems = hypotheses_retired(text, families)
     cfg = {e.family: e for e in retired}
     for fam in sorted(set(doc) | set(cfg)):
