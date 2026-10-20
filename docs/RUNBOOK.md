@@ -79,6 +79,20 @@ Log in to your IC Markets demo **once** (MT5 keeps the login; goldbot never sees
    the Journal, no network connection, the corner keeps showing "No connection". Fix: the Open an Account flow above.
 5. `sudo systemctl stop goldbot-vnc`, close the tunnel window.
 
+**Later logins need no VNC** (owner directive 2026-10-20). With the password in the box's keyring
+(`goldbot-mt5 accounts add icm-demo`, hidden prompts, once), the bridge logs the terminal in by itself when its
+attach fails or `/health` finds no account, to the configured login only (`goldbot/ops/login.py`, settings
+`mt5_login`). By hand: `goldbot-mt5 login icm-demo` prints `ok: icm-demo: logged in (demo, ICMarketsSC-Demo)` or
+`failed: icm-demo: <reason>`, never the login or password. A refused password (`-6`) is marked in
+`state/mt5-login/icm-demo.refused` (time and code only) and nothing sends it again, through any restart, until you
+store it again with `goldbot-mt5 accounts set mt5-icm-demo` (that clears the mark), because the broker locks an
+account after repeated bad passwords. If the password at the broker was reset and the stored one is right,
+`goldbot-mt5 login icm-demo --retry-refused` tries exactly once. Other failures wait 20 s, 40 s, ... up to 10 min
+between logins, and at most 6 logins an hour are sent; both are kept in `state/mt5-login/`, so restarts reset
+neither. The very first
+login on a freshly built terminal (no `Config/servers.dat` yet) may still need the Open an Account flow above: try the
+command first and use VNC only if it fails.
+
 The bridge never starts the terminal. `goldbot-bridge@icm-demo` requires `goldbot-mt5-terminal@icm-demo`, so starting
 the bridge starts the terminal first. The bridge then waits up to 60 s for the terminal process and attaches to it
 through the MT5 Python API with
@@ -112,7 +126,7 @@ Hosts are SSH aliases in `~/.ssh/goldbot.conf`; no address, login or token goes 
 | B4 | Build the box (below) | Claude, after the owner approves the deploy |
 | B5 | Login on the brain: `ssh -F ~/.ssh/goldbot.conf -t goldbot-brain goldbot accounts set mt5-login-icm-probe` (hidden prompt) | **Owner** |
 | B6 | Copy the login to the box without showing it (below) | Claude |
-| B7 | First login over VNC, as 0.3 steps 1 to 5, with `goldbot-mt5-terminal@icm-probe` and the probe account | **Owner** |
+| B7 | First login: `sudo systemctl start goldbot-mt5-terminal@icm-probe`, then `goldbot-mt5 login icm-probe` (password in the box keyring as `mt5-icm-probe`; prints ok/failed only). VNC (0.3 steps 1 to 5) only if it fails | Claude (VNC fallback: **Owner**) |
 | B8 | Bridge listen address and token (below) | Claude |
 | B9 | Tunnel key, env file and tunnel unit on the brain (below) | Claude (root; security review) |
 | B10 | Enable the box's bridge and watchdog and the brain's tunnel; check `/health` and preflight | Claude |
@@ -163,7 +177,8 @@ times in the deploy note. Later upgrades of this box use 0.5 "Attended MT5 box u
 **Failure and recovery on an account box.** Terminal down: "Terminal down" below, with the box's alias and account.
 Tunnel down (`journalctl -u goldbot-bridge-tunnel@<account>`): it restarts every 5 s by itself; a wrong env file is
 fixed by rewriting it (B9 step 3) and `sudo systemctl restart goldbot-bridge-tunnel@<account>`. Box lost (Oracle
-reclaim, disk): rebuild with B4, then B6 to B11; the owner's VNC login (B7) is the only hands-on step.
+reclaim, disk): rebuild with B4, then B6 to B11; the owner stores the password again (`goldbot-mt5 accounts add
+<account>`), and VNC (B7 fallback) is needed only if `goldbot-mt5 login` fails on the fresh terminal.
 `icm-demo` is not touched by any step here; if its engine shows `terminal:icm-demo` during this work, stop and check
 that nothing listens on 8765 except `goldbot-bridge-tunnel.service`.
 
@@ -578,7 +593,8 @@ more: the watchdog timer is still off and no floor is set, so a rollback is allo
 22:00 UTC and the engine stays stopped, so there is time; do not hurry.
 1. Read why, states only: `sudo journalctl -u goldbot-mt5-terminal@icm-demo -u goldbot-bridge@icm-demo -b -n 100 --no-pager`
    and `systemctl status goldbot-mt5-terminal@icm-demo goldbot-bridge@icm-demo --no-pager`.
-2. `not_logged_in` or `wrong_account`: log in over VNC (0.3), or restore the `Config/` copy:
+2. `not_logged_in`: `goldbot-mt5 login icm-demo` (0.3 "Later logins need no VNC"). `wrong_account`, or the command
+   fails: log in over VNC (0.3), or restore the `Config/` copy:
    ```bash
    sudo systemctl stop goldbot-mt5-terminal@icm-demo && sudo -u mt5 -H cp -a /home/mt5/config-backup/Config/. /home/mt5/.wine/drive_c/MT5/ICMarkets/Config/ && sudo systemctl start goldbot-mt5-terminal@icm-demo
    ```
@@ -1866,7 +1882,12 @@ word, never the reply itself. The watchdog acts on that word alone:
   `goldbot-mt5-terminal@<account>`, which restarts the bridge with it.
 - The bridge restarting 3 times without settling while the terminal has been up for 10 min: the terminal is hung and
   the bridge cannot attach to it, so the watchdog restarts the terminal unit.
-- `not_logged_in` or `wrong_account`: it logs the state and never restarts anything.
+- `not_logged_in` or `wrong_account`: it logs the state and never restarts anything. On `not_logged_in` the bridge's
+  background self-heal thread (every 30 s) logs the terminal in from the keyring, never inside `/health` or an RPC,
+  with the backoff, hourly cap and refused-password mark of 0.3. Each login takes at most 15 s; meanwhile `/health`
+  answers within 2 s as `not_logged_in` with `"login": "in_progress"`, and RPCs get a prompt 503 (the engine sends a
+  close again). `/health` also shows `"login": "refused"`, `"rate_limited"` or `"waiting"` when a login is held
+  back. Never on `wrong_account`.
 It restarts the terminal at most once every 10 min.
 
 ### Terminal down (`terminal:<account>`)
@@ -1881,10 +1902,18 @@ blocked, stops and targets stay with the broker, and nothing is lost by waiting:
   `sudo journalctl -u goldbot-mt5-terminal@<account> -n 100`. The line "a terminal64.exe already runs for mt5" means
   a terminal was started by hand. Stop that copy with `sudo pkill -u mt5 -f terminal64.exe`, then run
   `sudo systemctl start goldbot-mt5-terminal@<account>`.
-- **"running but not logged in (saved login lost?)"**: a restart cannot fix this, so the watchdog leaves it alone.
-  First stop the watchdog timer (`sudo systemctl stop goldbot-bridge-watchdog@<account>.timer`). Then log in over VNC
-  as in 0.3, steps 1 to 5, ticking *Save password*. The bridge starts serving by itself once it sees the right
-  account. Start the timer again afterwards. If the bridge had already seen the right account before the login was
+- **"running but not logged in (saved login lost?)"**: the bridge logs the terminal in from the keyring by itself,
+  to the configured login only, within about 30 s (its self-heal thread), and serves once it sees
+  the right account. This includes a terminal at the "Select a company to open an account with" wizard: the bridge's
+  attach fails there (`mt5.initialize failed: (-10005, 'IPC timeout')`) and it logs in from the keyring before
+  attaching again. If it stays down, on the box run `goldbot-mt5 login <account>`: `ok` clears it; `failed: ...`
+  names why (`no password stored`: `goldbot-mt5 accounts add <account>`; `password refused`: nothing is sent until
+  you store it again with `goldbot-mt5 accounts set mt5-<account>`, see 0.3; `curl -s 127.0.0.1:8765/health` shows
+  `"login": "refused"`; `refused: ...`: the login is not the registered account, see the last bullet; `-10005` at the wizard:
+  `goldbot-mt5 login <account> --dismiss-wizard`, which presses Escape on the terminal window first, unverified).
+  `sudo journalctl -u goldbot-bridge@<account> -n 100` shows the bridge's tries. Only if the command keeps failing:
+  stop the watchdog timer (`sudo systemctl stop goldbot-bridge-watchdog@<account>.timer`), log in over VNC as in
+  0.3, steps 1 to 5, ticking *Save password*, and start the timer again afterwards. If the bridge had already seen the right account before the login was
   lost, it keeps passing calls through: reads and closes keep flowing (exits are never gated), and the terminal
   answers what it can. Orders still fail the account check on every send.
 - **"not connected to the broker server"**: this is a warning for the first 5 minutes, then a FAIL. Check the box's

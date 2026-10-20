@@ -36,7 +36,8 @@ _TERMINAL_FAIL = {
     "not_running": "MT5 terminal not running on the MT5 box; it is being restarted. " + _NO_ENTRIES
                    + " If this lasts 10 min: RUNBOOK 'Terminal down'.",
     "not_logged_in": "MT5 terminal running but not logged in (saved login lost?). " + _NO_ENTRIES
-                     + " Owner login over VNC: RUNBOOK 0.3.",
+                     + " The MT5 box logs it in from the keyring; if it stays: goldbot-mt5 login <account>,"
+                     " RUNBOOK 'Terminal down'.",
     "wrong_account": "MT5 terminal logged in to a different account than registered; the bridge refuses orders.",
 }
 
