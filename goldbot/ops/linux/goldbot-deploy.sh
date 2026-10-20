@@ -61,6 +61,15 @@
 # engine-derived checks (engine, engine_loop, tick_errors for that account; reconcile stays compared, it also reports ledger mismatches) left out of the comparison: the
 # baseline still read them from a heartbeat that was fresh a moment before the stop. The detail says "engine stopped
 # for the deploy: <account>"; every other worsened check still yields deployed_degraded.
+#
+# What ran before is what runs after (incident 2026-10-20, docs/incidents/2026-10-20-deploy-rollback-left-services-stopped.md):
+# the units active before the deploy are recorded first. A unit that fails to (re)start never stops the others from
+# starting. A rollback restarts only those units, and after any rollback (successful or not) every one of them that is
+# not active is started again; the record names what runs and what does not. An engine that was NOT active before
+# (newly enabled) is started last and without waiting (--no-block), and is judged on its own: when it is down and its
+# bridge is not ok (bridge:, terminal: or bridge_compat:<account> not "ok" in `goldbot run health`), the deploy is
+# deployed_degraded with "engine@<account> blocked by its bridge (<check>)"; down with its bridge ok, it rolls back.
+# An engine that was active before and is not after still rolls the deploy back.
 set -euo pipefail
 ROOT=/opt/goldbot
 REPO_API=https://api.github.com/repos/engraamirkhan/goldbot
@@ -93,6 +102,13 @@ STARTED=0
 SETTLED=0
 ENGINE_STOPPED=0
 ENGINE_DOWN=0
+RESTORE=0                                 # 1 while a rollback restores what ran: only units active before are started
+PRE_KNOWN=0                               # 1 once the units active before the deploy are recorded
+PRE_LIST=()                               # those units, in services order
+declare -A PRE=()
+RECOVERY=""                               # after a rollback: which of PRE_LIST run and which do not
+NEW_NOTE=""                               # newly enabled engines blocked by their bridge / still starting
+NEW_FAIL=""                               # a newly enabled engine down with its bridge ok
 
 g() { sudo -u "$OWNER" -H env GIT_NO_REPLACE_OBJECTS=1 git -C "$ROOT" "$@"; }
 as_owner() { sudo -u "$OWNER" -H "$@"; }
@@ -419,6 +435,45 @@ services() {
   fi
 }
 
+short() { local u=${1#goldbot-}; echo "${u%.service}"; }   # goldbot-engine@x.service -> engine@x (for the record)
+pre_active() { [ "$PRE_KNOWN" != 1 ] || [ -n "${PRE[$1]:-}" ]; }   # unknown (an old watch file): every unit counts
+
+record_pre_active() {  # the daemons active now, before anything is stopped: the set every rollback brings back
+  local s
+  PRE=(); PRE_LIST=()
+  for s in $(services); do
+    systemctl is-active --quiet "$s" 2>/dev/null || continue
+    [ "$(systemctl show -p Type --value "$s")" = oneshot ] && continue   # a timer's run, not a daemon
+    PRE[$s]=1; PRE_LIST+=("$s")
+  done
+  PRE_KNOWN=1
+}
+
+ensure_started() {  # after any rollback: start every unit that ran before the deploy and is not active; RECOVERY says
+  # which run and which do not. Starts do not wait (an engine whose bridge is down would hold the others for its
+  # 15 min TimeoutStartSec); they get STABLE_S to come up. Order: supervisor, engines, the rest.
+  local s t0 up down
+  RECOVERY=""
+  [ "$PRE_KNOWN" = 1 ] && [ "${#PRE_LIST[@]}" -gt 0 ] || return 0
+  for s in "${PRE_LIST[@]}"; do [[ "$s" == goldbot-supervisor* ]] || continue; systemctl is-active --quiet "$s" || systemctl start --no-block "$s" || true; done
+  for s in "${PRE_LIST[@]}"; do [[ "$s" == goldbot-engine@* ]] || continue; systemctl is-active --quiet "$s" || systemctl start --no-block "$s" || true; done
+  for s in "${PRE_LIST[@]}"; do
+    [[ "$s" == goldbot-supervisor* || "$s" == goldbot-engine@* ]] && continue
+    systemctl is-active --quiet "$s" || systemctl start --no-block "$s" || true
+  done
+  t0=$(date +%s)
+  while :; do
+    up=""; down=""
+    for s in "${PRE_LIST[@]}"; do
+      if systemctl is-active --quiet "$s"; then up+="${up:+,}$(short "$s")"; else down+="${down:+,}$(short "$s")"; fi
+    done
+    [ -n "$down" ] && [ $(( $(date +%s) - t0 )) -lt "$STABLE_S" ] || break
+    sleep "$POLL_S"
+  done
+  RECOVERY="running: ${up:-none}; not running: ${down:-none}"
+  echo "after the rollback: $RECOVERY"
+}
+
 stop_all() {  # inputs first, then the supervisor, engines and bridges last (exits run until the last moment)
   local s
   for s in "$@"; do case "$s" in goldbot-supervisor* | goldbot-engine@* | goldbot-bridge@*) ;; *) systemctl stop "$s" || return 1 ;; esac; done
@@ -568,22 +623,34 @@ switch_to() {  # $1 from, $2 to; returns non-zero on any failure (the caller rol
   # Order: supervisor first (engines block entries until its heartbeat exists), then the engines (a restart stops the
   # old engine at the moment the new one starts: the trading gap is one restart, not the install), then the rest.
   # Restarts are safe: engines reconcile on start. Only enabled units: a loaded but disabled instance (a stray
-  # engine) is never started by a deploy.
-  for s in "${svcs[@]}"; do [[ "$s" == goldbot-supervisor* ]] && enabled "$s" && { systemctl restart "$s" || return 1; RESTARTED_AT[$s]=$(date +%s); }; done
-  for s in "${svcs[@]}"; do [[ "$s" == goldbot-engine@* ]] && enabled "$s" && { systemctl restart "$s" || return 1; RESTARTED_AT[$s]=$(date +%s); }; done
+  # engine) is never started by a deploy. A failed restart never stops the next one (incident 2026-10-20: one engine
+  # whose bridge was not logged in left api, scheduler, telegram, news and tv-pull stopped); the switch fails after
+  # all were tried. An engine that was not active before the deploy is started last, without waiting, and judged on
+  # its own (judge_new_engines); a rollback (RESTORE=1) starts only the units that were active before.
+  local failed=0 fresh=()
+  want() { enabled "$1" && { [ "$RESTORE" != 1 ] || pre_active "$1"; }; }
+  restart_one() { systemctl restart "$1" || { echo "$(short "$1") did not start"; failed=1; }; RESTARTED_AT[$1]=$(date +%s); }
+  for s in "${svcs[@]}"; do [[ "$s" == goldbot-supervisor* ]] && want "$s" && restart_one "$s"; done
   for s in "${svcs[@]}"; do
-    [[ "$s" == goldbot-supervisor* || "$s" == goldbot-engine@* ]] || ! enabled "$s" \
-      || { systemctl restart "$s" || return 1; RESTARTED_AT[$s]=$(date +%s); }
+    [[ "$s" == goldbot-engine@* ]] && want "$s" || continue
+    if pre_active "$s"; then restart_one "$s"; else fresh+=("$s"); fi
+  done
+  for s in "${svcs[@]}"; do
+    [[ "$s" == goldbot-supervisor* || "$s" == goldbot-engine@* ]] || ! want "$s" || restart_one "$s"
+  done
+  for s in "${fresh[@]}"; do
+    systemctl restart --no-block "$s" || echo "$(short "$s") did not start"
+    RESTARTED_AT[$s]=$(date +%s)
   done
   SETTLED=$(date +%s)
   ENGINE_DOWN=0
   for s in "${svcs[@]}"; do
-    [[ "$s" == goldbot-engine@* && -n "${RESTARTED_AT[$s]:-}" ]] || continue
+    [[ "$s" == goldbot-engine@* && -n "${RESTARTED_AT[$s]:-}" ]] && pre_active "$s" || continue
     [ $((RESTARTED_AT[$s] - ENGINE_STOPPED)) -le "$ENGINE_DOWN" ] || ENGINE_DOWN=$((RESTARTED_AT[$s] - ENGINE_STOPPED))
   done
   echo "engine down for $ENGINE_DOWN s (stopped last, started first after the switch)"
   for s in "${svcs[@]}"; do RESTARTS[$s]=$(systemctl show -p NRestarts --value "$s"); done
-  return 0
+  return "$failed"
 }
 
 written_since() {  # $1 file, $2 epoch: the file was written by a process (re)started at or after $2, not the old one
@@ -613,6 +680,10 @@ healthy() {
       enabled "$s" || continue
       # a timer-driven oneshot (e.g. goldbot-chart-fetch, every 60 s) is "static" and only briefly active: not a daemon
       [ "$(systemctl show -p Type --value "$s")" = oneshot ] && continue
+      if ! pre_active "$s"; then
+        [ "$RESTORE" = 1 ] && continue                # not running before: the rollback leaves it as it was
+        [[ "$s" == goldbot-engine@* ]] && continue    # a newly enabled engine: judged on its own (judge_new_engines)
+      fi
       systemctl is-active --quiet "$s" || return 1
       [ "$(systemctl show -p NRestarts --value "$s")" = "${RESTARTS[$s]:-0}" ] || return 1   # a crash loop restarts
       [ $((now - ${RESTARTED_AT[$s]:-$SETTLED})) -ge "$STABLE_S" ] || ok=0
@@ -641,8 +712,10 @@ write_watch() {  # what the watcher needs, in the root-only folder: target, prev
     for s in "${!RESTARTS[@]}"; do
       enabled "$s" || continue
       [ "$(systemctl show -p Type --value "$s")" = oneshot ] && continue
+      [[ "$s" == goldbot-engine@* ]] && ! pre_active "$s" && continue   # judged on its own at the deploy
       echo "$s ${RESTARTS[$s]}"
     done
+    [ "$PRE_KNOWN" != 1 ] || for s in "${PRE_LIST[@]}"; do echo "pre $s"; done   # what a rollback brings back
   } > "$WATCH_FILE.tmp" && mv -f "$WATCH_FILE.tmp" "$WATCH_FILE"
 }
 
@@ -656,7 +729,10 @@ watch_run() {  # --watch (holds the deploy lock): until WATCH_S after the switch
   declare -A base=()
   [ -f "$WATCH_FILE" ] || return 0
   read -r t c dl < "$WATCH_FILE" || true
-  while read -r s n; do [[ "$s" =~ ^[A-Za-z0-9@._-]+$ && "$n" =~ ^[0-9]+$ ]] && base[$s]=$n; done < <(tail -n +2 "$WATCH_FILE")
+  while read -r s n; do
+    if [ "$s" = pre ] && [[ "$n" =~ ^goldbot-[A-Za-z0-9@._-]+$ ]]; then PRE[$n]=1; PRE_LIST+=("$n"); PRE_KNOWN=1; continue; fi
+    [[ "$s" =~ ^[A-Za-z0-9@._-]+$ && "$n" =~ ^[0-9]+$ ]] && base[$s]=$n
+  done < <(tail -n +2 "$WATCH_FILE")
   rm -f "$WATCH_FILE"
   { is_sha "${t:-}" && is_sha "${c:-}" && [[ "${dl:-}" =~ ^[0-9]+$ ]]; } || return 0
   [ "$(g rev-parse HEAD)" = "$t" ] || return 0        # another version was applied since: not this watcher's to judge
@@ -670,10 +746,14 @@ watch_run() {  # --watch (holds the deploy lock): until WATCH_S after the switch
   [ -n "$bad" ] || return 0
   line="$bad restarted or stopped within ${WATCH_S} s of the switch (after the deploy was reported)"
   echo "$line; restoring $CUR"
-  if switch_to "$TARGET" "$CUR" && healthy full; then
-    log rolled_back "$CUR" "$TARGET" "$line; previous version restored"
+  RESTORE=1
+  local rc=0
+  switch_to "$TARGET" "$CUR" && healthy full || rc=1
+  ensure_started
+  if [ "$rc" = 0 ]; then
+    log rolled_back "$CUR" "$TARGET" "$line; previous version restored${RECOVERY:+; $RECOVERY}"
   else
-    log failed "$CUR" "$TARGET" "$line; rollback did not recover every service: check journalctl -u 'goldbot-*'"
+    log failed "$CUR" "$TARGET" "$line; rollback did not recover every service${RECOVERY:+ ($RECOVERY)}: check journalctl -u 'goldbot-*'"
   fi
   return 1
 }
@@ -754,6 +834,51 @@ health_worse() {  # names of checks worse after than before ("" when none or whe
   out=$(as_owner bash -c 'cd -- "$1" && python3 -I -c "$2" "$3" "$4" "$5"' _ "$ROOT" "$WORSE_PY" "$HEALTH_BEFORE" "$HEALTH_AFTER" "$STOPPED" \
     2>/dev/null | head -c 2000) || return 0
   [[ "$out" =~ ^[A-Za-z0-9_.:@,\<\>\ $'\n'-]*$ ]] && echo "$out"
+}
+
+BRIDGE_PY=$(cat <<'PY'
+import json, re, sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    checks = {str(c["name"]): c.get("status") for c in json.loads(fh.read(8388608))["checks"]}
+for a in sys.argv[2:]:
+    bad = [p + ":" + a for p in ("bridge", "terminal", "bridge_compat") if checks.get(p + ":" + a, "ok") != "ok"]
+    if bad and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", a):
+        print(a, ",".join(bad))
+PY
+)
+
+judge_new_engines() {  # after the window: each engine that was not active before the deploy, on its own. Active (or
+  # still starting, no restart): fine, noted. Down with its bridge not ok: noted as blocked by its bridge, no rollback.
+  # Down with its bridge ok (or health unreadable): returns 1 with NEW_FAIL, and the deploy rolls back.
+  local s a st r down=() starting="" blocked="" bad="" n
+  declare -A why=()
+  NEW_NOTE=""; NEW_FAIL=""
+  [ "$PRE_KNOWN" = 1 ] || return 0
+  for s in $(services); do
+    [[ "$s" == goldbot-engine@* ]] && enabled "$s" && ! pre_active "$s" || continue
+    a=${s#goldbot-engine@}; a=${a%.service}
+    [[ "$a" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || a='<account>'
+    st=$(systemctl show -p ActiveState --value "$s"); r=$(systemctl show -p NRestarts --value "$s")
+    if [ "$r" = "${RESTARTS[$s]:-0}" ] && [ "$st" = active ]; then continue; fi
+    if [ "$r" = "${RESTARTS[$s]:-0}" ] && [ "$st" = activating ]; then starting+="${starting:+,}engine@$a"; continue; fi
+    down+=("$a")
+  done
+  if [ "${#down[@]}" -gt 0 ] && health_out "$HEALTH_AFTER"; then
+    while read -r a n; do
+      [[ "$a" =~ ^[A-Za-z0-9_.-]{1,64}$ && "$n" =~ ^[A-Za-z0-9_.:,-]{1,250}$ ]] && why[$a]=$n
+    done < <(as_owner bash -c 'cd -- "$1" && python3 -I -c "$2" "$3" "${@:4}"' _ "$ROOT" "$BRIDGE_PY" "$HEALTH_AFTER" "${down[@]}" 2>/dev/null | head -c 4000)
+  fi
+  for a in "${down[@]}"; do
+    if [ -n "${why[$a]:-}" ]; then blocked+="${blocked:+, }engine@$a blocked by its bridge (${why[$a]})"; else bad+="${bad:+,}engine@$a"; fi
+  done
+  NEW_NOTE="${blocked:+$blocked; }${starting:+newly enabled $starting still starting; }"
+  [ -z "$NEW_NOTE" ] || echo "${NEW_NOTE%; }"
+  if [ -n "$bad" ]; then
+    NEW_FAIL="newly enabled $bad did not start and its bridge is ok (or health could not tell)"
+    echo "$NEW_FAIL"
+    return 1
+  fi
+  return 0
 }
 
 main() {
@@ -846,6 +971,7 @@ main() {
   if [ "$ROLE" = brain ]; then
     if health_out "$HEALTH_BEFORE"; then BASELINE=1; STOPPED=$(stopped_engines); else echo "note: no health baseline (health did not run); no comparison after the deploy"; fi
   fi
+  record_pre_active                                   # before guard_scheduler stops the scheduler
   guard_scheduler
   if [ "$MODE" = rollback ] && as_owner test -e "$APPROVED"; then   # a newer approved version must not follow
     as_owner rm -f -- "$APPROVED"
@@ -856,6 +982,7 @@ main() {
   local full=""; [ "$MODE" = deploy ] || full=full     # a manual rollback waits the whole 90 s; a forward deploy does not
   switch_to "$CUR" "$TARGET" && healthy $full
   local ok=$?
+  if [ "$ok" = 0 ]; then judge_new_engines || ok=1; fi
   local took=$(( $(date +%s) - STARTED ))
   drop_approval
   if [ "$ok" = 0 ]; then
@@ -874,25 +1001,30 @@ main() {
       done
       [ "$raw" = "$worse" ] || note="${raw#*$'\n'}; "
     fi
+    note="${NEW_NOTE}${note}"
     if [ "$MODE" = rollback ]; then
       log rolled_back_manual "$CUR" "$TARGET" "${DROPPED}${note}${worse:+degraded: $worse; }older version restored on the owner's request; all services stable for 90 s"
-    elif [ -n "$worse" ]; then
-      log deployed_degraded "$CUR" "$TARGET" "${DROPPED}${note}deployed (degraded: $worse); all services stable with fresh heartbeats after ${took} s (engine down ${ENGINE_DOWN} s)${MANUAL:+ (manual)}; not rolled back: goldbot run health"
+    elif [ -n "$worse" ] || [[ "$NEW_NOTE" == *"blocked by its bridge"* ]]; then
+      log deployed_degraded "$CUR" "$TARGET" "${DROPPED}${note}deployed (degraded: ${worse:-an engine blocked by its bridge}); all services stable with fresh heartbeats after ${took} s (engine down ${ENGINE_DOWN} s)${MANUAL:+ (manual)}; not rolled back: goldbot run health"
     else
       log deployed "$CUR" "$TARGET" "${DROPPED}${note}all services stable with fresh heartbeats after ${took} s (engine down ${ENGINE_DOWN} s)${MANUAL:+ (manual)}"
     fi
     [ "$MODE" = deploy ] && spawn_watch
     exit 0
   fi
-  switch_to "$TARGET" "$CUR" && healthy full
-  if [ $? = 0 ]; then
+  RESTORE=1                                           # bring back exactly what ran before the deploy
+  local back=0
+  switch_to "$TARGET" "$CUR" && healthy full || back=1
+  ensure_started                                      # whatever happened above: nothing that ran before stays stopped
+  local why="${DROPPED}${NEW_FAIL:+$NEW_FAIL; }" rec="${RECOVERY:+; $RECOVERY}"
+  if [ "$back" = 0 ]; then
     if [ "$MODE" = rollback ]; then
-      log rollback_reverted "$CUR" "$TARGET" "${DROPPED}the rollback failed or a service was unstable; the version that ran before is restored"
+      log rollback_reverted "$CUR" "$TARGET" "${why}the rollback failed or a service was unstable; the version that ran before is restored$rec"
     else
-      log rolled_back "$CUR" "$TARGET" "${DROPPED}the update failed or a service was unstable; previous version restored"
+      log rolled_back "$CUR" "$TARGET" "${why}the update failed or a service was unstable; previous version restored$rec"
     fi
   else
-    log failed "$CUR" "$TARGET" "${DROPPED}rollback did not recover every service: check journalctl -u 'goldbot-*'"
+    log failed "$CUR" "$TARGET" "${why}rollback did not recover every service${RECOVERY:+ ($RECOVERY)}: check journalctl -u 'goldbot-*'"
   fi
   exit 1
 }
