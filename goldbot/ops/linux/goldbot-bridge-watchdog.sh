@@ -6,9 +6,10 @@
 # option there. Its server answers one request at a time (the MetaTrader5 package is not thread-safe): a call stuck in
 # the terminal blocks GET /health too, which this probes. Run by goldbot-bridge-watchdog@.timer every 2 minutes, as
 # root (systemctl restart needs it). Root here only reads systemd's own properties and one fixed token: the GET runs in
-# goldbot-bridge-probe as nobody (setpriv), which prints one of ok|not_running|not_connected|not_logged_in|
-# wrong_account|noanswer. Root keeps at most 32 bytes of it, drops every byte outside [a-z_] and matches the rest with
-# an exact `case` on that list; anything else is noanswer. The body never reaches root, the log, a path, a unit name
+# goldbot-bridge-probe as nobody (setpriv), which prints the bridge's terminal token (ok|not_running|not_connected|
+# not_logged_in|wrong_account|autotrading_off today, any [a-z_] from a newer bridge) or noanswer. Root keeps at most 32
+# bytes of it, drops every byte outside [a-z_] and matches the rest with an exact `case`; a token it does not know is
+# logged without its value and never acted on (version skew: goldbot-deploy updates the bridge, not this script). The body never reaches root, the log, a path, a unit name
 # or an argument, and the only actions are restarts of the two literal units named from the validated <account>
 # (docs/proposals/2026-10-mt5-terminal-lifecycle.md, security conditions 1-3). It writes one file, a restart count in
 # its own root-only runtime directory (refused when that is a symlink or not root's), and follows no path the mt5
@@ -24,6 +25,9 @@
 # * otherwise PROBES probes PROBE_GAP_S apart (an order the terminal takes 20-30 s to answer must not trip it):
 #   - ok on any probe: nothing;
 #   - not_logged_in or wrong_account: logged, never restarted (a restart cannot restore a login; a loop would hide it);
+#   - autotrading_off: logged, never restarted (AutoTrading switched off by hand is never overridden from here; the
+#     brain's terminal:<account> check FAILs and names the restart that turns it on);
+#   - a token this script does not know: logged (not its value), never restarted;
 #   - noanswer on every probe: restart the bridge (as before);
 #   - not_running/not_connected on every probe, terminal unit up TERMINAL_GRACE_S: restart the terminal unit;
 #   - anything mixed: nothing (the next run looks again).
@@ -142,8 +146,14 @@ while :; do
     not_logged_in|wrong_account)
       log "terminal $tok on $bridge; not restarting (a restart cannot restore a login; RUNBOOK 'Terminal down')"
       exit 0 ;;
+    autotrading_off)
+      log "terminal $tok on $bridge; not restarting (never overrides AutoTrading switched off; RUNBOOK 0.5 AutoTrading)"
+      exit 0 ;;
     not_running|not_connected) down=$((down + 1)); last=$tok ;;
-    *) silent=$((silent + 1)) ;;
+    noanswer|"") silent=$((silent + 1)) ;;
+    *)
+      log "terminal state not known to this watchdog on $bridge; not acting (install this release's scripts: RUNBOOK 0.5)"
+      exit 0 ;;
   esac
   [ "$i" -lt "$PROBES" ] || break
   i=$((i + 1))

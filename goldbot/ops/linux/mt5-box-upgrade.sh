@@ -7,8 +7,9 @@
 # the owner checked off-box, never from /opt/goldbot (the mt5 user can write that tree).
 #   precheck     read-only except the Config/ backup: root, market closed, no engine unit active here, the two
 #                attestations, a Config/ copy kept in mt5's 0700 directory (an existing copy is kept, not redone).
-#   install      precheck again, then `goldbot-deploy <sha>`, then the units and the watchdog/probe scripts from root's
-#                OWN shallow clone at <sha> (git verifies the content by its id; goldbot-deploy does not install units),
+#   install      precheck again, then `goldbot-deploy <sha>`, then the units, the watchdog/probe scripts and the
+#                terminal unit's AutoTrading script (/usr/local/libexec/goldbot) from root's OWN shallow clone at
+#                <sha> (git verifies the content by its id; goldbot-deploy does not install units),
 #                stops the transient goldbot-mt5-terminal-check, kills the stray terminal, enables the terminal unit,
 #                leaves the watchdog timer OFF, records the boot id. It does not reboot: the PD runs `sudo reboot`.
 #   post-reboot  needs a boot id different from install's; checks the cold restart (xvfb, terminal, bridge, exactly
@@ -33,6 +34,8 @@ ROLE_FILE=/etc/goldbot/role
 DEPLOY=/usr/local/sbin/goldbot-deploy
 UNIT_DIR=/etc/systemd/system
 SBIN=/usr/local/sbin
+# mt5-experts-enable.sh + mt5-ini.sh, run as mt5 by the terminal unit before each start
+LIBEXEC=/usr/local/libexec/goldbot
 UNITS=(goldbot-mt5-terminal@.service goldbot-bridge@.service goldbot-bridge-watchdog@.service goldbot-bridge-watchdog@.timer)
 MIN_FREE_MB=500
 
@@ -134,12 +137,16 @@ phase_install() {
   for u in "${UNITS[@]}"; do
     [ -f "$ops/systemd/$u" ] || { row FAIL "unit file $u" "absent at sha"; return 0; }
   done
-  if [ ! -f "$ops/goldbot-bridge-watchdog.sh" ] || [ ! -f "$ops/goldbot-bridge-probe.sh" ]; then
+  if [ ! -f "$ops/goldbot-bridge-watchdog.sh" ] || [ ! -f "$ops/goldbot-bridge-probe.sh" ] \
+     || [ ! -f "$ops/mt5/mt5-experts-enable.sh" ] || [ ! -f "$ops/mt5/mt5-ini.sh" ]; then
     row FAIL "watchdog scripts" "absent at sha"; return 0
   fi
   for u in "${UNITS[@]}"; do install -m 644 -o root -g root "$ops/systemd/$u" "$UNIT_DIR/$u"; done
   install -m 755 -o root -g root "$ops/goldbot-bridge-watchdog.sh" "$SBIN/goldbot-bridge-watchdog"
   install -m 755 -o root -g root "$ops/goldbot-bridge-probe.sh" "$SBIN/goldbot-bridge-probe"
+  install -d -m 755 -o root -g root "$LIBEXEC"
+  install -m 755 -o root -g root "$ops/mt5/mt5-experts-enable.sh" "$LIBEXEC/mt5-experts-enable.sh"
+  install -m 755 -o root -g root "$ops/mt5/mt5-ini.sh" "$LIBEXEC/mt5-ini.sh"
   systemctl daemon-reload
   row PASS "units and watchdog scripts installed" "root-owned"
 

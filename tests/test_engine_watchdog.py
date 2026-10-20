@@ -501,8 +501,10 @@ def test_t3_a_young_or_inactive_terminal_unit_is_left_to_its_own_restart(tmp_pat
 
 
 @pytest.mark.skipif(not BASH, reason="needs bash")
-@pytest.mark.parametrize("state", ["not_logged_in", "wrong_account"])
+@pytest.mark.parametrize("state", ["not_logged_in", "wrong_account", "autotrading_off"])
 def test_t4_a_login_problem_is_logged_and_never_restarted(tmp_path, state):
+    """autotrading_off too: the watchdog never overrides an AutoTrading switched off by hand (the brain's check FAILs
+    and says how to restart the terminal unit, whose start turns it on)."""
     rc, out, calls = _bridge_watchdog(tmp_path, bodies=[_health(state)] * 3)
     assert rc == 0 and _restarted(calls) == [], calls
     assert f"terminal {state}" in out and "not restarting" in out
@@ -510,7 +512,6 @@ def test_t4_a_login_problem_is_logged_and_never_restarted(tmp_path, state):
 
 @pytest.mark.skipif(not BASH, reason="needs bash")
 @pytest.mark.parametrize("body", [
-    b'{"ok": false, "terminal": "rebooting"}',                                   # unknown value
     b'{"ok": false, "terminal": "not_running"}' + b" " * 1100,                   # over 1 KiB
     b'{"ok": false, "terminal": "not_running", "terminal": "ok"}',               # two known values
     b'{"ok": false, "terminal": "not_running$(touch /tmp/gbx)"}',                # metacharacters
@@ -520,11 +521,22 @@ def test_t4_a_login_problem_is_logged_and_never_restarted(tmp_path, state):
     b'{"ok": false, "terminal": "\x1b[31mnot_running\x1b[0m"}',                 # ANSI
     b'{"error": "not found"}',
     b"",
-], ids=["unknown", "over_1k", "two_values", "dollar_paren", "backtick", "nul", "newline", "ansi", "404", "empty"])
+], ids=["over_1k", "two_values", "dollar_paren", "backtick", "nul", "newline", "ansi", "404", "empty"])
 def test_t5_any_other_body_is_no_answer_and_never_evaluated(tmp_path, body):
     rc, out, calls = _bridge_watchdog(tmp_path, bodies=[body] * 3)
     assert rc == 0 and _restarted(calls) == ["goldbot-bridge@icm-demo.service"], calls   # "no answer": today's rule
     assert not Path("/tmp/gbx").exists()
+
+
+@pytest.mark.skipif(not BASH, reason="needs bash")
+@pytest.mark.parametrize("state", ["rebooting", "a_state_from_a_newer_bridge"])
+def test_an_unknown_terminal_state_is_logged_without_its_value_and_never_acted_on(tmp_path, state):
+    """Review MEDIUM (version skew): goldbot-deploy updates the bridge but not these root-owned scripts, so a newer
+    bridge's token reaches an older watchdog. The probe forwards any [a-z_] token; the watchdog restarts only on
+    noanswer (the bridge) and not_running/not_connected (the terminal), never on a token it does not know."""
+    rc, out, calls = _bridge_watchdog(tmp_path, bodies=[_health(state)] * 3)
+    assert rc == 0 and _restarted(calls) == [], calls
+    assert "not known to this watchdog" in out and state not in out
 
 
 @pytest.mark.skipif(not BASH, reason="needs bash")
@@ -630,7 +642,9 @@ def test_t8_the_terminal_unit_is_the_only_launcher_and_the_bridge_requires_it():
     assert _directive(term, "RestartSec") == "15" and _directive(term, "StartLimitIntervalSec") == "0"
     assert _directive(term, "RestartSteps") == "5" and _directive(term, "RestartMaxDelaySec") == "10min"
     assert _directive(term, "ExecStart") == "/usr/bin/wine /home/mt5/.wine/drive_c/MT5/ICMarkets/terminal64.exe /profile:goldbot"
-    pre = _directive(term, "ExecStartPre")
+    pres = [ln.split("=", 1)[1] for ln in term.splitlines() if ln.startswith("ExecStartPre=")]
+    assert pres[1:] == ["-/usr/local/libexec/goldbot/mt5-experts-enable.sh"]      # after the guard (AutoTrading on)
+    pre = pres[0]
     assert "pgrep -u mt5 -f" in pre and "[t]erminal64" in pre and "exit 1" in pre and "$" not in pre
     assert "goldbot-xvfb.service" in _directive(term, "Requires") and "DISPLAY=:99" in term
     bridge = (UNITS / "goldbot-bridge@.service").read_text()

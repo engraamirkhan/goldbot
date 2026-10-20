@@ -21,6 +21,8 @@ UNITS = [
     "goldbot-bridge-watchdog@.service", "goldbot-bridge-watchdog@.timer",
 ]
 SCRIPTS = {"goldbot-bridge-watchdog.sh": "goldbot-bridge-watchdog", "goldbot-bridge-probe.sh": "goldbot-bridge-probe"}
+# run as mt5 by the terminal unit before each start (AutoTrading on; incident 2026-10-20), root-owned in LIBEXEC
+LIBEXEC_SCRIPTS = ("mt5/mt5-experts-enable.sh", "mt5/mt5-ini.sh")
 SECRET = "SECRETLOGIN-12345"
 OLD = "a" * 40
 FLAGS = ("--book-flat", "--engine-stopped")
@@ -32,7 +34,7 @@ HARNESS = r"""
 set -euo pipefail
 source "$SCRIPT"
 REPO=$T/remote; STATE_DIR=$T/state; ROLLBACK_FLOOR=$T/etc/rollback-floor; ROLE_FILE=$T/etc/role
-UNIT_DIR=$T/units; SBIN=$T/sbin; DEPLOY=$T/deploy; CONFIG_DIR=$T/mt5/Config; BACKUP_DIR=$T/mt5/config-backup
+UNIT_DIR=$T/units; SBIN=$T/sbin; LIBEXEC=$T/libexec; DEPLOY=$T/deploy; CONFIG_DIR=$T/mt5/Config; BACKUP_DIR=$T/mt5/config-backup
 mkdir -p "$UNIT_DIR" "$T/en" "$T/act"
 now_dowhm() { echo "${NOW:-60900}"; }                     # Saturday 09:00 UTC
 boot_id() { cat "$T/bootid"; }
@@ -84,6 +86,9 @@ def _remote(tmp: Path) -> str:
     for u in UNITS:
         shutil.copy(LINUX / "systemd" / u, ops / "systemd" / u)
     for s in SCRIPTS:
+        shutil.copy(LINUX / s, ops / s)
+    (ops / "mt5").mkdir()
+    for s in LIBEXEC_SCRIPTS:
         shutil.copy(LINUX / s, ops / s)
     for c in (["init", "-q"], ["add", "-A"],
               ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"]):
@@ -194,6 +199,8 @@ def test_install_order_and_results(box):
         assert (tmp / "units" / u).read_text() == (LINUX / "systemd" / u).read_text()
     for src, dst in SCRIPTS.items():
         assert (tmp / "sbin" / dst).read_text() == (LINUX / src).read_text()
+    for src in LIBEXEC_SCRIPTS:
+        assert (tmp / "libexec" / Path(src).name).read_text() == (LINUX / src).read_text()
     assert "enable --now goldbot-bridge-watchdog" not in c          # the timer stays off until post-reboot
     assert (tmp / "state" / "previous-sha").read_text().strip() == OLD
     assert "sudo reboot" in out and SECRET not in out
@@ -377,3 +384,17 @@ def test_the_terminal_units_guard_never_matches_its_own_command_line():
         m = re.search(r'pgrep[^"]*"([^"]+)"', line)
         assert m is not None, line
         assert not re.search(m.group(1), line), line
+
+
+def test_install_refuses_a_sha_without_the_autotrading_script_and_installs_no_unit(box):
+    """The terminal unit's ExecStartPre names /usr/local/libexec/goldbot/mt5-experts-enable.sh: a unit is never put in
+    place without the script it runs."""
+    tmp, _ = box
+    r = tmp / "remote"
+    subprocess.run(["git", "-C", str(r), "rm", "-q", "goldbot/ops/linux/mt5/mt5-experts-enable.sh"], check=True)
+    subprocess.run(["git", "-C", str(r), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "y"], check=True)
+    sha = subprocess.run(["git", "-C", str(r), "rev-parse", "HEAD"], check=True, capture_output=True,
+                         text=True).stdout.strip()
+    rc, out = run(box, "install", sha, *FLAGS)
+    assert rc == 1 and "FAIL   watchdog scripts" in out
+    assert not (tmp / "units" / "goldbot-mt5-terminal@.service").exists()

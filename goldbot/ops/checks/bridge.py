@@ -39,13 +39,18 @@ _TERMINAL_FAIL = {
                      + " The MT5 box logs it in from the keyring; if it stays: goldbot-mt5 login <account>,"
                      " RUNBOOK 'Terminal down'.",
     "wrong_account": "MT5 terminal logged in to a different account than registered; the bridge refuses orders.",
+    # incident 2026-10-20: the terminal unit's start sets [Experts] Enabled=1 (mt5-experts-enable.sh)
+    "autotrading_off": "MT5 terminal AutoTrading is off: the terminal refuses every order (10027). Restart the terminal"
+                       " unit on the MT5 box (its start enables it): `sudo systemctl restart"
+                       " goldbot-mt5-terminal@<account>`",
 }
 
 
 @register_check("account", block=BLOCK_ACCOUNT, pos=115)
 def check_terminal(ctx: HealthContext, account_id: str) -> Check | None:
     """The MT5 terminal behind the bridge, as the bridge's GET /health reports it: one token (ok, not_running,
-    not_connected, not_logged_in, wrong_account; docs/proposals/2026-10-mt5-terminal-lifecycle.md section 3). The
+    not_connected, not_logged_in, wrong_account, autotrading_off; docs/proposals/2026-10-mt5-terminal-lifecycle.md
+    section 3). An older brain reads autotrading_off as an unknown value: `noanswer`, a warning here. The
     wording never carries a login, a server or a host (security condition 6). Omitted without a bridge URL or a probe;
     a bridge that does not answer is `bridge:<account>`'s FAIL, so here it is a warning."""
     try:
@@ -62,6 +67,10 @@ def check_terminal(ctx: HealthContext, account_id: str) -> Check | None:
     if state == "ok":
         return Check(name=name, status="ok", reason="MT5 terminal running, logged in to the registered account and "
                      "connected")
+    if state == "autotrading_off" and (n := _open_positions(ctx, account_id)):
+        # trading-safety review: goldbot cannot close anything (time barrier, weekend, kill switch) while it is off
+        return Check(name=name, status="fail", reason=f"CRITICAL: {n} open position(s) on this account cannot be "
+                     "closed by goldbot; only their broker stop and target protect them. " + _TERMINAL_FAIL[state])
     if state in _TERMINAL_FAIL:
         return Check(name=name, status="fail", reason=_TERMINAL_FAIL[state])
     if state == "not_connected":
@@ -75,6 +84,15 @@ def check_terminal(ctx: HealthContext, account_id: str) -> Check | None:
                      "this release): deploy the MT5 box (RUNBOOK 0.5)")
     return Check(name=name, status="warn", reason=f"MT5 terminal state unknown: the bridge does not answer /health "
                  f"(see bridge:{account_id})")
+
+
+def _open_positions(ctx: HealthContext, account_id: str) -> int:
+    """The open positions the engine last published (engine_<account>.json); 0 when unknown."""
+    try:
+        n = _read_json(ctx.state_dir / f"engine_{account_id}.json").get("open_positions")
+    except (ValueError, OSError, AttributeError):
+        return 0
+    return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
 
 
 @register_check("account", block=BLOCK_ACCOUNT, pos=120, pass_account=True)

@@ -124,9 +124,13 @@ MAX_NOTIONAL_EQUITY_MULT = 6.0
 CEILING_REFUSAL = "bridge_notional_ceiling"     # the message prefix of every ceiling refusal (the engine alerts on it)
 UNREADABLE_REFUSAL = f"{CEILING_REFUSAL}: unreadable:"   # ... when a figure it checks could not be read (fail closed)
 STALE_REFUSAL = "bridge_stale_order"            # an order that aged past ORDER_MAX_AGE_S during the ceiling's reads
+# an entry refused because the terminal's AutoTrading is off (/health autotrading_off): definite, 10006, never sent
+AUTOTRADING_REFUSAL = "terminal_autotrading_off"
 REFUSED_RETCODE = 10006         # MT5 "request rejected": a definite reject (runner.DEFINITE_REJECT_RETCODES)
-# The terminal's state on GET /health: exactly these tokens (the root watchdog's probe matches them literally).
-TERMINAL_STATES = ("ok", "not_running", "not_connected", "not_logged_in", "wrong_account")
+# The terminal's state on GET /health: exactly these tokens (the root watchdog's probe matches them literally, and
+# lists them in this order; a test pins the two equal). `autotrading_off` (incident 2026-10-20): on the registered
+# account and connected, but the terminal's AutoTrading button is off, so it refuses every order (10027).
+TERMINAL_STATES = ("ok", "not_running", "not_connected", "not_logged_in", "wrong_account", "autotrading_off")
 # The keyring login's state on /health (`login`, beside `terminal`; goldbot/ops/login.py SelfHeal.status): fixed tokens,
 # never a login. Old probes and brains ignore the extra field.
 LOGIN_STATES = ("in_progress", "refused", "rate_limited", "waiting")
@@ -245,7 +249,7 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
             state = "not_running"
         if state != seen["state"]:
             seen["state"], seen["since"] = state, clock()
-        if state == "ok":
+        if state in ("ok", "autotrading_off"):         # both are the registered account, connected
             seen["verified"] = True
         return str(state)
 
@@ -423,7 +427,12 @@ class GuardedBroker:
     A refusal is a definite reject, never a raise: OrderResult retcode 10006 with the message
     "bridge_notional_ceiling: ...", so the engine records `rejected` and alerts the owner. Order of the checks: magic
     -> 3.0 lots -> account (one read) -> F4 smoke magic on demo only -> verify -> ceiling -> the order's age again
-    (`order_sent_at`) -> send. `close` and `modify` are never sized."""
+    (`order_sent_at`) -> send. `close` and `modify` are never sized.
+
+    AutoTrading (incident 2026-10-20, trading-safety review): an entry is refused as a definite reject (10006,
+    "terminal_autotrading_off: ...") when `terminal_info().trade_allowed` is False, checked after verify and before
+    the ceiling; the terminal would refuse it anyway (10027), this makes the reason the box's own. A terminal_info that
+    cannot be read, or has no such field, is not judged here. Closes and modifies are never gated by it."""
 
     def __init__(self, broker: Any, *, magic_base: int, verify: Callable[[Any], str | None] | None = None) -> None:
         self._b, self.magic_base, self._verify = broker, magic_base, verify
@@ -458,12 +467,26 @@ class GuardedBroker:
         why = self._verify(info) if self._verify is not None else None
         if why:                                        # the terminal was switched to another account after start
             raise PermissionError(f"terminal account changed: {why}")
+        if self._autotrading_off():
+            log.warning("order %s refused: the terminal's AutoTrading is off", intent.client_order_id)
+            return _refusal(f"{AUTOTRADING_REFUSAL}: the MT5 terminal's AutoTrading is off (it refuses every order, "
+                            "10027); restart the terminal unit on the MT5 box")
         if (refused := self._notional_refusal(intent, info)) is not None:
             return self._refuse(intent, refused)
         if sent_at is not None and (age := time.time() - sent_at) >= ORDER_MAX_AGE_S:
             log.warning("order %s refused: %.1f s old after the ceiling's reads", intent.client_order_id, age)
             return _refusal(f"{STALE_REFUSAL}: {age:.1f} s old before the send (max {ORDER_MAX_AGE_S:g} s)")
         return self._b.place_order(intent)
+
+    def _autotrading_off(self) -> bool:
+        """True only when the terminal says trade_allowed is False; no terminal_info, a raise or no field: False."""
+        fn = getattr(self._b, "terminal_info", None)
+        if not callable(fn):
+            return False
+        try:
+            return getattr(fn(), "trade_allowed", True) is False
+        except Exception:                                # noqa: BLE001 - not judged here; the send says what it can
+            return False
 
     def _refuse(self, intent: OrderIntent, why: str) -> OrderResult:
         log.warning("order %s refused by the notional ceiling: %s", intent.client_order_id, why)
@@ -506,8 +529,9 @@ class GuardedBroker:
     def terminal_state(self) -> str | None:
         """The terminal's state as one token of TERMINAL_STATES, for GET /health; None when the wrapped broker cannot
         say (no `terminal_info`, e.g. the paper broker). Order: no terminal (terminal_info None or an IPC error) ->
-        no account -> another account than registered (`verify`) -> not connected to the broker server -> ok. A login
-        or a server never leaves this method."""
+        no account -> another account than registered (`verify`) -> not connected to the broker server -> AutoTrading
+        off (`terminal_info().trade_allowed` False: the terminal refuses every order, 10027; a terminal_info without
+        the field is not judged) -> ok. A login or a server never leaves this method."""
         info_fn = getattr(self._b, "terminal_info", None)
         if not callable(info_fn):
             return None
@@ -531,6 +555,8 @@ class GuardedBroker:
             return "wrong_account"
         if not getattr(term, "connected", False):
             return "not_connected"
+        if getattr(term, "trade_allowed", True) is False:
+            return "autotrading_off"
         return "ok"
 
     @property

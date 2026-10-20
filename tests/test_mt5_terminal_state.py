@@ -2,7 +2,7 @@
 (docs/proposals/2026-10-mt5-terminal-lifecycle.md: section 3, test 9 and security conditions 1 and 6).
 
 The bridge maps what the terminal says (terminal_info, account_info, the registered-account check) to one fixed token,
-`ok | not_running | not_connected | not_logged_in | wrong_account`, never a login, server or balance; it answers 200
+`ok | not_running | not_connected | not_logged_in | wrong_account | autotrading_off`, never a login, server or balance; it answers 200
 only for `ok` and 503 otherwise, and exits non-zero (systemd re-attaches it) after two consecutive `not_running`
 reads. Until the terminal has been seen on the registered account the bridge serves /health only."""
 from __future__ import annotations
@@ -42,12 +42,15 @@ class FakeTerminal:
             return None
         if self.mode == "ipc_error":
             raise RuntimeError("IPC timeout -10005")
-        return type("TI", (), {"connected": self.mode != "disconnected"})()
+        if self.mode == "legacy":                                   # a terminal_info without trade_allowed
+            return type("TI", (), {"connected": True})()
+        return type("TI", (), {"connected": self.mode not in ("disconnected", "disconnected_autotrading_off"),
+                               "trade_allowed": "autotrading_off" not in self.mode})()
 
     def account(self) -> AccountInfo:
         if self.mode == "logged_out":
             raise AttributeError("'NoneType' object has no attribute 'login'")    # MT5Broker on account_info() None
-        login = LOGIN + 1 if self.mode == "other_account" else LOGIN
+        login = LOGIN + 1 if self.mode.startswith("other_account") else LOGIN
         return AccountInfo(login=login, equity=1000.0, balance=1000.0, margin=0.0, margin_free=1000.0, leverage=30,
                            currency="GBP", server=SERVER, trade_mode="demo", margin_mode="hedging")
 
@@ -94,7 +97,10 @@ def _health(url: str) -> requests.Response:
 
 
 STATES = {"ok": "ok", "dead": "not_running", "ipc_error": "not_running", "disconnected": "not_connected",
-          "logged_out": "not_logged_in", "other_account": "wrong_account"}
+          "logged_out": "not_logged_in", "other_account": "wrong_account", "autotrading_off": "autotrading_off",
+          # the order: account and connection first, then AutoTrading (incident 2026-10-20)
+          "disconnected_autotrading_off": "not_connected", "other_account_autotrading_off": "wrong_account",
+          "legacy": "ok"}
 
 
 # ---- test 9: /health maps the terminal to one token, with no login digits
@@ -104,8 +110,8 @@ def test_t9_health_maps_the_terminal_to_one_fixed_token(served, mode):
     term.mode = mode
     r = requests.get(f"{url}/health", timeout=5)
     body = r.json()
-    assert body["terminal"] == STATES[mode] and body["ok"] is (mode == "ok")
-    assert r.status_code == (200 if mode == "ok" else 503)
+    assert body["terminal"] == STATES[mode] and body["ok"] is (STATES[mode] == "ok")
+    assert r.status_code == (200 if STATES[mode] == "ok" else 503)
     assert isinstance(body["terminal_for_s"], int) and 0 <= body["terminal_for_s"] <= bridge_mod.TERMINAL_FOR_CAP_S
     # security condition 6: no login, server or host; the commit is hex and carries its own digits, so it is left out
     text = json.dumps({k: v for k, v in body.items() if k != "commit"})
@@ -168,6 +174,16 @@ def test_rpc_is_refused_until_the_terminal_is_seen_on_the_registered_account(ser
     term.mode = "disconnected"                                        # verified once: reads keep being served
     r = requests.post(f"{url}/rpc", json={"method": "last_tick", "args": ["XAUUSD"]}, headers=hdr, timeout=5)
     assert r.status_code == 200
+
+
+def test_autotrading_off_still_verifies_the_account_so_reads_and_closes_are_served(served):
+    """autotrading_off is checked after the account: the terminal is on the registered account, so the bridge serves
+    reads and passes orders and closes on (the terminal itself refuses them with 10027 and the engine sees why)."""
+    url, term, _ = served
+    term.mode = "autotrading_off"
+    assert _rpc(url, "last_tick", "XAUUSD").status_code == 200
+    r = _rpc(url, "close", 1)
+    assert r.status_code != 503 and "refused" not in r.text, r.text
 
 
 def _rpc(url: str, method: str, *args: Any) -> requests.Response:
@@ -282,6 +298,9 @@ WORDING = {
                               "goldbot-mt5 login <account>, RUNBOOK 'Terminal down'."),
     "wrong_account": ("fail", "MT5 terminal logged in to a different account than registered; the bridge refuses "
                               "orders."),
+    "autotrading_off": ("fail", "MT5 terminal AutoTrading is off: the terminal refuses every order (10027). Restart "
+                                "the terminal unit on the MT5 box (its start enables it): "
+                                "`sudo systemctl restart goldbot-mt5-terminal@<account>`"),
 }
 
 
@@ -311,7 +330,7 @@ def test_terminal_check_ok_unknown_and_omitted(tmp_path):
 
 
 @pytest.mark.parametrize("state", ["ok", "not_running", "not_connected", "not_logged_in", "wrong_account",
-                                   "noanswer", "unreported"])
+                                   "autotrading_off", "noanswer", "unreported"])
 def test_security_6_the_check_text_carries_no_login_server_or_host(tmp_path, state):
     for for_s in (30, 99_999):
         c = _check(tmp_path, state, for_s=for_s)
@@ -377,3 +396,52 @@ def test_terminals_in_bridge_cgroup_counts_only_the_bridge_units_cgroup(tmp_path
     unreadable = tmp_path / "file-not-dir"
     unreadable.write_text("x")
     assert terminals_in_bridge_cgroup(unreadable) is None
+
+
+def test_the_watchdog_acts_only_on_tokens_the_bridge_reports_and_ignores_the_rest():
+    """Review MEDIUM (version skew): the probe forwards any [a-z_] token (no list to fall behind the bridge's), and the
+    watchdog's restarts hang only on noanswer and on TERMINAL_STATES tokens; anything else falls to an arm that only
+    logs. So a new token in a newer bridge can never become a restart loop on a box whose scripts are older."""
+    from pathlib import Path
+    linux = Path(__file__).resolve().parents[1] / "goldbot" / "ops" / "linux"
+    probe = (linux / "goldbot-bridge-probe.sh").read_text()
+    assert "for state in " not in probe and "[a-z_]{1,32}" in probe
+    wd = (linux / "goldbot-bridge-watchdog.sh").read_text()
+    block = wd.split('case "$tok" in', 1)[1].split("esac", 1)[0]
+    arms = {ln.strip().split(")")[0]: ln for ln in block.splitlines() if re.match(r"\s+[a-z_|*\"]+\)", ln)}
+    named = {t for arm in arms if arm not in ("*",) for t in arm.split("|")} - {'""'}
+    assert named <= set(bridge_mod.TERMINAL_STATES) | {"noanswer"}, named - set(bridge_mod.TERMINAL_STATES)
+    assert "*" in arms
+
+
+# ---- trading-safety review MEDIUM (item 2): autotrading_off refuses entries on the box and alerts with open positions
+def _ti(trade_allowed: bool) -> Any:
+    return lambda: type("TI", (), {"connected": True, "trade_allowed": trade_allowed})()
+
+
+def test_an_entry_is_refused_on_the_mt5_box_as_a_definite_reject_while_autotrading_is_off():
+    from goldbot.engine.runner import DEFINITE_REJECT_RETCODES
+    from goldbot.execution.not_placed import not_placed, refusal_code
+    from tests.test_bridge import _order, _pos, _Terminal
+    t = _Terminal(equity=100_000.0, positions=[_pos(0.1)])
+    t.terminal_info = _ti(False)                                   # type: ignore[attr-defined]
+    g = GuardedBroker(t, magic_base=260100)
+    res = g.place_order(_order(0.01))
+    assert not res.ok and res.retcode == bridge_mod.REFUSED_RETCODE and t.sent == []
+    assert res.message.startswith(f"{bridge_mod.AUTOTRADING_REFUSAL}: ")
+    assert res.retcode in DEFINITE_REJECT_RETCODES
+    code = refusal_code(res, paper=False, definite=DEFINITE_REJECT_RETCODES)
+    assert code == bridge_mod.AUTOTRADING_REFUSAL and not_placed(code).by == "mt5_box"   # type: ignore[union-attr]
+    assert g.close(7).ok                                           # closes are never gated by it
+    t.terminal_info = _ti(True)                                    # type: ignore[attr-defined]
+    assert g.place_order(_order(0.01)).ok and len(t.sent) == 1
+
+
+def test_autotrading_off_with_open_positions_is_a_critical_failure_naming_them(tmp_path):
+    (tmp_path / "engine_icm-demo.json").write_text(json.dumps({"open_positions": 2}))
+    c = _check(tmp_path, "autotrading_off")
+    assert c.status == "fail" and c.reason.startswith("CRITICAL: 2 open position(s) on this account cannot be closed "
+                                                      "by goldbot")
+    assert "only their broker stop and target protect them" in c.reason and WORDING["autotrading_off"][1] in c.reason
+    (tmp_path / "engine_icm-demo.json").write_text(json.dumps({"open_positions": 0}))
+    assert _check(tmp_path, "autotrading_off").reason == WORDING["autotrading_off"][1]
