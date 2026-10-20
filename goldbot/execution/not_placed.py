@@ -27,7 +27,7 @@ from goldbot.execution.bridge import (
     UNREADABLE_REFUSAL,
     BridgeError,
 )
-from goldbot.execution.broker import ACCOUNT_REFUSAL, OrderResult
+from goldbot.execution.broker import ACCOUNT_REFUSAL, PRECHECK_REFUSAL, RETCODE_PRECHECK_FAILED, OrderResult
 from goldbot.execution.not_confirmed import NOT_CONFIRMED
 from goldbot.execution.not_confirmed import card_text as not_confirmed_card
 
@@ -103,6 +103,9 @@ _MT5_BOX: dict[str, tuple[str, str]] = {
     STALE_REFUSAL: (f"it took more than {ORDER_MAX_AGE_S:g} s to check the order, so it dropped it rather than trade "
                     f"on an old price",
                     f"{_ONE_OFF} If it repeats, the MT5 box is overloaded or slow: check the Health tab."),
+    # incident 2026-10-20: the terminal's own pre-send check failed (MT5Broker.place_order); nothing reached the broker
+    PRECHECK_REFUSAL: ("the MT5 terminal's own check before sending refused it",
+                       f"{_ONE_OFF} If it repeats, ask Claude to check the MT5 box's log."),
     # BACKLOG 66, as shipped (the dashboard's words); the card and the notice keep their own shipped forms below
     CEILING_REFUSAL: ("its safety limit stops open gold worth more than 6× equity, and this trade would have gone "
                       "over it", _CEILING_STEP),
@@ -143,6 +146,8 @@ def refusal_code(res: OrderResult, *, paper: bool, definite: frozenset[int]) -> 
         return ACCOUNT_REFUSAL
     if res.message.startswith(STALE_REFUSAL):
         return STALE_REFUSAL
+    if res.retcode == RETCODE_PRECHECK_FAILED or res.message.startswith(PRECHECK_REFUSAL):
+        return PRECHECK_REFUSAL
     return f"{BROKER_REFUSED}:{res.retcode}{PAPER_SUFFIX if paper and res.retcode == 10027 else ''}"
 
 

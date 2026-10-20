@@ -53,6 +53,9 @@ from goldbot.data.calendar import SessionTable, TradingSession, resolve_server_s
 from goldbot.data.timeutil import server_to_utc, server_wall
 from goldbot.execution.broker import (
     ACCOUNT_REFUSAL,
+    DEFINITE_REJECT_RETCODES,
+    PRECHECK_REFUSAL,
+    RETCODE_PRECHECK_FAILED,
     AccountInfo,
     OrderIntent,
     OrderResult,
@@ -114,6 +117,13 @@ def _send_failed(position_id: int) -> OrderResult:
                        message=f"order_send failed: {mt5.last_error()}")
 
 log = logging.getLogger("goldbot.mt5")
+
+
+def _precheck_failed(why: str) -> OrderResult:
+    """order_check refused the request (with a code that would read as ambiguous from order_send) or returned None:
+    order_send was never called, so a definite reject, RETCODE_PRECHECK_FAILED."""
+    return OrderResult(ok=False, retcode=RETCODE_PRECHECK_FAILED, order_id=None, position_id=None, filled_lots=0.0,
+                       price=None, message=f"{PRECHECK_REFUSAL}: {why}")
 
 
 def _request_types(req: dict[str, Any]) -> str:
@@ -404,16 +414,18 @@ class MT5Broker:
         }
         for attempt in range(3):
             chk = mt5.order_check(req)
-            if chk is None:                            # MT5 says why only through last_error (incident 2026-10-20)
+            # nothing is sent when the check fails: a definite reject (trading-safety ruling, incident 2026-10-20)
+            if chk is None:                            # MT5 says why only through last_error
                 err = mt5.last_error()
                 log.warning("order %s: order_check returned None: %s; request types: %s", intent.client_order_id,
                             err, _request_types(req))
-                return OrderResult(ok=False, retcode=-1, order_id=None, position_id=None, filled_lots=0.0,
-                                   price=None, message=f"order_check: none: {err}")
+                return _precheck_failed(f"order_check: none: {err}")
             if chk.retcode not in (0, RETCODE_DONE):
-                return OrderResult(ok=False, retcode=chk.retcode, order_id=None, position_id=None, filled_lots=0.0,
-                                   price=None, message=f"order_check: {getattr(chk, 'comment', '')} "
-                                                       f"(retcode {chk.retcode})")
+                why = f"order_check: {getattr(chk, 'comment', '')} (retcode {chk.retcode})"
+                if chk.retcode in DEFINITE_REJECT_RETCODES:   # the broker's own code words the card (10027, 10019..)
+                    return OrderResult(ok=False, retcode=chk.retcode, order_id=None, position_id=None,
+                                       filled_lots=0.0, price=None, message=why)
+                return _precheck_failed(why)
             res = mt5.order_send(req)
             if res is not None and res.retcode == RETCODE_DONE:
                 return OrderResult(ok=True, retcode=res.retcode, order_id=res.order, position_id=_position_ticket(res), filled_lots=res.volume, price=res.price, message=res.comment)

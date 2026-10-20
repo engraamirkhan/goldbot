@@ -6,7 +6,7 @@ import pytest
 
 from goldbot.engine.runner import DEFINITE_REJECT_RETCODES
 from goldbot.execution.bridge import BridgeError, BridgeUnavailable
-from goldbot.execution.broker import ACCOUNT_REFUSAL, OrderResult
+from goldbot.execution.broker import ACCOUNT_REFUSAL, PRECHECK_REFUSAL, OrderResult
 from goldbot.execution.not_placed import (
     CEILING_CODES,
     NotPlaced,
@@ -22,11 +22,13 @@ from goldbot.telegram.entry_text import account_name
 
 PID = "icm-demo-51234567-1700000000-ab12"
 RAW = "Request rejected by trade server"
+# the broker's own codes; RETCODE_PRECHECK_FAILED (negative, the terminal's order_check) has its own refusal code
+BROKER_RETCODES = sorted(r for r in DEFINITE_REJECT_RETCODES if r > 0)
 
 
 def _codes() -> list[str]:
-    return ([f"broker_refused:{r}" for r in sorted(DEFINITE_REJECT_RETCODES)]
-            + ["broker_refused:10027:paper", "bridge_stale_order", *CEILING_CODES, ACCOUNT_REFUSAL])
+    return ([f"broker_refused:{r}" for r in BROKER_RETCODES]
+            + ["broker_refused:10027:paper", "bridge_stale_order", *CEILING_CODES, ACCOUNT_REFUSAL, PRECHECK_REFUSAL])
 
 
 def _res(retcode: int, message: str = RAW) -> OrderResult:
@@ -38,7 +40,7 @@ def _code(res: OrderResult, paper: bool = False) -> str | None:
     return refusal_code(res, paper=paper, definite=DEFINITE_REJECT_RETCODES)
 
 
-@pytest.mark.parametrize("retcode", sorted(DEFINITE_REJECT_RETCODES))
+@pytest.mark.parametrize("retcode", BROKER_RETCODES)
 def test_every_definite_reject_has_a_row_or_reaches_the_fallback_that_names_its_code(retcode):
     np = not_placed(f"broker_refused:{retcode}")
     assert np is not None and np.by == "broker"
