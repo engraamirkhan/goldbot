@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# goldbot-bridge-probe <port> <timeout_s>: print exactly one fixed token for the bridge's GET /health, one of
-#   ok | not_running | not_connected | not_logged_in | wrong_account | autotrading_off | noanswer
-# and nothing else. The body is written by the bridge, which runs as mt5, so it is untrusted here: this script runs
-# UNPRIVILEGED (goldbot-bridge-watchdog starts it with setpriv as nobody; security condition 1 of
+# goldbot-bridge-probe <port> <timeout_s>: print exactly one token for the bridge's GET /health and nothing else:
+#   the bridge's terminal state (today ok | not_running | not_connected | not_logged_in | wrong_account |
+#   autotrading_off; any 1 to 32 bytes of [a-z_]) or noanswer
+# The body is written by the bridge, which runs as mt5, so it is untrusted here: this script runs UNPRIVILEGED
+# (goldbot-bridge-watchdog starts it with setpriv as nobody; security condition 1 of
 # docs/proposals/2026-10-mt5-terminal-lifecycle.md), reads at most 1 KiB, never evaluates or prints the body, and
-# matches it only against the six literal `"terminal": "<state>"` forms the bridge writes (json.dumps). Exactly one
-# must match; anything else (unknown value, two values, over 1 KiB, a NUL, no answer, curl error) is `noanswer`.
+# prints only a value matching `"terminal": "[a-z_]{1,32}"` followed by , or }. Exactly one "terminal": key must be
+# there; anything else (two keys, a value with any other byte, over 1 KiB, a NUL, no answer, curl error) is noanswer.
 # A body without any "terminal" key that starts like the bridge's {"ok": true is an older bridge: `ok`, as before.
 set -uo pipefail
 export LC_ALL=C
@@ -32,20 +33,19 @@ if [ "${#body}" -gt "$MAX_BYTES" ]; then
   exit 0
 fi
 
-found=noanswer
-n=0
-for state in ok not_running not_connected not_logged_in wrong_account autotrading_off; do
-  case "$body" in
-    *"\"terminal\": \"$state\""*) found=$state; n=$((n + 1)) ;;
-  esac
-done
-if [ "$n" -eq 1 ]; then
-  echo "$found"
+# exactly one "terminal": key, whose value is 1 to 32 bytes of [a-z_] closed by a quote and then , or }. ANY such
+# token is forwarded, not only the ones this copy knows: goldbot-deploy updates the bridge but not this root-owned
+# script, so a newer bridge's token must not read as noanswer (the watchdog restarts the bridge on noanswer).
+rest=${body//\"terminal\":/}
+n=$(( (${#body} - ${#rest}) / 11 ))                    # 11 = the length of "terminal":
+re='"terminal": "([a-z_]{1,32})"[,}]'
+if [ "$n" -eq 1 ] && [[ $body =~ $re ]]; then
+  echo "${BASH_REMATCH[1]}"
   exit 0
 fi
 if [ "$n" -eq 0 ]; then
   case "$body" in
-    *'"terminal"'*) ;;                                   # a terminal key with no known value
+    *'"terminal"'*) ;;                                   # a terminal key in any other form
     '{"ok": true'*) echo ok; exit 0 ;;                   # a bridge older than the terminal state
   esac
 fi

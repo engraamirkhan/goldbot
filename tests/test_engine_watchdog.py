@@ -512,7 +512,6 @@ def test_t4_a_login_problem_is_logged_and_never_restarted(tmp_path, state):
 
 @pytest.mark.skipif(not BASH, reason="needs bash")
 @pytest.mark.parametrize("body", [
-    b'{"ok": false, "terminal": "rebooting"}',                                   # unknown value
     b'{"ok": false, "terminal": "not_running"}' + b" " * 1100,                   # over 1 KiB
     b'{"ok": false, "terminal": "not_running", "terminal": "ok"}',               # two known values
     b'{"ok": false, "terminal": "not_running$(touch /tmp/gbx)"}',                # metacharacters
@@ -522,11 +521,22 @@ def test_t4_a_login_problem_is_logged_and_never_restarted(tmp_path, state):
     b'{"ok": false, "terminal": "\x1b[31mnot_running\x1b[0m"}',                 # ANSI
     b'{"error": "not found"}',
     b"",
-], ids=["unknown", "over_1k", "two_values", "dollar_paren", "backtick", "nul", "newline", "ansi", "404", "empty"])
+], ids=["over_1k", "two_values", "dollar_paren", "backtick", "nul", "newline", "ansi", "404", "empty"])
 def test_t5_any_other_body_is_no_answer_and_never_evaluated(tmp_path, body):
     rc, out, calls = _bridge_watchdog(tmp_path, bodies=[body] * 3)
     assert rc == 0 and _restarted(calls) == ["goldbot-bridge@icm-demo.service"], calls   # "no answer": today's rule
     assert not Path("/tmp/gbx").exists()
+
+
+@pytest.mark.skipif(not BASH, reason="needs bash")
+@pytest.mark.parametrize("state", ["rebooting", "a_state_from_a_newer_bridge"])
+def test_an_unknown_terminal_state_is_logged_without_its_value_and_never_acted_on(tmp_path, state):
+    """Review MEDIUM (version skew): goldbot-deploy updates the bridge but not these root-owned scripts, so a newer
+    bridge's token reaches an older watchdog. The probe forwards any [a-z_] token; the watchdog restarts only on
+    noanswer (the bridge) and not_running/not_connected (the terminal), never on a token it does not know."""
+    rc, out, calls = _bridge_watchdog(tmp_path, bodies=[_health(state)] * 3)
+    assert rc == 0 and _restarted(calls) == [], calls
+    assert "not known to this watchdog" in out and state not in out
 
 
 @pytest.mark.skipif(not BASH, reason="needs bash")

@@ -398,18 +398,20 @@ def test_terminals_in_bridge_cgroup_counts_only_the_bridge_units_cgroup(tmp_path
     assert terminals_in_bridge_cgroup(unreadable) is None
 
 
-def test_the_root_probe_and_watchdog_know_every_terminal_state_the_bridge_reports():
-    """A token the probe does not list is `noanswer` there, and the watchdog restarts the bridge on noanswer: a new
-    TERMINAL_STATES token without the probe and the watchdog would turn into a restart loop on the MT5 box."""
+def test_the_watchdog_acts_only_on_tokens_the_bridge_reports_and_ignores_the_rest():
+    """Review MEDIUM (version skew): the probe forwards any [a-z_] token (no list to fall behind the bridge's), and the
+    watchdog's restarts hang only on noanswer and on TERMINAL_STATES tokens; anything else falls to an arm that only
+    logs. So a new token in a newer bridge can never become a restart loop on a box whose scripts are older."""
     from pathlib import Path
     linux = Path(__file__).resolve().parents[1] / "goldbot" / "ops" / "linux"
     probe = (linux / "goldbot-bridge-probe.sh").read_text()
-    [loop] = [ln for ln in probe.splitlines() if ln.startswith("for state in ")]
-    assert loop.removeprefix("for state in ").removesuffix("; do").split() == list(bridge_mod.TERMINAL_STATES)
+    assert "for state in " not in probe and "[a-z_]{1,32}" in probe
     wd = (linux / "goldbot-bridge-watchdog.sh").read_text()
-    arms = [ln.strip().split(")")[0] for ln in wd.splitlines() if re.match(r"\s+[a-z_|]+\)", ln)]
-    handled = {t for arm in arms for t in arm.split("|")}
-    assert set(bridge_mod.TERMINAL_STATES) <= handled, set(bridge_mod.TERMINAL_STATES) - handled
+    block = wd.split('case "$tok" in', 1)[1].split("esac", 1)[0]
+    arms = {ln.strip().split(")")[0]: ln for ln in block.splitlines() if re.match(r"\s+[a-z_|*\"]+\)", ln)}
+    named = {t for arm in arms if arm not in ("*",) for t in arm.split("|")} - {'""'}
+    assert named <= set(bridge_mod.TERMINAL_STATES) | {"noanswer"}, named - set(bridge_mod.TERMINAL_STATES)
+    assert "*" in arms
 
 
 # ---- trading-safety review MEDIUM (item 2): autotrading_off refuses entries on the box and alerts with open positions
