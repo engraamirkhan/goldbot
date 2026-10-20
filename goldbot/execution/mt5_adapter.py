@@ -115,6 +115,12 @@ def _send_failed(position_id: int) -> OrderResult:
 
 log = logging.getLogger("goldbot.mt5")
 
+
+def _request_types(req: dict[str, Any]) -> str:
+    """`key=type` for every field of an order request, for a log line: the TYPES only (an argument of the wrong type is
+    what makes order_check return None), never a value (the comment and magic identify the strategy and account)."""
+    return " ".join(f"{k}={type(v).__name__}" for k, v in req.items())
+
 SWAP_MODES = {0: "disabled", 1: "points", 2: "base currency", 3: "margin currency", 4: "deposit currency",
               5: "interest on the current price", 6: "interest on the open price", 7: "reopen at close", 8: "reopen at bid"}
 INTEREST_DAYS = 360
@@ -398,8 +404,16 @@ class MT5Broker:
         }
         for attempt in range(3):
             chk = mt5.order_check(req)
-            if chk is None or chk.retcode not in (0, RETCODE_DONE):
-                return OrderResult(ok=False, retcode=getattr(chk, "retcode", -1), order_id=None, position_id=None, filled_lots=0.0, price=None, message=f"order_check: {getattr(chk, 'comment', '')}")
+            if chk is None:                            # MT5 says why only through last_error (incident 2026-10-20)
+                err = mt5.last_error()
+                log.warning("order %s: order_check returned None: %s; request types: %s", intent.client_order_id,
+                            err, _request_types(req))
+                return OrderResult(ok=False, retcode=-1, order_id=None, position_id=None, filled_lots=0.0,
+                                   price=None, message=f"order_check: none: {err}")
+            if chk.retcode not in (0, RETCODE_DONE):
+                return OrderResult(ok=False, retcode=chk.retcode, order_id=None, position_id=None, filled_lots=0.0,
+                                   price=None, message=f"order_check: {getattr(chk, 'comment', '')} "
+                                                       f"(retcode {chk.retcode})")
             res = mt5.order_send(req)
             if res is not None and res.retcode == RETCODE_DONE:
                 return OrderResult(ok=True, retcode=res.retcode, order_id=res.order, position_id=_position_ticket(res), filled_lots=res.volume, price=res.price, message=res.comment)
