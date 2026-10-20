@@ -59,9 +59,11 @@ real (live-agent) trades take priority". A cost probe, not a population status: 
   Excluded from the dynamic probe count and from the mirror slots (prereg K10). Its close after `hold_s` on the host
   clock (`hold_exits`, every pass of `Engine._retry_closes`) is never gated: halted entries, probes switched off and a
   restart (the trade's open time) all still close it. Its row records the quote the close was sent on (K11) and the
-  broker's account-currency rate at send and close (K9). The RiskGate's learning-probe fence asks for a positive edge
-  that a signal-less probe cannot honestly show, so until the gate has a cost-measurement purpose (prereg K8) every
-  scheduled probe is refused there and journalled; no p is invented to pass it.
+  broker's account-currency rate at send and close (K9). A signal-less probe cannot honestly show the learning-probe
+  fence's positive edge, so it asks the RiskGate for the `cost_measurement` purpose (prereg K8; ADR 0037 Amendment 5,
+  owner-approved 2026-10-20): the gate skips only the EV requirement, and only for the minimum lot on a terminal that
+  reads demo now, a stop <= $3, a hold <= 60 s and a loss at the stop within the budget headroom and the dynamic
+  per-probe ceiling; every other limit applies. No p is invented to pass it.
 """
 from __future__ import annotations
 
@@ -886,7 +888,9 @@ def _send_scheduled(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick:
     intent = Intent(agent_id=SCHEDULED_ID, side=side, p=0.5, target_atr=1.0, stop_atr=1.0, atr_usd=sch.stop_usd,
                     cost_atr=eng._cost_atr(sch.stop_usd, close_ts), multiplier=1.0, price=price,
                     timeframe=eng.cfg.decision_tf, family=SCHEDULED_FAMILY, has_target=False, learning_probe=True,
-                    account_mode=eng.cfg.mode, phase_file=_phase_file(eng), **terms)
+                    account_mode=eng.cfg.mode, phase_file=_phase_file(eng), purpose="cost_measurement",
+                    terminal_trade_mode=_terminal_trade_mode(eng), hold_s=sch.hold_s, probe_headroom=headroom,
+                    probe_max_loss=lim.max_loss, **terms)
 
     def record(res: OrderResult, gd: GateDecision, filled: bool, loss: float, sent: pd.Timestamp,
                latency_ms: float) -> ProbeRecord:
@@ -905,6 +909,15 @@ def _send_scheduled(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick:
                  journal={"agent": SCHEDULED_ID}, record=record, max_stop=sch.stop_usd)
     if pos is not None:
         probe.held[pos] = _hold_clock(eng, tick.ts_utc)
+
+
+def _terminal_trade_mode(eng: Engine) -> str | None:
+    """What the terminal itself reports (MT5 `account_info().trade_mode`), read fresh for the gate's cost-measurement
+    fence (ADR 0037 Amendment 5); an unreadable account gives None, which the gate refuses."""
+    try:
+        return getattr(eng.broker.account(), "trade_mode", None)
+    except Exception:
+        return None
 
 
 def _hold_clock(eng: Engine, now: pd.Timestamp) -> pd.Timestamp:

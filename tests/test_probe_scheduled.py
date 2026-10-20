@@ -72,8 +72,9 @@ def _bars_until(eng: Engine, pb: PaperBroker, close: pd.Timestamp) -> Tick:
 
 
 def _allow(eng: Engine) -> list[Any]:
-    """The gate's answer for a scheduled probe once the cost-measurement purpose exists (prereg K8): allowed at the
-    minimum lot with the $3 stop. Every intent the gate is asked about is recorded."""
+    """A stub of the gate's answer for a scheduled probe (allowed at the minimum lot with the $3 stop), so the order
+    path's tests do not depend on the gate's fence; the real gate's own tests below and tests/test_cost_measurement_gate.py.
+    Every intent the gate is asked about is recorded."""
     seen: list[Any] = []
     real = eng.gate.check
 
@@ -138,14 +139,46 @@ def test_a_scheduled_probe_is_journalled_and_recorded_with_its_quote_and_the_gbp
     assert rec.native_stop_loss is None                                     # K10: never in the dynamic count
 
 
-def test_the_present_gate_refuses_a_scheduled_probe_until_a_cost_measurement_purpose_exists(tmp_path):
-    """The prereg (section 3): a scheduled probe has no signal and no p, so the learning-probe fence refuses it, "and
-    it must stay refused until K8 is merged". No p is invented to pass it."""
+def test_the_real_gate_allows_a_scheduled_probe_under_the_cost_measurement_purpose(tmp_path):
+    """ADR 0037 Amendment 5 (prereg K8): no p is invented; the probe asks for the cost-measurement purpose with the
+    terminal's own trade mode, its hold and both probe budgets, and the real RiskGate places it at the minimum lot."""
     eng, pb, tick = _engine(tmp_path)
+    seen: list[Any] = []
+    real = eng.gate.check
+
+    def check(intent: Any, *a: Any, **kw: Any) -> GateDecision:
+        seen.append(intent)
+        return real(intent, *a, **kw)
+
+    eng.gate.check = check                                  # type: ignore[method-assign]
+    eng.on_bar_close(CUT, tick)
+    [intent] = [i for i in seen if i.agent_id == cost_probe.SCHEDULED_ID]
+    assert intent.purpose == "cost_measurement" and intent.p == 0.5 and intent.terminal_trade_mode == "demo"
+    assert intent.hold_s == ON.hold_s and intent.probe_headroom > 0 and intent.probe_max_loss > 0
+    [pos] = pb.positions()
+    assert pos.lots == pytest.approx(0.01) and pos.sl is not None and abs(pos.open_price - pos.sl) <= 3.0 + 1e-9
+    assert [r.purpose for r in _rows(tmp_path)] == ["cost_measurement"]
+
+
+def test_the_gate_refuses_a_scheduled_probe_when_the_terminal_does_not_read_demo_at_the_order(tmp_path, monkeypatch):
+    """The engine's lock passed at the bar close; the gate is given the terminal's own read taken at the order."""
+    eng, pb, tick = _engine(tmp_path)
+    monkeypatch.setattr(cost_probe, "_terminal_trade_mode", lambda eng: "real")
     eng.on_bar_close(CUT, tick)
     assert not pb.positions() and not _rows(tmp_path)
     [why] = [a for a in _refusals(eng) if a.startswith("cost_probe_scheduled_refused:")]
-    assert "time_exit_ev_unsupported" in why
+    assert "cost_measurement_terminal_not_demo" in why
+
+
+def test_an_unreadable_terminal_gives_the_gate_no_trade_mode(tmp_path):
+    eng, pb, _ = _engine(tmp_path)
+
+    def boom() -> AccountInfo:
+        raise ConnectionError("bridge down")
+
+    assert cost_probe._terminal_trade_mode(eng) == "demo"
+    pb.account = boom                                        # type: ignore[method-assign]
+    assert cost_probe._terminal_trade_mode(eng) is None
 
 
 def test_sides_alternate_by_slot_index_never_by_outcome(tmp_path):

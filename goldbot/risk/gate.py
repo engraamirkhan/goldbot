@@ -228,6 +228,19 @@ class Intent(Record):
     learning_probe: bool = False
     account_mode: str | None = None   # the registry's (accounts.yaml); read only for a learning probe
     phase_file: Path | None = None    # state/phase_state.json; read only for a learning probe
+    # ADR 0037 Amendment 5 (owner-approved 2026-10-20, "Allow, demo only"): a scheduled cost probe has no signal, so
+    # the purpose `cost_measurement` skips ONLY the expected-value requirement (`time_exit_ev_unsupported`,
+    # `negative_gross_edge`), and only inside its fence (`_cost_measurement_reasons`): a learning probe, the demo lock,
+    # a terminal that itself reports demo, the minimum lot, a stop of at most COST_MEASUREMENT_MAX_STOP_USD, a planned
+    # hold of at most COST_MEASUREMENT_MAX_HOLD_S and the loss at the stop within both probe budgets. Every account
+    # limit, halt, window and sizing limit still applies. Set only by goldbot/engine/cost_probe.py (`_send_scheduled`)
+    purpose: Literal["signal", "cost_measurement"] = "signal"
+    terminal_trade_mode: str | None = None   # MT5 account_info().trade_mode read at the order; cost_measurement only
+    hold_s: float | None = None              # the planned hold, seconds; cost_measurement only
+    # account currency: what the probes may still lose today (the cost-probe budget) and the dynamic per-probe ceiling
+    # (`probe_limits`); cost_measurement only, None refuses
+    probe_headroom: float | None = None
+    probe_max_loss: float | None = None
     # the live model version the intent comes from (runner `live_versions`): the key of `RiskLimits.strategy_risk`;
     # None (unknown) trades the base risk per trade
     model_version: str | None = None
@@ -276,18 +289,62 @@ OPERATIONAL_MIN_STOP_USD = 1.0
 LIVE_GATES = frozenset({"paper_to_tiny_live", "tiny_live_to_full_size"})
 
 
-def _learning_probe_reasons(intent: Intent) -> list[str]:
+def _learning_probe_reasons(intent: Intent, *, gross_edge: bool = True) -> list[str]:
     """The learning probe's own fence (see `Intent.learning_probe`): demo by the registry and the phase file (F1's
     rule: an unreadable phase file or a missing one on a non-demo account refuses), the minimum lot only, and a
-    positive gross edge (p x target above (1 - p) x stop, before costs)."""
+    positive gross edge (p x target above (1 - p) x stop, before costs) unless `gross_edge` is False (a
+    cost-measurement probe, `_cost_measurement_reasons`)."""
     out: list[str] = []
     gates = phase_gates(intent.phase_file) if intent.account_mode == "demo" and intent.phase_file is not None else None
     if gates is None or LIVE_GATES & set(gates):
         out.append("learning_probe_not_demo")
     if intent.volume_max > intent.volume_min + 1e-9:
         out.append("learning_probe_not_min_lot")
-    if intent.p * intent.target_atr - (1 - intent.p) * intent.stop_atr <= 0:
+    if gross_edge and intent.p * intent.target_atr - (1 - intent.p) * intent.stop_atr <= 0:
         out.append("negative_gross_edge")
+    return out
+
+
+# ADR 0037 Amendment 5 (prereg docs/research/prereg-cost-measurement-2026-10.md, section 3: "a stop of at most $3 from
+# the fill", "a hold <= 60 s, closed by the engine"): the cost-measurement fence's bounds
+COST_MEASUREMENT_MAX_STOP_USD = 3.0
+COST_MEASUREMENT_MAX_HOLD_S = 60.0
+
+
+def _ok_amount(v: float | None) -> bool:
+    return v is not None and math.isfinite(v) and v > 0
+
+
+def _cost_measurement_reasons(intent: Intent) -> list[str]:
+    """The cost-measurement purpose's fence before sizing (ADR 0037 Amendment 5, see `Intent.purpose`): only a learning
+    probe may claim it (`cost_measurement_not_probe`); the learning probe's demo lock and minimum lot; a terminal that
+    itself reports demo, never inferred from a label (`cost_measurement_terminal_not_demo`); the stop asked for within
+    COST_MEASUREMENT_MAX_STOP_USD (`cost_measurement_stop_above_cap`; a missing stop is `invalid:stop_atr`); a planned
+    hold in (0, COST_MEASUREMENT_MAX_HOLD_S] (`cost_measurement_hold`); both probe budgets known and positive
+    (`cost_measurement_budget`). `check` repeats the stop and budget checks on the sized order."""
+    out = [] if intent.learning_probe else ["cost_measurement_not_probe"]
+    out += _learning_probe_reasons(intent, gross_edge=False)
+    if intent.terminal_trade_mode != "demo":
+        out.append("cost_measurement_terminal_not_demo")
+    if intent.stop_atr * intent.atr_usd > COST_MEASUREMENT_MAX_STOP_USD + 1e-9:
+        out.append("cost_measurement_stop_above_cap")
+    if not _ok_amount(intent.hold_s) or (intent.hold_s or 0.0) > COST_MEASUREMENT_MAX_HOLD_S:
+        out.append("cost_measurement_hold")
+    if not (_ok_amount(intent.probe_headroom) and _ok_amount(intent.probe_max_loss)):
+        out.append("cost_measurement_budget")
+    return out
+
+
+def _cost_measurement_sized(intent: Intent, d: GateDecision) -> list[str]:
+    """The fence on the sized order: exactly the minimum lot, the stop the gate set (stops level and spread floored)
+    within COST_MEASUREMENT_MAX_STOP_USD, and its loss at the stop within both probe budgets."""
+    out: list[str] = []
+    if abs(d.lots - intent.volume_min) > 1e-9:
+        out.append("learning_probe_not_min_lot")
+    if d.stop_distance > COST_MEASUREMENT_MAX_STOP_USD + 1e-9:
+        out.append("cost_measurement_stop_above_cap")
+    if d.risk_amount > min(intent.probe_headroom or 0.0, intent.probe_max_loss or 0.0) + 1e-9:
+        out.append("cost_measurement_budget")
     return out
 
 
@@ -668,10 +725,14 @@ class RiskGate:
         # a time-exit rule has no reachable target: p x target would be fiction (quant review H1). Fail closed until the
         # EV uses the time-exit outcome (HANDOFF: what must change before live)
         edge_checked = True
-        if intent.learning_probe:            # a demo learning probe: no edge judgement after costs (see Intent)
+        measuring = intent.purpose == "cost_measurement"
+        if measuring:                        # ADR 0037 Amendment 5: no EV requirement, inside its own fence (see Intent)
+            reasons += _cost_measurement_reasons(intent)
+            edge_checked = not intent.learning_probe
+        elif intent.learning_probe:          # a demo learning probe: no edge judgement after costs (see Intent)
             reasons += _learning_probe_reasons(intent)
             edge_checked = False
-        if not intent.has_target or not _family_has_target(intent):
+        if not measuring and (not intent.has_target or not _family_has_target(intent)):
             reasons.append("time_exit_ev_unsupported")
         # expected value and minimum target over cost
         ev = intent.p * intent.target_atr - (1 - intent.p) * intent.stop_atr - intent.cost_atr
@@ -718,6 +779,9 @@ class RiskGate:
         d = self._sized_limits(intent, st, lots=lots, risk_per_lot=sz.risk_per_lot, fx=fx, cost_per_oz=per_oz,
                                stop_distance=stop_distance, realised_risk=realised_risk, notes=notes,
                                margin_required=margin_required)
+        if d.allowed and measuring and (fence := _cost_measurement_sized(intent, d)):
+            return GateDecision(allowed=False, reasons=fence, stop_distance=d.stop_distance,
+                                margin_needed=d.margin_needed, margin_note=d.margin_note)
         if d.allowed and L.dynamic:          # the entry audit's why: the rate sized at and its source
             d = d.model_copy(update={"risk_per_trade": eff.risk_frac,
                                      "risk_source": L.risk_source(intent.model_version)})
