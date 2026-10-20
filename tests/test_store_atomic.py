@@ -90,3 +90,40 @@ def test_reader_during_append_sees_exactly_old_or_new_rows(tmp_path: Path):
     stop.set()
     t.join()
     assert not bad
+
+
+def _dec(ts: str, agent: object) -> pd.DataFrame:
+    return pd.DataFrame({"ts_utc": [pd.Timestamp(ts, tz="UTC")], "agent_id": [agent], "x": [1.0]})
+
+
+def test_read_unions_parts_when_first_part_has_all_null_column(tmp_path: Path) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    st = Store(tmp_path)
+    pdir = st.partition_dir("decisions", "icm-probe", "XAUUSD", pd.Timestamp("2026-10-01", tz="UTC"))
+    pdir.mkdir(parents=True)
+    first = pa.Table.from_pandas(_dec("2026-10-01", None), preserve_index=False)   # legacy part: agent_id typed null
+    assert pa.types.is_null(first.schema.field("agent_id").type)
+    pq.write_table(first, pdir / "part-00000001.parquet")
+    st._write_atomic(pdir, _dec("2026-10-02", "a1"))
+    out = st.read("decisions", source="icm-probe")
+    assert len(out) == 2
+    assert pd.api.types.is_string_dtype(out["agent_id"])
+    assert pd.isna(out["agent_id"].iloc[0]) and out["agent_id"].iloc[1] == "a1"
+
+
+@pytest.mark.parametrize("later", [[1.5], ["s"]])
+def test_all_none_part_unions_with_later_typed_part(tmp_path: Path, later: list) -> None:
+    st = Store(tmp_path)
+    for ts, vals in (("2026-10-01", [None]), ("2026-10-02", later)):
+        pdir = st.partition_dir("decisions", "icm-probe", "XAUUSD", pd.Timestamp(ts, tz="UTC"))
+        pdir.mkdir(parents=True, exist_ok=True)
+        df = pd.DataFrame({"ts_utc": [pd.Timestamp(ts, tz="UTC")], "x": vals})
+        st._write_atomic(pdir, df)
+    out = st.read("decisions", source="icm-probe")
+    assert pd.isna(out["x"].iloc[0])
+    if isinstance(later[0], float):
+        assert out["x"].dtype == "float64" and out["x"].iloc[1] == 1.5
+    else:
+        assert pd.api.types.is_string_dtype(out["x"]) and out["x"].iloc[1] == "s"
