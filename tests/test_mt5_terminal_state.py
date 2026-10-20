@@ -278,7 +278,8 @@ WORDING = {
     "not_running": ("fail", "MT5 terminal not running on the MT5 box; it is being restarted. No entries; stops stay at "
                             "the broker. If this lasts 10 min: RUNBOOK 'Terminal down'."),
     "not_logged_in": ("fail", "MT5 terminal running but not logged in (saved login lost?). No entries; stops stay at "
-                              "the broker. Owner login over VNC: RUNBOOK 0.3."),
+                              "the broker. The MT5 box logs it in from the keyring; if it stays: "
+                              "goldbot-mt5 login <account>, RUNBOOK 'Terminal down'."),
     "wrong_account": ("fail", "MT5 terminal logged in to a different account than registered; the bridge refuses "
                               "orders."),
 }

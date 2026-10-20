@@ -213,6 +213,15 @@ def measure_broker_terms(account_id: str, info: Any, *, account_currency: str, p
                        commission_per_lot_round_trip_usd=rt, commission_lots=lots, notes=notes)
 
 
+def account_info_from_mt5(a: Any) -> AccountInfo:
+    """mt5.account_info() as an AccountInfo, the shape accounts.verify_terminal_account checks (MT5Broker.account and
+    the keyring login in goldbot/ops/login.py read it the same way)."""
+    mode = {0: "demo", 1: "contest", 2: "real"}.get(int(getattr(a, "trade_mode", -1)))   # ACCOUNT_TRADE_MODE_*
+    margin = {0: "netting", 1: "exchange", 2: "hedging"}.get(int(getattr(a, "margin_mode", -1)))  # ACCOUNT_MARGIN_MODE_*
+    return AccountInfo(login=a.login, equity=a.equity, balance=a.balance, margin=a.margin, margin_free=a.margin_free,
+                       leverage=a.leverage, currency=a.currency, server=a.server, trade_mode=mode, margin_mode=margin)
+
+
 class MT5Broker:
     """`verify` is the per-order account check (trading-safety MEDIUM; the bridge's GuardedBroker does the same): the
     engine passes `accounts.verify_terminal_account` for its account, and every `place_order` reads the terminal's
@@ -266,11 +275,7 @@ class MT5Broker:
                           stops_level_points=i.trade_stops_level, filling_modes=modes, trade_allowed=i.trade_mode != 0)
 
     def account(self) -> AccountInfo:
-        a = mt5.account_info()
-        mode = {0: "demo", 1: "contest", 2: "real"}.get(int(getattr(a, "trade_mode", -1)))   # ACCOUNT_TRADE_MODE_*
-        margin = {0: "netting", 1: "exchange", 2: "hedging"}.get(int(getattr(a, "margin_mode", -1)))  # ACCOUNT_MARGIN_MODE_*
-        return AccountInfo(login=a.login, equity=a.equity, balance=a.balance, margin=a.margin, margin_free=a.margin_free, leverage=a.leverage, currency=a.currency, server=a.server,
-                           trade_mode=mode, margin_mode=margin)
+        return account_info_from_mt5(mt5.account_info())
 
     # ------------------------------------------------------------------ data
     def _mt5_time(self, utc: pd.Timestamp) -> datetime:

@@ -677,6 +677,31 @@ class ShadowSettings(_Section):
     max_open_per_agent: int = Field(default=3, ge=1, le=10)
 
 
+class Mt5LoginSettings(_Section):
+    """MT5 terminal login from the keyring (goldbot/ops/login.py; owner directive 2026-10-20: "MT5 terminal logins on
+    the boxes must happen without the owner (no VNC step)"). Used by `goldbot-mt5 login <account>`, by the bridge when
+    its attach fails, and by the bridge's background self-heal when the terminal has no account. Always the configured
+    login only. What was sent is kept across restarts (goldbot/ops/login_ledger.py): a refused password is never sent
+    again until it is stored again (a broker locks an account after repeated bad passwords), and the backoff and the
+    hourly cap survive the bridge's restarts."""
+    attempts: int = Field(3, ge=1, le=5)                 # tries per login (command, bridge start), timeouts only
+    backoff_s: float = Field(20.0, gt=0)                 # wait after a failed login, doubling for each one in a row
+    backoff_max_s: float = Field(600.0, gt=0)            # longest wait between logins
+    max_attempts_per_hour: int = Field(6, ge=1, le=30)   # logins sent per account per hour, across restarts
+    # the bridge's mt5.login on its open session: under the watchdog's 20 s /health probe timeout
+    heal_timeout_ms: int = Field(15_000, ge=1_000, le=19_000)
+    heal_interval_s: float = Field(30.0, ge=5, le=600)   # how often the self-heal thread looks at the terminal
+    # Escape to the terminal's foreground window before an initialize, for the "Select a company to open an account
+    # with" wizard a terminal without a saved login opens. Best effort, unverified on the box: off by default
+    dismiss_wizard: bool = False
+
+    @model_validator(mode="after")
+    def _ceiling_above_base(self) -> Mt5LoginSettings:
+        if self.backoff_max_s < self.backoff_s:
+            raise ValueError("mt5_login.backoff_max_s must be at least backoff_s")
+        return self
+
+
 class Settings(_Section):
     symbol: str
     data_root: str
@@ -706,6 +731,7 @@ class Settings(_Section):
     tv_pull: TvPullSettings = Field(default_factory=TvPullSettings)
     tv: TvSettings = Field(default_factory=TvSettings)
     shadow: ShadowSettings = Field(default_factory=ShadowSettings)
+    mt5_login: Mt5LoginSettings = Field(default_factory=Mt5LoginSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")
     @classmethod

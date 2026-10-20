@@ -354,7 +354,16 @@ def fallback_note() -> None:
 
 def set_secret(key: str, value: str) -> str:
     """Store a secret; returns "keyring" or "file". The file is used only when no keyring backend works AND
-    GOLDBOT_ALLOW_PLAINTEXT=1 on a non-macOS/Windows host; otherwise RuntimeError (nothing written)."""
+    GOLDBOT_ALLOW_PLAINTEXT=1 on a non-macOS/Windows host; otherwise RuntimeError (nothing written). Storing an MT5
+    password or login (`mt5-<account>`, `mt5-login-<account>`) clears that account's refused-password mark and login
+    attempts (goldbot/ops/login_ledger.py): the new credentials may be tried."""
+    where = _store_secret(key, value)
+    from goldbot.ops.login_ledger import clear_for_secret
+    clear_for_secret(key)
+    return where
+
+
+def _store_secret(key: str, value: str) -> str:
     if secret_store() == "keyring":
         try:
             keyring.set_password(SERVICE, key, value)
@@ -503,6 +512,12 @@ def secret_store() -> str:
 
 def account_password(acc: Account) -> str:
     return get_credential(f"mt5-{acc.account_id}", f"MT5 password for {acc.account_id} (login {acc.login}, {acc.server})")
+
+
+def stored_password(acc: Account) -> str | None:
+    """The account's MT5 password from the keyring (`mt5-<account_id>`, as `add` stores it), or None; never prompts
+    (the MT5 box login in goldbot/ops/login.py runs in services with no one to ask)."""
+    return get_secret(f"mt5-{acc.account_id}")
 
 
 def ensure_login(acc: Account) -> Account:
