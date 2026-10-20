@@ -300,19 +300,26 @@ def test_the_tercile_rule_takes_test_p_at_or_above_its_folds_cut_and_records_the
 
 
 # ---------------------------------------------------------------------------------------------- CPCV
+def _unpurged(n_groups: int, n: int) -> list[np.ndarray]:
+    """Every row allowed to calibrate every group: these tests pin the label-free cut, not the calibrator's purge."""
+    return [np.arange(n)] * n_groups
+
+
 def test_the_cpcv_path_cut_uses_only_groups_before_g_on_that_path():
     rng = np.random.default_rng(6)
     n_groups = 6
     groups = np.repeat(np.arange(n_groups), 100)
     p = rng.uniform(size=len(groups))
     y = rng.integers(0, 2, len(groups))
-    _, _, cuts = cpcv.path_selection(p, groups, n_groups, y, np.full(len(p), 0.5), "tercile_inner")
+    _, _, cuts = cpcv.path_selection(p, groups, n_groups, y, np.full(len(p), 0.5), "tercile_inner",
+                                     calibration_train=_unpurged(n_groups, len(p)))
     assert cuts is not None and np.isnan(cuts[0])
     for g in range(1, n_groups):
         assert cuts[g] == np.quantile(p[groups < g], 2 / 3, method="linear")
     later = p.copy()
     later[groups >= 3] = rng.uniform(size=int((groups >= 3).sum()))
-    _, _, moved = cpcv.path_selection(later, groups, n_groups, y, np.full(len(p), 0.5), "tercile_inner")
+    _, _, moved = cpcv.path_selection(later, groups, n_groups, y, np.full(len(p), 0.5), "tercile_inner",
+                                      calibration_train=_unpurged(n_groups, len(p)))
     assert moved is not None
     np.testing.assert_array_equal(moved[:4], cuts[:4])
 
@@ -325,7 +332,8 @@ def test_cpcv_cut_ignores_nan_filled_rows():
     p = np.linspace(0.6, 0.9, len(groups))
     p[:70] = np.nan                                                      # group 0: 30 finite rows (an unfitted split)
     y = np.tile([0, 1], len(groups) // 2)
-    taken, _, cuts = cpcv.path_selection(p, groups, n_groups, y, np.full(len(p), 0.5), "tercile_inner")
+    taken, _, cuts = cpcv.path_selection(p, groups, n_groups, y, np.full(len(p), 0.5), "tercile_inner",
+                                         calibration_train=_unpurged(n_groups, len(p)))
     assert cuts is not None and np.isnan(cuts[1])                        # 30 < 50 finite prior rows: no cut
     assert not taken[groups == 1].any()
     prior = p[groups < 2]
@@ -341,7 +349,8 @@ def test_the_cpcv_cut_uses_the_preregistered_tercile_q(stub_model: None):
     groups = np.repeat(np.arange(n_groups), 100)
     p = rng.uniform(size=len(groups))
     y = rng.integers(0, 2, len(groups))
-    _, _, cuts = cpcv.path_selection(p, groups, n_groups, y, np.full(len(p), 0.5), "tercile_inner", tercile_q=0.75)
+    _, _, cuts = cpcv.path_selection(p, groups, n_groups, y, np.full(len(p), 0.5), "tercile_inner", tercile_q=0.75,
+                                     calibration_train=_unpurged(n_groups, len(p)))
     assert cuts is not None
     for g in range(1, n_groups):
         assert cuts[g] == np.quantile(p[groups < g], 0.75, method="linear")
@@ -364,7 +373,10 @@ def test_run_cpcv_under_the_tercile_rule_records_the_rule_and_each_paths_cuts(st
 # ---------------------------------------------------------------------------------------------- default unchanged
 def test_default_rule_results_are_unchanged_on_a_golden_frame(stub_model: None):
     """Captured with `golden_snapshot()` on 65ece6e (before E-2); the default rule's out-of-fold columns, metrics and
-    CPCV result must not move (Q4 rows stay comparable)."""
+    CPCV result must not move (Q4 rows stay comparable). Re-captured once, deliberately, by the calibrator's prior-set
+    purge (ML leakage audit 2026-10 F2, BACKLOG 106): walk-forward calibrated p moved by at most 0.021 with no
+    selection flipped; CPCV took 2,378 trades per path instead of 2,325 (mean R 0.755 -> 0.740). The reading rule
+    is unchanged."""
     want = json.loads(GOLDEN.read_text())
     got = golden_snapshot()
     _same(got["walk_forward"], want["walk_forward"], "walk_forward")

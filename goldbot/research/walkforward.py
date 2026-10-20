@@ -8,8 +8,10 @@ training set grows with every fold). `expanding=True` trains on everything since
 `train_months` (the first test fold still starts `train_months` in): a family with few candidates a year, such as
 session_open (proposal P5), then has enough training rows, and with 6-month test folds every fold can reach the
 60-candidate gate. A specialist declares such overrides in its `walkforward` attribute. Purge removes any training label whose
-[entry, exit] interval overlaps the test window (extended by `purge`); embargo drops training labels
-that start within `embargo` after the test window ends.
+[entry, exit] interval overlaps the test window (extended by `purge`). Embargo drops training labels that start within
+`embargo` after a test window ends; every fold here trains strictly before its test window, so it removes nothing (a
+no-op, ML leakage audit 2026-10 F9). `embargo_days` is kept for the window settings CPCV reads (`purged_train`, where
+training groups do follow a test group).
 """
 from __future__ import annotations
 
@@ -47,7 +49,7 @@ def walk_forward_splits(labels: pd.DataFrame, *, train_months: int, test_months:
     ts = pd.DatetimeIndex(pd.to_datetime(labels["ts_utc"], utc=True))
     te = pd.DatetimeIndex(pd.to_datetime(labels["ts_exit"], utc=True))
     start, end = ts.min(), ts.max()
-    purge, embargo = pd.Timedelta(days=purge_days), pd.Timedelta(days=embargo_days)
+    purge = pd.Timedelta(days=purge_days)
     first_test = start + pd.DateOffset(months=train_months)
     k = 0
     t0 = first_test
@@ -56,12 +58,8 @@ def walk_forward_splits(labels: pd.DataFrame, *, train_months: int, test_months:
         test_mask = (ts >= t0) & (ts < t1)
         train_lo = start if expanding else t0 - pd.DateOffset(months=train_months)
         in_window = (ts >= train_lo) & (ts < t0)
-        # purge: label interval must end before the test window (minus purge) ...
-        no_overlap = te < (t0 - purge)
-        # ... and (for any training label after the test window, if we ever allowed it) embargo; here training
-        # is strictly before the test window, so embargo guards the *next* fold via the step. Keep it explicit:
-        after_embargo = ts >= (t1 + embargo)
-        train_mask = (in_window & no_overlap) | (after_embargo & False)
+        # purge: label interval must end before the test window (minus purge); no embargo, training precedes the test
+        train_mask = in_window & (te < (t0 - purge))
         tr, tst = np.flatnonzero(train_mask), np.flatnonzero(test_mask)
         if len(tr) >= min_train and len(tst) > 0:
             full = t0 + pd.DateOffset(months=test_months) <= end + pd.Timedelta(seconds=1)

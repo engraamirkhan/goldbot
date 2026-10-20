@@ -11,7 +11,8 @@ they make phi = 5 paths). Each path is one full out-of-sample history; the sprea
 5 paths is what one walk-forward cannot show.
 
 Selection reuses the walk-forward's own logic, not a copy of it: on each path the calibrator of group g is fitted only
-on that path's out-of-sample predictions of the groups before g (pipeline._cross_fitted, with the groups as folds), and
+on that path's out-of-sample predictions of the groups before g whose labels exit before g starts minus the purge
+(pipeline._cross_fitted, with the groups as folds and `purged_train` as each group's prior filter), and
 a candidate is taken when its calibrated p is above pipeline.candidate_threshold (break-even + margin from its barriers
 and costs). The first group of every path therefore has no calibrator and takes no trade, as the walk-forward's first
 fold does not.
@@ -210,17 +211,21 @@ def _dist(x: list[float]) -> dict[str, float]:
 
 
 def path_selection(p_raw: np.ndarray, groups: np.ndarray, n_groups: int, y: np.ndarray, threshold: np.ndarray,
-                   threshold_rule: ThresholdRule = DEFAULT_THRESHOLD_RULE, tercile_q: float = TERCILE_Q
-                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+                   threshold_rule: ThresholdRule = DEFAULT_THRESHOLD_RULE, tercile_q: float = TERCILE_Q, *,
+                   calibration_train: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     """(taken, calibrated p, the groups' tercile cuts or None) on one backtest path: groups are the path's folds in
     time order, each calibrated only from the groups before it. The calibrator reads p_raw with NaN (rows of an
     unfitted split) filled with 0.5, as before E-2; the tercile cut (`pipeline.fold_cuts`, groups before g as the
     prior set) reads p_raw BEFORE that fill, so only finite rows count toward the quantile and the 50 (quant plan
     review, condition 7). Quant ruling 1: the prior groups' p on a path may come from splits that trained on group g;
     the cut is a label-free scalar and CPCV only vetoes (ADR 0003), so no purged variant. tercile_q: the trial's
-    pre-registered q (part of the rule; quant re-verify of 48226f5)."""
+    pre-registered q (part of the rule; quant re-verify of 48226f5).
+    calibration_train: per group g, the rows group g's calibrator may fit (`purged_train` with g as the test group,
+    path-independent): ML leakage audit 2026-10 F2, an earlier group's label that exits inside group g (or within the
+    purge before it) never calibrates group g. The calibrator reads outcomes, so unlike the cut it is purged."""
     folds = [SimpleNamespace(test_idx=np.flatnonzero((groups == g) & np.isfinite(p_raw))) for g in range(n_groups)]
-    p_cal = _cross_fitted(np.nan_to_num(p_raw, nan=0.5), y, folds)
+    cal_folds = [SimpleNamespace(test_idx=f.test_idx, train_idx=calibration_train[g]) for g, f in enumerate(folds)]
+    p_cal = _cross_fitted(np.nan_to_num(p_raw, nan=0.5), y, cal_folds)
     if threshold_rule == "tercile_inner":
         cuts = fold_cuts(p_raw, folds, tercile_q)
         return select(p_raw, p_cal, row_cuts(cuts, folds, len(p_raw)), threshold_rule), p_cal, cuts
@@ -254,6 +259,7 @@ def run_cpcv(labels: pd.DataFrame, feats: pd.DataFrame, cols: list[str], *, edge
         split_info.append({"k": sp.k, "test_groups": list(sp.test_groups), "n_train": int(len(sp.train_idx)),
                            "n_test": int(len(sp.test_idx)), "fitted": bool(fitted)})
     threshold = candidate_threshold(labels, extra_cost_usd)
+    calibration_train = [purged_train(labels, groups, (g,), edges, purge_days, embargo_days) for g in range(n_groups)]
     r = labels["ret"].to_numpy(dtype=float) / labels["risk"].to_numpy(dtype=float)
     g_years = np.array([(edges[g + 1] - edges[g]).days / 365.25 for g in range(n_groups)])
     paths_out, group_r = [], []
@@ -263,7 +269,7 @@ def run_cpcv(labels: pd.DataFrame, feats: pd.DataFrame, cols: list[str], *, edge
             rows = groups == g
             p_raw[rows] = preds[k][rows]
         taken, p_cal, cuts = path_selection(p_raw, groups, n_groups, y.to_numpy(), threshold, threshold_rule,
-                                            tercile_q)
+                                            tercile_q, calibration_train=calibration_train)
         scored_groups = [g for g in range(n_groups) if np.isfinite(p_cal[groups == g]).any()]
         years = float(g_years[scored_groups].sum()) if scored_groups else 0.0
         ret = labels["ret"].to_numpy(dtype=float)[taken]

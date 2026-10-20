@@ -29,7 +29,7 @@ from goldbot.research.pipeline import (
 )
 from goldbot.research.population import Member, Population
 from goldbot.research.registry import TrialBudgetExceeded, TrialRegistry, quarter_of
-from goldbot.research.walkforward import Fold, splits_for
+from goldbot.research.walkforward import Fold, splits_for, walk_forward_splits
 from goldbot.specialists import SPECIALISTS
 
 NOW = datetime(2026, 10, 7, 12, tzinfo=timezone.utc)
@@ -59,6 +59,42 @@ def test_cross_fitted_calibration_never_sees_the_fold_it_scores():
     y2[55:355] = 1 - y2[55:355]
     p2 = _cross_fitted(p_raw, y2, folds)
     assert np.array_equal(p[55:355], p2[55:355]) and not np.allclose(p[355:], p2[355:])
+
+
+def _calibration_rows(monkeypatch: pytest.MonkeyPatch, p_raw: np.ndarray) -> list[np.ndarray]:
+    """Spy on the cross-fitted calibrator: the rows (recovered from their unique p_raw) each fit received, in order."""
+    from goldbot.research import pipeline
+    calls: list[np.ndarray] = []
+    real = pipeline.fit_calibrator
+
+    def spy(p: np.ndarray, y: np.ndarray):
+        calls.append(np.flatnonzero(np.isin(p_raw, p)))
+        return real(p, y)
+    monkeypatch.setattr(pipeline, "fit_calibrator", spy)
+    return calls
+
+
+def test_an_earlier_fold_label_that_resolves_inside_the_test_window_never_enters_its_calibrator(monkeypatch):
+    """ML leakage audit 2026-10 F2 (BACKLOG 106): fold k's calibrator fits only rows whose label exits before fold k's
+    test start minus the purge (the fold's own purged training rows), so no outcome decided by fold k's price path
+    reaches its selection."""
+    ts = pd.date_range("2020-01-01", periods=4 * 30 * 14, freq="6h", tz="UTC")
+    labels = pd.DataFrame({"ts_utc": ts, "ts_exit": ts + pd.Timedelta(days=3)})   # lives of 3 d cross every boundary
+    folds = list(walk_forward_splits(labels, train_months=6, test_months=2, step_months=2, purge_days=2,
+                                     embargo_days=1))
+    rng = np.random.default_rng(3)
+    p_raw = (np.arange(len(ts)) + 0.25) / (len(ts) + 1)                          # unique: rows recoverable
+    y = (rng.random(len(ts)) < 0.4).astype(int)
+    calls = _calibration_rows(monkeypatch, p_raw)
+    p = _cross_fitted(p_raw, y, folds)
+    calibrated = [f for f in folds if np.isfinite(p[f.test_idx]).all()]
+    assert len(calibrated) >= 3 and len(calls) == len(calibrated)
+    te = pd.DatetimeIndex(labels["ts_exit"])
+    for f, rows in zip(calibrated, calls, strict=True):
+        earlier = np.concatenate([g.test_idx for g in folds if g.k < f.k])
+        assert (te[earlier] >= f.test_start).any()                               # the leak case exists ...
+        assert (te[rows] < f.test_start - pd.Timedelta(days=2)).all()            # ... and is purged
+        np.testing.assert_array_equal(rows, np.intersect1d(earlier, f.train_idx))
 
 
 def test_in_sample_isotonic_selection_is_what_cross_fitting_removes():
