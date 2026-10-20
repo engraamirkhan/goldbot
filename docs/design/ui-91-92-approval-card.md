@@ -1,4 +1,4 @@
-# Spec 91 + 92: approval card says demo vs real money and why it asks; Settings entry mode per account (ADR 0036)
+# Spec 103 + 92 (backlog item 103, formerly 91): approval card says demo vs real money and why it asks; Settings entry mode per account (ADR 0036)
 
 Author: ui-ux-designer staff; signed off with the corrections below by the Principal Product Designer, 2026-10-19. Status: ready for implementer, except section 6's demo-back-to-auto control (open, trading-safety ruling). Today's shots: ~/tmp/ui-shots/{phone,desktop}-{light,dark}/ (04/03-home-default = card, 22/21-settings-entry-mode-and-halt).
 Code read: web/src/screens/ProposalCard.tsx (:46 bar scales by WINDOW_S, :217 "within {WINDOW_S} s"), web/src/lib/approval.ts:8, web/src/screens/AutoMode.tsx (:92 `owner_mode ?? "propose"`), goldbot/api/schema.py (Proposal :71, AccountSummary.mode :49, AutoModeView :871, ForcedPropose :863), goldbot/api/explain.py:539, goldbot/engine/auto_entry.py, goldbot/telegram/approvals.py:172,270.
@@ -28,7 +28,7 @@ Code read: web/src/screens/ProposalCard.tsx (:46 bar scales by WINDOW_S, :217 "w
 5. Layout: card height must not change between pending and expiring, and a badge or reason line must not appear later (account_mode, ask_reason arrive with the proposal). Reserve the reason line row on demo cards only; real-money cards have no such row (static per card, so no shift).
 6. Unknown is a state, not a default: if account_mode is missing (older engine) show badge "ACCOUNT TYPE UNKNOWN" (amber, text) and treat the card as real money for caution: Approve button label unchanged, but the header badge is amber. Never default to DEMO.
 
-## 1. API fields (Item 91)
+## 1. API fields (Item 103)
 | Field | Where | Status | Notes |
 |---|---|---|---|
 | Proposal.account_mode `demo\|live\|paper` | api Proposal + engine Proposal record + Telegram | NEW | engine knows `cfg.mode`; fall back (api only) to AccountSummary.mode join by account_id (existing) if absent |
@@ -85,7 +85,7 @@ Real-money extra line under header badge on pending/expiring only: none. (Decisi
 ```
 The reason line sits between header and direction row (above the fold, before the risk number), wrap allowed (max 3 lines at 360 px; longest copy is terminal_not_demo ~150 chars: acceptable, it is meant to be read).
 Desktop 1440: card max-width 560 px in the Home column (as today); badge and timer on one row; reason line one row; footer one row. No new columns.
-Sticky decide bar: today the bottom nav overlaps the Approve button in the phone shot (04-home-default: nav covers the card's lower part, footer cut). Flag: card needs `scroll-margin-bottom` = nav height + 16 px, and Approve must not sit under the nav (separate defect, also in 91's e2e at 390 px: assert Approve is not covered via elementFromPoint).
+Sticky decide bar: today the bottom nav overlaps the Approve button in the phone shot (04-home-default: nav covers the card's lower part, footer cut). Flag: card needs `scroll-margin-bottom` = nav height + 16 px, and Approve must not sit under the nav (separate defect, also in 103's e2e at 390 px: assert Approve is not covered via elementFromPoint).
 
 ## 4. Card states (each at 360 and 1440; light and dark use tokens only, contrast AA >= 4.5:1 text, 3:1 rule/bar)
 | # | State | Class | Differences from base card |
