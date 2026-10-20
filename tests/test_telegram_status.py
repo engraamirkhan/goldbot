@@ -196,12 +196,22 @@ def test_the_reply_carries_the_footer_and_any_failure_still_answers(tmp_path):
     load or build replies with the FAILED text."""
     sd = _state(tmp_path)
     ok = et.status_reply(sd, WED, tz=LONDON, bus=_Bus(), load=lambda: None)
-    assert ok.endswith("Approval mode: propose (default) · pending proposals: 0") and "OPEN · icm-demo" in ok
+    assert ok.endswith("Approval mode: each account's setting · pending proposals: 0") and "OPEN · icm-demo" in ok
 
     def bad_settings() -> Any:
         raise ValueError("bad yaml")
     assert "OPEN · icm-demo" in et.status_reply(sd, WED, tz=LONDON, bus=_Bus(), load=bad_settings)   # defaults
     assert et.status_reply(sd, WED, tz=LONDON, bus=_Bus(fail=True), load=lambda: None) == et.FAILED
+
+
+def test_status_names_each_accounts_setting_when_the_owner_mode_is_cleared_and_the_owner_mode_when_set(tmp_path):
+    from goldbot.telegram.bus import ApprovalBus
+    sd = _state(tmp_path)
+    bus = ApprovalBus(tmp_path / "bus")
+    bus.set_mode("propose", by="telegram")
+    assert "Approval mode: propose · " in et.status_reply(sd, WED, tz=LONDON, bus=bus, load=lambda: None)
+    bus.set_mode(None, by="telegram")                       # /mode account (ADR 0041)
+    assert "Approval mode: each account's setting · " in et.status_reply(sd, WED, tz=LONDON, bus=bus, load=lambda: None)
 
 
 def test_a_bad_zone_falls_back_to_utc():

@@ -29,4 +29,5 @@ so produces little evidence; real money keeps the human veto.
   auto` no longer makes a live account automatic (the directive keeps confirmation for real money).
 - A control.json left at `propose` by an earlier `/mode propose` keeps the demo engine proposing until the owner sends
   `/mode auto <TOTP>` (when eligible) or the value is cleared; this is deliberate (lowering authority always wins).
+  Superseded by ADR 0041: `/mode account` (owner, no code) clears the value.
 - Changing the live rule needs a new owner decision and ADR; the lock is code, not config.

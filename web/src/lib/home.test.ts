@@ -61,7 +61,7 @@ describe("Home card logic", () => {
     );
     const lines = digest(v);
     expect(lines.map((l) => l.family)).toEqual(["mfi", "box_break_close", "session_open"]);
-    expect(lines[1].text).toBe("Box break close: +0.31 R per trade over 7 days (n 14), all time +0.12 R (n 80)");
+    expect(lines[1].text).toBe("Box break close: +0.31 R per trade over 7 days (n 14), all time +0.12 R (n 80)");
   });
 
   it("has no digest line when the 7 days are the same as all time", () => {

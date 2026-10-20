@@ -147,7 +147,7 @@ class TelegramBot:  # pragma: no cover - needs network + token
     bus with Approve/Reject buttons, writes the owner's decisions back to the bus, edits each message with the outcome,
     delivers the staff agents' reports, and answers /status, /halt and /mode. Re-arming needs an authenticator code, so
     it is done on the dashboard. `/mode auto <code>` is accepted only on the auto-mode evidence (goldbot/telegram/
-    automode.py), which this service checks and offers once; `/mode propose` needs no code."""
+    automode.py), which this service checks and offers once; `/mode propose` and `/mode account` need no code."""
 
     def __init__(self, token: str, state_dir: str, owner_ids: set[int], poll_s: float = 2.0,
                  settings: TelegramSettings | None = None):

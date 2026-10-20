@@ -14,8 +14,11 @@ event always returns the system to propose-and-approve."
   nothing), so the check fails closed.
 * Offer (`AutoModeOffer`): when eligible, the Telegram service sends one message per mode epoch. It never switches.
 * `/mode auto <TOTP>` (`mode_command`): refused unless the code verifies and the evidence holds; writes the mode to
-  control.json through the bus, as /halt writes the halt. `/mode propose` lowers authority: no code needed. Both
-  directions, and refusals, are audited. Inside the engine the 30-day re-arm lock and the 12% kill switch still force
+  control.json through the bus, as /halt writes the halt. `/mode propose` lowers authority: no code needed.
+  `/mode account` (ADR 0041) clears the owner's override, so each engine uses its account's own mode: a demo account
+  configured auto enters automatically again, a real-money account keeps asking (the ADR 0036 lock in
+  goldbot/engine/auto_entry.py refuses auto on anything but a demo account on a demo terminal); no code, no evidence.
+  Every direction, and refusals, are audited. Inside the engine the 30-day re-arm lock and the 12% kill switch still force
   propose (goldbot/engine/runner.py `_refresh_account`).
 """
 from __future__ import annotations
@@ -265,17 +268,28 @@ def audit_to(state_dir: str | Path, owner_email: str | None = None) -> Callable[
     return AuthStore(state_dir, owner_email=owner_email if owner_email is not None else _settings_owner_email()).audit
 
 
-MODE_USAGE = "usage: /mode propose  |  /mode auto <6-digit code>"
+MODE_USAGE = "usage: /mode propose  |  /mode account  |  /mode auto <6-digit code>"
 MODE_LOCKED = ("Too many wrong authenticator codes: auto mode and re-arm are locked for 15 minutes. /halt still works, "
-               "and so does /mode propose.")
+               "and so do /mode propose and /mode account.")
+MODE_ACCOUNT_TEXT = ("Mode: each account's own setting. Demo accounts enter automatically; real-money accounts ask you "
+                     "for every entry. A re-arm or a 12% drawdown still returns to propose; exits stay automatic.")
 
 
 def mode_command(bus: ApprovalBus, arg: str | None, by: str, *, totp_ok: Callable[[str], bool],
                  eligibility: Callable[[], Eligibility], audit: Callable[..., None]) -> str:
-    """`/mode propose` (always allowed: it lowers authority) or `/mode auto <code>` (TOTP, then the evidence check).
-    The caller has already checked the owner allow-list. Every outcome is audited."""
+    """`/mode propose` (always allowed: it lowers authority), `/mode account` (always allowed: it clears the owner's
+    override, ADR 0041; a real-money account cannot gain authority from it, the engine's ADR 0036 lock keeps it on
+    propose) or `/mode auto <code>` (TOTP, then the evidence check). The caller has already checked the owner
+    (Telegram allow-list, dashboard owner role). Every outcome is audited. A change that can grant authority (`account`,
+    `auto`) is audited before it is written, so a failed audit write leaves the mode as it was; `propose` is written
+    first, because lowering authority must never wait on the audit log (as /halt)."""
     parts = (arg or "").split()
     mode = parts[0].lower() if parts else ""
+    if mode == "account":
+        prev = bus.control().approval_mode
+        audit("mode", by=by, to="account", previous=prev)
+        bus.set_mode(None, by=by, reason="owner: each account's setting")
+        return MODE_ACCOUNT_TEXT
     if mode == "propose":
         prev = bus.control().approval_mode
         bus.set_mode("propose", by=by, reason="owner")
@@ -297,7 +311,7 @@ def mode_command(bus: ApprovalBus, arg: str | None, by: str, *, totp_ok: Callabl
         audit("mode_refused", by=by, to="auto", reason="evidence", reasons=e.reasons, **e.numbers())
         return "Auto mode not available:\n• " + "\n• ".join(e.reasons)
     prev = bus.control().approval_mode
-    bus.set_mode("auto", by=by, reason="owner, evidence held")
     audit("mode", by=by, to="auto", previous=prev, **e.numbers())
+    bus.set_mode("auto", by=by, reason="owner, evidence held")
     return ("Mode: AUTO. Entries that pass the RiskGate are placed without asking you; exits stay automatic. "
             "A 12% drawdown or a re-arm returns to propose. Turn it off any time with /mode propose (or /halt).")

@@ -1102,7 +1102,8 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     # the owner pinned to auth.owner_email (need("owner") + verify_owner_totp), each authenticator code spent once
     # (the replay guard shared with sign-in, re-arm and /mode) inside the code lockout (verify_code_guarded, key
     # `code:<email>`, shared with re-arm and Telegram /mode; mode_failed / mode_locked; it never locks sign-in, and
-    # failed sign-ins lock it too), then the evidence check. Switching to propose needs no code and is never locked. Every outcome is audited by
+    # failed sign-ins lock it too), then the evidence check. Switching to propose, or back to each account's own setting
+    # (`account`, ADR 0041), needs no code and is never locked. Every outcome is audited by
     # mode_command. The engines still force propose under the 30-day re-arm lock and the 12% kill switch.
     @app.get("/api/automode", response_model=AutoModeView)
     def automode_get(u: User = Depends(auth)) -> AutoModeView:
@@ -1132,7 +1133,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
             return e
 
         code = body.totp.strip()
-        arg = "propose" if body.mode == "propose" else ("auto " + code if code.isdigit() else "auto")
+        arg = body.mode if body.mode != "auto" else ("auto " + code if code.isdigit() else "auto")
         msg = await asyncio.to_thread(automode.mode_command, st.bus, arg, f"dashboard:{u.email}", totp_ok=totp_ok,
                                       eligibility=eligibility, audit=st.auth.audit)
         if seen.get("locked"):

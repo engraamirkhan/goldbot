@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { AccountSummary, Status } from "../lib/api";
 import { budgetTone, cash } from "../lib/account";
 import { blockers, localTime, viaChannel } from "../lib/approval";
@@ -7,6 +8,10 @@ type Tone = "ok" | "warn" | "bad" | "idle";
 type Chip = { key: string; label: string; value: string; detail?: string; tone: Tone; title?: string };
 
 const STAGE: Record<AccountSummary["stage"], string> = { normal: "normal", size_down: "size down", halted: "halted" };
+/** The one phrase for "no engine has reported" (backlog 99): the banner and the header pill say it; the tiles that
+ *  depend on an engine say NOT_REPORTED in neutral grey, so amber is spent once, on the banner. */
+export const NO_ENGINE = "No engine reporting";
+const NOT_REPORTED = "not reported";
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
 
 type Props = {
@@ -18,6 +23,7 @@ type Props = {
 /** Everything that can stop a new entry, always visible above the approval cards. Red only for what stops trading.
  *  Never "allowed" from stale data: an error or a report older than STALE_MS shows its time and a warning instead. */
 export function SafetyStrip({ status, accounts, error, updatedAt, now }: Props) {
+  const [open, setOpen] = useState(false);
   if (error && !status) {
     return <p className="strip-summary warn" role="alert">Safety state unavailable. Check Overview before approving.</p>;
   }
@@ -36,10 +42,15 @@ export function SafetyStrip({ status, accounts, error, updatedAt, now }: Props) 
       ) : (
         <p className={`strip-summary ${loading ? "idle" : blocked.length ? "bad" : idle ? "warn" : "ok"}`} role="status">
           {loading ? "Checking safety state…" : blocked.length ? `New entries blocked: ${blocked.join(", ")}`
-            : idle ? "No engines reporting" : "New entries allowed"}
+            : idle ? NO_ENGINE : "New entries allowed"}
         </p>
       )}
-      <ul className="strip">
+      {/* phone only (CSS): the tiles fold behind this so the waiting card and Approve stay above the fold (backlog 101) */}
+      <button type="button" className="strip-toggle" aria-expanded={open} aria-controls="safety-tiles"
+              onClick={() => setOpen(!open)}>
+        {open ? "Hide safety details" : "Show safety details"}
+      </button>
+      <ul className={`strip${open ? " open" : ""}`} id="safety-tiles">
         {chips.map((c) => (
           <li key={c.key} className={`chip ${c.tone}`} title={c.title}>
             <span className="k">{c.label}</span>
@@ -71,7 +82,7 @@ function build(s: Status, accounts: AccountSummary[]): Chip[] {
       : { key: "drift", label: "Drift halt", value: "off", tone: "ok" },
   ];
   if (accounts.length === 0) {
-    chips.push({ key: "dd", label: "Drawdown", value: "no engines", tone: "warn" });
+    chips.push({ key: "dd", label: "Drawdown", value: NOT_REPORTED, tone: "idle" });
   } else {
     const worst = accounts.some((a) => a.stage === "halted") ? "bad" : accounts.some((a) => a.stage === "size_down") ? "warn" : "ok";
     const one = accounts.length === 1;
@@ -90,7 +101,7 @@ function build(s: Status, accounts: AccountSummary[]): Chip[] {
     chips.push({ key: "news", label: "News", value: "clear", tone: "ok" });
   }
   chips.push(accounts.length === 0
-    ? { key: "class", label: "Account", value: "—", tone: "warn" }
+    ? { key: "class", label: "Account", value: NOT_REPORTED, tone: "idle" }
     : { key: "class", label: "Account", value: accounts.map((a) => `${a.account_class} · ${a.mode}`).join(" / "),
         tone: accounts.some((a) => a.account_class === "unknown" && a.mode !== "paper") ? "bad" : "ok",
         detail: accounts.length > 1 ? accounts.map((a) => a.account_id).join(" / ") : undefined });
@@ -100,7 +111,7 @@ function build(s: Status, accounts: AccountSummary[]): Chip[] {
 /** The loss budget left (ADR 0004; daily and weekly caps): the account with the least left as a share of its limit. */
 function budgetChip(accounts: AccountSummary[]): Chip {
   const withBudget = accounts.filter((a) => a.loss_budget);
-  if (withBudget.length === 0) return { key: "budget", label: "Loss budget", value: "not reported", tone: "idle" };
+  if (withBudget.length === 0) return { key: "budget", label: "Loss budget", value: NOT_REPORTED, tone: "idle" };
   // never a roomier figure while a cap can't be checked; a paused account (red) before one not summed yet (amber)
   const unknown = withBudget.find((a) => a.loss_budget!.unknown && a.loss_budget!.unknown_paused)
     ?? withBudget.find((a) => a.loss_budget!.unknown);

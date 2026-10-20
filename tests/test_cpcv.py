@@ -6,7 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from goldbot.research import cpcv
+from goldbot.research import cpcv, pipeline
+from goldbot.research.model import MetaLabelModel
 from goldbot.research.registry import TrialRegistry, quarter_of
 
 T0 = pd.Timestamp("2022-01-01", tz="UTC")
@@ -98,6 +99,44 @@ def test_run_cpcv_reports_the_path_distribution_with_cross_fitted_selection():
     assert all(gr[0] == 0.0 for gr in res["group_r"]) and all(any(v != 0 for v in gr[1:]) for gr in res["group_r"])
     # an informative feature makes money on every path; the distribution is reported, not one number
     assert res["share_paths_positive"] == 1.0 and res["mean_r"]["min"] > 0
+
+
+class _RowModel(MetaLabelModel):
+    """p_raw unique per row (from its index), so a spy on the calibrator can recover the rows it was fitted on."""
+    n_rows: int = 0
+
+    def fit(self, X: pd.DataFrame, y: pd.Series, w: pd.Series | None = None) -> "_RowModel":
+        return self
+
+    def predict_raw(self, X: pd.DataFrame) -> np.ndarray:
+        return (X.index.to_numpy(dtype=float) + 0.25) / 1501.0
+
+
+def test_a_prior_group_label_that_resolves_inside_group_g_never_enters_its_path_calibrator(monkeypatch):
+    """ML leakage audit 2026-10 F2 (BACKLOG 106): on every path, group g's calibrator fits only earlier groups' rows
+    whose label exits before group g starts minus the purge (`purged_train` with g as the test group)."""
+    labels, feats = _labels(max_hours=200)
+    edges = cpcv.group_edges(T0, T1)
+    groups = cpcv.assign_groups(labels, edges)
+    te = pd.DatetimeIndex(labels["ts_exit"])
+    p_row = (np.arange(len(labels)) + 0.25) / 1501.0
+    calls: list[np.ndarray] = []
+    real = pipeline.fit_calibrator
+
+    def spy(p: np.ndarray, y: np.ndarray):
+        calls.append(np.flatnonzero(np.isin(p_row, p)))
+        return real(p, y)
+    monkeypatch.setattr(cpcv, "MetaLabelModel", _RowModel)
+    monkeypatch.setattr(pipeline, "fit_calibrator", spy)
+    cpcv.run_cpcv(labels, feats, ["side", "x", "z"], edges=edges, purge_days=2, embargo_days=1, extra_cost_usd=0.0)
+    assert len(calls) == 5 * 5                                          # 5 paths x groups 1..5
+    for rows in calls:
+        g = int(groups[rows].max()) + 1                                 # the group being calibrated
+        prior = np.flatnonzero((groups >= 0) & (groups < g))
+        assert (te[prior] >= edges[g]).any()                            # the leak case exists ...
+        assert (te[rows] < edges[g] - pd.Timedelta(days=2)).all()       # ... and is purged
+        np.testing.assert_array_equal(rows, np.intersect1d(
+            prior, cpcv.purged_train(labels, groups, (g,), edges, purge_days=2, embargo_days=1)))
 
 
 def _pbo(perf: np.ndarray) -> dict:

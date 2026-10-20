@@ -8,6 +8,7 @@ import { blockers } from "../lib/approval";
 import { STALE_MS } from "../lib/entry";
 import { useNow } from "../lib/useNow";
 import { HaltControl } from "../screens/HaltControl";
+import { NO_ENGINE } from "../screens/SafetyStrip";
 
 type Tone = "ok" | "warn" | "bad" | "idle";
 
@@ -52,7 +53,7 @@ export function StatusPill({ onOpenTrades }: { onOpenTrades?: () => void }) {
   } else if (blocked.length) {
     [tone, text] = ["bad", `Entries blocked: ${blocked.join(", ")}`];
   } else if (a.length === 0) {
-    [tone, text] = ["warn", "No engine reporting"];
+    [tone, text] = ["warn", NO_ENGINE];
   } else {
     [tone, text] = ["ok", waiting > 0 ? `Trading normally · ${waiting} waiting` : "Trading normally"];
   }

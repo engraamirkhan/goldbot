@@ -10,8 +10,8 @@ describe("trades summary formatting", () => {
   });
 
   it("signs R with a true minus and dashes a missing R", () => {
-    expect(signedR(1.5)).toBe("+1.50 R");
-    expect(signedR(-0.4)).toBe("−0.40 R");
+    expect(signedR(1.5)).toBe("+1.50 R");
+    expect(signedR(-0.4)).toBe("−0.40 R");
     expect(signedR(null)).toBe("—");
   });
 
@@ -22,7 +22,7 @@ describe("trades summary formatting", () => {
 
   it("heads a type with its net money, or its R when it has no money (shadow)", () => {
     expect(headline(stats({ net_pnl: { GBP: -2 }, total_r: -0.5 }))).toBe("−£2.00");
-    expect(headline(stats({ total_r: 1.5 }))).toBe("+1.50 R");
+    expect(headline(stats({ total_r: 1.5 }))).toBe("+1.50 R");
   });
 
   it("counts open and closed, and the win rate once something closed", () => {
@@ -38,7 +38,7 @@ describe("trades summary formatting", () => {
   it("names the best and worst by R, else by money", () => {
     const ref = { ts: "2026-10-19T10:00:00Z", agent_id: "mfi-g0", timeframe: "15m" };
     expect(bestWorst(stats({ best: { ...ref, r: 2, pnl: null, currency: null }, worst: { ...ref, r: -1, pnl: null, currency: null } })))
-      .toBe("best +2.00 R · worst −1.00 R");
+      .toBe("best +2.00 R · worst −1.00 R");
     expect(bestWorst(stats({ best: { ...ref, r: null, pnl: 3, currency: "GBP" }, worst: { ...ref, r: null, pnl: -2, currency: "GBP" } })))
       .toBe("best +£3.00 · worst −£2.00");
     expect(bestWorst(stats())).toBe("");

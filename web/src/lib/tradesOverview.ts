@@ -3,7 +3,9 @@
 // stops trading (docs/ux/design-system.md).
 import type { TradeStats, TradesOverview, TradeTypeSummary } from "./api";
 import type { Tone } from "../ui";
-import { money } from "../ui/format";
+import { money, signedR } from "../ui/format";
+
+export { signedR };
 
 export const TRADES_POLL_MS = 30_000;
 
@@ -26,12 +28,6 @@ const DASH = "—";
 /** "60%"; a dash with nothing closed. */
 export function winRate(s: TradeStats): string {
   return s.win_rate == null ? DASH : `${Math.round(s.win_rate * 100)}%`;
-}
-
-/** "+1.50 R", "−0.40 R" (U+2212); a dash when no trade has an R. */
-export function signedR(r: number | null | undefined): string {
-  if (r == null) return DASH;
-  return `${r > 0 ? "+" : r < 0 ? "−" : ""}${Math.abs(r).toFixed(2)} R`;
 }
 
 /** Net P&L per currency, "+£12.40 · −$3.00"; never added across currencies. A dash with no net money. */
