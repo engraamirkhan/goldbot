@@ -251,11 +251,14 @@ class CapitalFlow(FrozenRecord):
 
 def capital_flows(deals: pd.DataFrame, after: pd.Timestamp) -> list[CapitalFlow]:
     """The balance operations in an MT5 deal history stamped after `after`, oldest first (credit, trade, commission
-    and fee deals are not capital flows). Raises on a history without MT5's deal columns (the paper broker)."""
-    from goldbot.ops.ledger import DEAL_BALANCE, normalize_deals
-    d = normalize_deals(deals)
-    d = d[(d["type"] == DEAL_BALANCE) & (d["ts_utc"] > after) & (d["profit"] != 0)]
-    return [CapitalFlow(ts_utc=ts, amount=float(p)) for ts, p in zip(d["ts_utc"].tolist(), d["profit"].tolist())]
+    and fee deals are not capital flows). A balance operation at or after a cancelled deal (MT5 13/14) in the read is
+    left out (review of 14f154aa, MEDIUM): possibly the broker reversing that deal's P&L (ledger `follows_cancel`,
+    ADR 0015), so it stays P&L, never a withdrawal that would hide a loss. Raises on a history without MT5's deal
+    columns (the paper broker)."""
+    from goldbot.ops.ledger import classify_balance_deals, normalize_deals
+    rows = classify_balance_deals("", normalize_deals(deals))
+    return [CapitalFlow(ts_utc=b.ts_utc, amount=b.amount) for b in rows
+            if b.kind in ("deposit", "withdrawal") and not b.follows_cancel and b.ts_utc > after and b.amount != 0]
 
 
 FlowRefusal = Literal["no_anchor", "unreadable", "unreconciled"]
@@ -271,7 +274,7 @@ class FlowStep(FrozenRecord):
 
 
 def apply_flows(conf: HwmConfirmation, balance: float, tolerance: float, flows: list[CapitalFlow],
-                deals: Callable[[pd.Timestamp], pd.DataFrame]) -> FlowStep:
+                deals: Callable[[pd.Timestamp], pd.DataFrame], *, lower: bool = True) -> FlowStep:
     """ADR 0042 D3: add the net flow stamped after the mark's anchor to the mark (a withdrawal lowers it by exactly its
     amount; never below 0, where the engine sets the mark afresh). Flows from before the anchor are already in the mark.
 
@@ -280,7 +283,10 @@ def apply_flows(conf: HwmConfirmation, balance: float, tolerance: float, flows: 
     already holds (a deal clock skewed past the anchor, a rise an older release applied): counted twice, a deposit
     would be a phantom drawdown of its own size and trip the 12% kill switch. A refused flow leaves the mark to the
     ADR 0018 rule (a deposit then raises it to the balance; a withdrawal reads as a drawdown, the fail-safe side).
-    An applied flow clears the candidate: it was the balance before the flow was seen."""
+    An applied flow clears the candidate: it was the balance before the flow was seen. `lower=False` (real money,
+    review of 14f154aa): a withdrawal is never applied, so it reads as a drawdown (tighten-only); the reconciliation is
+    unchanged, as the mark then still stands for the balance at its anchor."""
+    flows = flows if lower else [f for f in flows if f.amount > 0]
     mine = [f for f in flows if conf.mark_utc is not None and f.ts_utc > conf.mark_utc]
     if not flows or (conf.mark_utc is not None and not mine):
         return FlowStep(conf=conf)

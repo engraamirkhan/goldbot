@@ -211,6 +211,7 @@ def test_after_a_mid_day_deposit_the_daily_caps_fire_at_the_same_pound_loss_as_w
 
 def test_a_withdrawal_mid_day_lowers_the_mark_and_both_starts_and_is_no_drawdown(tmp_path, monkeypatch):
     eng, pb = _engine(tmp_path)
+    eng.cfg.mode = "demo"                                          # lowering is demo-only
     _history(monkeypatch, pb, (T0 + 10 * M, DEP, -2_000.0))
     _balance(monkeypatch, pb, 8_000.0)
     _at(eng, T0 + 11 * M)
@@ -313,3 +314,77 @@ def test_the_paper_broker_has_no_capital_flows_and_its_deal_history_is_not_read_
     _at(eng, T0 + M)
     assert seen == [] and not _flows(eng)
     assert isinstance(pb, PaperBroker) and not isinstance(pb, _Terminal)
+
+
+# ---------------------------------------------------------------------------------------------- review 14f154aa
+def test_a_balance_operation_after_a_cancelled_deal_is_a_broker_reversal_not_a_capital_flow():
+    """Review MEDIUM: MT5 reverses a cancelled deal's P&L (deal types 13/14) with a balance deal (ledger
+    `follows_cancel`); read as a withdrawal it would lower the starts and hide a loss."""
+    d = _deals((T0 + 5 * M, 13, 0.0), (T0 + 6 * M, DEP, -300.0))
+    assert hwm.capital_flows(d, after=T0) == []
+
+
+def test_without_lowering_a_withdrawal_is_not_applied_to_the_mark_and_a_deposit_still_is():
+    out = (T0 + 10 * M, DEP, -500.0)
+    r = hwm.apply_flows(_conf(), 9_500.0, TOL, hwm.capital_flows(_deals(out), T0), _reader(out), lower=False)
+    assert not r.applied and r.conf.mark == 10_000.0
+    rows = (out, (T0 + 11 * M, DEP, 2_000.0))
+    r = hwm.apply_flows(_conf(), 11_500.0, TOL, hwm.capital_flows(_deals(*rows), T0), _reader(*rows), lower=False)
+    assert r.applied and r.conf.mark == 12_000.0 and r.net == 2_000.0
+
+
+def test_an_older_risk_file_reads_todays_deposit_even_when_the_mark_was_raised_before_the_upgrade(tmp_path,
+                                                                                                  monkeypatch):
+    """Review HIGH: the release before ADR 0042 raised the mark to the balance at its restart (anchor after the
+    deposit); the upgrade must still move the day and week starts by the deposit (anchored at the period rolls)."""
+    eng, pb = _engine(tmp_path)                                    # day and week rolled at T0
+    path = eng._risk_path()
+    risk = json.loads(path.read_text())
+    for k in ("week_reset", "flows_through"):
+        risk.pop(k, None)
+    path.write_text(json.dumps({**risk, "balance_closed_hwm": 20_000.0}))
+    eng._hwm_store.save(hwm.HwmConfirmation(account_id="icm-demo", mark=20_000.0, mark_utc=T0 + 20 * M))
+    _history(monkeypatch, pb, (T0 + 10 * M, DEP, 10_000.0))
+    _balance(monkeypatch, pb, 20_000.0)
+    again = _new_engine(tmp_path, pb)
+    _at(again, T0 + 30 * M)
+    st = again.state
+    assert (st.balance_closed_hwm, st.day_start_equity, st.week_start_equity) == (20_000, 20_000, 20_000)
+    [flow] = _flows(again)
+    assert flow["mark_applied"] is False and flow["day_start_shift"] == 10_000.0
+
+
+def test_a_withdrawal_the_deal_history_does_not_reconcile_never_lowers_the_starts(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    eng.cfg.mode = "demo"                                          # lowering is demo-only
+    _history(monkeypatch, pb, (T0 + 10 * M, DEP, -2_000.0))
+    _balance(monkeypatch, pb, 9_500.0)                             # 10,000 - 2,000 is not 9,500
+    _at(eng, T0 + 11 * M)
+    st = eng.state
+    assert (st.balance_closed_hwm, st.day_start_equity, st.week_start_equity) == (10_000, 10_000, 10_000)
+
+
+def test_on_a_live_account_a_withdrawal_never_lowers_the_mark_or_the_starts_and_a_deposit_still_raises_them(
+        tmp_path, monkeypatch):
+    """Review MEDIUM: tighten-only on real money: a withdrawal reads as a loss (ADR 0042 D6 operating control)."""
+    eng, pb = _engine(tmp_path)
+    eng.cfg.mode = "live"
+    _history(monkeypatch, pb, (T0 + 10 * M, DEP, -500.0))
+    _balance(monkeypatch, pb, 9_500.0)
+    _at(eng, T0 + 11 * M)
+    st = eng.state
+    assert (st.balance_closed_hwm, st.day_start_equity, st.week_start_equity) == (10_000, 10_000, 10_000)
+    _history(monkeypatch, pb, (T0 + 10 * M, DEP, -500.0), (T0 + 12 * M, DEP, 2_000.0))
+    _balance(monkeypatch, pb, 11_500.0)
+    _at(eng, T0 + 13 * M)
+    assert (st.balance_closed_hwm, st.day_start_equity, st.week_start_equity) == (12_000, 12_000, 12_000)
+
+
+def test_a_balance_reversal_after_a_cancelled_deal_reads_as_a_loss_in_the_engine(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _history(monkeypatch, pb, (T0 + 5 * M, 13, 0.0), (T0 + 6 * M, DEP, -300.0))
+    _balance(monkeypatch, pb, 9_700.0)
+    _at(eng, T0 + 7 * M)
+    st = eng.state
+    assert (st.balance_closed_hwm, st.day_start_equity, st.week_start_equity) == (10_000, 10_000, 10_000)
+    assert not _flows(eng)

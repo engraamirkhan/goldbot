@@ -2067,8 +2067,10 @@ class Engine:
         Each flow is journalled (`capital_flow`: amount and kind, no identifier) and the risk state saved at once.
         The finance ledger records the same balance operations from the broker's history (goldbot.ops.ledger RC-9,
         kind deposit / withdrawal)."""
-        if self._flows_through is None:                      # an older risk file: from the mark's anchor on
-            self._flows_through = self._hwm.mark_utc or now
+        if self._flows_through is None:
+            # an older risk file (review of 14f154aa, HIGH): from the period rolls on, so a deposit the release before
+            # folded into the mark at its restart still moves the starts; apply_flows skips flows the mark holds
+            self._flows_through = self._week_reset or self._last_reset or self._hwm.mark_utc or now
         if acc.balance == self._flow_balance and self._hwm.pending_balance is None:
             return
         since = self._flows_through
@@ -2085,7 +2087,9 @@ class Engine:
             return
         st = self.state
         before = st.balance_closed_hwm
-        r = hwm.apply_flows(self._hwm, acc.balance, self.gate.limits.hwm_rise_tolerance, flows, deals)
+        # tighten-only on anything but a demo account: a withdrawal lowers neither the mark nor the starts there
+        lower = self.cfg.mode == "demo"
+        r = hwm.apply_flows(self._hwm, acc.balance, self.gate.limits.hwm_rise_tolerance, flows, deals, lower=lower)
         if r.applied:
             st.balance_closed_hwm = r.conf.mark
             self._set_hwm(r.conf)
@@ -2094,8 +2098,12 @@ class Engine:
         day_set = self._last_reset
         week_set = self._week_reset or self._last_reset
         for f in flows:
-            day = f.amount if day_set is not None and f.ts_utc > day_set and st.day_start_equity > 0 else 0.0
-            week = f.amount if week_set is not None and f.ts_utc > week_set and st.week_start_equity > 0 else 0.0
+            # a withdrawal lowers the starts only once the deal history reconciled it, and only on a demo account
+            # (review of 14f154aa): otherwise it reads as a loss. A deposit always raises them (the strict side)
+            moves = f.amount > 0 or (lower and r.applied)
+            day = f.amount if moves and day_set is not None and f.ts_utc > day_set and st.day_start_equity > 0 else 0.0
+            week = f.amount if moves and week_set is not None and f.ts_utc > week_set and st.week_start_equity > 0 \
+                else 0.0
             st.day_start_equity = max(0.0, st.day_start_equity + day)
             st.week_start_equity = max(0.0, st.week_start_equity + week)
             log.warning("capital flow %+.2f (%s): high-water mark %.2f -> %.2f, day start %+.2f, week start %+.2f",
