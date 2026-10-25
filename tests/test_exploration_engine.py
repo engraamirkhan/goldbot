@@ -559,12 +559,12 @@ def test_the_engine_config_comes_from_the_frozen_spec_and_the_accounts_registrat
     assert exploration.config_for(_probe_account()) is None             # not enabled: no exploration
 
 
-def test_icm_probe_ships_the_adr_0043_budget_with_exploration_off():
+def test_icm_probe_ships_the_adr_0043_budget_with_exploration_on():
     """Integration I2 (PD): cost probes 60/220, exploration 138/220; pots scalp £50 / intraday £48 / swing £40;
-    swing £40 a trade and one open, scalp £6.50 a trade; 18 open at most; off until the reviewed switch-on."""
+    swing £40 a trade and one open, scalp £6.50 a trade; 18 open at most; switched on 2026-10-25 (PD decision)."""
     acc = acc_mod.load_accounts(logins=False)["icm-probe"]
     ex = acc.exploration
-    assert not ex.enabled and ex.max_open_total == 18
+    assert ex.enabled and ex.max_open_total == 18
     assert ex.budget_share * 220 == pytest.approx(138, abs=0.05)
     assert acc.cost_probe.budget_share * 220 == pytest.approx(60, abs=0.05)
     assert {k: (v.gbp, v.max_open) for k, v in ex.pots.items()} == {"scalp": (50, 8), "intraday": (48, 5),
