@@ -31,7 +31,7 @@ Tighten-only layers before the RiskGate; RiskGate unchanged. Each pot counts tod
 - Swing arms whose native stop exceeds £40 at 0.01 lot (W1B tsmom 1d ≈ £99) are skipped (`native_stop_above_cap`)
   and wait for a larger demo balance; they are counted in K regardless.
 - Drawdown: −6% of icm-probe warns; −8% pauses every arm except scheduled cost probes until the rotation in ADR 0043.
-- Per-arm £/day caps from program doc section 1 stay as arm caps inside the style ceiling; swing arm caps = £110 each
+- Per-arm £/day caps from program doc section 1 stay as arm caps inside the style ceiling; swing arm caps = £40 each (ADR 0043)
   and share the swing ceiling.
 - Swing contributes about 2-3 trades/day at best (honest; unchanged). Total estimate unchanged at ~290 (200-350)
   across ~24 arms, but scalp volume is now bounded by the £70 scalp ceiling and the 10-open cap, so expect the low end
@@ -72,7 +72,7 @@ probe fills (with the K9 fx field); slippage never favourable; swap charged per 
 **Validation:** rule arms: per-year OOS statistics (nothing fitted). ML arms: anchored walk-forward, train >= 3 y,
 test 6 months, purge = max hold, embargo 1 day, refit every step.
 **Outputs per arm:** fire rate per day, gross and net mean R, SD, day-clustered t, per-year table, hold-time and
-concurrency distributions, share of stops that fit the £ caps at 0.01 lot (swing: share <= £110), live-label parity
+concurrency distributions, share of stops that fit the £ caps at 0.01 lot (swing: share <= £40, ADR 0043), live-label parity
 on 2026-10 bars.
 **Prior:** Normal on net mean R from 2019-2025-09 OOS years, mean x 0.5, effective prior n = min(50, n_hist / 100).
 Per arm only, never pooled; live rows update the arm's own posterior with daily arm sums; backtest rows never added
