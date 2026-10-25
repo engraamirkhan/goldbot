@@ -414,3 +414,15 @@ def test_needrestart_never_restarts_a_goldbot_unit():
     for f in ("mt5_bootstrap.sh", "brain_bootstrap.sh"):
         assert ('install -m 644 -o root -g root "$OPS/needrestart/goldbot.conf" /etc/needrestart/conf.d/goldbot.conf'
                 in (LINUX / f).read_text()), f
+
+
+def test_the_terminal_count_ignores_the_wine_start_launcher():
+    """Live 2026-10-25 (demo box): the unit's main process is wine's `start.exe /exec ...terminal64.exe`, which names the
+    terminal too, so post-reboot counted 2. The count anchors on the terminal's own Windows path."""
+    import re
+    script = (Path(__file__).resolve().parents[1] / "goldbot" / "ops" / "linux" / "mt5-box-upgrade.sh").read_text()
+    m = re.search(r"pgrep -c -u mt5 -f '([^']+)'", script)
+    assert m is not None
+    pat = re.compile(m.group(1).replace("[\\\\]", "\\\\"))
+    assert pat.search(r"C:\MT5\ICMarkets\terminal64.exe /profile:goldbot")
+    assert not pat.search("start.exe /exec /home/mt5/.wine/drive_c/MT5/ICMarkets/terminal64.exe")
