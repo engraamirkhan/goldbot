@@ -134,6 +134,7 @@ def test_an_arm_with_no_usable_cap_is_refused(tmp_path, cap):
     (dict(stage=Stage.HALTED), "drawdown_halt"),
     (dict(in_rollover=True), "rollover"),
     (dict(weekend=True), "weekend"),
+    (dict(in_blackout=True), "news_blackout"),       # tier-1 news: the gate refuses every purpose, exploration too
     (dict(stale_bars=True), "stale_data"),
     (dict(last_tick_age_s=60.0), "stale_data"),
     (dict(equity=975.0, balance_closed_hwm=975.0), "daily_cap"),
