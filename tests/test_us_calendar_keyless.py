@@ -77,7 +77,13 @@ def test_event_utc_is_dst_correct_for_keyless_dates():
 # ------------------------------------------------------------------------------------------------- fetch
 class _Resp:
     def __init__(self, text: str, status: int = 200):
-        self.text, self.status_code = text, status
+        self.text, self.status_code, self.encoding = text, status, "utf-8"
+
+    def iter_content(self, chunk_size: int = 1):
+        yield self.text.encode()
+
+    def close(self) -> None:
+        pass
 
 
 class _Session:
@@ -114,7 +120,7 @@ def test_fetch_unions_history_and_schedule_and_spaces_requests():
     assert pd.Timestamp("2026-12-23") in out.dates                   # scheduled, from the calendar only
     assert len(s.urls) == 3 and all(w >= kl.CRAWL_DELAY for w in waits)
     assert any("2027 calendar not offered yet" in n for n in out.notes)
-    assert any(n.startswith("TIME FLAG pce:2026-01-22 listed at 10:00 ET") for n in out.notes)
+    assert not any(n.startswith("TIME FLAG") for n in out.notes)        # the listed odd times are in TIME_OVERRIDES
 
 
 def test_fetch_reports_past_dates_the_two_pages_disagree_on():
@@ -147,7 +153,7 @@ def _monthly(first: str, n: int, day: int) -> pd.DatetimeIndex:
 
 
 def test_keyless_dates_build_the_calendar_v1_schema_with_expected_counts_and_rule_stamps():
-    dates = {"nfp": _monthly("2015-01-01", 12 * 11, 5), "cpi": _monthly("2015-01-01", 12 * 11, 13),
+    dates = {"nfp": _monthly("2015-01-01", 12 * 11, 5), "cpi": _monthly("2015-01-01", 12 * 11, 22),
              "pce": _monthly("2015-01-01", 12 * 11, 27)}
     fomc = pd.DataFrame({"day": pd.DatetimeIndex([f"{y}-{m:02d}-15" for y in range(2015, 2026)
                                                   for m in (1, 3, 4, 6, 7, 9, 10, 12)]) + pd.offsets.BDay(0),
@@ -162,8 +168,10 @@ def test_keyless_dates_build_the_calendar_v1_schema_with_expected_counts_and_rul
     assert ((fred["event_utc"] - fred["available_utc"]) == uc.SCHEDULE_LEAD).all()
     counts = uc.count_table(cal, through_year=2025)
     for t in ("nfp", "cpi", "pce", "fomc_statement"):
-        c = counts[(counts["event_type"] == t) & counts["year"].between(2015, 2024)]
-        assert len(c) == 10 and c["ok"].all(), (t, c)
+        c = counts[(counts["event_type"] == t) & counts["year"].between(2015, 2024)
+                   & ~counts["year"].isin([y for (k, y) in uc.MONTHLY_COUNT_EXCEPTIONS if k == t]
+                                          + ([2020] if t == "fomc_statement" else []))]   # synthetic: no cancellation
+        assert len(c) >= 9 and c["ok"].all(), (t, c)
     # one NFP in summer and one in winter: 08:30 New York is 12:30 / 13:30 UTC
     nfp = cal[cal["event_type"] == "nfp"].set_index("event_id")["event_utc"]
     assert nfp["nfp:2015-07-06"].hour == 12 and nfp["nfp:2015-01-05"].hour == 13
@@ -246,3 +254,80 @@ def test_monthly_gaps_report_a_lost_release_but_not_a_normal_month():
     cal = uc.calendar_frame({"nfp": nfp}, NOW)
     gaps = [g for g in uc.monthly_gaps(cal, through=pd.Timestamp("2024-12-31", tz="UTC")) if g.startswith("nfp")]
     assert gaps == ["nfp: 63 days between 2024-08-02 and 2024-10-04"]
+
+
+# ------------------------------------------------------------------------------------------------- review edits
+def test_revision_only_equals_its_committed_evidence():
+    # each phantom with the agency check behind it (bls.gov schedules, BEA archive, Census/DOL rules; 2026-10-25)
+    ev = pd.read_csv(FIX / "revision_only_evidence.csv")
+    assert set(ev["event_id"]) == set(uc.REVISION_ONLY) and ev["event_id"].is_unique
+    assert set(ev["check"]) <= {"bls_schedule", "bea_archive", "census_annual_revision", "dol_weekly"}
+    assert ev["evidence"].str.len().min() > 20
+
+
+@pytest.mark.parametrize(("t", "year", "expected"), [
+    ("cpi", 2016, (12, 12)), ("nfp", 2024, (12, 12)), ("retail_sales", 2015, (12, 12)), ("jolts", 2010, (5, 5)),
+    ("jolts", 2011, (12, 12)), ("pce", 2019, (11, 11)), ("ppi", 2025, (10, 10)), ("nfp", 2025, (11, 11)),
+    ("pce", 2026, (13, 13)), ("nfp", 2013, (12, 12)), ("gdp_advance", 2025, (4, 4)), ("fomc_statement", 2020, (7, 7)),
+    ("fomc_statement", 2021, (8, 8)), ("ism_services", 2022, (12, 12)),
+])
+def test_expected_counts_are_exact_with_listed_exceptions(t: str, year: int, expected: tuple[int, int]):
+    assert uc.expected_count(t, year) == expected
+
+
+def test_time_overrides_move_the_event_to_the_published_time():
+    # PCE 2026-01-22 was at 10:00 New York, not 08:30: a [-15, +30] min blackout must sit around 15:00 UTC
+    cal = uc.calendar_frame({"pce": pd.DatetimeIndex(["2026-01-22", "2026-02-20"])}, NOW)
+    ev = cal.set_index("event_id")["event_utc"]
+    assert ev["pce:2026-01-22"] == pd.Timestamp("2026-01-22 15:00", tz="UTC")
+    assert ev["pce:2026-02-20"] == pd.Timestamp("2026-02-20 13:30", tz="UTC")
+    a = cal.set_index("event_id")["available_utc"]
+    assert a["pce:2026-01-22"] == ev["pce:2026-01-22"] - uc.SCHEDULE_LEAD
+    assert not set(uc.TIME_OVERRIDES) & uc.REVISION_ONLY
+    for key in uc.TIME_OVERRIDES:
+        assert key.split(":")[0] in uc.TIERS
+
+
+def test_an_overridden_time_is_not_flagged_again():
+    s = _Session(_pages(_alfred_pce(PCE_PAST)))
+    out = kl.fetch_release_keyless(REL["pce"], NOW, session=s, sleep=lambda _: None)  # type: ignore[arg-type]
+    assert not any(n.startswith("TIME FLAG pce") for n in out.notes)    # both 2026 PCE flags are overridden
+
+
+class _Big(_Resp):
+    def __init__(self, n: int):
+        super().__init__("")
+        self.n, self.closed = n, False
+
+    def iter_content(self, chunk_size: int = 1):
+        sent = 0
+        while sent < self.n:
+            yield b"x" * min(chunk_size, self.n - sent)
+            sent += chunk_size
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_get_refuses_a_response_over_the_size_cap_without_retrying():
+    calls: list[int] = []
+
+    class S:
+        def get(self, url: str, **kw: Any) -> _Big:
+            assert kw.get("stream") is True
+            calls.append(1)
+            return _Big(kl.MAX_RESPONSE_BYTES + 1)
+    with pytest.raises(uc.FredError, match="larger than"):
+        kl._get("https://x", retries=3, session=S(), sleep=lambda _: None)  # type: ignore[arg-type]
+    assert calls == [1]
+    ok = _Big(1000)
+    assert kl._read_capped(ok, "u") == "x" * 1000
+
+
+def test_an_odd_time_without_an_override_is_flagged():
+    page = _text("fred_calendar_rid54_2026.html")
+    i = page.index("February 20, 2026")
+    page = page[:i] + page[i:].replace("7:30 am", "9:00 am", 1)
+    out = kl.fetch_release_keyless(REL["pce"], NOW, session=_Session(_pages(_alfred_pce(PCE_PAST), cal_2026=page)),  # type: ignore[arg-type]
+                                   sleep=lambda _: None)
+    assert any(n.startswith("TIME FLAG pce:2026-02-20 listed at 10:00 ET, calendar-v1 uses 08:30 ET") for n in out.notes)

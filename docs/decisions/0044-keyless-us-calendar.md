@@ -50,6 +50,14 @@ revision-only dates). Implements the program decision of 2026-10-20 (calendar-v1
 - **Hand-checked additions** to `SPACING_EXEMPT` (real close pairs), and the `GDP_ADVANCE_OVERRIDES` entry 2026-03-31
   -> 2026-04-30.
 - **A monthly-gap report** lists gaps of more than 45 days between monthly releases, which catches a lost release.
+- **Exact counts** (quant review, 2026-10-25):
+  - monthly types: exactly 12 a year, apart from the listed `MONTHLY_COUNT_EXCEPTIONS`. These are JOLTS 2010 (5),
+    PCE 2019 (11), the 2025 lapse year, and the 2026 catch-up years (13);
+  - GDP advance: 4;
+  - FOMC statements: 8 (7 in 2020).
+- **The evidence behind `REVISION_ONLY`** is committed as `tests/fixtures/us_calendar/revision_only_evidence.csv`
+  (one row per date, with its agency check). A test keeps the set and the file equal.
+- **Response size:** responses are streamed and refused above 2 MB (security review).
 
 ## Consequences
 - calendar-v1 can be published without an owner step. The owner's `FRED_API_KEY` action (OD-5) is no longer needed.
@@ -58,8 +66,8 @@ revision-only dates). Implements the program decision of 2026-10-20 (calendar-v1
   - 3,159 rows, 0 quarantined;
   - 2015-2024: 12 a year each for CPI, NFP, PCE, PPI, retail sales and JOLTS; 4 GDP advances; 7-8 FOMC statements;
   - every gap is a shutdown gap (2013, 2018-19, 2025);
-  - counts outside the expected range: jobless claims 2025 (46, the lapse) and JOLTS 2010 (ALFRED starts in August
-    2010);
+  - with the exact counts, the only count outside the expected range is jobless claims 2025 (46, the lapse);
+    JOLTS 2010 is a listed exception, because ALFRED starts in August 2010;
   - every GDP advance from 2010 matches BEA's "advance/initial" titles. The exception is 2018-10-26, where BEA's
     archive page says 10-25.
 - Cost: about 2-3 runner-minutes a week. That is 24 requests spaced 2 s apart plus 13 Fed pages, and the asset is
@@ -68,7 +76,13 @@ revision-only dates). Implements the program decision of 2026-10-20 (calendar-v1
   - a St. Louis Fed page redesign, which the name, year and dates guards would catch, leaving the published rows
     as they are;
   - a new revision-only date, which the quarantine and the gap report surface;
-  - the ALFRED dates are vintage dates. A release moved within its day is still not seen (ADR 0008).
+  - the ALFRED dates are vintage dates. A release moved within its day is not seen unless FRED's calendar lists
+    its time and the day is in `TIME_OVERRIDES` (2026: PCE 01-22 10:00 and 03-13 11:00, GDP 03-13 09:30, retail
+    sales 03-06 07:30). These are applied to `event_utc`, so the blackout window sits around the real release. Odd
+    times before 2025 are not visible, because the calendar covers only last year onwards;
+  - residual: the originally scheduled dates of PCE, GDP and retail sales in the 2013 and 2018-19 shutdowns are not
+    listed as cancelled rows (ADR 0008 lists only the BLS ones and the 2019 GDP advance). Research therefore sees no
+    "scheduled, then cancelled" event on those days. Only the delayed real release appears.
 - The gate in ADR 0008 is unchanged: a quant review of the first published count table comes before any trial cites
   `tier1_events`/`tier2_events`.
 - What would change this: St. Louis Fed restricting these pages; a licensed calendar; or a key becoming available.

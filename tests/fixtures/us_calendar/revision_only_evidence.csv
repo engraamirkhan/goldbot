@@ -1,0 +1,77 @@
+event_id,check,evidence
+cpi:2010-02-17,bls_schedule,no BLS cpi release that day; nearest BLS release 2010-02-19 (for January 2010)
+cpi:2011-02-15,bls_schedule,no BLS cpi release that day; nearest BLS release 2011-02-17 (for January 2011)
+cpi:2012-02-15,bls_schedule,no BLS cpi release that day; nearest BLS release 2012-02-17 (for January 2012)
+cpi:2013-02-19,bls_schedule,no BLS cpi release that day; nearest BLS release 2013-02-21 (for January 2013)
+cpi:2014-02-18,bls_schedule,no BLS cpi release that day; nearest BLS release 2014-02-20 (for January 2014)
+cpi:2015-02-20,bls_schedule,no BLS cpi release that day; nearest BLS release 2015-02-26 (for January 2015)
+cpi:2017-02-13,bls_schedule,no BLS cpi release that day; nearest BLS release 2017-02-15 (for January 2017)
+cpi:2019-02-11,bls_schedule,no BLS cpi release that day; nearest BLS release 2019-02-13 (for January 2019)
+cpi:2020-02-11,bls_schedule,no BLS cpi release that day; nearest BLS release 2020-02-13 (for January 2020)
+cpi:2021-02-08,bls_schedule,no BLS cpi release that day; nearest BLS release 2021-02-10 (for January 2021)
+cpi:2022-02-08,bls_schedule,no BLS cpi release that day; nearest BLS release 2022-02-10 (for January 2022)
+cpi:2023-02-10,bls_schedule,no BLS cpi release that day; nearest BLS release 2023-02-14 (for January 2023)
+cpi:2024-02-09,bls_schedule,no BLS cpi release that day; nearest BLS release 2024-02-13 (for January 2024)
+gdp:2011-08-08,bea_archive,"no BEA release that day; nearest 2011-07-29 (Gross Domestic Product, 2nd Quarter 2011 (advance estimate))"
+gdp:2013-08-01,bea_archive,"no BEA release that day; nearest 2013-07-31 (Gross Domestic Product, 2nd quarter 2013 (advance estimate); Comprehensive Revision: 1929 through 1st quarter 2013)"
+gdp:2013-08-08,bea_archive,"no BEA release that day; nearest 2013-07-31 (Gross Domestic Product, 2nd quarter 2013 (advance estimate); Comprehensive Revision: 1929 through 1st quarter 2013)"
+gdp:2013-08-15,bea_archive,"no BEA release that day; nearest 2013-08-29 (Gross Domestic Product, 2nd quarter 2013 (second estimate); Corporate Profits, 2nd quarter 2013 (preliminary estimate))"
+gdp:2013-11-01,bea_archive,"no BEA release that day; nearest 2013-11-07 (Gross Domestic Product, 3rd quarter 2013 (advance estimate))"
+gdp:2014-01-10,bea_archive,"no BEA release that day; nearest 2014-01-30 (Gross Domestic Product, 4th quarter and annual 2013 (advance estimate))"
+gdp:2014-08-05,bea_archive,"no BEA release that day; nearest 2014-07-30 (Gross Domestic Product, 2nd quarter 2014 (advance estimate); Includes historical revisions)"
+gdp:2014-09-17,bea_archive,"no BEA release that day; nearest 2014-09-26 (Gross Domestic Product, 2nd quarter 2014 (third estimate); Corporate Profits, 2nd quarter 2014 (revised estimate))"
+gdp:2014-10-31,bea_archive,"no BEA release that day; nearest 2014-10-30 (Gross Domestic Product, 3rd quarter 2014 (advance estimate))"
+gdp:2015-08-06,bea_archive,"no BEA release that day; nearest 2015-07-30 (Gross Domestic Product, 2nd quarter 2015 (advance estimate); Includes historical revisions)"
+gdp:2016-08-03,bea_archive,"no BEA release that day; nearest 2016-07-29 (Gross Domestic Product, 2nd quarter 2016 (advance estimate))"
+gdp:2016-09-08,bea_archive,"no BEA release that day; nearest 2016-08-26 (Gross Domestic Product, 2nd quarter 2016 (second estimate); Corporate Profits, 2nd quarter 2016 (preliminary estimate))"
+gdp:2016-11-03,bea_archive,"no BEA release that day; nearest 2016-10-28 (Gross Domestic Product, 3rd quarter 2016 (advance estimate))"
+gdp:2017-08-03,bea_archive,"no BEA release that day; nearest 2017-07-28 (Gross Domestic Product, 2nd quarter 2017 (advance estimate), and annual update)"
+gdp:2017-08-31,bea_archive,"no BEA release that day; nearest 2017-08-30 (Gross Domestic Product, 2nd quarter 2017 (second estimate); Corporate Profits, 2nd quarter 2017 (preliminary estimate))"
+gdp:2017-10-03,bea_archive,"no BEA release that day; nearest 2017-09-28 (Gross Domestic Product, 2nd quarter 2017 (third estimate); Corporate Profits, 2nd quarter 2017 (revised estimate))"
+gdp:2017-11-16,bea_archive,"no BEA release that day; nearest 2017-11-29 (Gross Domestic Product, 3rd quarter 2017 (second estimate); Corporate Profits, 3rd quarter 2017 (preliminary estimate))"
+gdp:2018-07-31,bea_archive,"no BEA release that day; nearest 2018-07-27 (Gross Domestic Product, 2nd quarter 2018 (advance estimate), and comprehensive update)"
+gdp:2020-09-16,bea_archive,"no BEA release that day; nearest 2020-09-30 (Gross Domestic Product (Third Estimate), Corporate Profits (Revised), and GDP by Industry, Second Quarter 2020)"
+gdp:2020-11-03,bea_archive,"no BEA release that day; nearest 2020-10-29 (Gross Domestic Product, Third Quarter 2020  (Advance Estimate))"
+gdp:2021-08-06,bea_archive,"no BEA release that day; nearest 2021-07-29 (Gross Domestic Product, Second Quarter 2021 (Advance Estimate) and Annual Update)"
+gdp:2021-08-20,bea_archive,"no BEA release that day; nearest 2021-08-26 (Gross Domestic Product, 2nd Quarter 2021 (Second Estimate); Corporate Profits, 2nd Quarter 2021 (Preliminary Estimate))"
+gdp:2021-09-24,bea_archive,"no BEA release that day; nearest 2021-09-30 (Gross Domestic Product, (Third Estimate), GDP by Industry, and Corporate Profits (Revised), 2nd Quarter 2021)"
+gdp:2021-10-29,bea_archive,"no BEA release that day; nearest 2021-10-28 (Gross Domestic Product, Third Quarter 2021 (Advance Estimate))"
+gdp:2022-10-06,bea_archive,"no BEA release that day; nearest 2022-09-29 (Gross Domestic Product (Third Estimate), GDP by Industry, and Corporate Profits (Revised), 2nd Quarter 2022 and Annual Update)"
+gdp:2023-11-17,bea_archive,no BEA release that day; nearest 2023-11-29 (Gross Domestic Product (Second Estimate) Corporate Profits (Preliminary Estimate) Third Quarter 2023)
+gdp:2024-10-02,bea_archive,"no BEA release that day; nearest 2024-09-26 (Gross Domestic Product (Third Estimate), Corporate Profits (Revised Estimate), and GDP by Industry,  Second Quarter 2024 and Annual Update)"
+jobless_claims:2014-07-11,dol_weekly,1 days after the weekly report of 2014-07-10 (DOL publishes once a week)
+jobless_claims:2016-11-25,dol_weekly,2 days after the weekly report of 2016-11-23 (DOL publishes once a week)
+jobless_claims:2017-03-24,dol_weekly,1 days after the weekly report of 2017-03-23 (DOL publishes once a week)
+jobless_claims:2017-11-24,dol_weekly,2 days after the weekly report of 2017-11-22 (DOL publishes once a week)
+jobless_claims:2018-09-18,dol_weekly,5 days after the weekly report of 2018-09-13 (DOL publishes once a week)
+jobless_claims:2018-11-23,dol_weekly,2 days after the weekly report of 2018-11-21 (DOL publishes once a week)
+nfp:2012-12-12,bls_schedule,no BLS nfp release that day; nearest BLS release 2012-12-07 (for November 2012)
+nfp:2013-05-06,bls_schedule,no BLS nfp release that day; nearest BLS release 2013-05-03 (for April 2013)
+nfp:2020-05-11,bls_schedule,no BLS nfp release that day; nearest BLS release 2020-05-08 (for April 2020)
+nfp:2024-01-10,bls_schedule,no BLS nfp release that day; nearest BLS release 2024-01-05 (for December 2023)
+nfp:2024-08-21,bls_schedule,no BLS nfp release that day; nearest BLS release 2024-09-06 (for August 2024)
+pce:2011-08-08,bea_archive,"no BEA release that day; nearest 2011-08-02 (Personal Income and Outlays, June 2011)"
+pce:2013-08-08,bea_archive,"no BEA release that day; nearest 2013-08-02 (Personal Income and Outlays, June 2013)"
+ppi:2010-02-14,bls_schedule,no BLS ppi release that day; nearest BLS release 2010-02-18 (for January 2010)
+ppi:2010-02-16,bls_schedule,no BLS ppi release that day; nearest BLS release 2010-02-18 (for January 2010)
+ppi:2011-02-14,bls_schedule,no BLS ppi release that day; nearest BLS release 2011-02-16 (for January 2011)
+ppi:2012-02-14,bls_schedule,no BLS ppi release that day; nearest BLS release 2012-02-16 (for January 2012)
+ppi:2014-02-14,bls_schedule,no BLS ppi release that day; nearest BLS release 2014-02-19 (for January 2014)
+ppi:2017-02-10,bls_schedule,no BLS ppi release that day; nearest BLS release 2017-02-14 (for January 2017)
+ppi:2019-02-12,bls_schedule,no BLS ppi release that day; nearest BLS release 2019-02-14 (for January 2019)
+ppi:2020-02-14,bls_schedule,no BLS ppi release that day; nearest BLS release 2020-02-19 (for January 2020)
+ppi:2021-02-12,bls_schedule,no BLS ppi release that day; nearest BLS release 2021-02-17 (for January 2021)
+ppi:2022-02-11,bls_schedule,no BLS ppi release that day; nearest BLS release 2022-02-15 (for January 2022)
+ppi:2023-02-14,bls_schedule,no BLS ppi release that day; nearest BLS release 2023-02-16 (for January 2023)
+ppi:2024-02-14,bls_schedule,no BLS ppi release that day; nearest BLS release 2024-02-16 (for January 2024)
+retail_sales:2010-04-30,census_annual_revision,"Census annual benchmark revision (late Apr/May or catch-up), not the mid-month Advance Monthly report"
+retail_sales:2011-04-29,census_annual_revision,"Census annual benchmark revision (late Apr/May or catch-up), not the mid-month Advance Monthly report"
+retail_sales:2012-04-30,census_annual_revision,"Census annual benchmark revision (late Apr/May or catch-up), not the mid-month Advance Monthly report"
+retail_sales:2013-05-31,census_annual_revision,"Census annual benchmark revision (late Apr/May or catch-up), not the mid-month Advance Monthly report"
+retail_sales:2018-05-25,census_annual_revision,"Census annual benchmark revision (late Apr/May or catch-up), not the mid-month Advance Monthly report"
+retail_sales:2021-04-26,census_annual_revision,"Census annual benchmark revision (late Apr/May or catch-up), not the mid-month Advance Monthly report"
+retail_sales:2022-04-25,census_annual_revision,"Census annual benchmark revision (late Apr/May or catch-up), not the mid-month Advance Monthly report"
+retail_sales:2023-04-24,census_annual_revision,"Census annual benchmark revision (late Apr/May or catch-up), not the mid-month Advance Monthly report"
+retail_sales:2024-04-23,census_annual_revision,"Census annual benchmark revision (late Apr/May or catch-up), not the mid-month Advance Monthly report"
+retail_sales:2025-04-25,census_annual_revision,"Census annual benchmark revision (late Apr/May or catch-up), not the mid-month Advance Monthly report"
+retail_sales:2026-09-28,census_annual_revision,"Census annual benchmark revision (late Apr/May or catch-up), not the mid-month Advance Monthly report"

@@ -24,7 +24,8 @@ Guards (each failure fails that release only; its published rows are kept):
 * the calendar page must be for the year asked and must list this year's dates (next year may be empty until the
   agencies publish it).
 Reported, not failed: past dates of this year that the two pages disagree on, and calendar times that differ from the
-type's fixed release time (`Release.at_et`; event times stay fixed per ADR 0008, a flagged day is for review).
+time calendar-v1 uses (`Release.at_et`, or the hand-checked TIME_OVERRIDES entry); a flagged day is for review.
+Responses are streamed and refused beyond MAX_RESPONSE_BYTES.
 
 Requests are spaced CRAWL_DELAY apart (robots.txt asks for 1 s on fred and 2 s on alfred; both allow these paths):
 8 releases x 3 requests, about a minute. FRED terms: the dates are facts published by US federal agencies (public
@@ -37,18 +38,27 @@ import html as _html
 import re
 import time as _time
 from datetime import time
-from typing import Callable, NamedTuple
+from typing import Any, Callable, NamedTuple
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
 
-from goldbot.data.us_calendar import COVERAGE_START, ET, USER_AGENT, FredError, Release
+from goldbot.data.us_calendar import (
+    COVERAGE_START,
+    ET,
+    REVISION_ONLY,
+    TIME_OVERRIDES,
+    USER_AGENT,
+    FredError,
+    Release,
+)
 
 CT = ZoneInfo("America/Chicago")
 ALFRED_DATES_URL = "https://alfred.stlouisfed.org/release/downloaddates?rid={rid}&ff=txt"
 FRED_CALENDAR_URL = "https://fred.stlouisfed.org/releases/calendar?rid={rid}&y={year}"
 CRAWL_DELAY = 2.0                                  # seconds before every request (robots.txt: alfred 2, fred 1)
+MAX_RESPONSE_BYTES = 2_000_000                     # pages are 4-100 kB; a larger body is refused, not parsed
 ALFRED_MAX_AGE = pd.Timedelta(days=120)            # newest ALFRED date must be this recent (2025 lapse gap: ~7 weeks)
 
 _DATE_LINE = re.compile(r"^(\d{4}-\d{2}-\d{2})\s*$", re.M)
@@ -114,16 +124,30 @@ def parse_fred_calendar(page: str, rel: Release, year: int) -> pd.DataFrame:
     return out.drop_duplicates("day").sort_values("day").reset_index(drop=True)
 
 
+def _read_capped(r: Any, url: str) -> str:
+    """The streamed body, refused (FredError, no retry) beyond MAX_RESPONSE_BYTES."""
+    chunks, n = [], 0
+    for c in r.iter_content(chunk_size=65536):
+        n += len(c)
+        if n > MAX_RESPONSE_BYTES:
+            raise FredError(f"{url}: response larger than {MAX_RESPONSE_BYTES:,} bytes; refused")
+        chunks.append(c)
+    return b"".join(chunks).decode(r.encoding or "utf-8", errors="replace")
+
+
 def _get(url: str, *, retries: int, session: requests.Session | None, sleep: Callable[[float], None]) -> str:
     get = session.get if session is not None else requests.get
     last = ""
     for i in range(retries):
         sleep(CRAWL_DELAY * (1 + 5 * i))
         try:
-            r = get(url, timeout=60, headers={"User-Agent": USER_AGENT})
-            if r.status_code == 200:
-                return str(r.text)
-            last = f"HTTP {r.status_code}"
+            r = get(url, timeout=60, headers={"User-Agent": USER_AGENT}, stream=True)
+            try:
+                if r.status_code == 200:
+                    return _read_capped(r, url)
+                last = f"HTTP {r.status_code}"
+            finally:
+                r.close()
         except requests.RequestException as exc:
             last = type(exc).__name__
     raise FredError(f"{url}: {last}")
@@ -167,8 +191,11 @@ def fetch_release_keyless(rel: Release, now: pd.Timestamp, *, retries: int = 3,
         notes.append(f"{rel.event_type}: ALFRED and the FRED calendar disagree on past {today.year} dates "
                      f"(calendar only {[f'{d:%Y-%m-%d}' for d in only_cal]}, "
                      f"ALFRED only {[f'{d:%Y-%m-%d}' for d in only_alfred]}); the union is used")
-    off = times[times["time_et"] != rel.at_et]
+    used = [TIME_OVERRIDES.get(f"{rel.event_type}:{d:%Y-%m-%d}", rel.at_et) for d in times["day"]]
+    off = times.assign(used=pd.Series(used, index=times.index, dtype=object))
+    revision = [f"{rel.event_type}:{d:%Y-%m-%d}" in REVISION_ONLY for d in times["day"]]
+    off = off[(off["time_et"] != off["used"]).to_numpy() & ~pd.Series(revision, dtype=bool).to_numpy()]
     notes += [f"TIME FLAG {rel.event_type}:{r.day:%Y-%m-%d} listed at {r.time_et:%H:%M} ET, calendar-v1 uses "
-              f"{rel.at_et:%H:%M} ET (check; event times are fixed per type)" for r in off.itertuples()]
+              f"{r.used:%H:%M} ET (check, then add to TIME_OVERRIDES)" for r in off.itertuples()]
     dates = past.union(listed).normalize().unique().sort_values()
     return KeylessDates(pd.DatetimeIndex(dates[dates >= COVERAGE_START]), times, notes)

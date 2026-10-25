@@ -236,6 +236,16 @@ GDP_ADVANCE_OVERRIDES: dict[str, str] = {
     "2025-12-31": "2026-02-20",   # BEA blog 2026-01-07; 2026-01-22 was the Q3 update and PCE, not the Q4 advance
     "2026-03-31": "2026-04-30",   # BEA archive: 2026-04-09 was the Q4 2025 third estimate (catch-up), Q1 advance 04-30
 }
+# Releases published at another New York time than their type's (event_id -> ET time), from the times FRED's release
+# calendar lists (US Central, converted; the keyless fetch flags any other odd time). Applied in event_rows, so the
+# blackout window sits around the real release. retail_sales:2026-09-28 (listed 10:00) is a revision day
+# (REVISION_ONLY), not an override.
+TIME_OVERRIDES: dict[str, time] = {
+    "pce:2026-01-22": time(10, 0),            # with the GDP Q3 update at 08:30 (BEA)
+    "pce:2026-03-13": time(11, 0),
+    "gdp:2026-03-13": time(9, 30),            # Q4 2025 second estimate
+    "retail_sales:2026-03-06": time(7, 30),
+}
 # Rule-derived (ISM) dates checked by hand: rule event_id -> actual ET date, or None to drop it.
 RULE_OVERRIDES: dict[str, str | None] = {}
 
@@ -319,6 +329,7 @@ def event_rows(event_type: str, release_id: int, et_dates: pd.DatetimeIndex, at:
     keep = np.asarray(days >= COVERAGE_START) & ~pd.Series(days).duplicated().to_numpy()
     order = [i for i in np.argsort(days.to_numpy(), kind="stable") if keep[i]]
     days, times = days[order], [times[i] for i in order]
+    times = [TIME_OVERRIDES.get(f"{event_type}:{d:%Y-%m-%d}", t) for d, t in zip(days, times)]
     ev = et_to_utc(days, times)
     out = pd.DataFrame({
         "event_id": [f"{event_type}:{d:%Y-%m-%d}" for d in days], "event_type": event_type,
@@ -499,18 +510,32 @@ def quarantine_spacing(fresh: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
     return fresh.drop(index=bad), fresh.loc[bad]
 
 
+# Monthly releases are exactly 12 a year except these (hand-checked, quant review 2026-10-25). 2013 and 2018 stay 12:
+# the delayed releases still fell in the same year. Anything else off 12 is a lost or phantom release.
+MONTHLY_COUNT_EXCEPTIONS: dict[tuple[str, int], int] = {
+    ("jolts", 2010): 5,                                     # FRED release 192 starts in August 2010
+    ("pce", 2019): 11,                                      # 2018-19 lapse: Dec 2018 and Jan 2019 combined (03-01)
+    ("cpi", 2025): 11, ("nfp", 2025): 11, ("ppi", 2025): 10, ("jolts", 2025): 11,   # 2025 lapse (BLS)
+    ("pce", 2025): 11, ("retail_sales", 2025): 11,          # 2025 lapse (BEA, Census)
+    ("pce", 2026): 13, ("ppi", 2026): 13, ("retail_sales", 2026): 13,               # 2025 lapse catch-up releases
+}
+
+
 def expected_count(event_type: str, year: int) -> tuple[int, int]:
     """Expected number of events of one type in one full year (inclusive range; shutdown years allowed for)."""
     if event_type == "jobless_claims":
         return 51, 53
-    if event_type in (*MONTHLY_TYPES, *ISM):
-        return 10, 13
+    if event_type in MONTHLY_TYPES:
+        n = MONTHLY_COUNT_EXCEPTIONS.get((event_type, year), 12)
+        return n, n
+    if event_type in ISM:
+        return 12, 12
     if event_type == "gdp_advance":
         return 4, 4
     if event_type == "gdp":
         return 6, 10
     if event_type == "fomc_statement":
-        return 7, 8
+        return (7, 7) if year == 2020 else (8, 8)          # 2020: the March 17-18 meeting was cancelled
     if event_type == "fomc_minutes":
         return 7, 9                  # by release year: a December meeting's minutes can come out in the same year
     if event_type == "fomc_press_conference":
