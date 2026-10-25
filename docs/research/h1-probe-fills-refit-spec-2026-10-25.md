@@ -34,7 +34,8 @@ cost table through a separate input.
    per prereg s5 / K3 ("research slippage per leg = max(0.15, mean)"). Favourable (negative) slippage is therefore
    never credited and does not lower the charge; this is stricter than capping at 0. The raw mean and CI are
    published beside it as `measured_mean` for reporting. Consequence today: M = -0.07 gives a charge of 0.15 per leg,
-   same as the prior; the refit can only raise cost. If the CI lower bound > 0.15, charge = M_s (prior raised).
+   same as the prior; the refit can only raise cost. The rule is always charge = max(0.15, M_s), with no CI condition.
+   Tracked follow-up: main's `slippage_table` must floor real-fill slippage at the prior before any real fills reach `min_fills`.
    NOTE: existing `slippage_table` publishes the raw mean when n >= min_fills, with no floor, so do not reuse it
    unchanged for probes; add the floor, and flag the same gap for real fills to the quant-reviewer.
 6. Spread is not taken from fills (prereg decision 1); `spread_usd` of fills is reported only as a cross-check
