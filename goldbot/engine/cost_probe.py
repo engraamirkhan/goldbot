@@ -30,9 +30,15 @@ real (live-agent) trades take priority". A cost probe, not a population status: 
   the part of the £50 a real trade needs. An unknown allowance or an unknown probe P&L today refuses (fail closed).
 * Amendment (the research director's ruling 2026-10-19, "the system needs to learn, so more trades need to be opened
   and closed"): up to `cost_probe_max_open` (2) probe positions at once, at most one new probe per bar close, never
-  two on one agent; still 0.01 lot and round-robin. Each probe's stop is clamped so its loss at the stop, from the
-  broker's `loss_per_lot` at the minimum lot in the account currency, is at most `cost_probe_max_loss` (£4); a probe
-  whose loss cannot be computed is refused. No new probe once today's realised probe loss + the open probes' risk
+  two on one agent; still 0.01 lot and round-robin. Each probe's loss at its stop, from the broker's `loss_per_lot`
+  at the minimum lot in the account currency, is at most `cost_probe_max_loss` (£4); a probe whose loss cannot be
+  computed is refused. Architect trace 2026-10-25: "mirror probes must be evidence of the strategy, so they run at
+  the strategy's OWN stop and hold, or are skipped": a challenger whose own stop loses more than that at the minimum
+  lot is skipped (`cost_probe_refused:native_stop_above_cap`), never sent with a tightened stop. Each skip is a
+  `SkipRecord` in aux.db `cost_probe_skips` (never the probe ledger: no order went out) with its agent, timeframe,
+  ATR and native loss; the dynamic probe count reads it beside the sent probes. The rule for every reading of mirror
+  probes (quant review 2026-10-25): sent probes are a tight-stop, lower-volatility, shorter-timeframe sample of each
+  strategy, so their costs and outcomes are split by agent x timeframe and read beside `skip_counts`, never pooled. No new probe once today's realised probe loss + the open probes' risk
   (loss at their stops) + the new probe's would exceed `cost_probe_budget` x the day's loss limit (0.2 x £50 = £10).
   The bound is at the stop: a gap through it, commission and swap are outside it (the realised P&L counts them).
 * Dynamic limits (owner 2026-10-19, docs/design/dynamic-limits-2026-10-19.md item 4; the account's `dynamic_limits`):
@@ -46,9 +52,10 @@ real (live-agent) trades take priority". A cost probe, not a population status: 
   from the broker's deals. A probe's close never goes to closed_trades.jsonl (phase gate, throttle, broker-ledger
   trades, attribution) and its fill never to the store's `fills` (the nightly slippage table, attribution's live
   fills): costs-v2 reads `probes`, and refitting costs on them is a later preregistered step.
-* Learning volume on a probe_only account (owner directive 2026-10-20, hundreds of demo fills): a mirror probe is held
-  at most PROBE_ONLY_MAX_BARS of its agent's bars (`_ProbeAgent`), and UNTAKEN_PER_DAY_PROBE_ONLY below-threshold probes
-  a risk day are allowed (`untaken_cap`): such an account sends no real trade to keep a share for.
+* Learning volume on a probe_only account (owner directive 2026-10-20, hundreds of demo fills): UNTAKEN_PER_DAY_PROBE_ONLY
+  below-threshold probes a risk day are allowed (`untaken_cap`): such an account sends no real trade to keep a share
+  for. A mirror probe holds its shadow trade's own time barrier (`_ProbeAgent`) on every account (architect trace
+  2026-10-25; the former 4-bar probe_only cap cut probes short of the strategy's exit).
 * Scheduled probes, the measured-cost protocol's M1 arm (docs/research/prereg-cost-measurement-2026-10.md, section 1:
   "0.01 lot at a fixed slot time; side = +1 on even slot index, -1 on odd ... market close after 30 s; server SL at $3
   from fill (safety only)"), one per 15m close when `cost_probe.scheduled.enabled` (`scheduled_step`). Same lock
@@ -99,12 +106,10 @@ PREFIX = "cost_probe:"
 YIELD = "cost_probe_yield"          # the exit of a probe that makes way for a real trade
 PROBE_MAGIC_OFFSET = 97             # magic_base + 97: no family's crc32 % 100 (tests guard it), not the smoke's 99
 COMMENT = "cp-"                     # a probe's client order id, and so its MT5 comment, starts with this
-CLAMP_MARGIN = 0.99                 # a clamped probe stop aims at 99% of max_loss (the terminal rounds to the cent)
 # directors' ruling 2026-10-19 (ADR 0037 amendment): below-threshold (untaken) probes at most this many a risk day, at
 # most half the open slots, and only while more than half the probe budget is left: taken entries keep the rest
 UNTAKEN_PER_DAY = 12                # amendment 3 (2026-10-19): was 6
 UNTAKEN_PER_DAY_PROBE_ONLY = 48     # owner directive 2026-10-20 (learning volume): a probe_only account keeps no reserve
-PROBE_ONLY_MAX_BARS = 4             # owner directive 2026-10-20: a probe_only mirror probe holds min(agent's, 4) bars
 PER_CLOSE = 2                       # amendment 3: new probes per bar close at most, from different agents
 MAX_SAME_SIDE = 2                   # amendment 3: open probes on one side at most (one move, correlated losses)
 # amendment 3: no new probe once the day's allowance left after the open probes' risk and the new probe's max loss
@@ -122,6 +127,7 @@ SCHEDULED_COMMENT = "cm-sched-"             # its order id and MT5 comment (the 
 SCHEDULED_BASIS = "scheduled_m1"            # its ledger rows' basis
 SCHEDULED_FAMILY = "cost_measurement"       # its Intent's family and its ledger rows' purpose
 HOLD_EXIT = "cost_probe_hold"               # the exit of a scheduled probe held hold_s
+NATIVE_SKIP = "native_stop_above_cap"       # a mirror probe whose own stop loses more than the ceiling: skipped
 SLOT_S = 900                                # one slot per 15m close; the side alternates with the slot index
 
 
@@ -236,7 +242,7 @@ class ProbeRecord(FrozenRecord):
     swap: float | None = None               # broker's deals (None: not reported)
     commission: float | None = None         # paid, positive (None: not reported)
     pnl: float | None = None                # net, from the broker's deals (None: the deals were not readable)
-    stop_loss: float | None = None          # the loss at the (clamped) stop when sent, account currency
+    stop_loss: float | None = None          # the loss at the stop when sent (clamped on rows before 2026-10-25)
     # the mirrored shadow entry cleared its threshold; False = a below-threshold learning probe (owner 2026-10-19),
     # capped by UNTAKEN_PER_DAY and half the slots and budget. Rows written before carry True (they were all taken)
     taken: bool = True
@@ -245,8 +251,9 @@ class ProbeRecord(FrozenRecord):
     probe_max_loss: float | None = None
     probe_max_open: int | None = None
     basis: str | None = None
-    # the loss at the strategy's own (unclamped) stop at the lots sent, account currency: what the dynamic probe count
-    # reads (`stop_loss` is clamped to the ceiling, so its median could never tighten the count). None on rows before
+    # the loss at the strategy's own stop at the lots sent, account currency: what the dynamic probe count reads
+    # (`stop_loss` was clamped to the ceiling on rows before 2026-10-25, so its median could never tighten the count).
+    # None on rows before
     native_stop_loss: float | None = None
     # prereg K11: the quote the engine's own close was sent on (a scheduled probe's hold exit); None otherwise
     exit_bid: float | None = None
@@ -281,9 +288,36 @@ LEDGER: RecordRepo[ProbeRecord] = RecordRepo("cost_probes", ProbeRecord, key="cl
     "closed": lambda r: int(r.exit_utc is not None)})
 
 
+class SkipRecord(FrozenRecord):
+    """A mirror probe skipped because its strategy's own stop loses more than the probe ceiling at the minimum lot
+    (aux.db `cost_probe_skips`; architect trace 2026-10-25). No order was sent, so it is never a ProbeRecord: the
+    dynamic probe count reads its native loss beside the sent probes' (quant review: sent probes alone only ever show
+    stops inside the ceiling), and `skip_counts` splits the skips by agent x timeframe."""
+    client_order_id: str                    # the id the probe would have had (one attempt per agent per bar close)
+    account_id: str
+    agent_id: str
+    version: str
+    timeframe: str
+    side: int
+    taken: bool                             # the mirrored shadow entry cleared its threshold
+    signal_utc: UtcTimestamp                # the signal bar's close
+    atr_usd: float                          # the signal bar's ATR as the shadow entry used it (the regime's scale)
+    native_stop_loss: float                 # the loss at the strategy's own stop at the minimum lot, account currency
+    probe_max_loss: float                   # the ceiling it exceeded
+    basis: str | None = None                # which limits applied and why (`ProbeLimits.basis`)
+
+
+SKIPS: RecordRepo[SkipRecord] = RecordRepo("cost_probe_skips", SkipRecord, key="client_order_id", tolerant=True,
+                                           columns={"client_order_id": lambda r: r.client_order_id,
+                                                    "account_id": lambda r: r.account_id,
+                                                    "agent_id": lambda r: r.agent_id,
+                                                    "ts_ns": lambda r: _ns(r.signal_utc)})
+
+
 class _ProbeAgent:
     """The challenger's specialist under the probe's tag: its family (magic), timeframe, barriers and exit policy;
-    with `max_bars`, its time barrier capped at that many of its bars (a probe_only account's learning volume)."""
+    with `max_bars`, its time barrier set to that many of its bars (the shadow trade's own, which a candidate's
+    research labels may set apart from the label spec's)."""
 
     def __init__(self, agent: Specialist, max_bars: int | None = None):
         self._agent = agent
@@ -296,7 +330,7 @@ class _ProbeAgent:
     @property
     def label_spec(self) -> BarrierSpec:
         ls = self._agent.label_spec
-        if self._max_bars is None or ls.max_bars <= self._max_bars:
+        if self._max_bars is None or ls.max_bars == self._max_bars:
             return ls
         return ls.model_copy(update={"max_bars": self._max_bars})
 
@@ -530,8 +564,10 @@ class ProbeLimits(FrozenRecord):
 def probe_limits(eng: Engine, probe: CostProbe) -> ProbeLimits:
     """Design item 4 (docs/design/dynamic-limits-2026-10-19.md): the per-probe ceiling is min(cfg max_loss,
     budget_share x the day's loss limit / cfg max_open) and the count clamp(floor(budget_share x limit / the median loss
-    at the strategy's own stop of the last PROBE_LOSS_WINDOW probes), 1, cfg max_open). The median is of the native
-    (unclamped) loss: the loss as sent is clamped to the ceiling, so it could never tighten the count (quant review).
+    at the strategy's own stop of the last PROBE_LOSS_WINDOW probe attempts, sent or skipped), 1, cfg max_open).
+    The median is of the native
+    loss (quant review: the loss as sent was clamped to the ceiling before 2026-10-25, so it could never tighten the
+    count; since then a probe is sent at its own stop or skipped, and old rows still carry their clamped stop_loss).
     The day's limit is already dynamic (ADR 0031), so both tighten with it; budget_share stays static. Fail closed: an
     unknown limit, an unreadable ledger or fewer than PROBE_LOSS_MIN_ROWS probes with a native loss gives the
     configured value."""
@@ -552,12 +588,18 @@ def probe_limits(eng: Engine, probe: CostProbe) -> ProbeLimits:
     try:
         with probe.db.connection() as conn:
             rows = LEDGER.select(conn, "account_id = ?", (eng.cfg.account_id,), order_by="ts_ns")
+            skipped = SKIPS.select(conn, "account_id = ?", (eng.cfg.account_id,), order_by="ts_ns")
     except Exception as exc:
         log.warning("cost probe ledger unreadable (%s): the configured probe count", type(exc).__name__)
         return ProbeLimits(max_open=cfg_open, max_loss=max_loss, loss_basis=loss_basis,
                            open_basis="fixed:ledger_unreadable")
-    recent = [float(r.native_stop_loss) for r in rows if r.purpose == "cost_probe"      # prereg K10: never scheduled
-              and r.native_stop_loss is not None and r.native_stop_loss > 0][-PROBE_LOSS_WINDOW:]
+    # every attempt's own stop, sent or skipped (quant review 2026-10-25: a probe is sent only at a stop inside the
+    # ceiling, so the sent ones alone would always give the configured count), the most recent by signal time
+    attempts = [(r.signal_utc or r.sent_utc, float(r.native_stop_loss)) for r in rows
+                if r.purpose == "cost_probe"                                            # prereg K10: never scheduled
+                and r.native_stop_loss is not None and r.native_stop_loss > 0]
+    attempts += [(k.signal_utc, k.native_stop_loss) for k in skipped if k.native_stop_loss > 0]
+    recent = [loss for _, loss in sorted(attempts, key=lambda a: a[0])][-PROBE_LOSS_WINDOW:]
     if len(recent) < PROBE_LOSS_MIN_ROWS:
         return ProbeLimits(max_open=cfg_open, max_loss=max_loss, loss_basis=loss_basis, open_basis="fixed:no_history")
     n = math.floor(budget / statistics.median(recent))
@@ -730,31 +772,39 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
     def refuse(why: str) -> None:
         eng.decisions.append({"ts": close_ts.isoformat(), "agent": tag, "version": version,
                               "action": "cost_probe_refused:" + why, **applied})
+        if why == NATIVE_SKIP:
+            _record_skip(eng, probe, SkipRecord(
+                client_order_id=pid, account_id=eng.cfg.account_id, agent_id=agent.agent_id, version=version,
+                timeframe=t.timeframe, side=side, taken=t.taken, signal_utc=close_ts, atr_usd=round(atr_usd, 4),
+                native_stop_loss=applied["native_stop_loss"], probe_max_loss=round(lim.max_loss, 2),
+                basis=applied["basis"]))
 
     terms = eng._sizing_terms(side, price, ls.stop_atr * atr_usd, cycle=close_ts)
     lot = terms.get("volume_min")
-    per_usd = stop_loss(eng, side, price, 1.0, float(lot)) if lot is not None else None
-    if per_usd is None:
+    native = stop_loss(eng, side, price, ls.stop_atr * atr_usd, float(lot)) if lot is not None else None
+    if native is None:
         return refuse("probe_loss_unknown")
     # dynamic limits: the probe's loss is its own stop's at the minimum lot while that is inside the ceiling
     max_loss, loss_basis = lim.max_loss, lim.loss_basis
-    native = per_usd * ls.stop_atr * atr_usd
     if loss_basis in ("config_cap", "budget_cap") and native <= max_loss:
         max_loss, loss_basis = native, "native_stop"
-    applied = {"probe_max_loss": round(max_loss, 2), "probe_max_open": lim.max_open, "basis": lim.basis(loss_basis)}
-    # the amendment: the stop is clamped so the loss at it is at most the ceiling (cost_probe_max_loss, £4, or the
-    # dynamic one) at the minimum lot. The clamp aims 1% inside the cap: the terminal rounds each loss_per_lot to the
-    # cent, so a stop aimed exactly at the cap measures a fraction of a penny above it about half the time and the
-    # check below refused every such probe
-    stop_atr = min(ls.stop_atr, CLAMP_MARGIN * lim.max_loss / per_usd / atr_usd)
+    # the decision's detail splits every probe reading by agent x timeframe and the regime's ATR (quant review)
+    applied = {"probe_max_loss": round(max_loss, 2), "probe_max_open": lim.max_open, "basis": lim.basis(loss_basis),
+               "timeframe": t.timeframe, "atr_usd": round(atr_usd, 4), "native_stop_loss": round(native, 2)}
+    # architect trace 2026-10-25: "mirror probes must be evidence of the strategy, so they run at the strategy's OWN
+    # stop and hold, or are skipped". A native stop losing more than the ceiling (cost_probe_max_loss or the dynamic
+    # one) at the minimum lot is skipped, never sent with a tighter stop (the former clamp measured a different trade)
+    if native > lim.max_loss + 1e-9:
+        return refuse(NATIVE_SKIP)
     terms["volume_max"] = lot                                    # the minimum lot only
-    intent = Intent(agent_id=tag, side=side, p=t.p, target_atr=ls.target_atr, stop_atr=stop_atr, atr_usd=atr_usd,
+    intent = Intent(agent_id=tag, side=side, p=t.p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=atr_usd,
                     cost_atr=eng._cost_atr(atr_usd, close_ts), multiplier=1.0, price=price, timeframe=t.timeframe,
                     family=agent.family, swap_usd_per_oz=eng._swap_usd_per_oz(side, close_ts),
                     learning_probe=True, account_mode=eng.cfg.mode,
                     phase_file=_phase_file(eng), **terms)
-    # owner directive 2026-10-20: on a probe_only account the probe holds at most PROBE_ONLY_MAX_BARS of its agent's bars
-    order_agent = _ProbeAgent(agent, PROBE_ONLY_MAX_BARS if eng.cfg.probe_only else None)
+    # architect trace 2026-10-25: the probe holds the agent's own time barrier, its shadow trade's (the candidate's
+    # max_bars when it carries one), on every account; no probe_only cap
+    order_agent = _ProbeAgent(agent, t.max_bars)
 
     def record(res: OrderResult, gd: GateDecision, filled: bool, loss: float, sent: pd.Timestamp,
                latency_ms: float) -> ProbeRecord:
@@ -770,6 +820,7 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
 
     _place(eng, probe, intent, cast("Specialist", order_agent), pid=pid, close_ts=close_ts, entry=t.entry,
            target=price + side * ls.target_atr * atr_usd, max_loss=lim.max_loss, headroom=headroom,
+           native_distance=ls.stop_atr * atr_usd,
            applied=lambda: applied, refuse=refuse, action="cost_probe:", journal={"agent": tag, "version": version},
            record=record, before_send=None if t.taken else lambda: probe.untaken_sent.__setitem__(pid, close_ts))
 
@@ -778,11 +829,15 @@ def _place(eng: Engine, probe: CostProbe, intent: Intent, agent: Specialist, *, 
            entry: float, target: float, max_loss: float, headroom: float, applied: Callable[[], dict[str, Any]],
            refuse: Callable[[str], None], action: str, journal: dict[str, Any],
            record: Callable[[OrderResult, GateDecision, bool, float, pd.Timestamp, float], ProbeRecord],
-           max_stop: float | None = None, before_send: Callable[[], None] | None = None) -> int | None:
+           max_stop: float | None = None, before_send: Callable[[], None] | None = None,
+           native_distance: float | None = None) -> int | None:
     """Every probe's order core, mirror and scheduled: `RiskGate.check` (the only path to an order) on the minimum-lot
     intent, the loss at the stop the gate set within `max_loss` and the budget `headroom`, then `Engine._execute`
     (pending_orders row first), the journal and the ledger row. `before_send` runs once the order is going out (an
-    untaken probe's count, even when the send raises). The position id of a fill, else None."""
+    untaken probe's count, even when the send raises). A mirror probe's loss above the cap at its strategy's own stop
+    (`native_distance`, not widened by the gate) is the same skip as before the gate, `native_stop_above_cap` (safety
+    review 2026-10-25); `probe_loss_above_cap` stays for a stop the gate floored wider. The position id of a fill,
+    else None."""
     from goldbot.risk.gate import broker_margin
     from goldbot.telegram.approvals import Proposal
     side, price = intent.side, intent.price
@@ -799,7 +854,8 @@ def _place(eng: Engine, probe: CostProbe, intent: Intent, agent: Specialist, *, 
         refuse("probe_loss_unknown")
         return None
     if loss > max_loss + 1e-9:
-        refuse("probe_loss_above_cap")
+        own = native_distance is not None and gd.stop_distance <= native_distance + 1e-9
+        refuse(NATIVE_SKIP if own else "probe_loss_above_cap")
         return None
     if loss > headroom + 1e-9:
         eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": "cost_probe_budget:probe_budget_full",
@@ -835,6 +891,15 @@ def _place(eng: Engine, probe: CostProbe, intent: Intent, agent: Specialist, *, 
     if filled:
         _reread(eng, close_ts)
     return res.position_id if filled else None
+
+
+def _record_skip(eng: Engine, probe: CostProbe, rec: SkipRecord) -> None:
+    """A skipped attempt to `cost_probe_skips`; a failed write is logged, never raised (the skip stands)."""
+    try:
+        with probe.db.write() as conn:
+            SKIPS.upsert(conn, rec)
+    except Exception as exc:
+        log.warning("cost probe skip %s not written (%s)", rec.client_order_id, type(exc).__name__)
 
 
 # ------------------------------------------------------------------------------------------- scheduled probes (M1)
@@ -1051,6 +1116,30 @@ def probes(state_dir: str | Path, account_id: str | None = None) -> list[ProbeRe
         if account_id is None:
             return LEDGER.select(conn, order_by="ts_ns")
         return LEDGER.select(conn, "account_id = ?", (account_id,), order_by="ts_ns")
+
+
+def skips(state_dir: str | Path, account_id: str | None = None) -> list[SkipRecord]:
+    """Every skipped mirror probe, oldest first (one account's when given). Empty when aux.db has none."""
+    if not (Path(state_dir) / "aux.db").exists():
+        return []
+    db = Database.open(state_dir, "aux")
+    with db.connection() as conn:
+        if account_id is None:
+            return SKIPS.select(conn, order_by="ts_ns")
+        return SKIPS.select(conn, "account_id = ?", (account_id,), order_by="ts_ns")
+
+
+def skip_counts(state_dir: str | Path, account_id: str | None = None) -> dict[tuple[str, str], dict[str, float]]:
+    """Skipped mirror probes per (agent id, timeframe): the count and the median ATR and native stop loss. Split, never
+    pooled (quant review 2026-10-25): skips fall on wide stops, high volatility and long timeframes, so the probes
+    that were sent are a tight-stop sample of each strategy; any reading of them is per agent x timeframe, beside
+    these counts."""
+    groups: dict[tuple[str, str], list[SkipRecord]] = {}
+    for r in skips(state_dir, account_id):
+        groups.setdefault((r.agent_id, r.timeframe), []).append(r)
+    return {k: {"skips": len(v), "median_atr_usd": statistics.median(r.atr_usd for r in v),
+                "median_native_stop_loss": statistics.median(r.native_stop_loss for r in v)}
+            for k, v in groups.items()}
 
 
 def closed_position_ids(db: Database, account_id: str) -> set[int]:

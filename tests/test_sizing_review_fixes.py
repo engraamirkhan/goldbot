@@ -94,8 +94,8 @@ def test_the_absolute_daily_limit_lives_per_account_in_accounts_yaml_not_in_sett
     assert "daily_loss_limit_abs" not in RiskSettings.model_fields
     assert "daily_loss_limit_abs" not in yaml.safe_load(Path("config/settings.yaml").read_text())["risk"]
     raw = yaml.safe_load(Path("config/accounts.yaml").read_text())["accounts"]
-    assert raw["icm-demo"]["daily_loss_limit_abs"] == 50
-    assert raw["icm-probe"]["daily_loss_limit_abs"] == 30          # ADR 0037 am. 4, raised 2026-10-20 (demo volume)
+    assert raw["icm-demo"]["daily_loss_limit_abs"] == 220         # ADR 0042: 2% of the ~£11,000 demo balance
+    assert raw["icm-probe"]["daily_loss_limit_abs"] == 220        # ADR 0042 (was 30, ADR 0037 am. 4)
     assert all("daily_loss_limit_abs" not in a for k, a in raw.items() if k not in ("icm-demo", "icm-probe"))
     with pytest.raises(ValidationError):
         _acc(daily_loss_limit_abs=0)
@@ -134,7 +134,7 @@ def test_the_engine_publishes_its_accounts_absolute_limit_and_the_supervisor_app
 
 def test_the_shipped_registry_runs_icm_demo_alone():
     accs = acc_mod.load_accounts(Path("config/accounts.yaml"))
-    assert accs["icm-demo"].daily_loss_limit_abs == 50 and accs["icm-demo"].enabled
+    assert accs["icm-demo"].daily_loss_limit_abs == 220 and accs["icm-demo"].enabled      # ADR 0042
     assert not accs["vantage-demo"].enabled                  # USD next to GBP halts by design (re-enable once known)
 
 

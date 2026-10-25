@@ -10,6 +10,13 @@ like a drawdown: size-down at 8% and, two reads later, a phantom 12% kill switch
 * a deposit is a balance operation in the deal history, so it explains a rise and raises the mark (as before);
 * the mark is never lowered by this rule (only the owner's re-arm resets it); a refused rise is logged and recorded.
 
+ADR 0042 (D1, D3) amends the deposit case: "A deposit or withdrawal is a capital flow (MT5 DEAL_BALANCE). Never in
+P&L"; "on a confirmed balance operation the mark becomes max(mark + net flow, balance), confirmed by the deal history
+only (never by a second read alone). A loss before a deposit is not forgiven. A withdrawal lowers the mark by exactly
+the withdrawn amount (the only lowering besides the owner's re-arm)". `apply_flows` moves the mark by the flows; the
+`max(.., balance)` part is the rule above, explained by the deals since the anchor (`HwmConfirmation.flows` keeps them
+from being counted twice).
+
 The confirmation state (the candidate rise, and when the current mark was set: the deal-history anchor) is one row per
 account in core.db (`hwm_confirmation`, migration 2), written only when it changes. The mark itself stays in the risk
 state (`risk_<account>.json`); a row whose `mark` differs from it (a re-arm, or an older release that raised the mark
@@ -55,6 +62,10 @@ class HwmConfirmation(FrozenRecord):
     # when the current candidate was read: its age, and the anchor for the deals that may corroborate it later.
     # Missing (a row from before this field) = pending_since_utc, which then meant the same
     candidate_utc: UtcTimestamp | None = None
+    # ADR 0042: the net capital flow `apply_flows` added to `mark` since `mark_utc` (the deals since the anchor hold
+    # it too, so a rise is explained from mark - flows). Missing (an older row, or an older release reading this one:
+    # it then sees no rise explained and confirms by a second read) = 0
+    flows: float = 0.0
 
     def candidate_at(self) -> pd.Timestamp | None:
         return self.candidate_utc or self.pending_since_utc
@@ -205,7 +216,7 @@ def step(conf: HwmConfirmation, mark: float, balance: float, now: pd.Timestamp, 
     if above and exact:
         return _raised(conf, balance, now, "exact", 0.0, expired)
     if above:
-        explained = _explained(conf.mark_utc, mark, balance, tol, deals)
+        explained = _explained(conf.mark_utc, mark - conf.flows, balance, tol, deals)
         if explained is not None:
             return _raised(conf, balance, now, "deals", explained, expired)
         if pend is not None and abs(balance - pend) <= tol:
@@ -228,6 +239,70 @@ def step(conf: HwmConfirmation, mark: float, balance: float, now: pd.Timestamp, 
     candidate = conf.model_copy(update={"pending_balance": balance, "candidate_utc": now,
                                         "pending_since_utc": conf.pending_since_utc or now})
     return HwmStep(mark=mark, conf=candidate, outcome="pending", dropped=pend, expired=expired)
+
+
+class CapitalFlow(FrozenRecord):
+    """One balance operation in the deal history (MT5 DEAL_BALANCE): the owner's deposit (+) or withdrawal (-), in
+    the account currency. Never P&L (ADR 0042 D1). No ticket: the journal records the amount, never an identifier."""
+
+    ts_utc: UtcTimestamp
+    amount: float
+
+
+def capital_flows(deals: pd.DataFrame, after: pd.Timestamp) -> list[CapitalFlow]:
+    """The balance operations in an MT5 deal history stamped after `after`, oldest first (credit, trade, commission
+    and fee deals are not capital flows). A balance operation at or after a cancelled deal (MT5 13/14) in the read is
+    left out (review of 14f154aa, MEDIUM): possibly the broker reversing that deal's P&L (ledger `follows_cancel`,
+    ADR 0015), so it stays P&L, never a withdrawal that would hide a loss. Raises on a history without MT5's deal
+    columns (the paper broker)."""
+    from goldbot.ops.ledger import classify_balance_deals, normalize_deals
+    rows = classify_balance_deals("", normalize_deals(deals))
+    return [CapitalFlow(ts_utc=b.ts_utc, amount=b.amount) for b in rows
+            if b.kind in ("deposit", "withdrawal") and not (b.follows_cancel and b.amount < 0) and b.ts_utc > after and b.amount != 0]
+
+
+FlowRefusal = Literal["no_anchor", "unreadable", "unreconciled"]
+
+
+class FlowStep(FrozenRecord):
+    """What the capital flows of one read did to the mark."""
+
+    conf: HwmConfirmation
+    applied: bool = False
+    net: float = 0.0                                    # the net flow added to the mark (0 when not applied)
+    reason: FlowRefusal | None = None                   # why flows after the anchor were not applied
+
+
+def apply_flows(conf: HwmConfirmation, balance: float, tolerance: float, flows: list[CapitalFlow],
+                deals: Callable[[pd.Timestamp], pd.DataFrame], *, lower: bool = True) -> FlowStep:
+    """ADR 0042 D3: add the net flow stamped after the mark's anchor to the mark (a withdrawal lowers it by exactly its
+    amount; never below 0, where the engine sets the mark afresh). Flows from before the anchor are already in the mark.
+
+    Confirmed by the deal history only, and only when it reconciles: mark - flows already applied + every balance
+    change since the anchor must be within `tolerance` x mark of this balance read. That refuses a flow the mark
+    already holds (a deal clock skewed past the anchor, a rise an older release applied): counted twice, a deposit
+    would be a phantom drawdown of its own size and trip the 12% kill switch. A refused flow leaves the mark to the
+    ADR 0018 rule (a deposit then raises it to the balance; a withdrawal reads as a drawdown, the fail-safe side).
+    An applied flow clears the candidate: it was the balance before the flow was seen. `lower=False` (real money,
+    review of 14f154aa): a withdrawal is never applied, so it reads as a drawdown (tighten-only); the reconciliation is
+    unchanged, as the mark then still stands for the balance at its anchor."""
+    flows = flows if lower else [f for f in flows if f.amount > 0]
+    mine = [f for f in flows if conf.mark_utc is not None and f.ts_utc > conf.mark_utc]
+    if not flows or (conf.mark_utc is not None and not mine):
+        return FlowStep(conf=conf)
+    if conf.mark_utc is None:
+        return FlowStep(conf=conf, reason="no_anchor")
+    try:
+        change, _, _ = deals_balance_change(deals(conf.mark_utc))
+    except Exception as exc:
+        log.warning("deal history unreadable for a capital flow (%s); the mark keeps the ADR 0018 rule",
+                    type(exc).__name__)
+        return FlowStep(conf=conf, reason="unreadable")
+    if not math.isfinite(balance) or abs(conf.mark - conf.flows + change - balance) > tolerance * conf.mark:
+        return FlowStep(conf=conf, reason="unreconciled")
+    net = sum(f.amount for f in mine)
+    new = conf.without_candidate().model_copy(update={"mark": max(0.0, conf.mark + net), "flows": conf.flows + net})
+    return FlowStep(conf=new, applied=True, net=net)
 
 
 def _raised(conf: HwmConfirmation, to: float, at: pd.Timestamp, by: By, deposits: float,
@@ -253,5 +328,5 @@ def _explained(since: pd.Timestamp | None, start: float, balance: float, tol: fl
     return deposits
 
 
-__all__ = ["CANDIDATE_MAX_AGE", "HWM", "WRITE_BUSY_TIMEOUT_MS", "HwmConfirmation", "HwmStep", "HwmStore",
-           "deals_balance_change", "read_only_confirmation", "step"]
+__all__ = ["CANDIDATE_MAX_AGE", "HWM", "WRITE_BUSY_TIMEOUT_MS", "CapitalFlow", "FlowStep", "HwmConfirmation", "HwmStep",
+           "HwmStore", "apply_flows", "capital_flows", "deals_balance_change", "read_only_confirmation", "step"]

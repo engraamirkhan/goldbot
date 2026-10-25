@@ -181,7 +181,9 @@ phase_post_reboot() {
   for u in goldbot-xvfb "goldbot-mt5-terminal@$ACCOUNT" "goldbot-bridge@$ACCOUNT"; do
     if unit_active "$u"; then row PASS "active: $u"; else row FAIL "active: $u" "not active"; fi
   done
-  n=$(pgrep -c -u mt5 -f '[t]erminal64[.]exe' || true)
+  # the terminal itself (argv starts with its Windows path); wine's `start.exe /exec ...terminal64.exe` launcher, the
+  # unit's main process, also names it and was counted twice (demo box 2026-10-25)
+  n=$(pgrep -c -u mt5 -f '^[A-Za-z]:[\\].*[t]erminal64[.]exe' || true)
   if [ "${n:-0}" = 1 ]; then row PASS "exactly one terminal64.exe"; else row FAIL "exactly one terminal64.exe" "count ${n:-0}"; fi
   h=$("$SBIN/goldbot-bridge-probe" "$PORT" 20 2>/dev/null | head -c 32 || true)
   if [ "$h" = ok ]; then row PASS "bridge /health terminal state" "ok"; else row FAIL "bridge /health terminal state" "${h:-noanswer}"; fi

@@ -36,7 +36,7 @@ from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
 from goldbot.data.resample import IncrementalResampler, mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
-from goldbot.engine import auto_entry, cost_probe, history, unconfirmed
+from goldbot.engine import auto_entry, capital_flows, cost_probe, history, unconfirmed
 from goldbot.engine.cost_probe import ScheduledProbe
 from goldbot.engine.limits_apply import EngineLimits, daily_allowance, min_lot_risk, published_limits
 from goldbot.engine.shadow import ShadowBook, ShadowTrade, minutes_of, record_candidate
@@ -83,7 +83,15 @@ from goldbot.research.metrics import breakeven_prob, size_multiplier
 from goldbot.research.pipeline import CONTEXT_FEATURES, DEFAULT_FEATURE_NAMES
 from goldbot.research.rule_model import is_uncalibrated
 from goldbot.risk import AccountState, Intent, RiskGate, RiskLimits, hwm, open_risk, sizing
-from goldbot.risk.gate import PER_TRADE_REFUSALS, REARM_PHRASE, GateDecision, Stage, broker_margin, new_day
+from goldbot.risk.gate import (
+    PER_TRADE_REFUSALS,
+    REARM_PHRASE,
+    GateDecision,
+    Stage,
+    _risk_week,
+    broker_margin,
+    new_day,
+)
 from goldbot.risk.limits_profile import LimitsPolicy, RiskLimitsCurrent
 from goldbot.risk.supervisor import Supervisor, others_exposure, write_startup_error
 from goldbot.risk.throttle import AgentThrottle, agent_throttle, latest_shadow_win
@@ -101,6 +109,8 @@ from goldbot.telegram.approvals import ApprovalCenter, Outcome, Proposal, ceil_c
 from goldbot.telegram.entry_text import account_name
 
 log = logging.getLogger("goldbot.engine")
+#: ADR 0042: the capital-flow anchor trails the read by at most this: a balance operation booked up to a day late (a
+#: skewed deal clock, a terminal catching up) is still seen, and the history read per balance change stays a day long
 LOT_TERMS_WARN_S = 600.0     # the account view's symbol-info warning, at most this often
 APPROVED_RISK_TOLERANCE = 1.02   # ADR 0009: the risk sent may exceed the approved card's by 2% (fx moves), no more
 # MT5 trade retcodes that mean the market will not take an order now (10017 TRADE_DISABLED, 10018 MARKET_CLOSED): a
@@ -282,6 +292,9 @@ class Engine:
         self._orders: dict[str, SentOrder] = {}     # pending_orders: every id ever sent (pruned after a week)
         self.last_bar_close: pd.Timestamp | None = None   # open of the decision bar the last tick fell in
         self._closed_through: pd.Timestamp | None = None  # latest bar close processed (tick or clock path): never twice
+        # end (last visible_at) of the minutes warm_start loaded: a tick before it is re-delivered (a restart with the
+        # terminal's quote still in a minute the previous engine stored) and never rebuilds that minute
+        self._history_through: pd.Timestamp | None = None
         self.state = AccountState(equity=0, balance_closed_hwm=0, day_start_equity=0, week_start_equity=0,
                                   open_positions=0, margin_used=0, last_tick_age_s=0, spread_points=0)
         self.decisions: list[dict] = []
@@ -359,6 +372,11 @@ class Engine:
         self.ticks_dropped = 0                         # tick-log entries dropped while the store could not be written
         # risk periods and the owner's re-arm survive a restart (state/risk_<account>.json)
         self._last_reset: pd.Timestamp | None = None
+        # ADR 0042 D4: when the risk week last rolled; capital flows applied up to `_flows_through`; the balance their
+        # deal history was last read at (None: read on the next account read)
+        self._week_reset: pd.Timestamp | None = None
+        self._flows_through: pd.Timestamp | None = None
+        self._flow_balance: float | None = None
         self._rearm_seen: str | None = None
         self._weekend_done: str | None = None        # server date of the last Friday the weekend rule ran
         self._halted_at: pd.Timestamp | None = None  # when the 12% kill switch tripped (re-arm conditions count from it)
@@ -565,7 +583,9 @@ class Engine:
         repeat = prev is not None and (prev.ts_utc, prev.bid, prev.ask) == (t.ts_utc, t.bid, t.ask)
         if not repeat:
             self._skew.append((t.ts_utc - self._now(t)).total_seconds())
-            if self._closed_through is None or t.ts_utc >= self._closed_through:
+            if self._history_through is not None and t.ts_utc < self._history_through:
+                pass                    # its minute is already in the warm-start history (brain 2026-10-25 duplicate_ts)
+            elif self._closed_through is None or t.ts_utc >= self._closed_through:
                 self.ticks.append(t)
             else:
                 self._late_tick(t)      # never revises a bar the clock already finalised
@@ -1892,7 +1912,7 @@ class Engine:
         if self._ladder["lot_terms"] is None:
             self._ladder["lot_terms"] = self._lot_terms()
         self._roll_risk_period(tick.ts_utc)
-        self._update_hwm(acc, self._now(tick))
+        capital_flows.update_hwm(self, acc, self._now(tick))
         if st.day_start_equity == 0:            # normally set by the risk-period roll on the first tick
             st.day_start_equity = acc.balance
         if st.week_start_equity == 0:
@@ -1984,50 +2004,6 @@ class Engine:
         if conf is None or conf.mark != self.state.balance_closed_hwm:
             return hwm.HwmConfirmation(account_id=self.cfg.account_id, mark=self.state.balance_closed_hwm)
         return conf.fresh(self.clock()) if self.cfg.live_clock else conf
-
-    def _update_hwm(self, acc: AccountInfo, now: pd.Timestamp) -> None:
-        """BACKLOG 54 (ADR 0018): "a rise in balance_closed_hwm is applied only once confirmed: by the deal history
-        (closed deals and balance operations since the last mark account for the rise within a tolerance), or by a
-        second balance read that agrees; one disagreeing read never raises it, two agreeing reads always do". A
-        deposit explains a rise and raises the mark. The mark is never lowered here (only /rearm resets it). An
-        unconfirmed rise is read again on the next tick; a refused one is logged and recorded. The first read of an
-        engine that has no mark yet sets it (and its deal-history anchor)."""
-        st = self.state
-        if st.balance_closed_hwm == 0:
-            st.balance_closed_hwm = acc.balance
-            self._set_hwm(hwm.HwmConfirmation(account_id=self.cfg.account_id, mark=acc.balance, mark_utc=now))
-            return
-        if self._hwm.mark != st.balance_closed_hwm:          # the owner's re-arm reset the mark: candidate and anchor void
-            self._hwm = hwm.HwmConfirmation(account_id=self.cfg.account_id, mark=st.balance_closed_hwm)
-        mark = st.balance_closed_hwm
-        # a broker class may declare its balance reads exact (the paper broker's own ledger): looked up on the class,
-        # so a remote broker's attribute pass-through can never answer it
-        exact = getattr(type(self.broker), "balance_exact", False) is True
-        s = hwm.step(self._hwm, mark, acc.balance, now, self.gate.limits.hwm_rise_tolerance, self.broker.deals_since,
-                     exact=exact)
-        if s.expired is not None:
-            log.warning("high-water mark not raised: balance read %.2f expired unconfirmed (older than %s)",
-                        s.expired, hwm.CANDIDATE_MAX_AGE)
-            self.decisions.append({"ts": time.time(), "action": "hwm_rise_refused", "candidate": s.expired,
-                                   "balance": acc.balance, "mark": mark, "reason": "expired"})
-        if s.dropped is not None:
-            log.warning("high-water mark not raised: balance read %.2f was not confirmed (next read %.2f, mark %.2f)",
-                        s.dropped, acc.balance, mark)
-            self.decisions.append({"ts": time.time(), "action": "hwm_rise_refused", "candidate": s.dropped,
-                                   "balance": acc.balance, "mark": mark})
-        if s.outcome == "pending":
-            log.warning("balance %.2f is above the high-water mark %.2f and is not confirmed by the deal history; "
-                        "re-read next tick", acc.balance, mark)
-            self.decisions.append({"ts": time.time(), "action": "hwm_rise_unconfirmed", "balance": acc.balance,
-                                   "mark": mark})
-        elif s.outcome == "raised":
-            st.balance_closed_hwm = s.mark
-            self.decisions.append({"ts": time.time(), "action": "hwm_raised", "from": mark, "to": s.mark, "by": s.by,
-                                   "deposits": s.deposits})
-            self._save_risk_state_now("the raised high-water mark")   # survives a restart at once
-        if s.outcome != "unchanged" or s.expired is not None:
-            self._set_hwm(s.conf)
-        self._reread_hwm = s.conf.pending_balance is not None
 
     def _set_hwm(self, conf: hwm.HwmConfirmation) -> None:
         """Keep and persist the rise confirmation (core.db; a failed write is logged and only loses the candidate or
@@ -2335,8 +2311,11 @@ class Engine:
         if last is not None and now.tz_convert("UTC").date() == last.tz_convert("UTC").date():
             return
         self.state.equity = self.broker.account().equity
+        week = last is None or _risk_week(now) != _risk_week(last)
         if new_day(self.state, now, last):
             self._last_reset = now
+            if week:
+                self._week_reset = now
             # BACKLOG 43 (code review LOW-1): a new risk day starts with no "last entry refused" (an agent that stopped
             # producing intents is never allowed again, so its refusal would otherwise stay until a restart)
             self._entry_refusals.clear()
@@ -2797,7 +2776,8 @@ class Engine:
             balance_closed_hwm=st.balance_closed_hwm, stage=Stage(st.stage), rearm_seen=self._rearm_seen,
             weekend_done=self._weekend_done, halted_at=self._halted_at, propose_only_until=self._propose_only_until,
             rearm_refused=self._rearm_refused, kill_everything=self._kill_everything,
-            stage2_pending_since=self._stage2_pending_since))
+            stage2_pending_since=self._stage2_pending_since, week_reset=self._week_reset,
+            flows_through=self._flows_through))
 
     def _save_risk_state_now(self, what: str) -> None:
         """Save the risk state from the account-refresh path; never raises (BACKLOG 44 re-review MEDIUM-1, LOW-2). The
@@ -2832,6 +2812,8 @@ class Engine:
         self._rearm_refused = snap.rearm_refused
         self._stage2_pending_since = snap.stage2_pending_since
         self._kill_everything = snap.kill_everything
+        self._week_reset = snap.week_reset
+        self._flows_through = snap.flows_through
 
     def _regime(self, X: pd.DataFrame, close_ts: pd.Timestamp) -> Regime:
         """The allocator's inputs at this close. The tier-1 distances (row M9) come from the archived calendar the

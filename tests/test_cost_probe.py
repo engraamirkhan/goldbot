@@ -21,6 +21,7 @@ from goldbot.db.migrations import AUX, migrate
 from goldbot.engine import ConstantModel, Engine, EngineConfig, cost_probe
 from goldbot.execution.broker import AccountInfo, OrderIntent, Tick
 from goldbot.execution.paper import PaperBroker
+from goldbot.labels.triple_barrier import BarrierSpec
 from goldbot.ops import accounts as acc_mod
 from goldbot.ops import ledger
 from goldbot.ops.gates_phase import load_closed_trades
@@ -34,6 +35,13 @@ CUT = pd.Timestamp("2025-03-04 20:00", tz="UTC")   # the first bar close, in mar
 
 
 class _Long(SessionOpenSpecialist):
+    """Long at every close, with a stop of 0.2 ATR (~£3 at 0.01 lot on these bars): its own stop fits the £4 probe
+    cap, so it is mirrored at that stop (a probe never tightens a strategy's stop, architect trace 2026-10-25)."""
+
+    @property
+    def label_spec(self) -> BarrierSpec:
+        return super().label_spec.model_copy(update={"stop_atr": 0.2})
+
     def candidates(self, mid_bars: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame({"idx": [len(mid_bars) - 1], "side": [1]})
 
@@ -176,32 +184,78 @@ def test_the_probe_count_is_configured_per_account_and_never_above_four():
 
 
 # ------------------------------------------------------------------------------------------------ the loss bound
-def test_a_probe_stop_is_clamped_so_its_loss_at_the_stop_is_at_most_max_loss(tmp_path):
-    """The paper account loses distance x 100 oz x 0.01 lot = $1 per $1: a $0.5 cap puts the stop $0.5 away."""
-    eng, pb, tick, close = _engine(tmp_path, max_loss=0.5)
+def _native_loss(tmp_path: Path) -> float:
+    """The loss at the challenger's own stop at the minimum lot, as a probe under a wide cap records it."""
+    eng, pb, tick, close = _engine(tmp_path / "native", max_loss=1_000.0)
     eng.on_bar_close(close, tick)
+    [rec] = cost_probe.probes(tmp_path / "native", "icm-demo")
+    assert rec.native_stop_loss is not None and rec.native_stop_loss > 0
+    return rec.native_stop_loss
+
+
+def test_probe_skipped_when_native_stop_exceeds_cap(tmp_path):
+    """Architect trace 2026-10-25: a probe is evidence of the strategy only at the strategy's own stop. A native stop
+    whose loss at the minimum lot is above max_loss is skipped (journalled), never sent with a tighter stop."""
+    native = _native_loss(tmp_path)
+    eng, pb, tick, close = _engine(tmp_path, max_loss=native / 2)
+    eng.on_bar_close(close, tick)
+    assert not pb.positions() and not _probe_orders(eng)
+    assert cost_probe.probes(tmp_path, "icm-demo") == []
+    [skip] = [d for d in eng.decisions if str(d.get("action", "")).startswith("cost_probe_refused")]
+    assert skip["action"] == "cost_probe_refused:native_stop_above_cap"
+    assert skip["native_stop_loss"] == pytest.approx(native, abs=0.01)
+    assert skip["probe_max_loss"] == pytest.approx(native / 2, abs=0.01)
+
+
+def test_native_stop_kept_inside_cap(tmp_path):
+    """When the native stop's loss fits the cap (here by half a percent), the order's stop is exactly the shadow
+    trade's: the gate is asked for the agent's own stop_atr and sets that distance, and the broker gets it."""
+    native = _native_loss(tmp_path)
+    eng, pb, tick, close = _engine(tmp_path, max_loss=native * 1.005)
+    seen: list[Any] = []
+    check = eng.gate.check
+
+    def spy(intent: Any, *a: Any, **kw: Any):
+        gd = check(intent, *a, **kw)
+        seen.append((intent, gd))
+        return gd
+
+    eng.gate.check = spy                                     # type: ignore[method-assign]
+    eng.on_bar_close(close, tick)
+    assert eng.shadow is not None
+    [st] = [t for b in eng.shadow.books.values() for t in b.open]
+    agent = next(iter(eng.agents.values()))
+    [(intent, gd)] = [(i, g) for i, g in seen if cost_probe.is_probe(i.agent_id)]
+    assert intent.stop_atr == agent.label_spec.stop_atr
+    assert gd.stop_distance == pytest.approx(abs(st.entry - st.stop), abs=1e-9)
+    [pos] = pb.positions()
+    [rec] = cost_probe.probes(tmp_path, "icm-demo")
+    assert rec.requested_price is not None and pos.sl is not None
+    assert abs(rec.requested_price - pos.sl) == pytest.approx(abs(st.entry - st.stop), abs=0.01)   # cent-rounded
+    assert rec.stop_loss == pytest.approx(native, abs=0.01)
+
+
+class _LongHold7(_Long):
+    """Its candidates carry their own time barrier (7 bars), as a research family's labels do."""
+
+    def candidates(self, mid_bars: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
+        return pd.DataFrame({"idx": [len(mid_bars) - 1], "side": [1], "max_bars": [7]})
+
+
+def test_taken_probe_holds_agent_max_bars(tmp_path):
+    """A mirror probe holds its agent's own time barrier, the shadow trade's max_bars, on a probe_only account too
+    (the former PROBE_ONLY_MAX_BARS = 4 cap is gone: a probe cut short is not evidence of the strategy)."""
+    from goldbot.config import tf_seconds
+    agent = _LongHold7()
+    eng, pb, tick, close = _engine(tmp_path, agents=[agent])
+    eng.cfg.probe_only = True
+    eng.on_bar_close(close, tick)
+    assert eng.shadow is not None
+    [st] = [t for b in eng.shadow.books.values() for t in b.open]
+    assert st.taken and st.max_bars == 7 and agent.label_spec.max_bars != 7
     [tr] = eng.open.values()
-    [pos] = pb.positions()
-    assert tr.sl is not None and tr.open_price is not None
-    loss = float(pb.loss_per_lot("XAUUSD", tr.side, tr.open_price, abs(tr.open_price - tr.sl)) or 0) * pos.lots
-    assert loss <= 0.5 + 1e-6
-    [rec] = cost_probe.probes(tmp_path, "icm-demo")
-    assert rec.stop_loss is not None and rec.stop_loss <= 0.5
-
-
-def test_a_clamped_probe_opens_when_the_terminal_rounds_its_loss_to_the_cent(tmp_path):
-    """Live 2026-10-19: the terminal's order_calc_profit is rounded to the cent per lot, so a stop aimed exactly at
-    £4 measured £4.0002 and every box_break_close probe was refused probe_loss_above_cap."""
-    eng, pb, tick, close = _engine(tmp_path, max_loss=4.0)
-
-    def lpl(symbol: str, side: int, price: float, distance: float) -> float:
-        return round(abs(distance) * 100 * 1.00004, 2)                  # per lot, cent-rounded: $1 reads 100.00, low
-    pb.loss_per_lot = lpl                                                # type: ignore[method-assign]
-    eng.on_bar_close(close, tick)
-    assert not any(str(d.get("action", "")).startswith("cost_probe_refused") for d in eng.decisions), eng.decisions
-    [pos] = pb.positions()
-    [rec] = cost_probe.probes(tmp_path, "icm-demo")
-    assert rec.stop_loss is not None and 3.9 <= rec.stop_loss <= 4.0
+    assert cost_probe.is_probe(tr.agent_id)
+    assert tr.max_bars == (st.max_bars + 1) * tf_seconds(st.timeframe) // tf_seconds(eng.cfg.decision_tf)
 
 
 def _untaken(eng: Engine) -> None:
@@ -324,12 +378,12 @@ def test_a_probe_whose_loss_cannot_be_computed_is_refused(tmp_path, answer):
 
 def test_a_stop_the_gate_floors_wider_than_the_cap_is_refused(tmp_path):
     from goldbot.risk.gate import GateDecision
-    eng, pb, tick, close = _engine(tmp_path, max_loss=0.5)
+    eng, pb, tick, close = _engine(tmp_path, max_loss=4.0)
     check = eng.gate.check
 
     def wide(intent: Any, *a: Any, **kw: Any) -> GateDecision:
         gd = check(intent, *a, **kw)
-        return gd.model_copy(update={"stop_distance": 5.0})              # e.g. a stops level above the clamp
+        return gd.model_copy(update={"stop_distance": 5.0})              # e.g. a stops level: $5 = £5 > £4
     eng.gate.check = wide                                                # type: ignore[method-assign]
     eng.on_bar_close(close, tick)
     assert not pb.positions()
@@ -632,8 +686,9 @@ def test_the_cost_probes_table_is_an_additive_aux_migration_so_a_rollback_still_
     with sqlite3.connect(tmp_path / "aux.db") as conn:
         migrate(conn, "aux")
         assert conn.execute("SELECT COUNT(*) FROM cost_probes").fetchone()[0] == 0
-        assert migrate(conn, "aux", migrations=AUX[:-1]) == []          # the older code accepts the newer file
-    assert AUX[-1].name == "cost_probes" and AUX[-1].additive
+        assert conn.execute("SELECT COUNT(*) FROM cost_probe_skips").fetchone()[0] == 0
+        assert migrate(conn, "aux", migrations=AUX[:-2]) == []          # the older code accepts the newer file
+    assert [(m.name, m.additive) for m in AUX[-2:]] == [("cost_probes", True), ("cost_probe_skips", True)]
 
 
 def test_the_broker_ledger_reconciles_closed_probes_in_the_probe_ledger_not_as_missing(tmp_path):
@@ -831,27 +886,33 @@ def test_with_dynamic_limits_a_probe_inside_the_ceiling_keeps_its_own_stop_and_r
     assert order["basis"] == rec.basis
 
 
-def test_with_dynamic_limits_the_budgets_fair_share_caps_a_probe_below_the_configured_max_loss(tmp_path, monkeypatch):
-    """A day limit tightened to £5: 0.2 x 5 / 2 probes = £0.50 a probe, under the configured £4 ceiling."""
+def _skipped(eng: Engine) -> dict:
+    [skip] = [d for d in eng.decisions if str(d.get("action", "")).startswith("cost_probe_refused")]
+    assert skip["action"] == "cost_probe_refused:native_stop_above_cap"
+    return skip
+
+
+def test_with_dynamic_limits_a_probe_whose_own_stop_exceeds_the_budgets_fair_share_is_skipped(tmp_path, monkeypatch):
+    """A day limit tightened to £5: 0.2 x 5 / 2 probes = £0.50 a probe, under the configured £4 ceiling and under the
+    strategy's own stop (~£3): skipped, never sent with a tightened stop (architect trace 2026-10-25)."""
     eng, pb, tick, close = _engine(tmp_path, max_loss=4.0)
     _dynamic(eng)
     monkeypatch.setattr(cost_probe, "_limit", lambda e: 5.0)
     eng.on_bar_close(close, tick)
-    [rec] = cost_probe.probes(tmp_path, "icm-demo")
-    assert rec.stop_loss is not None and rec.stop_loss <= 0.5 + 1e-6
-    assert rec.probe_max_loss == pytest.approx(0.5) and rec.basis is not None
-    assert rec.basis.startswith("max_loss=budget_cap")
+    assert not pb.positions() and cost_probe.probes(tmp_path, "icm-demo") == []
+    skip = _skipped(eng)
+    assert skip["probe_max_loss"] == pytest.approx(0.5) and skip["basis"].startswith("max_loss=budget_cap")
+    assert skip["native_stop_loss"] > 0.5
 
 
 def test_with_dynamic_limits_the_configured_max_loss_stays_the_ceiling(tmp_path):
-    """The paper account loses $1 per $1 of stop at 0.01 lot: a $0.5 ceiling clamps a native stop wider than it."""
+    """The paper account loses $1 per $1 of stop at 0.01 lot: a $0.5 ceiling skips a native stop wider than it."""
     eng, pb, tick, close = _engine(tmp_path, max_loss=0.5)
     _dynamic(eng)
     eng.on_bar_close(close, tick)
-    [rec] = cost_probe.probes(tmp_path, "icm-demo")
-    assert rec.stop_loss is not None and rec.stop_loss <= 0.5 + 1e-6
-    assert rec.probe_max_loss == pytest.approx(0.5) and rec.basis is not None
-    assert rec.basis.startswith("max_loss=config_cap")
+    assert not pb.positions() and cost_probe.probes(tmp_path, "icm-demo") == []
+    skip = _skipped(eng)
+    assert skip["probe_max_loss"] == pytest.approx(0.5) and skip["basis"].startswith("max_loss=config_cap")
 
 
 def test_with_dynamic_limits_off_the_configured_values_apply_and_the_record_says_fixed(tmp_path, monkeypatch):
@@ -931,18 +992,6 @@ def test_the_dynamic_probe_count_reads_the_strategies_own_stops_not_the_clamped_
     assert cost_probe.probe_limits(eng, probe).max_open == 1                         # floor(20 / 60), at least one
 
 
-def test_a_clamped_probe_records_the_loss_at_its_strategys_own_stop(tmp_path):
-    eng, pb, tick, close = _engine(tmp_path, max_loss=0.5)
-    eng.on_bar_close(close, tick)
-    eng2, *_ = _engine(tmp_path / "wide", max_loss=1_000.0)
-    eng2.on_bar_close(close, _bars_until(eng2, eng2.broker, close))                 # type: ignore[arg-type]
-    [clamped] = cost_probe.probes(tmp_path, "icm-demo")
-    [own] = cost_probe.probes(tmp_path / "wide", "icm-demo")
-    assert clamped.stop_loss is not None and clamped.stop_loss <= 0.5 + 1e-6
-    assert clamped.native_stop_loss is not None and clamped.native_stop_loss > clamped.stop_loss
-    assert clamped.native_stop_loss == pytest.approx(own.stop_loss, abs=0.02)       # the unclamped stop's loss
-
-
 def test_with_dynamic_limits_a_strategy_with_wide_stops_gets_fewer_probes(tmp_path, monkeypatch):
     eng, pb, tick, close = _two_agents(tmp_path)
     _dynamic(eng)
@@ -962,3 +1011,81 @@ def test_with_dynamic_limits_a_probe_whose_loss_cannot_be_computed_is_still_refu
     assert not pb.positions()
     refused = [d for d in eng.decisions if d.get("action") == "cost_probe_refused:probe_loss_unknown"]
     assert refused and refused[0]["basis"].startswith("max_loss=fixed:probe_loss_unknown")
+
+
+# ---------------------------------------------------------------- skipped probes (quant review of 97ba941e, 2026-10-25)
+def _skip_rows(eng: Engine, *losses: float) -> None:
+    """Skipped attempts from an earlier day: the strategy's own stop lost `loss` at 0.01 lot, above the ceiling."""
+    assert eng.probe is not None
+    old = pd.Timestamp("2025-03-02 12:00", tz="UTC")
+    with eng.probe.db.write() as conn:
+        for i, loss in enumerate(losses):
+            cost_probe.SKIPS.upsert(conn, cost_probe.SkipRecord(
+                client_order_id=f"cp-skip-{i}", account_id="icm-demo", agent_id="w", version="w-v2",
+                timeframe="4h", side=1, taken=True, signal_utc=old + pd.Timedelta(minutes=i), atr_usd=30.0,
+                native_stop_loss=loss, probe_max_loss=4.0))
+
+
+def test_a_skipped_probe_records_its_native_stop_loss_agent_timeframe_and_atr(tmp_path):
+    """The skip is evidence too: its own stop's loss, agent, timeframe and ATR go to `cost_probe_skips` (never to
+    the probe ledger every fill reader reads) and to the decision's detail."""
+    native = _native_loss(tmp_path)
+    eng, pb, tick, close = _engine(tmp_path, max_loss=native / 2)
+    eng.on_bar_close(close, tick)
+    agent = next(iter(eng.agents.values()))
+    assert cost_probe.probes(tmp_path, "icm-demo") == []
+    [row] = cost_probe.skips(tmp_path, "icm-demo")
+    assert row.agent_id == agent.agent_id and row.timeframe == agent.timeframe and row.taken
+    assert row.native_stop_loss == pytest.approx(native, abs=0.01) and row.atr_usd > 0
+    assert row.probe_max_loss == pytest.approx(native / 2, abs=0.01) and row.signal_utc == close
+    skip = _skipped(eng)
+    assert skip["timeframe"] == agent.timeframe and skip["atr_usd"] == pytest.approx(row.atr_usd, abs=0.01)
+
+
+def test_with_dynamic_limits_skipped_wide_stops_lower_the_probe_count(tmp_path, monkeypatch):
+    """Quant review: probes are sent only at stops inside the ceiling, so a median of sent probes alone would always
+    give the configured count. Skipped attempts' own stops count too: floor(0.4 x £50 / median 60) -> 1."""
+    eng, pb, tick, close = _two_agents(tmp_path)
+    probe = _dynamic(eng)
+    monkeypatch.setattr(cost_probe, "_limit", lambda e: 50.0)
+    _history(eng, *[3.0] * 5)                                       # sent at their own £3 stops
+    assert cost_probe.probe_limits(eng, probe).max_open == 4        # floor(20 / 3), at most the configured 4
+    _skip_rows(eng, *[60.0] * 6)                                    # wide own stops, skipped
+    lim = cost_probe.probe_limits(eng, probe)
+    assert (lim.max_open, lim.open_basis) == (1, "budget")
+    eng.on_bar_close(close, tick)
+    assert len(pb.positions()) == 1
+
+
+def test_skip_counts_are_split_by_agent_and_timeframe_never_pooled(tmp_path):
+    eng, *_ = _engine(tmp_path)
+    _skip_rows(eng, 60.0, 50.0)
+    assert eng.probe is not None
+    with eng.probe.db.write() as conn:
+        cost_probe.SKIPS.upsert(conn, cost_probe.SkipRecord(
+            client_order_id="cp-skip-1h", account_id="icm-demo", agent_id="w", version="w-v2", timeframe="1h",
+            side=-1, taken=False, signal_utc=pd.Timestamp("2025-03-02 13:00", tz="UTC"), atr_usd=12.0,
+            native_stop_loss=9.0, probe_max_loss=4.0))
+    counts = cost_probe.skip_counts(tmp_path, "icm-demo")
+    assert counts == {("w", "4h"): {"skips": 2, "median_atr_usd": 30.0, "median_native_stop_loss": 55.0},
+                      ("w", "1h"): {"skips": 1, "median_atr_usd": 12.0, "median_native_stop_loss": 9.0}}
+
+
+def test_a_loss_above_the_cap_at_the_agents_own_stop_is_labelled_native_stop_above_cap_however_it_is_found(tmp_path):
+    """Safety review LOW: a native stop that measured inside the cap before the gate but above it at the gate's
+    (unfloored) stop is the same skip, `native_stop_above_cap`, not `probe_loss_above_cap` (kept for a stops-level
+    floor wider than the strategy's stop)."""
+    native = _native_loss(tmp_path)
+    eng, pb, tick, close = _engine(tmp_path, max_loss=native)
+    calls: list[int] = []
+    lpl = pb.loss_per_lot
+
+    def drifting(symbol: str, side: int, price: float, distance: float) -> float | None:
+        calls.append(1)
+        v = lpl(symbol, side, price, distance)                       # the quote's rate moves between the two reads
+        return None if v is None else v * (1.0 if len(calls) == 1 else 1.01)
+    pb.loss_per_lot = drifting                                       # type: ignore[method-assign]
+    eng.on_bar_close(close, tick)
+    assert not pb.positions()
+    _skipped(eng)
+    assert len(cost_probe.skips(tmp_path, "icm-demo")) == 1

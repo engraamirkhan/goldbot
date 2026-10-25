@@ -339,3 +339,11 @@ Every item raised since the last cycle, with the answer. A = adopted, D = deferr
 | 52 | evaluator | Attribution ignores the 13:49 UTC quarantine | **A**, `fix/attribution-evidence-start`, implementer + quant-reviewer | — |
 | 53 | evaluator | `perf_report` drawdown omits probe losses | **A**, finance-auditor reconciles to the broker | — |
 | 54 | evaluator | H-52 admissibility a-f | **A** as the checklist every forward number is tagged against (performance-analyst) | section 1 |
+| 55 | performance-analyst (2026-10-25) | 0 own entries: every agent shadows at cw 0 and promotion counts only taken trades (`population.py:111`) | **A.** H2 counterfactual fixed-threshold arms (pre-registered, counted in K, never pooled with the roster) plus a learning demo account. Untaken outcomes are **never promotion evidence**. Owner: strategy-researcher (H2 text), program-director (account) | H2 arms in K |
+| 56 | performance-analyst (2026-10-25) | Shared broker login: icm-probe = icm-demo | **A.** Owner is storing a separate account; until then probe and demo fills are not separable evidence. Owner: program-director | — |
+| 57 | performance-analyst (2026-10-25) | Probe fills are not in the cost table | **A.** H1 refit takes `probe_fills` as an input. Owner: microstructure-researcher | H1 inputs |
+| 58 | performance-analyst (2026-10-25) | Mirror probes at 0.3-0.5x the stop are useless as evidence | **A.** Mirrors use their own stop on the learning account, otherwise skipped. Mirror rows are tagged `exploration` and carry 0 trials. Owner: microstructure-researcher, implementer | — |
+| 59 | performance-analyst (2026-10-25) | 4h history gap from the August Dukascopy hole | **A.** Owner: data-engineer | — |
+| 60 | performance-analyst (2026-10-25) | Rule families p = 1.0, calibration undefined | **A.** Isotonic calibration once n >= 50; it must be cross-fitted and include untaken candidates (n=50 overfits otherwise). Owner: ml-researcher | — |
+| 61 | performance-analyst (2026-10-25) | Retrain skipped while a challenger is in shadow (`jobs.py:448`) | **A.** Retrain triggers per 25 closed outcomes; a challenger stuck > 30 days is retired or reset. Owner: implementer with ml-researcher | — |
+| 62 | performance-analyst (2026-10-25) | Weekly evaluator verdicts | **A.** Owner: evaluator via release-manager | — |
