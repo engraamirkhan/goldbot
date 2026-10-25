@@ -403,3 +403,48 @@ def test_1h_and_4h_windows_over_september_and_october_2026_pass_the_guard(tmp_pa
     fr = SimpleNamespace(dec=pd.DataFrame({"ts_utc": [first, ts[-1]]}))
     assert history.refuse(eng, tf, fr, gaps, [], NOW_1019) is None
     assert tf not in eng.history.gaps
+
+
+# ------------------------------------------------------------------------------------------- restart re-delivery
+@pytest.mark.parametrize("restart", ["2026-10-25 08:05", "2026-10-24 12:00"])   # EU DST fall-back day, a plain Saturday
+def test_a_restart_with_the_market_closed_does_not_rebuild_the_stored_last_minute_as_a_duplicate(tmp_path, restart):
+    """Brain 2026-10-25 (EU fall-back day): both engines restarted on Sunday reported dq_error duplicate_ts. The
+    terminal's latest quote was still Friday's last tick (20:56:59 UTC, server 23:56:59 EEST: converted correctly),
+    whose minute the previous engine had finalised and stored; the restarted engine re-built that minute from the
+    re-delivered tick and the duplicate check saw it twice (the stored tail + the rebuilt one). A tick inside the
+    warm-start history is already in the bars: it never rebuilds a minute and never raises duplicate_ts."""
+    ticks = synthetic_ticks("2026-10-19", "2026-10-24", ticks_per_minute=2, seed=3)
+    ticks = ticks[ticks["ts_utc"] < pd.Timestamp("2026-10-23 20:57", tz="UTC")]
+    last = ticks.iloc[-1]
+    assert pd.Timestamp(last["ts_utc"]).floor("min") == pd.Timestamp("2026-10-23 20:56", tz="UTC")
+    Store(tmp_path / "data").append(LIVE_TABLE, ticks_to_1m(ticks, DEFAULT_SESSIONS), source="icm")
+    eng = _engine(tmp_path, live_clock=True)
+    now = pd.Timestamp(restart, tz="UTC")
+    eng.clock = lambda: now
+    assert eng.warm_start(now) > 0
+    stored = len(eng.bars_1m)
+    for _ in range(3):                   # the run loop polls the same frozen quote over and over
+        eng.on_tick(Tick(ts_utc=pd.Timestamp(last["ts_utc"]), bid=float(last["bid"]), ask=float(last["ask"])))
+    assert eng._closed_through is not None                 # the clock-driven close did run on the frozen quote
+    assert [e.check for e in eng._dq_errors()] == []
+    assert len(eng.bars_1m) == stored and eng.bars_1m["ts_utc"].is_unique
+    state = json.loads((tmp_path / "engine_icm-demo.json").read_text())
+    assert "duplicate_ts" not in state["dq_checks"]
+
+
+def test_a_new_tick_after_the_restart_still_builds_its_minute_and_a_real_duplicate_still_blocks(tmp_path):
+    """The skip is only for minutes the warm-start history already holds: the next minute is built as before, and
+    a duplicate inside a batch of new minutes is still a blocking error."""
+    ticks = synthetic_ticks("2026-10-19", "2026-10-24", ticks_per_minute=2, seed=3)
+    hist = ticks[ticks["ts_utc"] < pd.Timestamp("2026-10-22 12:00", tz="UTC")]
+    Store(tmp_path / "data").append(LIVE_TABLE, ticks_to_1m(hist, DEFAULT_SESSIONS), source="icm")
+    eng = _engine(tmp_path)
+    eng.warm_start(pd.Timestamp("2026-10-22 12:00", tz="UTC"))
+    live = ticks[(ticks["ts_utc"] >= pd.Timestamp("2026-10-22 12:00", tz="UTC"))
+                 & (ticks["ts_utc"] < pd.Timestamp("2026-10-22 12:20", tz="UTC"))]
+    _feed(eng, live)
+    assert pd.Timestamp(eng.bars_1m["ts_utc"].iloc[-1]) >= pd.Timestamp("2026-10-22 12:14", tz="UTC")
+    assert [e.check for e in eng._dq_errors()] == []
+    done = eng.bars_1m.tail(1)
+    eng._check_new_bars(pd.concat([done, done]))
+    assert "duplicate_ts" in [e.check for e in eng._dq_pending]

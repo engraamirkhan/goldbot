@@ -320,6 +320,9 @@ def warm_start(eng: Engine, now: pd.Timestamp, broker: Any = None) -> int:
         rel = rel[rel["ts_utc"] < h.cutover] if not rel.empty else rel
     b = pd.concat([x for x in (rel, own) if not x.empty]) if not (rel.empty and own.empty) else pd.DataFrame()
     eng.bars_1m = b.tail(cfg.max_bars_in_memory).reset_index(drop=True) if not b.empty else pd.DataFrame()
+    # a tick stamped inside these minutes is a re-delivery (the terminal's frozen quote after a restart with the market
+    # closed or quiet): rebuilding its minute would duplicate the stored one and block entries with duplicate_ts
+    eng._history_through = pd.Timestamp(eng.bars_1m["visible_at"].max()) if not eng.bars_1m.empty else None
     h.backfill["cutover"] = h.cutover.isoformat() if h.cutover is not None else None
     start_fill(eng, now)
     return len(eng.bars_1m)

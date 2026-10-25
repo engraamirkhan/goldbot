@@ -282,6 +282,9 @@ class Engine:
         self._orders: dict[str, SentOrder] = {}     # pending_orders: every id ever sent (pruned after a week)
         self.last_bar_close: pd.Timestamp | None = None   # open of the decision bar the last tick fell in
         self._closed_through: pd.Timestamp | None = None  # latest bar close processed (tick or clock path): never twice
+        # end (last visible_at) of the minutes warm_start loaded: a tick before it is re-delivered (a restart with the
+        # terminal's quote still in a minute the previous engine stored) and never rebuilds that minute
+        self._history_through: pd.Timestamp | None = None
         self.state = AccountState(equity=0, balance_closed_hwm=0, day_start_equity=0, week_start_equity=0,
                                   open_positions=0, margin_used=0, last_tick_age_s=0, spread_points=0)
         self.decisions: list[dict] = []
@@ -565,7 +568,9 @@ class Engine:
         repeat = prev is not None and (prev.ts_utc, prev.bid, prev.ask) == (t.ts_utc, t.bid, t.ask)
         if not repeat:
             self._skew.append((t.ts_utc - self._now(t)).total_seconds())
-            if self._closed_through is None or t.ts_utc >= self._closed_through:
+            if self._history_through is not None and t.ts_utc < self._history_through:
+                pass                    # its minute is already in the warm-start history (brain 2026-10-25 duplicate_ts)
+            elif self._closed_through is None or t.ts_utc >= self._closed_through:
                 self.ticks.append(t)
             else:
                 self._late_tick(t)      # never revises a bar the clock already finalised
