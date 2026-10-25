@@ -8,7 +8,8 @@
 #   precheck     read-only except the Config/ backup: root, market closed, no engine unit active here, the two
 #                attestations, a Config/ copy kept in mt5's 0700 directory (an existing copy is kept, not redone).
 #   install      precheck again, then `goldbot-deploy <sha>`, then the units, the watchdog/probe scripts and the
-#                terminal unit's AutoTrading script (/usr/local/libexec/goldbot) from root's OWN shallow clone at
+#                terminal unit's AutoTrading script (/usr/local/libexec/goldbot) and the needrestart drop-in
+#                (/etc/needrestart/conf.d/goldbot.conf) from root's OWN shallow clone at
 #                <sha> (git verifies the content by its id; goldbot-deploy does not install units),
 #                stops the transient goldbot-mt5-terminal-check, kills the stray terminal, enables the terminal unit,
 #                leaves the watchdog timer OFF, records the boot id. It does not reboot: the PD runs `sudo reboot`.
@@ -36,6 +37,8 @@ UNIT_DIR=/etc/systemd/system
 SBIN=/usr/local/sbin
 # mt5-experts-enable.sh + mt5-ini.sh, run as mt5 by the terminal unit before each start
 LIBEXEC=/usr/local/libexec/goldbot
+# needrestart's drop-in directory: goldbot units are never restarted by it (incident 2026-10-22)
+NEEDRESTART_DIR=/etc/needrestart/conf.d
 UNITS=(goldbot-mt5-terminal@.service goldbot-bridge@.service goldbot-bridge-watchdog@.service goldbot-bridge-watchdog@.timer)
 MIN_FREE_MB=500
 
@@ -138,7 +141,8 @@ phase_install() {
     [ -f "$ops/systemd/$u" ] || { row FAIL "unit file $u" "absent at sha"; return 0; }
   done
   if [ ! -f "$ops/goldbot-bridge-watchdog.sh" ] || [ ! -f "$ops/goldbot-bridge-probe.sh" ] \
-     || [ ! -f "$ops/mt5/mt5-experts-enable.sh" ] || [ ! -f "$ops/mt5/mt5-ini.sh" ]; then
+     || [ ! -f "$ops/mt5/mt5-experts-enable.sh" ] || [ ! -f "$ops/mt5/mt5-ini.sh" ] \
+     || [ ! -f "$ops/needrestart/goldbot.conf" ]; then
     row FAIL "watchdog scripts" "absent at sha"; return 0
   fi
   for u in "${UNITS[@]}"; do install -m 644 -o root -g root "$ops/systemd/$u" "$UNIT_DIR/$u"; done
@@ -147,6 +151,8 @@ phase_install() {
   install -d -m 755 -o root -g root "$LIBEXEC"
   install -m 755 -o root -g root "$ops/mt5/mt5-experts-enable.sh" "$LIBEXEC/mt5-experts-enable.sh"
   install -m 755 -o root -g root "$ops/mt5/mt5-ini.sh" "$LIBEXEC/mt5-ini.sh"
+  install -d -m 755 -o root -g root "$NEEDRESTART_DIR"
+  install -m 644 -o root -g root "$ops/needrestart/goldbot.conf" "$NEEDRESTART_DIR/goldbot.conf"
   systemctl daemon-reload
   row PASS "units and watchdog scripts installed" "root-owned"
 
