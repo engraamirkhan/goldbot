@@ -38,6 +38,7 @@ from goldbot.labels.triple_barrier import SwapSpec
 
 if TYPE_CHECKING:
     from goldbot.config import Settings
+    from goldbot.engine.cost_probe import ProbeRecord
 
 Session = Literal["asia", "london", "newyork"]
 SESSIONS: tuple[Session, ...] = ("asia", "london", "newyork")
@@ -55,6 +56,21 @@ class SlippageStat(FrozenRecord):
     n: int
     from_prior: bool
 
+
+class ProbeSlippage(FrozenRecord):
+    """One session's scheduled-probe entry slippage ($/oz, positive = worse): the raw measurement beside what is charged."""
+    n: int
+    mean: float          # raw, reported even when favourable
+    ci_low: float        # day-block bootstrap 95% interval
+    ci_high: float
+    charged: float       # max(prior, mean): never below the prior
+    raised: bool         # mean above the prior
+
+
+PROBE_RETCODE_DONE = 10009           # TRADE_RETCODE_DONE (mt5_adapter.RETCODE_DONE; not imported: the adapter imports this module)
+PROBE_BOOTSTRAP_RESAMPLES = 2000     # prereg-cost-measurement-2026-10 s5
+PROBE_BOOTSTRAP_SEED = 20261020
+PROBE_MIN_FILLS = 50                 # per session, prereg s5 (the architect's sketch said 30: that is the per-bucket decision read)
 
 SPREAD_DECIMALS = 6      # spreads are counted at 1e-6 $/oz (float noise of ask - bid); quotes have 2-3 decimals
 
@@ -174,6 +190,8 @@ class CostTable(FrozenRecord):
     commission_measured: bool = False          # commission from the terminal's deals (else the settings value)
     commission_lots: float = 0.0               # lots of closed positions the measured commission rests on
     spread_profile: SpreadProfile | None = None   # the recorded broker ticks by hour and session (reported only)
+    probe_slippage: dict[str, ProbeSlippage] = Field(default_factory=dict)   # by session; reported beside `slippage`
+    n_probe_fills: int = 0                     # scheduled-probe entry fills seen (never part of n_fills)
 
     def extra_cost_usd(self) -> float:
         """Round-trip cost per oz beyond the quoted spread: entry and exit slippage (mean of the market-order cells,
@@ -268,6 +286,57 @@ def slippage_table(fills: pd.DataFrame, *, prior_usd: float, min_fills: int = 50
             else:
                 out[f"{s}:{ot}"] = SlippageStat(mean=prior_usd, n=int(len(v)), from_prior=True)
     return out
+
+
+def probe_slippage(rows: Iterable["ProbeRecord"], prior_usd: float, min_fills: int = PROBE_MIN_FILLS,
+                   sessions: SessionTable = DEFAULT_SESSIONS) -> dict[str, ProbeSlippage]:
+    """Scheduled-probe entry slippage by session (prereg-cost-measurement-2026-10 s0.3/s5): "Demo slippage only raises
+    costs ... Research slippage is max(0.15, measured)". Only `cost_measurement` entry legs with a done retcode and both
+    prices count. A session with fewer than `min_fills` is absent (the prior stands; sessions are never pooled). The
+    charge is max(prior, mean); favourable slippage is reported in `mean` (with the 95% day-block bootstrap interval)
+    and never credited."""
+    t: list[pd.Timestamp] = []
+    v: list[float] = []
+    for r in rows:
+        if (r.purpose == "cost_measurement" and r.retcode == PROBE_RETCODE_DONE
+                and r.requested_price is not None and r.fill_price is not None):
+            t.append(pd.Timestamp(r.sent_utc))
+            v.append(r.side * (r.fill_price - r.requested_price))
+    if not t:
+        return {}
+    idx = pd.DatetimeIndex(pd.to_datetime(t, utc=True))
+    labels = np.asarray(sessions.session_label(idx))
+    slip = np.asarray(v, dtype=float)
+    days = np.asarray(idx.strftime("%Y-%m-%d"))
+    out: dict[str, ProbeSlippage] = {}
+    rng = np.random.default_rng(PROBE_BOOTSTRAP_SEED)
+    for s in SESSIONS:
+        m = labels == s
+        if int(m.sum()) < min_fills:
+            continue
+        x, d = slip[m], days[m]
+        _, inv = np.unique(d, return_inverse=True)
+        sums = np.bincount(inv, weights=x)
+        cnts = np.bincount(inv).astype(float)
+        pick = rng.integers(0, len(sums), size=(PROBE_BOOTSTRAP_RESAMPLES, len(sums)))
+        means = sums[pick].sum(axis=1) / cnts[pick].sum(axis=1)
+        lo, hi = (float(q) for q in np.percentile(means, [2.5, 97.5]))
+        mean = float(x.mean())
+        raised = mean > prior_usd
+        out[s] = ProbeSlippage(n=int(m.sum()), mean=mean, ci_low=lo, ci_high=hi,
+                               charged=max(prior_usd, mean), raised=raised)
+    return out
+
+
+def apply_probe_slippage(table: CostTable, probe: dict[str, ProbeSlippage], n_probe_fills: int) -> CostTable:
+    """Raise a session's market cell to the probe charge where it exceeds the prior; a cell is never lowered, and a
+    real-fill cell already above the probe charge stays (the larger of the two is charged)."""
+    slip = dict(table.slippage)
+    for s, p in probe.items():
+        cur = slip.get(f"{s}:market")
+        if p.raised and (cur is None or p.charged > cur.mean):
+            slip[f"{s}:market"] = SlippageStat(mean=p.charged, n=p.n, from_prior=False)
+    return table.model_copy(update={"slippage": slip, "probe_slippage": probe, "n_probe_fills": n_probe_fills})
 
 
 def build_cost_table(account_id: str, ticks: pd.DataFrame, fills: pd.DataFrame, *, commission_per_lot_side_usd: float,

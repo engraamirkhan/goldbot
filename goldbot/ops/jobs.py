@@ -86,6 +86,7 @@ import itertools
 import json
 import logging
 import random
+import sqlite3
 from pathlib import Path
 from typing import Any, Callable, cast
 
@@ -98,13 +99,16 @@ from goldbot.base import Record, load_record, write_atomic
 from goldbot.config import DecisionTimeframe, Settings
 from goldbot.data.release import store_macro
 from goldbot.data.store import Store
+from goldbot.engine import cost_probe
 from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.classifier import PersistentClassifier, classify
 from goldbot.execution.costs import (
     BrokerTerms,
     CostTable,
     SpreadProfile,
+    apply_probe_slippage,
     build_cost_table,
+    probe_slippage,
     publishable,
     spread_profile,
 )
@@ -212,8 +216,18 @@ def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
                                  notes=[*notes, profile_note], spread_profile=profile)
         if measured and terms is not None:
             table = table.model_copy(update={"commission_lots": terms.commission_lots})
+        n_probe = 0
+        try:     # scheduled-probe fills raise a session's slippage when proven above the prior; never in `fills` (K7)
+            window_start = slot - pd.Timedelta(days=r.fills_window_days)
+            prows = [p for p in cost_probe.probes(ctx.state_dir, acc.account_id)
+                     if window_start <= p.sent_utc <= slot]
+            n_probe = len(prows)
+            table = apply_probe_slippage(table, probe_slippage(prows, ctx.settings.costs.slippage_prior_usd), n_probe)
+        except (sqlite3.Error, OSError, ValueError) as exc:     # unreadable aux.db: the prior stands
+            log.warning("cost probes for %s unreadable (%s): slippage keeps the prior", acc.account_id, type(exc).__name__)
+            table = table.model_copy(update={"notes": [*table.notes, "scheduled-probe fills unreadable: slippage keeps the prior"]})
         table.save(ctx.state_dir / f"costs_{acc.account_id}.json")
-        row: dict[str, Any] = {"ticks": len(ticks), "fills": len(fills),
+        row: dict[str, Any] = {"ticks": len(ticks), "fills": len(fills), "probe_fills": n_probe,
                                "round_trip_usd": {s: table.round_trip_usd_per_oz(s) for s in ("asia", "london", "newyork")},
                                "swap_measured": swap is not None, "commission_measured": measured,
                                "spread_profile_days": profile.days if profile is not None else 0}

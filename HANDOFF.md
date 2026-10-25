@@ -5,6 +5,7 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- Nightly costs now read the scheduled-probe fills (aux.db `cost_probes`, `cost_measurement` entry legs, done retcode, both prices, sent by the slot, inside `fills_window_days`) through `costs.probe_slippage`: per session with at least 50 fills (prereg s5; the architect's 30 is the per-bucket decision read) the market slippage cell is charged `max(prior, mean)`, favourable slippage is never credited, and the raw mean with its day-block bootstrap 95% interval (2,000 resamples, seed 20261020) is kept in `CostTable.probe_slippage`. Probe fills never enter `fills` (K7); an unreadable aux.db keeps the prior. The published table does not yet carry `probe_slippage` (reported in the local table only).
 - H-52 evidence start now cuts every shadow-evidence input that feeds a decision (evaluator finding, MEDIUM). Trades
   OPENED (signal bar open) before 2026-10-19 13:49 UTC are quarantined in: the attribution report (`trade_rows` /
   `build_report(evidence_start=)`, counted in its notes), the research director's attribution cells (budget tilt, the
