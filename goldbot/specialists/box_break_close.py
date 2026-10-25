@@ -55,33 +55,42 @@ def _empty() -> pd.DataFrame:
     return pd.DataFrame({"idx": pd.Series(dtype=int), "side": pd.Series(dtype=int)})
 
 
-def decide(t: int, o: np.ndarray, c: np.ndarray, mfi: np.ndarray, a: np.ndarray, tops: np.ndarray,
-           bots: np.ndarray, trend: float, f1: float, f2: float) -> int:
-    """The side the rule takes at bar t (0: none); arrays are the window's, `tops`/`bots` the boxes in force at t."""
+def decide_with_stop(t: int, o: np.ndarray, c: np.ndarray, mfi: np.ndarray, a: np.ndarray, tops: np.ndarray,
+                     bots: np.ndarray, trend: float, f1: float, f2: float, *, force_mfi: bool = False,
+                     stop_atr: float = STOP_ATR) -> tuple[int, float]:
+    """(side, structural stop distance in price units) the rule takes at bar t; (0, nan) for none. `force_mfi` and
+    `stop_atr` exist for the exploration arms (I2A: money-flow confirmation off, I2B: stop 1.0 ATR); the defaults are the
+    roster rule."""
     if t < MFI_WINDOW or not len(tops) or not np.isfinite(a[t]) or a[t] <= 0:
-        return 0
+        return 0, float("nan")
     if np.isfinite(f1) and np.isfinite(f2) and f1 * f2 < 0:
-        return 0                                                    # inside the golden zone
+        return 0, float("nan")                                      # inside the golden zone
     hgt = tops - bots
     with np.errstate(invalid="ignore"):
         up = (c[t - 1] < tops) & (c[t] >= tops + BREAK_DEPTH * hgt) & (c[t] > o[t])
         dn = (c[t - 1] > bots) & (c[t] <= bots - BREAK_DEPTH * hgt) & (c[t] < o[t])
     w = mfi[t - MFI_WINDOW + 1:t + 1]
     if not (np.isfinite(mfi[t]) and np.isfinite(mfi[t - 1])):
-        return 0
+        return 0, float("nan")
     if up.any() and not dn.any():
         k = int(np.argmax(np.where(up, tops, -np.inf)))
-        mfi_ok = bool(np.nanmin(w) <= MFI_LOW and mfi[t] > mfi[t - 1])
+        mfi_ok = force_mfi or bool(np.nanmin(w) <= MFI_LOW and mfi[t] > mfi[t - 1])
         stop = bots[k] - BUFFER_ATR * a[t]
-        if mfi_ok and trend != -1 and c[t] - stop <= STOP_ATR * a[t]:
-            return 1
+        if mfi_ok and trend != -1 and c[t] - stop <= stop_atr * a[t]:
+            return 1, float(c[t] - stop)
     if dn.any() and not up.any():
         k = int(np.argmin(np.where(dn, bots, np.inf)))
-        mfi_ok = bool(np.nanmax(w) >= MFI_HIGH and mfi[t] < mfi[t - 1])
+        mfi_ok = force_mfi or bool(np.nanmax(w) >= MFI_HIGH and mfi[t] < mfi[t - 1])
         stop = tops[k] + BUFFER_ATR * a[t]
-        if mfi_ok and trend != 1 and stop - c[t] <= STOP_ATR * a[t]:
-            return -1
-    return 0
+        if mfi_ok and trend != 1 and stop - c[t] <= stop_atr * a[t]:
+            return -1, float(stop - c[t])
+    return 0, float("nan")
+
+
+def decide(t: int, o: np.ndarray, c: np.ndarray, mfi: np.ndarray, a: np.ndarray, tops: np.ndarray,
+           bots: np.ndarray, trend: float, f1: float, f2: float) -> int:
+    """The side the rule takes at bar t (0: none); arrays are the window's, `tops`/`bots` the boxes in force at t."""
+    return decide_with_stop(t, o, c, mfi, a, tops, bots, trend, f1, f2)[0]
 
 
 @register
@@ -108,11 +117,12 @@ class BoxBreakCloseSpecialist(Specialist):
         vol = (bars["tick_count"] if "tick_count" in bars.columns else bars["volume"]).to_numpy(dtype=float)
         return o, c, smc.money_flow(h, lo, c, vol, p.mfi_len), atr(bars, 14).to_numpy(dtype=float)
 
-    def candidates(self, mid_bars: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
-        """Research: the rule on every bar of `mid_bars`, the replica run from its first bar."""
+    def candidates_with_risk(self, mid_bars: pd.DataFrame, *, force_mfi: bool = False,
+                             stop_atr: float = STOP_ATR) -> pd.DataFrame:
+        """`candidates` plus each candidate's structural stop distance (`risk_usd`), for the exploration arms."""
         bars = mid_bars.reset_index(drop=True)
         if len(bars) < 2:
-            return _empty()
+            return _empty().assign(risk_usd=pd.Series(dtype=float))
         p = self.replica_params
         frame = smc.replica_frame(bars, p)
         trace: list[tuple[np.ndarray, np.ndarray]] = []
@@ -122,10 +132,16 @@ class BoxBreakCloseSpecialist(Specialist):
         o, c, mfi, a = self._arrays(bars)
         trend = frame["trend_swing"].to_numpy(dtype=float)
         f1, f2 = frame["range_f1_dist_atr"].to_numpy(float), frame["range_f2_dist_atr"].to_numpy(float)
-        sides = np.array([decide(t, o, c, mfi, a, trace[t][0], trace[t][1], trend[t], f1[t], f2[t])
-                          for t in range(len(bars))], dtype=int)
+        res = [decide_with_stop(t, o, c, mfi, a, trace[t][0], trace[t][1], trend[t], f1[t], f2[t],
+                                force_mfi=force_mfi, stop_atr=stop_atr) for t in range(len(bars))]
+        sides = np.array([r[0] for r in res], dtype=int)
+        risk = np.array([r[1] for r in res], dtype=float)
         idx = np.flatnonzero(sides)
-        return pd.DataFrame({"idx": idx.astype(int), "side": sides[idx].astype(int)})
+        return pd.DataFrame({"idx": idx.astype(int), "side": sides[idx].astype(int), "risk_usd": risk[idx]})
+
+    def candidates(self, mid_bars: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
+        """Research: the rule on every bar of `mid_bars`, the replica run from its first bar."""
+        return self.candidates_with_risk(mid_bars).drop(columns="risk_usd")
 
     def candidates_in_context(self, mid_bars: pd.DataFrame, features: pd.DataFrame,
                               context: dict[str, pd.DataFrame] | None,

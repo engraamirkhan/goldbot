@@ -306,6 +306,46 @@ def triple_barrier_1m(bars: pd.DataFrame, bars_1m: pd.DataFrame, signals: pd.Dat
     return _finish(pd.DataFrame(rows), bars, signals, swap)
 
 
+def triple_barrier_next_open_1m(bars: pd.DataFrame, bars_1m: pd.DataFrame, signals: pd.DataFrame, spec: BarrierSpec,
+                                atr: pd.Series, swap: SwapSpec | None = None) -> pd.DataFrame:
+    """`triple_barrier_1m` with the entry at the OPEN of the first 1m bar at or after the decision bar's close (ask for
+    longs, bid for shorts), as the exploration arms' spec and the H-62 replay labels enter ("the open of bar t+1"), and the
+    barriers searched minute by minute from that bar (its own minute included; stop first when both fall in one minute).
+    Time barrier: the close of decision bar idx + 1 + max_bars. A gap between the close and that first minute (weekend,
+    session) is in the fill. Columns as `triple_barrier_1m`, plus `entry_ts` (the entry minute's stamp)."""
+    n = len(bars)
+    close = _bar_close_times(bars)
+    b1 = bars_1m.sort_values("ts_utc").reset_index(drop=True)
+    t1 = pd.DatetimeIndex(pd.to_datetime(b1["ts_utc"], utc=True))
+    cols = ["ts_utc", "bid_high", "bid_low", "bid_close", "ask_high", "ask_low", "ask_close"]
+    a = atr.to_numpy(dtype=float)
+    rows = []
+    for idx, side, hold, tmult in zip(signals["idx"].to_numpy().astype(int), signals["side"].to_numpy().astype(int),
+                                      _max_bars(signals, spec), _target_atr(signals, spec)):
+        if idx + 1 >= n:
+            continue
+        last = min(idx + 1 + int(hold), n - 1)
+        k0 = int(t1.searchsorted(close[idx], side="left"))       # the first minute at or after the close
+        k1 = int(t1.searchsorted(close[last], side="left"))
+        if k1 <= k0 or k0 >= len(b1):
+            continue
+        first = b1.iloc[[k0]][cols].copy()
+        first["ask_close"], first["bid_close"] = float(b1["ask_open"].iloc[k0]), float(b1["bid_open"].iloc[k0])
+        mini = pd.concat([first, b1.iloc[k0:k1][cols]], ignore_index=True)    # row 0: the fill price; rows 1..: the minutes
+        res = triple_barrier(mini, pd.DataFrame({"idx": [0], "side": [side], "max_bars": [k1 - k0],
+                                                 "target_atr": [tmult]}), spec, pd.Series(a[idx], index=mini.index))
+        if res.empty:
+            continue
+        r = res.iloc[0]
+        minute = t1[k0 + int(r["t_exit"]) - 1]
+        t_exit = min(int(close.searchsorted(minute, side="right")), last)
+        rows.append({"idx": idx, "side": side, "t_entry": idx + 1, "t_exit": t_exit, "bars_held": t_exit - idx,
+                     "entry": float(r["entry"]), "exit": float(r["exit"]), "ret": float(r["ret"]),
+                     "label": int(r["label"]), "barrier_hit": str(r["barrier_hit"]), "target_hit": int(r["target_hit"]),
+                     "entry_ts": t1[k0]})
+    return _finish(pd.DataFrame(rows), bars, signals, swap)
+
+
 def one_at_a_time(labels: pd.DataFrame) -> pd.DataFrame:
     """Keep a candidate only once the previously kept one has exited (one position per agent, as the engine and
     the shadow book trade). Rules that fire on runs of consecutive bars otherwise yield heavily overlapping labels:
