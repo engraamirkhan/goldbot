@@ -324,6 +324,43 @@ AUX: tuple[Migration, ...] = (
            ) STRICT""",
         "CREATE INDEX IF NOT EXISTS cost_probe_skips_account ON cost_probe_skips(account_id, ts_ns)",
     )),
+    # additive (exploration arms, architect plan 2026-10-25, goldbot/research/exploration_data.py): one row per closed
+    # exploration trade (its fills stay in cost_probes, purpose "exploration"), keyed by the probe's client order id and
+    # written once (a revision never overwrites the first record); a row that fails validation is kept with its
+    # `quarantine` reason and never trained on. And the nightly bandit's per-arm budget shares, one row per (run, arm),
+    # history kept; readers take the newest run. Read by the exploration learner and the arms' budget only, never by
+    # the shadow book, the tournament, promotion, closed trades, fills or the phase gate. A release without it never
+    # reads it
+    Migration(version=16, name="exploration", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS exploration_obs (
+               obs_id TEXT PRIMARY KEY,
+               account_id TEXT NOT NULL,
+               arm_id TEXT NOT NULL,
+               family TEXT NOT NULL,
+               tf TEXT NOT NULL,
+               side INTEGER NOT NULL,
+               decision_ns INTEGER NOT NULL,
+               entry_ns INTEGER NOT NULL,
+               exit_ns INTEGER NOT NULL,
+               entry_price REAL,
+               exit_price REAL,
+               stop REAL,
+               cost_per_oz REAL,
+               r_net REAL,
+               censored INTEGER NOT NULL CHECK (censored IN (0, 1)),
+               snapshot_ref TEXT,
+               quarantine TEXT,
+               recorded_ns INTEGER NOT NULL
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS exploration_obs_arm ON exploration_obs(arm_id, exit_ns)",
+        """CREATE TABLE IF NOT EXISTS exploration_weights (
+               run_ns INTEGER NOT NULL,
+               arm_id TEXT NOT NULL,
+               weight REAL NOT NULL CHECK (weight >= 0 AND weight <= 1),
+               detail TEXT NOT NULL CHECK (json_valid(detail)),
+               PRIMARY KEY (run_ns, arm_id)
+           ) STRICT""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (
