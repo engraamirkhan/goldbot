@@ -17,19 +17,20 @@ and the arm's config hash (E2) is recorded in the same commit. A placeholder sti
   never assumed). Sub-caps: scalp <= 10 open, intraday <= 7, swing <= 2 (sum 19). Program-doc concurrency figures
   (scalp 15, intraday 12, swing 4) are superseded.
 
-## Sub-budgets on `icm-probe` (H-61, tighten-only layers before the RiskGate; RiskGate unchanged)
-| Style | Daily £ ceiling (sub-budget) | Max open | Per-trade loss cap |
+## Sub-budgets on `icm-probe` (H-61; ADR 0043 governs: CFO decision 2026-10-25, supersedes this section's earlier draft)
+Tighten-only layers before the RiskGate; RiskGate unchanged. Each pot counts today's realised loss plus open risk.
+| Pot | Daily £ | Max open | Per-trade loss cap |
 |---|---|---|---|
-| Scalp (S arms, P0) | 70 | 10 | <= £6.50 at 0.01 lot (native stop; PD decision 2026-10-25 on arm spec F1: £3 skipped most S1–S4) |
-| Intraday (I arms, M mirrors) | 60 | 7 | <= £45 (existing `max_loss`) |
-| Swing (W arms) | 110 | 2 | arm's native stop £38-110, see below |
-- Ceilings are limits, not targets; their sum (240) exceeds the host's £198, so **the host's £198 binds** and the
-  RiskGate's £220 daily limit, weekly 6%, streak, SIZE_DOWN and HALTED are untouched. Exits are never gated.
-- **Swing reserve:** a swing entry is taken only if remaining host allowance >= its stop in £ + £30 (so one full
-  swing stop never exhausts the day for scalp/intraday risk accounting). Combined open stop risk of both swing slots
-  <= £150. Swing P&L counts against the host allowance like any other.
-- **Swing per-trade cap:** stops £38-110 at 0.01 lot breach the current £45 `max_loss`. The swing arms' per-trade cap
-  is raised **only to what their native stop needs and never above £110 (the RiskGate 1% per-trade hard limit)**.
+| Scheduled cost probes | 15 | 1 | $3 stop (unchanged) |
+| Mirror probes | 45 | (in host cap) | <= £45 (`max_loss`) |
+| Scalp (S arms) | 50 | (in host cap) | <= £6.50 at 0.01 lot (native stop; arm spec F1) |
+| Intraday (I arms) | 48 | (in host cap) | <= £45 |
+| Swing (W arms) | 40 | 1 | <= £40 |
+- Pots sum to the host's £198 (0.9 × £220); host max open 18 (notional cap ≈19). Random-control arms get fixed
+  shares within their pot. Exits are never gated.
+- Swing arms whose native stop exceeds £40 at 0.01 lot (W1B tsmom 1d ≈ £99) are skipped (`native_stop_above_cap`)
+  and wait for a larger demo balance; they are counted in K regardless.
+- Drawdown: −6% of icm-probe warns; −8% pauses every arm except scheduled cost probes until the rotation in ADR 0043.
   Scalp and intraday per-trade caps stay as above. The change is a config on `icm-probe` for W arms only; the
   architect and trading-safety-reviewer sign it off before the first W fill. A W candidate whose stop at 0.01 lot
   exceeds £110 is skipped and logged (reason `stop_gt_gate`), never resized or widened.
