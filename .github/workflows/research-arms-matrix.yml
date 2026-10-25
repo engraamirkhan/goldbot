@@ -40,12 +40,19 @@ jobs:
         name: validate the arms and the cost table, list the matrix
         env:
           ARMS_INPUT: ${{ inputs.arms }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # fail once here, not in every cell: the tier-1 blackout needs the calendar-v1 release (data-us-calendar, which
+          # needs the FRED_API_KEY secret). Never run without the blackout.
           python - <<'PY'
           import json, os
           from pathlib import Path
+          from goldbot.data.release import sync_release_us_calendar
           from goldbot.research import arms as A
+          if sync_release_us_calendar(raw_dir=Path("raw-calendar")).empty:
+              raise SystemExit("release calendar-v1 is missing or empty: run data-us-calendar (needs FRED_API_KEY); "
+                               "the matrix never runs without the tier-1 blackout")
           A.load_costs(Path("config/arm_costs.yaml"))
           ids = A.runnable_ids(Path("config/exploration_arms.yaml"))   # every config_hash is checked on load
           want = [x.strip() for x in os.environ.get("ARMS_INPUT", "").split(",") if x.strip()]

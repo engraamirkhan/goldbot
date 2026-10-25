@@ -107,3 +107,25 @@ def test_breakout_arm_enters_at_the_next_open_not_the_close(b1: pd.DataFrame) ->
     decision_close = mid_close.reindex(pd.DatetimeIndex(trades["ts_utc"])).to_numpy()
     assert not np.allclose(trades["entry"].to_numpy(), decision_close)         # the close is not the fill
     assert np.allclose(trades["entry"].to_numpy(), _mid_open(b1, trades["entry_ts"]))
+
+
+def _write_calendar(folder: Path) -> None:
+    from goldbot.data.us_calendar import COLUMNS
+    ev = pd.Timestamp("2025-03-07 13:30", tz="UTC")
+    row = {"event_id": "nfp-2025-03", "event_type": "NFP", "tier": 1, "release_id": "x", "event_utc": ev,
+           "status": "scheduled", "available_utc": ev - pd.Timedelta(days=30), "ts_utc": ev - pd.Timedelta(days=30),
+           "vintage": "", "source": "test"}
+    folder.mkdir(parents=True)
+    pd.DataFrame([row], columns=list(COLUMNS)).to_parquet(folder / "us_calendar.parquet")
+
+
+def test_blackout_loads_from_the_fetched_calendar_layout(tmp_path: Path) -> None:
+    """raw-calendar/us_calendar.parquet, the layout `fetch_data_release.py --us-calendar` leaves, gives blackout windows."""
+    _write_calendar(tmp_path / "raw-calendar")
+    lo, hi = rab.load_blackout(tmp_path / "raw-calendar")
+    assert len(lo) == 1 and hi[0] - lo[0] == pd.Timedelta(minutes=45).value
+
+
+def test_missing_calendar_fails_loudly_and_says_what_to_run(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="calendar-v1"):
+        rab.load_blackout(tmp_path / "raw-calendar")
