@@ -1,19 +1,22 @@
 name: data-us-calendar
-# Builds the point-in-time US economic calendar, 2010 onwards: tier 1 (CPI, NFP, PCE from FRED release dates; FOMC
-# statements and press conferences from the Federal Reserve Board's meeting calendars) and tier 2 (PPI, retail sales,
-# GDP, JOLTS, jobless claims from FRED; FOMC minutes from the Fed calendars; ISM manufacturing/services by rule), and
-# publishes one Parquet, us_calendar.parquet, on the rolling release tag `calendar-v1` (Claude sandboxes cannot reach
-# FRED or federalreserve.gov; runners can). Every row carries tier, event_utc (DST-correct from New York time), status,
-# source and a conservative available_utc (goldbot/data/us_calendar.py; sources and licence in
-# docs/decisions/0008-us-calendar-source.md). Needs the repo secret FRED_API_KEY (free key from
-# fred.stlouisfed.org; the owner adds it in Settings -> Secrets; the script never prints it). The previously published
-# file is kept as is; only new events, late stamps and cancellations are added. Only a release or asset that is
-# confirmed missing counts as a first run; any other error fetching the previous file fails the run, and the script
-# refuses (exit 2, no output) a frame that would drop published rows, so --clobber never replaces history. Research
-# (scripts/research_pass.py --us-calendar) and scripts/fetch_data_release.py --us-calendar load it.
-# The step summary carries a per-type, per-year count table, quarantined releases and refused types; no trial
-# cites the calendar features until a quant review of the first run's table.
-# Cost: about 1-2 runner-minutes a week (16 small FRED API calls, 13 Fed pages); the asset is well under 1 MB.
+# Builds the point-in-time US economic calendar, 2010 onwards: tier 1 (CPI, NFP, PCE release dates; FOMC statements
+# and press conferences from the Federal Reserve Board's meeting calendars) and tier 2 (PPI, retail sales, GDP, JOLTS,
+# jobless claims release dates; FOMC minutes from the Fed calendars; ISM manufacturing/services by rule), and publishes
+# one Parquet, us_calendar.parquet, on the rolling release tag `calendar-v1`. Every row carries tier, event_utc
+# (DST-correct from New York time), status, source and a conservative available_utc (goldbot/data/us_calendar.py;
+# sources and licence in docs/decisions/0008-us-calendar-source.md and 0044-keyless-us-calendar.md).
+# Release dates: from the FRED API when the repo secret FRED_API_KEY is set (never printed); otherwise KEYLESS from the
+# St. Louis Fed's public pages (ALFRED release-date files for history + the FRED release calendar for this year and
+# next; goldbot/data/us_calendar_keyless.py). Both serve the same ALFRED dates, so either path merges into the same
+# file. No secret is needed; the run never skips. The previously published file is kept as is; only new events, late
+# stamps and cancellations are added. Only a release or asset that is confirmed missing counts as a first run; any
+# other error fetching the previous file fails the run, and the script refuses (exit 2, no output) a frame that would
+# drop published rows, so --clobber never replaces history. Research (scripts/research_pass.py --us-calendar),
+# scripts/run_arm_backtest.py (research-arms-matrix) and scripts/fetch_data_release.py --us-calendar load it.
+# The step summary carries the source used, a per-type, per-year count table, quarantined releases, time flags and
+# refused types; no trial cites the calendar features until a quant review of the first run's table.
+# Cost: about 2-3 runner-minutes a week (keyless: 24 requests spaced 2 s apart per robots.txt crawl-delay, plus 13 Fed
+# pages; API: 16 small calls); the asset is well under 1 MB. Idempotent: a rerun adds nothing.
 on:
   workflow_dispatch:
   schedule:
@@ -23,31 +26,7 @@ concurrency:
   group: data-us-calendar   # one publisher at a time for calendar-v1
   cancel-in-progress: false
 jobs:
-  # Without the FRED_API_KEY secret the run is skipped, not failed: a warning annotation and the step summary name
-  # the missing secret, the published calendar-v1 file stays as is, and no `ci` issue is opened. Owner step: add
-  # the repo secret FRED_API_KEY. Cost of the check: about 1 billed runner-minute a week.
-  key-check:
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    permissions: {}
-    outputs:
-      present: ${{ steps.key.outputs.present }}
-    steps:
-      - id: key
-        env:
-          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
-        run: |
-          if [ -n "$FRED_API_KEY" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            msg="FRED_API_KEY repo secret is not set: data-us-calendar skipped, calendar-v1 left as published. Owner: add the free key from fred.stlouisfed.org in Settings -> Secrets and variables -> Actions."
-            echo "::warning::$msg"
-            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          fi
   fetch:
-    needs: key-check
-    if: needs.key-check.outputs.present == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -81,13 +60,13 @@ jobs:
           fi
           gh release download calendar-v1 -p us_calendar.parquet -D prev
           test -s prev/us_calendar.parquet
-      - name: build the calendar
+      - name: build the calendar (FRED API with the key, keyless without it)
         env:
-          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}   # optional: unset -> --source auto uses the keyless pages
           FIRST_RUN: ${{ steps.prev.outputs.first_run }}
         run: |
           set -o pipefail
-          args=(--out us_calendar.parquet --existing prev/us_calendar.parquet)
+          args=(--out us_calendar.parquet --existing prev/us_calendar.parquet --source auto)
           if [ "$FIRST_RUN" = "true" ]; then args+=(--first-run); fi
           python scripts/us_calendar_data.py "${args[@]}" 2>&1 | tee report.txt
       - name: publish to release calendar-v1
@@ -98,7 +77,7 @@ jobs:
           [ -f us_calendar.parquet ] || exit 0
           # same retry pattern as data-positioning (create/upload can race or hit transient API errors)
           for i in 1 2 3 4 5; do
-            { gh release view calendar-v1 >/dev/null 2>&1 || gh release create calendar-v1 --title "US economic calendar (rolling)" --notes "Point-in-time US release calendar (tiers 1 and 2) with available_utc, built by the data-us-calendar workflow. Uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis." --latest=false; } &&
+            { gh release view calendar-v1 >/dev/null 2>&1 || gh release create calendar-v1 --title "US economic calendar (rolling)" --notes "Point-in-time US release calendar (tiers 1 and 2) with available_utc, built by the data-us-calendar workflow from FRED/ALFRED release dates and the Federal Reserve Board's FOMC calendars. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis." --latest=false; } &&
             gh release upload calendar-v1 us_calendar.parquet --clobber && exit 0
             sleep $((i * 15))
           done

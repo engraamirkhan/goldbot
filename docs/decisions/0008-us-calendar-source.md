@@ -1,6 +1,8 @@
 # 0008: Point-in-time US calendar (tiers 1 and 2) from FRED release dates and the Fed's FOMC calendars
 
 Status: accepted (data engineer, 2026-10-10; revised 2026-10-11 after the quant, data and security review of 514d338).
+Amended by ADR 0044 (2026-10-25): without `FRED_API_KEY` the same release dates come keyless from ALFRED and the FRED
+release calendar, and hand-checked revision-only ALFRED dates (`REVISION_ONLY`) are dropped before the quarantine.
 The tier-2 blackout policy that would use it (BACKLOG 18, playbook G-3) is an owner decision and is not part of this
 record.
 
