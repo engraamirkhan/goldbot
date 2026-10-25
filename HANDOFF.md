@@ -5,6 +5,7 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- Charts off for now (owner 2026-10-25: focus on the trading system). The dashboard has no Chart destination (six: Home, Trades, Limits, Research, Feeds, Settings; the phone bar is Home, Trades, Limits, Research, More); `#/chart` opens Home. The screens (Chart, Mt5Chart, TradingViewCard) and `/api/chart/*` stay in the code for later. On the servers the MT5 screenshot timers are disabled: `goldbot-chart-fetch.timer` (brain) and `goldbot-chart-capture.timer` (MT5 box); re-enable with RUNBOOK "MT5 terminal chart on the dashboard". TradingView data pulls (tv-pull, indicators for research) are unchanged.
 - H-52 evidence start now cuts every shadow-evidence input that feeds a decision (evaluator finding, MEDIUM). Trades
   OPENED (signal bar open) before 2026-10-19 13:49 UTC are quarantined in: the attribution report (`trade_rows` /
   `build_report(evidence_start=)`, counted in its notes), the research director's attribution cells (budget tilt, the
