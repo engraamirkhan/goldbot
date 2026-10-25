@@ -446,7 +446,10 @@ def after_close(eng: Engine, close_ts: pd.Timestamp) -> None:
         absorb(eng)
         h = eng.history
         if h.gaps and (h.last_fill is None or close_ts - h.last_fill >= REFILL_EVERY):
-            reload_release(eng, close_ts)
+            try:
+                reload_release(eng, close_ts)
+            except Exception:                         # noqa: BLE001 - a faulty store never stops the broker fill
+                log.exception("history reload from the store failed; the broker fill still runs")
             start_fill(eng, close_ts)
         if h.writer is not None:
             h.backfill["dropped"] = h.writer.dropped
