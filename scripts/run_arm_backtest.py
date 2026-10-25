@@ -6,8 +6,8 @@ Usage: python scripts/run_arm_backtest.py --arm <id> --block <start>:<end> [--ba
 
 Nothing at or after 2025-10-01 is read (goldbot.research.arms: files past 2025 are never opened, the bars are cut and the
 cut is asserted). Rules are the live rule code (goldbot.specialists) or the ARM-SPEC's written rules
-(goldbot.research.arm_rules). Barriers are searched on 1m bars (`triple_barrier_1m`: entry at the decision bar's close,
-stop first when both fall in one minute) on mid prices; R is the candidate's own stop distance; costs are the frozen cost
+(goldbot.research.arm_rules). Barriers are searched on 1m bars (`triple_barrier_next_open_1m`: entry at the OPEN of the first 1m
+bar after the decision close, stop first when both fall in one minute) on mid prices; R is the candidate's own stop distance; costs are the frozen cost
 model (config/arm_costs.yaml: $0.23 round trip, plus swap per rollover) and net R is reported with a stop-exit overshoot
 of $0 and of $0.70."""
 from __future__ import annotations
@@ -27,7 +27,7 @@ from goldbot.data.release import read_bar_files, read_us_calendar_files  # noqa:
 from goldbot.data.resample import resample_bars  # noqa: E402
 from goldbot.data.timeutil import utc_index  # noqa: E402
 from goldbot.labels import SwapSpec  # noqa: E402
-from goldbot.labels.triple_barrier import BarrierSpec, triple_barrier_1m  # noqa: E402
+from goldbot.labels.triple_barrier import BarrierSpec, triple_barrier_next_open_1m  # noqa: E402
 from goldbot.research import arm_rules as R  # noqa: E402
 from goldbot.research import arms as A  # noqa: E402
 
@@ -85,7 +85,7 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
     if n_cands:
         t = close[cands["idx"].to_numpy()]
         cands = cands[np.asarray((t >= start) & (t < end + pd.Timedelta(days=1)))].reset_index(drop=True)
-    cols = ["ts_utc", "ts_exit", "side", "entry", "risk_usd", "move_usd", "gross_r", "net_r", "net_r_os", "barrier_hit"]
+    cols = ["ts_utc", "entry_ts", "ts_exit", "side", "entry", "risk_usd", "move_usd", "gross_r", "net_r", "net_r_os", "barrier_hit"]
     trades = pd.DataFrame(columns=cols)
     if len(cands):
         risk_arr = np.full(len(bars), np.nan)
@@ -93,7 +93,7 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
         risk = pd.Series(risk_arr, index=bars.index)
         sig = cands.assign(target_atr=cands["target_r"])[["idx", "side", "max_bars", "target_atr"]]
         spec = BarrierSpec(target_atr=1.0, stop_atr=1.0, max_bars=1, name=arm.id)
-        lab = triple_barrier_1m(mid_priced(bars), mid_priced(b1), sig, spec, risk, swap=SwapSpec.shipped())
+        lab = triple_barrier_next_open_1m(mid_priced(bars), mid_priced(b1), sig, spec, risk, swap=SwapSpec.shipped())
         lab = limit_open(lab, arm.max_open)
         if len(lab):
             idx = lab["idx"].to_numpy().astype(int)
@@ -103,7 +103,7 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
             stop = (lab["barrier_hit"] == "stop").to_numpy()
             os_hi = max(costs.overshoot_scenarios_usd)
             trades = pd.DataFrame({
-                "ts_utc": close[idx], "ts_exit": utc_index(lab["ts_exit"]), "side": lab["side"].to_numpy(),
+                "ts_utc": close[idx], "entry_ts": utc_index(lab["entry_ts"]), "ts_exit": utc_index(lab["ts_exit"]), "side": lab["side"].to_numpy(),
                 "entry": entry, "risk_usd": r_usd, "move_usd": move, "gross_r": move / r_usd,
                 "net_r": A.net_r(move, r_usd, stop, costs, min(costs.overshoot_scenarios_usd)),
                 "net_r_os": A.net_r(move, r_usd, stop, costs, os_hi), "barrier_hit": lab["barrier_hit"].to_numpy()})
@@ -119,7 +119,7 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
                "round_trip_usd": costs.round_trip_usd, "overshoot_scenarios_usd": list(costs.overshoot_scenarios_usd),
                "bars_from": str(utc_index(b1["ts_utc"]).min()), "bars_to": str(utc_index(b1["ts_utc"]).max()),
                "holdout_from": str(A.HOLDOUT_FROM.date()), "blackout_windows": int(len(lo)),
-               "entry_note": "entry at the decision bar's close (mid), not the next bar's open"}
+               "entry_note": "entry at the open (mid) of the first 1m bar at or after the decision close; barriers searched from that bar"}
     return trades, summary
 
 

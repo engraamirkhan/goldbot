@@ -80,3 +80,30 @@ def test_run_arm_asserts_on_holdout_bars() -> None:
 
 def test_warmup_is_at_least_400_days() -> None:
     assert rab.WARMUP_DAYS >= 400
+
+
+def _mid_open(b1: pd.DataFrame, ts: pd.Series) -> np.ndarray:
+    m = b1.assign(_t=pd.to_datetime(b1["ts_utc"], utc=True)).set_index("_t")
+    return ((m["bid_open"] + m["ask_open"]) / 2).reindex(pd.DatetimeIndex(ts)).to_numpy()
+
+
+def test_entry_is_after_the_decision_close_at_the_next_1m_open(b1: pd.DataFrame) -> None:
+    for arm_id in ("S0", "I0", "S2A"):
+        trades, _ = rab.run_arm(b1, ARMS[arm_id], START, END, COSTS)
+        assert len(trades) > 5
+        # the fill minute starts at or after the decision bar's close, and the first minute searched is that one
+        assert (pd.DatetimeIndex(trades["entry_ts"]) >= pd.DatetimeIndex(trades["ts_utc"])).all()
+        assert (pd.DatetimeIndex(trades["ts_exit"]) >= pd.DatetimeIndex(trades["entry_ts"])).all()
+        assert trades["entry"].to_numpy() == pytest.approx(_mid_open(b1, trades["entry_ts"]))
+
+
+def test_breakout_arm_enters_at_the_next_open_not_the_close(b1: pd.DataFrame) -> None:
+    b1 = b1.copy()
+    for side in ("bid", "ask"):
+        b1[f"{side}_open"] = b1[f"{side}_open"] + 0.5        # every minute opens 0.5 away from the previous close
+    trades, _ = rab.run_arm(b1, ARMS["S2A"], START, END, COSTS)
+    bars = rab.resample_bars(b1, "5m")
+    mid_close = ((bars["bid_close"] + bars["ask_close"]) / 2).set_axis(pd.DatetimeIndex(bars["visible_at"]))
+    decision_close = mid_close.reindex(pd.DatetimeIndex(trades["ts_utc"])).to_numpy()
+    assert not np.allclose(trades["entry"].to_numpy(), decision_close)         # the close is not the fill
+    assert np.allclose(trades["entry"].to_numpy(), _mid_open(b1, trades["entry_ts"]))
