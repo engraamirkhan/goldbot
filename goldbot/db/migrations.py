@@ -310,6 +310,20 @@ AUX: tuple[Migration, ...] = (
            ) STRICT""",
         "CREATE INDEX IF NOT EXISTS cost_probes_account ON cost_probes(account_id, ts_ns)",
     )),
+    # additive (architect trace and quant review 2026-10-25): mirror probes skipped because the strategy's own stop
+    # loses more than the probe ceiling at the minimum lot (goldbot/engine/cost_probe.py `SkipRecord`), one row per
+    # attempt keyed by its would-be client order id. No order, so never in cost_probes (which every fill reader
+    # reads); read by the dynamic probe count and the skip counts only. A release without it never reads it
+    Migration(version=15, name="cost_probe_skips", additive=True, statements=(
+        f"""CREATE TABLE IF NOT EXISTS cost_probe_skips (
+               client_order_id TEXT PRIMARY KEY,
+               account_id TEXT NOT NULL,
+               agent_id TEXT NOT NULL,
+               ts_ns INTEGER NOT NULL,
+               {_BODY}
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS cost_probe_skips_account ON cost_probe_skips(account_id, ts_ns)",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

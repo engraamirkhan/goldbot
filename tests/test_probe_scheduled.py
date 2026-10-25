@@ -18,6 +18,7 @@ from goldbot.data.synthetic import synthetic_ticks
 from goldbot.engine import ConstantModel, Engine, EngineConfig, cost_probe
 from goldbot.execution.broker import AccountInfo, Tick
 from goldbot.execution.paper import PaperBroker
+from goldbot.labels.triple_barrier import BarrierSpec
 from goldbot.ops import accounts as acc_mod
 from goldbot.ops.gates_phase import load_closed_trades
 from goldbot.risk import RiskLimits
@@ -32,6 +33,12 @@ ON = acc_mod.ScheduledProbe(enabled=True)
 
 
 class _Long(SessionOpenSpecialist):
+    """Long at every close; its 0.2 ATR stop (~£3 at 0.01 lot here) fits the £4 probe cap, so it is mirrored."""
+
+    @property
+    def label_spec(self) -> BarrierSpec:
+        return super().label_spec.model_copy(update={"stop_atr": 0.2})
+
     def candidates(self, mid_bars: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame({"idx": [len(mid_bars) - 1], "side": [1]})
 
@@ -467,12 +474,13 @@ def test_no_strategy_family_shares_the_scheduled_probe_magic():
 
 
 # ------------------------------------------------------------------------------------------------ probe_only volume (E)
-def test_on_a_probe_only_account_a_mirror_probe_is_held_at_most_four_of_its_agents_bars(tmp_path):
+def test_on_a_probe_only_account_a_mirror_probe_keeps_its_agents_own_time_exit(tmp_path):
+    """Architect trace 2026-10-25: a probe holds its strategy's own time barrier (the former 4-bar cap is gone)."""
     eng, pb, tick = _engine(tmp_path, shadow=True, probe_only=True, scheduled=acc_mod.ScheduledProbe())
     eng.on_bar_close(CUT, tick)
     [tr] = eng.open.values()
-    assert tr.max_bars == 5                                  # min(16, 4) + 1 bars of 15m, as `_base_bars` counts
-    assert next(iter(eng._orders.values())).max_bars == 5    # the order row too: a restart keeps it
+    assert tr.max_bars == 17                                 # 16 + 1 bars of 15m, as `_base_bars` counts
+    assert next(iter(eng._orders.values())).max_bars == 17   # the order row too: a restart keeps it
 
 
 def test_on_a_shared_account_a_mirror_probe_keeps_its_agents_time_exit(tmp_path):

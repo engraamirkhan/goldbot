@@ -120,8 +120,9 @@ class CostProbe(FrozenRecord):
     budget_share: float = Field(0.2, gt=0, le=1)
     # ADR 0037 amendments (rulings 2026-10-19): at most this many probe positions open at once (amendment 3 allows 4)
     max_open: int = Field(2, ge=1, le=4)
-    # each probe's stop is clamped so its loss at the stop (the broker's loss_per_lot at 0.01 lot) is at most this, in
-    # the account currency (icm-demo: £4); a probe whose loss cannot be computed is refused
+    # the most one probe may lose at its strategy's own stop (the broker's loss_per_lot at 0.01 lot), in the account
+    # currency (icm-demo: £4); a wider own stop skips the probe (never clamped, architect trace 2026-10-25), and a
+    # probe whose loss cannot be computed is refused
     max_loss: float = Field(4.0, gt=0)
     # the measured-cost protocol's scheduled market probes (M1); off by default
     scheduled: ScheduledProbe = Field(default_factory=ScheduledProbe)

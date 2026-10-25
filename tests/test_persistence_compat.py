@@ -292,6 +292,21 @@ def case_cost_probe(tmp: Path) -> None:
     assert cost_probe.probes(tmp, "icm-demo") == [rec]
 
 
+def case_cost_probe_skip(tmp: Path) -> None:
+    """aux.db cost_probe_skips row (a mirror probe skipped at its own stop) with a field from a newer release."""
+    from goldbot.db import Database
+    db = Database.open(tmp, "aux")
+    rec = cost_probe.SkipRecord(client_order_id="cp-1-a", account_id="icm-demo", agent_id="a", version="a-v2",
+                                timeframe="4h", side=1, taken=True, signal_utc=T0, atr_usd=30.0, native_stop_loss=40.0,
+                                probe_max_loss=4.0)
+    row = cost_probe.SKIPS.row(rec)
+    row["body"] = json.dumps(_newer(json.loads(row["body"])))
+    with db.write() as conn:
+        conn.execute(f"INSERT INTO cost_probe_skips ({', '.join(row)}) VALUES ({', '.join(':' + c for c in row)})",
+                     row)
+    assert cost_probe.skips(tmp, "icm-demo") == [rec]
+
+
 def case_hwm_confirmation(tmp: Path) -> None:
     """core.db high-water-mark confirmation row (BACKLOG 54, ADR 0018) with a field from a newer release."""
     conf = hwm.HwmConfirmation(account_id="icm-demo", mark=10_000.0, mark_utc=T0, pending_balance=10_500.0,
@@ -381,7 +396,7 @@ def case_attribution_report(tmp: Path) -> None:
 CASES = [case_closed_trade, case_closed_trade_from_before_ret_basis, case_closed_trade_price_return_without_ret_basis,
          case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
          case_shadow_stats, case_model_registry_and_backtest, case_population, case_research_plan, case_costs,
-         case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_cost_probe, case_hwm_confirmation, case_limits_profile, case_risk_term,
+         case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_cost_probe, case_cost_probe_skip, case_hwm_confirmation, case_limits_profile, case_risk_term,
          case_limits_state,
          case_trial_dsr_inputs, case_trial_day_summed_dsr, case_attribution_report, case_tick_index]
 
@@ -422,7 +437,7 @@ def test_every_persisted_record_model_has_a_compat_case():
                DigestState, OutboxState, crossfeed.ReconcileReport, ledger.LedgerReport,
                ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation, limits_profile.LimitsState,
                limits_profile.LimitsChange, adaptive.AdaptiveState, adaptive.RiskTerm, DsrInputs, DaySummedDsr,
-               AttributionReport, TickIndex, cost_probe.ProbeRecord,
+               AttributionReport, TickIndex, cost_probe.ProbeRecord, cost_probe.SkipRecord,
                # the engine's orders file: tests/test_engine_safety.py::
                # test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote
                SentOrder, OpenTrade, PendingClose,
