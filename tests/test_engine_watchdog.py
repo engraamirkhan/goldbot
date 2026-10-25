@@ -584,6 +584,8 @@ def test_a_bridge_that_cannot_attach_restarts_the_terminal_once_it_has_run_10_mi
     assert rc == 0 and _restarted(calls) == ([TERMINAL_UNIT] if restarts else []) and "curl " not in calls, calls
     if restarts:
         assert "restarted" in out and "times without settling" in out
+    # incident 2026-10-22: an attach loop with no terminal unit (hand-started terminal) is named in the journal
+    assert ("is not active; not acting" in out) == (kw.get("term_active") is False), out
 
 
 # ---- review follow-up (code MEDIUM): only restarts since the bridge last settled count, not NRestarts since boot

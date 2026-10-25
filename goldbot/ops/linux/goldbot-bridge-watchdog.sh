@@ -125,6 +125,11 @@ if [ "$bridge_up" -lt "$GRACE_S" ]; then                     # just (re)started:
   if [ "$restarts" -ge "$ATTACH_RESTARTS" ] && [ "$term_up" -ge "$TERMINAL_GRACE_S" ]; then
     restart_terminal "$bridge restarted $restarts times without settling while $term has run $term_up s"
   fi
+  # incident 2026-10-22: the box ran a hand-started terminal, not $term, so this rule could never fire and the bridge
+  # crash-looped for 23 h. Say so every run (states only) so the journal names the cause; never act on it.
+  if [ "$restarts" -ge "$ATTACH_RESTARTS" ] && [ "$term_up" -lt 0 ]; then
+    log "$bridge restarted $restarts times without settling and $term is not active; not acting (RUNBOOK 'Attended MT5 box upgrade')"
+  fi
   exit 0
 fi
 [ -z "$total" ] || set_baseline "$total"                     # settled: earlier restarts no longer count

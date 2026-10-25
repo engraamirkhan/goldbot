@@ -148,6 +148,9 @@ sudo -u goldbot cat /var/lib/goldbot/.ssh/id_ed25519.pub
 mkdir -p /etc/goldbot
 echo brain > /etc/goldbot/role
 install -m 755 -o root -g root "$OPS/goldbot-deploy.sh" /usr/local/sbin/goldbot-deploy
+# needrestart (run by unattended-upgrades) never restarts a goldbot unit in market hours (incident 2026-10-22)
+install -d -m 755 -o root -g root /etc/needrestart/conf.d
+install -m 644 -o root -g root "$OPS/needrestart/goldbot.conf" /etc/needrestart/conf.d/goldbot.conf
 install -m 644 "$OPS/systemd/goldbot-deploy.service" "$OPS/systemd/goldbot-deploy.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable goldbot-deploy.timer
