@@ -36,7 +36,7 @@ from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
 from goldbot.data.resample import IncrementalResampler, mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
-from goldbot.engine import auto_entry, cost_probe, history, unconfirmed
+from goldbot.engine import auto_entry, capital_flows, cost_probe, history, unconfirmed
 from goldbot.engine.cost_probe import ScheduledProbe
 from goldbot.engine.limits_apply import EngineLimits, daily_allowance, min_lot_risk, published_limits
 from goldbot.engine.shadow import ShadowBook, ShadowTrade, minutes_of, record_candidate
@@ -111,7 +111,6 @@ from goldbot.telegram.entry_text import account_name
 log = logging.getLogger("goldbot.engine")
 #: ADR 0042: the capital-flow anchor trails the read by at most this: a balance operation booked up to a day late (a
 #: skewed deal clock, a terminal catching up) is still seen, and the history read per balance change stays a day long
-FLOW_LOOKBACK = pd.Timedelta(days=1)
 LOT_TERMS_WARN_S = 600.0     # the account view's symbol-info warning, at most this often
 APPROVED_RISK_TOLERANCE = 1.02   # ADR 0009: the risk sent may exceed the approved card's by 2% (fx moves), no more
 # MT5 trade retcodes that mean the market will not take an order now (10017 TRADE_DISABLED, 10018 MARKET_CLOSED): a
@@ -1913,7 +1912,7 @@ class Engine:
         if self._ladder["lot_terms"] is None:
             self._ladder["lot_terms"] = self._lot_terms()
         self._roll_risk_period(tick.ts_utc)
-        self._update_hwm(acc, self._now(tick))
+        capital_flows.update_hwm(self, acc, self._now(tick))
         if st.day_start_equity == 0:            # normally set by the risk-period roll on the first tick
             st.day_start_equity = acc.balance
         if st.week_start_equity == 0:
@@ -2005,121 +2004,6 @@ class Engine:
         if conf is None or conf.mark != self.state.balance_closed_hwm:
             return hwm.HwmConfirmation(account_id=self.cfg.account_id, mark=self.state.balance_closed_hwm)
         return conf.fresh(self.clock()) if self.cfg.live_clock else conf
-
-    def _update_hwm(self, acc: AccountInfo, now: pd.Timestamp) -> None:
-        """BACKLOG 54 (ADR 0018): "a rise in balance_closed_hwm is applied only once confirmed: by the deal history
-        (closed deals and balance operations since the last mark account for the rise within a tolerance), or by a
-        second balance read that agrees; one disagreeing read never raises it, two agreeing reads always do". A
-        deposit explains a rise and raises the mark. The mark is never lowered here (only /rearm resets it). An
-        unconfirmed rise is read again on the next tick; a refused one is logged and recorded. The first read of an
-        engine that has no mark yet sets it (and its deal-history anchor). ADR 0042: a deposit or withdrawal is a
-        capital flow, applied first (`_apply_capital_flows`), never a rise."""
-        st = self.state
-        if st.balance_closed_hwm == 0:
-            st.balance_closed_hwm = acc.balance
-            self._set_hwm(hwm.HwmConfirmation(account_id=self.cfg.account_id, mark=acc.balance, mark_utc=now))
-            self._flows_through = self._flows_through or now      # flows before this read are in the mark and starts
-            return
-        if self._hwm.mark != st.balance_closed_hwm:          # the owner's re-arm reset the mark: candidate and anchor void
-            self._hwm = hwm.HwmConfirmation(account_id=self.cfg.account_id, mark=st.balance_closed_hwm)
-        # a broker class may declare its balance reads exact (the paper broker's own ledger): looked up on the class,
-        # so a remote broker's attribute pass-through can never answer it
-        exact = getattr(type(self.broker), "balance_exact", False) is True
-        read: dict[pd.Timestamp, pd.DataFrame] = {}
-
-        def deals(since: pd.Timestamp) -> pd.DataFrame:      # one deal-history read per anchor per account read
-            if since not in read:
-                read[since] = self.broker.deals_since(since)
-            return read[since]
-        if not exact:                                        # the paper broker has no deposits
-            self._apply_capital_flows(acc, now, deals)
-        mark = st.balance_closed_hwm
-        s = hwm.step(self._hwm, mark, acc.balance, now, self.gate.limits.hwm_rise_tolerance, deals, exact=exact)
-        if s.expired is not None:
-            log.warning("high-water mark not raised: balance read %.2f expired unconfirmed (older than %s)",
-                        s.expired, hwm.CANDIDATE_MAX_AGE)
-            self.decisions.append({"ts": time.time(), "action": "hwm_rise_refused", "candidate": s.expired,
-                                   "balance": acc.balance, "mark": mark, "reason": "expired"})
-        if s.dropped is not None:
-            log.warning("high-water mark not raised: balance read %.2f was not confirmed (next read %.2f, mark %.2f)",
-                        s.dropped, acc.balance, mark)
-            self.decisions.append({"ts": time.time(), "action": "hwm_rise_refused", "candidate": s.dropped,
-                                   "balance": acc.balance, "mark": mark})
-        if s.outcome == "pending":
-            log.warning("balance %.2f is above the high-water mark %.2f and is not confirmed by the deal history; "
-                        "re-read next tick", acc.balance, mark)
-            self.decisions.append({"ts": time.time(), "action": "hwm_rise_unconfirmed", "balance": acc.balance,
-                                   "mark": mark})
-        elif s.outcome == "raised":
-            st.balance_closed_hwm = s.mark
-            self.decisions.append({"ts": time.time(), "action": "hwm_raised", "from": mark, "to": s.mark, "by": s.by,
-                                   "deposits": s.deposits})
-            self._save_risk_state_now("the raised high-water mark")   # survives a restart at once
-        if s.outcome != "unchanged" or s.expired is not None:
-            self._set_hwm(s.conf)
-        self._reread_hwm = s.conf.pending_balance is not None
-
-    def _apply_capital_flows(self, acc: AccountInfo, now: pd.Timestamp,
-                             deals: Callable[[pd.Timestamp], pd.DataFrame]) -> None:
-        """ADR 0042 D1, D3, D4: "A deposit or withdrawal is a capital flow (MT5 DEAL_BALANCE). Never in P&L"; the mark
-        becomes max(mark + net flow, balance) (`hwm.apply_flows`, then the rise rule); "on a confirmed balance
-        operation day_start_equity and week_start_equity move by the same net flow, so the loss so far is neither
-        forgiven nor created". A start moves only for a flow stamped after it was set (a flow before the roll is in the
-        equity the roll took). The deal history is read when the balance changed since the last read of it, or while a
-        rise above the mark is unconfirmed (a deposit whose deal shows up a read late). Unreadable: nothing applied,
-        retried on the next read; a deposit then reads as profit until it is seen, a withdrawal as a loss.
-
-        Each flow is journalled (`capital_flow`: amount and kind, no identifier) and the risk state saved at once.
-        The finance ledger records the same balance operations from the broker's history (goldbot.ops.ledger RC-9,
-        kind deposit / withdrawal)."""
-        if self._flows_through is None:
-            # an older risk file (review of 14f154aa, HIGH): from the period rolls on, so a deposit the release before
-            # folded into the mark at its restart still moves the starts; apply_flows skips flows the mark holds
-            self._flows_through = self._week_reset or self._last_reset or self._hwm.mark_utc or now
-        if acc.balance == self._flow_balance and self._hwm.pending_balance is None:
-            return
-        since = self._flows_through
-        try:
-            flows = hwm.capital_flows(deals(since), since)
-        except Exception as exc:
-            log.warning("deal history unreadable for capital flows (%s); read again on the next account read",
-                        type(exc).__name__)
-            return
-        self._flow_balance = acc.balance
-        # MT5 stamps a deal when it books it: a day's margin covers a late-visible deal, never re-applies one
-        self._flows_through = max([since, now - FLOW_LOOKBACK, *(f.ts_utc for f in flows)])
-        if not flows:
-            return
-        st = self.state
-        before = st.balance_closed_hwm
-        # tighten-only on anything but a demo account: a withdrawal lowers neither the mark nor the starts there
-        lower = self.cfg.mode == "demo"
-        r = hwm.apply_flows(self._hwm, acc.balance, self.gate.limits.hwm_rise_tolerance, flows, deals, lower=lower)
-        if r.applied:
-            st.balance_closed_hwm = r.conf.mark
-            self._set_hwm(r.conf)
-        elif r.reason is not None:
-            log.warning("capital flow not applied to the high-water mark (%s): the ADR 0018 rule applies", r.reason)
-        day_set = self._last_reset
-        week_set = self._week_reset or self._last_reset
-        for f in flows:
-            # a withdrawal lowers the starts only once the deal history reconciled it, and only on a demo account
-            # (review of 14f154aa): otherwise it reads as a loss. A deposit always raises them (the strict side)
-            moves = f.amount > 0 or (lower and r.applied)
-            day = f.amount if moves and day_set is not None and f.ts_utc > day_set and st.day_start_equity > 0 else 0.0
-            week = f.amount if moves and week_set is not None and f.ts_utc > week_set and st.week_start_equity > 0 \
-                else 0.0
-            st.day_start_equity = max(0.0, st.day_start_equity + day)
-            st.week_start_equity = max(0.0, st.week_start_equity + week)
-            log.warning("capital flow %+.2f (%s): high-water mark %.2f -> %.2f, day start %+.2f, week start %+.2f",
-                        f.amount, "deposit" if f.amount > 0 else "withdrawal", before, st.balance_closed_hwm, day,
-                        week)
-            self.decisions.append({"ts": time.time(), "action": "capital_flow",
-                                   "kind": "deposit" if f.amount > 0 else "withdrawal", "amount": f.amount,
-                                   "deal_utc": f.ts_utc.isoformat(), "mark_from": before,
-                                   "mark_to": st.balance_closed_hwm, "mark_applied": r.applied,
-                                   "day_start_shift": day, "week_start_shift": week})
-        self._save_risk_state_now("the capital flow")         # survives a restart at once: never applied twice
 
     def _set_hwm(self, conf: hwm.HwmConfirmation) -> None:
         """Keep and persist the rise confirmation (core.db; a failed write is logged and only loses the candidate or
