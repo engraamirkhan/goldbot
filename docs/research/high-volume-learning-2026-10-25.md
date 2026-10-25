@@ -6,6 +6,13 @@ This is the program design. It dispatches no trial, spends no budget, reads no h
 touches no code or config. The engine work goes to the architect (section 5); the frozen rules go into the
 pre-registrations of section 4 **before** any exploration fill of an arm is read.
 
+> **Superseded on hosts and caps (PD decision and ADR 0043, 2026-10-25).** No new accounts: every arm runs on
+> `icm-probe` under pots (scalp £50/day, intraday £48, swing £40; scalp per trade £6.50, swing per trade £40 and 1
+> open; host max open 18; sub-caps scalp 10, intraday 7). Arm ids, rules and constants: `arms-2026-10-25.md`; frozen
+> rules: `prereg-2026-10-25-high-volume.md`. Graduation is one read at n = 300 per arm with a Bonferroni bar and a stop
+> rule (prereg). Where this document names `icm-scalp`, `icm-swing`, £70, £60, £110 or the old concurrency, those
+> are historical context only.
+
 ## 0. What volume buys, and what it does not (the honest premise)
 
 - **Volume buys execution truth fast; edge discovery comes from history.** At a per-trade SD of about 1 R, telling
@@ -27,12 +34,11 @@ pre-registrations of section 4 **before** any exploration fill of an arm is read
 
 ## 1. Volume plan
 
-Three probe-only learning hosts, one per style, so a swing drawdown or a scalp bug cannot stop the others' learning
-and the open-risk sum of one style cannot eat another's daily allowance. **Open 2 new IC Markets Raw GBP demo
-accounts** (free; MT5 logins are ours): `icm-scalp` and `icm-swing`, funded about £11,000 so ADR 0042's 2% =
-£220/day applies unchanged. `icm-probe` keeps intraday plus the cost probes. `icm-demo` is untouched: strategies,
+One probe-only learning host, `icm-probe` (about £11,000 demo, ADR 0042's 2% = £220/day), shared by the three styles
+through tighten-only pots (ADR 0043). No new accounts are opened (PD decision; the earlier draft's `icm-scalp` and
+`icm-swing` are dropped). `icm-demo` is untouched: strategies,
 13 shadow agents, no exploration (ADR 0036 ruling). Every arm trades at 0.01 lot with its **own native stop and
-hold** (H-59 principle), through the RiskGate, unchanged (1% cap = £110, daily £220, weekly 6%, streak, SIZE_DOWN and
+hold** (H-59 principle), through the RiskGate, unchanged (daily £220, weekly 6%, streak, SIZE_DOWN and
 HALTED). Exits are never gated.
 
 Signals/day are **design estimates to be measured by H-60 in week 1**. An arm whose measured rate differs launches
@@ -40,33 +46,32 @@ at the measured rate, not a loosened rule. £ figures assume 1 oz per 0.01 lot a
 
 | Host (style) | Arm id | TF | Rule (frozen in the prereg) | Est. trades/day | £ at stop (0.01) | Max open | Arm £/day cap |
 |---|---|---|---|---|---|---|---|
-| icm-scalp | S0 random bracket (control) | 1m | entry every 10 min 07-20 UTC, random side, stop 1 ATR1m, target 1R, 30 bars | 78 | ~1.5 | 3 | 15 |
-| icm-scalp | S1a/S1b session-VWAP 2-sigma fade | 1m | target VWAP (a) or 1R (b), stop 1 ATR1m | 2 x 8-15 | ~1.5 | 2 each | 12 each |
-| icm-scalp | S2a/S2b opening-range break, London 07:00 and NY 13:30 | 5m | range 15 min (a) / 30 min (b), stop at range mid | 2 x 2-4 | ~3 | 1 each | 10 each |
-| icm-scalp | S3a/S3b sweep-and-reclaim (sweep_absorb logic) | 5m | target 1R (a) / 2R (b) | 2 x 5-10 | ~3 | 2 each | 12 each |
-| icm-scalp | S4 owner box break+close+MFI | 5m | roster rule at 5m (refused on the 15m clock) | 3-5 | ~3 | 2 | 12 |
-| icm-scalp | S5a/S5b EMA pullback in 15m trend | 1m | stop 1.0 (a) / 1.5 (b) ATR1m, target 1.5R | 2 x 10-20 | ~1.5-2.3 | 2 each | 12 each |
-| icm-scalp | S6 meta-labelled stream (from month 2) | 1m/5m | top-decile meta p over all S candidates | 10-20 | ~2 | 2 | 15 |
+| icm-probe (scalp) | S0 random bracket (control) | 1m | entry every 10 min 07-20 UTC, random side, stop 1 ATR1m, target 1R, 30 bars | 78 | ~1.5 | 3 | 15 |
+| icm-probe (scalp) | S1a/S1b session-VWAP 2-sigma fade | 1m | target VWAP (a) or 1R (b), stop 1 ATR1m | 2 x 8-15 | ~1.5 | 2 each | 12 each |
+| icm-probe (scalp) | S2a/S2b opening-range break, London 07:00 and NY 13:30 | 5m | range 15 min (a) / 30 min (b), stop at range mid | 2 x 2-4 | ~3 | 1 each | 10 each |
+| icm-probe (scalp) | S3a/S3b sweep-and-reclaim (sweep_absorb logic) | 5m | target 1R (a) / 2R (b) | 2 x 5-10 | ~3 | 2 each | 12 each |
+| icm-probe (scalp) | S4 owner box break+close+MFI | 5m | roster rule at 5m (refused on the 15m clock) | 3-5 | ~3 | 2 | 12 |
+| icm-probe (scalp) | S5a/S5b EMA pullback in 15m trend | 1m | stop 1.0 (a) / 1.5 (b) ATR1m, target 1.5R | 2 x 10-20 | ~1.5-2.3 | 2 each | 12 each |
+| icm-probe (scalp) | S6 meta-labelled stream (from month 2) | 1m/5m | top-decile meta p over all S candidates | 10-20 | ~2 | 2 | 15 |
 | icm-probe (intraday) | P0 scheduled M1 cost probe (exists) | 1m | 30 s hold, cost only | 60-90 | <1 | 1 | 10 |
 | icm-probe | I0 random bracket (control) | 15m | 1 an hour 07-20 UTC, stop 1.5 ATR15, target 2R, 96 bars | 13 | ~9 | 6 | 40 |
 | icm-probe | M mirrors of the 13 shadow agents at own stop | 15m-1h | as today (ADR 0037 am. 4/5, H-59) | ~8 | 9-17 | 4 | 45 |
 | icm-probe | I1 tsmom 1h band p in [0.30, 0.36) as fills | 1h | the H-57 band, filled (H-57 itself stays shadow) | 2-3 | ~17 | 1 | 20 |
 | icm-probe | I2a/I2b box 15m without MFI / stop 1.0 ATR | 15m | ablations named in H-51a and the tight-stop study | 2 x 1-2 | 6-9 | 1 each | 15 each |
 | icm-probe | I3 meta-labelled stream (from month 2) | 15m | top-decile meta p over I candidates | 3-6 | ~9 | 2 | 25 |
-| icm-swing | W0 random bracket (control) | 4h | 1 a day, stop 1.5 ATR4h, target 2R, 24 bars | 1 | ~38 | 3 | 110 |
-| icm-swing | W1 tsmom 4h and 1d, incl. p band [0.30, threshold) | 4h/1d | frozen tsmom configs | 0.3-1 | 38-110 | 2 | 110 |
-| icm-swing | W2 box 4h roster rule; W3 macro 1d (macro-researcher's frozen rule) | 4h/1d | as roster / prereg | 0.1-0.5 | 38-110 | 1 each | 110 |
+| icm-probe (swing) | W0 random bracket (control) | 4h | 1 a day, stop 1.5 ATR4h, target 2R, 24 bars | 1 | ~38 | 1 | 40 |
+| icm-probe (swing) | W1 tsmom 4h and 1d, incl. p band [0.30, threshold) | 4h/1d | frozen tsmom configs | 0.3-1 | 38-110 | 1 | 40 |
+| icm-probe (swing) | W2 box 4h roster rule; W3 macro 1d (macro-researcher's frozen rule) | 4h/1d | as roster / prereg | 0.1-0.5 | 38-110 | 1 | 40 |
 | **Total** | about 24 arms | | | **~290 (range 200-350)**; strategy arms ~110-150 | | | each host ≤ £198 (0.9 x 220) |
 
 **Arithmetic.** Scalp ≈ 78 + 24 + 6 + 14 + 4 + 30 + 15 = **~170**. Intraday ≈ 75 + 13 + 8 + 3 + 3 + 5 = **~105**.
-Swing **2-3**. Swing cannot contribute volume at any honest rate; it is on its own host for risk isolation (a 1d stop
-at 0.01 lot is £60-110, which would breach `icm-probe`'s £45 `max_loss` and eat its daily allowance through open
-risk). Expected drift at **zero gross edge**: scalp about -0.1 R x £1.8 x 170, about -£30/day (cost-bound: at a $2
+Swing **2-3**. Swing cannot contribute volume at any honest rate; it is isolated by its own pot for risk (a 1d stop
+at 0.01 lot is £60-110, above the swing pot's £40 per-trade cap (ADR 0043): such arms are skipped). Expected drift at **zero gross edge**: scalp about -0.1 R x £1.8 x 170, about -£30/day (cost-bound: at a $2
 stop the $0.09 + slippage is about 0.1 R, so 1m arms need about 0.1 R gross just to break even; 5m about 0.05 R).
 Intraday about -£8/day; swing about £0. Daily P&L SD on the scalp host is about √170 x £1.8, about £25. All three
 are far inside £198.
 **Concurrency:** host max_open = sum of arm caps, bounded by open stop risk ≤ 0.5 x the day's remaining allowance
-(scalp ≤ 15 open, intraday ≤ 12, swing ≤ 4).
+(superseded: scalp ≤ 10 open, intraday ≤ 7, swing 1, host max 18).
 **Kill switch:** at null-edge drift the scalp host loses about 1.4% a week. The 12% drawdown kill switch is a rail,
 not a variable. Demo account rotation at -8% needs an ADR (trading-safety + CFO) before it is ever used. The per-arm
 stops below keep the drift lower.
@@ -136,13 +141,15 @@ by a new pre-registration.
 | H-63+ | One per graduate (below) | 1 each, 2027Q1 open slots | standard |
 
 **Graduation, then promotion.**
-- **Graduate:** an arm becomes a candidate when, after **≥ 300 admissible trades over ≥ 20 session days**,
-  P(net mean > 0) > 0.95 and live-backtest parity holds.
+- **Graduate (amended in the prereg):** one read at the arm's 300th admissible trade (on ≥ 20 session days),
+  P(net mean > 0) > 1 - 0.05/m (Bonferroni across the m eligible arms) and parity; random controls never graduate;
+  an arm not graduated at 300 retires; retired-family neighbours need the evaluator's re-entry record before the read.
 - **Promotion:**
   1. A new pre-registration of the **exact** config, written before any further fill is read.
   2. A research trial on 2015-2025-09 at full K, including H-60's k_eff, with gate-1 DSR t about 4.1+.
   3. The holdout scored once.
-  4. A forward n ≥ 60 at native stop on fills **after** the pre-registration date, admissible by H-52.
+  4. A forward n ≥ 60 at native stop on fills **after** the pre-registration date, admissible by H-52: fixed sample,
+     read once, from the roster shadow agent on `icm-demo` (never from bandit-allocated exploration fills).
   5. The evaluator's verdict.
   6. A roster shadow agent on `icm-demo`, then capital weight only through the tournament: one promotion per family
      per quarter, with sizing under the RiskGate.
@@ -179,5 +186,5 @@ by a new pre-registration.
 - 1m arms are probably cost-bound (about 0.1 R). Expect most scalp arms to hit their stops and the bandit to move
   budget to 5m and intraday. That is the program working, not failing.
 - Wine box capacity for 3-4 terminals is unknown (SRE).
-- If E1 slips, `icm-scalp` starts with S0 only (the existing scheduled-probe path already places M1 orders) and the
+- If E1 slips, the scalp side starts with S0 only (the existing scheduled-probe path already places M1 orders) and the
   intraday and swing hosts start on the 15m clock; no 1m/5m strategy arm runs before E1.

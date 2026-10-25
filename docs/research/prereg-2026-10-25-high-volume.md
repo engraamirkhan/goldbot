@@ -3,9 +3,10 @@
 Author: research-director (staff draft), 2026-10-25. Program design: `docs/research/high-volume-learning-2026-10-25.md`
 (sections 1-4; this file freezes them). Written **before any exploration fill of any arm is read** and before any
 H-60 output is read. No trial is dispatched, no budget spent, the holdout (2025-10-01..2026-09-30) is never read.
-Arm rule details live in the strategy-researcher's arm spec (`ARM-SPEC`, being written in parallel); each placeholder
-`[ARM-SPEC:<arm id>]` below is replaced by a reference to its frozen entry **before the first fill or run of that arm**,
-and the arm's config hash (E2) is recorded in the same commit. A placeholder still open blocks that arm only.
+Arm rules are frozen in `docs/research/arms-2026-10-25.md` (`ARM-SPEC`); each arm below references its entry there by
+arm id (section number given), and the arm's config hash (E2) is recorded before the first fill or run of that arm.
+The ARM-SPEC arm ids and timeframes govern where this file's wording differs (S1 runs on 5m; ids are upper case).
+Only W3 (macro 1d) stays open: it is blocked until its rule is committed to ARM-SPEC by amendment, and blocks that arm only.
 
 ## PD decision reflected here (supersedes program doc section 1 hosts)
 - **No new demo accounts.** The owner said use the two existing ones. `icm-scalp` and `icm-swing` are NOT opened.
@@ -13,8 +14,8 @@ and the arm's config hash (E2) is recorded in the same commit. A placeholder sti
   £198 = 0.9 x £220). **`icm-demo` is untouched** (strategies, shadow agents, no exploration; ADR 0036).
 - Consequence: one daily allowance and one open-position cap are shared by three styles. Isolation is by tighten-only
   sub-budgets (below), not by host. A swing drawdown can still consume the shared allowance, so swing is capped hard.
-- **Open-position cap on `icm-probe` is about 19**, from notional/margin (live figure read from the engine at launch,
-  never assumed). Sub-caps: scalp <= 10 open, intraday <= 7, swing <= 2 (sum 19). Program-doc concurrency figures
+- **Open-position cap on `icm-probe`: host max open 18 (ADR 0043; notional cap about 19)**, from notional/margin (live figure read from the engine at launch,
+  never assumed). Sub-caps: scalp <= 10 open, intraday <= 7, swing <= 1 (ADR 0043), all inside the host max open of 18. Program-doc concurrency figures
   (scalp 15, intraday 12, swing 4) are superseded.
 
 ## Sub-budgets on `icm-probe` (H-61; ADR 0043 governs: CFO decision 2026-10-25, supersedes this section's earlier draft)
@@ -34,40 +35,40 @@ Tighten-only layers before the RiskGate; RiskGate unchanged. Each pot counts tod
 - Per-arm £/day caps from program doc section 1 stay as arm caps inside the style ceiling; swing arm caps = £40 each (ADR 0043)
   and share the swing ceiling.
 - Swing contributes about 2-3 trades/day at best (honest; unchanged). Total estimate unchanged at ~290 (200-350)
-  across ~24 arms, but scalp volume is now bounded by the £70 scalp ceiling and the 10-open cap, so expect the low end
+  across ~24 arms, but scalp volume is now bounded by the £50 scalp pot (ADR 0043) and the 10-open sub-cap, so expect the low end
   of the range until measured. Volume is a capacity, not a quota; no threshold is loosened.
 
 ## H-60: historical arm priors (0 trials; K_eff + 24, once; K ~116 -> ~140)
 **Data:** data-v1 Dukascopy 1m, 2015-01-01..2025-09-30. Holdout never read. Run as a GitHub Actions matrix, arm x
 2-year block (E10), same rule code as live, reusing `goldbot/research/walkforward.py` and `cpcv.py`.
 
-**Arm list (exact rule, constants, stops, targets, hold: `[ARM-SPEC:<id>]`).** Fixed 0.01 lot, each arm's own native
+**Arm list (exact rule, constants, stops, targets, hold: the cited ARM-SPEC entry).** Fixed 0.01 lot, each arm's own native
 stop and hold (H-59 principle):
 | Arm id | Style / TF | Rule, constants, costs |
 |---|---|---|
-| S0 | scalp 1m, random bracket control | [ARM-SPEC:S0] (program doc: every 10 min 07-20 UTC, random side, stop 1 ATR1m, target 1R, 30 bars; RNG seed frozen in ARM-SPEC) |
-| S1a, S1b | scalp 1m, session-VWAP 2-sigma fade | [ARM-SPEC:S1a], [ARM-SPEC:S1b] |
-| S2a, S2b | scalp 5m, opening-range break London 07:00 / NY 13:30 | [ARM-SPEC:S2a], [ARM-SPEC:S2b] |
-| S3a, S3b | scalp 5m, sweep-and-reclaim | [ARM-SPEC:S3a], [ARM-SPEC:S3b] |
-| S4 | scalp 5m, owner box break+close+MFI | [ARM-SPEC:S4] |
-| S5a, S5b | scalp 1m, EMA pullback in 15m trend | [ARM-SPEC:S5a], [ARM-SPEC:S5b] |
-| S6 | scalp meta-labelled stream (ML arm, month 2+) | [ARM-SPEC:S6] |
+| S0 | scalp 1m, random bracket control | arms §1 S0 (every 10 min 07-20 UTC, random side by the frozen hash, stop $3.00, target 1R, 30 bars; S0R resting-stop twin is a cost arm, arms §4) |
+| S1A, S1B | scalp 5m, session-VWAP 2-sigma fade | arms §1 S1A, S1B |
+| S2A, S2B | scalp 5m, opening-range break London 07:00 / NY 13:30 | arms §1 S2A, S2B |
+| S3A, S3B | scalp 5m, sweep-and-reclaim | arms §1 S3A, S3B |
+| S4 | scalp 5m, owner box break+close+MFI | arms §1 S4 |
+| S5A, S5B | scalp 1m, EMA pullback in 15m trend | arms §1 S5A, S5B |
+| S6 | scalp meta-labelled stream (ML arm, month 2+) | arms §1 S6 |
 | P0 | cost probe 1m, 30 s hold (cost only, no R read) | exists; no history run |
-| I0 | intraday 15m random bracket control | [ARM-SPEC:I0] |
-| M | mirrors of the 13 shadow agents at own stop | roster rules as in ADR 0037 am. 4/5 and H-59; history = existing agent code |
-| I1 | intraday 1h tsmom, p in [0.30, 0.36) filled | [ARM-SPEC:I1] (band per H-57) |
-| I2a, I2b | intraday 15m box without MFI / stop 1.0 ATR | [ARM-SPEC:I2a], [ARM-SPEC:I2b] |
-| I3 | intraday meta-labelled stream (ML arm, month 2+) | [ARM-SPEC:I3] |
-| W0 | swing 4h random bracket control | [ARM-SPEC:W0] (1 a day, stop 1.5 ATR4h, target 2R, 24 bars) |
-| W1 | swing tsmom 4h and 1d incl. p band | [ARM-SPEC:W1] |
-| W2 | swing box 4h roster rule | [ARM-SPEC:W2] |
-| W3 | swing macro 1d | [ARM-SPEC:W3] (macro-researcher's frozen rule) |
+| I0 | intraday 15m random bracket control | arms §2 I0 |
+| M (MB15, MB30, MB1H, MSA15, others by registry) | mirrors of the shadow agents at own stop | roster rules as in ADR 0037 am. 4/5 and H-59; history = existing agent code; arms §2 |
+| I1 | intraday 1h tsmom, p in [0.30, 0.36) filled | arms §2 I1 (band per H-57) |
+| I2A, I2B | intraday 15m box without MFI / stop 1.0 ATR | arms §2 I2A, I2B |
+| I3 | intraday meta-labelled stream (ML arm, month 2+) | arms §2 I3 |
+| W0 | swing 4h random bracket control | arms §3 W0 (1 a day, stop 1.5 ATR4h, target 2R, 24 bars) |
+| W1A, W1B | swing tsmom 4h / 1d incl. p band | arms §3 W1A, W1B |
+| W2 | swing box 4h roster rule | arms §3 W2 |
+| W3 | swing macro 1d | arms §3 W3 (macro-researcher's rule; blocked until committed, arms §3) |
 The list is closed. Adding or editing an arm needs an amendment written before its first fill or history run.
 
 **Costs per era (frozen):** Dukascopy bid/ask at the bar, plus measured slippage and commission by hour of day from
 probe fills (with the K9 fx field); slippage never favourable; swap charged per rollover. Era split: 2015-2018,
-2019-2025-09 (current cost era; the prior uses this only). Era spread/slippage constants: `[ARM-SPEC:costs-per-era]`
-(to be pasted from the cost study before the first H-60 job runs).
+2019-2025-09 (current cost era; the prior uses this only). Era spread/slippage constants: `cost-model-1m-2026-10-25.md` (current era: central $0.144/oz,
+conservative $0.23/oz round trip; the 2015-2018 era constants are pasted from the same study before the first H-60 job runs).
 
 **Validation:** rule arms: per-year OOS statistics (nothing fitted). ML arms: anchored walk-forward, train >= 3 y,
 test 6 months, purge = max hold, embargo 1 day, refit every step.
@@ -103,7 +104,7 @@ believed.
 ## H-62: online meta-labeller (0 trials; K 0 until a model is proposed for promotion)
 - **One model per style** (scalp, intraday, swing); arm id as a feature; scored and evaluated per arm.
 - **Features:** <= **40**, list v1 frozen per quarter, chosen by the ml-researcher on history only, never on
-  exploration outcomes (`[ARM-SPEC:feature-list-v1]`, to be committed before the first retrain). Fill-time snapshot,
+  exploration outcomes (`h62-meta-labeller-spec-2026-10-25.md` section 1, committed before the first retrain). Fill-time snapshot,
   as-of joined on `available_utc`, stored with the fill (no recompute skew).
 - **Labels:** net R on the arm's own barriers; S0/I0/W0 random brackets are the unbiased core.
 - **Retrain:** weekly (Sunday) once >= **1,500 new admissible labels** in the style and >= 3,000 total. Swing will
@@ -112,16 +113,31 @@ believed.
   swing), isotonic calibration on out-of-fold scores.
 - **Strict forward:** a trade is scored only by a model whose training ended before its decision time.
 - **Champion/challenger:** the challenger replaces the champion only if its log-loss on the **next 2 unseen weeks**
-  beats the champion's by a margin frozen at `[ARM-SPEC:meta-margin]` before the first retrain. Never chosen
+  beats the champion's by the margin frozen in `h62-meta-labeller-spec-2026-10-25.md` (0.001 nats per row, lower bound > 0, ECE <= 0.03) before the first retrain. Never chosen
   in-sample. A model reaches `icm-demo` only through promotion.
 
-## Graduation and promotion (program doc section 4, unchanged)
-- **Graduate:** >= 300 admissible trades over >= 20 session days, P(net mean > 0) > 0.95, live-backtest parity holds.
+## Graduation and promotion (program doc section 4, amended by quant-review 2026-10-25)
+- **Graduation: one read, fixed sample.** Each arm is read **once, at its 300th admissible trade**, provided that
+  trade falls on >= 20 session days (otherwise the read waits for the 20th day and still uses the first 300 trades
+  only; later trades are never added). Graduate iff P(net mean > 0 | first 300) > **1 - 0.05 / m** and live-backtest
+  parity holds, where m = the number of graduation-eligible arms live on the read date (m <= 19: rule arms S1A, S1B,
+  S2A, S2B, S3A, S3B, S4, S5A, S5B, I1, I2A, I2B, MB15, MB30, MB1H, MSA15, W1A, W1B, W2; at m = 19 the bar is
+  P > 0.9974). No interim reads of the graduation statistic, no second read.
+- **Random controls never graduate:** S0, S0R, I0, W0 and P0 are nulls and cost arms; they are excluded from m.
+  S6 and I3 cannot graduate either (H-62 section 0).
+- **Stop rule at n = 300:** an arm not graduated at its read retires from exploration (its sub-budget share returns to
+  the style pot; re-entry only by a new pre-registration). The cumulative-R stops of H-61 remain earlier exits.
+  Swing arms (about 0.3-1 fills a day) are expected not to reach 300 this quarter and run only under their own stops.
+- **Retired-family neighbours: graduation void by default.** Arms S3A/S3B (R-14), S4, I2A, I2B, W2 (R-15), I1, W1A,
+  W1B (R-06/R-10) and S6, I3 (R-07) may explore, but a graduation read on them is **void** unless the evaluator records,
+  **before the read**, that the retirement row's re-entry condition is met (new mechanism, or measured costs below
+  half the prior for R-15). Without that record the 300-trade read is only descriptive and the arm retires.
 - **Promotion:** (1) new pre-registration of the exact config before any further fill is read; (2) research trial on
-  2015-2025-09 at full K incl. H-60 k_eff, gate-1 DSR t about 4.1+; (3) holdout scored once; (4) forward n >= 60 at
-  native stop on fills after the pre-registration date, admissible by H-52; (5) evaluator verdict; (6) roster shadow
-  agent on `icm-demo`, then capital weight only through the tournament, one promotion per family per quarter,
-  sizing under the RiskGate.
+  2015-2025-09 at full K incl. H-60 k_eff, gate-1 DSR t about 4.1+; (3) holdout scored once; (4) **forward n >= 60,
+  fixed sample, read once**, at native stop on fills after the pre-registration date, admissible by H-52, and taken
+  **only from fills not allocated by the bandit or the 0.8/0.2 taking rule**: the roster shadow agent on `icm-demo` (no
+  exploration order there); exploration fills are never promotion evidence; (5) evaluator verdict; (6) capital weight
+  only through the tournament, one promotion per family per quarter, sizing under the RiskGate.
 - **Budget:** 2027Q1 open 14; H-57, H-58 take 2 and H-53 takes 1, leaving 11; **4 reserved for graduates** (H-63+);
   the 6 reserved slots untouched. Scalping cost bar of H-14/O-4 (0.35 R withdrawal) applies.
 

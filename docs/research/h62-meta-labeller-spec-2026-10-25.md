@@ -67,10 +67,10 @@ categorical. Feature version of the frame: **`f-079deacc61`** (the default set t
 **Tail parity.** The engine computes features on the last `feature_window = 800` decision bars (`runner.py:194`) while
 research builds on the whole series. `session_zones` and `market_structure` declare `lookback=1000` (> 800), and at 1m
 800 bars is 13 h, so previous-day and previous-week levels can differ between the two. Rule: every v1 column must pass
-the tail-parity test L-3 (section 8) at its style's TF; a failing column is replaced by its pre-registered substitute
+the tail-parity test L-3 (section 8: effect-size tolerance) at its style's TF; a failing column is replaced by its pre-registered substitute
 below, and nothing else. pdh/pdl are therefore not in the scalp list and pwh/pwl not in the intraday list.
 
-### 1a. Scalp (`icm-scalp`; decision frame 1m from E1; context h1/h4/d1)
+### 1a. Scalp (`icm-probe`, scalp pot; decision frame 1m from E1; context h1/h4/d1)
 
 | # | Column | Registry feature (version) | Window at 1m | Signed | Rule | Why |
 |---|---|---|---|---|---|---|
@@ -116,7 +116,7 @@ below, and nothing else. pdh/pdl are therefore not in the scalp list and pwh/pwl
 Substitutes (L-3 failures only): 32/33 -> `dist_high_96_atr` / `dist_low_96_atr`; 34 -> `bars_since_bos`;
 24 -> `er_30`.
 
-### 1b. Intraday (`icm-probe`; decision frame 15m; context h1/h4/d1)
+### 1b. Intraday (`icm-probe`, intraday pot; decision frame 15m; context h1/h4/d1)
 
 | # | Column | Registry feature (version) | Window at 15m | Signed | Rule | Why |
 |---|---|---|---|---|---|---|
@@ -161,7 +161,7 @@ Substitutes (L-3 failures only): 32/33 -> `dist_high_96_atr` / `dist_low_96_atr`
 
 Substitutes: 31/32 -> `dist_high_96_atr` / `dist_low_96_atr`; 34 -> `bars_since_bos`.
 
-### 1c. Swing (`icm-swing`; decision frame 4h; context d1)
+### 1c. Swing (`icm-probe`, swing pot; decision frame 4h; context d1)
 
 | # | Column | Registry feature (version) | Window at 4h | Signed | Rule | Why |
 |---|---|---|---|---|---|---|
@@ -302,7 +302,9 @@ Column names verified on this branch against the registry output on 2026-10-25 (
   so `mu = pi_rand_arm` throughout (logged as `branch = uniform`). When the arm takes everything (under its cap),
   `mu = 1`.
 - **Blocked candidates** (no slot, a £ cap, the cumulative-R stop, RiskGate refusal, stopped arm) are logged with
-  `mu = 0` and the reason. They keep `label_sim_r` (training uses them) but are **outside OPE**: no target policy can be
+  `mu = 0` and the reason. **The off-policy estimate is conditional on the caps:** blocked candidates are excluded
+  because slot availability depends on the policy (a different policy would have filled different slots), so V(pi') is the value
+  of pi' under the same ADR 0043 pots and slot limits, not an unconditional value of the rule. They keep `label_sim_r` (training uses them) but are **outside OPE**: no target policy can be
   evaluated where the logging policy had no choice, so every target policy is evaluated under the same caps.
 - **Estimator, two layers:**
   1. **Replay value on simulated labels:** V_sim(pi') = sum over unblocked candidates of pi'(take | x) x
@@ -352,7 +354,7 @@ stand and this table is amended to match (one source of truth, no aliases).
 |---|---|---|
 | L-1 | `lookahead_check` (`pipeline.py`) on each style's decision TF with the v1 columns | 0 columns |
 | L-2 | Row invariant `available_utc_max <= decision_utc` over the whole training table | 0 rows |
-| L-3 | **Tail parity:** the 800-bar engine tail vs the full-history build on >= 2,000 sampled 2024-2025 decision rows per style | `isclose` (rtol 1e-6, NaN equal) on every column, else its pre-registered substitute |
+| L-3 | **Tail parity:** the 800-bar engine tail vs the full-history build on >= 2,000 sampled 2024-2025 decision rows per style | Effect-size tolerance, not bit equality. Per column, d = tail minus full-history value, scaled by the column's SD on the full history: flags and categorical columns equal; continuous columns need NaN pattern equal, >= 99.5% of rows with abs(d) <= 0.02 SD and no row above 0.25 SD. Model-level: a fitted model scores both frames and abs(delta p) <= 0.005 on >= 99% of rows. A failing column is replaced by its pre-registered substitute |
 | L-4 | **Label null:** labels permuted in whole session-day blocks (never shifted by one bar: a one-bar shift leaves neighbouring labels nearly identical, so it is no null; TRACEABILITY F8 records a shifted-label AUC of about 0.7 without leakage, which is how R-01's flagged 0.72 arose), 200 permutations | the real-feature OOF AUC distribution under permutation centred on 0.50 (mean within 0.005) |
 | L-5 | Purge/embargo audit: no training row's label interval overlaps a test block +- `max_hold`; no row starts inside an embargo | 0 rows |
 | L-6 | Strictly forward: every scored row's model has `T_m < decision_utc` and `A_m <= decision_utc` | 0 rows |
@@ -378,12 +380,12 @@ stand and this table is amended to match (one source of truth, no aliases).
 
 ## 10. Risks for the research director (raised, not decided here)
 
-1. **Retired-family neighbours among the arms.** S3a/S3b (sweep-and-reclaim at 5m) are a neighbour of R-14, whose
-   rule says "no neighbour tests". S4 (box break+close+MFI at 5m) and I2a/I2b neighbour R-15 ("no further trial without
+1. **Retired-family neighbours among the arms (arms-2026-10-25.md ids).** S3A/S3B (sweep-and-reclaim at 5m) are a neighbour of R-14, whose
+   rule says "no neighbour tests". S4 (box break+close+MFI at 5m) and I2A/I2B neighbour R-15 ("no further trial without
    a new mechanism or measured costs below half the prior"). I1 and W1 tsmom 1h/4h sit on R-06/R-10 ("re-scoring
-   tsmom 1h/4h under cheaper costs" retired). Exploring them is a 0-trial act, but their **graduation** pre-registrations
-   (H-63+) must name the new evidence the retirement rows require, or be refused.
-2. **Engine tail is shorter than the registry lookback** (`feature_window = 800` < `lookback = 1000` for
+   tsmom 1h/4h under cheaper costs" retired). Exploring them is a 0-trial act, but their **graduation** is void unless the evaluator records,
+   before the read, that the retirement row's re-entry condition is met (prereg 2026-10-25-high-volume, graduation section).
+2. **Engine tail is shorter than the registry lookback**; engine follow-up item: the engine tail (`runner.py:194`, 800 bars) must be >= the 1,000-bar lookback (`feature_window = 800` < `lookback = 1000` for
    `session_zones`, `market_structure`, `order_blocks`). This affects any live model using those columns, not only
    H-62. L-3 measures it; the architect owns the fix (raise the tail or the lookback rule).
 3. **Swing has no live learning this quarter** (2-3 labels a day). Its meta-labeller is base rate or H0 only.
