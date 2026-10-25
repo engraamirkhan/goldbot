@@ -12,7 +12,9 @@ Tiers keep the labels of goldbot/data/econ_calendar.py and settings `risk.blacko
 
 Sources and licence (docs/decisions/0008-us-calendar-source.md):
 * FRED API `fred/release/dates` (Federal Reserve Bank of St. Louis; ALFRED keeps past release dates) for the agency
-  releases (RELEASES). A free API key is needed (repo secret FRED_API_KEY; never in code or logs). The dates are
+  releases (RELEASES), when the repo secret FRED_API_KEY is set (never in code or logs); without it the same dates come
+  keyless from ALFRED's release-date files and the FRED release calendar (goldbot/data/us_calendar_keyless.py, ADR
+  0044). ALFRED also lists revision-only days; the hand-checked ones (REVISION_ONLY) are dropped. The dates are
   scheduling facts of US federal agencies (BLS, Census, BEA, DOL: US government works, public domain); FRED's API
   terms ask for the notice "This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve
   Bank of St. Louis" and no implied endorsement. No free, licence-compatible consensus source exists, so the file has
@@ -182,7 +184,48 @@ MANUAL_EVENTS: tuple[ManualEvent, ...] = (
 # Monthly releases closer than MIN_MONTHLY_SPACING that are real (hand-checked).
 SPACING_EXEMPT: frozenset[str] = frozenset({
     "nfp:2013-10-22", "nfp:2013-11-08",     # the delayed September report and the October one, 17 days apart (2013)
+    # checked 2026-10-25 against bls.gov/schedule/<year>/home.htm (both dates are BLS releases of the type)
+    "jolts:2013-11-22", "jolts:2013-12-10", "jolts:2016-03-17", "jolts:2016-04-05", "jolts:2022-03-09",
+    "jolts:2022-03-29", "jolts:2026-03-13", "jolts:2026-03-31",
+    "ppi:2026-01-14", "ppi:2026-01-30", "ppi:2026-02-27", "ppi:2026-03-18",
+    # checked 2026-10-25 against the BEA news-release archive (Personal Income and Outlays)
+    "pce:2013-12-06", "pce:2013-12-23",     # October 2013 (shutdown-delayed) and November 2013
+    "pce:2025-12-05", "pce:2025-12-23",     # September 2025, and its "Data Update" release (BEA)
+    # Census: the shutdown-delayed February 2019 report and the March one
+    "retail_sales:2019-04-01", "retail_sales:2019-04-18",
 })
+# ALFRED release dates that are revision-only vintages (seasonal-factor, benchmark and annual revisions, corrections),
+# not a scheduled release of the event type. ALFRED lists "the dates when any series from this release was revised",
+# so the FRED API and the keyless pages both return them; they are dropped from the downloaded dates before the
+# spacing quarantine (which would otherwise drop the real release next to them too, e.g. every January CPI). An
+# unlisted phantom still meets the quarantine and the gap report. Hand-checked 2026-10-25 (ADR 0044):
+# * BLS types: every ALFRED date 2010-2026 compared with BLS's yearly release schedules (bls.gov/schedule/<year>);
+#   these are the ALFRED dates with no BLS release of the type (BLS dates missing from ALFRED: JOLTS Jan-Jul 2010 only);
+# * PCE and GDP: compared with the BEA news-release archive (Personal Income and Outlays; GDP). 2018-10-26 (GDP, the
+#   archive shows 10-25) and 2026-09-30 (the archive lags) are kept;
+# * retail sales: Census annual benchmark revisions (late April/May; FRED's calendar lists 2025-04-25 and 2026-09-28 at
+#   10:00 ET, not the report's 08:30); the Advance Monthly report itself falls mid-month outside shutdown catch-ups;
+# * jobless claims: a second date 1-5 days after a weekly report (DOL publishes once a week).
+REVISION_ONLY: frozenset[str] = frozenset({
+    *(f"cpi:{d}" for d in ("2010-02-17", "2011-02-15", "2012-02-15", "2013-02-19", "2014-02-18", "2015-02-20",
+                           "2017-02-13", "2019-02-11", "2020-02-11", "2021-02-08", "2022-02-08", "2023-02-10",
+                           "2024-02-09")),
+    *(f"nfp:{d}" for d in ("2012-12-12", "2013-05-06", "2020-05-11", "2024-01-10", "2024-08-21")),
+    *(f"ppi:{d}" for d in ("2010-02-14", "2010-02-16", "2011-02-14", "2012-02-14", "2014-02-14", "2017-02-10",
+                           "2019-02-12", "2020-02-14", "2021-02-12", "2022-02-11", "2023-02-14", "2024-02-14")),
+    *(f"pce:{d}" for d in ("2011-08-08", "2013-08-08")),
+    *(f"gdp:{d}" for d in ("2011-08-08", "2013-08-01", "2013-08-08", "2013-08-15", "2013-11-01", "2014-01-10",
+                           "2014-08-05", "2014-09-17", "2014-10-31", "2015-08-06", "2016-08-03", "2016-09-08",
+                           "2016-11-03", "2017-08-03", "2017-08-31", "2017-10-03", "2017-11-16", "2018-07-31",
+                           "2020-09-16", "2020-11-03", "2021-08-06", "2021-08-20", "2021-09-24", "2021-10-29",
+                           "2022-10-06", "2023-11-17", "2024-10-02")),
+    *(f"retail_sales:{d}" for d in ("2010-04-30", "2011-04-29", "2012-04-30", "2013-05-31", "2018-05-25",
+                                    "2021-04-26", "2022-04-25", "2023-04-24", "2024-04-23", "2025-04-25",
+                                    "2026-09-28")),
+    *(f"jobless_claims:{d}" for d in ("2014-07-11", "2016-11-25", "2017-03-24", "2017-11-24", "2018-09-18",
+                                      "2018-11-23")),
+})
+MAX_MONTHLY_GAP = pd.Timedelta(days=45)     # a longer gap between two monthly releases is reported (a lost release?)
 # The real GDP advance for a quarter end when the first GDP release after it is something else (hand-checked):
 # quarter end -> advance date. A first release more than GDP_ADVANCE_MAX_LAG after a quarter end not listed here is
 # flagged (late_gdp_advances) for review.
@@ -191,6 +234,17 @@ GDP_ADVANCE_OVERRIDES: dict[str, str] = {
     "2018-12-31": "2019-02-28",   # NY Fed nowcast 2019-02-15: postponed by the shutdown
     "2025-09-30": "2025-12-23",   # BEA blog 2025-11-24/12-10: the October advance cancelled, initial estimate Dec 23
     "2025-12-31": "2026-02-20",   # BEA blog 2026-01-07; 2026-01-22 was the Q3 update and PCE, not the Q4 advance
+    "2026-03-31": "2026-04-30",   # BEA archive: 2026-04-09 was the Q4 2025 third estimate (catch-up), Q1 advance 04-30
+}
+# Releases published at another New York time than their type's (event_id -> ET time), from the times FRED's release
+# calendar lists (US Central, converted; the keyless fetch flags any other odd time). Applied in event_rows, so the
+# blackout window sits around the real release. retail_sales:2026-09-28 (listed 10:00) is a revision day
+# (REVISION_ONLY), not an override.
+TIME_OVERRIDES: dict[str, time] = {
+    "pce:2026-01-22": time(10, 0),            # with the GDP Q3 update at 08:30 (BEA)
+    "pce:2026-03-13": time(11, 0),
+    "gdp:2026-03-13": time(9, 30),            # Q4 2025 second estimate
+    "retail_sales:2026-03-06": time(7, 30),
 }
 # Rule-derived (ISM) dates checked by hand: rule event_id -> actual ET date, or None to drop it.
 RULE_OVERRIDES: dict[str, str | None] = {}
@@ -275,6 +329,7 @@ def event_rows(event_type: str, release_id: int, et_dates: pd.DatetimeIndex, at:
     keep = np.asarray(days >= COVERAGE_START) & ~pd.Series(days).duplicated().to_numpy()
     order = [i for i in np.argsort(days.to_numpy(), kind="stable") if keep[i]]
     days, times = days[order], [times[i] for i in order]
+    times = [TIME_OVERRIDES.get(f"{event_type}:{d:%Y-%m-%d}", t) for d, t in zip(days, times)]
     ev = et_to_utc(days, times)
     out = pd.DataFrame({
         "event_id": [f"{event_type}:{d:%Y-%m-%d}" for d in days], "event_type": event_type,
@@ -388,6 +443,7 @@ def calendar_frame(fred_dates: dict[str, pd.DatetimeIndex], now: pd.Timestamp,
         if t not in _RELEASE_OF:
             continue
         rel = _RELEASE_OF[t]
+        d = drop_revision_only(t, d)
         if t == "gdp":
             advance, later = split_gdp(d)
             frames += [event_rows("gdp_advance", rel.release_id, advance, rel.at_et, now, "fred"),
@@ -398,6 +454,32 @@ def calendar_frame(fred_dates: dict[str, pd.DatetimeIndex], now: pd.Timestamp,
         frames.append(fomc_rows(fomc, now))
     frames += [rule_rows(now, now), manual_rows(now)]
     return pd.concat([f for f in frames if len(f)], ignore_index=True)
+
+
+def drop_revision_only(event_type: str, dates: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """The downloaded dates of one FRED release without its hand-checked revision-only vintages (REVISION_ONLY;
+    `gdp` dates are checked before the advance split, so a phantom never becomes a quarter's advance)."""
+    d = pd.DatetimeIndex(dates)
+    keep = [f"{event_type}:{x:%Y-%m-%d}" not in REVISION_ONLY for x in d]
+    return d[keep]
+
+
+def monthly_gaps(cal: pd.DataFrame, through: pd.Timestamp | None = None) -> list[str]:
+    """Consecutive scheduled monthly releases (MONTHLY_TYPES, latest status) more than MAX_MONTHLY_GAP apart, up to
+    `through`: a release that was lost (quarantined, missing from the source) or a real shutdown gap. Reported for the
+    review, never dropped."""
+    latest = cal.sort_values("available_utc", kind="stable").drop_duplicates("event_id", keep="last")
+    live = latest[(latest["status"] == SCHEDULED) & latest["event_type"].isin(MONTHLY_TYPES)]
+    out = []
+    for t, g in live.groupby("event_type"):
+        ev = pd.DatetimeIndex(pd.to_datetime(g["event_utc"], utc=True)).sort_values()
+        if through is not None:
+            ev = ev[ev <= pd.Timestamp(through)]
+        for a, b in zip(ev[:-1], ev[1:]):
+            if b - a > MAX_MONTHLY_GAP:
+                out.append(f"{t}: {(b - a).days} days between {a.tz_convert(ET):%Y-%m-%d} and "
+                           f"{b.tz_convert(ET):%Y-%m-%d}")
+    return out
 
 
 def types_of(fetched_sources: Sequence[str]) -> list[str]:
@@ -428,18 +510,32 @@ def quarantine_spacing(fresh: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
     return fresh.drop(index=bad), fresh.loc[bad]
 
 
+# Monthly releases are exactly 12 a year except these (hand-checked, quant review 2026-10-25). 2013 and 2018 stay 12:
+# the delayed releases still fell in the same year. Anything else off 12 is a lost or phantom release.
+MONTHLY_COUNT_EXCEPTIONS: dict[tuple[str, int], int] = {
+    ("jolts", 2010): 5,                                     # FRED release 192 starts in August 2010
+    ("pce", 2019): 11,                                      # 2018-19 lapse: Dec 2018 and Jan 2019 combined (03-01)
+    ("cpi", 2025): 11, ("nfp", 2025): 11, ("ppi", 2025): 10, ("jolts", 2025): 11,   # 2025 lapse (BLS)
+    ("pce", 2025): 11, ("retail_sales", 2025): 11,          # 2025 lapse (BEA, Census)
+    ("pce", 2026): 13, ("ppi", 2026): 13, ("retail_sales", 2026): 13,               # 2025 lapse catch-up releases
+}
+
+
 def expected_count(event_type: str, year: int) -> tuple[int, int]:
     """Expected number of events of one type in one full year (inclusive range; shutdown years allowed for)."""
     if event_type == "jobless_claims":
         return 51, 53
-    if event_type in (*MONTHLY_TYPES, *ISM):
-        return 10, 13
+    if event_type in MONTHLY_TYPES:
+        n = MONTHLY_COUNT_EXCEPTIONS.get((event_type, year), 12)
+        return n, n
+    if event_type in ISM:
+        return 12, 12
     if event_type == "gdp_advance":
         return 4, 4
     if event_type == "gdp":
         return 6, 10
     if event_type == "fomc_statement":
-        return 7, 8
+        return (7, 7) if year == 2020 else (8, 8)          # 2020: the March 17-18 meeting was cancelled
     if event_type == "fomc_minutes":
         return 7, 9                  # by release year: a December meeting's minutes can come out in the same year
     if event_type == "fomc_press_conference":

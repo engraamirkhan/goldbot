@@ -1,0 +1,59 @@
+-------------------------------------------------------------------------
+Release: Employment Situation
+Archival Federal Reserve Economic Data, Federal Reserve Bank of St. Louis
+Link: https://alfred.stlouisfed.org
+Help: https://alfred.stlouisfed.org/help
+This data may be copyrighted. Please refer to the Terms of Use:
+https://fred.stlouisfed.org/legal#fred-terms-faq
+File Created: 2026-10-25 6:18 AM CDT
+-------------------------------------------------------------------------
+
+-------------------------------  ---------------  ----------
+Name                             Real Time Start  Period End
+Employment Situation             1955-05-06       2026-10-02
+
+Link
+http://www.bls.gov/ces/          1955-05-06       2026-10-02
+
+Source
+U.S. Bureau of Labor Statistics  1955-05-06       2026-10-02
+
+-------------------------------  ---------------  ----------
+
+Release Dates Notes:
+--------------------------------------------------------------------------------
+Release dates are determined by the following process:
+When available, the actual release date as provided by the source is entered
+into the ALFRED database.  If a release date is not available from the source,
+the release date given by our data providers is used.  If a release date cannot
+be determined either from the source or from our data providers, the date that
+the series was first available in the St. Louis Fed's FRED database is used.
+The release date list contains the dates when any series from this release was
+revised.  Note that all series from a release do not necessarily revise on every
+release date.
+--------------------------------------------------------------------------------
+
+
+
+Release Dates:
+----------
+1955-05-06
+1955-06-07
+1955-07-08
+1955-08-09
+1955-09-07
+1955-10-10
+2014-01-10
+2014-02-07
+2014-03-07
+2014-04-04
+2014-05-02
+2014-06-06
+2014-07-03
+2014-08-01
+2014-09-05
+2014-10-03
+2014-11-07
+2014-12-05
+2015-01-09
+2015-02-06

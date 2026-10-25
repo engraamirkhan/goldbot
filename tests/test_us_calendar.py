@@ -472,7 +472,8 @@ def test_script_needs_the_key_and_never_mistakes_a_missing_file_for_a_first_run(
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     out, missing = tmp_path / "out.parquet", tmp_path / "prev" / uc.ASSET
     monkeypatch.delenv("FRED_API_KEY", raising=False)
-    assert mod.main(["--out", str(out), "--existing", str(missing), "--first-run"]) == 1 and not out.exists()
+    assert mod.main(["--out", str(out), "--existing", str(missing), "--first-run", "--source", "api"]) == 1
+    assert not out.exists()
     monkeypatch.setenv("FRED_API_KEY", "k")
     assert mod.main(["--out", str(out), "--existing", str(missing)]) == 2
     assert not out.exists() and "REFUSED" in capsys.readouterr().out
@@ -530,21 +531,18 @@ def test_workflow_follows_the_data_workflow_pattern():
     assert "not endorsed or certified by the Federal Reserve Bank of St. Louis" in wf
 
 
-def test_workflow_skips_cleanly_without_the_fred_key():
-    # without the repo secret the Sunday run used to fail and open a confusing `ci` issue; now a key-check job (no
-    # token scopes) reports the missing secret as a warning and the fetch job is skipped, never failed
+def test_workflow_falls_back_to_keyless_without_the_fred_key():
+    # the FRED_API_KEY secret cannot be obtained (ADR 0044): the fetch job always runs, passes the optional key and
+    # lets `--source auto` pick the keyless pages when it is empty; no skip job, no secret needed to publish
     import yaml
 
     wf = yaml.safe_load((ROOT / ".github" / "workflows" / "data-us-calendar.yml").read_text())
     jobs = wf["jobs"]
-    check = jobs["key-check"]
-    assert check["permissions"] == {} and check["outputs"]["present"]
-    step = check["steps"][0]
-    assert step["env"]["FRED_API_KEY"] == "${{ secrets.FRED_API_KEY }}"
-    assert "::warning::" in step["run"] and "GITHUB_STEP_SUMMARY" in step["run"] and "exit 1" not in step["run"]
-    assert "echo \"$FRED_API_KEY\"" not in step["run"]                      # the key is tested, never printed
-    fetch = jobs["fetch"]
-    assert fetch["needs"] == "key-check" and fetch["if"] == "needs.key-check.outputs.present == 'true'"
+    assert set(jobs) == {"fetch"} and "if" not in jobs["fetch"] and "needs" not in jobs["fetch"]
+    build = next(s for s in jobs["fetch"]["steps"] if str(s.get("name", "")).startswith("build the calendar"))
+    assert build["env"]["FRED_API_KEY"] == "${{ secrets.FRED_API_KEY }}"
+    assert "--source auto" in build["run"] and "$FRED_API_KEY" not in build["run"]       # the key is never printed
+    assert jobs["fetch"]["permissions"] == {"contents": "write", "issues": "write"}
 
 
 # --------------------------------------------------------------------------- tier 1

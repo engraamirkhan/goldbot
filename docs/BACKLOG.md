@@ -369,7 +369,8 @@ execution items need trading-safety review. Feature items need quant review.
   - Opt-in features `tier1_events` and `tier2_events` (`min_to_next_tier2_pit`, `min_since_last_tier2_pit`,
     `tier2_count_today`, and the tier-1 equivalents), loaded with `research_pass.py --us-calendar`.
   - Open:
-    - the owner adds the `FRED_API_KEY` secret and runs the workflow;
+    - ~~the owner adds the `FRED_API_KEY` secret~~ not needed: keyless ALFRED/FRED-calendar source (ADR 0044,
+      2026-10-25); dispatch `data-us-calendar` after the merge to publish calendar-v1;
     - a quant review of the first run's count table, before any trial cites the features;
     - promoting `gdp_advance` to tier 1 is an owner / trading-safety decision;
     - the RiskGate blackout waits for the owner's adopt decision.
