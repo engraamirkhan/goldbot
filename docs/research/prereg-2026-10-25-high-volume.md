@@ -31,9 +31,6 @@ Tighten-only layers before the RiskGate; RiskGate unchanged. Each pot counts tod
 - Swing arms whose native stop exceeds £40 at 0.01 lot (W1B tsmom 1d ≈ £99) are skipped (`native_stop_above_cap`)
   and wait for a larger demo balance; they are counted in K regardless.
 - Drawdown: −6% of icm-probe warns; −8% pauses every arm except scheduled cost probes until the rotation in ADR 0043.
-  Scalp and intraday per-trade caps stay as above. The change is a config on `icm-probe` for W arms only; the
-  architect and trading-safety-reviewer sign it off before the first W fill. A W candidate whose stop at 0.01 lot
-  exceeds £110 is skipped and logged (reason `stop_gt_gate`), never resized or widened.
 - Per-arm £/day caps from program doc section 1 stay as arm caps inside the style ceiling; swing arm caps = £110 each
   and share the swing ceiling.
 - Swing contributes about 2-3 trades/day at best (honest; unchanged). Total estimate unchanged at ~290 (200-350)
