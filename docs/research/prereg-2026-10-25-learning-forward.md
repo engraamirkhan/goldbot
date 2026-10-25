@@ -95,7 +95,7 @@ stricter applies.
 
 ## Open questions for the research director
 
-1. Is 2.9 the intended pass bar (it is below the gate-1 DSR t of about 4.1), accepted as LEAD-only, as written?
+1. Resolved at quant review 2026-10-25: the pass bar is t > t_{0.05/K, days−1} at the verdict K (about 3.3–3.5), still below the gate-1 DSR bar, so a pass is a LEAD only.
 2. H-57 is a shadow arm at 0.30; it needs the engine to record p-band candidates as untaken shadow rows (check
    that this is journaled today, else an implementer item).
 3. H-59 conflicts with A1 if the minimum-lot floor, not the stop, is what clamps; confirm with the
