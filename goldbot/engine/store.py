@@ -123,6 +123,12 @@ class RiskSnapshot(FrozenRecord):
     rearm_refused: str | None
     kill_everything: bool
     stage2_pending_since: pd.Timestamp | None
+    # ADR 0042 D4: when the risk week last rolled (week_start_equity was set), so a capital flow between the week's and
+    # the day's roll moves the week start only. Absent (an older file) = the day's roll: never a double shift
+    week_reset: pd.Timestamp | None = None
+    # ADR 0042: capital flows stamped up to here were applied (or were already in the marks); absent = the mark's
+    # deal-history anchor, then the first read
+    flows_through: pd.Timestamp | None = None
 
 
 @runtime_checkable
@@ -190,7 +196,9 @@ class JsonEngineStore:
                    "propose_only_until": s.propose_only_until.isoformat() if s.propose_only_until is not None else None,
                    "rearm_refused": s.rearm_refused, "kill_everything": s.kill_everything,
                    "stage2_pending_since": None if s.stage2_pending_since is None
-                   else s.stage2_pending_since.isoformat()}
+                   else s.stage2_pending_since.isoformat(),
+                   "week_reset": s.week_reset.isoformat() if s.week_reset is not None else None,
+                   "flows_through": s.flows_through.isoformat() if s.flows_through is not None else None}
         # durable: halts and stages survive a power cut
         write_atomic(risk_file(self.state_dir, self.account_id), json.dumps(payload))
 
@@ -223,7 +231,9 @@ class JsonEngineStore:
                             week_start_equity=week_start_equity, balance_closed_hwm=balance_closed_hwm, stage=stage,
                             rearm_seen=rearm_seen, weekend_done=weekend_done, halted_at=halted_at,
                             propose_only_until=propose_only_until, rearm_refused=rearm_refused,
-                            kill_everything=kill_everything, stage2_pending_since=stage2_pending_since)
+                            kill_everything=kill_everything, stage2_pending_since=stage2_pending_since,
+                            week_reset=pd.Timestamp(d["week_reset"]) if d.get("week_reset") else None,
+                            flows_through=pd.Timestamp(d["flows_through"]) if d.get("flows_through") else None)
 
     def write_engine_state(self, payload: dict[str, Any], durable: bool = False) -> None:
         # the supervisor never reads a half-written file; a heartbeat, rewritten constantly, needs no fsync

@@ -195,15 +195,16 @@ def test_a_rise_the_deal_history_explains_raises_the_mark_on_the_first_read(tmp_
     assert raised[-1]["by"] == "deals" and raised[-1]["deposits"] == 0.0
 
 
-def test_a_deposit_in_the_deal_history_raises_the_mark_and_is_recorded(tmp_path, monkeypatch):
-    """ADR 0018: a deposit raises the mark (the drawdown is measured on the capital the account now holds)."""
+def test_a_deposit_in_the_deal_history_raises_the_mark_by_the_deposit_and_is_recorded(tmp_path, monkeypatch):
+    """ADR 0018 as amended by ADR 0042 D3: a deposit raises the mark by the deposit (a capital flow, not a rise), so
+    the drawdown is measured on the capital the account now holds (the rule: tests/test_capital_flows.py)."""
     eng, pb = _engine(tmp_path)
     monkeypatch.setattr(pb, "deals_since", lambda since: _deals((T0 + pd.Timedelta(minutes=5), 2, 1_000.0)))
     _script(monkeypatch, pb, 11_000.0)
     _read(eng, 600)
     assert eng.state.balance_closed_hwm == 11_000
-    raised = [d for d in eng.decisions if d.get("action") == "hwm_raised"]
-    assert raised[-1]["by"] == "deals" and raised[-1]["deposits"] == 1_000.0
+    flow = [d for d in eng.decisions if d.get("action") == "capital_flow"]
+    assert flow[-1]["kind"] == "deposit" and flow[-1]["amount"] == 1_000.0 and flow[-1]["mark_to"] == 11_000
 
 
 def test_a_deal_history_that_does_not_account_for_the_rise_leaves_it_unconfirmed(tmp_path, monkeypatch):
@@ -295,7 +296,9 @@ def test_a_row_for_another_mark_is_void(tmp_path, monkeypatch):
     eng._save_risk_state()
     path = tmp_path / "risk_icm-demo.json"
     risk = json.loads(path.read_text())
-    path.write_text(json.dumps({**risk, "balance_closed_hwm": 10_200.0}))      # an older release raised it
+    flows_through = T0 + pd.Timedelta(seconds=2)                                 # ADR 0042's own anchor, distinct
+    path.write_text(json.dumps({**risk, "balance_closed_hwm": 10_200.0,           # an older release raised it
+                                "flows_through": flows_through.isoformat()}))
     again = _new_engine(tmp_path, pb)
     reads: list[pd.Timestamp] = []
     def deals_since(since: pd.Timestamp) -> pd.DataFrame:
@@ -304,7 +307,8 @@ def test_a_row_for_another_mark_is_void(tmp_path, monkeypatch):
     monkeypatch.setattr(pb, "deals_since", deals_since)
     _script(monkeypatch, pb, 10_500.0)
     again._refresh_account(_tick(T0 + pd.Timedelta(seconds=5)))
-    assert again.state.balance_closed_hwm == 10_200 and reads == []
+    # the history is read for capital flows only (from their anchor), never against the void mark's anchor T0
+    assert again.state.balance_closed_hwm == 10_200 and reads == [flows_through]
 
 
 def _broken(*a: Any, **k: Any) -> Any:

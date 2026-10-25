@@ -88,7 +88,7 @@ def test_the_limit_is_per_account_and_validated():
     assert RiskLimits.from_settings(load_settings().risk, tiny_live=False).daily_loss_limit_abs is None
     assert SupervisorLimits.from_settings(load_settings().risk).daily_loss_limit_abs is None
     from goldbot.ops import accounts
-    assert accounts.load_accounts()["icm-demo"].daily_loss_limit_abs == 50
+    assert accounts.load_accounts()["icm-demo"].daily_loss_limit_abs == 220   # ADR 0042
     for bad in (0, -5):
         with pytest.raises(ValidationError):
             accounts.Account(account_id="a", broker="icm", mode="demo", server="s", login=None, terminal_path="t",

@@ -23,9 +23,12 @@ accounts:
     symbol: XAUUSD
     magic_base: 260100
     enabled: true
-    # ADR 0004: the owner's absolute daily loss limit, in this account's deposit currency (GBP: £50). Entries only;
-    # exits are never gated. Per account, never global: one number read in two currencies is not one limit.
-    daily_loss_limit_abs: 50
+    # ADR 0004: the owner's absolute daily loss limit, in this account's deposit currency (GBP). Entries only; exits
+    # are never gated. Per account, never global: one number read in two currencies is not one limit.
+    # ADR 0042 (CFO 2026-10-25, demo only): £50 -> £220 after the owner's top-up to ~£11,000, i.e. 2% of £11,000, the
+    # design's own default daily cap, so the £ limit adds no room beyond the percentage rule. Reverse to £50 BEFORE any
+    # withdrawal of the top-up. ADR 0004's £50 stays the real-money limit.
+    daily_loss_limit_abs: 220
     # the owner's declared account type (raw spread + commission): the baseline from the first run, so entries are not
     # blocked as "unknown" while the classifier gathers ticks. Measurement keeps running; if it reads standard the
     # stricter class wins and health warns. Leave unset (null) for an account whose type is not known.
@@ -38,9 +41,13 @@ accounts:
     # defaults until the owner re-arms (TOTP) at a normal stage. Refused on any account that is not mode: demo; the
     # values cannot exceed the owner's approval (goldbot/risk/limits_profile.py RiskCeilings). Records are tagged
     # `limits_profile: demo-2026-10-18`, kept apart from default-profile gate evidence.
+    # ADR 0042 (2026-10-25, ~£11,000): weekly 0.10 -> 0.06, a tightening. The weekly cap is checked on the loss so far,
+    # so a week can end one day past it: 6% + 2% = 8% (the size-down stage); 10% + 2% would cross the 8% stage and the
+    # 12% kill switch. daily 0.05 stays (the £220 binds first, 2.0%); min-lot 1% = £110, every native stop fits. The
+    # profile label stays: evidence in R is scale-free and the deposit date splits the regime in the ledger.
     risk_overrides:
       profile: demo-2026-10-18
-      ceilings: { daily: 0.05, weekly: 0.10, min_lot_risk_cap: 0.01 }
+      ceilings: { daily: 0.05, weekly: 0.06, min_lot_risk_cap: 0.01 }
     # ADR 0036, the owner 2026-10-18: "for the demo account, the trades will be opened and closed by the system, no
     # confirmation is needed, for real account with real money, stick to original plan of confirming from me".
     # propose | auto (default propose). auto is refused at load on any account that is not mode: demo, and the engine
@@ -84,18 +91,25 @@ accounts:
     # "probes must never consume the real trades' allowance"). Off until its credentials and terminal exist; enable it
     # together with the switch-over steps on icm-demo above.
     enabled: true             # switched over 2026-10-19 (its own box, goldbot-mt5-probe)
-    # its OWN day, in GBP: £30 a day (the RiskGate enforces it as on every account); 0.9 of it is the probe budget
-    # (£27, at most four open probes at £4 each). The supervisor keeps it out of the real accounts' combined limits
-    # (probe_only). Raised from £20 / 0.8 on 2026-10-20 for demo learning volume (owner: hundreds of demo fills).
-    daily_loss_limit_abs: 30
-    # the owner's approved demo ceilings (ADR 0032, demo only), so a 0.01-lot probe is not refused by the 0.5% cap
+    # its OWN day, in GBP (the RiskGate enforces it as on every account); 0.9 of it is the probe budget. The supervisor
+    # keeps it out of the real accounts' combined limits (probe_only). History: £20 / 0.8, then £30 / 0.9 on 2026-10-20
+    # for demo learning volume (owner: hundreds of demo fills). ADR 0042 (CFO 2026-10-25, after the owner's top-up to
+    # £11,000): £30 -> £220 = 2% of £11,000, the design's default daily cap; probe budget 0.9 x 220 = £198. Reverse to
+    # £30 BEFORE any withdrawal of the top-up.
+    daily_loss_limit_abs: 220
+    # the owner's approved demo ceilings (ADR 0032, demo only), so a 0.01-lot probe is not refused by the 0.5% cap.
+    # ADR 0042: weekly 0.10 -> 0.06 (a tightening: 6% + one 2% day = the 8% size-down stage, never the 12% kill switch)
     risk_overrides:
       profile: demo-2026-10-18
-      ceilings: { daily: 0.05, weekly: 0.10, min_lot_risk_cap: 0.01 }
+      ceilings: { daily: 0.05, weekly: 0.06, min_lot_risk_cap: 0.01 }
     approval_mode: auto       # ADR 0036 (demo); probes are sent only in auto
     # the account type is measured by the classifier (null = not declared: entries wait for a measured class)
     account_class: raw        # owner 2026-10-20: the icm-probe account is a Raw account (as icm-demo)
-    cost_probe: { enabled: true, budget_share: 0.9, max_open: 4, max_loss: 4.0, scheduled: { enabled: true } }   # ADR 0037 am. 4 + 5 (owner-approved 2026-10-20: scheduled M1 probes)
+    # ADR 0042: max_loss £4 -> £45 so native-stop mirror probes fit (1h ~£16.5, 4h ~£38 at 0.01 lot, 18% headroom; a
+    # 4h stop above ~$59 is still skipped). Load check: 45 <= 0.9 x 220 = 198 and 4 x 45 = 180 <= 198, so max_open 4
+    # stays. Reverse to £20 if the median realised probe loss passes £150 a day or the weekly cap is hit two weeks
+    # running in the first 10 risk days.
+    cost_probe: { enabled: true, budget_share: 0.9, max_open: 4, max_loss: 45.0, scheduled: { enabled: true } }   # ADR 0037 am. 4 + 5 (owner-approved 2026-10-20: scheduled M1 probes)
     shadow_host: true         # counts only once enabled: then icm-demo must drop its own flag
     # never a real trade: no live agents, and the engine refuses any entry that is not a cost probe (fail closed)
     probe_only: true
