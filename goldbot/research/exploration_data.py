@@ -61,7 +61,7 @@ log = logging.getLogger("goldbot.exploration")
 
 Style = Literal["scalp", "intraday", "swing"]
 STYLES: tuple[str, ...] = ("scalp", "intraday", "swing")
-TIMEFRAMES: tuple[str, ...] = ("1m", "5m", "15m", "1h", "4h", "1d")
+TIMEFRAMES: tuple[str, ...] = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
 BRANCHES: tuple[str, ...] = ("ranked", "random", "uniform", "blocked")
 
 # H-61 allocation (prereg): within a style, every live arm keeps at least FLOOR_SHARE and at most CAP_SHARE

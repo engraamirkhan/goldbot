@@ -108,6 +108,12 @@ def test_1m_and_5m_timeframes_are_accepted(tmp_path):
     assert set(ex.read_obs(db)["candidate_id"]) == {"a", "b"} and {"1m", "5m"} <= set(ex.TIMEFRAMES)
 
 
+def test_30m_candidates_of_the_mb30_mirror_arm_are_accepted(tmp_path):
+    db = _db(tmp_path)
+    _cand(db, "m", tf="30m")
+    assert set(ex.read_obs(db)["candidate_id"]) == {"m"}
+
+
 @pytest.mark.parametrize("kw, reason", [
     ({"tf": "2m"}, "timeframe"),
     ({"side": 0}, "side"),
