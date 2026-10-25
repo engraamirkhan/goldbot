@@ -101,6 +101,12 @@ class RiskLimits(Record):
     # clamped to `max_risk_per_trade` here whatever the engine sends. Empty and 1.0: today's fixed values
     strategy_risk: dict[str, float] = Field(default_factory=dict)
     risk_scale: float = Field(1.0, gt=0, le=1.0)
+    # exploration arms (plan 2026-10-25, lane L1): the account's own facts, from config/accounts.yaml, never from an
+    # intent. `probe_only` is the account's flag (ADR 0037 amendment 4); `exploration_arms` maps each registered arm id
+    # to its per-trade loss cap at the stop, account currency (`accounts.exploration_arm_caps`: empty unless the
+    # account's `exploration.enabled`). Defaults: no account explores, so the purpose `exploration` is always refused
+    probe_only: bool = False
+    exploration_arms: dict[str, float] = Field(default_factory=dict)
 
     @property
     def dynamic(self) -> bool:
@@ -234,8 +240,18 @@ class Intent(Record):
     # a terminal that itself reports demo, the minimum lot, a stop of at most COST_MEASUREMENT_MAX_STOP_USD, a planned
     # hold of at most COST_MEASUREMENT_MAX_HOLD_S and the loss at the stop within both probe budgets. Every account
     # limit, halt, window and sizing limit still applies. Set only by goldbot/engine/cost_probe.py (`_send_scheduled`)
-    purpose: Literal["signal", "cost_measurement"] = "signal"
-    terminal_trade_mode: str | None = None   # MT5 account_info().trade_mode read at the order; cost_measurement only
+    #
+    # Exploration arms (plan 2026-10-25, lane L1): an arm trades to MEASURE an edge, so the purpose `exploration` skips
+    # ONLY the expected-value and gross-edge rules (`time_exit_ev_unsupported`, `negative_ev`,
+    # `target_below_cost_floor`, `standard_account_15m`, `standard_account_edge`), and only inside its fence
+    # (`_exploration_reasons`, `_exploration_sized`): a probe_only account (`RiskLimits.probe_only`), the demo lock
+    # (`account_mode` demo and no live gate in `phase_file`), a terminal that itself reports demo
+    # (`terminal_trade_mode`), exactly the minimum lot, an `arm_id` registered in `RiskLimits.exploration_arms` and the
+    # loss at the gate's stop within that arm's cap. Outside the fence every edge rule applies again. Halts, windows,
+    # every loss cap, heat, margin, exposure, throttle and sizing limit still apply
+    purpose: Literal["signal", "cost_measurement", "exploration"] = "signal"
+    arm_id: str | None = None                # the exploration arm (registered in the account's config); exploration only
+    terminal_trade_mode: str | None = None   # MT5 account_info().trade_mode at the order; cost_measurement, exploration
     hold_s: float | None = None              # the planned hold, seconds; cost_measurement only
     # account currency: what the probes may still lose today (the cost-probe budget) and the dynamic per-probe ceiling
     # (`probe_limits`); cost_measurement only, None refuses
@@ -345,6 +361,36 @@ def _cost_measurement_sized(intent: Intent, d: GateDecision) -> list[str]:
         out.append("cost_measurement_stop_above_cap")
     if d.risk_amount > min(intent.probe_headroom or 0.0, intent.probe_max_loss or 0.0) + 1e-9:
         out.append("cost_measurement_budget")
+    return out
+
+
+def _exploration_reasons(intent: Intent, limits: RiskLimits) -> list[str]:
+    """The exploration purpose's fence before sizing (see `Intent.purpose`): a probe_only account
+    (`exploration_not_probe_only`); the demo lock by the registry and the phase file, F1's rule
+    (`exploration_not_demo`); a terminal that itself reports demo, never inferred from a label
+    (`exploration_terminal_not_demo`); the minimum lot only (`exploration_not_min_lot`); an arm id registered with a
+    usable cap (`exploration_arm_unregistered`). `check` judges the arm's cap on the sized order."""
+    out = [] if limits.probe_only else ["exploration_not_probe_only"]
+    gates = phase_gates(intent.phase_file) if intent.account_mode == "demo" and intent.phase_file is not None else None
+    if gates is None or LIVE_GATES & set(gates):
+        out.append("exploration_not_demo")
+    if intent.terminal_trade_mode != "demo":
+        out.append("exploration_terminal_not_demo")
+    if intent.volume_max > intent.volume_min + 1e-9:
+        out.append("exploration_not_min_lot")
+    if not intent.arm_id or not _ok_amount(limits.exploration_arms.get(intent.arm_id)):
+        out.append("exploration_arm_unregistered")
+    return out
+
+
+def _exploration_sized(intent: Intent, limits: RiskLimits, d: GateDecision) -> list[str]:
+    """The fence on the sized order: exactly the minimum lot, and the loss at the stop the gate set (stops level and
+    spread floored) within the arm's per-trade cap; equal is allowed (1e-9 absorbs float noise)."""
+    out: list[str] = []
+    if abs(d.lots - intent.volume_min) > 1e-9:
+        out.append("exploration_not_min_lot")
+    if d.risk_amount > limits.exploration_arms.get(intent.arm_id or "", 0.0) + 1e-9:
+        out.append("exploration_arm_cap")
     return out
 
 
@@ -726,13 +772,20 @@ class RiskGate:
         # EV uses the time-exit outcome (HANDOFF: what must change before live)
         edge_checked = True
         measuring = intent.purpose == "cost_measurement"
+        exploring = intent.purpose == "exploration"
+        ev_exempt = measuring              # skips time_exit_ev_unsupported
         if measuring:                        # ADR 0037 Amendment 5: no EV requirement, inside its own fence (see Intent)
             reasons += _cost_measurement_reasons(intent)
             edge_checked = not intent.learning_probe
+        elif exploring:                      # plan 2026-10-25: no edge rule, but only inside its fence (see Intent)
+            fence = _exploration_reasons(intent, L)
+            reasons += fence
+            ev_exempt = not fence            # a broken fence refuses AND keeps every edge rule's reason
+            edge_checked = not ev_exempt
         elif intent.learning_probe:          # a demo learning probe: no edge judgement after costs (see Intent)
             reasons += _learning_probe_reasons(intent)
             edge_checked = False
-        if not measuring and (not intent.has_target or not _family_has_target(intent)):
+        if not ev_exempt and (not intent.has_target or not _family_has_target(intent)):
             reasons.append("time_exit_ev_unsupported")
         # expected value and minimum target over cost
         ev = intent.p * intent.target_atr - (1 - intent.p) * intent.stop_atr - intent.cost_atr
@@ -782,6 +835,9 @@ class RiskGate:
         if d.allowed and measuring and (fence := _cost_measurement_sized(intent, d)):
             return GateDecision(allowed=False, reasons=fence, stop_distance=d.stop_distance,
                                 margin_needed=d.margin_needed, margin_note=d.margin_note)
+        if d.allowed and exploring and (fence := _exploration_sized(intent, L, d)):
+            return GateDecision(allowed=False, reasons=fence, stop_distance=d.stop_distance,
+                                margin_needed=d.margin_needed, margin_note=d.margin_note, risk_amount=d.risk_amount)
         if d.allowed and L.dynamic:          # the entry audit's why: the rate sized at and its source
             d = d.model_copy(update={"risk_per_trade": eff.risk_frac,
                                      "risk_source": L.risk_source(intent.model_version)})

@@ -118,6 +118,13 @@ accounts:
     # loss at the stop of the last 20 probes, 1 to max_open. max_loss and max_open are the ceilings and the fallback
     # (an unknown limit or no probe history gives them); every probe row says which applied (basis)
     dynamic_limits: true
+    # exploration arms (plan 2026-10-25): minimum-lot demo entries that MEASURE an edge, so the RiskGate skips only
+    # its expected-value rules for them, inside its fence (probe_only, demo terminal, minimum lot, a registered arm,
+    # loss at the stop <= the arm's max_loss). Refused at load unless demo + probe_only. budget_share: the arms'
+    # share of the day's allowance; with cost_probe.budget_share (0.9) at most 1, so 0.1 x 220 = £22 a day here and
+    # no arm's max_loss above it. max_open_total: exploration positions open at once, all arms. Off until the
+    # integrator registers the arms (exploration lane L2); false + restart is the rollback.
+    exploration: { enabled: false, budget_share: 0.1, max_open_total: 1, arms: {} }
   vantage-demo:
     broker: vantage
     mode: demo
