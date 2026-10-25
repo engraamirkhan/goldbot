@@ -62,8 +62,10 @@ def test_the_shipped_registry_makes_icm_probe_the_only_shadow_host_after_the_swi
 def test_the_probe_account_has_its_own_day_and_its_probes_fit_inside_it(registry):
     probe = acc_mod.load_accounts(registry)["icm-probe"]
     cp, cap = probe.cost_probe, probe.daily_loss_limit_abs
-    assert cap == 220 and (cp.max_open, cp.max_loss, cp.budget_share) == (4, 45.0, 0.9)   # ADR 0042 (~£11k demo)
-    assert cp.max_open * cp.max_loss <= cp.budget_share * cap        # four probes at their stops fit the probe budget
+    # ADR 0042 (~£11k demo), ADR 0043 sleeves: P0 £15 + M £45 = £60 of the day, three mirror slots
+    assert cap == 220 and (cp.max_open, cp.max_loss) == (3, 45.0) and cp.budget_share * cap == pytest.approx(60, abs=0.05)
+    assert cp.max_loss <= cp.budget_share * cap                      # one probe at its stop fits; the budget check
+    # (realised + open risk + new <= the sleeve, `cost_probe.budget_refusal`) binds the count at run time
     assert probe.magic_base not in {a.magic_base for k, a in acc_mod.load_accounts(registry).items() if k != "icm-probe"}
 
 

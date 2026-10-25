@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 from goldbot.engine import cost_probe, unconfirmed
+from goldbot.engine import magic as engine_magic
 from goldbot.execution.broker import MT5_COMMENT_MAX, RETCODE_PRECHECK_FAILED, OrderIntent, comment_keys
 from goldbot.execution.paper import PaperBroker
 from tests.test_engine_safety import _prop
@@ -91,7 +92,7 @@ def test_an_unconfirmed_order_is_found_by_its_29_or_legacy_31_character_comment(
     eng._execute(_prop(LONG_PID), AGENT, 0.1, SL, TP, requested=2400.2)
     assert eng._orders[LONG_PID].status == "ambiguous"
     PaperBroker.place_order(pb, OrderIntent(client_order_id=LONG_PID, symbol="XAUUSD", side=1, lots=0.1, sl=SL, tp=TP,
-                                            magic=eng._magic(AGENT.family), comment=LONG_PID[-width:]))
+                                            magic=engine_magic.family(eng.cfg.magic_base, AGENT.family), comment=LONG_PID[-width:]))
     [pos] = pb.positions()
     _look(eng)
     assert eng._orders[LONG_PID].status == "filled" and eng._orders[LONG_PID].position_id == pos.position_id

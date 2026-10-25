@@ -3,15 +3,12 @@
 own (and GuardedBroker would refuse that family's orders off demo)."""
 from __future__ import annotations
 
-from types import SimpleNamespace
-
-from goldbot.engine import Engine, EngineConfig
+from goldbot.engine import EngineConfig, magic
 from goldbot.execution.broker import SMOKE_MAGIC_OFFSET
 from goldbot.specialists import SPECIALISTS
 
 
 def test_no_family_magic_equals_the_smoke_offset():
     cfg = EngineConfig(account_id="icm-demo", broker_name="icm", magic_base=260100)
-    engine = SimpleNamespace(cfg=cfg)                    # Engine._magic reads only cfg.magic_base
-    magics = {family: Engine._magic(engine, family) for family in SPECIALISTS}   # type: ignore[arg-type]
+    magics = {family: magic.family(cfg.magic_base, family) for family in SPECIALISTS}
     assert magics and all(260100 <= m < 260100 + SMOKE_MAGIC_OFFSET for m in magics.values()), magics

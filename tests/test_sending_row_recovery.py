@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 
 from goldbot.engine import Engine, EngineConfig
+from goldbot.engine import magic as engine_magic
 from goldbot.execution.broker import OrderIntent, OrderResult, Tick
 from goldbot.execution.paper import PaperBroker
 from goldbot.labels.exit_policy import ExitPolicy
@@ -125,7 +126,7 @@ def test_a_short_never_gets_a_higher_stop_than_the_brokers(tmp_path):
     eng, pb = _start(tmp_path)
     pb.raise_next = False
     pid = pb.place_order(OrderIntent(client_order_id="s", symbol="XAUUSD", side=-1, lots=0.1, sl=2_390.0, tp=2_300.0,
-                                     magic=eng._magic("trend"))).position_id
+                                     magic=engine_magic.family(eng.cfg.magic_base, "trend"))).position_id
     assert pid is not None
     eng._reconcile(T0)
     tr = eng.open[pid]
