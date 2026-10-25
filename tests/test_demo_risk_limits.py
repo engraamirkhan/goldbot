@@ -100,7 +100,9 @@ def test_the_shipped_icm_demo_account_carries_exactly_the_approved_ceilings(monk
     accs = acc_mod.load_accounts()
     demo = accs["icm-demo"]
     assert demo.risk_overrides is not None and demo.risk_overrides.profile == PROFILE
-    assert demo.risk_overrides.ceilings == OVERRIDES.ceilings and demo.daily_loss_limit_abs == 50
+    # ADR 0042 (the ~£11k top-up): weekly 0.10 -> 0.06 (a tightening inside the approval), £50 -> £220 (2% of £11,000)
+    shipped = OVERRIDES.ceilings.model_copy(update={"weekly": 0.06})
+    assert demo.risk_overrides.ceilings == shipped and demo.daily_loss_limit_abs == 220
     assert all(a.risk_overrides is None for a in accs.values() if a.mode != "demo")
 
 
