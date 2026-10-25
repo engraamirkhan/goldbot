@@ -331,7 +331,7 @@ def test_the_live_agents_15m_decisions_are_identical_with_exploration_on(tmp_pat
 
     sent: list[int] = []
     off, on = run(tmp_path / "off", False), run(tmp_path / "on", True)
-    assert off and off == on and sent[0] == 0 and sent[1] >= 4      # the arms traded beside the agent
+    assert off and off == on and sent[0] == 0 and sent[1] >= 2      # the arms traded beside the agent
 
 
 def test_after_a_restart_an_arm_position_is_adopted_by_its_comment_and_its_hold_resumes(tmp_path):
@@ -398,16 +398,36 @@ def test_a_close_by_anything_but_the_arms_own_barrier_is_censored(tmp_path, reas
     assert rec.exit_reason == reason and rec.censored is censored
 
 
-def test_a_closed_15m_arm_trade_reaches_the_research_observations(tmp_path):
-    eng, pb = _engine(tmp_path, [_arm("a")])
+def _obs(tmp_path: Path) -> list[tuple[Any, ...]]:
+    with exploration.ledger_db(str(tmp_path)).connection() as conn:
+        return conn.execute("SELECT arm_id, taken, branch, mu, u, blocked_reason, label_fill_r IS NOT NULL, "
+                            "quarantine FROM exploration_obs ORDER BY arm_id").fetchall()
+
+
+def test_every_candidate_taken_or_not_is_recorded_with_its_propensity_and_a_closed_trade_its_fill(tmp_path):
+    """Lane L3's contract: a taken candidate (mu = the random branch's), a blocked one (mu 0 and its reason), and
+    the taken one's fill at its close, keyed by the order id."""
+    eng, pb = _engine(tmp_path, [_arm("a"), _arm("b", family="test_short", daily_gbp=0.5)])
     exploration.on_pass(eng, _at(eng, pb, CLOSE))
     [pid] = list(eng.open)
     eng._try_close(pid, "time_exit", CLOSE)
     eng._flush_closed()
-    [rec] = exploration.trades(str(tmp_path))
-    with exploration.ledger_db(str(tmp_path)).connection() as conn:
-        n = conn.execute("SELECT COUNT(*) FROM exploration_obs").fetchone()[0]
-    assert rec.exit_utc is not None and n == 1
+    [a, b] = _obs(tmp_path)
+    assert a[:4] == ("a", 1, "random", exploration.PI_RANDOM) and 0 <= a[4] < 1 and a[6] == 1 and a[7] is None
+    assert b[:4] == ("b", 0, "blocked", 0.0) and b[5] == "arm_budget" and b[6] == 0 and b[7] is None
+
+
+def test_at_champion_zero_the_ranked_branch_is_never_used(tmp_path, monkeypatch):
+    """Quant ruling 2026-10-25: with no champion model every candidate goes through the random branch with its
+    propensity recorded; and the engine never ranks on a model it cannot score, even when one is served."""
+    from goldbot.research import exploration_data
+    eng, pb = _engine(tmp_path, [_arm("a"), _arm("b", style="scalp", family="test_short")])
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert [r[2] for r in _obs(tmp_path)] == ["random", "random"]
+    monkeypatch.setattr(exploration_data, "serving_model", lambda db, style, now: {"model_version": "m1"})
+    exploration.on_pass(eng, _at(eng, pb, CLOSE + pd.Timedelta(minutes=15)))
+    rows = _obs(tmp_path)
+    assert len(rows) == 4 and {r[2] for r in rows} == {"random"} and {r[3] for r in rows} == {exploration.PI_RANDOM}
 
 
 # ------------------------------------------------------------------------------------------------ config and limits

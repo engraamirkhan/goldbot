@@ -88,6 +88,7 @@ SUB_15M = ("1m", "5m")
 SWING = "swing"                     # ADR 0043: the one style allowed to hold over the weekend
 MAX_NET_LOTS = 0.10                 # ADR 0043 X3: net same-side exposure on the account, lots
 DD_WARN, DD_PAUSE = 0.06, 0.08      # ADR 0043 section 2: drawdown from the mark: warn, pause
+PI_RANDOM = 1.0                     # champion zero: the random branch takes every admissible candidate (mu = 1)
 # a close by the arm's own barrier: anything else censors the label
 NATURAL = frozenset({HOLD_EXIT, "time_exit", "stop", "target", "engine_stop_close"})
 
@@ -154,6 +155,11 @@ class Arm(FrozenRecord):
     @property
     def hold_s(self) -> int:
         return self.hold_bars * tf_seconds(self.tf)
+
+    @property
+    def config_hash(self) -> str:
+        """The arm's definition hashed (lane L3 `arm_config_hash`): a changed rule is a different arm's evidence."""
+        return hashlib.sha1(self.model_dump_json().encode()).hexdigest()[:12]
 
     def side(self, raw: int) -> int:
         if self.side_rule == "fade":
@@ -295,6 +301,7 @@ class Exploration:
         self.last_minute: pd.Timestamp | None = None
         self.open_loss: dict[int, float] = {}       # position id -> its loss at the stop when sent
         self.weights_cache: tuple[pd.Timestamp, dict[str, float]] | None = None
+        self.champion_seen: dict[str, tuple[pd.Timestamp | None, bool]] = {}
 
     @classmethod
     def start(cls, eng: Engine) -> Exploration | None:
@@ -459,9 +466,10 @@ def _order(ex: Exploration) -> list[Pending]:
 
 def shares(ex: Exploration, now: pd.Timestamp) -> dict[str, float]:
     """Each arm's share of its pot (ADR 0043 "within a sleeve"): a control its fixed `control_share` (controls are the
-    null, never allocated by results); the strategy arms the rest x their research share (lane L3's
-    `exploration_data.weights`: the newest bandit run, capped, never re-normalised upward; equal shares when it is
-    missing, stale or unreadable). Read at most once a minute."""
+    null, never allocated by results); a strategy arm its research share of the style's budget (lane L3's
+    `exploration_data.weights` for ONE style's strategy arms: the newest bandit run held in [5%, 30%]; equal shares
+    in the same bounds when it is missing, stale or unreadable). The shares need not sum to 1: the pot's £ is the
+    backstop. Read at most once a minute."""
     from goldbot.research.exploration_data import weights
     minute = now.floor("min")
     if ex.weights_cache is not None and ex.weights_cache[0] == minute:
@@ -469,7 +477,6 @@ def shares(ex: Exploration, now: pd.Timestamp) -> dict[str, float]:
     out: dict[str, float] = {}
     for style in ex.cfg.pots:
         arms = [a for a in ex.arms.values() if a.style == style]
-        rest = max(0.0, 1.0 - sum(a.control_share or 0.0 for a in arms))
         strat = [a.arm_id for a in arms if a.control_share is None]
         try:
             w = weights(ex.db, strat, now=now) if strat else {}
@@ -477,7 +484,7 @@ def shares(ex: Exploration, now: pd.Timestamp) -> dict[str, float]:
             log.warning("exploration weights unreadable (%s): equal shares", type(exc).__name__)
             w = {a: 1.0 / len(strat) for a in strat}
         for a in arms:
-            v = a.control_share if a.control_share is not None else rest * float(w.get(a.arm_id, 0.0))
+            v = a.control_share if a.control_share is not None else float(w.get(a.arm_id, 0.0))
             out[a.arm_id] = v if math.isfinite(v) and v >= 0 else 0.0
     ex.weights_cache = (minute, out)
     return out
@@ -594,6 +601,7 @@ class _Pass:
                 _add(self.held, k, loss)
                 self.count[k] = self.count.get(k, 0) + 1
         self.cap: int | None = -1                   # -1: not read yet (the first signal's terms read it)
+        self.why: str | None = None                 # the last signal's refusal
 
     def lost_in(self, ex: Exploration, style: str | None = None) -> float:
         return sum(v for a, v in self.lost.items() if style is None or (a in ex.arms and ex.arms[a].style == style))
@@ -611,6 +619,7 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
         if age > stale_s(ex.arms[s.arm_id].tf):
             eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + s.arm_id, "action": "exploration_stale",
                                   "age_s": round(age, 3)})
+            candidate(eng, ex, s, now, "stale")
         else:
             keep.append(s)
     ex.queue = keep
@@ -620,6 +629,7 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
         for s in ex.queue:
             eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + s.arm_id,
                                   "action": "exploration_paused_dd", "drawdown": drawdown(eng)})
+            candidate(eng, ex, s, now, "paused_dd")
         ex.queue.clear()
         return
     try:
@@ -637,9 +647,56 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
         if res == "cap":
             break                                   # the global cap is full: the rest wait (until they are stale)
         ex.queue.remove(s)
+        if ps.why != "duplicate":
+            candidate(eng, ex, s, now, None if res == "sent" else ps.why)
         if res == "sent":
             sent += 1
             ex.last_arm = arm.arm_id
+
+
+def policy(ex: Exploration, style: str, now: pd.Timestamp) -> str:
+    """The branch that chooses a style's candidates (quant ruling 2026-10-25, "champion zero"): `random` until lane
+    L3's `serving_model` returns a champion for the style; no meta_p is ever served from a shadow model. The ranked
+    branch is not built here yet, so with a champion the engine stays on the random branch and says so
+    (`exploration_ranked_not_built`, once a minute at most): it never ranks on a model it cannot score."""
+    from goldbot.research.exploration_data import serving_model
+    minute = now.floor("min")
+    if ex.champion_seen.get(style, (None, False))[0] != minute:
+        try:
+            champ = serving_model(ex.db, style, now) is not None
+        except Exception:
+            champ = False
+        ex.champion_seen[style] = (minute, champ)
+        if champ:
+            log.warning("exploration: a %s champion is served but the ranked branch is not built; random branch", style)
+    return "random"
+
+
+def draw(candidate_id: str) -> float:
+    """The candidate's seeded uniform u in [0, 1): its id hashed, so a replay draws the same."""
+    return int(hashlib.sha1(candidate_id.encode()).hexdigest()[:13], 16) / float(16 ** 13)
+
+
+def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, blocked: str | None) -> None:
+    """Every candidate, taken or not, to lane L3's `exploration_data.record_candidate` with its propensity: the random
+    branch takes an admissible candidate when u < PI_RANDOM (mu = PI_RANDOM); a candidate a cap, the budget, the gate,
+    staleness or the pause stopped is `blocked` with mu 0 and its reason (research E6: off-policy estimates stay
+    unbiased). The feature snapshot is not built in the engine yet (None). Best effort: never raises."""
+    from goldbot.research.exploration_data import record_candidate
+    arm = ex.arms[s.arm_id]
+    cid = order_id(eng, arm, s.bar_ts)
+    branch = policy(ex, arm.style, now)
+    u = draw(cid)
+    taken = blocked is None
+    try:
+        record_candidate(ex.db, candidate_id=cid, account_id=eng.cfg.account_id, arm_id=arm.arm_id,
+                         family=arm.family, style=arm.style, tf=arm.tf, side=s.side, decision_utc=s.bar_ts,
+                         stop_dist=arm.stop * s.atr_usd, target_dist=arm.target * s.atr_usd, max_hold_s=arm.hold_s,
+                         taken=taken, is_control=arm.control_share is not None, arm_config_hash=arm.config_hash,
+                         blocked_reason=blocked, branch=branch if taken else "blocked", u=u,
+                         mu=PI_RANDOM if taken else 0.0, pi_rand_arm=PI_RANDOM)
+    except Exception as exc:
+        log.warning("exploration candidate %s not recorded (%s)", cid, type(exc).__name__)
 
 
 def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd.Timestamp,
@@ -654,10 +711,13 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
                                "propensity": round(ps.share.get(arm.arm_id, 0.0), 4)}
 
     def refuse(why: str) -> None:
+        ps.why = why
         eng.decisions.append({"ts": now.isoformat(), "agent": tag, "proposal": pid,
                               "action": "exploration_refused:" + why, **applied})
 
+    ps.why = None
     if pid in eng.sent_ids:
+        ps.why = "duplicate"
         return "refused"
     terms = eng._sizing_terms(side, price, stop_d, cycle=s.bar_ts)
     lot = terms.get("volume_min")
@@ -821,26 +881,23 @@ def record_close(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float | 
 
 
 def _observe(eng: Engine, db: Database, r: ExplorationRecord, filled: pd.Timestamp | None) -> None:
-    """Lane L3's learning row for a closed exploration trade (`exploration_data.record_obs`, keyed by this ledger's
-    client order id; the first record stands). The round trip in USD/oz is the spread paid at entry plus the
-    commission and paid swap converted at the entry's rate. The entry is the fill (the broker's clock), the decision
-    the send, never before the signal bar's close nor after the fill. Best effort: a row L3 cannot take is logged, never raised
-    (the exploration ledger above is the record of the trade)."""
-    from goldbot.research.exploration_data import record_obs
+    """Lane L3's fill row for a closed exploration trade (`exploration_data.record_fill`, keyed by the candidate id =
+    this ledger's client order id; written once). `cost_per_oz`: commission and paid swap per oz in USD at the
+    entry's rate (the spread is in the fill prices). The entry is the fill on the broker's clock, never after the
+    exit. Best effort: a row L3 cannot take is logged, never raised (the exploration ledger is the trade's record)."""
+    from goldbot.research.exploration_data import record_fill
     if r.fill_price is None or r.exit_price is None or r.exit_utc is None or not r.lots:
         return
     try:
         oz = r.lots * eng._contract_size()
         paid = (r.commission or 0.0) + max(0.0, -(r.swap or 0.0))
-        fees = paid / (oz * r.fx_acct_per_usd) if r.fx_acct_per_usd and oz > 0 else 0.0
         entry = filled or r.sent_utc
-        record_obs(db, obs_id=r.client_order_id, account_id=r.account_id, arm_id=r.arm_id, family=r.family, tf=r.tf,
-                   side=r.side, decision_utc=max(r.signal_utc, min(r.sent_utc, entry)), entry_utc=entry,
-                   exit_utc=max(r.exit_utc, entry),
-                   entry_price=r.fill_price, exit_price=r.exit_price, stop=r.fill_price - r.side * r.stop_usd,
-                   cost_per_oz=(r.spread_usd or 0.0) + fees, censored=bool(r.censored))
+        record_fill(db, candidate_id=r.client_order_id, entry_utc=min(entry, r.exit_utc), exit_utc=r.exit_utc,
+                    entry_price=r.fill_price, exit_price=r.exit_price,
+                    cost_per_oz=paid / (oz * r.fx_acct_per_usd) if r.fx_acct_per_usd and oz > 0 else 0.0,
+                    censored=bool(r.censored))
     except Exception as exc:
-        log.warning("exploration observation %s not recorded (%s)", r.client_order_id, type(exc).__name__)
+        log.warning("exploration fill %s not recorded (%s)", r.client_order_id, type(exc).__name__)
 
 
 def trades(state_dir: str, account_id: str | None = None) -> list[ExplorationRecord]:
