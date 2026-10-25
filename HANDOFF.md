@@ -5,6 +5,7 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- Engine: `history.reload_release` re-reads release minutes from the store into holes before the cut-over (point in time, first copy wins) at each REFILL_EVERY while a history_gap stands, so a month re-published by data-dukascopy heals a running engine without a restart (brain 2026-10-23: 4h refused on the 08-28..31 Sunday-open hole although the store was whole from 10-24).
 - H-52 evidence start now cuts every shadow-evidence input that feeds a decision (evaluator finding, MEDIUM). Trades
   OPENED (signal bar open) before 2026-10-19 13:49 UTC are quarantined in: the attribution report (`trade_rows` /
   `build_report(evidence_start=)`, counted in its notes), the research director's attribution cells (budget tilt, the

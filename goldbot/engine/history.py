@@ -407,6 +407,38 @@ def queue_minutes(eng: Engine, done: pd.DataFrame) -> None:
     _write(eng, done)
 
 
+def reload_release(eng: Engine, now: pd.Timestamp) -> int:
+    """Heal release-side holes from the store. The engine reads the release once, at warm_start; the data-dukascopy
+    job later re-publishes a month (a Sunday-open hole the first pull missed), the brain syncs it into the store, and
+    the running engine kept refusing every bar on the stale hole until its next restart (brain 2026-10-23: 4h refused
+    since 08-28..31 although the store was whole from 10-24). Only the minutes the window lacks, before the cut-over,
+    of the open gaps are read: `visible_at <= now` (point in time), release source, never over a minute the engine
+    already holds (first copy wins), so a revised value never replaces what a decision already used. Returns bars added."""
+    h, cfg = eng.history, eng.cfg
+    if eng.store is None or eng.bars_1m.empty or h.cutover is None:
+        return 0
+    gaps = window_gaps(eng, eng.bars_1m)
+    added = []
+    for g in gaps:
+        if g.start >= h.cutover:
+            continue                                        # the broker's own feed: only the broker fill may fill it
+        rel = _clean(eng.store.read("bars_1m", source=RELEASE_SOURCE, symbol=cfg.symbol, start=g.start,
+                                    end=min(g.end, h.cutover)), now)
+        if not rel.empty:
+            added.append(rel[(rel["ts_utc"] >= g.start) & (rel["ts_utc"] < min(g.end, h.cutover))])
+    got = pd.concat([a for a in added if not a.empty]) if any(not a.empty for a in added) else pd.DataFrame()
+    if got.empty:
+        return 0
+    merged = pd.concat([eng.bars_1m, got]).drop_duplicates("ts_utc", keep="first").sort_values("ts_utc", kind="stable")
+    n = len(merged) - len(eng.bars_1m)
+    if n <= 0:
+        return 0
+    eng.bars_1m = merged.tail(cfg.max_bars_in_memory).reset_index(drop=True)
+    eng._resamplers, eng._ctx_cache, eng._bars_clean = {}, {}, None
+    log.info("history: %d release minutes re-read from the store into %d hole(s)", n, len(gaps))
+    return n
+
+
 def after_close(eng: Engine, close_ts: pd.Timestamp) -> None:
     """After a bar close's exits and decisions: absorb a finished fill; while a window has a hole, re-fill it from the
     broker every REFILL_EVERY. Never raises."""
@@ -414,6 +446,7 @@ def after_close(eng: Engine, close_ts: pd.Timestamp) -> None:
         absorb(eng)
         h = eng.history
         if h.gaps and (h.last_fill is None or close_ts - h.last_fill >= REFILL_EVERY):
+            reload_release(eng, close_ts)
             start_fill(eng, close_ts)
         if h.writer is not None:
             h.backfill["dropped"] = h.writer.dropped

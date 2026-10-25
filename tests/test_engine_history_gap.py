@@ -403,3 +403,45 @@ def test_1h_and_4h_windows_over_september_and_october_2026_pass_the_guard(tmp_pa
     fr = SimpleNamespace(dec=pd.DataFrame({"ts_utc": [first, ts[-1]]}))
     assert history.refuse(eng, tf, fr, gaps, [], NOW_1019) is None
     assert tf not in eng.history.gaps
+
+
+# ----------------------------------------------------------- a release hole healed in the store (brain 2026-10-23)
+def _holed_engine(tmp_path: Path):
+    """An engine whose memory lacks 2h of release minutes that the store holds (the release was re-published)."""
+    _seed_store(tmp_path)
+    eng = _engine(tmp_path)
+    eng.warm_start(pd.Timestamp("2025-03-05 23:00", tz="UTC"))
+    hole = pd.Timestamp("2025-03-05 13:00", tz="UTC")
+    full = eng.bars_1m
+    eng.bars_1m = full[(full["ts_utc"] < hole) | (full["ts_utc"] >= hole + pd.Timedelta(hours=2))].reset_index(drop=True)
+    eng.history.cutover = pd.Timestamp("2025-03-06", tz="UTC")
+    return eng, full, hole
+
+
+def test_a_release_hole_is_healed_from_the_store_without_a_restart(tmp_path):
+    eng, full, _ = _holed_engine(tmp_path)
+    now = pd.Timestamp("2025-03-05 23:00", tz="UTC")
+    assert history.window_gaps(eng, eng.bars_1m)
+    assert history.reload_release(eng, now) == 120
+    assert history.window_gaps(eng, eng.bars_1m) == []
+    assert len(eng.bars_1m) == len(full)
+
+
+def test_a_release_minute_not_yet_visible_is_not_read_into_the_hole(tmp_path):
+    eng, full, hole = _holed_engine(tmp_path)
+    # as-of: at 13:30 the minutes from 13:30 on are not knowable yet (visible_at = ts + 1 min)
+    assert history.reload_release(eng, hole + pd.Timedelta(minutes=30)) == 30
+
+
+def test_reload_never_replaces_a_minute_the_engine_already_holds(tmp_path):
+    eng, full, _ = _holed_engine(tmp_path)
+    before = eng.bars_1m.copy()
+    history.reload_release(eng, pd.Timestamp("2025-03-05 23:00", tz="UTC"))
+    kept = eng.bars_1m[eng.bars_1m["ts_utc"].isin(before["ts_utc"])].reset_index(drop=True)
+    pd.testing.assert_frame_equal(kept, before.reset_index(drop=True))
+
+
+def test_reload_leaves_a_hole_after_the_cut_over_to_the_broker_fill(tmp_path):
+    eng, _, _ = _holed_engine(tmp_path)
+    eng.history.cutover = pd.Timestamp("2025-03-05 01:00", tz="UTC")
+    assert history.reload_release(eng, pd.Timestamp("2025-03-05 23:00", tz="UTC")) == 0
