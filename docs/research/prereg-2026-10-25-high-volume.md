@@ -20,7 +20,7 @@ and the arm's config hash (E2) is recorded in the same commit. A placeholder sti
 ## Sub-budgets on `icm-probe` (H-61, tighten-only layers before the RiskGate; RiskGate unchanged)
 | Style | Daily £ ceiling (sub-budget) | Max open | Per-trade loss cap |
 |---|---|---|---|
-| Scalp (S arms, P0) | 70 | 10 | <= £3 at 0.01 lot (native stop) |
+| Scalp (S arms, P0) | 70 | 10 | <= £6.50 at 0.01 lot (native stop; PD decision 2026-10-25 on arm spec F1: £3 skipped most S1–S4) |
 | Intraday (I arms, M mirrors) | 60 | 7 | <= £45 (existing `max_loss`) |
 | Swing (W arms) | 110 | 2 | arm's native stop £38-110, see below |
 - Ceilings are limits, not targets; their sum (240) exceeds the host's £198, so **the host's £198 binds** and the
