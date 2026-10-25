@@ -123,6 +123,15 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
     return trades, summary
 
 
+def load_blackout(folder: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Tier-1 blackout windows from the calendar-v1 files in `folder` (scripts/fetch_data_release.py --us-calendar)."""
+    cal = read_us_calendar_files(folder)
+    if cal.empty:
+        raise SystemExit(f"no calendar rows in {folder}: release calendar-v1 is missing or empty (run the data-us-calendar "
+                         "workflow, which needs the FRED_API_KEY secret); the blackout cannot be applied")
+    return R.blackout_windows(cal)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm")
@@ -152,10 +161,7 @@ def main() -> None:
         raise SystemExit("no bars for the block")
     blackout = None
     if not args.no_calendar:
-        cal = read_us_calendar_files(Path(args.calendar))
-        if cal.empty:
-            raise SystemExit(f"no calendar rows in {args.calendar}: the blackout cannot be applied (--no-calendar to run without)")
-        blackout = R.blackout_windows(cal)
+        blackout = load_blackout(Path(args.calendar))
     trades, summary = run_arm(b1, arm, start, end, A.load_costs(Path(args.costs)), blackout)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
