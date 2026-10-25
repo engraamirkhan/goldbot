@@ -1,11 +1,13 @@
 name: research-arms-matrix
-# E10: exploration arms (config/exploration_arms.yaml) walk-forwarded on the data-v1 1m bars, arm x 2-year block from
-# 2015-01 to 2025-09-30, each cell priced with the era's costs (config/era_costs.yaml), then per-arm priors (OOS
-# 2019-2025 trades, weight halved, capped at 50 trades). HARD HOLDOUT: nothing after 2025-09-30 is read (the files
+# E10: the frozen exploration arms (config/exploration_arms.yaml, ARM-SPEC 2026-10-25) walk-forwarded on the data-v1 1m
+# bars, arm x 2-year block from 2015-01 to 2025-09-30, priced with the frozen cost model (config/arm_costs.yaml: $0.23
+# round trip, net R at stop overshoot $0 and $0.70), then per-arm priors (OOS 2019-2025 trades: 0.5 x mean, weight
+# min(50, n/100)) and ONE registry K row per run. Runs only from main (reviewed code reaches the registry). HARD HOLDOUT: nothing after 2025-09-30 is read (the files
 # past 2025 are never opened, the bars are cut and asserted: goldbot/research/arms.py). Reads the public release only.
 # Uses no secrets: the job token is read-only (contents: read) and nothing is written to a release or the repo.
-# Cost estimate: plan ~1 min; each cell downloads <= 3 yearly files (~100-200 MB) and runs 5-20 min; with 2 random
-# arms x 6 blocks = 12 cells ~ 2-3 runner-hours per dispatch, and every added arm adds 6 cells (~1 h). Artefacts: a
+# Cost estimate: plan ~1 min; each cell downloads <= 4 yearly files (~150-250 MB, 400-day warmup) and runs 5-25 min
+# (1m arms and the box/tsmom replicas are the slow ones); 22 runnable arms x 6 blocks = 132 cells ~ 25-40 runner-hours
+# per full dispatch (max-parallel 6; use the `arms` input to run a subset). Artefacts: a
 # few MB per cell, kept 30 days. No schedule, so nothing recurring.
 on:
   workflow_dispatch:
@@ -20,6 +22,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   plan:
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -43,8 +46,8 @@ jobs:
           import json, os
           from pathlib import Path
           from goldbot.research import arms as A
-          A.load_era_costs(Path("config/era_costs.yaml"))
-          ids = [a.id for a in A.load_arms(Path("config/exploration_arms.yaml"))]
+          A.load_costs(Path("config/arm_costs.yaml"))
+          ids = A.runnable_ids(Path("config/exploration_arms.yaml"))   # every config_hash is checked on load
           want = [x.strip() for x in os.environ.get("ARMS_INPUT", "").split(",") if x.strip()]
           unknown = [w for w in want if w not in ids]
           if unknown:
@@ -58,6 +61,7 @@ jobs:
           PY
   cell:
     needs: plan
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -74,22 +78,22 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: { python-version: "3.11", cache: pip }
       - run: pip install -e .
-      - name: download only the years this block reads (warmup year to block end, never past 2025)
+      - name: download only the years this block reads (400-day warmup to block end, never past 2025) and the calendar
         env:
           GH_TOKEN: ${{ github.token }}
           BLOCK: ${{ matrix.block }}
         run: |
           set -euo pipefail
           start="${BLOCK%%:*}"; end="${BLOCK##*:}"
-          y0=$(( ${start:0:4} - 1 )); y1=$(( ${end:0:4} )); [ "$y1" -gt 2025 ] && y1=2025
-          python scripts/fetch_data_release.py --download-only --years "$y0" "$y1"
+          y0=$(( ${start:0:4} - 2 )); y1=$(( ${end:0:4} )); [ "$y1" -gt 2025 ] && y1=2025
+          python scripts/fetch_data_release.py --download-only --years "$y0" "$y1" --us-calendar
       - name: run the arm on the block
         env:
           ARM: ${{ matrix.arm }}
           BLOCK: ${{ matrix.block }}
         run: |
           set -euo pipefail
-          python scripts/run_arm_backtest.py --arm "$ARM" --block "$BLOCK" --bars raw --out arm_out
+          python scripts/run_arm_backtest.py --arm "$ARM" --block "$BLOCK" --bars raw --calendar raw-calendar --out arm_out
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: arm-${{ matrix.arm }}-${{ strategy.job-index }}
@@ -98,7 +102,7 @@ jobs:
           retention-days: 30
   aggregate:
     needs: cell
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -114,7 +118,7 @@ jobs:
           pattern: arm-*
           path: arm_all
           merge-multiple: true
-      - name: per-arm priors (OOS 2019-2025, halved, capped at 50 trades)
+      - name: per-arm priors (OOS 2019-2025 mean x 0.5, weight min(50, n/100))
         run: |
           set -euo pipefail
           python scripts/aggregate_arm_priors.py --in arm_all --out priors.json | tee -a "$GITHUB_STEP_SUMMARY"
@@ -123,3 +127,32 @@ jobs:
           name: arm-priors
           path: priors.json
           retention-days: 90
+  record:
+    needs: aggregate
+    if: ${{ !cancelled() && needs.aggregate.result == 'success' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: research-registry   # one writer at a time for registry.jsonl, shared with research.yml
+      cancel-in-progress: false
+    permissions:
+      contents: write   # registry upload to release research-v1 (nothing is pushed to the repo)
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -e .
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: arm-priors
+          path: priors
+      - name: one K row for this run
+        run: |
+          set -euo pipefail
+          scripts/registry_release.sh fetch registry.jsonl
+          python scripts/record_arms_k_row.py --registry registry.jsonl --priors priors/priors.json \
+            --run-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          scripts/registry_release.sh save registry.jsonl

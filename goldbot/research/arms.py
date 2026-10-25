@@ -1,11 +1,14 @@
-"""Exploration arms on the historical 1m bars (E10): the arm loader, the hard holdout guard, per-era cost pricing and
-the per-arm prior. Pure functions; `scripts/run_arm_backtest.py` runs one arm on one block, the workflow
-`research-arms-matrix.yml` fans arm x 2-year block out and `scripts/aggregate_arm_priors.py` builds the priors.
+"""Exploration arms on the historical 1m bars (E10, ARM-SPEC 2026-10-25): the arm loader with config hashes, the hard
+holdout guard, the frozen cost model and the per-arm prior. Pure functions; `goldbot.research.arm_rules` generates each
+rule's candidates, `scripts/run_arm_backtest.py` runs one arm on one block, the workflow `research-arms-matrix.yml` fans
+arm x 2-year block out and `scripts/aggregate_arm_priors.py` builds the priors.
 
 The hard holdout (nothing after 2025-09-30 is read) is independent of `research.holdout_from` on purpose: the loader
 cuts the bars, and the guard asserts nothing at or after it survived, so a loosened setting cannot widen this run."""
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any, Literal
 
@@ -19,12 +22,13 @@ from goldbot.data.timeutil import utc_index
 
 HOLDOUT_FROM = pd.Timestamp("2025-10-01", tz="UTC")     # first instant that is never read
 LAST_DAY = pd.Timestamp("2025-09-30", tz="UTC")
-FIRST_DAY = pd.Timestamp("2015-01-01", tz="UTC")
 OOS_FROM = pd.Timestamp("2019-01-01", tz="UTC")         # priors use 2019-2025 trades only
-PRIOR_OOS_FACTOR = 0.5
+PRIOR_MEAN_FACTOR = 0.5
 PRIOR_WEIGHT_CAP = 50.0
-CONTRACT_OZ = 100.0
-TIMEFRAMES = ("1m", "15m", "1h", "4h")
+PRIOR_WEIGHT_PER_TRADE = 0.01                           # weight = min(50, n / 100)
+Timeframe = Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
+RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_absorb", "box_break_close",
+         "ema_pullback", "tsmom", "blocked")
 
 
 # ---------------------------------------------------------------- holdout guard
@@ -64,110 +68,84 @@ def parse_block(text: str) -> tuple[pd.Timestamp, pd.Timestamp]:
     return start, end
 
 
-# ---------------------------------------------------------------- era costs
-class EraCost(FrozenRecord):
-    from_: pd.Timestamp = Field(alias="from")
-    spread_floor_usd: float = Field(ge=0)       # the quoted spread a retail broker would not go under, per oz
-    commission_per_lot_side_usd: float = Field(ge=0)
-    slippage_usd: float = Field(ge=0)           # per oz per side
-
-    def fixed_usd(self) -> float:
-        """Round trip per oz beyond the spread: two slippages and both commissions."""
-        return 2 * self.slippage_usd + 2 * self.commission_per_lot_side_usd / CONTRACT_OZ
+# ---------------------------------------------------------------- the frozen cost model
+class ArmCosts(FrozenRecord):
+    """cost-model-1m-2026-10-25.md, conservative case: p90 spread both legs + slippage upper CI + commission = $0.23 per
+    oz round trip (the bars are priced at mid, so the spread is inside it, never charged twice). The stop-exit overshoot
+    ($0.70 mean, n = 14, unverified: S0R measures it) is reported both ways."""
+    round_trip_usd: float = Field(ge=0)
+    overshoot_scenarios_usd: tuple[float, ...]
 
 
-class EraCosts(FrozenRecord):
-    eras: tuple[EraCost, ...]
-
-    @model_validator(mode="after")
-    def _ordered(self) -> EraCosts:
-        starts = [e.from_ for e in self.eras]
-        if not starts or starts[0] > FIRST_DAY:
-            raise ValueError("era costs must start on or before 2015-01-01")
-        if starts != sorted(set(starts)):
-            raise ValueError("era costs must be in strictly increasing order of `from`")
-        return self
-
-    def at(self, ts: pd.Timestamp) -> EraCost:
-        cur = self.eras[0]
-        for e in self.eras:
-            if e.from_ <= ts:
-                cur = e
-        return cur
-
-
-def load_era_costs(path: Path) -> EraCosts:
+def load_costs(path: Path) -> ArmCosts:
     raw = yaml.safe_load(Path(path).read_text())
-    eras = [{**e, "from": pd.Timestamp(str(e["from"]), tz="UTC")} for e in raw["eras"]]
-    return EraCosts.model_validate({"eras": eras})
+    return ArmCosts(round_trip_usd=float(raw["round_trip_usd"]),
+                    overshoot_scenarios_usd=tuple(float(x) for x in raw["overshoot_scenarios_usd"]))
 
 
-def extra_cost_usd(entry_ts: pd.DatetimeIndex, bar_spread: np.ndarray, table: EraCosts) -> np.ndarray:
-    """Round-trip cost per oz beyond what the labels already pay (they fill ask in, bid out, so the bar's own spread is
-    paid): the era's slippage and commission, plus the top-up when the bar's spread is under the era's floor
-    (Dukascopy's quote in the early years was tighter than a retail account could trade)."""
-    out = np.empty(len(entry_ts))
-    for i, (t, s) in enumerate(zip(entry_ts, np.asarray(bar_spread, dtype=float), strict=True)):
-        era = table.at(t)
-        top_up = max(era.spread_floor_usd - (s if np.isfinite(s) else 0.0), 0.0)
-        out[i] = era.fixed_usd() + top_up
-    return out
+def net_r(move_usd: np.ndarray, risk_usd: np.ndarray, stop_exit: np.ndarray, costs: ArmCosts,
+          overshoot_usd: float) -> np.ndarray:
+    """Net result in R: the signed move per oz (swap included) less the round trip, less `overshoot_usd` on a stop exit,
+    over the candidate's own stop distance."""
+    pnl = np.asarray(move_usd, dtype=float) - costs.round_trip_usd - overshoot_usd * np.asarray(stop_exit, dtype=float)
+    return pnl / np.asarray(risk_usd, dtype=float)
 
 
 # ---------------------------------------------------------------- arms
 class Arm(FrozenRecord):
-    id: str = Field(pattern=r"^[a-z0-9][a-z0-9_.-]*$")
-    kind: Literal["specialist", "random"]
-    timeframe: Literal["1m", "15m", "1h", "4h"]
-    family: str | None = None
-    config: dict[str, Any] = Field(default_factory=dict)
-    seed: int | None = None
-    # random arms: probability a decision bar opens a trade, and the barriers in ATR (same shape for both controls)
-    p_entry: float = Field(0.02, gt=0, le=1)
-    target_atr: float = Field(1.5, gt=0)
-    stop_atr: float = Field(1.0, gt=0)
-    max_bars: int = Field(16, ge=1)
+    id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    rule: str
+    timeframe: Timeframe
+    params: dict[str, Any] = Field(default_factory=dict)
+    max_open: int = Field(1, ge=1)
+    status: Literal["run", "blocked"] = "run"
+    note: str = ""
+    config_hash: str | None = None
 
     @model_validator(mode="after")
     def _consistent(self) -> Arm:
-        if self.kind == "random" and self.seed is None:
-            raise ValueError(f"{self.id}: a random arm needs a seed")
-        if self.kind == "specialist":
-            from goldbot.specialists import SPECIALISTS
-            if self.family not in SPECIALISTS:
-                raise ValueError(f"{self.id}: unknown specialist family {self.family!r}")
-            if self.timeframe == "1m":
-                raise ValueError(f"{self.id}: specialist arms run on 15m, 1h or 4h")
+        if self.rule not in RULES:
+            raise ValueError(f"{self.id}: unknown rule {self.rule!r}; known: {RULES}")
+        if self.status == "blocked" and not self.note:
+            raise ValueError(f"{self.id}: a blocked arm needs a note saying what unblocks it")
         return self
 
 
-def load_arms(path: Path) -> list[Arm]:
+def arm_hash(arm: Arm) -> str:
+    """The arm's frozen configuration: sha256 over id, rule, timeframe, params, max_open (status and note are prose)."""
+    body = {"id": arm.id, "rule": arm.rule, "timeframe": arm.timeframe, "params": arm.params, "max_open": arm.max_open}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def load_arms(path: Path, *, check_hash: bool = True) -> list[Arm]:
+    """The arms of `path`. With `check_hash` every arm must carry a `config_hash` equal to its own: an arm edited after
+    it was frozen is refused (ARM-SPEC: an edit needs a written amendment and a new arm id)."""
     raw = yaml.safe_load(Path(path).read_text()) or {}
     out = [Arm.model_validate(a) for a in raw.get("arms", [])]
     ids = [a.id for a in out]
     dup = sorted({i for i in ids if ids.count(i) > 1})
     if dup:
         raise ValueError(f"duplicate arm ids: {dup}")
+    if check_hash:
+        for a in out:
+            if a.config_hash != arm_hash(a):
+                raise ValueError(f"{a.id}: config_hash {a.config_hash!r} does not match the arm (expected "
+                                 f"{arm_hash(a)!r}); an arm is frozen, amend it under a new id")
     return out
 
 
-def random_candidates(arm: Arm, n_bars: int) -> pd.DataFrame:
-    """Seeded random control: each bar enters with probability `p_entry`, side a fair coin. Same barriers as a
-    specialist's, so the control prices the cost and barrier geometry with no edge."""
-    rng = np.random.default_rng(arm.seed)
-    take = rng.random(n_bars) < arm.p_entry
-    side = np.where(rng.random(n_bars) < 0.5, 1, -1)
-    idx = np.flatnonzero(take)
-    return pd.DataFrame({"idx": idx, "side": side[idx]})
+def runnable_ids(path: Path) -> list[str]:
+    return [a.id for a in load_arms(path) if a.status == "run"]
 
 
 # ---------------------------------------------------------------- priors
-def build_prior(trades: pd.DataFrame) -> dict[str, float]:
-    """Prior for one arm from its net-R trades: OOS (2019-2025) trades only, their weight halved and capped at 50
-    trades. `trades`: ts_utc (entry), net_r."""
+def build_prior(trades: pd.DataFrame, column: str = "net_r") -> dict[str, float]:
+    """Prior for one arm from its per-trade net R (`column`): OOS (2019-2025) trades only; mean x 0.5; weight
+    min(50, n / 100) trades. `trades`: ts_utc (entry) and the R column."""
     ts = utc_index(trades["ts_utc"])
-    oos = trades.loc[np.asarray(ts >= OOS_FROM), "net_r"].astype(float)
+    oos = trades.loc[np.asarray(ts >= OOS_FROM), column].astype(float)
     n = int(len(oos))
     if n == 0:
         return {"n_oos": 0, "mean_r": 0.0, "weight": 0.0}
-    return {"n_oos": n, "mean_r": float(oos.mean()), "weight": float(min(PRIOR_OOS_FACTOR * n, PRIOR_WEIGHT_CAP))}
+    return {"n_oos": n, "mean_r": float(PRIOR_MEAN_FACTOR * oos.mean()),
+            "weight": float(min(PRIOR_WEIGHT_CAP, PRIOR_WEIGHT_PER_TRADE * n))}

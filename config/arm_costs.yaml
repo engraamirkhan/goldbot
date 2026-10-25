@@ -1,0 +1,4 @@
+# The frozen cost model of the historical arms matrix (docs/research/cost-model-1m-2026-10-25.md, conservative case).
+# Bars are priced at mid, so the spread is inside the round trip; swap is charged per rollover held (costs.swap_*).
+round_trip_usd: 0.23              # per oz (= per 0.01 lot): p90 spread both legs 0.12 + slippage upper CI 0.05 + commission 0.06
+overshoot_scenarios_usd: [0.0, 0.70]   # stop-exit overshoot: none, and the measured mean (n = 14); S0R settles which holds
