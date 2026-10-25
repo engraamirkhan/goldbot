@@ -4,7 +4,7 @@ name: research-arms-matrix
 # round trip, net R at stop overshoot $0 and $0.70), then per-arm priors (OOS 2019-2025 trades: 0.5 x mean, weight
 # min(50, n/100)) and ONE registry K row per run. Runs only from main (reviewed code reaches the registry). HARD HOLDOUT: nothing after 2025-09-30 is read (the files
 # past 2025 are never opened, the bars are cut and asserted: goldbot/research/arms.py). Reads the public release only.
-# Uses no secrets: the job token is read-only (contents: read) and nothing is written to a release or the repo.
+# Uses no secrets: jobs are contents: read, except `record`, which uploads the registry to release research-v1 (never pushes to the repo).
 # Cost estimate: plan ~1 min; each cell downloads <= 4 yearly files (~150-250 MB, 400-day warmup) and runs 5-25 min
 # (1m arms and the box/tsmom replicas are the slow ones); 22 runnable arms x 6 blocks = 132 cells ~ 25-40 runner-hours
 # per full dispatch (max-parallel 6; use the `arms` input to run a subset). Artefacts: a
