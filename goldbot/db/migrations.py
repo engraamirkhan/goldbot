@@ -324,41 +324,99 @@ AUX: tuple[Migration, ...] = (
            ) STRICT""",
         "CREATE INDEX IF NOT EXISTS cost_probe_skips_account ON cost_probe_skips(account_id, ts_ns)",
     )),
-    # additive (exploration arms, architect plan 2026-10-25, goldbot/research/exploration_data.py): one row per closed
-    # exploration trade (its fills stay in cost_probes, purpose "exploration"), keyed by the probe's client order id and
-    # written once (a revision never overwrites the first record); a row that fails validation is kept with its
-    # `quarantine` reason and never trained on. And the nightly bandit's per-arm budget shares, one row per (run, arm),
-    # history kept; readers take the newest run. Read by the exploration learner and the arms' budget only, never by
-    # the shadow book, the tournament, promotion, closed trades, fills or the phase gate. A release without it never
-    # reads it
+    # additive (exploration arms, architect plan 2026-10-25; H-61/H-62, docs/research/h62-meta-labeller-spec-2026-10-25.md
+    # section 7; goldbot/research/exploration_data.py). `exploration_obs`: one row per exploration CANDIDATE, taken or
+    # not, written at the decision with its propensity (taken, branch, u, mu, tau_arm, pi_rand_arm), the served meta_p
+    # and versions and the decision-time feature snapshot; the bar-replayed label (label_sim_r, label_mid_r) and, for a
+    # taken one, the fill-based R (diagnostic only) are each written once, later; nothing is ever overwritten. A row
+    # failing validation keeps its `quarantine` reason and is never trained on. `exploration_weights`: the nightly
+    # bandit's share per arm within its style, one row per (run, arm), history kept. `exploration_priors`: H-60 per-arm
+    # history priors (2019-01..2025-09 only). `exploration_models`: the H-62 meta-labeller versions (file + SHA-256,
+    # cutoff and activation). Read by the exploration learner and the arms' allocation only, never by the shadow book,
+    # the tournament, promotion, closed trades, fills or the phase gate. A release without it never reads it
     Migration(version=16, name="exploration", additive=True, statements=(
         """CREATE TABLE IF NOT EXISTS exploration_obs (
-               obs_id TEXT PRIMARY KEY,
+               candidate_id TEXT PRIMARY KEY,
                account_id TEXT NOT NULL,
                arm_id TEXT NOT NULL,
+               arm_config_hash TEXT,
                family TEXT NOT NULL,
+               style TEXT NOT NULL,
                tf TEXT NOT NULL,
                side INTEGER NOT NULL,
+               is_control INTEGER NOT NULL CHECK (is_control IN (0, 1)),
                decision_ns INTEGER NOT NULL,
-               entry_ns INTEGER NOT NULL,
-               exit_ns INTEGER NOT NULL,
+               session_day TEXT NOT NULL,
+               stop_dist REAL,
+               target_dist REAL,
+               max_hold_s INTEGER,
+               taken INTEGER NOT NULL CHECK (taken IN (0, 1)),
+               blocked_reason TEXT,
+               branch TEXT,
+               u REAL,
+               mu REAL,
+               tau_arm REAL,
+               pi_rand_arm REAL,
+               meta_p REAL,
+               model_version TEXT,
+               bandit_version TEXT,
+               feature_version TEXT,
+               feature_list_id TEXT,
+               features TEXT CHECK (features IS NULL OR json_valid(features)),
+               available_utc_max_ns INTEGER,
+               snapshot_ref TEXT,
+               entry_ns INTEGER,
+               exit_ns INTEGER,
                entry_price REAL,
                exit_price REAL,
-               stop REAL,
-               cost_per_oz REAL,
-               r_net REAL,
-               censored INTEGER NOT NULL CHECK (censored IN (0, 1)),
-               snapshot_ref TEXT,
+               fill_cost_per_oz REAL,
+               label_fill_r REAL,
+               censored INTEGER CHECK (censored IS NULL OR censored IN (0, 1)),
+               fill_recorded_ns INTEGER,
+               label_exit_ns INTEGER,
+               label_sim_r REAL,
+               label_mid_r REAL,
+               label_barrier TEXT,
+               cost_model_version TEXT,
+               cost_effective_ns INTEGER,
+               labelled_ns INTEGER,
                quarantine TEXT,
                recorded_ns INTEGER NOT NULL
            ) STRICT""",
-        "CREATE INDEX IF NOT EXISTS exploration_obs_arm ON exploration_obs(arm_id, exit_ns)",
+        "CREATE INDEX IF NOT EXISTS exploration_obs_style ON exploration_obs(style, decision_ns)",
+        "CREATE INDEX IF NOT EXISTS exploration_obs_arm ON exploration_obs(arm_id, decision_ns)",
         """CREATE TABLE IF NOT EXISTS exploration_weights (
                run_ns INTEGER NOT NULL,
                arm_id TEXT NOT NULL,
+               style TEXT NOT NULL,
                weight REAL NOT NULL CHECK (weight >= 0 AND weight <= 1),
                detail TEXT NOT NULL CHECK (json_valid(detail)),
                PRIMARY KEY (run_ns, arm_id)
+           ) STRICT""",
+        """CREATE TABLE IF NOT EXISTS exploration_priors (
+               arm_id TEXT NOT NULL,
+               prior_version TEXT NOT NULL,
+               mean_r REAL NOT NULL,
+               sd_r REAL NOT NULL CHECK (sd_r > 0),
+               n_eff REAL NOT NULL CHECK (n_eff >= 0),
+               n_hist INTEGER NOT NULL,
+               hist_start_ns INTEGER NOT NULL,
+               hist_end_ns INTEGER NOT NULL,
+               recorded_ns INTEGER NOT NULL,
+               PRIMARY KEY (arm_id, prior_version)
+           ) STRICT""",
+        """CREATE TABLE IF NOT EXISTS exploration_models (
+               model_version TEXT PRIMARY KEY,
+               style TEXT NOT NULL,
+               feature_list_id TEXT NOT NULL,
+               feature_version TEXT NOT NULL,
+               cutoff_ns INTEGER NOT NULL,
+               activation_ns INTEGER NOT NULL CHECK (activation_ns > cutoff_ns),
+               path TEXT NOT NULL,
+               sha256 TEXT NOT NULL,
+               n_rows INTEGER NOT NULL,
+               detail TEXT NOT NULL CHECK (json_valid(detail)),
+               recorded_ns INTEGER NOT NULL
            ) STRICT""",
     )),
 )
