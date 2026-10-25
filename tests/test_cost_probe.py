@@ -686,8 +686,9 @@ def test_the_cost_probes_table_is_an_additive_aux_migration_so_a_rollback_still_
     with sqlite3.connect(tmp_path / "aux.db") as conn:
         migrate(conn, "aux")
         assert conn.execute("SELECT COUNT(*) FROM cost_probes").fetchone()[0] == 0
-        assert migrate(conn, "aux", migrations=AUX[:-1]) == []          # the older code accepts the newer file
-    assert AUX[-1].name == "cost_probes" and AUX[-1].additive
+        assert conn.execute("SELECT COUNT(*) FROM cost_probe_skips").fetchone()[0] == 0
+        assert migrate(conn, "aux", migrations=AUX[:-2]) == []          # the older code accepts the newer file
+    assert [(m.name, m.additive) for m in AUX[-2:]] == [("cost_probes", True), ("cost_probe_skips", True)]
 
 
 def test_the_broker_ledger_reconciles_closed_probes_in_the_probe_ledger_not_as_missing(tmp_path):
@@ -1010,3 +1011,81 @@ def test_with_dynamic_limits_a_probe_whose_loss_cannot_be_computed_is_still_refu
     assert not pb.positions()
     refused = [d for d in eng.decisions if d.get("action") == "cost_probe_refused:probe_loss_unknown"]
     assert refused and refused[0]["basis"].startswith("max_loss=fixed:probe_loss_unknown")
+
+
+# ---------------------------------------------------------------- skipped probes (quant review of 97ba941e, 2026-10-25)
+def _skip_rows(eng: Engine, *losses: float) -> None:
+    """Skipped attempts from an earlier day: the strategy's own stop lost `loss` at 0.01 lot, above the ceiling."""
+    assert eng.probe is not None
+    old = pd.Timestamp("2025-03-02 12:00", tz="UTC")
+    with eng.probe.db.write() as conn:
+        for i, loss in enumerate(losses):
+            cost_probe.SKIPS.upsert(conn, cost_probe.SkipRecord(
+                client_order_id=f"cp-skip-{i}", account_id="icm-demo", agent_id="w", version="w-v2",
+                timeframe="4h", side=1, taken=True, signal_utc=old + pd.Timedelta(minutes=i), atr_usd=30.0,
+                native_stop_loss=loss, probe_max_loss=4.0))
+
+
+def test_a_skipped_probe_records_its_native_stop_loss_agent_timeframe_and_atr(tmp_path):
+    """The skip is evidence too: its own stop's loss, agent, timeframe and ATR go to `cost_probe_skips` (never to
+    the probe ledger every fill reader reads) and to the decision's detail."""
+    native = _native_loss(tmp_path)
+    eng, pb, tick, close = _engine(tmp_path, max_loss=native / 2)
+    eng.on_bar_close(close, tick)
+    agent = next(iter(eng.agents.values()))
+    assert cost_probe.probes(tmp_path, "icm-demo") == []
+    [row] = cost_probe.skips(tmp_path, "icm-demo")
+    assert row.agent_id == agent.agent_id and row.timeframe == agent.timeframe and row.taken
+    assert row.native_stop_loss == pytest.approx(native, abs=0.01) and row.atr_usd > 0
+    assert row.probe_max_loss == pytest.approx(native / 2, abs=0.01) and row.signal_utc == close
+    skip = _skipped(eng)
+    assert skip["timeframe"] == agent.timeframe and skip["atr_usd"] == pytest.approx(row.atr_usd, abs=0.01)
+
+
+def test_with_dynamic_limits_skipped_wide_stops_lower_the_probe_count(tmp_path, monkeypatch):
+    """Quant review: probes are sent only at stops inside the ceiling, so a median of sent probes alone would always
+    give the configured count. Skipped attempts' own stops count too: floor(0.4 x £50 / median 60) -> 1."""
+    eng, pb, tick, close = _two_agents(tmp_path)
+    probe = _dynamic(eng)
+    monkeypatch.setattr(cost_probe, "_limit", lambda e: 50.0)
+    _history(eng, *[3.0] * 5)                                       # sent at their own £3 stops
+    assert cost_probe.probe_limits(eng, probe).max_open == 4        # floor(20 / 3), at most the configured 4
+    _skip_rows(eng, *[60.0] * 6)                                    # wide own stops, skipped
+    lim = cost_probe.probe_limits(eng, probe)
+    assert (lim.max_open, lim.open_basis) == (1, "budget")
+    eng.on_bar_close(close, tick)
+    assert len(pb.positions()) == 1
+
+
+def test_skip_counts_are_split_by_agent_and_timeframe_never_pooled(tmp_path):
+    eng, *_ = _engine(tmp_path)
+    _skip_rows(eng, 60.0, 50.0)
+    assert eng.probe is not None
+    with eng.probe.db.write() as conn:
+        cost_probe.SKIPS.upsert(conn, cost_probe.SkipRecord(
+            client_order_id="cp-skip-1h", account_id="icm-demo", agent_id="w", version="w-v2", timeframe="1h",
+            side=-1, taken=False, signal_utc=pd.Timestamp("2025-03-02 13:00", tz="UTC"), atr_usd=12.0,
+            native_stop_loss=9.0, probe_max_loss=4.0))
+    counts = cost_probe.skip_counts(tmp_path, "icm-demo")
+    assert counts == {("w", "4h"): {"skips": 2, "median_atr_usd": 30.0, "median_native_stop_loss": 55.0},
+                      ("w", "1h"): {"skips": 1, "median_atr_usd": 12.0, "median_native_stop_loss": 9.0}}
+
+
+def test_a_loss_above_the_cap_at_the_agents_own_stop_is_labelled_native_stop_above_cap_however_it_is_found(tmp_path):
+    """Safety review LOW: a native stop that measured inside the cap before the gate but above it at the gate's
+    (unfloored) stop is the same skip, `native_stop_above_cap`, not `probe_loss_above_cap` (kept for a stops-level
+    floor wider than the strategy's stop)."""
+    native = _native_loss(tmp_path)
+    eng, pb, tick, close = _engine(tmp_path, max_loss=native)
+    calls: list[int] = []
+    lpl = pb.loss_per_lot
+
+    def drifting(symbol: str, side: int, price: float, distance: float) -> float | None:
+        calls.append(1)
+        v = lpl(symbol, side, price, distance)                       # the quote's rate moves between the two reads
+        return None if v is None else v * (1.0 if len(calls) == 1 else 1.01)
+    pb.loss_per_lot = drifting                                       # type: ignore[method-assign]
+    eng.on_bar_close(close, tick)
+    assert not pb.positions()
+    _skipped(eng)
+    assert len(cost_probe.skips(tmp_path, "icm-demo")) == 1

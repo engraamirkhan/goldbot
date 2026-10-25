@@ -34,7 +34,11 @@ real (live-agent) trades take priority". A cost probe, not a population status: 
   at the minimum lot in the account currency, is at most `cost_probe_max_loss` (£4); a probe whose loss cannot be
   computed is refused. Architect trace 2026-10-25: "mirror probes must be evidence of the strategy, so they run at
   the strategy's OWN stop and hold, or are skipped": a challenger whose own stop loses more than that at the minimum
-  lot is skipped (`cost_probe_refused:native_stop_above_cap`), never sent with a tightened stop. No new probe once today's realised probe loss + the open probes' risk
+  lot is skipped (`cost_probe_refused:native_stop_above_cap`), never sent with a tightened stop. Each skip is a
+  `SkipRecord` in aux.db `cost_probe_skips` (never the probe ledger: no order went out) with its agent, timeframe,
+  ATR and native loss; the dynamic probe count reads it beside the sent probes. The rule for every reading of mirror
+  probes (quant review 2026-10-25): sent probes are a tight-stop, lower-volatility, shorter-timeframe sample of each
+  strategy, so their costs and outcomes are split by agent x timeframe and read beside `skip_counts`, never pooled. No new probe once today's realised probe loss + the open probes' risk
   (loss at their stops) + the new probe's would exceed `cost_probe_budget` x the day's loss limit (0.2 x £50 = £10).
   The bound is at the stop: a gap through it, commission and swap are outside it (the realised P&L counts them).
 * Dynamic limits (owner 2026-10-19, docs/design/dynamic-limits-2026-10-19.md item 4; the account's `dynamic_limits`):
@@ -123,6 +127,7 @@ SCHEDULED_COMMENT = "cm-sched-"             # its order id and MT5 comment (the 
 SCHEDULED_BASIS = "scheduled_m1"            # its ledger rows' basis
 SCHEDULED_FAMILY = "cost_measurement"       # its Intent's family and its ledger rows' purpose
 HOLD_EXIT = "cost_probe_hold"               # the exit of a scheduled probe held hold_s
+NATIVE_SKIP = "native_stop_above_cap"       # a mirror probe whose own stop loses more than the ceiling: skipped
 SLOT_S = 900                                # one slot per 15m close; the side alternates with the slot index
 
 
@@ -281,6 +286,32 @@ LEDGER: RecordRepo[ProbeRecord] = RecordRepo("cost_probes", ProbeRecord, key="cl
     "client_order_id": lambda r: r.client_order_id, "account_id": lambda r: r.account_id,
     "agent_id": lambda r: r.agent_id, "position_id": lambda r: r.position_id, "ts_ns": lambda r: _ns(r.sent_utc),
     "closed": lambda r: int(r.exit_utc is not None)})
+
+
+class SkipRecord(FrozenRecord):
+    """A mirror probe skipped because its strategy's own stop loses more than the probe ceiling at the minimum lot
+    (aux.db `cost_probe_skips`; architect trace 2026-10-25). No order was sent, so it is never a ProbeRecord: the
+    dynamic probe count reads its native loss beside the sent probes' (quant review: sent probes alone only ever show
+    stops inside the ceiling), and `skip_counts` splits the skips by agent x timeframe."""
+    client_order_id: str                    # the id the probe would have had (one attempt per agent per bar close)
+    account_id: str
+    agent_id: str
+    version: str
+    timeframe: str
+    side: int
+    taken: bool                             # the mirrored shadow entry cleared its threshold
+    signal_utc: UtcTimestamp                # the signal bar's close
+    atr_usd: float                          # the signal bar's ATR as the shadow entry used it (the regime's scale)
+    native_stop_loss: float                 # the loss at the strategy's own stop at the minimum lot, account currency
+    probe_max_loss: float                   # the ceiling it exceeded
+    basis: str | None = None                # which limits applied and why (`ProbeLimits.basis`)
+
+
+SKIPS: RecordRepo[SkipRecord] = RecordRepo("cost_probe_skips", SkipRecord, key="client_order_id", tolerant=True,
+                                           columns={"client_order_id": lambda r: r.client_order_id,
+                                                    "account_id": lambda r: r.account_id,
+                                                    "agent_id": lambda r: r.agent_id,
+                                                    "ts_ns": lambda r: _ns(r.signal_utc)})
 
 
 class _ProbeAgent:
@@ -533,7 +564,8 @@ class ProbeLimits(FrozenRecord):
 def probe_limits(eng: Engine, probe: CostProbe) -> ProbeLimits:
     """Design item 4 (docs/design/dynamic-limits-2026-10-19.md): the per-probe ceiling is min(cfg max_loss,
     budget_share x the day's loss limit / cfg max_open) and the count clamp(floor(budget_share x limit / the median loss
-    at the strategy's own stop of the last PROBE_LOSS_WINDOW probes), 1, cfg max_open). The median is of the native
+    at the strategy's own stop of the last PROBE_LOSS_WINDOW probe attempts, sent or skipped), 1, cfg max_open).
+    The median is of the native
     loss (quant review: the loss as sent was clamped to the ceiling before 2026-10-25, so it could never tighten the
     count; since then a probe is sent at its own stop or skipped, and old rows still carry their clamped stop_loss).
     The day's limit is already dynamic (ADR 0031), so both tighten with it; budget_share stays static. Fail closed: an
@@ -556,12 +588,18 @@ def probe_limits(eng: Engine, probe: CostProbe) -> ProbeLimits:
     try:
         with probe.db.connection() as conn:
             rows = LEDGER.select(conn, "account_id = ?", (eng.cfg.account_id,), order_by="ts_ns")
+            skipped = SKIPS.select(conn, "account_id = ?", (eng.cfg.account_id,), order_by="ts_ns")
     except Exception as exc:
         log.warning("cost probe ledger unreadable (%s): the configured probe count", type(exc).__name__)
         return ProbeLimits(max_open=cfg_open, max_loss=max_loss, loss_basis=loss_basis,
                            open_basis="fixed:ledger_unreadable")
-    recent = [float(r.native_stop_loss) for r in rows if r.purpose == "cost_probe"      # prereg K10: never scheduled
-              and r.native_stop_loss is not None and r.native_stop_loss > 0][-PROBE_LOSS_WINDOW:]
+    # every attempt's own stop, sent or skipped (quant review 2026-10-25: a probe is sent only at a stop inside the
+    # ceiling, so the sent ones alone would always give the configured count), the most recent by signal time
+    attempts = [(r.signal_utc or r.sent_utc, float(r.native_stop_loss)) for r in rows
+                if r.purpose == "cost_probe"                                            # prereg K10: never scheduled
+                and r.native_stop_loss is not None and r.native_stop_loss > 0]
+    attempts += [(k.signal_utc, k.native_stop_loss) for k in skipped if k.native_stop_loss > 0]
+    recent = [loss for _, loss in sorted(attempts, key=lambda a: a[0])][-PROBE_LOSS_WINDOW:]
     if len(recent) < PROBE_LOSS_MIN_ROWS:
         return ProbeLimits(max_open=cfg_open, max_loss=max_loss, loss_basis=loss_basis, open_basis="fixed:no_history")
     n = math.floor(budget / statistics.median(recent))
@@ -734,6 +772,12 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
     def refuse(why: str) -> None:
         eng.decisions.append({"ts": close_ts.isoformat(), "agent": tag, "version": version,
                               "action": "cost_probe_refused:" + why, **applied})
+        if why == NATIVE_SKIP:
+            _record_skip(eng, probe, SkipRecord(
+                client_order_id=pid, account_id=eng.cfg.account_id, agent_id=agent.agent_id, version=version,
+                timeframe=t.timeframe, side=side, taken=t.taken, signal_utc=close_ts, atr_usd=round(atr_usd, 4),
+                native_stop_loss=applied["native_stop_loss"], probe_max_loss=round(lim.max_loss, 2),
+                basis=applied["basis"]))
 
     terms = eng._sizing_terms(side, price, ls.stop_atr * atr_usd, cycle=close_ts)
     lot = terms.get("volume_min")
@@ -744,13 +788,14 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
     max_loss, loss_basis = lim.max_loss, lim.loss_basis
     if loss_basis in ("config_cap", "budget_cap") and native <= max_loss:
         max_loss, loss_basis = native, "native_stop"
-    applied = {"probe_max_loss": round(max_loss, 2), "probe_max_open": lim.max_open, "basis": lim.basis(loss_basis)}
+    # the decision's detail splits every probe reading by agent x timeframe and the regime's ATR (quant review)
+    applied = {"probe_max_loss": round(max_loss, 2), "probe_max_open": lim.max_open, "basis": lim.basis(loss_basis),
+               "timeframe": t.timeframe, "atr_usd": round(atr_usd, 4), "native_stop_loss": round(native, 2)}
     # architect trace 2026-10-25: "mirror probes must be evidence of the strategy, so they run at the strategy's OWN
     # stop and hold, or are skipped". A native stop losing more than the ceiling (cost_probe_max_loss or the dynamic
     # one) at the minimum lot is skipped, never sent with a tighter stop (the former clamp measured a different trade)
     if native > lim.max_loss + 1e-9:
-        applied["native_stop_loss"] = round(native, 2)
-        return refuse("native_stop_above_cap")
+        return refuse(NATIVE_SKIP)
     terms["volume_max"] = lot                                    # the minimum lot only
     intent = Intent(agent_id=tag, side=side, p=t.p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=atr_usd,
                     cost_atr=eng._cost_atr(atr_usd, close_ts), multiplier=1.0, price=price, timeframe=t.timeframe,
@@ -775,6 +820,7 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
 
     _place(eng, probe, intent, cast("Specialist", order_agent), pid=pid, close_ts=close_ts, entry=t.entry,
            target=price + side * ls.target_atr * atr_usd, max_loss=lim.max_loss, headroom=headroom,
+           native_distance=ls.stop_atr * atr_usd,
            applied=lambda: applied, refuse=refuse, action="cost_probe:", journal={"agent": tag, "version": version},
            record=record, before_send=None if t.taken else lambda: probe.untaken_sent.__setitem__(pid, close_ts))
 
@@ -783,11 +829,15 @@ def _place(eng: Engine, probe: CostProbe, intent: Intent, agent: Specialist, *, 
            entry: float, target: float, max_loss: float, headroom: float, applied: Callable[[], dict[str, Any]],
            refuse: Callable[[str], None], action: str, journal: dict[str, Any],
            record: Callable[[OrderResult, GateDecision, bool, float, pd.Timestamp, float], ProbeRecord],
-           max_stop: float | None = None, before_send: Callable[[], None] | None = None) -> int | None:
+           max_stop: float | None = None, before_send: Callable[[], None] | None = None,
+           native_distance: float | None = None) -> int | None:
     """Every probe's order core, mirror and scheduled: `RiskGate.check` (the only path to an order) on the minimum-lot
     intent, the loss at the stop the gate set within `max_loss` and the budget `headroom`, then `Engine._execute`
     (pending_orders row first), the journal and the ledger row. `before_send` runs once the order is going out (an
-    untaken probe's count, even when the send raises). The position id of a fill, else None."""
+    untaken probe's count, even when the send raises). A mirror probe's loss above the cap at its strategy's own stop
+    (`native_distance`, not widened by the gate) is the same skip as before the gate, `native_stop_above_cap` (safety
+    review 2026-10-25); `probe_loss_above_cap` stays for a stop the gate floored wider. The position id of a fill,
+    else None."""
     from goldbot.risk.gate import broker_margin
     from goldbot.telegram.approvals import Proposal
     side, price = intent.side, intent.price
@@ -804,7 +854,8 @@ def _place(eng: Engine, probe: CostProbe, intent: Intent, agent: Specialist, *, 
         refuse("probe_loss_unknown")
         return None
     if loss > max_loss + 1e-9:
-        refuse("probe_loss_above_cap")
+        own = native_distance is not None and gd.stop_distance <= native_distance + 1e-9
+        refuse(NATIVE_SKIP if own else "probe_loss_above_cap")
         return None
     if loss > headroom + 1e-9:
         eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": "cost_probe_budget:probe_budget_full",
@@ -840,6 +891,15 @@ def _place(eng: Engine, probe: CostProbe, intent: Intent, agent: Specialist, *, 
     if filled:
         _reread(eng, close_ts)
     return res.position_id if filled else None
+
+
+def _record_skip(eng: Engine, probe: CostProbe, rec: SkipRecord) -> None:
+    """A skipped attempt to `cost_probe_skips`; a failed write is logged, never raised (the skip stands)."""
+    try:
+        with probe.db.write() as conn:
+            SKIPS.upsert(conn, rec)
+    except Exception as exc:
+        log.warning("cost probe skip %s not written (%s)", rec.client_order_id, type(exc).__name__)
 
 
 # ------------------------------------------------------------------------------------------- scheduled probes (M1)
@@ -1056,6 +1116,30 @@ def probes(state_dir: str | Path, account_id: str | None = None) -> list[ProbeRe
         if account_id is None:
             return LEDGER.select(conn, order_by="ts_ns")
         return LEDGER.select(conn, "account_id = ?", (account_id,), order_by="ts_ns")
+
+
+def skips(state_dir: str | Path, account_id: str | None = None) -> list[SkipRecord]:
+    """Every skipped mirror probe, oldest first (one account's when given). Empty when aux.db has none."""
+    if not (Path(state_dir) / "aux.db").exists():
+        return []
+    db = Database.open(state_dir, "aux")
+    with db.connection() as conn:
+        if account_id is None:
+            return SKIPS.select(conn, order_by="ts_ns")
+        return SKIPS.select(conn, "account_id = ?", (account_id,), order_by="ts_ns")
+
+
+def skip_counts(state_dir: str | Path, account_id: str | None = None) -> dict[tuple[str, str], dict[str, float]]:
+    """Skipped mirror probes per (agent id, timeframe): the count and the median ATR and native stop loss. Split, never
+    pooled (quant review 2026-10-25): skips fall on wide stops, high volatility and long timeframes, so the probes
+    that were sent are a tight-stop sample of each strategy; any reading of them is per agent x timeframe, beside
+    these counts."""
+    groups: dict[tuple[str, str], list[SkipRecord]] = {}
+    for r in skips(state_dir, account_id):
+        groups.setdefault((r.agent_id, r.timeframe), []).append(r)
+    return {k: {"skips": len(v), "median_atr_usd": statistics.median(r.atr_usd for r in v),
+                "median_native_stop_loss": statistics.median(r.native_stop_loss for r in v)}
+            for k, v in groups.items()}
 
 
 def closed_position_ids(db: Database, account_id: str) -> set[int]:
