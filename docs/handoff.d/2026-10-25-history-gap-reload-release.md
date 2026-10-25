@@ -1,0 +1,1 @@
+- Engine: `history.reload_release` re-reads release minutes from the store into holes before the cut-over (point in time, first copy wins) at each REFILL_EVERY while a history_gap stands, so a month re-published by data-dukascopy heals a running engine without a restart (brain 2026-10-23: 4h refused on the 08-28..31 Sunday-open hole although the store was whole from 10-24).
