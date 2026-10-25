@@ -17,7 +17,6 @@ import json
 import logging
 import math
 import time
-import zlib
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Literal, Protocol
@@ -36,7 +35,7 @@ from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
 from goldbot.data.resample import IncrementalResampler, mid, resample_bars, ticks_to_1m
 from goldbot.data.store import Store
 from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
-from goldbot.engine import auto_entry, capital_flows, cost_probe, history, unconfirmed
+from goldbot.engine import auto_entry, capital_flows, cost_probe, exploration, history, unconfirmed
 from goldbot.engine.cost_probe import ScheduledProbe
 from goldbot.engine.limits_apply import EngineLimits, daily_allowance, min_lot_risk, published_limits
 from goldbot.engine.shadow import ShadowBook, ShadowTrade, minutes_of, record_candidate
@@ -184,6 +183,7 @@ class EngineConfig(Record):
     cost_probe_max_open: int = Field(2, ge=1, le=4)     # ADR 0037 amendment 3: concurrent probe positions at most
     cost_probe_max_loss: float = Field(4.0, gt=0)       # ADR 0037 amendment: a probe's loss at its stop, account ccy
     cost_probe_scheduled: ScheduledProbe = Field(default_factory=ScheduledProbe)   # prereg M1 arm (cost_probe.scheduled_step)
+    exploration_config: exploration.ExplorationConfig | None = None   # plan 2026-10-25: demo probe_only arms (ADR 0043)
     shadow_max_open: int = Field(3, ge=1)               # settings shadow.max_open_per_agent (ruling 2026-10-19)
     symbol: str = "XAUUSD"
     decision_tf: str = "15m"
@@ -336,6 +336,7 @@ class Engine:
         Path(cfg.state_dir).mkdir(parents=True, exist_ok=True)
         self.state_store: EngineStore = JsonEngineStore(Path(cfg.state_dir), cfg.account_id)   # ADR 0023 step 1
         self.probe = cost_probe.CostProbe.start(self)      # ADR 0037: demo accounts only (refused at start otherwise)
+        self.exploration = exploration.Exploration.start(self)   # plan 2026-10-25: demo probe_only only (else refused)
         self.center.on_decision = self._on_decision
         # data quality: errors since the last bar close, and those the last bar close was decided with
         self._last_tick: Tick | None = None
@@ -629,6 +630,7 @@ class Engine:
         elif self._state_heartbeat_due():
             self._guard(self._write_heartbeat)
         self.last_bar_close = bar_close
+        exploration.on_pass(self, t)       # after the exits and the bar close's decisions; never raises
         self._flush_closed()               # after every exit of this tick has been sent
         return out
 
@@ -1344,7 +1346,7 @@ class Engine:
                                "message": res.message})
         auto_entry.note_refusal(self, prop, agent, res, lots)     # the bridge's ceiling or a switched terminal
         if self.store is not None and res.ok and res.price is not None \
-                and not cost_probe.is_probe(agent.agent_id):     # ADR 0037: a probe's fill feeds its own ledger only
+                and not cost_probe.is_learning(agent.agent_id):  # ADR 0037: a probe's fill feeds its own ledger only
             # requested vs filled feeds the nightly slippage table
             fill = pd.DataFrame([{"ts_utc": self.broker.last_tick(self.cfg.symbol).ts_utc, "client_order_id": prop.proposal_id,
                                   "agent_id": agent.agent_id, "side": prop.side, "lots": res.filled_lots, "requested": requested,
@@ -1616,6 +1618,7 @@ class Engine:
         seen; a close of another symbol missing from the fallback book (the engine's symbol only) stays due (BACKLOG
         62, trading-safety C3). An unreadable book skips this tick (the next one retries)."""
         cost_probe.hold_exits(self, now)       # the scheduled probes' 30 s close, every pass, never gated; never raises
+        exploration.exits(self, now)           # the 1m/5m arms' holds on the host clock, likewise
         due = [pid for pid in self._close_due if not self._retry_wait(pid, now)]
         if not due:
             return
@@ -2994,10 +2997,6 @@ class Engine:
 
     def _busy(self, agent_id: str) -> bool:
         return any(t.agent_id == agent_id for t in self.open.values()) or any(a.agent_id == agent_id for _, _, a in self.pending.values())
-
-    def _magic(self, family: str) -> int:
-        """Per-family magic: crc32 is stable across restarts (str hash() is salted), so positions reconcile to a family."""
-        return self.cfg.magic_base + zlib.crc32(family.encode()) % 100
 
     def _base_bars(self, agent: Specialist) -> int:
         """The agent's time barrier in base bars (positions run on the decision_tf clock): the labels exit at the close of

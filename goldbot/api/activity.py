@@ -131,7 +131,7 @@ def _positions(state: Path, engines: dict[str, dict[str, Any]]) -> list[Trade]:
         raw = json.loads(f.read_text()).get("open", {})
         for v in raw.values():
             t = load_record(OpenTrade, v, source="orders_<account>.json")
-            if cost_probe.is_probe(t.agent_id) or (account, t.position_id) in seen:
+            if cost_probe.is_learning(t.agent_id) or (account, t.position_id) in seen:   # probes and arms: learning
                 continue
             out.append(Trade(source="positions", opened=ActivityEvent(
                 ts=t.opened_utc or t.entry_bar_ts, kind="position_opened", account=account_name(account),

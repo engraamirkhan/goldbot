@@ -215,3 +215,14 @@ def test_open_risk_is_the_loss_at_the_current_stop_in_account_money_and_zero_onc
     v = {p.position_id: p for p in hc.open_positions(tmp_path, NOW).positions}
     assert v[12].open_risk == 16.0                          # long 2400, stop 2396: 4 USD x 0.05 x 100 x 0.8
     assert v[13].open_risk == 3.2                           # short 2412, stop 2416: 4 USD x 0.01 x 100 x 0.8
+
+
+def test_an_exploration_position_is_tagged_as_a_probe_never_as_a_strategy_trade(tmp_path):
+    """Trading-safety L3 (exploration review 2026-10-25): an arm's position is learning, not a real trade."""
+    _engine(tmp_path)
+    _orders(tmp_path)
+    raw = json.loads((tmp_path / f"orders_{ACC}.json").read_text())
+    raw["open"]["14"] = {**raw["open"]["12"], "position_id": 14, "agent_id": "explore:S0", "lots": 0.01}
+    (tmp_path / f"orders_{ACC}.json").write_text(json.dumps(raw))
+    p = next(x for x in hc.open_positions(tmp_path, NOW).positions if x.position_id == 14)
+    assert p.probe

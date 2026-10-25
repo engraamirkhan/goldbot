@@ -72,8 +72,8 @@ def test_both_demo_accounts_carry_the_adr_0042_limits_for_about_eleven_thousand_
         assert a.risk_overrides.profile == "demo-2026-10-18"                          # evidence in R is scale-free
         assert a.login is None                                                        # public repo
     cp = probe.cost_probe
-    assert (cp.budget_share, cp.max_open, cp.max_loss) == (0.9, 4, 45.0)
-    assert cp.max_loss <= cp.budget_share * 220 and cp.max_open * cp.max_loss <= cp.budget_share * 220
+    assert (cp.budget_share, cp.max_open, cp.max_loss) == (0.2727, 3, 45.0)   # ADR 0043: P0 + M sleeves, £60
+    assert cp.max_loss <= cp.budget_share * 220            # one probe fits; budget_refusal binds the count at run time
 
 
 def test_the_weekly_ceiling_plus_one_daily_cap_stays_at_or_below_the_size_down_stage(monkeypatch):

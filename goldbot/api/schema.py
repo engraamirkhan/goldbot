@@ -1301,7 +1301,7 @@ class OpenPosition(BaseModel):
     mid price before spread, commission and swap; None when the engine publishes no price or conversion."""
     account: str                            # config name, any run of 5+ digits cut
     mode: Literal["demo", "live", "paper"] | None
-    probe: bool                             # a cost-probe order (ADR 0037), not a strategy's trade
+    probe: bool                             # a cost probe (ADR 0037) or an exploration arm: learning, not a strategy's trade
     position_id: int
     agent_id: str
     family: str

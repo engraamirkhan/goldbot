@@ -230,7 +230,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     import pandas as pd
 
     from goldbot.config import load_settings
-    from goldbot.engine import Engine, EngineConfig
+    from goldbot.engine import Engine, EngineConfig, exploration
     from goldbot.execution.costs import settings_swap
     from goldbot.ops import accounts
     from goldbot.research.model_registry import ModelRegistry
@@ -317,6 +317,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               cost_probe=acc.cost_probe.enabled, cost_probe_budget=acc.cost_probe.budget_share,
                               cost_probe_max_open=acc.cost_probe.max_open, cost_probe_max_loss=acc.cost_probe.max_loss,
                               cost_probe_scheduled=acc.cost_probe.scheduled,
+                              exploration_config=exploration.config_for(acc),   # None unless enabled (plan 2026-10-25)
                               shadow_max_open=settings.shadow.max_open_per_agent,
                               magic_base=acc.magic_base, server_tz=acc.server_tz, state_dir="state", data_root=settings.data_root,
                               shadow_host=shadow_host, probe_only=acc.probe_only, halt_checks=True, news_blackout=True,
@@ -456,7 +457,10 @@ def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> R
     from goldbot.ops import accounts
     from goldbot.risk import RiskLimits
     limits = RiskLimits.from_settings(settings.risk, tiny_live=accounts.tiny_live_risk(acc))
-    return limits.model_copy(update={"daily_loss_limit_abs": None if paper else acc.daily_loss_limit_abs})
+    # plan 2026-10-25 (lane L1 contract): the exploration fence's account facts, never on the paper stand-in
+    return limits.model_copy(update={"daily_loss_limit_abs": None if paper else acc.daily_loss_limit_abs,
+                                     "probe_only": acc.probe_only and not paper,
+                                     "exploration_arms": {} if paper else accounts.exploration_arm_caps(acc)})
 
 
 def engine_limits_policy(settings: Settings, acc: Account, *, paper: bool = False, state_dir: str | Path = "state",

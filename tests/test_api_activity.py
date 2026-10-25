@@ -191,3 +191,13 @@ def test_the_route_needs_a_sign_in_and_serves_a_viewer_without_the_login(tmp_pat
     assert len(body["events"]) == 4 and body["events"][0]["kind"] == "refused"
     assert LOGIN not in r.text
     assert c.get("/api/activity?limit=0", headers=h["viewer"]).status_code == 422
+
+
+def test_an_open_exploration_position_is_not_a_position_event(tmp_path):
+    """Trading-safety L3 (exploration review 2026-10-25): an arm's position is learning, never a real trade."""
+    state, root = _everything(tmp_path)
+    raw = json.loads((state / f"orders_{ACC}.json").read_text())
+    raw["open"]["14"] = {**raw["open"]["12"], "position_id": 14, "agent_id": "explore:S0"}
+    (state / f"orders_{ACC}.json").write_text(json.dumps(raw))
+    v = activity.activity_view(state, Store(root), NOW)
+    assert "explore:S0" not in {e.agent_id for e in v.events if e.kind == "position_opened"}
