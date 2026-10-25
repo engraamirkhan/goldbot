@@ -687,8 +687,8 @@ def test_the_cost_probes_table_is_an_additive_aux_migration_so_a_rollback_still_
         migrate(conn, "aux")
         assert conn.execute("SELECT COUNT(*) FROM cost_probes").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM cost_probe_skips").fetchone()[0] == 0
-        assert migrate(conn, "aux", migrations=AUX[:-2]) == []          # the older code accepts the newer file
-    assert [(m.name, m.additive) for m in AUX[-2:]] == [("cost_probes", True), ("cost_probe_skips", True)]
+        assert migrate(conn, "aux", migrations=AUX[:13]) == []          # the older code accepts the newer file
+    assert [(m.name, m.additive) for m in AUX[13:15]] == [("cost_probes", True), ("cost_probe_skips", True)]
 
 
 def test_the_broker_ledger_reconciles_closed_probes_in_the_probe_ledger_not_as_missing(tmp_path):

@@ -25,7 +25,7 @@ from goldbot.base import Record, SkewSummary
 from goldbot.config import load_settings
 from goldbot.data import crossfeed, tv_pull
 from goldbot.data.ticks import TickIndex
-from goldbot.engine import cost_probe
+from goldbot.engine import cost_probe, exploration
 from goldbot.engine.runner import OpenTrade, PendingClose, SentOrder
 from goldbot.engine.shadow import ShadowBook, VersionBook
 from goldbot.execution.costs import (
@@ -307,6 +307,20 @@ def case_cost_probe_skip(tmp: Path) -> None:
     assert cost_probe.skips(tmp, "icm-demo") == [rec]
 
 
+def case_exploration_trade(tmp: Path) -> None:
+    """aux.db exploration_trades row (plan 2026-10-25, lane L2) with a field from a newer release."""
+    rec = exploration.ExplorationRecord(client_order_id="exabcde-1741118400-12345678", account_id="icm-probe",
+                                        arm_id="a", family="donchian", tf="15m", side=1, lots=0.01, signal_utc=T0,
+                                        sent_utc=T0, atr_usd=10.0, stop_usd=10.0, target_usd=20.0, hold_s=3600)
+    db = exploration.ledger_db(str(tmp))
+    row = exploration.LEDGER.row(rec)
+    row["body"] = json.dumps(_newer(json.loads(row["body"])))
+    with db.write() as conn:
+        conn.execute(f"INSERT INTO exploration_trades ({', '.join(row)}) VALUES ({', '.join(':' + c for c in row)})",
+                     row)
+    assert exploration.trades(str(tmp), "icm-probe") == [rec]
+
+
 def case_hwm_confirmation(tmp: Path) -> None:
     """core.db high-water-mark confirmation row (BACKLOG 54, ADR 0018) with a field from a newer release."""
     conf = hwm.HwmConfirmation(account_id="icm-demo", mark=10_000.0, mark_utc=T0, pending_balance=10_500.0,
@@ -437,7 +451,7 @@ def test_every_persisted_record_model_has_a_compat_case():
                DigestState, OutboxState, crossfeed.ReconcileReport, ledger.LedgerReport,
                ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation, limits_profile.LimitsState,
                limits_profile.LimitsChange, adaptive.AdaptiveState, adaptive.RiskTerm, DsrInputs, DaySummedDsr,
-               AttributionReport, TickIndex, cost_probe.ProbeRecord, cost_probe.SkipRecord,
+               AttributionReport, TickIndex, cost_probe.ProbeRecord, cost_probe.SkipRecord, exploration.ExplorationRecord,
                # the engine's orders file: tests/test_engine_safety.py::
                # test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote
                SentOrder, OpenTrade, PendingClose,

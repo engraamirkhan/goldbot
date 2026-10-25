@@ -106,7 +106,7 @@ def _position(account: str, t: OpenTrade, e: dict[str, Any], now: pd.Timestamp) 
     open_risk = None if at_risk is None or contract is None or fx is None else round(at_risk * t.lots * contract * fx, 2)
     age = _age(e, now)
     ccy = e.get("currency")
-    return OpenPosition(account=account_name(account), mode=_mode(e.get("mode")), probe=cost_probe.is_probe(t.agent_id),
+    return OpenPosition(account=account_name(account), mode=_mode(e.get("mode")), probe=cost_probe.is_learning(t.agent_id),
                         position_id=t.position_id, agent_id=t.agent_id, family=family_of(t.agent_id.split(":", 1)[-1]),
                         timeframe=t.timeframe, side=_side(t.side), lots=t.lots, entry=entry,
                         stop=t.sl, target=t.tp, opened_utc=t.opened_utc or t.entry_bar_ts, price=price,

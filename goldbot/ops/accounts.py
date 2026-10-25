@@ -134,6 +134,51 @@ class CostProbe(FrozenRecord):
         return self
 
 
+class ExplorationArm(FrozenRecord):
+    """One registered exploration arm (plan 2026-10-25): the RiskGate refuses an arm id that is not registered here."""
+    # the most one entry of this arm may lose at the stop the RiskGate sets, at the minimum lot, account currency;
+    # equal passes, above is refused (`exploration_arm_cap`). Never clamped: a wider stop is a refused entry
+    max_loss: float = Field(gt=0)
+    # ADR 0043 section 1: the sleeve (a key of `Exploration.pots`) the arm draws on, and a random control's fixed
+    # share of it (controls are the null: never allocated by results); None = a strategy arm (research weights)
+    style: str | None = None
+    control_share: float | None = Field(None, gt=0, le=1)
+
+
+class ExplorationPot(FrozenRecord):
+    """ADR 0043 section 1: a style's sleeve, enforced by the engine (goldbot/engine/exploration.py): today's realised
+    loss + open risk at the stops + the new trade's loss at its stop <= `gbp` (account currency), and at most
+    `max_open` of its arms' positions open."""
+    gbp: float = Field(gt=0)
+    max_open: int = Field(ge=1)
+
+
+class Exploration(FrozenRecord):
+    """Exploration arms (plan 2026-10-25, lane L1): minimum-lot demo entries that trade to MEASURE an edge, so the
+    RiskGate's purpose `exploration` skips only its expected-value rules, inside its fence (goldbot/risk/gate.py
+    `_exploration_reasons`). Off unless set; refused at load unless the account is demo and probe_only."""
+    enabled: bool = False
+    # share of the day's loss allowance (daily_loss_limit_abs) the arms together may lose; with cost_probe.budget_share
+    # at most 1, so exploration and the cost probes never claim more than the day
+    budget_share: float = Field(0.1, gt=0, le=1)
+    # at most this many exploration positions open at once, all arms together (the engine's count)
+    max_open_total: int = Field(1, ge=1)
+    # arm id -> its config; an arm not listed is refused by the gate (`exploration_arm_unregistered`)
+    arms: dict[str, ExplorationArm] = Field(default_factory=dict)
+    # ADR 0043: style -> its sleeve (scalp, intraday, swing); every enabled arm names one, and the sleeves together fit
+    # inside budget_share x daily_loss_limit_abs
+    pots: dict[str, ExplorationPot] = Field(default_factory=dict)
+
+
+def exploration_arm_caps(acc: Account) -> dict[str, float]:
+    """`RiskLimits.exploration_arms` for this account: each registered arm's per-trade loss cap; empty (every
+    exploration entry refused) unless exploration is enabled on a demo probe_only account."""
+    ex = acc.exploration
+    if not (ex.enabled and acc.mode == "demo" and acc.probe_only):
+        return {}
+    return {arm: a.max_loss for arm, a in ex.arms.items()}
+
+
 class Account(Record):
     account_id: str
     broker: str
@@ -172,6 +217,9 @@ class Account(Record):
     # probes' loss and count from their own stops and the budget (cost_probe.probe_limits); the configured values stay
     # the ceilings and the fallback. Off (the default) is today's behaviour; on a live account it is owner-only
     dynamic_limits: bool = False
+    # plan 2026-10-25 (exploration arms): minimum-lot demo entries that measure an edge; refused at load unless the
+    # account is demo and probe_only, with its budget share and the cost probe's together at most the day
+    exploration: Exploration = Field(default_factory=Exploration)
 
     # backstop for records built outside load_accounts: validation errors never carry the input (names, logins)
     model_config = ConfigDict(hide_input_in_errors=True)      # merged with Record's config by pydantic
@@ -229,6 +277,30 @@ class Account(Record):
         lot. Without cost probes or the shadow book it would trade nothing, so the config is refused at load."""
         if self.probe_only and not (self.cost_probe.enabled and self.shadow_host):
             raise ValueError("probe_only needs cost_probe.enabled and shadow_host on the same account (ADR 0037)")
+        return self
+
+    @model_validator(mode="after")
+    def _exploration_fenced(self) -> Account:
+        """Exploration arms trade without an expected-value judgement, so they live only where nothing real is at
+        stake: a demo, probe_only account (refused at load otherwise, as cost_probe). Their budget and the cost
+        probe's are shares of one day's allowance (sum <= 1), and no arm's per-trade cap exceeds the exploration
+        budget. A disabled block is inert and not judged."""
+        ex = self.exploration
+        if not ex.enabled:
+            return self
+        if self.mode != "demo" or not self.probe_only:
+            raise ValueError("exploration is allowed on demo probe_only accounts only (plan 2026-10-25)")
+        if ex.budget_share + (self.cost_probe.budget_share if self.cost_probe.enabled else 0.0) > 1 + 1e-9:
+            raise ValueError("exploration.budget_share + cost_probe.budget_share must be at most 1 (one day's allowance)")
+        cap = self.daily_loss_limit_abs
+        if cap is None:
+            raise ValueError("exploration needs daily_loss_limit_abs on the same account (its budget is a share of it)")
+        if any(a.max_loss > ex.budget_share * cap + 1e-9 for a in ex.arms.values()):
+            raise ValueError("exploration arm max_loss must fit inside exploration.budget_share x daily_loss_limit_abs")
+        if any(a.style is None or a.style not in ex.pots for a in ex.arms.values()):
+            raise ValueError("every exploration arm names a style with a pot (exploration.pots, ADR 0043)")
+        if sum(pot.gbp for pot in ex.pots.values()) > ex.budget_share * cap + 1e-9:
+            raise ValueError("exploration pots must fit inside exploration.budget_share x daily_loss_limit_abs")
         return self
 
     @property
@@ -447,7 +519,8 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
                            risk_overrides=a.get("risk_overrides"), approval_mode=a.get("approval_mode", "propose"),
                            cost_probe=CostProbe(**(a.get("cost_probe") or {})),
                            shadow_host=bool(a.get("shadow_host", False)), probe_only=bool(a.get("probe_only", False)),
-                           dynamic_limits=a.get("dynamic_limits", False))
+                           dynamic_limits=a.get("dynamic_limits", False),
+                           exploration=Exploration(**(a.get("exploration") or {})))
     hosts = [a for a in out.values() if a.enabled and a.shadow_host]
     if len(hosts) > 1:      # ADR 0037 amendment 4: one shadow book, one host; two would trade it twice
         raise ValueError(f"{len(hosts)} enabled accounts are the shadow host in config/accounts.yaml: exactly one may "

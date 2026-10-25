@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 
 from goldbot.engine import Engine, EngineConfig, auto_entry, unconfirmed
+from goldbot.engine import magic as engine_magic
 from goldbot.engine.runner import DEFINITE_REJECT_RETCODES
 from goldbot.execution.broker import MT5_COMMENT_MAX, OrderIntent, OrderResult
 from goldbot.execution.not_confirmed import (
@@ -419,7 +420,7 @@ def test_a_fill_after_no_trade_was_reported_sends_one_correction(tmp_path, clock
     _look(eng)
     assert eng._orders[PID].status == "unfilled"
     PaperBroker.place_order(pb, OrderIntent(client_order_id=PID, symbol="XAUUSD", side=1, lots=0.1, sl=SL, tp=TP,
-                                            magic=eng._magic(AGENT.family), comment=PID[-MT5_COMMENT_MAX:]))   # it turns up late
+                                            magic=engine_magic.family(eng.cfg.magic_base, AGENT.family), comment=PID[-MT5_COMMENT_MAX:]))   # it turns up late
     [pos] = pb.positions()
     _look(eng)
     _look(eng)
@@ -702,7 +703,7 @@ def test_a_restart_with_a_sending_row_and_no_position_takes_the_two_look_rule(tm
     on one look; it becomes `ambiguous` and the look-up decides (an entry deal without a position id never resolves)."""
     eng, pb = _engine(tmp_path, _broker())
     assert isinstance(pb, _Unanswered)
-    eng._orders_record(PID, agent_id=AGENT.agent_id, side=1, magic=eng._magic(AGENT.family), lots=0.1, max_bars=4,
+    eng._orders_record(PID, agent_id=AGENT.agent_id, side=1, magic=engine_magic.family(eng.cfg.magic_base, AGENT.family), lots=0.1, max_bars=4,
                        sl=SL, tp=TP, ts=pd.Timestamp.now("UTC"))       # crashed before order_send returned
     pb.mt5_deals = _mt5_deals(77, with_ids=False)[:1]
     clock[0] = pd.Timestamp.now("UTC")
