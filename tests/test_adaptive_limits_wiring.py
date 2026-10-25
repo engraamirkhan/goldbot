@@ -299,6 +299,21 @@ def test_demo_accounts_with_ceilings_use_the_adaptive_controller(phase_file):
     assert isinstance(engine_limits_policy(S, _acc(), paper=True).controller, StaticController)
 
 
+def test_a_probe_only_account_trades_its_ceilings_and_the_job_never_decides_it(tmp_path, phase_file):
+    """Incident 2026-10-23: a probe-only account has no strategies, so the controller found no evidence and failed
+    closed to the floors (minimum-lot cap off), which refused every 0.01-lot probe. Its probes lose their cost by
+    design: the owner's demo ceilings (and its own daily £ limit) are its limits, never an adaptive decision."""
+    probe = _acc(name="icm-probe").model_copy(update={"probe_only": True})
+    pol = engine_limits_policy(S, probe)
+    assert isinstance(pol.controller, StaticController)
+    lim, cur = pol.resolve(_ev(T0))
+    assert (lim.daily_cap, lim.weekly_cap, lim.min_lot_risk_cap) == (0.05, 0.10, 0.01) and cur.profile == PROFILE
+    assert lim.daily_loss_limit_abs == probe.daily_loss_limit_abs == 50.0          # its own £ limit still binds
+    ctx = SimpleNamespace(settings=S, accounts=[probe], state_dir=tmp_path, models=MODELS, clock=None,
+                          store=SimpleNamespace(append=lambda *a, **k: 0))
+    assert limits_job(ctx, SLOT) == {}                                 # type: ignore[arg-type]
+
+
 def test_todays_decision_is_traded_and_a_decision_for_another_day_gives_the_floors(tmp_path, phase_file):
     _save(tmp_path, UP)
     lim, cur = _policy(tmp_path).resolve(_ev(T0))

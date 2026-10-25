@@ -23,6 +23,8 @@ UNITS = [
 SCRIPTS = {"goldbot-bridge-watchdog.sh": "goldbot-bridge-watchdog", "goldbot-bridge-probe.sh": "goldbot-bridge-probe"}
 # run as mt5 by the terminal unit before each start (AutoTrading on; incident 2026-10-20), root-owned in LIBEXEC
 LIBEXEC_SCRIPTS = ("mt5/mt5-experts-enable.sh", "mt5/mt5-ini.sh")
+# needrestart never restarts goldbot units (incident 2026-10-22), installed in NEEDRESTART_DIR
+NEEDRESTART_CONF = "needrestart/goldbot.conf"
 SECRET = "SECRETLOGIN-12345"
 OLD = "a" * 40
 FLAGS = ("--book-flat", "--engine-stopped")
@@ -34,7 +36,7 @@ HARNESS = r"""
 set -euo pipefail
 source "$SCRIPT"
 REPO=$T/remote; STATE_DIR=$T/state; ROLLBACK_FLOOR=$T/etc/rollback-floor; ROLE_FILE=$T/etc/role
-UNIT_DIR=$T/units; SBIN=$T/sbin; LIBEXEC=$T/libexec; DEPLOY=$T/deploy; CONFIG_DIR=$T/mt5/Config; BACKUP_DIR=$T/mt5/config-backup
+UNIT_DIR=$T/units; SBIN=$T/sbin; LIBEXEC=$T/libexec; NEEDRESTART_DIR=$T/needrestart; DEPLOY=$T/deploy; CONFIG_DIR=$T/mt5/Config; BACKUP_DIR=$T/mt5/config-backup
 mkdir -p "$UNIT_DIR" "$T/en" "$T/act"
 now_dowhm() { echo "${NOW:-60900}"; }                     # Saturday 09:00 UTC
 boot_id() { cat "$T/bootid"; }
@@ -90,6 +92,8 @@ def _remote(tmp: Path) -> str:
     (ops / "mt5").mkdir()
     for s in LIBEXEC_SCRIPTS:
         shutil.copy(LINUX / s, ops / s)
+    (ops / "needrestart").mkdir()
+    shutil.copy(LINUX / NEEDRESTART_CONF, ops / NEEDRESTART_CONF)
     for c in (["init", "-q"], ["add", "-A"],
               ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"]):
         subprocess.run(["git", "-C", str(r), *c], check=True, capture_output=True)
@@ -201,6 +205,7 @@ def test_install_order_and_results(box):
         assert (tmp / "sbin" / dst).read_text() == (LINUX / src).read_text()
     for src in LIBEXEC_SCRIPTS:
         assert (tmp / "libexec" / Path(src).name).read_text() == (LINUX / src).read_text()
+    assert (tmp / "needrestart" / "goldbot.conf").read_text() == (LINUX / NEEDRESTART_CONF).read_text()
     assert "enable --now goldbot-bridge-watchdog" not in c          # the timer stays off until post-reboot
     assert (tmp / "state" / "previous-sha").read_text().strip() == OLD
     assert "sudo reboot" in out and SECRET not in out
@@ -398,3 +403,14 @@ def test_install_refuses_a_sha_without_the_autotrading_script_and_installs_no_un
     rc, out = run(box, "install", sha, *FLAGS)
     assert rc == 1 and "FAIL   watchdog scripts" in out
     assert not (tmp / "units" / "goldbot-mt5-terminal@.service").exists()
+
+
+def test_needrestart_never_restarts_a_goldbot_unit():
+    """Incident 2026-10-22: unattended-upgrades + needrestart restarted the terminal and bridge mid-session. The drop-in
+    keeps every goldbot-* unit out of its automatic restarts, and every installer puts it in place."""
+    conf = (LINUX / NEEDRESTART_CONF).read_text()
+    code = [ln.strip() for ln in conf.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    assert code == ["$nrconf{override_rc}{qr(^goldbot-)} = 0;"]
+    for f in ("mt5_bootstrap.sh", "brain_bootstrap.sh"):
+        assert ('install -m 644 -o root -g root "$OPS/needrestart/goldbot.conf" /etc/needrestart/conf.d/goldbot.conf'
+                in (LINUX / f).read_text()), f

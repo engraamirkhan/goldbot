@@ -99,8 +99,11 @@ def dynamic_enabled(acc: Account) -> bool:
 
 
 def adaptive_enabled(settings: Settings, acc: Account) -> bool:
-    """ADR 0031 runs on a demo account with the owner's ceilings, when `risk.adaptive_limits` is on."""
-    return bool(settings.risk.adaptive_limits) and active_overrides(acc) is not None
+    """ADR 0031 runs on a demo account with the owner's ceilings, when `risk.adaptive_limits` is on. Never on a
+    probe-only account (ADR 0037 am. 4): it has no strategies, so no evidence, and the controller's fail-closed floors
+    (minimum-lot cap off) refused every 0.01-lot probe (incident 2026-10-23); it trades its ceilings (StaticController)
+    under its own daily £ limit."""
+    return bool(settings.risk.adaptive_limits) and active_overrides(acc) is not None and not acc.probe_only
 
 
 def bounds_for(settings: Settings, acc: Account, accounts: Iterable[Account]) -> LimitBounds:
