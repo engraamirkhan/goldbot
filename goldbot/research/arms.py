@@ -1,0 +1,151 @@
+"""Exploration arms on the historical 1m bars (E10, ARM-SPEC 2026-10-25): the arm loader with config hashes, the hard
+holdout guard, the frozen cost model and the per-arm prior. Pure functions; `goldbot.research.arm_rules` generates each
+rule's candidates, `scripts/run_arm_backtest.py` runs one arm on one block, the workflow `research-arms-matrix.yml` fans
+arm x 2-year block out and `scripts/aggregate_arm_priors.py` builds the priors.
+
+The hard holdout (nothing after 2025-09-30 is read) is independent of `research.holdout_from` on purpose: the loader
+cuts the bars, and the guard asserts nothing at or after it survived, so a loosened setting cannot widen this run."""
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any, Literal
+
+import numpy as np
+import pandas as pd
+import yaml
+from pydantic import Field, model_validator
+
+from goldbot.base import FrozenRecord
+from goldbot.data.timeutil import utc_index
+
+HOLDOUT_FROM = pd.Timestamp("2025-10-01", tz="UTC")     # first instant that is never read
+LAST_DAY = pd.Timestamp("2025-09-30", tz="UTC")
+OOS_FROM = pd.Timestamp("2019-01-01", tz="UTC")         # priors use 2019-2025 trades only
+PRIOR_MEAN_FACTOR = 0.5
+PRIOR_WEIGHT_CAP = 50.0
+PRIOR_WEIGHT_PER_TRADE = 0.01                           # weight = min(50, n / 100)
+Timeframe = Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
+RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_absorb", "box_break_close",
+         "ema_pullback", "tsmom", "blocked")
+
+
+# ---------------------------------------------------------------- holdout guard
+def assert_block_allowed(start: pd.Timestamp, end: pd.Timestamp) -> None:
+    if end >= HOLDOUT_FROM or start >= HOLDOUT_FROM:
+        raise ValueError(f"block {start.date()}..{end.date()} reaches the holdout (from {HOLDOUT_FROM.date()})")
+    if start > end:
+        raise ValueError("block starts after it ends")
+
+
+def cut_at_holdout(frame: pd.DataFrame, col: str = "ts_utc") -> pd.DataFrame:
+    """Rows strictly before the holdout, unit-safe (pandas s/ms/us/ns)."""
+    return frame.loc[np.asarray(utc_index(frame[col]) < HOLDOUT_FROM)].reset_index(drop=True)
+
+
+def assert_no_holdout_rows(frame: pd.DataFrame, col: str = "ts_utc") -> None:
+    if len(frame) and utc_index(frame[col]).max() >= HOLDOUT_FROM:
+        raise AssertionError(f"holdout rows present in {col} (>= {HOLDOUT_FROM.date()})")
+
+
+def blocks() -> list[tuple[str, str]]:
+    """Two-year blocks 2015-01-01 .. 2025-09-30 (the last is the 9 months left before the holdout)."""
+    out = []
+    for y in range(2015, 2026, 2):
+        end = min(pd.Timestamp(f"{y + 1}-12-31", tz="UTC"), LAST_DAY)
+        out.append((f"{y}-01-01", str(end.date())))
+    return out
+
+
+def parse_block(text: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    try:
+        a, b = text.split(":")
+        start, end = pd.Timestamp(a, tz="UTC"), pd.Timestamp(b, tz="UTC")
+    except ValueError as e:
+        raise ValueError(f"block must be <start>:<end> (YYYY-MM-DD), got {text!r}") from e
+    assert_block_allowed(start, end)
+    return start, end
+
+
+# ---------------------------------------------------------------- the frozen cost model
+class ArmCosts(FrozenRecord):
+    """cost-model-1m-2026-10-25.md, conservative case: p90 spread both legs + slippage upper CI + commission = $0.23 per
+    oz round trip (the bars are priced at mid, so the spread is inside it, never charged twice). The stop-exit overshoot
+    ($0.70 mean, n = 14, unverified: S0R measures it) is reported both ways."""
+    round_trip_usd: float = Field(ge=0)
+    overshoot_scenarios_usd: tuple[float, ...]
+
+
+def load_costs(path: Path) -> ArmCosts:
+    raw = yaml.safe_load(Path(path).read_text())
+    return ArmCosts(round_trip_usd=float(raw["round_trip_usd"]),
+                    overshoot_scenarios_usd=tuple(float(x) for x in raw["overshoot_scenarios_usd"]))
+
+
+def net_r(move_usd: np.ndarray, risk_usd: np.ndarray, stop_exit: np.ndarray, costs: ArmCosts,
+          overshoot_usd: float) -> np.ndarray:
+    """Net result in R: the signed move per oz (swap included) less the round trip, less `overshoot_usd` on a stop exit,
+    over the candidate's own stop distance."""
+    pnl = np.asarray(move_usd, dtype=float) - costs.round_trip_usd - overshoot_usd * np.asarray(stop_exit, dtype=float)
+    return pnl / np.asarray(risk_usd, dtype=float)
+
+
+# ---------------------------------------------------------------- arms
+class Arm(FrozenRecord):
+    id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    rule: str
+    timeframe: Timeframe
+    params: dict[str, Any] = Field(default_factory=dict)
+    max_open: int = Field(1, ge=1)
+    status: Literal["run", "blocked"] = "run"
+    note: str = ""
+    config_hash: str | None = None
+
+    @model_validator(mode="after")
+    def _consistent(self) -> Arm:
+        if self.rule not in RULES:
+            raise ValueError(f"{self.id}: unknown rule {self.rule!r}; known: {RULES}")
+        if self.status == "blocked" and not self.note:
+            raise ValueError(f"{self.id}: a blocked arm needs a note saying what unblocks it")
+        return self
+
+
+def arm_hash(arm: Arm) -> str:
+    """The arm's frozen configuration: sha256 over id, rule, timeframe, params, max_open (status and note are prose)."""
+    body = {"id": arm.id, "rule": arm.rule, "timeframe": arm.timeframe, "params": arm.params, "max_open": arm.max_open}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def load_arms(path: Path, *, check_hash: bool = True) -> list[Arm]:
+    """The arms of `path`. With `check_hash` every arm must carry a `config_hash` equal to its own: an arm edited after
+    it was frozen is refused (ARM-SPEC: an edit needs a written amendment and a new arm id)."""
+    raw = yaml.safe_load(Path(path).read_text()) or {}
+    out = [Arm.model_validate(a) for a in raw.get("arms", [])]
+    ids = [a.id for a in out]
+    dup = sorted({i for i in ids if ids.count(i) > 1})
+    if dup:
+        raise ValueError(f"duplicate arm ids: {dup}")
+    if check_hash:
+        for a in out:
+            if a.config_hash != arm_hash(a):
+                raise ValueError(f"{a.id}: config_hash {a.config_hash!r} does not match the arm (expected "
+                                 f"{arm_hash(a)!r}); an arm is frozen, amend it under a new id")
+    return out
+
+
+def runnable_ids(path: Path) -> list[str]:
+    return [a.id for a in load_arms(path) if a.status == "run"]
+
+
+# ---------------------------------------------------------------- priors
+def build_prior(trades: pd.DataFrame, column: str = "net_r") -> dict[str, float]:
+    """Prior for one arm from its per-trade net R (`column`): OOS (2019-2025) trades only; mean x 0.5; weight
+    min(50, n / 100) trades. `trades`: ts_utc (entry) and the R column."""
+    ts = utc_index(trades["ts_utc"])
+    oos = trades.loc[np.asarray(ts >= OOS_FROM), column].astype(float)
+    n = int(len(oos))
+    if n == 0:
+        return {"n_oos": 0, "mean_r": 0.0, "weight": 0.0}
+    return {"n_oos": n, "mean_r": float(PRIOR_MEAN_FACTOR * oos.mean()),
+            "weight": float(min(PRIOR_WEIGHT_CAP, PRIOR_WEIGHT_PER_TRADE * n))}
