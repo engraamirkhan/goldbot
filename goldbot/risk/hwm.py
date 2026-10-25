@@ -258,7 +258,7 @@ def capital_flows(deals: pd.DataFrame, after: pd.Timestamp) -> list[CapitalFlow]
     from goldbot.ops.ledger import classify_balance_deals, normalize_deals
     rows = classify_balance_deals("", normalize_deals(deals))
     return [CapitalFlow(ts_utc=b.ts_utc, amount=b.amount) for b in rows
-            if b.kind in ("deposit", "withdrawal") and not b.follows_cancel and b.ts_utc > after and b.amount != 0]
+            if b.kind in ("deposit", "withdrawal") and not (b.follows_cancel and b.amount < 0) and b.ts_utc > after and b.amount != 0]
 
 
 FlowRefusal = Literal["no_anchor", "unreadable", "unreconciled"]
