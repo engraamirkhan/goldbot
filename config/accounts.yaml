@@ -56,8 +56,9 @@ accounts:
     # no new probe once today's realised probe loss reaches this share of the day's loss allowance (£10 of £50), nor
     # while less than this share of the allowance remains. Probes trade under their own magic (magic_base + 97).
     # Amendment (research director ruling 2026-10-19, "more trades need to be opened and closed"): up to max_open
-    # probes at once (2; revisit 3 after 4 weeks of clean data); each probe's stop is clamped so its loss at the stop
-    # is at most max_loss (£4, from the broker's loss_per_lot at 0.01 lot; refused when it cannot be computed); no new
+    # probes at once (2; revisit 3 after 4 weeks of clean data); each probe runs at its strategy's own stop and hold,
+    # and is skipped when that stop's loss at 0.01 lot is above max_loss (£4, from the broker's loss_per_lot; refused
+    # when it cannot be computed; architect trace 2026-10-25: no clamped stop, no capped hold); no new
     # probe once today's realised probe loss + open probe risk + the new probe's would exceed budget_share x the
     # day's loss limit (0.2 x £50 = £10).
     cost_probe: { enabled: false, budget_share: 0.4, max_open: 4, max_loss: 4.0 }   # off: probes on icm-probe (am. 4)

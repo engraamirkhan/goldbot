@@ -30,9 +30,11 @@ real (live-agent) trades take priority". A cost probe, not a population status: 
   the part of the £50 a real trade needs. An unknown allowance or an unknown probe P&L today refuses (fail closed).
 * Amendment (the research director's ruling 2026-10-19, "the system needs to learn, so more trades need to be opened
   and closed"): up to `cost_probe_max_open` (2) probe positions at once, at most one new probe per bar close, never
-  two on one agent; still 0.01 lot and round-robin. Each probe's stop is clamped so its loss at the stop, from the
-  broker's `loss_per_lot` at the minimum lot in the account currency, is at most `cost_probe_max_loss` (£4); a probe
-  whose loss cannot be computed is refused. No new probe once today's realised probe loss + the open probes' risk
+  two on one agent; still 0.01 lot and round-robin. Each probe's loss at its stop, from the broker's `loss_per_lot`
+  at the minimum lot in the account currency, is at most `cost_probe_max_loss` (£4); a probe whose loss cannot be
+  computed is refused. Architect trace 2026-10-25: "mirror probes must be evidence of the strategy, so they run at
+  the strategy's OWN stop and hold, or are skipped": a challenger whose own stop loses more than that at the minimum
+  lot is skipped (`cost_probe_refused:native_stop_above_cap`), never sent with a tightened stop. No new probe once today's realised probe loss + the open probes' risk
   (loss at their stops) + the new probe's would exceed `cost_probe_budget` x the day's loss limit (0.2 x £50 = £10).
   The bound is at the stop: a gap through it, commission and swap are outside it (the realised P&L counts them).
 * Dynamic limits (owner 2026-10-19, docs/design/dynamic-limits-2026-10-19.md item 4; the account's `dynamic_limits`):
@@ -46,9 +48,10 @@ real (live-agent) trades take priority". A cost probe, not a population status: 
   from the broker's deals. A probe's close never goes to closed_trades.jsonl (phase gate, throttle, broker-ledger
   trades, attribution) and its fill never to the store's `fills` (the nightly slippage table, attribution's live
   fills): costs-v2 reads `probes`, and refitting costs on them is a later preregistered step.
-* Learning volume on a probe_only account (owner directive 2026-10-20, hundreds of demo fills): a mirror probe is held
-  at most PROBE_ONLY_MAX_BARS of its agent's bars (`_ProbeAgent`), and UNTAKEN_PER_DAY_PROBE_ONLY below-threshold probes
-  a risk day are allowed (`untaken_cap`): such an account sends no real trade to keep a share for.
+* Learning volume on a probe_only account (owner directive 2026-10-20, hundreds of demo fills): UNTAKEN_PER_DAY_PROBE_ONLY
+  below-threshold probes a risk day are allowed (`untaken_cap`): such an account sends no real trade to keep a share
+  for. A mirror probe holds its shadow trade's own time barrier (`_ProbeAgent`) on every account (architect trace
+  2026-10-25; the former 4-bar probe_only cap cut probes short of the strategy's exit).
 * Scheduled probes, the measured-cost protocol's M1 arm (docs/research/prereg-cost-measurement-2026-10.md, section 1:
   "0.01 lot at a fixed slot time; side = +1 on even slot index, -1 on odd ... market close after 30 s; server SL at $3
   from fill (safety only)"), one per 15m close when `cost_probe.scheduled.enabled` (`scheduled_step`). Same lock
@@ -99,12 +102,10 @@ PREFIX = "cost_probe:"
 YIELD = "cost_probe_yield"          # the exit of a probe that makes way for a real trade
 PROBE_MAGIC_OFFSET = 97             # magic_base + 97: no family's crc32 % 100 (tests guard it), not the smoke's 99
 COMMENT = "cp-"                     # a probe's client order id, and so its MT5 comment, starts with this
-CLAMP_MARGIN = 0.99                 # a clamped probe stop aims at 99% of max_loss (the terminal rounds to the cent)
 # directors' ruling 2026-10-19 (ADR 0037 amendment): below-threshold (untaken) probes at most this many a risk day, at
 # most half the open slots, and only while more than half the probe budget is left: taken entries keep the rest
 UNTAKEN_PER_DAY = 12                # amendment 3 (2026-10-19): was 6
 UNTAKEN_PER_DAY_PROBE_ONLY = 48     # owner directive 2026-10-20 (learning volume): a probe_only account keeps no reserve
-PROBE_ONLY_MAX_BARS = 4             # owner directive 2026-10-20: a probe_only mirror probe holds min(agent's, 4) bars
 PER_CLOSE = 2                       # amendment 3: new probes per bar close at most, from different agents
 MAX_SAME_SIDE = 2                   # amendment 3: open probes on one side at most (one move, correlated losses)
 # amendment 3: no new probe once the day's allowance left after the open probes' risk and the new probe's max loss
@@ -236,7 +237,7 @@ class ProbeRecord(FrozenRecord):
     swap: float | None = None               # broker's deals (None: not reported)
     commission: float | None = None         # paid, positive (None: not reported)
     pnl: float | None = None                # net, from the broker's deals (None: the deals were not readable)
-    stop_loss: float | None = None          # the loss at the (clamped) stop when sent, account currency
+    stop_loss: float | None = None          # the loss at the stop when sent (clamped on rows before 2026-10-25)
     # the mirrored shadow entry cleared its threshold; False = a below-threshold learning probe (owner 2026-10-19),
     # capped by UNTAKEN_PER_DAY and half the slots and budget. Rows written before carry True (they were all taken)
     taken: bool = True
@@ -245,8 +246,9 @@ class ProbeRecord(FrozenRecord):
     probe_max_loss: float | None = None
     probe_max_open: int | None = None
     basis: str | None = None
-    # the loss at the strategy's own (unclamped) stop at the lots sent, account currency: what the dynamic probe count
-    # reads (`stop_loss` is clamped to the ceiling, so its median could never tighten the count). None on rows before
+    # the loss at the strategy's own stop at the lots sent, account currency: what the dynamic probe count reads
+    # (`stop_loss` was clamped to the ceiling on rows before 2026-10-25, so its median could never tighten the count).
+    # None on rows before
     native_stop_loss: float | None = None
     # prereg K11: the quote the engine's own close was sent on (a scheduled probe's hold exit); None otherwise
     exit_bid: float | None = None
@@ -283,7 +285,8 @@ LEDGER: RecordRepo[ProbeRecord] = RecordRepo("cost_probes", ProbeRecord, key="cl
 
 class _ProbeAgent:
     """The challenger's specialist under the probe's tag: its family (magic), timeframe, barriers and exit policy;
-    with `max_bars`, its time barrier capped at that many of its bars (a probe_only account's learning volume)."""
+    with `max_bars`, its time barrier set to that many of its bars (the shadow trade's own, which a candidate's
+    research labels may set apart from the label spec's)."""
 
     def __init__(self, agent: Specialist, max_bars: int | None = None):
         self._agent = agent
@@ -296,7 +299,7 @@ class _ProbeAgent:
     @property
     def label_spec(self) -> BarrierSpec:
         ls = self._agent.label_spec
-        if self._max_bars is None or ls.max_bars <= self._max_bars:
+        if self._max_bars is None or ls.max_bars == self._max_bars:
             return ls
         return ls.model_copy(update={"max_bars": self._max_bars})
 
@@ -531,7 +534,8 @@ def probe_limits(eng: Engine, probe: CostProbe) -> ProbeLimits:
     """Design item 4 (docs/design/dynamic-limits-2026-10-19.md): the per-probe ceiling is min(cfg max_loss,
     budget_share x the day's loss limit / cfg max_open) and the count clamp(floor(budget_share x limit / the median loss
     at the strategy's own stop of the last PROBE_LOSS_WINDOW probes), 1, cfg max_open). The median is of the native
-    (unclamped) loss: the loss as sent is clamped to the ceiling, so it could never tighten the count (quant review).
+    loss (quant review: the loss as sent was clamped to the ceiling before 2026-10-25, so it could never tighten the
+    count; since then a probe is sent at its own stop or skipped, and old rows still carry their clamped stop_loss).
     The day's limit is already dynamic (ADR 0031), so both tighten with it; budget_share stays static. Fail closed: an
     unknown limit, an unreadable ledger or fewer than PROBE_LOSS_MIN_ROWS probes with a native loss gives the
     configured value."""
@@ -733,28 +737,29 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
 
     terms = eng._sizing_terms(side, price, ls.stop_atr * atr_usd, cycle=close_ts)
     lot = terms.get("volume_min")
-    per_usd = stop_loss(eng, side, price, 1.0, float(lot)) if lot is not None else None
-    if per_usd is None:
+    native = stop_loss(eng, side, price, ls.stop_atr * atr_usd, float(lot)) if lot is not None else None
+    if native is None:
         return refuse("probe_loss_unknown")
     # dynamic limits: the probe's loss is its own stop's at the minimum lot while that is inside the ceiling
     max_loss, loss_basis = lim.max_loss, lim.loss_basis
-    native = per_usd * ls.stop_atr * atr_usd
     if loss_basis in ("config_cap", "budget_cap") and native <= max_loss:
         max_loss, loss_basis = native, "native_stop"
     applied = {"probe_max_loss": round(max_loss, 2), "probe_max_open": lim.max_open, "basis": lim.basis(loss_basis)}
-    # the amendment: the stop is clamped so the loss at it is at most the ceiling (cost_probe_max_loss, £4, or the
-    # dynamic one) at the minimum lot. The clamp aims 1% inside the cap: the terminal rounds each loss_per_lot to the
-    # cent, so a stop aimed exactly at the cap measures a fraction of a penny above it about half the time and the
-    # check below refused every such probe
-    stop_atr = min(ls.stop_atr, CLAMP_MARGIN * lim.max_loss / per_usd / atr_usd)
+    # architect trace 2026-10-25: "mirror probes must be evidence of the strategy, so they run at the strategy's OWN
+    # stop and hold, or are skipped". A native stop losing more than the ceiling (cost_probe_max_loss or the dynamic
+    # one) at the minimum lot is skipped, never sent with a tighter stop (the former clamp measured a different trade)
+    if native > lim.max_loss + 1e-9:
+        applied["native_stop_loss"] = round(native, 2)
+        return refuse("native_stop_above_cap")
     terms["volume_max"] = lot                                    # the minimum lot only
-    intent = Intent(agent_id=tag, side=side, p=t.p, target_atr=ls.target_atr, stop_atr=stop_atr, atr_usd=atr_usd,
+    intent = Intent(agent_id=tag, side=side, p=t.p, target_atr=ls.target_atr, stop_atr=ls.stop_atr, atr_usd=atr_usd,
                     cost_atr=eng._cost_atr(atr_usd, close_ts), multiplier=1.0, price=price, timeframe=t.timeframe,
                     family=agent.family, swap_usd_per_oz=eng._swap_usd_per_oz(side, close_ts),
                     learning_probe=True, account_mode=eng.cfg.mode,
                     phase_file=_phase_file(eng), **terms)
-    # owner directive 2026-10-20: on a probe_only account the probe holds at most PROBE_ONLY_MAX_BARS of its agent's bars
-    order_agent = _ProbeAgent(agent, PROBE_ONLY_MAX_BARS if eng.cfg.probe_only else None)
+    # architect trace 2026-10-25: the probe holds the agent's own time barrier, its shadow trade's (the candidate's
+    # max_bars when it carries one), on every account; no probe_only cap
+    order_agent = _ProbeAgent(agent, t.max_bars)
 
     def record(res: OrderResult, gd: GateDecision, filled: bool, loss: float, sent: pd.Timestamp,
                latency_ms: float) -> ProbeRecord:
