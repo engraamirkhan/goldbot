@@ -87,7 +87,8 @@ import pandas as pd
 from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.data.timeutil import epoch_ns, server_wall
 from goldbot.db import Database, RecordRepo
-from goldbot.engine import auto_entry
+from goldbot.engine import auto_entry, exploration
+from goldbot.engine import magic as magics
 from goldbot.labels.triple_barrier import BarrierSpec
 from goldbot.ops.accounts import ScheduledProbe
 
@@ -104,7 +105,7 @@ log = logging.getLogger(__name__)
 
 PREFIX = "cost_probe:"
 YIELD = "cost_probe_yield"          # the exit of a probe that makes way for a real trade
-PROBE_MAGIC_OFFSET = 97             # magic_base + 97: no family's crc32 % 100 (tests guard it), not the smoke's 99
+PROBE_MAGIC_OFFSET = magics.PROBE_OFFSET          # magic_base + 97 (goldbot/engine/magic.py: every reserved offset)
 COMMENT = "cp-"                     # a probe's client order id, and so its MT5 comment, starts with this
 # directors' ruling 2026-10-19 (ADR 0037 amendment): below-threshold (untaken) probes at most this many a risk day, at
 # most half the open slots, and only while more than half the probe budget is left: taken entries keep the rest
@@ -122,7 +123,7 @@ PROBE_LOSS_MIN_ROWS = 5
 # the measured-cost protocol's M1 arm (scheduled probes)
 SCHEDULED = "scheduled"                     # the ledger's agent id of a scheduled probe
 SCHEDULED_ID = PREFIX + SCHEDULED           # its trade tag
-SCHEDULED_MAGIC_OFFSET = 96                 # magic_base + 96: no family's crc32 % 100 (tests guard it), not 97 or 99
+SCHEDULED_MAGIC_OFFSET = magics.SCHEDULED_PROBE_OFFSET   # magic_base + 96 (goldbot/engine/magic.py)
 SCHEDULED_COMMENT = "cm-sched-"             # its order id and MT5 comment (the prereg's `cm-`; "sched" for the counter)
 SCHEDULED_BASIS = "scheduled_m1"            # its ledger rows' basis
 SCHEDULED_FAMILY = "cost_measurement"       # its Intent's family and its ledger rows' purpose
@@ -153,8 +154,9 @@ def probe_id(agent_id: str) -> str:
 def refuse_non_probe(eng: Engine, agent_id: str, proposal_id: str) -> bool:
     """ADR 0037 amendment 4: "probes must never consume the real trades' allowance", and a dedicated probe account
     (`probe_only`) never sends a real trade either: whatever reached the order path there (a live share, an approval)
-    is refused and journalled, fail closed. True when refused."""
-    if not eng.cfg.probe_only or is_probe(agent_id):
+    is refused and journalled, fail closed. Exploration arms are that account's own entries (plan 2026-10-25). True
+    when refused."""
+    if not eng.cfg.probe_only or is_learning(agent_id):
         return False
     eng.decisions.append({"ts": time.time(), "agent": agent_id, "action": "probe_only_refused", "proposal": proposal_id})
     return True
@@ -164,11 +166,20 @@ def is_probe(agent_id: str | None) -> bool:
     return bool(agent_id) and str(agent_id).startswith(PREFIX)
 
 
+def is_learning(agent_id: str | None) -> bool:
+    """A probe or an exploration arm: its fills and closes feed its own ledger, never the trade record or `fills`."""
+    return is_probe(agent_id) or exploration.is_exploration(agent_id)
+
+
 def magic(eng: Engine, agent: Specialist) -> int:
-    """The order's magic: a scheduled probe's or a mirror probe's own, else the agent's family magic (`Engine._magic`)."""
+    """The order's magic: a scheduled probe's, a mirror probe's or an exploration arm's own, else the agent's family
+    magic (`magic.family`)."""
     if agent.agent_id == SCHEDULED_ID:
         return eng.cfg.magic_base + SCHEDULED_MAGIC_OFFSET
-    return eng.cfg.magic_base + PROBE_MAGIC_OFFSET if is_probe(agent.agent_id) else eng._magic(agent.family)
+    if exploration.is_exploration(agent.agent_id):
+        return magics.exploration(eng.cfg.magic_base)
+    return eng.cfg.magic_base + PROBE_MAGIC_OFFSET if is_probe(agent.agent_id) else magics.family(eng.cfg.magic_base,
+                                                                                                  agent.family)
 
 
 def is_probe_magic(m: int, magic_base: int) -> bool:
@@ -187,21 +198,26 @@ def adoption(eng: Engine, p: Any, rec: Any) -> tuple[Specialist | None, str]:
     in the probe ledger, never in the trade record), else the agent of the magic number when exactly one agent here
     has that family's magic."""
     if rec is not None:
+        if exploration.is_exploration(rec.agent_id):
+            return exploration.agent_for(eng, rec.agent_id), rec.agent_id
         return agent_of(eng, rec.agent_id), rec.agent_id
+    if magics.is_exploration(p.magic, eng.cfg.magic_base):
+        return exploration.adoption(eng, p)          # by its comment; an unknown arm is closed at once (`exits`)
     if int(p.magic) == eng.cfg.magic_base + SCHEDULED_MAGIC_OFFSET:
         return None, SCHEDULED_ID                   # its hold exit still closes it (`hold_exits`)
     if is_probe_magic(p.magic, eng.cfg.magic_base):
         return None, PREFIX + "orphan"
-    hits = [a for a in eng.agents.values() if eng._magic(a.family) == p.magic]
+    hits = [a for a in eng.agents.values() if magics.family(eng.cfg.magic_base, a.family) == p.magic]
     agent = hits[0] if len(hits) == 1 else None
     return agent, "orphan" if agent is None else agent.agent_id
 
 
 def probe_positions(deals: pd.DataFrame, magic_base: int) -> set[int]:
-    """Position ids with a probe's magic in a deal history (MT5 columns position_id, magic)."""
+    """Position ids with a probe's or an exploration arm's magic in a deal history (MT5 columns position_id, magic)."""
     if deals is None or deals.empty or "magic" not in deals.columns:
         return set()
-    return {int(pid) for pid, m in zip(deals["position_id"], deals["magic"]) if pid and is_probe_magic(m, magic_base)}
+    return {int(pid) for pid, m in zip(deals["position_id"], deals["magic"])
+            if pid and (is_probe_magic(m, magic_base) or magics.is_exploration(m, magic_base))}
 
 
 def check_start(mode: str, enabled: bool) -> None:
@@ -506,6 +522,10 @@ def step(eng: Engine, close_ts: pd.Timestamp, tick: Tick) -> None:
 
 def _step(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick: Tick) -> None:
     signals = _signals(eng, probe)
+    if signals and exploration.paused(eng, close_ts):      # ADR 0043 X4: -8% on the probe host pauses mirror probes
+        eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": "exploration_paused_dd",
+                              "purpose": "cost_probe", "drawdown": exploration.drawdown(eng)})
+        return
     probes_open = _probes_open(eng)
     others = any(not is_probe(t.agent_id) for t in eng.open.values()) or bool(eng.pending) or _in_flight(eng, False)
     if others or eng.state.open_positions > len(probes_open):
@@ -818,20 +838,22 @@ def _send(eng: Engine, probe: CostProbe, version: str, t: ShadowTrade, agent: Sp
                            probe_max_open=lim.max_open, basis=applied["basis"], native_stop_loss=round(native, 2),
                            fx_acct_per_usd=terms.get("acct_per_usd"))
 
-    _place(eng, probe, intent, cast("Specialist", order_agent), pid=pid, close_ts=close_ts, entry=t.entry,
+    _place(eng, probe.db, intent, cast("Specialist", order_agent), pid=pid, close_ts=close_ts, entry=t.entry,
            target=price + side * ls.target_atr * atr_usd, max_loss=lim.max_loss, headroom=headroom,
            native_distance=ls.stop_atr * atr_usd,
            applied=lambda: applied, refuse=refuse, action="cost_probe:", journal={"agent": tag, "version": version},
            record=record, before_send=None if t.taken else lambda: probe.untaken_sent.__setitem__(pid, close_ts))
 
 
-def _place(eng: Engine, probe: CostProbe, intent: Intent, agent: Specialist, *, pid: str, close_ts: pd.Timestamp,
+def _place(eng: Engine, db: Database, intent: Intent, agent: Specialist, *, pid: str, close_ts: pd.Timestamp,
            entry: float, target: float, max_loss: float, headroom: float, applied: Callable[[], dict[str, Any]],
            refuse: Callable[[str], None], action: str, journal: dict[str, Any],
-           record: Callable[[OrderResult, GateDecision, bool, float, pd.Timestamp, float], ProbeRecord],
+           record: Callable[[OrderResult, GateDecision, bool, float, pd.Timestamp, float], Any],
+           repo: RecordRepo[Any] | None = None,
            max_stop: float | None = None, before_send: Callable[[], None] | None = None,
            native_distance: float | None = None) -> int | None:
-    """Every probe's order core, mirror and scheduled: `RiskGate.check` (the only path to an order) on the minimum-lot
+    """Every probe's order core, mirror and scheduled, and an exploration arm's (`repo`: its ledger, the probe ledger
+    by default): `RiskGate.check` (the only path to an order) on the minimum-lot
     intent, the loss at the stop the gate set within `max_loss` and the budget `headroom`, then `Engine._execute`
     (pending_orders row first), the journal and the ledger row. `before_send` runs once the order is going out (an
     untaken probe's count, even when the send raises). A mirror probe's loss above the cap at its strategy's own stop
@@ -884,8 +906,8 @@ def _place(eng: Engine, probe: CostProbe, intent: Intent, agent: Specialist, *, 
         return None
     filled = res.ok and res.position_id is not None
     try:
-        with probe.db.write() as conn:
-            LEDGER.upsert(conn, record(res, gd, filled, loss, sent, latency_ms))
+        with db.write() as conn:
+            (repo or LEDGER).upsert(conn, record(res, gd, filled, loss, sent, latency_ms))
     except Exception as exc:        # the order stands; its close is recorded from the trade (`record_close`)
         log.warning("cost probe %s not written to the ledger (%s)", pid, type(exc).__name__)
     if filled:
@@ -1007,7 +1029,7 @@ def _send_scheduled(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick:
                            stop_loss=round(loss, 2), probe_max_loss=applied["probe_max_loss"], basis=SCHEDULED_BASIS,
                            fx_acct_per_usd=terms.get("acct_per_usd"))
 
-    pos = _place(eng, probe, intent, cast("Specialist", _ScheduledAgent(eng.cfg.decision_tf)), pid=pid,
+    pos = _place(eng, probe.db, intent, cast("Specialist", _ScheduledAgent(eng.cfg.decision_tf)), pid=pid,
                  close_ts=close_ts, entry=price, target=price + side * sch.stop_usd, max_loss=lim.max_loss,
                  headroom=headroom, applied=lambda: applied, refuse=refuse, action="cost_probe_scheduled:",
                  journal={"agent": SCHEDULED_ID}, record=record, max_stop=sch.stop_usd)
@@ -1071,6 +1093,8 @@ def record_close(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float | 
     """A probe's close goes to the probe ledger, never to closed_trades.jsonl; False for any other trade. Exit, swap,
     commission and P&L from the broker's deals (the engine's own close price when they are unreadable). Raises when the
     ledger cannot be written, so the close stays queued and is retried (`Engine._flush_closed`)."""
+    if exploration.is_exploration(tr.agent_id):
+        return exploration.record_close(eng, pid, tr, reason, px, at)       # its own ledger (plan 2026-10-25)
     if not is_probe(tr.agent_id):
         return False
     try:
@@ -1143,12 +1167,16 @@ def skip_counts(state_dir: str | Path, account_id: str | None = None) -> dict[tu
 
 
 def closed_position_ids(db: Database, account_id: str) -> set[int]:
-    """The position ids of an account's closed probes: the broker ledger reconciles them here, not in closed_trades."""
-    try:
-        with db.connection() as conn:
-            rows = conn.execute("SELECT position_id FROM cost_probes WHERE account_id = ? AND closed = 1 "
-                                "AND position_id IS NOT NULL", (account_id,)).fetchall()
-    except sqlite3.Error as exc:
-        log.warning("cost probe ledger unreadable (%s): probe closes reconciled as trades", type(exc).__name__)
-        return set()
-    return {int(r[0]) for r in rows}
+    """The position ids of an account's closed probes and exploration trades: the broker ledger reconciles them here
+    (aux.db cost_probes and exploration_trades), not in closed_trades."""
+    out: set[int] = set()
+    for table in ("cost_probes", "exploration_trades"):
+        try:
+            with db.connection() as conn:
+                rows = conn.execute(f"SELECT position_id FROM {table} WHERE account_id = ? AND closed = 1 "
+                                    "AND position_id IS NOT NULL", (account_id,)).fetchall()
+        except sqlite3.Error as exc:
+            log.warning("%s unreadable (%s): its closes reconciled as trades", table, type(exc).__name__)
+            continue
+        out |= {int(r[0]) for r in rows}
+    return out

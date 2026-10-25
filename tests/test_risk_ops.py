@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from goldbot.config import load_settings
-from goldbot.engine import ConstantModel, Engine, EngineConfig
+from goldbot.engine import ConstantModel, Engine, EngineConfig, magic
 from goldbot.execution.broker import AccountInfo, Tick
 from goldbot.execution.paper import PaperBroker
 from goldbot.ops import accounts as acc_mod
@@ -299,7 +299,7 @@ def test_magic_numbers_are_stable_across_processes(tmp_path):
     import subprocess
     import sys
     eng = _engine(tmp_path, _Equity())
-    here = {f: eng._magic(f) for f in ("trend", "breakout", "session_open", "mean_reversion")}
+    here = {f: magic.family(eng.cfg.magic_base, f) for f in ("trend", "breakout", "session_open", "mean_reversion")}
     assert all(260100 <= m < 260200 for m in here.values())
     code = ("import zlib; print({f: 260100 + zlib.crc32(f.encode()) % 100 "
             "for f in ('trend', 'breakout', 'session_open', 'mean_reversion')})")

@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from goldbot.config import AttributionSettings
-from goldbot.engine import runner
+from goldbot.engine import magic, runner
 from goldbot.engine.runner import OpenTrade
 from goldbot.engine.shadow import ShadowBook, ShadowTrade, VersionBook
 from goldbot.execution.broker import OrderIntent, OrderResult, Tick
@@ -364,7 +364,7 @@ def test_an_adopted_orphan_without_an_order_record_keeps_prices_but_no_r(tmp_pat
     eng, pb = _engine(tmp_path, TREND)
     pb.on_tick(_q(0, 2000.0, 2000.0))
     res = pb.place_order(OrderIntent(client_order_id="manual-1", symbol="XAUUSD", side=1, lots=0.1, sl=1999.0,
-                                     tp=2010.0, magic=eng._magic(TREND.family), comment="manual-1"))
+                                     tp=2010.0, magic=magic.family(eng.cfg.magic_base, TREND.family), comment="manual-1"))
     assert res.position_id is not None
     _settle(eng)
     assert res.position_id in eng.open

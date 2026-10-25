@@ -139,6 +139,18 @@ class ExplorationArm(FrozenRecord):
     # the most one entry of this arm may lose at the stop the RiskGate sets, at the minimum lot, account currency;
     # equal passes, above is refused (`exploration_arm_cap`). Never clamped: a wider stop is a refused entry
     max_loss: float = Field(gt=0)
+    # ADR 0043 section 1: the sleeve (a key of `Exploration.pots`) the arm draws on, and a random control's fixed
+    # share of it (controls are the null: never allocated by results); None = a strategy arm (research weights)
+    style: str | None = None
+    control_share: float | None = Field(None, gt=0, le=1)
+
+
+class ExplorationPot(FrozenRecord):
+    """ADR 0043 section 1: a style's sleeve, enforced by the engine (goldbot/engine/exploration.py): today's realised
+    loss + open risk at the stops + the new trade's loss at its stop <= `gbp` (account currency), and at most
+    `max_open` of its arms' positions open."""
+    gbp: float = Field(gt=0)
+    max_open: int = Field(ge=1)
 
 
 class Exploration(FrozenRecord):
@@ -153,6 +165,9 @@ class Exploration(FrozenRecord):
     max_open_total: int = Field(1, ge=1)
     # arm id -> its config; an arm not listed is refused by the gate (`exploration_arm_unregistered`)
     arms: dict[str, ExplorationArm] = Field(default_factory=dict)
+    # ADR 0043: style -> its sleeve (scalp, intraday, swing); every enabled arm names one, and the sleeves together fit
+    # inside budget_share x daily_loss_limit_abs
+    pots: dict[str, ExplorationPot] = Field(default_factory=dict)
 
 
 def exploration_arm_caps(acc: Account) -> dict[str, float]:
@@ -282,6 +297,10 @@ class Account(Record):
             raise ValueError("exploration needs daily_loss_limit_abs on the same account (its budget is a share of it)")
         if any(a.max_loss > ex.budget_share * cap + 1e-9 for a in ex.arms.values()):
             raise ValueError("exploration arm max_loss must fit inside exploration.budget_share x daily_loss_limit_abs")
+        if any(a.style is None or a.style not in ex.pots for a in ex.arms.values()):
+            raise ValueError("every exploration arm names a style with a pot (exploration.pots, ADR 0043)")
+        if sum(pot.gbp for pot in ex.pots.values()) > ex.budget_share * cap + 1e-9:
+            raise ValueError("exploration pots must fit inside exploration.budget_share x daily_loss_limit_abs")
         return self
 
     @property

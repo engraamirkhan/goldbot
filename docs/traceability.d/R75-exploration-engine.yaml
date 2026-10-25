@@ -1,0 +1,5 @@
+id: R75
+requirement: 'Exploration arms in the engine (plan 2026-10-25, ADR 0043): every arm signal at the minimum lot with its own stop, hold and target through the RiskGate (purpose exploration), within the global, budget-share, pot, arm and per-trade caps, the -8% pause; exits never gated'
+status: partial (engine built; arm definitions not yet wired into EngineConfig in production)
+code: goldbot/engine/exploration.py; goldbot/engine/magic.py; goldbot/engine/cost_probe.py (`_place`, adoption, record_close, mirror pause); goldbot/engine/runner.py (`on_pass` and `exits` hooks); goldbot/ops/accounts.py (`ExplorationPot`, arm `style`/`control_share`); goldbot/ops/services/engine.py `engine_limits`
+test: tests/test_exploration_engine.py; scripts/bench_exploration.py (p99 <= 50 ms at 50 arms)

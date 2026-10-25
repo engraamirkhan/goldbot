@@ -456,7 +456,10 @@ def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> R
     from goldbot.ops import accounts
     from goldbot.risk import RiskLimits
     limits = RiskLimits.from_settings(settings.risk, tiny_live=accounts.tiny_live_risk(acc))
-    return limits.model_copy(update={"daily_loss_limit_abs": None if paper else acc.daily_loss_limit_abs})
+    # plan 2026-10-25 (lane L1 contract): the exploration fence's account facts, never on the paper stand-in
+    return limits.model_copy(update={"daily_loss_limit_abs": None if paper else acc.daily_loss_limit_abs,
+                                     "probe_only": acc.probe_only and not paper,
+                                     "exploration_arms": {} if paper else accounts.exploration_arm_caps(acc)})
 
 
 def engine_limits_policy(settings: Settings, acc: Account, *, paper: bool = False, state_dir: str | Path = "state",

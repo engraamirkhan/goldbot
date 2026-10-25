@@ -163,7 +163,8 @@ def _account(**kw: Any) -> acc_mod.Account:
                                 cost_probe=acc_mod.CostProbe(enabled=True, budget_share=0.9, max_open=4, max_loss=45.0),
                                 shadow_host=True, probe_only=True,
                                 exploration=dict(enabled=True, budget_share=0.1, max_open_total=2,
-                                                 arms={ARM: {"max_loss": 10.0}}))
+                                                 arms={ARM: {"max_loss": 10.0, "style": "scalp"}},
+                                                 pots={"scalp": {"gbp": 20.0, "max_open": 2}}))   # ADR 0043 pots
     return acc_mod.Account(**{**base, **kw})
 
 
