@@ -451,6 +451,33 @@ def test_learn_allocates_strategy_arms_per_style_never_controls_and_retrains_whe
     import hashlib
     assert hashlib.sha256(Path(path).read_bytes()).hexdigest() == sha
     assert act == pd.Timestamp("2026-10-18 22:00", tz="UTC").value
+    # every Sunday fit is a shadow: nothing is served (champion zero) until one is marked champion
+    with db.connection() as conn:
+        assert conn.execute("SELECT status FROM exploration_models").fetchone()[0] == "shadow"
+    late = pd.Timestamp("2026-10-20", tz="UTC")
+    assert ex.serving_model(db, "scalp", late) is None
+
+
+def test_the_serving_read_returns_only_an_active_champion_with_a_matching_digest(tmp_path):
+    db = _db(tmp_path)
+    fit: dict[str, Any] = {"style": "scalp", "folds": [], "calibrator": None, "features": ["f0"], "per_arm": {}, "auc_net": None,
+           "auc_gross": None, "n": 0}
+    cutoff, act = ex.model_cutoff(pd.Timestamp("2026-10-11 01:00", tz="UTC"))
+    v = ex.save_model(db, tmp_path / "models", fit, cutoff=cutoff, activation=act)
+    assert ex.serving_model(db, "scalp", act + pd.Timedelta(days=1)) is None          # shadow: champion zero
+    with db.write() as conn:
+        conn.execute("UPDATE exploration_models SET status = 'champion' WHERE model_version = ?", (v,))
+    assert ex.serving_model(db, "scalp", act - pd.Timedelta(minutes=1)) is None       # not active yet
+    got = ex.serving_model(db, "scalp", act)
+    assert got is not None and got["model_version"] == v and got["features"] == ["f0"]
+    assert ex.serving_model(db, "swing", act) is None
+    with db.connection() as conn:
+        path = conn.execute("SELECT path FROM exploration_models").fetchone()[0]
+    Path(path).write_bytes(b"tampered")
+    assert ex.serving_model(db, "scalp", act) is None                                  # digest mismatch
+    with pytest.raises(sqlite3.IntegrityError):
+        with db.write() as conn:
+            conn.execute("UPDATE exploration_models SET status = 'live'")
 
 
 def test_learn_with_no_candidates_writes_nothing(tmp_path):

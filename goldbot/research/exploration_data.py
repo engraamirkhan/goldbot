@@ -537,7 +537,8 @@ def retrain_due(db: Database, style: str, cutoff: pd.Timestamp) -> tuple[bool, i
 
 def save_model(db: Database, models_dir: Path, fit: Mapping[str, Any], *, cutoff: pd.Timestamp,
                activation: pd.Timestamp) -> str:
-    """Persist a fitted style model (fold models + calibrator) as a pickle with its SHA-256, and register it."""
+    """Persist a fitted style model (fold models + calibrator) as a pickle with its SHA-256, and register it as
+    'shadow': it never serves until a separate champion decision (spec section 5) marks it 'champion'."""
     style = str(fit["style"])
     version = f"h62-{style}-{cutoff:%Y%m%dT%H%M}"
     path = Path(models_dir) / "h62" / style / f"{version}.pkl"
@@ -555,6 +556,29 @@ def save_model(db: Database, models_dir: Path, fit: Mapping[str, Any], *, cutoff
                       str(path), hashlib.sha256(data).hexdigest(), int(fit["n"]), json.dumps(detail, default=str),
                       now_ns()))
     return version
+
+
+def serving_model(db: Database, style: str, now: pd.Timestamp) -> dict[str, Any] | None:
+    """The H-62 model the engine may serve for `style` at `now`: the newest version with status 'champion' whose
+    activation is at or before `now` and whose cutoff is before it (strictly forward), its file matching the recorded
+    SHA-256. Every Sunday fit registers as 'shadow' (scored and logged, never acting); None = champion zero (the
+    per-arm base rate): serve no meta_p."""
+    try:
+        with db.connection() as conn:
+            r = conn.execute("SELECT model_version, path, sha256 FROM exploration_models WHERE style = ? AND "
+                             "status = 'champion' AND activation_ns <= ? AND cutoff_ns < ? "
+                             "ORDER BY activation_ns DESC LIMIT 1", (style, _ns(now), _ns(now))).fetchone()
+        if r is None:
+            return None
+        data = Path(r[1]).read_bytes()
+    except (sqlite3.Error, StateDbError, OSError) as exc:
+        log.warning("H-62 %s model unreadable (%s): champion zero", style, type(exc).__name__)
+        return None
+    if hashlib.sha256(data).hexdigest() != r[2]:
+        log.warning("H-62 %s model %s fails its SHA-256: champion zero", style, r[0])
+        return None
+    model: dict[str, Any] = pickle.loads(data)      # noqa: S301 - our own file, checked against its recorded digest
+    return {"model_version": r[0], **model}
 
 
 # ---------------------------------------------------------------------------------------------- priors (H-60)
@@ -770,5 +794,5 @@ def learn(db: Database, *, as_of: pd.Timestamp, arms: Mapping[str, str] | None =
 __all__ = ["CAP_SHARE", "FEATURE_LISTS", "FLOOR_SHARE", "MAX_FEATURES", "MAX_WEIGHTS_AGE", "ArmPrior", "ReplayCosts",
            "bounded_shares", "cross_fit_meta", "equal_shares", "label_candidates", "learn", "model_columns",
            "model_cutoff", "prior_from_history", "purged_folds", "read_obs", "read_priors", "record_candidate",
-           "record_fill", "replay_label", "retrain_due", "save_model", "session_day", "thompson_shares",
+           "record_fill", "replay_label", "retrain_due", "save_model", "serving_model", "session_day", "thompson_shares",
            "training_table", "weights", "write_prior", "write_weights"]

@@ -416,6 +416,7 @@ AUX: tuple[Migration, ...] = (
                sha256 TEXT NOT NULL,
                n_rows INTEGER NOT NULL,
                detail TEXT NOT NULL CHECK (json_valid(detail)),
+               status TEXT NOT NULL DEFAULT 'shadow' CHECK (status IN ('shadow', 'champion', 'retired')),
                recorded_ns INTEGER NOT NULL
            ) STRICT""",
     )),
