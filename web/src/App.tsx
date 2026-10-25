@@ -16,24 +16,22 @@ import { Research } from "./screens/Research";
 import { News } from "./screens/News";
 import { Users } from "./screens/Users";
 import { Account } from "./screens/Account";
-import { Chart } from "./screens/Chart";
 import { Progress } from "./screens/Progress";
 import { Limits } from "./screens/Limits";
 import { AutoModeCard } from "./screens/AutoMode";
 import { HaltControl } from "./screens/HaltControl";
 import { CodeSignInsBanner } from "./screens/CodeSignInsBanner";
 
-// Seven destinations (docs/ux/dashboard-v2.md section 2). Phone: bottom bar with the first four and More; desktop: rail.
+// Six destinations (docs/ux/dashboard-v2.md section 2; Chart off for now, owner 2026-10-25). Phone: bottom bar with the first four and More; desktop: rail.
 const NAV: { id: Section; label: string; icon: string }[] = [
   { id: "home", label: "Home", icon: "M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z" },
   { id: "trades", label: "Trades", icon: "M4 17l5-5 4 4 7-8M15 8h5v5" },
-  { id: "chart", label: "Chart", icon: "M4 4v16h16M8 14v3M12 10v7M16 6v11" },
   { id: "limits", label: "Limits", icon: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" },
   { id: "research", label: "Research", icon: "M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M8 3h8" },
   { id: "feeds", label: "Feeds", icon: "M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16M5 19h.01" },
   { id: "settings", label: "Settings", icon: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19 12l2-1-2-4-2 1-2-1-1-2h-4l-1 2-2 1-2-1-2 4 2 1v0l-2 1 2 4 2-1 2 1 1 2h4l1-2 2-1 2 1 2-4z" },
 ];
-const PHONE_BAR: Section[] = ["home", "trades", "chart", "limits"];
+const PHONE_BAR: Section[] = ["home", "trades", "limits", "research"];
 
 type Tab = { id: string; label: string; owner?: boolean; render: () => ReactNode };
 
@@ -108,7 +106,6 @@ export function App() {
   const SINGLE: Record<string, () => ReactNode> = {
     home: () => <Home onOpenProgress={() => go("research", "road")} onOpenLimits={() => go("limits")}
                       onOpenTrades={() => go("trades", "open")} />,
-    chart: () => <Chart />,
     limits: () => <Limits />,
   };
   const tabs = (TABS[route.section] ?? []).filter((t) => !t.owner || hasRole("owner"));

@@ -3,7 +3,8 @@
 // #invite=) are taken out of the URL before the app reads it (lib/links.ts), so they never reach this.
 import { useEffect, useState } from "react";
 
-export const SECTIONS = ["home", "trades", "chart", "limits", "research", "feeds", "settings"] as const;
+// "chart" is off for now (owner 2026-10-25: focus on the trading system); #/chart opens Home. Screens kept for later.
+export const SECTIONS = ["home", "trades", "limits", "research", "feeds", "settings"] as const;
 export type Section = (typeof SECTIONS)[number];
 export type Route = { section: Section; tab: string | null };
 

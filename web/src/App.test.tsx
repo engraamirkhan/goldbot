@@ -53,14 +53,14 @@ describe("App header", () => {
     },
   );
 
-  it("has seven destinations; the phone bar holds Home, Trades, Chart, Limits and More", () => {
+  it("has six destinations (the Chart tab is off for now); the phone bar holds Home, Trades, Limits, Research and More", () => {
     apiModule.setUser({ email: "v@x.io", role: "viewer", signed_in_with: "password_totp" });
     renderApp();
     const rail = screen.getByRole("navigation", { name: "Main" });
     expect(Array.from(rail.querySelectorAll("button")).map((b) => b.textContent))
-      .toEqual(["Home", "Trades", "Chart", "Limits", "Research", "Feeds", "Settings"]);
+      .toEqual(["Home", "Trades", "Limits", "Research", "Feeds", "Settings"]);
     const bar = screen.getByRole("navigation", { name: "Main, phone" });
-    expect(Array.from(bar.querySelectorAll("button")).map((b) => b.textContent)).toEqual(["Home", "Trades", "Chart", "Limits", "More"]);
+    expect(Array.from(bar.querySelectorAll("button")).map((b) => b.textContent)).toEqual(["Home", "Trades", "Limits", "Research", "More"]);
     fireEvent.click(rail.querySelector('[data-nav-item="Limits"]')!);
     expect(screen.getByLabelText("Loading limits")).toBeInTheDocument();
     expect(window.location.hash).toBe("#/limits");
