@@ -12,10 +12,10 @@
                     (`recorded_spread_profile`, aggregates only, reported and not charged).
                     With `costs.publish_release` and a github-token it then publishes the canonical broker's table
                     (costs only) to release costs-v1 for research.yml (`publish_costs`).
-                    Last, exploration arms (`exploration_learn`, research/exploration_data.py): per family, a purged,
-                    embargoed cross-fitted meta-labeller on the closed exploration trades, and the arms' Thompson
-                    shares of the configured exploration ceilings -> aux.db exploration_weights (a failure is reported
-                    and never stops the cost table; stale weights read as equal shares).
+                    Last, exploration arms (`exploration_learn`, research/exploration_data.py; H-61/H-62): the bar-
+                    replayed net-R labels of resolved candidates, the arms' Thompson shares within each style (floor
+                    5%, cap 30%) -> aux.db exploration_weights, and on Sundays the H-62 style models whose retrain is
+                    due (a failure is reported and never stops the cost table; stale weights read as equal shares).
 * saturday_retrain  refresh bars from the data release (best effort), then per specialist: evaluate any challenger
                     that has a shadow record against the promotion gates (promote automatically when all pass),
                     and retrain on the rolling window. A family keeps at most one challenger in shadow; a new one
@@ -100,7 +100,7 @@ import pandas as pd
 from goldbot.agents.roles import ROLES
 from goldbot.agents.runner import AgentRunner
 from goldbot.base import Record, load_record, write_atomic
-from goldbot.config import DecisionTimeframe, Settings, tf_seconds
+from goldbot.config import DecisionTimeframe, Settings
 from goldbot.data.release import store_macro
 from goldbot.data.store import Store
 from goldbot.db.connection import Database
@@ -152,7 +152,7 @@ from goldbot.research.director import (
     rule_preregistration,
 )
 from goldbot.research.drift import AgentHealth, assess, system_halt_reasons
-from goldbot.research.exploration_data import MAX_PRIOR_N, PRIOR_SD_R, ArmPrior, learn, read_obs
+from goldbot.research.exploration_data import ReplayCosts, label_candidates, learn, read_obs
 from goldbot.research.model import RecalibratedCalibrator, fit_recalibration
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.pipeline import (
@@ -259,57 +259,67 @@ def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------------------------- exploration arms
-EXPLORATION_FEATURE_WARMUP_DAYS = 90     # bars before the first decision so every feature's lookback is filled
+EXPLORATION_LABEL_DAYS = 30      # candidates still unlabelled after this long are left (their bars are long gone)
 
 
-def exploration_features(ctx: JobContext, family: str, tf: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
-    """The decision frame's features on `tf` (as training builds them), stamped with when each row became knowable:
-    its bar's close (bars are stamped at their open)."""
-    dec = _bars(ctx, tf, start - pd.Timedelta(days=EXPLORATION_FEATURE_WARMUP_DAYS), end)
-    if dec.empty:
-        return pd.DataFrame()
-    ctx_start = start - pd.Timedelta(days=EXPLORATION_FEATURE_WARMUP_DAYS) - pd.DateOffset(months=CONTEXT_EXTRA_MONTHS)
-    context = {TF_LABEL[t]: _bars(ctx, t, ctx_start, end) for t in context_tfs(tf)}
-    _, X = build_decision_frame(dec.reset_index(drop=True), context)
-    X = X.replace([np.inf, -np.inf], np.nan)
-    X["available_utc"] = pd.DatetimeIndex(pd.to_datetime(X.pop("ts_utc"), utc=True)).as_unit("ns") + \
-        pd.Timedelta(seconds=tf_seconds(tf))
-    return X[X["available_utc"] <= end].reset_index(drop=True)
+def exploration_arms(ctx: JobContext) -> tuple[dict[str, str], list[str], dict[str, float]]:
+    """(strategy arm -> style, control arms, arm -> share ceiling) from each account's `exploration` block when it has
+    one (read by attribute: accounts.yaml owns it); arms without a style are learnt from their candidates."""
+    styles: dict[str, str] = {}
+    controls: list[str] = []
+    ceilings: dict[str, float] = {}
+    for acc in ctx.accounts:
+        arms = getattr(getattr(acc, "exploration", None), "arms", None) or {}
+        items = arms.items() if isinstance(arms, dict) else ((getattr(a, "arm_id", None), a) for a in arms)
+        for arm_id, a in items:
+            if not arm_id:
+                continue
+            if getattr(a, "control_share", None) is not None or getattr(a, "is_control", False):
+                controls.append(str(arm_id))
+                continue
+            if isinstance(style := getattr(a, "style", None), str):
+                styles[str(arm_id)] = style
+            if isinstance(cap := getattr(a, "max_share", None), (int, float)):
+                ceilings[str(arm_id)] = float(cap)
+    return styles, controls, ceilings
 
 
-def exploration_prior(ctx: JobContext, family: str) -> ArmPrior | None:
-    """A family's backtest as an arm prior: the first champion's per-trade mean/sd ratio in R (sd PRIOR_SD_R), worth
-    half its trades up to MAX_PRIOR_N (backtests flatter)."""
-    for m in ctx.population.members.values():
-        if m.family != family:
-            continue
-        entry = ctx.models.champion(m.agent_id)
-        bt = _backtest_stats(entry) if entry is not None else None
-        if bt is not None and bt.mean_ret is not None and bt.std_ret and bt.n_trades > 0:
-            return ArmPrior(mean_r=bt.mean_ret / bt.std_ret * PRIOR_SD_R, sd_r=PRIOR_SD_R,
-                            n_eff=min(bt.n_trades / 2, MAX_PRIOR_N))
-    return None
+def exploration_costs(ctx: JobContext, slot: pd.Timestamp) -> ReplayCosts:
+    """The label replay's cost model, point in time: the canonical broker's measured table as built (slippage per leg
+    from its market cells, commission, swap), else the settings priors."""
+    found = canonical_cost_table(ctx.settings, ctx.accounts, ctx.state_dir)
+    if found is not None and found[0].built_utc <= slot:
+        table, acc = found
+        slips = [max(c.mean, 0.0) for k, c in table.slippage.items() if k.endswith(":market")]
+        return ReplayCosts(version=f"costs:{acc.account_id}:{table.built_utc:%Y%m%dT%H%M}", effective_utc=table.built_utc,
+                           slippage_usd=max(slips) if slips else table.slippage_prior_usd,
+                           commission_rt_per_oz=2 * table.commission_per_lot_side_usd / 100.0,
+                           swap=live_swap(ctx))
+    c = ctx.settings.costs
+    return ReplayCosts(version="settings-priors", effective_utc=pd.Timestamp("2026-01-01", tz="UTC"),
+                       slippage_usd=c.slippage_prior_usd,
+                       commission_rt_per_oz=2 * max(c.commission_per_lot_side_usd.values(), default=0.0) / 100.0,
+                       swap=live_swap(ctx))
 
 
 def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
-    """Nightly (inside nightly_costs): retrain each family's meta-labeller on its exploration trades (purged, embargoed
-    cross-fitting) and write the arms' Thompson shares to aux.db exploration_weights (research/exploration_data.py).
-    Ceilings and configured arms come from `settings.exploration` when that section exists; shares only divide them."""
+    """Nightly (inside nightly_costs; research/exploration_data.py): replay-label the candidates whose label resolved
+    (bar replay on each account's own 1m bid/ask bars), then the H-61 bandit's within-style shares -> aux.db
+    exploration_weights; on Sundays also the H-62 style models whose retrain is due (state/models/h62/)."""
     db = Database.open(ctx.state_dir, "aux")
-    cfg = getattr(ctx.settings, "exploration", None)
-    ceilings = {str(k): float(v) for k, v in dict(getattr(cfg, "arm_ceilings", None) or {}).items()}
-    arms = [a if isinstance(a, str) else str(getattr(a, "arm_id", a)) for a in (getattr(cfg, "arms", None) or [])]
-    obs = read_obs(db, as_of=slot)
-    priors: dict[str, ArmPrior] = {}
-    for arm, fam in obs.groupby("arm_id")["family"].first().items():
-        try:
-            p = exploration_prior(ctx, str(fam))
-        except (OSError, ValueError, KeyError, AttributeError):     # no prior: the flat one applies
-            p = None
-        if p is not None:
-            priors[str(arm)] = p
-    return learn(db, functools.partial(exploration_features, ctx), as_of=slot, priors=priors, ceilings=ceilings,
-                 arms=arms, seed=int(slot.value % (2**32)))
+    costs = exploration_costs(ctx, slot)
+    pending = read_obs(db)
+    pending = pending[pending["label_sim_r"].isna()]
+    labelled: dict[str, int] = {}
+    start = max(pending["decision_utc"].min(), slot - pd.Timedelta(days=EXPLORATION_LABEL_DAYS)) \
+        if not pending.empty else None
+    for account in sorted(set(pending["account_id"])):
+        bars = ctx.store.read("bars_1m", source=account, start=start, end=slot)
+        labelled[account] = label_candidates(db, bars, costs, cutoff=slot, account_id=account) if not bars.empty else 0
+    styles, controls, ceilings = exploration_arms(ctx)
+    out = learn(db, as_of=slot, arms=styles, controls=controls, ceilings=ceilings, seed=int(slot.value % (2**32)),
+                retrain=slot.dayofweek == 6, models_dir=ctx.state_dir / "models")
+    return {"labelled": labelled, "cost_model": costs.version, **out}
 
 
 COSTS_PUBLISHED_FILE = "costs_published.json"    # state: when the table last reached release costs-v1 (health reads it)
