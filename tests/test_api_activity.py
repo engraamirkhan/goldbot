@@ -176,7 +176,10 @@ def test_an_unreadable_source_is_named_and_the_others_still_show(tmp_path):
     assert not any(e.kind.startswith("shadow") for e in v.events)
 
 
-def test_the_route_needs_a_sign_in_and_serves_a_viewer_without_the_login(tmp_path):
+def test_the_route_needs_a_sign_in_and_serves_a_viewer_without_the_login(tmp_path, monkeypatch):
+    # the route reads the wall clock; pin it to the fixture's NOW, or the journal refusals (JOURNAL_DAYS) age out
+    view = activity.activity_view
+    monkeypatch.setattr(activity, "activity_view", lambda d, s, _now, *a, **k: view(d, s, NOW, *a, **k))
     state, root = _everything(tmp_path)
     app = create_app(state, web_dist=tmp_path / "nodist", data_root=root, owner_email="o@x.io")
     c = TestClient(app)
