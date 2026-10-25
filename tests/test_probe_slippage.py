@@ -7,13 +7,14 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from goldbot.config import load_settings
 from goldbot.data.store import Store
 from goldbot.db import Database
 from goldbot.engine import cost_probe
 from goldbot.engine.cost_probe import ProbeRecord
-from goldbot.execution.costs import CostTable, probe_slippage
+from goldbot.execution.costs import CostTable, PublishedCostTable, probe_slippage
 from goldbot.ops.accounts import Account
 from goldbot.ops.jobs import JobContext, nightly_costs
 from goldbot.research.model_registry import ModelRegistry
@@ -117,3 +118,34 @@ def test_a_probe_sent_after_the_slot_does_not_change_the_table(tmp_path):
     nightly_costs(_ctx(tmp_path), NOW)
     table = CostTable.load(tmp_path / "costs_icm-demo.json")
     assert table is not None and table.probe_slippage == {}
+
+
+def test_the_boundary_is_49_prior_and_50_measured_per_session():
+    assert "london" not in probe_slippage(_rows(49, 0.30), PRIOR)
+    assert probe_slippage(_rows(50, 0.30), PRIOR)["london"].n == 50
+
+
+def test_the_bootstrap_interval_is_deterministic_for_its_seed():
+    a, b = probe_slippage(_rows(60, 0.30), PRIOR)["london"], probe_slippage(_rows(60, 0.30), PRIOR)["london"]
+    assert (a.ci_low, a.ci_high) == (b.ci_low, b.ci_high) and a.ci_low < a.mean < a.ci_high
+
+
+def test_the_probe_fill_count_ignores_mirrored_and_unfilled_rows(tmp_path):
+    rows = _rows(60, 0.30)
+    mixed = rows + [r.model_copy(update={"purpose": "cost_probe", "client_order_id": f"m{i}"}) for i, r in enumerate(rows[:5])]
+    mixed += [r.model_copy(update={"retcode": 10006, "fill_price": None, "client_order_id": f"u{i}"}) for i, r in enumerate(rows[:5])]
+    _write(tmp_path, mixed)
+    assert nightly_costs(_ctx(tmp_path), NOW)["icm-demo"]["probe_fills"] == 60
+
+
+def test_published_table_carries_probe_slippage_labelled_and_without_ids(tmp_path):
+    _write(tmp_path, _rows(60, 0.30))
+    nightly_costs(_ctx(tmp_path), NOW)
+    table = CostTable.load(tmp_path / "costs_icm-demo.json")
+    assert table is not None
+    pub = PublishedCostTable.from_table(table, "icm")
+    assert pub.fields["probe_slippage"].source == "measured" and pub.probe_slippage["london"].raised
+    assert "icm-demo" not in pub.model_dump_json()
+    assert pub.to_cost_table().probe_slippage == table.probe_slippage
+    with pytest.raises(ValueError, match="come together"):
+        PublishedCostTable(**{**pub.model_dump(), "probe_slippage": {}})

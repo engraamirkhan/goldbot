@@ -288,6 +288,12 @@ def slippage_table(fills: pd.DataFrame, *, prior_usd: float, min_fills: int = 50
     return out
 
 
+def probe_entry_fills(rows: Iterable["ProbeRecord"]) -> list["ProbeRecord"]:
+    """The rows that count: scheduled (`cost_measurement`) entry legs the broker filled (done retcode, both prices)."""
+    return [r for r in rows if r.purpose == "cost_measurement" and r.retcode == PROBE_RETCODE_DONE
+            and r.requested_price is not None and r.fill_price is not None]
+
+
 def probe_slippage(rows: Iterable["ProbeRecord"], prior_usd: float, min_fills: int = PROBE_MIN_FILLS,
                    sessions: SessionTable = DEFAULT_SESSIONS) -> dict[str, ProbeSlippage]:
     """Scheduled-probe entry slippage by session (prereg-cost-measurement-2026-10 s0.3/s5): "Demo slippage only raises
@@ -297,11 +303,10 @@ def probe_slippage(rows: Iterable["ProbeRecord"], prior_usd: float, min_fills: i
     and never credited."""
     t: list[pd.Timestamp] = []
     v: list[float] = []
-    for r in rows:
-        if (r.purpose == "cost_measurement" and r.retcode == PROBE_RETCODE_DONE
-                and r.requested_price is not None and r.fill_price is not None):
-            t.append(pd.Timestamp(r.sent_utc))
-            v.append(r.side * (r.fill_price - r.requested_price))
+    for r in probe_entry_fills(rows):
+        assert r.requested_price is not None and r.fill_price is not None
+        t.append(pd.Timestamp(r.sent_utc))
+        v.append(r.side * (r.fill_price - r.requested_price))
     if not t:
         return {}
     idx = pd.DatetimeIndex(pd.to_datetime(t, utc=True))
@@ -440,8 +445,10 @@ class PublishedCostTable(FrozenRecord):
     swap_triple_weekday: int | None = Field(None, ge=0, le=4)
     n_ticks: int
     n_fills: int
-    fields: dict[str, FieldSource]             # spread, slippage, commission, swap (+ spread_profile when present)
+    fields: dict[str, FieldSource]             # spread, slippage, commission, swap (+ spread_profile, probe_slippage when present)
     spread_profile: SpreadProfile | None = None   # the recorded broker ticks by hour and session (reported only)
+    probe_slippage: dict[str, ProbeSlippage] = Field(default_factory=dict)   # scheduled-probe slippage by session (demo venue)
+    n_probe_fills: int = 0
 
     @model_validator(mode="after")
     def _labels_match_values(self) -> "PublishedCostTable":
@@ -463,6 +470,10 @@ class PublishedCostTable(FrozenRecord):
             raise ValueError("the spread profile and its label come together")
         if "spread_profile" in f and f["spread_profile"].source != "measured":
             raise ValueError("a spread profile is a measurement: its label must say so")
+        if bool(self.probe_slippage) != ("probe_slippage" in f):
+            raise ValueError("the probe slippage and its label come together")
+        if "probe_slippage" in f and f["probe_slippage"].source != "measured":
+            raise ValueError("probe slippage is a measurement: its label must say so")
         return self
 
     @classmethod
@@ -475,7 +486,10 @@ class PublishedCostTable(FrozenRecord):
                   "swap": FieldSource(source="measured" if swap_ok else "prior")}
         if table.spread_profile is not None:
             fields["spread_profile"] = FieldSource(source="measured", n=table.spread_profile.days)
+        if table.probe_slippage:
+            fields["probe_slippage"] = FieldSource(source="measured", n=table.n_probe_fills)
         return cls(broker=broker, measured_at=table.built_utc, spread=table.spread, slippage=table.slippage,
+                   probe_slippage=table.probe_slippage, n_probe_fills=table.n_probe_fills,
                    slippage_prior_usd=table.slippage_prior_usd,
                    commission_per_lot_side_usd=table.commission_per_lot_side_usd,
                    swap_long_usd_per_lot=table.swap_long_usd_per_lot, swap_short_usd_per_lot=table.swap_short_usd_per_lot,
@@ -492,7 +506,8 @@ class PublishedCostTable(FrozenRecord):
                          swap_short_usd_per_lot=self.swap_short_usd_per_lot, swap_triple_weekday=self.swap_triple_weekday,
                          commission_measured=commission is not None and commission.source == "measured",
                          commission_lots=(commission.n or 0.0) if commission is not None else 0.0,
-                         spread_profile=self.spread_profile)
+                         spread_profile=self.spread_profile, probe_slippage=self.probe_slippage,
+                         n_probe_fills=self.n_probe_fills)
 
 
 def publishable(table: CostTable, broker: str) -> tuple[PublishedCostTable | None, str]:

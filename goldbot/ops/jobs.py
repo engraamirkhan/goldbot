@@ -108,6 +108,7 @@ from goldbot.execution.costs import (
     SpreadProfile,
     apply_probe_slippage,
     build_cost_table,
+    probe_entry_fills,
     probe_slippage,
     publishable,
     spread_profile,
@@ -219,8 +220,8 @@ def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         n_probe = 0
         try:     # scheduled-probe fills raise a session's slippage when proven above the prior; never in `fills` (K7)
             window_start = slot - pd.Timedelta(days=r.fills_window_days)
-            prows = [p for p in cost_probe.probes(ctx.state_dir, acc.account_id)
-                     if window_start <= p.sent_utc <= slot]
+            prows = probe_entry_fills(p for p in cost_probe.probes(ctx.state_dir, acc.account_id)
+                                      if window_start <= p.sent_utc <= slot)
             n_probe = len(prows)
             table = apply_probe_slippage(table, probe_slippage(prows, ctx.settings.costs.slippage_prior_usd), n_probe)
         except (sqlite3.Error, OSError, ValueError) as exc:     # unreadable aux.db: the prior stands
