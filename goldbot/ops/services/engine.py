@@ -230,7 +230,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     import pandas as pd
 
     from goldbot.config import load_settings
-    from goldbot.engine import Engine, EngineConfig
+    from goldbot.engine import Engine, EngineConfig, exploration
     from goldbot.execution.costs import settings_swap
     from goldbot.ops import accounts
     from goldbot.research.model_registry import ModelRegistry
@@ -317,6 +317,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               cost_probe=acc.cost_probe.enabled, cost_probe_budget=acc.cost_probe.budget_share,
                               cost_probe_max_open=acc.cost_probe.max_open, cost_probe_max_loss=acc.cost_probe.max_loss,
                               cost_probe_scheduled=acc.cost_probe.scheduled,
+                              exploration_config=exploration.config_for(acc),   # None unless enabled (plan 2026-10-25)
                               shadow_max_open=settings.shadow.max_open_per_agent,
                               magic_base=acc.magic_base, server_tz=acc.server_tz, state_dir="state", data_root=settings.data_root,
                               shadow_host=shadow_host, probe_only=acc.probe_only, halt_checks=True, news_blackout=True,

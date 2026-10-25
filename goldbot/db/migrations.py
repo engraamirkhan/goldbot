@@ -357,6 +357,7 @@ AUX: tuple[Migration, ...] = (
                mu REAL,
                tau_arm REAL,
                pi_rand_arm REAL,
+               arm_share REAL,
                meta_p REAL,
                model_version TEXT,
                bandit_version TEXT,
@@ -385,6 +386,20 @@ AUX: tuple[Migration, ...] = (
            ) STRICT""",
         "CREATE INDEX IF NOT EXISTS exploration_obs_style ON exploration_obs(style, decision_ns)",
         "CREATE INDEX IF NOT EXISTS exploration_obs_arm ON exploration_obs(arm_id, decision_ns)",
+        # the engine's exploration ledger (goldbot/engine/exploration.py `ExplorationRecord`): one row per arm order
+        # keyed by its client order id (= the candidate id above), the fill and, once closed, the exit, the broker's
+        # P&L and `censored`. Never cost_probes (the mirror budget and the costs reader never see it)
+        f"""CREATE TABLE IF NOT EXISTS exploration_trades (
+               client_order_id TEXT PRIMARY KEY,
+               account_id TEXT NOT NULL,
+               arm_id TEXT NOT NULL,
+               position_id INTEGER,
+               ts_ns INTEGER NOT NULL,
+               closed INTEGER NOT NULL,
+               exit_ns INTEGER,
+               {_BODY}
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS exploration_trades_account ON exploration_trades(account_id, exit_ns)",
         """CREATE TABLE IF NOT EXISTS exploration_weights (
                run_ns INTEGER NOT NULL,
                arm_id TEXT NOT NULL,

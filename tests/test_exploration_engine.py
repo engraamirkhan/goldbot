@@ -7,7 +7,7 @@ from __future__ import annotations
 import sqlite3
 import zlib
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 import pytest
@@ -20,14 +20,17 @@ from goldbot.execution.broker import AccountInfo, Tick
 from goldbot.execution.paper import PaperBroker
 from goldbot.ops import accounts as acc_mod
 from goldbot.ops.gates_phase import load_closed_trades
+from goldbot.research import arm_rules
+from goldbot.research.arms import Arm as SpecArm
 from goldbot.risk import RiskLimits
 from goldbot.risk.gate import Stage
 from goldbot.specialists.session_open import SessionOpenSpecialist
 from goldbot.telegram.approvals import ApprovalCenter
 
-TICKS = synthetic_ticks("2025-03-03", "2025-03-05", ticks_per_minute=1, seed=5)
+TICKS = synthetic_ticks("2025-03-03", "2025-03-08", ticks_per_minute=1, seed=5)
 CLOSE = pd.Timestamp("2025-03-04 20:00", tz="UTC")        # a Tuesday 15m close in market hours
 LOSS = 1.0                                                 # every loss at a stop, and every round trip, in the tests
+LONG, SHORT = "random_bracket", "tsmom"                    # spec rule names whose generators the tests replace
 
 
 class _Terminal(PaperBroker):
@@ -35,26 +38,31 @@ class _Terminal(PaperBroker):
         return super().account().model_copy(update={"trade_mode": "demo"})
 
 
-def _long(m: pd.DataFrame, p: Any) -> int:
-    return 1
-
-
-def _short(m: pd.DataFrame, p: Any) -> int:
-    return -1
+def _rule(side: int) -> Any:
+    """A candidate on the bar that just closed: the arm's own stop (params stop_usd), target (target_r R) and hold."""
+    def gen(arm: SpecArm, ctx: arm_rules.RuleContext) -> pd.DataFrame:
+        p = arm.params
+        return pd.DataFrame({"idx": [len(ctx.bars) - 1], "side": [side], "risk_usd": [float(p["stop_usd"])],
+                             "target_r": [float(p["target_r"])], "max_bars": [int(p["hold_bars"]) - 1]})
+    return gen
 
 
 @pytest.fixture(autouse=True)
-def _families(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The two built-in test arms' rules, and a fixed loss at every stop (the budget arithmetic is then exact)."""
-    monkeypatch.setitem(exploration.FAMILIES, "test_long", _long)
-    monkeypatch.setitem(exploration.FAMILIES, "test_short", _short)
+def _rules(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The two built-in test arms' rules (always long, always short), and a fixed loss at every stop (the budget
+    arithmetic is then exact)."""
+    monkeypatch.setitem(arm_rules.RULE_FUNCS, LONG, _rule(1))
+    monkeypatch.setitem(arm_rules.RULE_FUNCS, SHORT, _rule(-1))
     monkeypatch.setattr(cost_probe, "stop_loss", lambda *a, **k: LOSS)
 
 
-def _arm(arm_id: str, tf: str = "15m", *, family: str = "test_long", style: str = "intraday", **kw: Any) -> Arm:
-    base: dict[str, Any] = dict(arm_id=arm_id, family=family, tf=tf, stop=1.0, hold_bars=4, target=2.0, max_open=5,
-                                daily_gbp=100.0, style=style)
-    return Arm(**{**base, **kw})
+def _arm(arm_id: str, tf: str = "15m", *, side: int = 1, style: str = "intraday", max_open: int = 5,
+         hold_bars: int = 4, stop_usd: float = 5.0, target_r: float = 2.0, control_share: float | None = None,
+         status: Literal["run", "blocked"] = "run") -> Arm:
+    spec = SpecArm(id=arm_id, rule=LONG if side > 0 else SHORT, timeframe=tf, max_open=max_open,  # type: ignore[arg-type]
+                   params={"stop_usd": stop_usd, "target_r": target_r, "hold_bars": hold_bars}, status=status,
+                   note="test" if status != "run" else "")
+    return Arm(spec=spec, style=style, control_share=control_share)
 
 
 def _engine(tmp_path: Path, arms: list[Arm], *, pots: dict[str, Pot] | None = None, max_open_total: int = 18,
@@ -100,7 +108,7 @@ def _sent(eng: Engine) -> list[dict]:
 
 # ------------------------------------------------------------------------------------------------ the order
 def test_every_signal_is_sent_at_the_minimum_lot_with_its_own_stop_hold_and_target_through_the_riskgate(tmp_path):
-    arm = _arm("i-long", stop=1.0, target=2.0, hold_bars=4)
+    arm = _arm("i-long", stop_usd=5.0, target_r=2.0, hold_bars=4)
     eng, pb = _engine(tmp_path, [arm])
     seen: list[Any] = []
     check = eng.gate.check
@@ -121,9 +129,8 @@ def test_every_signal_is_sent_at_the_minimum_lot_with_its_own_stop_hold_and_targ
     [pos] = pb.positions()
     [tr] = eng.open.values()
     assert pos.magic == eng.cfg.magic_base + magic.EXPLORATION_OFFSET and pos.lots == pytest.approx(0.01)
-    atr_usd = intent.atr_usd
-    assert tr.sl == pytest.approx(tick.ask - 1.0 * atr_usd, abs=0.01)       # its own stop: 1 ATR
-    assert tr.tp == pytest.approx(tick.ask + 2.0 * atr_usd, abs=0.01)       # its own target: 2 ATR
+    assert tr.sl == pytest.approx(tick.ask - 5.0, abs=0.01)                 # its own stop: $5
+    assert tr.tp == pytest.approx(tick.ask + 10.0, abs=0.01)                # its own target: 2 R
     assert tr.max_bars == 4 and tr.agent_id == "explore:i-long"              # its own hold: 4 of its 15m bars
     [rec] = exploration.trades(str(tmp_path), "icm-probe")
     assert rec.position_id == pos.position_id and rec.hold_s == 3600 and rec.arm_id == "i-long"
@@ -158,8 +165,8 @@ def test_exploration_runs_only_on_a_demo_probe_only_account(tmp_path):
 # ------------------------------------------------------------------------------------------------ the caps
 def test_the_arm_budget_admits_exactly_what_fits_and_refuses_the_next(tmp_path):
     """Its day: today's realised loss + open risk + the new loss at the stop <= its share of the pot, never above
-    its own ceiling (daily_gbp 2.0 with a loss of 1.0 a trade: exactly two)."""
-    eng, pb = _engine(tmp_path, [_arm("a", daily_gbp=2.0)])
+    its share (a control's 0.5 of a £4 pot = £2 with a loss of £1 a trade: exactly two)."""
+    eng, pb = _engine(tmp_path, [_arm("a", control_share=0.5)], pots={"intraday": Pot(gbp=4.0, max_open=5)})
     for k in range(3):
         close = CLOSE + pd.Timedelta(minutes=15 * k)
         exploration.on_pass(eng, _at(eng, pb, close))
@@ -171,7 +178,7 @@ def test_the_arm_budget_admits_exactly_what_fits_and_refuses_the_next(tmp_path):
 def test_an_exhausted_pot_refuses_the_next_entry_whatever_the_arms_shares_say(tmp_path, monkeypatch):
     """The arms' shares fit the pot by construction; the pot is the backstop when they do not (shares that moved
     during the day, a reader that over-allocates): realised + open + new <= the pot's £."""
-    arms = [_arm("a", daily_gbp=10), _arm("b", daily_gbp=10, family="test_short")]
+    arms = [_arm("a"), _arm("b", side=-1)]
     eng, pb = _engine(tmp_path, arms, pots={"intraday": Pot(gbp=1.0, max_open=5)})
     monkeypatch.setattr(exploration, "shares", lambda ex, now: {"a": 1.0, "b": 1.0})
     exploration.on_pass(eng, _at(eng, pb, CLOSE))
@@ -180,7 +187,7 @@ def test_an_exhausted_pot_refuses_the_next_entry_whatever_the_arms_shares_say(tm
 
 
 def test_the_budget_share_of_the_day_binds_across_every_pot(tmp_path):
-    arms = [_arm("a"), _arm("b", family="test_short", style="scalp")]
+    arms = [_arm("a"), _arm("b", side=-1, style="scalp")]
     eng, pb = _engine(tmp_path, arms, budget_share=1.5 / 200)          # £1.50 of the £200 day: one trade of £1
     exploration.on_pass(eng, _at(eng, pb, CLOSE))
     assert len(_sent(eng)) == 1
@@ -188,7 +195,7 @@ def test_the_budget_share_of_the_day_binds_across_every_pot(tmp_path):
 
 
 def test_one_swing_position_at_a_time(tmp_path):
-    arms = [_arm("w0", style="swing"), _arm("w1", style="swing", family="test_short")]
+    arms = [_arm("w0", style="swing"), _arm("w1", style="swing", side=-1)]
     eng, pb = _engine(tmp_path, arms)
     exploration.on_pass(eng, _at(eng, pb, CLOSE))
     assert len(_sent(eng)) == 1
@@ -200,19 +207,6 @@ def test_the_per_trade_cap_counts_the_round_trip_cost_beside_the_loss_at_the_sto
     exploration.on_pass(eng, _at(eng, pb, CLOSE))
     assert not _sent(eng) and not pb.positions()
     assert [d["action"] for d in _actions(eng, "exploration_refused:")] == ["exploration_refused:arm_cap"]
-
-
-def test_the_global_cap_holds_the_rest_queued_until_they_go_stale(tmp_path):
-    arms = [_arm(f"a{i}", style="intraday") for i in range(3)]
-    eng, pb = _engine(tmp_path, arms, max_open_total=2)
-    tick = _at(eng, pb, CLOSE)
-    exploration.on_pass(eng, tick)
-    assert len(_sent(eng)) == 2 and len(pb.positions()) == 2
-    assert eng.exploration is not None and len(eng.exploration.queue) == 1
-    later = Tick(ts_utc=CLOSE + pd.Timedelta(seconds=61), bid=tick.bid, ask=tick.ask)
-    exploration.on_pass(eng, later)
-    assert [d["action"] for d in _actions(eng, "exploration_stale")] == ["exploration_stale"]
-    assert len(pb.positions()) == 2 and not eng.exploration.queue
 
 
 def test_the_live_cap_from_equity_binds_below_max_open_total(tmp_path):
@@ -238,10 +232,10 @@ def test_at_most_four_entries_a_pass_in_fair_rotation_across_arms(tmp_path):
 def test_the_fair_order_serves_each_arm_once_a_round_oldest_first():
     ex = object.__new__(exploration.Exploration)
     p = exploration.Pending
-    ex.queue = __import__("collections").deque([p(arm_id="b", side=1, bar_ts=CLOSE, atr_usd=1.0),
-                                                p(arm_id="b", side=1, bar_ts=CLOSE + pd.Timedelta(minutes=1), atr_usd=1.0),
-                                                p(arm_id="a", side=1, bar_ts=CLOSE, atr_usd=1.0),
-                                                p(arm_id="c", side=1, bar_ts=CLOSE + pd.Timedelta(minutes=1), atr_usd=1.0)])
+    kw: dict[str, Any] = dict(side=1, stop_usd=1.0, target_usd=2.0, hold_bars=4)
+    later = CLOSE + pd.Timedelta(minutes=1)
+    ex.queue = __import__("collections").deque([p(arm_id="b", bar_ts=CLOSE, **kw), p(arm_id="b", bar_ts=later, **kw),
+                                                p(arm_id="a", bar_ts=CLOSE, **kw), p(arm_id="c", bar_ts=later, **kw)])
     ex.last_arm = "a"
     assert [s.arm_id for s in exploration._order(ex)] == ["b", "a", "c", "b"]
 
@@ -320,7 +314,7 @@ def test_the_live_agents_15m_decisions_are_identical_with_exploration_on(tmp_pat
 
     def run(path: Path, on: bool) -> list[tuple[Any, ...]]:
         path.mkdir()
-        eng, pb = _engine(path, [_arm("a"), _arm("b", tf="1h", family="test_short")], agents=[_Long()], enabled=on)
+        eng, pb = _engine(path, [_arm("a"), _arm("b", tf="1h", side=-1)], agents=[_Long()], enabled=on)
         for k in range(4):
             close = CLOSE + pd.Timedelta(minutes=15 * k)
             tick = _at(eng, pb, close)
@@ -367,7 +361,7 @@ def test_a_position_of_an_arm_no_longer_configured_is_closed_at_once(tmp_path):
 
 
 def test_an_unreadable_ledger_refuses_every_entry_and_exits_continue(tmp_path, monkeypatch):
-    arm = _arm("s", tf="1m", style="scalp", hold_bars=1, stop=8.0, target=8.0)   # no broker exit meanwhile
+    arm = _arm("s", tf="1m", style="scalp", hold_bars=1, stop_usd=20.0, target_r=1.0)   # no broker exit meanwhile
     eng, pb = _engine(tmp_path, [arm, _arm("i")])
     minute = CLOSE + pd.Timedelta(minutes=1)
     tick = _at(eng, pb, CLOSE)
@@ -407,7 +401,7 @@ def _obs(tmp_path: Path) -> list[tuple[Any, ...]]:
 def test_every_candidate_taken_or_not_is_recorded_with_its_propensity_and_a_closed_trade_its_fill(tmp_path):
     """Lane L3's contract: a taken candidate (mu = the random branch's), a blocked one (mu 0 and its reason), and
     the taken one's fill at its close, keyed by the order id."""
-    eng, pb = _engine(tmp_path, [_arm("a"), _arm("b", family="test_short", daily_gbp=0.5)])
+    eng, pb = _engine(tmp_path, [_arm("a"), _arm("b", side=-1, control_share=0.01)])
     exploration.on_pass(eng, _at(eng, pb, CLOSE))
     [pid] = list(eng.open)
     eng._try_close(pid, "time_exit", CLOSE)
@@ -421,13 +415,162 @@ def test_at_champion_zero_the_ranked_branch_is_never_used(tmp_path, monkeypatch)
     """Quant ruling 2026-10-25: with no champion model every candidate goes through the random branch with its
     propensity recorded; and the engine never ranks on a model it cannot score, even when one is served."""
     from goldbot.research import exploration_data
-    eng, pb = _engine(tmp_path, [_arm("a"), _arm("b", style="scalp", family="test_short")])
+    eng, pb = _engine(tmp_path, [_arm("a"), _arm("b", style="scalp", side=-1)])
     exploration.on_pass(eng, _at(eng, pb, CLOSE))
     assert [r[2] for r in _obs(tmp_path)] == ["random", "random"]
     monkeypatch.setattr(exploration_data, "serving_model", lambda db, style, now: {"model_version": "m1"})
     exploration.on_pass(eng, _at(eng, pb, CLOSE + pd.Timedelta(minutes=15)))
     rows = _obs(tmp_path)
     assert len(rows) == 4 and {r[2] for r in rows} == {"random"} and {r[3] for r in rows} == {exploration.PI_RANDOM}
+
+
+# ------------------------------------------------------------------------------------------------ review round 1
+def test_after_an_order_raises_no_other_arm_sends_in_the_same_pass(tmp_path, monkeypatch):
+    """Trading-safety M1: an order that raised (or came back ambiguous) is in no count yet (global cap, net lots,
+    pot slots), so nothing else is sent until it is settled; the rest are recorded blocked."""
+    eng, pb = _engine(tmp_path, [_arm("a"), _arm("b"), _arm("c")])
+    calls: list[str] = []
+
+    def boom(prop: Any, *a: Any, **k: Any) -> Any:
+        calls.append(prop.proposal_id)
+        raise TimeoutError("bridge timed out")
+
+    monkeypatch.setattr(eng, "_execute", boom)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert len(calls) == 1 and not eng.open
+    rows = _obs(tmp_path)
+    assert [r[1] for r in rows] == [1, 0, 0]                # the one sent (state unknown) and two held back
+    assert [r[5] for r in rows if r[1] == 0] == ["order_unsettled", "order_unsettled"]
+
+
+def test_the_per_trade_cap_and_the_open_risk_use_the_loss_at_the_stop_the_gate_set(tmp_path, monkeypatch):
+    """Trading-safety L1: the gate may floor the stop wider (stops level, spread); the cap check and the open risk use
+    that stop's loss, never the rule's."""
+    monkeypatch.setattr(cost_probe, "stop_loss", lambda eng, side, price, distance, lots: distance)   # £1 per $1
+    eng, pb = _engine(tmp_path, [_arm("a", stop_usd=5.0)], caps={"a": 12.0})
+    check = eng.gate.check
+
+    def wider(intent: Any, *a: Any, **kw: Any) -> Any:
+        gd = check(intent, *a, **kw)
+        return gd.model_copy(update={"stop_distance": 3 * gd.stop_distance})
+
+    eng.gate.check = wider                                   # type: ignore[method-assign]
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert not eng.open and [d["action"] for d in _actions(eng, "exploration_refused:")] == ["exploration_refused:arm_cap"]
+    eng2, pb2 = _engine(tmp_path / "b", [_arm("a", stop_usd=5.0, control_share=1.0)], caps={"a": 40.0})
+    check2 = eng2.gate.check
+
+    def wider2(intent: Any, *a: Any, **kw: Any) -> Any:
+        gd = check2(intent, *a, **kw)
+        return gd.model_copy(update={"stop_distance": 3 * gd.stop_distance})
+
+    eng2.gate.check = wider2                                 # type: ignore[method-assign]
+    exploration.on_pass(eng2, _at(eng2, pb2, CLOSE))
+    [pid] = list(eng2.open)
+    assert eng2.exploration is not None and eng2.exploration.open_loss[pid] == pytest.approx(15.0)
+
+
+def test_a_blocked_arm_is_dropped_and_journalled_and_the_engine_runs_the_rest(tmp_path):
+    """Trading-safety L2: one bad arm never stops the engine."""
+    eng, pb = _engine(tmp_path, [_arm("ok"), _arm("off", status="blocked")])
+    assert eng.exploration is not None and list(eng.exploration.arms) == ["ok"]
+    assert [d["arm"] for d in _actions(eng, "exploration_arm_dropped")] == ["off"]
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert len(_sent(eng)) == 1
+
+
+def test_when_the_global_cap_is_full_every_waiting_signal_is_recorded_blocked_and_dropped(tmp_path):
+    """Quant Q1: a signal the cap holds back is a blocked candidate now (mu 0, `global_cap`), not a stale one later."""
+    eng, pb = _engine(tmp_path, [_arm(f"a{i}") for i in range(4)], max_open_total=2)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert len(_sent(eng)) == 2 and eng.exploration is not None and not eng.exploration.queue
+    assert sorted(r[5] for r in _obs(tmp_path) if r[1] == 0) == ["global_cap", "global_cap"]
+
+
+def test_a_censored_close_leaves_the_fill_label_empty(tmp_path):
+    """Quant Q2: a trade cut short (Friday cut, kill switch) has no label: training never reads a censored R."""
+    eng, pb = _engine(tmp_path, [_arm("a")])
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    [pid] = list(eng.open)
+    eng._try_close(pid, "weekend_close_loser", CLOSE)
+    eng._flush_closed()
+    [row] = _obs(tmp_path)
+    assert row[6] == 0                                      # label_fill_r IS NULL
+
+
+def test_no_entry_of_any_style_whose_hold_reaches_the_friday_cut(tmp_path):
+    """Quant Q2: swing too (`weekend_hold`): no label may straddle the weekend gap."""
+    fri = pd.Timestamp("2025-03-07 16:00", tz="UTC")                    # 18:00 Athens; the cut is 21:30
+    eng, pb = _engine(tmp_path, [_arm("w", tf="4h", style="swing", hold_bars=24)])
+    exploration.on_pass(eng, _at(eng, pb, fri))
+    assert not _sent(eng)
+    assert [d["action"] for d in _actions(eng, "exploration_refused:")] == ["exploration_refused:weekend_hold"]
+
+
+def test_strategy_shares_are_scaled_by_what_the_controls_leave_and_recorded_with_the_candidate(tmp_path):
+    """Quant Q3: a control keeps its fixed share; the strategy arms' research shares (equal fallback held in 5-30%)
+    are scaled by 1 - the controls' sum; each candidate row carries its arm's share."""
+    arms = [_arm("c0", control_share=0.25), _arm("s1"), _arm("s2", side=-1)]
+    eng, pb = _engine(tmp_path, arms)
+    assert eng.exploration is not None
+    sh = exploration.shares(eng.exploration, CLOSE)
+    assert sh == pytest.approx({"c0": 0.25, "s1": 0.75 * 0.30, "s2": 0.75 * 0.30})
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    with exploration.ledger_db(str(tmp_path)).connection() as conn:
+        got = dict(conn.execute("SELECT arm_id, arm_share FROM exploration_obs").fetchall())
+    assert got == pytest.approx(sh)
+
+
+def test_the_equal_share_fallback_is_held_inside_five_to_thirty_percent(tmp_path, monkeypatch):
+    from goldbot.research import exploration_data
+
+    def broken(*a: Any, **k: Any) -> Any:
+        raise RuntimeError("reader down")
+
+    monkeypatch.setattr(exploration_data, "weights", broken)
+    eng, _ = _engine(tmp_path, [_arm("s1"), _arm("s2")])
+    assert eng.exploration is not None
+    assert exploration.shares(eng.exploration, CLOSE) == pytest.approx({"s1": 0.30, "s2": 0.30})
+
+
+def test_the_exploration_ledger_comes_with_the_aux_migrations():
+    """Integration I3: the table is the unreleased aux migration 16's, not created by the engine."""
+    from goldbot.db.migrations import AUX
+    [m16] = [m for m in AUX if m.version == 16]
+    assert any("exploration_trades" in st for st in m16.statements)
+    assert not hasattr(exploration, "DDL")
+
+
+def test_the_engine_config_comes_from_the_frozen_spec_and_the_accounts_registration(tmp_path):
+    """Integration I1: rules from config/exploration_arms.yaml (hash-checked), registration (style, caps) from
+    accounts.yaml; an arm registered but missing from the spec, or blocked there, is dropped and named."""
+    acc = _probe_account(exploration=_explore(
+        arms={"S0": acc_mod.ExplorationArm(max_loss=6.5, style="scalp", control_share=0.25),
+              "I2A": acc_mod.ExplorationArm(max_loss=17.0, style="intraday"),
+              "S6": acc_mod.ExplorationArm(max_loss=6.5, style="scalp"),
+              "ZZ9": acc_mod.ExplorationArm(max_loss=6.5, style="scalp")},
+        pots={"scalp": acc_mod.ExplorationPot(gbp=10, max_open=8), "intraday": acc_mod.ExplorationPot(gbp=10,
+                                                                                                       max_open=5)}))
+    cfg = exploration.config_for(acc)
+    assert cfg is not None and cfg.enabled
+    assert [a.arm_id for a in cfg.arms] == ["I2A", "S0"] and sorted(cfg.dropped) == ["S6", "ZZ9"]
+    s0 = next(a for a in cfg.arms if a.arm_id == "S0")
+    assert s0.tf == "1m" and s0.control_share == 0.25 and s0.spec.rule == "random_bracket"
+    assert exploration.config_for(_probe_account()) is None             # not enabled: no exploration
+
+
+def test_icm_probe_ships_the_adr_0043_budget_with_exploration_off():
+    """Integration I2 (PD): cost probes 60/220, exploration 138/220; pots scalp £50 / intraday £48 / swing £40;
+    swing £40 a trade and one open, scalp £6.50 a trade; 18 open at most; off until the reviewed switch-on."""
+    acc = acc_mod.load_accounts(logins=False)["icm-probe"]
+    ex = acc.exploration
+    assert not ex.enabled and ex.max_open_total == 18
+    assert ex.budget_share * 220 == pytest.approx(138, abs=0.05)
+    assert acc.cost_probe.budget_share * 220 == pytest.approx(60, abs=0.05)
+    assert {k: (v.gbp, v.max_open) for k, v in ex.pots.items()} == {"scalp": (50, 8), "intraday": (48, 5),
+                                                                    "swing": (40, 1)}
+    assert {a.max_loss for a in ex.arms.values() if a.style == "scalp"} == {6.5}
+    assert {a.max_loss for a in ex.arms.values() if a.style == "swing"} == {40.0}
 
 
 # ------------------------------------------------------------------------------------------------ config and limits

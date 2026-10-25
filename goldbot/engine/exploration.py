@@ -3,9 +3,10 @@
 
 The plan's rules, as built here:
 
-* An arm (`Arm`) is a rule family with its parameters on one timeframe, a side rule, its own stop and target (ATR(14)
-  multiples of its timeframe) and its own hold (`hold_bars` of its timeframe). "Every signal is sent at the minimum lot
-  with its own stop, hold and target", or refused and journalled; never resized, never with a tightened stop.
+* An arm (`Arm`) is a frozen ARM-SPEC rule (config/exploration_arms.yaml, hash-checked; `research.arm_rules`) as an
+  account registers it (style, control share, per-trade cap: `config_for`). Each candidate carries the rule's own
+  stop, target and hold. "Every signal is sent at the minimum lot with its own stop, hold and target", or refused and
+  journalled; never resized, never with a tightened stop.
 * When: arms on 15m and above decide at the engine's bar closes (`step`), after the engine's own decisions, so the
   live agents' decisions are the same with exploration on. Arms on 1m and 5m decide on the engine's pass (`on_pass`)
   "reading only already-complete minutes (bars_1m + ticks_to_1m(eng.ticks) at close + 1.5 s)": a minute joins once
@@ -46,7 +47,8 @@ import logging
 import math
 import time
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pandas as pd
@@ -55,17 +57,19 @@ from pydantic import Field, ValidationError, model_validator
 from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.config import tf_seconds
 from goldbot.data.calendar import DEFAULT_SESSIONS
-from goldbot.data.resample import mid, resample_bars, ticks_to_1m
+from goldbot.data.resample import resample_bars, ticks_to_1m
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db import Database, RecordRepo
 from goldbot.engine import auto_entry, cost_probe
-from goldbot.features.technical import atr
 from goldbot.labels.triple_barrier import BarrierSpec
+from goldbot.research.arms import Arm as SpecArm
+from goldbot.research.arms import arm_hash, load_arms
 
 if TYPE_CHECKING:
     from goldbot.engine.runner import Engine
     from goldbot.engine.store import OpenTrade
     from goldbot.execution.broker import OrderResult, Position, Tick
+    from goldbot.ops.accounts import Account
     from goldbot.risk import Intent
     from goldbot.risk.gate import GateDecision
     from goldbot.specialists.base import Specialist
@@ -82,17 +86,16 @@ NOTIONAL_X = 6.0                    # notional cap: 6 x equity
 MARGIN_LEVEL = 3.0                  # margin cap: the margin level kept at 300%
 FALLBACK_LEVERAGE = 20.0            # the gate's 1:20 margin figure: the margin used is never below it
 GRACE_S = 1.5                       # a minute is complete GRACE_S after its close
-LOOKBACK = 200                      # bars of an arm's timeframe its rule and ATR read
-ATR_N = 14
+LOOKBACK = 200                      # bars of an arm's timeframe its rule reads
+LOOKBACK_1M = 1_000                 # and at least this many minutes (S5's 15m EMA50 reads 750)
 SUB_15M = ("1m", "5m")
-SWING = "swing"                     # ADR 0043: the one style allowed to hold over the weekend
 MAX_NET_LOTS = 0.10                 # ADR 0043 X3: net same-side exposure on the account, lots
 DD_WARN, DD_PAUSE = 0.06, 0.08      # ADR 0043 section 2: drawdown from the mark: warn, pause
 PI_RANDOM = 1.0                     # champion zero: the random branch takes every admissible candidate (mu = 1)
+SHARE_FLOOR, SHARE_CAP = 0.05, 0.30  # H-61's bounds on a strategy arm's share (L3 `bounded_shares`), fallback included
+SPEC_PATH = Path(__file__).parents[2] / "config" / "exploration_arms.yaml"   # the frozen ARM-SPEC (hash-checked)
 # a close by the arm's own barrier: anything else censors the label
 NATURAL = frozenset({HOLD_EXIT, "time_exit", "stop", "target", "engine_stop_close"})
-
-Signal = Callable[[pd.DataFrame, Mapping[str, float]], int]
 
 
 def stale_s(tf: str) -> float:
@@ -100,48 +103,30 @@ def stale_s(tf: str) -> float:
     return 10.0 if tf == "1m" else 30.0 if tf == "5m" else 60.0
 
 
-# ------------------------------------------------------------------------------------------------ rule families
-def _donchian(m: pd.DataFrame, p: Mapping[str, float]) -> int:
-    """+1 when the bar closes above the highest high of the `n` bars before it, -1 below their lowest low."""
-    n = int(p.get("n", 20))
-    if n < 1 or len(m) < n + 1:
-        return 0
-    c = float(m["close"].iloc[-1])
-    hi, lo = m["high"].to_numpy()[-n - 1:-1], m["low"].to_numpy()[-n - 1:-1]
-    return 1 if c > hi.max() else -1 if c < lo.min() else 0
-
-
-def _roc(m: pd.DataFrame, p: Mapping[str, float]) -> int:
-    """The sign of the `n`-bar change in close when it exceeds `k` ATR, else 0."""
-    n, k = int(p.get("n", 10)), float(p.get("k", 1.0))
-    if n < 1 or len(m) < n + 1 or not math.isfinite(float(m["atr"].iloc[-1])):
-        return 0
-    c = m["close"].to_numpy()
-    move = float(c[-1] - c[-1 - n])
-    return 1 if move > k * float(m["atr"].iloc[-1]) else -1 if move < -k * float(m["atr"].iloc[-1]) else 0
-
-
-# family -> rule: mid OHLC bars of the arm's timeframe (with `atr`), the last row the bar just closed -> +1, -1 or 0
-FAMILIES: dict[str, Signal] = {"donchian": _donchian, "roc": _roc}
-
-
 class Arm(FrozenRecord):
-    """One exploration arm (the architect's plan 2026-10-25). `stop` and `target` are ATR(14) multiples of `tf`;
-    `daily_gbp` is the arm's ceiling on a day's loss (account currency, GBP), its share of the budget never above it."""
-    arm_id: str = Field(min_length=1, max_length=64)
-    family: str
-    params: dict[str, float] = Field(default_factory=dict)
-    tf: Literal["1m", "5m", "15m", "1h", "4h", "1d"]
-    side_rule: Literal["follow", "fade", "long", "short"] = "follow"
-    stop: float = Field(gt=0)
-    hold_bars: int = Field(ge=1)
-    target: float = Field(gt=0)
-    max_open: int = Field(1, ge=1)
-    daily_gbp: float = Field(gt=0)
-    # ADR 0043: the sleeve (pot) the arm draws on, and a random control's fixed share of it (controls are the null:
-    # never allocated by results); None = a strategy arm, which splits the rest by the research weights
+    """One exploration arm: its frozen rule (`spec`, config/exploration_arms.yaml, ARM-SPEC 2026-10-25: rule,
+    timeframe, params, max_open, hash-checked) and the account's registration of it (config/accounts.yaml
+    `exploration.arms`): the ADR 0043 sleeve (`style`) and, for a random control, its fixed share of it (controls are
+    the null: never allocated by results). Each candidate carries its own stop, target and hold from the rule."""
+    spec: SpecArm
     style: str
     control_share: float | None = Field(None, gt=0, le=1)
+
+    @property
+    def arm_id(self) -> str:
+        return self.spec.id
+
+    @property
+    def tf(self) -> str:
+        return self.spec.timeframe
+
+    @property
+    def max_open(self) -> int:
+        return self.spec.max_open
+
+    @property
+    def family(self) -> str:
+        return self.spec.rule
 
     @property
     def key(self) -> str:
@@ -154,21 +139,13 @@ class Arm(FrozenRecord):
 
     @property
     def hold_s(self) -> int:
-        return self.hold_bars * tf_seconds(self.tf)
+        """A 1m/5m arm's hold on the host clock: the spec's `hold_bars` of its timeframe (every sub-15m rule has one)."""
+        return int(self.spec.params.get("hold_bars", 1)) * tf_seconds(self.tf)
 
     @property
     def config_hash(self) -> str:
-        """The arm's definition hashed (lane L3 `arm_config_hash`): a changed rule is a different arm's evidence."""
-        return hashlib.sha1(self.model_dump_json().encode()).hexdigest()[:12]
-
-    def side(self, raw: int) -> int:
-        if self.side_rule == "fade":
-            return -raw
-        if self.side_rule == "long":
-            return raw if raw > 0 else 0
-        if self.side_rule == "short":
-            return raw if raw < 0 else 0
-        return raw
+        """The frozen spec's hash (lane L3 `arm_config_hash`): a changed rule is a different arm's evidence."""
+        return self.spec.config_hash or arm_hash(self.spec)
 
 
 class Pot(FrozenRecord):
@@ -179,13 +156,15 @@ class Pot(FrozenRecord):
 
 
 class ExplorationConfig(FrozenRecord):
-    """The engine's exploration block: the account's `exploration` (config/accounts.yaml, `accounts.Exploration`:
-    enabled, budget_share, max_open_total, pots) with the arms' definitions."""
+    """The engine's exploration block (`config_for`): the account's `exploration` (enabled, budget_share,
+    max_open_total, pots) with each registered arm's frozen rule; `dropped` names the registered arms left out (not
+    in the spec), which the engine journals at its start."""
     enabled: bool = False
     budget_share: float = Field(0.1, gt=0, le=1)
     max_open_total: int = Field(1, ge=1)
     pots: dict[str, Pot] = Field(default_factory=dict)
     arms: tuple[Arm, ...] = ()
+    dropped: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def _consistent(self) -> ExplorationConfig:
@@ -200,9 +179,32 @@ class ExplorationConfig(FrozenRecord):
         return self
 
 
+def config_for(acc: Account, spec_path: Path = SPEC_PATH) -> ExplorationConfig | None:
+    """The engine's exploration block for `acc` (integration ruling 2026-10-25): None unless its `exploration` is
+    enabled. Rules come from the frozen, hash-checked spec (`research.arms.load_arms`); the account registers the arms
+    it runs (style, control share; the per-trade cap reaches the RiskGate as `exploration_arms`). A registered arm the
+    spec lacks or blocks is dropped and logged here, and journalled at the engine's start (`dropped`)."""
+    ex = acc.exploration
+    if not ex.enabled:
+        return None
+    specs = {a.id: a for a in load_arms(spec_path)}
+    arms, dropped = [], []
+    for arm_id in sorted(ex.arms):
+        reg = ex.arms[arm_id]
+        if arm_id not in specs or specs[arm_id].status != "run" or reg.style is None:
+            log.warning("exploration arm %s is registered on %s but missing or blocked in the frozen spec: dropped",
+                        arm_id, acc.account_id)
+            dropped.append(arm_id)
+            continue
+        arms.append(Arm(spec=specs[arm_id], style=reg.style, control_share=reg.control_share))
+    return ExplorationConfig(enabled=True, budget_share=ex.budget_share, max_open_total=ex.max_open_total,
+                             pots={k: Pot(gbp=v.gbp, max_open=v.max_open) for k, v in ex.pots.items()},
+                             arms=tuple(arms), dropped=tuple(dropped))
+
+
 class ExplorationRecord(FrozenRecord):
-    """One exploration order and, once closed, its exit (aux.db `exploration_trades`). Prices USD per oz; money in
-    the account currency as the broker reports it."""
+    """One exploration order and, once closed, its exit (aux.db `exploration_trades`, aux migration 16). Prices USD per
+    oz; money in the account currency as the broker reports it."""
     client_order_id: str
     account_id: str
     arm_id: str
@@ -212,7 +214,7 @@ class ExplorationRecord(FrozenRecord):
     lots: float
     signal_utc: UtcTimestamp                # the signal bar's close
     sent_utc: UtcTimestamp
-    atr_usd: float
+    atr_usd: float                          # the rule's stop distance (USD/oz): the arm's R
     stop_usd: float                         # the stop distance the gate set
     target_usd: float
     hold_s: int
@@ -222,7 +224,7 @@ class ExplorationRecord(FrozenRecord):
     retcode: int | None = None
     position_id: int | None = None
     fill_price: float | None = None
-    stop_loss: float | None = None          # the loss at the stop when sent, account currency
+    stop_loss: float | None = None          # the loss at the gate's stop when sent, account currency
     cost: float | None = None               # the measured round trip at the lots sent, account currency
     exit_utc: UtcTimestamp | None = None
     exit_price: float | None = None
@@ -244,41 +246,35 @@ LEDGER: RecordRepo[ExplorationRecord] = RecordRepo(
         "arm_id": lambda r: r.arm_id, "position_id": lambda r: r.position_id, "ts_ns": lambda r: _ns(r.sent_utc),
         "closed": lambda r: int(r.exit_utc is not None),
         "exit_ns": lambda r: _ns(r.exit_utc) if r.exit_utc is not None else None})
-# the table, until it moves into goldbot/db/migrations.py (lane L3 owns the migrations): additive, as cost_probes
-DDL = ("""CREATE TABLE IF NOT EXISTS exploration_trades (
-            client_order_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, arm_id TEXT NOT NULL, position_id INTEGER,
-            ts_ns INTEGER NOT NULL, closed INTEGER NOT NULL, exit_ns INTEGER, body TEXT NOT NULL) STRICT""",
-       "CREATE INDEX IF NOT EXISTS exploration_trades_account ON exploration_trades(account_id, exit_ns)")
 
 
 def ledger_db(state_dir: str) -> Database:
-    db = Database.open(state_dir, "aux")
-    with db.write() as conn:
-        for s in DDL:
-            conn.execute(s)
-    return db
+    """aux.db, whose migration 16 holds the exploration ledger and lane L3's tables."""
+    return Database.open(state_dir, "aux")
 
 
 # ------------------------------------------------------------------------------------------------ the engine's state
 class Pending(FrozenRecord):
+    """A candidate waiting to be sent: the rule's side, stop and target (USD/oz) and hold (bars of its timeframe)."""
     arm_id: str
     side: int
     bar_ts: UtcTimestamp                    # the signal bar's close (visible_at)
-    atr_usd: float
+    stop_usd: float
+    target_usd: float
+    hold_bars: int
 
 
 class _ArmAgent:
     """What `Engine._execute` and `_adopt` read of an agent, for an arm: its tag (own magic), family, timeframe and a
-    time barrier. A 15m+ arm's barrier is its hold (base bars = hold_bars x tf / decision tf); a 1m/5m arm's is a
-    backstop one base bar past its hold (the hold itself is `exits`, on the host clock). No exit policy."""
+    time barrier. A 15m+ candidate's barrier is its hold (base bars = hold_bars x tf / decision tf); a 1m/5m arm's is
+    a backstop one base bar past its hold (the hold itself is `exits`, on the host clock). No exit policy."""
 
-    def __init__(self, arm: Arm, decision_tf: str):
+    def __init__(self, arm: Arm, decision_tf: str, hold_bars: int, target_r: float = 1.0):
         self.arm, self.agent_id, self.family, self.timeframe = arm, arm.tag, arm.family, arm.tf
         sec, base = tf_seconds(arm.tf), tf_seconds(decision_tf)
-        bars = arm.hold_bars if arm.tf not in SUB_15M else math.ceil(
-            (math.ceil(arm.hold_s / base) + 1) * base / sec)
-        self.label_spec = BarrierSpec(target_atr=arm.target, stop_atr=arm.stop, max_bars=max(0, bars - 1),
-                                      name="exploration")
+        bars = hold_bars if arm.tf not in SUB_15M else math.ceil(
+            (math.ceil(hold_bars * sec / base) + 1) * base / sec)
+        self.label_spec = BarrierSpec(target_atr=target_r, stop_atr=1.0, max_bars=max(0, bars - 1), name="exploration")
         self.exit_spec = None
         self.shadow_only = self.requires_tv = False
 
@@ -287,19 +283,23 @@ class Exploration:
     """The engine's exploration state: the arms, the ledger, the signals waiting, the rotation and what was read."""
 
     def __init__(self, eng: Engine, cfg: ExplorationConfig):
-        unknown = sorted({a.family for a in cfg.arms} - set(FAMILIES))
-        if unknown:
-            raise ValueError(f"exploration arms name unknown rule families: {unknown}")
+        from goldbot.research import arm_rules
         self.cfg = cfg
-        self.arms = {a.arm_id: a for a in cfg.arms}
-        self.by_key = {a.key: a for a in cfg.arms}
+        ok = [a for a in cfg.arms if a.spec.status == "run" and a.spec.rule in arm_rules.RULE_FUNCS]
+        for name in [*cfg.dropped, *(a.arm_id for a in cfg.arms if a not in ok)]:
+            # trading-safety L2: one bad arm never stops the engine; it is named and the others run
+            log.warning("exploration arm %s dropped (not in the frozen spec, blocked there or no rule)", name)
+            eng.decisions.append({"ts": time.time(), "agent": PREFIX + name, "action": "exploration_arm_dropped",
+                                  "arm": name})
+        self.arms = {a.arm_id: a for a in ok}
+        self.by_key = {a.key: a for a in ok}
         self.db = ledger_db(eng.cfg.state_dir)
         self.queue: deque[Pending] = deque()
         self.last_arm: str | None = None
         self.last_bar: dict[str, pd.Timestamp] = {}
         self.last_close = eng._closed_through
         self.last_minute: pd.Timestamp | None = None
-        self.open_loss: dict[int, float] = {}       # position id -> its loss at the stop when sent
+        self.open_loss: dict[int, float] = {}       # position id -> its loss at the gate's stop when sent
         self.weights_cache: tuple[pd.Timestamp, dict[str, float]] | None = None
         self.champion_seen: dict[str, tuple[pd.Timestamp | None, bool]] = {}
 
@@ -323,8 +323,9 @@ def agent_for(eng: Engine, tag: str | None) -> Specialist | None:
     return _agent(eng, arm) if arm is not None else None
 
 
-def _agent(eng: Engine, arm: Arm) -> Specialist:
-    return cast("Specialist", _ArmAgent(arm, eng.cfg.decision_tf))
+def _agent(eng: Engine, arm: Arm, hold_bars: int | None = None, target_r: float = 1.0) -> Specialist:
+    hold = hold_bars if hold_bars is not None else int(arm.spec.params.get("hold_bars", 1))
+    return cast("Specialist", _ArmAgent(arm, eng.cfg.decision_tf, hold, target_r))
 
 
 def adoption(eng: Engine, p: Position) -> tuple[Specialist | None, str]:
@@ -354,26 +355,44 @@ def _in_flight(eng: Engine) -> bool:
 
 # ------------------------------------------------------------------------------------------------ signals
 def _bars(frame_1m: pd.DataFrame, tf: str, through: pd.Timestamp) -> pd.DataFrame | None:
-    """Mid bars of `tf` with ATR, the last one closing exactly at `through`; None when that bar is not there."""
+    """The store-schema bars of `tf` the rule reads, the last one closing exactly at `through`; None when that bar
+    is not there."""
     sec = tf_seconds(tf)
-    src = frame_1m if tf == "1d" else frame_1m[frame_1m["ts_utc"] >= through - pd.Timedelta(seconds=sec * (LOOKBACK + 1))]
+    span = max(sec * (LOOKBACK + 1), 60 * LOOKBACK_1M)
+    src = frame_1m if tf == "1d" else frame_1m[frame_1m["ts_utc"] >= through - pd.Timedelta(seconds=span)]
     bars = src if tf == "1m" else resample_bars(src, tf)
-    bars = bars[bars["visible_at"] <= through]
-    if len(bars) < ATR_N + 1 or pd.Timestamp(bars["visible_at"].iloc[-1]) != through:
+    bars = bars[bars["visible_at"] <= through].reset_index(drop=True)
+    if bars.empty or pd.Timestamp(bars["visible_at"].iloc[-1]) != through:
         return None
-    m = mid(bars.tail(LOOKBACK).reset_index(drop=True))
-    m["atr"] = atr(m, ATR_N).to_numpy()
-    return m
+    return bars
 
 
-def _signal(ex: Exploration, arm: Arm, m: pd.DataFrame, through: pd.Timestamp) -> None:
+def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.DataFrame,
+            through: pd.Timestamp) -> None:
+    """The arm's frozen rule (`arm_rules.candidates`: its window, the common filters, its stop band) on the bars up to
+    `through`; a candidate on the bar that just closed is queued with its own stop, target and hold. A rule that
+    raises is journalled (`exploration_rule_error`) and the other arms go on."""
+    import numpy as np
+
+    from goldbot.research import arm_rules
     if ex.last_bar.get(arm.arm_id) == through:
         return
     ex.last_bar[arm.arm_id] = through
-    a = float(m["atr"].iloc[-1])
-    side = arm.side(FAMILIES[arm.family](m, arm.params)) if math.isfinite(a) and a > 0 else 0
-    if side:
-        ex.queue.append(Pending(arm_id=arm.arm_id, side=side, bar_ts=through, atr_usd=a))
+    try:
+        ctx = arm_rules.RuleContext(bars=bars, b1=b1, blackout_lo=np.zeros(0, dtype=np.int64),
+                                    blackout_hi=np.zeros(0, dtype=np.int64))
+        c = arm_rules.candidates(arm.spec, ctx)
+    except Exception as exc:
+        log.warning("exploration arm %s rule failed (%s)", arm.arm_id, type(exc).__name__)
+        eng.decisions.append({"ts": time.time(), "agent": arm.tag, "action": "exploration_rule_error",
+                              "error": type(exc).__name__})
+        return
+    last = c[c["idx"] == len(bars) - 1]
+    for side, risk, target_r, max_bars in zip(last["side"].to_numpy(dtype=int), last["risk_usd"].to_numpy(dtype=float),
+                                              last["target_r"].to_numpy(dtype=float),
+                                              last["max_bars"].to_numpy(dtype=int)):
+        ex.queue.append(Pending(arm_id=arm.arm_id, side=int(side), bar_ts=through, stop_usd=float(risk),
+                                target_usd=float(target_r) * float(risk), hold_bars=int(max_bars) + 1))
 
 
 def step(eng: Engine, close_ts: pd.Timestamp) -> None:
@@ -388,10 +407,11 @@ def step(eng: Engine, close_ts: pd.Timestamp) -> None:
     for tf in sorted({a.tf for a in arms}, key=tf_seconds):
         if tf != "1d" and int(close_ts.timestamp()) % tf_seconds(tf):
             continue
-        m = _bars(complete, tf, close_ts)
-        if m is not None:
+        bars = _bars(complete, tf, close_ts)
+        if bars is not None:
+            b1 = complete[complete["ts_utc"] >= pd.Timestamp(bars["ts_utc"].iloc[0])].reset_index(drop=True)
             for arm in (a for a in arms if a.tf == tf):
-                _signal(ex, arm, m, close_ts)
+                _signal(eng, ex, arm, bars, b1, close_ts)
 
 
 def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
@@ -405,7 +425,7 @@ def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     tfs = sorted({a.tf for a in arms if int(through.timestamp()) % tf_seconds(a.tf) == 0}, key=tf_seconds)
     if not tfs:
         return
-    since = through - pd.Timedelta(seconds=tf_seconds(tfs[-1]) * (LOOKBACK + 1))
+    since = through - pd.Timedelta(seconds=max(tf_seconds(tfs[-1]) * (LOOKBACK + 1), 60 * LOOKBACK_1M))
     b = eng.bars_1m
     parts = [b[b["ts_utc"] >= since]] if not b.empty else []
     ticks = [t for t in eng.ticks if t.ts_utc < through]
@@ -417,11 +437,12 @@ def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
         return
     frame = pd.concat(parts, ignore_index=True) if len(parts) > 1 else parts[0]
     frame = frame.drop_duplicates("ts_utc", keep="last").sort_values("ts_utc").reset_index(drop=True)
+    frame = frame[frame["visible_at"] <= through].reset_index(drop=True)
     for tf in tfs:
-        m = _bars(frame, tf, through)
-        if m is not None:
+        bars = _bars(frame, tf, through)
+        if bars is not None:
             for arm in (a for a in arms if a.tf == tf):
-                _signal(ex, arm, m, through)
+                _signal(eng, ex, arm, bars, frame, through)
 
 
 def on_pass(eng: Engine, tick: Tick) -> None:
@@ -468,8 +489,8 @@ def shares(ex: Exploration, now: pd.Timestamp) -> dict[str, float]:
     """Each arm's share of its pot (ADR 0043 "within a sleeve"): a control its fixed `control_share` (controls are the
     null, never allocated by results); a strategy arm its research share of the style's budget (lane L3's
     `exploration_data.weights` for ONE style's strategy arms: the newest bandit run held in [5%, 30%]; equal shares
-    in the same bounds when it is missing, stale or unreadable). The shares need not sum to 1: the pot's £ is the
-    backstop. Read at most once a minute."""
+    in the same bounds when it is missing, stale or unreadable, here too) scaled by what the controls leave
+    (1 - their shares; quant Q3). The pot's £ stays the backstop. Read at most once a minute."""
     from goldbot.research.exploration_data import weights
     minute = now.floor("min")
     if ex.weights_cache is not None and ex.weights_cache[0] == minute:
@@ -478,13 +499,14 @@ def shares(ex: Exploration, now: pd.Timestamp) -> dict[str, float]:
     for style in ex.cfg.pots:
         arms = [a for a in ex.arms.values() if a.style == style]
         strat = [a.arm_id for a in arms if a.control_share is None]
+        rest = max(0.0, 1.0 - sum(a.control_share or 0.0 for a in arms))
         try:
             w = weights(ex.db, strat, now=now) if strat else {}
         except Exception as exc:                    # the reader falls back itself; this is the last line
             log.warning("exploration weights unreadable (%s): equal shares", type(exc).__name__)
-            w = {a: 1.0 / len(strat) for a in strat}
+            w = {a: min(SHARE_CAP, max(SHARE_FLOOR, 1.0 / len(strat))) for a in strat}
         for a in arms:
-            v = a.control_share if a.control_share is not None else float(w.get(a.arm_id, 0.0))
+            v = a.control_share if a.control_share is not None else rest * float(w.get(a.arm_id, 0.0))
             out[a.arm_id] = v if math.isfinite(v) and v >= 0 else 0.0
     ex.weights_cache = (minute, out)
     return out
@@ -623,7 +645,7 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
         else:
             keep.append(s)
     ex.queue = keep
-    if not ex.queue or _in_flight(eng):
+    if not ex.queue or _unsettled(eng, now):
         return
     if paused(eng, now):
         for s in ex.queue:
@@ -639,19 +661,38 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
         eng.decisions.append({"ts": now.isoformat(), "agent": None, "action": "exploration_refused:ledger_unreadable"})
         return
     sent = 0
-    for s in _order(ex):
+    order = _order(ex)
+    for i, s in enumerate(order):
         if sent >= PER_PASS:
             break
+        if _unsettled(eng, now):
+            # trading-safety M1: an order that raised or came back ambiguous is in no count yet (global cap, net
+            # lots, slots), so nothing else goes out until it is settled; the rest are blocked candidates now
+            _block(eng, ex, order[i:], now, "order_unsettled")
+            return
         arm = ex.arms[s.arm_id]
         res = _send(eng, ex, ps, arm, s, now, tick)
         if res == "cap":
-            break                                   # the global cap is full: the rest wait (until they are stale)
+            _block(eng, ex, order[i:], now, "global_cap")    # quant Q1: recorded now, never left to go stale
+            return
         ex.queue.remove(s)
         if ps.why != "duplicate":
-            candidate(eng, ex, s, now, None if res == "sent" else ps.why)
+            candidate(eng, ex, s, now, None if res == "sent" else ps.why, ps.share.get(arm.arm_id))
         if res == "sent":
             sent += 1
             ex.last_arm = arm.arm_id
+
+
+def _unsettled(eng: Engine, now: pd.Timestamp) -> bool:
+    """An exploration order still sending or ambiguous, or an order that raised in this pass (`_auto_paused`)."""
+    return _in_flight(eng) or (eng._auto_paused is not None and eng._auto_paused[0] == now)
+
+
+def _block(eng: Engine, ex: Exploration, signals: list[Pending], now: pd.Timestamp, why: str) -> None:
+    for s in signals:
+        if s in ex.queue:
+            ex.queue.remove(s)
+        candidate(eng, ex, s, now, why)
 
 
 def policy(ex: Exploration, style: str, now: pd.Timestamp) -> str:
@@ -677,11 +718,13 @@ def draw(candidate_id: str) -> float:
     return int(hashlib.sha1(candidate_id.encode()).hexdigest()[:13], 16) / float(16 ** 13)
 
 
-def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, blocked: str | None) -> None:
+def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, blocked: str | None,
+              share: float | None = None) -> None:
     """Every candidate, taken or not, to lane L3's `exploration_data.record_candidate` with its propensity: the random
     branch takes an admissible candidate when u < PI_RANDOM (mu = PI_RANDOM); a candidate a cap, the budget, the gate,
     staleness or the pause stopped is `blocked` with mu 0 and its reason (research E6: off-policy estimates stay
-    unbiased). The feature snapshot is not built in the engine yet (None). Best effort: never raises."""
+    unbiased). The arm's share of its pot goes with it (quant Q3). The feature snapshot is not built in the engine
+    yet (None). Best effort: never raises."""
     from goldbot.research.exploration_data import record_candidate
     arm = ex.arms[s.arm_id]
     cid = order_id(eng, arm, s.bar_ts)
@@ -691,10 +734,11 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
     try:
         record_candidate(ex.db, candidate_id=cid, account_id=eng.cfg.account_id, arm_id=arm.arm_id,
                          family=arm.family, style=arm.style, tf=arm.tf, side=s.side, decision_utc=s.bar_ts,
-                         stop_dist=arm.stop * s.atr_usd, target_dist=arm.target * s.atr_usd, max_hold_s=arm.hold_s,
+                         stop_dist=s.stop_usd, target_dist=s.target_usd, max_hold_s=s.hold_bars * tf_seconds(arm.tf),
                          taken=taken, is_control=arm.control_share is not None, arm_config_hash=arm.config_hash,
                          blocked_reason=blocked, branch=branch if taken else "blocked", u=u,
-                         mu=PI_RANDOM if taken else 0.0, pi_rand_arm=PI_RANDOM)
+                         mu=PI_RANDOM if taken else 0.0, pi_rand_arm=PI_RANDOM,
+                         arm_share=share if share is not None else shares(ex, now).get(arm.arm_id))
     except Exception as exc:
         log.warning("exploration candidate %s not recorded (%s)", cid, type(exc).__name__)
 
@@ -702,12 +746,14 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
 def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd.Timestamp,
           tick: Tick) -> Literal["sent", "refused", "cap"]:
     """One signal's checks, in order, each refusal journalled with its reason and the arm's share of its pot (the
-    propensity, ADR 0043 / research E6), then the order core. "cap": the global cap is full."""
+    propensity, ADR 0043 / research E6), then the order core. "cap": the global cap is full. The checks before the
+    gate use the rule's stop; the gate may floor it wider (stops level, spread), so the order core judges the same
+    bounds again on the loss at the gate's stop, and that loss is the position's open risk (trading-safety L1)."""
     tag, side, pot = arm.tag, s.side, ex.cfg.pots[arm.style]
     pid = order_id(eng, arm, s.bar_ts)
     price = tick.ask if side > 0 else tick.bid
-    stop_d, target_d = arm.stop * s.atr_usd, arm.target * s.atr_usd
-    applied: dict[str, Any] = {"arm": arm.arm_id, "tf": arm.tf, "style": arm.style, "atr_usd": round(s.atr_usd, 4),
+    stop_d, target_d, hold_s = s.stop_usd, s.target_usd, s.hold_bars * tf_seconds(arm.tf)
+    applied: dict[str, Any] = {"arm": arm.arm_id, "tf": arm.tf, "style": arm.style, "stop_usd": round(stop_d, 4),
                                "propensity": round(ps.share.get(arm.arm_id, 0.0), 4)}
 
     def refuse(why: str) -> None:
@@ -735,7 +781,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     if ps.count.get(arm.arm_id, 0) >= arm.max_open:
         refuse("arm_max_open")
         return "refused"
-    if arm.style != SWING and crosses_friday(eng, now, arm.hold_s):
+    if crosses_friday(eng, now, hold_s):            # quant Q2: every style, swing included
         refuse("weekend_hold")
         return "refused"
     if lot is None:
@@ -749,70 +795,78 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         refuse("not_auto")
         return "refused"
     loss = cost_probe.stop_loss(eng, side, price, stop_d, float(lot))
-    cost = cost_probe.stop_loss(eng, side, price, eng._cost_atr(s.atr_usd, now) * s.atr_usd, float(lot))
+    cost = cost_probe.stop_loss(eng, side, price, eng._cost_atr(stop_d, now) * stop_d, float(lot))
     if loss is None or cost is None:
         refuse("loss_unknown")
         return "refused"
     applied.update(stop_loss=round(loss, 2), cost=round(cost, 2))
     arm_cap = eng.gate.limits.exploration_arms.get(arm.arm_id)
-    if arm_cap is None or loss + cost > arm_cap + 1e-9:            # trading-safety LOW: the round trip counts too
-        refuse("arm_cap")
-        return "refused"
     held_arm, held_pot, held_all = ps.held.get(arm.arm_id, 0.0), ps.held.get("pot:" + arm.style, 0.0), \
         ps.held.get("*", 0.0)
+    if arm_cap is None:
+        refuse("arm_cap")
+        return "refused"
     if held_arm is None or held_pot is None or held_all is None:
         refuse("open_risk_unknown")
         return "refused"
-    if ps.total is None or ps.lost_in(ex) + held_all + loss > ps.total + 1e-9:
-        refuse("budget")
+    # what the new trade may lose at its stop under each bound, in the order they are journalled
+    rooms = {"arm_cap": arm_cap - cost,              # trading-safety LOW: the round trip counts too
+             "budget": (ps.total - ps.lost_in(ex) - held_all) if ps.total is not None else 0.0,
+             "pot": pot.gbp - ps.lost_in(ex, arm.style) - held_pot,
+             "arm_budget": ps.share.get(arm.arm_id, 0.0) * pot.gbp - ps.lost.get(arm.arm_id, 0.0) - held_arm}
+
+    def binding(at_stop: float) -> str | None:
+        return next((k for k, room in rooms.items() if at_stop > room + 1e-9), None)
+
+    if (why := binding(loss)) is not None:
+        refuse(why)
         return "refused"
-    if ps.lost_in(ex, arm.style) + held_pot + loss > pot.gbp + 1e-9:
-        refuse("pot")
-        return "refused"
-    headroom = min(arm.daily_gbp, ps.share.get(arm.arm_id, 0.0) * pot.gbp) - ps.lost.get(arm.arm_id, 0.0) - held_arm
-    if loss > headroom + 1e-9:
-        refuse("arm_budget")
-        return "refused"
-    intent = _intent(eng, arm, side, price, s, now, terms, headroom)
+    room = min(rooms.values())
+    intent = _intent(eng, arm, side, price, s, now, terms, room)
     if intent is None:
         refuse("gate_unsupported")
         return "refused"
+    at_gate: list[float] = []
 
     def record(res: OrderResult, gd: GateDecision, filled: bool, at_stop: float, sent: pd.Timestamp,
                latency_ms: float) -> ExplorationRecord:
+        at_gate.append(at_stop)
         return ExplorationRecord(
             client_order_id=pid, account_id=eng.cfg.account_id, arm_id=arm.arm_id, family=arm.family, tf=arm.tf,
             side=side, lots=float(res.filled_lots if filled else gd.lots), signal_utc=s.bar_ts, sent_utc=sent,
-            atr_usd=s.atr_usd, stop_usd=gd.stop_distance, target_usd=target_d, hold_s=arm.hold_s,
+            atr_usd=stop_d, stop_usd=gd.stop_distance, target_usd=target_d, hold_s=hold_s,
             requested_price=price, spread_usd=round(tick.ask - tick.bid, 6), latency_ms=round(latency_ms, 3),
             retcode=res.retcode, position_id=res.position_id if filled else None,
             fill_price=(res.price if res.price is not None else price) if filled else None,
             stop_loss=round(at_stop, 2), cost=round(cost, 2), fx_acct_per_usd=terms.get("acct_per_usd"))
 
-    pos = cost_probe._place(eng, ex.db, intent, _agent(eng, arm), repo=LEDGER, pid=pid, close_ts=now, entry=price,
-                            target=price + side * target_d, max_loss=headroom, headroom=headroom,
-                            applied=lambda: applied, refuse=refuse, action="exploration:",
-                            journal={"agent": tag, "arm": arm.arm_id}, record=record, native_distance=stop_d)
+    pos = cost_probe._place(eng, ex.db, intent, _agent(eng, arm, s.hold_bars, target_d / stop_d), repo=LEDGER,
+                            pid=pid, close_ts=now, entry=price, target=price + side * target_d, max_loss=room,
+                            headroom=room, applied=lambda: applied, refuse=refuse, action="exploration:",
+                            journal={"agent": tag, "arm": arm.arm_id}, record=record,
+                            over_cap=lambda at_stop: binding(at_stop) or "arm_cap")
     if pos is None:
         return "refused"
-    ex.open_loss[pos] = loss
-    ps.note(arm, loss)
+    ex.open_loss[pos] = at_gate[0] if at_gate else loss
+    ps.note(arm, ex.open_loss[pos])
     return "sent"
 
 
 def _intent(eng: Engine, arm: Arm, side: int, price: float, s: Pending, now: pd.Timestamp,
             terms: dict[str, Any], headroom: float) -> Intent | None:
-    """The minimum-lot Intent of purpose `exploration` (lane L1's fence). No p is invented: 0.5, the gate skips only
-    the edge rules for this purpose. None when the gate's Intent does not know the purpose (fail closed)."""
+    """The minimum-lot Intent of purpose `exploration` (lane L1's fence), in the rule's R: the stop is 1 "ATR" of
+    `stop_usd`, the target its R multiple. No p is invented: 0.5, the gate skips only the edge rules for this purpose.
+    None when the gate's Intent does not take it (fail closed)."""
     from goldbot.risk import Intent
     try:
-        return Intent(agent_id=arm.tag, side=side, p=0.5, target_atr=arm.target, stop_atr=arm.stop,
-                      atr_usd=s.atr_usd, cost_atr=eng._cost_atr(s.atr_usd, now), multiplier=1.0, price=price,
+        return Intent(agent_id=arm.tag, side=side, p=0.5, target_atr=s.target_usd / s.stop_usd, stop_atr=1.0,
+                      atr_usd=s.stop_usd, cost_atr=eng._cost_atr(s.stop_usd, now), multiplier=1.0, price=price,
                       timeframe=arm.tf, family=arm.family, swap_usd_per_oz=eng._swap_usd_per_oz(side, now),
                       learning_probe=True, account_mode=eng.cfg.mode, phase_file=cost_probe._phase_file(eng),
                       purpose="exploration", arm_id=arm.arm_id,
-                      terminal_trade_mode=cost_probe._terminal_trade_mode(eng), hold_s=float(arm.hold_s),
-                      probe_headroom=headroom, **{**terms, "volume_max": terms.get("volume_min")})
+                      terminal_trade_mode=cost_probe._terminal_trade_mode(eng),
+                      hold_s=float(s.hold_bars * tf_seconds(arm.tf)), probe_headroom=headroom,
+                      **{**terms, "volume_max": terms.get("volume_min")})
     except ValidationError as exc:
         log.warning("exploration intent refused by its schema (%s)", exc.error_count())
         return None

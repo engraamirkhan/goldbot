@@ -151,7 +151,7 @@ def _finite(v: float | None) -> float | None:
 # ---------------------------------------------------------------------------------------------- candidates
 _CANDIDATE_COLS = ("candidate_id", "account_id", "arm_id", "arm_config_hash", "family", "style", "tf", "side",
                    "is_control", "decision_ns", "session_day", "stop_dist", "target_dist", "max_hold_s", "taken",
-                   "blocked_reason", "branch", "u", "mu", "tau_arm", "pi_rand_arm", "meta_p", "model_version",
+                   "blocked_reason", "branch", "u", "mu", "tau_arm", "pi_rand_arm", "arm_share", "meta_p", "model_version",
                    "bandit_version", "feature_version", "feature_list_id", "features", "available_utc_max_ns",
                    "snapshot_ref", "quarantine", "recorded_ns")
 
@@ -198,7 +198,7 @@ def record_candidate(db: Database, *, candidate_id: str, account_id: str, arm_id
                      max_hold_s: int, taken: bool, is_control: bool = False, arm_config_hash: str | None = None,
                      blocked_reason: str | None = None, branch: str | None = None, u: float | None = None,
                      mu: float | None = None, tau_arm: float | None = None, pi_rand_arm: float | None = None,
-                     meta_p: float | None = None, model_version: str | None = None,
+                     arm_share: float | None = None, meta_p: float | None = None, model_version: str | None = None,
                      bandit_version: str | None = None, feature_version: str | None = None,
                      feature_list_id: str | None = None, features: Mapping[str, float | None] | None = None,
                      available_utc_max: pd.Timestamp | None = None, snapshot_ref: str | None = None) -> bool:
@@ -218,7 +218,8 @@ def record_candidate(db: Database, *, candidate_id: str, account_id: str, arm_id
     feats = None if features is None else json.dumps({k: _finite(v) for k, v in features.items()})
     row = (candidate_id, account_id, arm_id, arm_config_hash, family, style, tf, int(side), int(bool(is_control)), d,
            session_day(_ts(d)), _finite(stop_dist), _finite(target_dist), int(max_hold_s), int(bool(taken)),
-           blocked_reason, branch, _finite(u), _finite(mu), _finite(tau_arm), _finite(pi_rand_arm), _finite(meta_p),
+           blocked_reason, branch, _finite(u), _finite(mu), _finite(tau_arm), _finite(pi_rand_arm), _finite(arm_share),
+           _finite(meta_p),
            model_version, bandit_version, feature_version, feature_list_id, feats, am, snapshot_ref,
            "; ".join(bad) or None, now_ns())
     with db.write() as conn:
@@ -247,7 +248,9 @@ def record_fill(db: Database, *, candidate_id: str, entry_utc: pd.Timestamp, exi
         if r is None or not r[2] or r[3] is not None or not r[1]:
             log.warning("exploration fill %s not recorded (unknown, untaken or already recorded)", candidate_id)
             return False
-        fill_r = (int(r[0]) * (exit_price - entry_price) - cost_per_oz) / float(r[1])
+        # quant Q2 (exploration review 2026-10-25): a censored close (cut short before either barrier) has no
+        # label; training reads only trades that ran to their own barrier
+        fill_r = None if censored else (int(r[0]) * (exit_price - entry_price) - cost_per_oz) / float(r[1])
         conn.execute("UPDATE exploration_obs SET entry_ns = ?, exit_ns = ?, entry_price = ?, exit_price = ?, "
                      "fill_cost_per_oz = ?, label_fill_r = ?, censored = ?, fill_recorded_ns = ? "
                      "WHERE candidate_id = ? AND fill_recorded_ns IS NULL",

@@ -1,6 +1,6 @@
 """Exploration pass latency (plan 2026-10-25, lane L2): p99 of `exploration.on_pass` <= 50 ms at 50 arms.
 
-A paper demo probe_only engine with N arms (the built-in `donchian` and `roc` rules on 1m, 5m, 15m and 1h) is fed one
+A paper demo probe_only engine with N arms (the frozen spec's runnable rules, cycled) is fed one
 pass a second over synthetic market hours, as the run loop does: each tick joins `eng.ticks`, the completed minutes
 join the bars every 10 s and at every 15m close (`Engine._rebuild_bars`), and the pass is timed. Orders go through
 the real RiskGate and the paper broker, so entry passes are in the sample. Exits are the engine's own and not timed.
@@ -24,10 +24,9 @@ from goldbot.engine import Engine, EngineConfig, exploration
 from goldbot.engine.exploration import Arm, ExplorationConfig, Pot
 from goldbot.execution.broker import AccountInfo, Tick
 from goldbot.execution.paper import PaperBroker
+from goldbot.research.arms import load_arms
 from goldbot.risk import RiskLimits
 from goldbot.telegram.approvals import ApprovalCenter
-
-TFS = ("1m", "5m", "15m", "1h")
 
 
 class _Terminal(PaperBroker):
@@ -35,22 +34,21 @@ class _Terminal(PaperBroker):
         return super().account().model_copy(update={"trade_mode": "demo"})
 
 
+STYLE = {"S": "scalp", "I": "intraday", "M": "intraday", "W": "swing"}
+
+
 def _arms(n: int) -> list[Arm]:
-    out = []
-    for i in range(n):
-        tf = TFS[i % len(TFS)]
-        fam = "donchian" if i % 2 == 0 else "roc"
-        style = "scalp" if tf in ("1m", "5m") else "intraday"
-        out.append(Arm(arm_id=f"bench-{i:03d}", family=fam, params={"n": 5 + i % 20, "k": 0.5}, tf=tf,  # type: ignore[arg-type]
-                       side_rule="follow" if i % 3 else "fade", stop=1.0, hold_bars=3, target=1.5, max_open=1,
-                       daily_gbp=100.0, style=style))
-    return out
+    """`n` arms cycling through the frozen spec's runnable arms (config/exploration_arms.yaml), their real rules."""
+    spec = [a for a in load_arms(exploration.SPEC_PATH) if a.status == "run"]
+    return [Arm(spec=spec[i % len(spec)].model_copy(update={"id": f"{spec[i % len(spec)].id}-{i:03d}"}),
+                style=STYLE[spec[i % len(spec)].id[0]]) for i in range(n)]
 
 
 def run(n_arms: int, hours: float) -> list[float]:
     arms = _arms(n_arms)
     cfg = ExplorationConfig(enabled=True, budget_share=0.9, max_open_total=18,
-                            pots={"scalp": Pot(gbp=2_000, max_open=8), "intraday": Pot(gbp=2_000, max_open=10)},
+                            pots={"scalp": Pot(gbp=2_000, max_open=8), "intraday": Pot(gbp=2_000, max_open=10),
+                                  "swing": Pot(gbp=2_000, max_open=1)},
                             arms=tuple(arms))
     pb = _Terminal(equity=10_000, adverse_slip_points=0.0)
     limits = RiskLimits(probe_only=True, exploration_arms={a.arm_id: 1_000.0 for a in arms}, max_positions=50,

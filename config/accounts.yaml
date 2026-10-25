@@ -106,10 +106,13 @@ accounts:
     # the account type is measured by the classifier (null = not declared: entries wait for a measured class)
     account_class: raw        # owner 2026-10-20: the icm-probe account is a Raw account (as icm-demo)
     # ADR 0042: max_loss £4 -> £45 so native-stop mirror probes fit (1h ~£16.5, 4h ~£38 at 0.01 lot, 18% headroom; a
-    # 4h stop above ~$59 is still skipped). Load check: 45 <= 0.9 x 220 = 198 and 4 x 45 = 180 <= 198, so max_open 4
-    # stays. Reverse to £20 if the median realised probe loss passes £150 a day or the weekly cap is hit two weeks
+    # 4h stop above ~$59 is still skipped). Load check: 45 <= the cost probes' 0.2727 x 220 = £60 (ADR 0043).
+    # Reverse to £20 if the median realised probe loss passes £150 a day or the weekly cap is hit two weeks
     # running in the first 10 risk days.
-    cost_probe: { enabled: true, budget_share: 0.9, max_open: 4, max_loss: 45.0, scheduled: { enabled: true } }   # ADR 0037 am. 4 + 5 (owner-approved 2026-10-20: scheduled M1 probes)
+    # ADR 0043 (CFO 2026-10-25; PD integration ruling): the £198 probe budget is split into sleeves; the cost probes keep
+    # P0 scheduled £15 (scheduled.budget_share 0.25 of it) + M mirrors £45 = £60 = 0.2727 x 220 (was 0.9 = £198); 3 mirror
+    # slots (was 4). max_open x max_loss no longer fits the sleeve: budget_refusal binds the count at run time
+    cost_probe: { enabled: true, budget_share: 0.2727, max_open: 3, max_loss: 45.0, scheduled: { enabled: true, budget_share: 0.25 } }   # ADR 0037 am. 4 + 5 (owner-approved 2026-10-20: scheduled M1 probes)
     shadow_host: true         # counts only once enabled: then icm-demo must drop its own flag
     # never a real trade: no live agents, and the engine refuses any entry that is not a cost probe (fail closed)
     probe_only: true
@@ -120,11 +123,44 @@ accounts:
     dynamic_limits: true
     # exploration arms (plan 2026-10-25): minimum-lot demo entries that MEASURE an edge, so the RiskGate skips only
     # its expected-value rules for them, inside its fence (probe_only, demo terminal, minimum lot, a registered arm,
-    # loss at the stop <= the arm's max_loss). Refused at load unless demo + probe_only. budget_share: the arms'
-    # share of the day's allowance; with cost_probe.budget_share (0.9) at most 1, so 0.1 x 220 = £22 a day here and
-    # no arm's max_loss above it. max_open_total: exploration positions open at once, all arms. Off until the
-    # integrator registers the arms (exploration lane L2); false + restart is the rollback.
-    exploration: { enabled: false, budget_share: 0.1, max_open_total: 1, arms: {} }
+    # loss at the stop <= the arm's max_loss). Refused at load unless demo + probe_only. ADR 0043 sleeves (CFO
+    # 2026-10-25, PD integration ruling): budget_share 0.6273 x 220 = £138 = scalp £50 + intraday £48 + swing £40;
+    # with cost_probe's 0.2727 (£60) the day's 0.9 = £198. Each pot: realised + open risk at the stops + the new
+    # trade's <= its £, at most max_open of its arms open; 18 open at most on the host (the live 6x-notional /
+    # 300%-margin cap still applies, the smaller binds). Per trade (loss at the gate's stop + the round trip, the
+    # engine; the stop alone, the gate): scalp £6.50, intraday £17, swing £40. The rules are the frozen ARM-SPEC
+    # (config/exploration_arms.yaml, hash-checked); here only the arms this account runs, their sleeve and, for the
+    # random controls, a fixed share of it (S0 25% + S0R 5% of scalp, I0 30% of intraday, W0 33% of swing; never
+    # allocated by results). Blocked spec arms (S6, I1, I3, W3) are not registered. OFF: switch-on is a separate
+    # reviewed step (enabled: true + restart); false + restart is the rollback.
+    exploration:
+      enabled: false
+      budget_share: 0.6273
+      max_open_total: 18
+      pots: { scalp: { gbp: 50, max_open: 8 }, intraday: { gbp: 48, max_open: 5 }, swing: { gbp: 40, max_open: 1 } }
+      arms:
+        S0: { style: scalp, max_loss: 6.5, control_share: 0.25 }
+        S0R: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        S1A: { style: scalp, max_loss: 6.5 }
+        S1B: { style: scalp, max_loss: 6.5 }
+        S2A: { style: scalp, max_loss: 6.5 }
+        S2B: { style: scalp, max_loss: 6.5 }
+        S3A: { style: scalp, max_loss: 6.5 }
+        S3B: { style: scalp, max_loss: 6.5 }
+        S4: { style: scalp, max_loss: 6.5 }
+        S5A: { style: scalp, max_loss: 6.5 }
+        S5B: { style: scalp, max_loss: 6.5 }
+        I0: { style: intraday, max_loss: 17.0, control_share: 0.30 }
+        I2A: { style: intraday, max_loss: 17.0 }
+        I2B: { style: intraday, max_loss: 17.0 }
+        MB15: { style: intraday, max_loss: 17.0 }
+        MB30: { style: intraday, max_loss: 17.0 }
+        MB1H: { style: intraday, max_loss: 17.0 }
+        MSA15: { style: intraday, max_loss: 17.0 }
+        W0: { style: swing, max_loss: 40.0, control_share: 0.33 }
+        W1A: { style: swing, max_loss: 40.0 }
+        W1B: { style: swing, max_loss: 40.0 }
+        W2: { style: swing, max_loss: 40.0 }
   vantage-demo:
     broker: vantage
     mode: demo

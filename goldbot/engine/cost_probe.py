@@ -849,7 +849,7 @@ def _place(eng: Engine, db: Database, intent: Intent, agent: Specialist, *, pid:
            entry: float, target: float, max_loss: float, headroom: float, applied: Callable[[], dict[str, Any]],
            refuse: Callable[[str], None], action: str, journal: dict[str, Any],
            record: Callable[[OrderResult, GateDecision, bool, float, pd.Timestamp, float], Any],
-           repo: RecordRepo[Any] | None = None,
+           repo: RecordRepo[Any] | None = None, over_cap: Callable[[float], str] | None = None,
            max_stop: float | None = None, before_send: Callable[[], None] | None = None,
            native_distance: float | None = None) -> int | None:
     """Every probe's order core, mirror and scheduled, and an exploration arm's (`repo`: its ledger, the probe ledger
@@ -858,8 +858,8 @@ def _place(eng: Engine, db: Database, intent: Intent, agent: Specialist, *, pid:
     (pending_orders row first), the journal and the ledger row. `before_send` runs once the order is going out (an
     untaken probe's count, even when the send raises). A mirror probe's loss above the cap at its strategy's own stop
     (`native_distance`, not widened by the gate) is the same skip as before the gate, `native_stop_above_cap` (safety
-    review 2026-10-25); `probe_loss_above_cap` stays for a stop the gate floored wider. The position id of a fill,
-    else None."""
+    review 2026-10-25); `probe_loss_above_cap` stays for a stop the gate floored wider; `over_cap` names the reason
+    instead (an exploration arm's binding bound). The position id of a fill, else None."""
     from goldbot.risk.gate import broker_margin
     from goldbot.telegram.approvals import Proposal
     side, price = intent.side, intent.price
@@ -877,7 +877,7 @@ def _place(eng: Engine, db: Database, intent: Intent, agent: Specialist, *, pid:
         return None
     if loss > max_loss + 1e-9:
         own = native_distance is not None and gd.stop_distance <= native_distance + 1e-9
-        refuse(NATIVE_SKIP if own else "probe_loss_above_cap")
+        refuse(over_cap(loss) if over_cap is not None else NATIVE_SKIP if own else "probe_loss_above_cap")
         return None
     if loss > headroom + 1e-9:
         eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": "cost_probe_budget:probe_budget_full",
