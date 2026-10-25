@@ -130,7 +130,7 @@ install -m 755 -o root -g root "$OPS/goldbot-bridge-probe.sh" /usr/local/sbin/go
 install -d -m 755 -o root -g root /usr/local/libexec/goldbot
 install -m 755 -o root -g root "$OPS/mt5/mt5-experts-enable.sh" /usr/local/libexec/goldbot/mt5-experts-enable.sh
 install -m 755 -o root -g root "$OPS/mt5/mt5-ini.sh" /usr/local/libexec/goldbot/mt5-ini.sh
-# needrestart (run by unattended-upgrades) never restarts a goldbot unit in market hours (incident 2026-10-22)
+# needrestart (run by unattended-upgrades) never restarts a goldbot unit (incident 2026-10-22; library updates land at the attended restart or reboot)
 install -d -m 755 -o root -g root /etc/needrestart/conf.d
 install -m 644 -o root -g root "$OPS/needrestart/goldbot.conf" /etc/needrestart/conf.d/goldbot.conf
 systemctl daemon-reload

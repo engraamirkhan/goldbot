@@ -46,6 +46,6 @@ because a zlib1g update made needrestart restart the terminal cleanly.
   mt5_bootstrap.sh, brain_bootstrap.sh and mt5-box-upgrade.sh install); tests in tests/test_mt5_box_upgrade_sh.py.
 - [x] The watchdog logs an attach loop when the terminal unit is not active (the box is not on the terminal unit), so
   the journal names the cause; test in tests/test_engine_watchdog.py.
-- [ ] Run the attended upgrade on the demo box (RUNBOOK 0.5) with the market closed.
-- [ ] Repeat a FAIL alert for `bridge:` and `engine:` while it lasts (every 30 min) and log every Telegram send.
-- [ ] Planned weekly restart, with the market closed, so goldbot services pick up library updates.
+- [ ] Run the attended upgrade on the demo box (RUNBOOK 0.5) with the market closed. Owner: Claude (sre), by 2026-10-25 20:00 UTC.
+- [ ] Repeat a FAIL alert for `bridge:` and `engine:` while it lasts (every 30 min) and log every Telegram send. Owner: sre, by 2026-10-31.
+- [ ] Planned weekly restart, with the market closed, so goldbot services pick up library updates. Owner: sre, first run Saturday 2026-10-31 (RUNBOOK 0.5 attended slot), weekly after; until it exists the needrestart exclusion is reviewed at each attended upgrade.
