@@ -1,0 +1,8 @@
+# Per-era execution cost for the historical matrix (goldbot.research.arms.extra_cost_usd). PRIORS, not measurements:
+# Dukascopy's quoted spread already enters every fill (ask in, bid out); this adds slippage per side, commission per
+# lot (100 oz) per side, and tops the spread up to a retail floor when the quote is tighter. Replace with the broker
+# cost table when it covers an era. Deliberately conservative in the early years.
+eras:
+  - { from: 2010-01-01, spread_floor_usd: 0.40, commission_per_lot_side_usd: 3.5, slippage_usd: 0.20 }
+  - { from: 2019-01-01, spread_floor_usd: 0.30, commission_per_lot_side_usd: 3.5, slippage_usd: 0.15 }
+  - { from: 2022-01-01, spread_floor_usd: 0.25, commission_per_lot_side_usd: 3.5, slippage_usd: 0.15 }

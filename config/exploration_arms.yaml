@@ -1,0 +1,6 @@
+# Exploration arms for the historical matrix (scripts/run_arm_backtest.py, .github/workflows/research-arms-matrix.yml).
+# kind random: seeded entry control (no edge; prices cost and barrier geometry). kind specialist: a registered family
+# run on its own rule code with `config` overrides. The strategy-researcher adds specialist arms below; ids are unique.
+arms:
+  - { id: random_1m,  kind: random, timeframe: 1m,  seed: 20151, p_entry: 0.002, target_atr: 1.5, stop_atr: 1.0, max_bars: 60 }
+  - { id: random_15m, kind: random, timeframe: 15m, seed: 201515, p_entry: 0.02,  target_atr: 1.5, stop_atr: 1.0, max_bars: 16 }

@@ -1,0 +1,125 @@
+name: research-arms-matrix
+# E10: exploration arms (config/exploration_arms.yaml) walk-forwarded on the data-v1 1m bars, arm x 2-year block from
+# 2015-01 to 2025-09-30, each cell priced with the era's costs (config/era_costs.yaml), then per-arm priors (OOS
+# 2019-2025 trades, weight halved, capped at 50 trades). HARD HOLDOUT: nothing after 2025-09-30 is read (the files
+# past 2025 are never opened, the bars are cut and asserted: goldbot/research/arms.py). Reads the public release only.
+# Uses no secrets: the job token is read-only (contents: read) and nothing is written to a release or the repo.
+# Cost estimate: plan ~1 min; each cell downloads <= 3 yearly files (~100-200 MB) and runs 5-20 min; with 2 random
+# arms x 6 blocks = 12 cells ~ 2-3 runner-hours per dispatch, and every added arm adds 6 cells (~1 h). Artefacts: a
+# few MB per cell, kept 30 days. No schedule, so nothing recurring.
+on:
+  workflow_dispatch:
+    inputs:
+      arms:
+        description: "comma-separated arm ids to run (empty: every arm in config/exploration_arms.yaml)"
+        required: false
+        default: ""
+permissions: {}
+concurrency:
+  group: research-arms-matrix
+  cancel-in-progress: false
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      arms: ${{ steps.plan.outputs.arms }}
+      blocks: ${{ steps.plan.outputs.blocks }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -e .
+      - id: plan
+        name: validate the arms and the cost table, list the matrix
+        env:
+          ARMS_INPUT: ${{ inputs.arms }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from goldbot.research import arms as A
+          A.load_era_costs(Path("config/era_costs.yaml"))
+          ids = [a.id for a in A.load_arms(Path("config/exploration_arms.yaml"))]
+          want = [x.strip() for x in os.environ.get("ARMS_INPUT", "").split(",") if x.strip()]
+          unknown = [w for w in want if w not in ids]
+          if unknown:
+              raise SystemExit(f"unknown arm ids: {unknown}")
+          ids = want or ids
+          blocks = [f"{s}:{e}" for s, e in A.blocks()]
+          for b in blocks:
+              A.parse_block(b)   # the holdout guard, before any runner starts
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"arms={json.dumps(ids)}\nblocks={json.dumps(blocks)}\n")
+          PY
+  cell:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        arm: ${{ fromJSON(needs.plan.outputs.arms) }}
+        block: ${{ fromJSON(needs.plan.outputs.blocks) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -e .
+      - name: download only the years this block reads (warmup year to block end, never past 2025)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BLOCK: ${{ matrix.block }}
+        run: |
+          set -euo pipefail
+          start="${BLOCK%%:*}"; end="${BLOCK##*:}"
+          y0=$(( ${start:0:4} - 1 )); y1=$(( ${end:0:4} )); [ "$y1" -gt 2025 ] && y1=2025
+          python scripts/fetch_data_release.py --download-only --years "$y0" "$y1"
+      - name: run the arm on the block
+        env:
+          ARM: ${{ matrix.arm }}
+          BLOCK: ${{ matrix.block }}
+        run: |
+          set -euo pipefail
+          python scripts/run_arm_backtest.py --arm "$ARM" --block "$BLOCK" --bars raw --out arm_out
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: arm-${{ matrix.arm }}-${{ strategy.job-index }}
+          path: arm_out/
+          if-no-files-found: error
+          retention-days: 30
+  aggregate:
+    needs: cell
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -e .
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: arm-*
+          path: arm_all
+          merge-multiple: true
+      - name: per-arm priors (OOS 2019-2025, halved, capped at 50 trades)
+        run: |
+          set -euo pipefail
+          python scripts/aggregate_arm_priors.py --in arm_all --out priors.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: arm-priors
+          path: priors.json
+          retention-days: 90
