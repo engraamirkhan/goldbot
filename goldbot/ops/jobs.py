@@ -12,6 +12,10 @@
                     (`recorded_spread_profile`, aggregates only, reported and not charged).
                     With `costs.publish_release` and a github-token it then publishes the canonical broker's table
                     (costs only) to release costs-v1 for research.yml (`publish_costs`).
+                    Last, exploration arms (`exploration_learn`, research/exploration_data.py): per family, a purged,
+                    embargoed cross-fitted meta-labeller on the closed exploration trades, and the arms' Thompson
+                    shares of the configured exploration ceilings -> aux.db exploration_weights (a failure is reported
+                    and never stops the cost table; stale weights read as equal shares).
 * saturday_retrain  refresh bars from the data release (best effort), then per specialist: evaluate any challenger
                     that has a shadow record against the promotion gates (promote automatically when all pass),
                     and retrain on the rolling window. A family keeps at most one challenger in shadow; a new one
@@ -96,9 +100,10 @@ import pandas as pd
 from goldbot.agents.roles import ROLES
 from goldbot.agents.runner import AgentRunner
 from goldbot.base import Record, load_record, write_atomic
-from goldbot.config import DecisionTimeframe, Settings
+from goldbot.config import DecisionTimeframe, Settings, tf_seconds
 from goldbot.data.release import store_macro
 from goldbot.data.store import Store
+from goldbot.db.connection import Database
 from goldbot.engine import cost_probe
 from goldbot.engine.shadow import ShadowBook
 from goldbot.execution.classifier import PersistentClassifier, classify
@@ -147,6 +152,7 @@ from goldbot.research.director import (
     rule_preregistration,
 )
 from goldbot.research.drift import AgentHealth, assess, system_halt_reasons
+from goldbot.research.exploration_data import MAX_PRIOR_N, PRIOR_SD_R, ArmPrior, learn, read_obs
 from goldbot.research.model import RecalibratedCalibrator, fit_recalibration
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.pipeline import (
@@ -244,7 +250,66 @@ def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         out[acc.account_id] = row
     if ctx.upload_costs is not None:            # costs.publish_release and a github-token: research reads it
         out["publish"] = publish_costs(ctx.settings, ctx.accounts, ctx.state_dir, ctx.upload_costs, slot)
+    try:          # exploration arms: never in the way of the cost table (a nightly slot of its own needs config)
+        out["exploration"] = exploration_learn(ctx, slot)
+    except Exception as exc:       # noqa: BLE001 - weights fall back to equal shares when stale
+        log.exception("exploration learner failed")
+        out["exploration"] = {"error": type(exc).__name__}
     return out
+
+
+# ---------------------------------------------------------------------------------------------- exploration arms
+EXPLORATION_FEATURE_WARMUP_DAYS = 90     # bars before the first decision so every feature's lookback is filled
+
+
+def exploration_features(ctx: JobContext, family: str, tf: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+    """The decision frame's features on `tf` (as training builds them), stamped with when each row became knowable:
+    its bar's close (bars are stamped at their open)."""
+    dec = _bars(ctx, tf, start - pd.Timedelta(days=EXPLORATION_FEATURE_WARMUP_DAYS), end)
+    if dec.empty:
+        return pd.DataFrame()
+    ctx_start = start - pd.Timedelta(days=EXPLORATION_FEATURE_WARMUP_DAYS) - pd.DateOffset(months=CONTEXT_EXTRA_MONTHS)
+    context = {TF_LABEL[t]: _bars(ctx, t, ctx_start, end) for t in context_tfs(tf)}
+    _, X = build_decision_frame(dec.reset_index(drop=True), context)
+    X = X.replace([np.inf, -np.inf], np.nan)
+    X["available_utc"] = pd.DatetimeIndex(pd.to_datetime(X.pop("ts_utc"), utc=True)).as_unit("ns") + \
+        pd.Timedelta(seconds=tf_seconds(tf))
+    return X[X["available_utc"] <= end].reset_index(drop=True)
+
+
+def exploration_prior(ctx: JobContext, family: str) -> ArmPrior | None:
+    """A family's backtest as an arm prior: the first champion's per-trade mean/sd ratio in R (sd PRIOR_SD_R), worth
+    half its trades up to MAX_PRIOR_N (backtests flatter)."""
+    for m in ctx.population.members.values():
+        if m.family != family:
+            continue
+        entry = ctx.models.champion(m.agent_id)
+        bt = _backtest_stats(entry) if entry is not None else None
+        if bt is not None and bt.mean_ret is not None and bt.std_ret and bt.n_trades > 0:
+            return ArmPrior(mean_r=bt.mean_ret / bt.std_ret * PRIOR_SD_R, sd_r=PRIOR_SD_R,
+                            n_eff=min(bt.n_trades / 2, MAX_PRIOR_N))
+    return None
+
+
+def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """Nightly (inside nightly_costs): retrain each family's meta-labeller on its exploration trades (purged, embargoed
+    cross-fitting) and write the arms' Thompson shares to aux.db exploration_weights (research/exploration_data.py).
+    Ceilings and configured arms come from `settings.exploration` when that section exists; shares only divide them."""
+    db = Database.open(ctx.state_dir, "aux")
+    cfg = getattr(ctx.settings, "exploration", None)
+    ceilings = {str(k): float(v) for k, v in dict(getattr(cfg, "arm_ceilings", None) or {}).items()}
+    arms = [a if isinstance(a, str) else str(getattr(a, "arm_id", a)) for a in (getattr(cfg, "arms", None) or [])]
+    obs = read_obs(db, as_of=slot)
+    priors: dict[str, ArmPrior] = {}
+    for arm, fam in obs.groupby("arm_id")["family"].first().items():
+        try:
+            p = exploration_prior(ctx, str(fam))
+        except (OSError, ValueError, KeyError, AttributeError):     # no prior: the flat one applies
+            p = None
+        if p is not None:
+            priors[str(arm)] = p
+    return learn(db, functools.partial(exploration_features, ctx), as_of=slot, priors=priors, ceilings=ceilings,
+                 arms=arms, seed=int(slot.value % (2**32)))
 
 
 COSTS_PUBLISHED_FILE = "costs_published.json"    # state: when the table last reached release costs-v1 (health reads it)
