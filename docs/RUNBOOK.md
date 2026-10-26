@@ -2077,8 +2077,11 @@ the broker's) and the broker ledger (`broker_ledger`). The feed part:
 * **warn** "engine bars missing for N of M broker minutes (... a coverage gap, not a price fault)": the engine was
   stopped (a deploy, a restart, terminal login work) or not collecting for those minutes. Nothing to fix in the data;
   `engine:<account>` and `engine_loop:<account>` show whether it runs now. It clears with the next weekday run.
-* **warn / fail** "divergence X% over N engine minutes": closes more than 2 points from the broker's M1, or engine bars
-  the broker does not have, while the engine ran (fail above 5% with at least 60 minutes compared). Compare the
+* **warn / fail** "divergence X% over N engine minutes": engine prices more than 2 points outside the broker's M1
+  minute range (a price the broker never quoted that minute, or a feed shifted in time), or engine bars the broker
+  does not have, while the engine ran (fail above 5% with at least 60 minutes compared). "N closes inside the broker's
+  minute range but off its close" is informational: the engine polls `last_tick`, so its close is the last tick it saw,
+  often a few hundred ms before the broker's last tick of the minute (about 20% of minutes, up to ~$0.90). Compare the
   feeds before trusting new signals. The minute either side of an engine stop is not compared; many such minutes
   (over 5% of matched warns, over 20% fails) mean the engine restarted again and again: read its journal.
 * **fail** "engine bars missing ... while the engine was up (loop heartbeat): a stalled feed": the engine ran but

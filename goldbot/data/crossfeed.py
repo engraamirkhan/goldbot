@@ -5,9 +5,17 @@
   path, `ticks_to_1m`) over the last day and compares them minute by minute with the broker's M1
   (`Broker.get_bars(symbol, "1m", n)`, direct or through the bridge). A minute diverges when
 
-      |engine bid close - broker close| > CLOSE_TOL_POINTS x point      (close_mismatch)
-      or it is on the broker but not in the engine's bars               (missing_engine)
-      or it is in the engine's bars but not on the broker               (missing_broker)
+      an engine bid high, low or close lies more than CLOSE_TOL_POINTS x point outside the broker's
+      minute [low, high]: a price the broker never quoted that minute                        (close_mismatch)
+      or it is on the broker but not in the engine's bars                                    (missing_engine)
+      or it is in the engine's bars but not on the broker                                    (missing_broker)
+
+  The engine polls `last_tick`, so its ticks are a sample of the broker's: its close is the last tick it SAW, often
+  a few hundred ms before the broker's last tick of the minute. Comparing closes point for point graded that sampling
+  lag as divergence (2026-10-23: 219 of 861 icm-demo minutes, max $0.82, every one inside the broker's range; no
+  hour offset: shifting either feed by 60 minutes puts ~99% of closes $4-6 apart). A close more than the tolerance
+  from the broker's but inside its range is counted as `close_lag` (reported, not graded). A price offset above the
+  tolerance still fails: it moves the engine's high or low outside the broker's range on every minute.
 
   over in-session minutes of the window (`grade`; docs/proposals/2026-10-feed-reconcile-outage-minutes.md):
   - divergence = (close_mismatch + missing_broker) / engine minutes: "ok" at or below WARN_FRACTION (0.5%), "warning"
@@ -105,6 +113,7 @@ class ReconcileReport(Record):
     edge_excluded: int = 0                 # partial minutes either side of an engine gap (>= 2 minutes), not compared
     up_minutes: int = 0                    # broker minutes inside the engine's current run (loop heartbeat)
     missing_engine_up: int = 0             # ... of which the engine has no bar (a stalled feed, not a stop)
+    close_lag: int = 0                     # closes off the broker's by > tolerance but inside its range (sampling lag)
 
     def save(self, state_dir: Path) -> None:
         write_atomic(reconcile_file(state_dir, self.account_id), self.model_dump_json(indent=1), durable=False)
@@ -158,15 +167,19 @@ def reconcile(engine: pd.DataFrame, broker: pd.DataFrame, *, start: pd.Timestamp
               engine_up: list[tuple[pd.Timestamp, pd.Timestamp]] | None = None) -> dict[str, Any]:
     """Minute-by-minute comparison over in-session minutes in [start, end) (see the module docstring). `engine_up`:
     the engine's runs [started, last beat] per its loop heartbeat (None or []: no evidence it was up)."""
-    def frame(b: pd.DataFrame) -> pd.Series:
+    def frame(b: pd.DataFrame) -> pd.DataFrame:
+        cols = ["bid_close", "bid_high", "bid_low"]
         if b.empty:
-            return pd.Series(dtype=float)
+            return pd.DataFrame(columns=cols, index=pd.DatetimeIndex([], tz="UTC"), dtype=float)
         ts = pd.DatetimeIndex(pd.to_datetime(b["ts_utc"], utc=True)).as_unit("ns")
-        s = pd.Series(b["bid_close"].astype(float).to_numpy(), index=ts)
-        s = s[~s.index.duplicated(keep="last")]
-        s = s[(s.index >= start) & (s.index < end)]
-        return s[sessions.is_open(pd.DatetimeIndex(s.index))] if len(s) else s
-    e, b = frame(engine).sort_index(), frame(broker).sort_index()
+        # a frame with closes only (tv_reconcile) has no range: its minute range is the close itself
+        b = b.assign(**{c: b[c] if c in b.columns else b["bid_close"] for c in cols[1:]})
+        f = pd.DataFrame(b[cols].astype(float).to_numpy(), index=ts, columns=cols)
+        f = f[~f.index.duplicated(keep="last")]
+        f = f[(f.index >= start) & (f.index < end)]
+        return f[sessions.is_open(pd.DatetimeIndex(f.index))] if len(f) else f
+    ef, bf = frame(engine).sort_index(), frame(broker).sort_index()
+    e, b = ef["bid_close"], bf["bid_close"]
     both = e.index.intersection(b.index)
     # either side of a gap of >= 2 broker minutes the engine lacks, its minute is partial (stopped or started inside
     # it): that close is not compared. A one-minute gap is no edge, so a flapping feed is still compared in full
@@ -176,18 +189,25 @@ def reconcile(engine: pd.DataFrame, broker: pd.DataFrame, *, start: pd.Timestamp
         gap_next[:-2] = miss[1:-1] & miss[2:]
         gap_prev[2:] = miss[1:-1] & miss[:-2]
     edge = both.intersection(b.index[gap_next | gap_prev])
-    diff = (e.reindex(both.difference(edge)) - b.reindex(both.difference(edge))).abs()
+    cmp = both.difference(edge)
+    ec, bc = ef.reindex(cmp), bf.reindex(cmp)
+    diff = (ec["bid_close"] - bc["bid_close"]).abs()
+    lo, hi = bc["bid_low"] - tolerance - 1e-9, bc["bid_high"] + tolerance + 1e-9
+    # the engine's ticks are a sample of the broker's: each engine price lies inside the broker's minute range
+    outside = ((ec["bid_close"] < lo) | (ec["bid_close"] > hi) | (ec["bid_high"] > hi) | (ec["bid_low"] < lo))
     in_run = np.zeros(len(b), dtype=bool)
     for frm, to in engine_up or []:
         in_run |= (b.index >= frm.ceil("min")) & (b.index < to)
     up = b.index[in_run]
     n: dict[str, Any] = {"broker_minutes": len(b), "engine_minutes": len(e), "matched": len(both),
-         "close_mismatch": int((diff > tolerance + 1e-9).sum()), "edge_excluded": len(edge),
+         "close_mismatch": int(outside.sum()), "edge_excluded": len(edge),
+         "close_lag": int(((diff > tolerance + 1e-9) & ~outside).sum()),
+
          "missing_engine": len(b.index.difference(e.index)), "missing_broker": len(e.index.difference(b.index)),
          "max_close_diff": float(diff.max()) if len(diff) else 0.0, "up_minutes": len(up),
          "missing_engine_up": len(up.difference(e.index))}
     n["divergence"], n["severity"] = grade(**{k: n[k] for k in _COUNTS})
-    first = {"close_mismatch": diff[diff > tolerance + 1e-9].index,
+    first = {"close_mismatch": outside.index[outside.to_numpy()],
              "missing_engine": b.index.difference(e.index), "missing_broker": e.index.difference(b.index)}
     n["first"] = {k: (pd.Timestamp(v[0]) if len(v) else None) for k, v in first.items()}
     return n
@@ -231,7 +251,8 @@ def reconcile_account(store: Store, broker: Any, account_id: str, symbol: str, n
     n = reconcile(eb, bb, start=start, end=end, tolerance=tol, sessions=sessions,
                   engine_up=_engine_runs(state_dir, account_id))
     events: list[DQEvent] = []
-    for kind, label in (("close_mismatch", f"closes more than {tol:.2f} from the broker's M1 (max {n['max_close_diff']:.2f})"),
+    for kind, label in (("close_mismatch", f"engine prices more than {tol:.2f} outside the broker's M1 range (max close "
+                                           f"difference {n['max_close_diff']:.2f})"),
                         ("missing_engine", "broker M1 minutes with no engine bar"),
                         ("missing_broker", "engine bars with no broker M1 minute")):
         if n[kind]:
@@ -281,8 +302,12 @@ def _feed_status(ctx: "HealthContext", account_id: str) -> "tuple[Status, str]":
         return "warn", f"reconcile file unreadable: {exc}"
     age_h = (ctx.now - r.ts_utc).total_seconds() / 3600
     edges = f", {r.edge_excluded} stop/restart-edge minutes not compared" if r.edge_excluded else ""
-    msg = (f"divergence {r.divergence:.2%} over {r.engine_minutes} engine minutes (close {r.close_mismatch}, missing "
-           f"broker {r.missing_broker}{edges}); {r.spikes_unconfirmed} unconfirmed spikes")
+    msg = (f"divergence {r.divergence:.2%} over {r.engine_minutes} engine minutes (outside the broker's range "
+           f"{r.close_mismatch}, missing broker {r.missing_broker}{edges}); {r.spikes_unconfirmed} unconfirmed spikes")
+    if r.close_lag:
+        msg += (f"; {r.close_lag} closes inside the broker's minute range but off its close (max "
+                f"{r.max_close_diff:.2f}): the engine samples last_tick and misses the minute's last ticks")
+
     if stalled(r.missing_engine_up, r.up_minutes):
         msg += (f"; engine bars missing for {r.missing_engine_up} of {r.up_minutes} broker minutes while the engine was "
                 "up (loop heartbeat): a stalled feed, check the bridge and the terminal")

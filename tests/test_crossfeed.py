@@ -65,17 +65,59 @@ def test_agreeing_feeds_reconcile_with_no_divergence():
     assert n["severity"] == "ok" and n["divergence"] == 0.0
 
 
-def test_diverging_closes_beyond_two_points_are_counted_and_graded():
+OHLC = ["open", "high", "low", "close"]
+
+
+def test_engine_prices_outside_the_broker_minute_beyond_two_points_are_counted_and_graded():
+    """The engine's ticks are a sample of the broker's, so each engine price lies inside the broker's minute
+    [low, high]; one more than 2 points outside it is a price the broker never quoted that minute."""
     eb = ticks_to_1m(day_ticks())
     m1 = as_broker_m1(eb)
-    m1.loc[m1.index[100:130], "close"] += 0.03                # 3 points away on 30 minutes
-    m1.loc[m1.index[130:140], "close"] += 0.02              # exactly 2 points: within tolerance
+    m1.loc[m1.index[100:130], "high"] = eb["bid_high"].iloc[100:130].to_numpy() - 0.03   # 3 points under the engine
+    m1.loc[m1.index[130:140], "high"] = eb["bid_high"].iloc[130:140].to_numpy() - 0.02   # exactly 2: within tolerance
     n = cf.reconcile(eb, cf.broker_m1_bars(m1), start=NOW - pd.Timedelta(days=1), end=NOW, tolerance=0.02)
-    assert n["close_mismatch"] == 30 and n["max_close_diff"] == pytest.approx(0.03)
+    assert n["close_mismatch"] == 30 and n["close_lag"] == 0
     assert n["severity"] == "warning"                     # 30 / ~1,300 minutes: between 0.5% and 5%
-    m1.loc[m1.index[100:300], "close"] += 1.0
+    m1.loc[m1.index[100:300], OHLC] += 50.0               # a different price on 200 minutes
     n = cf.reconcile(eb, cf.broker_m1_bars(m1), start=NOW - pd.Timedelta(days=1), end=NOW, tolerance=0.02)
-    assert n["severity"] == "error"
+    assert n["severity"] == "error" and n["max_close_diff"] == pytest.approx(50.0)
+
+
+def _sampled(ticks: pd.DataFrame) -> pd.DataFrame:
+    """What the engine stores: it polls last_tick, so the broker's last tick of every minute is missed."""
+    minute = ticks["ts_utc"].dt.floor("min")
+    return ticks[minute.duplicated(keep="last")].reset_index(drop=True)
+
+
+def test_a_sampled_engine_feed_lagging_the_last_ticks_is_not_a_price_fault():
+    """2026-10-23/26 on the brain: ~20% of engine closes differ from the broker's M1 close by up to $0.89, every one
+    inside the broker's minute range: the engine missed the minute's last ticks (it polls last_tick). That lag is
+    reported (close_lag), not graded as divergence."""
+    ticks = day_ticks()
+    eb, bb = ticks_to_1m(_sampled(ticks)), cf.broker_m1_bars(as_broker_m1(ticks_to_1m(ticks)))
+    n = cf.reconcile(eb, bb, start=NOW - pd.Timedelta(days=1), end=NOW, tolerance=0.02)
+    assert n["matched"] > 1000 and n["close_lag"] > 300 and n["max_close_diff"] > 0.02
+    assert n["close_mismatch"] == 0 and n["divergence"] == 0.0 and n["severity"] == "ok"
+
+
+@pytest.mark.parametrize("minutes", [-60, 60])
+def test_an_engine_feed_an_hour_off_fails(minutes):
+    """A server_tz mismatch (Europe/Athens against NY+7 in a US-EU gap week) shifts one feed by an hour."""
+    eb = ticks_to_1m(day_ticks())
+    bb = cf.broker_m1_bars(as_broker_m1(eb))
+    m = cf.reconcile(eb.assign(ts_utc=eb["ts_utc"] + pd.Timedelta(minutes=minutes)), bb,
+                     start=NOW - pd.Timedelta(days=1), end=NOW, tolerance=0.02)
+    assert m["close_mismatch"] > 0.5 * m["matched"] and m["severity"] == "error"
+
+
+def test_a_constant_price_offset_of_three_points_fails():
+    """Another price stream 3 points off: the engine's highs (or lows) leave the broker's range on every minute."""
+    eb = ticks_to_1m(day_ticks())
+    bb = cf.broker_m1_bars(as_broker_m1(eb))
+    shifted = eb.copy()
+    shifted[[c for c in shifted.columns if c.startswith(("bid_", "ask_"))]] += 0.03
+    n = cf.reconcile(shifted, bb, start=NOW - pd.Timedelta(days=1), end=NOW, tolerance=0.02)
+    assert n["close_mismatch"] == n["matched"] and n["close_lag"] == 0 and n["severity"] == "error"
 
 
 def test_missing_minutes_on_either_side_are_counted():
@@ -92,7 +134,7 @@ def test_reconcile_account_writes_events_broker_history_and_report(tmp_path):
     ticks = day_ticks()
     store.append("ticks", ticks, source="icm-demo", dedupe=False)
     m1 = as_broker_m1(ticks_to_1m(ticks))
-    m1.loc[m1.index[100:140], "close"] -= 0.5
+    m1.loc[m1.index[100:140], OHLC] -= 50.0
     rep = cf.reconcile_account(store, FakeBroker(m1), "icm-demo", "XAUUSD", NOW, state_dir=tmp_path)
     assert rep.close_mismatch == 40 and rep.severity == "warning" and rep.tolerance == pytest.approx(0.02)
     ev = store.read("dq_events", source="icm-demo")
@@ -131,6 +173,12 @@ def test_reconcile_health_check_follows_the_report_severity(tmp_path, severity, 
     _report(severity).save(tmp_path)
     c = cf.check_reconciliation(_health_ctx(tmp_path), "icm-demo")
     assert c.name == "reconcile:icm-demo" and c.status == status
+
+
+def test_health_reports_sampling_lag_without_failing(tmp_path):
+    _report("ok").model_copy(update={"close_lag": 250, "max_close_diff": 0.82}).save(tmp_path)
+    c = cf.check_reconciliation(_health_ctx(tmp_path), "icm-demo")
+    assert c.status == "ok" and "250 closes inside the broker's minute range" in c.reason
 
 
 def test_reconcile_health_check_without_a_report_and_when_stale(tmp_path):
@@ -183,7 +231,7 @@ def test_a_flapping_feed_still_fails_on_price():
     """A feed dropping every other minute leaves one-minute gaps: no minute is an edge, every close is compared."""
     eb = ticks_to_1m(day_ticks())
     m1 = as_broker_m1(eb)
-    m1.loc[m1.index[300:700], "close"] += 1.0
+    m1.loc[m1.index[300:700], OHLC] += 50.0
     n = cf.reconcile(eb.iloc[::2].reset_index(drop=True), cf.broker_m1_bars(m1), start=NOW - pd.Timedelta(days=1),
                      end=NOW, tolerance=0.02)
     assert n["edge_excluded"] == 0 and n["close_mismatch"] >= 150 and n["severity"] == "error"
@@ -211,7 +259,7 @@ def test_a_friday_outage_with_four_engine_minutes_warns_instead_of_failing():
 def test_a_real_price_fault_while_the_engine_ran_still_fails():
     eb = ticks_to_1m(day_ticks())
     m1 = as_broker_m1(eb)
-    m1.loc[m1.index[400:500], "close"] += 1.0
+    m1.loc[m1.index[400:500], OHLC] += 50.0
     n = cf.reconcile(_outage(eb, [range(300, 700)]), cf.broker_m1_bars(m1), start=NOW - pd.Timedelta(days=1), end=NOW,
                      tolerance=0.02)
     assert n["close_mismatch"] == 100 and n["severity"] == "error"
