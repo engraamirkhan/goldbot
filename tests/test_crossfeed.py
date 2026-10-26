@@ -110,14 +110,65 @@ def test_an_engine_feed_an_hour_off_fails(minutes):
     assert m["close_mismatch"] > 0.5 * m["matched"] and m["severity"] == "error"
 
 
-def test_a_constant_price_offset_of_three_points_fails():
-    """Another price stream 3 points off: the engine's highs (or lows) leave the broker's range on every minute."""
+def _sampled_some(ticks: pd.DataFrame, every: int = 5) -> pd.DataFrame:
+    """The brain's measured pattern: the engine misses the minute's last tick on about one minute in five, so its
+    highs and lows sit inside the broker's range and ~80% of its closes equal the broker's."""
+    minute = ticks["ts_utc"].dt.floor("min")
+    last = ~minute.duplicated(keep="last")
+    lagged = (minute.dt.minute % every == 0) & last
+    return ticks[~lagged].reset_index(drop=True)
+
+
+def _offset(bars: pd.DataFrame, d: float) -> pd.DataFrame:
+    out = bars.copy()
+    out[[c for c in out.columns if c.startswith(("bid_", "ask_"))]] += d
+    return out
+
+
+def test_a_realistically_sampled_feed_is_ok_with_no_bias():
+    ticks = day_ticks()
+    eb, bb = ticks_to_1m(_sampled_some(ticks)), cf.broker_m1_bars(as_broker_m1(ticks_to_1m(ticks)))
+    n = cf.reconcile(eb, bb, start=NOW - pd.Timedelta(days=1), end=NOW, tolerance=0.02)
+    assert n["close_lag"] > 100 and n["close_mismatch"] == 0 and n["stale_minutes"] == 0
+    assert n["close_bias"] == 0.0 and n["close_bias_share"] < cf.BIAS_SHARE and n["severity"] == "ok"
+
+
+@pytest.mark.parametrize("d", [0.03, -0.03, 0.5])
+def test_a_constant_price_offset_fails_on_bias_even_inside_the_ranges(d):
+    """Another price stream offset by 3 points to $0.50 on a realistically sampled feed: the engine's extremes stay
+    inside most broker minutes, the median close difference does not."""
+    ticks = day_ticks()
+    eb, bb = ticks_to_1m(_sampled_some(ticks)), cf.broker_m1_bars(as_broker_m1(ticks_to_1m(ticks)))
+    n = cf.reconcile(_offset(eb, d), bb, start=NOW - pd.Timedelta(days=1), end=NOW, tolerance=0.02)
+    assert n["close_bias"] == pytest.approx(d) and n["close_bias_share"] >= cf.BIAS_SHARE
+    assert n["severity"] == "error"
+
+
+def test_a_frozen_engine_feed_inside_the_broker_ranges_fails():
+    """A feed that keeps printing bars at one stale price for two hours; the broker's ranges are widened to cover it,
+    so only the frozen-close run shows it."""
     eb = ticks_to_1m(day_ticks())
-    bb = cf.broker_m1_bars(as_broker_m1(eb))
-    shifted = eb.copy()
-    shifted[[c for c in shifted.columns if c.startswith(("bid_", "ask_"))]] += 0.03
-    n = cf.reconcile(shifted, bb, start=NOW - pd.Timedelta(days=1), end=NOW, tolerance=0.02)
-    assert n["close_mismatch"] == n["matched"] and n["close_lag"] == 0 and n["severity"] == "error"
+    m1 = as_broker_m1(eb)
+    rows = list(range(400, 520))
+    v = float(eb["bid_close"].iloc[399])
+    frozen = eb.copy()
+    frozen.loc[rows, ["bid_open", "bid_high", "bid_low", "bid_close"]] = v
+    m1.loc[rows, "high"] = np.maximum(m1.loc[rows, "high"], v)
+    m1.loc[rows, "low"] = np.minimum(m1.loc[rows, "low"], v)
+    n = cf.reconcile(frozen, cf.broker_m1_bars(m1), start=NOW - pd.Timedelta(days=1), end=NOW, tolerance=0.02)
+    assert n["close_mismatch"] == 0 and n["stale_minutes"] == 121 and n["severity"] == "error"   # + minute 399 (same close)
+
+
+def test_a_short_flat_spell_is_not_a_frozen_feed():
+    eb = ticks_to_1m(day_ticks())
+    m1 = as_broker_m1(eb)
+    rows = list(range(400, 400 + cf.STALE_RUN - 1))
+    v = float(eb["bid_close"].iloc[400])
+    flat = eb.copy()
+    flat.loc[rows, "bid_close"] = v
+    m1.loc[rows, "close"] = flat.loc[rows, "bid_close"].to_numpy()
+    n = cf.reconcile(flat, cf.broker_m1_bars(m1), start=NOW - pd.Timedelta(days=1), end=NOW, tolerance=0.02)
+    assert n["stale_minutes"] == 0
 
 
 def test_missing_minutes_on_either_side_are_counted():
@@ -179,6 +230,17 @@ def test_health_reports_sampling_lag_without_failing(tmp_path):
     _report("ok").model_copy(update={"close_lag": 250, "max_close_diff": 0.82}).save(tmp_path)
     c = cf.check_reconciliation(_health_ctx(tmp_path), "icm-demo")
     assert c.status == "ok" and "250 closes inside the broker's minute range" in c.reason
+
+
+def test_health_grades_a_stored_bias_and_frozen_minutes(tmp_path):
+    _report("ok").model_copy(update={"close_bias": 0.05, "close_bias_share": 0.9}).save(tmp_path)
+    c = cf.check_reconciliation(_health_ctx(tmp_path), "icm-demo")
+    assert c.status == "fail" and "systematic price offset" in c.reason
+    _report("ok").model_copy(update={"close_bias": 0.05, "close_bias_share": 0.5}).save(tmp_path)   # lag, not offset
+    assert cf.check_reconciliation(_health_ctx(tmp_path), "icm-demo").status == "ok"
+    _report("ok").model_copy(update={"stale_minutes": 120}).save(tmp_path)
+    c = cf.check_reconciliation(_health_ctx(tmp_path), "icm-demo")
+    assert c.status == "fail" and "frozen engine close" in c.reason
 
 
 def test_reconcile_health_check_without_a_report_and_when_stale(tmp_path):
