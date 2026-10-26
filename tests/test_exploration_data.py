@@ -24,7 +24,7 @@ from goldbot.research import exploration_data as ex
 from goldbot.research.population import agent_trades
 
 T0 = pd.Timestamp("2026-10-05 08:00", tz="UTC")          # a Monday after the holdout
-COSTS = ex.ReplayCosts(version="c1", effective_utc=T0 - pd.Timedelta(days=1), slippage_usd=0.05,
+COSTS = ex.ReplayCosts(broker="icm", version="c1", effective_utc=T0 - pd.Timedelta(days=1), slippage_usd=0.05,
                        commission_rt_per_oz=0.07)
 
 
@@ -36,7 +36,7 @@ def _cand(db: Database, cid: str, *, arm: str = "S1a", style: str = "scalp", tf:
           decision: pd.Timestamp = T0, taken: bool = True, mu: float | None = 0.5, side: int = 1,
           stop: float = 2.0, target: float = 2.0, hold_s: int = 600, features: dict[str, float] | None = None,
           avail: pd.Timestamp | None = None, is_control: bool = False, branch: str = "random", **kw: Any) -> bool:
-    return ex.record_candidate(db, candidate_id=cid, account_id="icm-probe", arm_id=arm, family="vwap", style=style,
+    return ex.record_candidate(db, candidate_id=cid, account_id="icm-probe", broker="icm", arm_id=arm, family="vwap", style=style,
                                tf=tf, side=side, decision_utc=decision, stop_dist=stop, target_dist=target,
                                max_hold_s=hold_s, taken=taken, mu=mu, branch=branch, u=0.9, is_control=is_control,
                                features=features, feature_list_id=ex.STYLE_FEATURE_LIST.get(style),
@@ -142,7 +142,7 @@ def test_the_fill_r_is_a_diagnostic_written_once_and_never_the_training_label(tm
     assert not ex.record_fill(db, candidate_id="c2", entry_utc=T0, exit_utc=T0 + pd.Timedelta(minutes=5),
                               entry_price=2000.0, exit_price=2003.0, cost_per_oz=0.2, censored=False)   # untaken
     _label(db, "c1", -0.3)                                               # the replay lost; the fill won
-    tab = ex.training_table(db, style="scalp", as_of=T0 + pd.Timedelta(days=1))
+    tab = ex.training_table(db, style="scalp", broker="icm", as_of=T0 + pd.Timedelta(days=1))
     row = tab.set_index("candidate_id").loc["c1"]
     assert row["label_fill_r"] == pytest.approx((3.0 - 0.2) / 2.0) and row["y"] == 0
 
@@ -227,7 +227,7 @@ def test_the_snapshot_is_read_when_present_and_the_label_is_label_sim_r(tmp_path
     db = _db(tmp_path)
     _cand(db, "c", features=_snap("scalp", 3.0), avail=T0)
     _label(db, "c", 0.4, mid=-0.1)
-    tab = ex.training_table(db, style="scalp", as_of=T0 + pd.Timedelta(days=1))
+    tab = ex.training_table(db, style="scalp", broker="icm", as_of=T0 + pd.Timedelta(days=1))
     assert tab["em_atr_cost"].tolist() == [3.0] and tab["y"].tolist() == [1] and tab["label_mid_r"].tolist() == [-0.1]
 
 
@@ -239,11 +239,11 @@ def test_features_available_before_decision_only(tmp_path):
     # rule B: the decision bar's own row is available AT the decision (used); a later release is not
     feats = pd.DataFrame({"available_utc": [T0 - pd.Timedelta(minutes=1), T0, T0 + pd.Timedelta(seconds=1)],
                           "f0": [1.0, 2.0, 3.0]})
-    tab = ex.training_table(db, style="scalp", as_of=T0 + pd.Timedelta(days=1), features=feats, feature_cols=cols)
+    tab = ex.training_table(db, style="scalp", broker="icm", as_of=T0 + pd.Timedelta(days=1), features=feats, feature_cols=cols)
     assert tab["f0"].tolist() == [2.0] and tab["available_utc_max"].iloc[0] == T0
     # a feature table in seconds joins the same as one in ns
     feats_s = feats.assign(available_utc=pd.DatetimeIndex(feats["available_utc"]).as_unit("s"))
-    tab_s = ex.training_table(db, style="scalp", as_of=T0 + pd.Timedelta(days=1), features=feats_s, feature_cols=cols)
+    tab_s = ex.training_table(db, style="scalp", broker="icm", as_of=T0 + pd.Timedelta(days=1), features=feats_s, feature_cols=cols)
     assert tab_s["f0"].tolist() == [2.0]
 
 
@@ -254,7 +254,7 @@ def test_a_row_breaking_the_availability_invariant_fails_the_build(tmp_path):
     with db.write() as conn:                                             # corrupted after the write
         conn.execute("UPDATE exploration_obs SET available_utc_max_ns = ?", ((T0 + pd.Timedelta(minutes=1)).value,))
     with pytest.raises(ValueError, match="L-2"):
-        ex.training_table(db, style="scalp", as_of=T0 + pd.Timedelta(days=1))
+        ex.training_table(db, style="scalp", broker="icm", as_of=T0 + pd.Timedelta(days=1))
 
 
 def test_unresolved_holdout_and_other_style_rows_are_not_training_rows(tmp_path):
@@ -268,15 +268,15 @@ def test_unresolved_holdout_and_other_style_rows_are_not_training_rows(tmp_path)
     _label(db, "holdout", 0.2)
     _cand(db, "swing", style="swing", tf="4h")
     _label(db, "swing", 0.2)
-    tab = ex.training_table(db, style="scalp", as_of=T0 + pd.Timedelta(days=1))
+    tab = ex.training_table(db, style="scalp", broker="icm", as_of=T0 + pd.Timedelta(days=1))
     assert tab["candidate_id"].tolist() == ["ok"]
 
 
 def test_more_than_40_features_rejected(tmp_path):
     db = _db(tmp_path)
     with pytest.raises(ValueError, match="40"):
-        ex.training_table(db, style="scalp", as_of=T0, feature_cols=[f"f{j}" for j in range(39)])   # + side + arm_id
-    assert ex.training_table(db, style="scalp", as_of=T0, feature_cols=[f"f{j}" for j in range(38)]).empty
+        ex.training_table(db, style="scalp", broker="icm", as_of=T0, feature_cols=[f"f{j}" for j in range(39)])   # + side + arm_id
+    assert ex.training_table(db, style="scalp", broker="icm", as_of=T0, feature_cols=[f"f{j}" for j in range(38)]).empty
 
 
 # ---------------------------------------------------------------------------------------------- cross-fitting
@@ -364,10 +364,10 @@ def test_weights_never_exceed_ceilings(tmp_path):
     assert all(v >= ex.FLOOR_SHARE - 1e-12 for a, v in scalp.items() if a != "dud0")
     assert all(v <= ex.CAP_SHARE + 1e-12 for v in w.values()) and sum(scalp.values()) <= 1 + 1e-12
     assert w["w0"] == pytest.approx(0.30) and w["w1"] == pytest.approx(0.30)    # two arms: capped, never raised
-    ex.write_weights(db, T0.value, w, styles)
-    got = ex.weights(db, list(scalp))
+    ex.write_weights(db, T0.value, w, styles, broker="icm")
+    got = ex.weights(db, list(scalp), broker="icm")
     assert all(ex.FLOOR_SHARE - 1e-12 <= v <= ex.CAP_SHARE + 1e-12 for a, v in got.items() if a != "dud0")
-    assert ex.weights(db, list(scalp), ceilings={"star": 0.1})["star"] == pytest.approx(0.1)
+    assert ex.weights(db, list(scalp), broker="icm", ceilings={"star": 0.1})["star"] == pytest.approx(0.1)
     for n in (2, 3, 6, 12):
         eq = ex.equal_shares([f"a{i}" for i in range(n)])
         assert all(ex.FLOOR_SHARE <= v <= ex.CAP_SHARE for v in eq.values()) and sum(eq.values()) <= 1 + 1e-12
@@ -378,31 +378,32 @@ def test_corrupt_or_missing_weights_give_equal_shares(tmp_path):
     arms = ["a", "b", "c", "d"]
     st = {a: "scalp" for a in [*arms, "z"]}
     eq = {a: 0.25 for a in arms}
-    assert ex.weights(db, arms) == eq                                      # no run yet
-    ex.write_weights(db, 1, {"a": 0.3, "b": 0.3, "c": 0.3, "d": 0.3}, st)  # sums above 1
-    assert ex.weights(db, arms) == eq
-    ex.write_weights(db, 2, {"a": 0.4, "b": 0.3, "c": 0.2, "d": 0.1}, st)  # a share above the cap
-    assert ex.weights(db, arms) == eq
-    ex.write_weights(db, 3, {"a": 0.3, "b": 0.3, "c": 0.3}, st)            # an arm the run never scored
-    assert ex.weights(db, arms) == eq
-    ex.write_weights(db, 4, {"a": 0.3, "b": 0.3, "c": 0.3, "d": 0.01}, st)  # below the floor
-    assert ex.weights(db, arms) == eq
-    ex.write_weights(db, 5, {"a": 0.3, "b": 0.3, "c": 0.3, "d": 0.1}, {**st, "d": "swing"})   # styles mixed
-    assert ex.weights(db, arms) == eq
-    ex.write_weights(db, 6, {"a": 0.3, "b": 0.3, "c": 0.3, "d": 0.1}, st)
-    assert ex.weights(db, arms) == {"a": 0.3, "b": 0.3, "c": 0.3, "d": 0.1}
+    assert ex.weights(db, arms, broker="icm") == eq                                      # no run yet
+    ex.write_weights(db, 1, {"a": 0.3, "b": 0.3, "c": 0.3, "d": 0.3}, st, broker="icm")  # sums above 1
+    assert ex.weights(db, arms, broker="icm") == eq
+    ex.write_weights(db, 2, {"a": 0.4, "b": 0.3, "c": 0.2, "d": 0.1}, st, broker="icm")  # a share above the cap
+    assert ex.weights(db, arms, broker="icm") == eq
+    ex.write_weights(db, 3, {"a": 0.3, "b": 0.3, "c": 0.3}, st, broker="icm")  # an arm the run never scored
+    assert ex.weights(db, arms, broker="icm") == eq
+    ex.write_weights(db, 4, {"a": 0.3, "b": 0.3, "c": 0.3, "d": 0.01}, st, broker="icm")  # below the floor
+    assert ex.weights(db, arms, broker="icm") == eq
+    ex.write_weights(db, 5, {"a": 0.3, "b": 0.3, "c": 0.3, "d": 0.1}, {**st, "d": "swing"},
+                     broker="icm")                                     # styles mixed
+    assert ex.weights(db, arms, broker="icm") == eq
+    ex.write_weights(db, 6, {"a": 0.3, "b": 0.3, "c": 0.3, "d": 0.1}, st, broker="icm")
+    assert ex.weights(db, arms, broker="icm") == {"a": 0.3, "b": 0.3, "c": 0.3, "d": 0.1}
     now = pd.Timestamp(6, unit="ns", tz="UTC") + ex.MAX_WEIGHTS_AGE + pd.Timedelta(seconds=1)
-    assert ex.weights(db, arms, now=now) == eq                             # stale
+    assert ex.weights(db, arms, broker="icm", now=now) == eq                             # stale
     with db.write() as conn:
-        conn.execute("DROP TABLE exploration_weights")
-    assert ex.weights(db, arms) == eq
+        conn.execute("DROP TABLE exploration_broker_weights")
+    assert ex.weights(db, arms, broker="icm") == eq
     garbage = tmp_path / "g"
     garbage.mkdir()
     (garbage / "aux.db").write_bytes(b"not a sqlite file" * 100)
     fake = Database.__new__(Database)                                     # a Database over an unreadable file
     fake.path, fake.kind, fake.busy_timeout_ms = garbage / "aux.db", "aux", 100
-    assert ex.weights(fake, arms) == eq
-    assert ex.weights(db, []) == {}
+    assert ex.weights(fake, arms, broker="icm") == eq
+    assert ex.weights(db, [], broker="icm") == {}
 
 
 # ---------------------------------------------------------------------------------------------- isolation
@@ -444,14 +445,14 @@ def test_learn_allocates_strategy_arms_per_style_never_controls_and_retrains_whe
     monkeypatch.setattr(ex, "RETRAIN_MIN_TOTAL", 100)
     monkeypatch.setattr(ex, "H62_PARAMS", {**ex.H62_PARAMS, "min_child_samples": 5})
     as_of = pd.Timestamp("2026-10-11 23:00", tz="UTC")                  # a Sunday: retrain day
-    rep = ex.learn(db, as_of=as_of, arms={"S9": "scalp"}, controls=["S0"], seed=1, retrain=True,
+    rep = ex.learn(db, broker="icm", as_of=as_of, arms={"S9": "scalp"}, controls=["S0"], seed=1, retrain=True,
                    models_dir=tmp_path / "models")
     w = rep["weights"]
     assert set(w) == {"S1a", "S1b", "S5a", "S5b", "S9"} and "S0" not in w
     assert w["S1a"] == pytest.approx(0.30) and all(ex.FLOOR_SHARE - 1e-12 <= v <= 0.30 + 1e-12 for v in w.values())
-    assert ex.weights(db, list(w), now=as_of) == w
+    assert ex.weights(db, list(w), broker="icm", now=as_of) == w
     m = rep["models"]["scalp"]
-    assert m["version"] == "h62-scalp-20261009T2100" and rep["models"]["swing"]["due"] is False
+    assert m["version"] == "h62-icm-scalp-20261009T2100" and rep["models"]["swing"]["due"] is False
     with db.connection() as conn:
         path, sha, act = conn.execute("SELECT path, sha256, activation_ns FROM exploration_models").fetchone()
     import hashlib
@@ -461,7 +462,7 @@ def test_learn_allocates_strategy_arms_per_style_never_controls_and_retrains_whe
     with db.connection() as conn:
         assert conn.execute("SELECT status FROM exploration_models").fetchone()[0] == "shadow"
     late = pd.Timestamp("2026-10-20", tz="UTC")
-    assert ex.serving_model(db, "scalp", late) is None
+    assert ex.serving_model(db, "scalp", late, broker="icm") is None
 
 
 def test_the_serving_read_returns_only_an_active_champion_with_a_matching_digest(tmp_path):
@@ -469,18 +470,18 @@ def test_the_serving_read_returns_only_an_active_champion_with_a_matching_digest
     fit: dict[str, Any] = {"style": "scalp", "folds": [], "calibrator": None, "features": ["f0"], "per_arm": {}, "auc_net": None,
            "auc_gross": None, "n": 0}
     cutoff, act = ex.model_cutoff(pd.Timestamp("2026-10-11 01:00", tz="UTC"))
-    v = ex.save_model(db, tmp_path / "models", fit, cutoff=cutoff, activation=act)
-    assert ex.serving_model(db, "scalp", act + pd.Timedelta(days=1)) is None          # shadow: champion zero
+    v = ex.save_model(db, tmp_path / "models", fit, broker="icm", cutoff=cutoff, activation=act)
+    assert ex.serving_model(db, "scalp", act + pd.Timedelta(days=1), broker="icm") is None          # shadow: champion zero
     with db.write() as conn:
         conn.execute("UPDATE exploration_models SET status = 'champion' WHERE model_version = ?", (v,))
-    assert ex.serving_model(db, "scalp", act - pd.Timedelta(minutes=1)) is None       # not active yet
-    got = ex.serving_model(db, "scalp", act)
+    assert ex.serving_model(db, "scalp", act - pd.Timedelta(minutes=1), broker="icm") is None       # not active yet
+    got = ex.serving_model(db, "scalp", act, broker="icm")
     assert got is not None and got["model_version"] == v and got["features"] == ["f0"]
-    assert ex.serving_model(db, "swing", act) is None
+    assert ex.serving_model(db, "swing", act, broker="icm") is None
     with db.connection() as conn:
         path = conn.execute("SELECT path FROM exploration_models").fetchone()[0]
     Path(path).write_bytes(b"tampered")
-    assert ex.serving_model(db, "scalp", act) is None                                  # digest mismatch
+    assert ex.serving_model(db, "scalp", act, broker="icm") is None                                  # digest mismatch
     with pytest.raises(sqlite3.IntegrityError):
         with db.write() as conn:
             conn.execute("UPDATE exploration_models SET status = 'live'")
@@ -488,8 +489,8 @@ def test_the_serving_read_returns_only_an_active_champion_with_a_matching_digest
 
 def test_learn_with_no_candidates_writes_nothing(tmp_path):
     db = _db(tmp_path)
-    assert ex.learn(db, as_of=T0, seed=1) == {"arms": 0}
-    assert ex.weights(db, ["a", "b", "c", "d"]) == {a: 0.25 for a in "abcd"}
+    assert ex.learn(db, broker="icm", as_of=T0, seed=1) == {"arms": 0}
+    assert ex.weights(db, ["a", "b", "c", "d"], broker="icm") == {a: 0.25 for a in "abcd"}
 
 
 def test_the_nightly_cost_job_runs_the_exploration_learner_and_a_failure_never_stops_it(tmp_path, monkeypatch):
@@ -537,8 +538,8 @@ def test_exploration_learn_labels_candidates_from_the_accounts_own_1m_bars(tmp_p
     _cand(db, "a", arm="S1a")
     _cand(db, "b", arm="S1b", taken=False, mu=0.3)
     rep = jobs.exploration_learn(ctx, T0 + pd.Timedelta(hours=1))
-    assert rep["labelled"] == {"icm-probe": 2} and rep["cost_model"] == "settings-priors"
-    assert set(rep["weights"]) == {"S1a", "S1b"}
+    assert rep["labelled"] == {"icm-probe": 2} and rep["cost_model"] == {"icm": "settings-priors:icm"}
+    assert set(rep["brokers"]["icm"]["weights"]) == {"S1a", "S1b"}
     lab = ex.read_obs(db)["label_sim_r"]
     assert lab.notna().all() and (lab < 0).all()                         # a flat market loses its costs
 

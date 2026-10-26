@@ -287,6 +287,7 @@ class Exploration:
     def __init__(self, eng: Engine, cfg: ExplorationConfig):
         from goldbot.research import arm_rules
         self.cfg = cfg
+        self.broker = eng.cfg.broker_name             # the key its evidence is learnt and read under (ADR 0043 am.)
         ok = [a for a in cfg.arms if a.spec.status == "run" and a.spec.rule in arm_rules.RULE_FUNCS]
         for name in [*cfg.dropped, *(a.arm_id for a in cfg.arms if a not in ok)]:
             # trading-safety L2: one bad arm never stops the engine; it is named and the others run
@@ -504,9 +505,9 @@ def _order(ex: Exploration) -> list[Pending]:
 def shares(ex: Exploration, now: pd.Timestamp) -> dict[str, float]:
     """Each arm's share of its pot (ADR 0043 "within a sleeve"): a control its fixed `control_share` (controls are the
     null, never allocated by results); a strategy arm its research share of the style's budget (lane L3's
-    `exploration_data.weights` for ONE style's strategy arms: the newest bandit run held in [5%, 30%]; equal shares
-    in the same bounds when it is missing, stale or unreadable, here too) scaled by what the controls leave
-    (1 - their shares; quant Q3). The pot's £ stays the backstop. Read at most once a minute."""
+    `exploration_data.weights` for ONE style's strategy arms on this host's broker: its newest bandit run held in
+    [5%, 30%]; equal shares in the same bounds when it is missing, stale or unreadable, here too) scaled by what the
+    controls leave (1 - their shares; quant Q3). The pot's £ stays the backstop. Read at most once a minute."""
     from goldbot.research.exploration_data import weights
     minute = now.floor("min")
     if ex.weights_cache is not None and ex.weights_cache[0] == minute:
@@ -517,7 +518,7 @@ def shares(ex: Exploration, now: pd.Timestamp) -> dict[str, float]:
         strat = [a.arm_id for a in arms if a.control_share is None]
         rest = max(0.0, 1.0 - sum(a.control_share or 0.0 for a in arms))
         try:
-            w = weights(ex.db, strat, now=now) if strat else {}
+            w = weights(ex.db, strat, broker=ex.broker, now=now) if strat else {}
         except Exception as exc:                    # the reader falls back itself; this is the last line
             log.warning("exploration weights unreadable (%s): equal shares", type(exc).__name__)
             w = {a: min(SHARE_CAP, max(SHARE_FLOOR, 1.0 / len(strat))) for a in strat}
@@ -720,7 +721,7 @@ def policy(ex: Exploration, style: str, now: pd.Timestamp) -> str:
     minute = now.floor("min")
     if ex.champion_seen.get(style, (None, False))[0] != minute:
         try:
-            champ = serving_model(ex.db, style, now) is not None
+            champ = serving_model(ex.db, style, now, broker=ex.broker) is not None
         except Exception:
             champ = False
         ex.champion_seen[style] = (minute, champ)
@@ -748,7 +749,7 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
     u = draw(cid)
     taken = blocked is None
     try:
-        record_candidate(ex.db, candidate_id=cid, account_id=eng.cfg.account_id, arm_id=arm.arm_id,
+        record_candidate(ex.db, candidate_id=cid, account_id=eng.cfg.account_id, broker=ex.broker, arm_id=arm.arm_id,
                          family=arm.family, style=arm.style, tf=arm.tf, side=s.side, decision_utc=s.bar_ts,
                          stop_dist=s.stop_usd, target_dist=s.target_usd, max_hold_s=s.hold_bars * tf_seconds(arm.tf),
                          taken=taken, is_control=arm.control_share is not None, arm_config_hash=arm.config_hash,

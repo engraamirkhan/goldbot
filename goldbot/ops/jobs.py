@@ -152,7 +152,7 @@ from goldbot.research.director import (
     rule_preregistration,
 )
 from goldbot.research.drift import AgentHealth, assess, system_halt_reasons
-from goldbot.research.exploration_data import ReplayCosts, label_candidates, learn, read_obs
+from goldbot.research.exploration_data import ReplayCosts, label_candidates, learn, read_obs, stamp_brokers
 from goldbot.research.model import RecalibratedCalibrator, fit_recalibration
 from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.pipeline import (
@@ -262,13 +262,17 @@ def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
 EXPLORATION_LABEL_DAYS = 30      # candidates still unlabelled after this long are left (their bars are long gone)
 
 
-def exploration_arms(ctx: JobContext) -> tuple[dict[str, str], list[str], dict[str, float]]:
+def exploration_arms(ctx: JobContext, broker: str | None = None
+                     ) -> tuple[dict[str, str], list[str], dict[str, float]]:
     """(strategy arm -> style, control arms, arm -> share ceiling) from each account's `exploration` block when it has
-    one (read by attribute: accounts.yaml owns it); arms without a style are learnt from their candidates."""
+    one (read by attribute: accounts.yaml owns it), only `broker`'s accounts when given (the learner always gives it:
+    one broker's arms never enter another's run); arms without a style are learnt from their candidates."""
     styles: dict[str, str] = {}
     controls: list[str] = []
     ceilings: dict[str, float] = {}
     for acc in ctx.accounts:
+        if broker is not None and getattr(acc, "broker", None) != broker:
+            continue
         arms = getattr(getattr(acc, "exploration", None), "arms", None) or {}
         items = arms.items() if isinstance(arms, dict) else ((getattr(a, "arm_id", None), a) for a in arms)
         for arm_id, a in items:
@@ -284,42 +288,90 @@ def exploration_arms(ctx: JobContext) -> tuple[dict[str, str], list[str], dict[s
     return styles, controls, ceilings
 
 
-def exploration_costs(ctx: JobContext, slot: pd.Timestamp) -> ReplayCosts:
-    """The label replay's cost model, point in time: the canonical broker's measured table as built (slippage per leg
-    from its market cells, commission, swap), else the settings priors."""
-    found = canonical_cost_table(ctx.settings, ctx.accounts, ctx.state_dir)
+def broker_cost_table(accounts: list[Account], state_dir: Path, broker: str) -> tuple[CostTable, Account] | None:
+    """The readable nightly cost table of an account on `broker` resting on the most fills (its accounts share one
+    cost basis; the first in accounts.yaml order on a tie), with its account; None before one exists."""
+    best: tuple[CostTable, Account] | None = None
+    for acc in accounts:
+        if acc.broker != broker:
+            continue
+        try:
+            table = CostTable.load(state_dir / f"costs_{acc.account_id}.json")
+        except ValueError:
+            table = None
+        if table is not None and (best is None or table.n_fills > best[0].n_fills):
+            best = (table, acc)
+    return best
+
+
+def exploration_costs(ctx: JobContext, slot: pd.Timestamp, broker: str) -> ReplayCosts:
+    """`broker`'s label replay cost model, point in time (ADR 0043 amendment, quant 2026-10-26: "costs are keyed by
+    broker; never pooled across brokers"): its own measured table as built (slippage per leg from its market cells,
+    its commission, its swap), else the conservative settings priors (the slippage prior, the dearest configured
+    commission, the swap prior). Never another broker's measurements. A table resting on fewer than
+    `research.min_fills_for_slippage` fills charges the slippage prior, whatever its cells say."""
+    from goldbot.execution.costs import settings_swap
+    prior_swap = settings_swap(ctx.settings)
+    c = ctx.settings.costs
+    found = broker_cost_table(ctx.accounts, ctx.state_dir, broker)
     if found is not None and found[0].built_utc <= slot:
         table, acc = found
-        slips = [max(c.mean, 0.0) for k, c in table.slippage.items() if k.endswith(":market")]
-        return ReplayCosts(version=f"costs:{acc.account_id}:{table.built_utc:%Y%m%dT%H%M}", effective_utc=table.built_utc,
-                           slippage_usd=max(slips) if slips else table.slippage_prior_usd,
+        swap = table.swap_spec(acc.server_tz, prior_swap.triple_weekday)
+        slips = [max(v.mean, 0.0) for k, v in table.slippage.items() if k.endswith(":market")]
+        measured = table.n_fills >= ctx.settings.research.min_fills_for_slippage and slips
+        return ReplayCosts(broker=broker, version=f"costs:{acc.account_id}:{table.built_utc:%Y%m%dT%H%M}",
+                           effective_utc=table.built_utc,
+                           slippage_usd=max(slips) if measured else max(table.slippage_prior_usd, c.slippage_prior_usd),
                            commission_rt_per_oz=2 * table.commission_per_lot_side_usd / 100.0,
-                           swap=live_swap(ctx))
-    c = ctx.settings.costs
-    return ReplayCosts(version="settings-priors", effective_utc=pd.Timestamp("2026-01-01", tz="UTC"),
-                       slippage_usd=c.slippage_prior_usd,
+                           swap=swap if swap is not None else prior_swap)
+    return ReplayCosts(broker=broker, version=f"settings-priors:{broker}",
+                       effective_utc=pd.Timestamp("2026-01-01", tz="UTC"), slippage_usd=c.slippage_prior_usd,
                        commission_rt_per_oz=2 * max(c.commission_per_lot_side_usd.values(), default=0.0) / 100.0,
-                       swap=live_swap(ctx))
+                       swap=prior_swap)
 
 
 def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
-    """Nightly (inside nightly_costs; research/exploration_data.py): replay-label the candidates whose label resolved
-    (bar replay on each account's own 1m bid/ask bars), then the H-61 bandit's within-style shares -> aux.db
-    exploration_weights; on Sundays also the H-62 style models whose retrain is due (state/models/h62/)."""
+    """Nightly (inside nightly_costs; research/exploration_data.py), per BROKER (ADR 0043 amendment: evidence and
+    costs are never pooled across brokers): key any unkeyed rows by their account's broker, replay-label the
+    candidates whose label resolved (bar replay on each account's own 1m bid/ask bars, with its broker's own cost
+    model), then each broker's H-61 bandit (within-style shares from its own evidence and its own accounts' arms) ->
+    aux.db exploration_broker_weights; on Sundays also each broker's H-62 style models whose retrain is due
+    (state/models/h62/<broker>/)."""
     db = Database.open(ctx.state_dir, "aux")
-    costs = exploration_costs(ctx, slot)
+    stamped = stamp_brokers(db, {acc.account_id: acc.broker for acc in ctx.accounts})
     pending = read_obs(db)
     pending = pending[pending["label_sim_r"].isna()]
+    unkeyed = int(pending["broker"].isna().sum())
+    if unkeyed:
+        log.warning("%d exploration candidates have no broker (account not in accounts.yaml): never learnt", unkeyed)
+    pending = pending[pending["broker"].notna()]
     labelled: dict[str, int] = {}
+    costs: dict[str, ReplayCosts] = {}
     start = max(pending["decision_utc"].min(), slot - pd.Timedelta(days=EXPLORATION_LABEL_DAYS)) \
         if not pending.empty else None
-    for account in sorted(set(pending["account_id"])):
+    keys = sorted({(str(a), str(b)) for a, b in zip(pending["account_id"], pending["broker"], strict=True)})
+    for account, broker in keys:
+        if broker not in costs:
+            costs[broker] = exploration_costs(ctx, slot, broker)
+        cm = costs[broker]
         bars = ctx.store.read("bars_1m", source=account, start=start, end=slot)
-        labelled[account] = label_candidates(db, bars, costs, cutoff=slot, account_id=account) if not bars.empty else 0
-    styles, controls, ceilings = exploration_arms(ctx)
-    out = learn(db, as_of=slot, arms=styles, controls=controls, ceilings=ceilings, seed=int(slot.value % (2**32)),
-                retrain=slot.dayofweek == 6, models_dir=ctx.state_dir / "models")
-    return {"labelled": labelled, "cost_model": costs.version, **out}
+        n = label_candidates(db, bars, cm, cutoff=slot, account_id=account) if not bars.empty else 0
+        labelled[account] = labelled.get(account, 0) + n
+    seen = read_obs(db)["broker"].dropna()
+    brokers = sorted({str(b) for b in seen} | {acc.broker for acc in ctx.accounts
+                                               if getattr(getattr(acc, "exploration", None), "arms", None)})
+    out: dict[str, Any] = {}
+    for broker in brokers:
+        styles, controls, ceilings = exploration_arms(ctx, broker)
+        try:                           # one broker's failure never skips another's run
+            out[broker] = learn(db, broker=broker, as_of=slot, arms=styles, controls=controls, ceilings=ceilings,
+                                seed=int(slot.value % (2**32)), retrain=slot.dayofweek == 6,
+                                models_dir=ctx.state_dir / "models")
+        except Exception as exc:       # noqa: BLE001 - its weights age into equal shares; the others still learn
+            log.exception("exploration learner failed for broker %s", broker)
+            out[broker] = {"error": type(exc).__name__}
+    return {"labelled": labelled, "cost_model": {b: m.version for b, m in costs.items()}, "stamped": stamped,
+            "unkeyed": unkeyed, "brokers": out}
 
 
 COSTS_PUBLISHED_FILE = "costs_published.json"    # state: when the table last reached release costs-v1 (health reads it)
