@@ -236,6 +236,14 @@ class Account(Record):
         _check_account_name(v)
         return v
 
+    @field_validator("broker")
+    @classmethod
+    def _broker_slug(cls, v: str) -> str:
+        """The broker key names evidence, cost tables and model paths (state/models/h62/<broker>/): a lowercase slug."""
+        if not re.fullmatch(r"[a-z0-9_-]+", v):
+            raise ValueError("broker must be a lowercase slug (a-z, 0-9, _ and -)")
+        return v
+
     @field_validator("server_tz")
     @classmethod
     def _known_server_tz(cls, v: str) -> str:

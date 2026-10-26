@@ -430,7 +430,7 @@ def test_at_champion_zero_the_ranked_branch_is_never_used(tmp_path, monkeypatch)
     eng, pb = _engine(tmp_path, [_arm("a"), _arm("b", style="scalp", side=-1)])
     exploration.on_pass(eng, _at(eng, pb, CLOSE))
     assert [r[2] for r in _obs(tmp_path)] == ["random", "random"]
-    monkeypatch.setattr(exploration_data, "serving_model", lambda db, style, now: {"model_version": "m1"})
+    monkeypatch.setattr(exploration_data, "serving_model", lambda db, style, now, broker: {"model_version": "m1"})
     exploration.on_pass(eng, _at(eng, pb, CLOSE + pd.Timedelta(minutes=15)))
     rows = _obs(tmp_path)
     assert len(rows) == 4 and {r[2] for r in rows} == {"random"} and {r[3] for r in rows} == {exploration.PI_RANDOM}
@@ -531,6 +531,23 @@ def test_strategy_shares_are_scaled_by_what_the_controls_leave_and_recorded_with
     with exploration.ledger_db(str(tmp_path)).connection() as conn:
         got = dict(conn.execute("SELECT arm_id, arm_share FROM exploration_obs").fetchall())
     assert got == pytest.approx(sh)
+
+
+def test_the_engine_records_its_broker_on_every_candidate_and_reads_only_its_brokers_weights(tmp_path):
+    """ADR 0043 amendment (quant 2026-10-26): evidence is keyed by broker; an ICM host never allocates on another
+    broker's bandit run, and every candidate it records carries `icm`."""
+    from goldbot.research.exploration_data import write_weights
+    eng, pb = _engine(tmp_path, [_arm("s1"), _arm("s2", side=-1)])
+    assert eng.exploration is not None
+    styles = {"s1": "intraday", "s2": "intraday"}
+    write_weights(eng.exploration.db, CLOSE.value, {"s1": 0.30, "s2": 0.05}, styles, broker="vantage")
+    assert exploration.shares(eng.exploration, CLOSE) == pytest.approx({"s1": 0.30, "s2": 0.30})   # equal shares
+    write_weights(eng.exploration.db, CLOSE.value, {"s1": 0.25, "s2": 0.10}, styles, broker="icm")
+    eng.exploration.weights_cache = None
+    assert exploration.shares(eng.exploration, CLOSE) == pytest.approx({"s1": 0.25, "s2": 0.10})
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    with exploration.ledger_db(str(tmp_path)).connection() as conn:
+        assert {r[0] for r in conn.execute("SELECT broker FROM exploration_obs")} == {"icm"}
 
 
 def test_the_equal_share_fallback_is_held_inside_five_to_thirty_percent(tmp_path, monkeypatch):
