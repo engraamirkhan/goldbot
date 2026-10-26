@@ -61,7 +61,7 @@ def _full_state(sd: Path) -> Path:
     (sd / f"engine_{ACCOUNT}.json").write_text(json.dumps({
         "account": ACCOUNT, "stage": "size_down", "equity": 9_700, "balance_closed_hwm": 10_000,
         "day_start_equity": 9_800, "week_start_equity": 10_000, "open_positions": 1, "open_lots": 0.1,
-        "currency": "USD"}))           # the digest prints money in the account's own currency (BACKLOG 28)
+        "currency": "USD", "mode": "live"}))   # a real-money account: its own proposals and closes are reported (D1)           # the digest prints money in the account's own currency (BACKLOG 28)
     (sd / "control.json").write_text(json.dumps({"halted": True, "by": f"dashboard:{EMAIL}", "ts": YDAY.timestamp(),
                                                  "reason": "news"}))
     (sd / "drift.json").write_text(json.dumps({"system_halt": {"reasons": ["cusum"]}}))
@@ -93,6 +93,12 @@ def _report(*checks: tuple[str, str]) -> HealthReport:
     return HealthReport(ts=NOW, status=worst, checks=cs)  # type: ignore[arg-type]
 
 
+def _live(sd: Path) -> Path:
+    """A real-money engine file: the report shows an engine's own proposals and closes only for real money (D1)."""
+    (sd / f"engine_{ACCOUNT}.json").write_text(json.dumps({"account": ACCOUNT, "mode": "live", "currency": "USD"}))
+    return sd
+
+
 def _full_digest(tmp_path: Path) -> str:
     _full_state(tmp_path)
     roadmap = tmp_path / "ROADMAP.md"
@@ -113,7 +119,7 @@ def test_digest_renders_every_section_from_fixture_state(tmp_path: Path) -> None
                              "backup_age, daily_cap · Entries")
     assert "• Proposals 4: ✅ 2 approved (1 refused by the risk check) · ❌ 1 rejected · ⌛ 1 expired" in got
     assert "• Closed 2 trades: net +$80.25 · +1.00R (1 won, 1 lost)" in got
-    assert "Month: no lab trade closed yet · open now 1 trade (0.10 lot)" in got
+    assert "Month: 7 trading days so far · open now 1 trade (0.10 lot)" in got
     assert got[-1] == "👉 For you: 1 approval pending · 3 owner decisions open (see OWNER_GUIDE) · 1 deploy on offer"
 
 
@@ -134,7 +140,7 @@ def test_digest_never_prints_identifiers(tmp_path: Path) -> None:
 def test_digest_with_no_state_at_all_still_renders(tmp_path: Path) -> None:
     text = build_digest(tmp_path / "missing", NOW, roadmap=tmp_path / "nope.md")
     assert text.splitlines()[1] == "❔ Health: unknown (the check did not run) · Halts: none · Entries: no engine reporting"
-    assert "Month: no lab trade closed yet · open now 0 trades" in text and text.endswith("👉 For you: nothing")
+    assert "Month: 7 trading days so far · open now 0 trades" in text and text.endswith("👉 For you: nothing")
     assert "Attribution" not in text and "Proposals" not in text and "Trades closed" not in text
     assert len(text.splitlines()) <= 15
 
@@ -266,7 +272,7 @@ def _digest_with(sd: Path, now: pd.Timestamp, *exits: pd.Timestamp, **kw: Any) -
             fh.write(_trade(x, 10.0 * i, round(0.1 * i, 1), i).model_dump_json() + "\n")
     (sd / f"engine_{ACCOUNT}.json").write_text(json.dumps({
         "account": ACCOUNT, "stage": "normal", "equity": 9_900, "balance_closed_hwm": 10_000,
-        "day_start_equity": 10_000, "week_start_equity": 10_000, "currency": "USD"}))
+        "day_start_equity": 10_000, "week_start_equity": 10_000, "currency": "USD", "mode": "live"}))
     kw.setdefault("settings", load_settings())
     lines = build_digest(sd, now, roadmap=sd / "none.md", **kw).splitlines()
 
@@ -390,7 +396,7 @@ def test_the_digest_counts_risk_check_refusals_broker_and_mt5_box_refusals_and_u
     for i, (codes, outcome) in enumerate(cards):
         nc = Confirmation(outcome=outcome) if outcome is not None else None    # type: ignore[arg-type]
         bus.archive(_proposal(f"a{i}", YDAY, Outcome.APPROVED, gate_refusal=codes, not_confirmed=nc))
-    text = build_digest(tmp_path, NOW)
+    text = build_digest(_live(tmp_path), NOW)
     assert ("Proposals 10: ✅ 10 approved (1 refused by the risk check · 4 not placed by the MT5 box, the broker or the engine · "
             "2 not confirmed by the broker) · ❌ 0 rejected · ⌛ 0 expired") in text
 
@@ -400,4 +406,4 @@ def test_the_digest_names_only_the_buckets_that_have_cards(tmp_path: Path) -> No
     bus.archive(_proposal("a1", YDAY, Outcome.APPROVED, gate_refusal=["not_confirmed"]))
     bus.archive(_proposal("a2", YDAY, Outcome.APPROVED, gate_refusal=["not_confirmed"],
                           not_confirmed=Confirmation(outcome="opened_closed")))
-    assert "✅ 2 approved (1 not confirmed by the broker) · ❌" in build_digest(tmp_path, NOW)
+    assert "✅ 2 approved (1 not confirmed by the broker) · ❌" in build_digest(_live(tmp_path), NOW)

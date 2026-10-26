@@ -22,7 +22,9 @@ created or migrated by a report).
 """
 from __future__ import annotations
 
+import logging
 import math
+import re
 import sqlite3
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -37,6 +39,8 @@ from goldbot.db.connection import db_path
 from goldbot.engine.exploration import ExplorationRecord
 from goldbot.ops.monthly_report import SYMBOLS
 
+log = logging.getLogger(__name__)
+
 MINUS = "−"                    # the true minus sign (copy rule: "+1.4R", "−3.9R")
 CONTRACT_OZ = 100.0                 # XAUUSD oz per lot when the engine has not published `lot_terms.contract_oz`
 LABS = ("icm-probe", "icm-demo", "vantage-demo")    # the labs in report order
@@ -48,6 +52,8 @@ READ_AT = 300                       # prereg H-61: "each arm is read once, at it
 # prereg 2026-10-25 H-61 "Per-arm stop (permanent)": running net R in exit order reaching `r` within the first `n`
 # trades: scalp -30 R within 300, intraday -15 R within 100, swing -10 R within 40
 ARM_STOP: dict[str, tuple[float, int]] = {"scalp": (-30.0, 300), "intraday": (-15.0, 100), "swing": (-10.0, 40)}
+# quant 2026-10-26: a lab or style total (£ or R) needs closes from at least this many strategy arms in its window
+MIN_ARMS_FOR_TOTAL = 3
 BAND_SHARE = 0.5                    # "within 50% of its stop": the running R at or past half the stop's R
 _TF_STYLE = {"1m": "scalp", "5m": "scalp", "15m": "intraday", "30m": "intraday", "1h": "intraday", "4h": "swing",
              "1d": "swing"}
@@ -172,6 +178,19 @@ class LabSpan(Record):
     gross_no_pnl: float | None = None   # their gross from prices, when every one of them has prices and a rate
     costs: Costs = Field(default_factory=Costs)
     by_day: dict[str, float] = Field(default_factory=dict)       # opportunity day -> net R of its closes (weekly)
+    arms_contributing: int = 0          # distinct strategy (non-control) arms with a close in the span
+    by_day_arms: dict[str, int] = Field(default_factory=dict)    # opportunity day -> the same count for that day
+
+    @property
+    def totals_shown(self) -> bool:
+        """Quant 2026-10-26: a lab or style total (£, R, the gross of closes without a net figure) is printed only
+        when at least MIN_ARMS_FOR_TOTAL strategy arms contributed a close; below that it is an arm's own figure by
+        subtraction."""
+        return self.arms_contributing >= MIN_ARMS_FOR_TOTAL
+
+    def day_shown(self, day: str) -> bool:
+        """A day of the span may be printed (no close, or enough contributing arms)."""
+        return day not in self.by_day_arms or self.by_day_arms[day] >= MIN_ARMS_FOR_TOTAL
 
 
 def refusal_word(code: str | None) -> str:
@@ -225,10 +244,17 @@ def lab_span(conn: sqlite3.Connection, account: str, lo: pd.Timestamp, hi: pd.Ti
     net = [t for t in closed if t.pnl is not None]
     apart = [t for t in closed if t.pnl is None]
     grosses = [_gross(t, oz_per_lot) for t in apart]
+    controls = {str(x) for (x,) in conn.execute(
+        "SELECT DISTINCT arm_id FROM exploration_obs WHERE account_id = ? AND is_control = 1", (account,))}
     by_day: dict[str, float] = {}
-    for t in net:
-        if trade_r(t) is not None and t.exit_utc is not None:
-            d = report_day(t.exit_utc)
+    day_arms: dict[str, set[str]] = {}
+    for t in closed:
+        if t.exit_utc is None:
+            continue
+        d = report_day(t.exit_utc)
+        if t.arm_id not in controls:
+            day_arms.setdefault(d, set()).add(t.arm_id)
+        if trade_r(t) is not None:
             by_day[d] = by_day.get(d, 0.0) + (trade_r(t) or 0.0)
     return LabSpan(
         signals=len(obs), taken=sum(int(x) for x, _ in obs),
@@ -238,7 +264,9 @@ def lab_span(conn: sqlite3.Connection, account: str, lo: pd.Timestamp, hi: pd.Ti
         no_pnl=len(apart),
         gross_no_pnl=sum(g for g in grosses if g is not None) if apart and all(g is not None for g in grosses)
         else None,
-        costs=_costs(closed, oz_per_lot), by_day=by_day)
+        costs=_costs(closed, oz_per_lot), by_day=by_day,
+        arms_contributing=len({t.arm_id for t in closed if t.arm_id not in controls}),
+        by_day_arms={d: len(v) for d, v in day_arms.items()})
 
 
 def paused_since(conn: sqlite3.Connection, account: str) -> pd.Timestamp | None:
@@ -265,14 +293,17 @@ def labels_written(conn: sqlite3.Connection, accounts: Sequence[str], lo: pd.Tim
 
 # ---------------------------------------------------------------------------------------------- arms (blinded)
 class ArmStatus(Record):
-    """What the owner may see of an arm before its read (spec section 3.4): its admissible n and its band. No R, share,
-    rank or sign is a field here, so none can be printed."""
+    """What the owner may see of an arm before its read (spec section 3.4): its admissible n and its band. No share,
+    rank or running R is a field here, so none can be printed. The one R is `stop_r`, the running R at which its stop
+    fired: quant 2026-10-26 lets the stop notice carry it once, in the report whose window holds `stop_utc`."""
     arm_id: str
     account_id: str
     control: bool
     n: int
     band: Band
     stop_at: int | None = None          # the trade count at which its stop was reached
+    stop_utc: pd.Timestamp | None = None    # that trade's exit
+    stop_r: float | None = None         # the running net R there (at or past the stop)
 
 
 def _arm_order() -> list[str]:
@@ -305,27 +336,29 @@ def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str]) -> list[ArmS
         style, control = meta.get(arm, (_TF_STYLE.get(rows[0].tf, "scalp"), False))
         stop_r, within = ARM_STOP.get(style, ARM_STOP["scalp"])
         band: Band = "running"
-        stop_at = None
+        stop_at, stop_utc, at_r = None, None, None
         run = 0.0
         for i, t in enumerate(rows[:within], 1):
             run += trade_r(t) or 0.0
             if run <= stop_r + 1e-9:
-                band, stop_at = "at_stop", i
+                band, stop_at, stop_utc, at_r = "at_stop", i, t.exit_utc, run
                 break
         if band == "running" and len(rows) <= within and run <= BAND_SHARE * stop_r + 1e-9:
             band = "within_50pct"
         out.append(ArmStatus(arm_id=arm, account_id=rows[0].account_id, control=control, n=len(rows), band=band,
-                             stop_at=stop_at))
+                             stop_at=stop_at, stop_utc=stop_utc, stop_r=at_r))
     return out
 
 
-def arms_lines(arms: Sequence[ArmStatus], width: int) -> list[str]:
-    """The arms block: retirement and read notices first (never cut), then "Arms (trades): S1A 96 · …" within `width`
-    characters ("+N more" for the rest), then the band summary. n and band only (spec section 3.4)."""
+def arms_lines(arms: Sequence[ArmStatus], width: int, lo: pd.Timestamp, hi: pd.Timestamp) -> list[str]:
+    """The arms block: a stop notice (with its R) only in the report whose window [lo, hi) holds the stop, and read-due
+    notices, first (never cut); then "Arms (trades): S1A 96 · …" within `width` characters ("+N more" for the rest);
+    then the band summary as counts only, never arm ids (quant 2026-10-26)."""
     if not arms:
         return ["Arms: none running yet"]
-    notices = [f"{a.arm_id} reached its pre-set stop after {plural(a.stop_at or a.n, 'trade')}: retirement due"
-               for a in arms if a.band == "at_stop"]
+    notices = [f"{a.arm_id} retired at its pre-set stop after {plural(a.stop_at or a.n, 'trade')}"
+               + (f" ({r_text(a.stop_r)})" if a.stop_r is not None else "")
+               for a in arms if a.band == "at_stop" and a.stop_utc is not None and lo <= a.stop_utc < hi]
     notices += [f"{a.arm_id} reached {READ_AT} trades: read due" for a in arms
                 if a.band != "at_stop" and not a.control and a.n >= READ_AT]
     head, shown = "Arms (trades): ", list[str]()
@@ -337,11 +370,39 @@ def arms_lines(arms: Sequence[ArmStatus], width: int) -> list[str]:
         shown.append(f"{a.arm_id} {a.n:,}")
     more = len(arms) - len(shown)
     line = head + " · ".join(shown) + (f" · +{more} more" if more else "")
-    near = [a.arm_id for a in arms if a.band == "within_50pct"]
-    near_txt = f"{len(near)} within 50% of a stop ({', '.join(near)})" if near else "none within 50% of a stop"
-    at_stop = sum(a.band == "at_stop" for a in arms)
-    stopped = f"{at_stop} at a pre-set stop" if at_stop else "none retired"
-    return [" · ".join(notices)] * bool(notices) + [line, f"  {near_txt} · {stopped} · each read once at {READ_AT}"]
+    near = sum(a.band == "within_50pct" for a in arms)
+    retired = sum(a.band == "at_stop" for a in arms)
+    near_txt = f"{near} within 50% of a stop" if near else "none within 50% of a stop"
+    return notices + [line, f"  {near_txt} · {f'{retired} retired' if retired else 'none retired'} · "
+                            f"each read once at {READ_AT}"]
+
+
+# ---------------------------------------------------------------------------------------------- send-time guard
+# spec 3.4 banned tokens in arm context (quant 2026-10-26, extended): enforced on the text that is sent, not only in
+# tests. A line that names an arm and carries one of these, a percentage or an R figure is dropped and logged
+ARM_ID = re.compile(r"\b[A-Z]{1,3}\d{1,2}[A-Z]{0,2}\b")
+BANNED_WORDS = re.compile(
+    r"\b(shares?|sum|mean|sign|signs|budget|rank|ranked|ranking|best|worst|top|bottom|leading|lagging|ahead|behind|"
+    r"baseline|p-value|significant|significance|win rate|t =)\b", re.I)
+_FIGURE = re.compile(r"(\d+(\.\d+)?\s?R\b|\d%)")
+_STOP_NOTICE = re.compile(r"^[A-Z]{1,3}\d{1,2}[A-Z]{0,2} retired at its pre-set stop after [\d,]+ trades?"
+                          r"( \([+\u2212]\d[\d,]*\.\dR\))?$")
+
+
+def guard(text: str) -> str:
+    """The message as sent: every line that names an arm and carries a banned word, a percentage or an R figure (the
+    stop notice's own R excepted) is dropped, and the refusal logged with the arm id only. Never raises."""
+    out = []
+    for line in text.splitlines():
+        ids = ARM_ID.findall(line)
+        if ids and not _STOP_NOTICE.match(line.strip()):
+            hit = BANNED_WORDS.search(line) or _FIGURE.search(line)
+            if hit:
+                log.error("blinding guard: a line naming arm %s with a banned %s was not sent", ids[0],
+                          "word" if BANNED_WORDS.search(line) else "figure")
+                continue
+        out.append(line)
+    return "\n".join(out)
 
 
 # ---------------------------------------------------------------------------------------------- the learner
@@ -371,7 +432,7 @@ def learner_runs(conn: sqlite3.Connection, lo: pd.Timestamp, hi: pd.Timestamp) -
                        latest=pd.Timestamp(runs[-1], unit="ns", tz="UTC") if runs else None)
 
 
-__all__ = ["ARM_STOP", "CONTRACT_OZ", "LABS", "MINUS", "OTHER", "READ_AT", "ROLE", "ArmStatus", "Costs", "LabSpan",
-           "LearnerRuns", "admissible", "arm_statuses", "arms_lines", "aux", "lab_span", "labels_written",
+__all__ = ["ARM_STOP", "BANNED_WORDS", "CONTRACT_OZ", "MIN_ARMS_FOR_TOTAL", "LABS", "MINUS", "OTHER", "READ_AT", "ROLE", "ArmStatus", "Costs", "LabSpan",
+           "LearnerRuns", "admissible", "arm_statuses", "arms_lines", "aux", "guard", "lab_span", "labels_written",
            "learner_runs", "money", "paused_since", "pct", "plural", "r_text", "refusal_word", "role", "signed",
            "trade_r", "trades", "whole_money"]

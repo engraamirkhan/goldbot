@@ -45,7 +45,12 @@ WEEKLY_LINES = 25                   # spec 3: "Budget: <= 25 logical lines"
 ARMS_WIDTH = 110                    # three phone rows, less word-wrap slack
 NIGHTS = 5                          # the learner's nights in a Mon-Fri week (21:30 UTC, before each day's 22:00 roll)
 MAX_RESEARCH = 3                    # spec 3.2: "at most 3 bullets, newest first"
-VERDICT_WORDS = {"continue": "continues", "stop": "stopped", "inconclusive": "inconclusive"}
+# the evaluator's decision in plain words (its free-text reason is never printed)
+VERDICT_WORDS = {"continue": "passed this step, continues", "stop": "closed, did not pass its pre-set rule",
+                 "inconclusive": "no decision yet (inconclusive)"}
+# spec 3.2's unsourced lines (week's health failures, worst drawdown, broker costs, model outcome, next news) are
+# left out, never estimated; this one line says where they are
+MORE_LINE = "More detail on the dashboard"
 
 
 def week_days(slot: pd.Timestamp) -> list[str]:
@@ -60,14 +65,23 @@ def weekly_health(report: Any) -> str:
     return "✅ Health ok now" if h.startswith("✅") else h
 
 
-def learning_line(state_dir: Path, engines: list[dict[str, Any]], lo: pd.Timestamp, hi: pd.Timestamp) -> str:
+def family_name(family: str) -> str:
+    """"box_break_close" -> "Box break close", as the dashboard words a family (web/src/lib/home.ts)."""
+    return family.replace("_", " ").strip().capitalize() or "A trial"
+
+
+def learning_line(state_dir: Path, engines: list[dict[str, Any]], lo: pd.Timestamp, hi: pd.Timestamp, *,
+                  shown: bool = True) -> str:
     """Spec 3.2: "Learning paid +£x demo this week (real money £0) · n usable labels", or, after a loss, "Learning cost
     £x demo (real money £0) · £y per usable label (n)". Exploration runs on demo hosts only (the RiskGate's E2), so
-    real money is £0 by construction. Per currency, never summed across."""
+    real money is £0 by construction. Per currency, never summed across. Not `shown` (a lab's week total or one of
+    its days was withheld, quant 2026-10-26): "—", since the sum would give the withheld figure by subtraction."""
     sums = lab_money(state_dir, engines, lo, hi)
     with labs.aux(state_dir) as conn:
         n = labs.labels_written(conn, [str(e.get("account")) for e in lab_engines(engines)], lo, hi) \
             if conn is not None else 0
+    if sums and not shown:
+        return f"Learning: — demo this week (real money £0) · {labs.plural(n, 'usable label')}"
     if not sums:
         return f"Learning: no lab trade closed this week · {labs.plural(n, 'usable label')}"
     if len(sums) > 1:
@@ -121,7 +135,8 @@ def research_lines(registry_path: Path | None, settings: Settings | None, lo: pd
         trial = (r.get("verdict_of") or {}).get("trial")
         budget = settings.research.budget_for(quarter_of(ts.to_pydatetime())) if settings is not None else None
         of = f"trial {trial} of {budget}" if trial is not None and budget is not None else f"trial {trial}"
-        out.append(f"  • {r.get('family', 'a trial')} ({of}): {VERDICT_WORDS.get(str(r.get('decision')), 'recorded')}")
+        out.append(f"  • {family_name(str(r.get('family') or ''))} ({of}): "
+                   f"{VERDICT_WORDS.get(str(r.get('decision')), 'verdict recorded')}")
     if len(got) > MAX_RESEARCH:
         out[-1] += f" · +{len(got) - MAX_RESEARCH} more on the dashboard"
     return out
@@ -156,15 +171,18 @@ def build_weekly(state_dir: str | Path, now: pd.Timestamp, *, as_of: pd.Timestam
     if torn:
         out.append(Line(torn))
     try:
-        lab_lines, _, aux_ok = labs_section(sd, engines, lo, hi, settings, weekday=True, by_day=days)
+        lab_lines, spans, aux_ok = labs_section(sd, engines, lo, hi, settings, weekday=True, by_day=days)
     except Exception as exc:                # noqa: BLE001
-        lab_lines, aux_ok = [Line(f"Labs: could not read ({type(exc).__name__})")], False
+        lab_lines, spans, aux_ok = [Line(f"Labs: could not read ({type(exc).__name__})")], [], False
+    shown = all((s.totals_shown and all(s.day_shown(d) for d in days)) or not s.closed for s in spans) \
+        and len(spans) == len(lab_engines(engines))
     out += lab_lines
     if aux_ok and lab_engines(engines):
-        out.append(Line(_text(lambda: learning_line(sd, engines, lo, hi), "Learning"), 2))
-        out += arms_section(sd, engines, ARMS_WIDTH)
+        out.append(Line(_text(lambda: learning_line(sd, engines, lo, hi, shown=shown), "Learning"), 2))
+        out += arms_section(sd, engines, ARMS_WIDTH, lo, hi)
         out.append(Line(_text(lambda: learner_week(sd, lo, hi), "Learner"), 2))
     out += [Line(x, 2) for x in _section(lambda: research_lines(registry_path, settings, lo, hi), "Research")]
     out += [Line(x, 2) for x in _section(not_running_line, "Accounts")]
+    out.append(Line(MORE_LINE, 2))
     out.append(Line(_section(lambda: decisions_line(sd, roadmap), "For you")[0]))
-    return "\n".join(fit(out, WEEKLY_LINES))
+    return labs.guard("\n".join(fit(out, WEEKLY_LINES)))

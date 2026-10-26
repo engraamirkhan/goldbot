@@ -135,7 +135,7 @@ def test_run_py_dispatches_monthly_report(tmp_path):
 
 def test_the_daily_digest_carries_the_month_so_far_line_under_its_line_budget(tmp_path):
     from goldbot.telegram.digest import build_digest
-    _seed(tmp_path)
+    _seed(tmp_path, engine={"mode": "live"})       # the engines' own month line is reported for real money only (D1)
     text = build_digest(tmp_path, pd.Timestamp("2026-10-10 06:45", tz="UTC"), roadmap=tmp_path / "none.md")
     assert "\nOctober so far: +2.97% time-weighted · 4 trades · +3.00R" in text      # the engines' own month line
     assert len(text.splitlines()) <= 15

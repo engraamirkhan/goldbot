@@ -491,12 +491,17 @@ def oz_per_lot(e: dict[str, Any]) -> float:
     return v if v > 0 else labs.CONTRACT_OZ
 
 
-def result_text(name: str, s: labs.LabSpan, ccy: str | None) -> str:
-    """"Scalp lab: 214 signals · 63 taken · 61 filled · 58 closed −£17.60 · −3.9R" and its states (spec 2.4)."""
+def result_text(name: str, s: labs.LabSpan, ccy: str | None, *, withheld: str | None = None) -> str:
+    """"Scalp lab: 214 signals · 63 taken · 61 filled · 58 closed −£17.60 · −3.9R" and its states (spec 2.4). The £,
+    R and gross figures print only when `s.totals_shown` (quant 2026-10-26, MIN_ARMS_FOR_TOTAL strategy arms closed
+    in the window) and no `withheld` reason applies (the weekly: a day of the week was withheld); else "—"."""
     head = f"{name}: {labs.plural(s.signals, 'signal')} · {s.taken:,} taken"
     if not (s.taken or s.filled or s.closed):
         return head
     head += f" · {s.filled:,} filled · {s.closed:,} closed"
+    if s.closed and (withheld or not s.totals_shown):
+        head += f" — ({withheld or f'under {labs.MIN_ARMS_FOR_TOTAL} arms'})"
+        return head + (f" · {s.no_pnl:,} closed without costs recorded" if s.no_pnl else "")
     if s.net_closed:
         head += f" {labs.money(s.pnl, ccy)} · {labs.r_text(s.r)}"
     elif s.still_open and not s.closed:
@@ -505,6 +510,29 @@ def result_text(name: str, s: labs.LabSpan, ccy: str | None) -> str:
         gross = f" (gross {labs.money(s.gross_no_pnl, ccy)})" if s.gross_no_pnl is not None else ""
         head += f" · {s.no_pnl:,} closed without costs recorded{gross}"
     return head
+
+
+def open_hours(e: dict[str, Any], lo: pd.Timestamp, hi: pd.Timestamp) -> int:
+    """Hours the market was open in [lo, hi) by the engine's session table (its published cache, else the static
+    table), rounded: the "no signals in N h of open market" figure; 0 is a closed day (a holiday or the weekend)."""
+    from goldbot.data.calendar import DEFAULT_SESSIONS, session_table_from_cache
+    table = session_table_from_cache(e.get("sessions")) or DEFAULT_SESSIONS
+    minutes = pd.date_range(lo, hi, freq="1min", inclusive="left")
+    return int(round(float(table.is_open(minutes).sum()) / 60))
+
+
+def halted_since(state_dir: Path, account: str) -> pd.Timestamp | None:
+    """When the RiskGate halted the account (risk_<account>.json `halted_at`); None when not recorded."""
+    from goldbot.engine.store import risk_file
+    try:
+        at = _json(risk_file(state_dir, account)).get("halted_at")
+        return _utc(pd.Timestamp(str(at))) if at else None
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def since_text(ts: pd.Timestamp | None) -> str:
+    return f" since {day_name(ts)} {ts:%H:%M} UTC" if ts is not None else ""
 
 
 def costs_text(c: labs.Costs, ccy: str | None, *, breakdown: bool) -> str:
@@ -529,8 +557,9 @@ class LabBlock(NamedTuple):
     span: labs.LabSpan | None           # None: paused, halted or unreadable (not an empty day)
 
 
-def lab_block(conn: sqlite3.Connection | None, e: dict[str, Any], lo: pd.Timestamp, hi: pd.Timestamp,
-              settings: Settings | None, *, full: bool, weekday: bool, by_day: list[str] | None = None) -> LabBlock:
+def lab_block(state_dir: Path, conn: sqlite3.Connection | None, e: dict[str, Any], lo: pd.Timestamp,
+              hi: pd.Timestamp, settings: Settings | None, *, full: bool, weekday: bool,
+              by_day: list[str] | None = None) -> LabBlock:
     """One lab's lines: halted (the rail), paused (the engine's pause), else its result and details. `full`: the
     costs breakdown, refusals and drawdown each on their own line (the first lab); else one merged detail line.
     `by_day` (the weekly): the opportunity days whose net R is listed under the result; no refusals."""
@@ -539,24 +568,32 @@ def lab_block(conn: sqlite3.Connection | None, e: dict[str, Any], lo: pd.Timesta
     d = drawdown(e)
     warn, pause = lines_at()
     if str(e.get("stage")) == "halted":
-        return LabBlock([Line(f"🛑 {name} halted: {down_text(d, ccy)} · re-arm on the dashboard (Risk)", 1, acct)],
+        return LabBlock([Line(f"🛑 {name} halted{since_text(halted_since(state_dir, acct))}: {down_text(d, ccy)} · "
+                              "re-arm on the dashboard (Risk)", 1, acct)],
                         None)
     if d.dd is None or d.dd >= pause - 1e-12:   # the engine's own rule (exploration.paused): unknown pauses too
-        since = labs.paused_since(conn, acct) if conn is not None else None
-        when = f" since {day_name(since)} {since:%H:%M} UTC" if since is not None else ""
+        # the engine records no pause time: its first paused candidate is the record (exploration_obs `paused_dd`)
+        when = since_text(labs.paused_since(conn, acct) if conn is not None else None)
         what = f"{down_text(d, ccy)} from peak" if d.dd is not None else "drawdown unknown"
         return LabBlock([Line(f"⏸ {name} paused{when}: {what}", 1, acct),
                          Line(f"  arms stopped · cost probe and exits still running · resumes: {RESUME_RULE}", 1, acct,
                               True)], None)
     s = labs.lab_span(conn, acct, lo, hi, oz_per_lot=oz_per_lot(e)) if conn is not None else labs.LabSpan()
-    if s.signals == 0 and s.closed == 0 and weekday:
-        out = [Line(f"{name}: no signals while the market was open ⚠️ Warning: check the feed", 1, acct)]
+    hours = open_hours(e, lo, hi) if s.signals == 0 and s.closed == 0 and weekday else None
+    withheld = "a day under 3 arms" if by_day and not all(s.day_shown(x) for x in by_day) else None
+    if hours == 0:
+        out = [Line(f"{name}: market closed · nothing to report", 1, acct)]
+    elif hours is not None:
+        out = [Line(f"{name}: no signals in {hours} h of open market ⚠️ Warning: check the feed", 1, acct)]
     else:
-        out = [Line(result_text(name, s, ccy), 1, acct)]
+        out = [Line(result_text(name, s, ccy, withheld=withheld), 1, acct)]
+
+    def day_r(x: str) -> str:
+        if x not in s.by_day_arms:
+            return "none"
+        return labs.r_text(s.by_day.get(x, 0.0)) if s.day_shown(x) else "—"
     if by_day:
-        out.append(Line("  by day: " + " · ".join(
-            f"{pd.Timestamp(x):%a} {labs.r_text(s.by_day[x])}" if x in s.by_day else f"{pd.Timestamp(x):%a} none"
-            for x in by_day), 2, acct, True))
+        out.append(Line("  by day: " + " · ".join(f"{pd.Timestamp(x):%a} {day_r(x)}" for x in by_day), 2, acct, True))
     warned = d.dd >= warn - 1e-12
     if warned:
         out.append(Line(f"  ⚠️ Warning: {down_text(d, ccy)} from peak · pauses at {at_text(pause, d, ccy)}", 1, acct,
@@ -598,7 +635,7 @@ def labs_section(state_dir: Path, engines: list[dict[str, Any]], lo: pd.Timestam
         spans: list[labs.LabSpan] = []
         for i, e in enumerate(hosts):
             try:
-                b = lab_block(conn, e, lo, hi, settings, full=i == 0 and by_day is None, weekday=weekday,
+                b = lab_block(state_dir, conn, e, lo, hi, settings, full=i == 0 and by_day is None, weekday=weekday,
                               by_day=by_day)
             except Exception as exc:        # noqa: BLE001 - one lab's ledger never stops the report
                 name = labs.role(str(e.get("account")))
@@ -609,7 +646,8 @@ def labs_section(state_dir: Path, engines: list[dict[str, Any]], lo: pd.Timestam
         return out, spans, True
 
 
-def arms_section(state_dir: Path, engines: list[dict[str, Any]], width: int) -> list[Line]:
+def arms_section(state_dir: Path, engines: list[dict[str, Any]], width: int, lo: pd.Timestamp, hi: pd.Timestamp
+                 ) -> list[Line]:
     """The arms block (labs.arms_lines): notices are priority 1, the counts and band summary priority 2."""
     accounts = [str(e.get("account")) for e in lab_engines(engines)]
     if not accounts:
@@ -619,7 +657,7 @@ def arms_section(state_dir: Path, engines: list[dict[str, Any]], width: int) -> 
             arms = labs.arm_statuses(conn, accounts) if conn is not None else []
     except Exception as exc:                # noqa: BLE001
         return [Line(f"Arms: could not read ({type(exc).__name__})", 2)]
-    rows = labs.arms_lines(arms, width)
+    rows = labs.arms_lines(arms, width, lo, hi)
     return [Line(x, 1 if "pre-set stop after" in x or "read due" in x else 2) for x in rows]
 
 
@@ -652,30 +690,22 @@ def lab_money(state_dir: Path, engines: list[dict[str, Any]], lo: pd.Timestamp, 
     return out
 
 
-def money_terms(sums: dict[str, tuple[float, float, int]]) -> str:
-    return " | ".join(f"{labs.money(p, c or None)} · {labs.r_text(r)}" for c, (p, r, _) in sorted(sums.items()))
-
-
 def open_part(engines: list[dict[str, Any]]) -> str:
     n = sum(int(e.get("open_positions") or 0) for e in engines)
     lots = sum(float(e.get("open_lots") or 0.0) for e in engines)
     return f"open now {labs.plural(n, 'trade')}" + (f" ({lots:.2f} lot)" if n else "")
 
 
-def month_lines(state_dir: Path, engines: list[dict[str, Any]], day: str, hi: pd.Timestamp, as_of: pd.Timestamp,
-                aux_ok: bool) -> list[str]:
-    """"Month: +£112.40 · +9.8R over 18 trading days · open now 4 trades (0.04 lot)": the labs' net per currency; the
-    engines' own month (monthly_report.month_to_date_line) on its own line, never summed with it."""
+def month_lines(state_dir: Path, engines: list[dict[str, Any]], day: str, as_of: pd.Timestamp, *, live: bool
+                ) -> list[str]:
+    """"Month: 18 trading days so far · open now 4 trades (0.04 lot)". No running lab total (quant 2026-10-26: the
+    difference of two days' month figures is a day's total, withheld or not). A real-money account's own month
+    (monthly_report.month_to_date_line) follows on its own line, never summed with anything."""
     from goldbot.ops.monthly_report import month_to_date_line
     first, _ = month_days(day[:7])
-    if not aux_ok:
-        labs_txt = "lab figures not read"
-    else:
-        sums = lab_money(state_dir, engines, day_bounds(first)[0], hi)
-        labs_txt = (f"{money_terms(sums)} over {labs.plural(weekdays(first, day), 'trading day')}" if sums
-                    else "no lab trade closed yet")
-    out = [f"Month: {labs_txt} · {open_part(engines)}"]
-    out += [x.removeprefix("• ") for x in month_to_date_line(state_dir, as_of, day=day)]
+    out = [f"Month: {labs.plural(weekdays(first, day), 'trading day')} so far · {open_part(engines)}"]
+    if live:
+        out += [x.removeprefix("• ") for x in month_to_date_line(state_dir, as_of, day=day)]
     return out
 
 
@@ -707,8 +737,12 @@ def build_digest(state_dir: str | Path, now: pd.Timestamp, *, as_of: pd.Timestam
            Line(_text(lambda: overview_line(sd, now, report, settings, engines), "Health"))]
     if torn:
         out.append(Line(torn))
+    # D1: an engine's own proposals and closes come back only for a real-money account (the decision the owner makes);
+    # on the demo hosts the labs are the report. Which mode, from the engine files
+    live = torn is not None or any(str(e.get("mode")) == "live" for e in engines)   # unreadable: shown, not hidden
     other = [x for x in _section(lambda: proposals_line(sd, lo, hi, now), "Proposals")
-             + _section(lambda: trades_line(sd, lo, hi), "Trades closed") if not x.startswith((NO_PROPOSALS, NO_TRADES))]
+             + _section(lambda: trades_line(sd, lo, hi), "Trades closed")
+             if not x.startswith((NO_PROPOSALS, NO_TRADES))] if live else []
     out += [Line(x) for x in other]
     try:
         lab_lines, spans, aux_ok = labs_section(sd, engines, lo, hi, settings, weekday=weekday)
@@ -719,12 +753,12 @@ def build_digest(state_dir: str | Path, now: pd.Timestamp, *, as_of: pd.Timestam
         lab_lines = [Line(WEEKEND_LINE)]
     out += lab_lines
     if aux_ok:
-        out += arms_section(sd, engines, ARMS_WIDTH)
+        out += arms_section(sd, engines, ARMS_WIDTH, lo, hi)
         if lab_engines(engines):
             out.append(Line(_text(lambda: learner_line(sd, lo, hi, now), "Learner"), 2))
-    out += [Line(x, 2) for x in _section(lambda: month_lines(sd, engines, day, hi, as_of, aux_ok), "Month")]
+    out += [Line(x, 2) for x in _section(lambda: month_lines(sd, engines, day, as_of, live=live), "Month")]
     out.append(Line(_section(lambda: decisions_line(sd, roadmap), "For you")[0]))
-    return "\n".join(fit(out, DAILY_LINES))
+    return labs.guard("\n".join(fit(out, DAILY_LINES)))
 
 
 def report_text(state_dir: str | Path, now: pd.Timestamp, slot: pd.Timestamp, *, report: Any = None,

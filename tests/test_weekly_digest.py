@@ -29,8 +29,9 @@ Arms (trades): S0 140 · S1A 96 · S1B 88 · S2A 118 · S3B 126 · S5A 140 · I2
   none within 50% of a stop · none retired · each read once at 300
 Learner this week: ran 5 of 5 nights · shares updated
 Research this week:
-  • box_break_close (trial 7 of 20): stopped
+  • Box break close (trial 7 of 20): closed, did not pass its pre-set rule
 Not running: Vantage lab
+More detail on the dashboard
 👉 For you: nothing"""
 
 
@@ -55,15 +56,17 @@ def _week_lab(lab: Lab, acct: str, arms: list[tuple[str, int]], day_r: list[floa
 
 def mock_week(sd: Path) -> Lab:
     lab = Lab(sd, SUN).engine("icm-probe", 10_720, 10_950).engine("icm-demo", 10_912, 11_000)
-    _week_lab(lab, "icm-probe", [("S0", 140), ("S1A", 96), ("S1B", 69)], [-3.9, 2.2, -6.1, 1.0, -2.8], -41.20, 58.10,
+    _week_lab(lab, "icm-probe", [("S0", 137), ("S1A", 96), ("S1B", 67), ("S2A", 5)], [-3.9, 2.2, -6.1, 1.0, -2.8],
+              -41.20, 58.10,
               12.9, filled=312, taken=318, signals=1_040, style="scalp")
-    _week_lab(lab, "icm-demo", [("MB30", 38)], [1.4, -0.6, 2.9, -1.1, 1.5], 64.30, 9.80, 0.6, filled=41, taken=43,
-              signals=188, style="intraday")
+    _week_lab(lab, "icm-demo", [("MB30", 28), ("X03", 5), ("X04", 5)], [1.4, -0.6, 2.9, -1.1, 1.5], 64.30, 9.80, 0.6,
+              filled=41, taken=43, signals=188, style="intraday")
     lab.obs("icm-probe", "S0", SEPT, 1, control=True)
     lab.obs("icm-probe", "S2A", SEPT, 174, labelled_ns=(MON + pd.Timedelta(days=2)).value)   # labelled this week
-    for arm, n in (("S1B", 19), ("S2A", 118), ("S3B", 126), ("S5A", 140)):
+    lab.trades("icm-probe", "S0", SEPT, 3)
+    for arm, n in (("S1B", 21), ("S2A", 113), ("S3B", 126), ("S5A", 140)):
         lab.trades("icm-probe", arm, SEPT, n)
-    for arm, n in (("MB30", 3), ("I2B", 22), ("W1A", 12), ("W1B", 5), ("W2", 5)):
+    for arm, n in (("MB30", 13), ("I2B", 22), ("W1A", 12), ("W1B", 5), ("W2", 5)):
         lab.trades("icm-demo", arm, SEPT, n, stop_loss=15.0)
     for i in range(1, 11):
         lab.trades("icm-probe", f"X{i:02d}", SEPT, 10)
@@ -111,9 +114,22 @@ def test_the_weekly_arms_block_is_blinded(tmp_path: Path) -> None:
 
 def test_a_learning_loss_is_worded_as_a_cost_per_usable_label(tmp_path: Path) -> None:
     lab = Lab(tmp_path, SUN).engine("icm-probe", 10_000, 10_000)
-    lab.trade("icm-probe", "S1A", MON, pnl=-12.0)
+    for arm in ("S1A", "S1B", "S2A"):
+        lab.trade("icm-probe", arm, MON, pnl=-4.0)
     lab.obs("icm-probe", "S1A", MON, 8, taken=True, labelled_ns=MON.value)
     assert "Learning cost £12.00 demo (real money £0) · £1.50 per usable label (8)" in weekly(tmp_path)
+
+
+def test_a_week_total_is_withheld_when_any_of_its_days_was(tmp_path: Path) -> None:
+    """Quant 2026-10-26: a week total minus the dailies shown would give a withheld day's figure by subtraction."""
+    lab = Lab(tmp_path, SUN).engine("icm-probe", 10_000, 10_000)
+    for arm in ("S1A", "S1B", "S2A"):
+        lab.trade("icm-probe", arm, MON, pnl=-4.0)
+    lab.trade("icm-probe", "S1A", DAYS[2], pnl=7.0)                     # Wednesday: one arm only
+    text = weekly(tmp_path)
+    assert "by day: Mon −2.7R · Tue none · Wed — · Thu none · Fri none" in text
+    assert "4 closed — (a day under 3 arms)" in text and "Learning: — demo this week (real money £0)" in text
+    assert "5.00" not in text and "−£12" not in text
 
 
 def test_no_research_result_and_an_unreadable_registry_are_one_line_each(tmp_path: Path) -> None:
@@ -144,7 +160,7 @@ def test_the_worst_week_fits_twenty_five_lines(tmp_path: Path, monkeypatch: pyte
     got = lines(text)
     assert len(got) <= 25, text
     assert got[1].startswith("🛑 Halts: owner halt") and "Attention: fail bridge_heartbeat" in got[1]
-    assert any("S3B reached its pre-set stop" in x for x in got) and got[-1].startswith("👉 For you:")
+    assert any("1 retired" in x for x in got) and got[-1].startswith("👉 For you:")
 
 
 def test_every_weekly_number_carries_a_unit_and_no_identifier_appears(tmp_path: Path) -> None:

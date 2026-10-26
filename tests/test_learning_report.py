@@ -40,7 +40,7 @@ Day/swing lab: 37 signals · 9 taken · 9 filled · 7 closed +£21.60 · +1.4R
 Arms (trades): S1A 96 · S1B 88 · S2A 118 · S3B 126 · MB30 41 · +14 more
   none within 50% of a stop · none retired · each read once at 300
 Learner 21:30 UTC: ran · shares updated
-Month: +£112.40 · +9.8R over 18 trading days · open now 4 trades (0.04 lot)
+Month: 18 trading days so far · open now 4 trades (0.04 lot)
 👉 For you: nothing"""
 
 
@@ -121,7 +121,7 @@ def mock_state(sd: Path) -> Lab:
     lab.trade("icm-probe", "S1A", DAY, fill_price=2001.75)                             # £1.40 adverse slippage
     lab.trade("icm-probe", "S1A", DAY, commission=-2.70)
     lab.trade("icm-probe", "S1A", DAY, pnl=-17.60)
-    lab.trades("icm-probe", "S1A", DAY, 54)
+    lab.trades("icm-probe", "S1A", DAY, 52).trade("icm-probe", "S1B", DAY).trade("icm-probe", "S2A", DAY)
     lab.trades("icm-probe", "S1A", DAY, 3, closed=False).trades("icm-probe", "S1A", DAY, 2, filled=False)
     # Day/swing lab: 37 signals, 9 taken, 22 refused, 6 policy skips; 9 filled, 7 closed, 2 still open
     lab.obs("icm-demo", "MB30", DAY, 9, taken=True, style="intraday").obs("icm-demo", "MB30", DAY, 14, why="pot_slots",
@@ -129,11 +129,12 @@ def mock_state(sd: Path) -> Lab:
     lab.obs("icm-demo", "MB30", DAY, 8, why="news_blackout", style="intraday").obs("icm-demo", "MB30", DAY, 6,
                                                                                    style="intraday")
     lab.trade("icm-demo", "MB30", DAY, pnl=21.60, stop_loss=15.0, commission=-2.10)
-    lab.trades("icm-demo", "MB30", DAY, 6, stop_loss=15.0).trades("icm-demo", "MB30", DAY, 2, closed=False)
-    # history: September (outside the month) at 0R, and one October close of +£108.40 for the month line
-    lab.trades("icm-probe", "S1A", SEPT, 38).trades("icm-probe", "S1B", SEPT, 88)
-    lab.trades("icm-probe", "S2A", SEPT, 117).trades("icm-probe", "S3B", SEPT, 126)
-    lab.trades("icm-demo", "MB30", SEPT, 34, stop_loss=15.0)
+    lab.trades("icm-demo", "MB30", DAY, 4, stop_loss=15.0).trades("icm-demo", "MB30", DAY, 2, closed=False)
+    lab.trade("icm-demo", "X01", DAY, stop_loss=15.0).trade("icm-demo", "X02", DAY, stop_loss=15.0)
+    # history: September (outside the month) at 0R, and one October close of +£108.40
+    lab.trades("icm-probe", "S1A", SEPT, 40).trades("icm-probe", "S1B", SEPT, 87)
+    lab.trades("icm-probe", "S2A", SEPT, 116).trades("icm-probe", "S3B", SEPT, 126)
+    lab.trades("icm-demo", "MB30", SEPT, 36, stop_loss=15.0)
     for i in range(1, 15):
         lab.trades("icm-probe", f"X{i:02d}", SEPT, 10)
     lab.trade("icm-probe", "S2A", pd.Timestamp("2026-10-05 10:00", tz="UTC"), pnl=108.40, stop_loss=8.8)
@@ -185,19 +186,31 @@ def test_no_per_arm_r_share_rank_or_banned_word_appears_before_an_arms_read(tmp_
     arm_lines = [x for x in text.splitlines() if "Arms" in x or "within 50%" in x or "Learner" in x]
     assert arm_lines and not any(BANNED.search(x) or "share " in x for x in arm_lines)
     assert "Arms (trades): S1B 7 · S2A 4" in text and "Learner 08:00 UTC" not in text
-    # the lab total (both arms, £ and R) is allowed: it is not a per-arm figure
-    assert "11 closed +£14.98 · +3.3R" in text
+    # two arms closed: the lab total would be a per-arm figure by subtraction, so it is withheld (quant 2026-10-26)
+    assert "11 closed — (under 3 arms)" in text and "£14.98" not in text and "3.3R" not in text
 
 
-def test_an_arm_at_its_stop_prints_its_count_only_and_an_arm_near_it_prints_the_band_only(tmp_path: Path) -> None:
+def test_the_band_line_counts_arms_and_never_names_them(tmp_path: Path) -> None:
     lab = Lab(tmp_path).engine("icm-probe", 10_000, 10_000)
-    lab.trades("icm-probe", "S3B", SEPT, 31, pnl=-4.5, stop_loss=4.5)       # −30R at its 30th trade: H-61 scalp stop
+    lab.trades("icm-probe", "S3B", SEPT, 31, pnl=-4.5, stop_loss=4.5)       # −30R at its 30th trade, in September
     lab.trades("icm-probe", "S2A", SEPT, 16, pnl=-4.5, stop_loss=4.5)       # −16R: past half of −30R
+    lab.trades("icm-probe", "S1B", SEPT, 17, pnl=-4.5, stop_loss=4.5)
     lab.trades("icm-probe", "S1A", SEPT, 3, pnl=-4.5, stop_loss=4.5)
+    band = next(x for x in daily(tmp_path).splitlines() if "within 50%" in x)
+    assert band == "  2 within 50% of a stop · 1 retired · each read once at 300"
     text = daily(tmp_path)
-    assert "S3B reached its pre-set stop after 30 trades: retirement due" in text
-    assert "1 within 50% of a stop (S2A)" in text
-    assert "30R" not in text and "16R" not in text and "−3R" not in text
+    assert "S3B retired" not in text                     # its notice went out on the day it fired, not again
+    assert "30R" not in text and "16R" not in text and "17R" not in text
+
+
+def test_a_stop_prints_its_notice_with_its_r_once_on_the_day_it_fires(tmp_path: Path) -> None:
+    lab = Lab(tmp_path).engine("icm-probe", 10_000, 10_000)
+    lab.trades("icm-probe", "S3B", SEPT, 29, pnl=-4.5, stop_loss=4.5)
+    lab.trade("icm-probe", "S3B", DAY, pnl=-4.5, stop_loss=4.5)              # the 30th: −30R, today
+    got = lines(daily(tmp_path))
+    assert "S3B retired at its pre-set stop after 30 trades (−30.0R)" in got
+    later = daily(tmp_path, NOW + pd.Timedelta(days=1))
+    assert "S3B retired at its pre-set stop" not in later and "1 retired" in later
 
 
 def test_an_arm_at_300_says_read_due_and_a_control_never_does(tmp_path: Path) -> None:
@@ -242,6 +255,7 @@ def test_a_lab_paused_at_its_pause_line_replaces_its_result_with_the_pause_copy(
 def test_a_lab_at_the_warn_line_moves_its_drawdown_up_as_a_warning(tmp_path: Path) -> None:
     lab = Lab(tmp_path).engine("icm-probe", 10_249, 10_950)                   # down 6.4%, £701
     lab.obs("icm-probe", "S1A", DAY, 2, taken=True).trades("icm-probe", "S1A", DAY, 2)
+    lab.trade("icm-probe", "S1B", DAY).trade("icm-probe", "S2A", DAY)
     got = lines(daily(tmp_path))
     i = next(i for i, x in enumerate(got) if x.startswith("Scalp lab: "))
     assert got[i + 1] == "  ⚠️ Warning: down 6.4% (£701) from peak · pauses at 8% (£876)"
@@ -249,9 +263,10 @@ def test_a_lab_at_the_warn_line_moves_its_drawdown_up_as_a_warning(tmp_path: Pat
 
 def test_a_lab_at_the_halt_rail_is_red_on_line_two_and_on_its_own_line(tmp_path: Path) -> None:
     Lab(tmp_path).engine("icm-probe", 9_625, 10_950, stage="halted")         # down 12.1%, £1,325
+    (tmp_path / "risk_icm-probe.json").write_text(json.dumps({"halted_at": "2026-10-26T16:05:00+00:00"}))
     got = lines(daily(tmp_path))
     assert got[1].startswith("🛑 Halted: Scalp lab at 12% drawdown, no new trades · exits still run")
-    assert "🛑 Scalp lab halted: down 12.1% (£1,325) · re-arm on the dashboard (Risk)" in got
+    assert "🛑 Scalp lab halted since Mon 26 Oct 16:05 UTC: down 12.1% (£1,325) · re-arm on the dashboard (Risk)" in got
 
 
 def test_an_owner_halt_is_on_line_two_without_who_set_it(tmp_path: Path) -> None:
@@ -264,7 +279,15 @@ def test_an_owner_halt_is_on_line_two_without_who_set_it(tmp_path: Path) -> None
 
 def test_no_signals_on_an_open_weekday_is_a_warning(tmp_path: Path) -> None:
     Lab(tmp_path).engine("icm-probe", 10_000, 10_000)
-    assert "Scalp lab: no signals while the market was open ⚠️ Warning: check the feed" in daily(tmp_path)
+    assert "Scalp lab: no signals in 23 h of open market ⚠️ Warning: check the feed" in daily(tmp_path)
+
+
+def test_a_day_the_market_never_opened_says_closed_not_no_signals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from goldbot.telegram import digest
+    Lab(tmp_path).engine("icm-probe", 10_000, 10_000)
+    monkeypatch.setattr(digest, "open_hours", lambda e, lo, hi: 0)
+    text = daily(tmp_path)
+    assert "Scalp lab: market closed · nothing to report" in text and "Warning" not in text
 
 
 def test_signals_with_nothing_taken_show_the_count_and_the_refusals(tmp_path: Path) -> None:
@@ -282,10 +305,25 @@ def test_taken_but_nothing_closed_prints_no_money_figure(tmp_path: Path) -> None
 
 def test_a_close_without_a_net_figure_is_shown_apart_as_gross(tmp_path: Path) -> None:
     lab = Lab(tmp_path).engine("icm-probe", 10_000, 10_000)
-    lab.obs("icm-probe", "S1A", DAY, 2, taken=True)
-    lab.trade("icm-probe", "S1A", DAY, pnl=3.0).trade("icm-probe", "S1A", DAY, pnl=None, exit_price=2001.375)
+    lab.obs("icm-probe", "S1A", DAY, 3, taken=True)
+    lab.trade("icm-probe", "S1A", DAY, pnl=3.0).trade("icm-probe", "S1B", DAY, pnl=None, exit_price=2001.375)
+    lab.trade("icm-probe", "S2A", DAY)
     text = daily(tmp_path)
-    assert "2 closed +£3.00 · +0.7R · 1 closed without costs recorded (gross +£1.10)" in text
+    assert "3 closed +£3.00 · +0.7R · 1 closed without costs recorded (gross +£1.10)" in text
+
+
+@pytest.mark.parametrize("arms", [["S1A"], ["S1A", "S1B"], ["S1A", "S1B", "S0"]])
+def test_a_lab_total_is_withheld_until_three_strategy_arms_closed_a_trade(tmp_path: Path, arms: list[str]) -> None:
+    """Quant 2026-10-26 (MIN_ARMS_FOR_TOTAL): with one or two contributing arms the lab's £ and R are those arms'
+    own by subtraction; a control does not count."""
+    lab = Lab(tmp_path).engine("icm-probe", 10_000, 10_000)
+    lab.obs("icm-probe", "S0", SEPT, 1, control=True).obs("icm-probe", "S1A", DAY, len(arms), taken=True)
+    for arm in arms:
+        lab.trade("icm-probe", arm, DAY, pnl=-1.3, exit_price=2001.375).trade("icm-probe", arm, DAY, pnl=None)
+    text = daily(tmp_path)
+    assert f"{2 * len(arms)} closed — (under 3 arms)" in text
+    result = next(x for x in text.splitlines() if x.startswith("Scalp lab: "))
+    assert "1.3" not in text and "gross" not in text and "£" not in result and "R" not in result
 
 
 def test_the_weekend_day_is_one_market_closed_line(tmp_path: Path) -> None:
@@ -343,9 +381,9 @@ def test_the_worst_case_fits_fifteen_lines_and_keeps_every_line_that_matters(tmp
     assert any(x.startswith("⏸ Scalp lab paused") for x in got)
     assert any(x.startswith("🛑 Day/swing lab halted") for x in got)
     assert "  ⚠️ Warning: down 6.4% (£701) from peak · pauses at 8% (£876)" in got
-    assert any("S3B reached its pre-set stop" in x for x in got)
+    assert any("1 retired" in x for x in got)
     assert got[-1].startswith("👉 For you:")
-    assert not any(x.startswith("October so far") for x in got)          # a priority-2 line went to make room
+    assert not any("Closed 1 trade" in x for x in got)                     # a demo engine's own close: not shown (D1)
 
 
 def test_the_cut_drops_only_what_the_budget_needs_and_says_more_on_the_dashboard() -> None:
@@ -384,7 +422,7 @@ _UNIT_AFTER = re.compile(
     r"^(R\b|%|\s?(lot|lots|trade|trades|signal|signals|taken|filled|closed|still open|slots full|spread wide|"
     r"news window|budget used|signal too old|paused|would hold|same-side|auto entries|stop over|order still|"
     r"other reason|of \d|ok\b|health check|approval|owner decision|more|trading day|usable label|nights|"
-    r"h of open|deploy|arms changed|trial))")
+    r"h of open|deploy|arms changed|trial|arms\b))")
 
 
 def _unitless(text: str) -> list[str]:
@@ -470,16 +508,54 @@ def test_the_bot_sends_the_report_with_no_reply_markup(tmp_path: Path, monkeypat
 # ---------------------------------------------------------------------------------------------- acceptance 7: no sums
 def test_exploration_and_other_pnl_are_never_summed_and_currencies_never_mixed(tmp_path: Path) -> None:
     lab = Lab(tmp_path).engine("icm-probe", 10_000, 10_000).engine("icm-demo", 10_000, 10_000, currency="USD")
-    lab.obs("icm-probe", "S1A", DAY, 1, taken=True).trade("icm-probe", "S1A", DAY, pnl=10.0)
-    lab.obs("icm-demo", "MB30", DAY, 1, taken=True).trade("icm-demo", "MB30", DAY, pnl=-4.0, stop_loss=15.0)
+    for arm in ("S1A", "S1B", "S2A"):
+        lab.trade("icm-probe", arm, DAY, pnl=10.0)
+    for arm in ("MB30", "MB15", "MB1H"):
+        lab.trade("icm-demo", arm, DAY, pnl=-4.0, stop_loss=15.0)
+    lab.obs("icm-probe", "S1A", DAY, 3, taken=True).obs("icm-demo", "MB30", DAY, 3, taken=True)
     with closed_trade_file(tmp_path, "icm-probe").open("w") as fh:
         fh.write(ClosedTrade(account_id="icm-probe", broker="icm", mode="demo", exit_utc=DAY, ret=0.001, pnl=50.0,
                              equity_before=10_000, position_id=1, r=0.5, pnl_basis="net",
                              pnl_currency="GBP").model_dump_json() + "\n")
     text = daily(tmp_path)
+    assert "3 closed +£30.00" in text and "3 closed −$12.00" in text
+    for combined in ("£18.00", "$18.00", "£80.00", "+£50.00", "£42.00"):
+        assert combined not in text                              # no cross-currency or cross-source total
     month = next(x for x in text.splitlines() if x.startswith("Month: "))
-    assert "+£10.00" in month and "−$4.00" in month and "£6.00" not in month and "+£60.00" not in text
-    assert "+£50.00" in text                                    # the engine's own trade, on its own line
+    assert "£" not in month and "$" not in month and "R" not in month   # no running lab total (quant: differencing)
+
+
+def test_a_demo_engines_own_closes_and_proposals_are_not_in_the_report(tmp_path: Path) -> None:
+    lab = Lab(tmp_path).engine("icm-probe", 10_000, 10_000)
+    with closed_trade_file(tmp_path, "icm-probe").open("w") as fh:
+        fh.write(ClosedTrade(account_id="icm-probe", broker="icm", mode="demo", exit_utc=DAY, ret=0.001, pnl=50.0,
+                             equity_before=10_000, position_id=1, r=0.5, pnl_basis="net",
+                             pnl_currency="GBP").model_dump_json() + "\n")
+    lab.engine("icm-probe", 10_000, 10_000)
+    text = daily(tmp_path)
+    assert "Closed" not in text and "Proposals" not in text and "October so far" not in text
+
+
+# ---------------------------------------------------------------------------------------------- send-time guard
+def test_the_send_time_guard_drops_any_arm_line_with_a_banned_word_and_logs_it(caplog: pytest.LogCaptureFixture
+                                                                              ) -> None:
+    from goldbot.telegram.labs import guard
+    text = "\n".join(["Arms (trades): S1A 96 · S1B 88", "S1A best so far", "S2A share 0.25", "MB30 +2.1R",
+                      "S3B retired at its pre-set stop after 30 trades (−30.0R)", "Learner 21:30 UTC: ran · shares updated",
+                      "  refused: 3 budget used", "S1B ahead of baseline", "W1A mean R +0.4"])
+    with caplog.at_level("ERROR"):
+        out = guard(text)
+    assert out.splitlines() == ["Arms (trades): S1A 96 · S1B 88",
+                                "S3B retired at its pre-set stop after 30 trades (−30.0R)",
+                                "Learner 21:30 UTC: ran · shares updated", "  refused: 3 budget used"]
+    assert caplog.text.count("blinding guard") == 5
+
+
+def test_the_built_report_passes_through_the_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from goldbot.telegram import labs as labs_mod
+    mock_state(tmp_path)
+    monkeypatch.setattr(labs_mod, "arms_lines", lambda arms, width, lo, hi: ["S1A best arm +9.9R"])
+    assert "best arm" not in daily(tmp_path)
 
 
 # ---------------------------------------------------------------------------------------------- acceptance 8: config
