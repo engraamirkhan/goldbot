@@ -1,16 +1,18 @@
-"""Record the evidence exclusions of criterion v1 from the recorded dq quarantine spans (quant ruling 2026-10-26, blind;
-docs/research/prereg-2026-10-25-high-volume.md Amendment 4; goldbot/research/evidence_exclusions.py).
+"""Record the engine restarts after a dq correction and the evidence exclusions of criterion v1 (quant ruling
+2026-10-26, blind; docs/research/prereg-2026-10-25-high-volume.md Amendment 4; goldbot/research/evidence_exclusions.py).
 
 Dry run by default: prints how many order ids would be void per account, kind and reason, and the spans they rest on.
---apply inserts them into aux.db `evidence_exclusions` (append-only; a re-run inserts nothing new). It prints ids,
-accounts, arms and counts only: never an R or a P&L (blinding).
+--apply records, for every account with a recorded span, C (`--corrected`, when the corrected bars became visible in
+the store) and R (`--reloaded ACCOUNT=...`, the account's first engine warm start at or after C) in aux.db
+`evidence_reloads`, then inserts the exclusions into `evidence_exclusions`. Both are append-only; a re-run inserts
+nothing new. An R before C is refused (that restart loaded the bad bars). It prints ids, accounts and counts only:
+never an R multiple or a P&L (blinding).
 
-Every account with a recorded span needs its engine's restart time after the fix (`--reloaded ACCOUNT=ISO-UTC`): a
-decision before it read the uncorrected bars. The nightly learner adds the lookback half of the criterion for new
-candidates on its own; this script is the one that knows the restart times.
+Brain, 2026-10-26 span (C 15:07:59Z; both engines' first warm start after it 15:09:35Z):
 
     sudo -n -u goldbot env PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring /opt/goldbot/.venv/bin/python \\
-        scripts/evidence_exclusions.py --reloaded icm-demo=2026-10-26T07:23:00Z --reloaded icm-probe=... [--apply]
+        scripts/evidence_exclusions.py --corrected 2026-10-26T15:07:59Z \\
+        --reloaded icm-demo=2026-10-26T15:09:35Z --reloaded icm-probe=2026-10-26T15:09:35Z [--apply]
 """
 from __future__ import annotations
 
@@ -41,41 +43,60 @@ def _hosts(a: argparse.Namespace) -> dict[str, str]:
 
 
 def _pairs(items: list[str]) -> dict[str, pd.Timestamp]:
-    out = {}
-    for item in items:
-        account, _, ts = item.partition("=")
-        out[account] = pd.Timestamp(ts).tz_convert("UTC") if pd.Timestamp(ts).tzinfo else pd.Timestamp(ts, tz="UTC")
-    return out
+    return {acc: _utc(ts) for acc, _, ts in (i.partition("=") for i in items)}
+
+
+def _utc(text: str) -> pd.Timestamp:
+    t = pd.Timestamp(text)
+    return t.tz_convert("UTC") if t.tzinfo else t.tz_localize("UTC")
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
-    ap.add_argument("--apply", action="store_true", help="insert (default: dry run)")
+    ap.add_argument("--apply", action="store_true", help="record (default: dry run)")
     ap.add_argument("--state-dir", default="state")
     ap.add_argument("--data-root", default=None, help="default: settings.data_root")
     ap.add_argument("--symbol", default="XAUUSD")
     ap.add_argument("--hosts", action="append", default=[], help="ACCOUNT=BROKER (default: enabled accounts)")
-    ap.add_argument("--reloaded", action="append", default=[], help="ACCOUNT=ISO-UTC engine restart after the fix")
+    ap.add_argument("--corrected", default=None, help="ISO UTC: when the corrected bars became visible (C)")
+    ap.add_argument("--reloaded", action="append", default=[],
+                    help="ACCOUNT=ISO-UTC: the account's first engine warm start at or after C (R)")
     ap.add_argument("--now", default=None, help="decision time (default: now, UTC)")
     a = ap.parse_args(argv)
-    now = pd.Timestamp(a.now).tz_convert("UTC") if a.now else pd.Timestamp.now("UTC")
+    now = _utc(a.now) if a.now else pd.Timestamp.now("UTC")
     hosts, reloaded = _hosts(a), _pairs(a.reloaded)
     store = _store(a)
-    spans = {acc: ev.recorded_spans(store, (acc, broker), symbol=a.symbol, start=now - pd.Timedelta(days=400), end=now)
-             for acc, broker in hosts.items()}
-    missing = sorted(acc for acc, s in spans.items() if s and acc not in reloaded)
+    spans = ev.spans_of(store, hosts, symbol=a.symbol, now=now)
+    missing = sorted(acc for acc in spans if acc not in reloaded)
     if missing:
-        raise SystemExit(f"refused: --reloaded ACCOUNT=ISO-UTC is needed for {', '.join(missing)} (the engine "
-                         "restart that loaded the corrected bars)")
+        raise SystemExit(f"refused: --reloaded ACCOUNT=ISO-UTC is needed for {', '.join(missing)} (its first engine "
+                         "warm start on the corrected store bars)")
+    if spans and a.corrected is None:
+        raise SystemExit("refused: --corrected ISO-UTC (when the corrected bars became visible) is needed")
+    corrected = _utc(a.corrected) if a.corrected else None
+    early = sorted(acc for acc in spans if corrected is not None and reloaded[acc] < corrected)
+    if early:
+        raise SystemExit(f"refused: the restart of {', '.join(early)} is before the correction "
+                         f"{corrected.isoformat() if corrected is not None else ''}: it loaded the bad bars")
     db = Database.open(Path(a.state_dir), "aux")
-    rows = ev.compute(db, store, hosts=hosts, symbol=a.symbol, now=now, reloaded=reloaded)
+    recorded = []
+    if a.apply and corrected is not None:
+        for acc, ss in spans.items():
+            for s in ss:
+                if ev.record_reload(db, account_id=acc, span=s[2], corrected=corrected, reloaded=reloaded[acc],
+                                    now=now):
+                    recorded.append(f"{acc} {s[2]}")
+    planned = {} if a.apply or corrected is None else \
+        {(acc, s[2]): (corrected, reloaded[acc]) for acc, ss in spans.items() for s in ss}   # dry run: as if recorded
+    found = ev.screen(db, store, hosts=hosts, symbol=a.symbol, now=now, planned=planned)
     already = ev.excluded_ids(db, "cost_cells") | ev.excluded_ids(db, "posterior")
-    new = [e for e in rows if e.client_order_id not in already]
+    new = [e for e in found.exclusions if e.client_order_id not in already]
     report: dict[str, Any] = {
         "mode": "apply" if a.apply else "dry-run", "criterion_version": ev.CRITERION_VERSION,
-        "spans": {acc: sorted({ref for _, _, ref in s}) for acc, s in spans.items() if s},
-        "reloaded": {k: v.isoformat() for k, v in reloaded.items()},
-        "void": dict(Counter(f"{e.account_id}:{e.kind}:{e.reason}" for e in rows)),
+        "spans": {acc: [s[2] for s in ss] for acc, ss in spans.items()},
+        "corrected": corrected.isoformat() if corrected is not None else None,
+        "reloaded": {k: v.isoformat() for k, v in reloaded.items()}, "reloads_recorded": recorded,
+        "void": dict(Counter(f"{e.account_id}:{e.kind}:{e.reason}" for e in found.exclusions)),
         "new_ids": [{"client_order_id": e.client_order_id, "account_id": e.account_id, "kind": e.kind} for e in new],
     }
     report["inserted"] = ev.record(db, new) if a.apply else 0

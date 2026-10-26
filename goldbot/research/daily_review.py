@@ -212,6 +212,9 @@ class DailyReview(Record):
     weekly: str | None = None
     # prereg Amendment 4: the day's exploration trades void as evidence (aux.db evidence_exclusions), a count only
     evidence_void: int = 0
+    # accounts with a recorded quarantine span and no recorded engine restart: their decisions are held out of
+    # learning in memory, never voided, until scripts/evidence_exclusions.py records the restart (an alert line)
+    spans_unresolved: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _blinded(self) -> DailyReview:
@@ -712,6 +715,11 @@ def report_lines(r: DailyReview) -> list[str]:
         parts += [f"{n_ret} arm{'s' if n_ret != 1 else ''} retired at {'their' if n_ret != 1 else 'its'} stop"] \
             if n_ret else []
         out.append("Review: " + " · ".join(parts))
+    if r.spans_unresolved:
+        from goldbot.telegram.labs import role
+        out.append(f"Review: ALERT quarantine span with no recorded engine restart "
+                   f"({', '.join(role(a) for a in r.spans_unresolved)}): its decisions are held out of learning, "
+                   "not voided")
     if r.evidence_void:
         out.append(f"Review: {r.evidence_void} trade{'s' if r.evidence_void != 1 else ''} void as evidence "
                    "(dq quarantine; H-61 stops and P&L keep it)")
@@ -919,7 +927,8 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
                          of_plan=of_plan, volume_low_days=low_days, arm_health=health,
                          arms_retired={b: len(retired_arms(db, b)) for b in sorted(set(hosts.values()))},
                          integrity=integrity, incidents=incidents, refits=refits, retired=retired,
-                         evidence_void=_void(db, hosts, lo, hi))
+                         evidence_void=_void(db, hosts, lo, hi),
+                         spans_unresolved=_unresolved(db, store, hosts, settings, now))
     if dry_run:
         return review
     before = load_review(sd, day)
@@ -938,6 +947,13 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
     write_atomic(review_path(sd, day), body)
     _ledger(sd, day, body)
     return review
+
+
+def _unresolved(db: Database, store: Any, hosts: Mapping[str, str], settings: Settings,
+                now: pd.Timestamp) -> list[str]:
+    from goldbot.research import evidence_exclusions as ev
+    spans = ev.spans_of(store, hosts, symbol=getattr(settings, "symbol", "XAUUSD"), now=now)
+    return ev.unresolved(spans, ev.reloads(db)) if spans else []
 
 
 def _void(db: Database, hosts: Mapping[str, str], lo: pd.Timestamp, hi: pd.Timestamp) -> int:
