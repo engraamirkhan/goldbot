@@ -65,6 +65,7 @@ from goldbot.execution.broker import (  # noqa: F401  (DEFINITE_REJECT_RETCODES:
 )
 from goldbot.execution.classifier import StoredClass, effective_class, read_stored
 from goldbot.execution.costs import CostTable
+from goldbot.execution.deals import exit_summary
 from goldbot.execution.not_placed import bridge_refused, not_placed, notice_text, refusal_code
 from goldbot.features import build_features
 from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
@@ -2528,43 +2529,13 @@ class Engine:
         self._flush_exit_fills()             # after the records: a broker stop or target leg is added by its record
 
     def _exit_deals(self, pid: int, tr: OpenTrade) -> tuple[dict | None, bool]:
-        """(summary of the position's deals, whether the broker's deal history identifies positions at all). Reads the
-        paper broker's deals and MT5's (DEAL_ENTRY 0 in, 1 out, 2 in/out, 3 out by; DEAL_REASON 4 SL, 5 TP, 6 stop-out)
-        alike; the summary is None when no exit deal is there, including an empty history (never a confirmation). A
-        read that fails raises (`_read_deals`)."""
+        """(summary of the position's deals (`deals.exit_summary`: None when no exit deal is there), whether the
+        broker's deal history identifies positions at all). A read that fails raises (`_read_deals`)."""
         starts = [x for x in (tr.opened_utc, tr.entry_bar_ts) if x is not None]
         d = self._read_deals(min(starts) - pd.Timedelta(days=1))
         if not isinstance(d, pd.DataFrame) or "position_id" not in d.columns:
             return None, False
-        d = d[d["position_id"] == pid]
-        mt5 = "entry" in d.columns
-        is_exit = d["entry"].isin([1, 2, 3]) if mt5 else d["type"] != "entry"
-        vol = "volume" if mt5 else "lots"
-        ex, ent = d[is_exit], d[~is_exit]
-        lots = float(ex[vol].sum()) if not ex.empty else 0.0
-        if lots <= 0:
-            return None, True
-
-        def total(col: str, rows: pd.DataFrame) -> float | None:
-            """None when the broker does not report the column or reports it as unknown on every deal."""
-            if col not in rows.columns or bool(rows[col].isna().all()):
-                return None
-            return float(pd.to_numeric(rows[col], errors="coerce").fillna(0.0).sum())
-        comm = total("commission", d)
-        fee = total("fee", d) or 0.0
-        swap = total("swap", d)
-        gross = total("profit", ex)
-        pnl = gross + (comm or 0.0) + fee + (swap or 0.0) if gross is not None else float(total("pnl", ex) or 0.0)
-        last = ex.sort_values("ts_utc").iloc[-1]
-        if mt5:
-            reason = {4: "stop", 5: "target", 6: "stop_out"}.get(int(last.get("reason", -1)))
-        else:
-            reason = str(last["type"]) if last["type"] in ("stop", "target") else None
-        return {"exit_price": float((ex["price"] * ex[vol]).sum()) / lots, "exit_utc": pd.Timestamp(last["ts_utc"]),
-                "last_price": float(last["price"]), "last_lots": float(last[vol]),
-                "pnl": pnl, "commission": None if comm is None else -(comm + fee), "swap": swap,
-                "entry_price": float(ent["price"].iloc[0]) if not ent.empty else None,
-                "lots": float(ent[vol].sum()) if not ent.empty else None, "reason": reason}, True
+        return exit_summary(d, pid), True
 
     def _record_closed(self, pid: int, tr: OpenTrade, reason: str, px: float | None, at: pd.Timestamp) -> None:
         """One ClosedTrade for a fully closed position (scale-out folded in: see gates_phase.ClosedTrade), appended
