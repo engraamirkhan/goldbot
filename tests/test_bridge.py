@@ -686,3 +686,15 @@ def test_an_order_that_aged_out_during_the_ceiling_reads_is_refused_before_the_s
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_a_caller_can_drop_the_read_retry_and_shorten_the_timeout():
+    """The tick record (goldbot/data/ticks.py) bounds each copy_ticks page by ticks.page_limit_s: one attempt, its own
+    client timeout, so a slow page never holds the client twice as long (trading-safety review of bf2bf242)."""
+    read = _Flaky(fail=1)
+    rb = RemoteBroker("http://bridge", TOKEN, post=read)
+    assert rb.read_attempts == 2
+    rb.read_attempts = 1
+    with pytest.raises(BridgeUnavailable):
+        rb.last_tick("XAUUSD")
+    assert read.calls == 1

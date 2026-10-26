@@ -498,3 +498,57 @@ def test_job_is_read_only(tmp_path):
     broker = ReadOnlyBroker(_week_broker().ticks)
     out = tick_record(_job_ctx(tmp_path, lambda acc: broker), NOW)
     assert out["icm-demo"]["written"] == ["2026-10-09", "2026-10-12", "2026-10-13"] and broker.calls and broker.shut
+
+
+# ------------------------------------------------------------------------------------------- bridge bounds (trading-safety)
+class TimedBroker(FakeTickBroker):
+    """A RemoteBroker stand-in: its client timeout and read retries as the recorder sets them for each call."""
+
+    def __init__(self, ticks: pd.DataFrame, clock: _Clock | None = None, page_s: float = 0.0,
+                 raise_timeout: bool = False) -> None:
+        super().__init__(ticks)
+        self.timeout_s, self.read_attempts = 10.0, 2
+        self.seen: list[tuple[float, int]] = []
+        self.at: list[pd.Timestamp] = []
+        self.clock, self.page_s, self.raise_timeout = clock, page_s, raise_timeout
+
+    def copy_ticks(self, symbol: str, since_utc: pd.Timestamp, n: int = 100_000) -> pd.DataFrame:
+        self.seen.append((self.timeout_s, self.read_attempts))
+        if self.clock is not None:
+            self.at.append(self.clock())
+            self.clock.t += pd.Timedelta(seconds=self.page_s)
+        if self.raise_timeout:
+            from goldbot.execution.bridge import BridgeUnavailable
+            raise BridgeUnavailable("bridge copy_ticks: ReadTimeout")
+        return super().copy_ticks(symbol, since_utc, n)
+
+
+def test_each_page_has_its_own_client_timeout_and_no_retry_and_the_broker_is_restored(tmp_path):
+    broker = TimedBroker(_week_broker().ticks)
+    out = _record(tmp_path, broker, backfill_days=4, page_limit_s=5.0)
+    assert out["written"] and broker.seen and set(broker.seen) == {(5.0, 1)}
+    assert (broker.timeout_s, broker.read_attempts) == (10.0, 2)
+
+
+def test_a_page_timeout_defers_the_day_instead_of_failing_the_job(tmp_path):
+    broker = TimedBroker(_week_broker().ticks, raise_timeout=True)
+    out = _record(tmp_path, broker, backfill_days=4)
+    assert out["written"] == [] and "timeout" in out["deferred"].lower() and len(broker.seen) == 1
+    assert (broker.timeout_s, broker.read_attempts) == (10.0, 2)
+
+
+@pytest.mark.parametrize("hours", [24, 3])          # a whole day, and a truncated one (the TruncatedPull retries)
+def test_no_copy_ticks_call_once_the_quiet_window_has_ended(tmp_path, hours):
+    # Sunday 2026-10-18 17:49:40 EDT: the window closes at 17:50; each page takes 1.5 s and each retry wait 2 s
+    clock = _Clock(pd.Timestamp("2026-10-18 21:49:40", tz="UTC"))
+    s, e = _bounds("2026-10-16")
+    broker = TimedBroker(synthetic_day(s, s + pd.Timedelta(hours=hours), 20_000), clock, page_s=1.5)
+
+    def sleep(sec: float) -> None:
+        clock.t += pd.Timedelta(seconds=sec)
+
+    cfg = TickRecordSettings(page_ticks=1_000, backfill_days=2, max_days_per_run=3, run_budget_s=600)
+    out = tk.record_ticks(broker, tmp_path, "icm-demo", "XAUUSD", TZ, cfg, clock=clock, sleep=sleep)
+    assert broker.at and all(tk.market_quiet(t) for t in broker.at)
+    assert clock() >= pd.Timestamp("2026-10-18 21:50", tz="UTC") and "market" in out.get("deferred", "")
+    assert out["written"] == []

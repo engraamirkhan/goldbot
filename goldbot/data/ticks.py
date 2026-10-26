@@ -43,9 +43,10 @@ import logging
 import os
 import re
 import tempfile
+from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 import numpy as np
 import pandas as pd
@@ -343,6 +344,27 @@ def prune(state_dir: str | Path, account: str, keep_from: date) -> list[str]:
 
 
 # ------------------------------------------------------------------------------------------- the daily job
+@contextmanager
+def _bounded_pages(broker: Any, limit_s: float) -> Iterator[None]:
+    """While the record pulls, each bridge page gets one attempt and a client timeout of `limit_s` (RemoteBroker's
+    `timeout_s` / `read_attempts`; a broker without them, the in-process MT5 adapter, is left alone), then the broker's
+    own values come back. The client timeout frees the job, not the bridge: a page the terminal is still serving
+    finishes there, which `page_limit_s` < ORDER_MAX_AGE_S (10 s) and the quiet window already bound."""
+    try:
+        own = vars(broker)                    # instance attributes only: a proxy's __getattr__ is never asked
+    except TypeError:
+        own = {}
+    if not ("timeout_s" in own and "read_attempts" in own):
+        yield
+        return
+    saved = broker.timeout_s, broker.read_attempts
+    broker.timeout_s, broker.read_attempts = min(float(saved[0]), limit_s), 1
+    try:
+        yield
+    finally:
+        broker.timeout_s, broker.read_attempts = saved
+
+
 def record_ticks(broker: Any, state_dir: str | Path, account: str, symbol: str, server_tz: str,
                  cfg: TickRecordSettings, *, clock: Callable[[], pd.Timestamp],
                  sleep: Callable[[float], None]) -> dict[str, Any]:
@@ -360,24 +382,31 @@ def record_ticks(broker: Any, state_dir: str | Path, account: str, symbol: str, 
     written: list[str] = []
     incomplete: list[str] = []
     deferred: str | None = None
-    for day in missing:
-        if len(written) >= cfg.max_days_per_run:
-            break
-        start, end = server_day_bounds(day, server_tz)
-        try:
-            ticks = pull_day(broker, symbol, start, end, chunk=cfg.page_ticks, pace=pace, whole_day=True)
-        except PullDeferred as exc:
-            deferred = f"{day.isoformat()}: {exc}"
-            log.warning("tick record %s %s deferred: %s", account, day, exc)
-            break
-        except TruncatedPull as exc:          # this day only: newer days are still pulled
-            incomplete.append(f"{day.isoformat()}: {exc}")
-            log.warning("tick record %s %s not written: %s", account, day, exc)
-            continue
-        rec = write_day(state_dir, account, day, ticks, symbol=symbol, server_tz=server_tz, pulled_utc=clock())
-        written.append(day.isoformat())
-        log.info("tick record %s %s: %d ticks (%d London/NY), %d bytes", account, day, rec.rows, rec.london_ny_ticks,
-                 rec.bytes)
+    with _bounded_pages(broker, cfg.page_limit_s):
+        for day in missing:
+            if len(written) >= cfg.max_days_per_run:
+                break
+            start, end = server_day_bounds(day, server_tz)
+            try:
+                ticks = pull_day(broker, symbol, start, end, chunk=cfg.page_ticks, pace=pace, whole_day=True)
+            except PullDeferred as exc:
+                deferred = f"{day.isoformat()}: {exc}"
+                log.warning("tick record %s %s deferred: %s", account, day, exc)
+                break
+            except ConnectionError as exc:    # the bridge client's page timeout: a slow page, deferred like one
+                if "timeout" not in str(exc).lower():
+                    raise
+                deferred = f"{day.isoformat()}: page timeout after {cfg.page_limit_s} s ({exc})"
+                log.warning("tick record %s %s deferred: %s", account, day, deferred)
+                break
+            except TruncatedPull as exc:          # this day only: newer days are still pulled
+                incomplete.append(f"{day.isoformat()}: {exc}")
+                log.warning("tick record %s %s not written: %s", account, day, exc)
+                continue
+            rec = write_day(state_dir, account, day, ticks, symbol=symbol, server_tz=server_tz, pulled_utc=clock())
+            written.append(day.isoformat())
+            log.info("tick record %s %s: %d ticks (%d London/NY), %d bytes", account, day, rec.rows,
+                     rec.london_ny_ticks, rec.bytes)
     pruned = prune(state_dir, account, latest_closed(now, server_tz) - timedelta(days=cfg.retain_days))
     out: dict[str, Any] = {"written": written, "pruned": pruned, "days": len(read_index(state_dir, account)),
                            "behind": len(missing) - len(written), "pages": pace.pages}
