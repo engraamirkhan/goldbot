@@ -273,6 +273,9 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     acc = configured[account_id]
     if why := approval_ids_problem(account_id):
         resolve(refuse_start)(account_id, f"refusing to start {account_id}: {why}", probe_only=acc.probe_only)
+    from goldbot.ops.engine_lock import hold_engine
+    if why := hold_engine("state", account_id):      # held for the process's life: no repair rewrites its files
+        resolve(refuse_start)(account_id, f"refusing to start {account_id}: {why}", probe_only=acc.probe_only)
     settings = load_settings()
     if acc.is_live and acc not in accounts.enabled_accounts("live"):
         raise SystemExit("live account not unlocked by the phase gate")

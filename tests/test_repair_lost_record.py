@@ -13,7 +13,7 @@ import pytest
 
 from goldbot.engine import exploration
 from goldbot.engine.store import JsonEngineStore
-from goldbot.ops import repair_records
+from goldbot.ops import engine_lock, repair_records
 from tests.test_exploration_engine import (  # noqa: F401 - _rules: the test arms' rules (autouse)
     CLOSE,
     _at,
@@ -98,3 +98,43 @@ def test_the_command_refuses_while_the_engine_may_be_running(tmp_path, monkeypat
     monkeypatch.setattr("goldbot.ops.smoke.systemctl_state", lambda account_id: "active")
     assert repair_records.main([ACCOUNT, "--state", str(tmp_path)]) == repair_records.EXIT_REFUSED
     assert "stop the engine first" in capsys.readouterr().out
+
+
+# ------------------------------------------------------------------ the engine and a repair never run at once
+def _stopped_unit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("goldbot.ops.accounts.load_accounts",
+                        lambda *a, **k: {ACCOUNT: SimpleNamespace(account_id=ACCOUNT, mode="demo")})
+    monkeypatch.setattr("goldbot.ops.smoke.systemctl_state", lambda account_id: "inactive")
+    monkeypatch.setattr("goldbot.ops.accounts.bridge_endpoint", lambda account_id: ("http://127.0.0.1:1", "t"))
+
+
+def test_the_repair_is_refused_while_an_engine_of_the_account_holds_its_lock(tmp_path, monkeypatch, capsys):
+    """Trading-safety LOW of e7fba842: the unit may read inactive while an engine process runs (started by hand, or
+    starting); the engine's shared lock refuses the repair whatever systemd says."""
+    _stopped_unit(monkeypatch)
+    assert engine_lock.hold_engine(tmp_path, ACCOUNT) is None
+    assert repair_records.main([ACCOUNT, "--state", str(tmp_path)]) == repair_records.EXIT_REFUSED
+    assert "engine" in capsys.readouterr().out
+
+
+def test_an_engine_start_is_refused_while_a_repair_holds_the_account(tmp_path, monkeypatch):
+    from goldbot.ops import accounts
+    from goldbot.ops import run as run_mod
+    from tests.test_start_refusal import ACC
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(accounts, "load_accounts", lambda path=None: {"icm-demo": ACC})
+    fd = engine_lock.take_repair(tmp_path / "state", "icm-demo")
+    try:
+        with pytest.raises(SystemExit, match="repair-lost-record"):
+            run_mod.run_engine("icm-demo")
+    finally:
+        engine_lock.release(fd)
+
+
+def test_the_repair_writes_nothing_when_the_engine_may_have_started_before_it_saves(tmp_path, monkeypatch):
+    """The heartbeat is read again immediately before anything is written; any change aborts the whole repair."""
+    _, pb, pid = _lost_close(tmp_path, monkeypatch)
+    with pytest.raises(repair_records.EngineStarted, match="beat"):
+        repair_records.repair(tmp_path, ACCOUNT, pb, check=lambda: "the engine loop beat 3 s ago")
+    [rec] = exploration.trades(str(tmp_path), ACCOUNT)
+    assert rec.exit_utc is None and _lost_ids(tmp_path) == [pid]

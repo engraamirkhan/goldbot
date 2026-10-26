@@ -1865,7 +1865,8 @@ python -m goldbot.ops.run repair-lost-record icm-probe             # writes the 
 sudo systemctl start goldbot-engine@icm-probe
 ```
 
-It writes each record from the broker's deals, marked `censored`. It names the ones it leaves: `not_exploration` (a
+It holds the account's engine lock while it runs: the engine will not start until the repair ends, and a
+running engine makes the repair refuse. It writes each record from the broker's deals, marked `censored`. It names the ones it leaves: `not_exploration` (a
 strategy's or cost probe's record, written by hand from the MT5 History), `no_exit_deal` and `deals_unreadable`
 (try again later). It never places or closes an order. Exit codes: 0 = all repaired, 1 = some left, 2 = refused
 (the engine is running, the account is unknown, or there is no bridge endpoint).
