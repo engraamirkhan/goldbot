@@ -252,5 +252,12 @@ vantage-demo runs from 2027-01-01); until then `vantage-demo` stays `enabled: fa
 The demo ceilings (ADR 0032) and every RiskGate limit apply; exits are never gated. Trial budget, holdout and phase
 gate untouched: exploration is not promotion evidence on any broker.
 
+## Amendment 3 — 2026-10-26, before any retirement has happened
+
+H-61 cumulative-R stops apply to graduation-eligible arms only. Controls (S0, I0, W0 and the Vantage twins VI0, VW0)
+and the cost arm S0R are the null/cost measurement and are bounded only by their fixed £ share (ADR 0043 line 76:
+controls must not be allocated by results). K +0: no arm, rule body or read is added or changed; this only states
+which arms the already-registered stops act on.
+
 ## Note 2026-10-26 (research-director)
 Daily review (job `daily_review`) is blinded; the pre-registered stops are the only daily results output. See ADR 0045.

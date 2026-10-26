@@ -14,13 +14,15 @@ Three tiers.
 
 **1. AUTOMATIC daily (job `daily_review`, 06:15 UTC).**
 - Retire an arm at its pre-registered H-61 stop, the day it breaches.
-- Refit a (broker, session) cost cell at >=200 fills; within a day a refit may only be more conservative.
+- Refit a (broker, session) cost cell at >=200 fills; a refit cell may replace an older cell, but the cost charged in replay never falls below the nightly cost table (the max of the two).
 - Open or comment GitHub `learning-ops` issues for incidents, or when volume is <50% of plan two days running.
 - The nightly learner (weights, labels, retrain) runs as already decided.
 
 **2. REVIEWED weekly.**
 - At most 4 variant proposals, each pre-registered, then quant and trading-safety review, then a PR, all before any
-  trade of that variant.
+  trade of that variant. Each variant is one registry trial charged to `research.trial_budget_quarter`; none are
+  proposed when the budget is exhausted. Volume below plan is capacity, not a quota, and is never by itself a reason
+  to add arms.
 - Champion model changes follow the H-62 spec.
 
 **3. NEVER daily.**
@@ -33,7 +35,7 @@ The daily review is blinded; the pre-registered stops are the only daily results
 
 ## Consequences
 - K is protected: only frozen stops act on results daily; everything else waits for the weekly reviewed cycle.
-- Cost cells can tighten daily but never loosen, so the loop cannot weaken RiskGate-side protections.
+- The replay cost never falls below the nightly cost table (max of refit and table), so the loop cannot weaken RiskGate-side protections.
 - Arms cannot be added or tuned in response to daily noise; this slows adaptation by design.
 - `daily_review` must not emit per-arm R/rank/sign (see `docs/ux/daily-learning-report.md`); a test should enforce it.
 - Related: ADR 0043, prereg-2026-10-25-high-volume.md.
