@@ -973,8 +973,11 @@ def scheduled_step(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick: 
         return skip(why)
     if any(t.agent_id == SCHEDULED_ID for t in eng.open.values()):
         return
-    if any(not is_probe(t.agent_id) for t in eng.open.values()) or eng.pending or _in_flight(eng, False) \
-            or _in_flight(eng, True) or eng.state.open_positions > len(_probes_open(eng)):
+    # exploration trades are learning too (probe_only account, live 2026-10-26: they stopped every scheduled probe);
+    # a strategy position, a pending proposal or any order in flight still makes the probe wait
+    learning_open = [pid for pid, t in eng.open.items() if is_learning(t.agent_id)]
+    if any(not is_learning(t.agent_id) for t in eng.open.values()) or eng.pending or _in_flight(eng, False) \
+            or _in_flight(eng, True) or eng.state.open_positions > len(learning_open):
         return skip("busy")
     if eng._auto_paused is not None and eng._auto_paused[0] == close_ts:
         return skip("paused")

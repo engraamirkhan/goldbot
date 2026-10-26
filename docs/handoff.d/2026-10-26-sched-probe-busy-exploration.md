@@ -1,0 +1,1 @@
+- Scheduled cost probes are no longer skipped `busy` while an exploration trade is open: exploration is learning too (`is_learning`). Live 2026-10-26 from the first exploration fill every scheduled probe was skipped and cost measurement stopped. A strategy position, a pending proposal or any order in flight still makes the probe wait; one scheduled probe at a time is unchanged.

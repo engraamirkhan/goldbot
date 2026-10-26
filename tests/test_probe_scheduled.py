@@ -212,6 +212,32 @@ def test_only_one_scheduled_probe_is_open_at_a_time(tmp_path):
     assert len(_rows(tmp_path)) == 1 and len(_scheduled(eng)) == 1
 
 
+def test_an_open_exploration_trade_does_not_make_the_scheduled_probe_busy(tmp_path):
+    """Live 2026-10-26: exploration positions on the probe account counted as "anything else open", so every scheduled
+    probe was skipped `busy` from the first exploration fill and cost measurement stopped. Exploration is learning
+    too: it never makes a scheduled probe busy (a strategy position still does, below)."""
+    from goldbot.engine.exploration import PREFIX
+    from goldbot.engine.store import OpenTrade
+    eng, pb, tick = _engine(tmp_path)
+    _allow(eng)
+    eng.open[987654] = OpenTrade(position_id=987654, agent_id=PREFIX + "S0", side=1, lots=0.01, entry_bar_ts=CUT,
+                                 max_bars=4)
+    eng.state.open_positions = 1
+    eng.on_bar_close(CUT, tick)
+    assert "cost_probe_scheduled_skip:busy" not in _refusals(eng) and len(_scheduled(eng)) == 1
+
+
+def test_an_open_strategy_trade_still_makes_the_scheduled_probe_busy(tmp_path):
+    from goldbot.engine.store import OpenTrade
+    eng, pb, tick = _engine(tmp_path)
+    _allow(eng)
+    eng.open[987655] = OpenTrade(position_id=987655, agent_id="tsmom-g0-x", side=1, lots=0.01, entry_bar_ts=CUT,
+                                 max_bars=4)
+    eng.state.open_positions = 1
+    eng.on_bar_close(CUT, tick)
+    assert "cost_probe_scheduled_skip:busy" in _refusals(eng) and not _scheduled(eng)
+
+
 def test_a_scheduled_probe_its_hold_exit_missed_is_closed_by_its_one_bar_time_barrier(tmp_path):
     eng, pb, tick = _engine(tmp_path)
     _allow(eng)
