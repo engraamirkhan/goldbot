@@ -475,7 +475,7 @@ class TelegramSettings(_Section):
     auto_min_proposals: int = Field(100, ge=100)
     auto_alpha: float = Field(0.10, gt=0, le=0.5)
     auto_min_outcomes_per_side: int = Field(10, ge=2)   # fewer matched outcomes on a side: no evidence (fail closed)
-    # daily owner digest (goldbot/telegram/digest.py): sent once a day at this UTC time ("HH:MM"), before London
+    # the morning learning report (goldbot/telegram/digest.py; Sundays the weekly digest): once a day at this UTC time
     digest_at: str = Field("06:45", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     # the owner's time zone for Telegram /status times (UTC is shown beside each); an unknown zone shows UTC only
     owner_tz: str = "Europe/London"

@@ -61,7 +61,7 @@ def _full_state(sd: Path) -> Path:
     (sd / f"engine_{ACCOUNT}.json").write_text(json.dumps({
         "account": ACCOUNT, "stage": "size_down", "equity": 9_700, "balance_closed_hwm": 10_000,
         "day_start_equity": 9_800, "week_start_equity": 10_000, "open_positions": 1, "open_lots": 0.1,
-        "currency": "USD"}))           # the digest prints money in the account's own currency (BACKLOG 28)
+        "currency": "USD", "mode": "live"}))   # a real-money account: its own proposals and closes are reported (D1)           # the digest prints money in the account's own currency (BACKLOG 28)
     (sd / "control.json").write_text(json.dumps({"halted": True, "by": f"dashboard:{EMAIL}", "ts": YDAY.timestamp(),
                                                  "reason": "news"}))
     (sd / "drift.json").write_text(json.dumps({"system_halt": {"reasons": ["cusum"]}}))
@@ -93,70 +93,34 @@ def _report(*checks: tuple[str, str]) -> HealthReport:
     return HealthReport(ts=NOW, status=worst, checks=cs)  # type: ignore[arg-type]
 
 
+def _live(sd: Path) -> Path:
+    """A real-money engine file: the report shows an engine's own proposals and closes only for real money (D1)."""
+    (sd / f"engine_{ACCOUNT}.json").write_text(json.dumps({"account": ACCOUNT, "mode": "live", "currency": "USD"}))
+    return sd
+
+
 def _full_digest(tmp_path: Path) -> str:
-    reg = _full_state(tmp_path)
+    _full_state(tmp_path)
     roadmap = tmp_path / "ROADMAP.md"
     roadmap.write_text(ROADMAP)
     report = _report((f"engine:{ACCOUNT}", "fail"), ("backup_age", "warn"), (f"daily_cap:{ACCOUNT}", "warn"),
                      ("disk", "ok"))
-    return build_digest(tmp_path, NOW, report=report, settings=load_settings(), roadmap=roadmap, registry_path=reg)
+    return build_digest(tmp_path, NOW, report=report, settings=load_settings(), roadmap=roadmap)
 
 
 def test_digest_renders_every_section_from_fixture_state(tmp_path: Path) -> None:
+    """An account that is not a lab (no exploration): its proposals and closes on their own lines, every halt on line
+    two ahead of health (the lock-screen preview), the month and the open trades, and what is waiting for the owner."""
     text = _full_digest(tmp_path)
-    assert text.splitlines()[0] == "☀️ goldbot daily · Sat 10 Oct 2026 · 06:45 UTC"
-    assert "⚠️ Attention: fail engine · warn backup_age, daily_cap" in text
-    assert "Fri 09 Oct trading day (ended 22:00 UTC, 23:00 UK)" in text
-    assert "Proposals 4: ✅ 2 approved (1 refused by the risk check) · ❌ 1 rejected · ⌛ 1 expired" in text
-    assert "Closed 2 trades: net +$80.25 · +1.00R (1 won, 1 lost)" in text
-    assert "Open now: 1 position (0.10 lots)" in text
-    assert "Risk: stage size_down · drawdown 3.0% from peak (halt at 12%) · day loss 1.0% of 2.0% cap · week 3.0% of 5.0% cap" in text
-    assert "owner halt since Fri 09 Oct 10:00 UTC" in text and "drift system halt" in text
-    assert "supervisor combined-cap halt" in text
-    assert "next pre-registered trial #3 (carry) · budget 2026Q4: 2 of 20 trials used, 1 reserved for " \
-           "pre-registered, 17 open" in text
-    assert "Attribution: best session london +0.21R/trade net (n 64) · worst side short -0.15R/trade net (n 41)" in text
-    assert "👉 For you: 1 approval pending · 3 owner decisions open (see OWNER_GUIDE) · 1 deploy on offer" in text
-
-
-def test_attribution_line_names_no_best_or_worst_row_when_no_row_clears_the_bar(tmp_path: Path) -> None:
-    """ADR 0022 (quant ruling F3): only rows whose adjusted verdict is signed are named; a row signed only by the raw
-    |t| >= 2 (newyork above, mean +0.35) is never shown as the best."""
-    _full_state(tmp_path)
-    rep = json.loads((tmp_path / "attribution.json").read_text())
-    for group in rep["breakdowns"].values():
-        for c in group.values():
-            if c["verdict_adj"] != "noise":
-                c["verdict_adj"] = "indistinguishable from zero"
-    rep["overall"]["verdict_adj"] = "indistinguishable from zero"
-    (tmp_path / "attribution.json").write_text(json.dumps(rep))
-    text = build_digest(tmp_path, NOW, roadmap=tmp_path / "nope.md", registry_path=tmp_path / "research_registry.jsonl")
-    line = next(x for x in text.splitlines() if "Attribution" in x)
-    assert "best" not in line and "worst" not in line
-    assert line.endswith("Attribution: no row clears the bar (|t| ≥ 3.1 over 30 rows) · overall +0.12R/trade net, "
-                         "indistinguishable from zero")
-
-
-def test_attribution_line_never_names_an_exit_row(tmp_path: Path) -> None:
-    """Exit target and stop cells are signed by construction (a target pays, a stop loses): not a test (ADR 0022 F2)."""
-    _full_state(tmp_path)
-    rep = json.loads((tmp_path / "attribution.json").read_text())
-    rep["breakdowns"]["exit"] = {
-        "target": {"n": 80, "mean_r_net": 1.9, "verdict": "positive", "verdict_adj": "positive"},
-        "stop": {"n": 90, "mean_r_net": -1.1, "verdict": "negative", "verdict_adj": "negative"}}
-    (tmp_path / "attribution.json").write_text(json.dumps(rep))
-    text = build_digest(tmp_path, NOW, roadmap=tmp_path / "nope.md", registry_path=tmp_path / "research_registry.jsonl")
-    line = next(x for x in text.splitlines() if "Attribution" in x)
-    assert "exit" not in line and "target" not in line and "stop" not in line
-    assert "best session london +0.21R/trade net (n 64)" in line
-
-
-def test_attribution_line_from_an_older_report_without_the_bar_prints_unknowns(tmp_path: Path) -> None:
-    (tmp_path / "attribution.json").write_text(json.dumps({"min_trades": 30, "breakdowns": {
-        "session": {"london": {"n": 64, "mean_r_net": 0.21, "verdict": "positive"}}},
-        "overall": {"n": 64, "mean_r_net": 0.21}}))
-    text = build_digest(tmp_path, NOW, roadmap=tmp_path / "nope.md")
-    assert "Attribution: no row clears the bar (|t| ≥ ? over ? rows) · overall +0.21R/trade net, ?" in text
+    got = text.splitlines()
+    assert got[0] == "☀️ Fri 9 Oct results · day ended 22:00 UTC (23:00 UK)"
+    assert got[1].startswith("🛑 Halts: owner halt since Fri 09 Oct 10:00 UTC · drift system halt (review pending) · "
+                             "supervisor combined-cap halt · exits still run · Attention: fail engine · warn "
+                             "backup_age, daily_cap · Entries")
+    assert "• Proposals 4: ✅ 2 approved (1 refused by the risk check) · ❌ 1 rejected · ⌛ 1 expired" in got
+    assert "• Closed 2 trades: net +$80.25 · +1.00R (1 won, 1 lost)" in got
+    assert "Month: 7 trading days so far · open now 1 trade (0.10 lot)" in got
+    assert got[-1] == "👉 For you: 1 approval pending · 3 owner decisions open (see OWNER_GUIDE) · 1 deploy on offer"
 
 
 def test_digest_is_phone_sized_with_units_and_utc(tmp_path: Path) -> None:
@@ -175,33 +139,26 @@ def test_digest_never_prints_identifiers(tmp_path: Path) -> None:
 
 def test_digest_with_no_state_at_all_still_renders(tmp_path: Path) -> None:
     text = build_digest(tmp_path / "missing", NOW, roadmap=tmp_path / "nope.md")
-    assert "❔ Health: unknown" in text
-    assert "Proposals: none" in text and "Trades closed: none" in text
-    assert "Open now: no engine state yet" in text and "Risk: no engine state yet" in text and "Halts: none" in text
-    assert "no pre-registered trial waiting · budget 2026Q4: 0 of 20 trials used, 0 reserved for " \
-           "pre-registered, 20 open" in text
-    assert "Attribution" not in text
-    assert "0 approvals pending · owner decisions: see OWNER_GUIDE" in text
+    assert text.splitlines()[1] == "❔ Health: unknown (the check did not run) · Halts: none · Entries: no engine reporting"
+    assert "Month: 7 trading days so far · open now 0 trades" in text and text.endswith("👉 For you: nothing")
+    assert "Attribution" not in text and "Proposals" not in text and "Trades closed" not in text
     assert len(text.splitlines()) <= 15
 
 
 def test_all_good_when_every_check_is_ok(tmp_path: Path) -> None:
     text = build_digest(tmp_path, NOW, report=_report(("disk", "ok"), ("phase", "ok")))
-    assert "✅ All good: 2 health checks ok" in text
+    assert "✅ Health 2 of 2 ok · Halts: none" in text
 
 
 def test_one_broken_input_never_stops_the_digest(tmp_path: Path) -> None:
     _full_state(tmp_path)
     (tmp_path / f"engine_{ACCOUNT}.json").write_text("{torn")
-    (tmp_path / "attribution.json").write_text("not json")
     (tmp_path / "control.json").write_text("{torn")
     with closed_trade_file(tmp_path, ACCOUNT).open("a") as fh:
         fh.write("{torn\n")
-    text = build_digest(tmp_path, NOW, roadmap=tmp_path / "nope.md", registry_path=tmp_path / "research_registry.jsonl")
-    assert "Open now: could not read" in text
-    assert "Risk: could not read engine state" in text
+    text = build_digest(tmp_path, NOW, roadmap=tmp_path / "nope.md")
+    assert "Engine state: could not read (a torn engine file)" in text and ACCOUNT not in text
     assert "owner state unreadable (entries blocked)" in text
-    assert "Attribution: could not read" in text
     assert "Closed 2 trades" in text and "unreadable record lines skipped" in text
     assert "Proposals 4" in text and "For you" in text
 
@@ -271,34 +228,6 @@ def test_digest_at_setting_defaults_and_validates() -> None:
         TelegramSettings(digest_at="24:00")
 
 
-def test_digest_counts_a_preregistration_run_without_its_link_by_the_directors_matching(tmp_path: Path) -> None:
-    reg = tmp_path / "trials.jsonl"
-    reg.write_text("\n".join(json.dumps(r) for r in (
-        {"trial": 1, "ts": "2026-10-03T00:00:00+00:00", "status": "preregistered", "family": "tsmom",
-         "config_hash": "abc"},
-        # research_pass recorded the run without a `preregistration` link: same family and config hash
-        {"trial": 1, "ts": "2026-10-04T00:00:00+00:00", "status": "evaluated", "family": "tsmom", "config_hash": "abc"},
-        # a run's own pre-registration is not part of the queue
-        {"trial": 2, "ts": "2026-10-05T00:00:00+00:00", "status": "preregistered", "family": "carry", "queue": False},
-    )) + "\n")
-    text = build_digest(tmp_path, NOW, settings=load_settings(), roadmap=tmp_path / "nope.md", registry_path=reg)
-    assert "Research: no pre-registered trial waiting · budget 2026Q4: 1 of 20 trials used, 0 reserved for " \
-           "pre-registered, 19 open" in text
-
-
-def test_digest_shows_next_quarters_queue_in_the_quarter_before(tmp_path: Path) -> None:
-    reg = tmp_path / "trials.jsonl"
-    reg.write_text("\n".join(json.dumps(r) for r in (
-        {"trial": 1, "ts": "2026-10-05T00:00:00+00:00", "status": "preregistered", "family": "tsmom",
-         "config_hash": "h1", "target_quarter": "2027Q1"},
-        {"trial": 1, "ts": "2026-10-06T00:00:00+00:00", "status": "preregistered", "family": "tsmom",
-         "config_hash": "h2", "target_quarter": "2027Q1"},
-    )) + "\n")
-    text = build_digest(tmp_path, NOW, settings=load_settings(), roadmap=tmp_path / "nope.md", registry_path=reg)
-    assert "Research: no pre-registered trial waiting · budget 2026Q4: 0 of 20 trials used, 0 reserved for " \
-           "pre-registered, 20 open · next quarter: 2 queued" in text
-
-
 # ---------------------------------------------------------------------------------------------- P&L basis (finance audit)
 def _closed_day(sd: Path, *trades: ClosedTrade) -> list[str]:
     from goldbot.telegram.digest import trades_line
@@ -343,22 +272,21 @@ def _digest_with(sd: Path, now: pd.Timestamp, *exits: pd.Timestamp, **kw: Any) -
             fh.write(_trade(x, 10.0 * i, round(0.1 * i, 1), i).model_dump_json() + "\n")
     (sd / f"engine_{ACCOUNT}.json").write_text(json.dumps({
         "account": ACCOUNT, "stage": "normal", "equity": 9_900, "balance_closed_hwm": 10_000,
-        "day_start_equity": 10_000, "week_start_equity": 10_000, "currency": "USD"}))
+        "day_start_equity": 10_000, "week_start_equity": 10_000, "currency": "USD", "mode": "live"}))
     kw.setdefault("settings", load_settings())
     lines = build_digest(sd, now, roadmap=sd / "none.md", **kw).splitlines()
 
     def one(prefix: str) -> str:
         return next((x for x in lines if x.startswith(prefix)), "")
-    return {"header": next((x for x in lines if " trading day (" in x), ""),
-            "trades": one("• Closed") or one("• Trades closed") or one("• Weekend"), "proposals": one("• Proposals"),
-            "month": next((x for x in lines if " so far: " in x), ""), "risk": one("Risk:")}
+    return {"header": lines[0].removeprefix("☀️ "), "trades": one("• Closed") or one("Market closed"),
+            "proposals": one("• Proposals"), "month": next((x for x in lines if " so far: " in x), "")}
 
 
 def test_yesterday_header_names_the_trading_day_and_its_end_in_utc_and_uk_time(tmp_path: Path) -> None:
     got = _digest_with(tmp_path, _utc("2026-10-16 06:45"))
-    assert got["header"] == "Thu 15 Oct trading day (ended 22:00 UTC, 23:00 UK)"                                  # BST
+    assert got["header"] == "Thu 15 Oct results · day ended 22:00 UTC (23:00 UK)"                                  # BST
     got = _digest_with(tmp_path, _utc("2026-11-12 06:45"))
-    assert got["header"] == "Wed 11 Nov trading day (ended 22:00 UTC, 22:00 UK)"   # GMT
+    assert got["header"] == "Wed 11 Nov results · day ended 22:00 UTC (22:00 UK)"   # GMT
 
 
 def test_the_header_reads_the_owner_zone_and_drops_the_local_time_when_it_cannot_be_resolved(tmp_path: Path) -> None:
@@ -368,11 +296,11 @@ def test_the_header_reads_the_owner_zone_and_drops_the_local_time_when_it_cannot
         return base.model_copy(update={"telegram": base.telegram.model_copy(update={"owner_tz": tz})})
     now = _utc("2026-10-16 06:45")
     assert _digest_with(tmp_path, now, settings=with_tz("America/New_York"))["header"] == \
-        "Thu 15 Oct trading day (ended 22:00 UTC, 18:00 EDT)"
+        "Thu 15 Oct results · day ended 22:00 UTC (18:00 EDT)"
     assert _digest_with(tmp_path, now, settings=with_tz("Nowhere/Atlantis"))["header"] == \
-        "Thu 15 Oct trading day (ended 22:00 UTC)"
+        "Thu 15 Oct results · day ended 22:00 UTC"
     assert _digest_with(tmp_path, now, settings=None)["header"] == \
-        "Thu 15 Oct trading day (ended 22:00 UTC, 23:00 UK)"                   # Europe/London by default
+        "Thu 15 Oct results · day ended 22:00 UTC (23:00 UK)"                   # Europe/London by default
 
 
 def test_a_late_send_reports_the_slots_day_before_so_no_day_is_dropped_or_repeated(tmp_path: Path) -> None:
@@ -380,9 +308,9 @@ def test_a_late_send_reports_the_slots_day_before_so_no_day_is_dropped_or_repeat
     # slot reports 15 Oct
     sched = DigestSchedule(tmp_path, "18:00")
     late, next_day = _utc("2026-10-15 22:30"), _utc("2026-10-16 18:00")
-    assert _digest_with(tmp_path, late, as_of=sched.slot(late))["header"].startswith("Wed 14 Oct trading day")
-    assert _digest_with(tmp_path, next_day, as_of=sched.slot(next_day))["header"].startswith("Thu 15 Oct trading day")
-    assert _digest_with(tmp_path, late)["header"].startswith("Thu 15 Oct trading day")   # without the slot: by now
+    assert _digest_with(tmp_path, late, as_of=sched.slot(late))["header"].startswith("Wed 14 Oct results")
+    assert _digest_with(tmp_path, next_day, as_of=sched.slot(next_day))["header"].startswith("Thu 15 Oct results")
+    assert _digest_with(tmp_path, late)["header"].startswith("Thu 15 Oct results")   # without the slot: by now
 
 
 def test_a_close_at_2159_is_yesterdays_and_one_at_2200_is_todays(tmp_path: Path) -> None:
@@ -399,8 +327,8 @@ def test_a_digest_built_at_2159_and_at_2200_reports_different_yesterdays(tmp_pat
     exits = (_utc("2026-10-14 12:00"), _utc("2026-10-15 12:00"), _utc("2026-10-15 13:00"))
     early = _digest_with(tmp_path, _utc("2026-10-15 21:59"), *exits)
     late = _digest_with(tmp_path, _utc("2026-10-15 22:00"), *exits)
-    assert early["header"] == "Wed 14 Oct trading day (ended 22:00 UTC, 23:00 UK)" and early["trades"].startswith("• Closed 1 trade:")
-    assert late["header"] == "Thu 15 Oct trading day (ended 22:00 UTC, 23:00 UK)" and late["trades"].startswith("• Closed 2 trades:")
+    assert early["header"] == "Wed 14 Oct results · day ended 22:00 UTC (23:00 UK)" and early["trades"].startswith("• Closed 1 trade:")
+    assert late["header"] == "Thu 15 Oct results · day ended 22:00 UTC (23:00 UK)" and late["trades"].startswith("• Closed 2 trades:")
 
 
 def test_yesterday_and_the_month_so_far_count_the_same_closes(tmp_path: Path) -> None:
@@ -410,7 +338,7 @@ def test_yesterday_and_the_month_so_far_count_the_same_closes(tmp_path: Path) ->
                        _utc("2026-09-30 23:00"),       # 1 Oct's day: in both (the UTC calendar day put it in September)
                        _utc("2026-10-01 23:00"))       # 2 Oct's day: in neither (the UTC calendar day put it yesterday)
     assert got["trades"] == "• Closed 1 trade: net +$20.00 · +0.20R (1 won, 0 lost)"      # the 2nd
-    assert got["month"].startswith("• October so far: ") and " · 1 trade · +0.20R" in got["month"]
+    assert got["month"].startswith("October so far: ") and " · 1 trade · +0.20R" in got["month"]
 
 
 @pytest.mark.parametrize(("friday", "sunday", "label"), [
@@ -432,8 +360,8 @@ def test_weekend_digests_put_friday_on_saturday_and_the_sunday_reopen_on_tuesday
     sat = _digest_with(tmp_path, _utc(f"{fri + pd.Timedelta(days=1):%Y-%m-%d} 06:45"), *exits)
     mon = _digest_with(tmp_path, _utc(f"{sun + pd.Timedelta(days=1):%Y-%m-%d} 06:45"), *exits)
     tue = _digest_with(tmp_path, _utc(f"{sun + pd.Timedelta(days=2):%Y-%m-%d} 06:45"), *exits)
-    assert sat["header"].startswith(f"{fri:%a %d %b} trading day") and sat["trades"].startswith("• Closed 1 trade:")
-    assert mon["header"].startswith(f"{sun:%a %d %b} trading day")
+    assert sat["header"].startswith(f"{fri:%a} {fri.day} {fri:%b} results") and sat["trades"].startswith("• Closed 1 trade:")
+    assert mon["header"].startswith(f"{sun:%a} {sun.day} {sun:%b} results")
     assert mon["trades"] == WEEKEND_LINE and mon["proposals"] == ""      # one line, and Friday is not repeated
     assert tue["trades"].startswith("• Closed 2 trades:")  # the reopen's close and Monday's
 
@@ -441,19 +369,19 @@ def test_weekend_digests_put_friday_on_saturday_and_the_sunday_reopen_on_tuesday
 def test_a_weekend_day_with_a_close_shows_its_rows_not_the_weekend_line(tmp_path: Path) -> None:
     # a winter Friday close stamped exactly 22:00 UTC is Saturday's opportunity day, reported by Sunday's digest
     got = _digest_with(tmp_path, _utc("2026-11-08 06:45"), _utc("2026-11-06 22:00"))
-    assert got["header"].startswith("Sat 07 Nov trading day")
+    assert got["header"].startswith("Sat 7 Nov results")
     assert got["trades"] == "• Closed 1 trade: net +$10.00 · +0.10R (1 won, 0 lost)"
-    assert got["proposals"] == "• Proposals: none"
+    assert got["proposals"] == ""                                              # "none" lines are not printed
 
 
 def test_a_weekend_day_with_a_proposal_shows_its_rows_not_the_weekend_line(tmp_path: Path) -> None:
     ApprovalBus(tmp_path).archive(_proposal("w1", _utc("2026-10-10 12:00"), Outcome.REJECTED))   # a Saturday
     got = _digest_with(tmp_path, _utc("2026-10-11 06:45"))
-    assert got["proposals"].startswith("• Proposals 1:") and got["trades"] == "• Trades closed: none"
+    assert got["proposals"].startswith("• Proposals 1:") and got["trades"] == ""
 
 
 def test_the_weekend_line_is_plain_and_points_at_tuesday() -> None:
-    assert WEEKEND_LINE == "• Weekend: market closed, no trading. Sunday-evening trades show in Tuesday's digest."
+    assert WEEKEND_LINE == "Market closed Sat–Sun: no trading. Sunday-evening trades show in Tuesday's report."
 
 
 def test_the_digest_counts_risk_check_refusals_broker_and_mt5_box_refusals_and_unconfirmed_orders_apart(
@@ -468,7 +396,7 @@ def test_the_digest_counts_risk_check_refusals_broker_and_mt5_box_refusals_and_u
     for i, (codes, outcome) in enumerate(cards):
         nc = Confirmation(outcome=outcome) if outcome is not None else None    # type: ignore[arg-type]
         bus.archive(_proposal(f"a{i}", YDAY, Outcome.APPROVED, gate_refusal=codes, not_confirmed=nc))
-    text = build_digest(tmp_path, NOW)
+    text = build_digest(_live(tmp_path), NOW)
     assert ("Proposals 10: ✅ 10 approved (1 refused by the risk check · 4 not placed by the MT5 box, the broker or the engine · "
             "2 not confirmed by the broker) · ❌ 0 rejected · ⌛ 0 expired") in text
 
@@ -478,4 +406,4 @@ def test_the_digest_names_only_the_buckets_that_have_cards(tmp_path: Path) -> No
     bus.archive(_proposal("a1", YDAY, Outcome.APPROVED, gate_refusal=["not_confirmed"]))
     bus.archive(_proposal("a2", YDAY, Outcome.APPROVED, gate_refusal=["not_confirmed"],
                           not_confirmed=Confirmation(outcome="opened_closed")))
-    assert "✅ 2 approved (1 not confirmed by the broker) · ❌" in build_digest(tmp_path, NOW)
+    assert "✅ 2 approved (1 not confirmed by the broker) · ❌" in build_digest(_live(tmp_path), NOW)

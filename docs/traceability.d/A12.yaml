@@ -1,5 +1,5 @@
 id: A12
-requirement: 'Daily owner digest on Telegram (owner request 2026-10-10): status, yesterday, risk, research, decisions; once a day, late send under 6 h, no identifiers'
+requirement: 'Daily owner digest on Telegram (owner request 2026-10-10; body superseded by U27, the daily learning report): status, yesterday, risk, research, decisions; once a day, late send under 6 h, no identifiers'
 status: implemented
 code: goldbot/telegram/digest.py `build_digest`, `DigestSchedule`; goldbot/telegram/bot.py `_digest_pass`; config/settings.yaml `telegram.digest_at`
 test: tests/test_digest.py::test_digest_renders_every_section_from_fixture_state; ::test_digest_with_no_state_at_all_still_renders; ::test_digest_never_prints_identifiers; ::test_one_broken_input_never_stops_the_digest; ::test_digest_is_sent_once_a_day; ::test_missed_slot_is_sent_on_start_only_under_six_hours_late

@@ -346,7 +346,7 @@ gaps:                                # bounded spawning (goldbot/ops/gap_watch.p
   regime_history_days: 3650          # volatility terciles cut from up to ten years of 1h bars
 
 telegram:                            # owner user ids go in config/settings.local.yaml (per server), never here
-  digest_at: "06:45"                 # daily owner digest at this UTC time, before London (goldbot/telegram/digest.py)
+  digest_at: "06:45"                 # morning learning report at this UTC time, before London; Sundays the weekly digest (goldbot/telegram/digest.py, weekly_digest.py)
   deadman_every_min: 2               # outside dead man's switch: healthy ping period (goldbot/ops/deadman.py); = the check's period
 
 attribution:                         # daily deterministic attribution (goldbot/research/attribution.py, BACKLOG 12); reporting only
