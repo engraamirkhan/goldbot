@@ -369,12 +369,20 @@ def _in_flight(eng: Engine) -> bool:
 
 
 # ------------------------------------------------------------------------------------------------ signals
-def _bars(frame_1m: pd.DataFrame, tf: str, through: pd.Timestamp) -> pd.DataFrame | None:
+def whole_window(arm: SpecArm) -> bool:
+    """A `specialist` arm reads the engine's whole 1m window (~40 trading days), not LOOKBACK bars: the family's own
+    code warms up over long memories (eq_liquidity_run's ATR200 equal-level threshold found none of the history's
+    candidates on 200 bars), and "the same function runs in the history matrix and live" (arms expansion 2026-10-26,
+    section 3) holds only once they have converged. The written ARM-SPEC rules keep their lookback unchanged."""
+    return arm.rule == "specialist"
+
+
+def _bars(frame_1m: pd.DataFrame, tf: str, through: pd.Timestamp, whole: bool = False) -> pd.DataFrame | None:
     """The store-schema bars of `tf` the rule reads, the last one closing exactly at `through`; None when that bar
-    is not there."""
+    is not there. `whole`: every bar of `frame_1m` (`whole_window`)."""
     sec = tf_seconds(tf)
     span = max(sec * (LOOKBACK + 1), 60 * LOOKBACK_1M)
-    src = frame_1m if tf == "1d" else frame_1m[frame_1m["ts_utc"] >= through - pd.Timedelta(seconds=span)]
+    src = frame_1m if tf == "1d" or whole else frame_1m[frame_1m["ts_utc"] >= through - pd.Timedelta(seconds=span)]
     bars = src if tf == "1m" else resample_bars(src, tf)
     bars = bars[bars["visible_at"] <= through].reset_index(drop=True)
     if bars.empty or pd.Timestamp(bars["visible_at"].iloc[-1]) != through:
@@ -432,13 +440,13 @@ def step(eng: Engine, close_ts: pd.Timestamp) -> bool:
     if not arms or eng.bars_1m.empty:
         return True
     complete = eng.bars_1m[eng.bars_1m["visible_at"] <= close_ts]
-    for tf in sorted({a.tf for a in arms}, key=tf_seconds):
+    for tf, whole in sorted({(a.tf, whole_window(a.spec)) for a in arms}, key=lambda k: (tf_seconds(k[0]), k[1])):
         if tf != "1d" and int(close_ts.timestamp()) % tf_seconds(tf):
             continue
-        bars = _bars(complete, tf, close_ts)
+        bars = _bars(complete, tf, close_ts, whole)
         if bars is not None:
             b1 = complete[complete["ts_utc"] >= pd.Timestamp(bars["ts_utc"].iloc[0])].reset_index(drop=True)
-            for arm in (a for a in arms if a.tf == tf):
+            for arm in (a for a in arms if a.tf == tf and whole_window(a.spec) == whole):
                 _signal(eng, ex, arm, bars, b1, close_ts)
     return True
 
