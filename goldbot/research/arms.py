@@ -32,7 +32,8 @@ PRIOR_WEIGHT_CAP = 50.0
 PRIOR_WEIGHT_PER_TRADE = 0.01                           # weight = min(50, n / 100)
 Timeframe = Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
 RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_absorb", "box_break_close",
-         "ema_pullback", "tsmom", "specialist", "blocked")
+         "ema_pullback", "tsmom", "specialist", "blocked",
+         "hurst_band_break", "hurst_band_break_control", "htf_stretch_break", "htf_stretch_break_control")
 
 
 # ---------------------------------------------------------------- holdout guard
