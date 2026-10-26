@@ -116,6 +116,9 @@ accounts:
     shadow_host: true         # counts only once enabled: then icm-demo must drop its own flag
     # never a real trade: no live agents, and the engine refuses any entry that is not a cost probe (fail closed)
     probe_only: true
+    # PD 2026-10-26 (ADR 0043 host cap, 18 open): the RiskGate's open-position cap on THIS account only, replacing
+    # risk.max_positions_per_account (2, which every other account keeps); refused at load off a demo probe_only account
+    max_positions: 18
     # dynamic limits (design 2026-10-19 item 4): each probe's loss is its own stop's at 0.01 lot, at most max_loss
     # and budget_share x the day's limit / max_open; the probe count is budget_share x the day's limit / the median
     # loss at the stop of the last 20 probes, 1 to max_open. max_loss and max_open are the ceilings and the fallback

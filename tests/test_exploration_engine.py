@@ -653,3 +653,34 @@ def test_a_bar_stamped_ahead_of_the_host_clock_is_never_a_candidate_and_never_bl
     assert len(_sent(eng)) == 1
     [row] = _obs(tmp_path)
     assert row[:3] == ("i0", 1, "random")                   # the real candidate: taken, never shadowed
+
+
+# ------------------------------------------------------------------------------------------------ PD 2026-10-26
+def test_a_demo_probe_only_account_may_hold_its_own_max_positions_and_every_other_keeps_the_global_two():
+    """PD decision (A), ADR 0043 host cap: icm-probe's RiskGate holds up to 18 positions through a per-account,
+    demo-and-probe_only override; the global `risk.max_positions_per_account` (2) binds every other account."""
+    from goldbot.config import load_settings
+    from goldbot.ops.services.engine import engine_limits
+    s = load_settings()
+    assert s.risk.max_positions_per_account == 2
+    assert engine_limits(s, _probe_account(max_positions=18)).max_positions == 18
+    assert engine_limits(s, _probe_account(max_positions=18), paper=True).max_positions == 2   # paper: the defaults
+    assert engine_limits(s, _probe_account()).max_positions == 2
+    accs = acc_mod.load_accounts(logins=False)
+    assert accs["icm-probe"].max_positions == 18 and accs["icm-demo"].max_positions is None
+    assert engine_limits(s, accs["icm-demo"]).max_positions == 2
+
+
+@pytest.mark.parametrize("kw", [dict(mode="live", login=1), dict(probe_only=False)])
+def test_a_max_positions_override_is_refused_off_a_demo_probe_only_account(kw):
+    with pytest.raises(ValueError, match="max_positions"):
+        _account(max_positions=18, **kw)
+
+
+def test_the_max_positions_override_survives_the_limits_policy():
+    """The engine resolves its limits through the policy every refresh: the override must reach the gate there too."""
+    from goldbot.config import load_settings
+    from goldbot.ops.services.engine import engine_limits_policy
+    acc = acc_mod.load_accounts(logins=False)["icm-probe"]
+    pol = engine_limits_policy(load_settings(), acc)
+    assert pol.defaults.max_positions == 18

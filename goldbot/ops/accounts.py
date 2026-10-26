@@ -212,6 +212,10 @@ class Account(Record):
     # ADR 0037 amendment 4 ("probes must never consume the real trades' allowance"): a dedicated probe account. Its
     # engine has no live agents and refuses any entry that is not a cost probe (fail closed, Engine._execute)
     probe_only: bool = False
+    # PD decision 2026-10-26 (ADR 0043 host cap): the RiskGate's open-position cap for THIS account, replacing
+    # risk.max_positions_per_account (2) here only. Accepted on a demo probe_only account only (refused at load
+    # otherwise); None = the global value
+    max_positions: int | None = Field(None, ge=1, le=18)
     # owner 2026-10-19 (docs/design/dynamic-limits-2026-10-19.md): "loss per trade, daily loss ... dynamic according to
     # strategy". On: per-strategy risk per trade from the nightly controller, tighten-only intraday factors and the
     # probes' loss and count from their own stops and the budget (cost_probe.probe_limits); the configured values stay
@@ -269,6 +273,14 @@ class Account(Record):
         cap = self.daily_loss_limit_abs
         if self.cost_probe.enabled and cap is not None and self.cost_probe.max_loss > self.cost_probe.budget_share * cap:
             raise ValueError("cost_probe.max_loss must fit inside budget_share x daily_loss_limit_abs (ADR 0037)")
+        return self
+
+    @model_validator(mode="after")
+    def _max_positions_on_the_probe_host_only(self) -> Account:
+        """PD 2026-10-26: a per-account max_positions only on a demo probe_only account (where nothing real is at
+        stake); every other account keeps the global risk.max_positions_per_account."""
+        if self.max_positions is not None and (self.mode != "demo" or not self.probe_only):
+            raise ValueError("max_positions is allowed on demo probe_only accounts only (PD 2026-10-26, ADR 0043)")
         return self
 
     @model_validator(mode="after")
@@ -520,7 +532,8 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
                            cost_probe=CostProbe(**(a.get("cost_probe") or {})),
                            shadow_host=bool(a.get("shadow_host", False)), probe_only=bool(a.get("probe_only", False)),
                            dynamic_limits=a.get("dynamic_limits", False),
-                           exploration=Exploration(**(a.get("exploration") or {})))
+                           exploration=Exploration(**(a.get("exploration") or {})),
+                           max_positions=a.get("max_positions"))
     hosts = [a for a in out.values() if a.enabled and a.shadow_host]
     if len(hosts) > 1:      # ADR 0037 amendment 4: one shadow book, one host; two would trade it twice
         raise ValueError(f"{len(hosts)} enabled accounts are the shadow host in config/accounts.yaml: exactly one may "
