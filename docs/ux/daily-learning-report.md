@@ -13,8 +13,8 @@ The owner reads this on a phone, once, before London opens. The question it answ
 |---|---|---|---|
 | D1 | **One morning message, not two.** The learning report *replaces the body* of today's 06:45 UTC digest (same `DigestSchedule`, same state file, same 6 h late rule). Health, halts and "For you" stay; the exploration lines take the place of the proposals/trades lines on `probe_only` accounts. | Two bot messages in the same minute train the owner to skim both. The current digest's "Trades closed" reads `closed_trades_*.jsonl`, which by design (research E9, `population.py` isolation) never holds exploration trades, so on the labs it reports "none" while 60 trades closed: actively misleading. | A real-money account going live: its proposal/approval line (approved, rejected, expired) comes back above the labs, because that is the decision the owner makes. |
 | D2 | **Weekly digest replaces the Sunday 06:45 UTC daily.** Sunday's daily would only say "weekend, market closed". | One message per day, never more. Saturday 06:45 still carries Friday's day. | None foreseen. |
-| D3 | **Arms are described, never judged, before their read.** No p-values, t, "probability best", "winning/losing", "significant". Words: "ahead", "behind", with n and "first read at 300 trades". | The prereg fixes **one read per arm, at its 300th admissible trade, no interim reads**. A daily league table is an interim look by the owner and by every agent reading the message; the words must not invite acting on it. The only pre-registered rule that can act before 300 is the **per-arm stop** (scalp −30R in 300, intraday −15R in 100, swing −10R in 40), so the report shows distance to that stop: it is the one number that will actually change something. | Quant-reviewer ruling that a descriptive owner view is an interim read: then the arm block moves to the weekly only. **Quant-reviewer sign-off on §3.4 wording is required before build.** |
-| D4 | Bandit share (P(best)) is shown only as **"share of the lab's budget"**, never as a probability of success. | Thompson share is an allocation, not evidence. | — |
+| D3 | **Arms are blinded until their read (quant review 2026-10-26).** Per arm the report shows only its trade count n and its status (running / within 50% of its stop / retired at its pre-set stop / read verdict). Never an arm's mean R, sum, rank, sign, budget share or comparison with the random baseline before its recorded n = 300 read. | The prereg fixes **one read per arm, at its 300th admissible trade, no interim reads** (Bonferroni m ≤ 19). Any per-arm outcome figure seen daily by the owner or any agent is an interim look and invites tinkering. The per-arm stop is the only rule that acts before 300, so it is shown as a band, and its R only in the notice after it fires. | A new pre-registration that changes the read rule. |
+| D4 | **The learner line says only that it ran.** "Learner 21:30 UTC: ran · shares updated" (or "did not run", or "N arms changed share"): no arm id, direction or size. | Share moves are a function of each arm's posterior mean: printing them unblinds the arms (quant review). | Same as D3. |
 | D5 | Telegram text only: no inline keyboard on these messages at all (not even "open dashboard"). A deep link is plain text. | Constraint: nothing that places trades; zero buttons removes the class of mistake and of misclick. | — |
 | D6 | Accounts appear by **role label**, not slug: `icm-probe` = **Scalp lab**, `icm-demo` = **Day/swing lab**, `vantage-demo` = **Vantage lab**, a real-money account = **Live (ICM)**. Mapped in one table in code; an unmapped account prints "Other account", never its slug, login, server or host. | Plain words; nothing that identifies an account outside the repo; the slug's meaning changed on 2026-10-26 (per-style hosts) and will change again. | — |
 
@@ -31,15 +31,14 @@ Scalp lab: 214 signals · 63 taken · 61 filled · 58 closed −£17.60 · −3.
   down 2.1% (£230) from peak · warns at 6% (£657) · pauses at 8% (£876)
 Day/swing lab: 37 signals · 9 taken · 9 filled · 7 closed +£21.60 · +1.4R
   costs £2.10 (0.1R) · refused: 14 slots full · 8 news window · down 0.8% (£88)
-Arms, net R so far (trades) · too early to judge, first read at 300
-  ahead: MB30 +6.2R (41) · S2A +3.1R (118)
-  behind: S3B −11.4R (126; stops at −30R) · I2B −5.0R (22; stops at −15R)
-Learner 21:30 UTC: scalp S2A 18→24%, S3B 9→5% of budget · intraday, swing no change
+Arms (trades): S1A 96 · S1B 88 · S2A 118 · S3B 126 · MB30 41 · +14 more
+  none within 50% of a stop · none retired · each read once at 300
+Learner 21:30 UTC: ran · shares updated
 Month: +£112.40 · +9.8R over 18 trading days · open now 4 trades (0.04 lot)
 👉 For you: nothing
 ```
 
-14 logical lines. Every logical line wraps to at most 2 rows on a 360 px phone at Telegram's default size
+13 logical lines. Every logical line wraps to at most 2 rows on a 360 px phone at Telegram's default size
 (about 40 characters a row); the whole message fits one and a half phone screens.
 
 ### 2.2 Line order and budget (hard rule: ≤ 15 non-empty logical lines)
@@ -51,7 +50,7 @@ Month: +£112.40 · +9.8R over 18 trading days · open now 4 trades (0.04 lot)
 | 3-6 | Per lab: result line + up to 3 detail lines (costs, refused, drawdown) | per enabled account | result 1; drawdown 1 when ≥ warn line, else 3; costs 2; refused 3 |
 | | Second lab: result + 1 merged detail line | | as above |
 | | Broker cost comparison (only when ≥ 2 brokers filled) | conditional | 3 |
-| | Arms header + ahead + behind | when any arm has ≥ 10 trades | 2 (behind with a stop distance is kept longest) |
+| | Arms (trades, fixed config order, never sorted by outcome) + stop/read status | when any arm is running | 2 (a retirement or a read verdict is never cut) |
 | | Learner | yes | 2 |
 | | Month · open now | yes | 2 |
 | last | 👉 For you | yes | 1 |
@@ -63,7 +62,7 @@ risk line, and "For you" are never cut. A cut line adds "· more on the dashboar
 
 - **Units on every number**: money in the account's currency with its symbol (£ for the GBP labs); R with the suffix `R`
   and an explicit sign (`+1.4R`, `−3.9R`, true minus U+2212); percentages with `%` and a £ figure beside them for any
-  risk line; counts with their noun (`63 taken`, `(41)` only inside the arms block, whose header says "(trades)").
+  risk line; counts with their noun (`63 taken`; inside the arms block, whose header says "(trades)", a bare count after the arm id).
 - **Every time with its zone**: UTC first, owner's zone (`telegram.owner_tz`, default Europe/London, printed "UK") in
   the header; other times UTC only (one zone per line is enough on a phone).
 - **Never sum across currencies** (BACKLOG 28). A USD lab shows `$` and, in brackets, `≈ £` at the day's close rate
@@ -77,7 +76,7 @@ risk line, and "For you" are never cut. A cut line adds "· more on the dashboar
   code; unknown code: "other reason (n)". Arm ids stay as ids (the owner knows them from the dashboard) but never with
   family internals.
 - **No identifiers**: no login, server, host, Telegram id, email, client order id or position id.
-- Rounding: £ to 2 dp; R to 1 dp (sum) or 2 dp (per trade); % to 1 dp; lots to 2 dp; budget shares to whole %.
+- Rounding: £ to 2 dp; R to 1 dp (sum) or 2 dp (per trade); % to 1 dp; lots to 2 dp.
 
 ### 2.4 States (exact copy)
 
@@ -94,11 +93,11 @@ risk line, and "For you" are never cut. A cut line adds "· more on the dashboar
 | Drawdown ≥ 12% (halt rail) | line 2 and the lab line | line 2: `🛑 Halted: Scalp lab at 12% drawdown, no new trades · exits still run`; lab: `🛑 Scalp lab halted Mon 16:05 UTC: down 12.1% (£1,325) · re-arm on the dashboard (Risk)` |
 | Owner / supervisor / drift halt | line 2 | `🛑 Halts: owner halt since Mon 09:12 UTC` (as today: who set it is not printed) |
 | Account not enabled (e.g. Vantage before live) | — | omitted from the daily; listed once in the weekly ("Not running: Vantage lab") |
-| Arms: none with ≥ 10 trades | arms block | `Arms: too early, no arm has 10 trades yet (most: S2A 7)` (one line) |
-| Arm reached its stop | behind line, first | `S3B retired at −30.4R after 212 trades (its pre-set stop)` |
-| Arm reached 300 | arms block | `S2A reached 300 trades: read due, result in the weekly` (the report never computes the read; it relays the evaluator's recorded verdict when it exists: `S2A read: passed` / `S2A read: not passed, retired`) |
+| Arms: none running yet | arms block | `Arms: none running yet` (one line) |
+| Arm reached its stop | arms block, first | `S3B retired at its pre-set stop after 212 trades` (its R appears only in this notice, after the stop has fired, and only if the quant-reviewer's stop notice includes it) |
+| Arm reached 300 | arms block | `S2A reached 300 trades: read due` (the report never computes the read; it relays the evaluator's recorded `read_verdict`: `S2A read: passed` / `S2A read: not passed, retired`) |
 | Learner did not run / weights stale (> 3 days, `MAX_WEIGHTS_AGE`) | learner | `⚠️ Learner did not run last night: equal shares in use` |
-| Learner ran, nothing moved ≥ 2 points | learner | `Learner 21:30 UTC: no share moved by 2 points or more` |
+| Learner ran, nothing changed | learner | `Learner 21:30 UTC: ran · no share changed` (or `ran · 4 arms changed share`: a count, no ids, direction or size) |
 | Sunday model retrain happened (H-62) | learner, appended | `· scalp model: new one kept (beat the old on 2 unseen weeks)` / `· scalp model: old one kept` |
 | A source unreadable | that line only | `Scalp lab: could not read the trade ledger (OperationalError)` (existing `_section` pattern; the rest still sends) |
 | Health unknown | line 2 | `❔ Health: unknown (the check did not run)` |
@@ -130,11 +129,9 @@ broker cost comparison. All money in the account currency as the broker reports 
 | policy skips | not taken by the 0.8/0.2 taking rule or the bandit share: **not** a refusal, not shown in either message (the owner cannot act on it; the dashboard has it) | `branch` | count |
 | down … from peak | `1 − equity / balance_closed_hwm` of that engine (the RiskGate's own arithmetic), at send time, with £ = hwm − equity | `engine_<account>.json` | %, £ |
 | warn / pause / halt lines | the account's configured exploration warn (6%), pause (8%, ADR 0043 X4) and `risk.drawdown_stage2` (12%), **read from config, never hard-coded**; £ = hwm × line | settings / accounts.yaml | %, £ |
-| arms: net R so far | per arm, Σ net R of its closed live trades since the arm started, **in exit order, the same series the per-arm stop rule uses** (quant-reviewer confirms the series before build); controls (S0, S0R, I0, W0, P0) excluded from ahead/behind | `exploration_trades` | R |
-| arms: (n) | that arm's admissible closed trades (the prereg's n toward 300) | as above | trades |
-| ahead / behind | top 2 / bottom 2 arms by net R so far among arms with n ≥ 10; an arm within 50% of its stop is always listed in "behind" with "stops at …" | derived | R |
-| stops at | the arm's pre-registered stop (−30R scalp, −15R intraday, −10R swing) from the prereg config | prereg / arm config | R |
-| learner change | latest `exploration_weights` run vs the previous run, per style: arms whose share moved ≥ 2 points, largest 2 per style, "a→b%" | `exploration_weights` | % of the lab's style budget |
+| arms: status | per arm, one of running / within 50% of its stop (band only, computed on the stop-rule series in exit order, never printed as a number) / retired at its pre-set stop / read verdict (from `read_verdict`) | arm status row | — |
+| arms: (n) | that arm's admissible closed trades (the prereg's n toward 300); controls included as plain counts | arm status row | trades |
+| learner | whether the latest `exploration_weights` run exists and is fresh, and the count of arms whose share changed; never which arms, direction or size | `exploration_weights` | count |
 | learner time | the run's `run_ns`, UTC | same | time |
 | month | as today (`monthly_report.month_to_date_line`), plus the labs' exploration P&L/R as its own term | existing + exploration | £, R, days |
 | open now | open positions and lots across enabled engines | engine state | trades, lot |
@@ -147,7 +144,7 @@ broker cost comparison. All money in the account currency as the broker reports 
 2. A per-account **exploration state** readable without the engine's internals: `paused` (bool), `paused_since_utc`,
    `pause_line`, `warn_line`, `resume_rule` (plain text from a fixed set). Suggested home: `engine_<account>.json`
    `exploration` block, also served on `GET /api/accounts` so the dashboard and Telegram say the same thing.
-3. A per-arm **status** row: `arm_id, style, n_admissible, net_r_running, stop_r, stop_n, retired_at, retired_why,
+3. A per-arm **status** row readable by the report: `arm_id, style, n_admissible, stop_band (running|within_50pct|retired), retired_at, read_verdict, read_at`. The running net R stays in the evaluator-only store (§7) and is not in this row.
    read_verdict, read_at` (the evaluator writes `read_verdict`; the report only relays it). Without it, retirements
    cannot be reported reliably.
 4. An `fx_close` rate per day (USD→GBP) for the "≈ £" figure and the spread/slippage conversion; if absent, spread
@@ -170,13 +167,9 @@ Day/swing lab: 188 signals · 43 taken · 41 filled · 38 closed +£64.30 · +4.
   costs £9.80 (0.6R) · worst drawdown 1.2% (£132) Thu · now 0.8% (£88)
 Costs ICM: £0.19 a trade at 0.01 lot vs £0.18 planned · spread wide 6% of the time
 Learning paid +£23.10 demo this week (real money £0) · 1,402 usable labels
-Arms, net R so far (trades) · too early to judge, first read at 300
-  ahead: MB30 +6.2R (41) · S2A +3.1R (118) · W1A +2.0R (12)
-  behind: S3B −11.4R (126) · S5A −4.8R (140) · I2B −5.0R (22)
-  near a stop: S3B −11.4 of −30R · retired this week: none
-  closest to its read: S2A 118 of 300 · random baseline S0 −8.0R (140)
-Learner this week: scalp S2A 12→24%, S3B 14→5% · intraday MB30 10→19%
-  swing: equal shares (3 fills, too few) · models: scalp old one kept
+Arms (trades): S0 140 · S1A 96 · S1B 88 · S2A 118 · S3B 126 · S5A 140 · I2B 22 · MB30 41 · W1A 12 · +12 more
+  none within 50% of a stop · retired this week: none · each read once at 300
+Learner this week: ran 5 of 5 nights · shares updated · models: scalp old one kept
 Research this week:
   • Box break 24-bar test: no edge after costs, closed (trial 7 of 20)
   • Intraday and swing arms moved to the Day/swing lab (ADR 0043)
@@ -185,7 +178,7 @@ Not running: Vantage lab
 👉 For you: nothing
 ```
 
-23 logical lines.
+19 logical lines.
 
 ### 3.2 Weekly field definitions (beyond §2.5)
 
@@ -197,13 +190,11 @@ Not running: Vantage lab
 | cost per trade (broker) | mean measured round trip (`cost`, scaled to 0.01 lot) over all fills incl. the P0 probe, vs the frozen cost model (`config/arm_costs.yaml` round trip, converted) | `exploration_trades.cost`, cost probes | £ per trade at 0.01 lot |
 | spread wide % | share of decision minutes where the spread exceeded `risk.max_spread_points` | spread profile | % of open minutes |
 | learning result | Σ net P&L of the labs in the week. Negative: "Learning cost £x demo (real money £0) · £y per usable label (n)"; positive: "Learning paid +£x demo this week (real money £0) · n usable labels". Usable labels = admissible labels written in the week (ADR 0043 ROI reading: demo £ per admissible label) | exploration ledger, `exploration_obs.labelled_ns` | £, £ per label |
-| near a stop | non-control arms with net R ≤ 0.5 × their stop_r while n < stop_n (half-way or more to the stop) | arm status | R |
-| closest to its read | the non-control arm with the largest n < 300 | arm status | trades |
-| random baseline | the style's random control arm (S0 for scalp, I0 intraday, W0 swing) net R and n; the reference the arms are compared with by eye, without a test | arm status | R, trades |
-| learner this week | first vs last `exploration_weights` run of the week, per style, moves ≥ 2 points, top 2 per style | `exploration_weights` | % of style budget |
+| within 50% of a stop | arms whose stop band is `within_50pct` (count, then ids); band only, no R | arm status row | count |
+| learner this week | nights the learner ran out of the week's nights, and the H-62 retrain outcome; no per-arm shares | `exploration_weights`, model registry | count |
 | models | H-62 Sunday retrain outcome as recorded (kept / replaced / not enough labels: "612 of 1,500") | model registry | — |
 | research this week | at most 3 bullets, newest first: trials with a recorded verdict (registry rows with a verdict dated in the week), ADRs accepted in the week (`docs/decisions`, by date), arm retirements and read verdicts; each in plain words with the trial count "trial n of budget"; more: "+N more on the dashboard" | research registry, ADR index, arm status | — |
-| next week | at most 1 line: the next tier-1 news event (CPI, NFP, FOMC, PCE) with its blackout window in UTC, and any arm read expected | calendar, blackout settings | UTC |
+| next week | at most 1 line: the next tier-1 news event (CPI, NFP, FOMC, PCE) with its blackout window in UTC | calendar, blackout settings | UTC |
 
 **Needs field 5:** engine drawdown history (daily max drawdown per account, written at the 22:00 UTC roll) so "worst
 drawdown this week" is a record, not a guess from the end state.
@@ -218,14 +209,14 @@ drawdown this week" is a record, not a guess from the end state.
 | Research registry unreadable | `Research this week: could not read the registry` |
 | First week of a lab (no prior weights run) | `Learner: first run, equal shares` |
 
-### 3.4 Arms wording guardrails (quant sign-off required)
+### 3.4 Arms blinding rule (quant review 2026-10-26, binding)
 
-- Header always carries "too early to judge, first read at 300" until an arm has its recorded read; after that, that
-  arm prints its recorded verdict and leaves the ahead/behind list.
-- Never print: p-value, t-stat, "probability best", "significant", "edge found", "winning", "best/worst strategy",
-  win rate, or a per-trade mean R for an arm with n < 300 (sums are shown because the stop rule is a sum).
-- Controls are never in ahead/behind; they appear only as "random baseline".
-- Arms below 10 trades are not ranked; the line says how many were left out when it matters ("+6 arms under 10 trades").
+- Per arm: n and status only, in fixed config order. Never, before that arm's recorded n = 300 read: its mean R, sum
+  of R, rank, sign, budget share or share change, ahead/behind, or any comparison with the random baseline.
+- A stop breach prints only as "<arm> retired at its pre-set stop after <n> trades"; distance to a stop only as a band.
+- Banned tokens in arm context: per-arm net R, rank, share, "ahead", "behind", "baseline", "best", "worst", p-value, t, "significant", win rate.
+- Lab-level P&L in £ and R per account and per style (net, gross apart; controls included) stays; no per-arm split.
+- After the read, the arm prints its recorded `read_verdict` only.
 
 ## 4. Layout and accessibility on Telegram
 
@@ -251,13 +242,13 @@ drawdown this week" is a record, not a guess from the end state.
    and asserts none appears; account slugs (`icm-probe`, `icm-demo`, `vantage-demo`) never appear; an unmapped
    account prints "Other account".
 5. No `reply_markup` on either message (test on the bot send call).
-6. Arm guardrails (§3.4): banned-word test; controls never in ahead/behind; arms with n < 10 never ranked; the arm
-   series equals the stop-rule series (shared function, not a copy).
+6. Blinding (§3.4): for every state fixture, the output contains no per-arm R, sum, share, rank or banned token for any arm
+   before that arm's recorded read (a test seeds arms with distinctive R and share values and asserts none appears).
 7. Exploration and real-money P&L are never summed together, and currencies are never summed together.
 8. Drawdown lines (6/8/12%) come from config: a test changes them in settings and the text follows.
 9. One broken source yields one "could not read" line and the message still sends (existing `_section` contract).
 10. Sunday sends the weekly and not the daily; Saturday sends Friday's daily; a 6 h late send keeps the right day.
-11. Quant-reviewer has signed the §3.4 wording and the arm R series; trading-safety-reviewer has confirmed the pause and
+11. Trading-safety-reviewer has confirmed the pause and halt copy matches engine behaviour (cost probe and exits continue at −8%); the arm block follows §3.4 (quant review 2026-10-26).
     halt copy matches engine behaviour (cost probe and exits continue at −8%).
 12. Owner-verified: the first live daily is screenshotted on a 360 px phone in light and dark and attached to the
     deploy note; the owner reads it without opening the dashboard.
@@ -267,6 +258,16 @@ drawdown this week" is a record, not a guess from the end state.
 | Rank | Risk | Fix |
 |---|---|---|
 | 1 | The current digest reports "Trades closed: none" on the labs while they trade (exploration is isolated from `closed_trades`). The owner may already be reading wrong mornings. | D1: ship this as a replacement; until then, add one line to today's digest: "Labs: see the dashboard (exploration not counted here)". |
-| 2 | Daily arm rankings invite interim reads and owner tinkering against the prereg. | D3 + §3.4 guardrails + quant sign-off; the stop distance is the only action-relevant number shown. |
+| 2 | Per-arm figures invite interim reads and owner tinkering against the prereg. | D3/D4 + §3.4 blinding + §7 views; acceptance test 6. |
 | 3 | Costs in R on the scalp lab (2.4R a day on −3.9R) will read as "costs are killing it" — true and useful, but only if the planned figure is beside it. | Weekly broker line shows measured vs planned per trade; daily keeps the R figure. |
 | 4 | Per-host exposure is not summed (ADR 0043 note): the owner may read two "down 2%" lines as small while both labs are on XAUUSD. | Out of scope here; the weekly could add "combined open, both labs" if the trading-safety reviewer wants it. |
+
+
+## 7. Views (who sees what about arms)
+
+| Audience | Sees |
+|---|---|
+| Owner | this Telegram report: per arm n and status only |
+| Research team, evaluator (day to day) | the same n-only view |
+| Evaluator, at an arm's read | the unblinded per-arm series, in an evaluator-only store, opened **once per arm at n = 300** (Bonferroni m ≤ 19); the verdict is relayed through the existing `read_verdict` field |
+| Dashboard | the arm table follows the same rule as this report (n and status until `read_verdict`) |
