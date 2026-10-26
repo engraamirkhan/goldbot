@@ -32,7 +32,7 @@ PRIOR_WEIGHT_CAP = 50.0
 PRIOR_WEIGHT_PER_TRADE = 0.01                           # weight = min(50, n / 100)
 Timeframe = Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
 RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_absorb", "box_break_close",
-         "ema_pullback", "tsmom", "blocked",
+         "ema_pullback", "tsmom", "specialist", "blocked",
          # time-structure arms (docs/research/prereg-2026-10-26-time-structure.md): frozen in the spec with status
          # blocked until their generators land in arm_rules.RULE_FUNCS (backlog 112); a blocked arm never runs
          "band_hurst_switch", "level_break", "weekday_hold")
@@ -123,6 +123,10 @@ class Arm(FrozenRecord):
             raise ValueError(f"{self.id}: an arm has one decision window, window_utc or window_local, not both")
         try:
             local_window(self.params)
+            if self.rule == "specialist":
+                # arms expansion 2026-10-26: an unknown or blocked family, preset, timeframe or config is refused at load
+                from goldbot.research.arm_rules_specialist import build_specialist
+                build_specialist(self)
         except ValueError as exc:
             raise ValueError(f"{self.id}: {exc}") from exc
         return self
