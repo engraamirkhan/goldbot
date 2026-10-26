@@ -1,0 +1,1 @@
+- vantage-demo config corrected for the new box: server VantageMarkets-Demo (Raw ECN, GBP £10k), terminal_path as installed by the bootstrap on goldbot-mt5-vantage; still `enabled: false` until broker-separated evidence (loop L1) merges and server_tz is measured (gap week, ADR 0005).
