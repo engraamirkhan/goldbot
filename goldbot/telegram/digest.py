@@ -1,41 +1,42 @@
-"""The owner's daily Telegram digest: one short message every morning (telegram.digest_at, default 06:45 UTC, before
-London) with signal, not noise. Read on a phone, so it stays under about 15 lines:
+"""The owner's morning Telegram message: the daily learning report (docs/ux/daily-learning-report.md, lane L5a), sent
+once a day at telegram.digest_at (default 06:45 UTC, before London). It answers, on a phone, in ten seconds: "did the
+labs run, what did learning cost, is anything near a line, and do I need to do anything?"
 
-* status   all good / attention needed, from the health report, failing and warning checks named;
-* yesterday (the opportunity day before the digest's, D-2 22:00 to D-1 22:00 UTC; goldbot/ops/report_days.py, the
-           day the month line and the monthly report use, so a close is never on one day there and another here)
-           proposals made, approved, rejected, expired; trades closed with net P&L ($) and R from net rows only, gross-only trades (costs not recorded) shown apart and never labelled net
-           (state/closed_trades_*.jsonl via goldbot.ops.gates_phase.load_closed_trades); the month so far (time-weighted
-           %, trades, R, average per trading day; goldbot.ops.monthly_report), once it has a closed trade; open
-           positions now;
-* risk     worst drawdown stage and drawdown from peak, daily and weekly loss-cap use (the engine's figures, on the
-           risk day that resets at 00:00 UTC, not the opportunity day), any halt (owner, drift, supervisor, drawdown);
-* research the next pre-registered trial or the quarter's trial budget, and the attribution headline when
-           state/attribution.json exists: the best positive and worst negative row whose adjusted verdict clears the
-           Bonferroni bar (ADR 0022), else "no row clears the bar" with the overall cell;
-* decisions waiting for the owner, with counts: pending approvals, the owner decision queue in docs/ROADMAP.md, a
-           deploy on offer.
+Decisions of the spec, as built here:
 
-Every number carries its unit and every time its zone (UTC). No identifiers: check names lose their account suffix,
-halts do not say who set them, and no account, login, email or Telegram id is printed. Money is in account currency
-($, the accounts are USD, as `Proposal.risk_usd`).
+* D1 "One morning message, not two": this report REPLACES the old digest's body. The old digest read
+  closed_trades_*.jsonl only, which by design never holds exploration trades, so it said "Trades closed: none" while
+  the labs closed sixty. The labs' figures come from aux.db (goldbot/telegram/labs.py); the engines' own proposals
+  and closes still show, on their own lines, when there are any.
+* D2 "Weekly digest replaces the Sunday daily" (goldbot/telegram/weekly_digest.py): `report_text` picks by the slot.
+* D3 "Arms are blinded until their read": per arm only its trade count and a band; never its R, sum, rank, sign or
+  budget share (labs.ArmStatus has no such field). D4 "The learner line says only that it ran".
+* D5 no buttons: plain text, no reply_markup. D6 accounts by role label (labs.role), never their slug, login, server
+  or host; check names lose their account suffix; halts do not say who set them.
+* Budget: at most DAILY_LINES non-empty lines (spec 2.2). Over budget, `fit` drops priority-3 lines, then merges a
+  lab's detail lines, then drops priority-2 lines; health, halts, any line at or past a risk line, a stop or read
+  notice and "For you" are priority 1 and never cut, and a cut lab says "· more on the dashboard".
+* "Day" is the opportunity day before the slot (report_days.day_before, D-2 22:00 to D-1 22:00 UTC), the day the
+  dashboard and the monthly report use. Every number carries its unit, every time its zone; £ and R with an explicit
+  sign and the true minus; currencies and exploration and engine P&L are never summed together.
+* The drawdown lines are the engine's own (goldbot/engine/exploration.py DD_WARN, DD_PAUSE: the pause the engine
+  applies) and settings `risk.drawdown_stage2` (the halt rail), read at build time, never copied here.
 
-Robust by construction: each section is built on its own, a missing file reads as "none yet", and an unreadable one
-gives that section a "could not read" line; one broken input never stops the digest. Reporting only: nothing here
-changes an order, a halt or a setting.
+Robust by construction: each section is built on its own; an unreadable source gives that section one "could not
+read" line and the message still goes out. Reporting only: nothing here changes an order, a halt or a setting.
 
 `DigestSchedule` decides when to send (no network, so it is unit-tested): once per scheduled slot, recorded in
 state/telegram_digest.json only after delivery (a failed send is retried on the next pass), and a slot missed while
 the service was down is still sent when it starts, if it is under LATE_LIMIT (6 h) late; later than that it is
-skipped (a stale morning digest at night is noise).
+skipped (a stale morning report at night is noise).
 """
 from __future__ import annotations
 
 import json
 import re
-from datetime import timedelta
+import sqlite3
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -44,25 +45,26 @@ from goldbot.base import Record, load_record_json, write_atomic
 from goldbot.config import ROOT, Settings
 from goldbot.execution.not_placed import CAUSE_PHRASE, approval_cause
 from goldbot.ops.accounts import engine_state_files
-from goldbot.ops.report_days import day_before, day_bounds
+from goldbot.ops.report_days import day_before, day_bounds, month_days, weekdays
+from goldbot.telegram import labs
 from goldbot.telegram.approvals import window_over
-from goldbot.telegram.entry_text import digest_line as entry_digest_line
 
 STATE_FILE = "telegram_digest.json"
 LATE_LIMIT = pd.Timedelta(hours=6)
 MAX_NAMES = 5                       # check names listed per status before "+N more"
-# agent ids are per-version detail; "not taken" is not a trading cell; exit target/stop cells are signed by
-# construction (ADR 0022 F2): not a test
-ATTRIBUTION_SKIP = ("agent", "decision", "exit")
+DAILY_LINES = 15                    # spec 2.2: "hard rule: <= 15 non-empty logical lines"
+ARMS_WIDTH = 72                     # the arms line: two phone rows of about 40 characters, less word-wrap slack
 DEFAULT_ROADMAP = ROOT / "docs" / "ROADMAP.md"
 _DECISION_ROW = re.compile(r"^\|\s*(?:OD-|D)\d+\s*\|")   # "| D3 |" or, since the 2026-10-16 re-plan, "| OD-3 |"
-_STAGE_RANK = {"normal": 0, "size_down": 1, "halted": 2}
 OWNER_TZ = "Europe/London"          # the header's local time when telegram.owner_tz is not set ("UK")
 NO_PROPOSALS = "• Proposals: none"
 NO_TRADES = "• Trades closed: none"
-# a Saturday or Sunday opportunity day with no proposal and no close: one line instead of two "none" lines (the Sunday
-# reopen opens Monday's day, so its closes are in Tuesday's digest)
-WEEKEND_LINE = "• Weekend: market closed, no trading. Sunday-evening trades show in Tuesday's digest."
+# a Saturday or Sunday opportunity day with nothing in it: one line instead of the labs (the Sunday reopen opens
+# Monday's day, so its closes are in Tuesday's report)
+WEEKEND_LINE = "Market closed Sat–Sun: no trading. Sunday-evening trades show in Tuesday's report."
+# spec 2.4: until the rotation ADR names the engine's resume rule, the pause copy reads this
+RESUME_RULE = "when the drawdown is back under the clear line"
+MORE = " · more on the dashboard"
 
 
 # ---------------------------------------------------------------------------------------------- schedule and dedupe
@@ -138,30 +140,6 @@ def _section(build: Callable[[], list[str]], what: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------------------------- sections
-def status_line(report: Any) -> list[str]:
-    """✅ all good, or ⚠️ attention with failing then warning checks named (account suffixes removed)."""
-    if report is None:
-        return ["❔ Health: unknown (the health check did not run)"]
-
-    def names(status: str) -> list[str]:
-        seen: list[str] = []
-        for c in report.checks:
-            n = c.name.split(":", 1)[0]
-            if c.status == status and n not in seen:
-                seen.append(n)
-        return seen
-
-    def listed(ns: list[str]) -> str:
-        more = f" +{len(ns) - MAX_NAMES} more" if len(ns) > MAX_NAMES else ""
-        return ", ".join(ns[:MAX_NAMES]) + more
-
-    fails, warns = names("fail"), names("warn")
-    if not fails and not warns:
-        return [f"✅ All good: {_plural(len(report.checks), 'health check')} ok"]
-    parts = ([f"fail {listed(fails)}"] if fails else []) + ([f"warn {listed(warns)}"] if warns else [])
-    return ["⚠️ Attention: " + " · ".join(parts)]
-
-
 def proposals_line(state_dir: Path, day0: pd.Timestamp, day1: pd.Timestamp, now: pd.Timestamp) -> list[str]:
     """Proposals created in [day0, day1): outcome from the archive; a pending one past its window counts as expired.
     An approved card with a refusal code is counted by its cause, "(1 refused by the risk check · 1 not placed by the
@@ -256,74 +234,6 @@ def trades_line(state_dir: Path, day0: pd.Timestamp, day1: pd.Timestamp) -> list
     return [f"• Closed {_plural(len(day), 'trade')}: {net}{gross}{warn}"]
 
 
-def month_line(state_dir: Path, day: str, as_of: pd.Timestamp) -> list[str]:
-    """The month so far up to opportunity day `day` (YYYY-MM-DD; goldbot/ops/monthly_report.py): nothing before its
-    first closed trade."""
-    from goldbot.ops.monthly_report import month_to_date_line
-    return month_to_date_line(state_dir, as_of, day=day)
-
-
-def day_header(day: str, settings: Settings | None) -> str:
-    """"Thu 15 Oct trading day (ended 22:00 UTC, 23:00 UK)": the day's end in UTC and in the owner's zone
-    (telegram.owner_tz, else Europe/London, labelled UK; another zone by its abbreviation). A zone that cannot be
-    resolved drops the local time, never the line."""
-    end = day_bounds(day)[1]
-    tz = (settings.telegram.owner_tz if settings is not None else "") or OWNER_TZ
-    try:
-        local = end.tz_convert(ZoneInfo(tz))
-        local_txt = f", {local:%H:%M} {'UK' if tz == OWNER_TZ else local.tzname()}"
-    except (KeyError, ValueError, OSError):     # ZoneInfoNotFoundError is a KeyError; a malformed key a ValueError
-        local_txt = ""
-    return f"{pd.Timestamp(day):%a %d %b} trading day (ended {end:%H:%M} UTC{local_txt})"
-
-
-def open_line(state_dir: Path) -> list[str]:
-    engines = _engines(state_dir)
-    if not engines:
-        return ["• Open now: no engine state yet"]
-    n = sum(int(e.get("open_positions") or 0) for e in engines)
-    lots = sum(float(e.get("open_lots") or 0.0) for e in engines)
-    return [f"• Open now: {_plural(n, 'position')}" + (f" ({lots:.2f} lots)" if n else "")]
-
-
-def risk_lines(state_dir: Path, settings: Settings | None) -> list[str]:
-    """Worst engine's drawdown stage and drawdown from the closed-balance peak (the RiskGate's arithmetic), loss-cap use
-    against the settings' caps, and every halt in force (owner, drift, supervisor, drawdown)."""
-    out: list[str] = []
-    halts: list[str] = []
-    try:
-        engines = _engines(state_dir)
-        if engines:
-            stage = max((str(e.get("stage") or "normal") for e in engines), key=lambda s: _STAGE_RANK.get(s, 1))
-            dd = max((1 - float(e.get("equity") or 0) / float(e["balance_closed_hwm"])
-                      for e in engines if float(e.get("balance_closed_hwm") or 0) > 0), default=0.0)
-            day = max((1 - float(e.get("equity") or 0) / float(e["day_start_equity"])
-                       for e in engines if float(e.get("day_start_equity") or 0) > 0), default=0.0)
-            week = max((1 - float(e.get("equity") or 0) / float(e["week_start_equity"])
-                        for e in engines if float(e.get("week_start_equity") or 0) > 0), default=0.0)
-            r = settings.risk if settings is not None else None
-            halt_at = f" (halt at {100 * r.drawdown_stage2:.0f}%)" if r is not None else ""
-            dcap = f" of {100 * r.daily_cap:.1f}% cap" if r is not None else ""
-            wcap = f" of {100 * r.weekly_cap:.1f}% cap" if r is not None else ""
-            out.append(f"Risk: stage {stage} · drawdown {100 * max(dd, 0):.1f}% from peak{halt_at} · "
-                       f"day loss {100 * max(day, 0):.1f}%{dcap} · week {100 * max(week, 0):.1f}%{wcap}")
-            if stage == "halted":
-                halts.append("drawdown halt (re-arm on the dashboard)")
-        else:
-            out.append("Risk: no engine state yet")
-    except Exception as exc:                # noqa: BLE001
-        out.append(f"Risk: could not read engine state ({type(exc).__name__})")
-    for name, read in (("owner", _owner_halt), ("drift", _drift_halt), ("supervisor", _supervisor_halt)):
-        try:
-            h = read(state_dir)
-        except Exception:                   # noqa: BLE001 - unreadable halt files fail closed in the services
-            h = f"{name} state unreadable (entries blocked)"
-        if h:
-            halts.append(h)
-    out.append("🛑 Halts: " + " · ".join(halts) if halts else "Halts: none")
-    return out
-
-
 def _owner_halt(state_dir: Path) -> str | None:
     f = state_dir / "control.json"
     if not f.exists():
@@ -355,77 +265,21 @@ def _supervisor_halt(state_dir: Path) -> str | None:
     return "supervisor combined-cap halt" if _json(f).get("halt") else None
 
 
-def research_lines(state_dir: Path, settings: Settings | None, registry_path: Path | None, now: pd.Timestamp) -> list[str]:
-    return _section(lambda: [_trial_line(settings, registry_path, now)], "Research") + \
-        _section(lambda: _attribution_line(state_dir), "Attribution")
-
-
-def _trial_line(settings: Settings | None, registry_path: Path | None, now: pd.Timestamp) -> str:
-    """The quarter's budget and the next pre-registered trial, by the research director's own matching
-    (director._prereg_matches / reserved_trials): a trial uses up its pre-registration by link or by family and config
-    hash, so a run recorded without the link (research_pass) is not shown as still waiting."""
-    from goldbot.research.director import _prereg_matches, reserved_trials
-    from goldbot.research.registry import quarter_of, quarter_start, quarter_trials
-    budget = settings.research.budget_for(quarter_of()) if settings is not None else 20
-    rows: list[dict[str, Any]] = []
-    if registry_path is not None and registry_path.exists():
-        rows = [json.loads(x) for x in registry_path.read_text(encoding="utf-8").splitlines() if x.strip()]
-    q = quarter_of(_utc(now).to_pydatetime())
-    setting = settings.research.reserved_for(q) if settings is not None else 0
-    used = quarter_trials(rows, q)
-    reserved = reserved_trials(rows, q, setting).reserved
-    budget_txt = (f"budget {q}: {used} of {budget} trials used, {reserved} reserved for pre-registered, "
-                  f"{max(budget - used - reserved, 0)} open")
-    nq_rows, nq_matched = _prereg_matches(rows, quarter_of(quarter_start(q) + timedelta(days=100)))
-    if len(nq_rows) > len(nq_matched):    # next quarter's queue, visible in the quarter before (H-01/H-02 in December)
-        budget_txt += f" · next quarter: {len(nq_rows) - len(nq_matched)} queued"
-    prereg, matched = _prereg_matches(rows, q)
-    waiting = [p for i, p in enumerate(prereg) if i not in matched]
-    if waiting:
-        nxt = min(waiting, key=lambda r: int(r.get("trial", 0)))
-        return f"Research: next pre-registered trial #{nxt.get('trial')} ({nxt.get('family', '?')}) · {budget_txt}"
-    return f"Research: no pre-registered trial waiting · {budget_txt}"
-
-
-def _attribution_line(state_dir: Path) -> list[str]:
-    f = state_dir / "attribution.json"
-    if not f.exists():
-        return []
-    rep = _json(f)
-    cells = [(k, name, c) for k, group in (rep.get("breakdowns") or {}).items() if k not in ATTRIBUTION_SKIP
-             for name, c in group.items() if c.get("verdict") != "noise" and c.get("mean_r_net") is not None]
-    if not cells:
-        return [f"Attribution: every cell is still noise (< {rep.get('min_trades', '?')} trades)"]
-    # ADR 0022 (quant ruling F3): a row is named only when its adjusted verdict clears the Bonferroni bar; a report
-    # written before the rule carries no verdict_adj, so none of its rows is named
-    cells.sort(key=lambda x: float(x[2]["mean_r_net"]))
-    pos = [x for x in cells if x[2].get("verdict_adj") == "positive"]
-    neg = [x for x in cells if x[2].get("verdict_adj") == "negative"]
-
-    def cell(x: tuple[str, str, dict[str, Any]]) -> str:
-        return f"{x[0]} {x[1]} {float(x[2]['mean_r_net']):+.2f}R/trade net (n {x[2].get('n')})"
-
-    if pos or neg:
-        parts = ([f"best {cell(pos[-1])}"] if pos else []) + ([f"worst {cell(neg[0])}"] if neg else [])
-        return ["Attribution: " + " · ".join(parts)]
-    overall = rep.get("overall") or {}
-    mean = overall.get("mean_r_net")
-    head = f"overall {float(mean):+.2f}R/trade net, {overall.get('verdict_adj', '?')}" if mean is not None \
-        else "overall no taken trades"
-    bar = f"{float(rep['t_bar']):.1f}" if rep.get("t_bar") is not None else "?"   # older report: no bar recorded
-    return [f"Attribution: no row clears the bar (|t| ≥ {bar} over {rep.get('m', '?')} "
-            f"rows) · {head}"]
-
-
 def decisions_line(state_dir: Path, roadmap: Path) -> list[str]:
+    """👉 For you: pending approvals (real money only ever has any), owner decision rows, a deploy on offer; only the
+    ones that are not zero, and "nothing" when all are."""
     parts: list[str] = []
     try:
         from goldbot.telegram.bus import ApprovalBus
-        parts.append(f"{_plural(len(ApprovalBus(state_dir).pending()), 'approval')} pending")
+        if n := len(ApprovalBus(state_dir).pending()):
+            parts.append(f"{_plural(n, 'approval')} pending")
     except Exception:                       # noqa: BLE001
         parts.append("approvals unreadable")
     try:
-        parts.append(f"{_plural(owner_decisions(roadmap), 'owner decision')} open (see OWNER_GUIDE)")
+        if n := owner_decisions(roadmap):
+            parts.append(f"{_plural(n, 'owner decision')} open (see OWNER_GUIDE)")
+    except FileNotFoundError:
+        pass                                # no roadmap here: no queue to count
     except OSError:
         parts.append("owner decisions: see OWNER_GUIDE")
     try:
@@ -434,7 +288,8 @@ def decisions_line(state_dir: Path, roadmap: Path) -> list[str]:
             parts.append("1 deploy on offer")
     except (ValueError, OSError):
         pass
-    return ["👉 For you: " + " · ".join(parts)]
+    return ["👉 For you: " + (" · ".join(parts) if parts else "nothing")]
+
 
 
 def owner_decisions(roadmap: Path) -> int:
@@ -449,50 +304,456 @@ def owner_decisions(roadmap: Path) -> int:
     return n
 
 
+
+# ---------------------------------------------------------------------------------------------- shared lines
+class Line(NamedTuple):
+    """One logical line: its text, its priority (1 never cut, 3 cut first; spec 2.2), the lab it belongs to (None:
+    not a lab's) and whether it is one of that lab's detail lines."""
+    text: str
+    prio: int = 1
+    lab: str | None = None
+    detail: bool = False
+
+
+def fit(lines: list[Line], budget: int) -> list[str]:
+    """The spec's cut order, only as far as the budget needs: priority-3 lines (from the bottom up), then each lab's
+    detail lines merged into one, then priority-2 lines (from the bottom up). A lab that lost a line says "· more on
+    the dashboard" on its result line. Priority-1 lines are never cut."""
+    cut: set[str] = set()
+    rows = list(lines)
+
+    def over() -> bool:
+        return sum(1 for x in rows if x.text.strip()) > budget
+
+    def shed(prio: int) -> None:
+        for i in range(len(rows) - 1, -1, -1):
+            if not over():
+                return
+            if rows[i].prio == prio:
+                if (lab := rows[i].lab) is not None:
+                    cut.add(lab)
+                del rows[i]
+
+    shed(3)
+    if over():
+        merged: list[Line] = []
+        for x in rows:
+            prev = merged[-1] if merged else None
+            if x.detail and x.prio > 1 and prev is not None and prev.detail and prev.prio > 1 and prev.lab == x.lab:
+                merged[-1] = Line(f"{prev.text} · {x.text.strip()}", min(prev.prio, x.prio), x.lab, True)
+            else:
+                merged.append(x)
+        rows = merged
+    shed(2)
+    return [x.text + (MORE if x.lab in cut and not x.detail and MORE not in x.text else "") for x in rows]
+
+
+def _owner_zone(settings: Settings | None) -> tuple[ZoneInfo | None, str]:
+    tz = (settings.telegram.owner_tz if settings is not None else "") or OWNER_TZ
+    try:
+        return ZoneInfo(tz), tz
+    except (KeyError, ValueError, OSError):     # ZoneInfoNotFoundError is a KeyError; a malformed key a ValueError
+        return None, tz
+
+
+def local_end(end: pd.Timestamp, settings: Settings | None) -> str:
+    """" (23:00 UK)": a time in the owner's zone (telegram.owner_tz, else Europe/London, labelled UK; another zone by
+    its abbreviation); empty when the zone cannot be resolved (the UTC time stays)."""
+    zone, tz = _owner_zone(settings)
+    if zone is None:
+        return ""
+    local = end.tz_convert(zone)
+    return f" ({local:%H:%M} {'UK' if tz == OWNER_TZ else local.tzname()})"
+
+
+def day_name(day: str | pd.Timestamp) -> str:
+    """"Mon 26 Oct" (no leading zero)."""
+    d = pd.Timestamp(day)
+    return f"{d:%a} {d.day} {d:%b}"
+
+
+def health_part(report: Any) -> str:
+    """✅ every check ok, ⚠️ failing then warning checks named (account suffixes removed), or ❔ unknown."""
+    if report is None:
+        return "❔ Health: unknown (the check did not run)"
+
+    def names(status: str) -> list[str]:
+        seen: list[str] = []
+        for c in report.checks:
+            n = c.name.split(":", 1)[0]
+            if c.status == status and n not in seen:
+                seen.append(n)
+        return seen
+
+    def listed(ns: list[str]) -> str:
+        more = f" +{len(ns) - MAX_NAMES} more" if len(ns) > MAX_NAMES else ""
+        return ", ".join(ns[:MAX_NAMES]) + more
+
+    fails, warns = names("fail"), names("warn")
+    if not fails and not warns:
+        n = len(report.checks)
+        return f"✅ Health {n} of {n} ok"
+    parts = ([f"fail {listed(fails)}"] if fails else []) + ([f"warn {listed(warns)}"] if warns else [])
+    return "⚠️ Attention: " + " · ".join(parts)
+
+
+def halts_part(state_dir: Path, engines: list[dict[str, Any]], settings: Settings | None) -> str | None:
+    """Every halt in force (an engine at the halt rail by its lab's name, the owner's, drift's, the supervisor's), or
+    None. An unreadable halt file is a halt (the services fail closed on it)."""
+    rail = f"{labs.pct(settings.risk.drawdown_stage2)} drawdown" if settings is not None else "the halt rail"
+    rails = [f"{labs.role(str(e.get('account')))} at {rail}, no new trades" for e in engines
+             if str(e.get("stage")) == "halted"]
+    others: list[str] = []
+    for name, read in (("owner", _owner_halt), ("drift", _drift_halt), ("supervisor", _supervisor_halt)):
+        try:
+            h = read(state_dir)
+        except Exception:                   # noqa: BLE001 - unreadable halt files fail closed in the services
+            h = f"{name} state unreadable (entries blocked)"
+        if h:
+            others.append(h)
+    if not rails and not others:
+        return None
+    return ("🛑 Halted: " if not others else "🛑 Halts: ") + " · ".join(others + rails) + " · exits still run"
+
+
+def entries_part(state_dir: Path, now: pd.Timestamp, settings: Settings | None) -> str:
+    from goldbot.api import entry_status as es
+    rows = es.statuses_from_state(state_dir, now, settings)
+    if not rows:
+        return "Entries: no engine reporting"
+    return f"Entries open on {sum(s.state == 'open' for _, _, s in rows)} of {len(rows)}"
+
+
+def overview_line(state_dir: Path, now: pd.Timestamp, report: Any, settings: Settings | None,
+                  engines: list[dict[str, Any]], *, health_words: Callable[[Any], str] = health_part,
+                  entries: bool = True) -> str:
+    """Line 2: health · halts · entries (the weekly: no entries, they are a now-figure). A halt leads the line (it
+    must reach the lock-screen preview) and the health part then drops its emoji (one per line)."""
+    h = health_words(report)
+    try:
+        halts = halts_part(state_dir, engines, settings)
+    except Exception as exc:                # noqa: BLE001
+        halts = f"🛑 Halts: could not read ({type(exc).__name__})"
+    tail = ""
+    if entries:
+        try:
+            tail = " · " + entries_part(state_dir, now, settings)
+        except Exception as exc:            # noqa: BLE001
+            tail = f" · Entries: could not read ({type(exc).__name__})"
+    if halts is None:
+        return f"{h} · Halts: none{tail}"
+    return f"{halts} · {h.split(' ', 1)[1]}{tail}"
+
+
+def lab_engines(engines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The enabled exploration hosts (probe_only), in the labs' report order."""
+    order = {a: i for i, a in enumerate(labs.LABS)}
+    hosts = [e for e in engines if e.get("probe_only")]
+    return sorted(hosts, key=lambda e: (order.get(str(e.get("account")), len(order)), str(e.get("account"))))
+
+
+class Drawdown(NamedTuple):
+    dd: float | None                    # 1 - equity / closed-balance mark (the RiskGate's arithmetic); None unknown
+    hwm: float
+    equity: float
+
+
+def drawdown(e: dict[str, Any]) -> Drawdown:
+    try:
+        hwm, eq = float(e.get("balance_closed_hwm") or 0), float(e.get("equity") or 0)
+    except (TypeError, ValueError):
+        return Drawdown(None, 0.0, 0.0)
+    if not (hwm > 0 and eq > 0):
+        return Drawdown(None, hwm, eq)
+    return Drawdown(max(0.0, 1 - eq / hwm), hwm, eq)
+
+
+def lines_at() -> tuple[float, float]:
+    """The exploration warn and pause lines the engine applies now (read at call time, never copied)."""
+    from goldbot.engine import exploration
+    return exploration.DD_WARN, exploration.DD_PAUSE
+
+
+def down_text(d: Drawdown, ccy: str | None) -> str:
+    return f"down {labs.pct(d.dd or 0.0)} ({labs.whole_money(d.hwm - d.equity, ccy)})"
+
+
+def at_text(line: float, d: Drawdown, ccy: str | None) -> str:
+    return f"{labs.pct(line)} ({labs.whole_money(d.hwm * line, ccy)})"
+
+
+def oz_per_lot(e: dict[str, Any]) -> float:
+    terms = e.get("lot_terms") or {}
+    try:
+        v = float(terms.get("contract_oz") or 0) if isinstance(terms, dict) else 0.0
+    except (TypeError, ValueError):
+        v = 0.0
+    return v if v > 0 else labs.CONTRACT_OZ
+
+
+def result_text(name: str, s: labs.LabSpan, ccy: str | None) -> str:
+    """"Scalp lab: 214 signals · 63 taken · 61 filled · 58 closed −£17.60 · −3.9R" and its states (spec 2.4)."""
+    head = f"{name}: {labs.plural(s.signals, 'signal')} · {s.taken:,} taken"
+    if not (s.taken or s.filled or s.closed):
+        return head
+    head += f" · {s.filled:,} filled · {s.closed:,} closed"
+    if s.net_closed:
+        head += f" {labs.money(s.pnl, ccy)} · {labs.r_text(s.r)}"
+    elif s.still_open and not s.closed:
+        head += f" ({s.still_open:,} still open)"
+    if s.no_pnl:
+        gross = f" (gross {labs.money(s.gross_no_pnl, ccy)})" if s.gross_no_pnl is not None else ""
+        head += f" · {s.no_pnl:,} closed without costs recorded{gross}"
+    return head
+
+
+def costs_text(c: labs.Costs, ccy: str | None, *, breakdown: bool) -> str:
+    total = f"costs {labs.money(c.total, ccy, sign=False)} ({c.r:.1f}R)"
+    note = f" · rate not read on {labs.plural(c.no_rate, 'trade')}" if c.no_rate else ""
+    if not breakdown:
+        return total + note
+    parts = [f"spread {labs.money(c.spread, ccy, sign=False)}", f"slippage (entry) {labs.money(c.slippage, ccy, sign=False)}",
+             f"commission {labs.money(c.commission, ccy, sign=False)}"]
+    if c.swap > 0.005:
+        parts.append(f"swap {labs.money(c.swap, ccy, sign=False)}")
+    return f"{total}: " + " · ".join(parts) + note
+
+
+def refused_text(s: labs.LabSpan) -> str | None:
+    top = list(s.refused.items())[:3]
+    return "refused: " + " · ".join(f"{n:,} {w}" for w, n in top) if top else None
+
+
+class LabBlock(NamedTuple):
+    lines: list[Line]
+    span: labs.LabSpan | None           # None: paused, halted or unreadable (not an empty day)
+
+
+def lab_block(conn: sqlite3.Connection | None, e: dict[str, Any], lo: pd.Timestamp, hi: pd.Timestamp,
+              settings: Settings | None, *, full: bool, weekday: bool, by_day: list[str] | None = None) -> LabBlock:
+    """One lab's lines: halted (the rail), paused (the engine's pause), else its result and details. `full`: the
+    costs breakdown, refusals and drawdown each on their own line (the first lab); else one merged detail line.
+    `by_day` (the weekly): the opportunity days whose net R is listed under the result; no refusals."""
+    acct = str(e.get("account"))
+    name, ccy = labs.role(acct), (str(e.get("currency") or "") or None)
+    d = drawdown(e)
+    warn, pause = lines_at()
+    if str(e.get("stage")) == "halted":
+        return LabBlock([Line(f"🛑 {name} halted: {down_text(d, ccy)} · re-arm on the dashboard (Risk)", 1, acct)],
+                        None)
+    if d.dd is None or d.dd >= pause - 1e-12:   # the engine's own rule (exploration.paused): unknown pauses too
+        since = labs.paused_since(conn, acct) if conn is not None else None
+        when = f" since {day_name(since)} {since:%H:%M} UTC" if since is not None else ""
+        what = f"{down_text(d, ccy)} from peak" if d.dd is not None else "drawdown unknown"
+        return LabBlock([Line(f"⏸ {name} paused{when}: {what}", 1, acct),
+                         Line(f"  arms stopped · cost probe and exits still running · resumes: {RESUME_RULE}", 1, acct,
+                              True)], None)
+    s = labs.lab_span(conn, acct, lo, hi, oz_per_lot=oz_per_lot(e)) if conn is not None else labs.LabSpan()
+    if s.signals == 0 and s.closed == 0 and weekday:
+        out = [Line(f"{name}: no signals while the market was open ⚠️ Warning: check the feed", 1, acct)]
+    else:
+        out = [Line(result_text(name, s, ccy), 1, acct)]
+    if by_day:
+        out.append(Line("  by day: " + " · ".join(
+            f"{pd.Timestamp(x):%a} {labs.r_text(s.by_day[x])}" if x in s.by_day else f"{pd.Timestamp(x):%a} none"
+            for x in by_day), 2, acct, True))
+    warned = d.dd >= warn - 1e-12
+    if warned:
+        out.append(Line(f"  ⚠️ Warning: {down_text(d, ccy)} from peak · pauses at {at_text(pause, d, ccy)}", 1, acct,
+                        True))
+    costs = costs_text(s.costs, ccy, breakdown=full) if s.closed else None
+    refused = refused_text(s)
+    if full:
+        if costs:
+            out.append(Line(f"  {costs}", 2, acct, True))
+        if refused:
+            out.append(Line(f"  {refused}", 3, acct, True))
+        if not warned:
+            out.append(Line(f"  {down_text(d, ccy)} from peak · warns at {at_text(warn, d, ccy)} · pauses at "
+                            f"{at_text(pause, d, ccy)}", 3, acct, True))
+    else:
+        # the weekly (`by_day`) leaves refusals to the dailies and says the drawdown is the one now
+        now_dd = None if warned else f"now {down_text(d, ccy)} from peak" if by_day else down_text(d, ccy)
+        parts = [p for p in (costs, None if by_day else refused, now_dd) if p]
+        if parts:
+            out.append(Line("  " + " · ".join(parts), 2, acct, True))
+    return LabBlock(out, s)
+
+
+def labs_section(state_dir: Path, engines: list[dict[str, Any]], lo: pd.Timestamp, hi: pd.Timestamp,
+                 settings: Settings | None, *, weekday: bool, by_day: list[str] | None = None
+                 ) -> tuple[list[Line], list[labs.LabSpan], bool]:
+    """Every enabled lab's block (the daily's first in full), the spans read, and whether aux.db could be read at all (a
+    broken file is one line, and the arms and learner lines are then left out rather than repeating it)."""
+    hosts = lab_engines(engines)
+    if not hosts:
+        return [], [], True
+    with labs.aux(state_dir) as conn:
+        if conn is not None:
+            try:
+                conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()
+            except sqlite3.Error as exc:
+                return [Line(f"Labs: could not read ({type(exc).__name__})", 1)], [], False
+        out: list[Line] = []
+        spans: list[labs.LabSpan] = []
+        for i, e in enumerate(hosts):
+            try:
+                b = lab_block(conn, e, lo, hi, settings, full=i == 0 and by_day is None, weekday=weekday,
+                              by_day=by_day)
+            except Exception as exc:        # noqa: BLE001 - one lab's ledger never stops the report
+                name = labs.role(str(e.get("account")))
+                b = LabBlock([Line(f"{name}: could not read the trade ledger ({type(exc).__name__})", 1)], None)
+            out += b.lines
+            if b.span is not None:
+                spans.append(b.span)
+        return out, spans, True
+
+
+def arms_section(state_dir: Path, engines: list[dict[str, Any]], width: int) -> list[Line]:
+    """The arms block (labs.arms_lines): notices are priority 1, the counts and band summary priority 2."""
+    accounts = [str(e.get("account")) for e in lab_engines(engines)]
+    if not accounts:
+        return []
+    try:
+        with labs.aux(state_dir) as conn:
+            arms = labs.arm_statuses(conn, accounts) if conn is not None else []
+    except Exception as exc:                # noqa: BLE001
+        return [Line(f"Arms: could not read ({type(exc).__name__})", 2)]
+    rows = labs.arms_lines(arms, width)
+    return [Line(x, 1 if "pre-set stop after" in x or "read due" in x else 2) for x in rows]
+
+
+def learner_line(state_dir: Path, lo: pd.Timestamp, hi: pd.Timestamp, now: pd.Timestamp) -> str:
+    """D4: whether the nightly learner ran in the day and whether any share changed; never which, how or by how much."""
+    from goldbot.research.exploration_data import MAX_WEIGHTS_AGE
+    with labs.aux(state_dir) as conn:
+        lr = labs.learner_runs(conn, lo, hi) if conn is not None else labs.LearnerRuns()
+    if lr.runs:
+        return f"Learner {lr.runs[-1]:%H:%M} UTC: ran · " + ("shares updated" if lr.changed else "no share changed")
+    stale = lr.latest is None or lr.latest + MAX_WEIGHTS_AGE < now
+    return "⚠️ Learner did not run last night: " + ("equal shares in use" if stale else "the last run's shares in use")
+
+
+def lab_money(state_dir: Path, engines: list[dict[str, Any]], lo: pd.Timestamp, hi: pd.Timestamp
+              ) -> dict[str, tuple[float, float, int]]:
+    """Net P&L, R and closes of the labs' trades closed in [lo, hi), per currency (never summed across)."""
+    out: dict[str, tuple[float, float, int]] = {}
+    with labs.aux(state_dir) as conn:
+        if conn is None:
+            return out
+        for e in lab_engines(engines):
+            ccy = str(e.get("currency") or "")
+            for t in labs.trades(conn, "account_id = ? AND closed = 1 AND exit_ns >= ? AND exit_ns < ?",
+                                 (str(e.get("account")), lo.value, hi.value)):
+                if t.pnl is None or t.fill_price is None:
+                    continue
+                p, r, n = out.get(ccy, (0.0, 0.0, 0))
+                out[ccy] = (p + t.pnl, r + (labs.trade_r(t) or 0.0), n + 1)
+    return out
+
+
+def money_terms(sums: dict[str, tuple[float, float, int]]) -> str:
+    return " | ".join(f"{labs.money(p, c or None)} · {labs.r_text(r)}" for c, (p, r, _) in sorted(sums.items()))
+
+
+def open_part(engines: list[dict[str, Any]]) -> str:
+    n = sum(int(e.get("open_positions") or 0) for e in engines)
+    lots = sum(float(e.get("open_lots") or 0.0) for e in engines)
+    return f"open now {labs.plural(n, 'trade')}" + (f" ({lots:.2f} lot)" if n else "")
+
+
+def month_lines(state_dir: Path, engines: list[dict[str, Any]], day: str, hi: pd.Timestamp, as_of: pd.Timestamp,
+                aux_ok: bool) -> list[str]:
+    """"Month: +£112.40 · +9.8R over 18 trading days · open now 4 trades (0.04 lot)": the labs' net per currency; the
+    engines' own month (monthly_report.month_to_date_line) on its own line, never summed with it."""
+    from goldbot.ops.monthly_report import month_to_date_line
+    first, _ = month_days(day[:7])
+    if not aux_ok:
+        labs_txt = "lab figures not read"
+    else:
+        sums = lab_money(state_dir, engines, day_bounds(first)[0], hi)
+        labs_txt = (f"{money_terms(sums)} over {labs.plural(weekdays(first, day), 'trading day')}" if sums
+                    else "no lab trade closed yet")
+    out = [f"Month: {labs_txt} · {open_part(engines)}"]
+    out += [x.removeprefix("• ") for x in month_to_date_line(state_dir, as_of, day=day)]
+    return out
+
+
+def _text(build: Callable[[], str], what: str) -> str:
+    return _section(lambda: [build()], what)[0].removeprefix("• ")
+
+
+def _engine_rows(state_dir: Path) -> tuple[list[dict[str, Any]], str | None]:
+    try:
+        return _engines(state_dir), None
+    except ValueError:                      # its message names the file, so the account: never printed
+        return [], "Engine state: could not read (a torn engine file)"
+
+
 # ---------------------------------------------------------------------------------------------- the message
 def build_digest(state_dir: str | Path, now: pd.Timestamp, *, as_of: pd.Timestamp | None = None, report: Any = None,
-                 settings: Settings | None = None, roadmap: Path = DEFAULT_ROADMAP,
-                 registry_path: Path | None = None) -> str:
-    """The digest text for `now` (UTC). `report` is a goldbot.ops.health.HealthReport (None: unknown). Yesterday is
-    the opportunity day before the one holding `as_of` (report_days.day_before; default `now`), [D-2 22:00, D-1 22:00)
-    UTC for a digest on day D, and the month line counts up to the same day. The bot passes its scheduled slot as
-    `as_of`, so a send up to 6 h late (past the 22:00 roll) neither drops a day nor repeats one; the first line and
-    the expiry of pending proposals keep `now`."""
+                 settings: Settings | None = None, roadmap: Path = DEFAULT_ROADMAP) -> str:
+    """The daily learning report for `now` (UTC). `report` is a goldbot.ops.health.HealthReport (None: unknown). The day
+    is the opportunity day before the one holding `as_of` (report_days.day_before; default `now`); the bot passes its
+    scheduled slot, so a send up to 6 h late neither drops a day nor repeats one."""
     sd = Path(state_dir)
     now = _utc(now)
     as_of = now if as_of is None else _utc(as_of)
-    yesterday = day_before(as_of)
-    day0, day1 = day_bounds(yesterday)
-    lines = [f"☀️ goldbot daily · {now:%a %d %b %Y} · {now:%H:%M} UTC"]
-    lines += _section(lambda: status_line(report), "Health")
-    lines.append(day_header(yesterday, settings))
-    props = _section(lambda: proposals_line(sd, day0, day1, now), "Proposals")
-    trades = _section(lambda: trades_line(sd, day0, day1), "Trades closed")
-    weekend = pd.Timestamp(yesterday).dayofweek >= 5 and props == [NO_PROPOSALS] and trades == [NO_TRADES]
-    lines += [WEEKEND_LINE] if weekend else props + trades
-    lines += _section(lambda: month_line(sd, yesterday, as_of), "Month so far")
-    lines += _section(lambda: open_line(sd), "Open now")
-    lines += _section(lambda: risk_lines(sd, settings), "Risk")
-    lines += _section(lambda: entry_digest_line(sd, now, settings), "Entries")    # the /status words, accounts not OPEN
-    lines += research_lines(sd, settings, registry_path, now)
-    lines += _section(lambda: decisions_line(sd, roadmap), "For you")
-    return "\n".join(lines)
+    day = day_before(as_of)
+    lo, hi = day_bounds(day)
+    weekday = pd.Timestamp(day).dayofweek < 5
+    engines, torn = _engine_rows(sd)
+    out = [Line(f"☀️ {day_name(day)} results · day ended {hi:%H:%M} UTC{local_end(hi, settings)}"),
+           Line(_text(lambda: overview_line(sd, now, report, settings, engines), "Health"))]
+    if torn:
+        out.append(Line(torn))
+    other = [x for x in _section(lambda: proposals_line(sd, lo, hi, now), "Proposals")
+             + _section(lambda: trades_line(sd, lo, hi), "Trades closed") if not x.startswith((NO_PROPOSALS, NO_TRADES))]
+    out += [Line(x) for x in other]
+    try:
+        lab_lines, spans, aux_ok = labs_section(sd, engines, lo, hi, settings, weekday=weekday)
+    except Exception as exc:                # noqa: BLE001
+        lab_lines, spans, aux_ok = [Line(f"Labs: could not read ({type(exc).__name__})")], [], False
+    quiet = all(s.signals == 0 and s.closed == 0 for s in spans) and len(spans) == len(lab_engines(engines))
+    if not weekday and quiet and not other:
+        lab_lines = [Line(WEEKEND_LINE)]
+    out += lab_lines
+    if aux_ok:
+        out += arms_section(sd, engines, ARMS_WIDTH)
+        if lab_engines(engines):
+            out.append(Line(_text(lambda: learner_line(sd, lo, hi, now), "Learner"), 2))
+    out += [Line(x, 2) for x in _section(lambda: month_lines(sd, engines, day, hi, as_of, aux_ok), "Month")]
+    out.append(Line(_section(lambda: decisions_line(sd, roadmap), "For you")[0]))
+    return "\n".join(fit(out, DAILY_LINES))
+
+
+def report_text(state_dir: str | Path, now: pd.Timestamp, slot: pd.Timestamp, *, report: Any = None,
+                settings: Settings | None = None, roadmap: Path = DEFAULT_ROADMAP,
+                registry_path: Path | None = None) -> str:
+    """The morning message for scheduled `slot`: the weekly digest on a Sunday slot (D2: it replaces Sunday's daily,
+    which would only say the market was closed), else the daily report of the day before the slot."""
+    if _utc(slot).dayofweek == 6:
+        from goldbot.telegram.weekly_digest import build_weekly
+        return build_weekly(state_dir, now, as_of=slot, report=report, settings=settings, roadmap=roadmap,
+                            registry_path=registry_path)
+    return build_digest(state_dir, now, as_of=slot, report=report, settings=settings, roadmap=roadmap)
 
 
 def digest_from_runtime(state_dir: str | Path, now: pd.Timestamp,
                         as_of: pd.Timestamp | None = None) -> str:  # pragma: no cover - VPS wiring
-    """The digest on the VPS: health checks as the alert loop runs them, settings re-read from disk; `as_of` is the
-    scheduled slot (DigestSchedule.slot)."""
+    """The morning message on the VPS: health checks as the alert loop runs them, settings re-read from disk; `as_of`
+    is the scheduled slot (DigestSchedule.slot)."""
     report, settings = None, None
     try:
         from goldbot.ops.health import HealthContext, run_checks
         ctx = HealthContext.from_runtime(state_dir, now=_utc(now))
         settings = ctx.settings
         report = run_checks(ctx)
-    except Exception:                       # noqa: BLE001 - the digest still goes out, health shown as unknown
+    except Exception:                       # noqa: BLE001 - the report still goes out, health shown as unknown
         pass
     registry = None
     if settings is not None:
         registry = Path(settings.research.registry)
         registry = registry if registry.is_absolute() else ROOT / registry
-    return build_digest(state_dir, now, as_of=as_of, report=report, settings=settings, registry_path=registry)
+    return report_text(state_dir, now, _utc(now) if as_of is None else as_of, report=report, settings=settings,
+                       registry_path=registry)

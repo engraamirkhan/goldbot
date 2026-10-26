@@ -47,7 +47,7 @@ except ImportError:  # pragma: no cover
 DEPLOY_EVERY_S = 600             # new version on main with CI passed -> offered to the owner (one click)
 AUTOMODE_EVERY_S = 900           # auto-mode evidence (A10): offered once per mode epoch when it holds
 LIMITS_EVERY_S = 30              # risk-limit change FYI (goldbot/telegram/limits_notices.py)
-DIGEST_EVERY_S = 60              # daily owner digest due check (telegram.digest_at; once a day, late <= 6 h)
+DIGEST_EVERY_S = 60              # morning report due check (telegram.digest_at; once a day, late <= 6 h; Sunday: weekly)
 HEALTH_EVERY_S = 60               # health checks + alert dedupe: a silent service is reported within ~6 min (S5)
 AUDIT_DRAIN_S = 10.0              # at shutdown, wait this long at most for audit rows still being written
 OUTCOME_TEXT = {"APPROVED": "✅ APPROVED", "REJECTED": "❌ REJECTED", "EXPIRED_UNAPPROVED": "⌛ EXPIRED"}
@@ -234,8 +234,10 @@ class TelegramBot:  # pragma: no cover - needs network + token
             self.app.create_task(asyncio.to_thread(self.deadman.after_health, report, delivered=delivered))
 
     async def _digest_pass(self) -> None:
-        """The daily owner digest, once per slot (state/telegram_digest.json); a slot missed while this service was
-        down is sent on start when under 6 h late (goldbot/telegram/digest.py)."""
+        """The owner's morning message, once per slot (state/telegram_digest.json): the daily learning report, and on
+        the Sunday slot the weekly digest instead (docs/ux/daily-learning-report.md D2; `digest.report_text` picks by
+        the slot). A slot missed while this service was down is sent on start when under 6 h late. Plain text, no
+        reply_markup: nothing on it can place a trade (D5)."""
         try:
             now = pd.Timestamp.now("UTC")
             if not self.digest.due(now):

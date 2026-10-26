@@ -219,10 +219,12 @@ def test_a_bad_zone_falls_back_to_utc():
     assert "opens Sun 22:02 UTC (in 1 d 12 h)" in t
 
 
-def test_the_digest_names_every_account_not_open(tmp_path):
+def test_the_digest_counts_the_accounts_open_for_entries_without_naming_them(tmp_path):
+    """The morning report's line two counts the accounts that can take new trades (the /status words are one tap
+    away); it never prints an account slug, login or server (docs/ux/daily-learning-report.md D6)."""
     sd = _state(tmp_path, market_closed=True, entry_blocks=["market_closed"])
     d = build_digest(sd, WED)
-    assert "Entries not open: icm-demo PAUSED (Market closed)" in d
+    assert "Entries open on 0 of 1" in d.splitlines()[1]
     (tmp_path / "open").mkdir()
-    assert "Entries: open on every account" in build_digest(_state(tmp_path / "open"), WED)
-    assert "12345678" not in d and "ICMarketsSC" not in d
+    assert "Entries open on 1 of 1" in build_digest(_state(tmp_path / "open"), WED).splitlines()[1]
+    assert "12345678" not in d and "ICMarketsSC" not in d and "icm-demo" not in d
