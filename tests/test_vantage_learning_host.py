@@ -8,15 +8,19 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
+from pydantic import ValidationError
 
 from goldbot.config import load_settings
 from goldbot.engine import Engine, EngineConfig, exploration
 from goldbot.engine.exploration import ExplorationConfig
 from goldbot.execution.broker import OrderIntent, OrderResult
 from goldbot.ops import accounts as acc_mod
+from goldbot.ops import jobs
 from goldbot.ops.services.engine import engine_limits
 from goldbot.research import arms
+from goldbot.research import exploration_data as ex
 from goldbot.research.exploration_data import PRIOR_BROKERS
 from goldbot.telegram.approvals import ApprovalCenter
 from tests.test_exploration_engine import CLOSE, _arm, _at, _sent, _Terminal
@@ -34,9 +38,11 @@ def vantage() -> acc_mod.Account:
 
 
 # ------------------------------------------------------------------------------------------------ the registry entry
-def test_vantage_demo_ships_as_an_enabled_demo_probe_only_learning_host(vantage):
+def test_vantage_demo_ships_configured_as_a_demo_probe_only_learning_host_but_switched_off(vantage):
+    """Quant review of 10a18031 (PD choice): off in this change; the registry trials are recorded first, then a
+    one-line change switches it on."""
     acc = vantage
-    assert acc.enabled and acc.mode == "demo" and acc.broker == "vantage" and acc.login is None
+    assert not acc.enabled and acc.mode == "demo" and acc.broker == "vantage" and acc.login is None
     assert acc.probe_only and not acc.shadow_host and acc.approval_mode == "auto" and acc.account_class == "raw"
     assert acc.symbol == "XAUUSD+" and acc.server_tz == "NY+7" and acc.magic_base == 260200
     assert acc.daily_loss_limit_abs == 200 and acc.max_positions == 18
@@ -47,6 +53,7 @@ def test_vantage_demo_measures_its_own_costs_with_scheduled_probes_on_a_15_pound
     cp = vantage.cost_probe
     assert cp.enabled and cp.scheduled.enabled
     assert cp.budget_share * 200 == pytest.approx(15, abs=0.01)
+    assert cp.budget_share * cp.scheduled.budget_share * 200 == pytest.approx(12, abs=0.01)   # CFO 2026-10-26
     assert cp.max_loss <= cp.budget_share * 200
 
 
@@ -145,3 +152,54 @@ def test_a_vantage_exploration_order_is_sent_on_its_xauusd_plus_symbol(vantage, 
     assert len(_sent(eng)) == 1
     assert [i.symbol for i in term.intents] == ["XAUUSD+"]
     assert [p.symbol for p in term.positions()] == ["XAUUSD+"]
+
+
+# ------------------------------------------------------------------------------------------------ scheduled share
+def _host(**kw: Any) -> acc_mod.Account:
+    base: dict[str, Any] = dict(account_id="a", broker="vantage", mode="demo", server="s", login=None,
+                                terminal_path="t", server_tz="UTC", symbol="XAUUSD+", magic_base=1, enabled=True,
+                                daily_loss_limit_abs=200.0, probe_only=True,
+                                exploration=acc_mod.Exploration(enabled=True, budget_share=0.5, max_open_total=1,
+                                                                arms={}, pots={}))
+    return acc_mod.Account(**{**base, **kw})
+
+
+def _probe(share: float) -> acc_mod.CostProbe:
+    return acc_mod.CostProbe(enabled=True, budget_share=0.075, max_open=1, max_loss=4.0,
+                             scheduled=acc_mod.ScheduledProbe(enabled=True, budget_share=share))
+
+
+def test_scheduled_probes_may_take_more_than_half_the_probe_budget_only_where_no_mirror_probe_shares_it():
+    """Prereg K10: scheduled probes take at most 50% of the probe budget so the mirrored probes keep the rest. A host
+    without the shadow book sends no mirror probe, so nothing is taken from them (CFO 2026-10-26: 0.8 on
+    vantage-demo); on the shadow host the 50% stands."""
+    assert _host(cost_probe=_probe(0.8)).cost_probe.scheduled.budget_share == 0.8
+    with pytest.raises(ValidationError, match="K10"):
+        _host(cost_probe=_probe(0.8), shadow_host=True)
+    assert _host(cost_probe=_probe(0.5), shadow_host=True).cost_probe.scheduled.budget_share == 0.5
+
+
+# ------------------------------------------------------------------------------------------------ spread (quant 3)
+def test_a_vantage_label_pays_vantages_own_spread_once_never_icms(tmp_path):
+    """Labels charge the spread once, from the recording account's own bid/ask minutes (entry at the ask, exit at the
+    bid for a long); the cost model adds slippage, commission and swap only (it has no spread term)."""
+    from tests.test_exploration_broker import T0, _acc, _cand, _ctx, _db, _m1
+    assert not {f for f in ex.ReplayCosts.model_fields if "spread" in f}
+    db = _db(tmp_path)
+    _cand(db, "v1", "vantage")                                       # a long, $2 stop and target, a 10-minute hold
+    bars = {"icm-probe": _m1(T0, 120, spread=2.0), "vantage-demo": _m1(T0, 120, spread=0.3)}
+    ctx = _ctx(tmp_path, [_acc("icm-probe", "icm"), _acc("vantage-demo", "vantage")], bars)
+    slot = T0 + pd.Timedelta(hours=1)
+    jobs.exploration_learn(ctx, slot)
+    cm = jobs.exploration_costs(ctx, slot, "vantage")
+    obs = ex.read_obs(db)
+    got = float(obs.loc[obs["candidate_id"] == "v1", "label_sim_r"].iloc[0])
+    assert got == pytest.approx((-0.3 - 2 * cm.slip - cm.commission_rt_per_oz) / 2.0)
+
+
+def test_a_vantage_spread_profile_is_built_from_vantages_own_recorded_ticks_only(tmp_path):
+    from tests.test_costs_gbp_and_tick_spread import NOW, _record, _weekdays
+    _record(tmp_path, _weekdays(12))                                 # twelve recorded days of icm-demo ticks
+    assert jobs.recorded_spread_profile(tmp_path, "icm-demo", NOW, window_days=30, min_days=10)[0] is not None
+    prof, note = jobs.recorded_spread_profile(tmp_path, "vantage-demo", NOW, window_days=30, min_days=10)
+    assert prof is None and "0 recorded days" in note

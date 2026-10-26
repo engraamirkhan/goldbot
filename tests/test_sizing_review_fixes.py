@@ -138,8 +138,8 @@ def test_the_shipped_registry_runs_vantage_demo_only_as_a_probe_only_host_outsid
     accs = acc_mod.load_accounts(Path("config/accounts.yaml"))
     assert accs["icm-demo"].daily_loss_limit_abs == 220 and accs["icm-demo"].enabled      # ADR 0042
     # a probe_only engine file is kept out of the supervisor's currency check (ADR 0037 am. 4), so a second deposit
-    # currency could never halt the book; vantage-demo is enabled as a learning host only (PD 2026-10-26)
-    assert accs["vantage-demo"].enabled and accs["vantage-demo"].probe_only
+    # currency could never halt the book; vantage-demo is configured as a learning host only (PD 2026-10-26)
+    assert accs["vantage-demo"].probe_only
 
 
 # ---------------------------------------------------------------------------------------------- MEDIUM-1

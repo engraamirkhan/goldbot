@@ -186,6 +186,9 @@ class EngineConfig(Record):
     exploration_config: exploration.ExplorationConfig | None = None   # plan 2026-10-25: demo probe_only arms (ADR 0043)
     shadow_max_open: int = Field(3, ge=1)               # settings shadow.max_open_per_agent (ruling 2026-10-19)
     symbol: str = "XAUUSD"
+    # the research release bars' store symbol (canonical; Vantage trades XAUUSD+ but its history is stored as XAUUSD):
+    # warm start and the gap fill read the release under it, orders use `symbol` (services.engine.release_symbol)
+    release_symbol: str = "XAUUSD"
     decision_tf: str = "15m"
     magic_base: int = 260100
     state_dir: str = "state"

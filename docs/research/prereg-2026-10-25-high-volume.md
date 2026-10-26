@@ -216,18 +216,22 @@ hash. Each is a **new hypothesis**: one registry trial per twin, clustered with 
 by the research-director before the first Vantage fill is read. The random controls VI0 and VW0 draw their sides from
 their own ids, so they are independent nulls, not replays of I0 and W0.
 
-**(b) K and m, stated now.** K **+11** (nominal; the `k_eff` clustering can only lower it): K up to ~160 (amendment
-1) -> **up to ~171**; one-sided Bonferroni t **3.42 -> 3.44**. Graduation m counts each (broker, arm) separately: the
-nine Vantage rule twins (VI2A, VI2B, VMB15, VMB30, VMB1H, VMS15, VW1A, VW1B, VW2) join the 19, so **m <= 28** and at
-m = 28 the bar is **P > 1 - 0.05/28 = 0.9982**. VI0 and VW0 are random controls: excluded from m, never graduate.
-m on a read date is still the number of graduation-eligible arms live then, across both brokers.
+**(b) K and m, stated now.** K **+11**: K up to ~160 (amendment 1) -> **K = 171 nominal**, and the nominal K is the
+one every twin's bar and deflated Sharpe use (one-sided Bonferroni t **3.42 -> 3.44**). Clustering lowers K only
+through `k_eff` on a measured correlation of the two brokers' R series, never by treating a twin as a replication of
+its ICM arm. Graduation m counts each (broker, arm) separately: the nine Vantage rule twins (VI2A, VI2B, VMB15, VMB30,
+VMB1H, VMS15, VW1A, VW1B, VW2) join the 19, so **m <= 28** and at m = 28 the bar is **P > 1 - 0.05/28 = 0.9982**. VI0
+and VW0 are random controls: excluded from m, never graduate. m on a read date is still the number of
+graduation-eligible arms live then, across both brokers. **ICM-positive plus Vantage-positive on the same body is not
+a combined read and does not lower either bar.**
 
 **(c) Priors flat.** The H-60 priors were built on ICM's cost history; Vantage arms start from the flat prior (equal
 shares inside each pot) and no H-60 history run is made for a twin (`runnable_ids` leaves twins out, so the arms
 matrix charges no second look). A Vantage prior needs its own pre-registered history run on Vantage's cost constants.
 
-**(d) Costs from its own probes.** `vantage-demo` runs scheduled M1 cost probes only (sleeve £15 = 0.075 x £200; the
-scheduled share binds at £7.50 a day under K10). Vantage labels use Vantage's own measured cost table; until it holds
+**(d) Costs from its own probes.** `vantage-demo` runs scheduled M1 cost probes only (sleeve £15 = 0.075 x £200;
+scheduled share 0.8 = £12 a day, CFO 2026-10-26: K10's 50% keeps half for mirrored probes, and this host sends none;
+the shadow host keeps 0.5, enforced at load). Vantage labels use Vantage's own measured cost table; until it holds
 >= 50 fills (`research.min_fills_for_slippage`) they pay the settings priors (slippage prior, the dearest configured
 commission, the swap prior). ICM measurements are never used for Vantage, nor the reverse.
 
@@ -235,7 +239,13 @@ commission, the swap prior). ICM measurements are never used for Vantage, nor th
 own single graduation read at its **300th admissible trade on Vantage fills** (>= 20 session days), exactly as section
 "Graduation and promotion". ICM and Vantage evidence for the same rule body are never pooled, never combined into one
 read and never advance each other's read. Retired-family neighbours keep their originals' rule: VI2A, VI2B, VW2 (R-15)
-and VW1A, VW1B (R-06/R-10) have void reads unless the evaluator records the re-entry condition before the read.
+and VW1A, VW1B (R-06/R-10) have void reads unless the evaluator records the re-entry condition before the read; they
+still take pot share, slots and K.
+
+**(g) Trial budget (stated, not resolved here).** 2026Q4 is at 55 of 55 (`research.trial_budget_overrides`
+2026Q4 = 55; `hypotheses.md`, `prereg-2026-10-19-h50-followup.md`). The eleven trials do **not** fit 2026Q4. They are
+recorded only once the owner raises the 2026Q4 override by 11 (55 -> 66) or they are charged to 2027Q1 (then
+vantage-demo runs from 2027-01-01); until then `vantage-demo` stays `enabled: false`. Owner decision (budget).
 
 **(f) Budget (CFO 2026-10-26).** Day limit £200 (2% of £10,000); exploration 0.9 x £200 = £180 = intraday £98 (5 open,
 £17 a trade) + swing £82 (1 open, £40 a trade); VI0 30% of intraday, VW0 33% of swing; 17 of the host's 18 slots.

@@ -7,6 +7,7 @@ goldbot.ops.run (`resolve`, goldbot/ops/services/_base.py) so patching there sti
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -177,6 +178,36 @@ def refuse_start(account_id: str, why: str, info: Any = None, state_dir: str | P
     raise SystemExit(why)
 
 
+# trading-safety review of 10a18031 (M1): an account with no bridge and no local terminal refuses to start; the paper
+# stand-in (fake fills under the account's broker key, its £ daily limit dropped) only on this explicit developer opt-in
+PAPER_ENGINE_ENV = "GOLDBOT_PAPER_ENGINE"
+# the engine prices in these terms (spread points over 0.01, stops and targets rounded to 2 decimals, RiskLimits.point)
+PRICE_POINT, PRICE_DIGITS = 0.01, 2
+
+
+def symbol_terms_problem(info: Any) -> str | None:
+    """Why the engine would misprice this terminal symbol, or None (trading-safety review LOW of 10a18031): the spread
+    in points, the stop/target rounding and the gate's point all assume a $0.01 point and 2-decimal prices (IC Markets
+    XAUUSD and Vantage XAUUSD+ both quote 2 digits). Any other quote refuses the start instead of sending orders
+    rounded to the wrong tick."""
+    point, digits = float(info.point), int(info.digits)
+    if abs(point - PRICE_POINT) > 1e-12 or digits != PRICE_DIGITS:
+        return (f"symbol {info.name} quotes point {point} with {digits} digits; the engine prices in point "
+                f"{PRICE_POINT} and {PRICE_DIGITS} digits")
+    return None
+
+
+def release_symbol(settings: Settings, acc: Account) -> str:
+    """The store symbol of the research release bars for `acc` (trading-safety review M2 of 10a18031): the canonical
+    name whose `brokers.<broker>.symbol_map` entry is the account's traded symbol (Vantage XAUUSD+ -> XAUUSD), else
+    the traded symbol itself. Orders always use `acc.symbol`."""
+    b = settings.brokers.get(acc.broker)
+    for canonical, traded in (b.symbol_map.items() if b is not None else ()):
+        if traded == acc.symbol:
+            return canonical
+    return acc.symbol
+
+
 LONGEST_CLOSE_S = 9_999_999_999        # the widest ten-digit bar close (2286): the longest id an engine makes
 
 
@@ -269,10 +300,19 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         if why:
             resolve(refuse_start)(account_id, f"refusing to trade {account_id}: {why}", info,
                                     probe_only=acc.probe_only)
-    else:
+    elif os.environ.get(PAPER_ENGINE_ENV) == "1":
         from goldbot.execution.paper import PaperBroker
         broker = PaperBroker(symbol=acc.symbol)
-        log.warning("not on Windows: running %s against the paper broker", account_id)
+        log.warning("%s=1: running %s against the paper broker (developer stand-in)", PAPER_ENGINE_ENV, account_id)
+    else:
+        resolve(refuse_start)(account_id, f"refusing to start {account_id}: no MT5 bridge (mt5-bridge-url/token in "
+                                          "the keyring) and no local terminal on this host", probe_only=acc.probe_only)
+    try:
+        why = symbol_terms_problem(broker.symbol_info(acc.symbol))
+    except Exception as exc:  # noqa: BLE001 - a symbol the terminal cannot describe is never traded
+        why = f"symbol_info({acc.symbol}) unavailable ({type(exc).__name__})"
+    if why:
+        resolve(refuse_start)(account_id, f"refusing to trade {account_id}: {why}", probe_only=acc.probe_only)
     paper = resolve(paper_stand_in)(broker)
     policy = resolve(engine_limits_policy)(settings, acc, paper=paper, state_dir="state",
                                            accounts=list(configured.values()))
@@ -314,6 +354,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
 
     agents, live_shares = population_view()
     eng = Engine(EngineConfig(account_id=account_id, broker_name=acc.broker, mode=acc.mode, declared_class=acc.account_class, approval_mode=acc.approval_mode, symbol=acc.symbol,
+                              release_symbol=release_symbol(settings, acc),
                               cost_probe=acc.cost_probe.enabled, cost_probe_budget=acc.cost_probe.budget_share,
                               cost_probe_max_open=acc.cost_probe.max_open, cost_probe_max_loss=acc.cost_probe.max_loss,
                               cost_probe_scheduled=acc.cost_probe.scheduled,
