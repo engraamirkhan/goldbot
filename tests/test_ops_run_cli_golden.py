@@ -40,7 +40,7 @@ WRITE = os.environ.get("GOLDBOT_WRITE_RUN_GOLDEN") == "1"
 
 # subcommands whose --help only prints (argparse) or, for drift-review, only reads state/drift.json in the cwd
 HELP_COMMANDS = ("record-gate", "gates", "gate-evidence", "publish-costs", "restore", "setup", "preflight",
-                 "revoke-sessions", "owner-history", "health", "positions", "shadow-report", "fill-count", "ruin", "monthly-report", "perf-report",
+                 "revoke-sessions", "owner-history", "health", "positions", "shadow-report", "fill-count", "broker-history-depth", "ruin", "monthly-report", "perf-report",
                  "sizing-feasibility", "drift-review", "bridge-smoke", "tv-import", "tv-repaint-check", "tv-pull", "ledger",
                  "daily-review", "repair-lost-record")
 
@@ -73,6 +73,7 @@ DISPATCH: dict[str, list[str]] = {
     "positions": ["positions"],
     "shadow-report": ["shadow-report"],
     "fill-count": ["fill-count"],
+    "broker-history-depth": ["broker-history-depth", "icm-demo"],
     "ruin": ["ruin", "--trades-per-week", "5"],
     "monthly-report": ["monthly-report", "--json"],
     "perf-report": ["perf-report", "--json"],
@@ -163,6 +164,7 @@ def _entry_functions() -> dict[tuple[str, int, str], str]:
     from goldbot.data import tv_csv
     from goldbot.ops import (
         backup,
+        broker_depth,
         gates_phase,
         health,
         monthly_report,
@@ -183,7 +185,7 @@ def _entry_functions() -> dict[tuple[str, int, str], str]:
     for fn in (gates_phase.main, gates_phase.evidence_main, backup.main, setup_wizard.main, preflight.main,
                auth.revoke_sessions_cli, mailer.main, owner_history.main, health.main, ruin.main, monthly_report.main,
                perf_report.main, min_lot.main, smoke.main, tv_csv.main, tv_repaint.main, daily_review.main,
-               repair_records.main):
+               repair_records.main, broker_depth.main):
         add(fn, f"{fn.__module__}:{fn.__qualname__}")
     return out
 
@@ -271,6 +273,7 @@ ONE_SHOT: dict[str, tuple[str, str]] = {
     "positions": ("goldbot.ops.positions", "main"),
     "shadow-report": ("goldbot.ops.shadow_report", "main"),
     "fill-count": ("goldbot.ops.fill_count", "main"),
+    "broker-history-depth": ("goldbot.ops.broker_depth", "main"),
     "ruin": ("goldbot.research.ruin", "main"),
     "monthly-report": ("goldbot.ops.monthly_report", "main"),
     "perf-report": ("goldbot.ops.perf_report", "main"),

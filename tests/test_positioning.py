@@ -302,6 +302,9 @@ def _script():
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    # the legacy report (tests/test_positioning_legacy.py) never reaches the network from these tests
+    setattr(mod, "fetch_cot_legacy", lambda years: pd.DataFrame(
+        columns=["report_date", "nc_long", "nc_short", "open_interest", "comm_net"]))
     return mod
 
 

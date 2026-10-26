@@ -22,6 +22,7 @@ from goldbot.data.store import Store
 log = logging.getLogger(__name__)
 
 REPO = "engraamirkhan/goldbot"
+BAR_FILE_PREFIX = "xauusd_1m_dukascopy_"
 HIGHER_TFS = ("15m", "30m", "1h", "4h", "1d", "1w")
 
 
@@ -91,8 +92,9 @@ def load_into_store(store: Store, files: list[Path], *, source: str = "dukascopy
 def sync_release_bars(store: Store, *, years: tuple[int, int] | None = None, raw_dir: Path = Path("raw"),
                       token: str | None = None) -> dict[str, int]:
     token = token or os.environ.get("GH_TOKEN")
-    files = [download(a, raw_dir, token) for a in list_assets(token)
-             if years is None or years[0] <= asset_year(a["name"]) <= years[1]]
+    # gold yearly files only: another instrument or asset on the release must never load into bars_1m as gold
+    files = [download(a, raw_dir, token) for a in list_assets(token) if a["name"].startswith(BAR_FILE_PREFIX)
+             and (years is None or years[0] <= asset_year(a["name"]) <= years[1])]
     return load_into_store(store, files)
 
 
