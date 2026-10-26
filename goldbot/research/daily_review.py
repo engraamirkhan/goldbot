@@ -614,7 +614,7 @@ def _volume(d: _Day, plan: Mapping[str, Mapping[str, int]], probe_plan: Mapping[
     return out
 
 
-def _arm_health(db: Database, hosts: Mapping[str, str], hi: pd.Timestamp
+def _arm_health(db: Database, hosts: Mapping[str, str], hi: pd.Timestamp, store: Any = None
                 ) -> tuple[dict[str, dict[str, Health]], set[str]]:
     """Per broker: arm -> `breached` (its H-61 stop reached within its first trades) or `ok`; and the control arms
     (labs.ArmStatus.control: the candidates' flag or the spec's random bracket), which are never breached nor
@@ -625,7 +625,7 @@ def _arm_health(db: Database, hosts: Mapping[str, str], hi: pd.Timestamp
     with db.connection() as conn:
         for broker in sorted(set(hosts.values())):
             accts = sorted(h for h, b in hosts.items() if b == broker)
-            st = arm_statuses(conn, accts, until=hi)
+            st = arm_statuses(conn, accts, until=hi, store=store, now=hi)
             controls |= {a.arm_id for a in st if a.control}
             out[broker] = {a.arm_id: ("breached" if a.band == "at_stop" and a.arm_id not in controls else "ok")
                            for a in st}
@@ -906,7 +906,7 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
     of_plan = round(total / plan_total, 6) if plan_total else None
     integrity = _integrity(d, trading, cfg.max_gap_minutes, incidents)
     _health(sd, incidents)
-    health, controls = _arm_health(db, hosts, hi)
+    health, controls = _arm_health(db, hosts, hi, store)
     retired: list[Retirement] = []
     for broker, arms in health.items():
         already = retired_arms(db, broker)

@@ -297,3 +297,30 @@ def test_the_nightly_cost_table_holds_out_scheduled_probes_inside_a_span_with_no
     rows = jobs.cost_probe_rows(tmp_path, "icm-probe", SPAN[0] - pd.Timedelta(days=1), NOW,
                                 held=[(*SPAN, REF)])
     assert [p.client_order_id for p in rows] == ["p1"]
+
+
+# ---------------------------------------------------------------------------------------------- held out, no R yet
+def test_a_candidate_decided_before_the_span_whose_label_path_crosses_it_is_held_out_until_r_is_recorded():
+    early = SPAN[0] - pd.Timedelta(minutes=30)
+    spans = {"icm-probe": [(*SPAN, REF)]}
+    crosses = _cands(("x", early), entry=early, label_exit=SPAN[0] + pd.Timedelta(minutes=10), labelled=NOW)
+    clear = _cands(("y", early), entry=early, label_exit=SPAN[0] - pd.Timedelta(minutes=1), labelled=NOW)
+    assert ev.held_out(crosses, spans, {}) == {"x"}                   # C unknown: any label on that path is held out
+    assert ev.held_out(clear, spans, {}) == set()
+    assert ev.held_out(crosses, spans, RELOADS) == set()              # recorded: the criterion decides, not memory
+
+
+def test_the_n_toward_the_300_read_holds_out_a_span_with_no_recorded_r_and_the_h61_stop_still_counts_it(
+        tmp_path, monkeypatch):
+    db = tdr._db(tmp_path)
+    tdr._losers(db, "S1A", 30, start=SPAN[0] - pd.Timedelta(minutes=10))  # a minute apart: 10 before, 20 in the span
+    monkeypatch.setattr(ev, "recorded_spans", lambda store, sources, **k: [(*SPAN, REF)] if "icm-probe" in sources
+                        else [])
+    with db.connection() as conn:
+        [st] = labs.arm_statuses(conn, ["icm-probe"], store=object(), now=NOW)
+    # decided from the span's start on: 20 held out of n in memory (nothing voided), all 30 still in the stop
+    assert ev.excluded_ids(db, "n") == set()
+    assert st.n == 10 and st.band == "at_stop" and st.stop_at == 30
+    with db.connection() as conn:
+        [st] = labs.arm_statuses(conn, ["icm-probe"], store=object(), now=NOW, held_out=set())
+    assert st.n == 30
