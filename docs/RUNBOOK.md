@@ -1446,6 +1446,33 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
 * Not yet measured: the cost/model rule (BACKLOG 90) cannot fire until a 20-day cost series exists.
 
 
+### icm-demo learning host (ADR 0043 amendment 2026-10-26, ADR 0037 amendment 6)
+
+* Since 2026-10-26 `icm-demo` is a second learning host: `probe_only: true`, the intraday and swing exploration arms,
+  `max_positions: 18`. `icm-probe` keeps the scalp arms, the cost probes and the shadow book. Neither account trades a
+  strategy, so the phase gate's paper clock gathers no new trades while this lasts; promotion evidence comes from the
+  shadow book (account-independent).
+* Rolling it out: deploy, restart `goldbot-engine@icm-demo` and `goldbot-engine@icm-probe`. Check `engine_icm-demo.json`
+  shows `probe_only: true`, the dashboard lists both under the supervisor's probe engines (not in the combined limits),
+  and the first `exploration:` decisions on icm-demo name only I/MB/MSA/W arms.
+* **Re-role back to a strategy account** (Claude runs it; nothing here is the owner's except the TOTP of step 3):
+  1. Trigger: the first promotion verdict (evaluator, H-61 "Promotion" step 5). Not before: the account has nothing
+     to trade until then.
+  2. On icm-demo set `exploration.enabled: false`, restart its engine, and wait until the account is flat (the
+     exploration positions close at their own stop, target or hold; exits are never gated, nothing is closed by hand).
+  3. While it is still `probe_only`: if the account is 8% or more below its high-water mark, run the X5 rotation (ADR
+     0043 section 2; owner TOTP). X5 is not built yet: until it is, a mark at -8% or below blocks this step, and the
+     re-role waits for it.
+  4. Set `probe_only: false`, remove `max_positions` (both are refused at load off a probe host), and leave the
+     intraday and swing arms either moved back to icm-probe or retired (no arm on two hosts).
+  5. Open a new evidence epoch for icm-demo before any strategy fill counts: fills opened before the re-role date are
+     quarantined in the limits evidence (`limits_job._quarantined`, today one global start in
+     `research.promotion.EVIDENCE_START_UTC`: a per-account start is a code change, its own lane), and the phase
+     gate's `paper_start` (`backtest_to_paper` in `state/phase_state.json`) is a phase-gate record: an owner-level
+     decision, escalated with a recommendation, never edited here.
+  6. Restart icm-demo's engine and check its engine file shows `probe_only: false` and entries come from the live
+     agents again.
+
 ### Auto mode (entries without your click)
 
 * By default every entry waits for your click (propose-and-approve). **Auto mode** means an entry that passes the

@@ -571,18 +571,21 @@ def test_the_engine_config_comes_from_the_frozen_spec_and_the_accounts_registrat
     assert exploration.config_for(_probe_account()) is None             # not enabled: no exploration
 
 
-def test_icm_probe_ships_the_adr_0043_budget_with_exploration_on():
-    """Integration I2 (PD): cost probes 60/220, exploration 138/220; pots scalp £50 / intraday £48 / swing £40;
-    swing £40 a trade and one open, scalp £6.50 a trade; 18 open at most; switched on 2026-10-25 (PD decision)."""
-    acc = acc_mod.load_accounts(logins=False)["icm-probe"]
-    ex = acc.exploration
-    assert ex.enabled and ex.max_open_total == 18
-    assert ex.budget_share * 220 == pytest.approx(138, abs=0.05)
-    assert acc.cost_probe.budget_share * 220 == pytest.approx(60, abs=0.05)
-    assert {k: (v.gbp, v.max_open) for k, v in ex.pots.items()} == {"scalp": (50, 8), "intraday": (48, 5),
-                                                                    "swing": (40, 1)}
-    assert {a.max_loss for a in ex.arms.values() if a.style == "scalp"} == {6.5}
-    assert {a.max_loss for a in ex.arms.values() if a.style == "swing"} == {40.0}
+def test_the_two_hosts_ship_the_adr_0043_budget_with_exploration_on():
+    """Integration I2 (PD), per-style hosts (ADR 0043 amendment, PD 2026-10-26): icm-probe cost probes 60/220 and the
+    scalp pot 138/220 (£50 + the £88 freed by intraday and swing); icm-demo intraday £108 / swing £90 = 198/220; swing
+    £40 a trade and one open, intraday £17, scalp £6.50; 17 open at most on each (one host slot in reserve)."""
+    accs = acc_mod.load_accounts(logins=False)
+    probe, demo = accs["icm-probe"].exploration, accs["icm-demo"].exploration
+    assert probe.enabled and demo.enabled and probe.max_open_total == demo.max_open_total == 17
+    assert probe.budget_share * 220 == pytest.approx(138, abs=0.05)
+    assert demo.budget_share * 220 == pytest.approx(198, abs=0.05)
+    assert accs["icm-probe"].cost_probe.budget_share * 220 == pytest.approx(60, abs=0.05)
+    assert {k: (v.gbp, v.max_open) for k, v in probe.pots.items()} == {"scalp": (138, 12)}
+    assert {k: (v.gbp, v.max_open) for k, v in demo.pots.items()} == {"intraday": (108, 5), "swing": (90, 1)}
+    assert {a.max_loss for a in probe.arms.values()} == {6.5}
+    assert {a.max_loss for a in demo.arms.values() if a.style == "intraday"} == {17.0}
+    assert {a.max_loss for a in demo.arms.values() if a.style == "swing"} == {40.0}
 
 
 # ------------------------------------------------------------------------------------------------ config and limits
@@ -657,7 +660,7 @@ def test_a_bar_stamped_ahead_of_the_host_clock_is_never_a_candidate_and_never_bl
 
 # ------------------------------------------------------------------------------------------------ PD 2026-10-26
 def test_a_demo_probe_only_account_may_hold_its_own_max_positions_and_every_other_keeps_the_global_two():
-    """PD decision (A), ADR 0043 host cap: icm-probe's RiskGate holds up to 18 positions through a per-account,
+    """PD decision (A), ADR 0043 host cap: a learning host's RiskGate holds up to 18 positions through a per-account,
     demo-and-probe_only override; the global `risk.max_positions_per_account` (2) binds every other account."""
     from goldbot.config import load_settings
     from goldbot.ops.services.engine import engine_limits
@@ -667,8 +670,9 @@ def test_a_demo_probe_only_account_may_hold_its_own_max_positions_and_every_othe
     assert engine_limits(s, _probe_account(max_positions=18), paper=True).max_positions == 2   # paper: the defaults
     assert engine_limits(s, _probe_account()).max_positions == 2
     accs = acc_mod.load_accounts(logins=False)
-    assert accs["icm-probe"].max_positions == 18 and accs["icm-demo"].max_positions is None
-    assert engine_limits(s, accs["icm-demo"]).max_positions == 2
+    assert accs["icm-probe"].max_positions == accs["icm-demo"].max_positions == 18     # both learning hosts (PD 10-26)
+    assert all(a.max_positions is None and engine_limits(s, a).max_positions == 2
+               for a in accs.values() if not a.probe_only)
 
 
 @pytest.mark.parametrize("kw", [dict(mode="live", login=1), dict(probe_only=False)])

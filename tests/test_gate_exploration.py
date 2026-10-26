@@ -214,15 +214,17 @@ def test_a_disabled_exploration_block_never_opens_an_arm_even_on_a_live_account(
     assert acc_mod.exploration_arm_caps(acc) == {}
 
 
-def test_the_shipped_registry_runs_exploration_on_icm_probe_only(tmp_path):
-    """Switched on 2026-10-25 (PD decision) on the probe_only demo account; every other account registers no arm."""
+def test_the_shipped_registry_runs_exploration_on_the_two_demo_probe_only_hosts_only(tmp_path):
+    """Switched on 2026-10-25 (PD decision) on icm-probe, and on icm-demo as the second learning host (ADR 0043
+    amendment, PD 2026-10-26); every other account registers no arm."""
     cfg = tmp_path / "accounts.yaml"
     cfg.write_text(acc_mod.ACCOUNTS_FILE.read_text())
     accs = acc_mod.load_accounts(cfg, logins=False)
-    probe = accs["icm-probe"]
-    assert probe.exploration.enabled and probe.probe_only and probe.mode == "demo"
-    caps = acc_mod.exploration_arm_caps(probe)
-    assert caps and set(caps) == set(probe.exploration.arms)
-    assert all(acc_mod.exploration_arm_caps(a) == {} for k, a in accs.items() if k != "icm-probe")
-    raw = yaml.safe_load(cfg.read_text())
-    assert "exploration" in raw["accounts"]["icm-probe"]
+    hosts = ("icm-probe", "icm-demo")
+    for host in hosts:
+        acc = accs[host]
+        assert acc.exploration.enabled and acc.probe_only and acc.mode == "demo"
+        caps = acc_mod.exploration_arm_caps(acc)
+        assert caps and set(caps) == set(acc.exploration.arms)
+        assert "exploration" in yaml.safe_load(cfg.read_text())["accounts"][host]
+    assert all(acc_mod.exploration_arm_caps(a) == {} for k, a in accs.items() if k not in hosts)

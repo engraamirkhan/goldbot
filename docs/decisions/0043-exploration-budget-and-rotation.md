@@ -183,3 +183,35 @@ a sleeve review within 2 working days. ADR 0042's reversal (a) still stands.
 | X5 | Account-scoped rotation command: owner TOTP, `probe_only` + demo + terminal demo, drawdown ≥ 8%, flat except P0. Sets mark = equity and stage NORMAL. Leaves day and week starts and other engines' limits untouched. Journal `rotation`; quarter counter refuses a 3rd (`rotation_budget`). Never available on a live or non-probe account (refused at load and at the call) | **trading-safety** (full), security (TOTP path), code |
 | X6 | Ledger: epoch rows, exploration cost by sleeve, rotation entries, top-ups as capital flows | finance-auditor |
 | X7 | Dashboard and Telegram: icm-probe drawdown against -6% and -8%, the sleeves' £ used, the rotation count | ui-ux, code |
+
+## Amendment 2026-10-26 (PD-approved, architect option c): per-style hosts on the two demo accounts
+
+Context: section 1 put every arm on icm-probe because only one probe account existed; "What would change this ADR"
+names a second probe account as the trigger to return to the research program's per-style hosts. The owner said to use
+the two existing demo accounts. On one host the 1m/5m scalp arms fill most of the 18 slots and the shared £138, so the
+15m-1d arms (the ones with a realistic graduation path at H-61's 300 trades) get few fills.
+
+Decision (config only, `config/accounts.yaml`; ADR 0037 amendment 6 lets exploration alone make a `probe_only` host):
+
+| Host | Arms | Exploration £ | Slots | Cost probes |
+|---|---|---|---|---|
+| icm-probe | scalp: S0, S0R, S1A, S1B, S2A, S2B, S3A, S3B, S4, S5A, S5B | scalp £138 (£50 + the £88 freed), 0.6273 x 220 | max_open_total 17 (one of 18 kept for the scheduled probe), scalp pot 8 | unchanged: P0 £15 + M £45 = £60 |
+| icm-demo | intraday: I0, I2A, I2B, MB15, MB30, MB1H, MSA15; swing: W0, W1A, W1B, W2 | £198 = 0.9 x 220: intraday £108, swing £90 (section 1's 48 : 40, scaled) | max_open_total 17 of 18 (`max_positions: 18`), intraday 5, swing 1 | none (`cost_probe` off, `shadow_host` false) |
+
+- No arm runs on two hosts (a test asserts disjoint arm sets across enabled accounts), so no arm's evidence is split
+  across accounts or double-counted, and each arm's candidate and order ids hash its own account.
+- Per-trade caps, controls' fixed shares (I0 30%, W0 33%), the X3 same-side and Friday rules, the X4 -8% pause and the
+  RiskGate are unchanged. The exploration magic is `magic_base + 95` of each account (260195 and 260595).
+- Swing's per-trade cap stays £40 and its slot 1; the review "up to the 1% hard limit" named above is a separate
+  CFO + trading-safety decision, not taken here.
+- icm-demo stops trading strategies: its paper evidence for the phase gate pauses. It returns to a strategy account at
+  the first promotion verdict (RUNBOOK "icm-demo learning host": exploration off, flat, rotation, `probe_only` false,
+  a new evidence epoch, restart).
+
+Consequences: the exploration budget rises from £138 to £336 a day across the two hosts (each still inside its own
+£220 day and 0.9 share); both accounts are demo, so the real cash cost is £0. Weekly cap 6% and the -8% pause now apply
+per host. Rollback: on icm-demo `exploration.enabled: false`, `probe_only: false`, drop `max_positions`; move the
+intraday and swing arms and pots back to icm-probe; restart both engines. Reviews: trading-safety (a second order-
+sending host), quant (host split of H-61).
+
+- Trading-safety note (review of a11a65a7): the two learning hosts' exposure is not summed anywhere (up to 34 minimum-lot XAUUSD positions across icm-probe and icm-demo); the supervisor's combined limits cover real accounts only. Accepted on demo; each host keeps its own £220/day, −6%/−8% and RiskGate.

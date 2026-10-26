@@ -78,6 +78,39 @@ accounts:
     # factors; the ceilings above and the RiskGate's caps still bind. Default false; false + restart is the rollback.
     # A live account stays false until the owner decides (owner-only)
     dynamic_limits: true
+    # ADR 0043 amendment (PD 2026-10-26, architect option c; ADR 0043 "What would change this": a second probe account
+    # -> per-style hosts): icm-demo is a second learning host. It runs the INTRADAY and SWING exploration arms, icm-probe
+    # the SCALP arms and the cost probes; no arm runs on both (tests/test_demo_learning_host.py). Why: one host's 18
+    # slots and £198 were shared by three styles, so the 1m/5m scalp arms crowded the 15m-1d arms out; a second host
+    # doubles the learning budget at no real-money risk. probe_only (ADR 0037 amendment 6: exploration alone makes a
+    # probe host): no live agent, every non-learning entry refused, out of the supervisor's combined limits, the
+    # limits evidence (limits_job) and the phase gate (exploration closes never reach closed_trades.jsonl). The phase
+    # gate's paper evidence therefore pauses until the re-role back (RUNBOOK "icm-demo learning host": trigger, flat,
+    # probe_only false, a new evidence epoch). Rollback: exploration.enabled false, probe_only false, max_positions
+    # removed, restart.
+    probe_only: true
+    max_positions: 18         # PD 2026-10-26 host cap (demo probe_only only), as icm-probe
+    # exploration (plan 2026-10-25, ADR 0043 sleeves; the rules are the frozen ARM-SPEC, config/exploration_arms.yaml):
+    # budget_share 0.9 x 220 = £198 = intraday £108 + swing £90 (ADR 0043's £48 : £40 ratio, scaled to the host's
+    # budget); slots and per-trade caps unchanged (intraday 5 open at £17, swing 1 open at £40; I0 30% of intraday,
+    # W0 33% of swing, never allocated by results). max_open_total 17: one of the 18 host slots held in reserve.
+    exploration:
+      enabled: true
+      budget_share: 0.9
+      max_open_total: 17
+      pots: { intraday: { gbp: 108, max_open: 5 }, swing: { gbp: 90, max_open: 1 } }
+      arms:
+        I0: { style: intraday, max_loss: 17.0, control_share: 0.30 }
+        I2A: { style: intraday, max_loss: 17.0 }
+        I2B: { style: intraday, max_loss: 17.0 }
+        MB15: { style: intraday, max_loss: 17.0 }
+        MB30: { style: intraday, max_loss: 17.0 }
+        MB1H: { style: intraday, max_loss: 17.0 }
+        MSA15: { style: intraday, max_loss: 17.0 }
+        W0: { style: swing, max_loss: 40.0, control_share: 0.33 }
+        W1A: { style: swing, max_loss: 40.0 }
+        W1B: { style: swing, max_loss: 40.0 }
+        W2: { style: swing, max_loss: 40.0 }
   icm-probe:
     broker: icm
     mode: demo
@@ -136,11 +169,14 @@ accounts:
     # random controls, a fixed share of it (S0 25% + S0R 5% of scalp, I0 30% of intraday, W0 33% of swing; never
     # allocated by results). Blocked spec arms (S6, I1, I3, W3) are not registered. ON since 2026-10-25 (PD decision,
     # owner: a few hundred demo trades a day; trading-safety + quant approved the engine); false + restart is the rollback.
+    # ADR 0043 amendment (PD 2026-10-26, per-style hosts): the intraday and swing arms moved to icm-demo; the scalp pot
+    # takes their freed £88 (£50 -> £138 = the same 0.6273 x 220), cost probes unchanged (£60). max_open_total 18 -> 17:
+    # one host slot is always left for the scheduled probe (trading-safety nit, 2026-10-26).
     exploration:
       enabled: true
       budget_share: 0.6273
-      max_open_total: 18
-      pots: { scalp: { gbp: 50, max_open: 8 }, intraday: { gbp: 48, max_open: 5 }, swing: { gbp: 40, max_open: 1 } }
+      max_open_total: 17
+      pots: { scalp: { gbp: 138, max_open: 12 } }   # CFO 2026-10-26: 12 + mirrors 3 + scheduled 1 = 16 of 18; back to 8 if -6% before week 3
       arms:
         S0: { style: scalp, max_loss: 6.5, control_share: 0.25 }
         S0R: { style: scalp, max_loss: 6.5, control_share: 0.05 }
@@ -153,17 +189,6 @@ accounts:
         S4: { style: scalp, max_loss: 6.5 }
         S5A: { style: scalp, max_loss: 6.5 }
         S5B: { style: scalp, max_loss: 6.5 }
-        I0: { style: intraday, max_loss: 17.0, control_share: 0.30 }
-        I2A: { style: intraday, max_loss: 17.0 }
-        I2B: { style: intraday, max_loss: 17.0 }
-        MB15: { style: intraday, max_loss: 17.0 }
-        MB30: { style: intraday, max_loss: 17.0 }
-        MB1H: { style: intraday, max_loss: 17.0 }
-        MSA15: { style: intraday, max_loss: 17.0 }
-        W0: { style: swing, max_loss: 40.0, control_share: 0.33 }
-        W1A: { style: swing, max_loss: 40.0 }
-        W1B: { style: swing, max_loss: 40.0 }
-        W2: { style: swing, max_loss: 40.0 }
   vantage-demo:
     broker: vantage
     mode: demo

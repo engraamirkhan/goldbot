@@ -166,3 +166,20 @@ purpose with its hold, headroom and dynamic ceiling; nothing else in the probe p
 planned hold, not the actual one: the 60 s bound at the close is `hold_exits` (never gated). The purpose is a
 caller-declared field: the fence, not the caller, decides, so a wrong claim refuses rather than widens. Tests:
 tests/test_cost_measurement_gate.py, tests/test_probe_scheduled.py. Trading-safety review required (order path).
+
+## Amendment 6 (2026-10-26, PD-approved, architect option c): exploration alone makes a probe host
+Context: ADR 0043 "What would change this" names a second probe account as the trigger to return to per-style hosts.
+The owner said to use the two existing demo accounts, so icm-demo becomes a second learning host. Amendment 4 accepted
+`probe_only` only with cost probes and the shadow book on the same account, and only one account may host the shadow
+book, so a second learning host could not be configured.
+
+Decision: `probe_only` is accepted when (`cost_probe.enabled` and `shadow_host`) **or** `exploration.enabled`
+(`Account._probe_only_is_a_probe_host`). It stays demo only: a live account with `probe_only` fails at load, as before,
+and exploration keeps its own fence (demo, `probe_only`, the terminal's demo flag, minimum lot, registered arm,
+per-trade cap). Everything amendment 4 gives a probe account applies to every probe host: no live agent, every
+non-learning entry refused (`probe_only_refused`), out of the supervisor's combined limits (the engine file's literal
+`probe_only: true`), out of the limits evidence (`limits_job.adaptive_enabled`), and nothing in
+`closed_trades.jsonl`, so nothing reaches the phase gate.
+
+Consequences: icm-demo trades no strategy while it is a learning host; the phase gate's paper evidence pauses until
+the re-role back (RUNBOOK "icm-demo learning host"). Tests: tests/test_demo_learning_host.py.
