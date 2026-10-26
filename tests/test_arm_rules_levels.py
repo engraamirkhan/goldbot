@@ -192,12 +192,10 @@ def test_each_level_arm_pairs_with_a_control_on_its_own_timeframe() -> None:
 # ---------------------------------------------------------------- 8.13: the history count gate for PDC1 / PDC4
 @pytest.mark.integration
 @pytest.mark.skipif(not (RAW / "xauusd_1m_dukascopy_2017.parquet").exists(), reason="local 2010-2017 1m files absent")
-@pytest.mark.xfail(strict=True, reason=(
-    "PDC NO-GO (8.13): the frozen rule gives 727 (4h) / 689 (1h) break-close events on 2010-2017 against slice G's "
-    "600 / 592 (+21% / +16%). The whole gap is key_levels_discovery.py's unregistered skip of a level within 0.05 ATR "
-    "of the reference close (with it: 600 / 611). Not deployable until a dated amendment reconciles the definition."))
 @pytest.mark.parametrize(("tf", "slice_g_n"), [("4h", 600), ("1h", 592)])
 def test_pdc_history_count_reproduces_slice_g_within_ten_percent(tf, slice_g_n) -> None:
+    """8.13 gate, reconciled by amendment 8.14 (the 0.05 ATR reopen-close skip): the frozen rule without it gave
+    727 / 689 (+21% / +16%), a NO-GO; with it the count must sit within 10% of slice G's n."""
     from goldbot.data.resample import BAR_COLUMNS
     parts = [pd.read_parquet(RAW / f"xauusd_1m_dukascopy_{y}.parquet") for y in range(2010, 2018)]
     raw = pd.concat(parts, ignore_index=True).sort_values("ts_utc").drop_duplicates("ts_utc").reset_index(drop=True)

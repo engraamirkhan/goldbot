@@ -8,11 +8,13 @@ set at entry (`risk_usd` = |entry - stop|, `target_r`, `max_bars` from the hold)
 `pdc_break` (8.6 with 8.13): PDC(D) = the mid close of the last 1m bar of trading day D-1 (trading day = New York date
 after +7 h, ending 17:00 New York). "The touch window starts at the second bar of trading day D. The reopen bar opens at
 about PDC by construction": the reopen bar is the decision bar holding D's first minute; the window is every later bar
-that opens before D's 17:00 New York end. The approach side is the reopen bar's close against PDC. Touch bar j = the
+that opens before D's 17:00 New York end. The approach side is the reopen bar's close against PDC; amendment 8.14 (2026-10-26) skips the day when that close
+is within 0.05 x ATR_r of PDC (or ATR_r is undefined), as slice G did. Touch bar j = the
 first window bar whose range contains PDC; a break-close (close_j at least 0.1 x ATR_{j-1} beyond PDC on the far side
 from the approach) trades in the break direction; "otherwise (sweep, reject or stall) no trade that day". Stop = PDC -
 side x 1.0 x ATR_{j-1}; target 2 x |entry - stop|; time exit 32 bars. This is the break-close event of
-`key_levels_discovery.py` (slice G, `BRK_s1.0`), whose 2010-2017 count 8.13 requires within 10% before going live.
+`key_levels_discovery.py` (slice G, `BRK_s1.0`), whose 2010-2017 count 8.13 requires within 10% before going live:
+600 / 611 (4h / 1h) against slice G's 600 / 592 with the 8.14 skip (727 / 689 without it).
 
 `ob_retest` (8.5 with 8.13), 15m: swing high at p when high_p > max(high_{p-5..p-1}) and high_p >= max(high_{p+1..p+5}),
 known at the close of p+5 and usable from b = p+6 ("confirmed by the close of b-1"); the latest confirmed pivot replaces
@@ -90,9 +92,9 @@ def pdc_events(m: pd.DataFrame, b1: pd.DataFrame) -> pd.DataFrame:
         r = int(np.searchsorted(end, t0, side="right"))            # the reopen bar: the first that closes after t0
         if r >= len(m) or start[r] > t0:
             continue                                                # D's first minute is in no decision bar we hold
+        if not (np.isfinite(a[r]) and abs(c[r] - pdc) >= 0.05 * a[r]):
+            continue                                                # 8.14: reopen close within 0.05 ATR_r of PDC
         side0 = np.sign(c[r] - pdc)
-        if side0 == 0:
-            continue
         stop_at = day_end_ns(int(days[k]))
         for j in range(r + 1, len(m)):
             if start[j] >= stop_at:
