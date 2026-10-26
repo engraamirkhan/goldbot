@@ -1231,7 +1231,9 @@ def _runner_terms(eng: Engine, ex: Exploration, tr: OpenTrade) -> tuple[pd.Times
         with ex.db.connection() as conn:
             rec = LEDGER.get(conn, tr.client_order_id)
         risk = rec.atr_usd if rec is not None and rec.atr_usd > 0 else None
-    return (signal, float(tr.open_price), float(risk)) if risk is not None else None
+    if risk is None or not math.isfinite(float(risk)) or float(risk) <= 0:
+        return None          # trading-safety LOW: a 0 or non-finite R would arm the trail at once and close at market
+    return signal, float(tr.open_price), float(risk)
 
 
 def trail(eng: Engine, close_ts: pd.Timestamp) -> None:
