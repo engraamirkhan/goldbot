@@ -139,7 +139,8 @@ def _engine_at(b1: pd.DataFrame, arm: A.Arm, close: pd.Timestamp) -> SimpleNames
     minutes) and one exploration arm."""
     mem = b1[b1["visible_at"] <= close].tail(MEMORY).reset_index(drop=True)
     xarm = exploration.Arm(spec=arm, style="intraday")
-    ex = SimpleNamespace(arms={arm.id: xarm}, retired=frozenset(), last_bar={}, queue=deque(), ahead_seen=None)
+    ex = SimpleNamespace(arms={arm.id: xarm}, retired=frozenset(), last_bar={}, queue=deque(), ahead_seen=None,
+                         needs_context=frozenset())
     return SimpleNamespace(exploration=ex, cfg=SimpleNamespace(live_clock=False), bars_1m=mem, decisions=[])
 
 
