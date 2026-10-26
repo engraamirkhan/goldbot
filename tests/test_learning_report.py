@@ -575,7 +575,8 @@ def test_the_drawdown_lines_follow_the_configured_values(tmp_path: Path, monkeyp
 def test_one_broken_source_costs_one_line_and_the_report_still_builds(tmp_path: Path) -> None:
     mock_state(tmp_path)
     with sqlite3.connect(tmp_path / "aux.db") as conn:
-        conn.execute("DROP TABLE exploration_broker_weights")   # the table the learner line reads (aux migration 17)
+        conn.execute("DROP TABLE exploration_broker_weights")   # the learner line reads it (aux migration 17) ...
+        conn.execute("DROP TABLE exploration_weights")          # ... and falls back to this one on an older release
     text = daily(tmp_path)
     assert "Learner: could not read (OperationalError)" in text and "Scalp lab: 214 signals" in text
     (tmp_path / "aux.db").write_bytes(b"garbage" * 1000)
