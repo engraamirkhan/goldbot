@@ -4,13 +4,14 @@ Staff research lead, 2026-10-26, for the research director's time-structure prog
 `time-structure/README.md`, whose rules 4.1-4.6 bind this file). Definitions-first slice: it states what each concept
 is, to the precision needed to code it with no hindsight, shows the traps, ranks the candidates and closes most of them.
 
-**Outcome-blind attestation (README 4.1).** No outcome on gold was measured for this file, in either half. What was
-run: (a) a driftless **random walk** (true edge 0) to size the hindsight traps (section 3); (b) **counts only** of
-causal FVGs and previous-day sweeps on the 4h OANDA bars the TV pull holds (2023-01-02 .. 2025-09-30, 4,254 bars;
-holdout cut at load), which are activity counts, not outcomes. The Dukascopy 1m release is not on this machine, so
-nothing was read from 2010-2017 or 2018+. Looks taken: 2 trap statistics x 2 variants, 2 count statistics. Every
-number about gold edge below comes from existing registry rows and the director's section 6, cited. Script:
-`scripts/research/smc_hindsight_demo.py` (`uv run python scripts/research/smc_hindsight_demo.py --bars <parquet>`).
+**Discovery half only (README 4.1).** Version 2 of this file (same day) measures on real gold, Dukascopy 1m mid bars,
+**2010-01-01 .. 2017-12-31 only**: the script opens only the eight yearly files 2010-2017 and asserts the last bar is
+before 2018; nothing from 2018 on, and no holdout bar, was read or computed. (Version 1 had measured nothing on gold;
+the random-walk demo is kept.) Scripts: `scripts/research/smc_gold_discovery.py` (gold; run
+`uv run python scripts/research/smc_gold_discovery.py --raw ~/tmp/ts/raw --out <json>`, about 90 s, seeded, a re-run
+gives identical numbers) and `scripts/research/smc_hindsight_demo.py` (random walk and the control generators).
+Parameters were pinned in section 2 before the run (k 5, displacement 1.5 ATR, expiry 32 bars, buffer 0.25 ATR, 2R
+target, 32-bar exit). Looks taken are listed in section 10; none is charged to K.
 
 ## 1. What was already tried (do not repeat)
 
@@ -67,7 +68,17 @@ be about zero or equal the cost convention if the rule is causal):
 | **T1 swing, 10-bar short gain in ATR** | short at the close of the swing-high bar i (needs bars up to i+5 to know it is a swing): **+1.516 ATR** | short at the close of bar i+5, when it is known: **-0.016 ATR** |
 | **T2 FVG, mean R** (limit at the near edge, stop at the far edge, target 2x width, fill from the next bar, stop-first) | only zones never closed through in the following 50 bars, "the chart you review later": **+1.142 R** (n 2,343) | every filled zone: **-0.279 R** (n 17,185; negative because of the stop-first convention and the fill-bar rule, the reference level for a zero-edge process) |
 
-Reading. A 2.5-3% subsample of zero-edge gaps shows +1.14 R purely because the filter ("respected for 50 bars")
+**Same test on real gold, 15m, 2010-2017** (188,356 bars):
+
+| Trap | Hindsight version | Causal version |
+|---|---|---|
+| T1 swing high, 10-bar short gain, ATR (n 11,803) | **+1.101** (peeking 5 bars) | **-0.019** (at i+5) |
+| T2 FVG mean R (size >= 0.25 ATR; limit at near edge, stop far edge, 2x width) | zones "respected" 50 bars: **+0.877** (n 3,872) | every filled zone: **-0.135** (n 18,434) |
+
+Gold sits on the random-walk numbers: the hindsight versions pay +0.9 to +1.1 for nothing, so any statistic built from
+"zones that held" must be assumed to carry this bias.
+
+Reading (random-walk table). A 2.5-3% subsample of zero-edge gaps shows +1.14 R purely because the filter ("respected for 50 bars")
 contains the stop condition of the trade it is then used to evaluate. Order blocks have the same two defects and a
 third: **the OB candle is chosen after the move** ("the last down candle before the impulse"), so any statistic on OBs
 selected from a chart is conditioned on the impulse that followed. The causal OB (row 5) exists only from `a_b`, after
@@ -99,23 +110,93 @@ for every row, as in the TV-replica ruling B4a.
 | 0.8 ATR15 = $6.4 (fits the $6.65 cap) | 0.023 R | 0.036 R | 0.097 R | 0.111 R |
 | 1h structure stop $18.5 (H-46 median) | 0.008 R | 0.012 R | 0.034 R | 0.038 R |
 
-At the broker's costs, cost is not what closed the earlier SMC families (#88: gross -0.028 R; the recorded net -0.552 R
-implies a cost of 0.52 R, far above 0.09 R from a flat 0.71 $/oz at an $8 stop; the difference is unexplained here and
-is flagged below). They had no gross edge. A candidate needs gross >= 3x broker cost and a gate-1 t near 4.3 at K = 145.
+This table is for 2024-26 prices (ATR15 about $8). On 2010-2017 prices the same rules have stops of $1-2 and pay 0.4-0.9 R (section 5.1, which also explains #88's recorded 0.52 R gap: a real cost). The earlier SMC families had no gross edge. A candidate needs gross >= 3x broker cost and a gate-1 t near 4.3 at K = 145.
 
-## 5. Existing frequency facts (counts only)
+## 5. Measured on gold, discovery half 2010-2017 (15m unless stated)
 
-| Statistic | Value | Data |
+Cost basis. Research prior = bar spread (median $0.24-0.51 over 2010-2017) + $0.37/oz. Broker = $0.144/oz central.
+Net R = gross R - cost / stop. All t are day-clustered (CR1). Controls are described in section 4.
+
+**5.1 Why 2010-2017 stops are tiny and costs large (the #88 cost question).**
+
+| Year | ATR15 median $ | Spread median $ | Research-prior round trip $ | Stop 0.6 ATR15 $ | Cost in R at 0.6 ATR15 | Stop 1.0 ATR15 $ | Cost in R at 1.0 ATR15 |
+|---|---|---|---|---|---|---|---|
+| 2010 | 1.63 | 0.51 | 0.88 | 0.98 | 0.90 | 1.63 | 0.54 |
+| 2011 | 2.20 | 0.42 | 0.79 | 1.32 | 0.60 | 2.20 | 0.36 |
+| 2012 | 1.81 | 0.36 | 0.73 | 1.09 | 0.67 | 1.81 | 0.40 |
+| 2013 | 1.90 | 0.35 | 0.72 | 1.14 | 0.63 | 1.90 | 0.38 |
+| 2014 | 1.35 | 0.29 | 0.66 | 0.81 | 0.82 | 1.35 | 0.49 |
+| 2015 | 1.27 | 0.31 | 0.68 | 0.76 | 0.89 | 1.27 | 0.53 |
+| 2016 | 1.51 | 0.30 | 0.67 | 0.90 | 0.75 | 1.51 | 0.45 |
+| 2017 | 1.05 | 0.24 | 0.61 | 0.63 | 0.97 | 1.05 | 0.58 |
+
+**#88 cost flag, resolved: a real cost, not a bug.** H-48's stop was 0.6-1.0 ATR15 (`prereg-kb` s.1) and the "$8" in
+that document is today's ATR15. In 2010-2017 ATR15 was $1.05-2.20, so the stops were $0.6-2.2 and the research-prior
+round trip ($0.61-0.88) cost 0.36-0.97 R per trade, about 0.5 R on average: the recorded net-minus-gross gap of 0.52 R
+(-0.552 vs -0.028). The same mechanism explains E-1 below (median cost 0.39 R). Consequences: (1) every 15m trial read
+on 2010-2017 prices faces a 0.4-0.9 R cost that the same rule would pay at 0.02-0.1 R at today's ATR15 of about $8, so
+registry "net" for old years says little about today, and the era split matters; (2) on that data a rule needs a gross
+edge of 1-3 R to net positive, not the 0.1 R that a gross t of 3-4 usually represents. The "$8 stop -> 0.09 R" figure in
+section 4 applies to 2024-26 only. (This is a reading of the pre-registration and my own ATR table; I did not re-run
+trial #88.)
+
+**5.2 E-1 order-block retest (section 2 row 5; London + NY-morning window 02:00-12:00 NY on the break bar).**
+
+| Item | Value |
+|---|---|
+| Causal OB events, all hours / in the window | 3,571 / 2,372 (8 years) |
+| Filled before expiry or invalidation | 1,431 (60%; control fill rates 58-60%) |
+| Median stop | $1.80 = 1.26 ATR (98.7% under the $6.65 cap, which is meaningless at 2010-17 ATR) |
+| Outcomes | target 33.1%, stop 59.4% (a 2R target needs 33.3% to break even) |
+| **Real gross** | **+0.112 R, t 2.84, n 1,431** |
+| Real net, research prior (median cost 0.39 R) | **-0.313 R, t -7.8** |
+| Real net, broker cost $0.144 on the same stops | +0.024 R, t 0.61 |
+| Control A (zone identity removed: entry and stop distances shuffled within the year; same bar and side) gross / net prior | +0.054 / -0.384 |
+| Real minus control A, gross | +0.043 R, t 1.21, 95% CI [-0.025, +0.116] |
+| Real minus control A, net prior | +0.056 R, t 1.53, CI [-0.012, +0.134] |
+| Control B (same side and ATR-scaled distances at a random bar of the same NY hour) gross / net prior | +0.032 / -0.372 |
+| Real minus control B, gross | +0.082 R, t 1.89, CI [-0.006, +0.167] |
+| Real minus control B, net prior | +0.061 R, t 1.40, CI [-0.029, +0.149] |
+
+Reading. A small positive gross (t 2.84) but half to two thirds of it is earned by the same bracket on random levels
+and times (control gross +0.03 to +0.05; a nonzero control is the geometry of a limit order with a 2R target under the
+stop-first convention, not an edge). What the order block adds is +0.04 to +0.08 R gross, CI including zero against both
+controls. Net of the research-prior cost the rule loses 0.31 R. **E-1 meets its pre-written kill rule (b): the CI of real
+minus control includes 0. Closed at 0 trials.** The count (about 180 filled a year) would have cleared the 1,500 floor
+over 2010-2025-09, so the kill rests on the control, not on counts. Residual: at today's stops (about 4x larger in
+dollars; cost 0.02-0.1 R) the cost would not eat a +0.11 R gross, but the controls show it is not the block that earns it.
+
+**5.3 E-2 fair value gaps (size >= 0.25 ATR).**
+
+| Statistic | 15m (n 20,656) | 1h (n 4,794) |
 |---|---|---|
-| Causal FVG (3-bar gap, no size filter), 4h | 28.9 per month (4,254 bars, 32.9 months) | OANDA 4h 2023-01 .. 2025-09 (TV pull; activity count only) |
-| Previous-day high/low swept and closed back inside, 4h bars | 26.4 per month | same |
-| TVR-1 / TVR-2 15m events | 441 / 1,196 over 2010-2025-09 | `prereg-tv-replica` B4b |
-| London takes an Asia extreme; both | 68% each; 39% | README 6.4 |
+| P(midpoint retraced within 8 bars): real / control / diff [95% CI] | 63.1% / 60.7% / +2.3 pts [+1.7, +3.0] | 59.6% / 58.7% / +0.9 pts [-0.1, +2.0] |
+| within 32 bars | 80.1% / 78.3% / +1.9 pts [+1.4, +2.4] | 78.6% / 77.4% / +1.2 pts [+0.3, +2.1] |
+| Next-16-bar range / ATR after a displacement bar **with** a gap | 5.78 (n 4,644) | 4.69 (n 1,057) |
+| ... displacement bar **without** a gap | 5.83 (n 22,252) | 4.93 (n 6,144) |
+| ... all bars | 4.66 | 4.70 |
 
-Not available: 15m OB counts. They must be counted (0 trials) from the Dukascopy release before any registration; the
-floor is 1,500 candidates for gate 1 (`research/gates.py`). My own *estimate* is 10-25 OB retests a month on 15m
-(2-3% of bars are displacement bars, about half give a BOS, about 60% retest inside 32 bars), i.e. 1,900-4,800 over
-2010-2025 and 900-2,400 in the discovery half. That is a guess and the registration waits for the count.
+Reading. A gap is slightly more likely than a random level at the same distance to be revisited (about +2 points on 15m,
+nonzero, far below the 5-point bar H-49 set; 1h none at 8 bars). As a range predictor the gap adds nothing beyond the
+displacement bar that makes it: that bar predicts about 24% more range than average with or without a gap. **Kill rule
+met (retrace lift < 5 points, range lift 0): closed at 0 trials.** The displacement bar itself is volatility clustering,
+already covered by the H-02/H-16 feature set (README 6.7: RV20 IC +0.40).
+
+**5.4 E-4 value-area 80% rule** (prior trading day's profile from 1m typical price weighted by `tick_count`, 70% value
+area; open at 08:30 NY outside it, two consecutive 30-min closes back inside; target the far edge; stop at the excursion
+extreme -$0.50; flat 17:00 NY).
+
+| | n | gross R | gross t | net R (prior: spread $0.30 + $0.37) | net t | median stop |
+|---|---|---|---|---|---|---|
+| Real value area | **83** (10 a year) | +0.190 | 0.88 | +0.020 | 0.09 | $4.45 |
+| Random areas of the same width inside the prior day's range (10 per day) | 924 | +0.021 | 0.31 | -0.154 | -2.30 | $4.34 |
+
+Reading. About one event a month (my version-1 estimate of 4-6 was 5x too high): 83 in eight years, below the 150
+floor for daily rules. The point estimate is positive but t 0.88 on 83 events is no evidence. **Closed on the count rule;
+POC/VAH/VAL stay as level features for slice D, 0 trials.**
+
+**5.5 Other frequency facts.** London takes an Asia extreme 68% each, both 39% (README 6.4). TVR-1 / TVR-2 15m events
+441 / 1,196 over 2010-2025-09 (`prereg-tv-replica` B4b).
 
 ## 6. Literature (peer-reviewed first; evidence grade by the README scale: A direct causal/OOS, B robust empirical, C weak, D practitioner only)
 
@@ -138,21 +219,23 @@ floor is 1,500 candidates for gate 1 (`research/gates.py`). My own *estimate* is
 Where claims lack evidence: all of the ICT vocabulary and Wyckoff phases (D). The only mechanism with outside support is
 order clustering at levels (Osler), which predicts reactions at *prior extremes and round numbers*, not at candle zones.
 
-## 7. Candidates, ranked (budget: 2026Q4 has 0 left, 2027Q1 has 6 free slots, K = 145, gate-1 t about 4.3; at most two are worth a slot, and I recommend one)
+## 7. Candidates, ranked (budget: 2026Q4 has 0 left, 2027Q1 has 6 free slots, K = 145, gate-1 t about 4.3)
 
-Ranking by information per slot, given the director's early read (no Fibonacci edge, no 15m-90d momentum/reversal,
-no opening-range follow-through; ranges and volatility are what is predictable):
+After the discovery-half measurements **none is worth a Q1 slot. I propose 0 trials.** E-1, the only object with a
+positive gross over its controls, adds +0.04 to +0.08 R with a CI that includes zero.
 
-| Rank | ID | Verdict | Route |
+| Rank | ID | Discovery-half result | Verdict |
 |---|---|---|---|
-| 1 | E-1 OB retest, 15m | the only never-tested rule; prior low | **trial candidate** after a 0-trial counts + control stage |
-| 2 | E-2 FVG midpoint-fill and displacement-gap as range predictor | mechanism fits "range is predictable" | 0-trial diagnostic, then feature in H-16/H-62; slot only if the diagnostic is strong |
-| 3 | E-4 value-area 80% rule | untested level family, ~5 events a month | 0-trial diagnostic, then exploration arm |
-| 4 | E-5 spring/upthrust 1h | too few events, wide stops | feature / demo arm only |
-| 5 | E-3 Asia sweep in London | closed by 6.4 and #88 | drop as reversal; keep as a feature |
-| 6 | E-6 effort-vs-result absorption | filter on the above | feature (slice D owns volume) |
-| - | E-7 premium/discount and Fibonacci OTE | closed by 6.8 | drop, feature `p` stays in D-TVR |
-| - | Kill zones, inducement, breaker/mitigation, supply/demand, equal highs/lows, delta/footprint | see section 2 | drop |
+| 1 | E-1 OB retest 15m | gross +0.112 R t 2.84; over control +0.04..+0.08 R, CI includes 0; net prior -0.31 R | **closed at 0 trials** (kill rule b). May run only as a demo exploration arm, never as promotion evidence |
+| 2 | E-2 FVG magnet / range | retrace +2 pts (< 5); range lift 0 beyond the displacement bar | **closed**; displacement stays a feature (H-16/H-62) |
+| 3 | E-4 value-area 80% | n 83 in 8 years, gross t 0.88 | **closed on count**; levels go to slice D as features |
+| 4 | E-5 Wyckoff spring/upthrust 1h | not measured (rare, wide stops) | feature / demo arm only |
+| 5 | E-3 Asia sweep in London | README 6.4, #88 | drop as a rule; keep flags as features |
+| 6 | E-6 effort-vs-result | not measured | feature (slice D) |
+| - | E-7 premium/discount, Fibonacci OTE | README 6.8 | drop |
+| - | Kill zones, inducement, breaker/mitigation, supply/demand, equal highs/lows, delta/footprint | section 2 | drop |
+
+The blocks below keep the pre-measurement rationale and kill rules; the outcome of each is in section 5.
 
 ### E-1  Order-block retest (15m)
 - Mechanism: an impulse that breaks structure leaves resting limit orders (and unfilled institutional inventory) at the origin candle, which the price revisits. Weak: Osler explains clusters at extremes and round numbers, not candle origins. Evidence grade D (concept), C (mechanism by analogy).
@@ -162,12 +245,12 @@ no opening-range follow-through; ranges and volatility are what is predictable):
 - Side: both. One position at a time (yes).
 - Exit: stop `low_o - 0.25 ATR` (skip if stop > $6.65, the 0.01-lot cap); target 2R; time exit 32 bars; stop-first.
 - Control: random-level (same distance) and matched random-bracket (same session, ATR decile), section 4.
-- Discovery-half evidence: none. Counts owed (0 trials): candidates per year 2010-2017 and fit fraction under the stop cap.
+- Discovery-half evidence (2010-2017, section 5.2): n 1,431 filled; gross +0.112 R t 2.84; real minus control gross +0.043 (A) / +0.082 (B), CIs include 0; net prior -0.313 R.
 - Cost check: stop $6.4-8: broker 0.018-0.023 R central, 0.078-0.097 stress; research prior 0.09-0.11 R. Gate-1 t of 4.3 at n = 1,500 and a per-trade SD of about 1.1 R needs a mean of about 0.12 R net, so gross of about 0.2 R under the research prior.
-- Expected events: estimate 900-2,400 in the discovery half, 1,900-4,800 over 2010-2025-09 (guess; count before registering). Floor 1,500.
+- Expected events: measured 1,431 filled in the discovery half (about 180 a year), so about 2,900 over 2010-2025-09; clears the 1,500 floor.
 - Kill rule: (a) fewer than 1,500 candidates over 2010-2025-09 or fewer than 30% fitting the $6.65 cap; or (b) on 2010-2017, real minus control net R, 95% day-block CI includes 0 or is negative. Either closes it at 0 trials.
 - Read rule (if a trial): continue only if gross t >= 4.3 on the confirmation half's pre-registered read and net R > 0 under the research prior; else stop.
-- Route: 0-trial counts and control, then one Q1 free-reserve slot. Prior P(continue): 3%.
+- Route: closed after the 0-trial control. Posterior P(continue) under a trial: 1%.
 
 ### E-2  FVG as magnet and as range predictor (15m / 1h)
 - Mechanism: a gap marks an imbalance; price tends to return to gap midpoints (mean-reverting microstructure) and a large displacement gap marks a volatility burst whose range persists (the predictable object). Grade D / C.
@@ -175,8 +258,8 @@ no opening-range follow-through; ranges and volatility are what is predictable):
 - Entry (diagnostic only): at `a_j` of each causal FVG (size >= 0.25 ATR): P(midpoint retraced within 8 / 32 bars) vs the random-level control at the same distance; and next-16-bar range / ATR vs bars matched on session and ATR decile.
 - Exit/Side: none (descriptive; if used, as a target for the exits-researcher).
 - Control: random level same distance (retrace); matched bars (range).
-- Evidence: none yet. Cost check: not applicable to the diagnostic; as a target it saves round trips only if it beats the control by >= 5 points (the H-49 bar).
-- Expected events: ~20-30 per month on 4h, hundreds a month on 15m (descriptive, no floor).
+- Evidence: section 5.3 (closed). Cost check: not applicable to the diagnostic; as a target it saves round trips only if it beats the control by >= 5 points (the H-49 bar).
+- Expected events: measured 20,656 gaps on 15m and 4,794 on 1h in 2010-2017 (descriptive).
 - Kill rule: retrace lift CI contains 0 (as H-49) AND range lift < 5% over matched bars on 2010-2017.
 - Route: 0-trial diagnostic; if only the range lift survives, a feature for H-16/H-62 (K_eff +1). Prior that it adds beyond ATR and session: 15%.
 
@@ -192,9 +275,9 @@ flags as features for H-48's roster monitor. Prior P(continue) 2%.
 - Exit: stop beyond the first close's extreme (skip if > $6.65 at 0.01 lot, else demo-only), target the far VA edge, flat 17:00 NY.
 - Control: random value-area edges (the same width and distance, random side) and random-time re-entries.
 - Cost: stop $7-15 -> 0.01-0.02 R central, 0.04-0.09 stress.
-- Events: about 4-6 a month (about 25% of days leave the VA, about 40% re-enter): ~500-700 over 2010-2025-09, **below the 1,000 intraday floor**, so retire-only on any trial.
+- Events: measured 83 in 2010-2017 (about 10 a year), **below the 150 floor** (section 5.4).
 - Kill rule: 2010-2017 real minus control CI contains 0, or fewer than 150 events in the discovery half.
-- Route: 0-trial diagnostic, then a demo exploration arm on `icm-probe` (not promotion evidence). Prior 3%.
+- Route: closed on count (5.4). POC/VAH/VAL pass to slice D. Prior 1%.
 
 ### E-5  Wyckoff spring / upthrust on 1h (causal range)
 - Mechanism: a break below a multi-touch range that fails (sweep + close back inside) traps late sellers; Osler stop cascades after the stops are taken. Grade D / C.
@@ -219,30 +302,33 @@ as a rule. `p` (row 10) remains one column in the existing D-TVR group (0 trials
 
 | Topic | Verdict |
 |---|---|
-| Order block (retest) | trial candidate E-1 after counts and control; the only one I would spend a slot on |
-| FVG | feature/diagnostic (E-2); rule closed (TVR-1) |
+| Order block (retest) | closed at 0 trials after the control (5.2); no slot |
+| FVG | closed (5.3); rule closed (TVR-1) |
 | BOS / CHoCH | substrate only; rule closed (TVR-2 withdrawn, R-09) |
 | Liquidity sweeps (Asia, prior day) | close as reversal (6.4, #88); keep as feature |
 | Premium/discount, Fibonacci OTE | close (6.8) |
 | Kill zones | gate/feature only; volatility windows, not signals |
 | Wyckoff | spring/upthrust: demo arm (E-5); phases: drop |
-| Market profile | diagnostic then demo arm (E-4); POC levels via slice D |
+| Market profile | value-area 80% closed on count (5.4); POC/VAH/VAL levels via slice D |
 | Delta/footprint | footprint: drop (no tape); CLV/effort: feature (E-6) |
 | Supply/demand, breaker/mitigation, inducement | drop (duplicates or discretionary) |
 
 ## 9. Flags for the director
 
-1. **Cost discrepancy:** #88 records gross -0.028 R and net -0.552 R, a 0.52 R cost, while a flat 0.71 $/oz at its stops
-   would be about 0.09-0.11 R. Either the stops were much tighter than $8, or the 2010-2017 bar spread dominates. Worth
-   checking before any 15m SMC trial is read.
-2. **No Dukascopy data on this machine**; E-1 counts and all controls are unrun. The TV OANDA pull only reaches 15m from
-   2026-08 and 1h from 2023, so it cannot serve 2010-2017 discovery.
-3. **Backtests of OBs are the most hindsight-prone in the field.** Any vendor OB statistic (win rates quoted by
-   teachers) should be treated as selected zones until it passes the prefix-invariance test.
-4. **What I would stop doing:** any new test of sweep reversal, Fibonacci/premium-discount levels, kill-zone gating as a
-   signal, or equal highs/lows.
+1. **#88 cost flag: resolved, a real cost** (5.1). The era split decides what "net" means; 2010-2017 R-costs are 4-10x
+   today's. Worth stating in every verdict on a 15m rule: report net at the research prior and at the broker cost.
+2. **Zero trials proposed.** Everything in this slice that could be measured on 2010-2017 closed against its control.
+   What remains open is only features: displacement bar, POC/VAH/VAL, sweep flags, `p` position in range.
+3. **Hindsight bias is large and general** (T1 +1.10 ATR, T2 +0.88 R on gold from zero-edge construction): treat any
+   quoted OB/FVG win rate as selected zones until a prefix-invariance test passes.
+4. **Not measured:** Wyckoff spring (rare), absorption (needs slice D's volume work), 1h/4h order blocks (counts too
+   low at pinned parameters, cf. H-34).
+5. **What I would stop doing:** sweep reversal, Fibonacci/premium-discount levels, kill-zone gating as a signal, equal
+   highs/lows, FVG/OB entry rules on 15m.
 
 ## 10. Looks taken
 
-Outcome looks on gold: 0 (either half). Random-walk traps: 4 statistics (T1 x2, T2 x2), one seed. Count looks: 2
-(FVG per month, previous-day sweep per month, 4h OANDA 2023-2025). Nothing here is charged against K.
+On gold, 2010-2017 only: T1 (2 statistics), T2 (2), ATR/spread by year (1 table), E-1 (gross, net prior, net broker x
+real, 2 controls = 7 headline statistics), E-2 (4 retrace statistics x 2 timeframes, 3 range means x 2), E-4 (2 rows x 2
+cost cases). About 30 statistics; one pinned parameter set, no parameter varied. On the random walk: 4 statistics, one
+seed. Nothing is charged to K; nothing was read on 2018+ or the holdout.
