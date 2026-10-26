@@ -91,9 +91,15 @@ def test_a_disabled_account_flagged_shadow_host_does_not_count_toward_the_one_ho
     (dict(cost_probe={"enabled": False}, shadow_host=True), "probe_only"),
     (dict(cost_probe={"enabled": True}, shadow_host=False), "probe_only"),
 ])
-def test_a_probe_only_account_needs_cost_probes_on_and_the_shadow_book(kw, match):
+def test_a_probe_only_account_needs_cost_probes_on_and_the_shadow_book_or_scheduled_probes(kw, match):
     with pytest.raises(ValidationError, match=match):
         _account(probe_only=True, daily_loss_limit_abs=20.0, approval_mode="auto", **kw)
+
+
+def test_a_probe_only_account_without_the_shadow_book_may_run_scheduled_probes_only():
+    a = _account(probe_only=True, daily_loss_limit_abs=20.0, approval_mode="auto", shadow_host=False,
+                 cost_probe={"enabled": True, "scheduled": {"enabled": True}})
+    assert a.probe_only and not a.shadow_host and a.cost_probe.scheduled.enabled
 
 
 def test_a_live_account_is_never_probe_only():
