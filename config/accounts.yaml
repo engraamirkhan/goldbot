@@ -107,10 +107,15 @@ accounts:
         MB30: { style: intraday, max_loss: 17.0 }
         MB1H: { style: intraday, max_loss: 17.0 }
         MSA15: { style: intraday, max_loss: 17.0 }
+        # time-structure arms (prereg-2026-10-26-time-structure.md; override 69 -> 74 approved 2026-10-26): blocked in
+        # the frozen spec until backlog 112 lands, so the engine drops them (logged) and nothing is sent until then
+        G1A: { style: intraday, max_loss: 17.0 }
+        G1C: { style: intraday, max_loss: 17.0, control_share: 0.05 }
         W0: { style: swing, max_loss: 40.0, control_share: 0.33 }
         W1A: { style: swing, max_loss: 40.0 }
         W1B: { style: swing, max_loss: 40.0 }
         W2: { style: swing, max_loss: 40.0 }
+        WFRI: { style: swing, max_loss: 40.0 }   # time-structure H-72 (forward-only), blocked until backlog 112
   icm-probe:
     broker: icm
     mode: demo
@@ -189,6 +194,10 @@ accounts:
         S4: { style: scalp, max_loss: 6.5 }
         S5A: { style: scalp, max_loss: 6.5 }
         S5B: { style: scalp, max_loss: 6.5 }
+        # time-structure arms (prereg-2026-10-26-time-structure.md; override 69 -> 74 approved 2026-10-26): blocked in
+        # the frozen spec until backlog 112 lands, so the engine drops them (logged) and nothing is sent until then
+        F1A: { style: scalp, max_loss: 6.5 }
+        F1C: { style: scalp, max_loss: 6.5, control_share: 0.05 }
   vantage-demo:
     broker: vantage
     mode: demo

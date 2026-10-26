@@ -182,7 +182,7 @@ def test_an_override_with_a_malformed_quarter_key_is_rejected(key):
 
 def test_the_shipped_settings_raise_2026q4_to_55_and_leave_other_quarters_at_the_base():
     r = Settings.model_validate(_raw()).research      # the yaml itself: conftest's base_trial_budget clears the cached copy
-    assert r.budget_for("2026Q4") == 69      # 58 counted + 11 Vantage twin arms (prereg amendment 2)
+    assert r.budget_for("2026Q4") == 74      # 58 counted + 11 Vantage twins + 5 time-structure arms (prereg 2026-10-26)
     assert r.budget_for("2027Q1") == r.trial_budget_quarter
 
 
