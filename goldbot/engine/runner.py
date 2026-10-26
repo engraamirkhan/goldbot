@@ -902,8 +902,10 @@ class Engine:
             # exits first (review L3): an account read that fails must not skip this bar's position management (time
             # exits, policies); no entry is decided on this close, and the error propagates as before
             self._manage_open(base.dec)
+            exploration.trail(self, close_ts)
             raise
         self._manage_open(base.dec)
+        exploration.trail(self, close_ts)    # H-80 BXR's runner stop and its virtual twins; never gated, never raises
         self.center.sweep_expired()
         regime = self._regime(base.X, close_ts)
         fam_w = self.allocator.weights(regime)
@@ -1482,26 +1484,34 @@ class Engine:
                 sl = round(trail, 2)                      # never loosens
             if sl is None or trail is None:
                 continue
-            tick = self.broker.last_tick(self.cfg.symbol)
-            broker_looser = pos.sl is None or tr.side * (sl - pos.sl) > 1e-9
-            if broker_looser and tr.side * ((tick.bid if tr.side > 0 else tick.ask) - sl) <= 0:
-                # the price is through the stop the policy set but the broker's stop is not there (a new level, or a
-                # modify that did not stick): close at market, as the labels exit at that stop
-                self._policy_close(pid, tr, "trail_close")
-                continue
-            if pos.sl is not None and tr.side * (sl - pos.sl) <= 1e-9:
-                # review MEDIUM-2 (c), defence in depth: the broker's stop is already at or beyond this one (a restart
-                # or an adoption left the engine's copy loose): never send a looser stop; the broker's is the floor
-                if tr.sl is None or tr.side * (pos.sl - tr.sl) > 1e-9:
-                    tr.sl = pos.sl
-                continue
-            if sl == tr.sl:
-                continue
-            tr.sl = sl                                    # reconciliation re-sends it if the modify did not stick
-            res = self.broker.modify(pid, sl, pos.tp)
-            self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": "trail", "position": pid,
-                                   "sl": sl, "ok": res.ok, "retcode": res.retcode})
+            self._tighten_stop(pid, tr, pos, sl)
         self._save_orders()
+
+    def _tighten_stop(self, pid: int, tr: OpenTrade, pos: Position, sl: float) -> None:
+        """Move one position's stop to `sl` (the caller's new level, already never looser than `tr.sl`): the exit
+        policies' trail and an exploration runner's (`exploration.trail`, H-80 BXR). "A policy only tightens the stop":
+        when the price is already through `sl` and the broker's stop is not there the trade is closed at market
+        (`trail_close`); the broker's stop at or beyond `sl` is the floor and is never loosened; otherwise `tr.sl` takes
+        `sl` (reconciliation re-sends it if the modify does not stick) and `modify` sends it. Automatic, never gated."""
+        tick = self.broker.last_tick(self.cfg.symbol)
+        broker_looser = pos.sl is None or tr.side * (sl - pos.sl) > 1e-9
+        if broker_looser and tr.side * ((tick.bid if tr.side > 0 else tick.ask) - sl) <= 0:
+            # the price is through the stop the policy set but the broker's stop is not there (a new level, or a
+            # modify that did not stick): close at market, as the labels exit at that stop
+            self._policy_close(pid, tr, "trail_close")
+            return
+        if pos.sl is not None and tr.side * (sl - pos.sl) <= 1e-9:
+            # review MEDIUM-2 (c), defence in depth: the broker's stop is already at or beyond this one (a restart
+            # or an adoption left the engine's copy loose): never send a looser stop; the broker's is the floor
+            if tr.sl is None or tr.side * (pos.sl - tr.sl) > 1e-9:
+                tr.sl = pos.sl
+            return
+        if sl == tr.sl:
+            return
+        tr.sl = sl                                    # reconciliation re-sends it if the modify did not stick
+        res = self.broker.modify(pid, sl, pos.tp)
+        self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": "trail", "position": pid,
+                               "sl": sl, "ok": res.ok, "retcode": res.retcode})
 
     def _policy_close(self, pid: int, tr: OpenTrade, action: str, **extra: object) -> OrderResult:
         return self._try_close(pid, action, None, **extra)

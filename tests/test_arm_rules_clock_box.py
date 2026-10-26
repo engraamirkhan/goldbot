@@ -239,3 +239,53 @@ def test_a_rule_off_its_specification_is_refused_at_load(rule, tf, params, match
 def test_the_new_rules_are_registered() -> None:
     for name in A.CLOCK_BOX_RULES:
         assert name in A.RULES and name in R.RULE_FUNCS
+
+
+# ---------------------------------------------------------------- engine lane E3: the runner live, the twins
+def test_every_box_row_carries_the_struct_target_the_bxt_twin_reads(b1) -> None:
+    struct, _ = _run(b1, "box_next", "15m", {"exit": "struct"})
+    for mode in ("runner", "fixed"):
+        got, _ = _run(b1, "box_next", "15m", {"exit": mode})
+        np.testing.assert_allclose(got["struct_r"], struct["target_r"])
+
+
+def test_the_runner_stop_live_after_each_close_is_the_history_walks_stop_on_the_same_bars(b1) -> None:
+    """Live == history: on the 1m bars through a decision close, `runner_stop_at` is the stop `walk_runner` holds
+    after that close on the whole path (the trail is a function of the bars, so a restart recomputes it)."""
+    runner, ctx = _run(b1, "box_next", "15m", {"exit": "runner"})
+    close = ctx.close_ts
+    checked = 0
+    for _, row in runner.iloc[:: max(1, len(runner) // 6)].iterrows():
+        i, side, risk = int(row["idx"]), int(row["side"]), float(row["risk_usd"])
+        hold = int(row["max_bars"]) + 1
+        closes = K.decision_closes(b1, "15m", close[i], hold)
+        np.testing.assert_array_equal(closes, close[i + 1:i + 1 + hold])
+        path = K.mid_path(b1, close[i])
+        entry = float(path["open"].iloc[0])
+        hist = K.walk_runner(path, closes, entry, side, risk, risk / K.BOX_STOP_ATR)
+        for k, at in enumerate(closes[:len(hist["stops"]) - 1]):
+            seen = b1[np.asarray(utc_index(b1["visible_at"]) <= at)]
+            live = K.runner_stop_at(K.mid_path(seen, close[i]), K.decision_closes(seen, "15m", close[i], hold), entry,
+                                    side, risk, risk / K.BOX_STOP_ATR)
+            assert live == hist["stops"][k + 1]
+            checked += 1
+    assert checked > 10
+
+
+def test_twin_ids_follow_the_bxr_row_naming() -> None:
+    assert K.twin_ids("BXR15") == {"struct": "BXT15", "fixed": "BXF15"}
+    assert K.twin_ids("BXR4H") == {"struct": "BXT4H", "fixed": "BXF4H"}
+    assert K.twin_ids("RUN1") == {"struct": "RUN1-struct", "fixed": "RUN1-fixed"}
+
+
+def test_a_twin_stays_open_until_its_own_barrier_and_then_equals_the_full_walk() -> None:
+    closes = pd.date_range("2024-01-10 10:15", periods=8, freq="15min", tz="UTC")
+    up = _path([100 + 0.05 * k for k in range(200)])
+    full = K.walk_runner(up, closes, entry=100.0, side=1, risk=2.0, atr_sig=1.0, target_r=2.0)
+    assert full["kind"] == "target"
+    assert K.twin_outcome(up.iloc[:30], closes[:1], 8, entry=100.0, side=1, risk=2.0, target_r=2.0) is None
+    got = K.twin_outcome(up, closes, 8, entry=100.0, side=1, risk=2.0, target_r=2.0)
+    assert got is not None and (got["kind"], got["exit"], got["at"]) == (full["kind"], full["exit"], full["at"])
+    flat = _path([100.0] * 200)
+    timed = K.twin_outcome(flat, closes, 8, entry=100.0, side=1, risk=2.0, target_r=2.0)
+    assert timed is not None and timed["kind"] == "time" and timed["at"] == closes[-1]

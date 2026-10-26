@@ -129,3 +129,63 @@ def test_blackout_loads_from_the_fetched_calendar_layout(tmp_path: Path) -> None
 def test_missing_calendar_fails_loudly_and_says_what_to_run(tmp_path: Path) -> None:
     with pytest.raises(SystemExit, match="calendar-v1"):
         rab.load_blackout(tmp_path / "raw-calendar")
+
+
+# ---------------------------------------------------------------- engine lane E3: BXR's runner, its twins, T's spread
+def _spec(arm_id: str, rule: str, params: dict | None = None) -> A.Arm:
+    return A.Arm(id=arm_id, rule=rule, timeframe="15m", params=params or {})
+
+
+def test_bxr_in_history_exits_on_the_runner_walk_and_scores_its_twins_on_the_same_entries(b1: pd.DataFrame) -> None:
+    """H-80: BXR's exit is `walk_runner` (the function the engine trails with); BXT/BXF are virtual twins on BXR's own
+    entries: the same entry price and 1m path, the STRUCT or FIXED target, the fixed 1 R stop."""
+    from goldbot.research import arm_rules_clock_box as K
+    arm = _spec("BXR15", "box_next", {"exit": "runner"})
+    trades, s = rab.run_arm(b1, arm, START, END, COSTS)
+    assert len(trades) > 5
+    bars = rab.resample_bars(b1, "15m").reset_index(drop=True)
+    close = pd.DatetimeIndex(bars["visible_at"])
+    for _, t in trades.iterrows():
+        i = int(np.searchsorted(close, t["ts_utc"]))                                 # ts_utc: the decision close
+        closes = close[i + 1:i + 1 + 96]
+        path = K.mid_path(b1, close[i])
+        entry, side, r = float(t["entry"]), int(t["side"]), float(t["risk_usd"])
+        assert entry == pytest.approx(float(path["open"].iloc[0]))
+        w = K.walk_runner(path, closes, entry, side, r, r / K.BOX_STOP_ATR)
+        assert t["barrier_hit"] == w["kind"] and t["exit_px"] == pytest.approx(w["exit"])
+        for mode, tgt in (("fixed", 2.0), ("struct", float(t["twin_struct_target_r"]))):
+            v = K.walk_runner(path, closes, entry, side, r, r / K.BOX_STOP_ATR, target_r=tgt)
+            assert t[f"twin_{mode}_hit"] == v["kind"] and t[f"twin_{mode}_exit_px"] == pytest.approx(v["exit"])
+    assert (trades["twin_struct_target_r"] >= 2.0 - 1e-9).all()
+    assert set(s["twins"]) == {"BXT15", "BXF15"} and s["twins"]["BXF15"]["n_trades"] == len(trades)
+    assert set(s["twins"]["BXT15"]) >= {"gross_r", "net_r_overshoot_0", "net_r_overshoot_0.70"}
+
+
+def test_a_fixed_target_box_arm_has_no_twins(b1: pd.DataFrame) -> None:
+    trades, s = rab.run_arm(b1, _spec("BXF-X", "box_next", {"exit": "fixed"}), START, END, COSTS)
+    assert "twins" not in s and not any(c.startswith("twin_") for c in trades.columns)
+
+
+def test_ka15_stratum_t_pays_its_signal_time_spread_on_both_legs_and_the_family_is_also_read_without_t(b1) -> None:
+    """Arms 8.13 condition 2: "T is charged at the spread measured at signal time on both legs: the 23:00 UTC entry and
+    the 23:30 UTC exit" (in place of the p90 spread inside the frozen round trip, never below it); condition 3: the
+    family net with T excluded and each stratum's share of fills."""
+    trades, s = rab.run_arm(b1, _spec("KA15", "clock_anchor"), START, END, COSTS)
+    t_rows = trades[trades["stratum"] == "T"]
+    others = trades[trades["stratum"] != "T"]
+    assert len(t_rows) > 3 and len(others) > 3
+    dec = pd.DatetimeIndex(t_rows["ts_utc"])                                  # the decision close
+    assert (dec.hour == 23).all() and (dec.minute == 0).all()
+    m = b1.assign(_t=pd.to_datetime(b1["ts_utc"], utc=True)).set_index("_t")
+    for (_, t), at in zip(t_rows.iterrows(), dec, strict=True):
+        s_in = float(m["ask_open"].loc[t["entry_ts"]] - m["bid_open"].loc[t["entry_ts"]])
+        last = at + pd.Timedelta(minutes=29)                                  # the minute closing at 23:30
+        s_out = float(m["ask_close"].loc[last] - m["bid_close"].loc[last])
+        extra = max(0.0, s_in + s_out - COSTS.spread_both_legs_usd)
+        assert t["spread_extra_usd"] == pytest.approx(extra) and extra > 0
+        stop = float(t["barrier_hit"] == "stop")
+        assert t["net_r"] == pytest.approx((t["move_usd"] - 0.23 - extra) / t["risk_usd"])
+        assert t["net_r_os"] == pytest.approx((t["move_usd"] - 0.23 - extra - 0.70 * stop) / t["risk_usd"])
+    assert others["net_r"].to_numpy() == pytest.approx(((others["move_usd"] - 0.23) / others["risk_usd"]).to_numpy())
+    assert s["net_r_without_T"]["mean"] == pytest.approx(float(others["net_r"].mean()))
+    assert s["strata"]["T"] == pytest.approx(len(t_rows) / len(trades))

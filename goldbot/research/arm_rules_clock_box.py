@@ -36,10 +36,11 @@ trading day = New York date after +7 h) where the list covers the date; history 
 not filtered (no list exists for it), declared. "No target" is a target at NO_TARGET_R (a fixed-price bracket that
 the measured excursions never reach: the box runner's 2010-2017 maximum was 16.1 R).
 
-Declared, not built here (order/exit path, trading-safety review): the engine does not yet run `runner_stop` as a
-live stop modification, the BXT/BXF virtual twins on BXR's fill path, or XC15's netting shift; the history runner
-does not yet charge T's spread. Until then BXR, BXT and BXF run as their fixed-bracket forms only where the arm row
-says so. The Friday weekend rule is the engine's (`runner._weekend_rule`); `walk_friday` models it for WFRI only
+Live and history share these functions (engine lane E3, trading-safety review): the engine trails BXR's stop with
+`runner_stop_at` (= `walk_runner` on the same 1m bars) through its own stop move, scores the BXT/BXF virtual twins on
+each BXR fill with `twin_outcome`, and shifts XC15 behind an open KA15 on a netting host as `shift_control` does
+(`goldbot.engine.exploration`); `scripts/run_arm_backtest.py` exits BXR on `walk_runner`, scores its twins on the same
+entries and charges stratum T's measured spread on both legs. The Friday weekend rule is the engine's (`runner._weekend_rule`); `walk_friday` models it for WFRI only
 (the cut price is the mid open of the first 1m bar at or after the cut; live decides on the bid, half a spread lower)."""
 from __future__ import annotations
 
@@ -240,7 +241,9 @@ def pair_with_control(arm_trades: pd.DataFrame, control: pd.DataFrame) -> pd.Dat
 
 # ---------------------------------------------------------------- H-80 box family
 def box_next(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
-    """BXR / BXT / BXF entries (module docstring) with R = 1.5 ATR14 and the exit of `params.exit`."""
+    """BXR / BXT / BXF entries (module docstring) with R = 1.5 ATR14 and the exit of `params.exit`. Every row also
+    carries `struct_r`, the STRUCT target in R at the signal bar ("the first box in force at t lying at or beyond 2 R,
+    else 2 R"), so BXR's virtual BXT twin reads the same target in history and live."""
     from goldbot.features import smc_replica as smc
     from goldbot.specialists.box_break_close import HOLD_BARS, decide_with_stop
     mode = arm.params["exit"]
@@ -265,17 +268,16 @@ def box_next(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
         if not side:
             continue
         r = BOX_STOP_ATR * a[t]
-        tgt = BOX_TARGET_R
-        if mode == "runner":
-            tgt = NO_TARGET_R
-        elif mode == "struct":
-            nb = next_box(tops, bots, float(c[t]) + side * BOX_TARGET_R * r, side)
-            tgt = side * (nb - c[t]) / r if np.isfinite(nb) else BOX_TARGET_R
-        rows.append((t, side, r, tgt))
+        nb = next_box(tops, bots, float(c[t]) + side * BOX_TARGET_R * r, side)
+        struct = side * (nb - c[t]) / r if np.isfinite(nb) else BOX_TARGET_R
+        tgt = {"runner": NO_TARGET_R, "struct": struct, "fixed": BOX_TARGET_R}[mode]
+        rows.append((t, side, r, tgt, struct))
     if not rows:
-        return empty()
-    return _frame(np.array([x[0] for x in rows]), np.array([x[1] for x in rows]), np.array([x[2] for x in rows]),
-                  np.array([x[3] for x in rows]), HOLD_BARS[arm.timeframe])
+        return empty().assign(struct_r=pd.Series(dtype=float))
+    out = _frame(np.array([x[0] for x in rows]), np.array([x[1] for x in rows]), np.array([x[2] for x in rows]),
+                 np.array([x[3] for x in rows]), HOLD_BARS[arm.timeframe])
+    struct_r = {x[0]: x[4] for x in rows}
+    return out.assign(struct_r=[float(struct_r[int(i)]) for i in out["idx"]])
 
 
 def runner_stop(stop: float, entry: float, side: int, risk: float, atr_sig: float, best: float) -> float:
@@ -315,6 +317,58 @@ def walk_runner(path: pd.DataFrame, closes: pd.DatetimeIndex, entry: float, side
             stops.append(stop)
             k += 1
     return {"exit": c[-1] if len(c) else entry, "kind": "open", "at": ts[-1] if len(ts) else None, "stops": stops}
+
+
+_NEVER = pd.DatetimeIndex([pd.Timestamp("2262-01-01", tz="UTC")])     # a close no path reaches: no time exit yet
+
+
+def is_runner(arm: Arm) -> bool:
+    """A BXR row: `box_next` with the RUNNER exit (real orders whose stop the engine trails)."""
+    return arm.rule == "box_next" and arm.params.get("exit") == "runner"
+
+
+def twin_ids(arm_id: str) -> dict[str, str]:
+    """BXR's virtual twins (exits-adaptive-targets-2026-10-26.md section 5: "BXT15 ... virtual (no orders), on each
+    BXR fill", "BXF15 ... virtual, on each BXR fill"): BXR<tf> -> BXT<tf> (STRUCT) and BXF<tf> (FIXED)."""
+    if arm_id.startswith("BXR"):
+        return {"struct": "BXT" + arm_id[3:], "fixed": "BXF" + arm_id[3:]}
+    return {m: f"{arm_id}-{m}" for m in ("struct", "fixed")}
+
+
+def mid_path(b1: pd.DataFrame, start: pd.Timestamp) -> pd.DataFrame:
+    """The 1m mid path from the first minute at or after `start` (the decision close: the entry minute), the input of
+    `walk_runner` in history and live alike."""
+    rows = b1.loc[np.asarray(utc_index(b1["ts_utc"]) >= start)]
+    return mid(rows).reset_index(drop=True)[["ts_utc", "open", "high", "low", "close"]]
+
+
+def decision_closes(b1: pd.DataFrame, tf: str, after: pd.Timestamp, n: int) -> pd.DatetimeIndex:
+    """The first `n` closes of `tf` bars closing after `after`, built from the 1m bars as the history matrix builds
+    its decision bars (`resample_bars`; intraday bars floor on the UTC clock, so a slice from a bar close gives the
+    same bars as the whole history)."""
+    src = b1.loc[np.asarray(utc_index(b1["ts_utc"]) >= after)]
+    if src.empty:
+        return pd.DatetimeIndex([], tz="UTC")
+    vis = utc_index(resample_bars(src, tf)["visible_at"])
+    return vis[vis > after][:n]
+
+
+def runner_stop_at(path: pd.DataFrame, closes: pd.DatetimeIndex, entry: float, side: int, risk: float,
+                   atr_sig: float) -> float:
+    """BXR's stop after the last decision close `path` has reached: `walk_runner` on the same path and closes with no
+    time exit yet. Live and history run this one function on the same bars, so the engine's trail is the history
+    trail, and a restart recomputes it from the stored bars (the engine keeps the tighter of it and its own stop)."""
+    return float(walk_runner(path, pd.DatetimeIndex(closes.append(_NEVER)), entry, side, risk, atr_sig)["stops"][-1])
+
+
+def twin_outcome(path: pd.DataFrame, closes: pd.DatetimeIndex, hold: int, *, entry: float, side: int, risk: float,
+                 target_r: float) -> dict[str, Any] | None:
+    """A virtual twin's exit on the BXR fill's 1m path (prereg H-80: "BXT/BXF are computed on each BXR fill's 1m path
+    from the real fill price"): fixed stop 1 R, target `target_r` R, time exit at the `hold`-th close. None while the
+    path has reached none of its barriers (fewer than `hold` closes seen, no stop or target yet)."""
+    seen = closes[:hold] if len(closes) >= hold else pd.DatetimeIndex(closes.append(_NEVER))
+    w = walk_runner(path, seen, entry, side, risk, risk / BOX_STOP_ATR, target_r=target_r)
+    return None if w["kind"] == "open" else w
 
 
 # ---------------------------------------------------------------- registration and load checks

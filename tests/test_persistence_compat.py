@@ -321,6 +321,21 @@ def case_exploration_trade(tmp: Path) -> None:
     assert exploration.trades(str(tmp), "icm-probe") == [rec]
 
 
+def case_exploration_twin(tmp: Path) -> None:
+    """aux.db exploration_twins row (H-80 BXR's virtual twins, engine lane E3) with a field from a newer release."""
+    rec = exploration.TwinRecord(twin_id="exabcde-1741118400-12345678:fixed", client_order_id="exabcde-1741118400-12345678",
+                                 account_id="icm-probe", broker="icm", arm_id="BXF15", of_arm_id="BXR15",
+                                 exit_mode="fixed", tf="15m", side=1, signal_utc=T0, entry_price=2900.0, risk_usd=9.0,
+                                 target_r=2.0, hold_bars=96)
+    db = exploration.ledger_db(str(tmp))
+    row = exploration.TWINS.row(rec)
+    row["body"] = json.dumps(_newer(json.loads(row["body"])))
+    with db.write() as conn:
+        conn.execute(f"INSERT INTO exploration_twins ({', '.join(row)}) VALUES ({', '.join(':' + c for c in row)})",
+                     row)
+    assert exploration.twins(str(tmp), "icm-probe") == [rec]
+
+
 def case_hwm_confirmation(tmp: Path) -> None:
     """core.db high-water-mark confirmation row (BACKLOG 54, ADR 0018) with a field from a newer release."""
     conf = hwm.HwmConfirmation(account_id="icm-demo", mark=10_000.0, mark_utc=T0, pending_balance=10_500.0,
@@ -432,7 +447,7 @@ CASES = [case_closed_trade, case_closed_trade_from_before_ret_basis, case_closed
          case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_cost_probe, case_cost_probe_skip, case_hwm_confirmation, case_limits_profile, case_risk_term,
          case_limits_state,
          case_trial_dsr_inputs, case_trial_day_summed_dsr, case_attribution_report, case_tick_index,
-         case_daily_review]
+         case_daily_review, case_exploration_trade, case_exploration_twin]
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c.__name__.removeprefix("case_") for c in CASES])
@@ -473,6 +488,7 @@ def test_every_persisted_record_model_has_a_compat_case():
                ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation, limits_profile.LimitsState,
                limits_profile.LimitsChange, adaptive.AdaptiveState, adaptive.RiskTerm, DsrInputs, DaySummedDsr,
                AttributionReport, TickIndex, cost_probe.ProbeRecord, cost_probe.SkipRecord, exploration.ExplorationRecord,
+               exploration.TwinRecord,
                # the engine's orders file: tests/test_engine_safety.py::
                # test_a_restart_after_a_rollback_loads_an_orders_file_a_newer_release_wrote
                SentOrder, OpenTrade, PendingClose,
