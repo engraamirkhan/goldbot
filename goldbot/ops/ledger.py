@@ -53,6 +53,7 @@ monthly tie-out.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 import sys
@@ -109,6 +110,10 @@ class BalanceSnapshot(FrozenRecord):
     # it; it never trails the read by more than a day, so an idle account never drifts into a new baseline
     deals_through_utc: UtcTimestamp | None = None
     slot_utc: UtcTimestamp | None = None            # the scheduler slot: its UTC date keys the row (ts_utc = read time)
+    # one-way fingerprint of the terminal's login and server (never the login itself): a change means the account was
+    # switched, so the previous balance belongs to another account and the tie-out starts a new baseline. None on rows
+    # written before this field (nothing to compare)
+    identity: str | None = None
 
 
 class BalanceDeal(FrozenRecord):
@@ -461,6 +466,11 @@ def _latest(db: Database, repo: RecordRepo[Any], account_id: str, before_key: st
 _Verdict = Literal["ok", "warn", "fail"]
 
 
+def account_identity(info: AccountInfo, account_id: str) -> str:
+    """A truncated SHA-256 of (account id, login, server): enough to see the login change, not to recover the login."""
+    return hashlib.sha256(f"{account_id}|{info.login}|{info.server}".encode()).hexdigest()[:16]
+
+
 def _assess(prev: BalanceSnapshot | None, info: AccountInfo, deals: pd.DataFrame, read_at: pd.Timestamp,
             since: pd.Timestamp, slot: pd.Timestamp, acc_id: str,
             cfg: LedgerSettings) -> tuple[BalanceSnapshot, BalanceTieOut | None, _Verdict, list[str]]:
@@ -469,10 +479,14 @@ def _assess(prev: BalanceSnapshot | None, info: AccountInfo, deals: pd.DataFrame
     through = read_at - MIN_WINDOW if newest is None else max(newest, read_at - MIN_WINDOW)
     snap = BalanceSnapshot(account_id=acc_id, ts_utc=read_at, slot_utc=slot, balance=float(info.balance),
                            equity=float(info.equity), margin=float(info.margin), margin_free=float(info.margin_free),
-                           currency=str(info.currency), deals_through_utc=through)
+                           currency=str(info.currency), deals_through_utc=through,
+                           identity=account_identity(info, acc_id))
     notes: list[str] = []
     if prev is None:
         return snap, None, "ok", ["first snapshot: a baseline, nothing to tie out against"]
+    if prev.identity is not None and snap.identity is not None and prev.identity != snap.identity:
+        return snap, None, "warn", ["the account's login or server changed since the previous snapshot: a new "
+                                    "baseline (the previous balance belongs to another account)"]
     if prev.currency != snap.currency:
         return snap, None, "fail", ["the account currency changed since the previous snapshot: a new baseline"]
     if (prev.deals_through_utc or prev.ts_utc) < since:
