@@ -369,11 +369,19 @@ def specialist(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     return specialist_rule(arm, ctx)
 
 
+def band_rule(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
+    """Time-structure band breaks F1A/F1C/F2A/F2C (`goldbot.research.arm_rules_bands`)."""
+    from goldbot.research.arm_rules_bands import RULES as BANDS
+    return BANDS[arm.rule](arm, ctx)
+
+
 RULE_FUNCS: dict[str, Callable[[Arm, RuleContext], pd.DataFrame]] = {
     "random_bracket": random_bracket, "session_vwap_fade": session_vwap_fade,
     "opening_range_break": opening_range_break, "sweep_absorb": sweep_absorb_rule,
     "box_break_close": box_break_close_rule, "ema_pullback": ema_pullback, "tsmom": tsmom_rule,
     "specialist": specialist,
+    **dict.fromkeys(("hurst_band_break", "hurst_band_break_control", "htf_stretch_break", "htf_stretch_break_control"),
+                    band_rule),
 }
 
 
