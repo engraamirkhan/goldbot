@@ -324,6 +324,44 @@ anchored on UTC or on London time mis-times the NY window for about 3 weeks a ye
   0.15-0.30 ATR15 plus 0.37 $/oz. R-01 stands; slice D tests oscillators only as features (O-4/H-62) or with a new
   mechanism.
 
+### 6.11 Cross-slice check: is F-1's Hurst tercile a volatility or trend-length proxy? (15m, 2010-2017) [C, F]
+
+Raised because slice C found the R/S Hurst level equal to its shuffled null, while F-1/X1 sorts 15m band breaks on
+the Hurst tercile. Script: `docs/research/candidates/hurst_proxy_check_2026-10-26.py`. Events: first 15m close
+outside BB(20, 2) from inside (one of X1's three components); 4 bars from the next open, ATR15; terciles on a trailing
+250-bar rank, as F used them. 11,137 events.
+
+| Sort | Low tercile mean (t day) | Mid | High | Spearman ρ with hurst_128 |
+|---|---|---|---|---|
+| hurst_128 (F's variable) | **+0.084 (2.7)** | −0.044 (−1.4) | **−0.120 (−4.3)** | 1 |
+| efficiency ratio, 128 bars (trend straightness) | −0.029 (−1.0) | −0.017 | −0.032 (−1.0) | 0.12 |
+| abs(128-bar trend z) (trend length) | −0.026 (−0.9) | −0.022 | −0.030 (−1.0) | 0.12 |
+| ATR15 / 250-bar median (volatility) | −0.023 (−0.8) | −0.033 | −0.024 (−0.8) | 0.08 |
+| abs(16-bar trend z), signal-bar size, close beyond band | flat, abs(t) < 2.3, no monotone pattern | | | −0.01 .. 0.06 |
+| VR(8) over 128 bars (short-scale autocorrelation) | +0.044 (1.6) | −0.055 | −0.108 (−3.5) | **0.60** |
+
+- Within each efficiency-ratio tercile, Hurst high minus low is −0.19 / −0.31 / −0.13. Within each VR(8) tercile it
+  is −0.18 / −0.20 / −0.18.
+- By year (low minus high): 2010 −0.04, then +0.15 to +0.29 in 2011-2017 (7/8).
+- F's own split reproduces: −0.108 / +0.098 against my −0.120 / +0.084.
+
+Reading:
+- **The Hurst tercile is not a volatility or trend-length proxy.** Those sorts are flat, and Hurst keeps its spread
+  inside each of their terciles.
+- It is mostly a **short-scale (8-64 bar) autocorrelation state**: it is correlated with VR(8) at ρ 0.60, and VR(8)
+  sorts the same way, more weakly. Hurst keeps its spread within VR(8) terciles, so the R/S chunk structure adds
+  something VR(8) does not.
+- This does not contradict slice C. C tests whether the *level* of R/S Hurst shows long memory: it does not, the
+  level equals its shuffled null. F uses the *fluctuation* of a 128-bar statistic around that null as a state.
+  Sampling noise in a window can still sort what follows if the short-scale dependence it picks up is real.
+- Two cautions:
+  1. The split was chosen after looking: F logged 336 cells.
+  2. The plain breakout's mean is −0.03, so the "fade when Hurst is high" arm starts with a tailwind. Only the
+     low-Hurst arm is a true sign switch.
+- The composite is **not resting on a noise sort in the discovery half**. It still needs the confirmation-half read
+  and the cost-at-signal-times measurement (`learning-loop.md` stage 3) before any slot.
+- Looks: 1 event set, 10 sorts, about 60 statistics.
+
 ## 7. What each slice hands back
 
 1. Its file in this folder, following sections 4-5, with measured tables (discovery half), literature with URLs
