@@ -149,7 +149,8 @@ class SessionCosts(FrozenRecord):
 
 
 class StyleVolume(FrozenRecord):
-    style: str
+    broker: str
+    style: str                              # scalp / intraday / swing (exploration arms) or probe (cost probes)
     candidates: int
     fills: int
     plan: int
@@ -207,7 +208,7 @@ class DailyReview(Record):
     incidents: list[Incident] = Field(default_factory=list)
     refits: list[CellRefit] = Field(default_factory=list)
     retired: list[Retirement] = Field(default_factory=list)                 # retired in this review
-    posted: dict[str, str] = Field(default_factory=dict)                    # kind -> posted | outbox | skipped
+    posted: dict[str, str] = Field(default_factory=dict)                    # kind -> posted | outbox
     weekly: str | None = None
 
     @model_validator(mode="after")
@@ -238,6 +239,7 @@ class DayTrend(FrozenRecord):
 class VariantProposal(FrozenRecord):
     title: str
     rationale: str
+    cost: Literal["one registry trial if pre-registered"] = "one registry trial if pre-registered"
     status: Literal["proposed, not run"] = "proposed, not run"
 
 
@@ -247,6 +249,7 @@ class WeeklyRollup(Record):
     week_ending: str
     generated_utc: UtcTimestamp
     days: list[DayTrend] = Field(default_factory=list)
+    trials_left: int | None = None    # the quarter's registry trials left; 0 or unknown: no proposal is made
     proposals: list[VariantProposal] = Field(default_factory=list, max_length=4)
 
     @model_validator(mode="after")
@@ -310,6 +313,27 @@ def retire(db: Database, *, broker: str, arm_id: str, day: str, now: pd.Timestam
     if done:
         log.warning("exploration arm %s on %s retired at its pre-registered stop (%s)", arm_id, broker, day)
     return done
+
+
+def retired_on(db: Database, day: str) -> list[Retirement]:
+    """The arms retired by the review of `day` (a rerun of the day reports them again, from the table)."""
+    with db.connection() as conn:
+        return [Retirement(broker=str(b), arm_id=str(a), day=day) for b, a in conn.execute(
+            "SELECT broker, arm_id FROM exploration_arm_status WHERE day = ? ORDER BY broker, arm_id", (day,))]
+
+
+def refits_on(db: Database, day: str) -> list[CellRefit]:
+    """The cost cells fitted for `day`, from the table (a rerun of the day reports them again)."""
+    with db.connection() as conn:
+        rows = conn.execute("SELECT broker, session, fills, slippage_usd FROM exploration_cost_cells WHERE day = ? "
+                            "ORDER BY broker, session", (day,)).fetchall()
+        out = []
+        for b, sess, n, v in rows:
+            prev = conn.execute("SELECT slippage_usd FROM exploration_cost_cells WHERE broker = ? AND session = ? "
+                                "AND day < ? ORDER BY day DESC LIMIT 1", (b, sess, day)).fetchone()
+            out.append(CellRefit(broker=str(b), session=str(sess), day=day, fills=int(n), slippage_usd=float(v),
+                                 previous_usd=float(prev[0]) if prev else None))
+    return out
 
 
 # ---------------------------------------------------------------------------------------------- cost cells
@@ -559,32 +583,46 @@ def _refusals(d: _Day) -> dict[str, dict[str, int]]:
     return out
 
 
-def _volume(d: _Day, plan: Mapping[str, int]) -> list[StyleVolume]:
-    cands: dict[str, int] = {s: 0 for s in plan}
-    fills: dict[str, int] = {s: 0 for s in plan}
-    for s in d.obs["style"].astype(str):
-        cands[s] = cands.get(s, 0) + 1
-    for t in d.sent:
-        s = d.style_of.get(t.client_order_id, "scalp")
-        fills[s] = fills.get(s, 0) + 1
-    cands["probe"] = cands.get("probe", 0) + len(d.probes)
-    fills["probe"] = fills.get("probe", 0) + sum(p.fill_price is not None for p in d.probes)
-    styles = [*plan, *sorted(set(cands) - set(plan))]           # the plan's order, then any style it lacks
-    return [StyleVolume(style=s, candidates=cands.get(s, 0), fills=fills.get(s, 0), plan=int(plan.get(s, 0)),
-                        of_plan=round(cands.get(s, 0) / plan[s], 6) if plan.get(s) else None) for s in styles]
+def _volume(d: _Day, plan: Mapping[str, Mapping[str, int]], probe_plan: Mapping[str, int]) -> list[StyleVolume]:
+    """Per broker: exploration candidates and fills per style, and the cost probes (`probe`), each against its plan."""
+    out: list[StyleVolume] = []
+    for broker in sorted(set(d.hosts.values())):
+        hosts = {h for h, b in d.hosts.items() if b == broker}
+        bplan = {**plan.get(broker, {}), "probe": int(probe_plan.get(broker, 0))}
+        cands: dict[str, int] = dict.fromkeys(bplan, 0)
+        fills: dict[str, int] = dict.fromkeys(bplan, 0)
+        for s in d.obs.loc[d.obs["account_id"].isin(hosts), "style"].astype(str):
+            cands[s] = cands.get(s, 0) + 1
+        for t in d.sent:
+            if t.account_id in hosts:
+                s = d.style_of.get(t.client_order_id, "scalp")
+                fills[s] = fills.get(s, 0) + 1
+        probes = [p for p in d.probes if p.account_id in hosts]
+        cands["probe"] += len(probes)
+        fills["probe"] += sum(p.fill_price is not None for p in probes)
+        for s in [*bplan, *sorted(set(cands) - set(bplan))]:       # the plan's order, then any style it lacks
+            out.append(StyleVolume(broker=broker, style=s, candidates=cands.get(s, 0), fills=fills.get(s, 0),
+                                   plan=int(bplan.get(s, 0)),
+                                   of_plan=round(cands.get(s, 0) / bplan[s], 6) if bplan.get(s) else None))
+    return out
 
 
-def _arm_health(db: Database, hosts: Mapping[str, str], hi: pd.Timestamp) -> dict[str, dict[str, Health]]:
-    """Per broker: arm -> `breached` (its H-61 stop reached within its first trades) or `ok`. The running R is
-    computed in labs and never leaves it (labs.ArmStatus has no R but the stop's own)."""
-    from goldbot.telegram.labs import arm_statuses
+def _arm_health(db: Database, hosts: Mapping[str, str], hi: pd.Timestamp
+                ) -> tuple[dict[str, dict[str, Health]], set[str]]:
+    """Per broker: arm -> `breached` (its H-61 stop reached within its first trades) or `ok`; and the control arms
+    (labs.ArmStatus.control: the candidates' flag or the spec's random bracket), which are never breached nor
+    retired (quant 2026-10-26: the controls are the null). The running R is computed in labs and never leaves it."""
+    from goldbot.telegram.labs import arm_statuses, control_arm_ids
     out: dict[str, dict[str, Health]] = {}
+    controls: set[str] = set(control_arm_ids())
     with db.connection() as conn:
         for broker in sorted(set(hosts.values())):
             accts = sorted(h for h, b in hosts.items() if b == broker)
             st = arm_statuses(conn, accts, until=hi)
-            out[broker] = {a.arm_id: ("breached" if a.band == "at_stop" else "ok") for a in st}
-    return out
+            controls |= {a.arm_id for a in st if a.control}
+            out[broker] = {a.arm_id: ("breached" if a.band == "at_stop" and a.arm_id not in controls else "ok")
+                           for a in st}
+    return out, controls
 
 
 def _integrity(d: _Day, trading: bool, max_gap: int, incidents: list[Incident]) -> list[Integrity]:
@@ -681,7 +719,8 @@ def _status_body(r: DailyReview) -> str:
                      f"{_usd(c.spread_usd)}, entry slippage {_usd(c.entry_slip_usd)}, exit slippage "
                      f"{_usd(c.exit_slip_usd)}, stop overshoot {_usd(c.overshoot_usd)}"
                      + (f" ({c.overshoot_x:.1f}x the scenario)" if c.overshoot_x is not None else ""))
-    lines += [f"- Volume {v.style}: {v.candidates} candidates, {v.fills} fills, plan {v.plan}" for v in r.volume]
+    lines += [f"- Volume {_broker(v.broker)} {v.style}: {v.candidates} candidates, {v.fills} fills, plan {v.plan}"
+              for v in r.volume]
     if r.refits:
         lines.append(f"- Cost cells refit: {', '.join(f'{_broker(c.broker)} {c.session}' for c in r.refits)}")
     lines.append(f"- Arm health: {sum(v == 'breached' for b in r.arm_health.values() for v in b.values())} breached, "
@@ -703,7 +742,7 @@ def _issue(r: DailyReview, low_alert: bool, settings: DailyReviewSettings) -> tu
         lines += ["", f"**Volume** {r.volume_total:,} of {r.plan_total:,} planned ({_pct(r.of_plan)}), under "
                       f"{settings.volume_alert_below:.0%} of the plan on {r.volume_low_days} trading days running.",
                   "Counted cause:"]
-        lines += [f"- {v.style}: {v.candidates} of {v.plan} planned" for v in r.volume
+        lines += [f"- {_broker(v.broker)} {v.style}: {v.candidates} of {v.plan} planned" for v in r.volume
                   if v.plan and v.candidates < settings.volume_alert_below * v.plan]
         reasons: dict[str, int] = {}
         for counts in r.refusals.values():
@@ -726,7 +765,7 @@ def _post(state_dir: Path, day: str, kind: str, body: str, sink: IssueSink | Non
         posted = {}
     key = f"{day}:{kind}"
     if posted.get(key) == "posted":
-        return "skipped"
+        return "posted"
 
     def outbox() -> str:
         write_atomic(outbox_dir(state_dir) / f"{day}-{kind}.md", (f"# {title}\n\n" if title else "") + body + "\n")
@@ -747,7 +786,17 @@ def _post(state_dir: Path, day: str, kind: str, body: str, sink: IssueSink | Non
         return outbox()
     posted[key] = "posted"
     write_atomic(posted_file, json.dumps(dict(sorted(posted.items())[-120:]), indent=1))
+    (outbox_dir(state_dir) / f"{day}-{kind}.md").unlink(missing_ok=True)    # an earlier failed attempt's copy
     return "posted"
+
+
+def stale_outbox(state_dir: str | Path, now: pd.Timestamp, days: float = 2.0) -> int:
+    """Issue texts waiting in outbox/ (no token or a failed post) for at least `days` (the owner's report says so)."""
+    d = outbox_dir(state_dir)
+    if not d.exists():
+        return 0
+    cut = pd.Timestamp(now).timestamp() - days * 86400
+    return sum(1 for f in d.glob("*.md") if f.stat().st_mtime <= cut)
 
 
 # ---------------------------------------------------------------------------------------------- weekly
@@ -770,8 +819,9 @@ def _trend(r: DailyReview) -> DayTrend:
 
 
 def _proposals(days: Sequence[DayTrend], limit: int) -> list[VariantProposal]:
-    """Deterministic variant proposals from the week's operational figures only (costs, refusals, fill rate,
-    volume): never from any arm's result. The research director decides whether any is pre-registered."""
+    """Deterministic variant proposals from the week's operational figures only (costs, refusals, fill rate):
+    never from any arm's result, and never a new timeframe or arm for low volume (quant 2026-10-26: volume is not
+    evidence). Each costs one registry trial if the research director pre-registers it."""
     out: list[VariantProposal] = []
     for b in sorted({b for d in days for b in d.overshoot_x}):
         xs = [v for d in days if (v := d.overshoot_x.get(b)) is not None]
@@ -797,18 +847,13 @@ def _proposals(days: Sequence[DayTrend], limit: int) -> list[VariantProposal]:
     if fr and float(np.mean(fr)) < 0.9:
         out.append(VariantProposal(title="Limit-entry variant", rationale=f"fill rate {float(np.mean(fr)):.0%} "
                                                                           "over the week"))
-    short: dict[str, int] = {}
-    for d in days:
-        for s in d.styles_under_half:
-            short[s] = short.get(s, 0) + 1
-    for s, n in sorted(short.items()):
-        if n >= 3:
-            out.append(VariantProposal(title=f"Additional timeframe variant for {s}",
-                                       rationale=f"{s} candidates under half the plan on {n} trading days"))
     return out[:limit]
 
 
-def weekly_rollup(state_dir: Path, today: DailyReview, now: pd.Timestamp, limit: int) -> WeeklyRollup:
+def weekly_rollup(state_dir: Path, today: DailyReview, now: pd.Timestamp, limit: int,
+                  trials_left: int | None = None) -> WeeklyRollup:
+    """The week's trends and at most `limit` variant proposals, each costing one registry trial: none at all when
+    the quarter's trial budget is spent or unknown (`trials_left`), and never more than the trials left."""
     end = pd.Timestamp(today.day)
     days: list[DayTrend] = []
     for back in range(6, 0, -1):
@@ -816,14 +861,19 @@ def weekly_rollup(state_dir: Path, today: DailyReview, now: pd.Timestamp, limit:
         if r is not None:
             days.append(_trend(r))
     days.append(_trend(today))
-    return WeeklyRollup(week_ending=today.day, generated_utc=now, days=days, proposals=_proposals(days, limit))
+    cap = max(0, min(limit, trials_left)) if trials_left is not None else 0
+    return WeeklyRollup(week_ending=today.day, generated_utc=now, days=days, trials_left=trials_left,
+                        proposals=_proposals(days, cap))
 
 
 # ---------------------------------------------------------------------------------------------- the run
 def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, hosts: Mapping[str, str], day: str,
-                     now: pd.Timestamp, dry_run: bool = False, sink: IssueSink | None = None) -> DailyReview:
+                     now: pd.Timestamp, dry_run: bool = False, sink: IssueSink | None = None,
+                     trials_left: int | None = None) -> DailyReview:
     """Review opportunity day `day` (YYYY-MM-DD) of the learning `hosts` (account -> broker). `dry_run`: compute
-    only (what would be retired and refit is in the record); nothing is written, retired, refit or posted."""
+    only (what would be retired and refit is in the record); nothing is written, retired, refit or posted. A rerun
+    of a day reports that day's retirements and refits from the tables and keeps what was already posted.
+    `trials_left`: the quarter's registry trials left, for the Monday roll-up's proposals (None: none proposed)."""
     cfg = settings.daily_review
     sd = Path(state_dir)
     if not hosts:
@@ -835,22 +885,24 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
     incidents: list[Incident] = []
     d = _Day(db, store, hosts, lo, hi, incidents)
     costs = _costs(d, cfg.overshoot_scenario_usd)
-    volume = _volume(d, cfg.volume_plan)
+    volume = _volume(d, cfg.volume_plan, cfg.probe_plan)
     total = sum(v.candidates for v in volume)
-    plan_total = int(sum(cfg.volume_plan.values()))
+    plan_total = sum(v.plan for v in volume)
     of_plan = round(total / plan_total, 6) if plan_total else None
     integrity = _integrity(d, trading, cfg.max_gap_minutes, incidents)
     _health(sd, incidents)
-    health = _arm_health(db, hosts, hi)
+    health, controls = _arm_health(db, hosts, hi)
     retired: list[Retirement] = []
     for broker, arms in health.items():
         already = retired_arms(db, broker)
         for arm, h in arms.items():
-            if h == "breached" and arm not in already:
+            if h == "breached" and arm not in already and arm not in controls:    # a control is never retired
                 if dry_run or retire(db, broker=broker, arm_id=arm, day=day, now=now):
                     retired.append(Retirement(broker=broker, arm_id=arm, day=day))
     refits = refit_cells(db, hosts=hosts, day=day, hi=hi, min_fills=cfg.refit_min_fills, now=now,
                          write=not dry_run)
+    if not dry_run:               # idempotent rerun: the day's actions as the tables hold them
+        retired, refits = retired_on(db, day), refits_on(db, day)
     prev = _previous(sd, day)
     low = trading and of_plan is not None and of_plan < cfg.volume_alert_below
     carried = prev.volume_low_days if prev is not None else 0
@@ -862,7 +914,8 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
                          integrity=integrity, incidents=incidents, refits=refits, retired=retired)
     if dry_run:
         return review
-    posted: dict[str, str] = {}
+    before = load_review(sd, day)
+    posted: dict[str, str] = dict(before.posted) if before is not None else {}
     issue = _issue(review, low and low_days >= cfg.volume_alert_days, cfg)
     if issue is not None:
         posted["learning-ops"] = _post(sd, day, "learning-ops", issue[1], sink, title=issue[0],
@@ -870,7 +923,7 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
     posted["status"] = _post(sd, day, "status", _status_body(review), sink, number=cfg.status_issue)
     review.posted = posted
     if pd.Timestamp(day).dayofweek == 6:        # Monday's run reviews the Sunday day: the week's roll-up
-        week = weekly_rollup(sd, review, now, cfg.weekly_proposals)
+        week = weekly_rollup(sd, review, now, cfg.weekly_proposals, trials_left)
         write_atomic(weekly_path(sd, day), week.model_dump_json(indent=1))
         review.weekly = weekly_path(sd, day).name
     body = review.model_dump_json(indent=1)
@@ -897,7 +950,7 @@ def _ledger(state_dir: Path, day: str, body: str) -> None:
 def summary(r: DailyReview) -> dict[str, Any]:
     """The scheduler's job result (state/scheduler.json): counts only."""
     return {"day": r.day, "volume": r.volume_total, "plan": r.plan_total, "incidents": len(r.incidents),
-            "retired": len(r.retired), "refits": len(r.refits), "posted": r.posted, "weekly": r.weekly}
+            "retired": len(r.retired), "refits": len(r.refits), "posted": dict(r.posted), "weekly": r.weekly}
 
 
 # ---------------------------------------------------------------------------------------------- CLI
@@ -905,6 +958,23 @@ def _hosts() -> dict[str, str]:
     """The learning hosts: enabled accounts with exploration on, account -> broker (accounts.yaml)."""
     from goldbot.ops.accounts import enabled_accounts
     return {a.account_id: a.broker for a in enabled_accounts(logins=False) if a.exploration.enabled}
+
+
+def trials_left(settings: Settings, trials: Any, now: pd.Timestamp) -> int | None:
+    """The quarter's registry trials left (research budget less the trials stamped in it); None when unreadable."""
+    from goldbot.research.director import quarter_budget
+    from goldbot.research.registry import quarter_of
+    try:
+        q = quarter_of(pd.Timestamp(now).to_pydatetime())
+        return max(0, quarter_budget(settings.research, q) - int(trials.budget_used(q)))
+    except Exception as exc:          # noqa: BLE001 - unknown budget: no proposal (fail closed)
+        log.warning("trial budget unreadable (%s): no variant proposals", type(exc).__name__)
+        return None
+
+
+def _trials_left(settings: Settings) -> int | None:
+    from goldbot.research.registry import TrialRegistry
+    return trials_left(settings, TrialRegistry(settings.research.registry), pd.Timestamp.now("UTC"))
 
 
 def _store_for(settings: Settings) -> Any:
@@ -938,11 +1008,12 @@ def main(argv: list[str]) -> int:
         return 1
     review = run_daily_review(settings=settings, state_dir=a.state, store=_store_for(settings), hosts=hosts,
                               day=a.date, now=pd.Timestamp.now("UTC"), dry_run=a.dry_run,
-                              sink=None if a.dry_run else sink_for(settings))
+                              sink=None if a.dry_run else sink_for(settings), trials_left=_trials_left(settings))
     print(review.model_dump_json(indent=1))
     return 0
 
 
 __all__ = ["DailyReview", "WeeklyRollup", "banned_key", "blind", "cost_cells", "load_review", "load_weekly",
-           "main", "outbox_dir", "refit_cells", "replay_cells", "report_lines", "retire", "retired_arms",
-           "review_path", "run_daily_review", "summary", "write_cell"]
+           "main", "outbox_dir", "refit_cells", "refits_on", "replay_cells", "report_lines", "retire",
+           "retired_arms", "retired_on", "review_path", "run_daily_review", "stale_outbox", "summary",
+           "trials_left", "write_cell"]

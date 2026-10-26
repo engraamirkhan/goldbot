@@ -1528,12 +1528,13 @@ def daily_review(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     """The daily learning-ops review of the opportunity day before `slot` (research/daily_review.py) over the enabled
     accounts with exploration on; issue text goes to GitHub with the keyring's github-token, else to state."""
     from goldbot.ops.report_days import day_before
-    from goldbot.research.daily_review import run_daily_review, sink_for, summary
+    from goldbot.research.daily_review import run_daily_review, sink_for, summary, trials_left
     hosts = {a.account_id: a.broker for a in ctx.accounts if a.exploration.enabled}
     if not hosts:
         return {"skipped": "no enabled account has exploration on"}
     review = run_daily_review(settings=ctx.settings, state_dir=ctx.state_dir, store=ctx.store, hosts=hosts,
-                              day=day_before(slot), now=slot, sink=sink_for(ctx.settings, ctx.get_secret))
+                              day=day_before(slot), now=slot, sink=sink_for(ctx.settings, ctx.get_secret),
+                              trials_left=trials_left(ctx.settings, ctx.trials, slot))
     return summary(review)
 
 

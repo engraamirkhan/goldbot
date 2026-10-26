@@ -91,9 +91,9 @@ def _store(frames: dict[tuple[str, str], pd.DataFrame] | None = None) -> Any:
 
 
 def _run(sd: Path, *, day: str = DAY, now: pd.Timestamp = NOW, store: Any = None, sink: Any = None,
-         dry_run: bool = False) -> dr.DailyReview:
+         dry_run: bool = False, trials_left: int | None = 4) -> dr.DailyReview:
     return dr.run_daily_review(settings=S, state_dir=sd, store=store if store is not None else _store(), hosts=HOSTS,
-                               day=day, now=now, dry_run=dry_run, sink=sink)
+                               day=day, now=now, dry_run=dry_run, sink=sink, trials_left=trials_left)
 
 
 def _losers(db: Database, arm: str, n: int, *, host: str = "icm-probe", start: pd.Timestamp = LONDON,
@@ -160,7 +160,7 @@ def test_refusal_skip_and_stale_reasons_are_counted_from_the_journal_and_the_can
                                             "journal:exploration_refused:ledger_unreadable": 1}
 
 
-def test_candidates_and_fills_per_style_are_set_against_the_290_a_day_plan(tmp_path):
+def test_candidates_and_fills_per_broker_and_style_are_set_against_the_plan_290_a_day_on_icm(tmp_path):
     db = _db(tmp_path)
     for i in range(6):
         _cand(db, f"s{i}", at=LONDON + pd.Timedelta(minutes=i))
@@ -168,13 +168,15 @@ def test_candidates_and_fills_per_style_are_set_against_the_290_a_day_plan(tmp_p
     _cand(db, "i0", host="icm-demo", arm="I2A")
     _cand(db, "v0", host="vantage-demo", arm="VI2A")
     review = _run(tmp_path)
-    plan = S.daily_review.volume_plan
-    assert sum(plan.values()) == 290
-    vol = {v.style: v for v in review.volume}
-    assert (vol["scalp"].candidates, vol["scalp"].fills, vol["scalp"].plan) == (6, 1, plan["scalp"])
-    assert vol["intraday"].candidates == 2 and vol["swing"].candidates == 0
-    assert review.volume_total == 8 and review.plan_total == 290
-    assert review.of_plan == pytest.approx(8 / 290, abs=1e-6)
+    cfg = S.daily_review
+    assert sum(cfg.volume_plan["icm"].values()) + cfg.probe_plan["icm"] == 290      # the prereg's ~290 a day
+    vol = {(v.broker, v.style): v for v in review.volume}
+    icm = vol["icm", "scalp"]
+    assert (icm.candidates, icm.fills, icm.plan) == (6, 1, 160)
+    assert vol["icm", "intraday"].candidates == 1 and vol["vantage", "intraday"].candidates == 1  # never pooled
+    assert vol["icm", "probe"].plan == 90 and vol["icm", "swing"].candidates == 0
+    assert review.volume_total == 8 and review.plan_total == 290 + 80
+    assert review.of_plan == pytest.approx(8 / 370, abs=1e-6)
 
 
 @pytest.mark.parametrize(("arm", "host", "n", "breached"), [
@@ -254,7 +256,9 @@ def test_a_cost_cell_is_refit_after_200_fills_since_the_last_fit_and_never_cheap
     [cell] = _run(tmp_path).refits
     assert (cell.broker, cell.session, cell.fills) == ("icm", "london", 200)
     assert cell.slippage_usd == pytest.approx(0.4)
-    assert _run(tmp_path).refits == []                                   # no new fills since that fit
+    again = _run(tmp_path).refits                                         # a rerun: no new fills since that fit
+    assert [(c.session, c.fills) for c in again] == [("london", 200)]
+    assert again[0].slippage_usd == pytest.approx(0.4)
     assert dr.cost_cells(db, "icm", NOW)["london"] == pytest.approx(0.4)
     assert dr.cost_cells(db, "vantage", NOW) == {}
     # a cheaper fit within the same day never lowers the cell; the next day's fit may
@@ -312,7 +316,7 @@ def test_volume_under_half_the_plan_on_two_trading_days_running_opens_an_issue_w
     second = _run(tmp_path, sink=sink)
     assert second.volume_low_days == 2
     [(_, title, body)] = sink.issues
-    assert "volume" in title.lower() and "global_cap" in body and "of 290 planned" in body
+    assert "volume" in title.lower() and "global_cap" in body and "of 370 planned" in body
     _blinded(body)
 
 
@@ -416,7 +420,7 @@ def test_the_owner_report_carries_the_blinded_review_lines(tmp_path):
     _run(tmp_path)
     text = build_digest(tmp_path, NOW + pd.Timedelta(minutes=30), settings=S)
     line = next(x for x in text.splitlines() if x.startswith("Review:"))
-    assert "ICM $0.37/oz" in line and "3 of 290 planned" in line
+    assert "ICM $0.37/oz" in line and "3 of 370 planned" in line
     _blinded(line)
 
 
@@ -473,9 +477,114 @@ def test_the_job_reviews_the_day_before_its_slot_and_without_a_token_keeps_the_t
     accounts = [SimpleNamespace(account_id=a, broker=b, exploration=SimpleNamespace(enabled=True))
                 for a, b in HOSTS.items()]
     ctx: Any = SimpleNamespace(settings=S, store=_store(), state_dir=tmp_path, accounts=accounts,
-                               get_secret=lambda key: None)
+                               get_secret=lambda key: None, trials=SimpleNamespace(budget_used=lambda q: 0))
     got = daily_review(ctx, NOW)
     assert got["day"] == DAY and got["posted"] == {"status": "outbox"}
     assert dr.review_path(tmp_path, DAY).exists()
     ctx.accounts = [SimpleNamespace(account_id="icm-demo", broker="icm", exploration=SimpleNamespace(enabled=False))]
     assert daily_review(ctx, NOW) == {"skipped": "no enabled account has exploration on"}
+
+
+# ---------------------------------------------------------------------------------------------- review round 1
+def test_a_control_arm_past_the_stop_line_is_never_breached_nor_retired(tmp_path):
+    _losers(_db(tmp_path), "S0", 40)                     # a random bracket (spec rule random_bracket): the null
+    review = _run(tmp_path)
+    assert review.arm_health["icm"]["S0"] == "ok" and review.retired == []
+    assert dr.retired_arms(_db(tmp_path), "icm") == set()
+    assert {"S0", "S0R", "I0", "W0", "VI0", "VW0"} <= labs.control_arm_ids()
+    with _db(tmp_path).connection() as conn:
+        [st] = labs.arm_statuses(conn, ["icm-probe"])
+    assert st.control and st.band == "running"            # the owner's report never says it was retired
+
+
+def _weekly_fixture(tmp_path: Path) -> None:
+    db = _db(tmp_path)
+    for day in ["2026-10-19", "2026-10-20", "2026-10-21", "2026-10-22", "2026-10-23"]:
+        lo = pd.Timestamp(day, tz="UTC") + pd.Timedelta(hours=9)
+        _cand(db, f"{day}-n", at=lo + pd.Timedelta(hours=6))
+        _trade(db, f"{day}-n", sent=lo + pd.Timedelta(hours=6), reason="stop", exit_price=1997.0, pnl=-1.3)
+        _run(tmp_path, day=day, now=pd.Timestamp(day, tz="UTC") + pd.Timedelta(days=1, hours=6, minutes=15))
+
+
+@pytest.mark.parametrize(("left", "n"), [(0, 0), (None, 0), (1, 1), (10, 1)])
+def test_variant_proposals_each_cost_a_trial_and_none_are_made_once_the_quarters_budget_is_spent(tmp_path, left, n):
+    _weekly_fixture(tmp_path)
+    dr.run_daily_review(settings=S, state_dir=tmp_path, store=_store(), hosts=HOSTS, day="2026-10-25",
+                        now=pd.Timestamp("2026-10-26 06:15", tz="UTC"), trials_left=left)
+    week = dr.load_weekly(tmp_path, "2026-10-25")
+    assert week is not None and week.trials_left == left and len(week.proposals) == n
+    assert all(p.cost == "one registry trial if pre-registered" for p in week.proposals)
+    assert not any("timeframe" in p.title.lower() for p in week.proposals)
+
+
+def test_the_trials_left_are_the_quarters_budget_less_its_registry_trials():
+    q4 = pd.Timestamp("2026-10-26", tz="UTC")
+    full = SimpleNamespace(budget_used=lambda q: S.research.budget_for(q))
+    assert dr.trials_left(S, full, q4) == 0                                 # Q4: 69 of 69 used
+    assert dr.trials_left(S, SimpleNamespace(budget_used=lambda q: 5), q4) == S.research.budget_for("2026Q4") - 5
+    assert dr.trials_left(S, None, q4) is None                              # unreadable: no proposal
+
+
+def test_a_rerun_of_the_same_day_reports_its_retirements_and_refits_and_keeps_what_was_posted(tmp_path):
+    db = _db(tmp_path)
+    _losers(db, "S1A", 30)
+    for i in range(200):          # another arm's fills: the refit pools a broker's session, never an arm
+        _trade(db, f"f{i}", arm="S2A", sent=LONDON + pd.Timedelta(seconds=10 * i), requested=2000.0, fill=2000.4)
+    sink = Sink()
+    first = _run(tmp_path, sink=sink)
+    again = _run(tmp_path, sink=sink)
+    assert [r.arm_id for r in again.retired] == [r.arm_id for r in first.retired] == ["S1A"]
+    assert [(c.broker, c.session) for c in again.refits] == [(c.broker, c.session) for c in first.refits]
+    assert again.posted == first.posted == {"status": "posted"} and len(sink.comments) == 1
+    stored = dr.load_review(tmp_path, DAY)
+    assert stored is not None and stored.retired and stored.refits
+
+
+def test_the_job_summary_carries_the_posted_status_and_a_posted_text_leaves_the_outbox(tmp_path):
+    _run(tmp_path, sink=None)                                               # no token: the text waits in outbox/
+    assert (dr.outbox_dir(tmp_path) / f"{DAY}-status.md").exists()
+    review = _run(tmp_path, sink=Sink())                                    # the next run posts it
+    assert dr.summary(review)["posted"] == {"status": "posted"}
+    assert not (dr.outbox_dir(tmp_path) / f"{DAY}-status.md").exists()
+
+
+def test_the_owner_report_warns_when_issue_texts_wait_in_the_outbox_for_two_days(tmp_path):
+    import os
+
+    from goldbot.telegram.digest import review_section
+    _run(tmp_path, sink=None)
+    assert not [x for x in review_section(tmp_path, DAY) if "not posted" in x.text]
+    old = pd.Timestamp.now("UTC").timestamp() - 3 * 86400
+    for f in dr.outbox_dir(tmp_path).iterdir():
+        os.utime(f, (old, old))
+    [line] = [x for x in review_section(tmp_path, DAY) if "not posted" in x.text]
+    assert line.text == "⚠️ Review: 1 issue text not posted to GitHub for 2+ days (state outbox)" and line.prio == 1
+
+
+def test_after_a_restart_no_entry_goes_out_until_the_retired_arms_are_read_and_exits_are_unaffected(tmp_path,
+                                                                                                   monkeypatch):
+    from goldbot.engine import cost_probe
+    from goldbot.research import arm_rules
+    from tests.test_exploration_engine import CLOSE, LOSS, SHORT, _arm, _at, _engine, _rule
+    monkeypatch.setitem(arm_rules.RULE_FUNCS, SHORT, _rule(-1))
+    monkeypatch.setattr(cost_probe, "stop_loss", lambda *a, **k: LOSS)
+    arm = _arm("i-long", side=-1, stop_usd=15.0, target_r=3.0, hold_bars=8)
+    eng, pb = _engine(tmp_path, [arm])
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    [pid] = list(eng.open)
+    with _db(tmp_path).write() as conn:                                     # the status table cannot be read
+        conn.execute("ALTER TABLE exploration_arm_status RENAME TO gone")
+    eng2, _ = _engine(tmp_path, [arm], pb=pb)                               # a restart
+    eng2.open.clear()
+    eng2._reconcile(CLOSE)
+    later = CLOSE + pd.Timedelta(minutes=15)
+    exploration.on_pass(eng2, _at(eng2, pb, later))
+    assert not [d for d in eng2.decisions if str(d.get("action", "")).startswith("exploration:")]
+    blocked = ex.read_obs(_db(tmp_path))
+    assert set(blocked.loc[blocked["decision_utc"] == later, "blocked_reason"]) == {"arm_status_unread"}
+    eng2._retry_closes(later)
+    assert pid in eng2.open and [p.position_id for p in pb.positions()] == [pid]   # adopted and managed, not closed
+    with _db(tmp_path).write() as conn:
+        conn.execute("ALTER TABLE gone RENAME TO exploration_arm_status")
+    exploration.on_pass(eng2, _at(eng2, pb, CLOSE + pd.Timedelta(minutes=30)))
+    assert eng2.exploration is not None and eng2.exploration.retired_ok

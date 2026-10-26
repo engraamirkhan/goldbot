@@ -490,10 +490,14 @@ class TelegramSettings(_Section):
 class DailyReviewSettings(_Section):
     """The daily learning-ops review (goldbot/research/daily_review.py; research-director spec 2026-10-26). Reporting
     and housekeeping only: it never changes an arm, a threshold, a prior, a cap or the bandit."""
-    # candidates a day per style, the high-volume plan's midpoints (docs/research/high-volume-learning-2026-10-25.md
-    # section 1, ~290 a day): exploration styles from aux.db exploration_obs, `probe` the cost probes (P0 + mirrors)
-    volume_plan: dict[str, int] = Field(default_factory=lambda: {"scalp": 160, "intraday": 35, "swing": 5,
-                                                                 "probe": 90})
+    # exploration candidates a day per broker and style (aux.db exploration_obs), the high-volume plan's arm rows
+    # (prereg-2026-10-25-high-volume.md / high-volume-learning-2026-10-25.md section 1, ~290 a day with the probes);
+    # Vantage runs the intraday and swing twins only
+    volume_plan: dict[str, dict[str, int]] = Field(default_factory=lambda: {
+        "icm": {"scalp": 160, "intraday": 35, "swing": 5}, "vantage": {"scalp": 0, "intraday": 35, "swing": 5}})
+    # cost probes a day per broker (aux.db cost_probes), from the ADR 0043 probe sleeves: ICM P0 60-90 + mirrors ~8,
+    # Vantage scheduled M1 probes only (half ICM's scheduled share, no shadow book to mirror)
+    probe_plan: dict[str, int] = Field(default_factory=lambda: {"icm": 90, "vantage": 40})
     volume_alert_below: float = Field(0.5, gt=0, le=1)     # a trading day under this fraction of the plan is low ...
     volume_alert_days: int = Field(2, ge=1)                #   ... and this many low trading days running open an issue
     refit_min_fills: int = Field(200, ge=50)               # a (broker, session) cost cell is refit after this many fills

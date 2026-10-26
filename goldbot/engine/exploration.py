@@ -37,7 +37,9 @@ The plan's rules, as built here:
   H-61 stop (aux.db `exploration_arm_status`, this host's broker) is read once a minute (`refresh_retired`); from then
   on it queues no signal and its waiting signals are recorded blocked `arm_retired`. It stays configured, so its open
   positions keep their stop, target, hold and every exit (never closed as an orphan). An unreadable table keeps the
-  arms already known retired (a retirement is never undone by a read error).
+  arms already known retired (a retirement is never undone by a read error); until the first read after a start
+  succeeds no exploration entry is sent (its signals are recorded blocked `arm_status_unread`; trading-safety
+  2026-10-26: a restart must not trade an arm it cannot know is not retired). Exits are never affected.
 * Identity: magic_base + 95 (`goldbot.engine.magic`), order id and MT5 comment `ex<arm5>-<epoch10>-<h8>` (27 chars,
   inside MT5's 29). After a restart a position is adopted by its order row or its comment and its hold resumes from
   the broker's open time.
@@ -313,6 +315,7 @@ class Exploration:
         self.champion_seen: dict[str, tuple[pd.Timestamp | None, bool]] = {}
         self.retired: frozenset[str] = frozenset()      # arms retired at their stop (`refresh_retired`)
         self.retired_read: pd.Timestamp | None = None
+        self.retired_ok = False                         # a read has succeeded since the start: entries may go out
 
     @classmethod
     def start(cls, eng: Engine) -> Exploration | None:
@@ -483,7 +486,9 @@ def on_pass(eng: Engine, tick: Tick) -> None:
         if ct is not None and (ex.last_close is None or ct > ex.last_close) and step(eng, ct):
             ex.last_close = ct                      # a deferred close (clock ahead) is tried again next pass
         _minutes(eng, ex, now)
-        if ex.queue:
+        if ex.queue and not ex.retired_ok:      # fail closed: the retired arms are not known yet
+            _block(eng, ex, list(ex.queue), now, "arm_status_unread")
+        elif ex.queue:
             _enter(eng, ex, now, tick)
     except Exception as exc:
         log.exception("exploration pass failed; no exploration entry this pass")
@@ -505,8 +510,10 @@ def refresh_retired(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
             got = {str(a) for (a,) in conn.execute(
                 "SELECT arm_id FROM exploration_arm_status WHERE broker = ? AND status = 'retired'", (ex.broker,))}
     except Exception as exc:
-        log.warning("exploration retired arms unreadable (%s): the known set stands", type(exc).__name__)
+        log.warning("exploration retired arms unreadable (%s): the known set stands%s", type(exc).__name__,
+                    "" if ex.retired_ok else "; no entry until it is read")
         return
+    ex.retired_ok = True
     new = sorted((got & set(ex.arms)) - ex.retired)
     if not new:
         return

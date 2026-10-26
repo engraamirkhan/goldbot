@@ -426,7 +426,14 @@ mt5_login:                           # MT5 terminal login from the keyring (gold
   dismiss_wizard: false              # Escape to the terminal's foreground window before initialize, for the "open an
                                      #   account" wizard; best effort, unverified on the box (RUNBOOK "Terminal down")
 daily_review:                        # daily learning-ops review (goldbot/research/daily_review.py; research-director spec 2026-10-26)
-  volume_plan: {scalp: 160, intraday: 35, swing: 5, probe: 90}   # candidates a day, high-volume plan midpoints (~290); probe = cost probes
+  # exploration candidates a day per broker and style: the arm rows of prereg-2026-10-25-high-volume.md (~290 a day
+  # with the probes, high-volume-learning-2026-10-25.md section 1); Vantage runs the intraday and swing twins only
+  volume_plan:
+    icm: {scalp: 160, intraday: 35, swing: 5}
+    vantage: {scalp: 0, intraday: 35, swing: 5}
+  # cost probes a day per broker, from the ADR 0043 probe sleeves (ICM: P0 60-90 + ~8 mirrors; Vantage: scheduled
+  # M1 probes only at half ICM's scheduled share, no shadow book to mirror)
+  probe_plan: {icm: 90, vantage: 40}
   volume_alert_below: 0.5            # a trading day under half the plan is low ...
   volume_alert_days: 2               #   ... two low trading days running open a learning-ops issue with the counted cause
   refit_min_fills: 200               # a (broker, session) slippage cell is refit after 200 fills since its last fit; never cheaper within a day

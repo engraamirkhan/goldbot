@@ -666,12 +666,14 @@ def arms_section(state_dir: Path, engines: list[dict[str, Any]], width: int, lo:
 
 def review_section(state_dir: Path, day: str) -> list[Line]:
     """The daily review's lines for `day`: its incidents and retirements line is priority 1, the costs and volume
-    line priority 2; nothing when the review has not run for the day."""
-    from goldbot.research.daily_review import load_review, report_lines
+    line priority 2; nothing when the review has not run for the day. A priority-1 FYI when issue texts have waited
+    in the review's outbox for two days or more (no github-token, or GitHub refusing)."""
+    from goldbot.research.daily_review import load_review, report_lines, stale_outbox
     r = load_review(state_dir, day)
-    if r is None:
-        return []
-    return [Line(x, 2 if i == 0 else 1) for i, x in enumerate(report_lines(r))]
+    out = [] if r is None else [Line(x, 2 if i == 0 else 1) for i, x in enumerate(report_lines(r))]
+    if n := stale_outbox(state_dir, pd.Timestamp.now("UTC")):     # FYI: GitHub posts failing for 2 days or more
+        out.append(Line(f"⚠️ Review: {_plural(n, 'issue text')} not posted to GitHub for 2+ days (state outbox)", 1))
+    return out
 
 
 def learner_line(state_dir: Path, lo: pd.Timestamp, hi: pd.Timestamp, now: pd.Timestamp) -> str:
