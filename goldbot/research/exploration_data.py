@@ -49,7 +49,7 @@ import math
 import pickle
 import re
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
@@ -62,6 +62,7 @@ from goldbot.data.store import asof_join
 from goldbot.data.timeutil import NEW_YORK, epoch_ns
 from goldbot.db.connection import Database, StateDbError, now_ns
 from goldbot.labels.triple_barrier import SwapSpec, rollover_nights
+from goldbot.research.evidence_exclusions import Scope, excluded
 from goldbot.research.model import MAX_FEATURES, MetaLabelModel, check_feature_cap, fit_calibrator
 
 log = logging.getLogger("goldbot.exploration")
@@ -88,7 +89,9 @@ PRIOR_N_PER_TRADES = 100.0
 # the H-60 priors rest on IC Markets' cost history (the canonical cost tables): they seed only these brokers' bandits;
 # any other broker starts from the flat prior (ADR 0043 amendment 2026-10-26, quant review of c8433d3d)
 PRIOR_BROKERS: frozenset[str] = frozenset({"icm"})
-BROKER_KEY = re.compile(r"^[a-z0-9_-]+$")       # accounts.yaml `broker`; also a path segment (models/h62/<broker>/)
+# accounts.yaml `broker`; also a path segment (models/h62/<broker>/): matched in full (`fullmatch`), never `match`,
+# whose `$` also accepts a trailing newline
+BROKER_KEY = re.compile(r"[a-z0-9_-]+")
 
 # label replay (prereg H-60 costs): slippage per leg never below the prior, never credited
 SLIPPAGE_FLOOR_USD = 0.15
@@ -273,9 +276,13 @@ def record_fill(db: Database, *, candidate_id: str, entry_utc: pd.Timestamp, exi
 
 
 def read_obs(db: Database, *, broker: str | None = None, style: str | None = None, arm_id: str | None = None,
-             as_of: pd.Timestamp | None = None, include_quarantined: bool = False) -> pd.DataFrame:
+             as_of: pd.Timestamp | None = None, include_quarantined: bool = False,
+             evidence: Scope | None = None, held_out: Collection[str] = ()) -> pd.DataFrame:
     """Candidates ordered by decision time; times as UTC datetimes (ns). `as_of`: only labels resolved by then;
-    `broker`: only that broker's rows (an unkeyed row matches no broker). Every learner passes `broker`."""
+    `broker`: only that broker's rows (an unkeyed row matches no broker). Every learner passes `broker`. `evidence`:
+    leave out the candidates void for that scope (aux.db `evidence_exclusions`, prereg Amendment 4: "void as evidence
+    (n, posterior, cost cells, graduation)"); every learner passes "posterior". `held_out`: candidate ids left out in
+    memory only (decisions after a quarantine span whose engine restart is not recorded yet)."""
     where: list[str] = ["1 = 1"]
     params: list[Any] = []
     if not include_quarantined:
@@ -295,6 +302,10 @@ def read_obs(db: Database, *, broker: str | None = None, style: str | None = Non
     with db.connection() as conn:
         df = pd.read_sql_query(f"SELECT * FROM exploration_obs WHERE {' AND '.join(where)} "
                                "ORDER BY decision_ns, candidate_id", conn, params=params)
+        if evidence is not None:
+            df = df[~df["candidate_id"].isin(excluded(conn, evidence))].reset_index(drop=True)
+    if held_out:
+        df = df[~df["candidate_id"].isin(set(held_out))].reset_index(drop=True)
     for c, name in (("decision_ns", "decision_utc"), ("entry_ns", "entry_utc"), ("exit_ns", "exit_utc"),
                     ("label_exit_ns", "label_exit_utc"), ("available_utc_max_ns", "available_utc_max")):
         df[name] = pd.to_datetime(pd.to_numeric(df.pop(c), errors="coerce"), unit="ns", utc=True)
@@ -432,7 +443,7 @@ _BASE = ["candidate_id", "broker", "arm_id", "family", "style", "tf", "side", "i
 
 def training_table(db: Database, *, style: str, broker: str, as_of: pd.Timestamp,
                    features: pd.DataFrame | None = None, arm_id: str | None = None,
-                   feature_cols: Sequence[str] | None = None) -> pd.DataFrame:
+                   feature_cols: Sequence[str] | None = None, held_out: Collection[str] = ()) -> pd.DataFrame:
     """One broker's admissible rows of a style (spec section 2; never pooled across brokers): label resolved by `as_of`, not quarantined, no decision in the
     holdout, taken or not. `y` = 1[label_sim_r > 0]; label_fill_r and label_mid_r ride along as diagnostics. The
     columns are the style's frozen v1 list (or `feature_cols`), from each row's snapshot when it has one, else from
@@ -442,7 +453,8 @@ def training_table(db: Database, *, style: str, broker: str, as_of: pd.Timestamp
         raise ValueError(f"style {style!r} not one of {STYLES}")
     cols = list(feature_cols) if feature_cols is not None else list(FEATURE_LISTS[STYLE_FEATURE_LIST[style]])
     check_feature_cap([*cols, "side", "arm_id"])
-    obs = read_obs(db, broker=broker, style=style, arm_id=arm_id, as_of=as_of)
+    obs = read_obs(db, broker=broker, style=style, arm_id=arm_id, as_of=as_of, evidence="posterior",
+                   held_out=held_out)
     dec = pd.DatetimeIndex(obs["decision_utc"])
     obs = obs[~((dec >= HOLDOUT_START) & (dec < HOLDOUT_END))].reset_index(drop=True)      # L-10
     if obs.empty:
@@ -560,10 +572,11 @@ def _last_cutoff(db: Database, style: str, broker: str) -> pd.Timestamp | None:
     return _ts(r[0]) if r and r[0] is not None else None
 
 
-def retrain_due(db: Database, style: str, cutoff: pd.Timestamp, *, broker: str) -> tuple[bool, int, int]:
+def retrain_due(db: Database, style: str, cutoff: pd.Timestamp, *, broker: str,
+                held_out: Collection[str] = ()) -> tuple[bool, int, int]:
     """(due, new, total) of one broker's style: >= RETRAIN_MIN_NEW admissible labels resolved since its last fit's
     cutoff and >= RETRAIN_MIN_TOTAL in all (spec section 5)."""
-    obs = read_obs(db, broker=broker, style=style, as_of=cutoff)
+    obs = read_obs(db, broker=broker, style=style, as_of=cutoff, evidence="posterior", held_out=held_out)
     last = _last_cutoff(db, style, broker)
     new = int((obs["label_exit_utc"] > last).sum()) if last is not None else len(obs)
     return new >= RETRAIN_MIN_NEW and len(obs) >= RETRAIN_MIN_TOTAL, new, len(obs)
@@ -573,7 +586,7 @@ def save_model(db: Database, models_dir: Path, fit: Mapping[str, Any], *, broker
                activation: pd.Timestamp) -> str:
     """Persist one broker's fitted style model (fold models + calibrator) as a pickle with its SHA-256, and register
     it as 'shadow': it never serves until a separate champion decision (spec section 5) marks it 'champion'."""
-    if not BROKER_KEY.match(broker):
+    if not BROKER_KEY.fullmatch(broker):
         raise ValueError(f"broker key {broker!r} is not a lowercase slug")
     style = str(fit["style"])
     version = f"h62-{broker}-{style}-{cutoff:%Y%m%dT%H%M}"
@@ -796,14 +809,14 @@ def weights(db: Database, arms: Sequence[str], *, broker: str, ceilings: Mapping
 # ---------------------------------------------------------------------------------------------- the nightly run
 def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, str] | None = None,
           controls: Sequence[str] = (), ceilings: Mapping[str, float] | None = None, seed: int = 0,
-          retrain: bool = False, models_dir: Path | None = None) -> dict[str, Any]:
+          retrain: bool = False, models_dir: Path | None = None, held_out: Collection[str] = ()) -> dict[str, Any]:
     """One broker's bandit (nightly) and, when `retrain` (Sundays), its H-62 style models whose retrain is due, on
     that broker's evidence only. `arms`: the strategy arm id -> style configured on the broker's accounts (joined
     with the arms seen in its candidates); control arms (random brackets) are never allocated by results. Shares use
     each arm's net R labels (label_sim_r) resolved by `as_of`."""
     if not broker:
         raise ValueError("exploration evidence is learnt per broker")
-    obs = read_obs(db, broker=broker, as_of=as_of)
+    obs = read_obs(db, broker=broker, as_of=as_of, evidence="posterior", held_out=held_out)     # prereg Amendment 4
     strat = obs[~obs["is_control"]]
     style_of = {str(a): str(s) for a, s in strat.groupby("arm_id")["style"].first().items()}
     style_of.update(arms or {})
@@ -814,12 +827,13 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
         cutoff, activation = model_cutoff(as_of)
         models: dict[str, Any] = {}
         for style in STYLES:
-            due, new, total = retrain_due(db, style, cutoff, broker=broker)
+            due, new, total = retrain_due(db, style, cutoff, broker=broker, held_out=held_out)
             if not due:
                 models[style] = {"due": False, "new": new, "total": total}
                 continue
             try:
-                fit = cross_fit_meta(training_table(db, style=style, broker=broker, as_of=cutoff), style)
+                fit = cross_fit_meta(training_table(db, style=style, broker=broker, as_of=cutoff, held_out=held_out),
+                                     style)
                 models[style] = {"version": save_model(db, models_dir, fit, broker=broker, cutoff=cutoff,
                                                        activation=activation),
                                  "auc_net": fit["auc_net"], "auc_gross": fit["auc_gross"]}

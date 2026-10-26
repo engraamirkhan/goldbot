@@ -39,13 +39,15 @@ pins 50k ticks under 1 MB).
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
 import tempfile
+from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 import numpy as np
 import pandas as pd
@@ -70,6 +72,8 @@ MAX_PAGES = 2_000             # a server day never needs this many pages; a runa
 NEW_YORK = "America/New_York"
 BREAK_FROM, BREAK_TO = pd.Timedelta(hours=17, minutes=5), pd.Timedelta(hours=17, minutes=50)   # New York wall clock
 SETTLE = pd.Timedelta(minutes=5)   # a server day is pulled only this long after it ended (late ticks reach the terminal)
+TAIL_GAP = pd.Timedelta(minutes=15)   # a day's last tick this close to its end is the close, not a truncated pull
+SYNC_RETRIES, SYNC_WAIT_S = 3, 2.0     # requests (and seconds apart) for newer ticks before a pull is truncated
 STALE_DAYS = 4                # health: the newest recorded day older than this (Friday -> Monday is 3) WARNs
 SOURCE = "mt5 copy_ticks via the scheduler's read-only broker"
 _LABEL = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -166,6 +170,11 @@ class PullDeferred(RuntimeError):
     """The pull stopped before the day was complete (time limit or the quiet window ended); nothing is written."""
 
 
+class TruncatedPull(RuntimeError):
+    """The terminal served no tick near the end of the server day (still loading, or the day closed early with no
+    later session yet); nothing is written, newer days are still pulled and a later run retries this one."""
+
+
 class Pace:
     """Paces one run's copy_ticks calls: a pause between pages, a per-page time limit, a run deadline and the quiet
     window, all on `clock` (wall time, UTC). Raises PullDeferred when a limit is hit."""
@@ -195,30 +204,57 @@ class Pace:
 
 # ------------------------------------------------------------------------------------------- pull
 def pull_day(broker: Any, symbol: str, start: pd.Timestamp, end: pd.Timestamp, *,
-             chunk: int = PAGE_TICKS, pace: Pace | None = None) -> pd.DataFrame:
+             chunk: int = PAGE_TICKS, pace: Pace | None = None, whole_day: bool = False) -> pd.DataFrame:
     """Every tick the terminal holds in [start, end), paged by `chunk` rows. copy_ticks_from starts at a whole second,
     so each page restarts at its last tick's second and the overlap is dropped on (ts_utc, bid, ask, flags), the live
     collector's dedup key. A full page that cannot move past its start second raises instead of looping. With `pace`,
-    every page is paced and time-limited (PullDeferred)."""
+    every page is paced and time-limited (PullDeferred). Without `whole_day` (the engine's history fill, which takes
+    the broker's 1m bars for minutes its ticks do not reach) a short page ends the pull.
+
+    With `whole_day` (the tick record) a short page is NOT the end of the day: while the terminal loads an old day's history copy_ticks_from returns what
+    it holds so far (2026-10-12/13/19 were each written from 22:02 to 00:12-01:00 UTC only, 0 London/NY ticks), so
+    the pull asks again from the last tick. The day is done when a tick at or after `end` arrives (the next session)
+    or no newer tick comes and the last one is within TAIL_GAP of `end` (the day's close). Otherwise it retries
+    SYNC_RETRIES times SYNC_WAIT_S apart and then raises TruncatedPull: nothing is written and a later run (after the
+    next session opens, for an early close) pulls the day again."""
     pages: list[pd.DataFrame] = []
     since = pd.Timestamp(start)
+    seen: pd.Timestamp | None = None           # the newest tick so far
+    idle = 0                                   # requests in a row that brought no newer tick
     for _ in range(MAX_PAGES):
         started = pace.before_page() if pace is not None else None
         page = broker.copy_ticks(symbol, since, chunk)
         if pace is not None and started is not None:
             pace.after_page(started)
-        if page is None or page.empty:
+        last = None
+        if page is not None and not page.empty:
+            page = page.assign(ts_utc=pd.to_datetime(page["ts_utc"], utc=True))
+            if "flags" not in page.columns:
+                page = page.assign(flags=0)
+            pages.append(page[["ts_utc", "bid", "ask", "flags"]])
+            last = pd.Timestamp(page["ts_utc"].max())
+        if last is not None and last >= end:
             break
-        page = page.assign(ts_utc=pd.to_datetime(page["ts_utc"], utc=True))
-        if "flags" not in page.columns:
-            page = page.assign(flags=0)
-        pages.append(page[["ts_utc", "bid", "ask", "flags"]])
-        last = pd.Timestamp(page["ts_utc"].max())
-        if len(page) < chunk or last >= end:
+        if not whole_day:
+            if last is None or len(page) < chunk:
+                break
+        elif last is None or (seen is not None and last <= seen):
+            if seen is not None and seen >= end - TAIL_GAP:
+                break                          # the day's close: nothing newer yet (the next session opens later)
+            if idle >= SYNC_RETRIES:
+                raise TruncatedPull(f"ticks end at {seen.isoformat() if seen is not None else 'none'}, "
+                                    f"{_gap(seen, start, end)} before the server day ends at {end.isoformat()}, "
+                                    f"after {SYNC_RETRIES} retries")
+            idle += 1
+            if pace is not None:
+                pace.sleep(SYNC_WAIT_S)
+            continue
+        idle = 0
+        if last is None:                       # unreachable (the branches above); narrows the type
             break
-        if last.floor("s") <= since.floor("s"):
+        if len(page) >= chunk and last.floor("s") <= since.floor("s"):
             raise RuntimeError(f"copy_ticks cannot page past {since}: more than {chunk} ticks in one second")
-        since = last
+        seen, since = last, last
     else:
         raise RuntimeError(f"copy_ticks still returning full pages after {MAX_PAGES} pages from {start}")
     if not pages:
@@ -226,6 +262,10 @@ def pull_day(broker: Any, symbol: str, start: pd.Timestamp, end: pd.Timestamp, *
     df = pd.concat(pages, ignore_index=True)
     df = df[(df["ts_utc"] >= start) & (df["ts_utc"] < end)]
     return df.drop_duplicates(["ts_utc", "bid", "ask", "flags"]).sort_values("ts_utc", kind="stable").reset_index(drop=True)
+
+
+def _gap(seen: pd.Timestamp | None, start: pd.Timestamp, end: pd.Timestamp) -> str:
+    return f"{(end - (seen if seen is not None else start)).total_seconds() / 3600:.1f} h"
 
 
 # ------------------------------------------------------------------------------------------- write, index
@@ -283,6 +323,57 @@ def write_day(state_dir: str | Path, account: str, day: date, ticks: pd.DataFram
     return rec
 
 
+QUARANTINE_DIR = "quarantine"          # state/quarantine/<dataset>/<account>/: held, never deleted, never read as data
+
+
+def quarantine_dir(state_dir: str | Path, account: str) -> Path:
+    return Path(state_dir) / QUARANTINE_DIR / TICKS_DIR / _label(account)
+
+
+def quarantine_truncated_day(state_dir: str | Path, account: str, day: date | str, *, reason: str, apply: bool,
+                             now: pd.Timestamp) -> str:
+    """Take a recorded day whose ticks stop short of its server day's end (last tick more than TAIL_GAP before it, or
+    none) out of the record, so the next run pulls it again. Idempotent and conservative: a day not in the record, or
+    one that reaches its close, is left alone. With `apply`, the index is backed up first, the file is moved (never
+    deleted: first captures stay reproducible) to state/quarantine/ticks/<account>/ with a manifest line (digest, rows,
+    reason), then the index row is dropped. Returns what it did or would do."""
+    key = _day(day).isoformat()
+    d = account_dir(state_dir, account)
+    days = read_index(state_dir, account)
+    f = d / f"{key}.parquet"
+    rec = days.get(key)
+    if rec is None and not f.exists():
+        return f"{account} {key}: not recorded (already quarantined or never pulled), nothing to do"
+    tz = pq.read_schema(f).metadata.get(b"goldbot.server_tz", b"").decode() if f.exists() else ""
+    if rec is not None and tz:
+        end = server_day_bounds(_day(key), tz)[1]
+        if rec.last_utc is not None and pd.Timestamp(rec.last_utc) >= end - TAIL_GAP:
+            return f"{account} {key}: complete (last tick {pd.Timestamp(rec.last_utc).isoformat()}), kept"
+    what = (f"{account} {key}: {rec.rows if rec else '?'} ticks to "
+            f"{pd.Timestamp(rec.last_utc).isoformat() if rec and rec.last_utc is not None else 'n/a'}")
+    if not apply:
+        return f"would quarantine {what}"
+    q = _private_dir(quarantine_dir(state_dir, account))
+    os.chmod(q.parent.parent, 0o700)
+    stamp = pd.Timestamp(now).strftime("%Y%m%dT%H%M%SZ")
+    idx = d / INDEX_FILE
+    if idx.exists():
+        write_atomic(q / f"index.{stamp}.json", idx.read_text())
+    if f.exists():
+        target = q / f.name if not (q / f.name).exists() else q / f"{key}.{stamp}.parquet"
+        os.replace(f, target)
+        _fsync_dir(d)
+    line = {"server_date": key, "reason": reason, "quarantined_utc": pd.Timestamp(now).isoformat(),
+            "rows": rec.rows if rec else None, "sha256": rec.sha256 if rec else None,
+            "last_utc": pd.Timestamp(rec.last_utc).isoformat() if rec and rec.last_utc is not None else None}
+    with open(q / "manifest.jsonl", "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line, sort_keys=True) + "\n")
+    os.chmod(q / "manifest.jsonl", 0o600)
+    days.pop(key, None)
+    _write_index(d, days)
+    return f"quarantined {what}"
+
+
 def prune(state_dir: str | Path, account: str, keep_from: date) -> list[str]:
     """Delete day files (and their index rows) of server dates before `keep_from`; returns the dates removed."""
     d = account_dir(state_dir, account)
@@ -305,12 +396,34 @@ def prune(state_dir: str | Path, account: str, keep_from: date) -> list[str]:
 
 
 # ------------------------------------------------------------------------------------------- the daily job
+@contextmanager
+def _bounded_pages(broker: Any, limit_s: float) -> Iterator[None]:
+    """While the record pulls, each bridge page gets one attempt and a client timeout of `limit_s` (RemoteBroker's
+    `timeout_s` / `read_attempts`; a broker without them, the in-process MT5 adapter, is left alone), then the broker's
+    own values come back. The client timeout frees the job, not the bridge: a page the terminal is still serving
+    finishes there, which `page_limit_s` < ORDER_MAX_AGE_S (10 s) and the quiet window already bound."""
+    try:
+        own = vars(broker)                    # instance attributes only: a proxy's __getattr__ is never asked
+    except TypeError:
+        own = {}
+    if not ("timeout_s" in own and "read_attempts" in own):
+        yield
+        return
+    saved = broker.timeout_s, broker.read_attempts
+    broker.timeout_s, broker.read_attempts = min(float(saved[0]), limit_s), 1
+    try:
+        yield
+    finally:
+        broker.timeout_s, broker.read_attempts = saved
+
+
 def record_ticks(broker: Any, state_dir: str | Path, account: str, symbol: str, server_tz: str,
                  cfg: TickRecordSettings, *, clock: Callable[[], pd.Timestamp],
                  sleep: Callable[[float], None]) -> dict[str, Any]:
     """Pull up to `max_days_per_run` due server days not yet on disk, oldest first (idempotent: a recorded day is never
     pulled again; delete its file to re-pull), paced and time-boxed (`Pace`), then prune days older than
-    `retain_days`. A deferred day is reported and left for a later run. Returns what it did, for the job record. The
+    `retain_days`. A deferred day (budget, quiet window, slow bridge) stops the run and is left for a later one; a
+    truncated day (`TruncatedPull`) is reported under "incomplete" and skipped, so it never blocks newer days. Returns what it did, for the job record. The
     broker is only ever asked for `copy_ticks`."""
     now = pd.Timestamp(clock())
     have = read_index(state_dir, account)
@@ -319,24 +432,40 @@ def record_ticks(broker: Any, state_dir: str | Path, account: str, symbol: str, 
                if not (day.isoformat() in have and (d / f"{day.isoformat()}.parquet").exists())]
     pace = Pace(clock, sleep, pause_s=cfg.pause_s, page_limit_s=cfg.page_limit_s, budget_s=cfg.run_budget_s)
     written: list[str] = []
+    incomplete: list[str] = []
     deferred: str | None = None
-    for day in missing[:cfg.max_days_per_run]:
-        start, end = server_day_bounds(day, server_tz)
-        try:
-            ticks = pull_day(broker, symbol, start, end, chunk=cfg.page_ticks, pace=pace)
-        except PullDeferred as exc:
-            deferred = f"{day.isoformat()}: {exc}"
-            log.warning("tick record %s %s deferred: %s", account, day, exc)
-            break
-        rec = write_day(state_dir, account, day, ticks, symbol=symbol, server_tz=server_tz, pulled_utc=clock())
-        written.append(day.isoformat())
-        log.info("tick record %s %s: %d ticks (%d London/NY), %d bytes", account, day, rec.rows, rec.london_ny_ticks,
-                 rec.bytes)
+    with _bounded_pages(broker, cfg.page_limit_s):
+        for day in missing:
+            if len(written) >= cfg.max_days_per_run:
+                break
+            start, end = server_day_bounds(day, server_tz)
+            try:
+                ticks = pull_day(broker, symbol, start, end, chunk=cfg.page_ticks, pace=pace, whole_day=True)
+            except PullDeferred as exc:
+                deferred = f"{day.isoformat()}: {exc}"
+                log.warning("tick record %s %s deferred: %s", account, day, exc)
+                break
+            except ConnectionError as exc:    # the bridge client's page timeout: a slow page, deferred like one
+                if "timeout" not in str(exc).lower():
+                    raise
+                deferred = f"{day.isoformat()}: page timeout after {cfg.page_limit_s} s ({exc})"
+                log.warning("tick record %s %s deferred: %s", account, day, deferred)
+                break
+            except TruncatedPull as exc:          # this day only: newer days are still pulled
+                incomplete.append(f"{day.isoformat()}: {exc}")
+                log.warning("tick record %s %s not written: %s", account, day, exc)
+                continue
+            rec = write_day(state_dir, account, day, ticks, symbol=symbol, server_tz=server_tz, pulled_utc=clock())
+            written.append(day.isoformat())
+            log.info("tick record %s %s: %d ticks (%d London/NY), %d bytes", account, day, rec.rows,
+                     rec.london_ny_ticks, rec.bytes)
     pruned = prune(state_dir, account, latest_closed(now, server_tz) - timedelta(days=cfg.retain_days))
     out: dict[str, Any] = {"written": written, "pruned": pruned, "days": len(read_index(state_dir, account)),
                            "behind": len(missing) - len(written), "pages": pace.pages}
     if deferred is not None:
         out["deferred"] = deferred
+    if incomplete:
+        out["incomplete"] = incomplete
     return out
 
 
@@ -392,6 +521,6 @@ def check_tick_record(ctx: HealthContext, account_id: str) -> Check:
     return Check(name=name, status="ok", reason=msg)
 
 
-__all__ = ["DayRecord", "Pace", "PullDeferred", "TickIndex", "market_quiet", "INDEX_FILE", "PAGE_TICKS", "account_dir", "check_tick_record", "days_due", "load_day",
+__all__ = ["DayRecord", "Pace", "PullDeferred", "TickIndex", "TruncatedPull", "market_quiet", "quarantine_dir", "quarantine_truncated_day", "INDEX_FILE", "PAGE_TICKS", "account_dir", "check_tick_record", "days_due", "load_day",
            "latest_closed", "prune", "pull_day", "read_index", "record_ticks", "recorded_days", "server_date", "server_day_bounds",
            "write_day"]

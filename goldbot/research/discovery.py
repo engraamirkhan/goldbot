@@ -910,7 +910,7 @@ def discovery_pass(spec: Any, b1: pd.DataFrame, reg: Any, *, budget_cap: int, re
     from goldbot.research.director import cited_rule
     cited = cited_rule(prereg, rule_ref, capped=capped)      # E-5: a capped run cites its pre-registered rule
     tf = spec.timeframe
-    b_dec = resample_bars(b1, tf).reset_index(drop=True)
+    b_dec = resample_bars(b1, tf, drop_late=True).reset_index(drop=True)   # no decision on a corrected bar
     context = {TF_LABEL[x]: resample_bars(b1, x) for x in context_tfs(tf)}
     frame = build_decision_frame(b_dec, context, ctx=ctx)
     # BACKLOG 81: the group map of every frame column (context included; prices only, no label) and its size check

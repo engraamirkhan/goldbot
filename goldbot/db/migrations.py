@@ -188,7 +188,7 @@ AUX: tuple[Migration, ...] = (
         "CREATE INDEX IF NOT EXISTS email_link_requests_key ON email_link_requests(key, ts_ns)",
     )),
     # additive: the broker ledger (goldbot/ops/ledger.py; finance audit GAP-07, GAP-08). Amounts only: never a login,
-    # server or deal comment. key = '<account>|<UTC date>' (one snapshot and one report per account and day; a re-run
+    # server or deal comment (snapshots keep a truncated identity hash in the body to detect a login change). key = '<account>|<UTC date>' (one snapshot and one report per account and day; a re-run
     # replaces it) or '<account>|<deal ticket>' (a balance deal is booked once)
     Migration(version=7, name="broker_ledger", additive=True, statements=(
         f"""CREATE TABLE IF NOT EXISTS balance_snapshots (
@@ -483,6 +483,43 @@ AUX: tuple[Migration, ...] = (
                fitted_ns INTEGER NOT NULL,
                PRIMARY KEY (broker, session, day)
            ) STRICT""",
+    )),
+    # additive (quant ruling 2026-10-26, prereg-2026-10-25-high-volume.md Amendment 4; goldbot/research/
+    # evidence_exclusions.py): one row per order id void as evidence (an exploration candidate/trade, a scheduled cost
+    # probe), its scopes (n, posterior, cost_cells, graduation), reason, the dq quarantine span it rests on, criterion
+    # version and decision time, decided blind; and `evidence_reloads`, the (C, R) per account and span the criterion
+    # needs. Both append-only like `audit`: never updated or deleted. A release without them never reads them (and so
+    # counts every row as evidence again)
+    Migration(version=19, name="evidence_exclusions", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS evidence_exclusions (
+               client_order_id TEXT PRIMARY KEY,
+               kind TEXT NOT NULL CHECK (kind IN ('exploration', 'cost_probe')),
+               account_id TEXT NOT NULL,
+               scope TEXT NOT NULL CHECK (json_valid(scope)),
+               reason TEXT NOT NULL,
+               span_ref TEXT NOT NULL,
+               criterion_version TEXT NOT NULL,
+               decided_ns INTEGER NOT NULL,
+               blind INTEGER NOT NULL CHECK (blind = 1)
+           ) STRICT""",
+        """CREATE TRIGGER IF NOT EXISTS evidence_exclusions_no_update BEFORE UPDATE ON evidence_exclusions
+           BEGIN SELECT RAISE(ABORT, 'evidence_exclusions is append-only'); END""",
+        """CREATE TRIGGER IF NOT EXISTS evidence_exclusions_no_delete BEFORE DELETE ON evidence_exclusions
+           BEGIN SELECT RAISE(ABORT, 'evidence_exclusions is append-only'); END""",
+        # per (account, span): C (the corrected bars visible) and R (the account's first engine warm start at or
+        # after C); recorded once, before any exclusion of that span is written
+        """CREATE TABLE IF NOT EXISTS evidence_reloads (
+               account_id TEXT NOT NULL,
+               span_ref TEXT NOT NULL,
+               corrected_ns INTEGER NOT NULL,
+               reloaded_ns INTEGER NOT NULL CHECK (reloaded_ns >= corrected_ns),
+               recorded_ns INTEGER NOT NULL,
+               PRIMARY KEY (account_id, span_ref)
+           ) STRICT""",
+        """CREATE TRIGGER IF NOT EXISTS evidence_reloads_no_update BEFORE UPDATE ON evidence_reloads
+           BEGIN SELECT RAISE(ABORT, 'evidence_reloads is append-only'); END""",
+        """CREATE TRIGGER IF NOT EXISTS evidence_reloads_no_delete BEFORE DELETE ON evidence_reloads
+           BEGIN SELECT RAISE(ABORT, 'evidence_reloads is append-only'); END""",
     )),
 )
 

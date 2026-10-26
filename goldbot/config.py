@@ -327,11 +327,18 @@ class TickRecordSettings(_Section):
     backfill_days: int = Field(7, ge=0, le=30)            # closed server days before the latest that a run re-checks
     # bridge load (trading-safety review): the bridge serves one request at a time and refuses an engine order older
     # than ORDER_MAX_AGE_S (10 s), so a page must stay short and the run bounded
-    max_days_per_run: int = Field(1, ge=1, le=31)          # oldest missing day first; the weekend runs catch up
+    # oldest missing day first, bounded by the run budget: at 1 a run (one weekday slot) a single failed run left the
+    # record behind for good and the backfill window then dropped days (2026-10-14..16 never recorded)
+    max_days_per_run: int = Field(3, ge=1, le=31)
     page_ticks: int = Field(2000, ge=100, le=10_000)       # rows per copy_ticks call (~120 KB of JSON)
     pause_s: float = Field(0.2, ge=0, le=5)                # between pages: the engine's quote reads get the bridge
-    page_limit_s: float = Field(2.0, gt=0, le=8)           # a slower page stops the run; the day is pulled next run
-    run_budget_s: float = Field(300.0, gt=0, le=1800)      # per account per run; an unfinished day is not written
+    # a slower page stops the run; the day is pulled next run. The first page of an old day waits for the terminal to
+    # load its history: 2.1-4.7 s on the brain (2026-10-18..24) deferred every pull at 2 s. Gold is closed while the
+    # job runs (market_quiet), and 5 s stays under the bridge's ORDER_MAX_AGE_S (10 s)
+    page_limit_s: float = Field(5.0, gt=0, le=8)
+    # per account per run; an unfinished day is not written. A full day is ~500 pages (~3 min at 0.35 s a page);
+    # three accounts x 600 s fit the 45-minute quiet window of the daily break
+    run_budget_s: float = Field(600.0, gt=0, le=1800)
 
     @model_validator(mode="after")
     def _retention_outlives_the_backfill(self) -> TickRecordSettings:

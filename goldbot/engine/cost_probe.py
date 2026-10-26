@@ -366,12 +366,13 @@ class _ScheduledAgent:
 
 
 class CostProbe:
-    """The engine's probe state: the ledger, the shadow entries already seen and the rotation's last agent."""
+    """The engine's probe state: the ledger, the shadow entries already seen and the rotation's last agent. Without
+    the shadow book (a learning host, `shadow_host: false`) it runs the scheduled probes only (`step`)."""
 
     def __init__(self, eng: Engine):
-        assert eng.shadow is not None
         self.db = Database.open(eng.cfg.state_dir, "aux")
-        self.seen = _open_keys(eng)             # entries open at the start are old: never probed after a restart
+        # entries open at the start are old: never probed after a restart (none to see without the shadow book)
+        self.seen = _open_keys(eng) if eng.shadow is not None else set()
         with self.db.connection() as conn:
             r = conn.execute("SELECT agent_id FROM cost_probes WHERE account_id = ? AND agent_id != ? "
                              "ORDER BY ts_ns DESC LIMIT 1", (eng.cfg.account_id, SCHEDULED)).fetchone()
@@ -406,8 +407,14 @@ class CostProbe:
         if not eng.cfg.cost_probe:
             return None
         if eng.shadow is None:
-            log.warning("cost probe on, but this engine is not the shadow host: no shadow entries to mirror")
-            return None
+            # a probe_only learning host without the shadow book (vantage-demo, live 2026-10-26: its scheduled probes
+            # never ran) still measures its own costs with the scheduled probes; mirror probes need the shadow book, and
+            # a shared account (real strategy trades) gets no probes without it (trading-safety review 2026-10-26 LOW-1)
+            if not (eng.cfg.probe_only and eng.cfg.cost_probe_scheduled.enabled):
+                log.warning("cost probe on, but this engine is not the shadow host and is not a probe_only account "
+                            "with scheduled probes: nothing to probe")
+                return None
+            log.info("cost probe on without the shadow book: scheduled probes only, no mirror probes")
         return cls(eng)
 
 
@@ -507,7 +514,8 @@ def step(eng: Engine, close_ts: pd.Timestamp, tick: Tick) -> None:
     if probe is None:
         return
     try:
-        _step(eng, probe, close_ts, tick)
+        if eng.shadow is not None:          # mirror probes need the shadow book; scheduled ones below do not
+            _step(eng, probe, close_ts, tick)
     except Exception as exc:
         log.exception("cost probe step failed at %s; no probe this bar close", close_ts)
         eng.decisions.append({"ts": close_ts.isoformat(), "agent": None, "action": "cost_probe_error",

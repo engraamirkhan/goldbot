@@ -109,6 +109,89 @@ def test_pull_refuses_to_loop_when_a_page_cannot_advance():
         tk.pull_day(FakeTickBroker(same_second), "XAUUSD", s, e, chunk=10)
 
 
+class SyncingBroker(FakeTickBroker):
+    """The terminal still loading the day's history: the first request that reaches `cutoff` returns a short page
+    ending there (2026-10-19 on the brain: 45,876 ticks, 22:02-01:00 UTC, then a short page); later requests see it all."""
+
+    def __init__(self, ticks: pd.DataFrame, cutoff: pd.Timestamp) -> None:
+        super().__init__(ticks)
+        self.cutoff, self.loading = cutoff, True
+
+    def copy_ticks(self, symbol: str, since_utc: pd.Timestamp, n: int = 100_000) -> pd.DataFrame:
+        page = super().copy_ticks(symbol, since_utc, n)
+        if self.loading and (page["ts_utc"] >= self.cutoff).any():
+            self.loading = False
+            return page[page["ts_utc"] < self.cutoff].reset_index(drop=True)
+        return page
+
+
+def test_a_short_page_while_the_terminal_loads_history_is_not_the_end_of_the_day():
+    s, e = _bounds("2026-10-16")
+    day = synthetic_day(s, e, 25_000)
+    broker = SyncingBroker(day, s + pd.Timedelta(hours=3))
+    got = tk.pull_day(broker, "XAUUSD", s, e, chunk=2_000, whole_day=True)
+    assert len(got) == len(day) and got["ts_utc"].max() > e - pd.Timedelta(minutes=5)
+
+
+class GapBroker(FakeTickBroker):
+    """A terminal that cannot serve [hole_from, hole_to): requests from inside it return nothing."""
+
+    def __init__(self, ticks: pd.DataFrame, hole_from: pd.Timestamp, hole_to: pd.Timestamp) -> None:
+        super().__init__(ticks[(ticks["ts_utc"] < hole_from) | (ticks["ts_utc"] >= hole_to)])
+        self.hole_from, self.hole_to = hole_from, hole_to
+
+    def copy_ticks(self, symbol: str, since_utc: pd.Timestamp, n: int = 100_000) -> pd.DataFrame:
+        page = super().copy_ticks(symbol, since_utc, n)
+        if self.hole_from <= pd.Timestamp(since_utc) < self.hole_to:
+            return page.iloc[0:0]
+        return page[page["ts_utc"] < self.hole_from] if pd.Timestamp(since_utc) < self.hole_from else page
+
+
+def test_ticks_ending_early_raise_instead_of_passing_for_a_whole_day():
+    s, e = _bounds("2026-10-16")
+    broker = GapBroker(synthetic_day(s, e, 5_000), s + pd.Timedelta(hours=3), e + pd.Timedelta(days=1))
+    with pytest.raises(tk.TruncatedPull, match="before the server day ends"):
+        tk.pull_day(broker, "XAUUSD", s, e, chunk=1_000, whole_day=True)
+    # the engine's history fill (whole_day off) keeps what the terminal served: its gaps come from the broker's 1m bars
+    part = tk.pull_day(broker, "XAUUSD", s, e, chunk=1_000)
+    assert 0 < len(part) and part["ts_utc"].max() < s + pd.Timedelta(hours=3)
+
+
+def test_a_truncated_day_is_not_written_and_newer_days_still_are(tmp_path):
+    week = _week_broker().ticks
+    s, e = _bounds("2026-10-12")
+    broker = GapBroker(week, s + pd.Timedelta(hours=3), e)
+    out = _record(tmp_path, broker, backfill_days=4)
+    assert out["written"] == ["2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16"]
+    assert "2026-10-12" in out["incomplete"][0] and out["behind"] == 1
+    assert not (tmp_path / "ticks" / "icm-demo" / "2026-10-12.parquet").exists()
+
+
+class ShortPageBroker(FakeTickBroker):
+    """Pages shorter than requested in mid-stream for a second reason: the adapter drops repeated (time_msc, bid, ask,
+    flags) rows that COPY_TICKS_ALL returns (volume-only updates; 263-338 same-millisecond rows a day on the brain)."""
+
+    def __init__(self, ticks: pd.DataFrame, short_every: int = 1, drop: int = 3) -> None:
+        super().__init__(ticks)
+        self.short_every, self.drop = short_every, drop
+
+    def copy_ticks(self, symbol: str, since_utc: pd.Timestamp, n: int = 100_000) -> pd.DataFrame:
+        page = super().copy_ticks(symbol, since_utc, n)
+        if len(page) == n and len(self.calls) % self.short_every == 0:
+            return page.drop(index=page.index[1:1 + self.drop]).reset_index(drop=True)
+        return page
+
+
+@pytest.mark.parametrize("short_every", [1, 3])
+def test_a_page_short_from_dropped_duplicates_is_not_the_end_of_the_day(short_every):
+    s, e = _bounds("2026-10-16")
+    day = synthetic_day(s, e, 20_000)
+    broker = ShortPageBroker(day, short_every=short_every)
+    got = tk.pull_day(broker, "XAUUSD", s, e, chunk=1_000, whole_day=True)
+    assert got["ts_utc"].max() == day["ts_utc"].max() and len(tk._london_ny(got)) > 10_000
+    assert len(got) >= len(day) - 3 * len(broker.calls)          # only the rows the broker itself dropped are missing
+
+
 # ------------------------------------------------------------------------------------------- write, index, epoch_ns
 def test_written_times_are_epoch_ns_whatever_the_unit_and_round_trip_exactly(tmp_path):
     s, e = _bounds("2026-10-16")
@@ -222,8 +305,10 @@ def test_retention_deletes_days_older_than_retain_days(tmp_path):
     out = _record(tmp_path, FakeTickBroker(broker.ticks.head(0)), later, backfill_days=1, retain_days=4)
     assert out["pruned"] == ["2026-10-12", "2026-10-13", "2026-10-14"]
     d = tmp_path / "ticks" / "icm-demo"
-    assert sorted(p.name for p in d.glob("*.parquet")) == ["2026-10-15.parquet", "2026-10-16.parquet",
-                                                         "2026-10-19.parquet"]
+    # the 19th: the terminal served no tick and no later session has opened yet, so an empty file would claim a
+    # tickless day; it is reported incomplete and pulled again by a later run
+    assert sorted(p.name for p in d.glob("*.parquet")) == ["2026-10-15.parquet", "2026-10-16.parquet"]
+    assert out["incomplete"][0].startswith("2026-10-19")
     assert "2026-10-12" not in tk.read_index(tmp_path, "icm-demo")
 
 
@@ -275,7 +360,7 @@ def test_job_records_per_account_skips_without_a_broker_and_reports_failures(tmp
     assert JOBS["tick_record"] is tick_record
     broker = _week_broker()
     out = tick_record(_job_ctx(tmp_path, lambda acc: broker), NOW)
-    assert out["icm-demo"]["written"] == ["2026-10-09"] and broker.shut     # one day a run, oldest first
+    assert out["icm-demo"]["written"] == ["2026-10-09", "2026-10-12", "2026-10-13"] and broker.shut  # oldest first
     assert "skipped" in tick_record(_job_ctx(tmp_path, None), NOW)
     assert tick_record(_job_ctx(tmp_path, lambda acc: None), NOW)["icm-demo"]["skipped"]
 
@@ -296,7 +381,11 @@ def test_settings_defaults_cover_the_h_a_window():
     # each slot falls in the daily break of one DST regime (17:00-18:00 New York)
     assert tk.market_quiet(pd.Timestamp(f"2026-07-15 {s.scheduler.tick_record.at}", tz="UTC"))
     assert tk.market_quiet(pd.Timestamp(f"2026-12-16 {s.scheduler.tick_record_winter.at}", tz="UTC"))
-    assert s.ticks.max_days_per_run == 1 and s.ticks.page_limit_s < 10      # bridge ORDER_MAX_AGE_S
+    # a run catches up up to 3 days within its budget (one a run never caught up after a failed run); a cold page of
+    # an old day took 2.1-4.7 s on the brain (2026-10-18..24), so the limit is 5 s, still under ORDER_MAX_AGE_S
+    assert s.ticks.max_days_per_run == 3 and s.ticks.page_limit_s == 5.0 and s.ticks.page_limit_s < 10
+    # three accounts' budgets fit the 45-minute quiet window of the daily break
+    assert 3 * s.ticks.run_budget_s <= 45 * 60
 
 
 def test_backup_keeps_day_files_and_drops_temporaries():
@@ -408,4 +497,101 @@ class ReadOnlyBroker(FakeTickBroker):
 def test_job_is_read_only(tmp_path):
     broker = ReadOnlyBroker(_week_broker().ticks)
     out = tick_record(_job_ctx(tmp_path, lambda acc: broker), NOW)
-    assert out["icm-demo"]["written"] == ["2026-10-09"] and broker.calls and broker.shut
+    assert out["icm-demo"]["written"] == ["2026-10-09", "2026-10-12", "2026-10-13"] and broker.calls and broker.shut
+
+
+# ------------------------------------------------------------------------------------------- bridge bounds (trading-safety)
+class TimedBroker(FakeTickBroker):
+    """A RemoteBroker stand-in: its client timeout and read retries as the recorder sets them for each call."""
+
+    def __init__(self, ticks: pd.DataFrame, clock: _Clock | None = None, page_s: float = 0.0,
+                 raise_timeout: bool = False) -> None:
+        super().__init__(ticks)
+        self.timeout_s, self.read_attempts = 10.0, 2
+        self.seen: list[tuple[float, int]] = []
+        self.at: list[pd.Timestamp] = []
+        self.clock, self.page_s, self.raise_timeout = clock, page_s, raise_timeout
+
+    def copy_ticks(self, symbol: str, since_utc: pd.Timestamp, n: int = 100_000) -> pd.DataFrame:
+        self.seen.append((self.timeout_s, self.read_attempts))
+        if self.clock is not None:
+            self.at.append(self.clock())
+            self.clock.t += pd.Timedelta(seconds=self.page_s)
+        if self.raise_timeout:
+            from goldbot.execution.bridge import BridgeUnavailable
+            raise BridgeUnavailable("bridge copy_ticks: ReadTimeout")
+        return super().copy_ticks(symbol, since_utc, n)
+
+
+def test_each_page_has_its_own_client_timeout_and_no_retry_and_the_broker_is_restored(tmp_path):
+    broker = TimedBroker(_week_broker().ticks)
+    out = _record(tmp_path, broker, backfill_days=4, page_limit_s=5.0)
+    assert out["written"] and broker.seen and set(broker.seen) == {(5.0, 1)}
+    assert (broker.timeout_s, broker.read_attempts) == (10.0, 2)
+
+
+def test_a_page_timeout_defers_the_day_instead_of_failing_the_job(tmp_path):
+    broker = TimedBroker(_week_broker().ticks, raise_timeout=True)
+    out = _record(tmp_path, broker, backfill_days=4)
+    assert out["written"] == [] and "timeout" in out["deferred"].lower() and len(broker.seen) == 1
+    assert (broker.timeout_s, broker.read_attempts) == (10.0, 2)
+
+
+@pytest.mark.parametrize("hours", [24, 3])          # a whole day, and a truncated one (the TruncatedPull retries)
+def test_no_copy_ticks_call_once_the_quiet_window_has_ended(tmp_path, hours):
+    # Sunday 2026-10-18 17:49:40 EDT: the window closes at 17:50; each page takes 1.5 s and each retry wait 2 s
+    clock = _Clock(pd.Timestamp("2026-10-18 21:49:40", tz="UTC"))
+    s, e = _bounds("2026-10-16")
+    broker = TimedBroker(synthetic_day(s, s + pd.Timedelta(hours=hours), 20_000), clock, page_s=1.5)
+
+    def sleep(sec: float) -> None:
+        clock.t += pd.Timedelta(seconds=sec)
+
+    cfg = TickRecordSettings(page_ticks=1_000, backfill_days=2, max_days_per_run=3, run_budget_s=600)
+    out = tk.record_ticks(broker, tmp_path, "icm-demo", "XAUUSD", TZ, cfg, clock=clock, sleep=sleep)
+    assert broker.at and all(tk.market_quiet(t) for t in broker.at)
+    assert clock() >= pd.Timestamp("2026-10-18 21:50", tz="UTC") and "market" in out.get("deferred", "")
+    assert out["written"] == []
+
+
+# ------------------------------------------------------------------------------------------- repair: truncated days
+def test_a_truncated_day_is_quarantined_once_backed_up_and_pulled_again(tmp_path):
+    s, e = _bounds("2026-10-16")
+    full = synthetic_day(s, e, 6_000)
+    t = pd.Timestamp("2026-10-26 15:00", tz="UTC")
+    tk.write_day(tmp_path, "icm-demo", pd.Timestamp("2026-10-16").date(), full[full["ts_utc"] < s + pd.Timedelta(hours=4)],
+                 symbol="XAUUSD", server_tz=TZ, pulled_utc=t)
+    tk.write_day(tmp_path, "icm-demo", pd.Timestamp("2026-10-15").date(),
+                 synthetic_day(*_bounds("2026-10-15"), 3_000, seed=3), symbol="XAUUSD", server_tz=TZ, pulled_utc=t)
+    d, q = tmp_path / "ticks" / "icm-demo", tk.quarantine_dir(tmp_path, "icm-demo")
+    before = (d / "index.json").read_text()
+    dry = tk.quarantine_truncated_day(tmp_path, "icm-demo", "2026-10-16", reason="r", apply=False, now=t)
+    assert dry.startswith("would quarantine") and (d / "index.json").read_text() == before and not q.exists()
+    assert "kept" in tk.quarantine_truncated_day(tmp_path, "icm-demo", "2026-10-15", reason="r", apply=True, now=t)
+    done = tk.quarantine_truncated_day(tmp_path, "icm-demo", "2026-10-16", reason="short page", apply=True, now=t)
+    assert done.startswith("quarantined") and not (d / "2026-10-16.parquet").exists()
+    assert (q / "2026-10-16.parquet").exists() and json.loads((q / "index.20261026T150000Z.json").read_text()) == json.loads(before)
+    line = json.loads((q / "manifest.jsonl").read_text())
+    assert line["reason"] == "short page" and line["sha256"] and line["rows"] > 0
+    assert stat.S_IMODE(q.stat().st_mode) == 0o700 and stat.S_IMODE((q / "manifest.jsonl").stat().st_mode) == 0o600
+    assert set(tk.read_index(tmp_path, "icm-demo")) == {"2026-10-15"}
+    again = tk.quarantine_truncated_day(tmp_path, "icm-demo", "2026-10-16", reason="r", apply=True, now=t)
+    assert "nothing to do" in again and len((q / "manifest.jsonl").read_text().splitlines()) == 1
+    out = _record(tmp_path, FakeTickBroker(full), backfill_days=1)          # the next run pulls it whole
+    assert out["written"] == ["2026-10-16"] and tk.read_index(tmp_path, "icm-demo")["2026-10-16"].rows == len(full)
+
+
+def test_the_repair_script_is_a_dry_run_by_default_and_idempotent(tmp_path, capsys):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("qtd", Path(__file__).resolve().parents[1] / "scripts" / "quarantine_tick_days.py")
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    s, _ = _bounds("2026-10-16")
+    tk.write_day(tmp_path, "icm-demo", pd.Timestamp("2026-10-16").date(), synthetic_day(s, s + pd.Timedelta(hours=3), 500),
+                 symbol="XAUUSD", server_tz=TZ, pulled_utc=NOW)
+    args = ["--state-dir", str(tmp_path), "--accounts", "icm-demo", "--days", "2026-10-16"]
+    assert mod.main(args) == 0 and "would quarantine" in capsys.readouterr().out
+    assert (tmp_path / "ticks" / "icm-demo" / "2026-10-16.parquet").exists()
+    assert mod.main([*args, "--apply"]) == 0 and "quarantined icm-demo 2026-10-16" in capsys.readouterr().out
+    assert mod.main([*args, "--apply"]) == 0 and "nothing to do" in capsys.readouterr().out

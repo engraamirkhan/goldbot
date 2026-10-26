@@ -671,12 +671,13 @@ class RemoteBroker:
                  order_timeout_s: float = 15.0, post: Callable[..., Any] | None = None) -> None:
         self.url, self.name = url.rstrip("/"), name
         self._token, self.timeout_s, self.order_timeout_s = token, timeout_s, order_timeout_s
+        self.read_attempts = 2          # read-only calls; a paced caller (the tick record) sets 1 and its own timeout_s
         self._session = requests.Session()
         self._post = post or self._session.post
 
     def _call(self, method: str, *args: Any) -> Any:
         _, retry = METHODS[method]
-        attempts = 2 if retry else 1
+        attempts = self.read_attempts if retry else 1
         timeout = self.timeout_s if retry else self.order_timeout_s
         for i in range(attempts):
             body = json.dumps({"method": method, "args": [_encode(a) for a in args], "sent_at": time.time()})

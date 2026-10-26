@@ -67,14 +67,15 @@ class FakeBroker:
     """The read-only part of the Broker protocol the ledger uses: account, positions, deals_since."""
 
     def __init__(self, balance: float, deals: list[dict[str, Any]], positions: list[Position] | None = None,
-                 equity: float | None = None, currency: str = "GBP") -> None:
+                 equity: float | None = None, currency: str = "GBP", login: int = LOGIN) -> None:
+        self.login = login
         self.balance, self.deals, self.pos = balance, deals, positions or []
         self.equity, self.currency = equity, currency
         self.deal_reads = 0
 
     def account(self) -> AccountInfo:
         eq = self.balance if self.equity is None else self.equity
-        return AccountInfo(login=LOGIN, equity=eq, balance=self.balance, margin=120.0, margin_free=eq - 120.0,
+        return AccountInfo(login=self.login, equity=eq, balance=self.balance, margin=120.0, margin_free=eq - 120.0,
                            leverage=30, currency=self.currency, server="ICMarketsSC-Demo", trade_mode="demo",
                            margin_mode="hedging")
 
@@ -368,6 +369,7 @@ def test_show_prints_the_latest_report_snapshots_and_balance_deals(tmp_path, cap
     out = json.loads(capsys.readouterr().out)
     assert out["report"]["status"] == "ok" and len(out["snapshots"]) == 2
     assert [d["amount"] for d in out["balance_deals"]] == [500.0]
+    assert all("identity" not in s for s in out["snapshots"])   # the login hash stays in the DB (public pastes)
 
 
 # ------------------------------------------------------------------------------------------------ review fixes
@@ -461,3 +463,25 @@ def test_closed_cost_probes_are_reconciled_in_the_probe_ledger_not_counted_missi
     rep = _run(tmp_path, FakeBroker(1000.0 + _net(probe + engine), probe + engine))
     assert [(d.position_id, d.kind) for d in rep.diffs] == [(7, "missing")]
     assert "1 cost probe position(s)" in rep.note and rep.summary()["balance"] == "ties out"
+
+
+def test_a_login_change_is_a_new_baseline_not_an_unexplained_balance(tmp_path):
+    """The account was switched to a different MT5 login (a reset or re-pointed demo): its opening balance belongs to
+    the old login, so no tie-out; the new balance and the deposit that funds it are baseline, and the next day ties out."""
+    _baseline(tmp_path, 960.55)
+    other = LOGIN + 1
+    rep = _run(tmp_path, FakeBroker(11000.0, [_deal(5, "2026-10-07 08:51", 2, profit=10000.0)], login=other))
+    assert rep.tie_out is None and rep.status == "warn" and "login" in rep.note
+    assert [d.baseline for d in ledger.balance_deals(_db(tmp_path), ACC_ID) if d.ticket == 5] == [True]
+    with sqlite3.connect(tmp_path / "aux.db") as c:
+        dump = "\n".join(c.iterdump())
+    assert str(LOGIN) not in dump and str(other) not in dump          # only a one-way fingerprint is kept
+    day3 = DAY2 + pd.Timedelta(days=1)
+    rep3 = ledger.run_ledger(_db(tmp_path), FakeBroker(11000.0, [], login=other), ACC, tmp_path, day3, SETTINGS,
+                             clock=lambda: day3, sleep=lambda _s: None)
+    assert rep3.status == "ok" and rep3.tie_out is not None
+
+
+def test_an_unexplained_change_on_the_same_login_still_fails(tmp_path):
+    _baseline(tmp_path, 960.55)
+    assert _run(tmp_path, FakeBroker(11000.0, [])).status == "fail"

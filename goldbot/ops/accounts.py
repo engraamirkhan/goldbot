@@ -296,15 +296,16 @@ class Account(Record):
     def _probe_only_is_a_probe_host(self) -> Account:
         """ADR 0037 amendment 4: a probe_only account exists to mirror the shadow book's challengers at the minimum
         lot. Amendment 6 (PD 2026-10-26, ADR 0043 per-style hosts): "or to run exploration arms", so a second demo
-        account can host other arms without the shadow book. With neither it would trade nothing, so the config is
-        refused at load; demo only either way."""
+        account can host other arms without the shadow book. Scheduled cost probes (prereg M1) need no shadow book, so
+        they make a host too. With none it would trade nothing, so the config is refused at load; demo only always."""
         if not self.probe_only:
             return self
         if self.mode != "demo":
             raise ValueError("probe_only is allowed on demo accounts only (ADR 0037): a live account never probes")
-        if not ((self.cost_probe.enabled and self.shadow_host) or self.exploration.enabled):
-            raise ValueError("probe_only needs cost_probe.enabled and shadow_host, or exploration.enabled, on the same "
-                             "account (ADR 0037 amendments 4 and 6)")
+        probes = self.cost_probe.enabled and (self.shadow_host or self.cost_probe.scheduled.enabled)
+        if not (probes or self.exploration.enabled):
+            raise ValueError("probe_only needs cost_probe.enabled with shadow_host or cost_probe.scheduled, or "
+                             "exploration.enabled, on the same account (ADR 0037 amendments 4 and 6)")
         return self
 
     @model_validator(mode="after")

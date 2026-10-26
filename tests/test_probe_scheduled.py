@@ -54,13 +54,14 @@ class _Terminal(PaperBroker):
 
 def _engine(tmp_path: Path, *, scheduled: acc_mod.ScheduledProbe = ON, approval: str = "auto",
             trade_mode: str | None = "demo", pb: _Terminal | None = None, probe_only: bool = False,
-            shadow: bool = False, probe: bool = True) -> tuple[Engine, _Terminal, Tick]:
-    """An engine one 15m close (CUT) away; no shadow challenger unless `shadow`, so only scheduled probes trade."""
+            shadow: bool = False, probe: bool = True, shadow_host: bool = True) -> tuple[Engine, _Terminal, Tick]:
+    """An engine one 15m close (CUT) away; no shadow challenger unless `shadow`, so only scheduled probes trade;
+    `shadow_host` False: no shadow book at all (a learning host such as vantage-demo)."""
     agent = _Long()
     pb = pb if pb is not None else _Terminal(trade_mode, equity=10_000, adverse_slip_points=0.0)
     versions = {f"{agent.agent_id}-v2": agent.agent_id} if shadow else {}
     eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", mode="demo", approval_mode=approval,
-                              declared_class="raw", state_dir=str(tmp_path), owner_user_id=111, shadow_host=True,
+                              declared_class="raw", state_dir=str(tmp_path), owner_user_id=111, shadow_host=shadow_host,
                               cost_probe=probe, cost_probe_scheduled=scheduled, probe_only=probe_only),
                  pb, [agent], {agent.family: ConstantModel(p=0.9)}, ApprovalCenter({111}),
                  limits=RiskLimits(**BASE), live_shares={},
@@ -371,6 +372,61 @@ def test_no_scheduled_probe_outside_auto_mode(tmp_path):
 def test_scheduled_probes_off_by_default_send_nothing(tmp_path):
     eng, pb, tick = _engine(tmp_path, scheduled=acc_mod.ScheduledProbe())
     _allow(eng)
+    eng.on_bar_close(CUT, tick)
+    assert not pb.positions() and not _refusals(eng)
+
+
+# ------------------------------------------------------------------------------------- no shadow book on the host
+def test_an_engine_without_the_shadow_book_sends_scheduled_probes_through_the_gate(tmp_path):
+    eng, pb, tick = _engine(tmp_path, shadow_host=False, probe_only=True)
+    assert eng.shadow is None and eng.probe is not None
+    seen = _allow(eng)
+    eng.on_bar_close(CUT, tick)
+    [intent] = [i for i in seen if i.agent_id == cost_probe.SCHEDULED_ID]
+    assert intent.learning_probe and intent.volume_min == 0.01
+    [pos] = pb.positions()
+    assert pos.lots == pytest.approx(0.01)
+    assert len(_scheduled(eng)) == 1 and len(_rows(tmp_path)) == 1
+    assert not [d for d in eng.decisions if str(d.get("action", "")).endswith("_error")]
+
+
+def test_without_the_shadow_book_mirror_probes_are_skipped_cleanly_and_scheduled_ones_still_close(tmp_path):
+    eng, pb, tick = _engine(tmp_path, shadow_host=False, shadow=True, probe_only=True)
+    _allow(eng)
+    eng.on_bar_close(CUT, tick)
+    assert [eng.open[p].agent_id for p in eng.open] == [cost_probe.SCHEDULED_ID]   # no mirror probe, no error
+    assert not [d for d in eng.decisions if str(d.get("action", "")).endswith("_error")]
+    cost_probe.hold_exits(eng, CUT + pd.Timedelta(seconds=eng.cfg.cost_probe_scheduled.hold_s + 1))
+    assert not pb.positions()
+
+
+def test_a_shared_account_without_the_shadow_book_gets_no_scheduled_probes(tmp_path):
+    eng, pb, tick = _engine(tmp_path, shadow_host=False, probe_only=False)
+    assert eng.probe is None
+    _allow(eng)
+    eng.on_bar_close(CUT, tick)
+    assert not pb.positions() and not _refusals(eng)
+
+
+def test_without_the_shadow_book_a_scheduled_probe_open_at_a_restart_is_closed_by_its_hold_exit(tmp_path):
+    eng, pb, tick, pid = _sent(tmp_path, shadow_host=False, probe_only=True)
+    eng2, _, _ = _engine(tmp_path, pb=pb, shadow_host=False, probe_only=True)
+    assert eng2.probe is not None and pid not in eng2.probe.held        # the hold clock falls back to opened_utc
+    assert eng2.open[pid].agent_id == cost_probe.SCHEDULED_ID
+    cost_probe.hold_exits(eng2, tick.ts_utc + pd.Timedelta(seconds=eng2.cfg.cost_probe_scheduled.hold_s + 15))
+    eng2._flush_closed()
+    assert not pb.positions()
+    assert [r.exit_reason for r in _rows(tmp_path)] == [cost_probe.HOLD_EXIT]
+
+
+def test_mirror_probes_alone_still_need_the_shadow_book(tmp_path):
+    eng, _, _ = _engine(tmp_path, shadow_host=False, scheduled=acc_mod.ScheduledProbe())
+    assert eng.shadow is None and eng.probe is None
+
+
+def test_an_engine_without_the_shadow_book_and_probes_off_builds_no_probe(tmp_path):
+    eng, pb, tick = _engine(tmp_path, shadow_host=False, probe=False, scheduled=acc_mod.ScheduledProbe())
+    assert eng.probe is None
     eng.on_bar_close(CUT, tick)
     assert not pb.positions() and not _refusals(eng)
 

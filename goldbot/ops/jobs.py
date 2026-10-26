@@ -98,6 +98,7 @@ import json
 import logging
 import random
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable, cast
 
@@ -233,8 +234,8 @@ def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         n_probe = 0
         try:     # scheduled-probe fills raise a session's slippage when proven above the prior; never in `fills` (K7)
             window_start = slot - pd.Timedelta(days=r.fills_window_days)
-            prows = probe_entry_fills(p for p in cost_probe.probes(ctx.state_dir, acc.account_id)
-                                      if window_start <= p.sent_utc <= slot)
+            prows = probe_entry_fills(cost_probe_rows(ctx.state_dir, acc.account_id, window_start, slot,
+                                                      held=_held_spans(ctx, acc, slot)))
             n_probe = len(prows)
             table = apply_probe_slippage(table, probe_slippage(prows, ctx.settings.costs.slippage_prior_usd), n_probe)
         except (sqlite3.Error, OSError, ValueError) as exc:     # unreadable aux.db: the prior stands
@@ -263,6 +264,20 @@ def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         log.exception("exploration learner failed")
         out["exploration"] = {"error": type(exc).__name__}
     return out
+
+
+def cost_probe_rows(state_dir: Path, account_id: str, lo: pd.Timestamp, hi: pd.Timestamp,
+                    held: Sequence[tuple[pd.Timestamp, pd.Timestamp, str]] = ()) -> list[Any]:
+    """The account's probes sent in [lo, hi] that may feed its cost table: none void for the cost cells (aux.db
+    evidence_exclusions, prereg Amendment 4: a scheduled probe entered inside a dq quarantine span), and, in memory
+    only, no scheduled probe entered inside a `held` span (one whose engine restart is not recorded yet)."""
+    from goldbot.research.evidence_exclusions import SCHEDULED_PURPOSE, excluded_ids
+    rows = [p for p in cost_probe.probes(state_dir, account_id) if lo <= p.sent_utc <= hi]
+    if not rows:
+        return rows
+    void = excluded_ids(Database.open(state_dir, "aux"), "cost_cells")
+    return [p for p in rows if p.client_order_id not in void
+            and not (p.purpose == SCHEDULED_PURPOSE and any(a <= p.sent_utc < b for a, b, _ in held))]
 
 
 # ---------------------------------------------------------------------------------------------- exploration arms
@@ -360,6 +375,11 @@ def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     (state/models/h62/<broker>/)."""
     db = Database.open(ctx.state_dir, "aux")
     stamped = stamp_brokers(db, {acc.account_id: acc.broker for acc in ctx.accounts})
+    try:        # prereg Amendment 4, before any read (criterion v1)
+        void, held = evidence_exclusions(ctx, db, slot)
+    except Exception as exc:       # noqa: BLE001 - fail closed: no posterior on evidence not screened (weights age out)
+        log.exception("evidence exclusions not computed: the exploration learner does not run tonight")
+        return {"error": f"evidence_exclusions:{type(exc).__name__}"}
     pending = read_obs(db)
     pending = pending[pending["label_sim_r"].isna()]
     unkeyed = int(pending["broker"].isna().sum())
@@ -387,12 +407,39 @@ def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         try:                           # one broker's failure never skips another's run
             out[broker] = learn(db, broker=broker, as_of=slot, arms=styles, controls=controls, ceilings=ceilings,
                                 seed=int(slot.value % (2**32)), retrain=slot.dayofweek == 6,
-                                models_dir=ctx.state_dir / "models")
+                                models_dir=ctx.state_dir / "models", held_out=held)
         except Exception as exc:       # noqa: BLE001 - its weights age into equal shares; the others still learn
             log.exception("exploration learner failed for broker %s", broker)
             out[broker] = {"error": type(exc).__name__}
     return {"labelled": labelled, "cost_model": {b: m.version for b, m in costs.items()}, "stamped": stamped,
-            "unkeyed": unkeyed, "brokers": out}
+            "unkeyed": unkeyed, "evidence_exclusions": void, "brokers": out}
+
+
+def evidence_exclusions(ctx: JobContext, db: Database, slot: pd.Timestamp) -> tuple[dict[str, Any], frozenset[str]]:
+    """Criterion v1 (research/evidence_exclusions.py) before the learner reads: the exclusions of every span whose
+    engine restart (R) is recorded are written (append-only, idempotent); a span with no recorded R writes nothing
+    (over-voiding cannot be undone) and its decisions from the span's start are returned to be held out in memory."""
+    from goldbot.research import evidence_exclusions as ev
+    inserted, held, open_ = 0, set[str](), list[str]()
+    for symbol in sorted({getattr(acc, "symbol", "XAUUSD") for acc in ctx.accounts}):
+        hosts = {acc.account_id: acc.broker for acc in ctx.accounts if getattr(acc, "symbol", "XAUUSD") == symbol}
+        found = ev.screen(db, ctx.store, hosts=hosts, symbol=symbol, now=slot)
+        inserted += ev.record(db, found.exclusions)
+        held |= found.held_out
+        open_ += found.unresolved
+    if open_:
+        log.warning("quarantine span with no recorded engine restart on %s: decisions held out of learning, not "
+                    "voided (run scripts/evidence_exclusions.py)", ", ".join(sorted(open_)))
+    return {"inserted": inserted, "held_out": len(held), "unresolved": sorted(open_)}, frozenset(held)
+
+
+def _held_spans(ctx: JobContext, acc: Account, slot: pd.Timestamp) -> list[tuple[pd.Timestamp, pd.Timestamp, str]]:
+    """The account's quarantine spans with no recorded engine restart (its scheduled probes inside them are held out
+    of the cost table in memory)."""
+    from goldbot.research import evidence_exclusions as ev
+    spans = ev.spans_of(ctx.store, {acc.account_id: acc.broker}, symbol=acc.symbol, now=slot).get(acc.account_id, [])
+    rel = ev.reloads(Database.open(ctx.state_dir, "aux")) if spans else {}
+    return [s for s in spans if (acc.account_id, s[2]) not in rel]
 
 
 COSTS_PUBLISHED_FILE = "costs_published.json"    # state: when the table last reached release costs-v1 (health reads it)
