@@ -131,3 +131,43 @@ def test_one_registry_k_row_per_run(tmp_path: Path) -> None:
     row = mod.record(reg, {"S0": {"n_total": 5}}, "run-1", ARMS, ROOT / "config" / "arm_costs.yaml")
     assert len(reg.read_text().splitlines()) == 1 and row["family"] == "arms_matrix" and row["trial"] == 1
     assert row["config"]["arms"]["S0"] and "S6" not in row["config"]["arms"] and row["config"]["run_id"] == "run-1"
+
+
+def _k_mod():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("record_arms_k_row", ROOT / "scripts" / "record_arms_k_row.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_h60_adds_k_24_once_and_a_rerun_adds_only_its_own_row(tmp_path: Path) -> None:
+    from goldbot.research.registry import TrialRegistry
+    mod = _k_mod()
+    reg = tmp_path / "registry.jsonl"
+    costs = ROOT / "config" / "arm_costs.yaml"
+    first = mod.record(reg, {}, "run-1", ARMS, costs)
+    assert first["status"] == "discovery" and first["results"]["discovery"]["k_eff"] == 24
+    assert TrialRegistry(reg).n_trials_effective == 1 + 24
+    again = mod.record(reg, {}, "run-2", ARMS, costs)
+    assert again["results"]["discovery"]["k_eff"] == 0
+    assert TrialRegistry(reg).n_trials_effective == 2 + 24        # the rerun is one look, no new arms
+
+
+def test_correction_nets_h60_to_24_over_the_two_wrongly_recorded_rows(tmp_path: Path) -> None:
+    from goldbot.research.registry import TrialRegistry
+    mod = _k_mod()
+    reg = tmp_path / "registry.jsonl"
+    t = TrialRegistry(reg)
+    for run in ("40187046794-1", "40191721046-1"):             # the two evaluated rows of the first dispatches
+        t.record(agent_id="arms-matrix", family="arms_matrix", config={"run_id": run}, feature_version="n/a",
+                 rationale="r", results={"kind": "historical_arms_matrix"})
+    assert t.n_trials_effective == 2
+    row = mod.correct(reg)
+    assert row["status"] == "discovery" and len(row["results"]["corrects"]) == 2
+    assert TrialRegistry(reg).n_trials_effective == 24            # 2 rows + the correction row + k_eff 21
+    assert mod.correct(reg) is None                               # idempotent
+    assert TrialRegistry(reg).n_trials_effective == 24
+    # and a later run adds no more arms
+    assert mod.record(reg, {}, "run-3", ARMS, ROOT / "config" / "arm_costs.yaml")["results"]["discovery"]["k_eff"] == 0
