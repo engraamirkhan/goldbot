@@ -1,6 +1,6 @@
 """The exploration labs as the owner's morning report and Sunday digest read them (docs/ux/daily-learning-report.md,
 lane L5a of the closed learning loop): read-only figures from aux.db (`exploration_obs`, `exploration_trades`,
-`exploration_weights`) and the words and number formats both messages share.
+`exploration_broker_weights`) and the words and number formats both messages share.
 
 The spec's rules, as built here:
 
@@ -414,7 +414,12 @@ class LearnerRuns(Record):
 
 
 def learner_runs(conn: sqlite3.Connection, lo: pd.Timestamp, hi: pd.Timestamp) -> LearnerRuns:
-    rows = conn.execute("SELECT run_ns, arm_id, weight FROM exploration_weights ORDER BY run_ns").fetchall()
+    # the bandit writes per (run, broker, arm) since aux migration 17; the old table only on a release without it
+    has_broker = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'exploration_broker_weights'"
+                              ).fetchone() is not None
+    rows = conn.execute("SELECT run_ns, broker || ':' || arm_id, weight FROM exploration_broker_weights ORDER BY run_ns"
+                        if has_broker else "SELECT run_ns, arm_id, weight FROM exploration_weights ORDER BY run_ns"
+                        ).fetchall()
     by_run: dict[int, dict[str, float]] = {}
     for run, arm, w in rows:
         by_run.setdefault(int(run), {})[str(arm)] = float(w)
