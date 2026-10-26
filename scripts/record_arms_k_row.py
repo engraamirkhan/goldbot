@@ -12,7 +12,13 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.research import arms as A  # noqa: E402
-from goldbot.research.registry import DISCOVERY, TrialRegistry, row_ref  # noqa: E402
+from goldbot.research.registry import (  # noqa: E402
+    DISCOVERY,
+    TrialRegistry,
+    discovery_k_eff,
+    is_trial,
+    row_ref,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 FAMILY = "arms_matrix"
@@ -51,7 +57,9 @@ def correct(registry: Path) -> dict[str, Any] | None:
     if _already_charged(rows):
         return None
     wrong = [r for r in rows if r.get("status") != DISCOVERY]
-    k_eff = max(H60_K_EFF - len(wrong) - 1, 0)
+    existing = sum((1 if is_trial(r) else 0) + (discovery_k_eff((r.get("results") or {}).get("discovery") or {})
+                                                 if r.get("status") == DISCOVERY else 0) for r in rows)
+    k_eff = max(H60_K_EFF - existing - 1, 0)      # 24 minus every existing H-60 trial and k_eff, incl. a k_eff 0 row
     return TrialRegistry(registry).record(
         agent_id="arms-matrix", family=FAMILY, config={"correction": True, "corrects": [r.get("config", {}).get("run_id") for r in wrong]},
         feature_version="n/a", status=DISCOVERY,

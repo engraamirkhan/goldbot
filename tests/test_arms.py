@@ -171,3 +171,16 @@ def test_correction_nets_h60_to_24_over_the_two_wrongly_recorded_rows(tmp_path: 
     assert TrialRegistry(reg).n_trials_effective == 24
     # and a later run adds no more arms
     assert mod.record(reg, {}, "run-3", ARMS, ROOT / "config" / "arm_costs.yaml")["results"]["discovery"]["k_eff"] == 0
+
+
+def test_correction_counts_a_prior_k_eff_zero_discovery_row(tmp_path: Path) -> None:
+    from goldbot.research.registry import TrialRegistry
+    mod = _k_mod()
+    reg = tmp_path / "registry.jsonl"
+    t = TrialRegistry(reg)
+    t.record(agent_id="arms-matrix", family="arms_matrix", config={"run_id": "a"}, feature_version="n/a",
+             rationale="r", results={"kind": "historical_arms_matrix"})
+    t.record(agent_id="arms-matrix", family="arms_matrix", config={"run_id": "b"}, feature_version="n/a",
+             status="discovery", rationale="r", results={"kind": "historical_arms_matrix", "discovery": {"k_eff": 0}})
+    assert mod.correct(reg)["results"]["discovery"]["k_eff"] == 24 - 2 - 1
+    assert TrialRegistry(reg).n_trials_effective == 24
