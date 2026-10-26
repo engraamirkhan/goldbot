@@ -51,7 +51,9 @@ were these 6 across timeframes, parameters and two brokers). The target is **30 
 1. **Declared now:** each family is registered once, with all its timeframe, session and broker strata named before any
    fill. A stratum added later is a new registration under a new id.
 2. **Primary read:** pooled net R per trade. Each stratum's mean is weighted equally (not by fill count, so the fastest
-   timeframe cannot dominate). The SE combines the strata's day-clustered variances (CR1).
+   timeframe cannot dominate). The SE comes from the stacked fills, clustered by UTC day across all strata, with
+   equal stratum weights. Summing per-stratum CR1 variances understates the SE: strata share days (quant review
+   2026-10-26).
 3. **Consistency check** (pre-specified, part of "continue"):
    - the mean net R is > 0 in at least ceil(2m/3) of the m strata that reach ≥ 30 fills;
    - no such stratum has a mean ≤ −0.10 R with t ≤ −2.
@@ -73,13 +75,10 @@ were these 6 across timeframes, parameters and two brokers). The target is **30 
   m_eff = Σ [I(λ ≥ 1) + (λ − floor(λ))].
   - Measure it on the discovery half 2010-2017 history run of the arms (`run_arm_backtest`), never on forward fills.
   - Bounds: 1 ≤ m_eff ≤ m.
-  - Until it is measured, charge **m** (conservative).
-- **Broker twins** are strata, not new hypotheses. Their correlation with the primary is near 1 (same rule, same
-  market), so they add almost 0 to m_eff.
-- **Controls charge 0 hypotheses.** They are nulls. They still take a registration row.
-- **Q4 slots.** The precedent (the 11 Vantage twins, and the time-structure prereg) charges one 2026Q4 slot per arm
-  id. Until the quant reviewer rules on family counting, this plan uses the precedent, the higher number (section 5),
-  and also shows the family count.
+  - Until it is measured on 2010-2017, charge **m** per family (every stratum, twins included).
+- **Controls** take a registration row and a K count under the precedent.
+- **Ruling (quant review 2026-10-26):** K uses the **precedent count**, one per arm id: K ≈ 358, gate-1 t = 4.59
+  (section 8). A family charges m until its m_eff is measured. Family counting is not used for any gate.
 
 ### 2.3 Training (directive 3, "train and tested on multiple timeframes")
 
@@ -141,8 +140,8 @@ The same function runs in the history matrix and live, so history and live use t
 
 **Why the retired families are here.** An R-xx verdict reads "this version, tested this way, did not beat random after
 the research-prior cost". The broker's measured cost is 5-7 times lower (quant audit 2026-10-26). These rows gather
-live, signal-time cost and fill evidence. They do not re-open the verdicts: no promotion and no registry trial without a
-new pre-registration.
+live, signal-time cost and fill evidence. Each is a registry trial (exploration). Any later promotion counts the
+original R-xx trials in K too. They do not re-open the verdicts: no promotion without a new pre-registration.
 
 **Wave-1 slots:**
 
@@ -252,21 +251,26 @@ Shrinking the cap selects low-volatility trades and biases the sample. So drawdo
   10 (intraday) or 5 (swing) fills since the cut. Never above base.
 - **Combining factors:** the minimum of the three, not the product. The factors are correlated, and one named binding
   reason ("limited by: drawdown") is auditable.
-- **Bias warning for the evaluator:** limits conditioned on past outcomes change which trades are taken. Reads use the
-  logged propensities (inverse-propensity weights) and report the unweighted mean beside them.
+- **Bias warning for the evaluator:** limits conditioned on past outcomes change which trades are taken.
+  - **Share and `max_open` refusals:** reads use the logged propensities (inverse-propensity weights) and report the
+    unweighted mean beside them.
+  - **Over-cap skips:** a fixed rule, not a probability, so IPW cannot correct them. The estimand is **"trades within
+    the cap"**, and every read says so.
 
 ## 8. Trial accounting (Q4 override)
 
-| | Precedent count (one slot per arm id) | Family count (pending the quant ruling) |
-|---|---|---|
-| 2026Q4 used today | 69 / 69 | 69 / 69 |
-| Time-structure arms (their prereg) | 74 | 72 (F1, G1, WFRI = 3 families; controls 0) |
-| Wave 1 (14 families, 3 declared variants, 2 controls = 19 ids) | **74 -> 93** | 72 -> 86 |
-| Wave 2 (7 new families beyond F1/G1/WFRI, about 4 extra strata, 2 controls) | 93 -> 106 | 86 -> 93 |
-| Wave 3 (H4 swing strata + controls + twins, about 15 ids) | 106 -> about 121 | about 93 (strata only) |
-| Registry K (`n_trials_effective`) | 145 -> 150 -> 169 -> 182 -> about 197 | 145 -> 148 -> 162 -> 169 |
-| K with the programme's 161 charged looks | about 358 | about 330 |
-| Gate-1 bar: model-filtered t = E[max Z_K] + 1.645 | 4.30 at K 145 -> **4.59** at 358 | **4.56** at 330 |
+Precedent count, one slot per arm id (the quant ruling, 2026-10-26):
+
+| | Count |
+|---|---|
+| 2026Q4 used today | 69 / 69 |
+| Time-structure arms (their prereg) | 74 |
+| Wave 1 (14 families, 3 declared variants, 2 controls = 19 ids) | **74 -> 93** |
+| Wave 2 (7 new families beyond F1/G1/WFRI, about 4 extra strata, 2 controls) | 93 -> 106 |
+| Wave 3 (H4 swing strata + controls + twins, about 15 ids) | 106 -> about 121 |
+| Registry K (`n_trials_effective`) | 145 -> 150 -> 169 -> 182 -> about 197 |
+| K with the programme's 161 charged looks | **about 358** |
+| Gate-1 bar: model-filtered t = E[max Z_K] + 1.645 | 4.30 at K 145 -> **4.59** at 358 |
 
 - **Formula:** E[max Z_K] = (1 − γ) Φ⁻¹(1 − 1/K) + γ Φ⁻¹(1 − 1/(K e)), γ = 0.5772.
 - **Effect:** the bar rises by about 0.3 in t. Tripling the families costs little in bar terms, because K enters
@@ -276,15 +280,17 @@ Shrinking the cap selects low-volatility trades and biases the sample. So drawdo
 - Basis: the owner directives of 2026-10-26 (section 0) and the precedent of the Vantage twins and the time-structure
   arms.
 - Decision: program-director (PD + PO; research director recommends). Reported to the owner.
+- **Config comment:** the `trial_budget_overrides` entry cites owner directives 1 ("tripple the numbers") and 5
+  ("there should be 30 different strategies running...") of 2026-10-26 as its authorization.
 - Conditions: every row is an exploration row, never promotion evidence. No arm can graduate without gate 1 at the
   K of that day and the holdout once.
 
-**Quant review, in parallel with the build (not before it).** It must sign off before the first fill:
-1. family counting and m_eff (section 2.2);
-2. the pooled read and the consistency rule (2.1);
-3. the barrier-form deviations of `breakout` and `trend`;
-4. IPW reads under dynamic limits (7);
-5. the cross-timeframe purge (2.3).
+**Quant review (2026-10-26): approved with five conditions, all applied here.**
+1. SE clustered by UTC day on stacked fills (2.1).
+2. The R-xx exploration rows are registry trials (3).
+3. Precedent K, m per family until m_eff is measured (2.2, 8).
+4. The override's config citation (above).
+5. The "trades within the cap" estimand (7).
 
 ## 9. What I would stop
 
