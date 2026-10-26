@@ -743,6 +743,15 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
         log.warning("exploration candidate %s not recorded (%s)", cid, type(exc).__name__)
 
 
+
+def _arm_room(share_gbp: float, lost: float, held: float, arm_cap: float) -> float:
+    """An arm's room today: its share of the pot less today's realised loss and open risk. An arm with neither yet
+    may always take its first trade (up to its per-trade cap): a share below one trade's loss (W1A 0.20 x £40 = £8
+    against ≈ £29 at the stop, live 2026-10-26) otherwise refused it on every bar. The pot, the host budget and the
+    RiskGate still bind."""
+    room = share_gbp - lost - held
+    return max(room, arm_cap) if lost <= 0.0 and held <= 0.0 else room
+
 def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd.Timestamp,
           tick: Tick) -> Literal["sent", "refused", "cap"]:
     """One signal's checks, in order, each refusal journalled with its reason and the arm's share of its pot (the
@@ -813,7 +822,8 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     rooms = {"arm_cap": arm_cap - cost,              # trading-safety LOW: the round trip counts too
              "budget": (ps.total - ps.lost_in(ex) - held_all) if ps.total is not None else 0.0,
              "pot": pot.gbp - ps.lost_in(ex, arm.style) - held_pot,
-             "arm_budget": ps.share.get(arm.arm_id, 0.0) * pot.gbp - ps.lost.get(arm.arm_id, 0.0) - held_arm}
+             "arm_budget": _arm_room(ps.share.get(arm.arm_id, 0.0) * pot.gbp, ps.lost.get(arm.arm_id, 0.0), held_arm,
+                                     arm_cap)}
 
     def binding(at_stop: float) -> str | None:
         return next((k for k, room in rooms.items() if at_stop > room + 1e-9), None)
