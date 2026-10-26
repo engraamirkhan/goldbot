@@ -39,6 +39,7 @@ pins 50k ticks under 1 MB).
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -322,6 +323,57 @@ def write_day(state_dir: str | Path, account: str, day: date, ticks: pd.DataFram
     return rec
 
 
+QUARANTINE_DIR = "quarantine"          # state/quarantine/<dataset>/<account>/: held, never deleted, never read as data
+
+
+def quarantine_dir(state_dir: str | Path, account: str) -> Path:
+    return Path(state_dir) / QUARANTINE_DIR / TICKS_DIR / _label(account)
+
+
+def quarantine_truncated_day(state_dir: str | Path, account: str, day: date | str, *, reason: str, apply: bool,
+                             now: pd.Timestamp) -> str:
+    """Take a recorded day whose ticks stop short of its server day's end (last tick more than TAIL_GAP before it, or
+    none) out of the record, so the next run pulls it again. Idempotent and conservative: a day not in the record, or
+    one that reaches its close, is left alone. With `apply`, the index is backed up first, the file is moved (never
+    deleted: first captures stay reproducible) to state/quarantine/ticks/<account>/ with a manifest line (digest, rows,
+    reason), then the index row is dropped. Returns what it did or would do."""
+    key = _day(day).isoformat()
+    d = account_dir(state_dir, account)
+    days = read_index(state_dir, account)
+    f = d / f"{key}.parquet"
+    rec = days.get(key)
+    if rec is None and not f.exists():
+        return f"{account} {key}: not recorded (already quarantined or never pulled), nothing to do"
+    tz = pq.read_schema(f).metadata.get(b"goldbot.server_tz", b"").decode() if f.exists() else ""
+    if rec is not None and tz:
+        end = server_day_bounds(_day(key), tz)[1]
+        if rec.last_utc is not None and pd.Timestamp(rec.last_utc) >= end - TAIL_GAP:
+            return f"{account} {key}: complete (last tick {pd.Timestamp(rec.last_utc).isoformat()}), kept"
+    what = (f"{account} {key}: {rec.rows if rec else '?'} ticks to "
+            f"{pd.Timestamp(rec.last_utc).isoformat() if rec and rec.last_utc is not None else 'n/a'}")
+    if not apply:
+        return f"would quarantine {what}"
+    q = _private_dir(quarantine_dir(state_dir, account))
+    os.chmod(q.parent.parent, 0o700)
+    stamp = pd.Timestamp(now).strftime("%Y%m%dT%H%M%SZ")
+    idx = d / INDEX_FILE
+    if idx.exists():
+        write_atomic(q / f"index.{stamp}.json", idx.read_text())
+    if f.exists():
+        target = q / f.name if not (q / f.name).exists() else q / f"{key}.{stamp}.parquet"
+        os.replace(f, target)
+        _fsync_dir(d)
+    line = {"server_date": key, "reason": reason, "quarantined_utc": pd.Timestamp(now).isoformat(),
+            "rows": rec.rows if rec else None, "sha256": rec.sha256 if rec else None,
+            "last_utc": pd.Timestamp(rec.last_utc).isoformat() if rec and rec.last_utc is not None else None}
+    with open(q / "manifest.jsonl", "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line, sort_keys=True) + "\n")
+    os.chmod(q / "manifest.jsonl", 0o600)
+    days.pop(key, None)
+    _write_index(d, days)
+    return f"quarantined {what}"
+
+
 def prune(state_dir: str | Path, account: str, keep_from: date) -> list[str]:
     """Delete day files (and their index rows) of server dates before `keep_from`; returns the dates removed."""
     d = account_dir(state_dir, account)
@@ -469,6 +521,6 @@ def check_tick_record(ctx: HealthContext, account_id: str) -> Check:
     return Check(name=name, status="ok", reason=msg)
 
 
-__all__ = ["DayRecord", "Pace", "PullDeferred", "TickIndex", "TruncatedPull", "market_quiet", "INDEX_FILE", "PAGE_TICKS", "account_dir", "check_tick_record", "days_due", "load_day",
+__all__ = ["DayRecord", "Pace", "PullDeferred", "TickIndex", "TruncatedPull", "market_quiet", "quarantine_dir", "quarantine_truncated_day", "INDEX_FILE", "PAGE_TICKS", "account_dir", "check_tick_record", "days_due", "load_day",
            "latest_closed", "prune", "pull_day", "read_index", "record_ticks", "recorded_days", "server_date", "server_day_bounds",
            "write_day"]

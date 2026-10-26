@@ -552,3 +552,46 @@ def test_no_copy_ticks_call_once_the_quiet_window_has_ended(tmp_path, hours):
     assert broker.at and all(tk.market_quiet(t) for t in broker.at)
     assert clock() >= pd.Timestamp("2026-10-18 21:50", tz="UTC") and "market" in out.get("deferred", "")
     assert out["written"] == []
+
+
+# ------------------------------------------------------------------------------------------- repair: truncated days
+def test_a_truncated_day_is_quarantined_once_backed_up_and_pulled_again(tmp_path):
+    s, e = _bounds("2026-10-16")
+    full = synthetic_day(s, e, 6_000)
+    t = pd.Timestamp("2026-10-26 15:00", tz="UTC")
+    tk.write_day(tmp_path, "icm-demo", pd.Timestamp("2026-10-16").date(), full[full["ts_utc"] < s + pd.Timedelta(hours=4)],
+                 symbol="XAUUSD", server_tz=TZ, pulled_utc=t)
+    tk.write_day(tmp_path, "icm-demo", pd.Timestamp("2026-10-15").date(),
+                 synthetic_day(*_bounds("2026-10-15"), 3_000, seed=3), symbol="XAUUSD", server_tz=TZ, pulled_utc=t)
+    d, q = tmp_path / "ticks" / "icm-demo", tk.quarantine_dir(tmp_path, "icm-demo")
+    before = (d / "index.json").read_text()
+    dry = tk.quarantine_truncated_day(tmp_path, "icm-demo", "2026-10-16", reason="r", apply=False, now=t)
+    assert dry.startswith("would quarantine") and (d / "index.json").read_text() == before and not q.exists()
+    assert "kept" in tk.quarantine_truncated_day(tmp_path, "icm-demo", "2026-10-15", reason="r", apply=True, now=t)
+    done = tk.quarantine_truncated_day(tmp_path, "icm-demo", "2026-10-16", reason="short page", apply=True, now=t)
+    assert done.startswith("quarantined") and not (d / "2026-10-16.parquet").exists()
+    assert (q / "2026-10-16.parquet").exists() and json.loads((q / "index.20261026T150000Z.json").read_text()) == json.loads(before)
+    line = json.loads((q / "manifest.jsonl").read_text())
+    assert line["reason"] == "short page" and line["sha256"] and line["rows"] > 0
+    assert stat.S_IMODE(q.stat().st_mode) == 0o700 and stat.S_IMODE((q / "manifest.jsonl").stat().st_mode) == 0o600
+    assert set(tk.read_index(tmp_path, "icm-demo")) == {"2026-10-15"}
+    again = tk.quarantine_truncated_day(tmp_path, "icm-demo", "2026-10-16", reason="r", apply=True, now=t)
+    assert "nothing to do" in again and len((q / "manifest.jsonl").read_text().splitlines()) == 1
+    out = _record(tmp_path, FakeTickBroker(full), backfill_days=1)          # the next run pulls it whole
+    assert out["written"] == ["2026-10-16"] and tk.read_index(tmp_path, "icm-demo")["2026-10-16"].rows == len(full)
+
+
+def test_the_repair_script_is_a_dry_run_by_default_and_idempotent(tmp_path, capsys):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("qtd", Path(__file__).resolve().parents[1] / "scripts" / "quarantine_tick_days.py")
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    s, _ = _bounds("2026-10-16")
+    tk.write_day(tmp_path, "icm-demo", pd.Timestamp("2026-10-16").date(), synthetic_day(s, s + pd.Timedelta(hours=3), 500),
+                 symbol="XAUUSD", server_tz=TZ, pulled_utc=NOW)
+    args = ["--state-dir", str(tmp_path), "--accounts", "icm-demo", "--days", "2026-10-16"]
+    assert mod.main(args) == 0 and "would quarantine" in capsys.readouterr().out
+    assert (tmp_path / "ticks" / "icm-demo" / "2026-10-16.parquet").exists()
+    assert mod.main([*args, "--apply"]) == 0 and "quarantined icm-demo 2026-10-16" in capsys.readouterr().out
+    assert mod.main([*args, "--apply"]) == 0 and "nothing to do" in capsys.readouterr().out
