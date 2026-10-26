@@ -17,7 +17,7 @@ import pandas as pd
 from goldbot.data.resample import mid
 from goldbot.data.timeutil import epoch_ns, utc_index
 from goldbot.features.technical import atr
-from goldbot.research.arms import Arm, local_window
+from goldbot.research.arms import CLOCK_BOX_RULES, Arm, local_window
 
 SEED_PREFIX = "goldbot-arms-2026-10-25"
 GBP_PER_USD = 0.752
@@ -369,11 +369,17 @@ def specialist(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     return specialist_rule(arm, ctx)
 
 
+def clock_box(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
+    """Wave 2 lane W2d: WFRI, KA15/XC15 and the H-80 box family (`goldbot.research.arm_rules_clock_box`)."""
+    from goldbot.research.arm_rules_clock_box import RULE_FUNCS as CLOCK_BOX
+    return CLOCK_BOX[arm.rule](arm, ctx)
+
+
 RULE_FUNCS: dict[str, Callable[[Arm, RuleContext], pd.DataFrame]] = {
     "random_bracket": random_bracket, "session_vwap_fade": session_vwap_fade,
     "opening_range_break": opening_range_break, "sweep_absorb": sweep_absorb_rule,
     "box_break_close": box_break_close_rule, "ema_pullback": ema_pullback, "tsmom": tsmom_rule,
-    "specialist": specialist,
+    "specialist": specialist, **dict.fromkeys(CLOCK_BOX_RULES, clock_box),
 }
 
 
