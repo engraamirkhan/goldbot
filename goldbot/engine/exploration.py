@@ -574,15 +574,53 @@ def shares(ex: Exploration, now: pd.Timestamp) -> dict[str, float]:
 def realised(eng: Engine, ex: Exploration, since: pd.Timestamp) -> dict[str, float]:
     """arm id -> today's realised loss (>= 0, net of the arm's profits): every arm with a trade closed since `since`,
     at 0 when it is flat or up (so the keys are the arms that have traded today, `_arm_room`'s first trade). A row
-    closed with no P&L counts at its loss at the stop plus its cost. Raises when the ledger cannot be read (the caller refuses: fail closed)."""
+    closed with no P&L counts at its loss at the stop plus its cost. A close whose record is not in the ledger yet
+    (`unrecorded`: queued by the reconcile's sweep or a bar close's exit, which are written after `on_pass`; a write
+    being retried; or given up as lost) counts the same way, never optimistically, until its record lands (then from
+    the ledger only: no double count) (trading-safety HIGH 2026-10-26). Raises when the ledger cannot be read (the
+    caller refuses: fail closed)."""
+    pending = unrecorded(eng, since)
     with ex.db.connection() as conn:
         rows = LEDGER.select(conn, "account_id = ? AND closed = 1 AND exit_ns >= ?",
                              (eng.cfg.account_id, _ns(since)))
+        marks = ",".join("?" * len(pending))
+        mine = LEDGER.select(conn, f"account_id = ? AND position_id IN ({marks})",
+                             (eng.cfg.account_id, *pending)) if pending else []
     pnl: dict[str, float] = {}
     for r in rows:
         v = r.pnl if r.pnl is not None else -((r.stop_loss or 0.0) + (r.cost or 0.0))
         pnl[r.arm_id] = pnl.get(r.arm_id, 0.0) + v
+    done = {r.position_id for r in mine if r.exit_utc is not None}
+    sent = {r.position_id: r for r in mine if r.exit_utc is None}
+    for pid, arm_id in pending.items():
+        if pid in done:
+            continue                            # its record is in the ledger: counted from there (or not today)
+        row = sent.get(pid)
+        if row is not None and row.stop_loss is not None and row.cost is not None:
+            arm_id, v = row.arm_id, row.stop_loss + row.cost
+        elif arm_id is not None and arm_id in eng.gate.limits.exploration_arms:
+            v = eng.gate.limits.exploration_arms[arm_id]     # its per-trade cap bounds its loss at the stop + cost
+        else:
+            raise ValueError(f"the loss of unrecorded exploration position {pid} is unknown")
+        pnl[arm_id] = pnl.get(arm_id, 0.0) - v
     return {a: max(0.0, -v) for a, v in pnl.items()}
+
+
+def unrecorded(eng: Engine, since: pd.Timestamp) -> dict[int, str | None]:
+    """position id -> arm id (None when only the id is known) of every exploration close not recorded yet: queued
+    (`Engine._closes`, closed since `since`), given up as lost in this process (`_throttle_lost`, the same), and lost
+    in an earlier process (`_records_lost`, only the id persists; counted whatever its close time, which is not
+    known: health already fails on it, and a repaired record ends it)."""
+    out: dict[int, str | None] = {}
+    known: set[int] = set()
+    for c in [*eng._closes, *eng._throttle_lost]:
+        known.add(c.position_id)
+        if is_exploration(c.trade.agent_id) and c.position_id not in eng._recorded and c.at >= since:
+            out[c.position_id] = c.trade.agent_id.removeprefix(PREFIX)
+    for pid in eng._records_lost:
+        if pid not in known and pid not in eng._recorded:
+            out[pid] = None
+    return out
 
 
 def drawdown(eng: Engine) -> float | None:

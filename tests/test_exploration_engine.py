@@ -208,6 +208,99 @@ def test_the_first_trade_rule_admits_one_trade_a_day_even_when_that_trade_closed
     assert [d["action"] for d in _actions(eng, "exploration_refused:")] == ["exploration_refused:arm_budget"]
 
 
+def _stopped_at_the_broker(eng: Engine, pb: PaperBroker) -> int:
+    """The arm's one position hits its stop at the broker; the 30 s reconcile's `sweep` queues its record (not yet
+    written: the tick's records are flushed after `on_pass`)."""
+    [pid] = list(eng.open)
+    sl = eng.open[pid].sl
+    assert sl is not None
+    pb.on_tick(Tick(ts_utc=CLOSE + pd.Timedelta(seconds=40), bid=sl - 1.0, ask=sl - 0.8))
+    exploration.sweep(eng, {p.position_id for p in pb.positions()})
+    assert pid not in eng.open and [c.position_id for c in eng._closes] == [pid]
+    return pid
+
+
+def _fresh_arm(tmp_path: Path, **kw: Any) -> tuple[Engine, PaperBroker]:
+    """An arm whose share (£0.48) is below one trade: only the first-trade rule lets it trade."""
+    return _engine(tmp_path, [_arm("a", control_share=0.01)], pots={"intraday": Pot(gbp=48.0, max_open=5)},
+                   caps={"a": 17.0}, **kw)
+
+
+def test_a_close_swept_in_the_same_tick_spends_the_arms_first_trade_before_its_record_is_written(tmp_path):
+    """Trading-safety HIGH (2026-10-26): the reconcile's sweep queues the close and the record is written after
+    `on_pass`, so the signal in that tick saw the arm flat with nothing in the ledger and fresh again (PR #186)."""
+    eng, pb = _fresh_arm(tmp_path)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    _stopped_at_the_broker(eng, pb)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE + pd.Timedelta(minutes=15)))
+    assert len(_sent(eng)) == 1 and not eng.open
+    assert [d["action"] for d in _actions(eng, "exploration_refused:")] == ["exploration_refused:arm_budget"]
+
+
+def test_a_close_queued_before_on_pass_on_the_bar_close_path_counts_its_loss_against_the_budget(tmp_path):
+    """The bar close's exits (`_manage_open`) queue their records before `on_pass` too. The queued close counts at
+    its loss at the stop plus its cost (£2 here) until its record lands: with £1 open, a day of £2.50 has no room."""
+    eng, pb = _engine(tmp_path, [_arm("a"), _arm("b", side=-1, style="scalp")], budget_share=2.5 / 200)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert len(_sent(eng)) == 2
+    [pid] = [p for p, t in eng.open.items() if t.agent_id == "explore:b"]
+    eng._try_close(pid, "time_exit", CLOSE)
+    assert [c.position_id for c in eng._closes] == [pid]
+    exploration.on_pass(eng, _at(eng, pb, CLOSE + pd.Timedelta(minutes=15)))
+    assert len(_sent(eng)) == 2
+    assert {d["action"] for d in _actions(eng, "exploration_refused:")} == {"exploration_refused:budget"}
+
+
+def test_a_record_that_failed_to_write_or_was_lost_keeps_counting_after_a_restart(tmp_path, monkeypatch):
+    """A record write that fails is retried for `closed_record_retries` attempts and then reported lost; the close
+    counts (at its loss at the stop plus its cost) the whole time, and after a restart from its id alone."""
+    eng, pb = _fresh_arm(tmp_path)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    pid = _stopped_at_the_broker(eng, pb)
+
+    def fail(*a: Any, **k: Any) -> None:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(eng, "_record_closed", fail)
+    eng._flush_closed()
+    exploration.on_pass(eng, _at(eng, pb, CLOSE + pd.Timedelta(minutes=15)))          # retrying: still counted
+    for _ in range(eng.cfg.closed_record_retries):
+        for c in eng._closes:
+            c.next_try = None
+        eng._flush_closed()
+    assert eng._records_lost == [pid] and not eng._closes
+    now = CLOSE + pd.Timedelta(minutes=30)
+    assert eng.exploration is not None
+    assert exploration._Pass(eng, eng.exploration, now).lost == {"a": pytest.approx(2 * LOSS)}   # lost: counted
+    eng._save_orders()
+    eng2, _ = _fresh_arm(tmp_path, pb=pb)
+    assert eng2._records_lost == [pid] and not eng2._throttle_lost
+    exploration.on_pass(eng2, _at(eng2, pb, now))                                    # restarted: from its id
+    assert len(_sent(eng)) == 1 and not _sent(eng2) and not eng.open and not eng2.open
+    refused = _actions(eng, "exploration_refused:") + _actions(eng2, "exploration_refused:")
+    assert [d["action"] for d in refused] == ["exploration_refused:arm_budget"] * 2
+
+
+def test_a_queued_close_is_counted_once_when_its_record_is_already_in_the_ledger(tmp_path):
+    """No double count: a close whose record is in the ledger counts from the ledger only, queued or not."""
+    eng, pb = _fresh_arm(tmp_path)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    pid = _stopped_at_the_broker(eng, pb)
+    now = CLOSE + pd.Timedelta(minutes=15)
+    _at(eng, pb, now)
+    assert eng.exploration is not None
+    queued = exploration._Pass(eng, eng.exploration, now).lost
+    [c] = eng._closes
+    exploration.record_close(eng, pid, c.trade, c.reason, c.price, c.at)              # written, still queued
+    eng._recorded.discard(pid)
+    written = exploration._Pass(eng, eng.exploration, now).lost
+    eng._flush_closed()
+    flushed = exploration._Pass(eng, eng.exploration, now).lost
+    ledger = exploration.realised(eng, eng.exploration, now.floor("D"))
+    assert queued == {"a": pytest.approx(2 * LOSS)}                                   # stop + cost, before the record
+    assert written == flushed == ledger and set(ledger) == {"a"}
+
+
 def test_an_exhausted_pot_refuses_the_next_entry_whatever_the_arms_shares_say(tmp_path, monkeypatch):
     """The arms' shares fit the pot by construction; the pot is the backstop when they do not (shares that moved
     during the day, a reader that over-allocates): realised + open + new <= the pot's £."""
