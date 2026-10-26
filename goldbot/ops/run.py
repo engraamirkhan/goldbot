@@ -43,6 +43,9 @@
   python -m goldbot.ops.run ledger add|query|resume|export|sync|ingest|import [--state DIR]
                                                          # program ledger (state/program.db): append-only decisions,
                                                          # knowledge, hand-backs; export writes public rows to docs/ledger
+  python -m goldbot.ops.run repair-lost-record <account> [--state DIR] [--position ID ...] [--dry-run]
+                                                         # engine stopped: lost exploration records written from the
+                                                         # broker's deals, dropped from the engine's lost list
 """
 # The services live in goldbot/ops/services/ and the commands in goldbot/ops/commands/ (registry.py), one module each,
 # so lanes stop colliding on this file. This module stays the public surface: it re-exports every name it always had,

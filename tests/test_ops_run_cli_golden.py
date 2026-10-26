@@ -42,7 +42,7 @@ WRITE = os.environ.get("GOLDBOT_WRITE_RUN_GOLDEN") == "1"
 HELP_COMMANDS = ("record-gate", "gates", "gate-evidence", "publish-costs", "restore", "setup", "preflight",
                  "revoke-sessions", "owner-history", "health", "positions", "shadow-report", "fill-count", "ruin", "monthly-report", "perf-report",
                  "sizing-feasibility", "drift-review", "bridge-smoke", "tv-import", "tv-repaint-check", "tv-pull", "ledger",
-                 "daily-review")
+                 "daily-review", "repair-lost-record")
 
 # every command the dispatcher knows, with sample arguments (the trace stops before anything runs)
 DISPATCH: dict[str, list[str]] = {
@@ -82,6 +82,7 @@ DISPATCH: dict[str, list[str]] = {
     "tv-pull": ["tv-pull", "status"],
     "ledger": ["ledger", "resume"],
     "daily-review": ["daily-review", "--dry-run", "--date", "2026-10-22"],
+    "repair-lost-record": ["repair-lost-record", "icm-probe", "--dry-run"],
     "bridge-smoke": ["bridge-smoke", "icm-demo"],
     "no-command": [],
     "help": ["--help"],
@@ -167,6 +168,7 @@ def _entry_functions() -> dict[tuple[str, int, str], str]:
         monthly_report,
         perf_report,
         preflight,
+        repair_records,
         setup_wizard,
         smoke,
     )
@@ -180,7 +182,8 @@ def _entry_functions() -> dict[tuple[str, int, str], str]:
         add(getattr(run_mod, name), f"goldbot.ops.run:{name}")
     for fn in (gates_phase.main, gates_phase.evidence_main, backup.main, setup_wizard.main, preflight.main,
                auth.revoke_sessions_cli, mailer.main, owner_history.main, health.main, ruin.main, monthly_report.main,
-               perf_report.main, min_lot.main, smoke.main, tv_csv.main, tv_repaint.main, daily_review.main):
+               perf_report.main, min_lot.main, smoke.main, tv_csv.main, tv_repaint.main, daily_review.main,
+               repair_records.main):
         add(fn, f"{fn.__module__}:{fn.__qualname__}")
     return out
 
@@ -278,6 +281,7 @@ ONE_SHOT: dict[str, tuple[str, str]] = {
     "ledger": ("goldbot.ledger.cli", "main"),
     "tv-pull": ("goldbot.data.tv_pull", "main"),             # `follow` loops, but exits with main()'s value
     "daily-review": ("goldbot.research.daily_review", "main"),
+    "repair-lost-record": ("goldbot.ops.repair_records", "main"),
 }
 # Services are exempt from the exit-code rule: each loops forever (supervisor, engine, scheduler, telegram, news) or
 # serves until stopped (api and webhook under uvicorn, bridge under serve), and the dispatcher never passed a return

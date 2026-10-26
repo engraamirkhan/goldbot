@@ -1851,6 +1851,25 @@ Health WARN "order(s) not confirmed by the broker" (BACKLOG 72): on the MT5 box,
 XAUUSD position with the engine's comment and in History for its deals; if it is open without a stop, set the stop the
 notice names. The engine keeps looking and refuses new entries until it settles; the WARN clears by itself.
 
+### Closed-trade record lost (`closed_records_lost`)
+
+Health FAILs when a closed trade's record could not be written after its retries. An exploration close that is lost
+counts against its arm's budget on its own day. After that day the arm counts as already traded (no first trade)
+until the record is written, and the journal says `exploration_blocked_lost_record` once a day. Claude runs the repair
+on the brain:
+
+```bash
+sudo systemctl stop goldbot-engine@icm-probe      # the engine only: keep the supervisor (bridge) running
+python -m goldbot.ops.run repair-lost-record icm-probe --dry-run   # what it would write
+python -m goldbot.ops.run repair-lost-record icm-probe             # writes the records, clears the lost list
+sudo systemctl start goldbot-engine@icm-probe
+```
+
+It writes each record from the broker's deals, marked `censored`. It names the ones it leaves: `not_exploration` (a
+strategy's or cost probe's record, written by hand from the MT5 History), `no_exit_deal` and `deals_unreadable`
+(try again later). It never places or closes an order. Exit codes: 0 = all repaired, 1 = some left, 2 = refused
+(the engine is running, the account is unknown, or there is no bridge endpoint).
+
 ### Outside alert (dead man's switch)
 
 Telegram alerts come from the brain itself, so a dead brain cannot report itself. A free check on Healthchecks.io

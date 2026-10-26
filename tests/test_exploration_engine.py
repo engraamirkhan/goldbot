@@ -281,6 +281,61 @@ def test_a_record_that_failed_to_write_or_was_lost_keeps_counting_after_a_restar
     assert [d["action"] for d in refused] == ["exploration_refused:arm_budget"] * 2
 
 
+def _lost(eng: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every queued record fails to write until it is given up as lost."""
+    def fail(*a: Any, **k: Any) -> None:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(eng, "_record_closed", fail)
+    for _ in range(eng.cfg.closed_record_retries):
+        for c in eng._closes:
+            c.next_try = None
+        eng._flush_closed()
+    assert not eng._closes
+
+
+def test_a_lost_record_of_a_strategy_or_probe_trade_never_blocks_exploration(tmp_path):
+    """Trading-safety MEDIUM (2026-10-26): `_records_lost` lists every trade's lost record. An id with no exploration
+    ledger row is not exploration's to count; it used to make the pass raise, stopping exploration for good."""
+    eng, pb = _fresh_arm(tmp_path)
+    eng._records_lost = [987654]
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert len(_sent(eng)) == 1 and not _actions(eng, "exploration_refused:")
+    assert not _actions(eng, "exploration_blocked_lost_record")
+
+
+def test_a_lost_exploration_close_counts_on_its_own_day_only_and_keeps_the_arm_spent_after_it(tmp_path, monkeypatch):
+    """Its loss counts on the day it closed (sent + hold_s on or after the day's start when only its id survives); on
+    later days the arm stays a key at 0 (no daily re-charge of the budgets, and not fresh: its share binds until the
+    record is repaired). A lost exploration record that holds an arm is journalled once a day."""
+    eng, pb = _fresh_arm(tmp_path)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    [rec] = exploration.trades(str(tmp_path))
+    with exploration.ledger_db(str(tmp_path)).write() as conn:       # sent on the host clock: the tick's, as live
+        exploration.LEDGER.upsert(conn, rec.model_copy(update={"sent_utc": CLOSE + pd.Timedelta(seconds=2)}))
+    pid = _stopped_at_the_broker(eng, pb)
+    _lost(eng, monkeypatch)
+    assert eng.exploration is not None
+    wed = CLOSE + pd.Timedelta(days=1)
+    eng._last_reset = None                                  # the day's start is the risk day's reset, else midnight
+    assert exploration._Pass(eng, eng.exploration, CLOSE).lost == {"a": pytest.approx(2 * LOSS)}
+    assert exploration._Pass(eng, eng.exploration, wed).lost == {"a": 0.0}          # this process: its close time
+    eng._save_orders()
+    eng2, _ = _fresh_arm(tmp_path, pb=pb)
+    assert eng2.exploration is not None
+    eng2._last_reset = None
+    assert exploration._Pass(eng2, eng2.exploration, CLOSE).lost == {"a": pytest.approx(2 * LOSS)}   # by its id
+    ps = exploration._Pass(eng2, eng2.exploration, wed)
+    assert ps.lost == {"a": 0.0} and ps.lost_in(eng2.exploration) == 0.0
+    for k in range(2):
+        exploration.on_pass(eng2, _at(eng2, pb, wed + pd.Timedelta(minutes=15 * k)))
+    assert not _sent(eng2)
+    assert [d["action"] for d in _actions(eng2, "exploration_refused:")] == ["exploration_refused:arm_budget"] * 2
+    blocked = _actions(eng2, "exploration_blocked_lost_record")                     # Tuesday's and Wednesday's
+    assert [(d["position"], d["arm"], d["ts"][:10]) for d in blocked] == [(pid, "a", "2025-03-04"),
+                                                                          (pid, "a", "2025-03-05")]
+
+
 def test_a_queued_close_is_counted_once_when_its_record_is_already_in_the_ledger(tmp_path):
     """No double count: a close whose record is in the ledger counts from the ledger only, queued or not."""
     eng, pb = _fresh_arm(tmp_path)
