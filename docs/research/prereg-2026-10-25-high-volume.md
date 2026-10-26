@@ -38,7 +38,7 @@ Tighten-only layers before the RiskGate; RiskGate unchanged. Each pot counts tod
   across ~24 arms, but scalp volume is now bounded by the £50 scalp pot (ADR 0043) and the 10-open sub-cap, so expect the low end
   of the range until measured. Volume is a capacity, not a quota; no threshold is loosened.
 
-## H-60: historical arm priors (0 trials; K_eff + 24, once; K ~116 -> ~140)
+## H-60: historical arm priors (0 trials; K_eff + 24, once; K ~116 -> ~140; reruns +1 to K each)
 **Data:** data-v1 Dukascopy 1m, 2015-01-01..2025-09-30. Holdout never read. Run as a GitHub Actions matrix, arm x
 2-year block (E10), same rule code as live, reusing `goldbot/research/walkforward.py` and `cpcv.py`.
 
@@ -158,3 +158,42 @@ believed.
   competes with intraday and swing for the same £198. Re-check the sub-budgets after week 1 from measured rates
   (amendment before use).
 - Swing per-trade cap raise on `icm-probe` needs the trading-safety-reviewer before the first W fill.
+
+## Amendment 1 — 2026-10-26, before any live exploration fill is read
+Written before any live exploration fill is read and before any job below runs. Nothing above is loosened.
+
+**(a) H-60 prior scenario and wiring.** The prior uses the stop-overshoot **$0.70** scenario (conservative), not the
+central one, for every arm. S0 null
+audit passed (e5ea02e1, docs/research/s0-null-audit.md): gross -0.0026R, se 0.0019. Priors are wired as relative
+allocation weights only. The open items in that note are tracked as follow-ups.
+
+**(b) Box break+close feature-first screen (new, counted in K).** Data and holdout rules as H-60 (data-v1, 2015-01-01..
+2025-09-30, holdout never read, current cost era, $0.70 overshoot, fixed 0.01 lot). Rule: owner box break+close, no MFI
+filter, fixed 1R target-free read. The 24-bar time exit is the ONLY primary read per cell; the 1R/2R brackets are
+descriptive, reported separately, and never "of interest".
+Grid: timeframe {15m, 30m, 1h, 4h} x box stop size / ATR(14) of the same timeframe in buckets {<0.5, 0.5-1.0, 1.0-1.5,
+>1.5} = 16 cells, defined now and not edited. Output per cell: n, gross mean R, day-clustered t, per-year table.
+**Reading rule (fixed now):** a cell is "of interest" only if gross mean R > 0, day-clustered t >= 3.41 (frozen; K up to
+~156), positive in >= 70% of years, and n >= 300. Per-year positive counts use only years with n >= 20 (other years
+are excluded from the 70%). Overlapping trades are collapsed per day before the day-clustered t. Of-interest cells are hypotheses for a separate pre-registered
+net test, never promoted from this screen. Zero cells passing is reported as such. K: +16 trials, clustered via `k_eff`,
+stated here (K ~140 -> up to ~156).
+
+**(c) Exits check for 1h and 4h box trades (new, counted in K).** Same trades as (b) for 1h and 4h only, all stop
+buckets pooled and per bucket. Output: MFE distribution in R (quantiles 10/25/50/75/90, share reaching 1R, 2R, 3R), and
+total R for **trailing** (chandelier = highest high since entry - 3 x ATR(14), active once +1R is reached) versus **fixed 2R** target, same stop and time cap.
+**Reading rule (fixed now):** trailing is preferred only if its mean R exceeds fixed 2R by > 0 with a paired
+day-clustered t >= 2.0 in both 1h and 4h and in >= 70% of years; otherwise fixed 2R stays. A MFE median < 1R is reported
+as evidence against any box exit change. 2 timeframes x 2 exit rules = 4 comparisons, K +4 (clustered), K up to ~160.
+Only pooled per-timeframe results decide; per-bucket results are descriptive. Run (c) only if (b) has at least one
+of-interest 1h or 4h cell; otherwise skip it and do not charge K +4.
+No live parameter changes from this check without a further amendment.
+
+**(d) PD recommendation (recorded, not a decision of the research director).** Box break+close stays **demo-only for
+learning**, with **no real-money weight**, whatever (b) and (c) show, until a separate pre-registered net test and the
+usual graduation gates pass.
+
+**(e) Pending proposal, not in force.** The research director proposes amending **ADR 0043** to allow **one** W1B
+(tsmom 1d, stop ~ £99) trade up to **£110** funded from the scalp pot. Status: **pending CFO and trading-safety-reviewer
+decisions**; until both are recorded, the ADR 0043 caps (swing per-trade cap, sub-budgets) apply unchanged and no such
+trade is placed.
