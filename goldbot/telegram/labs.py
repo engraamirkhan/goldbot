@@ -26,10 +26,10 @@ import logging
 import math
 import re
 import sqlite3
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import pandas as pd
 from pydantic import Field
@@ -332,13 +332,16 @@ def _arm_order() -> list[str]:
         return []
 
 
-def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str], *,
-                 until: pd.Timestamp | None = None) -> list[ArmStatus]:
+def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str], *, until: pd.Timestamp | None = None,
+                 store: Any = None, now: pd.Timestamp | None = None,
+                 held_out: Collection[str] | None = None) -> list[ArmStatus]:
     """Every arm with an admissible trade on `accounts`, in the frozen spec's order (unknown arms after, by id): its
     n toward READ_AT and its H-61 stop band from the running net R in exit order over the stop's first trades.
     `until`: only closes before it (the daily review reads a day point in time). Prereg Amendment 4: a trade void as
     evidence (aux.db `evidence_exclusions`) is left out of n (the read and graduation) but "still counts toward H-61
-    stops and P&L", so the band and `stop_at` use every admissible trade."""
+    stops and P&L", so the band and `stop_at` use every admissible trade. While a quarantine span has no recorded
+    engine restart its decisions are held out of n in memory (`held_out`; computed from `store`, else the settings'
+    data root, when not given)."""
     from goldbot.research.evidence_exclusions import excluded
     if not accounts:
         return []
@@ -353,7 +356,7 @@ def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str], *,
             by_arm.setdefault(t.arm_id, []).append(t)
     order = {a: i for i, a in enumerate(_arm_order())}
     spec_controls = control_arm_ids()
-    void = excluded(conn, "n")
+    void = excluded(conn, "n") | set(held_out if held_out is not None else _held_out(conn, accounts, store, now))
     out = []
     for arm in sorted(by_arm, key=lambda a: (order.get(a, len(order)), a)):
         rows = by_arm[arm]
@@ -375,6 +378,28 @@ def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str], *,
         out.append(ArmStatus(arm_id=arm, account_id=rows[0].account_id, control=control, n=n, band=band,
                              stop_at=stop_at, stop_utc=stop_utc, stop_r=at_r))
     return out
+
+
+def _held_out(conn: sqlite3.Connection, accounts: Sequence[str], store: Any, now: pd.Timestamp | None) -> set[str]:
+    """The candidates of `accounts` held out of n while a quarantine span has no recorded engine restart. Reporting
+    only: a store that cannot be opened holds nothing out (the count is the ledger's, as before)."""
+    from goldbot.research.evidence_exclusions import held_out_in
+    marks = ",".join("?" * len(accounts))
+    hosts = {str(a): str(b) for a, b in conn.execute(
+        f"SELECT DISTINCT account_id, broker FROM exploration_obs WHERE account_id IN ({marks}) AND broker IS NOT NULL",
+        tuple(accounts))}
+    if not hosts:
+        return set()
+    try:
+        if store is None:
+            from goldbot.config import load_settings
+            from goldbot.data.store import Store
+            store = Store(load_settings().data_root)
+        return held_out_in(conn, store, hosts, symbol="XAUUSD",
+                           now=now if now is not None else pd.Timestamp.now("UTC"))
+    except Exception as exc:                # noqa: BLE001 - a report never fails on the store
+        log.warning("quarantine spans unreadable for the arms' n (%s)", type(exc).__name__)
+        return set()
 
 
 def arms_lines(arms: Sequence[ArmStatus], width: int, lo: pd.Timestamp, hi: pd.Timestamp) -> list[str]:

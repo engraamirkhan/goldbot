@@ -121,14 +121,27 @@ def decide(*, candidates: pd.DataFrame, probes: Sequence[Any], spans_by_account:
 
 
 def held_out(candidates: pd.DataFrame, spans_by_account: Mapping[str, Sequence[Span]], reloads: Reloads) -> set[str]:
-    """In memory only: the candidates decided at or after the start of a span whose R is not recorded yet."""
+    """In memory only, for a span whose R is not recorded yet: the candidates decided at or after its start, and those
+    whose label path [entry, label exit] overlaps it (C is not known either, so any such label is held out)."""
     out: set[str] = set()
     for r in candidates.to_dict("records"):
         acct = str(r["account_id"])
-        if any((acct, s[2]) not in reloads and pd.Timestamp(r["decision_utc"]) >= s[0]
+        dec, exit_ = pd.Timestamp(r["decision_utc"]), _ts(r.get("label_exit_utc"))
+        entry = _ts(r.get("entry_utc")) or dec
+        if any((acct, s[2]) not in reloads and (dec >= s[0] or (exit_ is not None and entry < s[1] and exit_ >= s[0]))
                for s in spans_by_account.get(acct, ())):
             out.add(str(r["candidate_id"]))
     return out
+
+
+def held_out_in(conn: sqlite3.Connection, store: Any, hosts: Mapping[str, str], *, symbol: str,
+                now: pd.Timestamp) -> set[str]:
+    """`held_out` for a read-only reader (labs n): the spans of `hosts` with no recorded R, from `conn`."""
+    spans = spans_of(store, hosts, symbol=symbol, now=now)
+    if not spans:
+        return set()
+    rel = _reloads(conn)
+    return held_out(_candidates(conn, sorted(spans)), spans, rel)
 
 
 def unresolved(spans_by_account: Mapping[str, Sequence[Span]], reloads: Reloads) -> list[str]:
@@ -152,12 +165,34 @@ def record_reload(db: Database, *, account_id: str, span: str, corrected: pd.Tim
 
 def reloads(db: Database) -> dict[tuple[str, str], tuple[pd.Timestamp, pd.Timestamp]]:
     with db.connection() as conn:
-        try:
-            rows = conn.execute(f"SELECT account_id, span_ref, corrected_ns, reloaded_ns FROM {RELOADS}").fetchall()  # noqa: S608
-        except sqlite3.OperationalError:
-            return {}
+        return _reloads(conn)
+
+
+def _reloads(conn: sqlite3.Connection) -> dict[tuple[str, str], tuple[pd.Timestamp, pd.Timestamp]]:
+    try:
+        rows = conn.execute(f"SELECT account_id, span_ref, corrected_ns, reloaded_ns FROM {RELOADS}").fetchall()  # noqa: S608
+    except sqlite3.OperationalError:            # an older aux.db opened read-only: nothing recorded
+        return {}
     return {(str(a), str(s)): (pd.Timestamp(c, unit="ns", tz="UTC"), pd.Timestamp(r, unit="ns", tz="UTC"))
             for a, s, c, r in rows}
+
+
+def _candidates(conn: sqlite3.Connection, accts: Sequence[str]) -> pd.DataFrame:
+    """Every exploration candidate of `accts` with its decision, entry, label exit and label time, and every trade
+    with no candidate row (its signal as the decision)."""
+    from goldbot.engine.exploration import LEDGER
+    marks = ",".join("?" * len(accts))
+    obs = pd.read_sql_query("SELECT candidate_id, account_id, decision_ns, entry_ns, label_exit_ns, labelled_ns "  # noqa: S608
+                            f"FROM exploration_obs WHERE account_id IN ({marks})", conn, params=list(accts))
+    trades = LEDGER.select(conn, f"account_id IN ({marks})", tuple(accts))
+    for col in ("decision", "entry", "label_exit", "labelled"):
+        obs[f"{col}_utc"] = pd.to_datetime(pd.to_numeric(obs.pop(f"{col}_ns"), errors="coerce"), unit="ns", utc=True)
+    seen = set(obs["candidate_id"])
+    extra = pd.DataFrame([{"candidate_id": t.client_order_id, "account_id": t.account_id,
+                           "decision_utc": t.signal_utc, "entry_utc": None, "label_exit_utc": None,
+                           "labelled_utc": None} for t in trades if t.client_order_id not in seen],
+                         columns=list(obs.columns))
+    return pd.concat([obs, extra], ignore_index=True) if not extra.empty else obs
 
 
 def record(db: Database, rows: Iterable[Exclusion]) -> int:
@@ -208,26 +243,15 @@ def screen(db: Database, store: Any, *, hosts: Mapping[str, str], symbol: str, n
     broker), with the (C, R) recorded in aux.db (and `planned` ones, for a dry run). Reads ids, accounts and times
     only (never an R multiple or a P&L)."""
     from goldbot.engine import cost_probe
-    from goldbot.engine.exploration import LEDGER
     spans = spans_of(store, hosts, symbol=symbol, now=now)
     if not spans:
         return Screen()
-    rel = {**reloads(db), **(planned or {})}
     accts = sorted(spans)
     marks = ",".join("?" * len(accts))
     with db.connection() as conn:
-        obs = pd.read_sql_query("SELECT candidate_id, account_id, decision_ns, entry_ns, label_exit_ns, labelled_ns "  # noqa: S608
-                                f"FROM exploration_obs WHERE account_id IN ({marks})", conn, params=accts)
-        trades = LEDGER.select(conn, f"account_id IN ({marks})", tuple(accts))
+        rel = {**_reloads(conn), **(planned or {})}
+        cands = _candidates(conn, accts)
         probes = cost_probe.LEDGER.select(conn, f"account_id IN ({marks})", tuple(accts))
-    for col in ("decision", "entry", "label_exit", "labelled"):
-        obs[f"{col}_utc"] = pd.to_datetime(pd.to_numeric(obs.pop(f"{col}_ns"), errors="coerce"), unit="ns", utc=True)
-    seen = set(obs["candidate_id"])
-    extra = pd.DataFrame([{"candidate_id": t.client_order_id, "account_id": t.account_id,
-                           "decision_utc": t.signal_utc, "entry_utc": None, "label_exit_utc": None,
-                           "labelled_utc": None} for t in trades if t.client_order_id not in seen],
-                         columns=list(obs.columns))
-    cands = pd.concat([obs, extra], ignore_index=True) if not extra.empty else obs
     return Screen(exclusions=tuple(decide(candidates=cands, probes=probes, spans_by_account=spans, reloads=rel,
                                           now=now, reason=reason)),
                   held_out=frozenset(held_out(cands, spans, rel)), unresolved=tuple(unresolved(spans, rel)))
@@ -246,5 +270,5 @@ def counts(conn: sqlite3.Connection, accounts: Sequence[str], lo: pd.Timestamp, 
 
 
 __all__ = ["CRITERION_VERSION", "EXPLORATION_SCOPE", "PROBE_SCOPE", "SCOPES", "Exclusion", "Screen", "counts",
-           "decide", "excluded", "excluded_ids", "held_out", "record", "record_reload", "recorded_spans", "reloads",
+           "decide", "excluded", "excluded_ids", "held_out", "held_out_in", "record", "record_reload", "recorded_spans", "reloads",
            "screen", "span_ref", "spans_of", "unresolved"]
