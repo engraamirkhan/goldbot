@@ -31,6 +31,9 @@
     engine minute before the gap and the one after it are partial, so their closes are not compared (edge_excluded,
     at most one each side; a one-minute gap is no edge, so a flapping feed is still compared). edge_excluded /
     matched above EDGE_WARN (5%) is a "warning", above EDGE_ERROR (20%) an "error".
+  - Quarantined spans (goldbot/data/quarantine.py: rows moved out of the store after the fact, e.g. ticks stamped
+    with the wrong server clock) are left out of both feeds and the engine's runs, and counted as
+    `quarantined_minutes`: a known, quarantined window is reported, not graded.
   - Fewer than MIN_COMPARED compared minutes cap a divergence or edge "error" at "warning".
   - Coverage: missing_engine above WARN_FRACTION of the broker minutes is a "warning" (the engine was stopped), an
     "error" when the engine was up (the loop heartbeat's runs of the window, `runs` and the current `started` to its
@@ -120,6 +123,7 @@ class ReconcileReport(Record):
     spikes_unconfirmed: int = 0            # ... of which the other feed shows no matching move (kept as warnings)
     note: str = ""
     edge_excluded: int = 0                 # partial minutes either side of an engine gap (>= 2 minutes), not compared
+    quarantined_minutes: int = 0           # broker minutes inside quarantined spans (data/quarantine.py), not compared
     up_minutes: int = 0                    # broker minutes inside the engine's current run (loop heartbeat)
     missing_engine_up: int = 0             # ... of which the engine has no bar (a stalled feed, not a stop)
     close_lag: int = 0                     # closes off the broker's by > tolerance but inside its range (sampling lag)
@@ -202,7 +206,8 @@ def grade(*, broker_minutes: int, engine_minutes: int, matched: int, edge_exclud
 
 def reconcile(engine: pd.DataFrame, broker: pd.DataFrame, *, start: pd.Timestamp, end: pd.Timestamp,
               tolerance: float, sessions: SessionTable = DEFAULT_SESSIONS,
-              engine_up: list[tuple[pd.Timestamp, pd.Timestamp]] | None = None) -> dict[str, Any]:
+              engine_up: list[tuple[pd.Timestamp, pd.Timestamp]] | None = None,
+              quarantined: list[tuple[pd.Timestamp, pd.Timestamp]] | None = None) -> dict[str, Any]:
     """Minute-by-minute comparison over in-session minutes in [start, end) (see the module docstring). `engine_up`:
     the engine's runs [started, last beat] per its loop heartbeat (None or []: no evidence it was up)."""
     def frame(b: pd.DataFrame) -> pd.DataFrame:
@@ -215,8 +220,16 @@ def reconcile(engine: pd.DataFrame, broker: pd.DataFrame, *, start: pd.Timestamp
         f = pd.DataFrame(b[cols].astype(float).to_numpy(), index=ts, columns=cols)
         f = f[~f.index.duplicated(keep="last")]
         f = f[(f.index >= start) & (f.index < end)]
+        for qa, qb in quarantined or []:          # quarantined spans (data/quarantine.py): reported, not compared
+            f = f[(f.index < qa) | (f.index >= qb)]
         return f[sessions.is_open(pd.DatetimeIndex(f.index))] if len(f) else f
     ef, bf = frame(engine).sort_index(), frame(broker).sort_index()
+    n_quarantined = 0
+    if quarantined and not broker.empty:
+        bts = pd.DatetimeIndex(pd.to_datetime(broker["ts_utc"], utc=True))
+        bts = bts[(bts >= start) & (bts < end)]
+        bts = bts[sessions.is_open(bts)] if len(bts) else bts
+        n_quarantined = len(bts) - len(bf)
     e, b = ef["bid_close"], bf["bid_close"]
     both = e.index.intersection(b.index)
     # either side of a gap of >= 2 broker minutes the engine lacks, its minute is partial (stopped or started inside
@@ -248,7 +261,7 @@ def reconcile(engine: pd.DataFrame, broker: pd.DataFrame, *, start: pd.Timestamp
 
          "missing_engine": len(b.index.difference(e.index)), "missing_broker": len(e.index.difference(b.index)),
          "max_close_diff": float(diff.max()) if len(diff) else 0.0, "up_minutes": len(up),
-         "missing_engine_up": len(up.difference(e.index))}
+         "missing_engine_up": len(up.difference(e.index)), "quarantined_minutes": int(n_quarantined)}
     n["divergence"], n["severity"] = grade(**{k: n[k] for k in _COUNTS}, close_bias=n["close_bias"],
                                            close_bias_share=n["close_bias_share"], tolerance=tolerance)
     first = {"close_mismatch": outside.index[outside.to_numpy()],
@@ -292,8 +305,10 @@ def reconcile_account(store: Store, broker: Any, account_id: str, symbol: str, n
     bb = bb[(bb["ts_utc"] >= start) & (bb["ts_utc"] < end)].reset_index(drop=True)
     ticks = store.read("ticks", source=account_id, symbol=symbol, start=start, end=end)
     eb = ticks_to_1m(ticks[["ts_utc", "bid", "ask"]], sessions) if not ticks.empty else pd.DataFrame(columns=BAR_COLUMNS)
+    from goldbot.data.quarantine import spans
     n = reconcile(eb, bb, start=start, end=end, tolerance=tol, sessions=sessions,
-                  engine_up=_engine_runs(state_dir, account_id))
+                  engine_up=_engine_runs(state_dir, account_id),
+                  quarantined=spans(store, source=account_id, symbol=symbol, start=start, end=end))
     events: list[DQEvent] = []
     for kind, label in (("close_mismatch", f"engine prices more than {tol:.2f} outside the broker's M1 range (max close "
                                            f"difference {n['max_close_diff']:.2f})"),
@@ -364,6 +379,9 @@ def _feed_status(ctx: "HealthContext", account_id: str) -> "tuple[Status, str]":
     elif r.missing_engine:
         msg += (f"; engine bars missing for {r.missing_engine} of {r.broker_minutes} broker minutes (engine stopped or "
                 "not collecting: a coverage gap, not a price fault)")
+    if r.quarantined_minutes:
+        msg += (f"; {r.quarantined_minutes} broker minutes in a quarantined span not compared (rows in "
+                "ticks_quarantine/bars_quarantine, span in dq_events)")
     msg += f"; {r.note}" if r.note else ""
     if age_h > RECONCILE_MAX_AGE_HOURS:
         return "warn", f"last reconciliation {age_h:.0f} h ago: {msg}"
