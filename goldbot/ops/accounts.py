@@ -210,7 +210,8 @@ class Account(Record):
     # hosts only on the canonical-cost broker (goldbot/ops/services/engine.is_shadow_host)
     shadow_host: bool = False
     # ADR 0037 amendment 4 ("probes must never consume the real trades' allowance"): a dedicated probe account. Its
-    # engine has no live agents and refuses any entry that is not a cost probe (fail closed, Engine._execute)
+    # engine has no live agents and refuses any entry that is not a cost probe or an exploration arm (fail closed,
+    # Engine._execute). Amendment 6: a probe host runs cost probes with the shadow book, or exploration, or both
     probe_only: bool = False
     # PD decision 2026-10-26 (ADR 0043 host cap): the RiskGate's open-position cap for THIS account, replacing
     # risk.max_positions_per_account (2) here only. Accepted on a demo probe_only account only (refused at load
@@ -286,9 +287,16 @@ class Account(Record):
     @model_validator(mode="after")
     def _probe_only_is_a_probe_host(self) -> Account:
         """ADR 0037 amendment 4: a probe_only account exists to mirror the shadow book's challengers at the minimum
-        lot. Without cost probes or the shadow book it would trade nothing, so the config is refused at load."""
-        if self.probe_only and not (self.cost_probe.enabled and self.shadow_host):
-            raise ValueError("probe_only needs cost_probe.enabled and shadow_host on the same account (ADR 0037)")
+        lot. Amendment 6 (PD 2026-10-26, ADR 0043 per-style hosts): "or to run exploration arms", so a second demo
+        account can host other arms without the shadow book. With neither it would trade nothing, so the config is
+        refused at load; demo only either way."""
+        if not self.probe_only:
+            return self
+        if self.mode != "demo":
+            raise ValueError("probe_only is allowed on demo accounts only (ADR 0037): a live account never probes")
+        if not ((self.cost_probe.enabled and self.shadow_host) or self.exploration.enabled):
+            raise ValueError("probe_only needs cost_probe.enabled and shadow_host, or exploration.enabled, on the same "
+                             "account (ADR 0037 amendments 4 and 6)")
         return self
 
     @model_validator(mode="after")

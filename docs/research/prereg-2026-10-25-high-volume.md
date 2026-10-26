@@ -12,6 +12,8 @@ Only W3 (macro 1d) stays open: it is blocked until its rule is committed to ARM-
 - **No new demo accounts.** The owner said use the two existing ones. `icm-scalp` and `icm-swing` are NOT opened.
 - **All arms (scalp, intraday, swing) run on `icm-probe`** (about £11k demo, £220/day under ADR 0042, probe budget
   £198 = 0.9 x £220). **`icm-demo` is untouched** (strategies, shadow agents, no exploration; ADR 0036).
+  *Amended 2026-10-26 (ADR 0043 amendment, PD-approved):* `icm-demo` became the intraday and swing host and
+  `icm-probe` keeps the scalp arms and the cost probes; see H-61 "Host".
 - Consequence: one daily allowance and one open-position cap are shared by three styles. Isolation is by tighten-only
   sub-budgets (below), not by host. A swing drawdown can still consume the shared allowance, so swing is capped hard.
 - **Open-position cap on `icm-probe`: host max open 18 (ADR 0043; notional cap about 19)**, from notional/margin (live figure read from the engine at launch,
@@ -83,8 +85,10 @@ believed.
 ~140, one-sided Bonferroni t 3.33 -> ~3.38. Stated, not hidden.
 
 ## H-61: exploration program and Thompson allocation (0 trials; K 0, tagged, no reading)
-- **Host:** `icm-probe` only. Exploration status is refused on any non-`probe_only` account (E2). Sub-budgets, caps and
-  swing rules as above. `icm-demo` receives no exploration order.
+- **Host:** per style, on the two demo `probe_only` accounts (ADR 0043 amendment 2026-10-26, PD-approved; supersedes
+  "`icm-probe` only"): scalp arms on `icm-probe` (scalp pot £138), intraday and swing arms on `icm-demo` (intraday £108,
+  swing £90). No arm runs on both hosts; each arm's posterior, stops and graduation read use its one host's fills.
+  Exploration status is refused on any non-`probe_only` account (E2). Per-trade caps and swing rules as above.
 - **Per-arm stop (permanent; re-entry only by new pre-registration):** running net R in exit order reaches **-30 R
   within first 300 trades** (scalp), **-15 R within 100** (intraday), **-10 R within 40** (swing).
 - **Posterior:** Normal-Inverse-Gamma on net R per trade per arm, updated nightly 21:30 UTC from daily sums, never
@@ -135,8 +139,9 @@ believed.
 - **Promotion:** (1) new pre-registration of the exact config before any further fill is read; (2) research trial on
   2015-2025-09 at full K incl. H-60 k_eff, gate-1 DSR t about 4.1+; (3) holdout scored once; (4) **forward n >= 60,
   fixed sample, read once**, at native stop on fills after the pre-registration date, admissible by H-52, and taken
-  **only from fills not allocated by the bandit or the 0.8/0.2 taking rule**: the roster shadow agent on `icm-demo` (no
-  exploration order there); exploration fills are never promotion evidence; (5) evaluator verdict; (6) capital weight
+  **only from fills not allocated by the bandit or the 0.8/0.2 taking rule**: the roster agent's shadow-book fills
+  (account-independent: the shadow book runs on the shadow host, today `icm-probe`; amended 2026-10-26 when `icm-demo`
+  became an exploration host); exploration fills are never promotion evidence; (5) evaluator verdict; (6) capital weight
   only through the tournament, one promotion per family per quarter, sizing under the RiskGate.
 - **Budget:** 2027Q1 open 14; H-57, H-58 take 2 and H-53 takes 1, leaving 11; **4 reserved for graduates** (H-63+);
   the 6 reserved slots untouched. Scalping cost bar of H-14/O-4 (0.35 R withdrawal) applies.
