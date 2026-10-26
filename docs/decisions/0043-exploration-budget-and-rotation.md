@@ -215,3 +215,36 @@ intraday and swing arms and pots back to icm-probe; restart both engines. Review
 sending host), quant (host split of H-61).
 
 - Trading-safety note (review of a11a65a7): the two learning hosts' exposure is not summed anywhere (up to 34 minimum-lot XAUUSD positions across icm-probe and icm-demo); the supervisor's combined limits cover real accounts only. Accepted on demo; each host keeps its own £220/day, −6%/−8% and RiskGate.
+
+## Amendment 2026-10-26 (quant): exploration evidence and costs are keyed by broker
+
+Context: a second broker (Vantage) can host exploration; its spread, commission, swap and fills differ from IC
+Markets', so its net-R labels measure a different quantity. Implementation: aux migration 17,
+`goldbot/research/exploration_data.py`, `goldbot/ops/jobs.py` (`exploration_learn`, `exploration_costs`).
+
+Decision:
+- **Never pooled across brokers.** Every `exploration_obs` and `exploration_models` row carries the recording
+  account's broker; labels, bandit weights (`exploration_broker_weights`), H-62 training, retrain counts and the
+  served champion are read and written per broker, with the broker a required argument. A model without a broker
+  key never serves. Rows from before migration 17 are stamped from `config/accounts.yaml`; a row whose account is
+  unknown stays unkeyed and is never learnt from.
+- **ICM hosts pool with each other** (icm-probe, icm-demo) because the cost basis is the same: same broker and
+  server, both declared Raw (spread in each account's own bid/ask bars, same commission schedule and swap). If either
+  ICM account ever changes class or server, it becomes its own key.
+- **Costs per broker.** Labels charge the spread once, from the account's own bid/ask bars; slippage, commission and
+  swap come from that broker's own measured cost table. A broker with no table pays the settings priors (slippage
+  prior, dearest configured commission, swap prior); a table on fewer than `research.min_fills_for_slippage` (50)
+  fills charges the slippage prior. Another broker's measurements are never used.
+- **Seeding.** Migration 17 copies the existing `exploration_weights` runs as broker `icm`: every exploration row
+  before it was recorded on an ICM host (vantage-demo never enabled). A Vantage host starts on equal shares.
+- **H-60 priors are ICM-basis.** They were built on Dukascopy bid/ask plus ICM-measured slippage and commission, so
+  they apply only to ICM arms. A Vantage arm runs the flat prior until an H-60 history run on Vantage's cost constants
+  is pre-registered and written under its own prior key.
+- **Trial and graduation accounting per (broker, arm).** An arm on a second broker is a new hypothesis: a distinct
+  arm id, a pre-registration amendment before its first fill, one registry trial (clustered with its ICM twin in
+  `k_eff`), its own -R stops, its own single read at 300 admissible trades on its own fills, and it counts separately
+  in the graduation m (Bonferroni bar 1 - 0.05/m) on its read date. Evidence from one broker never advances another
+  broker's read.
+
+Consequences: a Vantage arm learns from zero (slower), in exchange for allocations and graduation reads that are
+honest about its own costs. Rollback is not needed for ICM: its weights, labels and models continue unchanged.
