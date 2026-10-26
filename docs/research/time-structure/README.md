@@ -27,6 +27,9 @@ window. A descriptive pattern that pays none of these is recorded and closed.
 | F | `volatility-bands.md` | Keltner, Bollinger, TTM squeeze, Donchian, ATR/Chandelier, envelopes, regression and VWAP bands; breakout vs mean reversion by regime and session; bands as exits (coordinate with the exits-researcher's V1u runner) | 6.5 (cost by hour), 6.7 (variance ratios: no reversion or momentum at 15m-90d) |
 | E | `smc-orderblocks.md` | Order blocks, breaker/mitigation blocks, FVG, BOS/CHoCH, liquidity sweeps (Asia range in London), premium/discount, ICT kill zones, inducement, Wyckoff, market profile, supply/demand zones, delta/footprint proxies | 6.4 (Asia range taken in London) |
 
+| G | `key-levels.md` | Session OHLC, PDH/PDL/PDC, PWH/PWL, weekly/monthly open, PMH/PML, round numbers: break / reject / sweep / magnet, conditioned on the range forecast and the daily trend, tested with traders' exits; gross and net R reported separately | 6.4 (Asia range in London), 6.8 (prior-day Fibonacci vs random fractions) |
+| — | `learning-loop.md` | The continuous learning loop (stages 1-5), multi-model rules, what runs with 2026Q4 full | — |
+
 One slice per file; no slice edits another slice's file, this README, `hypotheses.md` or a pre-registration. Each
 slice returns its candidate hypotheses in the template of section 5; the director ranks across slices.
 
@@ -69,6 +72,28 @@ model-filtered rows), and a 15m idea needs a per-trade t near 4.3 to pass. Most 
 | Exploration arms already frozen (not trials): session-VWAP 2σ fade (S1A/B), opening-range break 15/30 min (S2A/B), EMA pullback (S5), tsmom, box | `arms-2026-10-25.md` | running or owed on `icm-probe`/`icm-demo`; exploration rows, never promotion evidence | H-60/H-61 |
 
 A slice that proposes something in this table must say what is new (mechanism, data, cost era) or drop it.
+
+**What each one died on (added 2026-10-26 for the owner's question "how are you ruling these out").** Wording rule
+for every slice: say "this version, tested this way, did not beat random after cost". Never say "the idea doesn't
+work". The research cost model itself is under quant audit (H-50: gross +0.030 R but net −0.297 R; #88: a net-gross
+gap of about 0.52 R).
+
+| Item | Gross (t) | Net | Died on | Could a range filter or an exit design rescue it? |
+|---|---|---|---|---|
+| R-02 session-open breakout 15m | +0.042 R (1.31) | negative | **signal**: gross t below 2, and costs 0.2-0.3 R on top | partly. H-17 is exactly the range-conditioned, runner-exit version (Q1 O-2/O-3) |
+| R-04 range breakout 1h | +0.015 R (0.38) | negative | **signal** | only through H-17 / H-16 conditioning; the bare rule, no |
+| R-05 intraday momentum | −0.006 / −0.028 R | negative | **signal** | no: gross ≤ 0 |
+| R-03 trend pullback 1h | ≈ 0 | negative | **signal** | no |
+| R-01 RSI/Bollinger/VWAP fades | ≈ 0 | negative | **signal** | no (README 6.10) |
+| H-04 Asia drift | +0.043 R (3.09) | −0.093 R | **cost per R** | yes, by cost: the current broker round trip ($0.14-0.23/oz) is a fraction of the research prior; the cost-era question is the quant audit's |
+| R-06 tsmom 1h/4h | +0.061 R (2.63) | −0.079 R | **cost per R** (and gross t below the DSR bar) | exit and holding-period designs were tried (R-10); a cheaper cost era is the only open route |
+| H-01 slow TSMOM 1d | +0.166 R (2.04) | +0.002 R | **events** (294, below the floor): inconclusive | not a rescue question; needs more history |
+| H-50 owner box break+close+MFI 15m | +0.030 R (1.61) | −0.297 R | **signal** (gross t below 2) **and cost** (net gap 0.33 R) | a range filter could lift gross; cost per R falls on high-ATR days; H-53 (1h) is the queued test |
+| H-48 sweep-and-reclaim fade 15m | −0.028 R | −0.552 R | **signal** (gross ≤ 0); the 0.52 R gap is a cost-model question, not the verdict | no for this version |
+| H-40 box/price-action flags | AUC 0.503 | — | **signal** | no |
+| R-13 EQH/EQL magnets | lift −0.3 / +0.8 pts | — | **signal** (base rate) | no |
+| TVR1/TVR2, H-34/H-35 SMC rules | not measured | — | **event count / stop fit at 0.01 lot**: never read on outcome | not a signal verdict: they were never tested on outcomes; slice E re-defines them testably |
+| R-08 pre-FOMC, fix front-running, weekday | not run | — | **literature only** | slice B tests the calendar ones on the discovery half (README 6.6) |
 
 ## 4. Common methodology (binding on every slice)
 
