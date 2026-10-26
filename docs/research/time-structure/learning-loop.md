@@ -95,9 +95,15 @@ What the audit found:
 What the loop requires:
 - Any candidate that passes only at measured-fill cost (today slices F-1/F-2 and D-1/D-2) goes to stage 3 first, as
   an arm that fills **at its own signal times**: opens, breaks, news-adjacent bars, stop exits included.
-- It is judged on the **worse** of (a) the research prior and (b) the cost its own fills measured. Spread, slippage,
-  stop overshoot and commission are broker-keyed, read with a 95% upper bound once there are at least 30 fills per
-  session cell.
+- At measured cost it is judged on the **worse** of two numbers:
+  - (a) the quiet-time probe cost: conservative $0.23/oz, plus the measured $0.70 mean overshoot on every stop exit;
+  - (b) the cost its own signal-time fills measured.
+  Spread, slippage, stop overshoot and commission are broker-keyed, read with a 95% upper bound once there are at
+  least 30 fills per session cell.
+- The research prior (about $1.07/oz) is not replaced. It stays the cost of record for every registry trial and for
+  gate 1, and each read reports net under both.
+- *Corrected 2026-10-26 (synthesis): an earlier wording said "the worse of the research prior and its own fills". That
+  would fail every 15m candidate by construction, which is not what the audit ruled.*
 - No stage-2 slot is spent on such a candidate until (b) exists. This is component C6 of stage 4, measured before
   the slot rather than after.
 

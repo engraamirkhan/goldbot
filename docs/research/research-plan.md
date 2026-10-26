@@ -279,6 +279,34 @@ The owner wants hundreds of demo fills by Fri 2026-10-23. They serve the cost-me
 learning. They are **never** edge evidence: probes are excluded by H-52 rule c, and research costs stay at
 max(0.15, measured) per leg, so demo slippage never lowers a research cost.
 
+### 11.7 Time-structure programme (research director, 2026-10-26)
+
+Source: `time-structure-2026-10-26.md` (synthesis of slices A-H), pre-registration
+`prereg-2026-10-26-time-structure.md`.
+
+**Ranking.** H-73, the range feature group, joins H-16/H-19 at the top as a priority-1 enabler (0 trials, K_eff +1).
+H-70 (F-1, 15m Hurst-switched band breakout) is the first new 15m candidate since H-17 that survived its 0-trial
+checks. The order now reads: H-16, H-73, H-13, H-19, H-17, H-14, H-70, then the rest unchanged. Below them sit H-71
+(G-1, 1h level break) and H-72 (Friday long), both arm-only. H-74 (slow-trend swing group) goes into SW-0. H-75/H-76/H-77
+are held for reconciliation.
+
+**Slots.**
+- The 2027Q1 free reserve gives 2 conditional rows, O-11 (H-70 confirmation) and O-12 (H-71 confirmation). 4 stay free.
+- The 5 new arms need the 2026Q4 override 69 -> 74, a **program-director decision** (owner told). If refused, they
+  start 2027-01-01 and O-11/O-12 move to Q2.
+
+**K.** Registry 145. The programme's looks are charged at about **161 effective**, so later gate-1 reads use
+K ≈ 306 (t ≈ 4.5).
+
+**Contamination** (slices launched before the frame landed):
+- A read the holdout for session-clock statistics. Those configurations lose holdout scoring and confirmation credit.
+- B read 2018-2025-09, and D read part of it for 1d rows: no confirmation credit for those.
+All three are reported to the evaluator.
+
+**Closed at 0 trials, in the form tested:** Fibonacci levels and time, wavelet/Ehlers/Goertzel/EMD direction,
+30/60/90-day direction, calendar direction, oscillator fades, ADX gate, OBV, VWAP fades, value area, OB retest, FVG,
+sweeps and magnets, level retests, 15m ORB (all 24 variants), band fades and unconditional band breaks.
+
 ## 12. Team feedback log
 
 Every item raised since the last cycle, with the answer. A = adopted, D = deferred (date), X = declined (reason).
@@ -347,3 +375,16 @@ Every item raised since the last cycle, with the answer. A = adopted, D = deferr
 | 60 | performance-analyst (2026-10-25) | Rule families p = 1.0, calibration undefined | **A.** Isotonic calibration once n >= 50; it must be cross-fitted and include untaken candidates (n=50 overfits otherwise). Owner: ml-researcher | — |
 | 61 | performance-analyst (2026-10-25) | Retrain skipped while a challenger is in shadow (`jobs.py:448`) | **A.** Retrain triggers per 25 closed outcomes; a challenger stuck > 30 days is retired or reset. Owner: implementer with ml-researcher | — |
 | 62 | performance-analyst (2026-10-25) | Weekly evaluator verdicts | **A.** Owner: evaluator via release-manager | — |
+| 63 | slice A (sessions) | A-1 failed Asia-range fade as an arm; A-2 NY pit continuation as a feature; A-3 cost-window rule; A-4 local-clock audit; read 2020-26 including the holdout | **A-1 deferred** (reconcile with H's flipped rebuild, MS-2, by 2026-11-13; holdout seen). **A-2 A** as a feature (not reproduced by H, so low weight). **A-3 A** as a 0-trial arm-fill diagnostic (microstructure). **A-4 A** (L-3, new arms local by construction). **Holdout breach recorded** (synthesis 7.2) | H-76 held; 7.2 contamination table |
+| 64 | slice B (cycles) | B-1 Friday slot; B-2 event-day range feature; B-3 rv ratio; B-4/B-5 drop; festival and expiry date tables | **B-1 A as a forward-only arm** (WFRI; 2018+ seen, so no slot now). **B-2/B-3 A** into H-73. **B-4/B-5 A** (dropped). **Date tables A** (macro-researcher-staff) | H-72, H-73 |
+| 65 | slice C (Fibonacci/wavelets) | Close Fibonacci, cycles, Ehlers, Hurst gate, EMD; C-1 30-day-low continuation; C-2/C-3 features | **Closures A.** **C-1 A merged** into H-74 (SW-0), no standalone slot (115 events < 150). **C-2/C-3 A** into H-73 (≤ 5 columns) | H-73, H-74 |
+| 66 | slice D (oscillators/trend/volume) | D-1 arm; D-2 arm; D-3 diagnostic; osc_trend_vol feature group (16 columns); tick volume is not real volume | **D-1 deferred** (H's rebuild null; reconcile by 2026-11-13). **D-2 deferred** (redundancy check vs MA regime first). **D-3 X** (bear-market regime control likely explains it; 2-3 events a month). **Group A** for H-62 v2 under the 40-cap (ml-researcher picks). **Volume A** (data survey decides COMEX volume) | H-75, H-77 held |
+| 67 | slice E (SMC) | 0 trials; OB/FVG/value area closed against controls; #88 cost resolved as real | **A.** The #88 explanation matches the quant audit | section 4 table |
+| 68 | slice F (bands) | F-1 slot candidate; F-2 one-or-the-other; F-3 feature; features list | **F-1 A**: arm F1A/F1C now, O-11 conditional. **F-2 A as a recorded flag inside F1A**, not a second slot. **F-3 A** into H-74. **Features A** (≤ 5 columns into H-62 v2) | H-70 |
+| 69 | slice G (key levels) | G-1 arm with a random-level control; G-2/G-3/G-4 features; close fades/retests | **A.** G-1 as arm G1A/G1C with **fixed 2R** (0.01 lot cannot split for the partial exit); O-12 conditional | H-71 |
+| 70 | slice H (combinations) | H-1 NY-pit split; H-2 book on arm fills; allocator unvalidated; meta-labelling no lift; A1/D1/C1 did not reproduce | **A.** H-1 as a pre-specified stratum of F1A; H-2 as H-78 (daily_review); allocator test as backlog 111; reproduction failures held (H-75/H-76) | H-78, H-79 |
+| 71 | architect | H's allocator result undetermined, probably an artefact | **A**; backlog 111 is the proper test | — |
+| 72 | quant-reviewer (cost audit) | Prior about 5-7x measured, conservative but defensible; no bug; no retired family flips; judge measured-cost candidates on the worse of two measured costs | **A.** Stage-3 requirement written; corrected the wording to the worse of quiet-time probe cost (+overshoot) and signal-time cost; the research prior stays the cost of record | learning-loop.md stage 3 |
+| 73 | quant-reviewer (local clocks) | S0L/S4L/S5AL as new ids, each a trial, paired reading rule | **D to the Q2 draft (by 2027-03-26)**: new arms are local by construction, and 3 slots for a scheduling answer is poor value | — |
+| 74 | data survey (pending) | longest history, volume, COT, ETF, options | **D until it lands:** H-74 (pre-2010 history), D volume (COMEX volume), B-5 (exact OG dates) wait on it | dependency list in synthesis 9 |
+| 75 | owner via coordinator | continuous learning loop; multi-models | **A**: `time-structure/learning-loop.md`, backlog 105-110 (L-1..L-6) | learning loop |

@@ -413,3 +413,29 @@ any exploration fill of an arm is read. Exploration rows are tagged `exploration
 | H-60 | Historical arm priors: about 24 frozen arms (scalp 1m/5m, intraday 15m/1h, swing 4h/1d, random-bracket controls) on data-v1 2015-01..2025-09-30, per-era measured costs; outputs fire rate, gross/net R, day-clustered t, per-year, parity | proposed 2026-10-25, prereg owed | 0 (K_eff + arms, once) | no verdict, no retirement, no promotion: priors for H-61 only |
 | H-61 | Exploration program on the probe-only demo host `icm-probe` (no new accounts): 0.01 lot at own stops, ADR 0043 pots (scalp £50, intraday £48, swing £40), per-arm £ caps and cumulative-R stops, Thompson allocation with 5% floor / 30% cap, propensity logging | proposed 2026-10-25, prereg owed; engine E0-E10 owed | 0 | none for promotion; an arm is read once at its 300th admissible trade (>= 20 days), graduates at P(mean > 0) > 1 - 0.05/m (Bonferroni) and parity, else retires; random controls never graduate; retired-family neighbours (R-06/R-10, R-07, R-14, R-15) need the evaluator's re-entry record before the read; graduation only earns a new pre-registration (H-63+), whose forward n >= 60 is fixed-sample from the `icm-demo` roster shadow agent |
 | H-62 | Online meta-labeller per style: <= 40 frozen features, weekly retrain at >= 1,500 new labels, session-day blocked cross-fitting with purge/embargo, strict-forward scoring, champion/challenger on 2 unseen weeks | proposed 2026-10-25, prereg owed | 0 | a model reaches icm-demo only through its own promotion pre-registration |
+
+## A15. Time-structure programme (research director, 2026-10-26)
+
+Sources: `time-structure-2026-10-26.md` (synthesis of slices A-H) and `prereg-2026-10-26-time-structure.md`. Discovery
+half 2010-2017 only. The programme took about 2,460 raw looks, charged 161 effective. Every row's "closed" means
+**this version, tested this way, did not beat random after cost**.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| H-70 | F-1: 15m band break (KC/BB/DC20 union) traded with the break when hurst_128 is in its low tercile and against it when high; 4-bar time exit, stop 1.0 ATR15 | **pre-registered**; arm F1A + control F1C (needs the 2026Q4 override 69 -> 74); O-11 confirmation (2027Q1, conditional) | 1 (O-11) + arm registrations | prereg 2.3 |
+| H-71 | G-1: first 1h close ≥ 0.1 ATR beyond a prior-period level in Asia hours, stop 1.0 ATR back through the level, fixed 2R, 32 bars | **pre-registered**; arm G1A + random-level control G1C; O-12 (conditional) | 1 (O-12) + arms | prereg 3.3 |
+| H-72 | Friday long, Thursday 19:00 to Friday 16:30 New York, 1.0 ATR4h stop | **pre-registered, forward-only** (2018+ seen by slice B); arm WFRI | 1 at its 26-Friday read (Q2) | prereg 4 |
+| H-73 | Time-structure range feature group (≤ 12 columns: FOMC/NFP days, pit window, wavelet energy, rv ratio, range used, displacement, tick z) | proposed; spec by the opportunity-researcher | 0 (K_eff +1) | drop rule prereg 5 |
+| H-74 | Slow-trend swing group: 30-day-extreme first touch (C-1), 4h/1d band state (F-3), 30/60/90 windows | proposed for SW-0 (Q2) | 0 here | SW-0's rule |
+| H-75 | D-1 Asia trend persistence 1h | held: H's rebuild null; reconcile by 2026-11-13 | 0 | new prereg if reconciled |
+| H-76 | A-1 failed Asia-range fade 15m | held: H's rebuild flipped sign; holdout seen by slice A | 0 | forward-only if reconciled |
+| H-77 | D-2 CMF20 1h | held: redundancy with the MA regime unchecked | 0 | ρ > 0.7 closes it |
+| H-78 | Pre-specified book read on arm fills against sign-randomised nulls | proposed (daily_review) | 0 | descriptive |
+| H-79 | Allocator against a shuffled-weight null and a journal replay | proposed (backlog 111) | 0 | backlog acceptance |
+
+Retired by this programme (0 trials, form tested): Fibonacci retracement/extension/time zones, wavelet/Ehlers/
+Goertzel/EMD direction, Hurst as an external gate, 30/60/90-day momentum/reversal/range position, turn of month,
+expiry, FOMC/NFP/CPI direction, pre-FOMC drift, festival and month seasonality, oscillator fades and divergences at
+15m-1h, ADX gate, OBV, session-VWAP fades, value-area 80% rule, order-block retest, FVG magnet, sweep reversal, key-level
+retests and fades, session opens as levels, 15m ORB (24 variants), TTM squeeze, unconditional band fades and breaks,
+LBMA/COMEX/Tokyo anchor reactions.
