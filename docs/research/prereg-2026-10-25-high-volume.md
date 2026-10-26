@@ -259,5 +259,18 @@ and the cost arm S0R are the null/cost measurement and are bounded only by their
 controls must not be allocated by results). K +0: no arm, rule body or read is added or changed; this only states
 which arms the already-registered stops act on.
 
+## Amendment 4 — 2026-10-26, decided blind before any read (quant ruling on the icm clock fault)
+
+Trades whose decision window overlaps a recorded dq quarantine span are void as evidence (n, posterior, cost cells,
+graduation); they still count toward H-61 stops and P&L. Decided blind, before any read; criterion v1; adds 0 to K.
+
+Criterion v1 (goldbot/research/evidence_exclusions.py; aux.db `evidence_exclusions`, append-only): an exploration
+candidate or trade is void when [decision - the arm's lookback, decision] overlaps a quarantine span recorded in
+dq_events for its account or broker (the lookback is the window the engine feeds the rule on the arm spec's
+timeframe: 201 bars of it, at least 1,000 minutes), or when it was decided at or after the span's start and before
+its engine restarted on the corrected bars. A scheduled cost probe entered inside a span is void for the cost cells
+only. The span that prompted it: icm-demo and icm-probe, 2026-10-25 22:02 to 2026-10-26 07:23 UTC (bridge converted
+with Europe/Athens while the broker ran NY+7).
+
 ## Note 2026-10-26 (research-director)
 Daily review (job `daily_review`) is blinded; the pre-registered stops are the only daily results output. See ADR 0045.

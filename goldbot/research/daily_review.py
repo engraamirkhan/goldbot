@@ -210,6 +210,8 @@ class DailyReview(Record):
     retired: list[Retirement] = Field(default_factory=list)                 # retired in this review
     posted: dict[str, str] = Field(default_factory=dict)                    # kind -> posted | outbox
     weekly: str | None = None
+    # prereg Amendment 4: the day's exploration trades void as evidence (aux.db evidence_exclusions), a count only
+    evidence_void: int = 0
 
     @model_validator(mode="after")
     def _blinded(self) -> DailyReview:
@@ -394,6 +396,7 @@ def refit_cells(db: Database, *, hosts: Mapping[str, str], day: str, hi: pd.Time
     """Per (broker, session): the entry fills sent after the cell's last fit and before `hi`; at `min_fills` or more,
     a new fit = max(research floor, mean adverse-positive slippage) (prereg H-60 costs: "slippage max(0.15, measured)
     ... never credited")."""
+    from goldbot.research.evidence_exclusions import excluded
     from goldbot.research.exploration_data import SLIPPAGE_FLOOR_USD
     from goldbot.telegram.labs import trades
     out: list[CellRefit] = []
@@ -403,8 +406,9 @@ def refit_cells(db: Database, *, hosts: Mapping[str, str], day: str, hi: pd.Time
         marks = ",".join("?" * len(accts))
         with db.connection() as conn:
             last = _cells(conn, broker, pd.Timestamp(2**62, unit="ns", tz="UTC"))
+            void = excluded(conn, "cost_cells")                # prereg Amendment 4
             rows = [t for t in trades(conn, f"account_id IN ({marks}) AND ts_ns < ?", (*accts, hi_ns))
-                    if t.fill_price is not None and t.requested_price is not None]
+                    if t.fill_price is not None and t.requested_price is not None and t.client_order_id not in void]
         if not rows:
             continue
         labels = _sessions([t.sent_utc for t in rows])
@@ -708,6 +712,9 @@ def report_lines(r: DailyReview) -> list[str]:
         parts += [f"{n_ret} arm{'s' if n_ret != 1 else ''} retired at {'their' if n_ret != 1 else 'its'} stop"] \
             if n_ret else []
         out.append("Review: " + " · ".join(parts))
+    if r.evidence_void:
+        out.append(f"Review: {r.evidence_void} trade{'s' if r.evidence_void != 1 else ''} void as evidence "
+                   "(dq quarantine; H-61 stops and P&L keep it)")
     return [x for x in (blind(x) for x in out) if x]
 
 
@@ -911,7 +918,8 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
                          refusals=_refusals(d), volume=volume, volume_total=total, plan_total=plan_total,
                          of_plan=of_plan, volume_low_days=low_days, arm_health=health,
                          arms_retired={b: len(retired_arms(db, b)) for b in sorted(set(hosts.values()))},
-                         integrity=integrity, incidents=incidents, refits=refits, retired=retired)
+                         integrity=integrity, incidents=incidents, refits=refits, retired=retired,
+                         evidence_void=_void(db, hosts, lo, hi))
     if dry_run:
         return review
     before = load_review(sd, day)
@@ -930,6 +938,12 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
     write_atomic(review_path(sd, day), body)
     _ledger(sd, day, body)
     return review
+
+
+def _void(db: Database, hosts: Mapping[str, str], lo: pd.Timestamp, hi: pd.Timestamp) -> int:
+    from goldbot.research.evidence_exclusions import counts
+    with db.connection() as conn:
+        return counts(conn, sorted(hosts), lo, hi)
 
 
 def _ledger(state_dir: Path, day: str, body: str) -> None:

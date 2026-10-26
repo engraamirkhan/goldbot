@@ -336,7 +336,10 @@ def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str], *,
                  until: pd.Timestamp | None = None) -> list[ArmStatus]:
     """Every arm with an admissible trade on `accounts`, in the frozen spec's order (unknown arms after, by id): its
     n toward READ_AT and its H-61 stop band from the running net R in exit order over the stop's first trades.
-    `until`: only closes before it (the daily review reads a day point in time)."""
+    `until`: only closes before it (the daily review reads a day point in time). Prereg Amendment 4: a trade void as
+    evidence (aux.db `evidence_exclusions`) is left out of n (the read and graduation) but "still counts toward H-61
+    stops and P&L", so the band and `stop_at` use every admissible trade."""
+    from goldbot.research.evidence_exclusions import excluded
     if not accounts:
         return []
     marks = ",".join("?" * len(accounts))
@@ -350,6 +353,7 @@ def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str], *,
             by_arm.setdefault(t.arm_id, []).append(t)
     order = {a: i for i, a in enumerate(_arm_order())}
     spec_controls = control_arm_ids()
+    void = excluded(conn, "n")
     out = []
     for arm in sorted(by_arm, key=lambda a: (order.get(a, len(order)), a)):
         rows = by_arm[arm]
@@ -367,7 +371,8 @@ def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str], *,
                 break
         if not control and band == "running" and len(rows) <= within and run <= BAND_SHARE * stop_r + 1e-9:
             band = "within_50pct"
-        out.append(ArmStatus(arm_id=arm, account_id=rows[0].account_id, control=control, n=len(rows), band=band,
+        n = sum(t.client_order_id not in void for t in rows)
+        out.append(ArmStatus(arm_id=arm, account_id=rows[0].account_id, control=control, n=n, band=band,
                              stop_at=stop_at, stop_utc=stop_utc, stop_r=at_r))
     return out
 

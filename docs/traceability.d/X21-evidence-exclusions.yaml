@@ -1,0 +1,5 @@
+id: X21
+requirement: 'Prereg 2026-10-25 Amendment 4 (quant ruling 2026-10-26, blind): "Trades whose decision window overlaps a recorded dq quarantine span are void as evidence (n, posterior, cost cells, graduation); they still count toward H-61 stops and P&L. Decided blind, before any read; criterion v1; adds 0 to K."'
+status: implemented
+code: 'goldbot/db/migrations.py aux 19 `evidence_exclusions` (append-only triggers); goldbot/research/evidence_exclusions.py (criterion v1 `decide`/`compute`, `lookback` from the arm spec timeframe, `record`, `excluded`, `counts`); readers: goldbot/research/exploration_data.py read_obs(evidence="posterior") in learn, training_table, retrain_due; goldbot/telegram/labs.py arm_statuses n (band and stop over every trade); goldbot/research/daily_review.py refit_cells and the evidence_void count line; goldbot/ops/jobs.py cost_probe_rows (cost table) and evidence_exclusions before the nightly learner (fails closed); scripts/evidence_exclusions.py (dry run by default, --reloaded per account)'
+test: tests/test_evidence_exclusions.py (14 tests)

@@ -62,6 +62,7 @@ from goldbot.data.store import asof_join
 from goldbot.data.timeutil import NEW_YORK, epoch_ns
 from goldbot.db.connection import Database, StateDbError, now_ns
 from goldbot.labels.triple_barrier import SwapSpec, rollover_nights
+from goldbot.research.evidence_exclusions import Scope, excluded
 from goldbot.research.model import MAX_FEATURES, MetaLabelModel, check_feature_cap, fit_calibrator
 
 log = logging.getLogger("goldbot.exploration")
@@ -275,9 +276,12 @@ def record_fill(db: Database, *, candidate_id: str, entry_utc: pd.Timestamp, exi
 
 
 def read_obs(db: Database, *, broker: str | None = None, style: str | None = None, arm_id: str | None = None,
-             as_of: pd.Timestamp | None = None, include_quarantined: bool = False) -> pd.DataFrame:
+             as_of: pd.Timestamp | None = None, include_quarantined: bool = False,
+             evidence: Scope | None = None) -> pd.DataFrame:
     """Candidates ordered by decision time; times as UTC datetimes (ns). `as_of`: only labels resolved by then;
-    `broker`: only that broker's rows (an unkeyed row matches no broker). Every learner passes `broker`."""
+    `broker`: only that broker's rows (an unkeyed row matches no broker). Every learner passes `broker`. `evidence`:
+    leave out the candidates void for that scope (aux.db `evidence_exclusions`, prereg Amendment 4: "void as evidence
+    (n, posterior, cost cells, graduation)"); every learner passes "posterior"."""
     where: list[str] = ["1 = 1"]
     params: list[Any] = []
     if not include_quarantined:
@@ -297,6 +301,8 @@ def read_obs(db: Database, *, broker: str | None = None, style: str | None = Non
     with db.connection() as conn:
         df = pd.read_sql_query(f"SELECT * FROM exploration_obs WHERE {' AND '.join(where)} "
                                "ORDER BY decision_ns, candidate_id", conn, params=params)
+        if evidence is not None:
+            df = df[~df["candidate_id"].isin(excluded(conn, evidence))].reset_index(drop=True)
     for c, name in (("decision_ns", "decision_utc"), ("entry_ns", "entry_utc"), ("exit_ns", "exit_utc"),
                     ("label_exit_ns", "label_exit_utc"), ("available_utc_max_ns", "available_utc_max")):
         df[name] = pd.to_datetime(pd.to_numeric(df.pop(c), errors="coerce"), unit="ns", utc=True)
@@ -444,7 +450,7 @@ def training_table(db: Database, *, style: str, broker: str, as_of: pd.Timestamp
         raise ValueError(f"style {style!r} not one of {STYLES}")
     cols = list(feature_cols) if feature_cols is not None else list(FEATURE_LISTS[STYLE_FEATURE_LIST[style]])
     check_feature_cap([*cols, "side", "arm_id"])
-    obs = read_obs(db, broker=broker, style=style, arm_id=arm_id, as_of=as_of)
+    obs = read_obs(db, broker=broker, style=style, arm_id=arm_id, as_of=as_of, evidence="posterior")
     dec = pd.DatetimeIndex(obs["decision_utc"])
     obs = obs[~((dec >= HOLDOUT_START) & (dec < HOLDOUT_END))].reset_index(drop=True)      # L-10
     if obs.empty:
@@ -565,7 +571,7 @@ def _last_cutoff(db: Database, style: str, broker: str) -> pd.Timestamp | None:
 def retrain_due(db: Database, style: str, cutoff: pd.Timestamp, *, broker: str) -> tuple[bool, int, int]:
     """(due, new, total) of one broker's style: >= RETRAIN_MIN_NEW admissible labels resolved since its last fit's
     cutoff and >= RETRAIN_MIN_TOTAL in all (spec section 5)."""
-    obs = read_obs(db, broker=broker, style=style, as_of=cutoff)
+    obs = read_obs(db, broker=broker, style=style, as_of=cutoff, evidence="posterior")
     last = _last_cutoff(db, style, broker)
     new = int((obs["label_exit_utc"] > last).sum()) if last is not None else len(obs)
     return new >= RETRAIN_MIN_NEW and len(obs) >= RETRAIN_MIN_TOTAL, new, len(obs)
@@ -805,7 +811,7 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
     each arm's net R labels (label_sim_r) resolved by `as_of`."""
     if not broker:
         raise ValueError("exploration evidence is learnt per broker")
-    obs = read_obs(db, broker=broker, as_of=as_of)
+    obs = read_obs(db, broker=broker, as_of=as_of, evidence="posterior")     # prereg Amendment 4
     strat = obs[~obs["is_control"]]
     style_of = {str(a): str(s) for a, s in strat.groupby("arm_id")["style"].first().items()}
     style_of.update(arms or {})

@@ -484,6 +484,28 @@ AUX: tuple[Migration, ...] = (
                PRIMARY KEY (broker, session, day)
            ) STRICT""",
     )),
+    # additive (quant ruling 2026-10-26, prereg-2026-10-25-high-volume.md Amendment 4; goldbot/research/
+    # evidence_exclusions.py): one row per order id void as evidence (an exploration candidate/trade, a scheduled cost
+    # probe), its scopes (n, posterior, cost_cells, graduation), reason, the dq quarantine span it rests on, criterion
+    # version and decision time, decided blind. Append-only like `audit`: never updated or deleted. A release without
+    # it never reads the table (and so counts every row as evidence again)
+    Migration(version=19, name="evidence_exclusions", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS evidence_exclusions (
+               client_order_id TEXT PRIMARY KEY,
+               kind TEXT NOT NULL CHECK (kind IN ('exploration', 'cost_probe')),
+               account_id TEXT NOT NULL,
+               scope TEXT NOT NULL CHECK (json_valid(scope)),
+               reason TEXT NOT NULL,
+               span_ref TEXT NOT NULL,
+               criterion_version TEXT NOT NULL,
+               decided_ns INTEGER NOT NULL,
+               blind INTEGER NOT NULL CHECK (blind = 1)
+           ) STRICT""",
+        """CREATE TRIGGER IF NOT EXISTS evidence_exclusions_no_update BEFORE UPDATE ON evidence_exclusions
+           BEGIN SELECT RAISE(ABORT, 'evidence_exclusions is append-only'); END""",
+        """CREATE TRIGGER IF NOT EXISTS evidence_exclusions_no_delete BEFORE DELETE ON evidence_exclusions
+           BEGIN SELECT RAISE(ABORT, 'evidence_exclusions is append-only'); END""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

@@ -233,8 +233,7 @@ def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         n_probe = 0
         try:     # scheduled-probe fills raise a session's slippage when proven above the prior; never in `fills` (K7)
             window_start = slot - pd.Timedelta(days=r.fills_window_days)
-            prows = probe_entry_fills(p for p in cost_probe.probes(ctx.state_dir, acc.account_id)
-                                      if window_start <= p.sent_utc <= slot)
+            prows = probe_entry_fills(cost_probe_rows(ctx.state_dir, acc.account_id, window_start, slot))
             n_probe = len(prows)
             table = apply_probe_slippage(table, probe_slippage(prows, ctx.settings.costs.slippage_prior_usd), n_probe)
         except (sqlite3.Error, OSError, ValueError) as exc:     # unreadable aux.db: the prior stands
@@ -263,6 +262,17 @@ def nightly_costs(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         log.exception("exploration learner failed")
         out["exploration"] = {"error": type(exc).__name__}
     return out
+
+
+def cost_probe_rows(state_dir: Path, account_id: str, lo: pd.Timestamp, hi: pd.Timestamp) -> list[Any]:
+    """The account's probes sent in [lo, hi] that may feed its cost table: none void for the cost cells (aux.db
+    evidence_exclusions, prereg Amendment 4: a scheduled probe entered inside a dq quarantine span)."""
+    from goldbot.research.evidence_exclusions import excluded_ids
+    rows = [p for p in cost_probe.probes(state_dir, account_id) if lo <= p.sent_utc <= hi]
+    if not rows:
+        return rows
+    void = excluded_ids(Database.open(state_dir, "aux"), "cost_cells")
+    return [p for p in rows if p.client_order_id not in void]
 
 
 # ---------------------------------------------------------------------------------------------- exploration arms
@@ -360,6 +370,11 @@ def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     (state/models/h62/<broker>/)."""
     db = Database.open(ctx.state_dir, "aux")
     stamped = stamp_brokers(db, {acc.account_id: acc.broker for acc in ctx.accounts})
+    try:        # prereg Amendment 4, before any read: a window still reaching a quarantine span is void (criterion v1)
+        void = evidence_exclusions(ctx, db, slot)
+    except Exception as exc:       # noqa: BLE001 - fail closed: no posterior on evidence not screened (weights age out)
+        log.exception("evidence exclusions not computed: the exploration learner does not run tonight")
+        return {"error": f"evidence_exclusions:{type(exc).__name__}"}
     pending = read_obs(db)
     pending = pending[pending["label_sim_r"].isna()]
     unkeyed = int(pending["broker"].isna().sum())
@@ -392,7 +407,20 @@ def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
             log.exception("exploration learner failed for broker %s", broker)
             out[broker] = {"error": type(exc).__name__}
     return {"labelled": labelled, "cost_model": {b: m.version for b, m in costs.items()}, "stamped": stamped,
-            "unkeyed": unkeyed, "brokers": out}
+            "unkeyed": unkeyed, "evidence_exclusions": void, "brokers": out}
+
+
+def evidence_exclusions(ctx: JobContext, db: Database, slot: pd.Timestamp) -> dict[str, int]:
+    """Criterion v1's lookback half over every account's candidates (research/evidence_exclusions.py): a decision
+    whose window reaches a recorded quarantine span is void, also weeks later on a 4h or 1d arm. The reload half
+    (decisions before an engine reloaded corrected bars) needs the restart time and is recorded once by
+    scripts/evidence_exclusions.py. Append-only and idempotent."""
+    from goldbot.research import evidence_exclusions as ev
+    inserted = 0
+    for symbol in sorted({getattr(acc, "symbol", "XAUUSD") for acc in ctx.accounts}):
+        hosts = {acc.account_id: acc.broker for acc in ctx.accounts if getattr(acc, "symbol", "XAUUSD") == symbol}
+        inserted += ev.record(db, ev.compute(db, ctx.store, hosts=hosts, symbol=symbol, now=slot))
+    return {"inserted": inserted}
 
 
 COSTS_PUBLISHED_FILE = "costs_published.json"    # state: when the table last reached release costs-v1 (health reads it)
