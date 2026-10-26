@@ -88,7 +88,9 @@ PRIOR_N_PER_TRADES = 100.0
 # the H-60 priors rest on IC Markets' cost history (the canonical cost tables): they seed only these brokers' bandits;
 # any other broker starts from the flat prior (ADR 0043 amendment 2026-10-26, quant review of c8433d3d)
 PRIOR_BROKERS: frozenset[str] = frozenset({"icm"})
-BROKER_KEY = re.compile(r"^[a-z0-9_-]+$")       # accounts.yaml `broker`; also a path segment (models/h62/<broker>/)
+# accounts.yaml `broker`; also a path segment (models/h62/<broker>/): matched in full (`fullmatch`), never `match`,
+# whose `$` also accepts a trailing newline
+BROKER_KEY = re.compile(r"[a-z0-9_-]+")
 
 # label replay (prereg H-60 costs): slippage per leg never below the prior, never credited
 SLIPPAGE_FLOOR_USD = 0.15
@@ -573,7 +575,7 @@ def save_model(db: Database, models_dir: Path, fit: Mapping[str, Any], *, broker
                activation: pd.Timestamp) -> str:
     """Persist one broker's fitted style model (fold models + calibrator) as a pickle with its SHA-256, and register
     it as 'shadow': it never serves until a separate champion decision (spec section 5) marks it 'champion'."""
-    if not BROKER_KEY.match(broker):
+    if not BROKER_KEY.fullmatch(broker):
         raise ValueError(f"broker key {broker!r} is not a lowercase slug")
     style = str(fit["style"])
     version = f"h62-{broker}-{style}-{cutoff:%Y%m%dT%H%M}"

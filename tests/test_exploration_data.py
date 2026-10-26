@@ -487,6 +487,19 @@ def test_the_serving_read_returns_only_an_active_champion_with_a_matching_digest
             conn.execute("UPDATE exploration_models SET status = 'live'")
 
 
+@pytest.mark.parametrize("broker", ["icm\n", "ICM", "icm/../x", "", "icm vantage"])
+def test_a_broker_key_must_be_a_lowercase_slug_in_full_so_no_trailing_newline_or_path_part_names_a_model(tmp_path,
+                                                                                                          broker):
+    """The broker key is a path segment (models/h62/<broker>/) and the key evidence is read under: the whole string is
+    the slug, never a prefix of it (`re.match` with `$` let "icm\\n" through)."""
+    fit: dict[str, Any] = {"style": "scalp", "folds": [], "calibrator": None, "features": ["f0"], "per_arm": {},
+                           "auc_net": None, "auc_gross": None, "n": 0}
+    cutoff, act = ex.model_cutoff(pd.Timestamp("2026-10-11 01:00", tz="UTC"))
+    with pytest.raises(ValueError, match="lowercase slug"):
+        ex.save_model(_db(tmp_path), tmp_path / "models", fit, broker=broker, cutoff=cutoff, activation=act)
+    assert not (tmp_path / "models").exists()
+
+
 def test_learn_with_no_candidates_writes_nothing(tmp_path):
     db = _db(tmp_path)
     assert ex.learn(db, broker="icm", as_of=T0, seed=1) == {"arms": 0}

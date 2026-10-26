@@ -1,0 +1,1 @@
+- Exploration evidence: the broker key (`exploration_data.BROKER_KEY`, the models/h62/<broker>/ path segment) is matched in full (`fullmatch`). `re.match` with `$` accepted a trailing newline (`"icm\n"`). The H-60 priors were already chosen by exact membership (`PRIOR_BROKERS`), so no other broker could read ICM evidence through this.
