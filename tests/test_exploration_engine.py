@@ -175,6 +175,18 @@ def test_the_arm_budget_admits_exactly_what_fits_and_refuses_the_next(tmp_path):
     assert refused["action"] == "exploration_refused:arm_budget" and "propensity" in refused
 
 
+def test_an_arm_whose_share_is_below_one_trade_still_takes_one_trade_a_day(tmp_path):
+    """Live 2026-10-26: share x pot (W1A: 0.20 x £40 = £8) was below one trade's loss at the stop (≈ £29), so the
+    arm was refused on every bar. Its day is at least its per-trade cap: one trade, then refused (the pot, the host
+    budget and the RiskGate still bind)."""
+    eng, pb = _engine(tmp_path, [_arm("a", control_share=0.01)], pots={"intraday": Pot(gbp=48.0, max_open=5)},
+                      caps={"a": 17.0})                    # share 0.01 x £48 = £0.48: below one trade
+    for k in range(3):
+        exploration.on_pass(eng, _at(eng, pb, CLOSE + pd.Timedelta(minutes=15 * k)))
+    assert len(_sent(eng)) == 1
+    assert {d["action"] for d in _actions(eng, "exploration_refused:")} == {"exploration_refused:arm_budget"}
+
+
 def test_an_exhausted_pot_refuses_the_next_entry_whatever_the_arms_shares_say(tmp_path, monkeypatch):
     """The arms' shares fit the pot by construction; the pot is the backstop when they do not (shares that moved
     during the day, a reader that over-allocates): realised + open + new <= the pot's £."""
@@ -401,14 +413,14 @@ def _obs(tmp_path: Path) -> list[tuple[Any, ...]]:
 def test_every_candidate_taken_or_not_is_recorded_with_its_propensity_and_a_closed_trade_its_fill(tmp_path):
     """Lane L3's contract: a taken candidate (mu = the random branch's), a blocked one (mu 0 and its reason), and
     the taken one's fill at its close, keyed by the order id."""
-    eng, pb = _engine(tmp_path, [_arm("a"), _arm("b", side=-1, control_share=0.01)])
-    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    eng, pb = _engine(tmp_path, [_arm("a"), _arm("b", side=-1, control_share=0.01)], caps={"a": 40.0, "b": 0.5})
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))                 # b: its per-trade cap is below its loss at the stop
     [pid] = list(eng.open)
     eng._try_close(pid, "time_exit", CLOSE)
     eng._flush_closed()
     [a, b] = _obs(tmp_path)
     assert a[:4] == ("a", 1, "random", exploration.PI_RANDOM) and 0 <= a[4] < 1 and a[6] == 1 and a[7] is None
-    assert b[:4] == ("b", 0, "blocked", 0.0) and b[5] == "arm_budget" and b[6] == 0 and b[7] is None
+    assert b[:4] == ("b", 0, "blocked", 0.0) and b[5] == "arm_cap" and b[6] == 0 and b[7] is None
 
 
 def test_at_champion_zero_the_ranked_branch_is_never_used(tmp_path, monkeypatch):
