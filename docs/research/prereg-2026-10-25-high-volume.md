@@ -251,3 +251,6 @@ vantage-demo runs from 2027-01-01); until then `vantage-demo` stays `enabled: fa
 £17 a trade) + swing £82 (1 open, £40 a trade); VI0 30% of intraday, VW0 33% of swing; 17 of the host's 18 slots.
 The demo ceilings (ADR 0032) and every RiskGate limit apply; exits are never gated. Trial budget, holdout and phase
 gate untouched: exploration is not promotion evidence on any broker.
+
+## Note 2026-10-26 (research-director)
+Daily review (job `daily_review`) is blinded; the pre-registered stops are the only daily results output. See ADR 0045.
