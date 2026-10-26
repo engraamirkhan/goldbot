@@ -213,3 +213,5 @@ Consequences: the exploration budget rises from £138 to £336 a day across the 
 per host. Rollback: on icm-demo `exploration.enabled: false`, `probe_only: false`, drop `max_positions`; move the
 intraday and swing arms and pots back to icm-probe; restart both engines. Reviews: trading-safety (a second order-
 sending host), quant (host split of H-61).
+
+- Trading-safety note (review of a11a65a7): the two learning hosts' exposure is not summed anywhere (up to 34 minimum-lot XAUUSD positions across icm-probe and icm-demo); the supervisor's combined limits cover real accounts only. Accepted on demo; each host keeps its own £220/day, −6%/−8% and RiskGate.

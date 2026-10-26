@@ -176,7 +176,7 @@ accounts:
       enabled: true
       budget_share: 0.6273
       max_open_total: 17
-      pots: { scalp: { gbp: 138, max_open: 8 } }
+      pots: { scalp: { gbp: 138, max_open: 12 } }   # CFO 2026-10-26: 12 + mirrors 3 + scheduled 1 = 16 of 18; back to 8 if -6% before week 3
       arms:
         S0: { style: scalp, max_loss: 6.5, control_share: 0.25 }
         S0R: { style: scalp, max_loss: 6.5, control_share: 0.05 }
