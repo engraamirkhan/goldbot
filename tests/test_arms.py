@@ -20,14 +20,29 @@ ARM_SPEC_IDS = {"S0", "S0R", "S1A", "S1B", "S2A", "S2B", "S3A", "S3B", "S4", "S5
                 "F1A", "F1C", "G1A", "G1C", "WFRI",
                 # arms expansion wave 1 (arms-expansion-2026-10-26.md section 3): specialist arms and 1h controls
                 "XBB15", "XTV1", "XEQ15", "XSO15", "XIMNY", "XIMLN", "XAD1H", "XMR15", "XMR1H", "C1H",
-                "VXRIP1H", "VXRT1H", "VXFK1H", "VXTL1H", "VXTV2", "VXBO1H", "VXBO15", "VXTR1H", "VC1H"}
+                "VXRIP1H", "VXRT1H", "VXFK1H", "VXTL1H", "VXTV2", "VXBO1H", "VXBO15", "VXTR1H", "VC1H",
+                # arms expansion wave 2 (arms-2026-10-25.md section 8, 8.13, 8.14) and H-80's box family
+                "F2A", "F2C", "PDC1", "PDC4", "OBR15", "KSQ1", "KSQ4", "DON4", "DOND", "C30A", "C30C", "KA15", "XC15",
+                "BXR15", "BXR30", "BXR1H", "BXR4H", "BXT15", "BXT30", "BXT1H", "BXT4H",
+                "BXF15", "BXF30", "BXF1H", "BXF4H"}
 
 
-def test_time_structure_arms_are_blocked_and_never_run_on_history() -> None:
+def test_time_structure_arms_are_forward_only_and_never_run_on_history() -> None:
     loaded = {a.id: a for a in arms.load_arms(ARMS)}
     new = {"F1A", "F1C", "G1A", "G1C", "WFRI"}
-    assert all(loaded[i].status == "blocked" and loaded[i].note for i in new)
+    assert all(loaded[i].forward_only and loaded[i].note for i in new)
     assert not new & set(arms.runnable_ids(ARMS))
+
+
+def test_a_forward_only_arm_stays_out_of_the_history_matrix_once_it_runs(tmp_path: Path) -> None:
+    def row(arm_id: str, extra: str = "") -> str:
+        h = arms.arm_hash(arms.Arm(id=arm_id, rule="random_bracket", timeframe="15m"))
+        return f"- {{id: {arm_id}, rule: random_bracket, timeframe: 15m, status: run{extra}, config_hash: {h}}}\n"
+
+    p = tmp_path / "a.yaml"
+    p.write_text("arms:\n" + row("A") + row("B", ", forward_only: true"))
+    assert [a.id for a in arms.load_arms(p)] == ["A", "B"]          # the flag is run policy: the hash still holds
+    assert arms.runnable_ids(p) == ["A"]
 
 
 def test_holdout_guard_refuses_blocks_and_bars_past_the_end() -> None:

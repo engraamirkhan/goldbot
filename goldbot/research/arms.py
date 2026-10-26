@@ -37,9 +37,9 @@ RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_ab
          "ema_pullback", "tsmom", "specialist", *CLOCK_BOX_RULES, "blocked",
          # wave 2 (ARM-SPEC section 8)
          "squeeze_release", "donchian_break", "low30_touch", "low30_control", "pdc_break", "ob_retest",
-         # time-structure arms (docs/research/prereg-2026-10-26-time-structure.md): frozen in the spec with status
-         # blocked until their generators land in arm_rules.RULE_FUNCS (backlog 112); a blocked arm never runs
-         "band_hurst_switch", "level_break", "weekday_hold",
+         # G-1 (prereg-2026-10-26-time-structure.md section 3, G1A/G1C): frozen in the spec with status blocked until
+         # its generator lands in arm_rules.RULE_FUNCS (engine lane E2); a blocked arm never runs
+         "level_break",
          # wave 2 lane W2a (H-70 F1 / F-2)
          "hurst_band_break", "hurst_band_break_control", "htf_stretch_break", "htf_stretch_break_control")
 
@@ -117,6 +117,11 @@ class Arm(FrozenRecord):
     # broker twin copies `twin_of`'s rule body (rule, timeframe, params, max_open; checked at load) under its own id
     # and hash, and has no history run of its own (`runnable_ids`): its broker starts from the flat prior
     twin_of: str | None = None
+    # a forward-only arm has no history run (`runnable_ids`), only live fills from a flat prior: the time-structure
+    # arms ("they are not run on history (no H-60 look; flat priors)", arms-2026-10-25.md 7a), KA "forward-only: no
+    # confirmation credit" (8.8) and H-80's box family, whose 2018+ half is its evaluator's single confirmation read.
+    # A run policy, like status: not in the hash
+    forward_only: bool = False
     config_hash: str | None = None
 
     @model_validator(mode="after")
@@ -179,7 +184,8 @@ def local_window(params: dict[str, Any]) -> SessionWindow | None:
 
 
 def arm_hash(arm: Arm) -> str:
-    """The arm's frozen configuration: sha256 over id, rule, timeframe, params, max_open (status and note are prose)."""
+    """The arm's frozen configuration: sha256 over id, rule, timeframe, params, max_open (status, note and
+    forward_only are prose and run policy)."""
     body = {"id": arm.id, "rule": arm.rule, "timeframe": arm.timeframe, "params": arm.params, "max_open": arm.max_open}
     return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
@@ -212,8 +218,9 @@ def load_arms(path: Path, *, check_hash: bool = True) -> list[Arm]:
 
 def runnable_ids(path: Path) -> list[str]:
     """The arms the historical matrix runs (H-60): every runnable arm but a broker twin, whose history is its
-    original's (same rule body on the same bars) and whose broker takes no H-60 prior (ADR 0043 broker amendment)."""
-    return [a.id for a in load_arms(path) if a.status == "run" and a.twin_of is None]
+    original's (same rule body on the same bars) and whose broker takes no H-60 prior (ADR 0043 broker amendment),
+    nor a forward-only arm (`Arm.forward_only`)."""
+    return [a.id for a in load_arms(path) if a.status == "run" and a.twin_of is None and not a.forward_only]
 
 
 # ---------------------------------------------------------------- priors

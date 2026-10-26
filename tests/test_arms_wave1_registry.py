@@ -78,7 +78,7 @@ def test_the_intraday_pot_opens_nine_and_no_other_limit_moves(accounts, account,
     acc = accounts[account]
     ex = acc.exploration
     assert (ex.pots["intraday"].gbp, ex.pots["intraday"].max_open) == (gbp, 9)
-    assert ex.pots["swing"].max_open == 1 and ex.max_open_total == 17 and ex.budget_share == 0.9
+    assert ex.pots["swing"].max_open == 2 and ex.max_open_total == 17     # swing 1 -> 2: wave 2, decision 3 and ex.budget_share == 0.9
     assert acc.daily_loss_limit_abs == cap and acc.max_positions == 18
     assert acc.risk_overrides is not None and acc.risk_overrides.ceilings.weekly == 0.06
     assert sum(a.control_share or 0.0 for a in ex.arms.values() if a.style == "intraday") <= 1
