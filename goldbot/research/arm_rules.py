@@ -391,3 +391,14 @@ def candidates(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
         raise ValueError(f"{arm.id} is blocked: {arm.note}")
     raw = RULE_FUNCS[arm.rule](arm, ctx)
     return post_filter(arm, ctx, raw)
+
+
+def lookback_bars(arm: Arm, default: int) -> int:
+    """Bars of the arm's timeframe its rule needs live for its candidates to equal the history run's (bounded by the
+    engine's `exploration.lookback`): a `specialist` family's warm-up (`arm_rules_specialist.WARMUP_MIN`), a band
+    rule's LOOKBACK_BARS, else `default`."""
+    if arm.rule == "specialist":
+        from goldbot.research.arm_rules_specialist import warmup_bars
+        return max(default, warmup_bars(arm))
+    from goldbot.research.arm_rules_bands import LOOKBACK_BARS
+    return max(default, LOOKBACK_BARS.get(arm.rule, 0))

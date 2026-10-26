@@ -118,11 +118,10 @@ def test_eq_liquidity_run_on_the_engines_live_window_decides_exactly_as_the_full
     quiet = [close[i] for i in span[::40] if close[i] not in hist]
     for c in [*want, *quiet]:
         complete = b1[b1["visible_at"] <= c].tail(KEEP_1M)
-        bars = exploration._bars(complete, "15m", c, whole=exploration.whole_window(arm))
-        assert bars is not None
-        live = R.candidates(arm, R.RuleContext(
-            bars=bars, b1=complete[complete["ts_utc"] >= pd.Timestamp(bars["ts_utc"].iloc[0])].reset_index(drop=True),
-            blackout_lo=NO, blackout_hi=NO))
+        got_bars = exploration.arm_bars(complete, arm, c)
+        assert got_bars is not None
+        bars = got_bars[0]
+        live = R.candidates(arm, R.RuleContext(bars=bars, b1=got_bars[1], blackout_lo=NO, blackout_hi=NO))
         last = live[live["idx"] == len(bars) - 1]
         got = [(int(s), float(r)) for s, r in zip(last["side"], last["risk_usd"], strict=True)]
         exp = [] if c not in hist else [(int(hist[c][0]), float(hist[c][1]))]
@@ -130,11 +129,11 @@ def test_eq_liquidity_run_on_the_engines_live_window_decides_exactly_as_the_full
                                             for g, e in zip(got, exp, strict=True)), c
 
 
-def test_only_specialist_arms_read_the_whole_window_the_written_rules_keep_their_lookback() -> None:
-    assert exploration.whole_window(_arm(*EQ))
-    assert not exploration.whole_window(A.Arm(id="Y", rule="random_bracket", timeframe="15m",
-                                              params={"minutes": [0], "stop_atr": 1.0, "target_r": 2.0,
-                                                      "hold_bars": 4}))
+def test_eq_liquidity_run_declares_its_warm_up_and_the_written_rules_keep_their_lookback() -> None:
+    assert exploration.lookback(_arm(*EQ)) > exploration.LOOKBACK
+    assert exploration.lookback(A.Arm(id="Y", rule="random_bracket", timeframe="15m",
+                                      params={"minutes": [0], "stop_atr": 1.0, "target_r": 2.0,
+                                              "hold_bars": 4})) == exploration.LOOKBACK
 
 
 # ------------------------------------------------------------------------------------------------ smc tvr1 / tvr2

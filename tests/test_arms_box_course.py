@@ -45,9 +45,6 @@ WHOLE_MEMORY = 10**7                   # LOOKBACK_1M so large that `exploration.
 CUT = pd.Timestamp("2024-01-11", tz="UTC")     # a Thursday 00:00 UTC: every family has a candidate before it
 FAKEY_SHORT = pytest.mark.xfail(strict=True, reason="fakey L0's 4h box set needs more than the engine's 60 000 1m "
                                                     "bars of memory (module docstring): NO-GO for wave 1")
-LIVE_WINDOW_SHORT = pytest.mark.xfail(strict=True, reason="exploration._bars hands an arm LOOKBACK=200 bars of its "
-                                                          "timeframe (~2 days at 15m, ~8 at 1h); the course reads "
-                                                          "daily structure and 1h/4h boxes from weeks before")
 
 
 def _families(*marked: str) -> list[Any]:
@@ -157,9 +154,9 @@ def _rule_at(b1: pd.DataFrame, name: str, tf: A.Timeframe, close: pd.Timestamp) 
     """The rule on exactly the bars `step` hands the arm at `close` (`exploration._bars`, then its 1m slice), before the
     window and common filters: the candidate of the bar that just closed."""
     eng = _engine_at(b1, _arm(name, tf), close)
-    bars = exploration._bars(eng.bars_1m, tf, close)
-    assert bars is not None
-    sub = eng.bars_1m[eng.bars_1m["ts_utc"] >= pd.Timestamp(bars["ts_utc"].iloc[0])].reset_index(drop=True)
+    got_bars = exploration.arm_bars(eng.bars_1m, _arm(name, tf), close)
+    assert got_bars is not None
+    bars, sub = got_bars
     got = R.RULE_FUNCS["specialist"](_arm(name, tf), R.RuleContext(bars=bars, b1=sub, blackout_lo=NO, blackout_hi=NO))
     return got[got["idx"] == len(bars) - 1].drop(columns="idx").reset_index(drop=True)
 
@@ -183,8 +180,7 @@ def test_the_engines_1m_memory_is_enough_warm_up_for_every_history_candidate(b1,
             pytest.approx((risk, 2 * risk, int(hold) + 1), rel=1e-6)], ctx.close_ts[int(i)]
 
 
-@LIVE_WINDOW_SHORT
-@pytest.mark.parametrize(("name", "tf"), FAMILIES)
+@pytest.mark.parametrize(("name", "tf"), _families("fakey"))
 def test_the_runners_live_arm_window_reproduces_every_history_candidate(b1, name, tf) -> None:
     ctx, got = _history(b1, name, tf)
     assert len(got) > 0

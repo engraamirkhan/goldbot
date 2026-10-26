@@ -42,6 +42,7 @@ UK_SWITCH = pd.Timestamp("2026-10-25 01:00", tz="UTC")      # London leaves BST
 US_SWITCH = pd.Timestamp("2026-11-01 06:00", tz="UTC")      # New York leaves EDT (02:00 local)
 CUT = pd.Timestamp("2026-10-28", tz="UTC")                  # a Wednesday 00:00 UTC, inside the gap week
 WARM = pd.Timestamp("2026-09-28", tz="UTC")                 # two weeks in: every live window is full of history
+MEMORY_1M = 60_000                                          # the engine's 1m memory (max_bars_in_memory)
 # (case id, family, timeframe, the arm's params beyond `specialist`): the section 3 rows; London is the declared
 # intraday_momentum variant, session_open's two opens are strata of one arm
 CASES: tuple[tuple[str, str, A.Timeframe, dict[str, Any]], ...] = (
@@ -173,9 +174,9 @@ def _live(b1: pd.DataFrame, arm: A.Arm, through: pd.Timestamp) -> list[explorati
     """What the engine queues at the close `through`: its own live window (`exploration._bars`, LOOKBACK bars of the
     arm's timeframe and at least LOOKBACK_1M minutes, cut at the close) and its own `_signal`."""
     complete = b1[b1["visible_at"] <= through]
-    bars = exploration._bars(complete, arm.timeframe, through)
-    assert bars is not None, through
-    window_1m = complete[complete["ts_utc"] >= pd.Timestamp(bars["ts_utc"].iloc[0])].reset_index(drop=True)
+    got = exploration.arm_bars(complete.tail(MEMORY_1M), arm, through)
+    assert got is not None, through
+    bars, window_1m = got
     eng = SimpleNamespace(decisions=[])
     ex = SimpleNamespace(retired=set(), last_bar={}, queue=[])
     exploration._signal(cast(Any, eng), cast(Any, ex), EngineArm(spec=arm, style="intraday"), bars, window_1m, through)
@@ -183,18 +184,11 @@ def _live(b1: pd.DataFrame, arm: A.Arm, through: pd.Timestamp) -> list[explorati
     return list(ex.queue)
 
 
-# The engine's live window is wall-clock (`exploration._bars`: LOOKBACK x the bar's seconds, at least LOOKBACK_1M
-# minutes), not a bar count, and its 1d context is resampled from that window. Measured on this fixture (lane L4):
-# - session_open: 200 15m bars hold about 3 daily bars, so its `d1_atr14` (ATR(14) of 1d) is NaN live; the specialist's
-#   Asian-range filter `asia_rng < 0.8 x d1_atr14` is then False (a NaN comparison; its `fillna(True)` never sees a
-#   NaN), so live never queues a candidate history takes: 16 of 16 missed.
-# - after a weekend the window holds 34-69 15m bars, so Wilder ATR(14) has not forgotten its start: intraday_momentum's
-#   Monday stop is up to 1.2% (London) / 0.25% (New York) off history's. Tuesday to Friday agree within 1e-4.
-WINDOW_GAP = "engine live window (exploration._bars) is wall-clock and too short for the family's warm-up (see above)"
-LIVE_CASES = [pytest.param(*c, id=c[0], marks=pytest.mark.xfail(strict=True, reason=WINDOW_GAP))
-              if c[0] == "session_open" else pytest.param(*c, id=c[0]) for c in CASES]
-MONDAY_CASES = [pytest.param(*c, id=c[0], marks=pytest.mark.xfail(strict=True, reason=WINDOW_GAP))
-                if c[0] != "asia_drift" else pytest.param(*c, id=c[0]) for c in CASES]
+# The engine's live window counts bars (`exploration.arm_bars`, the family's declared warm-up): session_open's daily
+# ATR(14) filter has its 30 trading days and the Monday ATR stops their full window after a weekend (lane L4 found
+# both broken on the earlier wall-clock window: 16 of 16 session_open candidates missed, Monday stops up to 1.2% off).
+LIVE_CASES = [pytest.param(*c, id=c[0]) for c in CASES]
+MONDAY_CASES = LIVE_CASES
 
 
 def _live_vs_history(b1: pd.DataFrame, case: str, mondays: bool) -> None:
@@ -225,15 +219,15 @@ def test_the_engines_live_window_gives_the_history_candidate_at_every_decision_c
         b1: pd.DataFrame, case: str, name: str, tf: A.Timeframe, extra: dict[str, Any]) -> None:
     """Warm-up: on the engine's live window alone the arm queues, at each close where history has a candidate, that
     candidate with its side, stop, target and hold, and nothing at the same clock times where history has none (a
-    missed or an extra trade both break history = live). session_open fails it (comment above): NO-GO."""
+    missed or an extra trade both break history = live)."""
     _live_vs_history(b1, case, mondays=False)
 
 
 @pytest.mark.parametrize(("case", "name", "tf", "extra"), MONDAY_CASES)
 def test_the_engines_live_window_gives_the_history_candidate_on_mondays_after_the_weekend_gap(
         b1: pd.DataFrame, case: str, name: str, tf: A.Timeframe, extra: dict[str, Any]) -> None:
-    """The same on Mondays, when the wall-clock window spans the weekend and holds the fewest bars. asia_drift (1h,
-    a 201 h window) passes; the 15m families fail on the stop (comment above) until the window counts bars."""
+    """The same on Mondays, after the weekend gap: with
+    the window counted in bars, the 15m families keep their full ATR warm-up."""
     _live_vs_history(b1, case, mondays=True)
 
 
@@ -251,8 +245,7 @@ def _tick(eng: Any, pb: Any, ticks: pd.DataFrame, close: pd.Timestamp) -> Tick:
     return tick
 
 
-@pytest.mark.parametrize("case", [pytest.param(c, marks=pytest.mark.xfail(strict=True, reason=WINDOW_GAP))
-                                  if c == "session_open" else c for c in IDS])
+@pytest.mark.parametrize("case", IDS)
 def test_a_candidate_whose_loss_at_its_stop_exceeds_the_arms_pound_cap_is_skipped_and_journalled_with_its_propensity(
         tmp_path: Path, ticks: pd.DataFrame, b1: pd.DataFrame, monkeypatch: pytest.MonkeyPatch, case: str) -> None:
     """Section 4: "A candidate outside its £ cap or stop band is skipped and logged with its propensity". The same

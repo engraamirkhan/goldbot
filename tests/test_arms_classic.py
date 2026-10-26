@@ -210,11 +210,11 @@ def test_the_engines_exploration_window_gives_the_history_candidate_on_every_clo
 
 @pytest.mark.parametrize(("name", "tf"), PARAMS)
 def test_a_specialist_arms_warm_up_is_its_familys_and_stays_inside_the_engines_buffer(name, tf) -> None:
-    """Bounded: never the whole 40-day buffer (L7: ~30 s a close), at most WARMUP_MAX_1M minutes, half the buffer;
+    """Bounded: never the whole 40-day buffer (L7: ~30 s a close), these five within half of it, the cap within it;
     any other arm keeps LOOKBACK."""
     n = exploration.lookback(_arm(name, tf))
-    assert exploration.LOOKBACK <= n <= exploration.WARMUP_MAX_1M * 60 // tf_seconds(tf)
-    assert exploration.WARMUP_MAX_1M <= BUFFER // 2
+    assert exploration.LOOKBACK <= n <= BUFFER // 2 * 60 // tf_seconds(tf)
+    assert exploration.LOOKBACK_MAX_1M <= BUFFER
     rb = A.Arm(id="R", rule="random_bracket", timeframe=tf,
                params={"stop_usd": 5.0, "target_r": 2.0, "hold_bars": 4, "minutes": [0]})
     assert exploration.lookback(rb) == exploration.LOOKBACK
@@ -231,6 +231,23 @@ def test_all_five_classic_arms_decide_a_close_inside_the_time_budget(b1) -> None
         assert got is not None
         R.candidates(arm, R.RuleContext(bars=got[0], b1=got[1], blackout_lo=NO, blackout_hi=NO))
     assert time.perf_counter() - t0 < BUDGET_S / 2
+
+
+def test_an_atr_control_arm_keeps_its_history_stop_on_mondays_after_the_weekend(b1) -> None:
+    """W2b, 2026-10-26: on the old wall-clock window a Monday held few bars and every ATR arm's stop drifted (up to
+    3e-4). Counted in bars, an I0-style control (stop 1.5 x ATR of its 15m bars) on Monday equals history."""
+    arm = A.Arm(id="I0X", rule="random_bracket", timeframe="15m",
+                params={"minutes": [0], "stop_atr": 1.5, "target_r": 2.0, "hold_bars": 8})
+    ctx = _ctx(b1, "15m")
+    full = R.candidates(arm, ctx)
+    full = full.assign(close=ctx.close_ts[full["idx"].to_numpy()])
+    monday = full[(full["close"] >= LIVE_FROM) & (full["close"] < LIVE_TO) & (full["close"].dt.dayofweek == 0)
+                  & (full["close"].dt.hour < 12)]
+    assert len(monday) >= 4
+    for c in monday["close"]:
+        got = exploration.arm_bars(b1[b1["visible_at"] <= c].tail(BUFFER), arm, c)
+        assert got is not None
+        _live_check(arm, full, c, *got)
 
 
 # ------------------------------------------------------------------------------------------------ the GBP cap
