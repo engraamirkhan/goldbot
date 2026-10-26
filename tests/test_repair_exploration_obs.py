@@ -26,7 +26,7 @@ def _load() -> Any:
 
 
 def _row(db: Database, cid: str, **kw: Any) -> None:
-    ed.record_candidate(db, candidate_id=cid, account_id="icm-probe", arm_id="I0", family="random_bracket",
+    ed.record_candidate(db, candidate_id=cid, account_id="icm-probe", broker="icm", arm_id="I0", family="random_bracket",
                         style="intraday", tf="15m", side=1, decision_utc=pd.Timestamp("2026-10-26 07:00", tz="UTC"),
                         stop_dist=10.0, target_dist=20.0, max_hold_s=86400, **kw)
 

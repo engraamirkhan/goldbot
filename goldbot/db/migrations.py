@@ -435,6 +435,28 @@ AUX: tuple[Migration, ...] = (
                recorded_ns INTEGER NOT NULL
            ) STRICT""",
     )),
+    # additive (ADR 0043 amendment, quant 2026-10-26: exploration evidence and costs are keyed by BROKER and never
+    # pooled across brokers; goldbot/research/exploration_data.py). `exploration_obs.broker` and
+    # `exploration_models.broker`: the broker of the account that recorded the candidate / whose evidence fitted the
+    # model (rows from before this migration are stamped from accounts.yaml by the nightly learner;
+    # `exploration_data.stamp_brokers`). `exploration_broker_weights`: the bandit's shares per (run, broker, arm), so
+    # two brokers running the same arm ids in one nightly run never overwrite each other. It starts with the last
+    # `exploration_weights` rows as the ICM run: every exploration host before this migration was on IC Markets
+    # (vantage-demo had never been enabled). A release without it keeps reading `exploration_weights`, which then
+    # ages past MAX_WEIGHTS_AGE and reads as equal shares (the safe side)
+    Migration(version=17, name="exploration_broker", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS exploration_broker_weights (
+               run_ns INTEGER NOT NULL,
+               broker TEXT NOT NULL,
+               arm_id TEXT NOT NULL,
+               style TEXT NOT NULL,
+               weight REAL NOT NULL CHECK (weight >= 0 AND weight <= 1),
+               detail TEXT NOT NULL CHECK (json_valid(detail)),
+               PRIMARY KEY (run_ns, broker, arm_id)
+           ) STRICT""",
+        "INSERT OR IGNORE INTO exploration_broker_weights (run_ns, broker, arm_id, style, weight, detail) "
+        "SELECT run_ns, 'icm', arm_id, style, weight, detail FROM exploration_weights",
+    ), add_columns=(("exploration_obs", "broker", "TEXT"), ("exploration_models", "broker", "TEXT"))),
 )
 
 CORE: tuple[Migration, ...] = (
