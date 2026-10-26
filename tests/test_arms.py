@@ -13,7 +13,9 @@ from goldbot.research import arms
 ROOT = Path(__file__).resolve().parents[1]
 ARMS = ROOT / "config" / "exploration_arms.yaml"
 ARM_SPEC_IDS = {"S0", "S0R", "S1A", "S1B", "S2A", "S2B", "S3A", "S3B", "S4", "S5A", "S5B", "S6", "I0", "I1", "I2A", "I2B",
-                "MB15", "MB30", "MB1H", "MSA15", "I3", "W0", "W1A", "W1B", "W2", "W3"}
+                "MB15", "MB30", "MB1H", "MSA15", "I3", "W0", "W1A", "W1B", "W2", "W3",
+                # broker twins (vantage-demo, ADR 0043 broker amendment): same rule bodies, own ids
+                "VI0", "VI2A", "VI2B", "VMB15", "VMB30", "VMB1H", "VMS15", "VW0", "VW1A", "VW1B", "VW2"}
 
 
 def test_holdout_guard_refuses_blocks_and_bars_past_the_end() -> None:

@@ -32,11 +32,12 @@ def _stored(tmp_path: Path, cls: str) -> None:
     (tmp_path / "classifier_icm-demo.json").write_text(json.dumps({"class": cls, "pending": None, "runs": []}))
 
 
-def test_the_shipped_config_declares_icm_demo_and_icm_probe_raw_and_nothing_else():
-    # owner 2026-10-20: icm-probe is a Raw account too; a declared class is only the baseline until measured
+def test_the_shipped_config_declares_the_three_demo_hosts_raw_and_nothing_else():
+    # owner 2026-10-20: icm-probe is a Raw account too; 2026-10-26: vantage-demo is Raw ECN. A declared class is only
+    # the baseline until measured
     accounts = load_accounts()
     declared = {a: acc.account_class for a, acc in accounts.items() if acc.account_class is not None}
-    assert declared == {"icm-demo": "raw", "icm-probe": "raw"}
+    assert declared == {"icm-demo": "raw", "icm-probe": "raw", "vantage-demo": "raw"}
 
 
 def test_an_account_class_other_than_raw_or_standard_is_refused_at_load():

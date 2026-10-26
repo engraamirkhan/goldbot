@@ -214,13 +214,14 @@ def test_a_disabled_exploration_block_never_opens_an_arm_even_on_a_live_account(
     assert acc_mod.exploration_arm_caps(acc) == {}
 
 
-def test_the_shipped_registry_runs_exploration_on_the_two_demo_probe_only_hosts_only(tmp_path):
-    """Switched on 2026-10-25 (PD decision) on icm-probe, and on icm-demo as the second learning host (ADR 0043
-    amendment, PD 2026-10-26); every other account registers no arm."""
+def test_the_shipped_registry_runs_exploration_on_the_three_demo_probe_only_hosts_only(tmp_path):
+    """Switched on 2026-10-25 (PD decision) on icm-probe, on icm-demo as the second learning host (ADR 0043
+    amendment, PD 2026-10-26) and on vantage-demo as the third (broker amendment, PD 2026-10-26); every other account
+    registers no arm."""
     cfg = tmp_path / "accounts.yaml"
     cfg.write_text(acc_mod.ACCOUNTS_FILE.read_text())
     accs = acc_mod.load_accounts(cfg, logins=False)
-    hosts = ("icm-probe", "icm-demo")
+    hosts = ("icm-probe", "icm-demo", "vantage-demo")
     for host in hosts:
         acc = accs[host]
         assert acc.exploration.enabled and acc.probe_only and acc.mode == "demo"

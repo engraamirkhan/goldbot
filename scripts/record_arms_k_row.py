@@ -37,7 +37,8 @@ def _already_charged(rows: list[dict[str, Any]]) -> bool:
 def record(registry: Path, priors: dict[str, Any], run_id: str, arms_file: Path, costs_file: Path) -> dict[str, Any]:
     """One registry row per run. The first charges H-60's K_eff = 24 once (a discovery-status row, which is what
     `n_trials_effective` sums); a rerun is still one look (1 trial) but charges k_eff 0."""
-    arms = [a for a in A.load_arms(arms_file) if a.status == "run"]
+    history = set(A.runnable_ids(arms_file))            # the matrix's arms: broker twins have no history run
+    arms = [a for a in A.load_arms(arms_file) if a.id in history]
     costs = A.load_costs(costs_file)
     config = {"arms": {a.id: a.config_hash for a in arms}, "blocks": [f"{s}:{e}" for s, e in A.blocks()],
               "round_trip_usd": costs.round_trip_usd, "overshoot_scenarios_usd": list(costs.overshoot_scenarios_usd),

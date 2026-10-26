@@ -333,7 +333,8 @@ def test_the_weekend_day_is_one_market_closed_line(tmp_path: Path) -> None:
     assert "Scalp lab" not in text
 
 
-def test_a_disabled_account_is_left_out_of_the_daily(tmp_path: Path) -> None:
+def test_a_disabled_account_is_left_out_of_the_daily(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _enable(monkeypatch, "icm-probe", "icm-demo")                  # vantage-demo switched off, its stale file kept
     Lab(tmp_path).engine("icm-probe", 10_000, 10_000).engine("vantage-demo", 10_000, 10_000)
     assert "Vantage lab" not in daily(tmp_path)
 
