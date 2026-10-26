@@ -369,11 +369,24 @@ def specialist(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     return specialist_rule(arm, ctx)
 
 
+# ---------------------------------------------------------------- wave 2 (ARM-SPEC section 8): level rules
+def pdc_break(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
+    """ARM-SPEC 8.6 / 8.13: PDC1 / PDC4 (`goldbot.research.arm_rules_levels`)."""
+    from goldbot.research.arm_rules_levels import pdc_break as rule
+    return rule(arm, ctx)
+
+
+def ob_retest(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
+    """ARM-SPEC 8.5 / 8.13: OBR15 (`goldbot.research.arm_rules_levels`)."""
+    from goldbot.research.arm_rules_levels import ob_retest as rule
+    return rule(arm, ctx)
+
+
 RULE_FUNCS: dict[str, Callable[[Arm, RuleContext], pd.DataFrame]] = {
     "random_bracket": random_bracket, "session_vwap_fade": session_vwap_fade,
     "opening_range_break": opening_range_break, "sweep_absorb": sweep_absorb_rule,
     "box_break_close": box_break_close_rule, "ema_pullback": ema_pullback, "tsmom": tsmom_rule,
-    "specialist": specialist,
+    "specialist": specialist, "pdc_break": pdc_break, "ob_retest": ob_retest,
 }
 
 
