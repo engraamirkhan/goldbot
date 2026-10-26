@@ -109,6 +109,89 @@ def test_pull_refuses_to_loop_when_a_page_cannot_advance():
         tk.pull_day(FakeTickBroker(same_second), "XAUUSD", s, e, chunk=10)
 
 
+class SyncingBroker(FakeTickBroker):
+    """The terminal still loading the day's history: the first request that reaches `cutoff` returns a short page
+    ending there (2026-10-19 on the brain: 45,876 ticks, 22:02-01:00 UTC, then a short page); later requests see it all."""
+
+    def __init__(self, ticks: pd.DataFrame, cutoff: pd.Timestamp) -> None:
+        super().__init__(ticks)
+        self.cutoff, self.loading = cutoff, True
+
+    def copy_ticks(self, symbol: str, since_utc: pd.Timestamp, n: int = 100_000) -> pd.DataFrame:
+        page = super().copy_ticks(symbol, since_utc, n)
+        if self.loading and (page["ts_utc"] >= self.cutoff).any():
+            self.loading = False
+            return page[page["ts_utc"] < self.cutoff].reset_index(drop=True)
+        return page
+
+
+def test_a_short_page_while_the_terminal_loads_history_is_not_the_end_of_the_day():
+    s, e = _bounds("2026-10-16")
+    day = synthetic_day(s, e, 25_000)
+    broker = SyncingBroker(day, s + pd.Timedelta(hours=3))
+    got = tk.pull_day(broker, "XAUUSD", s, e, chunk=2_000, whole_day=True)
+    assert len(got) == len(day) and got["ts_utc"].max() > e - pd.Timedelta(minutes=5)
+
+
+class GapBroker(FakeTickBroker):
+    """A terminal that cannot serve [hole_from, hole_to): requests from inside it return nothing."""
+
+    def __init__(self, ticks: pd.DataFrame, hole_from: pd.Timestamp, hole_to: pd.Timestamp) -> None:
+        super().__init__(ticks[(ticks["ts_utc"] < hole_from) | (ticks["ts_utc"] >= hole_to)])
+        self.hole_from, self.hole_to = hole_from, hole_to
+
+    def copy_ticks(self, symbol: str, since_utc: pd.Timestamp, n: int = 100_000) -> pd.DataFrame:
+        page = super().copy_ticks(symbol, since_utc, n)
+        if self.hole_from <= pd.Timestamp(since_utc) < self.hole_to:
+            return page.iloc[0:0]
+        return page[page["ts_utc"] < self.hole_from] if pd.Timestamp(since_utc) < self.hole_from else page
+
+
+def test_ticks_ending_early_raise_instead_of_passing_for_a_whole_day():
+    s, e = _bounds("2026-10-16")
+    broker = GapBroker(synthetic_day(s, e, 5_000), s + pd.Timedelta(hours=3), e + pd.Timedelta(days=1))
+    with pytest.raises(tk.TruncatedPull, match="before the server day ends"):
+        tk.pull_day(broker, "XAUUSD", s, e, chunk=1_000, whole_day=True)
+    # the engine's history fill (whole_day off) keeps what the terminal served: its gaps come from the broker's 1m bars
+    part = tk.pull_day(broker, "XAUUSD", s, e, chunk=1_000)
+    assert 0 < len(part) and part["ts_utc"].max() < s + pd.Timedelta(hours=3)
+
+
+def test_a_truncated_day_is_not_written_and_newer_days_still_are(tmp_path):
+    week = _week_broker().ticks
+    s, e = _bounds("2026-10-12")
+    broker = GapBroker(week, s + pd.Timedelta(hours=3), e)
+    out = _record(tmp_path, broker, backfill_days=4)
+    assert out["written"] == ["2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16"]
+    assert "2026-10-12" in out["incomplete"][0] and out["behind"] == 1
+    assert not (tmp_path / "ticks" / "icm-demo" / "2026-10-12.parquet").exists()
+
+
+class ShortPageBroker(FakeTickBroker):
+    """Pages shorter than requested in mid-stream for a second reason: the adapter drops repeated (time_msc, bid, ask,
+    flags) rows that COPY_TICKS_ALL returns (volume-only updates; 263-338 same-millisecond rows a day on the brain)."""
+
+    def __init__(self, ticks: pd.DataFrame, short_every: int = 1, drop: int = 3) -> None:
+        super().__init__(ticks)
+        self.short_every, self.drop = short_every, drop
+
+    def copy_ticks(self, symbol: str, since_utc: pd.Timestamp, n: int = 100_000) -> pd.DataFrame:
+        page = super().copy_ticks(symbol, since_utc, n)
+        if len(page) == n and len(self.calls) % self.short_every == 0:
+            return page.drop(index=page.index[1:1 + self.drop]).reset_index(drop=True)
+        return page
+
+
+@pytest.mark.parametrize("short_every", [1, 3])
+def test_a_page_short_from_dropped_duplicates_is_not_the_end_of_the_day(short_every):
+    s, e = _bounds("2026-10-16")
+    day = synthetic_day(s, e, 20_000)
+    broker = ShortPageBroker(day, short_every=short_every)
+    got = tk.pull_day(broker, "XAUUSD", s, e, chunk=1_000, whole_day=True)
+    assert got["ts_utc"].max() == day["ts_utc"].max() and len(tk._london_ny(got)) > 10_000
+    assert len(got) >= len(day) - 3 * len(broker.calls)          # only the rows the broker itself dropped are missing
+
+
 # ------------------------------------------------------------------------------------------- write, index, epoch_ns
 def test_written_times_are_epoch_ns_whatever_the_unit_and_round_trip_exactly(tmp_path):
     s, e = _bounds("2026-10-16")
@@ -222,8 +305,10 @@ def test_retention_deletes_days_older_than_retain_days(tmp_path):
     out = _record(tmp_path, FakeTickBroker(broker.ticks.head(0)), later, backfill_days=1, retain_days=4)
     assert out["pruned"] == ["2026-10-12", "2026-10-13", "2026-10-14"]
     d = tmp_path / "ticks" / "icm-demo"
-    assert sorted(p.name for p in d.glob("*.parquet")) == ["2026-10-15.parquet", "2026-10-16.parquet",
-                                                         "2026-10-19.parquet"]
+    # the 19th: the terminal served no tick and no later session has opened yet, so an empty file would claim a
+    # tickless day; it is reported incomplete and pulled again by a later run
+    assert sorted(p.name for p in d.glob("*.parquet")) == ["2026-10-15.parquet", "2026-10-16.parquet"]
+    assert out["incomplete"][0].startswith("2026-10-19")
     assert "2026-10-12" not in tk.read_index(tmp_path, "icm-demo")
 
 
@@ -275,7 +360,7 @@ def test_job_records_per_account_skips_without_a_broker_and_reports_failures(tmp
     assert JOBS["tick_record"] is tick_record
     broker = _week_broker()
     out = tick_record(_job_ctx(tmp_path, lambda acc: broker), NOW)
-    assert out["icm-demo"]["written"] == ["2026-10-09"] and broker.shut     # one day a run, oldest first
+    assert out["icm-demo"]["written"] == ["2026-10-09", "2026-10-12", "2026-10-13"] and broker.shut  # oldest first
     assert "skipped" in tick_record(_job_ctx(tmp_path, None), NOW)
     assert tick_record(_job_ctx(tmp_path, lambda acc: None), NOW)["icm-demo"]["skipped"]
 
@@ -296,7 +381,11 @@ def test_settings_defaults_cover_the_h_a_window():
     # each slot falls in the daily break of one DST regime (17:00-18:00 New York)
     assert tk.market_quiet(pd.Timestamp(f"2026-07-15 {s.scheduler.tick_record.at}", tz="UTC"))
     assert tk.market_quiet(pd.Timestamp(f"2026-12-16 {s.scheduler.tick_record_winter.at}", tz="UTC"))
-    assert s.ticks.max_days_per_run == 1 and s.ticks.page_limit_s < 10      # bridge ORDER_MAX_AGE_S
+    # a run catches up up to 3 days within its budget (one a run never caught up after a failed run); a cold page of
+    # an old day took 2.1-4.7 s on the brain (2026-10-18..24), so the limit is 5 s, still under ORDER_MAX_AGE_S
+    assert s.ticks.max_days_per_run == 3 and s.ticks.page_limit_s == 5.0 and s.ticks.page_limit_s < 10
+    # three accounts' budgets fit the 45-minute quiet window of the daily break
+    assert 3 * s.ticks.run_budget_s <= 45 * 60
 
 
 def test_backup_keeps_day_files_and_drops_temporaries():
@@ -408,4 +497,4 @@ class ReadOnlyBroker(FakeTickBroker):
 def test_job_is_read_only(tmp_path):
     broker = ReadOnlyBroker(_week_broker().ticks)
     out = tick_record(_job_ctx(tmp_path, lambda acc: broker), NOW)
-    assert out["icm-demo"]["written"] == ["2026-10-09"] and broker.calls and broker.shut
+    assert out["icm-demo"]["written"] == ["2026-10-09", "2026-10-12", "2026-10-13"] and broker.calls and broker.shut

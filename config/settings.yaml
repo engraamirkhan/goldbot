@@ -369,11 +369,11 @@ ticks:                               # broker tick record (goldbot/data/ticks.py
   retain_days: 240                   # server days kept in state/ticks/<account>/ (H-A reads Nov 2026 days in May 2027)
   min_london_ny_ticks: 1000          # health ticks:<account> WARNs when the latest trading day has fewer (classifier's bar)
   backfill_days: 7                   # closed server days before the latest that each run re-checks and pulls if missing
-  max_days_per_run: 1                # oldest missing day first; weekend runs (both slots run) catch up
+  max_days_per_run: 3                # oldest missing day first, within run_budget_s; one a run never caught up
   page_ticks: 2000                   # rows per copy_ticks call: the bridge serves one request at a time
   pause_s: 0.2                       # pause between pages so the engine's quote reads get the bridge
-  page_limit_s: 2.0                  # a slower page stops the run (engine orders older than 10 s are refused)
-  run_budget_s: 300                  # per account per run; an unfinished day is not written and is pulled next run
+  page_limit_s: 5.0                  # a slower page stops the run (cold history page 2-5 s; orders > 10 s refused)
+  run_budget_s: 600                  # per account per run (3 accounts fit the 45-min break); unfinished day pulled next run
 
 webhook:                             # TradingView receiver (goldbot/webhook/app.py)
   max_rows_per_hour: 5000            # inbox rows in the last hour; beyond it 429 (bounds what a leaked secret can write)
