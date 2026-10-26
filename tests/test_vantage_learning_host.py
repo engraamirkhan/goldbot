@@ -38,11 +38,11 @@ def vantage() -> acc_mod.Account:
 
 
 # ------------------------------------------------------------------------------------------------ the registry entry
-def test_vantage_demo_ships_configured_as_a_demo_probe_only_learning_host_but_switched_off(vantage):
+def test_vantage_demo_ships_configured_as_a_demo_probe_only_learning_host_switched_on(vantage):
     """Quant review of 10a18031 (PD choice): off in this change; the registry trials are recorded first, then a
     one-line change switches it on."""
     acc = vantage
-    assert not acc.enabled and acc.mode == "demo" and acc.broker == "vantage" and acc.login is None
+    assert acc.enabled and acc.mode == "demo" and acc.broker == "vantage" and acc.login is None    # on after its registry rows
     assert acc.probe_only and not acc.shadow_host and acc.approval_mode == "auto" and acc.account_class == "raw"
     assert acc.symbol == "XAUUSD+" and acc.server_tz == "NY+7" and acc.magic_base == 260200
     assert acc.daily_loss_limit_abs == 200 and acc.max_positions == 18

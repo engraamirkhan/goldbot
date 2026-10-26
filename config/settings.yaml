@@ -193,7 +193,7 @@ research:
   trial_budget_per_month: 12         # bounded loop: trials per specialist per month (feeds the deflated Sharpe)
   label_grid_paused: true            # monthly label-grid loop off until a family passes the primary-signal screen
   trial_budget_quarter: 20           # pre-registered trials per calendar quarter across all families (P2); raising it is an owner decision
-  trial_budget_overrides: {"2026Q4": 66}   # owner directive 2026-10-18: backtest as much as needed; batch-2026-10-18.md. +2 (53->55) for H-48 + H-49 stage 2: RD ruling 2026-10-18 (prereg-kb-2026-10-18.md), owner approved 2026-10-18. +11 (55->66) for the Vantage twin arms (prereg amendment 2), under the same owner directive and the 2026-10-26 "all three accounts learn"; reported to the owner 2026-10-26
+  trial_budget_overrides: {"2026Q4": 69}   # owner directive 2026-10-18: backtest as much as needed; batch-2026-10-18.md. +2 (53->55) for H-48 + H-49 stage 2: RD ruling 2026-10-18 (prereg-kb-2026-10-18.md), owner approved 2026-10-18. +11 (55->66) for the Vantage twin arms (prereg amendment 2), under the same owner directive and the 2026-10-26 "all three accounts learn"; reported to the owner 2026-10-26; 66 -> 69: Q4 already held 58 (H-60 reruns and corrections count +1 each, conservative), so the honest total is 69
   loop_trials_per_run: 16            # continuous research loop (owner 2026-10-18): trials per scheduled batch, separate from the
                                      #   quarterly budget; every one is a registry row and the deflated Sharpe counts the full K. 0 = off
                                      #   (ADR 0029; a loop trial cites rule_ref=loop, the quarterly count skips it, K counts it)
