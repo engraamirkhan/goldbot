@@ -4,7 +4,7 @@ Reusable read-only study behind docs/research/time-structure/sessions.md. It reg
 Point in time: a price "at T" is the close of the last 1m bar that STARTED before T (the bar is visible at start + 1m),
 and every rule enters at or after the stamp it is decided on. Costs are the measured $/oz round trip
 (docs/research/cost-model-1m-2026-10-25.md), not the Dukascopy spread (which is ~8x wider than our broker's).
-Usage: uv run python scripts/research/session_structure.py <dir with xauusd_1m_dukascopy_YYYY.parquet> [section ...]
+Usage: uv run python docs/research/candidates/time_structure/session_structure.py <dir with xauusd_1m_dukascopy_YYYY.parquet> [section ...]
 Sections: dst hourly events asia gao decomp orb spread tf   (default: all)
 """
 from __future__ import annotations

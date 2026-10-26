@@ -5,7 +5,7 @@ Descriptive screen, NOT a registry trial. Every look is counted in LOOKS and pri
 Point in time: every indicator is computed with one-sided (causal) filters and `check_causal` proves value(t) is
 identical when the bars after t are deleted. Macro joins go through goldbot.data.store.asof_join on available_utc.
 
-Usage: uv run --with pywavelets --with scipy --with statsmodels python scripts/research/ts_cycles.py --data DIR
+Usage: uv run --with pywavelets --with scipy --with statsmodels python docs/research/candidates/time_structure/ts_cycles.py --data DIR
        --macro PARQUET [part ...]   (parts: lookahead scales macro ehlers hurst goertzel emd fibtime)
 """
 from __future__ import annotations

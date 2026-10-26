@@ -6,7 +6,7 @@ bars is classified and traded under three rules (break-close, fade-of-reject/swe
 fixed 2R exit and a partial-at-1R + trail exit. Every real level is compared with randomised control levels at the same
 distance from the same reference price, same window and same rule (day-block bootstrap of real - control).
 
-Usage: uv run python scripts/research/key_levels_discovery.py --raw ~/tmp/ts/raw --out ~/tmp/key_levels
+Usage: uv run python docs/research/candidates/time_structure/key_levels_discovery.py --raw ~/tmp/ts/raw --out ~/tmp/key_levels
 """
 from __future__ import annotations
 

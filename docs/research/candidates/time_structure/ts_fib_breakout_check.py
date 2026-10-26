@@ -2,7 +2,7 @@
 Reads fib_events.parquet written by ts_fib.py. Entry = close of the 1m bar 15 minutes after the first touch (a market
 order after confirmation), continuation direction, barriers +-0.5 ATR(1d) and timeout 5 days (as in ts_fib.py).
 Also prints the lag sweep (0, 1, 5, 15 min) that shows the intraday 'edge' is a touch-minute artefact.
-Usage: uv run --with scipy python scripts/research/ts_fib_breakout_check.py --data DIR
+Usage: uv run --with scipy python docs/research/candidates/time_structure/ts_fib_breakout_check.py --data DIR
 """
 from __future__ import annotations
 

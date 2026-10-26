@@ -3,7 +3,7 @@
 Cells: (tf, family or condition, strategy, exit). Per cell: real vs control gross R (day-block bootstrap of the
 difference), net R under the research prior (bar spread + 0.37 $/oz), the measured-fill cost (0.16 $/oz: spread 0.10 +
 commission 0.06) on the 2010-2017 stops, and the same measured cost at today's ATR (15m 8, 1h 16, 4h 32 $; same R
-multiples). Usage: uv run python scripts/research/key_levels_tables.py --in ~/tmp/key_levels --out ~/tmp/key_levels
+multiples). Usage: uv run python docs/research/candidates/time_structure/key_levels_tables.py --in ~/tmp/key_levels --out ~/tmp/key_levels
 """
 from __future__ import annotations
 

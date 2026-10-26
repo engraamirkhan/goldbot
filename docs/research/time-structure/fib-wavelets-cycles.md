@@ -1,7 +1,7 @@
 # Slice C: Fibonacci, wavelets, cycles and fractal regimes (time-structure programme, 2026-10-26)
 
 Staff research lead for the research director. Follows `README.md` of this folder (sections 3-5). Descriptive screen:
-**no trial registered, no backtest job, 0 trial budget used**. Scripts: `scripts/research/ts_common.py` (loaders),
+**no trial registered, no backtest job, 0 trial budget used**. Scripts: `docs/research/candidates/time_structure/ts_common.py` (loaders),
 `ts_fib.py` (levels), `ts_fib_breakout_check.py` (follow-up), `ts_cycles.py` (wavelets, Ehlers, Hurst, Goertzel, EMD,
 Fibonacci time). Data: Dukascopy 1m mid via `goldbot.data.resample`, **2010-01-01 .. 2017-12-31 only** (the loader
 never reads 2018+; the confirmation half was **not** looked at, and neither was the holdout). Macro: FRED

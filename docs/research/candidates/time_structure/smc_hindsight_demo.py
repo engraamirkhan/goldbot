@@ -6,7 +6,7 @@
    open, high, low, close); bars from the holdout (2025-10-01) are cut before anything is computed.
 3. The randomised-level and randomised-time control generators the doc requires (same distance, same frequency).
 
-Usage: uv run python scripts/research/smc_hindsight_demo.py [--bars PATH] [--n 60000] [--seed 7]
+Usage: uv run python docs/research/candidates/time_structure/smc_hindsight_demo.py [--bars PATH] [--n 60000] [--seed 7]
 """
 from __future__ import annotations
 

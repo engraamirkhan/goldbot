@@ -14,7 +14,7 @@ Discipline (written before the first run):
   eligible bars (same slice), 300 draws. The statistic carried into the multiple-testing count is the z of the event
   mean against that control. Cells are counted; Benjamini-Hochberg at q = 0.10 is applied over ALL cells.
 
-Usage: uv run python -I scripts/research/volatility_bands_diag.py --raw ~/tmp/ts-data/raw --out ~/tmp/vb-out
+Usage: uv run python -I docs/research/candidates/time_structure/volatility_bands_diag.py --raw ~/tmp/ts-data/raw --out ~/tmp/vb-out
 """
 from __future__ import annotations
 

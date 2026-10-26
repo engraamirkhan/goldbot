@@ -1,8 +1,8 @@
 # Slice B: cycles, calendar and event time (30/60/90-day windows, turn of month, weekday, expiry, FOMC/NFP/CPI, seasonality)
 
 Staff research lead, 2026-10-26, for the research director. Frame: `README.md` in this folder. No trial registered,
-no backtest job, no registry row. Script (reusable, read-only): `scripts/research/time_structure_screen.py`
-(`uv run python scripts/research/time_structure_screen.py --bars-dir <data-v1 dir> --calendar <us_calendar.parquet>`,
+no backtest job, no registry row. Script (reusable, read-only): `docs/research/candidates/time_structure/time_structure_screen.py`
+(`uv run python docs/research/candidates/time_structure/time_structure_screen.py --bars-dir <data-v1 dir> --calendar <us_calendar.parquet>`,
 default window = discovery half). Data: release `data-v1` 1m mid (2010-2017 read for outcomes), `calendar-v1`
 `us_calendar.parquet` (scheduled rows only; `event_utc` is the announcement, windows are measured from it).
 

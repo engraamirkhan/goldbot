@@ -3,8 +3,8 @@
 Staff research lead for the research-director, 2026-10-26. Follows `README.md` (time-structure frame) sections 4-5.
 Owner directives (2026-10-26, verbatim): "opening closing sessions , previous day low, hig, week high low, monthely etc"
 and "traders trade on the strategies i shared such as range breakers but not limited to, so how are you ruling these out".
-Scripts: `scripts/research/key_levels_discovery.py` (events, trades, controls; 8 s) and
-`scripts/research/key_levels_tables.py` (tables). Data: Dukascopy 1m mid, **2010-2017 only** (the loader opens only
+Scripts: `docs/research/candidates/time_structure/key_levels_discovery.py` (events, trades, controls; 8 s) and
+`docs/research/candidates/time_structure/key_levels_tables.py` (tables). Data: Dukascopy 1m mid, **2010-2017 only** (the loader opens only
 those eight files; nothing from 2018 on was read). No trial, no registration, no secrets.
 
 ## 0. Answer to the owner and the three headlines

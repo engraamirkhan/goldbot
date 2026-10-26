@@ -20,7 +20,7 @@ Discipline (written before the first run):
   sign-randomised null book.
 * Part 3 (meta-labelling): ridge logistic on <= 12 pre-listed features, year-by-year walk-forward, label-permutation null.
 
-Usage: uv run python -I scripts/research/combinations_diag.py --raw ~/tmp/ts/raw --out ~/tmp/ts/comb-out
+Usage: uv run python -I docs/research/candidates/time_structure/combinations_diag.py --raw ~/tmp/ts/raw --out ~/tmp/ts/comb-out
 """
 from __future__ import annotations
 

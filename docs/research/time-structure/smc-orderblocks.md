@@ -7,9 +7,9 @@ is, to the precision needed to code it with no hindsight, shows the traps, ranks
 **Discovery half only (README 4.1).** Version 2 of this file (same day) measures on real gold, Dukascopy 1m mid bars,
 **2010-01-01 .. 2017-12-31 only**: the script opens only the eight yearly files 2010-2017 and asserts the last bar is
 before 2018; nothing from 2018 on, and no holdout bar, was read or computed. (Version 1 had measured nothing on gold;
-the random-walk demo is kept.) Scripts: `scripts/research/smc_gold_discovery.py` (gold; run
-`uv run python scripts/research/smc_gold_discovery.py --raw ~/tmp/ts/raw --out <json>`, about 90 s, seeded, a re-run
-gives identical numbers) and `scripts/research/smc_hindsight_demo.py` (random walk and the control generators).
+the random-walk demo is kept.) Scripts: `docs/research/candidates/time_structure/smc_gold_discovery.py` (gold; run
+`uv run python docs/research/candidates/time_structure/smc_gold_discovery.py --raw ~/tmp/ts/raw --out <json>`, about 90 s, seeded, a re-run
+gives identical numbers) and `docs/research/candidates/time_structure/smc_hindsight_demo.py` (random walk and the control generators).
 Parameters were pinned in section 2 before the run (k 5, displacement 1.5 ATR, expiry 32 bars, buffer 0.25 ATR, 2R
 target, 32-bar exit). Looks taken are listed in section 10; none is charged to K.
 

@@ -4,7 +4,7 @@ Reads the local Dukascopy 1m Parquet (scripts/fetch_data_release.py layout), onl
 (2018+ is never loaded), builds mid OHLC and the 15m/1h/4h/1d bars through goldbot.data.resample, and
 caches them. Research-only; imports nothing that touches the broker or the store.
 
-Usage: uv run --with pywavelets --with scipy --with statsmodels python scripts/research/ts_common.py --raw DIR --out DIR
+Usage: uv run --with pywavelets --with scipy --with statsmodels python docs/research/candidates/time_structure/ts_common.py --raw DIR --out DIR
 """
 from __future__ import annotations
 

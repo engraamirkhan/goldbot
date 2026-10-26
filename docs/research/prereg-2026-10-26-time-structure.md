@@ -72,7 +72,7 @@ Any later change needs a dated amendment and a new id.
 
 ### 2.1 Rule (identical in history and live)
 
-Definitions are those of `scripts/research/volatility_bands_diag.py` at commit 5ebd2b83 (KC, BB, DC20) and
+Definitions are those of `docs/research/candidates/time_structure/volatility_bands_diag.py` at commit 5ebd2b83 (KC, BB, DC20) and
 `docs/research/candidates/hurst_proxy_check_2026-10-26.py` (tercile), restated:
 
 - **Bands at the close of 15m bar i:**
@@ -142,7 +142,7 @@ Definitions are those of `scripts/research/volatility_bands_diag.py` at commit 5
 
 ### 3.1 Rule
 
-Definitions as `scripts/research/key_levels_discovery.py` at commit 371e7b9a, restated:
+Definitions as `docs/research/candidates/time_structure/key_levels_discovery.py` at commit 371e7b9a, restated:
 
 - **Level set at the start of trading day D** (17:00 New York): PDH, PDL, PDC of D−1; the most recent completed Asia,
   London and New York session high and low; previous-week high/low (fixed Friday 17:00 New York); previous-month

@@ -2,8 +2,8 @@
 
 Staff research lead for the research director's time-structure programme (frame: `README.md` in this folder, sections
 4-5). Descriptive measurement only: **no trial registered, no strategy backtest, no job dispatched**. Scripts:
-`scripts/research/volatility_bands_diag.py` (the measurements; read-only, about 3 min) and
-`scripts/research/vb_compact.py` (table formatting). Run: `uv run python -I scripts/research/volatility_bands_diag.py
+`docs/research/candidates/time_structure/volatility_bands_diag.py` (the measurements; read-only, about 3 min) and
+`docs/research/candidates/time_structure/vb_compact.py` (table formatting). Run: `uv run python -I docs/research/candidates/time_structure/volatility_bands_diag.py
 --raw <data-v1 dir> --out <dir>`.
 
 ## 0. Integrity statement (read first)

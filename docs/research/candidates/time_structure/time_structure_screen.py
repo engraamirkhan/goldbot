@@ -10,7 +10,7 @@ Data: release data-v1 1m bars (scripts/fetch_data_release.py, --download-only), 
 `visible_at` (bar close, so a return from t to t' uses only bars visible at t). Default window is the discovery half 2010-01-01..2017-12-31 (README 4.1); `--end` widens it, never past
 `research.holdout_from` (2025-10-01). US events: release calendar-v1 `us_calendar.parquet`.
 
-Usage: uv run python scripts/research/time_structure_screen.py --bars-dir DIR --calendar FILE [--draws 5000]
+Usage: uv run python docs/research/candidates/time_structure/time_structure_screen.py --bars-dir DIR --calendar FILE [--draws 5000]
 """
 from __future__ import annotations
 

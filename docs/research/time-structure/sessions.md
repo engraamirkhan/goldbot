@@ -1,7 +1,7 @@
 # Slice A: sessions, opens, closes, fixes, rollover and DST (XAUUSD)
 
 Research-director staff, 2026-10-26. Follows `README.md` of this folder (sections 4-5). Script (reusable, read-only,
-no trial, no backtest job): `scripts/research/session_structure.py`; run `uv run python scripts/research/session_structure.py
+no trial, no backtest job): `docs/research/candidates/time_structure/session_structure.py`; run `uv run python docs/research/candidates/time_structure/session_structure.py
 <dir of xauusd_1m_dukascopy_YYYY.parquet> [dst decomp events gao asia orb tf spread]`. Default window is the discovery half.
 Data: release `data-v1` 1m Dukascopy, mid = (bid+ask)/2, price at T = close of the last bar that started before T
 (visible one minute after its start), stale prices over 10 minutes dropped.

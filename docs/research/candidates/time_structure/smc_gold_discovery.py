@@ -7,7 +7,7 @@ Measures: (1) hindsight vs causal on gold (swing and FVG), (2) E-1 order-block r
 controls, net of the research-prior cost, (3) E-2 FVG midpoint retrace and range diagnostic, (4) E-4 value-area 80%
 rule vs random value areas, (5) the ATR15 / stop-size by year behind the #88 cost question.
 
-Usage: uv run python scripts/research/smc_gold_discovery.py --raw ~/tmp/ts/raw --out ~/tmp/smc_gold.json
+Usage: uv run python docs/research/candidates/time_structure/smc_gold_discovery.py --raw ~/tmp/ts/raw --out ~/tmp/smc_gold.json
 """
 from __future__ import annotations
 

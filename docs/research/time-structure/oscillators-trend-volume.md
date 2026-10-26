@@ -2,7 +2,7 @@
 
 Staff research lead for the research director, 2026-10-26. Follows `README.md` (the programme frame; it sits in the
 director's worktree, not this one). Descriptive, **0 trials, 0 backtest jobs**. Script:
-`scripts/research/time_structure_osc_trend_volume.py` (reuses `goldbot.features.technical` `atr`, `adx`, `rsi`, `mfi`,
+`docs/research/candidates/time_structure/time_structure_osc_trend_volume.py` (reuses `goldbot.features.technical` `atr`, `adx`, `rsi`, `mfi`,
 `ema`, `sma`; `resample_bars`, `mid`). Data: Dukascopy 1m mid, local Parquet, no network.
 
 ## 0. Method, and one disclosure

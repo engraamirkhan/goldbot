@@ -9,7 +9,7 @@ the time-of-day profile are removed. Costs: central $0.144/oz (docs/research/cos
 historical-regime $0.71/oz used by tight_stop_entry_study.py.
 
 Usage (no network; reads the 1m Parquet already on disk):
-  uv run python scripts/research/time_structure_osc_trend_volume.py --data ~/tmp/kb5data/raw --out ~/tmp/ts_ostv
+  uv run python docs/research/candidates/time_structure/time_structure_osc_trend_volume.py --data ~/tmp/kb5data/raw --out ~/tmp/ts_ostv
 """
 from __future__ import annotations
 

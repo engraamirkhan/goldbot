@@ -3,7 +3,7 @@
 Staff research lead for the research director's time-structure programme (frame: `README.md` in this folder,
 sections 4-5). Owner (2026-10-26): "combination of strategies etc" (earlier: "if required multimodels could be used").
 Descriptive measurement only: **no trial registered, no backtest job, no holdout or confirmation-half bar loaded**.
-Script: `scripts/research/combinations_diag.py` (`uv run python -I scripts/research/combinations_diag.py --raw
+Script: `docs/research/candidates/time_structure/combinations_diag.py` (`uv run python -I docs/research/candidates/time_structure/combinations_diag.py --raw
 <dir of xauusd_1m_dukascopy_YYYY.parquet> --out <dir>`; about 10 s; reads only the 2010-2017 files; seed fixed).
 Slice inputs read from their branches: sessions (A), cycles (B), fib-wavelets-cycles (C), oscillators-trend-volume (D),
 smc-orderblocks (E, redo: no SMC slot), volatility-bands (F), README 6.11 (the Hurst split is not a volatility or

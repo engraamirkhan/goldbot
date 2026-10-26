@@ -9,7 +9,7 @@ active window: bounce (price leaves the level by +b with the approach side) befo
 timeframe; timeout marks to market. Entry is assumed AT the level (a resting limit: optimistic), cost subtracted in R.
 Everything uses information available at the start of the active window; swing/range levels never use later bars.
 
-Usage: uv run --with scipy python scripts/research/ts_fib.py --data DIR [--nullper 20] [--seed 7]
+Usage: uv run --with scipy python docs/research/candidates/time_structure/ts_fib.py --data DIR [--nullper 20] [--seed 7]
 """
 from __future__ import annotations
 
