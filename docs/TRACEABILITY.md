@@ -18,12 +18,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 241 |
+| implemented | 242 |
 | partial | 22 |
 | missing | 2 |
 | deviates | 6 |
 | in review | 11 |
-| **total** | **282** |
+| **total** | **283** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -108,6 +108,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | R73 | Operator can read the shadow book, cost-probe ledger and engine history-gap/guard state without state-directory access, with the H-52 evidence cut applied by default | in review (code + security review pending) | goldbot/ops/shadow_report.py, goldbot/ops/commands/ops.py | tests/test_ops_shadow_report.py |
 | R74 | The dashboard, Telegram /status and health show only enabled accounts; a disabled account's leftover engine state is ignored; health shows the dashboard's entry status per enabled account | implemented | goldbot/ops/accounts.py `engine_state_files`, `enabled_account_ids`; goldbot/api/app.py `State.engines`; goldbot/api/entry_status.py `statuses_from_state`; goldbot/api/activity.py `engines_by_account`; goldbot/api/explain.py `_engine_modes`; goldbot/ops/checks/engine.py `check_entry_status` | tests/test_enabled_engine_files.py::test_a_disabled_accounts_leftover_engine_file_is_ignored_by_every_dashboard_reader; ::test_the_dashboard_accounts_and_banner_leave_out_a_disabled_account; ::test_an_enabled_account_with_a_stale_report_still_shows_engine_not_reporting; ::test_health_entry_status_line_is_the_dashboards_status_for_each_enabled_account; ::test_health_entry_status_fails_when_the_dashboard_shows_engine_not_reporting; ::test_health_entry_status_only_warns_for_the_owners_halt; ::test_the_health_entry_status_check_writes_nothing |
 | R75 | Exploration arms in the engine (plan 2026-10-25, ADR 0043): every arm signal at the minimum lot with its own stop, hold and target through the RiskGate (purpose exploration), within the global, budget-share, pot, arm and per-trade caps, the -8% pause; exits never gated | implemented (off in config; switch-on is a separate reviewed step) | goldbot/engine/exploration.py (`config_for` from config/exploration_arms.yaml + accounts.yaml); goldbot/engine/magic.py; goldbot/db/migrations.py aux 16 `exploration_trades`; goldbot/engine/cost_probe.py (`_place`, adoption, record_close, mirror pause); goldbot/engine/runner.py (`on_pass` and `exits` hooks); goldbot/ops/accounts.py (`ExplorationPot`, arm `style`/`control_share`); goldbot/ops/services/engine.py `engine_limits` | tests/test_exploration_engine.py; scripts/bench_exploration.py (p99 <= 50 ms at 50 arms) |
+| R76 | Daily learning-ops review (research-director spec 2026-10-26, loop lane L2 made daily): per broker/host/session costs, fill rate, refusal reasons, volume vs the ~290/day plan, H-61 arm health as breached/ok only, integrity; retire an arm the day its pre-registered stop is breached; refit a (broker, session) cost cell after 200 fills, never cheaper within a day; learning-ops issue on an incident or two low-volume days; one daily comment on #34; no per-arm R/rank/sign anywhere; Monday roll-up with up to 4 variant proposals | implemented; quant, code, sre and security review pending | goldbot/research/daily_review.py (`run_daily_review`, `DailyReview`, `retire`, `refit_cells`, `write_cell`, `replay_cells`, `report_lines`, `weekly_rollup`, `main`); goldbot/ops/github_issues.py; goldbot/db/migrations.py aux migration 18 `daily_review`; goldbot/engine/exploration.py `refresh_retired`; goldbot/ops/jobs.py `daily_review`, `_with_refit_cells`; goldbot/telegram/digest.py `review_section`; goldbot/telegram/labs.py `arm_statuses(until=)`; goldbot/config.py `DailyReviewSettings`, `scheduler.daily_review` | tests/test_daily_review.py |
 
 Risk analytics (reporting tools, not design rows, so the counts are unchanged): `goldbot/research/ruin.py`
 (`run.py ruin`, playbook G-5) simulates R against the R9/R11/R13/R14 limits read from `config/settings.yaml`, applying

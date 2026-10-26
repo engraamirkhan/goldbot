@@ -33,6 +33,11 @@ The plan's rules, as built here:
   on exploration positions as on any of this engine's magic range (`Engine._own`). A 1m/5m arm's hold is judged on the
   host clock on every pass with or without a quote (`exits`, from `Engine._retry_closes`), halted or not; a 15m+ arm's
   is the engine's time barrier. A position whose arm is unknown (no longer configured) is closed at once.
+* Retired arms (daily learning-ops review, goldbot/research/daily_review.py): an arm retired at its pre-registered
+  H-61 stop (aux.db `exploration_arm_status`, this host's broker) is read once a minute (`refresh_retired`); from then
+  on it queues no signal and its waiting signals are recorded blocked `arm_retired`. It stays configured, so its open
+  positions keep their stop, target, hold and every exit (never closed as an orphan). An unreadable table keeps the
+  arms already known retired (a retirement is never undone by a read error).
 * Identity: magic_base + 95 (`goldbot.engine.magic`), order id and MT5 comment `ex<arm5>-<epoch10>-<h8>` (27 chars,
   inside MT5's 29). After a restart a position is adopted by its order row or its comment and its hold resumes from
   the broker's open time.
@@ -306,6 +311,8 @@ class Exploration:
         self.open_loss: dict[int, float] = {}       # position id -> its loss at the gate's stop when sent
         self.weights_cache: tuple[pd.Timestamp, dict[str, float]] | None = None
         self.champion_seen: dict[str, tuple[pd.Timestamp | None, bool]] = {}
+        self.retired: frozenset[str] = frozenset()      # arms retired at their stop (`refresh_retired`)
+        self.retired_read: pd.Timestamp | None = None
 
     @classmethod
     def start(cls, eng: Engine) -> Exploration | None:
@@ -379,7 +386,7 @@ def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.D
     import numpy as np
 
     from goldbot.research import arm_rules
-    if ex.last_bar.get(arm.arm_id) == through:
+    if arm.arm_id in ex.retired or ex.last_bar.get(arm.arm_id) == through:
         return
     ex.last_bar[arm.arm_id] = through
     try:
@@ -471,6 +478,7 @@ def on_pass(eng: Engine, tick: Tick) -> None:
         return
     try:
         now = eng._now(tick)
+        refresh_retired(eng, ex, now)
         ct = eng._closed_through
         if ct is not None and (ex.last_close is None or ct > ex.last_close) and step(eng, ct):
             ex.last_close = ct                      # a deferred close (clock ahead) is tried again next pass
@@ -481,6 +489,33 @@ def on_pass(eng: Engine, tick: Tick) -> None:
         log.exception("exploration pass failed; no exploration entry this pass")
         eng.decisions.append({"ts": time.time(), "agent": None, "action": "exploration_error",
                               "error": type(exc).__name__})
+
+
+def refresh_retired(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
+    """Once a minute: the arms of this host's broker retired at their pre-registered stop (aux.db
+    `exploration_arm_status`, written by the daily review). A newly retired arm is journalled
+    (`exploration_arm_retired`) and its waiting signals are recorded blocked `arm_retired`. Read errors keep the set
+    already known (a retirement is permanent). Entries only: nothing here touches an open position."""
+    minute = now.floor("min")
+    if ex.retired_read == minute:
+        return
+    ex.retired_read = minute
+    try:
+        with ex.db.connection() as conn:
+            got = {str(a) for (a,) in conn.execute(
+                "SELECT arm_id FROM exploration_arm_status WHERE broker = ? AND status = 'retired'", (ex.broker,))}
+    except Exception as exc:
+        log.warning("exploration retired arms unreadable (%s): the known set stands", type(exc).__name__)
+        return
+    new = sorted((got & set(ex.arms)) - ex.retired)
+    if not new:
+        return
+    ex.retired = ex.retired | frozenset(new)
+    for arm_id in new:
+        log.warning("exploration arm %s retired at its pre-registered stop: no new entries", arm_id)
+        eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + arm_id, "action": "exploration_arm_retired",
+                              "arm": arm_id})
+    _block(eng, ex, [s for s in ex.queue if s.arm_id in ex.retired], now, "arm_retired")
 
 
 # ------------------------------------------------------------------------------------------------ entries

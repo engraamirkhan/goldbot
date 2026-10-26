@@ -457,6 +457,33 @@ AUX: tuple[Migration, ...] = (
         "INSERT OR IGNORE INTO exploration_broker_weights (run_ns, broker, arm_id, style, weight, detail) "
         "SELECT run_ns, 'icm', arm_id, style, weight, detail FROM exploration_weights",
     ), add_columns=(("exploration_obs", "broker", "TEXT"), ("exploration_models", "broker", "TEXT"))),
+    # additive (daily learning-ops review, research-director spec 2026-10-26; goldbot/research/daily_review.py).
+    # `exploration_arm_status`: an arm retired at its pre-registered H-61 stop, per broker, permanent ("re-entry only
+    # by a new pre-registration"); the engine reads it once a minute and sends no new candidate of a retired arm
+    # (its open positions keep every exit). `exploration_cost_cells`: a (broker, session) slippage cell refit after
+    # 200 fills since its last fit, one row per fit day (history kept, never lowered within a day); the label replay
+    # charges it only when dearer than the nightly table. A release without it never reads either table
+    Migration(version=18, name="daily_review", additive=True, statements=(
+        """CREATE TABLE IF NOT EXISTS exploration_arm_status (
+               broker TEXT NOT NULL,
+               arm_id TEXT NOT NULL,
+               status TEXT NOT NULL CHECK (status IN ('retired')),
+               day TEXT NOT NULL,
+               rule TEXT NOT NULL,
+               recorded_ns INTEGER NOT NULL,
+               PRIMARY KEY (broker, arm_id)
+           ) STRICT""",
+        """CREATE TABLE IF NOT EXISTS exploration_cost_cells (
+               broker TEXT NOT NULL,
+               session TEXT NOT NULL,
+               day TEXT NOT NULL,
+               slippage_usd REAL NOT NULL CHECK (slippage_usd >= 0),
+               fills INTEGER NOT NULL CHECK (fills > 0),
+               through_ns INTEGER NOT NULL,
+               fitted_ns INTEGER NOT NULL,
+               PRIMARY KEY (broker, session, day)
+           ) STRICT""",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

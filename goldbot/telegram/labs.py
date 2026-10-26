@@ -65,7 +65,7 @@ REFUSAL_WORDS = {
     "budget": "budget used", "pot": "budget used", "arm_budget": "budget used",
     "stale": "signal too old", "paused_dd": "paused (drawdown)", "weekend_hold": "would hold over the weekend",
     "same_side": "same-side limit", "not_auto": "auto entries off", "arm_cap": "stop over the arm's limit",
-    "order_unsettled": "order still settling",
+    "order_unsettled": "order still settling", "arm_retired": "arm retired at its stop",
 }
 OTHER_REASON = "other reason"
 
@@ -316,9 +316,11 @@ def _arm_order() -> list[str]:
         return []
 
 
-def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str]) -> list[ArmStatus]:
+def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str], *,
+                 until: pd.Timestamp | None = None) -> list[ArmStatus]:
     """Every arm with an admissible trade on `accounts`, in the frozen spec's order (unknown arms after, by id): its
-    n toward READ_AT and its H-61 stop band from the running net R in exit order over the stop's first trades."""
+    n toward READ_AT and its H-61 stop band from the running net R in exit order over the stop's first trades.
+    `until`: only closes before it (the daily review reads a day point in time)."""
     if not accounts:
         return []
     marks = ",".join("?" * len(accounts))
@@ -326,7 +328,8 @@ def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str]) -> list[ArmS
         f"SELECT arm_id, MAX(style), MAX(is_control) FROM exploration_obs WHERE account_id IN ({marks}) "
         "GROUP BY arm_id", tuple(accounts))}
     by_arm: dict[str, list[ExplorationRecord]] = {}
-    for t in trades(conn, f"account_id IN ({marks}) AND closed = 1", tuple(accounts)):
+    cut, args = ("", tuple(accounts)) if until is None else (" AND exit_ns < ?", (*accounts, _ns(until)))
+    for t in trades(conn, f"account_id IN ({marks}) AND closed = 1{cut}", args):
         if admissible(t):
             by_arm.setdefault(t.arm_id, []).append(t)
     order = {a: i for i, a in enumerate(_arm_order())}
