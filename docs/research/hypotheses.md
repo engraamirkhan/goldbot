@@ -439,3 +439,11 @@ expiry, FOMC/NFP/CPI direction, pre-FOMC drift, festival and month seasonality, 
 15m-1h, ADX gate, OBV, session-VWAP fades, value-area 80% rule, order-block retest, FVG magnet, sweep reversal, key-level
 retests and fades, session opens as levels, 15m ORB (24 variants), TTM squeeze, unconditional band fades and breaks,
 LBMA/COMEX/Tokyo anchor reactions.
+
+## A16. Adaptive exits by timeframe, lot size and running P&L (trade management researcher, 2026-10-26)
+
+Source: `exits-adaptive-targets-2026-10-26.md` (2010-2017 discovery only) and `prereg-exits-adaptive-2026-10-26.md`.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| H-80 | Box break-and-close as ONE family on 15m/30m/1h/4h (frozen roster entry, 1.5 ATR_tf stop, 0.01 lot): RUNNER exit (BE at +1 R, 2.5 ATR_tf trail after +1 R, no target; real arms BXR15/30/1H/4H) vs FIXED 2 R (virtual BXF*) vs first box at >= 2 R (virtual BXT*), paired on the same fills, pooled with a timeframe stratum. Discovery: runner - fixed +0.039 R (t 2.4; 30m carries it), first-box - fixed -0.016 R (all 4 TF negative), nearest box inside 2 R on 97-98% of breaks, no exit net-positive (measured cost at today's ATR: fixed -0.045, runner -0.021 R) | **pre-registered 2026-10-26**, not funded, not dispatched; R-15 stands | arms 0 (K_eff +1); confirmation read R2 on 2018-01..2025-09: 1 recommended | R1 forward: kill only, no adoption before 3,000 fills; R2: adopt runner if pooled paired t >= 2 (Holm, 2 comparisons), 3 of 4 TF same sign, net >= fixed; close next-box targets if pooled diff <= 0 |
