@@ -8,14 +8,15 @@ The plan's rules these tests hold the arms to:
   the hold `max_bars`, never the partial or the trail of `exit_spec`;
 - "The same function runs in the history matrix and live" (section 3): appending bars never changes a past candidate,
   and the bars the engine holds live (`EngineConfig.max_bars_in_memory`, ~40 trading days of 1m) are enough warm-up
-  for the history candidate on every close; the engine's own exploration window (`exploration._bars`) must give it;
+  for the history candidate on every close; the engine's own exploration slice (`exploration.arm_bars`: the family's
+  warm-up in trading bars of its timeframe, `exploration.lookback`) gives it, within the per-close time budget;
 - "A candidate outside its GBP cap or stop band is skipped and logged with its propensity" (section 4).
 
 A stop agrees when it is within half a broker point ($0.005): the broker quotes gold to $0.01, so two stops that close
-are the same order. Families that fail a rule on the engine's live path are marked `xfail(strict=True)` with the
-reason: the assertion is not weakened, and the marker fails the suite the day the path is fixed, so it is removed."""
+are the same order."""
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from goldbot.config import tf_seconds
 from goldbot.data.resample import resample_bars, ticks_to_1m
 from goldbot.data.synthetic import synthetic_ticks
 from goldbot.data.timeutil import utc_index
@@ -54,24 +56,8 @@ CASES: tuple[tuple[str, A.Timeframe], ...] = (("breakout", "1h"), ("breakout", "
 IDS = [f"{n}-{tf}" for n, tf in CASES]
 BARRIER = {"breakout": (1.0, 2.0, 24), "trend": (1.25, 2.5, 48), "mean_reversion": (1.5, 1.0, 12)}
 
-# the engine's exploration window: LOOKBACK (200) decision bars, and the 1m bars from the first of them only
-_SHORT = ("exploration._bars hands a rule LOOKBACK=200 decision bars and the 1m bars from the first of them; {why}. "
-          "Fix (engine, not this lane): give `specialist` arms the engine's whole 1m buffer, as the agents' `_frame` "
-          "does")
-ENGINE_WINDOW_FAILS = {
-    "breakout-15m": "the ATR(14) stop has not converged after a weekend (63 bars live: $0.11 off history)",
-    "trend-1h": "h4_slope_ema50 is NaN on every live bar (about 37 4h bars), so trend never fires live",
-    "mean_reversion-15m": "h1_vol_tercile is NaN on every live bar (about 50 1h bars, 100 needed), so it never fires",
-}
-
-
-# of those, the families whose history candidate never reaches the engine at all (so no cap can be judged)
-NEVER_LIVE = ("trend-1h", "mean_reversion-15m")
-
-
-def _engine_marks(fails: tuple[str, ...]) -> list[Any]:
-    return [pytest.param(n, tf, id=i, marks=pytest.mark.xfail(strict=True, reason=_SHORT.format(why=ENGINE_WINDOW_FAILS[i])))
-            if i in fails else pytest.param(n, tf, id=i) for (n, tf), i in zip(CASES, IDS)]
+PARAMS = [pytest.param(n, tf, id=i) for (n, tf), i in zip(CASES, IDS)]
+BUDGET_S = 10.0                                     # L7: every arm's rule at one 15m close, per host
 
 
 @pytest.fixture(scope="module")
@@ -209,18 +195,42 @@ def test_the_warm_up_fits_the_engines_forty_day_1m_buffer(b1, name, tf) -> None:
         _live_check(arm, full, c, bars[bars["visible_at"] <= c].reset_index(drop=True), buf)
 
 
-@pytest.mark.parametrize(("name", "tf"), _engine_marks(tuple(ENGINE_WINDOW_FAILS)))
+@pytest.mark.parametrize(("name", "tf"), PARAMS)
 def test_the_engines_exploration_window_gives_the_history_candidate_on_every_close(b1, name, tf) -> None:
-    """The bars `exploration.step` hands the arm at a close (`_bars`, and the 1m bars from the first of them) give the
-    history candidate, or none, on that close."""
+    """The bars `exploration.step` hands the arm at a close (`arm_bars`: its family's warm-up of trading bars, a
+    weekend inside it included, and the 1m bars from the first of them) give the history candidate, or none."""
     arm = _arm(name, tf)
     full, closes = _closes(b1, name, tf)
     for c in closes:
         complete = b1[b1["visible_at"] <= c].tail(BUFFER)
-        bars = exploration._bars(complete, tf, c)
-        assert bars is not None
-        live_1m = complete[complete["ts_utc"] >= pd.Timestamp(bars["ts_utc"].iloc[0])].reset_index(drop=True)
-        _live_check(arm, full, c, bars, live_1m)
+        got = exploration.arm_bars(complete, arm, c)
+        assert got is not None
+        _live_check(arm, full, c, *got)
+
+
+@pytest.mark.parametrize(("name", "tf"), PARAMS)
+def test_a_specialist_arms_warm_up_is_its_familys_and_stays_inside_the_engines_buffer(name, tf) -> None:
+    """Bounded: never the whole 40-day buffer (L7: ~30 s a close), at most WARMUP_MAX_1M minutes, half the buffer;
+    any other arm keeps LOOKBACK."""
+    n = exploration.lookback(_arm(name, tf))
+    assert exploration.LOOKBACK <= n <= exploration.WARMUP_MAX_1M * 60 // tf_seconds(tf)
+    assert exploration.WARMUP_MAX_1M <= BUFFER // 2
+    rb = A.Arm(id="R", rule="random_bracket", timeframe=tf,
+               params={"stop_usd": 5.0, "target_r": 2.0, "hold_bars": 4, "minutes": [0]})
+    assert exploration.lookback(rb) == exploration.LOOKBACK
+
+
+def test_all_five_classic_arms_decide_a_close_inside_the_time_budget(b1) -> None:
+    """L7's budget: every wave-1 rule at one 15m close within 10 s per host; these five take at most half of it."""
+    c = pd.Timestamp("2024-01-23 12:00", tz="UTC")
+    complete = b1[b1["visible_at"] <= c].tail(BUFFER)
+    t0 = time.perf_counter()
+    for name, tf in CASES:
+        arm = _arm(name, tf)
+        got = exploration.arm_bars(complete, arm, c)
+        assert got is not None
+        R.candidates(arm, R.RuleContext(bars=got[0], b1=got[1], blackout_lo=NO, blackout_hi=NO))
+    assert time.perf_counter() - t0 < BUDGET_S / 2
 
 
 # ------------------------------------------------------------------------------------------------ the GBP cap
@@ -260,7 +270,7 @@ def _blocked(path: Path) -> list[tuple[Any, ...]]:
         return conn.execute("SELECT arm_id, taken, branch, mu, blocked_reason, stop_dist FROM exploration_obs").fetchall()
 
 
-@pytest.mark.parametrize(("name", "tf"), _engine_marks(NEVER_LIVE))
+@pytest.mark.parametrize(("name", "tf"), PARAMS)
 def test_a_candidate_over_the_arms_gbp_cap_is_skipped_and_logged_with_its_propensity(tmp_path, ticks, b1, name,
                                                                                      tf) -> None:
     """Section 4: the history candidate reaches the engine with its own stop; with the per-trade cap a penny below its
