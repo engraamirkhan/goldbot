@@ -72,7 +72,10 @@ KEY_COLUMNS = {
     "fills": ["ts_utc", "client_order_id"],
     "exit_fills": ["ts_utc", "position_id", "kind"],
     "calendar_events": ["event_id"],          # a re-fetched event replaces the earlier copy (forecast revisions)
-    "news": ["item_id"],                       # headlines often share a published minute; ts_utc is not a key
+    "news": ["item_id"],
+    # data/quarantine.py: a re-run after a crash between the quarantine copy and the table rewrite adds no second copy
+    "ticks_quarantine": ["ts_utc", "bid", "ask", "from_table"],
+    "bars_quarantine": ["ts_utc", "from_table", "quarantine_reason", "bid_close"],                       # headlines often share a published minute; ts_utc is not a key
 }
 
 

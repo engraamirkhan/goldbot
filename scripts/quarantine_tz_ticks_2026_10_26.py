@@ -13,14 +13,20 @@ What it does (dry run by default; --apply writes):
      2026-10-26 08:00, from `ticks` to `ticks_quarantine` (goldbot/data/quarantine.py: never edited, never deleted);
   3. moves the `bars_1m_live` (source icm) minutes of the span to `bars_quarantine`;
   4. stores the corrected minutes for the span from the broker's own M1 (one get_bars call through the icm-demo bridge,
-     which must report server_tz NY+7), flagged `warning:corrected_broker_m1`, with available_utc = now (they were not
-     knowable before; never backdated). Corrected ticks are NOT written: a complete broker tick history in the engine's
+     which must report server_tz NY+7), flagged `warning:corrected_broker_m1`, with available_utc = now and
+     visible_at = max(minute close, now) (they were not knowable before; never backdated: every bar reader filters on
+     visible_at). Corrected minutes first written with visible_at = minute close (the first apply, 15:05 UTC) are
+     moved to bars_quarantine (reason corrected_row_backdated_visible_at) and written again with the later
+     visible_at, their available_utc kept. Corrected ticks are NOT written: a complete broker tick history in the engine's
      sampled `ticks` table would bias the cost tables;
   5. records the span in dq_events (check quarantine_span) for icm-demo, icm-probe and icm, so D12 reports it;
   6. prints the exploration_trades and cost_probes whose entry fell in the span, and those after it until now (their
      decisions read windows containing the span), as ids, arm/agent and account only (no R, no P&L: blinded for the
      quant reviewer's ruling). Nothing is excluded from evidence here.
 Idempotent: a re-run moves nothing more, writes no second span, and skips corrected minutes already present.
+Bridge and store load: moving ticks rewrites each month partition of the two accounts (~30 MB each) under the
+partition's writer lock and asks the bridge for one get_bars; --apply refuses to move ticks while gold trades
+(`ticks.market_quiet`), unless --allow-open-market (the 2026-10-26 apply ran at 15:05 UTC, before this guard).
 Afterwards restart goldbot-engine@icm-demo and @icm-probe so their warm start reads the corrected minutes.
 
     sudo -n -u goldbot env PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring \\
@@ -43,7 +49,7 @@ from goldbot.data import quarantine as qr
 from goldbot.data.crossfeed import broker_m1_bars
 from goldbot.data.store import Store
 
-REASON = "tz_mislabel_athens_vs_ny7_2026_10_26"
+REASON = qr.TZ_MISLABEL
 TICK_SOURCES = ("icm-demo", "icm-probe")
 BARS_SOURCE = "icm"                      # bars_1m_live source = broker name (engine/history.py)
 SYMBOL = "XAUUSD"
@@ -115,7 +121,39 @@ def corrected_minutes(span: tuple[pd.Timestamp, pd.Timestamp], now: pd.Timestamp
     raw = _job_broker(acc).get_bars(SYMBOL, "1m", min(need, 5000))
     m1 = broker_m1_bars(raw)
     m1 = m1[(m1["ts_utc"] >= span[0]) & (m1["ts_utc"] < span[1])].reset_index(drop=True)
-    return m1.assign(dq_flag="warning:corrected_broker_m1", available_utc=now, correction_of=REASON)
+    return stamp_corrected(m1, now)
+
+
+def stamp_corrected(m1: pd.DataFrame, applied: pd.Timestamp) -> pd.DataFrame:
+    """Corrected minutes as written at `applied`: available_utc = applied, visible_at never before it."""
+    vis = pd.to_datetime(m1["visible_at"], utc=True)
+    return m1.assign(visible_at=vis.where(vis >= applied, applied), dq_flag="warning:corrected_broker_m1",
+                     available_utc=applied, correction_of=REASON)
+
+
+def repair_visible_at(store: Store, *, now: pd.Timestamp, apply: bool = False) -> int:
+    """Corrected minutes whose visible_at precedes their available_utc: moved to bars_quarantine and written again
+    with visible_at = max(visible_at, available_utc) (available_utc kept). Returns the rows selected."""
+    live = store.read("bars_1m_live", source=BARS_SOURCE, symbol=SYMBOL)
+    if live.empty or "correction_of" not in live.columns:
+        return 0
+
+    def early(rows: pd.DataFrame) -> pd.Series:
+        if "correction_of" not in rows.columns or "available_utc" not in rows.columns:
+            return pd.Series(False, index=rows.index)
+        return rows["correction_of"].eq(REASON) & (pd.to_datetime(rows["visible_at"], utc=True)
+                                                    < pd.to_datetime(rows["available_utc"], utc=True))
+    bad = live[early(live).to_numpy()]
+    if bad.empty or not apply:
+        return len(bad)
+    fixed = bad.drop(columns=[c for c in ("source", "symbol", "year", "month") if c in bad.columns])
+    applied = pd.to_datetime(fixed["available_utc"], utc=True)
+    vis = pd.to_datetime(fixed["visible_at"], utc=True)
+    fixed = fixed.assign(visible_at=vis.where(vis >= applied, applied))
+    qr.move_rows(store, "bars_1m_live", source=BARS_SOURCE, symbol=SYMBOL, select=lambda _, r: early(r),
+                 reason=qr.BACKDATED_CORRECTION, now=now, apply=True)
+    store.append("bars_1m_live", fixed, source=BARS_SOURCE, symbol=SYMBOL)
+    return len(bad)
 
 
 def evidence(state_dir: Path, span: tuple[pd.Timestamp, pd.Timestamp], now: pd.Timestamp) -> dict[str, Any]:
@@ -140,6 +178,7 @@ def main() -> int:
     ap.add_argument("--data-root", default=None, help="default: settings.data_root")
     ap.add_argument("--state-dir", default="state")
     ap.add_argument("--backup-dir", default="backups/quarantine-tz-2026-10-26")
+    ap.add_argument("--allow-open-market", action="store_true", help="move ticks while gold trades (not advised)")
     a = ap.parse_args()
     from goldbot.config import load_settings
     store = Store(a.data_root or load_settings().data_root)
@@ -151,8 +190,16 @@ def main() -> int:
     span = span_of(*rng)
     report: dict[str, Any] = {"mode": "apply" if a.apply else "dry-run", "stamped": [t.isoformat() for t in rng],
                               "span": [t.isoformat() for t in span]}
+    pending = {src: qr.move_rows(store, "ticks", source=src, symbol=SYMBOL, select=ahead, reason=REASON, now=now)
+               for src in TICK_SOURCES}
+    if a.apply and any(pending.values()) and not a.allow_open_market:
+        from goldbot.data.ticks import market_quiet
+        if not market_quiet(now):
+            raise SystemExit(f"refused: {sum(pending.values())} tick rows to move while gold trades; run in the daily "
+                             "break or at the weekend (or --allow-open-market)")
     if a.apply:
         report["backup"] = backup(store, Path(a.backup_dir))
+    report["repaired_visible_at"] = repair_visible_at(store, now=now, apply=a.apply)
     for src in TICK_SOURCES:
         report[f"ticks.{src}"] = qr.move_rows(store, "ticks", source=src, symbol=SYMBOL, select=ahead, reason=REASON,
                                               now=now, apply=a.apply)

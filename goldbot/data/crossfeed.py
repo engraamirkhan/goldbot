@@ -33,7 +33,8 @@
     matched above EDGE_WARN (5%) is a "warning", above EDGE_ERROR (20%) an "error".
   - Quarantined spans (goldbot/data/quarantine.py: rows moved out of the store after the fact, e.g. ticks stamped
     with the wrong server clock) are left out of both feeds and the engine's runs, and counted as
-    `quarantined_minutes`: a known, quarantined window is reported, not graded.
+    `quarantined_minutes`: a known, quarantined window is reported, not failed; above QUARANTINE_WARN (5%) of the
+    window's broker minutes it is a "warning".
   - Fewer than MIN_COMPARED compared minutes cap a divergence or edge "error" at "warning".
   - Coverage: missing_engine above WARN_FRACTION of the broker minutes is a "warning" (the engine was stopped), an
     "error" when the engine was up (the loop heartbeat's runs of the window, `runs` and the current `started` to its
@@ -90,9 +91,10 @@ MIN_COMPARED = 60                 # fewer engine minutes compared than this: div
 EDGE_WARN, EDGE_ERROR = 0.05, 0.20  # skipped edge minutes / matched minutes above these: warning, error
 BIAS_SHARE = 0.6                  # one-sided share of compared minutes beyond the tolerance: an offset, not lag
 STALE_RUN = 5                     # consecutive engine minutes with one identical close while the broker moves: frozen
+QUARANTINE_WARN = 0.05            # quarantined minutes / the window's broker minutes above this: at least a warning
 STALL_FRACTION = 0.5              # broker minutes the engine lacks while its heartbeat shows it up: above this, error
 _COUNTS = ("broker_minutes", "engine_minutes", "matched", "edge_excluded", "close_mismatch", "missing_engine",
-           "missing_broker", "missing_engine_up", "up_minutes", "stale_minutes")
+           "missing_broker", "missing_engine_up", "up_minutes", "stale_minutes", "quarantined_minutes")
 _RANK = {"ok": 0, "warning": 1, "error": 2}
 RECONCILE_WINDOW = pd.Timedelta(days=1)
 RECONCILE_BARS = 1500             # M1 bars asked of the broker (a day is at most 1,440)
@@ -185,7 +187,7 @@ def stale_mask(engine_close: pd.Series, broker_close: pd.Series, tolerance: floa
 
 def grade(*, broker_minutes: int, engine_minutes: int, matched: int, edge_excluded: int, close_mismatch: int,
           missing_engine: int, missing_broker: int, missing_engine_up: int = 0, up_minutes: int = 0,
-          stale_minutes: int = 0, close_bias: float = 0.0, close_bias_share: float = 0.0,
+          stale_minutes: int = 0, quarantined_minutes: int = 0, close_bias: float = 0.0, close_bias_share: float = 0.0,
           tolerance: float = CLOSE_TOL_POINTS * POINT_DEFAULT) -> tuple[float, str]:
     """(divergence, severity) from a reconciliation's counts (module docstring). Health grades a stored report with
     it too, so a rule change applies to the last report at once (an older report lacks the newer counts: 0)."""
@@ -193,6 +195,8 @@ def grade(*, broker_minutes: int, engine_minutes: int, matched: int, edge_exclud
     edges = edge_excluded / matched if matched else 0.0
     sev = max(_severity(div), "error" if edges > EDGE_ERROR else "warning" if edges > EDGE_WARN else "ok",
               key=_RANK.__getitem__)
+    if quarantined_minutes / max(broker_minutes + quarantined_minutes, 1) > QUARANTINE_WARN and sev == "ok":
+        sev = "warning"                    # a quarantined window is reported, never silently ok
     if biased(close_bias, close_bias_share, tolerance):
         sev = "error"                      # another price stream: capped below when too few minutes were compared
     if sev == "error" and matched - edge_excluded + missing_broker < MIN_COMPARED:
