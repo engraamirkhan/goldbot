@@ -417,18 +417,18 @@ any exploration fill of an arm is read. Exploration rows are tagged `exploration
 ## A15. Time-structure programme (research director, 2026-10-26)
 
 Sources: `time-structure-2026-10-26.md` (synthesis of slices A-H) and `prereg-2026-10-26-time-structure.md`. Discovery
-half 2010-2017 only. The programme took about 2,460 raw looks, charged 161 effective. Every row's "closed" means
+half 2010-2017 only. The programme took about 2,460 raw looks, charged 187 effective (G at 51 axes; K ≈ 332, 337 with the 5 arms). Every row's "closed" means
 **this version, tested this way, did not beat random after cost**.
 
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | H-70 | F-1: 15m band break (KC/BB/DC20 union) traded with the break when hurst_128 is in its low tercile and against it when high; 4-bar time exit, stop 1.0 ATR15 | **pre-registered**; arm F1A + control F1C (needs the 2026Q4 override 69 -> 74); O-11 confirmation (2027Q1, conditional) | 1 (O-11) + arm registrations | prereg 2.3 |
 | H-71 | G-1: first 1h close ≥ 0.1 ATR beyond a prior-period level in Asia hours, stop 1.0 ATR back through the level, fixed 2R, 32 bars | **pre-registered**; arm G1A + random-level control G1C; O-12 (conditional) | 1 (O-12) + arms | prereg 3.3 |
-| H-72 | Friday long, Thursday 19:00 to Friday 16:30 New York, 1.0 ATR4h stop | **pre-registered, forward-only** (2018+ seen by slice B); arm WFRI | 1 at its 26-Friday read (Q2) | prereg 4 |
+| H-72 | Friday long, Thursday 19:00 to Friday 16:30 New York, 1.0 ATR4h stop | **pre-registered, forward-only** (2018+ seen by slice B); arm WFRI | 1 at its 170-Friday read (26 Fridays is a safety check only) | prereg 4 |
 | H-73 | Time-structure range feature group (≤ 12 columns: FOMC/NFP days, pit window, wavelet energy, rv ratio, range used, displacement, tick z) | proposed; spec by the opportunity-researcher | 0 (K_eff +1) | drop rule prereg 5 |
 | H-74 | Slow-trend swing group: 30-day-extreme first touch (C-1), 4h/1d band state (F-3), 30/60/90 windows | proposed for SW-0 (Q2) | 0 here | SW-0's rule |
 | H-75 | D-1 Asia trend persistence 1h | held: H's rebuild null; reconcile by 2026-11-13 | 0 | new prereg if reconciled |
-| H-76 | A-1 failed Asia-range fade 15m | held: H's rebuild flipped sign; holdout seen by slice A | 0 | forward-only if reconciled |
+| H-76 | A-1 failed Asia-range fade 15m | **closed 2026-10-26** (evaluator condition 8): sign flipped on an independent rebuild, holdout seen by slice A, 48 events a year | 0 | — |
 | H-77 | D-2 CMF20 1h | held: redundancy with the MA regime unchecked | 0 | ρ > 0.7 closes it |
 | H-78 | Pre-specified book read on arm fills against sign-randomised nulls | proposed (daily_review) | 0 | descriptive |
 | H-79 | Allocator against a shuffled-weight null and a journal replay | proposed (backlog 111) | 0 | backlog acceptance |

@@ -287,16 +287,17 @@ Source: `time-structure-2026-10-26.md` (synthesis of slices A-H), pre-registrati
 **Ranking.** H-73, the range feature group, joins H-16/H-19 at the top as a priority-1 enabler (0 trials, K_eff +1).
 H-70 (F-1, 15m Hurst-switched band breakout) is the first new 15m candidate since H-17 that survived its 0-trial
 checks. The order now reads: H-16, H-73, H-13, H-19, H-17, H-14, H-70, then the rest unchanged. Below them sit H-71
-(G-1, 1h level break) and H-72 (Friday long), both arm-only. H-74 (slow-trend swing group) goes into SW-0. H-75/H-76/H-77
-are held for reconciliation.
+(G-1, 1h level break) and H-72 (Friday long), both arm-only. H-74 (slow-trend swing group) goes into SW-0. H-75 and H-77
+are held for reconciliation; H-76 (A-1) is closed.
 
 **Slots.**
 - The 2027Q1 free reserve gives 2 conditional rows, O-11 (H-70 confirmation) and O-12 (H-71 confirmation). 4 stay free.
-- The 5 new arms need the 2026Q4 override 69 -> 74, a **program-director decision** (owner told). If refused, they
-  start 2027-01-01 and O-11/O-12 move to Q2.
+- The 5 new arms need the 2026Q4 override 69 -> 74: **approved 2026-10-26** by PD + PO, on the quant's conditions:
+  the pre-registration is on main before the first fill, the settings comment cites the directive, #34 is told the
+  same day, K +5, and the fills are never evidence.
 
-**K.** Registry 145. The programme's looks are charged at about **161 effective**, so later gate-1 reads use
-K ≈ 306 (t ≈ 4.5).
+**K.** Registry 145. The programme's looks are charged at about **187 effective** (G at its 51 axes), so later
+gate-1 reads use K ≈ 332, or 337 with the arms (t ≈ 4.6).
 
 **Contamination** (slices launched before the frame landed):
 - A read the holdout for session-clock statistics. Those configurations lose holdout scoring and confirmation credit.
@@ -388,3 +389,10 @@ Every item raised since the last cycle, with the answer. A = adopted, D = deferr
 | 73 | quant-reviewer (local clocks) | S0L/S4L/S5AL as new ids, each a trial, paired reading rule | **D to the Q2 draft (by 2027-03-26)**: new arms are local by construction, and 3 slots for a scheduling answer is poor value | — |
 | 74 | data survey (pending) | longest history, volume, COT, ETF, options | **D until it lands:** H-74 (pre-2010 history), D volume (COMEX volume), B-5 (exact OG dates) wait on it | dependency list in synthesis 9 |
 | 75 | owner via coordinator | continuous learning loop; multi-models | **A**: `time-structure/learning-loop.md`, backlog 105-110 (L-1..L-6) | learning loop |
+| 76 | quant-reviewer (synthesis review) | C1 swap in the measured cost; C2 freeze ny_pit and the WFRI clock; C3 the arm cannot cancel O-11/O-12; C4 charge G at 51 axes, eigenvalue K_eff in L-1; C5 override conditions | **A, all five.** ny_pit 08:00-13:30 NY; WFRI Thursday 19:00 NY; K 332 (337 with arms); L-1 acceptance amended | prereg 0, 1, 2.3, 3.3; synthesis 7.1 |
+| 77 | evaluator (synthesis review) | C6 key-level break-close died on signal | **A** | synthesis section 4 |
+| 78 | evaluator | C7 the 4h Asia cell | **A** as a pre-specified secondary in O-12 (not in its verdict) | prereg 3.3 |
+| 79 | evaluator | C8 close A-1 | **A**: H-76 closed | hypotheses A15 |
+| 80 | evaluator | C9 ban ny_pit from holdout criteria; G-1's 8/8 is the partial + trail exit | **A** | prereg 2.3, 3.1 |
+| 81 | evaluator | C10 power and stop rules for every arm; Friday read needs about 170; O-11 on the armed stop exit; minimum n on the net conditions | **A**: F1A n≈1,000 / 2,000 paired with futility at 300 and 1,000; G1A a cost/safety arm; WFRI safety at 26, read at 170; O-11 on the stop exit; n ≥ 1,000 | synthesis 6.3; prereg 2-4 |
+| 82 | program director + product owner | 2026Q4 override 69 -> 74 approved under the quant's conditions | **A**: settings and `config/exploration_arms.yaml` + `accounts.yaml` blocks prepared; arms blocked until their generators land (backlog 112) | config |

@@ -1151,7 +1151,9 @@ the other 4 stay free.
   2027-03-12; else Q2.
 
 Both read at day-clustered t ≥ 3.0 on 2018-01-01..2025-09-30 (never loaded for these rules). Neither can pass gate 1
-alone. K at their reads: registry K + 161 effective programme looks.
+alone. K at their reads: registry K + 187 effective programme looks (amended 2026-10-26 on the quant review: G at its
+51 axes). Neither read can be cancelled or deferred by its arm's net result; only the arm's fill-cost read is a
+precondition.
 
 ## Q1 readiness: what must exist before 2027-01-01 (research director; live list, last checked 2026-10-16)
 
