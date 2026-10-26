@@ -91,10 +91,16 @@ def weekly(sd: Path, now: pd.Timestamp = SUN, **kw: Any) -> str:
     return build_weekly(sd, now, **kw)
 
 
-def test_the_weekly_digest_reproduces_the_spec_mock_for_every_line_with_a_source(tmp_path: Path) -> None:
+def test_the_weekly_digest_reproduces_the_spec_mock_for_every_line_with_a_source(tmp_path: Path, monkeypatch) -> None:
     """The spec's section 3.1 mock, less what has no recorded source yet (reported, not invented): the health failure
     history, the worst drawdown of the week (needs-field 5), the broker cost comparison, the H-62 model outcome and
-    next week's news event. The verdict's free-text reason never reaches the chat."""
+    next week's news event. The verdict's free-text reason never reaches the chat. The spec's accounts are pinned
+    (Vantage listed, not enabled), so the shipped config switching it on never changes the mock."""
+    from types import SimpleNamespace
+
+    from goldbot.ops import accounts as acc_mod
+    monkeypatch.setattr(acc_mod, "account_ids", lambda *a, **k: SimpleNamespace(
+        listed={"icm-probe", "icm-demo", "vantage-demo"}, enabled={"icm-probe", "icm-demo"}))
     mock_week(tmp_path)
     assert weekly(tmp_path) == MOCK_WEEKLY
 
