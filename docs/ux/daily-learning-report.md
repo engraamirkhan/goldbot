@@ -28,7 +28,7 @@ The owner reads this on a phone, once, before London opens. The question it answ
 Scalp lab: 214 signals · 63 taken · 61 filled · 58 closed −£17.60 · −3.9R
   costs £10.90 (2.4R): spread £6.80 · slippage £1.40 · commission £2.70
   refused: 41 slots full · 22 spread wide · 9 news window
-  down 2.1% (£230) from peak · warns at 6% (£661) · pauses at 8% (£881)
+  down 2.1% (£230) from peak · warns at 6% (£657) · pauses at 8% (£876)
 Day/swing lab: 37 signals · 9 taken · 9 filled · 7 closed +£21.60 · +1.4R
   costs £2.10 (0.1R) · refused: 14 slots full · 8 news window · down 0.8% (£88)
 Arms, net R so far (trades) · too early to judge, first read at 300
@@ -89,9 +89,9 @@ risk line, and "For you" are never cut. A cut line adds "· more on the dashboar
 | Taken, nothing closed yet | lab result | `… 3 filled · 0 closed (3 still open)` and no P&L figure (never "£0.00") |
 | Market closed (weekend) | replaces all lab lines | `Market closed Sat–Sun: no trading. Sunday-evening trades show in Tuesday's report.` (existing `WEEKEND_LINE`) |
 | Market closed (holiday / early close) | per lab | `Scalp lab: market closed (US Thanksgiving) · nothing to report`; early close: result line + "(early close 18:00 UTC)" |
-| Drawdown ≥ 6% (warn) | drawdown line moves directly under the result line, never cut | `⚠️ Warning: down 6.4% (£704) from peak · pauses at 8% (£881)` |
-| Drawdown ≥ 8% (exploration paused, ADR 0043 X4) | lab result line is replaced | `⏸ Scalp lab paused since Mon 14:20 UTC: down 8.3% (£914) from peak` / `  arms stopped · cost probe and exits still running · resumes: <engine's resume rule>` (the resume text comes from the engine/state, never hard-coded; until the rotation ADR exists it reads "when the drawdown is back under the clear line") |
-| Drawdown ≥ 12% (halt rail) | line 2 and the lab line | line 2: `🛑 Halted: Scalp lab at 12% drawdown, no new trades · exits still run`; lab: `🛑 Scalp lab halted Mon 16:05 UTC: down 12.1% (£1,332) · re-arm on the dashboard (Risk)` |
+| Drawdown ≥ 6% (warn) | drawdown line moves directly under the result line, never cut | `⚠️ Warning: down 6.4% (£701) from peak · pauses at 8% (£876)` |
+| Drawdown ≥ 8% (exploration paused, ADR 0043 X4) | lab result line is replaced | `⏸ Scalp lab paused since Mon 14:20 UTC: down 8.3% (£909) from peak` / `  arms stopped · cost probe and exits still running · resumes: <engine's resume rule>` (the resume text comes from the engine/state, never hard-coded; until the rotation ADR exists it reads "when the drawdown is back under the clear line") |
+| Drawdown ≥ 12% (halt rail) | line 2 and the lab line | line 2: `🛑 Halted: Scalp lab at 12% drawdown, no new trades · exits still run`; lab: `🛑 Scalp lab halted Mon 16:05 UTC: down 12.1% (£1,325) · re-arm on the dashboard (Risk)` |
 | Owner / supervisor / drift halt | line 2 | `🛑 Halts: owner halt since Mon 09:12 UTC` (as today: who set it is not printed) |
 | Account not enabled (e.g. Vantage before live) | — | omitted from the daily; listed once in the weekly ("Not running: Vantage lab") |
 | Arms: none with ≥ 10 trades | arms block | `Arms: too early, no arm has 10 trades yet (most: S2A 7)` (one line) |
@@ -164,12 +164,12 @@ Week = the five opportunity days Mon–Fri (Sun 22:00 to Fri 22:00 UTC). Budget:
 ✅ Health ok now · 2 failures this week, both cleared · Halts: none
 Scalp lab: 1,040 signals · 318 taken · 312 filled · 305 closed −£41.20 · −9.6R
   by day: Mon −3.9R · Tue +2.2R · Wed −6.1R · Thu +1.0R · Fri −2.8R
-  costs £58.10 (12.9R) · worst drawdown 3.4% (£374) Wed · now 2.1% (£230)
+  costs £58.10 (12.9R) · worst drawdown 3.4% (£372) Wed · now 2.1% (£230)
 Day/swing lab: 188 signals · 43 taken · 41 filled · 38 closed +£64.30 · +4.1R
   by day: Mon +1.4R · Tue −0.6R · Wed +2.9R · Thu −1.1R · Fri +1.5R
   costs £9.80 (0.6R) · worst drawdown 1.2% (£132) Thu · now 0.8% (£88)
 Costs ICM: £0.19 a trade at 0.01 lot vs £0.18 planned · spread wide 6% of the time
-Learning cost: £23.10 demo (real money £0) · £0.07 per usable label (1,402)
+Learning paid +£23.10 demo this week (real money £0) · 1,402 usable labels
 Arms, net R so far (trades) · too early to judge, first read at 300
   ahead: MB30 +6.2R (41) · S2A +3.1R (118) · W1A +2.0R (12)
   behind: S3B −11.4R (126) · S5A −4.8R (140) · I2B −5.0R (22)
@@ -213,7 +213,7 @@ drawdown this week" is a record, not a guess from the end state.
 | State | Copy |
 |---|---|
 | Whole week closed (e.g. Christmas week) | `📅 Week … · market closed most of the week` + per lab one line with whatever traded |
-| Lab paused all week at −8% | lab line: `⏸ Scalp lab paused all week (down 8.3%, £914) · cost probe ran 220 fills` |
+| Lab paused all week at −8% | lab line: `⏸ Scalp lab paused all week (down 8.3%, £909) · cost probe ran 220 fills` |
 | No research decision | `Research this week: no new result (2 trials running)` |
 | Research registry unreadable | `Research this week: could not read the registry` |
 | First week of a lab (no prior weights run) | `Learner: first run, equal shares` |
