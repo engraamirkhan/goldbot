@@ -23,13 +23,17 @@ from goldbot.risk.supervisor import Supervisor
 from goldbot.telegram.approvals import ApprovalCenter
 from tests.test_exploration_engine import CLOSE, _arm, _at, _explore, _sent, _Terminal
 
-SCALP = {"S0", "S0R", "S1A", "S1B", "S2A", "S2B", "S3A", "S3B", "S4", "S5A", "S5B", "F1A", "F1C"}   # F1A/F1C: 2026-10-26 prereg, blocked in the spec
+SCALP = {"S0", "S0R", "S1A", "S1B", "S2A", "S2B", "S3A", "S3B", "S4", "S5A", "S5B", "F1A", "F1C",   # F1A/F1C: 2026-10-26 prereg
+         "KA15", "XC15"}                                                                     # wave 2 (8.8, 8.9)
 INTRADAY = {"I0", "I2A", "I2B", "MB15", "MB30", "MB1H", "MSA15", "G1A", "G1C",
             # arms expansion wave 1 (2026-10-26)
-            "XBB15", "XTV1", "XEQ15", "XSO15", "XIMNY", "XIMLN", "XAD1H", "XMR15", "XMR1H", "C1H"}
-SWING = {"W0", "W1A", "W1B", "W2", "WFRI"}
+            "XBB15", "XTV1", "XEQ15", "XSO15", "XIMNY", "XIMLN", "XAD1H", "XMR15", "XMR1H", "C1H",
+            # wave 2 (arms-2026-10-25.md section 8) and H-80's real-order runner
+            "F2A", "F2C", "OBR15", "BXR15", "BXR30", "BXR1H"}
+SWING = {"W0", "W1A", "W1B", "W2", "WFRI", "PDC4", "C30A", "C30C", "BXR4H"}
 VANTAGE = {"VI0", "VI2A", "VI2B", "VMB15", "VMB30", "VMB1H", "VMS15", "VW0", "VW1A", "VW1B", "VW2",
-           "VXRIP1H", "VXRT1H", "VXFK1H", "VXTL1H", "VXTV2", "VXBO1H", "VXBO15", "VXTR1H", "VC1H"}   # wave 1
+           "VXRIP1H", "VXRT1H", "VXFK1H", "VXTL1H", "VXTV2", "VXBO1H", "VXBO15", "VXTR1H", "VC1H",   # wave 1
+           "KSQ1", "PDC1", "DON4"}                                                                     # wave 2
 
 
 def _account(**kw: Any) -> acc_mod.Account:
