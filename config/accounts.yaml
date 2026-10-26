@@ -200,10 +200,10 @@ accounts:
     magic_base: 260200
     # third learning host (PD 2026-10-26, owner: "all three accounts learn"); broker-separated evidence (loop lane L1,
     # ADR 0043 broker amendment) has merged: Vantage labels, costs, weights and models never pool with ICM's, and the
-    # H-60 priors (ICM-cost history) do not seed it (flat prior). OFF until the research-director records its 11
-    # registry trials (prereg-2026-10-25-high-volume.md amendment 2; quant review 2026-10-26); then a one-line change
-    # switches it on. Rollback afterwards: enabled false + restart.
-    enabled: false
+    # H-60 priors (ICM-cost history) do not seed it (flat prior). ON since 2026-10-26: its 11 registry trials were
+    # recorded first (registry research-v1, family arms_vantage_twin; K 134 -> 145; prereg amendment 2).
+    # Rollback: enabled false + restart.
+    enabled: true
     # ADR 0004 / ADR 0042 pattern (CFO 2026-10-26): £200 = 2% of the £10,000 demo deposit, the design's default daily
     # cap, so the £ limit adds no room beyond the percentage rule. Demo only; a real-money Vantage account is owner-only.
     daily_loss_limit_abs: 200

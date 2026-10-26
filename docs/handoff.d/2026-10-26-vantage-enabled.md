@@ -1,0 +1,1 @@
+- vantage-demo switched ON (2026-10-26) after its 11 twin-arm trials were recorded in the registry (research-v1, family arms_vantage_twin; K 134 -> 145). 2026Q4 trial budget 66 -> 69: Q4 already held 58 (H-60 reruns and corrections count +1 each), so 58 + 11 = 69. Rollback: `enabled: false` + engine restart.
