@@ -158,3 +158,39 @@ believed.
   competes with intraday and swing for the same £198. Re-check the sub-budgets after week 1 from measured rates
   (amendment before use).
 - Swing per-trade cap raise on `icm-probe` needs the trading-safety-reviewer before the first W fill.
+
+## Amendment 1 — 2026-10-26, before any live exploration fill is read
+Written before any live exploration fill is read and before any job below runs. Nothing above is loosened.
+
+**(a) H-60 prior scenario and wiring.** The prior uses the stop-overshoot **$0.70** scenario (conservative), not the
+central one, for every arm. Priors are wired into live allocation weights only after the **S0 null audit** passes (S0
+showed +0.037R gross on n ~130k, so the cost and fill model is not yet shown to be null-clean). Until it passes, the
+live allocation is **E5 equal shares**; priors are computed and logged, not used. Passing or failing the audit is
+recorded in a dated note, not by editing this section.
+
+**(b) Box break+close feature-first screen (new, counted in K).** Data and holdout rules as H-60 (data-v1, 2015-01-01..
+2025-09-30, holdout never read, current cost era, $0.70 overshoot, fixed 0.01 lot). Rule: owner box break+close, no MFI
+filter, fixed 1R target-free read (gross R at a 24-bar-equivalent time exit and at 1R/2R brackets reported separately).
+Grid: timeframe {15m, 30m, 1h, 4h} x box stop size / ATR(14) of the same timeframe in buckets {<0.5, 0.5-1.0, 1.0-1.5,
+>1.5} = 16 cells, defined now and not edited. Output per cell: n, gross mean R, day-clustered t, per-year table.
+**Reading rule (fixed now):** a cell is "of interest" only if gross mean R > 0, day-clustered t >= 3.38 (the K-adjusted
+bar above), positive in >= 70% of years, and n >= 300. Of-interest cells are hypotheses for a separate pre-registered
+net test, never promoted from this screen. Zero cells passing is reported as such. K: +16 trials, clustered via `k_eff`,
+stated here (K ~140 -> up to ~156).
+
+**(c) Exits check for 1h and 4h box trades (new, counted in K).** Same trades as (b) for 1h and 4h only, all stop
+buckets pooled and per bucket. Output: MFE distribution in R (quantiles 10/25/50/75/90, share reaching 1R, 2R, 3R), and
+total R for **trailing** (chandelier 3 ATR, activated at +1R) versus **fixed 2R** target, same stop and time cap.
+**Reading rule (fixed now):** trailing is preferred only if its mean R exceeds fixed 2R by > 0 with a paired
+day-clustered t >= 2.0 in both 1h and 4h and in >= 70% of years; otherwise fixed 2R stays. A MFE median < 1R is reported
+as evidence against any box exit change. 2 timeframes x 2 exit rules = 4 comparisons, K +4 (clustered), K up to ~160.
+No live parameter changes from this check without a further amendment.
+
+**(d) PD recommendation (recorded, not a decision of the research director).** Box break+close stays **demo-only for
+learning**, with **no real-money weight**, whatever (b) and (c) show, until a separate pre-registered net test and the
+usual graduation gates pass.
+
+**(e) Pending proposal, not in force.** The research director proposes amending **ADR 0043** to allow **one** W1B
+(tsmom 1d, stop ~ £99) trade up to **£110** funded from the scalp pot. Status: **pending CFO and trading-safety-reviewer
+decisions**; until both are recorded, the ADR 0043 caps (swing per-trade cap, sub-budgets) apply unchanged and no such
+trade is placed.
