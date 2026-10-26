@@ -29,7 +29,7 @@ Exits (all fixed before any outcome was read; one pass; no parameter changed aft
 Costs per trade in R: A = $1.07/oz flat (research basis); M = $0.23/oz + $0.70 overshoot on the stopped share
 (initial, BE or trail stop); MT = M at today's ATR (15m 8.01, 30m 11.6, 1h 17.73, 4h 36.61, arms-2026-10-25.md).
 
-Usage: uv run python scripts/research/exits_adaptive_discovery.py --raw ~/tmp/ts/raw --out ~/tmp/exits_adaptive
+Usage: uv run python docs/research/candidates/time_structure/exits_adaptive_discovery.py --raw ~/tmp/ts/raw --out ~/tmp/exits_adaptive
 """
 from __future__ import annotations
 

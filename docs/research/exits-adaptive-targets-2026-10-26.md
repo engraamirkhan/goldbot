@@ -9,7 +9,7 @@ Scope: a target/exit policy that adapts by family, timeframe, position size and 
 pre-registered arms for the owner's next-box box break on 15m/30m/1h/4h as one family; a coding plan. Data: Dukascopy
 1m mid, **2010-01-01 .. 2017-12-31 only** (the script opens only those eight files and asserts it). No trial, no
 registration, no config change, no holdout, nothing from 2018 on. Script:
-`scripts/research/exits_adaptive_discovery.py` (24 s, outputs in `~/tmp/exits_adaptive/`). Pre-registration:
+`docs/research/candidates/time_structure/exits_adaptive_discovery.py` (24 s, outputs in `~/tmp/exits_adaptive/`). Pre-registration:
 `docs/research/prereg-exits-adaptive-2026-10-26.md` (H-80).
 
 ## 0. Answer in five lines
@@ -235,6 +235,6 @@ D7 runs only when the research director funds R2. Each implementer brief follows
 | D4 implementer | `goldbot/engine/exploration.py` (+ its tests): exploration positions accept an `ExitPolicy` (runner, BE) through the existing `_manage_policies` modify path; size fixed at 0.01, no scale-out | tests first: runner arm position gets trail/BE modifies at bar close; never loosens; exits never gated; kill switch and Friday cut still act | worktree |
 | D5 implementer | `goldbot/engine/shadow.py` (+ tests): virtual exit twins (BXF*, BXT*) on each BXR fill from the fill price and the 1m path, stored with the arm id and `twin_exit`; and the Friday rule in the shadow walk | tests first: twin E0/E8 equal `triple_barrier_1m` on the same path; Friday-rule fixture (loser closed, winner locked at half) equals `runner._weekend_rule` | worktree |
 | D6 implementer (after ruling) | `goldbot/engine/runner.py`: day-P&L lock-half overlay behind a config flag default off, with override journal and counterfactual exit | tests first: triggers at -75% of the daily cap and at +£50; only tightens; never gated; journal row per override | worktree |
-| D7 exits-researcher-staff | `scripts/research/exits_adaptive_discovery.py` extended with `--confirm` (2018-01..2025-09 only, refuses without the director's ruling id), R2 statistics and the D-4 best-day capture ratio | dry run on 2010-2017 reproduces section 4.2 to 3 decimals; refuses 2018+ without the flag; never opens 2025-10+ | worktree |
+| D7 exits-researcher-staff | `docs/research/candidates/time_structure/exits_adaptive_discovery.py` extended with `--confirm` (2018-01..2025-09 only, refuses without the director's ruling id), R2 statistics and the D-4 best-day capture ratio | dry run on 2010-2017 reproduces section 4.2 to 3 decimals; refuses 2018+ without the flag; never opens 2025-10+ | worktree |
 
 Reviews: quant-reviewer on D1, D2, D5, D7; trading-safety-reviewer on D4, D5, D6; code-reviewer on all.

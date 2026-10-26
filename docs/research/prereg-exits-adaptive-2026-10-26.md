@@ -26,7 +26,7 @@ levels: no magnet), so a structural target is expected to do no better than 2 R.
 ## 3. `research.yml` inputs
 None for the arms (exploration, 0 registry trials). R2 (below), if funded: `family: box_break_close`, timeframes
 `[15m, 30m, 1h, 4h]` pooled with a `timeframe` stratum, years 2018-01-01..2025-09-30, exits E0/E4/E8 as defined in
-`scripts/research/exits_adaptive_discovery.py` (no other exit), costs: research $1.07/oz flat and measured $0.23 +
+`docs/research/candidates/time_structure/exits_adaptive_discovery.py` (no other exit), costs: research $1.07/oz flat and measured $0.23 +
 overshoot (S0R's measured value when it has 30 stop exits, else $0.70) on the stopped share.
 
 ## 4. P4 screen expectation (from the 2010-2017 discovery half)
