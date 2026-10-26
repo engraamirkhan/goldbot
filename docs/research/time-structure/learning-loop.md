@@ -82,6 +82,25 @@ A confirmation read looks at outcomes, so it is a **registry trial**: 1 slot. Th
 | **Arm session windows on local clocks** (the measured activity peak follows New York's clock in the UK/US gap weeks, README 6.9) | **partly**: `opening_range_break` uses local clocks, `in_window` is UTC | gap **L-3** |
 | **A written path to add an arm mid-quarter with a flat prior** (an H-60 history run is a counted look; with 2026Q4 full, a new arm cannot get a history prior this quarter) | **no** (the Vantage twins set the precedent: no history run, flat prior) | gap **L-4** |
 
+**Stage-3 requirement: measure the cost at the signal's own times (quant cost audit, 2026-10-26).**
+
+What the audit found:
+- The research prior is about 1.07 $/oz (Dukascopy spread 0.70 + 0.37). The 142 probe fills measured 0.144 central
+  and 0.23 conservative, so the prior is 5-7 times higher.
+- The probes ran at quiet, scheduled times, and 14 stop exits overshot by a mean of $0.70.
+- The model is conservative and defensible, with no bug. Every retired family failed on gross t below 2, so none
+  flips. R-06 is the one that died on cost, and it cannot clear the DSR bar. H-53 (the 1h box rule, 2027Q1) is the
+  right re-read.
+
+What the loop requires:
+- Any candidate that passes only at measured-fill cost (today slices F-1/F-2 and D-1/D-2) goes to stage 3 first, as
+  an arm that fills **at its own signal times**: opens, breaks, news-adjacent bars, stop exits included.
+- It is judged on the **worse** of (a) the research prior and (b) the cost its own fills measured. Spread, slippage,
+  stop overshoot and commission are broker-keyed, read with a 95% upper bound once there are at least 30 fills per
+  session cell.
+- No stage-2 slot is spent on such a candidate until (b) exists. This is component C6 of stage 4, measured before
+  the slot rather than after.
+
 Exploration fills are **never promotion evidence**. They teach costs, fill rates, parity and which arms deserve a
 stage-2 slot.
 

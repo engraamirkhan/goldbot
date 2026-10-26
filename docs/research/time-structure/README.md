@@ -139,6 +139,11 @@ non-overlapping samples or Newey-West with h lags. Report the number of looks be
   $0.23/oz round trip, about 0.02-0.05 ATR15 at today's ATR15 of about $8.
 A hypothesis is worth a trial only if its plausible gross edge is several times the research-prior cost; it is worth
 an exploration arm if it is several times the broker cost and fits the £ caps.
+*Quant cost audit, 2026-10-26:* the prior (about 1.07 $/oz today) is 5-7 times the probes' measured 0.144-0.23, but
+the probes ran at quiet times and stop exits overshot by a mean of $0.70 (n 14). There is no bug, and no retired
+family flips: all failed on gross t below 2, and R-06 died on cost and cannot clear the DSR bar. So a candidate that
+passes only at measured cost is judged on the **worse** of the prior and the cost measured on demo fills **at its own
+signal times** (`learning-loop.md` stage 3) before any trial slot is spent on it.
 
 **4.7 Sizing facts (not research variables).** 0.01 lot = 1 oz; scalp per-trade cap £6.50, intraday £45, swing £40
 on the learning hosts (ADR 0043); £1,000 live means 15m only. Max 40 features per model, fold-internal selection
