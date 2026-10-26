@@ -209,6 +209,109 @@ def fetch_cot(years: list[int], *, retries: int = 3, session: requests.Session |
     return df.drop_duplicates("report_date", keep="last").sort_values("report_date").reset_index(drop=True)
 
 
+# --------------------------------------------------------------------------------------------------- CFTC COT, legacy
+# The legacy futures-only report (noncommercial / commercial) reaches back to 1986 for COMEX gold (088691), 20 years
+# before the disaggregated report. Files (checked 2026-10-26): deacot1986_2016.zip (FUT86_16.txt, 1,427 gold reports
+# 1986-01-15 .. 2016-12-27) and deacot<year>.zip (annual.txt) from 2017. Source `cftc_legacy`, its own last_ok.
+COT_LEGACY_FIRST_YEAR = 1986
+COT_LEGACY_HIST_URL = "https://www.cftc.gov/files/dea/history/deacot1986_2016.zip"
+COT_LEGACY_YEAR_URL = "https://www.cftc.gov/files/dea/history/deacot{year}.zip"
+COT_LEGACY_SERIES = ("cot_legacy_nc_long", "cot_legacy_nc_short", "cot_legacy_nc_net", "cot_legacy_open_interest",
+                     "cot_legacy_comm_net")
+# Publication before the weekly Friday release, conservative (UNVERIFIED against CFTC's own history of the report,
+# confirm before reading results that depend on the exact lag): positions were semi-monthly (15th and month end) until
+# Sept 1992 and weekly (Tuesday) from Oct 1992, but published every two weeks until the switch to weekly publication
+# in 2000. A report dated before the cut-off is not public before the Friday on or after report date + lag, 15:30 ET.
+# Too late only makes the features staler; too early would be look-ahead, so the lags err long.
+COT_LEGACY_LAGS: tuple[tuple[str, int], ...] = (
+    ("1992-10-01", 28),   # semi-monthly era: published around two weeks after the as-of date; 4 weeks assumed
+    ("2001-01-01", 14),   # fortnightly publication: the first week of a pair was up to ~10 days old when published
+)
+
+
+def cot_legacy_available_utc(report_date: pd.Series | pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """Conservative UTC time each legacy report was public: the weekly rule (`cot_available_utc`) applied to the report
+    date plus the era's lag (COT_LEGACY_LAGS); from 2001 exactly the weekly rule."""
+    d = _naive_days(report_date)
+    lag = pd.to_timedelta(np.zeros(len(d), dtype="int64"), unit="D")
+    for cutoff, days in reversed(COT_LEGACY_LAGS):        # earliest cut-off last, so it wins for the oldest reports
+        lag = lag.where(~(d < pd.Timestamp(cutoff)), pd.Timedelta(days=days))
+    return cot_available_utc(d + lag)
+
+
+def _legacy_norm(c: str) -> str:
+    """CFTC legacy header -> lower snake case ("Noncommercial Positions-Long (All)" -> noncommercial_positions_long_all)."""
+    out = "".join(ch if ch.isalnum() else "_" for ch in c.strip().lower())
+    while "__" in out:
+        out = out.replace("__", "_")
+    return out.strip("_")
+
+
+def parse_cot_legacy(text_or_bytes: str | bytes) -> pd.DataFrame:
+    """One legacy futures-only file (CSV) -> gold rows: report_date, nc_long, nc_short, open_interest, comm_net
+    (commercial long - short). Raises ValueError when the expected columns are missing."""
+    buf = io.BytesIO(text_or_bytes) if isinstance(text_or_bytes, bytes) else io.StringIO(text_or_bytes)
+    raw = pd.read_csv(buf, low_memory=False, dtype={"CFTC Contract Market Code": str})
+    raw.columns = [_legacy_norm(c) for c in raw.columns]
+    need = ["as_of_date_in_form_yyyy_mm_dd", "cftc_contract_market_code", "open_interest_all",
+            "noncommercial_positions_long_all", "noncommercial_positions_short_all", "commercial_positions_long_all",
+            "commercial_positions_short_all"]
+    missing = [c for c in need if c not in raw.columns]
+    if missing:
+        raise ValueError(f"legacy COT file lacks {missing}")
+    code = raw["cftc_contract_market_code"].astype(str).str.strip().str.zfill(6)
+    g = raw[code == COT_GOLD_CODE]
+
+    def num(c: str) -> pd.Series:
+        return pd.to_numeric(g[c].astype(str).str.replace(",", "").str.strip(), errors="coerce")
+
+    out = pd.DataFrame({
+        "report_date": pd.to_datetime(g["as_of_date_in_form_yyyy_mm_dd"].astype(str).str.strip()).dt.normalize(),
+        "nc_long": num("noncommercial_positions_long_all"),
+        "nc_short": num("noncommercial_positions_short_all"),
+        "open_interest": num("open_interest_all"),
+        "comm_net": num("commercial_positions_long_all") - num("commercial_positions_short_all"),
+    })
+    return out.dropna().drop_duplicates("report_date", keep="last").sort_values("report_date").reset_index(drop=True)
+
+
+def cot_legacy_frame(parsed: pd.DataFrame, vintage: pd.Timestamp) -> pd.DataFrame:
+    """parse_cot_legacy rows -> long release rows (COLUMNS), source `cftc_legacy`. The history files hold current
+    (corrected) values, the same small accepted backfill look-ahead as `cot_frame`; later revisions are new rows."""
+    if parsed.empty:
+        return pd.DataFrame(columns=list(COLUMNS))
+    days = _naive_days(parsed["report_date"])
+    avail = cot_legacy_available_utc(days)
+    values = {"cot_legacy_nc_long": parsed["nc_long"], "cot_legacy_nc_short": parsed["nc_short"],
+              "cot_legacy_nc_net": parsed["nc_long"] - parsed["nc_short"],
+              "cot_legacy_open_interest": parsed["open_interest"], "cot_legacy_comm_net": parsed["comm_net"]}
+    parts = [pd.DataFrame({"series": s, "series_id": COT_GOLD_CODE, "value_date": days,
+                           "value": v.astype(float).to_numpy(), "vintage": _vintage_day(vintage),
+                           "available_utc": avail, "source": "cftc_legacy"}) for s, v in values.items()]
+    out = pd.concat(parts, ignore_index=True)
+    out["ts_utc"] = out["available_utc"]
+    return out[list(COLUMNS)]
+
+
+def fetch_cot_legacy(years: list[int], *, retries: int = 3, session: requests.Session | None = None) -> pd.DataFrame:
+    """Gold rows (parse_cot_legacy) for the given years: 1986-2016 from the historical bundle (~23 MB), later years
+    one zip each (~2.4 MB)."""
+    frames = []
+    urls = (([COT_LEGACY_HIST_URL] if any(y <= 2016 for y in years) else [])
+            + [COT_LEGACY_YEAR_URL.format(year=y) for y in years if y > 2016])
+    for url in urls:
+        r = _get(url, retries=retries, session=session)
+        z = zipfile.ZipFile(io.BytesIO(r.content))
+        for name in z.namelist():
+            if name.lower().endswith((".txt", ".csv")):
+                frames.append(parse_cot_legacy(z.read(name)))
+    if not frames:
+        raise RuntimeError("legacy COT: no data file in the downloaded archives")
+    df = pd.concat(frames, ignore_index=True)
+    df = df[df["report_date"].dt.year.isin(years)]
+    return df.drop_duplicates("report_date", keep="last").sort_values("report_date").reset_index(drop=True)
+
+
 # --------------------------------------------------------------------------------------------------- GLD holdings
 GLD_URL = "https://www.spdrgoldshares.com/assets/dynamic/GLD/GLD_US_archive_EN.csv"
 GLD_AVAILABLE_AT_UTC = pd.Timedelta(hours=14)

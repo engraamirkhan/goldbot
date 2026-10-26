@@ -1,5 +1,6 @@
 name: data-positioning
-# Downloads COMEX gold Commitments of Traders (CFTC disaggregated futures-only, public zip, no key) and SPDR Gold Shares
+# Downloads COMEX gold Commitments of Traders (CFTC disaggregated futures-only from 2006 and legacy futures-only from
+# 1986, source cftc_legacy; public zips, no key; US government data, public domain) and SPDR Gold Shares
 # (GLD) holdings (the issuer's public archive CSV) and publishes one point-in-time Parquet, positioning.parquet, on the
 # rolling release tag `positioning-v1` (Claude sandboxes cannot reach cftc.gov or spdrgoldshares.com; runners can).
 # Every row carries value_date, vintage, source and a conservative available_utc (goldbot/data/positioning.py). The
@@ -7,7 +8,8 @@ name: data-positioning
 # confirmed missing counts as a first run; any other error fetching the previous file fails the run, and the script
 # refuses (exit 2, no output) a frame that would drop published rows, so --clobber never replaces history. Research (scripts/research_pass.py
 # --positioning) and scripts/fetch_data_release.py --positioning load it from there.
-# Cost: about 2 runner-minutes a week (first run ~4: COT since 2006, ~40 MB of zips); the asset is well under 1 MB.
+# Cost: about 2 runner-minutes a week (first run ~4: COT since 2006, ~40 MB of zips; the one-off legacy backfill from
+# 1986 adds ~23 MB and ~1 minute, 1,427 reports x 5 series = ~7,100 rows); the asset stays around 0.2 MB.
 on:
   workflow_dispatch:
     inputs:
