@@ -86,6 +86,8 @@ NOTIONAL_X = 6.0                    # notional cap: 6 x equity
 MARGIN_LEVEL = 3.0                  # margin cap: the margin level kept at 300%
 FALLBACK_LEVERAGE = 20.0            # the gate's 1:20 margin figure: the margin used is never below it
 GRACE_S = 1.5                       # a minute is complete GRACE_S after its close
+# live 2026-10-26: a bar closing more than this after the host clock is a clock fault, never a candidate
+CLOCK_AHEAD_S = 60.0
 LOOKBACK = 200                      # bars of an arm's timeframe its rule reads
 LOOKBACK_1M = 1_000                 # and at least this many minutes (S5's 15m EMA50 reads 750)
 SUB_15M = ("1m", "5m")
@@ -299,6 +301,7 @@ class Exploration:
         self.last_bar: dict[str, pd.Timestamp] = {}
         self.last_close = eng._closed_through
         self.last_minute: pd.Timestamp | None = None
+        self.ahead_seen: pd.Timestamp | None = None   # the last bar skipped as ahead of the host clock (journalled once)
         self.open_loss: dict[int, float] = {}       # position id -> its loss at the gate's stop when sent
         self.weights_cache: tuple[pd.Timestamp, dict[str, float]] | None = None
         self.champion_seen: dict[str, tuple[pd.Timestamp | None, bool]] = {}
@@ -395,14 +398,27 @@ def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.D
                                 target_usd=float(target_r) * float(risk), hold_bars=int(max_bars) + 1))
 
 
-def step(eng: Engine, close_ts: pd.Timestamp) -> None:
-    """At a base bar close (after the engine's decisions): the 15m+ arms whose bar closes now queue their signals."""
+def step(eng: Engine, close_ts: pd.Timestamp) -> bool:
+    """At a base bar close (after the engine's decisions): the 15m+ arms whose bar closes now queue their signals.
+    False when the close is deferred: on the live clock a close more than CLOCK_AHEAD_S after the host clock is a
+    broker-clock fault (live 2026-10-26: server_tz Athens after EU DST against the broker's NY+7 stamped the 06:00 bar
+    07:00). It is journalled once (`exploration_clock_ahead`) and nothing is evaluated or recorded: its candidate ids
+    are the real bar's, and a refused record would shadow the real candidates (first record stands). The caller
+    tries again on later passes, so the bar is evaluated once the host clock reaches it."""
     ex = eng.exploration
     if ex is None:
-        return
+        return True
+    if eng.cfg.live_clock and (ahead := (close_ts - eng.clock()).total_seconds()) > CLOCK_AHEAD_S:
+        if ex.ahead_seen != close_ts:
+            ex.ahead_seen = close_ts
+            log.warning("exploration: bar %s closes %.0f s after the host clock; deferred (clock fault)", close_ts,
+                        ahead)
+            eng.decisions.append({"ts": time.time(), "agent": None, "action": "exploration_clock_ahead",
+                                  "bar": close_ts.isoformat(), "ahead_s": round(ahead, 3)})
+        return False
     arms = [a for a in ex.arms.values() if a.tf not in SUB_15M]
     if not arms or eng.bars_1m.empty:
-        return
+        return True
     complete = eng.bars_1m[eng.bars_1m["visible_at"] <= close_ts]
     for tf in sorted({a.tf for a in arms}, key=tf_seconds):
         if tf != "1d" and int(close_ts.timestamp()) % tf_seconds(tf):
@@ -412,6 +428,7 @@ def step(eng: Engine, close_ts: pd.Timestamp) -> None:
             b1 = complete[complete["ts_utc"] >= pd.Timestamp(bars["ts_utc"].iloc[0])].reset_index(drop=True)
             for arm in (a for a in arms if a.tf == tf):
                 _signal(eng, ex, arm, bars, b1, close_ts)
+    return True
 
 
 def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
@@ -454,9 +471,8 @@ def on_pass(eng: Engine, tick: Tick) -> None:
     try:
         now = eng._now(tick)
         ct = eng._closed_through
-        if ct is not None and (ex.last_close is None or ct > ex.last_close):
-            ex.last_close = ct
-            step(eng, ct)
+        if ct is not None and (ex.last_close is None or ct > ex.last_close) and step(eng, ct):
+            ex.last_close = ct                      # a deferred close (clock ahead) is tried again next pass
         _minutes(eng, ex, now)
         if ex.queue:
             _enter(eng, ex, now, tick)

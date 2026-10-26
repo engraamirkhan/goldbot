@@ -629,3 +629,27 @@ def test_every_enabled_arm_needs_a_pot_and_the_pots_fit_the_budget_share():
 def test_the_engine_config_refuses_an_arm_whose_style_has_no_pot():
     with pytest.raises(ValueError, match="no pot"):
         ExplorationConfig(pots={}, arms=(_arm("a"),))
+
+
+# ------------------------------------------------------------------------------------------------ live 2026-10-26
+def test_a_bar_stamped_ahead_of_the_host_clock_is_never_a_candidate_and_never_blocks_the_real_one(tmp_path):
+    """Live 2026-10-26: a broker clock read 1 h ahead (server_tz Athens after EU DST vs the broker's NY+7) stamped the
+    06:00 bar as 07:00. Its candidate (refused for the clock) took the id of the real 07:00 candidate, so the trade
+    sent at 07:00 kept a `blocked` research row (first record stands) and its fill could never be recorded. A bar
+    closing after the host clock is now skipped and journalled, unrecorded, and the real bar is evaluated when it
+    comes."""
+    eng, pb = _engine(tmp_path, [_arm("i0")])
+    eng.cfg.live_clock = True
+    host = CLOSE - pd.Timedelta(hours=1) + pd.Timedelta(seconds=2)
+    eng.clock = lambda: host
+    tick = _at(eng, pb, CLOSE)
+    exploration.on_pass(eng, tick)
+    assert not _sent(eng) and _obs(tmp_path) == []
+    [ahead] = _actions(eng, "exploration_clock_ahead")
+    assert ahead["ahead_s"] == pytest.approx(3598.0)
+    eng.clock = lambda: CLOSE + pd.Timedelta(seconds=2)  # the clock is right again
+    eng._refresh_account(tick)
+    exploration.on_pass(eng, tick)
+    assert len(_sent(eng)) == 1
+    [row] = _obs(tmp_path)
+    assert row[:3] == ("i0", 1, "random")                   # the real candidate: taken, never shadowed
