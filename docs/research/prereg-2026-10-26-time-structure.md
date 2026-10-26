@@ -203,6 +203,16 @@ Definitions as `docs/research/candidates/time_structure/key_levels_discovery.py`
   - **At 26 Fridays: safety check only.** Stop if the mean ≤ −20 bp per Friday or the cumulative net ≤ −10 R.
   - **At 170 Fridays: the only read** (1 slot then). **continue** if mean gross ≥ +6 bp with t ≥ 2.0 and net at the
     measured cost > 0; **stop** if the mean < 0; else **inconclusive**.
+- **Amendment 1 (2026-10-26, before merge and before any WFRI fill or outcome; arms-2026-10-25.md 8.14 (2)).**
+  - The engine's Friday weekend cut is part of WFRI's exit. It runs at `weekend_cut` 21:30 server time, Europe/Athens,
+    which is about 14:30 New York. Exits are never relaxed for an arm.
+  - At the cut a losing WFRI (at or below entry) is closed. A winner's stop is tightened to entry + 0.5 x (price −
+    entry) and the trade is held to the 16:30 New York time exit, or stopped on the way.
+  - Both reads above use the **realised outcome under the cut**, with unchanged thresholds. The 14 bp power figure
+    assumed no cut, so it is now optimistic; this is declared.
+  - Code: `arm_rules_clock_box.friday_long` (`cut_at`) and `walk_friday`.
+  - Live, `exploration.crosses_friday` still refuses WFRI. That is flagged in 8.14 and not decided here.
+  - The id stays WFRI: this file was not yet merged, and no fill or outcome existed.
 
 ## 5. H-73 time-structure range features (0 trials; K_eff +1 as one group)
 

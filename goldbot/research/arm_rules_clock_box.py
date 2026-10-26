@@ -8,6 +8,11 @@ reads bars <= i only, and appending bars never changes a past candidate (arms-20
   exit lands on 16:30 New York: the candidate is the first 30m bar closing on the hour at or after 19:00 New York on
   Thursday (an hour close is a 1h bar's close: New York's offset is whole hours), its hold the 30m bars to 16:30
   Friday. ATR14(4h) is the last 4h bar closed by the decision close. The $53.2 skip is the arm row's `max_stop_usd`.
+  Exit amended 2026-10-26 (prereg section 4, amendment 1): the engine's Friday weekend cut (`EngineConfig.weekend_cut`
+  21:30 server, `server_tz` Europe/Athens, about 14:30 New York) is part of WFRI's exit, as live: at the cut a losing
+  WFRI is closed and a winning one has its stop tightened to entry + 0.5 x (price - entry) (never loosened), then held
+  to the 16:30 New York time exit. The frame keeps the 16:30 hold (`max_bars`) and carries `cut_at` (UTC); the read is
+  the realised outcome under the cut, `walk_friday` on the 1m path (history) and the engine's own weekend rule (live).
 * `clock_anchor` (KA15, arms 8.8 and 8.13): strata T (Tokyo 08:00, reversal), S (SGE AM auction 10:15 Shanghai,
   continuation), C (COMEX settle 13:30 New York, reversal) on 15m bars; pre = close at the anchor - close 30 min
   before (both closed 15m bars), skipped if |pre| < 0.1 x ATR14(15m); "stop = entry -/+ 1.0 x ATR14(15m); no target;
@@ -34,7 +39,8 @@ the measured excursions never reach: the box runner's 2010-2017 maximum was 16.1
 Declared, not built here (order/exit path, trading-safety review): the engine does not yet run `runner_stop` as a
 live stop modification, the BXT/BXF virtual twins on BXR's fill path, or XC15's netting shift; the history runner
 does not yet charge T's spread. Until then BXR, BXT and BXF run as their fixed-bracket forms only where the arm row
-says so, and the Friday weekend rule is the engine's (`runner._weekend_rule`), not modelled in `walk_runner`."""
+says so. The Friday weekend rule is the engine's (`runner._weekend_rule`); `walk_friday` models it for WFRI only
+(the cut price is the mid open of the first 1m bar at or after the cut; live decides on the bid, half a spread lower)."""
 from __future__ import annotations
 
 from datetime import date
@@ -58,6 +64,8 @@ WFRI_TF = "30m"
 WFRI_ENTRY_MIN = 19 * 60                    # Thursday 19:00 New York
 WFRI_EXIT = (16, 30)                        # Friday 16:30 New York
 WFRI_STOP_ATR4H = 1.0
+WFRI_CUT_TZ, WFRI_CUT = "Europe/Athens", (21, 30)   # = EngineConfig.server_tz / weekend_cut (a test holds them equal)
+WFRI_CUT_KEEP = 0.5                         # runner._weekend_rule: a winner's stop locks in half the open profit
 # KA15: stratum -> (zone, hh, mm, side vs sign(pre))
 ANCHORS: dict[str, tuple[str, int, int, int]] = {
     "T": ("Asia/Tokyo", 8, 0, -1), "S": ("Asia/Shanghai", 10, 15, 1), "C": (NEW_YORK, 13, 30, -1)}
@@ -90,11 +98,15 @@ def _ns(ts: pd.DatetimeIndex) -> np.ndarray:
 
 
 # ---------------------------------------------------------------- WFRI
+def _no_wfri() -> pd.DataFrame:
+    return empty().assign(cut_at=pd.Series(dtype="datetime64[ns, UTC]"))
+
+
 def friday_long(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     """WFRI (module docstring): long at Thursday's first on-the-hour close at or after 19:00 New York."""
     close = ctx.close_ts
     if not len(close):
-        return empty()
+        return _no_wfri()
     ny = close.tz_convert(NEW_YORK)
     mins = (ny.hour * 60 + ny.minute).to_numpy()
     ok = (ny.dayofweek.to_numpy() == 3) & (mins >= WFRI_ENTRY_MIN) & (ny.minute.to_numpy() == 0)
@@ -102,18 +114,44 @@ def friday_long(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     cand = np.flatnonzero(ok)
     idx = cand[np.unique(day[cand], return_index=True)[1]] if len(cand) else cand      # the first per Thursday
     if not len(idx):
-        return empty()
+        return _no_wfri()
     thu = day[idx]
     fri = np.array([d + pd.Timedelta(days=1) for d in thu])
     keep = ~(cme_holiday(list(thu)) | cme_holiday(list(fri)))
     idx, fri = idx[keep], fri[keep]
     if not len(idx):
-        return empty()
+        return _no_wfri()
     exit_at = pd.DatetimeIndex([pd.Timestamp(year=d.year, month=d.month, day=d.day, hour=WFRI_EXIT[0],
                                              minute=WFRI_EXIT[1], tz=NEW_YORK) for d in fri])
+    cut_at = pd.DatetimeIndex([pd.Timestamp(year=d.year, month=d.month, day=d.day, hour=WFRI_CUT[0],
+                                            minute=WFRI_CUT[1], tz=WFRI_CUT_TZ) for d in fri]).tz_convert("UTC")
     hold = ((exit_at - close[idx]) / pd.Timedelta(minutes=30)).to_numpy().astype(int)
     a4 = atr4h_at(ctx, close[idx])
-    return _frame(idx, np.ones(len(idx), dtype=int), WFRI_STOP_ATR4H * a4, NO_TARGET_R, hold)
+    out = _frame(idx, np.ones(len(idx), dtype=int), WFRI_STOP_ATR4H * a4, NO_TARGET_R, hold)
+    cut = dict(zip(idx.tolist(), cut_at, strict=True))
+    return out.assign(cut_at=pd.DatetimeIndex([cut[int(i)] for i in out["idx"]], tz="UTC"))
+
+
+def walk_friday(path: pd.DataFrame, entry: float, risk: float, cut_at: pd.Timestamp,
+                exit_at: pd.Timestamp) -> dict[str, Any]:
+    """One WFRI long on its 1m mid path after entry (`path`: ts_utc, open, high, low, close) under the engine's Friday
+    weekend cut (module docstring, amendment 1): at the open of the first minute at or after `cut_at` a loser (price <=
+    entry) is closed there (`weekend_loser`) and a winner's stop becomes max(stop, round(entry + 0.5 x (price - entry),
+    2)); then stop first in a minute, the time exit at the close of the minute ending at `exit_at`."""
+    ts = utc_index(path["ts_utc"])
+    o, lo, c = (path[k].to_numpy(float) for k in ("open", "low", "close"))
+    stop, cut_done = entry - risk, False
+    for j in range(len(path)):
+        if not cut_done and ts[j] >= cut_at:
+            cut_done = True
+            if o[j] - entry <= 0:
+                return {"exit": o[j], "kind": "weekend_loser", "at": ts[j], "stop": stop}
+            stop = max(stop, round(entry + WFRI_CUT_KEEP * (o[j] - entry), 2))
+        if lo[j] <= stop:
+            return {"exit": stop if o[j] > stop else o[j], "kind": "stop", "at": ts[j], "stop": stop}
+        if ts[j] + pd.Timedelta(minutes=1) >= exit_at:
+            return {"exit": c[j], "kind": "time", "at": ts[j] + pd.Timedelta(minutes=1), "stop": stop}
+    return {"exit": c[-1] if len(c) else entry, "kind": "open", "at": ts[-1] if len(ts) else None, "stop": stop}
 
 
 def atr4h_at(ctx: RuleContext, at: pd.DatetimeIndex) -> np.ndarray:

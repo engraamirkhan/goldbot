@@ -91,6 +91,50 @@ def test_wfri_stop_is_the_atr_of_the_last_closed_4h_bar_only(b1) -> None:
             <= close).all()
 
 
+def test_wfri_carries_the_engines_friday_weekend_cut_before_its_1630_exit(b1) -> None:
+    """Prereg section 4, amendment 1: the cut is EngineConfig's (server_tz, weekend_cut), about 14:30 New York."""
+    from goldbot.engine.runner import EngineConfig
+    f = EngineConfig.model_fields
+    assert f["server_tz"].default == K.WFRI_CUT_TZ
+    assert f["weekend_cut"].default == "%02d:%02d" % K.WFRI_CUT
+    got, ctx = _run(b1, "friday_long", "30m", {})
+    close = ctx.close_ts[got["idx"].to_numpy()]
+    cut = pd.DatetimeIndex(got["cut_at"])
+    srv = cut.tz_convert(K.WFRI_CUT_TZ)
+    assert (srv.dayofweek == 4).all() and (srv.hour == 21).all() and (srv.minute == 30).all()
+    exit_at = close + (got["max_bars"].to_numpy() + 1) * pd.Timedelta(minutes=30)
+    assert (cut < exit_at).all() and (cut > close).all()
+    assert set(cut.tz_convert(NY).hour) <= {14, 15}            # 14:30 New York; 15:30 in the DST mismatch weeks
+    # live on the bars up to the decision close sees the same cut (the prefix tests cover the whole frame)
+
+
+def _fri(prices: list[float]) -> tuple[pd.DataFrame, pd.Timestamp, pd.Timestamp]:
+    """A 1m path from 14:00 New York on a Friday (EST); cut at 14:30 New York, exit at 16:30."""
+    path = _path(prices, start="2024-01-12 19:00")
+    return path, pd.Timestamp("2024-01-12 19:30", tz="UTC"), pd.Timestamp("2024-01-12 21:30", tz="UTC")
+
+
+def test_walk_friday_closes_a_loser_at_the_cut() -> None:
+    path, cut, ex = _fri([99.5] * 200)
+    w = K.walk_friday(path, entry=100.0, risk=3.0, cut_at=cut, exit_at=ex)
+    assert w["kind"] == "weekend_loser" and w["exit"] == 99.5 and w["at"] == cut
+
+
+def test_walk_friday_tightens_a_winner_at_the_cut_and_holds_it_to_1630() -> None:
+    path, cut, ex = _fri([104.0] * 200)
+    w = K.walk_friday(path, entry=100.0, risk=3.0, cut_at=cut, exit_at=ex)
+    assert w["kind"] == "time" and w["exit"] == 104.0 and w["at"] == ex and w["stop"] == 102.0
+    fade = _fri([104.0] * 40 + [101.0] * 160)[0]                # falls through the tightened stop after the cut
+    w = K.walk_friday(fade, entry=100.0, risk=3.0, cut_at=cut, exit_at=ex)
+    assert w["kind"] == "stop" and w["exit"] == 101.0 and w["stop"] == 102.0     # gapped through: the open
+
+
+def test_walk_friday_keeps_the_entry_stop_before_the_cut() -> None:
+    path, cut, ex = _fri([99.0] * 10 + [96.5] * 190)
+    w = K.walk_friday(path, entry=100.0, risk=3.0, cut_at=cut, exit_at=ex)
+    assert w["kind"] == "stop" and w["exit"] == 96.5 and w["at"] < cut and w["stop"] == 97.0
+
+
 def test_clock_anchors_follow_local_clocks_and_t_only_on_us_daylight_time(b1) -> None:
     got, ctx = _run(b1, "clock_anchor", "15m", {})
     close = ctx.close_ts[got["idx"].to_numpy()]
