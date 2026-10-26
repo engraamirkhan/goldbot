@@ -222,6 +222,39 @@ def excluded_ids(db: Database, scope: Scope) -> set[str]:
         return excluded(conn, scope)
 
 
+# ---------------------------------------------------------------- spec-bug-midnight (quant review 2026-10-26)
+# ARM-SPEC 1.1 says "no signal after 20:00 UTC"; the S1 code read the close's minute of day, so on GMT (from the UK
+# switch, 2026-10-25) the 23:55 bar, still in the London day, closing at 00:00 UTC passed the cut. A correction to the
+# spec, not an amendment (arms-2026-10-25.md section 1.1 note): every S1A/S1B row decided on a 00:00 UTC close since
+# the switch is void for every evidence use, live and shadow alike. Decided from arm ids and decision times only.
+SPEC_BUG_MIDNIGHT = "spec-bug-midnight"
+SPEC_BUG_MIDNIGHT_REF = "spec:arms-2026-10-25:1.1:no-signal-after-20:00-utc"
+SPEC_BUG_MIDNIGHT_VERSION = "spec-bug-midnight/v1"
+SPEC_BUG_MIDNIGHT_ARMS = ("S1A", "S1B")
+SPEC_BUG_MIDNIGHT_FROM = pd.Timestamp("2026-10-25 01:00", tz="UTC")     # the UK leaves BST: London day = UTC day
+
+
+def midnight_spec_bug(db: Database, *, now: pd.Timestamp) -> list[Exclusion]:
+    """Every S1A/S1B candidate (taken or not) and every S1A/S1B trade without a candidate row whose decision bar
+    closed at 00:00 UTC in [SPEC_BUG_MIDNIGHT_FROM, now]."""
+    from goldbot.engine.exploration import LEDGER
+    marks = ",".join("?" * len(SPEC_BUG_MIDNIGHT_ARMS))
+    with db.connection() as conn:
+        obs = conn.execute(f"SELECT candidate_id, account_id, decision_ns FROM exploration_obs "  # noqa: S608
+                           f"WHERE arm_id IN ({marks})", SPEC_BUG_MIDNIGHT_ARMS).fetchall()
+        trades = LEDGER.select(conn, f"arm_id IN ({marks})", SPEC_BUG_MIDNIGHT_ARMS)
+    rows = [(str(c), str(a), pd.Timestamp(int(d), unit="ns", tz="UTC")) for c, a, d in obs]
+    seen = {r[0] for r in rows}
+    rows += [(t.client_order_id, t.account_id, t.signal_utc) for t in trades if t.client_order_id not in seen]
+    return sorted((Exclusion(client_order_id=cid, kind="exploration", account_id=acct, scope=EXPLORATION_SCOPE,
+                             reason=f"{SPEC_BUG_MIDNIGHT}: S1 signal on the 00:00 UTC close, after the spec's "
+                                    "20:00 UTC cut", span_ref=SPEC_BUG_MIDNIGHT_REF,
+                             criterion_version=SPEC_BUG_MIDNIGHT_VERSION, decided_utc=now)
+                   for cid, acct, at in rows
+                   if SPEC_BUG_MIDNIGHT_FROM <= at <= now and at == at.normalize()),
+                  key=lambda e: e.client_order_id)
+
+
 class Screen(FrozenRecord):
     """What one screening found: the exclusions to record (spans with a recorded R), the candidates held out in memory
     and the accounts whose span has no recorded R."""
