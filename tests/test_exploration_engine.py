@@ -67,19 +67,21 @@ def _arm(arm_id: str, tf: str = "15m", *, side: int = 1, style: str = "intraday"
 
 def _engine(tmp_path: Path, arms: list[Arm], *, pots: dict[str, Pot] | None = None, max_open_total: int = 18,
             budget_share: float = 0.9, caps: dict[str, float] | None = None, agents: list[Any] | None = None,
-            pb: PaperBroker | None = None, enabled: bool = True) -> tuple[Engine, PaperBroker]:
+            pb: PaperBroker | None = None, enabled: bool = True, max_positions: int = 50,
+            scheduled: bool = False) -> tuple[Engine, PaperBroker]:
     pots = pots if pots is not None else {"scalp": Pot(gbp=50, max_open=8), "intraday": Pot(gbp=48, max_open=5),
                                           "swing": Pot(gbp=40, max_open=1)}
     cfg = ExplorationConfig(enabled=enabled, budget_share=budget_share, max_open_total=max_open_total, pots=pots,
                             arms=tuple(arms))
     pb = pb if pb is not None else _Terminal(equity=10_000, adverse_slip_points=0.0)
-    limits = RiskLimits(risk_per_trade=0.002, multiplier_bounds=(1.0, 1.0), max_positions=50, probe_only=True,
+    limits = RiskLimits(risk_per_trade=0.002, multiplier_bounds=(1.0, 1.0), max_positions=max_positions, probe_only=True,
                         exploration_arms=caps if caps is not None else {a.arm_id: 40.0 for a in arms},
                         daily_loss_limit_abs=220.0)
     agents = agents if agents is not None else []
     eng = Engine(EngineConfig(account_id="icm-probe", broker_name="icm", mode="demo", approval_mode="auto",
                               declared_class="raw", state_dir=str(tmp_path), owner_user_id=111, probe_only=True,
-                              exploration_config=cfg),
+                              exploration_config=cfg, cost_probe=scheduled,
+                              cost_probe_scheduled=acc_mod.ScheduledProbe(enabled=scheduled)),
                  pb, agents, {a.family: ConstantModel(p=0.9) for a in agents}, ApprovalCenter({111}), limits=limits,
                  live_shares={a.agent_id: 1.0 for a in agents})
     return eng, pb
@@ -247,6 +249,22 @@ def test_the_live_cap_from_equity_binds_below_max_open_total(tmp_path):
     assert eng.exploration is not None
     terms = eng._sizing_terms(1, 2900.0, 5.0)
     assert exploration.global_cap(eng, eng.exploration, 2900.0, terms) == 1
+
+
+@pytest.mark.parametrize("scheduled,sent", [(True, 2), (False, 3)])
+def test_one_host_slot_is_kept_for_the_scheduled_cost_probe_whatever_else_is_open(tmp_path, scheduled, sent):
+    """ADR 0043: "one of 18 kept for the scheduled probe". max_open_total counts exploration positions only, so the
+    mirror probes (and any other position) could fill the host's max_positions and starve the scheduled probe. With
+    scheduled probes on, an arm is refused (`probe_slot`) when its entry would leave no host slot free; off, the
+    host cap is unchanged (never raised, never lowered)."""
+    arms = [_arm("a"), _arm("b", side=-1), _arm("c")]
+    eng, pb = _engine(tmp_path, arms, max_positions=3, scheduled=scheduled)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert len(_sent(eng)) == sent and len(eng.open) == sent
+    refused = [d["action"] for d in _actions(eng, "exploration_refused:")]
+    assert refused == (["exploration_refused:probe_slot"] if scheduled else [])
+    [blocked] = [r for r in _obs(tmp_path) if r[1] == 0] if scheduled else [None]
+    assert blocked is None or blocked[5] == "probe_slot"
 
 
 def test_at_most_four_entries_a_pass_in_fair_rotation_across_arms(tmp_path):

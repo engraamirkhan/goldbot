@@ -658,6 +658,14 @@ def global_cap(eng: Engine, ex: Exploration, price: float, terms: Mapping[str, A
     return min(ex.cfg.max_open_total, cap)
 
 
+def probe_slot(eng: Engine) -> int:
+    """ADR 0043 section 1 ("one of 18 kept for the scheduled probe"): 1 when this host runs scheduled cost probes,
+    else 0. `max_open_total` counts exploration positions only, so it cannot keep that slot once mirror probes (or any
+    other position) are open; this holds it against every position but an open scheduled probe. It only ever
+    lowers what exploration may take; the host's max_positions is never raised."""
+    return int(eng.cfg.cost_probe and eng.cfg.cost_probe_scheduled.enabled)
+
+
 def _add(d: dict[str, float | None], k: str, v: float | None) -> None:
     before = d.get(k, 0.0)
     d[k] = None if v is None or before is None else before + v
@@ -674,7 +682,10 @@ class _Pass:
         self.lost = realised(eng, ex, since)
         self.share = shares(ex, now)
         self.held: dict[str, float | None] = {}
-        self.count: dict[str, int] = {}
+        # "host": every position the RiskGate's max_positions counts (this engine's and foreign ones on the symbol)
+        # but an open scheduled probe, whose slot `_send` keeps free (ADR 0043: one of 18 kept for it)
+        self.count: dict[str, int] = {"host": len(eng._foreign) + sum(
+            t.agent_id != cost_probe.SCHEDULED_ID for t in eng.open.values())}
         for pid in _open(eng):
             tr = eng.open[pid]
             arm = ex.arms.get(tr.agent_id.removeprefix(PREFIX))
@@ -692,6 +703,7 @@ class _Pass:
         for k in ("*", arm.arm_id, "pot:" + arm.style):
             _add(self.held, k, loss)
             self.count[k] = self.count.get(k, 0) + 1
+        self.count["host"] += 1
 
 
 def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
@@ -733,7 +745,7 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
         arm = ex.arms[s.arm_id]
         res = _send(eng, ex, ps, arm, s, now, tick)
         if res == "cap":
-            _block(eng, ex, order[i:], now, "global_cap")    # quant Q1: recorded now, never left to go stale
+            _block(eng, ex, order[i:], now, ps.why or "global_cap")   # quant Q1: recorded now, never left to go stale
             return
         ex.queue.remove(s)
         if ps.why != "duplicate":
@@ -844,6 +856,9 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         return "refused"
     if ps.count.get("*", 0) >= ps.cap:
         refuse("global_cap")
+        return "cap"
+    if ps.count["host"] >= eng.gate.limits.max_positions - probe_slot(eng):
+        refuse("probe_slot")
         return "cap"
     if ps.count.get("pot:" + arm.style, 0) >= pot.max_open:
         refuse("pot_slots")
