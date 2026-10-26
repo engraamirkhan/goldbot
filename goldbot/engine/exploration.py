@@ -95,7 +95,8 @@ FALLBACK_LEVERAGE = 20.0            # the gate's 1:20 margin figure: the margin 
 GRACE_S = 1.5                       # a minute is complete GRACE_S after its close
 # live 2026-10-26: a bar closing more than this after the host clock is a clock fault, never a candidate
 CLOCK_AHEAD_S = 60.0
-LOOKBACK = 200                      # bars of an arm's timeframe its rule reads
+LOOKBACK = 200                      # bars of an arm's timeframe its rule reads, unless the rule declares more
+LOOKBACK_MAX_1M = 60_000            # and never more than this many minutes of bars (the engine's ~40-day 1m memory)
 LOOKBACK_1M = 1_000                 # and at least this many minutes (S5's 15m EMA50 reads 750)
 SUB_15M = ("1m", "5m")
 MAX_NET_LOTS = 0.10                 # ADR 0043 X3: net same-side exposure on the account, lots
@@ -369,17 +370,36 @@ def _in_flight(eng: Engine) -> bool:
 
 
 # ------------------------------------------------------------------------------------------------ signals
-def _bars(frame_1m: pd.DataFrame, tf: str, through: pd.Timestamp) -> pd.DataFrame | None:
+def lookback(arm: SpecArm) -> int:
+    """Bars of the arm's timeframe its rule reads live: the rule's own declared warm-up (`arm_rules.lookback_bars`:
+    a `specialist` family's from its inputs, the band rules' LOOKBACK_BARS), else LOOKBACK, never more than
+    LOOKBACK_MAX_1M minutes of bars. Arms expansion 2026-10-26, section 3: "The same function runs in the history
+    matrix and live" holds only once the rule's indicators have forgotten their start; bounded, because the engine's
+    whole 1m memory for every arm is ~30 s a close against L7's 10 s budget."""
+    from goldbot.research.arm_rules import lookback_bars
+    return max(1, min(lookback_bars(arm, LOOKBACK), LOOKBACK_MAX_1M * 60 // tf_seconds(arm.timeframe)))
+
+
+def _bars(frame_1m: pd.DataFrame, tf: str, through: pd.Timestamp, n: int = LOOKBACK) -> pd.DataFrame | None:
     """The store-schema bars of `tf` the rule reads, the last one closing exactly at `through`; None when that bar
-    is not there."""
-    sec = tf_seconds(tf)
-    span = max(sec * (LOOKBACK + 1), 60 * LOOKBACK_1M)
-    src = frame_1m if tf == "1d" else frame_1m[frame_1m["ts_utc"] >= through - pd.Timedelta(seconds=span)]
+    is not there. Counted in bars, never clock time (a weekend inside the window does not shorten it): the last
+    (n + 1) bars' worth of 1m rows, at least LOOKBACK_1M of them; 1d reads every row."""
+    rows = max((n + 1) * tf_seconds(tf) // 60, LOOKBACK_1M)
+    src = frame_1m[frame_1m["visible_at"] <= through]
+    src = src if tf == "1d" else src.tail(rows)
     bars = src if tf == "1m" else resample_bars(src, tf)
     bars = bars[bars["visible_at"] <= through].reset_index(drop=True)
     if bars.empty or pd.Timestamp(bars["visible_at"].iloc[-1]) != through:
         return None
     return bars
+
+
+def arm_bars(complete: pd.DataFrame, arm: SpecArm, through: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame] | None:
+    """What `step` hands the arm's rule at the close `through`: its `lookback` bars and the 1m bars from the first."""
+    bars = _bars(complete, arm.timeframe, through, lookback(arm))
+    if bars is None:
+        return None
+    return bars, complete[complete["ts_utc"] >= pd.Timestamp(bars["ts_utc"].iloc[0])].reset_index(drop=True)
 
 
 def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.DataFrame,
@@ -432,14 +452,15 @@ def step(eng: Engine, close_ts: pd.Timestamp) -> bool:
     if not arms or eng.bars_1m.empty:
         return True
     complete = eng.bars_1m[eng.bars_1m["visible_at"] <= close_ts]
-    for tf in sorted({a.tf for a in arms}, key=tf_seconds):
+    # one slice per (timeframe, lookback), shared by the arms that read it
+    for tf, n in sorted({(a.tf, lookback(a.spec)) for a in arms}, key=lambda k: (tf_seconds(k[0]), k[1])):
         if tf != "1d" and int(close_ts.timestamp()) % tf_seconds(tf):
             continue
-        bars = _bars(complete, tf, close_ts)
-        if bars is not None:
-            b1 = complete[complete["ts_utc"] >= pd.Timestamp(bars["ts_utc"].iloc[0])].reset_index(drop=True)
-            for arm in (a for a in arms if a.tf == tf):
-                _signal(eng, ex, arm, bars, b1, close_ts)
+        group = [a for a in arms if a.tf == tf and lookback(a.spec) == n]
+        got = arm_bars(complete, group[0].spec, close_ts)
+        if got is not None:
+            for arm in group:
+                _signal(eng, ex, arm, got[0], got[1], close_ts)
     return True
 
 
@@ -454,9 +475,9 @@ def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     tfs = sorted({a.tf for a in arms if int(through.timestamp()) % tf_seconds(a.tf) == 0}, key=tf_seconds)
     if not tfs:
         return
-    since = through - pd.Timedelta(seconds=max(tf_seconds(tfs[-1]) * (LOOKBACK + 1), 60 * LOOKBACK_1M))
+    rows = max(tf_seconds(tfs[-1]) * (LOOKBACK + 1) // 60, LOOKBACK_1M)      # bars, never clock time (`_bars`)
     b = eng.bars_1m
-    parts = [b[b["ts_utc"] >= since]] if not b.empty else []
+    parts = [b.tail(rows)] if not b.empty else []
     ticks = [t for t in eng.ticks if t.ts_utc < through]
     if ticks:
         parts.append(ticks_to_1m(pd.DataFrame({"ts_utc": [t.ts_utc for t in ticks], "bid": [t.bid for t in ticks],

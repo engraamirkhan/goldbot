@@ -108,3 +108,21 @@ def specialist_rule(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     target_atr = cands["target_atr"].to_numpy(dtype=float) if "target_atr" in cands else np.full(len(idx), ls.target_atr)
     max_bars = cands["max_bars"].to_numpy(dtype=int) if "max_bars" in cands else np.full(len(idx), ls.max_bars)
     return _frame(idx, cands["side"].to_numpy(), ls.stop_atr * a[idx], target_atr / ls.stop_atr, max_bars + 1)
+
+
+# Minutes of 1m history a family's inputs need before the decision bar for live to equal history (arms expansion
+# lanes L2-L5, measured on their fixtures), when that is more than the engine's LOOKBACK bars. trend: the 4h EMA50
+# slope (400 1h bars); mean_reversion: the 1h volatility tercile's 400-bar window + rv_20; session_open: the daily
+# ATR(14) filter (30 trading days); eq_liquidity_run: its ATR200 equal-level threshold; the box course: its 1h/4h box
+# sets (the whole ~40-day memory; fakey's 4h set needs more than the engine keeps, so live never equals history).
+WARMUP_MIN: dict[str, int] = {
+    "trend": 24_000, "mean_reversion": 25_200, "session_open": 41_400, "eq_liquidity_run": 15_000,
+    "box_break": 60_000, "box_rip": 60_000, "box_retest": 60_000, "trend_level_signal": 60_000, "fakey": 80_000,
+}
+
+
+def warmup_bars(arm: Arm) -> int:
+    """The family's warm-up (WARMUP_MIN) in bars of the arm's timeframe, rounded up; 0 when it declares none."""
+    from goldbot.config import tf_seconds
+    need = WARMUP_MIN.get(str(arm.params.get("specialist")), 0) * 60
+    return -(-need // tf_seconds(arm.timeframe))
