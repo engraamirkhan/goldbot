@@ -407,11 +407,12 @@ class CostProbe:
         if not eng.cfg.cost_probe:
             return None
         if eng.shadow is None:
-            # a learning host without the shadow book (vantage-demo, live 2026-10-26: its scheduled probes never ran)
-            # still measures its own costs with the scheduled probes; mirror probes need the shadow book
-            if not eng.cfg.cost_probe_scheduled.enabled:
-                log.warning("cost probe on, but this engine is not the shadow host and scheduled probes are off: "
-                            "nothing to probe")
+            # a probe_only learning host without the shadow book (vantage-demo, live 2026-10-26: its scheduled probes
+            # never ran) still measures its own costs with the scheduled probes; mirror probes need the shadow book, and
+            # a shared account (real strategy trades) gets no probes without it (trading-safety review 2026-10-26 LOW-1)
+            if not (eng.cfg.probe_only and eng.cfg.cost_probe_scheduled.enabled):
+                log.warning("cost probe on, but this engine is not the shadow host and is not a probe_only account "
+                            "with scheduled probes: nothing to probe")
                 return None
             log.info("cost probe on without the shadow book: scheduled probes only, no mirror probes")
         return cls(eng)

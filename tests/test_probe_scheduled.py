@@ -400,6 +400,25 @@ def test_without_the_shadow_book_mirror_probes_are_skipped_cleanly_and_scheduled
     assert not pb.positions()
 
 
+def test_a_shared_account_without_the_shadow_book_gets_no_scheduled_probes(tmp_path):
+    eng, pb, tick = _engine(tmp_path, shadow_host=False, probe_only=False)
+    assert eng.probe is None
+    _allow(eng)
+    eng.on_bar_close(CUT, tick)
+    assert not pb.positions() and not _refusals(eng)
+
+
+def test_without_the_shadow_book_a_scheduled_probe_open_at_a_restart_is_closed_by_its_hold_exit(tmp_path):
+    eng, pb, tick, pid = _sent(tmp_path, shadow_host=False, probe_only=True)
+    eng2, _, _ = _engine(tmp_path, pb=pb, shadow_host=False, probe_only=True)
+    assert eng2.probe is not None and pid not in eng2.probe.held        # the hold clock falls back to opened_utc
+    assert eng2.open[pid].agent_id == cost_probe.SCHEDULED_ID
+    cost_probe.hold_exits(eng2, tick.ts_utc + pd.Timedelta(seconds=eng2.cfg.cost_probe_scheduled.hold_s + 15))
+    eng2._flush_closed()
+    assert not pb.positions()
+    assert [r.exit_reason for r in _rows(tmp_path)] == [cost_probe.HOLD_EXIT]
+
+
 def test_mirror_probes_alone_still_need_the_shadow_book(tmp_path):
     eng, _, _ = _engine(tmp_path, shadow_host=False, scheduled=acc_mod.ScheduledProbe())
     assert eng.shadow is None and eng.probe is None
