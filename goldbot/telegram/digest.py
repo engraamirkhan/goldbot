@@ -19,6 +19,9 @@ Decisions of the spec, as built here:
 * "Day" is the opportunity day before the slot (report_days.day_before, D-2 22:00 to D-1 22:00 UTC), the day the
   dashboard and the monthly report use. Every number carries its unit, every time its zone; £ and R with an explicit
   sign and the true minus; currencies and exploration and engine P&L are never summed together.
+* The review lines (`review_section`) are the daily learning-ops review's own blinded lines
+  (goldbot/research/daily_review.py `report_lines`, written at 06:15 for the same day): costs per broker, volume
+  against the plan, incidents and the count of arms retired at their stop; absent when no review exists for the day.
 * The drawdown lines are the engine's own (goldbot/engine/exploration.py DD_WARN, DD_PAUSE: the pause the engine
   applies) and settings `risk.drawdown_stage2` (the halt rail), read at build time, never copied here.
 
@@ -661,6 +664,18 @@ def arms_section(state_dir: Path, engines: list[dict[str, Any]], width: int, lo:
     return [Line(x, 1 if "pre-set stop after" in x or "read due" in x else 2) for x in rows]
 
 
+def review_section(state_dir: Path, day: str) -> list[Line]:
+    """The daily review's lines for `day`: its incidents and retirements line is priority 1, the costs and volume
+    line priority 2; nothing when the review has not run for the day. A priority-1 FYI when issue texts have waited
+    in the review's outbox for two days or more (no github-token, or GitHub refusing)."""
+    from goldbot.research.daily_review import load_review, report_lines, stale_outbox
+    r = load_review(state_dir, day)
+    out = [] if r is None else [Line(x, 2 if i == 0 else 1) for i, x in enumerate(report_lines(r))]
+    if n := stale_outbox(state_dir, pd.Timestamp.now("UTC")):     # FYI: GitHub posts failing for 2 days or more
+        out.append(Line(f"⚠️ Review: {_plural(n, 'issue text')} not posted to GitHub for 2+ days (state outbox)", 1))
+    return out
+
+
 def learner_line(state_dir: Path, lo: pd.Timestamp, hi: pd.Timestamp, now: pd.Timestamp) -> str:
     """D4: whether the nightly learner ran in the day and whether any share changed; never which, how or by how much."""
     from goldbot.research.exploration_data import MAX_WEIGHTS_AGE
@@ -756,6 +771,10 @@ def build_digest(state_dir: str | Path, now: pd.Timestamp, *, as_of: pd.Timestam
         out += arms_section(sd, engines, ARMS_WIDTH, lo, hi)
         if lab_engines(engines):
             out.append(Line(_text(lambda: learner_line(sd, lo, hi, now), "Learner"), 2))
+    try:
+        out += review_section(sd, day)
+    except Exception as exc:                # noqa: BLE001
+        out.append(Line(f"Review: could not read ({type(exc).__name__})", 2))
     out += [Line(x, 2) for x in _section(lambda: month_lines(sd, engines, day, as_of, live=live), "Month")]
     out.append(Line(_section(lambda: decisions_line(sd, roadmap), "For you")[0]))
     return labs.guard("\n".join(fit(out, DAILY_LINES)))

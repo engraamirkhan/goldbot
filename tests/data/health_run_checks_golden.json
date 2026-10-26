@@ -151,6 +151,11 @@
    "waiting for its first slot; next 2026-10-07 23:00"
   ],
   [
+   "job:daily_review",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
    "job:drift_watch",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
@@ -591,6 +596,11 @@
   ],
   [
    "job:cpcv_quarterly",
+   "ok",
+   "waiting for its first slot; next 2026-10-07 23:00"
+  ],
+  [
+   "job:daily_review",
    "ok",
    "waiting for its first slot; next 2026-10-07 23:00"
   ],

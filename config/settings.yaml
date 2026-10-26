@@ -172,6 +172,7 @@ scheduler:
   tick_record:      { kind: daily,   at: "21:10", max_late_hours: 0.5 }                 # BACKLOG 79: broker ticks -> state/ticks/, in the daily break (US summer time)
   tick_record_winter: { kind: daily, at: "22:10", max_late_hours: 0.5 }                 #   ... and in the winter break; outside the break or weekend a run skips
   limits_job:       { kind: daily,   at: "23:05", max_late_hours: 0.9 }                 # ADR 0031: adaptive limits for the next risk day; never after the roll
+  daily_review:     { kind: daily,   at: "06:15", max_late_hours: 12 }                  # learning-ops review after the nightly learner, before the 06:45 owner report
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
@@ -424,3 +425,21 @@ mt5_login:                           # MT5 terminal login from the keyring (gold
   heal_interval_s: 30                # how often the self-heal thread looks at the terminal
   dismiss_wizard: false              # Escape to the terminal's foreground window before initialize, for the "open an
                                      #   account" wizard; best effort, unverified on the box (RUNBOOK "Terminal down")
+daily_review:                        # daily learning-ops review (goldbot/research/daily_review.py; research-director spec 2026-10-26)
+  # exploration candidates a day per broker and style: the arm rows of prereg-2026-10-25-high-volume.md (~290 a day
+  # with the probes, high-volume-learning-2026-10-25.md section 1); Vantage runs the intraday and swing twins only
+  volume_plan:
+    icm: {scalp: 160, intraday: 35, swing: 5}
+    vantage: {scalp: 0, intraday: 35, swing: 5}
+  # cost probes a day per broker, from the ADR 0043 probe sleeves (ICM: P0 60-90 + ~8 mirrors; Vantage: scheduled
+  # M1 probes only at half ICM's scheduled share, no shadow book to mirror)
+  probe_plan: {icm: 90, vantage: 40}
+  volume_alert_below: 0.5            # a trading day under half the plan is low ...
+  volume_alert_days: 2               #   ... two low trading days running open a learning-ops issue with the counted cause
+  refit_min_fills: 200               # a (broker, session) slippage cell is refit after 200 fills since its last fit; never cheaper within a day
+  overshoot_scenario_usd: 0.70       # stop-exit overshoot scenario ($/oz, cost-model-1m-2026-10-25): overshoot reported as a multiple of it
+  max_gap_minutes: 30                # missing open-market 1m bars of a host in a day beyond this are an incident
+  issue_label: learning-ops          # incidents and low volume: open or comment on the open issue with this label
+  status_issue: 34                   # one blinded status comment a day on the program issue
+  repo: engraamirkhan/goldbot
+  weekly_proposals: 4                # Monday roll-up: at most 4 variant proposals for the research director (never run)
