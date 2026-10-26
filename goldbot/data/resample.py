@@ -125,6 +125,8 @@ def _agg(bars: pd.DataFrame, key: pd.DatetimeIndex | pd.Series) -> pd.DataFrame:
         "spread_max": g["spread_max"].max(),
         "_last_minute": g["ts_utc"].last(),
     })
+    if "visible_at" in b.columns:                # the latest constituent visibility (resample_bars carries it forward)
+        out["_minutes_visible"] = g["visible_at"].max()
     out.index.name = "ts_utc"
     return out.reset_index()
 
@@ -150,7 +152,14 @@ def resample_bars(bars_1m: pd.DataFrame, tf: str, *, feature_day_tz: str = "Amer
         sec = tf_seconds(tf)
         out = _agg(bars_1m, floor_tf(idx, sec))
         out["visible_at"] = out["ts_utc"] + pd.Timedelta(seconds=sec)
-    # a bar whose last constituent minute is before the nominal close is still only visible at the nominal close
+    # a bar whose last constituent minute is before the nominal close is still only visible at the nominal close; a
+    # bar holding a minute that became visible later (a corrected minute, data/quarantine.py: visible_at = when it was
+    # written) is visible no earlier than that minute. Ordinary minutes (visible_at = ts_utc + 60 s) never exceed the
+    # nominal close, so their bars are unchanged
+    if "_minutes_visible" in out.columns:
+        vis = pd.to_datetime(out["visible_at"], utc=True)
+        late = pd.to_datetime(out["_minutes_visible"], utc=True).astype(vis.dtype)
+        out["visible_at"] = vis.where(~(late > vis), late)
     return out.drop(columns=["_last_minute"])[BAR_COLUMNS].reset_index(drop=True)
 
 
@@ -199,8 +208,9 @@ class IncrementalResampler:
         if len(ts) > 1 and not bool((np.diff(ts) > 0).all()):
             self._reset()
             return self._resample(bars)
-        cols = {c: bars[c].to_numpy() for c in _AGG_INPUTS}
-        dtypes = tuple(bars[c].dtype for c in ("ts_utc", *_AGG_INPUTS))
+        checked = [*_AGG_INPUTS, *(["visible_at"] if "visible_at" in bars.columns else [])]   # visibility too
+        cols = {c: bars[c].to_numpy() for c in checked}
+        dtypes = tuple(bars[c].dtype for c in ("ts_utc", *checked))
         out = self._update(bars, idx, ts, cols, dtypes)
         if out is None:
             out = self._full(bars, idx, ts, cols, dtypes)
