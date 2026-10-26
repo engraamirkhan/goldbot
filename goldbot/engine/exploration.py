@@ -370,6 +370,11 @@ class Exploration:
         # never entered, and a shifted entry is excluded from pairing anyway
         self.deferred: dict[str, Pending] = {}
         self.netting: bool | None = None                 # the terminal's margin mode, read once when first needed
+        # the arms whose rule reads stored bars or a carried replica state, and what they read (exploration_context)
+        from goldbot.engine.exploration_context import ArmContext, needs_context
+        self.context = ArmContext(self.db, eng.store, eng.cfg.release_symbol)
+        self.needs_context = frozenset(a.arm_id for a in ok if needs_context(a.spec))
+        self.held_back: dict[str, str] = {}             # arm -> why it is held back now (journalled once a change)
 
     @classmethod
     def start(cls, eng: Engine) -> Exploration | None:
@@ -424,12 +429,15 @@ def _in_flight(eng: Engine) -> bool:
 # ------------------------------------------------------------------------------------------------ signals
 def lookback(arm: SpecArm) -> int:
     """Bars of the arm's timeframe its rule reads live: the rule's own declared warm-up (`arm_rules.lookback_bars`:
-    a `specialist` family's from its inputs, the band rules' LOOKBACK_BARS), else LOOKBACK, never more than
-    LOOKBACK_MAX_1M minutes of bars. Arms expansion 2026-10-26, section 3: "The same function runs in the history
+    a `specialist` family's from its inputs, the band rules' LOOKBACK_BARS; a carried replica's context and lag,
+    `exploration_context.replica_bars`), else LOOKBACK, never more than LOOKBACK_MAX_1M minutes of bars (a rule that
+    needs more reads stored bars, `exploration_context.history_bars`). Arms expansion 2026-10-26, section 3: "The same function runs in the history
     matrix and live" holds only once the rule's indicators have forgotten their start; bounded, because the engine's
     whole 1m memory for every arm is ~30 s a close against L7's 10 s budget."""
+    from goldbot.engine.exploration_context import replica_bars
     from goldbot.research.arm_rules import lookback_bars
-    return max(1, min(lookback_bars(arm, LOOKBACK), LOOKBACK_MAX_1M * 60 // tf_seconds(arm.timeframe)))
+    need = max(lookback_bars(arm, LOOKBACK), replica_bars(arm))
+    return max(1, min(need, LOOKBACK_MAX_1M * 60 // tf_seconds(arm.timeframe)))
 
 
 def _bars(frame_1m: pd.DataFrame, tf: str, through: pd.Timestamp, n: int = LOOKBACK) -> pd.DataFrame | None:
@@ -455,7 +463,7 @@ def arm_bars(complete: pd.DataFrame, arm: SpecArm, through: pd.Timestamp) -> tup
 
 
 def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.DataFrame,
-            through: pd.Timestamp) -> None:
+            through: pd.Timestamp, spec_ctx: dict[str, Any] | None = None) -> None:
     """The arm's frozen rule (`arm_rules.candidates`: its window, the common filters, its stop band) on the bars up to
     `through`; a candidate on the bar that just closed is queued with its own stop, target and hold. A rule that
     raises is journalled (`exploration_rule_error`) and the other arms go on."""
@@ -467,7 +475,7 @@ def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.D
     ex.last_bar[arm.arm_id] = through
     try:
         ctx = arm_rules.RuleContext(bars=bars, b1=b1, blackout_lo=np.zeros(0, dtype=np.int64),
-                                    blackout_hi=np.zeros(0, dtype=np.int64))
+                                    blackout_hi=np.zeros(0, dtype=np.int64), spec_ctx=spec_ctx)
         c = arm_rules.candidates(arm.spec, ctx)
     except Exception as exc:
         log.warning("exploration arm %s rule failed (%s)", arm.arm_id, type(exc).__name__)
@@ -507,6 +515,9 @@ def step(eng: Engine, close_ts: pd.Timestamp) -> bool:
     if not arms or eng.bars_1m.empty:
         return True
     complete = eng.bars_1m[eng.bars_1m["visible_at"] <= close_ts]
+    for arm in (a for a in arms if a.arm_id in ex.needs_context):
+        _with_context(eng, ex, arm, complete, close_ts)
+    arms = [a for a in arms if a.arm_id not in ex.needs_context]
     # one slice per (timeframe, lookback), shared by the arms that read it
     for tf, n in sorted({(a.tf, lookback(a.spec)) for a in arms}, key=lambda k: (tf_seconds(k[0]), k[1])):
         if tf != "1d" and int(close_ts.timestamp()) % tf_seconds(tf):
@@ -572,6 +583,23 @@ def release_shifted(eng: Engine, ex: Exploration, close_ts: pd.Timestamp) -> Non
                                   "action": "exploration_shift_dropped", "decision": str(s.decision_utc)})
             continue
         ex.queue.append(s.model_copy(update={"bar_ts": close_ts}))
+def _with_context(eng: Engine, ex: Exploration, arm: Arm, complete: pd.DataFrame, close_ts: pd.Timestamp) -> None:
+    """An arm whose rule reads stored bars or a carried replica state (`exploration_context`): its inputs at this close,
+    or held back (`exploration_held_back`, journalled once each time the reason changes) and nothing queued. A
+    retired arm reads nothing."""
+    from goldbot.engine.exploration_context import NO_BAR
+    if arm.arm_id in ex.retired or (arm.tf != "1d" and int(close_ts.timestamp()) % tf_seconds(arm.tf)):
+        return
+    got = ex.context.inputs(arm.spec, complete, close_ts)
+    if isinstance(got, str):
+        if got != NO_BAR and ex.held_back.get(arm.arm_id) != got:
+            ex.held_back[arm.arm_id] = got
+            log.info("exploration arm %s held back at %s: %s", arm.arm_id, close_ts, got)
+            eng.decisions.append({"ts": time.time(), "agent": arm.tag, "action": "exploration_held_back",
+                                  "reason": got, "bar": close_ts.isoformat()})
+        return
+    ex.held_back.pop(arm.arm_id, None)
+    _signal(eng, ex, arm, got.bars, got.b1, close_ts, got.spec_ctx)
 
 
 def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:

@@ -4,8 +4,9 @@
 runs in the history matrix and live"), and a candidate outside its £ cap skipped and logged with its propensity.
 
 tvr1/tvr2 read the structure replica, whose state is pinned to the 2010 series start (B4a). The engine's exploration
-pass does not carry that state (`RuleContext.spec_ctx` stays None), so a smc arm on the live window refuses and the
-engine journals `exploration_rule_error` and sends nothing: fail closed (NO-GO for wave 1)."""
+pass carries that state from its own 2010-pinned feed (`engine.exploration_context`, tests/test_exploration_context.py);
+without it (no store, a bootstrap running) the arm is held back (`exploration_held_back`) and sends nothing: fail
+closed. The rule itself still refuses a window with no state."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -220,13 +221,14 @@ def test_eq_liquidity_run_candidate_above_its_pound_cap_is_skipped_and_logged_wi
 
 
 @pytest.mark.parametrize(("name", "extra"), SMC)
-def test_the_engine_journals_a_smc_arm_without_replica_state_and_sends_nothing(tmp_path, b1, name, extra) -> None:
-    """Fail closed while the exploration pass carries no replica state: the arm's rule error is journalled, no signal
-    is queued, no order is sent."""
+def test_the_engine_holds_back_a_smc_arm_without_replica_state_and_sends_nothing(tmp_path, b1, name, extra) -> None:
+    """Fail closed while the exploration pass has no replica state (here: no store to bootstrap it from): the arm is
+    journalled held back once, no signal is queued, no order is sent."""
     c = pd.Timestamp("2024-01-09 14:00", tz="UTC")
     eng, pb = _engine(tmp_path, _arm(name, extra, arm_id="SMX"), cap=40.0)
     tick = _close_at(eng, pb, b1, c)
     assert exploration.step(eng, c)
     exploration.on_pass(eng, tick)
     assert not eng.exploration.queue and not pb.positions()                  # type: ignore[union-attr]
-    assert [d["action"] for d in eng.decisions if d.get("agent") == "explore:SMX"] == ["exploration_rule_error"]
+    assert [(d["action"], d.get("reason")) for d in eng.decisions if d.get("agent") == "explore:SMX"] == [
+        ("exploration_held_back", "replica_warming")]

@@ -19,7 +19,8 @@ Declared deviations: DOND decides on goldbot's 1d bars (feature day to the 13:30
 17:00 New York days: a 17:00 New York decision close always falls in the rollover filter (20:45-22:15 UTC) and in the
 16:55-17:00 New York filter, so it could never enter. C30's day context (8.4) is built from the decision 15m bars
 themselves (trading day = New York date after +7 h); the first trading day of the input is dropped as possibly partial,
-and fewer than 30 completed days before D gives no candidate (fail closed)."""
+and fewer than 30 completed days before D gives no candidate (fail closed). Live, the engine extends its ~40-day window
+with stored bars to HISTORY_BARS (C30's 15m, DOND's 1d), so both decide on the history run's input."""
 from __future__ import annotations
 
 from functools import lru_cache
@@ -45,6 +46,11 @@ C30C_RATE = 0.00065                 # 8.13: C30C fires when hash_u < 0.00065
 TIMEFRAMES: dict[str, tuple[str, ...]] = {"squeeze_release": ("1h", "4h"), "donchian_break": ("4h", "1d"),
                                           "low30_touch": ("15m",), "low30_control": ("15m",)}
 HOLIDAYS = Path(__file__).parents[2] / "config" / "holidays_cme_metals.yaml"
+# bars of the arm's timeframe a rule reads before its decision bar for live to equal history, beyond the engine's
+# ~40-day 1m memory: C30's 30 completed trading days and ATR14(1d) of D-1 (~200 trading days of 15m, Wilder's start
+# residue below 1e-5), DOND's 55 days and ATR14(1d) (300 days); served from stored bars (`engine.exploration_context`)
+HISTORY_BARS: dict[tuple[str, str], int] = {("low30_touch", "15m"): 20_000, ("low30_control", "15m"): 20_000,
+                                            ("donchian_break", "1d"): 300}
 
 
 def spec_hold(arm: Arm) -> int:

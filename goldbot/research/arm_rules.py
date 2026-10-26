@@ -407,6 +407,7 @@ RULE_FUNCS: dict[str, Callable[[Arm, RuleContext], pd.DataFrame]] = {
     "opening_range_break": opening_range_break, "sweep_absorb": sweep_absorb_rule,
     "box_break_close": box_break_close_rule, "ema_pullback": ema_pullback, "tsmom": tsmom_rule,
     "specialist": specialist, "pdc_break": pdc_break, "ob_retest": ob_retest,
+    "level_break": lambda arm, ctx: __import__("goldbot.research.arm_rules_levels", fromlist=["x"]).level_break(arm, ctx),
     **dict.fromkeys(("squeeze_release", "donchian_break", "low30_touch", "low30_control"), channel),
     **dict.fromkeys(CLOCK_BOX_RULES, clock_box),
     **dict.fromkeys(("hurst_band_break", "hurst_band_break_control", "htf_stretch_break", "htf_stretch_break_control"),
