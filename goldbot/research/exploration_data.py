@@ -47,6 +47,7 @@ import json
 import logging
 import math
 import pickle
+import re
 import sqlite3
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -84,6 +85,10 @@ HOLDOUT_END = pd.Timestamp("2026-10-01", tz="UTC")       # exclusive
 PRIOR_SHRINK = 0.5
 PRIOR_N_MAX = 50.0
 PRIOR_N_PER_TRADES = 100.0
+# the H-60 priors rest on IC Markets' cost history (the canonical cost tables): they seed only these brokers' bandits;
+# any other broker starts from the flat prior (ADR 0043 amendment 2026-10-26, quant review of c8433d3d)
+PRIOR_BROKERS: frozenset[str] = frozenset({"icm"})
+BROKER_KEY = re.compile(r"^[a-z0-9_-]+$")       # accounts.yaml `broker`; also a path segment (models/h62/<broker>/)
 
 # label replay (prereg H-60 costs): slippage per leg never below the prior, never credited
 SLIPPAGE_FLOOR_USD = 0.15
@@ -568,6 +573,8 @@ def save_model(db: Database, models_dir: Path, fit: Mapping[str, Any], *, broker
                activation: pd.Timestamp) -> str:
     """Persist one broker's fitted style model (fold models + calibrator) as a pickle with its SHA-256, and register
     it as 'shadow': it never serves until a separate champion decision (spec section 5) marks it 'champion'."""
+    if not BROKER_KEY.match(broker):
+        raise ValueError(f"broker key {broker!r} is not a lowercase slug")
     style = str(fit["style"])
     version = f"h62-{broker}-{style}-{cutoff:%Y%m%dT%H%M}"
     path = Path(models_dir) / "h62" / broker / style / f"{version}.pkl"
@@ -589,7 +596,8 @@ def save_model(db: Database, models_dir: Path, fit: Mapping[str, Any], *, broker
 
 def serving_model(db: Database, style: str, now: pd.Timestamp, *, broker: str) -> dict[str, Any] | None:
     """The H-62 model the engine may serve for `style` on `broker` at `now` (fitted on that broker's evidence only;
-    a model without a broker key never serves): the newest version with status 'champion' whose
+    a model without a broker key, i.e. fitted before migration 17, never serves: none was ever champion, and the next
+    Sunday fit replaces it under its broker): the newest version with status 'champion' whose
     activation is at or before `now` and whose cutoff is before it (strictly forward), its file matching the recorded
     SHA-256. Every Sunday fit registers as 'shadow' (scored and logged, never acting); None = champion zero (the
     per-arm base rate): serve no meta_p."""
@@ -821,7 +829,7 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
         out["models"] = models
     if not style_of:
         return out
-    priors = read_priors(db)
+    priors = read_priors(db) if broker in PRIOR_BROKERS else {}      # ICM-cost history: never another broker's
     r_by_arm = {a: strat.loc[strat["arm_id"] == a, "label_sim_r"].astype(float).tolist() for a in style_of}
     shares = thompson_shares(r_by_arm, style_of, priors=priors, ceilings=ceilings, seed=seed)
     detail = {a: {"n": len(r_by_arm[a]), "mean_r": float(np.mean(r_by_arm[a])) if r_by_arm[a] else None,

@@ -289,8 +289,9 @@ def exploration_arms(ctx: JobContext, broker: str | None = None
 
 
 def broker_cost_table(accounts: list[Account], state_dir: Path, broker: str) -> tuple[CostTable, Account] | None:
-    """The first readable nightly cost table of an account on `broker`, with its account; None before one exists.
-    For the canonical broker this is `canonical_cost_table`'s table (the same accounts, in the same order)."""
+    """The readable nightly cost table of an account on `broker` resting on the most fills (its accounts share one
+    cost basis; the first in accounts.yaml order on a tie), with its account; None before one exists."""
+    best: tuple[CostTable, Account] | None = None
     for acc in accounts:
         if acc.broker != broker:
             continue
@@ -298,9 +299,9 @@ def broker_cost_table(accounts: list[Account], state_dir: Path, broker: str) -> 
             table = CostTable.load(state_dir / f"costs_{acc.account_id}.json")
         except ValueError:
             table = None
-        if table is not None:
-            return table, acc
-    return None
+        if table is not None and (best is None or table.n_fills > best[0].n_fills):
+            best = (table, acc)
+    return best
 
 
 def exploration_costs(ctx: JobContext, slot: pd.Timestamp, broker: str) -> ReplayCosts:
@@ -362,9 +363,13 @@ def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for broker in brokers:
         styles, controls, ceilings = exploration_arms(ctx, broker)
-        out[broker] = learn(db, broker=broker, as_of=slot, arms=styles, controls=controls, ceilings=ceilings,
-                            seed=int(slot.value % (2**32)), retrain=slot.dayofweek == 6,
-                            models_dir=ctx.state_dir / "models")
+        try:                           # one broker's failure never skips another's run
+            out[broker] = learn(db, broker=broker, as_of=slot, arms=styles, controls=controls, ceilings=ceilings,
+                                seed=int(slot.value % (2**32)), retrain=slot.dayofweek == 6,
+                                models_dir=ctx.state_dir / "models")
+        except Exception as exc:       # noqa: BLE001 - its weights age into equal shares; the others still learn
+            log.exception("exploration learner failed for broker %s", broker)
+            out[broker] = {"error": type(exc).__name__}
     return {"labelled": labelled, "cost_model": {b: m.version for b, m in costs.items()}, "stamped": stamped,
             "unkeyed": unkeyed, "brokers": out}
 

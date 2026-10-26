@@ -226,3 +226,77 @@ def test_the_nightly_learner_labels_and_allocates_each_broker_on_its_own_costs_a
     obs = ex.read_obs(db).set_index("candidate_id")
     assert obs.loc["v1", "cost_model_version"] == "settings-priors:vantage"
     assert obs.loc["i1", "cost_model_version"] == "settings-priors:icm"
+
+
+# ---------------------------------------------------------------------------------------------- review round 1
+def test_h60_history_priors_seed_only_the_icm_bandit_never_another_brokers(tmp_path):
+    """Quant (review of c8433d3d): the H-60 priors rest on IC Markets' cost history; a Vantage run starts flat."""
+    db = _db(tmp_path)
+    hist = pd.DataFrame({"decision_utc": pd.date_range("2019-01-02", "2025-09-29", periods=500, tz="UTC"),
+                         "r_net": [0.2] * 500})
+    ex.write_prior(db, ex.prior_from_history("S1a", hist, prior_version="h60-v1"))
+    _evidence(db, "icm", {"S1a": 0.1, "S1b": 0.0}, n=4)
+    _evidence(db, "vantage", {"S1a": 0.1, "S1b": 0.0}, n=4)
+    as_of = pd.Timestamp("2026-10-12 23:00", tz="UTC")
+    ex.learn(db, broker="icm", as_of=as_of, seed=1)
+    ex.learn(db, broker="vantage", as_of=as_of, seed=1)
+    with db.connection() as conn:
+        rows = conn.execute("SELECT broker, detail FROM exploration_broker_weights WHERE arm_id = 'S1a'").fetchall()
+    import json
+    got = {b: json.loads(d)["prior"] for b, d in rows}
+    assert got == {"icm": "h60-v1", "vantage": None}
+
+
+def test_a_broker_key_that_is_not_a_plain_lowercase_slug_is_refused(tmp_path):
+    """Code review LOW 1: the broker becomes a path segment (state/models/h62/<broker>/)."""
+    from goldbot.ops.accounts import Account
+    base = dict(account_id="icm-demo", mode="demo", server="s", login=None, terminal_path="", server_tz="Europe/Athens",
+                symbol="XAUUSD", magic_base=260100, enabled=True)
+    assert Account(broker="icm", **base).broker == "icm"     # type: ignore[arg-type]
+    for bad in ("../icm", "ICM", "ic m", ""):
+        with pytest.raises(ValueError):
+            Account(broker=bad, **base)                       # type: ignore[arg-type]
+    fit: dict[str, Any] = {"style": "scalp", "folds": [], "calibrator": None, "features": ["f0"], "per_arm": {},
+                           "auc_net": None, "auc_gross": None, "n": 0}
+    cutoff, act = ex.model_cutoff(pd.Timestamp("2026-10-11 01:00", tz="UTC"))
+    with pytest.raises(ValueError, match="broker"):
+        ex.save_model(_db(tmp_path), tmp_path / "models", fit, broker="../x", cutoff=cutoff, activation=act)
+
+
+def test_a_model_from_before_the_broker_key_never_serves_any_broker(tmp_path):
+    """Code review LOW 2: an exploration_models row without a broker (fitted before migration 17) is never served:
+    champion zero, the safe side; the next Sunday fit replaces it under its broker."""
+    db = _db(tmp_path)
+    fit: dict[str, Any] = {"style": "scalp", "folds": [], "calibrator": None, "features": ["f0"], "per_arm": {},
+                           "auc_net": None, "auc_gross": None, "n": 0}
+    cutoff, act = ex.model_cutoff(pd.Timestamp("2026-10-11 01:00", tz="UTC"))
+    v = ex.save_model(db, tmp_path / "models", fit, broker="icm", cutoff=cutoff, activation=act)
+    with db.write() as conn:
+        conn.execute("UPDATE exploration_models SET broker = NULL, status = 'champion' WHERE model_version = ?", (v,))
+    assert all(ex.serving_model(db, "scalp", act, broker=b) is None for b in ("icm", "vantage"))
+
+
+def test_one_brokers_learner_failure_never_skips_another_brokers_run(tmp_path, monkeypatch):
+    """Code review LOW 3."""
+    db = _db(tmp_path)
+    _cand(db, "i1", "icm")
+    _cand(db, "v1", "vantage")
+    real = ex.learn
+
+    def flaky(db: Database, *, broker: str, **kw: Any) -> dict[str, Any]:
+        if broker == "icm":
+            raise RuntimeError("boom")
+        return real(db, broker=broker, **kw)
+    monkeypatch.setattr(jobs, "learn", flaky)
+    rep = jobs.exploration_learn(_ctx(tmp_path, [_acc("icm-probe", "icm"), _acc("vantage-demo", "vantage")]),
+                                 T0 + pd.Timedelta(hours=1))
+    assert rep["brokers"]["icm"] == {"error": "RuntimeError"} and "arms" in rep["brokers"]["vantage"]
+
+
+def test_a_broker_with_two_cost_tables_labels_with_the_one_resting_on_more_fills(tmp_path):
+    """Quant (non-blocking): icm-demo and icm-probe share a cost basis; the better-measured table wins."""
+    _table("icm-demo", slip=0.30, n_fills=60).save(tmp_path / "costs_icm-demo.json")
+    _table("icm-probe", slip=0.20, n_fills=400).save(tmp_path / "costs_icm-probe.json")
+    ctx = _ctx(tmp_path, [_acc("icm-demo", "icm"), _acc("icm-probe", "icm")])
+    c = jobs.exploration_costs(ctx, T0, "icm")
+    assert c.version.startswith("costs:icm-probe:") and c.slippage_usd == pytest.approx(0.20)
