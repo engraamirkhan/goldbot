@@ -572,8 +572,9 @@ def shares(ex: Exploration, now: pd.Timestamp) -> dict[str, float]:
 
 
 def realised(eng: Engine, ex: Exploration, since: pd.Timestamp) -> dict[str, float]:
-    """arm id -> today's realised loss (>= 0, net of the arm's profits). A row closed with no P&L counts at its loss at
-    the stop plus its cost. Raises when the ledger cannot be read (the caller refuses: fail closed)."""
+    """arm id -> today's realised loss (>= 0, net of the arm's profits): every arm with a trade closed since `since`,
+    at 0 when it is flat or up (so the keys are the arms that have traded today, `_arm_room`'s first trade). A row
+    closed with no P&L counts at its loss at the stop plus its cost. Raises when the ledger cannot be read (the caller refuses: fail closed)."""
     with ex.db.connection() as conn:
         rows = LEDGER.select(conn, "account_id = ? AND closed = 1 AND exit_ns >= ?",
                              (eng.cfg.account_id, _ns(since)))
@@ -803,13 +804,14 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
 
 
 
-def _arm_room(share_gbp: float, lost: float, held: float, arm_cap: float) -> float:
-    """An arm's room today: its share of the pot less today's realised loss and open risk. An arm with neither yet
-    may always take its first trade (up to its per-trade cap): a share below one trade's loss (W1A 0.20 x £40 = £8
-    against ≈ £29 at the stop, live 2026-10-26) otherwise refused it on every bar. The pot, the host budget and the
-    RiskGate still bind."""
+def _arm_room(share_gbp: float, lost: float, held: float, arm_cap: float, first: bool) -> float:
+    """An arm's room today: its share of the pot less today's realised loss and open risk. Its `first` trade of the
+    day (none closed since the day's reset, none open) may always go, up to its per-trade cap: a share below one
+    trade's loss (W1A 0.20 x £40 = £8 against ≈ £29 at the stop, live 2026-10-26) otherwise refused it on every bar.
+    "First" is by trades, never by P&L: a trade closed flat or in profit nets to no loss, and used to make the arm
+    fresh again, trading at its cap on every bar. The pot, the host budget and the RiskGate still bind."""
     room = share_gbp - lost - held
-    return max(room, arm_cap) if lost <= 0.0 and held <= 0.0 else room
+    return max(room, arm_cap) if first else room
 
 def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd.Timestamp,
           tick: Tick) -> Literal["sent", "refused", "cap"]:
@@ -882,7 +884,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
              "budget": (ps.total - ps.lost_in(ex) - held_all) if ps.total is not None else 0.0,
              "pot": pot.gbp - ps.lost_in(ex, arm.style) - held_pot,
              "arm_budget": _arm_room(ps.share.get(arm.arm_id, 0.0) * pot.gbp, ps.lost.get(arm.arm_id, 0.0), held_arm,
-                                     arm_cap)}
+                                     arm_cap, first=arm.arm_id not in ps.lost and not ps.count.get(arm.arm_id))}
 
     def binding(at_stop: float) -> str | None:
         return next((k for k, room in rooms.items() if at_stop > room + 1e-9), None)

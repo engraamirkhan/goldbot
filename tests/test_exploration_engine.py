@@ -187,6 +187,25 @@ def test_an_arm_whose_share_is_below_one_trade_still_takes_one_trade_a_day(tmp_p
     assert {d["action"] for d in _actions(eng, "exploration_refused:")} == {"exploration_refused:arm_budget"}
 
 
+@pytest.mark.parametrize("pnl", [0.0, 3.0])
+def test_the_first_trade_rule_admits_one_trade_a_day_even_when_that_trade_closed_flat_or_in_profit(tmp_path, pnl):
+    """The first-trade rule (2026-10-26) is the arm's FIRST trade of the day: a trade closed today, at a flat or a
+    winning P&L, has spent it. Netted to no loss it used to make the arm fresh again, so it traded at its per-trade
+    cap on every bar while its share of the pot (£0.48 here) was never the bound."""
+    eng, pb = _engine(tmp_path, [_arm("a", control_share=0.01)], pots={"intraday": Pot(gbp=48.0, max_open=5)},
+                      caps={"a": 17.0})
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    [pid] = list(eng.open)
+    eng._try_close(pid, "time_exit", CLOSE)
+    eng._flush_closed()
+    [rec] = exploration.trades(str(tmp_path))
+    with exploration.ledger_db(str(tmp_path)).write() as conn:
+        exploration.LEDGER.upsert(conn, rec.model_copy(update={"pnl": pnl}))
+    exploration.on_pass(eng, _at(eng, pb, CLOSE + pd.Timedelta(minutes=15)))
+    assert len(_sent(eng)) == 1 and not eng.open
+    assert [d["action"] for d in _actions(eng, "exploration_refused:")] == ["exploration_refused:arm_budget"]
+
+
 def test_an_exhausted_pot_refuses_the_next_entry_whatever_the_arms_shares_say(tmp_path, monkeypatch):
     """The arms' shares fit the pot by construction; the pot is the backstop when they do not (shares that moved
     during the day, a reader that over-allocates): realised + open + new <= the pot's £."""
