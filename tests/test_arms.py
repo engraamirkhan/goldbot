@@ -17,7 +17,10 @@ ARM_SPEC_IDS = {"S0", "S0R", "S1A", "S1B", "S2A", "S2B", "S3A", "S3B", "S4", "S5
                 # broker twins (vantage-demo, ADR 0043 broker amendment): same rule bodies, own ids
                 "VI0", "VI2A", "VI2B", "VMB15", "VMB30", "VMB1H", "VMS15", "VW0", "VW1A", "VW1B", "VW2",
                 # time-structure arms (prereg-2026-10-26-time-structure.md), blocked until their generators land
-                "F1A", "F1C", "G1A", "G1C", "WFRI"}
+                "F1A", "F1C", "G1A", "G1C", "WFRI",
+                # arms expansion wave 1 (arms-expansion-2026-10-26.md section 3): specialist arms and 1h controls
+                "XBB15", "XTV1", "XEQ15", "XSO15", "XIMNY", "XIMLN", "XAD1H", "XMR15", "XMR1H", "C1H",
+                "VXRIP1H", "VXRT1H", "VXFK1H", "VXTL1H", "VXTV2", "VXBO1H", "VXBO15", "VXTR1H", "VC1H"}
 
 
 def test_time_structure_arms_are_blocked_and_never_run_on_history() -> None:
