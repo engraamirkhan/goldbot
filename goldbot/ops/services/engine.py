@@ -460,6 +460,9 @@ def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> R
     # plan 2026-10-25 (lane L1 contract): the exploration fence's account facts, never on the paper stand-in
     return limits.model_copy(update={"daily_loss_limit_abs": None if paper else acc.daily_loss_limit_abs,
                                      "probe_only": acc.probe_only and not paper,
+                                     # PD 2026-10-26: the probe host's own open-position cap (demo probe_only only)
+                                     **({"max_positions": acc.max_positions}
+                                        if acc.max_positions is not None and not paper else {}),
                                      "exploration_arms": {} if paper else accounts.exploration_arm_caps(acc)})
 
 

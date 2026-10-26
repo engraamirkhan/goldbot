@@ -629,3 +629,58 @@ def test_every_enabled_arm_needs_a_pot_and_the_pots_fit_the_budget_share():
 def test_the_engine_config_refuses_an_arm_whose_style_has_no_pot():
     with pytest.raises(ValueError, match="no pot"):
         ExplorationConfig(pots={}, arms=(_arm("a"),))
+
+
+# ------------------------------------------------------------------------------------------------ live 2026-10-26
+def test_a_bar_stamped_ahead_of_the_host_clock_is_never_a_candidate_and_never_blocks_the_real_one(tmp_path):
+    """Live 2026-10-26: a broker clock read 1 h ahead (server_tz Athens after EU DST vs the broker's NY+7) stamped the
+    06:00 bar as 07:00. Its candidate (refused for the clock) took the id of the real 07:00 candidate, so the trade
+    sent at 07:00 kept a `blocked` research row (first record stands) and its fill could never be recorded. A bar
+    closing after the host clock is now skipped and journalled, unrecorded, and the real bar is evaluated when it
+    comes."""
+    eng, pb = _engine(tmp_path, [_arm("i0")])
+    eng.cfg.live_clock = True
+    host = CLOSE - pd.Timedelta(hours=1) + pd.Timedelta(seconds=2)
+    eng.clock = lambda: host
+    tick = _at(eng, pb, CLOSE)
+    exploration.on_pass(eng, tick)
+    assert not _sent(eng) and _obs(tmp_path) == []
+    [ahead] = _actions(eng, "exploration_clock_ahead")
+    assert ahead["ahead_s"] == pytest.approx(3598.0)
+    eng.clock = lambda: CLOSE + pd.Timedelta(seconds=2)  # the clock is right again
+    eng._refresh_account(tick)
+    exploration.on_pass(eng, tick)
+    assert len(_sent(eng)) == 1
+    [row] = _obs(tmp_path)
+    assert row[:3] == ("i0", 1, "random")                   # the real candidate: taken, never shadowed
+
+
+# ------------------------------------------------------------------------------------------------ PD 2026-10-26
+def test_a_demo_probe_only_account_may_hold_its_own_max_positions_and_every_other_keeps_the_global_two():
+    """PD decision (A), ADR 0043 host cap: icm-probe's RiskGate holds up to 18 positions through a per-account,
+    demo-and-probe_only override; the global `risk.max_positions_per_account` (2) binds every other account."""
+    from goldbot.config import load_settings
+    from goldbot.ops.services.engine import engine_limits
+    s = load_settings()
+    assert s.risk.max_positions_per_account == 2
+    assert engine_limits(s, _probe_account(max_positions=18)).max_positions == 18
+    assert engine_limits(s, _probe_account(max_positions=18), paper=True).max_positions == 2   # paper: the defaults
+    assert engine_limits(s, _probe_account()).max_positions == 2
+    accs = acc_mod.load_accounts(logins=False)
+    assert accs["icm-probe"].max_positions == 18 and accs["icm-demo"].max_positions is None
+    assert engine_limits(s, accs["icm-demo"]).max_positions == 2
+
+
+@pytest.mark.parametrize("kw", [dict(mode="live", login=1), dict(probe_only=False)])
+def test_a_max_positions_override_is_refused_off_a_demo_probe_only_account(kw):
+    with pytest.raises(ValueError, match="max_positions"):
+        _account(max_positions=18, **kw)
+
+
+def test_the_max_positions_override_survives_the_limits_policy():
+    """The engine resolves its limits through the policy every refresh: the override must reach the gate there too."""
+    from goldbot.config import load_settings
+    from goldbot.ops.services.engine import engine_limits_policy
+    acc = acc_mod.load_accounts(logins=False)["icm-probe"]
+    pol = engine_limits_policy(load_settings(), acc)
+    assert pol.defaults.max_positions == 18
