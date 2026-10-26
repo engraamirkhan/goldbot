@@ -125,7 +125,7 @@ broker cost comparison. All money in the account currency as the broker reports 
 | spread £ | `spread_usd × oz × usd→ccy` at fill (paid once, entry) | `ExplorationRecord.spread_usd`, lots | £ |
 | slippage £ | adverse part of `(fill_price − requested_price) × side × oz × usd→ccy`, entry and exit; favourable slippage is **not** netted against it (shown as cost, never credit, as the labeller does) | `requested_price`, `fill_price` | £ |
 | commission £ | Σ `commission` (absolute value) | `exploration_trades.commission` | £ |
-| costs R | costs £ / Σ `stop_loss` over the same trades × count, i.e. Σ (cost_i / stop_loss_i) | derived | R |
+| costs R | Σ over closed trades of (cost_i ÷ stop_loss_i): each trade's costs in its own R | derived | R |
 | refused (top 3) | candidates not taken because a **rule refused** them (`blocked_reason` set, branch not a policy skip), grouped by reason, top 3 by count, worded by the entry-status map | `exploration_obs.blocked_reason`, `branch` | count |
 | policy skips | not taken by the 0.8/0.2 taking rule or the bandit share: **not** a refusal, not shown in either message (the owner cannot act on it; the dashboard has it) | `branch` | count |
 | down … from peak | `1 − equity / balance_closed_hwm` of that engine (the RiskGate's own arithmetic), at send time, with £ = hwm − equity | `engine_<account>.json` | %, £ |
@@ -196,8 +196,8 @@ Not running: Vantage lab
 | worst drawdown | max of `1 − equity/hwm` sampled at engine heartbeats in the week, with its day | engine state history (needs field 5 below) | %, £ |
 | cost per trade (broker) | mean measured round trip (`cost`, scaled to 0.01 lot) over all fills incl. the P0 probe, vs the frozen cost model (`config/arm_costs.yaml` round trip, converted) | `exploration_trades.cost`, cost probes | £ per trade at 0.01 lot |
 | spread wide % | share of decision minutes where the spread exceeded `risk.max_spread_points` | spread profile | % of open minutes |
-| learning cost | −(Σ net P&L of the labs) when negative, else "learning paid £x" ; per usable label = that ÷ admissible labels written this week (ADR 0043 ROI reading: demo £ per admissible label) | exploration ledger, `exploration_obs.labelled_ns` | £, £ per label |
-| near a stop | arms whose net R is ≤ 50% of the way… i.e. net R ≤ 0.5 × stop_r and n < stop_n | arm status | R |
+| learning result | Σ net P&L of the labs in the week. Negative: "Learning cost £x demo (real money £0) · £y per usable label (n)"; positive: "Learning paid +£x demo this week (real money £0) · n usable labels". Usable labels = admissible labels written in the week (ADR 0043 ROI reading: demo £ per admissible label) | exploration ledger, `exploration_obs.labelled_ns` | £, £ per label |
+| near a stop | non-control arms with net R ≤ 0.5 × their stop_r while n < stop_n (half-way or more to the stop) | arm status | R |
 | closest to its read | the non-control arm with the largest n < 300 | arm status | trades |
 | random baseline | the style's random control arm (S0 for scalp, I0 intraday, W0 swing) net R and n; the reference the arms are compared with by eye, without a test | arm status | R, trades |
 | learner this week | first vs last `exploration_weights` run of the week, per style, moves ≥ 2 points, top 2 per style | `exploration_weights` | % of style budget |
