@@ -1,0 +1,9 @@
+---
+number: 105
+rank: 38
+title: Free daily gold price 1968-2000
+stage: 'Data · research input'
+size: M
+status: 'proposed · accountable: data-engineer · reviews: quant-reviewer'
+---
+- **105. Free daily gold price 1968-2000.** Value: the 30/60/90-day and regime work has no free daily gold series before 2003 (Dukascopy) / 2006 (TradingView OANDA 1D); the LBMA fix is IBA-licensed and FRED deleted its copy in 2022. Target: a daily USD gold price 1968-2000 (1971+ is the free-float era that matters). Free avenues, in order: (1) TradingView daily TVC:GOLD / FX_IDC:XAUUSD through the existing read-only pull (item 107; personal use only, local); (2) central-bank and statistics series: Bundesbank time-series database (gold price in USD/EUR, daily or monthly), Bank of England statistical database, SNB data portal, RBA historical tables (F11/F-series), IMF IFS (monthly, free since 2020); (3) public-domain archives: NBER Macrohistory, US Treasury/Mint reports; (4) Internet Archive snapshots of old FRED CSVs (GOLDAMGBD228NLBM/GOLDPMGBD228NLBM, pre-2022), provenance and licence checked (the series was IBA's, so local only); (5) COMEX GC settlement history from CFTC or public filings; (6) splice candidates only with a documented overlap check (median abs diff and max diff per year on the overlap, e.g. 2006-2010 vs Dukascopy/OANDA daily closes). Licence condition: only public-domain or openly licensed data (CC BY, ODC-PDDL, US government) goes to a public release; anything personal-use-only stays local (brain or a private repository, ADR 0048) with only code, schema, row counts and sha256 in the repo. Done = verified first date per series, the PIT stamp rule (available_utc) written and tested with a seeded future row, and the quality checks (coverage per month, gaps, price-scale sanity against known levels, spikes, weekend rows) run and reported.
