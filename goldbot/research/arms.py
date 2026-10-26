@@ -39,7 +39,9 @@ RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_ab
          "squeeze_release", "donchian_break", "low30_touch", "low30_control", "pdc_break", "ob_retest",
          # time-structure arms (docs/research/prereg-2026-10-26-time-structure.md): frozen in the spec with status
          # blocked until their generators land in arm_rules.RULE_FUNCS (backlog 112); a blocked arm never runs
-         "band_hurst_switch", "level_break", "weekday_hold")
+         "band_hurst_switch", "level_break", "weekday_hold",
+         # wave 2 lane W2a (H-70 F1 / F-2)
+         "hurst_band_break", "hurst_band_break_control", "htf_stretch_break", "htf_stretch_break_control")
 
 
 # ---------------------------------------------------------------- holdout guard

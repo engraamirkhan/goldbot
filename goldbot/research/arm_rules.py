@@ -394,6 +394,12 @@ def clock_box(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     return CLOCK_BOX[arm.rule](arm, ctx)
 
 
+def band_rule(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
+    """Time-structure band breaks F1A/F1C/F2A/F2C (`goldbot.research.arm_rules_bands`)."""
+    from goldbot.research.arm_rules_bands import RULES as BANDS
+    return BANDS[arm.rule](arm, ctx)
+
+
 
 
 RULE_FUNCS: dict[str, Callable[[Arm, RuleContext], pd.DataFrame]] = {
@@ -403,6 +409,8 @@ RULE_FUNCS: dict[str, Callable[[Arm, RuleContext], pd.DataFrame]] = {
     "specialist": specialist, "pdc_break": pdc_break, "ob_retest": ob_retest,
     **dict.fromkeys(("squeeze_release", "donchian_break", "low30_touch", "low30_control"), channel),
     **dict.fromkeys(CLOCK_BOX_RULES, clock_box),
+    **dict.fromkeys(("hurst_band_break", "hurst_band_break_control", "htf_stretch_break", "htf_stretch_break_control"),
+                    band_rule),
 }
 
 
@@ -412,3 +420,14 @@ def candidates(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
         raise ValueError(f"{arm.id} is blocked: {arm.note}")
     raw = RULE_FUNCS[arm.rule](arm, ctx)
     return post_filter(arm, ctx, raw)
+
+
+def lookback_bars(arm: Arm, default: int) -> int:
+    """Bars of the arm's timeframe its rule needs live for its candidates to equal the history run's (bounded by the
+    engine's `exploration.lookback`): a `specialist` family's warm-up (`arm_rules_specialist.WARMUP_MIN`), a band
+    rule's LOOKBACK_BARS, else `default`."""
+    if arm.rule == "specialist":
+        from goldbot.research.arm_rules_specialist import warmup_bars
+        return max(default, warmup_bars(arm))
+    from goldbot.research.arm_rules_bands import LOOKBACK_BARS
+    return max(default, LOOKBACK_BARS.get(arm.rule, 0))
