@@ -30,9 +30,9 @@ WAVE2 = {"F1A": ("hurst_band_break", "15m"), "F1C": ("hurst_band_break_control",
          **BOX}
 # blocked row -> the engine lane its note names (state/RESUME.md 2026-10-26: E1 F1/F2 live + WFRI crosses_friday;
 # E2 G1 level_break + C30/DOND daily and weekend; E3 BXR trail, BXT/BXF virtual twins, XC15 netting shift)
-BLOCKED = {"F1A": "E1", "F1C": "E1", "F2A": "E1", "F2C": "E1", "WFRI": "E1",
-           "G1A": "E2", "G1C": "E2", "C30A": "E2", "C30C": "E2", "DOND": "E2",
-           "XC15": "E3", **{b: "E3" for b in BOX}}
+# lanes E1-E3 merged 2026-10-26: only DOND stays blocked (its 1d hold always crosses the weekend; the Friday cut
+# refuses it until an exit amendment like WFRI's lands)
+BLOCKED = {"DOND": "E2"}
 FORWARD_ONLY = {"F1A", "F1C", "G1A", "G1C", "WFRI", "KA15", "XC15", *BOX}
 # account -> arm id -> (style, max_loss, control_share)
 HOSTS: dict[str, dict[str, tuple[str, float, float | None]]] = {
@@ -87,7 +87,7 @@ def test_rows_blocked_on_an_engine_lane_name_it_and_every_other_wave_two_arm_run
 def test_no_row_keeps_a_placeholder_rule_and_the_placeholders_are_gone(spec) -> None:
     assert not {a.rule for a in spec.values()} & set(PLACEHOLDERS)
     assert not set(PLACEHOLDERS) & set(arms.RULES)
-    assert "level_break" in arms.RULES        # G1A/G1C use it until lane E2 lands its generator
+    assert "level_break" in arms.RULES        # G1A/G1C's generator (lane E2)
 
 
 def test_forward_only_arms_never_run_on_history(spec) -> None:

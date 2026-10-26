@@ -64,6 +64,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+import numpy as np
 import pandas as pd
 from pydantic import Field, ValidationError, model_validator
 
@@ -102,7 +103,9 @@ GRACE_S = 1.5                       # a minute is complete GRACE_S after its clo
 # live 2026-10-26: a bar closing more than this after the host clock is a clock fault, never a candidate
 CLOCK_AHEAD_S = 60.0
 LOOKBACK = 200                      # bars of an arm's timeframe its rule reads, unless the rule declares more
-LOOKBACK_MAX_1M = 60_000            # and never more than this many minutes of bars (the engine's ~40-day 1m memory)
+# and never more than this many minutes of bars: the engine's whole 1m memory (EngineConfig.max_bars_in_memory, ~62
+# trading days; a test holds them equal and every declared lookback inside them)
+LOOKBACK_MAX_1M = 90_000
 LOOKBACK_1M = 1_000                 # and at least this many minutes (S5's 15m EMA50 reads 750)
 SUB_15M = ("1m", "5m")
 MAX_NET_LOTS = 0.10                 # ADR 0043 X3: net same-side exposure on the account, lots
@@ -114,6 +117,7 @@ SPEC_PATH = Path(__file__).parents[2] / "config" / "exploration_arms.yaml"   # t
 # reached before the broker had it; no other arm trails)
 NATURAL = frozenset({HOLD_EXIT, "time_exit", "stop", "target", "engine_stop_close", "trail_close"})
 SHIFT_TF = "15m"                    # arms 8.9: a shifted XC15 enters "at the next 15m close" KA15 is not open
+CUT_EXIT = "weekend_close_loser"    # the Friday cut's loser close (`Engine._weekend_rule`): natural for a rule following it
 
 
 def stale_s(tf: str) -> float:
@@ -444,14 +448,34 @@ def _bars(frame_1m: pd.DataFrame, tf: str, through: pd.Timestamp, n: int = LOOKB
     """The store-schema bars of `tf` the rule reads, the last one closing exactly at `through`; None when that bar
     is not there. Counted in bars, never clock time (a weekend inside the window does not shorten it): the last
     (n + 1) bars' worth of 1m rows, at least LOOKBACK_1M of them; 1d reads every row."""
-    rows = max((n + 1) * tf_seconds(tf) // 60, LOOKBACK_1M)
+    return _shared_bars(frame_1m, tf, through, [n])[n]
+
+
+def _shared_bars(frame_1m: pd.DataFrame, tf: str, through: pd.Timestamp,
+                 ns: list[int]) -> dict[int, pd.DataFrame | None]:
+    """`_bars(frame_1m, tf, through, n)` for every n in `ns`, with one resample of the longest slice (L7's 10 s a close:
+    F2's 4,000 15m bars are the whole memory, and every 15m lookback used to resample its own slice of it). A shorter
+    slice is the longer one's bars from the bar holding its first minute, that first bar rebuilt from the minutes the
+    shorter slice has (it may start inside a bar), so each is exactly its own slice's resample (tested)."""
+    rows = {n: max((n + 1) * tf_seconds(tf) // 60, LOOKBACK_1M) for n in ns}
     src = frame_1m[frame_1m["visible_at"] <= through]
-    src = src if tf == "1d" else src.tail(rows)
-    bars = src if tf == "1m" else resample_bars(src, tf)
-    bars = bars[bars["visible_at"] <= through].reset_index(drop=True)
-    if bars.empty or pd.Timestamp(bars["visible_at"].iloc[-1]) != through:
-        return None
-    return bars
+    top = src if tf == "1d" else src.tail(max(rows.values(), default=0))
+    full = top if tf == "1m" else resample_bars(top, tf)
+    out: dict[int, pd.DataFrame | None] = {}
+    for n in ns:
+        bars = full
+        if tf == "1m":
+            bars = top.tail(rows[n])
+        elif tf != "1d" and rows[n] < len(top) and not full.empty:
+            sub = top.tail(rows[n])
+            first = epoch_ns(pd.DatetimeIndex(sub["ts_utc"].iloc[:1]))[0]
+            k = int(np.searchsorted(epoch_ns(pd.DatetimeIndex(full["ts_utc"])), first, side="right")) - 1
+            rest = full.iloc[k + 1:]
+            head = sub if rest.empty else sub[sub["ts_utc"] < rest["ts_utc"].iloc[0]]
+            bars = pd.concat([resample_bars(head, tf), rest], ignore_index=True)
+        bars = bars[bars["visible_at"] <= through].reset_index(drop=True)
+        out[n] = None if bars.empty or pd.Timestamp(bars["visible_at"].iloc[-1]) != through else bars
+    return out
 
 
 def arm_bars(complete: pd.DataFrame, arm: SpecArm, through: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame] | None:
@@ -464,11 +488,10 @@ def arm_bars(complete: pd.DataFrame, arm: SpecArm, through: pd.Timestamp) -> tup
 
 def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.DataFrame,
             through: pd.Timestamp, spec_ctx: dict[str, Any] | None = None) -> None:
-    """The arm's frozen rule (`arm_rules.candidates`: its window, the common filters, its stop band) on the bars up to
-    `through`; a candidate on the bar that just closed is queued with its own stop, target and hold. A rule that
-    raises is journalled (`exploration_rule_error`) and the other arms go on."""
-    import numpy as np
-
+    """The arm's frozen rule (`arm_rules.screened`: its window, the common filters, its stop band) on the bars up to
+    `through`; a candidate on the bar that just closed is queued with its own stop, target and hold. One its stop band
+    skips is journalled and recorded blocked with its propensity (`_skipped`). A rule that raises is journalled
+    (`exploration_rule_error`) and the other arms go on."""
     from goldbot.research import arm_rules
     if arm.arm_id in ex.retired or ex.last_bar.get(arm.arm_id) == through:
         return
@@ -476,20 +499,47 @@ def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.D
     try:
         ctx = arm_rules.RuleContext(bars=bars, b1=b1, blackout_lo=np.zeros(0, dtype=np.int64),
                                     blackout_hi=np.zeros(0, dtype=np.int64), spec_ctx=spec_ctx)
-        c = arm_rules.candidates(arm.spec, ctx)
+        c, skipped = arm_rules.screened(arm.spec, ctx)
     except Exception as exc:
         log.warning("exploration arm %s rule failed (%s)", arm.arm_id, type(exc).__name__)
         eng.decisions.append({"ts": time.time(), "agent": arm.tag, "action": "exploration_rule_error",
                               "error": type(exc).__name__})
         return
-    last = c[c["idx"] == len(bars) - 1]
-    struct = last["struct_r"].to_numpy(dtype=float) if "struct_r" in last.columns else [None] * len(last)
-    for side, risk, target_r, max_bars, struct_r in zip(
-            last["side"].to_numpy(dtype=int), last["risk_usd"].to_numpy(dtype=float),
-            last["target_r"].to_numpy(dtype=float), last["max_bars"].to_numpy(dtype=int), struct, strict=True):
-        ex.queue.append(Pending(arm_id=arm.arm_id, side=int(side), bar_ts=through, stop_usd=float(risk),
-                                target_usd=float(target_r) * float(risk), hold_bars=int(max_bars) + 1,
-                                struct_r=None if struct_r is None else float(struct_r)))
+    for p in _pending(arm, c[c["idx"] == len(bars) - 1], through):
+        ex.queue.append(p)
+    gone = skipped[skipped["idx"] == len(bars) - 1]
+    for p, why in zip(_pending(arm, gone, through), gone["reason"].astype(str)):
+        _skipped(eng, ex, arm, p, why)
+
+
+def _pending(arm: Arm, rows: pd.DataFrame, through: pd.Timestamp) -> list[Pending]:
+    """Candidate rows (side, risk_usd, target_r, max_bars; a BXR's struct_r) as signals with their own stop, target
+    and hold."""
+    struct = rows["struct_r"].to_numpy(dtype=float) if "struct_r" in rows.columns else [None] * len(rows)
+    return [Pending(arm_id=arm.arm_id, side=int(side), bar_ts=through, stop_usd=float(risk),
+                    target_usd=float(target_r) * float(risk), hold_bars=int(max_bars) + 1,
+                    struct_r=None if struct_r is None else float(struct_r))
+            for side, risk, target_r, max_bars, struct_r in zip(rows["side"].to_numpy(dtype=int),
+                                                                rows["risk_usd"].to_numpy(dtype=float),
+                                                                rows["target_r"].to_numpy(dtype=float),
+                                                                rows["max_bars"].to_numpy(dtype=int), struct,
+                                                                strict=True)]
+
+
+def _skipped(eng: Engine, ex: Exploration, arm: Arm, s: Pending, why: str) -> None:
+    """Arms expansion 2026-10-26, section 4: "A candidate outside its £ cap or stop band is skipped and logged with its
+    propensity": journalled (`exploration_skipped:<why>`, the arm's share of its pot as `propensity`, as `_send`'s
+    refusals) and recorded blocked with its reason (`candidate`: mu 0, so off-policy estimates stay unbiased). Best
+    effort: a failure here is logged and never stops the other arms' signals."""
+    try:
+        share = shares(ex, s.bar_ts).get(arm.arm_id)
+        eng.decisions.append({"ts": s.bar_ts.isoformat(), "agent": arm.tag, "proposal": order_id(eng, arm, s.bar_ts),
+                              "action": "exploration_skipped:" + why, "arm": arm.arm_id, "tf": arm.tf,
+                              "style": arm.style, "stop_usd": round(s.stop_usd, 4),
+                              "propensity": round(share, 4) if share is not None else None})
+        candidate(eng, ex, s, s.bar_ts, why, share)
+    except Exception as exc:
+        log.warning("exploration arm %s: skipped candidate not logged (%s)", arm.arm_id, type(exc).__name__)
 
 
 def step(eng: Engine, close_ts: pd.Timestamp) -> bool:
@@ -518,15 +568,18 @@ def step(eng: Engine, close_ts: pd.Timestamp) -> bool:
     for arm in (a for a in arms if a.arm_id in ex.needs_context):
         _with_context(eng, ex, arm, complete, close_ts)
     arms = [a for a in arms if a.arm_id not in ex.needs_context]
-    # one slice per (timeframe, lookback), shared by the arms that read it
-    for tf, n in sorted({(a.tf, lookback(a.spec)) for a in arms}, key=lambda k: (tf_seconds(k[0]), k[1])):
+    # one resample per timeframe (`_shared_bars`), one slice per lookback, shared by the arms that read it
+    for tf in sorted({a.tf for a in arms}, key=tf_seconds):
         if tf != "1d" and int(close_ts.timestamp()) % tf_seconds(tf):
             continue
-        group = [a for a in arms if a.tf == tf and lookback(a.spec) == n]
-        got = arm_bars(complete, group[0].spec, close_ts)
-        if got is not None:
-            for arm in group:
-                _signal(eng, ex, arm, got[0], got[1], close_ts)
+        group = [a for a in arms if a.tf == tf]
+        ns = sorted({lookback(a.spec) for a in group})
+        for n, bars in _shared_bars(complete, tf, close_ts, ns).items():
+            if bars is None:
+                continue
+            b1 = complete[complete["ts_utc"] >= pd.Timestamp(bars["ts_utc"].iloc[0])].reset_index(drop=True)
+            for arm in (a for a in group if lookback(a.spec) == n):
+                _signal(eng, ex, arm, bars, b1, close_ts)
     return True
 
 
@@ -823,14 +876,24 @@ def paused(eng: Engine, now: pd.Timestamp) -> bool:
 _warned: dict[int, pd.Timestamp] = {}
 
 
-def crosses_friday(eng: Engine, now: pd.Timestamp, hold_s: int) -> bool:
-    """ADR 0043 X3: a scalp or intraday entry whose maximum hold reaches the Friday weekend cut (server time)."""
+def crosses_friday(eng: Engine, now: pd.Timestamp, hold_s: int, follows_cut: bool = False) -> bool:
+    """ADR 0043 X3: an entry whose maximum hold reaches the Friday weekend cut (server time).
+
+    `follows_cut`: the arm's rule declares the cut part of its own exit (`arm_rules.follows_friday_cut`; WFRI,
+    prereg-2026-10-26-time-structure.md section 4, amendment 1: "at the cut a losing WFRI is closed and a winning one
+    has its stop tightened ... then held to the 16:30 New York time exit"). Its entry may hold across the cut, which
+    acts on it as on every position of the engine (`Engine._weekend_rule`, unchanged), but never into the weekend:
+    refused when its hold reaches the server's Saturday 00:00, or when it would be sent after the week's cut."""
     from goldbot.data.timeutil import server_wall
     end = now + pd.Timedelta(seconds=hold_s)
     h, m = (int(x) for x in eng.cfg.weekend_cut.split(":"))
     srv_now, srv_end = server_wall(pd.DatetimeIndex([now, end]), eng.cfg.server_tz)
-    days_to_fri = (4 - srv_now.weekday()) % 7
-    cut = (srv_now.normalize() + pd.Timedelta(days=days_to_fri, hours=h, minutes=m))
+    at_cut = pd.Timedelta(hours=h, minutes=m)
+    if follows_cut:
+        saturday = srv_now.normalize() + pd.Timedelta(days=(5 - srv_now.weekday()) % 7)
+        past_cut = srv_now.weekday() == 5 or (srv_now.weekday() == 4 and srv_now >= srv_now.normalize() + at_cut)
+        return bool(past_cut or srv_end >= saturday)
+    cut = srv_now.normalize() + pd.Timedelta(days=(4 - srv_now.weekday()) % 7) + at_cut
     if cut <= srv_now:
         cut += pd.Timedelta(days=7)
     return bool(srv_end >= cut)
@@ -1053,6 +1116,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     propensity, ADR 0043 / research E6), then the order core. "cap": the global cap is full. The checks before the
     gate use the rule's stop; the gate may floor it wider (stops level, spread), so the order core judges the same
     bounds again on the loss at the gate's stop, and that loss is the position's open risk (trading-safety L1)."""
+    from goldbot.research import arm_rules
     tag, side, pot = arm.tag, s.side, ex.cfg.pots[arm.style]
     pid = order_id(eng, arm, s.bar_ts)
     price = tick.ask if side > 0 else tick.bid
@@ -1088,7 +1152,8 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     if ps.count.get(arm.arm_id, 0) >= arm.max_open:
         refuse("arm_max_open")
         return "refused"
-    if crosses_friday(eng, now, hold_s):            # quant Q2: every style, swing included
+    # quant Q2: every style, swing included; a rule whose exit is the cut may hold across it, never into the weekend
+    if crosses_friday(eng, now, hold_s, arm_rules.follows_friday_cut(arm.spec)):
         refuse("weekend_hold")
         return "refused"
     if lot is None:
@@ -1388,16 +1453,12 @@ def record_close(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float | 
     known = info or {}
     why = known.get("reason") or reason
     ex = eng.exploration
-    own_arm = ex.arms.get(tr.agent_id.removeprefix(PREFIX)) if ex is not None else None
-    # a moved stop censors the label, except a runner arm's (H-80 BXR): its trailed stop is its own exit rule. The
-    # Friday cut never tightens one (`crosses_friday` refuses every entry whose hold reaches it)
-    trails = own_arm is not None and _is_runner(own_arm)
-    censored = why not in NATURAL or (not trails and tr.initial_sl is not None and tr.sl != tr.initial_sl)
+    arm_id = tr.agent_id.removeprefix(PREFIX)
+    arm = ex.arms.get(arm_id) if ex is not None else None
+    censored = _censored(arm, why, tr)
     db = ex.db if ex is not None else ledger_db(eng.cfg.state_dir)
     cid = tr.client_order_id or f"position-{pid}"
     with db.write() as conn:
-        arm_id = tr.agent_id.removeprefix(PREFIX)
-        arm = ex.arms.get(arm_id) if ex is not None else None
         start = tr.opened_utc or tr.entry_bar_ts
         rec = LEDGER.get(conn, cid) or ExplorationRecord(
             client_order_id=cid, account_id=eng.cfg.account_id, arm_id=arm_id,
@@ -1415,6 +1476,22 @@ def record_close(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float | 
         ex.open_loss.pop(pid, None)
     eng._recorded.add(pid)
     return True
+
+
+def _censored(arm: Arm | None, why: str, tr: OpenTrade) -> bool:
+    """A close by anything but the arm's own barrier (NATURAL), or with its stop moved, censors the label. For a rule
+    whose exit includes the Friday weekend cut (`arm_rules.follows_friday_cut`, WFRI amendment 1: the read is "the
+    realised outcome under the cut") the cut's loser close (CUT_EXIT) and a stop tightened (the cut's winner rule)
+    are its own exit. A loosened stop, the no-quote flatten or any other close still censors."""
+    from goldbot.research import arm_rules
+    follows = arm is not None and arm_rules.follows_friday_cut(arm.spec)
+    if why not in NATURAL and not (follows and why == CUT_EXIT):
+        return True
+    if tr.initial_sl is None or tr.sl == tr.initial_sl:
+        return False
+    if arm is not None and _is_runner(arm):
+        return False                      # H-80 BXR: its trailed stop (only ever tighter) is its own exit rule
+    return not (follows and tr.sl is not None and tr.side * (tr.sl - tr.initial_sl) > 0)
 
 
 def _observe(eng: Engine, db: Database, r: ExplorationRecord, filled: pd.Timestamp | None) -> None:

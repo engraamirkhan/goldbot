@@ -185,7 +185,7 @@ class EngineConfig(Record):
     magic_base: int = 260100
     state_dir: str = "state"
     cost_atr: float = 0.10           # round-trip cost in ATR until the measured cost table exists
-    max_bars_in_memory: int = 60000     # 1m bars kept (~40 trading days)
+    max_bars_in_memory: int = 90000     # 1m bars kept (~62 trading days; fakey L0's 4h boxes read ~80 000)
     feature_window: int = 800            # decision bars the features are computed on
     # history continuity (engine/history.py): background fill bounds (bridge rows per page, seconds)
     backfill_max_days: int = Field(30, ge=0, le=30)

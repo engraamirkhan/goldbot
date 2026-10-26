@@ -114,7 +114,7 @@ def specialist_rule(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
 # lanes L2-L5, measured on their fixtures), when that is more than the engine's LOOKBACK bars. trend: the 4h EMA50
 # slope (400 1h bars); mean_reversion: the 1h volatility tercile's 400-bar window + rv_20; session_open: the daily
 # ATR(14) filter (30 trading days); eq_liquidity_run: its ATR200 equal-level threshold; the box course: its 1h/4h box
-# sets (the whole ~40-day memory; fakey's 4h set needs more than the engine keeps, so live never equals history).
+# sets (~40 days; fakey's 4h set ~80 000 minutes, inside the engine's 90 000-minute memory since lane E1 2026-10-26).
 WARMUP_MIN: dict[str, int] = {
     "trend": 24_000, "mean_reversion": 25_200, "session_open": 41_400, "eq_liquidity_run": 15_000,
     "box_break": 60_000, "box_rip": 60_000, "box_retest": 60_000, "trend_level_signal": 60_000, "fakey": 80_000,

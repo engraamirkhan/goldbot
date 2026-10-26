@@ -156,19 +156,40 @@ def _frame(idx: np.ndarray, side: np.ndarray, risk: np.ndarray, target_r: Any, h
     return out[np.isfinite(out["risk_usd"]) & (out["risk_usd"] > 0) & np.isfinite(out["target_r"])].reset_index(drop=True)
 
 
-def post_filter(arm: Arm, ctx: RuleContext, cands: pd.DataFrame) -> pd.DataFrame:
-    """The arm's decision window, the common filters and its stop band / cap (candidates beyond them are skipped, logged
-    in the runner as stop_lt_floor / stop_gt_cap)."""
-    if cands.empty:
-        return cands
+STOP_LT_FLOOR, STOP_GT_CAP = "stop_lt_floor", "stop_gt_cap"     # a candidate's stop below / above the arm's band
+
+
+def _screen(arm: Arm, ctx: RuleContext, cands: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Per candidate: inside the arm's decision window and the common filters, and the stop band's verdict (None
+    inside it, else STOP_LT_FLOOR / STOP_GT_CAP)."""
     p = arm.params
     close = ctx.close_ts[cands["idx"].to_numpy()]
     ok = arm_window(close, p) & common_filter_ok(close, ctx.blackout_lo, ctx.blackout_hi)
-    if "min_stop_usd" in p:
-        ok &= cands["risk_usd"].to_numpy() >= float(p["min_stop_usd"]) - 1e-9
+    risk = cands["risk_usd"].to_numpy(dtype=float)
+    band = np.full(len(cands), None, dtype=object)
     if "max_stop_usd" in p:
-        ok &= cands["risk_usd"].to_numpy() <= float(p["max_stop_usd"]) + 1e-9
-    return cands[ok].reset_index(drop=True)
+        band[risk > float(p["max_stop_usd"]) + 1e-9] = STOP_GT_CAP
+    if "min_stop_usd" in p:
+        band[risk < float(p["min_stop_usd"]) - 1e-9] = STOP_LT_FLOOR
+    return ok, band
+
+
+def post_filter(arm: Arm, ctx: RuleContext, cands: pd.DataFrame) -> pd.DataFrame:
+    """The arm's decision window, the common filters and its stop band / cap. A candidate the window and filters keep
+    but the band drops is a skipped candidate (`screened`): the engine logs it with its propensity (arms expansion
+    2026-10-26, section 4: "A candidate outside its £ cap or stop band is skipped and logged with its propensity")."""
+    return screened_frame(arm, ctx, cands)[0]
+
+
+def screened_frame(arm: Arm, ctx: RuleContext, cands: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """`cands` split into (kept, skipped by the stop band); the skipped frame carries a `reason` column
+    (STOP_LT_FLOOR / STOP_GT_CAP). Candidates outside the window or the common filters are in neither."""
+    if cands.empty:
+        return cands, cands.assign(reason=pd.Series(dtype=object))
+    ok, band = _screen(arm, ctx, cands)
+    inside = np.array([b is None for b in band], dtype=bool)
+    skipped = cands[ok & ~inside].assign(reason=band[ok & ~inside]).reset_index(drop=True)
+    return cands[ok & inside].reset_index(drop=True), skipped
 
 
 # ---------------------------------------------------------------- S1 session-VWAP fade
@@ -417,18 +438,31 @@ RULE_FUNCS: dict[str, Callable[[Arm, RuleContext], pd.DataFrame]] = {
 
 def candidates(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     """The arm's candidates after its window, the common filters and its stop band."""
+    return screened(arm, ctx)[0]
+
+
+def screened(arm: Arm, ctx: RuleContext) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The arm's rule run once: (its candidates, the ones its stop band skipped with their `reason`)."""
     if arm.status != "run":
         raise ValueError(f"{arm.id} is blocked: {arm.note}")
-    raw = RULE_FUNCS[arm.rule](arm, ctx)
-    return post_filter(arm, ctx, raw)
+    return screened_frame(arm, ctx, RULE_FUNCS[arm.rule](arm, ctx))
 
 
 def lookback_bars(arm: Arm, default: int) -> int:
     """Bars of the arm's timeframe its rule needs live for its candidates to equal the history run's (bounded by the
     engine's `exploration.lookback`): a `specialist` family's warm-up (`arm_rules_specialist.WARMUP_MIN`), a band
-    rule's LOOKBACK_BARS, else `default`."""
+    rule's or a clock rule's LOOKBACK_BARS, else `default`."""
     if arm.rule == "specialist":
         from goldbot.research.arm_rules_specialist import warmup_bars
         return max(default, warmup_bars(arm))
-    from goldbot.research.arm_rules_bands import LOOKBACK_BARS
-    return max(default, LOOKBACK_BARS.get(arm.rule, 0))
+    from goldbot.research.arm_rules_bands import LOOKBACK_BARS as BANDS
+    from goldbot.research.arm_rules_clock_box import LOOKBACK_BARS as CLOCK
+    return max(default, BANDS.get(arm.rule, 0), CLOCK.get(arm.rule, 0))
+
+
+def follows_friday_cut(arm: Arm) -> bool:
+    """Whether the arm's rule declares the engine's Friday weekend cut part of its exit (`arm_rules_clock_box.
+    FOLLOWS_FRIDAY_CUT`, WFRI: prereg-2026-10-26-time-structure.md section 4, amendment 1). Such an entry may hold
+    across the cut (the engine closes it there if losing and tightens its stop if winning), never into the weekend."""
+    from goldbot.research.arm_rules_clock_box import FOLLOWS_FRIDAY_CUT
+    return arm.rule in FOLLOWS_FRIDAY_CUT
