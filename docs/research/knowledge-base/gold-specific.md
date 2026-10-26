@@ -99,3 +99,20 @@ Summarised from `../state-of-the-art.md` B1 and B3; no new claims here.
 - Hourly spread and tick profile on the broker's own ticks (CB-0 step 6, after 20 trading days).
 - Verify Elder et al. 2012 and the published version of Hauptfleisch et al.
 - pa-claims: sweep-and-reclaim frequencies by session on XAUUSD.
+
+## 7. Time structure, levels and indicators measured (2026-10-26)
+
+From `../time-structure-2026-10-26.md` (discovery half 2010-2017, randomised controls, two cost cases). Claims rows for
+the topic files are summarised here; the slice files hold the tables.
+
+| Claim | Our data | Grade |
+|---|---|---|
+| Activity follows each exchange's own clock (NY data/COMEX 08:20-08:30 NY is the day's activity event; DST gap weeks follow New York) | measured: sessions.md 4, README 6.9 | A (our data) |
+| The LBMA fixes have no activity spike of their own after 2015 | measured: the 15:00 London spike is 10:00 New York | B (our data) |
+| Session opens set direction | not in the form tested: 24 ORB variants ≈ random-start ORB, net −0.12..+0.03 R | A against (our data) |
+| Fibonacci levels act as support/resistance | not better than distance-matched random levels (0/26 cells after BH) | A against (our data) |
+| Key levels (PDH/PDL, PWH/PWL) break more often than random levels | +3 to +8 points break share; no magnet; retests worse than random | B (our data) |
+| Order blocks / FVGs | OB adds +0.04..+0.08 R over random brackets (CI includes 0); FVG revisit +2 pts | C against (our data) |
+| 30/60/90-day windows predict direction | no (abs(t) < 1.2); they predict volatility | A against for direction (our data) |
+| FOMC and NFP days carry more range than RV20 predicts | +0.40 / +0.37 log points (t 3.0 / 2.7) | B (our data) |
+| Tick volume measures traded size | no: about 40-60% clock shape, units drift 4x across years; COMEX volume needed | B against (our data) |

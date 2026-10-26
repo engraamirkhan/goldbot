@@ -15,7 +15,16 @@ ARMS = ROOT / "config" / "exploration_arms.yaml"
 ARM_SPEC_IDS = {"S0", "S0R", "S1A", "S1B", "S2A", "S2B", "S3A", "S3B", "S4", "S5A", "S5B", "S6", "I0", "I1", "I2A", "I2B",
                 "MB15", "MB30", "MB1H", "MSA15", "I3", "W0", "W1A", "W1B", "W2", "W3",
                 # broker twins (vantage-demo, ADR 0043 broker amendment): same rule bodies, own ids
-                "VI0", "VI2A", "VI2B", "VMB15", "VMB30", "VMB1H", "VMS15", "VW0", "VW1A", "VW1B", "VW2"}
+                "VI0", "VI2A", "VI2B", "VMB15", "VMB30", "VMB1H", "VMS15", "VW0", "VW1A", "VW1B", "VW2",
+                # time-structure arms (prereg-2026-10-26-time-structure.md), blocked until their generators land
+                "F1A", "F1C", "G1A", "G1C", "WFRI"}
+
+
+def test_time_structure_arms_are_blocked_and_never_run_on_history() -> None:
+    loaded = {a.id: a for a in arms.load_arms(ARMS)}
+    new = {"F1A", "F1C", "G1A", "G1C", "WFRI"}
+    assert all(loaded[i].status == "blocked" and loaded[i].note for i in new)
+    assert not new & set(arms.runnable_ids(ARMS))
 
 
 def test_holdout_guard_refuses_blocks_and_bars_past_the_end() -> None:

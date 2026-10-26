@@ -239,3 +239,4 @@ structural stops at £1,000 (tight-stop study).
 |---|---|
 | 2026-10-18 | Created: seven topic files from the owner's nine local note sets, about 30 external sources, data status from the registry and dated studies; KB-1..KB-7 proposed (0 trials) |
 | 2026-10-18 (cycle 2) | Results fed back from pa-claims and H-40 FAIL; KB-1/KB-2/KB-5 moved to `hypotheses.md` A12 as D-KB1/H-48/H-49 with counts; KB-3/4/6/7 stay features/exits. No grade changed |
+| 2026-10-26 | Time-structure programme: `gold-specific.md` section 7 added (9 claims from slices A-H, discovery half, randomised controls); Fibonacci and session-open direction graded A against on our data; no external grade changed |
