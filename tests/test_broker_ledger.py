@@ -369,6 +369,7 @@ def test_show_prints_the_latest_report_snapshots_and_balance_deals(tmp_path, cap
     out = json.loads(capsys.readouterr().out)
     assert out["report"]["status"] == "ok" and len(out["snapshots"]) == 2
     assert [d["amount"] for d in out["balance_deals"]] == [500.0]
+    assert all("identity" not in s for s in out["snapshots"])   # the login hash stays in the DB (public pastes)
 
 
 # ------------------------------------------------------------------------------------------------ review fixes

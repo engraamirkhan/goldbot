@@ -188,7 +188,7 @@ AUX: tuple[Migration, ...] = (
         "CREATE INDEX IF NOT EXISTS email_link_requests_key ON email_link_requests(key, ts_ns)",
     )),
     # additive: the broker ledger (goldbot/ops/ledger.py; finance audit GAP-07, GAP-08). Amounts only: never a login,
-    # server or deal comment. key = '<account>|<UTC date>' (one snapshot and one report per account and day; a re-run
+    # server or deal comment (snapshots keep a truncated identity hash in the body to detect a login change). key = '<account>|<UTC date>' (one snapshot and one report per account and day; a re-run
     # replaces it) or '<account>|<deal ticket>' (a balance deal is booked once)
     Migration(version=7, name="broker_ledger", additive=True, statements=(
         f"""CREATE TABLE IF NOT EXISTS balance_snapshots (

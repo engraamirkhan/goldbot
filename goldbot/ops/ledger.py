@@ -14,7 +14,8 @@ The daily `broker_ledger` job (goldbot/ops/jobs.py) calls `run_ledger` per accou
   (`STABLE_READS` attempts), so the balance and the deals describe the same moment. Stamped with the real read time;
   the scheduler slot's UTC date keys the row (one per account and day, `balance_snapshots`; a re-run replaces it).
   `deals_through_utc` = max(newest deal, read time - MIN_WINDOW): the cursor never trails the read by more than a
-  day, so an idle account never drifts into a new baseline. The login, server and deal comments are never stored.
+  day, so an idle account never drifts into a new baseline. The login, server and deal comments are never stored;
+  only `identity`, a truncated hash of (account, login, server) that detects a login change. It is never printed.
 * Balance deals. MT5 non-trade deals: DEAL_TYPE_BALANCE (2) is a deposit (> 0) or a withdrawal (< 0), CREDIT (3) is
   kept apart (credit is not balance), CHARGE, CORRECTION, BONUS, INTEREST and the rest are `adjustment`; commission
   deals (7-11) count as commission. Booked once per deal ticket (`balance_deals`): with the tie-out they explain, or,
@@ -664,7 +665,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         conn.close()
     out = {"report": rep.model_dump(mode="json") if rep is not None else None,
-           "snapshots": [s.model_dump(mode="json") for s in snaps if s.ts_utc >= since],
+           "snapshots": [s.model_dump(mode="json", exclude={"identity"}) for s in snaps if s.ts_utc >= since],
            "balance_deals": [d.model_dump(mode="json") for d in deals if d.ts_utc >= since]}
     print(json.dumps(out, indent=1))
     return 0
