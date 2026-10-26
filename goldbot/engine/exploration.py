@@ -33,6 +33,12 @@ The plan's rules, as built here:
   on exploration positions as on any of this engine's magic range (`Engine._own`). A 1m/5m arm's hold is judged on the
   host clock on every pass with or without a quote (`exits`, from `Engine._retry_closes`), halted or not; a 15m+ arm's
   is the engine's time barrier. A position whose arm is unknown (no longer configured) is closed at once.
+* H-80 (prereg-exits-adaptive-2026-10-26.md): a BXR position (`box_next`, exit `runner`) has its stop trailed at
+  each of its bar closes by the history walk on the same bars (`trail`: break-even at +1 R, then 2.5 ATR behind the
+  best price), through the engine's own stop move, only ever tighter; its virtual twins BXT/BXF (`TwinRecord`, aux
+  `exploration_twins`) are scored on its fill's 1m path and never place an order.
+* XC15 on a netting host (arms 8.9/8.13): while KA15 is open its signal waits (`defer`) and enters at the next 15m
+  close KA15 is not open (`release_shifted`), recorded `shifted` with its decision close (excluded from pairing).
 * Retired arms (daily learning-ops review, goldbot/research/daily_review.py): an arm retired at its pre-registered
   H-61 stop (aux.db `exploration_arm_status`, this host's broker) is read once a minute (`refresh_retired`); from then
   on it queues no signal and its waiting signals are recorded blocked `arm_retired`. It stays configured, so its open
@@ -104,8 +110,10 @@ DD_WARN, DD_PAUSE = 0.06, 0.08      # ADR 0043 section 2: drawdown from the mark
 PI_RANDOM = 1.0                     # champion zero: the random branch takes every admissible candidate (mu = 1)
 SHARE_FLOOR, SHARE_CAP = 0.05, 0.30  # H-61's bounds on a strategy arm's share (L3 `bounded_shares`), fallback included
 SPEC_PATH = Path(__file__).parents[2] / "config" / "exploration_arms.yaml"   # the frozen ARM-SPEC (hash-checked)
-# a close by the arm's own barrier: anything else censors the label
-NATURAL = frozenset({HOLD_EXIT, "time_exit", "stop", "target", "engine_stop_close"})
+# a close by the arm's own barrier: anything else censors the label (`trail_close`: a runner arm's own trailed stop,
+# reached before the broker had it; no other arm trails)
+NATURAL = frozenset({HOLD_EXIT, "time_exit", "stop", "target", "engine_stop_close", "trail_close"})
+SHIFT_TF = "15m"                    # arms 8.9: a shifted XC15 enters "at the next 15m close" KA15 is not open
 
 
 def stale_s(tf: str) -> float:
@@ -244,6 +252,36 @@ class ExplorationRecord(FrozenRecord):
     pnl: float | None = None                # net, from the broker's deals (None: not readable)
     censored: bool | None = None            # closed by anything but the arm's own stop, target or hold
     fx_acct_per_usd: float | None = None    # the broker's account currency per USD at the order (None: not read)
+    # XC15 on a netting host (arms 8.9/8.13): an entry moved past an open KA15 keeps its rule's decision close here
+    # and `shifted` (logged, "excluded from pairing"); `signal_utc` is the close it entered at
+    decision_utc: UtcTimestamp | None = None
+    shifted: bool = False
+
+
+class TwinRecord(FrozenRecord):
+    """A BXR fill's virtual twin (H-80, exits-adaptive-targets-2026-10-26.md section 5: "BXT ... virtual (no orders),
+    on each BXR fill", "BXF ... virtual, on each BXR fill"; prereg: "computed on each BXR fill's 1m path from the real
+    fill price"). STRUCT (BXT, `target_r` the signal bar's next-box target) or FIXED (BXF, 2 R); stop 1 R unmoved;
+    the BXR row's hold. Scored on the engine's 1m mid bars by the history walk (`arm_rules_clock_box.twin_outcome`),
+    in aux.db `exploration_twins` (aux migration 20): never an order, never in the exploration ledger or its budget."""
+    twin_id: str                            # <the BXR order id>:<exit mode>
+    client_order_id: str                    # the BXR order it rides on
+    account_id: str
+    broker: str
+    arm_id: str                             # BXT<tf> / BXF<tf>
+    of_arm_id: str                          # BXR<tf>
+    exit_mode: Literal["struct", "fixed"]
+    tf: str
+    side: int
+    signal_utc: UtcTimestamp                # BXR's signal close: the path starts at its first minute
+    entry_price: float                      # BXR's fill price
+    risk_usd: float                         # 1 R: the rule's 1.5 ATR14 at the signal bar
+    target_r: float
+    hold_bars: int
+    exit_utc: UtcTimestamp | None = None
+    exit_price: float | None = None
+    exit_reason: str | None = None          # stop | target | time
+    gross_r: float | None = None            # side x (exit - entry) / R, before costs
 
 
 def _ns(ts: pd.Timestamp) -> int:
@@ -258,8 +296,15 @@ LEDGER: RecordRepo[ExplorationRecord] = RecordRepo(
         "exit_ns": lambda r: _ns(r.exit_utc) if r.exit_utc is not None else None})
 
 
+TWINS: RecordRepo[TwinRecord] = RecordRepo(
+    "exploration_twins", TwinRecord, key="twin_id", tolerant=True, columns={
+        "twin_id": lambda r: r.twin_id, "account_id": lambda r: r.account_id, "arm_id": lambda r: r.arm_id,
+        "client_order_id": lambda r: r.client_order_id, "closed": lambda r: int(r.exit_utc is not None),
+        "ts_ns": lambda r: _ns(r.signal_utc)})
+
+
 def ledger_db(state_dir: str) -> Database:
-    """aux.db, whose migration 16 holds the exploration ledger and lane L3's tables."""
+    """aux.db, whose migration 16 holds the exploration ledger and lane L3's tables (20: BXR's virtual twins)."""
     return Database.open(state_dir, "aux")
 
 
@@ -272,6 +317,9 @@ class Pending(FrozenRecord):
     stop_usd: float
     target_usd: float
     hold_bars: int
+    struct_r: float | None = None           # BXR: the STRUCT target (R) its virtual BXT twin takes
+    decision_utc: UtcTimestamp | None = None    # XC15 shifted past an open KA15: the rule's own decision close
+    shifted: bool = False
 
 
 class _ArmAgent:
@@ -318,6 +366,10 @@ class Exploration:
         self.retired_read: pd.Timestamp | None = None
         self.retired_ok = False                         # a read has succeeded since the start: entries may go out
         self.lost_seen: dict[int, pd.Timestamp] = {}     # lost record -> the day it was last journalled
+        # XC15 signals waiting for KA15 to close on a netting host (`shift_due`); in memory: one lost to a restart is
+        # never entered, and a shifted entry is excluded from pairing anyway
+        self.deferred: dict[str, Pending] = {}
+        self.netting: bool | None = None                 # the terminal's margin mode, read once when first needed
 
     @classmethod
     def start(cls, eng: Engine) -> Exploration | None:
@@ -423,11 +475,13 @@ def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.D
                               "error": type(exc).__name__})
         return
     last = c[c["idx"] == len(bars) - 1]
-    for side, risk, target_r, max_bars in zip(last["side"].to_numpy(dtype=int), last["risk_usd"].to_numpy(dtype=float),
-                                              last["target_r"].to_numpy(dtype=float),
-                                              last["max_bars"].to_numpy(dtype=int)):
+    struct = last["struct_r"].to_numpy(dtype=float) if "struct_r" in last.columns else [None] * len(last)
+    for side, risk, target_r, max_bars, struct_r in zip(
+            last["side"].to_numpy(dtype=int), last["risk_usd"].to_numpy(dtype=float),
+            last["target_r"].to_numpy(dtype=float), last["max_bars"].to_numpy(dtype=int), struct, strict=True):
         ex.queue.append(Pending(arm_id=arm.arm_id, side=int(side), bar_ts=through, stop_usd=float(risk),
-                                target_usd=float(target_r) * float(risk), hold_bars=int(max_bars) + 1))
+                                target_usd=float(target_r) * float(risk), hold_bars=int(max_bars) + 1,
+                                struct_r=None if struct_r is None else float(struct_r)))
 
 
 def step(eng: Engine, close_ts: pd.Timestamp) -> bool:
@@ -448,6 +502,7 @@ def step(eng: Engine, close_ts: pd.Timestamp) -> bool:
             eng.decisions.append({"ts": time.time(), "agent": None, "action": "exploration_clock_ahead",
                                   "bar": close_ts.isoformat(), "ahead_s": round(ahead, 3)})
         return False
+    release_shifted(eng, ex, close_ts)
     arms = [a for a in ex.arms.values() if a.tf not in SUB_15M]
     if not arms or eng.bars_1m.empty:
         return True
@@ -462,6 +517,61 @@ def step(eng: Engine, close_ts: pd.Timestamp) -> bool:
             for arm in group:
                 _signal(eng, ex, arm, got[0], got[1], close_ts)
     return True
+
+
+def _anchor_open(eng: Engine, ex: Exploration) -> bool:
+    """A KA15 (`clock_anchor`) position of this host is open, or its order is still being sent."""
+    from goldbot.engine import unconfirmed
+    ka = {PREFIX + a.arm_id for a in ex.arms.values() if a.family == "clock_anchor"}
+    return any(t.agent_id in ka for t in eng.open.values()) or any(
+        o.status in ("sending", unconfirmed.AMBIGUOUS) and o.agent_id in ka for o in eng._orders.values())
+
+
+def _nets(eng: Engine, ex: Exploration) -> bool:
+    """The terminal nets positions per symbol (MT5 margin mode netting or exchange), read once; an unreadable mode is
+    hedging (no shift), the only mode the engine starts on (`accounts.verify_terminal_account`)."""
+    if ex.netting is None:
+        try:
+            ex.netting = getattr(eng.broker.account(), "margin_mode", None) in ("netting", "exchange")
+        except Exception:
+            return False
+    return bool(ex.netting)
+
+
+def shift_due(eng: Engine, ex: Exploration, arm: Arm) -> bool:
+    """Arms 8.9: "If KA15 is open on a netting host, XC15 enters at the next 15m close and the shift is recorded"
+    (`arm_rules_clock_box.shift_control`). True for an XC15 (`clock_anchor_control`) signal on a netting host while a
+    KA15 position is open or being sent. On a hedging host never: both are held side by side."""
+    return arm.family == "clock_anchor_control" and _nets(eng, ex) and _anchor_open(eng, ex)
+
+
+def defer(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp) -> None:
+    """Hold an XC15 signal behind an open KA15 (journalled `exploration_shifted`; its candidate is recorded when it
+    enters): `release_shifted` queues it at the first 15m close KA15 is not open, as `shift_control` schedules it."""
+    if s in ex.queue:
+        ex.queue.remove(s)
+    ex.deferred[s.arm_id] = s.model_copy(update={"decision_utc": s.decision_utc or s.bar_ts, "shifted": True})
+    eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + s.arm_id, "action": "exploration_shifted",
+                          "decision": (s.decision_utc or s.bar_ts).isoformat()})
+
+
+def release_shifted(eng: Engine, ex: Exploration, close_ts: pd.Timestamp) -> None:
+    """At each 15m close: a deferred XC15 whose KA15 is no longer open is queued at this close (its entry), keeping
+    its decision close and `shifted` (8.13: "excluded from pairing. It is still logged"). An entry the common filters
+    refuse at the new close (rollover, Friday from 19:00 UTC) is dropped and journalled `exploration_shift_dropped`."""
+    import numpy as np
+
+    from goldbot.research.arm_rules import common_filter_ok
+    if not ex.deferred or int(close_ts.timestamp()) % tf_seconds(SHIFT_TF) or _anchor_open(eng, ex):
+        return
+    empty = np.zeros(0, dtype=np.int64)
+    for arm_id, s in list(ex.deferred.items()):
+        del ex.deferred[arm_id]
+        if arm_id not in ex.arms or not bool(common_filter_ok(pd.DatetimeIndex([close_ts]), empty, empty)[0]):
+            eng.decisions.append({"ts": close_ts.isoformat(), "agent": PREFIX + arm_id,
+                                  "action": "exploration_shift_dropped", "decision": str(s.decision_utc)})
+            continue
+        ex.queue.append(s.model_copy(update={"bar_ts": close_ts}))
 
 
 def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
@@ -813,6 +923,8 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
         return
     sent = 0
     order = _order(ex)
+    if any(ex.arms[s.arm_id].family == "clock_anchor_control" for s in order) and _nets(eng, ex):
+        order.sort(key=lambda s: ex.arms[s.arm_id].family == "clock_anchor_control")   # KA15 first: its fill shifts XC15
     for i, s in enumerate(order):
         if sent >= PER_PASS:
             break
@@ -822,6 +934,9 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
             _block(eng, ex, order[i:], now, "order_unsettled")
             return
         arm = ex.arms[s.arm_id]
+        if shift_due(eng, ex, arm):
+            defer(eng, ex, s, now)
+            continue
         res = _send(eng, ex, ps, arm, s, now, tick)
         if res == "cap":
             _block(eng, ex, order[i:], now, ps.why or "global_cap")   # quant Q1: recorded now, never left to go stale
@@ -1003,7 +1118,8 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
             requested_price=price, spread_usd=round(tick.ask - tick.bid, 6), latency_ms=round(latency_ms, 3),
             retcode=res.retcode, position_id=res.position_id if filled else None,
             fill_price=(res.price if res.price is not None else price) if filled else None,
-            stop_loss=round(at_stop, 2), cost=round(cost, 2), fx_acct_per_usd=terms.get("acct_per_usd"))
+            stop_loss=round(at_stop, 2), cost=round(cost, 2), fx_acct_per_usd=terms.get("acct_per_usd"),
+            decision_utc=s.decision_utc, shifted=s.shifted)
 
     pos = cost_probe._place(eng, ex.db, intent, _agent(eng, arm, s.hold_bars, target_d / stop_d), repo=LEDGER,
                             pid=pid, close_ts=now, entry=price, target=price + side * target_d, max_loss=room,
@@ -1014,6 +1130,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         return "refused"
     ex.open_loss[pos] = at_gate[0] if at_gate else loss
     ps.note(arm, ex.open_loss[pos])
+    open_twins(eng, ex, arm, s, pid, pos)
     return "sent"
 
 
@@ -1060,6 +1177,151 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
         log.exception("exploration exits failed; retried next pass")
 
 
+def _is_runner(arm: Arm) -> bool:
+    from goldbot.research.arm_rules_clock_box import is_runner
+    return is_runner(arm.spec)
+
+
+def signal_close(client_order_id: str | None) -> pd.Timestamp | None:
+    """The signal bar's close an exploration order id carries (`order_id`: ex<arm5>-<epoch10>-<h8>), None otherwise."""
+    parts = str(client_order_id or "").split("-")
+    if len(parts) != 3 or not parts[0].startswith(COMMENT) or not parts[1].isdigit():
+        return None
+    return pd.Timestamp(int(parts[1]), unit="s", tz="UTC")
+
+
+def _runner_terms(eng: Engine, ex: Exploration, tr: OpenTrade) -> tuple[pd.Timestamp, float, float] | None:
+    """(signal close, entry, R) of a BXR position, all persisted: the signal close from its order id (the MT5 comment
+    after a restart that lost the order rows), the fill price, R = the rule's stop distance it was sent with (its
+    pending_orders row's `atr_usd`, else the exploration ledger's). None when any is unknown (the stop stays)."""
+    signal = signal_close(tr.client_order_id)
+    if signal is None or tr.open_price is None:
+        return None
+    row = eng._orders.get(tr.client_order_id or "")
+    risk = row.atr_usd if row is not None else None
+    if risk is None:
+        with ex.db.connection() as conn:
+            rec = LEDGER.get(conn, tr.client_order_id)
+        risk = rec.atr_usd if rec is not None and rec.atr_usd > 0 else None
+    return (signal, float(tr.open_price), float(risk)) if risk is not None else None
+
+
+def trail(eng: Engine, close_ts: pd.Timestamp) -> None:
+    """At every base bar close (`Engine.on_bar_close`, beside the time exits and the exit policies; whatever the
+    entry state: halted, paused, entries off), the H-80 runner (prereg-exits-adaptive-2026-10-26.md: "break-even at
+    +1 R (stop to entry + side x $0.23), chandelier 2.5 ATR_tf behind the best exit-side price armed at +1 R, effective
+    from the next bar close"):
+
+    * each open BXR position whose arm's bar closes now: its stop is `arm_rules_clock_box.runner_stop_at` on the 1m
+      bars through this close from its signal close, at its fill price and R: the history walk on the same bars
+      (live == history). It goes out through the engine's own stop move (`Engine._tighten_stop`, the exit policies'
+      path: `modify`, a close at market when the price is already through it) only once armed and only when tighter
+      than the stop in force: a ratchet, never loosened, never removed. The stop in force persists with the trade
+      (and at the broker), the rest is recomputed from the stored bars, so a restart resumes the same trail;
+    * every open virtual twin (`TwinRecord`) whose timeframe closes now is scored (`score_twins`).
+
+    Never raises: a failure is logged and the server stops stand; retried at the next close."""
+    ex = eng.exploration
+    if ex is None:
+        return
+    complete = eng.bars_1m[eng.bars_1m["visible_at"] <= close_ts] if not eng.bars_1m.empty else eng.bars_1m
+    try:
+        _trail_runners(eng, ex, complete, close_ts)
+    except Exception:
+        log.exception("exploration runner trail failed; the server stops stand, retried at the next close")
+    try:
+        score_twins(eng, ex, complete, close_ts)
+    except Exception:
+        log.exception("exploration twins not scored; retried at the next close")
+
+
+def _trail_runners(eng: Engine, ex: Exploration, complete: pd.DataFrame, close_ts: pd.Timestamp) -> None:
+    from goldbot.research import arm_rules_clock_box as K
+    from goldbot.specialists.box_break_close import HOLD_BARS
+    mine = []
+    for pid, tr in eng.open.items():
+        arm = ex.arms.get(tr.agent_id.removeprefix(PREFIX)) if is_exploration(tr.agent_id) else None
+        if arm is not None and _is_runner(arm) and pid not in eng._close_due \
+                and not int(close_ts.timestamp()) % tf_seconds(arm.tf):
+            mine.append((pid, tr, arm))
+    if not mine or complete.empty:
+        return
+    positions = eng._read_positions("BXR trails run at the next bar close; the server stops stand")
+    if positions is None:
+        return
+    live = {p.position_id: p for p in positions}
+    for pid, tr, arm in mine:
+        pos, terms = live.get(pid), _runner_terms(eng, ex, tr)
+        if pos is None or terms is None:
+            continue
+        signal, entry, risk = terms
+        cand = K.runner_stop_at(K.mid_path(complete, signal),
+                                K.decision_closes(complete, arm.tf, signal, HOLD_BARS[arm.tf]), entry, tr.side, risk,
+                                risk / K.BOX_STOP_ATR)
+        if tr.side * (cand - (entry - tr.side * risk)) <= 1e-9:
+            continue                                    # not armed (below +1 R): the entry stop stands
+        new = round(cand, 2)
+        sl = new if tr.sl is None or tr.side * (new - tr.sl) > 1e-9 else tr.sl      # a ratchet: never looser
+        eng._tighten_stop(pid, tr, pos, sl)
+    eng._save_orders()
+
+
+def open_twins(eng: Engine, ex: Exploration, arm: Arm, s: Pending, cid: str, pid: int) -> None:
+    """A BXR fill's two virtual twins (`TwinRecord`), from its fill price: BXT at the signal's STRUCT target, BXF at
+    2 R. Rows only, never an order; best effort (a failed write is logged, the fill stands)."""
+    if not _is_runner(arm):
+        return
+    from goldbot.research import arm_rules_clock_box as K
+    tr = eng.open.get(pid)
+    if tr is None or tr.open_price is None:
+        return
+    targets = {"struct": s.struct_r if s.struct_r is not None else K.BOX_TARGET_R, "fixed": K.BOX_TARGET_R}
+    try:
+        with ex.db.write() as conn:
+            for mode, twin in K.twin_ids(arm.arm_id).items():
+                TWINS.insert_if_absent(conn, TwinRecord(
+                    twin_id=f"{cid}:{mode}", client_order_id=cid, account_id=eng.cfg.account_id, broker=ex.broker,
+                    arm_id=twin, of_arm_id=arm.arm_id, exit_mode=cast("Literal['struct', 'fixed']", mode), tf=arm.tf,
+                    side=s.side, signal_utc=s.bar_ts, entry_price=float(tr.open_price), risk_usd=s.stop_usd,
+                    target_r=float(targets[mode]), hold_bars=s.hold_bars))
+    except Exception as exc:
+        log.warning("exploration twins of %s not written (%s)", cid, type(exc).__name__)
+
+
+def score_twins(eng: Engine, ex: Exploration, complete: pd.DataFrame, close_ts: pd.Timestamp) -> None:
+    """Each open twin of this account whose timeframe closes now, on the engine's 1m bars from its signal close:
+    `twin_outcome` (the history walk: stop 1 R first in a minute, its target, the hold's last close) once a barrier is
+    reached, recorded with its gross R. Independent of BXR's own position (a twin runs to its own barrier)."""
+    from goldbot.research import arm_rules_clock_box as K
+    if complete.empty:
+        return
+    with ex.db.connection() as conn:
+        open_ = TWINS.select(conn, "account_id = ? AND closed = 0", (eng.cfg.account_id,))
+    done = []
+    for tw in open_:
+        if int(close_ts.timestamp()) % tf_seconds(tw.tf):
+            continue
+        w = K.twin_outcome(K.mid_path(complete, tw.signal_utc),
+                           K.decision_closes(complete, tw.tf, tw.signal_utc, tw.hold_bars), tw.hold_bars,
+                           entry=tw.entry_price, side=tw.side, risk=tw.risk_usd, target_r=tw.target_r)
+        if w is not None:
+            px = float(w["exit"])
+            done.append(tw.model_copy(update={"exit_utc": w["at"], "exit_price": px, "exit_reason": str(w["kind"]),
+                                              "gross_r": tw.side * (px - tw.entry_price) / tw.risk_usd}))
+    if done:
+        with ex.db.write() as conn:
+            for rec in done:
+                TWINS.upsert(conn, rec)
+
+
+def twins(state_dir: str, account_id: str | None = None) -> list[TwinRecord]:
+    """BXR's virtual twins (one account's when given), for the H-80 R1 read (BXR - BXF, BXT - BXF on the same fills)."""
+    with ledger_db(state_dir).connection() as conn:
+        if account_id is None:
+            return TWINS.select(conn)
+        return TWINS.select(conn, "account_id = ?", (account_id,))
+
+
 def sweep(eng: Engine, live: set[int]) -> None:
     """At every reconciliation (`reconcile_every_s` of tick time, besides the bar close): an exploration position the
     broker no longer lists whose exit deal is seen (its stop or target at the broker) is forgotten and its record
@@ -1095,8 +1357,12 @@ def record_close(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float | 
         info = None
     known = info or {}
     why = known.get("reason") or reason
-    censored = why not in NATURAL or (tr.initial_sl is not None and tr.sl != tr.initial_sl)
     ex = eng.exploration
+    own_arm = ex.arms.get(tr.agent_id.removeprefix(PREFIX)) if ex is not None else None
+    # a moved stop censors the label, except a runner arm's (H-80 BXR): its trailed stop is its own exit rule. The
+    # Friday cut never tightens one (`crosses_friday` refuses every entry whose hold reaches it)
+    trails = own_arm is not None and _is_runner(own_arm)
+    censored = why not in NATURAL or (not trails and tr.initial_sl is not None and tr.sl != tr.initial_sl)
     db = ex.db if ex is not None else ledger_db(eng.cfg.state_dir)
     cid = tr.client_order_id or f"position-{pid}"
     with db.write() as conn:

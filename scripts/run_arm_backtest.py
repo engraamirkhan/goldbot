@@ -24,11 +24,12 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from goldbot.data.release import read_bar_files, read_us_calendar_files  # noqa: E402
-from goldbot.data.resample import resample_bars  # noqa: E402
+from goldbot.data.resample import mid, resample_bars  # noqa: E402
 from goldbot.data.timeutil import utc_index  # noqa: E402
-from goldbot.labels import SwapSpec  # noqa: E402
+from goldbot.labels import SwapSpec, rollover_nights  # noqa: E402
 from goldbot.labels.triple_barrier import BarrierSpec, triple_barrier_next_open_1m  # noqa: E402
 from goldbot.research import arm_rules as R  # noqa: E402
+from goldbot.research import arm_rules_clock_box as K  # noqa: E402
 from goldbot.research import arms as A  # noqa: E402
 
 WARMUP_DAYS = 400          # feature history before the block (indicators, 1d tsmom lookbacks); entries stay in the block
@@ -73,6 +74,94 @@ def limit_open(labels: pd.DataFrame, max_open: int) -> pd.DataFrame:
     return lab.iloc[keep].reset_index(drop=True)
 
 
+def runner_labels(lab: pd.DataFrame, bars: pd.DataFrame, b1: pd.DataFrame, cands: pd.DataFrame,
+                  swap: SwapSpec) -> pd.DataFrame:
+    """H-80 BXR in history: the RUNNER exit replaces the fixed bracket. `walk_runner` (the function the engine trails
+    BXR's live stop with) on the 1m mid path from the entry minute, R = the candidate's 1.5 ATR, the time exit at the
+    hold's last decision close; swap from the entry minute to the exit. On the same entry and path its virtual twins
+    (prereg: "BXT/BXF are computed on each BXR fill's 1m path from the real fill price") exit at the STRUCT target
+    (`struct_r`) and at FIXED 2 R with the 1 R stop unmoved: `twin_<mode>_*` columns, never trades of their own."""
+    if lab.empty:
+        return lab
+    t1 = utc_index(b1["ts_utc"])
+    m = mid(b1)[["ts_utc", "open", "high", "low", "close"]]
+    close, bar_ts = utc_index(bars["visible_at"]), utc_index(bars["ts_utc"])
+    c = cands.drop_duplicates("idx")
+    risk = dict(zip(c["idx"].to_numpy(dtype=int).tolist(), c["risk_usd"].to_numpy(dtype=float).tolist(), strict=True))
+    hold_of = dict(zip(c["idx"].to_numpy(dtype=int).tolist(), (c["max_bars"].to_numpy(dtype=int) + 1).tolist(),
+                       strict=True))
+    struct = dict(zip(c["idx"].to_numpy(dtype=int).tolist(), c["struct_r"].to_numpy(dtype=float).tolist(), strict=True))
+    entry_ts = utc_index(lab["entry_ts"])
+    k0s = t1.searchsorted(entry_ts, side="left")
+    out = lab.copy()
+    cols: dict[str, list[Any]] = {}
+
+    def put(key: str, v: Any) -> None:
+        cols.setdefault(key, []).append(v)
+
+    for j, (i, side, entry) in enumerate(zip(lab["idx"].to_numpy(dtype=int).tolist(),
+                                              lab["side"].to_numpy(dtype=int).tolist(),
+                                              lab["entry"].to_numpy(dtype=float).tolist(), strict=True)):
+        r, hold = risk[i], hold_of[i]
+        closes = close[i + 1:i + 1 + hold]
+        k1 = int(t1.searchsorted(closes[-1], side="left")) + 1 if len(closes) else len(t1)
+        path = m.iloc[int(k0s[j]):k1].reset_index(drop=True)
+        t0 = entry_ts[j:j + 1]
+
+        def walk(target_r: float, path: pd.DataFrame = path, closes: pd.DatetimeIndex = closes, entry: float = entry,
+                 side: int = side, r: float = r, t0: pd.DatetimeIndex = t0) -> tuple[str, float, float, pd.Timestamp]:
+            w = K.walk_runner(path, closes, entry, side, r, r / K.BOX_STOP_ATR, target_r=target_r)
+            at = pd.Timestamp(w["at"]) if w["at"] is not None else t0[0]
+            nights = rollover_nights(t0, pd.DatetimeIndex([at]), swap.server_tz, swap.triple_weekday)[0]
+            move = side * (float(w["exit"]) - entry) + nights * float(swap.usd_per_oz(np.array([side]))[0])
+            return str(w["kind"]), float(w["exit"]), move, at
+
+        kind, px, move, at = walk(K.NO_TARGET_R)
+        t_exit = min(int(close.searchsorted(at, side="left")), i + hold, len(close) - 1)
+        put("barrier_hit", kind)
+        put("exit", px)
+        put("ret", move / entry)
+        put("t_exit", t_exit)
+        put("ts_exit", bar_ts[t_exit])
+        for mode, tgt in (("struct", struct[i]), ("fixed", K.BOX_TARGET_R)):
+            tk, tpx, tmove, _ = walk(tgt)
+            put(f"twin_{mode}_target_r", tgt)
+            put(f"twin_{mode}_hit", tk)
+            put(f"twin_{mode}_exit_px", tpx)
+            put(f"twin_{mode}_move_usd", tmove)
+    for key, v in cols.items():
+        out[key] = v
+    return out
+
+
+def signal_spread_extra(lab: pd.DataFrame, bars: pd.DataFrame, b1: pd.DataFrame, cands: pd.DataFrame,
+                        costs: A.ArmCosts) -> np.ndarray:
+    """KA15 stratum T (arms 8.13 condition 2): "T is charged at the spread measured at signal time on both legs: the
+    23:00 UTC entry and the 23:30 UTC exit". The bid-ask spread at the entry minute's open and at the close of the
+    minute ending at the time exit, less the p90 spread already inside the frozen round trip, never below 0 (the
+    frozen round trip is the floor). 0 for every other row and every arm without strata."""
+    extra = np.zeros(len(lab))
+    if "stratum" not in cands.columns or lab.empty:
+        return extra
+    c = cands.drop_duplicates("idx")
+    ids = c["idx"].to_numpy(dtype=int).tolist()
+    stratum = dict(zip(ids, c["stratum"].astype(str).tolist(), strict=True))
+    max_bars = dict(zip(ids, c["max_bars"].to_numpy(dtype=int).tolist(), strict=True))
+    t1 = utc_index(b1["ts_utc"])
+    close = utc_index(bars["visible_at"])
+    k_ins = t1.searchsorted(utc_index(lab["entry_ts"]), side="left")
+    for j, i in enumerate(lab["idx"].to_numpy(dtype=int).tolist()):
+        if stratum[i] != "T":
+            continue
+        k_in = int(k_ins[j])
+        exit_close = close[min(i + 1 + max_bars[i], len(close) - 1)]
+        k_out = max(int(t1.searchsorted(exit_close, side="left")) - 1, k_in)
+        s_in = float(b1["ask_open"].iloc[k_in] - b1["bid_open"].iloc[k_in])
+        s_out = float(b1["ask_close"].iloc[k_out] - b1["bid_close"].iloc[k_out])
+        extra[j] = max(0.0, s_in + s_out - costs.spread_both_legs_usd)
+    return extra
+
+
 def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp, costs: A.ArmCosts,
             blackout: tuple[np.ndarray, np.ndarray] | None = None) -> tuple[pd.DataFrame, dict[str, Any]]:
     A.assert_no_holdout_rows(b1)
@@ -93,7 +182,11 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
         risk = pd.Series(risk_arr, index=bars.index)
         sig = cands.assign(target_atr=cands["target_r"])[["idx", "side", "max_bars", "target_atr"]]
         spec = BarrierSpec(target_atr=1.0, stop_atr=1.0, max_bars=1, name=arm.id)
-        lab = triple_barrier_next_open_1m(mid_priced(bars), mid_priced(b1), sig, spec, risk, swap=SwapSpec.shipped())
+        swap = SwapSpec.shipped()
+        lab = triple_barrier_next_open_1m(mid_priced(bars), mid_priced(b1), sig, spec, risk, swap=swap)
+        runner = K.is_runner(arm)
+        if runner:
+            lab = runner_labels(lab, bars, b1, cands, swap)
         lab = limit_open(lab, arm.max_open)
         if len(lab):
             idx = lab["idx"].to_numpy().astype(int)
@@ -101,19 +194,48 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
             r_usd = risk.to_numpy()[idx]
             move = lab["ret"].to_numpy(dtype=float) * entry
             stop = (lab["barrier_hit"] == "stop").to_numpy()
-            os_hi = max(costs.overshoot_scenarios_usd)
+            extra = signal_spread_extra(lab, bars, b1, cands, costs)
+            os_lo, os_hi = min(costs.overshoot_scenarios_usd), max(costs.overshoot_scenarios_usd)
             trades = pd.DataFrame({
                 "ts_utc": close[idx], "entry_ts": utc_index(lab["entry_ts"]), "ts_exit": utc_index(lab["ts_exit"]), "side": lab["side"].to_numpy(),
                 "entry": entry, "risk_usd": r_usd, "move_usd": move, "gross_r": move / r_usd,
-                "net_r": A.net_r(move, r_usd, stop, costs, min(costs.overshoot_scenarios_usd)),
-                "net_r_os": A.net_r(move, r_usd, stop, costs, os_hi), "barrier_hit": lab["barrier_hit"].to_numpy()})
+                "net_r": A.net_r(move, r_usd, stop, costs, os_lo, extra),
+                "net_r_os": A.net_r(move, r_usd, stop, costs, os_hi, extra), "barrier_hit": lab["barrier_hit"].to_numpy(),
+                "exit_px": lab["exit"].to_numpy(dtype=float)})
+            if "stratum" in cands.columns:
+                trades["stratum"] = cands.set_index("idx")["stratum"].reindex(idx).to_numpy()
+                trades["spread_extra_usd"] = extra
+            if runner:
+                for mode in ("struct", "fixed"):
+                    tmove = lab[f"twin_{mode}_move_usd"].to_numpy(dtype=float)
+                    tstop = (lab[f"twin_{mode}_hit"] == "stop").to_numpy()
+                    trades[f"twin_{mode}_target_r"] = lab[f"twin_{mode}_target_r"].to_numpy(dtype=float)
+                    trades[f"twin_{mode}_hit"] = lab[f"twin_{mode}_hit"].to_numpy()
+                    trades[f"twin_{mode}_exit_px"] = lab[f"twin_{mode}_exit_px"].to_numpy(dtype=float)
+                    trades[f"twin_{mode}_gross_r"] = tmove / r_usd
+                    trades[f"twin_{mode}_net_r"] = A.net_r(tmove, r_usd, tstop, costs, os_lo)
+                    trades[f"twin_{mode}_net_r_os"] = A.net_r(tmove, r_usd, tstop, costs, os_hi)
     A.assert_no_holdout_rows(trades, "ts_exit")
     n = len(trades)
 
-    def stat(col: str) -> dict[str, Any]:
-        return {"mean": float(trades[col].mean()) if n else None, "sum": float(trades[col].sum()) if n else 0.0,
-                "win_rate": float((trades[col] > 0).mean()) if n else None}
+    def stat(col: str, rows: pd.DataFrame | None = None) -> dict[str, Any]:
+        t = trades if rows is None else rows
+        k = len(t)
+        return {"mean": float(t[col].mean()) if k else None, "sum": float(t[col].sum()) if k else 0.0,
+                "win_rate": float((t[col] > 0).mean()) if k else None}
+    extra_summary: dict[str, Any] = {}
+    if K.is_runner(arm) and n:
+        # H-80: the paired twins on BXR's own entries (prereg R1 reads BXR - BXF and BXT - BXF)
+        extra_summary["twins"] = {
+            tid: {"n_trades": n, "gross_r": stat(f"twin_{mode}_gross_r"), "net_r_overshoot_0": stat(f"twin_{mode}_net_r"),
+                  "net_r_overshoot_0.70": stat(f"twin_{mode}_net_r_os")}
+            for mode, tid in K.twin_ids(arm.id).items()}
+    if "stratum" in trades.columns and n:
+        # arms 8.13 condition 3: the family net without T and each stratum's share of fills (descriptive, no decision)
+        extra_summary["strata"] = {str(k): float(v) for k, v in trades["stratum"].value_counts(normalize=True).items()}
+        extra_summary["net_r_without_T"] = stat("net_r", trades[trades["stratum"] != "T"])
     summary = {"arm": arm.id, "config_hash": arm.config_hash, "block": f"{start.date()}:{end.date()}", "n_trades": n,
+               **extra_summary,
                "n_candidates_in_data": n_cands, "gross_r": stat("gross_r"),
                "net_r_overshoot_0": stat("net_r"), "net_r_overshoot_0.70": stat("net_r_os"),
                "round_trip_usd": costs.round_trip_usd, "overshoot_scenarios_usd": list(costs.overshoot_scenarios_usd),

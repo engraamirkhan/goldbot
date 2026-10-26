@@ -521,6 +521,22 @@ AUX: tuple[Migration, ...] = (
         """CREATE TRIGGER IF NOT EXISTS evidence_reloads_no_delete BEFORE DELETE ON evidence_reloads
            BEGIN SELECT RAISE(ABORT, 'evidence_reloads is append-only'); END""",
     )),
+    # additive (H-80, docs/research/exits-adaptive-targets-2026-10-26.md section 5; goldbot/engine/exploration.py
+    # `TwinRecord`): BXR's virtual twins BXT/BXF, two rows per BXR fill from its fill price, scored on the engine's 1m
+    # bars to their own barrier. Never orders: kept out of `exploration_trades`, so no budget, cap or evidence reader
+    # of the real ledger ever counts them. A release without it never reads the table.
+    Migration(version=20, name="exploration_twins", additive=True, statements=(
+        f"""CREATE TABLE IF NOT EXISTS exploration_twins (
+               twin_id TEXT PRIMARY KEY,
+               account_id TEXT NOT NULL,
+               arm_id TEXT NOT NULL,
+               client_order_id TEXT NOT NULL,
+               closed INTEGER NOT NULL,
+               ts_ns INTEGER NOT NULL,
+               {_BODY}
+           ) STRICT""",
+        "CREATE INDEX IF NOT EXISTS exploration_twins_open ON exploration_twins(account_id, closed)",
+    )),
 )
 
 CORE: tuple[Migration, ...] = (

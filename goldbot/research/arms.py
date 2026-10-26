@@ -88,20 +88,25 @@ class ArmCosts(FrozenRecord):
     ($0.70 mean, n = 14, unverified: S0R measures it) is reported both ways."""
     round_trip_usd: float = Field(ge=0)
     overshoot_scenarios_usd: tuple[float, ...]
+    # the spread part of `round_trip_usd` (the cost model's p90 spread, both legs; arm_costs.yaml: "p90 spread both legs
+    # 0.12"): a read that charges a measured spread instead (KA15 stratum T, arms 8.13 condition 2) adds what the
+    # measured spread exceeds it by, so it never charges less than the frozen round trip
+    spread_both_legs_usd: float = Field(0.12, ge=0)
 
 
 def load_costs(path: Path) -> ArmCosts:
     raw = yaml.safe_load(Path(path).read_text())
+    extra = {"spread_both_legs_usd": float(raw["spread_both_legs_usd"])} if "spread_both_legs_usd" in raw else {}
     return ArmCosts(round_trip_usd=float(raw["round_trip_usd"]),
-                    overshoot_scenarios_usd=tuple(float(x) for x in raw["overshoot_scenarios_usd"]))
+                    overshoot_scenarios_usd=tuple(float(x) for x in raw["overshoot_scenarios_usd"]), **extra)
 
 
 def net_r(move_usd: np.ndarray, risk_usd: np.ndarray, stop_exit: np.ndarray, costs: ArmCosts,
-          overshoot_usd: float) -> np.ndarray:
+          overshoot_usd: float, extra_usd: np.ndarray | float = 0.0) -> np.ndarray:
     """Net result in R: the signed move per oz (swap included) less the round trip, less `overshoot_usd` on a stop exit,
-    over the candidate's own stop distance."""
+    less `extra_usd` (a measured spread above the frozen one), over the candidate's own stop distance."""
     pnl = np.asarray(move_usd, dtype=float) - costs.round_trip_usd - overshoot_usd * np.asarray(stop_exit, dtype=float)
-    return pnl / np.asarray(risk_usd, dtype=float)
+    return (pnl - np.asarray(extra_usd, dtype=float)) / np.asarray(risk_usd, dtype=float)
 
 
 # ---------------------------------------------------------------- arms
