@@ -310,12 +310,29 @@ def sync_release_us_calendar(*, raw_dir: Path = Path("raw-calendar"), token: str
     return read_us_calendar_files(raw_dir)
 
 
+# ADR 0048 (owner decision 2026-10-26): Dukascopy bars are no longer published while this repository is public. The
+# owner's Mac keeps the yearly files in its gitignored raw/ and scripts/local_bars.sh pushes them into this folder
+# under the brain's data root; when it holds any yearly file it is the bar source and the frozen data-v1 is not read.
+LOCAL_BARS_INBOX = Path("_inbox") / "bars"
+
+
+def local_bar_files(store: Store) -> list[Path]:
+    """The yearly 1m files pushed into the store's inbox (complete files only: the push writes `.<name>.part` and
+    renames, so a half-copied file never matches BAR_FILE_GLOB)."""
+    inbox = store.root / LOCAL_BARS_INBOX
+    return sorted(inbox.glob(BAR_FILE_GLOB)) if inbox.is_dir() else []
+
+
 def sync_release(store: Store, *, token: str | None = None) -> dict[str, int]:
-    """Bars from data-v1 and macro series from macro-v1 (the Saturday retrain's refresh). A macro failure is logged
-    and leaves the bar refresh standing."""
-    # downloads go inside the store, never the working directory: the services run under ProtectSystem=strict with only
-    # state/, logs/, data/ and models/ writable, so a cwd-relative raw/ fails the Saturday refresh ("Read-only file system")
-    counts = sync_release_bars(store, token=token, raw_dir=store.root / "_raw" / "bars")
+    """Bars and macro series for the Saturday retrain's refresh. Bars come from the local inbox when it holds files
+    (ADR 0048), else from release data-v1; macro from macro-v1. A macro failure is logged and leaves the bars standing."""
+    local = local_bar_files(store)
+    if local:
+        counts = load_into_store(store, local)
+    else:
+        # downloads go inside the store, never the working directory: the services run under ProtectSystem=strict with
+        # only state/, logs/, data/ and models/ writable, so a cwd-relative raw/ fails the refresh ("Read-only file system")
+        counts = sync_release_bars(store, token=token, raw_dir=store.root / "_raw" / "bars")
     try:
         counts["macro"] = sync_release_macro(store, token=token, raw_dir=store.root / "_raw" / "macro")
     except Exception as exc:     # macro is optional input; bars are what the retrain needs

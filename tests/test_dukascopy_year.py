@@ -334,15 +334,22 @@ def test_workflow_has_a_months_input_and_never_interpolates_expressions_into_run
     assert '--months "$MONTHS"' in build["run"]
 
 
-def _run_plan(tmp_path, **env: str) -> tuple[int, dict[str, str], str]:
+def _run_plan(tmp_path, private: str = "true", **env: str) -> tuple[int, dict[str, str], str]:
+    """`private` is what a stubbed `gh api repos/...` prints for the repository's visibility ("fail": gh errors)."""
     step = _step("plan", step_id="years")
     out = tmp_path / "gh_output"
     out.write_text("")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    gh = bin_dir / "gh"
+    gh.write_text("#!/bin/sh\nexit 1\n" if private == "fail" else f"#!/bin/sh\necho {private}\n")
+    gh.chmod(0o755)
     base = {"EVENT_NAME": "workflow_dispatch", "FROM_YEAR": "2010", "TO_YEAR": "2026", "MONTHS": "",
             "FULL_REFRESH": "false", "RETRY_FLAGGED": "false"}
     assert set(base) <= set(step["env"])
     r = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=ROOT, capture_output=True, text=True, check=False,
-                       env={"PATH": os.environ["PATH"], "GITHUB_OUTPUT": str(out), **base, **env})
+                       env={"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "GITHUB_OUTPUT": str(out),
+                            "GITHUB_REPOSITORY": "o/r", **base, **env})
     lines = dict(line.split("=", 1) for line in out.read_text().splitlines() if "=" in line)
     return r.returncode, lines, r.stdout + r.stderr
 
@@ -350,13 +357,33 @@ def _run_plan(tmp_path, **env: str) -> tuple[int, dict[str, str], str]:
 def test_plan_step_turns_a_month_list_into_years_and_a_normalised_list(tmp_path):
     rc, got, log = _run_plan(tmp_path, MONTHS="2026-06,2024-01,2024-06")
     assert rc == 0, log
-    assert got == {"symbol": "xauusd", "years": "[2024, 2026]", "months": "2024-01,2024-06,2026-06"}
+    assert got == {"symbol": "xauusd", "enabled": "true", "years": "[2024, 2026]", "months": "2024-01,2024-06,2026-06"}
 
 
 def test_plan_step_without_months_keeps_the_year_range(tmp_path):
     rc, got, log = _run_plan(tmp_path, FROM_YEAR="2024", TO_YEAR="2025")
     assert rc == 0, log
-    assert got == {"symbol": "xauusd", "years": "[2024, 2025]", "months": ""}
+    assert got == {"symbol": "xauusd", "enabled": "true", "years": "[2024, 2025]", "months": ""}
+
+
+@pytest.mark.parametrize("private", ["false", "fail", ""])
+def test_plan_step_refuses_gold_while_the_repository_is_public(tmp_path, private):
+    """ADR 0048 (owner 2026-10-26): no Dukascopy bars on a public repository; an API error counts as public."""
+    rc, got, log = _run_plan(tmp_path, private=private)
+    assert rc != 0 and "years" not in got and "ADR 0048" in log
+
+
+def test_scheduled_plan_on_a_public_repository_builds_nothing_and_does_not_fail(tmp_path):
+    rc, got, log = _run_plan(tmp_path, private="false", EVENT_NAME="schedule")
+    assert rc == 0, log
+    assert got["enabled"] == "false" and got["years"] == "[]"
+    assert _wf()["jobs"]["build-year"]["if"] == "needs.plan.outputs.enabled == 'true'"
+
+
+def test_publish_step_refuses_a_public_repository_again():
+    run = _step("build-year", name_prefix="publish")["run"]
+    guard, upload = run.index('--jq .private'), run.index("gh release upload data-v1")
+    assert guard < upload
 
 
 @pytest.mark.parametrize("env", [

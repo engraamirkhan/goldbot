@@ -1,9 +1,14 @@
 name: data-dukascopy
 # Downloads XAUUSD ticks from the free Dukascopy archive on GitHub's runners (both Claude sandboxes are
 # blocked from the datafeed host), builds 1m bars with goldbot's own resampler month by month, and publishes
-# one Parquet per year as assets on the rolling release tag `data-v1`. Research jobs and the VPS fetch from there.
+# one Parquet per year as assets on the rolling release tag `data-v1`.
 # Licence (Dukascopy terms of use, read 2026-10-26): downloads are licensed for personal, non-commercial use and may not
-# be redistributed. Gold on the public release data-v1 predates that check and is escalated (ADR 0048); any
+# be redistributed. Owner decision 2026-10-26 (ADR 0048): while THIS repository is public, gold is not built or
+# published here at all (release assets and run artifacts of a public repo are readable by anyone); the owner's Mac
+# builds and keeps the local copy (scripts/local_bars.sh: gitignored raw/, pushed to the brain's data/_inbox/bars).
+# The plan job checks the repository's visibility through the API (fail closed: unknown = public) and runs gold only
+# once the repository is private, so publishing to data-v1 resumes by itself then. The existing data-v1 assets are
+# frozen, not deleted (deleting them is the owner's call). Any
 # other instrument (input `symbol`, e.g. xagusd) is built only into a PRIVATE repository named by the repository
 # variable DATA_PRIVATE_REPO (release dukascopy-v1; secret DATA_PRIVATE_TOKEN, contents:write on that repo only), and the
 # plan job refuses it while that variable is unset. Cost: Actions minutes are free on this public repo; silver is about
@@ -16,7 +21,7 @@ on:
       full_refresh: { description: "download every month again (published bars stay as fallback). Costs hours of runner time per year of data: on the free tier this can use the whole month's 2,000 minutes", type: boolean, default: false }
       retry_flagged: { description: "also re-download closed months flagged imputed/partial (about 80 runner-minutes per month; off for the Saturday run, G5)", type: boolean, default: false }
       months: { description: "targeted refetch (G1/G2): comma-separated YYYY-MM, e.g. 2024-01,2024-06. Downloads exactly these months again (flagged or not) and keeps every other month as published; replaces from_year/to_year; leave full_refresh and retry_flagged off. Max 24", default: "" }
-      symbol: { description: "instrument: xauusd publishes to data-v1; xagusd only to the private repo in vars.DATA_PRIVATE_REPO (licence)", type: choice, options: [xauusd, xagusd], default: xauusd }
+      symbol: { description: "instrument: xauusd publishes to data-v1 only once this repository is private (ADR 0048); xagusd only to the private repo in vars.DATA_PRIVATE_REPO (licence)", type: choice, options: [xauusd, xagusd], default: xauusd }
   schedule:
     - cron: "17 3 * * 6"   # Saturdays 03:17 UTC: refresh the current year
 # Least privilege: the token has no scopes by default; only build-year may upload release assets and write issues.
@@ -31,6 +36,7 @@ jobs:
     permissions:
       contents: read    # sparse checkout of the month-list parser
     outputs:
+      enabled: ${{ steps.years.outputs.enabled }}   # false: nothing may be built (gold while the repository is public)
       years: ${{ steps.years.outputs.years }}
       months: ${{ steps.years.outputs.months }}   # validated and normalised; build-year never sees the raw input
       symbol: ${{ steps.years.outputs.symbol }}   # validated: xauusd, or xagusd with a private destination
@@ -42,6 +48,7 @@ jobs:
           sparse-checkout-cone-mode: false
       - id: years
         env:
+          GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           FROM_YEAR: ${{ inputs.from_year }}
           TO_YEAR: ${{ inputs.to_year }}
@@ -53,8 +60,17 @@ jobs:
         run: |
           set -euo pipefail
           symbol="${SYMBOL:-xauusd}"
+          # fail closed: an API error counts as public, so nothing is published by mistake
+          private=$(gh api "repos/$GITHUB_REPOSITORY" --jq .private 2>/dev/null || echo unknown)
           case "$symbol" in
-            xauusd) ;;
+            xauusd)
+              if [ "$private" != "true" ]; then
+                msg="gold is not built while this repository is public (ADR 0048, Dukascopy licence: no redistribution); the owner's Mac keeps the local copy (scripts/local_bars.sh)"
+                if [ "$EVENT_NAME" = "schedule" ]; then
+                  echo "::notice::$msg"; echo "enabled=false" >> "$GITHUB_OUTPUT"; echo "years=[]" >> "$GITHUB_OUTPUT"; exit 0
+                fi
+                echo "::error::$msg"; exit 1
+              fi ;;
             xagusd)
               if [ -z "${PRIVATE_REPO:-}" ]; then
                 echo "::error::$symbol is built only into a private repository (Dukascopy licence: no redistribution); set the repository variable DATA_PRIVATE_REPO and the secret DATA_PRIVATE_TOKEN first"
@@ -63,6 +79,7 @@ jobs:
             *) echo "::error::unknown symbol"; exit 1 ;;
           esac
           echo "symbol=$symbol" >> "$GITHUB_OUTPUT"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
           if [ "$EVENT_NAME" = "schedule" ]; then
             echo "years=[$(date -u +%Y)]" >> "$GITHUB_OUTPUT"
             echo "months=" >> "$GITHUB_OUTPUT"
@@ -82,6 +99,7 @@ jobs:
           fi
   build-year:
     needs: plan
+    if: needs.plan.outputs.enabled == 'true'
     runs-on: ubuntu-latest
     # the Saturday run only refreshes the open month and short months (~30-45 min); a hung run stops at 120 min
     # and publishes nothing, so the published file is never touched by it
@@ -166,6 +184,10 @@ jobs:
               sleep $((i * 15))
             done
             exit 1
+          fi
+          # defence in depth (ADR 0048): never a public asset, even if the plan job's check is bypassed
+          if [ "$(gh api "repos/$GITHUB_REPOSITORY" --jq .private 2>/dev/null || echo unknown)" != "true" ]; then
+            echo "::error::this repository is public: refusing to publish Dukascopy bars to data-v1 (ADR 0048)"; exit 1
           fi
           # parallel matrix jobs race on create/upload: retry with backoff
           for i in 1 2 3 4 5; do
