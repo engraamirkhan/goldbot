@@ -369,11 +369,18 @@ def specialist(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     return specialist_rule(arm, ctx)
 
 
+def channel(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
+    """ARM-SPEC section 8 (wave 2): KSQ, DON, C30 and C30C (`goldbot.research.arm_rules_channels`)."""
+    from goldbot.research.arm_rules_channels import RULES
+    return RULES[arm.rule](arm, ctx)
+
+
 RULE_FUNCS: dict[str, Callable[[Arm, RuleContext], pd.DataFrame]] = {
     "random_bracket": random_bracket, "session_vwap_fade": session_vwap_fade,
     "opening_range_break": opening_range_break, "sweep_absorb": sweep_absorb_rule,
     "box_break_close": box_break_close_rule, "ema_pullback": ema_pullback, "tsmom": tsmom_rule,
     "specialist": specialist,
+    **dict.fromkeys(("squeeze_release", "donchian_break", "low30_touch", "low30_control"), channel),
 }
 
 
