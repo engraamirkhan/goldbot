@@ -54,3 +54,36 @@ def test_the_incremental_resampler_carries_late_visibility_too(m1):
     again = late.copy()
     again.loc[100, "visible_at"] = LATE
     pd.testing.assert_frame_equal(inc(again), resample_bars(again, "1h"))
+
+
+# ------------------------------------------------------------------------------- research decides at visible bars only
+@pytest.mark.parametrize("tf", ["15m", "1h", "4h", "1d"])
+def test_drop_late_removes_only_bars_holding_a_late_visible_minute(m1, tf):
+    late = m1.copy()
+    late.loc[700, "visible_at"] = LATE
+    kept = resample_bars(late, tf, drop_late=True)
+    full = resample_bars(late, tf)
+    assert len(kept) == len(full) - 1 and LATE not in set(kept["visible_at"])
+    pd.testing.assert_frame_equal(resample_bars(m1, tf, drop_late=True), resample_bars(m1, tf))   # normal data
+
+
+def test_the_survival_screen_decides_only_on_bars_visible_at_their_close(m1, monkeypatch):
+    """crossfeed._rule_on (D23): a decision bar holding a corrected minute is not a decision point."""
+    import types
+
+    from goldbot.data import crossfeed as cf
+    from goldbot.research import pipeline, screen
+    seen: list[pd.DataFrame] = []
+
+    def prepare(spec, b_dec, context, extra_cost_usd=0.0):
+        seen.append(b_dec)
+        return types.SimpleNamespace(gross=pd.DataFrame(), labels=pd.DataFrame())
+    monkeypatch.setattr(pipeline, "prepare", prepare)
+    monkeypatch.setattr(pipeline, "rule_only", lambda g, n: {})
+    monkeypatch.setattr(screen, "screen_verdict", lambda r: {"n": 0, "gross_mean_r": 0.0, "gross_t": 0.0,
+                                                             "passed": False})
+    late = m1.copy()
+    late.loc[700, "visible_at"] = LATE
+    seg = [(m1["ts_utc"].iloc[0], m1["ts_utc"].iloc[-1] + pd.Timedelta(minutes=1))]
+    cf._rule_on(types.SimpleNamespace(timeframe="1h"), late, seg, 0.0)
+    assert len(seen[0]) == len(resample_bars(late, "1h")) - 1 and LATE not in set(seen[0]["visible_at"])

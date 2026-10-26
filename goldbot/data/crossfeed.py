@@ -481,7 +481,7 @@ def _rule_on(spec: Any, b1: pd.DataFrame, segments: list[tuple[pd.Timestamp, pd.
         if len(part) < 2:
             continue
         tf = spec.timeframe
-        b_dec = resample_bars(part, tf)
+        b_dec = resample_bars(part, tf, drop_late=True)   # decide only where the bar was visible at its close
         context = {TF_LABEL[x]: resample_bars(part, x) for x in context_tfs(tf)}
         p = prepare(spec, b_dec, context, extra_cost_usd=extra_cost_usd)
         gross += [p.gross] if not p.gross.empty else []
