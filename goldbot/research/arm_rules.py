@@ -31,6 +31,9 @@ class RuleContext:
     b1: pd.DataFrame              # the 1m bars, store schema
     blackout_lo: np.ndarray       # tier-1 blackout windows [lo, hi), epoch ns
     blackout_hi: np.ndarray
+    # point-in-time tables a `specialist` arm's family reads, as research.pipeline.prepare's `ctx` (e.g. the engine's
+    # carried smc replica state, ctx["smc_replica_state"]); None: none (research builds from the series start)
+    spec_ctx: dict[str, Any] | None = None
 
     @property
     def mid(self) -> pd.DataFrame:
@@ -358,10 +361,19 @@ def tsmom_rule(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     return out
 
 
+# ---------------------------------------------------------------- wave 1 (arms expansion 2026-10-26): any specialist
+def specialist(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
+    """Arms expansion 2026-10-26, section 3: the named specialist's own candidates and barrier form
+    (`goldbot.research.arm_rules_specialist`)."""
+    from goldbot.research.arm_rules_specialist import specialist_rule
+    return specialist_rule(arm, ctx)
+
+
 RULE_FUNCS: dict[str, Callable[[Arm, RuleContext], pd.DataFrame]] = {
     "random_bracket": random_bracket, "session_vwap_fade": session_vwap_fade,
     "opening_range_break": opening_range_break, "sweep_absorb": sweep_absorb_rule,
     "box_break_close": box_break_close_rule, "ema_pullback": ema_pullback, "tsmom": tsmom_rule,
+    "specialist": specialist,
 }
 
 
