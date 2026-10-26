@@ -2,6 +2,7 @@
 # research/high-volume-learning), one row per arm id. config_hash = sha256 of id, rule, timeframe, params, max_open
 # (goldbot.research.arms.arm_hash): an edited arm fails to load; amend under a NEW id. status blocked: no history run
 # until the note's condition is met. Regenerate hashes only for a new arm.
+# twin_of: a broker twin (same rule body, own id and hash, no history run; goldbot.research.arms.load_arms).
 arms:
   - { id: S0, rule: random_bracket, timeframe: 1m, params: {"minutes": [0, 10, 20, 30, 40, 50], "window_utc": ["07:00", "19:50"], "stop_usd": 3.0, "target_r": 1.0, "hold_bars": 30}, max_open: 3, status: run, config_hash: 9c6a7f3d4e90d8af }
   - { id: S0R, rule: random_bracket, timeframe: 1m, params: {"minutes": [5, 35], "window_utc": ["07:05", "19:35"], "stop_usd": 3.0, "target_r": 1.0, "hold_bars": 30}, max_open: 1, status: run, note: "history = S0's geometry on its own seed; the resting-stop overshoot is a LIVE measurement (ARM-SPEC 4), history has no R read of it", config_hash: 0919febfbefef8d5 }
@@ -29,3 +30,18 @@ arms:
   - { id: W1B, rule: tsmom, timeframe: 1d, params: {"config": {}, "max_stop_usd": 146.3}, max_open: 1, status: run, config_hash: 418fa0f7e2f045be }
   - { id: W2, rule: box_break_close, timeframe: 4h, params: {"target_r": 2.0, "hold_bars": 24}, max_open: 1, status: run, config_hash: 12af812cef703e44 }
   - { id: W3, rule: blocked, timeframe: 1d, params: {}, max_open: 1, status: blocked, note: "macro-researcher's frozen rule not yet committed to ARM-SPEC by amendment", config_hash: 7798a58ff785cf2d }
+  # Broker twins (ADR 0043 broker amendment; prereg-2026-10-25-high-volume.md amendment 2, 2026-10-26): vantage-demo's
+  # copies of the intraday and swing arms. Each keeps its twin_of arm's rule body (checked at load) under its own id
+  # and hash: a new trial per (broker, arm), its own fills, -R stops and single read, flat prior, no history run. The
+  # random controls draw their sides from their own id (arm_rules.hash_side), so VI0/VW0 are independent nulls.
+  - { id: VI0, twin_of: I0, rule: random_bracket, timeframe: 15m, params: {"minutes": [0], "window_utc": ["07:00", "19:00"], "stop_atr": 1.5, "target_r": 2.0, "hold_bars": 96}, max_open: 3, status: run, config_hash: 0326b08b3d61cdf9 }
+  - { id: VI2A, twin_of: I2A, rule: box_break_close, timeframe: 15m, params: {"force_mfi": true, "target_r": 2.0, "hold_bars": 96}, max_open: 1, status: run, config_hash: ab76f12c739f3b24 }
+  - { id: VI2B, twin_of: I2B, rule: box_break_close, timeframe: 15m, params: {"stop_atr": 1.0, "target_r": 2.0, "hold_bars": 96}, max_open: 1, status: run, config_hash: 2158ff06e2f4a7db }
+  - { id: VMB15, twin_of: MB15, rule: box_break_close, timeframe: 15m, params: {"target_r": 2.0, "hold_bars": 96}, max_open: 1, status: run, config_hash: 2d858ec6ce618921 }
+  - { id: VMB30, twin_of: MB30, rule: box_break_close, timeframe: 30m, params: {"target_r": 2.0, "hold_bars": 72}, max_open: 1, status: run, config_hash: 0cf8e3ec6e2f868f }
+  - { id: VMB1H, twin_of: MB1H, rule: box_break_close, timeframe: 1h, params: {"target_r": 2.0, "hold_bars": 48}, max_open: 1, status: run, config_hash: 58a694c3c8cb49f9 }
+  - { id: VMS15, twin_of: MSA15, rule: sweep_absorb, timeframe: 15m, params: {"target_r": 2.0, "hold_bars": 16}, max_open: 1, status: run, config_hash: 365465e3a182b08f }
+  - { id: VW0, twin_of: W0, rule: random_bracket, timeframe: 4h, params: {"minutes": [0], "window_utc": ["12:00", "12:00"], "stop_atr": 1.5, "target_r": 2.0, "hold_bars": 24}, max_open: 1, status: run, config_hash: bf25bfcffc8c80d9 }
+  - { id: VW1A, twin_of: W1A, rule: tsmom, timeframe: 4h, params: {"config": {"max_bars": 12}}, max_open: 1, status: run, config_hash: c8835d8b61fd6ff6 }
+  - { id: VW1B, twin_of: W1B, rule: tsmom, timeframe: 1d, params: {"config": {}, "max_stop_usd": 146.3}, max_open: 1, status: run, config_hash: 6fda0c23b9269012 }
+  - { id: VW2, twin_of: W2, rule: box_break_close, timeframe: 4h, params: {"target_r": 2.0, "hold_bars": 24}, max_open: 1, status: run, config_hash: ef5a1a04433742e3 }

@@ -201,6 +201,7 @@ def test_the_engine_service_builds_its_engine_with_the_settings_swap_prior(tmp_p
     monkeypatch.setattr(accounts, "load_accounts", lambda path=None: {"icm-demo": ACC})
     monkeypatch.setattr(accounts, "bridge_endpoint", lambda aid: None)
     monkeypatch.setattr(run_mod.sys, "platform", "linux")       # the paper broker branch, wherever the test runs
+    monkeypatch.setenv("GOLDBOT_PAPER_ENGINE", "1")              # the developer opt-in (else no bridge: refused)
     built: list[EngineConfig] = []
 
     class _Built(Exception):

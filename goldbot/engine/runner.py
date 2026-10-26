@@ -51,7 +51,6 @@ from goldbot.engine.store import (  # noqa: F401  (OpenTrade, PendingClose, Sent
     risk_file,
 )
 from goldbot.engine.tv_context import TvShadowWatch
-from goldbot.execution.bridge import CEILING_REFUSAL
 from goldbot.execution.broker import (  # noqa: F401  (DEFINITE_REJECT_RETCODES: re-exported)
     DEFINITE_REJECT_RETCODES,
     MT5_COMMENT_MAX,
@@ -66,7 +65,7 @@ from goldbot.execution.broker import (  # noqa: F401  (DEFINITE_REJECT_RETCODES:
 )
 from goldbot.execution.classifier import StoredClass, effective_class, read_stored
 from goldbot.execution.costs import CostTable
-from goldbot.execution.not_placed import not_placed, notice_text, refusal_code
+from goldbot.execution.not_placed import bridge_refused, not_placed, notice_text, refusal_code
 from goldbot.features import build_features
 from goldbot.features.mtf import TF_LABEL, context_tfs, merge_higher_tf
 from goldbot.features.registry import versions_for, with_versions
@@ -120,12 +119,6 @@ MARKET_CLOSED_RETCODES = frozenset({10017, 10018})
 # every symbol, BACKLOG 62) a hidden or delisted symbol refuses it on every attempt, so it is backed off like the above
 NO_QUOTES_RETCODE = 10021
 # DEFINITE_REJECT_RETCODES lives with the broker protocol (goldbot/execution/broker.py) so the MT5 adapter can use it
-
-
-def bridge_refused(res: OrderResult | None) -> bool:
-    """BACKLOG 66: the MT5 bridge's notional ceiling refused the order (retcode 10006, a definite reject: nothing was
-    placed). Its message starts with `bridge.CEILING_REFUSAL`; a broker's own 10006 does not."""
-    return res is not None and not res.ok and res.message.startswith(CEILING_REFUSAL)
 
 
 # review MEDIUM-2 (d): a pending_orders row still `sending` this long after its send is resolved in-process
@@ -186,6 +179,7 @@ class EngineConfig(Record):
     exploration_config: exploration.ExplorationConfig | None = None   # plan 2026-10-25: demo probe_only arms (ADR 0043)
     shadow_max_open: int = Field(3, ge=1)               # settings shadow.max_open_per_agent (ruling 2026-10-19)
     symbol: str = "XAUUSD"
+    release_symbol: str = "XAUUSD"   # the release bars' store symbol (canonical; orders use `symbol`; services.engine)
     decision_tf: str = "15m"
     magic_base: int = 260100
     state_dir: str = "state"

@@ -100,6 +100,10 @@ class Arm(FrozenRecord):
     max_open: int = Field(1, ge=1)
     status: Literal["run", "blocked"] = "run"
     note: str = ""
+    # ADR 0043 broker amendment (2026-10-26): "an arm on a second broker is a new hypothesis: a distinct arm id". A
+    # broker twin copies `twin_of`'s rule body (rule, timeframe, params, max_open; checked at load) under its own id
+    # and hash, and has no history run of its own (`runnable_ids`): its broker starts from the flat prior
+    twin_of: str | None = None
     config_hash: str | None = None
 
     @model_validator(mode="after")
@@ -126,6 +130,15 @@ def load_arms(path: Path, *, check_hash: bool = True) -> list[Arm]:
     dup = sorted({i for i in ids if ids.count(i) > 1})
     if dup:
         raise ValueError(f"duplicate arm ids: {dup}")
+    by_id = {a.id: a for a in out}
+    for a in out:
+        if a.twin_of is None:
+            continue
+        twin = by_id.get(a.twin_of)
+        if twin is None or twin.twin_of is not None:
+            raise ValueError(f"{a.id}: twin_of {a.twin_of!r} names no arm of this spec (a twin copies an original)")
+        if (a.rule, a.timeframe, a.params, a.max_open) != (twin.rule, twin.timeframe, twin.params, twin.max_open):
+            raise ValueError(f"{a.id}: a broker twin keeps {twin.id}'s rule body (rule, timeframe, params, max_open)")
     if check_hash:
         for a in out:
             if a.config_hash != arm_hash(a):
@@ -135,7 +148,9 @@ def load_arms(path: Path, *, check_hash: bool = True) -> list[Arm]:
 
 
 def runnable_ids(path: Path) -> list[str]:
-    return [a.id for a in load_arms(path) if a.status == "run"]
+    """The arms the historical matrix runs (H-60): every runnable arm but a broker twin, whose history is its
+    original's (same rule body on the same bars) and whose broker takes no H-60 prior (ADR 0043 broker amendment)."""
+    return [a.id for a in load_arms(path) if a.status == "run" and a.twin_of is None]
 
 
 # ---------------------------------------------------------------- priors

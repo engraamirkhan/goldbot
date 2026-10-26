@@ -96,7 +96,9 @@ def test_the_absolute_daily_limit_lives_per_account_in_accounts_yaml_not_in_sett
     raw = yaml.safe_load(Path("config/accounts.yaml").read_text())["accounts"]
     assert raw["icm-demo"]["daily_loss_limit_abs"] == 220         # ADR 0042: 2% of the ~£11,000 demo balance
     assert raw["icm-probe"]["daily_loss_limit_abs"] == 220        # ADR 0042 (was 30, ADR 0037 am. 4)
-    assert all("daily_loss_limit_abs" not in a for k, a in raw.items() if k not in ("icm-demo", "icm-probe"))
+    assert raw["vantage-demo"]["daily_loss_limit_abs"] == 200     # CFO 2026-10-26: 2% of the £10,000 demo deposit
+    assert all("daily_loss_limit_abs" not in a for k, a in raw.items()
+               if k not in ("icm-demo", "icm-probe", "vantage-demo"))
     with pytest.raises(ValidationError):
         _acc(daily_loss_limit_abs=0)
 
@@ -132,10 +134,12 @@ def test_the_engine_publishes_its_accounts_absolute_limit_and_the_supervisor_app
     assert not s["halt"] and s["daily_loss_limit_abs"] is None
 
 
-def test_the_shipped_registry_runs_icm_demo_alone():
+def test_the_shipped_registry_runs_vantage_demo_only_as_a_probe_only_host_outside_the_combined_currency_check():
     accs = acc_mod.load_accounts(Path("config/accounts.yaml"))
     assert accs["icm-demo"].daily_loss_limit_abs == 220 and accs["icm-demo"].enabled      # ADR 0042
-    assert not accs["vantage-demo"].enabled                  # USD next to GBP halts by design (re-enable once known)
+    # a probe_only engine file is kept out of the supervisor's currency check (ADR 0037 am. 4), so a second deposit
+    # currency could never halt the book; vantage-demo is configured as a learning host only (PD 2026-10-26)
+    assert accs["vantage-demo"].probe_only
 
 
 # ---------------------------------------------------------------------------------------------- MEDIUM-1

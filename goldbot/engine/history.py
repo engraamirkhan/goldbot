@@ -313,7 +313,7 @@ def warm_start(eng: Engine, now: pd.Timestamp, broker: Any = None) -> int:
     h.broker = broker
     days = cfg.max_bars_in_memory // (60 * 23) * 7 // 5 + 3     # trading minutes -> calendar days
     lo = now - pd.Timedelta(days=days)
-    rel = _clean(eng.store.read("bars_1m", source=RELEASE_SOURCE, symbol=cfg.symbol, start=lo, end=now), now)
+    rel = _clean(eng.store.read("bars_1m", source=RELEASE_SOURCE, symbol=cfg.release_symbol, start=lo, end=now), now)
     own = _clean(eng.store.read(LIVE_TABLE, source=cfg.broker_name, symbol=cfg.symbol, start=lo, end=now), now)
     if not own.empty:
         h.cutover = pd.Timestamp(own["ts_utc"].iloc[0])
@@ -425,7 +425,7 @@ def reload_release(eng: Engine, now: pd.Timestamp) -> int:
     for g in gaps:
         if g.start >= h.cutover:
             continue                                        # the broker's own feed: only the broker fill may fill it
-        rel = _clean(eng.store.read("bars_1m", source=RELEASE_SOURCE, symbol=cfg.symbol, start=g.start,
+        rel = _clean(eng.store.read("bars_1m", source=RELEASE_SOURCE, symbol=cfg.release_symbol, start=g.start,
                                     end=min(g.end, h.cutover)), now)
         if not rel.empty:
             added.append(rel[(rel["ts_utc"] >= g.start) & (rel["ts_utc"] < min(g.end, h.cutover))])
