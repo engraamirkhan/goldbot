@@ -500,6 +500,7 @@ def test_the_bot_sends_the_report_with_no_reply_markup(tmp_path: Path, monkeypat
     b = botmod.TelegramBot.__new__(botmod.TelegramBot)
     b.state_dir, b.owner_ids, b.settings = str(tmp_path), {7}, TelegramSettings()
     b.digest = DigestSchedule(tmp_path)
+    monkeypatch.setattr(b.digest, "due", lambda now: True)    # the send path, not the wall clock (06:45 + 6 h late limit)
     b.app = types.SimpleNamespace(bot=_Tg())
     monkeypatch.setattr(botmod, "digest_from_runtime", lambda sd, now, slot: "the report")
     asyncio.run(b._digest_pass())

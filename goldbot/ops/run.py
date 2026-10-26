@@ -37,6 +37,9 @@
                                                          # CSV vs live alerts on the same bars; flags repaint_validated
   python -m goldbot.ops.run tv-pull sync|follow|status|graphics [--study PINE_ID[@V]] [--tf TF]
                                                          # TradingView direct pull (read-only, cookie in the keyring)
+  python -m goldbot.ops.run daily-review --date YYYY-MM-DD [--dry-run] [--state DIR]
+                                                         # learning-ops review of one opportunity day (dry run: prints,
+                                                         # writes, retires, refits and posts nothing)
   python -m goldbot.ops.run ledger add|query|resume|export|sync|ingest|import [--state DIR]
                                                          # program ledger (state/program.db): append-only decisions,
                                                          # knowledge, hand-backs; export writes public rows to docs/ledger

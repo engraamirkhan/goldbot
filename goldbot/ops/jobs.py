@@ -79,6 +79,13 @@
                     owner's ceilings, the adaptive limits for the next risk day from its demo fills and the shadow book
                     since each strategy's freeze (core.db adaptive_state / adaptive_changes; health check
                     limits_controller:<account>); an FYI to the owner on every change. Places nothing.
+* daily_review      daily at 06:15, after the nightly learner and before the 06:45 owner report
+                    (goldbot/research/daily_review.py): the learning hosts' costs, fill rate, refusals, volume against
+                    the plan, arm health (breached / ok only) and integrity for the opportunity day before the slot ->
+                    state/aux/daily_review/<day>.json; retires an arm at its pre-registered H-61 stop, refits a
+                    (broker, session) slippage cell after 200 fills (never cheaper within a day), a learning-ops issue on
+                    an incident or two low-volume days and one comment on #34 (github-token from the keyring, else
+                    state/aux/daily_review/outbox/). Changes no arm, threshold, prior, cap or the bandit.
 * cpcv_quarterly    first Sunday of each quarter (M16): combinatorial purged CV (6 groups, 2 test: 15 splits, 5 paths)
                     of every trial that passed the gates, PBO against its family's other trials, attached to the
                     trial as evidence (not a trial) -> state/cpcv_<quarter>.md (research/cpcv.py).
@@ -319,15 +326,29 @@ def exploration_costs(ctx: JobContext, slot: pd.Timestamp, broker: str) -> Repla
         swap = table.swap_spec(acc.server_tz, prior_swap.triple_weekday)
         slips = [max(v.mean, 0.0) for k, v in table.slippage.items() if k.endswith(":market")]
         measured = table.n_fills >= ctx.settings.research.min_fills_for_slippage and slips
-        return ReplayCosts(broker=broker, version=f"costs:{acc.account_id}:{table.built_utc:%Y%m%dT%H%M}",
-                           effective_utc=table.built_utc,
-                           slippage_usd=max(slips) if measured else max(table.slippage_prior_usd, c.slippage_prior_usd),
-                           commission_rt_per_oz=2 * table.commission_per_lot_side_usd / 100.0,
-                           swap=swap if swap is not None else prior_swap)
-    return ReplayCosts(broker=broker, version=f"settings-priors:{broker}",
-                       effective_utc=pd.Timestamp("2026-01-01", tz="UTC"), slippage_usd=c.slippage_prior_usd,
-                       commission_rt_per_oz=2 * max(c.commission_per_lot_side_usd.values(), default=0.0) / 100.0,
-                       swap=prior_swap)
+        costs = ReplayCosts(broker=broker, version=f"costs:{acc.account_id}:{table.built_utc:%Y%m%dT%H%M}",
+                            effective_utc=table.built_utc,
+                            slippage_usd=max(slips) if measured else max(table.slippage_prior_usd, c.slippage_prior_usd),
+                            commission_rt_per_oz=2 * table.commission_per_lot_side_usd / 100.0,
+                            swap=swap if swap is not None else prior_swap)
+    else:
+        costs = ReplayCosts(broker=broker, version=f"settings-priors:{broker}",
+                            effective_utc=pd.Timestamp("2026-01-01", tz="UTC"), slippage_usd=c.slippage_prior_usd,
+                            commission_rt_per_oz=2 * max(c.commission_per_lot_side_usd.values(), default=0.0) / 100.0,
+                            swap=prior_swap)
+    return _with_refit_cells(ctx.state_dir, broker, slot, costs)
+
+
+def _with_refit_cells(state_dir: Path, broker: str, slot: pd.Timestamp, costs: ReplayCosts) -> ReplayCosts:
+    """The daily review's refit slippage cells (research/daily_review.py), point in time: charged only when dearer
+    than the slippage above, so a refit can raise a broker's replay cost and never lower it."""
+    from goldbot.research.daily_review import replay_cells
+    cells = replay_cells(state_dir, broker, slot)
+    if cells is None or cells[0] <= costs.slippage_usd:
+        return costs
+    slip, day, effective = cells
+    return costs.model_copy(update={"slippage_usd": slip, "version": f"{costs.version}+cells:{day}",
+                                    "effective_utc": max(costs.effective_utc, effective)})
 
 
 def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
@@ -1503,6 +1524,20 @@ def _limits_job(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return limits_job(ctx, slot)
 
 
+def daily_review(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """The daily learning-ops review of the opportunity day before `slot` (research/daily_review.py) over the enabled
+    accounts with exploration on; issue text goes to GitHub with the keyring's github-token, else to state."""
+    from goldbot.ops.report_days import day_before
+    from goldbot.research.daily_review import run_daily_review, sink_for, summary, trials_left
+    hosts = {a.account_id: a.broker for a in ctx.accounts if a.exploration.enabled}
+    if not hosts:
+        return {"skipped": "no enabled account has exploration on"}
+    review = run_daily_review(settings=ctx.settings, state_dir=ctx.state_dir, store=ctx.store, hosts=hosts,
+                              day=day_before(slot), now=slot, sink=sink_for(ctx.settings, ctx.get_secret),
+                              trials_left=trials_left(ctx.settings, ctx.trials, slot))
+    return summary(review)
+
+
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "nightly_costs": nightly_costs,
     "saturday_retrain": saturday_retrain,
@@ -1528,6 +1563,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "tick_record": tick_record,                   # BACKLOG 79: broker ticks per server day for research (H-A)
     "tick_record_winter": tick_record,            # ... the same job in the winter daily break (one slot skips)
     "limits_job": _limits_job,                    # ADR 0031: adaptive limits for the next risk day (ops/limits_job.py)
+    "daily_review": daily_review,                 # learning-ops review before the owner report (research/daily_review.py)
 }
 
 

@@ -65,7 +65,8 @@ REFUSAL_WORDS = {
     "budget": "budget used", "pot": "budget used", "arm_budget": "budget used",
     "stale": "signal too old", "paused_dd": "paused (drawdown)", "weekend_hold": "would hold over the weekend",
     "same_side": "same-side limit", "not_auto": "auto entries off", "arm_cap": "stop over the arm's limit",
-    "order_unsettled": "order still settling",
+    "order_unsettled": "order still settling", "arm_retired": "arm retired at its stop",
+    "arm_status_unread": "arm status not read yet",
 }
 OTHER_REASON = "other reason"
 
@@ -306,6 +307,21 @@ class ArmStatus(Record):
     stop_r: float | None = None         # the running net R there (at or past the stop)
 
 
+CONTROL_RULES = frozenset({"random_bracket"})   # ARM-SPEC: random-entry brackets are the null, never a strategy
+
+
+def control_arm_ids() -> frozenset[str]:
+    """The control arms by their frozen spec (config/exploration_arms.yaml: rule `random_bracket`, twins included):
+    S0, S0R, I0, W0, VI0, VW0 today. Controls are the null each arm is measured against (quant 2026-10-26): no
+    H-61 stop applies to them and they are never retired."""
+    from goldbot.engine.exploration import SPEC_PATH
+    from goldbot.research.arms import load_arms
+    try:
+        return frozenset(a.id for a in load_arms(SPEC_PATH, check_hash=False) if a.rule in CONTROL_RULES)
+    except (OSError, ValueError):
+        return frozenset()
+
+
 def _arm_order() -> list[str]:
     """The frozen ARM-SPEC order (config/exploration_arms.yaml): the arms block is never sorted by outcome."""
     from goldbot.engine.exploration import SPEC_PATH
@@ -316,9 +332,11 @@ def _arm_order() -> list[str]:
         return []
 
 
-def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str]) -> list[ArmStatus]:
+def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str], *,
+                 until: pd.Timestamp | None = None) -> list[ArmStatus]:
     """Every arm with an admissible trade on `accounts`, in the frozen spec's order (unknown arms after, by id): its
-    n toward READ_AT and its H-61 stop band from the running net R in exit order over the stop's first trades."""
+    n toward READ_AT and its H-61 stop band from the running net R in exit order over the stop's first trades.
+    `until`: only closes before it (the daily review reads a day point in time)."""
     if not accounts:
         return []
     marks = ",".join("?" * len(accounts))
@@ -326,24 +344,28 @@ def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str]) -> list[ArmS
         f"SELECT arm_id, MAX(style), MAX(is_control) FROM exploration_obs WHERE account_id IN ({marks}) "
         "GROUP BY arm_id", tuple(accounts))}
     by_arm: dict[str, list[ExplorationRecord]] = {}
-    for t in trades(conn, f"account_id IN ({marks}) AND closed = 1", tuple(accounts)):
+    cut, args = ("", tuple(accounts)) if until is None else (" AND exit_ns < ?", (*accounts, _ns(until)))
+    for t in trades(conn, f"account_id IN ({marks}) AND closed = 1{cut}", args):
         if admissible(t):
             by_arm.setdefault(t.arm_id, []).append(t)
     order = {a: i for i, a in enumerate(_arm_order())}
+    spec_controls = control_arm_ids()
     out = []
     for arm in sorted(by_arm, key=lambda a: (order.get(a, len(order)), a)):
         rows = by_arm[arm]
         style, control = meta.get(arm, (_TF_STYLE.get(rows[0].tf, "scalp"), False))
+        control = control or arm in spec_controls
         stop_r, within = ARM_STOP.get(style, ARM_STOP["scalp"])
         band: Band = "running"
         stop_at, stop_utc, at_r = None, None, None
         run = 0.0
-        for i, t in enumerate(rows[:within], 1):
+        # a control is the null: no stop applies to it (quant 2026-10-26), so it is never "at its stop"
+        for i, t in enumerate(rows[:within] if not control else [], 1):
             run += trade_r(t) or 0.0
             if run <= stop_r + 1e-9:
                 band, stop_at, stop_utc, at_r = "at_stop", i, t.exit_utc, run
                 break
-        if band == "running" and len(rows) <= within and run <= BAND_SHARE * stop_r + 1e-9:
+        if not control and band == "running" and len(rows) <= within and run <= BAND_SHARE * stop_r + 1e-9:
             band = "within_50pct"
         out.append(ArmStatus(arm_id=arm, account_id=rows[0].account_id, control=control, n=len(rows), band=band,
                              stop_at=stop_at, stop_utc=stop_utc, stop_r=at_r))

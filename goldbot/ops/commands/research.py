@@ -1,5 +1,6 @@
 """Research commands (goldbot/research): `owner-history`, `ruin` (G-5), `sizing-feasibility` (G-7), and the TradingView
-chart-export pair `tv-import` / `tv-repaint-check`, and the direct pull `tv-pull`. The first three are the old dispatcher's branches, verbatim."""
+chart-export pair `tv-import` / `tv-repaint-check`, the direct pull `tv-pull`, and the daily learning-ops review
+`daily-review`. The first three are the old dispatcher's branches, verbatim."""
 from __future__ import annotations
 
 import sys
@@ -47,3 +48,9 @@ def _tv_pull(cmd: str, args: list[str]) -> None:
 def _ledger(cmd: str, args: list[str]) -> None:
     from goldbot.ledger.cli import main as ledger_main
     sys.exit(ledger_main(args))
+
+
+@register_command("daily-review", pos=300)
+def _daily_review(cmd: str, args: list[str]) -> None:
+    from goldbot.research.daily_review import main as daily_review_main
+    sys.exit(daily_review_main(args))

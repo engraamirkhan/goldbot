@@ -259,6 +259,9 @@ class SchedulerSettings(_Section):
     # ADR 0031: the adaptive limits decision for the next risk day, after the daily break and before the 00:00 UTC roll;
     # never caught up past the roll (the engine adopts a decision only at the roll, so a late one waits a day)
     limits_job: ScheduleSettings = ScheduleSettings(kind="daily", at="23:05", max_late_hours=0.9)
+    # the daily learning-ops review (goldbot/research/daily_review.py): after the nightly learner (inside
+    # nightly_costs) and before the 06:45 owner report, which carries its section; a late run still retires and refits
+    daily_review: ScheduleSettings = ScheduleSettings(kind="daily", at="06:15", max_late_hours=12)
 
 
 class BackupSettings(_Section):
@@ -482,6 +485,28 @@ class TelegramSettings(_Section):
     # outside dead man's switch (goldbot/ops/deadman.py, ADR 0014): healthy pings at most this often; the check's
     # period on Healthchecks.io must match (grace 3 min), so a dead brain is reported within ~6 min
     deadman_every_min: int = Field(2, ge=1, le=60)
+
+
+class DailyReviewSettings(_Section):
+    """The daily learning-ops review (goldbot/research/daily_review.py; research-director spec 2026-10-26). Reporting
+    and housekeeping only: it never changes an arm, a threshold, a prior, a cap or the bandit."""
+    # exploration candidates a day per broker and style (aux.db exploration_obs), the high-volume plan's arm rows
+    # (prereg-2026-10-25-high-volume.md / high-volume-learning-2026-10-25.md section 1, ~290 a day with the probes);
+    # Vantage runs the intraday and swing twins only
+    volume_plan: dict[str, dict[str, int]] = Field(default_factory=lambda: {
+        "icm": {"scalp": 160, "intraday": 35, "swing": 5}, "vantage": {"scalp": 0, "intraday": 35, "swing": 5}})
+    # cost probes a day per broker (aux.db cost_probes), from the ADR 0043 probe sleeves: ICM P0 60-90 + mirrors ~8,
+    # Vantage scheduled M1 probes only (half ICM's scheduled share, no shadow book to mirror)
+    probe_plan: dict[str, int] = Field(default_factory=lambda: {"icm": 90, "vantage": 40})
+    volume_alert_below: float = Field(0.5, gt=0, le=1)     # a trading day under this fraction of the plan is low ...
+    volume_alert_days: int = Field(2, ge=1)                #   ... and this many low trading days running open an issue
+    refit_min_fills: int = Field(200, ge=50)               # a (broker, session) cost cell is refit after this many fills
+    overshoot_scenario_usd: float = Field(0.70, gt=0)      # the stop-exit overshoot scenario (cost-model-1m-2026-10-25)
+    max_gap_minutes: int = Field(30, ge=0)                 # missing open-market minutes of a host's 1m bars in a day
+    issue_label: str = "learning-ops"                      # the label of the incident / low-volume issue
+    status_issue: int = Field(34, ge=1)                    # the program's status issue: one comment a day
+    repo: str = Field("engraamirkhan/goldbot", pattern=r"^[\w.-]+/[\w.-]+$")
+    weekly_proposals: int = Field(4, ge=0, le=4)           # Monday roll-up: variant proposals for the research director
 
 
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
@@ -735,6 +760,7 @@ class Settings(_Section):
     tv: TvSettings = Field(default_factory=TvSettings)
     shadow: ShadowSettings = Field(default_factory=ShadowSettings)
     mt5_login: Mt5LoginSettings = Field(default_factory=Mt5LoginSettings)
+    daily_review: DailyReviewSettings = Field(default_factory=DailyReviewSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")
     @classmethod

@@ -407,12 +407,32 @@ def case_attribution_report(tmp: Path) -> None:
     assert v.cant_check is None and v.report is not None and v.report.overall.n == 0
 
 
+def case_daily_review(tmp: Path) -> None:
+    """state/aux/daily_review/<day>.json and weekly-<sunday>.json (research/daily_review.py DailyReview,
+    WeeklyRollup) with a field from a newer release at the top and in a nested row: the morning report's review
+    lines and the research director's roll-up still read them."""
+    from goldbot.research import daily_review as dr
+    from goldbot.telegram.digest import review_section
+    cost = dr.SessionCosts(broker="icm", host="all", session="all", fills=3, spread_usd=0.2, round_trip_usd=0.37)
+    review = dr.DailyReview(day="2026-10-25", generated_utc=T0, costs=[cost], volume_total=3, plan_total=370)
+    week = dr.WeeklyRollup(week_ending="2026-10-25", generated_utc=T0, trials_left=2, proposals=[
+        dr.VariantProposal(title="Limit-entry variant", rationale="fill rate 80% over the week")])
+    for path, rec in ((dr.review_path(tmp, "2026-10-25"), review), (dr.weekly_path(tmp, "2026-10-25"), week)):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(rec.model_dump_json())
+    _rewrite(dr.review_path(tmp, "2026-10-25"), lambda d: {**_newer(d), "costs": [_newer(d["costs"][0])]})
+    _rewrite(dr.weekly_path(tmp, "2026-10-25"), lambda d: {**_newer(d), "proposals": [_newer(d["proposals"][0])]})
+    assert dr.load_review(tmp, "2026-10-25") == review and dr.load_weekly(tmp, "2026-10-25") == week
+    assert review_section(tmp, "2026-10-25")[0].text.startswith("Review: costs ICM $0.37/oz")
+
+
 CASES = [case_closed_trade, case_closed_trade_from_before_ret_basis, case_closed_trade_price_return_without_ret_basis,
          case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
          case_shadow_stats, case_model_registry_and_backtest, case_population, case_research_plan, case_costs,
          case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_cost_probe, case_cost_probe_skip, case_hwm_confirmation, case_limits_profile, case_risk_term,
          case_limits_state,
-         case_trial_dsr_inputs, case_trial_day_summed_dsr, case_attribution_report, case_tick_index]
+         case_trial_dsr_inputs, case_trial_day_summed_dsr, case_attribution_report, case_tick_index,
+         case_daily_review]
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c.__name__.removeprefix("case_") for c in CASES])
@@ -446,6 +466,7 @@ def test_an_older_release_loads_a_file_with_ambiguous_rows(tmp_path):
 
 def test_every_persisted_record_model_has_a_compat_case():
     """A new persisted model must add a case above (and a default that is safe when missing, AGENT_STANDARDS S12)."""
+    from goldbot.research import daily_review as dr
     covered = {ClosedTrade, Proposal, VersionBook, PerfStats, ModelEntry, Member, ResearchPlan,
                BrokerTerms, CostTable, PublishedCostTable, scheduler.JobState, health.WatchState, health.HealthReport,
                DigestState, OutboxState, crossfeed.ReconcileReport, ledger.LedgerReport,
@@ -463,7 +484,9 @@ def test_every_persisted_record_model_has_a_compat_case():
                # engine_<account>.json and approval files `ask_reason` (backlog 103; every field defaults, a missing
                # reason is None): tests/test_api_ui_contract.py::
                # test_a_newer_engines_reason_with_an_extra_field_is_read_tolerantly
-               AskReason}
+               AskReason,
+               # state/aux/daily_review/: case_daily_review
+               dr.DailyReview, dr.WeeklyRollup}
     loaded = {f.model for f in _tolerant_finds() if f.model not in GENERIC_MODEL_ARGS.values()}
     assert loaded - {m.__name__ for m in covered} == set()
 
