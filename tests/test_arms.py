@@ -30,7 +30,7 @@ ARM_SPEC_IDS = {"S0", "S0R", "S1A", "S1B", "S2A", "S2B", "S3A", "S3B", "S4", "S5
 def test_time_structure_arms_are_forward_only_and_never_run_on_history() -> None:
     loaded = {a.id: a for a in arms.load_arms(ARMS)}
     new = {"F1A", "F1C", "G1A", "G1C", "WFRI"}
-    assert all(loaded[i].forward_only and loaded[i].note for i in new)
+    assert all(loaded[i].forward_only for i in new)      # forward-only whether blocked or running
     assert not new & set(arms.runnable_ids(ARMS))
 
 

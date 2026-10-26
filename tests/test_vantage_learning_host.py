@@ -124,9 +124,9 @@ def test_a_twin_whose_body_differs_from_its_arm_or_names_no_arm_is_refused(tmp_p
 # ------------------------------------------------------------------------------------------------ engine and gate
 def test_vantage_engine_config_builds_its_runnable_arms_from_the_spec_and_drops_the_blocked_one(vantage):
     cfg = exploration.config_for(vantage)
-    assert cfg is not None and cfg.dropped == ("VXTV2",)
-    assert {a.arm_id for a in cfg.arms} == (V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2)) - {"VXTV2"}
-    assert len(cfg.arms) == 22
+    assert cfg is not None and cfg.dropped == ()      # VXTV2 runs since lane E2 carries the smc replica state
+    assert {a.arm_id for a in cfg.arms} == (V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2))
+    assert len(cfg.arms) == 23
     by = {a.arm_id: a for a in cfg.arms}
     assert by["DON4"].style == "swing" and by["KSQ1"].style == by["PDC1"].style == "intraday"
     assert by["VI0"].control_share == 0.30 and by["VW0"].control_share == 0.33
