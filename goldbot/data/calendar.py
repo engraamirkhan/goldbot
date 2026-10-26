@@ -110,6 +110,21 @@ class SessionWindow(FrozenRecord):
                              "positive span shorter than a day on every date")
         return o, c
 
+    def covers(self, utc_ts: pd.DatetimeIndex, *, include_close: bool = False) -> np.ndarray:
+        """True where a stamp lies in an instance of this window, [open, close) or [open, close] with
+        `include_close`, each instance resolved on its own trading date from the zones' rules alone (playbook D-1),
+        so the window's UTC hours move with each city's own DST switch and a stamp depends on nothing but itself."""
+        ns = epoch_ns(pd.DatetimeIndex(utc_ts))
+        out = np.zeros(len(ns), dtype=bool)
+        if not len(ns):
+            return out
+        day, first, days = _day_grid(ns)
+        o, c = self.bounds_ns(days)
+        for off in _OFFSETS:
+            j = day + off - first
+            out |= (ns >= o[j]) & ((ns <= c[j]) if include_close else (ns < c[j]))
+        return out
+
 
 def _local_ns(days: np.ndarray, tz: str, t: time) -> np.ndarray:
     """UTC epoch ns of wall-clock `t` in `tz` on each local date (days since the epoch). A wall time the zone skips
