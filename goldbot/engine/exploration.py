@@ -981,6 +981,28 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
         log.exception("exploration exits failed; retried next pass")
 
 
+def sweep(eng: Engine, live: set[int]) -> None:
+    """At every reconciliation (`reconcile_every_s` of tick time, besides the bar close): an exploration position the
+    broker no longer lists whose exit deal is seen (its stop or target at the broker) is forgotten and its record
+    queued, so its arm, pot and host slots and its open risk are free for the next signal instead of at the next
+    decision-bar close (a 1m arm signals every minute). One whose exit deal is not seen yet, or whose deals cannot be
+    read, is left to `Engine._sweep_closed` and its confirmation count at the bar close, as every other trade. Never
+    raises."""
+    try:
+        for pid, tr in [(k, t) for k, t in eng.open.items() if k not in live and is_exploration(t.agent_id)]:
+            try:
+                summary, _ = eng._exit_deals(pid, tr)
+            except Exception:                   # counted by _read_deals; the bar close's sweep asks again
+                continue
+            if summary is None:
+                continue
+            eng._unconfirmed.pop(pid, None)
+            del eng.open[pid]
+            eng._note_closed(pid, tr, "broker_close")
+    except Exception:
+        log.exception("exploration sweep failed; the bar close's sweep records the close")
+
+
 def record_close(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float | None, at: pd.Timestamp) -> bool:
     """An exploration close goes to the exploration ledger, never closed_trades.jsonl; False for any other trade. Exit,
     swap, commission and P&L from the broker's deals; `censored` unless the arm's own stop, target or hold closed it
