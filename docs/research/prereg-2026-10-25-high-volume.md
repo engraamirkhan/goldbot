@@ -230,8 +230,8 @@ shares inside each pot) and no H-60 history run is made for a twin (`runnable_id
 matrix charges no second look). A Vantage prior needs its own pre-registered history run on Vantage's cost constants.
 
 **(d) Costs from its own probes.** `vantage-demo` runs scheduled M1 cost probes only (sleeve £15 = 0.075 x £200;
-scheduled share 0.8 = £12 a day, CFO 2026-10-26: K10's 50% keeps half for mirrored probes, and this host sends none;
-the shadow host keeps 0.5, enforced at load). Vantage labels use Vantage's own measured cost table; until it holds
+scheduled share 0.5 = £7.50 a day, the pre-registered K10 bound, kept on every account by PD decision 2026-10-26;
+its cost table therefore reaches 50 fills more slowly). Vantage labels use Vantage's own measured cost table; until it holds
 >= 50 fills (`research.min_fills_for_slippage`) they pay the settings priors (slippage prior, the dearest configured
 commission, the swap prior). ICM measurements are never used for Vantage, nor the reverse.
 

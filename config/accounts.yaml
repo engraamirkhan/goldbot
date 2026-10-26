@@ -216,10 +216,10 @@ accounts:
     approval_mode: auto       # ADR 0036 (demo): exploration and probes enter only in auto on a terminal reading demo
     # its OWN cost measurement (ADR 0043 broker amendment: "another broker's measurements are never used"): scheduled
     # M1 probes only (no shadow book here, so no mirror probes), sleeve £15 = 0.075 x 200 (CFO 2026-10-26); scheduled
-    # share 0.8 = £12 a day (CFO 2026-10-26; K10's 50% protects mirrors, and this host sends none). max_loss £4 covers
-    # the $3 safety stop at 0.01 lot. Labels use the settings priors until its own table has >= 50 fills
+    # share 0.5 = £7.50 a day, the pre-registered K10 bound (PD 2026-10-26), so its 50 fills come more slowly. max_loss
+    # £4 covers the $3 safety stop at 0.01 lot. Labels use the settings priors until its own table has >= 50 fills
     # (research.min_fills_for_slippage)
-    cost_probe: { enabled: true, budget_share: 0.075, max_open: 1, max_loss: 4.0, scheduled: { enabled: true, budget_share: 0.8 } }
+    cost_probe: { enabled: true, budget_share: 0.075, max_open: 1, max_loss: 4.0, scheduled: { enabled: true, budget_share: 0.5 } }
     shadow_host: false        # icm-probe hosts the shadow book (one host per deployment)
     # a learning host (ADR 0037 amendment 6): no live agent, every non-learning entry refused, out of the supervisor's
     # combined limits, the limits evidence and the phase gate

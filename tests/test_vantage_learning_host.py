@@ -53,7 +53,8 @@ def test_vantage_demo_measures_its_own_costs_with_scheduled_probes_on_a_15_pound
     cp = vantage.cost_probe
     assert cp.enabled and cp.scheduled.enabled
     assert cp.budget_share * 200 == pytest.approx(15, abs=0.01)
-    assert cp.budget_share * cp.scheduled.budget_share * 200 == pytest.approx(12, abs=0.01)   # CFO 2026-10-26
+    # prereg K10 (PD 2026-10-26: the pre-registered bound stands): at most half the sleeve, £7.50 a day
+    assert cp.budget_share * cp.scheduled.budget_share * 200 == pytest.approx(7.5, abs=0.01)
     assert cp.max_loss <= cp.budget_share * 200
 
 
@@ -155,28 +156,10 @@ def test_a_vantage_exploration_order_is_sent_on_its_xauusd_plus_symbol(vantage, 
 
 
 # ------------------------------------------------------------------------------------------------ scheduled share
-def _host(**kw: Any) -> acc_mod.Account:
-    base: dict[str, Any] = dict(account_id="a", broker="vantage", mode="demo", server="s", login=None,
-                                terminal_path="t", server_tz="UTC", symbol="XAUUSD+", magic_base=1, enabled=True,
-                                daily_loss_limit_abs=200.0, probe_only=True,
-                                exploration=acc_mod.Exploration(enabled=True, budget_share=0.5, max_open_total=1,
-                                                                arms={}, pots={}))
-    return acc_mod.Account(**{**base, **kw})
-
-
-def _probe(share: float) -> acc_mod.CostProbe:
-    return acc_mod.CostProbe(enabled=True, budget_share=0.075, max_open=1, max_loss=4.0,
-                             scheduled=acc_mod.ScheduledProbe(enabled=True, budget_share=share))
-
-
-def test_scheduled_probes_may_take_more_than_half_the_probe_budget_only_where_no_mirror_probe_shares_it():
-    """Prereg K10: scheduled probes take at most 50% of the probe budget so the mirrored probes keep the rest. A host
-    without the shadow book sends no mirror probe, so nothing is taken from them (CFO 2026-10-26: 0.8 on
-    vantage-demo); on the shadow host the 50% stands."""
-    assert _host(cost_probe=_probe(0.8)).cost_probe.scheduled.budget_share == 0.8
-    with pytest.raises(ValidationError, match="K10"):
-        _host(cost_probe=_probe(0.8), shadow_host=True)
-    assert _host(cost_probe=_probe(0.5), shadow_host=True).cost_probe.scheduled.budget_share == 0.5
+def test_scheduled_probes_above_half_the_probe_budget_are_refused_on_every_account_even_without_mirrors():
+    """Prereg K10, the pre-registered bound (PD 2026-10-26): at most 50% of the probe budget, on every account."""
+    with pytest.raises(ValidationError):
+        acc_mod.ScheduledProbe(enabled=True, budget_share=0.8)
 
 
 # ------------------------------------------------------------------------------------------------ spread (quant 3)

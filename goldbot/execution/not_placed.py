@@ -135,6 +135,12 @@ _CEILING_CARD = {
 }
 
 
+def bridge_refused(res: OrderResult | None) -> bool:
+    """BACKLOG 66: the MT5 bridge's notional ceiling refused the order (retcode 10006, a definite reject: nothing was
+    placed). Its message starts with `bridge.CEILING_REFUSAL`; a broker's own 10006 does not."""
+    return res is not None and not res.ok and res.message.startswith(CEILING_REFUSAL)
+
+
 def refusal_code(res: OrderResult, *, paper: bool, definite: frozenset[int]) -> str | None:
     """The refusal code for an order result, or None when it is not a definite reject (a fill or an ambiguous result:
     the card stays approved). `definite` is the engine's DEFINITE_REJECT_RETCODES. The bridge's message prefixes are

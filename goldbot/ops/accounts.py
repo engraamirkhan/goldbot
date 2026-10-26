@@ -90,9 +90,8 @@ class ScheduledProbe(FrozenRecord):
     # winter slots in the break and on the reopen)
     blackout: tuple[str, str] = ("16:45", "18:15")
     blackout_tz: str = "America/New_York"
-    # prereg K10: scheduled probes' realised loss + open risk take at most this share of the day's probe budget; at
-    # most 0.5 on the shadow host, where the mirrored probes need the rest (Account `_k10_half_where_mirrors_run`)
-    budget_share: float = Field(0.5, gt=0, le=1)
+    # prereg K10: scheduled probes' realised loss + open risk take at most this share of the day's probe budget
+    budget_share: float = Field(0.5, gt=0, le=0.5)
 
     @field_validator("blackout")
     @classmethod
@@ -283,16 +282,6 @@ class Account(Record):
         cap = self.daily_loss_limit_abs
         if self.cost_probe.enabled and cap is not None and self.cost_probe.max_loss > self.cost_probe.budget_share * cap:
             raise ValueError("cost_probe.max_loss must fit inside budget_share x daily_loss_limit_abs (ADR 0037)")
-        return self
-
-    @model_validator(mode="after")
-    def _k10_half_where_mirrors_run(self) -> Account:
-        """Prereg K10: scheduled probes "take at most 50% of the day's probe budget", so the mirrored probes keep the
-        rest. Mirrors run only on the shadow host; a probe host without the shadow book sends none, so there its
-        scheduled probes may take more (CFO 2026-10-26, vantage-demo 0.8). On the shadow host the 50% stands."""
-        if self.shadow_host and self.cost_probe.scheduled.budget_share > 0.5:
-            raise ValueError("cost_probe.scheduled.budget_share above 0.5 on the shadow host: the mirrored probes keep "
-                             "half the probe budget (prereg K10)")
         return self
 
     @model_validator(mode="after")
