@@ -377,24 +377,6 @@ def test_the_live_agents_15m_decisions_are_identical_with_exploration_on(tmp_pat
     assert off and off == on and sent[0] == 0 and sent[1] >= 2      # the arms traded beside the agent
 
 
-def test_a_slot_freed_by_the_brokers_stop_is_released_at_the_next_reconcile_not_the_next_bar_close(tmp_path):
-    """A 1m/5m arm signals every minute; its position stopped out at the broker held the arm's slot (and its open
-    risk) until the engine's next decision-bar close swept it. Exploration positions the broker no longer lists are
-    swept at every reconciliation (`reconcile_every_s`, 30 s of tick time) once their exit deal is seen."""
-    eng, pb = _engine(tmp_path, [_arm("a", max_open=1)])
-    exploration.on_pass(eng, _at(eng, pb, CLOSE))
-    [pid] = list(eng.open)
-    sl = eng.open[pid].sl
-    assert sl is not None
-    eng._last_reconcile = CLOSE
-    stop = CLOSE + pd.Timedelta(seconds=40)                  # past reconcile_every_s, long before the next 15m close
-    eng.on_tick(Tick(ts_utc=stop, bid=sl - 1.0, ask=sl - 0.8))
-    assert not pb.positions()                                # the broker's stop closed it
-    assert pid not in eng.open
-    [rec] = exploration.trades(str(tmp_path))
-    assert rec.exit_utc is not None and rec.exit_reason == "stop"
-
-
 def test_after_a_restart_an_arm_position_is_adopted_by_its_comment_and_its_hold_resumes(tmp_path):
     arm = _arm("s", tf="1m", style="scalp", hold_bars=5)
     eng, pb = _engine(tmp_path, [arm])

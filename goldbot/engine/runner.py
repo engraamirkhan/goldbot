@@ -1758,11 +1758,12 @@ class Engine:
 
     def _reconcile(self, now: pd.Timestamp | None) -> None:
         """Broker positions are the source of truth (design: Reconciliation), on start, every bar close and every
-        `reconcile_every_s` of tick time: an orphan in this engine's magic range is adopted (its agent's trade with its
-        exit policy when its magic maps to exactly one known agent) and, without a stop, given one `orphan_stop_atr` x
-        ATR from entry; a stop or target missing at the broker, or a stop looser than this engine's, is reinstated (a
-        reject re-sent after reconcile_every_s, doubling up to modify_backoff_max_s; the per-tick stop check covers the
-        gap). Unknown magics are listed, never touched. Exploration closes are swept here too (`exploration.sweep`)."""
+        `reconcile_every_s` of tick time: an orphan in this engine's magic range is adopted and, without a stop, given
+        one `orphan_stop_atr` x ATR from entry; a stop or target missing at the broker, or a stop looser than the one
+        this engine set, is reinstated. An orphan whose magic maps to exactly one known agent is adopted as that
+        agent's trade with its exit policy. A rejected reinstatement is re-sent after reconcile_every_s, doubling per
+        consecutive reject up to modify_backoff_max_s (the per-tick stop check covers the gap). Positions with unknown
+        magic numbers are listed and never touched."""
         if now is not None:
             self._last_reconcile = now
         positions = self._read_positions("reconciliation skipped this pass")
@@ -1811,7 +1812,6 @@ class Engine:
                 tr.sl = p.sl                  # adopted with a stop: that stop is the floor from now on
         live = {p.position_id for p in positions}
         self._modify_backoff = {k: v for k, v in self._modify_backoff.items() if k in live}
-        exploration.sweep(self, live)       # an arm's slot freed by the broker's stop, without waiting for a bar close
         if changed:
             self._save_orders()             # an adoption or a resolved row survives a restart (review MEDIUM-2)
 
