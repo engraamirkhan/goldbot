@@ -17,7 +17,7 @@ import pandas as pd
 from goldbot.data.resample import mid
 from goldbot.data.timeutil import epoch_ns, utc_index
 from goldbot.features.technical import atr
-from goldbot.research.arms import Arm
+from goldbot.research.arms import Arm, local_window
 
 SEED_PREFIX = "goldbot-arms-2026-10-25"
 GBP_PER_USD = 0.752
@@ -73,6 +73,17 @@ def in_window(close: pd.DatetimeIndex, window: list[str] | None) -> np.ndarray:
     return (m >= parse_hhmm(window[0])) & (m <= parse_hhmm(window[1]))
 
 
+def arm_window(close: pd.DatetimeIndex, params: dict[str, Any]) -> np.ndarray:
+    """The arm's decision window on its closes, [from, to] inclusive: `window_local` on city clocks, converted per date
+    so it follows Europe/London's and America/New_York's own DST switches (research note time-structure/sessions.md
+    A-4: a UTC window slides an hour against London in winter), else the pre-registered `window_utc` in UTC hours
+    (ARM-SPEC: "Clock times are UTC unless a local session clock is named"), else always."""
+    w = local_window(params)
+    if w is None:
+        return in_window(close, params.get("window_utc"))
+    return w.covers(close, include_close=True)
+
+
 def common_filter_ok(close: pd.DatetimeIndex, lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
     """True where a new entry is allowed: not in a tier-1 blackout, not 20:45-22:15 UTC, not Friday from 19:00 UTC."""
     m = _minutes_utc(close)
@@ -119,7 +130,7 @@ def random_bracket(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     p = arm.params
     close = ctx.close_ts
     mins = close.minute.to_numpy()
-    ok = np.isin(mins, p.get("minutes", [0])) & in_window(close, p.get("window_utc")) & (close.dayofweek.to_numpy() < 5)
+    ok = np.isin(mins, p.get("minutes", [0])) & arm_window(close, p) & (close.dayofweek.to_numpy() < 5)
     ok &= common_filter_ok(close, ctx.blackout_lo, ctx.blackout_hi)
     idx = np.flatnonzero(ok)
     if len(idx) == 0:
@@ -149,7 +160,7 @@ def post_filter(arm: Arm, ctx: RuleContext, cands: pd.DataFrame) -> pd.DataFrame
         return cands
     p = arm.params
     close = ctx.close_ts[cands["idx"].to_numpy()]
-    ok = in_window(close, p.get("window_utc")) & common_filter_ok(close, ctx.blackout_lo, ctx.blackout_hi)
+    ok = arm_window(close, p) & common_filter_ok(close, ctx.blackout_lo, ctx.blackout_hi)
     if "min_stop_usd" in p:
         ok &= cands["risk_usd"].to_numpy() >= float(p["min_stop_usd"]) - 1e-9
     if "max_stop_usd" in p:
@@ -166,7 +177,6 @@ def session_vwap_fade(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     p = arm.params
     m = ctx.mid
     ts = utc_index(m["ts_utc"])
-    close = ctx.close_ts
     loc = ts.tz_convert(LONDON)
     lmin = (loc.hour * 60 + loc.minute).to_numpy()
     day = np.asarray(loc.normalize().tz_localize(None).to_numpy().astype("datetime64[D]")).astype("int64")
@@ -190,9 +200,10 @@ def session_vwap_fade(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     with np.errstate(invalid="ignore"):
         long_ = defined & prev_def & (c < lo_b) & (prev_c >= prev_lo)
         short_ = defined & prev_def & (c > hi_b) & (prev_c <= prev_hi)
-    cm = _minutes_utc(close)
+    # "no signal after 20:00 UTC" on the bar's own start: on GMT the London day is the UTC day, so the 23:55 bar is in
+    # the session and its close (00:00) is minute 0 of the next UTC day, which a test on the close's minute let through
     after_open = (lmin + 5) >= 8 * 60 + 30            # the bar closes at least 30 min after London open
-    timing = after_open & (cm <= 20 * 60)
+    timing = after_open & (_minutes_utc(ts) + 5 <= 20 * 60)
     a5 = atr(m, 14).to_numpy()
     rows = []
     for side, flag in ((1, long_), (-1, short_)):

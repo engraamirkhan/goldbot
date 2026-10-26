@@ -324,3 +324,49 @@ def test_the_n_toward_the_300_read_holds_out_a_span_with_no_recorded_r_and_the_h
     with db.connection() as conn:
         [st] = labs.arm_statuses(conn, ["icm-probe"], store=object(), now=NOW, held_out=set())
     assert st.n == 30
+
+
+# ------------------------------------------------------------------ spec-bug-midnight (S1 cut fix, commit 8d777955)
+MID = pd.Timestamp("2026-10-27 00:00", tz="UTC")
+MID_NOW = pd.Timestamp("2026-10-30 12:00", tz="UTC")
+
+
+def _midnight_rows(db: Database) -> None:
+    tdr._cand(db, "s1a-mid", arm="S1A", at=MID)                                    # live, the bug: void
+    tdr._cand(db, "s1b-mid", arm="S1B", at=MID + pd.Timedelta(days=1), taken=False, blocked="style_cap")  # shadow
+    tdr._trade(db, "s1b-trade", arm="S1B", sent=MID + pd.Timedelta(days=2), pnl=-3.0)   # a trade, no obs row: void
+    tdr._cand(db, "s1a-late", arm="S1A", at=MID + pd.Timedelta(minutes=5))         # not the 00:00 close: kept
+    tdr._cand(db, "s1a-summer", arm="S1A", at=pd.Timestamp("2026-10-20 00:00", tz="UTC"))   # before 10-25: kept
+    tdr._cand(db, "s2a-mid", arm="S2A", at=MID)                                    # another rule: kept
+
+
+def test_the_midnight_spec_bug_voids_only_s1_rows_decided_on_the_0000_utc_close_since_the_uk_switch(tmp_path):
+    db = tdr._db(tmp_path)
+    _midnight_rows(db)
+    found = ev.midnight_spec_bug(db, now=MID_NOW)
+    assert [e.client_order_id for e in found] == ["s1a-mid", "s1b-mid", "s1b-trade"]
+    assert all(e.reason.startswith(ev.SPEC_BUG_MIDNIGHT) and e.scope == ev.EXPLORATION_SCOPE
+               and e.kind == "exploration" and e.span_ref == ev.SPEC_BUG_MIDNIGHT_REF for e in found)
+
+
+def _midnight_script() -> Any:
+    path = Path(__file__).resolve().parents[1] / "scripts" / "exclude_spec_bug_midnight.py"
+    spec = importlib.util.spec_from_file_location("exclude_spec_bug_midnight_script", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_midnight_script_is_a_dry_run_by_default_idempotent_with_apply_and_prints_no_r_or_pnl(tmp_path, capsys):
+    db = tdr._db(tmp_path)
+    _midnight_rows(db)
+    mod = _midnight_script()
+    args = ["--state-dir", str(tmp_path), "--now", MID_NOW.isoformat()]
+    assert mod.main(args) == 0 and ev.excluded_ids(db, "n") == set()                # dry run: nothing written
+    assert mod.main([*args, "--apply"]) == 0
+    assert ev.excluded_ids(db, "n") == {"s1a-mid", "s1b-mid", "s1b-trade"}
+    assert mod.main([*args, "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert '"inserted": 0' in out and "pnl" not in out.lower() and "-3" not in out
+    tdr._blinded(out)

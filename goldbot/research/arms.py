@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from datetime import time
 from pathlib import Path
 from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import numpy as np
 import pandas as pd
@@ -18,6 +21,7 @@ import yaml
 from pydantic import Field, model_validator
 
 from goldbot.base import FrozenRecord
+from goldbot.data.calendar import SessionWindow
 from goldbot.data.timeutil import utc_index
 
 HOLDOUT_FROM = pd.Timestamp("2025-10-01", tz="UTC")     # first instant that is never read
@@ -112,7 +116,46 @@ class Arm(FrozenRecord):
             raise ValueError(f"{self.id}: unknown rule {self.rule!r}; known: {RULES}")
         if self.status == "blocked" and not self.note:
             raise ValueError(f"{self.id}: a blocked arm needs a note saying what unblocks it")
+        if "window_utc" in self.params and "window_local" in self.params:
+            raise ValueError(f"{self.id}: an arm has one decision window, window_utc or window_local, not both")
+        try:
+            local_window(self.params)
+        except ValueError as exc:
+            raise ValueError(f"{self.id}: {exc}") from exc
         return self
+
+
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def local_window(params: dict[str, Any]) -> SessionWindow | None:
+    """The arm's `window_local` as a session window on city clocks, None without one. Spec form:
+    `{"from": [zone, "HH:MM"], "to": [zone, "HH:MM"]}`, e.g. London open to the New York cash close
+    `{"from": ["Europe/London", "08:00"], "to": ["America/New_York", "16:00"]}`. ARM-SPEC: "Clock times are UTC unless a
+    local session clock is named"; a named clock is converted per date (`SessionWindow`, playbook D-1), so the window
+    follows each city's own DST switch, the UK/US gap weeks included. A window that is not a positive span shorter
+    than a day on every date of a year (both DST regimes) is refused at load."""
+    spec = params.get("window_local")
+    if spec is None:
+        return None
+    if not isinstance(spec, dict) or set(spec) != {"from", "to"}:
+        raise ValueError(f"window_local needs exactly from and to, each [zone, HH:MM]; got {spec!r}")
+    ends: list[tuple[str, time]] = []
+    for key in ("from", "to"):
+        end = spec[key]
+        if not isinstance(end, list | tuple) or len(end) != 2:
+            raise ValueError(f"window_local {key}: {end!r} is not [zone, HH:MM]")
+        zone, hhmm = end
+        try:
+            ZoneInfo(str(zone))
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"window_local {key}: unknown time zone {zone!r}") from exc
+        if not isinstance(hhmm, str) or not _HHMM.match(hhmm):
+            raise ValueError(f"window_local {key}: {hhmm!r} is not HH:MM")
+        ends.append((str(zone), time(int(hhmm[:2]), int(hhmm[3:]))))
+    w = SessionWindow(open_tz=ends[0][0], open=ends[0][1], close_tz=ends[1][0], close=ends[1][1])
+    w.bounds_ns(np.arange(20454, 20454 + 366, dtype=np.int64))      # every date of 2026 (both regimes, 4 switches)
+    return w
 
 
 def arm_hash(arm: Arm) -> str:
