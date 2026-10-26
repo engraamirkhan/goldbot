@@ -7,6 +7,7 @@ from __future__ import annotations
 import sqlite3
 import zlib
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Literal
 
 import pandas as pd
@@ -908,3 +909,97 @@ def test_the_max_positions_override_survives_the_limits_policy():
     acc = acc_mod.load_accounts(logins=False)["icm-probe"]
     pol = engine_limits_policy(load_settings(), acc)
     assert pol.defaults.max_positions == 18
+
+
+
+# ------------------------------------------------------------------------------------------------ WFRI and the Friday cut
+THU_19_NY = pd.Timestamp("2025-03-07 00:00", tz="UTC")      # Thursday 19:00 New York (EST): WFRI's decision close
+WFRI_HOLD = 43                                               # 30m bars to Friday 16:30 New York (21:30 UTC)
+
+
+def _wfri(arm_id: str = "WFRI", *, follows: bool = True) -> Arm:
+    """A WFRI-shaped arm (long, 30m, held to Friday 16:30 New York) on `friday_long`, the rule that declares the cut
+    its exit, or on a rule that does not (`follows=False`)."""
+    spec = SpecArm(id=arm_id, rule="friday_long" if follows else LONG, timeframe="30m", max_open=1,
+                   params={"stop_usd": 5.0, "target_r": 50.0, "hold_bars": WFRI_HOLD})
+    return Arm(spec=spec, style="swing")
+
+
+def test_only_a_rule_that_declares_the_friday_cut_its_exit_may_hold_across_the_cut(tmp_path):
+    eng, _ = _engine(tmp_path, [_arm("a")])
+    hold = WFRI_HOLD * 1800
+    assert arm_rules.follows_friday_cut(_wfri().spec) and not arm_rules.follows_friday_cut(_wfri(follows=False).spec)
+    assert exploration.crosses_friday(eng, THU_19_NY, hold)                        # every other rule: refused
+    assert not exploration.crosses_friday(eng, THU_19_NY, hold, follows_cut=True)  # WFRI: across the cut
+    # never into the weekend: a hold to Saturday 00:00 server (22:00 UTC), or an entry after the week's cut
+    assert exploration.crosses_friday(eng, THU_19_NY, hold + 1800, follows_cut=True)
+    after_cut = pd.Timestamp("2025-03-07 19:31", tz="UTC")                        # 21:31 Athens
+    assert exploration.crosses_friday(eng, after_cut, 600, follows_cut=True)    # (the gate's `weekend` also refuses)
+
+
+def _wfri_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Engine, PaperBroker]:
+    monkeypatch.setitem(arm_rules.RULE_FUNCS, "friday_long", _rule(1))
+    return _engine(tmp_path, [_wfri(), _wfri("NOCUT", follows=False)],
+                   pots={"swing": Pot(gbp=40, max_open=2), "intraday": Pot(gbp=48, max_open=5)})
+
+
+def test_wfri_enters_on_thursday_and_a_rule_without_the_cut_is_refused_the_same_hold(tmp_path, monkeypatch):
+    eng, pb = _wfri_engine(tmp_path, monkeypatch)
+    exploration.on_pass(eng, _at(eng, pb, THU_19_NY))
+    assert [d["agent"] for d in _sent(eng)] == ["explore:WFRI"], eng.decisions
+    assert [(d["agent"], d["action"]) for d in _actions(eng, "exploration_refused:")] == [
+        ("explore:NOCUT", "exploration_refused:weekend_hold")]
+
+
+def test_the_friday_cut_still_closes_a_losing_wfri_and_that_close_is_its_own_exit_not_a_censoring(tmp_path,
+                                                                                                    monkeypatch):
+    eng, pb = _wfri_engine(tmp_path, monkeypatch)
+    exploration.on_pass(eng, _at(eng, pb, THU_19_NY))
+    [pid] = list(eng.open)
+    entry = eng.open[pid].open_price
+    assert entry is not None
+    cut = Tick(ts_utc=pd.Timestamp("2025-03-07 19:31", tz="UTC"), bid=entry - 1.0, ask=entry - 0.8)
+    pb.on_tick(cut)
+    assert eng._weekend_rule(cut)
+    eng._flush_closed()
+    assert not pb.positions() and pid not in eng.open
+    [rec] = exploration.trades(str(tmp_path))
+    assert rec.exit_reason == "weekend_close_loser" and rec.censored is False
+
+
+def test_the_cuts_tightened_stop_is_wfris_own_exit_and_any_other_moved_stop_or_close_censors():
+    wfri, other = _wfri(), _wfri(follows=False)
+
+    def trade(sl: float) -> Any:
+        return SimpleNamespace(side=1, initial_sl=95.0, sl=sl)
+
+    assert not exploration._censored(wfri, "stop", trade(97.5))                   # tightened at the cut
+    assert not exploration._censored(wfri, "weekend_close_loser", trade(95.0))
+    assert exploration._censored(wfri, "stop", trade(94.0))                       # loosened
+    assert exploration._censored(wfri, "weekend_close_no_quote", trade(95.0))     # the dead-feed flatten
+    assert exploration._censored(other, "weekend_close_loser", trade(95.0))
+    assert exploration._censored(other, "stop", trade(97.5))
+    assert not exploration._censored(other, "time_exit", trade(95.0))
+
+
+# ------------------------------------------------------------------------------------------------ stop-band skips
+def test_a_candidate_outside_the_arms_stop_band_is_skipped_journalled_and_recorded_with_its_propensity(tmp_path):
+    """Arms expansion section 4: "A candidate outside its £ cap or stop band is skipped and logged with its
+    propensity": no order, an `exploration_skipped:<reason>` journal entry with the arm's share, and a blocked
+    candidate (mu 0) with its reason for the off-policy estimates."""
+    spec = SpecArm(id="band", rule=LONG, timeframe="15m", max_open=1,
+                   params={"stop_usd": 5.0, "target_r": 2.0, "hold_bars": 4, "max_stop_usd": 4.0})
+    low = SpecArm(id="floor", rule=LONG, timeframe="15m", max_open=1,
+                  params={"stop_usd": 5.0, "target_r": 2.0, "hold_bars": 4, "min_stop_usd": 6.0})
+    eng, pb = _engine(tmp_path, [Arm(spec=spec, style="intraday"), Arm(spec=low, style="intraday")])
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert not _sent(eng) and not pb.positions()
+    skips = {d["arm"]: d for d in _actions(eng, "exploration_skipped:")}
+    assert skips["band"]["action"] == "exploration_skipped:stop_gt_cap"
+    assert skips["floor"]["action"] == "exploration_skipped:stop_lt_floor"
+    assert all(d["propensity"] is not None and d["propensity"] > 0 and d["stop_usd"] == 5.0 for d in skips.values())
+    ex = eng.exploration
+    assert ex is not None
+    u = {a: exploration.draw(exploration.order_id(eng, ex.arms[a], CLOSE)) for a in ("band", "floor")}
+    assert [r[:6] for r in _obs(tmp_path)] == [("band", 0, "blocked", 0.0, pytest.approx(u["band"]), "stop_gt_cap"),
+                                               ("floor", 0, "blocked", 0.0, pytest.approx(u["floor"]), "stop_lt_floor")]

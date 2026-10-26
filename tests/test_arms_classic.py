@@ -45,7 +45,7 @@ from goldbot.telegram.approvals import ApprovalCenter
 
 NO = np.zeros(0, dtype=np.int64)
 HALF_POINT = 0.005                                  # USD: stops this close are the same broker price
-BUFFER = EngineConfig.model_fields["max_bars_in_memory"].default    # the engine's live 1m bars (~40 trading days)
+BUFFER = 60_000         # ~40 trading days of 1m bars: these warm-ups fit it, and the engine keeps at least this
 CUT = pd.Timestamp("2024-01-10", tz="UTC")          # a Wednesday 00:00 UTC: whole 15m/1h/4h bars on both sides
 LIVE_FROM, LIVE_TO = pd.Timestamp("2024-01-02", tz="UTC"), pd.Timestamp("2024-01-31", tz="UTC")
 QUIET = 8                                           # closes without a candidate also checked live
@@ -214,7 +214,7 @@ def test_a_specialist_arms_warm_up_is_its_familys_and_stays_inside_the_engines_b
     any other arm keeps LOOKBACK."""
     n = exploration.lookback(_arm(name, tf))
     assert exploration.LOOKBACK <= n <= BUFFER // 2 * 60 // tf_seconds(tf)
-    assert exploration.LOOKBACK_MAX_1M <= BUFFER
+    assert BUFFER <= EngineConfig.model_fields["max_bars_in_memory"].default == exploration.LOOKBACK_MAX_1M
     rb = A.Arm(id="R", rule="random_bracket", timeframe=tf,
                params={"stop_usd": 5.0, "target_r": 2.0, "hold_bars": 4, "minutes": [0]})
     assert exploration.lookback(rb) == exploration.LOOKBACK

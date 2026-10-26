@@ -29,7 +29,7 @@ TF_SECONDS: dict[str, int] = {
 
 Timeframe = Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]
 # Timeframes an agent may decide on live: each needs a walk-forward window (the Saturday retrain) and the engine must
-# hold enough 1m history for 120 of its bars. 1d is research-only: the engine keeps ~40 trading days of 1m bars
+# hold enough 1m history for 120 of its bars. 1d is research-only: the engine keeps ~62 trading days of 1m bars
 # (EngineConfig.max_bars_in_memory), so a daily agent would never get a frame.
 DecisionTimeframe = Literal["15m", "1h", "4h"]
 

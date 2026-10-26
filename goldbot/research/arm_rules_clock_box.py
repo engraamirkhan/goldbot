@@ -66,6 +66,13 @@ WFRI_EXIT = (16, 30)                        # Friday 16:30 New York
 WFRI_STOP_ATR4H = 1.0
 WFRI_CUT_TZ, WFRI_CUT = "Europe/Athens", (21, 30)   # = EngineConfig.server_tz / weekend_cut (a test holds them equal)
 WFRI_CUT_KEEP = 0.5                         # runner._weekend_rule: a winner's stop locks in half the open profit
+# Rules whose exit includes the engine's Friday weekend cut (amendment 1): `exploration.crosses_friday` lets their
+# entries hold across the cut (never into the weekend), and a close by the cut is their own exit, not a censoring.
+FOLLOWS_FRIDAY_CUT = frozenset({"friday_long"})
+# Decision bars live must hand the rule for its candidates to equal the history run's (`arm_rules.lookback_bars`):
+# WFRI's stop is Wilder's ATR14 of the 4h bars, whose start weighs (13/14)^k after k bars; 200 4h bars (1,600 of its
+# 30m bars) put it below 1e-6. The default 200 decision bars are 25 4h bars: a stop ~15% off history's (tested).
+LOOKBACK_BARS = {"friday_long": 1_600}
 # KA15: stratum -> (zone, hh, mm, side vs sign(pre))
 ANCHORS: dict[str, tuple[str, int, int, int]] = {
     "T": ("Asia/Tokyo", 8, 0, -1), "S": ("Asia/Shanghai", 10, 15, 1), "C": (NEW_YORK, 13, 30, -1)}

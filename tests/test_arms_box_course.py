@@ -7,13 +7,13 @@ roster's 1.5 ATR stop. Section 4: "A candidate outside its £ cap or stop band i
 propensity", and the same function runs in the history matrix and live.
 
 Warm-up (measured 2026-10-26, synthetic seed 1 here and real 2025-01..09 bars, which reproduce the same picture):
-* the engine's memory, `EngineConfig.max_bars_in_memory` = 60 000 1m bars (~40 trading days), reproduces every
-  history candidate of box_break, box_rip, box_retest and trend_level_signal with the same R; fakey's 4h box set is
-  still empty after 271 4h bars, so its L0 candidates are lost (real 2025: 0 of 1; it needs ~80 000 minutes there).
-  Real Q3 2025, every 1h close against the full run: box_retest 6/6, box_rip 1/1, no candidate the history lacks;
-* the window the exploration runner actually hands an arm (`exploration._bars`: LOOKBACK 200 bars of the arm's
-  timeframe, at least LOOKBACK_1M minutes: ~2 days for 15m, ~8 days for 1h) reproduces none of them.
-Both shortfalls are strict xfails below, so they fail loudly the day they are fixed and the marker must go."""
+* 60 000 1m bars (~40 trading days) reproduce every history candidate of box_break, box_rip, box_retest and
+  trend_level_signal with the same R; fakey's 4h box set is still empty after 271 4h bars, so its L0 candidates were
+  lost (real 2025: 0 of 1; it needs ~80 000 minutes there). Real Q3 2025, every 1h close against the full run:
+  box_retest 6/6, box_rip 1/1, no candidate the history lacks;
+* so the engine's memory, `EngineConfig.max_bars_in_memory`, is 90 000 1m bars (~62 trading days, engine lane E1
+  2026-10-26), and the window the runner hands an arm is its declared warm-up (`exploration.lookback`:
+  `arm_rules_specialist.WARMUP_MIN`, fakey 80 000 minutes), which reproduces every one of them, fakey's included."""
 from __future__ import annotations
 
 from collections import deque
@@ -40,16 +40,13 @@ from goldbot.specialists import box_course as bc
 NO = np.zeros(0, dtype=np.int64)
 FAMILIES: tuple[tuple[str, A.Timeframe], ...] = (("box_break", "15m"), ("box_rip", "1h"), ("box_retest", "1h"),
                                                  ("fakey", "1h"), ("trend_level_signal", "1h"))
-MEMORY = int(EngineConfig.model_fields["max_bars_in_memory"].default)   # 60 000 1m bars, ~40 trading days
+MEMORY = int(EngineConfig.model_fields["max_bars_in_memory"].default)   # 90 000 1m bars, ~62 trading days
 WHOLE_MEMORY = 10**7                   # LOOKBACK_1M so large that `exploration._bars` hands an arm the whole memory
 CUT = pd.Timestamp("2024-01-11", tz="UTC")     # a Thursday 00:00 UTC: every family has a candidate before it
-FAKEY_SHORT = pytest.mark.xfail(strict=True, reason="fakey L0's 4h box set needs more than the engine's 60 000 1m "
-                                                    "bars of memory (module docstring): NO-GO for wave 1")
 
 
-def _families(*marked: str) -> list[Any]:
-    return [pytest.param(n, tf, marks=FAKEY_SHORT, id=n) if n in marked else pytest.param(n, tf, id=n)
-            for n, tf in FAMILIES]
+def _families() -> list[Any]:
+    return [pytest.param(n, tf, id=n) for n, tf in FAMILIES]
 
 
 @pytest.fixture(scope="module")
@@ -139,8 +136,12 @@ def _engine_at(b1: pd.DataFrame, arm: A.Arm, close: pd.Timestamp) -> SimpleNames
     minutes) and one exploration arm."""
     mem = b1[b1["visible_at"] <= close].tail(MEMORY).reset_index(drop=True)
     xarm = exploration.Arm(spec=arm, style="intraday")
-    ex = SimpleNamespace(arms={arm.id: xarm}, retired=frozenset(), last_bar={}, queue=deque(), ahead_seen=None)
-    return SimpleNamespace(exploration=ex, cfg=SimpleNamespace(live_clock=False), bars_1m=mem, decisions=[])
+    # what a skipped candidate's log reads: the pots (equal shares without a ledger), the broker, no champion
+    ex = SimpleNamespace(arms={arm.id: xarm}, retired=frozenset(), last_bar={}, queue=deque(), ahead_seen=None,
+                         cfg=SimpleNamespace(pots={"intraday": None}), weights_cache=None, db=None, broker="icm",
+                         champion_seen={})
+    return SimpleNamespace(exploration=ex, cfg=SimpleNamespace(live_clock=False, account_id="t"), bars_1m=mem,
+                           decisions=[])
 
 
 def _queued(b1: pd.DataFrame, arm: A.Arm, close: pd.Timestamp) -> tuple[list[Any], list[dict[str, Any]]]:
@@ -165,7 +166,7 @@ def _expect(got: pd.DataFrame, i: int) -> pd.DataFrame:
     return got[got["idx"] == i].drop(columns="idx").reset_index(drop=True)
 
 
-@pytest.mark.parametrize(("name", "tf"), _families("fakey"))
+@pytest.mark.parametrize(("name", "tf"), _families())
 def test_the_engines_1m_memory_is_enough_warm_up_for_every_history_candidate(b1, name, tf, monkeypatch) -> None:
     """With the arm reading the engine's whole memory (~40 trading days), every history candidate is decided the same
     (side, structural R, 2R, hold), and the runner queues each one its filters keep with that stop, target and hold."""
@@ -180,7 +181,7 @@ def test_the_engines_1m_memory_is_enough_warm_up_for_every_history_candidate(b1,
             pytest.approx((risk, 2 * risk, int(hold) + 1), rel=1e-6)], ctx.close_ts[int(i)]
 
 
-@pytest.mark.parametrize(("name", "tf"), _families("fakey"))
+@pytest.mark.parametrize(("name", "tf"), _families())
 def test_the_runners_live_arm_window_reproduces_every_history_candidate(b1, name, tf) -> None:
     ctx, got = _history(b1, name, tf)
     assert len(got) > 0
@@ -211,10 +212,7 @@ def test_a_structural_stop_outside_the_stop_band_is_skipped(b1, name, tf) -> Non
     assert i in inside["idx"].tolist()
 
 
-@pytest.mark.xfail(strict=True, reason="arm_rules.post_filter drops a stop outside the band silently; its docstring's "
-                                       "'logged in the runner as stop_lt_floor / stop_gt_cap' has no code (section 4 "
-                                       "requires skipped AND logged with its propensity)")
-@pytest.mark.parametrize(("name", "tf"), [f for f in BANDED if f[0] != "fakey"])
+@pytest.mark.parametrize(("name", "tf"), BANDED)
 def test_a_structural_stop_outside_the_stop_band_is_journalled_by_the_runner(b1, name, tf, monkeypatch) -> None:
     monkeypatch.setattr(exploration, "LOOKBACK_1M", WHOLE_MEMORY)
     ctx, i, risk = _first(b1, name, tf)
@@ -222,4 +220,5 @@ def test_a_structural_stop_outside_the_stop_band_is_journalled_by_the_runner(b1,
     assert len(_queued(b1, arm, ctx.close_ts[i])[0]) == 1                # inside the band: queued
     q, decisions = _queued(b1, _arm(name, tf, max_stop_usd=risk - 0.01), ctx.close_ts[i])
     assert not q
-    assert any(d.get("agent") == exploration.PREFIX + arm.id and "propensity" in d for d in decisions), decisions
+    [skip] = [d for d in decisions if d.get("agent") == exploration.PREFIX + arm.id]
+    assert skip["action"] == "exploration_skipped:stop_gt_cap" and skip["propensity"] > 0, decisions
