@@ -27,6 +27,13 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   `RuleContext.spec_ctx` carries point-in-time tables (e.g. the smc replica state) for families that need them; the
   engine does not pass it yet. Tests: tests/test_arm_rules_specialist.py (parity with `candidates_in_context` and
   with `research.pipeline.prepare`'s stop and target for box_break and trend, prefix invariance, refusals, hash).
+- Arms expansion wave 1 config (arms-expansion-2026-10-26.md sections 3-5, lane L6): 19 new hash-frozen arm ids in
+  `config/exploration_arms.yaml` (`rule: specialist`, stop band $3 to the £ cap at 0.01 lot): icm-demo XBB15, XTV1,
+  XEQ15, XSO15, XIMNY, XIMLN, XAD1H, XMR15, XMR1H + control C1H; vantage-demo VXRIP1H, VXRT1H, VXFK1H, VXTL1H, VXTV2,
+  VXBO1H, VXBO15, VXTR1H + control VC1H. XTV1/VXTV2 (smc) are `blocked` until the ReplicaShadow/spec_ctx path runs on
+  the engine's bars (SRE profile 2026-10-26). `config/accounts.yaml`: registered at £17 (15m) / £30 (1h), controls a
+  fixed 0.25 share, intraday pot `max_open` 5 -> 9 on both hosts; no other limit changed. The 2026Q4 trial override
+  (74 -> 93, `config/settings.yaml`) is NOT in this commit: a PD-owned trial-budget edit, applied by the PD before deploy.
 - Wave-2 channel arm rules (2026-10-26, lane W2c; ARM-SPEC docs/research/arms-2026-10-25.md section 8 and 8.13):
   goldbot/research/arm_rules_channels.py adds `squeeze_release` (KSQ1 1h / KSQ4 4h), `donchian_break` (DON4 4h /
   DOND 1d), `low30_touch` (C30A, 15m on trading-day context) and `low30_control` (C30C, whole trading day,

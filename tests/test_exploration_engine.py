@@ -802,9 +802,9 @@ def test_the_two_hosts_ship_the_adr_0043_budget_with_exploration_on():
     assert demo.budget_share * 220 == pytest.approx(198, abs=0.05)
     assert accs["icm-probe"].cost_probe.budget_share * 220 == pytest.approx(60, abs=0.05)
     assert {k: (v.gbp, v.max_open) for k, v in probe.pots.items()} == {"scalp": (138, 12)}
-    assert {k: (v.gbp, v.max_open) for k, v in demo.pots.items()} == {"intraday": (108, 5), "swing": (90, 1)}
+    assert {k: (v.gbp, v.max_open) for k, v in demo.pots.items()} == {"intraday": (108, 9), "swing": (90, 1)}   # max_open 5 -> 9: wave 1
     assert {a.max_loss for a in probe.arms.values()} == {6.5}
-    assert {a.max_loss for a in demo.arms.values() if a.style == "intraday"} == {17.0}
+    assert {a.max_loss for a in demo.arms.values() if a.style == "intraday"} == {17.0, 30.0}   # £30: wave-1 1h arms
     assert {a.max_loss for a in demo.arms.values() if a.style == "swing"} == {40.0}
 
 
