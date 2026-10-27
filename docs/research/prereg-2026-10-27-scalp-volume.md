@@ -255,3 +255,73 @@ void. **The 500 is only real after step 0's repair** (void ≤ 5%, `reconcile:*`
    the 1m/5m frames; the spread gate; the `net_conflict` skip; virtual re-brackets for ZCD/ZCV/S0; the bridge burst
    at :00/:30 (Z7 plus probes); and, per the plan, probe minutes moved off the quarter hour.
 6. **Owner-only:** none is assumed. No live account, sizing, spending or cap is touched.
+
+## 7. Amendment 2026-10-27 (a): step-1 total of 520 or more on icm-probe; one stop bar for Vantage
+
+Written on 2026-10-27 at the program director's decision, before any code, history run or fill of any arm in this
+file. No return was read; the inputs are section 1's counts and section 3's null SDs. This amendment overrides
+sections 1-5 where they differ.
+
+### 7.1 icm-probe carries the gap
+
+The loosening rule stands: no threshold of any rule is loosened. The added volume is **new decision points, disjoint
+from icm-demo's**, so it is not a same-rule duplicate on one broker.
+
+- **Z7P**, a declared stratum of Z7. It is Z7's rule at the **New York :15 and :45** half-hour starts: S sums the same
+  New York half-hour [τ, τ+30 min) over the previous 10 days. Its stop is $4.50, 1.5 R target, 6 bars.
+  - Z7D samples :00/:30, so the two strata never share a decision time or an interval.
+  - Rate: 40.9 a day (2010-17 census at the offset grid), about **35 fills** a day.
+- **Z4P**, a declared stratum of Z4. It is Z4's rule at the **$5-offset handles** (prices ≡ 5.00 mod 10.00), with a
+  $3.00 stop, 1 R target and 15 bars.
+  - Z4D trades the $10 handles, so the levels are disjoint.
+  - Osler 2003 ranks roundness: a $5 handle is a weaker cluster, so the stratum is reported per handle class
+    (descriptive).
+  - About **28 fills** a day.
+- **Probes** go from 50 to about 54 a day, every 10 minutes off the quarter hour (plan lever). That is 17% of the
+  count, under the 20% rule.
+- **Slots.** icm-probe's scalp pot `max_open` goes 12 → **14**, inside the unchanged `max_open_total` 17 (with 3 probe
+  slots) and `max_positions` 18. The pot is re-split to £168 (section 3.4); the £198 and `budget_share` are
+  unchanged.
+- **Ids.** The two strata are new ids under one family each (+2). The precedent count gives 2026Q4 143 → **145**, and
+  K about 397. This is the director's decision.
+
+**icm-probe at about 323 a day** (scalp 269, probes 54):
+
+| Case | Drift £/day | σ (D1) | P(bind) D1 / D1.5 / D2 | Weekly |
+|---|---|---|---|---|
+| Whole £198, $0.156 | 37.9 | 47.9 | 0.2% / **1.0%** / 2.5% | £189 (1.7%); −8% in about 23 trading days |
+| Whole £198, $0.23 | 55.9 | 47.9 | 0.5% / **2.1%** / 4.4% | £279 |
+| Scalp pot £168, $0.156 | 31.6 | 45.0 | 0.4% / **1.9%** / 4.1% | — |
+| Scalp pot £168, $0.23 | 46.5 | 45.0 | 1.1% / **3.5%** / 6.5% | — |
+
+- Below 5% at D1.5 in every case up to the conservative cost.
+- **Tripwire:** if its 10-day realised bind rate is above 5%, or icm-probe's measured cost rises above $0.23, Z7P and
+  Z4P stop first, as one rung.
+
+### 7.2 One stop bar for Vantage, reconciled with ADR 0049
+
+- **The bar: cost/R ≤ 0.08 at the broker's measured round trip,** using the 95% upper bound once there are ≥ 200 own
+  fills. At $0.52 that means a **$7.00** stop on every Vantage scalp arm. At UB ≤ $0.24 it allows $3, and the
+  S-twins unblock.
+- **Why this bar.** At $3-4.5 stops and $0.52, cost alone is 0.12-0.17 R. The volume plan's 3× rule then needs a
+  gross 0.35-0.5 R per trade, which no family here has a basis for. That would buy cost-dominated labels.
+- **Conflict with ADR 0049 (proposed, CFO).** D1/D2 size vantage-demo at 150 now on $3-4.5 stops (1.6% bind at
+  D1.5). Under the $7 bar each trade risks £5.26, so:
+  - with its intraday and swing arms still on the host, the cost-safe level is a **£100 scalp pot ≈ 58 scalp fills
+    (8.5% at D1.5) + probes + depth ≈ 80-95**;
+  - with them moved to `vantage-swing` (V2), it is **≈ 120-135 (5.2%)**;
+  - the whole-£180 ceiling at $0.52 is **≈ 165**. Vantage is held at or below it until its measured cost is in.
+  - **Requested of the CFO:** amend ADR 0049 D1/D2 so that Vantage's target is "the cost-safe level at the $7 bar".
+    That is about 90 now, about 130 at V2, ≤ 165 at $0.52 and 200 at UB ≤ $0.35. Its ≤ 10% bind rule is unchanged.
+
+### 7.3 Step-1 numbers (11-02)
+
+| Account | Fills/day | P(bind) at D1.5 |
+|---|---|---|
+| icm-probe | **≈ 323** | 1.0-3.5% |
+| icm-demo | **≈ 138**, with one shared budget (option A, section 3.4) | 8.0% |
+| vantage-demo | **≈ 90** at V1, **≈ 130** if `vantage-swing` is live before 11-02 | 8.5% / 5.2% |
+| **Total** | **≈ 551 (V1) to 591 (V2)**, at least 520 either way | |
+
+- If icm-demo stays on separate pots (option B, about 120), the total is ≈ 533 at V1.
+- These are filled fills. Admissible fills still need step 0's void repair.
