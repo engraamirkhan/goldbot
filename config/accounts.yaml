@@ -237,6 +237,17 @@ accounts:
         # KA15's decision closes (0.10 of the pot: about KA15's 2 a day; XC15 blocked until engine lane E3)
         KA15: { style: scalp, max_loss: 6.5 }
         XC15: { style: scalp, max_loss: 6.5, control_share: 0.10 }
+        # H-81 scalp volume (prereg-2026-10-27-scalp-volume.md section 1 and amendment (a)): icm-probe's strata of
+        # Z1/Z2/Z5/Z8 and Z7P/Z4P at ICM's fixed stops ($3.00 1m = £2.26, $4.50 5m = £3.38, inside the £6.50 scalp
+        # cap); their control is the borrowed S0 (fills inside W that pass the spread gate only, amendment (b) 2).
+        # Inside the unchanged £138 / 12 scalp pot: the requested re-split to £168 / 14 (sections 3.4, 7.1; ADR 0049
+        # D1) is not applied here. Rollback: drop these six lines, restart.
+        Z1P: { style: scalp, max_loss: 6.5 }
+        Z2P: { style: scalp, max_loss: 6.5 }
+        Z5P: { style: scalp, max_loss: 6.5 }
+        Z8P: { style: scalp, max_loss: 6.5 }
+        Z7P: { style: scalp, max_loss: 6.5 }
+        Z4P: { style: scalp, max_loss: 6.5 }
   vantage-demo:
     broker: vantage
     mode: demo

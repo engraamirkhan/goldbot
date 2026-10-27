@@ -24,7 +24,8 @@ from goldbot.telegram.approvals import ApprovalCenter
 from tests.test_exploration_engine import CLOSE, _arm, _at, _explore, _sent, _Terminal
 
 SCALP = {"S0", "S0R", "S1A", "S1B", "S2A", "S2B", "S3A", "S3B", "S4", "S5A", "S5B", "F1A", "F1C",   # F1A/F1C: 2026-10-26 prereg
-         "KA15", "XC15"}                                                                     # wave 2 (8.8, 8.9)
+         "KA15", "XC15",                                                                     # wave 2 (8.8, 8.9)
+         "Z1P", "Z2P", "Z5P", "Z8P", "Z7P", "Z4P"}                                           # H-81 (2026-10-27)
 INTRADAY = {"I0", "I2A", "I2B", "MB15", "MB30", "MB1H", "MSA15", "G1A", "G1C",
             # arms expansion wave 1 (2026-10-26)
             "XBB15", "XTV1", "XEQ15", "XSO15", "XIMNY", "XIMLN", "XAD1H", "XMR15", "XMR1H", "C1H",

@@ -32,6 +32,9 @@ PRIOR_WEIGHT_CAP = 50.0
 PRIOR_WEIGHT_PER_TRADE = 0.01                           # weight = min(50, n / 100)
 # wave 2 lane W2d (goldbot.research.arm_rules_clock_box): WFRI, KA15/XC15, the H-80 box family
 CLOCK_BOX_RULES = ("friday_long", "clock_anchor", "clock_anchor_control", "box_next")
+# H-81 scalp-volume families Z1-Z10 and their controls (goldbot.research.arm_rules_scalp)
+SCALP_RULES = ("tick_surge", "run_fade", "round_break", "round_reject", "extreme_break", "nr4_break",
+               "halfhour_persist", "absorb_fade", "htf_reclaim", "three_horizon", "scalp_control")
 Timeframe = Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
 RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_absorb", "box_break_close",
          "ema_pullback", "tsmom", "specialist", *CLOCK_BOX_RULES, "blocked",
@@ -41,7 +44,8 @@ RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_ab
          # its generator lands in arm_rules.RULE_FUNCS (engine lane E2); a blocked arm never runs
          "level_break",
          # wave 2 lane W2a (H-70 F1 / F-2)
-         "hurst_band_break", "hurst_band_break_control", "htf_stretch_break", "htf_stretch_break_control")
+         "hurst_band_break", "hurst_band_break_control", "htf_stretch_break", "htf_stretch_break_control",
+         *SCALP_RULES)
 
 
 # ---------------------------------------------------------------- holdout guard
@@ -150,6 +154,9 @@ class Arm(FrozenRecord):
             if self.rule in CLOCK_BOX_RULES:
                 from goldbot.research.arm_rules_clock_box import check
                 check(self)
+            if self.rule in SCALP_RULES:
+                from goldbot.research.arm_rules_scalp import check as check_scalp
+                check_scalp(self)
         except ValueError as exc:
             raise ValueError(f"{self.id}: {exc}") from exc
         return self

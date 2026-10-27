@@ -101,7 +101,8 @@ def test_no_row_keeps_a_placeholder_rule_and_the_placeholders_are_gone(spec) -> 
 
 
 def test_forward_only_arms_never_run_on_history(spec) -> None:
-    assert {i for i, a in spec.items() if a.forward_only} == FORWARD_ONLY
+    h81 = {i for i, a in spec.items() if a.rule in arms.SCALP_RULES}     # H-81 (tests/test_arm_rules_scalp.py)
+    assert {i for i, a in spec.items() if a.forward_only} - h81 == FORWARD_ONLY
     runnable = set(arms.runnable_ids(SPEC))
     assert not FORWARD_ONLY & runnable
     assert {"PDC1", "PDC4", "OBR15", "KSQ1", "KSQ4", "DON4"} <= runnable
