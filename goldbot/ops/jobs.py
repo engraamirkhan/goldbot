@@ -109,6 +109,7 @@ from goldbot.agents.roles import ROLES
 from goldbot.agents.runner import AgentRunner
 from goldbot.base import Record, load_record, write_atomic
 from goldbot.config import DecisionTimeframe, Settings
+from goldbot.data.account_bars import account_bars_1m
 from goldbot.data.release import store_macro
 from goldbot.data.store import Store
 from goldbot.db.connection import Database
@@ -391,11 +392,20 @@ def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     start = max(pending["decision_utc"].min(), slot - pd.Timedelta(days=EXPLORATION_LABEL_DAYS)) \
         if not pending.empty else None
     keys = sorted({(str(a), str(b)) for a, b in zip(pending["account_id"], pending["broker"], strict=True)})
+    symbol_of = {acc.account_id: getattr(acc, "symbol", "XAUUSD") for acc in ctx.accounts}
+    no_bars: list[str] = []
     for account, broker in keys:
         if broker not in costs:
             costs[broker] = exploration_costs(ctx, slot, broker)
         cm = costs[broker]
-        bars = ctx.store.read("bars_1m", source=account, start=start, end=slot)
+        # the account's own broker minutes, point in time (data/account_bars.py; never `bars_1m` alone: on the brain
+        # it holds only the reference feed, and 0 of 349 candidates were labelled until 2026-10-27)
+        bars = account_bars_1m(ctx.store, account_id=account, broker=broker,
+                               symbol=symbol_of.get(account, "XAUUSD"), start=start, end=slot, as_of=slot)
+        if bars.empty:
+            no_bars.append(account)
+            log.warning("no 1m bars for %s (%s) in bars_1m_live / bars_1m_broker / bars_1m: its exploration "
+                        "candidates are not labelled tonight", account, broker)
         n = label_candidates(db, bars, cm, cutoff=slot, account_id=account) if not bars.empty else 0
         labelled[account] = labelled.get(account, 0) + n
     seen = read_obs(db)["broker"].dropna()
@@ -411,7 +421,8 @@ def exploration_learn(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
         except Exception as exc:       # noqa: BLE001 - its weights age into equal shares; the others still learn
             log.exception("exploration learner failed for broker %s", broker)
             out[broker] = {"error": type(exc).__name__}
-    return {"labelled": labelled, "cost_model": {b: m.version for b, m in costs.items()}, "stamped": stamped,
+    return {"labelled": labelled, "no_bars": no_bars, "cost_model": {b: m.version for b, m in costs.items()},
+            "stamped": stamped,
             "unkeyed": unkeyed, "evidence_exclusions": void, "brokers": out}
 
 
