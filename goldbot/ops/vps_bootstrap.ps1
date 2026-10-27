@@ -271,6 +271,8 @@ foreach ($s in $svcs) {
   nssm set $s.name AppRotateFiles 1
   nssm set $s.name AppRotateBytes 10485760
   nssm set $s.name AppExit Default Restart
+  # an engine refused by config (disabled account, live not unlocked) exits 78 and stays stopped (ENGINE_DISABLED_EXIT)
+  if ($s.name -like "goldbot-engine-*") { nssm set $s.name AppExit 78 Exit }
   nssm set $s.name AppRestartDelay 5000
   nssm set $s.name Start SERVICE_AUTO_START
   if ($svcCred) {

@@ -178,6 +178,39 @@ def refuse_start(account_id: str, why: str, info: Any = None, state_dir: str | P
     raise SystemExit(why)
 
 
+# SRE finding 2026-10-27: an account `enabled: false` in config/accounts.yaml never trades. Its refusal exits with
+# EX_CONFIG, which goldbot-engine@.service (RestartPreventExitStatus=) and NSSM (AppExit 78 Exit) never restart: a
+# config refusal does not cure itself in 10 s, unlike a bridge outage (Restart=always).
+ENGINE_DISABLED_EXIT = 78
+
+
+def refuse_disabled(account_id: str, why: str) -> NoReturn:
+    """End the start of an account that may not trade: the reason in the journal, then ENGINE_DISABLED_EXIT. Nothing
+    is written to engine_<account>.json: the supervisor halts every real account on a `startup_error` there
+    (`engine_startup_refused`), and a switched-off account must not stop the enabled ones."""
+    log.error("refusing to start %s: %s (exit %d, not restarted)", account_id, why, ENGINE_DISABLED_EXIT)
+    raise SystemExit(ENGINE_DISABLED_EXIT)
+
+
+def disabled_wind_down(acc: Account, broker: Any) -> bool:
+    """A demo account `enabled: false`: True when it must start to wind down, else the start is refused
+    (`refuse_disabled`). Design rule: exits are never gated, so a position this engine owns (its magic range, as
+    Engine._own) is never stranded by a switch-off: the engine starts with every entry refused `account_disabled`
+    and manages the exits; a positions read that fails counts as a position. With nothing of its own open the start is
+    refused; the next restart after the wind-down is flat refuses the same way."""
+    try:
+        own = [p for p in broker.positions() if acc.magic_base <= p.magic < acc.magic_base + 100]
+    except Exception as exc:  # noqa: BLE001 - unknown exposure: manage it rather than strand it
+        log.warning("%s is disabled and its positions are unreadable (%s): winding down, entries refused",
+                    acc.account_id, type(exc).__name__)
+        return True
+    if not own:
+        refuse_disabled(acc.account_id, "enabled: false in config/accounts.yaml and no position of its own open")
+    log.warning("%s is disabled with %d position(s) of its own open: winding down, entries refused, exits managed",
+                acc.account_id, len(own))
+    return True
+
+
 # trading-safety review of 10a18031 (M1): an account with no bridge and no local terminal refuses to start; the paper
 # stand-in (fake fills under the account's broker key, its £ daily limit dropped) only on this explicit developer opt-in
 PAPER_ENGINE_ENV = "GOLDBOT_PAPER_ENGINE"
@@ -271,14 +304,15 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     from goldbot.telegram.bus import ApprovalBus
     configured = accounts.load_accounts()
     acc = configured[account_id]
+    # before any broker connection: a live account trades only enabled AND past the phase gate, never to wind down
+    if acc.is_live and acc not in accounts.enabled_accounts("live", loaded=configured):
+        refuse_disabled(account_id, "live account not enabled or not unlocked by the phase gate")
     if why := approval_ids_problem(account_id):
         resolve(refuse_start)(account_id, f"refusing to start {account_id}: {why}", probe_only=acc.probe_only)
     from goldbot.ops.engine_lock import hold_engine
     if why := hold_engine("state", account_id):      # held for the process's life: no repair rewrites its files
         resolve(refuse_start)(account_id, f"refusing to start {account_id}: {why}", probe_only=acc.probe_only)
     settings = load_settings()
-    if acc.is_live and acc not in accounts.enabled_accounts("live"):
-        raise SystemExit("live account not unlocked by the phase gate")
     bridge = accounts.bridge_endpoint(account_id)
     if bridge is not None:
         # terminal on another machine (Oracle free tier: MT5 under Wine); a bridge failure ends this process and the
@@ -316,7 +350,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         why = f"symbol_info({acc.symbol}) unavailable ({type(exc).__name__})"
     if why:
         resolve(refuse_start)(account_id, f"refusing to trade {account_id}: {why}", probe_only=acc.probe_only)
-    paper = resolve(paper_stand_in)(broker)
+    wind_down = not acc.enabled and disabled_wind_down(acc, broker)   # refuses when nothing of its own is open
+    paper =resolve(paper_stand_in)(broker)
     policy = resolve(engine_limits_policy)(settings, acc, paper=paper, state_dir="state",
                                            accounts=list(configured.values()))
     limits = policy.defaults
@@ -364,7 +399,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               exploration_config=exploration.config_for(acc),   # None unless enabled (plan 2026-10-25)
                               shadow_max_open=settings.shadow.max_open_per_agent,
                               magic_base=acc.magic_base, server_tz=acc.server_tz, state_dir="state", data_root=settings.data_root,
-                              shadow_host=shadow_host, probe_only=acc.probe_only, halt_checks=True, news_blackout=True,
+                              shadow_host=shadow_host, probe_only=acc.probe_only, wind_down=wind_down, halt_checks=True,
+                              news_blackout=True,
                               blackout_before_min=settings.risk.blackout.before_min,
                               blackout_after_min=settings.risk.blackout.after_min,
                               shock_blackout_min=settings.news.shock_blackout_min,
