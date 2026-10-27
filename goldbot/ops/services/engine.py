@@ -452,8 +452,9 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     compat: Any = None                      # BACKLOG 42: the bridge's methods, protocol and zone against this brain's
     if bridge is not None:
         from goldbot.ops.bridge_compat import BridgeCompatChecker, check_bridge, repo_commit
-        brain_commit, url, tz = repo_commit(), bridge[0], acc.server_tz
-        compat = BridgeCompatChecker(lambda: check_bridge(url, tz, brain_commit))
+        brain_commit, url, tz, live = repo_commit(), bridge[0], acc.server_tz, acc.mode != "demo"
+        # BACKLOG 135: a live account also needs the close-priority bridge (v7), else its entries are refused
+        compat = BridgeCompatChecker(lambda: check_bridge(url, tz, brain_commit, live=live))
         resolve(begin_bridge_check)(eng, compat)   # blocked (unchecked) first, then one check before the loop starts
     # the history fill (engine/history.py) pulls ticks on its own thread, so through the bridge it gets its own client;
     # a direct MT5 terminal (one module-wide connection) is never called from a second thread: no fill without a bridge

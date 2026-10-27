@@ -109,16 +109,20 @@ def check_bridge_compat(ctx: HealthContext, account: AccountRef) -> Check | None
         url = None
     if not url or ctx.bridge_info is None or account.server_tz is None:
         return None
-    from goldbot.ops.bridge_compat import BridgeInfo, assess
+    from goldbot.ops.bridge_compat import LANE_DOWN, BridgeInfo, assess
     name = f"bridge_compat:{account.account_id}"
     try:
         info = ctx.bridge_info(url)
     except Exception as exc:              # the type only: a message can name the tunnel endpoint
         info = BridgeInfo(reachable=False, problem=f"/health unreadable ({type(exc).__name__})")
-    v = assess(info, account.server_tz, ctx.commit)
+    v = assess(info, account.server_tz, ctx.commit, live=account.live)
     if v.blocks:
         return Check(name=name, status="fail", reason=f"{v.reason}: the engine refuses entries (bridge_incompatible), "
                      "exits unaffected; deploy the brain's commit to the MT5 box (RUNBOOK: bridge compatibility)")
+    if info.order_lane == LANE_DOWN:      # BACKLOG 135: any account; entries share the terminal again until a restart
+        return Check(name=name, status="fail", reason=f"{v.reason}; the order lane is down: entries share the bridge's "
+                     "terminal connection again, so exits can wait out an order (RUNBOOK 'Order lane': restart "
+                     "goldbot-bridge@<account> or roll the lane back)")
     try:
         engine = _read_json(ctx.state_dir / f"engine_{account.account_id}.json").get("bridge_compat") or {}
     except (ValueError, OSError, AttributeError):

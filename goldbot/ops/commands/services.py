@@ -5,7 +5,7 @@ from __future__ import annotations
 from goldbot.ops.commands.registry import register_command
 from goldbot.ops.services._base import resolve
 from goldbot.ops.services.api import run_api
-from goldbot.ops.services.bridge import run_bridge
+from goldbot.ops.services.bridge import run_bridge, run_order_lane
 from goldbot.ops.services.engine import run_engine
 from goldbot.ops.services.news import run_news
 from goldbot.ops.services.scheduler import run_scheduler
@@ -27,6 +27,11 @@ def _engine(cmd: str, args: list[str]) -> None:
 @register_command("bridge", pos=40)
 def _bridge(cmd: str, args: list[str]) -> None:
     resolve(run_bridge)(args[0])
+
+
+@register_command("bridge-order-lane", pos=45)
+def _bridge_order_lane(cmd: str, args: list[str]) -> None:
+    resolve(run_order_lane)(args[0])     # started by the bridge itself (BACKLOG 135), never by hand
 
 
 @register_command("api", pos=50)

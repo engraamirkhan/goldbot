@@ -313,7 +313,7 @@ def _bridge_compat_item(ctx: PreflightContext, url: str) -> Item:
         info = ctx.bridge_info(url)
     except Exception as exc:              # the type only: a message could carry the URL
         info = BridgeInfo(reachable=False, problem=f"/health unreadable ({type(exc).__name__})")
-    v = assess(info, acc.server_tz, ctx.commit)
+    v = assess(info, acc.server_tz, ctx.commit, live=acc.mode != "demo")     # BACKLOG 135: v7 and the lane
     if v.blocks:
         return Item(name="bridge_compat", status="fail", fix=fix,
                     detail=f"{v.reason}: the engine would refuse every entry (bridge_incompatible)")
