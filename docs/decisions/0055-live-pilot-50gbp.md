@@ -1,0 +1,117 @@
+# 0055: Live pilot at £50 on IC Markets: 0.01 lot, £3.12 a trade, £6.25 a day, £25 or 30 trades
+
+Status: accepted (program-director + cfo + trading-safety-reviewer under the owner's delegation, 2026-10-27).
+This record stands in for the owner's signature on the pilot terms (readiness plan item L1). It does **not** replace
+the owner's own unlock: live starts only through `unlock_live` and the typed phrase `ENABLE LIVE icm-live` (L19).
+
+## Context
+- **Owner instruction, 2026-10-27:** live on 2026-10-30 with about £50, on IC Markets Raw Spread.
+  - Server `ICMarketsSC-MT5-3` (the Seychelles entity, IC Markets Global), leverage 1:5000, account currency GBP.
+  - The login number is never recorded in the repo; it lives in the live box's keyring (L7).
+- **Owner delegation, 2026-10-27 (verbatim):** "again you are asking me, i want it done, for decisions ask expert
+  agents, i gave what i want".
+- **CFO analysis:** `docs/finance/live-pilot-50gbp-2026-10-27.md` (branch `cfo/demo-volume-500-funding`, sha 8b7a42d6).
+  - At £50 no 0.01-lot order fits the standing rails: the 1% per-trade limit, the 2% daily limit and the gate's 1:20
+    margin and notional rails.
+  - Three sizing options were simulated with 100,000 runs each for the pilot rows, assuming a 1.5 R payoff and 3 trades
+    a day. Option (b), the owner's style at about £18-19 a trade, loses the account in 68% of runs within 5 trading
+    days at zero edge.
+  - Option (a), the conservative pilot, caps the loss at £25 by construction. At zero edge it reaches that stop in
+    33% of runs; the median end balance is £44.7.
+- **Evidence of edge: none.** No trial has passed the gates, and the demo record since 10-25 is flat within noise
+  (readiness plan, section 2). This pilot is a paid test of the plumbing: fills, slippage, the 90 s confirmation,
+  live exits and reconciliation. It is not a profit plan.
+- **Inputs:** XAUUSD 4,014.84; GBP per USD 0.7508; ICM round trip $0.156 (£0.12) per 0.01 lot from 137 demo fills
+  (daily review 2026-10-26). These were measured on 2026-10-27, and the limits below are in £ so that they do not move
+  with price.
+
+## Decision
+Option (a) for account `icm-live` only. Every other account and every default is unchanged.
+
+| Term | Value | Basis |
+|---|---|---|
+| Lot | 0.01 exactly (1 oz) | the minimum lot; there is no sizing-up |
+| Stop distance | at most **$4.00** from entry. A longer stop is refused, never shrunk | $4 × 0.7508 = £3.00 |
+| Risk per trade | at most **£3.12** at the stop, including the round trip (6.25% of £50) | £3.00 + £0.12 |
+| Daily loss limit | **£6.25** (two full stops), absolute, account currency | 12.5% of £50; ADR 0004's £50 stays the ceiling |
+| Pilot stop | after **£25 cumulative realised loss** or **30 filled entries**, whichever comes first: entries halt for good. Open positions keep their automatic exits | the £25 caps the downside |
+| Open positions | at most 1 | |
+| Timeframe | 15m families only, with stops ≤ $4 (scalp rules). The one family nominated by the research-director (L17) | the 15m natural stop of $9.90 is refused |
+| Entries | owner-confirmed, card marked REAL MONEY, 90 s window, `approval_mode: propose` | ADR 0036; L8 |
+| Exits | automatic, never gated | non-negotiable |
+| Gate leverage | `leverage_cap` **500** for this account (not the broker's 1:5000) | see below |
+| Dynamic or adaptive limits | off (`dynamic_limits: false`, no learnt caps) | tighten-only in any case |
+| First order | 2026-10-30, if every go/no-go item in `docs/deploy/live-readiness-2026-10-30.md` is green at the 2026-10-29 18:00 UTC review (L18); otherwise the first day on which they all are | |
+
+**Why `leverage_cap` is 500 and not the broker's 5000.**
+- 500 is the smallest round value that lets one 0.01 lot through across the whole pilot range (£50 down to £25).
+- **Margin.** The gate's figure is £3,014 / 500 = £6.03. Its margin level is 829% at £50 and 415% at £25, against the
+  300% floor. The broker's own figure at 1:5000 is about $0.80 (£0.60).
+- **Combined notional.** The cap is 0.30 × 500 × equity: £7,500 at £50 and £3,750 at £25, against a £3,014 notional.
+  If gold reaches about $4,990 with the account at £25, that rail refuses. That is fail-closed and accepted.
+- Using 5000 would let the gate rails stop binding at all. 500 keeps them meaningful.
+
+**Rails changed for this account only, stated plainly.** Each is a loosening of a standing rail. Each is decided here
+under the owner's delegation and is bounded by the £25 pilot stop:
+1. The per-trade 1% hard limit becomes £3.12 absolute (6.25%).
+2. The 2% daily cap becomes £6.25 absolute (12.5%). The £50 ADR 0004 cap remains the ceiling above it.
+3. The gate's `leverage_cap` goes from 20 to 500.
+4. The drawdown kill (12% of the high-water mark, £6 at £50) gives way to the £25 pilot stop as the hard halt.
+   - The 8% size-down stage cannot shrink below 0.01 lot, so it is not applicable.
+   - The £6.25 daily limit still ends each bad day.
+
+Unchanged:
+- RiskGate remains the only path to an order.
+- The spread, stale-tick and news-blackout rails stay as they are.
+- Max one order in flight (ADR 0052).
+- BACKLOG 135 close-priority bridge (L2) is a go/no-go item.
+
+**Config values for the pilot-mode implementer** (account `icm-live`; names to fit the L3 mechanism):
+
+```yaml
+icm-live:
+  server: ICMarketsSC-MT5-3
+  login: null                    # keyring only
+  currency: GBP
+  approval_mode: propose         # owner confirms each entry, 90 s
+  dynamic_limits: false
+  max_positions: 1
+  daily_loss_limit_abs: 6.25     # GBP
+  pilot:
+    adr: 55
+    lot: 0.01                    # fixed; refuse any other size
+    max_stop_usd: 4.00           # refuse (never shrink) a wider stop
+    max_risk_per_trade_abs: 3.12 # GBP, stop loss + round trip
+    stop_loss_abs: 25.00         # GBP cumulative realised loss -> halt entries for good, exits continue
+    max_entries: 30              # filled entries -> halt entries for good, exits continue
+    timeframes: [15m]
+    leverage_cap: 500            # gate margin and notional rails for this account
+```
+
+## Consequences
+- **£ cost.**
+  - Expected: about £3.60 in round trips over 30 trades (30 × £0.12), plus a trading result that is zero to negative
+    because no edge is proven.
+  - Worst case: £25 realised, plus the overshoot of one gap on the last open position.
+  - Host: about £3.6 a month (L6, a spend approval already listed in the readiness plan).
+- **Break-even.** None is claimed. The loss is booked as a cost of learning in the GBP ledger (L16), reconciled to the
+  broker daily within £0.01.
+- **Upside.** It cannot meet the £50-a-day north star at £50. That belongs to a £1,000+ account (ADR 0004).
+  - The best day is two or three £4.5-wins at a 1.5 R payoff.
+  - At p 0.45 the median end balance after the pilot is £54.
+- **After the pilot stop or the 30th fill:** entries stay halted. The CFO and finance-auditor review the 30-trade
+  record within 2 working days: slippage against the cost model, confirmation latency, exit behaviour and net £.
+  - Any continuation, larger size, a second account or more capital needs a new recorded decision.
+  - Capital follows evidence: a measured, out-of-sample net edge on at least 60 forward fills (the capital plan),
+    sized at most at half-Kelly. A good streak is not evidence.
+- **What would reverse this decision before or during the pilot:**
+  - any go/no-go item red;
+  - an exit that is late or not served;
+  - an unreconciled ledger day;
+  - slippage over 2 × the cost model on 5 or more fills;
+  - the owner saying stop.
+  Each of these halts entries; the exits stay automatic.
+- **UK tax flag** (not tax advice): from the first fill, keep GBP records of every gain, loss, commission and swap.
+  Spread-bet versus CFD treatment depends on the account type, and the owner should confirm it with an adviser.
+- **Regulation:** the account is offshore (FSA Seychelles). The FCA's 1:20 cap, FOS and FSCS do not apply. Our rails
+  are the protection that binds.
