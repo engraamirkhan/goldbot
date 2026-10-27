@@ -32,10 +32,18 @@ from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_
 from goldbot.data.econ_calendar import blackout_window
 from goldbot.data.news import shock_window
 from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
-from goldbot.data.resample import IncrementalResampler, mid, resample_bars, ticks_to_1m
+from goldbot.data.resample import IncrementalResampler, mid, resample_bars
 from goldbot.data.store import Store
-from goldbot.data.timeutil import epoch_ns, feature_day, floor_tf, server_wall
-from goldbot.engine import auto_entry, capital_flows, cost_probe, exploration, history, unconfirmed
+from goldbot.data.timeutil import feature_day, floor_tf, server_wall
+from goldbot.engine import (
+    auto_entry,
+    broker_bars,
+    capital_flows,
+    cost_probe,
+    exploration,
+    history,
+    unconfirmed,
+)
 from goldbot.engine.cost_probe import ScheduledProbe
 from goldbot.engine.limits_apply import EngineLimits, daily_allowance, min_lot_risk, published_limits
 from goldbot.engine.shadow import ShadowBook, ShadowTrade, minutes_of, record_candidate
@@ -210,6 +218,9 @@ class EngineConfig(Record):
     shock_min_relevance: float = 0.7
     # production: tick age and feed staleness are measured against the wall clock (replays and tests use tick time)
     live_clock: bool = False
+    # production: completed 1m bars are the broker's own M1 bars, the sampled quotes only the current minute and the
+    # fallback of a late bar (engine/broker_bars.py); off, as paper, replays and backtests, the bars are the sampled ones
+    broker_bars: bool = False
     # between bar closes the account is refreshed (drawdown stages, kill switch, halts) and the state file written
     # this often (tick time), so the supervisor's combined caps and the 12% kill switch act within seconds. On the live
     # clock the file is also rewritten this often on the host clock while the session table has the market closed
@@ -281,6 +292,7 @@ class Engine:
         self.ticks: list[Tick] = []
         self.bars_1m = pd.DataFrame()
         self.history = history.History()     # cut-over, background fill and writer, history_gap
+        self.broker_m1 = broker_bars.BrokerBars()   # the broker's finished 1m bars and the minutes awaiting theirs
         self.open: dict[int, OpenTrade] = {}
         self.pending: dict[str, tuple[Intent, Proposal, Specialist]] = {}
         self.sent_ids: set[str] = set()
@@ -302,7 +314,7 @@ class Engine:
         self._ctx_cache: dict[str, tuple[pd.Timestamp, tuple[pd.DataFrame, pd.DataFrame] | None]] = {}
         # per timeframe: completed 1m bars -> bars, re-aggregating only the groups that changed since the last close
         self._resamplers: dict[str, IncrementalResampler] = {}
-        self._bars_clean: pd.DataFrame | None = None      # bars_1m as last built by _append_bars (duplicate-free)
+        self._bars_clean: pd.DataFrame | None = None      # bars_1m as last built by broker_bars.append_bars
         self._calendar: tuple[pd.Timestamp | None, pd.DataFrame] = (None, pd.DataFrame())
         self._blackout_event: dict | None = None
         # BACKLOG 17 holiday list: loaded once, when the window is first needed; (loaded, list or None if unusable)
@@ -601,6 +613,7 @@ class Engine:
         self._guard(lambda: self._roll_risk_period(t.ts_utc))
         if self._last_reconcile is None or (t.ts_utc - self._last_reconcile).total_seconds() >= self.cfg.reconcile_every_s:
             self._reconcile(t.ts_utc)
+        self._guard(lambda: broker_bars.poll(self, t))   # after the exits; a failed rates call is no tick error
         sec = tf_seconds(self.cfg.decision_tf)
         bar_close = pd.Timestamp((int(t.ts_utc.timestamp()) // sec) * sec, unit="s", tz="UTC")
         out: list[dict] = []
@@ -781,43 +794,8 @@ class Engine:
         return history.warm_start(self, now, history_broker)
 
     def _rebuild_bars(self, until: pd.Timestamp | None = None) -> None:
-        """Incremental: only ticks since the last completed minute are aggregated; bars accumulate. Without `until`
-        the latest tick's minute may still receive ticks and stays open; with it (a bar close) every minute ending at
-        or before `until` is complete and none starting at or after it is built."""
-        if not self.ticks:
-            return
-        cutoff = until.floor("min") if until is not None else None
-        if cutoff is None and self.ticks[0].ts_utc.floor("min") == self.ticks[-1].ts_utc.floor("min"):
-            return      # every tick is in the current minute (ticks arrive in time order): no minute has completed
-        tdf = pd.DataFrame({"ts_utc": [x.ts_utc for x in self.ticks], "bid": [x.bid for x in self.ticks], "ask": [x.ask for x in self.ticks]})
-        new = ticks_to_1m(tdf, DEFAULT_SESSIONS)
-        if new.empty:
-            return
-        if cutoff is None:
-            cutoff = new["ts_utc"].iloc[-1]              # the current minute may still receive ticks
-        done = new[new["ts_utc"] < cutoff]
-        if not done.empty:
-            self._check_new_bars(done)
-            self.bars_1m = self._append_bars(done)
-            history.queue_minutes(self, done)
-        self.ticks =[x for x in self.ticks if x.ts_utc >= cutoff]
-
-    def _append_bars(self, done: pd.DataFrame) -> pd.DataFrame:
-        """bars_1m + newly completed minutes, de-duplicated on ts_utc (last wins) and capped at max_bars_in_memory.
-        When the buffer is one this method built (so already duplicate-free) and every new minute is later than its
-        last bar, de-duplication cannot drop a row and is skipped: the same frame without hashing 60000 stamps on
-        every 10-second refresh."""
-        b, cap = self.bars_1m, self.cfg.max_bars_in_memory
-        if b.empty:
-            out = done.reset_index(drop=True)
-        else:
-            new_ts = epoch_ns(pd.DatetimeIndex(done["ts_utc"]))
-            clean = b is self._bars_clean and len(new_ts) and bool((np.diff(new_ts) > 0).all()) \
-                and new_ts[0] > epoch_ns(pd.DatetimeIndex(b["ts_utc"].iloc[-1:]))[0]
-            joined = pd.concat([b, done])
-            out = (joined if clean else joined.drop_duplicates("ts_utc", keep="last")).tail(cap).reset_index(drop=True)
-        self._bars_clean = out          # duplicate-free by construction on every path above
-        return out
+        """Completed minutes join bars_1m (broker_bars.rebuild: the broker's M1 bars when on, else the sampled)."""
+        broker_bars.rebuild(self, until)
 
     # ------------------------------------------------------------------ main step
     def _frame(self, complete: pd.DataFrame, tf: str, close_ts: pd.Timestamp) -> _Frame | None:
@@ -3268,7 +3246,7 @@ class Engine:
             "server_clock": self.clock_probe.model_dump(mode="json") if self.clock_probe is not None else None,
             "bridge_compat": self.bridge_compat.model_dump(mode="json") if self.bridge_compat is not None else None,
             # ADR 0010: state from a newer release read by this process, bounded (health: check_schema_skew)
-            "schema_skew": schema_skew_summary().model_dump(mode="json"), **history.published(self),
+            "schema_skew": schema_skew_summary().model_dump(mode="json"), **history.published(self), **broker_bars.published(self),
         }
         # one `currency` key: the broker's deposit currency the gate sized with, read once (BACKLOG 28); the account
         # view's copy (None until the first refresh) must not blank it for the supervisor's currency check

@@ -369,6 +369,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               blackout_after_min=settings.risk.blackout.after_min,
                               shock_blackout_min=settings.news.shock_blackout_min,
                               shock_min_relevance=settings.news.shock_min_relevance, live_clock=True,
+                              broker_bars=bridge is not None or sys.platform == "win32",   # not the paper stand-in
                               approval_window_s=settings.risk.approval_window_seconds,
                               tv_max_lag_s=settings.tv.max_lag_s,
                               swap_prior=settings_swap(settings)), broker, agents,
