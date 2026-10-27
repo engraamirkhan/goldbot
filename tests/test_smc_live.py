@@ -1,7 +1,9 @@
 """The replica live (quant review 2026-10-18, before any shadow or live use of replica columns): (1) a plain tail is
 refused, (2) a state from other code or other parameters is refused, (3) the state is bootstrapped from the 2010 series
-start, persisted in SQLite on every bar, and any discontinuity (a gap, a revised bar, a bar_index jump, a restart on
-stale state) re-bootstraps, so every value equals the full-history run."""
+start, persisted in SQLite on every bar, and any discontinuity (a gap, a revised bar older than the kept snapshots, a
+restart on stale state) re-bootstraps, so every value equals the full-history run. A revised last bar resumes from an
+earlier kept snapshot and a drifting store bar count is not a discontinuity (SRE 2026-10-27: 61 rebuilds of ~60 CPU-s
+at the quarter-hour closes), so neither rebuilds."""
 from __future__ import annotations
 
 import pandas as pd
@@ -114,7 +116,7 @@ def test_a_series_that_does_not_start_at_the_pin_is_refused(tmp_path, series):
     assert feed.stored() is None                               # nothing persisted from a wrong start
 
 
-@pytest.mark.parametrize("break_it", ["gap", "revised", "bar_index", "stale"])
+@pytest.mark.parametrize("break_it", ["gap", "revised", "stale"])
 def test_any_discontinuity_rebootstraps_and_the_values_stay_exact(tmp_path, series, full, break_it):
     src = Source(series)
     feed = _feed(tmp_path)
@@ -126,11 +128,10 @@ def test_any_discontinuity_rebootstraps_and_the_values_stay_exact(tmp_path, seri
     if break_it == "gap":                                      # the engine missed bars: the snapshot is not in the tail
         end, start = 2500, 2500 + 1 - tail_len
         tail, before = series.iloc[start:end + 1].reset_index(drop=True), start
-    elif break_it == "revised":                                # a bar before the snapshot came back different
-        tail.loc[tail_len - 10, "close"] += 0.5
+    elif break_it == "revised":                                # a bar older than every kept snapshot came back different
+        from goldbot.features.smc_live import KEEP_STATES
+        tail.loc[tail_len - KEEP_STATES - 10, "close"] += 0.5
         src.series = pd.concat([series.iloc[:start], tail]).reset_index(drop=True)
-    elif break_it == "bar_index":                              # the store holds one more bar before the tail
-        before = start + 1
     else:                                                      # the stored state was written by other code
         with feed.db.write() as conn:
             text = conn.execute("SELECT state FROM replica_state").fetchone()[0]
@@ -157,3 +158,54 @@ def test_the_last_bars_snapshots_are_kept_so_a_rule_can_resume_from_before_its_d
     assert s is not None and s == R.replica_run(series.iloc[:last - 1])[1]
     assert feed.state_at(ts[last - KEEP_STATES - 1]) is None              # pruned
     assert ReplicaFeed(feed.db, feed.feed, R.ReplicaParams(swing_len=40)).state_at(ts[last]) is None   # other block
+
+
+def test_a_stream_of_closes_with_a_revised_last_bar_never_rebuilds_and_equals_a_fresh_rebuild(tmp_path, series):
+    """The 1m bars of the bar that just closed are rebuilt or corrected after the close (the broker's M1 bar replaces
+    the one built from ticks): the next close resumes from the snapshot before it, kept in aux.db, instead of
+    rebuilding from 2010, and every value and kept snapshot equals a fresh rebuild on the corrected bars."""
+    src = Source(series.copy())
+    feed = _feed(tmp_path)
+    _step(feed, src, 2000)
+    for e in range(2001, 2009):
+        fixed = src.series.copy()
+        for col, add in (("close", 0.37), ("high", 0.37), ("tick_count", 3)):   # the previous close's bar came
+            fixed[col] = fixed[col].where(fixed.index != e - 1, fixed[col] + add)  # back corrected
+        src.series = fixed
+        up = _step(feed, src, e)
+        assert not up.bootstrapped and src.calls == 1, up.reason
+        truth = R.replica_frame(fixed.iloc[:e + 1]).reset_index(drop=True)
+        _equal(up.frame, truth, e + 1 - (CB + 40), up.frame.index)
+        assert list(up.frame.index)[0] == CB + 38                  # the corrected bar is served again, then the new one
+    ts = pd.DatetimeIndex(pd.to_datetime(src.series["ts_utc"], utc=True))
+    for b in (2008, 2007, 2006):
+        assert feed.state_at(ts[b]) == R.replica_run(src.series.iloc[:b + 1])[1], b
+
+
+def test_a_store_bar_count_that_drifts_is_logged_and_the_state_keeps_its_own_count(tmp_path, series, full, caplog):
+    """The count of bars before the tail mixes the store's release bars and the broker's window, so it moves by a bar
+    whenever the window's start passes a bar one source has and the other has not. The replica's FVG threshold is its
+    own running sum over its own count, so the count is a note, never a rebuild."""
+    src = Source(series)
+    feed = _feed(tmp_path)
+    _step(feed, src, 2000)
+    tail = series.iloc[2002 - (CB + 40):2002].reset_index(drop=True)
+    with caplog.at_level("INFO", logger="goldbot.features.smc_live"):
+        up = feed.update(tail, 2002 - (CB + 40) + 1, src.through(2001))
+    assert not up.bootstrapped and src.calls == 1 and up.state.bar_index == 2001
+    _equal(up.frame, full, 2002 - (CB + 40), up.frame.index)
+    assert any("count drift" in r.getMessage() for r in caplog.records)
+
+
+def test_after_a_rebuild_the_last_bars_snapshots_are_there_at_once(tmp_path, series):
+    """A rule that resumes from state_lag bars before its decision bar decides on the first close after a rebuild,
+    not state_lag closes later."""
+    from goldbot.features.smc_live import KEEP_STATES
+    src = Source(series)
+    feed = _feed(tmp_path)
+    up = _step(feed, src, 2000)
+    assert up.bootstrapped
+    ts = pd.DatetimeIndex(pd.to_datetime(series["ts_utc"], utc=True))
+    for b in (2000, 1999, 1997, 2000 - KEEP_STATES + 1):
+        assert feed.state_at(ts[b]) == R.replica_run(series.iloc[:b + 1])[1], b
+    assert feed.state_at(ts[2000 - KEEP_STATES]) is None

@@ -312,20 +312,26 @@ def triple_barrier_next_open_1m(bars: pd.DataFrame, bars_1m: pd.DataFrame, signa
     longs, bid for shorts), as the exploration arms' spec and the H-62 replay labels enter ("the open of bar t+1"), and the
     barriers searched minute by minute from that bar (its own minute included; stop first when both fall in one minute).
     Time barrier: the close of decision bar idx + 1 + max_bars. A gap between the close and that first minute (weekend,
-    session) is in the fill. Columns as `triple_barrier_1m`, plus `entry_ts` (the entry minute's stamp)."""
+    session) is in the fill. Columns as `triple_barrier_1m`, plus `entry_ts` (the entry minute's stamp).
+    An optional signals column `entry_delay_s` (seconds after the close the order is sent, `arms.send_delay_s`) moves
+    the entry to the minute holding close + delay: under a minute that is still the first minute after the close."""
     n = len(bars)
     close = _bar_close_times(bars)
     b1 = bars_1m.sort_values("ts_utc").reset_index(drop=True)
     t1 = pd.DatetimeIndex(pd.to_datetime(b1["ts_utc"], utc=True))
     cols = ["ts_utc", "bid_high", "bid_low", "bid_close", "ask_high", "ask_low", "ask_close"]
     a = atr.to_numpy(dtype=float)
+    delays = (signals["entry_delay_s"].to_numpy(dtype=float) if "entry_delay_s" in signals.columns
+              else np.zeros(len(signals)))
     rows = []
-    for idx, side, hold, tmult in zip(signals["idx"].to_numpy().astype(int), signals["side"].to_numpy().astype(int),
-                                      _max_bars(signals, spec), _target_atr(signals, spec)):
+    for idx, side, hold, tmult, delay in zip(signals["idx"].to_numpy().astype(int),
+                                             signals["side"].to_numpy().astype(int), _max_bars(signals, spec),
+                                             _target_atr(signals, spec), delays):
         if idx + 1 >= n:
             continue
         last = min(idx + 1 + int(hold), n - 1)
-        k0 = int(t1.searchsorted(close[idx], side="left"))       # the first minute at or after the close
+        sent = (close[idx] + pd.Timedelta(seconds=float(delay))).floor("min")
+        k0 = int(t1.searchsorted(sent, side="left"))              # the first minute at or after the send's minute
         k1 = int(t1.searchsorted(close[last], side="left"))
         if k1 <= k0 or k0 >= len(b1):
             continue

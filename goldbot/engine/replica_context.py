@@ -3,19 +3,26 @@
 A specialist that reads the replica (`replica_params`, e.g. `smc_structure`) cannot decide on the engine's 800-bar tail:
 the replica carries unbounded memory, so a tail gives other values than the series (`features.smc_live`). `ReplicaShadow`
 gives such an agent the full-history value instead: `ReplicaFeed.update` carries the state in aux.db (resume after a
-restart, rebuild from SERIES_START on a gap, a revised bar, a bar_index jump or stale code), and the agent's rule runs
-on the window resumed from the snapshot `state_lag` bars before the decision bar, exactly as research computes it.
+restart, resume from an earlier kept snapshot after a corrected bar, rebuild from SERIES_START on a gap, a revision
+older than the kept snapshots or stale code), and the agent's rule runs on the window resumed from the snapshot
+`state_lag` bars before the decision bar, exactly as research computes it.
+
+A rebuild reads every bar since the series start and runs the replica over them (~60 CPU-s on the brain's 2 OCPU), on
+a background thread, at most once per feed every REBUILD_COOLDOWN_S in a process (a restart starts afresh; SRE
+2026-10-27: 61 rebuilds since 10-26, each at a quarter-hour close when orders go out). One due within the cooldown
+holds the agent back meanwhile (logged once), as a failed one does.
 
 Shadow only (trading-safety rule, like `requires_tv`): `Specialist.shadow_only` is true for such an agent, so the engine
 gives it share 0 and the shadow book alone trades it; no entry reaches the RiskGate. Fail closed: with no source, a
-tail too short, a state not kept (after a rebuild only the latest snapshot is kept, so the next `state_lag` bars have
-none) or any error, the agent proposes nothing this bar (logged); nothing here raises, so a bar close and every exit are
-unaffected. The price_action features have no state path yet (research only), so nothing here serves them.
+tail too short, a state not kept (an update keeps the snapshots of its last KEEP_STATES bars) or any error, the agent
+proposes nothing this bar (logged); nothing here raises, so a bar close and every exit are unaffected. The
+price_action features have no state path yet (research only), so nothing here serves them.
 """
 from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -30,6 +37,13 @@ from goldbot.features.smc_live import SERIES_START, STATE_KEY, ReplicaFeed
 from goldbot.specialists.base import Specialist
 
 log = logging.getLogger(__name__)
+
+REBUILD_COOLDOWN_S = 3600.0         # a feed's rebuilds from the series start start at most this often in a process
+
+
+def clock() -> float:
+    """Monotonic seconds for the rebuild cooldown (one place, so a test moves it without touching `time`)."""
+    return time.monotonic()
 
 
 def _empty() -> pd.DataFrame:
@@ -77,6 +91,8 @@ class ReplicaShadow:
         self.history, self.series_start, self.warm_wait_s = history, series_start, warm_wait_s
         self._feeds: dict[str, ReplicaFeed] = {}
         self._warming: dict[str, threading.Thread] = {}      # feed -> its background bootstrap
+        self._started: dict[str, float] = {}                 # feed -> monotonic start of its last bootstrap
+        self._cooling: dict[str, float] = {}                 # feed -> the start whose cooldown was logged
 
     def feed(self, agent: Any) -> ReplicaFeed:
         params: R.ReplicaParams = agent.replica_params
@@ -88,19 +104,28 @@ class ReplicaShadow:
     def _ready(self, feed: ReplicaFeed, m: pd.DataFrame, before: int, series: Callable[[], pd.DataFrame]) -> bool:
         """True when the stored state continues on this tail (the bar's update is a cheap resume). Otherwise a
         bootstrap is due: it runs on a background thread (never in the engine loop: a store read and a replica run
-        over years of bars), one per feed at a time, and the agent proposes nothing until a later bar resumes it."""
+        over years of bars), one per feed at a time and at most one per feed every REBUILD_COOLDOWN_S, and the agent
+        proposes nothing until a later bar resumes it."""
         running = self._warming.get(feed.feed)
         if running is not None and running.is_alive():
             return False
-        state, _ = feed._resume_point(m.reset_index(drop=True), before)
+        state, _, reason = feed._resume_point(m.reset_index(drop=True), before)
         if state is not None:
             return True
+        now, last = clock(), self._started.get(feed.feed)
+        if last is not None and now - last < REBUILD_COOLDOWN_S:
+            if self._cooling.get(feed.feed) != last:
+                self._cooling[feed.feed] = last
+                log.warning("replica feed %s: a rebuild is due (%s) but one started %.0f s ago; held back until "
+                            "%.0f s after it", feed.feed, reason, now - last, REBUILD_COOLDOWN_S)
+            return False
+        self._started[feed.feed] = now
         tail = m.copy()
 
         def work() -> None:
             try:
                 feed.update(tail, before, series)
-            except Exception as exc:                         # noqa: BLE001 - logged; the next bar retries
+            except Exception as exc:                         # noqa: BLE001 - logged; retried after the cooldown
                 log.warning("replica bootstrap of %s failed (%s: %s)", feed.feed, type(exc).__name__, exc)
         th = threading.Thread(target=work, name=f"replica-{feed.feed}", daemon=True)
         self._warming[feed.feed] = th

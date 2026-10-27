@@ -259,3 +259,22 @@ def test_pdc4_and_dond_in_history_exit_on_the_cut_walk_and_never_hold_into_the_w
         assert t["barrier_hit"] == w["kind"] and t["exit_px"] == pytest.approx(w["exit"])
         _, saturday = W.week_bounds(pd.DatetimeIndex([close[i]]))
         assert pd.Timestamp(w["at"]) <= saturday[0] - W.WEEK_END_SLACK
+
+
+def test_the_history_run_applies_the_live_send_delay_of_a_scalp_arm(b1: pd.DataFrame, monkeypatch) -> None:
+    """Live == history (SRE 2026-10-27): a 1m/5m arm's order on a quarter-hour close goes out `send_delay_s` after it;
+    history enters at the open of the minute holding close + that delay. Every live delay is under a minute, so that is
+    still the first minute after the close; a delay past the minute would move the entry, here as live."""
+    base, _ = rab.run_arm(b1, ARMS["S0"], START, END, COSTS)
+    dec, ent = pd.DatetimeIndex(base["ts_utc"]), pd.DatetimeIndex(base["entry_ts"])
+    qh = np.asarray(dec.minute % 15 == 0)
+    assert qh.any() and (~qh).any()
+    assert (ent[qh] < dec[qh] + pd.Timedelta(minutes=1)).all()
+    monkeypatch.setattr(A, "send_delay_s", lambda arm_id, tf, close: 61.0 if close.minute % 15 == 0 else 0.0)
+    late, _ = rab.run_arm(b1, ARMS["S0"], START, END, COSTS)
+    pair = base.merge(late, on="ts_utc", suffixes=("", "_late"))
+    d = pd.DatetimeIndex(pair["ts_utc"])
+    moved = np.asarray(d.minute % 15 == 0)
+    assert moved.any()
+    assert (pd.DatetimeIndex(pair["entry_ts_late"])[moved] >= d[moved] + pd.Timedelta(minutes=1)).all()
+    assert (pair["entry_ts_late"] == pair["entry_ts"])[~moved].all()

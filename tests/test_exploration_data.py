@@ -572,3 +572,33 @@ def test_every_v1_column_is_built_by_the_served_decision_frame_at_the_frozen_fea
                                     {TF_LABEL[t]: resample_bars(b1, t) for t in context_tfs(tf)})
         assert X.attrs["feature_version"] == ex.FEATURE_VERSION_V1
         assert [c for c in ex.FEATURE_LISTS[ex.STYLE_FEATURE_LIST[style]] if c not in X.columns] == [], style
+
+
+def test_the_replay_enters_at_the_open_of_the_minute_holding_the_send_delay():
+    """Live == history (SRE 2026-10-27): a quarter-hour scalp order goes out a few seconds after the close, inside the
+    first minute, so the replay's entry is that minute's open; only a delay past the minute would move it."""
+    bars = _m1(T0, [(2000.0, 2000.0, 2000.0), (2004.0, 2004.0, 2004.0)] + [(2004.0, 2004.0, 2004.0)] * 13)
+    kw: dict[str, Any] = dict(side=1, decision_utc=T0, stop_dist=20.0, target_dist=20.0, max_hold_s=600, costs=COSTS)
+    now = ex.replay_label(bars, **kw)
+    soon = ex.replay_label(bars, entry_delay_s=7.0, **kw)
+    late = ex.replay_label(bars, entry_delay_s=61.0, **kw)
+    assert now is not None and soon == now
+    assert late is not None and late.mid_r == pytest.approx(0.0) and now.mid_r == pytest.approx(4.0 / 20.0)
+
+
+def test_label_candidates_replays_each_candidate_with_its_arms_send_delay(tmp_path, monkeypatch):
+    """The labels apply the delay the engine sends with (`arms.send_delay_s` of the candidate's arm, timeframe and
+    decision close), so a delay past the minute would move the label's entry here as it moves the order."""
+    from goldbot.research import arms as A
+    db = _db(tmp_path)
+    _cand(db, "qh", stop=20.0, target=20.0)
+    bars = _m1(T0, [(2000.0, 2000.0, 2000.0), (2004.0, 2004.0, 2004.0)] + [(2004.0, 2004.0, 2004.0)] * 40)
+    seen: list[tuple[str, str, pd.Timestamp]] = []
+
+    def delay(arm_id: str, tf: str, close: pd.Timestamp) -> float:
+        seen.append((arm_id, tf, close))
+        return 61.0
+    monkeypatch.setattr(A, "send_delay_s", delay)
+    assert ex.label_candidates(db, bars, COSTS, cutoff=T0 + pd.Timedelta(minutes=30)) == 1
+    assert seen == [("S1a", "1m", T0)]
+    assert ex.read_obs(db).set_index("candidate_id").loc["qh", "label_mid_r"] == pytest.approx(0.0)
