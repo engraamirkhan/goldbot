@@ -12,7 +12,7 @@ from collections import Counter
 from pathlib import Path
 
 RUNNER = Path(__file__).parents[1] / "goldbot" / "engine" / "runner.py"
-LINE_CAP = 3276             # measured after step 1 (3471), lowered by moves out (engine/capital_flows.py, engine/magic.py 2026-10-25, bridge_refused -> execution/not_placed.py, exit_summary -> execution/deals.py 2026-10-26, _rebuild_bars/_append_bars -> engine/broker_bars.py 2026-10-27); <= 1,500 after step 7 (ADR 0023)
+LINE_CAP = 3274             # measured after step 1 (3471), lowered by moves out (engine/capital_flows.py, engine/magic.py 2026-10-25, bridge_refused -> execution/not_placed.py, exit_summary -> execution/deals.py 2026-10-26, _rebuild_bars/_append_bars -> engine/broker_bars.py, the fills row -> engine/order_send.py 2026-10-27); <= 1,500 after step 7 (ADR 0023)
 
 # A1 (ADR 0023 addendum): after step 1 runner.py writes no state file. The reads left are of files other jobs write, each
 # allowed only in its named function, at today's count, until that function moves: a second read inside an allowed

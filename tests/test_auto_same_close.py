@@ -178,20 +178,40 @@ def test_a_failed_account_reread_after_a_fill_stops_auto_entries_for_the_rest_of
 
 
 def test_an_order_call_that_raises_pauses_auto_entries_and_leaves_the_row_sending(tmp_path):
-    # LOW-C: a bridge timeout or terminal error inside place_order may or may not have placed the order: the row stays
-    # "sending" for the restart reconciliation, the error blocks entries, and no second order is sent this close
+    # LOW-C: a terminal error inside place_order may or may not have placed the order: the row stays "sending" for the
+    # reconciliation, the error blocks entries, and no second order is sent this close
     class Raising(PaperBroker):
+        calls = 0
+
+        def place_order(self, intent: OrderIntent) -> OrderResult:
+            self.calls += 1
+            raise RuntimeError("terminal error")
+
+    pb = Raising(equity=10_000, adverse_slip_points=0.0)
+    eng, _, dec = _run(tmp_path, _two(), RiskLimits(**BASE), pb=pb)
+    first, second = _actions(dec)
+    assert first == "auto_unconfirmed:RuntimeError" and pb.calls == 1
+    assert second.startswith(("gate:", "auto_paused:")) and "executed" not in second, second
+    assert eng._auto_paused is not None and eng._auto_paused[1] == "order_raised"
+    assert [o.status for o in eng._orders.values()] == ["sending"]
+    assert eng.state.tick_error and eng.tick_errors_total == 1
+
+
+def test_an_order_call_that_times_out_pauses_this_close_as_ambiguous_and_is_no_tick_error(tmp_path):
+    # live issue 2026-10-27 (engine/order_send.py): a call with no answer is an ambiguous order, looked up at the
+    # broker; no second order this close, entries wait for the look-up only, never a tick error for a decision bar
+    class TimesOut(PaperBroker):
         calls = 0
 
         def place_order(self, intent: OrderIntent) -> OrderResult:
             self.calls += 1
             raise TimeoutError("bridge timed out")
 
-    pb = Raising(equity=10_000, adverse_slip_points=0.0)
+    pb = TimesOut(equity=10_000, adverse_slip_points=0.0)
     eng, _, dec = _run(tmp_path, _two(), RiskLimits(**BASE), pb=pb)
     first, second = _actions(dec)
-    assert first == "auto_unconfirmed:TimeoutError" and pb.calls == 1
+    assert first == "auto_unconfirmed:-1" and pb.calls == 1, first
     assert second.startswith(("gate:", "auto_paused:")) and "executed" not in second, second
-    assert eng._auto_paused is not None and eng._auto_paused[1] == "order_raised"
-    assert [o.status for o in eng._orders.values()] == ["sending"]
-    assert eng.state.tick_error and eng.tick_errors_total == 1
+    assert eng._auto_paused is not None and eng._auto_paused[1] == "unconfirmed_order"
+    assert [o.status for o in eng._orders.values()] == ["ambiguous"]
+    assert not eng.state.tick_error and eng.tick_errors_total == 0

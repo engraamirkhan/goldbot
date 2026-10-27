@@ -140,7 +140,8 @@ def engine_pass(eng: Any, broker: Any, symbol: str) -> bool:
     try:
         tick = broker.last_tick(symbol)
     except Exception as exc:                 # no quote at all: record it, then the exits that need no price
-        resolve(_record_tick_error)(eng, exc)
+        if not _behind_order(eng, exc):
+            resolve(_record_tick_error)(eng, exc)
         try:
             eng.no_quote_pass()
         except Exception:
@@ -152,6 +153,21 @@ def engine_pass(eng: Any, broker: Any, symbol: str) -> bool:
     except Exception as exc:
         resolve(_record_tick_error)(eng, exc)
         return False
+
+
+def _behind_order(eng: Any, exc: BaseException) -> bool:
+    """A tick read that timed out behind our own entry order on the MT5 box (engine/order_send.py `excused`): logged,
+    not a tick error; entries are refused `unconfirmed_order_pending` meanwhile and the no-quote pass still runs."""
+    from goldbot.engine import order_send
+    try:
+        excused = order_send.excused(eng, exc)
+    except Exception:
+        log.exception("order-in-flight check failed")
+        return False
+    if excused:
+        log.warning("tick read failed (%s) while an entry order is in flight on the MT5 box: not a tick error",
+                    type(exc).__name__)
+    return excused
 
 
 def _record_tick_error(eng: Any, exc: BaseException) -> None:
@@ -304,7 +320,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     import pandas as pd
 
     from goldbot.config import load_settings
-    from goldbot.engine import Engine, EngineConfig, broker_bars, exploration
+    from goldbot.engine import Engine, EngineConfig, broker_bars, exploration, order_send
     from goldbot.execution.costs import settings_swap
     from goldbot.ops import accounts
     from goldbot.research.model_registry import ModelRegistry
@@ -451,6 +467,10 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                                    timeout_s=broker_bars.FETCH_TIMEOUT_S)
         bars_client.read_attempts = 1
         eng.broker_m1.fetcher = broker_bars.Fetcher(bars_client)
+        # entry orders (engine/order_send.py) on their own thread and client, with this account's order timeout, so a
+        # slow fill neither stalls the tick thread nor raises as a tick error
+        eng.order_sender = order_send.bridge_sender(bridge[0], bridge[1], name=f"mt5-remote-{account_id}-orders",
+                                                    timeout_s=acc.order_timeout_s)
     warm = eng.warm_start(pd.Timestamp.now("UTC"), history_broker)   # store read only; the fill runs in the background
     log.info("engine %s started (%s), models: %s, %d 1m bars of history, risk per trade %.4f, limits %s", account_id,
              type(broker).__name__, sorted(eng.models), warm, limits.risk_per_trade, eng.limits_current.profile)

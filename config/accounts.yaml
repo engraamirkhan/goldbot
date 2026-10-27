@@ -299,6 +299,10 @@ accounts:
     probe_only: true
     max_positions: 18         # PD 2026-10-26 host cap (demo probe_only only), as icm-probe and icm-demo
     dynamic_limits: true      # probes' loss and count from their own stops and the budget; the values above are ceilings
+    # live issue 2026-10-27 (SRE: Vantage fills 2.6-5.3 s p95, up to 31 s): an entry order waits this long for the
+    # terminal's reply on its own worker thread (goldbot/engine/order_send.py); the default 15 s timed out while the
+    # broker still filled. Rollback: drop the line (15 s) + restart
+    order_timeout_s: 35
     # exploration (ADR 0043 broker amendment; prereg-2026-10-25-high-volume.md amendment 2): the Vantage TWINS of the
     # intraday and swing arms (config/exploration_arms.yaml twin_of; same rule bodies, own ids, hashes, fills and
     # reads; never pooled with ICM). CFO 2026-10-26: budget 0.9 x 200 = £180 = intraday £98 + swing £82 (ADR 0043's

@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Literal, cast
 
 import pandas as pd
 
+from goldbot.engine import order_send
 from goldbot.execution.bridge import UNREADABLE_REFUSAL
 from goldbot.execution.broker import ACCOUNT_REFUSAL, OrderResult
 from goldbot.telegram.approvals import ACCOUNT_MODES, AskReason
@@ -183,6 +184,8 @@ def after_order(eng: Engine, res: OrderResult | None, gd: GateDecision, prop: Pr
     if not filled:
         eng._auto_paused = (close_ts, "unconfirmed_order")
         log.warning("auto entry result unconfirmed (retcode %s): auto entries stop for this bar close", res.retcode)
+        if order_send.unanswered(res):              # the MT5 box may still be sending it: no read queued behind it
+            return
     try:
         eng._refresh_account(eng.broker.last_tick(eng.cfg.symbol))
         seen = eng._position_ids is not None and res.position_id in eng._position_ids
