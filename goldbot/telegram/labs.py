@@ -38,6 +38,7 @@ from goldbot.base import Record
 from goldbot.db.connection import db_path
 from goldbot.engine.exploration import ExplorationRecord
 from goldbot.ops.monthly_report import SYMBOLS
+from goldbot.research.arm_stops import Fill, StopUnit, UnitStop, load_stop_rules, net_bp, unit_stop
 
 log = logging.getLogger(__name__)
 
@@ -66,7 +67,8 @@ REFUSAL_WORDS = {
     "stale": "signal too old", "paused_dd": "paused (drawdown)", "weekend_hold": "would hold over the weekend",
     "same_side": "same-side limit", "not_auto": "auto entries off", "arm_cap": "stop over the arm's limit",
     "order_unsettled": "order still settling", "arm_retired": "arm retired at its stop",
-    "arm_status_unread": "arm status not read yet",
+    "arm_status_unread": "arm status not read yet", "cost_suspended": "arm suspended (costs)",
+    "stop_rules_unreadable": "stop rules not read",
 }
 OTHER_REASON = "other reason"
 
@@ -304,7 +306,8 @@ class ArmStatus(Record):
     band: Band
     stop_at: int | None = None          # the trade count at which its stop was reached
     stop_utc: pd.Timestamp | None = None    # that trade's exit
-    stop_r: float | None = None         # the running net R there (at or past the stop)
+    stop_r: float | None = None         # the running net R there (at or past the stop); None at a futility stop
+    rule: str | None = None             # the stop that fired (config/arm_stops.yaml source; "with F1A" for a follower)
 
 
 CONTROL_RULES = frozenset({"random_bracket"})   # ARM-SPEC: random-entry brackets are the null, never a strategy
@@ -336,7 +339,10 @@ def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str], *, until: pd
                  store: Any = None, now: pd.Timestamp | None = None,
                  held_out: Collection[str] | None = None) -> list[ArmStatus]:
     """Every arm with an admissible trade on `accounts`, in the frozen spec's order (unknown arms after, by id): its
-    n toward READ_AT and its H-61 stop band from the running net R in exit order over the stop's first trades.
+    n toward READ_AT and its stop band from the running net R in exit order over the stop's first trades, by its
+    pre-registered rule (config/arm_stops.yaml, goldbot/research/arm_stops.py): a family's pooled fills on every
+    account and broker where it registers one (W1, W2, Z, F1A/G1A with futility), else H-61's per-style ARM_STOP;
+    a control never stops, F1C/G1C only with their arm.
     `until`: only closes before it (the daily review reads a day point in time). Prereg Amendment 4: a trade void as
     evidence (aux.db `evidence_exclusions`) is left out of n (the read and graduation) but "still counts toward H-61
     stops and P&L", so the band and `stop_at` use every admissible trade. While a quarantine span has no recorded
@@ -350,34 +356,60 @@ def arm_statuses(conn: sqlite3.Connection, accounts: Sequence[str], *, until: pd
         f"SELECT arm_id, MAX(style), MAX(is_control) FROM exploration_obs WHERE account_id IN ({marks}) "
         "GROUP BY arm_id", tuple(accounts))}
     by_arm: dict[str, list[ExplorationRecord]] = {}
-    cut, args = ("", tuple(accounts)) if until is None else (" AND exit_ns < ?", (*accounts, _ns(until)))
-    for t in trades(conn, f"account_id IN ({marks}) AND closed = 1{cut}", args):
+    cut, upto = ("", ()) if until is None else (" AND exit_ns < ?", (_ns(until),))
+    for t in trades(conn, f"account_id IN ({marks}) AND closed = 1{cut}", (*accounts, *upto)):
         if admissible(t):
             by_arm.setdefault(t.arm_id, []).append(t)
     order = {a: i for i, a in enumerate(_arm_order())}
     spec_controls = control_arm_ids()
     void = excluded(conn, "n") | set(held_out if held_out is not None else _held_out(conn, accounts, store, now))
+    rules = load_stop_rules()
+    units: dict[str, UnitStop] = {}
+
+    def unit(name: str) -> UnitStop:
+        """A family's stop over its arms' admissible fills on EVERY account and broker (Z 4: "pooled across its
+        strata and brokers"), so each broker's review reads the same family state."""
+        if name not in units:
+            u = rules.units[name]
+            m = ",".join("?" * len(u.arms))
+            pooled = [_fill(t, t.client_order_id not in void) for t in trades(
+                conn, f"arm_id IN ({m}) AND closed = 1{cut}", (*u.arms, *upto)) if admissible(t)]
+            units[name] = unit_stop(u, [f for f in pooled if f is not None], BAND_SHARE)
+        return units[name]
+
     out = []
     for arm in sorted(by_arm, key=lambda a: (order.get(a, len(order)), a)):
         rows = by_arm[arm]
         style, control = meta.get(arm, (_TF_STYLE.get(rows[0].tf, "scalp"), False))
         control = control or arm in spec_controls
-        stop_r, within = ARM_STOP.get(style, ARM_STOP["scalp"])
-        band: Band = "running"
-        stop_at, stop_utc, at_r = None, None, None
-        run = 0.0
-        # a control is the null: no stop applies to it (quant 2026-10-26), so it is never "at its stop"
-        for i, t in enumerate(rows[:within] if not control else [], 1):
-            run += trade_r(t) or 0.0
-            if run <= stop_r + 1e-9:
-                band, stop_at, stop_utc, at_r = "at_stop", i, t.exit_utc, run
-                break
-        if not control and band == "running" and len(rows) <= within and run <= BAND_SHARE * stop_r + 1e-9:
-            band = "within_50pct"
+        leader = rules.follows.get(arm)
+        name = rules.unit_of(leader or arm)
+        if leader is not None:
+            # TS 2.2/3.2: "F1C stops with" F1A: never a stop of its own, only its leader's
+            got = unit(name) if name is not None else UnitStop()
+            st = got.model_copy(update={"stop_r": None}) if got.band == "at_stop" else UnitStop()
+        elif control:
+            st = UnitStop()             # a control is the null: no stop applies to it (quant 2026-10-26)
+        elif name is not None:
+            st = unit(name)             # a pre-registered family (or one arm) with its own rule
+        else:
+            stop_r, within = ARM_STOP.get(style, ARM_STOP["scalp"])
+            st = unit_stop(StopUnit(arms=(arm,), stop_r=stop_r, within=within, source="HV"),
+                           [f for f in (_fill(t, True) for t in rows) if f is not None], BAND_SHARE)
+        rule = None
+        if st.band == "at_stop":
+            rule = f"with {leader}" if leader else rules.units[name].source if name is not None else "HV"
         n = sum(t.client_order_id not in void for t in rows)
-        out.append(ArmStatus(arm_id=arm, account_id=rows[0].account_id, control=control, n=n, band=band,
-                             stop_at=stop_at, stop_utc=stop_utc, stop_r=at_r))
+        out.append(ArmStatus(arm_id=arm, account_id=rows[0].account_id, control=control, n=n, band=st.band,
+                             stop_at=st.stop_at, stop_utc=st.stop_utc, stop_r=st.stop_r, rule=rule))
     return out
+
+
+def _fill(t: ExplorationRecord, counted: bool) -> Fill | None:
+    """An admissible close as a stop rule reads it (net R, exit, counted toward the read, stratum, net bp)."""
+    if t.exit_utc is None:
+        return None
+    return Fill(r=trade_r(t) or 0.0, at=t.exit_utc, counted=counted, arm=t.arm_id, bp=net_bp(t, CONTRACT_OZ))
 
 
 def _held_out(conn: sqlite3.Connection, accounts: Sequence[str], store: Any, now: pd.Timestamp | None) -> set[str]:

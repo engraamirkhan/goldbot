@@ -40,7 +40,7 @@ The plan's rules, as built here:
 * XC15 on a netting host (arms 8.9/8.13): while KA15 is open its signal waits (`defer`) and enters at the next 15m
   close KA15 is not open (`release_shifted`), recorded `shifted` with its decision close (excluded from pairing).
 * Retired arms (daily learning-ops review, goldbot/research/daily_review.py): an arm retired at its pre-registered
-  H-61 stop (aux.db `exploration_arm_status`, this host's broker) is read once a minute (`refresh_retired`); from then
+  stop (config/arm_stops.yaml: H-61, a family's, or H-81's cost stop) (aux.db `exploration_arm_status`, this host's broker) is read once a minute (`refresh_retired`); from then
   on it queues no signal and its waiting signals are recorded blocked `arm_retired`. It stays configured, so its open
   positions keep their stop, target, hold and every exit (never closed as an orphan). An unreadable table keeps the
   arms already known retired (a retirement is never undone by a read error); until the first read after a start
@@ -372,6 +372,7 @@ class Exploration:
         self.ahead_seen: pd.Timestamp | None = None   # the last bar skipped as ahead of the host clock (journalled once)
         self.open_loss: dict[int, float] = {}       # position id -> its loss at the gate's stop when sent
         self.weights_cache: tuple[pd.Timestamp, dict[str, float]] | None = None
+        self.cost_scale: dict[str, float] = {}         # H-81 cost stop: arm -> its share's scale (`shares`)
         self.champion_seen: dict[str, tuple[pd.Timestamp | None, bool]] = {}
         self.retired: frozenset[str] = frozenset()      # arms retired at their stop (`refresh_retired`)
         self.retired_read: pd.Timestamp | None = None
@@ -772,7 +773,11 @@ def shares(ex: Exploration, now: pd.Timestamp) -> dict[str, float]:
     null, never allocated by results); a strategy arm its research share of the style's budget (lane L3's
     `exploration_data.weights` for ONE style's strategy arms on this host's broker: its newest bandit run held in
     [5%, 30%]; equal shares in the same bounds when it is missing, stale or unreadable, here too) scaled by what the
-    controls leave (1 - their shares; quant Q3). The pot's £ stays the backstop. Read at most once a minute."""
+    controls leave (1 - their shares; quant Q3). The pot's £ stays the backstop. Read at most once a minute.
+    H-81 cost stop (prereg-2026-10-27-scalp-volume.md 4, goldbot/research/arm_stops.py): a registered stratum whose
+    95% UB of signal-time cost per R is above 0.10 at >= 30 fills has its share "halved (ADR 0047 ladder)", above 0.20
+    it is 0 here and the daily review suspends it (no entry at all). The share freed is not handed on. A read error
+    keeps the scales last read. Entries only: no open position is touched."""
     from goldbot.research.exploration_data import weights
     minute = now.floor("min")
     if ex.weights_cache is not None and ex.weights_cache[0] == minute:
@@ -790,8 +795,36 @@ def shares(ex: Exploration, now: pd.Timestamp) -> dict[str, float]:
         for a in arms:
             v = a.control_share if a.control_share is not None else rest * float(w.get(a.arm_id, 0.0))
             out[a.arm_id] = v if math.isfinite(v) and v >= 0 else 0.0
+    scale = _cost_scale(ex)
+    out = {a: v * scale.get(a, 1.0) for a, v in out.items()} if scale else out
     ex.weights_cache = (minute, out)
     return out
+
+
+class StopRulesUnreadable(RuntimeError):
+    """config/arm_stops.yaml is missing or invalid: no exploration entry goes out (its own refusal reason)."""
+
+
+def _cost_scale(ex: Exploration) -> dict[str, float]:
+    """The H-81 cost stop's scale of each registered stratum this host runs, below 1 only (`shares`); the scales last
+    read on a ledger read error. No registered stratum here: nothing is read. An unreadable rules file raises
+    `StopRulesUnreadable` (fail closed: the stops cannot be known)."""
+    from goldbot.research.arm_stops import COST_SCALE, cost_states, load_stop_rules
+    try:
+        rules = load_stop_rules()
+    except (OSError, ValueError) as exc:
+        raise StopRulesUnreadable(type(exc).__name__) from exc
+    mine = set(ex.arms) & set(rules.cost_stop.arms)
+    if not mine:
+        return {}
+    try:
+        with ex.db.connection() as conn:
+            got = cost_states(conn, mine, rules=rules)
+    except Exception as exc:                        # the scales last read stand
+        log.warning("exploration cost stop unreadable (%s): the scales last read stand", type(exc).__name__)
+        return ex.cost_scale
+    ex.cost_scale = {a: COST_SCALE[st] for a, st in got.items() if st != "ok"}
+    return ex.cost_scale
 
 
 def realised(eng: Engine, ex: Exploration, since: pd.Timestamp,
@@ -1019,6 +1052,11 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
         return
     try:
         ps = _Pass(eng, ex, now)
+    except StopRulesUnreadable as exc:
+        log.warning("exploration stop rules unreadable (%s): no exploration entry", exc)
+        eng.decisions.append({"ts": now.isoformat(), "agent": None,
+                              "action": "exploration_refused:stop_rules_unreadable"})
+        return
     except Exception as exc:
         log.warning("exploration ledger unreadable (%s): no exploration entry", type(exc).__name__)
         eng.decisions.append({"ts": now.isoformat(), "agent": None, "action": "exploration_refused:ledger_unreadable"})
@@ -1151,6 +1189,11 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     ps.why = None
     if pid in eng.sent_ids:
         ps.why = "duplicate"
+        return "refused"
+    if ex.cost_scale.get(arm.arm_id) == 0.0:
+        # H-81 cost stop above 0.20: suspended. Refused before any room check, so no first-trade-of-the-day bypass
+        # (trading-safety 2026-10-27 b); the daily review records the suspension for good
+        refuse("cost_suspended")
         return "refused"
     terms = eng._sizing_terms(side, price, stop_d, cycle=s.bar_ts)
     lot = terms.get("volume_min")
