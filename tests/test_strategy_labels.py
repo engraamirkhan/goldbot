@@ -66,3 +66,23 @@ def test_no_arm_is_read_until_arm_reads_lists_it_and_a_broken_file_reads_none(tm
     bad = tmp_path / "bad.yaml"
     bad.write_text("reads: {S1A: {verdict: no time}}")
     assert load_catalog(reads_path=bad).reads == {}
+
+
+def test_each_strategy_arm_is_read_against_its_named_or_own_family_control_else_its_sleeves_random_control():
+    """Item 132: the board's control pairing (strategy_labels docstring), on the shipped config."""
+    arms = load_catalog().arms
+    pairs = {a: arms[a].control_arm for a in ("F1A", "KA15", "G1A", "C30A", "S1A", "I2A", "W1A", "Z3D", "PDC4", "VI2A")}
+    assert pairs == {"F1A": "F1C", "KA15": "XC15", "G1A": "G1C", "C30A": "C30C", "S1A": "S0", "I2A": "I0",
+                     "W1A": "W0", "Z3D": "ZCD", "PDC4": "W0", "VI2A": "VI0"}
+    assert all(i.control_arm is None for i in arms.values() if i.is_control)
+
+
+def test_a_preregistered_read_size_replaces_300_and_a_bad_one_reads_no_arm(tmp_path):
+    good = tmp_path / "good.yaml"
+    good.write_text("reads: {}\nread_at: {BXR15: 150}\n")
+    cat = load_catalog(reads_path=good)
+    assert cat.read_size("BXR15") == 150 and cat.read_size("S1A") == 300
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("reads: {S1A: {read_utc: '2026-10-20T00:00:00Z', verdict: no edge}}\nread_at: {BXR15: 0}\n")
+    cat = load_catalog(reads_path=bad)
+    assert cat.reads == {} and cat.read_size("BXR15") == 300

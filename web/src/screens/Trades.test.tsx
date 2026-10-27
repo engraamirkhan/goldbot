@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as apiModule from "../lib/api";
 import type { Route } from "../lib/route";
-import { bars, blindedPage, board, openPositions, todayAccount, tradeRow, tradesPage } from "../test/tradesFixtures";
+import { bars, blindedPage, board, openPositions, todayAccount, tradeBars, tradeRow, tradesPage } from "../test/tradesFixtures";
 import type { TradesTab } from "../lib/trades";
 import { TradesTabView } from "./Trades";
 import { TradeChart } from "./trades/TradeChart";
@@ -26,6 +26,7 @@ function renderTab(tab: TradesTab, route: Partial<Route> = {}, go = vi.fn()) {
   free("limits", { generated_utc: "2026-10-27T09:00:00Z", error: null, supervisor: {}, accounts: [] });
   free("trades", tradesPage());
   free("trade", tradeRow());
+  free("tradeBars", tradeBars());
   free("strategyBoard", board());
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const r: Route = { section: "trades", tab, sub: null, query: "", ...route };
@@ -156,11 +157,28 @@ describe("Trade detail (133)", () => {
     expect(apiModule.api.trade).toHaveBeenCalledWith("exploration:icm-demo:41");
   });
 
-  it("no bars are served yet: the missing-bars state with the levels in words, not an empty chart", async () => {
+  it("draws the trade on its bars: entry, first and last stop, target and exit labelled; the move in words; the feed named", async () => {
+    renderTab("list", { sub: "exploration:icm-demo:41" });
+    const chart = await screen.findByRole("img", { name: /^Chart of 15m bars: target 4,024\.00, entry 4,012\.40, first stop 4,006\.10, last stop 4,012\.40, exit 4,024\.00/ });
+    expect(chart.querySelectorAll("rect.up, rect.down")).toHaveLength(40);
+    const d = screen.getByRole("dialog", { name: "Trade detail" });
+    expect(d).toHaveTextContent(/stop 4,006\.10 \(moved to 4,012\.40 at/);
+    expect(d).toHaveTextContent("15m bars, bid prices, from this broker.");
+    expect(apiModule.api.tradeBars).toHaveBeenCalledWith("exploration:icm-demo:41");
+  });
+
+  it("no stored bars: the missing-bars state with the levels in words, not an empty chart", async () => {
+    vi.spyOn(apiModule.api, "tradeBars").mockResolvedValue(tradeBars({ bars: [], feed: null, stop_moves: [], missing: "Bars for this period aren't stored yet" }));
     renderTab("list", { sub: "exploration:icm-demo:41" });
     expect(await screen.findByText("Bars for this period aren't stored yet.")).toBeInTheDocument();
     expect(screen.getByText("first stop 4,006.10 USD/oz")).toBeInTheDocument();
     expect(screen.queryByRole("img", { name: /Chart of/ })).toBeNull();
+  });
+
+  it("bars from the reference feed or a coarser timeframe say so", async () => {
+    vi.spyOn(apiModule.api, "tradeBars").mockResolvedValue(tradeBars({ feed: "reference", timeframe: "1h" }));
+    renderTab("list", { sub: "exploration:icm-demo:41" });
+    expect(await screen.findByText("1h bars (a long hold: coarser than its 15m), bid prices, from the reference feed (this broker's bars aren't stored).")).toBeInTheDocument();
   });
 
   it("a trade the ledger doesn't hold (404) says so", async () => {
@@ -201,6 +219,7 @@ describe("Trades > Strategies (132, ADR 0050)", () => {
     const box = within(board).getByRole("button", { name: /Box break \+ close, running/ });
     expect(box).toHaveTextContent("213/300 · read ~Thu 5 Nov");
     expect(box).toHaveTextContent("retired at its stop");
+    expect(box).toHaveTextContent("read against Random control (scalp) 1m");
     expect(box).not.toHaveTextContent(/R\/trade|near/);
     const or = within(board).getByRole("button", { name: /Opening range, READ · proven/ });
     expect(or).toHaveTextContent(`+0.21 R/trade (90% CI +0.05…+0.37 R)`);
@@ -210,14 +229,14 @@ describe("Trades > Strategies (132, ADR 0050)", () => {
     expect(or.textContent!.match(/R\/trade/g)).toHaveLength(1);
   });
 
-  it("orders by state, never by result; lab money only with 3+ arms; learning line on top", async () => {
+  it("keeps the server's order (state, never result); lab money only with 3+ arms; learning line on top", async () => {
     renderTab("strategies");
     const board = await screen.findByRole("region", { name: "Strategy board" });
     const names = within(board).getAllByRole("button").map((b) => b.getAttribute("aria-label")!.split(",")[0]);
     expect(names).toEqual(["Opening range", "Box break + close", "Random control (scalp)"]);
     const top = screen.getByRole("region", { name: "Learning progress" });
-    expect(top).toHaveTextContent("4 arms read, 1 proven, 3 retired, 44 running · 2,960 trades counted toward reads this week");
-    expect(top).toHaveTextContent("Scalp lab (scalp), 7 days: 2,960 trades · −£41.20 net · costs £66.10 · within plan");
+    expect(top).toHaveTextContent("4 arms read, 1 proven, 3 retired, 44 running · 2,960 trades counted toward reads in 7 days");
+    expect(top).toHaveTextContent("Scalp lab (scalp), 7 days: 2,960 trades · −£41.20 net · costs £66.10");
     expect(top).toHaveTextContent("Vantage lab (intraday), 7 days: 310 trades · net hidden (fewer than 3 arms)");
   });
 
@@ -227,11 +246,24 @@ describe("Trades > Strategies (132, ADR 0050)", () => {
     expect(go).toHaveBeenCalledWith("trades", "list", null, "fam=box_break_close");
   });
 
-  it("while the board isn't served, says so and shows the engine strategies' summary", async () => {
-    vi.spyOn(apiModule.api, "strategyBoard").mockRejectedValue(new apiModule.ApiError(404, "not served by this server"));
+  it("a board that can't load says so and that trading is not affected", async () => {
+    vi.spyOn(apiModule.api, "strategyBoard").mockRejectedValue(new apiModule.ApiError(500, "boom"));
     renderTab("strategies");
-    expect(await screen.findByText(/The strategy board \(each arm's progress to its read\) isn't served yet/)).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Trades summary" })).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't load strategies.")).toBeInTheDocument();
+    expect(screen.getByText(/Trading is not affected/)).toBeInTheDocument();
+  });
+
+  it("an arm without a counted trade reads warming up; twins on two labs name their lab", async () => {
+    const v = board();
+    v.families[1] = { ...v.families[1], accounts: ["Day/swing lab", "Vantage lab"], variants: [
+      { ...v.families[1].variants[0], status: "warming", n_counted: 0, eta_read_date: null },
+      { ...v.families[1].variants[0], arm_id: "VKA15", account_labels: ["Vantage lab"] },
+    ] };
+    vi.spyOn(apiModule.api, "strategyBoard").mockResolvedValue(v);
+    renderTab("strategies");
+    const box = await screen.findByRole("button", { name: /Box break \+ close, running/ });
+    expect(box).toHaveTextContent("0/300 · warming up: no counted trade yet");
+    expect(box).toHaveTextContent("Vantage lab");
   });
 
   it("engine strategies show full figures with n and a 90% CI", async () => {

@@ -278,7 +278,7 @@ def _arm_row(t: ExplorationRecord, ctx: _Ctx, voids: dict[str, str]) -> TradeRow
         gross=round(round(t.pnl, 2) + costs.total, 2) if closed and t.pnl is not None else None,
         pnl_now=pnl_now, r_now=r_now, price_now=None if closed else a.price, costs=costs, why=_why(why),
         evidence=evidence, excluded_reason=voids.get(t.client_order_id), blinded=False,
-        stale=False if closed else a.stale)
+        stale=False if closed else a.stale, position_id=t.position_id)
 
 
 def _probes(state: Path, ctx: _Ctx) -> list[TradeRow]:
@@ -311,7 +311,8 @@ def _probes(state: Path, ctx: _Ctx) -> list[TradeRow]:
             r=round(p.pnl / risk, 3) if closed and p.pnl is not None and risk else None,
             gross=round(round(p.pnl, 2) + costs.total, 2) if closed and p.pnl is not None else None,
             pnl_now=pnl_now, r_now=r_now, price_now=None if closed else a.price, costs=costs, why=_why(why),
-            evidence="not_evidence", excluded_reason=None, blinded=False, stale=False if closed else a.stale))
+            evidence="not_evidence", excluded_reason=None, blinded=False, stale=False if closed else a.stale,
+            position_id=p.position_id))
     return out
 
 
@@ -360,7 +361,7 @@ def _positions(state: Path, ctx: _Ctx) -> list[TradeRow]:
             risk_amount=_r2(risk), currency=ccy, pnl=_r2(c.pnl) if net else None, r=c.r,
             gross=round(round(c.pnl, 2) + costs.total, 2) if net else _r2(c.pnl), pnl_now=None, r_now=None,
             price_now=None, costs=costs, why=_strategy_why(ctx, family, kind), evidence="not_evidence",
-            excluded_reason=None, blinded=False, stale=False))
+            excluded_reason=None, blinded=False, stale=False, position_id=c.position_id))
         if c.position_id is not None:
             seen.add((c.account_id, c.position_id))
     for (account, pid), t in ctx.orders.items():
@@ -384,7 +385,7 @@ def _positions(state: Path, ctx: _Ctx) -> list[TradeRow]:
             hold_limit_s=float(t.max_bars * tf_seconds(t.timeframe)) if t.timeframe else None, risk_amount=risk,
             currency=a.currency, pnl=None, r=None, gross=None, pnl_now=pnl_now, r_now=r_now, price_now=a.price,
             costs=None, why=_strategy_why(ctx, family, kind), evidence="not_evidence", excluded_reason=None,
-            blinded=False, stale=a.stale))
+            blinded=False, stale=a.stale, position_id=pid))
     return out
 
 

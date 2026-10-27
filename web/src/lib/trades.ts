@@ -1,11 +1,11 @@
 // The trades experience (docs/design/trades-ux-2026-10-27.md, ADR 0050, backlog 128-134): Now / List / Strategies /
-// Today. The ledger, Today and open-position shapes come from the API contract (schema.d.ts: GET /api/trades,
-// /api/trades/{trade_id}, /api/today, /api/positions/open); the strategy board (132) and the trade bars (133) are not
-// served yet, so their shapes stay here until their endpoints land. Pure helpers shared by the screens.
+// Today. Every shape comes from the API contract (schema.d.ts: GET /api/trades, /api/trades/{trade_id},
+// /api/trades/{trade_id}/bars, /api/strategies/board, /api/today, /api/positions/open). Pure helpers shared by the
+// screens.
 //
-// Blinding (ADR 0050 with the quant-reviewer's tightenings) is the server's: it withholds totals and blinds rows. The
-// client never computes an aggregate of its own over ledger rows; it shows `withheld` and `unreadable` as the API
-// returns them, and a "near its stop" band is never shown before the stop has fired.
+// Blinding (ADR 0050 with the quant-reviewer's tightenings) is the server's: it withholds totals and blinds rows, and
+// the board carries no result of an unread arm and no "near its stop" status. The client never computes an aggregate
+// of its own over ledger rows, nor re-orders the board: it shows what the API returns.
 import type { components } from "./schema";
 import { money, NBSP, signedR, withUnit } from "../ui/format";
 
@@ -59,87 +59,26 @@ export type Side = "long" | "short";
 export type Mode = "demo" | "live" | "paper";
 
 // ------------------------------------------------------------------------------------------------ chart bars (133)
-// No bars endpoint yet: the detail shows the missing-bars state with the levels in words.
-export type Bar = { t: string; o: number; h: number; l: number; c: number };
+export type Bar = S["ChartBar"];
+export type TradeBars = S["TradeBars"];
+export type StopMove = S["StopMove"];
 
-// ------------------------------------------------------------------------------------------------ board (132, API pending)
-export type AnnealState = "E" | "C1" | "P" | "R";
+// ------------------------------------------------------------------------------------------------ board (132)
+export type StrategyBoard = S["StrategyBoardView"];
+export type BoardFamily = S["BoardFamily"];
+export type BoardVariant = S["BoardVariant"];
+export type ReadFigures = S["ReadFigures"];
+export type EngineStrategy = S["EngineStrategy"];
+export type LabTotal = S["LabTotal"];
+export type AnnealState = BoardVariant["anneal_state"];
+export type BoardState = BoardFamily["state"];
+export type ArmStatus = BoardVariant["status"];
 export const ANNEAL_WORDS: Record<AnnealState, string> = { E: "exploring", C1: "candidate", P: "proven", R: "retired" };
-/** Only two bands exist before the read (quant review): "near its stop" would reveal a running loss. */
-export type Band = "running" | "retired_at_stop";
-export const bandWords = (b: string | null | undefined) => (b === "retired_at_stop" ? "retired at its stop" : "running");
-
-export type ReadFigures = {
-  verdict: string;
-  n: number;
-  net_r_per_trade: number;
-  ci90: [number, number];
-  hit_rate: number;
-  vs_control_r: number | null;
-  vs_control_ci90: [number, number] | null;
-  net_gbp: number | null;
-  since_read: { net_r_per_trade: number; n: number } | null;
+/** Before the read only these exist (quant review): "near its stop" would reveal a running loss. */
+export const STATUS_WORDS: Record<ArmStatus, string> = {
+  warming: "warming up: no counted trade yet", running: "running", read: "read", retired: "retired at its stop",
 };
-
-export type BoardVariant = {
-  timeframe: string;
-  arm_id: string;
-  is_control: boolean;
-  n_counted: number;
-  n_read_at: number;
-  fills_today: number;
-  fills_7d: number;
-  eta_read_date: string | null;
-  band: Band;
-  open_now: number;
-  read: ReadFigures | null;              // present only after the arm's read (never before: ADR 0050)
-};
-
-export type BoardState = "real" | "proven" | "candidate" | "running" | "retired" | "control";
-export type BoardFamily = {
-  family: string;
-  family_label: string;
-  style: "scalp" | "intraday" | "swing";
-  accounts: string[];
-  state: BoardState;
-  anneal_state: AnnealState;
-  variants: BoardVariant[];
-};
-
-export type EngineStrategy = {
-  name: string;
-  timeframe: string | null;
-  kind: "strategy" | "shadow" | "real";
-  n: number;
-  net_r_per_trade: number | null;
-  ci90: [number, number] | null;
-  hit_rate: number | null;
-  net_pnl: number | null;
-  currency: string | null;
-  n_today: number;
-  n_7d: number;
-};
-
-export type LabTotal = {
-  account_label: string;
-  style: string | null;
-  period: string;
-  arms: number;
-  n: number;
-  net_pnl: number | null;
-  costs: number | null;
-  currency: string | null;
-  within_plan: boolean | null;
-};
-
-export type StrategyBoard = {
-  as_of: string;
-  learning: { running: number; read: number; proven: number; retired: number; counted_this_week: number };
-  lab_totals: LabTotal[];
-  families: BoardFamily[];
-  engine: EngineStrategy[];
-  unreadable: string[];
-};
+export const statusWords = (s: string | null | undefined) => STATUS_WORDS[s as ArmStatus] ?? "running";
 
 // ------------------------------------------------------------------------------------------------ polls (§3)
 export const POLL = { now: 5_000, list: 15_000, strategies: 60_000, today: 15_000, detail: 15_000 } as const;
@@ -333,22 +272,17 @@ export const activeFilterCount = (f: Filters) =>
 
 export const PERIOD_WORDS: Record<Period, string> = { today: "Today", "7d": "7 days", "30d": "30 days", all: "All" };
 
-// ------------------------------------------------------------------------------------------------ board order
-const STATE_ORDER: BoardState[] = ["real", "proven", "candidate", "running", "retired", "control"];
-
-/** Real money, proven, candidates, running by closeness to the read, retired, controls: never by result (ADR 0050). */
-export function orderBoard(fams: BoardFamily[]): BoardFamily[] {
-  const closeness = (f: BoardFamily) => Math.max(0, ...f.variants.map((v) => (v.n_read_at > 0 ? v.n_counted / v.n_read_at : 0)));
-  return [...fams].sort((a, b) => STATE_ORDER.indexOf(a.state) - STATE_ORDER.indexOf(b.state)
-    || closeness(b) - closeness(a) || a.family_label.localeCompare(b.family_label));
-}
+// ------------------------------------------------------------------------------------------------ board words
+// The order is the server's (strategy_board.py: state, then closeness to the read, never by result); filters keep it.
 
 /** "read ~Thu 5 Nov" from the server's ETA (the client never projects a pace of its own). */
 export function etaWords(iso: string | null | undefined): string {
   if (!iso) return "read date not known yet";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "read date not known yet";
-  return `read ~${d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}`;
+  // a read most of a year away (a slow arm) carries its year: "read ~Tue 20 Jul 2032", never a misleading "Jul"
+  const year = d.getTime() - Date.now() > 300 * 86_400_000 ? { year: "numeric" as const } : {};
+  return `read ~${d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", ...year })}`;
 }
 
 export const ci = (c: [number, number] | null | undefined) =>

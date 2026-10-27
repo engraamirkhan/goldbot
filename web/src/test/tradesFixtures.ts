@@ -1,7 +1,9 @@
 // Typed fixtures for the trades screens' unit tests, in the API contract's shapes (schema.d.ts: TradeRow, TradesPage,
-// TodayAccount, OpenPosition). The e2e and screenshots use the real seeded server. The strategy board is not served
-// yet (backlog 132): its fixture feeds the board's unit tests only. Illustrative figures.
-import type { Bar, OpenPositionX, StrategyBoard, StripDay, TodayAccountX, TradeRow, TradesPage } from "../lib/trades";
+// TodayAccount, OpenPosition, StrategyBoardView, TradeBars). The e2e and screenshots use the real seeded server.
+// Illustrative figures.
+import type {
+  Bar, BoardVariant, OpenPositionX, StrategyBoard, StripDay, TodayAccountX, TradeBars, TradeRow, TradesPage,
+} from "../lib/trades";
 
 const NOW = Date.UTC(2026, 9, 27, 9, 0, 0);
 const iso = (minAgo: number) => new Date(NOW - minAgo * 60_000).toISOString();
@@ -73,36 +75,59 @@ export const bars = (): Bar[] => {
   return out;
 };
 
+const variant = (o: Partial<BoardVariant>): BoardVariant => ({
+  arm_id: "KA15", timeframe: "15m", variant: "15m", account_labels: ["Day/swing lab"], is_control: false, control_arm_id: "S0",
+  status: "running", anneal_state: "E", n_counted: 213, n_read_at: 300, fills_today: 14, fills_7d: 70, open_now: 0,
+  eta_read_date: "2026-11-05", read: null, ...o,
+});
+
+/** In the server's order (strategy_board.py): proven, then running by closeness to the read, then controls. */
 export const board = (): StrategyBoard => ({
   as_of: iso(0),
-  learning: { running: 44, read: 4, proven: 1, retired: 3, counted_this_week: 2960 },
+  learning: { running: 44, read: 4, proven: 1, retired: 3, counted_7d: 2960 },
   lab_totals: [
-    { account_label: "Scalp lab", style: "scalp", period: "7 days", arms: 7, n: 2960, net_pnl: -41.2, costs: 66.1, currency: "GBP", within_plan: true },
-    { account_label: "Vantage lab", style: "intraday", period: "7 days", arms: 2, n: 310, net_pnl: null, costs: 8.4, currency: "GBP", within_plan: null },
+    { account_label: "Scalp lab", style: "scalp", period: "7 days", arms: 7, n: 2960, n_closed: 2950, net_pnl: -41.2, costs: 66.1,
+      currency: "GBP", withheld_reason: null },
+    { account_label: "Vantage lab", style: "intraday", period: "7 days", arms: 2, n: 310, n_closed: 300, net_pnl: null, costs: null,
+      currency: "GBP", withheld_reason: "these trades cover fewer than 3 unread arms in an account and day (ADR 0050)" },
   ],
   families: [
-    { family: "random_bracket", family_label: "Random control (scalp)", style: "scalp", accounts: ["Scalp lab"], state: "control", anneal_state: "E",
-      variants: [{ timeframe: "1m", arm_id: "S0", is_control: true, n_counted: 412, n_read_at: 300, fills_today: 80, fills_7d: 412,
-                   eta_read_date: null, band: "running", open_now: 1, read: null }] },
-    { family: "box_break_close", family_label: "Box break + close", style: "intraday", accounts: ["Day/swing lab"], state: "running", anneal_state: "E",
-      variants: [
-        { timeframe: "15m", arm_id: "KA15", is_control: false, n_counted: 213, n_read_at: 300, fills_today: 14, fills_7d: 70, eta_read_date: "2026-11-05", band: "running", open_now: 1, read: null },
-        { timeframe: "1h", arm_id: "KA1H", is_control: false, n_counted: 61, n_read_at: 300, fills_today: 3, fills_7d: 18, eta_read_date: "2026-12-15", band: "running", open_now: 0, read: null },
-        { timeframe: "4h", arm_id: "KA4H", is_control: false, n_counted: 18, n_read_at: 300, fills_today: 0, fills_7d: 2, eta_read_date: null, band: "retired_at_stop", open_now: 0, read: null },
-      ] },
     { family: "opening_range", family_label: "Opening range", style: "intraday", accounts: ["Scalp lab"], state: "proven", anneal_state: "P",
       variants: [
-        { timeframe: "15m", arm_id: "OR15", is_control: false, n_counted: 300, n_read_at: 300, fills_today: 9, fills_7d: 64, eta_read_date: null, band: "running", open_now: 0,
-          read: { verdict: "proven", n: 300, net_r_per_trade: 0.21, ci90: [0.05, 0.37], hit_rate: 0.46, vs_control_r: 0.24,
-                  vs_control_ci90: [0.06, 0.42], net_gbp: 41.2, since_read: { net_r_per_trade: 0.18, n: 64 } } },
-        { timeframe: "1h", arm_id: "OR1H", is_control: false, n_counted: 120, n_read_at: 300, fills_today: 2, fills_7d: 15, eta_read_date: "2026-11-30", band: "running", open_now: 0, read: null },
+        variant({ arm_id: "OR15", account_labels: ["Scalp lab"], status: "read", anneal_state: "P", n_counted: 364, fills_today: 9,
+                  fills_7d: 64, eta_read_date: null,
+                  read: { read_utc: "2026-10-20T00:00:00Z", verdict: "proven", n: 300, net_r_per_trade: 0.21, ci90: [0.05, 0.37],
+                          hit_rate: 0.46, net_pnl: 41.2, currency: "GBP", vs_control_r: 0.24, vs_control_ci90: [0.06, 0.42],
+                          since_read: { net_r_per_trade: 0.18, n: 64 } } }),
+        variant({ arm_id: "OR1H", timeframe: "1h", variant: "1h", account_labels: ["Scalp lab"], n_counted: 120, fills_today: 2,
+                  fills_7d: 15, eta_read_date: "2026-11-30" }),
       ] },
+    { family: "box_break_close", family_label: "Box break + close", style: "intraday", accounts: ["Day/swing lab"], state: "running", anneal_state: "E",
+      variants: [
+        variant({ open_now: 1 }),
+        variant({ arm_id: "KA1H", timeframe: "1h", variant: "1h", n_counted: 61, fills_today: 3, fills_7d: 18, eta_read_date: "2026-12-15" }),
+        variant({ arm_id: "KA4H", timeframe: "4h", variant: "4h", status: "retired", anneal_state: "R", n_counted: 18, fills_today: 0,
+                  fills_7d: 2, eta_read_date: null }),
+      ] },
+    { family: "random_bracket", family_label: "Random control (scalp)", style: "scalp", accounts: ["Scalp lab"], state: "control", anneal_state: "E",
+      variants: [variant({ arm_id: "S0", timeframe: "1m", variant: "1m", account_labels: ["Scalp lab"], is_control: true,
+                           control_arm_id: null, n_counted: 412, fills_today: 80, fills_7d: 412, eta_read_date: null, open_now: 1 })] },
   ],
   engine: [
-    { name: "Box break + MFI", timeframe: "1h", kind: "strategy", n: 42, net_r_per_trade: 0.12, ci90: [-0.08, 0.32], hit_rate: 0.52, net_pnl: 12.3, currency: "GBP", n_today: 2, n_7d: 11 },
+    { name: "Box break + MFI", family: "box_break_close", timeframe: "1h", kind: "strategy", n: 42, net_r_per_trade: 0.12,
+      ci90: [-0.08, 0.32], hit_rate: 0.52, net_pnl: 12.3, currency: "GBP", n_today: 2, n_7d: 11 },
   ],
   unreadable: [],
 });
+
+/** The chart of the fixture trade (tradeRow: entry 4,012.40, stop 4,006.10, target 4,024.00): its stop moved once. */
+export const tradeBars = (o: Partial<TradeBars> = {}): TradeBars => {
+  const b = bars();
+  return {
+    trade_id: "exploration:icm-demo:41", timeframe: "15m", feed: "broker", bars: b, missing: null, side: "long", entry: 4012.4,
+    entry_utc: b[30].t, stop: 4006.1, stop_moves: [{ at: b[34].t, price: 4012.4 }], target: 4024, exit: 4024, exit_utc: b[36].t, ...o,
+  };
+};
 
 const strip: StripDay[] = Array.from({ length: 14 }, (_, i) => ({
   day: new Date(NOW - (13 - i) * 86_400_000).toISOString().slice(0, 10), n: 30 + i,

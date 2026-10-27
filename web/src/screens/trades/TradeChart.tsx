@@ -2,7 +2,7 @@
 // are told apart by shape (hollow up, filled down), levels by line style and a label with the word and the price, so
 // nothing depends on colour. Fixed height: loading and a missing-bars state take the same box (no layout shift).
 import { barIndexAt, chartLevels, spreadLabels } from "../../lib/tradeChart";
-import { type Bar, price, type TradeRow } from "../../lib/trades";
+import { type Bar, price, type StopMove, type TradeRow } from "../../lib/trades";
 
 type Level = { key: string; y: number; word: string; dash?: string; strong?: boolean };
 
@@ -10,12 +10,13 @@ const PAD_R = 118;    // room for the level labels
 const PAD_T = 10;
 const PAD_B = 18;
 
-export function TradeChart({ trade, bars, loading, height, width = 360 }: {
-  trade: TradeRow; bars: Bar[] | null | undefined; loading: boolean; height: number; width?: number;
+export function TradeChart({ trade, bars, moves = [], timeframe, loading, height, width = 360 }: {
+  trade: TradeRow; bars: Bar[] | null | undefined; moves?: StopMove[]; timeframe?: string; loading: boolean; height: number;
+  width?: number;
 }) {
   const W = width;
   if (loading) return <div className="chart-box skeleton-row" style={{ height }} aria-busy="true" aria-label="Loading the chart" />;
-  const levels = chartLevels(trade);
+  const levels = chartLevels(trade, moves);
   if (!bars || bars.length === 0) {
     return (
       <div className="chart-box chart-missing" style={{ height }} role="note">
@@ -37,7 +38,7 @@ export function TradeChart({ trade, bars, loading, height, width = 360 }: {
   const exitI = barIndexAt(bars, trade.exit_utc);
   const lv: Level[] = levels.map((l) => ({ key: l.key, y: y(l.value), word: `${l.word} ${price(l.value)}`, dash: l.dash, strong: l.strong }));
   const labelY = spreadLabels(lv.map((l) => l.y), 13, 10, H - 4);
-  const name = `Chart of ${trade.timeframe ?? ""} bars: ${levels.map((l) => `${l.word} ${price(l.value)}`).join(", ")} USD per ounce`;
+  const name = `Chart of ${timeframe ?? trade.timeframe ?? ""} bars: ${levels.map((l) => `${l.word} ${price(l.value)}`).join(", ")} USD per ounce`;
   return (
     <div className="chart-box" style={{ height }}>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} role="img" aria-label={name}>
