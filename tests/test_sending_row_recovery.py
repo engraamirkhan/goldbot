@@ -25,7 +25,8 @@ T0 = pd.Timestamp("2025-03-04 10:00", tz="UTC")       # a Tuesday, market open
 
 
 class LostReply(PaperBroker):
-    """The order reaches the broker, but the reply is lost (a bridge timeout after the terminal filled it)."""
+    """The order reaches the broker, then the terminal raises before the result comes back. (A call with no answer, a
+    bridge timeout, is no longer a raise but an ambiguous row: tests/test_order_send.py; an answered error still is.)"""
 
     raise_next = True
 
@@ -33,7 +34,7 @@ class LostReply(PaperBroker):
         res = super().place_order(intent)
         if self.raise_next:
             self.raise_next = False
-            raise TimeoutError("bridge timed out after the fill")
+            raise RuntimeError("terminal connection lost after the fill")
         return res
 
 
@@ -56,7 +57,7 @@ def _send_that_raises(eng: Engine, pb: PaperBroker) -> tuple[str, int]:
     agent = TrendSpecialist()
     prop = Proposal(proposal_id="icm-demo-raised-x", account_id="icm-demo", agent_id=agent.agent_id, side=1, lots=0.1,
                     entry=2_400.2, stop=2_390.0, target=2_430.0, p=0.6, ev_r=0.1, spread_points=20.0, top_features=[])
-    with pytest.raises(TimeoutError):
+    with pytest.raises(RuntimeError):
         eng._execute(prop, agent, 0.1, 2_390.0, 2_430.0, requested=2_400.2, atr_usd=10.0)
     (pos,) = pb.positions()
     assert eng._orders[prop.proposal_id].status == "sending" and pos.position_id not in eng.open

@@ -42,6 +42,7 @@ from goldbot.engine import (
     cost_probe,
     exploration,
     history,
+    order_send,
     unconfirmed,
 )
 from goldbot.engine.cost_probe import ScheduledProbe
@@ -294,6 +295,7 @@ class Engine:
         self.bars_1m = pd.DataFrame()
         self.history = history.History()     # cut-over, background fill and writer, history_gap
         self.broker_m1 = broker_bars.BrokerBars()   # the broker's finished 1m bars and the minutes awaiting theirs
+        self.order_sender: order_send.Sender | None = None   # through the bridge: orders off the tick thread
         self.open: dict[int, OpenTrade] = {}
         self.pending: dict[str, tuple[Intent, Proposal, Specialist]] = {}
         self.sent_ids: set[str] = set()
@@ -613,6 +615,7 @@ class Engine:
             self._guard(lambda: self._log_tick(t))      # a full disk is a tick error, never a skipped exit
         self._refresh_broker_terms(t.ts_utc)
         self._guard(lambda: self._roll_risk_period(t.ts_utc))
+        self._guard(lambda: order_send.poll(self))      # a late order reply: the look-up runs on this pass
         if self._last_reconcile is None or (t.ts_utc - self._last_reconcile).total_seconds() >= self.cfg.reconcile_every_s:
             self._reconcile(t.ts_utc)
         self._guard(lambda: broker_bars.poll(self, t))   # after the exits; a failed rates call is no tick error
@@ -1144,9 +1147,11 @@ class Engine:
                 try:
                     res = self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd, gd=gd)
                 except Exception as exc:
-                    # review LOW-C: the order may or may not be at the broker. Its pending_orders row stays "sending"
-                    # (the restart reconciliation resolves it), entries are blocked (tick_error), no further auto
-                    # entry this bar close; the remaining agents are still journalled and exits carry on
+                    if isinstance(exc, order_send.OrderInFlight):    # nothing sent: a refusal, never a tick error
+                        decisions.append(self._record(agent, close_ts, p, mult, order_send.REFUSED, pid, scored_fv=sfv))
+                        continue
+                    # review LOW-C: the order may be at the broker: its row stays "sending" (reconciliation resolves it),
+                    # entries blocked (tick_error), no further auto entry this close; other agents journalled, exits go on
                     self._auto_paused = (close_ts, "order_raised")
                     self.note_tick_error(exc)
                     decisions.append(self._record(agent, close_ts, p, mult, f"auto_unconfirmed:{type(exc).__name__}",
@@ -1171,6 +1176,8 @@ class Engine:
             self._apply_decision(p)
         except BaseException as exc:
             unconfirmed.archive_not_sent(self, p, exc)
+            if order_send.refused(self, exc, p.agent_id, p.proposal_id):   # nothing sent: never a tick error
+                return
             raise
         unconfirmed.silent_fill(self, p)   # BACKLOG 86
 
@@ -1291,6 +1298,7 @@ class Engine:
         if cost_probe.refuse_non_probe(self, agent.agent_id, prop.proposal_id):   # ADR 0037 amendment 4
             return None
         magic = cost_probe.magic(self, agent)        # ADR 0037: a probe has its own magic
+        order_send.ready(self)                       # one order in flight per account: refused before the row
         # finance audit GAP-01/02/13: the signal's quote and spread (the proposal) next to the quote priced from now
         audit = EntryAudit(decision_price=prop.entry, decision_spread_points=prop.spread_points,
                            decision_utc=pd.Timestamp(prop.created, unit="s", tz="UTC"), requested_price=requested,
@@ -1302,7 +1310,7 @@ class Engine:
         self._orders_record(prop.proposal_id, agent_id=agent.agent_id, side=prop.side, magic=magic, lots=lots,
                             max_bars=self._base_bars(agent), sl=oi.sl, tp=oi.tp, ts=pd.Timestamp.now("UTC"),
                             atr_usd=atr_usd, audit=audit)
-        res = self.broker.place_order(oi)
+        res = order_send.send(self, oi)              # no answer: ambiguous (looked up), never a tick error
         rec = self._orders[prop.proposal_id]
         rec.status = unconfirmed.sent_status(res, paper=self.cfg.mode == "paper", definite=DEFINITE_REJECT_RETCODES)
         rec.position_id = res.position_id if rec.status == "filled" else None
@@ -1322,13 +1330,7 @@ class Engine:
                                "retcode": res.retcode, "price": res.price, "lots": res.filled_lots,
                                "message": res.message})
         auto_entry.note_refusal(self, prop, agent, res, lots)     # the bridge's ceiling or a switched terminal
-        if self.store is not None and res.ok and res.price is not None \
-                and not cost_probe.is_learning(agent.agent_id):  # ADR 0037: a probe's fill feeds its own ledger only
-            # requested vs filled feeds the nightly slippage table
-            fill = pd.DataFrame([{"ts_utc": self.broker.last_tick(self.cfg.symbol).ts_utc, "client_order_id": prop.proposal_id,
-                                  "agent_id": agent.agent_id, "side": prop.side, "lots": res.filled_lots, "requested": requested,
-                                  "filled": res.price, "order_type": "market", "retcode": res.retcode, "commission": np.nan}])
-            self.store.append("fills", fill, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
+        order_send.record_fill(self, prop, agent, res, requested)     # the nightly slippage table
         return res
 
     @staticmethod
@@ -1341,16 +1343,6 @@ class Engine:
             return
         tr.policy, tr.timeframe, tr.atr_usd, tr.entry = policy, agent.timeframe, float(atr_usd), float(entry)
         tr.opened_utc, tr.flat_at = opened, policy.flat_deadline(opened)
-
-    @staticmethod
-    def _implied_atr(agent: Specialist, entry: float, sl: float | None) -> float | None:
-        """The ATR implied by an initial stop placed stop_atr x ATR from entry (recovery when no ATR was recorded).
-        A stop already tightened gives a smaller ATR, so the restored policy is tighter, never looser; a stop at
-        entry implies nothing."""
-        if sl is None or agent.label_spec.stop_atr <= 0:
-            return None
-        d = abs(entry - sl) / agent.label_spec.stop_atr
-        return d if d > 0 else None
 
     # ------------------------------------------------------------------ position management
     # ------------------------------------------------------------------ broker reads (fail closed)
@@ -1808,7 +1800,7 @@ class Engine:
                        audit=rec.audit if rec is not None else None)
         if agent is not None:
             atr_usd = rec.atr_usd if rec is not None and rec.atr_usd is not None else \
-                self._implied_atr(agent, p.open_price, tr.initial_sl)
+                unconfirmed.implied_atr(agent, p.open_price, tr.initial_sl)
             self._attach_policy(tr, agent, entry=p.open_price, atr_usd=atr_usd, opened=p.open_time_utc)
         if rec is not None and rec.status != "filled":
             # review MEDIUM-2 (a): the row of a send that raised (or a fill found late) now names its position, so a

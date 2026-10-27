@@ -225,6 +225,11 @@ class Account(Record):
     # plan 2026-10-25 (exploration arms): minimum-lot demo entries that measure an edge; refused at load unless the
     # account is demo and probe_only, with its budget share and the cost probe's together at most the day
     exploration: Exploration = Field(default_factory=Exploration)
+    # live issue 2026-10-27 (goldbot/engine/order_send.py): how long an entry order call through the bridge waits for
+    # the terminal's reply, on its own worker thread (never the tick thread; closes and reads keep the bridge's 15 s
+    # and 10 s). Vantage fills take up to 31 s. At most 60 s, below the look-up's AMBIGUOUS_SETTLE_S (120 s), so no
+    # clean look calls an order unfilled while its call can still answer
+    order_timeout_s: float = Field(15.0, gt=0, le=60)
 
     # backstop for records built outside load_accounts: validation errors never carry the input (names, logins)
     model_config = ConfigDict(hide_input_in_errors=True)      # merged with Record's config by pydantic
@@ -550,7 +555,7 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
                            shadow_host=bool(a.get("shadow_host", False)), probe_only=bool(a.get("probe_only", False)),
                            dynamic_limits=a.get("dynamic_limits", False),
                            exploration=Exploration(**(a.get("exploration") or {})),
-                           max_positions=a.get("max_positions"))
+                           max_positions=a.get("max_positions"), order_timeout_s=a.get("order_timeout_s", 15.0))
     hosts = [a for a in out.values() if a.enabled and a.shadow_host]
     if len(hosts) > 1:      # ADR 0037 amendment 4: one shadow book, one host; two would trade it twice
         raise ValueError(f"{len(hosts)} enabled accounts are the shadow host in config/accounts.yaml: exactly one may "

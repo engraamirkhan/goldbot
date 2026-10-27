@@ -87,7 +87,7 @@ import pandas as pd
 from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.data.timeutil import epoch_ns, server_wall
 from goldbot.db import Database, RecordRepo
-from goldbot.engine import auto_entry, exploration
+from goldbot.engine import auto_entry, exploration, order_send
 from goldbot.engine import magic as magics
 from goldbot.labels.triple_barrier import BarrierSpec
 from goldbot.ops.accounts import ScheduledProbe
@@ -901,6 +901,10 @@ def _place(eng: Engine, db: Database, intent: Intent, agent: Specialist, *, pid:
     t0 = time.perf_counter()
     try:
         res = eng._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd, gd=gd)
+    except order_send.OrderInFlight:    # nothing sent (the gate's unconfirmed_order_pending refuses it first)
+        eng.decisions.append({"ts": close_ts.isoformat(), **journal, "proposal": pid,
+                              "action": f"{action}{order_send.REFUSED}", **applied()})
+        return None
     except Exception as exc:        # as an auto entry (review LOW-C): the row stays "sending", reconciliation resolves it
         eng._auto_paused = (close_ts, "order_raised")
         eng.note_tick_error(exc)

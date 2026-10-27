@@ -11,8 +11,10 @@ the terminal through this bridge:
 * `RemoteBroker(url, token)` implements the `Broker` protocol on the engine's side.
 
 Order safety: `place_order`, `modify` and `close` are never retried. A timeout after the bridge sent an order raises
-`BridgeUnavailable`, exactly like a terminal that died after `order_send`; the engine's restart reconciliation finds
-the fill by its client order id in positions and deals (row X7), so an order is never sent twice. Read-only calls
+`BridgeUnavailable`, exactly like a terminal that died after `order_send`; the engine treats an entry that raised it as
+an ambiguous order (goldbot/engine/order_send.py) and finds the fill by its client order id in positions and deals
+(row X7, BACKLOG 72), so an order is never sent twice. The engine sends entries through a client of their own on a
+worker thread with the account's `order_timeout_s`; this server still serves one call at a time. Read-only calls
 are retried once. While the bridge is unreachable there are no ticks, so the gate's stale-data rule blocks entries;
 open positions keep their broker-side stop and target (sent with every order).
 
