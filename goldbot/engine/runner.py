@@ -3233,6 +3233,7 @@ class Engine:
             # BACKLOG 19/35: remaining stop risk (account currency; null = unknown), per position, and positions by side
             "open_risk": round(st.open_risk, 2) if st.open_risk is not None else None,
             "open_risk_positions": self._open_risk_rows, "open_long": st.open_long, "open_short": st.open_short,
+            **open_risk.published_fx(self._open_fx),   # item 128: the rate the dashboard's open money uses (reporting)
             "combined_size_down": st.combined_size_down, "spread_points": st.spread_points, "last_tick_age_s": st.last_tick_age_s,
             "terminal_connected": True, "account_class": self._account_class(),
             "account_class_declared": self.cfg.declared_class, "account_class_measured": self._measured_class(),

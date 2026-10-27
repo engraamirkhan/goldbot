@@ -13,7 +13,7 @@ import math
 import os
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -45,6 +45,8 @@ from goldbot.api import (
     mt5_crop,
     progress,
     spread_normal,
+    today_ledger,
+    trades_ledger,
     trades_overview,
 )
 from goldbot.api.auth import (
@@ -102,6 +104,7 @@ from goldbot.api.schema import (
     EmailLinkRedeemRequest,
     EmailLinkRequest,
     EmailLinkResponse,
+    ExitReason,
     FeedHealth,
     ForgotPasswordRequest,
     GatesView,
@@ -137,8 +140,14 @@ from goldbot.api.schema import (
     Status,
     StrategyWatchView,
     TodayView,
+    TradeEvidence,
+    TradeKind,
+    TradeListPeriod,
+    TradeRow,
     TradesOverview,
+    TradesPage,
     TradesSummary,
+    TradeStatus,
     TvStatusView,
     UserRef,
     UserRow,
@@ -1110,6 +1119,40 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                                                                           engines_or_none()))
     # ============================================================== end Home trades summary
 
+    # ============================================================== Trade ledger (read-only, viewer and above)
+    # goldbot/api/trades_ledger.py (items 128, 129; ADR 0050): one row per trade of every kind, filters, cursor paging
+    # and totals, blinded server-side. One build serves every poll for LEDGER_TTL_S; /api/today reads the same build.
+    # Registered after /api/trades/overview and /api/trades/summary so the detail route never shadows them.
+    ledger_cache = progress.GatesCache(ttl_s=trades_ledger.LEDGER_TTL_S)
+
+    def ledger() -> trades_ledger.Ledger:
+        return ledger_cache.get(lambda: trades_ledger.build_ledger(st.dir, pd.Timestamp.now("UTC"), engines_or_none()))
+
+    @app.get("/api/trades", response_model=TradesPage)
+    def trades_list(period: TradeListPeriod = "today", since: date | None = None, until: date | None = None,
+                    account: list[str] = Query([]), family: list[str] = Query([]), timeframe: list[str] = Query([]),
+                    arm: list[str] = Query([]), kind: list[TradeKind] = Query([]), status: TradeStatus | None = None,
+                    exit_reason: list[ExitReason] = Query([]), evidence: list[TradeEvidence] = Query([]),
+                    control: bool | None = None, cursor: str | None = None,
+                    limit: int = Query(trades_ledger.PAGE, ge=1, le=trades_ledger.MAX_PAGE),
+                    _: User = Depends(need("viewer"))) -> TradesPage:
+        q = trades_ledger.TradeQuery(period=period, since=since, until=until, account=tuple(account),
+                                     family=tuple(family), timeframe=tuple(timeframe), arm=tuple(arm), kind=tuple(kind),
+                                     status=status, exit_reason=tuple(exit_reason), evidence=tuple(evidence),
+                                     control=control, cursor=cursor, limit=limit)
+        try:
+            return trades_ledger.query(ledger(), q)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get("/api/trades/{trade_id:path}", response_model=TradeRow)
+    def trade_detail(trade_id: str, _: User = Depends(need("viewer"))) -> TradeRow:
+        row = trades_ledger.detail(ledger(), trade_id)
+        if row is None:
+            raise HTTPException(404, "no such trade")
+        return row
+    # ============================================================== end Trade ledger
+
     # ============================================================== Home status card stack (read-only, viewer and above)
     # goldbot/api/home_cards.py (docs/ux/home-redesign-2026-10-19.md): open positions (N1), the strategy agents' states
     # (N2) and today's money. Each its own route and cache (one failing source never blanks Home). Nothing writes.
@@ -1128,8 +1171,9 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
 
     @app.get("/api/today", response_model=TodayView)
     def today(_: User = Depends(need("viewer"))) -> TodayView:
-        return today_cache.get(lambda: home_cards.today_money(st.dir, pd.Timestamp.now("UTC"),
-                                                              home_cards.probe_terms_from_config(), engines_or_none()))
+        return today_cache.get(lambda: home_cards.today_money(
+            st.dir, pd.Timestamp.now("UTC"), home_cards.probe_terms_from_config(), engines_or_none(), ledger=ledger(),
+            plans=today_ledger.plans_from_config(view_settings())))
     # ============================================================== end Home status card stack
 
     # ============================================================== auto mode (A10): card for any role, switch owner-only

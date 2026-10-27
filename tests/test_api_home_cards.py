@@ -34,6 +34,7 @@ def _account_enabled(enabled_accounts):
 
 def _engine(state: Path, **over: object) -> None:
     e = {"account": ACC, "mode": "demo", "currency": "GBP", "usd_to_account": 0.8, "ts": NOW.timestamp(),
+         "usd_to_account_utc": (NOW - pd.Timedelta(seconds=30)).isoformat(),
          "price": 2410.0, "lot_terms": {"contract_oz": 100.0, "volume_min": 0.01}, "equity": 1012.0, "balance": 1010.0,
          "day_start_equity": 1000.0, "daily_loss_limit": 50.0, "daily_loss_remaining": 44.0, "market_closed": False}
     e.update(over)
@@ -85,6 +86,44 @@ def test_an_unreadable_orders_file_is_named_and_nothing_is_invented(tmp_path):
     (tmp_path / f"orders_{ACC}.json").write_text("{torn")
     v = hc.open_positions(tmp_path, NOW)
     assert v.positions == [] and v.unreadable == [CUT]
+
+
+def test_a_fresh_gbp_engine_payload_gives_every_open_row_its_money_risk_and_r(tmp_path):
+    """Item 128 (trades-ux A1): with the engine's published rate every GBP row, cost probe included, has floating
+    P&L, the risk at entry and the open risk in pounds, and the CLI's per-account totals are numbers, not None."""
+    from goldbot.ops import positions as cli
+    _engine(tmp_path)
+    _orders(tmp_path)
+    rows = hc.open_positions(tmp_path, NOW).positions
+    assert rows and all(p.floating_pnl is not None and p.open_risk is not None and p.risk_amount is not None
+                        and not p.stale for p in rows)
+    p = next(x for x in rows if x.position_id == 12)
+    assert p.risk_amount == 20.0                            # (2400 - 2395) x 0.05 x 100 x 0.8 at the stop at entry
+    assert (p.kind, p.account_label) == ("strategy", "Other account")
+    assert p.held_s == 3600.0 and p.hold_limit_s == 8 * 3600.0
+    assert next(x for x in rows if x.position_id == 13).kind == "cost_probe"
+    totals = cli.build(tmp_path, NOW, [ACC], None)["accounts"][0]["totals"]
+    assert totals["floating_pnl"] is not None and totals["open_risk"] is not None
+
+
+def test_a_rate_older_than_120_seconds_is_shown_stale_never_as_current(tmp_path):
+    _engine(tmp_path, usd_to_account_utc=(NOW - pd.Timedelta(seconds=121)).isoformat())
+    _orders(tmp_path)
+    p = next(x for x in hc.open_positions(tmp_path, NOW).positions if x.position_id == 12)
+    assert p.floating_pnl == 40.0 and p.stale and p.fx_age_s == 121.0
+    _engine(tmp_path, usd_to_account_utc=None)
+    assert next(x for x in hc.open_positions(tmp_path, NOW).positions if x.position_id == 12).stale
+
+
+def test_an_exploration_arms_open_row_is_named_by_its_family_and_kind(tmp_path):
+    _engine(tmp_path)
+    trade = {"position_id": 21, "agent_id": "explore:S0", "side": 1, "lots": 0.01, "max_bars": 30, "timeframe": "1m",
+             "entry_bar_ts": (NOW - pd.Timedelta(minutes=5)).isoformat(), "open_price": 2405.0, "sl": 2402.0,
+             "initial_sl": 2402.0, "opened_utc": (NOW - pd.Timedelta(minutes=4)).isoformat()}
+    (tmp_path / f"orders_{ACC}.json").write_text(json.dumps({"sent": {}, "open": {"21": trade}}))
+    p = hc.open_positions(tmp_path, NOW).positions[0]
+    assert (p.kind, p.family, p.family_label) == ("control", "random_bracket", "Random control")
+    assert p.floating_pnl == 4.0 and p.risk_amount == 2.4      # 5 x 0.01 x 100 x 0.8; 3 x 0.01 x 100 x 0.8
 
 
 # ------------------------------------------------------------------------------------------------ N2 strategy watch

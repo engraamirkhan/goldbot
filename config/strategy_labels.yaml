@@ -1,0 +1,81 @@
+# The owner's names for strategies (docs/design/trades-ux-2026-10-27.md §2.2, design-system rule 3: no raw ids on
+# screen). Read by goldbot/api/strategy_labels.py for the trades ledger (GET /api/trades), the open trades and Today.
+#
+# families: a family key -> its name and, in plain words, what makes it trade (`why`, at most 60 characters; the row
+#   adds the timeframe). The key is an exploration arm's rule (config/exploration_arms.yaml; a `specialist` arm's
+#   key is its `params.specialist`) or a specialist family (goldbot/specialists, `family`).
+# arms: an arm id -> its variant tag, required when two running arms share a family and a timeframe (a broker twin
+#   takes its `twin_of` arm's tag). tests/test_strategy_labels.py fails CI on a new arm or family without a label.
+families:
+  # exploration rules
+  random_bracket: {label: "Random control", why: "Random entry at a set minute: the null the arms are measured against"}
+  session_vwap_fade: {label: "VWAP fade", why: "Price stretched from the session VWAP, faded back"}
+  opening_range_break: {label: "Opening range", why: "Close outside the session's opening range"}
+  sweep_absorb: {label: "Sweep + absorb", why: "A sweep of a recent high or low was absorbed"}
+  box_break_close: {label: "Box break + close", why: "Close outside the box after a squeeze"}
+  box_next: {label: "Box break, exit study", why: "Close outside the box; the exit is what is measured"}
+  ema_pullback: {label: "EMA pullback", why: "Pullback to the EMA in a trend"}
+  tsmom: {label: "Trend momentum", why: "Price trend over the lookback points one way"}
+  donchian_break: {label: "Donchian break", why: "Close beyond the 55-bar high or low"}
+  pdc_break: {label: "Prior close break", why: "Break of the prior day's close level"}
+  squeeze_release: {label: "Squeeze release", why: "Volatility squeeze released in one direction"}
+  clock_anchor: {label: "Clock anchor", why: "Entry at a fixed time of day"}
+  clock_anchor_control: {label: "Clock anchor control", why: "Random side at the clock anchor's times: its null"}
+  htf_stretch_break: {label: "Stretch break", why: "Break while stretched on the higher timeframe"}
+  htf_stretch_break_control: {label: "Stretch break control", why: "Random side in the same stretched state: its null"}
+  hurst_band_break: {label: "Band break (trend regime)", why: "Band break while the market is trending"}
+  hurst_band_break_control: {label: "Band break control", why: "Random side at the band break's times: its null"}
+  level_break: {label: "Level break", why: "Break of a key level (prior day, week, session)"}
+  ob_retest: {label: "Order block retest", why: "Retest of an order block"}
+  friday_long: {label: "Friday long", why: "Long from Thursday evening to Friday afternoon (New York)"}
+  low30_touch: {label: "30-day low touch", why: "Touch of the 30-day low, held for the bounce"}
+  low30_control: {label: "30-day low control", why: "Random entry on the low-touch days: its null"}
+  blocked: {label: "Not running yet", why: "Blocked in the frozen spec until its condition is met"}
+  # specialist families (engine strategies, shadow models and specialist arms)
+  asia_drift: {label: "Asia drift", why: "The Asian session's drift continued"}
+  box_break: {label: "Box break", why: "Break of the box"}
+  box_course: {label: "Box course", why: "Box setup from the course rules"}
+  box_retest: {label: "Box retest", why: "Retest of the broken box edge"}
+  box_rip: {label: "Box rip", why: "Fast move out of the box"}
+  breakout: {label: "Range breakout", why: "Breakout of a compressed range"}
+  eq_liquidity_run: {label: "Equal-highs run", why: "Run on liquidity at equal highs or lows"}
+  fakey: {label: "Fakey", why: "False break of an inside bar, reversed"}
+  intraday_momentum: {label: "Intraday momentum", why: "The session's opening move continued"}
+  mean_reversion: {label: "Mean reversion", why: "Band and RSI stretch, faded back"}
+  session_open: {label: "Session open", why: "Move at the session open"}
+  smc_structure: {label: "Market structure", why: "Change of market structure (TradingView rule)"}
+  trend: {label: "Trend", why: "Trend filter and pullback agreed"}
+  trend_level_signal: {label: "Trend level", why: "Trend signal at a level"}
+  tv_event: {label: "TradingView alert", why: "A TradingView alert fired"}
+arms:
+  S0: {variant: "every 10 min"}
+  S0R: {variant: "resting stop"}
+  S1A: {variant: "target VWAP"}
+  S1B: {variant: "target 1R"}
+  S2A: {variant: "15-min range"}
+  S2B: {variant: "30-min range"}
+  S3A: {variant: "target 1R"}
+  S3B: {variant: "target 2R"}
+  S5A: {variant: "stop $3"}
+  S5B: {variant: "stop $3.75"}
+  I2A: {variant: "MFI forced"}
+  I2B: {variant: "stop 1 ATR"}
+  MB15: {variant: "shadow mirror"}
+  BXR15: {variant: "runner"}
+  BXT15: {variant: "structure target"}
+  BXF15: {variant: "fixed target"}
+  BXR30: {variant: "runner"}
+  BXT30: {variant: "structure target"}
+  BXF30: {variant: "fixed target"}
+  BXR1H: {variant: "runner"}
+  BXT1H: {variant: "structure target"}
+  BXF1H: {variant: "fixed target"}
+  BXR4H: {variant: "runner"}
+  BXT4H: {variant: "structure target"}
+  BXF4H: {variant: "fixed target"}
+  XIMNY: {variant: "New York"}
+  XIMLN: {variant: "London"}
+  G1A: {variant: "key levels"}
+  G1C: {variant: "random levels (control)"}
+  XTV1: {variant: "TV rule 1"}
+  VXTV2: {variant: "TV rule 2"}
