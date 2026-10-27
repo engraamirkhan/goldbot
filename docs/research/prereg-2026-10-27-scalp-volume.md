@@ -325,3 +325,35 @@ from icm-demo's**, so it is not a same-rule duplicate on one broker.
 
 - If icm-demo stays on separate pots (option B, about 120), the total is ≈ 533 at V1.
 - These are filled fills. Admissible fills still need step 0's void repair.
+
+## 8. Amendment 2026-10-27 (b): quant conditions on 0439d7da (APPROVE WITH CONDITIONS), applied before any fill
+
+Written before any code, history run or fill of any arm in this file. This amendment overrides the text above where
+they differ.
+
+1. **Z7 (Z7D, Z7V, Z7P): the timestamp convention.** τ is the 5m bar's **close** time. Dukascopy bars are labelled by
+   their **open**, so history adds the bar length before any clock test. The live engine uses the same function.
+   This is the convention the census used (bar close = `ts_utc` + 1 min on 1m).
+2. **Controls.**
+   - Borrowed S0 fills count as controls only when they fall **inside window W** and **pass the spread gate**
+     (section 0).
+   - Every control re-bracket (ZCD, ZCV, S0) is charged its **own signal-time cost**, the cost of the control's
+     own fill, never the family's.
+3. **K accounting: one registry row per id** (the precedent rule). Section 5's "families count once in the registry"
+   is withdrawn. A family is the unit of the **read** only (section 4). Every arm id, controls and blocked twins
+   included, is its own registry row and its own count in K.
+4. **The m_eff run.** The 2010-17 `run_arm_backtest` that measures m_eff outputs the strata's **daily net-R
+   correlation matrix only**. Means, t-statistics and any per-arm return summary are suppressed in its output and in
+   its logs.
+5. **The authority for the budget raise.** The 2026Q4 override goes **118 → 145**, for **27 ids**:
+   - 25 from section 5;
+   - Z7P and Z4P from amendment (a), c7c9ac8e.
+
+   The authority is the owner's written directives:
+   - 2026-10-18, "backtest as much as needed";
+   - 2026-10-26, "tripple the numbers";
+   - 2026-10-27, "make sure it trades 500 and plus trades a day";
+   - 2026-10-27, "500 plus overall, 200 per account".
+
+   The decision is the program director's (PD + PO), on the precedent of the waves. K is about 397. Each row is
+   registered before its id's first fill.
