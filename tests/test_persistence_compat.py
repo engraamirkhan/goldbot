@@ -537,8 +537,12 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
         "strict: hand-edited config (a misspelt key fails: calendar_unavailable)",
     ("goldbot/api/strategy_labels.py", "load_catalog", "Labels"):
         "strict: hand-edited config (a misspelt key fails: the names fall back to the keys in words)",
-    ("goldbot/api/strategy_labels.py", "_reads", "ArmRead"):
-        "strict: hand-edited config (a misspelt read fails closed: no arm counts as read, ADR 0050)",
+    ("goldbot/api/strategy_labels.py", "_reads_file", "ReadsFile"):
+        "strict: hand-edited checked-in config, not persisted state (a misspelt read fails closed: no arm counts as "
+        "read, every arm its own unit, ADR 0050)",
+    ("goldbot/research/arm_stops.py", "_load", "StopRules"):
+        "strict: hand-edited checked-in config, not persisted state (a misspelt stop rule fails closed: exploration "
+        "entries refused as stop_rules_unreadable)",
     ("goldbot/research/min_lot.py", "min_lot_feasibility", "Feasibility"):
         "not persisted: built from a dict in the same function",
     ("goldbot/data/news.py", "score_batch", "HeadlineScore"): "not persisted: the LLM's answer, validated strictly",

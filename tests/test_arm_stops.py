@@ -238,6 +238,26 @@ def test_every_arm_of_the_spec_and_of_the_accounts_is_classified_exactly_once():
     assert labs.control_arm_ids() <= set(rules.none)
 
 
+def test_the_stop_families_and_the_pooled_read_units_have_the_same_members():
+    """One family membership for the stop and the read: "a family continues or stops as a whole" (arms-expansion 2.1)
+    and is read pooled ("the n is the family's pooled count", config/arm_reads.yaml). Every multi-arm stop unit is a
+    read unit with the same arms, and every pooled read unit is a stop unit with the same arms, except H-80, whose
+    BXR arms keep "the H-61 per-arm cumulative-R stop ... unchanged" and whose BXT/BXF virtual twins never stop."""
+    from goldbot.api.strategy_labels import READS_PATH, _reads_file
+    rules = arm_stops.load_stop_rules()
+    read_units = _reads_file(READS_PATH).read_units
+    assert read_units, "config/arm_reads.yaml read no unit (fail closed)"
+    stop_families = {frozenset(u.arms) for u in rules.units.values() if len(u.arms) > 1}
+    read_families = {frozenset(u.arms): u for u in read_units.values()}
+    assert stop_families - set(read_families) == set(), "a stop family is not read pooled with the same arms"
+    for arms, u in read_families.items():
+        if arms in stop_families:
+            continue
+        counted = set(u.counted or u.arms)
+        assert counted <= set(rules.h61) and arms - counted <= set(rules.none), \
+            f"read unit {sorted(arms)} is no stop family and not the H-80 per-arm case"
+
+
 def test_a_rules_file_with_an_arm_in_two_units_is_refused(tmp_path):
     p = tmp_path / "stops.yaml"
     p.write_text(yaml.safe_dump({"units": {"A": {"arms": ["X"], "stop_r": -30.0, "within": 300, "source": "W1"},

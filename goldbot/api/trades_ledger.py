@@ -694,8 +694,8 @@ ANSWERS_MAX = 256                       # distinct filters remembered per ledger
 def _scan(closed: Sequence[TradeRow], days: Sequence[int], opened: Sequence[TradeRow], narrowed: bool,
           cat: Catalog) -> tuple[str | None, bool, TradeTotals]:
     """`withheld_reason`, `open_withheld` and `totals` in one pass over the matching rows (same rules, same results;
-    tests/test_trades_ledger.py checks them against each other)."""
-    reads = cat.reads
+    tests/test_trades_ledger.py checks them against each other): read and counted by read unit, as there."""
+    is_read, unit_of = cat.is_read, cat.unit_of
     cells: dict[tuple[str | None, int], set[str]] = {}
     open_cells: dict[str | None, set[str]] = {}
     unread = False
@@ -715,11 +715,11 @@ def _scan(closed: Sequence[TradeRow], days: Sequence[int], opened: Sequence[Trad
         if r.currency is not None and (pnl is not None or r.risk_amount is not None):
             ccys.add(r.currency)
         arm = r.arm_id
-        if arm is not None and arm not in reads:
+        if arm is not None and not is_read(arm):
             unread = True
             got = cells.setdefault((r.account, day), set())
             if not r.is_control:
-                got.add(arm)
+                got.add(unit_of(arm))       # a pooled family is one read unit: its arms count once
     for r in opened:
         if r.pnl_now is not None:
             open_pnl += r.pnl_now
@@ -728,11 +728,11 @@ def _scan(closed: Sequence[TradeRow], days: Sequence[int], opened: Sequence[Trad
         if r.currency is not None and (r.pnl_now is not None or r.risk_amount is not None or r.pnl is not None):
             ccys.add(r.currency)
         arm = r.arm_id
-        if arm is not None and arm not in reads:
+        if arm is not None and not is_read(arm):
             unread = True
             got = open_cells.setdefault(r.account, set())
             if not r.is_control:
-                got.add(arm)
+                got.add(unit_of(arm))
     reason, blind = None, False
     if unread and narrowed:
         reason, blind = NARROWED, True
