@@ -32,6 +32,7 @@ Blinding (ADR 0050 with the quant reviewer's binding tightenings), enforced here
 from __future__ import annotations
 
 import base64
+import bisect
 import json
 import logging
 import math
@@ -43,6 +44,7 @@ from pathlib import Path
 from typing import Any, Literal, TypeVar
 
 import pandas as pd
+from pydantic import PrivateAttr
 
 from goldbot.api.activity import engines_by_account
 from goldbot.api.schema import (
@@ -420,10 +422,21 @@ def _shadow(state: Path, ctx: _Ctx) -> list[TradeRow]:
 
 # ------------------------------------------------------------------------------------------------ the build
 class Ledger(FrozenRecord):
-    """Every trade of every kind, newest activity first, and the sources that could not be read."""
+    """Every trade of every kind, newest activity first, and the sources that could not be read. Its query index and
+    result cache (`_Index`) are built on the first query and live as long as this build (LEDGER_TTL_S)."""
     as_of: pd.Timestamp
     rows: list[TradeRow]
     unreadable: list[TradeSource]
+    _index: Any = PrivateAttr(default=None)
+
+    def model_post_init(self, context: Any, /) -> None:
+        """The index is built with the ledger (inside the API's 10 s cache build), never on a request."""
+        self._index = _Index.build(self.rows)
+
+    def index(self) -> _Index:
+        if self._index is None:
+            self._index = _Index.build(self.rows)
+        return self._index
 
 
 def _read(name: TradeSource, read: Callable[[], list[T]], unreadable: list[TradeSource]) -> list[T]:
@@ -474,6 +487,13 @@ class TradeQuery(FrozenRecord):
     control: bool | None = None
     cursor: str | None = None
     limit: int = PAGE
+
+    @property
+    def plain(self) -> bool:
+        """Only dates and accounts narrow the list (the default kinds, every status): the bisected slices are the
+        answer, less shadow trades."""
+        return not (self.kind or self.family or self.timeframe or self.arm or self.status or self.exit_reason
+                    or self.evidence or self.control is not None)
 
     @property
     def narrowed(self) -> bool:
@@ -625,25 +645,164 @@ def _decode(cursor: str) -> tuple[pd.Timestamp, str]:
         raise ValueError("cursor is not one this API gave") from exc
 
 
+@dataclass
+class _Closed:
+    """Closed rows newest close first, with their negated close instants (ascending: bisected) and opportunity days."""
+    rows: list[TradeRow] = field(default_factory=list)
+    neg: list[float] = field(default_factory=list)
+    days: list[int] = field(default_factory=list)
+
+    def add(self, r: TradeRow) -> None:
+        assert r.exit_utc is not None
+        secs = r.exit_utc.timestamp()
+        self.rows.append(r)
+        self.neg.append(-secs)
+        self.days.append(int((secs + _SHIFT_S) // 86400))
+
+    def span(self, lo: pd.Timestamp | None, hi: pd.Timestamp | None) -> tuple[int, int]:
+        """The slice closing in [lo, hi), by bisection (no scan of the rows outside it)."""
+        a = bisect.bisect_right(self.neg, -hi.timestamp()) if hi is not None else 0
+        b = bisect.bisect_right(self.neg, -lo.timestamp()) if lo is not None else len(self.neg)
+        return a, max(a, b)
+
+
+@dataclass
+class _Index:
+    """Built once per ledger build (PR #206 CI: p95 over 50k rows): closed rows by close time, overall and per
+    account, the open rows apart, and the answers already given for a filter (the ledger is immutable until the next
+    build, so an answer stays right for its whole life)."""
+    closed: _Closed
+    by_account: dict[str | None, _Closed]
+    open: list[TradeRow]
+    answers: dict[tuple[Any, ...], tuple[list[TradeRow], str | None, bool, TradeTotals]] = field(default_factory=dict)
+
+    @classmethod
+    def build(cls, rows: Sequence[TradeRow]) -> _Index:
+        closed, opened = _Closed(), []
+        by_account: dict[str | None, _Closed] = {}
+        for r in rows:                                  # newest activity first: closed rows stay newest close first
+            if r.exit_utc is None:
+                opened.append(r)
+                continue
+            closed.add(r)
+            by_account.setdefault(r.account, _Closed()).add(r)
+        return cls(closed=closed, by_account=by_account, open=opened)
+
+
+ANSWERS_MAX = 256                       # distinct filters remembered per ledger build (10 s)
+
+
+def _scan(closed: Sequence[TradeRow], days: Sequence[int], opened: Sequence[TradeRow], narrowed: bool,
+          cat: Catalog) -> tuple[str | None, bool, TradeTotals]:
+    """`withheld_reason`, `open_withheld` and `totals` in one pass over the matching rows (same rules, same results;
+    tests/test_trades_ledger.py checks them against each other)."""
+    reads = cat.reads
+    cells: dict[tuple[str | None, int], set[str]] = {}
+    open_cells: dict[str | None, set[str]] = {}
+    unread = False
+    n_closed = unknown = 0
+    net = costs = open_pnl = open_risk = 0.0
+    ccys: set[str] = set()
+    for r, day in zip(closed, days):
+        n_closed += 1
+        pnl = r.pnl
+        if pnl is None:
+            if r.kind != "shadow":
+                unknown += 1
+        else:
+            net += pnl
+        if r.costs is not None:
+            costs += r.costs.total
+        if r.currency is not None and (pnl is not None or r.risk_amount is not None):
+            ccys.add(r.currency)
+        arm = r.arm_id
+        if arm is not None and arm not in reads:
+            unread = True
+            got = cells.setdefault((r.account, day), set())
+            if not r.is_control:
+                got.add(arm)
+    for r in opened:
+        if r.pnl_now is not None:
+            open_pnl += r.pnl_now
+        if r.risk_amount is not None:
+            open_risk += r.risk_amount
+        if r.currency is not None and (r.pnl_now is not None or r.risk_amount is not None or r.pnl is not None):
+            ccys.add(r.currency)
+        arm = r.arm_id
+        if arm is not None and arm not in reads:
+            unread = True
+            got = open_cells.setdefault(r.account, set())
+            if not r.is_control:
+                got.add(arm)
+    reason, blind = None, False
+    if unread and narrowed:
+        reason, blind = NARROWED, True
+    elif unread and any(len(a) < labs.MIN_ARMS_FOR_TOTAL for a in cells.values()):
+        reason, blind = FEW_ARMS, len(set().union(*cells.values())) < labs.MIN_ARMS_FOR_TOTAL
+    open_hidden = any(len(a) < labs.MIN_ARMS_FOR_TOTAL for a in open_cells.values())
+    mixed = len(ccys) > 1
+    money = reason is None and not mixed
+    t = TradeTotals(
+        n=n_closed + len(opened), n_open=len(opened), n_closed=n_closed,
+        currency=next(iter(ccys)) if len(ccys) == 1 else None, mixed_currencies=mixed,
+        net_pnl=round(net, 2) if money and not unknown else None, net_unknown=unknown,
+        net_partial=round(net, 2) if money and unknown else None, costs=round(costs, 2) if money else None,
+        open_pnl=round(open_pnl, 2) if money and not open_hidden else None, open_pnl_withheld=open_hidden,
+        open_risk=round(open_risk, 2) if not mixed else None, withheld=reason is not None, withheld_reason=reason)
+    return reason, blind, t
+
+
+def _answer(ledger: Ledger, q: TradeQuery, cat: Catalog) -> tuple[list[TradeRow], str | None, bool, TradeTotals]:
+    """Every matching row (newest activity first), why totals are withheld, whether unread rows are blinded, and the
+    totals; remembered per filter for the life of the ledger build."""
+    idx = ledger.index()
+    key = (q.model_copy(update={"cursor": None, "limit": PAGE}), id(cat))
+    hit = idx.answers.get(key)
+    if hit is not None:
+        return hit
+    lo, hi = bounds(q, ledger.as_of)
+    match = _matcher(q, None, None, ledger.as_of)        # the dates are applied by bisection below
+    opened = [r for r in idx.open if (hi is None or hi > ledger.as_of) and match(r)]
+    sources = ([idx.by_account[a] for a in dict.fromkeys(q.account) if a in idx.by_account] if q.account
+               else [idx.closed])
+    rows: list[TradeRow] = []
+    days: list[int] = []
+    for src in sources:
+        a, b = src.span(lo, hi)
+        if q.plain:                                     # nothing but dates, accounts and the default kinds
+            rows += src.rows[a:b]
+            days += src.days[a:b]
+            continue
+        keep = [i for i in range(a, b) if match(src.rows[i])]
+        rows += [src.rows[i] for i in keep]
+        days += [src.days[i] for i in keep]
+    if q.plain:
+        days = [d for r, d in zip(rows, days) if r.kind != "shadow"]
+        rows = [r for r in rows if r.kind != "shadow"]
+    reason, blind, t = _scan(rows, days, opened, q.narrowed, cat)
+    if opened or len(sources) > 1:
+        rows = sorted(rows + opened, key=_key, reverse=True)
+    if len(idx.answers) >= ANSWERS_MAX:
+        idx.answers.clear()
+    idx.answers[key] = (rows, reason, blind, t)
+    return rows, reason, blind, t
+
+
 def query(ledger: Ledger, q: TradeQuery, cat: Catalog | None = None) -> TradesPage:
     """One page of the matching rows (newest activity first) and the totals of all of them, blinded server-side."""
     cat = cat or catalog()
-    lo, hi = bounds(q, ledger.as_of)
-    match = _matcher(q, lo, hi, ledger.as_of)
-    rows = [r for r in ledger.rows if match(r)]
-    reason, blind = withheld_reason(rows, narrowed=q.narrowed, cat=cat)
-    open_hidden = open_withheld(rows, cat)
+    rows, reason, blind, t = _answer(ledger, q, cat)
     start = 0
     if q.cursor:
         after = _decode(q.cursor)
-        start = next((i for i, r in enumerate(rows) if (pd.Timestamp(_key(r)[0]), r.trade_id) < after), len(rows))
+        start = next((i for i, r in enumerate(rows) if _key(r) < after), len(rows))
     limit = max(1, min(q.limit, MAX_PAGE))
     page = rows[start:start + limit]
     if blind:
         page = [_blind(r) if r.arm_id and not cat.is_read(r.arm_id) and r.status == "closed" else r for r in page]
     more = start + limit < len(rows)
     return TradesPage(as_of=ledger.as_of, rows=page, next_cursor=_encode(page[-1]) if more and page else None,
-                      totals=totals(rows, reason, open_hidden), unreadable=ledger.unreadable)
+                      totals=t, unreadable=ledger.unreadable)
 
 
 def detail(ledger: Ledger, trade_id: str) -> TradeRow | None:

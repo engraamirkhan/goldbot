@@ -450,6 +450,30 @@ def test_a_filtered_page_over_50k_rows_answers_within_300_ms_at_p95(tmp_path):
     assert sorted(times)[int(0.95 * len(times)) - 1] < 0.3
 
 
+def test_the_indexed_query_gives_the_same_rows_and_totals_as_a_full_scan(tmp_path):
+    """PR #206 speed fix: bisected date slices, the plain path and the one-pass scan answer exactly what a scan of
+    every row with `withheld_reason`, `open_withheld` and `totals` answers, for every filter shape."""
+    _every_kind(tmp_path)
+    _labs(tmp_path)
+    _arm(tmp_path, "old", "S2A", sent=NOW - pd.Timedelta(days=9))
+    cat = _catalog(tmp_path, read=("I2A",))
+    led = _ledger(tmp_path, cat)
+    yesterday, today = (NOW - pd.Timedelta(days=1)).date(), NOW.date()
+    queries = [_q(), _q(period="7d"), _q(period="30d"), _q(period="all"), _q(account=(SCALP,)),
+               _q(account=(SCALP, DAY), period="all"), _q(since=yesterday, until=today), _q(since=yesterday),
+               _q(until=yesterday, period="all"), _q(kind=("shadow",), period="all"), _q(status="open"),
+               _q(family=("box_break_close",)), _q(kind=("exploration", "control")), _q(arm=("S1A",), period="all")]
+    for q in queries:
+        lo, hi = tl.bounds(q, NOW)
+        match = tl._matcher(q, lo, hi, NOW)
+        want = [r for r in led.rows if match(r)]
+        reason, blind = tl.withheld_reason(want, narrowed=q.narrowed, cat=cat)
+        page = tl.query(led, q.model_copy(update={"limit": tl.MAX_PAGE}), cat)
+        assert [r.trade_id for r in page.rows] == [r.trade_id for r in want], q
+        assert page.totals == tl.totals(want, reason, tl.open_withheld(want, cat)), q
+        assert tl.query(led, q.model_copy(update={"limit": tl.MAX_PAGE}), cat) == page        # a remembered answer
+
+
 # ------------------------------------------------------------------------------------------------ quant conditions
 def _net(led: tl.Ledger, cat: Any, **kw: Any) -> float | None:
     return tl.query(led, _q(account=(SCALP,), **kw), cat).totals.net_pnl
