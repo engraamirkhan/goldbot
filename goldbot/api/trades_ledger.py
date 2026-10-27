@@ -280,7 +280,7 @@ def _arm_row(t: ExplorationRecord, ctx: _Ctx, voids: dict[str, str]) -> TradeRow
         gross=round(round(t.pnl, 2) + costs.total, 2) if closed and t.pnl is not None else None,
         pnl_now=pnl_now, r_now=r_now, price_now=None if closed else a.price, costs=costs, why=_why(why),
         evidence=evidence, excluded_reason=voids.get(t.client_order_id), blinded=False,
-        stale=False if closed else a.stale)
+        stale=False if closed else a.stale, position_id=t.position_id)
 
 
 def _probes(state: Path, ctx: _Ctx) -> list[TradeRow]:
@@ -313,7 +313,8 @@ def _probes(state: Path, ctx: _Ctx) -> list[TradeRow]:
             r=round(p.pnl / risk, 3) if closed and p.pnl is not None and risk else None,
             gross=round(round(p.pnl, 2) + costs.total, 2) if closed and p.pnl is not None else None,
             pnl_now=pnl_now, r_now=r_now, price_now=None if closed else a.price, costs=costs, why=_why(why),
-            evidence="not_evidence", excluded_reason=None, blinded=False, stale=False if closed else a.stale))
+            evidence="not_evidence", excluded_reason=None, blinded=False, stale=False if closed else a.stale,
+            position_id=p.position_id))
     return out
 
 
@@ -362,7 +363,7 @@ def _positions(state: Path, ctx: _Ctx) -> list[TradeRow]:
             risk_amount=_r2(risk), currency=ccy, pnl=_r2(c.pnl) if net else None, r=c.r,
             gross=round(round(c.pnl, 2) + costs.total, 2) if net else _r2(c.pnl), pnl_now=None, r_now=None,
             price_now=None, costs=costs, why=_strategy_why(ctx, family, kind), evidence="not_evidence",
-            excluded_reason=None, blinded=False, stale=False))
+            excluded_reason=None, blinded=False, stale=False, position_id=c.position_id))
         if c.position_id is not None:
             seen.add((c.account_id, c.position_id))
     for (account, pid), t in ctx.orders.items():
@@ -386,7 +387,7 @@ def _positions(state: Path, ctx: _Ctx) -> list[TradeRow]:
             hold_limit_s=float(t.max_bars * tf_seconds(t.timeframe)) if t.timeframe else None, risk_amount=risk,
             currency=a.currency, pnl=None, r=None, gross=None, pnl_now=pnl_now, r_now=r_now, price_now=a.price,
             costs=None, why=_strategy_why(ctx, family, kind), evidence="not_evidence", excluded_reason=None,
-            blinded=False, stale=a.stale))
+            blinded=False, stale=a.stale, position_id=pid))
     return out
 
 
@@ -557,17 +558,16 @@ def withheld_reason(rows: Iterable[TradeRow], *, narrowed: bool, cat: Catalog) -
     arm's own record); a mixed list keeps single trades' results (accepted in the ADR). Open trades form no cell: their
     risk and P&L are the owner's money now (ADR 0050 decision 1), and the Now tab shows them per trade."""
     cells: dict[tuple[str | None, int], set[str]] = {}
-    reads = cat.reads
     unread = False
     for r in rows:
-        if r.arm_id is None or r.arm_id in reads:
+        if r.arm_id is None or cat.is_read(r.arm_id):
             continue
         unread = True
         if r.exit_utc is None:
             continue
         arms = cells.setdefault((r.account, int((r.exit_utc.timestamp() + _SHIFT_S) // 86400)), set())
         if not r.is_control:
-            arms.add(r.arm_id)
+            arms.add(cat.unit_of(r.arm_id))     # a pooled family is one read unit: its arms count once
     if not unread:
         return None, False
     if narrowed:
@@ -583,12 +583,11 @@ def open_withheld(rows: Iterable[TradeRow], cat: Catalog) -> bool:
     trades cover fewer than MIN_ARMS_FOR_TOTAL strategy arms (an account with unread open controls only included).
     Each open row keeps its own P&L (ADR 0050 decision 1); only the total is withheld."""
     cells: dict[str | None, set[str]] = {}
-    reads = cat.reads
     for r in rows:
-        if r.exit_utc is None and r.arm_id is not None and r.arm_id not in reads:
+        if r.exit_utc is None and r.arm_id is not None and not cat.is_read(r.arm_id):
             arms = cells.setdefault(r.account, set())
             if not r.is_control:
-                arms.add(r.arm_id)
+                arms.add(cat.unit_of(r.arm_id))
     return any(len(a) < labs.MIN_ARMS_FOR_TOTAL for a in cells.values())
 
 
@@ -695,8 +694,8 @@ ANSWERS_MAX = 256                       # distinct filters remembered per ledger
 def _scan(closed: Sequence[TradeRow], days: Sequence[int], opened: Sequence[TradeRow], narrowed: bool,
           cat: Catalog) -> tuple[str | None, bool, TradeTotals]:
     """`withheld_reason`, `open_withheld` and `totals` in one pass over the matching rows (same rules, same results;
-    tests/test_trades_ledger.py checks them against each other)."""
-    reads = cat.reads
+    tests/test_trades_ledger.py checks them against each other): read and counted by read unit, as there."""
+    is_read, unit_of = cat.is_read, cat.unit_of
     cells: dict[tuple[str | None, int], set[str]] = {}
     open_cells: dict[str | None, set[str]] = {}
     unread = False
@@ -716,11 +715,11 @@ def _scan(closed: Sequence[TradeRow], days: Sequence[int], opened: Sequence[Trad
         if r.currency is not None and (pnl is not None or r.risk_amount is not None):
             ccys.add(r.currency)
         arm = r.arm_id
-        if arm is not None and arm not in reads:
+        if arm is not None and not is_read(arm):
             unread = True
             got = cells.setdefault((r.account, day), set())
             if not r.is_control:
-                got.add(arm)
+                got.add(unit_of(arm))       # a pooled family is one read unit: its arms count once
     for r in opened:
         if r.pnl_now is not None:
             open_pnl += r.pnl_now
@@ -729,11 +728,11 @@ def _scan(closed: Sequence[TradeRow], days: Sequence[int], opened: Sequence[Trad
         if r.currency is not None and (r.pnl_now is not None or r.risk_amount is not None or r.pnl is not None):
             ccys.add(r.currency)
         arm = r.arm_id
-        if arm is not None and arm not in reads:
+        if arm is not None and not is_read(arm):
             unread = True
             got = open_cells.setdefault(r.account, set())
             if not r.is_control:
-                got.add(arm)
+                got.add(unit_of(arm))
     reason, blind = None, False
     if unread and narrowed:
         reason, blind = NARROWED, True

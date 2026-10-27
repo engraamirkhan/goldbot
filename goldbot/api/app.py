@@ -45,7 +45,9 @@ from goldbot.api import (
     mt5_crop,
     progress,
     spread_normal,
+    strategy_board,
     today_ledger,
+    trade_chart,
     trades_ledger,
     trades_overview,
 )
@@ -138,8 +140,10 @@ from goldbot.api.schema import (
     SetupRequest,
     SetupResponse,
     Status,
+    StrategyBoardView,
     StrategyWatchView,
     TodayView,
+    TradeBars,
     TradeEvidence,
     TradeKind,
     TradeListPeriod,
@@ -1145,12 +1149,29 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
+    # goldbot/api/trade_chart.py (item 133): one trade on the stored bars of its timeframe, with its own levels and
+    # stop moves; never blinded (ADR 0050). Registered before the detail so `{trade_id:path}` never swallows "/bars".
+    @app.get("/api/trades/{trade_id:path}/bars", response_model=TradeBars)
+    def trade_bars(trade_id: str, _: User = Depends(need("viewer"))) -> TradeBars:
+        row = trades_ledger.detail(ledger(), trade_id)
+        if row is None:
+            raise HTTPException(404, "no such trade")
+        return trade_chart.trade_bars(row, st.store(), pd.Timestamp.now("UTC"))
+
     @app.get("/api/trades/{trade_id:path}", response_model=TradeRow)
     def trade_detail(trade_id: str, _: User = Depends(need("viewer"))) -> TradeRow:
         row = trades_ledger.detail(ledger(), trade_id)
         if row is None:
             raise HTTPException(404, "no such trade")
         return row
+
+    # goldbot/api/strategy_board.py (item 132; ADR 0050): each family's arms, progress to their single read and, only
+    # after it, the verdict and the frozen figures. Built from the same ledger build; one build per BOARD_TTL_S.
+    board_cache = progress.GatesCache(ttl_s=strategy_board.BOARD_TTL_S)
+
+    @app.get("/api/strategies/board", response_model=StrategyBoardView)
+    def strategies_board(_: User = Depends(need("viewer"))) -> StrategyBoardView:
+        return board_cache.get(lambda: strategy_board.board(ledger(), state_dir=st.dir, store=st.store()))
     # ============================================================== end Trade ledger
 
     # ============================================================== Home status card stack (read-only, viewer and above)

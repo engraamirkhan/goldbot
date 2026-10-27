@@ -11,8 +11,9 @@ store (`decisions`, `exit_fills`, `bars_1m`):
   commission and the paid swap per oz; and the fill rate (taken candidates that filled);
 * refusal, skip and stale reasons with counts, from the journal and from the candidates' `blocked_reason`;
 * candidates and fills per style against the ~290 a day plan (settings `daily_review.volume_plan`);
-* arm health against the pre-registered H-61 stops ("running net R in exit order reaches -30 R within its first 300
-  trades (scalp) / -15 R within 100 (intraday) / -10 R within 40 (swing)", prereg-2026-10-25-high-volume.md), the same
+* arm health against the pre-registered stops (config/arm_stops.yaml, goldbot/research/arm_stops.py: H-61's "running
+  net R in exit order reaches -30 R within its first 300 trades (scalp) / -15 R within 100 (intraday) / -10 R within 40
+  (swing)" per arm, or a W1/W2/H-81 family's pooled -30 R within 300 fills and futility read), the same
   computation the owner's report uses (telegram/labs.py `arm_statuses`), reported ONLY as `breached` or `ok`;
 * integrity: missing open-market minutes and duplicates in each host's 1m bars, clock faults, engine incidents from
   the journal, failing health checks.
@@ -47,7 +48,7 @@ import logging
 import re
 import sqlite3
 import sys
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -59,6 +60,7 @@ from goldbot.base import FrozenRecord, Record, UtcTimestamp, load_record_json, w
 from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.db.connection import Database, db_path
 from goldbot.ops.report_days import day_bounds
+from goldbot.research.arm_stops import cost_states, load_stop_rules
 
 if TYPE_CHECKING:
     from goldbot.config import DailyReviewSettings, Settings
@@ -73,6 +75,14 @@ ALL = "all"
 OZ_PER_LOT = 100.0
 STOP_EXITS = frozenset({"stop", "engine_stop_close"})
 RULE = "H-61 per-arm stop (docs/research/prereg-2026-10-25-high-volume.md)"
+# the `rule` recorded with a retirement, by the stop's source in config/arm_stops.yaml (goldbot/research/arm_stops.py)
+RULES = {"HV": RULE,
+         "W1": "W1 per-family stop (docs/research/arms-expansion-2026-10-26.md 2.1)",
+         "W2": "W2 family stop or futility (docs/research/arms-2026-10-25.md 8.0)",
+         "Z": "H-81 family stop or futility (docs/research/prereg-2026-10-27-scalp-volume.md 4)",
+         "TS": "H-61 stop or futility (docs/research/prereg-2026-10-26-time-structure.md)"}
+FOLLOW_RULE = "stops with its arm (docs/research/prereg-2026-10-26-time-structure.md 2.2, 3.2)"
+COST_RULE = "H-81 cost stop, suspended until a dated amendment (docs/research/prereg-2026-10-27-scalp-volume.md 4)"
 BROKER_NAMES = {"icm": "ICM", "vantage": "Vantage"}
 # journal actions that are engine incidents (goldbot/engine/exploration.py, runner.py)
 ENGINE_INCIDENTS = ("exploration_error", "exploration_rule_error", "exploration_refused:ledger_unreadable",
@@ -308,15 +318,17 @@ def retired_arms(db: Database, broker: str) -> set[str]:
             "SELECT arm_id FROM exploration_arm_status WHERE broker = ? AND status = 'retired'", (broker,))}
 
 
-def retire(db: Database, *, broker: str, arm_id: str, day: str, now: pd.Timestamp) -> bool:
-    """Retire `arm_id` on `broker` for good. True when recorded now, False when it already was (the first stands)."""
+def retire(db: Database, *, broker: str, arm_id: str, day: str, now: pd.Timestamp, rule: str = RULE) -> bool:
+    """Retire `arm_id` on `broker` for good under `rule` (the stop that fired). True when recorded now, False when it
+    already was (the first stands)."""
     with db.write() as conn:
         cur = conn.execute("INSERT OR IGNORE INTO exploration_arm_status (broker, arm_id, status, day, rule, "
                            "recorded_ns) VALUES (?, ?, 'retired', ?, ?, ?)",
-                           (broker, arm_id, day, RULE, int(pd.Timestamp(now).value)))
+                           (broker, arm_id, day, rule, int(pd.Timestamp(now).value)))
         done = cur.rowcount == 1
     if done:
-        log.warning("exploration arm %s on %s retired at its pre-registered stop (%s)", arm_id, broker, day)
+        log.warning("exploration arm %s on %s retired at its pre-registered stop (%s; %s)", arm_id, broker, day,
+                    rule)
     return done
 
 
@@ -615,21 +627,63 @@ def _volume(d: _Day, plan: Mapping[str, Mapping[str, int]], probe_plan: Mapping[
 
 
 def _arm_health(db: Database, hosts: Mapping[str, str], hi: pd.Timestamp, store: Any = None
-                ) -> tuple[dict[str, dict[str, Health]], set[str]]:
-    """Per broker: arm -> `breached` (its H-61 stop reached within its first trades) or `ok`; and the control arms
-    (labs.ArmStatus.control: the candidates' flag or the spec's random bracket), which are never breached nor
-    retired (quant 2026-10-26: the controls are the null). The running R is computed in labs and never leaves it."""
+                ) -> tuple[dict[str, dict[str, Health]], set[str], dict[tuple[str, str], str]]:
+    """Per broker: arm -> `breached` (its pre-registered stop reached: config/arm_stops.yaml, H-61 per style where no
+    family rule is registered) or `ok`; the control arms (labs.ArmStatus.control: the candidates' flag or the spec's
+    random bracket), never breached nor retired on their own (quant 2026-10-26: the controls are the null), less
+    F1C/G1C, which are breached only with their arm (time-structure 2.2/3.2); and (broker, arm) -> the rule text of
+    each breach. The running R is computed in labs and never leaves it."""
     from goldbot.telegram.labs import arm_statuses, control_arm_ids
     out: dict[str, dict[str, Health]] = {}
+    why: dict[tuple[str, str], str] = {}
     controls: set[str] = set(control_arm_ids())
+    followers = set(load_stop_rules().follows)
     with db.connection() as conn:
         for broker in sorted(set(hosts.values())):
             accts = sorted(h for h, b in hosts.items() if b == broker)
             st = arm_statuses(conn, accts, until=hi, store=store, now=hi)
             controls |= {a.arm_id for a in st if a.control}
-            out[broker] = {a.arm_id: ("breached" if a.band == "at_stop" and a.arm_id not in controls else "ok")
-                           for a in st}
-    return out, controls
+            out[broker] = {}
+            for a in st:
+                hit = a.band == "at_stop" and (a.arm_id not in controls or a.arm_id in followers)
+                out[broker][a.arm_id] = "breached" if hit else "ok"
+                if hit:
+                    why[(broker, a.arm_id)] = FOLLOW_RULE if a.arm_id in followers else RULES.get(a.rule or "HV", RULE)
+    return out, controls - followers, why
+
+
+def _family_members(health: Mapping[str, Mapping[str, Health]], why: Mapping[tuple[str, str], str],
+                    controls: Collection[str]) -> dict[str, str]:
+    """Every member of a stopped unit, and every control that stops with one, with the rule that stopped it: retired
+    on EVERY broker reviewed, fills or not ("a family continues or stops as a whole", arms-expansion 2.1 (4), Z 4), so
+    a stratum with no fill yet (Z3V/Z5V before stage V2) never trades inside a stopped family (quant and
+    trading-safety review 2026-10-27)."""
+    rules = load_stop_rules()
+    out: dict[str, str] = {}
+    for broker, arms in health.items():
+        for arm, h in arms.items():
+            name = rules.unit_of(arm)
+            if h != "breached" or arm in controls or name is None:
+                continue
+            members = rules.units[name].arms
+            for m in members:
+                out.setdefault(m, why[(broker, arm)])
+            for f, lead in rules.follows.items():
+                if lead in members:
+                    out.setdefault(f, FOLLOW_RULE)
+    return out
+
+
+def _cost_suspended(db: Database, hosts: Mapping[str, str], hi: pd.Timestamp) -> dict[str, set[str]]:
+    """Per broker: the H-81 strata whose cost stop suspends them (Z 4: "Above 0.20 it is suspended until a dated
+    amendment"), from their fills sent before `hi`. A halved share is the engine's (`exploration.shares`), not here."""
+    out: dict[str, set[str]] = {}
+    with db.connection() as conn:
+        for broker in sorted(set(hosts.values())):
+            arms = {str(a) for (a,) in conn.execute(
+                "SELECT DISTINCT arm_id FROM exploration_obs WHERE broker = ?", (broker,))}
+            out[broker] = {a for a, st in cost_states(conn, arms, until=hi).items() if st == "suspended"}
+    return out
 
 
 def _integrity(d: _Day, trading: bool, max_gap: int, incidents: list[Incident]) -> list[Integrity]:
@@ -906,14 +960,19 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
     of_plan = round(total / plan_total, 6) if plan_total else None
     integrity = _integrity(d, trading, cfg.max_gap_minutes, incidents)
     _health(sd, incidents)
-    health, controls = _arm_health(db, hosts, hi, store)
+    health, controls, why = _arm_health(db, hosts, hi, store)
+    suspended = _cost_suspended(db, hosts, hi)
     retired: list[Retirement] = []
+    family = _family_members(health, why, controls)
     for broker, arms in health.items():
         already = retired_arms(db, broker)
-        for arm, h in arms.items():
-            if h == "breached" and arm not in already and arm not in controls:    # a control is never retired
-                if dry_run or retire(db, broker=broker, arm_id=arm, day=day, now=now):
-                    retired.append(Retirement(broker=broker, arm_id=arm, day=day))
+        stops = {a: why[(broker, a)] for a, h in arms.items() if h == "breached" and a not in controls}
+        stops |= {a: r for a, r in family.items() if a not in stops}
+        stops |= {a: COST_RULE for a in sorted(suspended.get(broker, set()) - set(stops) - controls)}
+        for arm, rule in stops.items():         # a control is never retired (F1C/G1C only with their arm)
+            if arm not in already and (dry_run or retire(db, broker=broker, arm_id=arm, day=day, now=now,
+                                                         rule=rule)):
+                retired.append(Retirement(broker=broker, arm_id=arm, day=day))
     refits = refit_cells(db, hosts=hosts, day=day, hi=hi, min_fills=cfg.refit_min_fills, now=now,
                          write=not dry_run)
     if not dry_run:               # idempotent rerun: the day's actions as the tables hold them

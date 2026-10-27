@@ -1162,6 +1162,213 @@
     "title": "AutoModeView",
     "type": "object"
    },
+   "BoardFamily": {
+    "properties": {
+     "accounts": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Accounts",
+      "type": "array"
+     },
+     "anneal_state": {
+      "enum": [
+       "E",
+       "C1",
+       "P",
+       "R"
+      ],
+      "title": "Anneal State",
+      "type": "string"
+     },
+     "family": {
+      "title": "Family",
+      "type": "string"
+     },
+     "family_label": {
+      "title": "Family Label",
+      "type": "string"
+     },
+     "pooled": {
+      "items": {
+       "$ref": "#/components/schemas/ReadProgress"
+      },
+      "title": "Pooled",
+      "type": "array"
+     },
+     "state": {
+      "enum": [
+       "proven",
+       "candidate",
+       "running",
+       "retired",
+       "control"
+      ],
+      "title": "State",
+      "type": "string"
+     },
+     "style": {
+      "title": "Style",
+      "type": "string"
+     },
+     "variants": {
+      "items": {
+       "$ref": "#/components/schemas/BoardVariant"
+      },
+      "title": "Variants",
+      "type": "array"
+     }
+    },
+    "required": [
+     "family",
+     "family_label",
+     "style",
+     "accounts",
+     "state",
+     "anneal_state",
+     "variants",
+     "pooled"
+    ],
+    "title": "BoardFamily",
+    "type": "object"
+   },
+   "BoardVariant": {
+    "description": "One arm. Read alone (`pooled` false): its unit's progress is its own. Read pooled: its own count only; the\nfamily's `pooled` progress carries n of N, ETA and the read (`eta_read_date` and `read` are None here).",
+    "properties": {
+     "account_labels": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Account Labels",
+      "type": "array"
+     },
+     "anneal_state": {
+      "enum": [
+       "E",
+       "C1",
+       "P",
+       "R"
+      ],
+      "title": "Anneal State",
+      "type": "string"
+     },
+     "arm_id": {
+      "title": "Arm Id",
+      "type": "string"
+     },
+     "control_arm_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Control Arm Id"
+     },
+     "eta_read_date": {
+      "anyOf": [
+       {
+        "format": "date",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Eta Read Date"
+     },
+     "fills_7d": {
+      "title": "Fills 7D",
+      "type": "integer"
+     },
+     "fills_today": {
+      "title": "Fills Today",
+      "type": "integer"
+     },
+     "is_control": {
+      "title": "Is Control",
+      "type": "boolean"
+     },
+     "n_counted": {
+      "title": "N Counted",
+      "type": "integer"
+     },
+     "n_read_at": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "N Read At"
+     },
+     "open_now": {
+      "title": "Open Now",
+      "type": "integer"
+     },
+     "pooled": {
+      "title": "Pooled",
+      "type": "boolean"
+     },
+     "read": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ReadFigures"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "read_unit": {
+      "title": "Read Unit",
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "warming",
+       "running",
+       "read",
+       "retired"
+      ],
+      "title": "Status",
+      "type": "string"
+     },
+     "timeframe": {
+      "title": "Timeframe",
+      "type": "string"
+     },
+     "variant": {
+      "title": "Variant",
+      "type": "string"
+     }
+    },
+    "required": [
+     "arm_id",
+     "timeframe",
+     "variant",
+     "account_labels",
+     "is_control",
+     "control_arm_id",
+     "read_unit",
+     "pooled",
+     "status",
+     "anneal_state",
+     "n_counted",
+     "n_read_at",
+     "fills_today",
+     "fills_7d",
+     "open_now",
+     "eta_read_date",
+     "read"
+    ],
+    "title": "BoardVariant",
+    "type": "object"
+   },
    "CalendarEvent": {
     "description": "One archived economic-calendar event. Tier 1 (US CPI, NFP, FOMC, PCE) carries its entry-blackout window.",
     "properties": {
@@ -1327,6 +1534,40 @@
      }
     },
     "title": "ChangePasswordRequest",
+    "type": "object"
+   },
+   "ChartBar": {
+    "properties": {
+     "c": {
+      "title": "C",
+      "type": "number"
+     },
+     "h": {
+      "title": "H",
+      "type": "number"
+     },
+     "l": {
+      "title": "L",
+      "type": "number"
+     },
+     "o": {
+      "title": "O",
+      "type": "number"
+     },
+     "t": {
+      "format": "date-time",
+      "title": "T",
+      "type": "string"
+     }
+    },
+    "required": [
+     "t",
+     "o",
+     "h",
+     "l",
+     "c"
+    ],
+    "title": "ChartBar",
     "type": "object"
    },
    "ChartLayout": {
@@ -2277,6 +2518,132 @@
      }
     },
     "title": "EmailLinkResponse",
+    "type": "object"
+   },
+   "EngineStrategy": {
+    "description": "An engine strategy or shadow model (not a pre-registered arm): full figures with n and a 90% CI.",
+    "properties": {
+     "ci90": {
+      "anyOf": [
+       {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "number"
+         }
+        ],
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ci90"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
+     "family": {
+      "title": "Family",
+      "type": "string"
+     },
+     "hit_rate": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hit Rate"
+     },
+     "kind": {
+      "enum": [
+       "real",
+       "strategy",
+       "shadow"
+      ],
+      "title": "Kind",
+      "type": "string"
+     },
+     "n": {
+      "title": "N",
+      "type": "integer"
+     },
+     "n_7d": {
+      "title": "N 7D",
+      "type": "integer"
+     },
+     "n_today": {
+      "title": "N Today",
+      "type": "integer"
+     },
+     "name": {
+      "title": "Name",
+      "type": "string"
+     },
+     "net_pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net Pnl"
+     },
+     "net_r_per_trade": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net R Per Trade"
+     },
+     "timeframe": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Timeframe"
+     }
+    },
+    "required": [
+     "name",
+     "family",
+     "timeframe",
+     "kind",
+     "n",
+     "net_r_per_trade",
+     "ci90",
+     "hit_rate",
+     "net_pnl",
+     "currency",
+     "n_today",
+     "n_7d"
+    ],
+    "title": "EngineStrategy",
     "type": "object"
    },
    "EntryBlock": {
@@ -3502,6 +3869,127 @@
      "net_r"
     ],
     "title": "KindDay",
+    "type": "object"
+   },
+   "LabTotal": {
+    "description": "One lab's sleeve over 7 days: counts always; money only when every (account, day) cell of its unread closes\ncovers 3+ strategy arms, and only when every sleeve of the account clears that (else one sleeve is the lab's\nfigure minus the others).",
+    "properties": {
+     "account_label": {
+      "title": "Account Label",
+      "type": "string"
+     },
+     "arms": {
+      "title": "Arms",
+      "type": "integer"
+     },
+     "costs": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Costs"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
+     "n": {
+      "title": "N",
+      "type": "integer"
+     },
+     "n_closed": {
+      "title": "N Closed",
+      "type": "integer"
+     },
+     "net_pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net Pnl"
+     },
+     "period": {
+      "const": "7 days",
+      "title": "Period",
+      "type": "string"
+     },
+     "style": {
+      "title": "Style",
+      "type": "string"
+     },
+     "withheld_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Withheld Reason"
+     }
+    },
+    "required": [
+     "account_label",
+     "style",
+     "period",
+     "arms",
+     "n",
+     "n_closed",
+     "net_pnl",
+     "costs",
+     "currency",
+     "withheld_reason"
+    ],
+    "title": "LabTotal",
+    "type": "object"
+   },
+   "Learning": {
+    "properties": {
+     "counted_7d": {
+      "title": "Counted 7D",
+      "type": "integer"
+     },
+     "proven": {
+      "title": "Proven",
+      "type": "integer"
+     },
+     "read": {
+      "title": "Read",
+      "type": "integer"
+     },
+     "retired": {
+      "title": "Retired",
+      "type": "integer"
+     },
+     "running": {
+      "title": "Running",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "running",
+     "read",
+     "proven",
+     "retired",
+     "counted_7d"
+    ],
+    "title": "Learning",
     "type": "object"
    },
    "LimitAccount": {
@@ -5629,6 +6117,231 @@
     "title": "PsiHeatmap",
     "type": "object"
    },
+   "ReadFigures": {
+    "description": "The read sample's figures, frozen at the read (its first `n` counted trades closed by `read_utc`).",
+    "properties": {
+     "ci90": {
+      "anyOf": [
+       {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "number"
+         }
+        ],
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ci90"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
+     "hit_rate": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hit Rate"
+     },
+     "n": {
+      "title": "N",
+      "type": "integer"
+     },
+     "net_pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net Pnl"
+     },
+     "net_r_per_trade": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net R Per Trade"
+     },
+     "read_utc": {
+      "format": "date-time",
+      "title": "Read Utc",
+      "type": "string"
+     },
+     "since_read": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SinceRead"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "verdict": {
+      "title": "Verdict",
+      "type": "string"
+     },
+     "vs_control_ci90": {
+      "anyOf": [
+       {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "number"
+         }
+        ],
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Vs Control Ci90"
+     },
+     "vs_control_r": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Vs Control R"
+     }
+    },
+    "required": [
+     "read_utc",
+     "verdict",
+     "n",
+     "net_r_per_trade",
+     "ci90",
+     "hit_rate",
+     "net_pnl",
+     "currency",
+     "vs_control_r",
+     "vs_control_ci90",
+     "since_read"
+    ],
+    "title": "ReadFigures",
+    "type": "object"
+   },
+   "ReadProgress": {
+    "description": "One read unit's progress (an arm, or a family read pooled: W1, W2, H-80, H-81; config/arm_reads.yaml). Before\nits read: counts, progress, ETA and status only (no money, R, hit rate or rank).",
+    "properties": {
+     "anneal_state": {
+      "enum": [
+       "E",
+       "C1",
+       "P",
+       "R"
+      ],
+      "title": "Anneal State",
+      "type": "string"
+     },
+     "arm_ids": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Arm Ids",
+      "type": "array"
+     },
+     "eta_read_date": {
+      "anyOf": [
+       {
+        "format": "date",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Eta Read Date"
+     },
+     "n_counted": {
+      "title": "N Counted",
+      "type": "integer"
+     },
+     "n_read_at": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "N Read At"
+     },
+     "read": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ReadFigures"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "status": {
+      "enum": [
+       "warming",
+       "running",
+       "read",
+       "retired"
+      ],
+      "title": "Status",
+      "type": "string"
+     },
+     "unit_id": {
+      "title": "Unit Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "unit_id",
+     "arm_ids",
+     "n_counted",
+     "n_read_at",
+     "status",
+     "anneal_state",
+     "eta_read_date",
+     "read"
+    ],
+    "title": "ReadProgress",
+    "type": "object"
+   },
    "RearmRequest": {
     "additionalProperties": false,
     "properties": {
@@ -7110,6 +7823,24 @@
     "title": "SetupResponse",
     "type": "object"
    },
+   "SinceRead": {
+    "properties": {
+     "n": {
+      "title": "N",
+      "type": "integer"
+     },
+     "net_r_per_trade": {
+      "title": "Net R Per Trade",
+      "type": "number"
+     }
+    },
+    "required": [
+     "n",
+     "net_r_per_trade"
+    ],
+    "title": "SinceRead",
+    "type": "object"
+   },
    "Status": {
     "properties": {
      "blackout": {
@@ -7228,6 +7959,25 @@
      "loss_frac"
     ],
     "title": "StopIncidentView",
+    "type": "object"
+   },
+   "StopMove": {
+    "properties": {
+     "at": {
+      "format": "date-time",
+      "title": "At",
+      "type": "string"
+     },
+     "price": {
+      "title": "Price",
+      "type": "number"
+     }
+    },
+    "required": [
+     "at",
+     "price"
+    ],
+    "title": "StopMove",
     "type": "object"
    },
    "StopRuleView": {
@@ -7414,6 +8164,56 @@
      "min_trades_for_estimate"
     ],
     "title": "StopRuleView",
+    "type": "object"
+   },
+   "StrategyBoardView": {
+    "properties": {
+     "as_of": {
+      "format": "date-time",
+      "title": "As Of",
+      "type": "string"
+     },
+     "engine": {
+      "items": {
+       "$ref": "#/components/schemas/EngineStrategy"
+      },
+      "title": "Engine",
+      "type": "array"
+     },
+     "families": {
+      "items": {
+       "$ref": "#/components/schemas/BoardFamily"
+      },
+      "title": "Families",
+      "type": "array"
+     },
+     "lab_totals": {
+      "items": {
+       "$ref": "#/components/schemas/LabTotal"
+      },
+      "title": "Lab Totals",
+      "type": "array"
+     },
+     "learning": {
+      "$ref": "#/components/schemas/Learning"
+     },
+     "unreadable": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Unreadable",
+      "type": "array"
+     }
+    },
+    "required": [
+     "as_of",
+     "learning",
+     "lab_totals",
+     "families",
+     "engine",
+     "unreadable"
+    ],
+    "title": "StrategyBoardView",
     "type": "object"
    },
    "StrategyRiskView": {
@@ -8123,6 +8923,145 @@
     "title": "TodayView",
     "type": "object"
    },
+   "TradeBars": {
+    "description": "`bars` (bid prices, USD/oz) from BARS_BEFORE bars before the entry to BARS_AFTER after the exit (now while\nopen); none stored: `bars` empty and `missing` says so, the levels still given. `stop` is the stop at entry,\n`stop_moves` each accepted move after it, in time order.",
+    "properties": {
+     "bars": {
+      "items": {
+       "$ref": "#/components/schemas/ChartBar"
+      },
+      "title": "Bars",
+      "type": "array"
+     },
+     "entry": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Entry"
+     },
+     "entry_utc": {
+      "format": "date-time",
+      "title": "Entry Utc",
+      "type": "string"
+     },
+     "exit": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Exit"
+     },
+     "exit_utc": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Exit Utc"
+     },
+     "feed": {
+      "anyOf": [
+       {
+        "enum": [
+         "broker",
+         "reference"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Feed"
+     },
+     "missing": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Missing"
+     },
+     "side": {
+      "enum": [
+       "long",
+       "short"
+      ],
+      "title": "Side",
+      "type": "string"
+     },
+     "stop": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Stop"
+     },
+     "stop_moves": {
+      "items": {
+       "$ref": "#/components/schemas/StopMove"
+      },
+      "title": "Stop Moves",
+      "type": "array"
+     },
+     "target": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Target"
+     },
+     "timeframe": {
+      "title": "Timeframe",
+      "type": "string"
+     },
+     "trade_id": {
+      "title": "Trade Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "trade_id",
+     "timeframe",
+     "feed",
+     "bars",
+     "missing",
+     "side",
+     "entry",
+     "entry_utc",
+     "stop",
+     "stop_moves",
+     "target",
+     "exit",
+     "exit_utc"
+    ],
+    "title": "TradeBars",
+    "type": "object"
+   },
    "TradeRef": {
     "description": "One closed trade named by a summary (its best or worst).",
     "properties": {
@@ -8444,6 +9383,17 @@
        }
       ],
       "title": "Pnl Now"
+     },
+     "position_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Position Id"
      },
      "price_now": {
       "anyOf": [
@@ -11238,6 +12188,29 @@
     "summary": "Status"
    }
   },
+  "/api/strategies/board": {
+   "get": {
+    "operationId": "strategies_board_api_strategies_board_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/StrategyBoardView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Strategies Board"
+   }
+  },
   "/api/strategies/watch": {
    "get": {
     "operationId": "strategies_watch_api_strategies_watch_get",
@@ -11642,6 +12615,50 @@
      }
     ],
     "summary": "Trade Detail"
+   }
+  },
+  "/api/trades/{trade_id}/bars": {
+   "get": {
+    "operationId": "trade_bars_api_trades__trade_id__bars_get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "trade_id",
+      "required": true,
+      "schema": {
+       "title": "Trade Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TradeBars"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Trade Bars"
    }
   },
   "/api/tradingview": {

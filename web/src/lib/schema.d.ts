@@ -765,6 +765,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/strategies/board": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Strategies Board */
+        get: operations["strategies_board_api_strategies_board_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/strategies/watch": {
         parameters: {
             query?: never;
@@ -859,6 +876,23 @@ export interface paths {
         };
         /** Trade Detail */
         get: operations["trade_detail_api_trades__trade_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/trades/{trade_id}/bars": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Trade Bars */
+        get: operations["trade_bars_api_trades__trade_id__bars_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1345,6 +1379,77 @@ export interface components {
             /** Window S */
             window_s?: number | null;
         };
+        /** BoardFamily */
+        BoardFamily: {
+            /** Accounts */
+            accounts: string[];
+            /**
+             * Anneal State
+             * @enum {string}
+             */
+            anneal_state: "E" | "C1" | "P" | "R";
+            /** Family */
+            family: string;
+            /** Family Label */
+            family_label: string;
+            /** Pooled */
+            pooled: components["schemas"]["ReadProgress"][];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "proven" | "candidate" | "running" | "retired" | "control";
+            /** Style */
+            style: string;
+            /** Variants */
+            variants: components["schemas"]["BoardVariant"][];
+        };
+        /**
+         * BoardVariant
+         * @description One arm. Read alone (`pooled` false): its unit's progress is its own. Read pooled: its own count only; the
+         *     family's `pooled` progress carries n of N, ETA and the read (`eta_read_date` and `read` are None here).
+         */
+        BoardVariant: {
+            /** Account Labels */
+            account_labels: string[];
+            /**
+             * Anneal State
+             * @enum {string}
+             */
+            anneal_state: "E" | "C1" | "P" | "R";
+            /** Arm Id */
+            arm_id: string;
+            /** Control Arm Id */
+            control_arm_id: string | null;
+            /** Eta Read Date */
+            eta_read_date: string | null;
+            /** Fills 7D */
+            fills_7d: number;
+            /** Fills Today */
+            fills_today: number;
+            /** Is Control */
+            is_control: boolean;
+            /** N Counted */
+            n_counted: number;
+            /** N Read At */
+            n_read_at: number | null;
+            /** Open Now */
+            open_now: number;
+            /** Pooled */
+            pooled: boolean;
+            read: components["schemas"]["ReadFigures"] | null;
+            /** Read Unit */
+            read_unit: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "warming" | "running" | "read" | "retired";
+            /** Timeframe */
+            timeframe: string;
+            /** Variant */
+            variant: string;
+        };
         /**
          * CalendarEvent
          * @description One archived economic-calendar event. Tier 1 (US CPI, NFP, FOMC, PCE) carries its entry-blackout window.
@@ -1416,6 +1521,22 @@ export interface components {
              * @default
              */
             totp: string;
+        };
+        /** ChartBar */
+        ChartBar: {
+            /** C */
+            c: number;
+            /** H */
+            h: number;
+            /** L */
+            l: number;
+            /** O */
+            o: number;
+            /**
+             * T
+             * Format: date-time
+             */
+            t: string;
         };
         /** ChartLayout */
         ChartLayout: {
@@ -1787,6 +1908,42 @@ export interface components {
              * @default true
              */
             ok: boolean;
+        };
+        /**
+         * EngineStrategy
+         * @description An engine strategy or shadow model (not a pre-registered arm): full figures with n and a 90% CI.
+         */
+        EngineStrategy: {
+            /** Ci90 */
+            ci90: [
+                number,
+                number
+            ] | null;
+            /** Currency */
+            currency: string | null;
+            /** Family */
+            family: string;
+            /** Hit Rate */
+            hit_rate: number | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "real" | "strategy" | "shadow";
+            /** N */
+            n: number;
+            /** N 7D */
+            n_7d: number;
+            /** N Today */
+            n_today: number;
+            /** Name */
+            name: string;
+            /** Net Pnl */
+            net_pnl: number | null;
+            /** Net R Per Trade */
+            net_r_per_trade: number | null;
+            /** Timeframe */
+            timeframe: string | null;
         };
         /**
          * EntryBlock
@@ -2231,6 +2388,50 @@ export interface components {
              * @default false
              */
             withheld: boolean;
+        };
+        /**
+         * LabTotal
+         * @description One lab's sleeve over 7 days: counts always; money only when every (account, day) cell of its unread closes
+         *     covers 3+ strategy arms, and only when every sleeve of the account clears that (else one sleeve is the lab's
+         *     figure minus the others).
+         */
+        LabTotal: {
+            /** Account Label */
+            account_label: string;
+            /** Arms */
+            arms: number;
+            /** Costs */
+            costs: number | null;
+            /** Currency */
+            currency: string | null;
+            /** N */
+            n: number;
+            /** N Closed */
+            n_closed: number;
+            /** Net Pnl */
+            net_pnl: number | null;
+            /**
+             * Period
+             * @constant
+             */
+            period: "7 days";
+            /** Style */
+            style: string;
+            /** Withheld Reason */
+            withheld_reason: string | null;
+        };
+        /** Learning */
+        Learning: {
+            /** Counted 7D */
+            counted_7d: number;
+            /** Proven */
+            proven: number;
+            /** Read */
+            read: number;
+            /** Retired */
+            retired: number;
+            /** Running */
+            running: number;
         };
         /**
          * LimitAccount
@@ -2939,6 +3140,70 @@ export interface components {
             /** Warn */
             warn: number;
         };
+        /**
+         * ReadFigures
+         * @description The read sample's figures, frozen at the read (its first `n` counted trades closed by `read_utc`).
+         */
+        ReadFigures: {
+            /** Ci90 */
+            ci90: [
+                number,
+                number
+            ] | null;
+            /** Currency */
+            currency: string | null;
+            /** Hit Rate */
+            hit_rate: number | null;
+            /** N */
+            n: number;
+            /** Net Pnl */
+            net_pnl: number | null;
+            /** Net R Per Trade */
+            net_r_per_trade: number | null;
+            /**
+             * Read Utc
+             * Format: date-time
+             */
+            read_utc: string;
+            since_read: components["schemas"]["SinceRead"] | null;
+            /** Verdict */
+            verdict: string;
+            /** Vs Control Ci90 */
+            vs_control_ci90: [
+                number,
+                number
+            ] | null;
+            /** Vs Control R */
+            vs_control_r: number | null;
+        };
+        /**
+         * ReadProgress
+         * @description One read unit's progress (an arm, or a family read pooled: W1, W2, H-80, H-81; config/arm_reads.yaml). Before
+         *     its read: counts, progress, ETA and status only (no money, R, hit rate or rank).
+         */
+        ReadProgress: {
+            /**
+             * Anneal State
+             * @enum {string}
+             */
+            anneal_state: "E" | "C1" | "P" | "R";
+            /** Arm Ids */
+            arm_ids: string[];
+            /** Eta Read Date */
+            eta_read_date: string | null;
+            /** N Counted */
+            n_counted: number;
+            /** N Read At */
+            n_read_at: number | null;
+            read: components["schemas"]["ReadFigures"] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "warming" | "running" | "read" | "retired";
+            /** Unit Id */
+            unit_id: string;
+        };
         /** RearmRequest */
         RearmRequest: {
             /** Totp */
@@ -3453,6 +3718,13 @@ export interface components {
             /** Totp Uri */
             totp_uri: string;
         };
+        /** SinceRead */
+        SinceRead: {
+            /** N */
+            n: number;
+            /** Net R Per Trade */
+            net_r_per_trade: number;
+        };
         /** Status */
         Status: {
             blackout?: components["schemas"]["ActiveBlackout"] | null;
@@ -3508,6 +3780,16 @@ export interface components {
              */
             mode: "demo" | "live";
         };
+        /** StopMove */
+        StopMove: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Price */
+            price: number;
+        };
         /**
          * StopRuleView
          * @description P6 in fields a screen words itself. status: breached > cant_check > not_started > ok (a breach stays a breach
@@ -3559,6 +3841,23 @@ export interface components {
             weekly_cap?: number | null;
             /** Worst Loss Frac */
             worst_loss_frac?: number | null;
+        };
+        /** StrategyBoardView */
+        StrategyBoardView: {
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
+            /** Engine */
+            engine: components["schemas"]["EngineStrategy"][];
+            /** Families */
+            families: components["schemas"]["BoardFamily"][];
+            /** Lab Totals */
+            lab_totals: components["schemas"]["LabTotal"][];
+            learning: components["schemas"]["Learning"];
+            /** Unreadable */
+            unreadable: string[];
         };
         /**
          * StrategyRiskView
@@ -3749,6 +4048,46 @@ export interface components {
             unreadable?: ("shadow" | "positions" | "probes" | "exploration" | "orders")[];
         };
         /**
+         * TradeBars
+         * @description `bars` (bid prices, USD/oz) from BARS_BEFORE bars before the entry to BARS_AFTER after the exit (now while
+         *     open); none stored: `bars` empty and `missing` says so, the levels still given. `stop` is the stop at entry,
+         *     `stop_moves` each accepted move after it, in time order.
+         */
+        TradeBars: {
+            /** Bars */
+            bars: components["schemas"]["ChartBar"][];
+            /** Entry */
+            entry: number | null;
+            /**
+             * Entry Utc
+             * Format: date-time
+             */
+            entry_utc: string;
+            /** Exit */
+            exit: number | null;
+            /** Exit Utc */
+            exit_utc: string | null;
+            /** Feed */
+            feed: ("broker" | "reference") | null;
+            /** Missing */
+            missing: string | null;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "long" | "short";
+            /** Stop */
+            stop: number | null;
+            /** Stop Moves */
+            stop_moves: components["schemas"]["StopMove"][];
+            /** Target */
+            target: number | null;
+            /** Timeframe */
+            timeframe: string;
+            /** Trade Id */
+            trade_id: string;
+        };
+        /**
          * TradeRef
          * @description One closed trade named by a summary (its best or worst).
          */
@@ -3835,6 +4174,8 @@ export interface components {
             pnl: number | null;
             /** Pnl Now */
             pnl_now: number | null;
+            /** Position Id */
+            position_id?: number | null;
             /** Price Now */
             price_now: number | null;
             /** R */
@@ -5463,6 +5804,26 @@ export interface operations {
             };
         };
     };
+    strategies_board_api_strategies_board_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyBoardView"];
+                };
+            };
+        };
+    };
     strategies_watch_api_strategies_watch_get: {
         parameters: {
             query?: never;
@@ -5605,6 +5966,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TradeRow"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trade_bars_api_trades__trade_id__bars_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trade_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradeBars"];
                 };
             };
             /** @description Validation Error */
