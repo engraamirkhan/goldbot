@@ -185,7 +185,7 @@ class EngineConfig(Record):
     magic_base: int = 260100
     state_dir: str = "state"
     cost_atr: float = 0.10           # round-trip cost in ATR until the measured cost table exists
-    max_bars_in_memory: int = 60000     # 1m bars kept (~40 trading days)
+    max_bars_in_memory: int = 90000     # 1m bars kept (~62 trading days; fakey L0's 4h boxes read ~80 000)
     feature_window: int = 800            # decision bars the features are computed on
     # history continuity (engine/history.py): background fill bounds (bridge rows per page, seconds)
     backfill_max_days: int = Field(30, ge=0, le=30)
@@ -902,8 +902,10 @@ class Engine:
             # exits first (review L3): an account read that fails must not skip this bar's position management (time
             # exits, policies); no entry is decided on this close, and the error propagates as before
             self._manage_open(base.dec)
+            exploration.trail(self, close_ts)
             raise
         self._manage_open(base.dec)
+        exploration.trail(self, close_ts)    # H-80 BXR's runner stop and its virtual twins; never gated, never raises
         self.center.sweep_expired()
         regime = self._regime(base.X, close_ts)
         fam_w = self.allocator.weights(regime)
@@ -1482,26 +1484,13 @@ class Engine:
                 sl = round(trail, 2)                      # never loosens
             if sl is None or trail is None:
                 continue
-            tick = self.broker.last_tick(self.cfg.symbol)
-            broker_looser = pos.sl is None or tr.side * (sl - pos.sl) > 1e-9
-            if broker_looser and tr.side * ((tick.bid if tr.side > 0 else tick.ask) - sl) <= 0:
-                # the price is through the stop the policy set but the broker's stop is not there (a new level, or a
-                # modify that did not stick): close at market, as the labels exit at that stop
-                self._policy_close(pid, tr, "trail_close")
-                continue
-            if pos.sl is not None and tr.side * (sl - pos.sl) <= 1e-9:
-                # review MEDIUM-2 (c), defence in depth: the broker's stop is already at or beyond this one (a restart
-                # or an adoption left the engine's copy loose): never send a looser stop; the broker's is the floor
-                if tr.sl is None or tr.side * (pos.sl - tr.sl) > 1e-9:
-                    tr.sl = pos.sl
-                continue
-            if sl == tr.sl:
-                continue
-            tr.sl = sl                                    # reconciliation re-sends it if the modify did not stick
-            res = self.broker.modify(pid, sl, pos.tp)
-            self.decisions.append({"ts": time.time(), "agent": tr.agent_id, "action": "trail", "position": pid,
-                                   "sl": sl, "ok": res.ok, "retcode": res.retcode})
+            self._tighten_stop(pid, tr, pos, sl)
         self._save_orders()
+
+    def _tighten_stop(self, pid: int, tr: OpenTrade, pos: Position, sl: float) -> None:
+        """Only-tighter stop move (policy trail, exploration runner): `goldbot.execution.stop_moves.tighten_stop`."""
+        from goldbot.execution.stop_moves import tighten_stop
+        tighten_stop(self, pid, tr, pos, sl)
 
     def _policy_close(self, pid: int, tr: OpenTrade, action: str, **extra: object) -> OrderResult:
         return self._try_close(pid, action, None, **extra)

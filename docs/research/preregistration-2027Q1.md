@@ -1141,6 +1141,20 @@ trials than the plan, and touches no rail. It is reported to the owner as an FYI
 compared. It is being relabelled from `daily_floor` to **`retire_floor`** (another lane). The withdrawal tests above
 read that `retire_floor`, equal to `research.screen_min_events_daily` at the freeze (150).
 
+## Research director note 2026-10-26: free-reserve rows O-11 and O-12 (time-structure programme)
+
+Written before any 2018+ outcome of these rules exists. Two of the 6 free-reserve slots are named, both conditional;
+the other 4 stay free.
+- **O-11 (1 slot):** H-70 confirmation read, rule and reading in `prereg-2026-10-26-time-structure.md` 2.3.
+  Condition: F1A's signal-time cost read and L-2 merged by 2027-02-26; else Q2.
+- **O-12 (1 slot):** H-71 confirmation read, `prereg-2026-10-26-time-structure.md` 3.3. Condition: G1A's cost read by
+  2027-03-12; else Q2.
+
+Both read at day-clustered t ≥ 3.0 on 2018-01-01..2025-09-30 (never loaded for these rules). Neither can pass gate 1
+alone. K at their reads: registry K + 187 effective programme looks (amended 2026-10-26 on the quant review: G at its
+51 axes). Neither read can be cancelled or deferred by its arm's net result; only the arm's fill-cost read is a
+precondition.
+
 ## Q1 readiness: what must exist before 2027-01-01 (research director; live list, last checked 2026-10-16)
 
 **How this list is kept.** Every row names ONE accountable role and a date (`docs/AGENT_STANDARDS.md`, "Accountability

@@ -4,14 +4,15 @@ the availability rules).
 
 With --existing (the last published file) history is kept as published: only new dates and revised values are added
 (merge_releases), and a row that should have been in the previous download but was not is stamped no earlier than this
-run. COT: the first run downloads 2006 onwards; later runs this year and last. GLD: the whole archive each run.
+run. COT: the first run downloads 2006 onwards (disaggregated) and 1986 onwards (legacy, source cftc_legacy; also on
+the first run after a published file without legacy rows); later runs this year and last. GLD: the whole archive.
 
 Never loses history: --existing must name a file that exists unless --first-run says there is no published file yet
 (the workflow passes --first-run only when the release or its asset is confirmed missing), and a merged frame with
 fewer rows for any source than the previous file, or without every previously published row, is refused
 (check_keeps_history; exit 2, no output, so the publish step uploads nothing).
 
-Exit status: 2 when history would be lost (or --existing is missing without --first-run); 1 when COT fails (its published rows are kept) or nothing could be written; a GLD source that is
+Exit status: 2 when history would be lost (or --existing is missing without --first-run); 1 when either COT report fails (its published rows are kept) or nothing could be written; a GLD source that is
 unavailable (blocked or reformatted; it is not scraped around) keeps its published rows, is reported, and exits 0, so a
 known gap does not open an issue every week.
 
@@ -30,11 +31,14 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.data.positioning import (  # noqa: E402
     COT_FIRST_YEAR,
+    COT_LEGACY_FIRST_YEAR,
     GldSourceUnavailable,
     HistoryLoss,
     check_keeps_history,
     cot_frame,
+    cot_legacy_frame,
     fetch_cot,
+    fetch_cot_legacy,
     fetch_gld,
     gld_frame,
     merge_releases,
@@ -69,6 +73,23 @@ def main(argv: list[str] | None = None) -> int:
     except (RuntimeError, ValueError, OSError) as exc:
         cot_failed = True
         notes.append(f"COT FAILED: {exc}")
+    # legacy report (1986 on): backfilled once from 1986 when the published file has no legacy rows, then last year on
+    has_legacy = prev is not None and (prev["source"] == "cftc_legacy").any()
+    first_legacy = max(args.from_year, COT_LEGACY_FIRST_YEAR) if args.from_year else (
+        now.year - 1 if has_legacy else COT_LEGACY_FIRST_YEAR)
+    try:
+        legacy = fetch_cot_legacy(list(range(first_legacy, now.year + 1)))
+        if len(legacy):
+            fresh.append(cot_legacy_frame(legacy, now))
+        last_ok["cftc_legacy"] = now
+        if len(legacy):
+            notes.append(f"COT legacy: {len(legacy):,} reports {legacy['report_date'].min():%Y-%m-%d} .. "
+                         f"{legacy['report_date'].max():%Y-%m-%d}")
+        else:
+            notes.append("COT legacy: no reports")
+    except (RuntimeError, ValueError, OSError) as exc:
+        cot_failed = True
+        notes.append(f"COT LEGACY FAILED: {exc}")
     if args.skip_gld:
         notes.append("GLD: skipped (--skip-gld)")
     else:

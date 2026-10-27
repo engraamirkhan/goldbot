@@ -30,7 +30,7 @@ def fake_dukascopy(monkeypatch):
     calls: list[tuple[str, dt.date]] = []
     dead_ask = {"2024-03"}   # Dukascopy never serves the ask side for March
 
-    def fetch(start, end, side, outdir, salvage=False):
+    def fetch(start, end, side, outdir, salvage=False, inst="XAUUSD"):
         calls.append((side, start))
         if side == "ask" and f"{start:%Y-%m}" in dead_ask:
             return None, "rc=1 Request failed with status 503"
@@ -91,7 +91,7 @@ def test_failed_refetch_keeps_previously_published_month(fake_dukascopy, monkeyp
     assert rc == 0
     published = pd.read_parquet(first)
 
-    def down(start, end, side, outdir, salvage=False):
+    def down(start, end, side, outdir, salvage=False, inst="XAUUSD"):
         return None, "rc=1 Request failed with status 503"
     monkeypatch.setattr(dy, "_fetch", down)
     rc, second = _run(monkeypatch, tmp_path, "--existing", first, "--refetch-all")

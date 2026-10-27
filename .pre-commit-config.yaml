@@ -35,7 +35,11 @@ repos:
         name: no MT5 trade-history reports
         entry: python scripts/check_no_mt5_report.py
         language: python
-      - id: docs-assemble             # HANDOFF/TRACEABILITY/BACKLOG are rendered from fragments (ADR 0012);
+      - id: no-market-data            # ADR 0048: Dukascopy terms forbid redistribution; bars stay in raw/ and data/
+        name: no market data (Parquet/Arrow/bi5 or price CSV) in the public repo
+        entry: python scripts/check_no_market_data.py
+        language: python
+      - id: docs-assemble            # HANDOFF/TRACEABILITY/BACKLOG are rendered from fragments (ADR 0012);
         # also fails on two ADRs with one number (ADR 0025)
         name: rendered docs match their fragments (fix with `python scripts/docs_assemble.py`)
         entry: python scripts/docs_assemble.py check

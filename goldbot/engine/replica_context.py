@@ -109,43 +109,61 @@ class ReplicaShadow:
             th.join(self.warm_wait_s)
         return False
 
+    def _prepared(self, agent: Any, m: pd.DataFrame) -> tuple[pd.DataFrame, int, R.ReplicaState] | None:
+        """(the mid bars, extended from `history` when shorter than the replica's context, how many bars were put in
+        front, the carried state `agent.state_lag` bars before the last bar), after this bar's feed update; None while
+        the state is not there (no source, too few bars, a bootstrap running, the snapshot not kept yet). Raises on a
+        store or replica error: the callers fail closed."""
+        m = m.reset_index(drop=True)
+        tf = agent.timeframe
+        lag = int(agent.state_lag)
+        feed = self.feed(agent)
+        need = R.context_bars(feed.params) + lag
+        offset = 0
+        if len(m) < need and self.history is not None and len(m):
+            pre = self.history.before(tf, utc_index(m["ts_utc"])[0], need - len(m))
+            offset = len(pre)
+            m = pd.concat([pre, m], ignore_index=True)
+        if len(m) < need:
+            return None
+        ts = utc_index(m["ts_utc"])
+        if self.history is not None:
+            hist = self.history
+            before, series = hist.count(tf, ts[0]), (lambda: pd.concat([hist.before(tf, ts[0]), m], ignore_index=True))
+        elif self.series is not None and self.bars_before is not None:
+            src, count = self.series, self.bars_before
+            before, series = count(tf, ts[0]), (lambda: src(tf))
+        else:
+            return None
+        if not self._ready(feed, m, before, series):
+            return None
+        feed.update(m, before, series)
+        state = feed.state_at(ts[-1 - lag])
+        if state is None:
+            log.info("replica state of %s not kept for %s yet: none this bar", feed.feed, agent.agent_id)
+            return None
+        return m, offset, state
+
+    def state_for(self, agent: Any, m: pd.DataFrame) -> R.ReplicaState | None:
+        """The carried state `agent.state_lag` bars before the last of the mid bars `m` (which must hold the replica's
+        context before it), for a rule that resumes from it (`ctx["smc_replica_state"]`, the exploration arms); None
+        while it is not there. Raises on a store or replica error."""
+        got = self._prepared(agent, m)
+        return None if got is None or got[1] else got[2]
+
     def candidates(self, agent: Specialist, fr: Any) -> pd.DataFrame:
         """`agent`'s candidates on the decision frame `fr` (mid bars `fr.m`, features `fr.X`); idx positional in fr.m.
         With a store `history`, a tail shorter than the replica's context (4h: the engine keeps ~40 days of 1m bars)
         is extended with the store's earlier bars, and the bootstrap series is the store's bars before the tail plus
         the tail itself."""
         try:
-            m = fr.m.reset_index(drop=True)
+            got = self._prepared(agent, fr.m)
+            if got is None:
+                return _empty()
+            m, offset, state = got
             X = fr.X
-            tf = agent.timeframe
-            lag = int(agent.state_lag)                           # type: ignore[attr-defined]
-            feed = self.feed(agent)
-            need = R.context_bars(feed.params) + lag
-            offset = 0
-            if len(m) < need and self.history is not None and len(m):
-                pre = self.history.before(tf, utc_index(m["ts_utc"])[0], need - len(m))
-                offset = len(pre)
-                m = pd.concat([pre, m], ignore_index=True)
+            if offset:
                 X = X.reset_index(drop=True).reindex(range(-offset, len(X))).reset_index(drop=True)
-            if len(m) < need:
-                return _empty()
-            ts = utc_index(m["ts_utc"])
-            if self.history is not None:
-                hist = self.history
-                before, series = hist.count(tf, ts[0]), (lambda: pd.concat([hist.before(tf, ts[0]), m],
-                                                                           ignore_index=True))
-            elif self.series is not None and self.bars_before is not None:
-                src, count = self.series, self.bars_before
-                before, series = count(tf, ts[0]), (lambda: src(tf))
-            else:
-                return _empty()
-            if not self._ready(feed, m, before, series):
-                return _empty()
-            feed.update(m, before, series)
-            state = feed.state_at(ts[-1 - lag])
-            if state is None:
-                log.info("replica state of %s not kept for %s yet: no candidate this bar", feed.feed, agent.agent_id)
-                return _empty()
             out = agent.candidates_in_context(m, X, None, {STATE_KEY: state})
             if offset:
                 out = out.assign(idx=out["idx"] - offset)

@@ -89,7 +89,7 @@ def test_fractional_dukascopy_volumes_are_kept(monkeypatch, tmp_path):
     ts = pd.date_range("2025-03-04 09:00", periods=5, freq="1min", tz="UTC")
     side = pd.DataFrame({"ts_utc": ts, "open": 2900.0, "high": 2901.0, "low": 2899.0, "close": 2900.5,
                          "volume": [0.12, 0.5, 1.7, 0.0, 0.03]})
-    monkeypatch.setattr(dy, "download_side", lambda s, e, which, out: side.assign(close=2900.5 + (which == "ask") * 0.2))
+    monkeypatch.setattr(dy, "download_side", lambda s, e, which, out, **kw: side.assign(close=2900.5 + (which == "ask") * 0.2))
     monkeypatch.setattr(dy, "MIN_BARS_PER_FULL_MONTH", 1)
     monkeypatch.setattr(dy.time, "sleep", lambda s: None)
     bars = dy.month_bars(dt.date(2025, 3, 1), dt.date(2025, 4, 1), tmp_path)
@@ -158,7 +158,7 @@ def test_main_never_publishes_fewer_bars_for_a_day_than_before(monkeypatch, tmp_
     short = full(days[0][:50], 1.0)                    # only 50 of Tuesday's 300 bars came back, no Wednesday
 
     monkeypatch.setattr(dy, "month_range", lambda year, today=None: iter([(dt.date(2026, 10, 1), dt.date(2026, 10, 17))]))
-    monkeypatch.setattr(dy, "month_bars", lambda start, end, tmp: short)
+    monkeypatch.setattr(dy, "month_bars", lambda start, end, tmp, **kw: short)
     out = tmp_path / "out.parquet"
     monkeypatch.setattr(dy.sys, "argv", ["dukascopy_year.py", "2026", "--out", str(out), "--existing", str(prev),
                                          "--tmp", str(tmp_path / "raw"), "--report", str(tmp_path / "r.md")])
@@ -230,7 +230,7 @@ def _session(day: str, n: int = 300) -> pd.DatetimeIndex:
 
 
 def _run_main(monkeypatch, tmp_path, argv: list[str], fetched: dict[str, pd.DataFrame], calls: list[str]) -> int:
-    def fake_month_bars(start, end, tmp):
+    def fake_month_bars(start, end, tmp, **kw):
         calls.append(f"{start:%Y-%m}")
         return fetched.get(f"{start:%Y-%m}")
     monkeypatch.setattr(dy, "month_bars", fake_month_bars)
@@ -276,10 +276,10 @@ def test_main_with_months_retries_a_flagged_month_and_repairs_imputed_days(monke
     calls: list[str] = []
     out = tmp_path / "out.parquet"
     rc = _run_main(monkeypatch, tmp_path, ["2026", "--out", str(out), "--existing", str(prev), "--months", "2026-02"],
-                   {"2026-02": _full_bars(feb, 1.0)}, calls)
+                   {"2026-02": _full_bars(feb, 2001.0)}, calls)
     assert rc == 0 and calls == ["2026-02"]           # the open month 2026-10 is not touched by a targeted run
     got = pd.read_parquet(out)
-    assert (got["bid_close"] == 1.0).all() and not got["dq_flag"].fillna("").str.contains("imputed").any()
+    assert (got["bid_close"] == 2001.0).all() and not got["dq_flag"].fillna("").str.contains("imputed").any()
 
 
 def test_main_with_months_refuses_without_a_published_year(monkeypatch, tmp_path):
@@ -334,15 +334,22 @@ def test_workflow_has_a_months_input_and_never_interpolates_expressions_into_run
     assert '--months "$MONTHS"' in build["run"]
 
 
-def _run_plan(tmp_path, **env: str) -> tuple[int, dict[str, str], str]:
+def _run_plan(tmp_path, private: str = "true", **env: str) -> tuple[int, dict[str, str], str]:
+    """`private` is what a stubbed `gh api repos/...` prints for the repository's visibility ("fail": gh errors)."""
     step = _step("plan", step_id="years")
     out = tmp_path / "gh_output"
     out.write_text("")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    gh = bin_dir / "gh"
+    gh.write_text("#!/bin/sh\nexit 1\n" if private == "fail" else f"#!/bin/sh\necho {private}\n")
+    gh.chmod(0o755)
     base = {"EVENT_NAME": "workflow_dispatch", "FROM_YEAR": "2010", "TO_YEAR": "2026", "MONTHS": "",
             "FULL_REFRESH": "false", "RETRY_FLAGGED": "false"}
     assert set(base) <= set(step["env"])
     r = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=ROOT, capture_output=True, text=True, check=False,
-                       env={"PATH": os.environ["PATH"], "GITHUB_OUTPUT": str(out), **base, **env})
+                       env={"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "GITHUB_OUTPUT": str(out),
+                            "GITHUB_REPOSITORY": "o/r", **base, **env})
     lines = dict(line.split("=", 1) for line in out.read_text().splitlines() if "=" in line)
     return r.returncode, lines, r.stdout + r.stderr
 
@@ -350,13 +357,33 @@ def _run_plan(tmp_path, **env: str) -> tuple[int, dict[str, str], str]:
 def test_plan_step_turns_a_month_list_into_years_and_a_normalised_list(tmp_path):
     rc, got, log = _run_plan(tmp_path, MONTHS="2026-06,2024-01,2024-06")
     assert rc == 0, log
-    assert got == {"years": "[2024, 2026]", "months": "2024-01,2024-06,2026-06"}
+    assert got == {"symbol": "xauusd", "enabled": "true", "years": "[2024, 2026]", "months": "2024-01,2024-06,2026-06"}
 
 
 def test_plan_step_without_months_keeps_the_year_range(tmp_path):
     rc, got, log = _run_plan(tmp_path, FROM_YEAR="2024", TO_YEAR="2025")
     assert rc == 0, log
-    assert got == {"years": "[2024, 2025]", "months": ""}
+    assert got == {"symbol": "xauusd", "enabled": "true", "years": "[2024, 2025]", "months": ""}
+
+
+@pytest.mark.parametrize("private", ["false", "fail", ""])
+def test_plan_step_refuses_gold_while_the_repository_is_public(tmp_path, private):
+    """ADR 0048 (owner 2026-10-26): no Dukascopy bars on a public repository; an API error counts as public."""
+    rc, got, log = _run_plan(tmp_path, private=private)
+    assert rc != 0 and "years" not in got and "ADR 0048" in log
+
+
+def test_scheduled_plan_on_a_public_repository_builds_nothing_and_does_not_fail(tmp_path):
+    rc, got, log = _run_plan(tmp_path, private="false", EVENT_NAME="schedule")
+    assert rc == 0, log
+    assert got["enabled"] == "false" and got["years"] == "[]"
+    assert _wf()["jobs"]["build-year"]["if"] == "needs.plan.outputs.enabled == 'true'"
+
+
+def test_publish_step_refuses_a_public_repository_again():
+    run = _step("build-year", name_prefix="publish")["run"]
+    guard, upload = run.index('--jq .private'), run.index("gh release upload data-v1")
+    assert guard < upload
 
 
 @pytest.mark.parametrize("env", [
@@ -387,7 +414,7 @@ def test_download_side_refetches_days_a_salvage_pass_silently_dropped(monkeypatc
     week = [dt.date(2020, 5, 25) + dt.timedelta(days=i) for i in range(5)]
     calls: list[tuple[dt.date, dt.date]] = []
 
-    def fake_fetch(a, b, side, outdir, salvage=False):
+    def fake_fetch(a, b, side, outdir, salvage=False, **kw):
         calls.append((a, b))
         if (b - a).days > 1:                       # the week call lost the 3 throttled days
             return _day_frame([week[0], week[4]]), ""
@@ -450,11 +477,152 @@ def test_fetch_prefers_datafeed_and_falls_back_to_node(monkeypatch, tmp_path):
     def node_unused(*a, **k):
         raise AssertionError("node not needed")
 
-    monkeypatch.setattr(dy, "_fetch_datafeed", lambda a, b, side: (good, ""))
+    monkeypatch.setattr(dy, "_fetch_datafeed", lambda a, b, side, inst=None: (good, ""))
     monkeypatch.setattr(dy, "_fetch_node", node_unused)
     df, _ = dy._fetch(dt.date(2026, 10, 14), dt.date(2026, 10, 15), "bid", tmp_path)
     assert df is good
-    monkeypatch.setattr(dy, "_fetch_datafeed", lambda a, b, side: (None, "http 503"))
+    monkeypatch.setattr(dy, "_fetch_datafeed", lambda a, b, side, inst=None: (None, "http 503"))
     monkeypatch.setattr(dy, "_fetch_node", lambda *a, **k: (good, ""))
     df, _ = dy._fetch(dt.date(2026, 10, 14), dt.date(2026, 10, 15), "bid", tmp_path)
     assert df is good
+
+
+# --- pre-2010 history and sibling instruments (issue #108; owner 2026-10-26: gold back as far as possible, silver) --
+
+def test_fetch_datafeed_treats_a_corrupt_payload_as_a_day_error_not_a_crash(monkeypatch):
+    """A non-LZMA body (an error page served with 200, a truncated file) raised LZMAError, which is not an OSError,
+    and killed the whole year's build; it must cost that day only."""
+    good = _bi5([(0, 4154975, 4155975, 4154885, 4156055, 0.5)])
+
+    def fake_get(url, timeout=30):
+        return b"<html>throttled</html>" if "/14/" in url else good
+
+    monkeypatch.setattr(dy, "_http_get", fake_get)
+    df, err = dy._fetch_datafeed(dt.date(2026, 10, 14), dt.date(2026, 10, 16), "bid")
+    assert err == "" and df is not None
+    assert list(df["ts_utc"].dt.date.unique()) == [dt.date(2026, 10, 15)]
+    monkeypatch.setattr(dy, "_http_get", lambda url, timeout=30: b"garbage")
+    df, err = dy._fetch_datafeed(dt.date(2026, 10, 14), dt.date(2026, 10, 16), "bid")
+    assert df is None and "corrupt" in err
+
+
+def test_fetch_datafeed_keeps_moving_minutes_of_a_day_without_any_volume(monkeypatch):
+    """Early archive days can carry no volume at all; dropping every volume-0 minute would empty them. On such a day
+    only flat minutes (open = high = low = close) are dropped; a day with volume keeps the volume > 0 rule."""
+    no_volume = _bi5([(0, 400000, 400500, 399900, 400600, 0.0), (60, 400500, 400500, 400500, 400500, 0.0),
+                      (120, 400500, 400100, 400000, 400700, 0.0)])
+    monkeypatch.setattr(dy, "_http_get", lambda url, timeout=30: no_volume)
+    df, err = dy._fetch_datafeed(dt.date(2004, 5, 12), dt.date(2004, 5, 13), "bid")
+    assert err == "" and df is not None
+    assert list(df["ts_utc"].dt.strftime("%H:%M")) == ["00:00", "00:02"]
+    assert (df["volume"] == 0).all() and df["open"].iloc[0] == 400.0
+
+
+def test_month_bars_flags_bars_without_volume(monkeypatch, tmp_path):
+    ts = pd.date_range("2004-05-12 09:00", periods=3, freq="1min", tz="UTC")
+    side = pd.DataFrame({"ts_utc": ts, "open": 400.0, "high": 401.0, "low": 399.0, "close": 400.5,
+                         "volume": [0.0, 0.0, 1.0]})
+    monkeypatch.setattr(dy, "download_side",
+                        lambda s, e, which, out, **kw: side.assign(close=400.5 + (which == "ask") * 0.5))
+    monkeypatch.setattr(dy, "MIN_BARS_PER_FULL_MONTH", 1)
+    monkeypatch.setattr(dy.time, "sleep", lambda s: None)
+    bars = dy.month_bars(dt.date(2004, 5, 1), dt.date(2004, 6, 1), tmp_path)
+    assert bars is not None
+    assert bars["dq_flag"].tolist() == ["warning:no_volume", "warning:no_volume", ""]
+
+
+def test_instruments_name_the_archive_and_a_plausible_price_band():
+    gold, silver = dy.INSTRUMENTS["xauusd"], dy.INSTRUMENTS["xagusd"]
+    assert dy.datafeed_url(dt.date(2008, 9, 15), "bid", silver) == \
+        "https://datafeed.dukascopy.com/datafeed/XAGUSD/2008/08/15/BID_candles_min_1.bi5"
+    assert dy.datafeed_url(dt.date(2008, 9, 15), "bid") == dy.datafeed_url(dt.date(2008, 9, 15), "bid", gold)
+    # known levels: gold ~350-420 $ in 2003 and ~2,000-4,400 $ in 2023-26; silver ~4.4 $ in 2003, ~50 $ in 2011
+    assert gold.price_ok(350.0) and gold.price_ok(4400.0) and not gold.price_ok(3.5) and not gold.price_ok(35_000.0)
+    assert silver.price_ok(4.4) and silver.price_ok(50.0) and not silver.price_ok(400.0)
+
+
+def _argv(monkeypatch, tmp_path, *args: str) -> Path:
+    report = tmp_path / "r.md"
+    monkeypatch.setattr(dy.sys, "argv", ["dukascopy_year.py", *args, "--tmp", str(tmp_path / "raw"),
+                                         "--report", str(report)])
+    return report
+
+
+def test_main_does_not_download_months_before_the_instruments_history(monkeypatch, tmp_path):
+    """XAUUSD starts in May 2003 on Dukascopy: January to April are not asked for (each empty month cost hours of
+    retries and the year was reported MISSING); they are reported before_history and the year still publishes."""
+    calls: list[tuple[dt.date, dt.date]] = []
+
+    def fake_month_bars(start, end, tmp, **kw):
+        calls.append((start, end))
+        return _full_bars(pd.date_range(f"{start:%Y-%m}-06 10:00", periods=300, freq="1min", tz="UTC"), 360.0)
+
+    monkeypatch.setattr(dy, "month_bars", fake_month_bars)
+    monkeypatch.setattr(dy, "month_range", lambda year, today=None: _MONTH_RANGE(year, dt.date(2003, 7, 1)))
+    out = tmp_path / "out.parquet"
+    report = _argv(monkeypatch, tmp_path, "2003", "--out", str(out))
+    assert dy.main() == 0
+    start = dy.INSTRUMENTS["xauusd"].history_start
+    assert start is not None
+    assert calls[0][0] == start and [s.month for s, _ in calls] == [5, 6]
+    text = report.read_text()
+    assert "| 2003-01 | 0 | before_history |" in text and "| 2003-04 | 0 | before_history |" in text
+    assert pd.read_parquet(out)["ts_utc"].min() >= pd.Timestamp(start, tz="UTC")
+
+
+def test_main_refuses_a_month_at_the_wrong_price_scale(monkeypatch, tmp_path):
+    """A wrong point size shows as gold at 7.8 $ or 78,000 $: such a month is never published and the run exits 2 so
+    the failure reaches an issue."""
+    good = _full_bars(pd.date_range("2008-09-15 10:00", periods=300, freq="1min", tz="UTC"), 780.0)
+    bad = _full_bars(pd.date_range("2008-10-15 10:00", periods=300, freq="1min", tz="UTC"), 7.8)
+    fetched = {"2008-09": good, "2008-10": bad}
+    monkeypatch.setattr(dy, "month_bars", lambda start, end, tmp, **kw: fetched.get(f"{start:%Y-%m}"))
+    monkeypatch.setattr(dy, "month_range", lambda year, today=None: iter([(dt.date(2008, 9, 1), dt.date(2008, 10, 1)),
+                                                                          (dt.date(2008, 10, 1), dt.date(2008, 11, 1))]))
+    out = tmp_path / "out.parquet"
+    report = _argv(monkeypatch, tmp_path, "2008", "--out", str(out))
+    assert dy.main() == 2
+    assert "| 2008-10 | 300 | SCALE |" in report.read_text()
+    assert (pd.read_parquet(out)["bid_close"] == 780.0).all()
+
+
+def test_main_builds_silver_into_its_own_file(monkeypatch, tmp_path):
+    seen = []
+
+    def fake_month_bars(start, end, tmp, inst=None, **kw):
+        seen.append(inst.code if inst is not None else None)
+        return _full_bars(pd.date_range("2011-04-12 10:00", periods=300, freq="1min", tz="UTC"), 44.0)
+
+    monkeypatch.setattr(dy, "month_bars", fake_month_bars)
+    monkeypatch.setattr(dy, "month_range", lambda year, today=None: iter([(dt.date(2011, 4, 1), dt.date(2011, 5, 1))]))
+    monkeypatch.chdir(tmp_path)
+    _argv(monkeypatch, tmp_path, "2011", "--symbol", "xagusd")
+    assert dy.main() == 0
+    assert seen == ["XAGUSD"]
+    got = pd.read_parquet(tmp_path / "xagusd_1m_dukascopy_2011.parquet")
+    assert (got["source"] == "dukascopy").all() and got["bid_close"].iloc[0] == 44.0
+
+
+def test_workflow_builds_silver_only_into_a_private_destination():
+    """Licence (Dukascopy terms of use, read 2026-10-26): downloads are licensed for personal, non-commercial use and may
+    not be redistributed. The gold assets already on public release data-v1 are an escalated decision; a NEW
+    instrument is never added to a public release: silver needs a private repository (variable DATA_PRIVATE_REPO)."""
+    wf = _wf()
+    on = wf["on"] if "on" in wf else wf[True]
+    assert on["workflow_dispatch"]["inputs"]["symbol"]["options"] == ["xauusd", "xagusd"]
+    plan = _step("plan", step_id="years")
+    assert plan["env"]["SYMBOL"] == "${{ inputs.symbol }}"
+    assert plan["env"]["PRIVATE_REPO"] == "${{ vars.DATA_PRIVATE_REPO }}"
+    publish = _step("build-year", name_prefix="publish")
+    assert '--repo "$PRIVATE_REPO"' in publish["run"]
+
+
+def test_plan_step_refuses_silver_without_a_private_repository(tmp_path):
+    rc, got, log = _run_plan(tmp_path, SYMBOL="xagusd", PRIVATE_REPO="")
+    assert rc != 0 and "years" not in got and "DATA_PRIVATE_REPO" in log
+    rc, got, log = _run_plan(tmp_path, SYMBOL="xagusd", PRIVATE_REPO="owner/goldbot-data", FROM_YEAR="2011",
+                             TO_YEAR="2011")
+    assert rc == 0, log
+    assert got["years"] == "[2011]" and got["symbol"] == "xagusd"
+    rc, got, log = _run_plan(tmp_path, SYMBOL="btcusd")
+    assert rc != 0 and "years" not in got

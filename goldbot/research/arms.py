@@ -30,9 +30,18 @@ OOS_FROM = pd.Timestamp("2019-01-01", tz="UTC")         # priors use 2019-2025 t
 PRIOR_MEAN_FACTOR = 0.5
 PRIOR_WEIGHT_CAP = 50.0
 PRIOR_WEIGHT_PER_TRADE = 0.01                           # weight = min(50, n / 100)
+# wave 2 lane W2d (goldbot.research.arm_rules_clock_box): WFRI, KA15/XC15, the H-80 box family
+CLOCK_BOX_RULES = ("friday_long", "clock_anchor", "clock_anchor_control", "box_next")
 Timeframe = Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
 RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_absorb", "box_break_close",
-         "ema_pullback", "tsmom", "blocked")
+         "ema_pullback", "tsmom", "specialist", *CLOCK_BOX_RULES, "blocked",
+         # wave 2 (ARM-SPEC section 8)
+         "squeeze_release", "donchian_break", "low30_touch", "low30_control", "pdc_break", "ob_retest",
+         # G-1 (prereg-2026-10-26-time-structure.md section 3, G1A/G1C): frozen in the spec with status blocked until
+         # its generator lands in arm_rules.RULE_FUNCS (engine lane E2); a blocked arm never runs
+         "level_break",
+         # wave 2 lane W2a (H-70 F1 / F-2)
+         "hurst_band_break", "hurst_band_break_control", "htf_stretch_break", "htf_stretch_break_control")
 
 
 # ---------------------------------------------------------------- holdout guard
@@ -79,20 +88,25 @@ class ArmCosts(FrozenRecord):
     ($0.70 mean, n = 14, unverified: S0R measures it) is reported both ways."""
     round_trip_usd: float = Field(ge=0)
     overshoot_scenarios_usd: tuple[float, ...]
+    # the spread part of `round_trip_usd` (the cost model's p90 spread, both legs; arm_costs.yaml: "p90 spread both legs
+    # 0.12"): a read that charges a measured spread instead (KA15 stratum T, arms 8.13 condition 2) adds what the
+    # measured spread exceeds it by, so it never charges less than the frozen round trip
+    spread_both_legs_usd: float = Field(0.12, ge=0)
 
 
 def load_costs(path: Path) -> ArmCosts:
     raw = yaml.safe_load(Path(path).read_text())
+    extra = {"spread_both_legs_usd": float(raw["spread_both_legs_usd"])} if "spread_both_legs_usd" in raw else {}
     return ArmCosts(round_trip_usd=float(raw["round_trip_usd"]),
-                    overshoot_scenarios_usd=tuple(float(x) for x in raw["overshoot_scenarios_usd"]))
+                    overshoot_scenarios_usd=tuple(float(x) for x in raw["overshoot_scenarios_usd"]), **extra)
 
 
 def net_r(move_usd: np.ndarray, risk_usd: np.ndarray, stop_exit: np.ndarray, costs: ArmCosts,
-          overshoot_usd: float) -> np.ndarray:
+          overshoot_usd: float, extra_usd: np.ndarray | float = 0.0) -> np.ndarray:
     """Net result in R: the signed move per oz (swap included) less the round trip, less `overshoot_usd` on a stop exit,
-    over the candidate's own stop distance."""
+    less `extra_usd` (a measured spread above the frozen one), over the candidate's own stop distance."""
     pnl = np.asarray(move_usd, dtype=float) - costs.round_trip_usd - overshoot_usd * np.asarray(stop_exit, dtype=float)
-    return pnl / np.asarray(risk_usd, dtype=float)
+    return (pnl - np.asarray(extra_usd, dtype=float)) / np.asarray(risk_usd, dtype=float)
 
 
 # ---------------------------------------------------------------- arms
@@ -108,6 +122,11 @@ class Arm(FrozenRecord):
     # broker twin copies `twin_of`'s rule body (rule, timeframe, params, max_open; checked at load) under its own id
     # and hash, and has no history run of its own (`runnable_ids`): its broker starts from the flat prior
     twin_of: str | None = None
+    # a forward-only arm has no history run (`runnable_ids`), only live fills from a flat prior: the time-structure
+    # arms ("they are not run on history (no H-60 look; flat priors)", arms-2026-10-25.md 7a), KA "forward-only: no
+    # confirmation credit" (8.8) and H-80's box family, whose 2018+ half is its evaluator's single confirmation read.
+    # A run policy, like status: not in the hash
+    forward_only: bool = False
     config_hash: str | None = None
 
     @model_validator(mode="after")
@@ -120,6 +139,17 @@ class Arm(FrozenRecord):
             raise ValueError(f"{self.id}: an arm has one decision window, window_utc or window_local, not both")
         try:
             local_window(self.params)
+            if self.rule == "specialist":
+                # arms expansion 2026-10-26: an unknown or blocked family, preset, timeframe or config is refused at load
+                from goldbot.research.arm_rules_specialist import build_specialist
+                build_specialist(self)
+            if self.rule in ("squeeze_release", "donchian_break", "low30_touch", "low30_control"):
+                # ARM-SPEC 8 (wave 2): a timeframe the spec does not declare or a hold other than the frozen one
+                from goldbot.research.arm_rules_channels import check_arm
+                check_arm(self)
+            if self.rule in CLOCK_BOX_RULES:
+                from goldbot.research.arm_rules_clock_box import check
+                check(self)
         except ValueError as exc:
             raise ValueError(f"{self.id}: {exc}") from exc
         return self
@@ -159,7 +189,8 @@ def local_window(params: dict[str, Any]) -> SessionWindow | None:
 
 
 def arm_hash(arm: Arm) -> str:
-    """The arm's frozen configuration: sha256 over id, rule, timeframe, params, max_open (status and note are prose)."""
+    """The arm's frozen configuration: sha256 over id, rule, timeframe, params, max_open (status, note and
+    forward_only are prose and run policy)."""
     body = {"id": arm.id, "rule": arm.rule, "timeframe": arm.timeframe, "params": arm.params, "max_open": arm.max_open}
     return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
@@ -192,8 +223,9 @@ def load_arms(path: Path, *, check_hash: bool = True) -> list[Arm]:
 
 def runnable_ids(path: Path) -> list[str]:
     """The arms the historical matrix runs (H-60): every runnable arm but a broker twin, whose history is its
-    original's (same rule body on the same bars) and whose broker takes no H-60 prior (ADR 0043 broker amendment)."""
-    return [a.id for a in load_arms(path) if a.status == "run" and a.twin_of is None]
+    original's (same rule body on the same bars) and whose broker takes no H-60 prior (ADR 0043 broker amendment),
+    nor a forward-only arm (`Arm.forward_only`)."""
+    return [a.id for a in load_arms(path) if a.status == "run" and a.twin_of is None and not a.forward_only]
 
 
 # ---------------------------------------------------------------- priors

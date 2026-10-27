@@ -94,11 +94,21 @@ accounts:
     # budget_share 0.9 x 220 = £198 = intraday £108 + swing £90 (ADR 0043's £48 : £40 ratio, scaled to the host's
     # budget); slots and per-trade caps unchanged (intraday 5 open at £17, swing 1 open at £40; I0 30% of intraday,
     # W0 33% of swing, never allocated by results). max_open_total 17: one of the 18 host slots held in reserve.
+    # Arms expansion wave 1 (docs/research/arms-expansion-2026-10-26.md sections 3 and 5; 2026Q4 trial override
+    # 74 -> 93, authorised by the owner's directives 1 "tripple the numbers" and 5 "there should be 30 different
+    # strategies running..." of 2026-10-26): the intraday pot's max_open 5 -> 9 (10 of the 17, the £108 pot binds
+    # first); per trade £17 (15m) and £30 (1h, under ADR 0043's £45); C1H a fixed 0.25 share (a control, never
+    # allocated by results). No other limit changes. Rollback: drop the wave-1 arms, max_open back to 5, restart.
+    # Arms expansion wave 2 (arms-2026-10-25.md section 8, 8.13, 8.14; research director's decision 3 in
+    # arms-expansion-2026-10-26.md section 11: "the swing pot goes from max_open 1 to 2 on icm-demo and vantage-demo for
+    # 4h arms. The £40 cap and the £90 / £82 pots are unchanged"; 2026Q4 override 93 -> 106): swing max_open 1 -> 2,
+    # nothing else moves. Arms blocked in the frozen spec are dropped by the engine (logged) until their engine lane
+    # lands. Rollback: drop the wave-2 arms, swing max_open back to 1, restart.
     exploration:
       enabled: true
       budget_share: 0.9
       max_open_total: 17
-      pots: { intraday: { gbp: 108, max_open: 5 }, swing: { gbp: 90, max_open: 1 } }
+      pots: { intraday: { gbp: 108, max_open: 9 }, swing: { gbp: 90, max_open: 2 } }
       arms:
         I0: { style: intraday, max_loss: 17.0, control_share: 0.30 }
         I2A: { style: intraday, max_loss: 17.0 }
@@ -107,10 +117,40 @@ accounts:
         MB30: { style: intraday, max_loss: 17.0 }
         MB1H: { style: intraday, max_loss: 17.0 }
         MSA15: { style: intraday, max_loss: 17.0 }
+        # time-structure arms (prereg-2026-10-26-time-structure.md; override 69 -> 74 approved 2026-10-26): blocked in
+        # the frozen spec until engine lane E2 lands level_break, so the engine drops them (logged) until then
+        G1A: { style: intraday, max_loss: 17.0 }
+        G1C: { style: intraday, max_loss: 17.0, control_share: 0.05 }
+        # wave 1 (arms expansion 2026-10-26): specialist arms; XTV1 is blocked in the spec (dropped, logged)
+        XBB15: { style: intraday, max_loss: 17.0 }
+        XTV1: { style: intraday, max_loss: 17.0 }
+        XEQ15: { style: intraday, max_loss: 17.0 }
+        XSO15: { style: intraday, max_loss: 17.0 }
+        XIMNY: { style: intraday, max_loss: 17.0 }
+        XIMLN: { style: intraday, max_loss: 17.0 }
+        XAD1H: { style: intraday, max_loss: 30.0 }
+        XMR15: { style: intraday, max_loss: 17.0 }
+        XMR1H: { style: intraday, max_loss: 30.0 }
+        C1H: { style: intraday, max_loss: 30.0, control_share: 0.25 }
+        # wave 2 (arms-2026-10-25.md 8.5, 8.13): F-2 and its state-matched control, the order-block retest
+        F2A: { style: intraday, max_loss: 17.0 }
+        F2C: { style: intraday, max_loss: 17.0, control_share: 0.05 }
+        OBR15: { style: intraday, max_loss: 17.0 }
+        # H-80 box family (prereg-exits-adaptive-2026-10-26.md): BXR only, the real-order runner; BXT/BXF are virtual
+        # exits on BXR's fills (engine lane E3), never registered as orders
+        BXR15: { style: intraday, max_loss: 17.0 }
+        BXR30: { style: intraday, max_loss: 17.0 }
+        BXR1H: { style: intraday, max_loss: 30.0 }
         W0: { style: swing, max_loss: 40.0, control_share: 0.33 }
         W1A: { style: swing, max_loss: 40.0 }
         W1B: { style: swing, max_loss: 40.0 }
         W2: { style: swing, max_loss: 40.0 }
+        WFRI: { style: swing, max_loss: 40.0 }   # time-structure H-72 (forward-only), blocked until engine lane E1
+        # wave 2 (arms-2026-10-25.md 8.4, 8.6, 8.9): PDC 4h, the 30-day-low touch and its control; BXR's 4h stratum
+        PDC4: { style: swing, max_loss: 40.0 }
+        C30A: { style: swing, max_loss: 40.0 }
+        C30C: { style: swing, max_loss: 40.0, control_share: 0.05 }
+        BXR4H: { style: swing, max_loss: 40.0 }
   icm-probe:
     broker: icm
     mode: demo
@@ -189,6 +229,14 @@ accounts:
         S4: { style: scalp, max_loss: 6.5 }
         S5A: { style: scalp, max_loss: 6.5 }
         S5B: { style: scalp, max_loss: 6.5 }
+        # time-structure arms (prereg-2026-10-26-time-structure.md; override 69 -> 74 approved 2026-10-26): blocked in
+        # the frozen spec until engine lane E1 lands, so the engine drops them (logged) and nothing is sent until then
+        F1A: { style: scalp, max_loss: 6.5 }
+        F1C: { style: scalp, max_loss: 6.5, control_share: 0.05 }
+        # wave 2 (arms-2026-10-25.md 8.8, 8.9, 8.13): clock anchors, forward-only, and their random-side control at
+        # KA15's decision closes (0.10 of the pot: about KA15's 2 a day; XC15 blocked until engine lane E3)
+        KA15: { style: scalp, max_loss: 6.5 }
+        XC15: { style: scalp, max_loss: 6.5, control_share: 0.10 }
   vantage-demo:
     broker: vantage
     mode: demo
@@ -232,11 +280,16 @@ accounts:
     # £48 : £40 ratio); with the probes' 0.075 the day's 0.975. Per trade intraday £17 (5 open), swing £40 (1 open);
     # VI0 30% of intraday, VW0 33% of swing (controls, never allocated by results). 17 open at most: one of the 18 host
     # slots is kept for the scheduled probe. Rollback: exploration.enabled false + restart (with probe_only, enabled).
+    # Arms expansion wave 1 (as icm-demo above, same override and owner directives 1 and 5 of 2026-10-26): intraday
+    # max_open 5 -> 9 (the £98 pot binds first); £17 (15m) / £30 (1h) per trade; VC1H a fixed 0.25 share. VX* arms
+    # are Vantage's own hypotheses, not twins. No other limit changes. Rollback as icm-demo.
+    # Arms expansion wave 2 (as icm-demo above, decision 3 of arms-expansion-2026-10-26.md section 11): swing max_open
+    # 1 -> 2, the £82 pot and £40 cap unchanged; KSQ1 and PDC1 (1h, £30) and DON4 (4h swing). Rollback as icm-demo.
     exploration:
       enabled: true
       budget_share: 0.9
       max_open_total: 17
-      pots: { intraday: { gbp: 98, max_open: 5 }, swing: { gbp: 82, max_open: 1 } }
+      pots: { intraday: { gbp: 98, max_open: 9 }, swing: { gbp: 82, max_open: 2 } }
       arms:
         VI0: { style: intraday, max_loss: 17.0, control_share: 0.30 }
         VI2A: { style: intraday, max_loss: 17.0 }
@@ -245,10 +298,24 @@ accounts:
         VMB30: { style: intraday, max_loss: 17.0 }
         VMB1H: { style: intraday, max_loss: 17.0 }
         VMS15: { style: intraday, max_loss: 17.0 }
+        # wave 1 (arms expansion 2026-10-26): specialist arms; VXTV2 is blocked in the spec (dropped, logged)
+        VXRIP1H: { style: intraday, max_loss: 30.0 }
+        VXRT1H: { style: intraday, max_loss: 30.0 }
+        VXFK1H: { style: intraday, max_loss: 30.0 }
+        VXTL1H: { style: intraday, max_loss: 30.0 }
+        VXTV2: { style: intraday, max_loss: 17.0 }
+        VXBO1H: { style: intraday, max_loss: 30.0 }
+        VXBO15: { style: intraday, max_loss: 17.0 }
+        VXTR1H: { style: intraday, max_loss: 30.0 }
+        VC1H: { style: intraday, max_loss: 30.0, control_share: 0.25 }
+        # wave 2 (arms-2026-10-25.md 8.2, 8.6): squeeze release and PDC break, 1h
+        KSQ1: { style: intraday, max_loss: 30.0 }
+        PDC1: { style: intraday, max_loss: 30.0 }
         VW0: { style: swing, max_loss: 40.0, control_share: 0.33 }
         VW1A: { style: swing, max_loss: 40.0 }
         VW1B: { style: swing, max_loss: 40.0 }
         VW2: { style: swing, max_loss: 40.0 }
+        DON4: { style: swing, max_loss: 40.0 }   # wave 2 (8.3): Donchian-55 break-close 4h
   icm-live:
     broker: icm
     mode: live

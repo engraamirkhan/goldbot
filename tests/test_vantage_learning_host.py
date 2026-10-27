@@ -30,6 +30,12 @@ TWINS = {"VI0": "I0", "VI2A": "I2A", "VI2B": "I2B", "VMB15": "MB15", "VMB30": "M
          "VMS15": "MSA15", "VW0": "W0", "VW1A": "W1A", "VW1B": "W1B", "VW2": "W2"}
 V_INTRADAY = {"VI0", "VI2A", "VI2B", "VMB15", "VMB30", "VMB1H", "VMS15"}
 V_SWING = {"VW0", "VW1A", "VW1B", "VW2"}
+# arms expansion wave 1 (2026-10-26): Vantage's own specialist arms and 1h control, per-trade cap by timeframe;
+# VXTV2 is blocked in the spec, so the engine drops it (logged)
+V_WAVE1 = {"VXRIP1H": 30.0, "VXRT1H": 30.0, "VXFK1H": 30.0, "VXTL1H": 30.0, "VXTV2": 17.0, "VXBO1H": 30.0,
+           "VXBO15": 17.0, "VXTR1H": 30.0, "VC1H": 30.0}
+# arms expansion wave 2 (arms-2026-10-25.md section 8): Vantage's own hypotheses, per-trade cap by timeframe
+V_WAVE2 = {"KSQ1": 30.0, "PDC1": 30.0, "DON4": 40.0}
 
 
 @pytest.fixture(scope="module")
@@ -60,12 +66,14 @@ def test_vantage_demo_measures_its_own_costs_with_scheduled_probes_on_a_15_pound
 
 def test_vantage_demo_exploration_pots_are_98_intraday_and_82_swing_of_180(vantage):
     ex = vantage.exploration
-    assert ex.enabled and set(ex.arms) == V_INTRADAY | V_SWING
+    assert ex.enabled and set(ex.arms) == V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2)
     assert ex.budget_share * 200 == pytest.approx(180, abs=0.01) and ex.max_open_total == 17
-    assert {k: (p.gbp, p.max_open) for k, p in ex.pots.items()} == {"intraday": (98, 5), "swing": (82, 1)}
-    assert {a.max_loss for a in ex.arms.values() if a.style == "intraday"} == {17.0}
+    # swing max_open 1 -> 2: wave 2 (arms-expansion-2026-10-26.md section 11, decision 3); the £82 is unchanged
+    assert {k: (p.gbp, p.max_open) for k, p in ex.pots.items()} == {"intraday": (98, 9), "swing": (82, 2)}
+    assert {ex.arms[a].max_loss for a in V_INTRADAY} == {17.0}
+    assert {a: ex.arms[a].max_loss for a in {**V_WAVE1, **V_WAVE2}} == {**V_WAVE1, **V_WAVE2}
     assert {a.max_loss for a in ex.arms.values() if a.style == "swing"} == {40.0}
-    assert {k for k, a in ex.arms.items() if a.control_share} == {"VI0", "VW0"}
+    assert {k for k, a in ex.arms.items() if a.control_share} == {"VI0", "VW0", "VC1H"}
     assert ex.budget_share + vantage.cost_probe.budget_share <= 1           # one day's allowance
 
 
@@ -114,11 +122,13 @@ def test_a_twin_whose_body_differs_from_its_arm_or_names_no_arm_is_refused(tmp_p
 
 
 # ------------------------------------------------------------------------------------------------ engine and gate
-def test_vantage_engine_config_builds_its_eleven_arms_from_the_spec(vantage):
+def test_vantage_engine_config_builds_its_runnable_arms_from_the_spec_and_drops_the_blocked_one(vantage):
     cfg = exploration.config_for(vantage)
-    assert cfg is not None and cfg.dropped == ()
-    assert {a.arm_id for a in cfg.arms} == V_INTRADAY | V_SWING and len(cfg.arms) == 11
+    assert cfg is not None and cfg.dropped == ()      # VXTV2 runs since lane E2 carries the smc replica state
+    assert {a.arm_id for a in cfg.arms} == (V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2))
+    assert len(cfg.arms) == 23
     by = {a.arm_id: a for a in cfg.arms}
+    assert by["DON4"].style == "swing" and by["KSQ1"].style == by["PDC1"].style == "intraday"
     assert by["VI0"].control_share == 0.30 and by["VW0"].control_share == 0.33
     assert by["VW1B"].tf == "1d" and by["VMB1H"].style == "intraday" and by["VW2"].style == "swing"
 
@@ -126,7 +136,8 @@ def test_vantage_engine_config_builds_its_eleven_arms_from_the_spec(vantage):
 def test_vantage_riskgate_limits_carry_its_host_cap_probe_only_fence_and_arm_caps(vantage):
     limits = engine_limits(load_settings(), vantage)
     assert limits.max_positions == 18 and limits.probe_only and limits.daily_loss_limit_abs == 200
-    assert limits.exploration_arms == {a: (17.0 if a in V_INTRADAY else 40.0) for a in V_INTRADAY | V_SWING}
+    assert limits.exploration_arms == {**{a: (17.0 if a in V_INTRADAY else 40.0) for a in V_INTRADAY | V_SWING},
+                                       **V_WAVE1, **V_WAVE2}
 
 
 class _Recorder(_Terminal):

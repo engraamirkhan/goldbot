@@ -5,9 +5,92 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- PDC4 (pdc_break 4h) and DOND (donchian_break 1d) can enter (ARM-SPEC arms-2026-10-25.md 8.15, written 2026-10-26 before any outcome or fill). Before this, every entry was refused because the frozen hold (128 h / 10 days) always reached the Friday cut. Now the time exit is the earlier of the frozen hold and the week's last close at least 15 min before the server's Saturday 00:00. The arms follow the cut as WFRI does: losers close at the cut, winners hold under the tightened stop. There is no entry after the cut. The Friday cut itself is unchanged. The code is `goldbot/research/arm_rules_weekcut.py`; history replays the cut through `run_arm_backtest.cut_labels`. Live, `exploration.exits` closes every rule that follows the cut on the host clock at signal close + hold, which also closes a WFRI winner at 16:30 New York if a bar is missing. Rows re-frozen: PDC4 `a419ba0dd0eaa4e8`, DOND `5e98462c8fc599fa`. DOND is now `status: run` but still registered on no account (it waits for H4). PDC1 and DON4 are unchanged. Trading-safety review owed.
 - Exploration arm windows on city clocks (time-structure/sessions.md A-4 audit). New arm param `window_local: {"from": [zone, "HH:MM"], "to": [zone, "HH:MM"]}` (`research.arms.local_window`, checked at load; one of `window_utc`/`window_local` per arm), applied by `arm_rules.arm_window` in `random_bracket` and `post_filter` (history and live share it) through the new `SessionWindow.covers` (per-date conversion, so London and New York each follow their own DST switch, gap weeks included). No frozen arm changed: S0, S0R, S4, S5A, S5B, I0, W0, VI0, VW0 keep their hash-locked `window_utc` (07-20 UTC etc.), which slides an hour against London in winter; the common filters (20:45-22:15 UTC, Friday 19:00 UTC) and S1/S2's 20:00 UTC cuts are UTC by the spec. Moving the session arms to local clocks needs a research-director amendment under new arm ids; the param is ready for it. S1 fix: the "no signal after 20:00 UTC" cut read the close's minute of day, so on GMT the 23:55 bar (still in the London day) closing at 00:00 passed it; now judged on the bar's start (quant + trading-safety review). S1/S2 London 08:00 and New York 08:30 anchors verified across the March and October gap weeks (tests/test_arm_local_windows.py).
 - After deploying the S1 cut fix, on the brain: `scripts/exclude_spec_bug_midnight.py` (dry run; `--apply` records). It voids as evidence (n, posterior, cost cells, graduation; P&L and the broker ledger keep them) every S1A/S1B candidate or trade decided on a 00:00 UTC close since 2026-10-25 01:00 UTC, reason `spec-bug-midnight` (`evidence_exclusions.midnight_spec_bug`). Spec note in arms-2026-10-25.md 1.1; follow-up BACKLOG 105 (rule-code version per arm row: `arm_hash` covers params only).
+- Arm rules `pdc_break` (PDC1/PDC4) and `ob_retest` (OBR15) (2026-10-26, wave 2 lane W2b; ARM-SPEC
+  `arms-2026-10-25.md` 8.5, 8.6, 8.13) in goldbot/research/arm_rules_levels.py, registered in `arm_rules.RULE_FUNCS` and
+  `arms.RULES`; no config rows. PDC skips the reopen bar (8.13) and trades only a break-close against the reopen bar's
+  side; OBR uses pivots confirmed by the close of b-1. Both apply 8.0's 16:55-17:00 / 18:00-18:30 New York no-entry.
+  **PDC is NO-GO**: the frozen rule counts 727 (4h) / 689 (1h) events on 2010-2017 against slice G's 600 / 592; the gap
+  is key_levels_discovery.py's unregistered 0.05 ATR reference-distance skip (with it 600 / 611). A dated amendment is
+  owed before PDC1/PDC4 deploy (strict-xfail test `test_pdc_history_count_reproduces_slice_g_within_ten_percent`).
+  G1A/G1C (`level_break`) not built: the engine's 200-bar window cannot supply previous-week/month levels at 1h.
+- Arm rule `specialist` (2026-10-26, arms expansion wave 1, lane L1; docs/research/arms-expansion-2026-10-26.md
+  section 3). An exploration arm can now run any registered specialist family: `rule: specialist`, the decision
+  `timeframe`, and `params.specialist` (family name), optional `params.preset` and `params.config` (config wins over
+  the preset), plus the common window and stop-band params. goldbot/research/arm_rules_specialist.py calls the family's
+  own `candidates_in_context` on research's context (`context_tfs`) and takes the stop (`label_spec.stop_atr` x its
+  `barrier_atr`, else ATR(14)), the target and the time exit from its `label_spec`, a candidate's own `target_atr` /
+  `max_bars` kept. Barrier form only: `exit_spec` (partial/trail) is not run at 0.01 lot, a next-open family fills at
+  the close, and `complete_windows` (asia_drift) is not applied. An unknown family, `tv_event` / `requires_tv`, a
+  delayed signal, an unknown preset or a refused timeframe/config fails at arm load and at run.
+  `RuleContext.spec_ctx` carries point-in-time tables (e.g. the smc replica state) for families that need them; the
+  engine does not pass it yet. Tests: tests/test_arm_rules_specialist.py (parity with `candidates_in_context` and
+  with `research.pipeline.prepare`'s stop and target for box_break and trend, prefix invariance, refusals, hash).
+- Arms expansion wave 1 config (arms-expansion-2026-10-26.md sections 3-5, lane L6): 19 new hash-frozen arm ids in
+  `config/exploration_arms.yaml` (`rule: specialist`, stop band $3 to the £ cap at 0.01 lot): icm-demo XBB15, XTV1,
+  XEQ15, XSO15, XIMNY, XIMLN, XAD1H, XMR15, XMR1H + control C1H; vantage-demo VXRIP1H, VXRT1H, VXFK1H, VXTL1H, VXTV2,
+  VXBO1H, VXBO15, VXTR1H + control VC1H. XTV1/VXTV2 (smc) are `blocked` until the ReplicaShadow/spec_ctx path runs on
+  the engine's bars (SRE profile 2026-10-26). `config/accounts.yaml`: registered at £17 (15m) / £30 (1h), controls a
+  fixed 0.25 share, intraday pot `max_open` 5 -> 9 on both hosts; no other limit changed. The 2026Q4 trial override
+  (74 -> 93, `config/settings.yaml`) is NOT in this commit: a PD-owned trial-budget edit, applied by the PD before deploy.
+- Wave-2 channel arm rules (2026-10-26, lane W2c; ARM-SPEC docs/research/arms-2026-10-25.md section 8 and 8.13):
+  goldbot/research/arm_rules_channels.py adds `squeeze_release` (KSQ1 1h / KSQ4 4h), `donchian_break` (DON4 4h /
+  DOND 1d), `low30_touch` (C30A, 15m on trading-day context) and `low30_control` (C30C, whole trading day,
+  hash_u < 0.00065, C30A's bracket and calendar). The 8.0 filters (no entry 16:55-17:00 / 18:00-18:30 New York, listed
+  CME holidays) are applied in the rule. "No target" is NO_TARGET_R = 20 R. An arm is refused at load on a foreign
+  timeframe or a `params.hold_bars` other than the frozen hold. 2010-2017 counts: KSQ1 533 (slice 566), KSQ4 94 (94),
+  DON4 512 (512), DOND 96 (77; 13:30 NY settlement days, declared), C30 155 (slice 310 raw / 118 non-overlapping).
+  Open for the engine lane: C30A/C30C need about 31+ trading days of 15m bars and DOND 56+ daily bars, more than
+  `exploration.LOOKBACK` / the 1m memory give, so they emit nothing live (fail closed) until the engine feeds more
+  history; the 460-bar C30 hold and the 10-day DOND hold always meet `crosses_friday` (weekend_hold). No config rows
+  were added (arms are registered by their own lane). Tests: tests/test_arm_rules_channels.py.
+- Arms wave 2 config (lane E4; arms-2026-10-25.md 8, 8.13, 8.14; arms-expansion section 11): 25 new arm ids in
+  `config/exploration_arms.yaml` (F2A/F2C, PDC1/PDC4, OBR15, KSQ1/KSQ4, DON4/DOND, C30A/C30C, KA15/XC15, BXR/BXT/BXF
+  x 15m/30m/1h/4h); F1A/F1C re-frozen as `hurst_band_break(_control)`, WFRI as `friday_long`/30m (new hashes, no fill or
+  history run existed); G1A/G1C keep `level_break` and their hashes. Placeholders `band_hurst_switch`/`weekday_hold`
+  left `arms.RULES`. New `Arm.forward_only` (not hashed): `runnable_ids` skips it, so time-structure, KA15/XC15 and
+  H-80 arms never enter the H-60 matrix. Blocked until their engine lane merges: E1 F1A/F1C/F2A/F2C/WFRI; E2
+  G1A/G1C/C30A/C30C/DOND; E3 XC15 and all BX rows. Running now: PDC1, PDC4, OBR15, KSQ1, KSQ4 (no host), DON4, KA15.
+  Swing pot max_open 1 -> 2 on icm-demo and vantage-demo; no £ or cap moved. BXR registered on icm-demo (prereg named
+  icm-probe, whose £6.50 scalp pot cannot hold a 1.5 ATR 15m+ stop); BXT/BXF and KSQ4/DOND registered nowhere.
+  Open for review: PDC4 (32 x 4h) and C30A (460 x 15m) holds always reach the Friday cut, so `crosses_friday` refuses
+  them until E2's weekend work; whether wave-2 8.x arms get an H-60 history run is the quant's call.
 - Daily learning-ops review (research-director spec 2026-10-26, loop lane L2 made daily): scheduler job `daily_review` at 06:15 UTC (after the nightly learner, before the 06:45 owner report), `goldbot/research/daily_review.py`. Per broker, host and session: costs in $/oz (spread, entry and exit slippage, stop overshoot also as a multiple of the $0.70 scenario, commission, paid swap), fill rate, refusal/skip/stale reasons from the journal and `exploration_obs`, candidates and fills per broker and style against the plan (`daily_review.volume_plan` per broker, `probe_plan` for the cost probes; ICM 290 a day), arm health against the H-61 stops as `breached`/`ok` only, integrity (1m gaps and duplicates, clock faults, engine incidents, failing health) -> `state/aux/daily_review/<day>.json`, a private `artifacts` row in program.db when it exists, and two blinded lines in the morning report. Actions: a strategy arm at its stop is retired for good (controls, the spec's random brackets, never are) (aux migration 18 `exploration_arm_status`; the engine reads it once a minute, sends no exploration entry until its first read after a start succeeds, sends no new candidate of a retired arm and keeps every exit of its open positions), a (broker, session) slippage cell is refit after 200 fills (`exploration_cost_cells`, floored at $0.15, never lowered within a day; the label replay charges it only when dearer), a `learning-ops` issue on an incident or two low-volume trading days and one comment a day on #34 with the keyring's github-token (else `outbox/`). Monday's run adds `weekly-<sunday>.json` with up to 4 variant proposals for the research director (never run; each costs one registry trial, none when the quarter's budget is spent). A rerun of a day reports its retirements and refits from the tables and keeps what was posted; a posted text leaves `outbox/`, and texts waiting there 2+ days get a line in the morning report. The record refuses any per-arm R/rank/sign/share key; texts are checked before writing or posting. CLI `python -m goldbot.ops.run daily-review --date D --dry-run`. ADR 0045 and the prereg note come from the research-director lane.
+- Engine lane E1 (2026-10-26): live == history for the new arms through the engine's own pass (`exploration.step`).
+  F1A/F1C/F2A/F2C on the engine's 1m memory queue exactly history's candidates (tests/test_exploration_live_parity.py).
+  The 1m memory (`EngineConfig.max_bars_in_memory`) is 90 000 (was 60 000; ~62 trading days) so fakey L0's 4h box
+  set (~80 000 minutes) reproduces history; `LOOKBACK_MAX_1M` follows it (a test holds them equal). WFRI declares a
+  1,600-bar lookback (its ATR14(4h) stop was ~15% off history on the default 200 bars). The pass resamples once per
+  timeframe (`_shared_bars`, exact per lookback, tested). Measured at the worst close (00:00 UTC, every timeframe),
+  real 2025 bars, F1/F2/WFRI added to every host: icm-demo 25 arms 1.69 s on the Mac (x3 = 5.1 s on the brain,
+  budget 10 s), vantage-demo 1.44 s, icm-probe 0.15 s; before the change 1.68 / 1.34 / 0.15 s at the same load. RAM:
+  the 1m frame 7.4 -> 11.1 MB, a close's transient peak 25 -> 32 MB per engine.
+  WFRI: `crosses_friday` lets an entry hold across the Friday cut only for a rule that declares the cut its exit
+  (`arm_rules_clock_box.FOLLOWS_FRIDAY_CUT` = friday_long), never into the weekend (refused at the server's Saturday
+  or after the cut); the cut itself (`Engine._weekend_rule`) is unchanged and closes a losing WFRI. For such a rule the
+  cut's loser close and its tightened stop are the arm's own exit, not a censoring (`_censored`).
+  Stop-band skips: `arm_rules.screened` returns the candidates the band dropped; the engine journals
+  `exploration_skipped:stop_lt_floor|stop_gt_cap` with the arm's propensity and records each blocked (mu 0) through
+  `record_candidate`. For trading-safety review (order path: `crosses_friday`) and quant review (censoring, lookbacks).
+- Engine lane E2 (2026-10-26): exploration arms that need more than the engine's ~40-day 1m window now read it live
+  as history does (`goldbot/engine/exploration_context.py`). C30A/C30C (20,000 15m bars), DOND (300 1d bars) and
+  G1A/G1C (2,500 1h bars) get the store's release bars of their own timeframe before the window (read once, point in
+  time, the store must reach into the window). smc tvr1/tvr2 (XTV1, VXTV2) resume a replica state from their own
+  aux.db feed `xauusd-s2010-15m-*`, bootstrapped in the background from the 2010 series start (B4a). No store, a
+  store ending before the window, a store that does not start 2010, or a bootstrap running: the arm is journalled
+  `exploration_held_back` (once per reason) and sends nothing. New rule `level_break` (H-71 G-1, G1A and its control
+  G1C) in `goldbot/research/arm_rules_levels.py`: previous day/session/week/month and round-number levels set at the
+  trading day's start, slice G's first-touch break-close, one a day; declared choices for the quant review: the
+  nearest-to-close level when one bar breaks several, the prereg's "every week/month" level set (slice G used period
+  levels only in a period's first five days), session levels carried from D-1.
+  Weekend: unchanged. ADR 0043 X3 with quant Q2 refuses every style whose hold reaches the Friday cut, as for W1A/W1B,
+  so DOND (10 x 1d), W1B (11 x 1d) and PDC4 (32 x 4h = 128 h) can never enter and C30A/C30C only from the Sunday
+  reopen. Lifting that needs an arm amendment that runs the Friday cut in history (as WFRI, ARM-SPEC 8.14 (2)),
+  routed to quant + trading-safety. Ops: XTV1/VXTV2 need the 2010-2015 release 15m bars on the exploration host's
+  store, or they stay held back. Config rows (status blocked) are for the config lane.
+- Engine lane E3 (exit path, trading-safety review owed): BXR's runner stop now trails live at each of its bar closes (`exploration.trail` from `Engine.on_bar_close`) by `arm_rules_clock_box.runner_stop_at`, the history walk on the same 1m bars, through the exit policies' own stop move (`Engine._tighten_stop`, refactored out of `_manage_policies`): only ever tighter, recomputed from the persisted stop + stored bars after a restart. BXT/BXF are virtual twins on each BXR fill (aux migration 20 `exploration_twins`, never orders, never in the exploration ledger or budget). XC15 waits behind an open KA15 on a netting host and enters at the next 15m close, recorded `shifted` (excluded from pairing); the engine only starts on hedging terminals, so today this never fires. `run_arm_backtest.py` exits BXR on `walk_runner`, scores its twins on the same entries, and charges KA15 stratum T its measured spread on both legs above the $0.12 p90 inside the round trip; it reports the family without T. No BXR/BXT/BXF/KA15/XC15 rows are registered in config yet.
 - Evidence exclusions (prereg Amendment 4, quant ruling 2026-10-26, blind). Two append-only aux.db tables (migration 19): `evidence_reloads` holds C (corrected bars visible) and R (the account's first engine warm start at or after C, never before) per account and span; `evidence_exclusions` lists the void order ids. Criterion v1: an exploration candidate or trade is void when decided at or after the span's start and before R, or when labelled before C from a label path overlapping the span. There is no lookback term: indicators are recomputed from the stored bars at every decision. A scheduled cost probe entered inside a span is void for the cost cells only. Readers that leave void rows out: the nightly posterior, the H-62 models and their retrain counts; the n toward the 300 read; the cost table's probe fills; the daily review's refit cells. Readers that keep them: the H-61 stops, P&L and broker reconciliation. The daily review prints a void-count line. Nothing is voided until R is recorded. Meanwhile the nightly learner, the arms' n (labs) and the cost table hold the span's decisions out in memory, together with any label path crossing it, and its probes; the daily review raises an ALERT line. The learner skips the night if it cannot screen the evidence. On the brain after deploy: `scripts/evidence_exclusions.py --corrected 2026-10-26T15:07:59Z --reloaded icm-demo=2026-10-26T15:09:35Z --reloaded icm-probe=2026-10-26T15:09:35Z` (dry run), then the same with `--apply`.
 - Exploration: an arm with no realised loss and no open risk today may always take its first trade (up to its per-trade cap); after that its share of the pot governs. Live 2026-10-26: share x pot was below one trade loss for most arms (W1A 0.20 x £40 = £8 vs ~£29 at the stop; intraday ~£5.6 vs up to £17; scalp ~£3.9 vs up to £6.50), so they were refused `arm_budget` on every bar. The pot, the host budget (£138), the daily £220, max open and the RiskGate still bind.
 - Exploration evidence: the broker key (`exploration_data.BROKER_KEY`, the models/h62/<broker>/ path segment) is matched in full (`fullmatch`). `re.match` with `$` accepted a trailing newline (`"icm\n"`). The H-60 priors were already chosen by exact membership (`PRIOR_BROKERS`), so no other broker could read ICM evidence through this.

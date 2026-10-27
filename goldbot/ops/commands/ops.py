@@ -53,6 +53,13 @@ def _fill_count(cmd: str, args: list[str]) -> None:
     sys.exit(fill_count_main(args))
 
 
+@register_command("broker-history-depth", pos=208)
+def _broker_history_depth(cmd: str, args: list[str]) -> None:
+    """Earliest bar the broker's MT5 server serves per timeframe, read-only (get_bars only; quiet window)."""
+    from goldbot.ops.broker_depth import main as depth_main
+    sys.exit(depth_main(args))
+
+
 @register_command("monthly-report", pos=220)
 def _monthly_report(cmd: str, args: list[str]) -> None:
     from goldbot.ops.monthly_report import main as monthly_main

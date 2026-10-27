@@ -84,3 +84,33 @@ def test_the_io_site_finder_sees_every_spelling_it_polices():
            "    def b(self):\n        return json.loads(p.read_text())\n"
            "def c():\n    json.dumps({})\n")
     assert _io_sites(src) == Counter({("E.a", "write_atomic"): 2, ("E.b", "json.loads"): 1, ("E.b", "read_text"): 1})
+
+
+def test_a_bxr_with_no_positive_finite_r_keeps_its_stop():
+    """Trading-safety LOW (2026-10-26): R = 0, NaN or inf would arm the runner at once and close at market."""
+    from types import SimpleNamespace
+
+    from goldbot.engine import exploration as ex_mod
+    cid = f"{ex_mod.COMMENT}-1761500000-1"
+    for bad in (0.0, float("nan"), float("inf"), -1.0):
+        eng = SimpleNamespace(_orders={cid: SimpleNamespace(atr_usd=bad)})
+        tr = SimpleNamespace(client_order_id=cid, open_price=4000.0)
+        assert ex_mod._runner_terms(eng, SimpleNamespace(), tr) is None  # type: ignore[arg-type]
+    eng = SimpleNamespace(_orders={cid: SimpleNamespace(atr_usd=6.0)})
+    tr = SimpleNamespace(client_order_id=cid, open_price=4000.0)
+    assert ex_mod._runner_terms(eng, SimpleNamespace(), tr)[1:] == (4000.0, 6.0)  # type: ignore[arg-type,index]
+
+
+def test_a_rule_under_the_friday_cut_is_never_held_into_the_weekend_even_without_its_order_row():
+    """Trading-safety LOW (2026-10-26): a cut rule's backstop is Friday 16:45 New York of its week (DST-aware)."""
+    import pandas as pd
+
+    from goldbot.engine import exploration as ex_mod
+    tue = pd.Timestamp("2026-10-27 10:00", tz="UTC")                  # US still on EDT: 16:45 NY = 20:45 UTC
+    assert ex_mod.weekend_backstop(tue) == pd.Timestamp("2026-10-30 20:45", tz="UTC")
+    after_close = pd.Timestamp("2026-10-30 21:30", tz="UTC")          # past Friday's 17:00 NY: the next week
+    assert ex_mod.weekend_backstop(after_close) == pd.Timestamp("2026-11-06 21:45", tz="UTC")   # EST after 11-01
+    sun_reopen = pd.Timestamp("2026-11-01 23:00", tz="UTC")
+    assert ex_mod.weekend_backstop(sun_reopen) == pd.Timestamp("2026-11-06 21:45", tz="UTC")
+    fri_noon = pd.Timestamp("2026-11-06 17:00", tz="UTC")
+    assert ex_mod.weekend_backstop(fri_noon) == pd.Timestamp("2026-11-06 21:45", tz="UTC")

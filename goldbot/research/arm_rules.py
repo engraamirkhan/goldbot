@@ -17,7 +17,7 @@ import pandas as pd
 from goldbot.data.resample import mid
 from goldbot.data.timeutil import epoch_ns, utc_index
 from goldbot.features.technical import atr
-from goldbot.research.arms import Arm, local_window
+from goldbot.research.arms import CLOCK_BOX_RULES, Arm, local_window
 
 SEED_PREFIX = "goldbot-arms-2026-10-25"
 GBP_PER_USD = 0.752
@@ -31,6 +31,9 @@ class RuleContext:
     b1: pd.DataFrame              # the 1m bars, store schema
     blackout_lo: np.ndarray       # tier-1 blackout windows [lo, hi), epoch ns
     blackout_hi: np.ndarray
+    # point-in-time tables a `specialist` arm's family reads, as research.pipeline.prepare's `ctx` (e.g. the engine's
+    # carried smc replica state, ctx["smc_replica_state"]); None: none (research builds from the series start)
+    spec_ctx: dict[str, Any] | None = None
 
     @property
     def mid(self) -> pd.DataFrame:
@@ -153,19 +156,40 @@ def _frame(idx: np.ndarray, side: np.ndarray, risk: np.ndarray, target_r: Any, h
     return out[np.isfinite(out["risk_usd"]) & (out["risk_usd"] > 0) & np.isfinite(out["target_r"])].reset_index(drop=True)
 
 
-def post_filter(arm: Arm, ctx: RuleContext, cands: pd.DataFrame) -> pd.DataFrame:
-    """The arm's decision window, the common filters and its stop band / cap (candidates beyond them are skipped, logged
-    in the runner as stop_lt_floor / stop_gt_cap)."""
-    if cands.empty:
-        return cands
+STOP_LT_FLOOR, STOP_GT_CAP = "stop_lt_floor", "stop_gt_cap"     # a candidate's stop below / above the arm's band
+
+
+def _screen(arm: Arm, ctx: RuleContext, cands: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Per candidate: inside the arm's decision window and the common filters, and the stop band's verdict (None
+    inside it, else STOP_LT_FLOOR / STOP_GT_CAP)."""
     p = arm.params
     close = ctx.close_ts[cands["idx"].to_numpy()]
     ok = arm_window(close, p) & common_filter_ok(close, ctx.blackout_lo, ctx.blackout_hi)
-    if "min_stop_usd" in p:
-        ok &= cands["risk_usd"].to_numpy() >= float(p["min_stop_usd"]) - 1e-9
+    risk = cands["risk_usd"].to_numpy(dtype=float)
+    band = np.full(len(cands), None, dtype=object)
     if "max_stop_usd" in p:
-        ok &= cands["risk_usd"].to_numpy() <= float(p["max_stop_usd"]) + 1e-9
-    return cands[ok].reset_index(drop=True)
+        band[risk > float(p["max_stop_usd"]) + 1e-9] = STOP_GT_CAP
+    if "min_stop_usd" in p:
+        band[risk < float(p["min_stop_usd"]) - 1e-9] = STOP_LT_FLOOR
+    return ok, band
+
+
+def post_filter(arm: Arm, ctx: RuleContext, cands: pd.DataFrame) -> pd.DataFrame:
+    """The arm's decision window, the common filters and its stop band / cap. A candidate the window and filters keep
+    but the band drops is a skipped candidate (`screened`): the engine logs it with its propensity (arms expansion
+    2026-10-26, section 4: "A candidate outside its £ cap or stop band is skipped and logged with its propensity")."""
+    return screened_frame(arm, ctx, cands)[0]
+
+
+def screened_frame(arm: Arm, ctx: RuleContext, cands: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """`cands` split into (kept, skipped by the stop band); the skipped frame carries a `reason` column
+    (STOP_LT_FLOOR / STOP_GT_CAP). Candidates outside the window or the common filters are in neither."""
+    if cands.empty:
+        return cands, cands.assign(reason=pd.Series(dtype=object))
+    ok, band = _screen(arm, ctx, cands)
+    inside = np.array([b is None for b in band], dtype=bool)
+    skipped = cands[ok & ~inside].assign(reason=band[ok & ~inside]).reset_index(drop=True)
+    return cands[ok & inside].reset_index(drop=True), skipped
 
 
 # ---------------------------------------------------------------- S1 session-VWAP fade
@@ -358,16 +382,89 @@ def tsmom_rule(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     return out
 
 
+# ---------------------------------------------------------------- wave 1 (arms expansion 2026-10-26): any specialist
+def specialist(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
+    """Arms expansion 2026-10-26, section 3: the named specialist's own candidates and barrier form
+    (`goldbot.research.arm_rules_specialist`)."""
+    from goldbot.research.arm_rules_specialist import specialist_rule
+    return specialist_rule(arm, ctx)
+
+
+# ---------------------------------------------------------------- wave 2 (ARM-SPEC section 8): level rules
+def pdc_break(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
+    """ARM-SPEC 8.6 / 8.13: PDC1 / PDC4 (`goldbot.research.arm_rules_levels`)."""
+    from goldbot.research.arm_rules_levels import pdc_break as rule
+    return rule(arm, ctx)
+
+
+def ob_retest(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
+    """ARM-SPEC 8.5 / 8.13: OBR15 (`goldbot.research.arm_rules_levels`)."""
+    from goldbot.research.arm_rules_levels import ob_retest as rule
+    return rule(arm, ctx)
+
+
+def channel(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
+    """ARM-SPEC section 8 (wave 2): KSQ, DON, C30 and C30C (`goldbot.research.arm_rules_channels`)."""
+    from goldbot.research.arm_rules_channels import RULES
+    return RULES[arm.rule](arm, ctx)
+
+
+def clock_box(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
+    """Wave 2 lane W2d: WFRI, KA15/XC15 and the H-80 box family (`goldbot.research.arm_rules_clock_box`)."""
+    from goldbot.research.arm_rules_clock_box import RULE_FUNCS as CLOCK_BOX
+    return CLOCK_BOX[arm.rule](arm, ctx)
+
+
+def band_rule(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
+    """Time-structure band breaks F1A/F1C/F2A/F2C (`goldbot.research.arm_rules_bands`)."""
+    from goldbot.research.arm_rules_bands import RULES as BANDS
+    return BANDS[arm.rule](arm, ctx)
+
+
+
+
 RULE_FUNCS: dict[str, Callable[[Arm, RuleContext], pd.DataFrame]] = {
     "random_bracket": random_bracket, "session_vwap_fade": session_vwap_fade,
     "opening_range_break": opening_range_break, "sweep_absorb": sweep_absorb_rule,
     "box_break_close": box_break_close_rule, "ema_pullback": ema_pullback, "tsmom": tsmom_rule,
+    "specialist": specialist, "pdc_break": pdc_break, "ob_retest": ob_retest,
+    "level_break": lambda arm, ctx: __import__("goldbot.research.arm_rules_levels", fromlist=["x"]).level_break(arm, ctx),
+    **dict.fromkeys(("squeeze_release", "donchian_break", "low30_touch", "low30_control"), channel),
+    **dict.fromkeys(CLOCK_BOX_RULES, clock_box),
+    **dict.fromkeys(("hurst_band_break", "hurst_band_break_control", "htf_stretch_break", "htf_stretch_break_control"),
+                    band_rule),
 }
 
 
 def candidates(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     """The arm's candidates after its window, the common filters and its stop band."""
+    return screened(arm, ctx)[0]
+
+
+def screened(arm: Arm, ctx: RuleContext) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The arm's rule run once: (its candidates, the ones its stop band skipped with their `reason`)."""
     if arm.status != "run":
         raise ValueError(f"{arm.id} is blocked: {arm.note}")
-    raw = RULE_FUNCS[arm.rule](arm, ctx)
-    return post_filter(arm, ctx, raw)
+    return screened_frame(arm, ctx, RULE_FUNCS[arm.rule](arm, ctx))
+
+
+def lookback_bars(arm: Arm, default: int) -> int:
+    """Bars of the arm's timeframe its rule needs live for its candidates to equal the history run's (bounded by the
+    engine's `exploration.lookback`): a `specialist` family's warm-up (`arm_rules_specialist.WARMUP_MIN`), a band
+    rule's or a clock rule's LOOKBACK_BARS, else `default`."""
+    if arm.rule == "specialist":
+        from goldbot.research.arm_rules_specialist import warmup_bars
+        return max(default, warmup_bars(arm))
+    from goldbot.research.arm_rules_bands import LOOKBACK_BARS as BANDS
+    from goldbot.research.arm_rules_clock_box import LOOKBACK_BARS as CLOCK
+    return max(default, BANDS.get(arm.rule, 0), CLOCK.get(arm.rule, 0))
+
+
+def follows_friday_cut(arm: Arm) -> bool:
+    """Whether the arm's rule declares the engine's Friday weekend cut part of its exit (`arm_rules_clock_box.
+    FOLLOWS_FRIDAY_CUT`, WFRI: prereg-2026-10-26-time-structure.md section 4, amendment 1; `arm_rules_weekcut.
+    CUT_CAPPED`, PDC4 and DOND: arms-2026-10-25.md 8.15). Such an entry may hold across the cut (the engine closes it
+    there if losing and tightens its stop if winning), never into the weekend."""
+    from goldbot.research.arm_rules_clock_box import FOLLOWS_FRIDAY_CUT
+    from goldbot.research.arm_rules_weekcut import CUT_CAPPED
+    return arm.rule in FOLLOWS_FRIDAY_CUT or (arm.rule, arm.timeframe) in CUT_CAPPED

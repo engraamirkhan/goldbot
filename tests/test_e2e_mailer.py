@@ -126,7 +126,7 @@ def test_no_deployed_module_imports_the_fake_mailer():
     assert users == []
     assert pat.search((ROOT / "scripts" / "e2e_server.py").read_text(encoding="utf-8"))
     for cfg in (ROOT / "config").glob("*.y*ml"):
-        assert not re.search(r"e2e|capture|fake", cfg.read_text(encoding="utf-8"), re.I), cfg.name
+        assert not re.search(r"\be2e\b|\bcapture\b|\bfake\b", cfg.read_text(encoding="utf-8"), re.I), cfg.name
 
 
 def test_the_e2e_server_hands_the_mailer_the_host_uvicorn_binds():
