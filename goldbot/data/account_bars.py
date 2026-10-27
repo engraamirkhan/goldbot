@@ -10,7 +10,8 @@ bandit run rested on n = 0, with the job reporting ok. The account's own minutes
   2. `bars_1m_broker` source = the account id: the broker's M1 as its terminal reports it (feed_reconcile, nightly);
   3. `bars_1m`        source = the account id: legacy, kept so an older store still reads.
 
-A minute is taken from the first feed that has it visible by `as_of`: all three are the same broker's prices, never
+A minute quarantined (bars_quarantine, source = the broker or the account) is read from no feed at all. Otherwise a
+minute is taken from the first feed that has it visible by `as_of`: all three are the same broker's prices, never
 another broker's and never the reference feed. Point in time: a row counts only once visible (`visible_at`, and
 `available_utc` when stored; a row with neither is visible at its minute's close), and of several stored versions of
 one minute the last one visible by `as_of`. Timestamps are compared in ns (`timeutil.epoch_ns`), so the parquet unit
@@ -26,6 +27,7 @@ import pandas as pd
 from goldbot.data.timeutil import epoch_ns
 
 MINUTE = pd.Timedelta(minutes=1)
+QUARANTINE = "bars_quarantine"           # data/quarantine.py QUARANTINE_TABLE of bars_1m and bars_1m_live
 PRICE_COLUMNS = [f"{s}_{c}" for s in ("bid", "ask") for c in ("open", "high", "low", "close")]
 FEEDS: tuple[tuple[str, str], ...] = (("bars_1m_live", "broker"), ("bars_1m_broker", "account"),
                                       ("bars_1m", "account"))
@@ -50,7 +52,13 @@ def account_bars_1m(store: Any, *, account_id: str, broker: str, symbol: str, st
     per minute, sorted, with the `feed` it came from. Empty when no feed has a minute."""
     cut = int(pd.Timestamp(as_of).tz_convert("UTC").value)
     parts: list[pd.DataFrame] = []
+    # a minute quarantined from the broker's live feed or the account's bars is left out of EVERY feed (quant
+    # 2026-10-27, MEDIUM): back-filling it from the terminal's M1 would replay the very spike that was quarantined
     taken: set[int] = set()
+    for source in dict.fromkeys((broker, account_id)):
+        q = store.read(QUARANTINE, source=source, symbol=symbol, start=start, end=end, columns=["ts_utc"])
+        if q is not None and not q.empty:
+            taken.update(epoch_ns(pd.DatetimeIndex(pd.to_datetime(q["ts_utc"], utc=True))).tolist())
     for table, keyed in FEEDS:
         source = broker if keyed == "broker" else account_id
         df = store.read(table, source=source, symbol=symbol, start=start, end=end)

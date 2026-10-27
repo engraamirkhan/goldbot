@@ -79,6 +79,36 @@ def test_a_minute_or_a_correction_visible_after_the_cutoff_is_never_read(tmp_pat
     assert len(got) == 15 and (got["bid_open"].iloc[10:] == 2100.0 - 0.1).all()
 
 
+def test_a_quarantined_minute_is_read_from_no_feed_never_back_filled_from_the_terminal_m1(tmp_path):
+    """Quant 2026-10-27 (MEDIUM): a spike moved out of bars_1m_live must not come back from bars_1m_broker."""
+    store = Store(tmp_path / "data")
+    live = _m1(T0, 10)
+    store.append("bars_1m_live", live.drop(index=[4]), source="icm")                 # minute 4 was quarantined
+    store.append("bars_quarantine", live.loc[[4]], source="icm")
+    spike = _m1(T0, 10)
+    spike.loc[4, [c for c in spike.columns if c.endswith(("_low", "_open"))]] = 1900.0
+    store.append("bars_1m_broker", spike, source="icm-demo")
+    store.append("bars_quarantine", _m1(T0 + pd.Timedelta(minutes=7), 1), source="icm-demo")  # the account's own
+    got = account_bars_1m(store, account_id="icm-demo", broker="icm", symbol="XAUUSD", start=T0,
+                          end=T0 + pd.Timedelta(hours=1), as_of=SLOT)
+    minutes = set(got["ts_utc"])
+    assert T0 + pd.Timedelta(minutes=4) not in minutes and T0 + pd.Timedelta(minutes=7) not in minutes
+    assert len(got) == 8 and (got["bid_low"] > 1999).all()
+
+
+def test_no_weights_run_is_written_when_nothing_is_labelled(tmp_path):
+    """Quant 2026-10-27 (LOW): a run on n = 0 everywhere is not a learnt run."""
+    db = Database.open(tmp_path, "aux")
+    _cand(db, "i1", "icm-demo", "icm")
+    arm = SimpleNamespace(arm_id="S1A", style="scalp", control_share=None)
+    ctx: Any = SimpleNamespace(settings=load_settings(), store=Store(tmp_path / "data"), state_dir=tmp_path,
+                               accounts=[_acc("icm-demo", "icm", "XAUUSD", (arm,))])
+    rep = jobs.exploration_learn(ctx, SLOT)
+    assert rep["brokers"]["icm"]["weights"] is None
+    with db.connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM exploration_broker_weights").fetchone()[0] == 0
+
+
 def test_no_feed_gives_an_empty_frame(tmp_path):
     got = account_bars_1m(Store(tmp_path / "data"), account_id="x", broker="y", symbol="XAUUSD", start=T0,
                           end=SLOT, as_of=SLOT)
