@@ -15,7 +15,9 @@ Design rules:
   AutoTrading, the notional ceiling, and the order's age checked again just before the send (`sent_at` crosses the
   pipe). It attaches only: it never logs in (the bridge's self-heal does), and a child whose initialize launched a
   terminal of its own exits TERMINAL_SPAWNED_EXIT; the bridge then exits with it so systemd stops that terminal.
-- One order at a time. An order whose reply does not come (the child died, or no reply within LANE_ORDER_MAX_S) raises
+- One order at a time. An order that never reached the child (the lane went down first, or the write failed) is a
+  definite reject, `NOT_SENT` (10006): nothing was sent, so the brain does not book it ambiguous. An order whose reply
+  does not come (the child died, or no reply within LANE_ORDER_MAX_S) raises
   `LaneLost`: the bridge answers nothing, the brain books an ambiguous order and its look-up settles it (BACKLOG 72);
   the lane is down for the rest of this bridge process and orders go back to the shared connection. Never re-sent.
 - Wire: one line per message on the child's stdin/stdout, `GBLANE1 <json>`, records in the bridge's wire format
@@ -32,7 +34,7 @@ import threading
 import time
 from typing import IO, Any, Callable
 
-from goldbot.execution.bridge_queue import LaneError, LaneLost
+from goldbot.execution.bridge_queue import LaneError, LaneLost, LaneNotSent
 from goldbot.execution.broker import OrderIntent, OrderResult
 
 log = logging.getLogger("goldbot.bridge")
@@ -41,6 +43,7 @@ PREFIX = b"GBLANE1 "
 READY_TIMEOUT_S = 90.0          # the child's attach: initialize(path=..., timeout 60 s) plus the import
 LANE_ORDER_MAX_S = 90.0         # an order with no reply after this is lost (above every account's order_timeout_s, 60 s)
 LANE_STATES = ("off", "starting", "separate", "down")    # /health `order_lane` (fixed tokens)
+NOT_SENT = "order_lane_not_sent"   # the message prefix of the definite reject for an order the lane never sent
 
 
 def _line(msg: dict[str, Any]) -> bytes:
@@ -126,20 +129,22 @@ class ProcessLane:
         self._down("bridge stopping")
 
     def place_order(self, intent: OrderIntent, sent_at: float | None) -> OrderResult:
-        """The child's result; `LaneError` when it answered with an error; `LaneLost` when no answer came."""
+        """The child's result; `LaneError` when it answered with an error; `LaneNotSent` when the order never reached
+        the child (nothing sent); `LaneLost` when it was written and no answer came (outcome unknown)."""
         from goldbot.execution.bridge import _decode, _encode
         with self._lock:
             proc = self._proc
             if self.state != "separate" or proc is None:
-                raise LaneLost("order lane not up")
+                raise LaneNotSent("order lane not up")
             self._ids += 1
             rid = self._ids
             try:
                 proc.stdin.write(_line({"id": rid, "intent": _encode(intent), "sent_at": sent_at}))
                 proc.stdin.flush()
             except (OSError, ValueError) as exc:
+                # a pipe that refuses the write reaches a child that is gone: no partial line can be acted on
                 self._down(f"write failed ({type(exc).__name__})")
-                raise LaneLost("order lane write failed") from exc
+                raise LaneNotSent(f"order lane write failed ({type(exc).__name__})") from exc
             deadline = time.monotonic() + self.order_max_s
             while True:
                 try:

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from goldbot.execution.bridge_lane import ProcessLane
-from goldbot.execution.bridge_queue import LaneError, LaneLost
+from goldbot.execution.bridge_queue import LaneError, LaneLost, LaneNotSent
 from goldbot.execution.broker import OrderIntent
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -100,7 +100,7 @@ def test_a_child_that_dies_with_the_order_in_it_raises_lane_lost_and_the_lane_st
     with pytest.raises(LaneLost):
         lane.place_order(_intent(), time.time())
     assert lane.state == "down" and not lane.ready()
-    with pytest.raises(LaneLost):                                   # never sent again through a dead lane
+    with pytest.raises(LaneNotSent):                                # a dead lane sends nothing: a definite "not sent"
         lane.place_order(_intent("icm-demo-135-b"), time.time())
 
 

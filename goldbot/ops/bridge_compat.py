@@ -17,9 +17,12 @@ reports on its unauthenticated GET /health (goldbot/execution/bridge.py) its `se
   after an `incompatible` that verdict is kept (`next_verdict`); health reports it (`bridge:<account>` fails).
 * `ok`; a different commit on the two boxes is reported (health warning) but never blocks: doc-only commits differ.
 
-A live account needs more than a compatible bridge (BACKLOG 135, ADR 0056): a bridge below CLOSE_PRIORITY_VERSION
-(protocol v7: closes queued ahead of reads and orders, abandoned reads dropped) is `incompatible` for it, so a live
-account never takes an entry while its exits could wait out an order on the MT5 box. Demo accounts keep MIN_COMPATIBLE.
+A live account needs more than a compatible bridge (BACKLOG 135, ADR 0056; PD decision on the trading-safety review
+of 49335812): a bridge below CLOSE_PRIORITY_VERSION (protocol v7: closes queued ahead of reads and orders, abandoned
+reads dropped), or whose order lane is not up (`order_lane` other than `separate` on /health: off, starting, down, or
+not reported), is `incompatible` for it, so a live account never takes an entry while its exits could wait out an
+order on the MT5 box. Exits never read this. Demo accounts keep MIN_COMPATIBLE and trade whatever the lane's state; a
+lane that is `down` FAILs health on any account (goldbot/ops/checks/bridge.py `check_bridge_compat`).
 
 Exits never read any of this: the verdict is one RiskGate input for entries only. The engine checks at start and every
 60 s on a background thread (`BridgeCompatChecker`, goldbot/ops/run.py), so the tick loop never waits for /health.
@@ -54,6 +57,7 @@ MAX_VERDICT_AGE_S = 300.0                # an ok older than this counts as unche
 UNCHECKED_GRACE_S = 120.0                # health: an engine unchecked longer than this FAILs (Telegram); warns inside
 HUNG_AFTER_S = 3 * CHECK_TIMEOUT_S       # a check thread alive this long is abandoned and replaced (daemon thread)
 CLOSE_PRIORITY_VERSION = 7               # BACKLOG 135: the bridge protocol a live account needs (closes first)
+LANE_UP, LANE_DOWN = "separate", "down"   # /health `order_lane`: live needs it up; down FAILs health anywhere
 REQUIRED_METHODS = frozenset(METHODS) - OPTIONAL_METHODS   # every method the brain calls without a fallback
 _TZ = re.compile(r"^[A-Za-z0-9_+\-/]{1,64}$")             # a zone name (Europe/Athens, NY+7); anything else is refused
 _SHA = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")     # sha-1 or sha-256 object names
@@ -220,7 +224,7 @@ def assess(info: BridgeInfo, server_tz: str, brain_commit: str | None, *, now: p
            min_compatible: int = MIN_COMPATIBLE, live: bool = False) -> BridgeCompat:
     """The verdict for a /health report against this brain's methods, protocol versions, zone and commit. `now` stamps
     `checked_at` on a reachable answer (default: the host clock). `live`: a real-money account, which also needs
-    CLOSE_PRIORITY_VERSION (module docstring)."""
+    CLOSE_PRIORITY_VERSION and its order lane up (module docstring)."""
     if not info.reachable:
         return BridgeCompat(status="unreachable", reason=f"{info.problem or '/health unreachable'}: compatibility not "
                             "checked (no ticks either: the stale-data rule blocks entries)", brain_commit=brain_commit)
@@ -245,6 +249,9 @@ def assess(info: BridgeInfo, server_tz: str, brain_commit: str | None, *, now: p
         if live and info.api_version < CLOSE_PRIORITY_VERSION:
             problems.append(f"bridge protocol v{info.api_version} queues closes behind orders: a live account needs "
                             f"v{CLOSE_PRIORITY_VERSION} (BACKLOG 135)")
+        if live and info.order_lane != LANE_UP:
+            problems.append(f"the order lane is {info.order_lane or 'not reported'}: a live account needs it up "
+                            f"({LANE_UP}; order_lane: true in accounts.yaml, RUNBOOK 'Order lane')")
     if info.problem is None:
         if info.server_tz_invalid:
             problems.append("the bridge reports an invalid server_tz")

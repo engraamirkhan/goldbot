@@ -541,7 +541,7 @@ def test_the_brain_sends_its_read_timeout_with_every_request():
 
 def _info(version: int) -> BridgeInfo:
     return BridgeInfo(reachable=True, server_tz="Europe/Athens", api_version=version, min_compatible=5,
-                      methods=sorted(bridge_mod.METHODS), commit=None)
+                      methods=sorted(bridge_mod.METHODS), commit=None, order_lane="separate")   # live also needs its lane up (review of 49335812)
 
 
 def test_a_live_account_refuses_entries_on_a_bridge_without_close_priority_and_demo_does_not():

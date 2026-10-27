@@ -70,6 +70,7 @@ from goldbot.execution.bridge_queue import (
     Job,
     LaneError,
     LaneLost,
+    LaneNotSent,
     TerminalQueue,
     priority_of,
 )
@@ -388,6 +389,10 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
             return _Outcome(200, result=lane.place_order(args[0], sent_at))
         except LaneError as exc:
             return _Outcome(500, {"error": str(exc)})
+        except LaneNotSent as exc:            # nothing reached the terminal: a definite reject, never silence
+            from goldbot.execution.bridge_lane import NOT_SENT
+            log.warning("order %s not sent: %s", getattr(args[0], "client_order_id", "?"), exc)
+            return _Outcome(200, result=_refusal(f"{NOT_SENT}: {exc}; nothing was sent"))
 
     def stale(sent_at: float) -> str | None:
         age = time.time() - sent_at

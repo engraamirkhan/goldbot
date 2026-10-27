@@ -560,7 +560,8 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
                            shadow_host=bool(a.get("shadow_host", False)), probe_only=bool(a.get("probe_only", False)),
                            dynamic_limits=a.get("dynamic_limits", False),
                            exploration=Exploration(**(a.get("exploration") or {})),
-                           max_positions=a.get("max_positions"), order_timeout_s=a.get("order_timeout_s", 15.0))
+                           max_positions=a.get("max_positions"), order_timeout_s=a.get("order_timeout_s", 15.0),
+                           order_lane=a.get("order_lane", False))    # BACKLOG 135: read by the bridge
     hosts = [a for a in out.values() if a.enabled and a.shadow_host]
     if len(hosts) > 1:      # ADR 0037 amendment 4: one shadow book, one host; two would trade it twice
         raise ValueError(f"{len(hosts)} enabled accounts are the shadow host in config/accounts.yaml: exactly one may "

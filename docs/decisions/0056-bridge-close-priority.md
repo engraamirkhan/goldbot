@@ -56,3 +56,14 @@ Options considered:
   would be the next option, at the cost of a second login), or MetaQuotes shipping `order_send_async` in Python.
 - For the real-money pilot as planned (one position at a time, owner-confirmed entries) an entry and an open position
   never overlap, so the 5 s bound matters for the kill switch and a second account, not for the pilot's own stop.
+
+## Amendment 1 (trading-safety review of 49335812, approved with conditions; PD decision)
+- A live account needs bridge v7 **and** its order lane up (`order_lane: separate` on /health); entries are refused
+  (`bridge_incompatible`) otherwise; exits never read it. A lane that is `down` FAILs health (`bridge_compat:<account>`,
+  Telegram) on any account. `icm-live` has `order_lane: true` and the bootstrap's `terminal_path`
+  (`C:\MT5\ICMarkets\terminal64.exe`). This supersedes docs/deploy/bridge-v7-rollout.md section 8 ("lane stays off
+  for the pilot"): the pilot now waits for the lane drill on the live box.
+- Cancelled requests no longer count toward MAX_QUEUED, and a close or stop change is never refused by the cap.
+- An order the lane never sent (lane down before the write, or the write failed) is a definite reject
+  (`order_lane_not_sent`, 10006), not silence, so the brain books no ambiguous order.
+- `load_accounts` now reads `order_lane` (the first commit dropped it, so the flag could never turn on).

@@ -14,7 +14,8 @@ Design rules (ADR 0056):
   whatever its method; a read still queued past the timeout its client sent (`timeout_s`, protocol v7; READ_TTL_S
   without one) is dropped; an order older than ORDER_MAX_AGE_S when it reaches the front is refused stale, as at the
   door. The bridge never re-sends anything.
-- At most MAX_QUEUED requests wait; one more is refused (503, nothing run), so a flood cannot exhaust the box.
+- At most MAX_QUEUED live requests wait; one more read or order is refused (503, nothing run), so a flood cannot
+  exhaust the box. A close or stop change is never refused, and a cancelled request no longer counts.
 """
 from __future__ import annotations
 
@@ -85,9 +86,12 @@ class TerminalQueue:
         self.counts = {"run": 0, "skipped": 0, "cancelled": 0, "refused_full": 0}
 
     def submit(self, job: Job) -> bool:
-        """Queue `job`; False (nothing queued) when MAX_QUEUED requests already wait."""
+        """Queue `job`; False (nothing queued) when `max_queued` live requests already wait. Only jobs still queued
+        count (a cancelled one waits in the heap until popped, and never runs), and a close or stop change is never
+        refused: exits are never gated (trading-safety review of 49335812, MEDIUM)."""
         with self._cv:
-            if len(self._heap) >= self.max_queued:
+            live = sum(1 for _, _, j in self._heap if j.status == "queued")
+            if job.priority != CLOSE and live >= self.max_queued:
                 self.counts["refused_full"] += 1
                 return False
             heapq.heappush(self._heap, (job.priority, next(self._seq), job))
@@ -153,6 +157,12 @@ class TerminalQueue:
             if job.status == "queued" and sock is not None and client_gone(sock) and self.cancel(job):
                 return False
         return job.status not in ("cancelled",)
+
+
+class LaneNotSent(RuntimeError):
+    """The order never reached the order lane's child (the lane was not up, or the write failed): nothing was sent.
+    The bridge answers a definite reject (bridge_lane.NOT_SENT, retcode 10006), never silence, so the brain does not
+    book an ambiguous order (trading-safety review of 49335812, LOW)."""
 
 
 class LaneLost(ConnectionError):

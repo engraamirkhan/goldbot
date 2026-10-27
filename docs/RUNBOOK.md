@@ -2326,8 +2326,8 @@ back on the shared connection until the bridge restarts).
 | Bridge | Exit delay with an entry in flight | Live account |
 | --- | --- | --- |
 | v6 | the entry's hold plus a 2 x 10 s read cycle (about 45-55 s at 35 s) | entries refused (`bridge_incompatible`, "a live account needs v7") |
-| v7, lane off | the entry's hold plus one engine pass (about 36 s at 35 s) | allowed |
-| v7, lane `separate` | under 5 s | allowed |
+| v7, lane off | the entry's hold plus one engine pass (about 36 s at 35 s) | entries refused (the lane must be up; ADR 0056 amendment 1) |
+| v7, lane `separate` | under 5 s | allowed; a lane `down` FAILs health on any account |
 
 **Deploy (protocol v7).** `MIN_COMPATIBLE` stays 5, so a v6 brain and a v7 bridge work together either way round. Do
 the MT5 boxes first anyway, one at a time, and the brain last. Each box's bridge restarts (about 15 s with no ticks;
