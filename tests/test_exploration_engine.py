@@ -13,6 +13,7 @@ from typing import Any, Literal
 import pandas as pd
 import pytest
 
+from goldbot.config import tf_seconds
 from goldbot.data.resample import ticks_to_1m
 from goldbot.data.synthetic import synthetic_ticks
 from goldbot.engine import ConstantModel, Engine, EngineConfig, cost_probe, exploration, magic
@@ -967,6 +968,32 @@ def test_the_friday_cut_still_closes_a_losing_wfri_and_that_close_is_its_own_exi
     assert rec.exit_reason == "weekend_close_loser" and rec.censored is False
 
 
+def test_a_wfri_winner_is_closed_on_the_host_clock_at_1630_new_york_even_if_a_bar_is_missing(tmp_path, monkeypatch):
+    """Trading-safety LOW (final review): the bar count alone holds a WFRI winner past Friday 16:30 New York when a
+    decision bar is missing; `exploration.exits` closes it on the host clock at its signal close plus its hold."""
+    eng, pb = _wfri_engine(tmp_path, monkeypatch)
+    exploration.on_pass(eng, _at(eng, pb, THU_19_NY))
+    [pid] = list(eng.open)
+    eng.open[pid].bars_held = 0                                   # every bar of the hold missed: the count never ends
+    closes: list[tuple[int, str]] = []
+    monkeypatch.setattr(eng, "_try_close", lambda p, why, now, **kw: closes.append((p, why)))
+    exit_ny = pd.Timestamp("2025-03-07 21:30", tz="UTC")           # Friday 16:30 New York (EST)
+    exploration.exits(eng, exit_ny - pd.Timedelta(seconds=1))
+    assert not closes
+    exploration.exits(eng, exit_ny)
+    assert closes == [(pid, "time_exit")]
+
+
+def test_a_rule_without_the_cut_keeps_the_bar_count_time_exit_only(tmp_path):
+    eng, pb = _engine(tmp_path, [_arm("a", tf="1h", hold_bars=2)])
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    [pid] = list(eng.open)
+    closes: list[str] = []
+    eng._try_close = lambda p, why, now, **kw: closes.append(why)  # type: ignore[assignment,method-assign]
+    exploration.exits(eng, CLOSE + pd.Timedelta(days=2))
+    assert closes == [] and pid in eng.open
+
+
 def test_the_cuts_tightened_stop_is_wfris_own_exit_and_any_other_moved_stop_or_close_censors():
     wfri, other = _wfri(), _wfri(follows=False)
 
@@ -980,6 +1007,84 @@ def test_the_cuts_tightened_stop_is_wfris_own_exit_and_any_other_moved_stop_or_c
     assert exploration._censored(other, "weekend_close_loser", trade(95.0))
     assert exploration._censored(other, "stop", trade(97.5))
     assert not exploration._censored(other, "time_exit", trade(95.0))
+
+
+# ------------------------------------------------------------------------------------------------ PDC4 / DOND (8.15)
+TUE_4H = pd.Timestamp("2025-03-04 08:00", tz="UTC")          # a Tuesday 4h close
+TUE_1D = pd.Timestamp("2025-03-04 18:30", tz="UTC")          # a Tuesday 1d close (13:30 New York, EST)
+
+
+def _capped_rule(side: int) -> Any:
+    """The real rules' 8.15 step on a test candidate: the frozen hold capped at the week's end, the cut carried."""
+    from goldbot.research.arm_rules_weekcut import capped
+    gen = _rule(side)
+    return lambda arm, ctx: capped(gen(arm, ctx), ctx.close_ts, arm.timeframe)
+
+
+def _week_arm(arm_id: str, rule: str, tf: str, hold: int) -> Arm:
+    spec = SpecArm(id=arm_id, rule=rule, timeframe=tf, max_open=1,  # type: ignore[arg-type]
+                   params={"stop_usd": 5.0, "target_r": 2.0, "hold_bars": hold})
+    return Arm(spec=spec, style="swing")
+
+
+def _week_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rule: str, tf: str,
+                 hold: int) -> tuple[Engine, PaperBroker]:
+    """A PDC4- or DOND-shaped arm on its real rule name (capped), and the same frozen hold on a rule without the cut."""
+    monkeypatch.setitem(arm_rules.RULE_FUNCS, rule, _capped_rule(1))
+    eng, pb = _engine(tmp_path, [_week_arm("WEEK", rule, tf, hold), _week_arm("NOCUT", LONG, tf, hold)],
+                      pots={"swing": Pot(gbp=40, max_open=2), "intraday": Pot(gbp=48, max_open=5)})
+    assert eng.exploration is not None
+    eng.exploration.needs_context = frozenset()               # DOND's stored-bar context is exploration_context's
+    return eng, pb
+
+
+@pytest.mark.parametrize(("rule", "tf", "hold", "close"), [("pdc_break", "4h", 32, TUE_4H),
+                                                           ("donchian_break", "1d", 10, TUE_1D)])
+def test_pdc4_and_dond_enter_on_a_weekday_and_the_same_frozen_hold_without_the_cut_is_refused(
+        tmp_path, monkeypatch, rule, tf, hold, close):
+    eng, pb = _week_engine(tmp_path, monkeypatch, rule, tf, hold)
+    exploration.on_pass(eng, _at(eng, pb, close))
+    assert [d["agent"] for d in _sent(eng)] == ["explore:WEEK"], eng.decisions
+    assert [(d["agent"], d["action"]) for d in _actions(eng, "exploration_refused:")] == [
+        ("explore:NOCUT", "exploration_refused:weekend_hold")]
+    [rec] = exploration.trades(str(tmp_path))
+    end = close + pd.Timedelta(seconds=rec.hold_s)
+    assert end <= pd.Timestamp("2025-03-07 21:45", tz="UTC")       # Saturday 00:00 Athens less the slack
+    assert rec.hold_s < hold * tf_seconds(tf)                         # capped at the week's end
+
+
+def test_the_friday_cut_still_closes_a_losing_pdc4_and_that_close_is_its_own_exit(tmp_path, monkeypatch):
+    eng, pb = _week_engine(tmp_path, monkeypatch, "pdc_break", "4h", 32)
+    exploration.on_pass(eng, _at(eng, pb, TUE_4H))
+    [pid] = list(eng.open)
+    entry = eng.open[pid].open_price
+    assert entry is not None
+    cut = Tick(ts_utc=pd.Timestamp("2025-03-07 19:31", tz="UTC"), bid=entry - 1.0, ask=entry - 0.8)
+    pb.on_tick(cut)
+    assert eng._weekend_rule(cut)
+    eng._flush_closed()
+    assert not pb.positions() and pid not in eng.open
+    [rec] = exploration.trades(str(tmp_path))
+    assert rec.exit_reason == "weekend_close_loser" and rec.censored is False
+
+
+def test_a_pdc4_winner_is_closed_at_its_wall_clock_time_exit_before_the_weekend(tmp_path, monkeypatch):
+    """The engine counts a 15m+ hold in decision bars, and the daily break has none: a hold counted in bars from a
+    Tuesday would run past Friday's close. A rule under the cut exits on the wall clock (`exploration.exits`), the
+    history run's close of bar i + hold; the bar count stays as a backstop."""
+    eng, pb = _week_engine(tmp_path, monkeypatch, "pdc_break", "4h", 32)
+    exploration.on_pass(eng, _at(eng, pb, TUE_4H))
+    [pid] = list(eng.open)
+    tr = eng.open[pid]
+    end = TUE_4H + pd.Timedelta(seconds=tr.max_bars * tf_seconds(eng.cfg.decision_tf))
+    assert end == pd.Timestamp("2025-03-07 20:00", tz="UTC")       # Friday's last 4h close before the week ends
+    closes: list[tuple[int, str]] = []
+    monkeypatch.setattr(eng, "_try_close", lambda p, why, now, **kw: closes.append((p, why)))
+    exploration.exits(eng, end - pd.Timedelta(seconds=1))
+    assert not closes
+    exploration.exits(eng, end)
+    assert closes == [(pid, "time_exit")]
+    assert not exploration._censored(eng.exploration.arms["WEEK"], "time_exit", tr)   # type: ignore[union-attr]
 
 
 # ------------------------------------------------------------------------------------------------ stop-band skips

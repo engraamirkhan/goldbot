@@ -80,7 +80,14 @@ def test_donchian_break_is_the_first_close_beyond_the_prior_55_bar_extreme(b1, t
         up1, dn1 = h[i - 56:i - 1].max(), lo[i - 56:i - 1].min()
         assert (c[i] > up and c[i - 1] <= up1) if side == 1 else (c[i] < dn and c[i - 1] >= dn1)
     np.testing.assert_allclose(got["risk_usd"], atr(m, 14).to_numpy()[got["idx"]])
-    assert (got["target_r"] == C.NO_TARGET_R).all() and (got["max_bars"] == hold - 1).all()
+    assert (got["target_r"] == C.NO_TARGET_R).all()
+    if tf == "4h":
+        assert (got["max_bars"] == hold - 1).all() and "cut_at" not in got
+    else:                                   # DOND, 8.15: the 10-day hold capped at the week's end under the Friday cut
+        from goldbot.research.arm_rules_weekcut import week_hold
+        close = ctx.close_ts[got["idx"].to_numpy()]
+        np.testing.assert_array_equal(got["max_bars"], week_hold(close, np.full(len(got), hold), "1d") - 1)
+        assert (got["max_bars"] < hold - 1).all() and (got["max_bars"] >= 0).all()
 
 
 def test_c30_shorts_the_first_touch_of_the_30_day_low_once_a_day_with_half_atr_brackets(b1) -> None:

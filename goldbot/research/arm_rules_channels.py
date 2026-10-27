@@ -32,6 +32,7 @@ import pandas as pd
 from goldbot.data.timeutil import utc_index
 from goldbot.features.technical import atr, ema, sma
 from goldbot.research.arm_rules import NEW_YORK, RuleContext, _frame, empty, hash_u
+from goldbot.research.arm_rules_weekcut import CUT_CAPPED, capped
 from goldbot.research.arms import Arm
 
 NO_TARGET_R = 20.0                  # "no target" (8.2, 8.3): 20 x a 1 ATR stop, out of reach within the hold
@@ -128,7 +129,10 @@ def squeeze_release(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
 # ---------------------------------------------------------------- 8.3 DON Donchian-55 break-close
 def donchian_break(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     """8.3: "U_i = max high of bars i-55..i-1, L_i = min low of bars i-55..i-1. Long when close_i > U_i and close_{i-1}
-    <= U_{i-1}; short mirrored on L." Stop 1.0 x ATR14_i; no target; time exit 24 bars at 4h, 10 at 1d."""
+    <= U_{i-1}; short mirrored on L." Stop 1.0 x ATR14_i; no target; time exit 24 bars at 4h, 10 at 1d. DOND (1d)
+    only, 8.15: "the time exit is the earlier of the frozen hold and the end of the week ... No entry after the cut"
+    (`arm_rules_weekcut.capped`: Monday to Thursday settlements enter and exit at Friday's 13:30 New York settlement,
+    before the cut; 10 days never fit a week). DON4 is unchanged."""
     m = ctx.mid
     c = m["close"]
     up = m["high"].rolling(DON_N, min_periods=DON_N).max().shift(1)
@@ -138,9 +142,9 @@ def donchian_break(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
         short = ((c < dn) & (c.shift(1) >= dn.shift(1))).to_numpy()
     a_ = atr(m, 14).to_numpy(dtype=float)
     idx = _keep(ctx, np.flatnonzero((long_ | short) & np.isfinite(a_)))
-    if len(idx) == 0:
-        return empty()
-    return _frame(idx, np.where(long_[idx], 1, -1), a_[idx], NO_TARGET_R, DON_HOLD[arm.timeframe])
+    out = empty() if len(idx) == 0 else \
+        _frame(idx, np.where(long_[idx], 1, -1), a_[idx], NO_TARGET_R, DON_HOLD[arm.timeframe])
+    return capped(out, ctx.close_ts, arm.timeframe) if (arm.rule, arm.timeframe) in CUT_CAPPED else out
 
 
 # ---------------------------------------------------------------- 8.4 C30 first touch of the 30-day low, and C30C

@@ -1251,7 +1251,8 @@ def _intent(eng: Engine, arm: Arm, side: int, price: float, s: Pending, now: pd.
 def exits(eng: Engine, now: pd.Timestamp) -> None:
     """Every pass, with a quote or without (`Engine._retry_closes`), whatever the entry state (halted, propose mode,
     exploration switched off): a 1m/5m arm's position held `hold_s` on the host clock (from its fill; after a restart
-    the broker's open time) is closed (`HOLD_EXIT`); a position whose arm is not configured is closed at once
+    the broker's open time) is closed (`HOLD_EXIT`); a 15m+ position of a rule under the Friday cut is closed at its
+    wall-clock time exit (`_week_due`, `time_exit`); a position whose arm is not configured is closed at once
     (`ORPHAN_EXIT`). A refused close stays due and is retried like any close. Never raises."""
     try:
         ex = eng.exploration
@@ -1266,8 +1267,23 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
             since = tr.opened_utc or tr.entry_bar_ts
             if arm.tf in SUB_15M and since is not None and (at - since).total_seconds() >= arm.hold_s:
                 eng._try_close(pid, HOLD_EXIT, now)
+            elif arm.tf not in SUB_15M and _week_due(eng, arm, tr, at):
+                eng._try_close(pid, "time_exit", now)
     except Exception:
         log.exception("exploration exits failed; retried next pass")
+
+
+def _week_due(eng: Engine, arm: Arm, tr: OpenTrade, at: pd.Timestamp) -> bool:
+    """A position of a rule under the Friday cut (`arm_rules.follows_friday_cut`; arms-2026-10-25.md 8.14 (2), 8.15)
+    at its wall-clock time exit: its signal close (from its order id) plus its hold (`max_bars` decision bars), the
+    history run's close of bar i + hold. The bar count alone would run past the week's close: the daily break has no
+    decision bars, so a hold counted in bars from a Tuesday ends after Friday's close. Only ever closes earlier."""
+    from goldbot.research import arm_rules
+    from goldbot.research.arm_rules_weekcut import time_exit_at
+    if not arm_rules.follows_friday_cut(arm.spec):
+        return False
+    end = time_exit_at(signal_close(tr.client_order_id), tr.max_bars * tf_seconds(eng.cfg.decision_tf))
+    return end is not None and at >= end
 
 
 def _is_runner(arm: Arm) -> bool:

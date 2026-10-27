@@ -15,6 +15,9 @@ from the approach) trades in the break direction; "otherwise (sweep, reject or s
 side x 1.0 x ATR_{j-1}; target 2 x |entry - stop|; time exit 32 bars. This is the break-close event of
 `key_levels_discovery.py` (slice G, `BRK_s1.0`), whose 2010-2017 count 8.13 requires within 10% before going live:
 600 / 611 (4h / 1h) against slice G's 600 / 592 with the 8.14 skip (727 / 689 without it).
+PDC4 only (8.15, 2026-10-26): "the time exit is the earlier of the frozen hold and the end of the week ... Losers close
+at the cut, winners hold under the cut's tightened stop to that time exit. No entry after the cut"
+(`arm_rules_weekcut.capped`; 128 h never fits a trading week, so the week's end always binds). PDC1 is unchanged.
 
 `ob_retest` (8.5 with 8.13), 15m: swing high at p when high_p > max(high_{p-5..p-1}) and high_p >= max(high_{p+1..p+5}),
 known at the close of p+5 and usable from b = p+6 ("confirmed by the close of b-1"); the latest confirmed pivot replaces
@@ -49,6 +52,7 @@ from goldbot.data.resample import mid
 from goldbot.data.timeutil import epoch_ns, utc_index
 from goldbot.features.technical import atr
 from goldbot.research.arm_rules import RuleContext, _frame, empty
+from goldbot.research.arm_rules_weekcut import CUT_CAPPED, capped
 from goldbot.research.arms import Arm
 
 NY = "America/New_York"
@@ -123,17 +127,19 @@ def pdc_break(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     p = arm.params
     m = ctx.mid
     ev = pdc_events(m, ctx.b1.reset_index(drop=True))
+    if not ev.empty:
+        ev = ev[reopen_ok(ctx.close_ts[ev["idx"].to_numpy(dtype=int)])]
     if ev.empty:
-        return empty()
-    idx = ev["idx"].to_numpy(dtype=int)
-    ev = ev[reopen_ok(ctx.close_ts[idx])]
-    if ev.empty:
-        return empty()
-    idx = ev["idx"].to_numpy(dtype=int)
-    side = ev["side"].to_numpy(dtype=int)
-    entry = m["close"].to_numpy(dtype=float)[idx]
-    stop = ev["level"].to_numpy(dtype=float) - side * float(p.get("stop_atr", 1.0)) * ev["atr"].to_numpy(dtype=float)
-    return _frame(idx, side, np.abs(entry - stop), float(p.get("target_r", 2.0)), int(p.get("hold_bars", 32)))
+        out = empty()
+    else:
+        idx = ev["idx"].to_numpy(dtype=int)
+        side = ev["side"].to_numpy(dtype=int)
+        entry = m["close"].to_numpy(dtype=float)[idx]
+        stop = ev["level"].to_numpy(dtype=float) - side * float(p.get("stop_atr", 1.0)) * ev["atr"].to_numpy(float)
+        out = _frame(idx, side, np.abs(entry - stop), float(p.get("target_r", 2.0)), int(p.get("hold_bars", 32)))
+    if (arm.rule, arm.timeframe) in CUT_CAPPED:
+        out = capped(out, ctx.close_ts, arm.timeframe)     # PDC4: 8.15, the time exit under the Friday cut
+    return out
 
 
 # ---------------------------------------------------------------- OBR15
