@@ -300,11 +300,25 @@ class MT5Broker:
         naive datetime in the HOST's local zone, so a naive value would be right only on a UTC host (Wine box)."""
         return server_wall(pd.Timestamp(utc), self.server_tz)[0].tz_localize("UTC").to_pydatetime()
 
-    def get_bars(self, symbol: str, tf: str, n: int) -> pd.DataFrame:
-        rates = mt5.copy_rates_from_pos(symbol, getattr(mt5, TF_MAP[tf]), 0, n)
-        df = pd.DataFrame(rates)
+    _BAR_COLS = ["ts_utc", "open", "high", "low", "close", "tick_count", "spread"]
+
+    def _rates_frame(self, rates: Any) -> pd.DataFrame:
+        """MT5 rates (server-clock epochs) as UTC bars; an empty frame when the terminal returned none (None or [])."""
+        df = pd.DataFrame(rates) if rates is not None else pd.DataFrame()
+        if df.empty:
+            return pd.DataFrame(columns=self._BAR_COLS)
         df["ts_utc"] = server_to_utc(pd.to_datetime(df["time"], unit="s"), self.server_tz)
-        return df.rename(columns={"tick_volume": "tick_count"})[["ts_utc", "open", "high", "low", "close", "tick_count", "spread"]]
+        return df.rename(columns={"tick_volume": "tick_count"})[self._BAR_COLS]
+
+    def get_bars(self, symbol: str, tf: str, n: int) -> pd.DataFrame:
+        return self._rates_frame(mt5.copy_rates_from_pos(symbol, getattr(mt5, TF_MAP[tf]), 0, n))
+
+    def get_bars_range(self, symbol: str, tf: str, start_utc: pd.Timestamp, end_utc: pd.Timestamp) -> pd.DataFrame:
+        """Every bar the terminal holds with an open time in [start_utc, end_utc] (MT5 copy_rates_range, read-only;
+        the UTC bounds converted to the server clock as copy_ticks does). The D12 reconcile reads its window with it,
+        so a short history shows as missing minutes at the window's start rather than a silently shorter tail."""
+        return self._rates_frame(mt5.copy_rates_range(symbol, getattr(mt5, TF_MAP[tf]), self._mt5_time(start_utc),
+                                                      self._mt5_time(end_utc)))
 
     def copy_ticks(self, symbol: str, since_utc: pd.Timestamp, n: int = 100_000) -> pd.DataFrame:
         # copy_ticks_from takes server time; convert the UTC request into server clock
