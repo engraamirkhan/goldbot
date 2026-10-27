@@ -383,7 +383,7 @@ class Exploration:
         self.netting: bool | None = None                 # the terminal's margin mode, read once when first needed
         # the arms whose rule reads stored bars or a carried replica state, and what they read (exploration_context)
         from goldbot.engine.exploration_context import ArmContext, needs_context
-        self.context = ArmContext(self.db, eng.store, eng.cfg.release_symbol)
+        self.context = ArmContext(self.db, eng.store, eng.cfg.release_symbol, eng.cfg.account_id)
         self.needs_context = frozenset(a.arm_id for a in ok if needs_context(a.spec))
         self.held_back: dict[str, str] = {}             # arm -> why it is held back now (journalled once a change)
 
@@ -664,16 +664,18 @@ def _with_context(eng: Engine, ex: Exploration, arm: Arm, complete: pd.DataFrame
 
 def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     """The 1m/5m arms: once a minute is GRACE_S past its close, the complete minutes (bars_1m and the engine's
-    unbuilt ticks, both copied, never written) are read and the arms whose bar closed queue their signals."""
+    unbuilt ticks, both copied, never written) are read and the arms whose bar closed queue their signals, each on
+    its own `lookback` bars (H-81's Z7 reads ten trading days of 5m closes, Z9 a 1h EMA50)."""
     through = (now - pd.Timedelta(seconds=GRACE_S)).floor("min")
     if ex.last_minute is not None and through <= ex.last_minute:
         return
     ex.last_minute = through
-    arms = [a for a in ex.arms.values() if a.tf in SUB_15M]
-    tfs = sorted({a.tf for a in arms if int(through.timestamp()) % tf_seconds(a.tf) == 0}, key=tf_seconds)
+    arms = [a for a in ex.arms.values() if a.tf in SUB_15M and int(through.timestamp()) % tf_seconds(a.tf) == 0]
+    tfs = sorted({a.tf for a in arms}, key=tf_seconds)
     if not tfs:
         return
-    rows = max(tf_seconds(tfs[-1]) * (LOOKBACK + 1) // 60, LOOKBACK_1M)      # bars, never clock time (`_bars`)
+    # bars, never clock time (`_bars`)
+    rows = max(max(tf_seconds(a.tf) * (lookback(a.spec) + 1) // 60 for a in arms), LOOKBACK_1M)
     b = eng.bars_1m
     parts = [b.tail(rows)] if not b.empty else []
     ticks = [t for t in eng.ticks if t.ts_utc < through]
@@ -687,10 +689,11 @@ def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     frame = frame.drop_duplicates("ts_utc", keep="last").sort_values("ts_utc").reset_index(drop=True)
     frame = frame[frame["visible_at"] <= through].reset_index(drop=True)
     for tf in tfs:
-        bars = _bars(frame, tf, through)
-        if bars is not None:
-            for arm in (a for a in arms if a.tf == tf):
-                _signal(eng, ex, arm, bars, frame, through)
+        group = [a for a in arms if a.tf == tf]
+        for n, bars in _shared_bars(frame, tf, through, sorted({lookback(a.spec) for a in group})).items():
+            if bars is not None:
+                for arm in (a for a in group if lookback(a.spec) == n):
+                    _signal(eng, ex, arm, bars, frame, through)
 
 
 def on_pass(eng: Engine, tick: Tick) -> None:
@@ -1004,7 +1007,8 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
         else:
             keep.append(s)
     ex.queue = keep
-    if not ex.queue or _unsettled(eng, now):
+    due = [s for s in ex.queue if not _waits(ex, s, now)]
+    if not due or _unsettled(eng, now):
         return
     if paused(eng, now):
         for s in ex.queue:
@@ -1020,7 +1024,7 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
         eng.decisions.append({"ts": now.isoformat(), "agent": None, "action": "exploration_refused:ledger_unreadable"})
         return
     sent = 0
-    order = _order(ex)
+    order = [s for s in _order(ex) if s in due]
     if any(ex.arms[s.arm_id].family == "clock_anchor_control" for s in order) and _nets(eng, ex):
         order.sort(key=lambda s: ex.arms[s.arm_id].family == "clock_anchor_control")   # KA15 first: its fill shifts XC15
     for i, s in enumerate(order):
@@ -1045,6 +1049,14 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
         if res == "sent":
             sent += 1
             ex.last_arm = arm.arm_id
+
+
+def _waits(ex: Exploration, s: Pending, now: pd.Timestamp) -> bool:
+    """A 1m/5m signal of a quarter-hour close waits its arm's `arms.send_delay_s` (3-7 s) before it is sent, so the
+    scalp sends leave the 15m+ close work and sends behind (SRE 2026-10-27); its decision bar stays `bar_ts`."""
+    from goldbot.research.arms import send_delay_s
+    wait = send_delay_s(s.arm_id, ex.arms[s.arm_id].tf, s.bar_ts)
+    return wait > 0 and now < s.bar_ts + pd.Timedelta(seconds=wait)
 
 
 def _unsettled(eng: Engine, now: pd.Timestamp) -> bool:

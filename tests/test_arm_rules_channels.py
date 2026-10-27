@@ -3,6 +3,7 @@ section 8 and amendment 8.13). Causal closed-bar entries with prefix invariance,
 pairing, live == history on the engine's own bar window, and the 2010-2017 history counts against the slice figures."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +23,7 @@ NO = np.zeros(0, dtype=np.int64)
 CASES = (("squeeze_release", "1h", 4), ("squeeze_release", "4h", 4), ("donchian_break", "4h", 24),
          ("donchian_break", "1d", 10), ("low30_touch", "15m", 460), ("low30_control", "15m", 460))
 CUT = pd.Timestamp("2024-01-10", tz="UTC")       # a Wednesday 00:00 UTC: whole bars of every timeframe on both sides
-RAW = Path("/Users/aamirkhan/tmp/ts/raw")
+RAW = Path(os.environ.get("GOLDBOT_RAW_BARS", str(Path(__file__).resolve().parents[1] / "raw")))   # the gitignored local bars (ADR 0048)
 
 
 @pytest.fixture(scope="module")

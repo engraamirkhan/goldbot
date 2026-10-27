@@ -334,3 +334,29 @@ def test_health_warns_and_alerts_when_the_open_risk_is_unknown_while_a_rule_is_o
     assert health.check_open_risk(ctx, "icm-demo") == []                          # projection inert without a limit
     engine(tmp_path, 60, open_risk=None, limits=heat_on)
     assert "open_risk:icm-demo" in by_name(health.run_checks(ctx).checks)          # wired into the health pass
+
+
+# ---------------------------------------------------------------------------------------------- item 128: the rate
+def test_a_gbp_engine_publishes_the_usd_to_account_rate_and_when_it_was_read(tmp_path):
+    """Item 128 (trades-ux A1): the engine had the broker's rate (`_open_risk_fx`) but never published it, so every
+    GBP open row showed "money not known". It is published with the minute it was read; reporting only."""
+    pb = GbpPaper(equity=10_000)
+    pb.on_tick(_tick(WED))
+    eng, _, _ = _engine(tmp_path, pb=pb)
+    _open(pb, 1, 2_390.0, "a")
+    eng._refresh_account(_tick(WED))
+    eng._write_state()
+    e = _published(tmp_path)
+    assert e["usd_to_account"] == pytest.approx(GBP)
+    assert pd.Timestamp(e["usd_to_account_utc"]) == pd.Timestamp(WED).floor("min")
+
+
+def test_without_a_position_needing_a_rate_the_engine_publishes_none_never_a_guess(tmp_path):
+    pb = GbpPaper(fx=None, equity=10_000)
+    pb.on_tick(_tick(WED))
+    eng, _, _ = _engine(tmp_path, pb=pb)
+    _open(pb, 1, 2_390.0, "a")
+    eng._refresh_account(_tick(WED))
+    eng._write_state()
+    e = _published(tmp_path)
+    assert e["usd_to_account"] is None and e["usd_to_account_utc"] is None

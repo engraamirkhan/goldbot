@@ -1,0 +1,5 @@
+id: U29
+requirement: 'Today per account (backlog 131; docs/design/trades-ux-2026-10-27.md §2.4, §3.5): GET /api/today from the same ledger rows as GET /api/trades: fills today against the per-account target (settings trades_view) and pace, figures by kind, net and costs today, caps used, open risk, exploration sleeves used, a 14-trading-day net strip against the daily target (ADR 0004 scaled per account), week and month to date; quiet-day only from the volatility screen; blinded per ADR 0050'
+status: 'implemented; not done: no volatility screen publishes `opportunity_day` yet (quiet_day and the strip''s opportunity marks stay None); the Telegram /today builder (item 134) still to call the same function'
+code: 'goldbot/api/today_ledger.py (`account_day`, `plans_from_config`); goldbot/api/home_cards.py (`today_money`); goldbot/config.py (TradesViewSettings); config/settings.yaml (trades_view)'
+test: 'tests/test_today_ledger.py'

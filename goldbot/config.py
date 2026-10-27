@@ -516,6 +516,19 @@ class DailyReviewSettings(_Section):
     weekly_proposals: int = Field(4, ge=0, le=4)           # Monday roll-up: variant proposals for the research director
 
 
+
+class TradesViewSettings(_Section):
+    """The trades screens' plan figures (docs/design/trades-ux-2026-10-27.md §2.4, item 131; goldbot/api/today_ledger.py).
+    Reporting only: nothing here sizes, gates or limits a trade."""
+    # fills a day for a demo account without its own target; a live account has no target
+    fills_target: int = Field(200, ge=0)
+    # account id -> its own target (ADR 0049 D1/D1a: icm-probe about 323, icm-demo about 120, vantage-demo about 90)
+    fills_target_by_account: dict[str, int] = Field(default_factory=dict)
+    # ADR 0004 north-star: GBP 50 a day on the GBP 1,000 basis = 5% of the day's starting equity, scaled per account
+    daily_target_share: float = Field(0.05, gt=0, le=1)
+    daily_target_by_account: dict[str, float] = Field(default_factory=dict)  # account id -> a fixed target, account currency
+    strip_days: int = Field(14, ge=1, le=60)                                 # trading days in the daily net strip
+
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 
@@ -768,6 +781,7 @@ class Settings(_Section):
     shadow: ShadowSettings = Field(default_factory=ShadowSettings)
     mt5_login: Mt5LoginSettings = Field(default_factory=Mt5LoginSettings)
     daily_review: DailyReviewSettings = Field(default_factory=DailyReviewSettings)
+    trades_view: TradesViewSettings = Field(default_factory=TradesViewSettings)
 
     @field_validator("feature_day_anchor", "risk_day_anchor")
     @classmethod

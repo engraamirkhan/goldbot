@@ -8,7 +8,8 @@ import { Segmented } from "./ui";
 import { StatusPill } from "./shell/StatusPill";
 import { Login } from "./screens/Login";
 import { Home } from "./screens/Home";
-import { TradesActivity, TradesOpen, TradesSummary } from "./screens/Trades";
+import { TradesTabView } from "./screens/Trades";
+import { TRADES_TABS } from "./lib/trades";
 import { Agents } from "./screens/Agents";
 import { Feeds } from "./screens/Feeds";
 import { Health } from "./screens/Health";
@@ -83,9 +84,7 @@ export function App() {
 
   const TABS: Partial<Record<Section, Tab[]>> = {
     trades: [
-      { id: "open", label: "Open", render: () => <TradesOpen /> },
-      { id: "activity", label: "Activity", render: () => <TradesActivity /> },
-      { id: "summary", label: "Summary", render: () => <TradesSummary /> },
+      ...TRADES_TABS.map((t) => ({ id: t.id, label: t.label, render: () => <TradesTabView tab={t.id} route={route} go={go} /> })),
     ],
     research: [
       { id: "trials", label: "Today and trials", render: () => <Research /> },
@@ -105,7 +104,7 @@ export function App() {
   };
   const SINGLE: Record<string, () => ReactNode> = {
     home: () => <Home onOpenProgress={() => go("research", "road")} onOpenLimits={() => go("limits")}
-                      onOpenTrades={() => go("trades", "open")} />,
+                      onOpenTrades={() => go("trades", "now")} />,
     limits: () => <Limits />,
   };
   const tabs = (TABS[route.section] ?? []).filter((t) => !t.owner || hasRole("owner"));

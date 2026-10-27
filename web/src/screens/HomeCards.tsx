@@ -1,8 +1,8 @@
-// The cards of Home (docs/ux/home-v2-2026-10-19.md: a calm status page) and of the Trades screen. Each card runs its
+// The cards of Home (docs/ux/home-v2-2026-10-19.md: a calm status page) and of the Trades screen (Today: risk per trade). Each card runs its
 // own query and sits in its own error boundary, so one failing source never blanks the page.
 import { useQuery } from "@tanstack/react-query";
 import { Component, type ReactNode } from "react";
-import { api, type OpenPosition, type TodayAccount, type TradesOverview } from "../lib/api";
+import { api, type TodayAccount, type TradesOverview } from "../lib/api";
 import {
   digest, HOME_POLL_MS, meterWords, modeBadge, openTradesWords, shadowTiles, strategyName, systemLine, WATCH_POLL_MS,
 } from "../lib/home";
@@ -10,8 +10,8 @@ import { signedR, TRADES_POLL_MS } from "../lib/tradesOverview";
 import { ageSeconds, type LimitAccount } from "../lib/limits";
 import { type Budget, factorWords, leftState, rateText, riskTodayLine, strategyRows, whyShort } from "../lib/riskToday";
 import { useNow } from "../lib/useNow";
-import { Badge, Button, Card, EmptyState, ErrorState, Meter, MetricTile, Skeleton, TimeText } from "../ui";
-import { lots, money, NBSP, seconds } from "../ui/format";
+import { Badge, Button, Card, EmptyState, ErrorState, Meter, Skeleton, TimeText } from "../ui";
+import { money, NBSP, seconds } from "../ui/format";
 
 /** One card's crash shows its own error; the other cards keep working. */
 export class CardBoundary extends Component<{ name: string; children: ReactNode }, { failed: boolean }> {
@@ -33,83 +33,11 @@ function ModeBadge({ mode }: { mode: string | null | undefined }) {
   return <Badge tone={b === "REAL" ? "warn" : "info"}>{b}</Badge>;
 }
 
-const price = (x: number | null | undefined) => (x == null ? "—" : x.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 const signed = (x: number | null | undefined, ccy: string | null | undefined) => (x == null ? "not known" : money(x, ccy, true));
 
 function Stale({ age }: { age: number | null | undefined }) {
   return <p className="small state warn" role="status">{age == null ? "Figures of unknown age: not shown as current."
     : `Figures are ${seconds(Math.round(age))} old (over ${seconds(60)}): can't reach the engine, not shown as current.`}</p>;
-}
-
-// ------------------------------------------------------------------------------------------------ Today
-/** Today's money per account: after costs, split closed / open, today's costs, and the limit that binds first. */
-export function TodayCard() {
-  const q = useQuery({ queryKey: ["today"], queryFn: api.today, refetchInterval: HOME_POLL_MS });
-  return (
-    <Card title="Today" label="Today" aside={q.dataUpdatedAt ? <>updated <TimeText iso={new Date(q.dataUpdatedAt).toISOString()} /></> : undefined}>
-      {q.isLoading ? <Skeleton height={96} label="Loading today's money" />
-        : q.isError && !q.data ? <ErrorState title="Could not load today's money." stillWorks="Trading and the loss limits are not affected." onRetry={() => q.refetch()} />
-        : q.data!.accounts.length === 0 ? <EmptyState title="No engine is reporting">Today's money shows once an engine reports.</EmptyState>
-        : q.data!.accounts.map((a) => <TodayRow key={a.account} a={a} />)}
-    </Card>
-  );
-}
-
-function TodayRow({ a }: { a: TodayAccount }) {
-  const ccy = a.currency;
-  const m = a.loss_meter ? meterWords(a.loss_meter, (x) => money(x, ccy)) : null;
-  return (
-    <div className="today-row" aria-label={`Today ${a.account}`} role="group">
-      <div className="today-head"><ModeBadge mode={a.mode} /><strong>{a.account}</strong></div>
-      {a.stale && <Stale age={a.age_s} />}
-      <div className="today-figs">
-        <MetricTile label="Day P&L after costs" value={signed(a.day_pnl, ccy)} />
-        <MetricTile label="Closed" value={signed(a.closed_pnl, ccy)}
-                    sub={`${a.closed_n} trade${a.closed_n === 1 ? "" : "s"}${a.closed_complete ? "" : ", some records left out"}`} />
-        <MetricTile label="Open" value={signed(a.open_pnl, ccy)} sub="floating" />
-      </div>
-      {a.costs && (
-        <p className="small muted">Costs today: spread {money(a.costs.spread, ccy)}{a.costs.spread_complete ? "" : " (where recorded)"} ·
-          commission {money(a.costs.commission, ccy)} · swap {money(a.costs.swap, ccy, true)}</p>
-      )}
-      {a.loss_meter && m ? (
-        <div className="today-meter">
-          <Meter value={a.loss_meter.used} max={m.limit} tone={m.tone} label={`Loss today against the ${a.loss_meter.binding === "probe_stop" ? "probe stop" : "daily loss limit"}`}
-                 text={`${money(a.loss_meter.used, ccy)} lost of ${money(m.limit, ccy)}`} />
-          <p className={`small ${m.tone === "ok" ? "muted" : `state ${m.tone}`}`}>{m.text}</p>
-        </div>
-      ) : <p className="small muted">Loss limit not reported by this engine yet.</p>}
-    </div>
-  );
-}
-
-// ------------------------------------------------------------------------------------------------ Open trades
-export function OpenTradesCard() {
-  const q = useQuery({ queryKey: ["positionsOpen"], queryFn: api.openPositions, refetchInterval: HOME_POLL_MS });
-  const v = q.data;
-  return (
-    <Card title={`Open trades${v ? ` (${v.positions.length})` : ""}`} label="Open trades">
-      {q.isLoading ? <Skeleton height={72} label="Loading open trades" />
-        : q.isError && !v ? <ErrorState title="Could not load open trades." stillWorks="Open trades keep their stop, target and automatic exits." onRetry={() => q.refetch()} />
-        : <>
-            {v!.unreadable.length > 0 && <p className="small state warn">{`Couldn't read the open trades of ${v!.unreadable.join(", ")}: missing, not zero.`}</p>}
-            {v!.positions.length === 0 ? <p className="muted">No open trades.</p> : (
-              <ul className="open-list" aria-label="Open trades">{v!.positions.map((p) => <OpenRow key={`${p.account}-${p.position_id}`} p={p} />)}</ul>
-            )}
-          </>}
-    </Card>
-  );
-}
-
-function OpenRow({ p }: { p: OpenPosition }) {
-  return (
-    <li className="open-row">
-      <span className="open-what"><ModeBadge mode={p.mode} />{p.probe && <Badge tone="idle">probe</Badge>}
-        <strong className={p.side}>{p.side.toUpperCase()}</strong> {lots(p.lots)} · {strategyName(p.family, p.timeframe)}</span>
-      <span className="open-money">{p.floating_pnl == null ? "money not known" : money(p.floating_pnl, p.currency, true)} · {signedR(p.r_now)}{p.stale ? " · stale" : ""}</span>
-      <span className="open-levels small muted">entry {price(p.entry)} · stop {price(p.stop)} · target {price(p.target)} USD/oz · opened <TimeText iso={p.opened_utc} /></span>
-    </li>
-  );
 }
 
 // ------------------------------------------------------------------------------------------------ Your strategies
@@ -197,7 +125,7 @@ function TodayLine({ a, limits }: { a: TodayAccount; limits?: LimitAccount }) {
     <div className="today-row" aria-label={`Today ${a.account}`} role="group">
       <p className="today-line"><ModeBadge mode={a.mode} /> <strong>{a.account}</strong>{" "}
         <span className="today-pnl num">{signed(a.day_pnl, ccy)}</span> <span className="muted small">today after costs</span></p>
-      <p className="small muted num">closed {signed(a.closed_pnl, ccy)} ({a.closed_n} trade{a.closed_n === 1 ? "" : "s"}
+      <p className="small muted num">closed {(a.withheld ?? []).includes("closed_pnl") ? "hidden until the arms' reads" : signed(a.closed_pnl, ccy)} ({a.closed_n} trade{a.closed_n === 1 ? "" : "s"}
         {a.closed_complete ? "" : ", some left out"}) · open {signed(a.open_pnl, ccy)}</p>
       {a.stale && <Stale age={a.age_s} />}
       {a.loss_meter && m ? (

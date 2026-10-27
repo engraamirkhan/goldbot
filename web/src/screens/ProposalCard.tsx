@@ -16,12 +16,15 @@ type Props = {
   error?: string | null;
   onApprove?: () => void;
   onReject?: (reason: ReasonCode) => void;
+  /** REAL or DEMO from the account's mode: line 1 of a waiting card names the money class and account first (trades
+   *  spec §3.6, A3). Omitted: the footer keeps the account, as before. */
+  moneyClass?: "REAL" | "DEMO";
 };
 
 const OPEN: CardState[] = ["pending", "expiring"];
 
 /** One proposal: what the trade is, why, how long is left, and one tap to approve. Spec: docs/ux/approval-card.md. */
-export function ProposalCard({ p, now, canDecide, blockers, busy = false, error, onApprove, onReject }: Props) {
+export function ProposalCard({ p, now, canDecide, blockers, busy = false, error, onApprove, onReject, moneyClass }: Props) {
   const [rejecting, setRejecting] = useState(false);
   const state = cardState(p, now);
   const open = OPEN.includes(state);
@@ -32,7 +35,11 @@ export function ProposalCard({ p, now, canDecide, blockers, busy = false, error,
   const money = cardMoney(p);
   const budget = budgetLine(p);
   return (
-    <article className={`card ${p.side} ${state}`} aria-label={`${title}, ${stateName(p, state)}`}>
+    <article className={`card ${p.side} ${state}`} aria-label={`${moneyClass ? `${moneyClass} ${p.account_id}, ` : ""}${title}, ${stateName(p, state)}`}>
+      {moneyClass && open && (
+        <p className={`card-class ${moneyClass === "REAL" ? "real" : ""}`}><strong>{moneyClass}</strong> · {p.account_id}
+          {moneyClass === "REAL" ? " · needs you" : ""}</p>
+      )}
       <header className="card-head">
         <span className={`dir ${p.side}`}><span aria-hidden="true">{long ? "▲" : "▼"}</span> {long ? "LONG" : "SHORT"}</span>
         <strong className="size">{p.lots.toFixed(2)} lots <span className="muted">XAUUSD</span></strong>

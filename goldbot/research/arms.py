@@ -32,6 +32,9 @@ PRIOR_WEIGHT_CAP = 50.0
 PRIOR_WEIGHT_PER_TRADE = 0.01                           # weight = min(50, n / 100)
 # wave 2 lane W2d (goldbot.research.arm_rules_clock_box): WFRI, KA15/XC15, the H-80 box family
 CLOCK_BOX_RULES = ("friday_long", "clock_anchor", "clock_anchor_control", "box_next")
+# H-81 scalp-volume families Z1-Z10 and their controls (goldbot.research.arm_rules_scalp)
+SCALP_RULES = ("tick_surge", "run_fade", "round_break", "round_reject", "extreme_break", "nr4_break",
+               "halfhour_persist", "absorb_fade", "htf_reclaim", "three_horizon", "scalp_control")
 Timeframe = Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
 RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_absorb", "box_break_close",
          "ema_pullback", "tsmom", "specialist", *CLOCK_BOX_RULES, "blocked",
@@ -41,7 +44,8 @@ RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_ab
          # its generator lands in arm_rules.RULE_FUNCS (engine lane E2); a blocked arm never runs
          "level_break",
          # wave 2 lane W2a (H-70 F1 / F-2)
-         "hurst_band_break", "hurst_band_break_control", "htf_stretch_break", "htf_stretch_break_control")
+         "hurst_band_break", "hurst_band_break_control", "htf_stretch_break", "htf_stretch_break_control",
+         *SCALP_RULES)
 
 
 # ---------------------------------------------------------------- holdout guard
@@ -150,6 +154,9 @@ class Arm(FrozenRecord):
             if self.rule in CLOCK_BOX_RULES:
                 from goldbot.research.arm_rules_clock_box import check
                 check(self)
+            if self.rule in SCALP_RULES:
+                from goldbot.research.arm_rules_scalp import check as check_scalp
+                check_scalp(self)
         except ValueError as exc:
             raise ValueError(f"{self.id}: {exc}") from exc
         return self
@@ -226,6 +233,24 @@ def runnable_ids(path: Path) -> list[str]:
     original's (same rule body on the same bars) and whose broker takes no H-60 prior (ADR 0043 broker amendment),
     nor a forward-only arm (`Arm.forward_only`)."""
     return [a.id for a in load_arms(path) if a.status == "run" and a.twin_of is None and not a.forward_only]
+
+
+# ---------------------------------------------------------------- send timing
+SEND_DELAY_TFS = ("1m", "5m")
+QUARTER_S = 900
+SEND_DELAY_MIN_S, SEND_DELAY_STEP_S, SEND_DELAY_STEPS = 3.0, 0.5, 9      # 3.0, 3.5, ..., 7.0 s
+
+
+def send_delay_s(arm_id: str, timeframe: str, close: pd.Timestamp) -> float:
+    """Seconds after its decision close a 1m/5m arm's entry order is sent (ARM-SPEC section 0, dated note
+    2026-10-27): on a quarter-hour close (:00/:15/:30/:45), which carries the 15m+ close work and sends, 3.0-7.0 s in
+    0.5 s steps fixed by the arm id (a hash: no state, restart-safe, identical in history and live); otherwise and for
+    15m+ arms 0. The decision stays on its bar; every delay is inside the 1m stale window (10 s) and the first minute
+    after the close, so the history entry (the open of the minute holding close + delay) is still that minute's."""
+    if timeframe not in SEND_DELAY_TFS or int(pd.Timestamp(close).timestamp()) % QUARTER_S:
+        return 0.0
+    h = int.from_bytes(hashlib.sha256(f"goldbot-send-delay|{arm_id}".encode()).digest()[:8], "big")
+    return SEND_DELAY_MIN_S + SEND_DELAY_STEP_S * (h % SEND_DELAY_STEPS)
 
 
 # ---------------------------------------------------------------- priors

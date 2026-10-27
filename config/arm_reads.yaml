@@ -1,0 +1,7 @@
+# Exploration arms whose single pre-registered read is recorded (prereg H-61: "each arm is read once, at its 300th
+# admissible trade"; ADR 0050). Until an arm is listed here every view treats it as UNREAD: no aggregate of it (sum,
+# mean, hit rate, rank, share, comparison with its control) leaves the server (goldbot/api/trades_ledger.py). The
+# evaluator adds the row with the read's verdict, in the same commit as the verdict; a row is never removed or edited.
+# Controls are the null their arms are read against: they stay unread until listed.
+#   <arm id>: {read_utc: "YYYY-MM-DDTHH:MM:SSZ", verdict: "<the recorded verdict, plain words>"}
+reads: {}

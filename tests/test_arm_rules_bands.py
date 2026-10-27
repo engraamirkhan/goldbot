@@ -4,6 +4,7 @@ Hurst window and the 4h join included), the stop/no-target/time exit as frozen, 
 (a trailing window of LOOKBACK_BARS) equal to the history run, and the 2010-2017 counts near slice F's."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +24,7 @@ RULES = tuple(B.RULES)
 IDS = {"hurst_band_break": "F1A", "hurst_band_break_control": "F1C", "htf_stretch_break": "F2A",
        "htf_stretch_break_control": "F2C"}
 CUT = pd.Timestamp("2024-02-14", tz="UTC")
-RAW = Path("/Users/aamirkhan/tmp/ts/raw")
+RAW = Path(os.environ.get("GOLDBOT_RAW_BARS", str(Path(__file__).resolve().parents[1] / "raw")))   # the gitignored local bars (ADR 0048)
 
 
 @pytest.fixture(scope="module")

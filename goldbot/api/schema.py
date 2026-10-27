@@ -1318,7 +1318,15 @@ class OpenPosition(BaseModel):
     r_now: float | None                     # the move from entry over the risk at entry
     open_risk: float | None = None          # the loss if the stop held now, in the account currency; 0 once locked in
     age_s: float | None                     # how old the engine's figures are
-    stale: bool                             # older than 60 s (or unknown): never shown as current
+    stale: bool                             # older than 60 s, or a conversion older than 120 s: never shown as current
+    # item 128 (docs/design/trades-ux-2026-10-27.md §3.1); defaults keep older clients and fixtures valid
+    account_label: str = "Other account"    # the owner's word for the account ("Scalp lab"), never the slug
+    kind: TradeKind = "strategy"
+    family_label: str = ""                  # the owner's name for the strategy ("Box break + close")
+    risk_amount: float | None = None        # the loss at the stop at entry, account currency
+    held_s: float | None = None             # since the fill
+    hold_limit_s: float | None = None       # the most it is held (max bars x timeframe); None when not bounded by time
+    fx_age_s: float | None = None           # age of the engine's USD -> account rate (stale past 120 s)
 
 
 class OpenPositionsView(BaseModel):
@@ -1390,13 +1398,185 @@ class TodayAccount(BaseModel):
     loss_meter: LossMeter | None            # None: the engine publishes no daily limit
     age_s: float | None
     stale: bool                             # older than 60 s (or unknown)
+    # item 131 (docs/design/trades-ux-2026-10-27.md §2.4, §3.5): from the trade ledger (GET /api/trades, one builder).
+    # A money figure covering fewer than 3 unread arms is None and named in `withheld` (ADR 0050)
+    account_label: str = "Other account"
+    fills_today: int | None = None          # fills this opportunity day, every kind but shadow; None: ledger unreadable
+    fills_target: int | None = None         # the per-account plan from settings (trades_view); None for live
+    pace: int | None = None                 # fills projected by the day's end from the last 2 hours' rate
+    by_kind: dict[str, KindDay] = Field(default_factory=dict)   # TradeKind -> today's figures; never summed on screen
+    net_today: float | None = None          # every ledger row closed today, net after costs (= sum of the list's rows)
+    net_unknown: int = 0                    # today's closed trades whose net is not known: net_today is then None
+    net_today_partial: float | None = None  # with net_unknown: the known rows' sum, never the net
+    costs_today: CostSplit | None = None
+    open_n: int | None = None               # the engine's open positions
+    open_risk: float | None = None          # the engine's remaining stop risk, account currency
+    day_cap_used: CapUse | None = None
+    week_cap_used: CapUse | None = None
+    exploration_pot_used: CapUse | None = None   # realised arm losses today + open arms' stop risk, of the sleeves
+    daily_target: float | None = None       # ADR 0004 north-star scaled per account (settings trades_view)
+    strip: list[StripDay] = Field(default_factory=list)   # the last 14 trading days, oldest first
+    week_to_date: PeriodNet | None = None
+    month_to_date: PeriodNet | None = None
+    quiet_day: bool | None = None           # the volatility screen's verdict; None while no screen publishes one
+    withheld: list[str] = Field(default_factory=list)   # figures withheld by the blinding rule (ADR 0050)
 
 
 class TodayView(BaseModel):
     as_of: datetime
     accounts: list[TodayAccount]
+    unreadable: list[TradeSource] = Field(default_factory=list)   # ledger sources: their trades missing, not zero
 # ============================================================================= end Home status card stack
+
+
+# ============================================================================= Trade ledger (GET /api/trades)
+# goldbot/api/trades_ledger.py (docs/design/trades-ux-2026-10-27.md §2, items 128, 129, 131; ADR 0050): one row per
+# trade of every kind, filters, cursor paging and totals; blinding is enforced here, server-side
+TradeKind = Literal["real", "strategy", "exploration", "control", "cost_probe", "shadow"]
+# the closed vocabulary of how a trade ended (the raw engine/broker codes are mapped, never shown)
+ExitReason = Literal["target", "stop", "trail", "time_limit", "friday_cut", "manual", "kill_switch",
+                     "broker_stop_out", "other"]
+# counted: admissible toward its arm's read; excluded: void as evidence (quarantine); censored: closed by anything but
+# its own stop, target or hold; pending: still open; not_evidence: a strategy, real, probe or shadow trade
+TradeEvidence = Literal["counted", "excluded", "censored", "pending", "not_evidence"]
+TradeStatus = Literal["open", "closed"]
+TradeSource = Literal["shadow", "positions", "probes", "exploration", "orders"]
+TradeListPeriod = Literal["today", "7d", "30d", "all"]
+
+
+class CostSplit(BaseModel):
+    """Costs in the account currency, each positive when paid: spread at the fill (both legs at the entry's spread),
+    adverse entry slippage, commission, swap (a credit is negative). `total` is the sum of the known parts;
+    `complete` False when a part is not recorded in money (a position record keeps its spread in points)."""
+    spread: float | None
+    slippage: float | None
+    commission: float | None
+    swap: float | None
+    total: float
+    complete: bool
+    # the exit half of the spread is the entry's (no exit quote recorded): an estimate, labelled as such
+    spread_exit_estimated: bool = False
+    slippage_exit_known: bool = False       # exit slippage measured (fill vs the quote the close was sent on)
+
+
+class TradeRow(BaseModel):
+    """One trade (opened and closed merged). Money in the account currency, prices USD per oz, times UTC. Closed:
+    `pnl` is net of every cost and `gross` = pnl + costs.total (to the penny). Open: `pnl_now` at the engine's mid
+    price from the fill (the entry spread is inside it). `blinded` True: this row's result fields were withheld because
+    the list's filter isolates arms not yet read (ADR 0050); GET /api/trades/{trade_id} always shows the result."""
+    trade_id: str
+    kind: TradeKind
+    status: TradeStatus
+    account: str | None                     # config name, digits cut: the filter key; None for a shadow trade
+    account_label: str                      # "Scalp lab", "Live (ICM)", "Shadow (paper)": never the slug
+    mode: Literal["demo", "live", "paper"] | None
+    family: str
+    family_label: str
+    variant: str | None                     # "15m", or "5m · target VWAP" when two arms share a family and timeframe
+    timeframe: str | None
+    arm_id: str | None                      # exploration and control only (the "Details" disclosure)
+    is_control: bool
+    side: Literal["long", "short"]
+    lots: float | None
+    entry: float | None
+    stop: float | None                      # at entry
+    stop_now: float | None                  # the engine's stop now, when it holds the position
+    target: float | None
+    exit: float | None
+    exit_utc: datetime | None
+    exit_reason: ExitReason | None          # never None on a closed row unless `blinded`
+    censored: bool
+    opened_utc: datetime
+    held_s: float | None
+    hold_limit_s: float | None
+    risk_amount: float | None               # the loss at the stop at entry
+    currency: str | None
+    pnl: float | None                       # closed, net of every cost
+    r: float | None                         # closed: pnl over risk_amount (a shadow trade: gross, from its return)
+    gross: float | None                     # closed: pnl + costs.total
+    pnl_now: float | None                   # open
+    r_now: float | None
+    price_now: float | None
+    costs: CostSplit | None                 # None for a shadow trade (paper: no money)
+    why: str                                # plain words, at most 80 characters
+    evidence: TradeEvidence
+    excluded_reason: str | None
+    blinded: bool
+    stale: bool                             # open: the engine's figures or rate are old, never shown as current
+
+
+class TradeTotals(BaseModel):
+    """The filter's totals over every matching row (not only the page), equal to the sum of those rows. With
+    `withheld` the money is None (ADR 0050: an aggregate covering fewer than 3 unread arms, or a filter narrowed to
+    strategies with unread arms); counts and open risk always show."""
+    n: int
+    n_open: int
+    n_closed: int
+    currency: str | None                    # the one currency of the money rows; None when none or mixed
+    mixed_currencies: bool                  # money in more than one currency: never summed
+    net_pnl: float | None                   # closed rows; None when withheld or any closed net is unknown
+    net_unknown: int = 0                    # closed trades whose net is not known (gross-only or unreadable deals)
+    net_partial: float | None = None        # with net_unknown: the known rows' sum, never the net
+    costs: float | None                     # closed rows' known costs
+    open_pnl: float | None
+    open_risk: float | None                 # open rows' risk at entry
+    # the open-P&L total alone is withheld: an account's unread open trades cover fewer than 3 arms (each open row
+    # still shows its own P&L)
+    open_pnl_withheld: bool = False
+    withheld: bool
+    withheld_reason: str | None
+
+
+class TradesPage(BaseModel):
+    as_of: datetime
+    rows: list[TradeRow]                    # newest activity first (close, else open)
+    next_cursor: str | None                 # pass as `cursor` for the next page; None on the last
+    totals: TradeTotals
+    unreadable: list[TradeSource]           # their trades are missing, not zero
+
+
+class KindDay(BaseModel):
+    """One kind's figures today on one account. `withheld`: the money covers fewer than 3 unread arms (ADR 0050)."""
+    fills: int
+    closed: int
+    net_pnl: float | None
+    costs: float | None
+    net_r: float | None
+    withheld: bool = False
+    net_unknown: int = 0                    # closed trades whose net is not known: net_pnl is then None
+
+
+class CapUse(BaseModel):
+    used: float                             # account currency
+    limit: float
+    share: float                            # used / limit
+
+
+class StripDay(BaseModel):
+    """One opportunity day of the strip: net after costs of the rows closed that day."""
+    day: date
+    n: int
+    net_pnl: float | None                   # None: withheld (fewer than 3 unread arms that day) or a net unknown
+    costs: float | None
+    target: float | None                    # the daily target (settings), account currency
+    opportunity: bool | None                # the volatility screen's verdict; None while none is published
+    withheld: bool = False
+    net_unknown: int = 0
+
+
+class PeriodNet(BaseModel):
+    since: date
+    n: int
+    net_pnl: float | None
+    costs: CostSplit | None
+    withheld: bool = False
+    net_unknown: int = 0                    # closed trades whose net is not known: net_pnl is then None
+    net_partial: float | None = None
+# ============================================================================= end Trade ledger
 
 
 ResearchPlanView.model_rebuild()   # refers to models defined after it
 Status.model_rebuild()          # `blackout` refers to ActiveBlackout, defined after Status
+OpenPosition.model_rebuild()    # `kind` is TradeKind, defined with the trade ledger after it
+TodayAccount.model_rebuild()    # refers to the trade ledger models defined after it
+TodayView.model_rebuild()

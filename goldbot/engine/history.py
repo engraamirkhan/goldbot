@@ -96,6 +96,28 @@ class _Deadline(Pace):
         return now
 
 
+def rates_to_bars(r: pd.DataFrame | None, point: float) -> pd.DataFrame:
+    """The broker's 1m rates (`get_bars`: ts_utc, open/high/low/close bid, tick_count, spread in points) as BAR_COLUMNS,
+    one definition for the history fill and the live minutes (engine/broker_bars.py): bid_* = the rates (MT5 bars are
+    bid), ask_* = bid_* + spread x point, spread_mean = spread_max = spread x point (MT5 keeps one spread per bar),
+    tick_count = tick volume, visible_at = ts_utc + 1 min, in-session minutes only (DEFAULT_SESSIONS, as the live
+    builder), sorted and de-duplicated. Empty for no rates or an unusable point."""
+    if r is None or len(r) == 0 or not point > 0:
+        return pd.DataFrame(columns=BAR_COLUMNS)
+    ts = pd.DatetimeIndex(pd.to_datetime(r["ts_utc"], utc=True))
+    spread = pd.to_numeric(r["spread"]).to_numpy(float) * point
+    out = pd.DataFrame({"ts_utc": ts, "visible_at": ts + pd.Timedelta(minutes=1)})
+    for side in ("open", "high", "low", "close"):
+        bid = pd.to_numeric(r[side]).to_numpy(float)
+        out[f"bid_{side}"] = bid
+        out[f"ask_{side}"] = bid + spread
+    out["tick_count"] = pd.to_numeric(r["tick_count"]).to_numpy(float)
+    out["spread_mean"] = spread
+    out["spread_max"] = spread
+    out = out[np.asarray(DEFAULT_SESSIONS.is_open(ts), dtype=bool)]
+    return out[BAR_COLUMNS].drop_duplicates("ts_utc").sort_values("ts_utc").reset_index(drop=True)
+
+
 class BrokerRates:
     """The broker's own 1m bars (MT5 copy_rates via `get_bars(symbol, "1m", n)`), the fallback for minutes older than
     the terminal's tick history (brain 2026-10-19: ticks reached ~15 h back, rates weeks). Pulled once per fill, on the
@@ -134,19 +156,8 @@ class BrokerRates:
         if r is None or len(r) == 0 or not point > 0:
             self.frame = empty
             return empty
-        ts = pd.DatetimeIndex(pd.to_datetime(r["ts_utc"], utc=True))
-        spread = pd.to_numeric(r["spread"]).to_numpy(float) * point
-        out = pd.DataFrame({"ts_utc": ts, "visible_at": ts + pd.Timedelta(minutes=1)})
-        for side in ("open", "high", "low", "close"):
-            bid = pd.to_numeric(r[side]).to_numpy(float)
-            out[f"bid_{side}"] = bid
-            out[f"ask_{side}"] = bid + spread
-        out["tick_count"] = pd.to_numeric(r["tick_count"]).to_numpy(float)
-        out["spread_mean"] = spread
-        out["spread_max"] = spread
-        out = out[np.asarray(DEFAULT_SESSIONS.is_open(ts), dtype=bool)]
         self.ok = True
-        self.frame = out[BAR_COLUMNS].drop_duplicates("ts_utc").sort_values("ts_utc").reset_index(drop=True)
+        self.frame = rates_to_bars(r, point)
         return self.frame
 
     def minutes(self, lo: pd.Timestamp, hi: pd.Timestamp, *, since: pd.Timestamp) -> pd.DataFrame:

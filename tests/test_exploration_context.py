@@ -106,8 +106,8 @@ def _live(ac: ArmContext, arm: A.Arm, b1: pd.DataFrame, close: pd.Timestamp, kee
     return live[live["idx"] == len(got.bars) - 1].drop(columns="idx").reset_index(drop=True)
 
 
-def _ac(tmp_path: Path, store: Any, **kw: Any) -> ArmContext:
-    return ArmContext(Database.open(str(tmp_path), "aux"), store, "XAUUSD", **kw)
+def _ac(tmp_path: Path, store: Any, account_id: str = "icm-demo", **kw: Any) -> ArmContext:
+    return ArmContext(Database.open(str(tmp_path), "aux"), store, "XAUUSD", account_id, **kw)
 
 
 # ------------------------------------------------------------------------------------------------ stored bars
@@ -214,7 +214,83 @@ def test_the_exploration_replica_feed_is_its_own_and_pinned_to_the_research_seri
     ac = _ac(tmp_path, None)
     assert ac.replica.series_start == SERIES_START
     agent = ac.agent(_smc("XTV1", "tvr1"))
-    assert ac.replica.feed(agent).feed.startswith("xauusd-s2010-15m-")
+    assert ac.replica.feed(agent).feed.startswith("icm-demo-xauusd-s2010-15m-")
+
+
+class Rebuilds:
+    """Counts the replica feed's rebuilds from the series start (each ~60 CPU-s on the brain)."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch):
+        from goldbot.features.smc_live import ReplicaFeed
+        self.feeds: list[str] = []
+        boot = ReplicaFeed._bootstrap
+
+        def spy(feed: Any, *a: Any, **kw: Any) -> Any:
+            self.feeds.append(feed.feed)
+            return boot(feed, *a, **kw)
+        monkeypatch.setattr(ReplicaFeed, "_bootstrap", spy)
+
+
+def test_two_hosts_on_one_aux_db_keep_their_own_replica_feed_and_never_rebuild_each_other(tmp_path, b1_2010,
+                                                                                         monkeypatch) -> None:
+    """SRE 2026-10-27: XTV1 (icm-demo) and VXTV2 (vantage-demo) share the replica parameters and state/aux.db; on one
+    feed each host's close found the other's snapshot (other broker's bars: another digest and count) and rebuilt
+    from 2010, every close. Each host now carries its own feed: one rebuild each, then bar by bar."""
+    rebuilds = Rebuilds(monkeypatch)
+    _, close = _hist(_smc("XTV1", "tvr1"), b1_2010)
+    other = b1_2010.assign(tick_count=b1_2010["tick_count"] + 1)        # the other broker's bars of the same minutes
+    icm = _ac(tmp_path, FakeStore(b1_2010), "icm-demo", warm_wait_s=120.0)
+    vantage = _ac(tmp_path, FakeStore(b1_2010), "vantage-demo", warm_wait_s=120.0)
+    for c in close[-8:]:
+        _live(icm, _smc("XTV1", "tvr1"), b1_2010, c, keep=12_000)
+        _live(vantage, _smc("VXTV2", "tvr2"), other, c, keep=12_000)
+    assert sorted(rebuilds.feeds) == sorted({*rebuilds.feeds}) and len(rebuilds.feeds) == 2, rebuilds.feeds
+
+
+def test_the_replica_tail_holds_only_complete_bars_of_the_window(tmp_path, b1_2010, monkeypatch) -> None:
+    """The rule's slice of 1m rows may start inside a bar (`exploration._shared_bars`); the replica is fed the window's
+    complete bars instead, so a rebuild never carries a part bar into the state from 2010."""
+    from goldbot.data.resample import mid
+    from goldbot.features.smc_live import ReplicaFeed
+    tails: list[pd.DataFrame] = []
+    update = ReplicaFeed.update
+
+    def spy(feed: Any, tail: pd.DataFrame, *a: Any, **kw: Any) -> Any:
+        tails.append(tail.reset_index(drop=True))
+        return update(feed, tail, *a, **kw)
+    monkeypatch.setattr(ReplicaFeed, "update", spy)
+    b = b1_2010.drop(index=b1_2010.index[-600:-593]).reset_index(drop=True)   # 7 minutes missing: the rule's rows
+    _, close = _hist(_smc("XTV1", "tvr1"), b)                                  # then start inside a bar
+    full = mid(resample_bars(b, "15m")).set_index("ts_utc")
+    arm = _smc("XTV1", "tvr1")
+    first = exploration.arm_bars(b[b["visible_at"] <= close[-1]].tail(12_000), arm, close[-1])
+    assert first is not None and first[0]["tick_count"].iloc[0] != full.loc[first[0]["ts_utc"].iloc[0], "tick_count"]
+    ac = _ac(tmp_path, FakeStore(b), warm_wait_s=120.0)
+    for c in close[-4:]:
+        _live(ac, arm, b, c, keep=12_000)
+    assert len(tails) >= 3
+    for t in tails:
+        want = full.loc[pd.DatetimeIndex(t["ts_utc"])].reset_index()
+        pd.testing.assert_frame_equal(t[want.columns.tolist()], want, check_dtype=False)
+
+
+def test_a_bootstrap_that_failed_or_ran_is_not_started_again_within_the_cooldown(tmp_path, b1_2010,
+                                                                                 monkeypatch) -> None:
+    """At most one rebuild per feed a REBUILD_COOLDOWN_S (a restart starts afresh): a store that cannot give the 2010
+    series used to read every bar since 2010 at every close; the arm stays held back meanwhile (fail closed)."""
+    from goldbot.engine import replica_context
+    rebuilds = Rebuilds(monkeypatch)
+    now = [1000.0]
+    monkeypatch.setattr(replica_context, "clock", lambda: now[0])
+    arm = _smc("XTV1", "tvr1")
+    _, close = _hist(arm, b1_2010)
+    ac = _ac(tmp_path, FakeStore(b1_2010, start=pd.Timestamp("2010-02-01", tz="UTC")), warm_wait_s=120.0)
+    for c in close[-6:]:
+        assert _live(ac, arm, b1_2010, c, keep=12_000) == "replica_warming"
+    assert len(rebuilds.feeds) == 1
+    now[0] += replica_context.REBUILD_COOLDOWN_S
+    assert _live(ac, arm, b1_2010, close[-1], keep=12_000) == "replica_warming"
+    assert len(rebuilds.feeds) == 2
 
 
 def test_rules_that_need_nothing_beyond_the_window_keep_the_engines_own_path() -> None:
@@ -262,7 +338,7 @@ def test_the_engine_queues_the_history_candidate_of_a_stored_bars_arm_and_holds_
     assert not ex.queue
     held = [d for d in eng.decisions if d.get("action") == "exploration_held_back"]
     assert [(d["agent"], d["reason"]) for d in held] == [("explore:DOND", "history_unavailable")]
-    ex.context = ArmContext(ex.db, FakeStore(b1), "XAUUSD")
+    ex.context = ArmContext(ex.db, FakeStore(b1), "XAUUSD", eng.cfg.account_id)
     ex.last_bar.clear()
     _close_at(eng, pb, b1, c)
     assert exploration.step(eng, c)

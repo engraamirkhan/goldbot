@@ -804,7 +804,9 @@ def test_the_two_hosts_ship_the_adr_0043_budget_with_exploration_on():
     assert demo.budget_share * 220 == pytest.approx(198, abs=0.05)
     assert accs["icm-probe"].cost_probe.budget_share * 220 == pytest.approx(60, abs=0.05)
     assert {k: (v.gbp, v.max_open) for k, v in probe.pots.items()} == {"scalp": (138, 12)}
-    assert {k: (v.gbp, v.max_open) for k, v in demo.pots.items()} == {"intraday": (108, 9), "swing": (90, 2)}   # 5 -> 9 wave 1; swing 1 -> 2 wave 2
+    # ADR 0049 D1a (CFO 2026-10-27): a scalp pot for H-81 carved inside the same £198 (was intraday 108 / 9, swing 90 / 2)
+    assert {k: (v.gbp, v.max_open) for k, v in demo.pots.items()} == {"scalp": (90, 8), "intraday": (68, 7),
+                                                                       "swing": (40, 2)}
     assert {a.max_loss for a in probe.arms.values()} == {6.5}
     assert {a.max_loss for a in demo.arms.values() if a.style == "intraday"} == {17.0, 30.0}   # £30: wave-1 1h arms
     assert {a.max_loss for a in demo.arms.values() if a.style == "swing"} == {40.0}
@@ -1108,3 +1110,37 @@ def test_a_candidate_outside_the_arms_stop_band_is_skipped_journalled_and_record
     u = {a: exploration.draw(exploration.order_id(eng, ex.arms[a], CLOSE)) for a in ("band", "floor")}
     assert [r[:6] for r in _obs(tmp_path)] == [("band", 0, "blocked", 0.0, pytest.approx(u["band"]), "stop_gt_cap"),
                                                ("floor", 0, "blocked", 0.0, pytest.approx(u["floor"]), "stop_lt_floor")]
+
+
+# ------------------------------------------------------------------------------------------------ the quarter-hour
+def test_a_scalp_arm_sends_a_few_seconds_after_a_quarter_hour_close_fixed_by_its_arm_id():
+    """SRE 2026-10-27: the quarter-hour closes carry the 15m+ work and sends; a 1m/5m arm's order on such a close goes
+    out 3-7 s after it, the same delay for the same arm every time (no state, restart-safe), inside its stale window
+    and the first minute; on every other close and for 15m+ arms, at once."""
+    from goldbot.research.arms import send_delay_s
+    qh, off = CLOSE, CLOSE + pd.Timedelta(minutes=3)
+    ids = [f"S{i}" for i in range(40)]
+    got = {a: send_delay_s(a, "1m", qh) for a in ids}
+    assert all(3.0 <= d <= 7.0 for d in got.values()) and len(set(got.values())) >= 5
+    assert got == {a: send_delay_s(a, "1m", qh + pd.Timedelta(hours=5)) for a in ids}
+    assert max(got.values()) < exploration.stale_s("1m") - 2.0
+    assert all(send_delay_s(a, "5m", qh) == got[a] for a in ids)
+    assert send_delay_s("S0", "1m", off) == 0.0 and send_delay_s("S0", "15m", qh) == 0.0
+    assert send_delay_s("S0", "5m", CLOSE + pd.Timedelta(minutes=5)) == 0.0
+
+
+def test_a_scalp_signal_on_a_quarter_hour_close_waits_its_delay_and_keeps_its_decision_bar(tmp_path):
+    from goldbot.research.arms import send_delay_s
+    arm = _arm("s", tf="1m", style="scalp", hold_bars=5)
+    eng, pb = _engine(tmp_path, [arm])
+    tick = _at(eng, pb, CLOSE)
+    wait = send_delay_s("s", "1m", CLOSE)
+    exploration.on_pass(eng, Tick(ts_utc=CLOSE + pd.Timedelta(seconds=2), bid=tick.bid, ask=tick.ask))
+    ex = eng.exploration
+    assert ex is not None and not _sent(eng) and [s.bar_ts for s in ex.queue] == [CLOSE]
+    exploration.on_pass(eng, Tick(ts_utc=CLOSE + pd.Timedelta(seconds=wait - 0.1), bid=tick.bid, ask=tick.ask))
+    assert not _sent(eng)
+    exploration.on_pass(eng, Tick(ts_utc=CLOSE + pd.Timedelta(seconds=wait), bid=tick.bid, ask=tick.ask))
+    assert len(_sent(eng)) == 1 and not ex.queue
+    [rec] = exploration.trades(str(tmp_path))
+    assert rec.signal_utc == CLOSE

@@ -20,7 +20,12 @@ failing source never blanks Home ("each card its own query").
   than the real-trade reserve plus one probe's loss, `limit x (1 - REAL_TRADE_RESERVE) - max_loss`, ~£16 of £50, and
   never past `budget_share x limit`; a probe_only account keeps no reserve, ADR 0037 amendment 4) or the account's
   daily loss limit. Money older than `STALE_S` is marked stale,
-  never shown as current.
+  never shown as current. Item 131 adds the ledger fields (today_ledger.account_day, from the GET /api/trades build).
+
+Item 128 (docs/design/trades-ux-2026-10-27.md A1): the engine publishes `usd_to_account` and `usd_to_account_utc`
+(risk/open_risk.published_fx), so every GBP open row has its floating P&L, risk at entry and open risk; a rate older
+than `FX_STALE_S` marks the row stale ("shown stale, never as current"). Rows carry the owner's names (account label,
+family label) and their kind (strategy, real, exploration, control, cost probe).
 
 Design rules kept: "accounts appear by config name. Any run of 5 or more digits is cut to its last two"
 (`entry_text.account_name`); demo and live are separate rows, never summed; a source that cannot be read is named in
@@ -47,10 +52,14 @@ from goldbot.api.schema import (
     StrategyWatchView,
     TodayAccount,
     TodayView,
+    TradeKind,
 )
+from goldbot.api.strategy_labels import account_label, catalog
+from goldbot.api.today_ledger import AccountPlan, account_day
+from goldbot.api.trades_ledger import Ledger, build_ledger
 from goldbot.base import FrozenRecord, load_record
 from goldbot.config import TF_SECONDS, tf_seconds
-from goldbot.engine import cost_probe
+from goldbot.engine import cost_probe, exploration
 from goldbot.engine.shadow import ShadowBook, ShadowTrade
 from goldbot.engine.store import OpenTrade
 from goldbot.ops import gates_phase as gp
@@ -66,6 +75,7 @@ __all__ = ["HOME_TTL_S", "STALE_S", "WATCH_DAYS", "ProbeTerms", "open_positions"
 
 HOME_TTL_S = 5.0                    # one build serves every poll for 5 s (the Home cards poll every 5-15 s)
 STALE_S = 60.0                      # the decision: money or status older than 60 s is stale, never "allowed"
+FX_STALE_S = 120.0                  # item 128: a USD -> account rate older than this is stale, never shown as current
 WATCH_DAYS = 7                      # a shadow agent seen in this many days is watched even when agents.json omits it
 
 
@@ -92,6 +102,24 @@ def _mode(v: Any) -> Literal["demo", "live", "paper"] | None:
 
 
 # ------------------------------------------------------------------------------------------------ N1 open positions
+def _kind(agent_id: str, mode: str | None) -> TradeKind:
+    if cost_probe.is_probe(agent_id):
+        return "cost_probe"
+    if exploration.is_exploration(agent_id):
+        info = catalog().arm(agent_id.removeprefix(exploration.PREFIX))
+        return "control" if info is not None and info.is_control else "exploration"
+    return "real" if mode == "live" else "strategy"
+
+
+def _family(agent_id: str) -> str:
+    """An arm's family from the catalog; a probe's or a strategy's from its agent id."""
+    if exploration.is_exploration(agent_id):
+        info = catalog().arm(agent_id.removeprefix(exploration.PREFIX))
+        if info is not None:
+            return info.family
+    return family_of(agent_id.split(":", 1)[-1])
+
+
 def _position(account: str, t: OpenTrade, e: dict[str, Any], now: pd.Timestamp) -> OpenPosition:
     entry = t.open_price if t.open_price is not None else t.entry
     price = _num(e.get("price"))
@@ -104,15 +132,39 @@ def _position(account: str, t: OpenTrade, e: dict[str, Any], now: pd.Timestamp) 
     r_now = None if move is None or not risk else round(move / risk, 2)
     at_risk = None if entry is None or t.sl is None else max(0.0, t.side * (entry - t.sl))
     open_risk = None if at_risk is None or contract is None or fx is None else round(at_risk * t.lots * contract * fx, 2)
+    risk_amount = None if risk is None or contract is None or fx is None else round(risk * t.lots * contract * fx, 2)
     age = _age(e, now)
+    fx_age, fx_stale = _fx_age(e, now)
     ccy = e.get("currency")
-    return OpenPosition(account=account_name(account), mode=_mode(e.get("mode")), probe=cost_probe.is_learning(t.agent_id),
-                        position_id=t.position_id, agent_id=t.agent_id, family=family_of(t.agent_id.split(":", 1)[-1]),
+    mode = _mode(e.get("mode"))
+    opened = t.opened_utc or t.entry_bar_ts
+    family = _family(t.agent_id)
+    return OpenPosition(account=account_name(account), mode=mode, probe=cost_probe.is_learning(t.agent_id),
+                        position_id=t.position_id, agent_id=t.agent_id, family=family,
                         timeframe=t.timeframe, side=_side(t.side), lots=t.lots, entry=entry,
-                        stop=t.sl, target=t.tp, opened_utc=t.opened_utc or t.entry_bar_ts, price=price,
+                        stop=t.sl, target=t.tp, opened_utc=opened, price=price,
                         floating_pnl=pnl, currency=ccy if isinstance(ccy, str) else None, r_now=r_now, open_risk=open_risk,
-                        age_s=age,
-                        stale=age is None or age > STALE_S)
+                        age_s=age, stale=age is None or age > STALE_S or fx_stale,
+                        account_label=account_label(account), kind=_kind(t.agent_id, mode),
+                        family_label=catalog().family_label(family), risk_amount=risk_amount,
+                        held_s=round(max(0.0, (now - opened).total_seconds()), 1),
+                        hold_limit_s=float(t.max_bars * tf_seconds(t.timeframe)) if t.timeframe else None,
+                        fx_age_s=fx_age)
+
+
+def _fx_age(e: dict[str, Any], now: pd.Timestamp) -> tuple[float | None, bool]:
+    """(age of the engine's published USD -> account rate, whether it is stale: over FX_STALE_S or without a readable
+    stamp), item 128. (None, False) on a USD account (no conversion) or when no rate is published (money is then None,
+    not stale)."""
+    if str(e.get("currency") or "").upper() == "USD" or usd_to_account(e) is None:
+        return None, False
+    try:
+        age = (now - pd.Timestamp(str(e["usd_to_account_utc"]))).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        return None, True
+    if not math.isfinite(age):
+        return None, True
+    return round(max(0.0, age), 1), age > FX_STALE_S
 
 
 def open_positions(state_dir: str | Path, now: pd.Timestamp,
@@ -286,12 +338,19 @@ def _closed_today(state: Path, account: str, now: pd.Timestamp, e: dict[str, Any
 
 
 def today_money(state_dir: str | Path, now: pd.Timestamp, probe_terms: dict[str, ProbeTerms],
-                engines: list[dict[str, Any]] | None = None) -> TodayView:
+                engines: list[dict[str, Any]] | None = None, ledger: Ledger | None = None,
+                plans: dict[str, AccountPlan] | None = None) -> TodayView:
     """One row per reporting engine (demo and live never summed). A record source that cannot be read leaves the
-    closed figures None (`closed_unreadable`), the broker's figures still show."""
+    closed figures None (`closed_unreadable`), the broker's figures still show. The ledger fields (item 131,
+    today_ledger.account_day) come from `ledger` (the API passes its cached GET /api/trades build) and `plans`
+    (settings and accounts.yaml; None: no targets)."""
     state = Path(state_dir)
+    by_acc = engines_by_account(state, engines)
+    if ledger is None:
+        ledger = build_ledger(state, now, list(by_acc.values()))
+    cat = catalog()
     rows: list[TodayAccount] = []
-    for account, e in sorted(engines_by_account(state, engines).items()):
+    for account, e in sorted(by_acc.items()):
         eq, d0, bal = _num(e.get("equity")), _num(e.get("day_start_equity")), _num(e.get("balance"))
         try:
             closed, n, costs, complete = _closed_today(state, account, now, e)
@@ -299,6 +358,15 @@ def today_money(state_dir: str | Path, now: pd.Timestamp, probe_terms: dict[str,
         except Exception as exc:          # noqa: BLE001 - reporting only
             log.warning("today: closed records unreadable (%s)", type(exc).__name__)
             closed, n, costs, complete, readable = None, 0, None, False, False
+        try:
+            extra = account_day(account_name(account), e, ledger.rows, now, (plans or {}).get(account), cat)
+        except Exception as exc:          # noqa: BLE001 - reporting only: the broker's figures still show
+            log.warning("today: ledger figures failed (%s)", type(exc).__name__)
+            extra = {}
+        if "net_today" in extra.get("withheld", []):
+            # quant 2026-10-27, condition 2: day P&L less open less these closes would be the arms' own result
+            closed, costs = None, None
+            extra["withheld"] = [*extra["withheld"], "closed_pnl", "costs"]
         age = _age(e, now)
         ccy = e.get("currency")
         rows.append(TodayAccount(
@@ -306,5 +374,6 @@ def today_money(state_dir: str | Path, now: pd.Timestamp, probe_terms: dict[str,
             day_pnl=round(eq - d0, 2) if eq is not None and d0 else None,
             open_pnl=round(eq - bal, 2) if eq is not None and bal is not None else None,
             closed_pnl=closed if readable else None, closed_n=n, closed_complete=complete, costs=costs,
-            loss_meter=_meter(e, probe_terms.get(account)), age_s=age, stale=age is None or age > STALE_S))
-    return TodayView(as_of=now, accounts=rows)
+            loss_meter=_meter(e, probe_terms.get(account)), age_s=age, stale=age is None or age > STALE_S,
+            account_label=account_label(account), **extra))
+    return TodayView(as_of=now, accounts=rows, unreadable=ledger.unreadable)

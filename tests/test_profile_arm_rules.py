@@ -54,3 +54,32 @@ def test_profile_times_every_due_arm(prof, bars) -> None:
     assert not r.errors
     s = r.summary(cpu_factor=2.0)
     assert s["max_s_brain"] == pytest.approx(2.0 * s["max_s"], abs=2e-3) and s["budget_s"] == prof.BUDGET_S
+
+
+def test_minute_cases_are_the_sub15m_arms(prof) -> None:
+    probe = prof.minute_cases("icm-probe")
+    labels = {c.label for c in probe}
+    assert {"S0", "S1A", "S5A"} <= labels and all(c.tf in ("1m", "5m") for c in probe)
+    demo = {c.label for c in prof.minute_cases("icm-demo")}      # icm-demo carries the H-81 scalp sleeve (2026-10-27)
+    assert demo and all(c.tf in ("1m", "5m") for c in prof.minute_cases("icm-demo"))
+    two = prof.minute_cases("icm-probe", replicate=2)
+    assert len(two) == 2 * len(probe) and "S0#1" in {c.label for c in two}
+
+
+def test_minute_pass_times_due_arms_and_the_quarter_sum(prof, bars) -> None:
+    cases = [c for c in prof.minute_cases("icm-probe") if c.label in {"S0", "S1A"}]
+    minutes = prof.sample_minutes(bars, 15)
+    assert len(minutes) == 15 and all(t.second == 0 for t in minutes)
+    r = prof.profile_minutes(bars, cases, minutes, host="icm-probe")
+    assert len(r.per_close_s) == 15 and not r.errors
+    assert len(r.per_arm_s["S0"]) == 15                          # the 1m arm every minute
+    assert len(r.per_arm_s["S1A"]) == sum(t.minute % 5 == 0 for t in minutes)   # the 5m arm on the fives
+    s = r.summary(cpu_factor=1.0, budget_s=prof.MINUTE_BUDGET_S, at="p99")
+    assert s["budget_s"] == 2.0 and s["within_budget"] is (s["p99_s_brain"] <= 2.0)
+    quarters = [t for t in minutes if t.minute % 15 == 0]
+    fifteen = prof.HostResult(host="icm-probe", arms=1, wave1=0, per_close_s=[1.0] * len(quarters),
+                              close_ts=quarters)
+    q = prof.quarter_pass(fifteen, r, cpu_factor=2.0)
+    assert q["quarter_closes"] == len(quarters) >= 1
+    worst = max(r.per_close_s[minutes.index(t)] for t in quarters)
+    assert q["max_s"] == pytest.approx(1.0 + worst, abs=2e-3)

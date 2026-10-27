@@ -1283,6 +1283,29 @@
     "title": "CalendarResponse",
     "type": "object"
    },
+   "CapUse": {
+    "properties": {
+     "limit": {
+      "title": "Limit",
+      "type": "number"
+     },
+     "share": {
+      "title": "Share",
+      "type": "number"
+     },
+     "used": {
+      "title": "Used",
+      "type": "number"
+     }
+    },
+    "required": [
+     "used",
+     "limit",
+     "share"
+    ],
+    "title": "CapUse",
+    "type": "object"
+   },
    "ChangePasswordRequest": {
     "additionalProperties": false,
     "description": "Logged in. Revokes the user's other sessions.",
@@ -1440,6 +1463,83 @@
      "channel"
     ],
     "title": "CodeSignIns",
+    "type": "object"
+   },
+   "CostSplit": {
+    "description": "Costs in the account currency, each positive when paid: spread at the fill (both legs at the entry's spread),\nadverse entry slippage, commission, swap (a credit is negative). `total` is the sum of the known parts;\n`complete` False when a part is not recorded in money (a position record keeps its spread in points).",
+    "properties": {
+     "commission": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Commission"
+     },
+     "complete": {
+      "title": "Complete",
+      "type": "boolean"
+     },
+     "slippage": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Slippage"
+     },
+     "slippage_exit_known": {
+      "default": false,
+      "title": "Slippage Exit Known",
+      "type": "boolean"
+     },
+     "spread": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Spread"
+     },
+     "spread_exit_estimated": {
+      "default": false,
+      "title": "Spread Exit Estimated",
+      "type": "boolean"
+     },
+     "swap": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Swap"
+     },
+     "total": {
+      "title": "Total",
+      "type": "number"
+     }
+    },
+    "required": [
+     "spread",
+     "slippage",
+     "commission",
+     "swap",
+     "total",
+     "complete"
+    ],
+    "title": "CostSplit",
     "type": "object"
    },
    "CusumPoint": {
@@ -3339,6 +3439,71 @@
     "title": "JobRow",
     "type": "object"
    },
+   "KindDay": {
+    "description": "One kind's figures today on one account. `withheld`: the money covers fewer than 3 unread arms (ADR 0050).",
+    "properties": {
+     "closed": {
+      "title": "Closed",
+      "type": "integer"
+     },
+     "costs": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Costs"
+     },
+     "fills": {
+      "title": "Fills",
+      "type": "integer"
+     },
+     "net_pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net Pnl"
+     },
+     "net_r": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net R"
+     },
+     "net_unknown": {
+      "default": 0,
+      "title": "Net Unknown",
+      "type": "integer"
+     },
+     "withheld": {
+      "default": false,
+      "title": "Withheld",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "fills",
+     "closed",
+     "net_pnl",
+     "costs",
+     "net_r"
+    ],
+    "title": "KindDay",
+    "type": "object"
+   },
    "LimitAccount": {
     "description": "One account's risk limits now, from what its engine publishes (state/engine_<account>.json) and the revert in\ncore.db `limits_state`. Money is in `currency`; percentages are fractions. Null = the engine does not say.",
     "properties": {
@@ -4547,6 +4712,11 @@
       "title": "Account",
       "type": "string"
      },
+     "account_label": {
+      "default": "Other account",
+      "title": "Account Label",
+      "type": "string"
+     },
      "age_s": {
       "anyOf": [
        {
@@ -4588,6 +4758,11 @@
       "title": "Family",
       "type": "string"
      },
+     "family_label": {
+      "default": "",
+      "title": "Family Label",
+      "type": "string"
+     },
      "floating_pnl": {
       "anyOf": [
        {
@@ -4598,6 +4773,52 @@
        }
       ],
       "title": "Floating Pnl"
+     },
+     "fx_age_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fx Age S"
+     },
+     "held_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Held S"
+     },
+     "hold_limit_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hold Limit S"
+     },
+     "kind": {
+      "default": "strategy",
+      "enum": [
+       "real",
+       "strategy",
+       "exploration",
+       "control",
+       "cost_probe",
+       "shadow"
+      ],
+      "title": "Kind",
+      "type": "string"
      },
      "lots": {
       "title": "Lots",
@@ -4664,6 +4885,17 @@
        }
       ],
       "title": "R Now"
+     },
+     "risk_amount": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Risk Amount"
      },
      "side": {
       "enum": [
@@ -4763,6 +4995,69 @@
      "unreadable"
     ],
     "title": "OpenPositionsView",
+    "type": "object"
+   },
+   "PeriodNet": {
+    "properties": {
+     "costs": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/CostSplit"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "n": {
+      "title": "N",
+      "type": "integer"
+     },
+     "net_partial": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net Partial"
+     },
+     "net_pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net Pnl"
+     },
+     "net_unknown": {
+      "default": 0,
+      "title": "Net Unknown",
+      "type": "integer"
+     },
+     "since": {
+      "format": "date",
+      "title": "Since",
+      "type": "string"
+     },
+     "withheld": {
+      "default": false,
+      "title": "Withheld",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "since",
+     "n",
+     "net_pnl",
+     "costs"
+    ],
+    "title": "PeriodNet",
     "type": "object"
    },
    "PlanFamily": {
@@ -7357,6 +7652,84 @@
     "title": "StrategyWatchView",
     "type": "object"
    },
+   "StripDay": {
+    "description": "One opportunity day of the strip: net after costs of the rows closed that day.",
+    "properties": {
+     "costs": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Costs"
+     },
+     "day": {
+      "format": "date",
+      "title": "Day",
+      "type": "string"
+     },
+     "n": {
+      "title": "N",
+      "type": "integer"
+     },
+     "net_pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net Pnl"
+     },
+     "net_unknown": {
+      "default": 0,
+      "title": "Net Unknown",
+      "type": "integer"
+     },
+     "opportunity": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Opportunity"
+     },
+     "target": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Target"
+     },
+     "withheld": {
+      "default": false,
+      "title": "Withheld",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "day",
+     "n",
+     "net_pnl",
+     "costs",
+     "target",
+     "opportunity"
+    ],
+    "title": "StripDay",
+    "type": "object"
+   },
    "SystemHaltView": {
     "properties": {
      "clear_command": {
@@ -7403,6 +7776,11 @@
       "title": "Account",
       "type": "string"
      },
+     "account_label": {
+      "default": "Other account",
+      "title": "Account Label",
+      "type": "string"
+     },
      "age_s": {
       "anyOf": [
        {
@@ -7413,6 +7791,13 @@
        }
       ],
       "title": "Age S"
+     },
+     "by_kind": {
+      "additionalProperties": {
+       "$ref": "#/components/schemas/KindDay"
+      },
+      "title": "By Kind",
+      "type": "object"
      },
      "closed_complete": {
       "title": "Closed Complete",
@@ -7443,6 +7828,16 @@
        }
       ]
      },
+     "costs_today": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/CostSplit"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
      "currency": {
       "anyOf": [
        {
@@ -7454,6 +7849,27 @@
       ],
       "title": "Currency"
      },
+     "daily_target": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Daily Target"
+     },
+     "day_cap_used": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/CapUse"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
      "day_pnl": {
       "anyOf": [
        {
@@ -7464,6 +7880,38 @@
        }
       ],
       "title": "Day Pnl"
+     },
+     "exploration_pot_used": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/CapUse"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "fills_target": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fills Target"
+     },
+     "fills_today": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Fills Today"
      },
      "loss_meter": {
       "anyOf": [
@@ -7491,6 +7939,54 @@
       ],
       "title": "Mode"
      },
+     "month_to_date": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/PeriodNet"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "net_today": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net Today"
+     },
+     "net_today_partial": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net Today Partial"
+     },
+     "net_unknown": {
+      "default": 0,
+      "title": "Net Unknown",
+      "type": "integer"
+     },
+     "open_n": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Open N"
+     },
      "open_pnl": {
       "anyOf": [
        {
@@ -7502,9 +7998,76 @@
       ],
       "title": "Open Pnl"
      },
+     "open_risk": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Open Risk"
+     },
+     "pace": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Pace"
+     },
+     "quiet_day": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Quiet Day"
+     },
      "stale": {
       "title": "Stale",
       "type": "boolean"
+     },
+     "strip": {
+      "items": {
+       "$ref": "#/components/schemas/StripDay"
+      },
+      "title": "Strip",
+      "type": "array"
+     },
+     "week_cap_used": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/CapUse"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "week_to_date": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/PeriodNet"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "withheld": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Withheld",
+      "type": "array"
      }
     },
     "required": [
@@ -7537,6 +8100,20 @@
       "format": "date-time",
       "title": "As Of",
       "type": "string"
+     },
+     "unreadable": {
+      "items": {
+       "enum": [
+        "shadow",
+        "positions",
+        "probes",
+        "exploration",
+        "orders"
+       ],
+       "type": "string"
+      },
+      "title": "Unreadable",
+      "type": "array"
      }
     },
     "required": [
@@ -7619,6 +8196,425 @@
      "currency"
     ],
     "title": "TradeRef",
+    "type": "object"
+   },
+   "TradeRow": {
+    "description": "One trade (opened and closed merged). Money in the account currency, prices USD per oz, times UTC. Closed:\n`pnl` is net of every cost and `gross` = pnl + costs.total (to the penny). Open: `pnl_now` at the engine's mid\nprice from the fill (the entry spread is inside it). `blinded` True: this row's result fields were withheld because\nthe list's filter isolates arms not yet read (ADR 0050); GET /api/trades/{trade_id} always shows the result.",
+    "properties": {
+     "account": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Account"
+     },
+     "account_label": {
+      "title": "Account Label",
+      "type": "string"
+     },
+     "arm_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Arm Id"
+     },
+     "blinded": {
+      "title": "Blinded",
+      "type": "boolean"
+     },
+     "censored": {
+      "title": "Censored",
+      "type": "boolean"
+     },
+     "costs": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/CostSplit"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
+     "entry": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Entry"
+     },
+     "evidence": {
+      "enum": [
+       "counted",
+       "excluded",
+       "censored",
+       "pending",
+       "not_evidence"
+      ],
+      "title": "Evidence",
+      "type": "string"
+     },
+     "excluded_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Excluded Reason"
+     },
+     "exit": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Exit"
+     },
+     "exit_reason": {
+      "anyOf": [
+       {
+        "enum": [
+         "target",
+         "stop",
+         "trail",
+         "time_limit",
+         "friday_cut",
+         "manual",
+         "kill_switch",
+         "broker_stop_out",
+         "other"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Exit Reason"
+     },
+     "exit_utc": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Exit Utc"
+     },
+     "family": {
+      "title": "Family",
+      "type": "string"
+     },
+     "family_label": {
+      "title": "Family Label",
+      "type": "string"
+     },
+     "gross": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gross"
+     },
+     "held_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Held S"
+     },
+     "hold_limit_s": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hold Limit S"
+     },
+     "is_control": {
+      "title": "Is Control",
+      "type": "boolean"
+     },
+     "kind": {
+      "enum": [
+       "real",
+       "strategy",
+       "exploration",
+       "control",
+       "cost_probe",
+       "shadow"
+      ],
+      "title": "Kind",
+      "type": "string"
+     },
+     "lots": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Lots"
+     },
+     "mode": {
+      "anyOf": [
+       {
+        "enum": [
+         "demo",
+         "live",
+         "paper"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mode"
+     },
+     "opened_utc": {
+      "format": "date-time",
+      "title": "Opened Utc",
+      "type": "string"
+     },
+     "pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Pnl"
+     },
+     "pnl_now": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Pnl Now"
+     },
+     "price_now": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Price Now"
+     },
+     "r": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "R"
+     },
+     "r_now": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "R Now"
+     },
+     "risk_amount": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Risk Amount"
+     },
+     "side": {
+      "enum": [
+       "long",
+       "short"
+      ],
+      "title": "Side",
+      "type": "string"
+     },
+     "stale": {
+      "title": "Stale",
+      "type": "boolean"
+     },
+     "status": {
+      "enum": [
+       "open",
+       "closed"
+      ],
+      "title": "Status",
+      "type": "string"
+     },
+     "stop": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Stop"
+     },
+     "stop_now": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Stop Now"
+     },
+     "target": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Target"
+     },
+     "timeframe": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Timeframe"
+     },
+     "trade_id": {
+      "title": "Trade Id",
+      "type": "string"
+     },
+     "variant": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Variant"
+     },
+     "why": {
+      "title": "Why",
+      "type": "string"
+     }
+    },
+    "required": [
+     "trade_id",
+     "kind",
+     "status",
+     "account",
+     "account_label",
+     "mode",
+     "family",
+     "family_label",
+     "variant",
+     "timeframe",
+     "arm_id",
+     "is_control",
+     "side",
+     "lots",
+     "entry",
+     "stop",
+     "stop_now",
+     "target",
+     "exit",
+     "exit_utc",
+     "exit_reason",
+     "censored",
+     "opened_utc",
+     "held_s",
+     "hold_limit_s",
+     "risk_amount",
+     "currency",
+     "pnl",
+     "r",
+     "gross",
+     "pnl_now",
+     "r_now",
+     "price_now",
+     "costs",
+     "why",
+     "evidence",
+     "excluded_reason",
+     "blinded",
+     "stale"
+    ],
+    "title": "TradeRow",
     "type": "object"
    },
    "TradeStats": {
@@ -7725,6 +8721,133 @@
     "title": "TradeStats",
     "type": "object"
    },
+   "TradeTotals": {
+    "description": "The filter's totals over every matching row (not only the page), equal to the sum of those rows. With\n`withheld` the money is None (ADR 0050: an aggregate covering fewer than 3 unread arms, or a filter narrowed to\nstrategies with unread arms); counts and open risk always show.",
+    "properties": {
+     "costs": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Costs"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
+     "mixed_currencies": {
+      "title": "Mixed Currencies",
+      "type": "boolean"
+     },
+     "n": {
+      "title": "N",
+      "type": "integer"
+     },
+     "n_closed": {
+      "title": "N Closed",
+      "type": "integer"
+     },
+     "n_open": {
+      "title": "N Open",
+      "type": "integer"
+     },
+     "net_partial": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net Partial"
+     },
+     "net_pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net Pnl"
+     },
+     "net_unknown": {
+      "default": 0,
+      "title": "Net Unknown",
+      "type": "integer"
+     },
+     "open_pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Open Pnl"
+     },
+     "open_pnl_withheld": {
+      "default": false,
+      "title": "Open Pnl Withheld",
+      "type": "boolean"
+     },
+     "open_risk": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Open Risk"
+     },
+     "withheld": {
+      "title": "Withheld",
+      "type": "boolean"
+     },
+     "withheld_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Withheld Reason"
+     }
+    },
+    "required": [
+     "n",
+     "n_open",
+     "n_closed",
+     "currency",
+     "mixed_currencies",
+     "net_pnl",
+     "costs",
+     "open_pnl",
+     "open_risk",
+     "withheld",
+     "withheld_reason"
+    ],
+    "title": "TradeTotals",
+    "type": "object"
+   },
    "TradeTypeSummary": {
     "properties": {
      "by_family": {
@@ -7799,6 +8922,59 @@
      "unreadable"
     ],
     "title": "TradesOverview",
+    "type": "object"
+   },
+   "TradesPage": {
+    "properties": {
+     "as_of": {
+      "format": "date-time",
+      "title": "As Of",
+      "type": "string"
+     },
+     "next_cursor": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Next Cursor"
+     },
+     "rows": {
+      "items": {
+       "$ref": "#/components/schemas/TradeRow"
+      },
+      "title": "Rows",
+      "type": "array"
+     },
+     "totals": {
+      "$ref": "#/components/schemas/TradeTotals"
+     },
+     "unreadable": {
+      "items": {
+       "enum": [
+        "shadow",
+        "positions",
+        "probes",
+        "exploration",
+        "orders"
+       ],
+       "type": "string"
+      },
+      "title": "Unreadable",
+      "type": "array"
+     }
+    },
+    "required": [
+     "as_of",
+     "rows",
+     "next_cursor",
+     "totals",
+     "unreadable"
+    ],
+    "title": "TradesPage",
     "type": "object"
    },
    "TradesPeriodView": {
@@ -10108,6 +11284,272 @@
     "summary": "Today"
    }
   },
+  "/api/trades": {
+   "get": {
+    "operationId": "trades_list_api_trades_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "period",
+      "required": false,
+      "schema": {
+       "default": "today",
+       "enum": [
+        "today",
+        "7d",
+        "30d",
+        "all"
+       ],
+       "title": "Period",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "since",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "format": "date",
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Since"
+      }
+     },
+     {
+      "in": "query",
+      "name": "until",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "format": "date",
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Until"
+      }
+     },
+     {
+      "in": "query",
+      "name": "account",
+      "required": false,
+      "schema": {
+       "default": [],
+       "items": {
+        "type": "string"
+       },
+       "title": "Account",
+       "type": "array"
+      }
+     },
+     {
+      "in": "query",
+      "name": "family",
+      "required": false,
+      "schema": {
+       "default": [],
+       "items": {
+        "type": "string"
+       },
+       "title": "Family",
+       "type": "array"
+      }
+     },
+     {
+      "in": "query",
+      "name": "timeframe",
+      "required": false,
+      "schema": {
+       "default": [],
+       "items": {
+        "type": "string"
+       },
+       "title": "Timeframe",
+       "type": "array"
+      }
+     },
+     {
+      "in": "query",
+      "name": "arm",
+      "required": false,
+      "schema": {
+       "default": [],
+       "items": {
+        "type": "string"
+       },
+       "title": "Arm",
+       "type": "array"
+      }
+     },
+     {
+      "in": "query",
+      "name": "kind",
+      "required": false,
+      "schema": {
+       "default": [],
+       "items": {
+        "enum": [
+         "real",
+         "strategy",
+         "exploration",
+         "control",
+         "cost_probe",
+         "shadow"
+        ],
+        "type": "string"
+       },
+       "title": "Kind",
+       "type": "array"
+      }
+     },
+     {
+      "in": "query",
+      "name": "status",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "enum": [
+          "open",
+          "closed"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Status"
+      }
+     },
+     {
+      "in": "query",
+      "name": "exit_reason",
+      "required": false,
+      "schema": {
+       "default": [],
+       "items": {
+        "enum": [
+         "target",
+         "stop",
+         "trail",
+         "time_limit",
+         "friday_cut",
+         "manual",
+         "kill_switch",
+         "broker_stop_out",
+         "other"
+        ],
+        "type": "string"
+       },
+       "title": "Exit Reason",
+       "type": "array"
+      }
+     },
+     {
+      "in": "query",
+      "name": "evidence",
+      "required": false,
+      "schema": {
+       "default": [],
+       "items": {
+        "enum": [
+         "counted",
+         "excluded",
+         "censored",
+         "pending",
+         "not_evidence"
+        ],
+        "type": "string"
+       },
+       "title": "Evidence",
+       "type": "array"
+      }
+     },
+     {
+      "in": "query",
+      "name": "control",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Control"
+      }
+     },
+     {
+      "in": "query",
+      "name": "cursor",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Cursor"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 50,
+       "maximum": 200,
+       "minimum": 1,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TradesPage"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Trades List"
+   }
+  },
   "/api/trades/overview": {
    "get": {
     "operationId": "trades_overview_view_api_trades_overview_get",
@@ -10156,6 +11598,50 @@
      }
     ],
     "summary": "Trades Summary"
+   }
+  },
+  "/api/trades/{trade_id}": {
+   "get": {
+    "operationId": "trade_detail_api_trades__trade_id__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "trade_id",
+      "required": true,
+      "schema": {
+       "title": "Trade Id",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TradeRow"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Trade Detail"
    }
   },
   "/api/tradingview": {

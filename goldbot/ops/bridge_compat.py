@@ -38,7 +38,7 @@ from pydantic import Field
 from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.config import ROOT
 from goldbot.data.timeutil import CLOCK_AHEAD_TOLERANCE_S
-from goldbot.execution.bridge import API_VERSION, METHODS, MIN_COMPATIBLE
+from goldbot.execution.bridge import API_VERSION, METHODS, MIN_COMPATIBLE, OPTIONAL_METHODS
 
 log = logging.getLogger("goldbot.bridge_compat")
 
@@ -48,7 +48,7 @@ MAX_HEALTH_BYTES = 64 * 1024             # the bridge's report is ~400 bytes; an
 MAX_VERDICT_AGE_S = 300.0                # an ok older than this counts as unchecked (checks run every 60 s)
 UNCHECKED_GRACE_S = 120.0                # health: an engine unchecked longer than this FAILs (Telegram); warns inside
 HUNG_AFTER_S = 3 * CHECK_TIMEOUT_S       # a check thread alive this long is abandoned and replaced (daemon thread)
-REQUIRED_METHODS = frozenset(METHODS)    # every method this brain's RemoteBroker calls
+REQUIRED_METHODS = frozenset(METHODS) - OPTIONAL_METHODS   # every method the brain calls without a fallback
 _TZ = re.compile(r"^[A-Za-z0-9_+\-/]{1,64}$")             # a zone name (Europe/Athens, NY+7); anything else is refused
 _SHA = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")     # sha-1 or sha-256 object names
 

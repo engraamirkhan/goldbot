@@ -25,6 +25,9 @@ ExecStart=/opt/goldbot/.venv/bin/python -m goldbot.ops.run engine %i
 # a lost bridge reply ends the process on purpose: the restart reconciles orders with the broker (row X7)
 Restart=always
 RestartSec=10
+# except a config refusal (goldbot/ops/services/engine.py ENGINE_DISABLED_EXIT): an account `enabled: false` in
+# config/accounts.yaml with nothing of its own open, or a live account not unlocked, exits 78 and stays stopped
+RestartPreventExitStatus=78
 NoNewPrivileges=true
 ProtectSystem=strict
 ReadWritePaths=/opt/goldbot/state /opt/goldbot/logs /opt/goldbot/data /opt/goldbot/models /var/lib/goldbot

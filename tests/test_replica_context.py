@@ -97,12 +97,16 @@ def test_a_restart_resumes_the_carried_state_and_decides_as_the_full_history(tmp
     assert len(first) == 200
 
 
-def test_a_gap_rebuilds_from_the_series_start_and_values_stay_exact(tmp_path, series):
+def test_a_gap_rebuilds_from_the_series_start_and_values_stay_exact(tmp_path, series, monkeypatch):
+    from goldbot.engine import replica_context
+    now = [0.0]
+    monkeypatch.setattr(replica_context, "clock", lambda: now[0])
     agent, src = _agent(), Source(series)
     shadow = _shadow(tmp_path, src)
     _walk(shadow, src, agent, range(2000, 2010))
     assert src.calls == 1
-    ends = range(2600, 2600 + 300)                             # the engine was down: the snapshot is not in the tail
+    now[0] += replica_context.REBUILD_COOLDOWN_S                # one rebuild per feed an hour (SRE 2026-10-27)
+    ends = range(2600, 2600 + 300)                             # the bars stopped: the snapshot is not in the tail
     got = _walk(shadow, src, agent, ends)
     assert src.calls == 2
     k = agent.state_lag + 1

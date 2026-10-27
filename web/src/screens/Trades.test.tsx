@@ -1,71 +1,302 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as apiModule from "../lib/api";
-import { TradesActivity, TradesOpen, TradesSummary } from "./Trades";
+import type { Route } from "../lib/route";
+import { bars, blindedPage, board, openPositions, todayAccount, tradeRow, tradesPage } from "../test/tradesFixtures";
+import type { TradesTab } from "../lib/trades";
+import { TradesTabView } from "./Trades";
+import { TradeChart } from "./trades/TradeChart";
 
+const NB = " ";
 const status: apiModule.Status = { mode: "propose", halted: false, halted_by: null, halt_reason: null, pending: 0, supervisor: {},
   supervisor_halt: false, supervisor_reasons: [], drift_halt: false, drift_reasons: [], blackout: null };
 
-function renderIt(ui: ReactNode) {
+function renderTab(tab: TradesTab, route: Partial<Route> = {}, go = vi.fn()) {
   apiModule.setUser({ email: "a@x.io", role: "viewer", signed_in_with: "password_totp" });
   const free = <K extends keyof typeof apiModule.api>(k: K, v: unknown) => {
     if (!vi.isMockFunction(apiModule.api[k])) vi.spyOn(apiModule.api, k).mockResolvedValue(v as never);
   };
   free("status", status); free("accounts", []); free("proposals", []); free("recentProposals", []);
-  free("openPositions", { as_of: "2026-10-19T10:00:00Z", unreadable: [], positions: [] });
+  free("openPositions", openPositions());
   free("activity", { events: [], unreadable: [] });
-  free("today", { as_of: "2026-10-19T10:00:00Z", accounts: [] });
-  free("tradesOverview", { as_of: "2026-10-19T10:00:00Z", periods: [], unreadable: [] });
+  free("today", { as_of: "2026-10-27T09:00:00Z", accounts: [todayAccount()] });
+  free("tradesOverview", { as_of: "2026-10-27T09:00:00Z", periods: [], unreadable: [] });
+  free("limits", { generated_utc: "2026-10-27T09:00:00Z", error: null, supervisor: {}, accounts: [] });
+  free("trades", tradesPage());
+  free("trade", tradeRow());
+  free("strategyBoard", board());
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+  const r: Route = { section: "trades", tab, sub: null, query: "", ...route };
+  return { go, ...render(<QueryClientProvider client={qc}><TradesTabView tab={tab} route={r} go={go} /></QueryClientProvider>) };
 }
+const wrap = (ui: ReactNode) => render(<QueryClientProvider client={new QueryClient()}>{ui}</QueryClientProvider>);
 
 afterEach(() => { vi.restoreAllMocks(); apiModule.setUser(null); });
 
-describe("Trades: Open", () => {
-  it("shows the decisions, then each open trade with stop, target, R and floating money, probes badged", async () => {
-    vi.spyOn(apiModule.api, "openPositions").mockResolvedValue({ as_of: "2026-10-19T10:00:00Z", unreadable: [], positions: [
-      { account: "icm-live", mode: "live", probe: false, position_id: 1, agent_id: "box_break_close-g0", family: "box_break_close",
-        timeframe: "1h", side: "long", lots: 0.05, entry: 2400, stop: 2396, target: 2420, opened_utc: "2026-10-19T09:00:00Z",
-        price: 2410, floating_pnl: 40, currency: "GBP", r_now: 2.5, age_s: 2, stale: false },
-      { account: "icm-demo", mode: "demo", probe: true, position_id: 2, agent_id: "probe", family: "probe", timeframe: null,
-        side: "short", lots: 0.01, entry: 2400, stop: 2404, target: 2390, opened_utc: "2026-10-19T09:30:00Z", price: 2401,
-        floating_pnl: -1, currency: "GBP", r_now: -0.25, age_s: 2, stale: false }] });
-    renderIt(<TradesOpen />);
-    expect(await screen.findByText(/No proposals waiting/)).toBeInTheDocument();
-    const list = await screen.findByRole("list", { name: "Open trades" });
-    expect(list).toHaveTextContent("REAL");
-    expect(list).toHaveTextContent("+£40.00 · +2.50 R");
-    expect(list).toHaveTextContent("entry 2,400.00 · stop 2,396.00 · target 2,420.00 USD/oz");
-    expect(list).toHaveTextContent("probe");
-    expect(screen.getByRole("heading", { name: "Open trades (2)" })).toBeInTheDocument();
+describe("Trades > Now (128, 130)", () => {
+  it("shows money on every open row: P&L and risk in £, R, levels, time held; grouped by account", async () => {
+    renderTab("now");
+    const day = await screen.findByRole("list", { name: "Open trades, Day/swing lab" });
+    const row = within(day).getByRole("button", { name: /Box break \+ close 15m, long, plus £3\.40, open/ });
+    expect(row.textContent).toContain("+£3.40");
+    expect(row.textContent).toContain(`+0.63${NB}R`);
+    expect(row.textContent).toContain("risk £5.40");
+    expect(row.textContent).toContain("4,012.40 → stop 4,006.10 USD/oz");
+    expect(row.textContent).toContain(`22${NB}min of 2${NB}h`);
+    expect(screen.queryByText(/not known/)).toBeNull();
+    const scalp = screen.getByRole("region", { name: "Open trades Scalp lab" });
+    expect(scalp).toHaveTextContent("2 open · risk £3.10 · P&L now +£2.10");    // the broker's account figure, not a sum of rows
+    expect(within(scalp).getByText("CONTROL")).toBeInTheDocument();             // kind in a word, not a colour
+    expect(screen.getByRole("group", { name: "Open now summary" })).toHaveTextContent("Open now · 3 trades · risk £8.50");
+    expect(screen.getByRole("group", { name: "Open now summary" })).not.toHaveTextContent("P&L");   // never summed across accounts
+    expect(screen.getByRole("region", { name: "Open trades Day/swing lab" })).toHaveTextContent("P&L now £ —");   // no figure from the server
   });
 
-  it("keeps the decisions when the open trades fail to load", async () => {
+  it("an unknown rate is a dash on the row and '(no rate)' once on the group, never 'not known'", async () => {
+    const v = openPositions();
+    v.positions = v.positions.map((p) => ({ ...p, floating_pnl: null }));
+    vi.spyOn(apiModule.api, "openPositions").mockResolvedValue(v as never);
+    renderTab("now");
+    const scalp = await screen.findByRole("region", { name: "Open trades Scalp lab" });
+    expect(within(scalp).getAllByText("(no rate)")).toHaveLength(1);
+    expect(screen.queryByText(/not known/)).toBeNull();
+  });
+
+  it("filters by account; an engine position opens its trade, an arm's opens the List filtered to it", async () => {
+    const { go } = renderTab("now");
+    fireEvent.change(await screen.findByRole("combobox", { name: "Account" }), { target: { value: "icm-probe" } });
+    expect(screen.queryByRole("region", { name: "Open trades Day/swing lab" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Opening range 5m, long/ }));
+    expect(go).toHaveBeenCalledWith("trades", "now", "position:icm-probe:3", "", { keepScroll: true });
+    fireEvent.click(screen.getByRole("button", { name: /Random control \(scalp\) 1m, short/ }));
+    expect(go).toHaveBeenCalledWith("trades", "list", null, "acct=icm-probe&fam=random_bracket&status=open");
+  });
+
+  it("empty, error: words that say trading goes on", async () => {
+    vi.spyOn(apiModule.api, "openPositions").mockResolvedValue({ as_of: "x", unreadable: [], positions: [] });
+    const { unmount } = renderTab("now");
+    expect(await screen.findByText("No open trades.")).toBeInTheDocument();
+    unmount();
+    vi.restoreAllMocks();
     vi.spyOn(apiModule.api, "openPositions").mockRejectedValue(new Error("down"));
-    renderIt(<TradesOpen />);
-    expect(await screen.findByText("Could not load open trades.")).toBeInTheDocument();
-    expect(screen.getByRole("tablist", { name: "Decisions" })).toBeInTheDocument();
+    renderTab("now");
+    expect(await screen.findByText("Couldn't load open trades.")).toBeInTheDocument();
+    expect(screen.getByText(/Open trades keep their stop, target and automatic exits/)).toBeInTheDocument();
+    expect(screen.getByRole("tablist", { name: "Decisions" })).toBeInTheDocument();   // the decisions stay
   });
 });
 
-describe("Trades: Activity", () => {
-  it("lists refusals and probe trades as they happen", async () => {
-    vi.spyOn(apiModule.api, "activity").mockResolvedValue({ unreadable: [], events: [
-      { ts: "2026-10-19T10:00:00Z", kind: "shadow_opened", agent_id: "box_break_close-g0", timeframe: "1h", side: "long", entry: 2400 },
-    ] } as apiModule.ActivityView);
-    renderIt(<TradesActivity />);
-    expect(await screen.findByRole("list", { name: "Activity" })).toHaveTextContent("Shadow opened");
-    expect(screen.getByText(/Refused entries are the risk check doing its job/)).toBeInTheDocument();
+describe("Trades > List (130)", () => {
+  it("one row per trade with strategy, net after costs, R, exit reason, kind and why; the server's totals", async () => {
+    renderTab("list");
+    const list = await screen.findByRole("list", { name: "Trades" });
+    const row = within(list).getByRole("button", { name: "Box break + close 15m, long, plus £2.10, closed at target" });
+    expect(row.textContent).toContain("+£2.10");
+    expect(row.textContent).toContain(`+1.50${NB}R`);
+    expect(row.textContent).toContain("LONG · Day/swing lab · target");
+    expect(row.textContent).toContain("Close above the 15m box after a squeeze");
+    expect(within(list).getByText("CONTROL")).toBeInTheDocument();
+    expect(within(list).getByText("COST PROBE")).toBeInTheDocument();
+    expect(screen.getByText("412 trades (3 open) · net +£18.40 after costs · costs £22.10 · open risk £8.50")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Load 50 more" })).toBeInTheDocument();
+  });
+
+  it("sends the URL's filters to the API and writes chip changes back to the URL", async () => {
+    const { go } = renderTab("list", { query: "acct=icm-probe&fam=box_break_close" });
+    await screen.findByRole("list", { name: "Trades" });
+    expect(apiModule.api.trades).toHaveBeenCalledWith(expect.stringMatching(/account=icm-probe.*family=box_break_close/));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove filter Scalp lab" }));
+    expect(go).toHaveBeenCalledWith("trades", "list", null, "fam=box_break_close", { replace: true, keepScroll: true });
+  });
+
+  it("a filter narrowed to unread arms is withheld as served: counts only, rows blinded, the server's reason (ADR 0050)", async () => {
+    vi.spyOn(apiModule.api, "trades").mockResolvedValue(blindedPage());
+    renderTab("list", { query: "fam=opening_range" });
+    expect(await screen.findByText("64 trades")).toBeInTheDocument();
+    expect(screen.getByText(/Totals hidden: the filter narrows to strategies whose arms are not read yet/)).toBeInTheDocument();
+    const list = screen.getByRole("list", { name: "Trades" });
+    expect(list).toHaveTextContent("hidden");
+    expect(list).not.toHaveTextContent(/[+−]£/);
+    expect(list).not.toHaveTextContent(/\d R/);
+  });
+
+  it("names an unreadable source: its trades are missing, not zero", async () => {
+    vi.spyOn(apiModule.api, "trades").mockResolvedValue(tradesPage({ unreadable: ["exploration"] }));
+    renderTab("list");
+    expect(await screen.findByText(/Couldn't read exploration trades: those trades are missing from this list and its totals, not zero/)).toBeInTheDocument();
+  });
+
+  it("an error says trading goes on and offers a retry", async () => {
+    vi.spyOn(apiModule.api, "trades").mockRejectedValue(new apiModule.ApiError(500, "boom"));
+    renderTab("list");
+    expect(await screen.findByText("Couldn't load the trades.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("no match: says so and offers to clear the filters", async () => {
+    vi.spyOn(apiModule.api, "trades").mockResolvedValue(tradesPage({ rows: [], next_cursor: null,
+      totals: { ...tradesPage().totals, n: 0, n_open: 0, n_closed: 0, net_pnl: null, costs: null } }));
+    const { go } = renderTab("list", { query: "tf=4h" });
+    fireEvent.click(await screen.findByRole("button", { name: "Clear filters" }));
+    expect(go).toHaveBeenCalledWith("trades", "list", null, "", { replace: true, keepScroll: true });
   });
 });
 
-describe("Trades: Summary", () => {
-  it("holds today's money in full and the trades summary", async () => {
-    renderIt(<TradesSummary />);
-    expect(await screen.findByRole("heading", { name: "Trades summary" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Today" })).toBeInTheDocument();
+describe("Trade detail (133)", () => {
+  it("explains one trade: why, closed by, levels, costs that add up to gross minus net, evidence, ids under Details", async () => {
+    renderTab("list", { sub: "exploration:icm-demo:41" });
+    const d = await screen.findByRole("dialog", { name: "Trade detail" });
+    expect(await within(d).findByText("Close above the 15m box after a squeeze")).toBeInTheDocument();
+    expect(d).toHaveTextContent(`target, after 32 min (hold limit 2 h) at 4,024.00 USD/oz`);
+    expect(d).toHaveTextContent(`spread £0.18 · slippage +£0.02 · commission £0.07 · swap £0.00 = £0.27 · gross +£2.37`);
+    expect(d).toHaveTextContent("counted toward the read");
+    expect(within(d).getByText("Details")).toBeInTheDocument();
+    expect(apiModule.api.trade).toHaveBeenCalledWith("exploration:icm-demo:41");
+  });
+
+  it("no bars are served yet: the missing-bars state with the levels in words, not an empty chart", async () => {
+    renderTab("list", { sub: "exploration:icm-demo:41" });
+    expect(await screen.findByText("Bars for this period aren't stored yet.")).toBeInTheDocument();
+    expect(screen.getByText("first stop 4,006.10 USD/oz")).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /Chart of/ })).toBeNull();
+  });
+
+  it("a trade the ledger doesn't hold (404) says so", async () => {
+    vi.spyOn(apiModule.api, "trade").mockRejectedValue(new apiModule.ApiError(404, "no such trade"));
+    renderTab("list", { sub: "position:icm-demo:999" });
+    expect(await screen.findByText("This trade isn't in the ledger.")).toBeInTheDocument();
+  });
+
+  it("a blinded arm's single trade still shows its own result", async () => {
+    vi.spyOn(apiModule.api, "trade").mockResolvedValue(tradeRow({ blinded: true }));
+    renderTab("list", { sub: "x" });
+    const d = await screen.findByRole("dialog", { name: "Trade detail" });
+    expect(await within(d).findByText("+£2.10")).toBeInTheDocument();
+    expect(d).toHaveTextContent(/totals stay hidden until its read/);
+  });
+
+  it("Escape and Close return to the list, keeping the filters", async () => {
+    const { go } = renderTab("list", { sub: "x", query: "fam=box_break_close" });
+    fireEvent.click(await screen.findByRole("button", { name: "Close trade detail" }));
+    expect(go).toHaveBeenCalledWith("trades", "list", null, "fam=box_break_close", { keepScroll: true });
+  });
+
+  it("the chart puts the entry and exit markers on the right bars", () => {
+    const b = bars();
+    const t = tradeRow({ opened_utc: b[10].t, exit_utc: b[20].t });
+    const { container } = wrap(<TradeChart trade={t} bars={b} loading={false} height={200} />);
+    expect(container.querySelectorAll("rect.up, rect.down")).toHaveLength(b.length);
+    expect(container.querySelector("path.marker.entry")).not.toBeNull();
+    expect(container.querySelector("circle.marker.exit")).not.toBeNull();
+    expect(container.textContent).toContain("target 4,024.00");
+  });
+});
+
+describe("Trades > Strategies (132, ADR 0050)", () => {
+  it("unread arms show progress only; a read arm its verdict with CI and vs control; a partly-read family both", async () => {
+    renderTab("strategies");
+    const board = await screen.findByRole("region", { name: "Strategy board" });
+    const box = within(board).getByRole("button", { name: /Box break \+ close, running/ });
+    expect(box).toHaveTextContent("213/300 · read ~Thu 5 Nov");
+    expect(box).toHaveTextContent("retired at its stop");
+    expect(box).not.toHaveTextContent(/R\/trade|near/);
+    const or = within(board).getByRole("button", { name: /Opening range, READ · proven/ });
+    expect(or).toHaveTextContent(`+0.21 R/trade (90% CI +0.05…+0.37 R)`);
+    expect(or).toHaveTextContent(`vs control +0.24 R`);
+    expect(or).toHaveTextContent(`since read: +0.18 R, n 64`);
+    expect(or).toHaveTextContent("120/300");                                    // its unread 1h arm: progress only
+    expect(or.textContent!.match(/R\/trade/g)).toHaveLength(1);
+  });
+
+  it("orders by state, never by result; lab money only with 3+ arms; learning line on top", async () => {
+    renderTab("strategies");
+    const board = await screen.findByRole("region", { name: "Strategy board" });
+    const names = within(board).getAllByRole("button").map((b) => b.getAttribute("aria-label")!.split(",")[0]);
+    expect(names).toEqual(["Opening range", "Box break + close", "Random control (scalp)"]);
+    const top = screen.getByRole("region", { name: "Learning progress" });
+    expect(top).toHaveTextContent("4 arms read, 1 proven, 3 retired, 44 running · 2,960 trades counted toward reads this week");
+    expect(top).toHaveTextContent("Scalp lab (scalp), 7 days: 2,960 trades · −£41.20 net · costs £66.10 · within plan");
+    expect(top).toHaveTextContent("Vantage lab (intraday), 7 days: 310 trades · net hidden (fewer than 3 arms)");
+  });
+
+  it("tapping a family opens the List filtered to it", async () => {
+    const { go } = renderTab("strategies");
+    fireEvent.click(await screen.findByRole("button", { name: /Box break \+ close, running/ }));
+    expect(go).toHaveBeenCalledWith("trades", "list", null, "fam=box_break_close");
+  });
+
+  it("while the board isn't served, says so and shows the engine strategies' summary", async () => {
+    vi.spyOn(apiModule.api, "strategyBoard").mockRejectedValue(new apiModule.ApiError(404, "not served by this server"));
+    renderTab("strategies");
+    expect(await screen.findByText(/The strategy board \(each arm's progress to its read\) isn't served yet/)).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Trades summary" })).toBeInTheDocument();
+  });
+
+  it("engine strategies show full figures with n and a 90% CI", async () => {
+    renderTab("strategies");
+    const eng = await screen.findByRole("region", { name: "Engine strategies" });
+    expect(eng).toHaveTextContent(`Box break + MFI · 1h`);
+    expect(eng).toHaveTextContent(`90% CI −0.08…+0.32 R`);
+  });
+});
+
+describe("Trades > Today (131)", () => {
+  it("per account: fills against the target with pace, net after costs by kind, open risk, caps, strip, week and month", async () => {
+    renderTab("today");
+    const c = await screen.findByRole("region", { name: "Today Scalp lab" });
+    expect(c).toHaveTextContent("Fills 148 of 200 · pace ~240 by day end");
+    expect(within(c).getByRole("meter", { name: "Fills today against the target of 200" })).toBeInTheDocument();
+    expect(c).toHaveTextContent("Closed today: −£3.10 net after costs (costs £9.80) · open +£2.10");
+    expect(c).toHaveTextContent("Exploration −£4.20 (120 fills) · Control +£0.90 (20 fills) · Cost probe +£0.20 (8 fills)");
+    expect(c).toHaveTextContent("Open: 15 trades · risk £18.20 · P&L now +£2.10");
+    expect(c).toHaveTextContent("Caps: day £30.00 of £500.00 used · week £61.00 of £1,000.00 · exploration pot £30.00 of £150.00");
+    expect(c.querySelectorAll(".day-strip rect")).toHaveLength(14);
+    expect(c.querySelector(".day-strip line.target")).not.toBeNull();
+    expect(c).toHaveTextContent("Week to date+£12.40 after costs (spread £40.10 · slippage +£1.00 · commission £11.20 · swap −£0.40)");
+    expect(c).not.toHaveTextContent("Quiet day");
+  });
+
+  it("quiet-day wording only when the volatility screen says so; real money first", async () => {
+    vi.spyOn(apiModule.api, "today").mockResolvedValue({ as_of: "x", accounts: [
+      todayAccount({ quiet_day: true }), todayAccount({ account: "icm-live", account_label: "Live (ICM)", mode: "live", fills_target: null }),
+    ] } as never);
+    renderTab("today");
+    const cards = await screen.findAllByRole("region", { name: /^Today / });
+    expect(cards[0]).toHaveAccessibleName("Today Live (ICM)");
+    expect(cards[0]).toHaveTextContent("REAL");
+    expect(cards[1]).toHaveTextContent("Quiet day: fewer trades is expected.");
+  });
+
+  it("an unknown net is 'incomplete: N trades without costs yet', never a full total", async () => {
+    const a = todayAccount({ net_today: null, net_unknown: 2, net_today_partial: -1.5,
+      month_to_date: { since: "2026-10-01", n: 3000, net_pnl: null, costs: null, withheld: false, net_unknown: 4, net_partial: 80 } });
+    vi.spyOn(apiModule.api, "today").mockResolvedValue({ as_of: "x", accounts: [a] });
+    renderTab("today");
+    const c = await screen.findByRole("region", { name: "Today Scalp lab" });
+    expect(c).toHaveTextContent("Closed today: net incomplete: 2 trades without costs yet (known trades −£1.50)");
+    expect(c).toHaveTextContent("Month to date3000 trades · net incomplete: 4 trades without costs yet (known trades +£80.00)");
+  });
+
+  it("money the server withholds (ADR 0050) says so in words; an unreadable source is named, never zero", async () => {
+    const a = todayAccount({
+      withheld: ["net_today", "costs_today", "exploration_pot_used", "week_to_date"], net_today: null, costs_today: null,
+      exploration_pot_used: null,
+      by_kind: { exploration: { fills: 120, closed: 110, net_pnl: null, costs: null, net_r: null, withheld: true, net_unknown: 0 } },
+      week_to_date: { since: "2026-10-26", n: 300, net_pnl: null, costs: null, withheld: true, net_unknown: 0 },
+      strip: todayAccount().strip!.map((d, i) => (i === 13 ? { ...d, net_pnl: null, costs: null, withheld: true } : d)),
+    });
+    vi.spyOn(apiModule.api, "today").mockResolvedValue({ as_of: "x", accounts: [a], unreadable: ["probes"] });
+    renderTab("today");
+    const c = await screen.findByRole("region", { name: "Today Scalp lab" });
+    expect(c).toHaveTextContent("Closed today: net hidden until the arms' reads");
+    expect(c).toHaveTextContent("Exploration hidden (120 fills)");
+    expect(c).toHaveTextContent("exploration pot hidden until the arms' reads");
+    expect(c).toHaveTextContent("Week to date300 trades · net hidden until the arms' reads");
+    expect(c.querySelectorAll(".day-strip rect")).toHaveLength(13);
+    expect(c).toHaveTextContent("h: hidden until the arms' reads");
+    expect(screen.getByText(/Couldn't read cost probes: those trades are missing from today's figures, not zero/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("region", { name: "Risk per trade" })).toBeInTheDocument());
   });
 });
