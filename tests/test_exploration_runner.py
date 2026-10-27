@@ -4,6 +4,7 @@ BXR's own fills that never place an order; XC15's netting-host shift behind an o
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -196,9 +197,41 @@ def test_a_bxr_closed_at_its_own_trailed_stop_is_not_censored(tmp_path, monkeypa
     assert rec.censored is censored
 
 
+def test_a_bxr_stop_moved_tighter_is_its_own_exit_and_a_looser_moved_stop_censors(monkeypatch):
+    """Quant review C4: BXR's trail only ever tightens, so its moved stop is natural ONLY when side x (sl - initial_sl)
+    > 0; a stop moved looser (or for a short, moved up) censors the label."""
+    bxr = _bxr(monkeypatch)
+
+    def trade(side: int, sl: float | None) -> Any:
+        return SimpleNamespace(side=side, initial_sl=100.0, sl=sl)
+
+    assert not exploration._censored(bxr, "stop", trade(1, 101.0))               # long, tighter
+    assert not exploration._censored(bxr, "trail_close", trade(-1, 99.0))        # short, tighter
+    assert exploration._censored(bxr, "stop", trade(1, 99.0))                    # long, looser
+    assert exploration._censored(bxr, "engine_stop_close", trade(-1, 101.0))     # short, looser
+    assert exploration._censored(bxr, "stop", trade(1, None))                    # a stop removed
+    assert not exploration._censored(bxr, "stop", trade(1, 100.0))               # unmoved
+
+
 # ------------------------------------------------------------------------------------------------ (2) the twins
 def _twins(tmp_path: Path) -> list[exploration.TwinRecord]:
     return exploration.twins(str(tmp_path))
+
+
+def test_a_twin_is_charged_the_exit_half_spread_and_the_swap_of_every_rollover_it_held():
+    """Quant review C4: a twin is scored like a real fill. Its entry is BXR's real fill (the entry spread is paid);
+    its exit is on the mid path, so it pays the exit leg's half of the bid-ask at the exit minute (a long sells at
+    the bid) and the swap of each rollover between its signal and its exit (the triple night counted three times)."""
+    from goldbot.labels.triple_barrier import SwapSpec
+    swap = SwapSpec(long_usd_per_lot=-50.0, short_usd_per_lot=10.0, triple_weekday=2, server_tz="Europe/Athens")
+    minutes = pd.date_range("2025-03-05 21:50", periods=20, freq="1min", tz="UTC")   # across Wednesday's rollover
+    b = pd.DataFrame({"ts_utc": minutes, "bid_close": 100.0, "ask_close": 100.0 + np.linspace(0.1, 0.5, 20)})
+    exit_at = minutes[15] + pd.Timedelta(minutes=1)                                 # the 16th minute's close
+    spread, swap_usd = exploration.twin_charges(b, T0, exit_at, 1, swap)
+    assert spread == pytest.approx((b["ask_close"].iloc[15] - 100.0) / 2)
+    assert swap_usd == pytest.approx(-0.5 * 3 + -0.5 * 1)    # Tuesday night and Wednesday's triple: 4 nights x -$0.50
+    assert exploration.twin_charges(b, T0, T0 + pd.Timedelta(hours=1), -1, swap)[1] == 0.0      # no rollover held
+    assert exploration.twin_charges(b.iloc[:0], T0, exit_at, 1, swap)[0] is None      # no exit minute: not charged
 
 
 def test_a_bxr_fill_opens_its_two_virtual_twins_from_the_fill_price_and_no_order(tmp_path, monkeypatch):
@@ -232,7 +265,42 @@ def test_a_twin_closes_at_its_own_barrier_as_the_history_walk_does_even_after_bx
                           target_r=t.target_r)
         assert (t.exit_reason, t.exit_price, t.exit_utc) == (w["kind"], w["exit"], w["at"])
         assert t.exit_reason == "target" and t.gross_r == pytest.approx(t.target_r)
+        assert t.exit_spread_usd == pytest.approx(0.1) and t.swap_usd == 0.0     # bid-ask 0.20, no rollover held
     assert not pb.positions() and len(exploration.trades(str(tmp_path))) == 1
+
+
+def _scored_pairs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str) -> list[exploration.TwinPair]:
+    eng, pb, pid, bars = _open_bxr(tmp_path, monkeypatch)
+    eng._try_close(pid, reason, T0 + pd.Timedelta(minutes=1))
+    eng._flush_closed()
+    for k in range(1, 17):
+        _tick(eng, pb, bars, T0 + pd.Timedelta(minutes=15 * k))
+        exploration.trail(eng, T0 + pd.Timedelta(minutes=15 * k))
+    assert len([t for t in _twins(tmp_path) if t.exit_utc is not None]) == 2
+    return exploration.twin_pairs(str(tmp_path))
+
+
+def test_a_pair_whose_bxr_closed_censored_is_dropped_from_the_twin_comparison(tmp_path, monkeypatch):
+    """Quant review C4: BXR - BXF and BXT - BXF compare like with like; a BXR cut short (kill switch) has no outcome
+    of its own to compare, so its twins leave the read."""
+    assert _scored_pairs(tmp_path, monkeypatch, "kill_switch_close") == []
+
+
+def test_a_natural_pair_charges_the_twin_bxrs_own_commission_beside_its_exit_spread_and_swap(tmp_path, monkeypatch):
+    """The twin pays what the real fill paid: BXR's broker commission per oz (same order, same lots), the exit half
+    spread and the swap; BXR's side is its broker-net P&L per oz, both over the same 1 R."""
+    pairs = _scored_pairs(tmp_path, monkeypatch, "time_exit")
+    [rec] = exploration.trades(str(tmp_path))
+    assert rec.censored is False and {p.exit_mode for p in pairs} == {"struct", "fixed"}
+    assert rec.pnl is not None and rec.commission is not None and rec.fx_acct_per_usd
+    oz = rec.lots * exploration.CONTRACT_OZ
+    commission = rec.commission / rec.fx_acct_per_usd / oz
+    for p in pairs:
+        [tw] = [t for t in _twins(tmp_path) if t.twin_id == p.twin_id]
+        assert tw.gross_r is not None and tw.exit_spread_usd is not None and tw.swap_usd is not None
+        want = tw.gross_r - (tw.exit_spread_usd + commission - tw.swap_usd) / tw.risk_usd
+        assert p.twin_net_r == pytest.approx(want) and p.twin_net_r < tw.gross_r
+        assert p.bxr_net_r == pytest.approx(rec.pnl / rec.fx_acct_per_usd / oz / tw.risk_usd)
 
 
 # ------------------------------------------------------------------------------------------------ (3) XC15's shift

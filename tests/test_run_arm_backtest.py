@@ -161,6 +161,46 @@ def test_bxr_in_history_exits_on_the_runner_walk_and_scores_its_twins_on_the_sam
     assert set(s["twins"]["BXT15"]) >= {"gross_r", "net_r_overshoot_0", "net_r_overshoot_0.70"}
 
 
+def test_a_history_twin_pays_the_round_trip_and_the_swap_of_every_rollover_it_held_as_bxr_does(b1: pd.DataFrame) -> None:
+    """Quant review C4: a twin is charged like a real fill: its move carries the swap of each rollover from the entry
+    minute to its exit, and its net R pays the frozen round trip (spread both legs, slippage, commission) and the
+    stop-exit overshoot, exactly as BXR's own row on the same entry."""
+    from goldbot.labels.triple_barrier import SwapSpec, rollover_nights
+    from goldbot.research import arm_rules_clock_box as K
+    trades, _ = rab.run_arm(b1, _spec("BXR15", "box_next", {"exit": "runner"}), START, END, COSTS)
+    swap = SwapSpec.shipped()
+    close = pd.DatetimeIndex(rab.resample_bars(b1, "15m").reset_index(drop=True)["visible_at"])
+    held = 0
+    for _, t in trades.iterrows():
+        i = int(np.searchsorted(close, t["ts_utc"]))
+        path, closes = K.mid_path(b1, close[i]), close[i + 1:i + 1 + 96]
+        entry, side, r = float(t["entry"]), int(t["side"]), float(t["risk_usd"])
+        for mode in ("struct", "fixed"):
+            w = K.walk_runner(path, closes, entry, side, r, r / K.BOX_STOP_ATR, target_r=float(t[f"twin_{mode}_target_r"]))
+            nights = int(rollover_nights(pd.DatetimeIndex([t["entry_ts"]]), pd.DatetimeIndex([w["at"]]),
+                                         swap.server_tz, swap.triple_weekday)[0])
+            move = side * (w["exit"] - entry) + nights * float(swap.usd_per_oz(np.array([side]))[0])
+            stop = float(t[f"twin_{mode}_hit"] == "stop")
+            assert t[f"twin_{mode}_gross_r"] == pytest.approx(move / r)
+            assert t[f"twin_{mode}_net_r"] == pytest.approx((move - COSTS.round_trip_usd) / r)
+            assert t[f"twin_{mode}_net_r_os"] == pytest.approx((move - COSTS.round_trip_usd - 0.70 * stop) / r)
+            held += nights > 0
+    assert held > 0, "some twin must hold a rollover, else the swap check is vacuous"
+
+
+def test_the_history_twin_read_drops_a_pair_whose_bxr_did_not_reach_its_own_exit() -> None:
+    """Quant review C4: a BXR that ran off the data before its own stop or hold (`open`) is censored; its pair leaves
+    the twin comparison (n counts the kept pairs), as the live read drops a censored BXR's twins."""
+    rows = pd.DataFrame({"barrier_hit": ["stop", "time", "open"], "twin_fixed_hit": ["target", "stop", "target"],
+                         "twin_struct_hit": ["stop", "time", "target"],
+                         **{f"twin_{m}_{c}": [1.0, -1.0, 9.0] for m in ("struct", "fixed")
+                            for c in ("gross_r", "net_r", "net_r_os")}})
+    out = rab.twin_summary(rows, "BXR15")
+    assert out["BXF15"]["n_trades"] == 2 and out["BXF15"]["n_dropped_censored"] == 1
+    assert out["BXF15"]["net_r_overshoot_0"]["mean"] == pytest.approx(0.0)
+    assert out["BXT15"]["gross_r"]["sum"] == pytest.approx(0.0)
+
+
 def test_a_fixed_target_box_arm_has_no_twins(b1: pd.DataFrame) -> None:
     trades, s = rab.run_arm(b1, _spec("BXF-X", "box_next", {"exit": "fixed"}), START, END, COSTS)
     assert "twins" not in s and not any(c.startswith("twin_") for c in trades.columns)

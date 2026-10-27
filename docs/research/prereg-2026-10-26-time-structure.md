@@ -159,6 +159,14 @@ Definitions as `docs/research/candidates/time_structure/key_levels_discovery.py`
   About half are skipped at today's ATR1h.
 - **Recorded:** level class, range used vs the 20-day forecast (G-4, logged only), session of the touch. The swap for
   any rollover held is in the measured cost.
+- **Amendment (made 2026-10-26 before any fill).**
+  - **Tie-break:** when one bar breaks several levels at once (all in one direction), the trade is on the level
+    nearest that bar's close. Slice G had no such case to settle, because it counted every level's break as its own
+    event. Code: `arm_rules_levels.level_events`.
+  - **Conformance, not a change:** as in slice G ("window = 5 trading days from the first day of the period"), the
+    previous-week and previous-month levels exist only on the first 5 trading days of the week or month
+    (`arm_rules_levels.day_levels`, `PERIOD_LEVEL_DAYS`). The first armed code had applied them every day; the
+    quant review (condition C1) found this.
 
 ### 3.2 Arms (host `icm-demo`, intraday pot)
 

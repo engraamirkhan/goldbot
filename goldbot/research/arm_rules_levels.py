@@ -222,6 +222,9 @@ LEVEL_WINDOW_FROM = ["17:00", NY]          # the window opens at the trading day
 LONDON, TOKYO = "Europe/London", "Asia/Tokyo"
 NEAR_REF_ATR = 0.05                        # slice G: a level within 0.05 ATR of the 17:00 price has no approach side
 SESSION_MIN_MINUTES = 20                   # slice G `agg`: a session with fewer 1m bars has no high or low
+# slice G (`key_levels_discovery.py`, adopted by 3.1): "weekly-and-longer class (window = 5 trading days from the first
+# day of the period)": previous-week and previous-month levels trade on the period's first 5 trading days only
+PERIOD_LEVEL_DAYS = 5
 ROUND_STEP, ROUND_ATR = 10.0, 3.0          # every $10 (so $50 and $100) number within 3 ATR14(1h) of the 17:00 price
 # 1h bars the rule reads before its decision bar for live to equal history: the previous month's high needs up to two
 # calendar months and ATR14(1h) forgets its start in ~300 bars; more than the engine's 1m memory holds, so the engine
@@ -264,12 +267,23 @@ def _periods(key: np.ndarray, trade: np.ndarray, hi: np.ndarray, lo: np.ndarray)
     return out
 
 
+def _nth_trading_day(key: np.ndarray, trade: np.ndarray) -> np.ndarray:
+    """Each day's ordinal among the trading days of its period (`key` per day, 1 = the period's first trading day)."""
+    out = np.zeros(len(key), dtype=np.int64)
+    seen: dict[int, int] = {}
+    for i in np.flatnonzero(trade):
+        seen[int(key[i])] = out[i] = seen.get(int(key[i]), 0) + 1
+    return out
+
+
 def day_levels(m: pd.DataFrame, b1: pd.DataFrame, classes: list[str]) -> dict[int, dict[str, Any]]:
     """Per trading day D (days since the epoch) with a trading day before it in `m`: `levels`, the (class, value)
     pairs set at D's start (3.1); `ref`, the 17:00 New York price (the close of D-1's last bar), and `ref_atr`, ATR14
     there; `start`, D's first bar; `start_ts`, D-1's last close. Point in time: each level is of a period closed by
     D's start (a week at Friday 17:00 New York, a month at its last trading day's). A day, week or month the input
-    holds only part of (its first trading day, that day's week and month) gives no level: never a partial high."""
+    holds only part of (its first trading day, that day's week and month) gives no level: never a partial high.
+    Previous-week and previous-month levels exist only on the period's first PERIOD_LEVEL_DAYS (5) trading days, as
+    slice G's "window = 5 trading days from the first day of the period"."""
     t = utc_index(m["ts_utc"])
     day = trading_day(t)
     h, lo_, c = (m[k].to_numpy(dtype=float) for k in ("high", "low", "close"))
@@ -284,6 +298,7 @@ def day_levels(m: pd.DataFrame, b1: pd.DataFrame, classes: list[str]) -> dict[in
     week = days - dow                                                   # the Monday of each trading day's week
     month = days.astype("datetime64[D]").astype("datetime64[M]").astype(np.int64)
     weeks, months = _periods(week, trade, dhi, dlo), _periods(month, trade, dhi, dlo)
+    nth_week, nth_month = _nth_trading_day(week, trade), _nth_trading_day(month, trade)
     sess = _sessions(b1, days) if {"asia_hl", "london_hl", "ny_hl"} & set(classes) else {}
     close_ts = utc_index(m["visible_at"])
     table: dict[int, dict[str, Any]] = {}
@@ -299,7 +314,8 @@ def day_levels(m: pd.DataFrame, b1: pd.DataFrame, classes: list[str]) -> dict[in
             for n in ("asia_hl", "london_hl", "ny_hl"):
                 if n in classes:
                     lv += [(n, float(v)) for v in (sess[n][0][p], sess[n][1][p]) if np.isfinite(v)]
-        pw, pm = weeks.get(int(week[k]) - 7), months.get(int(month[k]) - 1)
+        pw = weeks.get(int(week[k]) - 7) if nth_week[k] <= PERIOD_LEVEL_DAYS else None
+        pm = months.get(int(month[k]) - 1) if nth_month[k] <= PERIOD_LEVEL_DAYS else None
         if pw is not None:
             lv += [(n, v) for n, v in (("pwh", pw[0]), ("pwl", pw[1])) if n in classes]
         if pm is not None:

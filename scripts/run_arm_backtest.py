@@ -201,6 +201,27 @@ def signal_spread_extra(lab: pd.DataFrame, bars: pd.DataFrame, b1: pd.DataFrame,
     return extra
 
 
+def _stat(t: pd.DataFrame, col: str) -> dict[str, Any]:
+    k = len(t)
+    return {"mean": float(t[col].mean()) if k else None, "sum": float(t[col].sum()) if k else 0.0,
+            "win_rate": float((t[col] > 0).mean()) if k else None}
+
+
+def twin_summary(trades: pd.DataFrame, arm_id: str) -> dict[str, Any]:
+    """H-80: the paired twins on BXR's own entries (prereg R1 reads BXR - BXF and BXT - BXF). Each twin is charged as
+    a real fill: its move carries the swap of each rollover held and its net R the frozen round trip (spread both
+    legs, slippage, commission) and the overshoot (`runner_labels`, `run_arm`). Quant review C4: a pair whose BXR did
+    not reach its own exit (`open`: the data ended first) is censored and dropped, as is a twin that did not reach its
+    own; `n_trades` counts the kept pairs."""
+    out: dict[str, Any] = {}
+    for mode, tid in K.twin_ids(arm_id).items():
+        kept = trades[(trades["barrier_hit"] != "open") & (trades[f"twin_{mode}_hit"] != "open")]
+        out[tid] = {"n_trades": len(kept), "n_dropped_censored": len(trades) - len(kept),
+                    "gross_r": _stat(kept, f"twin_{mode}_gross_r"), "net_r_overshoot_0": _stat(kept, f"twin_{mode}_net_r"),
+                    "net_r_overshoot_0.70": _stat(kept, f"twin_{mode}_net_r_os")}
+    return out
+
+
 def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp, costs: A.ArmCosts,
             blackout: tuple[np.ndarray, np.ndarray] | None = None) -> tuple[pd.DataFrame, dict[str, Any]]:
     A.assert_no_holdout_rows(b1)
@@ -260,17 +281,10 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
     n = len(trades)
 
     def stat(col: str, rows: pd.DataFrame | None = None) -> dict[str, Any]:
-        t = trades if rows is None else rows
-        k = len(t)
-        return {"mean": float(t[col].mean()) if k else None, "sum": float(t[col].sum()) if k else 0.0,
-                "win_rate": float((t[col] > 0).mean()) if k else None}
+        return _stat(trades if rows is None else rows, col)
     extra_summary: dict[str, Any] = {}
     if K.is_runner(arm) and n:
-        # H-80: the paired twins on BXR's own entries (prereg R1 reads BXR - BXF and BXT - BXF)
-        extra_summary["twins"] = {
-            tid: {"n_trades": n, "gross_r": stat(f"twin_{mode}_gross_r"), "net_r_overshoot_0": stat(f"twin_{mode}_net_r"),
-                  "net_r_overshoot_0.70": stat(f"twin_{mode}_net_r_os")}
-            for mode, tid in K.twin_ids(arm.id).items()}
+        extra_summary["twins"] = twin_summary(trades, arm.id)
     if "stratum" in trades.columns and n:
         # arms 8.13 condition 3: the family net without T and each stratum's share of fills (descriptive, no decision)
         extra_summary["strata"] = {str(k): float(v) for k, v in trades["stratum"].value_counts(normalize=True).items()}
