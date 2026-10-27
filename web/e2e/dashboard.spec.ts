@@ -555,7 +555,10 @@ test("Trades: money on every open row, filters in the URL, withheld totals on a 
       await page.goto("/#/trades/list?acct=icm-demo");
       await list.getByRole(width < 1024 ? "button" : "row", { name: /^Box break \+ close 1h, long, plus £3\.95, closed at trailing stop$/ }).click();
       await expect(detail).toContainText("+£3.95");
-      await expect(detail).toContainText("Bars for this period aren't stored yet.");
+      // its chart from the server's stored broker minutes: levels in words, the journalled stop move drawn (133)
+      await expect(detail.getByRole("img", { name: /^Chart of 1h bars: target 2,404\.00, entry 2,400\.00, first stop 2,398\.00, last stop 2,399\.50, exit 2,401\.20/ })).toBeVisible();
+      await expect(detail).toContainText("1h bars, bid prices, from this broker.");
+      await expect(detail).toContainText(/moved to 2,399\.50 at/);
       await expect(detail).toContainText(/commission £0\.35 · swap \+?£0\.12|commission £0\.35/);
       await noSideways(page, width);
       await shot(page, `trades-detail-${tag}`);
@@ -563,9 +566,19 @@ test("Trades: money on every open row, filters in the URL, withheld totals on a 
       await expect(detail).toHaveCount(0);
       await expect(page).toHaveURL(/#\/trades\/list\?acct=icm-demo$/);
 
-      await page.goto("/#/trades/strategies");                                 // the board (132) is not served yet
-      await expect(page.getByText(/The strategy board \(each arm's progress to its read\) isn't served yet/)).toBeVisible();
-      await expect(page.getByRole("region", { name: "Trades summary" })).toBeVisible();
+      // the board (132): progress to each arm's read from the real server; no unread arm's money or R (ADR 0050)
+      await page.goto("/#/trades/strategies");
+      await expect(page.getByRole("region", { name: "Learning progress" })).toContainText(/trades counted toward reads in 7 days/);
+      const vwap = page.getByRole("region", { name: "Strategy board" })
+        .getByRole(width < 1024 ? "button" : "row", { name: /^VWAP fade, running, open its trades$/ });
+      // the server keeps one board build for BOARD_TTL_S: a build from before the seed (the List's filter names) ages out
+      await expect(async () => {
+        await page.reload();
+        await expect(vwap).toContainText(/\d+\/300 · read ~/, { timeout: 2_000 });
+      }).toPass({ timeout: 45_000 });
+      await expect(vwap).toContainText("read against Random control 1m · every 10 min");
+      await expect(vwap).not.toContainText(/R\/trade|£/);
+      await expect(page.getByRole("region", { name: "Engine strategies" })).toContainText("Box break + close · 1h");
       await noSideways(page, width);
       await shot(page, `trades-strategies-${tag}`);
 

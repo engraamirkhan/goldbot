@@ -7,7 +7,9 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from goldbot.api.strategy_labels import LABELS_PATH, arm_family, load_catalog
+import yaml
+
+from goldbot.api.strategy_labels import LABELS_PATH, READS_PATH, arm_family, load_catalog
 from goldbot.engine.exploration import SPEC_PATH
 from goldbot.ops.accounts import load_accounts
 from goldbot.research.arms import load_arms
@@ -66,3 +68,34 @@ def test_no_arm_is_read_until_arm_reads_lists_it_and_a_broken_file_reads_none(tm
     bad = tmp_path / "bad.yaml"
     bad.write_text("reads: {S1A: {verdict: no time}}")
     assert load_catalog(reads_path=bad).reads == {}
+
+
+def test_each_strategy_arm_is_read_against_its_named_or_own_family_control_else_its_sleeves_random_control():
+    """Item 132: the board's control pairing (strategy_labels docstring), on the shipped config."""
+    arms = load_catalog().arms
+    pairs = {a: arms[a].control_arm for a in ("F1A", "KA15", "G1A", "C30A", "S1A", "I2A", "W1A", "Z3D", "PDC4", "VI2A")}
+    assert pairs == {"F1A": "F1C", "KA15": "XC15", "G1A": "G1C", "C30A": "C30C", "S1A": "S0", "I2A": "I0",
+                     "W1A": "W0", "Z3D": "ZCD", "PDC4": "W0", "VI2A": "VI0"}
+    assert all(i.control_arm is None for i in arms.values() if i.is_control)
+
+
+def test_pooled_families_and_read_sizes_come_from_the_evaluators_arm_reads_file(tmp_path):
+    """Quant 2026-10-27: the read unit and n are the evaluator's (config/arm_reads.yaml `read_at`, `read_units`)."""
+    cat = load_catalog()
+    assert cat.unit_of("Z6D") == cat.unit_of("Z6V") == "H-81:Z6" and cat.read_size("Z6D") == 300
+    assert cat.unit_of("BXT15") == "H-80:BXR" and not cat.arms["BXT15"].counted and cat.arms["BXR15"].counted
+    assert cat.unit_of("ZCD") == "ZCD" and cat.read_size("ZCD") is None and cat.read_size("WFRI") == 170
+    assert cat.arms["S0R"].count == "stop_exits" and cat.read_size("S0R") == 100
+    spec = {a.id for a in load_arms(SPEC_PATH, check_hash=False)}
+    raw = yaml.safe_load(READS_PATH.read_text())
+    assert set(raw["read_at"]) <= spec and all(set(u["arms"]) <= spec for u in raw["read_units"].values())
+    reads = tmp_path / "reads.yaml"
+    reads.write_text(READS_PATH.read_text().replace("reads: {}", "reads: {'H-81:Z6': {read_utc: '2026-10-20T00:00:00Z', verdict: no edge}}"))
+    assert load_catalog(reads_path=reads).is_read("Z6V")
+
+
+def test_a_broken_reads_file_reads_no_unit_and_pools_nothing(tmp_path):
+    bad = tmp_path / "reads.yaml"
+    bad.write_text("reads: {'H-81:Z6': {read_utc: '2026-10-20T00:00:00Z', verdict: no edge}}\nread_at: {Z6D: 0}\n")
+    cat = load_catalog(reads_path=bad)
+    assert cat.reads == {} and cat.unit_of("Z6D") == "Z6D" and not cat.is_read("Z6D") and cat.read_size("Z6D") == 300

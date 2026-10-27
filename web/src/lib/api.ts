@@ -2,7 +2,6 @@
 // backend's OpenAPI schema: `python scripts/export_openapi.py && npm run gen:api`. CI regenerates both and
 // fails on a diff, so a contract change in goldbot/api/schema.py cannot reach main without the client.
 import type { components, operations } from "./schema";
-import type { StrategyBoard } from "./trades";
 
 type Schemas = components["schemas"];
 export type AccountSummary = Schemas["AccountSummary"];
@@ -226,8 +225,10 @@ export const api = {
   // server-side (ADR 0050). `query` is built by lib/trades.apiQuery from the URL's filters.
   trades: (query: string) => req<Schemas["TradesPage"]>(`/api/trades${query}`),
   trade: (id: string) => req<Schemas["TradeRow"]>(`/api/trades/${encodeURIComponent(id)}`),
-  // the strategy board (backlog 132) is not served yet: an older server's SPA answer reads as a 404 (see req)
-  strategyBoard: () => req<StrategyBoard>("/api/strategies/board"),
+  // one trade on the stored bars of its timeframe with its levels and stop moves (backlog 133; never blinded)
+  tradeBars: (id: string) => req<Schemas["TradeBars"]>(`/api/trades/${encodeURIComponent(id)}/bars`),
+  // the strategy board (backlog 132): progress to each arm's read; results only after it (ADR 0050)
+  strategyBoard: () => req<Schemas["StrategyBoardView"]>("/api/strategies/board"),
   // read-only cards (docs/ux/limits-and-tradingview.md): nothing here changes a limit or the TradingView link
   limits: () => req<LimitsView>("/api/limits"),
   limitChanges: (q: LimitChangesQuery = {}) => req<LimitChange[]>(`/api/limits/changes${qs(q)}`),

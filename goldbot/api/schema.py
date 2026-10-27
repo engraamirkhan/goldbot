@@ -1503,6 +1503,7 @@ class TradeRow(BaseModel):
     excluded_reason: str | None
     blinded: bool
     stale: bool                             # open: the engine's figures or rate are old, never shown as current
+    position_id: int | None = None          # the broker's position (the "Details" disclosure; its stop moves)
 
 
 class TradeTotals(BaseModel):
@@ -1533,6 +1534,164 @@ class TradesPage(BaseModel):
     next_cursor: str | None                 # pass as `cursor` for the next page; None on the last
     totals: TradeTotals
     unreadable: list[TradeSource]           # their trades are missing, not zero
+
+
+# ============================================================================= Trade chart (GET /api/trades/{id}/bars)
+# goldbot/api/trade_chart.py (docs/design/trades-ux-2026-10-27.md §3.3, item 133): one trade on the stored bars of
+# its decision timeframe, with its own levels. One trade, the owner's money: never blinded (ADR 0050)
+class ChartBar(BaseModel):
+    t: datetime                             # the bar's open, UTC
+    o: float
+    h: float
+    l: float                                # noqa: E741 - OHLC
+    c: float
+
+
+class StopMove(BaseModel):
+    at: datetime
+    price: float
+
+
+class TradeBars(BaseModel):
+    """`bars` (bid prices, USD/oz) from BARS_BEFORE bars before the entry to BARS_AFTER after the exit (now while
+    open); none stored: `bars` empty and `missing` says so, the levels still given. `stop` is the stop at entry,
+    `stop_moves` each accepted move after it, in time order."""
+    trade_id: str
+    timeframe: str                          # of the bars shown: the trade's, coarser only past MAX_BARS
+    feed: Literal["broker", "reference"] | None    # the trade's broker's minutes, else the reference feed
+    bars: list[ChartBar]
+    missing: str | None
+    side: Literal["long", "short"]
+    entry: float | None
+    entry_utc: datetime
+    stop: float | None
+    stop_moves: list[StopMove]
+    target: float | None
+    exit: float | None
+    exit_utc: datetime | None
+
+
+# ============================================================================= Strategy board (GET /api/strategies/board)
+# goldbot/api/strategy_board.py (docs/design/trades-ux-2026-10-27.md §2.3, §3.4, item 132; ADR 0050): progress to each
+# arm's single read; results only after it. Before the read no per-arm or per-family aggregate is in the payload
+ArmStatusWord = Literal["warming", "running", "read", "retired"]
+AnnealState = Literal["E", "C1", "P", "R"]
+BoardState = Literal["proven", "candidate", "running", "retired", "control"]
+
+
+class SinceRead(BaseModel):
+    n: int
+    net_r_per_trade: float
+
+
+class ReadFigures(BaseModel):
+    """The read sample's figures, frozen at the read (its first `n` counted trades closed by `read_utc`)."""
+    read_utc: datetime
+    verdict: str
+    n: int
+    net_r_per_trade: float | None           # None when no counted trade is stored (the verdict still shows)
+    ci90: tuple[float, float] | None        # None under 2 trades
+    hit_rate: float | None
+    net_pnl: float | None                  # None when any trade's net is unknown or currencies differ
+    currency: str | None
+    vs_control_r: float | None              # the evaluator's recorded comparison (as its prereg defines it), never computed
+    vs_control_ci90: tuple[float, float] | None
+    since_read: SinceRead | None            # counted trades closed after the read, labelled "since read"
+
+
+class ReadProgress(BaseModel):
+    """One read unit's progress (an arm, or a family read pooled: W1, W2, H-80, H-81; config/arm_reads.yaml). Before
+    its read: counts, progress, ETA and status only (no money, R, hit rate or rank)."""
+    unit_id: str                            # the arm id, or the pooled unit's id ("H-81:Z6")
+    arm_ids: list[str]
+    n_counted: int                          # over its counted arms (H-80: BXR's fills; S0R: its stop exits)
+    n_read_at: int | None                   # None: no read registered (a control)
+    status: ArmStatusWord                   # warming: no counted trade yet; retired: at its stop before the read
+    anneal_state: AnnealState
+    eta_read_date: date | None              # at the 7-day pace of counted trades; None read, retired, no read, no pace
+    read: ReadFigures | None                # only after the unit's read (config/arm_reads.yaml `reads`)
+
+
+class BoardVariant(BaseModel):
+    """One arm. Read alone (`pooled` false): its unit's progress is its own. Read pooled: its own count only; the
+    family's `pooled` progress carries n of N, ETA and the read (`eta_read_date` and `read` are None here)."""
+    arm_id: str
+    timeframe: str
+    variant: str                            # "15m", or "15m · strict" when two arms share a family and timeframe
+    account_labels: list[str]
+    is_control: bool
+    control_arm_id: str | None              # the control it is read against; None for a control
+    read_unit: str
+    pooled: bool
+    status: ArmStatusWord                   # its unit's
+    anneal_state: AnnealState               # its unit's
+    n_counted: int                          # its own count toward its unit
+    n_read_at: int | None                   # its unit's read size; None: no read registered (a control)
+    fills_today: int
+    fills_7d: int
+    open_now: int
+    eta_read_date: date | None
+    read: ReadFigures | None
+
+
+class BoardFamily(BaseModel):
+    family: str
+    family_label: str
+    style: str
+    accounts: list[str]                     # account labels, never slugs
+    state: BoardState
+    anneal_state: AnnealState               # the furthest of its strategy arms (P, C1, E, R)
+    variants: list[BoardVariant]
+    pooled: list[ReadProgress]              # the family's pooled read units (empty when its arms are read alone)
+
+
+class LabTotal(BaseModel):
+    """One lab's sleeve over 7 days: counts always; money only when every (account, day) cell of its unread closes
+    covers 3+ strategy arms, and only when every sleeve of the account clears that (else one sleeve is the lab's
+    figure minus the others)."""
+    account_label: str
+    style: str
+    period: Literal["7 days"]
+    arms: int
+    n: int
+    n_closed: int
+    net_pnl: float | None
+    costs: float | None
+    currency: str | None
+    withheld_reason: str | None
+
+
+class EngineStrategy(BaseModel):
+    """An engine strategy or shadow model (not a pre-registered arm): full figures with n and a 90% CI."""
+    name: str
+    family: str
+    timeframe: str | None
+    kind: Literal["real", "strategy", "shadow"]
+    n: int                                  # closed trades with an R
+    net_r_per_trade: float | None
+    ci90: tuple[float, float] | None
+    hit_rate: float | None
+    net_pnl: float | None                   # None for shadow (paper) or when a net is unknown
+    currency: str | None
+    n_today: int
+    n_7d: int
+
+
+class Learning(BaseModel):
+    running: int                            # strategy arms warming or running
+    read: int
+    proven: int
+    retired: int
+    counted_7d: int                         # trades counted toward reads in the last 7 days
+
+
+class StrategyBoardView(BaseModel):
+    as_of: datetime
+    learning: Learning
+    lab_totals: list[LabTotal]
+    families: list[BoardFamily]             # by state, then closeness to the read: never by result
+    engine: list[EngineStrategy]
+    unreadable: list[str]                   # sources missing (not zero): ledger sources, "arm status"
 
 
 class KindDay(BaseModel):

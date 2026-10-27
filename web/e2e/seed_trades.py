@@ -1,7 +1,8 @@
 """Seed a realistic trading day into the e2e server's state dir, through goldbot's own writers, for the trades screens
 (docs/design/trades-ux-2026-10-27.md; e2e/dashboard.spec.ts "Trades: ..."). Every kind the ledger reads: exploration
 and control arms (aux.db), a cost probe, a closed engine trade, open engine and arm positions (orders files) and a
-shadow trade, on two GBP demo accounts, with closes on earlier days for the 14-day strip. At least 3 unread arms per
+shadow trade, on two GBP demo accounts, with closes on earlier days for the 14-day strip, and the closed engine trade's
+bars and stop move in the server's store for its chart. At least 3 unread arms per
 account and day, so an unfiltered list shows its totals and a filter narrowed to one strategy withholds them
 (ADR 0050), both from the real server.
 
@@ -11,12 +12,15 @@ account and day, so an unfiltered list shows its totals and a filter narrowed to
 from __future__ import annotations
 
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+from goldbot.data.resample import BAR_COLUMNS
+from goldbot.data.store import Store
 from goldbot.db import Database
 from goldbot.engine import cost_probe, exploration
 from goldbot.engine.exploration import ExplorationRecord
@@ -70,8 +74,8 @@ def seed(state: Path, now: pd.Timestamp) -> None:
                 arm(conn, f"e2e-{arm_id}-{i}", arm_id, SCALP, now - (20 + 9 * n) * m, tf=tf, minutes=6, pnl=pnl,
                     side=1 if n % 2 else -1, reason="target" if pnl > 0 else "stop")
         arm(conn, "e2e-S1A-open", "S1A", SCALP, now - 14 * m, tf="5m", minutes=None, pnl=None, pid=501)
-        # the day/swing lab: the three box-exit arms on 1h
-        for i, (arm_id, pnl) in enumerate((("BXR1H", 2.1), ("BXT1H", -1.4), ("BXF1H", 1.6))):
+        # the day/swing lab: three read units on 1h (BXT/BXF would be the same unit as BXR, H-80 pooled: one unit)
+        for i, (arm_id, pnl) in enumerate((("BXR1H", 2.1), ("MB1H", -1.4), ("G1A", 1.6))):
             arm(conn, f"e2e-{arm_id}", arm_id, DAY, now - (200 - 30 * i) * m, tf="1h", minutes=95, pnl=pnl,
                 reason="target" if pnl > 0 else "stop")
         # earlier days for the 14-day strip (three arms a day on the scalp lab)
@@ -102,6 +106,25 @@ def seed(state: Path, now: pd.Timestamp) -> None:
         version="v1", agent_id="tsmom-g0-x", side=1, entry_ts=now - 300 * m, entry=2400.0, stop=2390.0, target=2420.0,
         max_bars=12, timeframe="1h", p=0.62, exit_ts=now - 120 * m, exit=2420.0, barrier="target", ret=20 / 2400))
     book.save(now)
+    chart(state, now)
+
+
+def chart(state: Path, now: pd.Timestamp) -> None:
+    """The closed 1h engine trade's chart (item 133): the Day/swing lab's broker minutes over the last 36 hours in the
+    server's store (state/data, scripts/e2e_server.py) and one accepted stop move of its position, 41."""
+    store = Store(state / "data")
+    ts = pd.date_range((now - pd.Timedelta(hours=36)).floor("min"), now.floor("min"), freq="1min", inclusive="left")
+    mid = [2400.0 + 2.5 * math.sin(i / 90) for i in range(len(ts))]
+    bars = pd.DataFrame({"ts_utc": ts, "visible_at": ts + pd.Timedelta(minutes=1)})
+    for f, d in (("open", 0.0), ("high", 0.4), ("low", -0.4), ("close", 0.1)):
+        bars[f"bid_{f}"] = [p + d for p in mid]
+        bars[f"ask_{f}"] = [p + d + 0.2 for p in mid]
+    bars["tick_count"], bars["spread_mean"], bars["spread_max"] = 20.0, 0.2, 0.3
+    store.append("bars_1m_broker", bars[BAR_COLUMNS], source=DAY)
+    store.append("decisions", pd.DataFrame([{
+        "ts_utc": now - pd.Timedelta(minutes=150), "account_id": DAY, "agent_id": "box_break_close-g0-1h", "action": "trail",
+        "p": None, "mult": None, "proposal_id": None,
+        "detail": json.dumps({"position": 41, "sl": 2399.5, "ok": True, "retcode": 10009})}]), source=DAY, dedupe=False)
 
 
 if __name__ == "__main__":

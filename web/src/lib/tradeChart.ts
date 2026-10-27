@@ -1,19 +1,25 @@
 // Pure helpers of the trade chart (screens/trades/TradeChart.tsx): levels in words, the bar a fill fell in, and
 // label spacing so two close levels never print on top of each other.
-import type { Bar, TradeRow } from "./trades";
+import type { Bar, StopMove, TradeRow } from "./trades";
 
-export function chartLevels(t: TradeRow): { key: string; value: number; word: string; dash?: string; strong?: boolean }[] {
-  const out: { key: string; value: number; word: string; dash?: string; strong?: boolean }[] = [];
+export type ChartLevel = { key: string; value: number; word: string; dash?: string; strong?: boolean };
+
+/** Target, entry, the stop at entry, the stop it ended on (its last journalled move, else the engine's stop now) and
+ *  the exit. A moved stop reads "first stop" and "last stop" (or "stop now" while open). */
+export function chartLevels(t: TradeRow, moves: readonly StopMove[] = []): ChartLevel[] {
+  const out: ChartLevel[] = [];
+  const last = moves.length ? moves[moves.length - 1].price : t.stop_now;
+  const moved = last != null && last !== t.stop;
   if (t.target != null) out.push({ key: "target", value: t.target, word: "target", dash: "6 4" });
   if (t.entry != null) out.push({ key: "entry", value: t.entry, word: "entry", strong: true });
-  if (t.stop != null) out.push({ key: "stop", value: t.stop, word: t.stop_now != null && t.stop_now !== t.stop ? "first stop" : "stop", dash: "6 4" });
-  if (t.stop_now != null && t.stop_now !== t.stop) out.push({ key: "stop_now", value: t.stop_now, word: t.status === "open" ? "stop now" : "last stop", dash: "2 3" });
+  if (t.stop != null) out.push({ key: "stop", value: t.stop, word: moved ? "first stop" : "stop", dash: "6 4" });
+  if (moved) out.push({ key: "stop_now", value: last, word: t.status === "open" ? "stop now" : "last stop", dash: "2 3" });
   if (t.exit != null) out.push({ key: "exit", value: t.exit, word: "exit" });
   return out;
 }
 
 /** Index of the last bar that starts at or before `iso` (the bar a fill happened in); -1 when none. */
-export function barIndexAt(bars: Bar[], iso: string | null | undefined): number {
+export function barIndexAt(bars: readonly Bar[], iso: string | null | undefined): number {
   if (!iso) return -1;
   const t = new Date(iso).getTime();
   let i = -1;

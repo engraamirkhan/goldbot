@@ -8,11 +8,11 @@ import { api, ApiError } from "../../lib/api";
 import { modeBadge } from "../../lib/home";
 import {
   duration, EVIDENCE_WORDS, exitWords, KIND_WORDS, moneyOrDash, POLL, price, resultOf, sideArrow, sideWords, signedR,
-  strategyLabel, type TradeRow,
+  strategyLabel, type TradeBars, type TradeRow,
 } from "../../lib/trades";
 import { useWide } from "../../lib/useMedia";
 import { Badge, Button, ErrorState, Skeleton, TimeText } from "../../ui";
-import { lots, money } from "../../ui/format";
+import { lots, money, NBSP } from "../../ui/format";
 import { TradeChart } from "./TradeChart";
 
 export function TradeDetail({ id, onClose }: { id: string; onClose: () => void }) {
@@ -45,6 +45,9 @@ export function TradeDetail({ id, onClose }: { id: string; onClose: () => void }
 }
 
 function DetailBody({ t, wide }: { t: TradeRow; wide: boolean }) {
+  // the bars and stop moves (backlog 133): refreshed with the trade while it is open (the last bar is live)
+  const chart = useQuery({ queryKey: ["tradeBars", t.trade_id], queryFn: () => api.tradeBars(t.trade_id), retry: false,
+                           refetchInterval: t.status === "open" ? POLL.detail : false });
   const { pnl, r } = resultOf(t);
   const c = t.costs;
   const part = (x: number | null, signed = false) => (x == null ? "not recorded" : money(x, t.currency, signed));
@@ -61,14 +64,18 @@ function DetailBody({ t, wide }: { t: TradeRow; wide: boolean }) {
         <span className="muted">(risk {moneyOrDash(t.risk_amount, t.currency, false)}){t.status === "open" ? " · now" : ""}</span>
       </p>
       {t.stale && <p className="small state warn">Figures are old: the engine isn't reporting; not shown as current.</p>}
-      {/* no bars endpoint yet (backlog 133): the chart box shows the levels in words, at its final height */}
-      <TradeChart trade={t} bars={null} loading={false} height={wide ? 280 : 200} width={wide ? 440 : 340} />
+      <TradeChart trade={t} bars={chart.data?.bars} moves={chart.data?.stop_moves} timeframe={chart.data?.timeframe}
+                  loading={chart.isLoading} height={wide ? 280 : 200} width={wide ? 440 : 340} />
+      {/* always one line, so the facts below never move when the bars arrive */}
+      <p className="small muted chart-note">{chart.data && chart.data.bars.length > 0 ? chartNote(t, chart.data) : NBSP}</p>
       <dl className="detail-facts">
         <div><dt>Why taken</dt><dd>{t.why || "—"}</dd></div>
         <div><dt>{t.status === "open" ? "Closes at" : "Closed by"}</dt><dd>{t.status === "open"
           ? <>target {price(t.target)} or stop {price(t.stop_now ?? t.stop)} USD/oz{t.hold_limit_s ? `, or after ${duration(t.hold_limit_s)}` : ""}</>
           : <>{exitWords(t.exit_reason)}, after {duration(t.held_s)}{t.hold_limit_s ? ` (hold limit ${duration(t.hold_limit_s)})` : ""}{t.exit != null ? ` at ${price(t.exit)} USD/oz` : ""}</>}</dd></div>
-        <div><dt>Levels</dt><dd className="num">entry {price(t.entry)} · stop {price(t.stop)}{t.stop_now != null && t.stop_now !== t.stop ? ` (moved to ${price(t.stop_now)})` : ""} · target {price(t.target)} USD/oz</dd></div>
+        <div><dt>Levels</dt><dd className="num">entry {price(t.entry)} · stop {price(t.stop)}{chart.data?.stop_moves.length
+          ? chart.data.stop_moves.map((m) => <span key={m.at}> (moved to {price(m.price)} at <TimeText iso={m.at} />)</span>)
+          : t.stop_now != null && t.stop_now !== t.stop ? ` (moved to ${price(t.stop_now)})` : ""} · target {price(t.target)} USD/oz</dd></div>
         <div><dt>Costs</dt><dd className="num">{c ? <>spread {part(c.spread)}{c.spread_exit_estimated ? " (exit half estimated)" : ""} · slippage {part(c.slippage, true)}{c.slippage_exit_known ? "" : " (entry only)"} · commission {part(c.commission)} · swap {part(c.swap, true)} = {money(c.total, t.currency)}
           {!c.complete && <span className="muted"> (known parts only)</span>}{t.gross != null && <span className="muted"> · gross {money(t.gross, t.currency, true)}</span>}</>
           : t.kind === "shadow" ? "none: a paper trade" : "not recorded"}</dd></div>
@@ -87,4 +94,10 @@ function DetailBody({ t, wide }: { t: TradeRow; wide: boolean }) {
       </details>
     </div>
   );
+}
+
+/** Which bars these are, in words: a coarser timeframe than the trade's, or the reference feed, is said. */
+function chartNote(t: TradeRow, c: TradeBars): string {
+  const tf = c.timeframe !== t.timeframe ? `${c.timeframe} bars (a long hold: coarser than its ${t.timeframe ?? "1m"})` : `${c.timeframe} bars`;
+  return `${tf}, bid prices, ${c.feed === "reference" ? "from the reference feed (this broker's bars aren't stored)" : "from this broker"}.`;
 }

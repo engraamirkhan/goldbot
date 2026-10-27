@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { board, openPositions } from "../test/tradesFixtures";
+import { openPositions, tradeBars } from "../test/tradesFixtures";
 import { parseRoute, routeHash } from "./route";
+import { chartLevels } from "./tradeChart";
 import {
-  apiQuery, bandWords, DEFAULT_FILTERS, filtersQuery, groupOpen, heldWords, kindBadge, openTarget, orderBoard, parseFilters, rowName,
-  totalsLine, type BoardFamily,
+  apiQuery, DEFAULT_FILTERS, etaWords, filtersQuery, groupOpen, heldWords, kindBadge, openTarget, parseFilters, rowName, statusWords,
+  totalsLine,
 } from "./trades";
 import { blindedPage, tradeRow, tradesPage } from "../test/tradesFixtures";
 
@@ -74,19 +75,26 @@ describe("ADR 0050 in the client", () => {
     expect(openTarget(arm)).toEqual({ query: "acct=icm-demo&fam=box_break_close&status=open" });
   });
 
-  it("never words a band as near its stop (only running or retired once fired)", () => {
-    expect(bandWords("near_stop")).toBe("running");
-    expect(bandWords("running")).toBe("running");
-    expect(bandWords("retired_at_stop")).toBe("retired at its stop");
+  it("never words an arm as near its stop (only warming, running, read or retired once fired)", () => {
+    expect(statusWords("near_stop")).toBe("running");
+    expect(statusWords("running")).toBe("running");
+    expect(statusWords("retired")).toBe("retired at its stop");
+    expect(statusWords("warming")).toBe("warming up: no counted trade yet");
   });
 
-  it("orders the board by state and closeness to the read, never by result", () => {
-    const fams = board().families;
-    expect(orderBoard(fams).map((f) => f.family)).toEqual(["opening_range", "box_break_close", "random_bracket"]);
-    // two running families: the one closer to its read first, whatever their figures
-    const a: BoardFamily = { ...fams[1], family: "a", family_label: "A", variants: [{ ...fams[1].variants[1], n_counted: 50 }] };
-    const b: BoardFamily = { ...fams[1], family: "b", family_label: "B", variants: [{ ...fams[1].variants[1], n_counted: 250 }] };
-    expect(orderBoard([a, b]).map((f) => f.family)).toEqual(["b", "a"]);
+  it("an ETA most of a year away carries its year; a near one does not", () => {
+    const far = new Date(Date.now() + 2 * 365 * 86_400_000);
+    expect(etaWords(far.toISOString())).toContain(String(far.getFullYear()));
+    const near = new Date(Date.now() + 10 * 86_400_000);
+    expect(etaWords(near.toISOString())).not.toMatch(/\d{4}/);
+    expect(etaWords(null)).toBe("read date not known yet");
+  });
+
+  it("a moved stop draws the first stop and the last journalled move; an unmoved one a single stop", () => {
+    const moved = chartLevels(tradeRow({ stop_now: null }), tradeBars().stop_moves).map((l) => `${l.word} ${l.value}`);
+    expect(moved).toEqual(["target 4024", "entry 4012.4", "first stop 4006.1", "last stop 4012.4", "exit 4024"]);
+    const still = chartLevels(tradeRow({ stop_now: null })).map((l) => l.word);
+    expect(still).toEqual(["target", "entry", "stop", "exit"]);
   });
 
   it("a blinded row's accessible name hides its result", () => {
