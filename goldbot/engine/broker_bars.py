@@ -12,7 +12,8 @@ the D12 reconcile found 83 closes a day off the broker's. Design rules (trading-
   from when the failure was applied). Without a fetcher (a terminal on this host: one MT5 connection per process)
   nothing is fetched and the bars are the sampled ones.
 - A decision close waits at most HOLD past close + GRACE, while the fetch for its last minute has not answered, so it
-  decides on the broker's bar (`hold`); the pass's exits ran before and every later pass runs its exits as usual.
+  decides on the broker's bar (`hold`). Only entries wait: the close's time exits and its account refresh (stage
+  machine, kill switch, Friday cut) run when the hold starts, and every pass runs its tick exits as usual.
 - No look-ahead: a broker bar is taken only when the call started at or after its visible_at (open + 1 min, research's
   rule, unchanged) and the broker had finished it (a later bar in the reply, a tick at or after its close, or the clock
   past close + GRACE): the terminal's forming bar never joins. FETCH_N < 60, so a server zone off by a DST hour puts
@@ -121,6 +122,7 @@ class BrokerBars:
         self.retry_at: pd.Timestamp | None = None
         self.fails = 0                                      # failed calls in a row (the backoff exponent)
         self.held: pd.Timestamp | None = None               # a decision close waiting for its last broker bar
+        self.exits_for: pd.Timestamp | None = None          # the held close whose exit-side work has run
         self.fallback: set[pd.Timestamp] = set()            # minutes in bars_1m from sampled ticks, awaiting the broker
         self.point: float | None = None
         self.stats = {"fetches": 0, "fetch_errors": 0, "broker": 0, "fallback": 0, "replaced": 0, "refused": 0,
@@ -171,9 +173,29 @@ def hold(eng: Engine, due: pd.Timestamp | None, t: Tick) -> pd.Timestamp | None:
     waiting = not have and (bb.answered is None or bb.answered < m) and now < due + GRACE + HOLD \
         and bool(DEFAULT_SESSIONS.is_open(pd.DatetimeIndex([m]))[0])
     if waiting:
+        if bb.exits_for != due:           # once per held close, before it waits
+            bb.exits_for = due
+            _held_exits(eng, t)
         bb.held = due
         return None
     return due
+
+
+def _held_exits(eng: Engine, t: Tick) -> None:
+    """Only entries wait for the broker's bar (trading-safety LOW on 432fbba8): when a close is held, its exit-side
+    work runs at once. A live trade whose bars_held reaches max_bars with this close is closed `time_exit` (as
+    `_manage_open` would; that then skips it, closed or already due), and the account is refreshed: the stage
+    machine, the kill switch and the Friday cut (`_server_clock`). Each step is guarded like a tick step."""
+    def time_exits() -> None:
+        positions = eng._read_positions("time exits of a held close run at the close")
+        if positions is None:
+            return
+        live = {p.position_id for p in positions}
+        for pid, tr in list(eng.open.items()):
+            if pid in live and pid not in eng._close_due and tr.bars_held + 1 >= tr.max_bars:
+                eng._try_close(pid, "time_exit", None)
+    eng._guard(time_exits)
+    eng._guard(lambda: eng._refresh_account(t))
 
 
 def _expire(bb: BrokerBars, now: pd.Timestamp) -> None:

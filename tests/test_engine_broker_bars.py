@@ -486,3 +486,36 @@ def test_a_malformed_rates_reply_is_a_warning_not_a_tick_error(tmp_path):
     eng._rebuild_bars()
     assert eng.broker_m1.stats["fetch_errors"] >= 1 and len(eng.bars_1m) >= 18
     assert not eng.state.tick_error and eng.tick_errors_total == 0
+
+
+def test_a_held_close_runs_its_time_exit_and_the_friday_cut_check_before_it_waits(tmp_path):
+    """Only entries wait for the broker's bar (trading-safety LOW on 432fbba8): the close's time exit and its account
+    refresh (stage machine, kill switch, the Friday cut in `_server_clock`) run when the hold starts."""
+    live = pd.Timestamp("2025-03-13", tz="UTC")
+    ticks = _ticks("2025-03-03", "2025-03-13 09:30", 2, 8)
+    Store(tmp_path / "data").append("bars_1m", ticks_to_1m(ticks[ticks["ts_utc"] < live]), source="dukascopy")
+    term = Terminal(ticks)
+    fetcher = Inline(term)
+    eng = _engine(tmp_path, term, fetcher=fetcher)
+    eng.warm_start(live)
+    s = _sampled(ticks[ticks["ts_utc"] >= live])
+    close = pd.Timestamp("2025-03-13 08:45", tz="UTC")
+    _feed(eng, s[s["ts_utc"] < close])
+    [(pid, tr)] = list(eng.open.items())                     # the 08:30 entry
+    tr.bars_held = tr.max_bars - 1                           # its time barrier is this close
+    cuts: list[pd.Timestamp] = []
+    server_clock = eng._server_clock
+
+    def spy(now: pd.Timestamp, tick: Tick) -> None:
+        cuts.append(now)
+        server_clock(now, tick)
+    eng._server_clock = spy                                  # type: ignore[method-assign]
+    fetcher.paused = True                                    # the call for 08:44 is in flight: the close is held
+    q = s[s["ts_utc"] >= close].iloc[0]
+    assert eng.on_tick(_tick(close + pd.Timedelta(seconds=0.5), q["bid"], q["ask"])) == []
+    assert eng.broker_m1.held == close and eng._closed_through is not None and eng._closed_through < close
+    assert pid not in {p.position_id for p in term.positions()}          # closed at the held close, not after it
+    assert cuts                                                          # the Friday cut was checked
+    fetcher.release()
+    eng.on_tick(_tick(close + pd.Timedelta(seconds=1), q["bid"], q["ask"]))
+    assert eng._closed_through == close and not eng.state.tick_error
