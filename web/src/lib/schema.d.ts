@@ -3888,6 +3888,11 @@ export interface components {
             net_pnl: number | null;
             /** Open Pnl */
             open_pnl: number | null;
+            /**
+             * Open Pnl Withheld
+             * @default false
+             */
+            open_pnl_withheld: boolean;
             /** Open Risk */
             open_risk: number | null;
             /** Withheld */

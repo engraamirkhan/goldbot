@@ -8732,6 +8732,11 @@
       ],
       "title": "Open Pnl"
      },
+     "open_pnl_withheld": {
+      "default": false,
+      "title": "Open Pnl Withheld",
+      "type": "boolean"
+     },
      "open_risk": {
       "anyOf": [
        {

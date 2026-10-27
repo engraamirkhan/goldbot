@@ -363,6 +363,10 @@ def today_money(state_dir: str | Path, now: pd.Timestamp, probe_terms: dict[str,
         except Exception as exc:          # noqa: BLE001 - reporting only: the broker's figures still show
             log.warning("today: ledger figures failed (%s)", type(exc).__name__)
             extra = {}
+        if "net_today" in extra.get("withheld", []):
+            # quant 2026-10-27, condition 2: day P&L less open less these closes would be the arms' own result
+            closed, costs = None, None
+            extra["withheld"] = [*extra["withheld"], "closed_pnl", "costs"]
         age = _age(e, now)
         ccy = e.get("currency")
         rows.append(TodayAccount(

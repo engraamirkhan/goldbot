@@ -133,3 +133,16 @@ def test_the_today_view_carries_the_ledger_fields_per_account(tmp_path, monkeypa
     a = v.accounts[0]
     assert (a.account_label, a.fills_today, a.fills_target) == ("Scalp lab", 4, 200) and len(a.strip) == 14
     assert a.net_today == round(1.10 - 0.40 + 0.25 - 0.60, 2) and v.unreadable == []
+
+
+def test_closed_pnl_is_withheld_with_the_day_so_the_other_kinds_cannot_reveal_the_arms(tmp_path, monkeypatch):
+    """Quant condition 2: day P&L less open less closed (positions and probes) would be the arms' result."""
+    _arm(tmp_path, "a1", "S1A", pnl=1.10)
+    _arm(tmp_path, "a2", "S2A", pnl=-0.40)
+    _engine(tmp_path, SCALP)
+    cat = _catalog(tmp_path)
+    monkeypatch.setattr(tl, "catalog", lambda: cat)
+    monkeypatch.setattr(hc, "catalog", lambda: cat)
+    a = hc.today_money(tmp_path, NOW, {}).accounts[0]
+    assert a.closed_pnl is None and a.costs is None and "closed_pnl" in a.withheld
+    assert a.day_pnl is not None                                             # the broker's figure: the owner's money

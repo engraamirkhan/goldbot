@@ -1513,6 +1513,9 @@ class TradeTotals(BaseModel):
     costs: float | None                     # closed rows' known costs
     open_pnl: float | None
     open_risk: float | None                 # open rows' risk at entry
+    # the open-P&L total alone is withheld: an account's unread open trades cover fewer than 3 arms (each open row
+    # still shows its own P&L)
+    open_pnl_withheld: bool = False
     withheld: bool
     withheld_reason: str | None
 
