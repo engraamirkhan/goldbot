@@ -1,4 +1,4 @@
-- **Replica rebuild storm fixed; scalp sends off the quarter-hour (2026-10-27, R79).** Root cause of the 61 "bar_index
+- **Replica rebuild storm fixed; scalp sends off the quarter-hour (2026-10-27, R80).** Root cause of the 61 "bar_index
   discontinuity" / "revised" rebuilds (~60 CPU-s each at the quarter-hour closes): XTV1 (icm-demo) and VXTV2
   (vantage-demo) share one replica parameter block and state/aux.db, so both engines wrote one feed with their own
   broker's bars and each found the other's snapshot at every close (reproduced: 16 rebuilds in 8 closes). Each host
