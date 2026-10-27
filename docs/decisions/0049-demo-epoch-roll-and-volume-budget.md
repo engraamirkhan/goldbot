@@ -96,6 +96,65 @@ by raising any £.
   - icm-demo: option A, then option B;
   - vantage-demo: V2, then V1.
 
+### D1a. Scalp pots on icm-demo and vantage-demo (decided 2026-10-27, for config now)
+
+Neither host has a scalp pot today. Filing the H-81 scalp arms under `intraday` would retire them on the intraday
+stop (−15 R in 100). They must be retired on the scalp rule (−30 R in 300). Each host therefore gets a `scalp` pot
+**carved inside its existing exploration budget**. These figures hold until option A (one shared host budget, an
+engine change) is merged and reviewed.
+
+Unchanged:
+- `budget_share` 0.9 (£198 / £180);
+- `max_open_total` 17 and `max_positions` 18;
+- `daily_loss_limit_abs`, the ceilings and the probes' 0.075.
+
+| Host | Pot | Before | **After (config)** | Sum |
+|---|---|---|---|---|
+| icm-demo | scalp | none | **gbp 90, max_open 8** | |
+| | intraday | 108 / 9 | **gbp 68, max_open 7** | |
+| | swing | 90 / 2 | **gbp 40, max_open 2** | **£198 = 0.9 × 220; 17 slots = `max_open_total`** |
+| vantage-demo (V1) | scalp | none | **gbp 100, max_open 8** | |
+| | intraday | 98 / 9 | **gbp 40, max_open 4** | |
+| | swing | 82 / 2 | **gbp 40, max_open 1** | **£180 = 0.9 × 200; 13 of 17 slots** |
+| vantage-demo (V2, once `vantage-swing` takes the 15m-1d arms) | scalp | | **gbp 150, max_open 12**; the remaining £30 is left unallocated | £150-180 |
+
+**Arms.**
+- Every H-81 1m/5m arm on these hosts is `style: scalp`, retired by the H-61 scalp stop (−30 R within 300 fills).
+- Per-arm `max_loss` is **£6.50**, as icm-probe's scalp arms. Vantage's $7 stop is £5.26 at risk; ICM's 5m stop is
+  £3.38 and its 1m stop £2.26.
+- The controls (ZCD, ZCV) keep their prereg fixed shares and are never allocated by results.
+
+**Why these figures.** They are H-81 section 3.4's option B and V1, sized by its null-SD arithmetic (3.3):
+
+| Pot | Bind on days, D1 / D1.5 / D2 |
+|---|---|
+| icm-demo scalp (£90, 110 fills) | 4.0% / 9.2% / 14.2% |
+| vantage-demo scalp (£100, 58 fills) | about 3.5% / 8.5% / 13% |
+
+- **Swing.** On icm-demo, £40 still fits one position at the £40 cap, or two at 4h stops of £20 or less. The £10 of
+  the old £90 above two £40 positions was never usable. On Vantage, £40 / 1 keeps one position at the cap.
+- **Accepted cost: the intraday pot binds more often.**
+  - icm-demo at £68: about 23% of days at D1.5, against about 4% at £108.
+  - vantage-demo at £40: one 1h trade at £30, or two 15m trades.
+  - These are refusals, not losses: refused candidates are still replay-labelled (ADR 0047 D5). Only intraday live-
+    fill depth is lost.
+  - Option A removes the cost by letting the pots share one budget.
+- **Resulting fills.** icm-demo is about 120 a day under these pots, against 138 under option A; vantage-demo about
+  90. The step-1 total is **about 533**, still at least 520 (H-81 7.3).
+
+**Sensitivity.**
+- My coarser model (per-trade SD 1.15 R, no null simulation) gives higher scalp bind rates at D1.5: about 16% for
+  icm-demo's £90 and about 19% for vantage-demo's £100.
+- **Tripwire:** after 10 risk days, a scalp pot whose realised bind rate is above 15% has its arm list cut by one rung
+  (research director). Its £ is never raised above these figures without a new CFO note, and the sum never exceeds
+  the budget.
+
+**Rollback.** Remove the scalp pot and the scalp arms, restore intraday 108 / 9 and swing 90 / 2 (icm-demo), and
+intraday 98 / 9 and swing 82 / 2 (vantage-demo). Then restart.
+
+**Review.** Trading-safety checks the config diff: the pots sum to ≤ the budget, slots ≤ `max_open_total`, and no
+cap is raised.
+
 ### D2. Vantage: scalp waits for its own measured cost (question 2)
 
 **Chosen: wait.** Vantage runs at the cost-safe level for the $7 bar and steps up only on a cost read from its own
