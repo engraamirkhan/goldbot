@@ -188,3 +188,9 @@ button.trade-row:hover { background: var(--surface-2); }
 .rank-variants summary { cursor: pointer; font-size: var(--fs-small); color: var(--text-2); }
 .rank-variants ul { margin: var(--s1) 0 0; padding-left: var(--s4); display: grid; gap: 2px; }
 .band-head { font-size: var(--fs-small); color: var(--text-2); margin: var(--s4) 0 var(--s2); }
+/* phones: the rows too few to rank are one compact list (UI review), a tap target per line */
+.rank-few { list-style: none; margin: 0; padding: 0; display: grid; }
+.rank-few li + li { border-top: 1px solid var(--border); }
+.rank-few button { display: block; width: 100%; min-height: var(--tap); padding: var(--s2) 0; text-align: left; background: none;
+  border: 0; color: var(--text-2); font: inherit; cursor: pointer; overflow-wrap: anywhere; }
+.rank-few button strong { color: var(--text-2); }

@@ -3206,6 +3206,19 @@ export interface components {
             /** Trend */
             trend: ("up" | "down" | "flat") | null;
         };
+        /**
+         * RankProgress
+         * @description A row's progress to its next read: the unread read unit (config/arm_reads.yaml; a pooled family's unit where
+         *     registered) closest to its read, counted on the same ledger fills as the row (closed, evidence "counted").
+         */
+        RankProgress: {
+            /** N Counted */
+            n_counted: number;
+            /** N Read At */
+            n_read_at: number;
+            /** Unit */
+            unit: string;
+        };
         /** RankRow */
         RankRow: {
             /** Accounts */
@@ -3229,6 +3242,7 @@ export interface components {
             kind: "exploration" | "engine" | "control";
             /** Rank */
             rank: number | null;
+            read_progress?: components["schemas"]["RankProgress"] | null;
             /**
              * Status
              * @enum {string}

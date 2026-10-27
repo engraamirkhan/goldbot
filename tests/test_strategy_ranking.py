@@ -24,7 +24,8 @@ ROOT = Path(__file__).parents[1]
 
 
 def _info(arm: str, family: str, tf: str = "15m", **kw: Any) -> ArmInfo:
-    return ArmInfo(arm_id=arm, family=family, timeframe=tf, style=kw.pop("style", "intraday"), unit=arm, **kw)
+    return ArmInfo(arm_id=arm, family=family, timeframe=tf, style=kw.pop("style", "intraday"), unit=kw.pop("unit", arm),
+                   **kw)
 
 
 def _cat(*infos: ArmInfo, reads: dict[str, ArmRead] | None = None) -> Catalog:
@@ -93,9 +94,15 @@ def test_the_key_is_the_bonferroni_adjusted_lower_bound_with_t_on_g_minus_1_df_a
     view = sr.rank(rows, CAT, NOW)
     assert view.k_ranked == 2
     alpha = _by(view, "alpha")
-    p = sr._pass([got[1] for r in rows if r.arm_id == "A1" and (got := sr._fill(r, CAT, {}))])
-    m, se, g = p.mean, p.se, p.clusters
-    assert se is not None
+    # the oracle, by hand: CR1 over (account, day) clusters, G/(G-1) x sum (S_g - n_g m)^2 / N^2
+    a1 = [r for r in rows if r.arm_id == "A1"]
+    cells: dict[tuple[Any, Any], list[float]] = {}
+    for r in a1:
+        assert r.r is not None and r.exit_utc is not None
+        cells.setdefault((r.account, r.exit_utc.date()), []).append(r.r)
+    n, g = len(a1), len(cells)
+    m = sum(sum(c) for c in cells.values()) / n
+    se = (g / (g - 1) * sum((sum(c) - len(c) * m) ** 2 for c in cells.values()) / n ** 2) ** 0.5
     assert g == alpha.figures.clusters == 12
     assert alpha.figures.lower_adjusted == round(m - student_t.ppf(1 - 0.025 / 2, g - 1) * se, 3)
     half = student_t.ppf(0.975, g - 1) * se
@@ -327,3 +334,21 @@ def test_one_arm_read_and_another_stopped_unread_takes_the_recorded_verdict():
     rows = [*_spread("A1", [0.2] * 30, 10), *_spread("A2", [-0.5] * 10, 10, tf="1h")]
     row = _by(sr.rank(rows, cat, NOW, retired={"A2"}), "alpha")
     assert row.status == "candidate" and row.band != "retired"
+
+
+def test_read_progress_counts_the_rows_own_counted_fills_on_its_read_unit():
+    """UI review: a family with 12 fills never reads "0 of 300 to the read"; progress counts the same counted fills,
+    on the read unit of config/arm_reads.yaml, the unread unit closest to its read."""
+    rows = [*_spread("A1", [0.2] * 12, 6), _row("A1", 0.4, day=2, evidence="censored")]
+    p = _by(sr.rank(rows, CAT, NOW), "alpha").read_progress
+    assert p is not None and (p.unit, p.n_counted, p.n_read_at) == ("A1", 12, 300)
+
+
+def test_read_progress_of_a_pooled_family_counts_every_counted_arm_of_its_unit_on_any_account():
+    pooled = _cat(_info("A1", "alpha", unit="U1"), _info("A2", "alpha", "1h", unit="U1"),
+                  _info("C1", "random_bracket", is_control=True, read_n=None))
+    rows = [*_spread("A1", [0.2] * 10, 5), *_spread("A2", [0.1] * 7, 7, tf="1h", account="vantage-demo")]
+    p = sr.rank(rows, pooled, NOW, account="icm-demo").rows[0].read_progress
+    assert p is not None and (p.unit, p.n_counted) == ("U1", 17)
+    read = _cat(*pooled.arms.values(), reads={"U1": ArmRead(read_utc=NOW, verdict="no edge")})
+    assert sr.rank(rows, read, NOW).retired[0].read_progress is None          # read: no progress to show

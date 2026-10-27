@@ -1736,6 +1736,14 @@ class RankVariant(BaseModel):
     figures: RankFigures
 
 
+class RankProgress(BaseModel):
+    """A row's progress to its next read: the unread read unit (config/arm_reads.yaml; a pooled family's unit where
+    registered) closest to its read, counted on the same ledger fills as the row (closed, evidence "counted")."""
+    unit: str
+    n_counted: int
+    n_read_at: int
+
+
 class RankRow(BaseModel):
     key: str                                # the family, or "family:v2" for a rule edit's row
     family: str
@@ -1749,6 +1757,7 @@ class RankRow(BaseModel):
     rank: int | None                        # among ranked rows only
     unranked_reason: str | None             # "too few to rank (12 of 30 fills, 4 of 10 days)"
     status: RankStatus
+    read_progress: RankProgress | None = None   # None: no unread unit with a read (engine, controls, all read)
     figures: RankFigures
     variants: list[RankVariant]
 

@@ -6,7 +6,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import {
-  ANNEAL_WORDS, type BoardFamily, boundWords, type BoardQuery, ci, edgeWords, familyProgress, pct, pfWords, POLL, RANK_STATUS_WORDS,
+  ANNEAL_WORDS, type BoardFamily, boundWords, type BoardQuery, ci, edgeWords, pct, pfWords, POLL, RANK_STATUS_WORDS,
   rankingQuery, type RankingView, type RankingWindow, type RankRow, signedR, trendWords, WINDOW_WORDS, WINDOWS,
 } from "../../lib/trades";
 import { useWide } from "../../lib/useMedia";
@@ -95,14 +95,15 @@ function KeyCell({ r }: { r: RankRow }) {
 }
 const nWords = (r: RankRow) => `${r.figures.n.toLocaleString("en-GB")} ${r.figures.n === 1 ? "fill" : "fills"}, ${r.figures.days} ${r.figures.days === 1 ? "day" : "days"}`;
 
-function Progress({ f }: { f: BoardFamily | undefined }) {
-  const p = familyProgress(f);
+/** The server's progress to the row's next read: the same counted fills as the row, on its read unit. */
+function Progress({ r }: { r: RankRow }) {
+  const p = r.read_progress;
   if (!p) return null;
   return (
     <span className="rank-progress">
-      <Meter value={p.n} max={p.size} label={`${f!.family_label}: ${p.n} of ${p.size} trades toward its read`}
-             text={`${p.n} of ${p.size} to the read`} tone="info" />
-      <span className="small muted num">{p.n} of {p.size} to the read</span>
+      <Meter value={p.n_counted} max={p.n_read_at} label={`${r.family_label}: ${p.n_counted} of ${p.n_read_at} trades toward its read`}
+             text={`${p.n_counted} of ${p.n_read_at} to the read`} tone="info" />
+      <span className="small muted num">{p.n_counted} of {p.n_read_at} to the read</span>
     </span>
   );
 }
@@ -133,13 +134,35 @@ function Variants({ r }: { r: RankRow }) {
   );
 }
 
+/** Phones: the rows too few to rank as one compact list, a line each (name, why, the average and n). */
+function FewList({ rows, onFamily }: { rows: RankRow[]; onFamily: (f: string) => void }) {
+  return (
+    <section aria-label="Too few to rank">
+      <h3 className="band-head">Too few to rank yet ({rows.length})</h3>
+      <ul className="rank-few">
+        {rows.map((r) => (
+          <li key={r.key}>
+            <button type="button" onClick={() => onFamily(r.family)} aria-label={`${r.family_label}, open its trades`}>
+              <strong>{r.family_label}</strong> <span className="small num">avg {signedR(r.figures.net_r_per_trade)} · {nWords(r)}
+                {r.read_progress && <> · {r.read_progress.n_counted} of {r.read_progress.n_read_at} to the read</>}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function Rows({ rows, wide, families, onFamily, caption }: {
   rows: RankRow[]; wide: boolean; families: Map<string, BoardFamily>; onFamily: (f: string) => void; caption: string;
 }) {
   if (!wide) {
+    const few = rows.filter((r) => r.rank == null && r.band === "too_few");
+    const full = rows.filter((r) => !few.includes(r));
     return (
+      <>
       <ul className="rank-list">
-        {rows.map((r) => {
+        {full.map((r) => {
           const f = families.get(r.family);
           return (
             <li key={r.key} className={r.rank == null && r.band === "too_few" ? "greyed" : undefined}>
@@ -150,7 +173,7 @@ function Rows({ rows, wide, families, onFamily, caption }: {
                 <span className="small num">hit {pct(r.figures.hit_rate)} · {moneyPair(r)} · PF {pfWords(r.figures)} · max drawdown {r.figures.max_drawdown_r == null ? "—" : `${r.figures.max_drawdown_r.toFixed(1)}${NBSP}R`}</span>
                 <span className="small num">vs random {edgeWords(r.figures)} · cost {costPair(r)}</span>
                 <span className="small num muted">{trendWords(r.figures)}</span>
-                <Progress f={f} />
+                <Progress r={r} />
                 <StatusLine r={r} f={f} />
               </button>
               <Variants r={r} />
@@ -158,6 +181,8 @@ function Rows({ rows, wide, families, onFamily, caption }: {
           );
         })}
       </ul>
+      {few.length > 0 && <FewList rows={few} onFamily={onFamily} />}
+      </>
     );
   }
   return (
@@ -178,7 +203,7 @@ function Rows({ rows, wide, families, onFamily, caption }: {
                   aria-label={`${name(r)}, open its trades`} onClick={() => onFamily(r.family)}
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onFamily(r.family); } }}>
                 <th scope="row"><strong>{name(r)}</strong><br /><span className="muted small">{r.style} · {r.kind} · {r.timeframes.join(", ")}</span>
-                  <Progress f={f} /><StatusLine r={r} f={f} /><Variants r={r} /></th>
+                  <Progress r={r} /><StatusLine r={r} f={f} /><Variants r={r} /></th>
                 <td className="num"><KeyCell r={r} /><br /><span className="small muted">avg {nw(signedR(r.figures.net_r_per_trade))} · {nw(ciWords(r))}</span></td>
                 <td className="num">{pct(r.figures.hit_rate)}<br /><span className="small muted">{nWords(r)}</span></td>
                 <td className="num">{moneyPair(r)}</td>
