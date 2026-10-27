@@ -572,7 +572,8 @@ def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> R
 
     ADR 0055 ("Option (a) for account `icm-live` only. Every other account and every default is unchanged"): a live
     account's enabled `pilot:` block (goldbot/risk/pilot.py) goes to the gate with its four changed rails, all read
-    from that block: the per-trade maximum (`max_risk_frac`), the daily cap (`daily_cap_frac`), `leverage_cap`, and
+    from that block: the per-trade maximum (`max_risk_frac`), the daily and weekly caps (`daily_cap_frac`,
+    `weekly_cap_frac`, the amendment's fifth), `leverage_cap`, and
     the drawdown stages off when `drawdown_stages` is false (the pilot stop is the hard halt), plus one position.
     Against the real terminal only."""
     from goldbot.ops import accounts
@@ -584,6 +585,7 @@ def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> R
         limits = limits.model_copy(update={"pilot": pilot, "max_positions": min(limits.max_positions,
                                                                                  pilot.max_positions),
                                            "max_risk_per_trade": pilot.max_risk_frac, "daily_cap": pilot.daily_cap_frac,
+                                           "weekly_cap": pilot.weekly_cap_frac,
                                            "leverage_cap": pilot.leverage_cap, **stages})
     # plan 2026-10-25 (lane L1 contract): the exploration fence's account facts, never on the paper stand-in
     return limits.model_copy(update={"daily_loss_limit_abs": None if paper else acc.daily_loss_limit_abs,

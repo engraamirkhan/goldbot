@@ -411,6 +411,10 @@ accounts:
       max_risk_frac: 0.125            # £3.12 of £25: the £ cap binds over the pilot's whole range
       daily_cap_frac: 0.25            # £6.25 of £25: daily_loss_limit_abs binds over the pilot's whole range
       drawdown_stages: false
+      # ADR 0055 amendment (trading-safety rulings): the weekly cap 25% (£12.50 at £50) instead of 5%, and every
+      # position closed at the Friday cut, winners too
+      weekly_cap_frac: 0.25
+      weekend_flat: true
   vantage-live:
     broker: vantage
     mode: live

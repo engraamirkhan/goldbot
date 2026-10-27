@@ -31,8 +31,9 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   with the round trip, one position, 15m only, entries halt for good at £25 realised loss or 30 filled entries
   (counted from the broker's deals, kept in core.db `pilot_state`, unreadable = entries refused), the £25 also
   projected before every entry, gate `leverage_cap` 500 (the terminal's leverage when lower), bridge notional
-  ceiling 150x equity on this account only. Health measures its server clock as soon as its bridge answers. Open for
-  trading-safety: the standing 5% weekly cap (£2.50) still binds, so one full stop ends the pilot's week.
+  ceiling 150x equity on this account only, weekly cap 25% (`weekly_cap_frac`) and every position closed at the
+  Friday cut, winners too (`weekend_flat`), per the ADR 0055 amendment. Health measures its server clock as soon as
+  its bridge answers.
 - **Replica rebuild storm fixed; scalp sends off the quarter-hour (2026-10-27, R80).** Root cause of the 61 "bar_index
   discontinuity" / "revised" rebuilds (~60 CPU-s each at the quarter-hour closes): XTV1 (icm-demo) and VXTV2
   (vantage-demo) share one replica parameter block and state/aux.db, so both engines wrote one feed with their own

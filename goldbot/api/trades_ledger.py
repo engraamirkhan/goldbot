@@ -97,7 +97,7 @@ EXIT_WORDS: dict[str, ExitReason] = {
     "trail": "trail", "trail_close": "trail",
     "time": "time_limit", "time_exit": "time_limit", "hard_flat": "time_limit", "flat": "time_limit",
     HOLD_EXIT: "time_limit", cost_probe.HOLD_EXIT: "time_limit",
-    "weekend_close_loser": "friday_cut", "weekend_close_no_quote": "friday_cut",
+    "weekend_close_loser": "friday_cut", "weekend_close_no_quote": "friday_cut", "weekend_flat": "friday_cut",
     "kill_switch_close": "kill_switch", "stop_out": "broker_stop_out",
     "broker_close": "manual",           # closed at the broker outside the engine (the owner or the terminal)
 }

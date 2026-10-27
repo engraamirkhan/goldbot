@@ -18,7 +18,8 @@ NOW = pd.Timestamp("2026-10-30 10:00", tz="UTC")
 GBP_PER_USD = 0.7508
 PRICE = 4014.84
 RULES = PilotRules(enabled=True, adr=55, pilot_id="icm-live-adr55", start_utc=pd.Timestamp("2026-10-29", tz="UTC"),
-                   leverage_cap=500, max_risk_frac=0.125, daily_cap_frac=0.25, drawdown_stages=False)
+                   leverage_cap=500, max_risk_frac=0.125, daily_cap_frac=0.25, weekly_cap_frac=0.25,
+                   drawdown_stages=False, weekend_flat=True)
 STOP_GBP = 0.01 * 100 * 3.5 * GBP_PER_USD            # a $3.50 stop at 0.01 lot: £2.63
 TRIP_GBP = 0.05 * 3.5 * 0.01 * 100 * GBP_PER_USD     # its round trip: £0.13
 
@@ -28,7 +29,7 @@ def _limits(pilot: PilotRules | None = RULES, **kw: Any) -> RiskLimits:
     base: dict[str, Any] = dict(risk_per_trade=0.001, min_lot_risk_cap=None, daily_loss_limit_abs=6.25)
     if pilot is not None:
         base.update(pilot=pilot, max_positions=1, max_risk_per_trade=pilot.max_risk_frac,
-                    daily_cap=pilot.daily_cap_frac, leverage_cap=pilot.leverage_cap,
+                    daily_cap=pilot.daily_cap_frac, weekly_cap=pilot.weekly_cap_frac, leverage_cap=pilot.leverage_cap,
                     dd_stage1=1.0, dd_stage2=1.0, dd_stage1_clear=1.0)
     return RiskLimits(**{**base, **kw})
 
@@ -91,6 +92,14 @@ def test_the_pilot_never_sends_more_than_its_lot_whatever_the_multiplier_or_equi
     assert d.allowed and d.lots == pytest.approx(0.01)
 
 
+def test_the_pilot_sends_its_own_lot_not_a_smaller_broker_minimum():
+    d = _check(_intent(volume_min=0.001, volume_step=0.001))
+    assert d.allowed and d.lots == pytest.approx(0.01)
+    assert "pilot_lot_unavailable" in _check(_intent(volume_min=0.001, volume_step=0.003)).reasons   # not a step
+    assert "pilot_lot_unavailable" in _check(_intent(volume_max=0.005, volume_min=0.001,
+                                                     volume_step=0.001)).reasons
+
+
 def test_a_broker_whose_smallest_lot_is_above_the_pilot_lot_refuses_the_entry():
     d = _check(_intent(volume_min=0.1, volume_step=0.1))
     assert not d.allowed and "pilot_lot_unavailable" in d.reasons
@@ -132,10 +141,15 @@ def test_the_6_25_gbp_daily_limit_refuses_an_entry_that_could_end_the_day_past_i
     assert not d.allowed and d.reasons == ["daily_loss_limit_abs"]
 
 
-def test_the_standing_weekly_5_percent_cap_still_binds_on_the_pilot_account():
-    """ADR 0055 changes four rails; the weekly cap is not one of them, so one full stop (6% of £50) ends the week."""
-    d = _check(st=_state(equity=47.0, day_start_equity=47.0, week_start_equity=50.0))
-    assert not d.allowed and d.reasons == ["weekly_cap"]
+def test_the_pilot_weekly_cap_is_25_percent_and_the_standing_5_percent_elsewhere():
+    """ADR 0055 amendment: `pilot.weekly_cap_frac` 0.25 (£12.50 at £50) replaces the 5% weekly cap on the pilot only."""
+    st = _state(equity=47.0, day_start_equity=47.0, week_start_equity=50.0)     # 6% down this week
+    assert _check(st=st).allowed
+    d = _check(st=_state(equity=37.5, day_start_equity=37.5, week_start_equity=50.0))   # 25% down
+    assert not d.allowed and "weekly_cap" in d.reasons
+    plain = RiskGate(_limits(pilot=None)).account_reasons(_state(equity=47.0, day_start_equity=47.0,
+                                                                 week_start_equity=50.0))
+    assert "weekly_cap" in plain
 
 
 def test_the_drawdown_stages_do_not_run_on_the_pilot_account():

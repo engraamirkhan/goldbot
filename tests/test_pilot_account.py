@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from goldbot.config import load_settings
 from goldbot.engine import pilot as engine_pilot
 from goldbot.execution.bridge import MAX_NOTIONAL_EQUITY_MULT, GuardedBroker
+from goldbot.execution.broker import Tick
 from goldbot.ops import accounts as acc_mod
 from goldbot.ops.services.engine import engine_limits
 from goldbot.risk.gate import AccountState, RiskLimits
@@ -28,7 +29,8 @@ START = pd.Timestamp("2026-10-29", tz="UTC")
 
 def _rules(**kw: Any) -> PilotRules:
     base: dict[str, Any] = dict(enabled=True, adr=55, pilot_id="icm-live-adr55", start_utc=START, leverage_cap=500,
-                                max_risk_frac=0.125, daily_cap_frac=0.25, drawdown_stages=False)
+                                max_risk_frac=0.125, daily_cap_frac=0.25, weekly_cap_frac=0.25,
+                                drawdown_stages=False, weekend_flat=True)
     return PilotRules(**{**base, **kw})
 
 
@@ -59,6 +61,7 @@ def test_a_pilot_outside_its_rails_fails_at_load(kw, match):
 @pytest.mark.parametrize("kw", [dict(stop_loss_abs=25.5), dict(max_risk_per_trade_abs=3.2), dict(lot=0.02),
                                 dict(max_stop_usd=4.5), dict(max_entries=31), dict(max_positions=2),
                                 dict(leverage_cap=600), dict(max_risk_frac=0.2), dict(daily_cap_frac=0.3),
+                                dict(weekly_cap_frac=0.3),
                                 dict(pilot_id=""), dict(start_utc=None)])
 def test_the_pilot_rails_cannot_be_widened_past_the_adr_terms_by_config(kw):
     with pytest.raises(ValidationError):
@@ -80,6 +83,7 @@ def test_the_committed_icm_live_is_a_disabled_pilot_with_the_adr_0055_terms_and_
     assert p.enabled and p.adr == 55 and p.lot == 0.01 and p.max_stop_usd == 4.0
     assert p.max_risk_per_trade_abs == 3.12 and p.stop_loss_abs == 25.0 and p.max_entries == 30
     assert p.timeframes == ("15m",) and p.max_positions == 1 and p.leverage_cap == 500
+    assert p.weekly_cap_frac == 0.25 and p.weekend_flat
     assert not p.drawdown_stages and p.start_utc is not None and p.start_utc < pd.Timestamp("2026-10-30", tz="UTC")
     assert a.daily_loss_limit_abs == 6.25 and a.approval_mode == "propose" and not a.dynamic_limits
     # the same broker's measured server clock (icm-demo and icm-probe, 2026-10-26 gap week)
@@ -104,6 +108,7 @@ def test_engine_limits_apply_the_four_changed_rails_to_the_pilot_account_only():
     assert on.pilot is not None and on.pilot.pilot_id == "icm-live-adr55"
     assert on.max_positions == 1 and on.daily_loss_limit_abs == 6.25 and on.leverage_cap == 500
     assert on.max_risk_per_trade == 0.125 and on.daily_cap == 0.25 and on.dd_stage2 == 1.0 and on.dd_stage1 == 1.0
+    assert on.weekly_cap == 0.25 and s.risk.weekly_cap == 0.05
     assert engine_limits(s, _account(), paper=True).pilot is None
     plain = RiskLimits.from_settings(s.risk, tiny_live=False)
     demo = engine_limits(s, _account(mode="demo", daily_loss_limit_abs=220.0, currency=None, pilot=PilotRules()))
@@ -257,3 +262,23 @@ def test_a_new_pilot_id_starts_a_new_record_and_no_pilot_clears_it(tmp_path):
     off.state.pilot = eng.state.pilot
     engine_pilot.refresh(off, _acc(), NOW)
     assert off.state.pilot is None and off.state.broker_leverage is None
+
+
+# ---------------------------------------------------------------- weekend flat (ADR 0055 amendment)
+def test_the_pilot_account_closes_winners_too_at_the_friday_cut_and_every_other_account_keeps_them(tmp_path):
+    from tests.test_invalid_feed import CUT, _open_ids, _winner_before_the_cut
+
+    def at_the_cut(pilot: bool) -> tuple[Any, set[int], int]:
+        eng, pb, host, pid = _winner_before_the_cut(tmp_path / ("pilot" if pilot else "plain"))
+        if pilot:
+            eng.gate.limits = eng.gate.limits.model_copy(update={"pilot": _rules()})
+        host[0] = CUT + pd.Timedelta(seconds=2)
+        pb.on_tick(Tick(ts_utc=host[0], bid=2410.0, ask=2410.3))
+        eng._refresh_account(pb.last_tick("XAUUSD"))
+        assert eng.state.weekend
+        return eng, _open_ids(pb), pid
+    _, left, pid = at_the_cut(pilot=False)
+    assert pid in left                                                    # the standing rule keeps a winner
+    eng, left, pid = at_the_cut(pilot=True)
+    assert pid not in left                                                # the pilot closes it
+    assert not any(d.get("action") == "weekend_tighten" for d in eng.decisions)

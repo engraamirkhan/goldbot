@@ -360,13 +360,15 @@ def _pilot_account_reasons(p: PilotRules, st: AccountState) -> list[str]:
 
 def _pilot_intent_reasons(p: PilotRules, intent: Intent) -> list[str]:
     """ADR 0055's scope: owner-confirmed signals only (no cost probe, learning probe or exploration arm), "15m families
-    only", "0.01 exactly": the broker's minimum lot must be the pilot's lot or smaller."""
+    only", "0.01 exactly": the pilot's lot must be a size the broker takes (at least its minimum, at most its
+    maximum, a whole number of its steps)."""
     out: list[str] = []
     if intent.purpose != "signal" or intent.learning_probe:
         out.append("pilot_signal_only")
     if intent.timeframe not in p.timeframes:
         out.append("pilot_timeframe")
-    if intent.volume_min > p.lot + 1e-9 or intent.volume_min > intent.volume_max + 1e-9:
+    steps = p.lot / intent.volume_step if intent.volume_step > 0 else math.nan
+    if intent.volume_min > p.lot + 1e-9 or p.lot > intent.volume_max + 1e-9 or not abs(steps - round(steps)) < 1e-6:
         out.append("pilot_lot_unavailable")
     return out
 
@@ -887,7 +889,7 @@ class RiskGate:
             if stop_distance > L.pilot.max_stop_usd + 1e-9:
                 return GateDecision(allowed=False, reasons=["pilot_stop_above_cap"], stop_distance=stop_distance)
             half = sizing.SIZE_DOWN_RISK if size_down else 1.0
-            lots = intent.volume_min
+            lots = L.pilot.lot                 # "0.01 exactly": the pilot's lot, a whole number of the broker's steps
             risk_amount = lots * sz.risk_per_lot
             trip = (max(0.0, intent.cost_atr * intent.atr_usd) + max(0.0, intent.swap_usd_per_oz)) * lots \
                 * intent.contract_oz * fx

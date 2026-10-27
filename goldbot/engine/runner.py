@@ -2142,14 +2142,14 @@ class Engine:
         positions = self._read_positions("the weekend rule is retried on the next refresh")
         if positions is None:
             return False
-        done, left = True, len(positions)
+        done, left, flat = True, len(positions), pilot.weekend_flat(self)     # ADR 0055: the pilot closes winners too
         for p in positions:
             if not self._own(p.magic):
                 continue
             px = tick.bid if p.side > 0 else tick.ask
-            if p.side * (px - p.open_price) <= 0:
+            if p.side * (px - p.open_price) <= 0 or flat:
                 ok = p.position_id not in self._close_due and \
-                    self._try_close(p.position_id, "weekend_close_loser", tick.ts_utc).ok
+                    self._try_close(p.position_id, "weekend_flat" if flat else "weekend_close_loser", tick.ts_utc).ok
                 left -= ok
                 done = done and ok
                 continue

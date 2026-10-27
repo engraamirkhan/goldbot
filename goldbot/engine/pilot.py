@@ -104,6 +104,13 @@ def _tracker(eng: Any) -> _Tracker:
     return t
 
 
+def weekend_flat(eng: Any) -> bool:
+    """ADR 0055 amendment: whether the Friday cut closes every position of this account, winners too
+    (`pilot.weekend_flat`); False on every account without the pilot (the standing rule)."""
+    rules: PilotRules | None = eng.gate.limits.pilot
+    return rules is not None and rules.weekend_flat
+
+
 def refresh(eng: Any, acc: Any, now: pd.Timestamp) -> None:
     """Update `eng.state.pilot` and `broker_leverage` after the account read `acc`; every account refresh. No pilot on
     this account: both cleared (read only while one is set)."""

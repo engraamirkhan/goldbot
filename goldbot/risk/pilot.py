@@ -38,6 +38,7 @@ PILOT_MAX_ENTRIES = 30               # filled entries
 PILOT_MAX_LEVERAGE_CAP = 500.0
 PILOT_MAX_RISK_FRAC = 0.125          # £3.12 of £25: the per-trade £ cap binds down to the pilot's lowest equity
 PILOT_MAX_DAILY_FRAC = 0.25          # £6.25 of £25: the absolute daily limit binds down to the pilot's lowest equity
+PILOT_MAX_WEEKLY_FRAC = 0.25         # ADR 0055 amendment: £12.50 at £50
 
 
 class PilotRules(FrozenRecord):
@@ -66,6 +67,12 @@ class PilotRules(FrozenRecord):
     daily_cap_frac: float = Field(0.02, gt=0, le=PILOT_MAX_DAILY_FRAC)
     # rail 4: False = the 8%/12% drawdown stages do not run on this account; the pilot stop is the hard halt
     drawdown_stages: bool = True
+    # ADR 0055 amendment (trading-safety ruling): the weekly cap as a fraction of the week-start equity, replacing the
+    # 5% weekly cap on this account only (5% = £2.50 at £50 would end the week after one full stop)
+    weekly_cap_frac: float = Field(0.05, gt=0, le=PILOT_MAX_WEEKLY_FRAC)
+    # ADR 0055 amendment: True = at the Friday cut the engine closes EVERY position of this account, winners too,
+    # instead of the standing rule (close losers, tighten winners): a weekend gap on a £25-£50 account is the risk
+    weekend_flat: bool = False
 
     @model_validator(mode="after")
     def _complete(self) -> PilotRules:
