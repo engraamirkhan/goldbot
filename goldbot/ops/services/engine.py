@@ -261,7 +261,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     import pandas as pd
 
     from goldbot.config import load_settings
-    from goldbot.engine import Engine, EngineConfig, exploration
+    from goldbot.engine import Engine, EngineConfig, broker_bars, exploration
     from goldbot.execution.costs import settings_swap
     from goldbot.ops import accounts
     from goldbot.research.model_registry import ModelRegistry
@@ -369,7 +369,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               blackout_after_min=settings.risk.blackout.after_min,
                               shock_blackout_min=settings.news.shock_blackout_min,
                               shock_min_relevance=settings.news.shock_min_relevance, live_clock=True,
-                              broker_bars=bridge is not None or sys.platform == "win32",   # not the paper stand-in
+                              broker_bars=bridge is not None,   # through the bridge only (engine/broker_bars.py)
                               approval_window_s=settings.risk.approval_window_seconds,
                               tv_max_lag_s=settings.tv.max_lag_s,
                               swap_prior=settings_swap(settings)), broker, agents,
@@ -401,6 +401,12 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     if bridge is not None:
         from goldbot.execution.bridge import RemoteBroker
         history_broker = RemoteBroker(bridge[0], bridge[1], name=f"mt5-remote-{account_id}-history")
+        # the broker's M1 bars (engine/broker_bars.py) on their own thread and client: one attempt, a short timeout,
+        # so the tick thread never waits on the bridge for them
+        bars_client = RemoteBroker(bridge[0], bridge[1], name=f"mt5-remote-{account_id}-bars",
+                                   timeout_s=broker_bars.FETCH_TIMEOUT_S)
+        bars_client.read_attempts = 1
+        eng.broker_m1.fetcher = broker_bars.Fetcher(bars_client)
     warm = eng.warm_start(pd.Timestamp.now("UTC"), history_broker)   # store read only; the fill runs in the background
     log.info("engine %s started (%s), models: %s, %d 1m bars of history, risk per trade %.4f, limits %s", account_id,
              type(broker).__name__, sorted(eng.models), warm, limits.risk_per_trade, eng.limits_current.profile)

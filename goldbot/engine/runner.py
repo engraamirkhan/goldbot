@@ -617,7 +617,7 @@ class Engine:
         sec = tf_seconds(self.cfg.decision_tf)
         bar_close = pd.Timestamp((int(t.ts_utc.timestamp()) // sec) * sec, unit="s", tz="UTC")
         out: list[dict] = []
-        due = self._due_close(t, bar_close)
+        due = broker_bars.hold(self, self._due_close(t, bar_close), t)   # waits at most 3 s for its last broker bar
         if due is not None:
             self._closed_through = due
             self._rebuild_bars(until=due)   # every minute before the close is complete; none at or after it joins
@@ -637,7 +637,7 @@ class Engine:
             self._last_state_write = t.ts_utc
         elif self._state_heartbeat_due():
             self._guard(self._write_heartbeat)
-        self.last_bar_close = bar_close
+        self.last_bar_close = bar_close if self.broker_m1.held is None else self.last_bar_close   # a held close stays due
         exploration.on_pass(self, t)       # after the exits and the bar close's decisions; never raises
         self._flush_closed()               # after every exit of this tick has been sent
         return out

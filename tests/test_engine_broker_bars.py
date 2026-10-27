@@ -5,6 +5,8 @@ D12 reconcile found 83 closes a day off the broker's. Completed minutes now come
 once each minute closes; the sampled bar is only the provisional current minute and the fallback when the broker's bar
 is late or missing (a dq warning, replaced on arrival, never revising a decision already taken). A minute joins only
 once the broker's bar has been fetched at or after its close (visible_at = open + 1 min, as research)."""
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -52,6 +54,8 @@ class Terminal(PaperBroker):
         self.ns = self.truth["ts_utc"].to_numpy()
         self.now: pd.Timestamp | None = None
         self.withhold, self.ahead, self.fail = set(withhold), pd.Timedelta(seconds=ahead_s), False
+        self.corrupt: set[pd.Timestamp] = set()           # minutes whose bar comes back with its high below its low
+        self.malformed = False
         self.calls: list[pd.Timestamp] = []
 
     def on_tick(self, tick: Tick) -> None:
@@ -66,7 +70,11 @@ class Terminal(PaperBroker):
         hi = self.now + self.ahead
         lo = hi.floor("min") - pd.Timedelta(minutes=n + 5)
         seen = self.truth[(self.truth["ts_utc"] >= lo) & (self.truth["ts_utc"] <= hi)]
+        if self.malformed:
+            return pd.DataFrame({"ts_utc": [hi], "close": ["n/a"]})
         r = _rates(seen)
+        bad = r["ts_utc"].isin(self.corrupt)
+        r.loc[bad, "high"] = r.loc[bad, "low"] - 1.0
         return r[~r["ts_utc"].isin(self.withhold)].tail(n).reset_index(drop=True)
 
 
@@ -76,11 +84,35 @@ def _sampled(ticks: pd.DataFrame) -> pd.DataFrame:
     return ticks.drop(index=last).reset_index(drop=True)
 
 
-def _engine(tmp_path: Path, broker: PaperBroker, **cfg: Any) -> Engine:
+class Inline(broker_bars.Fetcher):
+    """The fetcher with its call run at once (a deterministic stand-in for the thread); `paused` keeps calls until
+    `release` (a call still in flight)."""
+
+    def __init__(self, client: Any):
+        super().__init__(client)
+        self.paused = False
+        self.kept: list[Any] = []
+
+    def _spawn(self, fn: Any) -> None:
+        if self.paused:
+            self.kept.append(fn)
+        else:
+            fn()
+
+    def release(self) -> None:
+        self.paused = False
+        for fn in self.kept:
+            fn()
+        self.kept = []
+
+
+def _engine(tmp_path: Path, broker: PaperBroker, fetcher: broker_bars.Fetcher | None = None, **cfg: Any) -> Engine:
     spec = SPECIALISTS["session_open"](min_body_pct=0.0, asia_range_max_atr_d=99.0)
-    return Engine(EngineConfig(account_id="icm-demo", broker_name="icm", approval_mode="auto", state_dir=str(tmp_path),
-                               data_root=str(tmp_path / "data"), broker_bars=True, **cfg),
-                  broker, [spec], {"session_open": ConstantModel(p=0.65)})
+    eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", approval_mode="auto", state_dir=str(tmp_path),
+                              data_root=str(tmp_path / "data"), broker_bars=True, **cfg),
+                 broker, [spec], {"session_open": ConstantModel(p=0.65)})
+    eng.broker_m1.fetcher = fetcher or Inline(broker)
+    return eng
 
 
 def _tick(ts: Any, bid: float, ask: float) -> Tick:
@@ -312,3 +344,145 @@ def test_in_the_us_eu_dst_gap_week_the_brokers_bars_land_on_their_utc_minutes(tm
     else:
         assert np.allclose(got["bid_close"].to_numpy(float), sampled.to_numpy(float))
         assert eng.broker_m1.stats["broker"] == 0
+
+
+# ------------------------------------------------------------------------------------- the tick thread never waits
+class Hung(Terminal):
+    """A bridge that does not answer the rates call until `gate` is set (the safety review's 10 s x 2 stall)."""
+
+    def __init__(self, truth: pd.DataFrame):
+        super().__init__(truth)
+        self.gate = threading.Event()
+
+    def get_bars(self, symbol: str, tf: str, n: int) -> pd.DataFrame:
+        self.calls.append(self.now)       # type: ignore[arg-type]
+        self.gate.wait(30)
+        raise TimeoutError("read timed out")
+
+
+def test_a_hung_rates_call_never_slows_the_exits_or_the_stop_checks(tmp_path):
+    term = Hung(TICKS)
+    eng = _engine(tmp_path, term, fetcher=broker_bars.Fetcher(term))     # the production fetcher: its own thread
+    checks: list[pd.Timestamp] = []
+    retries: list[pd.Timestamp] = []
+    stop_check, retry_closes = eng._stop_check, eng._retry_closes
+
+    def counted_stop(t: Tick) -> None:
+        checks.append(t.ts_utc)
+        stop_check(t)
+
+    def counted_retry(now: pd.Timestamp) -> None:
+        retries.append(now)
+        retry_closes(now)
+    eng._stop_check, eng._retry_closes = counted_stop, counted_retry     # type: ignore[method-assign]
+    s = _sampled(TICKS).iloc[:120]
+    slowest = 0.0
+    try:
+        for ts, bid, ask in zip(s["ts_utc"], s["bid"], s["ask"]):
+            t0 = time.monotonic()
+            eng.on_tick(_tick(ts, bid, ask))
+            slowest = max(slowest, time.monotonic() - t0)
+        assert slowest < 1.0                                  # the call hangs 30 s; no pass waits on it
+        assert len(checks) == len(retries) == len(s)          # every pass ran its stop check and close retries
+        assert len(term.calls) == 1 and eng.broker_m1.fetcher is not None and eng.broker_m1.fetcher.busy()
+        assert not eng.state.tick_error
+    finally:
+        term.gate.set()
+    job = eng.broker_m1.fetcher.job
+    assert job is not None and job.done.wait(5)
+    last = s.iloc[-1]
+    later = pd.Timestamp(last["ts_utc"]) + pd.Timedelta(seconds=1)
+    eng.on_tick(_tick(later, last["bid"], last["ask"]))
+    assert eng.broker_m1.stats["fetch_errors"] == 1 and not eng.state.tick_error
+    assert eng.broker_m1.retry_at == later + broker_bars.RETRY  # backoff measured from when the failure was applied
+
+
+def test_failed_calls_back_off_exponentially_up_to_a_minute(tmp_path):
+    term = Terminal(TICKS)
+    term.fail = True
+    eng = _engine(tmp_path, term)
+    _feed(eng, _sampled(TICKS).iloc[:400])
+    gaps = [(b - a).total_seconds() for a, b in zip(term.calls, term.calls[1:])]
+    assert len(gaps) >= 5
+    floors = [5, 10, 20, 40] + [60] * (len(gaps) - 4)
+    assert all(g >= f for g, f in zip(gaps, floors))
+    assert eng.broker_m1.fails == len(term.calls) and not eng.state.tick_error
+
+
+def test_a_decision_close_waits_briefly_for_its_last_broker_bar_and_decides_on_it(tmp_path):
+    live = pd.Timestamp("2025-03-13", tz="UTC")
+    ticks = _ticks("2025-03-03", "2025-03-13 09:30", 2, 8)
+    Store(tmp_path / "data").append("bars_1m", ticks_to_1m(ticks[ticks["ts_utc"] < live]), source="dukascopy")
+    close = pd.Timestamp("2025-03-13 08:30", tz="UTC")
+    term = Terminal(ticks)
+    fetcher = Inline(term)
+    eng = _engine(tmp_path, term, fetcher=fetcher)
+    eng.warm_start(live)
+    s = _sampled(ticks[ticks["ts_utc"] >= live])
+    _feed(eng, s[s["ts_utc"] < close])
+    fetcher.paused = True                                      # the call for 08:29 is in flight
+    first = s[s["ts_utc"] >= close].iloc[0]
+    assert eng.on_tick(_tick(close + pd.Timedelta(seconds=0.5), first["bid"], first["ask"])) == []
+    assert eng.broker_m1.held == close and eng._closed_through is not None and eng._closed_through < close
+    fetcher.release()                                          # it answers
+    out = eng.on_tick(_tick(close + pd.Timedelta(seconds=1), first["bid"], first["ask"]))
+    assert [d["action"] for d in out] == ["executed:auto"]
+    used = eng.bars_1m.set_index("ts_utc").loc[close - pd.Timedelta(minutes=1)]
+    assert used["bid_close"] == _as_bars(_rates(ticks)).loc[close - pd.Timedelta(minutes=1), "bid_close"]
+    assert eng.broker_m1.stats["fallback"] == 0
+
+
+def test_a_close_whose_bar_call_never_answers_decides_after_the_hold_on_the_sampled_bar(tmp_path):
+    term = Terminal(TICKS)
+    fetcher = Inline(term)
+    eng = _engine(tmp_path, term, fetcher=fetcher)
+    s = _sampled(TICKS)
+    close = pd.Timestamp("2025-03-10 09:15", tz="UTC")
+    _feed(eng, s[s["ts_utc"] < close])
+    fetcher.paused = True
+    q = s[s["ts_utc"] >= close].iloc[0]
+    eng.on_tick(_tick(close + pd.Timedelta(seconds=1), q["bid"], q["ask"]))
+    assert eng.broker_m1.held == close
+    eng.on_tick(_tick(close + broker_bars.GRACE + broker_bars.HOLD, q["bid"], q["ask"]))
+    assert eng.broker_m1.held is None and eng._closed_through == close
+    assert close - pd.Timedelta(minutes=1) in eng.broker_m1.fallback
+
+
+def test_a_broker_bar_with_its_high_below_its_low_is_refused_and_the_sampled_bar_stands(tmp_path):
+    bad = pd.Timestamp("2025-03-10 08:20", tz="UTC")
+    term = Terminal(TICKS)
+    term.corrupt.add(bad)
+    eng = _engine(tmp_path, term)
+    s = _sampled(TICKS)
+    _feed(eng, s[s["ts_utc"] < pd.Timestamp("2025-03-10 08:40", tz="UTC")])
+    eng._rebuild_bars()
+    row = eng.bars_1m.set_index("ts_utc").loc[bad]
+    assert row["bid_close"] == ticks_to_1m(s[(s["ts_utc"] >= bad) & (s["ts_utc"] < bad + pd.Timedelta(minutes=1))]).iloc[0]["bid_close"]
+    assert eng.broker_m1.stats["refused"] >= 1 and not eng._dq_errors()
+    assert any(e.check == "broker_bar_refused" for e in eng._dq_pending + eng._dq_bar_events)
+
+
+def test_a_late_replacement_that_is_unsound_is_refused_and_never_replaces_the_sampled_bar(tmp_path):
+    late = pd.Timestamp("2025-03-10 09:14", tz="UTC")
+    term = Terminal(TICKS, withhold=(late,))
+    eng = _engine(tmp_path, term)
+    s = _sampled(TICKS)
+    _feed(eng, s[s["ts_utc"] < late + pd.Timedelta(minutes=1, seconds=40)])
+    eng._rebuild_bars()
+    sampled = eng.bars_1m.set_index("ts_utc").loc[late, "bid_close"]
+    term.withhold.clear()
+    term.corrupt.add(late)
+    _feed(eng, s[(s["ts_utc"] >= late + pd.Timedelta(minutes=1, seconds=40)) & (s["ts_utc"] < late + pd.Timedelta(minutes=4))])
+    assert eng.bars_1m.set_index("ts_utc").loc[late, "bid_close"] == sampled
+    assert eng.broker_m1.stats["replaced"] == 0 and eng.broker_m1.stats["refused"] >= 1
+
+
+def test_a_malformed_rates_reply_is_a_warning_not_a_tick_error(tmp_path):
+    term = Terminal(TICKS)
+    term.malformed = True
+    eng = _engine(tmp_path, term)
+    s = _sampled(TICKS)
+    _feed(eng, s[s["ts_utc"] < pd.Timestamp("2025-03-10 08:20", tz="UTC")])
+    eng._rebuild_bars()
+    assert eng.broker_m1.stats["fetch_errors"] >= 1 and len(eng.bars_1m) >= 18
+    assert not eng.state.tick_error and eng.tick_errors_total == 0
