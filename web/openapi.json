@@ -1494,6 +1494,11 @@
       ],
       "title": "Slippage"
      },
+     "slippage_exit_known": {
+      "default": false,
+      "title": "Slippage Exit Known",
+      "type": "boolean"
+     },
      "spread": {
       "anyOf": [
        {
@@ -1504,6 +1509,11 @@
        }
       ],
       "title": "Spread"
+     },
+     "spread_exit_estimated": {
+      "default": false,
+      "title": "Spread Exit Estimated",
+      "type": "boolean"
      },
      "swap": {
       "anyOf": [
@@ -3473,6 +3483,11 @@
       ],
       "title": "Net R"
      },
+     "net_unknown": {
+      "default": 0,
+      "title": "Net Unknown",
+      "type": "integer"
+     },
      "withheld": {
       "default": false,
       "title": "Withheld",
@@ -4998,6 +5013,17 @@
       "title": "N",
       "type": "integer"
      },
+     "net_partial": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net Partial"
+     },
      "net_pnl": {
       "anyOf": [
        {
@@ -5008,6 +5034,11 @@
        }
       ],
       "title": "Net Pnl"
+     },
+     "net_unknown": {
+      "default": 0,
+      "title": "Net Unknown",
+      "type": "integer"
      },
      "since": {
       "format": "date",
@@ -7655,6 +7686,11 @@
       ],
       "title": "Net Pnl"
      },
+     "net_unknown": {
+      "default": 0,
+      "title": "Net Unknown",
+      "type": "integer"
+     },
      "opportunity": {
       "anyOf": [
        {
@@ -7923,6 +7959,22 @@
        }
       ],
       "title": "Net Today"
+     },
+     "net_today_partial": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net Today Partial"
+     },
+     "net_unknown": {
+      "default": 0,
+      "title": "Net Unknown",
+      "type": "integer"
      },
      "open_n": {
       "anyOf": [
@@ -8710,6 +8762,17 @@
       "title": "N Open",
       "type": "integer"
      },
+     "net_partial": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net Partial"
+     },
      "net_pnl": {
       "anyOf": [
        {
@@ -8721,6 +8784,11 @@
       ],
       "title": "Net Pnl"
      },
+     "net_unknown": {
+      "default": 0,
+      "title": "Net Unknown",
+      "type": "integer"
+     },
      "open_pnl": {
       "anyOf": [
        {
@@ -8731,6 +8799,11 @@
        }
       ],
       "title": "Open Pnl"
+     },
+     "open_pnl_withheld": {
+      "default": false,
+      "title": "Open Pnl Withheld",
+      "type": "boolean"
      },
      "open_risk": {
       "anyOf": [

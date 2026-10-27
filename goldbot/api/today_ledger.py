@@ -73,6 +73,14 @@ def _sum(vals: Sequence[float | None]) -> float:
     return round(sum(v for v in vals if v is not None), 2)
 
 
+def _net(rows: Sequence[TradeRow]) -> tuple[float | None, float | None, int]:
+    """(net, partial, unknown): the closed rows' net after costs, or None with the known rows' sum as `partial` and the
+    count of trades whose net is unknown (finance audit 2026-10-27: a total missing a trade is never shown as net)."""
+    unknown = sum(1 for r in rows if r.pnl is None)
+    total = _sum([r.pnl for r in rows])
+    return (None, total, unknown) if unknown else (total, None, 0)
+
+
 def _split(rows: Sequence[TradeRow]) -> CostSplit:
     parts = [r.costs for r in rows if r.costs is not None]
 
@@ -80,7 +88,9 @@ def _split(rows: Sequence[TradeRow]) -> CostSplit:
         vals = [getattr(c, name) for c in parts]
         return _sum(vals) if vals else 0.0
     return CostSplit(spread=part("spread"), slippage=part("slippage"), commission=part("commission"),
-                     swap=part("swap"), total=_sum([c.total for c in parts]), complete=all(c.complete for c in parts))
+                     swap=part("swap"), total=_sum([c.total for c in parts]), complete=all(c.complete for c in parts),
+                     spread_exit_estimated=any(c.spread_exit_estimated for c in parts),
+                     slippage_exit_known=bool(parts) and all(c.slippage_exit_known for c in parts))
 
 
 def _blind(rows: Sequence[TradeRow], cat: Catalog) -> bool:
@@ -112,8 +122,10 @@ def _pot_used(mine: Sequence[TradeRow], today: list[TradeRow]) -> float:
     sleeves' own measure (exploration.realised + the pot check), from the ledger."""
     by_arm: dict[str, float] = {}
     for r in today:
-        if r.kind in _ARMS and r.arm_id is not None and r.pnl is not None:
-            by_arm[r.arm_id] = by_arm.get(r.arm_id, 0.0) + r.pnl
+        if r.kind in _ARMS and r.arm_id is not None:
+            # a close without its net counts at its loss at the stop plus its costs, as the engine's sleeve does
+            loss = r.pnl if r.pnl is not None else -((r.risk_amount or 0.0) + (r.costs.total if r.costs else 0.0))
+            by_arm[r.arm_id] = by_arm.get(r.arm_id, 0.0) + loss
     held = sum(r.risk_amount or 0.0 for r in mine if r.kind in _ARMS and r.status == "open")
     return round(sum(max(0.0, -v) for v in by_arm.values()) + held, 2)
 
@@ -137,8 +149,9 @@ def account_day(name: str, e: dict[str, Any], rows: Sequence[TradeRow], now: pd.
         k_closed = [r for r in closed if r.kind == kind]
         hide = kind in _ARMS and arms_blind
         rs = [r.r for r in k_closed if r.r is not None]
+        k_net, _, k_unknown = _net(k_closed)
         by_kind[kind] = KindDay(fills=sum(r.kind == kind for r in filled), closed=len(k_closed),
-                                net_pnl=None if hide else _sum([r.pnl for r in k_closed]),
+                                net_pnl=None if hide else k_net, net_unknown=k_unknown,
                                 costs=None if hide else _sum([r.costs.total for r in k_closed if r.costs]),
                                 net_r=None if hide else (round(sum(rs), 3) if rs else None), withheld=hide)
     day_hidden = _blind(closed, cat)
@@ -155,7 +168,8 @@ def account_day(name: str, e: dict[str, Any], rows: Sequence[TradeRow], now: pd.
     for d in _trading_days(today, plan.strip_days):
         on = _closed_on(mine, {d})
         hidden = _blind(on, cat)
-        strip.append(StripDay(day=d, n=len(on), net_pnl=None if hidden else _sum([r.pnl for r in on]),
+        d_net, _, d_unknown = _net(on)
+        strip.append(StripDay(day=d, n=len(on), net_pnl=None if hidden else d_net, net_unknown=d_unknown,
                             costs=None if hidden else _sum([r.costs.total for r in on if r.costs]),
                             target=daily_target, opportunity=None, withheld=hidden))
     periods = {}
@@ -164,12 +178,16 @@ def account_day(name: str, e: dict[str, Any], rows: Sequence[TradeRow], now: pd.
         hidden = _blind(on, cat)
         if hidden:
             withheld.append(key)
-        periods[key] = PeriodNet(since=start, n=len(on), net_pnl=None if hidden else _sum([r.pnl for r in on]),
+        p_net, p_part, p_unknown = _net(on)
+        periods[key] = PeriodNet(since=start, n=len(on), net_pnl=None if hidden else p_net, net_unknown=p_unknown,
+                                 net_partial=None if hidden else p_part,
                                  costs=None if hidden else _split(on), withheld=hidden)
+    today_net, today_partial, today_unknown = _net(closed)
     opp = e.get("opportunity_day")
     return dict(
         fills_today=len(filled), fills_target=plan.fills_target, pace=pace, by_kind=by_kind,
-        net_today=None if day_hidden else _sum([r.pnl for r in closed]),
+        net_today=None if day_hidden else today_net, net_unknown=today_unknown,
+        net_today_partial=None if day_hidden else today_partial,
         costs_today=None if day_hidden else _split(closed),
         open_n=int(v) if (v := _num(e.get("open_positions"))) is not None else None, open_risk=_num(e.get("open_risk")),
         day_cap_used=_cap(None if limit is None or remaining is None else limit - remaining, limit),

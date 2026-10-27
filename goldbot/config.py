@@ -520,9 +520,10 @@ class DailyReviewSettings(_Section):
 class TradesViewSettings(_Section):
     """The trades screens' plan figures (docs/design/trades-ux-2026-10-27.md §2.4, item 131; goldbot/api/today_ledger.py).
     Reporting only: nothing here sizes, gates or limits a trade."""
-    # fills a day per demo account (the high-volume plan heads for about 200 per lab); a live account has no target
+    # fills a day for a demo account without its own target; a live account has no target
     fills_target: int = Field(200, ge=0)
-    fills_target_by_account: dict[str, int] = Field(default_factory=dict)   # account id -> its own target
+    # account id -> its own target (ADR 0049 D1/D1a: icm-probe about 323, icm-demo about 120, vantage-demo about 90)
+    fills_target_by_account: dict[str, int] = Field(default_factory=dict)
     # ADR 0004 north-star: GBP 50 a day on the GBP 1,000 basis = 5% of the day's starting equity, scaled per account
     daily_target_share: float = Field(0.05, gt=0, le=1)
     daily_target_by_account: dict[str, float] = Field(default_factory=dict)  # account id -> a fixed target, account currency
