@@ -138,5 +138,48 @@ icm-live:
 - **Open point for the trading-safety reviewer: the weekly cap.** The standing 5% weekly cap is not one of the four
   changed rails, so it still binds: £2.50 at £50, i.e. **one full stop ends the pilot's week**. It is left as is
   (never loosened without a decision); 30 trades are then unlikely within 4 weeks. Decide whether a fifth rail
-  (weekly) is intended.
+  (weekly) is intended. **Ruled in the amendment below (weekly 25%, i.e. £12.50 at £50).**
 - The supervisor's combined caps (1.5% / 4% of combined equity) are unchanged and see icm-live beside the demo accounts.
+
+## Amendment (trading-safety rulings on the two open points, 2026-10-27)
+Decided by the trading-safety reviewer under the owner's delegation. The unlock and typed phrase stay the owner's.
+
+**(a) Weekly cap: a fifth changed rail, set to 25% of the week's starting equity (£12.50 at £50), not £25.**
+- The standing 5% (£2.50 at £50) is below one full stop (£3.12), so one loss ends the week. The pilot then cannot
+  collect its 30 fills in a useful time, which defeats its purpose.
+- Setting it to £25 would remove the rail: the pilot stop already ends everything at £25. That would be a hidden
+  loosening, not a weekly limit.
+- £12.50 (four full stops, two bad days) means the pilot cannot spend its whole budget in one week. At least one weekly
+  review (the ledger reconciliation, slippage against the cost model, the reversal triggers above) takes place before
+  the second half is at risk. It never binds in a week that is not losing.
+- As a fraction it tightens as equity falls (£8.75 at £35). The weekly check is on equity and has no projection, so a
+  week can end at most one trade (£3.12) past it. This is accepted.
+- **Implementation (config, not a code bypass):** `pilot.weekly_cap_frac: 0.25` in `config/accounts.yaml`, bounded at
+  0.25 in `PilotRules` (`PILOT_MAX_WEEKLY_FRAC`). `engine_limits` maps it to `weekly_cap` for the pilot account only.
+  The test `test_the_standing_weekly_5_percent_cap_still_binds_on_the_pilot_account` is replaced by one that proves
+  25% on icm-live and 5% everywhere else.
+
+**(b) Gap overshoot: acceptable only if the pilot holds nothing over a weekend. Stops are not tightened.**
+- Where the £40 comes from: the weekend rule (`Engine._weekend_rule`) closes losers at the Friday cut but **keeps
+  winners** with their stop moved to half the open profit. A weekend gap of about $20-30 goes through that stop. This
+  is the realistic route to a single loss of £15-20.
+- Tightening the $4 stop does not help. A gap's overshoot does not depend on the stop's width; a tighter stop only
+  adds noise stop-outs.
+- Moving the Friday cut earlier does not help on its own either, because winners are still held.
+- **Ruling:** on the pilot account every position is closed at the Friday cut, winners too (`pilot.weekend_flat: true`,
+  default false, so no other account changes). It is an exit, so it is automatic and never gated.
+  - What remains is a midweek shock that is not in the calendar. The news blackout covers scheduled events. The daily
+    break gap on gold is typically a few dollars.
+  - Worst case kept in this record: about £25 + £15 in a rare midweek shock. The deposit (£50) bounds it, provided
+    negative-balance protection applies.
+- **Negative-balance protection stays a go/no-go item.** It could not be verified from the repo or this environment.
+  `docs/finance/capital-plan.md` records it as unverified, and BACKLOG 27 has it open. Before the first order, the
+  sre/finance-auditor records the following in BACKLOG 27:
+  - IC Markets Global's (Seychelles FSA) client agreement and its negative-balance protection clause or policy page,
+    with the version and date;
+  - a written answer from IC Markets support to two questions: "Is negative balance protection applied to retail Raw
+    Spread MT5 accounts of IC Markets (SC), automatically and per account? Is a negative balance from a gap reset to
+    zero without a claim?";
+  - the account's stop-out level, read from the terminal.
+- **If IC Markets does not confirm it in writing, the pilot does not start.** A debt larger than the deposit is outside
+  what the owner delegated.
