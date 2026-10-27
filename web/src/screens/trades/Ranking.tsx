@@ -84,15 +84,16 @@ const name = (r: RankRow) => `${r.rank != null ? `${r.rank}. ` : ""}${r.family_l
 const nw = (t: string) => <span className="nowrap">{t}</span>;
 const moneyPair = (r: RankRow) => (r.figures.net_pnl == null ? "—"
   : <>{nw(money(r.figures.net_pnl, r.figures.currency, true))} {nw(`(${money(r.figures.net_per_trade ?? 0, r.figures.currency, true)}/trade)`)}</>);
-const costPair = (r: RankRow) => `${r.figures.cost_per_trade == null ? "—" : money(r.figures.cost_per_trade, r.figures.currency)}${
-  r.figures.cost_per_trade_r != null ? ` (${r.figures.cost_per_trade_r.toFixed(2)}${NBSP}R)` : ""}`;
+const costMoney = (r: RankRow) => (r.figures.cost_per_trade == null ? "—" : money(r.figures.cost_per_trade, r.figures.currency));
+const costR = (r: RankRow) => (r.figures.cost_per_trade_r != null ? `(${r.figures.cost_per_trade_r.toFixed(2)}${NBSP}R)` : "");
+const costPair = (r: RankRow) => `${costMoney(r)}${costR(r) ? ` ${costR(r)}` : ""}`;
 const ciWords = (r: RankRow) => ci(r.figures.ci95, 0.95);
 /** The primary cell: the lower bound, or "too few to rank" with its counts on their own line (the reason is said once). */
 function KeyCell({ r }: { r: RankRow }) {
   const m = r.figures.lower_adjusted == null ? /^(.*?) \((.+)\)$/.exec(r.unranked_reason ?? "") : null;
   return m ? <><strong>{m[1]}</strong><br /><span className="small">{m[2]}</span></> : <strong>{boundWords(r)}</strong>;
 }
-const nWords = (r: RankRow) => `${r.figures.n.toLocaleString("en-GB")} fills, ${r.figures.days} days`;
+const nWords = (r: RankRow) => `${r.figures.n.toLocaleString("en-GB")} ${r.figures.n === 1 ? "fill" : "fills"}, ${r.figures.days} ${r.figures.days === 1 ? "day" : "days"}`;
 
 function Progress({ f }: { f: BoardFamily | undefined }) {
   const p = familyProgress(f);
@@ -163,7 +164,7 @@ function Rows({ rows, wide, families, onFamily, caption }: {
     <div className="trade-table-wrap">
       <table className="trade-table board-table rank-table">
         <caption className="sr-only">{caption}</caption>
-        <colgroup><col className="w-name" /><col className="w-key" /><col className="w-hit" /><col /><col className="w-pf" /><col /><col /><col className="w-trend" /></colgroup>
+        <colgroup><col className="w-name" /><col className="w-key" /><col className="w-hit" /><col className="w-net" /><col className="w-pf" /><col /><col className="w-cost" /><col className="w-trend" /></colgroup>
         <thead><tr>
           <th scope="col">Strategy</th><th scope="col" className="num">Net R/trade at least</th><th scope="col" className="num">Hit · n</th>
           <th scope="col" className="num">Net</th><th scope="col" className="num">PF · max DD</th><th scope="col" className="num">Vs random</th>
@@ -183,7 +184,7 @@ function Rows({ rows, wide, families, onFamily, caption }: {
                 <td className="num">{moneyPair(r)}</td>
                 <td className="num">{pfWords(r.figures)}<br /><span className="small muted">{r.figures.max_drawdown_r == null ? "—" : `${r.figures.max_drawdown_r.toFixed(1)}${NBSP}R`}</span></td>
                 <td className="num small">{edgeWords(r.figures)}</td>
-                <td className="num small">{costPair(r)}</td>
+                <td className="num small">{nw(costMoney(r))}{costR(r) && <> {nw(costR(r))}</>}</td>
                 <td className="num small">{trendWords(r.figures).split(" · ").map((t, i) => <span key={i} className="nowrap">{i > 0 && <br />}{t}</span>)}</td>
               </tr>
             );
