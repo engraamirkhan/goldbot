@@ -60,7 +60,8 @@ def test_minute_cases_are_the_sub15m_arms(prof) -> None:
     probe = prof.minute_cases("icm-probe")
     labels = {c.label for c in probe}
     assert {"S0", "S1A", "S5A"} <= labels and all(c.tf in ("1m", "5m") for c in probe)
-    assert prof.minute_cases("icm-demo") == []                   # no 1m/5m arms on the 15m+ hosts today
+    demo = {c.label for c in prof.minute_cases("icm-demo")}      # icm-demo carries the H-81 scalp sleeve (2026-10-27)
+    assert demo and all(c.tf in ("1m", "5m") for c in prof.minute_cases("icm-demo"))
     two = prof.minute_cases("icm-probe", replicate=2)
     assert len(two) == 2 * len(probe) and "S0#1" in {c.label for c in two}
 
