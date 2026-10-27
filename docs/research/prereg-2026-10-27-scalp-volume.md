@@ -357,3 +357,23 @@ they differ.
 
    The decision is the program director's (PD + PO), on the precedent of the waves. K is about 397. Each row is
    registered before its id's first fill.
+
+## 9. Amendment 2026-10-27 (c): the control side draw uses its own key (implementation fix, before any fill)
+
+Written before any code merged, any history run or any fill of ZCD or ZCV.
+
+**Defect in the frozen text.** Section 1 gates a control entry with `hash_u(id, close) < p` (p 0.07 / 0.05) and draws
+its side with `hash_side(id, close)`. `hash_side` is `+1 if u < 0.5`, on the **same** u. Every admitted entry has
+u < p < 0.5, so as written every control entry would be **long**. That is a long-only null, not a random one.
+
+**Fix.**
+- The side is drawn from a separate hash with the key `f"{id}:side"`, i.e. `hash_side(f"{id}:side", close)`, using
+  the section-0 hash of arms-2026-10-25.
+- The entry gate keeps `hash_u(id, close)`.
+- The two draws are therefore independent: the side is 50/50 whatever the gate admits.
+
+**Unchanged:** ids, p, the bracket, W, the filters and the reading rule. This restores the stated intent ("random
+side"), so it is an implementation fix, not a new hypothesis. K is unchanged.
+
+**Test owed (implementer):** over a long synthetic run of admitted control entries, the long share lies within
+0.5 ± 3 SE.
