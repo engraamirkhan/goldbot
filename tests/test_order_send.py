@@ -163,42 +163,115 @@ def test_an_unanswered_auto_entry_pauses_this_close_without_reading_the_busy_bri
 
 
 # ---------------------------------------------------------------------------------------------- 2. off the tick thread
-def test_exits_and_stop_checks_run_every_tick_while_an_order_hangs_for_30_s(tmp_path):
-    pb = _Hanging(fill=False)
-    eng = _hanging_engine(tmp_path, pb)
-    # an open trade whose engine stop (2398) is tighter than the broker's (2390)
+class _SerialBridge(PaperBroker):
+    """The MT5 box as it is (bridge.serve: one call at a time): while the order for PID holds the terminal for `hold_s`,
+    every other call waits for it, a read at most `read_s` per attempt (READ_ATTEMPTS, then BridgeUnavailable), a
+    close at most `read_s` once. The order reaches no fill and its reply is lost (the worst case)."""
+
+    def __init__(self, *, hold_s: float, read_s: float, **kw: Any) -> None:
+        super().__init__(equity=10_000, **kw)
+        self.hold_s, self.read_s, self.sends = hold_s, read_s, 0
+        self.terminal = threading.Lock()
+        self.closed_at: float | None = None
+
+    def _call(self, attempts: int) -> None:
+        for _ in range(attempts):
+            if self.terminal.acquire(timeout=self.read_s):
+                self.terminal.release()
+                return
+        raise BridgeUnavailable("bridge call: ReadTimeout")
+
+    def place_order(self, intent: OrderIntent) -> OrderResult:
+        if intent.client_order_id != PID:
+            return super().place_order(intent)
+        self.sends += 1
+        with self.terminal:
+            time.sleep(self.hold_s)
+        raise BridgeUnavailable("bridge place_order: ReadTimeout")
+
+    def last_tick(self, symbol: str) -> Tick:
+        self._call(order_send.READ_ATTEMPTS)
+        return super().last_tick(symbol)
+
+    def positions(self, magic_prefix: int | None = None) -> list[Any]:
+        self._call(order_send.READ_ATTEMPTS)
+        return super().positions(magic_prefix)
+
+    def close(self, position_id: int, lots: float | None = None) -> OrderResult:
+        self._call(1)
+        res = super().close(position_id, lots)
+        self.closed_at = time.monotonic()
+        return res
+
+
+def test_with_an_order_in_flight_exits_wait_for_the_serial_mt5_box_within_the_documented_bound(tmp_path):
+    """Trading-safety review of 5d661e94 (MEDIUM): closes do not keep per-tick cadence while the terminal is sending an
+    order; the engine-side stop close lands after the order's hold, within `exit_delay_bound_s` (35 s order timeout:
+    55 s; here scaled down), the loop keeps passing and no pass is a tick error."""
+    hold_s, read_s = 0.6, 0.1
+    pb = _SerialBridge(hold_s=hold_s, read_s=read_s)
+    eng, _ = _engine(tmp_path, _started(pb))
+    eng.order_sender = Sender(pb, wait_s=0.05)
     pos = pb.place_order(OrderIntent(client_order_id="held", symbol="XAUUSD", side=1, lots=0.1, sl=2390.0, tp=2500.0,
                                      magic=eng.cfg.magic_base, comment="held")).position_id
     assert pos is not None
     eng._reconcile(None)
-    eng.open[pos].sl = 2398.0
-    calls = {"stop": 0, "closes": 0}
-    stop_check, retry = eng._stop_check, eng._retry_closes
-
-    def counted_stop(t: Tick) -> None:
-        calls["stop"] += 1
-        stop_check(t)
-
-    def counted_retry(at: pd.Timestamp) -> None:
-        calls["closes"] += 1
-        retry(at)
-
-    eng._stop_check, eng._retry_closes = counted_stop, counted_retry
+    eng.open[pos].sl = 2398.0                                        # the engine's stop, tighter than the broker's
     t0 = time.monotonic()
     _send(eng)
-    assert time.monotonic() - t0 < 2.0                       # the tick thread waited wait_s, not the order's 30 s
-    assert eng.order_sender.busy() and eng._orders[PID].status == unconfirmed.AMBIGUOUS
-    for i in range(1, 6):
-        bid = 2400.0 if i < 4 else 2397.5                        # the 4th tick goes through the engine stop
-        pb.on_tick(_tick(T0 + pd.Timedelta(seconds=i), bid=bid))
-        started = time.monotonic()
-        eng.on_tick(pb.last_tick("XAUUSD"))
-        assert time.monotonic() - started < 1.0
-    assert eng.order_sender.busy()                                # still in flight the whole time
-    assert calls == {"stop": 5, "closes": 5}
-    assert pos not in {p.position_id for p in pb.positions()}     # closed at market while the order hung
-    assert not eng.state.tick_error
-    _finish(eng, pb)
+    assert time.monotonic() - t0 < hold_s                           # the tick thread waited wait_s, not the order
+    PaperBroker.on_tick(pb, _tick(T0 + pd.Timedelta(seconds=1), bid=2397.5))   # the market goes through the stop
+    passes = 0
+    while pb.closed_at is None and time.monotonic() - t0 < 5.0:
+        engine_pass(eng, pb, "XAUUSD")
+        passes += 1
+    assert pb.closed_at is not None, "the engine stop never closed"
+    delay = pb.closed_at - t0
+    assert hold_s * 0.9 <= delay                                      # serialised: not before the order let go
+    assert delay <= order_send.exit_delay_bound_s(hold_s, read_s) + 0.5
+    assert passes >= 2 and not eng.state.tick_error and eng.tick_errors_total == 0
+    assert pos not in {p.position_id for p in PaperBroker.positions(pb)}
+
+
+def test_the_documented_exit_delay_bound_at_vantages_order_timeout_is_55_s():
+    assert order_send.exit_delay_bound_s(35.0) == 55.0
+    assert order_send.READ_TIMEOUT_S == RemoteBroker("http://127.0.0.1:1", "t" * 40).timeout_s
+    assert order_send.READ_ATTEMPTS == RemoteBroker("http://127.0.0.1:1", "t" * 40).read_attempts
+
+
+# ---------------------------------------------------------------------------------------------- OrderInFlight refusals
+@pytest.fixture
+def in_flight(monkeypatch: pytest.MonkeyPatch) -> None:
+    def busy(eng: Any) -> None:
+        raise OrderInFlight("an order is still in flight on this account: nothing sent")
+    monkeypatch.setattr(order_send, "ready", busy)
+
+
+def test_an_auto_entry_refused_in_flight_is_journalled_as_a_refusal_never_a_tick_error(tmp_path, in_flight):
+    from goldbot.risk import RiskLimits
+    from tests.test_auto_same_close import BASE, _actions, _run, _two
+    eng, pb, dec = _run(tmp_path, _two(), RiskLimits(**BASE))
+    assert _actions(dec) == [order_send.REFUSED, order_send.REFUSED], _actions(dec)
+    assert not pb.positions() and not eng._orders
+    assert not eng.state.tick_error and eng.tick_errors_total == 0 and eng._auto_paused is None
+
+
+def test_an_approval_refused_in_flight_is_journalled_and_archived_not_sent_never_raised(tmp_path, in_flight):
+    from tests.test_engine_safety import _approved_through
+    pb = PaperBroker(equity=10_000)
+    eng, archived, _ = _approved_through(tmp_path, pb)
+    assert [d["action"] for d in eng.decisions if d.get("action") == order_send.REFUSED] == [order_send.REFUSED]
+    assert archived.gate_refusal is not None and archived.gate_refusal[0].startswith("not_sent")
+    assert not pb.positions() and not eng._orders and not eng.state.tick_error
+
+
+def test_a_cost_probe_refused_in_flight_is_journalled_as_a_refusal_never_a_tick_error(tmp_path, in_flight):
+    from tests.test_cost_probe import _engine as _probe_engine
+    eng, pb, tick, close = _probe_engine(tmp_path)
+    eng.on_bar_close(close, tick)
+    assert any(str(d.get("action", "")).endswith(order_send.REFUSED) and "cost_probe" in str(d.get("action", ""))
+               for d in eng.decisions), [d.get("action") for d in eng.decisions]
+    assert not pb.positions() and not eng.state.tick_error and eng.tick_errors_total == 0
 
 
 def test_a_late_fill_is_journalled_and_adopted_on_the_next_pass(tmp_path, clock):

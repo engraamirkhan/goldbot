@@ -1147,9 +1147,11 @@ class Engine:
                 try:
                     res = self._execute(prop, agent, gd.lots, stop, target, requested=price, atr_usd=intent.atr_usd, gd=gd)
                 except Exception as exc:
-                    # review LOW-C: the order may or may not be at the broker. Its pending_orders row stays "sending"
-                    # (the restart reconciliation resolves it), entries are blocked (tick_error), no further auto
-                    # entry this bar close; the remaining agents are still journalled and exits carry on
+                    if isinstance(exc, order_send.OrderInFlight):    # nothing sent: a refusal, never a tick error
+                        decisions.append(self._record(agent, close_ts, p, mult, order_send.REFUSED, pid, scored_fv=sfv))
+                        continue
+                    # review LOW-C: the order may be at the broker: its row stays "sending" (reconciliation resolves it),
+                    # entries blocked (tick_error), no further auto entry this close; other agents journalled, exits go on
                     self._auto_paused = (close_ts, "order_raised")
                     self.note_tick_error(exc)
                     decisions.append(self._record(agent, close_ts, p, mult, f"auto_unconfirmed:{type(exc).__name__}",
@@ -1174,6 +1176,8 @@ class Engine:
             self._apply_decision(p)
         except BaseException as exc:
             unconfirmed.archive_not_sent(self, p, exc)
+            if order_send.refused(self, exc, p.agent_id, p.proposal_id):   # nothing sent: never a tick error
+                return
             raise
         unconfirmed.silent_fill(self, p)   # BACKLOG 86
 
@@ -1339,16 +1343,6 @@ class Engine:
             return
         tr.policy, tr.timeframe, tr.atr_usd, tr.entry = policy, agent.timeframe, float(atr_usd), float(entry)
         tr.opened_utc, tr.flat_at = opened, policy.flat_deadline(opened)
-
-    @staticmethod
-    def _implied_atr(agent: Specialist, entry: float, sl: float | None) -> float | None:
-        """The ATR implied by an initial stop placed stop_atr x ATR from entry (recovery when no ATR was recorded).
-        A stop already tightened gives a smaller ATR, so the restored policy is tighter, never looser; a stop at
-        entry implies nothing."""
-        if sl is None or agent.label_spec.stop_atr <= 0:
-            return None
-        d = abs(entry - sl) / agent.label_spec.stop_atr
-        return d if d > 0 else None
 
     # ------------------------------------------------------------------ position management
     # ------------------------------------------------------------------ broker reads (fail closed)
@@ -1806,7 +1800,7 @@ class Engine:
                        audit=rec.audit if rec is not None else None)
         if agent is not None:
             atr_usd = rec.atr_usd if rec is not None and rec.atr_usd is not None else \
-                self._implied_atr(agent, p.open_price, tr.initial_sl)
+                unconfirmed.implied_atr(agent, p.open_price, tr.initial_sl)
             self._attach_policy(tr, agent, entry=p.open_price, atr_usd=atr_usd, opened=p.open_time_utc)
         if rec is not None and rec.status != "filled":
             # review MEDIUM-2 (a): the row of a send that raised (or a fill found late) now names its position, so a

@@ -15,21 +15,27 @@ Design rules:
 - Through the bridge an order is sent on a `Sender` worker thread (the broker_bars `Fetcher` pattern), through a client
   of its own (a requests.Session is never shared across threads) whose order timeout is the account's
   `order_timeout_s` (accounts.yaml; vantage-demo 35 s). The tick thread waits at most `wait_s` (WAIT_S) for the reply,
-  so a reply in time is handled exactly as before; after that the order is unanswered and the tick thread carries on:
-  stop checks, closes, the Friday cut and the kill switch keep their per-tick cadence while it is in flight. A direct
-  terminal (one MT5 connection per process) and the paper broker send on the tick thread, as before.
+  so a reply in time is handled exactly as before; after that the order is unanswered and the tick thread carries on
+  with its passes. A direct terminal (one MT5 connection per process) and the paper broker send on the tick thread, as
+  before.
+- Exits do NOT keep per-tick cadence while an order is in flight (trading-safety review of 5d661e94, MEDIUM): the MT5
+  box serves one call at a time (bridge.serve; the MetaTrader5 package is not thread-safe), so the engine's tick reads,
+  position reads and closes queue behind the order the terminal is still sending. The worst exit delay is
+  `exit_delay_bound_s`: the order's hold (at most the account's order_timeout_s) plus one failed tick-read cycle of the
+  engine's client (2 attempts x 10 s), about 45-55 s at vantage-demo's 35 s. Not a regression (the old send held the
+  tick thread 15 s and its reads queued the same way); the broker-side stop and target sent with every order cover
+  the window. The fix (the bridge queues closes ahead of reads and orders and drops abandoned reads) is a backlog item
+  owed before any real-money account.
 - One order at a time per account: a send while one is in flight is refused (`OrderInFlight`) before its row is written,
-  so nothing can have reached the broker (BACKLOG 85 "not sent"). The gate's `unconfirmed_order_pending` refuses such an
-  entry first; this is the backstop.
+  so nothing can have reached the broker (BACKLOG 85 "not sent"); every caller journals it `REFUSED`, never a tick
+  error. The gate's `unconfirmed_order_pending` refuses such an entry first; this is the backstop.
 - The late reply is collected after the pass's exits (`poll`) and journalled `order_late`; it brings the look-up
   forward to that pass. It never changes the row itself: the look-up at the broker decides (reads only).
 - order_timeout_s stays below AMBIGUOUS_SETTLE_S (Account field bound), so no clean look can call an order `unfilled`
   while its call can still answer.
-- Known limit: the MT5 box serves one call at a time (bridge.serve, the MetaTrader5 package is not thread-safe), so the
-  engine's own calls queue behind an order the terminal is still sending; the broker-side stop and target sent with
-  every order cover the position meanwhile. A tick read that fails while our order is in flight (or within
-  EXCUSE_S of its late reply) is not a tick error (`excused`): entries are refused `unconfirmed_order_pending` then
-  anyway, and the no-quote pass still runs. Exits never pass through this module.
+- A tick read that fails while our order is in flight (or within EXCUSE_S of its late reply) is not a tick error
+  (`excused`): entries are refused `unconfirmed_order_pending` then anyway, and the no-quote pass still runs. Exits
+  never pass through this module.
 """
 from __future__ import annotations
 
@@ -53,11 +59,28 @@ log = logging.getLogger("goldbot.engine")
 WAIT_S = 5.0            # the tick thread waits at most this for the reply (Vantage p95 2.6-5.3 s; the old send blocked 15 s)
 EXCUSE_S = 5.0          # after a late reply, the engine's own calls still queued behind it drain within this
 UNANSWERED = "order_unanswered"
+REFUSED = "entry_refused:order_in_flight"      # the journal's word for an OrderInFlight refusal
+READ_TIMEOUT_S, READ_ATTEMPTS = 10.0, 2       # the engine's bridge client (RemoteBroker timeout_s, read_attempts)
 NO_ANSWER = (ConnectionError, TimeoutError)     # BridgeUnavailable is a ConnectionError
 
 
 class OrderInFlight(RuntimeError):
     """An order was asked for while this account's previous one is still in flight: nothing was sent."""
+
+
+def exit_delay_bound_s(order_timeout_s: float, read_timeout_s: float = READ_TIMEOUT_S,
+                       read_attempts: int = READ_ATTEMPTS) -> float:
+    """The worst delay of an engine-side exit while an order is in flight on the serial MT5 box: the order's hold plus
+    one failed tick-read cycle that started just before it ended (module docstring)."""
+    return order_timeout_s + read_timeout_s * read_attempts
+
+
+def refused(eng: Engine, exc: BaseException, agent_id: str, proposal_id: str) -> bool:
+    """An `OrderInFlight` journalled as the refusal it is (`REFUSED`); False for any other error."""
+    if not isinstance(exc, OrderInFlight):
+        return False
+    eng.decisions.append({"ts": time.time(), "agent": agent_id, "action": REFUSED, "proposal": proposal_id})
+    return True
 
 
 class Flight:

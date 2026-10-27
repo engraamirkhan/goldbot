@@ -25,7 +25,11 @@ refused every entry until a whole clean decision bar (15 min), and the synchrono
 ## Consequences
 - No 15-minute entry block after a slow fill; the tick loop is held at most 5 s (was 15 s) by an order.
 - The engine's own calls still queue behind an order the terminal is sending (single-threaded bridge,
-  MetaTrader5 not thread-safe): engine-side closes land after that order; broker-side stops cover the window. A tick
-  read failing behind our own order in flight is not a tick error.
+  MetaTrader5 not thread-safe): engine-side closes do NOT keep per-tick cadence; they land after that order, at worst
+  `order_send.exit_delay_bound_s` (order hold + one 2 x 10 s tick-read cycle, about 45-55 s at 35 s; not a
+  regression). Broker-side stops cover the window; BACKLOG 135 (close-priority queue on the bridge) is owed before any
+  real-money account. A tick read failing behind our own order in flight is not a tick error.
+- `OrderInFlight` (the backstop) is journalled `entry_refused:order_in_flight` on the auto, cost-probe and approval
+  paths (the approval card is archived "not sent"), never a tick error.
 - `order_timeout_s` is bounded at 60 s, below `AMBIGUOUS_SETTLE_S` (120 s), so the look-up can never call an order not
   placed while its call can still answer.

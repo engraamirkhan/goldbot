@@ -61,6 +61,7 @@ from goldbot.telegram.outbox import placing_abandoned
 
 if TYPE_CHECKING:
     from goldbot.engine.runner import Engine
+    from goldbot.specialists.base import Specialist
     from goldbot.telegram.approvals import Proposal
 
 log = logging.getLogger("goldbot.engine")
@@ -114,6 +115,16 @@ def decide(*, age_s: float, position: bool, deals_read: bool, entry_dealt: bool,
     if entry_dealt:
         return "opened_closed" if exit_dealt else "wait"
     return "no_trade" if clean_for_s is not None and clean_for_s >= AMBIGUOUS_SETTLE_S else "wait"
+
+
+def implied_atr(agent: Specialist, entry: float, sl: float | None) -> float | None:
+    """The ATR implied by an initial stop placed stop_atr x ATR from entry (recovery when no ATR was recorded; moved
+    from `Engine._implied_atr`, ADR 0023). A stop already tightened gives a smaller ATR, so the restored policy is
+    tighter, never looser; a stop at entry implies nothing."""
+    if sl is None or agent.label_spec.stop_atr <= 0:
+        return None
+    d = abs(entry - sl) / agent.label_spec.stop_atr
+    return d if d > 0 else None
 
 
 def pending(orders: dict[str, SentOrder]) -> bool:
@@ -201,7 +212,7 @@ def _adopt_row(eng: Engine, cid: str, rec: SentOrder, pos: Position) -> OpenTrad
                                                opened_utc=pos.open_time_utc, excursion_approx=True, audit=rec.audit)
     agent = cost_probe.agent_of(eng, rec.agent_id)      # ADR 0037: a probe keeps its challenger's exit policy
     if agent is not None:
-        atr_usd = rec.atr_usd if rec.atr_usd is not None else eng._implied_atr(agent, pos.open_price, rec.sl)
+        atr_usd = rec.atr_usd if rec.atr_usd is not None else implied_atr(agent, pos.open_price, rec.sl)
         eng._attach_policy(tr, agent, entry=pos.open_price, atr_usd=atr_usd, opened=pos.open_time_utc)
     eng.decisions.append({"ts": time.time(), "agent": rec.agent_id, "action": "reconcile_adopt_sent",
                           "proposal": cid, "position": pos.position_id})
