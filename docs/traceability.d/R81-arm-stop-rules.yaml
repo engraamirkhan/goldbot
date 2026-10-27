@@ -1,0 +1,5 @@
+id: R81
+requirement: 'Exploration arms stop by their pre-registered rule (evaluator mismatch 2026-10-27): W1 families pooled -30 R within 300 fills (arms-expansion 2.1); W2 the same or futility at 300, one-sided 95% UB of mean net R < +0.03 R, day-clustered (arms 8.0); H-81 families pooled across strata and brokers, futility on >= 20 session days, plus the per-stratum cost stop (UB cost/R > 0.10 halve the share, > 0.20 suspend) (scalp-volume 4); F1A/G1A H-61 stop plus futility, F1C/G1C stop with them (time-structure 2.2/3.2); H-61 arms (BXR* included) unchanged; controls never stop; a stop only refuses new entries'
+status: 'implemented; quant and trading-safety review pending; WFRI''s own 26-Friday safety stop not implemented (H-61 swing meanwhile)'
+code: 'config/arm_stops.yaml; goldbot/research/arm_stops.py (`load_stop_rules`, `unit_stop`, `upper_bound`, `cost_states`); goldbot/telegram/labs.py `arm_statuses`; goldbot/research/daily_review.py `_arm_health`, `_cost_suspended`, `retire(rule=)`; goldbot/engine/exploration.py `shares`, `_cost_scale`'
+test: tests/test_arm_stops.py

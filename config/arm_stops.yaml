@@ -1,0 +1,90 @@
+# Pre-registered stop rules of the exploration arms (goldbot/research/arm_stops.py). Data, not code: the daily review
+# (goldbot/research/daily_review.py) and the owner's report (goldbot/telegram/labs.py `arm_statuses`) read an arm's
+# stop from here, and a retirement only refuses the arm's NEW entries (aux.db `exploration_arm_status`, read by the
+# engine once a minute); its open positions keep every exit. Membership and sources: the evaluator's read table
+# (2026-10-27, config/arm_reads.yaml comments). Adding or changing a row needs the pre-registration that says so.
+#
+# Sources:
+#   HV  = prereg-2026-10-25-high-volume.md "H-61 Per-arm stop (permanent)": running net R in exit order reaching
+#         scalp -30 R within 300, intraday -15 R within 100, swing -10 R within 40 trades (telegram.labs ARM_STOP, by
+#         the arm's style). Amendment 4: a trade void as evidence still counts toward the stop.
+#   W1  = arms-expansion-2026-10-26.md 2.1 (6): "Per-family stop: -30 R within 300 fills". No futility rule.
+#   W2  = arms-2026-10-25.md 8.0: "stop at -30 R within 300 fills, or on futility at 300 (one-sided 95% upper bound of
+#         the mean net R < +0.03 R)", day-clustered (CR1) SE.
+#   Z   = prereg-2026-10-27-scalp-volume.md 4 (H-81): W2's rule, the family pooled across its strata and brokers, the
+#         read "at the 300th admissible family fill on >= 20 session days"; plus the per-stratum cost stop below.
+#   TS  = prereg-2026-10-26-time-structure.md 2.2 / 3.2: H-61's stop plus futility (F1A at 300 and 1,000, G1A at 300);
+#         "F1C stops with" F1A, "G1C stops with" G1A.
+#   H-80 = prereg-exits-adaptive-2026-10-26.md 5 R1: "the H-61 per-arm cumulative-R stop ... unchanged" (BXR*).
+#
+# `units`: a stop unit (a family, or one arm) -> its arms, pooled in exit order across every account and broker.
+#   stop_r / within: the unit stops when its running net R reaches stop_r within its first `within` admissible fills.
+#   futility_at: the read sizes at which the futility stop is tested (empty: none registered). At each, over the
+#     unit's first n COUNTED fills (evidence exclusions left out, as in the read), the unit stops when the one-sided
+#     95% upper bound of the mean net R (SE clustered by UTC exit day, CR1) is below futility_ub.
+#   min_days: the read waits until its fills span this many UTC days (the n grows until they do); 0 = no condition.
+units:
+  # ------------------------------------------------------------------ W1 (arms-expansion-2026-10-26.md 2.1)
+  XBB15: {arms: [XBB15], stop_r: -30.0, within: 300, source: W1}
+  XTV1: {arms: [XTV1], stop_r: -30.0, within: 300, source: W1}
+  XEQ15: {arms: [XEQ15], stop_r: -30.0, within: 300, source: W1}
+  XSO15: {arms: [XSO15], stop_r: -30.0, within: 300, source: W1}
+  intraday_momentum: {arms: [XIMNY, XIMLN], stop_r: -30.0, within: 300, source: W1}
+  XAD1H: {arms: [XAD1H], stop_r: -30.0, within: 300, source: W1}
+  mean_reversion: {arms: [XMR15, XMR1H], stop_r: -30.0, within: 300, source: W1}
+  VXRIP1H: {arms: [VXRIP1H], stop_r: -30.0, within: 300, source: W1}
+  VXRT1H: {arms: [VXRT1H], stop_r: -30.0, within: 300, source: W1}
+  VXFK1H: {arms: [VXFK1H], stop_r: -30.0, within: 300, source: W1}
+  VXTL1H: {arms: [VXTL1H], stop_r: -30.0, within: 300, source: W1}
+  VXTV2: {arms: [VXTV2], stop_r: -30.0, within: 300, source: W1}
+  breakout: {arms: [VXBO1H, VXBO15], stop_r: -30.0, within: 300, source: W1}
+  VXTR1H: {arms: [VXTR1H], stop_r: -30.0, within: 300, source: W1}
+  # ------------------------------------------------------------------ W2 (arms-2026-10-25.md 8.0)
+  F2A: {arms: [F2A], stop_r: -30.0, within: 300, futility_at: [300], source: W2}
+  KLR: {arms: [PDC1, PDC4], stop_r: -30.0, within: 300, futility_at: [300], source: W2}
+  OBR15: {arms: [OBR15], stop_r: -30.0, within: 300, futility_at: [300], source: W2}
+  KSQ: {arms: [KSQ1, KSQ4], stop_r: -30.0, within: 300, futility_at: [300], source: W2}
+  DON: {arms: [DON4, DOND], stop_r: -30.0, within: 300, futility_at: [300], source: W2}
+  C30A: {arms: [C30A], stop_r: -30.0, within: 300, futility_at: [300], source: W2}
+  KA15: {arms: [KA15], stop_r: -30.0, within: 300, futility_at: [300], source: W2}
+  # ------------------------------------------------------------------ Z (prereg-2026-10-27-scalp-volume.md 4, H-81)
+  Z1: {arms: [Z1P], stop_r: -30.0, within: 300, futility_at: [300], min_days: 20, source: Z}
+  Z2: {arms: [Z2P], stop_r: -30.0, within: 300, futility_at: [300], min_days: 20, source: Z}
+  Z3: {arms: [Z3D, Z3V], stop_r: -30.0, within: 300, futility_at: [300], min_days: 20, source: Z}
+  Z4: {arms: [Z4D, Z4P], stop_r: -30.0, within: 300, futility_at: [300], min_days: 20, source: Z}
+  Z5: {arms: [Z5P, Z5V], stop_r: -30.0, within: 300, futility_at: [300], min_days: 20, source: Z}
+  Z6: {arms: [Z6D, Z6V], stop_r: -30.0, within: 300, futility_at: [300], min_days: 20, source: Z}
+  Z7: {arms: [Z7D, Z7V, Z7P], stop_r: -30.0, within: 300, futility_at: [300], min_days: 20, source: Z}
+  Z8: {arms: [Z8P], stop_r: -30.0, within: 300, futility_at: [300], min_days: 20, source: Z}
+  Z9: {arms: [Z9D], stop_r: -30.0, within: 300, futility_at: [300], min_days: 20, source: Z}
+  Z10: {arms: [Z10D], stop_r: -30.0, within: 300, futility_at: [300], min_days: 20, source: Z}
+  # ------------------------------------------------------------------ TS (prereg-2026-10-26-time-structure.md)
+  F1A: {arms: [F1A], stop_r: -30.0, within: 300, futility_at: [300, 1000], source: TS}
+  G1A: {arms: [G1A], stop_r: -15.0, within: 100, futility_at: [300], source: TS}
+
+# A control that stops with its arm (TS 2.2 / 3.2): never a stop of its own, retired the day its leader is.
+follows:
+  F1C: F1A
+  G1C: G1A
+
+# HV per-arm stop by style (telegram.labs ARM_STOP), unchanged. Listed so every arm of the spec is classified once
+# (tests/test_arm_stops.py); an arm in no list also falls back to it. WFRI: its own safety stop at 26 Fridays (TS 4)
+# is not implemented here yet; H-61's swing stop stands for it meanwhile.
+h61: [S1A, S1B, S2A, S2B, S3A, S3B, S4, S5A, S5B, S6, I1, I2A, I2B, MB15, MB30, MB1H, MSA15, I3, W1A, W1B, W2, W3,
+      VI2A, VI2B, VMB15, VMB30, VMB1H, VMS15, VW1A, VW1B, VW2, BXR15, BXR30, BXR1H, BXR4H, WFRI,
+      VS1A, VS1B, VS2A, VS2B, VS3A, VS3B, VS5A, VS5B]
+
+# No stop: the controls (the null; HV amendment 3, Z 4, arms 8.9) and the virtual twins BXT/BXF (H-80: scored on
+# BXR's fills, they place no order).
+none: [S0, S0R, I0, W0, VI0, VW0, VS0, C1H, VC1H, F2C, C30C, XC15, ZCD, ZCV,
+       BXT15, BXT30, BXT1H, BXT4H, BXF15, BXF30, BXF1H, BXF4H]
+
+# Z 4 "Cost stop per stratum (independent of R)": at >= min_fills fills, the one-sided 95% upper bound of the
+# stratum's signal-time cost per R (`cost` / `stop_loss` at the send; SE clustered by UTC day) above halve_above
+# halves its share of the pot (ADR 0047 ladder; engine `shares`, live); above suspend_above it is suspended until a
+# dated amendment (the daily review records it in exploration_arm_status, so the engine sends no new entry).
+cost_stop:
+  min_fills: 30
+  halve_above: 0.10
+  suspend_above: 0.20
+  arms: [Z1P, Z2P, Z3D, Z3V, Z4D, Z4P, Z5P, Z5V, Z6D, Z6V, Z7D, Z7V, Z7P, Z8P, Z9D, Z10D]
