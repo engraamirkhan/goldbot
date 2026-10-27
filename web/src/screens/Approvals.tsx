@@ -2,11 +2,13 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, hasRole } from "../lib/api";
 import { blockers } from "../lib/approval";
+import { orderWaiting } from "../lib/home";
 import { useNow } from "../lib/useNow";
 import { ProposalCard } from "./ProposalCard";
 import { SafetyStrip } from "./SafetyStrip";
 import { useDecide } from "./useDecide";
 import "./home.css";
+import "./trades/trades.css";
 
 type Part = "waiting" | "recent";
 
@@ -23,8 +25,9 @@ export function Approvals() {
   const decided = recent.data ?? [];
   const decidedIds = new Set(decided.map((d) => d.proposal_id));
   // most urgent first; a proposal that has just been decided shows once, as decided
-  const open = (pending.data ?? []).filter((p) => !decidedIds.has(p.proposal_id))
-    .sort((a, b) => a.expires_at.localeCompare(b.expires_at));
+  // real money first, then most urgent (trades spec §3.6)
+  const open = orderWaiting((pending.data ?? []).filter((p) => !decidedIds.has(p.proposal_id)), accounts.data);
+  const moneyClass = (id: string) => (accounts.data?.find((a) => a.account_id === id)?.mode === "live" ? "REAL" as const : "DEMO" as const);
 
   return (
     <div className="approvals">
@@ -46,7 +49,7 @@ export function Approvals() {
         ) : (
           <section className="cards" aria-label="Waiting for your decision">
             {open.map((p) => (
-              <ProposalCard key={p.proposal_id} p={p} now={now} canDecide={canDecide}
+              <ProposalCard key={p.proposal_id} p={p} now={now} canDecide={canDecide} moneyClass={moneyClass(p.account_id)}
                             blockers={blockers(status.data, accounts.data, p.account_id, p.agent_id)}
                             busy={decide.busyId === p.proposal_id} error={decide.errors[p.proposal_id]}
                             onApprove={() => decide.approve(p)} onReject={(reason) => decide.reject(p, reason)} />
