@@ -86,7 +86,14 @@ def test_pdc_stop_is_a_fixed_price_one_atr_back_through_the_level_with_a_2r_targ
     entry = ctx.mid["close"].to_numpy()[got["idx"].to_numpy()]
     stop = ev["level"].to_numpy() - got["side"].to_numpy() * ev["atr"].to_numpy()
     np.testing.assert_allclose(got["risk_usd"], np.abs(entry - stop))
-    assert (got["target_r"] == 2.0).all() and (got["max_bars"] == 31).all()
+    assert (got["target_r"] == 2.0).all()
+    if tf == "1h":
+        assert (got["max_bars"] == 31).all() and "cut_at" not in got
+    else:                                   # PDC4, 8.15: the 32-bar hold capped at the week's end under the Friday cut
+        from goldbot.research.arm_rules_weekcut import week_hold
+        close = ctx.close_ts[got["idx"].to_numpy()]
+        np.testing.assert_array_equal(got["max_bars"], week_hold(close, np.full(len(got), 32), "4h") - 1)
+        assert (got["max_bars"] < 31).all() and (got["max_bars"] >= 0).all()
 
 
 def test_no_level_entry_in_the_new_york_reopen_minutes() -> None:

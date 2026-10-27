@@ -462,7 +462,9 @@ def lookback_bars(arm: Arm, default: int) -> int:
 
 def follows_friday_cut(arm: Arm) -> bool:
     """Whether the arm's rule declares the engine's Friday weekend cut part of its exit (`arm_rules_clock_box.
-    FOLLOWS_FRIDAY_CUT`, WFRI: prereg-2026-10-26-time-structure.md section 4, amendment 1). Such an entry may hold
-    across the cut (the engine closes it there if losing and tightens its stop if winning), never into the weekend."""
+    FOLLOWS_FRIDAY_CUT`, WFRI: prereg-2026-10-26-time-structure.md section 4, amendment 1; `arm_rules_weekcut.
+    CUT_CAPPED`, PDC4 and DOND: arms-2026-10-25.md 8.15). Such an entry may hold across the cut (the engine closes it
+    there if losing and tightens its stop if winning), never into the weekend."""
     from goldbot.research.arm_rules_clock_box import FOLLOWS_FRIDAY_CUT
-    return arm.rule in FOLLOWS_FRIDAY_CUT
+    from goldbot.research.arm_rules_weekcut import CUT_CAPPED
+    return arm.rule in FOLLOWS_FRIDAY_CUT or (arm.rule, arm.timeframe) in CUT_CAPPED

@@ -30,9 +30,8 @@ WAVE2 = {"F1A": ("hurst_band_break", "15m"), "F1C": ("hurst_band_break_control",
          **BOX}
 # blocked row -> the engine lane its note names (state/RESUME.md 2026-10-26: E1 F1/F2 live + WFRI crosses_friday;
 # E2 G1 level_break + C30/DOND daily and weekend; E3 BXR trail, BXT/BXF virtual twins, XC15 netting shift)
-# lanes E1-E3 merged 2026-10-26: only DOND stays blocked (its 1d hold always crosses the weekend; the Friday cut
-# refuses it until an exit amendment like WFRI's lands)
-BLOCKED = {"DOND": "E2"}
+# lanes E1-E3 merged 2026-10-26; DOND unblocked by ARM-SPEC 8.15 (its exit runs under the Friday cut, as WFRI's)
+BLOCKED: dict[str, str] = {}
 FORWARD_ONLY = {"F1A", "F1C", "G1A", "G1C", "WFRI", "KA15", "XC15", *BOX}
 # account -> arm id -> (style, max_loss, control_share)
 HOSTS: dict[str, dict[str, tuple[str, float, float | None]]] = {
@@ -82,6 +81,17 @@ def test_rows_blocked_on_an_engine_lane_name_it_and_every_other_wave_two_arm_run
             assert a.status == "blocked" and BLOCKED[arm_id] in a.note, arm_id
         else:
             assert a.status == "run", arm_id
+
+
+def test_pdc4_and_dond_are_frozen_under_their_exit_amendment_and_follow_the_friday_cut(spec) -> None:
+    """ARM-SPEC 8.15: the amended exit is part of the frozen row (a new hash), and only PDC4 / DOND (and WFRI) follow
+    the cut; PDC1 and DON4 keep their frozen holds and the plain weekend refusal."""
+    for arm_id in ("PDC4", "DOND"):
+        p = spec[arm_id].params
+        assert "8.15" in p["spec"] and "8.15" in p["weekend_cut"], arm_id
+        assert arm_rules.follows_friday_cut(spec[arm_id]), arm_id
+    assert {i for i, a in spec.items() if arm_rules.follows_friday_cut(a)} == {"PDC4", "DOND", "WFRI"}
+    assert "weekend_cut" not in spec["PDC1"].params and "weekend_cut" not in spec["DON4"].params
 
 
 def test_no_row_keeps_a_placeholder_rule_and_the_placeholders_are_gone(spec) -> None:

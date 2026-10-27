@@ -40,7 +40,7 @@ Live and history share these functions (engine lane E3, trading-safety review): 
 `runner_stop_at` (= `walk_runner` on the same 1m bars) through its own stop move, scores the BXT/BXF virtual twins on
 each BXR fill with `twin_outcome`, and shifts XC15 behind an open KA15 on a netting host as `shift_control` does
 (`goldbot.engine.exploration`); `scripts/run_arm_backtest.py` exits BXR on `walk_runner`, scores its twins on the same
-entries and charges stratum T's measured spread on both legs. The Friday weekend rule is the engine's (`runner._weekend_rule`); `walk_friday` models it for WFRI only
+entries and charges stratum T's measured spread on both legs. The Friday weekend rule is the engine's (`runner._weekend_rule`); `walk_friday` models it for WFRI (the shared `arm_rules_weekcut.walk_cut`, also PDC4 and DOND, 8.15)
 (the cut price is the mid open of the first 1m bar at or after the cut; live decides on the bid, half a spread lower)."""
 from __future__ import annotations
 
@@ -56,6 +56,7 @@ from goldbot.data.timeutil import epoch_ns, utc_index
 from goldbot.features.box_course import next_box
 from goldbot.features.technical import atr
 from goldbot.research.arm_rules import NEW_YORK, RuleContext, _frame, empty, hash_side
+from goldbot.research.arm_rules_weekcut import CUT, CUT_KEEP, CUT_TZ, walk_cut
 from goldbot.research.arms import Arm
 
 NO_TARGET_R = 50.0
@@ -65,8 +66,8 @@ WFRI_TF = "30m"
 WFRI_ENTRY_MIN = 19 * 60                    # Thursday 19:00 New York
 WFRI_EXIT = (16, 30)                        # Friday 16:30 New York
 WFRI_STOP_ATR4H = 1.0
-WFRI_CUT_TZ, WFRI_CUT = "Europe/Athens", (21, 30)   # = EngineConfig.server_tz / weekend_cut (a test holds them equal)
-WFRI_CUT_KEEP = 0.5                         # runner._weekend_rule: a winner's stop locks in half the open profit
+# the engine's cut (= EngineConfig.server_tz / weekend_cut, a test holds them equal) and its winner rule
+WFRI_CUT_TZ, WFRI_CUT, WFRI_CUT_KEEP = CUT_TZ, CUT, CUT_KEEP
 # Rules whose exit includes the engine's Friday weekend cut (amendment 1): `exploration.crosses_friday` lets their
 # entries hold across the cut (never into the weekend), and a close by the cut is their own exit, not a censoring.
 FOLLOWS_FRIDAY_CUT = frozenset({"friday_long"})
@@ -145,21 +146,9 @@ def walk_friday(path: pd.DataFrame, entry: float, risk: float, cut_at: pd.Timest
     """One WFRI long on its 1m mid path after entry (`path`: ts_utc, open, high, low, close) under the engine's Friday
     weekend cut (module docstring, amendment 1): at the open of the first minute at or after `cut_at` a loser (price <=
     entry) is closed there (`weekend_loser`) and a winner's stop becomes max(stop, round(entry + 0.5 x (price - entry),
-    2)); then stop first in a minute, the time exit at the close of the minute ending at `exit_at`."""
-    ts = utc_index(path["ts_utc"])
-    o, lo, c = (path[k].to_numpy(float) for k in ("open", "low", "close"))
-    stop, cut_done = entry - risk, False
-    for j in range(len(path)):
-        if not cut_done and ts[j] >= cut_at:
-            cut_done = True
-            if o[j] - entry <= 0:
-                return {"exit": o[j], "kind": "weekend_loser", "at": ts[j], "stop": stop}
-            stop = max(stop, round(entry + WFRI_CUT_KEEP * (o[j] - entry), 2))
-        if lo[j] <= stop:
-            return {"exit": stop if o[j] > stop else o[j], "kind": "stop", "at": ts[j], "stop": stop}
-        if ts[j] + pd.Timedelta(minutes=1) >= exit_at:
-            return {"exit": c[j], "kind": "time", "at": ts[j] + pd.Timedelta(minutes=1), "stop": stop}
-    return {"exit": c[-1] if len(c) else entry, "kind": "open", "at": ts[-1] if len(ts) else None, "stop": stop}
+    2)); then stop first in a minute, the time exit at the close of the minute ending at `exit_at`. No target: the
+    shared cut walk (`arm_rules_weekcut.walk_cut`, also PDC4's and DOND's, 8.15) at NO_TARGET_R."""
+    return walk_cut(path, entry, 1, risk, cut_at, exit_at, NO_TARGET_R)
 
 
 def atr4h_at(ctx: RuleContext, at: pd.DatetimeIndex) -> np.ndarray:

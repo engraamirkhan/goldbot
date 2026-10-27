@@ -30,6 +30,7 @@ from goldbot.labels import SwapSpec, rollover_nights  # noqa: E402
 from goldbot.labels.triple_barrier import BarrierSpec, triple_barrier_next_open_1m  # noqa: E402
 from goldbot.research import arm_rules as R  # noqa: E402
 from goldbot.research import arm_rules_clock_box as K  # noqa: E402
+from goldbot.research import arm_rules_weekcut as W  # noqa: E402
 from goldbot.research import arms as A  # noqa: E402
 
 WARMUP_DAYS = 400          # feature history before the block (indicators, 1d tsmom lookbacks); entries stay in the block
@@ -134,6 +135,44 @@ def runner_labels(lab: pd.DataFrame, bars: pd.DataFrame, b1: pd.DataFrame, cands
     return out
 
 
+def cut_labels(lab: pd.DataFrame, bars: pd.DataFrame, b1: pd.DataFrame, cands: pd.DataFrame,
+               swap: SwapSpec) -> pd.DataFrame:
+    """A rule under the engine's Friday weekend cut (`arm_rules.follows_friday_cut`: WFRI, arms 8.14 (2); PDC4 and
+    DOND, 8.15) in history: "the read is the realised outcome under the cut". `walk_cut` (the engine's weekend rule on
+    the 1m mid path: a loser closed at the cut, a winner's stop tightened to half its open profit) replaces the plain
+    bracket, from the entry minute to the candidate's own (week-capped) time exit at the close of bar i + hold, R the
+    candidate's stop, its target; swap from the entry minute to the exit."""
+    if lab.empty:
+        return lab
+    m = mid(b1)[["ts_utc", "open", "high", "low", "close"]]
+    t1 = utc_index(b1["ts_utc"])
+    close, bar_ts = utc_index(bars["visible_at"]), utc_index(bars["ts_utc"])
+    c = cands.drop_duplicates("idx")
+    ids = c["idx"].to_numpy(dtype=int).tolist()
+    hold = dict(zip(ids, c["max_bars"].to_numpy(dtype=int).tolist(), strict=True))
+    risk = dict(zip(ids, c["risk_usd"].to_numpy(dtype=float).tolist(), strict=True))
+    target = dict(zip(ids, c["target_r"].to_numpy(dtype=float).tolist(), strict=True))
+    cut = dict(zip(ids, utc_index(c["cut_at"]), strict=True))
+    entry_ts = utc_index(lab["entry_ts"])
+    k0s = t1.searchsorted(entry_ts, side="left")
+    cols: dict[str, list[Any]] = {k: [] for k in ("barrier_hit", "exit", "ret", "t_exit", "ts_exit")}
+    for j, (i, side, entry) in enumerate(zip(lab["idx"].to_numpy(dtype=int).tolist(),
+                                              lab["side"].to_numpy(dtype=int).tolist(),
+                                              lab["entry"].to_numpy(dtype=float).tolist(), strict=True)):
+        last = min(i + 1 + hold[i], len(close) - 1)
+        k1 = int(t1.searchsorted(close[last], side="left"))
+        path = m.iloc[int(k0s[j]):k1].reset_index(drop=True)
+        w = W.walk_cut(path, entry, side, risk[i], cut[i], close[last], target[i])
+        at = pd.Timestamp(w["at"]) if w["at"] is not None else entry_ts[j]
+        nights = rollover_nights(entry_ts[j:j + 1], pd.DatetimeIndex([at]), swap.server_tz, swap.triple_weekday)[0]
+        move = side * (float(w["exit"]) - entry) + nights * float(swap.usd_per_oz(np.array([side]))[0])
+        t_exit = min(int(close.searchsorted(at, side="left")), last)
+        for key, v in (("barrier_hit", str(w["kind"])), ("exit", float(w["exit"])), ("ret", move / entry),
+                       ("t_exit", t_exit), ("ts_exit", bar_ts[t_exit])):
+            cols[key].append(v)
+    return lab.assign(**cols)
+
+
 def signal_spread_extra(lab: pd.DataFrame, bars: pd.DataFrame, b1: pd.DataFrame, cands: pd.DataFrame,
                         costs: A.ArmCosts) -> np.ndarray:
     """KA15 stratum T (arms 8.13 condition 2): "T is charged at the spread measured at signal time on both legs: the
@@ -187,6 +226,8 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
         runner = K.is_runner(arm)
         if runner:
             lab = runner_labels(lab, bars, b1, cands, swap)
+        elif R.follows_friday_cut(arm):
+            lab = cut_labels(lab, bars, b1, cands, swap)
         lab = limit_open(lab, arm.max_open)
         if len(lab):
             idx = lab["idx"].to_numpy().astype(int)
