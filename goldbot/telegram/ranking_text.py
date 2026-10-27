@@ -4,8 +4,8 @@ built from the same trade ledger as `GET /api/strategies/ranking`, so Telegram a
 Reporting only: nothing here changes an order, a stop, a budget or a read.
 
 Copy rules kept (§4, §7.4, §7.5): at most LINES_MAX lines; the heading line first; one line per family, "1. Opening
-range · +0.03 R/trade at least (avg +0.12, 412 fills) · hit 48% · +£38.10 · vs random +0.10 (interim) · early, not
-proven"; the true minus; no tables; family names only (never an arm id, account slug, login or host); every row says
+range · +0.03 R/trade at least (avg +0.12, 412 fills) · hit 48% · +£38.10 · vs random +0.10 R (interim) · early,
+not proven"; the true minus; no tables; family names only (never an arm id, account slug, login or host); every row says
 "early, not proven" until its read. The section is appended after the blinding guard of the lab lines
 (labs.guard): ADR 0053 lifted blinding for the ranking, and a family named like an arm id ("NR4 break") must still show.
 """
@@ -60,16 +60,17 @@ def family_line(row: RankRow, move: str | None = None) -> str:
     if f.net_pnl is not None:
         parts.append(money(f.net_pnl, f.currency))
     if f.edge_vs_control_r is not None:
-        parts.append(f"vs random {_r(f.edge_vs_control_r)} ({f.edge_source})")
+        parts.append(f"vs random {_r(f.edge_vs_control_r)} R ({f.edge_source})")
     parts.append(STATUS_WORDS[row.status])
     return " · ".join(parts)
 
 
-def _counts(view: RankingView, shown: int) -> str:
+def _counts(view: RankingView, shown: int) -> list[str]:
+    """"3 more ranked · 2 too few to rank yet"; a zero part is left out, and the line with it (no "0 too few")."""
     ranked = sum(r.rank is not None for r in view.rows)
-    few = len(view.rows) - ranked
-    rest = ranked - shown
-    return f"+{rest} ranked, {few} too few to rank" if rest else f"{few} too few to rank"
+    few, rest = len(view.rows) - ranked, ranked - shown
+    parts = [*([f"{rest} more ranked"] if rest else []), *([f"{few} too few to rank yet"] if few else [])]
+    return [" · ".join(parts)] if parts else []
 
 
 def ranking_lines(view: RankingView) -> list[str]:
@@ -79,14 +80,14 @@ def ranking_lines(view: RankingView) -> list[str]:
         return []
     out = [f"🏁 {view.heading}"]
     if not ranked:
-        out.append(f"None ranked yet: a family needs {MIN_FILLS} fills on {MIN_DAYS} opportunity days")
+        out.append(f"None ranked yet: a strategy needs {MIN_FILLS} fills on {MIN_DAYS} days for a place")
     top = ranked[:TOP]
     low = ranked[TOP:][-BOTTOM:] if len(ranked) >= BOTTOM_FROM else []
     out += [family_line(r) for r in top]
     if low:
         out.append("…")
         out += [family_line(r) for r in low]
-    out += [_counts(view, len(top) + len(low)), LINK]
+    out += [*_counts(view, len(top) + len(low)), LINK]
     return out[:LINES_MAX]
 
 
@@ -99,12 +100,12 @@ def weekly_lines(week: RankingView, life: RankingView, before: RankingView) -> l
     ranked = [r for r in life.rows if r.rank is not None]
     out = [f"🏁 {life.heading}", "Since each version began (move since last week):"]
     out += [family_line(r, moves.get(r.key)) for r in ranked[:TOP]] or [
-        f"None ranked yet: a family needs {MIN_FILLS} fills on {MIN_DAYS} opportunity days"]
+        f"None ranked yet: a strategy needs {MIN_FILLS} fills on {MIN_DAYS} days for a place"]
     week_ranked = [r for r in week.rows if r.rank is not None][:WEEK_TOP]
     if week_ranked:
         out.append("This week:")
         out += [family_line(r) for r in week_ranked]
-    out += [_counts(life, min(len(ranked), TOP)), LINK]
+    out += [*_counts(life, min(len(ranked), TOP)), LINK]
     return out[:LINES_MAX]
 
 

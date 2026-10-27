@@ -497,17 +497,13 @@ def oz_per_lot(e: dict[str, Any]) -> float:
     return v if v > 0 else labs.CONTRACT_OZ
 
 
-def result_text(name: str, s: labs.LabSpan, ccy: str | None, *, withheld: str | None = None) -> str:
-    """"Scalp lab: 214 signals · 63 taken · 61 filled · 58 closed −£17.60 · −3.9R" and its states (spec 2.4). The £,
-    R and gross figures print only when `s.totals_shown` (quant 2026-10-26, MIN_ARMS_FOR_TOTAL strategy arms closed
-    in the window) and no `withheld` reason applies (the weekly: a day of the week was withheld); else "—"."""
+def result_text(name: str, s: labs.LabSpan, ccy: str | None) -> str:
+    """"Scalp lab: 214 signals · 63 taken · 61 filled · 58 closed −£17.60 · −3.9R" and its states (spec 2.4), whatever
+    the number of arms behind it (ADR 0053 retired the 3-arm rule)."""
     head = f"{name}: {labs.plural(s.signals, 'signal')} · {s.taken:,} taken"
     if not (s.taken or s.filled or s.closed):
         return head
     head += f" · {s.filled:,} filled · {s.closed:,} closed"
-    if s.closed and (withheld or not s.totals_shown):
-        head += f" — ({withheld or f'under {labs.MIN_ARMS_FOR_TOTAL} arms'})"
-        return head + (f" · {s.no_pnl:,} closed without costs recorded" if s.no_pnl else "")
     if s.net_closed:
         head += f" {labs.money(s.pnl, ccy)} · {labs.r_text(s.r)}"
     elif s.still_open and not s.closed:
@@ -586,18 +582,15 @@ def lab_block(state_dir: Path, conn: sqlite3.Connection | None, e: dict[str, Any
                               True)], None)
     s = labs.lab_span(conn, acct, lo, hi, oz_per_lot=oz_per_lot(e)) if conn is not None else labs.LabSpan()
     hours = open_hours(e, lo, hi) if s.signals == 0 and s.closed == 0 and weekday else None
-    withheld = "a day under 3 arms" if by_day and not all(s.day_shown(x) for x in by_day) else None
     if hours == 0:
         out = [Line(f"{name}: market closed · nothing to report", 1, acct)]
     elif hours is not None:
         out = [Line(f"{name}: no signals in {hours} h of open market ⚠️ Warning: check the feed", 1, acct)]
     else:
-        out = [Line(result_text(name, s, ccy, withheld=withheld), 1, acct)]
+        out = [Line(result_text(name, s, ccy), 1, acct)]
 
     def day_r(x: str) -> str:
-        if x not in s.by_day_arms:
-            return "none"
-        return labs.r_text(s.by_day.get(x, 0.0)) if s.day_shown(x) else "—"
+        return labs.r_text(s.by_day.get(x, 0.0)) if x in s.closed_days else "none"
     if by_day:
         out.append(Line("  by day: " + " · ".join(f"{pd.Timestamp(x):%a} {day_r(x)}" for x in by_day), 2, acct, True))
     warned = d.dd >= warn - 1e-12

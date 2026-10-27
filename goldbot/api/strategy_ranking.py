@@ -267,16 +267,17 @@ def _figures(fills: Sequence[_Fill], recent: Sequence[_Fill], edge: _Edge | None
 
 # ------------------------------------------------------------------------------------------------ status and bands
 def _status(arms: Collection[str], kind: Kind, cat: Catalog, retired: Collection[str]) -> RankStatus:
-    """Early until every read unit of the row's strategy arms is read (then the best recorded verdict); retired when
-    every arm stopped at its pre-registered stop unread. Engine strategies and controls stay early."""
+    """The best recorded verdict once any read unit of the row's strategy arms is read and the others are read or
+    stopped; "early" while an unread arm still runs; "retired" when every arm stopped at its pre-registered stop
+    unread. Engine strategies and controls stay early."""
     if kind != "exploration" or not arms:
         return "early"
-    reads = [cat.reads.get(cat.unit_of(a)) for a in arms]
-    if all(r is not None for r in reads):
-        return min((_READ_STATUS[r.state] for r in reads if r is not None), key=_STATUS_ORDER.index)
-    if all(a in retired or cat.reads.get(cat.unit_of(a)) is not None for a in arms):
-        return "retired"
-    return "early"
+    reads = [r for a in arms if (r := cat.reads.get(cat.unit_of(a))) is not None]
+    if not all(a in retired or cat.reads.get(cat.unit_of(a)) is not None for a in arms):
+        return "early"
+    if reads:
+        return min((_READ_STATUS[r.state] for r in reads), key=_STATUS_ORDER.index)
+    return "retired"
 
 
 def _band(kind: Kind, status: RankStatus, f: RankFigures) -> RankBand:
@@ -314,8 +315,9 @@ def _arm_meta(arm: str, r: TradeRow, cat: Catalog) -> _Meta:
 
 
 def _fill(r: TradeRow, cat: Catalog, metas: dict[str, _Meta]) -> tuple[_Meta, _Fill] | None:
-    """The row's group and its fill; None for anything the ranking does not read. `metas` caches each arm's."""
-    if r.status != "closed" or r.exit_utc is None or r.r is None or r.evidence == "excluded":
+    """The row's group and its fill; None for anything the ranking does not read. `metas` caches each arm's. A row
+    without its net (a gross-only engine record, unreadable deals) carries a gross R: never ranked (after costs only)."""
+    if r.status != "closed" or r.exit_utc is None or r.r is None or r.pnl is None or r.evidence == "excluded":
         return None
     tf = r.timeframe or ""
     arm = r.arm_id
@@ -381,6 +383,7 @@ def rank(rows: Iterable[TradeRow], cat: Catalog, as_of: pd.Timestamp, *, window:
             g.recent.append(f)
         if f.arm is not None:
             g.arms.add(f.arm)
+    groups = {k: g for k, g in groups.items() if g.fills}  # a family with no fill in the window is no row (n 0)
     order = attrgetter("at", "trade_id")
     controls = {}
     for arm, fs in by_control.items():

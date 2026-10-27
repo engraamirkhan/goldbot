@@ -236,7 +236,8 @@ describe("Trades > Strategies, ranked (136-138, ADR 0053)", () => {
     expect(first).toHaveTextContent("120 of 300 to the read");    // the board's progress bar stays (its unread 1h arm)
     const few = within(card).getByRole("button", { name: /^Sweep \+ absorb/ });
     expect(few.closest("li")).toHaveClass("greyed");
-    expect(few).toHaveTextContent("too few to rank (12 of 30 fills, 4 of 10 days)");
+    expect(few).toHaveTextContent("too few to rank12 of 30 fills, 4 of 10 days");        // why, on its own line
+    expect(few.textContent!.match(/too few to rank/g)).toHaveLength(1);                   // said once, not again by the status
     expect(within(card).getByRole("region", { name: "Controls" })).toHaveTextContent("Random control");
     expect(within(card).getByRole("region", { name: "Retired" })).toHaveTextContent("retired at its stop");
   });

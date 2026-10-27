@@ -116,7 +116,7 @@ function ListBody({ q, f, onOpen, wide, onClear }: { q: Q; f: Filters; onOpen: (
           {q.isFetchingNextPage ? "Loading…" : "Load 50 more"}
         </Button>
       )}
-      <p className="small muted">Net after costs (spread, slippage, commission, swap), in the account currency; {f.sort === "newest" ? "newest first" : f.sort === "best" ? "best result first (open trades by their P&L now)" : "worst result first (open trades by their P&L now)"}; times are your time, UTC on hover.</p>
+      <p className="small muted">Net after costs (spread, slippage, commission, swap), in the account currency; {f.sort === "newest" ? "newest first" : `${f.sort === "best" ? "best" : "worst"} R first (R, never £ against $), then open trades and trades without their net, newest first`}; times are your time, UTC on hover.</p>
     </>
   );
 }

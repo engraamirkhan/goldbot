@@ -19,7 +19,7 @@ engine's published USD -> account rate (item 128); a rate over FX_STALE_S old ma
 Blinding retired (ADR 0053, backlog 139; ADR 0050 decisions 2-3 superseded): every list, its totals and every row
 carry their results whatever an arm's read, so a family's filter shows what its ranking row shows. "early, not
 proven" with n and a CI lives on every per-strategy figure (goldbot/api/strategy_ranking.py). Rows come newest
-activity first, or by result (`sort`: best or worst net first; an open trade by its P&L now, unknown last).
+activity first, or by result (`sort`: best or worst R first, then the trades without a final R, newest first).
 """
 from __future__ import annotations
 
@@ -540,9 +540,26 @@ def totals(rows: Sequence[TradeRow]) -> TradeTotals:
     return _scan(closed, [r for r in rows if r.status == "open"])
 
 
-def _encode(r: TradeRow) -> str:
+def _encode(r: TradeRow, sort: TradeSort = "newest") -> str:
+    if sort != "newest":
+        g, v, neg_at, key_id = _sort_key(r, sort)
+        return base64.urlsafe_b64encode(f"k|{g}|{v!r}|{neg_at!r}|{key_id}".encode()).decode()
     at, tid = _key(r)
     return base64.urlsafe_b64encode(f"{pd.Timestamp(at).isoformat()}|{tid}".encode()).decode()
+
+
+def _decode_key(cursor: str) -> SortKey:
+    """A result-order cursor: the last row's immutable sort key."""
+    try:
+        tag, g, v, at, tid = base64.urlsafe_b64decode(cursor.encode()).decode().split("|", 4)
+        if tag != "k" or g not in ("0", "1"):
+            raise ValueError("not a result-order cursor")
+        key = int(g), float(v), float(at), tid
+        if not all(math.isfinite(x) for x in key[1:3]):
+            raise ValueError("cursor key not finite")
+        return key
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise ValueError("cursor is not one this API gave") from exc
 
 
 def _decode(cursor: str) -> tuple[pd.Timestamp, str]:
@@ -637,19 +654,21 @@ def _scan(closed: Sequence[TradeRow], opened: Sequence[TradeRow]) -> TradeTotals
         open_pnl=round(open_pnl, 2) if not mixed else None, open_risk=round(open_risk, 2) if not mixed else None)
 
 
-def _result(r: TradeRow) -> float | None:
-    """A row's result for the List's sort: the net of a closed trade, the P&L now of an open one."""
-    return r.pnl if r.status == "closed" else r.pnl_now
+SortKey = tuple[int, float, float, str]
+
+
+def _sort_key(r: TradeRow, sort: TradeSort) -> SortKey:
+    """The List's result order, on what never changes once a row is shown: a closed trade by its R (never by £ against
+    $), best or worst first, ties newest first; then every trade without a final R (open: its result still moves; a
+    close without its net), newest first. Being immutable, it is also the cursor (pages survive a fresh build)."""
+    if r.status == "closed" and r.r is not None and r.exit_utc is not None:
+        return 0, (-r.r if sort == "best" else r.r), -r.exit_utc.timestamp(), r.trade_id
+    return 1, 0.0, -(r.exit_utc or r.opened_utc).timestamp(), r.trade_id
 
 
 def _sorted(rows: list[TradeRow], sort: TradeSort) -> list[TradeRow]:
-    """By result, best or worst first (an unknown result last, ties newest first); "newest" keeps the ledger order."""
-    if sort == "newest":
-        return rows
-    known = [r for r in rows if _result(r) is not None]
-    sign = -1.0 if sort == "best" else 1.0
-    known.sort(key=lambda r: sign * (_result(r) or 0.0))         # stable: ties stay newest first
-    return known + [r for r in rows if _result(r) is None]
+    """By result (`_sort_key`); "newest" keeps the ledger order."""
+    return rows if sort == "newest" else sorted(rows, key=lambda r: _sort_key(r, sort))
 
 
 def _answer(ledger: Ledger, q: TradeQuery) -> tuple[list[TradeRow], TradeTotals]:
@@ -688,16 +707,16 @@ def query(ledger: Ledger, q: TradeQuery) -> TradesPage:
     page starts after it in the query's order (newest first, or by result)."""
     rows, t = _answer(ledger, q)
     start = 0
-    if q.cursor:
-        after, tid = _decode(q.cursor)
-        if q.sort == "newest":
-            start = next((i for i, r in enumerate(rows) if _key(r) < (after, tid)), len(rows))
-        else:
-            start = next((i + 1 for i, r in enumerate(rows) if r.trade_id == tid), len(rows))
+    if q.cursor and q.sort == "newest":
+        after = _decode(q.cursor)
+        start = next((i for i, r in enumerate(rows) if _key(r) < after), len(rows))
+    elif q.cursor:
+        last = _decode_key(q.cursor)
+        start = next((i for i, r in enumerate(rows) if _sort_key(r, q.sort) > last), len(rows))
     limit = max(1, min(q.limit, MAX_PAGE))
     page = rows[start:start + limit]
     more = start + limit < len(rows)
-    return TradesPage(as_of=ledger.as_of, rows=page, next_cursor=_encode(page[-1]) if more and page else None,
+    return TradesPage(as_of=ledger.as_of, rows=page, next_cursor=_encode(page[-1], q.sort) if more and page else None,
                       totals=t, unreadable=ledger.unreadable)
 
 

@@ -134,16 +134,16 @@ def test_a_learning_loss_is_worded_as_a_cost_per_usable_label(tmp_path: Path) ->
     assert "Learning cost £12.00 demo (real money £0) · £1.50 per usable label (8)" in weekly(tmp_path)
 
 
-def test_a_week_total_is_withheld_when_any_of_its_days_was(tmp_path: Path) -> None:
-    """Quant 2026-10-26: a week total minus the dailies shown would give a withheld day's figure by subtraction."""
+def test_a_week_total_and_every_day_show_whatever_the_number_of_arms(tmp_path: Path) -> None:
+    """ADR 0053 (backlog 139 follow-up): the 3-arm rule is retired; a one-arm day shows its R and the week its total."""
     lab = Lab(tmp_path, SUN).engine("icm-probe", 10_000, 10_000)
     for arm in ("S1A", "S1B", "S2A"):
         lab.trade("icm-probe", arm, MON, pnl=-4.0)
     lab.trade("icm-probe", "S1A", DAYS[2], pnl=7.0)                     # Wednesday: one arm only
     text = weekly(tmp_path)
-    assert "by day: Mon −2.7R · Tue none · Wed — · Thu none · Fri none" in text
-    assert "4 closed — (a day under 3 arms)" in text and "Learning: — demo this week (real money £0)" in text
-    assert "5.00" not in text and "−£12" not in text
+    assert "by day: Mon −2.7R · Tue none · Wed " in text and "Wed —" not in text
+    assert "4 closed −£5.00 · " in text and "a day under 3 arms" not in text
+    assert "Learning cost £5.00 demo (real money £0)" in text
 
 
 def test_no_research_result_and_an_unreadable_registry_are_one_line_each(tmp_path: Path) -> None:

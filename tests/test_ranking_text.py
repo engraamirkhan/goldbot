@@ -1,6 +1,6 @@
 """Backlog 137 (docs/design/trades-ux-2026-10-27.md §7.5; ADR 0053): the ranking in every daily review and the weekly
 digest. The morning Telegram section is at most 12 lines (the heading line, the top 5, the 2 lowest when 8 or more are
-ranked, "+N ranked, M too few to rank" and the dashboard link); each line carries the lower bound, the mean, n, hit
+ranked, "N more ranked · M too few to rank yet" and the dashboard link); each line carries the lower bound, the mean, n, hit
 rate, net money, edge vs random and the status, with the true minus and no tables. The weekly digest adds the rank
 change since last week. Telegram, the dashboard and `GET /api/strategies/ranking` show the same numbers, and no line
 carries an arm id, an account slug or a login."""
@@ -54,13 +54,13 @@ def test_the_morning_section_has_the_heading_top_5_the_2_lowest_counts_and_link_
     ranked = [x for x in lines if re.match(r"^\d+\. ", x)]
     assert [x.split(" · ")[0] for x in ranked] == ["1. Fam00", "2. Fam01", "3. Fam02", "4. Fam03", "5. Fam04",
                                                    "9. Fam08", "10. Fam09"]
-    assert lines[-2] == "+3 ranked, 3 too few to rank" and lines[-1] == rt.LINK
+    assert lines[-2] == "3 more ranked · 3 too few to rank yet" and lines[-1] == rt.LINK
 
 
 def test_under_8_ranked_the_lowest_are_not_repeated():
     lines = rt.ranking_lines(_view(6))
     assert [x.split(".")[0] for x in lines if re.match(r"^\d+\. ", x)] == ["1", "2", "3", "4", "5"]
-    assert "+1 ranked, 0 too few to rank" in lines
+    assert lines[-2] == "1 more ranked"                            # no "0 too few to rank"
 
 
 def test_each_line_carries_the_bound_mean_n_hit_money_edge_and_status_with_the_true_minus_and_no_table():
@@ -76,11 +76,11 @@ def test_edge_vs_random_shows_with_its_source():
         "C1": ArmInfo(arm_id="C1", family="random_bracket", timeframe="15m", unit="C1", is_control=True)}, reads={})
     rows = [*_spread("A1", [0.3, 0.1] * 20, 10), *_spread("C1", [-0.1, 0.1] * 20, 10, kind="control",
                                                          family="random_bracket")]
-    assert "vs random +0.20 (interim)" in rt.ranking_lines(sr.rank(rows, cat, NOW))[1]
+    assert "vs random +0.20 R (interim)" in rt.ranking_lines(sr.rank(rows, cat, NOW))[1]
 
 
 def test_with_no_ranked_family_the_section_says_why_and_with_no_family_it_is_absent():
-    assert rt.ranking_lines(_view(0, n_few=2))[1] == "None ranked yet: a family needs 30 fills on 10 opportunity days"
+    assert rt.ranking_lines(_view(0, n_few=2))[1] == "None ranked yet: a strategy needs 30 fills on 10 days for a place"
     assert rt.ranking_lines(_view(0)) == []
 
 

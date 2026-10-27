@@ -49,9 +49,18 @@ function RankingBody({ v, families, onFamily }: { v: RankingView; families: Map<
     <>
       <p><strong>{v.heading}</strong></p>
       <p className="small muted">
-        {ranked} ranked{v.t_adjusted != null && <>, each bound {v.t_adjusted.toFixed(1)} standard errors below its average (adjusted for {v.k_ranked} at once)</>};
-        {` a family needs ${v.min_fills} fills on ${v.min_days} days to be ranked. Intervals count each account's day once, so a day's similar trades are not independent evidence. This ranking changes no trade, budget, stop or read.`}
+        {`${ranked} ranked, best first. A strategy needs ${v.min_fills} fills on ${v.min_days} days for a place; greyed rows have
+        fewer and are listed by fills, without a place. All = since each strategy's current version began. The ranking never
+        changes trading.`}
       </p>
+      <details className="rank-how">
+        <summary>How the order is worked out</summary>
+        <p className="small muted">
+          {`"At least" is the low end of what each trade is likely earning in R (profit divided by the risk taken) after all costs`}
+          {v.t_adjusted != null && <>, {v.t_adjusted.toFixed(1)} standard errors below the average because {v.k_ranked} strategies are compared at once</>}.
+          {" Intervals count each account's day once, so a day's similar trades are not independent evidence. Hit rate and money are shown, never used to sort. The ranking changes no trade, budget, stop or read."}
+        </p>
+      </details>
       {v.unreadable.length > 0 && <p className="small state warn">{`Couldn't read ${v.unreadable.join(", ")}: missing, not zero.`}</p>}
       {v.rows.length === 0 ? <EmptyState title="Nothing to rank yet." />
         : <Rows rows={v.rows} wide={wide} families={families} onFamily={onFamily} caption="Strategies ranked by the least each trade is likely earning after costs" />}
@@ -72,10 +81,17 @@ function RankingBody({ v, families, onFamily }: { v: RankingView; families: Map<
 }
 
 const name = (r: RankRow) => `${r.rank != null ? `${r.rank}. ` : ""}${r.family_label}`;
+const nw = (t: string) => <span className="nowrap">{t}</span>;
 const moneyPair = (r: RankRow) => (r.figures.net_pnl == null ? "—"
-  : `${money(r.figures.net_pnl, r.figures.currency, true)} (${money(r.figures.net_per_trade ?? 0, r.figures.currency, true)}/trade)`);
+  : <>{nw(money(r.figures.net_pnl, r.figures.currency, true))} {nw(`(${money(r.figures.net_per_trade ?? 0, r.figures.currency, true)}/trade)`)}</>);
 const costPair = (r: RankRow) => `${r.figures.cost_per_trade == null ? "—" : money(r.figures.cost_per_trade, r.figures.currency)}${
   r.figures.cost_per_trade_r != null ? ` (${r.figures.cost_per_trade_r.toFixed(2)}${NBSP}R)` : ""}`;
+const ciWords = (r: RankRow) => ci(r.figures.ci95, 0.95);
+/** The primary cell: the lower bound, or "too few to rank" with its counts on their own line (the reason is said once). */
+function KeyCell({ r }: { r: RankRow }) {
+  const m = r.figures.lower_adjusted == null ? /^(.*?) \((.+)\)$/.exec(r.unranked_reason ?? "") : null;
+  return m ? <><strong>{m[1]}</strong><br /><span className="small">{m[2]}</span></> : <strong>{boundWords(r)}</strong>;
+}
 const nWords = (r: RankRow) => `${r.figures.n.toLocaleString("en-GB")} fills, ${r.figures.days} days`;
 
 function Progress({ f }: { f: BoardFamily | undefined }) {
@@ -95,7 +111,7 @@ function StatusLine({ r, f }: { r: RankRow; f: BoardFamily | undefined }) {
     <span className="small">
       <Badge tone={r.status === "proven" ? "ok" : "idle"}>{RANK_STATUS_WORDS[r.status]}</Badge>
       {f && <span className="muted"> · {ANNEAL_WORDS[f.anneal_state]}</span>}
-      {r.unranked_reason && <span className="muted"> · {r.unranked_reason}</span>}
+      {r.unranked_reason && r.figures.lower_adjusted != null && <span className="muted"> · {r.unranked_reason}</span>}
     </span>
   );
 }
@@ -128,7 +144,7 @@ function Rows({ rows, wide, families, onFamily, caption }: {
             <li key={r.key} className={r.rank == null && r.band === "too_few" ? "greyed" : undefined}>
               <button type="button" className="family-card" onClick={() => onFamily(r.family)} aria-label={`${name(r)}, open its trades`}>
                 <span className="family-head"><strong>{name(r)}</strong><span className="muted small">{r.style} · {r.kind}</span></span>
-                <span className="num"><strong>{boundWords(r)}</strong></span>
+                <span className="num"><KeyCell r={r} /></span>
                 <span className="small num">avg {signedR(r.figures.net_r_per_trade)} ({ci(r.figures.ci95, 0.95)}) · {nWords(r)}</span>
                 <span className="small num">hit {pct(r.figures.hit_rate)} · {moneyPair(r)} · PF {pfWords(r.figures)} · max drawdown {r.figures.max_drawdown_r == null ? "—" : `${r.figures.max_drawdown_r.toFixed(1)}${NBSP}R`}</span>
                 <span className="small num">vs random {edgeWords(r.figures)} · cost {costPair(r)}</span>
@@ -147,7 +163,7 @@ function Rows({ rows, wide, families, onFamily, caption }: {
     <div className="trade-table-wrap">
       <table className="trade-table board-table rank-table">
         <caption className="sr-only">{caption}</caption>
-        <colgroup><col className="w-name" /><col /><col className="w-hit" /><col /><col className="w-pf" /><col /><col /><col /></colgroup>
+        <colgroup><col className="w-name" /><col className="w-key" /><col className="w-hit" /><col /><col className="w-pf" /><col /><col /><col className="w-trend" /></colgroup>
         <thead><tr>
           <th scope="col">Strategy</th><th scope="col" className="num">Net R/trade at least</th><th scope="col" className="num">Hit · n</th>
           <th scope="col" className="num">Net</th><th scope="col" className="num">PF · max DD</th><th scope="col" className="num">Vs random</th>
@@ -162,13 +178,13 @@ function Rows({ rows, wide, families, onFamily, caption }: {
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onFamily(r.family); } }}>
                 <th scope="row"><strong>{name(r)}</strong><br /><span className="muted small">{r.style} · {r.kind} · {r.timeframes.join(", ")}</span>
                   <Progress f={f} /><StatusLine r={r} f={f} /><Variants r={r} /></th>
-                <td className="num"><strong>{boundWords(r)}</strong><br /><span className="small muted">avg {signedR(r.figures.net_r_per_trade)} · {ci(r.figures.ci95, 0.95)}</span></td>
+                <td className="num"><KeyCell r={r} /><br /><span className="small muted">avg {nw(signedR(r.figures.net_r_per_trade))} · {nw(ciWords(r))}</span></td>
                 <td className="num">{pct(r.figures.hit_rate)}<br /><span className="small muted">{nWords(r)}</span></td>
                 <td className="num">{moneyPair(r)}</td>
                 <td className="num">{pfWords(r.figures)}<br /><span className="small muted">{r.figures.max_drawdown_r == null ? "—" : `${r.figures.max_drawdown_r.toFixed(1)}${NBSP}R`}</span></td>
                 <td className="num small">{edgeWords(r.figures)}</td>
                 <td className="num small">{costPair(r)}</td>
-                <td className="num small">{trendWords(r.figures)}</td>
+                <td className="num small">{trendWords(r.figures).split(" · ").map((t, i) => <span key={i} className="nowrap">{i > 0 && <br />}{t}</span>)}</td>
               </tr>
             );
           })}

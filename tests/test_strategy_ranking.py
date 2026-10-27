@@ -301,3 +301,29 @@ def test_the_ranking_answers_over_50k_fills_within_300_ms_at_p95():
         times.append(time.perf_counter() - t0)
     assert sorted(times)[int(0.95 * len(times)) - 1] < 0.3
     assert ranker("all") is ranker("all")
+
+
+# ------------------------------------------------------------------------------------------------ review of 39a335be
+def test_a_gross_engine_fill_is_not_counted_in_n():
+    """Quant: an engine row whose record is gross (pnl unknown) carries a gross R; only net fills are ranked."""
+    net = _spread(None, [0.2] * 30, 10, kind="strategy", family="box_break")
+    gross = [r.model_copy(update={"pnl": None}) for r in _spread(None, [5.0] * 10, 10, kind="strategy",
+                                                                   family="box_break")]
+    f = _by(sr.rank([*net, *gross], CAT, NOW), "engine:box_break").figures
+    assert (f.n, f.net_r_per_trade) == (30, 0.2)
+
+
+def test_a_window_lists_only_families_with_a_fill_in_it():
+    """Code review: a family last traded 20 days ago is not a 7-day row at n 0 (nor counted as too few to rank)."""
+    rows = [*_spread("A1", [0.2] * 14, 7), *[_row("B1", 0.3, day=20 + d, family="beta") for d in range(5)]]
+    assert [r.key for r in sr.rank(rows, CAT, NOW, window="7d").rows] == ["alpha"]
+    assert {r.key for r in sr.rank(rows, CAT, NOW, window="30d").rows} == {"alpha", "beta"}
+
+
+def test_one_arm_read_and_another_stopped_unread_takes_the_recorded_verdict():
+    """Code review: a recorded read outranks "retired" for the row's status."""
+    read = ArmRead(read_utc=NOW - timedelta(days=1), verdict="edge", state="C1")
+    cat = _cat(*CAT.arms.values(), reads={"A1": read})
+    rows = [*_spread("A1", [0.2] * 30, 10), *_spread("A2", [-0.5] * 10, 10, tf="1h")]
+    row = _by(sr.rank(rows, cat, NOW, retired={"A2"}), "alpha")
+    assert row.status == "candidate" and row.band != "retired"

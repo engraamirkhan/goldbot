@@ -23,6 +23,7 @@ from goldbot.engine.exploration import LEDGER, ExplorationRecord
 from goldbot.ops.gates_phase import ClosedTrade, closed_trade_file
 from goldbot.ops.health import Check, HealthReport
 from goldbot.research.exploration_data import write_weights
+from goldbot.telegram import labs
 from goldbot.telegram.digest import build_digest, report_text
 from tests.test_api_entry_status import engine
 
@@ -194,8 +195,8 @@ def test_no_per_arm_r_share_rank_or_banned_word_appears_before_an_arms_read(tmp_
     arm_lines = [x for x in text.splitlines() if "Arms" in x or "within 50%" in x or "Learner" in x]
     assert arm_lines and not any(BANNED.search(x) or "share " in x for x in arm_lines)
     assert "Arms (trades): S1B 7 · S2A 4" in text and "Learner 08:00 UTC" not in text
-    # two arms closed: the lab total would be a per-arm figure by subtraction, so it is withheld (quant 2026-10-26)
-    assert "11 closed — (under 3 arms)" in text and "£14.98" not in text and "3.3R" not in text
+    # two arms closed: the lab total shows (ADR 0053 retired the 3-arm rule; the ranking shows families anyway)
+    assert "11 closed " in text and "(under 3 arms)" not in text
 
 
 def test_the_band_line_counts_arms_and_never_names_them(tmp_path: Path) -> None:
@@ -321,17 +322,15 @@ def test_a_close_without_a_net_figure_is_shown_apart_as_gross(tmp_path: Path) ->
 
 
 @pytest.mark.parametrize("arms", [["S1A"], ["S1A", "S1B"], ["S1A", "S1B", "S0"]])
-def test_a_lab_total_is_withheld_until_three_strategy_arms_closed_a_trade(tmp_path: Path, arms: list[str]) -> None:
-    """Quant 2026-10-26 (MIN_ARMS_FOR_TOTAL): with one or two contributing arms the lab's £ and R are those arms'
-    own by subtraction; a control does not count."""
+def test_a_lab_total_shows_whatever_the_number_of_arms_that_closed(tmp_path: Path, arms: list[str]) -> None:
+    """ADR 0053 (backlog 139 follow-up): the 3-arm rule (MIN_ARMS_FOR_TOTAL) is retired; one or two arms' closes give
+    the lab's £ and R like any day's."""
     lab = Lab(tmp_path).engine("icm-probe", 10_000, 10_000)
     lab.obs("icm-probe", "S0", SEPT, 1, control=True).obs("icm-probe", "S1A", DAY, len(arms), taken=True)
     for arm in arms:
         lab.trade("icm-probe", arm, DAY, pnl=-1.3, exit_price=2001.375).trade("icm-probe", arm, DAY, pnl=None)
-    text = daily(tmp_path)
-    assert f"{2 * len(arms)} closed — (under 3 arms)" in text
-    result = next(x for x in text.splitlines() if x.startswith("Scalp lab: "))
-    assert "1.3" not in text and "gross" not in text and "£" not in result and "R" not in result
+    result = next(x for x in daily(tmp_path).splitlines() if x.startswith("Scalp lab: "))
+    assert f"{2 * len(arms)} closed {labs.money(-1.3 * len(arms), 'GBP')} · " in result and "under 3 arms" not in result
 
 
 def test_the_weekend_day_is_one_market_closed_line(tmp_path: Path) -> None:

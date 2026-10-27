@@ -350,6 +350,42 @@ def test_the_list_sorts_by_result_best_or_worst_first_and_pages_in_that_order(tm
     assert seen == [r.trade_id for r in tl.query(led, _q(sort="best", limit=50)).rows]
 
 
+def test_the_result_sort_is_by_r_across_currencies_and_open_trades_follow_the_closed(tmp_path):
+    """Code review LOW: £ and $ are never compared; a closed trade is placed by its R, an open one (its result still
+    moves) after the closed ones, newest first."""
+    _labs(tmp_path)
+    _arm(tmp_path, "o1", "S1A", exit_after=None, sent=NOW - pd.Timedelta(minutes=5))
+    led = _ledger(tmp_path, _catalog(tmp_path))
+    usd = led.rows[-1].model_copy(update={"trade_id": "x:usd", "currency": "USD", "pnl": 100.0, "r": 0.1})
+    rows = sorted([*led.rows, usd], key=lambda r: (r.exit_utc or r.opened_utc, r.trade_id), reverse=True)
+    led = tl.Ledger(as_of=NOW, rows=rows, unreadable=[])
+    best = tl.query(led, _q(sort="best", limit=50)).rows
+    rs = [r.r for r in best if r.status == "closed" and r.r is not None]
+    assert rs == sorted(rs, reverse=True) and best[-1].status == "open"
+    assert best[0].trade_id != "x:usd"                  # $100.00 at 0.1 R is not the best trade
+
+
+def test_result_pages_neither_repeat_nor_skip_when_the_next_build_moves_an_open_trades_pnl(tmp_path):
+    """Code review LOW: the cursor carries the row's immutable sort key, so a fresh 10 s build (open P&L moved, one
+    more close) continues after the last row given."""
+    _labs(tmp_path)
+    for i in range(3):
+        _arm(tmp_path, f"o{i}", "S1A", exit_after=None, sent=NOW - pd.Timedelta(minutes=5 + i))
+    led = _ledger(tmp_path, _catalog(tmp_path))
+    first = tl.query(led, _q(sort="best", limit=4))
+    moved = [r.model_copy(update={"pnl_now": 999.0, "r_now": 99.0}) if r.status == "open" else r for r in led.rows]
+    led2 = tl.Ledger(as_of=NOW, rows=moved, unreadable=[])
+    rest: list[str] = []
+    cursor = first.next_cursor
+    while cursor is not None:
+        page = tl.query(led2, _q(sort="best", limit=4, cursor=cursor))
+        rest += [r.trade_id for r in page.rows]
+        cursor = page.next_cursor
+    ids = [r.trade_id for r in first.rows] + rest
+    assert sorted(ids) == sorted(r.trade_id for r in tl.query(led2, _q(sort="best", limit=50)).rows)
+    assert len(ids) == len(set(ids))
+
+
 def test_results_hidden_copy_is_gone_from_the_web_and_telegram():
     """Backlog 139 (4): no screen or message says a result is hidden for an unread arm."""
     root = Path(__file__).parents[1]

@@ -93,7 +93,7 @@ export const RANK_STATUS_WORDS: Record<RankStatus, string> = {
   retired: "retired at its stop",
 };
 export const WINDOWS: RankingWindow[] = ["all", "30d", "7d"];
-export const WINDOW_WORDS: Record<RankingWindow, string> = { all: "Since each version began", "30d": "30 days", "7d": "7 days" };
+export const WINDOW_WORDS: Record<RankingWindow, string> = { all: "All", "30d": "30 days", "7d": "7 days" };
 export type BoardOrder = "ranked" | "progress";
 
 /** The Strategies tab's URL state: its order (Ranked by default; "By progress to read" is `order=progress`), the
@@ -273,7 +273,7 @@ export function groupOpen(positions: OpenPositionX[]): OpenGroup[] {
 export type Period = "today" | "7d" | "30d" | "all";
 export type Sort = "newest" | "best" | "worst";
 export const SORTS: Sort[] = ["newest", "best", "worst"];
-export const SORT_WORDS: Record<Sort, string> = { newest: "Newest", best: "Best result", worst: "Worst result" };
+export const SORT_WORDS: Record<Sort, string> = { newest: "Newest", best: "Best R", worst: "Worst R" };
 export type Filters = {
   period: Period;
   sort: Sort;

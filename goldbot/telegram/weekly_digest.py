@@ -72,18 +72,14 @@ def family_name(family: str) -> str:
     return family.replace("_", " ").strip().capitalize() or "A trial"
 
 
-def learning_line(state_dir: Path, engines: list[dict[str, Any]], lo: pd.Timestamp, hi: pd.Timestamp, *,
-                  shown: bool = True) -> str:
+def learning_line(state_dir: Path, engines: list[dict[str, Any]], lo: pd.Timestamp, hi: pd.Timestamp) -> str:
     """Spec 3.2: "Learning paid +£x demo this week (real money £0) · n usable labels", or, after a loss, "Learning cost
     £x demo (real money £0) · £y per usable label (n)". Exploration runs on demo hosts only (the RiskGate's E2), so
-    real money is £0 by construction. Per currency, never summed across. Not `shown` (a lab's week total or one of
-    its days was withheld, quant 2026-10-26): "—", since the sum would give the withheld figure by subtraction."""
+    real money is £0 by construction. Per currency, never summed across."""
     sums = lab_money(state_dir, engines, lo, hi)
     with labs.aux(state_dir) as conn:
         n = labs.labels_written(conn, [str(e.get("account")) for e in lab_engines(engines)], lo, hi) \
             if conn is not None else 0
-    if sums and not shown:
-        return f"Learning: — demo this week (real money £0) · {labs.plural(n, 'usable label')}"
     if not sums:
         return f"Learning: no lab trade closed this week · {labs.plural(n, 'usable label')}"
     if len(sums) > 1:
@@ -173,14 +169,12 @@ def build_weekly(state_dir: str | Path, now: pd.Timestamp, *, as_of: pd.Timestam
     if torn:
         out.append(Line(torn))
     try:
-        lab_lines, spans, aux_ok = labs_section(sd, engines, lo, hi, settings, weekday=True, by_day=days)
+        lab_lines, _, aux_ok = labs_section(sd, engines, lo, hi, settings, weekday=True, by_day=days)
     except Exception as exc:                # noqa: BLE001
-        lab_lines, spans, aux_ok = [Line(f"Labs: could not read ({type(exc).__name__})")], [], False
-    shown = all((s.totals_shown and all(s.day_shown(d) for d in days)) or not s.closed for s in spans) \
-        and len(spans) == len(lab_engines(engines))
+        lab_lines, aux_ok = [Line(f"Labs: could not read ({type(exc).__name__})")], False
     out += lab_lines
     if aux_ok and lab_engines(engines):
-        out.append(Line(_text(lambda: learning_line(sd, engines, lo, hi, shown=shown), "Learning"), 2))
+        out.append(Line(_text(lambda: learning_line(sd, engines, lo, hi), "Learning"), 2))
         out += arms_section(sd, engines, ARMS_WIDTH, lo, hi)
         out.append(Line(_text(lambda: learner_week(sd, lo, hi), "Learner"), 2))
     out += [Line(x, 2) for x in _section(lambda: research_lines(registry_path, settings, lo, hi), "Research")]

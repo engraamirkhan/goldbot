@@ -53,8 +53,6 @@ READ_AT = 300                       # prereg H-61: "each arm is read once, at it
 # prereg 2026-10-25 H-61 "Per-arm stop (permanent)": running net R in exit order reaching `r` within the first `n`
 # trades: scalp -30 R within 300, intraday -15 R within 100, swing -10 R within 40
 ARM_STOP: dict[str, tuple[float, int]] = {"scalp": (-30.0, 300), "intraday": (-15.0, 100), "swing": (-10.0, 40)}
-# quant 2026-10-26: a lab or style total (£ or R) needs closes from at least this many strategy arms in its window
-MIN_ARMS_FOR_TOTAL = 3
 BAND_SHARE = 0.5                    # "within 50% of its stop": the running R at or past half the stop's R
 _TF_STYLE = {"1m": "scalp", "5m": "scalp", "15m": "intraday", "30m": "intraday", "1h": "intraday", "4h": "swing",
              "1d": "swing"}
@@ -180,20 +178,10 @@ class LabSpan(Record):
     no_pnl: int = 0                     # closes without the broker's net figure (shown apart)
     gross_no_pnl: float | None = None   # their gross from prices, when every one of them has prices and a rate
     costs: Costs = Field(default_factory=Costs)
-    by_day: dict[str, float] = Field(default_factory=dict)       # opportunity day -> net R of its closes (weekly)
-    arms_contributing: int = 0          # distinct strategy (non-control) arms with a close in the span
-    by_day_arms: dict[str, int] = Field(default_factory=dict)    # opportunity day -> the same count for that day
-
-    @property
-    def totals_shown(self) -> bool:
-        """Quant 2026-10-26: a lab or style total (£, R, the gross of closes without a net figure) is printed only
-        when at least MIN_ARMS_FOR_TOTAL strategy arms contributed a close; below that it is an arm's own figure by
-        subtraction."""
-        return self.arms_contributing >= MIN_ARMS_FOR_TOTAL
-
-    def day_shown(self, day: str) -> bool:
-        """A day of the span may be printed (no close, or enough contributing arms)."""
-        return day not in self.by_day_arms or self.by_day_arms[day] >= MIN_ARMS_FOR_TOTAL
+    # opportunity day -> net R of its closes (weekly); every total shows whatever the number of arms behind it (ADR
+    # 0053 retired the quant 2026-10-26 3-arm rule: the ranking shows each family's figures)
+    by_day: dict[str, float] = Field(default_factory=dict)
+    closed_days: list[str] = Field(default_factory=list)          # opportunity days with a close (weekly: "none")
 
 
 def refusal_word(code: str | None) -> str:
@@ -247,16 +235,13 @@ def lab_span(conn: sqlite3.Connection, account: str, lo: pd.Timestamp, hi: pd.Ti
     net = [t for t in closed if t.pnl is not None]
     apart = [t for t in closed if t.pnl is None]
     grosses = [_gross(t, oz_per_lot) for t in apart]
-    controls = {str(x) for (x,) in conn.execute(
-        "SELECT DISTINCT arm_id FROM exploration_obs WHERE account_id = ? AND is_control = 1", (account,))}
     by_day: dict[str, float] = {}
-    day_arms: dict[str, set[str]] = {}
+    days: set[str] = set()
     for t in closed:
         if t.exit_utc is None:
             continue
         d = report_day(t.exit_utc)
-        if t.arm_id not in controls:
-            day_arms.setdefault(d, set()).add(t.arm_id)
+        days.add(d)
         if trade_r(t) is not None:
             by_day[d] = by_day.get(d, 0.0) + (trade_r(t) or 0.0)
     return LabSpan(
@@ -267,9 +252,7 @@ def lab_span(conn: sqlite3.Connection, account: str, lo: pd.Timestamp, hi: pd.Ti
         no_pnl=len(apart),
         gross_no_pnl=sum(g for g in grosses if g is not None) if apart and all(g is not None for g in grosses)
         else None,
-        costs=_costs(closed, oz_per_lot), by_day=by_day,
-        arms_contributing=len({t.arm_id for t in closed if t.arm_id not in controls}),
-        by_day_arms={d: len(v) for d, v in day_arms.items()})
+        costs=_costs(closed, oz_per_lot), by_day=by_day, closed_days=sorted(days))
 
 
 def paused_since(conn: sqlite3.Connection, account: str) -> pd.Timestamp | None:
@@ -521,7 +504,7 @@ def learner_runs(conn: sqlite3.Connection, lo: pd.Timestamp, hi: pd.Timestamp) -
                        latest=pd.Timestamp(runs[-1], unit="ns", tz="UTC") if runs else None)
 
 
-__all__ = ["ARM_STOP", "BANNED_WORDS", "CONTRACT_OZ", "MIN_ARMS_FOR_TOTAL", "LABS", "MINUS", "OTHER", "READ_AT", "ROLE", "ArmStatus", "Costs", "LabSpan",
+__all__ = ["ARM_STOP", "BANNED_WORDS", "CONTRACT_OZ", "LABS", "MINUS", "OTHER", "READ_AT", "ROLE", "ArmStatus", "Costs", "LabSpan",
            "LearnerRuns", "admissible", "arm_statuses", "arms_lines", "aux", "guard", "lab_span", "labels_written",
            "learner_runs", "money", "paused_since", "pct", "plural", "r_text", "refusal_word", "role", "signed",
            "trade_r", "trades", "whole_money"]
