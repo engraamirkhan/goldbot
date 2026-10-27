@@ -16,8 +16,18 @@ transient peak of one close and the resident growth after the closes, per host.
 Hosts run in separate engine processes; each host's figure is its own single-threaded seconds per close. Scale to the
 brain with `--cpu-factor` (this machine's single-thread speed over the brain's) and compare with the 10 s budget.
 
+`--pass 1m` (volume plan 2026-10-26 section 5: "1m-pass compute <= 2 s p99") times the sub-15m path instead, as
+`exploration._minutes` runs it once a minute: the last rows of the 1m window (LOOKBACK bars of the slowest due
+timeframe, at least LOOKBACK_1M minutes), de-duplicated and sorted, `exploration._bars` per due timeframe (1m every
+minute, 5m on the fives) and `arm_rules.screened` for each 1m/5m arm of the host. `--minute-arms-from HOST` gives a
+host another host's sub-15m arm set (the vantage S-twins, an icm-demo 5m sleeve) and `--replicate K` K copies of it
+(the 10-15 new volume arms per host of plan section 2.3). At a quarter hour the engine runs the 15m step and the
+minute pass in the same pass; `--pass both` reports their sum per host (`quarter_pass`): how long that pass holds the
+engine's next exit check. Not modelled: the unbuilt ticks of the current minute (`ticks_to_1m`, a few hundred rows).
+
 Usage: uv run scripts/profile_arm_rules.py --bars ~/tmp/ts/raw [--closes 96] [--window engine|full|both]
        [--hosts icm-demo,vantage-demo] [--cpu-factor 3.0] [--json out.json]
+       [--pass 15m|1m|both] [--minutes 480] [--minute-arms-from icm-probe] [--replicate 2]
 """
 from __future__ import annotations
 
@@ -43,11 +53,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from goldbot.config import tf_seconds  # noqa: E402
 from goldbot.data.resample import resample_bars  # noqa: E402
+from goldbot.data.timeutil import epoch_ns  # noqa: E402
 from goldbot.engine import exploration as X  # noqa: E402
 from goldbot.research import arm_rules as R  # noqa: E402
 from goldbot.research.arms import Arm, load_arms  # noqa: E402
 
 BUDGET_S = 10.0                      # per host per 15m close (plan 2026-10-26 section 5)
+MINUTE_BUDGET_S = 2.0                # per host per 1m pass, p99 (volume plan 2026-10-26 section 5)
 BARS_IN_MEMORY = 60_000              # engine.runner EngineConfig.max_bars_in_memory (~40 trading days of 1m)
 ARMS_FILE = ROOT / "config" / "exploration_arms.yaml"
 ACCOUNTS_FILE = ROOT / "config" / "accounts.yaml"
@@ -94,14 +106,15 @@ class HostResult:
     per_arm_s: dict[str, list[float]] = field(default_factory=dict)
     errors: dict[str, str] = field(default_factory=dict)
 
-    def summary(self, cpu_factor: float) -> dict[str, Any]:
+    def summary(self, cpu_factor: float, budget_s: float = BUDGET_S, at: str = "max") -> dict[str, Any]:
+        """`at` is the statistic held to the budget: "max" (the 15m close) or "p99" (the 1m pass)."""
         pc = np.asarray(self.per_close_s or [0.0])
-        worst = float(pc.max()) * cpu_factor
+        worst = float(pc.max() if at == "max" else np.percentile(pc, 99)) * cpu_factor
         return {"host": self.host, "arms": self.arms, "wave1_arms": self.wave1, "closes": len(self.per_close_s),
                 "median_s": round(float(np.median(pc)), 3), "p95_s": round(float(np.percentile(pc, 95)), 3),
-                "max_s": round(float(pc.max()), 3),
-                "worst_close": str(self.close_ts[int(pc.argmax())]) if self.close_ts else None, "max_s_brain": round(worst, 3), "budget_s": BUDGET_S,
-                "within_budget": worst <= BUDGET_S,
+                "p99_s": round(float(np.percentile(pc, 99)), 3), "max_s": round(float(pc.max()), 3),
+                "worst_close": str(self.close_ts[int(pc.argmax())]) if self.close_ts else None,
+                f"{at}_s_brain": round(worst, 3), "budget_s": budget_s, "within_budget": worst <= budget_s,
                 "slowest_arms_max_s": dict(sorted(((k, round(max(v), 3)) for k, v in self.per_arm_s.items()),
                                                   key=lambda kv: -kv[1])[:6]),
                 "errors": self.errors}
@@ -161,6 +174,78 @@ def host_cases(host: str, *, arms_file: Path = ARMS_FILE, accounts_file: Path = 
                   params=CONTROL_1H)
         out.append(Case(ctl.id, "1h", frozen_rule(ctl), wave1=True))
     return out
+
+
+def screened_rule(arm: Arm) -> Callable[[R.RuleContext], pd.DataFrame]:
+    def run(ctx: R.RuleContext) -> pd.DataFrame:
+        return R.screened(arm, ctx)[0]
+    return run
+
+
+def minute_cases(host: str, *, arms_file: Path = ARMS_FILE, accounts_file: Path = ACCOUNTS_FILE,
+                 replicate: int = 1) -> list[Case]:
+    """The host's 1m/5m arms (`exploration._minutes`), run through `arm_rules.screened` as `_signal` does; with
+    `replicate` K, K labelled copies of each (a projection of more volume arms of the same cost)."""
+    spec = {a.id: a for a in load_arms(arms_file)}
+    accounts = yaml.safe_load(accounts_file.read_text()) or {}
+    out: list[Case] = []
+    for aid in host_arm_ids(accounts, host):
+        arm = spec.get(aid)
+        if arm is None or arm.status != "run" or arm.timeframe not in X.SUB_15M or arm.rule not in R.RULE_FUNCS:
+            continue
+        out.extend(Case(aid if k == 0 else f"{aid}#{k}", arm.timeframe, screened_rule(arm)) for k in range(replicate))
+    return out
+
+
+def sample_minutes(b1: pd.DataFrame, n: int) -> list[pd.Timestamp]:
+    """The last `n` minutes of the window with a 1m bar closing exactly then (what `_minutes` reads as `through`)."""
+    vis = pd.DatetimeIndex(b1["visible_at"]).as_unit("ns")
+    return [pd.Timestamp(t) for t in vis[vis.second == 0][-n:]]
+
+
+def profile_minutes(b1: pd.DataFrame, cases: list[Case], minutes: list[pd.Timestamp], host: str) -> HostResult:
+    """One host's minute pass, per minute, as `exploration._minutes`: the tail rows (bars, never clock time), the
+    de-duplicated sorted frame up to `through`, `_bars` per due timeframe and every due arm's screened rule. Each
+    minute's position in the window is found outside the timer (the engine's `bars_1m.tail` is a view)."""
+    res = HostResult(host=host, arms=len(cases), wave1=0)
+    zero = np.zeros(0, dtype=np.int64)
+    vis = epoch_ns(pd.DatetimeIndex(b1["visible_at"]))
+    tf_all = sorted({c.tf for c in cases}, key=tf_seconds)
+    for through in minutes:
+        end = int(np.searchsorted(vis, int(epoch_ns(pd.DatetimeIndex([through]))[0]), side="right"))
+        t0 = time.perf_counter()
+        tfs = [tf for tf in tf_all if int(through.timestamp()) % tf_seconds(tf) == 0]
+        if tfs:
+            rows = max(tf_seconds(tfs[-1]) * (X.LOOKBACK + 1) // 60, X.LOOKBACK_1M)
+            frame = b1.iloc[max(0, end - rows):end]
+            frame = frame.drop_duplicates("ts_utc", keep="last").sort_values("ts_utc").reset_index(drop=True)
+            frame = frame[frame["visible_at"] <= through].reset_index(drop=True)
+            for tf in tfs:
+                bars = X._bars(frame, tf, through)
+                if bars is None:
+                    continue
+                ctx = R.RuleContext(bars=bars, b1=frame, blackout_lo=zero, blackout_hi=zero)
+                for c in (c for c in cases if c.tf == tf):
+                    a0 = time.perf_counter()
+                    try:
+                        c.run(ctx)
+                    except Exception as exc:          # the engine journals and goes on; so does the profile
+                        res.errors[c.label] = f"{type(exc).__name__}: {exc}"[:200]
+                    res.per_arm_s.setdefault(c.label, []).append(time.perf_counter() - a0)
+        res.per_close_s.append(time.perf_counter() - t0)
+        res.close_ts.append(through)
+    return res
+
+
+def quarter_pass(fifteen: HostResult, minute: HostResult, cpu_factor: float) -> dict[str, Any]:
+    """At a quarter hour the engine pass runs the 15m step and the minute pass back to back: their sum per close."""
+    m = dict(zip(minute.close_ts, minute.per_close_s))
+    both = [s + m[t] for t, s in zip(fifteen.close_ts, fifteen.per_close_s) if t in m]
+    if not both:
+        return {"host": fifteen.host, "quarter_closes": 0}
+    a = np.asarray(both)
+    return {"host": fifteen.host, "quarter_closes": len(both), "median_s": round(float(np.median(a)), 3),
+            "max_s": round(float(a.max()), 3), "max_s_brain": round(float(a.max()) * cpu_factor, 3)}
 
 
 def peak_rss_mb() -> float:
@@ -264,6 +349,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cpu-factor", type=float, default=1.0, help="brain seconds per local second (single thread)")
     ap.add_argument("--no-wave1", action="store_true", help="only the arms in the config today")
     ap.add_argument("--json", type=Path)
+    ap.add_argument("--pass", dest="passes", choices=("15m", "1m", "both"), default="15m")
+    ap.add_argument("--minutes", type=int, default=480, help="last N minutes for the 1m pass (480 = 8 h)")
+    ap.add_argument("--minute-arms-from", default=None, help="the host whose 1m/5m arms to run (default: each host)")
+    ap.add_argument("--replicate", type=int, default=1, help="copies of each 1m/5m arm (a projected arm count)")
     a = ap.parse_args(argv)
 
     b1 = load_window(a.bars.expanduser(), a.bars_in_memory)
@@ -273,21 +362,41 @@ def main(argv: list[str] | None = None) -> int:
                            "closes": len(closes), "cpu_factor": a.cpu_factor, "rss_mb_after_load": round(rss_mb(), 1),
                            "runs": []}
     modes = ("engine", "full") if a.window == "both" else (a.window,)
+    minutes = sample_minutes(b1, a.minutes) if a.passes != "15m" else []
     for host in a.hosts.split(","):
-        cases = host_cases(host, wave1=not a.no_wave1)
-        warm = profile(b1, cases, closes[-4:], full=False, host=host)   # imports, caches: the engine is long-running
-        for mode in modes:
-            r = profile(b1, cases, closes, full=(mode == "full"), host=host)
-            s = {"mode": mode, **r.summary(a.cpu_factor), "cold_first_close_s": round(warm.per_close_s[0], 3)}
+        engine_15m: HostResult | None = None
+        if a.passes != "1m":
+            cases = host_cases(host, wave1=not a.no_wave1)
+            warm = profile(b1, cases, closes[-4:], full=False, host=host)   # imports, caches: long-running engine
+            for mode in modes:
+                r = profile(b1, cases, closes, full=(mode == "full"), host=host)
+                engine_15m = r if mode == "engine" else engine_15m
+                s = {"mode": mode, **r.summary(a.cpu_factor), "cold_first_close_s": round(warm.per_close_s[0], 3)}
+                out["runs"].append(s)
+                print(json.dumps(s), flush=True)
+            hours = [t for t in closes if t.minute == 0][-3:]
+            mem = {"host": host, **memory_pass(b1, cases, hours)}
+            out.setdefault("memory", []).append(mem)
+            print(json.dumps(mem), flush=True)
+        if a.passes != "15m":
+            src = a.minute_arms_from or host
+            mcases = minute_cases(src, replicate=a.replicate)
+            if not mcases:
+                print(json.dumps({"mode": "1m", "host": host, "arms": 0}), flush=True)
+                continue
+            profile_minutes(b1, mcases, minutes[-10:], host)                # warm: imports, caches
+            mr = profile_minutes(b1, mcases, minutes, host)
+            s = {"mode": "1m", "arms_from": src, "replicate": a.replicate,
+                 **mr.summary(a.cpu_factor, MINUTE_BUDGET_S, at="p99")}
             out["runs"].append(s)
             print(json.dumps(s), flush=True)
-        hours = [t for t in closes if t.minute == 0][-3:]
-        mem = {"host": host, **memory_pass(b1, cases, hours)}
-        out.setdefault("memory", []).append(mem)
-        print(json.dumps(mem), flush=True)
+            if engine_15m is not None:
+                q = quarter_pass(engine_15m, mr, a.cpu_factor)
+                out.setdefault("quarter_pass", []).append(q)
+                print(json.dumps(q), flush=True)
     out["peak_rss_mb"] = round(peak_rss_mb(), 1)
     out["rss_mb_end"] = round(rss_mb(), 1)
-    out["go"] = all(r["within_budget"] for r in out["runs"] if r["mode"] == "engine")
+    out["go"] = all(r["within_budget"] for r in out["runs"] if r["mode"] in ("engine", "1m"))
     print(json.dumps({k: v for k, v in out.items() if k != "runs"}))
     if a.json:
         a.json.write_text(json.dumps(out, indent=2, default=str))
