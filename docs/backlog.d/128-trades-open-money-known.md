@@ -1,9 +1,9 @@
 ---
 number: 128
-rank: 48
+rank: 8.1
 title: 'Open trades show money: publish the conversion, risk and P&L in £ on every row'
 stage: Engine · API · UI
 size: S
-status: 'proposed · accountable: implementer · design: ui-ux-designer · reviews: code-reviewer'
+status: 'ready · accountable: implementer · design: ui-ux-designer · reviews: code-reviewer, trading-safety-reviewer · due 2026-10-29'
 ---
-- **128. Open trades show money: publish the conversion, risk and P&L in £ on every row.** Value: every open row on the dashboard and `goldbot run positions` shows 'money not known' / 'risk ? GBP pnl ? GBP' because the engine never writes `usd_to_account` to engine_<account>.json and every account is GBP (docs/design/trades-ux-2026-10-27.md A1). Fields: engine payload `usd_to_account` (account currency per USD, from `_open_fx`) and `usd_to_account_utc`; `OpenPosition` gains `risk_amount` (loss at the stop at entry, account currency), `held_s`, `hold_limit_s`, `account_label`, `kind`. Acceptance: a test with a fresh GBP engine payload shows floating P&L and open risk on every row (fails before, passes after); totals per account are numbers, not None; a rate older than 120 s is shown stale, never as current; trading-safety-reviewer confirms the published rate is reporting-only.
+- **128. Open trades show money: publish the conversion, risk and P&L in £ on every row.** Value: every open row on the dashboard and `goldbot run positions` shows 'money not known' / 'risk ? GBP pnl ? GBP' because the engine never writes `usd_to_account` to engine_<account>.json and every account is GBP (docs/design/trades-ux-2026-10-27.md A1). Fields: engine payload `usd_to_account` (account currency per USD, from `_open_fx`) and `usd_to_account_utc`; `OpenPosition` gains `risk_amount` (loss at the stop at entry, account currency), `held_s`, `hold_limit_s`, `account_label`, `kind`. Acceptance: a test with a fresh GBP engine payload shows floating P&L and open risk on every row (fails before, passes after); totals per account are numbers, not None; a rate older than 120 s is shown stale, never as current; trading-safety-reviewer confirms the published rate is reporting-only. Lifecycle: run an edge (monitoring money at risk). Depends: none. TRACEABILITY: none yet; the implementer adds a U row with the build (`new-row`). Also testable: `goldbot run positions` on the same fixture prints no '?'; the dashboard Now row shows risk £ and P&L £ in a vitest render; P&L shown is after the costs already paid (spread at entry, commission), labelled "after costs".
