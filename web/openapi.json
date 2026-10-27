@@ -1189,6 +1189,13 @@
       "title": "Family Label",
       "type": "string"
      },
+     "pooled": {
+      "items": {
+       "$ref": "#/components/schemas/ReadProgress"
+      },
+      "title": "Pooled",
+      "type": "array"
+     },
      "state": {
       "enum": [
        "proven",
@@ -1219,13 +1226,14 @@
      "accounts",
      "state",
      "anneal_state",
-     "variants"
+     "variants",
+     "pooled"
     ],
     "title": "BoardFamily",
     "type": "object"
    },
    "BoardVariant": {
-    "description": "One arm. Before its read: counts, progress, ETA and status only (no money, R, hit rate or rank).",
+    "description": "One arm. Read alone (`pooled` false): its unit's progress is its own. Read pooled: its own count only; the\nfamily's `pooled` progress carries n of N, ETA and the read (`eta_read_date` and `read` are None here).",
     "properties": {
      "account_labels": {
       "items": {
@@ -1288,12 +1296,23 @@
       "type": "integer"
      },
      "n_read_at": {
-      "title": "N Read At",
-      "type": "integer"
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "N Read At"
      },
      "open_now": {
       "title": "Open Now",
       "type": "integer"
+     },
+     "pooled": {
+      "title": "Pooled",
+      "type": "boolean"
      },
      "read": {
       "anyOf": [
@@ -1304,6 +1323,10 @@
         "type": "null"
        }
       ]
+     },
+     "read_unit": {
+      "title": "Read Unit",
+      "type": "string"
      },
      "status": {
       "enum": [
@@ -1331,6 +1354,8 @@
      "account_labels",
      "is_control",
      "control_arm_id",
+     "read_unit",
+     "pooled",
      "status",
      "anneal_state",
      "n_counted",
@@ -6230,6 +6255,91 @@
      "since_read"
     ],
     "title": "ReadFigures",
+    "type": "object"
+   },
+   "ReadProgress": {
+    "description": "One read unit's progress (an arm, or a family read pooled: W1, W2, H-80, H-81; config/arm_reads.yaml). Before\nits read: counts, progress, ETA and status only (no money, R, hit rate or rank).",
+    "properties": {
+     "anneal_state": {
+      "enum": [
+       "E",
+       "C1",
+       "P",
+       "R"
+      ],
+      "title": "Anneal State",
+      "type": "string"
+     },
+     "arm_ids": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Arm Ids",
+      "type": "array"
+     },
+     "eta_read_date": {
+      "anyOf": [
+       {
+        "format": "date",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Eta Read Date"
+     },
+     "n_counted": {
+      "title": "N Counted",
+      "type": "integer"
+     },
+     "n_read_at": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "N Read At"
+     },
+     "read": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/ReadFigures"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "status": {
+      "enum": [
+       "warming",
+       "running",
+       "read",
+       "retired"
+      ],
+      "title": "Status",
+      "type": "string"
+     },
+     "unit_id": {
+      "title": "Unit Id",
+      "type": "string"
+     }
+    },
+    "required": [
+     "unit_id",
+     "arm_ids",
+     "n_counted",
+     "n_read_at",
+     "status",
+     "anneal_state",
+     "eta_read_date",
+     "read"
+    ],
+    "title": "ReadProgress",
     "type": "object"
    },
    "RearmRequest": {

@@ -1594,28 +1594,44 @@ class ReadFigures(BaseModel):
     hit_rate: float | None
     net_pnl: float | None                  # None when any trade's net is unknown or currencies differ
     currency: str | None
-    vs_control_r: float | None              # only when its control is read too (a control is unread until listed)
+    vs_control_r: float | None              # the evaluator's recorded comparison (as its prereg defines it), never computed
     vs_control_ci90: tuple[float, float] | None
     since_read: SinceRead | None            # counted trades closed after the read, labelled "since read"
 
 
+class ReadProgress(BaseModel):
+    """One read unit's progress (an arm, or a family read pooled: W1, W2, H-80, H-81; config/arm_reads.yaml). Before
+    its read: counts, progress, ETA and status only (no money, R, hit rate or rank)."""
+    unit_id: str                            # the arm id, or the pooled unit's id ("H-81:Z6")
+    arm_ids: list[str]
+    n_counted: int                          # over its counted arms (H-80: BXR's fills; S0R: its stop exits)
+    n_read_at: int | None                   # None: no read registered (a control)
+    status: ArmStatusWord                   # warming: no counted trade yet; retired: at its stop before the read
+    anneal_state: AnnealState
+    eta_read_date: date | None              # at the 7-day pace of counted trades; None read, retired, no read, no pace
+    read: ReadFigures | None                # only after the unit's read (config/arm_reads.yaml `reads`)
+
+
 class BoardVariant(BaseModel):
-    """One arm. Before its read: counts, progress, ETA and status only (no money, R, hit rate or rank)."""
+    """One arm. Read alone (`pooled` false): its unit's progress is its own. Read pooled: its own count only; the
+    family's `pooled` progress carries n of N, ETA and the read (`eta_read_date` and `read` are None here)."""
     arm_id: str
     timeframe: str
     variant: str                            # "15m", or "15m · strict" when two arms share a family and timeframe
     account_labels: list[str]
     is_control: bool
     control_arm_id: str | None              # the control it is read against; None for a control
-    status: ArmStatusWord                   # warming: no counted trade yet; retired: at its H-61 stop before the read
-    anneal_state: AnnealState
-    n_counted: int
-    n_read_at: int
+    read_unit: str
+    pooled: bool
+    status: ArmStatusWord                   # its unit's
+    anneal_state: AnnealState               # its unit's
+    n_counted: int                          # its own count toward its unit
+    n_read_at: int | None                   # its unit's read size; None: no read registered (a control)
     fills_today: int
     fills_7d: int
     open_now: int
-    eta_read_date: date | None              # at the 7-day pace of counted trades; None read, retired, control, no pace
-    read: ReadFigures | None                # only after the arm's read (config/arm_reads.yaml)
+    eta_read_date: date | None
+    read: ReadFigures | None
 
 
 class BoardFamily(BaseModel):
@@ -1626,6 +1642,7 @@ class BoardFamily(BaseModel):
     state: BoardState
     anneal_state: AnnealState               # the furthest of its strategy arms (P, C1, E, R)
     variants: list[BoardVariant]
+    pooled: list[ReadProgress]              # the family's pooled read units (empty when its arms are read alone)
 
 
 class LabTotal(BaseModel):

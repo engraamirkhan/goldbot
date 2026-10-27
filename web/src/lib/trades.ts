@@ -68,6 +68,7 @@ export type StrategyBoard = S["StrategyBoardView"];
 export type BoardFamily = S["BoardFamily"];
 export type BoardVariant = S["BoardVariant"];
 export type ReadFigures = S["ReadFigures"];
+export type ReadProgress = S["ReadProgress"];
 export type EngineStrategy = S["EngineStrategy"];
 export type LabTotal = S["LabTotal"];
 export type AnnealState = BoardVariant["anneal_state"];

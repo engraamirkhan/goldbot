@@ -1,16 +1,160 @@
-# Exploration arms whose single pre-registered read is recorded (prereg H-61: "each arm is read once, at its 300th
-# admissible trade"; ADR 0050). Until an arm is listed here every view treats it as UNREAD: no aggregate of it (sum,
-# mean, hit rate, rank, share, comparison with its control) leaves the server (goldbot/api/trades_ledger.py,
-# goldbot/api/strategy_board.py). The evaluator adds the row with the read's verdict, in the same commit as the
-# verdict; a row is never removed or edited.
-# Controls are the null their arms are read against: they stay unread until listed (the board shows an arm's
-# difference against its control only once both are listed).
+# Exploration read units whose single pre-registered read is recorded (prereg H-61: "each arm is read once, at its
+# 300th admissible trade"; families read pooled below in `read_units`; ADR 0050, 0051). Until a unit is listed here
+# every view treats its arms as UNREAD: no aggregate of them (sum, mean, hit rate, rank, share, comparison with a
+# control) leaves the server (goldbot/api/trades_ledger.py, goldbot/api/strategy_board.py). The evaluator adds the row
+# with the read's verdict, in the same commit as the verdict; a row is never removed or edited. The key is the arm id,
+# or the unit id of a pooled family (e.g. `H-81:Z6`). Controls have no read of their own (listed below `read_at`).
 # `state` is the annealing state the read set (volume-500 plan 4.1): C1 candidate, P proven, R retired; omitted = R
-# (H-61: "not graduated at 300 -> retired"). The board freezes the read's figures at the arm's first n counted trades
-# closed by `read_utc`.
-#   <arm id>: {read_utc: "YYYY-MM-DDTHH:MM:SSZ", verdict: "<the recorded verdict, plain words>", state: C1}
+# (H-61: "not graduated at 300 -> retired"). `vs_control_r` / `vs_control_ci90` are the evaluator's RECORDED
+# comparison as the prereg defines it (H-81 section 4: day-paired family minus control); the board never computes
+# one (quant 2026-10-27). The board freezes the read's figures at the unit's first n counted trades closed by
+# `read_utc`.
+#   <unit>: {read_utc: "YYYY-MM-DDTHH:MM:SSZ", verdict: "<plain words>", state: C1, vs_control_r: 0.12, vs_control_ci90: [0.01, 0.23]}
 reads: {}
-# Arms whose pre-registration reads them at another n than H-61's 300 (the strategy board's "n of N"; the evaluator
-# adds the row with the prereg section that sets it, before the arm's first fill). A size below 1 reads no arm.
-#   <arm id>: <n>    # <prereg file>#<section>
-read_at: {}
+# Read size n per arm as pre-registered (evaluator, 2026-10-27, from the frozen texts; every arm of
+# config/exploration_arms.yaml is listed, 300 included). A size below 1 reads no arm. Comment = read source; stop rule.
+# Sources:
+#   HV   = prereg-2026-10-25-high-volume.md "Graduation and promotion": one read at the 300th admissible trade, on
+#          >= 20 session days; not graduated -> retired.
+#   STOP = HV "H-61 Per-arm stop": scalp -30 R within 300, intraday -15 R within 100, swing -10 R within 40 (amendment
+#          3: graduation-eligible arms only). VOID = HV "retired-family neighbours": read void unless the evaluator
+#          records the re-entry condition before the read. TWIN = HV amendment 2(e): own read on Vantage fills.
+#   W1   = arms-expansion-2026-10-26.md 2.1 (6): one read at the 300th admissible FAMILY fill; per-family stop -30 R
+#          within 300 fills. No futility rule registered.
+#   W2   = arms-2026-10-25.md 8.0: FAMILY read at 300; stop -30 R within 300 fills or futility at 300 (one-sided 95%
+#          UB of mean net R < +0.03 R); else inconclusive, no outcome read before 1,000.
+#   Z    = prereg-2026-10-27-scalp-volume.md 4: W2's rule, FAMILY pooled across strata and brokers, on >= 20 session
+#          days; plus per-stratum cost stop (UB cost/R > 0.10 halve, > 0.20 suspend).
+# FAMILY = the n is the family's pooled count, not this arm's: the board's per-arm n understates progress.
+# No read registered (controls never read for edge, never graduate; no H-61 stop, HV amendment 3 / Z 4 / 8.9):
+#   S0, I0, W0, VI0, VW0, C1H, VC1H, F2C, C30C, XC15, ZCD, ZCV, VS0.
+#   F1C stops with F1A, G1C with G1A (prereg-2026-10-26-time-structure.md 2.2, 3.2); neither has a read of its own.
+read_at:
+  # arms-2026-10-25.md 1-3 (H-61 arms), icm
+  S1A: 300      # HV; STOP scalp
+  S1B: 300      # HV; STOP scalp
+  S2A: 300      # HV; STOP scalp
+  S2B: 300      # HV; STOP scalp
+  S3A: 300      # HV; STOP scalp; VOID (R-14)
+  S3B: 300      # HV; STOP scalp; VOID (R-14)
+  S4: 300       # HV; STOP scalp; VOID (R-15)
+  S5A: 300      # HV; STOP scalp; arms 4: suspended if S0R reads real
+  S5B: 300      # HV; STOP scalp; arms 4: suspended if S0R reads real
+  S6: 300       # HV; cannot graduate (H-62 0); VOID (R-07); blocked
+  S0R: 100      # arms-2026-10-25.md 4: cost arm, n = STOP EXITS (not trades); inconclusive -> once more at 200, last
+  I1: 300       # HV; STOP intraday; VOID (R-06/R-10); blocked
+  I2A: 300      # HV; STOP intraday; VOID (R-15)
+  I2B: 300      # HV; STOP intraday; VOID (R-15)
+  MB15: 300     # HV; STOP intraday
+  MB30: 300     # HV; STOP intraday
+  MB1H: 300     # HV; STOP intraday
+  MSA15: 300    # HV; STOP intraday
+  I3: 300       # HV; cannot graduate (H-62 0); VOID (R-07); blocked
+  W1A: 300      # HV; STOP swing; VOID (R-06/R-10)
+  W1B: 300      # HV; STOP swing; VOID (R-06/R-10)
+  W2: 300       # HV; STOP swing; VOID (R-15)
+  W3: 300       # HV; STOP swing; rule not yet frozen (blocked, arms 3 F5)
+  # Vantage twins (HV amendment 2)
+  VI2A: 300     # HV, TWIN; STOP intraday; VOID (R-15)
+  VI2B: 300     # HV, TWIN; STOP intraday; VOID (R-15)
+  VMB15: 300    # HV, TWIN; STOP intraday
+  VMB30: 300    # HV, TWIN; STOP intraday
+  VMB1H: 300    # HV, TWIN; STOP intraday
+  VMS15: 300    # HV, TWIN; STOP intraday
+  VW1A: 300     # HV, TWIN; STOP swing; VOID (R-06/R-10)
+  VW1B: 300     # HV, TWIN; STOP swing; VOID (R-06/R-10)
+  VW2: 300      # HV, TWIN; STOP swing; VOID (R-15)
+  # prereg-2026-10-26-time-structure.md
+  F1A: 300      # 2.2: HV read + F1A-F1C paired 95% CI > 0; STOP scalp; futility at 300 and 1,000 (UB < +0.03 R)
+  G1A: 300      # 3.2: HV read; STOP intraday; futility at 300 (UB < +0.03 R)
+  WFRI: 170     # 4: n = Fridays, the only read; safety stop at 26 (mean <= -20 bp/Friday or cum net <= -10 R)
+  # arms-expansion-2026-10-26.md wave 1 (W1)
+  XBB15: 300    # W1
+  XTV1: 300     # W1; blocked (smc replica not fed)
+  XEQ15: 300    # W1
+  XSO15: 300    # W1
+  XIMNY: 300    # W1 FAMILY intraday_momentum (XIMNY+XIMLN)
+  XIMLN: 300    # W1 FAMILY intraday_momentum (XIMNY+XIMLN)
+  XAD1H: 300    # W1
+  XMR15: 300    # W1 FAMILY mean_reversion (XMR15+XMR1H)
+  XMR1H: 300    # W1 FAMILY mean_reversion (XMR15+XMR1H)
+  VXRIP1H: 300  # W1
+  VXRT1H: 300   # W1
+  VXFK1H: 300   # W1
+  VXTL1H: 300   # W1
+  VXTV2: 300    # W1; blocked (smc replica not fed)
+  VXBO1H: 300   # W1 FAMILY breakout (VXBO1H+VXBO15)
+  VXBO15: 300   # W1 FAMILY breakout (VXBO1H+VXBO15)
+  VXTR1H: 300   # W1
+  # arms-2026-10-25.md 8 (W2)
+  F2A: 300      # W2 (8.13)
+  PDC1: 300     # W2 FAMILY KLR (PDC1+PDC4)
+  PDC4: 300     # W2 FAMILY KLR (PDC1+PDC4); 8.15 read under the cut
+  OBR15: 300    # W2
+  KSQ1: 300     # W2 FAMILY KSQ (KSQ1+KSQ4)
+  KSQ4: 300     # W2 FAMILY KSQ (KSQ1+KSQ4); inactive until H4
+  DON4: 300     # W2 FAMILY DON (DON4+DOND)
+  DOND: 300     # W2 FAMILY DON (DON4+DOND); inactive until H4; 8.15 read under the cut
+  C30A: 300     # W2 (8.4: ~15 a year, "cannot reach the 300-fill read for many years")
+  KA15: 300     # W2, strata T/S/C pooled in the arm (8.13)
+  # prereg-exits-adaptive-2026-10-26.md 5 R1 (H-80): pooled BXR fills, report at 300 and every 300 after, labelled
+  # underpowered; no adoption before 3,000 pooled fills. Kill: "the H-61 per-arm cumulative-R stop ... unchanged".
+  # BXT/BXF are virtual exits on BXR's fills (their n is BXR's). No futility rule registered.
+  BXR15: 300    # H-80 R1 FAMILY BXR*; STOP
+  BXR30: 300    # H-80 R1 FAMILY BXR*; STOP
+  BXR1H: 300    # H-80 R1 FAMILY BXR*; STOP
+  BXR4H: 300    # H-80 R1 FAMILY BXR*; STOP
+  BXT15: 300    # H-80 R1 FAMILY (BXR fills)
+  BXT30: 300    # H-80 R1 FAMILY (BXR fills)
+  BXT1H: 300    # H-80 R1 FAMILY (BXR fills)
+  BXT4H: 300    # H-80 R1 FAMILY (BXR fills)
+  BXF15: 300    # H-80 R1 FAMILY (BXR fills)
+  BXF30: 300    # H-80 R1 FAMILY (BXR fills)
+  BXF1H: 300    # H-80 R1 FAMILY (BXR fills)
+  BXF4H: 300    # H-80 R1 FAMILY (BXR fills)
+  # prereg-2026-10-27-scalp-volume.md (H-81, Z)
+  Z1P: 300      # Z family Z1; $3 stratum: suspended if S0R reads real
+  Z2P: 300      # Z family Z2; $3 stratum: suspended if S0R reads real
+  Z3D: 300      # Z FAMILY Z3 (Z3D+Z3V)
+  Z3V: 300      # Z FAMILY Z3 (Z3D+Z3V); stage V2
+  Z4D: 300      # Z FAMILY Z4 (Z4D+Z4P); $3 stratum: suspended if S0R reads real
+  Z4P: 300      # Z FAMILY Z4 (Z4D+Z4P); 7.1 bind tripwire (first off with Z7P)
+  Z5P: 300      # Z FAMILY Z5 (Z5P+Z5V)
+  Z5V: 300      # Z FAMILY Z5 (Z5P+Z5V); stage V2
+  Z6D: 300      # Z FAMILY Z6 (Z6D+Z6V)
+  Z6V: 300      # Z FAMILY Z6 (Z6D+Z6V)
+  Z7D: 300      # Z FAMILY Z7 (Z7D+Z7V+Z7P)
+  Z7V: 300      # Z FAMILY Z7 (Z7D+Z7V+Z7P)
+  Z7P: 300      # Z FAMILY Z7 (Z7D+Z7V+Z7P); 7.1 bind tripwire (first off with Z4P)
+  Z8P: 300      # Z family Z8; $3 stratum: suspended if S0R reads real
+  Z9D: 300      # Z family Z9
+  Z10D: 300     # Z family Z10
+  # Vantage S-twins (H-81 2.1, blocked on Vantage cost gate): H-81 restates no read; H-61's default applies
+  VS1A: 300     # HV; STOP scalp
+  VS1B: 300     # HV; STOP scalp
+  VS2A: 300     # HV; STOP scalp
+  VS2B: 300     # HV; STOP scalp
+  VS3A: 300     # HV; STOP scalp (VOID not restated for twins)
+  VS3B: 300     # HV; STOP scalp (VOID not restated for twins)
+  VS5A: 300     # HV; STOP scalp
+  VS5B: 300     # HV; STOP scalp
+# Families read POOLED (the FAMILY rows above): one read unit, its n the pooled count of `counted` (default: all its
+# arms), its read row keyed by the unit id. Every arm of a unit has the same read_at (else the file reads no unit).
+read_units:
+  W1:intraday_momentum: {arms: [XIMNY, XIMLN]}
+  W1:mean_reversion: {arms: [XMR15, XMR1H]}
+  W1:breakout: {arms: [VXBO1H, VXBO15]}
+  W2:KLR: {arms: [PDC1, PDC4]}
+  W2:KSQ: {arms: [KSQ1, KSQ4]}
+  W2:DON: {arms: [DON4, DOND]}
+  # H-80 R1: pooled BXR fills; BXT/BXF are virtual exits on them (their trades do not add to n)
+  H-80:BXR: {arms: [BXR15, BXR30, BXR1H, BXR4H, BXT15, BXT30, BXT1H, BXT4H, BXF15, BXF30, BXF1H, BXF4H],
+             counted: [BXR15, BXR30, BXR1H, BXR4H]}
+  H-81:Z3: {arms: [Z3D, Z3V]}
+  H-81:Z4: {arms: [Z4D, Z4P]}
+  H-81:Z5: {arms: [Z5P, Z5V]}
+  H-81:Z6: {arms: [Z6D, Z6V]}
+  H-81:Z7: {arms: [Z7D, Z7V, Z7P]}
+# An arm whose n is not its admissible trades (arms-2026-10-25.md 4: S0R's n is its stop exits).
+counts:
+  S0R: stop_exits

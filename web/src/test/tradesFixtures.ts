@@ -78,7 +78,7 @@ export const bars = (): Bar[] => {
 const variant = (o: Partial<BoardVariant>): BoardVariant => ({
   arm_id: "KA15", timeframe: "15m", variant: "15m", account_labels: ["Day/swing lab"], is_control: false, control_arm_id: "S0",
   status: "running", anneal_state: "E", n_counted: 213, n_read_at: 300, fills_today: 14, fills_7d: 70, open_now: 0,
-  eta_read_date: "2026-11-05", read: null, ...o,
+  eta_read_date: "2026-11-05", read: null, pooled: false, ...o, read_unit: o.read_unit ?? o.arm_id ?? "KA15",
 });
 
 /** In the server's order (strategy_board.py): proven, then running by closeness to the read, then controls. */
@@ -92,7 +92,7 @@ export const board = (): StrategyBoard => ({
       currency: "GBP", withheld_reason: "these trades cover fewer than 3 unread arms in an account and day (ADR 0050)" },
   ],
   families: [
-    { family: "opening_range", family_label: "Opening range", style: "intraday", accounts: ["Scalp lab"], state: "proven", anneal_state: "P",
+    { family: "opening_range", family_label: "Opening range", style: "intraday", accounts: ["Scalp lab"], state: "proven", anneal_state: "P", pooled: [],
       variants: [
         variant({ arm_id: "OR15", account_labels: ["Scalp lab"], status: "read", anneal_state: "P", n_counted: 364, fills_today: 9,
                   fills_7d: 64, eta_read_date: null,
@@ -102,16 +102,16 @@ export const board = (): StrategyBoard => ({
         variant({ arm_id: "OR1H", timeframe: "1h", variant: "1h", account_labels: ["Scalp lab"], n_counted: 120, fills_today: 2,
                   fills_7d: 15, eta_read_date: "2026-11-30" }),
       ] },
-    { family: "box_break_close", family_label: "Box break + close", style: "intraday", accounts: ["Day/swing lab"], state: "running", anneal_state: "E",
+    { family: "box_break_close", family_label: "Box break + close", style: "intraday", accounts: ["Day/swing lab"], state: "running", anneal_state: "E", pooled: [],
       variants: [
         variant({ open_now: 1 }),
         variant({ arm_id: "KA1H", timeframe: "1h", variant: "1h", n_counted: 61, fills_today: 3, fills_7d: 18, eta_read_date: "2026-12-15" }),
         variant({ arm_id: "KA4H", timeframe: "4h", variant: "4h", status: "retired", anneal_state: "R", n_counted: 18, fills_today: 0,
                   fills_7d: 2, eta_read_date: null }),
       ] },
-    { family: "random_bracket", family_label: "Random control (scalp)", style: "scalp", accounts: ["Scalp lab"], state: "control", anneal_state: "E",
+    { family: "random_bracket", family_label: "Random control (scalp)", style: "scalp", accounts: ["Scalp lab"], state: "control", anneal_state: "E", pooled: [],
       variants: [variant({ arm_id: "S0", timeframe: "1m", variant: "1m", account_labels: ["Scalp lab"], is_control: true,
-                           control_arm_id: null, n_counted: 412, fills_today: 80, fills_7d: 412, eta_read_date: null, open_now: 1 })] },
+                           control_arm_id: null, n_read_at: null, n_counted: 412, fills_today: 80, fills_7d: 412, eta_read_date: null, open_now: 1 })] },
   ],
   engine: [
     { name: "Box break + MFI", family: "box_break_close", timeframe: "1h", kind: "strategy", n: 42, net_r_per_trade: 0.12,

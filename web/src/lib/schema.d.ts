@@ -1392,6 +1392,8 @@ export interface components {
             family: string;
             /** Family Label */
             family_label: string;
+            /** Pooled */
+            pooled: components["schemas"]["ReadProgress"][];
             /**
              * State
              * @enum {string}
@@ -1404,7 +1406,8 @@ export interface components {
         };
         /**
          * BoardVariant
-         * @description One arm. Before its read: counts, progress, ETA and status only (no money, R, hit rate or rank).
+         * @description One arm. Read alone (`pooled` false): its unit's progress is its own. Read pooled: its own count only; the
+         *     family's `pooled` progress carries n of N, ETA and the read (`eta_read_date` and `read` are None here).
          */
         BoardVariant: {
             /** Account Labels */
@@ -1429,10 +1432,14 @@ export interface components {
             /** N Counted */
             n_counted: number;
             /** N Read At */
-            n_read_at: number;
+            n_read_at: number | null;
             /** Open Now */
             open_now: number;
+            /** Pooled */
+            pooled: boolean;
             read: components["schemas"]["ReadFigures"] | null;
+            /** Read Unit */
+            read_unit: string;
             /**
              * Status
              * @enum {string}
@@ -3168,6 +3175,34 @@ export interface components {
             ] | null;
             /** Vs Control R */
             vs_control_r: number | null;
+        };
+        /**
+         * ReadProgress
+         * @description One read unit's progress (an arm, or a family read pooled: W1, W2, H-80, H-81; config/arm_reads.yaml). Before
+         *     its read: counts, progress, ETA and status only (no money, R, hit rate or rank).
+         */
+        ReadProgress: {
+            /**
+             * Anneal State
+             * @enum {string}
+             */
+            anneal_state: "E" | "C1" | "P" | "R";
+            /** Arm Ids */
+            arm_ids: string[];
+            /** Eta Read Date */
+            eta_read_date: string | null;
+            /** N Counted */
+            n_counted: number;
+            /** N Read At */
+            n_read_at: number | null;
+            read: components["schemas"]["ReadFigures"] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "warming" | "running" | "read" | "retired";
+            /** Unit Id */
+            unit_id: string;
         };
         /** RearmRequest */
         RearmRequest: {

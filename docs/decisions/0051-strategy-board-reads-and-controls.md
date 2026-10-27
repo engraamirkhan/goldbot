@@ -15,21 +15,24 @@ per-account totals (ADR 0050: no aggregate covering fewer than 3 unread arms).
    `<base>_control` with the family `<base>` or `<base>_...`); else a generic control (one of no strategy's family:
    `random_bracket`, `scalp_control`) on a shared account and sleeve, preferring the arm's pre-registration file, then
    its timeframe, then the spec's order. Tested on the shipped config.
-2. Frozen read figures: the arm's first N counted trades closed by `read_utc` (N = its read size, H-61's 300 unless
-   `config/arm_reads.yaml` `read_at` lists the prereg's n); everything counted after is "since read". Net R per trade
-   with a normal 90% CI, hit rate, net money in one currency.
-3. The difference against the control is shown only when the control is read too ("controls stay unread until
-   listed"): arm mean minus control mean over the control's counted trades closed by the arm's read, Welch 90% CI.
-4. Annealing state comes from the read row (`state`: C1, P, R; omitted = R, H-61 "not graduated at 300 -> retired").
-5. Sleeve totals (per account and sleeve, 7 days) use trades_ledger.withheld_reason per sleeve and are withheld for
+2. Read units and sizes are the evaluator's (config/arm_reads.yaml, quant 2026-10-27 condition 2): `read_at` per arm,
+   `read_units` for families read POOLED (W1, W2, H-80, H-81; H-80 counts only BXR's fills, `counted`), `counts` for an
+   arm whose n is not its trades (S0R: stop exits). A pooled family shows one progress, ETA and read; its arms only
+   their own counts. A unit is read when `reads` lists the arm id or the unit id; a broken or inconsistent file reads
+   no unit. The ADR 0050 3-arm rule counts read units, so a pooled family's arms count once.
+3. Frozen read figures: the unit's first N counted trades closed by `read_utc`; everything counted after is "since
+   read". Net R per trade with a normal 90% CI, hit rate, net money in one currency.
+4. The difference against the control is the evaluator's RECORDED comparison only (`vs_control_r`, `vs_control_ci90`
+   on the read row; quant 2026-10-27 condition 1: the prereg defines it, e.g. H-81's day-paired family minus control,
+   and never reads the control itself). The board computes none.
+5. Annealing state comes from the read row (`state`: C1, P, R; omitted = R, H-61 "not graduated at 300 -> retired").
+6. Sleeve totals (per account and sleeve, 7 days) use trades_ledger.withheld_reason per sleeve and are withheld for
    every sleeve of an account when one sleeve is short, so no shown pair differs by a short sleeve.
 
 ## Consequences
 - An arm's control can change if the spec or accounts.yaml changes registrations; the board reads it at start. The
-  evaluator's recorded verdict, not the board's pairing, is the record of the read; a mismatch is a quant finding.
-- A control must be listed in arm_reads.yaml before any arm shows "vs control"; the evaluator lists it at the first
-  read that uses it.
-- BXT/BXF (virtual exits on BXR's fills) count as separate arms for the 3-arm rule; the quant check decides whether
-  they should count as one.
-- Would change my mind: the quant-reviewer requiring a recorded comparison (from the evaluator) instead of a computed
-  one, or a pairing table in config instead of the rule.
+  evaluator's recorded verdict and comparison, not the board's pairing, are the record of the read.
+- The evaluator keeps `read_at` and `read_units` in step with config/exploration_arms.yaml (a test fails on an
+  unknown arm); a new pooled family needs its `read_units` row before its first fill.
+- Counting units, not arms, withholds more lab totals while pooled families dominate a lab-day (the e2e seed now uses
+  three units on the Day/swing lab).

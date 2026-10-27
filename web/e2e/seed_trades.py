@@ -74,8 +74,8 @@ def seed(state: Path, now: pd.Timestamp) -> None:
                 arm(conn, f"e2e-{arm_id}-{i}", arm_id, SCALP, now - (20 + 9 * n) * m, tf=tf, minutes=6, pnl=pnl,
                     side=1 if n % 2 else -1, reason="target" if pnl > 0 else "stop")
         arm(conn, "e2e-S1A-open", "S1A", SCALP, now - 14 * m, tf="5m", minutes=None, pnl=None, pid=501)
-        # the day/swing lab: the three box-exit arms on 1h
-        for i, (arm_id, pnl) in enumerate((("BXR1H", 2.1), ("BXT1H", -1.4), ("BXF1H", 1.6))):
+        # the day/swing lab: three read units on 1h (BXT/BXF would be the same unit as BXR, H-80 pooled: one unit)
+        for i, (arm_id, pnl) in enumerate((("BXR1H", 2.1), ("MB1H", -1.4), ("G1A", 1.6))):
             arm(conn, f"e2e-{arm_id}", arm_id, DAY, now - (200 - 30 * i) * m, tf="1h", minutes=95, pnl=pnl,
                 reason="target" if pnl > 0 else "stop")
         # earlier days for the 14-day strip (three arms a day on the scalp lab)

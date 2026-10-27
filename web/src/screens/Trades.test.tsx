@@ -253,6 +253,22 @@ describe("Trades > Strategies (132, ADR 0050)", () => {
     expect(screen.getByText(/Trading is not affected/)).toBeInTheDocument();
   });
 
+  it("a family read pooled shows one pooled progress and ETA; its arms only their own counts (quant 2026-10-27)", async () => {
+    const v = board();
+    const fam = v.families[1];
+    v.families[1] = { ...fam, pooled: [{ unit_id: "H-81:Z6", arm_ids: ["KA15", "KA1H"], n_counted: 140, n_read_at: 300, status: "running",
+                                         anneal_state: "E", eta_read_date: "2026-11-20", read: null }],
+                      variants: fam.variants.slice(0, 2).map((x) => ({ ...x, pooled: true, read_unit: "H-81:Z6", eta_read_date: null })) };
+    vi.spyOn(apiModule.api, "strategyBoard").mockResolvedValue(v);
+    renderTab("strategies");
+    const box = await screen.findByRole("button", { name: /Box break \+ close, running/ });
+    expect(box).toHaveTextContent("All timeframes pooled");
+    expect(box).toHaveTextContent("140/300 · read ~Fri 20 Nov");
+    expect(within(box).getAllByRole("meter")).toHaveLength(1);                  // the pooled one, no per-arm meter
+    expect(box).toHaveTextContent("213 counted toward the family's pooled read");
+    expect(box).not.toHaveTextContent("213/300");
+  });
+
   it("an arm without a counted trade reads warming up; twins on two labs name their lab", async () => {
     const v = board();
     v.families[1] = { ...v.families[1], accounts: ["Day/swing lab", "Vantage lab"], variants: [

@@ -9,9 +9,14 @@ Design rules kept:
   Its variant is the timeframe, plus the arm's tag when two running arms share a family and a timeframe.
 * Controls are the null (quant 2026-10-26): an arm with a `random_bracket` rule, a `*_control` rule, or registered
   with a `control_share` on any account (config/accounts.yaml).
-* "Each arm is read once, at its 300th admissible trade" (prereg H-61): an arm is read only once config/arm_reads.yaml
-  lists it. A file that cannot be read means NO arm is read (fail closed: everything stays blinded). An arm whose
-  pre-registration reads it at another n is listed under `read_at` in the same file (default READ_AT).
+* Read sizes and units are the evaluator's, in config/arm_reads.yaml: `read_at` (the pre-registered n of every arm
+  that has a read; "each arm is read once, at its 300th admissible trade", H-61, unless its prereg says otherwise),
+  `read_units` (families read POOLED, e.g. W1, W2, H-80, H-81: "the n is the family's pooled count"; quant
+  2026-10-27; `counted` names the arms whose fills make the n when others are virtual exits on them, H-80) and
+  `counts` (an arm whose n is not its trades, S0R: stop exits). A unit is read only once `reads` lists it (the arm
+  id, or the unit id). An arm not in `read_at`: a strategy arm reads at READ_AT; a control has no read. A file that
+  cannot be read, or whose units disagree on n, means NO unit is read and every arm is its own unit at READ_AT (fail
+  closed: everything stays blinded).
 * Each strategy arm is measured against one control (the strategy board, item 132), in this order: a control whose
   frozen `params.control` names the arm; else a control of the arm's own family (`<family>_control`, or the same rule)
   on its timeframe and a shared account; else a generic random control (one of no strategy's family) on a shared
@@ -66,6 +71,23 @@ class ArmRead(FrozenRecord):
     # the annealing state the read put the arm in (volume-500 plan 4.1): C1 candidate, P proven, R retired. H-61: "not
     # graduated at 300 -> retired", so a row that does not say is R
     state: Literal["C1", "P", "R"] = "R"
+    # the evaluator's RECORDED comparison with the control, as its prereg defines it (e.g. H-81 section 4: the day-paired
+    # family minus control; the controls are never read themselves). Never computed by a view (quant 2026-10-27)
+    vs_control_r: float | None = None
+    vs_control_ci90: tuple[float, float] | None = None
+
+
+class ReadUnit(FrozenRecord):
+    """A family read pooled (config/arm_reads.yaml `read_units`)."""
+    arms: list[str] = Field(min_length=1)
+    counted: list[str] | None = None    # the arms whose fills make the pooled n (default: all of `arms`)
+
+
+class ReadsFile(FrozenRecord):
+    reads: dict[str, ArmRead] = Field(default_factory=dict)
+    read_at: dict[str, int] = Field(default_factory=dict)
+    read_units: dict[str, ReadUnit] = Field(default_factory=dict)
+    counts: dict[str, Literal["trades", "stop_exits"]] = Field(default_factory=dict)
 
 
 class ArmInfo(FrozenRecord):
@@ -78,6 +100,14 @@ class ArmInfo(FrozenRecord):
     accounts: tuple[str, ...] = ()      # the accounts that register it (config/accounts.yaml)
     running: bool = True                # spec status `run` (a blocked arm has no rule to trade)
     control_arm: str | None = None      # the control it is measured against (module docstring); None for a control
+    unit: str = ""                      # its read unit: the arm id, or the pooled family's unit id
+    read_n: int | None = READ_AT        # the unit's read size; None: no read registered (a control)
+    counted: bool = True                # its fills count toward its unit's n (False: virtual exits on another's)
+    count: Literal["trades", "stop_exits"] = "trades"
+
+    @property
+    def pooled(self) -> bool:
+        return bool(self.unit) and self.unit != self.arm_id
 
     @property
     def variant(self) -> str:
@@ -92,8 +122,7 @@ def _words(key: str) -> str:
 class Catalog(FrozenRecord):
     labels: Labels
     arms: dict[str, ArmInfo]
-    reads: dict[str, ArmRead]
-    read_at: dict[str, int] = Field(default_factory=dict)
+    reads: dict[str, ArmRead]           # by read unit
 
     def family_label(self, family: str) -> str:
         f = self.labels.families.get(family)
@@ -106,12 +135,22 @@ class Catalog(FrozenRecord):
     def arm(self, arm_id: str) -> ArmInfo | None:
         return self.arms.get(arm_id)
 
-    def is_read(self, arm_id: str) -> bool:
-        return arm_id in self.reads
+    def unit_of(self, arm_id: str) -> str:
+        """The arm's read unit (an arm the spec does not know is its own unit)."""
+        info = self.arms.get(arm_id)
+        return info.unit if info is not None and info.unit else arm_id
 
-    def read_size(self, arm_id: str) -> int:
-        """The n its single read is taken at: its pre-registration's (`read_at`), else H-61's READ_AT."""
-        return self.read_at.get(arm_id, READ_AT)
+    def read_of(self, arm_id: str) -> ArmRead | None:
+        return self.reads.get(self.unit_of(arm_id))
+
+    def is_read(self, arm_id: str) -> bool:
+        """Whether the arm's read unit is read (a pooled family's arms are read together)."""
+        return self.unit_of(arm_id) in self.reads
+
+    def read_size(self, arm_id: str) -> int | None:
+        """The n its unit's single read is taken at (the evaluator's `read_at`); None when no read is registered."""
+        info = self.arms.get(arm_id)
+        return info.read_n if info is not None else READ_AT
 
 
 def arm_family(rule: str, params: dict[str, object]) -> str:
@@ -148,18 +187,23 @@ def _registrations() -> tuple[set[str], dict[str, str], dict[str, tuple[str, ...
     return controls, styles, {a: tuple(sorted(v)) for a, v in where.items()}
 
 
-def _reads(path: Path) -> tuple[dict[str, ArmRead], dict[str, int]]:
-    """(the recorded reads, the arms read at another n than READ_AT). Fail closed: no arm read, every size READ_AT."""
+def _reads_file(path: Path) -> ReadsFile:
+    """config/arm_reads.yaml. Fail closed: a broken file, a size below 1, an arm in two units, a unit's arms of
+    different sizes or `counted` outside its arms reads NO unit and pools nothing."""
     try:
-        raw = yaml.safe_load(path.read_text()) or {}
-        reads = {str(k): ArmRead.model_validate(v) for k, v in (raw.get("reads") or {}).items()}
-        sizes = {str(k): int(v) for k, v in (raw.get("read_at") or {}).items()}
-        if any(v < 1 for v in sizes.values()):
+        f = ReadsFile.model_validate(yaml.safe_load(path.read_text()) or {})
+        seen: set[str] = set()
+        for uid, u in f.read_units.items():
+            sizes = {f.read_at.get(a) for a in u.arms}
+            if len(sizes) != 1 or None in sizes or seen & set(u.arms) or not set(u.counted or u.arms) <= set(u.arms):
+                raise ValueError(f"read unit {uid}: arms without one shared read size, listed twice or not counted")
+            seen |= set(u.arms)
+        if any(v < 1 for v in f.read_at.values()):
             raise ValueError("a read size below 1")
-        return reads, sizes
+        return f
     except Exception as exc:             # noqa: BLE001 - fail closed: no arm counts as read
         log.error("arm reads unreadable (%s): every arm stays blinded", type(exc).__name__)
-        return {}, {}
+        return ReadsFile()
 
 
 def _prereg(arm: Arm) -> str | None:
@@ -213,19 +257,24 @@ def load_catalog(labels_path: Path = LABELS_PATH, spec_path: Path | None = None,
         log.warning("arm spec unreadable (%s): arms named by their ledger rows", type(exc).__name__)
         spec = []
     controls, styles, where = _registrations()
+    rf = _reads_file(reads_path)
+    unit_of = {a: (uid, u) for uid, u in rf.read_units.items() for a in u.arms}
     by_id = {a.id: a for a in spec}
     arms = {}
     for a in spec:
         src = by_id.get(a.twin_of or "", a)            # a broker twin takes its source's tag
         tag = labels.arms.get(a.id) or labels.arms.get(src.id)
         control = (a.rule in CONTROL_RULES or a.rule.endswith("_control") or a.id in controls)
-        arms[a.id] = ArmInfo(arm_id=a.id, family=arm_family(a.rule, a.params), timeframe=a.timeframe,
+        family = arm_family(a.rule, a.params)
+        uid, u = unit_of.get(a.id, (a.id, None))
+        n = rf.read_at[a.id] if a.id in rf.read_at else None if control else READ_AT
+        arms[a.id] = ArmInfo(arm_id=a.id, family=family, timeframe=a.timeframe,
                              tag=tag.variant if tag else None, is_control=control, style=styles.get(a.id),
-                             accounts=where.get(a.id, ()), running=a.status == "run")
+                             accounts=where.get(a.id, ()), running=a.status == "run", unit=uid, read_n=n,
+                             counted=u is None or a.id in (u.counted or u.arms), count=rf.counts.get(a.id, "trades"))
     pairs = _pairs(spec, arms)
     arms = {k: v.model_copy(update={"control_arm": pairs.get(k)}) for k, v in arms.items()}
-    reads, sizes = _reads(reads_path)
-    return Catalog(labels=labels, arms=arms, reads=reads, read_at=sizes)
+    return Catalog(labels=labels, arms=arms, reads=rf.reads)
 
 
 @lru_cache(maxsize=1)

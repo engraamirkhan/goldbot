@@ -1,15 +1,15 @@
 // Trades > Strategies (docs/design/trades-ux-2026-10-27.md §3.4, backlog 132): the leaderboard, honestly. One row per
-// family with its timeframes, progress to each arm's read (n of its read size, the server's ETA, status, anneal state,
-// the control it is read against) and, only after the read, the recorded verdict with its frozen figures and the
-// difference against its control (ADR 0050). The server orders it by state and closeness to the read, never by
+// family with its timeframes, progress to each read unit (an arm, or the family pooled: n of its read size, the server's
+// ETA, status, anneal state, the control it is read against) and, only after the read, the recorded verdict with its
+// frozen figures and the evaluator's recorded difference against its control (ADR 0050, 0051). The server orders it by state and closeness to the read, never by
 // result; filters keep that order. Engine strategies (not pre-registered) show full figures with n and a 90% CI.
 // Money per lab only (3+ arms); per-arm money waits for the read.
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../../lib/api";
 import {
-  ANNEAL_WORDS, type BoardFamily, type BoardVariant, ci, type EngineStrategy, etaWords, type LabTotal, pct, POLL, signedR,
-  type StrategyBoard, statusWords, TIMEFRAMES,
+  ANNEAL_WORDS, type BoardFamily, type BoardVariant, ci, type EngineStrategy, etaWords, type LabTotal, pct, POLL,
+  type ReadFigures, type ReadProgress, signedR, type StrategyBoard, statusWords, TIMEFRAMES,
 } from "../../lib/trades";
 import { useWide } from "../../lib/useMedia";
 import { Badge, Card, EmptyState, ErrorState, Meter, Skeleton, TimeText } from "../../ui";
@@ -84,32 +84,50 @@ function LabLine({ t }: { t: LabTotal }) {
   );
 }
 
-function Progress({ x }: { x: BoardVariant }) {
+function Progress({ label, n, size, retired }: { label: string; n: number; size: number; retired: boolean }) {
   return (
-    <Meter value={x.n_counted} max={x.n_read_at} label={`${x.variant}: ${x.n_counted} of ${x.n_read_at} trades toward the read`}
-           text={`${x.n_counted} of ${x.n_read_at}`} tone={x.status === "retired" ? "idle" : "info"} />
+    <Meter value={n} max={size} label={`${label}: ${n} of ${size} trades toward the read`} text={`${n} of ${size}`}
+           tone={retired ? "idle" : "info"} />
   );
 }
 
-/** Words for one variant: progress before the read; the frozen read figures after. */
+/** The frozen read figures, with the evaluator's recorded comparison with the control (never computed here). */
+function ReadText({ r }: { r: ReadFigures }) {
+  return (
+    <>
+      <strong>{r.verdict}</strong> · {signedR(r.net_r_per_trade)}/trade ({ci(r.ci90)}) · hit {pct(r.hit_rate)}
+      {r.vs_control_r != null && <> · vs control {signedR(r.vs_control_r)}{r.vs_control_ci90 ? ` (${ci(r.vs_control_ci90)})` : ""}</>}
+      {` · n${NBSP}${r.n}`}{r.net_pnl != null && ` · ${money(r.net_pnl, r.currency, true)}`}
+      {r.since_read && <span className="muted"> · since read: {signedR(r.since_read.net_r_per_trade)}, n{NBSP}{r.since_read.n}</span>}
+    </>
+  );
+}
+
+/** A family read pooled (W1, W2, H-80, H-81): one progress, ETA and read for all its arms. */
+function PooledLine({ p }: { p: ReadProgress }) {
+  return (
+    <span className="pooled-row small num">
+      <strong>All timeframes pooled</strong>
+      {!p.read && p.n_read_at != null && <Progress label="Pooled" n={p.n_counted} size={p.n_read_at} retired={p.status === "retired"} />}
+      <span>{p.read ? <ReadText r={p.read} />
+        : <>{p.n_counted}/{p.n_read_at} · {p.status === "running" ? etaWords(p.eta_read_date) : statusWords(p.status)}</>}</span>
+    </span>
+  );
+}
+
+const ownProgress = (x: BoardVariant) => !x.read && !x.pooled && x.n_read_at != null;
+
+/** Words for one variant: progress before the read; the frozen read figures after; a pooled arm its own count. */
 function VariantText({ x, controls, many }: { x: BoardVariant; controls: Controls; many: boolean }) {
   const where = many ? <span className="muted"> · {x.account_labels.join(", ")}</span> : null;
   const tag = x.variant !== x.timeframe ? <span className="muted">{x.variant.slice(x.timeframe.length)} </span> : null;
-  if (x.read) {
-    const r = x.read;
-    return (
-      <span className="v-read num">
-        {tag}<strong>{r.verdict}</strong> · {signedR(r.net_r_per_trade)}/trade ({ci(r.ci90)}) · hit {pct(r.hit_rate)}
-        {r.vs_control_r != null && <> · vs control {signedR(r.vs_control_r)}{r.vs_control_ci90 ? ` (${ci(r.vs_control_ci90)})` : ""}</>}
-        {` · n${NBSP}${r.n}`}{r.net_pnl != null && ` · ${money(r.net_pnl, r.currency, true)}`}
-        {r.since_read && <span className="muted"> · since read: {signedR(r.since_read.net_r_per_trade)}, n{NBSP}{r.since_read.n}</span>}{where}
-      </span>
-    );
-  }
-  if (x.is_control) return <span className="num">{tag}{x.fills_7d.toLocaleString("en-GB")} trades in 7 days · random control, never retired{where}</span>;
+  if (x.read) return <span className="v-read num">{tag}<ReadText r={x.read} />{where}</span>;
+  if (x.n_read_at == null) return <span className="num">{tag}{x.fills_7d.toLocaleString("en-GB")} trades in 7 days · random control, never retired{where}</span>;
   const vs = x.control_arm_id ? controls.get(x.control_arm_id) : undefined;
+  const progress = x.pooled ? <>{x.n_counted} counted toward the family's pooled read</>
+    : <>{x.n_counted}/{x.n_read_at} · {x.status === "running" ? etaWords(x.eta_read_date) : statusWords(x.status)}</>;
   return (
-    <span className="num">{tag}{x.n_counted}/{x.n_read_at} · {x.status === "running" ? etaWords(x.eta_read_date) : statusWords(x.status)}
+    <span className="num">{tag}{progress}
       {x.open_now > 0 && ` · ${x.open_now} open`}{vs && <span className="muted"> · read against {vs}</span>}{where}</span>
   );
 }
@@ -122,10 +140,11 @@ function FamilyCard({ f, onFamily, controls }: { f: BoardFamily; onFamily: (f: s
             aria-label={`${f.family_label}, ${STATE_WORDS[f.state]}, open its trades`}>
       <span className="family-head"><strong>{f.family_label}</strong><span className="muted small">{f.style}</span>
         <Badge tone={f.state === "proven" ? "ok" : "idle"}>{STATE_WORDS[f.state]}</Badge></span>
+      {f.pooled.map((p) => <PooledLine key={p.unit_id} p={p} />)}
       {f.variants.map((x) => (
         <span key={x.arm_id} className="variant-row">
           <span className="v-tf num">{x.timeframe}</span>
-          {!x.read && !x.is_control && <Progress x={x} />}
+          {ownProgress(x) && <Progress label={x.variant} n={x.n_counted} size={x.n_read_at!} retired={x.status === "retired"} />}
           <span className="v-text small"><VariantText x={x} controls={controls} many={manyAccounts(f)} /></span>
         </span>
       ))}
@@ -147,13 +166,15 @@ function BoardTable({ fams, tfs, onFamily, controls }: {
           {fams.map((f) => (
             <tr key={f.family} className="clickable" tabIndex={0} aria-label={`${f.family_label}, ${STATE_WORDS[f.state]}, open its trades`}
                 onClick={() => onFamily(f.family)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onFamily(f.family); } }}>
-              <th scope="row"><strong>{f.family_label}</strong><br /><span className="muted small">{f.style} · {ANNEAL_WORDS[f.anneal_state]}</span></th>
+              <th scope="row"><strong>{f.family_label}</strong><br /><span className="muted small">{f.style} · {ANNEAL_WORDS[f.anneal_state]}</span>
+                {f.pooled.map((p) => <PooledLine key={p.unit_id} p={p} />)}</th>
               <td><Badge tone={f.state === "proven" ? "ok" : "idle"}>{STATE_WORDS[f.state]}</Badge></td>
               {tfs.map((t) => {
                 const xs = f.variants.filter((v) => v.timeframe === t);
                 return (
                   <td key={t} className="board-cell">{xs.length === 0 ? <span className="muted">—</span> : xs.map((x) => (
-                    <div key={x.arm_id} className="board-variant">{!x.read && !x.is_control && <Progress x={x} />}
+                    <div key={x.arm_id} className="board-variant">
+                      {ownProgress(x) && <Progress label={x.variant} n={x.n_counted} size={x.n_read_at!} retired={x.status === "retired"} />}
                       <span className="small"><VariantText x={x} controls={controls} many={manyAccounts(f)} /></span></div>
                   ))}</td>
                 );
