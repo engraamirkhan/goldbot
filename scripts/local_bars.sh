@@ -43,8 +43,18 @@ refresh() {
     [[ "$y" =~ ^20[0-9]{2}$ ]] || die "year must be YYYY: $y"
     out="$RAW/xauusd_1m_dukascopy_${y}.parquet"
     # build next to the file and rename: a failed or interrupted build never leaves a half-written year behind
+    local rc=0
     (cd "$ROOT" && uv run -q python scripts/dukascopy_year.py "$y" --existing "$out" --out "$out.new" \
-        --report "$RAW/coverage-${y}.md") || { rm -f "$out.new"; die "build of $y failed; $out unchanged"; }
+        --report "$RAW/coverage-${y}.md") || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      rm -f "$out.new"
+      # a new year in its first days has no months yet (exit 1) or a MISSING month (exit 2): a warning, so the
+      # previous year's completed December still reaches the brain (code review LOW, 2026-10-26)
+      if [ "$y" = "$(date -u +%Y)" ] && { [ "$rc" -eq 1 ] || [ "$rc" -eq 2 ]; }; then
+        say "build of $y not ready yet (exit $rc); $out unchanged"; continue
+      fi
+      die "build of $y failed; $out unchanged"
+    fi
     [ -s "$out.new" ] || die "build of $y wrote nothing; $out unchanged"
     mv -f "$out.new" "$out"
     (cd "$ROOT" && uv run -q python scripts/check_coverage.py "$out" --report "$RAW/daycov-${y}.md") \
