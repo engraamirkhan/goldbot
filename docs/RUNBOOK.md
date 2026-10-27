@@ -1696,11 +1696,22 @@ nightly report explains them. `goldbot run health` shows the dashboard's banner 
 a blackout, a cap that resets), WARN when only your halt blocks, FAIL for any other block. The dashboard, `/status`
 and health show enabled accounts only (`config/accounts.yaml`): a disabled account's leftover
 `state/engine_<account>.json` is ignored there, but the supervisor still reads it, so move it aside (e.g. to
-`state/retired/`) once that account holds no open position. The reasons (from `goldbot/risk/gate.py`) and what to do:
+`state/retired/`) once that account holds no open position.
+
+Switching an account off: set `enabled: false` in `config/accounts.yaml` and restart its engine. With nothing of its
+own open the engine refuses (`refusing to start <account>: enabled: false ...` in the journal, exit code 78, never
+restarted: `RestartPreventExitStatus=78`, NSSM `AppExit 78 Exit`); with positions open it winds down
+(`account_disabled` below) and refuses at the next restart once flat. Also run
+`sudo systemctl disable goldbot-engine@<account>`: a deploy restarts every systemd-enabled engine unit and reports a
+refused one as not started. A live account starts only when it is enabled and the paper -> tiny-live gate is recorded;
+otherwise it refuses the same way, even with positions open.
+
+The reasons (from `goldbot/risk/gate.py`) and what to do:
 
 | Reason | Meaning | What to do |
 | --- | --- | --- |
 | `owner_halt` | You or an approver halted (`state\control.json`). An unreadable `control.json` also counts as halted. | Re-arm on the dashboard (owner + authenticator code). |
+| `account_disabled` | The account is `enabled: false` in `config/accounts.yaml` but its engine had positions of its own open when it started, so it only winds down: no new entry, every exit (stop, target, time exit, Friday cut) runs as usual. The dashboard and health hide disabled accounts; the engine journal says `winding down`. | Nothing. Once flat, restart the engine (`sudo systemctl restart goldbot-engine@<account>`): it then refuses with exit code 78 and stays stopped. To trade again set `enabled: true` and restart. |
 | `supervisor_halt` | The supervisor halted on combined limits (`combined_daily_cap`, `combined_weekly_cap`, `combined_drawdown_halt` in `state\supervisor.json`), **or** its heartbeat is missing/older than 60 s, or `supervisor.json` is unreadable. | Check `nssm status goldbot-supervisor` and the Feeds tab heartbeat; restart it if stopped. For a cap halt see the `daily_cap` row. |
 | `drawdown_halt` | This account's equity fell 12% below its high-water mark. | Investigate before anything else. The dashboard Re-arm clears only the owner halt; the code has no command that clears this stage (an engine restart resets it, because the stage is kept in memory). |
 | `news_blackout` | Within 15 min before to 30 min after a tier-1 event (CPI, NFP, FOMC, PCE), or 30 min after a high-relevance news shock. The active event is in `state\engine_<account>.json` under `blackout`. | Wait. If it never clears, check `calendar_archive` on the Feeds tab. |

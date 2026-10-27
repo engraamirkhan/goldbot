@@ -207,6 +207,7 @@ class EngineConfig(Record):
     data_root: str | None = None         # when set, ticks and fills are logged to the store for the nightly cost job
     shadow_host: bool = False            # this engine runs the shadow book (one per deployment: accounts.yaml shadow_host)
     probe_only: bool = False             # ADR 0037 amendment 4: a dedicated probe account; non-probe entries refused
+    wind_down: bool = False              # accounts.yaml enabled: false with own positions open: entries refused, exits run
     tick_flush_s: int = 60               # market seconds between tick-log flushes
     # production: block entries on the supervisor's halt (or a missing/stale heartbeat) and on the owner's halt
     halt_checks: bool = False
@@ -303,7 +304,8 @@ class Engine:
         # terminal's quote still in a minute the previous engine stored) and never rebuilds that minute
         self._history_through: pd.Timestamp | None = None
         self.state = AccountState(equity=0, balance_closed_hwm=0, day_start_equity=0, week_start_equity=0,
-                                  open_positions=0, margin_used=0, last_tick_age_s=0, spread_points=0)
+                                  open_positions=0, margin_used=0, last_tick_age_s=0, spread_points=0,
+                                  account_disabled=cfg.wind_down)
         self.decisions: list[dict] = []
         self.store = Store(cfg.data_root) if cfg.data_root else None
         self._tick_log: list[Tick] = []
