@@ -211,7 +211,7 @@ Definitions as `docs/research/candidates/time_structure/key_levels_discovery.py`
   - Both reads above use the **realised outcome under the cut**, with unchanged thresholds. The 14 bp power figure
     assumed no cut, so it is now optimistic; this is declared.
   - Code: `arm_rules_clock_box.friday_long` (`cut_at`) and `walk_friday`.
-  - Live, `exploration.crosses_friday` still refuses WFRI. That is flagged in 8.14 and not decided here.
+  - Live, `exploration.crosses_friday` exempts a rule that declares it follows the Friday cut (`arm_rules.follows_friday_cut`): WFRI may hold past the cut but never into the weekend, and the cut still closes a losing WFRI (lane E1, trading-safety review 2026-10-26: the cut itself is unchanged). (Quant C2, 2026-10-26, before any fill.)
   - The id stays WFRI: this file was not yet merged, and no fill or outcome existed.
 
 ## 5. H-73 time-structure range features (0 trials; K_eff +1 as one group)

@@ -20,7 +20,7 @@ ICM = {"XBB15": "box_break", "XTV1": "smc_structure", "XEQ15": "eq_liquidity_run
 VANTAGE = {"VXRIP1H": "box_rip", "VXRT1H": "box_retest", "VXFK1H": "fakey", "VXTL1H": "trend_level_signal",
            "VXTV2": "smc_structure", "VXBO1H": "breakout", "VXBO15": "breakout", "VXTR1H": "trend"}
 CONTROLS = {"icm-demo": "C1H", "vantage-demo": "VC1H"}
-BLOCKED = {"XTV1", "VXTV2"}      # SRE profile 2026-10-26: the smc replica state is not fed on the engine's bars
+BLOCKED: set[str] = set()      # XTV1/VXTV2 run since lane E2 carries the smc replica state (2026-10-26)
 CAP = {"15m": 17.0, "1h": 30.0}
 
 

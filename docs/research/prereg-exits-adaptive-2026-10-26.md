@@ -35,7 +35,7 @@ Gross: E0 about 0, E4 about +0.04 R, E8 about -0.016 R. Net at measured cost: al
 today's ATR). P4 for a family promotion is not expected to pass; the read is about the exit.
 
 ## 5. Reading rules (written before any data they read)
-- **R1, forward arms (icm-probe).** Kill: the H-61 per-arm cumulative-R stop and ADR 0043 caps, unchanged. At 300
+- **R1, forward arms (icm-probe; host icm-demo by amendment 2026-10-26: a 1.5 ATR stop of about £9 exceeds icm-probe's £6.50 cap, so BXR is registered on icm-demo; the read is unchanged. Quant C3, before any fill).** Kill: the H-61 per-arm cumulative-R stop and ADR 0043 caps, unchanged. At 300
   pooled BXR fills and every 300 after: report paired BXR - BXF and BXT - BXF (net, day-clustered t) per timeframe and
   pooled, labelled "underpowered: detectable 0.13 R / 0.08 R at 300". **No adoption from R1 alone** before 3,000 pooled
   fills. Measured trail-stop slippage is reported and replaces the $0.70 prior in R2 once >= 30 trail exits exist.

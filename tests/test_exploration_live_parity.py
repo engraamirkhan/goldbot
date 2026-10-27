@@ -40,7 +40,8 @@ def _engine_at(b1: pd.DataFrame, arms: list[A.Arm], close: pd.Timestamp) -> Simp
     the arms."""
     mem = b1[b1["visible_at"] <= close].tail(MEMORY).reset_index(drop=True)
     xa = {a.id: exploration.Arm(spec=a, style="intraday") for a in arms}
-    ex = SimpleNamespace(arms=xa, retired=frozenset(), last_bar={}, queue=deque(), ahead_seen=None)
+    ex = SimpleNamespace(arms=xa, retired=frozenset(), last_bar={}, queue=deque(), ahead_seen=None, deferred={},
+                         needs_context=frozenset(), held_back={}, netting=None)
     return SimpleNamespace(exploration=ex, cfg=SimpleNamespace(live_clock=False, account_id="t"), bars_1m=mem,
                            decisions=[])
 
