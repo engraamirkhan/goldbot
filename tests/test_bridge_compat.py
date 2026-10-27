@@ -97,7 +97,7 @@ def _dead_url() -> str:
 
 
 # ---------------------------------------------------------------------------------------------- the bridge reports
-PINNED = (6, 5, "2331980ac73baee93dc51da9132526015da69b068981068eca9cde7dd5159703")
+PINNED = (7, 5, "2331980ac73baee93dc51da9132526015da69b068981068eca9cde7dd5159703")
 
 
 def test_api_version_is_bumped_whenever_the_method_table_signatures_or_records_change():
@@ -133,7 +133,8 @@ def test_health_reports_commit_protocol_methods_and_zone_without_auth_or_secrets
     assert body["server_tz"] == TZ and body["commit"] == SHA_A and body["api_version"] == API_VERSION
     assert body["methods"] == sorted(METHODS)
     assert body["min_compatible"] == MIN_COMPATIBLE
-    assert set(body) == {"ok", "server_tz", "commit", "api_version", "min_compatible", "methods"}   # no account, token
+    assert body["order_lane"] == "off"                       # v7 (BACKLOG 135): a fixed token, no lane configured
+    assert set(body) == {"ok", "server_tz", "commit", "api_version", "min_compatible", "methods", "order_lane"}   # no account, token
     assert TOKEN not in r.text
 
 

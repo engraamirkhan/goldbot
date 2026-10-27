@@ -230,6 +230,11 @@ class Account(Record):
     # and 10 s). Vantage fills take up to 31 s. At most 60 s, below the look-up's AMBIGUOUS_SETTLE_S (120 s), so no
     # clean look calls an order unfilled while its call can still answer
     order_timeout_s: float = Field(15.0, gt=0, le=60)
+    # BACKLOG 135 (ADR 0056, goldbot/execution/bridge_lane.py): the MT5 box's bridge sends this account's entries on a
+    # terminal connection of its own, so ticks, closes and the kill switch keep flowing while the terminal sends one.
+    # Read by the bridge only. Off until the drill on that box passed (RUNBOOK "Order lane"); off = entries share the
+    # bridge's connection, at the back of its queue
+    order_lane: bool = False
 
     # backstop for records built outside load_accounts: validation errors never carry the input (names, logins)
     model_config = ConfigDict(hide_input_in_errors=True)      # merged with Record's config by pydantic

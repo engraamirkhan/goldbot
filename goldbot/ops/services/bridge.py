@@ -94,5 +94,36 @@ def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTra
                               lambda: guarded.terminal_state() == "not_logged_in")
     heal.start()
     from goldbot.ops.bridge_compat import repo_commit
+    lane = None
+    if acc.order_lane:                    # BACKLOG 135: entries on a terminal connection of their own (a child process)
+        from goldbot.execution.bridge_lane import ProcessLane, lane_argv
+        lane = ProcessLane(lane_argv(account_id), spawned_exit=TERMINAL_SPAWNED_EXIT)
     serve(guarded, host, int(port), token, verify_first=True, lock=lock, login_status=heal.status,
-          commit=repo_commit())           # read once: the code this process runs, reported on /health (BACKLOG 42)
+          commit=repo_commit(), lane=lane)   # commit read once: the code this process runs, on /health (BACKLOG 42)
+
+
+def run_order_lane(account_id: str) -> None:  # pragma: no cover - needs the MetaTrader5 package and a terminal
+    """The bridge's order lane (goldbot/execution/bridge_lane.py; started by `run_bridge` when the account has
+    `order_lane: true`, never by hand): attach to the terminal already running (no login: the bridge's self-heal does
+    that), refuse to serve a terminal its own initialize launched (exit TERMINAL_SPAWNED_EXIT, and the bridge exits
+    with it), then serve `place_order` lines from the bridge on stdin, through the same GuardedBroker checks. Logs go to
+    stderr; stdout carries the lane's lines only."""
+    out = sys.stdout.buffer
+    sys.stdout = sys.stderr                # nothing printed by mistake can reach the lane's wire
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(asctime)s order-lane %(levelname)s %(message)s")
+    from goldbot.execution.bridge import GuardedBroker
+    from goldbot.execution.bridge_lane import serve_lane
+    from goldbot.execution.mt5_adapter import MT5Broker
+    from goldbot.ops import accounts
+    acc = accounts.load_accounts()[account_id]
+    broker = MT5Broker(terminal_path=acc.terminal_path, login=None, password=None, server=acc.server,
+                       server_tz=acc.server_tz, symbol=acc.symbol, account_label=account_id, verify=None)
+    spawned = terminals_in_bridge_cgroup(_proc_root())
+    if spawned:
+        log.error("the order lane's initialize launched %d MT5 terminal(s): exiting so the bridge unit stops them",
+                  spawned)
+        broker.shutdown()
+        raise SystemExit(TERMINAL_SPAWNED_EXIT)
+    guarded = GuardedBroker(broker, magic_base=acc.magic_base,
+                            verify=lambda info: accounts.verify_terminal_account(acc, info))
+    serve_lane(guarded, sys.stdin.buffer, out)
