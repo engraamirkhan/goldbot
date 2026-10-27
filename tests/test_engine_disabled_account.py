@@ -59,6 +59,18 @@ def test_a_disabled_account_with_nothing_open_refuses_to_start_with_the_no_resta
     assert not (tmp_path / "state" / "engine_icm-demo.json").exists()
 
 
+def test_a_disabled_account_with_no_bridge_or_terminal_exits_78_without_a_startup_error(tmp_path, monkeypatch):
+    """Trading-safety LOW on 893f0cc6: a failed start check of a disabled account never writes `startup_error` (the
+    supervisor would halt every real account) and never restart-loops."""
+    monkeypatch.delenv("GOLDBOT_PAPER_ENGINE", raising=False)
+    built = _start(tmp_path, monkeypatch, DISABLED)
+    with pytest.raises(SystemExit) as exc:
+        run_mod.run_engine("icm-demo")
+    assert exc.value.code == engine_service.ENGINE_DISABLED_EXIT
+    assert built == []
+    assert not (tmp_path / "state" / "engine_icm-demo.json").exists()
+
+
 def test_a_disabled_account_with_only_other_engines_positions_open_still_refuses(tmp_path, monkeypatch):
     _paper(monkeypatch, [_position(ACC.magic_base + 100)])      # another engine's magic range: never touched
     built = _start(tmp_path, monkeypatch, DISABLED)

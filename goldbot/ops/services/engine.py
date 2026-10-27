@@ -211,6 +211,16 @@ def disabled_wind_down(acc: Account, broker: Any) -> bool:
     return True
 
 
+def start_refused(acc: Account, why: str, info: Any = None) -> NoReturn:
+    """A start check failed (approval ids, the engine lock, no broker, a wrong terminal account, symbol terms). An
+    enabled account ends through `refuse_start` (startup_error written, restarted); a disabled one through
+    `refuse_disabled` (trading-safety LOW on 893f0cc6): exit 78, nothing written, so a switched-off account's failed
+    start never halts the enabled accounts through the supervisor nor restart-loops."""
+    if not acc.enabled:
+        refuse_disabled(acc.account_id, f"enabled: false in config/accounts.yaml; {why}")
+    resolve(refuse_start)(acc.account_id, why, info, probe_only=acc.probe_only)
+
+
 # trading-safety review of 10a18031 (M1): an account with no bridge and no local terminal refuses to start; the paper
 # stand-in (fake fills under the account's broker key, its £ daily limit dropped) only on this explicit developer opt-in
 PAPER_ENGINE_ENV = "GOLDBOT_PAPER_ENGINE"
@@ -308,10 +318,10 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     if acc.is_live and acc not in accounts.enabled_accounts("live", loaded=configured):
         refuse_disabled(account_id, "live account not enabled or not unlocked by the phase gate")
     if why := approval_ids_problem(account_id):
-        resolve(refuse_start)(account_id, f"refusing to start {account_id}: {why}", probe_only=acc.probe_only)
+        start_refused(acc, f"refusing to start {account_id}: {why}")
     from goldbot.ops.engine_lock import hold_engine
     if why := hold_engine("state", account_id):      # held for the process's life: no repair rewrites its files
-        resolve(refuse_start)(account_id, f"refusing to start {account_id}: {why}", probe_only=acc.probe_only)
+        start_refused(acc, f"refusing to start {account_id}: {why}")
     settings = load_settings()
     bridge = accounts.bridge_endpoint(account_id)
     if bridge is not None:
@@ -322,8 +332,7 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         info = broker.account()
         why = accounts.verify_terminal_account(acc, info)
         if why:
-            resolve(refuse_start)(account_id, f"refusing to trade {account_id} through the bridge: {why}", info,
-                                    probe_only=acc.probe_only)
+            start_refused(acc, f"refusing to trade {account_id} through the bridge: {why}", info)
     elif sys.platform == "win32":
         from goldbot.execution.mt5_adapter import MT5Broker
         acc = accounts.ensure_login(acc)
@@ -335,21 +344,20 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         info = broker.account()
         why = accounts.verify_terminal_account(acc, info)
         if why:
-            resolve(refuse_start)(account_id, f"refusing to trade {account_id}: {why}", info,
-                                    probe_only=acc.probe_only)
+            start_refused(acc, f"refusing to trade {account_id}: {why}", info)
     elif os.environ.get(PAPER_ENGINE_ENV) == "1":
         from goldbot.execution.paper import PaperBroker
         broker = PaperBroker(symbol=acc.symbol)
         log.warning("%s=1: running %s against the paper broker (developer stand-in)", PAPER_ENGINE_ENV, account_id)
     else:
-        resolve(refuse_start)(account_id, f"refusing to start {account_id}: no MT5 bridge (mt5-bridge-url/token in "
-                                          "the keyring) and no local terminal on this host", probe_only=acc.probe_only)
+        start_refused(acc, f"refusing to start {account_id}: no MT5 bridge (mt5-bridge-url/token in the keyring) "
+                           "and no local terminal on this host")
     try:
         why = symbol_terms_problem(broker.symbol_info(acc.symbol))
     except Exception as exc:  # noqa: BLE001 - a symbol the terminal cannot describe is never traded
         why = f"symbol_info({acc.symbol}) unavailable ({type(exc).__name__})"
     if why:
-        resolve(refuse_start)(account_id, f"refusing to trade {account_id}: {why}", probe_only=acc.probe_only)
+        start_refused(acc, f"refusing to trade {account_id}: {why}")
     wind_down = not acc.enabled and disabled_wind_down(acc, broker)   # refuses when nothing of its own is open
     paper =resolve(paper_stand_in)(broker)
     policy = resolve(engine_limits_policy)(settings, acc, paper=paper, state_dir="state",
