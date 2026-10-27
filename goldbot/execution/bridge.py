@@ -6,20 +6,23 @@ the terminal through this bridge:
 
 * `serve(broker, host, port, token)` runs next to the terminal (`python -m goldbot.ops.run bridge <account>` under the
   Wine Python). It exposes the `Broker` protocol methods in `METHODS` (and nothing else) as JSON over HTTP POST
-  /rpc, one request at a time (the MetaTrader5 package is not thread-safe), each authenticated by a bearer token
-  compared in constant time. Bind it to the private network address only.
+  /rpc, each authenticated by a bearer token compared in constant time. Bind it to the private network address only.
+  Requests are accepted concurrently, but the terminal gets one call at a time (the MetaTrader5 package is not
+  thread-safe) from a priority queue: closes and stop changes first, then /health, reads, and entry orders last; a
+  request whose client has gone, or a read queued past its client's timeout, is never run (BACKLOG 135,
+  goldbot/execution/bridge_queue.py). With the account's order lane up, entries go out on a terminal connection of
+  their own, so ticks and closes keep flowing while the terminal sends one (goldbot/execution/bridge_lane.py).
 * `RemoteBroker(url, token)` implements the `Broker` protocol on the engine's side.
 
 Order safety: `place_order`, `modify` and `close` are never retried. A timeout after the bridge sent an order raises
 `BridgeUnavailable`, exactly like a terminal that died after `order_send`; the engine treats an entry that raised it as
 an ambiguous order (goldbot/engine/order_send.py) and finds the fill by its client order id in positions and deals
 (row X7, BACKLOG 72), so an order is never sent twice. The engine sends entries through a client of their own on a
-worker thread with the account's `order_timeout_s`; this server still serves one call at a time. Read-only calls
-are retried once. While the bridge is unreachable there are no ticks, so the gate's stale-data rule blocks entries;
+worker thread with the account's `order_timeout_s`. Read-only calls are retried once. While the bridge is unreachable there are no ticks, so the gate's stale-data rule blocks entries;
 open positions keep their broker-side stop and target (sent with every order).
 
-Defence in depth on the terminal's side: requests time out after `SOCKET_TIMEOUT_S` (one stalled connection cannot
-hold the single-threaded server); an order call older than `ORDER_MAX_AGE_S` when it reaches the terminal is refused
+Defence in depth on the terminal's side: requests time out after `SOCKET_TIMEOUT_S` (a stalled connection holds
+only its own thread); an order call older than `ORDER_MAX_AGE_S` when it reaches the terminal is refused
 (the engine has already given up on it, and its price is stale); `GuardedBroker` refuses orders outside the account's
 magic range or above `MAX_ORDER_LOTS`, and stop/target changes on positions that are not goldbot's (closes stay allowed: the kill switch closes everything). It also refuses
 an order that would take this terminal's gross notional on the symbol above `MAX_NOTIONAL_EQUITY_MULT` (6x) its own
@@ -51,7 +54,7 @@ import threading
 import time
 from datetime import date
 from datetime import time as dtime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, AsyncIterator, Callable
 
 import pandas as pd
@@ -60,6 +63,17 @@ from pydantic import BaseModel
 
 from goldbot.base import load_record
 from goldbot.data.calendar import TradingSession
+from goldbot.execution.bridge_queue import (
+    HEALTH,
+    MAX_QUEUED,
+    READ_TTL_S,
+    Job,
+    LaneError,
+    LaneLost,
+    LaneNotSent,
+    TerminalQueue,
+    priority_of,
+)
 from goldbot.execution.broker import (
     SMOKE_MAGIC_OFFSET,
     AccountInfo,
@@ -111,7 +125,12 @@ METHODS: dict[str, tuple[str, bool]] = {
 # v6: `get_bars_range` (MT5 copy_rates_range, read-only), the D12 reconcile's window read. It is OPTIONAL_METHODS: the
 # brain falls back to get_bars when a v5 bridge refuses it (HTTP 403), so a v5 bridge stays compatible (MIN_COMPATIBLE
 # 5, not required by bridge_compat) and either box can be deployed first.
-API_VERSION = 6
+# v7 (BACKLOG 135, ADR 0056): the bridge serves requests concurrently from a priority queue (closes and stop changes
+# first, abandoned reads dropped; goldbot/execution/bridge_queue.py), may send entries through its order lane
+# (`order_lane` on /health), and the brain sends its read timeout (`timeout_s`) with every request. Same methods,
+# records and arguments, and a v6 server ignores the extra request key, so MIN_COMPATIBLE stays 5 and either box can
+# be deployed first; only a live account requires v7 (bridge_compat.CLOSE_PRIORITY_VERSION: entries refused below it).
+API_VERSION = 7
 MIN_COMPATIBLE = 5
 # Methods the brain calls only with a fallback for a bridge that lacks them: never required by bridge_compat, so their
 # absence never refuses entries. Read-only methods only (an order method is never optional).
@@ -212,22 +231,35 @@ def _decode(v: Any, *, response: bool) -> Any:
 
 
 # ---------------------------------------------------------------------------------------------- server
-def _exit_terminal_lost() -> None:
-    """End the bridge after TERMINAL_LOST_READS not_running reads: its IPC is gone, and a fresh process re-attaches
-    (initialize(path=..., timeout=60 s)) once the terminal unit has the terminal up again. SystemExit is not an
-    Exception, so it leaves serve_forever after the reply was written; one request at a time, so no RPC is cut."""
+def _log_terminal_lost() -> None:
     log.error("MT5 terminal not running on %d consecutive reads over %g s: exiting to re-attach",
               TERMINAL_LOST_READS, TERMINAL_LOST_MIN_SPAN_S)
+
+
+def _exit_terminal_lost() -> None:
+    """End the bridge after TERMINAL_LOST_READS not_running reads: its IPC is gone, and a fresh process re-attaches
+    (initialize(path=..., timeout=60 s)) once the terminal unit has the terminal up again. Called after the reply was
+    written. `serve` passes its own callback (requests are served on threads since protocol v7, where a SystemExit
+    would end only the request's thread): it stops the server and exits from the main thread."""
+    _log_terminal_lost()
     raise SystemExit(TERMINAL_LOST_EXIT)
+
+
+def _read_timeout(v: Any) -> float | None:
+    """The client's read timeout (`timeout_s`, protocol v7) when it is a sane number of seconds, else None."""
+    if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 < v <= 600:
+        return float(v)
+    return None
 
 
 def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_first: bool = False,
                  on_terminal_lost: Callable[[], None] | None = None,
                  clock: Callable[[], float] = time.monotonic, lock: threading.Lock | None = None,
-                 login_status: Callable[[], str | None] | None = None) -> type[BaseHTTPRequestHandler]:
+                 login_status: Callable[[], str | None] | None = None,
+                 terminal: TerminalQueue | None = None, lane: Any = None) -> type[BaseHTTPRequestHandler]:
     """`commit`: the commit this bridge process runs (read once at start), reported on /health so the brain can see
-    when the two boxes run different code. Nothing on /health is a secret: zone, commit (public repo), protocol, and
-    the terminal's state token when the broker reports one (`terminal_state()`).
+    when the two boxes run different code. Nothing on /health is a secret: zone, commit (public repo), protocol, the
+    order lane's state token, and the terminal's state token when the broker reports one (`terminal_state()`).
 
     `verify_first`: the terminal's state is read on every RPC. Every RPC is refused (503) until the terminal has once
     been seen in state `ok` (logged in to the registered account, connected), and again whenever it is CURRENTLY on
@@ -241,15 +273,26 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
     MetaTrader5 package is not thread-safe). /health and every RPC take it for their terminal calls, waiting at most
     LOCK_WAIT_S: while a login holds it, /health answers not_logged_in with `login: in_progress` without touching the
     terminal, and an RPC gets a prompt 503 (a definite refusal; the engine sends a close again), never a wait past the
-    watchdog's probe or an order's age limit. `login_status`: the self-heal's token (LOGIN_STATES) for /health."""
+    watchdog's probe or an order's age limit. `login_status`: the self-heal's token (LOGIN_STATES) for /health.
+
+    BACKLOG 135 (protocol v7, goldbot/execution/bridge_queue.py): the request is read, authenticated and decoded on
+    its own thread; its terminal work (/health's reads included) runs on `terminal`'s one worker, closes and stop
+    changes first, then /health, then reads, then orders. A request whose client went while it waited is never run;
+    a read queued past its client's `timeout_s` is dropped (504); an order older than ORDER_MAX_AGE_S when it reaches
+    the front is refused stale (409). `lane` (goldbot/execution/bridge_lane.py ProcessLane, or None): while it is up,
+    `place_order` runs there on its own terminal connection (its own one-worker queue), checked against the last
+    terminal state this connection read (the lane's GuardedBroker reads the account itself on every order); an order
+    whose lane died with it gets no reply at all, so the brain books it ambiguous (BACKLOG 72)."""
     if len(token) < 32:
         raise ValueError("bridge token must be at least 32 characters")
     lost_cb = on_terminal_lost or _exit_terminal_lost
     seen: dict[str, Any] = {"state": None, "since": clock(), "lost": 0, "lost_at": 0.0,
                             "verified": not verify_first}
+    main = terminal if terminal is not None else TerminalQueue("terminal")
+    orders = TerminalQueue("order-lane")
 
     def terminal_state() -> str | None:
-        """The terminal's token (and its bookkeeping), or None when the broker does not report one."""
+        """The terminal's token (and its bookkeeping), or None when the broker does not report one. On the worker."""
         fn = getattr(broker, "terminal_state", None)
         state = fn() if callable(fn) else None
         if state is None:
@@ -261,6 +304,99 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
         if state in ("ok", "autotrading_off"):         # both are the registered account, connected
             seen["verified"] = True
         return str(state)
+
+    def health() -> tuple[int, dict[str, Any], bool]:
+        """GET /health on the worker: (status, body, whether the terminal is lost and the bridge must exit)."""
+        body: dict[str, Any] = {"ok": True}
+        state: str | None
+        held = lock is not None and not lock.acquire(timeout=LOCK_WAIT_S)
+        if held:                                         # a login holds the terminal: it has no account now
+            state = "not_logged_in"
+            if state != seen["state"]:
+                seen["state"], seen["since"] = state, clock()
+        else:
+            try:
+                state = terminal_state()
+            finally:
+                if lock is not None:
+                    lock.release()
+        login = "in_progress" if held else (login_status() if login_status is not None else None)
+        if login in LOGIN_STATES and state != "ok":    # a login held back only matters without an account
+            body["login"] = login
+        if state is not None:                            # a fixed token and a capped age: no account data
+            body["ok"] = state == "ok"
+            body["terminal"] = state
+            body["terminal_for_s"] = min(int(max(clock() - seen["since"], 0)), TERMINAL_FOR_CAP_S)
+        tz = getattr(broker, "server_tz", None)      # the zone this box converts MT5 stamps with (not a secret)
+        if isinstance(tz, str):
+            body["server_tz"] = tz
+        body["api_version"] = API_VERSION
+        body["min_compatible"] = MIN_COMPATIBLE
+        body["methods"] = sorted(METHODS)                # exactly what do_POST serves
+        body["order_lane"] = lane.state if lane is not None else "off"
+        if commit is not None:
+            body["commit"] = commit
+        lost = False
+        if state != "not_running":
+            seen["lost"] = 0
+        else:
+            if seen["lost"] == 0:
+                seen["lost_at"] = clock()
+            seen["lost"] += 1
+            # one brain health pass reads /health three times within a second: only reads spanning
+            # TERMINAL_LOST_MIN_SPAN_S end the bridge (a terminal restarting for a moment does not)
+            if seen["lost"] >= TERMINAL_LOST_READS and clock() - seen["lost_at"] >= TERMINAL_LOST_MIN_SPAN_S:
+                seen["lost"] = 0
+                lost = True
+        return (200 if body["ok"] else 503), body, lost
+
+    def gate(*, read_terminal: bool) -> tuple[int, dict[str, Any]] | None:
+        """verify_first (see above): a refusal, or None. `read_terminal` False (the order lane) judges the state
+        this connection read last instead of reading the terminal from another thread."""
+        if not verify_first:
+            return None
+        state = terminal_state() if read_terminal else seen["state"]
+        if not seen["verified"]:                     # not yet seen on the registered account: no call at all
+            return 503, {"error": f"terminal not verified: {state or 'unknown'}"}
+        if state == "wrong_account":                 # switched since: nothing at all, reads and closes too
+            return 503, {"error": "terminal on another account: refused"}
+        # not_logged_in / not_running / not_connected: calls go through (exits are never gated); the terminal
+        # answers what it can
+        return None
+
+    def call(method: str, args: list[Any], sent_at: float) -> _Outcome:
+        """One RPC on the main worker."""
+        if lock is not None and not lock.acquire(timeout=LOCK_WAIT_S):
+            return _Outcome(503, {"error": "terminal login in progress: refused, send again"})
+        try:
+            if (refused := gate(read_terminal=True)) is not None:
+                return _Outcome(*refused)
+            if method == "place_order" and isinstance(broker, GuardedBroker):
+                broker.order_sent_at = sent_at       # its age is checked again just before the send
+            return _Outcome(200, result=getattr(broker, method)(*args))
+        except Exception as exc:                                  # the terminal's error goes back to the caller
+            log.exception("bridge call failed")
+            return _Outcome(500, {"error": f"{type(exc).__name__}: {exc}"})
+        finally:
+            if lock is not None:
+                lock.release()
+
+    def lane_call(args: list[Any], sent_at: float) -> _Outcome:
+        """place_order on the order lane's own connection (its worker), as `call`; LaneLost propagates."""
+        if (refused := gate(read_terminal=False)) is not None:
+            return _Outcome(*refused)
+        try:
+            return _Outcome(200, result=lane.place_order(args[0], sent_at))
+        except LaneError as exc:
+            return _Outcome(500, {"error": str(exc)})
+        except LaneNotSent as exc:            # nothing reached the terminal: a definite reject, never silence
+            from goldbot.execution.bridge_lane import NOT_SENT
+            log.warning("order %s not sent: %s", getattr(args[0], "client_order_id", "?"), exc)
+            return _Outcome(200, result=_refusal(f"{NOT_SENT}: {exc}; nothing was sent"))
+
+    def stale(sent_at: float) -> str | None:
+        age = time.time() - sent_at
+        return None if -ORDER_MAX_AGE_S < age < ORDER_MAX_AGE_S else f"{age:.1f} s old; refused (stale)"
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "goldbot-bridge"
@@ -277,49 +413,34 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
             self.end_headers()
             self.wfile.write(data)
 
+        def _run(self, q: TerminalQueue, job: Job) -> bool:
+            """Queue `job` and wait for it; False (a reply already sent, or the client gone) when it never ran."""
+            if not q.submit(job):
+                self._reply(503, {"error": "bridge busy: too many requests waiting; refused, send again"})
+                return False
+            if not q.wait(job, self.connection):
+                log.info("bridge: %s not run, its client went while it waited", job.label)
+                self.close_connection = True
+                return False
+            if job.status == "skipped":
+                code = 409 if (job.skipped or "").endswith("(stale)") else 504
+                self._reply(code, {"error": f"{job.label} is {job.skipped}"})
+                return False
+            return True
+
         def do_GET(self) -> None:
             if self.path != "/health":
                 self._reply(404, {"error": "not found"})
                 return
-            body: dict[str, Any] = {"ok": True}
-            state: str | None
-            held = lock is not None and not lock.acquire(timeout=LOCK_WAIT_S)
-            if held:                                         # a login holds the terminal: it has no account now
-                state = "not_logged_in"
-                if state != seen["state"]:
-                    seen["state"], seen["since"] = state, clock()
-            else:
-                try:
-                    state = terminal_state()
-                finally:
-                    if lock is not None:
-                        lock.release()
-            login = "in_progress" if held else (login_status() if login_status is not None else None)
-            if login in LOGIN_STATES and state != "ok":    # a login held back only matters without an account
-                body["login"] = login
-            if state is not None:                            # a fixed token and a capped age: no account data
-                body["ok"] = state == "ok"
-                body["terminal"] = state
-                body["terminal_for_s"] = min(int(max(clock() - seen["since"], 0)), TERMINAL_FOR_CAP_S)
-            tz = getattr(broker, "server_tz", None)      # the zone this box converts MT5 stamps with (not a secret)
-            if isinstance(tz, str):
-                body["server_tz"] = tz
-            body["api_version"] = API_VERSION
-            body["min_compatible"] = MIN_COMPATIBLE
-            body["methods"] = sorted(METHODS)                # exactly what do_POST serves
-            if commit is not None:
-                body["commit"] = commit
-            self._reply(200 if body["ok"] else 503, body)
-            if state != "not_running":
-                seen["lost"] = 0
+            job = Job(health, priority=HEALTH, label="health")
+            if not self._run(main, job):
                 return
-            if seen["lost"] == 0:
-                seen["lost_at"] = clock()
-            seen["lost"] += 1
-            # one brain health pass reads /health three times within a second: only reads spanning
-            # TERMINAL_LOST_MIN_SPAN_S end the bridge (a terminal restarting for a moment does not)
-            if seen["lost"] >= TERMINAL_LOST_READS and clock() - seen["lost_at"] >= TERMINAL_LOST_MIN_SPAN_S:
-                seen["lost"] = 0
+            if job.error is not None:
+                self._reply(500, {"error": f"health failed ({type(job.error).__name__})"})
+                return
+            status, body, lost = job.result
+            self._reply(status, body)
+            if lost:
                 lost_cb()
 
         def do_POST(self) -> None:
@@ -337,58 +458,116 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
             if n <= 0 or n > MAX_BODY:
                 self._reply(400, {"error": "bad body"})
                 return
-            if lock is not None and not lock.acquire(timeout=LOCK_WAIT_S):
-                self._reply(503, {"error": "terminal login in progress: refused, send again"})
-                return
-            try:
-                self._rpc(n)
-            finally:
-                if lock is not None:
-                    lock.release()
-
-        def _rpc(self, n: int) -> None:
-            if verify_first:                                 # the terminal's CURRENT account, on every call
-                state = terminal_state()
-                if not seen["verified"]:                     # not yet seen on the registered account: no call at all
-                    self._reply(503, {"error": f"terminal not verified: {state or 'unknown'}"})
-                    return
-                if state == "wrong_account":                 # switched since: nothing at all, reads and closes too
-                    self._reply(503, {"error": "terminal on another account: refused"})
-                    return
-                # not_logged_in / not_running / not_connected: calls go through (exits are never gated); the
-                # terminal answers what it can
+            received = time.monotonic()
             try:
                 req = json.loads(self.rfile.read(n))
                 method = req["method"]
                 if not isinstance(method, str) or method not in METHODS:
                     self._reply(403, {"error": f"method {method!r} not allowed"})
                     return
-                age = time.time() - float(req.get("sent_at", 0.0))
-                if not METHODS[method][1] and not -ORDER_MAX_AGE_S < age < ORDER_MAX_AGE_S:
-                    self._reply(409, {"error": f"{method} is {age:.1f} s old; refused (stale)"})
+                sent_at = float(req.get("sent_at", 0.0))
+                retry_safe = METHODS[method][1]
+                if not retry_safe and (why := stale(sent_at)) is not None:
+                    self._reply(409, {"error": f"{method} is {why}"})
                     return
                 args = [_decode(a, response=False) for a in req.get("args", [])]
-                if method == "place_order" and isinstance(broker, GuardedBroker):
-                    broker.order_sent_at = time.time() - age      # its age is checked again just before the send
-                result = getattr(broker, method)(*args)
-            except Exception as exc:                                  # the terminal's error goes back to the caller
+            except Exception as exc:                                  # a malformed request goes back to the caller
                 log.exception("bridge call failed")
                 self._reply(500, {"error": f"{type(exc).__name__}: {exc}"})
                 return
-            self._reply(200, {"result": _encode(result)})
+            ttl = _read_timeout(req.get("timeout_s")) or READ_TTL_S
+
+            def refusal() -> str | None:
+                """On the worker, just before the call: an abandoned read or a stale order is never run."""
+                if method == "place_order":
+                    return stale(sent_at)
+                if retry_safe and time.monotonic() - received > ttl:
+                    return f"queued past its client's {ttl:g} s timeout; dropped"
+                return None
+            on_lane = method == "place_order" and lane is not None and lane.ready()
+            job = Job((lambda: lane_call(args, sent_at)) if on_lane else (lambda: call(method, args, sent_at)),
+                      priority=priority_of(method), label=method, refusal=refusal)
+            if not self._run(orders if on_lane else main, job):
+                return
+            if isinstance(job.error, LaneLost):      # the order's outcome is unknown: no reply, never re-sent
+                log.error("order lane lost an order in flight: no reply, the brain looks it up (BACKLOG 72)")
+                self.close_connection = True
+                return
+            if job.error is not None:
+                log.error("bridge call failed: %s", type(job.error).__name__)
+                self._reply(500, {"error": f"{type(job.error).__name__}: {job.error}"})
+                return
+            out: _Outcome = job.result
+            if out.status != 200:
+                self._reply(out.status, out.body)
+                return
+            try:
+                body = {"result": _encode(out.result)}      # encoded on this thread, never on the terminal's worker
+            except Exception as exc:                          # an unencodable result: the caller hears why
+                self._reply(500, {"error": f"{type(exc).__name__}: {exc}"})
+                return
+            self._reply(200, body)
 
     return Handler
 
 
+class _Outcome:
+    """A request's outcome from the worker: an HTTP status with an error body, or 200 with the broker's `result`."""
+
+    def __init__(self, status: int, body: dict[str, Any] | None = None, *, result: Any = None) -> None:
+        self.status, self.body, self.result = status, body or {}, result
+
+
+def make_server(broker: Any, host: str, port: int, token: str, **kw: Any) -> ThreadingHTTPServer:
+    """The bridge's HTTP server (protocol v7): requests accepted on threads of their own (daemon), terminal work on
+    the queue's one worker (make_handler). `kw` goes to make_handler."""
+    httpd = _BridgeServer((host, port), make_handler(broker, token, **kw))
+    httpd.daemon_threads = True
+    return httpd
+
+
+class _BridgeServer(ThreadingHTTPServer):
+    """A listen backlog of MAX_QUEUED, not socketserver's 5: the brain opens about six connections per account at once
+    (ticks, history, M1 bars, sessions, health, orders), and a connection refused at the door would be a close lost
+    under load (found by the read-flood test: a reset on connect)."""
+
+    request_queue_size = MAX_QUEUED
+
+
 def serve(broker: Any, host: str, port: int, token: str, commit: str | None = None,
           verify_first: bool = False, lock: threading.Lock | None = None,
-          login_status: Callable[[], str | None] | None = None) -> None:  # pragma: no cover - blocking loop
-    """One request at a time (HTTPServer, not ThreadingHTTPServer): the MetaTrader5 package is not thread-safe; the
-    self-heal login thread shares `lock` with it (make_handler)."""
-    httpd = HTTPServer((host, port), make_handler(broker, token, commit=commit, verify_first=verify_first, lock=lock,
-                                                  login_status=login_status))
+          login_status: Callable[[], str | None] | None = None,
+          lane: Any = None) -> None:  # pragma: no cover - blocking loop
+    """Requests on threads, one terminal call at a time per connection (make_handler); the self-heal login thread
+    shares `lock` with it. `lane`: the order lane (bridge_lane.ProcessLane), started here on a thread of its own;
+    orders use it once it is up. A lost terminal, or a lane child that launched a terminal of its own, stops the
+    server and exits from this thread (TERMINAL_LOST_EXIT, or the lane's spawned_exit)."""
+    exit_code: dict[str, int] = {}
+    holder: dict[str, ThreadingHTTPServer] = {}
+
+    def stop(code: int) -> None:
+        exit_code.setdefault("code", code)
+        if "httpd" in holder:
+            threading.Thread(target=holder["httpd"].shutdown, name="bridge-stop", daemon=True).start()
+
+    def lost() -> None:
+        _log_terminal_lost()
+        stop(TERMINAL_LOST_EXIT)
+    if lane is not None:
+        lane.on_spawned = lambda: stop(lane.spawned_exit)
+    httpd = holder["httpd"] = make_server(broker, host, port, token, commit=commit, verify_first=verify_first,
+                                          lock=lock, login_status=login_status, on_terminal_lost=lost, lane=lane)
+    if lane is not None:
+        threading.Thread(target=lane.start, name="bridge-order-lane-start", daemon=True).start()
     log.info("bridge serving %s on %s:%d", type(broker).__name__, host, port)
-    httpd.serve_forever()
+    try:
+        httpd.serve_forever()
+    finally:
+        if lane is not None:
+            lane.stop()
+        httpd.server_close()
+    if "code" in exit_code:
+        raise SystemExit(exit_code["code"])
 
 
 class _Unreadable(Exception):
@@ -689,7 +868,9 @@ class RemoteBroker:
         attempts = self.read_attempts if retry else 1
         timeout = self.timeout_s if retry else self.order_timeout_s
         for i in range(attempts):
-            body = json.dumps({"method": method, "args": [_encode(a) for a in args], "sent_at": time.time()})
+            # timeout_s (v7): the bridge drops a read still queued after it (BACKLOG 135); v6 bridges ignore it
+            body = json.dumps({"method": method, "args": [_encode(a) for a in args], "sent_at": time.time(),
+                               "timeout_s": timeout})
             try:
                 r = self._post(f"{self.url}/rpc", data=body, timeout=timeout,
                                headers={"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"})

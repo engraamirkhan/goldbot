@@ -375,12 +375,17 @@ accounts:
     mode: live
     server: ICMarketsSC-Live
     login: null
-    terminal_path: C:\MT5\ICMarkets-Live\terminal64.exe
+    # its own box, the bootstrap's install path (docs/deploy/bridge-v7-rollout.md section 7: the terminal unit starts
+    # C:\MT5\ICMarkets only; the old ICMarkets-Live path had no terminal behind it)
+    terminal_path: C:\MT5\ICMarkets\terminal64.exe
     server_tz: Europe/Athens
     symbol: XAUUSD
     magic_base: 260300
     enabled: false  # unlocked by the paper -> tiny-live gate
     dynamic_limits: false     # owner-only on real money (design 2026-10-19); tighten-only if ever turned on
+    # BACKLOG 135, PD decision on the trading-safety review of 49335812: a live account takes entries only while its
+    # bridge's order lane is up (/health order_lane: separate); exits work without it. Its drill: RUNBOOK "Order lane"
+    order_lane: true
   vantage-live:
     broker: vantage
     mode: live

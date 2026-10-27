@@ -164,9 +164,10 @@ def test_an_unanswered_auto_entry_pauses_this_close_without_reading_the_busy_bri
 
 # ---------------------------------------------------------------------------------------------- 2. off the tick thread
 class _SerialBridge(PaperBroker):
-    """The MT5 box as it is (bridge.serve: one call at a time): while the order for PID holds the terminal for `hold_s`,
-    every other call waits for it, a read at most `read_s` per attempt (READ_ATTEMPTS, then BridgeUnavailable), a
-    close at most `read_s` once. The order reaches no fill and its reply is lost (the worst case)."""
+    """The MT5 box without an order lane (one terminal connection, one call at a time): while the order for PID holds
+    the terminal for `hold_s`, every other call waits for it, a read at most `read_s` per attempt (READ_ATTEMPTS, then
+    BridgeUnavailable), a close at most `read_s` once. The order reaches no fill and its reply is lost (the worst
+    case). The bridge side of BACKLOG 135 (closes first, abandoned reads dropped) is tests/test_bridge_close_priority.py."""
 
     def __init__(self, *, hold_s: float, read_s: float, **kw: Any) -> None:
         super().__init__(equity=10_000, **kw)
@@ -205,9 +206,10 @@ class _SerialBridge(PaperBroker):
 
 
 def test_with_an_order_in_flight_exits_wait_for_the_serial_mt5_box_within_the_documented_bound(tmp_path):
-    """Trading-safety review of 5d661e94 (MEDIUM): closes do not keep per-tick cadence while the terminal is sending an
-    order; the engine-side stop close lands after the order's hold, within `exit_delay_bound_s` (35 s order timeout:
-    55 s; here scaled down), the loop keeps passing and no pass is a tick error."""
+    """Trading-safety review of 5d661e94 (MEDIUM): without the order lane, closes do not keep per-tick cadence while
+    the terminal is sending an order; the engine-side stop close lands after the order's hold, within
+    `exit_delay_bound_s` (the hold plus one pass; here scaled down), the loop keeps passing and no pass is a tick
+    error."""
     hold_s, read_s = 0.6, 0.1
     pb = _SerialBridge(hold_s=hold_s, read_s=read_s)
     eng, _ = _engine(tmp_path, _started(pb))
@@ -228,13 +230,14 @@ def test_with_an_order_in_flight_exits_wait_for_the_serial_mt5_box_within_the_do
     assert pb.closed_at is not None, "the engine stop never closed"
     delay = pb.closed_at - t0
     assert hold_s * 0.9 <= delay                                      # serialised: not before the order let go
-    assert delay <= order_send.exit_delay_bound_s(hold_s, read_s) + 0.5
+    assert delay <= order_send.exit_delay_bound_s(hold_s, order_lane=False)
     assert passes >= 2 and not eng.state.tick_error and eng.tick_errors_total == 0
     assert pos not in {p.position_id for p in PaperBroker.positions(pb)}
 
 
-def test_the_documented_exit_delay_bound_at_vantages_order_timeout_is_55_s():
-    assert order_send.exit_delay_bound_s(35.0) == 55.0
+def test_the_documented_exit_delay_bound_is_5_s_with_the_order_lane_and_the_order_hold_plus_a_pass_without():
+    assert order_send.exit_delay_bound_s(35.0, order_lane=True) == 5.0      # BACKLOG 135 acceptance
+    assert order_send.exit_delay_bound_s(35.0, order_lane=False) == 36.0    # was 55 s on a v6 bridge
     assert order_send.READ_TIMEOUT_S == RemoteBroker("http://127.0.0.1:1", "t" * 40).timeout_s
     assert order_send.READ_ATTEMPTS == RemoteBroker("http://127.0.0.1:1", "t" * 40).read_attempts
 

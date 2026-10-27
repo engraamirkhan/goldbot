@@ -26,6 +26,12 @@
   "bridge-no-account": {
    "error": "IndexError"
   },
+  "bridge-order-lane": {
+   "args": {
+    "account_id": "vantage-demo"
+   },
+   "target": "goldbot.ops.run:run_order_lane"
+  },
   "bridge-smoke": {
    "args": {
     "argv": [

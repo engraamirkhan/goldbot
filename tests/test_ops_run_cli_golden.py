@@ -52,6 +52,7 @@ DISPATCH: dict[str, list[str]] = {
     "drift-review": ["drift-review", "--clear", "checked it"],
     "bridge": ["bridge", "icm-demo"],
     "bridge-no-account": ["bridge"],
+    "bridge-order-lane": ["bridge-order-lane", "vantage-demo"],      # BACKLOG 135: started by the bridge itself
     "api": ["api"],
     "webhook": ["webhook"],
     "scheduler": ["scheduler"],
@@ -91,7 +92,7 @@ DISPATCH: dict[str, list[str]] = {
 }
 
 # the run module's own functions a command reaches (the dispatcher's targets; helpers they call are not entries)
-RUN_ENTRIES = ("run_supervisor", "run_engine", "drift_review_cli", "run_bridge", "run_api", "run_webhook",
+RUN_ENTRIES = ("run_supervisor", "run_engine", "drift_review_cli", "run_bridge", "run_order_lane", "run_api", "run_webhook",
                "run_scheduler", "run_telegram", "run_news", "record_gate_cli", "publish_costs_cli")
 
 # files that start goldbot services or call the CLI on a server
@@ -292,6 +293,7 @@ ONE_SHOT: dict[str, tuple[str, str]] = {
 # an uncaught error). Pinned the other way round: a value a service returns is NOT turned into an exit code.
 SERVICES: dict[str, str] = {s: f"run_{s}" for s in
                             ("supervisor", "engine", "bridge", "api", "webhook", "scheduler", "telegram", "news")}
+SERVICES["bridge-order-lane"] = "run_order_lane"          # BACKLOG 135: started by the bridge, never by hand
 
 
 def _returns_3(calls: list[Any]) -> Callable[..., int]:

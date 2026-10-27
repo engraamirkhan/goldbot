@@ -66,7 +66,7 @@ from goldbot.ops.commands.gates import record_gate_cli
 from goldbot.ops.commands.registry import find
 from goldbot.ops.services._base import log
 from goldbot.ops.services.api import run_api
-from goldbot.ops.services.bridge import run_bridge
+from goldbot.ops.services.bridge import run_bridge, run_order_lane
 from goldbot.ops.services.engine import (
     SESSIONS_TIMEOUT_S,
     SessionRefresher,
@@ -124,6 +124,7 @@ __all__ = [
     "run_bridge",
     "run_engine",
     "run_news",
+    "run_order_lane",
     "run_scheduler",
     "run_supervisor",
     "run_telegram",
