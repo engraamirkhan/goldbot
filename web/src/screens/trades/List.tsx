@@ -37,14 +37,15 @@ export function TradesList({ query, onQuery, onOpen }: Props) {
   const n = activeFilterCount(f);
   const panel = <FilterPanel f={f} set={set} />;
   return (
-    <div className={`trades-page list-page${wide ? " wide" : ""}`}>
-      {wide && <aside className="filter-col" aria-label="Filters">{panel}</aside>}
+    <div className="trades-page list-page">
       <div className="list-main">
         <div className="list-bar">
           <Segmented label="Period" items={(["today", "7d", "30d"] as Period[]).map((id) => ({ id, label: PERIOD_WORDS[id] }))}
                      value={f.period} onChange={(period) => set({ period })} />
-          {!wide && <Button onClick={() => setSheet(true)} aria-haspopup="dialog">Filters{n ? ` (${n})` : ""}</Button>}
+          {wide ? <Button onClick={() => setSheet(!sheet)} aria-expanded={sheet} aria-controls="trade-filters">Filters{n ? ` (${n})` : ""}</Button>
+            : <Button onClick={() => setSheet(true)} aria-haspopup="dialog">Filters{n ? ` (${n})` : ""}</Button>}
         </div>
+        {wide && sheet && <section id="trade-filters" className="filter-inline" aria-label="Filters">{panel}</section>}
         <Chips f={f} set={set} />
         <Card title="Trades" label="Trade list">
           <ListBody q={q} f={f} onOpen={onOpen} wide={wide} onClear={() => onQuery(filtersQuery({ ...f, acct: [], fam: [], tf: [], status: "", kind: [], exit: [], evidence: [] }))} />
@@ -111,7 +112,7 @@ function ListBody({ q, f, onOpen, wide, onClear }: { q: Q; f: Filters; onOpen: (
         <EmptyState title="No trades match." action={activeFilterCount(f) ? <Button onClick={onClear}>Clear filters</Button> : undefined}>
           {f.period === "today" ? "Nothing yet today with these filters." : "Nothing in this period with these filters."}
         </EmptyState>
-      ) : wide ? <ListTable rows={rows} onOpen={onOpen} /> : (
+      ) : wide ? <ListTable rows={rows} onOpen={onOpen} period={f.period} /> : (
         <ul className="trade-rows" aria-label="Trades">
           {rows.map((t) => <li key={t.trade_id}><ListRowPhone t={t} onOpen={onOpen} /></li>)}
         </ul>
@@ -139,27 +140,29 @@ function ListRowPhone({ t, onOpen }: { t: TradeRow; onOpen: (id: string) => void
   const res = result(t);
   return (
     <button type="button" className={`trade-row${t.stale ? " stale" : ""}`} aria-label={rowName(t)} onClick={() => onOpen(t.trade_id)}>
-      <span className="tr-l1"><span className="tr-time muted num"><TimeText iso={t.opened_utc} /></span>
-        <span className="tr-name">{strategyLabel(t.family_label, t.family, t.timeframe, t.variant)}</span>
+      {/* line 1 what and how much; line 2 when, side, where, how it ended; line 3 the kind in a word and why */}
+      <span className="tr-l1"><span className="tr-name">{strategyLabel(t.family_label, t.family, t.timeframe, t.variant)}</span>
         <span className="tr-pnl num">{res.pnl}</span></span>
-      <span className="tr-l2"><span className="tr-meta">{sideWords(t.side)} · {t.account_label} · {endWords(t)}
+      <span className="tr-l2"><span className="tr-meta"><TimeText iso={t.opened_utc} /> · {sideWords(t.side)} · {t.account_label} · {endWords(t)}
         {t.status === "closed" && t.held_s != null ? ` · ${heldWords(t.held_s, null)}` : ""}</span>
-        {badge && <Badge tone="idle">{badge.toUpperCase()}</Badge>}
         <span className="tr-r num">{res.r}</span></span>
-      <span className="tr-l3 small muted">{t.why}</span>
+      <span className="tr-l3 small muted">{badge && <Badge tone="idle">{badge.toUpperCase()}</Badge>} {t.why}</span>
     </button>
   );
 }
 
-function ListTable({ rows, onOpen }: { rows: TradeRow[]; onOpen: (id: string) => void }) {
+function ListTable({ rows, onOpen, period }: { rows: TradeRow[]; onOpen: (id: string) => void; period: Period }) {
   return (
     <div className="trade-table-wrap">
       <table className="trade-table">
         <caption className="sr-only">Trades, newest first; net after costs in the account currency</caption>
+        {/* fixed layout, two lines a row (56 px): the why sits under the strategy, so nothing pushes the page sideways */}
+        <colgroup><col className="w-time" /><col /><col className="w-acct" /><col className="w-side" /><col className="w-exit" />
+          <col className="w-money" /><col className="w-r" /><col className="w-money" /><col className="w-kind" /></colgroup>
         <thead><tr>
-          <th scope="col">Opened</th><th scope="col">Strategy</th><th scope="col">Account</th><th scope="col">Side</th>
-          <th scope="col">Closed by</th><th scope="col" className="num">Held</th><th scope="col" className="num">Net</th>
-          <th scope="col" className="num">R</th><th scope="col" className="num">Costs</th><th scope="col">Kind</th><th scope="col">Why</th>
+          <th scope="col">Opened</th><th scope="col">Strategy and why</th><th scope="col">Account</th><th scope="col">Side</th>
+          <th scope="col">Closed by, held</th><th scope="col" className="num">Net</th>
+          <th scope="col" className="num">R</th><th scope="col" className="num">Costs</th><th scope="col">Kind</th>
         </tr></thead>
         <tbody>
           {rows.map((t) => {
@@ -168,17 +171,16 @@ function ListTable({ rows, onOpen }: { rows: TradeRow[]; onOpen: (id: string) =>
             return (
               <tr key={t.trade_id} className={`clickable${t.stale ? " stale" : ""}`} tabIndex={0} aria-label={rowName(t)} onClick={go}
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } }}>
-                <td className="num"><TimeText iso={t.opened_utc} withDay /></td>
-                <td>{strategyLabel(t.family_label, t.family, t.timeframe, t.variant)}</td>
+                <td className="num"><TimeText iso={t.opened_utc} withDay={period !== "today"} /></td>
+                <td className="two-line" title={t.why}><span>{strategyLabel(t.family_label, t.family, t.timeframe, t.variant)}</span>
+                  <span className="muted">{t.why}</span></td>
                 <td>{t.account_label}</td>
                 <td className={`tr-side ${t.side}`}>{sideWords(t.side)}</td>
-                <td>{endWords(t)}</td>
-                <td className="num">{heldWords(t.held_s, t.status === "open" ? t.hold_limit_s : null)}</td>
+                <td>{endWords(t)} · {heldWords(t.held_s, t.status === "open" ? t.hold_limit_s : null)}</td>
                 <td className="num">{res.pnl}</td>
                 <td className="num">{res.r}</td>
                 <td className="num">{t.costs_total == null ? "—" : money(t.costs_total, t.currency)}</td>
                 <td>{KIND_WORDS[t.kind]}</td>
-                <td className="why-cell" title={t.why}>{t.why}</td>
               </tr>
             );
           })}
@@ -248,7 +250,7 @@ function Chips({ f, set }: { f: Filters; set: (n: Partial<Filters>) => void }) {
   if (!chips.length) return <p className="small muted chips-none">All accounts · {DEFAULT_KINDS.length === KINDS.length ? "all kinds" : "all kinds but Shadow"}</p>;
   return (
     <ul className="chip-set chips-active" aria-label="Active filters">
-      {chips.map((c) => <li key={c.key}><button type="button" className="chip" onClick={c.drop} aria-label={`Remove filter ${c.label}`}>{c.label} <span aria-hidden="true">×</span></button></li>)}
+      {chips.map((c) => <li key={c.key}><button type="button" className="filter-chip" onClick={c.drop} aria-label={`Remove filter ${c.label}`}>{c.label} <span aria-hidden="true">×</span></button></li>)}
     </ul>
   );
 }

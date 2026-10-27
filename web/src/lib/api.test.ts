@@ -13,6 +13,14 @@ describe("api client", () => {
     vi.unstubAllGlobals();
   });
 
+  it("an /api path answered by the page itself (older server, SPA fallback) is a 404, not a JSON parse error", async () => {
+    const { api, ApiError } = await import("./api");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("<!doctype html>", { status: 200, headers: { "content-type": "text/html; charset=utf-8" } })));
+    const err = await api.strategyBoard().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(404);
+  });
+
   it("sends the bearer token and parses JSON", async () => {
     const { api, setToken } = await import("./api");
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { mode: "propose", halted: false, pending: 0, supervisor: {} }));

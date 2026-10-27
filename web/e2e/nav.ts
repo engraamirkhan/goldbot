@@ -2,8 +2,10 @@ import type { Page } from "@playwright/test";
 
 /** The screens by their pre-v2 names, mapped to the v2 destination and sub-tab (docs/ux/dashboard-v2.md section 2). */
 const WHERE: Record<string, [string, string?]> = {
-  Overview: ["Home"], Approvals: ["Trades"], "Trades open": ["Trades", "Open"], "Trades activity": ["Trades", "Activity"],
-  "Trades summary": ["Trades", "Summary"], Limits: ["Limits"],
+  // trades redesign 2026-10-27: Open -> Now, Activity -> List, Summary -> Today (docs/design/trades-ux-2026-10-27.md)
+  Overview: ["Home"], Approvals: ["Trades"], "Trades open": ["Trades", "Now"], "Trades activity": ["Trades", "List"],
+  "Trades summary": ["Trades", "Today"], "Trades now": ["Trades", "Now"], "Trades list": ["Trades", "List"],
+  "Trades strategies": ["Trades", "Strategies"], "Trades today": ["Trades", "Today"], Limits: ["Limits"],
   Research: ["Research", "Today and trials"], Progress: ["Research", "Road to live"], Agents: ["Research", "Strategies"],
   Feeds: ["Feeds", "Data feeds"], News: ["Feeds", "News"], Health: ["Feeds", "System health"],
   "Entry mode": ["Settings", "Entry mode and halt"], Account: ["Settings", "Your sign-in"], Users: ["Settings", "Users"],

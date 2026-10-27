@@ -252,7 +252,7 @@ export function duration(s: number | null | undefined): string {
   if (m < 1) return withUnit(Math.round(s), "s");
   if (m < 60) return withUnit(m, "min");
   const h = Math.floor(m / 60);
-  if (h < 48) return `${withUnit(h, "h")} ${withUnit(String(m % 60).padStart(2, "0"), "min")}`;
+  if (h < 48) return m % 60 ? `${withUnit(h, "h")} ${withUnit(String(m % 60).padStart(2, "0"), "min")}` : withUnit(h, "h");
   return `${withUnit(Math.floor(h / 24), "d")} ${withUnit(h % 24, "h")}`;
 }
 

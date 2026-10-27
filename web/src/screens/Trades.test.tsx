@@ -142,7 +142,7 @@ describe("Trade detail (133)", () => {
     const d = await screen.findByRole("dialog", { name: "Trade detail" });
     expect(await within(d).findByRole("img", { name: /target 4,024\.00, entry 4,012\.40, first stop 4,006\.10, last stop 4,012\.40, exit 4,024\.00/ })).toBeInTheDocument();
     expect(d).toHaveTextContent("Close above the 15m box after a squeeze");
-    expect(d).toHaveTextContent(`target, after 32 min (hold limit 2 h 00 min) at 4,024.00 USD/oz`);
+    expect(d).toHaveTextContent(`target, after 32 min (hold limit 2 h) at 4,024.00 USD/oz`);
     expect(d).toHaveTextContent(`spread £0.18 · slippage £0.02 · commission £0.07 · swap £0.00 = £0.27 (0.19 R)`);
     expect(d).toHaveTextContent("counted toward the read (213 of 300)");
     expect(within(d).getByText("Details")).toBeInTheDocument();

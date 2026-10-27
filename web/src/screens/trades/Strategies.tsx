@@ -75,16 +75,16 @@ function Board({ v, onFamily, updated }: { v: StrategyBoard; onFamily: (f: strin
           : wide ? <BoardTable fams={fams} tfs={tfs} onFamily={onFamily} />
           : <ul className="board-list">{fams.map((f) => <li key={f.family}><FamilyCard f={f} onFamily={onFamily} /></li>)}</ul>}
       </Card>
-      <EngineCard rows={v.engine} />
+      <EngineCard rows={v.engine} wide={wide} />
     </>
   );
 }
 
 function LabLine({ t }: { t: LabTotal }) {
-  const money_ = t.net_pnl == null ? "net hidden (fewer than 3 arms)" : `${money(t.net_pnl, t.currency, true)} net`;
+  const money_ = t.net_pnl == null ? "net hidden (fewer than 3 arms)" : <><span className="nowrap">{money(t.net_pnl, t.currency, true)}</span> net</>;
   return (
     <li className="num">{t.account_label}{t.style ? ` (${t.style})` : ""}, {t.period}: {t.n.toLocaleString("en-GB")} trades · {money_}
-      {t.costs != null && ` · costs ${money(t.costs, t.currency)}`}
+      {t.costs != null && <> · costs <span className="nowrap">{money(t.costs, t.currency)}</span></>}
       {t.within_plan != null && ` · ${t.within_plan ? "within plan" : "outside plan"}`}</li>
   );
 }
@@ -139,6 +139,7 @@ function BoardTable({ fams, tfs, onFamily }: { fams: BoardFamily[]; tfs: string[
     <div className="trade-table-wrap">
       <table className="trade-table board-table">
         <caption className="sr-only">Strategies by timeframe: progress to each arm's read, or its verdict after the read</caption>
+        <colgroup><col className="w-name" /><col className="w-state" />{tfs.map((t) => <col key={t} />)}</colgroup>
         <thead><tr><th scope="col">Strategy</th><th scope="col">State</th>{tfs.map((t) => <th key={t} scope="col">{t}</th>)}</tr></thead>
         <tbody>
           {fams.map((f) => (
@@ -158,10 +159,20 @@ function BoardTable({ fams, tfs, onFamily }: { fams: BoardFamily[]; tfs: string[
   );
 }
 
-function EngineCard({ rows }: { rows: EngineStrategy[] }) {
+function EngineCard({ rows, wide }: { rows: EngineStrategy[]; wide: boolean }) {
   return (
     <Card title="Engine strategies" label="Engine strategies">
-      {rows.length === 0 ? <EmptyState title="No engine strategy has traded yet." /> : (
+      {rows.length === 0 ? <EmptyState title="No engine strategy has traded yet." /> : !wide ? (
+        <ul className="engine-rows">
+          {rows.map((s) => (
+            <li key={`${s.kind}-${s.name}-${s.timeframe}`}>
+              <strong>{s.name}{s.timeframe ? ` · ${s.timeframe}` : ""}{s.kind === "shadow" && <span className="muted small"> (shadow, not money)</span>}</strong>
+              <span className="small num">{signedR(s.net_r_per_trade)}/trade ({ci(s.ci90)}) · n{NBSP}{s.n} · hit {pct(s.hit_rate)}
+                {s.net_pnl != null && <> · <span className="nowrap">{money(s.net_pnl, s.currency, true)}</span></>} · today {s.n_today}, 7{NBSP}d {s.n_7d}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
         <div className="trade-table-wrap scroll">
           <table className="trade-table">
             <caption className="sr-only">Engine strategies and shadow models: full figures with n and a 90% confidence interval</caption>

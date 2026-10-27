@@ -49,7 +49,6 @@ export function OpenNow({ onOpen }: { onOpen?: (tradeId: string) => void }) {
         : q.isError && !v ? <ErrorState title="Couldn't load open trades." stillWorks="Open trades keep their stop, target and automatic exits." onRetry={() => q.refetch()} />
         : <>
             {v!.unreadable.length > 0 && <p className="small state warn">{`Couldn't read the open trades of ${v!.unreadable.join(", ")}: missing, not zero.`}</p>}
-            {all.length > 0 && <p className="small muted">P&amp;L now after the costs already paid; risk is the loss at the stop set at entry; prices in USD/oz.</p>}
             {all.length === 0 ? (
               <EmptyState title="No open trades.">The labs open trades on their own signals; the next one shows here.</EmptyState>
             ) : <>
@@ -74,6 +73,7 @@ export function OpenNow({ onOpen }: { onOpen?: (tradeId: string) => void }) {
               {shown.length === 0 ? <EmptyState title="No open trades match.">Choose all accounts and all kinds to see every open trade.</EmptyState>
                 : wide ? <OpenTable groups={groups} onOpen={onOpen} />
                 : groups.map((g) => <OpenGroupBlock key={g.key} g={g} onOpen={onOpen} />)}
+              <p className="small muted">P&amp;L now is after the costs already paid; risk is the loss at the stop set at entry; prices in USD/oz.</p>
             </>}
           </>}
     </Card>
@@ -143,13 +143,13 @@ function OpenRowPhone({ p, onOpen }: { p: OpenPositionX; onOpen?: (id: string) =
   const risk = p.risk_amount ?? p.open_risk;
   return (
     <RowShell p={p} onOpen={onOpen} className={`trade-row${p.stale ? " stale" : ""}`}>
+      {/* the group header names the account, so line 1 carries the kind instead (a word, never colour alone) */}
       <span className="tr-l1"><span className="tr-name">{strategyLabel(p.family_label, p.family, p.timeframe)}</span>
-        <span className="tr-acct muted">{p.account_label || p.account}</span></span>
+        {badge && <Badge tone="idle">{badge.toUpperCase()}</Badge>}</span>
       <span className="tr-l2 num"><span className={`tr-side ${p.side}`}><span aria-hidden="true">{sideArrow(p.side)}</span> {sideWords(p.side)}</span>
         <span className="tr-pnl">{moneyOrDash(p.floating_pnl, p.currency)}</span>
         <span className="tr-r">{signedR(p.r_now)}</span>
-        <span className="tr-risk muted">risk {moneyOrDash(risk, p.currency, false)}</span>
-        {badge && <Badge tone="idle">{badge.toUpperCase()}</Badge>}</span>
+        <span className="tr-risk muted">risk {moneyOrDash(risk, p.currency, false)}</span></span>
       <span className="tr-l3 small muted num">{price(p.entry)} → stop {price(p.stop)} USD/oz · {heldWords(p.held_s, p.hold_limit_s)}</span>
     </RowShell>
   );
@@ -160,15 +160,18 @@ function OpenTable({ groups, onOpen }: { groups: OpenGroup[]; onOpen?: (id: stri
     <div className="trade-table-wrap">
       <table className="trade-table">
         <caption className="sr-only">Open trades, real money first; prices in USD per ounce, money in the account currency</caption>
+        {/* fixed layout: the columns never push the page sideways; the account is the group's header row */}
+        <colgroup><col /><col className="w-side" /><col className="w-price" /><col className="w-price" /><col className="w-price" />
+          <col className="w-money" /><col className="w-money" /><col className="w-r" /><col className="w-held" /><col className="w-kind" /></colgroup>
         <thead><tr>
-          <th scope="col">Account</th><th scope="col">Strategy</th><th scope="col">Side</th><th scope="col" className="num">Lots</th>
+          <th scope="col">Strategy</th><th scope="col">Side, lots</th>
           <th scope="col" className="num">Entry</th><th scope="col" className="num">Stop</th><th scope="col" className="num">Target</th>
           <th scope="col" className="num">Risk</th><th scope="col" className="num">P&amp;L now</th><th scope="col" className="num">R</th>
-          <th scope="col">Held</th><th scope="col">Kind</th>
+          <th scope="col" className="num">Held</th><th scope="col">Kind</th>
         </tr></thead>
         {groups.map((g) => (
           <tbody key={g.key} aria-label={`Open trades ${g.label}`}>
-            <tr className="group-row"><th scope="rowgroup" colSpan={12}><span className="group-line"><GroupHead g={g} /></span></th></tr>
+            <tr className="group-row"><th scope="rowgroup" colSpan={10}><span className="group-line"><GroupHead g={g} /></span></th></tr>
             {g.rows.map((p) => {
               const risk = p.risk_amount ?? p.open_risk;
               const go = p.trade_id && onOpen ? () => onOpen(p.trade_id!) : undefined;
@@ -176,10 +179,8 @@ function OpenTable({ groups, onOpen }: { groups: OpenGroup[]; onOpen?: (id: stri
                 <tr key={`${p.account}-${p.position_id}`} className={`${p.stale ? "stale " : ""}${go ? "clickable" : ""}`}
                     tabIndex={go ? 0 : undefined} aria-label={openRowName(p)} onClick={go}
                     onKeyDown={(e) => { if (go && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); go(); } }}>
-                  <td>{p.account_label || p.account}</td>
-                  <td>{strategyLabel(p.family_label, p.family, p.timeframe)}</td>
-                  <td className={`tr-side ${p.side}`}><span aria-hidden="true">{sideArrow(p.side)}</span> {sideWords(p.side)}</td>
-                  <td className="num">{lots(p.lots)}</td>
+                  <td title={strategyLabel(p.family_label, p.family, p.timeframe)}>{strategyLabel(p.family_label, p.family, p.timeframe)}</td>
+                  <td><span className={`tr-side ${p.side}`}><span aria-hidden="true">{sideArrow(p.side)}</span> {sideWords(p.side)}</span> {lots(p.lots)}</td>
                   <td className="num">{price(p.entry)}</td><td className="num">{price(p.stop)}</td><td className="num">{price(p.target)}</td>
                   <td className="num">{moneyOrDash(risk, p.currency, false)}</td>
                   <td className="num">{moneyOrDash(p.floating_pnl, p.currency)}</td>

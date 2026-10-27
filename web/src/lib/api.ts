@@ -122,6 +122,8 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(401, "login required");
   }
   if (!r.ok) throw new ApiError(r.status, (await r.json().catch(() => ({})))?.detail ?? r.statusText);
+  // the page itself (the SPA fallback) for an /api path: this server has no such endpoint yet (an older backend)
+  if ((r.headers.get("content-type") ?? "").startsWith("text/html")) throw new ApiError(404, "not served by this server");
   return r.json() as Promise<T>;
 }
 
