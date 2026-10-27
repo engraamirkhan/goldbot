@@ -17,6 +17,13 @@ reports on its unauthenticated GET /health (goldbot/execution/bridge.py) its `se
   after an `incompatible` that verdict is kept (`next_verdict`); health reports it (`bridge:<account>` fails).
 * `ok`; a different commit on the two boxes is reported (health warning) but never blocks: doc-only commits differ.
 
+A live account needs more than a compatible bridge (BACKLOG 135, ADR 0056; PD decision on the trading-safety review
+of 49335812): a bridge below CLOSE_PRIORITY_VERSION (protocol v7: closes queued ahead of reads and orders, abandoned
+reads dropped), or whose order lane is not up (`order_lane` other than `separate` on /health: off, starting, down, or
+not reported), is `incompatible` for it, so a live account never takes an entry while its exits could wait out an
+order on the MT5 box. Exits never read this. Demo accounts keep MIN_COMPATIBLE and trade whatever the lane's state; a
+lane that is `down` FAILs health on any account (goldbot/ops/checks/bridge.py `check_bridge_compat`).
+
 Exits never read any of this: the verdict is one RiskGate input for entries only. The engine checks at start and every
 60 s on a background thread (`BridgeCompatChecker`, goldbot/ops/run.py), so the tick loop never waits for /health.
 Nothing here carries the bridge URL into a reason (it names the tunnel endpoint).
@@ -39,6 +46,7 @@ from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.config import ROOT
 from goldbot.data.timeutil import CLOCK_AHEAD_TOLERANCE_S
 from goldbot.execution.bridge import API_VERSION, METHODS, MIN_COMPATIBLE, OPTIONAL_METHODS
+from goldbot.execution.bridge_lane import LANE_STATES
 
 log = logging.getLogger("goldbot.bridge_compat")
 
@@ -48,6 +56,8 @@ MAX_HEALTH_BYTES = 64 * 1024             # the bridge's report is ~400 bytes; an
 MAX_VERDICT_AGE_S = 300.0                # an ok older than this counts as unchecked (checks run every 60 s)
 UNCHECKED_GRACE_S = 120.0                # health: an engine unchecked longer than this FAILs (Telegram); warns inside
 HUNG_AFTER_S = 3 * CHECK_TIMEOUT_S       # a check thread alive this long is abandoned and replaced (daemon thread)
+CLOSE_PRIORITY_VERSION = 7               # BACKLOG 135: the bridge protocol a live account needs (closes first)
+LANE_UP, LANE_DOWN = "separate", "down"   # /health `order_lane`: live needs it up; down FAILs health anywhere
 REQUIRED_METHODS = frozenset(METHODS) - OPTIONAL_METHODS   # every method the brain calls without a fallback
 _TZ = re.compile(r"^[A-Za-z0-9_+\-/]{1,64}$")             # a zone name (Europe/Athens, NY+7); anything else is refused
 _SHA = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")     # sha-1 or sha-256 object names
@@ -106,6 +116,7 @@ class BridgeInfo(FrozenRecord):
     min_compatible: int | None = None
     methods: list[str] | None = None
     commit: str | None = None
+    order_lane: str | None = None        # v7: off | starting | separate | down (bridge_lane.LANE_STATES); else None
 
 
 def _int(v: Any) -> int | None:
@@ -166,10 +177,12 @@ def _read_bridge_info(url: str, timeout_s: float, get: Callable[..., Any]) -> Br
         return BridgeInfo(reachable=True, problem="/health answered, but not with the bridge's report")
     tz, methods, commit = body.get("server_tz"), body.get("methods"), body.get("commit")
     tz_ok = isinstance(tz, str) and _TZ.fullmatch(tz) is not None
+    lane = body.get("order_lane")
     return BridgeInfo(reachable=True, server_tz=tz if tz_ok else None, server_tz_invalid=tz is not None and not tz_ok,
                       api_version=_int(body.get("api_version")), min_compatible=_int(body.get("min_compatible")),
                       methods=[m for m in methods if isinstance(m, str)] if isinstance(methods, list) else None,
-                      commit=commit if isinstance(commit, str) and _SHA.fullmatch(commit) else None)
+                      commit=commit if isinstance(commit, str) and _SHA.fullmatch(commit) else None,
+                      order_lane=lane if lane in LANE_STATES else None)
 
 
 def _short(sha: str | None) -> str:
@@ -208,9 +221,10 @@ def unchecked(why: str, checked_at: pd.Timestamp | None = None, *, now: pd.Times
 
 def assess(info: BridgeInfo, server_tz: str, brain_commit: str | None, *, now: pd.Timestamp | None = None,
            required: frozenset[str] = REQUIRED_METHODS, api_version: int = API_VERSION,
-           min_compatible: int = MIN_COMPATIBLE) -> BridgeCompat:
+           min_compatible: int = MIN_COMPATIBLE, live: bool = False) -> BridgeCompat:
     """The verdict for a /health report against this brain's methods, protocol versions, zone and commit. `now` stamps
-    `checked_at` on a reachable answer (default: the host clock)."""
+    `checked_at` on a reachable answer (default: the host clock). `live`: a real-money account, which also needs
+    CLOSE_PRIORITY_VERSION and its order lane up (module docstring)."""
     if not info.reachable:
         return BridgeCompat(status="unreachable", reason=f"{info.problem or '/health unreachable'}: compatibility not "
                             "checked (no ticks either: the stale-data rule blocks entries)", brain_commit=brain_commit)
@@ -232,6 +246,12 @@ def assess(info: BridgeInfo, server_tz: str, brain_commit: str | None, *, now: p
         if api_version < info.min_compatible:
             problems.append(f"this brain's protocol v{api_version} is below the bridge's min_compatible "
                             f"v{info.min_compatible}")
+        if live and info.api_version < CLOSE_PRIORITY_VERSION:
+            problems.append(f"bridge protocol v{info.api_version} queues closes behind orders: a live account needs "
+                            f"v{CLOSE_PRIORITY_VERSION} (BACKLOG 135)")
+        if live and info.order_lane != LANE_UP:
+            problems.append(f"the order lane is {info.order_lane or 'not reported'}: a live account needs it up "
+                            f"({LANE_UP}; order_lane: true in accounts.yaml, RUNBOOK 'Order lane')")
     if info.problem is None:
         if info.server_tz_invalid:
             problems.append("the bridge reports an invalid server_tz")
@@ -254,8 +274,8 @@ def assess(info: BridgeInfo, server_tz: str, brain_commit: str | None, *, now: p
 
 
 def check_bridge(url: str, server_tz: str, brain_commit: str | None, timeout_s: float = CHECK_TIMEOUT_S,
-                 get: Callable[..., Any] = requests.get) -> BridgeCompat:
-    return assess(read_bridge_info(url, timeout_s, get), server_tz, brain_commit)
+                 get: Callable[..., Any] = requests.get, *, live: bool = False) -> BridgeCompat:
+    return assess(read_bridge_info(url, timeout_s, get), server_tz, brain_commit, live=live)
 
 
 def next_verdict(prev: BridgeCompat | None, new: BridgeCompat) -> BridgeCompat:

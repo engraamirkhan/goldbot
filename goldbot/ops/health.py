@@ -390,7 +390,7 @@ class HealthContext(Record):
         try:
             from goldbot.ops.limits_job import adaptive_enabled
             accs = [AccountRef(account_id=a.account_id, server_tz=a.server_tz, symbol=a.symbol,
-                               adaptive=settings is not None and adaptive_enabled(settings, a))
+                               adaptive=settings is not None and adaptive_enabled(settings, a), live=a.mode != "demo")
                     for a in accounts.enabled_accounts()]
             on = {a.account_id for a in accs}
             pilots = [AccountRef(account_id=a.account_id, server_tz=a.server_tz, symbol=a.symbol)

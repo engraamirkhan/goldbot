@@ -376,7 +376,8 @@ accounts:
     server: ICMarketsSC-MT5-3   # the owner's real account (Raw Spread), given 2026-10-27
     login: null  # never here (public repo): `python -m goldbot.ops.accounts add icm-live` on the VPS keeps it in the keyring
     currency: GBP               # the deposit currency; the engine refuses a terminal reporting another one
-    terminal_path: C:\MT5\ICMarkets-Live\terminal64.exe
+    # its own box, the bootstrap's install path (docs/deploy/bridge-v7-rollout.md section 7)
+    terminal_path: C:\MT5\ICMarkets\terminal64.exe
     # as icm-demo and icm-probe (same broker, measured 2026-10-26 in the gap week: UTC+3 = NY+7). health measures it on
     # the live terminal as soon as its bridge answers (`server_clock:icm-live`, before the unlock too); ADR 0005
     server_tz: NY+7
@@ -415,6 +416,9 @@ accounts:
       # position closed at the Friday cut, winners too
       weekly_cap_frac: 0.25
       weekend_flat: true
+    # BACKLOG 135, PD decision on the trading-safety review of 49335812: a live account takes entries only while its
+    # bridge's order lane is up (/health order_lane: separate); exits work without it. Its drill: RUNBOOK "Order lane"
+    order_lane: true
   vantage-live:
     broker: vantage
     mode: live

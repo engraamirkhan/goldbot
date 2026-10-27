@@ -158,7 +158,7 @@ def test_get_bars_range_is_a_read_only_optional_bridge_method_served_through_the
 
 def test_a_v5_bridge_without_the_range_method_stays_compatible():
     """The MT5 box can be deployed after the brain: an older bridge lacks get_bars_range and is still ok."""
-    assert API_VERSION == 6 and MIN_COMPATIBLE == 5
+    assert API_VERSION >= 6 and MIN_COMPATIBLE == 5          # v7 (BACKLOG 135) kept MIN_COMPATIBLE 5
     v5 = BridgeInfo(reachable=True, server_tz=TZ, api_version=5, min_compatible=5,
                     methods=sorted(set(METHODS) - {"get_bars_range"}))
     v = assess(v5, TZ, "a" * 40)

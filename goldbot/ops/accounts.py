@@ -239,6 +239,11 @@ class Account(Record):
     # entries and the absolute daily limit (refused at load otherwise). It enables nothing: the account still needs
     # `unlock_live` and the owner's typed phrase
     pilot: PilotRules = Field(default_factory=PilotRules)
+    # BACKLOG 135 (ADR 0056, goldbot/execution/bridge_lane.py): the MT5 box's bridge sends this account's entries on a
+    # terminal connection of its own, so ticks, closes and the kill switch keep flowing while the terminal sends one.
+    # Read by the bridge only. Off until the drill on that box passed (RUNBOOK "Order lane"); off = entries share the
+    # bridge's connection, at the back of its queue
+    order_lane: bool = False
 
     # backstop for records built outside load_accounts: validation errors never carry the input (names, logins)
     model_config = ConfigDict(hide_input_in_errors=True)      # merged with Record's config by pydantic
@@ -583,7 +588,8 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
                            dynamic_limits=a.get("dynamic_limits", False),
                            exploration=Exploration(**(a.get("exploration") or {})),
                            max_positions=a.get("max_positions"), order_timeout_s=a.get("order_timeout_s", 15.0),
-                           pilot=PilotRules(**(a.get("pilot") or {})))
+                           pilot=PilotRules(**(a.get("pilot") or {})),
+                           order_lane=a.get("order_lane", False))    # BACKLOG 135: read by the bridge
     hosts = [a for a in out.values() if a.enabled and a.shadow_host]
     if len(hosts) > 1:      # ADR 0037 amendment 4: one shadow book, one host; two would trade it twice
         raise ValueError(f"{len(hosts)} enabled accounts are the shadow host in config/accounts.yaml: exactly one may "

@@ -151,7 +151,7 @@ trim), and 62 must hold the cap too. 11 ranked rows.
 | 126 | Disaggregated COT before Sept 2009: availability floor | Data · PIT fix | S | proposed · accountable: data-engineer · reviews: quant-reviewer |
 | 117 | A bad exploration arm row must not stop the engine (exits keep running) | build | S | proposed |
 | 127 | Move Dukascopy bars off the public release (ADR 0048) | Data · licence | S | proposed · accountable: program-director (owner decision) · reviews: security-reviewer |
-| 135 | MT5 bridge: closes ahead of reads and orders, abandoned reads dropped (before any real-money account) | Execution (bridge) · safety | M | proposed, severity MEDIUM, gate: before any real-money account · accountable: implementer · reviews: trading-safety-reviewer, sre, security-reviewer |
+| 135 | MT5 bridge: closes ahead of reads and orders, abandoned reads dropped (before any real-money account) | Execution (bridge) · safety | M | in review (ADR 0056, protocol v7; order lane opt-in per account after its drill), severity MEDIUM, gate: before any real-money account · accountable: implementer · reviews: trading-safety-reviewer, sre, security-reviewer |
 
 ### 1. MT5-under-Wine demo smoke test on Oracle
 Value: until a real terminal has run, no cost, fill or reconciliation number in the system is measured. Every later

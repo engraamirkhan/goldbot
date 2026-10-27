@@ -2312,6 +2312,64 @@ longer interoperate (`tests/test_bridge_compat.py` pins both to `protocol_digest
 "deploy the MT5 box first" in the PR. The Telegram "New version ready" offer warns when an MT5 box runs an older
 commit than the one offered.
 
+### Order lane and close priority (BACKLOG 135, protocol v7)
+
+From protocol v7 (ADR 0056) the bridge accepts requests concurrently and gives the terminal one call at a time from a
+priority queue: closes and stop changes first, then `/health`, then reads, then entry orders. A request whose client
+went is never run, a read queued past its client's timeout is dropped (504), and an entry queued past 10 s is refused
+stale (409). With an account's **order lane** on (`order_lane: true` in `config/accounts.yaml`), the bridge starts a
+child process (`goldbot run bridge-order-lane <account>`, never started by hand) with its own terminal connection that
+sends entries only, so ticks, closes, the Friday cut and the kill switch keep flowing while the terminal sends one.
+`/health` reports `order_lane`: `off`, `starting`, `separate` (up), or `down` (it failed or lost an order; entries are
+back on the shared connection until the bridge restarts).
+
+| Bridge | Exit delay with an entry in flight | Live account |
+| --- | --- | --- |
+| v6 | the entry's hold plus a 2 x 10 s read cycle (about 45-55 s at 35 s) | entries refused (`bridge_incompatible`, "a live account needs v7") |
+| v7, lane off | the entry's hold plus one engine pass (about 36 s at 35 s) | entries refused (the lane must be up; ADR 0056 amendment 1) |
+| v7, lane `separate` | under 5 s | allowed; a lane `down` FAILs health on any account |
+
+**Deploy (protocol v7).** `MIN_COMPATIBLE` stays 5, so a v6 brain and a v7 bridge work together either way round. Do
+the MT5 boxes first anyway, one at a time, and the brain last. Each box's bridge restarts (about 15 s with no ticks;
+the broker-side stops cover open positions), so pick a quiet minute or a flat book. Claude runs every step; nothing
+needs the owner.
+1. CI is green on main for the commit `<SHA>` that contains this change.
+2. For each MT5 box (`goldbot-mt5` = icm-demo, `goldbot-mt5-probe` = icm-probe, `goldbot-mt5-vantage` = vantage-demo):
+   `ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes <box> sudo goldbot-deploy <SHA>`. The deploy restarts
+   `goldbot-bridge@<account>`, watches it for 90 s and rolls back by itself if it restarts again. No new package and
+   no new unit: `goldbot-deploy` is all it needs.
+3. Check each box: `ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes <box> curl -fsS http://127.0.0.1:8765/health`
+   shows `"api_version": 7`, `"order_lane": "off"` and `"terminal": "ok"`.
+4. The brain: `ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-brain sudo goldbot-deploy <SHA>` (or the Telegram
+   Deploy). Then `goldbot run health | grep -e bridge_compat -e 'bridge:'`: every account ok (commits equal).
+5. Soak for 4 h: `journalctl -u goldbot-engine@<account> --since -4h | grep -c tick_error` stays 0 on every
+   account, and the bridge log shows the queue at work without errors:
+   `ssh ... <box> journalctl -u goldbot-bridge@<account> --since -4h | grep -c "not run"` (abandoned reads dropped, normal)
+   and `... | grep -c "queue worker error"` (must be 0).
+
+**Turn the lane on (one demo box at a time; vantage-demo first, its entries are the slowest).**
+1. Memory first: the lane is a second Wine Python (about 150-250 MB). `ssh ... goldbot-mt5-vantage free -m` must show
+   at least 400 MB available; else stop and raise it with the SRE (the box is 2 GB).
+2. Before: on the brain run `python scripts/bridge_latency_probe.py vantage-demo --minutes 60` (read-only, last_tick
+   every 0.5 s) while the engine trades. Expect slow reads (over 1 s) at the times of entries.
+3. A one-line change on a branch: `order_lane: true` under `vantage-demo` in `config/accounts.yaml`, through CI and
+   merged as usual; deploy it to the vantage box only (step 2 of the deploy, with the new `<SHA>`), then the brain.
+4. On the box within 2 min: `/health` shows `"order_lane": "separate"` and `"terminal": "ok"`; exactly one terminal:
+   `ssh ... goldbot-mt5-vantage pgrep -c -u mt5 -f '[t]erminal64[.]exe'` prints `1`; two Python processes in the
+   bridge unit: `systemctl status goldbot-bridge@vantage-demo` lists the bridge and `bridge-order-lane`.
+5. After: `python scripts/bridge_latency_probe.py vantage-demo --minutes 240`. PASS: no read over 1 s at the time of
+   any entry in the engine journal (`order_late` or a fill), and `/health` stayed `ok` throughout (no `not_running`).
+   This is the drill that shows the MT5 terminal under Wine serves two connections at once; until it passes, no
+   account counts as having the 5 s bound.
+6. The kill-switch drill (live-readiness L10) on this box: flatten a demo position while an entry is in flight; the
+   close lands within 5 s (`gate-evidence` records it).
+
+**Rollback.** The lane: set `order_lane: false` (or remove the line), merge, deploy the box. A box whose `/health`
+shows `not_running` or restarts after the lane came up: `sudo systemctl stop goldbot-bridge@<account>`, then the
+lane rollback, then start it again. Protocol v7 itself: the brain first (`sudo goldbot-deploy --rollback <previous
+SHA>`), then each box; on demo either order works (MIN_COMPATIBLE 5). A live account refuses entries on a v6 bridge,
+by design.
+
 ### Updating the VPS to a new version
 
 ```powershell

@@ -29,7 +29,7 @@ BEFORE_SPLIT = (
 )
 
 # the old dispatcher's branches, in its order
-ORDER = ("supervisor", "engine", "drift-review", "bridge", "api", "webhook", "scheduler", "telegram", "news",
+ORDER = ("supervisor", "engine", "drift-review", "bridge", "bridge-order-lane", "api", "webhook", "scheduler", "telegram", "news",
          "record-gate", "gates", "gate-evidence", "publish-costs", "backup", "restore", "restore-drill", "setup",
          "preflight", "revoke-sessions", "mail-test", "owner-history", "health", "positions", "shadow-report", "fill-count",
          "broker-history-depth", "ruin", "monthly-report",
@@ -50,8 +50,11 @@ def test_the_registry_knows_exactly_the_commands_the_golden_dispatch_covers():
     assert all(registry.find(n) is not None for n in ORDER) and registry.find("no-such-command") is None
 
 
+ADDED_SINCE_SPLIT = {"run_order_lane"}         # BACKLOG 135: the bridge's order lane service
+
+
 def test_every_name_the_run_module_had_is_still_exported_from_it():
-    assert set(BEFORE_SPLIT) | {"main"} == set(run.__all__)
+    assert set(BEFORE_SPLIT) | {"main"} | ADDED_SINCE_SPLIT == set(run.__all__)
     for name in BEFORE_SPLIT:
         obj = getattr(run, name)
         home = getattr(obj, "__module__", None)
