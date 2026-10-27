@@ -145,11 +145,16 @@ def test_arms_without_a_host_and_virtual_exits_are_not_registered(accounts) -> N
     assert not {"KSQ4", "DOND", *(b for b in BOX if not b.startswith("BXR"))} & registered
 
 
-@pytest.mark.parametrize(("account", "swing_gbp", "intraday_gbp"), [("icm-demo", 90, 108), ("vantage-demo", 82, 98)])
-def test_swing_pot_opens_two_and_no_cap_moves(accounts, account, swing_gbp, intraday_gbp) -> None:
-    ex = accounts[account].exploration
-    assert (ex.pots["swing"].gbp, ex.pots["swing"].max_open) == (swing_gbp, 2)
-    assert (ex.pots["intraday"].gbp, ex.pots["intraday"].max_open) == (intraday_gbp, 9)
+# ADR 0049 D1a (CFO 2026-10-27): a scalp pot carved inside the unchanged budget for H-81's scalp strata (H-81 option B /
+# V1): swing 90 / 2 -> 40 / 2 (icm-demo) and 82 / 2 -> 40 / 1 (vantage-demo), the pots still summing to the budget
+@pytest.mark.parametrize(("account", "pots"), [
+    ("icm-demo", {"scalp": (90, 8), "intraday": (68, 7), "swing": (40, 2)}),
+    ("vantage-demo", {"scalp": (100, 8), "intraday": (40, 4), "swing": (40, 1)})])
+def test_the_pots_are_the_cfos_and_no_cap_moves(accounts, account, pots) -> None:
+    acc = accounts[account]
+    ex = acc.exploration
+    assert {k: (p.gbp, p.max_open) for k, p in ex.pots.items()} == pots
+    assert sum(p.gbp for p in ex.pots.values()) == pytest.approx(ex.budget_share * acc.daily_loss_limit_abs)
     assert ex.max_open_total == 17 and ex.budget_share == 0.9
     for style in ex.pots:
         assert sum(a.control_share or 0.0 for a in ex.arms.values() if a.style == style) <= 1

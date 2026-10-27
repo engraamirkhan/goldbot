@@ -29,11 +29,10 @@ Conventions (prereg section 0; the arm row carries what differs per stratum):
   `asof_join` on `available_utc`" (8.0), the bars resampled from the 1m bars the rule is handed.
 * ATR = Wilder ATR(14) of the decision bars on mid prices, at t unless the rule reads ATR_{t-1} or ATR_{t-3}.
 
-Controls (ZCD p 0.07, ZCV p 0.05): "at each 5m close in W with the common filters, enter when `hash_u(id, close) < p`;
-side `hash_side(id, close)`". Read literally, the side draw is the entry draw (`hash_side` is `hash_u(id, close) <
-0.5`), so every control entry (u < 0.07) would be LONG: a one-sided control is no null. The side is drawn on its own
-key, `hash_side(id + ":side", close)` (G1C's precedent, `arm_rules_levels`: "a sign by hash_u(arm id + ':sign', D's
-start)"); flagged to the quant reviewer for a dated amendment that records it.
+Controls (ZCD p 0.07, ZCV p 0.05): "at each 5m close in W with the common filters, enter when `hash_u(id, close) < p`".
+Amendment (c): "The side is drawn from a separate hash with the key `f"{id}:side"`, i.e. `hash_side(f"{id}:side",
+close)` ... The two draws are therefore independent: the side is 50/50 whatever the gate admits" (the frozen
+`hash_side(id, close)` reused the entry draw, so every admitted entry would have been long).
 
 Declared readings where the frozen text is silent:
 * Z4: a bar that touches both handles and closes inside both rejection bands has no side and is no event.
@@ -395,7 +394,7 @@ def three_horizon(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
 # ---------------------------------------------------------------- controls ZCD / ZCV
 def scalp_control(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     """ZCD / ZCV: every 5m close in W with the common filters enters when hash_u(id, close) < p (the row's `p`); the
-    side is drawn on its own key (module docstring); the row's 5m bracket."""
+    side is hash_side(f"{id}:side", close) (amendment (c)); the row's 5m bracket."""
     b = _Bars(arm, ctx)
     close = b.close
     p = float(arm.params["p"])

@@ -263,8 +263,8 @@ def test_z9_follows_only_the_last_closed_1h_bars_trend(b1, ctxs) -> None:
 
 
 def test_the_controls_enter_on_their_own_draw_and_take_both_sides_from_a_separate_key(ctxs) -> None:
-    """ZCD: "enter when hash_u(id, close) < p". Its side is drawn on `id:side` (module docstring): `hash_side(id,
-    close)` is the entry draw < 0.5, which would make every control entry long."""
+    """ZCD: "enter when hash_u(id, close) < p". Amendment (c): the side is `hash_side(f"{id}:side", close)`; the frozen
+    `hash_side(id, close)` is the entry draw < 0.5, which made every control entry long."""
     ctx = ctxs["5m"]
     arm = _arm("scalp_control", arm_id="ZCD", stop_usd=4.5, p=0.07)
     c = Z.scalp_control(arm, ctx)
@@ -274,6 +274,28 @@ def test_the_controls_enter_on_their_own_draw_and_take_both_sides_from_a_separat
     assert c["side"].tolist() == [R.hash_side("ZCD:side", close[int(i)]) for i in c["idx"]]
     assert set(c["side"]) == {-1, 1} and 0.4 < (c["side"] > 0).mean() < 0.6
     assert {R.hash_side("ZCD", close[int(i)]) for i in c["idx"]} == {1}      # the literal reading: long only
+
+
+def _flat(start: str, end: str, tf: str) -> pd.DataFrame:
+    """Store-schema bars at one price on every `tf` step (the controls read only the clock and the spread)."""
+    ts = pd.date_range(start, end, freq=tf.replace("m", "min"), tz="UTC", inclusive="left")
+    one = np.ones(len(ts))
+    cols = {f"{s}_{k}": 2000.0 * one + (0.1 if s == "ask" else 0.0) for s in ("bid", "ask")
+            for k in ("open", "high", "low", "close")}
+    return pd.DataFrame({"ts_utc": ts, "visible_at": ts + pd.Timedelta(seconds=tf_seconds(tf)), **cols,
+                         "tick_count": one, "spread_mean": 0.1 * one, "spread_max": 0.1 * one})
+
+
+@pytest.mark.parametrize(("arm_id", "p"), [("ZCD", 0.07), ("ZCV", 0.05)])
+def test_a_controls_admitted_entries_are_long_half_the_time_within_three_standard_errors(arm_id, p) -> None:
+    """Amendment (c): "the long share lies within 0.5 +/- 3 SE" over a long run of admitted control entries (three
+    years of 5m closes in W), so the side draw is independent of the entry draw."""
+    ctx = R.RuleContext(bars=_flat("2021-01-04", "2024-01-01", "5m"), b1=_flat("2023-12-31", "2024-01-01", "1m"),
+                        blackout_lo=NO, blackout_hi=NO)
+    side = Z.scalp_control(_arm("scalp_control", arm_id=arm_id, p=p), ctx)["side"].to_numpy()
+    n = len(side)
+    assert n > 5_000
+    assert abs((side > 0).mean() - 0.5) <= 3 * 0.5 / np.sqrt(n)
 
 
 # ---------------------------------------------------------------- live == history (the engine's 1m/5m pass)

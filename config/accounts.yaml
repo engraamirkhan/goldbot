@@ -108,7 +108,11 @@ accounts:
       enabled: true
       budget_share: 0.9
       max_open_total: 17
-      pots: { intraday: { gbp: 108, max_open: 9 }, swing: { gbp: 90, max_open: 2 } }
+      # ADR 0049 D1a (CFO 2026-10-27, H-81 3.4 option B): a scalp pot carved inside the unchanged £198 budget for the
+      # H-81 scalp strata, so they are retired on the scalp stop (-30 R in 300), never the intraday one; intraday 108 / 9 -> 68 / 7, swing 90 / 2 -> 40 / 2.
+      # budget_share, max_open_total 17 and max_positions 18 unchanged. Until option A (one shared host budget) lands.
+      # Rollback: drop the scalp pot and the H-81 arms, restore intraday 108 / 9 and swing 90 / 2, restart.
+      pots: { scalp: { gbp: 90, max_open: 8 }, intraday: { gbp: 68, max_open: 7 }, swing: { gbp: 40, max_open: 2 } }
       arms:
         I0: { style: intraday, max_loss: 17.0, control_share: 0.30 }
         I2A: { style: intraday, max_loss: 17.0 }
@@ -151,6 +155,16 @@ accounts:
         C30A: { style: swing, max_loss: 40.0 }
         C30C: { style: swing, max_loss: 40.0, control_share: 0.05 }
         BXR4H: { style: swing, max_loss: 40.0 }
+        # H-81 scalp volume (prereg-2026-10-27-scalp-volume.md section 1): icm-demo's strata at ICM's fixed stops ($3.00
+        # 1m = £2.26, $4.50 5m = £3.38) and their random control ZCD (a fixed share, never allocated by results: its
+        # ~15 of the ~128 scalp fills a day, section 3.2)
+        Z3D: { style: scalp, max_loss: 6.5 }
+        Z4D: { style: scalp, max_loss: 6.5 }
+        Z6D: { style: scalp, max_loss: 6.5 }
+        Z7D: { style: scalp, max_loss: 6.5 }
+        Z9D: { style: scalp, max_loss: 6.5 }
+        Z10D: { style: scalp, max_loss: 6.5 }
+        ZCD: { style: scalp, max_loss: 6.5, control_share: 0.12 }
   icm-probe:
     broker: icm
     mode: demo
@@ -300,7 +314,11 @@ accounts:
       enabled: true
       budget_share: 0.9
       max_open_total: 17
-      pots: { intraday: { gbp: 98, max_open: 9 }, swing: { gbp: 82, max_open: 2 } }
+      # ADR 0049 D1a (CFO 2026-10-27, H-81 3.4 V1): a scalp pot carved inside the unchanged £180 budget for the
+      # H-81 scalp strata, so they are retired on the scalp stop (-30 R in 300), never the intraday one; intraday 98 / 9 -> 40 / 4, swing 82 / 2 -> 40 / 1.
+      # budget_share, max_open_total 17 and max_positions 18 unchanged. Until option A (one shared host budget) lands.
+      # Rollback: drop the scalp pot and the H-81 arms, restore intraday 98 / 9 and swing 82 / 2, restart.
+      pots: { scalp: { gbp: 100, max_open: 8 }, intraday: { gbp: 40, max_open: 4 }, swing: { gbp: 40, max_open: 1 } }
       arms:
         VI0: { style: intraday, max_loss: 17.0, control_share: 0.30 }
         VI2A: { style: intraday, max_loss: 17.0 }
@@ -327,6 +345,11 @@ accounts:
         VW1B: { style: swing, max_loss: 40.0 }
         VW2: { style: swing, max_loss: 40.0 }
         DON4: { style: swing, max_loss: 40.0 }   # wave 2 (8.3): Donchian-55 break-close 4h
+        # H-81 stage V1 (section 3.2): Vantage's strata at the $7.00 bar (£5.26) and ZCV (~12 of ~58 scalp fills a
+        # day); Z3V/Z5V wait for V2 (vantage-swing live) and the VS S-twins stay blocked on Vantage's cost gate
+        Z6V: { style: scalp, max_loss: 6.5 }
+        Z7V: { style: scalp, max_loss: 6.5 }
+        ZCV: { style: scalp, max_loss: 6.5, control_share: 0.20 }
   icm-live:
     broker: icm
     mode: live
