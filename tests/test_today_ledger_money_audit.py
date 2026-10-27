@@ -44,6 +44,6 @@ def test_list_totals_do_not_present_a_partial_net_as_complete(tmp_path):
     _closed(tmp_path, DAY, "demo", 41, 3.95, "trail_close")
     _gross_close(tmp_path, 42, -8.00)
     cat = _catalog(tmp_path)
-    page = tl.query(tl.build_ledger(tmp_path, NOW, cat=cat), tl.TradeQuery(account=(DAY,)), cat)
+    page = tl.query(tl.build_ledger(tmp_path, NOW, cat=cat), tl.TradeQuery(account=(DAY,)))
     assert page.totals.n_closed == 2
     assert page.totals.net_pnl != 3.95, "totals.net_pnl is the net of 1 of 2 closed trades, with no flag"

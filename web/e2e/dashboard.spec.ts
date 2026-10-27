@@ -489,14 +489,14 @@ async function rowsClearBar(page: Page, name: string) {
   await page.evaluate(() => window.scrollTo(0, 0));
 }
 
-// The trades experience (docs/design/trades-ux-2026-10-27.md, ADR 0050, backlog 128-133) on a phone and a desktop,
-// light and dark, against the real API: e2e/seed_trades.py writes a trading day through goldbot's own writers (arms,
-// controls, a probe, engine trades open and closed, a shadow trade) and the server builds the ledger, Today and the
-// open trades from it; blinding is the server's.
+// The trades experience (docs/design/trades-ux-2026-10-27.md, ADR 0050, 0053, backlog 128-139) on a phone and a
+// desktop, light and dark, against the real API: e2e/seed_trades.py writes a trading day through goldbot's own writers
+// (arms, controls, a probe, engine trades open and closed, a shadow trade) and the server builds the ledger, Today, the
+// ranking and the open trades from it.
 const PYTHON = process.env.PYTHON ?? (existsSync("../.venv/bin/python") ? "../.venv/bin/python" : "python3");
 const seed = (...args: string[]) => execFileSync(PYTHON, ["e2e/seed_trades.py", info().state_dir, ...args], { stdio: "inherit" });
 
-test("Trades: money on every open row, filters in the URL, withheld totals on a narrowed filter, one trade's detail, no layout shift", async ({ page }) => {
+test("Trades: money on every open row, filters in the URL, a strategy's totals, one trade's detail, the ranking, no layout shift", async ({ page }) => {
   seed();
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
@@ -534,22 +534,22 @@ test("Trades: money on every open row, filters in the URL, withheld totals on a 
       await page.goBack();
       await expect(detail).toHaveCount(0);
 
-      // List, unfiltered: the server shows its totals (3+ unread arms per account and day)
+      // List, unfiltered: the server's totals after costs
       await page.goto("/#/trades/list");
       const list = page.getByRole("region", { name: "Trade list" });
       await expect(list.getByText(/^\d+ trades \(\d+ open\) · net [+−]£[\d.]+ after costs · costs £[\d.]+/)).toBeVisible();
       await noSideways(page, width);
       if (width === 360) await rowsClearBar(page, `trades-list-${tag}`);
       await shot(page, `trades-list-${tag}`);
-      // narrowed to one strategy with unread arms: the server withholds the money and blinds those rows (ADR 0050);
-      // the filter is in the URL and survives a reload
-      await page.goto("/#/trades/list?acct=icm-probe&fam=session_vwap_fade");
+      // narrowed to one strategy: its totals show like any list's (ADR 0053, backlog 139); the filter and the order
+      // are in the URL and survive a reload
+      await page.goto("/#/trades/list?acct=icm-probe&fam=session_vwap_fade&sort=best");
       await page.reload();
-      await expect(list.getByText(/^Totals hidden: the filter narrows to strategies whose arms are not read yet/)).toBeVisible();
-      await expect(list.getByRole("group", { name: "Totals of this list" })).not.toContainText(/net [+−]£|costs £/);   // open risk at entry still shows (not a result)
+      await expect(list.getByRole("group", { name: "Totals of this list" })).toContainText(/net [+−]£[\d.]+ after costs/);
+      await expect(list).not.toContainText(/hidden/i);
       await expect(page.getByRole("button", { name: "Remove filter Scalp lab" })).toBeVisible();
-      await expect(page).toHaveURL(/#\/trades\/list\?acct=icm-probe&fam=session_vwap_fade$/);
-      await shot(page, `trades-list-withheld-${tag}`);
+      await expect(page).toHaveURL(/#\/trades\/list\?acct=icm-probe&fam=session_vwap_fade&sort=best$/);
+      await shot(page, `trades-list-strategy-${tag}`);
 
       // one closed trade: its own result, costs that add up, why and how it ended; back closes it
       await page.goto("/#/trades/list?acct=icm-demo");
@@ -566,8 +566,17 @@ test("Trades: money on every open row, filters in the URL, withheld totals on a 
       await expect(detail).toHaveCount(0);
       await expect(page).toHaveURL(/#\/trades\/list\?acct=icm-demo$/);
 
-      // the board (132): progress to each arm's read from the real server; no unread arm's money or R (ADR 0050)
+      // the ranking (136-138) is the default order: the heading line, n and status on every row, from the real server
       await page.goto("/#/trades/strategies");
+      const ranked = page.getByRole("region", { name: "Strategy ranking" });
+      await expect(ranked).toContainText("Ranked by the least each trade is likely earning after costs.", { timeout: 15_000 });
+      await expect(ranked).toContainText(/fills, \d+ days/);
+      await expect(ranked).toContainText("early, not proven");
+      await noSideways(page, width);
+      await shot(page, `trades-ranking-${tag}`);
+      // the board (132): progress to each arm's read, the toggle kept in the URL
+      await page.getByRole("tab", { name: "By progress to read" }).click();
+      await expect(page).toHaveURL(/#\/trades\/strategies\?order=progress$/);
       await expect(page.getByRole("region", { name: "Learning progress" })).toContainText(/trades counted toward reads in 7 days/);
       const vwap = page.getByRole("region", { name: "Strategy board" })
         .getByRole(width < 1024 ? "button" : "row", { name: /^VWAP fade, running, open its trades$/ });
@@ -577,7 +586,6 @@ test("Trades: money on every open row, filters in the URL, withheld totals on a 
         await expect(vwap).toContainText(/\d+\/300 · read ~/, { timeout: 2_000 });
       }).toPass({ timeout: 45_000 });
       await expect(vwap).toContainText("read against Random control 1m · every 10 min");
-      await expect(vwap).not.toContainText(/R\/trade|£/);
       await expect(page.getByRole("region", { name: "Engine strategies" })).toContainText("Box break + close · 1h");
       await noSideways(page, width);
       await shot(page, `trades-strategies-${tag}`);
@@ -589,6 +597,28 @@ test("Trades: money on every open row, filters in the URL, withheld totals on a 
       await expect(today.locator(".day-strip")).toBeVisible();
       await noSideways(page, width);
       await shot(page, `trades-today-${tag}`);
+    }
+  }
+});
+
+test("REVIEW ONLY ranking shots", async ({ page }) => {
+  execFileSync(PYTHON, [process.env.RICH_SEED!, info().state_dir, join(process.cwd(), "..")], { stdio: "inherit" });
+  seed("--touch");
+  await page.goto("/");
+  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  for (const [width, height] of [[360, 800], [1280, 900]] as const) {
+    for (const scheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.setViewportSize({ width, height });
+      await page.goto("/#/trades/strategies");
+      const ranked = page.getByRole("region", { name: "Strategy ranking" });
+      await expect(ranked).toContainText(/^1\. /m, { timeout: 60_000 }).catch(() => undefined);
+      await expect(async () => { await page.reload(); await expect(ranked).toContainText("1. ", { timeout: 3_000 }); }).toPass({ timeout: 90_000 });
+      await page.waitForTimeout(500);
+      const dir = process.env.SHOTS_DIR!;
+      await page.screenshot({ path: join(dir, `review-ranking-${width}-${scheme}.png`), fullPage: true });
+      await ranked.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: join(dir, `review-ranking-${width}-${scheme}-view.png`) });
     }
   }
 });

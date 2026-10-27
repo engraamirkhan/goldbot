@@ -171,3 +171,18 @@ button.trade-row:hover { background: var(--surface-2); }
 .card .card-class { margin: 0 0 var(--s1); font-size: var(--fs-small); color: var(--text-2); }
 .card .card-class.real { color: var(--warn); }
 .card .card-class strong { letter-spacing: 0.04em; }
+
+/* the ranking (Ranking.tsx, backlog 137-138): greyed rows are too few to rank; bands for controls and retired */
+.rank-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); }
+/* greyed = text in --text-2 (AA in light and dark), never opacity (0.6 fell to about 2.6:1); the words say why */
+.rank-list li.greyed .family-card, .rank-table tr.greyed, .rank-table tr.greyed strong { color: var(--text-2); }
+.rank-list li.greyed .family-card { border-style: dashed; }
+.rank-table .w-name { width: 210px; } .rank-table .w-key { width: 190px; } .rank-table .w-hit { width: 110px; }
+.rank-table .w-pf { width: 96px; } .rank-table .w-trend { width: 120px; }
+.rank-table td, .rank-table th[scope="row"] { overflow-wrap: break-word; }
+.rank-how summary { cursor: pointer; font-size: var(--fs-small); color: var(--text-2); padding: var(--s3) 0; }
+.rank-table .ui-meter { margin: 4px 0; }
+.rank-progress { display: grid; gap: 2px; }
+.rank-variants summary { cursor: pointer; font-size: var(--fs-small); color: var(--text-2); }
+.rank-variants ul { margin: var(--s1) 0 0; padding-left: var(--s4); display: grid; gap: 2px; }
+.band-head { font-size: var(--fs-small); color: var(--text-2); margin: var(--s4) 0 var(--s2); }

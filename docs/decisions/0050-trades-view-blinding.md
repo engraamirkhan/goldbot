@@ -1,6 +1,8 @@
 # 0050: Trades views: money always visible, arm results blinded until the read
 
-Status: accepted with the quant-reviewer's tightenings (principal product designer, 2026-10-27)
+Status: accepted with the quant-reviewer's tightenings (principal product designer, 2026-10-27).
+Amended 2026-10-27 by ADR 0053 (owner decision: strategy rankings are shown): decisions 2-4 superseded and retired in
+the code (backlog 136-139: no blinded rows, withheld totals or progress-only order remain); decision 1 stands.
 
 ## Context
 The owner asked for a trades experience that shows "valuable and complete" information, including per-strategy net R,

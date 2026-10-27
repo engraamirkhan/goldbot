@@ -14,20 +14,18 @@ trades out of n, every admissible trade in the stop). An arm whose n is its stop
 counted trades closed at the stop. A unit's n is the sum over its `counted` arms (H-80: BXR's fills, not the virtual
 BXT/BXF exits on them).
 
-Blinding (ADR 0050 with the quant reviewer's binding tightenings), enforced here and never by the client:
-* "An unread arm's aggregates are never computed for the client: no per-arm sum, mean, hit rate, rank, share,
-  ahead/behind, or comparison with its control." Before its unit's read a variant or pooled progress carries counts,
-  progress, ETA, status and annealing state only; the payload has no field that could hold a result.
+Progress and reads (ADR 0050, 0051; the per-family results before a read are the ranking's since ADR 0053,
+GET /api/strategies/ranking, which the Strategies tab shows by default with this board's progress beside it):
+* Before its unit's read a variant or pooled progress carries counts, progress, ETA, status and annealing state.
 * "'Near its stop' only once fired": status is warming, running or retired (at its H-61 stop; a pooled unit when all
   its counted arms are); a running loss is "running" whatever its size.
 * After the read (the unit listed in config/arm_reads.yaml `reads`): the recorded verdict and the read sample's
   figures, frozen (the unit's first n counted trades closed by `read_utc`), with the rest labelled "since read". The
   difference against the control is the evaluator's RECORDED comparison only (the prereg defines it, e.g. H-81's
   day-paired family minus control, and never reads the control itself); nothing is computed here (quant 2026-10-27).
-* Families are ordered by state, then closeness to the read (n / read size), then name: never by result.
-* Lab totals (per account and sleeve, 7 days): money only when every (account, day) cell of the sleeve's unread
-  closes covers MIN_ARMS_FOR_TOTAL read units (trades_ledger.withheld_reason), and only when every sleeve of that
-  account clears it: otherwise one sleeve would be the List's account total minus the others.
+* Families are ordered by state, then closeness to the read (n / read size), then name: the "By progress to read"
+  order (the ranked order is the ranking's).
+* Lab totals (per account and sleeve, 7 days): counts and money after costs (no withholding since ADR 0053).
 Engine strategies and shadow models are not pre-registered arms: full figures, always with n and a 90% CI.
 """
 from __future__ import annotations
@@ -66,7 +64,7 @@ from goldbot.telegram import labs
 
 log = logging.getLogger(__name__)
 
-__all__ = ["BOARD_TTL_S", "PACE_DAYS", "Z90", "board"]
+__all__ = ["BOARD_TTL_S", "PACE_DAYS", "Z90", "board", "retired_arms"]
 
 BOARD_TTL_S = 30.0                  # one build serves every poll for 30 s (the Strategies tab polls every 60 s)
 PACE_DAYS = 7                       # the ETA's pace: counted trades over the last 7 opportunity days
@@ -74,8 +72,6 @@ Z90 = 1.645                         # two-sided 90% normal interval
 TF_ORDER = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
 STATE_ORDER: tuple[BoardState, ...] = ("proven", "candidate", "running", "retired", "control")
 ANNEAL_RANK: dict[AnnealState, int] = {"P": 0, "C1": 1, "E": 2, "R": 3}
-SLEEVE_SHORT = ("another sleeve of this lab covers fewer than 3 unread arms in a day (ADR 0050): every sleeve's money "
-                "waits, or that sleeve would be the lab's total minus the others")
 _ARM_KINDS = frozenset({"exploration", "control"})
 _ENGINE_KINDS = ("real", "strategy", "shadow")
 
@@ -115,6 +111,14 @@ def _statuses(state: Path, now: pd.Timestamp, store: Any,
         log.warning("strategy board: arm status unreadable (%s)", type(exc).__name__)
         return {}, False
     return {a.arm_id: a for a in arms}, True
+
+
+def retired_arms(state_dir: str | Path, now: pd.Timestamp, *, store: Any = None,
+                 held_out: Collection[str] | None = None) -> tuple[set[str], bool]:
+    """The strategy arms at their pre-registered stop (the ranking's retired band), and False when aux.db cannot be
+    read (none is then known retired)."""
+    statuses, ok = _statuses(Path(state_dir), now, store, held_out)
+    return {a for a, s in statuses.items() if s.band == "at_stop" and not s.control}, ok
 
 
 # ------------------------------------------------------------------------------------------------ arms and units
@@ -249,17 +253,13 @@ def _lab_totals(rows: Iterable[TradeRow], styles: dict[str, str], cat: Catalog,
         if r.kind in _ARM_KINDS and r.account and r.arm_id and (r.exit_utc is None or r.exit_utc >= week_lo):
             style = styles.get(r.arm_id) or labs._TF_STYLE.get(r.timeframe or "", "scalp")
             cells.setdefault((r.account, style), []).append(r)
-    reasons = {k: tl.withheld_reason(v, narrowed=False, cat=cat)[0] for k, v in cells.items()}
-    short = {acc for (acc, _), why in reasons.items() if why is not None}
     out = []
     for (acc, style), rs in sorted(cells.items(), key=lambda kv: (account_label(kv[0][0]), kv[0][1])):
-        why = reasons[(acc, style)] or (SLEEVE_SHORT if acc in short else None)
-        t = tl.totals(rs, why)
+        t = tl.totals(rs)
         out.append(LabTotal(account_label=account_label(acc), style=style, period="7 days",
                             arms=len({cat.unit_of(r.arm_id) for r in rs
                                       if r.arm_id and r.status == "closed" and not r.is_control}),
-                            n=t.n, n_closed=t.n_closed, net_pnl=t.net_pnl, costs=t.costs, currency=t.currency,
-                            withheld_reason=why))
+                            n=t.n, n_closed=t.n_closed, net_pnl=t.net_pnl, costs=t.costs, currency=t.currency))
     return out
 
 

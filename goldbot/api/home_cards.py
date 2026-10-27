@@ -348,7 +348,6 @@ def today_money(state_dir: str | Path, now: pd.Timestamp, probe_terms: dict[str,
     by_acc = engines_by_account(state, engines)
     if ledger is None:
         ledger = build_ledger(state, now, list(by_acc.values()))
-    cat = catalog()
     rows: list[TodayAccount] = []
     for account, e in sorted(by_acc.items()):
         eq, d0, bal = _num(e.get("equity")), _num(e.get("day_start_equity")), _num(e.get("balance"))
@@ -359,14 +358,10 @@ def today_money(state_dir: str | Path, now: pd.Timestamp, probe_terms: dict[str,
             log.warning("today: closed records unreadable (%s)", type(exc).__name__)
             closed, n, costs, complete, readable = None, 0, None, False, False
         try:
-            extra = account_day(account_name(account), e, ledger.rows, now, (plans or {}).get(account), cat)
+            extra = account_day(account_name(account), e, ledger.rows, now, (plans or {}).get(account))
         except Exception as exc:          # noqa: BLE001 - reporting only: the broker's figures still show
             log.warning("today: ledger figures failed (%s)", type(exc).__name__)
             extra = {}
-        if "net_today" in extra.get("withheld", []):
-            # quant 2026-10-27, condition 2: day P&L less open less these closes would be the arms' own result
-            closed, costs = None, None
-            extra["withheld"] = [*extra["withheld"], "closed_pnl", "costs"]
         age = _age(e, now)
         ccy = e.get("currency")
         rows.append(TodayAccount(

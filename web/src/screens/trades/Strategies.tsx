@@ -1,20 +1,25 @@
-// Trades > Strategies (docs/design/trades-ux-2026-10-27.md §3.4, backlog 132): the leaderboard, honestly. One row per
-// family with its timeframes, progress to each read unit (an arm, or the family pooled: n of its read size, the server's
-// ETA, status, anneal state, the control it is read against) and, only after the read, the recorded verdict with its
-// frozen figures and the evaluator's recorded difference against its control (ADR 0050, 0051). The server orders it by state and closeness to the read, never by
-// result; filters keep that order. Engine strategies (not pre-registered) show full figures with n and a 90% CI.
-// Money per lab only (3+ arms); per-arm money waits for the read.
+// Trades > Strategies (docs/design/trades-ux-2026-10-27.md §3.4, §7.5, backlog 132, 138; ADR 0050, 0051, 0053): the
+// leaderboard, honestly. "Ranked" is the default order: the strategy ranking (Ranking.tsx), each row with its progress
+// to the read. "By progress to read" (`order=progress` in the URL) is the board: one row per family with its
+// timeframes, progress to each read unit (an arm, or the family pooled: n of its read size, the server's ETA, status,
+// anneal state, the control it is read against) and, after the read, the recorded verdict with its frozen figures and
+// the evaluator's recorded difference against its control; ordered by state and closeness to the read. Engine
+// strategies (not pre-registered) show full figures with n and a 90% CI; lab money per sleeve, 7 days.
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../../lib/api";
 import {
-  ANNEAL_WORDS, type BoardFamily, type BoardVariant, ci, type EngineStrategy, etaWords, type LabTotal, pct, POLL,
-  type ReadFigures, type ReadProgress, signedR, type StrategyBoard, statusWords, TIMEFRAMES,
+  ANNEAL_WORDS, type BoardFamily, type BoardOrder, boardQuery, type BoardQuery, type BoardVariant, ci, type EngineStrategy,
+  etaWords, type LabTotal, parseBoardQuery, pct, POLL, type ReadFigures, type ReadProgress, signedR, type StrategyBoard,
+  statusWords, TIMEFRAMES,
 } from "../../lib/trades";
 import { useWide } from "../../lib/useMedia";
-import { Badge, Card, EmptyState, ErrorState, Meter, Skeleton, TimeText } from "../../ui";
+import { Badge, Card, EmptyState, ErrorState, Meter, Segmented, Skeleton, TimeText } from "../../ui";
 import { money, NBSP } from "../../ui/format";
+import { RankingCard } from "./Ranking";
 import "./trades.css";
+
+const ORDERS: { id: BoardOrder; label: string }[] = [{ id: "ranked", label: "Ranked" }, { id: "progress", label: "By progress to read" }];
 
 const STATE_WORDS: Record<BoardFamily["state"], string> = {
   proven: "READ · proven", candidate: "READ · candidate", running: "running", retired: "retired", control: "CONTROL",
@@ -22,11 +27,18 @@ const STATE_WORDS: Record<BoardFamily["state"], string> = {
 
 type Controls = Map<string, string>;     // control arm id -> "Random control (scalp) 1m"
 
-export function TradesStrategies({ onFamily }: { onFamily: (family: string) => void }) {
+type Props = { query: string; onQuery: (q: string) => void; onFamily: (family: string) => void };
+
+export function TradesStrategies({ query, onQuery, onFamily }: Props) {
+  const b = parseBoardQuery(query);
+  const set = (next: Partial<BoardQuery>) => onQuery(boardQuery({ ...b, ...next }));
   const q = useQuery({ queryKey: ["strategyBoard"], queryFn: api.strategyBoard, refetchInterval: POLL.strategies, retry: false });
+  const families = new Map((q.data?.families ?? []).map((f) => [f.family, f] as [string, BoardFamily]));
   return (
     <div className="trades-page">
-      {q.isLoading ? <Skeleton height={320} label="Loading strategies" />
+      <Segmented<BoardOrder> label="Order" items={ORDERS} value={b.order} onChange={(order) => set({ order })} />
+      {b.order === "ranked" ? <RankingCard b={b} set={set} families={families} onFamily={onFamily} />
+        : q.isLoading ? <Skeleton height={320} label="Loading strategies" />
         : q.isError && !q.data ? <ErrorState title="Couldn't load strategies." stillWorks="Trading is not affected." onRetry={() => q.refetch()} />
         : <Board v={q.data!} onFamily={onFamily} updated={q.dataUpdatedAt} />}
     </div>
@@ -54,8 +66,8 @@ function Board({ v, onFamily, updated }: { v: StrategyBoard; onFamily: (f: strin
           counted toward reads in 7 days</p>
         {v.unreadable.length > 0 && <p className="small state warn">{`Couldn't read ${v.unreadable.join(", ")}: missing, not zero.`}</p>}
         {v.lab_totals.length > 0 && <ul className="lab-totals">{v.lab_totals.map((t) => <LabLine key={`${t.account_label}-${t.style}`} t={t} />)}</ul>}
-        <p className="small muted">Each arm is judged once, at its read (300 counted trades unless its plan says otherwise). Before
-          then only progress shows: no per-arm money, R or rank, so the read stays fair. Lab money is the total of 3 or more arms.</p>
+        <p className="small muted">Each arm is judged once, at its read (300 counted trades unless its plan says otherwise), by its
+          pre-registered rule. Results before then are on Ranked: early, not proven.</p>
         <div className="now-filters">
           <select aria-label="Style" value={style} onChange={(e) => setStyle(e.target.value)}>
             <option value="">All styles</option>{styles.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -77,7 +89,7 @@ function Board({ v, onFamily, updated }: { v: StrategyBoard; onFamily: (f: strin
 
 function LabLine({ t }: { t: LabTotal }) {
   const money_ = t.net_pnl != null ? <><span className="nowrap">{money(t.net_pnl, t.currency, true)}</span> net</>
-    : t.withheld_reason ? "net hidden (fewer than 3 arms)" : "net not known yet";
+    : "net not known yet";
   return (
     <li className="num">{t.account_label} ({t.style}), {t.period}: {t.n.toLocaleString("en-GB")} trades · {money_}
       {t.costs != null && <> · costs <span className="nowrap">{money(t.costs, t.currency)}</span></>}</li>

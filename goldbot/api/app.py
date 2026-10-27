@@ -15,7 +15,7 @@ import threading
 import time
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 import pandas as pd
 from fastapi import (
@@ -46,6 +46,8 @@ from goldbot.api import (
     progress,
     spread_normal,
     strategy_board,
+    strategy_labels,
+    strategy_ranking,
     today_ledger,
     trade_chart,
     trades_ledger,
@@ -126,6 +128,8 @@ from goldbot.api.schema import (
     Ok,
     OpenPositionsView,
     Proposal,
+    RankingView,
+    RankingWindow,
     RearmRequest,
     RecoveryCodesRequest,
     RecoveryCodesResponse,
@@ -148,6 +152,7 @@ from goldbot.api.schema import (
     TradeKind,
     TradeListPeriod,
     TradeRow,
+    TradeSort,
     TradesOverview,
     TradesPage,
     TradesSummary,
@@ -1125,7 +1130,7 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
 
     # ============================================================== Trade ledger (read-only, viewer and above)
     # goldbot/api/trades_ledger.py (items 128, 129; ADR 0050): one row per trade of every kind, filters, cursor paging
-    # and totals, blinded server-side. One build serves every poll for LEDGER_TTL_S; /api/today reads the same build.
+    # and totals (no blinding since ADR 0053). One build serves every poll for LEDGER_TTL_S; /api/today reads it too.
     # Registered after /api/trades/overview and /api/trades/summary so the detail route never shadows them.
     ledger_cache = progress.GatesCache(ttl_s=trades_ledger.LEDGER_TTL_S)
 
@@ -1137,20 +1142,20 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
                     account: list[str] = Query([]), family: list[str] = Query([]), timeframe: list[str] = Query([]),
                     arm: list[str] = Query([]), kind: list[TradeKind] = Query([]), status: TradeStatus | None = None,
                     exit_reason: list[ExitReason] = Query([]), evidence: list[TradeEvidence] = Query([]),
-                    control: bool | None = None, cursor: str | None = None,
+                    control: bool | None = None, sort: TradeSort = "newest", cursor: str | None = None,
                     limit: int = Query(trades_ledger.PAGE, ge=1, le=trades_ledger.MAX_PAGE),
                     _: User = Depends(need("viewer"))) -> TradesPage:
         q = trades_ledger.TradeQuery(period=period, since=since, until=until, account=tuple(account),
                                      family=tuple(family), timeframe=tuple(timeframe), arm=tuple(arm), kind=tuple(kind),
                                      status=status, exit_reason=tuple(exit_reason), evidence=tuple(evidence),
-                                     control=control, cursor=cursor, limit=limit)
+                                     control=control, sort=sort, cursor=cursor, limit=limit)
         try:
             return trades_ledger.query(ledger(), q)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
     # goldbot/api/trade_chart.py (item 133): one trade on the stored bars of its timeframe, with its own levels and
-    # stop moves; never blinded (ADR 0050). Registered before the detail so `{trade_id:path}` never swallows "/bars".
+    # stop moves. Registered before the detail so `{trade_id:path}` never swallows "/bars".
     @app.get("/api/trades/{trade_id:path}/bars", response_model=TradeBars)
     def trade_bars(trade_id: str, _: User = Depends(need("viewer"))) -> TradeBars:
         row = trades_ledger.detail(ledger(), trade_id)
@@ -1172,6 +1177,25 @@ def create_app(state_dir: str | Path = "state", web_dist: str | Path = "web/dist
     @app.get("/api/strategies/board", response_model=StrategyBoardView)
     def strategies_board(_: User = Depends(need("viewer"))) -> StrategyBoardView:
         return board_cache.get(lambda: strategy_board.board(ledger(), state_dir=st.dir, store=st.store()))
+
+    # goldbot/api/strategy_ranking.py (backlog 136-138; ADR 0053): families ranked by the adjusted lower bound of net R
+    # per trade after costs. One Ranker per ledger build (BOARD_TTL_S), its answers remembered per filter. Descriptive:
+    # nothing that trades, stops, reads or promotes reads it (tests/test_strategy_ranking.py import test).
+    ranker_cache = progress.GatesCache(ttl_s=strategy_board.BOARD_TTL_S)
+
+    def ranker() -> strategy_ranking.Ranker:
+        def build() -> strategy_ranking.Ranker:
+            led = ledger()
+            retired, ok = strategy_board.retired_arms(st.dir, led.as_of, store=st.store())
+            return strategy_ranking.Ranker(led.rows, strategy_labels.catalog(), led.as_of, retired=retired,
+                                           unreadable=[*led.unreadable, *([] if ok else ["arm status"])])
+        return ranker_cache.get(build)
+
+    @app.get("/api/strategies/ranking", response_model=RankingView)
+    def strategies_ranking(window: RankingWindow = "all", account: str | None = None,
+                           style: Literal["scalp", "intraday", "swing"] | None = None,
+                           _: User = Depends(need("viewer"))) -> RankingView:
+        return ranker()(window, account, style)
     # ============================================================== end Trade ledger
 
     # ============================================================== Home status card stack (read-only, viewer and above)

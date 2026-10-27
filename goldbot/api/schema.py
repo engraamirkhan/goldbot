@@ -1399,7 +1399,7 @@ class TodayAccount(BaseModel):
     age_s: float | None
     stale: bool                             # older than 60 s (or unknown)
     # item 131 (docs/design/trades-ux-2026-10-27.md §2.4, §3.5): from the trade ledger (GET /api/trades, one builder).
-    # A money figure covering fewer than 3 unread arms is None and named in `withheld` (ADR 0050)
+    # Every money figure shows whatever an arm's read (ADR 0053 retired the ADR 0050 withholding, backlog 139)
     account_label: str = "Other account"
     fills_today: int | None = None          # fills this opportunity day, every kind but shadow; None: ledger unreadable
     fills_target: int | None = None         # the per-account plan from settings (trades_view); None for live
@@ -1419,7 +1419,6 @@ class TodayAccount(BaseModel):
     week_to_date: PeriodNet | None = None
     month_to_date: PeriodNet | None = None
     quiet_day: bool | None = None           # the volatility screen's verdict; None while no screen publishes one
-    withheld: list[str] = Field(default_factory=list)   # figures withheld by the blinding rule (ADR 0050)
 
 
 class TodayView(BaseModel):
@@ -1431,7 +1430,7 @@ class TodayView(BaseModel):
 
 # ============================================================================= Trade ledger (GET /api/trades)
 # goldbot/api/trades_ledger.py (docs/design/trades-ux-2026-10-27.md §2, items 128, 129, 131; ADR 0050): one row per
-# trade of every kind, filters, cursor paging and totals; blinding is enforced here, server-side
+# trade of every kind, filters, cursor paging and totals (no blinding since ADR 0053)
 TradeKind = Literal["real", "strategy", "exploration", "control", "cost_probe", "shadow"]
 # the closed vocabulary of how a trade ended (the raw engine/broker codes are mapped, never shown)
 ExitReason = Literal["target", "stop", "trail", "time_limit", "friday_cut", "manual", "kill_switch",
@@ -1442,6 +1441,7 @@ TradeEvidence = Literal["counted", "excluded", "censored", "pending", "not_evide
 TradeStatus = Literal["open", "closed"]
 TradeSource = Literal["shadow", "positions", "probes", "exploration", "orders"]
 TradeListPeriod = Literal["today", "7d", "30d", "all"]
+TradeSort = Literal["newest", "best", "worst"]   # the List's order: newest activity, or by result (net, P&L now)
 
 
 class CostSplit(BaseModel):
@@ -1462,8 +1462,7 @@ class CostSplit(BaseModel):
 class TradeRow(BaseModel):
     """One trade (opened and closed merged). Money in the account currency, prices USD per oz, times UTC. Closed:
     `pnl` is net of every cost and `gross` = pnl + costs.total (to the penny). Open: `pnl_now` at the engine's mid
-    price from the fill (the entry spread is inside it). `blinded` True: this row's result fields were withheld because
-    the list's filter isolates arms not yet read (ADR 0050); GET /api/trades/{trade_id} always shows the result."""
+    price from the fill (the entry spread is inside it)."""
     trade_id: str
     kind: TradeKind
     status: TradeStatus
@@ -1484,7 +1483,7 @@ class TradeRow(BaseModel):
     target: float | None
     exit: float | None
     exit_utc: datetime | None
-    exit_reason: ExitReason | None          # never None on a closed row unless `blinded`
+    exit_reason: ExitReason | None          # never None on a closed row
     censored: bool
     opened_utc: datetime
     held_s: float | None
@@ -1501,36 +1500,29 @@ class TradeRow(BaseModel):
     why: str                                # plain words, at most 80 characters
     evidence: TradeEvidence
     excluded_reason: str | None
-    blinded: bool
     stale: bool                             # open: the engine's figures or rate are old, never shown as current
     position_id: int | None = None          # the broker's position (the "Details" disclosure; its stop moves)
 
 
 class TradeTotals(BaseModel):
-    """The filter's totals over every matching row (not only the page), equal to the sum of those rows. With
-    `withheld` the money is None (ADR 0050: an aggregate covering fewer than 3 unread arms, or a filter narrowed to
-    strategies with unread arms); counts and open risk always show."""
+    """The filter's totals over every matching row (not only the page), equal to the sum of those rows. Money is None
+    only when currencies differ (never summed) or, for the net, when a closed trade's net is unknown."""
     n: int
     n_open: int
     n_closed: int
     currency: str | None                    # the one currency of the money rows; None when none or mixed
     mixed_currencies: bool                  # money in more than one currency: never summed
-    net_pnl: float | None                   # closed rows; None when withheld or any closed net is unknown
+    net_pnl: float | None                   # closed rows; None when any closed net is unknown or currencies mix
     net_unknown: int = 0                    # closed trades whose net is not known (gross-only or unreadable deals)
     net_partial: float | None = None        # with net_unknown: the known rows' sum, never the net
     costs: float | None                     # closed rows' known costs
     open_pnl: float | None
     open_risk: float | None                 # open rows' risk at entry
-    # the open-P&L total alone is withheld: an account's unread open trades cover fewer than 3 arms (each open row
-    # still shows its own P&L)
-    open_pnl_withheld: bool = False
-    withheld: bool
-    withheld_reason: str | None
 
 
 class TradesPage(BaseModel):
     as_of: datetime
-    rows: list[TradeRow]                    # newest activity first (close, else open)
+    rows: list[TradeRow]                    # newest activity first (close, else open), or by result (`sort`)
     next_cursor: str | None                 # pass as `cursor` for the next page; None on the last
     totals: TradeTotals
     unreadable: list[TradeSource]           # their trades are missing, not zero
@@ -1538,7 +1530,7 @@ class TradesPage(BaseModel):
 
 # ============================================================================= Trade chart (GET /api/trades/{id}/bars)
 # goldbot/api/trade_chart.py (docs/design/trades-ux-2026-10-27.md §3.3, item 133): one trade on the stored bars of
-# its decision timeframe, with its own levels. One trade, the owner's money: never blinded (ADR 0050)
+# its decision timeframe, with its own levels
 class ChartBar(BaseModel):
     t: datetime                             # the bar's open, UTC
     o: float
@@ -1572,8 +1564,9 @@ class TradeBars(BaseModel):
 
 
 # ============================================================================= Strategy board (GET /api/strategies/board)
-# goldbot/api/strategy_board.py (docs/design/trades-ux-2026-10-27.md §2.3, §3.4, item 132; ADR 0050): progress to each
-# arm's single read; results only after it. Before the read no per-arm or per-family aggregate is in the payload
+# goldbot/api/strategy_board.py (docs/design/trades-ux-2026-10-27.md §2.3, §3.4, item 132; ADR 0050, 0053): progress
+# to each arm's single read and the read's frozen figures; the families' results before it are the ranking's
+# (GET /api/strategies/ranking, ADR 0053)
 ArmStatusWord = Literal["warming", "running", "read", "retired"]
 AnnealState = Literal["E", "C1", "P", "R"]
 BoardState = Literal["proven", "candidate", "running", "retired", "control"]
@@ -1646,9 +1639,8 @@ class BoardFamily(BaseModel):
 
 
 class LabTotal(BaseModel):
-    """One lab's sleeve over 7 days: counts always; money only when every (account, day) cell of its unread closes
-    covers 3+ strategy arms, and only when every sleeve of the account clears that (else one sleeve is the lab's
-    figure minus the others)."""
+    """One lab's sleeve over 7 days: counts and money after costs (None only when a net is unknown or currencies
+    differ)."""
     account_label: str
     style: str
     period: Literal["7 days"]
@@ -1658,7 +1650,6 @@ class LabTotal(BaseModel):
     net_pnl: float | None
     costs: float | None
     currency: str | None
-    withheld_reason: str | None
 
 
 class EngineStrategy(BaseModel):
@@ -1689,19 +1680,108 @@ class StrategyBoardView(BaseModel):
     as_of: datetime
     learning: Learning
     lab_totals: list[LabTotal]
-    families: list[BoardFamily]             # by state, then closeness to the read: never by result
+    families: list[BoardFamily]             # by state, then closeness to the read (the ranked order is the ranking's)
     engine: list[EngineStrategy]
     unreadable: list[str]                   # sources missing (not zero): ledger sources, "arm status"
 
 
+# ============================================================================= Strategy ranking (GET /api/strategies/ranking)
+# goldbot/api/strategy_ranking.py (docs/design/trades-ux-2026-10-27.md §7, backlog 136-139; ADR 0053): families ranked
+# by the Bonferroni-adjusted lower bound of net R per trade after costs. Descriptive only: nothing trades on it
+RankingWindow = Literal["7d", "30d", "all"]
+RankBand = Literal["ranked", "too_few", "control", "retired"]
+# early: before its read or gate ("early, not proven"); candidate / proven / not_proven: the read's verdict;
+# retired: stopped by its own pre-registered rule
+RankStatus = Literal["early", "candidate", "proven", "not_proven", "retired"]
+
+
+class RecentFigures(BaseModel):
+    """Net R per trade over the last 7 or 30 opportunity days, with its n."""
+    n: int
+    net_r_per_trade: float | None
+
+
+class RankFigures(BaseModel):
+    """One row's figures over the window (closed fills with an R, after every cost; voided evidence left out).
+    Intervals are clustered by (account, opportunity day of the close), t with G-1 df, G = `clusters`."""
+    n: int                                  # closed fills
+    days: int                               # opportunity days with a close
+    clusters: int                           # (account, opportunity day) cells
+    net_r_per_trade: float | None
+    ci95: tuple[float, float] | None        # unadjusted, two-sided; None under 2 clusters
+    lower_adjusted: float | None            # the sort key: mean - t(1 - 0.025/K, G-1) x SE; None when not ranked
+    hit_rate: float | None                  # share of fills with net > 0 after costs (0 is not a win)
+    net_pnl: float | None                   # account currency; None when currencies differ
+    net_per_trade: float | None
+    currency: str | None
+    profit_factor: float | None             # gross winning net / gross losing net; None with no losses yet or mixed
+    no_losses: bool                         # "no losses yet"
+    max_drawdown_r: float | None            # largest peak-to-trough of cumulative net R in close order (positive)
+    cost_per_trade: float | None            # account currency
+    cost_per_trade_r: float | None
+    edge_vs_control_r: float | None         # net R/trade minus its paired control's (ADR 0051 pairing)
+    edge_ci: tuple[float, float] | None
+    edge_ci_level: float | None             # 0.95 interim; the evaluator's recorded interval is 0.90
+    edge_source: Literal["read", "interim"] | None   # read: the evaluator's recorded figure, else interim (descriptive)
+    last_7d: RecentFigures
+    last_30d: RecentFigures
+    trend: Literal["up", "down", "flat"] | None   # 7 d against 30 d; None when either window is under the minimum n
+
+
+class RankVariant(BaseModel):
+    """One timeframe variant of a family (its arms pooled over accounts), the same columns, never ranked."""
+    variant: str                            # "15m", or "15m · strict"
+    timeframe: str
+    status: RankStatus
+    figures: RankFigures
+
+
+class RankRow(BaseModel):
+    key: str                                # the family, or "family:v2" for a rule edit's row
+    family: str
+    family_label: str                       # "Box break + close", "Box break + close v2"
+    version: int
+    style: str
+    kind: Literal["exploration", "engine", "control"]
+    timeframes: list[str]
+    accounts: list[str]                     # account labels, never slugs
+    band: RankBand
+    rank: int | None                        # among ranked rows only
+    unranked_reason: str | None             # "too few to rank (12 of 30 fills, 4 of 10 days)"
+    status: RankStatus
+    figures: RankFigures
+    variants: list[RankVariant]
+
+
+class AccountChoice(BaseModel):
+    account: str                            # the config name (the `account` filter)
+    label: str                              # the owner's name for it, never shown as the slug
+
+
+class RankingView(BaseModel):
+    as_of: datetime
+    window: RankingWindow
+    account: str | None                     # the account filter (config name), None: all
+    style: str | None
+    heading: str                            # §7.4 rule 5, heads every ranking
+    k_ranked: int                           # K of the Bonferroni adjustment
+    t_adjusted: float | None                # the multiplier at K for the median cluster count (shown in the method note)
+    min_fills: int
+    min_days: int
+    rows: list[RankRow]                     # ranked (by the adjusted lower bound), then too few to rank (by n)
+    controls: list[RankRow]                 # the yardstick, never ranked
+    retired: list[RankRow]                  # stopped by their rule, never ranked
+    account_choices: list[AccountChoice]    # the accounts with a ranked kind's fill, for the account filter
+    unreadable: list[str]
+
+
 class KindDay(BaseModel):
-    """One kind's figures today on one account. `withheld`: the money covers fewer than 3 unread arms (ADR 0050)."""
+    """One kind's figures today on one account."""
     fills: int
     closed: int
     net_pnl: float | None
     costs: float | None
     net_r: float | None
-    withheld: bool = False
     net_unknown: int = 0                    # closed trades whose net is not known: net_pnl is then None
 
 
@@ -1715,11 +1795,10 @@ class StripDay(BaseModel):
     """One opportunity day of the strip: net after costs of the rows closed that day."""
     day: date
     n: int
-    net_pnl: float | None                   # None: withheld (fewer than 3 unread arms that day) or a net unknown
+    net_pnl: float | None                   # None: a net unknown
     costs: float | None
     target: float | None                    # the daily target (settings), account currency
     opportunity: bool | None                # the volatility screen's verdict; None while none is published
-    withheld: bool = False
     net_unknown: int = 0
 
 
@@ -1728,7 +1807,6 @@ class PeriodNet(BaseModel):
     n: int
     net_pnl: float | None
     costs: CostSplit | None
-    withheld: bool = False
     net_unknown: int = 0                    # closed trades whose net is not known: net_pnl is then None
     net_partial: float | None = None
 # ============================================================================= end Trade ledger

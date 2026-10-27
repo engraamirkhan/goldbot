@@ -19,6 +19,9 @@ Decisions of the spec, as built here:
 * "Day" is the opportunity day before the slot (report_days.day_before, D-2 22:00 to D-1 22:00 UTC), the day the
   dashboard and the monthly report use. Every number carries its unit, every time its zone; £ and R with an explicit
   sign and the true minus; currencies and exploration and engine P&L are never summed together.
+* The ranking section (ADR 0053, backlog 137; goldbot/telegram/ranking_text.py) follows the report on its own budget
+  of at most 12 lines: families ranked by the adjusted lower bound of net R per trade after costs, the same figures
+  as the dashboard's. D3 below still governs the arm lines; the ranking names families, never arms.
 * The review lines (`review_section`) are the daily learning-ops review's own blinded lines
   (goldbot/research/daily_review.py `report_lines`, written at 06:15 for the same day): costs per broker, volume
   against the plan, incidents and the count of arms retired at their stop; absent when no review exists for the day.
@@ -494,17 +497,13 @@ def oz_per_lot(e: dict[str, Any]) -> float:
     return v if v > 0 else labs.CONTRACT_OZ
 
 
-def result_text(name: str, s: labs.LabSpan, ccy: str | None, *, withheld: str | None = None) -> str:
-    """"Scalp lab: 214 signals · 63 taken · 61 filled · 58 closed −£17.60 · −3.9R" and its states (spec 2.4). The £,
-    R and gross figures print only when `s.totals_shown` (quant 2026-10-26, MIN_ARMS_FOR_TOTAL strategy arms closed
-    in the window) and no `withheld` reason applies (the weekly: a day of the week was withheld); else "—"."""
+def result_text(name: str, s: labs.LabSpan, ccy: str | None) -> str:
+    """"Scalp lab: 214 signals · 63 taken · 61 filled · 58 closed −£17.60 · −3.9R" and its states (spec 2.4), whatever
+    the number of arms behind it (ADR 0053 retired the 3-arm rule)."""
     head = f"{name}: {labs.plural(s.signals, 'signal')} · {s.taken:,} taken"
     if not (s.taken or s.filled or s.closed):
         return head
     head += f" · {s.filled:,} filled · {s.closed:,} closed"
-    if s.closed and (withheld or not s.totals_shown):
-        head += f" — ({withheld or f'under {labs.MIN_ARMS_FOR_TOTAL} arms'})"
-        return head + (f" · {s.no_pnl:,} closed without costs recorded" if s.no_pnl else "")
     if s.net_closed:
         head += f" {labs.money(s.pnl, ccy)} · {labs.r_text(s.r)}"
     elif s.still_open and not s.closed:
@@ -583,18 +582,15 @@ def lab_block(state_dir: Path, conn: sqlite3.Connection | None, e: dict[str, Any
                               True)], None)
     s = labs.lab_span(conn, acct, lo, hi, oz_per_lot=oz_per_lot(e)) if conn is not None else labs.LabSpan()
     hours = open_hours(e, lo, hi) if s.signals == 0 and s.closed == 0 and weekday else None
-    withheld = "a day under 3 arms" if by_day and not all(s.day_shown(x) for x in by_day) else None
     if hours == 0:
         out = [Line(f"{name}: market closed · nothing to report", 1, acct)]
     elif hours is not None:
         out = [Line(f"{name}: no signals in {hours} h of open market ⚠️ Warning: check the feed", 1, acct)]
     else:
-        out = [Line(result_text(name, s, ccy, withheld=withheld), 1, acct)]
+        out = [Line(result_text(name, s, ccy), 1, acct)]
 
     def day_r(x: str) -> str:
-        if x not in s.by_day_arms:
-            return "none"
-        return labs.r_text(s.by_day.get(x, 0.0)) if s.day_shown(x) else "—"
+        return labs.r_text(s.by_day.get(x, 0.0)) if x in s.closed_days else "none"
     if by_day:
         out.append(Line("  by day: " + " · ".join(f"{pd.Timestamp(x):%a} {day_r(x)}" for x in by_day), 2, acct, True))
     warned = d.dd >= warn - 1e-12
@@ -777,7 +773,19 @@ def build_digest(state_dir: str | Path, now: pd.Timestamp, *, as_of: pd.Timestam
         out.append(Line(f"Review: could not read ({type(exc).__name__})", 2))
     out += [Line(x, 2) for x in _section(lambda: month_lines(sd, engines, day, as_of, live=live), "Month")]
     out.append(Line(_section(lambda: decisions_line(sd, roadmap), "For you")[0]))
-    return labs.guard("\n".join(fit(out, DAILY_LINES)))
+    return with_ranking(labs.guard("\n".join(fit(out, DAILY_LINES))), ranking_section(sd, hi))
+
+
+def ranking_section(state_dir: Path, day_end: pd.Timestamp) -> list[str]:
+    """The morning report's ranking over each version's life, as of the reported day's end."""
+    from goldbot.telegram.ranking_text import daily_lines
+    return _section(lambda: daily_lines(state_dir, day_end), "Ranking")
+
+
+def with_ranking(body: str, ranking: list[str]) -> str:
+    """The report with its ranking section (ADR 0053; goldbot/telegram/ranking_text.py) after the lab lines' blinding
+    guard: its own budget (at most 12 lines), family names only, never an arm id, slug or login."""
+    return body + ("\n\n" + "\n".join(ranking) if ranking else "")
 
 
 def report_text(state_dir: str | Path, now: pd.Timestamp, slot: pd.Timestamp, *, report: Any = None,

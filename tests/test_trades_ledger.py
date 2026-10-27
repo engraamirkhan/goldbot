@@ -1,12 +1,12 @@
 """Item 129 (docs/design/trades-ux-2026-10-27.md §2.2, §3.2; ADR 0050): one trade ledger over every kind, `GET
 /api/trades` and `GET /api/trades/{trade_id}`. One row per trade with human names, costs split to the penny, a "why"
 in words and an exit reason from a closed list; filters, cursor paging and totals equal to the rows; unreadable
-sources named. Blinding is server-side: an aggregate covering fewer than 3 unread arms, or a filter narrowed to
-strategies with unread arms (a partly-read family included), withholds its money and blinds the unread arms' rows;
-the seeded-arm leak test checks every response's payload."""
+sources named. Backlog 139 (ADR 0053): no blinding is left, so a family's filter shows the totals its ranking row
+shows; the List sorts by result too."""
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any, Literal
@@ -190,7 +190,7 @@ def test_a_total_missing_a_closed_trades_net_says_so_with_the_count_and_the_part
         _arm(tmp_path, cid, arm, pnl=1.0)
     _arm(tmp_path, "a4", "S4", pnl=None)                         # the broker's deals were unreadable
     cat = _catalog(tmp_path)
-    t = tl.query(_ledger(tmp_path, cat), _q(account=(SCALP,)), cat).totals
+    t = tl.query(_ledger(tmp_path, cat), _q(account=(SCALP,))).totals
     assert (t.net_pnl, t.net_unknown, t.net_partial) == (None, 1, 3.0)
 
 
@@ -234,10 +234,10 @@ def test_open_rows_carry_risk_and_money_now_and_the_engines_current_stop(tmp_pat
 def test_filter_totals_equal_the_sum_of_the_rows(tmp_path):
     _every_kind(tmp_path)
     led = _ledger(tmp_path, _catalog(tmp_path, read=("S1A", "S0")))
-    page = tl.query(led, _q(kind=("strategy", "cost_probe", "real")), _catalog(tmp_path, read=("S1A", "S0")))
+    page = tl.query(led, _q(kind=("strategy", "cost_probe", "real")))
     closed = [r for r in page.rows if r.status == "closed"]
     t = page.totals
-    assert t.n == len(page.rows) and not t.withheld and t.currency == "GBP"
+    assert t.n == len(page.rows) and t.currency == "GBP"
     assert t.net_pnl == round(sum(r.pnl or 0 for r in closed), 2) == round(1.41 + 3.95 + 7.10, 2)
     assert t.costs == round(sum(r.costs.total for r in closed if r.costs), 2)
 
@@ -246,21 +246,21 @@ def test_the_default_list_is_today_every_kind_but_shadow(tmp_path):
     _every_kind(tmp_path)
     _arm(tmp_path, "ex-old", "S1A", sent=NOW - pd.Timedelta(days=3))
     cat = _catalog(tmp_path)
-    page = tl.query(_ledger(tmp_path, cat), _q(), cat)
+    page = tl.query(_ledger(tmp_path, cat), _q())
     ids = {r.trade_id for r in page.rows}
     assert not any(i.startswith("shadow:") for i in ids) and not any(i.endswith("ex-old") for i in ids)
-    assert any(i.endswith("ex-old") for i in (r.trade_id for r in tl.query(_ledger(tmp_path, cat), _q(period="7d"),
-                                                                          cat).rows))
+    week = tl.query(_ledger(tmp_path, cat), _q(period="7d")).rows
+    assert any(r.trade_id.endswith("ex-old") for r in week)
 
 
 def test_filters_select_by_account_status_kind_and_timeframe(tmp_path):
     _every_kind(tmp_path)
     cat = _catalog(tmp_path)
     led = _ledger(tmp_path, cat)
-    assert {r.account for r in tl.query(led, _q(account=("icm-demo",)), cat).rows} == {"icm-demo"}
-    assert {r.status for r in tl.query(led, _q(status="open"), cat).rows} == {"open"}
-    assert {r.kind for r in tl.query(led, _q(kind=("shadow",)), cat).rows} == {"shadow"}
-    assert {r.timeframe for r in tl.query(led, _q(timeframe=("1h",)), cat).rows} == {"1h"}
+    assert {r.account for r in tl.query(led, _q(account=("icm-demo",))).rows} == {"icm-demo"}
+    assert {r.status for r in tl.query(led, _q(status="open")).rows} == {"open"}
+    assert {r.kind for r in tl.query(led, _q(kind=("shadow",))).rows} == {"shadow"}
+    assert {r.timeframe for r in tl.query(led, _q(timeframe=("1h",))).rows} == {"1h"}
 
 
 def test_a_cursor_pages_through_every_row_once_newest_first(tmp_path):
@@ -273,14 +273,14 @@ def test_a_cursor_pages_through_every_row_once_newest_first(tmp_path):
     seen: list[str] = []
     cursor = None
     while True:
-        page = tl.query(led, _q(limit=3, cursor=cursor), cat)
+        page = tl.query(led, _q(limit=3, cursor=cursor))
         seen += [r.trade_id for r in page.rows]
         cursor = page.next_cursor
         if cursor is None:
             break
     assert seen == [r.trade_id for r in led.rows] and len(seen) == 7
     with pytest.raises(ValueError):
-        tl.query(led, _q(cursor="not-a-cursor"), cat)
+        tl.query(led, _q(cursor="not-a-cursor"))
 
 
 def test_an_unreadable_source_is_named_and_the_others_still_show(tmp_path):
@@ -290,7 +290,7 @@ def test_an_unreadable_source_is_named_and_the_others_still_show(tmp_path):
     assert led.unreadable == ["shadow"] and any(r.kind == "exploration" for r in led.rows)
 
 
-# ------------------------------------------------------------------------------------------------ blinding (ADR 0050)
+# ------------------------------------------------------------------------------------------------ no blinding (139)
 def _labs(state: Path) -> None:
     """Scalp lab today: three unread strategy arms (S1A, S2A, S3A) and a control; Day/swing lab: the box family
     15m with I2A read and MB15 unread (a partly-read family), and one more unread arm (I2B)."""
@@ -305,105 +305,107 @@ def _labs(state: Path) -> None:
     _arm(state, "b3", "I2B", account=DAY, tf="15m", pnl=8.88)
 
 
-def test_lab_totals_over_three_unread_arms_in_the_account_and_day_show(tmp_path):
+def test_an_unread_arms_rows_and_any_filters_totals_show_whatever_its_read(tmp_path):
+    """ADR 0053 supersedes ADR 0050 decisions 2-3: one unread arm, two unread arms in an account-day, a partly-read
+    family, controls alone: every list carries its rows' results and its money totals."""
     _labs(tmp_path)
     cat = _catalog(tmp_path, read=("I2A",))
-    page = tl.query(_ledger(tmp_path, cat), _q(account=("icm-probe",)), cat)
-    assert not page.totals.withheld and page.totals.net_pnl == round(11.11 + 22.22 - 33.33 + 4.44, 2)
-    assert not any(r.blinded for r in page.rows)
+    led = _ledger(tmp_path, cat)
+    for q, net in ((_q(arm=("S1A",)), 11.11), (_q(account=(DAY,)), round(5.55 - 6.67 + 8.88, 2)),
+                   (_q(family=("box_break_close",)), round(5.55 - 6.67 + 8.88, 2)), (_q(kind=("control",)), 4.44)):
+        page = tl.query(led, q)
+        assert page.totals.net_pnl == net and page.totals.costs is not None, q
+        assert all(r.pnl is not None and r.exit_reason is not None for r in page.rows), q
 
 
-def test_an_account_day_under_three_unread_arms_withholds_the_totals_and_blinds_that_lists_rows(tmp_path):
+def test_a_family_filters_totals_equal_that_familys_ranking_row_for_the_same_window(tmp_path):
+    """Backlog 139 (1): the leak tests became equality tests. A family's 7-day filter and its 7-day ranking row agree
+    on the fills and the net after costs."""
+    from goldbot.api import strategy_ranking as sr
     _labs(tmp_path)
+    for i in range(6):
+        _arm(tmp_path, f"m{i}", "MB15", account=DAY, tf="15m", pnl=1.5 - i, sent=NOW - pd.Timedelta(days=i, hours=2))
     cat = _catalog(tmp_path, read=("I2A",))
-    page = tl.query(_ledger(tmp_path, cat), _q(account=("icm-demo",)), cat)          # MB15 + I2B unread: 2 arms
-    assert page.totals.withheld and page.totals.net_pnl is None and page.totals.costs is None
-    assert page.totals.n == 3
-    by = {r.arm_id: r for r in page.rows}
-    assert by["I2A"].pnl == 5.55 and not by["I2A"].blinded                           # read: its result shows
-    assert by["MB15"].blinded and by["MB15"].pnl is None and by["MB15"].r is None and by["MB15"].exit_reason is None
-    mixed = tl.query(_ledger(tmp_path, cat), _q(), cat)                              # both labs: one cell is short
-    assert mixed.totals.withheld and not any(r.blinded for r in mixed.rows)        # single trades still show
+    led = _ledger(tmp_path, cat)
+    page = tl.query(led, _q(family=("box_break_close",), period="7d", status="closed"))
+    row = next(r for r in sr.rank(led.rows, cat, NOW, window="7d").rows if r.family == "box_break_close")
+    assert (page.totals.n_closed, page.totals.net_pnl) == (row.figures.n, row.figures.net_pnl)
 
 
-def test_a_filter_on_one_unread_arm_withholds_and_blinds(tmp_path):
+def test_the_list_sorts_by_result_best_or_worst_first_and_pages_in_that_order(tmp_path):
+    """Backlog 139 (2): sorting by result is enabled; an unknown result sorts last; the cursor follows the order."""
     _labs(tmp_path)
-    cat = _catalog(tmp_path)
-    page = tl.query(_ledger(tmp_path, cat), _q(arm=("S1A",)), cat)
-    assert page.totals.withheld and page.totals.net_pnl is None
-    assert all(r.blinded and r.pnl is None for r in page.rows)
+    _arm(tmp_path, "u1", "S4", pnl=None)
+    led = _ledger(tmp_path, _catalog(tmp_path))
+    best = [r.pnl for r in tl.query(led, _q(sort="best", limit=50)).rows]
+    assert best[:3] == [22.22, 11.11, 8.88] and best[-1] is None
+    worst = [r.pnl for r in tl.query(led, _q(sort="worst", limit=50)).rows]
+    assert worst[:2] == [-33.33, -6.67] and worst[-1] is None
+    seen, cursor = [], None
+    while True:
+        page = tl.query(led, _q(sort="best", limit=3, cursor=cursor))
+        seen += [r.trade_id for r in page.rows]
+        if (cursor := page.next_cursor) is None:
+            break
+    assert seen == [r.trade_id for r in tl.query(led, _q(sort="best", limit=50)).rows]
 
 
-def test_a_filter_on_a_partly_read_family_withholds_totals_and_blinds_only_the_unread_arms(tmp_path):
+def test_the_result_sort_is_by_r_across_currencies_and_open_trades_follow_the_closed(tmp_path):
+    """Code review LOW: £ and $ are never compared; a closed trade is placed by its R, an open one (its result still
+    moves) after the closed ones, newest first."""
     _labs(tmp_path)
-    cat = _catalog(tmp_path, read=("I2A",))
-    page = tl.query(_ledger(tmp_path, cat), _q(family=("box_break_close",)), cat)
-    assert page.totals.withheld and page.totals.net_pnl is None and page.totals.open_pnl is None
-    by = {r.arm_id: r for r in page.rows}
-    assert by["I2A"].pnl == 5.55 and not by["I2A"].blinded
-    assert by["MB15"].blinded and by["I2B"].blinded and by["MB15"].pnl is None
+    _arm(tmp_path, "o1", "S1A", exit_after=None, sent=NOW - pd.Timedelta(minutes=5))
+    led = _ledger(tmp_path, _catalog(tmp_path))
+    usd = led.rows[-1].model_copy(update={"trade_id": "x:usd", "currency": "USD", "pnl": 100.0, "r": 0.1})
+    rows = sorted([*led.rows, usd], key=lambda r: (r.exit_utc or r.opened_utc, r.trade_id), reverse=True)
+    led = tl.Ledger(as_of=NOW, rows=rows, unreadable=[])
+    best = tl.query(led, _q(sort="best", limit=50)).rows
+    rs = [r.r for r in best if r.status == "closed" and r.r is not None]
+    assert rs == sorted(rs, reverse=True) and best[-1].status == "open"
+    assert best[0].trade_id != "x:usd"                  # $100.00 at 0.1 R is not the best trade
 
 
-def test_controls_alone_or_exploration_alone_is_a_narrowed_filter(tmp_path):
+def test_result_pages_neither_repeat_nor_skip_when_the_next_build_moves_an_open_trades_pnl(tmp_path):
+    """Code review LOW: the cursor carries the row's immutable sort key, so a fresh 10 s build (open P&L moved, one
+    more close) continues after the last row given."""
     _labs(tmp_path)
-    cat = _catalog(tmp_path)
-    for kind in (("control",), ("exploration",)):
-        assert tl.query(_ledger(tmp_path, cat), _q(kind=kind), cat).totals.withheld
-    both = tl.query(_ledger(tmp_path, cat), _q(account=("icm-probe",), kind=("exploration", "control")), cat)
-    assert not both.totals.withheld
+    for i in range(3):
+        _arm(tmp_path, f"o{i}", "S1A", exit_after=None, sent=NOW - pd.Timedelta(minutes=5 + i))
+    led = _ledger(tmp_path, _catalog(tmp_path))
+    first = tl.query(led, _q(sort="best", limit=4))
+    moved = [r.model_copy(update={"pnl_now": 999.0, "r_now": 99.0}) if r.status == "open" else r for r in led.rows]
+    led2 = tl.Ledger(as_of=NOW, rows=moved, unreadable=[])
+    rest: list[str] = []
+    cursor = first.next_cursor
+    while cursor is not None:
+        page = tl.query(led2, _q(sort="best", limit=4, cursor=cursor))
+        rest += [r.trade_id for r in page.rows]
+        cursor = page.next_cursor
+    ids = [r.trade_id for r in first.rows] + rest
+    assert sorted(ids) == sorted(r.trade_id for r in tl.query(led2, _q(sort="best", limit=50)).rows)
+    assert len(ids) == len(set(ids))
 
 
-def test_the_detail_view_shows_a_single_trades_own_result_before_its_read(tmp_path):
+def test_results_hidden_copy_is_gone_from_the_web_and_telegram():
+    """Backlog 139 (4): no screen or message says a result is hidden for an unread arm."""
+    root = Path(__file__).parents[1]
+    files = [*(root / "web" / "src").rglob("*.ts*"), *(root / "goldbot" / "telegram").rglob("*.py")]
+    pat = re.compile(r"Results hidden|hidden until (the|this|its) (arm|arms'|read)|Totals hidden", re.I)
+    hits = [str(f.relative_to(root)) for f in files if f.name != "schema.d.ts" and pat.search(f.read_text())]
+    assert hits == []
+
+
+def test_the_detail_view_shows_a_single_trades_own_result(tmp_path):
     _labs(tmp_path)
     led = _ledger(tmp_path, _catalog(tmp_path))
     row = tl.detail(led, next(r.trade_id for r in led.rows if r.arm_id == "MB15"))
-    assert row is not None and row.pnl == -6.67 and not row.blinded
+    assert row is not None and row.pnl == -6.67
 
 
-def test_unreadable_arm_reads_mean_every_arm_stays_unread(tmp_path):
+def test_unreadable_arm_reads_mean_no_arm_is_read(tmp_path):
     bad = tmp_path / "bad.yaml"
     bad.write_text("reads: [not, a, map")
     assert load_catalog(reads_path=bad).reads == {}
-
-
-def _payloads(c: TestClient, h: dict[str, str], led_ids: list[str]) -> list[str]:
-    queries = ["", "?arm=S1A", "?arm=MB15", "?family=box_break_close", "?family=session_vwap_fade",
-               "?account=icm-demo", "?kind=control", "?kind=exploration", "?timeframe=15m", "?exit_reason=target",
-               "?evidence=counted", "?control=false", "?account=icm-demo&kind=exploration&kind=control",
-               "?family=box_break_close&period=all", "?status=closed&account=icm-demo"]
-    out = [c.get("/api/trades" + q, headers=h).text for q in queries]
-    out.append(c.get("/api/today", headers=h).text)
-    return out
-
-
-def test_seeded_per_arm_results_never_appear_in_any_aggregate_or_narrowed_list(tmp_path, monkeypatch):
-    """The payload-level leak test (ADR 0050): distinctive per-arm results are seeded (each arm's sum and, for the
-    narrowed lists, its single trades); no `/api/trades` response withholding totals and no `/api/today` carries an
-    unread arm's sum, nor a narrowed list any unread arm's own result. Includes a filter on a partly-read family."""
-    state = tmp_path / "state"
-    state.mkdir()
-    _labs(state)
-    _arm(state, "b2b", "MB15", account=DAY, tf="15m", pnl=-1.01, sent=NOW - pd.Timedelta(minutes=50))
-    cat = _catalog(tmp_path, read=("I2A",))
-    monkeypatch.setattr(tl, "catalog", lambda: cat)
-    from goldbot.api import home_cards
-    monkeypatch.setattr(home_cards, "catalog", lambda: cat)
-    app = create_app(state, web_dist=tmp_path / "nodist", data_root=tmp_path / "data", owner_email="o@x.io")
-    c = TestClient(app)
-    h = _login(c, app)["viewer"]
-    texts = _payloads(c, h, [])
-    sums = ["-7.68", "−7.68", "15.21", "1.2"]                     # MB15's sum, MB15 + I2B, the Day/swing unread pair
-    for text in texts:
-        for s in sums:
-            assert s not in text, s
-    narrowed = [c.get("/api/trades" + q, headers=h).json() for q in ("?arm=MB15", "?family=box_break_close",
-                                                                       "?kind=control", "?arm=S1A")]
-    for page in narrowed:
-        assert page["totals"]["withheld"] and page["totals"]["net_pnl"] is None
-        for r in page["rows"]:
-            if r["arm_id"] != "I2A":
-                assert r["pnl"] is None and r["r"] is None and r["gross"] is None and r["blinded"]
-    assert c.get("/api/trades", headers=h).json()["totals"]["withheld"]   # Day/swing cell under 3 unread arms
 
 
 # ------------------------------------------------------------------------------------------------ the API
@@ -426,14 +428,13 @@ def test_the_routes_need_a_sign_in_page_and_answer_one_trade(tmp_path):
     assert "51234567" not in c.get("/api/trades?period=all", headers=h).text
 
 
-def test_a_filtered_page_over_50k_rows_answers_within_300_ms_at_p95(tmp_path):
-    cat = _catalog(tmp_path)
+def test_a_filtered_page_over_50k_rows_answers_within_300_ms_at_p95():
     base: dict[str, Any] = dict(kind="exploration", status="closed", account_label="Scalp lab", mode="demo", family="session_vwap_fade",
                 family_label="VWAP fade", variant="5m", timeframe="5m", is_control=False, side="long", lots=0.01,
                 entry=2400.0, stop=2397.0, stop_now=None, target=2406.0, exit=2406.0, exit_reason="target",
                 censored=False, held_s=600.0, hold_limit_s=3600.0, risk_amount=2.4, currency="GBP", pnl=1.0, r=0.4,
                 gross=1.3, pnl_now=None, r_now=None, price_now=None, costs=None, why="VWAP fade",
-                evidence="counted", excluded_reason=None, blinded=False, stale=False)
+                evidence="counted", excluded_reason=None, stale=False)
     arms = ["S1A", "S1B", "S2A", "S2B", "S3A", "S3B", "S4", "S5A"]
     rows = [TradeRow.model_construct(**base, trade_id=f"exploration:icm-probe:{i}", account="icm-probe",
                                      arm_id=arms[i % len(arms)], opened_utc=NOW - pd.Timedelta(minutes=i % 4000 + 10),
@@ -445,14 +446,14 @@ def test_a_filtered_page_over_50k_rows_answers_within_300_ms_at_p95(tmp_path):
     for q in [_q(period="30d"), _q(period="30d", account=("icm-probe",)), _q(period="all", family=("ema_pullback",)),
               _q(period="7d", status="closed")] * 5:
         t0 = time.perf_counter()
-        tl.query(led, q, cat)
+        tl.query(led, q)
         times.append(time.perf_counter() - t0)
     assert sorted(times)[int(0.95 * len(times)) - 1] < 0.3
 
 
 def test_the_indexed_query_gives_the_same_rows_and_totals_as_a_full_scan(tmp_path):
     """PR #206 speed fix: bisected date slices, the plain path and the one-pass scan answer exactly what a scan of
-    every row with `withheld_reason`, `open_withheld` and `totals` answers, for every filter shape."""
+    every row with `totals` answers, for every filter shape."""
     _every_kind(tmp_path)
     _labs(tmp_path)
     _arm(tmp_path, "old", "S2A", sent=NOW - pd.Timedelta(days=9))
@@ -467,53 +468,31 @@ def test_the_indexed_query_gives_the_same_rows_and_totals_as_a_full_scan(tmp_pat
         lo, hi = tl.bounds(q, NOW)
         match = tl._matcher(q, lo, hi, NOW)
         want = [r for r in led.rows if match(r)]
-        reason, blind = tl.withheld_reason(want, narrowed=q.narrowed, cat=cat)
-        page = tl.query(led, q.model_copy(update={"limit": tl.MAX_PAGE}), cat)
+        page = tl.query(led, q.model_copy(update={"limit": tl.MAX_PAGE}))
         assert [r.trade_id for r in page.rows] == [r.trade_id for r in want], q
-        assert page.totals == tl.totals(want, reason, tl.open_withheld(want, cat)), q
-        assert tl.query(led, q.model_copy(update={"limit": tl.MAX_PAGE}), cat) == page        # a remembered answer
+        assert page.totals == tl.totals(want), q
+        assert tl.query(led, q.model_copy(update={"limit": tl.MAX_PAGE})) == page        # a remembered answer
 
 
-# ------------------------------------------------------------------------------------------------ quant conditions
-def _net(led: tl.Ledger, cat: Any, **kw: Any) -> float | None:
-    return tl.query(led, _q(account=(SCALP,), **kw), cat).totals.net_pnl
-
-
-def test_no_two_range_difference_isolates_one_arm_closing_overnight(tmp_path):
-    """Quant condition 1: a closed trade belongs to the day it CLOSED, as the blinding cells do. Arms a, b, c open on
-    Monday and close on Tuesday; arm d opens and closes on Tuesday. Before the fix [Mon..Mon] held a, b, c (opened
-    Monday) and [Tue..Tue] held all four: the difference was d alone. No pair of shown ranges may differ by one arm."""
+# ------------------------------------------------------------------------------------------------ ranges
+def test_a_closed_trade_belongs_to_the_day_it_closed(tmp_path):
+    """Arms a, b, c open on Monday and close on Tuesday: Monday's list is empty, Tuesday's holds them (the day the
+    money lands, as Today and the ranking count it)."""
     _engine(tmp_path, SCALP)
     mon = pd.Timestamp("2026-10-26 20:00", tz="UTC")
     for cid, arm in (("a", "S1A"), ("b", "S2A"), ("c", "S3A")):
         _arm(tmp_path, cid, arm, sent=mon, exit_after=pd.Timedelta(hours=4), pnl=1.0)    # closes Tue 00:00
-    _arm(tmp_path, "d", "S5A", sent=NOW - pd.Timedelta(hours=2), exit_after=pd.Timedelta(minutes=10), pnl=9.99)
-    cat = _catalog(tmp_path)
-    led = _ledger(tmp_path, cat)
+    led = _ledger(tmp_path, _catalog(tmp_path))
     days = [pd.Timestamp(d).date() for d in ("2026-10-26", "2026-10-27")]
-    shown = [_net(led, cat, since=lo, until=hi) for lo in days for hi in days if lo <= hi]
-    values = [v for v in shown if v is not None]
-    assert 9.99 not in values
-    assert all(abs(abs(a - b) - 9.99) > 0.005 for a in values for b in values)
-    monday = tl.query(led, _q(account=(SCALP,), since=days[0], until=days[0]), cat)
-    assert not monday.rows                                                   # a, b, c closed on Tuesday
+    assert not tl.query(led, _q(account=(SCALP,), since=days[0], until=days[0])).rows
+    assert tl.query(led, _q(account=(SCALP,), since=days[1], until=days[1])).totals.net_pnl == 3.0
 
 
-def test_open_pnl_totals_under_three_unread_arms_are_withheld_but_open_rows_show(tmp_path):
-    """Quant condition 3: an open-P&L total is an aggregate too; each account's unread open trades need 3 arms."""
+def test_the_open_pnl_total_shows_with_each_open_rows_pnl(tmp_path):
     _engine(tmp_path, SCALP)
-    for cid, arm in (("a1", "S1A"), ("a2", "S2A"), ("a3", "S3A")):
-        _arm(tmp_path, cid, arm)
     _arm(tmp_path, "o1", "S1A", exit_after=None, sent=NOW - pd.Timedelta(minutes=20))
-    _arm(tmp_path, "o2", "S2A", exit_after=None, sent=NOW - pd.Timedelta(minutes=15))
-    cat = _catalog(tmp_path)
-    page = tl.query(_ledger(tmp_path, cat), _q(account=(SCALP,)), cat)
-    assert page.totals.net_pnl is not None                                   # closes: 3 arms in the day
-    assert page.totals.open_pnl is None and page.totals.open_pnl_withheld
-    assert all(r.pnl_now is not None for r in page.rows if r.status == "open")   # single open trades stay visible
-    _arm(tmp_path, "o3", "S3A", exit_after=None, sent=NOW - pd.Timedelta(minutes=10))
-    page = tl.query(_ledger(tmp_path, cat), _q(account=(SCALP,)), cat)
-    assert page.totals.open_pnl is not None and not page.totals.open_pnl_withheld
+    page = tl.query(_ledger(tmp_path, _catalog(tmp_path)), _q(account=(SCALP,)))
+    assert page.totals.open_pnl is not None and page.totals.open_pnl == page.rows[0].pnl_now
 
 
 def test_open_trades_belong_only_to_ranges_that_reach_now(tmp_path):
@@ -522,5 +501,5 @@ def test_open_trades_belong_only_to_ranges_that_reach_now(tmp_path):
     cat = _catalog(tmp_path)
     led = _ledger(tmp_path, cat)
     yesterday = (NOW - pd.Timedelta(days=1)).date()
-    assert not tl.query(led, _q(since=yesterday, until=yesterday), cat).rows
-    assert tl.query(led, _q(since=yesterday), cat).rows
+    assert not tl.query(led, _q(since=yesterday, until=yesterday)).rows
+    assert tl.query(led, _q(since=yesterday)).rows
