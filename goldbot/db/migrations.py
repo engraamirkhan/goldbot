@@ -596,6 +596,16 @@ CORE: tuple[Migration, ...] = (
         """CREATE TRIGGER IF NOT EXISTS adaptive_changes_no_delete BEFORE DELETE ON adaptive_changes
            BEGIN SELECT RAISE(ABORT, 'adaptive_changes is append-only'); END""",
     )),
+    # additive (ADR 0055): the live pilot's record, one row per account (realised loss and filled entries from the
+    # broker's deals, the sticky stop; goldbot/engine/pilot.py). A release without it never reads the table and has
+    # no pilot rails at all: icm-live stays disabled until the release that has them is deployed
+    Migration(version=5, name="pilot_state", additive=True, statements=(
+        f"""CREATE TABLE IF NOT EXISTS pilot_state (
+               account_id TEXT PRIMARY KEY,
+               ts_ns INTEGER NOT NULL,
+               {_BODY}
+           ) STRICT""",
+    )),
 )
 
 # tv.db: the TradingView webhook's durable alert inbox (goldbot/webhook/inbox.py) and the direct pull's log

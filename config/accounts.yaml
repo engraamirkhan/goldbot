@@ -373,14 +373,44 @@ accounts:
   icm-live:
     broker: icm
     mode: live
-    server: ICMarketsSC-Live
-    login: null
+    server: ICMarketsSC-MT5-3   # the owner's real account (Raw Spread), given 2026-10-27
+    login: null  # never here (public repo): `python -m goldbot.ops.accounts add icm-live` on the VPS keeps it in the keyring
+    currency: GBP               # the deposit currency; the engine refuses a terminal reporting another one
     terminal_path: C:\MT5\ICMarkets-Live\terminal64.exe
-    server_tz: Europe/Athens
+    # as icm-demo and icm-probe (same broker, measured 2026-10-26 in the gap week: UTC+3 = NY+7). health measures it on
+    # the live terminal as soon as its bridge answers (`server_clock:icm-live`, before the unlock too); ADR 0005
+    server_tz: NY+7
     symbol: XAUUSD
     magic_base: 260300
-    enabled: false  # unlocked by the paper -> tiny-live gate
-    dynamic_limits: false     # owner-only on real money (design 2026-10-19); tighten-only if ever turned on
+    enabled: false  # only the owner's `unlock-live icm-live` and typed phrase enable it (ADR 0055)
+    dynamic_limits: false     # ADR 0055: "Dynamic or adaptive limits off"
+    # ADR 0055: "£6.25 (two full stops), absolute, account currency"; the pilot's daily_cap_frac keeps the 2% rule
+    # from binding first. Entries only; exits are never gated
+    daily_loss_limit_abs: 6.25
+    approval_mode: propose    # ADR 0036 / 0055: the owner confirms every entry (approval_window_seconds: 90)
+    # ADR 0055, option (a), this account only (goldbot/risk/pilot.py): 0.01 lot exactly, stops <= $4 (refused, never
+    # shrunk), <= £3.12 a trade including the round trip, one position, 15m only; entries halt for good after £25
+    # realised loss or 30 filled entries (counted from the broker's deals since start_utc, kept in core.db), checked
+    # before every entry with the open risk and the new trade; exits keep running. The four rails it changes, for
+    # this account only: max_risk_frac (1% -> £3.12), daily_cap_frac (2% -> £6.25), leverage_cap (20 -> 500, the
+    # terminal's own leverage when lower; the bridge's notional ceiling follows it) and drawdown_stages (the 12% kill
+    # gives way to the £25 stop). The field bounds are ADR 0055's terms. It enables nothing by itself
+    pilot:
+      enabled: true
+      adr: 55
+      pilot_id: icm-live-adr55
+      start_utc: 2026-10-29T00:00:00Z   # before the earliest first order (2026-10-30)
+      lot: 0.01
+      max_stop_usd: 4.00
+      max_risk_per_trade_abs: 3.12
+      stop_loss_abs: 25.00
+      max_entries: 30
+      timeframes: [15m]
+      max_positions: 1
+      leverage_cap: 500
+      max_risk_frac: 0.125            # £3.12 of £25: the £ cap binds over the pilot's whole range
+      daily_cap_frac: 0.25            # £6.25 of £25: daily_loss_limit_abs binds over the pilot's whole range
+      drawdown_stages: false
   vantage-live:
     broker: vantage
     mode: live

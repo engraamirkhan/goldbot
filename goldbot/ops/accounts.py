@@ -45,6 +45,7 @@ from goldbot.base import FrozenRecord, Record, write_private
 from goldbot.config import ROOT
 from goldbot.data.timeutil import server_zone
 from goldbot.risk.limits_profile import RiskOverrides
+from goldbot.risk.pilot import PILOT_MAX_DAILY_LOSS, PilotRules
 
 ACCOUNTS_FILE = ROOT / "config" / "accounts.yaml"
 ACCOUNT_ID_LOGIN = re.compile(r"\d{5,}")      # an account name with this could carry an MT5 login: refused at load
@@ -193,6 +194,9 @@ class Account(Record):
     # BACKLOG 29 / ADR 0004: the owner's absolute daily loss limit for THIS account, in its own deposit currency
     # (icm-demo: 50 = £50). None = off. Per account because one number read in different currencies is not one limit
     daily_loss_limit_abs: float | None = Field(None, gt=0)
+    # the owner's declared deposit currency (ISO code); when set, a terminal reporting another one is refused
+    # (`verify_terminal_account`), so a £ limit is never applied to a $ account. None = not declared (read only)
+    currency: str | None = Field(None, pattern=r"^[A-Z]{3}$")
     # the owner's declared account type: the baseline until the classifier stores a measured class (it keeps running;
     # a measured class that disagrees makes the stricter one win and health warns: execution/classifier.effective_class)
     account_class: Literal["raw", "standard"] | None = None
@@ -230,6 +234,11 @@ class Account(Record):
     # and 10 s). Vantage fills take up to 31 s. At most 60 s, below the look-up's AMBIGUOUS_SETTLE_S (120 s), so no
     # clean look calls an order unfilled while its call can still answer
     order_timeout_s: float = Field(15.0, gt=0, le=60)
+    # the live pilot (goldbot/risk/pilot.py, ADR 0055): 0.01 lot, stops <= $4, £3.12 a trade, a halt for good at £25
+    # realised or 30 filled entries, 15m only, one position. Accepted on a live account only, with owner-confirmed
+    # entries and the absolute daily limit (refused at load otherwise). It enables nothing: the account still needs
+    # `unlock_live` and the owner's typed phrase
+    pilot: PilotRules = Field(default_factory=PilotRules)
 
     # backstop for records built outside load_accounts: validation errors never carry the input (names, logins)
     model_config = ConfigDict(hide_input_in_errors=True)      # merged with Record's config by pydantic
@@ -335,6 +344,23 @@ class Account(Record):
             raise ValueError("every exploration arm names a style with a pot (exploration.pots, ADR 0043)")
         if sum(pot.gbp for pot in ex.pots.values()) > ex.budget_share * cap + 1e-9:
             raise ValueError("exploration pots must fit inside exploration.budget_share x daily_loss_limit_abs")
+        return self
+
+    @model_validator(mode="after")
+    def _pilot_rails(self) -> Account:
+        """ADR 0055's account terms: a live account (a demo account has nothing to pilot), entries the owner confirms
+        ("owner-confirmed ... `approval_mode: propose`"; auto is refused on live already), "Daily loss limit £6.25
+        ... absolute" (`daily_loss_limit_abs` set, at most PILOT_MAX_DAILY_LOSS), and "Dynamic or adaptive limits
+        off". A disabled block is inert and not judged."""
+        p = self.pilot
+        if not p.enabled:
+            return self
+        if self.mode != "live":
+            raise ValueError("pilot is allowed on live accounts only (ADR 0055)")
+        if self.daily_loss_limit_abs is None or self.daily_loss_limit_abs > PILOT_MAX_DAILY_LOSS + 1e-9:
+            raise ValueError(f"pilot needs daily_loss_limit_abs on the same account, at most {PILOT_MAX_DAILY_LOSS:g}")
+        if self.dynamic_limits or self.risk_overrides is not None:
+            raise ValueError("pilot needs dynamic_limits off and no risk_overrides (ADR 0055)")
         return self
 
     @property
@@ -549,13 +575,15 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
             login = int(stored) if stored and stored.strip().isdigit() else None
         out[aid] = Account(account_id=aid, broker=a["broker"], mode=a["mode"], server=a["server"], login=login, terminal_path=a["terminal_path"],
                            server_tz=a["server_tz"], symbol=a["symbol"], magic_base=a["magic_base"], enabled=bool(a.get("enabled", False)),
-                           daily_loss_limit_abs=a.get("daily_loss_limit_abs"), account_class=a.get("account_class"),
+                           daily_loss_limit_abs=a.get("daily_loss_limit_abs"), currency=a.get("currency"),
+                           account_class=a.get("account_class"),
                            risk_overrides=a.get("risk_overrides"), approval_mode=a.get("approval_mode", "propose"),
                            cost_probe=CostProbe(**(a.get("cost_probe") or {})),
                            shadow_host=bool(a.get("shadow_host", False)), probe_only=bool(a.get("probe_only", False)),
                            dynamic_limits=a.get("dynamic_limits", False),
                            exploration=Exploration(**(a.get("exploration") or {})),
-                           max_positions=a.get("max_positions"), order_timeout_s=a.get("order_timeout_s", 15.0))
+                           max_positions=a.get("max_positions"), order_timeout_s=a.get("order_timeout_s", 15.0),
+                           pilot=PilotRules(**(a.get("pilot") or {})))
     hosts = [a for a in out.values() if a.enabled and a.shadow_host]
     if len(hosts) > 1:      # ADR 0037 amendment 4: one shadow book, one host; two would trade it twice
         raise ValueError(f"{len(hosts)} enabled accounts are the shadow host in config/accounts.yaml: exactly one may "
@@ -599,6 +627,9 @@ def verify_terminal_account(acc: Account, info: Any) -> str | None:
     want = "demo" if acc.mode == "demo" else "real"
     if info.trade_mode != want:
         return f"terminal account is {info.trade_mode or 'unknown'}, {acc.account_id} is {acc.mode}"
+    have = str(getattr(info, "currency", "") or "").strip().upper()
+    if acc.currency is not None and have != acc.currency:
+        return f"terminal account currency is {have or 'unknown'}, {acc.account_id} is {acc.currency}"
     margin = getattr(info, "margin_mode", None)
     if margin is None:          # a v3 bridge does not report it (review LOW-A: say what to do)
         return ("terminal margin mode unknown (not reported; the engine needs a hedging account): bridge older than "

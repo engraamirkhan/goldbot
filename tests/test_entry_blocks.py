@@ -121,7 +121,9 @@ def test_a_bad_intent_number_keeps_the_account_reasons_and_names_its_field():
 
 def test_the_per_trade_refusals_are_the_sizing_refusals_of_the_gate():
     assert PER_TRADE_REFUSALS == {"fx_conversion_unavailable", "min_lot_exceeds_risk", "margin_level_floor",
-                                  "combined_exposure_cap", "daily_loss_limit_abs", "heat_cap"}
+                                  "combined_exposure_cap", "daily_loss_limit_abs", "heat_cap",
+                                  "pilot_stop_above_cap", "pilot_trade_risk_above_cap",
+                                  "pilot_stop_projected"}
     assert not PER_TRADE_REFUSALS & set(RiskGate(LIMITS).account_reasons(
         _state(**{k: v for over, _ in FLAGS if "equity" not in over for k, v in over.items()}), NOW))
 

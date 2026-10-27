@@ -79,7 +79,9 @@ def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTra
     if spawned is None:
         log.warning("could not list processes: a terminal launched by initialize would go unnoticed here")
     guarded = GuardedBroker(broker, magic_base=acc.magic_base,
-                            verify=lambda info: accounts.verify_terminal_account(acc, info))
+                            verify=lambda info: accounts.verify_terminal_account(acc, info),
+                            # ADR 0055: the live pilot account's notional ceiling from its leverage cap (else 6x)
+                            leverage_cap=acc.pilot.leverage_cap if acc.pilot.enabled and acc.is_live else None)
     # The registered-account check (login, server, demo vs real, hedging) gates every RPC instead of the start:
     # until the terminal is once seen `ok`, /health answers with the token (not_logged_in, wrong_account, ...) and
     # every call is refused, so a lost login shows as such rather than as a bridge that keeps restarting; after that,

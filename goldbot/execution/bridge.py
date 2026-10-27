@@ -130,6 +130,7 @@ MAX_ORDER_LOTS = 3.0            # the design's combined exposure cap; no single 
 # leverage cap = 6x equity, the gate's `max_combined_notional_frac * leverage_cap` (a test pins the two equal). The
 # bridge enforces it on this terminal's own readings, so a brain sizing wrongly on a 1:5000 demo terminal is refused.
 MAX_NOTIONAL_EQUITY_MULT = 6.0
+NOTIONAL_FRAC = 0.30            # the 30% of DESIGN.md:112; x a leverage cap = the multiple of equity
 CEILING_REFUSAL = "bridge_notional_ceiling"     # the message prefix of every ceiling refusal (the engine alerts on it)
 UNREADABLE_REFUSAL = f"{CEILING_REFUSAL}: unreadable:"   # ... when a figure it checks could not be read (fail closed)
 STALE_REFUSAL = "bridge_stale_order"            # an order that aged past ORDER_MAX_AGE_S during the ceiling's reads
@@ -443,8 +444,13 @@ class GuardedBroker:
     the ceiling; the terminal would refuse it anyway (10027), this makes the reason the box's own. A terminal_info that
     cannot be read, or has no such field, is not judged here. Closes and modifies are never gated by it."""
 
-    def __init__(self, broker: Any, *, magic_base: int, verify: Callable[[Any], str | None] | None = None) -> None:
+    def __init__(self, broker: Any, *, magic_base: int, verify: Callable[[Any], str | None] | None = None,
+                 leverage_cap: float | None = None) -> None:
         self._b, self.magic_base, self._verify = broker, magic_base, verify
+        # ADR 0055 (trading-safety condition, HIGH): the live pilot account's own leverage cap (accounts.yaml
+        # `pilot.leverage_cap`, 500), so its ceiling is NOTIONAL_FRAC x min(cap, the terminal's own leverage) x equity
+        # (150x at 1:500) instead of 6x, which refuses every 0.01 lot at £50. None (every other account): 6x
+        self.leverage_cap = leverage_cap
         # when the brain sent the order being served (the bridge handler sets it; one request at a time): the age is
         # checked again just before the send, after the ceiling's reads. None: not served over the bridge
         self.order_sent_at: float | None = None
@@ -501,6 +507,15 @@ class GuardedBroker:
         log.warning("order %s refused by the notional ceiling: %s", intent.client_order_id, why)
         return _refusal(f"{CEILING_REFUSAL}: {why}")
 
+    def notional_mult(self, info: AccountInfo) -> float:
+        """The ceiling's multiple of equity: MAX_NOTIONAL_EQUITY_MULT, or on the pilot account NOTIONAL_FRAC x its
+        leverage cap, lowered to the terminal's own leverage when that is smaller (it only tightens)."""
+        if self.leverage_cap is None:
+            return MAX_NOTIONAL_EQUITY_MULT
+        lev = float(getattr(info, "leverage", 0) or 0)
+        cap = min(self.leverage_cap, lev) if math.isfinite(lev) and lev > 0 else self.leverage_cap
+        return NOTIONAL_FRAC * cap
+
     def _notional_refusal(self, intent: OrderIntent, info: AccountInfo) -> str | None:
         """Why the order would take this terminal's notional on its symbol above MAX_NOTIONAL_EQUITY_MULT x equity, or
         None. Fail closed: a figure that cannot be read or is not finite and > 0 is the reason (`unreadable:<field>`)."""
@@ -523,8 +538,9 @@ class GuardedBroker:
         except Exception as exc:                        # noqa: BLE001 - a malformed record: never a 500, never a send
             return f"unreadable:ceiling ({type(exc).__name__})"
         notional = (open_lots + intent.lots) * contract * px * fx
-        if notional > MAX_NOTIONAL_EQUITY_MULT * equity:
-            return (f"notional {notional:.2f} {currency} > {MAX_NOTIONAL_EQUITY_MULT:g} x equity {equity:.2f} "
+        mult = self.notional_mult(info)
+        if notional > mult * equity:
+            return (f"notional {notional:.2f} {currency} > {mult:g} x equity {equity:.2f} "
                     f"({open_lots:g} lots open + {intent.lots:g} on {sym})")
         return None
 

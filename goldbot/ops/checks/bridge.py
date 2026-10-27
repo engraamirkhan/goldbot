@@ -7,7 +7,7 @@ import pandas as pd
 
 from goldbot.data.calendar import SessionTable, session_table_from_cache
 from goldbot.ops.checks._base import AccountRef, Check, Status, _read_json
-from goldbot.ops.checks.registry import BLOCK_ACCOUNT, register_check
+from goldbot.ops.checks.registry import BLOCK_ACCOUNT, BLOCK_CORE, register_check
 
 if TYPE_CHECKING:
     from goldbot.ops.health import HealthContext
@@ -207,3 +207,17 @@ def check_server_clock(ctx: HealthContext, account: AccountRef) -> Check | None:
         return Check(name=name, status="warn", reason=f"not measured: probe failed ({type(exc).__name__})")
     status: Status = "fail" if p.status == "mismatch" else "ok"     # market closed: not measurable, no alert noise
     return Check(name=name, status=status, reason=p.reason)
+
+
+@register_check("global", block=BLOCK_CORE, pos=60)
+def check_pilot_server_clock(ctx: HealthContext) -> list[Check]:
+    """The real-money pilot's server clock before the unlock (docs/deploy/live-readiness-2026-10-30.md, L4: "server_tz
+    set from a measurement on the live server"): `check_server_clock` for every configured pilot account that is not
+    enabled yet (`ctx.pilot_accounts`), as soon as a bridge for it answers. Nothing without a bridge (not connected
+    yet); an enabled pilot account is measured by the per-account check, once. Read-only."""
+    out: list[Check] = []
+    for a in ctx.pilot_accounts:
+        c = check_server_clock(ctx, a)
+        if c is not None:
+            out.append(c)
+    return out

@@ -115,3 +115,28 @@ icm-live:
   Spread-bet versus CFD treatment depends on the account type, and the owner should confirm it with an adviser.
 - **Regulation:** the account is offshore (FSA Seychelles). The FCA's 1:20 cap, FOS and FSCS do not apply. Our rails
   are the protection that binds.
+
+## Addendum (trading-safety review conditions and implementation, 2026-10-27)
+- **Worst-case gap.** A stop is a market order once touched: a weekend or news gap can fill about **$20 beyond the
+  stop** (about **£15** at 0.01 lot and 0.7508 GBP per USD). The worst single trade is then about £18 (£3 stop + £15
+  gap), and the worst pilot about £25 + £15 = **£40**, not £25. The £25 stop bounds what the gate lets start, not
+  what a gap can take.
+- **Negative-balance protection must be confirmed with IC Markets** (support or the client agreement) for the
+  Seychelles entity before the first order. Without it a gap on a £25-£50 account could leave a debt. Go/no-go item.
+- **Implemented as icm-live config, not code bypasses** (`pilot:` in config/accounts.yaml, goldbot/risk/pilot.py
+  bounds = these terms; the gate's pilot checks run only when that block is set; every demo rail unchanged):
+  - the £25 stop is also checked before each entry: realised loss + open risk + this trade's stop and round trip
+    must stay within £25 (`pilot_stop_projected`), as the daily limit is;
+  - realised loss and filled entries are counted from the broker's deal history since `start_utc` (balance
+    operations excluded, any magic counted), kept with the sticky stop in core.db `pilot_state`; a record that cannot
+    be read refuses entries (`pilot_record_unknown`);
+  - `leverage_cap` 500 for the gate's margin and combined-notional rails, lowered to the terminal's own leverage when
+    that is smaller; the bridge's notional ceiling on this account is 0.30 x that (150x equity, £7,500 at £50)
+    instead of 6x (£300 at £50, which refuses every 0.01 lot);
+  - rails 1, 2 and 4 are `max_risk_frac: 0.125`, `daily_cap_frac: 0.25` and `drawdown_stages: false` on the pilot block,
+    so £3.12 a trade and £6.25 a day bind over the whole £25-£50 range.
+- **Open point for the trading-safety reviewer: the weekly cap.** The standing 5% weekly cap is not one of the four
+  changed rails, so it still binds: £2.50 at £50, i.e. **one full stop ends the pilot's week**. It is left as is
+  (never loosened without a decision); 30 trades are then unlikely within 4 weeks. Decide whether a fifth rail
+  (weekly) is intended.
+- The supervisor's combined caps (1.5% / 4% of combined equity) are unchanged and see icm-live beside the demo accounts.
