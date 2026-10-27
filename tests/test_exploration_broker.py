@@ -134,7 +134,8 @@ def _table(account: str, *, slip: float, n_fills: int, commission: float = 3.5) 
 
 
 def _ctx(tmp_path: Path, accounts: list[Any], bars: dict[str, pd.DataFrame] | None = None) -> Any:
-    store = SimpleNamespace(read=lambda table, source=None, **_: (bars or {}).get(source, pd.DataFrame()))
+    store = SimpleNamespace(read=lambda table, source=None, **_: pd.DataFrame() if table == "bars_quarantine"
+                            else (bars or {}).get(source, pd.DataFrame()))
     return SimpleNamespace(settings=load_settings(), store=store, state_dir=tmp_path, accounts=accounts)
 
 

@@ -852,7 +852,11 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
         return out
     priors = read_priors(db) if broker in PRIOR_BROKERS else {}      # ICM-cost history: never another broker's
     r_by_arm = {a: strat.loc[strat["arm_id"] == a, "label_sim_r"].astype(float).tolist() for a in style_of}
-    shares = thompson_shares(r_by_arm, style_of, priors=priors, ceilings=ceilings, seed=seed)
+    if not any(r_by_arm.values()):      # quant 2026-10-27 (LOW): a run on no evidence is not a learnt run
+        log.warning("exploration %s: no labelled evidence by %s, no weights run written", broker, as_of)
+        out["weights"] = None
+        return out
+    shares =thompson_shares(r_by_arm, style_of, priors=priors, ceilings=ceilings, seed=seed)
     detail = {a: {"n": len(r_by_arm[a]), "mean_r": float(np.mean(r_by_arm[a])) if r_by_arm[a] else None,
                   "prior": priors[a].prior_version if a in priors else None, "ceiling": (ceilings or {}).get(a),
                   "method": "thompson_nig_net_r_within_style"} for a in style_of}

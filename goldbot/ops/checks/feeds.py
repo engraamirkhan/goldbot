@@ -261,3 +261,64 @@ register_check("account", block=BLOCK_RECONCILIATION, pos=10)(check_reconciliati
 register_check("account", block=BLOCK_RECONCILIATION, pos=20)(check_tick_record)
 # TradingView sign-in / pull state lives with the pull's health module (goldbot/ops/tv_pull_health.py); WARN only
 register_check("global", block=BLOCK_TAIL, pos=85)(check_tv_pull)
+
+
+# ---- exploration learning (brain 2026-10-27: 0 of 349 candidates labelled for days while the job reported ok)
+LEARNER_STALE_H = 26.0     # nightly_costs runs 23:10 on weekdays: a Sunday-evening close is labelled ~25 h later
+
+
+def _has_aux(ctx: HealthContext) -> bool:
+    return (ctx.state_dir / "aux.db").exists()
+
+
+def _at(ns: int | None) -> str:
+    return "never" if ns is None else f"{pd.Timestamp(int(ns), tz='UTC'):%Y-%m-%d %H:%M}"
+
+
+@register_check("global", block=BLOCK_TAIL, pos=95, when=_has_aux)
+def check_exploration_learning(ctx: HealthContext) -> Check:
+    """Is the system learning: per broker, every exploration trade that closed more than LEARNER_STALE_H ago must be
+    followed by at least one label (exploration_obs.labelled_ns) and one bandit weights run
+    (exploration_broker_weights.run_ns) of that broker; FAIL otherwise (the nightly learner, goldbot/ops/jobs.py
+    exploration_learn, is not labelling or not writing weights). aux.db is opened read-only, never migrated."""
+    import sqlite3
+    name = "exploration_learning"
+    due_ns = int((ctx.now - pd.Timedelta(hours=LEARNER_STALE_H)).value)
+    day_ns = int((ctx.now - pd.Timedelta(hours=24)).value)
+    if not _has_aux(ctx):
+        return Check(name=name, status="ok", reason="no aux.db yet")
+    try:
+        con = sqlite3.connect(f"file:{ctx.state_dir / 'aux.db'}?mode=ro", uri=True, timeout=5)
+        try:
+            tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if not {"exploration_obs", "exploration_broker_weights"} <= tables:
+                return Check(name=name, status="ok", reason="no exploration tables yet")
+            closed = dict(con.execute(
+                "SELECT broker, MAX(exit_ns) FROM exploration_obs WHERE taken = 1 AND exit_ns IS NOT NULL "
+                "AND exit_ns <= ? AND quarantine IS NULL AND broker IS NOT NULL GROUP BY broker", (due_ns,)).fetchall())
+            labelled = dict(con.execute("SELECT broker, MAX(labelled_ns) FROM exploration_obs "
+                                        "WHERE broker IS NOT NULL GROUP BY broker").fetchall())
+            n_day = dict(con.execute("SELECT broker, COUNT(*) FROM exploration_obs WHERE labelled_ns >= ? "
+                                     "AND broker IS NOT NULL GROUP BY broker", (day_ns,)).fetchall())
+            runs = dict(con.execute("SELECT broker, MAX(run_ns) FROM exploration_broker_weights "
+                                    "GROUP BY broker").fetchall())
+        finally:
+            con.close()
+    except sqlite3.Error as exc:
+        return Check(name=name, status="warn", reason=f"aux.db unreadable: {type(exc).__name__}")
+    if not closed:
+        return Check(name=name, status="ok", reason=f"no exploration trade closed more than {LEARNER_STALE_H:.0f} h ago")
+    bad, good = [], []
+    for broker, last_exit in sorted(closed.items()):
+        lab, run = labelled.get(broker), runs.get(broker)
+        miss = [what for what, ns in (("nothing labelled", lab), ("no weights run", run))
+                if ns is None or int(ns) < int(last_exit)]
+        if miss:
+            bad.append(f"{broker}: {' and '.join(miss)} since a trade closed {_at(last_exit)} (last label {_at(lab)}, "
+                       f"last weights {_at(run)})")
+        else:
+            good.append(f"{broker}: {n_day.get(broker, 0)} labelled in 24 h, weights {_at(run)}")
+    if bad:
+        return Check(name=name, status="fail", reason="exploration learner stalled: " + "; ".join(bad)
+                     + " (nightly_costs -> exploration_learn)")
+    return Check(name=name, status="ok", reason="; ".join(good))

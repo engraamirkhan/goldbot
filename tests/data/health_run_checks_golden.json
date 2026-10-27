@@ -306,6 +306,11 @@
    "1 feeds ok, last poll 0 s ago"
   ],
   [
+   "exploration_learning",
+   "ok",
+   "no exploration trade closed more than 26 h ago"
+  ],
+  [
    "agent_spend",
    "ok",
    "2026-10: $0.00 of $40.00 (0%)"
@@ -778,6 +783,11 @@
    "news",
    "ok",
    "1 feeds ok, last poll 0 s ago"
+  ],
+  [
+   "exploration_learning",
+   "ok",
+   "no exploration trade closed more than 26 h ago"
   ],
   [
    "agent_spend",
