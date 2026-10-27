@@ -383,7 +383,7 @@ class Exploration:
         self.netting: bool | None = None                 # the terminal's margin mode, read once when first needed
         # the arms whose rule reads stored bars or a carried replica state, and what they read (exploration_context)
         from goldbot.engine.exploration_context import ArmContext, needs_context
-        self.context = ArmContext(self.db, eng.store, eng.cfg.release_symbol)
+        self.context = ArmContext(self.db, eng.store, eng.cfg.release_symbol, eng.cfg.account_id)
         self.needs_context = frozenset(a.arm_id for a in ok if needs_context(a.spec))
         self.held_back: dict[str, str] = {}             # arm -> why it is held back now (journalled once a change)
 
@@ -1007,7 +1007,8 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
         else:
             keep.append(s)
     ex.queue = keep
-    if not ex.queue or _unsettled(eng, now):
+    due = [s for s in ex.queue if not _waits(ex, s, now)]
+    if not due or _unsettled(eng, now):
         return
     if paused(eng, now):
         for s in ex.queue:
@@ -1023,7 +1024,7 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
         eng.decisions.append({"ts": now.isoformat(), "agent": None, "action": "exploration_refused:ledger_unreadable"})
         return
     sent = 0
-    order = _order(ex)
+    order = [s for s in _order(ex) if s in due]
     if any(ex.arms[s.arm_id].family == "clock_anchor_control" for s in order) and _nets(eng, ex):
         order.sort(key=lambda s: ex.arms[s.arm_id].family == "clock_anchor_control")   # KA15 first: its fill shifts XC15
     for i, s in enumerate(order):
@@ -1048,6 +1049,14 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
         if res == "sent":
             sent += 1
             ex.last_arm = arm.arm_id
+
+
+def _waits(ex: Exploration, s: Pending, now: pd.Timestamp) -> bool:
+    """A 1m/5m signal of a quarter-hour close waits its arm's `arms.send_delay_s` (3-7 s) before it is sent, so the
+    scalp sends leave the 15m+ close work and sends behind (SRE 2026-10-27); its decision bar stays `bar_ts`."""
+    from goldbot.research.arms import send_delay_s
+    wait = send_delay_s(s.arm_id, ex.arms[s.arm_id].tf, s.bar_ts)
+    return wait > 0 and now < s.bar_ts + pd.Timedelta(seconds=wait)
 
 
 def _unsettled(eng: Engine, now: pd.Timestamp) -> bool:

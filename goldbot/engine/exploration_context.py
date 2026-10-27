@@ -12,9 +12,10 @@ input (arms expansion 2026-10-26, section 3: "The same function runs in the hist
 * Carried replica state (`ArmContext.replica`). smc_structure tvr1/tvr2 (XTV1, VXTV2) read the structure replica,
   whose running FVG threshold and structure depend on the series start (B4a: "the replica's state starts at the 2010
   series' first bar"). The arms get the shadow book's `ReplicaShadow` path on a feed of their own pinned to the
-  research start (`smc_live.SERIES_START`, feed `<symbol>-s2010-<tf>-<params>`): bootstrapped once in the background
-  from the store's series since 2010 plus the window, persisted in aux.db every bar and resumed bar by bar (after a
-  restart too, while the bars stay continuous). Until the state is there (no store, a store that does not start the
+  research start (`smc_live.SERIES_START`, feed `<account>-<symbol>-s2010-<tf>-<params>`: each host its own, as the
+  engines share aux.db and their brokers' bars differ): bootstrapped once in the background from the store's series
+  since 2010 plus the window's complete bars, persisted in aux.db every bar and resumed bar by bar (after a restart
+  too, while the bars stay continuous). Until the state is there (no store, a store that does not start the
   2010 series, a bootstrap running, the snapshot `state_lag` bars back not kept yet) the arm is held back. The
   engine's own shadow replica (settings tv.replica_series_start, bounded years) is another feed and is unchanged: its
   agents are shadow only, while these arms' values must equal the history run's.
@@ -214,11 +215,14 @@ class StoredBars:
 class ArmContext:
     """The inputs of the arms that need more than the engine's window (module docstring)."""
 
-    def __init__(self, db: Database, store: Any, symbol: str, warm_wait_s: float = 0.0):
+    def __init__(self, db: Database, store: Any, symbol: str, account_id: str, warm_wait_s: float = 0.0):
         self.stored = StoredBars(store, symbol) if store is not None else None
-        # warm_wait_s: how long a close waits for a bootstrap it started (production 0: never; tests wait)
-        self.replica = ReplicaShadow(db, symbol=f"{symbol.lower()}-s{SERIES_START.year}", history=self.stored,
-                                     series_start=SERIES_START, warm_wait_s=warm_wait_s)
+        # warm_wait_s: how long a close waits for a bootstrap it started (production 0: never; tests wait). The feed
+        # is the host's own: every engine on the brain shares state/aux.db, and two hosts on one feed (XTV1 on
+        # icm-demo, VXTV2 on vantage-demo: one replica parameter block) found each other's snapshot, of another
+        # broker's bars, at every close and rebuilt from 2010 (SRE 2026-10-27)
+        self.replica = ReplicaShadow(db, symbol=f"{account_id}-{symbol.lower()}-s{SERIES_START.year}",
+                                     history=self.stored, series_start=SERIES_START, warm_wait_s=warm_wait_s)
         self._agents: dict[str, Specialist] = {}
 
     def agent(self, arm: Arm) -> Specialist:
@@ -248,9 +252,13 @@ class ArmContext:
         if got is None:
             return NO_BAR
         try:
+            tail = got[0]
             if self.stored is not None and win is not None:
                 self.stored.set_window(tf, win, pd.Timestamp(_ts(complete)[0]), through)
-            state = self.replica.state_for(self.agent(arm), mid(got[0]))
+                # the same bars from the window's complete ones: the rule's slice of 1m rows may start inside its
+                # first bar (`exploration._shared_bars`), and a rebuild must not carry a part bar into the state
+                tail = self.stored.window[tf].tail(len(tail))
+            state = self.replica.state_for(self.agent(arm), mid(tail))
         except Exception as exc:                                        # noqa: BLE001 - fail closed, logged
             log.warning("exploration arm %s: replica state unavailable (%s: %s)", arm.id, type(exc).__name__, exc)
             state = None

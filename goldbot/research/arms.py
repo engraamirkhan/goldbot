@@ -235,6 +235,24 @@ def runnable_ids(path: Path) -> list[str]:
     return [a.id for a in load_arms(path) if a.status == "run" and a.twin_of is None and not a.forward_only]
 
 
+# ---------------------------------------------------------------- send timing
+SEND_DELAY_TFS = ("1m", "5m")
+QUARTER_S = 900
+SEND_DELAY_MIN_S, SEND_DELAY_STEP_S, SEND_DELAY_STEPS = 3.0, 0.5, 9      # 3.0, 3.5, ..., 7.0 s
+
+
+def send_delay_s(arm_id: str, timeframe: str, close: pd.Timestamp) -> float:
+    """Seconds after its decision close a 1m/5m arm's entry order is sent (ARM-SPEC section 0, dated note
+    2026-10-27): on a quarter-hour close (:00/:15/:30/:45), which carries the 15m+ close work and sends, 3.0-7.0 s in
+    0.5 s steps fixed by the arm id (a hash: no state, restart-safe, identical in history and live); otherwise and for
+    15m+ arms 0. The decision stays on its bar; every delay is inside the 1m stale window (10 s) and the first minute
+    after the close, so the history entry (the open of the minute holding close + delay) is still that minute's."""
+    if timeframe not in SEND_DELAY_TFS or int(pd.Timestamp(close).timestamp()) % QUARTER_S:
+        return 0.0
+    h = int.from_bytes(hashlib.sha256(f"goldbot-send-delay|{arm_id}".encode()).digest()[:8], "big")
+    return SEND_DELAY_MIN_S + SEND_DELAY_STEP_S * (h % SEND_DELAY_STEPS)
+
+
 # ---------------------------------------------------------------- priors
 def build_prior(trades: pd.DataFrame, column: str = "net_r") -> dict[str, float]:
     """Prior for one arm from its per-trade net R (`column`): OOS (2019-2025) trades only; mean x 0.5; weight

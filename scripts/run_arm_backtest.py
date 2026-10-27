@@ -241,6 +241,8 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
         risk_arr[cands["idx"].to_numpy()] = cands["risk_usd"].to_numpy()
         risk = pd.Series(risk_arr, index=bars.index)
         sig = cands.assign(target_atr=cands["target_r"])[["idx", "side", "max_bars", "target_atr"]]
+        # live == history: the order goes out the arm's send delay after the close (ARM-SPEC section 0, 2026-10-27)
+        sig["entry_delay_s"] = [A.send_delay_s(arm.id, arm.timeframe, c) for c in close[sig["idx"].to_numpy()]]
         spec = BarrierSpec(target_atr=1.0, stop_atr=1.0, max_bars=1, name=arm.id)
         swap = SwapSpec.shipped()
         lab = triple_barrier_next_open_1m(mid_priced(bars), mid_priced(b1), sig, spec, risk, swap=swap)

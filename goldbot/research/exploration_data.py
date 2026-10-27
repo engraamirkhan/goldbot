@@ -62,6 +62,7 @@ from goldbot.data.store import asof_join
 from goldbot.data.timeutil import NEW_YORK, epoch_ns
 from goldbot.db.connection import Database, StateDbError, now_ns
 from goldbot.labels.triple_barrier import SwapSpec, rollover_nights
+from goldbot.research import arms as arm_spec
 from goldbot.research.evidence_exclusions import Scope, excluded
 from goldbot.research.model import MAX_FEATURES, MetaLabelModel, check_feature_cap, fit_calibrator
 
@@ -373,12 +374,16 @@ def _walk(t: pd.DatetimeIndex, k: int, deadline: pd.Timestamp, side: int, entry:
 
 
 def replay_label(bars_1m: pd.DataFrame, *, side: int, decision_utc: pd.Timestamp, stop_dist: float,
-                 target_dist: float, max_hold_s: int, costs: ReplayCosts) -> Replay | None:
-    """Net and gross R of one candidate on 1m bid/ask bars (stamped at their open). See the module docstring."""
+                 target_dist: float, max_hold_s: int, costs: ReplayCosts,
+                 entry_delay_s: float = 0.0) -> Replay | None:
+    """Net and gross R of one candidate on 1m bid/ask bars (stamped at their open). See the module docstring. The
+    entry is the open of the minute holding decision + `entry_delay_s` (the order's send delay, `arms.send_delay_s`;
+    under a minute: the first minute after the decision)."""
     b = bars_1m.sort_values("ts_utc").reset_index(drop=True)
     t = pd.DatetimeIndex(pd.to_datetime(b["ts_utc"], utc=True)).as_unit("ns")
     deadline = pd.Timestamp(decision_utc) + pd.Timedelta(seconds=int(max_hold_s))
-    k = int(t.searchsorted(pd.Timestamp(decision_utc), side="left"))
+    sent = (pd.Timestamp(decision_utc) + pd.Timedelta(seconds=float(entry_delay_s))).floor("min")
+    k = int(t.searchsorted(sent, side="left"))
     if k >= len(t) or t[k] >= deadline:
         return None
     ent, ex = ("ask", "bid") if side > 0 else ("bid", "ask")
@@ -417,8 +422,10 @@ def label_candidates(db: Database, bars_1m: pd.DataFrame, costs: ReplayCosts, *,
         obs = obs[obs["account_id"] == account_id]
     rows = []
     for r in obs.to_dict("records"):
+        delay = arm_spec.send_delay_s(str(r["arm_id"]), str(r["tf"]), pd.Timestamp(r["decision_utc"]))
         rep = replay_label(bars, side=int(r["side"]), decision_utc=r["decision_utc"], stop_dist=float(r["stop_dist"]),
-                           target_dist=float(r["target_dist"]), max_hold_s=int(r["max_hold_s"]), costs=costs)
+                           target_dist=float(r["target_dist"]), max_hold_s=int(r["max_hold_s"]), costs=costs,
+                           entry_delay_s=delay)
         if rep is None or rep.exit_utc > cutoff:
             continue                                        # unresolved: stays NULL, never censored
         rows.append((_ns(rep.exit_utc), rep.sim_r, rep.mid_r, rep.barrier, costs.version, _ns(costs.effective_utc),
