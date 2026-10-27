@@ -62,6 +62,12 @@ describe("ADR 0050 in the client", () => {
     expect(m.note).toBe("Money not summed: more than one currency.");
   });
 
+  it("unknown nets are never a total: 'net incomplete: N trades without costs yet', the known sum labelled", () => {
+    const t = totalsLine({ ...tradesPage().totals, net_pnl: null, net_unknown: 3, net_partial: 12.4 });
+    expect(t.text).toBe("412 trades (3 open) · net incomplete: 3 trades without costs yet (known trades +£12.40) · costs £22.10 · open risk £8.50");
+    expect(totalsLine({ ...blindedPage().totals, net_unknown: 2 }).text).toBe("64 trades");   // withheld wins: nothing partial leaks
+  });
+
   it("an engine position opens its ledger trade; an arm's open trade opens the List filtered to it", () => {
     const [arm, , strat] = openPositions().positions;
     expect(openTarget(strat)).toEqual({ id: "position:icm-probe:3" });
@@ -97,14 +103,13 @@ describe("Now groups", () => {
     expect(g.map((x) => x.label)).toEqual(["Live (ICM)", "Day/swing lab", "Scalp lab"]);
     const scalp = g[2];
     expect(scalp.risk).toBeCloseTo(3.1);
-    expect(scalp.pnl).toBeCloseTo(0.5);
+    expect(scalp).not.toHaveProperty("pnl");              // no client sum of open P&L (the server may withhold it)
     expect(scalp.rows[0].risk_amount).toBe(2);           // largest risk first
   });
 
   it("refuses a partial total when any row's money is unknown, and flags it once", () => {
     const v = openPositions().positions.map((p) => (p.position_id === 2 ? { ...p, floating_pnl: null } : p));
     const scalp = groupOpen(v).find((x) => x.label === "Scalp lab")!;
-    expect(scalp.pnl).toBeNull();
     expect(scalp.noRate).toBe(true);
   });
 });

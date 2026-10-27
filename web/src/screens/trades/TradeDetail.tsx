@@ -69,7 +69,7 @@ function DetailBody({ t, wide }: { t: TradeRow; wide: boolean }) {
           ? <>target {price(t.target)} or stop {price(t.stop_now ?? t.stop)} USD/oz{t.hold_limit_s ? `, or after ${duration(t.hold_limit_s)}` : ""}</>
           : <>{exitWords(t.exit_reason)}, after {duration(t.held_s)}{t.hold_limit_s ? ` (hold limit ${duration(t.hold_limit_s)})` : ""}{t.exit != null ? ` at ${price(t.exit)} USD/oz` : ""}</>}</dd></div>
         <div><dt>Levels</dt><dd className="num">entry {price(t.entry)} · stop {price(t.stop)}{t.stop_now != null && t.stop_now !== t.stop ? ` (moved to ${price(t.stop_now)})` : ""} · target {price(t.target)} USD/oz</dd></div>
-        <div><dt>Costs</dt><dd className="num">{c ? <>spread {part(c.spread)} · slippage {part(c.slippage)} · commission {part(c.commission)} · swap {part(c.swap, true)} = {money(c.total, t.currency)}
+        <div><dt>Costs</dt><dd className="num">{c ? <>spread {part(c.spread)}{c.spread_exit_estimated ? " (exit half estimated)" : ""} · slippage {part(c.slippage, true)}{c.slippage_exit_known ? "" : " (entry only)"} · commission {part(c.commission)} · swap {part(c.swap, true)} = {money(c.total, t.currency)}
           {!c.complete && <span className="muted"> (known parts only)</span>}{t.gross != null && <span className="muted"> · gross {money(t.gross, t.currency, true)}</span>}</>
           : t.kind === "shadow" ? "none: a paper trade" : "not recorded"}</dd></div>
         <div><dt>Evidence</dt><dd>{EVIDENCE_WORDS[t.evidence] ?? t.evidence}

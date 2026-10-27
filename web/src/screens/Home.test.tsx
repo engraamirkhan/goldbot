@@ -17,7 +17,7 @@ const account = (entry: Partial<apiModule.EntryStatus> = {}): apiModule.AccountS
 });
 
 const today = (): apiModule.TodayView => ({ as_of: "2026-10-19T10:00:00Z", accounts: [{
-  account: "icm-demo", account_label: "icm-demo", mode: "demo", currency: "GBP", day_pnl: 12, open_pnl: 2, closed_pnl: 4, closed_n: 2,
+  account: "icm-demo", account_label: "icm-demo", net_unknown: 0, mode: "demo", currency: "GBP", day_pnl: 12, open_pnl: 2, closed_pnl: 4, closed_n: 2,
   closed_complete: true, costs: { spread: 0.16, spread_complete: false, commission: 0.8, swap: -0.3 },
   loss_meter: { used: 6, binding: "probe_stop", limits: [
     { key: "probe_stop", label: "probe stop", limit: 16, remaining: 10 },

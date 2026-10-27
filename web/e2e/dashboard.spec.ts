@@ -475,7 +475,8 @@ async function rowsClearBar(page: Page, name: string) {
     if (!last || last.bottom > bar) out.push(`last row bottom ${last?.bottom} > bar top ${bar}`);
     for (const r of rows) {
       const b = r.getBoundingClientRect();
-      if (b.bottom <= 0 || b.top >= window.innerHeight) continue;
+      // rows near the bottom bar only: a row scrolled up under the sticky header is meant to be covered
+      if (b.top >= window.innerHeight || b.bottom < bar - 200 || b.top < 120) continue;
       const y = Math.min(b.top + b.height / 2, window.innerHeight - 1);
       const hit = document.elementFromPoint(b.left + b.width / 2, y);
       if (b.top + b.height / 2 < bar && !(hit && r.contains(hit))) out.push(`row at ${Math.round(b.top)} covered`);
@@ -545,7 +546,7 @@ test("Trades: money on every open row, filters in the URL, withheld totals on a 
       await page.goto("/#/trades/list?acct=icm-probe&fam=session_vwap_fade");
       await page.reload();
       await expect(list.getByText(/^Totals hidden: the filter narrows to strategies whose arms are not read yet/)).toBeVisible();
-      await expect(list.getByRole("group", { name: "Totals of this list" })).not.toContainText("£");
+      await expect(list.getByRole("group", { name: "Totals of this list" })).not.toContainText(/net [+−]£|costs £/);   // open risk at entry still shows (not a result)
       await expect(page.getByRole("button", { name: "Remove filter Scalp lab" })).toBeVisible();
       await expect(page).toHaveURL(/#\/trades\/list\?acct=icm-probe&fam=session_vwap_fade$/);
       await shot(page, `trades-list-withheld-${tag}`);

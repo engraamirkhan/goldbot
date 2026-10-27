@@ -31,13 +31,13 @@ export const tradeRow = (o: Partial<TradeRow> = {}): TradeRow => ({
   arm_id: "KA15", is_control: false, side: "long", lots: 0.01, entry: 4012.4, stop: 4006.1, stop_now: 4012.4, target: 4024,
   exit: 4024, exit_utc: iso(19), exit_reason: "target", censored: false, opened_utc: iso(51), held_s: 32 * 60, hold_limit_s: 7200,
   risk_amount: 1.4, pnl: 2.1, gross: 2.37, pnl_now: null, r: 1.5, r_now: null, price_now: null,
-  costs: { spread: 0.18, slippage: 0.02, commission: 0.07, swap: 0, total: 0.27, complete: true },
+  costs: { spread: 0.18, slippage: 0.02, commission: 0.07, swap: 0, total: 0.27, complete: true, spread_exit_estimated: false, slippage_exit_known: true },
   why: "Close above the 15m box after a squeeze", blinded: false, evidence: "counted", excluded_reason: null, stale: false, ...o,
 });
 
 const totals = (o: Partial<TradesPage["totals"]> = {}): TradesPage["totals"] => ({
   n: 412, n_open: 3, n_closed: 409, currency: "GBP", mixed_currencies: false, net_pnl: 18.4, costs: 22.1, open_pnl: 3.9,
-  open_risk: 8.5, withheld: false, withheld_reason: null, ...o,
+  open_risk: 8.5, withheld: false, withheld_reason: null, net_unknown: 0, net_partial: null, open_pnl_withheld: false, ...o,
 });
 
 export const tradesPage = (o: Partial<TradesPage> = {}): TradesPage => ({
@@ -107,20 +107,20 @@ export const board = (): StrategyBoard => ({
 const strip: StripDay[] = Array.from({ length: 14 }, (_, i) => ({
   day: new Date(NOW - (13 - i) * 86_400_000).toISOString().slice(0, 10), n: 30 + i,
   net_pnl: [12, -8, 31, 55, -20, 4, 0, 62, -3, 18, 9, -14, 41, -3.1][i], costs: 9, target: 50,
-  opportunity: [2, 3, 7, 10, 12].includes(i), withheld: false,
+  opportunity: [2, 3, 7, 10, 12].includes(i), withheld: false, net_unknown: 0,
 }));
 
 export const todayAccount = (o: Partial<TodayAccountX> = {}): TodayAccountX => ({
   account: "icm-probe", mode: "demo", currency: "GBP", day_pnl: -1.0, open_pnl: 2.1, closed_pnl: -3.1, closed_n: 133,
   closed_complete: true, costs: { spread: 7.6, spread_complete: true, commission: 2.2, swap: 0 }, loss_meter: null, age_s: 3, stale: false,
   account_label: "Scalp lab", fills_today: 148, fills_target: 200, pace: 240,
-  by_kind: { exploration: { fills: 120, closed: 110, net_pnl: -4.2, costs: 8.1, net_r: -2.1, withheld: false },
-             control: { fills: 20, closed: 18, net_pnl: 0.9, costs: 1.3, net_r: 0.4, withheld: false },
-             cost_probe: { fills: 8, closed: 5, net_pnl: 0.2, costs: 0.4, net_r: 0.1, withheld: false } },
-  net_today: -3.1, costs_today: { spread: 7.4, slippage: 0.2, commission: 2.2, swap: 0, total: 9.8, complete: true },
+  by_kind: { exploration: { fills: 120, closed: 110, net_pnl: -4.2, costs: 8.1, net_r: -2.1, withheld: false, net_unknown: 0 },
+             control: { fills: 20, closed: 18, net_pnl: 0.9, costs: 1.3, net_r: 0.4, withheld: false, net_unknown: 0 },
+             cost_probe: { fills: 8, closed: 5, net_pnl: 0.2, costs: 0.4, net_r: 0.1, withheld: false, net_unknown: 0 } },
+  net_today: -3.1, costs_today: { spread: 7.4, slippage: 0.2, commission: 2.2, swap: 0, total: 9.8, complete: true, spread_exit_estimated: false, slippage_exit_known: true },
   open_n: 15, open_risk: 18.2, day_cap_used: { used: 30, limit: 500, share: 0.06 }, week_cap_used: { used: 61, limit: 1000, share: 0.061 },
   exploration_pot_used: { used: 30, limit: 150, share: 0.2 }, quiet_day: false, daily_target: 50, strip,
-  week_to_date: { since: "2026-10-26", n: 300, net_pnl: 12.4, costs: { spread: 40.1, slippage: 1, commission: 11.2, swap: -0.4, total: 51.9, complete: true }, withheld: false },
-  month_to_date: { since: "2026-10-01", n: 3000, net_pnl: 88.1, costs: { spread: 160.2, slippage: 4, commission: 44.8, swap: -2.1, total: 206.9, complete: true }, withheld: false },
-  withheld: [], ...o,
+  week_to_date: { since: "2026-10-26", n: 300, net_pnl: 12.4, costs: { spread: 40.1, slippage: 1, commission: 11.2, swap: -0.4, total: 51.9, complete: true, spread_exit_estimated: false, slippage_exit_known: true }, withheld: false, net_unknown: 0 },
+  month_to_date: { since: "2026-10-01", n: 3000, net_pnl: 88.1, costs: { spread: 160.2, slippage: 4, commission: 44.8, swap: -2.1, total: 206.9, complete: true, spread_exit_estimated: false, slippage_exit_known: true }, withheld: false, net_unknown: 0 },
+  withheld: [], net_unknown: 0, net_today_partial: null, ...o,
 });

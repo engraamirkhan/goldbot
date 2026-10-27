@@ -125,7 +125,7 @@ function TodayLine({ a, limits }: { a: TodayAccount; limits?: LimitAccount }) {
     <div className="today-row" aria-label={`Today ${a.account}`} role="group">
       <p className="today-line"><ModeBadge mode={a.mode} /> <strong>{a.account}</strong>{" "}
         <span className="today-pnl num">{signed(a.day_pnl, ccy)}</span> <span className="muted small">today after costs</span></p>
-      <p className="small muted num">closed {signed(a.closed_pnl, ccy)} ({a.closed_n} trade{a.closed_n === 1 ? "" : "s"}
+      <p className="small muted num">closed {(a.withheld ?? []).includes("closed_pnl") ? "hidden until the arms' reads" : signed(a.closed_pnl, ccy)} ({a.closed_n} trade{a.closed_n === 1 ? "" : "s"}
         {a.closed_complete ? "" : ", some left out"}) · open {signed(a.open_pnl, ccy)}</p>
       {a.stale && <Stale age={a.age_s} />}
       {a.loss_meter && m ? (

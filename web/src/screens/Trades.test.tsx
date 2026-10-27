@@ -47,9 +47,11 @@ describe("Trades > Now (128, 130)", () => {
     expect(row.textContent).toContain(`22${NB}min of 2${NB}h`);
     expect(screen.queryByText(/not known/)).toBeNull();
     const scalp = screen.getByRole("region", { name: "Open trades Scalp lab" });
-    expect(scalp).toHaveTextContent("2 open · risk £3.10 · +£0.50");
+    expect(scalp).toHaveTextContent("2 open · risk £3.10 · P&L now +£2.10");    // the broker's account figure, not a sum of rows
     expect(within(scalp).getByText("CONTROL")).toBeInTheDocument();             // kind in a word, not a colour
-    expect(screen.getByRole("group", { name: "Open now summary" })).toHaveTextContent("Open now · 3 trades · risk £8.50 · P&L now +£3.90");
+    expect(screen.getByRole("group", { name: "Open now summary" })).toHaveTextContent("Open now · 3 trades · risk £8.50");
+    expect(screen.getByRole("group", { name: "Open now summary" })).not.toHaveTextContent("P&L");   // never summed across accounts
+    expect(screen.getByRole("region", { name: "Open trades Day/swing lab" })).toHaveTextContent("P&L now £ —");   // no figure from the server
   });
 
   it("an unknown rate is a dash on the row and '(no rate)' once on the group, never 'not known'", async () => {
@@ -60,7 +62,6 @@ describe("Trades > Now (128, 130)", () => {
     const scalp = await screen.findByRole("region", { name: "Open trades Scalp lab" });
     expect(within(scalp).getAllByText("(no rate)")).toHaveLength(1);
     expect(screen.queryByText(/not known/)).toBeNull();
-    expect(screen.getByRole("group", { name: "Open now summary" })).toHaveTextContent(`P&L now £ —`);
   });
 
   it("filters by account; an engine position opens its trade, an arm's opens the List filtered to it", async () => {
@@ -149,7 +150,7 @@ describe("Trade detail (133)", () => {
     const d = await screen.findByRole("dialog", { name: "Trade detail" });
     expect(await within(d).findByText("Close above the 15m box after a squeeze")).toBeInTheDocument();
     expect(d).toHaveTextContent(`target, after 32 min (hold limit 2 h) at 4,024.00 USD/oz`);
-    expect(d).toHaveTextContent(`spread £0.18 · slippage £0.02 · commission £0.07 · swap £0.00 = £0.27 · gross +£2.37`);
+    expect(d).toHaveTextContent(`spread £0.18 · slippage +£0.02 · commission £0.07 · swap £0.00 = £0.27 · gross +£2.37`);
     expect(d).toHaveTextContent("counted toward the read");
     expect(within(d).getByText("Details")).toBeInTheDocument();
     expect(apiModule.api.trade).toHaveBeenCalledWith("exploration:icm-demo:41");
@@ -253,7 +254,7 @@ describe("Trades > Today (131)", () => {
     expect(c).toHaveTextContent("Caps: day £30.00 of £500.00 used · week £61.00 of £1,000.00 · exploration pot £30.00 of £150.00");
     expect(c.querySelectorAll(".day-strip rect")).toHaveLength(14);
     expect(c.querySelector(".day-strip line.target")).not.toBeNull();
-    expect(c).toHaveTextContent("Week to date+£12.40 after costs (spread £40.10 · slippage £1.00 · commission £11.20 · swap −£0.40)");
+    expect(c).toHaveTextContent("Week to date+£12.40 after costs (spread £40.10 · slippage +£1.00 · commission £11.20 · swap −£0.40)");
     expect(c).not.toHaveTextContent("Quiet day");
   });
 
@@ -268,12 +269,22 @@ describe("Trades > Today (131)", () => {
     expect(cards[1]).toHaveTextContent("Quiet day: fewer trades is expected.");
   });
 
+  it("an unknown net is 'incomplete: N trades without costs yet', never a full total", async () => {
+    const a = todayAccount({ net_today: null, net_unknown: 2, net_today_partial: -1.5,
+      month_to_date: { since: "2026-10-01", n: 3000, net_pnl: null, costs: null, withheld: false, net_unknown: 4, net_partial: 80 } });
+    vi.spyOn(apiModule.api, "today").mockResolvedValue({ as_of: "x", accounts: [a] });
+    renderTab("today");
+    const c = await screen.findByRole("region", { name: "Today Scalp lab" });
+    expect(c).toHaveTextContent("Closed today: net incomplete: 2 trades without costs yet (known trades −£1.50)");
+    expect(c).toHaveTextContent("Month to date3000 trades · net incomplete: 4 trades without costs yet (known trades +£80.00)");
+  });
+
   it("money the server withholds (ADR 0050) says so in words; an unreadable source is named, never zero", async () => {
     const a = todayAccount({
       withheld: ["net_today", "costs_today", "exploration_pot_used", "week_to_date"], net_today: null, costs_today: null,
       exploration_pot_used: null,
-      by_kind: { exploration: { fills: 120, closed: 110, net_pnl: null, costs: null, net_r: null, withheld: true } },
-      week_to_date: { since: "2026-10-26", n: 300, net_pnl: null, costs: null, withheld: true },
+      by_kind: { exploration: { fills: 120, closed: 110, net_pnl: null, costs: null, net_r: null, withheld: true, net_unknown: 0 } },
+      week_to_date: { since: "2026-10-26", n: 300, net_pnl: null, costs: null, withheld: true, net_unknown: 0 },
       strip: todayAccount().strip!.map((d, i) => (i === 13 ? { ...d, net_pnl: null, costs: null, withheld: true } : d)),
     });
     vi.spyOn(apiModule.api, "today").mockResolvedValue({ as_of: "x", accounts: [a], unreadable: ["probes"] });

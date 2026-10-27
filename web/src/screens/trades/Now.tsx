@@ -42,6 +42,10 @@ export function OpenNow({ onOpen }: { onOpen?: (t: OpenTarget) => void }) {
   const accounts = groupOpen(all).map((g) => ({ key: g.key, label: g.label }));
   const kinds = [...new Set(all.map(kindOf))];
   const total = overall(groups);
+  // P&L now per account is the broker's (equity less balance, /api/today), never a client sum of the rows: the
+  // ledger may withhold an open-P&L total (ADR 0050). Shown only while the group holds every open trade (no kind filter).
+  const today = useQuery({ queryKey: ["today"], queryFn: api.today, refetchInterval: POLL.today });
+  const accountPnl = (key: string) => (kind ? undefined : today.data?.accounts.find((a) => a.account === key)?.open_pnl ?? null);
   const aside = q.dataUpdatedAt ? <>updated <TimeText iso={new Date(q.dataUpdatedAt).toISOString()} /></> : undefined;
   return (
     <Card title="Open trades" label="Open trades" aside={aside}>
@@ -54,7 +58,8 @@ export function OpenNow({ onOpen }: { onOpen?: (t: OpenTarget) => void }) {
             ) : <>
               <div className="now-sum" role="group" aria-label="Open now summary">
                 <p className="num"><strong>Open now · {shown.length} trade{shown.length === 1 ? "" : "s"}</strong>
-                  {total && <> · risk {moneyOrDash(total.risk, total.currency, false)} · P&amp;L now {moneyOrDash(total.pnl, total.currency)}</>}
+                  {total && <> · risk {moneyOrDash(total.risk, total.currency, false)}</>}
+                  {groups.length === 1 && accountPnl(groups[0].key) !== undefined && <> · P&amp;L now {moneyOrDash(accountPnl(groups[0].key), groups[0].currency)}</>}
                   {!total && groups.length > 1 && <span className="muted"> · totals per account below (never summed across real and demo or currencies)</span>}
                   {v!.unreadable.length > 0 && <span className="muted"> · excl. {v!.unreadable.join(", ")}</span>}</p>
                 <div className="now-filters">
@@ -71,8 +76,8 @@ export function OpenNow({ onOpen }: { onOpen?: (t: OpenTarget) => void }) {
                 </div>
               </div>
               {shown.length === 0 ? <EmptyState title="No open trades match.">Choose all accounts and all kinds to see every open trade.</EmptyState>
-                : wide ? <OpenTable groups={groups} onOpen={onOpen} />
-                : groups.map((g) => <OpenGroupBlock key={g.key} g={g} onOpen={onOpen} />)}
+                : wide ? <OpenTable groups={groups} onOpen={onOpen} pnl={accountPnl} />
+                : groups.map((g) => <OpenGroupBlock key={g.key} g={g} onOpen={onOpen} pnl={accountPnl(g.key)} />)}
               <p className="small muted">P&amp;L now is after the costs already paid; risk is the loss at the stop set at entry; prices in USD/oz.</p>
             </>}
           </>}
@@ -81,40 +86,41 @@ export function OpenNow({ onOpen }: { onOpen?: (t: OpenTarget) => void }) {
 }
 
 /** One total across groups only when they share a currency and none is real money (never summed across classes). */
-function overall(groups: OpenGroup[]): { risk: number | null; pnl: number | null; currency: string | null } | null {
+function overall(groups: OpenGroup[]): { risk: number | null; currency: string | null } | null {
   if (groups.length === 0) return null;
   if (groups.length === 1) return groups[0];
   const ccys = new Set(groups.map((g) => g.currency));
   if (ccys.size !== 1 || groups[0].currency == null || groups.some((g) => g.mode === "live")) return null;
   const add = (f: (g: OpenGroup) => number | null) => (groups.some((g) => f(g) == null) ? null : groups.reduce((s, g) => s + (f(g) as number), 0));
-  return { risk: add((g) => g.risk), pnl: add((g) => g.pnl), currency: groups[0].currency };
+  return { risk: add((g) => g.risk), currency: groups[0].currency };
 }
 
 export function SkeletonRows({ n, height = 72 }: { n: number; height?: number }) {
   return <div aria-busy="true" aria-label="Loading">{Array.from({ length: n }, (_, i) => <div key={i} className="skeleton-row" style={{ height }} />)}</div>;
 }
 
-function GroupHead({ g }: { g: OpenGroup }) {
+function GroupHead({ g, pnl }: { g: OpenGroup; pnl: number | null | undefined }) {
   const age = Math.max(0, ...g.rows.map((r) => r.age_s ?? 0));
   return (
     <>
       <Badge tone={modeBadge(g.mode) === "REAL" ? "warn" : "info"}>{modeBadge(g.mode)}</Badge>
       <strong>{g.label}</strong>
-      <span className="num">{g.rows.length} open · risk {moneyOrDash(g.risk, g.currency, false)} · {moneyOrDash(g.pnl, g.currency)}
+      <span className="num">{g.rows.length} open · risk {moneyOrDash(g.risk, g.currency, false)}
+        {pnl !== undefined && <> · P&amp;L now {moneyOrDash(pnl, g.currency)}</>}
         {g.noRate && <span className="muted"> (no rate)</span>}</span>
       {g.stale && <span className="small state warn">figures {seconds(Math.round(age))} old: engine not reporting</span>}
     </>
   );
 }
 
-function OpenGroupBlock({ g, onOpen }: { g: OpenGroup; onOpen?: (t: OpenTarget) => void }) {
+function OpenGroupBlock({ g, onOpen, pnl }: { g: OpenGroup; onOpen?: (t: OpenTarget) => void; pnl: number | null | undefined }) {
   const [open, setOpen] = useState(true);
   const [all, setAll] = useState(false);
   const rows = all ? g.rows : g.rows.slice(0, FIRST);
   return (
     <section className={`now-group${g.stale ? " stale" : ""}`} aria-label={`Open trades ${g.label}`}>
       <button type="button" className="now-group-head" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <GroupHead g={g} />
+        <GroupHead g={g} pnl={pnl} />
       </button>
       {open && (
         <>
@@ -155,7 +161,7 @@ function OpenRowPhone({ p, onOpen }: { p: OpenPositionX; onOpen?: (t: OpenTarget
   );
 }
 
-function OpenTable({ groups, onOpen }: { groups: OpenGroup[]; onOpen?: (t: OpenTarget) => void }) {
+function OpenTable({ groups, onOpen, pnl }: { groups: OpenGroup[]; onOpen?: (t: OpenTarget) => void; pnl: (key: string) => number | null | undefined }) {
   return (
     <div className="trade-table-wrap">
       <table className="trade-table">
@@ -171,7 +177,7 @@ function OpenTable({ groups, onOpen }: { groups: OpenGroup[]; onOpen?: (t: OpenT
         </tr></thead>
         {groups.map((g) => (
           <tbody key={g.key} aria-label={`Open trades ${g.label}`}>
-            <tr className="group-row"><th scope="rowgroup" colSpan={10}><span className="group-line"><GroupHead g={g} /></span></th></tr>
+            <tr className="group-row"><th scope="rowgroup" colSpan={10}><span className="group-line"><GroupHead g={g} pnl={pnl(g.key)} /></span></th></tr>
             {g.rows.map((p) => {
               const risk = p.risk_amount ?? p.open_risk;
               const go = onOpen ? () => onOpen(openTarget(p)) : undefined;

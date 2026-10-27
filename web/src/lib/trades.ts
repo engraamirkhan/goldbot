@@ -209,6 +209,13 @@ export function openRowName(p: OpenPositionX): string {
   return `${strategyLabel(p.family_label, p.family, p.timeframe).replace(" · ", " ")}, ${p.side}, ${res}, open`;
 }
 
+/** A net that is not known for some closed trades is never shown as a total: "net incomplete: 3 trades without
+ *  costs yet (known trades +£12.40)". The partial sum is labelled as the known trades only. */
+export function incompleteWords(n: number, partial: number | null | undefined, ccy: string | null | undefined): string {
+  const known = partial == null ? "" : ` (known trades ${money(partial, ccy, true)})`;
+  return `net incomplete: ${n} trade${n === 1 ? "" : "s"} without costs yet${known}`;
+}
+
 /** Where an open row leads. An engine position is one ledger trade ("position:<account>:<id>"); an arm's or a
  *  probe's open trade is keyed by its order in the ledger, which the open-positions view does not carry, so it opens
  *  the List filtered to its account, strategy and open trades (the trade is the top row there). */
@@ -224,6 +231,7 @@ export function totalsLine(t: TradeTotals): { text: string; note: string | null 
   const n = `${t.n.toLocaleString("en-GB")} trade${t.n === 1 ? "" : "s"}${t.n_open ? ` (${t.n_open} open)` : ""}`;
   const parts = [n];
   if (t.net_pnl != null) parts.push(`net ${money(t.net_pnl, t.currency, true)} after costs`);
+  else if (!t.withheld && (t.net_unknown ?? 0) > 0) parts.push(incompleteWords(t.net_unknown ?? 0, t.net_partial, t.currency));
   if (t.costs != null) parts.push(`costs ${money(t.costs, t.currency)}`);
   if (t.open_risk != null && t.n_open) parts.push(`open risk ${money(t.open_risk, t.currency)}`);
   const note = t.withheld ? `Totals hidden: ${t.withheld_reason ?? "arms not read yet (ADR 0050)"}.`
@@ -238,7 +246,6 @@ export type OpenGroup = {
   mode: Mode | null;
   rows: OpenPositionX[];
   risk: number | null;                   // null when any row's risk is unknown (a partial total is refused)
-  pnl: number | null;
   currency: string | null;
   stale: boolean;
   noRate: boolean;                       // money unknown on at least one row: "(no rate)" once per group
@@ -259,7 +266,7 @@ export function groupOpen(positions: OpenPositionX[]): OpenGroup[] {
     const sorted = [...rows].sort((a, b) => (b.risk_amount ?? b.open_risk ?? -1) - (a.risk_amount ?? a.open_risk ?? -1));
     return {
       key, label: rows[0].account_label || key, mode: rows[0].mode ?? null, rows: sorted, currency: one,
-      risk: sum((r) => r.risk_amount ?? r.open_risk), pnl: sum((r) => r.floating_pnl),
+      risk: sum((r) => r.risk_amount ?? r.open_risk),
       stale: rows.some((r) => r.stale), noRate: rows.some((r) => r.floating_pnl == null),
     };
   });

@@ -30,6 +30,7 @@ button.trade-row:hover { background: var(--surface-2); }
 .skeleton-row { border-radius: var(--r-sm); background: var(--surface-2); margin: 0 0 var(--s1); }
 @media (prefers-reduced-motion: no-preference) { .skeleton-row { animation: sk-pulse 1.4s ease-in-out infinite; } }
 
+.trades-page { grid-template-columns: minmax(0, 1fr); }
 .trades-page .ui-card p { margin: 0; }
 .nowrap { white-space: nowrap; }
 .engine-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); }
