@@ -896,7 +896,8 @@ def test_a_demo_probe_only_account_may_hold_its_own_max_positions_and_every_othe
     accs = acc_mod.load_accounts(logins=False)
     assert accs["icm-probe"].max_positions == accs["icm-demo"].max_positions == 18     # both learning hosts (PD 10-26)
     assert all(a.max_positions is None and engine_limits(s, a).max_positions == 2
-               for a in accs.values() if not a.probe_only)
+               for a in accs.values() if not a.probe_only and not a.pilot.enabled)
+    assert engine_limits(s, accs["icm-live"]).max_positions == 1          # ADR 0055: the live pilot's one position
 
 
 @pytest.mark.parametrize("kw", [dict(mode="live", login=1), dict(probe_only=False)])

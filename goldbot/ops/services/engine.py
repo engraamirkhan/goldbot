@@ -568,10 +568,25 @@ def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> R
     """RiskLimits from settings.yaml `risk:`; a live account before the full-size gate (or with an unreadable phase
     file) gets the tiny-live risk per trade (and no minimum-lot exception). The account's own absolute daily loss
     limit (accounts.yaml, its deposit currency) applies only against its real terminal: `paper=True` (the paper broker
-    standing in for it, a USD book) drops it, so paper and shadow evidence are not changed by a £ figure."""
+    standing in for it, a USD book) drops it, so paper and shadow evidence are not changed by a £ figure.
+
+    ADR 0055 ("Option (a) for account `icm-live` only. Every other account and every default is unchanged"): a live
+    account's enabled `pilot:` block (goldbot/risk/pilot.py) goes to the gate with its four changed rails, all read
+    from that block: the per-trade maximum (`max_risk_frac`), the daily and weekly caps (`daily_cap_frac`,
+    `weekly_cap_frac`, the amendment's fifth), `leverage_cap`, and
+    the drawdown stages off when `drawdown_stages` is false (the pilot stop is the hard halt), plus one position.
+    Against the real terminal only."""
     from goldbot.ops import accounts
     from goldbot.risk import RiskLimits
     limits = RiskLimits.from_settings(settings.risk, tiny_live=accounts.tiny_live_risk(acc))
+    pilot = acc.pilot if acc.pilot.enabled and acc.is_live and not paper else None
+    if pilot is not None:
+        stages = {} if pilot.drawdown_stages else {"dd_stage1": 1.0, "dd_stage2": 1.0, "dd_stage1_clear": 1.0}
+        limits = limits.model_copy(update={"pilot": pilot, "max_positions": min(limits.max_positions,
+                                                                                 pilot.max_positions),
+                                           "max_risk_per_trade": pilot.max_risk_frac, "daily_cap": pilot.daily_cap_frac,
+                                           "weekly_cap": pilot.weekly_cap_frac,
+                                           "leverage_cap": pilot.leverage_cap, **stages})
     # plan 2026-10-25 (lane L1 contract): the exploration fence's account facts, never on the paper stand-in
     return limits.model_copy(update={"daily_loss_limit_abs": None if paper else acc.daily_loss_limit_abs,
                                      "probe_only": acc.probe_only and not paper,

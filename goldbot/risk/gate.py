@@ -28,6 +28,7 @@ from goldbot.config import (
 )
 from goldbot.data.timeutil import floor_tf, risk_day
 from goldbot.risk import sizing
+from goldbot.risk.pilot import PilotRules, PilotState
 from goldbot.risk.throttle import AgentThrottle
 
 log = logging.getLogger("goldbot.risk")
@@ -107,6 +108,9 @@ class RiskLimits(Record):
     # account's `exploration.enabled`). Defaults: no account explores, so the purpose `exploration` is always refused
     probe_only: bool = False
     exploration_arms: dict[str, float] = Field(default_factory=dict)
+    # the live pilot (goldbot/risk/pilot.py, ADR 0055): the account's `pilot:` block when enabled, set only by
+    # ops.services.engine.engine_limits for that account's real terminal. None (every other account): no change
+    pilot: PilotRules | None = None
 
     @property
     def dynamic(self) -> bool:
@@ -198,6 +202,13 @@ class AccountState(Record):
     # confirms it or the reads stay below 12% minus the tolerance for equity_recovery_s). The stage machine does not
     # run and entries are refused `equity_unconfirmed`; exits are never gated
     equity_unconfirmed: bool = False
+    # the pilot's record (goldbot/engine/pilot.py: realised loss, filled entries, sticky stop), read only while
+    # `RiskLimits.pilot` is set; None = not read (entries refused)
+    pilot: PilotState | None = None
+    # the terminal's own account leverage (MT5 account_info().leverage), set by the engine on the pilot account only:
+    # the margin and combined-notional figures use min(leverage_cap, it) (ADR 0055: "using the real leverage"; it can
+    # only tighten). None = unknown: leverage_cap alone
+    broker_leverage: float | None = None
 
 
 class Intent(Record):
@@ -330,6 +341,38 @@ COST_MEASUREMENT_MAX_STOP_USD = 3.0
 COST_MEASUREMENT_MAX_HOLD_S = 60.0
 
 
+def _pilot_account_reasons(p: PilotRules, st: AccountState) -> list[str]:
+    """ADR 0055: "after £25 cumulative realised loss or 30 filled entries, whichever comes first: entries halt for good.
+    Open positions keep their automatic exits". Sticky once the engine recorded the stop for this pilot_id; a record
+    the engine could not read (none, another pilot's, a count not read) refuses too (fail closed)."""
+    out: list[str] = []
+    ps = st.pilot if st.pilot is not None and st.pilot.pilot_id == p.pilot_id else None
+    if ps is not None and ps.stopped_utc is not None:
+        out.append("pilot_stop")
+    elif ps is None or not ps.known or not math.isfinite(ps.realised_loss or 0.0) or (ps.realised_loss or 0.0) < 0:
+        out.append("pilot_record_unknown")
+    elif (ps.realised_loss or 0.0) >= p.stop_loss_abs - 1e-9:
+        out.append("pilot_stop")
+    elif (ps.entries or 0) >= p.max_entries:
+        out.append("pilot_trade_limit")
+    return out
+
+
+def _pilot_intent_reasons(p: PilotRules, intent: Intent) -> list[str]:
+    """ADR 0055's scope: owner-confirmed signals only (no cost probe, learning probe or exploration arm), "15m families
+    only", "0.01 exactly": the pilot's lot must be a size the broker takes (at least its minimum, at most its
+    maximum, a whole number of its steps)."""
+    out: list[str] = []
+    if intent.purpose != "signal" or intent.learning_probe:
+        out.append("pilot_signal_only")
+    if intent.timeframe not in p.timeframes:
+        out.append("pilot_timeframe")
+    steps = p.lot / intent.volume_step if intent.volume_step > 0 else math.nan
+    if intent.volume_min > p.lot + 1e-9 or p.lot > intent.volume_max + 1e-9 or not abs(steps - round(steps)) < 1e-6:
+        out.append("pilot_lot_unavailable")
+    return out
+
+
 def _ok_amount(v: float | None) -> bool:
     return v is not None and math.isfinite(v) and v > 0
 
@@ -433,7 +476,8 @@ _POSITIVE_OPERATIONAL = ("price", "contract_oz", "volume_step", "volume_min", "v
 # refusal is an account reason (`RiskGate.account_reasons`, published as `entry_blocks`) or the intent's own filtering
 # (negative EV, cost floor, account class rules, same-direction cap), which is not published
 PER_TRADE_REFUSALS = frozenset({"fx_conversion_unavailable", "min_lot_exceeds_risk", "margin_level_floor",
-                                "combined_exposure_cap", "daily_loss_limit_abs", "heat_cap"})
+                                "combined_exposure_cap", "daily_loss_limit_abs", "heat_cap",
+                                "pilot_stop_above_cap", "pilot_trade_risk_above_cap", "pilot_stop_projected"})
 
 
 def _bad(obj: Any, f: str, positive: tuple[str, ...]) -> bool:
@@ -578,30 +622,39 @@ class RiskGate:
             out.append("calendar_unavailable")
         return out
 
+    def leverage(self, st: AccountState | None = None) -> float:
+        """The leverage the margin and combined-notional figures use: `leverage_cap`, or the terminal's own leverage
+        when it is known and lower (ADR 0055; it only tightens)."""
+        cap = self.limits.leverage_cap
+        lev = st.broker_leverage if st is not None else None
+        return min(cap, lev) if lev is not None and math.isfinite(lev) and lev > 0 else cap
+
     def margin_for(self, intent: Intent | OperationalIntent, lots: float, notional: float,
-                   margin_required: MarginFn | None) -> tuple[float, str]:
+                   margin_required: MarginFn | None, st: AccountState | None = None) -> tuple[float, str]:
         """Design (Hard limits): margin is "checked with order_calc_margin and against the FCA retail cap of 1:20".
         `notional` is in the account currency (BACKLOG 28), as is the broker's figure. The larger of the broker's
         figure and notional / 20 is used; when the broker cannot answer (no source, None, a non-finite or negative figure, or an error) the 1:20 figure is used and the reason recorded. Never smaller
         than 1:20, so a broker fault can only make the check stricter-or-equal, never fail open."""
-        cap = notional / self.limits.leverage_cap
+        lev = self.leverage(st)
+        cap = notional / lev
+        tag = f"1:{lev:g}"
         if margin_required is None:
-            return cap, "fallback 1:20: no broker margin source"
+            return cap, f"fallback {tag}: no broker margin source"
         raw: Any = None
         try:
             raw = margin_required(intent.side, lots, intent.price)
             broker = float(raw) if raw is not None else math.nan
         except Exception as exc:                      # bridge down, terminal error, junk: fall back, never fail open
-            why = f"fallback 1:20: broker margin failed ({type(exc).__name__}: {exc})"
+            why = f"fallback {tag}: broker margin failed ({type(exc).__name__}: {exc})"
             log.warning("%s", why)
             return cap, why
         if not math.isfinite(broker) or broker < 0:
-            why = f"fallback 1:20: broker margin unusable ({raw!r})"
+            why = f"fallback {tag}: broker margin unusable ({raw!r})"
             log.warning("%s", why)
             return cap, why
         if broker > cap:
-            return broker, f"broker {broker:.2f} > 1:20 {cap:.2f}"
-        return cap, f"1:20 {cap:.2f} >= broker {broker:.2f}"
+            return broker, f"broker {broker:.2f} > {tag} {cap:.2f}"
+        return cap, f"{tag} {cap:.2f} >= broker {broker:.2f}"
 
     def account_reasons(self, st: AccountState, now_utc: pd.Timestamp | None = None,
                         throttle: AgentThrottle | None = None) -> list[str]:
@@ -657,6 +710,8 @@ class RiskGate:
             reasons.append("spread_too_wide")
         if st.open_positions >= L.max_positions:
             reasons.append("max_positions")
+        if L.pilot is not None:
+            reasons += _pilot_account_reasons(L.pilot, st)
         reasons += self.throttle_reasons(throttle, now_utc)
         bad = invalid_state_fields(st)
         if not bad:
@@ -670,7 +725,7 @@ class RiskGate:
             reasons.append("account_class_unknown")
         # BACKLOG 19/35: the heat cap, or the projection with an absolute daily limit, needs the open risk; unknown, or not
         # a finite amount >= 0, refuses (fail closed). Nothing while both are off, so the fact is never read then
-        needs = L.heat.enabled or (L.project_open_risk and L.daily_loss_limit_abs is not None)
+        needs = L.heat.enabled or (L.project_open_risk and L.daily_loss_limit_abs is not None) or L.pilot is not None
         if needs and (st.open_risk is None or not math.isfinite(st.open_risk) or st.open_risk < 0):
             reasons.append("open_risk_unknown")
         if bad:
@@ -711,7 +766,7 @@ class RiskGate:
         L = self.limits
         notional = lots * intent.contract_oz * intent.price * fx          # account currency
         # margin: the stricter of the broker's order_calc_margin and the FCA cap (1:20); level must stay >= 300%
-        margin_needed, margin_note = self.margin_for(intent, lots, notional, margin_required)
+        margin_needed, margin_note = self.margin_for(intent, lots, notional, margin_required, st)
         level_after = st.equity / max(st.margin_used + margin_needed, 1e-9)
         if level_after < L.margin_level_floor:
             return GateDecision(allowed=False, reasons=["margin_level_floor"], stop_distance=stop_distance,
@@ -722,7 +777,7 @@ class RiskGate:
         comb_lots = st.open_lots + st.other_lots + lots
         comb_notional = (st.open_notional + st.other_notional) * fx + notional
         if comb_lots > L.max_combined_lots + 1e-9 or \
-                comb_notional > L.max_combined_notional_frac * L.leverage_cap * (st.equity + st.other_equity):
+                comb_notional > L.max_combined_notional_frac * self.leverage(st) * (st.equity + st.other_equity):
             return GateDecision(allowed=False, reasons=["combined_exposure_cap"], stop_distance=stop_distance,
                                 margin_needed=margin_needed, margin_note=margin_note)
         # absolute daily loss limit (BACKLOG 29, ADR 0004): projected with this trade's full stop risk, entries only.
@@ -805,6 +860,8 @@ class RiskGate:
             if edge <= L.standard_edge_over_cost * intent.cost_atr:            # design: must exceed 1.5x
                 reasons.append("standard_account_edge")
         reasons += self._same_direction(st, intent.side)
+        if L.pilot is not None:
+            reasons += _pilot_intent_reasons(L.pilot, intent)
         if reasons:
             return GateDecision(allowed=False, reasons=reasons)
 
@@ -824,7 +881,25 @@ class RiskGate:
                               volume_max=intent.volume_max, acct_per_usd=fx)
         lots, realised_risk = sz.lots, sz.realised_risk
         notes: list[str] = []
-        if sz.refused:
+        if L.pilot is not None:
+            # ADR 0055: "0.01 exactly ... there is no sizing-up"; "Stop distance at most $4.00 from entry. A longer
+            # stop is refused, never shrunk"; "Risk per trade at most £3.12 at the stop, including the round trip",
+            # and within the account's per-trade maximum (`max_risk_frac`); both halved in a size-down stage. Every
+            # check below still applies
+            if stop_distance > L.pilot.max_stop_usd + 1e-9:
+                return GateDecision(allowed=False, reasons=["pilot_stop_above_cap"], stop_distance=stop_distance)
+            half = sizing.SIZE_DOWN_RISK if size_down else 1.0
+            lots = L.pilot.lot                 # "0.01 exactly": the pilot's lot, a whole number of the broker's steps
+            risk_amount = lots * sz.risk_per_lot
+            trip = (max(0.0, intent.cost_atr * intent.atr_usd) + max(0.0, intent.swap_usd_per_oz)) * lots \
+                * intent.contract_oz * fx
+            realised_risk = risk_amount / st.equity
+            if risk_amount + trip > L.pilot.max_risk_per_trade_abs * half + 1e-9 \
+                    or realised_risk > L.max_risk_per_trade * half + 1e-12:
+                return GateDecision(allowed=False, reasons=["pilot_trade_risk_above_cap"], stop_distance=stop_distance,
+                                    risk_amount=risk_amount, cost_amount=trip)
+            notes = ["pilot_min_lot"]
+        elif sz.refused:
             # minimum-lot exception (BACKLOG 25, ADR 0004): exactly the minimum lot, only within the cap (half of it
             # in size-down), never above the per-trade maximum; every check below still applies to it
             cap = self.min_lot_cap(size_down)
@@ -843,6 +918,14 @@ class RiskGate:
         if d.allowed and exploring and (fence := _exploration_sized(intent, L, d)):
             return GateDecision(allowed=False, reasons=fence, stop_distance=d.stop_distance,
                                 margin_needed=d.margin_needed, margin_note=d.margin_note, risk_amount=d.risk_amount)
+        if d.allowed and L.pilot is not None and st.pilot is not None and st.pilot.realised_loss is not None \
+                and st.pilot.realised_loss + (st.open_risk or 0.0) + d.risk_amount + d.cost_amount \
+                > L.pilot.stop_loss_abs + 1e-9:
+            # trading-safety condition (ADR 0055 review, HIGH): the £25 stop checked BEFORE each entry, as the daily
+            # limit is: realised loss + open risk + this trade's full stop-out and round trip must stay within it
+            return GateDecision(allowed=False, reasons=["pilot_stop_projected"], stop_distance=d.stop_distance,
+                                margin_needed=d.margin_needed, margin_note=d.margin_note, risk_amount=d.risk_amount,
+                                cost_amount=d.cost_amount)
         if d.allowed and L.dynamic:          # the entry audit's why: the rate sized at and its source
             d = d.model_copy(update={"risk_per_trade": eff.risk_frac,
                                      "risk_source": L.risk_source(intent.model_version)})

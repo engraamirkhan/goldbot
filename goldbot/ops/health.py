@@ -118,6 +118,7 @@ from goldbot.ops.checks.bridge import (
     _engine_sessions,
     check_bridge,
     check_bridge_compat,
+    check_pilot_server_clock,
     check_server_clock,
     check_terminal,
 )
@@ -322,6 +323,7 @@ __all__ = [
     "check_schema_skew",
     "check_secrets",
     "check_server_clock",
+    "check_pilot_server_clock",
     "check_terminal",
     "check_service_schema_skew",
     "check_settings",
@@ -360,6 +362,8 @@ class HealthContext(Record):
     settings: Settings | None = None
     settings_error: str | None = None
     accounts: list[AccountRef] = Field(default_factory=list)
+    # real-money pilot accounts configured but not enabled yet: their server clock is measured before the unlock
+    pilot_accounts: list[AccountRef] = Field(default_factory=list)
     accounts_error: str | None = None
     get_secret: Callable[[str], str | None]
     disk_usage: Callable[[str], Any] = shutil.disk_usage     # -> (total, used, free) in bytes
@@ -378,7 +382,7 @@ class HealthContext(Record):
         """Context for the VPS: settings re-read from disk (not the cached copy, so a bad edit shows up), enabled
         accounts (live ones only after the phase gate) and the keyring."""
         from goldbot.ops import accounts
-        settings, s_err, accs, a_err = None, None, [], None
+        settings, s_err, accs, a_err, pilots = None, None, [], None, []
         try:
             settings = Settings.model_validate(settings_dict(settings_path))
         except Exception as exc:
@@ -388,12 +392,16 @@ class HealthContext(Record):
             accs = [AccountRef(account_id=a.account_id, server_tz=a.server_tz, symbol=a.symbol,
                                adaptive=settings is not None and adaptive_enabled(settings, a))
                     for a in accounts.enabled_accounts()]
+            on = {a.account_id for a in accs}
+            pilots = [AccountRef(account_id=a.account_id, server_tz=a.server_tz, symbol=a.symbol)
+                      for a in accounts.load_accounts(logins=False).values()
+                      if a.pilot.enabled and a.account_id not in on]
         except Exception as exc:
             a_err = f"{type(exc).__name__}: {exc}"
         from goldbot.execution.bridge import probe_health, probe_terminal
         from goldbot.ops.bridge_compat import read_bridge_info, repo_commit
         return cls(state_dir=Path(state_dir), now=now if now is not None else pd.Timestamp.now("UTC"),
-                   settings=settings, settings_error=s_err, accounts=accs, accounts_error=a_err,
+                   settings=settings, settings_error=s_err, accounts=accs, accounts_error=a_err, pilot_accounts=pilots,
                    get_secret=accounts.get_secret, bridge_probe=lambda url: probe_health(url, BRIDGE_TIMEOUT_S),
                    clock=lambda: pd.Timestamp.now("UTC"), last_run=_last_run(Path(state_dir)),
                    tick_reader=bridge_tick_reader, bridge_info=lambda url: read_bridge_info(url, BRIDGE_TIMEOUT_S),

@@ -143,6 +143,9 @@ STATE_SOURCES: dict[str, str] = {
     "open_short": "account_positions(): short count",
     "equity_unconfirmed": "risk_<account>.json stage2_pending_since (ADR 0016)",
     "unconfirmed_order": "orders_<account>.json: any `ambiguous` row (BACKLOG 72); unreadable counts as one",
+    # ADR 0055: read only on a pilot account, which is live; the smoke is demo-only (F1), so both are none
+    "pilot": "none: the live pilot's record is the engine's, and the smoke never runs on a live account (F1)",
+    "broker_leverage": "none: read only on the live pilot account; the 1:20 figure applies (F1: demo only)",
 }
 
 
@@ -401,7 +404,7 @@ def _open_book(positions: list[Position], sym: SymbolInfo, tick: Tick | None, fx
 
 
 def _windows(limits: RiskLimits, sessions: SessionTable, events: pd.DataFrame, tick_ts: pd.Timestamp,
-             now: pd.Timestamp) -> dict[str, bool]:
+             now: pd.Timestamp) -> dict[str, Any]:
     """BACKLOG 17/18 entry windows as the engine raises them (`Engine._window_flags`), each only when enabled; a fault
     fails closed (calendar_unavailable, or inside the reopen window)."""
     from goldbot.data.econ_calendar import blackout_window
@@ -498,7 +501,7 @@ def smoke_state(broker: Any, bus: ApprovalBus, acc: Account, state_dir: Path, *,
         combined_size_down=size_down, account_class=_account_class(state_dir, acc),
         drift_halt=_drift_halt(state_dir), clock_mismatch=clock is None or clock.status == "mismatch",
         market_closed=closed, tick_error=tick is None, bridge_incompatible=getattr(compat, "status", None) != "ok",
-        unconfirmed_order=_unconfirmed_order(state_dir, acc.account_id),
+        unconfirmed_order=_unconfirmed_order(state_dir, acc.account_id), pilot=None, broker_leverage=None,
         **_windows(cfg.limits, sessions, events, tick_ts, now),
         **_open_book(positions, sym, tick, fx, acc.symbol))
     new_day(st, now, risk["last_reset"])        # in memory only (S5)
