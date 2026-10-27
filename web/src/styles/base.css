@@ -63,7 +63,7 @@ th { font-size: var(--fs-small); }
 .layout { display: flex; }
 .rail { display: none; }
 .content { flex: 1; min-width: 0; }
-main { padding: var(--s4); max-width: var(--content-max); margin: 0 auto; padding-bottom: calc(var(--nav-h) + var(--s5)); }
+main { padding: var(--s4); max-width: var(--content-max); margin: 0 auto; padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + var(--s5)); }
 .navlink { display: flex; align-items: center; gap: var(--s3); min-height: var(--tap); padding: 0 var(--s3); border: 0;
   border-radius: var(--r-md); background: none; color: var(--text-2); font: inherit; font-size: var(--fs-body);
   font-weight: 500; cursor: pointer; text-align: left; width: 100%; position: relative; }

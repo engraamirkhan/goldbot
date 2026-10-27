@@ -461,6 +461,32 @@ test("Home is five calm cards and the trades live on Trades, on a phone and a de
   }
 });
 
+/** Phone: scrolled to the bottom, the last trade row clears the fixed bottom bar, and no visible row is under it
+ *  (the tap at a row's centre lands on the row, not on the bar). Viewport screenshot as evidence. */
+async function rowsClearBar(page: Page, name: string) {
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await page.waitForTimeout(100);
+  const bad = await page.evaluate(() => {
+    const bar = document.querySelector(".bottombar")!.getBoundingClientRect().top;
+    const rows = Array.from(document.querySelectorAll(".trade-row"));
+    const last = rows[rows.length - 1]?.getBoundingClientRect();
+    const out: string[] = [];
+    if (!last || last.bottom > bar) out.push(`last row bottom ${last?.bottom} > bar top ${bar}`);
+    for (const r of rows) {
+      const b = r.getBoundingClientRect();
+      if (b.bottom <= 0 || b.top >= window.innerHeight) continue;
+      const y = Math.min(b.top + b.height / 2, window.innerHeight - 1);
+      const hit = document.elementFromPoint(b.left + b.width / 2, y);
+      if (b.top + b.height / 2 < bar && !(hit && r.contains(hit))) out.push(`row at ${Math.round(b.top)} covered`);
+      if (b.top < bar && b.bottom > bar && r === rows[rows.length - 1]) out.push("last row cut by the bar");
+    }
+    return out;
+  });
+  expect(bad).toEqual([]);
+  if (process.env.SHOTS_DIR) await page.screenshot({ path: join(process.env.SHOTS_DIR, `${name}-viewport-bottom.png`) });
+  await page.evaluate(() => window.scrollTo(0, 0));
+}
+
 // The trades experience (docs/design/trades-ux-2026-10-27.md, ADR 0050, backlog 128-133) on a phone and a desktop,
 // light and dark. The trade ledger, the strategy board and the new Today and open-trade fields come from the backend
 // lane (129, 131); until the seeded server serves them, this story answers those calls with the typed fixtures the
@@ -513,6 +539,7 @@ test("Trades: money on every open row, filters in the URL, a blinded partly-read
         const h = await row.evaluate((e) => e.getBoundingClientRect().height);
         expect(Math.round(h)).toBe(72);
       }
+      if (width === 360) await rowsClearBar(page, `trades-now-${tag}`);
       await shot(page, `trades-now-${tag}`);
 
       // List: filters from the URL survive a reload; a partly-read family's view is blinded with the reason in words
@@ -523,6 +550,7 @@ test("Trades: money on every open row, filters in the URL, a blinded partly-read
       await expect(page.getByRole("button", { name: "Remove filter Scalp lab" })).toBeVisible();
       await expect(page).toHaveURL(/#\/trades\/list\?acct=icm-probe&fam=box_break_close$/);
       await noSideways(page, width);
+      if (width === 360) await rowsClearBar(page, `trades-list-${tag}`);
       await shot(page, `trades-list-${tag}`);
       await page.goto("/#/trades/list?fam=opening_range");
       await expect(list.getByText("64 trades · costs £3.20")).toBeVisible();
