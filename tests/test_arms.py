@@ -24,7 +24,12 @@ ARM_SPEC_IDS = {"S0", "S0R", "S1A", "S1B", "S2A", "S2B", "S3A", "S3B", "S4", "S5
                 # arms expansion wave 2 (arms-2026-10-25.md section 8, 8.13, 8.14) and H-80's box family
                 "F2A", "F2C", "PDC1", "PDC4", "OBR15", "KSQ1", "KSQ4", "DON4", "DOND", "C30A", "C30C", "KA15", "XC15",
                 "BXR15", "BXR30", "BXR1H", "BXR4H", "BXT15", "BXT30", "BXT1H", "BXT4H",
-                "BXF15", "BXF30", "BXF1H", "BXF4H"}
+                "BXF15", "BXF30", "BXF1H", "BXF4H",
+                # H-81 scalp volume (prereg-2026-10-27-scalp-volume.md, amendments (a), (b)): 18 strata and controls,
+                # 9 Vantage S-twins (blocked until Vantage's cost gate)
+                "Z1P", "Z2P", "Z5P", "Z8P", "Z7P", "Z4P", "Z3D", "Z4D", "Z6D", "Z7D", "Z9D", "Z10D", "ZCD",
+                "Z3V", "Z5V", "Z6V", "Z7V", "ZCV",
+                "VS0", "VS1A", "VS1B", "VS2A", "VS2B", "VS3A", "VS3B", "VS5A", "VS5B"}
 
 
 def test_time_structure_arms_are_forward_only_and_never_run_on_history() -> None:
@@ -104,7 +109,8 @@ def test_arm_ids_are_the_arm_spec_ids_with_matching_hashes() -> None:
 
 
 def test_a_changed_arm_fails_its_hash(tmp_path: Path) -> None:
-    text = ARMS.read_text().replace("\"stop_usd\": 3.0", "\"stop_usd\": 3.5", 1)
+    # an arm with no broker twin (every S arm has its Vantage twin VS*, whose body check would refuse it first)
+    text = ARMS.read_text().replace("\"p\": 0.07", "\"p\": 0.08", 1)
     p = tmp_path / "a.yaml"
     p.write_text(text)
     with pytest.raises(ValueError, match="config_hash"):

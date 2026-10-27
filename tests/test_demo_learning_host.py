@@ -24,13 +24,17 @@ from goldbot.telegram.approvals import ApprovalCenter
 from tests.test_exploration_engine import CLOSE, _arm, _at, _explore, _sent, _Terminal
 
 SCALP = {"S0", "S0R", "S1A", "S1B", "S2A", "S2B", "S3A", "S3B", "S4", "S5A", "S5B", "F1A", "F1C",   # F1A/F1C: 2026-10-26 prereg
-         "KA15", "XC15"}                                                                     # wave 2 (8.8, 8.9)
+         "KA15", "XC15",                                                                     # wave 2 (8.8, 8.9)
+         "Z1P", "Z2P", "Z5P", "Z8P", "Z7P", "Z4P"}                                           # H-81 (2026-10-27)
 INTRADAY = {"I0", "I2A", "I2B", "MB15", "MB30", "MB1H", "MSA15", "G1A", "G1C",
             # arms expansion wave 1 (2026-10-26)
             "XBB15", "XTV1", "XEQ15", "XSO15", "XIMNY", "XIMLN", "XAD1H", "XMR15", "XMR1H", "C1H",
             # wave 2 (arms-2026-10-25.md section 8) and H-80's real-order runner
             "F2A", "F2C", "OBR15", "BXR15", "BXR30", "BXR1H"}
 SWING = {"W0", "W1A", "W1B", "W2", "WFRI", "PDC4", "C30A", "C30C", "BXR4H"}
+# H-81 (prereg-2026-10-27-scalp-volume.md 3.2; ADR 0049 D1a scalp pots): icm-demo's and vantage-demo's scalp strata
+DEMO_SCALP = {"Z3D", "Z4D", "Z6D", "Z7D", "Z9D", "Z10D", "ZCD"}
+VANTAGE_SCALP = {"Z6V", "Z7V", "ZCV"}
 VANTAGE = {"VI0", "VI2A", "VI2B", "VMB15", "VMB30", "VMB1H", "VMS15", "VW0", "VW1A", "VW1B", "VW2",
            "VXRIP1H", "VXRT1H", "VXFK1H", "VXTL1H", "VXTV2", "VXBO1H", "VXBO15", "VXTR1H", "VC1H",   # wave 1
            "KSQ1", "PDC1", "DON4"}                                                                     # wave 2
@@ -65,12 +69,13 @@ def test_a_live_account_is_never_a_probe_only_exploration_host():
 
 
 # ------------------------------------------------------------------------------------------------ the shipped registry
-def test_icm_demo_ships_as_the_intraday_and_swing_learning_host(accs):
+def test_icm_demo_ships_as_the_intraday_swing_and_h81_scalp_learning_host(accs):
     acc = accs["icm-demo"]
     ex = acc.exploration
     assert acc.enabled and acc.mode == "demo" and acc.probe_only and acc.login is None
     assert not acc.shadow_host and not acc.cost_probe.enabled and acc.max_positions == 18
-    assert ex.enabled and set(ex.arms) == INTRADAY | SWING and set(ex.pots) == {"intraday", "swing"}
+    assert ex.enabled and set(ex.arms) == INTRADAY | SWING | DEMO_SCALP and set(ex.pots) == {"scalp", "intraday", "swing"}
+    assert {(ex.arms[a].style, ex.arms[a].max_loss) for a in DEMO_SCALP} == {("scalp", 6.5)}
     assert ex.budget_share * 220 == pytest.approx(198, abs=0.05) and ex.max_open_total == 17
     assert sum(p.gbp for p in ex.pots.values()) == pytest.approx(198)
 
@@ -92,7 +97,7 @@ def test_no_arm_runs_on_two_enabled_accounts(accs):
         clash = {arm: seen[arm] for arm in acc.exploration.arms if arm in seen}
         assert not clash, f"{aid} shares arms with another host: {clash}"
         seen.update(dict.fromkeys(acc.exploration.arms, aid))
-    assert set(seen) == SCALP | INTRADAY | SWING | VANTAGE
+    assert set(seen) == SCALP | INTRADAY | SWING | VANTAGE | DEMO_SCALP | VANTAGE_SCALP
 
 
 def test_each_hosts_exploration_magic_and_order_ids_are_its_own(accs, tmp_path):

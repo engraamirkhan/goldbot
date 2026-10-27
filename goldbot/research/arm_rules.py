@@ -17,7 +17,7 @@ import pandas as pd
 from goldbot.data.resample import mid
 from goldbot.data.timeutil import epoch_ns, utc_index
 from goldbot.features.technical import atr
-from goldbot.research.arms import CLOCK_BOX_RULES, Arm, local_window
+from goldbot.research.arms import CLOCK_BOX_RULES, SCALP_RULES, Arm, local_window
 
 SEED_PREFIX = "goldbot-arms-2026-10-25"
 GBP_PER_USD = 0.752
@@ -171,6 +171,9 @@ def _screen(arm: Arm, ctx: RuleContext, cands: pd.DataFrame) -> tuple[np.ndarray
         band[risk > float(p["max_stop_usd"]) + 1e-9] = STOP_GT_CAP
     if "min_stop_usd" in p:
         band[risk < float(p["min_stop_usd"]) - 1e-9] = STOP_LT_FLOOR
+    if "skip" in cands.columns:         # a rule's own skip (H-81's spread gate, `arm_rules_scalp`: "journalled")
+        own = cands["skip"].to_numpy(dtype=object)
+        band = np.where(pd.isna(band) & ~pd.isna(own), own, band)
     return ok, band
 
 
@@ -182,11 +185,14 @@ def post_filter(arm: Arm, ctx: RuleContext, cands: pd.DataFrame) -> pd.DataFrame
 
 
 def screened_frame(arm: Arm, ctx: RuleContext, cands: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """`cands` split into (kept, skipped by the stop band); the skipped frame carries a `reason` column
-    (STOP_LT_FLOOR / STOP_GT_CAP). Candidates outside the window or the common filters are in neither."""
+    """`cands` split into (kept, skipped by the stop band or the rule's own `skip`); the skipped frame carries a
+    `reason` column (STOP_LT_FLOOR / STOP_GT_CAP / the rule's reason). Candidates outside the window or the common
+    filters are in neither."""
     if cands.empty:
+        cands = cands.drop(columns="skip", errors="ignore")
         return cands, cands.assign(reason=pd.Series(dtype=object))
     ok, band = _screen(arm, ctx, cands)
+    cands = cands.drop(columns="skip", errors="ignore")
     inside = np.array([b is None for b in band], dtype=bool)
     skipped = cands[ok & ~inside].assign(reason=band[ok & ~inside]).reset_index(drop=True)
     return cands[ok & inside].reset_index(drop=True), skipped
@@ -421,6 +427,10 @@ def band_rule(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     return BANDS[arm.rule](arm, ctx)
 
 
+def scalp_rule(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
+    """H-81 scalp-volume families Z1-Z10 and ZCD/ZCV (`goldbot.research.arm_rules_scalp`)."""
+    from goldbot.research.arm_rules_scalp import RULE_FUNCS as SCALP
+    return SCALP[arm.rule](arm, ctx)
 
 
 RULE_FUNCS: dict[str, Callable[[Arm, RuleContext], pd.DataFrame]] = {
@@ -433,6 +443,7 @@ RULE_FUNCS: dict[str, Callable[[Arm, RuleContext], pd.DataFrame]] = {
     **dict.fromkeys(CLOCK_BOX_RULES, clock_box),
     **dict.fromkeys(("hurst_band_break", "hurst_band_break_control", "htf_stretch_break", "htf_stretch_break_control"),
                     band_rule),
+    **dict.fromkeys(SCALP_RULES, scalp_rule),
 }
 
 
@@ -457,7 +468,8 @@ def lookback_bars(arm: Arm, default: int) -> int:
         return max(default, warmup_bars(arm))
     from goldbot.research.arm_rules_bands import LOOKBACK_BARS as BANDS
     from goldbot.research.arm_rules_clock_box import LOOKBACK_BARS as CLOCK
-    return max(default, BANDS.get(arm.rule, 0), CLOCK.get(arm.rule, 0))
+    from goldbot.research.arm_rules_scalp import LOOKBACK_BARS as SCALP
+    return max(default, BANDS.get(arm.rule, 0), CLOCK.get(arm.rule, 0), SCALP.get(arm.rule, 0))
 
 
 def follows_friday_cut(arm: Arm) -> bool:
