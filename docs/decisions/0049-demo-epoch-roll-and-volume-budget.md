@@ -11,6 +11,10 @@ What it amends:
 - ADR 0043 section 2: the R1 rotation actor and the rotation budget, on demo `probe_only` hosts only;
 - the volume targets of `docs/research/volume-500-plan-2026-10-26.md` sections 2.2 and 5, as corrected by the owner.
 
+It is aligned with the frozen scalp-volume pre-registration H-81 (`docs/research/prereg-2026-10-27-scalp-volume.md`,
+amendment 7, commit c7c9ac8e). Where this ADR's first draft differed (Vantage at $3-4.5 stops, icm-probe at 250),
+**H-81 section 7 governs.**
+
 ## Context
 
 **Directive.** The owner asked on 2026-10-26 and 2026-10-27 for 500+ demo fills a day. The program director relayed
@@ -48,13 +52,18 @@ vantage-demo, not 500 on each.
 | vantage-demo 200 + 5 intraday | $0.52 | 78 | 10.6% / 17.3% / 22.6% | £390 | 10 |
 | vantage-demo 200 + 10 intraday (today's mix) | $0.52 | 78 | 18.9% / 26.5% / 32.0% | £390 | 10 |
 
+**Superseded rows.** The vantage-demo rows above assume $3-4.5 stops. At $0.52, those stops carry cost/R of
+0.12-0.17, which fails H-81's single Vantage bar of cost/R ≤ 0.08. That bar needs **$7 stops** (£5.26 at risk per
+trade). D1 and D2 use H-81 7.2-7.3's figures instead.
+
 **What the table says:**
 1. **At about 200 per account, the daily caps are not the problem.** Every scalp-dominated mix stays inside the
    budget on about 90% or more of days, even at Vantage's $0.52.
 2. **The 15m-1h fills set the bind probability, not the scalp count.** Ten intraday fills at £12 R add more variance
    and open risk than about 150 scalps.
-3. **The cumulative drawdown is the problem.** At $0.52, 200 a day reaches Vantage's −8% (£800) in about 10 trading
-   days. Under ADR 0043 that means about 4 rotations in what is left of Q4, against a budget of 2 a quarter, each
+3. **The cumulative drawdown is the problem.** At $0.52, Vantage at its V2 level (≈ 130 at $7 stops, £53 a day) reaches
+   its −8% (£800) in about 15 trading days, and 200 at $3-4.5 stops would reach it in about 10. Under ADR 0043 that means
+   2-4 rotations in what is left of Q4, against a budget of 2 a quarter, each
    needing an owner TOTP the code does not yet have. Volume would stall on Vantage within about two weeks of
    reaching 200.
 
@@ -66,35 +75,46 @@ The budget per account is **unchanged**: £198 / £198 / £180, the same `budget
 **P(budget binds) ≤ 10% at the measured D** (D = 1.5 until research D4 reports). It is met by choosing the mix, not
 by raising any £.
 
-| Host | Target fills/day | Mix limit that holds the target | P(bind) at D1.5 | Drift/day (zero edge) |
+| Host | Target fills/day (step 1, 11-02) | Mix limit that holds the target | P(bind) at D1.5 | Drift/day (zero edge) |
 |---|---|---|---|---|
-| icm-probe | **250** (probes ≤ 50, i.e. ≤ 20%) | scalp + probes only; no 15m-1d arm | 0.7% | £29 |
-| icm-demo | **150**, and 200 only once its intraday share is ≤ 5 fills/day or D ≤ 1.2 is measured | 5m sleeve + intraday ≤ 10 + 1 swing slot | 8.3% | £18 |
-| vantage-demo | **150 now, 200 by the D2 ladder** | scalp + probes only once its intraday and swing arms move to `vantage-swing` (wave 3). Until they move: scalp ≤ 150 | 1.6% (150) / 7.6% (200) | £59 / £78 |
-| **Total** | **550 now → 600** | | | **£106 → £125 a day, demo £; real cost £0** |
+| icm-probe | **≈ 323**: scalp 269 + probes 54 (17%, under 20%) | scalp + probes only, with no 15m-1d arm. Scalp pot £168, `max_open` 14, all inside the unchanged £198, `max_open_total` 17 and `max_positions` 18 (H-81 7.1) | 1.0% (whole £198, $0.156) to 3.5% (scalp pot, $0.23) | £38 |
+| icm-demo | **≈ 138**: scalp 128 + intraday ≈ 9 + swing ≈ 1 | **Option A** (H-81 3.4): the style pots become shares of one £198 host budget. That is an ADR 0047 amendment and an engine change, and needs trading-safety review. Under option B, separate pots, the target is ≈ 120 | 8.0% | £18 |
+| vantage-demo | **≈ 90** (V1); **≈ 130** once its 15m-1d arms move to `vantage-swing` (V2); **never above ≈ 165 at the $0.52 cost** | **one stop bar**: cost/R ≤ 0.08 at the measured round trip (the 95% upper bound once there are ≥ 200 own fills), so $7 stops at $0.52. V1: scalp pot £100 / 8 open, intraday £40, swing £40. V2: scalp £150 / 12, probes £30 | 8.5% (V1) / 5.2% (V2) | £23-35 (V1) / £53 (V2) |
+| **Total** | **≈ 551 (V1) to 591 (V2)**, at least 520 either way | | | **≈ £80-110 a day, demo £; real cost £0** |
 
-- **The plan has headroom on purpose.** 600 planned against 500 required gives about 17% margin for void rows (45%
-  on 10-26 before the step-0 repair), refusals and the 20% probe-count rule.
+- **The plan has headroom on purpose.** 551-591 planned against 500 required gives a 10-18% margin. The margin is
+  for refusals and the 20% probe-count rule. These are filled fills; admissible fills still need step 0's void repair
+  (45% void on 10-26).
 - **No new paid host is needed for the corrected target.** The ICM depth host (about £3.6 a month, owner-only spend)
-  in the volume plan 2.3 C is withdrawn as a requirement. icm-demo stays a depth host at 150.
+  in the volume plan 2.3 C is withdrawn as a requirement. icm-demo stays a depth host at about 138.
+- **The CFO chooses option A for icm-demo.** It adds about 18 fills a day at £0 of real cost, and the £198 total is
+  unchanged. It is conditional on trading-safety accepting the ADR 0047 amendment; until then option B (≈ 120)
+  applies.
 - **Weekly check** (research director, in the daily review): if a host's 10-day realised bind rate is above 10%, its
-  target steps down one rung (250 → 200 → 150) at the next 00:00 UTC roll. A cap never moves.
+  target steps down one rung at the next 00:00 UTC roll. A cap never moves. The rungs are H-81's:
+  - icm-probe: if its bind rate is above 5%, or its cost is above $0.23, Z7P and Z4P stop first;
+  - icm-demo: option A, then option B;
+  - vantage-demo: V2, then V1.
 
 ### D2. Vantage: scalp waits for its own measured cost (question 2)
 
-**Chosen: wait.** Vantage scalp stays at the step-1 level of 150, which costs about £59 a day even at $0.52. It steps
-up only on a cost read from its own fills: at least 200 admissible Vantage fills, the 95% upper bound of the round
-trip, and at least 3 session days. At 150 a day that read takes about 2 trading days, so waiting costs almost no
-volume.
+**Chosen: wait.** Vantage runs at the cost-safe level for the $7 bar and steps up only on a cost read from its own
+fills: at least 200 admissible fills, the 95% upper bound of the round trip, and at least 3 session days. At V1's
+about 90 a day that read takes about 3 trading days. It is the cheapest lever in the program.
 
-| Vantage 95% upper bound on ≥ 200 own fills | Scalp target | Why |
+| Vantage state | Stop bar (cost/R ≤ 0.08) | Target |
 |---|---|---|
-| ≤ $0.35 | 200 (and the volume plan's own 300/500 bars still apply above that) | P(bind) ≤ 5.7% at D2; −8% in ≥ 15 days |
-| $0.35-0.55 | 200, but only once the intraday arms have left the host | P(bind) 7.6% at D1.5; −8% in about 10 days. The epoch roll (D3) carries it |
-| > $0.55, or entry slip > $0.25 on ≥ 100 fills | 100, and a microstructure review in 2 working days | at that cost, about 3.5 ICM fills could be bought for each Vantage fill; the learning value is in the cost read itself, which 100 a day still gives |
+| Cost unmeasured; 15m-1d arms still on the host (V1) | $7 | **≈ 90** |
+| `vantage-swing` live, so the whole £180 serves scalp + probes (V2) | $7 | **≈ 130** (5.2% bind at D1.5) |
+| 95% upper bound $0.35-0.56 | $7 (stops below UB/0.08 are skipped as `cost_per_r` and logged, never resized) | at most **≈ 165**. At $0.52, 195 fills bind on 16.1% of days and are refused |
+| 95% upper bound ≤ $0.35 on ≥ 200 own fills (V3) | the 1m strata at $7 (H-81 amendment) | ≈ 175-190, up to **200** |
+| 95% upper bound ≤ $0.24 | $3 allowed; the VS S-twins unblock | **200+**, subject to the volume plan's 300/500 bars |
+| Upper bound above $0.56, or entry slip above $0.25 on ≥ 100 fills | — | hold at V1, with a microstructure review within 2 working days |
 
-**Rejected: starting at a reduced share of 500.** Any share above 150 relies on a 5-fill cost figure. The bind
-probability at $0.52 with today's intraday mix is already 19-32%, so the step would be sized on noise.
+**Rejected:**
+- **$3-4.5 stops at $0.52** (this ADR's first draft): cost is 0.12-0.17 R, so a trade needs 0.35-0.5 R gross by the 3×
+  rule. That buys cost-dominated labels.
+- **A reduced share of 500 now:** it would be sized on a 5-fill cost figure.
 
 ### D3. Demo epoch roll: top-up and mark reset at −8% (question 1)
 
@@ -118,7 +138,7 @@ is less. That is a tightening.
   needed. The login goes only to the VPS keyring.
 
 **Why the roll is automated (amends ADR 0043 R1).**
-- An owner TOTP every ~10 trading days on Vantage goes against the owner's standing "no owner input" rule.
+- An owner TOTP every ~15 trading days on Vantage goes against the owner's standing "no owner input" rule.
 - Lowering a mark on a fenced demo account puts no real money at risk.
 - The trading-safety constraint is that **the path must never reach a live account**. T1 enforces that by
   construction.
@@ -131,7 +151,7 @@ is less. That is a tightening.
 |---|---|
 | An epoch shorter than 5 trading days | the host's target steps down one rung; CFO + research director review within 2 working days. Drift is then about twice the plan, so cost or edge is worse than measured |
 | 3 or more rolls on a host in a quarter with no arm at C1 | the research director's readout (arms stopped, demo £ per admissible label) goes to the monthly review |
-| The quarter's cumulative demo exploration cost per host is above £2,500 (ICM hosts) or above £5,000 (vantage-demo). That is about 1.5× the zero-edge plan for the 43 trading days left in Q4 | CFO review within 2 working days; the host drops to 150 until it is reviewed |
+| The quarter's cumulative demo exploration cost per host is above £2,500 (icm-probe), £1,200 (icm-demo) or £3,500 (vantage-demo). That is about 1.5× the zero-edge plan for the 43 trading days left in Q4 | CFO review within 2 working days; the host drops one rung until it is reviewed |
 | −12% / HALTED | **no roll.** The ADR 0043 K2 re-arm path stays as it is. A roll is never available at or after a halt |
 
 ### D4. Recording, so P&L reads stay honest
@@ -148,17 +168,18 @@ is less. That is a tightening.
 ### Break-even (E1)
 
 - **Real cash: £0.** Demo deposits are free, and no hosting is added.
-- **Demo £:** about £106-125 a day at zero gross edge.
-- **Break-even per fill:** a gross edge of $0.156 per oz on ICM and $0.52 per oz on Vantage (about 0.05 R and 0.17 R
-  on a $3 stop). An arm below that bleeds demo £ and is stopped by its H-61 rule, not by this ADR.
+- **Demo £:** about £80-110 a day at zero gross edge.
+- **Break-even per fill:** a gross edge of $0.156 per oz on ICM (about 0.05 R on a $3 stop) and $0.52 per oz on Vantage
+  (0.074 R on the $7 stop). An arm below that bleeds demo £ and is stopped by its H-61 rule, not by this ADR.
 
 ## What would reverse or change this
 
 | Signal | Change |
 |---|---|
 | D4 measures D > 2 | each target steps down one rung |
-| D4 measures D ≤ 1.2 | icm-demo may go to 200 with 10 intraday fills |
-| Vantage's 95% upper bound ≤ $0.20 on ≥ 200 fills | Vantage is eligible for the volume plan's 300/500 rungs |
+| D4 measures D ≤ 1.2 | icm-demo may go to about 150 |
+| Vantage's 95% upper bound ≤ $0.24 on ≥ 200 fills | the S-twins unblock, and Vantage is eligible for 200+ and the volume plan's 300/500 rungs |
+| H-81 is amended or retired | D1 and D2 follow it; the caps and the roll do not change |
 | A broker stops demo top-ups or expires a demo | R3 fresh account for that slot |
 | Trading-safety rejects T1 | R3 only; ADR 0043 R1 (owner TOTP) stays the only mark-lowering path |
 | Any proposal to roll a real-money or non-`probe_only` account | refused. That needs a new ADR, and it is owner-only |
@@ -169,14 +190,17 @@ is less. That is a tightening.
 
 | Host | Expected rolls |
 |---|---|
-| vantage-demo at 200 | about 4 |
-| icm-probe | about 1 |
+| vantage-demo at V2 (≈ 130) | about 2-3 |
+| icm-probe at ≈ 323 | about 1-2 |
 | icm-demo | 0 |
 
-- **Volume** stays at about 550-600 fills a day across the three hosts and never stalls on the −8% pause, provided
+- **Volume** stays at about 551-591 fills a day across the three hosts and never stalls on the −8% pause, provided
   the roll code is in before the first expected −8%.
-- **The first expected −8% is Vantage, about 2026-11-19** (150 a day from 11-02 at $0.52, from a flat mark). The
-  roll code is therefore due **Fri 2026-11-13**.
+- **The first expected −8% is Vantage.**
+  - At V2 (£53 a day), it comes about 15 trading days after V2 starts, around 2026-11-20 or later, from a flat mark.
+  - At V1 (£23-35 a day), it takes about 23-35 trading days.
+  - icm-probe at £38 a day takes about 23 trading days, around 2026-12-03.
+  - The roll code is due **Fri 2026-11-13**.
 - **If the roll code is late,** the host pauses (as today) and the program director hears it the same day.
 
 **Implementation** (implementer, failing tests first; trading-safety full review):
@@ -193,5 +217,6 @@ is less. That is a tightening.
 **Accountable:**
 - implementation: the program director (T1-T6), due 11-13;
 - the volume targets in D1 and D2: the research director, from step 1 on 11-02;
+- the icm-demo option A engine change (ADR 0047 amendment): the program director, with trading-safety review;
 - the tripwire reviews: the CFO;
 - the November finance review checks D4 against the ledger.
