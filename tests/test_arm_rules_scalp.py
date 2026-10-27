@@ -6,6 +6,7 @@ half-hour read on the bar's CLOSE time (amendment (b) 1); the controls' entry an
 registry; and the 2010-2017 event counts against the prereg's census."""
 from __future__ import annotations
 
+import os
 from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,7 +29,7 @@ from goldbot.research import arms as A
 NO = np.zeros(0, dtype=np.int64)
 NY = "America/New_York"
 SPEC = Path(__file__).resolve().parents[1] / "config" / "exploration_arms.yaml"
-RAW = Path("/Users/aamirkhan/tmp/ts/raw")
+RAW = Path(os.environ.get("GOLDBOT_RAW_BARS", str(Path(__file__).resolve().parents[1] / "raw")))   # the gitignored local bars (ADR 0048)
 MEMORY = int(EngineConfig.model_fields["max_bars_in_memory"].default)
 RULES = tuple(Z.RULE_TF)
 CUT = pd.Timestamp("2023-12-20", tz="UTC")

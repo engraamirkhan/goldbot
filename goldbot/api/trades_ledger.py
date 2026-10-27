@@ -617,7 +617,10 @@ def _encode(r: TradeRow) -> str:
 def _decode(cursor: str) -> tuple[pd.Timestamp, str]:
     try:
         at, tid = base64.urlsafe_b64decode(cursor.encode()).decode().split("|", 1)
-        return pd.Timestamp(at), tid
+        ts = pd.Timestamp(at)
+        if ts.tzinfo is None:                     # security LOW: a crafted naive cursor would fail the compare (500)
+            raise ValueError("naive cursor time")
+        return ts, tid
     except (ValueError, UnicodeDecodeError) as exc:
         raise ValueError("cursor is not one this API gave") from exc
 
