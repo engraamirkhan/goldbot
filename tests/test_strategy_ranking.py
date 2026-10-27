@@ -94,9 +94,15 @@ def test_the_key_is_the_bonferroni_adjusted_lower_bound_with_t_on_g_minus_1_df_a
     view = sr.rank(rows, CAT, NOW)
     assert view.k_ranked == 2
     alpha = _by(view, "alpha")
-    p = sr._pass([got[1] for r in rows if r.arm_id == "A1" and (got := sr._fill(r, CAT, {}))])
-    m, se, g = p.mean, p.se, p.clusters
-    assert se is not None
+    # the oracle, by hand: CR1 over (account, day) clusters, G/(G-1) x sum (S_g - n_g m)^2 / N^2
+    a1 = [r for r in rows if r.arm_id == "A1"]
+    cells: dict[tuple[Any, Any], list[float]] = {}
+    for r in a1:
+        assert r.r is not None and r.exit_utc is not None
+        cells.setdefault((r.account, r.exit_utc.date()), []).append(r.r)
+    n, g = len(a1), len(cells)
+    m = sum(sum(c) for c in cells.values()) / n
+    se = (g / (g - 1) * sum((sum(c) - len(c) * m) ** 2 for c in cells.values()) / n ** 2) ** 0.5
     assert g == alpha.figures.clusters == 12
     assert alpha.figures.lower_adjusted == round(m - student_t.ppf(1 - 0.025 / 2, g - 1) * se, 3)
     half = student_t.ppf(0.975, g - 1) * se
