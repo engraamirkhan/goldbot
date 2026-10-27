@@ -443,3 +443,9 @@ daily_review:                        # daily learning-ops review (goldbot/resear
   status_issue: 34                   # one blinded status comment a day on the program issue
   repo: engraamirkhan/goldbot
   weekly_proposals: 4                # Monday roll-up: at most 4 variant proposals for the research director (never run)
+trades_view:                         # trades screens' plan figures (goldbot/api/today_ledger.py, item 131); reporting only
+  fills_target: 200                  # fills a day per demo account (the high-volume plan's ~200 per lab); live accounts have none
+  fills_target_by_account: {}        # account id -> its own target
+  daily_target_share: 0.05           # ADR 0004: GBP 50 a day on the GBP 1,000 basis = 5% of the day's start equity, per account
+  daily_target_by_account: {}        # account id -> a fixed daily target in the account currency (overrides the share)
+  strip_days: 14                     # trading days in the Today tab's daily net strip

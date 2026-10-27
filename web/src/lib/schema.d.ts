@@ -799,6 +799,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/trades": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Trades List */
+        get: operations["trades_list_api_trades_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/trades/overview": {
         parameters: {
             query?: never;
@@ -825,6 +842,23 @@ export interface paths {
         };
         /** Trades Summary */
         get: operations["trades_summary_api_trades_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/trades/{trade_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Trade Detail */
+        get: operations["trade_detail_api_trades__trade_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1353,6 +1387,15 @@ export interface components {
              */
             now: string;
         };
+        /** CapUse */
+        CapUse: {
+            /** Limit */
+            limit: number;
+            /** Share */
+            share: number;
+            /** Used */
+            used: number;
+        };
         /**
          * ChangePasswordRequest
          * @description Logged in. Revokes the user's other sessions.
@@ -1425,6 +1468,26 @@ export interface components {
             channel: "telegram" | "mail";
             /** Sign Ins */
             sign_ins: components["schemas"]["CodeSignIn"][];
+        };
+        /**
+         * CostSplit
+         * @description Costs in the account currency, each positive when paid: spread at the fill (both legs at the entry's spread),
+         *     adverse entry slippage, commission, swap (a credit is negative). `total` is the sum of the known parts;
+         *     `complete` False when a part is not recorded in money (a position record keeps its spread in points).
+         */
+        CostSplit: {
+            /** Commission */
+            commission: number | null;
+            /** Complete */
+            complete: boolean;
+            /** Slippage */
+            slippage: number | null;
+            /** Spread */
+            spread: number | null;
+            /** Swap */
+            swap: number | null;
+            /** Total */
+            total: number;
         };
         /** CusumPoint */
         CusumPoint: {
@@ -2134,6 +2197,27 @@ export interface components {
             runs: number;
         };
         /**
+         * KindDay
+         * @description One kind's figures today on one account. `withheld`: the money covers fewer than 3 unread arms (ADR 0050).
+         */
+        KindDay: {
+            /** Closed */
+            closed: number;
+            /** Costs */
+            costs: number | null;
+            /** Fills */
+            fills: number;
+            /** Net Pnl */
+            net_pnl: number | null;
+            /** Net R */
+            net_r: number | null;
+            /**
+             * Withheld
+             * @default false
+             */
+            withheld: boolean;
+        };
+        /**
          * LimitAccount
          * @description One account's risk limits now, from what its engine publishes (state/engine_<account>.json) and the revert in
          *     core.db `limits_state`. Money is in `currency`; percentages are fractions. Null = the engine does not say.
@@ -2568,6 +2652,11 @@ export interface components {
         OpenPosition: {
             /** Account */
             account: string;
+            /**
+             * Account Label
+             * @default Other account
+             */
+            account_label: string;
             /** Age S */
             age_s: number | null;
             /** Agent Id */
@@ -2578,8 +2667,25 @@ export interface components {
             entry: number | null;
             /** Family */
             family: string;
+            /**
+             * Family Label
+             * @default
+             */
+            family_label: string;
             /** Floating Pnl */
             floating_pnl: number | null;
+            /** Fx Age S */
+            fx_age_s?: number | null;
+            /** Held S */
+            held_s?: number | null;
+            /** Hold Limit S */
+            hold_limit_s?: number | null;
+            /**
+             * Kind
+             * @default strategy
+             * @enum {string}
+             */
+            kind: "real" | "strategy" | "exploration" | "control" | "cost_probe" | "shadow";
             /** Lots */
             lots: number;
             /** Mode */
@@ -2599,6 +2705,8 @@ export interface components {
             probe: boolean;
             /** R Now */
             r_now: number | null;
+            /** Risk Amount */
+            risk_amount?: number | null;
             /**
              * Side
              * @enum {string}
@@ -2624,6 +2732,24 @@ export interface components {
             positions: components["schemas"]["OpenPosition"][];
             /** Unreadable */
             unreadable: string[];
+        };
+        /** PeriodNet */
+        PeriodNet: {
+            costs: components["schemas"]["CostSplit"] | null;
+            /** N */
+            n: number;
+            /** Net Pnl */
+            net_pnl: number | null;
+            /**
+             * Since
+             * Format: date
+             */
+            since: string;
+            /**
+             * Withheld
+             * @default false
+             */
+            withheld: boolean;
         };
         /** PlanFamily */
         PlanFamily: {
@@ -3476,6 +3602,32 @@ export interface components {
             /** Unreadable */
             unreadable: ("agents" | "shadow")[];
         };
+        /**
+         * StripDay
+         * @description One opportunity day of the strip: net after costs of the rows closed that day.
+         */
+        StripDay: {
+            /** Costs */
+            costs: number | null;
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /** N */
+            n: number;
+            /** Net Pnl */
+            net_pnl: number | null;
+            /** Opportunity */
+            opportunity: boolean | null;
+            /** Target */
+            target: number | null;
+            /**
+             * Withheld
+             * @default false
+             */
+            withheld: boolean;
+        };
         /** SystemHaltView */
         SystemHaltView: {
             /** Clear Command */
@@ -3494,8 +3646,17 @@ export interface components {
         TodayAccount: {
             /** Account */
             account: string;
+            /**
+             * Account Label
+             * @default Other account
+             */
+            account_label: string;
             /** Age S */
             age_s: number | null;
+            /** By Kind */
+            by_kind?: {
+                [key: string]: components["schemas"]["KindDay"];
+            };
             /** Closed Complete */
             closed_complete: boolean;
             /** Closed N */
@@ -3503,17 +3664,43 @@ export interface components {
             /** Closed Pnl */
             closed_pnl: number | null;
             costs: components["schemas"]["DayCosts"] | null;
+            costs_today?: components["schemas"]["CostSplit"] | null;
             /** Currency */
             currency: string | null;
+            /** Daily Target */
+            daily_target?: number | null;
+            day_cap_used?: components["schemas"]["CapUse"] | null;
             /** Day Pnl */
             day_pnl: number | null;
+            exploration_pot_used?: components["schemas"]["CapUse"] | null;
+            /** Fills Target */
+            fills_target?: number | null;
+            /** Fills Today */
+            fills_today?: number | null;
             loss_meter: components["schemas"]["LossMeter"] | null;
             /** Mode */
             mode: ("demo" | "live" | "paper") | null;
+            month_to_date?: components["schemas"]["PeriodNet"] | null;
+            /** Net Today */
+            net_today?: number | null;
+            /** Open N */
+            open_n?: number | null;
             /** Open Pnl */
             open_pnl: number | null;
+            /** Open Risk */
+            open_risk?: number | null;
+            /** Pace */
+            pace?: number | null;
+            /** Quiet Day */
+            quiet_day?: boolean | null;
             /** Stale */
             stale: boolean;
+            /** Strip */
+            strip?: components["schemas"]["StripDay"][];
+            week_cap_used?: components["schemas"]["CapUse"] | null;
+            week_to_date?: components["schemas"]["PeriodNet"] | null;
+            /** Withheld */
+            withheld?: string[];
         };
         /** TodayView */
         TodayView: {
@@ -3524,6 +3711,8 @@ export interface components {
              * Format: date-time
              */
             as_of: string;
+            /** Unreadable */
+            unreadable?: ("shadow" | "positions" | "probes" | "exploration" | "orders")[];
         };
         /**
          * TradeRef
@@ -3545,6 +3734,107 @@ export interface components {
              * Format: date-time
              */
             ts: string;
+        };
+        /**
+         * TradeRow
+         * @description One trade (opened and closed merged). Money in the account currency, prices USD per oz, times UTC. Closed:
+         *     `pnl` is net of every cost and `gross` = pnl + costs.total (to the penny). Open: `pnl_now` at the engine's mid
+         *     price from the fill (the entry spread is inside it). `blinded` True: this row's result fields were withheld because
+         *     the list's filter isolates arms not yet read (ADR 0050); GET /api/trades/{trade_id} always shows the result.
+         */
+        TradeRow: {
+            /** Account */
+            account: string | null;
+            /** Account Label */
+            account_label: string;
+            /** Arm Id */
+            arm_id: string | null;
+            /** Blinded */
+            blinded: boolean;
+            /** Censored */
+            censored: boolean;
+            costs: components["schemas"]["CostSplit"] | null;
+            /** Currency */
+            currency: string | null;
+            /** Entry */
+            entry: number | null;
+            /**
+             * Evidence
+             * @enum {string}
+             */
+            evidence: "counted" | "excluded" | "censored" | "pending" | "not_evidence";
+            /** Excluded Reason */
+            excluded_reason: string | null;
+            /** Exit */
+            exit: number | null;
+            /** Exit Reason */
+            exit_reason: ("target" | "stop" | "trail" | "time_limit" | "friday_cut" | "manual" | "kill_switch" | "broker_stop_out" | "other") | null;
+            /** Exit Utc */
+            exit_utc: string | null;
+            /** Family */
+            family: string;
+            /** Family Label */
+            family_label: string;
+            /** Gross */
+            gross: number | null;
+            /** Held S */
+            held_s: number | null;
+            /** Hold Limit S */
+            hold_limit_s: number | null;
+            /** Is Control */
+            is_control: boolean;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "real" | "strategy" | "exploration" | "control" | "cost_probe" | "shadow";
+            /** Lots */
+            lots: number | null;
+            /** Mode */
+            mode: ("demo" | "live" | "paper") | null;
+            /**
+             * Opened Utc
+             * Format: date-time
+             */
+            opened_utc: string;
+            /** Pnl */
+            pnl: number | null;
+            /** Pnl Now */
+            pnl_now: number | null;
+            /** Price Now */
+            price_now: number | null;
+            /** R */
+            r: number | null;
+            /** R Now */
+            r_now: number | null;
+            /** Risk Amount */
+            risk_amount: number | null;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "long" | "short";
+            /** Stale */
+            stale: boolean;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "closed";
+            /** Stop */
+            stop: number | null;
+            /** Stop Now */
+            stop_now: number | null;
+            /** Target */
+            target: number | null;
+            /** Timeframe */
+            timeframe: string | null;
+            /** Trade Id */
+            trade_id: string;
+            /** Variant */
+            variant: string | null;
+            /** Why */
+            why: string;
         };
         /**
          * TradeStats
@@ -3575,6 +3865,36 @@ export interface components {
             wins: number;
             worst: components["schemas"]["TradeRef"] | null;
         };
+        /**
+         * TradeTotals
+         * @description The filter's totals over every matching row (not only the page), equal to the sum of those rows. With
+         *     `withheld` the money is None (ADR 0050: an aggregate covering fewer than 3 unread arms, or a filter narrowed to
+         *     strategies with unread arms); counts and open risk always show.
+         */
+        TradeTotals: {
+            /** Costs */
+            costs: number | null;
+            /** Currency */
+            currency: string | null;
+            /** Mixed Currencies */
+            mixed_currencies: boolean;
+            /** N */
+            n: number;
+            /** N Closed */
+            n_closed: number;
+            /** N Open */
+            n_open: number;
+            /** Net Pnl */
+            net_pnl: number | null;
+            /** Open Pnl */
+            open_pnl: number | null;
+            /** Open Risk */
+            open_risk: number | null;
+            /** Withheld */
+            withheld: boolean;
+            /** Withheld Reason */
+            withheld_reason: string | null;
+        };
         /** TradeTypeSummary */
         TradeTypeSummary: {
             /** By Family */
@@ -3603,6 +3923,21 @@ export interface components {
             periods: components["schemas"]["TradesPeriodView"][];
             /** Unreadable */
             unreadable: ("shadow" | "positions" | "probes" | "journal")[];
+        };
+        /** TradesPage */
+        TradesPage: {
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Rows */
+            rows: components["schemas"]["TradeRow"][];
+            totals: components["schemas"]["TradeTotals"];
+            /** Unreadable */
+            unreadable: ("shadow" | "positions" | "probes" | "exploration" | "orders")[];
         };
         /** TradesPeriodView */
         TradesPeriodView: {
@@ -5122,6 +5457,50 @@ export interface operations {
             };
         };
     };
+    trades_list_api_trades_get: {
+        parameters: {
+            query?: {
+                period?: "today" | "7d" | "30d" | "all";
+                since?: string | null;
+                until?: string | null;
+                account?: string[];
+                family?: string[];
+                timeframe?: string[];
+                arm?: string[];
+                kind?: ("real" | "strategy" | "exploration" | "control" | "cost_probe" | "shadow")[];
+                status?: ("open" | "closed") | null;
+                exit_reason?: ("target" | "stop" | "trail" | "time_limit" | "friday_cut" | "manual" | "kill_switch" | "broker_stop_out" | "other")[];
+                evidence?: ("counted" | "excluded" | "censored" | "pending" | "not_evidence")[];
+                control?: boolean | null;
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradesPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     trades_overview_view_api_trades_overview_get: {
         parameters: {
             query?: never;
@@ -5158,6 +5537,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TradesSummary"][];
+                };
+            };
+        };
+    };
+    trade_detail_api_trades__trade_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trade_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradeRow"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

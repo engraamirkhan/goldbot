@@ -12,6 +12,10 @@ entries while the heat cap or the projection is on. Exits never read any of this
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
+from typing import Any
+
+import pandas as pd
 
 
 def _usable(x: float | None) -> bool:
@@ -35,3 +39,16 @@ def remaining_stop_risk(*, side: int, lots: float, sl: float | None, bid: float,
         return None
     assert fx is not None
     return distance * lots * contract * fx
+
+
+def published_fx(open_fx: Mapping[int, tuple[pd.Timestamp, float | None]]) -> dict[str, Any]:
+    """Item 128 (docs/design/trades-ux-2026-10-27.md A1): the newest account-currency-per-USD rate the open-risk refresh
+    read from the broker (`Engine._open_risk_fx`, per side, once a minute) and the minute it was read, for
+    engine_<account>.json. Reporting only: the dashboard and `goldbot run positions` convert open P&L and risk with it
+    (account_view.usd_to_account) and show a rate older than 120 s as stale; no gate, size or exit reads it. None
+    while no position has needed a rate (the dashboard then says "no rate", never a guess)."""
+    known = [(at, fx) for at, fx in open_fx.values() if fx is not None and math.isfinite(fx) and fx > 0]
+    if not known:
+        return {"usd_to_account": None, "usd_to_account_utc": None}
+    at, fx = max(known, key=lambda x: x[0])
+    return {"usd_to_account": round(fx, 8), "usd_to_account_utc": pd.Timestamp(at).isoformat()}

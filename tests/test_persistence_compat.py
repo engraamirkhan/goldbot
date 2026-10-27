@@ -535,6 +535,10 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/db/repo.py", "RecordRepo._load", "self.model"): "RecordRepo: strict unless built with tolerant=True",
     ("goldbot/risk/windows.py", "load_holidays", "HolidayList"):
         "strict: hand-edited config (a misspelt key fails: calendar_unavailable)",
+    ("goldbot/api/strategy_labels.py", "load_catalog", "Labels"):
+        "strict: hand-edited config (a misspelt key fails: the names fall back to the keys in words)",
+    ("goldbot/api/strategy_labels.py", "_reads", "ArmRead"):
+        "strict: hand-edited config (a misspelt read fails closed: no arm counts as read, ADR 0050)",
     ("goldbot/research/min_lot.py", "min_lot_feasibility", "Feasibility"):
         "not persisted: built from a dict in the same function",
     ("goldbot/data/news.py", "score_batch", "HeadlineScore"): "not persisted: the LLM's answer, validated strictly",

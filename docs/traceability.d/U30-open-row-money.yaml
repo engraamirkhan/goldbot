@@ -1,0 +1,5 @@
+id: U30
+requirement: 'Money on every open row (backlog 128; trades-ux A1): the engine publishes its USD -> account rate and when it was read; every GBP open row has floating P&L, risk at entry and open risk in pounds; a rate older than 120 s is shown stale; rows carry account label, kind, family label, time held and hold limit'
+status: 'implemented; open P&L is at the mid from the fill price, so it includes the entry spread but not commission or swap (charged at the close on these accounts); trading-safety review owed for the engine payload'
+code: 'goldbot/risk/open_risk.py (`published_fx`); goldbot/engine/runner.py (`_write_state`); goldbot/api/home_cards.py (`_position`, `_fx_age`)'
+test: 'tests/test_open_risk_heat.py (rate published, none without a position); tests/test_api_home_cards.py (every row has money, stale past 120 s, an arm row named by family and kind); tests/test_engine_store_golden.py (golden regenerated)'
