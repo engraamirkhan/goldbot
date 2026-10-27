@@ -6371,6 +6371,30 @@
     "title": "RankFigures",
     "type": "object"
    },
+   "RankProgress": {
+    "description": "A row's progress to its next read: the unread read unit (config/arm_reads.yaml; a pooled family's unit where\nregistered) closest to its read, counted on the same ledger fills as the row (closed, evidence \"counted\").",
+    "properties": {
+     "n_counted": {
+      "title": "N Counted",
+      "type": "integer"
+     },
+     "n_read_at": {
+      "title": "N Read At",
+      "type": "integer"
+     },
+     "unit": {
+      "title": "Unit",
+      "type": "string"
+     }
+    },
+    "required": [
+     "unit",
+     "n_counted",
+     "n_read_at"
+    ],
+    "title": "RankProgress",
+    "type": "object"
+   },
    "RankRow": {
     "properties": {
      "accounts": {
@@ -6424,6 +6448,16 @@
        }
       ],
       "title": "Rank"
+     },
+     "read_progress": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/RankProgress"
+       },
+       {
+        "type": "null"
+       }
+      ]
      },
      "status": {
       "enum": [

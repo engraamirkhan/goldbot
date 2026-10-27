@@ -44,6 +44,7 @@ from goldbot.api.schema import (
     RankFigures,
     RankingView,
     RankingWindow,
+    RankProgress,
     RankRow,
     RankStatus,
     RankVariant,
@@ -337,6 +338,32 @@ def _fill(r: TradeRow, cat: Catalog, metas: dict[str, _Meta]) -> tuple[_Meta, _F
         style=meta[5])
 
 
+def _read_unit(arm: str, cat: Catalog) -> tuple[str, bool] | None:
+    """Where an arm's counted (admissible, closed) fills count toward a read, as labs.arm_statuses counts n: its read
+    unit, and whether only its stop exits count (S0R); None for a control or virtual exits on another arm's fills."""
+    info = cat.arm(arm)
+    if info is None:
+        return arm, False
+    if not info.counted or info.is_control:
+        return None
+    return cat.unit_of(arm), info.count == "stop_exits"
+
+
+def _progress(arms: Collection[str], kind: Kind, cat: Catalog, unit_n: dict[str, int]) -> RankProgress | None:
+    """The row's unread unit closest to its read (n counted of its read size)."""
+    if kind != "exploration":
+        return None
+    best: RankProgress | None = None
+    for u in sorted({cat.unit_of(a) for a in arms}):
+        size = next((cat.read_size(a) for a in arms if cat.unit_of(a) == u), None)
+        if u in cat.reads or not size:
+            continue
+        p = RankProgress(unit=u, n_counted=unit_n.get(u, 0), n_read_at=size)
+        if best is None or p.n_counted / p.n_read_at > best.n_counted / best.n_read_at:
+            best = p
+    return best
+
+
 def _window_lo(as_of: pd.Timestamp, days: int | None) -> float | None:
     """The first instant of the window's first opportunity day, epoch seconds; None for "all"."""
     if days is None:
@@ -358,9 +385,17 @@ def rank(rows: Iterable[TradeRow], cat: Catalog, as_of: pd.Timestamp, *, window:
     by_control: dict[str, list[_Fill]] = {}             # control arm -> its fills in the window (any style)
     metas: dict[str, _Meta] = {}
     choices: dict[str, str] = {}
+    unit_n: dict[str, int] = {}                         # read unit -> counted fills, every account (the read's n)
+    reads_to: dict[str, tuple[str, bool] | None] = {}   # arm -> (its read unit, counts stop exits only) or None
     for r in rows:
         if r.account is not None and r.kind in _ARM_KINDS | _ENGINE_KINDS:
             choices.setdefault(r.account, r.account_label)
+        arm = r.arm_id
+        if (arm is not None and r.kind == "exploration" and r.evidence == "counted" and r.exit_utc is not None
+                and r.exit_utc.timestamp() < hi):
+            to = reads_to[arm] if arm in reads_to else reads_to.setdefault(arm, _read_unit(arm, cat))
+            if to is not None and (not to[1] or r.exit_reason == "stop"):
+                unit_n[to[0]] = unit_n.get(to[0], 0) + 1
         if account is not None and r.account != account:
             continue
         got = _fill(r, cat, metas)
@@ -433,7 +468,8 @@ def rank(rows: Iterable[TradeRow], cat: Catalog, as_of: pd.Timestamp, *, window:
             style=styles[0][0] if styles else (style or ""), kind=g.kind,
             timeframes=sorted({f.timeframe for f in g.fills}, key=_tf_key),
             accounts=sorted({f.account_label for f in g.fills}), band=band, rank=None,
-            unranked_reason=_why(fig) if band == "too_few" else None, status=status, figures=fig, variants=variants))
+            unranked_reason=_why(fig) if band == "too_few" else None, status=status,
+            read_progress=_progress(strat, g.kind, cat, unit_n), figures=fig, variants=variants))
     ranked = [r for r in built if r.band == "ranked"]
     k = len(ranked)
     for row in ranked:

@@ -24,7 +24,8 @@ ROOT = Path(__file__).parents[1]
 
 
 def _info(arm: str, family: str, tf: str = "15m", **kw: Any) -> ArmInfo:
-    return ArmInfo(arm_id=arm, family=family, timeframe=tf, style=kw.pop("style", "intraday"), unit=arm, **kw)
+    return ArmInfo(arm_id=arm, family=family, timeframe=tf, style=kw.pop("style", "intraday"), unit=kw.pop("unit", arm),
+                   **kw)
 
 
 def _cat(*infos: ArmInfo, reads: dict[str, ArmRead] | None = None) -> Catalog:
@@ -327,3 +328,21 @@ def test_one_arm_read_and_another_stopped_unread_takes_the_recorded_verdict():
     rows = [*_spread("A1", [0.2] * 30, 10), *_spread("A2", [-0.5] * 10, 10, tf="1h")]
     row = _by(sr.rank(rows, cat, NOW, retired={"A2"}), "alpha")
     assert row.status == "candidate" and row.band != "retired"
+
+
+def test_read_progress_counts_the_rows_own_counted_fills_on_its_read_unit():
+    """UI review: a family with 12 fills never reads "0 of 300 to the read"; progress counts the same counted fills,
+    on the read unit of config/arm_reads.yaml, the unread unit closest to its read."""
+    rows = [*_spread("A1", [0.2] * 12, 6), _row("A1", 0.4, day=2, evidence="censored")]
+    p = _by(sr.rank(rows, CAT, NOW), "alpha").read_progress
+    assert p is not None and (p.unit, p.n_counted, p.n_read_at) == ("A1", 12, 300)
+
+
+def test_read_progress_of_a_pooled_family_counts_every_counted_arm_of_its_unit_on_any_account():
+    pooled = _cat(_info("A1", "alpha", unit="U1"), _info("A2", "alpha", "1h", unit="U1"),
+                  _info("C1", "random_bracket", is_control=True, read_n=None))
+    rows = [*_spread("A1", [0.2] * 10, 5), *_spread("A2", [0.1] * 7, 7, tf="1h", account="vantage-demo")]
+    p = sr.rank(rows, pooled, NOW, account="icm-demo").rows[0].read_progress
+    assert p is not None and (p.unit, p.n_counted) == ("U1", 17)
+    read = _cat(*pooled.arms.values(), reads={"U1": ArmRead(read_utc=NOW, verdict="no edge")})
+    assert sr.rank(rows, read, NOW).retired[0].read_progress is None          # read: no progress to show

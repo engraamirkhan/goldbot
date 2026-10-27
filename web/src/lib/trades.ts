@@ -128,13 +128,6 @@ export function edgeWords(f: RankFigures): string {
   if (f.edge_vs_control_r == null) return "—";
   return `${signedR(f.edge_vs_control_r)} (${f.edge_source ?? "interim"}${f.edge_ci ? `, ${ci(f.edge_ci, f.edge_ci_level ?? 0.95)}` : ""})`;
 }
-/** The unread read unit closest to its read: a ranked family's progress bar (n of its read size). */
-export function familyProgress(f: BoardFamily | undefined): { n: number; size: number } | null {
-  if (!f) return null;
-  const units = [...f.pooled.filter((p) => !p.read && p.n_read_at).map((p) => ({ n: p.n_counted, size: p.n_read_at! })),
-    ...f.variants.filter((v) => !v.pooled && !v.is_control && !v.read && v.n_read_at).map((v) => ({ n: v.n_counted, size: v.n_read_at! }))];
-  return units.sort((a, b) => b.n / b.size - a.n / a.size)[0] ?? null;
-}
 export const pfWords = (f: RankFigures) => (f.no_losses ? "no losses yet" : f.profit_factor == null ? "—" : f.profit_factor.toFixed(2));
 export const trendWords = (f: RankFigures) =>
   `7${NBSP}d ${signedR(f.last_7d.net_r_per_trade)} (n${NBSP}${f.last_7d.n}) · 30${NBSP}d ${signedR(f.last_30d.net_r_per_trade)} (n${NBSP}${f.last_30d.n})${f.trend ? ` · ${f.trend}` : ""}`;
