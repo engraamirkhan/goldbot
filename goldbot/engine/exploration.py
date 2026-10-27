@@ -801,11 +801,19 @@ def shares(ex: Exploration, now: pd.Timestamp) -> dict[str, float]:
     return out
 
 
+class StopRulesUnreadable(RuntimeError):
+    """config/arm_stops.yaml is missing or invalid: no exploration entry goes out (its own refusal reason)."""
+
+
 def _cost_scale(ex: Exploration) -> dict[str, float]:
     """The H-81 cost stop's scale of each registered stratum this host runs, below 1 only (`shares`); the scales last
-    read on a read error. No registered stratum here: nothing is read."""
+    read on a ledger read error. No registered stratum here: nothing is read. An unreadable rules file raises
+    `StopRulesUnreadable` (fail closed: the stops cannot be known)."""
     from goldbot.research.arm_stops import COST_SCALE, cost_states, load_stop_rules
-    rules = load_stop_rules()
+    try:
+        rules = load_stop_rules()
+    except (OSError, ValueError) as exc:
+        raise StopRulesUnreadable(type(exc).__name__) from exc
     mine = set(ex.arms) & set(rules.cost_stop.arms)
     if not mine:
         return {}
@@ -1044,6 +1052,11 @@ def _enter(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
         return
     try:
         ps = _Pass(eng, ex, now)
+    except StopRulesUnreadable as exc:
+        log.warning("exploration stop rules unreadable (%s): no exploration entry", exc)
+        eng.decisions.append({"ts": now.isoformat(), "agent": None,
+                              "action": "exploration_refused:stop_rules_unreadable"})
+        return
     except Exception as exc:
         log.warning("exploration ledger unreadable (%s): no exploration entry", type(exc).__name__)
         eng.decisions.append({"ts": now.isoformat(), "agent": None, "action": "exploration_refused:ledger_unreadable"})
@@ -1176,6 +1189,11 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     ps.why = None
     if pid in eng.sent_ids:
         ps.why = "duplicate"
+        return "refused"
+    if ex.cost_scale.get(arm.arm_id) == 0.0:
+        # H-81 cost stop above 0.20: suspended. Refused before any room check, so no first-trade-of-the-day bypass
+        # (trading-safety 2026-10-27 b); the daily review records the suspension for good
+        refuse("cost_suspended")
         return "refused"
     terms = eng._sizing_terms(side, price, stop_d, cycle=s.bar_ts)
     lot = terms.get("volume_min")

@@ -48,7 +48,7 @@ import logging
 import re
 import sqlite3
 import sys
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -652,6 +652,28 @@ def _arm_health(db: Database, hosts: Mapping[str, str], hi: pd.Timestamp, store:
     return out, controls - followers, why
 
 
+def _family_members(health: Mapping[str, Mapping[str, Health]], why: Mapping[tuple[str, str], str],
+                    controls: Collection[str]) -> dict[str, str]:
+    """Every member of a stopped unit, and every control that stops with one, with the rule that stopped it: retired
+    on EVERY broker reviewed, fills or not ("a family continues or stops as a whole", arms-expansion 2.1 (4), Z 4), so
+    a stratum with no fill yet (Z3V/Z5V before stage V2) never trades inside a stopped family (quant and
+    trading-safety review 2026-10-27)."""
+    rules = load_stop_rules()
+    out: dict[str, str] = {}
+    for broker, arms in health.items():
+        for arm, h in arms.items():
+            name = rules.unit_of(arm)
+            if h != "breached" or arm in controls or name is None:
+                continue
+            members = rules.units[name].arms
+            for m in members:
+                out.setdefault(m, why[(broker, arm)])
+            for f, lead in rules.follows.items():
+                if lead in members:
+                    out.setdefault(f, FOLLOW_RULE)
+    return out
+
+
 def _cost_suspended(db: Database, hosts: Mapping[str, str], hi: pd.Timestamp) -> dict[str, set[str]]:
     """Per broker: the H-81 strata whose cost stop suspends them (Z 4: "Above 0.20 it is suspended until a dated
     amendment"), from their fills sent before `hi`. A halved share is the engine's (`exploration.shares`), not here."""
@@ -941,9 +963,11 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
     health, controls, why = _arm_health(db, hosts, hi, store)
     suspended = _cost_suspended(db, hosts, hi)
     retired: list[Retirement] = []
+    family = _family_members(health, why, controls)
     for broker, arms in health.items():
         already = retired_arms(db, broker)
         stops = {a: why[(broker, a)] for a, h in arms.items() if h == "breached" and a not in controls}
+        stops |= {a: r for a, r in family.items() if a not in stops}
         stops |= {a: COST_RULE for a in sorted(suspended.get(broker, set()) - set(stops) - controls)}
         for arm, rule in stops.items():         # a control is never retired (F1C/G1C only with their arm)
             if arm not in already and (dry_run or retire(db, broker=broker, arm_id=arm, day=day, now=now,

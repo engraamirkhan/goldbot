@@ -14,14 +14,18 @@
 #   Z   = prereg-2026-10-27-scalp-volume.md 4 (H-81): W2's rule, the family pooled across its strata and brokers, the
 #         read "at the 300th admissible family fill on >= 20 session days"; plus the per-stratum cost stop below.
 #   TS  = prereg-2026-10-26-time-structure.md 2.2 / 3.2: H-61's stop plus futility (F1A at 300 and 1,000, G1A at 300);
-#         "F1C stops with" F1A, "G1C stops with" G1A.
+#         "F1C stops with" F1A, "G1C stops with" G1A; 4: WFRI's 26-Friday safety check beside H-61's swing stop.
 #   H-80 = prereg-exits-adaptive-2026-10-26.md 5 R1: "the H-61 per-arm cumulative-R stop ... unchanged" (BXR*).
 #
 # `units`: a stop unit (a family, or one arm) -> its arms, pooled in exit order across every account and broker.
 #   stop_r / within: the unit stops when its running net R reaches stop_r within its first `within` admissible fills.
+#   safety: a one-off check at the `at`-th fill (every fill): stop when the mean net bp is <= mean_bp_le or the
+#     cumulative net R <= cum_r_le.
 #   futility_at: the read sizes at which the futility stop is tested (empty: none registered). At each, over the
 #     unit's first n COUNTED fills (evidence exclusions left out, as in the read), the unit stops when the one-sided
 #     95% upper bound of the mean net R (SE clustered by UTC exit day, CR1) is below futility_ub.
+#   Futility weights each stratum equally (arms-expansion 2.1 (2)): the mean of the strata's means, its SE from the
+#     stacked fills clustered by day with weights 1 / (S x n_s). The R stop sums every fill.
 #   min_days: the read waits until its fills span this many UTC days (the n grows until they do); 0 = no condition.
 units:
   # ------------------------------------------------------------------ W1 (arms-expansion-2026-10-26.md 2.1)
@@ -61,6 +65,9 @@ units:
   # ------------------------------------------------------------------ TS (prereg-2026-10-26-time-structure.md)
   F1A: {arms: [F1A], stop_r: -30.0, within: 300, futility_at: [300, 1000], source: TS}
   G1A: {arms: [G1A], stop_r: -15.0, within: 100, futility_at: [300], source: TS}
+  # TS 4 (H-72): H-61's swing stop, and "At 26 Fridays: safety check only. Stop if the mean <= -20 bp per Friday or the
+  # cumulative net <= -10 R" (one fill a Friday; the mean is the net return over the entry notional), first to fire
+  WFRI: {arms: [WFRI], stop_r: -10.0, within: 40, safety: {at: 26, mean_bp_le: -20.0, cum_r_le: -10.0}, source: TS}
 
 # A control that stops with its arm (TS 2.2 / 3.2): never a stop of its own, retired the day its leader is.
 follows:
@@ -68,10 +75,9 @@ follows:
   G1C: G1A
 
 # HV per-arm stop by style (telegram.labs ARM_STOP), unchanged. Listed so every arm of the spec is classified once
-# (tests/test_arm_stops.py); an arm in no list also falls back to it. WFRI: its own safety stop at 26 Fridays (TS 4)
-# is not implemented here yet; H-61's swing stop stands for it meanwhile.
+# (tests/test_arm_stops.py); an arm in no list also falls back to it.
 h61: [S1A, S1B, S2A, S2B, S3A, S3B, S4, S5A, S5B, S6, I1, I2A, I2B, MB15, MB30, MB1H, MSA15, I3, W1A, W1B, W2, W3,
-      VI2A, VI2B, VMB15, VMB30, VMB1H, VMS15, VW1A, VW1B, VW2, BXR15, BXR30, BXR1H, BXR4H, WFRI,
+      VI2A, VI2B, VMB15, VMB30, VMB1H, VMS15, VW1A, VW1B, VW2, BXR15, BXR30, BXR1H, BXR4H,
       VS1A, VS1B, VS2A, VS2B, VS3A, VS3B, VS5A, VS5B]
 
 # No stop: the controls (the null; HV amendment 3, Z 4, arms 8.9) and the virtual twins BXT/BXF (H-80: scored on

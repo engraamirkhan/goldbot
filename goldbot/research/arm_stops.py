@@ -26,7 +26,7 @@ import sqlite3
 from collections.abc import Collection, Sequence
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, NamedTuple
 
 import pandas as pd
 import yaml
@@ -43,6 +43,23 @@ CostState = Literal["ok", "halved", "suspended"]
 COST_SCALE: dict[str, float] = {"ok": 1.0, "halved": 0.5, "suspended": 0.0}
 
 
+class Safety(FrozenRecord):
+    """time-structure 4 (WFRI): "At 26 Fridays: safety check only. Stop if the mean <= -20 bp per Friday or the
+    cumulative net <= -10 R." Checked once, at the `at`-th admissible fill (every fill, as the R stop counts them)."""
+    at: int = Field(gt=0)
+    mean_bp_le: float
+    cum_r_le: float
+
+
+class Fill(NamedTuple):
+    """One admissible fill of a unit, in exit order."""
+    r: float                                    # net R (pnl / the loss at the gate's stop)
+    at: pd.Timestamp                            # its exit
+    counted: bool                               # counted toward the read (not void as evidence)
+    arm: str                                    # its stratum
+    bp: float | None = None                     # net return in basis points of the entry notional
+
+
 class StopUnit(FrozenRecord):
     """One stop unit: a family (or one arm) whose admissible fills are pooled in exit order."""
     arms: tuple[str, ...] = Field(min_length=1)
@@ -51,6 +68,7 @@ class StopUnit(FrozenRecord):
     futility_at: tuple[int, ...] = ()           # read sizes the futility stop is tested at (none: not registered)
     futility_ub: float = 0.03                   # stop when the one-sided 95% UB of the mean net R is below this
     min_days: int = Field(0, ge=0)              # the read waits until its fills span this many UTC days
+    safety: Safety | None = None                # a one-off safety check at a fill count (WFRI, time-structure 4)
     source: str
 
 
@@ -88,30 +106,54 @@ class StopRules(FrozenRecord):
 
 @lru_cache(maxsize=4)
 def _load(path: str, mtime_ns: int) -> StopRules:
-    return StopRules.model_validate(yaml.safe_load(Path(path).read_text()) or {})
+    try:
+        raw = yaml.safe_load(Path(path).read_text()) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{path}: not YAML ({type(exc).__name__})") from exc
+    return StopRules.model_validate(raw)
 
 
-def load_stop_rules(path: str | Path = RULES_PATH) -> StopRules:
-    """The rules file (cached until it changes on disk)."""
-    p = Path(path)
+def load_stop_rules(path: str | Path | None = None) -> StopRules:
+    """The rules file (cached until it changes on disk). Raises (OSError, ValueError) when it is missing or invalid."""
+    p = Path(path if path is not None else RULES_PATH)
     return _load(str(p), p.stat().st_mtime_ns)
 
 
-def upper_bound(values: Sequence[float], days: Sequence[pd.Timestamp], z: float = Z95) -> float | None:
-    """One-sided upper bound of the mean: mean + z x SE, SE clustered by UTC day (CR1, G/(G-1)). None below 2 days."""
+def upper_bound(values: Sequence[float], days: Sequence[pd.Timestamp], strata: Sequence[str] | None = None,
+                z: float = Z95) -> float | None:
+    """One-sided upper bound of the mean: mean + z x SE, SE clustered by UTC day (CR1, G/(G-1)). None below 2 days.
+    With `strata` the mean is the equal-weight mean of the strata's means (arms-expansion 2.1 (2): "Each stratum's
+    mean is weighted equally (not by fill count) ... The SE comes from the stacked fills, clustered by UTC day across
+    all strata, with equal stratum weights"): fill i weighs 1 / (S x n_s), its influence w_i (x_i - mean_s) summed by
+    day."""
     n = len(values)
-    if n == 0 or n != len(days):
+    if n == 0 or n != len(days) or (strata is not None and len(strata) != n):
         return None
-    mean = math.fsum(values) / n
+    keys = list(strata) if strata is not None else [""] * n
+    count: dict[str, int] = {}
+    total: dict[str, float] = {}
+    for v, k in zip(values, keys, strict=True):
+        count[k] = count.get(k, 0) + 1
+        total[k] = total.get(k, 0.0) + v
+    means = {k: total[k] / count[k] for k in count}
+    centre = math.fsum(means.values()) / len(means)
     sums: dict[object, float] = {}
-    for v, d in zip(values, days, strict=True):
-        key = pd.Timestamp(d).tz_convert("UTC").date()
-        sums[key] = sums.get(key, 0.0) + (v - mean)
+    for v, d, k in zip(values, days, keys, strict=True):
+        day = pd.Timestamp(d).tz_convert("UTC").date()
+        sums[day] = sums.get(day, 0.0) + (v - means[k]) / (len(means) * count[k])
     g = len(sums)
     if g < 2:
         return None
-    var = g / (g - 1) * math.fsum(s * s for s in sums.values()) / (n * n)
-    return mean + z * math.sqrt(var)
+    var = g / (g - 1) * math.fsum(x * x for x in sums.values())
+    return centre + z * math.sqrt(var)
+
+
+def net_bp(t: ExplorationRecord, oz_per_lot: float = 100.0) -> float | None:
+    """A fill's net return in basis points of its entry notional: the broker's net pnl over lots x oz x fill price in
+    the account currency (None without the pnl, the fill or the rate)."""
+    if t.pnl is None or t.fill_price is None or not t.fx_acct_per_usd or t.lots <= 0:
+        return None
+    return 1e4 * t.pnl / (t.lots * oz_per_lot * t.fill_price * t.fx_acct_per_usd)
 
 
 class UnitStop(FrozenRecord):
@@ -120,32 +162,40 @@ class UnitStop(FrozenRecord):
     stop_at: int | None = None
     stop_utc: pd.Timestamp | None = None
     stop_r: float | None = None                 # the running R at an R stop; None at a futility stop (a read)
-    why: Literal["r", "futility"] | None = None
+    why: Literal["r", "futility", "safety"] | None = None
 
 
-def unit_stop(unit: StopUnit, rows: Sequence[tuple[float, pd.Timestamp, bool]], band_share: float = 0.5) -> UnitStop:
-    """`rows`: the unit's admissible fills in exit order as (net R, exit, counted toward the read). The first of its R
-    stop (every fill) and its futility reads (counted fills only) that fires; else its band."""
+def unit_stop(unit: StopUnit, rows: Sequence[Fill], band_share: float = 0.5) -> UnitStop:
+    """`rows`: the unit's admissible fills in exit order. The first of its R stop (every fill), its safety check
+    (every fill) and its futility reads (counted fills only, strata weighted equally) that fires; else its band."""
     run, hit = 0.0, None
-    for i, (r, at, _) in enumerate(rows[:unit.within], 1):
-        run += r
+    for i, f in enumerate(rows[:unit.within], 1):
+        run += f.r
         if run <= unit.stop_r + 1e-9:
-            hit = UnitStop(band="at_stop", stop_at=i, stop_utc=at, stop_r=run, why="r")
+            hit = UnitStop(band="at_stop", stop_at=i, stop_utc=f.at, stop_r=run, why="r")
             break
+    sc = unit.safety
+    if sc is not None and len(rows) >= sc.at and (hit is None or (hit.stop_at or 0) > sc.at):
+        first = rows[:sc.at]
+        cum = math.fsum(f.r for f in first)
+        bps = [f.bp for f in first if f.bp is not None]
+        bad_mean = len(bps) == sc.at and math.fsum(bps) / sc.at <= sc.mean_bp_le + 1e-9
+        if bad_mean or cum <= sc.cum_r_le + 1e-9:
+            hit = UnitStop(band="at_stop", stop_at=sc.at, stop_utc=first[-1].at, why="safety")
     for size in unit.futility_at:
-        vals: list[float] = []
-        days: list[pd.Timestamp] = []
-        for i, (r, at, counted) in enumerate(rows, 1):
-            if hit is not None and hit.stop_utc is not None and at > hit.stop_utc:
+        read: list[Fill] = []
+        seen: set[object] = set()
+        for i, f in enumerate(rows, 1):
+            if hit is not None and hit.stop_utc is not None and f.at > hit.stop_utc:
                 break
-            if not counted:
+            if not f.counted:
                 continue
-            vals.append(r)
-            days.append(at)
-            if len(vals) >= size and len({d.date() for d in days}) >= unit.min_days:
-                ub = upper_bound(vals, days)
+            read.append(f)
+            seen.add(f.at.date())
+            if len(read) >= size and len(seen) >= unit.min_days:
+                ub = upper_bound([x.r for x in read], [x.at for x in read], [x.arm for x in read])
                 if ub is not None and ub < unit.futility_ub:
-                    hit = UnitStop(band="at_stop", stop_at=i, stop_utc=at, why="futility")
+                    hit = UnitStop(band="at_stop", stop_at=i, stop_utc=f.at, why="futility")
                 break                               # one read at this size: the first point it is due
     if hit is not None:
         return hit
@@ -183,5 +233,5 @@ def cost_states(conn: sqlite3.Connection, arms: Collection[str], *, until: pd.Ti
     return {a: cost_state(rows, rules.cost_stop) for a, rows in by_arm.items()}
 
 
-__all__ = ["COST_SCALE", "RULES_PATH", "CostState", "CostStop", "StopRules", "StopUnit", "UnitStop", "cost_state",
-           "cost_states", "load_stop_rules", "unit_stop", "upper_bound"]
+__all__ = ["COST_SCALE", "RULES_PATH", "CostState", "CostStop", "Fill", "Safety", "StopRules", "StopUnit", "UnitStop",
+           "cost_state", "cost_states", "load_stop_rules", "net_bp", "unit_stop", "upper_bound"]

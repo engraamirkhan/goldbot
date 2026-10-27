@@ -65,7 +65,9 @@ def test_a_w1_family_stops_on_its_pooled_minus_30_r_within_300_fills_and_every_m
     assert st["XIMNY"].band == st["XIMLN"].band == "at_stop"
     assert st["XIMLN"].stop_at == 30                                    # the family's pooled fill count
     review = _run(tmp_path)
-    assert {(r.broker, r.arm_id) for r in review.retired} == {("icm", "XIMNY"), ("icm", "XIMLN")}
+    # a family stops as a whole: every member on every broker reviewed (fills or not)
+    assert {(r.broker, r.arm_id) for r in review.retired} == {(b, a) for b in ("icm", "vantage")
+                                                              for a in ("XIMNY", "XIMLN")}
 
 
 def test_a_w1_family_one_r_short_of_its_stop_is_not_stopped(tmp_path):
@@ -93,7 +95,8 @@ def test_a_z_family_pools_its_strata_across_brokers_and_stops_on_both(tmp_path):
     assert _status(tmp_path, ["icm-demo"])["Z3D"].band == "at_stop"
     assert _status(tmp_path, ["vantage-demo"])["Z3V"].band == "at_stop"
     review = _run(tmp_path)
-    assert {(r.broker, r.arm_id) for r in review.retired} == {("icm", "Z3D"), ("vantage", "Z3V")}
+    assert {(r.broker, r.arm_id) for r in review.retired} == {(b, a) for b in ("icm", "vantage")
+                                                              for a in ("Z3D", "Z3V")}
 
 
 def test_a_family_past_its_within_window_is_not_stopped_by_later_losses(tmp_path):
@@ -114,7 +117,7 @@ def test_futility_stops_a_w2_arm_at_its_300th_fill_when_the_upper_bound_is_below
     _fills(db, "OBR15", 1, pnls=[-0.05], start=START + pd.Timedelta(days=25), tag="last")
     st = _status(tmp_path, ["icm-demo"])["OBR15"]
     assert (st.band, st.stop_at, st.stop_r) == ("at_stop", 300, None)  # no R shown for a futility stop
-    assert [r.arm_id for r in _run(tmp_path).retired] == ["OBR15"]
+    assert {r.arm_id for r in _run(tmp_path).retired} == {"OBR15"}
 
 
 def test_futility_does_not_stop_a_w2_arm_whose_upper_bound_clears_three_hundredths_of_r(tmp_path):
@@ -249,7 +252,7 @@ def test_a_retirement_by_a_family_stop_is_the_same_entries_only_row_the_engine_r
     db = _db(tmp_path)
     _fills(db, "XIMNY", 30)
     _run(tmp_path)
-    assert dr.retired_arms(db, "icm") == {"XIMNY"}
+    assert dr.retired_arms(db, "icm") == {"XIMNY", "XIMLN"}
 
 
 def test_a_cost_stop_read_error_keeps_the_scales_last_read(tmp_path, monkeypatch):
@@ -265,3 +268,87 @@ def test_a_cost_stop_read_error_keeps_the_scales_last_read(tmp_path, monkeypatch
     monkeypatch.setattr(arm_stops, "cost_states", down)
     eng.exploration.weights_cache = None
     assert exploration.shares(eng.exploration, CLOSE)["Z1P"] == pytest.approx(halved)
+
+
+# ---------------------------------------------------------------------------------------------- review round 1
+def test_futility_weights_each_stratum_equally_not_by_its_fill_count(tmp_path):
+    """arms-expansion 2.1 (2), arms 8.0, Z 4: "Each stratum's mean is weighted equally (not by fill count)". PDC1's
+    270 fills at -0.05 R and PDC4's 30 at +0.5 R pool by fills to about +0.005 R (UB below +0.03 R: futile), but the
+    equal-weight mean is about +0.22 R: no futility stop."""
+    db = _db(tmp_path)
+    _fills(db, "PDC1", 270, pnls=[-0.04 if i % 2 else -0.06 for i in range(270)], days=20)
+    _fills(db, "PDC4", 30, pnls=[0.49 if i % 2 else 0.51 for i in range(30)], days=20, style="swing",
+           start=START + pd.Timedelta(hours=8))
+    st = _status(tmp_path, ["icm-demo"])
+    assert st["PDC1"].band != "at_stop" and st["PDC4"].band != "at_stop"
+
+
+def test_the_equal_weight_upper_bound_is_the_mean_of_the_stratum_means():
+    d1, d2 = pd.Timestamp("2026-10-01", tz="UTC"), pd.Timestamp("2026-10-02", tz="UTC")
+    vals, days, strata = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], [d1, d2] * 4, ["a", "a", "a", "a", "a", "a", "b", "b"]
+    ub = arm_stops.upper_bound(vals, days, strata)
+    pooled = arm_stops.upper_bound(vals, days)
+    assert ub is not None and pooled is not None
+    assert ub > pooled and ub >= (1 / 6 + 0.5) / 2           # centre: (a 1/6 + b 1/2) / 2, not 2/8 by fills
+
+
+def test_a_family_member_with_no_fills_is_retired_with_its_family_on_every_broker(tmp_path):
+    """Quant 2 / trading-safety c: Z3V (vantage, stage V2) has no fill when Z3 stops on Z3D's: it must never trade
+    inside a stopped family, so it is retired too."""
+    db = _db(tmp_path)
+    _fills(db, "Z3D", 30, style="scalp")
+    _fills(db, "XIMNY", 30)
+    retired = {(r.broker, r.arm_id) for r in _run(tmp_path).retired}
+    assert {("vantage", "Z3V"), ("icm", "Z3V"), ("icm", "XIMLN"), ("icm", "Z3D"), ("icm", "XIMNY")} <= retired
+
+
+def test_a_follower_with_no_fills_is_retired_with_its_arm(tmp_path):
+    _fills(_db(tmp_path), "F1A", 30, host="icm-probe", style="scalp")
+    assert ("icm", "F1C") in {(r.broker, r.arm_id) for r in _run(tmp_path).retired}
+
+
+def test_wfri_stops_at_its_26th_friday_when_the_mean_is_at_or_below_minus_20_bp(tmp_path):
+    """time-structure 4: "At 26 Fridays: safety check only. Stop if the mean <= -20 bp per Friday or the cumulative
+    net <= -10 R." -3.2 at 0.01 lot on $2,000.1 at 0.75 = -21.3 bp net a Friday; -0.16 R each, far from H-61's -10 R."""
+    db = _db(tmp_path)
+    _fills(db, "WFRI", 25, style="swing", pnl=-3.2, stop_loss=20.0, days=25)
+    assert _status(tmp_path, ["icm-demo"])["WFRI"].band != "at_stop"
+    _fills(db, "WFRI", 1, style="swing", pnl=-3.2, stop_loss=20.0, start=START + pd.Timedelta(days=30), tag="26")
+    st = _status(tmp_path, ["icm-demo"])["WFRI"]
+    assert (st.band, st.stop_at) == ("at_stop", 26)
+    assert {r.arm_id for r in _run(tmp_path).retired} == {"WFRI"}
+
+
+def test_wfri_above_minus_20_bp_at_26_fridays_runs_on_and_keeps_h61s_swing_stop(tmp_path):
+    db = _db(tmp_path)
+    _fills(db, "WFRI", 26, style="swing", pnl=-2.7, stop_loss=20.0, days=26)          # -18 bp
+    assert _status(tmp_path, ["icm-demo"])["WFRI"].band != "at_stop"
+    _fills(db, "WFRI", 10, style="swing", pnl=-20.0, stop_loss=20.0, start=START + pd.Timedelta(days=40), tag="b")
+    assert _status(tmp_path, ["icm-demo"])["WFRI"].band == "at_stop"                    # -10 R within 40
+
+
+def test_a_broken_stop_rules_file_refuses_exploration_entries_under_its_own_reason(tmp_path, monkeypatch):
+    from tests.test_exploration_engine import CLOSE, _arm, _at, _engine
+    eng, pb = _engine(tmp_path, [_arm("s1")])
+    bad = tmp_path / "arm_stops.yaml"
+    bad.write_text("units: {A: {arms: [X], stop_r: 5}}\n")
+    monkeypatch.setattr(arm_stops, "RULES_PATH", bad)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    acts = [str(d.get("action")) for d in eng.decisions]
+    assert "exploration_refused:stop_rules_unreadable" in acts
+    assert "exploration_refused:ledger_unreadable" not in acts and not pb.positions()
+
+
+def test_a_suspended_stratum_is_refused_every_entry_including_the_days_first(tmp_path, monkeypatch):
+    from goldbot.engine import cost_probe
+    from goldbot.research import arm_rules
+    from tests.test_exploration_engine import CLOSE, LONG, LOSS, _arm, _at, _engine, _rule
+    monkeypatch.setitem(arm_rules.RULE_FUNCS, LONG, _rule(1))
+    monkeypatch.setattr(cost_probe, "stop_loss", lambda *a, **k: LOSS)
+    eng, pb = _engine(tmp_path, [_arm("Z1P", style="scalp")])
+    assert eng.exploration is not None
+    _fills(eng.exploration.db, "Z1P", 30, host="icm-probe", style="scalp", pnl=0.5, cost=0.25, days=5,
+           start=pd.Timestamp("2025-02-01 09:00", tz="UTC"))
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert not pb.positions()
+    assert "exploration_refused:cost_suspended" in [str(d.get("action")) for d in eng.decisions]
