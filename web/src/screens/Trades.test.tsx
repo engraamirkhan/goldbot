@@ -26,7 +26,6 @@ function renderTab(tab: TradesTab, route: Partial<Route> = {}, go = vi.fn()) {
   free("limits", { generated_utc: "2026-10-27T09:00:00Z", error: null, supervisor: {}, accounts: [] });
   free("trades", tradesPage());
   free("trade", tradeRow());
-  free("tradeBars", bars());
   free("strategyBoard", board());
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const r: Route = { section: "trades", tab, sub: null, query: "", ...route };
@@ -48,9 +47,11 @@ describe("Trades > Now (128, 130)", () => {
     expect(row.textContent).toContain(`22${NB}min of 2${NB}h`);
     expect(screen.queryByText(/not known/)).toBeNull();
     const scalp = screen.getByRole("region", { name: "Open trades Scalp lab" });
-    expect(scalp).toHaveTextContent("2 open · risk £3.10 · +£0.50");
+    expect(scalp).toHaveTextContent("2 open · risk £3.10 · P&L now +£2.10");    // the broker's account figure, not a sum of rows
     expect(within(scalp).getByText("CONTROL")).toBeInTheDocument();             // kind in a word, not a colour
-    expect(screen.getByRole("group", { name: "Open now summary" })).toHaveTextContent("Open now · 3 trades · risk £8.50 · P&L now +£3.90");
+    expect(screen.getByRole("group", { name: "Open now summary" })).toHaveTextContent("Open now · 3 trades · risk £8.50");
+    expect(screen.getByRole("group", { name: "Open now summary" })).not.toHaveTextContent("P&L");   // never summed across accounts
+    expect(screen.getByRole("region", { name: "Open trades Day/swing lab" })).toHaveTextContent("P&L now £ —");   // no figure from the server
   });
 
   it("an unknown rate is a dash on the row and '(no rate)' once on the group, never 'not known'", async () => {
@@ -61,15 +62,16 @@ describe("Trades > Now (128, 130)", () => {
     const scalp = await screen.findByRole("region", { name: "Open trades Scalp lab" });
     expect(within(scalp).getAllByText("(no rate)")).toHaveLength(1);
     expect(screen.queryByText(/not known/)).toBeNull();
-    expect(screen.getByRole("group", { name: "Open now summary" })).toHaveTextContent(`P&L now £ —`);
   });
 
-  it("filters by account and opens a trade", async () => {
+  it("filters by account; an engine position opens its trade, an arm's opens the List filtered to it", async () => {
     const { go } = renderTab("now");
     fireEvent.change(await screen.findByRole("combobox", { name: "Account" }), { target: { value: "icm-probe" } });
     expect(screen.queryByRole("region", { name: "Open trades Day/swing lab" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Opening range 5m, long/ }));
+    expect(go).toHaveBeenCalledWith("trades", "now", "position:icm-probe:3", "", { keepScroll: true });
     fireEvent.click(screen.getByRole("button", { name: /Random control \(scalp\) 1m, short/ }));
-    expect(go).toHaveBeenCalledWith("trades", "now", "control:icm-probe:2", "", { keepScroll: true });
+    expect(go).toHaveBeenCalledWith("trades", "list", null, "acct=icm-probe&fam=random_bracket&status=open");
   });
 
   it("empty, error: words that say trading goes on", async () => {
@@ -97,39 +99,45 @@ describe("Trades > List (130)", () => {
     expect(row.textContent).toContain("Close above the 15m box after a squeeze");
     expect(within(list).getByText("CONTROL")).toBeInTheDocument();
     expect(within(list).getByText("COST PROBE")).toBeInTheDocument();
-    expect(screen.getByText("412 trades · net +£18.40 after costs · costs £22.10")).toBeInTheDocument();
+    expect(screen.getByText("412 trades (3 open) · net +£18.40 after costs · costs £22.10 · open risk £8.50")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Load 50 more" })).toBeInTheDocument();
   });
 
   it("sends the URL's filters to the API and writes chip changes back to the URL", async () => {
     const { go } = renderTab("list", { query: "acct=icm-probe&fam=box_break_close" });
     await screen.findByRole("list", { name: "Trades" });
-    expect(apiModule.api.trades).toHaveBeenCalledWith(expect.stringMatching(/acct=icm-probe.*fam=box_break_close/));
+    expect(apiModule.api.trades).toHaveBeenCalledWith(expect.stringMatching(/account=icm-probe.*family=box_break_close/));
     fireEvent.click(await screen.findByRole("button", { name: "Remove filter Scalp lab" }));
     expect(go).toHaveBeenCalledWith("trades", "list", null, "fam=box_break_close", { replace: true, keepScroll: true });
   });
 
-  it("a partly-read family's filter is blinded: no net, no R, and the reason in words (ADR 0050)", async () => {
+  it("a filter narrowed to unread arms is withheld as served: counts only, rows blinded, the server's reason (ADR 0050)", async () => {
     vi.spyOn(apiModule.api, "trades").mockResolvedValue(blindedPage());
     renderTab("list", { query: "fam=opening_range" });
-    expect(await screen.findByText("64 trades · costs £3.20")).toBeInTheDocument();
-    expect(screen.getByText(/Results hidden: this view holds 1 unread arm \(fewer than 3\)/)).toBeInTheDocument();
+    expect(await screen.findByText("64 trades")).toBeInTheDocument();
+    expect(screen.getByText(/Totals hidden: the filter narrows to strategies whose arms are not read yet/)).toBeInTheDocument();
     const list = screen.getByRole("list", { name: "Trades" });
     expect(list).toHaveTextContent("hidden");
     expect(list).not.toHaveTextContent(/[+−]£/);
     expect(list).not.toHaveTextContent(/\d R/);
   });
 
-  it("falls back to the activity feed while the server has no ledger (404), and says so", async () => {
-    vi.spyOn(apiModule.api, "trades").mockRejectedValue(new apiModule.ApiError(404, "Not Found"));
+  it("names an unreadable source: its trades are missing, not zero", async () => {
+    vi.spyOn(apiModule.api, "trades").mockResolvedValue(tradesPage({ unreadable: ["exploration"] }));
     renderTab("list");
-    expect(await screen.findByText(/doesn't serve the trade list yet/)).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Activity feed" })).toBeInTheDocument();
+    expect(await screen.findByText(/Couldn't read exploration trades: those trades are missing from this list and its totals, not zero/)).toBeInTheDocument();
+  });
+
+  it("an error says trading goes on and offers a retry", async () => {
+    vi.spyOn(apiModule.api, "trades").mockRejectedValue(new apiModule.ApiError(500, "boom"));
+    renderTab("list");
+    expect(await screen.findByText("Couldn't load the trades.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
 
   it("no match: says so and offers to clear the filters", async () => {
     vi.spyOn(apiModule.api, "trades").mockResolvedValue(tradesPage({ rows: [], next_cursor: null,
-      totals: { n: 0, net_pnl: 0, costs: 0, currency: "GBP", blinded: false, unread_arms: 0, excluded: [] } }));
+      totals: { ...tradesPage().totals, n: 0, n_open: 0, n_closed: 0, net_pnl: null, costs: null } }));
     const { go } = renderTab("list", { query: "tf=4h" });
     fireEvent.click(await screen.findByRole("button", { name: "Clear filters" }));
     expect(go).toHaveBeenCalledWith("trades", "list", null, "", { replace: true, keepScroll: true });
@@ -137,22 +145,28 @@ describe("Trades > List (130)", () => {
 });
 
 describe("Trade detail (133)", () => {
-  it("explains one trade: chart levels in words and prices, why, closed by, costs that add up, evidence, ids under Details", async () => {
+  it("explains one trade: why, closed by, levels, costs that add up to gross minus net, evidence, ids under Details", async () => {
     renderTab("list", { sub: "exploration:icm-demo:41" });
     const d = await screen.findByRole("dialog", { name: "Trade detail" });
-    expect(await within(d).findByRole("img", { name: /target 4,024\.00, entry 4,012\.40, first stop 4,006\.10, last stop 4,012\.40, exit 4,024\.00/ })).toBeInTheDocument();
-    expect(d).toHaveTextContent("Close above the 15m box after a squeeze");
+    expect(await within(d).findByText("Close above the 15m box after a squeeze")).toBeInTheDocument();
     expect(d).toHaveTextContent(`target, after 32 min (hold limit 2 h) at 4,024.00 USD/oz`);
-    expect(d).toHaveTextContent(`spread £0.18 · slippage £0.02 · commission £0.07 · swap £0.00 = £0.27 (0.19 R)`);
-    expect(d).toHaveTextContent("counted toward the read (213 of 300)");
+    expect(d).toHaveTextContent(`spread £0.18 · slippage +£0.02 · commission £0.07 · swap £0.00 = £0.27 · gross +£2.37`);
+    expect(d).toHaveTextContent("counted toward the read");
     expect(within(d).getByText("Details")).toBeInTheDocument();
+    expect(apiModule.api.trade).toHaveBeenCalledWith("exploration:icm-demo:41");
   });
 
-  it("a trade without bars shows the missing-bars state, not an empty chart", async () => {
-    vi.spyOn(apiModule.api, "tradeBars").mockRejectedValue(new apiModule.ApiError(404, "Not Found"));
+  it("no bars are served yet: the missing-bars state with the levels in words, not an empty chart", async () => {
     renderTab("list", { sub: "exploration:icm-demo:41" });
     expect(await screen.findByText("Bars for this period aren't stored yet.")).toBeInTheDocument();
+    expect(screen.getByText("first stop 4,006.10 USD/oz")).toBeInTheDocument();
     expect(screen.queryByRole("img", { name: /Chart of/ })).toBeNull();
+  });
+
+  it("a trade the ledger doesn't hold (404) says so", async () => {
+    vi.spyOn(apiModule.api, "trade").mockRejectedValue(new apiModule.ApiError(404, "no such trade"));
+    renderTab("list", { sub: "position:icm-demo:999" });
+    expect(await screen.findByText("This trade isn't in the ledger.")).toBeInTheDocument();
   });
 
   it("a blinded arm's single trade still shows its own result", async () => {
@@ -171,9 +185,9 @@ describe("Trade detail (133)", () => {
 
   it("the chart puts the entry and exit markers on the right bars", () => {
     const b = bars();
-    const t = tradeRow({ opened_utc: b.bars[10].t, exit_utc: b.bars[20].t });
-    const { container } = wrap(<TradeChart trade={t} bars={b.bars} loading={false} height={200} />);
-    expect(container.querySelectorAll("rect.up, rect.down")).toHaveLength(b.bars.length);
+    const t = tradeRow({ opened_utc: b[10].t, exit_utc: b[20].t });
+    const { container } = wrap(<TradeChart trade={t} bars={b} loading={false} height={200} />);
+    expect(container.querySelectorAll("rect.up, rect.down")).toHaveLength(b.length);
     expect(container.querySelector("path.marker.entry")).not.toBeNull();
     expect(container.querySelector("circle.marker.exit")).not.toBeNull();
     expect(container.textContent).toContain("target 4,024.00");
@@ -213,6 +227,13 @@ describe("Trades > Strategies (132, ADR 0050)", () => {
     expect(go).toHaveBeenCalledWith("trades", "list", null, "fam=box_break_close");
   });
 
+  it("while the board isn't served, says so and shows the engine strategies' summary", async () => {
+    vi.spyOn(apiModule.api, "strategyBoard").mockRejectedValue(new apiModule.ApiError(404, "not served by this server"));
+    renderTab("strategies");
+    expect(await screen.findByText(/The strategy board \(each arm's progress to its read\) isn't served yet/)).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Trades summary" })).toBeInTheDocument();
+  });
+
   it("engine strategies show full figures with n and a 90% CI", async () => {
     renderTab("strategies");
     const eng = await screen.findByRole("region", { name: "Engine strategies" });
@@ -227,13 +248,13 @@ describe("Trades > Today (131)", () => {
     const c = await screen.findByRole("region", { name: "Today Scalp lab" });
     expect(c).toHaveTextContent("Fills 148 of 200 · pace ~240 by day end");
     expect(within(c).getByRole("meter", { name: "Fills today against the target of 200" })).toBeInTheDocument();
-    expect(c).toHaveTextContent("Closed today: −£3.10 net after costs from 133 trades (costs £9.80)");
+    expect(c).toHaveTextContent("Closed today: −£3.10 net after costs (costs £9.80) · open +£2.10");
     expect(c).toHaveTextContent("Exploration −£4.20 (120 fills) · Control +£0.90 (20 fills) · Cost probe +£0.20 (8 fills)");
     expect(c).toHaveTextContent("Open: 15 trades · risk £18.20 · P&L now +£2.10");
     expect(c).toHaveTextContent("Caps: day £30.00 of £500.00 used · week £61.00 of £1,000.00 · exploration pot £30.00 of £150.00");
     expect(c.querySelectorAll(".day-strip rect")).toHaveLength(14);
     expect(c.querySelector(".day-strip line.target")).not.toBeNull();
-    expect(c).toHaveTextContent("Week to date+£12.40 after costs (spread £40.10 · commission £11.20 · swap −£0.40)");
+    expect(c).toHaveTextContent("Week to date+£12.40 after costs (spread £40.10 · slippage +£1.00 · commission £11.20 · swap −£0.40)");
     expect(c).not.toHaveTextContent("Quiet day");
   });
 
@@ -248,14 +269,34 @@ describe("Trades > Today (131)", () => {
     expect(cards[1]).toHaveTextContent("Quiet day: fewer trades is expected.");
   });
 
-  it("an older server (no new fields) shows today's money without inventing zeros", async () => {
-    vi.spyOn(apiModule.api, "today").mockResolvedValue({ as_of: "x", accounts: [{
-      account: "icm-demo", mode: "demo", currency: "GBP", day_pnl: 4, open_pnl: 1, closed_pnl: 3, closed_n: 2, closed_complete: true,
-      costs: null, loss_meter: null, age_s: 1, stale: false }] } as never);
+  it("an unknown net is 'incomplete: N trades without costs yet', never a full total", async () => {
+    const a = todayAccount({ net_today: null, net_unknown: 2, net_today_partial: -1.5,
+      month_to_date: { since: "2026-10-01", n: 3000, net_pnl: null, costs: null, withheld: false, net_unknown: 4, net_partial: 80 } });
+    vi.spyOn(apiModule.api, "today").mockResolvedValue({ as_of: "x", accounts: [a] });
     renderTab("today");
-    const c = await screen.findByRole("region", { name: "Today icm-demo" });
-    expect(c).toHaveTextContent("+£4.00");
-    expect(c).not.toHaveTextContent(/Fills|Caps|Week to date/);
+    const c = await screen.findByRole("region", { name: "Today Scalp lab" });
+    expect(c).toHaveTextContent("Closed today: net incomplete: 2 trades without costs yet (known trades −£1.50)");
+    expect(c).toHaveTextContent("Month to date3000 trades · net incomplete: 4 trades without costs yet (known trades +£80.00)");
+  });
+
+  it("money the server withholds (ADR 0050) says so in words; an unreadable source is named, never zero", async () => {
+    const a = todayAccount({
+      withheld: ["net_today", "costs_today", "exploration_pot_used", "week_to_date"], net_today: null, costs_today: null,
+      exploration_pot_used: null,
+      by_kind: { exploration: { fills: 120, closed: 110, net_pnl: null, costs: null, net_r: null, withheld: true, net_unknown: 0 } },
+      week_to_date: { since: "2026-10-26", n: 300, net_pnl: null, costs: null, withheld: true, net_unknown: 0 },
+      strip: todayAccount().strip!.map((d, i) => (i === 13 ? { ...d, net_pnl: null, costs: null, withheld: true } : d)),
+    });
+    vi.spyOn(apiModule.api, "today").mockResolvedValue({ as_of: "x", accounts: [a], unreadable: ["probes"] });
+    renderTab("today");
+    const c = await screen.findByRole("region", { name: "Today Scalp lab" });
+    expect(c).toHaveTextContent("Closed today: net hidden until the arms' reads");
+    expect(c).toHaveTextContent("Exploration hidden (120 fills)");
+    expect(c).toHaveTextContent("exploration pot hidden until the arms' reads");
+    expect(c).toHaveTextContent("Week to date300 trades · net hidden until the arms' reads");
+    expect(c.querySelectorAll(".day-strip rect")).toHaveLength(13);
+    expect(c).toHaveTextContent("h: hidden until the arms' reads");
+    expect(screen.getByText(/Couldn't read cost probes: those trades are missing from today's figures, not zero/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("region", { name: "Risk per trade" })).toBeInTheDocument());
   });
 });

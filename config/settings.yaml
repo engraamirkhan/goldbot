@@ -444,8 +444,10 @@ daily_review:                        # daily learning-ops review (goldbot/resear
   repo: engraamirkhan/goldbot
   weekly_proposals: 4                # Monday roll-up: at most 4 variant proposals for the research director (never run)
 trades_view:                         # trades screens' plan figures (goldbot/api/today_ledger.py, item 131); reporting only
-  fills_target: 200                  # fills a day per demo account (the high-volume plan's ~200 per lab); live accounts have none
-  fills_target_by_account: {}        # account id -> its own target
+  fills_target: 200                  # fills a day for a demo account not listed below; live accounts have none
+  # ADR 0049 D1/D1a step-1 targets (fills a day): icm-probe scalp 269 + probes 54; icm-demo under option B (separate
+  # pots, D1a); vantage-demo stage V1. Revisit with the ADR (icm-demo ~138 under option A, vantage ~130 at V2)
+  fills_target_by_account: {icm-probe: 323, icm-demo: 120, vantage-demo: 90}
   daily_target_share: 0.05           # ADR 0004: GBP 50 a day on the GBP 1,000 basis = 5% of the day's start equity, per account
   daily_target_by_account: {}        # account id -> a fixed daily target in the account currency (overrides the share)
   strip_days: 14                     # trading days in the Today tab's daily net strip

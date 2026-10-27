@@ -1,20 +1,19 @@
 // Trades > List (docs/design/trades-ux-2026-10-27.md §3.2, backlog 130): every trade of every kind, one row per trade,
 // findable. Filters live in the URL (#/trades/list?acct=..&fam=..) so a Telegram link or a reload keeps them; paging is
 // a cursor and a "Load 50 more" button (no infinite scroll: position stays put, screen readers cope). The totals line
-// is the server's (after costs), blinded per ADR 0050; the client never adds results up itself. While the list is
+// is the server's (after costs), withheld per ADR 0050 with the server's reason; the client never adds results up. While the list is
 // scrolled down, a poll that brings new trades shows a "N new · show" pill instead of pushing the rows down.
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { api, ApiError } from "../../lib/api";
+import { api } from "../../lib/api";
 import {
   activeFilterCount, apiQuery, DEFAULT_KINDS, EVIDENCE_WORDS, type Evidence, EXIT_REASONS, EXIT_WORDS, exitWords, type Filters,
-  filtersQuery, heldWords, KIND_WORDS, KINDS, kindBadge, moneyOrDash, parseFilters, type Period, PERIOD_WORDS, POLL, resultOf,
+  filtersQuery, heldWords, KIND_WORDS, KINDS, kindBadge, moneyOrDash, parseFilters, type Period, PERIOD_WORDS, PERIODS, POLL, sourcesWords, resultOf,
   rowName, sideWords, signedR, strategyLabel, TIMEFRAMES, totalsLine, type TradeRow, type TradesPage,
 } from "../../lib/trades";
 import { useWide } from "../../lib/useMedia";
 import { Badge, Button, Card, EmptyState, ErrorState, Segmented, TimeText } from "../../ui";
 import { money } from "../../ui/format";
-import { ActivityFeed } from "../Activity";
 import { SkeletonRows } from "./Now";
 import "./trades.css";
 
@@ -32,21 +31,23 @@ export function TradesList({ query, onQuery, onOpen }: Props) {
     getNextPageParam: (last: TradesPage) => last.next_cursor ?? undefined,
     refetchInterval: POLL.list,
   });
-  const notServed = q.error instanceof ApiError && q.error.status === 404 && !q.data;
-  if (notServed) return <LedgerNotServed />;
   const n = activeFilterCount(f);
-  const panel = <FilterPanel f={f} set={set} />;
+  // strategy names for the filter and its chips: the board's when served, else those of the rows loaded (names only)
+  const named = new Map<string, string>();
+  for (const page of q.data?.pages ?? []) for (const r of page.rows) named.set(r.family, r.family_label);
+  for (const x of f.fam) if (!named.has(x)) named.set(x, x);
+  const panel = <FilterPanel f={f} set={set} named={named} />;
   return (
     <div className="trades-page list-page">
       <div className="list-main">
         <div className="list-bar">
-          <Segmented label="Period" items={(["today", "7d", "30d"] as Period[]).map((id) => ({ id, label: PERIOD_WORDS[id] }))}
+          <Segmented label="Period" items={PERIODS.map((id) => ({ id, label: PERIOD_WORDS[id] }))}
                      value={f.period} onChange={(period) => set({ period })} />
           {wide ? <Button onClick={() => setSheet(!sheet)} aria-expanded={sheet} aria-controls="trade-filters">Filters{n ? ` (${n})` : ""}</Button>
             : <Button onClick={() => setSheet(true)} aria-haspopup="dialog">Filters{n ? ` (${n})` : ""}</Button>}
         </div>
         {wide && sheet && <section id="trade-filters" className="filter-inline" aria-label="Filters">{panel}</section>}
-        <Chips f={f} set={set} />
+        <Chips f={f} set={set} named={named} />
         <Card title="Trades" label="Trade list">
           <ListBody q={q} f={f} onOpen={onOpen} wide={wide} onClear={() => onQuery(filtersQuery({ ...f, acct: [], fam: [], tf: [], status: "", kind: [], exit: [], evidence: [] }))} />
         </Card>
@@ -60,17 +61,6 @@ export function TradesList({ query, onQuery, onOpen }: Props) {
           </div>
         </>
       )}
-    </div>
-  );
-}
-
-function LedgerNotServed() {
-  return (
-    <div className="trades-page">
-      <p className="small state warn" role="status">This server doesn't serve the trade list yet (it arrives with the trade
-        ledger). Until then the activity feed below shows engine, shadow and probe trades; exploration trades are counted
-        in the morning report.</p>
-      <ActivityFeed />
     </div>
   );
 }
@@ -98,7 +88,7 @@ function ListBody({ q, f, onOpen, wide, onClear }: { q: Q; f: Filters; onOpen: (
   const tot = totalsLine(first.totals);
   return (
     <>
-      {first.unreadable.length > 0 && <p className="small state warn">{`Couldn't read the trades of ${first.unreadable.join(", ")}: missing, not zero.`}</p>}
+      {first.unreadable.length > 0 && <p className="small state warn">{`Couldn't read ${sourcesWords(first.unreadable)}: those trades are missing from this list and its totals, not zero.`}</p>}
       <div className="list-totals" role="group" aria-label="Totals of this list">
         <p className="num"><strong>{tot.text}</strong></p>
         {tot.note && <p className="small muted">{tot.note}</p>}
@@ -179,7 +169,7 @@ function ListTable({ rows, onOpen, period }: { rows: TradeRow[]; onOpen: (id: st
                 <td>{endWords(t)} · {heldWords(t.held_s, t.status === "open" ? t.hold_limit_s : null)}</td>
                 <td className="num">{res.pnl}</td>
                 <td className="num">{res.r}</td>
-                <td className="num">{t.costs_total == null ? "—" : money(t.costs_total, t.currency)}</td>
+                <td className="num">{t.costs == null ? "—" : money(t.costs.total, t.currency)}</td>
                 <td>{KIND_WORDS[t.kind]}</td>
               </tr>
             );
@@ -197,11 +187,12 @@ function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; c
 
 const flip = <T,>(xs: T[], x: T) => (xs.includes(x) ? xs.filter((y) => y !== x) : [...xs, x]);
 
-function FilterPanel({ f, set }: { f: Filters; set: (n: Partial<Filters>) => void }) {
+function FilterPanel({ f, set, named }: { f: Filters; set: (n: Partial<Filters>) => void; named: Map<string, string> }) {
   const today = useQuery({ queryKey: ["today"], queryFn: api.today, staleTime: POLL.today });
   const board = useQuery({ queryKey: ["strategyBoard"], queryFn: api.strategyBoard, staleTime: POLL.strategies, retry: false });
   const accts = (today.data?.accounts ?? []).map((a) => ({ id: a.account, label: a.account_label || a.account }));
-  const fams = (board.data?.families ?? []).map((x) => ({ id: x.family, label: x.family_label }))
+  const fams = (board.data?.families.length ? board.data.families.map((x) => ({ id: x.family, label: x.family_label }))
+    : [...named].map(([id, label]) => ({ id, label })))
     .sort((a, b) => a.label.localeCompare(b.label));
   return (
     <div className="filter-panel">
@@ -233,11 +224,11 @@ function FilterPanel({ f, set }: { f: Filters; set: (n: Partial<Filters>) => voi
 }
 
 /** The active filters as removable chips (each a 44 px button: "Scalp lab ×"). */
-function Chips({ f, set }: { f: Filters; set: (n: Partial<Filters>) => void }) {
+function Chips({ f, set, named }: { f: Filters; set: (n: Partial<Filters>) => void; named: Map<string, string> }) {
   const today = useQuery({ queryKey: ["today"], queryFn: api.today, staleTime: POLL.today });
   const board = useQuery({ queryKey: ["strategyBoard"], queryFn: api.strategyBoard, staleTime: POLL.strategies, retry: false });
   const acctLabel = (id: string) => today.data?.accounts.find((a) => a.account === id)?.account_label || id;
-  const famLabel = (id: string) => board.data?.families.find((x) => x.family === id)?.family_label || id;
+  const famLabel = (id: string) => board.data?.families.find((x) => x.family === id)?.family_label || named.get(id) || id;
   const chips: { key: string; label: string; drop: () => void }[] = [
     ...f.acct.map((a) => ({ key: `a-${a}`, label: acctLabel(a), drop: () => set({ acct: f.acct.filter((x) => x !== a) }) })),
     ...f.fam.map((a) => ({ key: `f-${a}`, label: famLabel(a), drop: () => set({ fam: f.fam.filter((x) => x !== a) }) })),

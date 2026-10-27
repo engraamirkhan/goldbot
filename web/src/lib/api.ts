@@ -2,7 +2,7 @@
 // backend's OpenAPI schema: `python scripts/export_openapi.py && npm run gen:api`. CI regenerates both and
 // fails on a diff, so a contract change in goldbot/api/schema.py cannot reach main without the client.
 import type { components, operations } from "./schema";
-import type { OpenPositionX, StrategyBoard, TodayAccountX, TradeBars, TradeRow, TradesPage } from "./trades";
+import type { StrategyBoard } from "./trades";
 
 type Schemas = components["schemas"];
 export type AccountSummary = Schemas["AccountSummary"];
@@ -219,14 +219,14 @@ export const api = {
   // Home trades summary: every trade type for today, 7 days and all time (read-only, viewer and above)
   tradesOverview: () => req<TradesOverview>("/api/trades/overview"),
   // Home card stack (docs/ux/home-redesign-2026-10-19.md): open positions, strategy states, today's money (read-only)
-  openPositions: () => req<Omit<OpenPositionsView, "positions"> & { positions: OpenPositionX[] }>("/api/positions/open"),
+  openPositions: () => req<OpenPositionsView>("/api/positions/open"),
   strategyWatch: () => req<StrategyWatchView>("/api/strategies/watch"),
-  today: () => req<Omit<TodayView, "accounts"> & { accounts: TodayAccountX[] }>("/api/today"),
-  // The trades experience (docs/design/trades-ux-2026-10-27.md, backlog 129-133): one ledger over every kind, blinded
+  today: () => req<TodayView>("/api/today"),
+  // The trade ledger (docs/design/trades-ux-2026-10-27.md, backlog 129): one row per trade of every kind, blinded
   // server-side (ADR 0050). `query` is built by lib/trades.apiQuery from the URL's filters.
-  trades: (query: string) => req<TradesPage>(`/api/trades${query}`),
-  trade: (id: string) => req<TradeRow>(`/api/trades/${encodeURIComponent(id)}`),
-  tradeBars: (id: string) => req<TradeBars>(`/api/trades/${encodeURIComponent(id)}/bars`),
+  trades: (query: string) => req<Schemas["TradesPage"]>(`/api/trades${query}`),
+  trade: (id: string) => req<Schemas["TradeRow"]>(`/api/trades/${encodeURIComponent(id)}`),
+  // the strategy board (backlog 132) is not served yet: an older server's SPA answer reads as a 404 (see req)
   strategyBoard: () => req<StrategyBoard>("/api/strategies/board"),
   // read-only cards (docs/ux/limits-and-tradingview.md): nothing here changes a limit or the TradingView link
   limits: () => req<LimitsView>("/api/limits"),

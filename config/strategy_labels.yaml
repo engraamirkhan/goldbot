@@ -30,6 +30,18 @@ families:
   friday_long: {label: "Friday long", why: "Long from Thursday evening to Friday afternoon (New York)"}
   low30_touch: {label: "30-day low touch", why: "Touch of the 30-day low, held for the bounce"}
   low30_control: {label: "30-day low control", why: "Random entry on the low-touch days: its null"}
+  # H-81 scalp strata (Z arms)
+  tick_surge: {label: "Tick surge", why: "A burst of ticks one way, followed"}
+  run_fade: {label: "Run fade", why: "An exhausted run, faded"}
+  extreme_break: {label: "Hour extreme break", why: "Break of the prior hour's high or low"}
+  absorb_fade: {label: "Absorption fade", why: "Heavy volume absorbed at a level, faded"}
+  halfhour_persist: {label: "Half-hour persistence", why: "The half-hour's move carried on"}
+  round_reject: {label: "Round number rejection", why: "A touch of a round number rejected"}
+  round_break: {label: "Round number break", why: "Close through a round number"}
+  nr4_break: {label: "NR4 break", why: "Break of a narrow-range inside bar"}
+  htf_reclaim: {label: "Trend reclaim", why: "5m reclaim in the direction of the 1h trend"}
+  three_horizon: {label: "Three-horizon momentum", why: "Momentum agreed on three horizons"}
+  scalp_control: {label: "Random control (strata)", why: "Random entry at the strata's times: their null"}
   blocked: {label: "Not running yet", why: "Blocked in the frozen spec until its condition is met"}
   # specialist families (engine strategies, shadow models and specialist arms)
   asia_drift: {label: "Asia drift", why: "The Asian session's drift continued"}

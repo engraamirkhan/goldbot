@@ -34,7 +34,7 @@ describe("Home cards keep number-unit pairs together", () => {
     vi.spyOn(apiModule.api, "openPositions").mockResolvedValue({ as_of: "2026-10-19T10:00:00Z", unreadable: [], positions: [
       { account: "icm-demo", mode: "demo", probe: false, position_id: 1, agent_id: "a", family: "box_break_close", timeframe: "1h",
         side: "long", lots: 0.05, entry: 2400, stop: 2396, target: 2410, opened_utc: "2026-10-19T09:00:00Z", price: 2401,
-        floating_pnl: 1, currency: "GBP", r_now: 0.25, age_s: 2, stale: false }] });
+        floating_pnl: 1, currency: "GBP", r_now: 0.25, age_s: 2, stale: false, account_label: "Day/swing lab", family_label: "", kind: "strategy" }] });
     wrap(<OpenNow />);
     const row = (await screen.findByRole("listitem")).textContent ?? "";
     expect(row).toContain(`+0.25${NBSP}R`);

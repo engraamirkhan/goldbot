@@ -163,6 +163,35 @@ def test_a_closed_rows_net_is_after_costs_split_to_the_penny(tmp_path):
             assert r.gross is not None and round(r.gross - r.pnl, 2) == round(parts, 2) == r.costs.total, r.trade_id
     pos = next(r for r in rows if r.kind == "strategy" and r.status == "closed")
     assert pos.costs is not None and not pos.costs.complete and pos.costs.spread is None   # kept in points only
+    assert ex.costs.spread_exit_estimated and not ex.costs.slippage_exit_known   # no exit quote on an arm's row
+
+
+def test_slippage_counts_both_fills_favourable_as_well_as_adverse_and_a_measured_exit_spread(tmp_path):
+    """Finance audit 2026-10-27 (LOW): a short probe sold 0.10 above its request (favourable, -0.10/oz) and bought
+    back 0.20 above the ask the close was sent on (adverse, +0.20/oz): slippage +0.10/oz x 1 oz x 0.8 = £0.08. Spread
+    is half the entry's 0.25 plus half the exit's measured 0.30: 0.275 x 0.8 = £0.22."""
+    _engine(tmp_path, DAY)
+    with _db(tmp_path).write() as conn:
+        cost_probe.LEDGER.upsert(conn, cost_probe.ProbeRecord(
+            client_order_id="cp-2", account_id=DAY, agent_id="mean_reversion-g0-ab", side=-1, lots=0.01,
+            requested_price=2400.8, spread_usd=0.25, sent_utc=NOW - pd.Timedelta(hours=2), fill_price=2400.9,
+            exit_utc=NOW - pd.Timedelta(hours=1), exit_price=2399.0, exit_bid=2398.5, exit_ask=2398.8,
+            exit_reason="time_exit", swap=0.0, commission=0.07, pnl=1.30, stop_loss=3.0, fx_acct_per_usd=0.8))
+    row = _ledger(tmp_path, _catalog(tmp_path)).rows[0]
+    assert row.costs is not None and (row.costs.slippage, row.costs.spread) == (0.08, 0.22)
+    assert row.costs.slippage_exit_known and not row.costs.spread_exit_estimated
+    assert row.gross is not None and round(row.gross - 1.30, 2) == row.costs.total
+
+
+def test_a_total_missing_a_closed_trades_net_says_so_with_the_count_and_the_partial_sum(tmp_path):
+    """Finance audit 2026-10-27 (HIGH): an unknown net is counted and flagged, never silently dropped."""
+    _engine(tmp_path, SCALP)
+    for cid, arm in (("a1", "S1A"), ("a2", "S2A"), ("a3", "S3A")):
+        _arm(tmp_path, cid, arm, pnl=1.0)
+    _arm(tmp_path, "a4", "S4", pnl=None)                         # the broker's deals were unreadable
+    cat = _catalog(tmp_path)
+    t = tl.query(_ledger(tmp_path, cat), _q(account=(SCALP,)), cat).totals
+    assert (t.net_pnl, t.net_unknown, t.net_partial) == (None, 1, 3.0)
 
 
 def test_every_closed_row_has_an_exit_reason_from_the_closed_vocabulary(tmp_path):
@@ -419,3 +448,55 @@ def test_a_filtered_page_over_50k_rows_answers_within_300_ms_at_p95(tmp_path):
         tl.query(led, q, cat)
         times.append(time.perf_counter() - t0)
     assert sorted(times)[int(0.95 * len(times)) - 1] < 0.3
+
+
+# ------------------------------------------------------------------------------------------------ quant conditions
+def _net(led: tl.Ledger, cat: Any, **kw: Any) -> float | None:
+    return tl.query(led, _q(account=(SCALP,), **kw), cat).totals.net_pnl
+
+
+def test_no_two_range_difference_isolates_one_arm_closing_overnight(tmp_path):
+    """Quant condition 1: a closed trade belongs to the day it CLOSED, as the blinding cells do. Arms a, b, c open on
+    Monday and close on Tuesday; arm d opens and closes on Tuesday. Before the fix [Mon..Mon] held a, b, c (opened
+    Monday) and [Tue..Tue] held all four: the difference was d alone. No pair of shown ranges may differ by one arm."""
+    _engine(tmp_path, SCALP)
+    mon = pd.Timestamp("2026-10-26 20:00", tz="UTC")
+    for cid, arm in (("a", "S1A"), ("b", "S2A"), ("c", "S3A")):
+        _arm(tmp_path, cid, arm, sent=mon, exit_after=pd.Timedelta(hours=4), pnl=1.0)    # closes Tue 00:00
+    _arm(tmp_path, "d", "S5A", sent=NOW - pd.Timedelta(hours=2), exit_after=pd.Timedelta(minutes=10), pnl=9.99)
+    cat = _catalog(tmp_path)
+    led = _ledger(tmp_path, cat)
+    days = [pd.Timestamp(d).date() for d in ("2026-10-26", "2026-10-27")]
+    shown = [_net(led, cat, since=lo, until=hi) for lo in days for hi in days if lo <= hi]
+    values = [v for v in shown if v is not None]
+    assert 9.99 not in values
+    assert all(abs(abs(a - b) - 9.99) > 0.005 for a in values for b in values)
+    monday = tl.query(led, _q(account=(SCALP,), since=days[0], until=days[0]), cat)
+    assert not monday.rows                                                   # a, b, c closed on Tuesday
+
+
+def test_open_pnl_totals_under_three_unread_arms_are_withheld_but_open_rows_show(tmp_path):
+    """Quant condition 3: an open-P&L total is an aggregate too; each account's unread open trades need 3 arms."""
+    _engine(tmp_path, SCALP)
+    for cid, arm in (("a1", "S1A"), ("a2", "S2A"), ("a3", "S3A")):
+        _arm(tmp_path, cid, arm)
+    _arm(tmp_path, "o1", "S1A", exit_after=None, sent=NOW - pd.Timedelta(minutes=20))
+    _arm(tmp_path, "o2", "S2A", exit_after=None, sent=NOW - pd.Timedelta(minutes=15))
+    cat = _catalog(tmp_path)
+    page = tl.query(_ledger(tmp_path, cat), _q(account=(SCALP,)), cat)
+    assert page.totals.net_pnl is not None                                   # closes: 3 arms in the day
+    assert page.totals.open_pnl is None and page.totals.open_pnl_withheld
+    assert all(r.pnl_now is not None for r in page.rows if r.status == "open")   # single open trades stay visible
+    _arm(tmp_path, "o3", "S3A", exit_after=None, sent=NOW - pd.Timedelta(minutes=10))
+    page = tl.query(_ledger(tmp_path, cat), _q(account=(SCALP,)), cat)
+    assert page.totals.open_pnl is not None and not page.totals.open_pnl_withheld
+
+
+def test_open_trades_belong_only_to_ranges_that_reach_now(tmp_path):
+    _engine(tmp_path, SCALP)
+    _arm(tmp_path, "o1", "S1A", exit_after=None, sent=NOW - pd.Timedelta(days=1))
+    cat = _catalog(tmp_path)
+    led = _ledger(tmp_path, cat)
+    yesterday = (NOW - pd.Timedelta(days=1)).date()
+    assert not tl.query(led, _q(since=yesterday, until=yesterday), cat).rows
+    assert tl.query(led, _q(since=yesterday), cat).rows

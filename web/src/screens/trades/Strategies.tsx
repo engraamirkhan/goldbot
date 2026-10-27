@@ -25,8 +25,8 @@ export function TradesStrategies({ onFamily }: { onFamily: (family: string) => v
   if (q.error instanceof ApiError && q.error.status === 404 && !q.data) {
     return (
       <div className="trades-page">
-        <p className="small state warn" role="status">This server doesn't serve the strategy board yet (it arrives with the trade
-          ledger). The engine strategies' summary is below; exploration arms show their progress here once it lands.</p>
+        <p className="small state warn" role="status">The strategy board (each arm's progress to its read) isn't served yet. Until it
+          is, the engine strategies' summary is below, and every arm's trades are in List, filtered by strategy.</p>
         <TradesSummaryCard />
       </div>
     );
