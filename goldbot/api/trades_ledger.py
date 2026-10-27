@@ -181,19 +181,34 @@ class _Ctx:
 
 def _costs(*, lots: float, contract: float, side: int, fx: float | None, spread_usd: float | None,
            requested: float | None, fill: float | None, commission: float | None, swap: float | None,
-           priced: bool = True) -> CostSplit:
-    """The split, each part rounded to the penny and `total` their sum (so gross = net + total exactly)."""
+           priced: bool = True, exit_fill: float | None = None, exit_bid: float | None = None,
+           exit_ask: float | None = None) -> CostSplit:
+    """The split, each part rounded to the penny and `total` their sum (so gross = net + total exactly).
+
+    Finance audit 2026-10-27: slippage is signed (favourable slippage is a negative cost, as adverse is a positive
+    one) and covers both fills where the request is known: the entry against its requested price and the exit fill
+    against the quote the close was sent on (bid for a long, ask for a short). Spread is half the entry's spread plus
+    half the exit's; without a recorded exit quote the exit half is the entry's (`spread_exit_estimated`)."""
     oz = lots * contract
     spread = slip = None
+    exit_quote = (exit_bid if side > 0 else exit_ask) if exit_fill is not None else None
+    exit_spread = exit_ask - exit_bid if exit_ask is not None and exit_bid is not None else None
     if priced and fx is not None and fx > 0:
-        spread = round(max(0.0, spread_usd or 0.0) * oz * fx, 2) if spread_usd is not None else None
+        if spread_usd is not None:
+            legs = spread_usd / 2 + (exit_spread if exit_spread is not None else spread_usd) / 2
+            spread = round(max(0.0, legs) * oz * fx, 2)
         if requested is not None and fill is not None:
-            slip = round(max(0.0, (fill - requested) * side) * oz * fx, 2)    # adverse only, never a credit
+            move = (fill - requested) * side
+            if exit_quote is not None and exit_fill is not None:
+                move += (exit_quote - exit_fill) * side
+            slip = round(move * oz * fx, 2)
     comm = round(abs(commission), 2) if commission is not None else None
     sw = round(-swap, 2) if swap is not None else None
     parts = [spread, slip, comm, sw]
     return CostSplit(spread=spread, slippage=slip, commission=comm, swap=sw,
-                     total=round(sum(p for p in parts if p is not None), 2), complete=all(p is not None for p in parts))
+                     total=round(sum(p for p in parts if p is not None), 2), complete=all(p is not None for p in parts),
+                     spread_exit_estimated=priced and spread is not None and exit_spread is None,
+                     slippage_exit_known=exit_quote is not None)
 
 
 def _open_money(side: int, entry: float | None, a: _Acct, lots: float, risk: float | None
@@ -277,7 +292,8 @@ def _probes(state: Path, ctx: _Ctx) -> list[TradeRow]:
         label = "Cost probe" if scheduled else f"Cost probe · {ctx.cat.family_label(family)}"
         closed = p.exit_utc is not None
         costs = _costs(lots=p.lots, contract=a.contract, side=p.side, fx=p.fx_acct_per_usd, spread_usd=p.spread_usd,
-                       requested=p.requested_price, fill=p.fill_price, commission=p.commission, swap=p.swap)
+                       requested=p.requested_price, fill=p.fill_price, commission=p.commission, swap=p.swap,
+                       exit_fill=p.exit_price, exit_bid=p.exit_bid, exit_ask=p.exit_ask)
         risk = p.stop_loss if p.stop_loss and p.stop_loss > 0 else None
         pnl_now, r_now = (None, None) if closed else _open_money(p.side, p.fill_price, a, p.lots, risk)
         why = ("Scheduled cost measurement at the minimum lot" if scheduled
@@ -564,8 +580,10 @@ def _blind(r: TradeRow) -> TradeRow:
 
 def totals(rows: Sequence[TradeRow], reason: str | None, open_hidden: bool = False) -> TradeTotals:
     """The rows' sums in one pass: money only from rows that carry it, in one currency (never summed across
-    currencies)."""
-    n_open = 0
+    currencies). A closed trade whose net is unknown (gross-only record, unreadable deals) is counted in
+    `net_unknown` and makes `net_pnl` None: the sum of the others is `net_partial`, never shown as the net (finance
+    audit 2026-10-27: "a number missing a trade is not a net figure")."""
+    n_open = unknown = 0
     net = costs = open_pnl = open_risk = 0.0
     ccys: set[str] = set()
     for r in rows:
@@ -576,15 +594,19 @@ def totals(rows: Sequence[TradeRow], reason: str | None, open_hidden: bool = Fal
             open_pnl += r.pnl_now or 0.0
             open_risk += r.risk_amount or 0.0
         else:
+            if r.pnl is None and r.kind != "shadow":
+                unknown += 1
             net += r.pnl or 0.0
             costs += r.costs.total if r.costs is not None else 0.0
     mixed = len(ccys) > 1
     money = reason is None and not mixed
     return TradeTotals(
         n=len(rows), n_open=n_open, n_closed=len(rows) - n_open, currency=next(iter(ccys)) if len(ccys) == 1 else None,
-        mixed_currencies=mixed, net_pnl=round(net, 2) if money else None, costs=round(costs, 2) if money else None,
-        open_pnl=round(open_pnl, 2) if money and not open_hidden else None, open_pnl_withheld=open_hidden, open_risk=round(open_risk, 2) if not mixed else None,
-        withheld=reason is not None, withheld_reason=reason)
+        mixed_currencies=mixed, net_pnl=round(net, 2) if money and not unknown else None,
+        net_unknown=unknown, net_partial=round(net, 2) if money and unknown else None,
+        costs=round(costs, 2) if money else None,
+        open_pnl=round(open_pnl, 2) if money and not open_hidden else None, open_pnl_withheld=open_hidden,
+        open_risk=round(open_risk, 2) if not mixed else None, withheld=reason is not None, withheld_reason=reason)
 
 
 def _encode(r: TradeRow) -> str:

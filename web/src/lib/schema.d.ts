@@ -1482,8 +1482,18 @@ export interface components {
             complete: boolean;
             /** Slippage */
             slippage: number | null;
+            /**
+             * Slippage Exit Known
+             * @default false
+             */
+            slippage_exit_known: boolean;
             /** Spread */
             spread: number | null;
+            /**
+             * Spread Exit Estimated
+             * @default false
+             */
+            spread_exit_estimated: boolean;
             /** Swap */
             swap: number | null;
             /** Total */
@@ -2212,6 +2222,11 @@ export interface components {
             /** Net R */
             net_r: number | null;
             /**
+             * Net Unknown
+             * @default 0
+             */
+            net_unknown: number;
+            /**
              * Withheld
              * @default false
              */
@@ -2738,8 +2753,15 @@ export interface components {
             costs: components["schemas"]["CostSplit"] | null;
             /** N */
             n: number;
+            /** Net Partial */
+            net_partial?: number | null;
             /** Net Pnl */
             net_pnl: number | null;
+            /**
+             * Net Unknown
+             * @default 0
+             */
+            net_unknown: number;
             /**
              * Since
              * Format: date
@@ -3618,6 +3640,11 @@ export interface components {
             n: number;
             /** Net Pnl */
             net_pnl: number | null;
+            /**
+             * Net Unknown
+             * @default 0
+             */
+            net_unknown: number;
             /** Opportunity */
             opportunity: boolean | null;
             /** Target */
@@ -3683,6 +3710,13 @@ export interface components {
             month_to_date?: components["schemas"]["PeriodNet"] | null;
             /** Net Today */
             net_today?: number | null;
+            /** Net Today Partial */
+            net_today_partial?: number | null;
+            /**
+             * Net Unknown
+             * @default 0
+             */
+            net_unknown: number;
             /** Open N */
             open_n?: number | null;
             /** Open Pnl */
@@ -3884,8 +3918,15 @@ export interface components {
             n_closed: number;
             /** N Open */
             n_open: number;
+            /** Net Partial */
+            net_partial?: number | null;
             /** Net Pnl */
             net_pnl: number | null;
+            /**
+             * Net Unknown
+             * @default 0
+             */
+            net_unknown: number;
             /** Open Pnl */
             open_pnl: number | null;
             /**

@@ -1406,6 +1406,8 @@ class TodayAccount(BaseModel):
     pace: int | None = None                 # fills projected by the day's end from the last 2 hours' rate
     by_kind: dict[str, KindDay] = Field(default_factory=dict)   # TradeKind -> today's figures; never summed on screen
     net_today: float | None = None          # every ledger row closed today, net after costs (= sum of the list's rows)
+    net_unknown: int = 0                    # today's closed trades whose net is not known: net_today is then None
+    net_today_partial: float | None = None  # with net_unknown: the known rows' sum, never the net
     costs_today: CostSplit | None = None
     open_n: int | None = None               # the engine's open positions
     open_risk: float | None = None          # the engine's remaining stop risk, account currency
@@ -1452,6 +1454,9 @@ class CostSplit(BaseModel):
     swap: float | None
     total: float
     complete: bool
+    # the exit half of the spread is the entry's (no exit quote recorded): an estimate, labelled as such
+    spread_exit_estimated: bool = False
+    slippage_exit_known: bool = False       # exit slippage measured (fill vs the quote the close was sent on)
 
 
 class TradeRow(BaseModel):
@@ -1509,7 +1514,9 @@ class TradeTotals(BaseModel):
     n_closed: int
     currency: str | None                    # the one currency of the money rows; None when none or mixed
     mixed_currencies: bool                  # money in more than one currency: never summed
-    net_pnl: float | None                   # closed rows
+    net_pnl: float | None                   # closed rows; None when withheld or any closed net is unknown
+    net_unknown: int = 0                    # closed trades whose net is not known (gross-only or unreadable deals)
+    net_partial: float | None = None        # with net_unknown: the known rows' sum, never the net
     costs: float | None                     # closed rows' known costs
     open_pnl: float | None
     open_risk: float | None                 # open rows' risk at entry
@@ -1536,6 +1543,7 @@ class KindDay(BaseModel):
     costs: float | None
     net_r: float | None
     withheld: bool = False
+    net_unknown: int = 0                    # closed trades whose net is not known: net_pnl is then None
 
 
 class CapUse(BaseModel):
@@ -1548,11 +1556,12 @@ class StripDay(BaseModel):
     """One opportunity day of the strip: net after costs of the rows closed that day."""
     day: date
     n: int
-    net_pnl: float | None                   # None: withheld (fewer than 3 unread arms that day)
+    net_pnl: float | None                   # None: withheld (fewer than 3 unread arms that day) or a net unknown
     costs: float | None
     target: float | None                    # the daily target (settings), account currency
     opportunity: bool | None                # the volatility screen's verdict; None while none is published
     withheld: bool = False
+    net_unknown: int = 0
 
 
 class PeriodNet(BaseModel):
@@ -1561,6 +1570,8 @@ class PeriodNet(BaseModel):
     net_pnl: float | None
     costs: CostSplit | None
     withheld: bool = False
+    net_unknown: int = 0                    # closed trades whose net is not known: net_pnl is then None
+    net_partial: float | None = None
 # ============================================================================= end Trade ledger
 
 
