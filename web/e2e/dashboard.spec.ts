@@ -600,25 +600,3 @@ test("Trades: money on every open row, filters in the URL, a strategy's totals, 
     }
   }
 });
-
-test("REVIEW ONLY ranking shots", async ({ page }) => {
-  execFileSync(PYTHON, [process.env.RICH_SEED!, info().state_dir, join(process.cwd(), "..")], { stdio: "inherit" });
-  seed("--touch");
-  await page.goto("/");
-  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
-  for (const [width, height] of [[360, 800], [1280, 900]] as const) {
-    for (const scheme of ["light", "dark"] as const) {
-      await page.emulateMedia({ colorScheme: scheme });
-      await page.setViewportSize({ width, height });
-      await page.goto("/#/trades/strategies");
-      const ranked = page.getByRole("region", { name: "Strategy ranking" });
-      await expect(ranked).toContainText(/^1\. /m, { timeout: 60_000 }).catch(() => undefined);
-      await expect(async () => { await page.reload(); await expect(ranked).toContainText("1. ", { timeout: 3_000 }); }).toPass({ timeout: 90_000 });
-      await page.waitForTimeout(500);
-      const dir = process.env.SHOTS_DIR!;
-      await page.screenshot({ path: join(dir, `review-ranking-${width}-${scheme}.png`), fullPage: true });
-      await ranked.scrollIntoViewIfNeeded();
-      await page.screenshot({ path: join(dir, `review-ranking-${width}-${scheme}-view.png`) });
-    }
-  }
-});
