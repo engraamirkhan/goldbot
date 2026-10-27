@@ -1,16 +1,26 @@
 // The trades experience (docs/design/trades-ux-2026-10-27.md, ADR 0050, backlog 128-134): Now / List / Strategies /
-// Today. Shapes of the trade ledger, the strategy board and the per-account Today fields, plus the pure helpers the
-// screens share. The backend lane serves these (GET /api/trades, /api/trades/{id}, /api/trades/{id}/bars,
-// /api/strategies/board, new fields on /api/today and /api/positions/open); until its OpenAPI types land in
-// schema.d.ts the shapes below follow the spec's field lists (§2.2-2.4). Every new field is optional on the existing
-// views, so an older server shows today's figures and never a wrong one.
+// Today. The ledger, Today and open-position shapes come from the API contract (schema.d.ts: GET /api/trades,
+// /api/trades/{trade_id}, /api/today, /api/positions/open); the strategy board (132) and the trade bars (133) are not
+// served yet, so their shapes stay here until their endpoints land. Pure helpers shared by the screens.
 //
-// Blinding (ADR 0050 with the quant-reviewer's tightenings): the server omits every pre-read per-arm aggregate and
-// blinds any set holding fewer than 3 unread arms (a partly-read family included). The client never computes an
-// aggregate of its own over rows (no sums, means or counts of results): totals come only from the server, and a
-// "near its stop" band is never shown before the stop has fired.
-import type { OpenPosition, TodayAccount } from "./api";
+// Blinding (ADR 0050 with the quant-reviewer's tightenings) is the server's: it withholds totals and blinds rows. The
+// client never computes an aggregate of its own over ledger rows; it shows `withheld` and `unreadable` as the API
+// returns them, and a "near its stop" band is never shown before the stop has fired.
+import type { components } from "./schema";
 import { money, NBSP, signedR, withUnit } from "../ui/format";
+
+type S = components["schemas"];
+export type TradeRow = S["TradeRow"];
+export type TradesPage = S["TradesPage"];
+export type TradeTotals = S["TradeTotals"];
+export type CostSplit = S["CostSplit"];
+export type KindDay = S["KindDay"];
+export type CapUse = S["CapUse"];
+export type StripDay = S["StripDay"];
+export type PeriodNet = S["PeriodNet"];
+export type TodayAccountX = S["TodayAccount"];
+export type OpenPositionX = S["OpenPosition"];
+export type TradeSource = TradesPage["unreadable"][number];
 
 export const TRADES_TABS = [
   { id: "now", label: "Now" }, { id: "list", label: "List" }, { id: "strategies", label: "Strategies" }, { id: "today", label: "Today" },
@@ -18,100 +28,41 @@ export const TRADES_TABS = [
 export type TradesTab = (typeof TRADES_TABS)[number]["id"];
 
 // ------------------------------------------------------------------------------------------------ kinds and words
-export const KINDS = ["real", "strategy", "exploration", "control", "cost_probe", "shadow"] as const;
-export type TradeKind = (typeof KINDS)[number];
+export type TradeKind = TradeRow["kind"];
+export const KINDS: readonly TradeKind[] = ["real", "strategy", "exploration", "control", "cost_probe", "shadow"];
 export const KIND_WORDS: Record<TradeKind, string> = {
   real: "Real", strategy: "Strategy", exploration: "Exploration", control: "Control", cost_probe: "Cost probe", shadow: "Shadow",
 };
 
-export const EXIT_REASONS = ["target", "stop", "trail", "time", "friday_cut", "manual", "kill_switch", "stop_out", "other"] as const;
-export type ExitReason = (typeof EXIT_REASONS)[number];
+export type ExitReason = NonNullable<TradeRow["exit_reason"]>;
+export const EXIT_REASONS: readonly ExitReason[] = ["target", "stop", "trail", "time_limit", "friday_cut", "manual", "kill_switch", "broker_stop_out", "other"];
 export const EXIT_WORDS: Record<ExitReason, string> = {
-  target: "target", stop: "stop", trail: "trailing stop", time: "time limit", friday_cut: "Friday cut",
-  manual: "closed by hand", kill_switch: "kill switch", stop_out: "broker stop-out", other: "other",
+  target: "target", stop: "stop", trail: "trailing stop", time_limit: "time limit", friday_cut: "Friday cut",
+  manual: "closed by hand", kill_switch: "kill switch", broker_stop_out: "broker stop-out", other: "other",
 };
 export const exitWords = (r: string | null | undefined) => (r ? EXIT_WORDS[r as ExitReason] ?? r.replace(/_/g, " ") : "—");
 
-export type Evidence = "counted" | "excluded" | "censored" | "not_evidence";
+export type Evidence = TradeRow["evidence"];
 export const EVIDENCE_WORDS: Record<Evidence, string> = {
   counted: "counted toward the read", excluded: "excluded", censored: "censored (closed by something other than its own exit)",
-  not_evidence: "not research evidence",
+  pending: "open: counts once it closes", not_evidence: "not research evidence",
 };
+
+/** The ledger's sources in words: what is missing (never zero) when one can't be read. */
+export const SOURCE_WORDS: Record<TradeSource, string> = {
+  shadow: "shadow trades", positions: "closed positions", probes: "cost probes", exploration: "exploration trades", orders: "open orders",
+};
+export const sourcesWords = (xs: readonly TradeSource[]) => xs.map((x) => SOURCE_WORDS[x] ?? x).join(", ");
 
 export const TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"] as const;
 export type Side = "long" | "short";
 export type Mode = "demo" | "live" | "paper";
 
-// ------------------------------------------------------------------------------------------------ ledger (§2.2)
-export type Costs = { spread: number; slippage: number; commission: number; swap: number };
-
-export type TradeRow = {
-  trade_id: string;
-  kind: TradeKind;
-  status: "open" | "closed";
-  account_label: string;                 // "Scalp lab", never the slug
-  mode: Mode | null;
-  currency: string | null;
-  family: string;
-  family_label: string;                  // "Box break + close"
-  variant: string | null;                // "5m runner" when one arm has two rules on a timeframe
-  timeframe: string | null;
-  arm_id: string | null;                 // Details only
-  is_control: boolean;
-  side: Side;
-  lots: number;
-  entry: number | null;
-  stop: number | null;                   // at entry
-  stop_now: number | null;               // moved stop (trail, break-even)
-  target: number | null;
-  exit: number | null;
-  exit_utc: string | null;
-  exit_reason: string | null;            // closed rows: never null on the server (129)
-  censored: boolean;
-  opened_utc: string;
-  held_s: number | null;
-  hold_limit_s: number | null;
-  risk_amount: number | null;            // loss at the stop at entry, account currency
-  pnl: number | null;                    // closed: broker net after costs; null when blinded
-  pnl_now: number | null;                // open: mid-price mark
-  r: number | null;
-  r_now: number | null;
-  costs: Costs | null;
-  costs_total: number | null;
-  costs_r: number | null;
-  why: string;                           // one plain sentence
-  blinded: boolean;                      // ADR 0050: result fields withheld
-  evidence: Evidence;
-  excluded_reason: string | null;
-  read_n?: number | null;                // the arm's counted trades so far (detail: "213 of 300")
-  read_at?: number | null;
-  price_now: number | null;
-  as_of: string | null;
-  stale: boolean;
-};
-
-export type TradeTotals = {
-  n: number;
-  net_pnl: number | null;                // null when blinded (fewer than 3 unread arms in the set)
-  costs: number | null;
-  currency: string | null;               // null: more than one currency in the set, so never summed
-  blinded: boolean;
-  unread_arms: number;                   // unread arms in the set (the copy says why it is blinded)
-  excluded: string[];                    // accounts left out (unreadable): "excl. Vantage lab"
-};
-
-export type TradesPage = {
-  as_of: string;
-  rows: TradeRow[];
-  next_cursor: string | null;
-  totals: TradeTotals;
-  unreadable: string[];                  // account labels whose trades could not be read: missing, not zero
-};
-
+// ------------------------------------------------------------------------------------------------ chart bars (133)
+// No bars endpoint yet: the detail shows the missing-bars state with the levels in words.
 export type Bar = { t: string; o: number; h: number; l: number; c: number };
-export type TradeBars = { timeframe: string; bars: Bar[] };
 
-// ------------------------------------------------------------------------------------------------ board (§2.3)
+// ------------------------------------------------------------------------------------------------ board (132, API pending)
 export type AnnealState = "E" | "C1" | "P" | "R";
 export const ANNEAL_WORDS: Record<AnnealState, string> = { E: "exploring", C1: "candidate", P: "proven", R: "retired" };
 /** Only two bands exist before the read (quant review): "near its stop" would reveal a running loss. */
@@ -138,7 +89,7 @@ export type BoardVariant = {
   n_read_at: number;
   fills_today: number;
   fills_7d: number;
-  eta_read_date: string | null;          // ISO date
+  eta_read_date: string | null;
   band: Band;
   open_now: number;
   read: ReadFigures | null;              // present only after the arm's read (never before: ADR 0050)
@@ -156,7 +107,7 @@ export type BoardFamily = {
 };
 
 export type EngineStrategy = {
-  name: string;                          // plain label
+  name: string;
   timeframe: string | null;
   kind: "strategy" | "shadow" | "real";
   n: number;
@@ -172,8 +123,8 @@ export type EngineStrategy = {
 export type LabTotal = {
   account_label: string;
   style: string | null;
-  period: string;                        // "7 days"
-  arms: number;                          // >= 3 or the server sends no money (blinded)
+  period: string;
+  arms: number;
   n: number;
   net_pnl: number | null;
   costs: number | null;
@@ -190,48 +141,8 @@ export type StrategyBoard = {
   unreadable: string[];
 };
 
-// ------------------------------------------------------------------------------------------------ today (§2.4)
-export type KindDay = { fills: number; closed: number; net_pnl: number | null; costs: number | null; net_r: number | null };
-export type CapUse = { used: number; limit: number };
-export type DayNet = { date: string; net_pnl: number | null; opportunity: boolean | null };
-export type PeriodNet = { net_pnl: number | null; costs: { spread: number; commission: number; swap: number } | null };
-
-/** /api/today per account with the 131 fields (all optional: an older server shows the existing card). */
-export type TodayAccountX = TodayAccount & {
-  account_label?: string | null;
-  fills_today?: number | null;
-  fills_target?: number | null;          // from config; null for real money
-  pace?: number | null;                  // projected fills by day end
-  day_end_utc?: string | null;
-  by_kind?: Partial<Record<TradeKind, KindDay>> | null;
-  open_n?: number | null;
-  open_risk?: number | null;
-  day_cap_used?: CapUse | null;
-  week_cap_used?: CapUse | null;
-  exploration_pot_used?: CapUse | null;
-  quiet_day?: boolean | null;            // the volatility screen says not an opportunity day
-  day_target?: number | null;            // daily £ target from config (ADR 0004)
-  days?: DayNet[] | null;                // the last 14 trading days, oldest first
-  wtd?: PeriodNet | null;
-  mtd?: PeriodNet | null;
-  paused?: boolean | null;
-  halted?: boolean | null;
-};
-
-/** /api/positions/open with the 128 fields. */
-export type OpenPositionX = OpenPosition & {
-  risk_amount?: number | null;
-  held_s?: number | null;
-  hold_limit_s?: number | null;
-  account_label?: string | null;
-  kind?: TradeKind | null;
-  family_label?: string | null;
-  why?: string | null;
-  trade_id?: string | null;
-};
-
 // ------------------------------------------------------------------------------------------------ polls (§3)
-export const POLL = { now: 5_000, list: 15_000, strategies: 60_000, today: 15_000, bars: 15_000 } as const;
+export const POLL = { now: 5_000, list: 15_000, strategies: 60_000, today: 15_000, detail: 15_000 } as const;
 export const PAGE_SIZE = 50;
 export const STALE_S = 60;
 
@@ -298,18 +209,26 @@ export function openRowName(p: OpenPositionX): string {
   return `${strategyLabel(p.family_label, p.family, p.timeframe).replace(" · ", " ")}, ${p.side}, ${res}, open`;
 }
 
-/** The totals line of a filtered list (§3.2), blinded per ADR 0050: count and costs only, and why. */
+/** Where an open row leads. An engine position is one ledger trade ("position:<account>:<id>"); an arm's or a
+ *  probe's open trade is keyed by its order in the ledger, which the open-positions view does not carry, so it opens
+ *  the List filtered to its account, strategy and open trades (the trade is the top row there). */
+export type OpenTarget = { id: string } | { query: string };
+export function openTarget(p: OpenPositionX): OpenTarget {
+  if (p.kind === "strategy" || p.kind === "real") return { id: `position:${p.account}:${p.position_id}` };
+  return { query: filtersQuery({ ...DEFAULT_FILTERS, acct: [p.account], fam: [p.family], status: "open" }) };
+}
+
+/** The totals line of a filtered list (§3.2), as the server sends it: money withheld per ADR 0050 (with the
+ *  server's reason) or not summed across currencies; counts and open risk always shown. */
 export function totalsLine(t: TradeTotals): { text: string; note: string | null } {
-  const n = `${t.n.toLocaleString("en-GB")} trade${t.n === 1 ? "" : "s"}`;
-  const costs = t.costs == null ? null : `costs ${money(t.costs, t.currency)}`;
-  const excl = t.excluded.length ? ` · excl. ${t.excluded.join(", ")}` : "";
-  if (t.blinded || t.net_pnl == null) {
-    const why = t.blinded
-      ? `Results hidden: this view holds ${t.unread_arms} unread arm${t.unread_arms === 1 ? "" : "s"} (fewer than 3). Open one trade to see it.`
-      : t.currency == null ? "Net not summed: more than one currency." : null;
-    return { text: [n, costs].filter(Boolean).join(" · ") + excl, note: why };
-  }
-  return { text: [n, `net ${money(t.net_pnl, t.currency, true)} after costs`, costs].filter(Boolean).join(" · ") + excl, note: null };
+  const n = `${t.n.toLocaleString("en-GB")} trade${t.n === 1 ? "" : "s"}${t.n_open ? ` (${t.n_open} open)` : ""}`;
+  const parts = [n];
+  if (t.net_pnl != null) parts.push(`net ${money(t.net_pnl, t.currency, true)} after costs`);
+  if (t.costs != null) parts.push(`costs ${money(t.costs, t.currency)}`);
+  if (t.open_risk != null && t.n_open) parts.push(`open risk ${money(t.open_risk, t.currency)}`);
+  const note = t.withheld ? `Totals hidden: ${t.withheld_reason ?? "arms not read yet (ADR 0050)"}.`
+    : t.mixed_currencies ? "Money not summed: more than one currency." : null;
+  return { text: parts.join(" · "), note };
 }
 
 // ------------------------------------------------------------------------------------------------ Now grouping
@@ -348,7 +267,7 @@ export function groupOpen(positions: OpenPositionX[]): OpenGroup[] {
 }
 
 // ------------------------------------------------------------------------------------------------ List filters (URL)
-export type Period = "today" | "7d" | "30d";
+export type Period = "today" | "7d" | "30d" | "all";
 export type Filters = {
   period: Period;
   acct: string[];
@@ -360,6 +279,7 @@ export type Filters = {
   evidence: Evidence[];
 };
 export const DEFAULT_KINDS: TradeKind[] = KINDS.filter((k) => k !== "shadow");
+export const PERIODS: Period[] = ["today", "7d", "30d", "all"];
 export const DEFAULT_FILTERS: Filters = { period: "today", acct: [], fam: [], tf: [], status: "", kind: [], exit: [], evidence: [] };
 
 const list = (p: URLSearchParams, k: string) => (p.get(k) ?? "").split(",").filter(Boolean);
@@ -369,11 +289,11 @@ export function parseFilters(query: string): Filters {
   const period = p.get("period");
   const status = p.get("status");
   return {
-    period: period === "7d" || period === "30d" ? period : "today",
+    period: period === "7d" || period === "30d" || period === "all" ? period : "today",
     acct: list(p, "acct"), fam: list(p, "fam"), tf: list(p, "tf"),
     status: status === "open" || status === "closed" ? status : "",
     kind: list(p, "kind").filter((k): k is TradeKind => (KINDS as readonly string[]).includes(k)),
-    exit: list(p, "exit"),
+    exit: list(p, "exit").filter((k) => (EXIT_REASONS as readonly string[]).includes(k)),
     evidence: list(p, "evidence").filter((k): k is Evidence => k in EVIDENCE_WORDS),
   };
 }
@@ -387,19 +307,24 @@ export function filtersQuery(f: Filters): string {
   return p.toString().replace(/%2C/g, ",");
 }
 
-/** The API query: the URL's filters plus the cursor; the default kind set leaves Shadow out. */
+/** The API query (GET /api/trades: repeated parameters): the URL's filters, the cursor, and by default every kind
+ *  but Shadow. */
 export function apiQuery(f: Filters, cursor?: string | null): string {
-  const p = new URLSearchParams(filtersQuery(f));
-  if (!f.kind.length) p.set("kind", DEFAULT_KINDS.join(","));
+  const p = new URLSearchParams();
+  p.set("period", f.period);
+  const many: [string, readonly string[]][] = [["account", f.acct], ["family", f.fam], ["timeframe", f.tf],
+    ["kind", f.kind.length ? f.kind : DEFAULT_KINDS], ["exit_reason", f.exit], ["evidence", f.evidence]];
+  for (const [k, vs] of many) for (const v of vs) p.append(k, v);
+  if (f.status) p.set("status", f.status);
   p.set("limit", String(PAGE_SIZE));
   if (cursor) p.set("cursor", cursor);
-  return `?${p.toString().replace(/%2C/g, ",")}`;
+  return `?${p.toString()}`;
 }
 
 export const activeFilterCount = (f: Filters) =>
   (["acct", "fam", "tf", "kind", "exit", "evidence"] as const).reduce((n, k) => n + (f[k].length ? 1 : 0), 0) + (f.status ? 1 : 0);
 
-export const PERIOD_WORDS: Record<Period, string> = { today: "Today", "7d": "7 days", "30d": "30 days" };
+export const PERIOD_WORDS: Record<Period, string> = { today: "Today", "7d": "7 days", "30d": "30 days", all: "All" };
 
 // ------------------------------------------------------------------------------------------------ board order
 const STATE_ORDER: BoardState[] = ["real", "proven", "candidate", "running", "retired", "control"];
@@ -429,12 +354,12 @@ export const pct = (x: number | null | undefined) => (x == null ? "—" : withUn
 export function fillsWords(a: TodayAccountX): { text: string; pace: string | null } | null {
   if (a.fills_today == null) return null;
   const text = a.fills_target ? `${a.fills_today} of ${a.fills_target}` : `${a.fills_today}`;
-  const pace = a.pace == null ? null : `pace ~${a.pace}${a.day_end_utc ? " by day end" : ""}`;
+  const pace = a.pace == null ? null : `pace ~${a.pace} by day end`;
   return { text, pace };
 }
 
 /** A 14-day strip scaled to the largest absolute value and the target, so bars and target share one scale. */
-export function stripScale(days: DayNet[], target: number | null | undefined): number {
+export function stripScale(days: StripDay[], target: number | null | undefined): number {
   return Math.max(1e-9, Math.abs(target ?? 0), ...days.map((d) => Math.abs(d.net_pnl ?? 0)));
 }
 

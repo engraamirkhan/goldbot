@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { go } from "./nav";
 import { totpClock } from "./totp";
@@ -455,7 +456,7 @@ test("Home is five calm cards and the trades live on Trades, on a phone and a de
       await expect(page.getByRole("region", { name: /^(Trade list|Activity feed)$/ })).toBeVisible();
       await noSideways(page, width);
       await go(page, "Trades summary");                                        // ... and Summary on Today
-      for (const name of ["Today icm-demo", "Account icm-demo", "Risk per trade"]) await expect(page.getByRole("region", { name })).toBeVisible();
+      for (const name of [/^Today /, "Account icm-demo", "Risk per trade"]) await expect(page.getByRole("region", { name }).first()).toBeVisible();
       await noSideways(page, width);
     }
   }
@@ -488,100 +489,90 @@ async function rowsClearBar(page: Page, name: string) {
 }
 
 // The trades experience (docs/design/trades-ux-2026-10-27.md, ADR 0050, backlog 128-133) on a phone and a desktop,
-// light and dark. The trade ledger, the strategy board and the new Today and open-trade fields come from the backend
-// lane (129, 131); until the seeded server serves them, this story answers those calls with the typed fixtures the
-// unit tests use (src/test/tradesFixtures.ts) and leaves every other call to the real server. Drop the routes once
-// scripts/e2e_server.py seeds the ledger.
-test("Trades: money on every open row, filters in the URL, a blinded partly-read family, one trade's detail, no layout shift", async ({ page }) => {
-  const fx = await import("../src/test/tradesFixtures");
-  let polls = 0;
-  await page.route(/\/api\/(positions\/open|today|trades|strategies\/board)(\/|\?|$)/, async (route) => {
-    const url = new URL(route.request().url());
-    const json = (b: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(b) });
-    if (url.pathname === "/api/positions/open") {
-      const v = fx.openPositions();
-      polls += 1;                                                               // a live update every poll: P&L moves
-      v.positions = v.positions.map((p) => ({ ...p, floating_pnl: (p.floating_pnl ?? 0) + (polls % 2) * 0.37 }));
-      return json(v);
-    }
-    if (url.pathname === "/api/today") return json({ as_of: new Date().toISOString(), accounts: [fx.todayAccount()] });
-    if (url.pathname === "/api/strategies/board") return json(fx.board());
-    if (url.pathname.endsWith("/bars")) return json(fx.bars());
-    if (url.pathname.startsWith("/api/trades/") && !/summary|overview/.test(url.pathname)) return json(fx.tradeRow());
-    if (url.pathname === "/api/trades") return json(url.searchParams.get("fam") === "opening_range" ? fx.blindedPage() : fx.tradesPage());
-    return route.fallback();
-  });
+// light and dark, against the real API: e2e/seed_trades.py writes a trading day through goldbot's own writers (arms,
+// controls, a probe, engine trades open and closed, a shadow trade) and the server builds the ledger, Today and the
+// open trades from it; blinding is the server's.
+const PYTHON = process.env.PYTHON ?? (existsSync("../.venv/bin/python") ? "../.venv/bin/python" : "python3");
+const seed = (...args: string[]) => execFileSync(PYTHON, ["e2e/seed_trades.py", info().state_dir, ...args], { stdio: "inherit" });
+
+test("Trades: money on every open row, filters in the URL, withheld totals on a narrowed filter, one trade's detail, no layout shift", async ({ page }) => {
+  seed();
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
   for (const [width, height] of [[360, 800], [1280, 900]] as const) {
     for (const scheme of ["light", "dark"] as const) {
+      seed("--touch");                                                          // engine reports older than 60 s read as stale
       await page.emulateMedia({ colorScheme: scheme });
       await page.setViewportSize({ width, height });
       const tag = `${width}-${scheme}`;
 
       await page.goto("/#/trades/now");
       const open = page.getByRole("region", { name: "Open trades", exact: true });
-      await expect(open.getByText("Open now · 3 trades")).toBeVisible();
+      await expect(open.getByText(/^Open now · 2 trades/)).toBeVisible({ timeout: 15_000 });
       await expect(open).not.toContainText("not known");
-      const row = open.getByRole(width < 1024 ? "button" : "row", { name: /^Box break \+ close 15m, long, plus £3\.(40|77), open$/ });
-      await expect(row).toContainText(width < 1024 ? "risk £5.40" : "£5.40");
-      await expect(row).toContainText(/\+0\.63\sR/);
+      const row = open.getByRole(width < 1024 ? "button" : "row", { name: /^Box break \+ close 1h, long, (plus|minus) £[\d.]+, open$/ });
+      await expect(row).toContainText(/£\d+\.\d\d/);                            // risk and P&L in pounds
+      await expect(row).toContainText(/[+−]\d\.\d\d\sR/);
       await noSideways(page, width);
       if (width === 360) {
-        // no layout shift while a poll moves the P&L: fixed row heights, tabular numbers (CLS 0 over two polls)
         const cls = await page.evaluate(() => new Promise<number>((done) => {
           let sum = 0;
           new PerformanceObserver((l) => { for (const e of l.getEntries() as unknown as { value: number; hadRecentInput: boolean }[]) if (!e.hadRecentInput) sum += e.value; })
             .observe({ type: "layout-shift", buffered: false });
-          setTimeout(() => done(sum), 11_000);
+          setTimeout(() => done(sum), 11_000);                                  // two 5 s polls
         }));
         expect(cls).toBeLessThan(0.01);
-        const h = await row.evaluate((e) => e.getBoundingClientRect().height);
-        expect(Math.round(h)).toBe(72);
+        expect(Math.round(await row.evaluate((e) => e.getBoundingClientRect().height))).toBe(72);
+        await rowsClearBar(page, `trades-now-${tag}`);
       }
-      if (width === 360) await rowsClearBar(page, `trades-now-${tag}`);
       await shot(page, `trades-now-${tag}`);
+      await row.click();                                                        // an engine position opens its ledger trade
+      const detail = page.getByRole("dialog", { name: "Trade detail" });
+      await expect(detail).toContainText("OPEN");
+      await expect(detail).toContainText("Box break + close");
+      await page.goBack();
+      await expect(detail).toHaveCount(0);
 
-      // List: filters from the URL survive a reload; a partly-read family's view is blinded with the reason in words
-      await page.goto("/#/trades/list?acct=icm-probe&fam=box_break_close");
-      await page.reload();
+      // List, unfiltered: the server shows its totals (3+ unread arms per account and day)
+      await page.goto("/#/trades/list");
       const list = page.getByRole("region", { name: "Trade list" });
-      await expect(list.getByText("412 trades · net +£18.40 after costs · costs £22.10")).toBeVisible();
-      await expect(page.getByRole("button", { name: "Remove filter Scalp lab" })).toBeVisible();
-      await expect(page).toHaveURL(/#\/trades\/list\?acct=icm-probe&fam=box_break_close$/);
+      await expect(list.getByText(/^\d+ trades \(\d+ open\) · net [+−]£[\d.]+ after costs · costs £[\d.]+/)).toBeVisible();
       await noSideways(page, width);
       if (width === 360) await rowsClearBar(page, `trades-list-${tag}`);
       await shot(page, `trades-list-${tag}`);
-      await page.goto("/#/trades/list?fam=opening_range");
-      await expect(list.getByText("64 trades · costs £3.20")).toBeVisible();
-      await expect(list.getByText(/Results hidden: this view holds 1 unread arm \(fewer than 3\)/)).toBeVisible();
-      await expect(list).not.toContainText(/[+−]£\d/);
+      // narrowed to one strategy with unread arms: the server withholds the money and blinds those rows (ADR 0050);
+      // the filter is in the URL and survives a reload
+      await page.goto("/#/trades/list?acct=icm-probe&fam=session_vwap_fade");
+      await page.reload();
+      await expect(list.getByText(/^Totals hidden: the filter narrows to strategies whose arms are not read yet/)).toBeVisible();
+      await expect(list.getByRole("group", { name: "Totals of this list" })).not.toContainText("£");
+      await expect(page.getByRole("button", { name: "Remove filter Scalp lab" })).toBeVisible();
+      await expect(page).toHaveURL(/#\/trades\/list\?acct=icm-probe&fam=session_vwap_fade$/);
+      await shot(page, `trades-list-withheld-${tag}`);
 
-      // one trade: opens from the list, shows its chart with labelled levels, closes with the browser's back
-      await page.goto("/#/trades/list?acct=icm-probe");
-      await list.getByRole(width < 1024 ? "button" : "row", { name: /Box break \+ close 15m, long, plus £2\.10, closed at target/ }).click();
-      const detail = page.getByRole("dialog", { name: "Trade detail" });
-      await expect(detail.getByRole("img", { name: /target 4,024\.00, entry 4,012\.40/ })).toBeVisible();
-      await expect(detail).toContainText("Close above the 15m box after a squeeze");
-      await expect(detail).toContainText("= £0.27");
+      // one closed trade: its own result, costs that add up, why and how it ended; back closes it
+      await page.goto("/#/trades/list?acct=icm-demo");
+      await list.getByRole(width < 1024 ? "button" : "row", { name: /^Box break \+ close 1h, long, plus £3\.95, closed at trailing stop$/ }).click();
+      await expect(detail).toContainText("+£3.95");
+      await expect(detail).toContainText("Bars for this period aren't stored yet.");
+      await expect(detail).toContainText(/commission £0\.35 · swap \+?£0\.12|commission £0\.35/);
       await noSideways(page, width);
       await shot(page, `trades-detail-${tag}`);
       await page.goBack();
       await expect(detail).toHaveCount(0);
-      await expect(page).toHaveURL(/#\/trades\/list\?acct=icm-probe$/);
+      await expect(page).toHaveURL(/#\/trades\/list\?acct=icm-demo$/);
 
-      await page.goto("/#/trades/strategies");
-      const board = page.getByRole("region", { name: "Strategy board" });
-      await expect(board.getByText(/213\/300 · read ~/).first()).toBeVisible();
-      await expect(board).not.toContainText("near its stop");
-      await expect(board.getByText(/proven · \+0\.21\sR\/trade/).first()).toBeVisible();
+      await page.goto("/#/trades/strategies");                                 // the board (132) is not served yet
+      await expect(page.getByText(/The strategy board \(each arm's progress to its read\) isn't served yet/)).toBeVisible();
+      await expect(page.getByRole("region", { name: "Trades summary" })).toBeVisible();
       await noSideways(page, width);
       await shot(page, `trades-strategies-${tag}`);
 
       await page.goto("/#/trades/today");
       const today = page.getByRole("region", { name: "Today Scalp lab" });
-      await expect(today.getByText("Fills 148 of 200")).toBeVisible();
-      await expect(today.locator(".day-strip rect")).toHaveCount(14);
+      await expect(today.getByText(/^Fills \d+/)).toBeVisible();
+      await expect(today).toContainText("Closed today:");
+      await expect(today.locator(".day-strip")).toBeVisible();
       await noSideways(page, width);
       await shot(page, `trades-today-${tag}`);
     }

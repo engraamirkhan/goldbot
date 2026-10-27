@@ -7,7 +7,7 @@ import { useState } from "react";
 import { api } from "../../lib/api";
 import { modeBadge } from "../../lib/home";
 import {
-  groupOpen, heldWords, kindBadge, KIND_WORDS, moneyOrDash, type OpenGroup, type OpenPositionX, openRowName, POLL, price, sideArrow,
+  groupOpen, heldWords, kindBadge, KIND_WORDS, moneyOrDash, type OpenGroup, type OpenPositionX, openRowName, type OpenTarget, openTarget, POLL, price, sideArrow,
   sideWords, signedR, strategyLabel, type TradeKind,
 } from "../../lib/trades";
 import { useWide } from "../../lib/useMedia";
@@ -19,7 +19,7 @@ import "./trades.css";
 
 const FIRST = 10;
 
-export function TradesNow({ onOpen }: { onOpen?: (tradeId: string) => void }) {
+export function TradesNow({ onOpen }: { onOpen?: (t: OpenTarget) => void }) {
   return (
     <div className="trades-page">
       <CardBoundary name="Decisions"><Approvals /></CardBoundary>
@@ -30,7 +30,7 @@ export function TradesNow({ onOpen }: { onOpen?: (tradeId: string) => void }) {
 
 const kindOf = (p: OpenPositionX): TradeKind => p.kind ?? (p.mode === "live" ? "real" : p.probe ? "exploration" : "strategy");
 
-export function OpenNow({ onOpen }: { onOpen?: (tradeId: string) => void }) {
+export function OpenNow({ onOpen }: { onOpen?: (t: OpenTarget) => void }) {
   const q = useQuery({ queryKey: ["positionsOpen"], queryFn: api.openPositions, refetchInterval: POLL.now });
   const wide = useWide();
   const [acct, setAcct] = useState("");
@@ -107,7 +107,7 @@ function GroupHead({ g }: { g: OpenGroup }) {
   );
 }
 
-function OpenGroupBlock({ g, onOpen }: { g: OpenGroup; onOpen?: (id: string) => void }) {
+function OpenGroupBlock({ g, onOpen }: { g: OpenGroup; onOpen?: (t: OpenTarget) => void }) {
   const [open, setOpen] = useState(true);
   const [all, setAll] = useState(false);
   const rows = all ? g.rows : g.rows.slice(0, FIRST);
@@ -131,14 +131,14 @@ function OpenGroupBlock({ g, onOpen }: { g: OpenGroup; onOpen?: (id: string) => 
 }
 
 
-function RowShell({ p, onOpen, children, className }: { p: OpenPositionX; onOpen?: (id: string) => void; children: React.ReactNode; className: string }) {
-  if (p.trade_id && onOpen) {
-    return <button type="button" className={className} aria-label={openRowName(p)} onClick={() => onOpen(p.trade_id!)}>{children}</button>;
+function RowShell({ p, onOpen, children, className }: { p: OpenPositionX; onOpen?: (t: OpenTarget) => void; children: React.ReactNode; className: string }) {
+  if (onOpen) {
+    return <button type="button" className={className} aria-label={openRowName(p)} onClick={() => onOpen(openTarget(p))}>{children}</button>;
   }
   return <div className={className} aria-label={openRowName(p)} role="group">{children}</div>;
 }
 
-function OpenRowPhone({ p, onOpen }: { p: OpenPositionX; onOpen?: (id: string) => void }) {
+function OpenRowPhone({ p, onOpen }: { p: OpenPositionX; onOpen?: (t: OpenTarget) => void }) {
   const badge = kindBadge(kindOf(p));
   const risk = p.risk_amount ?? p.open_risk;
   return (
@@ -155,7 +155,7 @@ function OpenRowPhone({ p, onOpen }: { p: OpenPositionX; onOpen?: (id: string) =
   );
 }
 
-function OpenTable({ groups, onOpen }: { groups: OpenGroup[]; onOpen?: (id: string) => void }) {
+function OpenTable({ groups, onOpen }: { groups: OpenGroup[]; onOpen?: (t: OpenTarget) => void }) {
   return (
     <div className="trade-table-wrap">
       <table className="trade-table">
@@ -174,7 +174,7 @@ function OpenTable({ groups, onOpen }: { groups: OpenGroup[]; onOpen?: (id: stri
             <tr className="group-row"><th scope="rowgroup" colSpan={10}><span className="group-line"><GroupHead g={g} /></span></th></tr>
             {g.rows.map((p) => {
               const risk = p.risk_amount ?? p.open_risk;
-              const go = p.trade_id && onOpen ? () => onOpen(p.trade_id!) : undefined;
+              const go = onOpen ? () => onOpen(openTarget(p)) : undefined;
               return (
                 <tr key={`${p.account}-${p.position_id}`} className={`${p.stale ? "stale " : ""}${go ? "clickable" : ""}`}
                     tabIndex={go ? 0 : undefined} aria-label={openRowName(p)} onClick={go}

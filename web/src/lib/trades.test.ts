@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { board, openPositions } from "../test/tradesFixtures";
 import { parseRoute, routeHash } from "./route";
 import {
-  apiQuery, bandWords, DEFAULT_FILTERS, filtersQuery, groupOpen, heldWords, kindBadge, orderBoard, parseFilters, rowName,
+  apiQuery, bandWords, DEFAULT_FILTERS, filtersQuery, groupOpen, heldWords, kindBadge, openTarget, orderBoard, parseFilters, rowName,
   totalsLine, type BoardFamily,
 } from "./trades";
-import { tradeRow } from "../test/tradesFixtures";
+import { blindedPage, tradeRow, tradesPage } from "../test/tradesFixtures";
 
 const NB = " ";
 
@@ -30,29 +30,42 @@ describe("List filters live in the URL", () => {
   });
 
   it("drops unknown kinds and periods instead of passing them on", () => {
-    expect(parseFilters("kind=bogus,real&period=1y&status=maybe")).toMatchObject({ kind: ["real"], period: "today", status: "" });
+    expect(parseFilters("kind=bogus,real&period=1y&status=maybe&exit=time,stop")).toMatchObject({ kind: ["real"], period: "today", status: "", exit: ["stop"] });
   });
 
-  it("asks the API for every kind but Shadow by default, 50 a page, with the cursor", () => {
-    const q = apiQuery(DEFAULT_FILTERS, "c2");
-    expect(q).toContain("kind=real,strategy,exploration,control,cost_probe");
-    expect(q).not.toContain("shadow");
-    expect(q).toContain("limit=50");
-    expect(q).toContain("cursor=c2");
+  it("asks the API with its own parameter names, repeated; every kind but Shadow by default; 50 a page", () => {
+    const q = new URLSearchParams(apiQuery({ ...DEFAULT_FILTERS, acct: ["icm-probe"], fam: ["a", "b"], exit: ["time_limit"], status: "closed" }, "c2"));
+    expect(q.get("period")).toBe("today");
+    expect(q.getAll("account")).toEqual(["icm-probe"]);
+    expect(q.getAll("family")).toEqual(["a", "b"]);
+    expect(q.getAll("exit_reason")).toEqual(["time_limit"]);
+    expect(q.getAll("kind")).toEqual(["real", "strategy", "exploration", "control", "cost_probe"]);
+    expect(q.get("status")).toBe("closed");
+    expect(q.get("limit")).toBe("50");
+    expect(q.get("cursor")).toBe("c2");
   });
 });
 
 describe("ADR 0050 in the client", () => {
-  it("a blinded totals line shows count and costs only, and says why", () => {
-    const t = totalsLine({ n: 64, net_pnl: null, costs: 3.2, currency: "GBP", blinded: true, unread_arms: 1, excluded: [] });
-    expect(t.text).toBe("64 trades · costs £3.20");
-    expect(t.note).toMatch(/Results hidden: this view holds 1 unread arm \(fewer than 3\)/);
+  it("withheld totals show the counts only, with the server's reason", () => {
+    const t = totalsLine(blindedPage().totals);
+    expect(t.text).toBe("64 trades");
+    expect(t.note).toBe("Totals hidden: the filter narrows to strategies whose arms are not read yet (ADR 0050): totals return at the read.");
   });
 
-  it("an open totals line shows net after costs", () => {
-    const t = totalsLine({ n: 412, net_pnl: 18.4, costs: 22.1, currency: "GBP", blinded: false, unread_arms: 12, excluded: ["Vantage lab"] });
-    expect(t.text).toBe("412 trades · net +£18.40 after costs · costs £22.10 · excl. Vantage lab");
+  it("totals as served: net after costs, costs and open risk; mixed currencies never summed", () => {
+    const t = totalsLine(tradesPage().totals);
+    expect(t.text).toBe("412 trades (3 open) · net +£18.40 after costs · costs £22.10 · open risk £8.50");
     expect(t.note).toBeNull();
+    const m = totalsLine({ ...tradesPage().totals, net_pnl: null, costs: null, open_risk: null, currency: null, mixed_currencies: true });
+    expect(m.text).toBe("412 trades (3 open)");
+    expect(m.note).toBe("Money not summed: more than one currency.");
+  });
+
+  it("an engine position opens its ledger trade; an arm's open trade opens the List filtered to it", () => {
+    const [arm, , strat] = openPositions().positions;
+    expect(openTarget(strat)).toEqual({ id: "position:icm-probe:3" });
+    expect(openTarget(arm)).toEqual({ query: "acct=icm-demo&fam=box_break_close&status=open" });
   });
 
   it("never words a band as near its stop (only running or retired once fired)", () => {

@@ -12,12 +12,12 @@ import {
 } from "../../lib/trades";
 import { useWide } from "../../lib/useMedia";
 import { Badge, Button, ErrorState, Skeleton, TimeText } from "../../ui";
-import { lots, money, withUnit } from "../../ui/format";
+import { lots, money } from "../../ui/format";
 import { TradeChart } from "./TradeChart";
 
 export function TradeDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const wide = useWide();
-  const q = useQuery({ queryKey: ["trade", id], queryFn: () => api.trade(id), refetchInterval: (qq) => (qq.state.data?.status === "open" ? POLL.bars : false) });
+  const q = useQuery({ queryKey: ["trade", id], queryFn: () => api.trade(id), refetchInterval: (qq) => (qq.state.data?.status === "open" ? POLL.detail : false) });
   const head = useRef<HTMLHeadingElement>(null);
   useEffect(() => { head.current?.focus(); }, [id]);
   useEffect(() => {
@@ -45,11 +45,9 @@ export function TradeDetail({ id, onClose }: { id: string; onClose: () => void }
 }
 
 function DetailBody({ t, wide }: { t: TradeRow; wide: boolean }) {
-  const bars = useQuery({ queryKey: ["tradeBars", t.trade_id], queryFn: () => api.tradeBars(t.trade_id),
-                          refetchInterval: t.status === "open" ? POLL.bars : false, retry: false });
   const { pnl, r } = resultOf(t);
   const c = t.costs;
-  const costTotal = t.costs_total ?? (c ? c.spread + c.slippage + c.commission + c.swap : null);
+  const part = (x: number | null, signed = false) => (x == null ? "not recorded" : money(x, t.currency, signed));
   return (
     <div className="detail-body">
       <p className="detail-sub">
@@ -58,24 +56,27 @@ function DetailBody({ t, wide }: { t: TradeRow; wide: boolean }) {
         <strong>{t.status === "open" ? "OPEN" : `CLOSED · ${exitWords(t.exit_reason)}`}</strong>
       </p>
       <p className="detail-money num">
-        <span className={`tr-side ${t.side}`}><span aria-hidden="true">{sideArrow(t.side)}</span> {sideWords(t.side)}</span> {lots(t.lots)}{" "}
+        <span className={`tr-side ${t.side}`}><span aria-hidden="true">{sideArrow(t.side)}</span> {sideWords(t.side)}</span> {t.lots == null ? "" : lots(t.lots)}{" "}
         <strong className="detail-pnl">{moneyOrDash(pnl, t.currency)}</strong> {signedR(r)}{" "}
         <span className="muted">(risk {moneyOrDash(t.risk_amount, t.currency, false)}){t.status === "open" ? " · now" : ""}</span>
       </p>
       {t.stale && <p className="small state warn">Figures are old: the engine isn't reporting; not shown as current.</p>}
-      <TradeChart trade={t} bars={bars.data?.bars} loading={bars.isLoading} height={wide ? 280 : 200} width={wide ? 440 : 340} />
+      {/* no bars endpoint yet (backlog 133): the chart box shows the levels in words, at its final height */}
+      <TradeChart trade={t} bars={null} loading={false} height={wide ? 280 : 200} width={wide ? 440 : 340} />
       <dl className="detail-facts">
         <div><dt>Why taken</dt><dd>{t.why || "—"}</dd></div>
         <div><dt>{t.status === "open" ? "Closes at" : "Closed by"}</dt><dd>{t.status === "open"
           ? <>target {price(t.target)} or stop {price(t.stop_now ?? t.stop)} USD/oz{t.hold_limit_s ? `, or after ${duration(t.hold_limit_s)}` : ""}</>
           : <>{exitWords(t.exit_reason)}, after {duration(t.held_s)}{t.hold_limit_s ? ` (hold limit ${duration(t.hold_limit_s)})` : ""}{t.exit != null ? ` at ${price(t.exit)} USD/oz` : ""}</>}</dd></div>
         <div><dt>Levels</dt><dd className="num">entry {price(t.entry)} · stop {price(t.stop)}{t.stop_now != null && t.stop_now !== t.stop ? ` (moved to ${price(t.stop_now)})` : ""} · target {price(t.target)} USD/oz</dd></div>
-        <div><dt>Costs</dt><dd className="num">{c ? <>spread {money(c.spread, t.currency)} · slippage {money(c.slippage, t.currency)} · commission {money(c.commission, t.currency)} · swap {money(c.swap, t.currency, true)} = {money(costTotal ?? 0, t.currency)}{t.costs_r != null ? ` (${withUnit(t.costs_r.toFixed(2), "R")})` : ""}</> : "not recorded"}</dd></div>
-        <div><dt>Evidence</dt><dd>{EVIDENCE_WORDS[t.evidence] ?? t.evidence}{t.evidence === "counted" && t.read_n != null && t.read_at ? ` (${t.read_n} of ${t.read_at})` : ""}
+        <div><dt>Costs</dt><dd className="num">{c ? <>spread {part(c.spread)} · slippage {part(c.slippage)} · commission {part(c.commission)} · swap {part(c.swap, true)} = {money(c.total, t.currency)}
+          {!c.complete && <span className="muted"> (known parts only)</span>}{t.gross != null && <span className="muted"> · gross {money(t.gross, t.currency, true)}</span>}</>
+          : t.kind === "shadow" ? "none: a paper trade" : "not recorded"}</dd></div>
+        <div><dt>Evidence</dt><dd>{EVIDENCE_WORDS[t.evidence] ?? t.evidence}
           {t.evidence === "excluded" && t.excluded_reason ? `: ${t.excluded_reason}` : ""}</dd></div>
         <div><dt>Times</dt><dd>opened <TimeText iso={t.opened_utc} withDay />{t.exit_utc && <> · closed <TimeText iso={t.exit_utc} withDay /></>} <span className="muted">(your time; UTC on hover)</span></dd></div>
       </dl>
-      {t.blinded && <p className="small muted">This arm's totals stay hidden until its read; this one trade is shown in full.</p>}
+      {t.arm_id && <p className="small muted">This arm's totals stay hidden until its read (ADR 0050); one trade is shown in full.</p>}
       <details className="detail-ids">
         <summary>Details</summary>
         <dl className="small">
