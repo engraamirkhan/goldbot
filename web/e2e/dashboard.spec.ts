@@ -445,20 +445,145 @@ test("Home is five calm cards and the trades live on Trades, on a phone and a de
       await noSideways(page, width);
       await shot(page, `home-${width}-${scheme}`);
 
-      await page.getByRole("button", { name: /open trades?( · see trades)? →$/ }).click();   // Home -> Trades > Open
-      await expect(page.getByRole("tab", { name: "Open", exact: true })).toHaveAttribute("aria-selected", "true");
+      await page.getByRole("button", { name: /open trades?( · see trades)? →$/ }).click();   // Home -> Trades > Now
+      await expect(page.getByRole("tab", { name: "Now", exact: true })).toHaveAttribute("aria-selected", "true");
       await expect(page.getByRole("region", { name: "Open trades" })).toBeVisible();
       await expect(page.getByRole("region", { name: "Safety state" })).toBeVisible();
       await noSideways(page, width);
-      await shot(page, `trades-open-${width}-${scheme}`);
-      await go(page, "Trades activity");
-      await expect(page.getByRole("region", { name: "Activity feed" })).toBeVisible();
+      await go(page, "Trades activity");                                       // the old tab name lands on List
+      // until this server serves the trade ledger (backlog 129), List says so and keeps the activity feed
+      await expect(page.getByRole("region", { name: /^(Trade list|Activity feed)$/ })).toBeVisible();
       await noSideways(page, width);
-      await shot(page, `trades-activity-${width}-${scheme}`);
-      await go(page, "Trades summary");
-      for (const name of ["Today", "Account icm-demo", "Trades summary"]) await expect(page.getByRole("region", { name })).toBeVisible();
+      await go(page, "Trades summary");                                        // ... and Summary on Today
+      for (const name of ["Today icm-demo", "Account icm-demo", "Risk per trade"]) await expect(page.getByRole("region", { name })).toBeVisible();
       await noSideways(page, width);
-      await shot(page, `trades-summary-${width}-${scheme}`);
+    }
+  }
+});
+
+/** Phone: scrolled to the bottom, the last trade row clears the fixed bottom bar, and no visible row is under it
+ *  (the tap at a row's centre lands on the row, not on the bar). Viewport screenshot as evidence. */
+async function rowsClearBar(page: Page, name: string) {
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await page.waitForTimeout(100);
+  const bad = await page.evaluate(() => {
+    const bar = document.querySelector(".bottombar")!.getBoundingClientRect().top;
+    const rows = Array.from(document.querySelectorAll(".trade-row"));
+    const last = rows[rows.length - 1]?.getBoundingClientRect();
+    const out: string[] = [];
+    if (!last || last.bottom > bar) out.push(`last row bottom ${last?.bottom} > bar top ${bar}`);
+    for (const r of rows) {
+      const b = r.getBoundingClientRect();
+      if (b.bottom <= 0 || b.top >= window.innerHeight) continue;
+      const y = Math.min(b.top + b.height / 2, window.innerHeight - 1);
+      const hit = document.elementFromPoint(b.left + b.width / 2, y);
+      if (b.top + b.height / 2 < bar && !(hit && r.contains(hit))) out.push(`row at ${Math.round(b.top)} covered`);
+      if (b.top < bar && b.bottom > bar && r === rows[rows.length - 1]) out.push("last row cut by the bar");
+    }
+    return out;
+  });
+  expect(bad).toEqual([]);
+  if (process.env.SHOTS_DIR) await page.screenshot({ path: join(process.env.SHOTS_DIR, `${name}-viewport-bottom.png`) });
+  await page.evaluate(() => window.scrollTo(0, 0));
+}
+
+// The trades experience (docs/design/trades-ux-2026-10-27.md, ADR 0050, backlog 128-133) on a phone and a desktop,
+// light and dark. The trade ledger, the strategy board and the new Today and open-trade fields come from the backend
+// lane (129, 131); until the seeded server serves them, this story answers those calls with the typed fixtures the
+// unit tests use (src/test/tradesFixtures.ts) and leaves every other call to the real server. Drop the routes once
+// scripts/e2e_server.py seeds the ledger.
+test("Trades: money on every open row, filters in the URL, a blinded partly-read family, one trade's detail, no layout shift", async ({ page }) => {
+  const fx = await import("../src/test/tradesFixtures");
+  let polls = 0;
+  await page.route(/\/api\/(positions\/open|today|trades|strategies\/board)(\/|\?|$)/, async (route) => {
+    const url = new URL(route.request().url());
+    const json = (b: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(b) });
+    if (url.pathname === "/api/positions/open") {
+      const v = fx.openPositions();
+      polls += 1;                                                               // a live update every poll: P&L moves
+      v.positions = v.positions.map((p) => ({ ...p, floating_pnl: (p.floating_pnl ?? 0) + (polls % 2) * 0.37 }));
+      return json(v);
+    }
+    if (url.pathname === "/api/today") return json({ as_of: new Date().toISOString(), accounts: [fx.todayAccount()] });
+    if (url.pathname === "/api/strategies/board") return json(fx.board());
+    if (url.pathname.endsWith("/bars")) return json(fx.bars());
+    if (url.pathname.startsWith("/api/trades/") && !/summary|overview/.test(url.pathname)) return json(fx.tradeRow());
+    if (url.pathname === "/api/trades") return json(url.searchParams.get("fam") === "opening_range" ? fx.blindedPage() : fx.tradesPage());
+    return route.fallback();
+  });
+  await page.goto("/");
+  await signIn(page, OWNER.email, OWNER.password, ownerSecret);
+  for (const [width, height] of [[360, 800], [1280, 900]] as const) {
+    for (const scheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.setViewportSize({ width, height });
+      const tag = `${width}-${scheme}`;
+
+      await page.goto("/#/trades/now");
+      const open = page.getByRole("region", { name: "Open trades", exact: true });
+      await expect(open.getByText("Open now · 3 trades")).toBeVisible();
+      await expect(open).not.toContainText("not known");
+      const row = open.getByRole(width < 1024 ? "button" : "row", { name: /^Box break \+ close 15m, long, plus £3\.(40|77), open$/ });
+      await expect(row).toContainText(width < 1024 ? "risk £5.40" : "£5.40");
+      await expect(row).toContainText(/\+0\.63\sR/);
+      await noSideways(page, width);
+      if (width === 360) {
+        // no layout shift while a poll moves the P&L: fixed row heights, tabular numbers (CLS 0 over two polls)
+        const cls = await page.evaluate(() => new Promise<number>((done) => {
+          let sum = 0;
+          new PerformanceObserver((l) => { for (const e of l.getEntries() as unknown as { value: number; hadRecentInput: boolean }[]) if (!e.hadRecentInput) sum += e.value; })
+            .observe({ type: "layout-shift", buffered: false });
+          setTimeout(() => done(sum), 11_000);
+        }));
+        expect(cls).toBeLessThan(0.01);
+        const h = await row.evaluate((e) => e.getBoundingClientRect().height);
+        expect(Math.round(h)).toBe(72);
+      }
+      if (width === 360) await rowsClearBar(page, `trades-now-${tag}`);
+      await shot(page, `trades-now-${tag}`);
+
+      // List: filters from the URL survive a reload; a partly-read family's view is blinded with the reason in words
+      await page.goto("/#/trades/list?acct=icm-probe&fam=box_break_close");
+      await page.reload();
+      const list = page.getByRole("region", { name: "Trade list" });
+      await expect(list.getByText("412 trades · net +£18.40 after costs · costs £22.10")).toBeVisible();
+      await expect(page.getByRole("button", { name: "Remove filter Scalp lab" })).toBeVisible();
+      await expect(page).toHaveURL(/#\/trades\/list\?acct=icm-probe&fam=box_break_close$/);
+      await noSideways(page, width);
+      if (width === 360) await rowsClearBar(page, `trades-list-${tag}`);
+      await shot(page, `trades-list-${tag}`);
+      await page.goto("/#/trades/list?fam=opening_range");
+      await expect(list.getByText("64 trades · costs £3.20")).toBeVisible();
+      await expect(list.getByText(/Results hidden: this view holds 1 unread arm \(fewer than 3\)/)).toBeVisible();
+      await expect(list).not.toContainText(/[+−]£\d/);
+
+      // one trade: opens from the list, shows its chart with labelled levels, closes with the browser's back
+      await page.goto("/#/trades/list?acct=icm-probe");
+      await list.getByRole(width < 1024 ? "button" : "row", { name: /Box break \+ close 15m, long, plus £2\.10, closed at target/ }).click();
+      const detail = page.getByRole("dialog", { name: "Trade detail" });
+      await expect(detail.getByRole("img", { name: /target 4,024\.00, entry 4,012\.40/ })).toBeVisible();
+      await expect(detail).toContainText("Close above the 15m box after a squeeze");
+      await expect(detail).toContainText("= £0.27");
+      await noSideways(page, width);
+      await shot(page, `trades-detail-${tag}`);
+      await page.goBack();
+      await expect(detail).toHaveCount(0);
+      await expect(page).toHaveURL(/#\/trades\/list\?acct=icm-probe$/);
+
+      await page.goto("/#/trades/strategies");
+      const board = page.getByRole("region", { name: "Strategy board" });
+      await expect(board.getByText(/213\/300 · read ~/).first()).toBeVisible();
+      await expect(board).not.toContainText("near its stop");
+      await expect(board.getByText(/proven · \+0\.21\sR\/trade/).first()).toBeVisible();
+      await noSideways(page, width);
+      await shot(page, `trades-strategies-${tag}`);
+
+      await page.goto("/#/trades/today");
+      const today = page.getByRole("region", { name: "Today Scalp lab" });
+      await expect(today.getByText("Fills 148 of 200")).toBeVisible();
+      await expect(today.locator(".day-strip rect")).toHaveCount(14);
+      await noSideways(page, width);
+      await shot(page, `trades-today-${tag}`);
     }
   }
 });

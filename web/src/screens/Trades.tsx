@@ -1,54 +1,29 @@
-// The Trades screen (docs/ux/home-v2-2026-10-19.md): everything about trades, moved off Home on the owner's request
-// (2026-10-19). Three tabs: Open (decisions waiting or just made, then the open trades with stop, target, R and
-// floating money), Activity (every shadow, demo, live and probe trade and every refused entry, newest first) and
-// Summary (today's money in full, the account balance and the trades summary). Each card its own query and boundary.
-import { useQuery } from "@tanstack/react-query";
-import { api } from "../lib/api";
-import { ErrorState } from "../ui";
-import { ActivityFeed } from "./Activity";
-import { Approvals } from "./Approvals";
-import { BalanceCard, BalanceCardSkeleton } from "./BalanceCard";
-import { CardBoundary, OpenTradesCard, RiskTodayCard, TodayCard } from "./HomeCards";
-import { TradesSummaryCard } from "./TradesOverview";
+// The Trades screen (docs/design/trades-ux-2026-10-27.md §3, ADR 0050, backlog 128-133): Now (what needs me, what is
+// open, with money on every row), List (every trade of every kind, filtered in the URL, one row per trade), Strategies
+// (progress to each arm's read, verdicts after it) and Today (per account: fills against the plan, net £ after costs,
+// caps, the 14-day strip). One trade opens as a sheet (phone) or a side panel (desktop) at #/trades/<tab>/<trade_id>;
+// the browser's back closes it. The old tabs (#/trades/open, activity, summary) redirect (lib/route.ts).
+import type { Go, Route } from "../lib/route";
+import { TradesList } from "./trades/List";
+import { TradesNow } from "./trades/Now";
+import { TradesStrategies } from "./trades/Strategies";
+import { TradesToday } from "./trades/Today";
+import { TradeDetail } from "./trades/TradeDetail";
+import { filtersQuery, parseFilters, type TradesTab } from "../lib/trades";
 import "./home.css";
 
-export function TradesOpen() {
+export function TradesTabView({ tab, route, go }: { tab: TradesTab; route: Route; go: Go }) {
+  const query = route.query ?? "";
+  const open = (id: string) => go("trades", tab, id, query, { keepScroll: true });
+  const close = () => go("trades", tab, null, query, { keepScroll: true });
   return (
-    <div className="trades-page">
-      <CardBoundary name="Decisions"><Approvals /></CardBoundary>
-      <CardBoundary name="Open trades"><OpenTradesCard /></CardBoundary>
-    </div>
+    <>
+      {tab === "now" && <TradesNow onOpen={open} />}
+      {tab === "list" && <TradesList query={query} onOpen={open}
+                                     onQuery={(q) => go("trades", "list", null, q, { replace: true, keepScroll: true })} />}
+      {tab === "strategies" && <TradesStrategies onFamily={(fam) => go("trades", "list", null, filtersQuery({ ...parseFilters(""), fam: [fam] }))} />}
+      {tab === "today" && <TradesToday />}
+      {route.sub && (tab === "now" || tab === "list") && <TradeDetail id={route.sub} onClose={close} />}
+    </>
   );
-}
-
-export function TradesActivity() {
-  return (
-    <div className="trades-page">
-      <p className="muted small">Shadow, demo and live trades, cost probes and refused entries, newest first. Refused
-        entries are the risk check doing its job: no order was sent.</p>
-      <CardBoundary name="Activity"><ActivityFeed /></CardBoundary>
-    </div>
-  );
-}
-
-export function TradesSummary() {
-  return (
-    <div className="trades-page">
-      <CardBoundary name="Today"><TodayCard /></CardBoundary>
-      <CardBoundary name="Balance"><Balances /></CardBoundary>
-      <CardBoundary name="Risk per trade today"><RiskTodayCard /></CardBoundary>
-      <CardBoundary name="Trades summary"><TradesSummaryCard /></CardBoundary>
-    </div>
-  );
-}
-
-/** The broker's balance, loss budget and milestones per account (BalanceCard, unchanged). */
-function Balances() {
-  const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts, refetchInterval: 5000 });
-  if (accounts.isLoading) return <div className="accts"><BalanceCardSkeleton /></div>;
-  if (accounts.isError && !accounts.data) {
-    return <ErrorState title="Could not load the balances." stillWorks="Trading and the loss limits are not affected." onRetry={() => accounts.refetch()} />;
-  }
-  if ((accounts.data?.length ?? 0) === 0) return null;
-  return <div className="accts">{accounts.data!.map((a) => <BalanceCard key={a.account_id} a={a} />)}</div>;
 }
