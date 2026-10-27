@@ -316,6 +316,22 @@ accounts:
         VW1B: { style: swing, max_loss: 40.0 }
         VW2: { style: swing, max_loss: 40.0 }
         DON4: { style: swing, max_loss: 40.0 }   # wave 2 (8.3): Donchian-55 break-close 4h
+  icm-depth:
+    broker: icm
+    mode: demo
+    server: ICMarketsSC-Demo
+    login: null  # never here (public repo): `goldbot accounts set mt5-login-icm-depth` keeps it in the keyring
+    terminal_path: C:\MT5\ICMarkets\terminal64.exe   # its own box (goldbot-mt5-depth), the bootstrap's install path
+    server_tz: NY+7   # as icm-demo and icm-probe (same broker, measured 2026-10-26); re-check on its box (ADR 0005)
+    symbol: XAUUSD
+    magic_base: 260600
+    # ICM depth host (owner 2026-10-27, docs/research/volume-500-plan-2026-10-26.md section 2 lever C; build plan
+    # docs/deploy/icm-depth-host.md): a second free IC Markets demo on its own Wine MT5 box, to take icm-demo's 15m-1d
+    # families so icm-demo becomes a pure volume host. OFF and armless until the box is verified and the arm move has
+    # passed the trading-safety and quant reviews; that change sets the limits, probe_only, approval_mode, exploration
+    # and enabled in one step. Until then approval_mode stays propose and no engine unit is enabled for it.
+    # Rollback: remove this block.
+    enabled: false
   icm-live:
     broker: icm
     mode: live
