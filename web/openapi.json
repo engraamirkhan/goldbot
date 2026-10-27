@@ -36,6 +36,24 @@
     "title": "AcceptResponse",
     "type": "object"
    },
+   "AccountChoice": {
+    "properties": {
+     "account": {
+      "title": "Account",
+      "type": "string"
+     },
+     "label": {
+      "title": "Label",
+      "type": "string"
+     }
+    },
+    "required": [
+     "account",
+     "label"
+    ],
+    "title": "AccountChoice",
+    "type": "object"
+   },
    "AccountSummary": {
     "properties": {
      "account_class": {
@@ -3807,7 +3825,7 @@
     "type": "object"
    },
    "KindDay": {
-    "description": "One kind's figures today on one account. `withheld`: the money covers fewer than 3 unread arms (ADR 0050).",
+    "description": "One kind's figures today on one account.",
     "properties": {
      "closed": {
       "title": "Closed",
@@ -3854,11 +3872,6 @@
       "default": 0,
       "title": "Net Unknown",
       "type": "integer"
-     },
-     "withheld": {
-      "default": false,
-      "title": "Withheld",
-      "type": "boolean"
      }
     },
     "required": [
@@ -3872,7 +3885,7 @@
     "type": "object"
    },
    "LabTotal": {
-    "description": "One lab's sleeve over 7 days: counts always; money only when every (account, day) cell of its unread closes\ncovers 3+ strategy arms, and only when every sleeve of the account clears that (else one sleeve is the lab's\nfigure minus the others).",
+    "description": "One lab's sleeve over 7 days: counts and money after costs (None only when a net is unknown or currencies\ndiffer).",
     "properties": {
      "account_label": {
       "title": "Account Label",
@@ -3931,17 +3944,6 @@
      "style": {
       "title": "Style",
       "type": "string"
-     },
-     "withheld_reason": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Withheld Reason"
      }
     },
     "required": [
@@ -3953,8 +3955,7 @@
      "n_closed",
      "net_pnl",
      "costs",
-     "currency",
-     "withheld_reason"
+     "currency"
     ],
     "title": "LabTotal",
     "type": "object"
@@ -5532,11 +5533,6 @@
       "format": "date",
       "title": "Since",
       "type": "string"
-     },
-     "withheld": {
-      "default": false,
-      "title": "Withheld",
-      "type": "boolean"
      }
     },
     "required": [
@@ -6117,6 +6113,537 @@
     "title": "PsiHeatmap",
     "type": "object"
    },
+   "RankFigures": {
+    "description": "One row's figures over the window (closed fills with an R, after every cost; voided evidence left out).\nIntervals are clustered by (account, opportunity day of the close), t with G-1 df, G = `clusters`.",
+    "properties": {
+     "ci95": {
+      "anyOf": [
+       {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "number"
+         }
+        ],
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ci95"
+     },
+     "clusters": {
+      "title": "Clusters",
+      "type": "integer"
+     },
+     "cost_per_trade": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cost Per Trade"
+     },
+     "cost_per_trade_r": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cost Per Trade R"
+     },
+     "currency": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Currency"
+     },
+     "days": {
+      "title": "Days",
+      "type": "integer"
+     },
+     "edge_ci": {
+      "anyOf": [
+       {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "number"
+         }
+        ],
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Edge Ci"
+     },
+     "edge_ci_level": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Edge Ci Level"
+     },
+     "edge_source": {
+      "anyOf": [
+       {
+        "enum": [
+         "read",
+         "interim"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Edge Source"
+     },
+     "edge_vs_control_r": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Edge Vs Control R"
+     },
+     "hit_rate": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hit Rate"
+     },
+     "last_30d": {
+      "$ref": "#/components/schemas/RecentFigures"
+     },
+     "last_7d": {
+      "$ref": "#/components/schemas/RecentFigures"
+     },
+     "lower_adjusted": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Lower Adjusted"
+     },
+     "max_drawdown_r": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Max Drawdown R"
+     },
+     "n": {
+      "title": "N",
+      "type": "integer"
+     },
+     "net_per_trade": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net Per Trade"
+     },
+     "net_pnl": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net Pnl"
+     },
+     "net_r_per_trade": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net R Per Trade"
+     },
+     "no_losses": {
+      "title": "No Losses",
+      "type": "boolean"
+     },
+     "profit_factor": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Profit Factor"
+     },
+     "trend": {
+      "anyOf": [
+       {
+        "enum": [
+         "up",
+         "down",
+         "flat"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Trend"
+     }
+    },
+    "required": [
+     "n",
+     "days",
+     "clusters",
+     "net_r_per_trade",
+     "ci95",
+     "lower_adjusted",
+     "hit_rate",
+     "net_pnl",
+     "net_per_trade",
+     "currency",
+     "profit_factor",
+     "no_losses",
+     "max_drawdown_r",
+     "cost_per_trade",
+     "cost_per_trade_r",
+     "edge_vs_control_r",
+     "edge_ci",
+     "edge_ci_level",
+     "edge_source",
+     "last_7d",
+     "last_30d",
+     "trend"
+    ],
+    "title": "RankFigures",
+    "type": "object"
+   },
+   "RankRow": {
+    "properties": {
+     "accounts": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Accounts",
+      "type": "array"
+     },
+     "band": {
+      "enum": [
+       "ranked",
+       "too_few",
+       "control",
+       "retired"
+      ],
+      "title": "Band",
+      "type": "string"
+     },
+     "family": {
+      "title": "Family",
+      "type": "string"
+     },
+     "family_label": {
+      "title": "Family Label",
+      "type": "string"
+     },
+     "figures": {
+      "$ref": "#/components/schemas/RankFigures"
+     },
+     "key": {
+      "title": "Key",
+      "type": "string"
+     },
+     "kind": {
+      "enum": [
+       "exploration",
+       "engine",
+       "control"
+      ],
+      "title": "Kind",
+      "type": "string"
+     },
+     "rank": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Rank"
+     },
+     "status": {
+      "enum": [
+       "early",
+       "candidate",
+       "proven",
+       "not_proven",
+       "retired"
+      ],
+      "title": "Status",
+      "type": "string"
+     },
+     "style": {
+      "title": "Style",
+      "type": "string"
+     },
+     "timeframes": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Timeframes",
+      "type": "array"
+     },
+     "unranked_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Unranked Reason"
+     },
+     "variants": {
+      "items": {
+       "$ref": "#/components/schemas/RankVariant"
+      },
+      "title": "Variants",
+      "type": "array"
+     },
+     "version": {
+      "title": "Version",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "key",
+     "family",
+     "family_label",
+     "version",
+     "style",
+     "kind",
+     "timeframes",
+     "accounts",
+     "band",
+     "rank",
+     "unranked_reason",
+     "status",
+     "figures",
+     "variants"
+    ],
+    "title": "RankRow",
+    "type": "object"
+   },
+   "RankVariant": {
+    "description": "One timeframe variant of a family (its arms pooled over accounts), the same columns, never ranked.",
+    "properties": {
+     "figures": {
+      "$ref": "#/components/schemas/RankFigures"
+     },
+     "status": {
+      "enum": [
+       "early",
+       "candidate",
+       "proven",
+       "not_proven",
+       "retired"
+      ],
+      "title": "Status",
+      "type": "string"
+     },
+     "timeframe": {
+      "title": "Timeframe",
+      "type": "string"
+     },
+     "variant": {
+      "title": "Variant",
+      "type": "string"
+     }
+    },
+    "required": [
+     "variant",
+     "timeframe",
+     "status",
+     "figures"
+    ],
+    "title": "RankVariant",
+    "type": "object"
+   },
+   "RankingView": {
+    "properties": {
+     "account": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Account"
+     },
+     "account_choices": {
+      "items": {
+       "$ref": "#/components/schemas/AccountChoice"
+      },
+      "title": "Account Choices",
+      "type": "array"
+     },
+     "as_of": {
+      "format": "date-time",
+      "title": "As Of",
+      "type": "string"
+     },
+     "controls": {
+      "items": {
+       "$ref": "#/components/schemas/RankRow"
+      },
+      "title": "Controls",
+      "type": "array"
+     },
+     "heading": {
+      "title": "Heading",
+      "type": "string"
+     },
+     "k_ranked": {
+      "title": "K Ranked",
+      "type": "integer"
+     },
+     "min_days": {
+      "title": "Min Days",
+      "type": "integer"
+     },
+     "min_fills": {
+      "title": "Min Fills",
+      "type": "integer"
+     },
+     "retired": {
+      "items": {
+       "$ref": "#/components/schemas/RankRow"
+      },
+      "title": "Retired",
+      "type": "array"
+     },
+     "rows": {
+      "items": {
+       "$ref": "#/components/schemas/RankRow"
+      },
+      "title": "Rows",
+      "type": "array"
+     },
+     "style": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Style"
+     },
+     "t_adjusted": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "T Adjusted"
+     },
+     "unreadable": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Unreadable",
+      "type": "array"
+     },
+     "window": {
+      "enum": [
+       "7d",
+       "30d",
+       "all"
+      ],
+      "title": "Window",
+      "type": "string"
+     }
+    },
+    "required": [
+     "as_of",
+     "window",
+     "account",
+     "style",
+     "heading",
+     "k_ranked",
+     "t_adjusted",
+     "min_fills",
+     "min_days",
+     "rows",
+     "controls",
+     "retired",
+     "account_choices",
+     "unreadable"
+    ],
+    "title": "RankingView",
+    "type": "object"
+   },
    "ReadFigures": {
     "description": "The read sample's figures, frozen at the read (its first `n` counted trades closed by `read_utc`).",
     "properties": {
@@ -6354,6 +6881,32 @@
      "totp"
     ],
     "title": "RearmRequest",
+    "type": "object"
+   },
+   "RecentFigures": {
+    "description": "Net R per trade over the last 7 or 30 opportunity days, with its n.",
+    "properties": {
+     "n": {
+      "title": "N",
+      "type": "integer"
+     },
+     "net_r_per_trade": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Net R Per Trade"
+     }
+    },
+    "required": [
+     "n",
+     "net_r_per_trade"
+    ],
+    "title": "RecentFigures",
     "type": "object"
    },
    "RecoveryCodesRequest": {
@@ -8512,11 +9065,6 @@
        }
       ],
       "title": "Target"
-     },
-     "withheld": {
-      "default": false,
-      "title": "Withheld",
-      "type": "boolean"
      }
     },
     "required": [
@@ -8861,13 +9409,6 @@
         "type": "null"
        }
       ]
-     },
-     "withheld": {
-      "items": {
-       "type": "string"
-      },
-      "title": "Withheld",
-      "type": "array"
      }
     },
     "required": [
@@ -9138,7 +9679,7 @@
     "type": "object"
    },
    "TradeRow": {
-    "description": "One trade (opened and closed merged). Money in the account currency, prices USD per oz, times UTC. Closed:\n`pnl` is net of every cost and `gross` = pnl + costs.total (to the penny). Open: `pnl_now` at the engine's mid\nprice from the fill (the entry spread is inside it). `blinded` True: this row's result fields were withheld because\nthe list's filter isolates arms not yet read (ADR 0050); GET /api/trades/{trade_id} always shows the result.",
+    "description": "One trade (opened and closed merged). Money in the account currency, prices USD per oz, times UTC. Closed:\n`pnl` is net of every cost and `gross` = pnl + costs.total (to the penny). Open: `pnl_now` at the engine's mid\nprice from the fill (the entry spread is inside it).",
     "properties": {
      "account": {
       "anyOf": [
@@ -9165,10 +9706,6 @@
        }
       ],
       "title": "Arm Id"
-     },
-     "blinded": {
-      "title": "Blinded",
-      "type": "boolean"
      },
      "censored": {
       "title": "Censored",
@@ -9561,7 +10098,6 @@
      "why",
      "evidence",
      "excluded_reason",
-     "blinded",
      "stale"
     ],
     "title": "TradeRow",
@@ -9672,7 +10208,7 @@
     "type": "object"
    },
    "TradeTotals": {
-    "description": "The filter's totals over every matching row (not only the page), equal to the sum of those rows. With\n`withheld` the money is None (ADR 0050: an aggregate covering fewer than 3 unread arms, or a filter narrowed to\nstrategies with unread arms); counts and open risk always show.",
+    "description": "The filter's totals over every matching row (not only the page), equal to the sum of those rows. Money is None\nonly when currencies differ (never summed) or, for the net, when a closed trade's net is unknown.",
     "properties": {
      "costs": {
       "anyOf": [
@@ -9750,11 +10286,6 @@
       ],
       "title": "Open Pnl"
      },
-     "open_pnl_withheld": {
-      "default": false,
-      "title": "Open Pnl Withheld",
-      "type": "boolean"
-     },
      "open_risk": {
       "anyOf": [
        {
@@ -9765,21 +10296,6 @@
        }
       ],
       "title": "Open Risk"
-     },
-     "withheld": {
-      "title": "Withheld",
-      "type": "boolean"
-     },
-     "withheld_reason": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Withheld Reason"
      }
     },
     "required": [
@@ -9791,9 +10307,7 @@
      "net_pnl",
      "costs",
      "open_pnl",
-     "open_risk",
-     "withheld",
-     "withheld_reason"
+     "open_risk"
     ],
     "title": "TradeTotals",
     "type": "object"
@@ -12211,6 +12725,93 @@
     "summary": "Strategies Board"
    }
   },
+  "/api/strategies/ranking": {
+   "get": {
+    "operationId": "strategies_ranking_api_strategies_ranking_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "window",
+      "required": false,
+      "schema": {
+       "default": "all",
+       "enum": [
+        "7d",
+        "30d",
+        "all"
+       ],
+       "title": "Window",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "account",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Account"
+      }
+     },
+     {
+      "in": "query",
+      "name": "style",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "enum": [
+          "scalp",
+          "intraday",
+          "swing"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Style"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/RankingView"
+        }
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "summary": "Strategies Ranking"
+   }
+  },
   "/api/strategies/watch": {
    "get": {
     "operationId": "strategies_watch_api_strategies_watch_get",
@@ -12462,6 +13063,21 @@
         }
        ],
        "title": "Control"
+      }
+     },
+     {
+      "in": "query",
+      "name": "sort",
+      "required": false,
+      "schema": {
+       "default": "newest",
+       "enum": [
+        "newest",
+        "best",
+        "worst"
+       ],
+       "title": "Sort",
+       "type": "string"
       }
      },
      {

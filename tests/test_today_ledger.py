@@ -1,8 +1,8 @@
 """Item 131 (docs/design/trades-ux-2026-10-27.md §2.4, §3.5): Today per account from the trade ledger, one builder
 with GET /api/trades. Fills against the per-account target and the pace; net after costs equal to today's closed
 ledger rows to the penny; caps, open risk and the exploration sleeves used; a 14-trading-day net strip with the daily
-target, week and month to date; quiet-day wording only when the volatility screen publishes it; the arms' own money
-withheld before their read (ADR 0050)."""
+target, week and month to date; quiet-day wording only when the volatility screen publishes it; every figure shown
+whatever an arm's read (ADR 0053 retired the ADR 0050 withholding, backlog 139)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -30,7 +30,7 @@ def _day(state: Path, cat: Any, account: str = SCALP, plan: AccountPlan | None =
     e = {"open_positions": 1, "open_risk": 2.4, "equity": 10_050.0, "day_start_equity": 10_000.0,
          "week_start_equity": 10_100.0, "daily_loss_limit": 200.0, "daily_loss_remaining": 180.0,
          "limits": {"weekly_cap": 0.05}, **engine}
-    return account_day(account, e, led.rows, NOW, plan or AccountPlan(fills_target=200, pot=138.0), cat)
+    return account_day(account, e, led.rows, NOW, plan or AccountPlan(fills_target=200, pot=138.0))
 
 
 def _three_arms(state: Path) -> None:
@@ -47,7 +47,7 @@ def test_todays_net_equals_the_sum_of_todays_closed_ledger_rows_to_the_penny(tmp
     rows = [r for r in tl.build_ledger(tmp_path, NOW, cat=cat).rows if r.status == "closed"]
     assert d["net_today"] == round(sum(r.pnl or 0 for r in rows), 2) == round(1.10 - 0.40 + 0.25 - 0.60, 2)
     assert d["costs_today"].total == round(sum(r.costs.total for r in rows if r.costs), 2)
-    page = tl.query(tl.build_ledger(tmp_path, NOW, cat=cat), tl.TradeQuery(account=(SCALP,)), cat)
+    page = tl.query(tl.build_ledger(tmp_path, NOW, cat=cat), tl.TradeQuery(account=(SCALP,)))
     assert page.totals.net_pnl == d["net_today"]                                  # the List tab's line agrees
 
 
@@ -61,28 +61,25 @@ def test_fills_are_counted_against_the_accounts_target_with_a_pace(tmp_path):
     assert d["by_kind"]["exploration"].fills == 4 and d["by_kind"]["control"].fills == 1
 
 
-def test_the_arms_own_money_is_withheld_before_their_read_but_other_kinds_show(tmp_path):
+def test_every_kinds_money_shows_whatever_the_arms_read(tmp_path):
     _three_arms(tmp_path)
     _engine(tmp_path, DAY)
     _probe(tmp_path)
     _closed(tmp_path, DAY, "demo", 41, 3.95, "trail_close")
     cat = _catalog(tmp_path)
     scalp = _day(tmp_path, cat)
-    for k in ("exploration", "control"):
-        kd = scalp["by_kind"][k]
-        assert kd.withheld and kd.net_pnl is None and kd.net_r is None and kd.closed >= 1
+    assert scalp["by_kind"]["exploration"].net_pnl == round(1.10 - 0.40 + 0.25, 2)
+    assert scalp["by_kind"]["control"].net_pnl == -0.60 and scalp["by_kind"]["control"].net_r is not None
     day = _day(tmp_path, cat, account=DAY)
     assert day["by_kind"]["cost_probe"].net_pnl == 1.41 and day["by_kind"]["strategy"].net_pnl == 3.95
-    read = _day(tmp_path, _catalog(tmp_path, read=("S1A", "S2A", "S3A", "S0")))
-    assert read["by_kind"]["control"].net_pnl == -0.60
 
 
-def test_a_day_under_three_unread_arms_withholds_its_net_and_names_it(tmp_path):
+def test_a_day_with_two_unread_arms_shows_its_net_and_the_strip_its_day(tmp_path):
     _arm(tmp_path, "a1", "S1A", pnl=1.10)
     _arm(tmp_path, "a2", "S2A", pnl=-0.40)
     d = _day(tmp_path, _catalog(tmp_path))
-    assert d["net_today"] is None and "net_today" in d["withheld"] and d["exploration_pot_used"] is None
-    assert d["strip"][-1].withheld and d["strip"][-1].net_pnl is None
+    assert d["net_today"] == 0.7 and d["exploration_pot_used"] is not None and d["strip"][-1].net_pnl == 0.7
+    assert "withheld" not in d
 
 
 def test_the_strip_has_14_trading_days_with_the_daily_target_and_week_and_month_to_date(tmp_path):
@@ -137,8 +134,7 @@ def test_the_today_view_carries_the_ledger_fields_per_account(tmp_path, monkeypa
     assert a.net_today == round(1.10 - 0.40 + 0.25 - 0.60, 2) and v.unreadable == []
 
 
-def test_closed_pnl_is_withheld_with_the_day_so_the_other_kinds_cannot_reveal_the_arms(tmp_path, monkeypatch):
-    """Quant condition 2: day P&L less open less closed (positions and probes) would be the arms' result."""
+def test_closed_pnl_shows_with_the_day_whatever_the_arms_read(tmp_path, monkeypatch):
     _arm(tmp_path, "a1", "S1A", pnl=1.10)
     _arm(tmp_path, "a2", "S2A", pnl=-0.40)
     _engine(tmp_path, SCALP)
@@ -146,5 +142,5 @@ def test_closed_pnl_is_withheld_with_the_day_so_the_other_kinds_cannot_reveal_th
     monkeypatch.setattr(tl, "catalog", lambda: cat)
     monkeypatch.setattr(hc, "catalog", lambda: cat)
     a = hc.today_money(tmp_path, NOW, {}).accounts[0]
-    assert a.closed_pnl is None and a.costs is None and "closed_pnl" in a.withheld
+    assert a.net_today == 0.7 and a.costs_today is not None
     assert a.day_pnl is not None                                             # the broker's figure: the owner's money

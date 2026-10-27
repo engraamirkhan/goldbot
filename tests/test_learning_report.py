@@ -26,6 +26,14 @@ from goldbot.research.exploration_data import write_weights
 from goldbot.telegram.digest import build_digest, report_text
 from tests.test_api_entry_status import engine
 
+
+@pytest.fixture(autouse=True)
+def _no_ranking(monkeypatch):
+    """The ranking section (ADR 0053) follows the report on its own budget; tests/test_ranking_text.py covers it."""
+    from goldbot.telegram import ranking_text
+    monkeypatch.setattr(ranking_text, "daily_lines", lambda *a, **k: [])
+    monkeypatch.setattr(ranking_text, "weekly", lambda *a, **k: [])
+
 NOW = pd.Timestamp("2026-10-27 06:45", tz="UTC")     # Tuesday: the report is on Monday 26 Oct (UK on GMT)
 DAY = pd.Timestamp("2026-10-26 10:00", tz="UTC")
 SEPT = pd.Timestamp("2026-09-15 10:00", tz="UTC")

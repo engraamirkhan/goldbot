@@ -221,14 +221,17 @@ export const api = {
   openPositions: () => req<OpenPositionsView>("/api/positions/open"),
   strategyWatch: () => req<StrategyWatchView>("/api/strategies/watch"),
   today: () => req<TodayView>("/api/today"),
-  // The trade ledger (docs/design/trades-ux-2026-10-27.md, backlog 129): one row per trade of every kind, blinded
-  // server-side (ADR 0050). `query` is built by lib/trades.apiQuery from the URL's filters.
+  // The trade ledger (docs/design/trades-ux-2026-10-27.md, backlog 129, 139): one row per trade of every kind, with
+  // its result. `query` is built by lib/trades.apiQuery from the URL's filters.
   trades: (query: string) => req<Schemas["TradesPage"]>(`/api/trades${query}`),
   trade: (id: string) => req<Schemas["TradeRow"]>(`/api/trades/${encodeURIComponent(id)}`),
-  // one trade on the stored bars of its timeframe with its levels and stop moves (backlog 133; never blinded)
+  // one trade on the stored bars of its timeframe with its levels and stop moves (backlog 133)
   tradeBars: (id: string) => req<Schemas["TradeBars"]>(`/api/trades/${encodeURIComponent(id)}/bars`),
-  // the strategy board (backlog 132): progress to each arm's read; results only after it (ADR 0050)
+  // the strategy board (backlog 132): progress to each arm's read and the read's frozen figures (ADR 0050, 0051)
   strategyBoard: () => req<Schemas["StrategyBoardView"]>("/api/strategies/board"),
+  // the strategy ranking (backlog 136-138, ADR 0053): families by the adjusted lower bound of net R per trade after
+  // costs; `query` from lib/trades.rankingQuery (window, account, style)
+  strategyRanking: (query: string) => req<Schemas["RankingView"]>(`/api/strategies/ranking${query}`),
   // read-only cards (docs/ux/limits-and-tradingview.md): nothing here changes a limit or the TradingView link
   limits: () => req<LimitsView>("/api/limits"),
   limitChanges: (q: LimitChangesQuery = {}) => req<LimitChange[]>(`/api/limits/changes${qs(q)}`),

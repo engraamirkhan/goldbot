@@ -13,6 +13,14 @@ from goldbot.config import load_settings
 from goldbot.telegram.weekly_digest import build_weekly
 from tests.test_learning_report import BANNED, SEPT, Lab, _enable, _unitless, health, lines
 
+
+@pytest.fixture(autouse=True)
+def _no_ranking(monkeypatch):
+    """The ranking section (ADR 0053) follows the report on its own budget; tests/test_ranking_text.py covers it."""
+    from goldbot.telegram import ranking_text
+    monkeypatch.setattr(ranking_text, "daily_lines", lambda *a, **k: [])
+    monkeypatch.setattr(ranking_text, "weekly", lambda *a, **k: [])
+
 SUN = pd.Timestamp("2026-10-25 06:45", tz="UTC")
 MON = pd.Timestamp("2026-10-19 10:00", tz="UTC")
 DAYS = [MON + pd.Timedelta(days=i) for i in range(5)]

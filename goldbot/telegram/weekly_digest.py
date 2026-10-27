@@ -4,7 +4,8 @@ slot still carries Friday's day). The week is the five opportunity days Mon-Fri 
 
 Same rules as the daily (goldbot/telegram/digest.py): labs by role label, £ and R with explicit signs, no identifiers,
 no buttons, one "could not read" line per broken source, and the arms blinded until their read ("Per arm: n and
-status only, in fixed config order", spec 3.4). At most WEEKLY_LINES non-empty lines.
+status only, in fixed config order", spec 3.4). At most WEEKLY_LINES non-empty lines, then the ranking section (ADR
+0053, backlog 137): the ranking over each version's life with its move since last week, and the week's own top three.
 
 Lines whose source is not recorded yet are left out, never estimated: the week's health failures (no alert history
 is kept), the worst drawdown of the week (needs-field 5: a drawdown history written at the 22:00 roll), the broker
@@ -39,6 +40,7 @@ from goldbot.telegram.digest import (
     labs_section,
     local_end,
     overview_line,
+    with_ranking,
 )
 
 WEEKLY_LINES = 25                   # spec 3: "Budget: <= 25 logical lines"
@@ -185,4 +187,5 @@ def build_weekly(state_dir: str | Path, now: pd.Timestamp, *, as_of: pd.Timestam
     out += [Line(x, 2) for x in _section(not_running_line, "Accounts")]
     out.append(Line(MORE_LINE, 2))
     out.append(Line(_section(lambda: decisions_line(sd, roadmap), "For you")[0]))
-    return labs.guard("\n".join(fit(out, WEEKLY_LINES)))
+    from goldbot.telegram.ranking_text import weekly
+    return with_ranking(labs.guard("\n".join(fit(out, WEEKLY_LINES))), _section(lambda: weekly(sd, hi), "Ranking"))

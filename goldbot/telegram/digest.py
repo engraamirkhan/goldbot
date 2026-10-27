@@ -19,6 +19,9 @@ Decisions of the spec, as built here:
 * "Day" is the opportunity day before the slot (report_days.day_before, D-2 22:00 to D-1 22:00 UTC), the day the
   dashboard and the monthly report use. Every number carries its unit, every time its zone; £ and R with an explicit
   sign and the true minus; currencies and exploration and engine P&L are never summed together.
+* The ranking section (ADR 0053, backlog 137; goldbot/telegram/ranking_text.py) follows the report on its own budget
+  of at most 12 lines: families ranked by the adjusted lower bound of net R per trade after costs, the same figures
+  as the dashboard's. D3 below still governs the arm lines; the ranking names families, never arms.
 * The review lines (`review_section`) are the daily learning-ops review's own blinded lines
   (goldbot/research/daily_review.py `report_lines`, written at 06:15 for the same day): costs per broker, volume
   against the plan, incidents and the count of arms retired at their stop; absent when no review exists for the day.
@@ -777,7 +780,19 @@ def build_digest(state_dir: str | Path, now: pd.Timestamp, *, as_of: pd.Timestam
         out.append(Line(f"Review: could not read ({type(exc).__name__})", 2))
     out += [Line(x, 2) for x in _section(lambda: month_lines(sd, engines, day, as_of, live=live), "Month")]
     out.append(Line(_section(lambda: decisions_line(sd, roadmap), "For you")[0]))
-    return labs.guard("\n".join(fit(out, DAILY_LINES)))
+    return with_ranking(labs.guard("\n".join(fit(out, DAILY_LINES))), ranking_section(sd, hi))
+
+
+def ranking_section(state_dir: Path, day_end: pd.Timestamp) -> list[str]:
+    """The morning report's ranking over each version's life, as of the reported day's end."""
+    from goldbot.telegram.ranking_text import daily_lines
+    return _section(lambda: daily_lines(state_dir, day_end), "Ranking")
+
+
+def with_ranking(body: str, ranking: list[str]) -> str:
+    """The report with its ranking section (ADR 0053; goldbot/telegram/ranking_text.py) after the lab lines' blinding
+    guard: its own budget (at most 12 lines), family names only, never an arm id, slug or login."""
+    return body + ("\n\n" + "\n".join(ranking) if ranking else "")
 
 
 def report_text(state_dir: str | Path, now: pd.Timestamp, slot: pd.Timestamp, *, report: Any = None,

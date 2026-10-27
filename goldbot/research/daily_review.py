@@ -30,13 +30,14 @@ What it does on its own:
   kind is posted at most once a day. Without the keyring's github-token, or when a post fails, the body is written
   to state (`outbox/`) and the review carries on.
 
-What it NEVER does: report a per-arm R, mean, sum, rank, sign or share anywhere (the record refuses such a field at
-construction and every text is checked before it is written or sent), add an arm, or change a threshold, prior, cap
-or the bandit. Weekly (Monday's run, the Sunday day) it writes a roll-up of the week's trends and at most four variant
+What it NEVER does: name an account login or a host in a text it writes or sends (every text is scrubbed first:
+the issues go to a public repository), add an arm, or change a threshold, prior, cap or the bandit. Per-arm and
+per-family results are the strategy ranking's (ADR 0053 retired the blinding this review once enforced; backlog
+139); the review itself reports operations, and arm health only as `breached` or `ok`. Weekly (Monday's run, the Sunday day) it writes a roll-up of the week's trends and at most four variant
 proposals for the research director, which nothing runs.
 
 Outputs: state/aux/daily_review/<day>.json (`DailyReview`), an `artifacts` row in program.db when that store exists,
-the blinded lines of the owner's report (`report_lines`, read by goldbot/telegram/digest.py).
+the review lines of the owner's report (`report_lines`, read by goldbot/telegram/digest.py).
 CLI: `python -m goldbot.ops.run daily-review [--dry-run] --date YYYY-MM-DD [--state DIR]` (dry run: computes and
 prints, writes and posts nothing).
 """
@@ -48,13 +49,13 @@ import logging
 import re
 import sqlite3
 import sys
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import pandas as pd
-from pydantic import Field, model_validator
+from pydantic import Field
 
 from goldbot.base import FrozenRecord, Record, UtcTimestamp, load_record_json, write_atomic
 from goldbot.data.calendar import DEFAULT_SESSIONS
@@ -89,49 +90,20 @@ ENGINE_INCIDENTS = ("exploration_error", "exploration_rule_error", "exploration_
                     "exploration_arm_dropped", "auto_unconfirmed", "auto_paused")
 CLOCK_ACTIONS = ("exploration_clock_ahead",)
 REFUSAL_ACTION = re.compile(r"refus|stale|skip|blocked|paused|^gate:|drift_halt|unconfirmed", re.I)
-# blinding (quant review 2026-10-26, spec section 3): no key or text may carry a per-arm R, rank, sign or share
-_BANNED_TOKENS = frozenset({"r", "rank", "ranks", "ranked", "ranking", "sign", "signs", "signed", "pnl", "share",
-                            "shares", "expectancy", "winrate", "win", "best", "worst", "mean", "sum"})
-_TEXT_R = re.compile(r"[+\-−]?\d+(\.\d+)?\s?R\b")
-_TEXT_WORDS = re.compile(r"\b(rank|ranked|ranking|sign|signs|best|worst|top|bottom|leading|lagging|win rate|"
-                         r"expectancy|shares?|mean|sum|p-value|significant|t =)\b", re.I)
+# what a written or sent text may never carry (backlog 139 narrowed the old blinding to this): an MT5 login (a run of 6
+# or more digits) or a host address. The repo and its issues are public
+_LOGIN = re.compile(r"(?<![\d.,])\d{6,}(?![\d.,])")
+_HOST = re.compile(r"\b\d{1,3}(\.\d{1,3}){3}\b")
 Health = Literal["breached", "ok"]
 IncidentKind = Literal["data_gap", "data_duplicate", "clock", "engine", "health", "unreadable"]
 
 
-def banned_key(key: str) -> bool:
-    """A key that names a per-arm R, rank, sign, share or P&L (any token of it, so `S1A_r` too)."""
-    k = str(key).lower()
-    return k in _BANNED_TOKENS or any(t in _BANNED_TOKENS for t in re.split(r"[^a-z0-9]+", k))
-
-
-def _keys(obj: Any) -> Iterable[str]:
-    if isinstance(obj, Mapping):
-        for k, v in obj.items():
-            yield str(k)
-            yield from _keys(v)
-    elif isinstance(obj, (list, tuple)):
-        for v in obj:
-            yield from _keys(v)
-
-
-def _refuse_banned(rec: Record) -> None:
-    bad = sorted({k for k in _keys(rec.model_dump()) if banned_key(k)})
-    if bad:
-        raise ValueError(f"per-arm R, rank, sign or share field refused (blinded until the read): {bad}")
-
-
-def text_problems(text: str) -> list[str]:
-    """What in `text` would unblind an arm: an R figure or a ranking word."""
-    return [m.group(0) for m in (*_TEXT_R.finditer(text), *_TEXT_WORDS.finditer(text))]
-
-
-def blind(text: str) -> str:
-    """`text` as it may be written or sent: a line with an R figure or a ranking word is dropped and logged."""
+def scrub(text: str) -> str:
+    """`text` as it may be written or sent: a line carrying a login or a host address is dropped and logged."""
     out = []
     for line in text.splitlines():
-        if text_problems(line):
-            log.error("daily review: a line with a blinded figure or word was dropped")
+        if _LOGIN.search(line) or _HOST.search(line):
+            log.error("daily review: a line carrying a login or a host was dropped")
             continue
         out.append(line)
     return "\n".join(out)
@@ -226,11 +198,6 @@ class DailyReview(Record):
     # learning in memory, never voided, until scripts/evidence_exclusions.py records the restart (an alert line)
     spans_unresolved: list[str] = Field(default_factory=list)
 
-    @model_validator(mode="after")
-    def _blinded(self) -> DailyReview:
-        _refuse_banned(self)
-        return self
-
     def cost(self, broker: str, host: str, session: str) -> SessionCosts:
         for c in self.costs:
             if (c.broker, c.host, c.session) == (broker, host, session):
@@ -267,12 +234,6 @@ class WeeklyRollup(Record):
     trials_left: int | None = None    # the quarter's registry trials left; 0 or unknown: no proposal is made
     proposals: list[VariantProposal] = Field(default_factory=list, max_length=4)
 
-    @model_validator(mode="after")
-    def _blinded(self) -> WeeklyRollup:
-        _refuse_banned(self)
-        if any(text_problems(f"{p.title} {p.rationale}") for p in self.proposals):
-            raise ValueError("a variant proposal carries a blinded figure or word")
-        return self
 
 
 # ---------------------------------------------------------------------------------------------- paths
@@ -592,13 +553,8 @@ def _refusals(d: _Day) -> dict[str, dict[str, int]]:
             if REFUSAL_ACTION.search(action):
                 k = "journal:" + action.split(",", 1)[0].strip()
                 counts[k] = counts.get(k, 0) + 1
-        # a reason whose words would read as a blinded figure is counted under a neutral key, never dropped
-        clean: dict[str, int] = {}
-        for k, v in counts.items():
-            key = k if not banned_key(k) else k.split(":", 1)[0] + ":other"
-            clean[key] = clean.get(key, 0) + v
-        if clean:
-            out[host] = clean
+        if counts:
+            out[host] = counts
     return out
 
 
@@ -755,8 +711,8 @@ def _pct(x: float | None) -> str:
 
 
 def report_lines(r: DailyReview) -> list[str]:
-    """The blinded lines of the 06:45 owner report: costs per broker, volume against the plan, incidents and arms
-    retired at their stop (a count, never which or by how much)."""
+    """The review lines of the 06:45 owner report: costs per broker, volume against the plan, incidents and arms
+    retired at their stop (a count; which and by how much are on the ranking's retired band)."""
     costs = " · ".join(f"{_broker(c.broker)} {_usd(c.round_trip_usd)}" for c in r.costs if c.host == ALL)
     first = (f"Review: costs {costs or 'none'} (round trip) · volume {r.volume_total:,} of {r.plan_total:,} planned "
              f"({_pct(r.of_plan)})")
@@ -777,11 +733,11 @@ def report_lines(r: DailyReview) -> list[str]:
     if r.evidence_void:
         out.append(f"Review: {r.evidence_void} trade{'s' if r.evidence_void != 1 else ''} void as evidence "
                    "(dq quarantine; H-61 stops and P&L keep it)")
-    return [x for x in (blind(x) for x in out) if x]
+    return [x for x in (scrub(x) for x in out) if x]
 
 
 def _status_body(r: DailyReview) -> str:
-    lines = [f"**Daily learning-ops review {r.day}** (opportunity day; blinded: no per-arm figures)", ""]
+    lines = [f"**Daily learning-ops review {r.day}** (opportunity day)", ""]
     lines += [f"- {x.removeprefix('Review: ')}" for x in report_lines(r)]
     for c in (c for c in r.costs if c.host == ALL):
         lines.append(f"- {_broker(c.broker)}: {c.fills} fills, fill rate {_pct(c.fill_rate)}, spread "
@@ -794,7 +750,7 @@ def _status_body(r: DailyReview) -> str:
         lines.append(f"- Cost cells refit: {', '.join(f'{_broker(c.broker)} {c.session}' for c in r.refits)}")
     lines.append(f"- Arm health: {sum(v == 'breached' for b in r.arm_health.values() for v in b.values())} breached, "
                  f"{sum(v == 'ok' for b in r.arm_health.values() for v in b.values())} ok")
-    return blind("\n".join(lines))
+    return scrub("\n".join(lines))
 
 
 def _issue(r: DailyReview, low_alert: bool, settings: DailyReviewSettings) -> tuple[str, str] | None:
@@ -803,7 +759,7 @@ def _issue(r: DailyReview, low_alert: bool, settings: DailyReviewSettings) -> tu
         return None
     what = [k for k, on in (("incidents", bool(r.incidents)), ("low volume", low_alert)) if on]
     title = f"Learning ops {r.day}: {' and '.join(what)}"
-    lines = [f"Daily learning-ops review of the opportunity day {r.day} (blinded: no per-arm figures).", ""]
+    lines = [f"Daily learning-ops review of the opportunity day {r.day}.", ""]
     if r.incidents:
         lines.append("**Incidents (counted)**")
         lines += [f"- {i.kind.replace('_', ' ')}{f' on {i.host}' if i.host else ''}: {i.detail}" for i in r.incidents]
@@ -821,7 +777,7 @@ def _issue(r: DailyReview, low_alert: bool, settings: DailyReviewSettings) -> tu
             lines.append(f"- {n} {k}")
         if not reasons:
             lines.append("- no refusal recorded: the arms produced fewer candidates (signals), not refusals")
-    return title, blind("\n".join(lines))
+    return title, scrub("\n".join(lines))
 
 
 def _post(state_dir: Path, day: str, kind: str, body: str, sink: IssueSink | None, *, title: str = "",
@@ -1102,7 +1058,7 @@ def main(argv: list[str]) -> int:
     return 0
 
 
-__all__ = ["DailyReview", "WeeklyRollup", "banned_key", "blind", "cost_cells", "load_review", "load_weekly",
+__all__ = ["DailyReview", "WeeklyRollup", "cost_cells", "load_review", "load_weekly",
            "main", "outbox_dir", "refit_cells", "refits_on", "replay_cells", "report_lines", "retire",
-           "retired_arms", "retired_on", "review_path", "run_daily_review", "stale_outbox", "summary",
+           "retired_arms", "retired_on", "review_path", "run_daily_review", "scrub", "stale_outbox", "summary",
            "trials_left", "write_cell"]

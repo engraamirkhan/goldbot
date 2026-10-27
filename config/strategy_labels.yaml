@@ -6,6 +6,9 @@
 #   key is its `params.specialist`) or a specialist family (goldbot/specialists, `family`).
 # arms: an arm id -> its variant tag, required when two running arms share a family and a timeframe (a broker twin
 #   takes its `twin_of` arm's tag). tests/test_strategy_labels.py fails CI on a new arm or family without a label.
+#   `version: 2` (with or without a tag) marks a rule edit: a new arm id and config_hash that amends an earlier arm's
+#   rule. It starts its own ranking row ("v2", n from 0; goldbot/api/strategy_ranking.py) and is one more registry
+#   trial (ADR 0053 decision 6d); absent means version 1.
 families:
   # exploration rules
   random_bracket: {label: "Random control", why: "Random entry at a set minute: the null the arms are measured against"}

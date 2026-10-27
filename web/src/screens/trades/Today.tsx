@@ -1,8 +1,8 @@
 // Trades > Today (docs/design/trades-ux-2026-10-27.md §3.5, backlog 131): one card per account, real money first and
 // on its own card. Is the day on plan? Fills against the plan's target and pace, net £ after costs (closed) by kind,
 // open risk and P&L, caps used, the 14-day £ strip against the daily target (ADR 0004), week and month to date with the
-// costs split. Never summed across accounts, demo and real, or currencies. Money the server withholds (ADR 0050,
-// `withheld`) says so in words; unreadable ledger sources are named. The broker's balance and risk per trade follow.
+// costs split. Never summed across accounts, demo and real, or currencies; a net missing a trade's costs says so in
+// words; unreadable ledger sources are named. The broker's balance and risk per trade follow.
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import { meterWords, modeBadge } from "../../lib/home";
@@ -45,22 +45,19 @@ function AccountDay({ a, updated }: { a: TodayAccountX; updated: number }) {
   const fills = fillsWords(a);
   const m = a.loss_meter ? meterWords(a.loss_meter, (x) => money(x, ccy)) : null;
   const kinds = KIND_ORDER.filter((k) => a.by_kind?.[k]);
-  const hidden = new Set(a.withheld ?? []);
   return (
     <Card label={`Today ${label}`} title={<><Badge tone={modeBadge(a.mode) === "REAL" ? "warn" : "info"}>{modeBadge(a.mode)}</Badge> {label}</>}
           aside={updated ? <>updated <TimeText iso={new Date(updated).toISOString()} /></> : undefined}>
       {a.stale && <p className="small state warn" role="status">{a.age_s == null ? "Figures of unknown age: not shown as current."
         : `Figures are ${seconds(Math.round(a.age_s))} old: the engine isn't reporting; not shown as current.`}</p>}
       <p className="day-head"><span className="display num">{moneyOrDash(a.day_pnl, ccy)}</span> <span className="muted small">day P&amp;L after costs (broker)</span></p>
-      <p className="small num">Closed today: {hidden.has("net_today")
-        ? <strong>net hidden until the arms' reads</strong>
-        : (a.net_unknown ?? 0) > 0 ? <strong>{incompleteWords(a.net_unknown ?? 0, a.net_today_partial, ccy)}</strong>
+      <p className="small num">Closed today: {(a.net_unknown ?? 0) > 0 ? <strong>{incompleteWords(a.net_unknown ?? 0, a.net_today_partial, ccy)}</strong>
         : <><strong>{moneyOrDash(a.net_today, ccy)}</strong> net after costs</>}
         {a.costs_today && <> (costs {money(a.costs_today.total, ccy)}{a.costs_today.complete ? "" : ", known parts"})</>} · open {moneyOrDash(a.open_pnl, ccy)}</p>
       {kinds.length > 0 && (
         <p className="small num by-kind">{kinds.map((k, i) => {
           const d = a.by_kind![k]!;
-          return <span key={k}>{i > 0 && " · "}{KIND_WORDS[k as TradeKind] ?? k} {d.withheld ? "hidden" : (d.net_unknown ?? 0) > 0 ? `incomplete (${d.net_unknown} without costs yet)` : d.net_pnl == null ? "—" : money(d.net_pnl, ccy, true)} <span className="muted">({d.fills} fill{d.fills === 1 ? "" : "s"})</span></span>;
+          return <span key={k}>{i > 0 && " · "}{KIND_WORDS[k as TradeKind] ?? k} {(d.net_unknown ?? 0) > 0 ? `incomplete (${d.net_unknown} without costs yet)` : d.net_pnl == null ? "—" : money(d.net_pnl, ccy, true)} <span className="muted">({d.fills} fill{d.fills === 1 ? "" : "s"})</span></span>;
         })}</p>
       )}
       {fills && (
@@ -74,8 +71,7 @@ function AccountDay({ a, updated }: { a: TodayAccountX; updated: number }) {
       {a.open_n != null && <p className="small num">Open: {a.open_n} trade{a.open_n === 1 ? "" : "s"} · risk {moneyOrDash(a.open_risk, ccy, false)} · P&amp;L now {moneyOrDash(a.open_pnl, ccy)}</p>}
       {(a.day_cap_used || a.week_cap_used || a.exploration_pot_used) ? (
         <p className="small num">Caps: day {capWords(a.day_cap_used, ccy)} used · week {capWords(a.week_cap_used, ccy)}
-          {a.exploration_pot_used ? <> · exploration pot {capWords(a.exploration_pot_used, ccy)}</>
-            : hidden.has("exploration_pot_used") ? " · exploration pot hidden until the arms' reads" : null}</p>
+          {a.exploration_pot_used && <> · exploration pot {capWords(a.exploration_pot_used, ccy)}</>}</p>
       ) : a.loss_meter && m ? (
         <div className="today-meter">
           <Meter value={a.loss_meter.used} max={m.limit} tone={m.tone} label={`Loss today against the ${a.loss_meter.binding === "probe_stop" ? "probe stop" : "daily loss limit"}`}
@@ -96,8 +92,7 @@ function AccountDay({ a, updated }: { a: TodayAccountX; updated: number }) {
 
 function PeriodLine({ name, p, ccy }: { name: string; p: PeriodNet; ccy: string | null }) {
   return (
-    <div><dt>{name}</dt><dd>{p.withheld ? <>{p.n} trades · net hidden until the arms' reads</>
-      : (p.net_unknown ?? 0) > 0 ? <>{p.n} trades · {incompleteWords(p.net_unknown ?? 0, p.net_partial, ccy)}</>
+    <div><dt>{name}</dt><dd>{(p.net_unknown ?? 0) > 0 ? <>{p.n} trades · {incompleteWords(p.net_unknown ?? 0, p.net_partial, ccy)}</>
       : <><strong>{moneyOrDash(p.net_pnl, ccy)}</strong> after costs
       {p.costs && <span className="muted"> (spread {part(p.costs.spread, ccy)} · slippage {part(p.costs.slippage, ccy, true)} · commission {part(p.costs.commission, ccy)} · swap {part(p.costs.swap, ccy, true)})</span>}</>}</dd></div>
   );
@@ -120,7 +115,7 @@ export function DayStrip({ days, target, ccy, label }: { days: StripDay[]; targe
   const day = (iso: string) => new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
   return (
     <figure className="day-strip">
-      <figcaption className="small">Last {days.length} trading days, net after costs{target != null && <> · target {money(target, ccy)} a day (dashed)</>} · <span aria-hidden="true">•</span> opportunity day{days.some((d) => d.withheld) && <> · h: hidden until the arms' reads</>}{days.some((d) => (d.net_unknown ?? 0) > 0) && <> · i: incomplete, trades without costs yet</>}</figcaption>
+      <figcaption className="small">Last {days.length} trading days, net after costs{target != null && <> · target {money(target, ccy)} a day (dashed)</>} · <span aria-hidden="true">•</span> opportunity day{days.some((d) => (d.net_unknown ?? 0) > 0) && <> · i: incomplete, trades without costs yet</>}</figcaption>
       <svg viewBox={`0 0 ${SW} ${SH}`} width="100%" height={SH} role="img"
            aria-label={`${label}: net after costs per day for the last ${days.length} trading days; the table below has the figures`}>
         <line className="zero" x1={0} x2={SW} y1={mid} y2={mid} />
@@ -128,7 +123,6 @@ export function DayStrip({ days, target, ccy, label }: { days: StripDay[]; targe
         {days.map((d, i) => {
           const v = d.net_pnl;
           const x = i * w + w * 0.2;
-          if (d.withheld) return <text key={d.day} className="na" x={i * w + w / 2} y={mid + 4} textAnchor="middle">h</text>;
           if ((d.net_unknown ?? 0) > 0) return <text key={d.day} className="na" x={i * w + w / 2} y={mid + 4} textAnchor="middle">i</text>;
           if (v == null) return null;                                           // no trades closed that day
           const top = Math.min(y(v), mid);
@@ -143,7 +137,7 @@ export function DayStrip({ days, target, ccy, label }: { days: StripDay[]; targe
       <table className="sr-only">
         <caption>{label}: net after costs per trading day</caption>
         <thead><tr><th>Day</th><th>Net</th><th>Opportunity day</th></tr></thead>
-        <tbody>{days.map((d) => <tr key={d.day}><td>{day(d.day)}</td><td>{d.withheld ? "hidden until the arms' reads" : (d.net_unknown ?? 0) > 0 ? `incomplete: ${d.net_unknown} without costs yet` : d.net_pnl == null ? "no trades" : money(d.net_pnl, ccy, true)}</td><td>{d.opportunity ? "yes" : "no"}</td></tr>)}</tbody>
+        <tbody>{days.map((d) => <tr key={d.day}><td>{day(d.day)}</td><td>{(d.net_unknown ?? 0) > 0 ? `incomplete: ${d.net_unknown} without costs yet` : d.net_pnl == null ? "no trades" : money(d.net_pnl, ccy, true)}</td><td>{d.opportunity ? "yes" : "no"}</td></tr>)}</tbody>
       </table>
     </figure>
   );

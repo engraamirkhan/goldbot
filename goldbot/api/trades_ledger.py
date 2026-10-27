@@ -16,18 +16,10 @@ legs, at the order's own USD rate), adverse entry slippage, commission and swap 
 `gross` = pnl + costs.total to the penny. An open row's `pnl_now` is at the engine's mid price from the fill, with the
 engine's published USD -> account rate (item 128); a rate over FX_STALE_S old marks the row stale.
 
-Blinding (ADR 0050 with the quant reviewer's binding tightenings), enforced here and never by the client:
-* single trades always show their result in the detail view, and in any list whose totals are shown;
-* "WITHHOLD every aggregate covering fewer than 3 unread arms": the totals' money is withheld when the matching rows
-  hold an unread arm and either (a) the filter is narrowed to strategies (family, timeframe, arm, control, exit
-  reason, evidence, or one of exploration / control without the other: a partly-read family is narrowed), or (b) any
-  (account, opportunity day of the close) cell of the unread arms' closes covers fewer than `MIN_ARMS_FOR_TOTAL`
-  strategy arms. Cells, not the whole set, and a closed trade is selected by its close day too, so two allowed totals
-  never differ by a cell under the bar (today minus yesterday, all accounts minus one, two date ranges);
-* the open-P&L total is withheld on its own when any account's unread open trades cover fewer than
-  `MIN_ARMS_FOR_TOTAL` strategy arms (open trades are in a range only when it reaches now); each open row keeps its P&L;
-* when the totals are withheld, the unread arms' closed rows in that list are `blinded`: result fields null;
-* rows come newest first; there is no sort by result.
+Blinding retired (ADR 0053, backlog 139; ADR 0050 decisions 2-3 superseded): every list, its totals and every row
+carry their results whatever an arm's read, so a family's filter shows what its ranking row shows. "early, not
+proven" with n and a CI lives on every per-strategy figure (goldbot/api/strategy_ranking.py). Rows come newest
+activity first, or by result (`sort`: best or worst net first; an open trade by its P&L now, unknown last).
 """
 from __future__ import annotations
 
@@ -37,7 +29,7 @@ import json
 import logging
 import math
 import sqlite3
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -54,6 +46,7 @@ from goldbot.api.schema import (
     TradeKind,
     TradeListPeriod,
     TradeRow,
+    TradeSort,
     TradeSource,
     TradesPage,
     TradeStatus,
@@ -77,7 +70,7 @@ from goldbot.telegram.entry_text import account_name
 log = logging.getLogger(__name__)
 
 __all__ = ["FX_STALE_S", "LEDGER_TTL_S", "MAX_PAGE", "PAGE", "Ledger", "TradeQuery", "build_ledger", "detail",
-           "exit_reason", "oday", "open_withheld", "query", "withheld_reason"]
+           "exit_reason", "oday", "query", "totals"]
 
 T = TypeVar("T")
 
@@ -87,9 +80,6 @@ MAX_PAGE = 200
 STALE_S = 60.0                      # the engine's figures (home_cards.STALE_S)
 FX_STALE_S = 120.0                  # item 128: a USD -> account rate older than this is shown stale, never as current
 WHY_MAX = 80
-NARROWED = "the filter narrows to strategies whose arms are not read yet (ADR 0050): totals return at the read"
-FEW_ARMS = (f"these trades cover fewer than {labs.MIN_ARMS_FOR_TOTAL} unread arms in an account and day "
-            "(ADR 0050): open a single trade to see its result")
 # raw exit codes (engine, broker deals, ledgers, shadow barriers) -> the closed vocabulary; anything else is "other"
 EXIT_WORDS: dict[str, ExitReason] = {
     "target": "target", "tp": "target",
@@ -279,7 +269,7 @@ def _arm_row(t: ExplorationRecord, ctx: _Ctx, voids: dict[str, str]) -> TradeRow
         r=round(t.pnl / risk, 3) if closed and t.pnl is not None and risk else None,
         gross=round(round(t.pnl, 2) + costs.total, 2) if closed and t.pnl is not None else None,
         pnl_now=pnl_now, r_now=r_now, price_now=None if closed else a.price, costs=costs, why=_why(why),
-        evidence=evidence, excluded_reason=voids.get(t.client_order_id), blinded=False,
+        evidence=evidence, excluded_reason=voids.get(t.client_order_id),
         stale=False if closed else a.stale, position_id=t.position_id)
 
 
@@ -313,7 +303,7 @@ def _probes(state: Path, ctx: _Ctx) -> list[TradeRow]:
             r=round(p.pnl / risk, 3) if closed and p.pnl is not None and risk else None,
             gross=round(round(p.pnl, 2) + costs.total, 2) if closed and p.pnl is not None else None,
             pnl_now=pnl_now, r_now=r_now, price_now=None if closed else a.price, costs=costs, why=_why(why),
-            evidence="not_evidence", excluded_reason=None, blinded=False, stale=False if closed else a.stale,
+            evidence="not_evidence", excluded_reason=None, stale=False if closed else a.stale,
             position_id=p.position_id))
     return out
 
@@ -363,7 +353,7 @@ def _positions(state: Path, ctx: _Ctx) -> list[TradeRow]:
             risk_amount=_r2(risk), currency=ccy, pnl=_r2(c.pnl) if net else None, r=c.r,
             gross=round(round(c.pnl, 2) + costs.total, 2) if net else _r2(c.pnl), pnl_now=None, r_now=None,
             price_now=None, costs=costs, why=_strategy_why(ctx, family, kind), evidence="not_evidence",
-            excluded_reason=None, blinded=False, stale=False, position_id=c.position_id))
+            excluded_reason=None, stale=False, position_id=c.position_id))
         if c.position_id is not None:
             seen.add((c.account_id, c.position_id))
     for (account, pid), t in ctx.orders.items():
@@ -387,7 +377,7 @@ def _positions(state: Path, ctx: _Ctx) -> list[TradeRow]:
             hold_limit_s=float(t.max_bars * tf_seconds(t.timeframe)) if t.timeframe else None, risk_amount=risk,
             currency=a.currency, pnl=None, r=None, gross=None, pnl_now=pnl_now, r_now=r_now, price_now=a.price,
             costs=None, why=_strategy_why(ctx, family, kind), evidence="not_evidence", excluded_reason=None,
-            blinded=False, stale=a.stale, position_id=pid))
+            stale=a.stale, position_id=pid))
     return out
 
 
@@ -417,7 +407,7 @@ def _shadow(state: Path, ctx: _Ctx) -> list[TradeRow]:
                 hold_limit_s=float(t.max_bars * bar.total_seconds()), risk_amount=None, currency=None, pnl=None,
                 r=shadow_r(t.ret, t.entry, t.stop) if closed else None, gross=None, pnl_now=None, r_now=None,
                 price_now=None, costs=None, why=_why(f"{ctx.cat.why(family)} (paper, p {t.p:.2f} cleared its bar)"),
-                evidence="not_evidence", excluded_reason=None, blinded=False, stale=False))
+                evidence="not_evidence", excluded_reason=None, stale=False))
     return out
 
 
@@ -486,6 +476,7 @@ class TradeQuery(FrozenRecord):
     exit_reason: tuple[ExitReason, ...] = ()
     evidence: tuple[TradeEvidence, ...] = ()
     control: bool | None = None
+    sort: TradeSort = "newest"
     cursor: str | None = None
     limit: int = PAGE
 
@@ -495,15 +486,6 @@ class TradeQuery(FrozenRecord):
         answer, less shadow trades."""
         return not (self.kind or self.family or self.timeframe or self.arm or self.status or self.exit_reason
                     or self.evidence or self.control is not None)
-
-    @property
-    def narrowed(self) -> bool:
-        """The filter selects strategies rather than labs (ADR 0050 tightening): its totals over unread arms are an
-        arm's or a family's own figure."""
-        arm_kinds = _ARM_KINDS & set(self.kind)
-        return bool(self.family or self.timeframe or self.arm or self.exit_reason or self.evidence
-                    or self.control is not None or len(arm_kinds) == 1)
-
 
 PERIOD_DAYS: dict[TradeListPeriod, int | None] = {"today": 1, "7d": 7, "30d": 30, "all": None}
 
@@ -527,8 +509,8 @@ DEFAULT_KINDS: frozenset[TradeKind] = frozenset({"real", "strategy", "exploratio
 def _matcher(q: TradeQuery, lo: pd.Timestamp | None, hi: pd.Timestamp | None,
              now: pd.Timestamp) -> Callable[[TradeRow], bool]:
     """One predicate per query, its sets built once (the ledger can hold 50k+ rows: p95 under 300 ms). A closed trade
-    is in [lo, hi) by its CLOSE, the instant the blinding cells group it by (quant 2026-10-27, condition 1: selecting
-    by the open let [D..D+1] minus [D..D] isolate one arm); an open trade only in a range that reaches now."""
+    is in [lo, hi) by its CLOSE (the day its money lands, as Today and the ranking count it); an open trade only in a
+    range that reaches now."""
     open_in = hi is None or hi > now
     kinds = frozenset(q.kind) or DEFAULT_KINDS
     accounts, families, tfs, arms = set(q.account), set(q.family), set(q.timeframe), set(q.arm)
@@ -549,83 +531,13 @@ def _matcher(q: TradeQuery, lo: pd.Timestamp | None, hi: pd.Timestamp | None,
     return match
 
 
-def withheld_reason(rows: Iterable[TradeRow], *, narrowed: bool, cat: Catalog) -> tuple[str | None, bool]:
-    """(why an aggregate over `rows` is withheld, else None; whether the unread arms' closed rows are blinded too),
-    ADR 0050 with the quant tightenings. Unread: every arm (controls included) not listed in config/arm_reads.yaml.
-    Totals: withheld when the filter is narrowed to strategies, or when any (account, opportunity day of the close)
-    cell of unread closes covers fewer than MIN_ARMS_FOR_TOTAL strategy arms. Rows: blinded when the filter is
-    narrowed, or when the whole set's unread closes cover fewer than MIN_ARMS_FOR_TOTAL strategy arms (the list is an
-    arm's own record); a mixed list keeps single trades' results (accepted in the ADR). Open trades form no cell: their
-    risk and P&L are the owner's money now (ADR 0050 decision 1), and the Now tab shows them per trade."""
-    cells: dict[tuple[str | None, int], set[str]] = {}
-    unread = False
-    for r in rows:
-        if r.arm_id is None or cat.is_read(r.arm_id):
-            continue
-        unread = True
-        if r.exit_utc is None:
-            continue
-        arms = cells.setdefault((r.account, int((r.exit_utc.timestamp() + _SHIFT_S) // 86400)), set())
-        if not r.is_control:
-            arms.add(cat.unit_of(r.arm_id))     # a pooled family is one read unit: its arms count once
-    if not unread:
-        return None, False
-    if narrowed:
-        return NARROWED, True
-    if any(len(a) < labs.MIN_ARMS_FOR_TOTAL for a in cells.values()):
-        everywhere = set().union(*cells.values())
-        return FEW_ARMS, len(everywhere) < labs.MIN_ARMS_FOR_TOTAL
-    return None, False
-
-
-def open_withheld(rows: Iterable[TradeRow], cat: Catalog) -> bool:
-    """Quant 2026-10-27, condition 3: an open-P&L total is an aggregate too. True when any account's unread open
-    trades cover fewer than MIN_ARMS_FOR_TOTAL strategy arms (an account with unread open controls only included).
-    Each open row keeps its own P&L (ADR 0050 decision 1); only the total is withheld."""
-    cells: dict[str | None, set[str]] = {}
-    for r in rows:
-        if r.exit_utc is None and r.arm_id is not None and not cat.is_read(r.arm_id):
-            arms = cells.setdefault(r.account, set())
-            if not r.is_control:
-                arms.add(cat.unit_of(r.arm_id))
-    return any(len(a) < labs.MIN_ARMS_FOR_TOTAL for a in cells.values())
-
-
-def _blind(r: TradeRow) -> TradeRow:
-    """A closed row of an unread arm in a withheld list: its result fields null (ADR 0050 decision 3)."""
-    return r.model_copy(update={"pnl": None, "r": None, "gross": None, "exit": None, "exit_reason": None,
-                                "blinded": True})
-
-
-def totals(rows: Sequence[TradeRow], reason: str | None, open_hidden: bool = False) -> TradeTotals:
+def totals(rows: Sequence[TradeRow]) -> TradeTotals:
     """The rows' sums in one pass: money only from rows that carry it, in one currency (never summed across
     currencies). A closed trade whose net is unknown (gross-only record, unreadable deals) is counted in
     `net_unknown` and makes `net_pnl` None: the sum of the others is `net_partial`, never shown as the net (finance
     audit 2026-10-27: "a number missing a trade is not a net figure")."""
-    n_open = unknown = 0
-    net = costs = open_pnl = open_risk = 0.0
-    ccys: set[str] = set()
-    for r in rows:
-        if r.currency is not None and (r.pnl is not None or r.pnl_now is not None or r.risk_amount is not None):
-            ccys.add(r.currency)
-        if r.status == "open":
-            n_open += 1
-            open_pnl += r.pnl_now or 0.0
-            open_risk += r.risk_amount or 0.0
-        else:
-            if r.pnl is None and r.kind != "shadow":
-                unknown += 1
-            net += r.pnl or 0.0
-            costs += r.costs.total if r.costs is not None else 0.0
-    mixed = len(ccys) > 1
-    money = reason is None and not mixed
-    return TradeTotals(
-        n=len(rows), n_open=n_open, n_closed=len(rows) - n_open, currency=next(iter(ccys)) if len(ccys) == 1 else None,
-        mixed_currencies=mixed, net_pnl=round(net, 2) if money and not unknown else None,
-        net_unknown=unknown, net_partial=round(net, 2) if money and unknown else None,
-        costs=round(costs, 2) if money else None,
-        open_pnl=round(open_pnl, 2) if money and not open_hidden else None, open_pnl_withheld=open_hidden,
-        open_risk=round(open_risk, 2) if not mixed else None, withheld=reason is not None, withheld_reason=reason)
+    closed = [r for r in rows if r.status != "open"]
+    return _scan(closed, [r for r in rows if r.status == "open"])
 
 
 def _encode(r: TradeRow) -> str:
@@ -673,7 +585,7 @@ class _Index:
     closed: _Closed
     by_account: dict[str | None, _Closed]
     open: list[TradeRow]
-    answers: dict[tuple[Any, ...], tuple[list[TradeRow], str | None, bool, TradeTotals]] = field(default_factory=dict)
+    answers: dict[Any, tuple[list[TradeRow], TradeTotals]] = field(default_factory=dict)
 
     @classmethod
     def build(cls, rows: Sequence[TradeRow]) -> _Index:
@@ -691,18 +603,13 @@ class _Index:
 ANSWERS_MAX = 256                       # distinct filters remembered per ledger build (10 s)
 
 
-def _scan(closed: Sequence[TradeRow], days: Sequence[int], opened: Sequence[TradeRow], narrowed: bool,
-          cat: Catalog) -> tuple[str | None, bool, TradeTotals]:
-    """`withheld_reason`, `open_withheld` and `totals` in one pass over the matching rows (same rules, same results;
-    tests/test_trades_ledger.py checks them against each other): read and counted by read unit, as there."""
-    is_read, unit_of = cat.is_read, cat.unit_of
-    cells: dict[tuple[str | None, int], set[str]] = {}
-    open_cells: dict[str | None, set[str]] = {}
-    unread = False
+def _scan(closed: Sequence[TradeRow], opened: Sequence[TradeRow]) -> TradeTotals:
+    """`totals` over the matching closed and open rows in one pass (tests/test_trades_ledger.py checks the indexed
+    answers against a full scan)."""
     n_closed = unknown = 0
     net = costs = open_pnl = open_risk = 0.0
     ccys: set[str] = set()
-    for r, day in zip(closed, days):
+    for r in closed:
         n_closed += 1
         pnl = r.pnl
         if pnl is None:
@@ -714,12 +621,6 @@ def _scan(closed: Sequence[TradeRow], days: Sequence[int], opened: Sequence[Trad
             costs += r.costs.total
         if r.currency is not None and (pnl is not None or r.risk_amount is not None):
             ccys.add(r.currency)
-        arm = r.arm_id
-        if arm is not None and not is_read(arm):
-            unread = True
-            got = cells.setdefault((r.account, day), set())
-            if not r.is_control:
-                got.add(unit_of(arm))       # a pooled family is one read unit: its arms count once
     for r in opened:
         if r.pnl_now is not None:
             open_pnl += r.pnl_now
@@ -727,35 +628,34 @@ def _scan(closed: Sequence[TradeRow], days: Sequence[int], opened: Sequence[Trad
             open_risk += r.risk_amount
         if r.currency is not None and (r.pnl_now is not None or r.risk_amount is not None or r.pnl is not None):
             ccys.add(r.currency)
-        arm = r.arm_id
-        if arm is not None and not is_read(arm):
-            unread = True
-            got = open_cells.setdefault(r.account, set())
-            if not r.is_control:
-                got.add(unit_of(arm))
-    reason, blind = None, False
-    if unread and narrowed:
-        reason, blind = NARROWED, True
-    elif unread and any(len(a) < labs.MIN_ARMS_FOR_TOTAL for a in cells.values()):
-        reason, blind = FEW_ARMS, len(set().union(*cells.values())) < labs.MIN_ARMS_FOR_TOTAL
-    open_hidden = any(len(a) < labs.MIN_ARMS_FOR_TOTAL for a in open_cells.values())
     mixed = len(ccys) > 1
-    money = reason is None and not mixed
-    t = TradeTotals(
+    return TradeTotals(
         n=n_closed + len(opened), n_open=len(opened), n_closed=n_closed,
         currency=next(iter(ccys)) if len(ccys) == 1 else None, mixed_currencies=mixed,
-        net_pnl=round(net, 2) if money and not unknown else None, net_unknown=unknown,
-        net_partial=round(net, 2) if money and unknown else None, costs=round(costs, 2) if money else None,
-        open_pnl=round(open_pnl, 2) if money and not open_hidden else None, open_pnl_withheld=open_hidden,
-        open_risk=round(open_risk, 2) if not mixed else None, withheld=reason is not None, withheld_reason=reason)
-    return reason, blind, t
+        net_pnl=round(net, 2) if not mixed and not unknown else None, net_unknown=unknown,
+        net_partial=round(net, 2) if not mixed and unknown else None, costs=round(costs, 2) if not mixed else None,
+        open_pnl=round(open_pnl, 2) if not mixed else None, open_risk=round(open_risk, 2) if not mixed else None)
 
 
-def _answer(ledger: Ledger, q: TradeQuery, cat: Catalog) -> tuple[list[TradeRow], str | None, bool, TradeTotals]:
-    """Every matching row (newest activity first), why totals are withheld, whether unread rows are blinded, and the
-    totals; remembered per filter for the life of the ledger build."""
+def _result(r: TradeRow) -> float | None:
+    """A row's result for the List's sort: the net of a closed trade, the P&L now of an open one."""
+    return r.pnl if r.status == "closed" else r.pnl_now
+
+
+def _sorted(rows: list[TradeRow], sort: TradeSort) -> list[TradeRow]:
+    """By result, best or worst first (an unknown result last, ties newest first); "newest" keeps the ledger order."""
+    if sort == "newest":
+        return rows
+    known = [r for r in rows if _result(r) is not None]
+    sign = -1.0 if sort == "best" else 1.0
+    known.sort(key=lambda r: sign * (_result(r) or 0.0))         # stable: ties stay newest first
+    return known + [r for r in rows if _result(r) is None]
+
+
+def _answer(ledger: Ledger, q: TradeQuery) -> tuple[list[TradeRow], TradeTotals]:
+    """Every matching row (in the query's order) and the totals; remembered per filter for the life of the build."""
     idx = ledger.index()
-    key = (q.model_copy(update={"cursor": None, "limit": PAGE}), id(cat))
+    key = q.model_copy(update={"cursor": None, "limit": PAGE})
     hit = idx.answers.get(key)
     if hit is not None:
         return hit
@@ -765,40 +665,37 @@ def _answer(ledger: Ledger, q: TradeQuery, cat: Catalog) -> tuple[list[TradeRow]
     sources = ([idx.by_account[a] for a in dict.fromkeys(q.account) if a in idx.by_account] if q.account
                else [idx.closed])
     rows: list[TradeRow] = []
-    days: list[int] = []
     for src in sources:
         a, b = src.span(lo, hi)
         if q.plain:                                     # nothing but dates, accounts and the default kinds
             rows += src.rows[a:b]
-            days += src.days[a:b]
             continue
-        keep = [i for i in range(a, b) if match(src.rows[i])]
-        rows += [src.rows[i] for i in keep]
-        days += [src.days[i] for i in keep]
+        rows += [src.rows[i] for i in range(a, b) if match(src.rows[i])]
     if q.plain:
-        days = [d for r, d in zip(rows, days) if r.kind != "shadow"]
         rows = [r for r in rows if r.kind != "shadow"]
-    reason, blind, t = _scan(rows, days, opened, q.narrowed, cat)
+    t = _scan(rows, opened)
     if opened or len(sources) > 1:
         rows = sorted(rows + opened, key=_key, reverse=True)
+    rows = _sorted(rows, q.sort)
     if len(idx.answers) >= ANSWERS_MAX:
         idx.answers.clear()
-    idx.answers[key] = (rows, reason, blind, t)
-    return rows, reason, blind, t
+    idx.answers[key] = (rows, t)
+    return rows, t
 
 
-def query(ledger: Ledger, q: TradeQuery, cat: Catalog | None = None) -> TradesPage:
-    """One page of the matching rows (newest activity first) and the totals of all of them, blinded server-side."""
-    cat = cat or catalog()
-    rows, reason, blind, t = _answer(ledger, q, cat)
+def query(ledger: Ledger, q: TradeQuery) -> TradesPage:
+    """One page of the matching rows and the totals of all of them. The cursor names the last row given: the next
+    page starts after it in the query's order (newest first, or by result)."""
+    rows, t = _answer(ledger, q)
     start = 0
     if q.cursor:
-        after = _decode(q.cursor)
-        start = next((i for i, r in enumerate(rows) if _key(r) < after), len(rows))
+        after, tid = _decode(q.cursor)
+        if q.sort == "newest":
+            start = next((i for i, r in enumerate(rows) if _key(r) < (after, tid)), len(rows))
+        else:
+            start = next((i + 1 for i, r in enumerate(rows) if r.trade_id == tid), len(rows))
     limit = max(1, min(q.limit, MAX_PAGE))
     page = rows[start:start + limit]
-    if blind:
-        page = [_blind(r) if r.arm_id and not cat.is_read(r.arm_id) and r.status == "closed" else r for r in page]
     more = start + limit < len(rows)
     return TradesPage(as_of=ledger.as_of, rows=page, next_cursor=_encode(page[-1]) if more and page else None,
                       totals=t, unreadable=ledger.unreadable)

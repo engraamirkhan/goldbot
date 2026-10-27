@@ -1,7 +1,6 @@
 // One trade, fully explained (docs/design/trades-ux-2026-10-27.md §3.3, backlog 133): a sheet on a phone, a 480 px
 // panel on a desktop. Levels on the bars, why it was taken, what closed it, what it cost, whether it counts toward its
-// arm's read, and the ids under Details. A blinded arm's single trade still shows its own result (ADR 0050: one trade
-// is the owner's money, not an aggregate).
+// arm's read, and the ids under Details.
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { api, ApiError } from "../../lib/api";
@@ -83,7 +82,7 @@ function DetailBody({ t, wide }: { t: TradeRow; wide: boolean }) {
           {t.evidence === "excluded" && t.excluded_reason ? `: ${t.excluded_reason}` : ""}</dd></div>
         <div><dt>Times</dt><dd>opened <TimeText iso={t.opened_utc} withDay />{t.exit_utc && <> · closed <TimeText iso={t.exit_utc} withDay /></>} <span className="muted">(your time; UTC on hover)</span></dd></div>
       </dl>
-      {t.arm_id && <p className="small muted">This arm's totals stay hidden until its read (ADR 0050); one trade is shown in full.</p>}
+      {t.arm_id && <p className="small muted">One trade proves nothing: its family's figures, with n and the CI, are on Strategies (early, not proven until its read).</p>}
       <details className="detail-ids">
         <summary>Details</summary>
         <dl className="small">
