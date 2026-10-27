@@ -93,19 +93,40 @@ def test_previous_week_and_month_levels_are_known_only_after_their_period_closes
     day = L.trading_day(utc_index(m["ts_utc"]))
     hi = pd.Series(m["high"].to_numpy(float)).groupby(day).max()
     lo = pd.Series(m["low"].to_numpy(float)).groupby(day).min()
-    d = pd.Timestamp("2024-01-17")                                          # a Wednesday: previous week 8-12 Jan
+    d = pd.Timestamp("2024-01-03")                                 # a Wednesday, the month's third trading day
     k = int(np.datetime64(d.date(), "D").astype(np.int64))
-    week = [int(np.datetime64(f"2024-01-{x:02d}", "D").astype(np.int64)) for x in range(8, 13)]
+    week = [int(np.datetime64(f"2023-12-{x:02d}", "D").astype(np.int64)) for x in range(25, 30)]
     month = [x for x in hi.index if np.datetime64(int(x), "D").astype("datetime64[M]") == np.datetime64("2023-12")]
     lv = dict(table[k]["levels"])
     assert lv["pwh"] == hi.loc[week].max() and lv["pwl"] == lo.loc[week].min()
     assert lv["pmh"] == hi.loc[month].max() and lv["pml"] == lo.loc[month].min()
     # change every bar of the current week and month: the levels do not move
     moved = m.copy()
-    cur = np.asarray(day >= int(np.datetime64("2024-01-15", "D").astype(np.int64)))
+    cur = np.asarray(day >= int(np.datetime64("2024-01-01", "D").astype(np.int64)))
     for col in ("open", "high", "low", "close"):
         moved.loc[cur, col] = moved.loc[cur, col] + 500.0
     assert dict(L.day_levels(moved, ctx.b1, LEVELS)[k]["levels"])["pwh"] == lv["pwh"]
+
+
+def test_week_and_month_levels_exist_only_in_the_first_five_trading_days_of_their_period(b1) -> None:
+    """3.1 adopts slice G's definitions (`key_levels_discovery.py`: "weekly-and-longer class (window = 5 trading days
+    from the first day of the period)"): previous-week and previous-month levels are tradable on a period's trading
+    days 1-5 only; from day 6 on the day carries no such level."""
+    ctx = _ctx(b1)
+    table = L.day_levels(ctx.mid, ctx.b1, LEVELS)
+
+    def names(date: str) -> set[str]:
+        return {n for n, _ in table[int(np.datetime64(date, "D").astype(np.int64))]["levels"]}
+
+    # December 2023 starts on a Friday: trading days 1-5 are 1 and 4-7 Dec, the sixth is Friday 8 Dec
+    assert {"pmh", "pml"} <= names("2023-12-04") and {"pmh", "pml"} <= names("2023-12-07")
+    assert not names("2023-12-08") & {"pmh", "pml"}
+    assert not names("2023-12-20") & {"pmh", "pml"}
+    # January 2024: 1-5 Jan carry the previous month; Monday 8 Jan, its sixth day, starts a week: week levels, no month
+    assert {"pmh", "pml", "pwh", "pwl"} <= names("2024-01-05")
+    assert not names("2024-01-08") & {"pmh", "pml"} and {"pwh", "pwl"} <= names("2024-01-08")
+    # a full week carries the previous week on all five of its trading days
+    assert all({"pwh", "pwl"} <= names(f"2023-12-{x}") for x in range(11, 16))
 
 
 def test_an_input_that_does_not_hold_the_whole_previous_month_gives_no_month_level(b1) -> None:

@@ -75,7 +75,8 @@ from goldbot.data.resample import resample_bars, ticks_to_1m
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db import Database, RecordRepo
 from goldbot.engine import auto_entry, cost_probe
-from goldbot.labels.triple_barrier import BarrierSpec
+from goldbot.execution.costs import CONTRACT_OZ
+from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec
 from goldbot.research.arms import Arm as SpecArm
 from goldbot.research.arms import arm_hash, load_arms
 
@@ -286,6 +287,11 @@ class TwinRecord(FrozenRecord):
     exit_price: float | None = None
     exit_reason: str | None = None          # stop | target | time
     gross_r: float | None = None            # side x (exit - entry) / R, before costs
+    # charged like a real fill (quant review C4; `twin_charges`), USD per oz: the exit leg's half of the bid-ask at the
+    # exit minute (the entry is BXR's real fill, its spread paid) and the swap of every rollover held (broker sign);
+    # commission is BXR's own, per oz, at the paired read (`twin_pairs`). None: not charged (an older row)
+    exit_spread_usd: float | None = None
+    swap_usd: float | None = None
 
 
 def _ns(ts: pd.Timestamp) -> int:
@@ -1386,10 +1392,13 @@ def open_twins(eng: Engine, ex: Exploration, arm: Arm, s: Pending, cid: str, pid
 def score_twins(eng: Engine, ex: Exploration, complete: pd.DataFrame, close_ts: pd.Timestamp) -> None:
     """Each open twin of this account whose timeframe closes now, on the engine's 1m bars from its signal close:
     `twin_outcome` (the history walk: stop 1 R first in a minute, its target, the hold's last close) once a barrier is
-    reached, recorded with its gross R. Independent of BXR's own position (a twin runs to its own barrier)."""
+    reached, recorded with its gross R and charged like a real fill (`twin_charges`, at the account's swap rates).
+    Independent of BXR's own position (a twin runs to its own barrier)."""
+    from goldbot.ops.cost_imputation import account_swap
     from goldbot.research import arm_rules_clock_box as K
     if complete.empty:
         return
+    swap = account_swap(eng._cost_table(), eng.cfg.swap_prior.model_copy(update={"server_tz": eng.cfg.server_tz}))
     with ex.db.connection() as conn:
         open_ = TWINS.select(conn, "account_id = ? AND closed = 0", (eng.cfg.account_id,))
     done = []
@@ -1400,13 +1409,62 @@ def score_twins(eng: Engine, ex: Exploration, complete: pd.DataFrame, close_ts: 
                            K.decision_closes(complete, tw.tf, tw.signal_utc, tw.hold_bars), tw.hold_bars,
                            entry=tw.entry_price, side=tw.side, risk=tw.risk_usd, target_r=tw.target_r)
         if w is not None:
-            px = float(w["exit"])
-            done.append(tw.model_copy(update={"exit_utc": w["at"], "exit_price": px, "exit_reason": str(w["kind"]),
-                                              "gross_r": tw.side * (px - tw.entry_price) / tw.risk_usd}))
+            px, at = float(w["exit"]), pd.Timestamp(w["at"])
+            spread, swap_usd = twin_charges(complete, tw.signal_utc, at, tw.side, swap)
+            done.append(tw.model_copy(update={"exit_utc": at, "exit_price": px, "exit_reason": str(w["kind"]),
+                                              "gross_r": tw.side * (px - tw.entry_price) / tw.risk_usd,
+                                              "exit_spread_usd": spread, "swap_usd": swap_usd}))
     if done:
         with ex.db.write() as conn:
             for rec in done:
                 TWINS.upsert(conn, rec)
+
+
+def twin_charges(b1: pd.DataFrame, entry_utc: pd.Timestamp, exit_utc: pd.Timestamp, side: int,
+                 swap: SwapSpec) -> tuple[float | None, float]:
+    """What a real fill would have paid on a twin's exit (quant review C4: "charged the exit spread, commission and
+    swap per rollover held, like a real fill"), USD per oz: half the bid-ask of the 1m bar closing at `exit_utc` (the
+    twin walks the mid; a long sells at the bid, a short buys at the ask; None when that minute is not held), and the
+    swap of every rollover from `entry_utc` to `exit_utc` (`rollover_nights`, the triple night counted three times;
+    broker sign, a credit counts as in history). Commission is BXR's own, charged at the paired read (`twin_pairs`)."""
+    from goldbot.labels.triple_barrier import rollover_nights
+    row = b1.loc[np.asarray(pd.DatetimeIndex(b1["ts_utc"]) == exit_utc - pd.Timedelta(minutes=1))] if len(b1) else b1
+    spread = float(row["ask_close"].iloc[-1] - row["bid_close"].iloc[-1]) / 2.0 if len(row) else None
+    nights = int(rollover_nights(pd.DatetimeIndex([entry_utc]), pd.DatetimeIndex([exit_utc]), swap.server_tz,
+                                 swap.triple_weekday)[0])
+    return spread, nights * float(swap.usd_per_oz(np.array([side]))[0])
+
+
+class TwinPair(FrozenRecord):
+    """One row of H-80 R1's paired read (BXR - BXF, BXT - BXF on the same fills): a scored twin beside its BXR's
+    closed, uncensored real fill, both in net R over the same 1 R (the twin's `risk_usd`, BXR's signal stop)."""
+    twin_id: str
+    client_order_id: str
+    arm_id: str                             # BXT<tf> / BXF<tf>
+    of_arm_id: str                          # BXR<tf>
+    exit_mode: Literal["struct", "fixed"]
+    twin_net_r: float                       # gross R less the exit half spread and BXR's commission, plus the swap
+    bxr_net_r: float                        # BXR's broker-net P&L per oz over the same R
+
+
+def twin_pairs(state_dir: str, account_id: str | None = None) -> list[TwinPair]:
+    """The twins H-80 R1 compares (quant review C4): each scored, charged twin whose BXR closed by its own exit. A pair
+    whose BXR closed censored (or is still open, or whose net P&L, commission or FX is unknown) is dropped: there is
+    no real outcome to compare. The twin pays BXR's own commission per oz (same order, same lots)."""
+    recs = {r.client_order_id: r for r in trades(state_dir, account_id)}
+    out = []
+    for tw in twins(state_dir, account_id):
+        r = recs.get(tw.client_order_id)
+        if (tw.gross_r is None or tw.exit_spread_usd is None or tw.swap_usd is None or r is None
+                or r.exit_utc is None or r.censored is not False or r.pnl is None or r.commission is None
+                or not r.fx_acct_per_usd or not r.lots):
+            continue
+        per_oz = r.fx_acct_per_usd * r.lots * CONTRACT_OZ          # account currency per USD-per-oz
+        cost = tw.exit_spread_usd + r.commission / per_oz - tw.swap_usd
+        out.append(TwinPair(twin_id=tw.twin_id, client_order_id=tw.client_order_id, arm_id=tw.arm_id,
+                            of_arm_id=tw.of_arm_id, exit_mode=tw.exit_mode,
+                            twin_net_r=tw.gross_r - cost / tw.risk_usd, bxr_net_r=r.pnl / per_oz / tw.risk_usd))
+    return out
 
 
 def twins(state_dir: str, account_id: str | None = None) -> list[TwinRecord]:
@@ -1482,16 +1540,17 @@ def _censored(arm: Arm | None, why: str, tr: OpenTrade) -> bool:
     """A close by anything but the arm's own barrier (NATURAL), or with its stop moved, censors the label. For a rule
     whose exit includes the Friday weekend cut (`arm_rules.follows_friday_cut`, WFRI amendment 1: the read is "the
     realised outcome under the cut") the cut's loser close (CUT_EXIT) and a stop tightened (the cut's winner rule)
-    are its own exit. A loosened stop, the no-quote flatten or any other close still censors."""
+    are its own exit. A loosened stop, the no-quote flatten or any other close still censors. H-80 BXR (quant review
+    C4): its trailed stop is its own exit only when it moved tighter, side x (sl - initial_sl) > 0; a stop moved
+    looser, or removed, censors."""
     from goldbot.research import arm_rules
     follows = arm is not None and arm_rules.follows_friday_cut(arm.spec)
     if why not in NATURAL and not (follows and why == CUT_EXIT):
         return True
     if tr.initial_sl is None or tr.sl == tr.initial_sl:
         return False
-    if arm is not None and _is_runner(arm):
-        return False                      # H-80 BXR: its trailed stop (only ever tighter) is its own exit rule
-    return not (follows and tr.sl is not None and tr.side * (tr.sl - tr.initial_sl) > 0)
+    tighter = tr.sl is not None and tr.side * (tr.sl - tr.initial_sl) > 0
+    return not ((follows or (arm is not None and _is_runner(arm))) and tighter)
 
 
 def _observe(eng: Engine, db: Database, r: ExplorationRecord, filled: pd.Timestamp | None) -> None:
