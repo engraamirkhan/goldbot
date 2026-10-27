@@ -46,6 +46,7 @@ from goldbot.research.model_registry import ModelEntry, ModelRegistry
 from goldbot.research.population import Member, Population
 from goldbot.research.promotion import PerfStats
 from goldbot.risk import adaptive, hwm, limits_profile
+from goldbot.risk.pilot import PilotState
 from goldbot.telegram import automode
 from goldbot.telegram.approvals import AskReason, Outcome, Proposal
 from goldbot.telegram.bus import ApprovalBus
@@ -348,6 +349,19 @@ def case_hwm_confirmation(tmp: Path) -> None:
     assert hwm.read_only_confirmation(tmp, "icm-demo") == conf
 
 
+def case_pilot_state(tmp: Path) -> None:
+    """core.db live pilot record (ADR 0055) with a field from a newer release: the sticky stop still loads."""
+    from goldbot.engine import pilot
+    from goldbot.risk.pilot import PilotState
+    rec = PilotState(account_id="icm-live", pilot_id="icm-live-adr55", realised_loss=25.0, entries=7, stopped_utc=T0,
+                     stop_reason="stop_loss", read_utc=T0)
+    assert pilot.PilotStore(tmp).save(rec)
+    with sqlite3.connect(tmp / "core.db") as conn:
+        body = conn.execute("SELECT body FROM pilot_state").fetchone()[0]
+        conn.execute("UPDATE pilot_state SET body = ?", (json.dumps(_newer(json.loads(body))),))
+    assert pilot.PilotStore(tmp).load("icm-live") == rec
+
+
 def case_limits_profile(tmp: Path) -> None:
     """core.db demo-limits revert row and change log (ADR 0032) with a field from a newer release."""
     store = limits_profile.LimitsStore(tmp)
@@ -444,7 +458,7 @@ def case_daily_review(tmp: Path) -> None:
 CASES = [case_closed_trade, case_closed_trade_from_before_ret_basis, case_closed_trade_price_return_without_ret_basis,
          case_bus_proposal, case_bus_finished_proposal, case_shadow_book,
          case_shadow_stats, case_model_registry_and_backtest, case_population, case_research_plan, case_costs,
-         case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_cost_probe, case_cost_probe_skip, case_hwm_confirmation, case_limits_profile, case_risk_term,
+         case_scheduler, case_health, case_digest, case_outbox, case_reconcile, case_ledger, case_cost_probe, case_cost_probe_skip, case_hwm_confirmation, case_pilot_state, case_limits_profile, case_risk_term,
          case_limits_state,
          case_trial_dsr_inputs, case_trial_day_summed_dsr, case_attribution_report, case_tick_index,
          case_daily_review, case_exploration_trade, case_exploration_twin]
@@ -485,7 +499,7 @@ def test_every_persisted_record_model_has_a_compat_case():
     covered = {ClosedTrade, Proposal, VersionBook, PerfStats, ModelEntry, Member, ResearchPlan,
                BrokerTerms, CostTable, PublishedCostTable, scheduler.JobState, health.WatchState, health.HealthReport,
                DigestState, OutboxState, crossfeed.ReconcileReport, ledger.LedgerReport,
-               ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation, limits_profile.LimitsState,
+               ledger.BalanceSnapshot, ledger.BalanceDeal, hwm.HwmConfirmation, PilotState, limits_profile.LimitsState,
                limits_profile.LimitsChange, adaptive.AdaptiveState, adaptive.RiskTerm, DsrInputs, DaySummedDsr,
                AttributionReport, TickIndex, cost_probe.ProbeRecord, cost_probe.SkipRecord, exploration.ExplorationRecord,
                exploration.TwinRecord,

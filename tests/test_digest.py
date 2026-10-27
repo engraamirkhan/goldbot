@@ -17,6 +17,14 @@ from goldbot.telegram.approvals import Outcome, Proposal
 from goldbot.telegram.bus import ApprovalBus
 from goldbot.telegram.digest import STATE_FILE, WEEKEND_LINE, DigestSchedule, build_digest, owner_decisions
 
+
+@pytest.fixture(autouse=True)
+def _no_ranking(monkeypatch):
+    """The ranking section (ADR 0053) follows the report on its own budget; tests/test_ranking_text.py covers it."""
+    from goldbot.telegram import ranking_text
+    monkeypatch.setattr(ranking_text, "daily_lines", lambda *a, **k: [])
+    monkeypatch.setattr(ranking_text, "weekly", lambda *a, **k: [])
+
 NOW = pd.Timestamp("2026-10-10 06:45", tz="UTC")              # Saturday morning; "yesterday" is Friday 9 Oct UTC
 YDAY = pd.Timestamp("2026-10-09 10:00", tz="UTC")
 ACCOUNT = "icm-demo-51234567"                                  # looks like a login: must never reach the message

@@ -43,6 +43,7 @@ from goldbot.engine import (
     exploration,
     history,
     order_send,
+    pilot,
     unconfirmed,
 )
 from goldbot.engine.cost_probe import ScheduledProbe
@@ -1941,6 +1942,7 @@ class Engine:
         owner_mode = self.center.bus.control().approval_mode if self.center.bus is not None else None
         self.cfg.approval_mode = auto_entry.lock(self, owner_mode or self._account_approval, acc)   # ADR 0036 lock
         st.equity_unconfirmed = self._equity_unconfirmed(acc, now)
+        pilot.refresh(self, acc, now)        # ADR 0055: the live pilot's record and stop from the deals (engine/pilot.py)
         stage = st.stage
         if self.gate.update_stage(st) != stage:
             if st.stage == Stage.HALTED:
@@ -2140,14 +2142,14 @@ class Engine:
         positions = self._read_positions("the weekend rule is retried on the next refresh")
         if positions is None:
             return False
-        done, left = True, len(positions)
+        done, left, flat = True, len(positions), pilot.weekend_flat(self)     # ADR 0055: the pilot closes winners too
         for p in positions:
             if not self._own(p.magic):
                 continue
             px = tick.bid if p.side > 0 else tick.ask
-            if p.side * (px - p.open_price) <= 0:
+            if p.side * (px - p.open_price) <= 0 or flat:
                 ok = p.position_id not in self._close_due and \
-                    self._try_close(p.position_id, "weekend_close_loser", tick.ts_utc).ok
+                    self._try_close(p.position_id, "weekend_flat" if flat else "weekend_close_loser", tick.ts_utc).ok
                 left -= ok
                 done = done and ok
                 continue
@@ -2734,15 +2736,13 @@ class Engine:
         st.week_start_equity = snap.week_start_equity
         st.balance_closed_hwm = snap.balance_closed_hwm
         st.stage = snap.stage
-        self._rearm_seen = snap.rearm_seen
-        self._weekend_done = snap.weekend_done
+        self._rearm_seen, self._weekend_done = snap.rearm_seen, snap.weekend_done
         self._halted_at = snap.halted_at
         self._propose_only_until = snap.propose_only_until
         self._rearm_refused = snap.rearm_refused
         self._stage2_pending_since = snap.stage2_pending_since
         self._kill_everything = snap.kill_everything
-        self._week_reset = snap.week_reset
-        self._flows_through = snap.flows_through
+        self._week_reset, self._flows_through = snap.week_reset, snap.flows_through
 
     def _regime(self, X: pd.DataFrame, close_ts: pd.Timestamp) -> Regime:
         """The allocator's inputs at this close. The tier-1 distances (row M9) come from the archived calendar the

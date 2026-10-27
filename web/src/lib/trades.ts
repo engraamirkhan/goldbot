@@ -1,11 +1,11 @@
-// The trades experience (docs/design/trades-ux-2026-10-27.md, ADR 0050, backlog 128-134): Now / List / Strategies /
-// Today. Every shape comes from the API contract (schema.d.ts: GET /api/trades, /api/trades/{trade_id},
-// /api/trades/{trade_id}/bars, /api/strategies/board, /api/today, /api/positions/open). Pure helpers shared by the
-// screens.
+// The trades experience (docs/design/trades-ux-2026-10-27.md, ADR 0050, 0053, backlog 128-139): Now / List /
+// Strategies / Today. Every shape comes from the API contract (schema.d.ts: GET /api/trades, /api/trades/{trade_id},
+// /api/trades/{trade_id}/bars, /api/strategies/board, /api/strategies/ranking, /api/today, /api/positions/open). Pure
+// helpers shared by the screens.
 //
-// Blinding (ADR 0050 with the quant-reviewer's tightenings) is the server's: it withholds totals and blinds rows, and
-// the board carries no result of an unread arm and no "near its stop" status. The client never computes an aggregate
-// of its own over ledger rows, nor re-orders the board: it shows what the API returns.
+// ADR 0053 retired the blinding (backlog 139): every list, total and row carries its result. The client never computes
+// an aggregate of its own over ledger rows, nor ranks anything: the ranking's order and figures are the server's, and
+// every per-strategy figure keeps its n, its CI and "early, not proven" until its read.
 import type { components } from "./schema";
 import { money, NBSP, signedR, withUnit } from "../ui/format";
 
@@ -81,6 +81,57 @@ export const STATUS_WORDS: Record<ArmStatus, string> = {
 };
 export const statusWords = (s: string | null | undefined) => STATUS_WORDS[s as ArmStatus] ?? "running";
 
+// ------------------------------------------------------------------------------------------------ ranking (136-138)
+export type RankingView = S["RankingView"];
+export type RankRow = S["RankRow"];
+export type RankVariant = S["RankVariant"];
+export type RankFigures = S["RankFigures"];
+export type RankingWindow = RankingView["window"];
+export type RankStatus = RankRow["status"];
+export const RANK_STATUS_WORDS: Record<RankStatus, string> = {
+  early: "early, not proven", candidate: "candidate, not proven yet", proven: "proven", not_proven: "not proven",
+  retired: "retired at its stop",
+};
+export const WINDOWS: RankingWindow[] = ["all", "30d", "7d"];
+export const WINDOW_WORDS: Record<RankingWindow, string> = { all: "All", "30d": "30 days", "7d": "7 days" };
+export type BoardOrder = "ranked" | "progress";
+
+/** The Strategies tab's URL state: its order (Ranked by default; "By progress to read" is `order=progress`), the
+ *  ranking's window and the filters. */
+export type BoardQuery = { order: BoardOrder; window: RankingWindow; acct: string; style: string };
+export function parseBoardQuery(query: string): BoardQuery {
+  const p = new URLSearchParams(query.replace(/^\?/, ""));
+  const w = p.get("window");
+  return { order: p.get("order") === "progress" ? "progress" : "ranked",
+           window: w === "7d" || w === "30d" ? w : "all", acct: p.get("acct") ?? "", style: p.get("style") ?? "" };
+}
+export function boardQuery(b: BoardQuery): string {
+  const p = new URLSearchParams();
+  if (b.order !== "ranked") p.set("order", b.order);
+  if (b.window !== "all") p.set("window", b.window);
+  if (b.acct) p.set("acct", b.acct);
+  if (b.style) p.set("style", b.style);
+  return p.toString();
+}
+/** GET /api/strategies/ranking's query: the window, and the account (config name) and style when chosen. */
+export function rankingQuery(b: BoardQuery): string {
+  const p = new URLSearchParams({ window: b.window });
+  if (b.acct) p.set("account", b.acct);
+  if (b.style) p.set("style", b.style);
+  return `?${p.toString()}`;
+}
+/** "+0.03 R/trade at least" for a ranked row; an unranked row says why. */
+export const boundWords = (r: RankRow) => (r.figures.lower_adjusted != null
+  ? `${signedR(r.figures.lower_adjusted)}/trade at least` : r.unranked_reason ?? "not ranked");
+/** "vs random +0.10 R (interim, 95% CI ...)" or "(read, 90% CI ...)"; "—" without a paired control. */
+export function edgeWords(f: RankFigures): string {
+  if (f.edge_vs_control_r == null) return "—";
+  return `${signedR(f.edge_vs_control_r)} (${f.edge_source ?? "interim"}${f.edge_ci ? `, ${ci(f.edge_ci, f.edge_ci_level ?? 0.95)}` : ""})`;
+}
+export const pfWords = (f: RankFigures) => (f.no_losses ? "no losses yet" : f.profit_factor == null ? "—" : f.profit_factor.toFixed(2));
+export const trendWords = (f: RankFigures) =>
+  `7${NBSP}d ${signedR(f.last_7d.net_r_per_trade)} (n${NBSP}${f.last_7d.n}) · 30${NBSP}d ${signedR(f.last_30d.net_r_per_trade)} (n${NBSP}${f.last_30d.n})${f.trend ? ` · ${f.trend}` : ""}`;
+
 // ------------------------------------------------------------------------------------------------ polls (§3)
 export const POLL = { now: 5_000, list: 15_000, strategies: 60_000, today: 15_000, detail: 15_000 } as const;
 export const PAGE_SIZE = 50;
@@ -137,8 +188,7 @@ export const resultOf = (t: TradeRow) => (t.status === "open"
 /** The row's accessible name: "Box break + close 15m, long, plus £2.10, closed at target". */
 export function rowName(t: TradeRow): string {
   const { pnl } = resultOf(t);
-  const res = t.blinded ? "result hidden until the arm's read"
-    : pnl == null ? "result not known" : `${pnl >= 0 ? "plus" : "minus"} ${money(Math.abs(pnl), t.currency)}`;
+  const res = pnl == null ? "result not known" : `${pnl >= 0 ? "plus" : "minus"} ${money(Math.abs(pnl), t.currency)}`;
   const end = t.status === "open" ? "open" : `closed at ${exitWords(t.exit_reason)}`;
   return `${strategyLabel(t.family_label, t.family, t.timeframe, t.variant).replace(" · ", " ")}, ${t.side}, ${res}, ${end}`;
 }
@@ -165,17 +215,16 @@ export function openTarget(p: OpenPositionX): OpenTarget {
   return { query: filtersQuery({ ...DEFAULT_FILTERS, acct: [p.account], fam: [p.family], status: "open" }) };
 }
 
-/** The totals line of a filtered list (§3.2), as the server sends it: money withheld per ADR 0050 (with the
- *  server's reason) or not summed across currencies; counts and open risk always shown. */
+/** The totals line of a filtered list (§3.2), as the server sends it: money not summed across currencies; counts and
+ *  open risk always shown. */
 export function totalsLine(t: TradeTotals): { text: string; note: string | null } {
   const n = `${t.n.toLocaleString("en-GB")} trade${t.n === 1 ? "" : "s"}${t.n_open ? ` (${t.n_open} open)` : ""}`;
   const parts = [n];
   if (t.net_pnl != null) parts.push(`net ${money(t.net_pnl, t.currency, true)} after costs`);
-  else if (!t.withheld && (t.net_unknown ?? 0) > 0) parts.push(incompleteWords(t.net_unknown ?? 0, t.net_partial, t.currency));
+  else if ((t.net_unknown ?? 0) > 0) parts.push(incompleteWords(t.net_unknown ?? 0, t.net_partial, t.currency));
   if (t.costs != null) parts.push(`costs ${money(t.costs, t.currency)}`);
   if (t.open_risk != null && t.n_open) parts.push(`open risk ${money(t.open_risk, t.currency)}`);
-  const note = t.withheld ? `Totals hidden: ${t.withheld_reason ?? "arms not read yet (ADR 0050)"}.`
-    : t.mixed_currencies ? "Money not summed: more than one currency." : null;
+  const note = t.mixed_currencies ? "Money not summed: more than one currency." : null;
   return { text: parts.join(" · "), note };
 }
 
@@ -215,8 +264,12 @@ export function groupOpen(positions: OpenPositionX[]): OpenGroup[] {
 
 // ------------------------------------------------------------------------------------------------ List filters (URL)
 export type Period = "today" | "7d" | "30d" | "all";
+export type Sort = "newest" | "best" | "worst";
+export const SORTS: Sort[] = ["newest", "best", "worst"];
+export const SORT_WORDS: Record<Sort, string> = { newest: "Newest", best: "Best R", worst: "Worst R" };
 export type Filters = {
   period: Period;
+  sort: Sort;
   acct: string[];
   fam: string[];
   tf: string[];
@@ -227,7 +280,7 @@ export type Filters = {
 };
 export const DEFAULT_KINDS: TradeKind[] = KINDS.filter((k) => k !== "shadow");
 export const PERIODS: Period[] = ["today", "7d", "30d", "all"];
-export const DEFAULT_FILTERS: Filters = { period: "today", acct: [], fam: [], tf: [], status: "", kind: [], exit: [], evidence: [] };
+export const DEFAULT_FILTERS: Filters = { period: "today", sort: "newest", acct: [], fam: [], tf: [], status: "", kind: [], exit: [], evidence: [] };
 
 const list = (p: URLSearchParams, k: string) => (p.get(k) ?? "").split(",").filter(Boolean);
 
@@ -235,8 +288,10 @@ export function parseFilters(query: string): Filters {
   const p = new URLSearchParams(query.replace(/^\?/, ""));
   const period = p.get("period");
   const status = p.get("status");
+  const sort = p.get("sort");
   return {
     period: period === "7d" || period === "30d" || period === "all" ? period : "today",
+    sort: sort === "best" || sort === "worst" ? sort : "newest",
     acct: list(p, "acct"), fam: list(p, "fam"), tf: list(p, "tf"),
     status: status === "open" || status === "closed" ? status : "",
     kind: list(p, "kind").filter((k): k is TradeKind => (KINDS as readonly string[]).includes(k)),
@@ -249,6 +304,7 @@ export function parseFilters(query: string): Filters {
 export function filtersQuery(f: Filters): string {
   const p = new URLSearchParams();
   if (f.period !== "today") p.set("period", f.period);
+  if (f.sort !== "newest") p.set("sort", f.sort);
   for (const k of ["acct", "fam", "tf", "kind", "exit", "evidence"] as const) if (f[k].length) p.set(k, f[k].join(","));
   if (f.status) p.set("status", f.status);
   return p.toString().replace(/%2C/g, ",");
@@ -263,6 +319,7 @@ export function apiQuery(f: Filters, cursor?: string | null): string {
     ["kind", f.kind.length ? f.kind : DEFAULT_KINDS], ["exit_reason", f.exit], ["evidence", f.evidence]];
   for (const [k, vs] of many) for (const v of vs) p.append(k, v);
   if (f.status) p.set("status", f.status);
+  if (f.sort !== "newest") p.set("sort", f.sort);
   p.set("limit", String(PAGE_SIZE));
   if (cursor) p.set("cursor", cursor);
   return `?${p.toString()}`;
@@ -286,8 +343,9 @@ export function etaWords(iso: string | null | undefined): string {
   return `read ~${d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", ...year })}`;
 }
 
-export const ci = (c: [number, number] | null | undefined) =>
-  c ? `90% CI ${signedR(c[0]).replace(`${NBSP}R`, "")}…${signedR(c[1])}` : "CI not known";
+/** "90% CI +0.05…+0.37 R" (the board's and the reads' level), or at `level` (the ranking's 95%). */
+export const ci = (c: [number, number] | null | undefined, level = 0.9) =>
+  c ? `${Math.round(level * 100)}% CI ${signedR(c[0]).replace(`${NBSP}R`, "")}…${signedR(c[1])}` : "CI not known";
 
 export const pct = (x: number | null | undefined) => (x == null ? "—" : withUnit(Math.round(x * 100), "%"));
 

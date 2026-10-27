@@ -1,15 +1,16 @@
 // Trades > List (docs/design/trades-ux-2026-10-27.md §3.2, backlog 130): every trade of every kind, one row per trade,
 // findable. Filters live in the URL (#/trades/list?acct=..&fam=..) so a Telegram link or a reload keeps them; paging is
 // a cursor and a "Load 50 more" button (no infinite scroll: position stays put, screen readers cope). The totals line
-// is the server's (after costs), withheld per ADR 0050 with the server's reason; the client never adds results up. While the list is
-// scrolled down, a poll that brings new trades shows a "N new · show" pill instead of pushing the rows down.
+// is the server's (after costs); the client never adds results up. The order is newest first, or by result (backlog
+// 139: the server sorts, `sort` in the URL). While the list is scrolled down, a poll that brings new trades shows a
+// "N new · show" pill instead of pushing the rows down.
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../../lib/api";
 import {
   activeFilterCount, apiQuery, DEFAULT_KINDS, EVIDENCE_WORDS, type Evidence, EXIT_REASONS, EXIT_WORDS, exitWords, type Filters,
   filtersQuery, heldWords, KIND_WORDS, KINDS, kindBadge, moneyOrDash, parseFilters, type Period, PERIOD_WORDS, PERIODS, POLL, sourcesWords, resultOf,
-  rowName, sideWords, signedR, strategyLabel, TIMEFRAMES, totalsLine, type TradeRow, type TradesPage,
+  rowName, sideWords, signedR, SORT_WORDS, SORTS, strategyLabel, TIMEFRAMES, totalsLine, type TradeRow, type TradesPage,
 } from "../../lib/trades";
 import { useWide } from "../../lib/useMedia";
 import { Badge, Button, Card, EmptyState, ErrorState, Segmented, TimeText } from "../../ui";
@@ -43,6 +44,9 @@ export function TradesList({ query, onQuery, onOpen }: Props) {
         <div className="list-bar">
           <Segmented label="Period" items={PERIODS.map((id) => ({ id, label: PERIOD_WORDS[id] }))}
                      value={f.period} onChange={(period) => set({ period })} />
+          <select aria-label="Order" value={f.sort} onChange={(e) => set({ sort: e.target.value as Filters["sort"] })}>
+            {SORTS.map((x) => <option key={x} value={x}>{SORT_WORDS[x]}</option>)}
+          </select>
           {wide ? <Button onClick={() => setSheet(!sheet)} aria-expanded={sheet} aria-controls="trade-filters">Filters{n ? ` (${n})` : ""}</Button>
             : <Button onClick={() => setSheet(true)} aria-haspopup="dialog">Filters{n ? ` (${n})` : ""}</Button>}
         </div>
@@ -112,13 +116,12 @@ function ListBody({ q, f, onOpen, wide, onClear }: { q: Q; f: Filters; onOpen: (
           {q.isFetchingNextPage ? "Loading…" : "Load 50 more"}
         </Button>
       )}
-      <p className="small muted">Net after costs (spread, slippage, commission, swap), in the account currency; newest first; times are your time, UTC on hover.</p>
+      <p className="small muted">Net after costs (spread, slippage, commission, swap), in the account currency; {f.sort === "newest" ? "newest first" : `${f.sort === "best" ? "best" : "worst"} R first (R, never £ against $), then open trades and trades without their net, newest first`}; times are your time, UTC on hover.</p>
     </>
   );
 }
 
 function result(t: TradeRow): { pnl: string; r: string } {
-  if (t.blinded) return { pnl: "hidden", r: "until read" };
   const { pnl, r } = resultOf(t);
   return { pnl: moneyOrDash(pnl, t.currency), r: signedR(r) };
 }

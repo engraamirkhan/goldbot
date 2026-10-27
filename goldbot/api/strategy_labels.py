@@ -16,7 +16,7 @@ Design rules kept:
   `counts` (an arm whose n is not its trades, S0R: stop exits). A unit is read only once `reads` lists it (the arm
   id, or the unit id). An arm not in `read_at`: a strategy arm reads at READ_AT; a control has no read. A file that
   cannot be read, or whose units disagree on n, means NO unit is read and every arm is its own unit at READ_AT (fail
-  closed: everything stays blinded).
+  closed: no read verdict is shown and no arm is promoted on a guess).
 * Each strategy arm is measured against one control (the strategy board, item 132), in this order: a control whose
   frozen `params.control` names the arm; else a control of the arm's own family (`<family>_control`, or the same rule)
   on its timeframe and a shared account; else a generic random control (one of no strategy's family) on a shared
@@ -57,7 +57,10 @@ class FamilyLabel(FrozenRecord):
 
 
 class ArmVariant(FrozenRecord):
-    variant: str = Field(min_length=1, max_length=30)
+    variant: str | None = Field(default=None, min_length=1, max_length=30)
+    # a rule edit is a new arm id with its own config_hash (config/exploration_arms.yaml); its version starts a new
+    # ranking row ("v2", n from 0; ADR 0053: one more registry trial)
+    version: int = Field(default=1, ge=1)
 
 
 class Labels(FrozenRecord):
@@ -104,6 +107,7 @@ class ArmInfo(FrozenRecord):
     read_n: int | None = READ_AT        # the unit's read size; None: no read registered (a control)
     counted: bool = True                # its fills count toward its unit's n (False: virtual exits on another's)
     count: Literal["trades", "stop_exits"] = "trades"
+    version: int = 1                    # its rule version (strategy_labels `arms: <id>: {version: 2}`): a ranking row
 
     @property
     def pooled(self) -> bool:
@@ -202,7 +206,7 @@ def _reads_file(path: Path) -> ReadsFile:
             raise ValueError("a read size below 1")
         return f
     except Exception as exc:             # noqa: BLE001 - fail closed: no arm counts as read
-        log.error("arm reads unreadable (%s): every arm stays blinded", type(exc).__name__)
+        log.error("arm reads unreadable (%s): no arm counts as read", type(exc).__name__)
         return ReadsFile()
 
 
@@ -264,12 +268,14 @@ def load_catalog(labels_path: Path = LABELS_PATH, spec_path: Path | None = None,
     for a in spec:
         src = by_id.get(a.twin_of or "", a)            # a broker twin takes its source's tag
         tag = labels.arms.get(a.id) or labels.arms.get(src.id)
+        own = labels.arms.get(a.id)
         control = (a.rule in CONTROL_RULES or a.rule.endswith("_control") or a.id in controls)
         family = arm_family(a.rule, a.params)
         uid, u = unit_of.get(a.id, (a.id, None))
         n = rf.read_at[a.id] if a.id in rf.read_at else None if control else READ_AT
         arms[a.id] = ArmInfo(arm_id=a.id, family=family, timeframe=a.timeframe,
-                             tag=tag.variant if tag else None, is_control=control, style=styles.get(a.id),
+                             tag=tag.variant if tag else None, version=own.version if own else 1,
+                             is_control=control, style=styles.get(a.id),
                              accounts=where.get(a.id, ()), running=a.status == "run", unit=uid, read_n=n,
                              counted=u is None or a.id in (u.counted or u.arms), count=rf.counts.get(a.id, "trades"))
     pairs = _pairs(spec, arms)

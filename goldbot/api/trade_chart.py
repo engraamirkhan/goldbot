@@ -10,8 +10,7 @@ Read-only: nothing here writes, sizes or orders.
   this period aren't stored yet' with the levels still listed").
 * Levels: the trade's own record (entry, the stop at entry, target, exit) and each stop move the engine journalled
   for its position (store `decisions`, action `trail`, accepted by the broker), in time order.
-* "A blinded arm: this view still shows the trade's own result (it is one trade, the owner's money; ADR 0050)": the
-  row comes from trades_ledger.detail, never blinded.
+* The row comes from trades_ledger.detail: the trade's own result, whatever its arm's read (ADR 0050, 0053).
 """
 from __future__ import annotations
 
@@ -125,7 +124,7 @@ def _stop_moves(store: Any, row: TradeRow, now: pd.Timestamp) -> list[StopMove]:
 
 
 def trade_bars(row: TradeRow, store: Any, now: pd.Timestamp) -> TradeBars:
-    """The chart of one trade (module docstring). `row` is the ledger's detail row: never blinded."""
+    """The chart of one trade (module docstring). `row` is the ledger's detail row."""
     end = pd.Timestamp(row.exit_utc) if row.exit_utc is not None else now
     tf = _timeframe(row, pd.Timestamp(row.opened_utc), end)
     lo, hi = _window(row, tf, now)

@@ -3,10 +3,11 @@ import { openPositions, tradeBars } from "../test/tradesFixtures";
 import { parseRoute, routeHash } from "./route";
 import { chartLevels } from "./tradeChart";
 import {
-  apiQuery, DEFAULT_FILTERS, etaWords, filtersQuery, groupOpen, heldWords, kindBadge, openTarget, parseFilters, rowName, statusWords,
+  apiQuery, boardQuery, boundWords, DEFAULT_FILTERS, edgeWords, etaWords, filtersQuery, groupOpen, heldWords, kindBadge, openTarget,
+  parseBoardQuery, parseFilters, pfWords, rankingQuery, rowName, statusWords,
   totalsLine,
 } from "./trades";
-import { blindedPage, tradeRow, tradesPage } from "../test/tradesFixtures";
+import { ranking, tradeRow, tradesPage } from "../test/tradesFixtures";
 
 const NB = " ";
 
@@ -47,13 +48,7 @@ describe("List filters live in the URL", () => {
   });
 });
 
-describe("ADR 0050 in the client", () => {
-  it("withheld totals show the counts only, with the server's reason", () => {
-    const t = totalsLine(blindedPage().totals);
-    expect(t.text).toBe("64 trades");
-    expect(t.note).toBe("Totals hidden: the filter narrows to strategies whose arms are not read yet (ADR 0050): totals return at the read.");
-  });
-
+describe("totals and rows as served (ADR 0053: no blinding)", () => {
   it("totals as served: net after costs, costs and open risk; mixed currencies never summed", () => {
     const t = totalsLine(tradesPage().totals);
     expect(t.text).toBe("412 trades (3 open) · net +£18.40 after costs · costs £22.10 · open risk £8.50");
@@ -66,7 +61,6 @@ describe("ADR 0050 in the client", () => {
   it("unknown nets are never a total: 'net incomplete: N trades without costs yet', the known sum labelled", () => {
     const t = totalsLine({ ...tradesPage().totals, net_pnl: null, net_unknown: 3, net_partial: 12.4 });
     expect(t.text).toBe("412 trades (3 open) · net incomplete: 3 trades without costs yet (known trades +£12.40) · costs £22.10 · open risk £8.50");
-    expect(totalsLine({ ...blindedPage().totals, net_unknown: 2 }).text).toBe("64 trades");   // withheld wins: nothing partial leaks
   });
 
   it("an engine position opens its ledger trade; an arm's open trade opens the List filtered to it", () => {
@@ -97,8 +91,8 @@ describe("ADR 0050 in the client", () => {
     expect(still).toEqual(["target", "entry", "stop", "exit"]);
   });
 
-  it("a blinded row's accessible name hides its result", () => {
-    expect(rowName(tradeRow({ blinded: true, pnl: null, r: null }))).toContain("result hidden until the arm's read");
+  it("a row's accessible name carries its result, or says it is not known", () => {
+    expect(rowName(tradeRow({ pnl: null, r: null }))).toContain("result not known");
     expect(rowName(tradeRow())).toBe("Box break + close 15m, long, plus £2.10, closed at target");
   });
 });
@@ -132,5 +126,32 @@ describe("words", () => {
     expect(kindBadge("strategy")).toBeNull();
     expect(kindBadge("control")).toBe("Control");
     expect(kindBadge("cost_probe")).toBe("Cost probe");
+  });
+});
+
+describe("the ranking and the List's order in the URL (136-139)", () => {
+  it("the Strategies tab is ranked by default; 'By progress to read', the window and the filters live in the URL", () => {
+    expect(parseBoardQuery("")).toEqual({ order: "ranked", window: "all", acct: "", style: "" });
+    const b = parseBoardQuery("order=progress&window=7d&acct=icm-probe&style=scalp");
+    expect(b).toEqual({ order: "progress", window: "7d", acct: "icm-probe", style: "scalp" });
+    expect(boardQuery(b)).toBe("order=progress&window=7d&acct=icm-probe&style=scalp");
+    expect(boardQuery(parseBoardQuery(""))).toBe("");
+    expect(rankingQuery(b)).toBe("?window=7d&account=icm-probe&style=scalp");
+  });
+
+  it("a ranked row says its bound; an unranked one says why; edge says its source", () => {
+    const [first, , few] = ranking().rows;
+    expect(boundWords(first)).toBe(`+0.03${NB}R/trade at least`);
+    expect(boundWords(few)).toBe("too few to rank (12 of 30 fills, 4 of 10 days)");
+    expect(edgeWords(first.figures)).toBe(`+0.10${NB}R (interim, 95% CI −0.02…+0.22${NB}R)`);
+    expect(pfWords({ ...first.figures, no_losses: true, profit_factor: null })).toBe("no losses yet");
+  });
+
+  it("the List's sort is in the URL and sent to the API; newest is the default and left out", () => {
+    const f = parseFilters("sort=best&period=7d");
+    expect(f.sort).toBe("best");
+    expect(filtersQuery(f)).toBe("period=7d&sort=best");
+    expect(new URLSearchParams(apiQuery(f).slice(1)).get("sort")).toBe("best");
+    expect(new URLSearchParams(apiQuery(parseFilters("")).slice(1)).get("sort")).toBeNull();
   });
 });

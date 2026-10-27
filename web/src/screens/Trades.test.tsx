@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as apiModule from "../lib/api";
 import type { Route } from "../lib/route";
-import { bars, blindedPage, board, openPositions, todayAccount, tradeBars, tradeRow, tradesPage } from "../test/tradesFixtures";
+import { bars, board, openPositions, ranking, todayAccount, tradeBars, tradeRow, tradesPage } from "../test/tradesFixtures";
 import type { TradesTab } from "../lib/trades";
 import { TradesTabView } from "./Trades";
 import { TradeChart } from "./trades/TradeChart";
@@ -28,6 +28,7 @@ function renderTab(tab: TradesTab, route: Partial<Route> = {}, go = vi.fn()) {
   free("trade", tradeRow());
   free("tradeBars", tradeBars());
   free("strategyBoard", board());
+  free("strategyRanking", ranking());
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const r: Route = { section: "trades", tab, sub: null, query: "", ...route };
   return { go, ...render(<QueryClientProvider client={qc}><TradesTabView tab={tab} route={r} go={go} /></QueryClientProvider>) };
@@ -112,15 +113,12 @@ describe("Trades > List (130)", () => {
     expect(go).toHaveBeenCalledWith("trades", "list", null, "fam=box_break_close", { replace: true, keepScroll: true });
   });
 
-  it("a filter narrowed to unread arms is withheld as served: counts only, rows blinded, the server's reason (ADR 0050)", async () => {
-    vi.spyOn(apiModule.api, "trades").mockResolvedValue(blindedPage());
+  it("a filter on one strategy shows its rows' results and its totals (ADR 0053, 139)", async () => {
     renderTab("list", { query: "fam=opening_range" });
-    expect(await screen.findByText("64 trades")).toBeInTheDocument();
-    expect(screen.getByText(/Totals hidden: the filter narrows to strategies whose arms are not read yet/)).toBeInTheDocument();
+    expect(await screen.findByText("412 trades (3 open) · net +£18.40 after costs · costs £22.10 · open risk £8.50")).toBeInTheDocument();
     const list = screen.getByRole("list", { name: "Trades" });
-    expect(list).toHaveTextContent("hidden");
-    expect(list).not.toHaveTextContent(/[+−]£/);
-    expect(list).not.toHaveTextContent(/\d R/);
+    expect(list).toHaveTextContent("+£2.10");
+    expect(screen.queryByText(/hidden/i)).toBeNull();
   });
 
   it("names an unreadable source: its trades are missing, not zero", async () => {
@@ -187,12 +185,19 @@ describe("Trade detail (133)", () => {
     expect(await screen.findByText("This trade isn't in the ledger.")).toBeInTheDocument();
   });
 
-  it("a blinded arm's single trade still shows its own result", async () => {
-    vi.spyOn(apiModule.api, "trade").mockResolvedValue(tradeRow({ blinded: true }));
+  it("an arm's single trade shows its own result and points to its family's figures", async () => {
     renderTab("list", { sub: "x" });
     const d = await screen.findByRole("dialog", { name: "Trade detail" });
     expect(await within(d).findByText("+£2.10")).toBeInTheDocument();
-    expect(d).toHaveTextContent(/totals stay hidden until its read/);
+    expect(d).toHaveTextContent(/its family's figures, with n and the CI, are on Strategies/);
+  });
+
+  it("sorts by result from the URL and writes a new order back to it", async () => {
+    const { go } = renderTab("list", { query: "sort=worst" });
+    await screen.findByRole("list", { name: "Trades" });
+    expect(apiModule.api.trades).toHaveBeenCalledWith(expect.stringMatching(/sort=worst/));
+    fireEvent.change(screen.getByRole("combobox", { name: "Order" }), { target: { value: "best" } });
+    expect(go).toHaveBeenCalledWith("trades", "list", null, "sort=best", { replace: true, keepScroll: true });
   });
 
   it("Escape and Close return to the list, keeping the filters", async () => {
@@ -212,9 +217,50 @@ describe("Trade detail (133)", () => {
   });
 });
 
-describe("Trades > Strategies (132, ADR 0050)", () => {
-  it("unread arms show progress only; a read arm its verdict with CI and vs control; a partly-read family both", async () => {
+describe("Trades > Strategies, ranked (136-138, ADR 0053)", () => {
+  it("is ranked by default in the server's order, with the heading line, n, CI and status on every row", async () => {
     renderTab("strategies");
+    const card = await screen.findByRole("region", { name: "Strategy ranking" });
+    expect(await within(card).findByText(/^Ranked by the least each trade is likely earning after costs\./)).toBeInTheDocument();
+    expect(apiModule.api.strategyRanking).toHaveBeenCalledWith("?window=all");
+    const rows = within(card).getAllByRole("button", { name: /open its trades/ }).map((b) => b.getAttribute("aria-label")!.split(",")[0]);
+    expect(rows).toEqual(["1. Opening range", "2. Box break + close", "Sweep + absorb", "Random control", "EMA pullback"]);
+    const first = within(card).getByRole("button", { name: /^1\. Opening range/ });
+    expect(first).toHaveTextContent(`+0.03 R/trade at least`);
+    expect(first).toHaveTextContent(`avg +0.12 R (95% CI +0.05…+0.19 R) · 412 fills, 18 days`);
+    expect(first).toHaveTextContent("hit 48 %");
+    expect(first).toHaveTextContent("+£38.10 (+£0.09/trade)");
+    expect(first).toHaveTextContent("PF 1.31");
+    expect(first).toHaveTextContent(`vs random +0.10 R (interim`);
+    expect(first).toHaveTextContent("early, not proven");
+    expect(first).toHaveTextContent("120 of 300 to the read");    // the server's progress, on the row's own fills
+    // a phone: the rows too few to rank are one compact list, a line each, with the same progress as their fills
+    const few = within(within(card).getByRole("region", { name: "Too few to rank" })).getByRole("button", { name: /^Sweep \+ absorb/ });
+    expect(few).toHaveTextContent("Sweep + absorb avg +0.80 R · 12 fills, 4 days · 12 of 300 to the read");
+    expect(few.closest(".family-card")).toBeNull();
+    expect(within(card).getByRole("region", { name: "Controls" })).toHaveTextContent("Random control");
+    expect(within(card).getByRole("region", { name: "Retired" })).toHaveTextContent("retired at its stop");
+  });
+
+  it("the order toggle and the window are remembered in the URL", async () => {
+    const { go } = renderTab("strategies");
+    await screen.findByRole("region", { name: "Strategy ranking" });
+    fireEvent.click(screen.getByRole("tab", { name: "By progress to read" }));
+    expect(go).toHaveBeenCalledWith("trades", "strategies", null, "order=progress", { replace: true, keepScroll: true });
+    fireEvent.click(screen.getByRole("tab", { name: "7 days" }));
+    expect(go).toHaveBeenCalledWith("trades", "strategies", null, "window=7d", { replace: true, keepScroll: true });
+  });
+
+  it("a ranking that can't load says so and that trading is not affected", async () => {
+    vi.spyOn(apiModule.api, "strategyRanking").mockRejectedValue(new apiModule.ApiError(500, "boom"));
+    renderTab("strategies");
+    expect(await screen.findByText("Couldn't load the ranking.")).toBeInTheDocument();
+  });
+});
+
+describe("Trades > Strategies, by progress to read (132, ADR 0050, 0051)", () => {
+  it("unread arms show progress only; a read arm its verdict with CI and vs control; a partly-read family both", async () => {
+    renderTab("strategies", { query: "order=progress" });
     const board = await screen.findByRole("region", { name: "Strategy board" });
     const box = within(board).getByRole("button", { name: /Box break \+ close, running/ });
     expect(box).toHaveTextContent("213/300 · read ~Thu 5 Nov");
@@ -229,26 +275,26 @@ describe("Trades > Strategies (132, ADR 0050)", () => {
     expect(or.textContent!.match(/R\/trade/g)).toHaveLength(1);
   });
 
-  it("keeps the server's order (state, never result); lab money only with 3+ arms; learning line on top", async () => {
-    renderTab("strategies");
+  it("by progress keeps the server's order (state, then closeness to the read); lab money; learning line on top", async () => {
+    renderTab("strategies", { query: "order=progress" });
     const board = await screen.findByRole("region", { name: "Strategy board" });
     const names = within(board).getAllByRole("button").map((b) => b.getAttribute("aria-label")!.split(",")[0]);
     expect(names).toEqual(["Opening range", "Box break + close", "Random control (scalp)"]);
     const top = screen.getByRole("region", { name: "Learning progress" });
     expect(top).toHaveTextContent("4 arms read, 1 proven, 3 retired, 44 running · 2,960 trades counted toward reads in 7 days");
     expect(top).toHaveTextContent("Scalp lab (scalp), 7 days: 2,960 trades · −£41.20 net · costs £66.10");
-    expect(top).toHaveTextContent("Vantage lab (intraday), 7 days: 310 trades · net hidden (fewer than 3 arms)");
+    expect(top).toHaveTextContent("Vantage lab (intraday), 7 days: 310 trades · net not known yet");
   });
 
   it("tapping a family opens the List filtered to it", async () => {
-    const { go } = renderTab("strategies");
+    const { go } = renderTab("strategies", { query: "order=progress" });
     fireEvent.click(await screen.findByRole("button", { name: /Box break \+ close, running/ }));
     expect(go).toHaveBeenCalledWith("trades", "list", null, "fam=box_break_close");
   });
 
   it("a board that can't load says so and that trading is not affected", async () => {
     vi.spyOn(apiModule.api, "strategyBoard").mockRejectedValue(new apiModule.ApiError(500, "boom"));
-    renderTab("strategies");
+    renderTab("strategies", { query: "order=progress" });
     expect(await screen.findByText("Couldn't load strategies.")).toBeInTheDocument();
     expect(screen.getByText(/Trading is not affected/)).toBeInTheDocument();
   });
@@ -260,7 +306,7 @@ describe("Trades > Strategies (132, ADR 0050)", () => {
                                          anneal_state: "E", eta_read_date: "2026-11-20", read: null }],
                       variants: fam.variants.slice(0, 2).map((x) => ({ ...x, pooled: true, read_unit: "H-81:Z6", eta_read_date: null })) };
     vi.spyOn(apiModule.api, "strategyBoard").mockResolvedValue(v);
-    renderTab("strategies");
+    renderTab("strategies", { query: "order=progress" });
     const box = await screen.findByRole("button", { name: /Box break \+ close, running/ });
     expect(box).toHaveTextContent("All timeframes pooled");
     expect(box).toHaveTextContent("140/300 · read ~Fri 20 Nov");
@@ -276,14 +322,14 @@ describe("Trades > Strategies (132, ADR 0050)", () => {
       { ...v.families[1].variants[0], arm_id: "VKA15", account_labels: ["Vantage lab"] },
     ] };
     vi.spyOn(apiModule.api, "strategyBoard").mockResolvedValue(v);
-    renderTab("strategies");
+    renderTab("strategies", { query: "order=progress" });
     const box = await screen.findByRole("button", { name: /Box break \+ close, running/ });
     expect(box).toHaveTextContent("0/300 · warming up: no counted trade yet");
     expect(box).toHaveTextContent("Vantage lab");
   });
 
   it("engine strategies show full figures with n and a 90% CI", async () => {
-    renderTab("strategies");
+    renderTab("strategies", { query: "order=progress" });
     const eng = await screen.findByRole("region", { name: "Engine strategies" });
     expect(eng).toHaveTextContent(`Box break + MFI · 1h`);
     expect(eng).toHaveTextContent(`90% CI −0.08…+0.32 R`);
@@ -319,7 +365,7 @@ describe("Trades > Today (131)", () => {
 
   it("an unknown net is 'incomplete: N trades without costs yet', never a full total", async () => {
     const a = todayAccount({ net_today: null, net_unknown: 2, net_today_partial: -1.5,
-      month_to_date: { since: "2026-10-01", n: 3000, net_pnl: null, costs: null, withheld: false, net_unknown: 4, net_partial: 80 } });
+      month_to_date: { since: "2026-10-01", n: 3000, net_pnl: null, costs: null, net_unknown: 4, net_partial: 80 } });
     vi.spyOn(apiModule.api, "today").mockResolvedValue({ as_of: "x", accounts: [a] });
     renderTab("today");
     const c = await screen.findByRole("region", { name: "Today Scalp lab" });
@@ -327,23 +373,10 @@ describe("Trades > Today (131)", () => {
     expect(c).toHaveTextContent("Month to date3000 trades · net incomplete: 4 trades without costs yet (known trades +£80.00)");
   });
 
-  it("money the server withholds (ADR 0050) says so in words; an unreadable source is named, never zero", async () => {
-    const a = todayAccount({
-      withheld: ["net_today", "costs_today", "exploration_pot_used", "week_to_date"], net_today: null, costs_today: null,
-      exploration_pot_used: null,
-      by_kind: { exploration: { fills: 120, closed: 110, net_pnl: null, costs: null, net_r: null, withheld: true, net_unknown: 0 } },
-      week_to_date: { since: "2026-10-26", n: 300, net_pnl: null, costs: null, withheld: true, net_unknown: 0 },
-      strip: todayAccount().strip!.map((d, i) => (i === 13 ? { ...d, net_pnl: null, costs: null, withheld: true } : d)),
-    });
-    vi.spyOn(apiModule.api, "today").mockResolvedValue({ as_of: "x", accounts: [a], unreadable: ["probes"] });
+  it("an unreadable source is named, never zero", async () => {
+    vi.spyOn(apiModule.api, "today").mockResolvedValue({ as_of: "x", accounts: [todayAccount()], unreadable: ["probes"] });
     renderTab("today");
-    const c = await screen.findByRole("region", { name: "Today Scalp lab" });
-    expect(c).toHaveTextContent("Closed today: net hidden until the arms' reads");
-    expect(c).toHaveTextContent("Exploration hidden (120 fills)");
-    expect(c).toHaveTextContent("exploration pot hidden until the arms' reads");
-    expect(c).toHaveTextContent("Week to date300 trades · net hidden until the arms' reads");
-    expect(c.querySelectorAll(".day-strip rect")).toHaveLength(13);
-    expect(c).toHaveTextContent("h: hidden until the arms' reads");
+    await screen.findByRole("region", { name: "Today Scalp lab" });
     expect(screen.getByText(/Couldn't read cost probes: those trades are missing from today's figures, not zero/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("region", { name: "Risk per trade" })).toBeInTheDocument());
   });

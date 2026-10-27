@@ -2,8 +2,9 @@
 daily): per broker, host and session the costs, fill rate, refusal reasons, volume against the ~290 a day plan, arm
 health against the pre-registered H-61 stops (only `breached` / `ok`) and integrity; the automatic actions (retire an
 arm at its stop, refit a cost cell after 200 fills, never cheaper within a day, a `learning-ops` issue on an incident
-or two low-volume days, one status comment on #34); and NEVER a per-arm R, rank or sign in the record, the issue text
-or the owner's report section."""
+or two low-volume days, one status comment on #34); and never a login or a host in a text it writes or sends (backlog
+139 narrowed the old blinding to that; results are the strategy ranking's, ADR 0053). Its own texts still carry no
+per-arm figure: arm health is `breached` or `ok`."""
 from __future__ import annotations
 
 import json
@@ -353,16 +354,19 @@ def test_one_status_comment_on_issue_34_a_day_even_when_the_review_runs_twice(tm
     _blinded(sink.comments[0][1])
 
 
-# ---------------------------------------------------------------------------------------------- (3) never per-arm R
-def test_the_review_record_refuses_any_per_arm_r_rank_or_sign_field():
+# ---------------------------------------------------------------------------------------------- (3) texts scrubbed
+def test_the_review_record_refuses_unknown_fields_and_a_health_word_other_than_breached_or_ok():
     base = dr.DailyReview(day=DAY, generated_utc=NOW, dry_run=True)
-    for bad in ("mean_r", "rank", "sign", "pnl", "share"):
-        with pytest.raises(ValidationError):
-            dr.DailyReview(**{**base.model_dump(), bad: 1})                # unknown fields are refused
-    with pytest.raises(ValidationError, match="per-arm"):
-        dr.DailyReview(**{**base.model_dump(), "refusals": {"icm-probe": {"S1A_r": 3}}})
+    with pytest.raises(ValidationError):
+        dr.DailyReview(**{**base.model_dump(), "mean_r": 1})                # unknown fields are refused
     with pytest.raises(ValidationError):
         dr.DailyReview(**{**base.model_dump(), "arm_health": {"icm": {"S1A": "-31R"}}})
+
+
+def test_a_line_carrying_a_login_or_a_host_is_dropped_before_it_is_written_or_sent():
+    """Backlog 139 (3): the old blinding check is narrowed to identifiers: the issue texts go to a public repo."""
+    text = "costs ICM $0.37/oz\naccount 51234567 halted\nbridge 10.0.0.12 down\nvolume 1,234,567 of 2,000,000\n+0.3R ok"
+    assert dr.scrub(text).splitlines() == ["costs ICM $0.37/oz", "volume 1,234,567 of 2,000,000", "+0.3R ok"]
 
 
 def test_the_record_issue_and_report_section_carry_no_arm_r_rank_or_sign(tmp_path):
@@ -371,9 +375,6 @@ def test_the_record_issue_and_report_section_carry_no_arm_r_rank_or_sign(tmp_pat
     journal = pd.DataFrame({"ts_utc": [LONDON], "action": ["exploration_error"]})
     sink = Sink()
     review = _run(tmp_path, store=_store({("decisions", "icm-probe"): journal}), sink=sink)
-    stored = dr.review_path(tmp_path, DAY).read_text()
-    for key in re.findall(r'"([^"]+)":', stored):
-        assert not dr.banned_key(key), key
     assert "S1A" not in "".join(b for _, _, b in sink.issues) + "".join(b for _, b in sink.comments)
     for text in [b for _, _, b in sink.issues] + [b for _, b in sink.comments] + dr.report_lines(review):
         _blinded(text)

@@ -4,13 +4,10 @@ daily net strip with week and month to date. One builder: `GET /api/today` (home
 134, Telegram's /today read the same figures, from the same rows as `GET /api/trades`. Reporting only.
 
 Design rules kept: demo and live never summed, currencies never summed (each account its own card); figures from
-net-of-cost ledger rows; a day is an opportunity day ([D-1 22:00, D 22:00) UTC). Blinding (ADR 0050, quant
-tightenings): a money figure is withheld (None, named in `withheld`) when its rows' unread-arm closes cover fewer than
-`MIN_ARMS_FOR_TOTAL` strategy arms in any account-day cell (trades_ledger.withheld_reason). The arms' own buckets
-(exploration, control) never show money before their read: control money beside exploration money is the banned
-comparison with the random baseline, and either bucket beside the account's net is the other by subtraction; the
-arms together are the account's net less the other kinds (a lab total). "Quiet day" wording only when the volatility
-screen says so: until an engine publishes `opportunity_day`, `quiet_day` is None.
+net-of-cost ledger rows; a day is an opportunity day ([D-1 22:00, D 22:00) UTC). No figure is withheld for unread
+arms any more (ADR 0053 retired the ADR 0050 withholding, backlog 139): the arms' buckets show their money as the
+ranking shows each family's. "Quiet day" wording only when the volatility screen says so: until an engine publishes
+`opportunity_day`, `quiet_day` is None.
 """
 from __future__ import annotations
 
@@ -22,8 +19,7 @@ from typing import Any
 import pandas as pd
 
 from goldbot.api.schema import CapUse, CostSplit, KindDay, PeriodNet, StripDay, TradeRow
-from goldbot.api.strategy_labels import Catalog
-from goldbot.api.trades_ledger import oday, withheld_reason
+from goldbot.api.trades_ledger import oday
 from goldbot.base import FrozenRecord
 from goldbot.config import Settings
 from goldbot.ops.report_days import day_bounds, report_day
@@ -93,10 +89,6 @@ def _split(rows: Sequence[TradeRow]) -> CostSplit:
                      slippage_exit_known=bool(parts) and all(c.slippage_exit_known for c in parts))
 
 
-def _blind(rows: Sequence[TradeRow], cat: Catalog) -> bool:
-    return withheld_reason(rows, narrowed=False, cat=cat)[0] is not None
-
-
 def _closed_on(rows: Sequence[TradeRow], days: set[date]) -> list[TradeRow]:
     return [r for r in rows if r.status == "closed" and r.exit_utc is not None and oday(r.exit_utc) in days]
 
@@ -130,8 +122,8 @@ def _pot_used(mine: Sequence[TradeRow], today: list[TradeRow]) -> float:
     return round(sum(max(0.0, -v) for v in by_arm.values()) + held, 2)
 
 
-def account_day(name: str, e: dict[str, Any], rows: Sequence[TradeRow], now: pd.Timestamp, plan: AccountPlan | None,
-                cat: Catalog) -> dict[str, Any]:
+def account_day(name: str, e: dict[str, Any], rows: Sequence[TradeRow], now: pd.Timestamp,
+                plan: AccountPlan | None) -> dict[str, Any]:
     """TodayAccount's ledger fields for the account named `name` (config name, digits cut) with engine file `e`."""
     plan = plan or AccountPlan()
     mine = [r for r in rows if r.account == name and r.kind != "shadow"]
@@ -139,24 +131,17 @@ def account_day(name: str, e: dict[str, Any], rows: Sequence[TradeRow], now: pd.
     lo, hi = day_bounds(today.isoformat())
     filled = [r for r in mine if lo <= r.opened_utc < hi]
     closed = _closed_on(mine, {today})
-    withheld: list[str] = []
     recent = sum(1 for r in filled if r.opened_utc >= now - PACE_WINDOW)
     window_h = min(PACE_WINDOW, now - lo).total_seconds() / 3600
     pace = round(len(filled) + recent / window_h * max(0.0, (hi - now).total_seconds() / 3600)) if window_h > 0 else None
-    arms_blind = any(r.kind in _ARMS and r.arm_id is not None and not cat.is_read(r.arm_id) for r in closed)
     by_kind: dict[str, KindDay] = {}
     for kind in sorted({r.kind for r in [*filled, *closed]}):
         k_closed = [r for r in closed if r.kind == kind]
-        hide = kind in _ARMS and arms_blind
         rs = [r.r for r in k_closed if r.r is not None]
         k_net, _, k_unknown = _net(k_closed)
-        by_kind[kind] = KindDay(fills=sum(r.kind == kind for r in filled), closed=len(k_closed),
-                                net_pnl=None if hide else k_net, net_unknown=k_unknown,
-                                costs=None if hide else _sum([r.costs.total for r in k_closed if r.costs]),
-                                net_r=None if hide else (round(sum(rs), 3) if rs else None), withheld=hide)
-    day_hidden = _blind(closed, cat)
-    if day_hidden:
-        withheld += ["net_today", "costs_today", "exploration_pot_used"]
+        by_kind[kind] = KindDay(fills=sum(r.kind == kind for r in filled), closed=len(k_closed), net_pnl=k_net,
+                                net_unknown=k_unknown, costs=_sum([r.costs.total for r in k_closed if r.costs]),
+                                net_r=round(sum(rs), 3) if rs else None)
     eq, d0, w0 = _num(e.get("equity")), _num(e.get("day_start_equity")), _num(e.get("week_start_equity"))
     limit, remaining = _num(e.get("daily_loss_limit")), _num(e.get("daily_loss_remaining"))
     raw = e.get("limits")
@@ -167,31 +152,24 @@ def account_day(name: str, e: dict[str, Any], rows: Sequence[TradeRow], now: pd.
     strip = []
     for d in _trading_days(today, plan.strip_days):
         on = _closed_on(mine, {d})
-        hidden = _blind(on, cat)
         d_net, _, d_unknown = _net(on)
-        strip.append(StripDay(day=d, n=len(on), net_pnl=None if hidden else d_net, net_unknown=d_unknown,
-                            costs=None if hidden else _sum([r.costs.total for r in on if r.costs]),
-                            target=daily_target, opportunity=None, withheld=hidden))
+        strip.append(StripDay(day=d, n=len(on), net_pnl=d_net, net_unknown=d_unknown,
+                              costs=_sum([r.costs.total for r in on if r.costs]), target=daily_target,
+                              opportunity=None))
     periods = {}
     for key, start in (("week_to_date", today - timedelta(days=today.weekday())), ("month_to_date", today.replace(day=1))):
         on = [r for r in mine if r.status == "closed" and r.exit_utc is not None and start <= oday(r.exit_utc) <= today]
-        hidden = _blind(on, cat)
-        if hidden:
-            withheld.append(key)
         p_net, p_part, p_unknown = _net(on)
-        periods[key] = PeriodNet(since=start, n=len(on), net_pnl=None if hidden else p_net, net_unknown=p_unknown,
-                                 net_partial=None if hidden else p_part,
-                                 costs=None if hidden else _split(on), withheld=hidden)
+        periods[key] = PeriodNet(since=start, n=len(on), net_pnl=p_net, net_unknown=p_unknown, net_partial=p_part,
+                                 costs=_split(on))
     today_net, today_partial, today_unknown = _net(closed)
     opp = e.get("opportunity_day")
     return dict(
         fills_today=len(filled), fills_target=plan.fills_target, pace=pace, by_kind=by_kind,
-        net_today=None if day_hidden else today_net, net_unknown=today_unknown,
-        net_today_partial=None if day_hidden else today_partial,
-        costs_today=None if day_hidden else _split(closed),
+        net_today=today_net, net_unknown=today_unknown, net_today_partial=today_partial, costs_today=_split(closed),
         open_n=int(v) if (v := _num(e.get("open_positions"))) is not None else None, open_risk=_num(e.get("open_risk")),
         day_cap_used=_cap(None if limit is None or remaining is None else limit - remaining, limit),
         week_cap_used=_cap(None if w0 is None or eq is None else w0 - eq, None if weekly is None or not w0 else weekly * w0),
-        exploration_pot_used=None if day_hidden else _cap(_pot_used(mine, closed), plan.pot),
+        exploration_pot_used=_cap(_pot_used(mine, closed), plan.pot),
         daily_target=daily_target, strip=strip, **periods,
-        quiet_day=(not opp) if isinstance(opp, bool) else None, withheld=withheld)
+        quiet_day=(not opp) if isinstance(opp, bool) else None)

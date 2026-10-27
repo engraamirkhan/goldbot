@@ -1,8 +1,9 @@
 // Typed fixtures for the trades screens' unit tests, in the API contract's shapes (schema.d.ts: TradeRow, TradesPage,
-// TodayAccount, OpenPosition, StrategyBoardView, TradeBars). The e2e and screenshots use the real seeded server.
+// TodayAccount, OpenPosition, StrategyBoardView, RankingView, TradeBars). The e2e and screenshots use the real seeded server.
 // Illustrative figures.
 import type {
-  Bar, BoardVariant, OpenPositionX, StrategyBoard, StripDay, TodayAccountX, TradeBars, TradeRow, TradesPage,
+  Bar, BoardVariant, OpenPositionX, RankFigures, RankingView, RankRow, StrategyBoard, StripDay, TodayAccountX, TradeBars,
+  TradeRow, TradesPage,
 } from "../lib/trades";
 
 const NOW = Date.UTC(2026, 9, 27, 9, 0, 0);
@@ -34,12 +35,12 @@ export const tradeRow = (o: Partial<TradeRow> = {}): TradeRow => ({
   exit: 4024, exit_utc: iso(19), exit_reason: "target", censored: false, opened_utc: iso(51), held_s: 32 * 60, hold_limit_s: 7200,
   risk_amount: 1.4, pnl: 2.1, gross: 2.37, pnl_now: null, r: 1.5, r_now: null, price_now: null,
   costs: { spread: 0.18, slippage: 0.02, commission: 0.07, swap: 0, total: 0.27, complete: true, spread_exit_estimated: false, slippage_exit_known: true },
-  why: "Close above the 15m box after a squeeze", blinded: false, evidence: "counted", excluded_reason: null, stale: false, ...o,
+  why: "Close above the 15m box after a squeeze", evidence: "counted", excluded_reason: null, stale: false, ...o,
 });
 
 const totals = (o: Partial<TradesPage["totals"]> = {}): TradesPage["totals"] => ({
   n: 412, n_open: 3, n_closed: 409, currency: "GBP", mixed_currencies: false, net_pnl: 18.4, costs: 22.1, open_pnl: 3.9,
-  open_risk: 8.5, withheld: false, withheld_reason: null, net_unknown: 0, net_partial: null, open_pnl_withheld: false, ...o,
+  open_risk: 8.5, net_unknown: 0, net_partial: null, ...o,
 });
 
 export const tradesPage = (o: Partial<TradesPage> = {}): TradesPage => ({
@@ -53,15 +54,6 @@ export const tradesPage = (o: Partial<TradesPage> = {}): TradesPage => ({
                family_label: "Cost probe", variant: null, timeframe: null, exit_reason: "time_limit", pnl: -0.05, r: -0.1,
                why: "Measures spread and slippage", evidence: "not_evidence", arm_id: null, opened_utc: iso(70), held_s: 60 }),
   ], ...o,
-});
-
-/** A filter narrowed to a strategy whose arms are unread: the server withholds the money and blinds the rows. */
-export const blindedPage = (): TradesPage => tradesPage({
-  next_cursor: null,
-  totals: totals({ n: 64, n_open: 0, n_closed: 64, net_pnl: null, costs: null, open_pnl: null, open_risk: null, withheld: true,
-                   withheld_reason: "the filter narrows to strategies whose arms are not read yet (ADR 0050): totals return at the read" }),
-  rows: [tradeRow({ trade_id: "exploration:icm-probe:88", family: "opening_range", family_label: "Opening range", variant: "1h",
-                    timeframe: "1h", blinded: true, pnl: null, r: null, gross: null, exit_reason: null })],
 });
 
 export const bars = (): Bar[] => {
@@ -87,9 +79,9 @@ export const board = (): StrategyBoard => ({
   learning: { running: 44, read: 4, proven: 1, retired: 3, counted_7d: 2960 },
   lab_totals: [
     { account_label: "Scalp lab", style: "scalp", period: "7 days", arms: 7, n: 2960, n_closed: 2950, net_pnl: -41.2, costs: 66.1,
-      currency: "GBP", withheld_reason: null },
+      currency: "GBP" },
     { account_label: "Vantage lab", style: "intraday", period: "7 days", arms: 2, n: 310, n_closed: 300, net_pnl: null, costs: null,
-      currency: "GBP", withheld_reason: "these trades cover fewer than 3 unread arms in an account and day (ADR 0050)" },
+      currency: "GBP" },
   ],
   families: [
     { family: "opening_range", family_label: "Opening range", style: "intraday", accounts: ["Scalp lab"], state: "proven", anneal_state: "P", pooled: [],
@@ -132,20 +124,60 @@ export const tradeBars = (o: Partial<TradeBars> = {}): TradeBars => {
 const strip: StripDay[] = Array.from({ length: 14 }, (_, i) => ({
   day: new Date(NOW - (13 - i) * 86_400_000).toISOString().slice(0, 10), n: 30 + i,
   net_pnl: [12, -8, 31, 55, -20, 4, 0, 62, -3, 18, 9, -14, 41, -3.1][i], costs: 9, target: 50,
-  opportunity: [2, 3, 7, 10, 12].includes(i), withheld: false, net_unknown: 0,
+  opportunity: [2, 3, 7, 10, 12].includes(i), net_unknown: 0,
 }));
 
 export const todayAccount = (o: Partial<TodayAccountX> = {}): TodayAccountX => ({
   account: "icm-probe", mode: "demo", currency: "GBP", day_pnl: -1.0, open_pnl: 2.1, closed_pnl: -3.1, closed_n: 133,
   closed_complete: true, costs: { spread: 7.6, spread_complete: true, commission: 2.2, swap: 0 }, loss_meter: null, age_s: 3, stale: false,
   account_label: "Scalp lab", fills_today: 148, fills_target: 200, pace: 240,
-  by_kind: { exploration: { fills: 120, closed: 110, net_pnl: -4.2, costs: 8.1, net_r: -2.1, withheld: false, net_unknown: 0 },
-             control: { fills: 20, closed: 18, net_pnl: 0.9, costs: 1.3, net_r: 0.4, withheld: false, net_unknown: 0 },
-             cost_probe: { fills: 8, closed: 5, net_pnl: 0.2, costs: 0.4, net_r: 0.1, withheld: false, net_unknown: 0 } },
+  by_kind: { exploration: { fills: 120, closed: 110, net_pnl: -4.2, costs: 8.1, net_r: -2.1, net_unknown: 0 },
+             control: { fills: 20, closed: 18, net_pnl: 0.9, costs: 1.3, net_r: 0.4, net_unknown: 0 },
+             cost_probe: { fills: 8, closed: 5, net_pnl: 0.2, costs: 0.4, net_r: 0.1, net_unknown: 0 } },
   net_today: -3.1, costs_today: { spread: 7.4, slippage: 0.2, commission: 2.2, swap: 0, total: 9.8, complete: true, spread_exit_estimated: false, slippage_exit_known: true },
   open_n: 15, open_risk: 18.2, day_cap_used: { used: 30, limit: 500, share: 0.06 }, week_cap_used: { used: 61, limit: 1000, share: 0.061 },
   exploration_pot_used: { used: 30, limit: 150, share: 0.2 }, quiet_day: false, daily_target: 50, strip,
-  week_to_date: { since: "2026-10-26", n: 300, net_pnl: 12.4, costs: { spread: 40.1, slippage: 1, commission: 11.2, swap: -0.4, total: 51.9, complete: true, spread_exit_estimated: false, slippage_exit_known: true }, withheld: false, net_unknown: 0 },
-  month_to_date: { since: "2026-10-01", n: 3000, net_pnl: 88.1, costs: { spread: 160.2, slippage: 4, commission: 44.8, swap: -2.1, total: 206.9, complete: true, spread_exit_estimated: false, slippage_exit_known: true }, withheld: false, net_unknown: 0 },
-  withheld: [], net_unknown: 0, net_today_partial: null, ...o,
+  week_to_date: { since: "2026-10-26", n: 300, net_pnl: 12.4, costs: { spread: 40.1, slippage: 1, commission: 11.2, swap: -0.4, total: 51.9, complete: true, spread_exit_estimated: false, slippage_exit_known: true }, net_unknown: 0 },
+  month_to_date: { since: "2026-10-01", n: 3000, net_pnl: 88.1, costs: { spread: 160.2, slippage: 4, commission: 44.8, swap: -2.1, total: 206.9, complete: true, spread_exit_estimated: false, slippage_exit_known: true }, net_unknown: 0 },
+  net_unknown: 0, net_today_partial: null, ...o,
+});
+
+const figures = (o: Partial<RankFigures> = {}): RankFigures => ({
+  n: 412, days: 18, clusters: 30, net_r_per_trade: 0.12, ci95: [0.05, 0.19], lower_adjusted: 0.03, hit_rate: 0.48,
+  net_pnl: 38.1, net_per_trade: 0.09, currency: "GBP", profit_factor: 1.31, no_losses: false, max_drawdown_r: 6.4,
+  cost_per_trade: 0.27, cost_per_trade_r: 0.11, edge_vs_control_r: 0.1, edge_ci: [-0.02, 0.22], edge_ci_level: 0.95,
+  edge_source: "interim", last_7d: { n: 120, net_r_per_trade: 0.15 }, last_30d: { n: 412, net_r_per_trade: 0.12 }, trend: "up", ...o,
+});
+
+const rankRow = (o: Omit<Partial<RankRow>, "figures"> & { figures?: Partial<RankFigures> } = {}): RankRow => {
+  const { figures: f, ...rest } = o;
+  return {
+    key: "opening_range", family: "opening_range", family_label: "Opening range", version: 1, style: "intraday",
+    kind: "exploration", timeframes: ["15m", "1h"], accounts: ["Scalp lab"], band: "ranked", rank: 1, unranked_reason: null,
+    status: "early", read_progress: { unit: "OR1H", n_counted: 120, n_read_at: 300 }, variants: [
+      { variant: "15m", timeframe: "15m", status: "early", figures: figures({ n: 300 }) },
+      { variant: "1h", timeframe: "1h", status: "early", figures: figures({ n: 112 }) },
+    ], ...rest, figures: figures(f),
+  };
+};
+
+/** In the server's order (strategy_ranking.py): ranked by the adjusted bound, then too few to rank by n. */
+export const ranking = (): RankingView => ({
+  as_of: iso(0), window: "all", account: null, style: null, k_ranked: 2, t_adjusted: 2.32, min_fills: 30, min_days: 10,
+  heading: "Ranked by the least each trade is likely earning after costs. Early results move a lot; nothing is proven before its read.",
+  rows: [
+    rankRow(),
+    rankRow({ key: "box_break_close", family: "box_break_close", family_label: "Box break + close", rank: 2,
+              figures: { lower_adjusted: -0.09, net_r_per_trade: -0.02, hit_rate: 0.7, net_pnl: -12.5, no_losses: false } }),
+    rankRow({ key: "sweep_absorb", family: "sweep_absorb", family_label: "Sweep + absorb", rank: null, band: "too_few",
+              unranked_reason: "too few to rank (12 of 30 fills, 4 of 10 days)", variants: [],
+              read_progress: { unit: "SA15", n_counted: 12, n_read_at: 300 },
+              figures: { n: 12, days: 4, lower_adjusted: null, net_r_per_trade: 0.8 } }),
+  ],
+  controls: [rankRow({ key: "control:random_bracket", family: "random_bracket", family_label: "Random control", kind: "control",
+                       band: "control", rank: null, variants: [], figures: { lower_adjusted: null, edge_vs_control_r: null } })],
+  retired: [rankRow({ key: "ema_pullback", family: "ema_pullback", family_label: "EMA pullback", band: "retired", rank: null,
+                      status: "retired", variants: [], figures: { lower_adjusted: null } })],
+  account_choices: [{ account: "icm-probe", label: "Scalp lab" }, { account: "icm-demo", label: "Day/swing lab" }],
+  unreadable: [],
 });

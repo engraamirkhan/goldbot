@@ -1,6 +1,8 @@
 # 0051: Strategy board: control pairing, frozen read figures and sleeve totals
 
-Status: proposed (principal software engineer, 2026-10-27); quant-reviewer check of the payload follows (ADR 0050)
+Status: proposed (principal software engineer, 2026-10-27); quant-reviewer check of the payload follows (ADR 0050).
+Amended 2026-10-27 by ADR 0053: decision 4 becomes "the ranking computes a descriptive difference vs control,
+labelled interim; the evaluator's recorded comparison replaces it at the read" (goldbot/api/strategy_ranking.py).
 
 ## Context
 The strategy board (backlog 132, docs/design/trades-ux-2026-10-27.md §2.3) shows each arm against "its control" and,

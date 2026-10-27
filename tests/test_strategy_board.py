@@ -3,7 +3,8 @@ family with its timeframes as variants: n counted toward each arm's single read 
 an ETA at the 7-day pace, a status (warming, running, read, retired) and the control it is read against. Before the
 read no result of an arm (money, R, hit rate, a "near its stop" band) is in the payload; after it, the recorded
 verdict and the read sample's frozen figures, with the comparison against the control once the control is read too.
-Lab totals only over 3+ unread arms per account and day, all sleeves of an account or none."""
+Lab totals show their money whatever the arms' reads (ADR 0053, backlog 139); a family's results before its read are
+the ranking's (tests/test_strategy_ranking.py)."""
 from __future__ import annotations
 
 import json
@@ -55,7 +56,7 @@ def _family(view: Any, family: str) -> Any:
 
 
 # ------------------------------------------------------------------------------------------------ before the read
-def test_an_unread_arm_shows_progress_eta_status_and_anneal_state_but_no_result(tmp_path):
+def test_an_unread_arm_shows_progress_eta_status_and_anneal_state_and_leaves_its_result_to_the_ranking(tmp_path):
     _engine(tmp_path, SCALP)
     for i in range(14):                                           # 14 counted trades in 7 days: 2 a day
         _arm(tmp_path, f"a{i}", "S1A", sent=NOW - pd.Timedelta(hours=12 * i + 2), pnl=7.77 if i % 2 else -3.33)
@@ -64,8 +65,8 @@ def test_an_unread_arm_shows_progress_eta_status_and_anneal_state_but_no_result(
     assert (v.n_counted, v.n_read_at, v.status, v.anneal_state, v.read) == (14, 300, "running", "E", None)
     assert v.fills_7d == 14 and v.fills_today >= 1 and v.control_arm_id == "S0"
     assert v.eta_read_date == date(2026, 10, 27) + timedelta(days=143)          # 286 left at 2 a day
-    text = view.model_dump_json()
-    for leak in ("7.77", "3.33", "31.08", "1.85"):                    # a trade, the sum, the mean R
+    text = view.model_dump_json(include={"families"})               # the lab total carries the money (139)
+    for leak in ("7.77", "3.33", "31.08", "1.85"):                    # a trade, the sum, the mean R: the ranking's
         assert leak not in text, leak
 
 
@@ -249,21 +250,11 @@ def _three_arms(state: Path, *, swing: bool) -> None:
         _arm(state, "w-W2", "W2", account=DAY, tf="4h", pnl=4.44)
 
 
-def test_a_lab_sleeve_over_three_unread_arms_shows_its_money(tmp_path):
-    _three_arms(tmp_path, swing=False)
+def test_a_lab_sleeves_money_shows_whatever_its_arms_reads(tmp_path):
+    _three_arms(tmp_path, swing=True)
     totals = {(t.account_label, t.style): t for t in _board(tmp_path, _cat(tmp_path)).lab_totals}
     t = totals[("Day/swing lab", "intraday")]
-    assert (t.arms, t.n, t.net_pnl, t.withheld_reason) == (3, 3, 6.66, None)
-
-
-def test_one_sleeve_under_three_arms_withholds_every_sleeve_of_that_account(tmp_path):
-    """Else the short sleeve is the List's account total minus the others (a difference isolating 1-2 arms)."""
-    _three_arms(tmp_path, swing=True)
-    view = _board(tmp_path, _cat(tmp_path))
-    day = [t for t in view.lab_totals if t.account_label == "Day/swing lab"]
-    assert {t.style for t in day} == {"intraday", "swing"}
-    assert all(t.net_pnl is None and t.costs is None and t.withheld_reason for t in day)
-    assert "4.44" not in view.model_dump_json() and "6.66" not in view.model_dump_json()
+    assert (t.arms, t.n, t.net_pnl) == (3, 3, 6.66) and totals[("Day/swing lab", "swing")].net_pnl == 4.44
 
 
 def test_engine_strategies_show_net_money_and_r_with_n_and_a_90_ci(tmp_path):
@@ -290,7 +281,7 @@ def test_learning_progress_counts_arms_by_status_and_trades_counted_this_week(tm
 
 
 # ------------------------------------------------------------------------------------------------ the API
-def test_the_board_route_needs_a_sign_in_and_never_carries_an_unread_arms_result(tmp_path, monkeypatch):
+def test_the_board_route_needs_a_sign_in_and_carries_progress_and_lab_money(tmp_path, monkeypatch):
     state = tmp_path / "state"
     state.mkdir()
     _engine(state, SCALP)
@@ -307,15 +298,4 @@ def test_the_board_route_needs_a_sign_in_and_never_carries_an_unread_arms_result
     assert res.status_code == 200
     body = res.json()
     assert any(v["arm_id"] == "S1A" and v["n_counted"] == 1 for f in body["families"] for v in f["variants"])
-    for leak in ("12.34", "13.34", "25.68", "5.14"):
-        assert leak not in res.text, leak
-
-
-def test_a_pooled_family_counts_once_toward_the_three_unit_total_rule(tmp_path):
-    """BXR/BXT/BXF are one H-80 read unit: three of its arms in a lab-day are one unit's result, so totals wait."""
-    _engine(tmp_path, DAY)
-    for i, arm in enumerate(("BXR1H", "BXT1H", "BXF1H")):
-        _arm(tmp_path, f"u{i}", arm, account=DAY, tf="1h", pnl=1.11 * (i + 1))
-    cat = _cat(tmp_path)
-    page = tl.query(tl.build_ledger(tmp_path, NOW, cat=cat), tl.TradeQuery(account=(DAY,)), cat)
-    assert page.totals.withheld and page.totals.net_pnl is None
+    assert [t["net_pnl"] for t in body["lab_totals"]] == [25.68]

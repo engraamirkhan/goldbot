@@ -782,6 +782,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/strategies/ranking": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Strategies Ranking */
+        get: operations["strategies_ranking_api_strategies_ranking_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/strategies/watch": {
         parameters: {
             query?: never;
@@ -1026,6 +1043,13 @@ export interface components {
             email: string;
             /** Totp Uri */
             totp_uri: string;
+        };
+        /** AccountChoice */
+        AccountChoice: {
+            /** Account */
+            account: string;
+            /** Label */
+            label: string;
         };
         /** AccountSummary */
         AccountSummary: {
@@ -2365,7 +2389,7 @@ export interface components {
         };
         /**
          * KindDay
-         * @description One kind's figures today on one account. `withheld`: the money covers fewer than 3 unread arms (ADR 0050).
+         * @description One kind's figures today on one account.
          */
         KindDay: {
             /** Closed */
@@ -2383,17 +2407,11 @@ export interface components {
              * @default 0
              */
             net_unknown: number;
-            /**
-             * Withheld
-             * @default false
-             */
-            withheld: boolean;
         };
         /**
          * LabTotal
-         * @description One lab's sleeve over 7 days: counts always; money only when every (account, day) cell of its unread closes
-         *     covers 3+ strategy arms, and only when every sleeve of the account clears that (else one sleeve is the lab's
-         *     figure minus the others).
+         * @description One lab's sleeve over 7 days: counts and money after costs (None only when a net is unknown or currencies
+         *     differ).
          */
         LabTotal: {
             /** Account Label */
@@ -2417,8 +2435,6 @@ export interface components {
             period: "7 days";
             /** Style */
             style: string;
-            /** Withheld Reason */
-            withheld_reason: string | null;
         };
         /** Learning */
         Learning: {
@@ -2968,11 +2984,6 @@ export interface components {
              * Format: date
              */
             since: string;
-            /**
-             * Withheld
-             * @default false
-             */
-            withheld: boolean;
         };
         /** PlanFamily */
         PlanFamily: {
@@ -3141,6 +3152,167 @@ export interface components {
             warn: number;
         };
         /**
+         * RankFigures
+         * @description One row's figures over the window (closed fills with an R, after every cost; voided evidence left out).
+         *     Intervals are clustered by (account, opportunity day of the close), t with G-1 df, G = `clusters`.
+         */
+        RankFigures: {
+            /** Ci95 */
+            ci95: [
+                number,
+                number
+            ] | null;
+            /** Clusters */
+            clusters: number;
+            /** Cost Per Trade */
+            cost_per_trade: number | null;
+            /** Cost Per Trade R */
+            cost_per_trade_r: number | null;
+            /** Currency */
+            currency: string | null;
+            /** Days */
+            days: number;
+            /** Edge Ci */
+            edge_ci: [
+                number,
+                number
+            ] | null;
+            /** Edge Ci Level */
+            edge_ci_level: number | null;
+            /** Edge Source */
+            edge_source: ("read" | "interim") | null;
+            /** Edge Vs Control R */
+            edge_vs_control_r: number | null;
+            /** Hit Rate */
+            hit_rate: number | null;
+            last_30d: components["schemas"]["RecentFigures"];
+            last_7d: components["schemas"]["RecentFigures"];
+            /** Lower Adjusted */
+            lower_adjusted: number | null;
+            /** Max Drawdown R */
+            max_drawdown_r: number | null;
+            /** N */
+            n: number;
+            /** Net Per Trade */
+            net_per_trade: number | null;
+            /** Net Pnl */
+            net_pnl: number | null;
+            /** Net R Per Trade */
+            net_r_per_trade: number | null;
+            /** No Losses */
+            no_losses: boolean;
+            /** Profit Factor */
+            profit_factor: number | null;
+            /** Trend */
+            trend: ("up" | "down" | "flat") | null;
+        };
+        /**
+         * RankProgress
+         * @description A row's progress to its next read: the unread read unit (config/arm_reads.yaml; a pooled family's unit where
+         *     registered) closest to its read, counted on the same ledger fills as the row (closed, evidence "counted").
+         */
+        RankProgress: {
+            /** N Counted */
+            n_counted: number;
+            /** N Read At */
+            n_read_at: number;
+            /** Unit */
+            unit: string;
+        };
+        /** RankRow */
+        RankRow: {
+            /** Accounts */
+            accounts: string[];
+            /**
+             * Band
+             * @enum {string}
+             */
+            band: "ranked" | "too_few" | "control" | "retired";
+            /** Family */
+            family: string;
+            /** Family Label */
+            family_label: string;
+            figures: components["schemas"]["RankFigures"];
+            /** Key */
+            key: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "exploration" | "engine" | "control";
+            /** Rank */
+            rank: number | null;
+            read_progress?: components["schemas"]["RankProgress"] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "early" | "candidate" | "proven" | "not_proven" | "retired";
+            /** Style */
+            style: string;
+            /** Timeframes */
+            timeframes: string[];
+            /** Unranked Reason */
+            unranked_reason: string | null;
+            /** Variants */
+            variants: components["schemas"]["RankVariant"][];
+            /** Version */
+            version: number;
+        };
+        /**
+         * RankVariant
+         * @description One timeframe variant of a family (its arms pooled over accounts), the same columns, never ranked.
+         */
+        RankVariant: {
+            figures: components["schemas"]["RankFigures"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "early" | "candidate" | "proven" | "not_proven" | "retired";
+            /** Timeframe */
+            timeframe: string;
+            /** Variant */
+            variant: string;
+        };
+        /** RankingView */
+        RankingView: {
+            /** Account */
+            account: string | null;
+            /** Account Choices */
+            account_choices: components["schemas"]["AccountChoice"][];
+            /**
+             * As Of
+             * Format: date-time
+             */
+            as_of: string;
+            /** Controls */
+            controls: components["schemas"]["RankRow"][];
+            /** Heading */
+            heading: string;
+            /** K Ranked */
+            k_ranked: number;
+            /** Min Days */
+            min_days: number;
+            /** Min Fills */
+            min_fills: number;
+            /** Retired */
+            retired: components["schemas"]["RankRow"][];
+            /** Rows */
+            rows: components["schemas"]["RankRow"][];
+            /** Style */
+            style: string | null;
+            /** T Adjusted */
+            t_adjusted: number | null;
+            /** Unreadable */
+            unreadable: string[];
+            /**
+             * Window
+             * @enum {string}
+             */
+            window: "7d" | "30d" | "all";
+        };
+        /**
          * ReadFigures
          * @description The read sample's figures, frozen at the read (its first `n` counted trades closed by `read_utc`).
          */
@@ -3208,6 +3380,16 @@ export interface components {
         RearmRequest: {
             /** Totp */
             totp: string;
+        };
+        /**
+         * RecentFigures
+         * @description Net R per trade over the last 7 or 30 opportunity days, with its n.
+         */
+        RecentFigures: {
+            /** N */
+            n: number;
+            /** Net R Per Trade */
+            net_r_per_trade: number | null;
         };
         /** RecoveryCodesRequest */
         RecoveryCodesRequest: {
@@ -3948,11 +4130,6 @@ export interface components {
             opportunity: boolean | null;
             /** Target */
             target: number | null;
-            /**
-             * Withheld
-             * @default false
-             */
-            withheld: boolean;
         };
         /** SystemHaltView */
         SystemHaltView: {
@@ -4032,8 +4209,6 @@ export interface components {
             strip?: components["schemas"]["StripDay"][];
             week_cap_used?: components["schemas"]["CapUse"] | null;
             week_to_date?: components["schemas"]["PeriodNet"] | null;
-            /** Withheld */
-            withheld?: string[];
         };
         /** TodayView */
         TodayView: {
@@ -4112,8 +4287,7 @@ export interface components {
          * TradeRow
          * @description One trade (opened and closed merged). Money in the account currency, prices USD per oz, times UTC. Closed:
          *     `pnl` is net of every cost and `gross` = pnl + costs.total (to the penny). Open: `pnl_now` at the engine's mid
-         *     price from the fill (the entry spread is inside it). `blinded` True: this row's result fields were withheld because
-         *     the list's filter isolates arms not yet read (ADR 0050); GET /api/trades/{trade_id} always shows the result.
+         *     price from the fill (the entry spread is inside it).
          */
         TradeRow: {
             /** Account */
@@ -4122,8 +4296,6 @@ export interface components {
             account_label: string;
             /** Arm Id */
             arm_id: string | null;
-            /** Blinded */
-            blinded: boolean;
             /** Censored */
             censored: boolean;
             costs: components["schemas"]["CostSplit"] | null;
@@ -4242,9 +4414,8 @@ export interface components {
         };
         /**
          * TradeTotals
-         * @description The filter's totals over every matching row (not only the page), equal to the sum of those rows. With
-         *     `withheld` the money is None (ADR 0050: an aggregate covering fewer than 3 unread arms, or a filter narrowed to
-         *     strategies with unread arms); counts and open risk always show.
+         * @description The filter's totals over every matching row (not only the page), equal to the sum of those rows. Money is None
+         *     only when currencies differ (never summed) or, for the net, when a closed trade's net is unknown.
          */
         TradeTotals: {
             /** Costs */
@@ -4270,17 +4441,8 @@ export interface components {
             net_unknown: number;
             /** Open Pnl */
             open_pnl: number | null;
-            /**
-             * Open Pnl Withheld
-             * @default false
-             */
-            open_pnl_withheld: boolean;
             /** Open Risk */
             open_risk: number | null;
-            /** Withheld */
-            withheld: boolean;
-            /** Withheld Reason */
-            withheld_reason: string | null;
         };
         /** TradeTypeSummary */
         TradeTypeSummary: {
@@ -5824,6 +5986,39 @@ export interface operations {
             };
         };
     };
+    strategies_ranking_api_strategies_ranking_get: {
+        parameters: {
+            query?: {
+                window?: "7d" | "30d" | "all";
+                account?: string | null;
+                style?: ("scalp" | "intraday" | "swing") | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RankingView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     strategies_watch_api_strategies_watch_get: {
         parameters: {
             query?: never;
@@ -5879,6 +6074,7 @@ export interface operations {
                 exit_reason?: ("target" | "stop" | "trail" | "time_limit" | "friday_cut" | "manual" | "kill_switch" | "broker_stop_out" | "other")[];
                 evidence?: ("counted" | "excluded" | "censored" | "pending" | "not_evidence")[];
                 control?: boolean | null;
+                sort?: "newest" | "best" | "worst";
                 cursor?: string | null;
                 limit?: number;
             };

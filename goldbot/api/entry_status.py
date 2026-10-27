@@ -245,6 +245,27 @@ REASONS: dict[str, Reason] = {
                                f"{NOTHING}: the bridge smoke is refused here by design.", "wait"),
     "invalid_volume": _r("The broker's smallest trade size cannot be placed",
                          "Check the symbol's minimum lot and lot step in the MT5 terminal.", "act"),
+    # the live pilot (goldbot/risk/pilot.py, ADR 0055)
+    "pilot_stop": _r("Pilot stopped: its total loss limit was reached",
+                     "No new trades in this pilot; open trades keep their automatic exits. Continuing needs a new "
+                     "recorded decision.", "act"),
+    "pilot_trade_limit": _r("Pilot complete: its 30 trades are done",
+                            "No new trades in this pilot; open trades keep their automatic exits. The pilot review "
+                            "decides what comes next.", "act"),
+    "pilot_record_unknown": _r("Pilot record not read yet",
+                               f"{NOTHING}: it is read from the broker's deal history with the next account update.",
+                               "wait"),
+    "pilot_stop_projected": _r("This trade could take the pilot past its total loss limit",
+                               f"{NOTHING}: refused here by design.", "wait"),
+    "pilot_stop_above_cap": _r("The pilot's stop would be wider than $4", f"{NOTHING}: refused here by design.",
+                               "wait"),
+    "pilot_trade_risk_above_cap": _r("The pilot's trade would risk more than its per-trade cap",
+                                     f"{NOTHING}: refused here by design.", "wait"),
+    "pilot_timeframe": _r("The pilot trades 15-minute signals only", f"{NOTHING}: refused here by design.", "wait"),
+    "pilot_signal_only": _r("The pilot trades confirmed signals only, no probes or exploration",
+                            f"{NOTHING}: refused here by design.", "wait"),
+    "pilot_lot_unavailable": _r("The broker's smallest trade is larger than the pilot's lot",
+                                "Check the symbol's minimum lot in the MT5 terminal.", "act"),
 }
 _ORDER = {code: i for i, code in enumerate(REASONS)}
 # BACKLOG 43 (ui-ux review 2026-10-16): a strategy's last refused trade (`entry_refusals`, gate.PER_TRADE_REFUSALS) is
@@ -257,6 +278,9 @@ REFUSAL_TEXT: dict[str, str] = {
     "combined_exposure_cap": "enough gold already open across accounts",
     "min_lot_exceeds_risk": "the smallest trade would risk too much for this balance",
     "fx_conversion_unavailable": "couldn't convert dollars to the account currency",
+    "pilot_stop_above_cap": "its stop would be wider than the pilot's $4",
+    "pilot_trade_risk_above_cap": "it would risk more than the pilot's per-trade cap",
+    "pilot_stop_projected": "this trade could take the pilot past its total loss limit",
 }
 # the reason in a card refused at approval (the Telegram line and the dashboard note, docs/ux/order-not-confirmed.md):
 # a per-trade refusal's words, or an account reason's own; any other code in plain words, never the raw code
