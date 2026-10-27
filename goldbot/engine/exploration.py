@@ -55,6 +55,7 @@ The plan's rules, as built here:
 """
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import logging
 import math
@@ -1288,8 +1289,31 @@ def _week_due(eng: Engine, arm: Arm, tr: OpenTrade, at: pd.Timestamp) -> bool:
     from goldbot.research.arm_rules_weekcut import time_exit_at
     if not arm_rules.follows_friday_cut(arm.spec):
         return False
-    end = time_exit_at(signal_close(tr.client_order_id), tr.max_bars * tf_seconds(eng.cfg.decision_tf))
-    return end is not None and at >= end
+    signal = signal_close(tr.client_order_id)
+    end = time_exit_at(signal, tr.max_bars * tf_seconds(eng.cfg.decision_tf))
+    if end is not None and at >= end:
+        return True
+    # trading-safety LOW (2026-10-26): whatever the hold (a position adopted after a restart with no order row reverts
+    # to the uncapped hold), a rule under the cut is never held into the weekend: closed by Friday 16:45 New York of
+    # the week it opened in, 15 min before the 17:00 New York weekly close, while a close can still fill
+    since = signal if signal is not None else (tr.opened_utc or tr.entry_bar_ts)
+    return since is not None and at >= weekend_backstop(pd.Timestamp(since))
+
+
+WEEKEND_BACKSTOP_S = 15 * 60
+
+
+def weekend_backstop(since: pd.Timestamp) -> pd.Timestamp:
+    """The weekly close (Friday 17:00 America/New_York, DST-aware) of the trading week `since` falls in, less
+    WEEKEND_BACKSTOP_S, in UTC. A time after that close (Friday evening to the Sunday reopen) counts as the next week."""
+    t = since.tz_convert("America/New_York") if since.tzinfo is not None else since.tz_localize("UTC").tz_convert(
+        "America/New_York")
+    fri = t.date() + dt.timedelta(days=(4 - t.dayofweek) % 7)      # calendar days: a DST switch never shifts the day
+    close = pd.Timestamp(year=fri.year, month=fri.month, day=fri.day, hour=17, tz="America/New_York")
+    if t >= close:
+        nxt = fri + dt.timedelta(days=7)
+        close = pd.Timestamp(year=nxt.year, month=nxt.month, day=nxt.day, hour=17, tz="America/New_York")
+    return (close - pd.Timedelta(seconds=WEEKEND_BACKSTOP_S)).tz_convert("UTC")
 
 
 def _is_runner(arm: Arm) -> bool:
