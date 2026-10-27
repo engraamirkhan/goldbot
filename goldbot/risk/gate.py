@@ -158,6 +158,9 @@ class AccountState(Record):
     stage: Stage = Stage.NORMAL
     supervisor_halt: bool = False
     owner_halt: bool = False          # /halt from Telegram or the dashboard (state/control.json)
+    # accounts.yaml `enabled: false` with this engine's positions still open: it only winds down (services.engine
+    # disabled_wind_down); every entry is refused `account_disabled`, exits are never gated
+    account_disabled: bool = False
     in_blackout: bool = False
     dq_error: bool = False
     stale_bars: bool = False          # the last completed bar is more than one decision period old
@@ -617,6 +620,8 @@ class RiskGate:
             reasons.append("supervisor_halt")
         if st.owner_halt:
             reasons.append("owner_halt")
+        if st.account_disabled:
+            reasons.append("account_disabled")
         if st.stage == Stage.HALTED:
             reasons.append("drawdown_halt")
         if st.equity_unconfirmed:

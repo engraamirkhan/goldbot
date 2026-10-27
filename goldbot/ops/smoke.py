@@ -117,6 +117,7 @@ STATE_SOURCES: dict[str, str] = {
     "in_blackout": "the engine's calendar (store calendar_events, tier 1) and news shocks; unreadable refuses",
     "dq_error": "a failed tick or bars read, or stale bars",
     "stale_bars": "get_bars(1m): last bar older than one decision period",
+    "account_disabled": "constant False: engine-only state (a disabled account's wind-down; the smoke is operational)",
     "data_recovering": "constant False: engine-only state (the 60 s healthy resume after an engine data error)",
     "in_rollover": "server clock (accounts.yaml server_tz): +-rollover_min of 00:00",
     "weekend": "server clock: Friday weekend_cut until the week reopens",
@@ -490,6 +491,7 @@ def smoke_state(broker: Any, bus: ApprovalBus, acc: Account, state_dir: Path, *,
         in_blackout=shock is not None or blackout_window(events, tick_ts, cfg.blackout_before_min,
                                                          cfg.blackout_after_min) is not None,
         dq_error=stale_bars or bars_failed or tick is None, stale_bars=stale_bars,
+        account_disabled=False,  # engine-only state (services.engine disabled_wind_down); the smoke is ADR 0021's own
         data_recovering=False,   # engine-only state (runner: healthy_resume_s after an engine data error)
         in_rollover=in_rollover, weekend=weekend,
         other_lots=other["lots"], other_notional=other["notional"], other_equity=other["equity"],

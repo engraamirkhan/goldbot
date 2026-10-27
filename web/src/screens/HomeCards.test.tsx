@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as apiModule from "../lib/api";
-import { LearningCard, OpenTradesCard } from "./HomeCards";
+import { LearningCard } from "./HomeCards";
+import { OpenNow } from "./trades/Now";
 
 const NBSP = " ";
 const wrap = (ui: React.ReactElement) =>
@@ -29,14 +30,15 @@ describe("Home cards keep number-unit pairs together", () => {
     expect(line).not.toMatch(/\(n 8\)|\d R\b/);
   });
 
-  it("joins R and lots in an open trade row", async () => {
+  it("joins R to its number in an open trade row, and an older engine's row (no risk yet) shows a dash, not 'not known'", async () => {
     vi.spyOn(apiModule.api, "openPositions").mockResolvedValue({ as_of: "2026-10-19T10:00:00Z", unreadable: [], positions: [
       { account: "icm-demo", mode: "demo", probe: false, position_id: 1, agent_id: "a", family: "box_break_close", timeframe: "1h",
         side: "long", lots: 0.05, entry: 2400, stop: 2396, target: 2410, opened_utc: "2026-10-19T09:00:00Z", price: 2401,
         floating_pnl: 1, currency: "GBP", r_now: 0.25, age_s: 2, stale: false }] });
-    wrap(<OpenTradesCard />);
+    wrap(<OpenNow />);
     const row = (await screen.findByRole("listitem")).textContent ?? "";
     expect(row).toContain(`+0.25${NBSP}R`);
-    expect(row).toContain(`0.05${NBSP}lots`);
+    expect(row).toContain(`risk £${NBSP}—`);
+    expect(row).not.toContain("not known");
   });
 });

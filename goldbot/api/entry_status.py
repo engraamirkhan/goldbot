@@ -123,6 +123,9 @@ REASONS: dict[str, Reason] = {
                                 "Update the brain to the current version, then restart the engine.", "act", UPDATE),
     "owner_halt": _r("New entries halted by you or an approver",
                      "Re-arm on this page when ready (owner and authenticator code).", "act", HALT),
+    "account_disabled": _r("This account is switched off (enabled: false): it only closes the trades it has open",
+                           f"{NOTHING}: it stops once flat. To trade it again, set enabled: true and restart its "
+                           "engine.", "wait"),
     "supervisor_halt": _r("The safety supervisor stopped new entries",
                           "Check the supervisor service and the Health tab.", "act"),
     "no_supervisor_heartbeat": _r("Safety supervisor is not running", "Start the supervisor service.", "act"),

@@ -78,6 +78,7 @@ METHODS: dict[str, tuple[str, bool]] = {
     "symbol_info": ("SymbolInfo", True),
     "account": ("AccountInfo", True),
     "get_bars": ("frame", True),
+    "get_bars_range": ("frame", True),       # read-only (copy_rates_range): optional, see OPTIONAL_METHODS
     "copy_ticks": ("frame", True),
     "last_tick": ("Tick", True),
     "positions": ("list[Position]", True),
@@ -105,8 +106,14 @@ METHODS: dict[str, tuple[str, bool]] = {
 # v5 (ADR 0016): `account_positions` (every symbol) and Position.swap, read by the equity cross-check only. A v5
 # brain calls a method a v4 bridge lacks, so MIN_COMPATIBLE = 5 names the v4 bridge (entries refused
 # bridge_incompatible, exits unaffected): deploy the MT5 box first. A v4 brain drops the unknown swap field.
-API_VERSION = 5
+# v6: `get_bars_range` (MT5 copy_rates_range, read-only), the D12 reconcile's window read. It is OPTIONAL_METHODS: the
+# brain falls back to get_bars when a v5 bridge refuses it (HTTP 403), so a v5 bridge stays compatible (MIN_COMPATIBLE
+# 5, not required by bridge_compat) and either box can be deployed first.
+API_VERSION = 6
 MIN_COMPATIBLE = 5
+# Methods the brain calls only with a fallback for a bridge that lacks them: never required by bridge_compat, so their
+# absence never refuses entries. Read-only methods only (an order method is never optional).
+OPTIONAL_METHODS = frozenset({"get_bars_range"})
 _RECORDS: dict[str, type[BaseModel]] = {"SymbolInfo": SymbolInfo, "AccountInfo": AccountInfo, "Tick": Tick, "OrderResult": OrderResult,
             "Position": Position, "BrokerTerms": BrokerTerms, "OrderIntent": OrderIntent, "TradingSession": TradingSession}
 # Any change to these records' fields goes to the trading-safety reviewer (AGENT_STANDARDS S12): responses are read
@@ -705,6 +712,9 @@ class RemoteBroker:
 
     def get_bars(self, symbol: str, tf: str, n: int) -> pd.DataFrame:
         return self._call("get_bars", symbol, tf, n)
+
+    def get_bars_range(self, symbol: str, tf: str, start_utc: pd.Timestamp, end_utc: pd.Timestamp) -> pd.DataFrame:
+        return self._call("get_bars_range", symbol, tf, start_utc, end_utc)
 
     def copy_ticks(self, symbol: str, since_utc: pd.Timestamp, n: int = 100_000) -> pd.DataFrame:
         return self._call("copy_ticks", symbol, since_utc, n)

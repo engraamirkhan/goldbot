@@ -2,6 +2,7 @@
 // backend's OpenAPI schema: `python scripts/export_openapi.py && npm run gen:api`. CI regenerates both and
 // fails on a diff, so a contract change in goldbot/api/schema.py cannot reach main without the client.
 import type { components, operations } from "./schema";
+import type { OpenPositionX, StrategyBoard, TodayAccountX, TradeBars, TradeRow, TradesPage } from "./trades";
 
 type Schemas = components["schemas"];
 export type AccountSummary = Schemas["AccountSummary"];
@@ -121,6 +122,8 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(401, "login required");
   }
   if (!r.ok) throw new ApiError(r.status, (await r.json().catch(() => ({})))?.detail ?? r.statusText);
+  // the page itself (the SPA fallback) for an /api path: this server has no such endpoint yet (an older backend)
+  if ((r.headers.get("content-type") ?? "").startsWith("text/html")) throw new ApiError(404, "not served by this server");
   return r.json() as Promise<T>;
 }
 
@@ -216,9 +219,15 @@ export const api = {
   // Home trades summary: every trade type for today, 7 days and all time (read-only, viewer and above)
   tradesOverview: () => req<TradesOverview>("/api/trades/overview"),
   // Home card stack (docs/ux/home-redesign-2026-10-19.md): open positions, strategy states, today's money (read-only)
-  openPositions: () => req<OpenPositionsView>("/api/positions/open"),
+  openPositions: () => req<Omit<OpenPositionsView, "positions"> & { positions: OpenPositionX[] }>("/api/positions/open"),
   strategyWatch: () => req<StrategyWatchView>("/api/strategies/watch"),
-  today: () => req<TodayView>("/api/today"),
+  today: () => req<Omit<TodayView, "accounts"> & { accounts: TodayAccountX[] }>("/api/today"),
+  // The trades experience (docs/design/trades-ux-2026-10-27.md, backlog 129-133): one ledger over every kind, blinded
+  // server-side (ADR 0050). `query` is built by lib/trades.apiQuery from the URL's filters.
+  trades: (query: string) => req<TradesPage>(`/api/trades${query}`),
+  trade: (id: string) => req<TradeRow>(`/api/trades/${encodeURIComponent(id)}`),
+  tradeBars: (id: string) => req<TradeBars>(`/api/trades/${encodeURIComponent(id)}/bars`),
+  strategyBoard: () => req<StrategyBoard>("/api/strategies/board"),
   // read-only cards (docs/ux/limits-and-tradingview.md): nothing here changes a limit or the TradingView link
   limits: () => req<LimitsView>("/api/limits"),
   limitChanges: (q: LimitChangesQuery = {}) => req<LimitChange[]>(`/api/limits/changes${qs(q)}`),
