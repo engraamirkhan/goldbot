@@ -181,6 +181,7 @@ def build_tensor(bars_in: ExploreFrame, atr: pd.Series, exits: Sequence[BarrierE
     `execution.costs.research_costs(settings, table)` (the conservative table: the max of the refit cell and the table
     is the caller's choice, ADR 0045). `mode="1m"` reads the barriers on `bars_1m` (`triple_barrier_1m`, a rule
     pre-registered on 1m barriers); "bar" is the decision-bar labeller every family without `barriers_on_1m` uses."""
+    ExploreFrame(bars_in.frame)                     # re-checked here: a frame mutated after its guard is refused
     bars = bars_in.frame.reset_index(drop=True)
     bars_1m = None if bars_1m_in is None else bars_1m_in.frame
     if mode == "1m" and bars_1m is None:

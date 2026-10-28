@@ -44,3 +44,23 @@ def test_variant_flagged_on_survivor(tmp_path, capsys):
     s = family_spec("tsmom", "15m", None, exit_menu("15m")[0])
     labels = cli.novelty_labels(t, [s], [cli.spec_hash(s)], SyntheticProvider(3000))
     assert labels[cli.spec_hash(s)] == "variant_of:tsmom"
+
+
+def test_ledger_modes_never_mix(tmp_path):
+    from goldbot.research.autodisc import LedgerError, SearchLedger
+
+    db = tmp_path / "m.db"
+    assert cli.main(["run", "--synthetic", "--limit", "5", "--reps", "2", "--min-events", "60", "--db", str(db)]) == 0
+    with pytest.raises(LedgerError):
+        SearchLedger(db, mode="real")
+    SearchLedger(db, mode="synthetic")
+    assert cli.DEFAULT_DB["real"] != cli.DEFAULT_DB["synthetic"] and cli.DEFAULT_REPS >= 100
+
+
+def test_run_json_records_dropped_and_cost_line(tmp_path):
+    import json
+
+    rj = tmp_path / "r.json"
+    cli.main(["run", "--synthetic", "--limit", "5", "--reps", "2", "--min-events", "60", "--db", str(tmp_path / "d.db"),
+              "--run-json", str(rj)])
+    assert json.loads(rj.read_text())["dropped_unsupported"] == 0

@@ -86,16 +86,17 @@ class ExploreFrame:
     __slots__ = ("_frame", "_digest")
 
     def __init__(self, frame: pd.DataFrame) -> None:
-        guard_times(_times(frame, None) if isinstance(frame.index, pd.DatetimeIndex) else pd.DatetimeIndex([]))
+        if isinstance(frame.index, pd.DatetimeIndex):
+            guard_times(frame.index)
+        for c in frame.columns:                        # every datetime column (ts_utc, visible_at, a label end time)
+            if pd.api.types.is_datetime64_any_dtype(frame[c]):
+                guard_times(frame[c], what=f"'{c}' values")
         self._frame = frame
         self._digest: str | None = None
 
     @classmethod
     def from_frame(cls, df: pd.DataFrame, time_col: str | None = None) -> ExploreFrame:
         guard_times(_times(df, time_col), what="bars")
-        for c in df.columns:
-            if pd.api.types.is_datetime64_any_dtype(df[c]):
-                guard_times(df[c], what=f"'{c}' values")
         return cls(df)
 
     @property

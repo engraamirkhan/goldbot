@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS entries (
     digest TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS entries_once ON entries (kind, spec_hash, is_null);
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 _COLS = "seq, kind, spec_hash, is_null, payload, written_utc, prev_digest, digest"
 
@@ -90,13 +91,23 @@ def _dumps(d: Any) -> str:
 
 
 class SearchLedger:
-    def __init__(self, path: str | Path, *, clock: Callable[[], pd.Timestamp] | None = None) -> None:
+    def __init__(self, path: str | Path, *, clock: Callable[[], pd.Timestamp] | None = None,
+                 mode: str | None = None) -> None:
+        """`mode` ("real" / "synthetic"): stamped on a new ledger and checked on every open, so a synthetic run can never
+        add its specs to a real search's K (a mismatch raises LedgerError). None: unchecked (the library default)."""
         self.path = Path(path)
         self._clock = clock or (lambda: pd.Timestamp.now("UTC"))
         self.path.parent.mkdir(parents=True, exist_ok=True)
         con = self._connect()
         try:
             con.executescript(_SCHEMA)
+            if mode is not None:
+                con.execute("INSERT OR IGNORE INTO meta (key, value) SELECT 'mode', ? "
+                            "WHERE NOT EXISTS (SELECT 1 FROM entries)", (mode,))
+                row = con.execute("SELECT value FROM meta WHERE key = 'mode'").fetchone()
+                if row is None or row[0] != mode:
+                    raise LedgerError(f"{self.path} is a {row[0] if row else 'unmarked'} ledger; refusing to open it "
+                                      f"as {mode} (synthetic and real searches never share a K)")
         finally:
             con.close()
 

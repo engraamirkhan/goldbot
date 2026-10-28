@@ -241,6 +241,12 @@ def test_2018_bar_refused() -> None:
         guard_times(pd.DatetimeIndex(["2026-01-01"]))             # naive is read as UTC
     with pytest.raises(WindowViolation):
         ExploreFrame(_bars("2019-05-01", 3))
+    late = pd.DataFrame({"ts_utc": pd.date_range("2019-05-01", periods=3, freq="15min", tz="UTC"), "x": [1.0, 2.0, 3.0]})
+    with pytest.raises(WindowViolation):                      # a RangeIndex frame with a 2019 datetime column
+        ExploreFrame(late)
+    late["t1"] = pd.date_range("2017-12-31 23:00", periods=3, freq="30min", tz="UTC")
+    with pytest.raises(WindowViolation):
+        ExploreFrame(late.drop(columns="ts_utc"))             # a label end time in 2018
 
 
 def test_last_explore_bar_allowed() -> None:

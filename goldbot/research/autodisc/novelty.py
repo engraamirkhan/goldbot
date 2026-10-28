@@ -41,7 +41,7 @@ class NoveltyResult:
     nearest: str | None       # parent when a variant
     jaccard: float | None
     corr: float | None
-    reason: str               # "novel", "overlap", "correlated" or "named"
+    reason: str               # "novel", "overlap", "correlated", "named" or "family"
 
     @property
     def label(self) -> str:
@@ -77,7 +77,13 @@ def _corr(a: FloatArr, b: FloatArr) -> float:
 
 def check_novelty(family: str, mask: BoolArr, daily_r: FloatArr, refs: list[Reference],
                   known_names: frozenset[str] | None = None) -> NoveltyResult:
-    """Label one spec. `family` is the spec's entry family (used only when no reference carries that name)."""
+    """Label one spec. A spec carrying a `family` (every G1 spec) is a variant of that family whatever its overlap with
+    it: a thin subset of a family (a Monday-only tsmom) is the family conditioned, not a new mechanism (quant review)."""
+    if family:
+        own = next((r for r in refs if r.name == family), None)
+        j = jaccard(mask, own.entry_mask) if own is not None else None
+        c = abs(_corr(daily_r, own.daily_r)) if own is not None else None
+        return NoveltyResult(False, family, j, c, "family")
     if not refs or family not in {r.name for r in refs}:
         names = known_names if known_names is not None else existing_names()
         if family in names:

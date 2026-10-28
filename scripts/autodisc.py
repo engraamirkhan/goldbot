@@ -1,6 +1,6 @@
 """Autonomous discovery CLI (ADR 0058 phase 1): generate -> log -> evaluate -> null -> report, explore window only.
 
-    python scripts/autodisc.py run --generator combine --synthetic [--limit N] [--reps 20] [--db PATH]
+    python scripts/autodisc.py run --generator combine --synthetic [--limit N] [--reps 100] [--db PATH]
     python scripts/autodisc.py bench --synthetic --specs 10000        # throughput of log + evaluate
     python scripts/autodisc.py report --run-json state/autodisc_run.json
 
@@ -29,7 +29,11 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.config import load_settings  # noqa: E402
 from goldbot.data.release import read_bar_files  # noqa: E402
-from goldbot.execution.costs import research_costs  # noqa: E402
+from goldbot.execution.costs import (  # noqa: E402
+    load_research_cost_table,
+    research_costs,
+    settings_extra_cost_usd,
+)
 from goldbot.features.technical import atr  # noqa: E402
 from goldbot.research.autodisc import ExploreFrame, SearchLedger, spec_hash, truncate_to_explore  # noqa: E402
 from goldbot.research.autodisc.contracts import MaskProvider  # noqa: E402
@@ -52,7 +56,9 @@ from goldbot.research.autodisc.outcomes import OutcomeTensor, build_tensor, defa
 from goldbot.research.autodisc.primitives import PrimitiveProvider  # noqa: E402
 from goldbot.research.autodisc.spec import StrategySpec  # noqa: E402
 
-DEFAULT_DB = "state/discovery.db"
+DEFAULT_DB = {"real": "state/discovery_real.db", "synthetic": "state/discovery_synthetic.db"}
+DEFAULT_REPS = 100      # reported null percentiles need >= 100 reps; 20 (resolution 1/21) is the pass/fail gate only
+_DATE = re.compile(r" built \d{4}-\d\d-\d\d")
 _CONFIRM_YEAR = re.compile(r"(?<![0-9A-Za-z])20(?:1[89]|[2-9]\d)(?![0-9A-Za-z])")
 _CONFIRM_MONTH = re.compile(r"20(?:1[89]|[2-9]\d)-\d\d")
 
@@ -92,10 +98,11 @@ def novelty_labels(t: OutcomeTensor, specs: list[StrategySpec], survivors: list[
 
 
 def render_report(res: FunnelResult, labels: dict[str, str], head: tuple[int, str], generator: str, reps: int,
-                  fpr: float) -> str:
+                  fpr: float, cost_line: str = "") -> str:
     lines = [
         f"autodisc report | generator {generator} | explore window 2010-2017 only",
         f"K_search {res.k_search} | K_null {res.k_null} (null reps {reps})",
+        *([f"costs: {_DATE.sub('', cost_line)}"] if cost_line else []),
         f"evaluated {res.evaluated}",
         f"passed floors {res.passed_floors}",
         f"beat null (>= 95th pct of best-of-search, {res.null_threshold:.3f}) {res.beat_null}",
@@ -121,7 +128,7 @@ def raw_dir(arg: str | None) -> Path:
     return Path(arg or os.environ.get("GOLDBOT_RAW_BARS") or Path(__file__).resolve().parents[1] / "raw")
 
 
-def real_backends(args: argparse.Namespace, timeframe: str) -> tuple[OutcomeTensor, PrimitiveProvider]:
+def real_backends(args: argparse.Namespace, timeframe: str) -> tuple[OutcomeTensor, PrimitiveProvider, str]:
     """Explore-window 1m bars -> provider and the outcome tensor of the decision bars it cut."""
     raw = raw_dir(args.raw)
     b1 = truncate_to_explore(read_bar_files(raw, 2010, 2017), "ts_utc")      # 2018+ files are never opened
@@ -129,10 +136,13 @@ def real_backends(args: argparse.Namespace, timeframe: str) -> tuple[OutcomeTens
         raise SystemExit(f"no 2010-2017 1m bars under {raw} (set --raw or GOLDBOT_RAW_BARS)")
     prov = PrimitiveProvider(ExploreFrame.from_frame(b1, "ts_utc"))
     bars = prov.bars(timeframe)
-    extra, swap, _ = research_costs(load_settings(), None)
+    settings = load_settings()
+    table = load_research_cost_table(args.cost_table) if args.cost_table else None
+    extra, swap, source = research_costs(settings, table)
+    extra = max(extra, settings_extra_cost_usd(settings))       # conservative: never below the settings prior (ADR 0045)
     t = build_tensor(ExploreFrame.from_frame(bars, "ts_utc"), atr(prov.mid_bars(timeframe), 14),
                      default_menu(MAX_BARS[timeframe]), extra_cost_usd=extra, swap=swap)
-    return t, prov
+    return t, prov, source
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -140,29 +150,34 @@ def cmd_run(args: argparse.Namespace) -> int:
         raise SystemExit("only --generator combine exists in phase 1")
     tf = args.timeframe
     prov: MaskProvider
+    cost_line, dropped = "", 0
     if args.synthetic:
         specs = list(generate(timeframes=(tf,)))
         t = make_noise_tensor(args.bars, seed=args.seed)
         prov = SyntheticProvider(args.bars, seed=args.seed)
     else:
-        t, real = real_backends(args, tf)
+        t, real, cost_line = real_backends(args, tf)
         fams = tuple(f for f in existing_family_names() if f in real.families(tf))
         every = list(generate(families=fams, timeframes=(tf,)))
         specs = [s for s in every if s.filter is None or real.supports(s.filter)]
-        print(f"families {len(fams)} ({', '.join(fams)}); grid {len(every)}; dropped {len(every) - len(specs)} specs "
+        dropped = len(every) - len(specs)
+        print(f"families {len(fams)} ({', '.join(fams)}); grid {len(every)}; dropped {dropped} specs "
               "whose filter has no existing feature", file=sys.stderr)
         prov = real
     if args.limit:
         specs = specs[: args.limit]
-    ledger = SearchLedger(args.db)
+    mode = "synthetic" if args.synthetic else "real"
+    ledger = SearchLedger(args.db or DEFAULT_DB[mode], mode=mode)
     res = run_funnel(t, specs, prov, ledger, "G1", "1", reps=args.reps, seed=args.seed, min_events=args.min_events or None)
     labels = novelty_labels(t, specs, res.survivors, prov)
     head = ledger.head()
-    text = render_report(res, labels, head, "G1 combine", args.reps, 1 / (args.reps + 1))
+    text = render_report(res, labels, head, "G1 combine", args.reps, 1 / (args.reps + 1), cost_line)
     sys.stdout.write(text)
     if args.run_json:
+        # dropped_unsupported: grid specs never ledgered (their filter has no existing feature); not part of K
         Path(args.run_json).write_text(json.dumps({"result": asdict(res), "labels": labels, "head": list(head),
-                                                   "reps": args.reps}))
+                                                   "reps": args.reps, "cost_line": cost_line,
+                                                   "dropped_unsupported": dropped}))
     return 0
 
 
@@ -170,7 +185,7 @@ def cmd_report(args: argparse.Namespace) -> int:
     d: dict[str, Any] = json.loads(Path(args.run_json).read_text())
     res = FunnelResult(**d["result"])
     sys.stdout.write(render_report(res, d["labels"], (d["head"][0], d["head"][1]), "G1 combine", d["reps"],
-                                   1 / (d["reps"] + 1)))
+                                   1 / (d["reps"] + 1), d.get("cost_line", "")))
     return 0
 
 
@@ -181,7 +196,7 @@ def cmd_bench(args: argparse.Namespace) -> int:
     specs = list(generate())[: args.specs]
     t = make_noise_tensor(args.bars, seed=0)
     cache = MaskCache(SyntheticProvider(args.bars))
-    ledger = SearchLedger(args.db)
+    ledger = SearchLedger(args.db or DEFAULT_DB["synthetic"], mode="synthetic")
     t0 = time.perf_counter()
     for s in specs:
         ledger.log_spec(s, "G1", "1")
@@ -200,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
         p = sub.add_parser(name)
         p.set_defaults(fn=fn)
         p.add_argument("--synthetic", action="store_true", help="seeded-noise stand-in backends")
-        p.add_argument("--db", default=DEFAULT_DB)
+        p.add_argument("--db", default=None, help="ledger path (default per mode: state/discovery_real.db or _synthetic.db)")
         p.add_argument("--bars", type=int, default=4000)
         p.add_argument("--seed", type=int, default=0)
         p.add_argument("--min-events", type=int, default=0, help="0 = the evaluator's per-timeframe floor")
@@ -208,8 +223,9 @@ def main(argv: list[str] | None = None) -> int:
         if name == "run":
             p.add_argument("--generator", default="combine")
             p.add_argument("--limit", type=int, default=0)
-            p.add_argument("--reps", type=int, default=20)
+            p.add_argument("--reps", type=int, default=DEFAULT_REPS)
             p.add_argument("--timeframe", default="15m", choices=["15m", "1h", "4h"])
+            p.add_argument("--cost-table", default=None, help="measured cost table JSON (costs_measured.json); default: priors")
             p.add_argument("--raw", default=None, help="dir of xauusd_1m_*.parquet (default GOLDBOT_RAW_BARS or raw/)")
         if name == "bench":
             p.add_argument("--specs", type=int, default=10_000)
