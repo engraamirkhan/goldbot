@@ -35,7 +35,7 @@ from typing import Any, Literal
 
 import pandas as pd
 
-from goldbot.base import FrozenRecord
+from goldbot.base import FrozenRecord, load_record
 from goldbot.research.autodisc.spec import StrategySpec, canonical_json, spec_hash
 
 GENESIS = "0" * 64
@@ -189,7 +189,7 @@ class SearchLedger:
     def get_spec(self, spec_hash: str) -> StrategySpec | None:
         rows = self._query("SELECT payload FROM entries WHERE kind='spec' AND spec_hash=? ORDER BY seq LIMIT 1",
                            (spec_hash,))
-        return StrategySpec.model_validate(json.loads(rows[0][0])["spec"]) if rows else None
+        return load_record(StrategySpec, json.loads(rows[0][0])["spec"], source="autodisc.ledger") if rows else None
 
     def result(self, spec_hash: str, *, null: bool = False) -> dict[str, Any] | None:
         rows = self._query("SELECT payload FROM entries WHERE kind='result' AND spec_hash=? AND is_null=?",
