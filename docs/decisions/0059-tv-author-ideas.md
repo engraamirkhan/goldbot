@@ -36,7 +36,17 @@ afterwards. TradingView has no published API for ideas. Measured on 2026-10-28:
 - Levels (entry, stop, target, support, resistance) are parsed from the text by a keyword heuristic. They are
   derived data: `tv-ideas reparse` recomputes them and never touches the text.
 
+Back catalogue read on the Mac, 2026-10-28 (raw/tv_ideas): 6,843 of 6,846 counted ideas (KnightsofGold 1,955 of
+1,957, from 2020-11-27; Goldviewfx 2,220 of 2,222, from 2021-10-06; ArmanShabanTrading 2,667 of 2,667, from
+2021-08-08). The three missing are counted by TradingView but never served, and one detail read failed. 4,862 of
+the ideas are XAUUSD. There are 2,933 updates; 905 of them are "Trade closed: target reached" and 24 are "stop
+reached". The read took 6,843 detail requests plus about 1,500 listing requests, at 2 s apart.
+
 ## Consequences
+- Finding: the authors almost never publish an entry, a stop and a target together (0-0.05% of ideas). About
+  34-36% name a target and 17-54% name support or resistance. Only ArmanShabanTrading sets the long/short label
+  (81%; Goldviewfx 1%, KnightsofGold 5%). A study should therefore read the ideas as levels and bias, not as
+  complete trade tickets.
 - Research can test "trade the author's idea" with honest timing: back-catalogue rows carry the author's claim and
   live rows carry our own clock. Using a backfilled row's text assumes it was not edited before we saw it.
   TradingView exposes no edit history for the original text, so studies should report results with and without
@@ -45,6 +55,6 @@ afterwards. TradingView has no published API for ideas. Measured on 2026-10-28:
   `tv_ideas` WARNs after 2 h without a successful poll on a weekday, and never FAILs), and nothing on the trading
   path depends on it.
 - Cost: about 400 requests a day live, and about 7,000 once for the back catalogue (2 s apart, a few hours). It adds
-  no Actions minutes. `tv_ideas.db` is roughly 10-30 MB for the three catalogues.
+  no Actions minutes. `tv_ideas.db` is about 54 MB for the three catalogues (the Parquet export is about 4 MB).
 - What would change this: an official ideas API, a block or rate-limit answer from TradingView (raise
   `min_interval_s`, narrow to the newest page), or the owner adding or removing authors (config only).
