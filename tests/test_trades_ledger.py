@@ -242,6 +242,18 @@ def test_filter_totals_equal_the_sum_of_the_rows(tmp_path):
     assert t.costs == round(sum(r.costs.total for r in closed if r.costs), 2)
 
 
+def test_totals_count_the_cost_probes_on_a_line_of_their_own(tmp_path):
+    """volume-500 plan section 1: probes count toward the day's trades but "Reports show the count split into
+    strategy arms, controls and probes": `n` includes them and `n_probes` says how many of `n` are probes."""
+    _every_kind(tmp_path)
+    led = _ledger(tmp_path, _catalog(tmp_path))
+    page = tl.query(led, _q())
+    probes = [r for r in page.rows if r.kind == "cost_probe"]
+    assert probes and page.totals.n == len(page.rows) and page.totals.n_probes == len(probes)
+    none = tl.query(led, _q(kind=("strategy", "real")))
+    assert none.totals.n_probes == 0 and none.totals.n == len(none.rows)
+
+
 def test_the_default_list_is_today_every_kind_but_shadow(tmp_path):
     _every_kind(tmp_path)
     _arm(tmp_path, "ex-old", "S1A", sent=NOW - pd.Timedelta(days=3))

@@ -73,6 +73,7 @@ log = logging.getLogger("goldbot.daily_review")
 SCHEMA_VERSION = 1
 SESSIONS: tuple[str, ...] = ("asia", "london", "newyork")
 ALL = "all"
+PROBE = "probe"                       # the cost probes' style in `volume` (StyleVolume.style)
 OZ_PER_LOT = 100.0
 STOP_EXITS = frozenset({"stop", "engine_stop_close"})
 RULE = "H-61 per-arm stop (docs/research/prereg-2026-10-25-high-volume.md)"
@@ -183,6 +184,11 @@ class DailyReview(Record):
     volume_total: int = 0
     plan_total: int = 0
     of_plan: float | None = None
+    # the day's fills: exploration arms (controls included) + cost probes; `fills_probes` is the probes' part, a line of
+    # its own (volume-500 plan section 1: "Reports show the count split into strategy arms, controls and probes, so
+    # the total cannot be padded"; the plan counts probe fills toward the 500, at most 20% of it)
+    fills_total: int = 0
+    fills_probes: int = 0
     volume_low_days: int = 0                                                # low trading days running
     arm_health: dict[str, dict[str, Health]] = Field(default_factory=dict)  # broker -> arm -> breached | ok
     arms_retired: dict[str, int] = Field(default_factory=dict)              # broker -> arms retired so far
@@ -563,7 +569,7 @@ def _volume(d: _Day, plan: Mapping[str, Mapping[str, int]], probe_plan: Mapping[
     out: list[StyleVolume] = []
     for broker in sorted(set(d.hosts.values())):
         hosts = {h for h, b in d.hosts.items() if b == broker}
-        bplan = {**plan.get(broker, {}), "probe": int(probe_plan.get(broker, 0))}
+        bplan = {**plan.get(broker, {}), PROBE: int(probe_plan.get(broker, 0))}
         cands: dict[str, int] = dict.fromkeys(bplan, 0)
         fills: dict[str, int] = dict.fromkeys(bplan, 0)
         for s in d.obs.loc[d.obs["account_id"].isin(hosts), "style"].astype(str):
@@ -573,8 +579,8 @@ def _volume(d: _Day, plan: Mapping[str, Mapping[str, int]], probe_plan: Mapping[
                 s = d.style_of.get(t.client_order_id, "scalp")
                 fills[s] = fills.get(s, 0) + 1
         probes = [p for p in d.probes if p.account_id in hosts]
-        cands["probe"] += len(probes)
-        fills["probe"] += sum(p.fill_price is not None for p in probes)
+        cands[PROBE] += len(probes)
+        fills[PROBE] += sum(p.fill_price is not None for p in probes)
         for s in [*bplan, *sorted(set(cands) - set(bplan))]:       # the plan's order, then any style it lacks
             out.append(StyleVolume(broker=broker, style=s, candidates=cands.get(s, 0), fills=fills.get(s, 0),
                                    plan=int(bplan.get(s, 0)),
@@ -716,7 +722,8 @@ def report_lines(r: DailyReview) -> list[str]:
     costs = " · ".join(f"{_broker(c.broker)} {_usd(c.round_trip_usd)}" for c in r.costs if c.host == ALL)
     first = (f"Review: costs {costs or 'none'} (round trip) · volume {r.volume_total:,} of {r.plan_total:,} planned "
              f"({_pct(r.of_plan)})")
-    out = [first]
+    out = [first, f"Review: fills {r.fills_total:,} (arms {r.fills_total - r.fills_probes:,}, probes "
+                  f"{r.fills_probes:,})"]
     n_ret = len(r.retired)
     if r.incidents or n_ret:
         kinds = sorted({i.kind.replace('_', ' ') for i in r.incidents})
@@ -912,6 +919,7 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
     costs = _costs(d, cfg.overshoot_scenario_usd)
     volume = _volume(d, cfg.volume_plan, cfg.probe_plan)
     total = sum(v.candidates for v in volume)
+    probe_fills = sum(v.fills for v in volume if v.style == PROBE)
     plan_total = sum(v.plan for v in volume)
     of_plan = round(total / plan_total, 6) if plan_total else None
     integrity = _integrity(d, trading, cfg.max_gap_minutes, incidents)
@@ -939,7 +947,7 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
     low_days = (carried + 1 if low else 0) if trading else carried
     review = DailyReview(day=day, generated_utc=now, dry_run=dry_run, trading_day=trading, costs=costs,
                          refusals=_refusals(d), volume=volume, volume_total=total, plan_total=plan_total,
-                         of_plan=of_plan, volume_low_days=low_days, arm_health=health,
+                         of_plan=of_plan, fills_total=sum(v.fills for v in volume), fills_probes=probe_fills, volume_low_days=low_days, arm_health=health,
                          arms_retired={b: len(retired_arms(db, b)) for b in sorted(set(hosts.values()))},
                          integrity=integrity, incidents=incidents, refits=refits, retired=retired,
                          evidence_void=_void(db, hosts, lo, hi),

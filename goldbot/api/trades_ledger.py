@@ -623,11 +623,12 @@ ANSWERS_MAX = 256                       # distinct filters remembered per ledger
 def _scan(closed: Sequence[TradeRow], opened: Sequence[TradeRow]) -> TradeTotals:
     """`totals` over the matching closed and open rows in one pass (tests/test_trades_ledger.py checks the indexed
     answers against a full scan)."""
-    n_closed = unknown = 0
+    n_closed = unknown = probes = 0
     net = costs = open_pnl = open_risk = 0.0
     ccys: set[str] = set()
     for r in closed:
         n_closed += 1
+        probes += r.kind == "cost_probe"
         pnl = r.pnl
         if pnl is None:
             if r.kind != "shadow":
@@ -639,6 +640,7 @@ def _scan(closed: Sequence[TradeRow], opened: Sequence[TradeRow]) -> TradeTotals
         if r.currency is not None and (pnl is not None or r.risk_amount is not None):
             ccys.add(r.currency)
     for r in opened:
+        probes += r.kind == "cost_probe"
         if r.pnl_now is not None:
             open_pnl += r.pnl_now
         if r.risk_amount is not None:
@@ -647,7 +649,7 @@ def _scan(closed: Sequence[TradeRow], opened: Sequence[TradeRow]) -> TradeTotals
             ccys.add(r.currency)
     mixed = len(ccys) > 1
     return TradeTotals(
-        n=n_closed + len(opened), n_open=len(opened), n_closed=n_closed,
+        n=n_closed + len(opened), n_open=len(opened), n_closed=n_closed, n_probes=probes,
         currency=next(iter(ccys)) if len(ccys) == 1 else None, mixed_currencies=mixed,
         net_pnl=round(net, 2) if not mixed and not unknown else None, net_unknown=unknown,
         net_partial=round(net, 2) if not mixed and unknown else None, costs=round(costs, 2) if not mixed else None,

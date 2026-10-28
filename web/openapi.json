@@ -10282,6 +10282,11 @@
       "title": "N Open",
       "type": "integer"
      },
+     "n_probes": {
+      "default": 0,
+      "title": "N Probes",
+      "type": "integer"
+     },
      "net_partial": {
       "anyOf": [
        {

@@ -4430,6 +4430,11 @@ export interface components {
             n_closed: number;
             /** N Open */
             n_open: number;
+            /**
+             * N Probes
+             * @default 0
+             */
+            n_probes: number;
             /** Net Partial */
             net_partial?: number | null;
             /** Net Pnl */
