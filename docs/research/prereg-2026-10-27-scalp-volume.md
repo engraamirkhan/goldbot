@@ -377,3 +377,31 @@ side"), so it is an implementation fix, not a new hypothesis. K is unchanged.
 
 **Test owed (implementer):** over a long synthetic run of admitted control entries, the long share lies within
 0.5 ± 3 SE.
+
+## 10. Amendment 2026-10-28 (d): quant conditions on the live volume fix and the room floor (before the 300-fill read)
+
+Written on 2026-10-28, before any read of any family in this file. No return was read. It applies the quant
+reviewer's conditions on the fix to Z1P's live volume and on ADR 0057.
+
+### 10.1 A minute without its broker bar is not a volume decision (condition C1)
+
+**What happened.** Live, the 1m/5m pass read the minute that had just closed from the engine's sampled quotes. That
+broke section 0's "v = ... MT5 `tick_volume` live ... on the same feed", and Z1P made no candidate on 2026-10-27. The
+fix: the pass reads the broker's M1 bar of that minute. It waits for it at most 3 s past close + 1.5 s, as a decision
+close does.
+
+**Rule.** When the bar misses that hold, the minute has no MT5 tick volume.
+- A rule that reads tick volume is **not decided on the sampled count**. Such rules are `arm_rules.VOLUME_RULES`: Z1,
+  Z2, Z5, Z8 here, plus S1's tick-weighted VWAP and S4's money flow. A test shows that every other shipped 1m/5m rule
+  ignores `tick_count`.
+- A candidate such a rule makes on that minute is journalled `exploration_skipped:broker_bar_late` and recorded
+  blocked with its propensity, exactly as `spread_wide`. It is a refusal, not an untaken candidate. The history run
+  has no such minute.
+- Rules that do not read volume decide on the sampled minute, as before.
+- **Reported:** the daily review gives the late rate per host (late minutes / the host's 1m bars) and the longest
+  wait (`broker_bars` in the review record). Every waited or late minute is journalled
+  `exploration_broker_bar_wait` with `hold_ms`.
+- **Read.** The 300-fill read of Z1, Z2, Z5 and Z8 counts only candidates decided on a broker bar. Before this fix
+  no Z1P/Z2P/Z5P/Z8P candidate was decided on the broker's volume. Their read therefore starts at the fix's deploy
+  time on each host (taken from the release record). Earlier rows are reported as pre-fix and are not in the primary
+  read.

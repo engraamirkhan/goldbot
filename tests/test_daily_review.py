@@ -412,6 +412,24 @@ def test_integrity_counts_gaps_duplicates_clock_faults_and_failing_health_as_inc
     assert {"data_gap", "data_duplicate", "clock", "health"} <= kinds
 
 
+def test_the_broker_bar_late_rate_and_the_minute_passs_waits_are_reported_per_host(tmp_path):
+    """Quant C1 / trading-safety LOW 2: the minutes the 1m/5m pass decided without their broker bar (`late`, the volume
+    arms held out) over the host's 1m bars, and how long it waited (`hold_ms`), so a rise in `exploration_stale`
+    can be traced to the wait."""
+    minutes = pd.date_range(LONDON, LONDON + pd.Timedelta(minutes=99), freq="1min")
+    bars = pd.DataFrame({"ts_utc": minutes})
+    waits = [(400, False), (1500, False), (3000, True), (3000, True)]
+    journal = pd.DataFrame({"ts_utc": [LONDON + pd.Timedelta(minutes=i) for i in range(len(waits))],
+                            "action": [exploration.WAIT_ACTION] * len(waits),
+                            "detail": [json.dumps({"hold_ms": h, "late": late}) for h, late in waits]})
+    review = _run(tmp_path, store=_store({("bars_1m", "icm-probe"): bars, ("decisions", "icm-probe"): journal}))
+    [w] = [w for w in review.broker_bars if w.host == "icm-probe"]
+    assert (w.minutes, w.waited, w.late, w.late_rate, w.hold_ms_max) == (100, 4, 2, 0.02, 3000)
+    line = next(x for x in dr.report_lines(review) if "broker bar" in x)
+    assert "2 of 100 minutes" in line and "2%" in line
+    assert all(w.late == 0 for w in review.broker_bars if w.host != "icm-probe")
+
+
 def _probe(db: Database, cid: str, *, host: str = "icm-probe", sent: pd.Timestamp = LONDON,
            fill: float | None = 2000.1) -> None:
     from goldbot.engine import cost_probe

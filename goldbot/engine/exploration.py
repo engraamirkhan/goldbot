@@ -125,6 +125,11 @@ SPEC_PATH = Path(__file__).parents[2] / "config" / "exploration_arms.yaml"   # t
 # a close by the arm's own barrier: anything else censors the label (`trail_close`: a runner arm's own trailed stop,
 # reached before the broker had it; no other arm trails)
 NATURAL = frozenset({HOLD_EXIT, "time_exit", "stop", "target", "engine_stop_close", "trail_close"})
+# prereg-2026-10-27-scalp-volume.md amendment (d): a volume rule's candidate on a minute whose broker bar missed the
+# hold is blocked with this reason (as `spread_wide`); each minute the pass waited for, or decided without, its broker
+# bar is journalled WAIT_ACTION with `hold_ms` and `late` (trading-safety LOW 2; the daily review's late rate)
+BROKER_BAR_LATE = "broker_bar_late"
+WAIT_ACTION = "exploration_broker_bar_wait"
 SHIFT_TF = "15m"                    # arms 8.9: a shifted XC15 enters "at the next 15m close" KA15 is not open
 CUT_EXIT = "weekend_close_loser"    # the Friday cut's loser close (`Engine._weekend_rule`): natural for a rule following it
 
@@ -376,6 +381,7 @@ class Exploration:
         self.last_bar: dict[str, pd.Timestamp] = {}
         self.last_close = eng._closed_through
         self.last_minute: pd.Timestamp | None = None
+        self.waiting: pd.Timestamp | None = None       # the minute close whose broker bar the minute pass waits for
         self.ahead_seen: pd.Timestamp | None = None   # the last bar skipped as ahead of the host clock (journalled once)
         self.open_loss: dict[int, float] = {}       # position id -> its loss at the gate's stop when sent
         self.weights_cache: tuple[pd.Timestamp, dict[str, float]] | None = None
@@ -502,11 +508,13 @@ def arm_bars(complete: pd.DataFrame, arm: SpecArm, through: pd.Timestamp) -> tup
 
 
 def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.DataFrame,
-            through: pd.Timestamp, spec_ctx: dict[str, Any] | None = None) -> None:
+            through: pd.Timestamp, spec_ctx: dict[str, Any] | None = None, late: bool = False) -> None:
     """The arm's frozen rule (`arm_rules.screened`: its window, the common filters, its stop band) on the bars up to
     `through`; a candidate on the bar that just closed is queued with its own stop, target and hold. One its stop band
     skips is journalled and recorded blocked with its propensity (`_skipped`). A rule that raises is journalled
-    (`exploration_rule_error`) and the other arms go on."""
+    (`exploration_rule_error`) and the other arms go on. `late` (the minute pass decided without the last minute's
+    broker bar): a rule reading tick volume (`arm_rules.reads_volume`) has its candidate on that bar blocked
+    BROKER_BAR_LATE the same way (prereg-2026-10-27-scalp-volume.md amendment (d))."""
     from goldbot.research import arm_rules
     if arm.arm_id in ex.retired or ex.last_bar.get(arm.arm_id) == through:
         return
@@ -520,6 +528,10 @@ def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.D
         eng.decisions.append({"ts": time.time(), "agent": arm.tag, "action": "exploration_rule_error",
                               "error": type(exc).__name__})
         return
+    if late and arm_rules.reads_volume(arm.spec):
+        now_rows = c["idx"] == len(bars) - 1
+        skipped = pd.concat([skipped, c[now_rows].assign(reason=BROKER_BAR_LATE)], ignore_index=True)
+        c = c[~now_rows]
     for p in _pending(arm, c[c["idx"] == len(bars) - 1], through):
         ex.queue.append(p)
     gone = skipped[skipped["idx"] == len(bars) - 1]
@@ -680,18 +692,27 @@ def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     volume (... MT5 `tick_volume` live)" with its own trailing median "on the same feed"; the unbuilt minute's
     sampled quotes (at most four a second at the 0.25 s loop) are another feed, so Z1P, whose v_t was that count set
     against the broker's tick volumes, never fired live (2026-10-27: 0 candidates against 11.7 a day). Past the hold
-    the minute is decided on what is there (sampled), as the engine's own closes are (`broker_bar_late`)."""
+    the minute is decided on what is there (sampled), as the engine's own closes are, except by a volume rule: its
+    candidate is blocked BROKER_BAR_LATE (amendment (d), `_signal`). A minute waited for or decided without its bar is
+    journalled WAIT_ACTION with the wait (`hold_ms`, from close + GRACE_S) and `late`."""
     from goldbot.engine import broker_bars
     through = (now - pd.Timedelta(seconds=GRACE_S)).floor("min")
     if ex.last_minute is not None and through <= ex.last_minute:
         return
     arms = [a for a in ex.arms.values() if a.tf in SUB_15M and int(through.timestamp()) % tf_seconds(a.tf) == 0]
-    if arms and broker_bars.awaiting(eng, through - pd.Timedelta(minutes=1), now):
-        return                  # the minute's broker bar is on its way: a later pass decides this close
+    minute = through - pd.Timedelta(minutes=1)
+    if arms and broker_bars.awaiting(eng, minute, now):
+        ex.waiting = through    # the minute's broker bar is on its way: a later pass decides this close
+        return
     ex.last_minute = through
     tfs = sorted({a.tf for a in arms}, key=tf_seconds)
     if not tfs:
         return
+    late = broker_bars.missed(eng, minute)
+    if late or ex.waiting == through:
+        hold_ms = round(max(0.0, (now - through).total_seconds() - GRACE_S) * 1000)
+        eng.decisions.append({"ts": now.isoformat(), "agent": None, "action": WAIT_ACTION, "bar": through.isoformat(),
+                              "hold_ms": hold_ms, "late": late})
     # bars, never clock time (`_bars`)
     rows = max(max(tf_seconds(a.tf) * (lookback(a.spec) + 1) // 60 for a in arms), LOOKBACK_1M)
     b = eng.bars_1m
@@ -712,7 +733,7 @@ def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
         for n, bars in _shared_bars(frame, tf, through, sorted({lookback(a.spec) for a in group})).items():
             if bars is not None:
                 for arm in (a for a in group if lookback(a.spec) == n):
-                    _signal(eng, ex, arm, bars, frame, through)
+                    _signal(eng, ex, arm, bars, frame, through, late=late)
 
 
 def on_pass(eng: Engine, tick: Tick) -> None:

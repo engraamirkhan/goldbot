@@ -140,6 +140,18 @@ class StyleVolume(FrozenRecord):
     of_plan: float | None
 
 
+class BrokerBarWaits(FrozenRecord):
+    """One host's day of the 1m/5m exploration pass against the broker's M1 bars (engine/exploration.py WAIT_ACTION):
+    `late` minutes were decided without their broker bar (the volume arms held out, prereg-2026-10-27-scalp-volume.md
+    amendment (d)), `waited` minutes waited for it (late included); `late_rate` = late / the host's 1m bars."""
+    host: str
+    minutes: int = 0
+    waited: int = 0
+    late: int = 0
+    late_rate: float | None = None
+    hold_ms_max: int | None = None
+
+
 class Integrity(FrozenRecord):
     host: str
     bars_rows: int = 0
@@ -189,6 +201,7 @@ class DailyReview(Record):
     # the total cannot be padded"; the plan counts probe fills toward the 500, at most 20% of it)
     fills_total: int = 0
     fills_probes: int = 0
+    broker_bars: list[BrokerBarWaits] = Field(default_factory=list)           # per host: late rate and waits
     volume_low_days: int = 0                                                # low trading days running
     arm_health: dict[str, dict[str, Health]] = Field(default_factory=dict)  # broker -> arm -> breached | ok
     arms_retired: dict[str, int] = Field(default_factory=dict)              # broker -> arms retired so far
@@ -648,6 +661,25 @@ def _cost_suspended(db: Database, hosts: Mapping[str, str], hi: pd.Timestamp) ->
     return out
 
 
+def _broker_bars(d: _Day) -> list[BrokerBarWaits]:
+    """Per host: the minute pass's WAIT_ACTION rows (`hold_ms`, `late` in the journal's detail) against its 1m bars."""
+    from goldbot.engine.exploration import WAIT_ACTION
+    out: list[BrokerBarWaits] = []
+    for host in d.hosts:
+        j = d.journal.get(host, pd.DataFrame())
+        rows = j[j["action"].astype(str) == WAIT_ACTION] if not j.empty and "action" in j else pd.DataFrame()
+        details = [json.loads(x) if isinstance(x, str) and x else {} for x in
+                   (rows["detail"] if "detail" in rows else [])]
+        late = sum(bool(x.get("late")) for x in details)
+        holds = [int(x["hold_ms"]) for x in details if x.get("hold_ms") is not None]
+        bars = d.bars.get(host)
+        minutes = 0 if bars is None or bars.empty else int(pd.DatetimeIndex(bars["ts_utc"]).nunique())
+        out.append(BrokerBarWaits(host=host, minutes=minutes, waited=len(details), late=late,
+                                  late_rate=round(late / minutes, 6) if minutes else None,
+                                  hold_ms_max=max(holds) if holds else None))
+    return out
+
+
 def _integrity(d: _Day, trading: bool, max_gap: int, incidents: list[Incident]) -> list[Integrity]:
     out: list[Integrity] = []
     grid = pd.date_range(d.lo, d.hi, freq="1min", inclusive="left")
@@ -737,6 +769,12 @@ def report_lines(r: DailyReview) -> list[str]:
         out.append(f"Review: ALERT quarantine span with no recorded engine restart "
                    f"({', '.join(role(a) for a in r.spans_unresolved)}): its decisions are held out of learning, "
                    "not voided")
+    late = [w for w in r.broker_bars if w.late]
+    if late:
+        from goldbot.telegram.labs import role
+        out.append("Review: broker bar late " + " · ".join(
+            f"{role(w.host)} {w.late:,} of {w.minutes:,} minutes ({_pct(w.late_rate)})" for w in late)
+            + ": volume arms held out on them")
     if r.evidence_void:
         out.append(f"Review: {r.evidence_void} trade{'s' if r.evidence_void != 1 else ''} void as evidence "
                    "(dq quarantine; H-61 stops and P&L keep it)")
@@ -947,7 +985,8 @@ def run_daily_review(*, settings: Settings, state_dir: str | Path, store: Any, h
     low_days = (carried + 1 if low else 0) if trading else carried
     review = DailyReview(day=day, generated_utc=now, dry_run=dry_run, trading_day=trading, costs=costs,
                          refusals=_refusals(d), volume=volume, volume_total=total, plan_total=plan_total,
-                         of_plan=of_plan, fills_total=sum(v.fills for v in volume), fills_probes=probe_fills, volume_low_days=low_days, arm_health=health,
+                         of_plan=of_plan, fills_total=sum(v.fills for v in volume), fills_probes=probe_fills,
+                         broker_bars=_broker_bars(d), volume_low_days=low_days, arm_health=health,
                          arms_retired={b: len(retired_arms(db, b)) for b in sorted(set(hosts.values()))},
                          integrity=integrity, incidents=incidents, refits=refits, retired=retired,
                          evidence_void=_void(db, hosts, lo, hi),

@@ -188,6 +188,16 @@ def awaiting(eng: Engine, minute: pd.Timestamp, now: pd.Timestamp) -> bool:
         and bool(DEFAULT_SESSIONS.is_open(pd.DatetimeIndex([minute]))[0])
 
 
+def missed(eng: Engine, minute: pd.Timestamp) -> bool:
+    """Whether a decision on the in-session `minute` is taken without its broker bar (broker bars on, the bar not
+    fetched): the hold ran out or a finished call came back without it."""
+    bb = eng.broker_m1
+    if not eng.cfg.broker_bars or bb.fetcher is None:
+        return False
+    have = not bb.got.empty and bool((bb.got["ts_utc"] == minute).any())
+    return not have and bool(DEFAULT_SESSIONS.is_open(pd.DatetimeIndex([minute]))[0])
+
+
 def fetched(eng: Engine, through: pd.Timestamp) -> pd.DataFrame:
     """The broker's finished minutes fetched so far (the last KEEP) that close at or before `through`, with bars_1m's
     dtypes; empty with broker bars off. The exploration minute pass lays them over the sampled minutes it builds from

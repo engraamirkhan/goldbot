@@ -307,7 +307,7 @@ def _live_eng(arm: A.Arm, mem: pd.DataFrame, *, ticks: list[Tick] | None = None,
     bars on (production through the bridge), the broker's fetched minutes `got`."""
     ex = SimpleNamespace(arms={arm.id: exploration.Arm(spec=arm, style="scalp")}, retired=frozenset(), last_bar={},
                          queue=deque(), last_minute=None, deferred={}, needs_context=frozenset(), held_back={},
-                         netting=None, ahead_seen=None)
+                         netting=None, ahead_seen=None, waiting=None)
     bb = broker_bars.BrokerBars()
     if broker_bars_on:
         bb.fetcher = broker_bars.Fetcher(client=None)
@@ -356,13 +356,13 @@ def _queued(ex: Any) -> list[tuple[int, float, float, int]]:
     return [(p.side, p.stop_usd, p.target_usd, p.hold_bars) for p in ex.queue]
 
 
-def _z1p_live_shape(b1: pd.DataFrame, ctxs: dict[str, R.RuleContext]
+def _z1p_live_shape(b1: pd.DataFrame, ctxs: dict[str, R.RuleContext], arm: A.Arm | None = None
                     ) -> tuple[A.Arm, pd.Timestamp, tuple[int, float, float, int], pd.DataFrame, list[Tick]]:
-    """Z1P (its frozen row) at a history candidate, and the engine's live view of that close: bars_1m holds the
-    broker's M1 bars up to the minute before (tick_count = MT5 tick volume, `history.rates_to_bars`), and the minute
+    """Z1P (its frozen row; or `arm`) at a history candidate, and the engine's live view of that close: bars_1m holds
+    the broker's M1 bars up to the minute before (tick_count = MT5 tick volume, `history.rates_to_bars`), and the minute
     that just closed exists only as the engine's sampled quotes (four polls: its open, high, low and close)."""
-    arm = _arm("tick_surge", "Z1P", stop_usd=3.0, target_r=1.5, hold_bars=15)
-    ctx = ctxs["1m"]
+    arm = arm or _arm("tick_surge", "Z1P", stop_usd=3.0, target_r=1.5, hold_bars=15)
+    ctx = ctxs[arm.timeframe]
     kept, _ = R.screened(arm, ctx)
     close = ctx.close_ts
     first = pd.Timestamp(b1["visible_at"].iloc[(exploration.lookback(arm) + 1) + 1440])
@@ -374,7 +374,8 @@ def _z1p_live_shape(b1: pd.DataFrame, ctxs: dict[str, R.RuleContext]
     bar, minute = broker.iloc[-1], at - pd.Timedelta(minutes=1)
     ticks = [Tick(ts_utc=minute + pd.Timedelta(seconds=s), bid=float(bar[f"bid_{k}"]), ask=float(bar[f"ask_{k}"]))
              for s, k in ((1, "open"), (15, "high"), (30, "low"), (50, "close"))]
-    assert float(bar["tick_count"]) >= Z.SURGE_X * float(broker["tick_count"].iloc[-61:-1].median()) > len(ticks)
+    if arm.rule == "tick_surge":
+        assert float(bar["tick_count"]) >= Z.SURGE_X * float(broker["tick_count"].iloc[-61:-1].median()) > len(ticks)
     return arm, at, want, broker, ticks
 
 
@@ -409,7 +410,77 @@ def test_the_minute_pass_waits_for_the_brokers_bar_of_the_minute_that_just_close
     assert ex.last_minute == at and _queued(ex) == [want]
     late, lex = _live_eng(arm, broker.iloc[:-1], ticks=ticks, got=broker.iloc[:-1].tail(29), broker_bars_on=True)
     exploration._minutes(late, lex, at + broker_bars.GRACE + broker_bars.HOLD)
-    assert lex.last_minute == at                                          # past the hold: decided on the sampled bar
+    assert lex.last_minute == at                                          # past the hold: decided, as below
+    [wait] = [d for d in eng.decisions if d["action"] == exploration.WAIT_ACTION]
+    assert wait["late"] is False and wait["hold_ms"] == 1500 and wait["bar"] == at.isoformat()   # TS LOW 2: the wait
+
+
+@pytest.fixture
+def journalled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_skipped` records a blocked candidate with its propensity; the bare engine here has no ledger or shares."""
+    monkeypatch.setattr(exploration, "shares", lambda ex, now: {})
+    monkeypatch.setattr(exploration, "candidate", lambda *a, **k: None)
+
+
+def test_past_the_hold_a_volume_arm_is_never_decided_on_the_sampled_minute_and_its_candidate_is_blocked(
+        b1, ctxs, journalled) -> None:
+    """Quant condition C1 (prereg amendment (d)): a minute whose broker bar missed the hold has no MT5 tick volume, so
+    a volume rule (`arm_rules.VOLUME_RULES`) is not decided on its sampled count. A candidate the rule makes on it is
+    journalled `exploration_skipped:broker_bar_late` and recorded blocked, as `spread_wide` (a refusal, never an
+    untaken candidate). Here the engine polled every one of the minute's ticks, so the sampled bar fires Z1P."""
+    arm, at, _, broker, ticks = _z1p_live_shape(b1, ctxs)
+    bar, minute = broker.iloc[-1], at - pd.Timedelta(minutes=1)
+    fill = [Tick(ts_utc=minute + pd.Timedelta(seconds=31) + pd.Timedelta(milliseconds=10 * k),
+                 bid=float(bar["bid_close"]), ask=float(bar["ask_close"])) for k in range(int(bar["tick_count"]))]
+    every = sorted([*ticks, *fill], key=lambda t: t.ts_utc)
+    on_sampled, _ = _live_eng(arm, broker.iloc[:-1], ticks=every)       # broker bars off: the sampled bar fires
+    exploration._minutes(on_sampled, on_sampled.exploration, at + pd.Timedelta(seconds=2))
+    assert len(on_sampled.exploration.queue) == 1
+    eng, ex = _live_eng(arm, broker.iloc[:-1], ticks=every, got=broker.iloc[:-1].tail(29), broker_bars_on=True)
+    exploration._minutes(eng, ex, at + broker_bars.GRACE + broker_bars.HOLD)
+    assert _queued(ex) == []
+    assert [d["action"] for d in eng.decisions if d["action"].startswith("exploration_skipped:")] == \
+        ["exploration_skipped:" + exploration.BROKER_BAR_LATE]
+    [wait] = [d for d in eng.decisions if d["action"] == exploration.WAIT_ACTION]
+    assert wait["late"] is True and wait["hold_ms"] == 3000
+
+
+def test_past_the_hold_an_arm_that_reads_no_volume_still_decides_on_the_sampled_minute(b1, ctxs) -> None:
+    """C1: only the volume rules are held out; the others keep the engine's fallback (the sampled bar)."""
+    arm = _arm("round_reject", "Z4P", stop_usd=3.0, target_r=1.0, hold_bars=15)
+    assert not R.reads_volume(arm)
+    arm, at, want, broker, ticks = _z1p_live_shape(b1, ctxs, arm)
+    eng, ex = _live_eng(arm, broker.iloc[:-1], ticks=ticks, got=broker.iloc[:-1].tail(29), broker_bars_on=True)
+    exploration._minutes(eng, ex, at + broker_bars.GRACE + broker_bars.HOLD)
+    assert _queued(ex) == [want]
+
+
+def test_a_broker_bar_of_a_later_minute_is_never_read_by_the_minute_pass(b1, ctxs) -> None:
+    """Quant condition C2: a fetched bar of a minute that closes after the decision close (visible_at > the close) is
+    ignored: `broker_bars.fetched` leaves it out and the rule's candidates are those without it."""
+    arm, at, want, broker, ticks = _z1p_live_shape(b1, ctxs)
+    later = broker.iloc[[-1]].assign(ts_utc=at, visible_at=at + pd.Timedelta(minutes=1), tick_count=1e9,
+                                     **{c: broker.iloc[-1][c] + 50.0 for c in broker.columns if c[:4] in ("bid_", "ask_")})
+    got = pd.concat([broker.tail(30), later], ignore_index=True)
+    eng, ex = _live_eng(arm, broker.iloc[:-1], ticks=ticks, got=got, broker_bars_on=True)
+    assert pd.Timestamp(broker_bars.fetched(eng, at)["ts_utc"].max()) == at - pd.Timedelta(minutes=1)
+    exploration._minutes(eng, ex, at + pd.Timedelta(seconds=exploration.GRACE_S + 0.5))
+    assert _queued(ex) == [want]
+
+
+def test_every_live_1m_or_5m_rule_outside_the_volume_rules_ignores_tick_count(b1, spec) -> None:
+    """C1's set is complete: perturbing tick_count changes no candidate of a shipped 1m/5m rule outside VOLUME_RULES
+    (so the late-minute exclusion cannot miss a rule that reads volume)."""
+    noisy = b1.assign(tick_count=np.round(np.random.default_rng(5).lognormal(4.0, 1.0, len(b1))))
+    rules = {a.rule: a for a in spec.values() if a.timeframe in ("1m", "5m") and a.status == "run"}
+    checked = 0
+    for rule, arm in sorted(rules.items()):
+        if R.reads_volume(arm):
+            continue
+        a, b = (R.screened(arm, _ctx(x, arm.timeframe))[0] for x in (b1, noisy))
+        pd.testing.assert_frame_equal(a, b, obj=rule)
+        checked += 1
+    assert checked >= 8 and {"tick_surge", "run_fade", "absorb_fade", "extreme_break"} <= R.VOLUME_RULES
 
 
 def test_every_declared_lookback_fits_the_engines_memory_and_reaches_z7s_ten_trading_days() -> None:
