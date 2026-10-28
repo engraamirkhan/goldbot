@@ -31,9 +31,9 @@ def test_run_report_has_counts_head_and_no_2018_plus(tmp_path, capsys):
     assert capsys.readouterr().out == out
 
 
-def test_real_backends_refused_until_integration(tmp_path):
+def test_bench_refuses_without_synthetic(tmp_path):
     with pytest.raises(SystemExit):
-        cli.main(["run", "--db", str(tmp_path / "d.db")])
+        cli.main(["bench", "--db", str(tmp_path / "d.db")])
 
 
 def test_variant_flagged_on_survivor(tmp_path, capsys):

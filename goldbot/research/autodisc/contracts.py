@@ -1,6 +1,6 @@
 """The one interface this slice still codes against that another slice has not delivered: `MaskProvider`.
 
-REPLACE AT INTEGRATION (ADR 0058 phase 1, backlog 140): `autodisc.primitives` (leaf -> point-in-time boolean over
+Implemented by `autodisc.primitives.PrimitiveProvider` (ADR 0058 phase 1, backlog 140; leaf -> point-in-time boolean over
 `goldbot/features`) implements it. Everything else (spec, ledger, windows, outcomes, evaluate) is the real module.
 G1 specs name their family in `spec.family`; the provider resolves it to the family's own entry bars and side.
 """

@@ -177,7 +177,9 @@ def test_clustered_t():
     plain = r.mean() / (r.std(ddof=1) / np.sqrt(400))
     assert ev.clustered_t(r, np.arange(400)) == pytest.approx(plain, rel=0.02)
     shared = r + np.repeat(rng.normal(0, 1, 40), 10)
-    assert abs(ev.clustered_t(shared, np.repeat(np.arange(40), 10))) < abs(ev.clustered_t(shared, np.arange(400)))
+    t_cl, t_pl = ev.clustered_t(shared, np.repeat(np.arange(40), 10)), ev.clustered_t(shared, np.arange(400))
+    assert t_cl is not None and t_pl is not None
+    assert abs(t_cl) < abs(t_pl)
     assert ev.clustered_t(np.array([1.0]), np.array([0])) is None
 
 
