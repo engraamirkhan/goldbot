@@ -1220,12 +1220,14 @@ ArmanShabanTrading). It reads TradingView's public ideas listing and each idea's
 writes to TradingView, and spaces requests at least 3 s apart (2 s for the one-time back catalogue). The text stays
 in `state/tv_ideas.db` on the brain and in `raw/tv_ideas/` on the Mac, never in the repo. Nothing for you to do.
 
-On the brain (no secret needed):
+On the brain (no secret needed; the release with `tv-ideas` deployed and healthy):
 
-1. `sudo install -m 644 /opt/goldbot/goldbot/ops/linux/systemd/goldbot-tv-ideas.service /etc/systemd/system/ &&
-   sudo systemctl daemon-reload && sudo systemctl enable --now goldbot-tv-ideas`
-2. Check: `journalctl -u goldbot-tv-ideas -n 5` shows `tv-ideas poll: ok`, and health shows `tv_ideas ok`.
-3. Rollback: `sudo systemctl disable --now goldbot-tv-ideas`. The file stays, and polling resumes where it stopped.
+1. One poll by hand first: `goldbot run tv-ideas poll` must print `tv-ideas poll: ok`.
+2. Install and start the unit from root's own clone of the deployed commit `<SHA>`, as in 2.7d T4, with
+   `U=goldbot-tv-ideas`, then `sudo systemctl enable --now goldbot-tv-ideas`. Never install it from `/opt/goldbot`.
+3. Check: `systemctl is-active goldbot-tv-ideas` = active; `journalctl -u goldbot-tv-ideas -n 5` shows
+   `tv-ideas poll: ok`; `goldbot run health` shows `tv_ideas` ok.
+4. Rollback: `sudo systemctl disable --now goldbot-tv-ideas`. The file stays, and polling resumes where it stopped.
 
 On the Mac (research copy, one-time, resumable):
 `python -m goldbot.ops.run tv-ideas backfill --state raw/tv_ideas`, then
