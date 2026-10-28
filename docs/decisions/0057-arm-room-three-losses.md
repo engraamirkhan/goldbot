@@ -1,6 +1,7 @@
 # 0057: A strategy arm's day absorbs three losses; icm-probe pot re-split to £168 / 14
 
-Status: proposed (implementer, 2026-10-28; quant-reviewer and trading-safety-reviewer owed before it ships)
+Status: proposed (implementer, 2026-10-28). Quant approved with conditions C1-C5, applied 2026-10-28 (the floor's
+basis below is C4); trading-safety passed.
 
 ## Context
 On 2026-10-27 the exploration arms made 257 fills against a target of 500. `arm_budget` refused 86 candidates, 69 of
@@ -27,9 +28,15 @@ Pre-registered inputs:
   scalp pot gets £168 (from £138)".
 
 ## Decision
-1. **A room floor, not a share floor.** The `arm_budget` room of a strategy arm is now max(share x pot,
-   ARM_ROOM_LOSSES x (this trade's loss at the stop + its round trip)) - today's realised loss - open risk, with
-   ARM_ROOM_LOSSES = 3. It extends the 2026-10-26 first-trade rule from one trade to three losses.
+1. **A room floor, not a share floor.** The `arm_budget` room of a strategy arm is now max(share x pot, floor)
+   minus today's realised loss and open risk, where:
+   - floor = min(ARM_ROOM_LOSSES x (the arm's per-trade cap + the round trip), SHARE_CAP x the pot), and
+     ARM_ROOM_LOSSES = 3;
+   - the cap at SHARE_CAP (0.30) of the pot stops a wide-stop arm from taking a disproportionate slice (quant C4).
+     Example: an icm-demo 1h arm at £30 in the £68 intraday pot gets £20.4, not £93.
+   - The floor rests on the per-trade cap, not on the trade being sent, so it does not depend on the candidate's own
+     stop.
+   - It extends the 2026-10-26 first-trade rule: an arm can now absorb three losses at its cap.
    - Controls keep their fixed share (they are the null, "never allocated by results").
    - Unchanged: the bandit shares and the propensities logged with every candidate and refusal, `SHARE_FLOOR`,
      H-61's `FLOOR_SHARE` and cap, and the `bandit_version`.
@@ -43,17 +50,24 @@ Pre-registered inputs:
      the dynamic per-probe ceiling: the £30 sleeve over 3 slots.
    - Unchanged: `max_open_total` 17, `max_positions` 18, the per-arm £6.50 caps and the daily £220.
 
+3. **The switch and the estimand** (quant C3; prereg-2026-10-27-scalp-volume.md amendment (d) 10.2):
+   - Each engine journals `exploration_room_floor` at start, with the floor's terms. A host's first such row is the
+     switch time, and fills sent before it are flagged pre-floor.
+   - The primary read is rule-only over every admissible candidate. IPW cannot undo a refusal with mu = 0, so the
+     filled subset is not the estimand.
+
 ## Consequences
 - **Volume.** About 50-69 more fills a day on icm-probe (most of the 69 refusals), subject to the pot.
   - With the pot at £168, a 1m arm at £4.47 x 168/138 = £5.44 could still take only two losses.
-  - With the floor it takes three: £7.1 for 1m, £10.5 for 5m.
-  - The pot binds on a bad day: 17 x £7-10.5 + the controls' £76 exceeds £168. That is intended: the pot is the
-    backstop. Prereg 7.1 puts P(bind) at 1.9-3.5% at D1.5.
+  - With the floor at 3 x (£6.50 + about £0.12) = £19.9 (under 0.30 x £168 = £50.4), a scalp arm absorbs about 8
+    one-minute losses or 5 five-minute ones.
+  - The pot binds on a bad day: 17 x £19.9 + the controls' £76 exceeds £168. That is intended: the pot is the
+    backstop, and its total is unchanged. Prereg 7.1 puts P(bind) at 1.9-3.5% at D1.5. The floor moves room between
+    arms; it does not add any.
 - **The bandit's weight is diluted at the bottom.** An arm the bandit ranks low still gets three losses a day. H-61's
   floor already intends that every live arm keeps being sampled. Reads use the logged propensities (share), and a
-  room refusal is a fixed rule like the first-trade rule. The quant reviewer decides whether the IPW estimand note
-  ("trades within the cap") needs a line about the room floor.
+  room refusal is a fixed rule like the first-trade rule. Hence the rule-only primary read (decision 3).
 - **Mirror probes.** With a £10 per-probe ceiling, a 1h mirror probe at about £16.5 at its stop is skipped. 4h
   mirrors already were. The plan's probe volume comes from scheduled probes (unchanged £15).
 - **Rollback.** Config: restore the old values in config/accounts.yaml. Code: ARM_ROOM_LOSSES = 0 restores the
-  share-only room (the first-trade rule stays).
+  share-only room (the first-trade rule stays). A rollback is journalled the same way (the start row says 0).

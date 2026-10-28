@@ -405,3 +405,16 @@ close does.
   no Z1P/Z2P/Z5P/Z8P candidate was decided on the broker's volume. Their read therefore starts at the fix's deploy
   time on each host (taken from the release record). Earlier rows are reported as pre-fix and are not in the primary
   read.
+
+### 10.2 The ADR 0057 room floor: switch time and estimand (condition C3)
+
+- **What changed.** From ADR 0057 on, a strategy arm's daily £ room is at least min(3 x (its per-trade cap + the
+  round trip), 0.30 x its pot). The bandit shares and the logged propensities are unchanged.
+- **Switch time.** Each engine journals `exploration_room_floor` (with `losses` and `share_cap`) when it starts. A
+  host's first such row is the switch. Every fill and candidate before it is flagged pre-floor in each read and
+  reported apart.
+- **Estimand.** A refusal under the floor or the share has mu = 0, and IPW cannot undo it. So the **primary read is
+  rule-only**: net R of the frozen rule over every admissible candidate (filled or refused, labelled by
+  `label_sim_r`), never the filled subset. Fill-based figures (`label_fill_r`, costs, parity) are secondary and say
+  "trades within the room and the cap".
+- Section 4's reading rule is otherwise unchanged. K is unchanged.

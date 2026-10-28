@@ -115,10 +115,12 @@ SUB_15M = ("1m", "5m")
 MAX_NET_LOTS = 0.10                 # ADR 0043 X3: net same-side exposure on the account, lots
 DD_WARN, DD_PAUSE = 0.06, 0.08      # ADR 0043 section 2: drawdown from the mark: warn, pause
 PI_RANDOM = 1.0                     # champion zero: the random branch takes every admissible candidate (mu = 1)
-# ADR 0057: a strategy arm's day holds at least this many of its trade's loss at the stop plus the round trip (17
-# scalp arms in the 55% the controls leave of a £138 pot had £4.47 each: one $3 loss spent the day, live 2026-10-27).
-# A room floor, not a share: the bandit's shares (the logged propensities) are unchanged; the pot, the host budget,
-# the per-trade cap and the RiskGate still bind. Controls keep their fixed share (the null).
+# ADR 0057: a strategy arm's day holds at least this many of its per-trade cap plus the round trip, never more than
+# SHARE_CAP x its pot (quant C4: a wide-stop arm takes no disproportionate slice). 17 scalp arms in the 55% the controls
+# leave of a £138 pot had £4.47 each: one $3 loss spent the day (live 2026-10-27). A room floor, not a share: the
+# bandit's shares (the logged propensities) are unchanged; the pot, the host budget, the per-trade cap and the
+# RiskGate still bind. Controls keep their fixed share (the null). Journalled once at start (`exploration_room_floor`:
+# the switch time of prereg-2026-10-27-scalp-volume.md amendment (d) 10.2).
 ARM_ROOM_LOSSES = 3
 SHARE_FLOOR, SHARE_CAP = 0.05, 0.30  # H-61's bounds on a strategy arm's share (L3 `bounded_shares`), fallback included
 SPEC_PATH = Path(__file__).parents[2] / "config" / "exploration_arms.yaml"   # the frozen ARM-SPEC (hash-checked)
@@ -408,6 +410,8 @@ class Exploration:
             return None
         if eng.cfg.mode != "demo" or not eng.cfg.probe_only:
             raise ValueError("exploration runs on demo probe_only accounts only (plan 2026-10-25)")
+        eng.decisions.append({"ts": time.time(), "agent": None, "action": "exploration_room_floor",
+                              "losses": ARM_ROOM_LOSSES, "share_cap": SHARE_CAP})
         return cls(eng, cfg)
 
 
@@ -1203,10 +1207,17 @@ def _arm_room(share_gbp: float, lost: float, held: float, arm_cap: float, first:
     per-trade cap: a share below one trade's loss (W1A 0.20 x £40 = £8 against ≈ £29 at the stop, live 2026-10-26)
     otherwise refused it on every bar. "First" is by trades, never by P&L: a trade closed flat or in profit nets to no
     loss, and used to make the arm fresh again, trading at its cap on every bar. `floor_gbp` (ADR 0057): a strategy
-    arm's ARM_ROOM_LOSSES x this trade's loss at the stop plus the round trip, so three losses do not spend a day
-    one loss used to. The pot, the host budget and the RiskGate still bind."""
+    arm's ARM_ROOM_LOSSES x (its per-trade cap + the round trip), at most SHARE_CAP x its pot (`_room_floor`). The pot, the host budget and the RiskGate still bind."""
     room = max(share_gbp, floor_gbp) - lost - held
     return max(room, arm_cap) if first else room
+
+def _room_floor(arm: Arm, arm_cap: float, cost: float, pot_gbp: float) -> float:
+    """ADR 0057: a strategy arm's day is at least ARM_ROOM_LOSSES x (its per-trade cap + the round trip), never above
+    SHARE_CAP x its pot; a control's is its fixed share only (0)."""
+    if arm.control_share is not None:
+        return 0.0
+    return min(ARM_ROOM_LOSSES * (arm_cap + cost), SHARE_CAP * pot_gbp)
+
 
 def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd.Timestamp,
           tick: Tick) -> Literal["sent", "refused", "cap"]:
@@ -1290,7 +1301,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
              "pot": pot.gbp - ps.lost_in(ex, arm.style) - held_pot,
              "arm_budget": _arm_room(ps.share.get(arm.arm_id, 0.0) * pot.gbp, ps.lost.get(arm.arm_id, 0.0), held_arm,
                                      arm_cap, first=arm.arm_id not in ps.lost and not ps.count.get(arm.arm_id),
-                                     floor_gbp=ARM_ROOM_LOSSES * (loss + cost) if arm.control_share is None else 0.0)}
+                                     floor_gbp=_room_floor(arm, arm_cap, cost, pot.gbp))}
 
     def binding(at_stop: float) -> str | None:
         return next((k for k, room in rooms.items() if at_stop > room + 1e-9), None)
