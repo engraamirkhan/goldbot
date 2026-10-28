@@ -199,7 +199,11 @@ accounts:
     # ADR 0043 (CFO 2026-10-25; PD integration ruling): the £198 probe budget is split into sleeves; the cost probes keep
     # P0 scheduled £15 (scheduled.budget_share 0.25 of it) + M mirrors £45 = £60 = 0.2727 x 220 (was 0.9 = £198); 3 mirror
     # slots (was 4). max_open x max_loss no longer fits the sleeve: budget_refusal binds the count at run time
-    cost_probe: { enabled: true, budget_share: 0.2727, max_open: 3, max_loss: 45.0, scheduled: { enabled: true, budget_share: 0.25 } }   # ADR 0037 am. 4 + 5 (owner-approved 2026-10-20: scheduled M1 probes)
+    # ADR 0057 (H-81 amendment (a) 7.1, volume-500 plan 2.3 B: "the probe sleeve keeps £30 ..., the scalp pot gets
+    # £168 (from £138)"): 0.2727 -> 0.1363 (£30); the scheduled probes keep their £15 (0.25 -> 0.5 of the sleeve);
+    # max_loss 45 -> 10 = the sleeve / 3 slots, the dynamic ceiling (a 1h mirror probe at ~£16.5 is now skipped).
+    # Rollback: 0.2727 / 45.0 / 0.25 here and exploration 0.6273 / £138 / 12 below, restart.
+    cost_probe: { enabled: true, budget_share: 0.1363, max_open: 3, max_loss: 10.0, scheduled: { enabled: true, budget_share: 0.5 } }   # ADR 0037 am. 4 + 5 (owner-approved 2026-10-20: scheduled M1 probes)
     shadow_host: true         # counts only once enabled: then icm-demo must drop its own flag
     # never a real trade: no live agents, and the engine refuses any entry that is not a cost probe (fail closed)
     probe_only: true
@@ -226,11 +230,13 @@ accounts:
     # ADR 0043 amendment (PD 2026-10-26, per-style hosts): the intraday and swing arms moved to icm-demo; the scalp pot
     # takes their freed £88 (£50 -> £138 = the same 0.6273 x 220), cost probes unchanged (£60). max_open_total 18 -> 17:
     # one host slot is always left for the scheduled probe (trading-safety nit, 2026-10-26).
+    # ADR 0057 (H-81 amendment (a) 7.1): the scalp pot is re-split to £168 / 14 (0.7637 x 220; with the probes' 0.1363
+    # the day's 0.9 = £198 is unchanged), inside the unchanged max_open_total 17 and max_positions 18.
     exploration:
       enabled: true
-      budget_share: 0.6273
+      budget_share: 0.7637
       max_open_total: 17
-      pots: { scalp: { gbp: 138, max_open: 12 } }   # CFO 2026-10-26: 12 + mirrors 3 + scheduled 1 = 16 of 18; back to 8 if -6% before week 3
+      pots: { scalp: { gbp: 168, max_open: 14 } }   # 7.1: 14 + mirrors 3 + scheduled 1 inside 18 (max_open_total 17 binds); back to 8 if -6% before week 3
       arms:
         S0: { style: scalp, max_loss: 6.5, control_share: 0.25 }
         S0R: { style: scalp, max_loss: 6.5, control_share: 0.05 }
@@ -254,8 +260,8 @@ accounts:
         # H-81 scalp volume (prereg-2026-10-27-scalp-volume.md section 1 and amendment (a)): icm-probe's strata of
         # Z1/Z2/Z5/Z8 and Z7P/Z4P at ICM's fixed stops ($3.00 1m = £2.26, $4.50 5m = £3.38, inside the £6.50 scalp
         # cap); their control is the borrowed S0 (fills inside W that pass the spread gate only, amendment (b) 2).
-        # Inside the unchanged £138 / 12 scalp pot: the requested re-split to £168 / 14 (sections 3.4, 7.1; ADR 0049
-        # D1) is not applied here. Rollback: drop these six lines, restart.
+        # In the re-split £168 / 14 scalp pot (sections 3.4, 7.1; ADR 0049 D1; ADR 0057). Rollback: drop these six
+        # lines, restart.
         Z1P: { style: scalp, max_loss: 6.5 }
         Z2P: { style: scalp, max_loss: 6.5 }
         Z5P: { style: scalp, max_loss: 6.5 }

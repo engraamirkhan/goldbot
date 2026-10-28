@@ -456,11 +456,13 @@ def test_the_vantage_s_twins_are_frozen_blocked_on_their_cost_gate_with_their_or
                                                                spec[orig].params, spec[orig].max_open)
 
 
-def test_icm_probe_registers_its_six_strata_in_the_unchanged_scalp_pot_at_the_scalp_cap(accounts) -> None:
+def test_icm_probe_registers_its_six_strata_in_the_re_split_scalp_pot_at_the_scalp_cap(accounts) -> None:
+    """Amendment (a) 7.1: "icm-probe's scalp pot `max_open` goes 12 -> 14, inside the unchanged `max_open_total` 17
+    ... The pot is re-split to £168 (section 3.4); the £198 and `budget_share` are unchanged" (ADR 0057)."""
     ex = accounts["icm-probe"].exploration
     assert {a for a in ex.arms if a in ROWS} == PROBE
     assert {(ex.arms[a].style, ex.arms[a].max_loss, ex.arms[a].control_share) for a in PROBE} == {("scalp", 6.5, None)}
-    assert (ex.pots["scalp"].gbp, ex.pots["scalp"].max_open, ex.max_open_total) == (138, 12, 17)
+    assert (ex.pots["scalp"].gbp, ex.pots["scalp"].max_open, ex.max_open_total) == (168, 14, 17)
     from goldbot.engine.exploration import config_for
     cfg = config_for(accounts["icm-probe"])
     assert cfg is not None and PROBE <= {a.arm_id for a in cfg.arms} and not cfg.dropped
