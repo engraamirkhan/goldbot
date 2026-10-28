@@ -74,6 +74,7 @@ def test_detail_parses_to_an_idea_with_utc_times_direction_and_snapshot():
     idea, ups = ti.idea_from_detail(json.loads(json.dumps({k: v for k, v in d.items() if not k.startswith("_")})))
     assert idea.idea_id == 10_000_001 and idea.uuid == "u0000001" and idea.author == "SynthAuthor"
     assert idea.direction == "short" and idea.tf == "1D" and idea.interval == "1D"
+    assert idea.symbol == "FX:XAUUSD" and idea.exchange == "FX"
     assert idea.published_utc == pd.Timestamp(1_793_042_561, unit="s", tz="UTC")
     assert idea.updated_utc == pd.Timestamp(1_793_050_000, unit="s", tz="UTC")
     assert idea.snapshot_url and idea.snapshot_url.endswith("_big.png")

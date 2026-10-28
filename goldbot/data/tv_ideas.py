@@ -239,6 +239,15 @@ def _direction(code: Any) -> Direction:
         return "unknown"
 
 
+def _symbol_of(sym: Mapping[str, Any]) -> str:
+    """EXCHANGE:TICKER. The listing has `full_name`; the detail has `resolved_symbol` / `pro_symbol` (measured)."""
+    for k in ("full_name", "name", "pro_symbol", "resolved_symbol"):
+        if sym.get(k):
+            return str(sym[k])
+    ex, tk = sym.get("exchange") or "", sym.get("short_name") or ""
+    return f"{ex}:{tk}" if ex and tk else str(tk)
+
+
 def idea_from_detail(det: Mapping[str, Any]) -> tuple[Idea, list[IdeaUpdate]]:
     """The detail endpoint's idea and its updates."""
     sym = det.get("symbol") or {}
@@ -249,7 +258,7 @@ def idea_from_detail(det: Mapping[str, Any]) -> tuple[Idea, list[IdeaUpdate]]:
     desc = str(det.get("description") or "")
     idea = Idea(
         idea_id=int(det["id"]), uuid=str(det["uuid"]), author=str((det.get("user") or {}).get("username") or ""),
-        symbol=str(sym.get("full_name") or sym.get("name") or ""), exchange=str(sym.get("exchange") or ""),
+        symbol=_symbol_of(sym), exchange=str(sym.get("exchange") or ""),
         interval=interval, tf=tf_of(interval), direction=_direction(det.get("direction", sym.get("direction"))),
         title=str(det.get("name") or ""), description=desc, is_education=bool(det.get("is_education")),
         is_video=bool(det.get("video")), published_utc=published,

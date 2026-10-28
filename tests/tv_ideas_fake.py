@@ -36,8 +36,9 @@ def make_idea(i: int, *, author: str = "SynthAuthor", exchange: str = "FX", tick
         "description": description if description is not None else f"Synthetic text {i}.",
         "created_timestamp": created, "last_updated_timestamp": max((u["ts"] for u in ups), default=None),
         "chart_url": f"/chart/{ticker}/{uuid}-synthetic-idea-{i}/", "direction": direction, "interval": interval,
-        "symbol": {"name": f"{exchange}:{ticker}", "full_name": f"{exchange}:{ticker}", "short_name": ticker,
-                   "exchange": exchange, "interval": interval, "direction": direction},
+        # the detail's symbol has no `name`/`full_name` (measured: resolved_symbol, pro_symbol, exchange, short_name)
+        "symbol": {"resolved_symbol": f"{exchange}:{ticker}", "pro_symbol": f"{exchange}:{ticker}",
+                   "short_name": ticker, "exchange": exchange},
         "user": {"id": 1, "username": author},
         "image": {"big": f"https://s3.example.invalid/h/{uuid}_big.png"},
         "is_education": is_education, "video": {"id": 1} if is_video else None,
@@ -59,7 +60,10 @@ def listing_item(d: Mapping[str, Any]) -> dict[str, Any]:
         "date_timestamp": int(d["created_timestamp"]),
         "updated_date_timestamp": int(d["last_updated_timestamp"]) if d["last_updated_timestamp"] else None,
         "chart_url": "https://www.tradingview.com" + d["chart_url"], "is_video": d["video"] is not None,
-        "is_education": d["is_education"], "symbol": dict(d["symbol"]), "user": dict(d["user"]),
+        "is_education": d["is_education"], "user": dict(d["user"]),
+        "symbol": {"name": d["symbol"]["pro_symbol"], "full_name": d["symbol"]["pro_symbol"],
+                   "short_name": d["symbol"]["short_name"], "exchange": d["symbol"]["exchange"],
+                   "interval": d["interval"], "direction": d["direction"]},
         "image": dict(d["image"]), "likes_count": d["_likes"],
     }
 
