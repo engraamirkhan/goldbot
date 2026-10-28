@@ -13,6 +13,8 @@ for the tests, and `search_specs`, the loop that evaluates specs against any ten
 (spec, ledger, outcomes, evaluate, primitives) come in through `contracts` interfaces."""
 from __future__ import annotations
 
+import json
+import zlib
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 
@@ -24,12 +26,13 @@ from goldbot.research.autodisc.contracts import (
     BoolArr,
     EvalResult,
     IntArr,
-    Ledger,
     MaskProvider,
     OutcomeTensor,
-    SpecLike,
+    exit_key,
     stub_evaluate,
 )
+from goldbot.research.autodisc.ledger import SearchLedger
+from goldbot.research.autodisc.spec import Predicate, StrategySpec, canonical_json, spec_hash
 
 Evaluate = Callable[[OutcomeTensor, BoolArr, IntArr, int, int], EvalResult]
 NULL_REPS = 20
@@ -84,32 +87,37 @@ def is_survivor(fitness: float, null: NullDistribution) -> bool:
 
 # ---------------------------------------------------------------- search over specs
 
-def exit_index(spec: SpecLike) -> int:
-    return EXIT_MENU.index(spec.exit_template)
+def exit_index(spec: StrategySpec) -> int:
+    return EXIT_MENU.index(exit_key(spec.exit))        # a time-exit spec is outside the 6-exit menu: ValueError
 
 
 class MaskCache:
-    """Entry masks per spec, cached by (family, timeframe) and (filter, timeframe)."""
+    """Entry masks per spec, cached by (family, timeframe) and (filter, timeframe). G1 specs name their family in
+    `spec.family`; the provider resolves it to the family's entry bars and side."""
 
     def __init__(self, provider: MaskProvider) -> None:
         self.p = provider
         self._fam: dict[tuple[str, str], tuple[BoolArr, IntArr]] = {}
         self._flt: dict[tuple[str, str], BoolArr] = {}
 
-    def entries(self, spec: SpecLike) -> tuple[BoolArr, IntArr]:
-        key = (spec.entry.name, spec.timeframe)
+    def entries(self, spec: StrategySpec) -> tuple[BoolArr, IntArr]:
+        if spec.family is None:
+            raise ValueError("search_specs: only family-based (G1) specs are resolved by this cache")
+        key = (spec.family, spec.timeframe)
         if key not in self._fam:
             self._fam[key] = self.p.family_entries(*key)
         mask, side = self._fam[key]
         if spec.filter is None:
             return mask, side
-        fk = (spec.filter.canonical(), spec.timeframe)
+        fk = (canonical_json(spec.model_copy(update={"entry": spec.filter, "filter": None,
+                                                     "side_rule": "long", "side_primitive": None})),
+              spec.timeframe)
         if fk not in self._flt:
-            self._flt[fk] = self.p.leaf_mask(spec.filter, spec.timeframe)
+            self._flt[fk] = self.p.predicate_mask(spec.filter, spec.timeframe)
         return mask & self._flt[fk], side
 
 
-def search_specs(t: OutcomeTensor, specs: Sequence[SpecLike], cache: MaskCache,
+def search_specs(t: OutcomeTensor, specs: Sequence[StrategySpec], cache: MaskCache,
                  evaluate: Evaluate | None = None, min_events: int = 300) -> list[EvalResult]:
     ev = evaluate or stub_evaluate
     out = []
@@ -139,23 +147,41 @@ class FunnelResult:
     real_best: float = float("-inf")
 
 
-def run_funnel(t: OutcomeTensor, specs: Sequence[SpecLike], provider: MaskProvider, ledger: Ledger,
+def _num(x: float) -> float | None:
+    return x if np.isfinite(x) else None
+
+
+def run_funnel(t: OutcomeTensor, specs: Sequence[StrategySpec], provider: MaskProvider, ledger: SearchLedger,
                generator: str, version: str, evaluate: Evaluate | None = None, reps: int = NULL_REPS,
                seed: int = 0, min_events: int = 300) -> FunnelResult:
-    """Ledger row first for every spec (a duplicate hash is evaluated once and adds nothing to K), then the real
-    search, then the same search on `reps` null replications; survivors beat the null's 95th percentile of
-    best-of-search, have positive net mean R at 1.5x cost, and pass the event floor."""
-    fresh: list[SpecLike] = []
+    """Ledger row first for every spec (`log_spec`; a hash already logged is not evaluated again and adds nothing to
+    K), `require_logged` before its evaluation, then the real search, then the same search on `reps` null
+    replications (specs logged with null=True: K_null, apart from K_search). Survivors beat the null's 95th
+    percentile of best-of-search, have positive net mean R at 1.5x cost, and pass the event floor."""
+    fresh: list[StrategySpec] = []
     for s in specs:
-        if ledger.append(s.spec_hash(), s.canonical(), generator, version, (s.entry.name,)):
+        h = spec_hash(s)
+        if not ledger.is_logged(h):
+            ledger.log_spec(s, generator, version, parents=(s.family,) if s.family else ())
             fresh.append(s)
     cache = MaskCache(provider)
+    for s in fresh:
+        ledger.require_logged(spec_hash(s))
     real = search_specs(t, fresh, cache, evaluate, min_events)
-    null = run_null(t, lambda nt: best_fitness(search_specs(nt, fresh, cache, evaluate, min_events)), reps, seed,
-                    len(fresh))
+    for s, r in zip(fresh, real, strict=True):
+        ledger.record_result(spec_hash(s), {"n_events": r.n_events, "mean_r": r.mean_r, "fitness": _num(r.fitness),
+                                            "stress_mean_r": r.stress_mean_r, "ok": r.ok})
+    per_rep = [search_specs(null_tensor(t, seed * 1_000_003 + i + 1), fresh, cache, evaluate, min_events)
+               for i in range(reps)]
+    for j, s in enumerate(fresh):
+        h = spec_hash(s)
+        ledger.log_spec(s, generator, version, parents=(s.family,) if s.family else (), null=True)
+        ledger.record_result(h, {"null_fitness": [_num(per_rep[i][j].fitness) if per_rep[i][j].ok else None
+                                                  for i in range(reps)]}, null=True)
+    null = NullDistribution(tuple(best_fitness(rep) for rep in per_rep), ledger.k_null())
     thr = max(null.threshold(), 0.0)
     beat = [(s, r) for s, r in zip(fresh, real, strict=True) if r.ok and r.fitness > thr]
-    kept = [s.spec_hash() for s, r in beat if r.stress_mean_r > 0]
+    kept = [spec_hash(s) for s, r in beat if r.stress_mean_r > 0]
     rb = best_fitness(real)
     return FunnelResult(ledger.k_search(), null.k_null, len(fresh), sum(r.ok for r in real), len(beat), len(kept),
                         thr, null.percentile_of(rb), kept, rb)
@@ -187,3 +213,22 @@ def inject_edge(t: OutcomeTensor, mask: BoolArr, side: IntArr, exit_idx: int | N
     else:
         net[idx, side[idx], exit_idx] += edge_r
     return replace(t, net_r=net)
+
+
+class SyntheticProvider:
+    """STAND-IN for `autodisc.primitives` on synthetic data: every family's entries and every filter's mask are
+    seeded random draws, independent of the outcomes (so any survivor on a noise tensor is a false discovery)."""
+
+    def __init__(self, n_bars: int, seed: int = 0, density: float = 0.25) -> None:
+        self.n, self.seed, self.density = n_bars, seed, density
+
+    def _rng(self, *key: str) -> np.random.Generator:
+        return np.random.default_rng([self.seed, zlib.crc32("|".join(key).encode())])
+
+    def family_entries(self, family: str, timeframe: str) -> tuple[BoolArr, IntArr]:
+        rng = self._rng("fam", family, timeframe)
+        return rng.random(self.n) < self.density, rng.integers(0, 2, self.n).astype(np.int64)
+
+    def predicate_mask(self, pred: Predicate, timeframe: str) -> BoolArr:
+        key = json.dumps(pred.model_dump(mode="json"), sort_keys=True)
+        return self._rng("flt", key, timeframe).random(self.n) < 0.5

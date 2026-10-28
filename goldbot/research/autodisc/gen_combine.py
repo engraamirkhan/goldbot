@@ -7,12 +7,15 @@ Deterministic order, deduplicated by canonical hash (two spellings of one rule s
 The filter catalogue is quantised (terciles, session windows, signs), so the space is countable. Each leaf wraps a
 point-in-time feature that `autodisc.primitives` resolves; no new feature maths lives here.
 
-Spec type: `contracts.StubSpec` until `autodisc.spec.StrategySpec` lands (REPLACE AT INTEGRATION)."""
+A G1 spec re-expresses a family as `entry = Leaf(structure, "family_rule", {rule: <name>})`, `side_rule = "with"` that
+same leaf, and `family = <name>` (the label novelty reads). ASSUMPTION: `autodisc.primitives` resolves the
+`structure/family_rule` leaf to the family's own entry and direction (the evaluator's parity test needs it anyway)."""
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 
-from goldbot.research.autodisc.contracts import EXIT_MENU, Leaf, StubSpec
+from goldbot.research.autodisc.contracts import EXIT_MENU, exit_template
+from goldbot.research.autodisc.spec import Leaf, StrategySpec, spec_hash
 
 GENERATOR = "G1"
 VERSION = "1"
@@ -22,7 +25,7 @@ NOT_COMBINABLE = frozenset({"random_bracket", "specialist", "blocked"})
 
 
 def _leaves(kind: str, names: Sequence[str]) -> tuple[Leaf, ...]:
-    return tuple(Leaf(kind=kind, name=n) for n in names)
+    return tuple(Leaf(kind=kind, name=n) for n in names)  # type: ignore[arg-type]
 
 
 # Quantised filter catalogue. Names are the primitives' vocabulary (design section 2), not new feature maths.
@@ -32,7 +35,7 @@ FILTERS: tuple[Leaf, ...] = (
                         "wavelet_energy_hi", "day_type_trend", "day_type_range")),
     *_leaves("time", ("asia", "london", "ny", "london_ny_overlap", "mon", "tue", "wed", "thu", "fri",
                       "month_turn", "pre_tier1_release", "post_tier1_release")),
-    *_leaves("opportunity", ("score_t1", "score_t2", "score_t3", "score_top_quartile")),
+    *_leaves("regime", ("opportunity_t1", "opportunity_t2", "opportunity_t3", "opportunity_top_quartile")),
 )
 MACRO_FILTERS: tuple[Leaf, ...] = _leaves("macro", ("dxy_chg_up", "dxy_chg_down", "real_yield_up", "real_yield_down",
                                                     "cot_bucket_lo", "cot_bucket_mid", "cot_bucket_hi"))
@@ -50,7 +53,7 @@ def filters_for(timeframe: str) -> tuple[Leaf, ...]:
 
 
 def generate(families: Sequence[str] | None = None, timeframes: Sequence[str] = DEFAULT_TIMEFRAMES,
-             exits: Sequence[str] = EXIT_MENU, filters: bool = True) -> Iterator[StubSpec]:
+             exits: Sequence[str] = EXIT_MENU, filters: bool = True) -> Iterator[StrategySpec]:
     """Every (family, timeframe, filter or none, exit), once each, in a fixed order. `filters=False` yields only
     the unfiltered baselines (each family's own entry on each exit)."""
     seen: set[str] = set()
@@ -59,17 +62,18 @@ def generate(families: Sequence[str] | None = None, timeframes: Sequence[str] = 
             options: tuple[Leaf | None, ...] = (None, *filters_for(tf)) if filters else (None,)
             for flt in options:
                 for ex in exits:
-                    s = StubSpec(timeframe=tf, entry=Leaf(kind="family", name=fam), filter=flt, exit_template=ex)
-                    h = s.spec_hash()
+                    s = family_spec(fam, tf, flt, ex)
+                    h = spec_hash(s)
                     if h not in seen:
                         seen.add(h)
                         yield s
 
 
+def family_spec(family: str, timeframe: str, flt: Leaf | None, exit_key_: str) -> StrategySpec:
+    entry = Leaf(kind="structure", name="family_rule", params={"rule": family})
+    return StrategySpec(timeframe=timeframe, side_rule="with", side_primitive=entry, entry=entry,  # type: ignore[arg-type]
+                        filter=flt, exit=exit_template(exit_key_), family=family)
+
+
 def grid_size(n_families: int, timeframes: Sequence[str] = DEFAULT_TIMEFRAMES, n_exits: int = len(EXIT_MENU)) -> int:
     return n_families * n_exits * sum(1 + len(filters_for(tf)) for tf in timeframes)
-
-
-def parents_of(spec: StubSpec) -> tuple[str, ...]:
-    """Ledger parent labels of a G1 spec: the family it conditions."""
-    return (spec.entry.name,)
