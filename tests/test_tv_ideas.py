@@ -63,6 +63,9 @@ def test_parse_levels_ranges_trailing_keywords_and_support_resistance():
     assert lv.target == [1970.0, 1975.0] and lv.entry == []
     assert lv.support == [2020.0, 1698.0, 1695.0] and lv.resistance == [2040.0, 2045.0]
     assert not ti.parse_levels("Support 2020 and resistance 2040").any       # S/R alone is not entry/stop/target
+    lv = ti.parse_levels("Price trades between 4843 Goldturn support and 5412 Goldturn resistance, the 2051 "
+                         "Bullish target")
+    assert (lv.support, lv.resistance, lv.target) == ([4843.0], [5412.0], [2051.0])
 
 
 def test_detail_parses_to_an_idea_with_utc_times_direction_and_snapshot():

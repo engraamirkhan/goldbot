@@ -142,7 +142,8 @@ _BREAK = re.compile(r"\n|[!?;]|\.(?=\s|$)")
 # a move size, not a price: `100-140pips`, `2%`, `50 points`
 _NOT_PRICE = re.compile(r"\$?\d[\d,.]*(?:\s*(?:-|–|to)\s*\d[\d,.]*)?\s*(?:%|pips?\b|points?\b|pts\b)", re.I)
 _MAX_GAP = 30                          # characters between a keyword (or its last number) and the next number
-_TRAIL = 2                             # `1970-75 target`: a keyword this close after a number names it ...
+# `1970-75 target`, `4843 Goldturn support`: a keyword right after a number, at most one word between, names it ...
+_TRAIL = re.compile(r"\s{0,2}(?:[A-Za-z]{1,12}\s{1,2})?")
 _GLUED = 3                             # ... unless the number sits right after its own keyword (`Entry: 4035`)
 
 
@@ -175,7 +176,8 @@ def parse_levels(text: str) -> Levels:
             if before and before[-1].end() > pos:          # a new keyword since the last number
                 last_kind, pos = before[-1].lastgroup, before[-1].end()
             gap = n.start() - pos if before else _MAX_GAP + 1
-            trailing = next((k for k in keys if 0 <= k.start() - n.end() <= _TRAIL), None)
+            trailing = next((k for k in keys if k.start() >= n.end()
+                             and _TRAIL.fullmatch(seg[n.end():k.start()])), None)
             if gap <= _GLUED or (trailing is None and gap <= _MAX_GAP):
                 kind = last_kind                           # `Entry: 4035`, `TP 2370 / 2385`
             elif trailing is not None:
