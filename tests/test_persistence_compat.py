@@ -526,6 +526,8 @@ def test_every_persisted_record_model_has_a_compat_case():
 # Everything else must use load_record / load_record_json. Keep each entry's reason; remove it when its call goes away.
 STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
     ("goldbot/config.py", "load_settings", "Settings"): "strict: Settings (a misspelt key must fail)",
+    ("goldbot/research/autodisc/ledger.py", "SearchLedger.get_spec", "StrategySpec"):
+        "strict: hash-chained spec; a field dropped on read would change spec_hash and break the ledger chain (ADR 0058)",
     ("goldbot/research/arms.py", "load_arms", "Arm"):
         "strict: frozen arm spec, checked-in config with a sha256 per arm (an edited or misspelt arm must fail)",
     ("goldbot/features/smc_replica.py", "state_from_json", "ReplicaState"):
