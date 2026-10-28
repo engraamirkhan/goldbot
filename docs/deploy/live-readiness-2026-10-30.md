@@ -102,14 +102,14 @@ item moves the date to 11-02 without further discussion.
 
 GO only if **all** hold:
 1. The owner chose B or C and signed the waiver ADR; the CFO's pilot budget and the research director's family note are on #34.
-2. BACKLOG 135 deployed on every bridge, its 5 s close test passed, 4 h of demo trading on it without a tick error.
+2. BACKLOG 135 (bridge v7) on the canary box (icm-probe) and the live box; icm-demo and vantage-demo follow on Friday. Live unlock needs a passed v7 canary verdict (24 h or more, through London and NY) on a demo box running the live box's commit. The 18:00 review may pass on an interim read of 12 h or more: C1-C10 of docs/deploy/bridge-v7-rollout.md all pass, and C8's RSS trend scaled to 24 h stays under 20 MB. The L10 flatten-with-an-order-in-flight drill passes on icm-probe on v7 (under 5 s). The live box runs exactly the canary's commit with the lane off, with `bridge_compat:icm-live` ok (live) and 4 h or more of clean health. The owner's unlock waits for the 24 h verdict (Fri 03:00 UTC). A canary fail at any point means NO-GO and the next weekday (trading-safety decision, 2026-10-28).
 3. Pilot mechanism (L3) and live config (L4) merged on green CI; the server clock measured on the live server.
-4. The live account is funded at no less than £750 (recommended £1,000), GBP, read by the terminal; login in the keyring.
+4. The live account is funded at about £50 (ADR 0055 pilot; the pilot stops at £25), GBP, read by the terminal; login in the keyring.
 5. Kill switch, chaos and restore drills passed and recorded in the last 48 h.
 6. A real-money approval card seen on the owner's phone; alerts for icm-live reach Telegram.
 7. Health green for every account (reconcile FAILs on demo cleared or explained) and no open HIGH/CRITICAL review.
 
-NO-GO on any one of: a failed drill, 135 not deployed, the account under £750, an unsigned waiver, any secret or
+NO-GO on any one of: a failed drill, 135 not deployed, the account under £25 (ADR 0055), an unsigned waiver, any secret or
 account id found in the repo, or the owner unreachable for confirmations on the day. A NO-GO moves the first order to
 the next weekday 08:00 UTC that passes, reported on #34 the same evening.
 
