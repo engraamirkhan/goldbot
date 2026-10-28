@@ -301,6 +301,11 @@
    "no TradingView pull yet (opt-in)"
   ],
   [
+   "tv_ideas",
+   "ok",
+   "no TradingView ideas poll yet"
+  ],
+  [
    "news",
    "ok",
    "1 feeds ok, last poll 0 s ago"
@@ -778,6 +783,11 @@
    "tv_pull",
    "ok",
    "no TradingView pull yet (opt-in)"
+  ],
+  [
+   "tv_ideas",
+   "ok",
+   "no TradingView ideas poll yet"
   ],
   [
    "news",
