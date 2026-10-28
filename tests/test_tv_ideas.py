@@ -312,3 +312,23 @@ def test_reparse_recomputes_derived_levels_and_never_touches_the_text(tmp_path: 
     r = _rows(db, "SELECT * FROM tv_ideas")[0]
     assert r["has_entry"] == 1 and json.loads(r["levels"])["entry"] == [2000.0]
     assert (r["description"], r["available_utc"]) == (before["description"], before["available_utc"])
+
+
+def test_backfill_gives_up_on_ideas_the_listing_counts_but_never_serves(tmp_path: Path):
+    """TradingView's count can include hidden or removed ideas: the slicing stops after a word round finds nothing
+    new, reports the gap, and still reads every detail it has."""
+    api = FakeIdeasApi(_catalogue(n_fx=1300, n_oanda=0, n_tvc=0))
+    real = api._listing
+
+    def counts_a_ghost(q: dict[str, str]) -> dict[str, Any]:
+        out = real(q)
+        if q.get("sort") == "recent_extended" and not ({"exchange", "q", "type", "is_video", "symbol"} & set(q)):
+            out["count"] += 1
+        return out
+
+    api._listing = counts_a_ghost  # type: ignore[method-assign]
+    db = _db(tmp_path)
+    rep = ti.backfill(_cfg(), db, _client(api), authors=["SynthAuthor"], now=lambda: T0)
+    lst = rep.listing["SynthAuthor"]
+    assert (lst.total, lst.collected) == (1301, 1300) and lst.requests < 200
+    assert rep.ok and "incomplete" in rep.reason and rep.details_fetched == 1300
