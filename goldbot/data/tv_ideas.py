@@ -656,7 +656,7 @@ def _vocabulary(items: Iterable[Mapping[str, Any]], tried: set[str], limit: int 
 
 
 def backfill_listing(client: IdeasClient, db: IdeasDb, author: str, now: Callable[[], pd.Timestamp],
-                     rep: SliceReport, *, max_requests: int = 1500) -> None:
+                     rep: SliceReport, *, max_requests: int = 600) -> None:
     """Read the author's whole listing although one query serves only 1000: every slice whose count fits is read to
     the end; a bigger one is read to its cap and split further (sort, exchange, type, video, then words), until the
     union reaches the author's count or nothing is left to try. Each item goes to tv_idea_listing at first sighting."""
@@ -721,9 +721,11 @@ def backfill_listing(client: IdeasClient, db: IdeasDb, author: str, now: Callabl
             if count > LISTING_CAP and f.get("sort") in (None, "recent_extended"):
                 big.append(f)
                 queue.extend(refinements(f, got, top=False))
-        # a word round that found nothing new ends it: the listing's count can include ideas it never serves
-        # (hidden or removed), and chasing them costs hundreds of requests
-        if done() or rounds >= 3 or rep.requests >= max_requests or (rounds and len(collected) == at_start):
+        # a word round that adds less than 0.5% of the catalogue ends it: the listing's count can include ideas it
+        # never serves (hidden or removed), and chasing the last few costs hundreds of requests (measured 2026-10-28:
+        # Goldviewfx 2220 of 2222 after an hour)
+        found = len(collected) - at_start
+        if done() or rounds >= 3 or rep.requests >= max_requests or (rounds and found < max(3, 0.005 * rep.total)):
             break
         rounds += 1
         # words from what has been read so far: a `q` slice of a big slice usually fits under the cap
@@ -735,7 +737,7 @@ def backfill_listing(client: IdeasClient, db: IdeasDb, author: str, now: Callabl
             break
     # the newest 1000 of every big slice not already read to its cap
     for f in big:
-        if done():
+        if done() or rep.requests >= max_requests:
             break
         key = tuple(sorted({**f, "_full": "1"}.items()))
         if key in tried:
