@@ -40,7 +40,7 @@ export const tradeRow = (o: Partial<TradeRow> = {}): TradeRow => ({
 
 const totals = (o: Partial<TradesPage["totals"]> = {}): TradesPage["totals"] => ({
   n: 412, n_open: 3, n_closed: 409, currency: "GBP", mixed_currencies: false, net_pnl: 18.4, costs: 22.1, open_pnl: 3.9,
-  open_risk: 8.5, net_unknown: 0, net_partial: null, ...o,
+  open_risk: 8.5, net_unknown: 0, net_partial: null, n_probes: 0, ...o,
 });
 
 export const tradesPage = (o: Partial<TradesPage> = {}): TradesPage => ({

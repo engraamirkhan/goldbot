@@ -83,10 +83,10 @@ def test_icm_demo_ships_as_the_intraday_swing_and_h81_scalp_learning_host(accs):
 def test_icm_probe_ships_the_scalp_arms_and_the_cost_probes(accs):
     acc = accs["icm-probe"]
     ex = acc.exploration
-    assert acc.shadow_host and acc.cost_probe.enabled and acc.cost_probe.budget_share * 220 == pytest.approx(60, abs=0.05)
+    assert acc.shadow_host and acc.cost_probe.enabled and acc.cost_probe.budget_share * 220 == pytest.approx(30, abs=0.05)
     assert ex.enabled and set(ex.arms) == SCALP and set(ex.pots) == {"scalp"}
-    assert ex.pots["scalp"].gbp == 138 and ex.max_open_total == 17       # one slot of 18 kept for the scheduled probe
-    assert ex.budget_share * 220 == pytest.approx(138, abs=0.05)
+    assert ex.pots["scalp"].gbp == 168 and ex.max_open_total == 17       # one slot of 18 kept for the scheduled probe
+    assert ex.budget_share * 220 == pytest.approx(168, abs=0.05)
 
 
 def test_no_arm_runs_on_two_enabled_accounts(accs):

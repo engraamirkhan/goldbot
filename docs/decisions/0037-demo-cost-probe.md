@@ -183,3 +183,31 @@ non-learning entry refused (`probe_only_refused`), out of the supervisor's combi
 
 Consequences: icm-demo trades no strategy while it is a learning host; the phase gate's paper evidence pauses until
 the re-role back (RUNBOOK "icm-demo learning host"). Tests: tests/test_demo_learning_host.py.
+
+## Amendment 7 (2026-10-28, quant condition C5 on ADR 0057): mirror probes off on icm-probe; the cost evidence is scheduled only
+
+Context: ADR 0057 re-splits icm-probe's £198 as pre-registered (H-81 amendment (a) 7.1). The probe sleeve falls
+from £60 to £30. `max_loss` falls from £45 to £10: the load check requires max_loss <= the sleeve, and the dynamic
+per-probe ceiling is the sleeve over its 3 slots.
+
+Decision and what it means:
+- **Mirror probes are skipped.** A 1h mirror probe loses about £16.5 at its stop and a 4h one about £38. Both are
+  above £10, so both are skipped (journalled, never clamped, as before); 4h mirrors were already skipped under the
+  £20 ceiling.
+- **Cost evidence now comes only from the scheduled M1 probes** (amendment 5; they keep £15, half the sleeve).
+- **That evidence is biased low.** Scheduled probes trade at fixed quiet slots, at the minimum lot and a 30 s hold.
+  Their round trip (about $0.156) understates the cost of a signal-time entry in fast markets, against $0.23 in the
+  conservative case (prereg-2026-10-27-scalp-volume.md section 0).
+- **The 1h+ hurdles use the conservative cost.** No code path takes a 1h+ hurdle from probe evidence:
+  - the research labels and arm reads charge the frozen `config/arm_costs.yaml` round trip ($0.23), or, for the
+    H-81 cost stop, each arm's own fills (95% upper bound at >= 30 fills, else $0.23 + $0.70 per stop exit);
+  - the engine's hurdle (`Engine._cost_atr`) reads the nightly cost table. There, scheduled-probe slippage can only
+    raise a session's cell above the $0.15 prior, never lower it (`costs.apply_probe_slippage`). Mirror probes never
+    fed it (`probe_entry_fills` takes `cost_measurement` rows only).
+
+  No code change was needed. A future path that prices a 1h+ hurdle from probe rows must take the conservative
+  figure.
+- **Reversal:** restore the £60 sleeve (ADR 0057 rollback). Mirror probes then resume at their own stops.
+
+Tests: tests/test_probe_account.py::test_the_probe_account_has_its_own_day_and_its_probes_fit_inside_it (the £10
+ceiling and the scheduled £15).

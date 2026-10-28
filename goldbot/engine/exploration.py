@@ -10,7 +10,9 @@ The plan's rules, as built here:
 * When: arms on 15m and above decide at the engine's bar closes (`step`), after the engine's own decisions, so the
   live agents' decisions are the same with exploration on. Arms on 1m and 5m decide on the engine's pass (`on_pass`)
   "reading only already-complete minutes (bars_1m + ticks_to_1m(eng.ticks) at close + 1.5 s)": a minute joins once
-  its close is GRACE_S behind the clock. Nothing here writes `bars_1m`, `ticks` or `_closed_through`.
+  its close is GRACE_S behind the clock; with broker bars on, a minute's fetched broker bar replaces its sampled one
+  and the minute just closed waits for its bar as a decision close does (`_minutes`). Nothing here writes `bars_1m`,
+  `ticks` or `_closed_through`.
 * Sending: at most PER_PASS orders a pass, "FIFO with fair rotation across arms" (`_order`); a signal older than its
   staleness (10 s on 1m, 30 s on 5m, 60 s on 15m and above) is dropped and journalled `exploration_stale`. Each order
   goes through the cost probe's order core (`cost_probe._place`: `RiskGate.check`, the only path to an order, then
@@ -113,11 +115,23 @@ SUB_15M = ("1m", "5m")
 MAX_NET_LOTS = 0.10                 # ADR 0043 X3: net same-side exposure on the account, lots
 DD_WARN, DD_PAUSE = 0.06, 0.08      # ADR 0043 section 2: drawdown from the mark: warn, pause
 PI_RANDOM = 1.0                     # champion zero: the random branch takes every admissible candidate (mu = 1)
+# ADR 0057: a strategy arm's day holds at least this many of its per-trade cap plus the round trip, never more than
+# SHARE_CAP x its pot (quant C4: a wide-stop arm takes no disproportionate slice). 17 scalp arms in the 55% the controls
+# leave of a £138 pot had £4.47 each: one $3 loss spent the day (live 2026-10-27). A room floor, not a share: the
+# bandit's shares (the logged propensities) are unchanged; the pot, the host budget, the per-trade cap and the
+# RiskGate still bind. Controls keep their fixed share (the null). Journalled once at start (`exploration_room_floor`:
+# the switch time of prereg-2026-10-27-scalp-volume.md amendment (d) 10.2).
+ARM_ROOM_LOSSES = 3
 SHARE_FLOOR, SHARE_CAP = 0.05, 0.30  # H-61's bounds on a strategy arm's share (L3 `bounded_shares`), fallback included
 SPEC_PATH = Path(__file__).parents[2] / "config" / "exploration_arms.yaml"   # the frozen ARM-SPEC (hash-checked)
 # a close by the arm's own barrier: anything else censors the label (`trail_close`: a runner arm's own trailed stop,
 # reached before the broker had it; no other arm trails)
 NATURAL = frozenset({HOLD_EXIT, "time_exit", "stop", "target", "engine_stop_close", "trail_close"})
+# prereg-2026-10-27-scalp-volume.md amendment (d): a volume rule's candidate on a minute whose broker bar missed the
+# hold is blocked with this reason (as `spread_wide`); each minute the pass waited for, or decided without, its broker
+# bar is journalled WAIT_ACTION with `hold_ms` and `late` (trading-safety LOW 2; the daily review's late rate)
+BROKER_BAR_LATE = "broker_bar_late"
+WAIT_ACTION = "exploration_broker_bar_wait"
 SHIFT_TF = "15m"                    # arms 8.9: a shifted XC15 enters "at the next 15m close" KA15 is not open
 CUT_EXIT = "weekend_close_loser"    # the Friday cut's loser close (`Engine._weekend_rule`): natural for a rule following it
 
@@ -369,6 +383,7 @@ class Exploration:
         self.last_bar: dict[str, pd.Timestamp] = {}
         self.last_close = eng._closed_through
         self.last_minute: pd.Timestamp | None = None
+        self.waiting: pd.Timestamp | None = None       # the minute close whose broker bar the minute pass waits for
         self.ahead_seen: pd.Timestamp | None = None   # the last bar skipped as ahead of the host clock (journalled once)
         self.open_loss: dict[int, float] = {}       # position id -> its loss at the gate's stop when sent
         self.weights_cache: tuple[pd.Timestamp, dict[str, float]] | None = None
@@ -395,6 +410,8 @@ class Exploration:
             return None
         if eng.cfg.mode != "demo" or not eng.cfg.probe_only:
             raise ValueError("exploration runs on demo probe_only accounts only (plan 2026-10-25)")
+        eng.decisions.append({"ts": time.time(), "agent": None, "action": "exploration_room_floor",
+                              "losses": ARM_ROOM_LOSSES, "share_cap": SHARE_CAP})
         return cls(eng, cfg)
 
 
@@ -495,11 +512,13 @@ def arm_bars(complete: pd.DataFrame, arm: SpecArm, through: pd.Timestamp) -> tup
 
 
 def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.DataFrame,
-            through: pd.Timestamp, spec_ctx: dict[str, Any] | None = None) -> None:
+            through: pd.Timestamp, spec_ctx: dict[str, Any] | None = None, late: bool = False) -> None:
     """The arm's frozen rule (`arm_rules.screened`: its window, the common filters, its stop band) on the bars up to
     `through`; a candidate on the bar that just closed is queued with its own stop, target and hold. One its stop band
     skips is journalled and recorded blocked with its propensity (`_skipped`). A rule that raises is journalled
-    (`exploration_rule_error`) and the other arms go on."""
+    (`exploration_rule_error`) and the other arms go on. `late` (the minute pass decided without the last minute's
+    broker bar): a rule reading tick volume (`arm_rules.reads_volume`) has its candidate on that bar blocked
+    BROKER_BAR_LATE the same way (prereg-2026-10-27-scalp-volume.md amendment (d))."""
     from goldbot.research import arm_rules
     if arm.arm_id in ex.retired or ex.last_bar.get(arm.arm_id) == through:
         return
@@ -513,6 +532,10 @@ def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.D
         eng.decisions.append({"ts": time.time(), "agent": arm.tag, "action": "exploration_rule_error",
                               "error": type(exc).__name__})
         return
+    if late and arm_rules.reads_volume(arm.spec):
+        now_rows = c["idx"] == len(bars) - 1
+        skipped = pd.concat([skipped, c[now_rows].assign(reason=BROKER_BAR_LATE)], ignore_index=True)
+        c = c[~now_rows]
     for p in _pending(arm, c[c["idx"] == len(bars) - 1], through):
         ex.queue.append(p)
     gone = skipped[skipped["idx"] == len(bars) - 1]
@@ -666,15 +689,34 @@ def _with_context(eng: Engine, ex: Exploration, arm: Arm, complete: pd.DataFrame
 def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     """The 1m/5m arms: once a minute is GRACE_S past its close, the complete minutes (bars_1m and the engine's
     unbuilt ticks, both copied, never written) are read and the arms whose bar closed queue their signals, each on
-    its own `lookback` bars (H-81's Z7 reads ten trading days of 5m closes, Z9 a 1h EMA50)."""
+    its own `lookback` bars (H-81's Z7 reads ten trading days of 5m closes, Z9 a 1h EMA50).
+    With broker bars on (engine/broker_bars.py), every minute whose broker bar has been fetched is the broker's, and
+    the pass waits for the bar of the minute just closed as a decision close does (`broker_bars.awaiting`: at most
+    HOLD past close + GRACE, while no finished call has covered it). H-81's volume rules compare "v = the bar's tick
+    volume (... MT5 `tick_volume` live)" with its own trailing median "on the same feed"; the unbuilt minute's
+    sampled quotes (at most four a second at the 0.25 s loop) are another feed, so Z1P, whose v_t was that count set
+    against the broker's tick volumes, never fired live (2026-10-27: 0 candidates against 11.7 a day). Past the hold
+    the minute is decided on what is there (sampled), as the engine's own closes are, except by a volume rule: its
+    candidate is blocked BROKER_BAR_LATE (amendment (d), `_signal`). A minute waited for or decided without its bar is
+    journalled WAIT_ACTION with the wait (`hold_ms`, from close + GRACE_S) and `late`."""
+    from goldbot.engine import broker_bars
     through = (now - pd.Timedelta(seconds=GRACE_S)).floor("min")
     if ex.last_minute is not None and through <= ex.last_minute:
         return
-    ex.last_minute = through
     arms = [a for a in ex.arms.values() if a.tf in SUB_15M and int(through.timestamp()) % tf_seconds(a.tf) == 0]
+    minute = through - pd.Timedelta(minutes=1)
+    if arms and broker_bars.awaiting(eng, minute, now):
+        ex.waiting = through    # the minute's broker bar is on its way: a later pass decides this close
+        return
+    ex.last_minute = through
     tfs = sorted({a.tf for a in arms}, key=tf_seconds)
     if not tfs:
         return
+    late = broker_bars.missed(eng, minute)
+    if late or ex.waiting == through:
+        hold_ms = round(max(0.0, (now - through).total_seconds() - GRACE_S) * 1000)
+        eng.decisions.append({"ts": now.isoformat(), "agent": None, "action": WAIT_ACTION, "bar": through.isoformat(),
+                              "hold_ms": hold_ms, "late": late})
     # bars, never clock time (`_bars`)
     rows = max(max(tf_seconds(a.tf) * (lookback(a.spec) + 1) // 60 for a in arms), LOOKBACK_1M)
     b = eng.bars_1m
@@ -683,6 +725,7 @@ def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     if ticks:
         parts.append(ticks_to_1m(pd.DataFrame({"ts_utc": [t.ts_utc for t in ticks], "bid": [t.bid for t in ticks],
                                                "ask": [t.ask for t in ticks]}), DEFAULT_SESSIONS))
+    parts.append(broker_bars.fetched(eng, through))     # last, so a minute's broker bar wins over its sampled one
     parts = [p for p in parts if not p.empty]
     if not parts:
         return
@@ -694,7 +737,7 @@ def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
         for n, bars in _shared_bars(frame, tf, through, sorted({lookback(a.spec) for a in group})).items():
             if bars is not None:
                 for arm in (a for a in group if lookback(a.spec) == n):
-                    _signal(eng, ex, arm, bars, frame, through)
+                    _signal(eng, ex, arm, bars, frame, through, late=late)
 
 
 def on_pass(eng: Engine, tick: Tick) -> None:
@@ -1158,14 +1201,23 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
 
 
 
-def _arm_room(share_gbp: float, lost: float, held: float, arm_cap: float, first: bool) -> float:
-    """An arm's room today: its share of the pot less today's realised loss and open risk. Its `first` trade of the
-    day (none closed since the day's reset, none open) may always go, up to its per-trade cap: a share below one
-    trade's loss (W1A 0.20 x £40 = £8 against ≈ £29 at the stop, live 2026-10-26) otherwise refused it on every bar.
-    "First" is by trades, never by P&L: a trade closed flat or in profit nets to no loss, and used to make the arm
-    fresh again, trading at its cap on every bar. The pot, the host budget and the RiskGate still bind."""
-    room = share_gbp - lost - held
+def _arm_room(share_gbp: float, lost: float, held: float, arm_cap: float, first: bool, floor_gbp: float = 0.0) -> float:
+    """An arm's room today: its day (its share of the pot, at least `floor_gbp`) less today's realised loss and open
+    risk. Its `first` trade of the day (none closed since the day's reset, none open) may always go, up to its
+    per-trade cap: a share below one trade's loss (W1A 0.20 x £40 = £8 against ≈ £29 at the stop, live 2026-10-26)
+    otherwise refused it on every bar. "First" is by trades, never by P&L: a trade closed flat or in profit nets to no
+    loss, and used to make the arm fresh again, trading at its cap on every bar. `floor_gbp` (ADR 0057): a strategy
+    arm's ARM_ROOM_LOSSES x (its per-trade cap + the round trip), at most SHARE_CAP x its pot (`_room_floor`). The pot, the host budget and the RiskGate still bind."""
+    room = max(share_gbp, floor_gbp) - lost - held
     return max(room, arm_cap) if first else room
+
+def _room_floor(arm: Arm, arm_cap: float, cost: float, pot_gbp: float) -> float:
+    """ADR 0057: a strategy arm's day is at least ARM_ROOM_LOSSES x (its per-trade cap + the round trip), never above
+    SHARE_CAP x its pot; a control's is its fixed share only (0)."""
+    if arm.control_share is not None:
+        return 0.0
+    return min(ARM_ROOM_LOSSES * (arm_cap + cost), SHARE_CAP * pot_gbp)
+
 
 def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd.Timestamp,
           tick: Tick) -> Literal["sent", "refused", "cap"]:
@@ -1248,7 +1300,8 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
              "budget": (ps.total - ps.lost_in(ex) - held_all) if ps.total is not None else 0.0,
              "pot": pot.gbp - ps.lost_in(ex, arm.style) - held_pot,
              "arm_budget": _arm_room(ps.share.get(arm.arm_id, 0.0) * pot.gbp, ps.lost.get(arm.arm_id, 0.0), held_arm,
-                                     arm_cap, first=arm.arm_id not in ps.lost and not ps.count.get(arm.arm_id))}
+                                     arm_cap, first=arm.arm_id not in ps.lost and not ps.count.get(arm.arm_id),
+                                     floor_gbp=_room_floor(arm, arm_cap, cost, pot.gbp))}
 
     def binding(at_stop: float) -> str | None:
         return next((k for k, room in rooms.items() if at_stop > room + 1e-9), None)

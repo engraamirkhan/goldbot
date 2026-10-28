@@ -1510,6 +1510,9 @@ class TradeTotals(BaseModel):
     n: int
     n_open: int
     n_closed: int
+    # of `n`, the cost probes: they count toward the day's trades, shown on their own line so strategy and probe
+    # trades stay apart (volume-500 plan section 1: "Reports show the count split into ... probes")
+    n_probes: int = 0
     currency: str | None                    # the one currency of the money rows; None when none or mixed
     mixed_currencies: bool                  # money in more than one currency: never summed
     net_pnl: float | None                   # closed rows; None when any closed net is unknown or currencies mix

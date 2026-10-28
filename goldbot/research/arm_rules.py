@@ -447,6 +447,20 @@ RULE_FUNCS: dict[str, Callable[[Arm, RuleContext], pd.DataFrame]] = {
 }
 
 
+# the rules that read the bars' tick volume (`tick_count`): H-81's Z1/Z2/Z8 and Z5, S1's tick-weighted session VWAP and
+# S4's money flow. prereg-2026-10-27-scalp-volume.md amendment (d): live, a minute whose broker bar missed the hold has
+# no MT5 tick volume, so these are not decided on it (`exploration._minutes`); a test perturbs tick_count under every
+# shipped 1m/5m rule outside this set and finds no candidate changed. A `specialist` rule reads features (volume
+# among them): it counts as reading volume.
+VOLUME_RULES = frozenset({"tick_surge", "run_fade", "absorb_fade", "extreme_break", "session_vwap_fade",
+                          "box_break_close", "specialist"})
+
+
+def reads_volume(arm: Arm) -> bool:
+    """Whether the arm's rule reads the bars' tick volume (VOLUME_RULES)."""
+    return arm.rule in VOLUME_RULES
+
+
 def candidates(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     """The arm's candidates after its window, the common filters and its stop band."""
     return screened(arm, ctx)[0]

@@ -210,6 +210,51 @@ def test_the_first_trade_rule_admits_one_trade_a_day_even_when_that_trade_closed
     assert [d["action"] for d in _actions(eng, "exploration_refused:")] == ["exploration_refused:arm_budget"]
 
 
+@pytest.mark.parametrize(("cap", "pot", "sent"), [
+    (6.0, 80.0, 3),      # floor 3 x (£6 cap + £1 round trip) = £21 under 0.30 x £80 = £24: losses of £7 at 0, 7, 14
+    (17.0, 50.0, 3),     # floor 3 x (£17 + £1) = £54, capped at 0.30 x £50 = £15: losses at 0, 7, 14 (uncapped: six)
+])
+def test_a_strategy_arms_day_is_three_per_trade_caps_with_the_round_trip_capped_at_the_share_cap_of_the_pot(
+        tmp_path, cap, pot, sent):
+    """Live 2026-10-27: 86 `arm_budget` refusals (69 on icm-probe): 17 strategy arms in the 55% of the scalp pot the
+    controls leave had 3.24% of £138 = £4.47, so one $3 loss spent a day. ADR 0057 (with the quant's C4): a strategy
+    arm's day is at least ARM_ROOM_LOSSES x (its per-trade cap + the round trip), never above SHARE_CAP x the pot (so a
+    wide-stop arm cannot take a disproportionate slice); its share here is 0.10 x 0.30 x the pot, far below."""
+    eng, pb = _engine(tmp_path, [_arm("a"), _arm("b", side=-1), _arm("c", control_share=0.9)],
+                      pots={"intraday": Pot(gbp=pot, max_open=5)}, caps={"a": cap, "b": 0.5, "c": 0.5})
+    assert exploration.ARM_ROOM_LOSSES == 3 and exploration.SHARE_CAP == 0.30
+    for k in range(6):
+        close = CLOSE - pd.Timedelta(hours=1) + pd.Timedelta(minutes=15 * k)      # 19:00-20:15, before 20:45 UTC
+        exploration.on_pass(eng, _at(eng, pb, close))
+        for pid in [p for p, t in eng.open.items() if t.agent_id == "explore:a"]:
+            eng._try_close(pid, "time_exit", close)
+            eng._flush_closed()
+            [rec] = [r for r in exploration.trades(str(tmp_path)) if r.position_id == pid]
+            with exploration.ledger_db(str(tmp_path)).write() as conn:
+                exploration.LEDGER.upsert(conn, rec.model_copy(update={"pnl": -7.0}))   # a loss at about its cap
+    assert [d["arm"] for d in _sent(eng)] == ["a"] * sent
+    assert {d["action"] for d in _actions(eng, "exploration_refused:") if d["arm"] == "a"} == \
+        {"exploration_refused:arm_budget"}
+
+
+def test_the_engine_journals_the_room_floor_it_runs_so_a_read_can_flag_fills_before_the_switch(tmp_path):
+    """Quant C3 (prereg amendment (d) 10.2): the room floor's switch time is the first `exploration_room_floor` row a
+    host journals; fills sent before it are pre-floor."""
+    eng, _ = _engine(tmp_path, [_arm("a")])
+    [row] = _actions(eng, "exploration_room_floor")
+    assert (row["losses"], row["share_cap"]) == (3, 0.30)
+
+
+def test_a_controls_day_stays_its_fixed_share_with_no_three_loss_floor(tmp_path):
+    """Controls are the null at a fixed share (ADR 0043: "never allocated by results"); the three-loss floor is for
+    strategy arms only, so a control keeps its share plus the first-trade rule (0.01 x £48: one trade a day)."""
+    eng, pb = _engine(tmp_path, [_arm("a", control_share=0.01)], pots={"intraday": Pot(gbp=48.0, max_open=5)},
+                      caps={"a": 17.0})
+    for k in range(3):
+        exploration.on_pass(eng, _at(eng, pb, CLOSE + pd.Timedelta(minutes=15 * k)))
+    assert len(_sent(eng)) == 1
+
+
 def _stopped_at_the_broker(eng: Engine, pb: PaperBroker) -> int:
     """The arm's one position hits its stop at the broker; the 30 s reconcile's `sweep` queues its record (not yet
     written: the tick's records are flushed after `on_pass`)."""
@@ -794,16 +839,17 @@ def test_the_engine_config_comes_from_the_frozen_spec_and_the_accounts_registrat
 
 
 def test_the_two_hosts_ship_the_adr_0043_budget_with_exploration_on():
-    """Integration I2 (PD), per-style hosts (ADR 0043 amendment, PD 2026-10-26): icm-probe cost probes 60/220 and the
-    scalp pot 138/220 (£50 + the £88 freed by intraday and swing); icm-demo intraday £108 / swing £90 = 198/220; swing
+    """Integration I2 (PD), per-style hosts (ADR 0043 amendment, PD 2026-10-26): icm-probe cost probes 30/220 and the
+    scalp pot 168/220 with 14 slots (H-81 amendment (a) 7.1, ADR 0057: re-split from 60 / 138 / 12, the £198 kept); icm-demo intraday £108 / swing £90 = 198/220; swing
     £40 a trade and one open, intraday £17, scalp £6.50; 17 open at most on each (one host slot in reserve)."""
     accs = acc_mod.load_accounts(logins=False)
     probe, demo = accs["icm-probe"].exploration, accs["icm-demo"].exploration
     assert probe.enabled and demo.enabled and probe.max_open_total == demo.max_open_total == 17
-    assert probe.budget_share * 220 == pytest.approx(138, abs=0.05)
+    assert probe.budget_share * 220 == pytest.approx(168, abs=0.05)
     assert demo.budget_share * 220 == pytest.approx(198, abs=0.05)
-    assert accs["icm-probe"].cost_probe.budget_share * 220 == pytest.approx(60, abs=0.05)
-    assert {k: (v.gbp, v.max_open) for k, v in probe.pots.items()} == {"scalp": (138, 12)}
+    assert accs["icm-probe"].cost_probe.budget_share * 220 == pytest.approx(30, abs=0.05)
+    assert (probe.budget_share + accs["icm-probe"].cost_probe.budget_share) * 220 == pytest.approx(198, abs=0.01)
+    assert {k: (v.gbp, v.max_open) for k, v in probe.pots.items()} == {"scalp": (168, 14)}
     # ADR 0049 D1a (CFO 2026-10-27): a scalp pot for H-81 carved inside the same £198 (was intraday 108 / 9, swing 90 / 2)
     assert {k: (v.gbp, v.max_open) for k, v in demo.pots.items()} == {"scalp": (90, 8), "intraday": (68, 7),
                                                                        "swing": (40, 2)}

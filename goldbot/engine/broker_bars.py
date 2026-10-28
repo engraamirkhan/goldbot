@@ -165,20 +165,49 @@ def hold(eng: Engine, due: pd.Timestamp | None, t: Tick) -> pd.Timestamp | None:
     keeps the close pending (`held`), so a later pass decides it; exits never wait."""
     bb = eng.broker_m1
     bb.held = None
-    if due is None or not eng.cfg.broker_bars or bb.fetcher is None:
+    if due is None:
         return due
-    m = due - MINUTE
-    now = max(t.ts_utc, eng._now(t))
-    have = not bb.got.empty and bool((bb.got["ts_utc"] == m).any())
-    waiting = not have and (bb.answered is None or bb.answered < m) and now < due + GRACE + HOLD \
-        and bool(DEFAULT_SESSIONS.is_open(pd.DatetimeIndex([m]))[0])
-    if waiting:
+    if awaiting(eng, due - MINUTE, max(t.ts_utc, eng._now(t))):
         if bb.exits_for != due:           # once per held close, before it waits
             bb.exits_for = due
             _held_exits(eng, t)
         bb.held = due
         return None
     return due
+
+
+def awaiting(eng: Engine, minute: pd.Timestamp, now: pd.Timestamp) -> bool:
+    """Whether a decision on the in-session `minute` (its open) waits for that minute's broker bar: broker bars on,
+    the bar not fetched, no finished call has covered the minute, and `now` within HOLD past its close + GRACE. One
+    rule for the engine's decision closes (`hold`) and the exploration minute pass (`exploration._minutes`)."""
+    bb = eng.broker_m1
+    if not eng.cfg.broker_bars or bb.fetcher is None:
+        return False
+    have = not bb.got.empty and bool((bb.got["ts_utc"] == minute).any())
+    return not have and (bb.answered is None or bb.answered < minute) and now < minute + MINUTE + GRACE + HOLD \
+        and bool(DEFAULT_SESSIONS.is_open(pd.DatetimeIndex([minute]))[0])
+
+
+def missed(eng: Engine, minute: pd.Timestamp) -> bool:
+    """Whether a decision on the in-session `minute` is taken without its broker bar (broker bars on, the bar not
+    fetched): the hold ran out or a finished call came back without it."""
+    bb = eng.broker_m1
+    if not eng.cfg.broker_bars or bb.fetcher is None:
+        return False
+    have = not bb.got.empty and bool((bb.got["ts_utc"] == minute).any())
+    return not have and bool(DEFAULT_SESSIONS.is_open(pd.DatetimeIndex([minute]))[0])
+
+
+def fetched(eng: Engine, through: pd.Timestamp) -> pd.DataFrame:
+    """The broker's finished minutes fetched so far (the last KEEP) that close at or before `through`, with bars_1m's
+    dtypes; empty with broker bars off. The exploration minute pass lays them over the sampled minutes it builds from
+    the engine's quotes, so every minute it has a broker bar for is the broker's (prereg-2026-10-27-scalp-volume.md
+    section 0: "v = the bar's tick volume (... MT5 `tick_volume` live)", never the engine's count of sampled quotes)."""
+    bb = eng.broker_m1
+    if not eng.cfg.broker_bars or bb.got.empty:
+        return bb.got.iloc[:0]
+    got = bb.got[pd.DatetimeIndex(bb.got["ts_utc"]) + MINUTE <= through]
+    return _like(got.reset_index(drop=True), eng.bars_1m)
 
 
 def _held_exits(eng: Engine, t: Tick) -> None:

@@ -412,6 +412,51 @@ def test_integrity_counts_gaps_duplicates_clock_faults_and_failing_health_as_inc
     assert {"data_gap", "data_duplicate", "clock", "health"} <= kinds
 
 
+def test_the_broker_bar_late_rate_and_the_minute_passs_waits_are_reported_per_host(tmp_path):
+    """Quant C1 / trading-safety LOW 2: the minutes the 1m/5m pass decided without their broker bar (`late`, the volume
+    arms held out) over the host's 1m bars, and how long it waited (`hold_ms`), so a rise in `exploration_stale`
+    can be traced to the wait."""
+    minutes = pd.date_range(LONDON, LONDON + pd.Timedelta(minutes=99), freq="1min")
+    bars = pd.DataFrame({"ts_utc": minutes})
+    waits = [(400, False), (1500, False), (3000, True), (3000, True)]
+    journal = pd.DataFrame({"ts_utc": [LONDON + pd.Timedelta(minutes=i) for i in range(len(waits))],
+                            "action": [exploration.WAIT_ACTION] * len(waits),
+                            "detail": [json.dumps({"hold_ms": h, "late": late}) for h, late in waits]})
+    review = _run(tmp_path, store=_store({("bars_1m", "icm-probe"): bars, ("decisions", "icm-probe"): journal}))
+    [w] = [w for w in review.broker_bars if w.host == "icm-probe"]
+    assert (w.minutes, w.waited, w.late, w.late_rate, w.hold_ms_max) == (100, 4, 2, 0.02, 3000)
+    line = next(x for x in dr.report_lines(review) if "broker bar" in x)
+    assert "2 of 100 minutes" in line and "2%" in line
+    assert all(w.late == 0 for w in review.broker_bars if w.host != "icm-probe")
+
+
+def _probe(db: Database, cid: str, *, host: str = "icm-probe", sent: pd.Timestamp = LONDON,
+           fill: float | None = 2000.1) -> None:
+    from goldbot.engine import cost_probe
+    with db.write() as conn:
+        cost_probe.LEDGER.upsert(conn, cost_probe.ProbeRecord(
+            client_order_id=cid, account_id=host, agent_id=cost_probe.SCHEDULED, side=1, lots=0.01,
+            requested_price=2000.0, spread_usd=0.2, sent_utc=sent, fill_price=fill, stop_loss=2.3,
+            purpose="cost_measurement", fx_acct_per_usd=0.75))
+
+
+def test_the_day_fill_count_adds_the_cost_probes_on_a_line_of_their_own(tmp_path):
+    """volume-500 plan section 1: "Reports show the count split into strategy arms, controls and probes, so the total
+    cannot be padded": the day's fills are arm fills + probe fills, and the probes are a separate line."""
+    db = _db(tmp_path)
+    for i in range(3):
+        _cand(db, f"s{i}", at=LONDON + pd.Timedelta(minutes=i))
+        _trade(db, f"s{i}", sent=LONDON + pd.Timedelta(minutes=i))
+    for i in range(2):
+        _probe(db, f"cp{i}", sent=LONDON + pd.Timedelta(minutes=10 + i))
+    _probe(db, "cp-unfilled", sent=LONDON + pd.Timedelta(minutes=20), fill=None)
+    review = _run(tmp_path)
+    assert (review.fills_total, review.fills_probes) == (5, 2)
+    line = next(x for x in dr.report_lines(review) if x.startswith("Review: fills"))
+    assert "fills 5" in line and "arms 3" in line and "probes 2" in line
+    _blinded(line)
+
+
 def test_the_owner_report_carries_the_blinded_review_lines(tmp_path):
     from goldbot.telegram.digest import build_digest
     db = _db(tmp_path)
