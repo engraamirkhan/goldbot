@@ -157,7 +157,8 @@ def _values(m: re.Match[str]) -> list[float]:
         if "." not in b and len(bi) < len(ai) and float(b) < float(a):
             b = ai[: len(ai) - len(bi)] + bi          # 1970-75 -> 1975, 1698-5 -> 1695
         out.append(float(b))
-    return [v for v in out if v > 0]
+    # a bare small count (`all 3 resistances`, `2 targets`) is not a price; 1.2650 or 0.85 can be
+    return [v for v, raw in zip(out, (a, b or "")) if v > 0 and ("." in raw or v >= 10)]
 
 
 def parse_levels(text: str) -> Levels:
