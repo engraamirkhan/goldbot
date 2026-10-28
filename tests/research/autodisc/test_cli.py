@@ -20,7 +20,7 @@ def test_report_refuses_confirm_window_numbers():
 
 def test_run_report_has_counts_head_and_no_2018_plus(tmp_path, capsys):
     run_json = tmp_path / "run.json"
-    rc = cli.main(["run", "--synthetic", "--generator", "combine", "--limit", "40", "--reps", "4",
+    rc = cli.main(["run", "--synthetic", "--generator", "combine", "--limit", "40", "--reps", "4", "--min-events", "60",
                    "--db", str(tmp_path / "d.db"), "--run-json", str(run_json)])
     out = capsys.readouterr().out
     assert rc == 0
@@ -37,11 +37,10 @@ def test_real_backends_refused_until_integration(tmp_path):
 
 
 def test_variant_flagged_on_survivor(tmp_path, capsys):
-    from goldbot.research.autodisc.contracts import EXIT_MENU
-    from goldbot.research.autodisc.gen_combine import family_spec
+    from goldbot.research.autodisc.gen_combine import exit_menu, family_spec
     from goldbot.research.autodisc.nulls import SyntheticProvider, make_noise_tensor
 
     t = make_noise_tensor(3000, seed=1)
-    s = family_spec("tsmom", "15m", None, EXIT_MENU[0])
+    s = family_spec("tsmom", "15m", None, exit_menu("15m")[0])
     labels = cli.novelty_labels(t, [s], [cli.spec_hash(s)], SyntheticProvider(3000))
     assert labels[cli.spec_hash(s)] == "variant_of:tsmom"

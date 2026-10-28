@@ -1,12 +1,14 @@
 from goldbot.research.autodisc import spec_hash
-from goldbot.research.autodisc.contracts import EXIT_MENU, exit_key
 from goldbot.research.autodisc.gen_combine import (
     DEFAULT_TIMEFRAMES,
+    N_EXITS,
     existing_family_names,
+    exit_menu,
     filters_for,
     generate,
     grid_size,
 )
+from goldbot.research.autodisc.outcomes import barrier_exit, default_menu
 
 
 def test_families_exclude_controls_and_meta():
@@ -20,8 +22,13 @@ def test_grid_is_finite_unique_deterministic_and_counted():
     a = list(generate(fams))
     assert len(a) == grid_size(2) == len({spec_hash(s) for s in a})
     assert [spec_hash(s) for s in a] == [spec_hash(s) for s in generate(fams)]
-    assert {exit_key(s.exit) for s in a} == set(EXIT_MENU)
     assert {s.timeframe for s in a} == set(DEFAULT_TIMEFRAMES)
+
+
+def test_exit_menu_matches_the_tensor_menu():
+    for tf, mb in (("15m", 96), ("4h", 24)):
+        names = [barrier_exit(e, mb).name for e in exit_menu(tf)]
+        assert names == [e.name for e in default_menu(mb)] and len(names) == N_EXITS
 
 
 def test_macro_filters_only_on_4h_and_1d_and_at_most_one_filter():
@@ -34,7 +41,7 @@ def test_macro_filters_only_on_4h_and_1d_and_at_most_one_filter():
 
 def test_baselines_and_exit_menu():
     base = list(generate(["tsmom"], filters=False))
-    assert len(base) == len(DEFAULT_TIMEFRAMES) * len(EXIT_MENU) and all(s.filter is None for s in base)
+    assert len(base) == len(DEFAULT_TIMEFRAMES) * N_EXITS and all(s.filter is None for s in base)
 
 
 def test_default_grid_is_about_ten_thousand_or_more():

@@ -22,10 +22,10 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.research.autodisc import SearchLedger, spec_hash  # noqa: E402
-from goldbot.research.autodisc.contracts import OutcomeTensor  # noqa: E402
 from goldbot.research.autodisc.gen_combine import generate  # noqa: E402
 from goldbot.research.autodisc.novelty import (  # noqa: E402
     Reference,
@@ -41,6 +41,7 @@ from goldbot.research.autodisc.nulls import (  # noqa: E402
     run_funnel,
     search_specs,
 )
+from goldbot.research.autodisc.outcomes import OutcomeTensor  # noqa: E402
 from goldbot.research.autodisc.spec import StrategySpec  # noqa: E402
 
 DEFAULT_DB = "state/discovery.db"
@@ -55,24 +56,30 @@ def assert_no_confirm_numbers(text: str) -> None:
         raise ValueError(f"report would contain a confirm/holdout-window date: {m.group(0)!r}")
 
 
+def _daily(t: OutcomeTensor, mask: np.ndarray, side: np.ndarray, day_id: np.ndarray, n_days: int) -> np.ndarray:
+    ev = t.select(mask, side, 0)
+    return daily_series(ev.r(), ev.idx, day_id, n_days)
+
+
 def novelty_labels(t: OutcomeTensor, specs: list[StrategySpec], survivors: list[str], provider: SyntheticProvider
                    ) -> dict[str, str]:
     """Label each survivor against every family (unfiltered entries, exit 0) and flag variants of existing families."""
     cache = MaskCache(provider)
     names = existing_names()
+    tf = specs[0].timeframe
+    codes, _ = pd.factorize(t.ts_utc.normalize())
+    day_id, n_days = codes.astype(np.int64), int(codes.max()) + 1
     refs: dict[str, Reference] = {}
     for fam in sorted({s.family for s in specs if s.family}):
-        mask, side = cache.p.family_entries(fam, t.timeframe)
-        idx = np.flatnonzero(mask)
-        refs[fam] = Reference(fam, mask, daily_series(t.net_r[idx, side[idx], 0], idx, t.day_id, t.n_days))
+        mask, side = cache.p.family_entries(fam, tf)
+        refs[fam] = Reference(fam, mask, _daily(t, mask, side, day_id, n_days))
     by_hash = {spec_hash(s): s for s in specs}
     out = {}
     for h in survivors:
         s = by_hash[h]
         mask, side = cache.entries(s)
-        idx = np.flatnonzero(mask)
-        daily = daily_series(t.net_r[idx, side[idx], 0], idx, t.day_id, t.n_days)
-        out[h] = check_novelty(s.family or "", mask, daily, list(refs.values()), names).label
+        out[h] = check_novelty(s.family or "", mask, _daily(t, mask, side, day_id, n_days), list(refs.values()),
+                               names).label
     return out
 
 
@@ -84,7 +91,7 @@ def render_report(res: FunnelResult, labels: dict[str, str], head: tuple[int, st
         f"evaluated {res.evaluated}",
         f"passed floors {res.passed_floors}",
         f"beat null (>= 95th pct of best-of-search, {res.null_threshold:.3f}) {res.beat_null}",
-        f"positive net R at 1.5x cost {res.passed_stress}",
+        f"also pass explore checks (excess over drift, 1.5x cost stress, floors) {res.passed_explore_checks}",
         f"real best-of-search fitness {res.real_best:.3f} at null percentile {res.real_best_null_percentile:.2f}",
         f"stated false-positive rate {fpr:.3f} (1/(reps+1))",
         f"explore survivors {len(res.survivors)}: a recorded fact, not evidence of edge",
@@ -113,7 +120,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     t = make_noise_tensor(args.bars, seed=args.seed)
     prov = SyntheticProvider(args.bars, seed=args.seed)
     ledger = SearchLedger(args.db)
-    res = run_funnel(t, specs, prov, ledger, "G1", "1", reps=args.reps, seed=args.seed, min_events=args.min_events)
+    res = run_funnel(t, specs, prov, ledger, "G1", "1", reps=args.reps, seed=args.seed, min_events=args.min_events or None)
     labels = novelty_labels(t, specs, res.survivors, prov)
     head = ledger.head()
     text = render_report(res, labels, head, "G1 combine", args.reps, 1 / (args.reps + 1))
@@ -137,14 +144,14 @@ def cmd_bench(args: argparse.Namespace) -> int:
     version, run overnight)."""
     _need_synthetic(args)
     specs = list(generate())[: args.specs]
-    t = make_noise_tensor(args.bars, n_days=args.bars // 24, seed=0)
+    t = make_noise_tensor(args.bars, seed=0)
     cache = MaskCache(SyntheticProvider(args.bars))
     ledger = SearchLedger(args.db)
     t0 = time.perf_counter()
     for s in specs:
         ledger.log_spec(s, "G1", "1")
     t1 = time.perf_counter()
-    search_specs(t, specs, cache, min_events=args.min_events)
+    search_specs(t, specs, cache, ledger=ledger, min_events=args.min_events or None)
     t2 = time.perf_counter()
     print(f"{len(specs)} specs on {args.bars} bars: ledger {t1 - t0:.1f}s, evaluate {t2 - t1:.1f}s, "
           f"{(t2 - t0) / len(specs) * 1000:.2f} ms/spec single process")
@@ -161,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--db", default=DEFAULT_DB)
         p.add_argument("--bars", type=int, default=4000)
         p.add_argument("--seed", type=int, default=0)
-        p.add_argument("--min-events", type=int, default=100)
+        p.add_argument("--min-events", type=int, default=0, help="0 = the evaluator's per-timeframe floor")
         p.add_argument("--run-json", default=None)
         if name == "run":
             p.add_argument("--generator", default="combine")

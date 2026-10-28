@@ -14,12 +14,17 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 
-from goldbot.research.autodisc.contracts import EXIT_MENU, exit_template
-from goldbot.research.autodisc.spec import Leaf, StrategySpec, spec_hash
+from goldbot.research.autodisc.spec import ExitTemplate, Leaf, StrategySpec, spec_hash
 
 GENERATOR = "G1"
 VERSION = "1"
 DEFAULT_TIMEFRAMES: tuple[str, ...] = ("15m", "1h", "4h")
+# Time barrier (bars) of the 1R/2R exits and the time exit, per timeframe: the frozen arm hold_bars of the 15m/1h/4h
+# families (config/exploration_arms.yaml), 10 sessions on 1d. The tensor's exits are `outcomes.default_menu(MAX_BARS[tf])`.
+MAX_BARS = {"15m": 96, "1h": 48, "4h": 24, "1d": 10}
+EXIT_STOPS = ("atr_1.0", "atr_1.5")
+EXIT_TARGETS = ("1R", "2R", "time")
+N_EXITS = len(EXIT_STOPS) * len(EXIT_TARGETS)     # 6: the structural stop needs a price level and is not in the tensor
 MACRO_TIMEFRAMES = frozenset({"4h", "1d"})
 NOT_COMBINABLE = frozenset({"random_bracket", "specialist", "blocked"})
 
@@ -53,7 +58,7 @@ def filters_for(timeframe: str) -> tuple[Leaf, ...]:
 
 
 def generate(families: Sequence[str] | None = None, timeframes: Sequence[str] = DEFAULT_TIMEFRAMES,
-             exits: Sequence[str] = EXIT_MENU, filters: bool = True) -> Iterator[StrategySpec]:
+             exits: Sequence[ExitTemplate] | None = None, filters: bool = True) -> Iterator[StrategySpec]:
     """Every (family, timeframe, filter or none, exit), once each, in a fixed order. `filters=False` yields only
     the unfiltered baselines (each family's own entry on each exit)."""
     seen: set[str] = set()
@@ -61,7 +66,7 @@ def generate(families: Sequence[str] | None = None, timeframes: Sequence[str] = 
         for tf in timeframes:
             options: tuple[Leaf | None, ...] = (None, *filters_for(tf)) if filters else (None,)
             for flt in options:
-                for ex in exits:
+                for ex in (exits if exits is not None else exit_menu(tf)):
                     s = family_spec(fam, tf, flt, ex)
                     h = spec_hash(s)
                     if h not in seen:
@@ -69,11 +74,16 @@ def generate(families: Sequence[str] | None = None, timeframes: Sequence[str] = 
                         yield s
 
 
-def family_spec(family: str, timeframe: str, flt: Leaf | None, exit_key_: str) -> StrategySpec:
+def exit_menu(timeframe: str) -> tuple[ExitTemplate, ...]:
+    return tuple(ExitTemplate(stop=s, target=t, time_bars=MAX_BARS[timeframe] if t == "time" else None)  # type: ignore[arg-type]
+                 for s in EXIT_STOPS for t in EXIT_TARGETS)
+
+
+def family_spec(family: str, timeframe: str, flt: Leaf | None, exit_: ExitTemplate) -> StrategySpec:
     entry = Leaf(kind="structure", name="family_rule", params={"rule": family})
     return StrategySpec(timeframe=timeframe, side_rule="with", side_primitive=entry, entry=entry,  # type: ignore[arg-type]
-                        filter=flt, exit=exit_template(exit_key_), family=family)
+                        filter=flt, exit=exit_, family=family)
 
 
-def grid_size(n_families: int, timeframes: Sequence[str] = DEFAULT_TIMEFRAMES, n_exits: int = len(EXIT_MENU)) -> int:
+def grid_size(n_families: int, timeframes: Sequence[str] = DEFAULT_TIMEFRAMES, n_exits: int = N_EXITS) -> int:
     return n_families * n_exits * sum(1 + len(filters_for(tf)) for tf in timeframes)

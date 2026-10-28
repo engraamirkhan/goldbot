@@ -15,8 +15,12 @@ from pathlib import Path
 
 import numpy as np
 import yaml
+from numpy.typing import NDArray
 
-from goldbot.research.autodisc.contracts import BoolArr, FloatArr, IntArr
+from goldbot.research.autodisc.contracts import BoolArr
+
+FloatArr = NDArray[np.float64]
+IntArr = NDArray[np.int64]
 
 JACCARD_MAX = 0.30
 CORR_MAX = 0.50
