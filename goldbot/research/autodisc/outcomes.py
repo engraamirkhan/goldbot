@@ -11,13 +11,11 @@ for `research.screen`. R is the stop distance as a fraction of the entry price (
 Layout: arrays of shape (n_bars, 2, n_exits); side index 0 is long (+1), 1 is short (-1). A cell with no outcome (the
 last bar, an undefined ATR) is NaN in `ret` and -1 in `t_entry`/`t_exit`.
 
-Window guard: the explore window ends 2017-12-31 23:59 UTC. `assert_explore_bars` raises `ExploreWindowError` for any bar
-at or after `EXPLORE_END`; `build_tensor` calls it first, and `tensor.digest` is the digest of the bars' timestamps the
-tensor was built on (the evaluator's input digest).
+Window guard: `build_tensor` takes the bars as `windows.ExploreFrame` (construction raises `WindowViolation` for any bar
+at or after 2018-01-01); `tensor.digest` is that frame's digest (the evaluator's input digest).
 """
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Literal
@@ -26,28 +24,16 @@ import numpy as np
 import pandas as pd
 
 from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec, triple_barrier, triple_barrier_1m
+from goldbot.research.autodisc.spec import ExitTemplate
+from goldbot.research.autodisc.windows import ExploreFrame
 
-# STUB, REPLACE AT INTEGRATION: `autodisc.windows.ExploreFrame` owns the explore window (another slice). Until it lands
-# this module carries the one constant and the one check it needs; swap both for the windows module's.
-EXPLORE_END = pd.Timestamp("2018-01-01", tz="UTC")     # exclusive: the last explore minute is 2017-12-31 23:59 UTC
 LONG, SHORT = 1, -1
 SIDES: tuple[int, int] = (LONG, SHORT)                 # side index 0 / 1
 _NO_TARGET_ATR = 1e6                                   # a time-exit template: the target is out of reach
 
 
-class ExploreWindowError(ValueError):
-    """A bar at or after 2018-01-01 reached the discovery explore stage."""
-
-
-def assert_explore_bars(ts_utc: pd.Series | pd.DatetimeIndex) -> None:
-    """Refuse any timestamp at or after `EXPLORE_END` (design 3.2 step 1)."""
-    ts = pd.DatetimeIndex(pd.to_datetime(ts_utc, utc=True))
-    if len(ts) and ts.max() >= EXPLORE_END:
-        raise ExploreWindowError(f"bar at {ts.max()} is outside the explore window (ends before {EXPLORE_END:%Y-%m-%d})")
-
-
 @dataclass(frozen=True)
-class ExitTemplate:
+class BarrierExit:
     """One stop/target/time-barrier exit in ATR units. `target_atr` None is a time exit at `max_bars`."""
     name: str
     stop_atr: float
@@ -60,19 +46,32 @@ class ExitTemplate:
                            has_target=self.target_atr is not None)
 
     @classmethod
-    def from_barrier_spec(cls, spec: BarrierSpec) -> ExitTemplate:
+    def from_barrier_spec(cls, spec: BarrierSpec) -> BarrierExit:
         """A family's own barriers as a template (the parity re-expression of an existing family)."""
         return cls(name=spec.name, stop_atr=spec.stop_atr, target_atr=spec.target_atr if spec.has_target else None,
                    max_bars=spec.max_bars)
 
 
-def default_menu(max_bars: int) -> tuple[ExitTemplate, ...]:
+def barrier_exit(exit_: ExitTemplate, max_bars: int) -> BarrierExit:
+    """The numeric barriers of a spec's menu exit (spec.ExitTemplate): stop 1.0/1.5 ATR, target 1R/2R of that stop, or a
+    time exit at `time_bars`; `max_bars` is the time barrier of the 1R/2R ones. The structural stop needs a price level and is not in the tensor (ValueError)."""
+    if exit_.stop == "structural":
+        raise ValueError("the structural stop is not in the outcome tensor")
+    stop = float(exit_.stop.split("_")[1])
+    if exit_.target == "time":
+        assert exit_.time_bars is not None
+        return BarrierExit(f"s{stop:g}_time", stop, None, exit_.time_bars)
+    mult = 1 if exit_.target == "1R" else 2
+    return BarrierExit(f"s{stop:g}_t{exit_.target}", stop, mult * stop, max_bars)
+
+
+def default_menu(max_bars: int) -> tuple[BarrierExit, ...]:
     """The design's fixed menu of 6: stop {1.0, 1.5} ATR x {target 1R, target 2R, time exit at `max_bars`}.
     (The design's "structural" stop needs a price level from the spec and is not in the tensor.)"""
-    out: list[ExitTemplate] = []
+    out: list[BarrierExit] = []
     for stop in (1.0, 1.5):
-        out += [ExitTemplate(f"s{stop:g}_t1R", stop, stop, max_bars), ExitTemplate(f"s{stop:g}_t2R", stop, 2 * stop, max_bars),
-                ExitTemplate(f"s{stop:g}_time", stop, None, max_bars)]
+        out += [BarrierExit(f"s{stop:g}_t1R", stop, stop, max_bars), BarrierExit(f"s{stop:g}_t2R", stop, 2 * stop, max_bars),
+                BarrierExit(f"s{stop:g}_time", stop, None, max_bars)]
     return tuple(out)
 
 
@@ -80,7 +79,7 @@ def default_menu(max_bars: int) -> tuple[ExitTemplate, ...]:
 class OutcomeTensor:
     """Outcomes of every (bar, side, exit): see the module docstring for the layout."""
     ts_utc: pd.DatetimeIndex
-    exits: tuple[ExitTemplate, ...]
+    exits: tuple[BarrierExit, ...]
     ret: np.ndarray            # net signed return (fraction of entry price): spread in the fill, extra cost and swap off
     risk: np.ndarray           # stop distance / entry price: ret / risk is the trade's R
     cost: np.ndarray           # round-trip cost as a fraction of price: spread at the signal bar + extra - swap_ret
@@ -121,18 +120,19 @@ class OutcomeTensor:
         one position at a time exactly as `labels.one_at_a_time` (a candidate is kept once the previous kept one has
         exited). `side` may be one int for a fixed side."""
         mask = np.asarray(mask, dtype=bool)
-        side_arr = np.full(self.n_bars, int(side), dtype=np.int8) if np.isscalar(side) else np.asarray(side, dtype=np.int8)
+        side_arr = np.full(self.n_bars, int(side), dtype=np.int8) if isinstance(side, int) else np.asarray(side, dtype=np.int8)
         if len(mask) != self.n_bars or len(side_arr) != self.n_bars:
             raise ValueError("mask and side must have one value per bar")
-        idx_l, side_l = [], []
-        for si, sv in enumerate(SIDES):
-            sel = np.flatnonzero(mask & (side_arr == sv) & (self.t_entry[:, si, exit_i] >= 0)
-                                 & np.isfinite(self.ret[:, si, exit_i]))
+        idx_l: list[np.ndarray] = []
+        side_l: list[np.ndarray] = []
+        for k, sv in enumerate(SIDES):
+            sel = np.flatnonzero(mask & (side_arr == sv) & (self.t_entry[:, k, exit_i] >= 0)
+                                 & np.isfinite(self.ret[:, k, exit_i]))
             idx_l.append(sel)
-            side_l.append(np.full(len(sel), si))
-        idx, si = np.concatenate(idx_l), np.concatenate(side_l)
-        order = np.lexsort((si, idx))                       # signal order: by bar, long before short
-        idx, si = idx[order], si[order]
+            side_l.append(np.full(len(sel), k))
+        idx0, si0 = np.concatenate(idx_l), np.concatenate(side_l)
+        order = np.lexsort((si0, idx0))                     # signal order: by bar, long before short
+        idx, si = idx0[order], si0[order]
         te, tx = self.t_entry[idx, si, exit_i], self.t_exit[idx, si, exit_i]
         keep = _one_at_a_time(te, tx)
         idx, si = idx[keep], si[keep]
@@ -173,28 +173,18 @@ def _one_at_a_time(t_entry: np.ndarray, t_exit: np.ndarray) -> np.ndarray:
     return keep
 
 
-def tensor_digest(ts_utc: pd.Series | pd.DatetimeIndex) -> str:
-    """SHA-256 of the decision-bar timestamps (epoch ns, via `data.timeutil.epoch_ns`): the evaluator's input digest."""
-    from goldbot.data.timeutil import epoch_ns
-    ts = pd.DatetimeIndex(pd.to_datetime(ts_utc, utc=True))
-    return hashlib.sha256(np.asarray(epoch_ns(ts), dtype="int64").tobytes()).hexdigest()
-
-
-def build_tensor(bars: pd.DataFrame, atr: pd.Series, exits: Sequence[ExitTemplate], *, extra_cost_usd: float = 0.0,
-                 swap: SwapSpec | None = None, bars_1m: pd.DataFrame | None = None,
+def build_tensor(bars_in: ExploreFrame, atr: pd.Series, exits: Sequence[BarrierExit], *, extra_cost_usd: float = 0.0,
+                 swap: SwapSpec | None = None, bars_1m_in: ExploreFrame | None = None,
                  mode: Literal["bar", "1m"] = "bar") -> OutcomeTensor:
-    """The outcome tensor of `bars` (decision bars, store schema with bid_/ask_ OHLC, positional index) for `exits`.
+    """The outcome tensor of `bars_in` (decision bars as an ExploreFrame: store schema with ts_utc and bid_/ask_ OHLC) for `exits`.
     `atr`: the barrier ATR per bar (the same series the family's labels use). `extra_cost_usd` and `swap` come from
     `execution.costs.research_costs(settings, table)` (the conservative table: the max of the refit cell and the table
     is the caller's choice, ADR 0045). `mode="1m"` reads the barriers on `bars_1m` (`triple_barrier_1m`, a rule
     pre-registered on 1m barriers); "bar" is the decision-bar labeller every family without `barriers_on_1m` uses."""
-    bars = bars.reset_index(drop=True)
-    assert_explore_bars(bars["ts_utc"])
+    bars = bars_in.frame.reset_index(drop=True)
+    bars_1m = None if bars_1m_in is None else bars_1m_in.frame
     if mode == "1m" and bars_1m is None:
-        raise ValueError("mode='1m' needs bars_1m")
-    if mode == "1m":
-        assert bars_1m is not None
-        assert_explore_bars(bars_1m["ts_utc"])
+        raise ValueError("mode='1m' needs bars_1m_in")
     n, e_n = len(bars), len(exits)
     shape = (n, 2, e_n)
     ret, risk, cost = np.full(shape, np.nan), np.full(shape, np.nan), np.full(shape, np.nan)
@@ -204,8 +194,11 @@ def build_tensor(bars: pd.DataFrame, atr: pd.Series, exits: Sequence[ExitTemplat
     signals = pd.DataFrame({"idx": np.repeat(np.arange(n), 2), "side": np.tile(np.array(SIDES), n)})
     for k, ex in enumerate(exits):
         spec = ex.barrier_spec()
-        lab = (triple_barrier_1m(bars, bars_1m, signals, spec, atr, swap=swap) if mode == "1m"
-               else triple_barrier(bars, signals, spec, atr, swap=swap))
+        if mode == "1m":
+            assert bars_1m is not None
+            lab = triple_barrier_1m(bars, bars_1m, signals, spec, atr, swap=swap)
+        else:
+            lab = triple_barrier(bars, signals, spec, atr, swap=swap)
         if lab.empty:
             continue
         i, s = lab["idx"].to_numpy(dtype=int), (lab["side"].to_numpy(dtype=int) < 0).astype(int)
@@ -219,4 +212,4 @@ def build_tensor(bars: pd.DataFrame, atr: pd.Series, exits: Sequence[ExitTemplat
         t_entry[i, s, k], t_exit[i, s, k] = lab["t_entry"].to_numpy(dtype=int), lab["t_exit"].to_numpy(dtype=int)
     ts = pd.DatetimeIndex(pd.to_datetime(bars["ts_utc"], utc=True))
     return OutcomeTensor(ts_utc=ts, exits=tuple(exits), ret=ret, risk=risk, cost=cost, t_entry=t_entry, t_exit=t_exit,
-                         digest=tensor_digest(ts))
+                         digest=bars_in.digest)

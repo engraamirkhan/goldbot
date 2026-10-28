@@ -23,13 +23,13 @@ An evaluation is a recorded fact, never evidence of edge.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol
 
 import numpy as np
 import pandas as pd
 
 from goldbot.base import FrozenRecord
 from goldbot.data.timeutil import epoch_ns
+from goldbot.research.autodisc.ledger import LedgerError, SearchLedger
 from goldbot.research.autodisc.outcomes import Events, OutcomeTensor
 from goldbot.research.walkforward import WINDOWS
 
@@ -38,17 +38,6 @@ STRESS_MULT = 1.5
 MAX_TIME_IN_MARKET = 0.40
 PLATEAU_MIN_SHARE = 0.60
 MIN_EVENTS = {"15m": 300, "1h": 300, "4h": 150, "1d": 100}
-
-
-class UnledgeredSpecError(ValueError):
-    """The evaluator was handed a spec hash the search ledger has not recorded (design 3.1: ledger first)."""
-
-
-class LedgerLike(Protocol):
-    """STUB, REPLACE AT INTEGRATION with `autodisc.ledger`'s type: the one method the evaluator needs. The evaluator
-    refuses a hash for which this is false."""
-
-    def is_ledgered(self, spec_hash: str) -> bool: ...
 
 
 class Stat(FrozenRecord):
@@ -131,12 +120,14 @@ def _stat(r: np.ndarray, day: np.ndarray) -> Stat:
 
 
 def evaluate(tensor: OutcomeTensor, mask: np.ndarray, side: np.ndarray | int, exit_i: int, *, timeframe: str,
-             spec_hash: str | None = None, ledger: LedgerLike | None = None, min_events: int | None = None,
+             spec_hash: str | None = None, ledger: SearchLedger | None = None, null: bool = False, min_events: int | None = None,
              stress_mult: float = STRESS_MULT) -> Evaluation:
     """Evaluate one spec on the tensor. With a `ledger`, `spec_hash` must be recorded in it first (design 3.1), else
-    `UnledgeredSpecError`. `min_events` overrides the timeframe's floor."""
-    if ledger is not None and (spec_hash is None or not ledger.is_ledgered(spec_hash)):
-        raise UnledgeredSpecError(f"spec {spec_hash!r} is not in the search ledger: write it before evaluating")
+    `ledger.LedgerError`. `min_events` overrides the timeframe's floor."""
+    if ledger is not None:
+        if spec_hash is None:
+            raise LedgerError("a ledger was given without the spec hash")
+        ledger.require_logged(spec_hash, null=null)       # LedgerError: log the spec before evaluating (design 3.1)
     ev = tensor.select(mask, side, exit_i)
     n = len(ev)
     floor = MIN_EVENTS[timeframe] if min_events is None else min_events
