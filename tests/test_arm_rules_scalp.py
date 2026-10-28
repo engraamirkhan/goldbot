@@ -19,7 +19,8 @@ import pytest
 from goldbot.config import tf_seconds
 from goldbot.data.resample import mid, resample_bars, ticks_to_1m
 from goldbot.data.synthetic import synthetic_ticks
-from goldbot.engine import EngineConfig, exploration
+from goldbot.engine import EngineConfig, broker_bars, exploration
+from goldbot.execution.broker import Tick
 from goldbot.features.technical import atr
 from goldbot.ops import accounts as acc_mod
 from goldbot.research import arm_rules as R
@@ -300,18 +301,31 @@ def test_a_controls_admitted_entries_are_long_half_the_time_within_three_standar
 
 
 # ---------------------------------------------------------------- live == history (the engine's 1m/5m pass)
-def _live(b1: pd.DataFrame, arm: A.Arm, close: pd.Timestamp) -> list[tuple[int, float, float, int]]:
-    """What `exploration._minutes` queues for `arm` at `close` from the engine's 1m memory (the last
-    max_bars_in_memory complete minutes, no unbuilt ticks)."""
-    mem = b1[b1["visible_at"] <= close].tail(MEMORY).reset_index(drop=True)
+def _live_eng(arm: A.Arm, mem: pd.DataFrame, *, ticks: list[Tick] | None = None, got: pd.DataFrame | None = None,
+              broker_bars_on: bool = False) -> tuple[Any, Any]:
+    """An engine's exploration state for `exploration._minutes`: its 1m memory `mem`, unbuilt `ticks` and, with broker
+    bars on (production through the bridge), the broker's fetched minutes `got`."""
     ex = SimpleNamespace(arms={arm.id: exploration.Arm(spec=arm, style="scalp")}, retired=frozenset(), last_bar={},
                          queue=deque(), last_minute=None, deferred={}, needs_context=frozenset(), held_back={},
                          netting=None, ahead_seen=None)
-    eng = SimpleNamespace(exploration=ex, cfg=SimpleNamespace(live_clock=False, account_id="t"), bars_1m=mem,
-                          ticks=[], decisions=[])
-    exploration._minutes(eng, ex, close + pd.Timedelta(seconds=exploration.GRACE_S + 0.5))  # type: ignore[arg-type]
+    bb = broker_bars.BrokerBars()
+    if broker_bars_on:
+        bb.fetcher = broker_bars.Fetcher(client=None)
+    if got is not None:
+        bb.got = got.reset_index(drop=True)
+    eng = SimpleNamespace(exploration=ex, cfg=SimpleNamespace(live_clock=False, account_id="t",
+                                                              broker_bars=broker_bars_on),
+                          bars_1m=mem.reset_index(drop=True), ticks=list(ticks or []), decisions=[], broker_m1=bb)
+    return eng, ex
+
+
+def _live(b1: pd.DataFrame, arm: A.Arm, close: pd.Timestamp) -> list[tuple[int, float, float, int]]:
+    """What `exploration._minutes` queues for `arm` at `close` from the engine's 1m memory (the last
+    max_bars_in_memory complete minutes, no unbuilt ticks)."""
+    eng, ex = _live_eng(arm, b1[b1["visible_at"] <= close].tail(MEMORY))
+    exploration._minutes(eng, ex, close + pd.Timedelta(seconds=exploration.GRACE_S + 0.5))
     assert not [d for d in eng.decisions if d.get("action") == "exploration_rule_error"], eng.decisions
-    assert exploration.step(eng, close)  # type: ignore[arg-type]       # the 15m+ pass never runs a 1m/5m arm
+    assert exploration.step(eng, close)       # the 15m+ pass never runs a 1m/5m arm
     return [(p.side, p.stop_usd, p.target_usd, p.hold_bars) for p in ex.queue]
 
 
@@ -336,6 +350,66 @@ def test_the_engines_minute_pass_queues_every_history_candidate_and_no_other(b1,
         assert _live(b1, arm, at) == [rows[at]], at
     for at in quiet:
         assert _live(b1, arm, at) == [], f"live queues at {at}, history has no candidate"
+
+
+def _queued(ex: Any) -> list[tuple[int, float, float, int]]:
+    return [(p.side, p.stop_usd, p.target_usd, p.hold_bars) for p in ex.queue]
+
+
+def _z1p_live_shape(b1: pd.DataFrame, ctxs: dict[str, R.RuleContext]
+                    ) -> tuple[A.Arm, pd.Timestamp, tuple[int, float, float, int], pd.DataFrame, list[Tick]]:
+    """Z1P (its frozen row) at a history candidate, and the engine's live view of that close: bars_1m holds the
+    broker's M1 bars up to the minute before (tick_count = MT5 tick volume, `history.rates_to_bars`), and the minute
+    that just closed exists only as the engine's sampled quotes (four polls: its open, high, low and close)."""
+    arm = _arm("tick_surge", "Z1P", stop_usd=3.0, target_r=1.5, hold_bars=15)
+    ctx = ctxs["1m"]
+    kept, _ = R.screened(arm, ctx)
+    close = ctx.close_ts
+    first = pd.Timestamp(b1["visible_at"].iloc[(exploration.lookback(arm) + 1) + 1440])
+    i = next(int(j) for j in kept["idx"] if close[int(j)] >= first)
+    row = kept[kept["idx"] == i].iloc[0]
+    at = close[i]
+    want = (int(row["side"]), float(row["risk_usd"]), float(row["risk_usd"] * row["target_r"]), int(row["max_bars"]) + 1)
+    broker = b1[b1["visible_at"] <= at].tail(MEMORY).reset_index(drop=True)
+    bar, minute = broker.iloc[-1], at - pd.Timedelta(minutes=1)
+    ticks = [Tick(ts_utc=minute + pd.Timedelta(seconds=s), bid=float(bar[f"bid_{k}"]), ask=float(bar[f"ask_{k}"]))
+             for s, k in ((1, "open"), (15, "high"), (30, "low"), (50, "close"))]
+    assert float(bar["tick_count"]) >= Z.SURGE_X * float(broker["tick_count"].iloc[-61:-1].median()) > len(ticks)
+    return arm, at, want, broker, ticks
+
+
+def test_live_z1p_reads_the_brokers_tick_volume_for_the_minute_that_just_closed_never_the_sampled_quote_count(
+        b1, ctxs) -> None:
+    """Prereg section 0: "v = the bar's tick volume (Dukascopy `tick_count` in history; MT5 `tick_volume` live). It is
+    only ever compared with its own trailing median on the same feed." Live 2026-10-27: Z1P made no candidate against
+    11.7 a day expected. The minute pass read the decision minute from the engine's sampled quotes (at most four a
+    second at the 0.25 s loop), so v_t was a quote count set against a median of the broker's tick volumes and never
+    reached 2.5 x it. With broker bars on, the broker's fetched bar of that minute is the one the rule reads."""
+    arm, at, want, broker, ticks = _z1p_live_shape(b1, ctxs)
+    now = at + pd.Timedelta(seconds=exploration.GRACE_S + 0.5)
+    eng, ex = _live_eng(arm, broker.iloc[:-1], ticks=ticks, got=broker.tail(30), broker_bars_on=True)
+    exploration._minutes(eng, ex, now)
+    assert _queued(ex) == [want]
+    # broker bars off (paper, replays): the sampled minute is the feed, as before
+    eng, ex = _live_eng(arm, broker.iloc[:-1], ticks=ticks)
+    exploration._minutes(eng, ex, now)
+    assert _queued(ex) == []
+
+
+def test_the_minute_pass_waits_for_the_brokers_bar_of_the_minute_that_just_closed_at_most_the_engines_hold(
+        b1, ctxs) -> None:
+    """As a decision close (`broker_bars.hold`): the 1m/5m arms wait for the broker's bar of the minute just closed at
+    most HOLD past close + GRACE, while no finished call has covered it; then they decide on what is there."""
+    arm, at, want, broker, ticks = _z1p_live_shape(b1, ctxs)
+    eng, ex = _live_eng(arm, broker.iloc[:-1], ticks=ticks, got=broker.iloc[:-1].tail(29), broker_bars_on=True)
+    exploration._minutes(eng, ex, at + pd.Timedelta(seconds=exploration.GRACE_S + 0.5))
+    assert ex.last_minute is None and _queued(ex) == []                   # waiting: nothing decided yet
+    eng.broker_m1.got = broker.tail(30).reset_index(drop=True)           # the call returns with it
+    exploration._minutes(eng, ex, at + pd.Timedelta(seconds=3))
+    assert ex.last_minute == at and _queued(ex) == [want]
+    late, lex = _live_eng(arm, broker.iloc[:-1], ticks=ticks, got=broker.iloc[:-1].tail(29), broker_bars_on=True)
+    exploration._minutes(late, lex, at + broker_bars.GRACE + broker_bars.HOLD)
+    assert lex.last_minute == at                                          # past the hold: decided on the sampled bar
 
 
 def test_every_declared_lookback_fits_the_engines_memory_and_reaches_z7s_ten_trading_days() -> None:

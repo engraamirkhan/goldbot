@@ -10,7 +10,9 @@ The plan's rules, as built here:
 * When: arms on 15m and above decide at the engine's bar closes (`step`), after the engine's own decisions, so the
   live agents' decisions are the same with exploration on. Arms on 1m and 5m decide on the engine's pass (`on_pass`)
   "reading only already-complete minutes (bars_1m + ticks_to_1m(eng.ticks) at close + 1.5 s)": a minute joins once
-  its close is GRACE_S behind the clock. Nothing here writes `bars_1m`, `ticks` or `_closed_through`.
+  its close is GRACE_S behind the clock; with broker bars on, a minute's fetched broker bar replaces its sampled one
+  and the minute just closed waits for its bar as a decision close does (`_minutes`). Nothing here writes `bars_1m`,
+  `ticks` or `_closed_through`.
 * Sending: at most PER_PASS orders a pass, "FIFO with fair rotation across arms" (`_order`); a signal older than its
   staleness (10 s on 1m, 30 s on 5m, 60 s on 15m and above) is dropped and journalled `exploration_stale`. Each order
   goes through the cost probe's order core (`cost_probe._place`: `RiskGate.check`, the only path to an order, then
@@ -666,12 +668,22 @@ def _with_context(eng: Engine, ex: Exploration, arm: Arm, complete: pd.DataFrame
 def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     """The 1m/5m arms: once a minute is GRACE_S past its close, the complete minutes (bars_1m and the engine's
     unbuilt ticks, both copied, never written) are read and the arms whose bar closed queue their signals, each on
-    its own `lookback` bars (H-81's Z7 reads ten trading days of 5m closes, Z9 a 1h EMA50)."""
+    its own `lookback` bars (H-81's Z7 reads ten trading days of 5m closes, Z9 a 1h EMA50).
+    With broker bars on (engine/broker_bars.py), every minute whose broker bar has been fetched is the broker's, and
+    the pass waits for the bar of the minute just closed as a decision close does (`broker_bars.awaiting`: at most
+    HOLD past close + GRACE, while no finished call has covered it). H-81's volume rules compare "v = the bar's tick
+    volume (... MT5 `tick_volume` live)" with its own trailing median "on the same feed"; the unbuilt minute's
+    sampled quotes (at most four a second at the 0.25 s loop) are another feed, so Z1P, whose v_t was that count set
+    against the broker's tick volumes, never fired live (2026-10-27: 0 candidates against 11.7 a day). Past the hold
+    the minute is decided on what is there (sampled), as the engine's own closes are (`broker_bar_late`)."""
+    from goldbot.engine import broker_bars
     through = (now - pd.Timedelta(seconds=GRACE_S)).floor("min")
     if ex.last_minute is not None and through <= ex.last_minute:
         return
-    ex.last_minute = through
     arms = [a for a in ex.arms.values() if a.tf in SUB_15M and int(through.timestamp()) % tf_seconds(a.tf) == 0]
+    if arms and broker_bars.awaiting(eng, through - pd.Timedelta(minutes=1), now):
+        return                  # the minute's broker bar is on its way: a later pass decides this close
+    ex.last_minute = through
     tfs = sorted({a.tf for a in arms}, key=tf_seconds)
     if not tfs:
         return
@@ -683,6 +695,7 @@ def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     if ticks:
         parts.append(ticks_to_1m(pd.DataFrame({"ts_utc": [t.ts_utc for t in ticks], "bid": [t.bid for t in ticks],
                                                "ask": [t.ask for t in ticks]}), DEFAULT_SESSIONS))
+    parts.append(broker_bars.fetched(eng, through))     # last, so a minute's broker bar wins over its sampled one
     parts = [p for p in parts if not p.empty]
     if not parts:
         return
