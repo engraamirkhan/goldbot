@@ -455,3 +455,11 @@ Source: `prereg-2026-10-27-scalp-volume.md` (2010-2017 event counts and null-bra
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | H-81 | Ten 1m/5m exploration families at fixed-$ brackets with cost/R ≤ 0.08 per broker (ICM $3 / $4.50, Vantage $7), each with a shared per-account random control: Z1 tick-surge continuation, Z2 run-exhaustion fade, Z3 round-number break, Z4 round-number touch rejection, Z5 tick-confirmed prior-hour break, Z6 NR4 inside-bar break, Z7 same-half-hour periodicity (Heston-Korajczyk-Sadka 2010), Z8 volume absorption fade, Z9 1h-trend 5m reclaim, Z10 three-horizon momentum; plus Vantage S-twins VS0-VS5B (blocked until the Vantage cost UB is ≤ $0.24) | **pre-registered**, not dispatched; 25 ids need the 2026Q4 override 118 -> 143 (PD) | 0 (exploration rows; K +25 by the precedent) | prereg section 4: one read per family at the 300th admissible fill, continue / stop (-30 R) / futility (UB < +0.03 R); never promotion evidence |
+
+## A18. When-to-trade map on random entries (microstructure researcher, 2026-10-30)
+
+Source: `prereg-2026-10-30-when-map.md` (research plan bet 3; tests the performance-analyst's H-A trend filter).
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| H-82 | Random entries (S0 geometry: $3 stop, 1 R, 30 min, both sides every 10 min) pay net of the worse measured broker cost ($0.23/oz + thin-hour spread add-on) in some of 24 cells of session (Asia, London, NY overlap, NY late) x prior-day range / ATR20 tercile x side vs the trailing 4h return; and "with" beats "against" by >= 0.05 R (H-A) | **pre-registered** 2026-10-30, screen on 2010-2017 only | 1 screen, K +25 | cell passes on Holm-adjusted day-bootstrap lower bound > 0; plan line 3 retired if no cell has net > 0, day-clustered t >= 3 and >= 6 of 8 years positive; H-A passes on mean d >= 0.05 R with 90 % LB > 0 |
