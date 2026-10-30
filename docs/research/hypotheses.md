@@ -463,3 +463,11 @@ Source: `prereg-2026-10-30-hb-exits.md` (bet 2b of `research-plan.md`; the plan'
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | H-82 | Wider targets (1 / 1.5 / 2 / 3 R) or a time-only exit at the arm's own hold, on the fixed entries of S5A/S5B, Z4D/Z4P, Z6D, Z7D/Z7P, beat the arm's current target by more than the same exits gain on random-side entries within +/-60 min (difference-in-differences of net R, day-block bootstrap), 2010-2017 only | **failed 2026-10-30** (screen `hb-exits-screen-2026-11.md`: all 5 variants FAIL, best pooled DiD +0.0009 R, 90% CI -0.0002..+0.0019; retired, do not re-test on fixed-$ scalp entries without new evidence) | 0 registry trials; K +5 (one per variant) | PASS per variant: pooled DiD >= +0.05 R, 90% lower bound > 0, Bonferroni-5 bound > 0, family and year consistency; no PASS closes plan line 2's wider-target part for these entries; a PASS earns only a 2018-2025-09 confirmation |
+
+## A19. When-to-trade map on random entries (microstructure researcher, 2026-10-30)
+
+Source: `prereg-2026-10-30-when-map.md` (research plan bet 3; tests the performance-analyst's H-A trend filter).
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| H-83 | Random entries (S0 geometry: $3 stop, 1 R, 30 min, both sides every 10 min) pay net of the worse measured broker cost ($0.23/oz + thin-hour spread add-on) in some of 24 cells of session (Asia, London, NY overlap, NY late) x prior-day range / ATR20 tercile x side vs the trailing 4h return; and "with" beats "against" by >= 0.05 R (H-A) | **failed** 2026-10-30 (0 of 24 cells; H-A d -0.008 R; `when-map-screen-2026-11.md`); timing-only line at the S0 clock retired | 1 screen, K +25 | cell passes on Holm-adjusted day-bootstrap lower bound > 0; plan line 3 retired if no cell has net > 0, day-clustered t >= 3 and >= 6 of 8 years positive; H-A passes on mean d >= 0.05 R with 90 % LB > 0 |
