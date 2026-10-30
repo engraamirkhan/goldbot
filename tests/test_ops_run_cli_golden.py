@@ -41,8 +41,8 @@ WRITE = os.environ.get("GOLDBOT_WRITE_RUN_GOLDEN") == "1"
 # subcommands whose --help only prints (argparse) or, for drift-review, only reads state/drift.json in the cwd
 HELP_COMMANDS = ("record-gate", "gates", "gate-evidence", "publish-costs", "restore", "setup", "preflight",
                  "revoke-sessions", "owner-history", "health", "positions", "shadow-report", "fill-count", "broker-history-depth", "ruin", "monthly-report", "perf-report",
-                 "sizing-feasibility", "drift-review", "bridge-smoke", "tv-import", "tv-repaint-check", "tv-pull", "ledger",
-                 "daily-review", "repair-lost-record")
+                 "sizing-feasibility", "drift-review", "bridge-smoke", "tv-import", "tv-repaint-check", "tv-pull", "tv-ideas", "ledger",
+                 "daily-review", "repair-lost-record", "autodisc-register")
 
 # every command the dispatcher knows, with sample arguments (the trace stops before anything runs)
 DISPATCH: dict[str, list[str]] = {
@@ -82,9 +82,11 @@ DISPATCH: dict[str, list[str]] = {
     "tv-import": ["tv-import", "e.csv", "--indicator", "K", "--version", "1", "--tf", "15"],
     "tv-repaint-check": ["tv-repaint-check", "--indicator", "K", "--version", "1", "--tf", "15"],
     "tv-pull": ["tv-pull", "status"],
+    "tv-ideas": ["tv-ideas", "summary"],
     "ledger": ["ledger", "resume"],
     "daily-review": ["daily-review", "--dry-run", "--date", "2026-10-22"],
     "repair-lost-record": ["repair-lost-record", "icm-probe", "--dry-run"],
+    "autodisc-register": ["autodisc-register", "0" * 64, "--account", "icm-probe", "--prereg", "x.md#a", "--dry-run"],
     "bridge-smoke": ["bridge-smoke", "icm-demo"],
     "no-command": [],
     "help": ["--help"],
@@ -164,6 +166,7 @@ def _entry_functions() -> dict[tuple[str, int, str], str]:
     from goldbot.api import auth, mailer
     from goldbot.data import tv_csv
     from goldbot.ops import (
+        autodisc_register,
         backup,
         broker_depth,
         gates_phase,
@@ -186,7 +189,7 @@ def _entry_functions() -> dict[tuple[str, int, str], str]:
     for fn in (gates_phase.main, gates_phase.evidence_main, backup.main, setup_wizard.main, preflight.main,
                auth.revoke_sessions_cli, mailer.main, owner_history.main, health.main, ruin.main, monthly_report.main,
                perf_report.main, min_lot.main, smoke.main, tv_csv.main, tv_repaint.main, daily_review.main,
-               repair_records.main, broker_depth.main):
+               repair_records.main, broker_depth.main, autodisc_register.main):
         add(fn, f"{fn.__module__}:{fn.__qualname__}")
     return out
 
@@ -284,8 +287,10 @@ ONE_SHOT: dict[str, tuple[str, str]] = {
     "tv-repaint-check": ("goldbot.research.tv_repaint", "main"),
     "ledger": ("goldbot.ledger.cli", "main"),
     "tv-pull": ("goldbot.data.tv_pull", "main"),             # `follow` loops, but exits with main()'s value
+    "tv-ideas": ("goldbot.data.tv_ideas", "main"),
     "daily-review": ("goldbot.research.daily_review", "main"),
     "repair-lost-record": ("goldbot.ops.repair_records", "main"),
+    "autodisc-register": ("goldbot.ops.autodisc_register", "main"),
 }
 # Services are exempt from the exit-code rule: each loops forever (supervisor, engine, scheduler, telegram, news) or
 # serves until stopped (api and webhook under uvicorn, bridge under serve), and the dispatcher never passed a return

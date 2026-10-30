@@ -69,6 +69,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 import pandas as pd
+import yaml
 from pydantic import Field, ValidationError, model_validator
 
 from goldbot.base import FrozenRecord, UtcTimestamp
@@ -80,8 +81,8 @@ from goldbot.db import Database, RecordRepo
 from goldbot.engine import auto_entry, cost_probe
 from goldbot.execution.costs import CONTRACT_OZ
 from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec
+from goldbot.research.arms import SPEC_RULE, arm_hash, load_arms
 from goldbot.research.arms import Arm as SpecArm
-from goldbot.research.arms import arm_hash, load_arms
 
 if TYPE_CHECKING:
     from goldbot.engine.runner import Engine
@@ -124,6 +125,8 @@ PI_RANDOM = 1.0                     # champion zero: the random branch takes eve
 ARM_ROOM_LOSSES = 3
 SHARE_FLOOR, SHARE_CAP = 0.05, 0.30  # H-61's bounds on a strategy arm's share (L3 `bounded_shares`), fallback included
 SPEC_PATH = Path(__file__).parents[2] / "config" / "exploration_arms.yaml"   # the frozen ARM-SPEC (hash-checked)
+# ADR 0058: discovered arms (rule `spec_rule`), hash-checked like the ARM-SPEC and loaded on demo accounts only
+SPEC_ARMS_PATH = Path(__file__).parents[2] / "config" / "spec_arms.yaml"
 # a close by the arm's own barrier: anything else censors the label (`trail_close`: a runner arm's own trailed stop,
 # reached before the broker had it; no other arm trails)
 NATURAL = frozenset({HOLD_EXIT, "time_exit", "stop", "target", "engine_stop_close", "trail_close"})
@@ -217,15 +220,60 @@ class ExplorationConfig(FrozenRecord):
         return self
 
 
-def config_for(acc: Account, spec_path: Path = SPEC_PATH) -> ExplorationConfig | None:
+def _load_spec_arm_rows(path: Path, *, live_class: bool) -> tuple[list[SpecArm], list[str]]:
+    """The discovered-arm rows of `path`, one at a time (trading-safety L2: one bad row never stops the engine). A row
+    that fails validation (`arm_rules_spec.check`, the frozen hash) or shares its id with another row is left out, logged
+    and named in the second result (journalled at the engine's start like any dropped arm); an unreadable file drops
+    every row. The one hard error is a `spec_rule` row for a live-class account (ADR 0058, demo only)."""
+    try:
+        raw = yaml.safe_load(Path(path).read_text()) or {}
+        rows = list(raw.get("arms") or [])
+    except (yaml.YAMLError, OSError, AttributeError, TypeError) as exc:
+        log.error("discovered-arm file %s is unreadable (%s): no discovered arm runs", path, exc)
+        return [], []
+    if live_class and (spec := sorted(str(r.get("id")) for r in rows if isinstance(r, dict)
+                                      and r.get("rule") == SPEC_RULE)):
+        raise ValueError(f"spec_rule arms {spec} load on demo accounts only (ADR 0058): refused for a live-class account")
+    ids = [str(r.get("id")) for r in rows if isinstance(r, dict)]
+    arms: list[SpecArm] = []
+    rejected: list[str] = []
+    for i, row in enumerate(rows):
+        name = str(row.get("id")) if isinstance(row, dict) and row.get("id") else f"row{i}"
+        try:
+            arm = SpecArm.model_validate(row)
+            if ids.count(arm.id) > 1:
+                raise ValueError("another row has the same id (ambiguous: neither runs)")
+            if arm.config_hash != arm_hash(arm):
+                raise ValueError(f"config_hash {arm.config_hash!r} does not match the arm (an arm is frozen)")
+        except ValueError as exc:
+            log.error("discovered arm %s dropped from %s: %s", name, path, exc)
+            rejected.append(name)
+            continue
+        arms.append(arm)
+    return arms, rejected
+
+
+def config_for(acc: Account, spec_path: Path = SPEC_PATH,
+               spec_arms_path: Path = SPEC_ARMS_PATH) -> ExplorationConfig | None:
     """The engine's exploration block for `acc` (integration ruling 2026-10-25): None unless its `exploration` is
-    enabled. Rules come from the frozen, hash-checked spec (`research.arms.load_arms`); the account registers the arms
-    it runs (style, control share; the per-trade cap reaches the RiskGate as `exploration_arms`). A registered arm the
-    spec lacks or blocks is dropped and logged here, and journalled at the engine's start (`dropped`)."""
+    enabled. Rules come from the frozen, hash-checked spec (`research.arms.load_arms`) and the discovered arms
+    (`spec_arms_path`, ADR 0058: "Demo arms are data rows run by one reviewed interpreter (`spec_rule`), loaded only on
+    demo accounts": on any other account they are refused, loudly; a bad row is dropped and journalled, never fatal:
+    `_load_spec_arm_rows`); the account registers the
+    arms it runs (style, control share; the per-trade cap reaches the RiskGate as `exploration_arms`). A registered arm
+    the spec lacks or blocks is dropped and logged here, and journalled at the engine's start (`dropped`)."""
     ex = acc.exploration
     if not ex.enabled:
         return None
     specs = {a.id: a for a in load_arms(spec_path)}
+    rejected: list[str] = []
+    if spec_arms_path.exists():
+        found, rejected = _load_spec_arm_rows(spec_arms_path, live_class=acc.mode != "demo")
+        for a in found:
+            if a.id in specs:
+                log.warning("discovered arm id %s is already an ARM-SPEC arm id: the row is dropped", a.id)
+            else:
+                specs[a.id] = a
     arms, dropped = [], []
     for arm_id in sorted(ex.arms):
         reg = ex.arms[arm_id]
@@ -235,6 +283,8 @@ def config_for(acc: Account, spec_path: Path = SPEC_PATH) -> ExplorationConfig |
             dropped.append(arm_id)
             continue
         arms.append(Arm(spec=specs[arm_id], style=reg.style, control_share=reg.control_share))
+    running = {a.arm_id for a in arms}
+    dropped += [i for i in rejected if i not in running and i not in dropped]
     return ExplorationConfig(enabled=True, budget_share=ex.budget_share, max_open_total=ex.max_open_total,
                              pots={k: Pot(gbp=v.gbp, max_open=v.max_open) for k, v in ex.pots.items()},
                              arms=tuple(arms), dropped=tuple(dropped))
@@ -369,7 +419,10 @@ class Exploration:
         from goldbot.research import arm_rules
         self.cfg = cfg
         self.broker = eng.cfg.broker_name             # the key its evidence is learnt and read under (ADR 0043 am.)
-        ok = [a for a in cfg.arms if a.spec.status == "run" and a.spec.rule in arm_rules.RULE_FUNCS]
+        # ADR 0058: a discovered arm (`spec_rule`) runs on a demo account only; refused here again whatever the config
+        # said (the loader refuses it first, `config_for`), journalled as dropped like any arm that cannot run
+        ok = [a for a in cfg.arms if a.spec.status == "run" and a.spec.rule in arm_rules.RULE_FUNCS
+              and (a.spec.rule != SPEC_RULE or eng.cfg.mode == "demo")]
         for name in [*cfg.dropped, *(a.arm_id for a in cfg.arms if a not in ok)]:
             # trading-safety L2: one bad arm never stops the engine; it is named and the others run
             log.warning("exploration arm %s dropped (not in the frozen spec, blocked there or no rule)", name)

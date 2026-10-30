@@ -1,0 +1,9 @@
+# Discovered exploration arms (ADR 0058 section 5, design autonomous-discovery-2026-10-28.md section 4): one row per
+# autonomous-discovery survivor, run by the one reviewed interpreter `spec_rule` (goldbot/research/arm_rules_spec.py).
+# Row: { id: D<yymm>-<n>, rule: spec_rule, timeframe, params: {spec: <canonical JSON>, spec_hash, prereg: <path#section>},
+# max_open: 1, forward_only: true, status: run, config_hash } with config_hash = goldbot.research.arms.arm_hash; an
+# edited row fails to load, amend under a new id. Rows are written only by `python -m goldbot.ops.run autodisc-register`
+# after its journal row (state/discovery.db `arm_registrations`), never by hand.
+# Demo only: `load_arms(live_class=True)` refuses any spec_rule row and the engine drops one on a non-demo account. Caps,
+# pots, the ADR 0057 room floor and the RiskGate apply unchanged; exits are the engine's standard automatic exits.
+arms: []

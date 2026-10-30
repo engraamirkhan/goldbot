@@ -13,11 +13,13 @@ from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal
+from unittest import mock
 
 import numpy as np
 import pandas as pd
 import pytest
 
+import goldbot.engine.runner as runner_mod
 from goldbot.config import load_settings
 from goldbot.engine import Engine, EngineConfig
 from goldbot.engine.limits_apply import AdaptiveLimitsController, EngineLimits
@@ -417,8 +419,25 @@ class _Equity(PaperBroker):
 
 def _engine(tmp_path: Path, pb: _Equity) -> Engine:
     pol = engine_limits_policy(S, _acc(), state_dir=tmp_path)
-    return Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path), mode="demo"), pb,
-                  [], {}, ApprovalCenter({1}, bus=ApprovalBus(tmp_path)), limits=pol.defaults, limits_policy=pol)
+    # the engine's first limits read (in its constructor) is on the host clock, and it opens the controller's day
+    # and logs a change on it; this engine lives on DAY (its ticks), so that read is placed on DAY too, or a host
+    # date after DAY makes every tick read "intraday: only lower" from the floors
+    with mock.patch.object(runner_mod, "pd", _pandas_on(T0)):
+        eng = Engine(EngineConfig(account_id="icm-demo", broker_name="icm", state_dir=str(tmp_path), mode="demo"),
+                     pb, [], {}, ApprovalCenter({1}, bus=ApprovalBus(tmp_path)), limits=pol.defaults, limits_policy=pol)
+    eng.clock = lambda: T0
+    return eng
+
+
+def _pandas_on(now: pd.Timestamp) -> SimpleNamespace:
+    """pandas as the runner sees it, with `Timestamp.now()` fixed at `now`."""
+    class _Timestamp(pd.Timestamp):
+        @classmethod
+        def now(cls, tz: Any = None) -> pd.Timestamp:   # type: ignore[override]
+            return now if tz is None else now.tz_convert(tz)
+    shim = SimpleNamespace(**{k: getattr(pd, k) for k in dir(pd) if not k.startswith("_")})
+    shim.Timestamp = _Timestamp
+    return shim
 
 
 def _tick(s: float = 0.0) -> Tick:

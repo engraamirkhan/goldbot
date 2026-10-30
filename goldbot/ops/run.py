@@ -39,6 +39,8 @@
                                                          # CSV vs live alerts on the same bars; flags repaint_validated
   python -m goldbot.ops.run tv-pull sync|follow|status|graphics [--study PINE_ID[@V]] [--tf TF]
                                                          # TradingView direct pull (read-only, cookie in the keyring)
+  python -m goldbot.ops.run tv-ideas poll|follow|backfill|summary|export|reparse [--state DIR]
+                                                         # followed TradingView authors' ideas (read-only, no cookie)
   python -m goldbot.ops.run daily-review --date YYYY-MM-DD [--dry-run] [--state DIR]
                                                          # learning-ops review of one opportunity day (dry run: prints,
                                                          # writes, retires, refits and posts nothing)
@@ -48,6 +50,9 @@
   python -m goldbot.ops.run repair-lost-record <account> [--state DIR] [--position ID ...] [--dry-run]
                                                          # engine stopped: lost exploration records written from the
                                                          # broker's deals, dropped from the engine's lost list
+  python -m goldbot.ops.run autodisc-register <spec_hash> --account ID --prereg PATH#SECTION [--max-loss X] [--dry-run]
+                                                         # a discovery survivor -> a demo spec_rule arm (ADR 0058):
+                                                         # journalled first, then config files; no order, no start
 """
 # The services live in goldbot/ops/services/ and the commands in goldbot/ops/commands/ (registry.py), one module each,
 # so lanes stop colliding on this file. This module stays the public surface: it re-exports every name it always had,

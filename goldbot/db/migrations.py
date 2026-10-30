@@ -1,4 +1,4 @@
-"""Forward-only schema migrations for core.db, aux.db, tv.db, tv_auth.db and program.db (docs/proposals/2026-10-state-store.md, section 3).
+"""Forward-only schema migrations for core.db, aux.db, tv.db, tv_auth.db, program.db and tv_ideas.db (docs/proposals/2026-10-state-store.md, section 3).
 
 "Each migration runs in one BEGIN IMMEDIATE transaction that also records its version; forward-only, never edited
 after merge." Applied versions are rows of `schema_version` (version, name, applied_ns), mirrored in
@@ -664,6 +664,54 @@ TV_AUTH: tuple[Migration, ...] = (
     )),
 )
 
+# tv_ideas.db: the published chart ideas of the TradingView authors the owner follows (goldbot/data/tv_ideas.py). Its own
+# file: third-party text never shares a file with the alert inbox, and the Mac research copy is this file alone.
+# Point in time: every row carries first_seen_utc (our clock) and available_utc (live: first_seen; back catalogue:
+# TradingView's server time + backfill_latency_s, flagged backfilled). First release is immutable: a later content is
+# a new tv_idea_versions row, an author's update a new tv_idea_updates row; nothing is overwritten.
+TV_IDEAS: tuple[Migration, ...] = (
+    Migration(version=1, name="tv_ideas", statements=(
+        """CREATE TABLE IF NOT EXISTS tv_ideas (
+    idea_id INTEGER PRIMARY KEY, uuid TEXT NOT NULL, author TEXT NOT NULL,
+    symbol TEXT NOT NULL, exchange TEXT NOT NULL, interval TEXT NOT NULL, tf TEXT,
+    direction TEXT NOT NULL CHECK (direction IN ('long', 'short', 'neutral', 'unknown')),
+    title TEXT NOT NULL, description TEXT NOT NULL, description_complete INTEGER NOT NULL,
+    is_education INTEGER NOT NULL, is_video INTEGER NOT NULL,
+    published_utc TEXT NOT NULL, updated_utc TEXT, chart_url TEXT NOT NULL, snapshot_url TEXT,
+    levels TEXT NOT NULL CHECK (json_valid(levels)),
+    has_entry INTEGER NOT NULL, has_stop INTEGER NOT NULL, has_target INTEGER NOT NULL,
+    content_hash TEXT NOT NULL,
+    first_seen_utc TEXT NOT NULL, available_utc TEXT NOT NULL, backfilled INTEGER NOT NULL,
+    edited INTEGER NOT NULL, last_seen_utc TEXT NOT NULL, source TEXT NOT NULL
+) STRICT""",
+        "CREATE INDEX IF NOT EXISTS tv_ideas_author_avail ON tv_ideas (author, available_utc)",
+        """CREATE TABLE IF NOT EXISTS tv_idea_versions (
+    idea_id INTEGER NOT NULL, content_hash TEXT NOT NULL, seen_utc TEXT NOT NULL,
+    title TEXT NOT NULL, description TEXT NOT NULL, direction TEXT NOT NULL, interval TEXT NOT NULL,
+    levels TEXT NOT NULL CHECK (json_valid(levels)),
+    PRIMARY KEY (idea_id, content_hash)
+) STRICT""",
+        """CREATE TABLE IF NOT EXISTS tv_idea_updates (
+    update_id INTEGER PRIMARY KEY, idea_id INTEGER NOT NULL, type TEXT NOT NULL, value TEXT, label TEXT,
+    description TEXT NOT NULL, levels TEXT NOT NULL CHECK (json_valid(levels)),
+    created_utc TEXT NOT NULL, first_seen_utc TEXT NOT NULL, available_utc TEXT NOT NULL, backfilled INTEGER NOT NULL
+) STRICT""",
+        "CREATE INDEX IF NOT EXISTS tv_idea_updates_idea ON tv_idea_updates (idea_id, created_utc)",
+        # the back catalogue's listing items (truncated text), read before each idea's detail: the backfill resumes here
+        """CREATE TABLE IF NOT EXISTS tv_idea_listing (
+    idea_id INTEGER PRIMARY KEY, uuid TEXT NOT NULL, author TEXT NOT NULL, updated_ts REAL,
+    item TEXT NOT NULL CHECK (json_valid(item)), seen_utc TEXT NOT NULL
+) STRICT""",
+        """CREATE TABLE IF NOT EXISTS tv_ideas_runs (
+    id INTEGER PRIMARY KEY, kind TEXT NOT NULL, started_utc TEXT NOT NULL, finished_utc TEXT NOT NULL,
+    ok INTEGER NOT NULL, requests INTEGER NOT NULL, new_ideas INTEGER NOT NULL, new_updates INTEGER NOT NULL,
+    new_versions INTEGER NOT NULL, reason TEXT NOT NULL
+) STRICT""",
+        "CREATE TABLE IF NOT EXISTS tv_ideas_state (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_utc TEXT NOT NULL)"
+        " STRICT",
+    )),
+)
+
 # program.db: the program ledger (goldbot/ledger). Every table has the same common columns and is append-only: a row
 # is never updated or deleted; the only permitted UPDATE sets `superseded_by_id` once, from NULL, when a newer version
 # of the same key is appended. `owner_notes` can only hold private rows (docs/ledger exports public rows only).
@@ -725,7 +773,7 @@ PROGRAM: tuple[Migration, ...] = (
 )
 
 MIGRATIONS: dict[DbKind, tuple[Migration, ...]] = {"core": CORE, "aux": AUX, "tv": TV, "tv_auth": TV_AUTH,
-                                                   "program": PROGRAM}
+                                                   "program": PROGRAM, "tv_ideas": TV_IDEAS}
 
 
 def _check_sequence(kind: DbKind, migs: tuple[Migration, ...]) -> None:
