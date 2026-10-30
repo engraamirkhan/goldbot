@@ -30,7 +30,12 @@ The reading rule (frozen in `reading_rule`; every part is a check in the verdict
   (4) net mean R > 0 at 1.5x cost (the explore stress);
   (5) consistency: the confirm mean R inside the explore window's 90% prediction interval,
       explore mean +- 1.645 x explore se x sqrt(1 + n_explore / n_confirm), the explore numbers frozen in the
-      pre-registration.
+      pre-registration;
+  (6) the read is net of the declared measured cost table (A4 cost floor; quant review of phase 3, F3).
+Advancing to a confirm trial (quant review F1-F3): the survivor's DSR is re-read from its stored inputs at the
+registry's `n_trials_discovery` on the day (grammar v1's K 864 included, `k_link.PRIOR_SEARCHES`), its own explore net
+mean R is > 0 and it was judged on a measured cost table. The holdout passes on `gates.holdout_verdict` AND the t
+clustered by session day >= HOLDOUT_MIN_T (F4).
 Deviation from design 3.3, recorded in ADR 0058's phase-3 amendment: the read is rule-only on the outcome tensor (the same
 evaluator and costs as explore), not the `SpecSpecialist` -> `research_pass` model path; the gates' model-only checks
 (1,500 candidates, per-fold test sizes) do not apply. A pass here is therefore never `passed_gates` (no "evaluated"
@@ -50,7 +55,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats as sps
 
-from goldbot.base import FrozenRecord
+from goldbot.base import FrozenRecord, load_record_json
 from goldbot.config import Settings
 from goldbot.data.timeutil import epoch_ns
 from goldbot.research import gates
@@ -159,14 +164,28 @@ def reading_rule(h: str, plan: dict[str, Any]) -> str:
             f"one-sided t rejects under Holm at {HOLM_ALPHA:.0%} over the batch; (4) net mean R > 0 at "
             f"{STRESS_MULT:g}x cost; (5) the confirm mean R lies inside the explore 90% prediction interval "
             f"{m:.4f} +- {PI_Z} x {se:.4f} x sqrt(1 + {n} / n_confirm). A pass is followed by one holdout read "
-            f"(gates.holdout_verdict: mean R > 0 and t >= {gates.HOLDOUT_MIN_T}), never for a holdout_contaminated spec. "
-            "A failed hash is never re-confirmed.")
+            f"(gates.holdout_verdict: mean R > 0 and t >= {gates.HOLDOUT_MIN_T}, and clustered t >= "
+            f"{gates.HOLDOUT_MIN_T} by session day), never for a holdout_contaminated spec. Every read is net of the "
+            f"measured cost table ({plan['explore_cost_line']}); a read on other costs fails. A failed hash is never "
+            "re-confirmed.")
+
+
+def is_measured(cost_line: str) -> bool:
+    """The A4 cost floor: the cost line names a measured cost table (`execution.costs.research_costs`), not priors."""
+    return cost_line.startswith("cost table ")
+
+
+def _require_measured(cost_line: str, what: str) -> None:
+    if not is_measured(cost_line):
+        raise StageRefused(f"{what} is not on a measured cost table ({cost_line or 'no cost line'}): the A4 cost floor "
+                           "needs one (pass --cost-table / research.autodisc.cost_table)")
 
 
 def _real(ledger: SearchLedger) -> None:
     if ledger.mode() != "real":
         raise StageRefused(f"{ledger.path} is not a real search ledger: a synthetic search never reaches a stage read")
-    ledger.verify()
+    if ledger.verify() == 0:
+        raise StageRefused(f"no search ledger at {ledger.path} (empty): stage reads run on the host that searched")
 
 
 def _spec(ledger: SearchLedger, h: str) -> StrategySpec:
@@ -192,15 +211,20 @@ def preregister_confirm(registry: TrialRegistry, ledger: SearchLedger, h: str) -
     if sv is None:
         raise StageRefused(f"spec {h[:12]} is not a recorded explore survivor: only survivors advance to confirm")
     n = int(res.get("n_events") or 0)
-    dsr = sv.get("dsr")
-    if dsr is None or not meets_confirm_bar(float(dsr), n):
-        raise StageRefused(f"spec {h[:12]}: explore DSR {_f(dsr)} at cumulative K_search {sv['k_search']:,} on {n} "
-                           f"events; advancing to confirm needs DSR >= {gates.DSR_BAR} on {MIN_TRADES_FOR_DSR}+ events "
+    if n < MIN_TRADES_FOR_DSR:
+        raise StageRefused(f"spec {h[:12]}: {n} events; advancing to confirm needs {MIN_TRADES_FOR_DSR}+ events "
                            "(ADR 0058 amendment 2026-10-30): it stays a recorded fact")
     m, t = res.get("mean_r"), res.get("t_stat")
     if m is None or t is None or not t:
         raise StageRefused(f"spec {h[:12]}: no explore mean R / t_stat in the ledger result, so the consistency "
                            "interval cannot be frozen")
+    if not float(m) > 0:
+        raise StageRefused(f"spec {h[:12]}: explore net mean R {float(m):.4f} <= 0 (its own, before the drift baseline)")
+    _require_measured(sv.get("cost_line") or "", f"spec {h[:12]}'s explore result")
+    if not sv.get("dsr_inputs"):
+        raise StageRefused(f"spec {h[:12]}: its survivor row has no stored DSR inputs, so the DSR cannot be read at "
+                           "today's K: re-judge it on a later night")
+    inputs = load_record_json(DsrInputs, sv["dsr_inputs"], source="discovery_survivors")
     if StageJournal(ledger.path).state(h).confirm is not None:
         raise StageRefused(f"spec {h[:12]} was read on the confirm window already: a failed hash is never re-confirmed")
     with registry.locked():
@@ -209,6 +233,12 @@ def preregister_confirm(registry: TrialRegistry, ledger: SearchLedger, h: str) -
         if any(r.get("rule_ref") == ref for r in rows):
             raise StageRefused(f"spec {h[:12]} is pre-registered already ({ref})")
         sync_discovery_k(registry, ledger, generator="confirm precondition", lock=False)      # F3, before any trial
+        k = registry.n_trials_discovery
+        dsr = inputs.dsr(k)                   # quant F2: re-read at the registry's discovery K of today, not the night's
+        if not meets_confirm_bar(dsr, n):
+            raise StageRefused(f"spec {h[:12]}: explore DSR {dsr:.3f} at the registry's discovery K {k:,} (judged "
+                               f"{_f(sv.get('dsr'))} at K {sv['k_search']:,}) on {n} events; advancing to confirm needs "
+                               f"DSR >= {gates.DSR_BAR} (ADR 0058 amendment 2026-10-30): it stays a recorded fact")
         batch = f"{RG._utcnow():%Y-%m}"
         if _batch_rows(rows, STATUS_CONFIRM, batch):
             raise StageRefused(f"the {batch} confirm batch has been read: pre-register into next month's batch")
@@ -216,7 +246,9 @@ def preregister_confirm(registry: TrialRegistry, ledger: SearchLedger, h: str) -
             raise StageRefused(f"{MONTHLY_MAX} confirm pre-registrations in {batch} already (design 3.3)")
         plan = {"spec_hash": h, "spec": canonical_json(spec), "timeframe": spec.timeframe, "batch": batch,
                 "explore_mean_r": float(m), "explore_se": abs(float(m) / float(t)), "explore_n": n,
-                "survivor_dsr": float(dsr), "survivor_k_search": int(sv["k_search"]), "survivor_night": sv["night"],
+                "survivor_dsr": float(dsr), "survivor_k": k, "survivor_night": sv["night"],
+                "survivor_dsr_at_night": sv.get("dsr"), "survivor_k_at_night": int(sv["k_search"]),
+                "explore_cost_line": sv.get("cost_line"),
                 "k_discovery_at_prereg": registry.n_trials_discovery, "window": window_text("confirm"),
                 "flags": ledger.spec_flags(h)}
         return registry.preregister(agent_id=AGENT_ID, family=FAMILY, config=config_for(spec),
@@ -275,6 +307,11 @@ def judge(read: StageRead, plan: dict[str, Any], k: int) -> list[dict[str, Any]]
     ]
 
 
+def _cost_check(read: StageRead, cost_line: str) -> dict[str, Any]:
+    return _check("costs", read.cost_line == cost_line and is_measured(read.cost_line),
+                  f"read net of {read.cost_line or 'no cost line'} (declared: {cost_line})")
+
+
 def p_value(t: float | None) -> float:
     """One-sided p of the clustered t (normal reference); no t: 1."""
     return 1.0 if t is None or not np.isfinite(t) else float(sps.norm.sf(t))
@@ -282,10 +319,13 @@ def p_value(t: float | None) -> float:
 
 # ---------------------------------------------------------------- the confirm read
 def run_confirm_batch(registry: TrialRegistry, ledger: SearchLedger, batch: str, read: Reader, *, cap: int,
-                      reserved: int, now: Any = None) -> list[ConfirmVerdict]:
+                      reserved: int, cost_line: str, now: Any = None) -> list[ConfirmVerdict]:
     """Read the month's pre-registered batch once (module docstring). `cap` / `reserved`: the quarter's budget and
-    reservation (research.budget_for / reserved_for); the check, the reads and the rows happen under the registry lock."""
+    reservation (research.budget_for / reserved_for); the check, the reads and the rows happen under the registry lock.
+    `cost_line`: the measured cost table the reads are net of (`stage_costs`), checked before anything opens; a read on
+    other costs fails its "costs" check."""
     _real(ledger)
+    _require_measured(cost_line, "the confirm read")
     journal = StageJournal(ledger.path)
     with registry.locked():
         rows = registry._rows()
@@ -314,7 +354,7 @@ def run_confirm_batch(registry: TrialRegistry, ledger: SearchLedger, batch: str,
             for p, h in zip(preregs, hashes):
                 _void(registry, journal, "confirm", h, p["config"], p, quarter, batch, f"{type(exc).__name__}: {exc}")
             raise
-        checks = {h: judge(reads[h], p["plan"], k) for p, h in zip(preregs, hashes)}
+        checks = {h: judge(reads[h], p["plan"], k) + [_cost_check(reads[h], cost_line)] for p, h in zip(preregs, hashes)}
         pv = [p_value(reads[h].t_stat) for h in hashes]
         rejects = holm(pv)
         out: list[ConfirmVerdict] = []
@@ -354,9 +394,12 @@ def _void(registry: TrialRegistry, journal: StageJournal, stage: Stage, h: str, 
 
 # ---------------------------------------------------------------- the holdout read
 def holdout_read(registry: TrialRegistry, ledger: SearchLedger, h: str, read: Reader, *, cap: int, reserved: int,
-                 now: Any = None) -> HoldoutVerdict:
-    """Read a confirm passer once on the holdout window (module docstring); StageRefused says why not."""
+                 cost_line: str, now: Any = None) -> HoldoutVerdict:
+    """Read a confirm passer once on the holdout window (module docstring); StageRefused says why not. It passes on
+    `gates.holdout_verdict` AND the t clustered by session day >= HOLDOUT_MIN_T (quant F4), net of the declared
+    measured `cost_line`."""
     _real(ledger)
+    _require_measured(cost_line, "the holdout read")
     spec = _spec(ledger, h)
     if ledger.spec_flags(h).get("holdout_contaminated"):
         raise StageRefused(f"spec {h[:12]} is holdout_contaminated: its holdout read is void, the forward demo read is "
@@ -386,16 +429,20 @@ def holdout_read(registry: TrialRegistry, ledger: SearchLedger, h: str, read: Re
             _void(registry, journal, "holdout", h, cfg, None, quarter, "", f"{type(exc).__name__}: {exc}")
             raise
         hv = gates.holdout_verdict(np.asarray(rd.ret, dtype=float), np.asarray(rd.risk, dtype=float))
-        results = {"passed": bool(hv["passed"]), "holdout": hv, "input_digest": rd.input_digest,
+        clustered = rd.t_stat is not None and rd.t_stat >= gates.HOLDOUT_MIN_T
+        costs = _cost_check(rd, cost_line)
+        passed = bool(hv["passed"]) and clustered and costs["passed"]
+        results = {"passed": passed, "holdout": hv, "clustered_t": rd.t_stat, "costs": costs, "input_digest": rd.input_digest,
                    "cost_source": rd.cost_line, "window": window_text("holdout")}
         journal.close("holdout", h, results)
         row = registry.record(agent_id=AGENT_ID, family=FAMILY, config=cfg, feature_version=FEATURE_VERSION,
                               rationale=f"holdout read of {h[:12]} (ADR 0058 design 3.5)", results=results,
                               status="holdout", budget_quarter=quarter, rule_ref=f"autodisc:{h}")
-        registry.record_verdict(row_ref(row), "continue" if hv["passed"] else "stop",
-                                f"holdout: {json.dumps({k: hv[k] for k in ('n', 'mean_r', 't_stat')})}; {hv['rule']}",
+        registry.record_verdict(row_ref(row), "continue" if passed else "stop",
+                                f"holdout: {json.dumps({k: hv[k] for k in ('n', 'mean_r', 't_stat')})}, clustered t "
+                                f"{_f(rd.t_stat)} (need {gates.HOLDOUT_MIN_T}); {hv['rule']}; {costs['detail']}",
                                 rule="ADR 0058 design 3.5 (holdout, one-way)", agent_id="evaluator")
-        return HoldoutVerdict(spec_hash=h, passed=bool(hv["passed"]), verdict=hv, trial=int(row["trial"]))
+        return HoldoutVerdict(spec_hash=h, passed=passed, verdict=hv, trial=int(row["trial"]))
 
 
 # ---------------------------------------------------------------- the real reader (the owner's Mac)
@@ -447,23 +494,34 @@ def stage_bars(raw: Path, stage: StageName) -> StageFrame:
     return StageFrame(b.loc[(ns >= lo_ns) & (vis < hi_ns)].reset_index(drop=True), stage)   # visible before the end
 
 
+def stage_costs(settings: Settings, cost_table: str | None = None) -> tuple[float, Any, str]:
+    """(extra cost per oz, swap, cost line) of a stage read: the measured cost table only (the A4 cost floor; no
+    silent fallback to the priors), at the same conservative value as the explore search (never below the settings
+    prior). `cost_table` None: research.autodisc.cost_table."""
+    from goldbot.execution.costs import load_research_cost_table, research_costs, settings_extra_cost_usd
+    ct = cost_table if cost_table is not None else settings.research.autodisc.cost_table
+    table = load_research_cost_table(ct) if ct else None
+    if table is None:
+        raise StageRefused(f"a stage read needs a measured cost table (A4 cost floor); {ct or 'none'} was given or found")
+    extra, swap, source = research_costs(settings, table)
+    _require_measured(source, "the stage read")
+    return max(extra, settings_extra_cost_usd(settings)), swap, source
+
+
 def stage_backends(settings: Settings, stage: StageName, timeframe: str, raw: Path | None = None,
                    cost_table: str | None = None) -> tuple[OutcomeTensor, MaskProvider, str]:
     """The stage window's outcome tensor (decision bars inside the window only), its mask provider and the cost line:
     the same conservative cost model as the explore search (`nightly.real_backends`)."""
-    from goldbot.execution.costs import load_research_cost_table, research_costs, settings_extra_cost_usd
     from goldbot.features.technical import atr
     from goldbot.research.autodisc.gen_combine import MAX_BARS
     from goldbot.research.autodisc.nightly import raw_dir
     from goldbot.research.autodisc.outcomes import build_tensor, default_menu
     a = settings.research.autodisc
+    extra, swap, source = stage_costs(settings, cost_table)          # refused before any bar is read
     prov = StageProvider(stage_bars(raw if raw is not None else raw_dir(a.raw_dir), stage))
     bars = prov.bars(timeframe)
     lo = WINDOWS[stage][0]
     k0 = int(np.searchsorted(epoch_ns(pd.DatetimeIndex(bars["ts_utc"])), int(epoch_ns(pd.DatetimeIndex([lo]))[0])))
-    ct = cost_table if cost_table is not None else a.cost_table
-    extra, swap, source = research_costs(settings, load_research_cost_table(ct) if ct else None)
-    extra = max(extra, settings_extra_cost_usd(settings))
     t = build_tensor(StageFrame(bars.iloc[k0:].reset_index(drop=True), stage),
                      atr(prov.mid_bars(timeframe), 14).iloc[k0:].reset_index(drop=True),
                      default_menu(MAX_BARS[timeframe]), extra_cost_usd=extra, swap=swap)

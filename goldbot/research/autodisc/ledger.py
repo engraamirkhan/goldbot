@@ -118,6 +118,10 @@ class SearchLedger:
         con = self._connect()
         try:
             con.executescript(_SCHEMA)
+            have = {r[1] for r in con.execute("PRAGMA table_info(survivors)").fetchall()}
+            for col in ("cost_line", "dsr_inputs"):        # phase 3 (quant F2/F3): added to an existing ledger on open
+                if col not in have:
+                    con.execute(f"ALTER TABLE survivors ADD COLUMN {col} TEXT")
             if mode is not None:
                 con.execute("INSERT OR IGNORE INTO meta (key, value) SELECT 'mode', ? "
                             "WHERE NOT EXISTS (SELECT 1 FROM entries)", (mode,))
@@ -194,9 +198,12 @@ class SearchLedger:
         finally:
             con.close()
 
-    def record_survivors(self, night: str, survivors: Sequence[tuple[str, float | None]], *, k_search: int) -> int:
-        """Record one night's explore survivors (spec hash, DSR at `k_search`); every hash must be a logged search spec
-        (LedgerError otherwise, and nothing is written). A rerun of the same night adds nothing. Returns rows added."""
+    def record_survivors(self, night: str, survivors: Sequence[tuple[str, float | None]], *, k_search: int,
+                         inputs: Mapping[str, str] | None = None, cost_line: str = "") -> int:
+        """Record one night's explore survivors (spec hash, DSR at `k_search`, the K the DSR was read at); every hash
+        must be a logged search spec (LedgerError otherwise, and nothing is written). `inputs`: each survivor's DSR
+        inputs (`metrics.DsrInputs` JSON), so the confirm step re-reads the DSR at the K of its own day; `cost_line`: the
+        night's cost source. A rerun of the same night adds nothing. Returns rows added."""
         con = self._connect()
         try:
             con.execute("BEGIN IMMEDIATE")
@@ -209,8 +216,10 @@ class SearchLedger:
                 written = self._clock().isoformat()
                 added = 0
                 for h, dsr in survivors:
-                    cur = con.execute("INSERT OR IGNORE INTO survivors VALUES (?,?,?,?,?,?,?)",
-                                      (night, h, int(k_search), dsr, seq, digest, written))
+                    cur = con.execute("INSERT OR IGNORE INTO survivors (night, spec_hash, k_search, dsr, head_seq, "
+                                      "head_digest, written_utc, cost_line, dsr_inputs) VALUES (?,?,?,?,?,?,?,?,?)",
+                                      (night, h, int(k_search), dsr, seq, digest, written, cost_line,
+                                       (inputs or {}).get(h)))
                     added += cur.rowcount
                 con.execute("COMMIT")
             except BaseException:
@@ -255,10 +264,14 @@ class SearchLedger:
         return dict(json.loads(rows[0][0]).get("flags") or {}) if rows else {}
 
     def survivor_record(self, spec_hash: str) -> dict[str, Any] | None:
-        """The spec's latest explore-survivor row (night, k_search, dsr), judged at the largest K; None if never one."""
-        rows = self._query("SELECT night, k_search, dsr FROM survivors WHERE spec_hash=? ORDER BY k_search DESC, "
-                           "night DESC LIMIT 1", (spec_hash,))
-        return {"night": rows[0][0], "k_search": int(rows[0][1]), "dsr": rows[0][2]} if rows else None
+        """The spec's latest explore-survivor row (night, k_search, dsr, cost_line, dsr_inputs), judged at the largest
+        K; None if never one."""
+        rows = self._query("SELECT night, k_search, dsr, cost_line, dsr_inputs FROM survivors WHERE spec_hash=? "
+                           "ORDER BY k_search DESC, night DESC LIMIT 1", (spec_hash,))
+        if not rows:
+            return None
+        r = rows[0]
+        return {"night": r[0], "k_search": int(r[1]), "dsr": r[2], "cost_line": r[3] or "", "dsr_inputs": r[4]}
 
     def mode(self) -> str | None:
         """The ledger's stamped mode ("real" / "synthetic"), None when unmarked."""

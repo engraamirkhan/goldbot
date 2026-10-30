@@ -114,13 +114,18 @@ def test_the_stage_commands_preregister_a_survivor_and_refuse_with_exit_2_and_on
     h = cli.spec_hash(s)
     led.log_spec(s, "G2", "1")
     led.record_result(h, {"n_events": 420, "mean_r": 0.25, "t_stat": 10.0, "floors": True})
-    led.record_survivors("n1", [(h, 0.97)], k_search=1)
+    from goldbot.research.metrics import DsrInputs
+    inputs = DsrInputs(sr=0.5, n=2000, skew=0.0, kurtosis=3.0, var_sr_trials=0.001).model_dump_json()
+    led.record_survivors("n1", [(h, 0.97)], k_search=1, cost_line="cost table icm-demo, commission 3.50",
+                         inputs={h: inputs})
     base = ["--db", str(db), "--registry", str(reg)]
+    assert cli.main(["confirm-prereg", h, "--db", str(tmp_path / "absent.db"), "--registry", str(reg)]) == 2
+    assert "no search ledger" in capsys.readouterr().err and not (tmp_path / "absent.db").exists()
     assert cli.main(["confirm-prereg", h, *base]) == 0
     assert json.loads(capsys.readouterr().out)["rule_ref"] == f"autodisc:{h}"
     assert cli.main(["confirm-prereg", h, *base]) == 2
     assert capsys.readouterr().err.startswith("refused: ")
-    assert cli.main(["confirm-run", "--batch", "1999-01", *base]) == 2           # no pre-registered batch: no read
-    assert "no pre-registered confirm trial" in capsys.readouterr().err
-    assert cli.main(["holdout", h, *base]) == 2                                  # not a confirm passer
-    assert "not a confirm passer" in capsys.readouterr().err
+    assert cli.main(["confirm-run", "--batch", "1999-01", *base, "--cost-table", ""]) == 2   # priors: refused first
+    assert "measured cost table" in capsys.readouterr().err
+    assert cli.main(["holdout", h, *base, "--cost-table", ""]) == 2
+    assert "measured cost table" in capsys.readouterr().err

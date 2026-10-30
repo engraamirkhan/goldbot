@@ -48,7 +48,7 @@ from goldbot.research.autodisc.gen_gp import (
     neighbours,
     run_gp,
 )
-from goldbot.research.autodisc.k_link import sync_discovery_k
+from goldbot.research.autodisc.k_link import dsr_k_offset, sync_discovery_k
 from goldbot.research.autodisc.ledger import SearchLedger
 from goldbot.research.autodisc.nulls import exit_index
 from goldbot.research.autodisc.outcomes import OutcomeTensor
@@ -58,7 +58,7 @@ from goldbot.research.autodisc.stats import (
     PBOResult,
     Plateau,
     RealityCheck,
-    batch_dsr,
+    batch_dsr_inputs,
     batch_passes,
     batch_pbo,
     circular_shift_null,
@@ -158,6 +158,7 @@ class NightlyResult(FrozenRecord):
     rejected: list[Rejected]
     head: tuple[int, str]
     explore_failed: list[ExploreFailed] = []      # beat the null bar, failed an explore check: never judged
+    k_dsr: int = 0                                # the K the DSR is read at: k_offset + k_search (0: k_search)
     cost_line: str = ""
 
 
@@ -178,9 +179,12 @@ def _failed(p: float, pl: Plateau, batch_ok: bool) -> list[str]:
 
 
 def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg: GPConfig, *, reps: int,
-                     max_candidates: int = 20, cost_line: str = "", night: str = "adhoc") -> NightlyResult:
+                     max_candidates: int = 20, cost_line: str = "", night: str = "adhoc", k_offset: int = 0
+                     ) -> NightlyResult:
     """The module docstring's funnel on one tensor. Every evaluated spec (search, null, neighbours) is ledgered first.
-    The night's survivors are recorded in the ledger under `night`, so the report states the cumulative count."""
+    The night's survivors are recorded in the ledger under `night` with their DSR inputs and the night's cost line, so
+    the report states the cumulative count. The DSR is read at `k_offset` + the cumulative K_search (`k_offset`: the
+    registry's discovery K outside this ledger, `k_link.dsr_k_offset`; quant review of phase 3, F1)."""
     k_before = ledger.k_search()
     res = Resolver(provider)
     real = run_gp(t, provider, cfg, ledger, resolver=res)
@@ -218,7 +222,9 @@ def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg:
         fit = [f if np.isfinite(f := gp_fitness(nb.evaluation)) else None for nb in nbs]
         judged.append((c, shift.p_value, plateau_check(gp_fitness(c.evaluation), fit)))
     k_cum = ledger.k_search()                 # every night's specs: the multiplicity the confirm DSR pays for
-    dsr = batch_dsr(d, [col_of[c.spec_hash] for c, _, _ in judged], k_cum) if judged else {}
+    k_dsr = k_cum + int(k_offset)
+    inputs = batch_dsr_inputs(d, [col_of[c.spec_hash] for c, _, _ in judged]) if judged else {}
+    dsr = {c: inp.dsr(max(k_dsr, 1)) for c, inp in inputs.items()}
     survivors: list[Survivor] = []
     rejected: list[Rejected] = []
     for c, p, pl in judged:
@@ -233,14 +239,15 @@ def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg:
             rejected.append(Rejected(spec_hash=c.spec_hash, fitness=f, shift_p=p, plateau_share=pl.share_positive,
                                      plateau_ratio=pl.ratio, failed=_failed(p, pl, batch_ok)))
     if survivors:
-        ledger.record_survivors(night, [(s.spec_hash, s.dsr) for s in survivors], k_search=k_cum)
+        ledger.record_survivors(night, [(s.spec_hash, s.dsr) for s in survivors], k_search=k_dsr, cost_line=cost_line,
+                                inputs={s.spec_hash: inputs[col_of[s.spec_hash]].model_dump_json() for s in survivors})
     return NightlyResult(generator=f"{GENERATOR} gp", timeframe=cfg.timeframe, k_search=k_cum,
                          k_search_tonight=k_cum - k_before, survivors_cumulative=ledger.n_survivors(),
                          k_null=ledger.k_null(), null_reps=reps, evaluated=len(real.evaluated), passed_floors=len(floors),
                          null_threshold=thr, real_best=real.best, real_best_null_percentile=null.percentile_of(real.best),
                          candidates=len(cands), judged=len(judged), neighbours_evaluated=n_nb, rc=rc, pbo=pbo,
                          batch_ok=batch_ok, batch_why=why, survivors=survivors, rejected=rejected, head=ledger.head(),
-                         cost_line=cost_line, explore_failed=explore_failed)
+                         cost_line=cost_line, explore_failed=explore_failed, k_dsr=k_dsr)
 
 
 def _n(x: int) -> str:
@@ -250,6 +257,12 @@ def _n(x: int) -> str:
 
 def _f(x: float | None) -> str:
     return "n/a" if x is None or not np.isfinite(x) else f"{x:,.3f}"
+
+
+def _k_text(r: NightlyResult) -> str:
+    if r.k_dsr in (0, r.k_search):
+        return f"cumulative K_search {_n(r.k_search)}"
+    return f"K {_n(r.k_dsr)} (registry discovery K: cumulative K_search {_n(r.k_search)} + {_n(r.k_dsr - r.k_search)})"
 
 
 def render(r: NightlyResult) -> str:
@@ -276,7 +289,7 @@ def render(r: NightlyResult) -> str:
     for s in r.survivors:
         lines.append(f"  {s.spec_hash[:12]}  fitness {_f(s.fitness)}  mean R {_f(s.mean_r)}  excess R {_f(s.excess_r)}  "
                      f"events {_n(s.n_events)}  shift p {_f(s.shift_p)}  plateau {_f(s.plateau.ratio)}")
-        lines.append(f"    DSR at cumulative K_search {_n(r.k_search)}: {_f(s.dsr)} "
+        lines.append(f"    DSR at {_k_text(r)}: {_f(s.dsr)} "
                      f"({'meets' if s.meets_confirm_dsr else 'below'} the {DSR_CONFIRM_BAR:.2f} confirm bar)")
         lines.append(f"    {s.spec_json}")
     lines.append(f"judged candidates that failed {_n(len(r.rejected))}")
@@ -365,14 +378,15 @@ def run_nightly_job(settings: Settings, state_dir: Path, slot: pd.Timestamp, *,
     if b is None:
         return {"skipped": "no 2010-2017 1m bars in the raw dir (research.autodisc.raw_dir or GOLDBOT_RAW_BARS)"}
     ledger = SearchLedger(Path(state_dir) / LEDGER_FILE[b.mode], mode=b.mode)
+    registry = TrialRegistry(settings.research.registry) if b.mode == "real" else None
+    offset = dsr_k_offset(registry, ledger) if registry is not None else 0
     cfg = GPConfig(timeframe=a.timeframe, population=a.population, generations=a.generations,
                    seed=night_seed(a.seed, slot), min_events=min_events, families=b.families)
     res = search_and_judge(b.tensor, b.provider, ledger, cfg, reps=a.null_reps, max_candidates=a.max_candidates,
-                           cost_line=b.cost_line, night=f"{pd.Timestamp(slot):%Y-%m-%d}")
+                           cost_line=b.cost_line, night=f"{pd.Timestamp(slot):%Y-%m-%d}", k_offset=offset)
     batch = None
-    if b.mode == "real":                      # ADR 0058 decision 2 (F3): the registry's K includes the batch's k_contrib
-        batch = sync_discovery_k(TrialRegistry(settings.research.registry), ledger, generator=res.generator,
-                                 timeframe=res.timeframe)
+    if registry is not None:                  # ADR 0058 decision 2 (F3): the registry's K includes the batch's k_contrib
+        batch = sync_discovery_k(registry, ledger, generator=res.generator, timeframe=res.timeframe)
     rel = f"{REPORT_DIR}/survivors-{pd.Timestamp(slot):%Y-%m-%d}.md"
     out = Path(state_dir) / rel
     _write_atomic(out, render(res))
@@ -381,6 +395,7 @@ def run_nightly_job(settings: Settings, state_dir: Path, slot: pd.Timestamp, *,
     return {"report": rel, "k_search": res.k_search, "k_null": res.k_null, "evaluated": res.evaluated,
             "candidates": res.candidates, "survivors": len(res.survivors), "batch_ok": res.batch_ok,
             "survivors_cumulative": res.survivors_cumulative, "explore_failed": len(res.explore_failed),
-            **({} if b.mode != "real" else {"k_contrib": 0 if batch is None else int(batch["k_contrib"])}),
+            **({} if b.mode != "real" else {"k_contrib": 0 if batch is None else int(batch["k_contrib"]),
+                                             "k_dsr": res.k_dsr}),
             "health": f"autodisc {res.timeframe}: {res.evaluated:,} specs, K_search {res.k_search:,}, SPA p {spa}, "
                       f"PBO {pbo}, survivors {len(res.survivors)} (explore only, not evidence)"}

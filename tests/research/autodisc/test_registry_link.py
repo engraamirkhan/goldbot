@@ -13,7 +13,7 @@ from goldbot.config import load_settings
 from goldbot.research import registry_sync
 from goldbot.research.autodisc import SearchLedger
 from goldbot.research.autodisc import nightly as NT
-from goldbot.research.autodisc.k_link import sync_discovery_k
+from goldbot.research.autodisc.k_link import GRAMMAR_V1_K, dsr_k_offset, sync_discovery_k
 from goldbot.research.autodisc.nulls import SyntheticProvider, inject_edge, make_noise_tensor
 from goldbot.research.autodisc.spec import ExitTemplate, Leaf, StrategySpec
 from goldbot.research.registry import DISCOVERY_BATCH, TrialRegistry, quarter_of
@@ -76,15 +76,16 @@ def test_sync_tops_the_registry_up_to_the_ledger_k_search_once(tmp_path):
     reg = TrialRegistry(tmp_path / "registry.jsonl")
     row = sync_discovery_k(reg, led, generator="G2 gp", timeframe="1h")
     assert row is not None and row["k_contrib"] == 7 and row["ledger_id"] == led.ledger_id()
+    assert reg.n_trials_discovery == GRAMMAR_V1_K + 7
     assert sync_discovery_k(reg, led, generator="G2 gp") is None              # nothing new: no row
     for i in range(7, 10):
         led.log_spec(spec(i), "G2", "1")
     assert sync_discovery_k(reg, led, generator="G2 gp")["k_contrib"] == 3   # type: ignore[index]
-    assert reg.n_trials_discovery == led.k_search() == 10
+    assert reg.n_trials_discovery - GRAMMAR_V1_K == led.k_search() == 10
     other = SearchLedger(tmp_path / "e.db", mode="real")                      # another ledger counts on its own
     other.log_spec(spec(0), "G2", "1")
     assert sync_discovery_k(reg, other, generator="G2 gp")["k_contrib"] == 1  # type: ignore[index]
-    assert reg.n_trials_discovery == 11
+    assert reg.n_trials_discovery == GRAMMAR_V1_K + 11
 
 
 def test_a_synthetic_ledger_never_reaches_the_registry(tmp_path):
@@ -110,7 +111,32 @@ def test_the_nightly_job_records_its_batch_k_contrib_only_for_a_real_search(tmp_
                                                                  cost_line="synthetic", mode=mode))
     reg = TrialRegistry(reg_path)
     if mode == "real":
-        assert reg.n_trials_discovery == out["k_search"] > 0 and reg.n_trials == 0
+        assert reg.n_trials_discovery == GRAMMAR_V1_K + out["k_search"] and reg.n_trials == 0
         assert out["k_contrib"] == out["k_search"]
+        assert out["k_dsr"] == reg.n_trials_discovery                      # the explore DSR's K (quant F1)
     else:
         assert reg.discovery_batches() == [] and "k_contrib" not in out
+
+
+def test_the_grammar_v1_runs_are_counted_once_in_the_discovery_k(tmp_path):
+    """Quant F1: grammar v1's 864 specs (the 2026-10-30 runs, 288 per timeframe) predate the registry link."""
+    assert GRAMMAR_V1_K == 864
+    led = SearchLedger(tmp_path / "d.db", mode="real")
+    led.log_spec(spec(0), "G2", "1")
+    reg = TrialRegistry(tmp_path / "registry.jsonl")
+    sync_discovery_k(reg, led, generator="G2 gp")
+    sync_discovery_k(reg, led, generator="G2 gp")
+    rows = [b for b in reg.discovery_batches() if b["generator"] == "grammar-v1 (A4)"]
+    assert len(rows) == 1 and rows[0]["k_contrib"] == 864
+    assert reg.n_trials_discovery >= 864 + led.k_search()
+
+
+def test_the_explore_dsr_is_read_at_the_registry_discovery_k(tmp_path):
+    led = SearchLedger(tmp_path / "d.db", mode="real")
+    reg = TrialRegistry(tmp_path / "registry.jsonl")
+    reg.record(agent_id="a", family="f", config={"x": 1}, feature_version="v", rationale="r", results={})
+    off = dsr_k_offset(reg, led)                                               # before tonight's specs
+    for i in range(5):
+        led.log_spec(spec(i), "G2", "1")
+    sync_discovery_k(reg, led, generator="G2 gp")
+    assert off + led.k_search() == reg.n_trials_discovery == 1 + 864 + 5

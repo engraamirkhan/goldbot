@@ -266,3 +266,20 @@ def test_explore_failures_name_each_failed_check_with_its_value():
     good = e.model_copy(update={"fitness": 1.0, "excess_r": 0.1, "stress_mean_r": 0.1, "stress_passed": True,
                                 "floors_passed": True})
     assert NT.explore_failures(good) == []
+
+
+def test_the_explore_dsr_reads_at_the_offset_k_and_survivors_keep_their_dsr_inputs_and_costs(tmp_path):
+    """Quant F1/F2/F3: the DSR is read at the registry's discovery K (k_offset + K_search); each survivor row keeps
+    its DSR inputs (re-read at a later K) and the night's cost line."""
+    from goldbot.research.metrics import DsrInputs
+    t, prov = edge_tensor()
+    led = SearchLedger(tmp_path / "o.db", mode="synthetic")
+    res = NT.search_and_judge(t, prov, led, gp(), reps=2, k_offset=900, cost_line="cost table x", night="n1")
+    assert res.k_dsr == res.k_search + 900 and res.survivors
+    text = NT.render(res)
+    assert f"DSR at K {res.k_dsr:,}" in text and not CONFIRM.search(text)
+    for s in res.survivors:
+        rec = led.survivor_record(s.spec_hash)
+        assert rec is not None and rec["k_search"] == res.k_dsr and rec["cost_line"] == "cost table x"
+        inp = DsrInputs.model_validate_json(rec["dsr_inputs"])
+        assert inp.dsr(res.k_dsr) == pytest.approx(s.dsr)

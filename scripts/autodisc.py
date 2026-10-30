@@ -205,8 +205,11 @@ def cmd_nightly(args: argparse.Namespace) -> int:
 
 
 def _stage_args(args: argparse.Namespace) -> tuple[Any, Any, Any]:
+    from goldbot.research.autodisc.stages import StageRefused
     from goldbot.research.registry import TrialRegistry
     s = load_settings()
+    if not Path(args.db).is_file():          # never create an empty ledger here: stage reads run where the search ran
+        raise StageRefused(f"no search ledger at {args.db}: stage reads run on the host that searched (the Mac)")
     return s, SearchLedger(args.db, mode="real"), TrialRegistry(args.registry or s.research.registry)
 
 
@@ -238,28 +241,38 @@ def _stage_cmd(fn: Any) -> int:
 
 def cmd_confirm_prereg(args: argparse.Namespace) -> int:
     from goldbot.research.autodisc import confirm as C
-    _, ledger, reg = _stage_args(args)
-    return _stage_cmd(lambda: C.preregister_confirm(reg, ledger, args.spec_hash))
+
+    def go() -> Any:
+        _, ledger, reg = _stage_args(args)
+        return C.preregister_confirm(reg, ledger, args.spec_hash)
+    return _stage_cmd(go)
 
 
 def cmd_confirm_run(args: argparse.Namespace) -> int:
     from goldbot.research.autodisc import confirm as C
     from goldbot.research.registry import quarter_of
-    s, ledger, reg = _stage_args(args)
-    q = quarter_of()
-    return _stage_cmd(lambda: [v.model_dump() for v in C.run_confirm_batch(
-        reg, ledger, args.batch, _stage_reader(args, s, "confirm"), cap=s.research.budget_for(q),
-        reserved=s.research.reserved_for(q))])
+
+    def go() -> Any:
+        s, ledger, reg = _stage_args(args)
+        q = quarter_of()
+        cost = C.stage_costs(s, args.cost_table)[2]
+        return [v.model_dump() for v in C.run_confirm_batch(
+            reg, ledger, args.batch, _stage_reader(args, s, "confirm"), cap=s.research.budget_for(q),
+            reserved=s.research.reserved_for(q), cost_line=cost)]
+    return _stage_cmd(go)
 
 
 def cmd_holdout(args: argparse.Namespace) -> int:
     from goldbot.research.autodisc import confirm as C
     from goldbot.research.registry import quarter_of
-    s, ledger, reg = _stage_args(args)
-    q = quarter_of()
-    return _stage_cmd(lambda: C.holdout_read(reg, ledger, args.spec_hash, _stage_reader(args, s, "holdout"),
-                                             cap=s.research.budget_for(q), reserved=s.research.reserved_for(q)
-                                             ).model_dump())
+
+    def go() -> Any:
+        s, ledger, reg = _stage_args(args)
+        q = quarter_of()
+        return C.holdout_read(reg, ledger, args.spec_hash, _stage_reader(args, s, "holdout"),
+                              cap=s.research.budget_for(q), reserved=s.research.reserved_for(q),
+                              cost_line=C.stage_costs(s, args.cost_table)[2]).model_dump()
+    return _stage_cmd(go)
 
 
 def main(argv: list[str] | None = None) -> int:

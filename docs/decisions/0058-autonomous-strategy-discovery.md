@@ -105,3 +105,10 @@ Written before any real-data nightly search has run, so it binds every explore s
    voided stage read never registers.
 5. **Budget.** Confirm and holdout reads take open budget only (never reserved slots). 2026Q4 has no open slot, so no
    confirm read runs before a program-director extension or 2027Q1. That is unchanged and is an owner/PD matter.
+6. **Review round 1 (quant conditions F1-F4, before the first confirm read).** F1: grammar v1's 864 specs (the
+   2026-10-30 Mac runs, 288 per timeframe) are one fixed sidecar row, and the explore DSR is read at the registry's
+   `n_trials_discovery`, not the ledger's K alone. F2: each survivor keeps its DSR inputs, and advancing re-reads the
+   DSR at the registry's discovery K of that day. F3 (A4 cost floor): a survivor advances only if judged on a measured
+   cost table with its own net mean R > 0; stage reads refuse priors (no fallback) and a read on other costs fails. F4:
+   the holdout also needs the t clustered by session day >= HOLDOUT_MIN_T. A stage read refuses an absent or empty
+   search ledger.

@@ -2480,7 +2480,10 @@ stays false there). Install the nightly agent once (Claude may run it; the owner
 `scripts/autodisc_nightly_mac.sh`: `scripts/autodisc.py nightly --timeframe 15m`, then `1h`, then `4h`, one after another, each logged
 to `~/tmp/autodisc/<day>-<tf>.log`, a one-line summary per run in `~/tmp/autodisc/nightly.log`, survivors reports in
 `state/autodisc/`. Every real night tops up the registry's discovery K (`state/research_registry.discovery.jsonl`, never a trial).
-Remove: `scripts/install_autodisc_launchd.sh --uninstall`.
+Remove: `scripts/install_autodisc_launchd.sh --uninstall`. The agent runs whatever branch the Mac checkout has open at
+01:30 (it does not switch or pull): keep that checkout on `main` (or the branch you mean to search with) overnight. Set
+`research.autodisc.cost_table` (or pass `--cost-table`) to the measured `costs_measured.json`: a survivor judged on
+priors-only costs cannot advance, and every confirm or holdout read refuses priors (A4 cost floor).
 
 Confirm and holdout (design 3.3 / 3.5; each read happens once and is charged one trial slot from the quarter's open budget):
 1. Merge the shared registry in first: `python -m goldbot.research.registry_sync fetch ~/tmp/registry-release.jsonl`, then
