@@ -80,3 +80,22 @@ search beats a cost-crushed null, not zero. Decisions:
 | A1, A2 | evaluator, quant-reviewer | 2026-11-04 | draft |
 | A3 | quant-reviewer | 2026-11-03, before any H-16/H-17 screen output | draft |
 | A4 | quant-reviewer; strategy-researcher writes the ADR 0058 amendment | 2026-11-04, before grammar v2's first run | draft |
+
+## Quant-reviewer conditions (2026-10-30, binding; all four amendments pass with them)
+
+- **A1.** At n = 300 the upper-bound clause is redundant (UB < +0.10 R needs a point estimate below about -0.05 R), so
+  "point estimate <= 0" is the operative test. Added: **any cross-arm or family summary includes retired arms at their
+  value when retired; a read over surviving arms only is void** (kill-only rules must not flatter a pooled "demo
+  learning works" read).
+- **A2.** **Unit = the unit of the existing pre-registered read (per arm for H-61).** Under that unit S1A and S1B
+  (about 8 fills an arm) fall under the 2026-11-13 100-fill bar: they are retired on 2026-11-13 unless an exemption
+  with its reason is recorded here before 2026-11-04 (research-plan.md's 2026-12-16 date for S1 is superseded).
+- **A3.** Features, the HAR fit (walk-forward inside the window) and the reading rules are **frozen by commit hash
+  before any screen output**; a screen result can only **cancel** the formal trial, and any change means a new
+  pre-registration and a new id; the H-16 sample floor for 2018-01-01..2025-09-30 is stated in the screen document
+  before the trial is read.
+- **A4.** The exit list in item 4 names five primitives (time exit only; fixed 1 R, 2 R, 3 R; BE at +1 R with an ATR
+  trail), not six: **every v2 primitive and its count is enumerated and K_v2 declared before the run**; v2 survivors
+  pay the DSR at cumulative K (v1 864 + K_v2); the HAR terciles are fitted walk-forward and the event gate is joined
+  as-of on `available_utc`; if v2 has not run on all three timeframes by 2026-11-20 generation freezes anyway; no
+  v2.x before 2026-11-20.
