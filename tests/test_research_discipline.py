@@ -249,6 +249,7 @@ def test_quarterly_trial_budget_is_enforced_with_a_clear_message(tmp_path):
         reg.check_budget(3, 20, NOW)
 
 
+@pytest.mark.real_clock(reason="a lock is stale by its file mtime, which the OS stamps")
 def test_registry_lock_is_exclusive_and_recovers_from_a_stale_lock(tmp_path):
     import os
     import time

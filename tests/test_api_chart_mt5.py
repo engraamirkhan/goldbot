@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 from goldbot.api.app import create_app
 from tests.test_api_views import _login
 
+pytestmark = pytest.mark.clock_at("2026-10-30T12:00:00Z")
+
 PNG = b"\x89PNG\r\n\x1a\nfake"
 
 

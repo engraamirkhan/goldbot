@@ -27,6 +27,8 @@ from goldbot.telegram import labs
 from goldbot.telegram.digest import build_digest, report_text
 from tests.test_api_entry_status import engine
 
+pytestmark = pytest.mark.clock_at("2026-10-30T12:00:00Z")
+
 
 @pytest.fixture(autouse=True)
 def _no_ranking(monkeypatch):

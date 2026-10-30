@@ -4,7 +4,11 @@ import json
 import subprocess
 from typing import Any
 
+import pytest
+
 from goldbot.ops.deploy import ACTIONS_APP_ID, DeployWatch, ci_status
+
+pytestmark = pytest.mark.clock_at("2026-10-30T12:00:00Z")
 
 A, B, C = "a" * 40, "b" * 40, "c" * 40
 

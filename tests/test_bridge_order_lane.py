@@ -17,6 +17,8 @@ from goldbot.execution.bridge_lane import ProcessLane
 from goldbot.execution.bridge_queue import LaneError, LaneLost, LaneNotSent
 from goldbot.execution.broker import OrderIntent
 
+pytestmark = pytest.mark.real_clock(reason="the child process and the file mtimes it is compared with read the OS clock")
+
 ROOT = Path(__file__).resolve().parents[1]
 SPAWNED = 76
 
