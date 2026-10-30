@@ -187,7 +187,7 @@ def test_the_report_carries_cumulative_k_and_survivors_across_nights_and_the_con
     assert "advancing to confirm requires DSR >= 0.95 at the cumulative K_search" in text
     for s in second.survivors:
         assert f"DSR at cumulative K_search {second.k_search:,}: {s.dsr:,.3f}" in text
-        assert s.meets_confirm_dsr == (s.dsr >= NT.DSR_CONFIRM_BAR)
+        assert s.meets_confirm_dsr == NT.meets_confirm_bar(s.dsr, s.n_events)
     assert NT.DSR_CONFIRM_BAR == 0.95 and not hasattr(NT.S, "DSR_BAR")
 
 
@@ -203,3 +203,10 @@ def test_the_report_lists_every_judged_candidate_that_failed_with_the_test_it_fa
     assert "aaaaaaaaaaaa  fitness 1.200  failed: shift p 0.310 > 0.05; plateau share 0.25 < 0.60; plateau ratio " \
            "0.100 < 0.50" in text
     assert not CONFIRM.search(text)
+
+
+def test_a_survivor_with_dsr_097_on_150_events_does_not_meet_the_confirm_bar():
+    """Quant re-check: the gates' DSR check needs MIN_TRADES_FOR_DSR trades as well as the 0.95 bar."""
+    assert NT.MIN_TRADES_FOR_DSR == 200
+    assert not NT.meets_confirm_bar(0.97, 150)
+    assert NT.meets_confirm_bar(0.97, 200) and not NT.meets_confirm_bar(0.94, 500)

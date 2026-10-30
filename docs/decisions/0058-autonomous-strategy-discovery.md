@@ -56,9 +56,10 @@ Written before any real-data nightly search has run, so it binds every explore s
    cumulative K_search of all nights, not tonight's. The survivors report states the cumulative K_search (and the new
    specs of the night), the cumulative count of distinct explore survivors over all nights (from the ledger), and per
    survivor its DSR at the cumulative K_search. **Rule: advancing an explore survivor to a confirm trial requires
-   DSR >= 0.95 (the gates' bar) at the cumulative K_search at the time it is judged.** Below that it stays a recorded
+   DSR >= 0.95 (the gates' bar) at the cumulative K_search at the time it is judged, on 200+ events.** Below that it stays a recorded
    fact. Caveat: K is cumulative, but the cross-trial variance of the Sharpe ratios inside the DSR is tonight's batch
-   only (the other nights' daily series are not kept); a night with an unusually narrow batch reads a slightly higher
+   only (the other nights' daily series are not kept), and `batch_dsr` takes its Sharpe variance from the
+   floor-passers only (nightly.py), which reads the DSR somewhat high; a night with an unusually narrow batch reads a slightly higher
    DSR than a pooled variance would give.
 2. **Plateau ratio (step 6).** Besides "at least 60% of the grid neighbours positive", the neighbours' mean fitness
    must be at least 0.5 x the peak's (a knife-edge optimum with barely positive neighbours fails).
@@ -66,7 +67,8 @@ Written before any real-data nightly search has run, so it binds every explore s
    K_eff, so the reading is conservative; K_eff stays reported as not computed until it is built and reviewed.
 4. **Shift null and fitness (F1, F4).** The circular-shift null moves the signal by whole weeks in calendar time (whole
    days on a sample shorter than 40 weeks) and scores excess R over the drift baseline of the same hour and side; the
-   G2 fitness is the min-fold t of that excess R. A pure calendar rule therefore cannot pass the shift null, and
+   G2 fitness is the min-fold t of that excess R. A pure calendar rule therefore cannot pass the shift null (whole-week mode; the day fallback is for synthetic/short
+   samples only), and
    gold's drift does not count as skill against the driftless G0 null.
 5. **Registry link is a phase-3 precondition (F3).** Decision 2's "the registry's K includes each batch's k_contrib"
    is not wired in phase 2 (strict xfail `tests/research/autodisc/test_registry_link.py`). Two reasons it waits:

@@ -61,6 +61,7 @@ from goldbot.research.autodisc.stats import (
     plateau_check,
     reality_check,
 )
+from goldbot.research.metrics import MIN_TRADES_FOR_DSR
 
 REPORT_DIR = "autodisc"
 LEDGER_FILE = {"real": "discovery_real.db", "synthetic": "discovery_synthetic.db"}
@@ -89,7 +90,12 @@ class Survivor(FrozenRecord):
     shift_p: float
     plateau: Plateau
     dsr: float                                # at the cumulative K_search
-    meets_confirm_dsr: bool                   # dsr >= DSR_CONFIRM_BAR: what advancing to confirm requires
+    meets_confirm_dsr: bool                   # DSR bar on >= MIN_TRADES_FOR_DSR events: what confirm requires
+
+
+def meets_confirm_bar(dsr: float, n_events: int) -> bool:
+    """The gates' DSR check: the bar at the cumulative K_search on at least MIN_TRADES_FOR_DSR events."""
+    return bool(dsr >= DSR_CONFIRM_BAR and n_events >= MIN_TRADES_FOR_DSR)
 
 
 class Rejected(FrozenRecord):
@@ -192,7 +198,7 @@ def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg:
             survivors.append(Survivor(spec_hash=c.spec_hash, spec_json=c.spec.model_dump_json(), fitness=f,
                                       mean_r=c.evaluation.mean_r, excess_r=c.evaluation.excess_r,
                                       n_events=c.evaluation.n_events, shift_p=p, plateau=pl, dsr=v,
-                                      meets_confirm_dsr=bool(v >= DSR_CONFIRM_BAR)))
+                                      meets_confirm_dsr=meets_confirm_bar(v, c.evaluation.n_events)))
         else:
             rejected.append(Rejected(spec_hash=c.spec_hash, fitness=f, shift_p=p, plateau_share=pl.share_positive,
                                      plateau_ratio=pl.ratio, failed=_failed(p, pl, batch_ok)))

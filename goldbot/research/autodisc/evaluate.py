@@ -12,7 +12,8 @@ Per spec (a boolean entry mask, a side rule and an exit template of the tensor):
 - **Side split:** long-only and short-only net R of the same events (`screen.rule_only_split`'s reading).
 - **Drift baseline:** excess net R over the random-entry baseline of the same timing (UTC hour) and side: the mean R of
   every bar at that hour and side (`OutcomeTensor.drift_table`), averaged over the spec's events. Gold's drift cannot
-  make a long-biased rule look clever. `excess_fitness` is the fitness above on each event's excess R: the G2 search
+  make a long-biased rule look clever. The baseline includes the spec's own events, so excess R is understated by
+  roughly density x edge (about 5 % at density 0.1), a conservative bias. `excess_fitness` is the fitness above on each event's excess R: the G2 search
   ranks by it (quant review F4, 2026-10-30), so drift never counts as skill there.
 - **Plateau:** `plateau_test` on the fitness of the spec's grid neighbours (each parameter +-1 step; the generator
   evaluates the neighbours and passes their fitness): at least 60% positive.

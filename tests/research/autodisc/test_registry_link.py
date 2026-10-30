@@ -7,7 +7,7 @@ import pytest
 from goldbot.research.registry import TrialRegistry, quarter_of
 
 
-@pytest.mark.xfail(strict=True, reason="phase-3 precondition: discovery_batch registry rows (ADR 0058 amendment "
+@pytest.mark.xfail(strict=True, raises=AttributeError, reason="phase-3 precondition: discovery_batch registry rows (ADR 0058 amendment "
                                        "2026-10-30, F3)")
 def test_a_discovery_batch_row_raises_the_k_of_discovered_candidates_without_a_budget_slot(tmp_path):
     reg = TrialRegistry(tmp_path / "registry.jsonl")

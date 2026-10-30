@@ -249,7 +249,8 @@ def circular_shift_null(side: NDArray[np.int8], r_long: FloatArr, r_short: Float
     (default units // 20, so a shift never leaves the signal near its own alignment). Overlapping events are all
     counted: this tests the alignment of signal and outcome, the evaluator's one-at-a-time book is read elsewhere.
     A rule that is a pure calendar pattern maps onto itself under whole-week shifts and cannot pass: its timing alone
-    is not alignment evidence (quant review F1, 2026-10-30)."""
+    is not alignment evidence (quant review F1, 2026-10-30) (whole-week mode; the day fallback is for synthetic/short
+    samples only)."""
     side = np.asarray(side, dtype=np.int8)
     n = len(side)
     ts = pd.DatetimeIndex(ts_utc)
