@@ -14,7 +14,7 @@ name: ci
 #   backend, frontend  aggregates: the REQUIRED checks on main and the checks goldbot-deploy reads; keep these names
 #   deployable         main only, when both aggregates are green: commit status `goldbot/deployable` + the owner's
 #                      one-line deploy command in the summary. It never deploys (deploys stay owner-approved).
-#   report-failure     any failure -> one GitHub issue labelled `ci` with the failing output (Claude sandboxes cannot
+#   report-failure     any failure -> one GitHub issue per failing test labelled `ci` (a repeat is a comment) with the output (Claude sandboxes cannot
 #                      download Actions logs); FLAKY / FAIL verdicts of re-run tests are included.
 # Every check step runs even after an earlier one failed, so one run reports all failures. A failed pytest shard
 # re-runs only its failed tests once, alone, and labels each FLAKY or FAIL; the job stays failed either way.
@@ -319,38 +319,26 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-      issues: write   # the only job that writes issues: one issue per failed run
+      issues: write   # the only job that writes issues: one per failing test, a comment on a repeat
     steps:
+      # the reporter comes from the PR's BASE commit (already on main), like the `changes` filter: a PR cannot edit it to
+      # silence or forge its own failure issue. Pushes to main use their own commit.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci_summary.py
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { pattern: ci-out-*, path: ci-out, merge-multiple: true }
         continue-on-error: true
-      - name: open an issue with the failing checks' output
+      - name: one issue per failing test (an open issue for the same test gets a comment)
         env:
           GH_TOKEN: ${{ github.token }}
           PR_SHA: ${{ github.event.pull_request.head.sha }}
           JOBS: ${{ toJSON(needs) }}
         run: |
-          python3 - <<'EOF'
-          import json, os, pathlib, urllib.request
-          repo = os.environ["GITHUB_REPOSITORY"]; sha = os.environ.get("PR_SHA") or os.environ["GITHUB_SHA"]
-          ref = os.environ.get("GITHUB_HEAD_REF") or os.environ["GITHUB_REF_NAME"]
-          run_url = f"https://github.com/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
-          failed_jobs = [j for j, v in json.loads(os.environ["JOBS"]).items() if v["result"] == "failure"]
-          out = pathlib.Path("ci-out")
-          names = sorted({n for f in out.glob("failed-*.list") for n in f.read_text().split()}) if out.exists() else []
-          failed = [out / f"{n}.txt" for n in names if (out / f"{n}.txt").exists()]
-          names = names or failed_jobs
-          parts = [f"Run: {run_url}\nBranch: `{ref}`\nFailed: {', '.join(names) or '(none reported)'}\n"]
-          budget = 60000 // max(len(failed), 1)
-          for p in failed:
-              parts.append(f"### {p.stem}\n```\n{p.read_text(errors='replace')[-budget:]}\n```")
-          if not failed:
-              if out.exists() and any(out.iterdir()):
-                  parts.append("(a job failed but wrote no output for the failed steps; see the run URL)")
-              else:
-                  parts.append("(no artifact exists: the jobs failed before running any step, e.g. no runner was assigned)")
-          payload = {"title": f"CI failure on {sha[:7]} ({', '.join(names)})", "body": "\n".join(parts), "labels": ["ci"]}
-          req = urllib.request.Request(f"https://api.github.com/repos/{repo}/issues", data=json.dumps(payload).encode(),
-                                       headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"})
-          print(urllib.request.urlopen(req).status)
-          EOF
+          failed=$(python3 -c 'import json, os; print(*[j for j, v in json.loads(os.environ["JOBS"]).items() if v["result"] == "failure"])')
+          # shellcheck disable=SC2086
+          python3 -I scripts/ci_summary.py report ci-out --jobs $failed \
+            || echo "the base commit's ci_summary.py has no report command yet (first run after FR-5): see the run URL"
