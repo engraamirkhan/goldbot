@@ -405,6 +405,21 @@ tv_pull:                             # TradingView direct pull (goldbot/data/tv_
   graphics_timeframes: ["15", "60", "240"]  # a study's boxes/lines/labels are saved per closed bar here (tv.db tv_graphics); [] = off
   graphics_max_objects: 500          # per snapshot (highest ids kept, flagged truncated)
   graphics_max_snapshots: 50000      # per study, symbol and timeframe; append-only, nothing added beyond it
+tv_ideas:                            # followed TradingView authors' published ideas (goldbot/data/tv_ideas.py; owner 2026-10-28)
+  enabled: true                      # public listing, no cookie; text stays in state/tv_ideas.db and raw/ (never the repo)
+  authors: [KnightsofGold, Goldviewfx, ArmanShabanTrading]   # public handles
+  poll_interval_s: 720               # a poll every 12 min plus up to poll_jitter_s (12-15 min apart)
+  poll_jitter_s: 180
+  live_page_size: 20                 # newest-activity page per author; a new or changed idea also reads its detail
+  min_interval_s: 3.0                # between two requests (tv_pull's Pacer)
+  backfill_min_interval_s: 2.0       # the one-time back catalogue (about 7,000 requests for the three authors)
+  max_requests_per_day: 2000         # live, rolling 24 h (a normal day is about 400)
+  backfill_max_requests: 12000       # per backfill run; it resumes where it stopped
+  backfill_latency_s: 900            # back catalogue: available_utc = TradingView's time + this, flagged backfilled
+  backoff_base_s: 300                # after a failed poll: doubling to backoff_max_s, never sooner than the interval
+  backoff_max_s: 21600
+  timeout_s: 30
+  stale_hours: 2.0                   # health tv_ideas WARNs past this without a successful poll on a weekday
 tv:                                  # TradingView values at decision time (goldbot/engine/tv_context.py, specialists/tv_event.py)
   max_lag_s: 60                      # a value counts only for the decision bar and when it arrived <= this after its close,
                                      #   else NaN and no TradingView entry (fails closed); equals features.tv_plots.MAX_LAG

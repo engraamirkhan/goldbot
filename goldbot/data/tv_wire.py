@@ -48,6 +48,7 @@ READ_URLS: tuple[tuple[str, str], ...] = (
     ("www.tradingview.com", "/chart-token/"),
     ("charts-storage.tradingview.com", "/charts-storage/get/layout/"),
     ("pine-facade.tradingview.com", "/pine-facade/translate/"),
+    ("www.tradingview.com", "/api/v1/ideas/"),                     # public idea listings (tv_ideas.py, no cookie)
 )
 # what a chart tab sends to draw itself; nothing that saves, alerts, trades or writes to the account
 READ_METHODS = frozenset({
