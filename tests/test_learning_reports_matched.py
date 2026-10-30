@@ -204,3 +204,16 @@ def test_account_flag_keeps_an_account_whose_config_name_embeds_digits_and_has_o
     _arm(tmp_path, "e1", account="icm-demo-51234567")
     rep = _report(tmp_path, account="icm-demo-51234567")
     assert [a.account_id for a in rep.accounts] == ["icm-demo-51234567"]
+
+
+def test_a_trade_held_across_the_rollover_sits_in_its_entry_days_cell():
+    """The matched cell is the entry's risk day and session (quant re-check): a swing exit after the 22:00 UTC roll must
+    not move the trade into the next day's drift cell."""
+    import pandas as pd
+
+    from goldbot.ops.learning_ledger import LearningClose
+    from goldbot.ops.perf_report import _lrow
+    c = LearningClose(account="icm-demo", kind="exploration", family="f", opened_utc=pd.Timestamp("2026-10-28 20:00Z"),
+                      exit_utc=pd.Timestamp("2026-10-29 01:00Z"), side="long", pnl=1.0, r=0.5, gross=1.1, risk=2.0,
+                      net=True)
+    assert _lrow(c, "GBP").cell[0] == "2026-10-28"

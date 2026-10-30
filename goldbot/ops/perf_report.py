@@ -875,7 +875,7 @@ def _lrow(c: LearningClose, ccy: str | None) -> _LRow:
     same_ccy = c.currency is None or ccy is None or c.currency.upper() == ccy.upper()
     gross_r = c.gross / c.risk if c.net and c.gross is not None and c.risk else None
     session = str(DEFAULT_SESSIONS.session_label(pd.DatetimeIndex([c.opened_utc]))[0])
-    day = f"{risk_day(pd.DatetimeIndex([c.exit_utc]))[0]:%Y-%m-%d}"
+    day = f"{risk_day(pd.DatetimeIndex([c.opened_utc]))[0]:%Y-%m-%d}"   # the entry's day, as its session
     return _LRow(trade=c, cell=(day, session, c.side), basis="net" if c.net else None,
                  net_pnl=c.pnl if c.net and same_ccy else None, net_r=c.r if c.net else None,
                  gross_pnl=c.gross if c.net and same_ccy else None, gross_r=gross_r)
@@ -909,11 +909,21 @@ def _excess(key: str, fam: list[_LRow], control: list[_LRow], weekdays: int) -> 
     if len(diffs) >= MIN_TRADES and n_ctrl >= MIN_TRADES:
         pooled_var = float(np.var([x for c in used for x in ctrl[c]], ddof=1))
         va = float(np.var(diffs, ddof=1)) / len(diffs)
-        vb = sum((sum(c == u for c, _ in matched) / len(matched)) ** 2
-                 * (float(np.var(ctrl[u], ddof=1)) if len(ctrl[u]) > 1 else pooled_var) / len(ctrl[u]) for u in used)
+        # the control side: a cell-weighted mean, var = sum_u w_u^2 s_u^2 / m_u; Welch-Satterthwaite df per cell
+        # (m_u - 1), and a cell with one control trade takes the pooled variance with the pooled df (n_ctrl - 1)
+        cells: list[tuple[float, int]] = []
+        pooled_t = 0.0
+        for u in used:
+            w, m = sum(c == u for c, _ in matched) / len(matched), len(ctrl[u])
+            if m > 1:
+                cells.append((w * w * float(np.var(ctrl[u], ddof=1)) / m, m - 1))
+            else:
+                pooled_t += w * w * pooled_var
+        vb = sum(t for t, _ in cells) + pooled_t
         se = math.sqrt(va + vb)
         if se > 0:
-            df = (va + vb) ** 2 / ((va ** 2 / (len(diffs) - 1)) + (vb ** 2 / (n_ctrl - 1)))
+            df = (va + vb) ** 2 / (va ** 2 / (len(diffs) - 1) + sum(t * t / d for t, d in cells)
+                                   + pooled_t ** 2 / (n_ctrl - 1))
             half = float(stats.t.ppf(0.95, df)) * se
         else:
             half = 0.0
