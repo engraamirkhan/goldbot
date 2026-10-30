@@ -82,7 +82,7 @@ def check_pnl_basis(ctx: HealthContext, account_id: str) -> Check:
     (ops/learning_ledger.py; net = commission and swap both recorded), once each, and the line says how many came from
     which kind. An unreadable aux.db is a WARN with the reason, never a FAIL."""
     from goldbot.ops.gates_phase import load_closed_trades, pnl_basis
-    from goldbot.ops.learning_ledger import closed_learning_trades, recorded_keys
+    from goldbot.ops.learning_ledger import read_learning_closes, recorded_keys, without_recorded
     from goldbot.telegram.entry_text import account_name
     name = f"pnl_basis:{account_id}"
     try:
@@ -95,28 +95,41 @@ def check_pnl_basis(ctx: HealthContext, account_id: str) -> Check:
     note = f"; {err}" if err else ""
     unreadable = bool(err)
     by_kind: dict[str, int] = {}
-    try:
-        learn = closed_learning_trades(ctx.state_dir, ctx.now, recorded_keys(trades))
-    except Exception as exc:                      # noqa: BLE001 - reporting only: a torn ledger never fails the check
-        learn = None
+    censored = 0
+    # the ledger is built once per health run (ctx.memo), not once per account; the record's own trades are dropped per call
+    if "learning" not in ctx.memo:
+        try:
+            ctx.memo["learning"] = read_learning_closes(ctx.state_dir, ctx.now)
+        except Exception as exc:                  # noqa: BLE001 - reporting only: a torn ledger never fails the check
+            ctx.memo["learning"] = type(exc).__name__
+    learn = ctx.memo["learning"]
+    if isinstance(learn, str):
         unreadable = True
-        note += f"; trade ledger unreadable: {type(exc).__name__}"
+        note += f"; trade ledger unreadable: {learn}"
+        learn = None
+    else:
+        learn = without_recorded(learn, recorded_keys(trades))
     if learn is not None:
         if learn.unreadable:
             unreadable = True
             note += f"; trade ledger source unreadable: {', '.join(learn.unreadable)} (those trades are missing)"
         for c in learn.rows:
             if c.account == account_name(account_id) and since <= c.exit_utc <= ctx.now:
+                if c.censored:                    # counted apart, never in the net share
+                    censored += 1
+                    continue
                 by_kind[c.kind] = by_kind.get(c.kind, 0) + 1
                 total += 1
                 not_net += not c.net
     status: Literal["ok", "warn"] = "warn" if unreadable else "ok"
     if not total:
-        return Check(name=name, status=status, reason=f"no closed trades in the last {PNL_BASIS_WINDOW_DAYS} d{note}"[:400])
+        cens = f" ({censored:,} censored exploration trades not counted)" if censored else ""
+        return Check(name=name, status=status,
+                     reason=f"no closed trades in the last {PNL_BASIS_WINDOW_DAYS} d{cens}{note}"[:400])
     pct = 100.0 * not_net / total
     split = ", ".join(f"{label} {by_kind[k]:,}" for k, label in (("exploration", "exploration"), ("control", "control"),
                                                                  ("cost_probe", "probes")) if k in by_kind)
-    sources = f" ({split})" if split else ""
+    sources = (f" ({split})" if split else "") + (f"; {censored:,} censored, not counted" if censored else "")
     msg = (f"{not_net:,} of {total:,} closed trades in the last {PNL_BASIS_WINDOW_DAYS} d ({pct:.0f}%) are gross only "
            f"(costs not recorded){sources}")
     if pct > PNL_BASIS_GROSS_WARN_PCT:

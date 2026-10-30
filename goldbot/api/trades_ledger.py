@@ -166,6 +166,7 @@ class _Ctx:
     cat: Catalog
     accts: dict[str, _Acct]
     orders: dict[tuple[str, int], OpenTrade] = field(default_factory=dict)
+    read_only: bool = False             # a report: never migrate aux.db from a reader (ops/learning_ledger.py)
 
     def acct(self, account: str) -> _Acct:
         return self.accts.get(account, _Acct())
@@ -275,7 +276,7 @@ def _arm_row(t: ExplorationRecord, ctx: _Ctx, voids: dict[str, str]) -> TradeRow
 
 def _probes(state: Path, ctx: _Ctx) -> list[TradeRow]:
     out = []
-    for p in cost_probe.probes(state):
+    for p in cost_probe.probes(state, migrate=not ctx.read_only):
         if p.fill_price is None:
             continue
         a = ctx.acct(p.account_id)
@@ -444,11 +445,12 @@ def _key(r: TradeRow) -> tuple[datetime, str]:
 
 
 def build_ledger(state_dir: str | Path, now: pd.Timestamp, engines: list[dict[str, Any]] | None = None,
-                 cat: Catalog | None = None) -> Ledger:
-    """Read every source once (the API caches the result LEDGER_TTL_S)."""
+                 cat: Catalog | None = None, *, read_only: bool = False) -> Ledger:
+    """Read every source once (the API caches the result LEDGER_TTL_S). `read_only` (the reports): the cost-probe
+    source is opened without migrating aux.db, as the exploration source already is."""
     state = Path(state_dir)
     unreadable: list[TradeSource] = []
-    ctx = _Ctx(now=now, cat=cat or catalog(),
+    ctx = _Ctx(now=now, cat=cat or catalog(), read_only=read_only,
                accts={k: _acct(e, now) for k, e in engines_by_account(state, engines).items()})
     orders = _read("orders", lambda: [_orders(state)], unreadable)
     ctx.orders = orders[0] if orders else {}

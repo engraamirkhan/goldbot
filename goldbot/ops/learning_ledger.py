@@ -11,6 +11,11 @@ hundreds of exploration trades a day; this is the second source those reports no
 A trade that is in both sources (same account and broker position) is counted once, in the closed-trade record
 (`recorded_keys`): the caller passes that record's keys and the matching ledger rows are dropped.
 
+Voided rows (`evidence == "excluded"`, aux.db `evidence_exclusions`) are skipped; censored rows (closed by anything
+but the arm's own stop, target or hold) are kept and flagged so the reports count them apart, never in net R or money.
+Gross is pnl + commission + swap only (the closed-trade rule), never the ledger's `gross`, which also adds the modelled
+spread and slippage and so depends on engine_<account>.json.
+
 Net follows the closed-trade rule (gates_phase.pnl_basis, "nothing gross is labelled net"): a row is net only when its
 commission AND its swap are both recorded; otherwise it is counted but has no net money and no net R.
 
@@ -42,14 +47,16 @@ class LearningClose(FrozenRecord):
     arm_id: str | None = None
     timeframe: str | None = None
     position_id: int | None = None
+    opened_utc: pd.Timestamp
     exit_utc: pd.Timestamp
     side: Literal["long", "short"]
     currency: str | None = None
     pnl: float | None = None            # net of every cost the broker reported
     r: float | None = None              # pnl over the loss at the stop when sent
-    gross: float | None = None          # pnl + costs
+    gross: float | None = None          # pnl + commission + swap (None unless both are recorded)
     risk: float | None = None
     net: bool                           # commission and swap both recorded (gates_phase.pnl_basis "net")
+    censored: bool = False              # closed by anything but the arm's own stop, target or hold
 
 
 class LearningCloses(FrozenRecord):
@@ -62,22 +69,36 @@ def recorded_keys(trades: Iterable[ClosedTrade]) -> frozenset[tuple[str, int]]:
     return frozenset((account_name(t.account_id), t.position_id) for t in trades if t.position_id is not None)
 
 
-def closed_learning_trades(state_dir: str | Path, now: pd.Timestamp,
-                           recorded: frozenset[tuple[str, int]] = frozenset()) -> LearningCloses:
-    """Every closed exploration, control and cost-probe trade, less those already in the closed-trade record
-    (`recorded`). Reads only; a torn source is named in `unreadable`."""
+def read_learning_closes(state_dir: str | Path, now: pd.Timestamp) -> LearningCloses:
+    """Every closed, not voided exploration, control and cost-probe trade of the ledger (read-only: the cost-probe
+    source is not migrated). Not yet de-duplicated against the closed-trade record: `without_recorded`."""
     from goldbot.api.trades_ledger import build_ledger
-    ledger = build_ledger(state_dir, now)
+    ledger = build_ledger(state_dir, now, read_only=True)
     rows = []
     for r in ledger.rows:
         if r.kind not in KINDS or r.status != "closed" or r.exit_utc is None or r.account is None:
             continue
-        if r.position_id is not None and (r.account, r.position_id) in recorded:
+        if r.evidence == "excluded":
             continue
         c = r.costs
+        gross = None
+        if r.pnl is not None and c is not None and c.commission is not None and c.swap is not None:
+            gross = round(r.pnl + c.commission + c.swap, 2)
         rows.append(LearningClose(
             account=r.account, kind=r.kind, family=r.family, arm_id=r.arm_id, timeframe=r.timeframe,
-            position_id=r.position_id, exit_utc=pd.Timestamp(r.exit_utc), side=r.side, currency=r.currency,
-            pnl=r.pnl, r=r.r, gross=r.gross, risk=r.risk_amount,
-            net=r.pnl is not None and c is not None and c.commission is not None and c.swap is not None))
+            position_id=r.position_id, opened_utc=pd.Timestamp(r.opened_utc), exit_utc=pd.Timestamp(r.exit_utc),
+            side=r.side, currency=r.currency, pnl=r.pnl, r=r.r, gross=gross, risk=r.risk_amount, net=gross is not None,
+            censored=r.censored))
     return LearningCloses(rows=rows, unreadable=[s for s in ledger.unreadable if s in SOURCES])
+
+
+def without_recorded(closes: LearningCloses, recorded: frozenset[tuple[str, int]]) -> LearningCloses:
+    """`closes` less the trades already in the closed-trade record (counted once, there)."""
+    keep = [c for c in closes.rows if c.position_id is None or (c.account, c.position_id) not in recorded]
+    return closes.model_copy(update={"rows": keep})
+
+
+def closed_learning_trades(state_dir: str | Path, now: pd.Timestamp,
+                           recorded: frozenset[tuple[str, int]] = frozenset()) -> LearningCloses:
+    """`read_learning_closes` less the closed-trade record's own trades. A torn source is named in `unreadable`."""
+    return without_recorded(read_learning_closes(state_dir, now), recorded)

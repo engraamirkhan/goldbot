@@ -34,14 +34,14 @@ def _accounts(enabled_accounts):
 
 def _arm(state: Path, cid: str, arm: str = STRAT, *, account: str = ACC, day: str = "2026-10-28", minute: int = 0,
          pnl: float | None = 1.2, stop_loss: float = 2.4, commission: float | None = 0.07,
-         swap: float | None = -0.03, pid: int | None = None) -> None:
+         swap: float | None = -0.03, pid: int | None = None, side: int = 1, censored: bool = False) -> None:
     """One closed exploration row in the real body shape (aux.db `exploration_trades`)."""
     sent = pd.Timestamp(f"{day} 10:00", tz="UTC") + pd.Timedelta(minutes=minute)
     rec = ExplorationRecord(
-        client_order_id=cid, account_id=account, arm_id=arm, family="x", tf="5m", side=1, lots=0.01, signal_utc=sent,
+        client_order_id=cid, account_id=account, arm_id=arm, family="x", tf="5m", side=side, lots=0.01, signal_utc=sent,
         sent_utc=sent, atr_usd=3.0, stop_usd=3.0, target_usd=6.0, hold_s=3600, requested_price=2400.0, spread_usd=0.2,
         fill_price=2400.1, stop_loss=stop_loss, cost=0.4, position_id=pid, exit_utc=sent + pd.Timedelta(minutes=10),
-        exit_price=2406.1, exit_reason="target", swap=swap, commission=commission, pnl=pnl, censored=False,
+        exit_price=2406.1, exit_reason="target", swap=swap, commission=commission, pnl=pnl, censored=censored,
         fx_acct_per_usd=0.8)
     with Database.open(state, "aux").write() as conn:
         exploration.LEDGER.upsert(conn, rec)
@@ -122,13 +122,16 @@ def test_thirty_trade_rule_applies_to_exploration_groups(tmp_path):
     assert g.trades == MIN_TRADES and g.r_ci90 is not None
 
 
-def test_learning_groups_count_in_the_multiple_groups_note(tmp_path):
+def test_learning_groups_are_counted_apart_in_the_multiple_groups_note(tmp_path):
     _engine(tmp_path)
     _arm(tmp_path, "e1")
     rep = _report(tmp_path)
     [a] = rep.accounts
     assert a.learning is not None
-    assert rep.groups == sum(len(gs) for gs in a.by.values()) + len(a.learning.kinds) + len(a.learning.families)
+    assert rep.groups == sum(len(gs) for gs in a.by.values())                  # the closed-trade count is as before
+    assert rep.learning_groups == len(a.learning.kinds) + len(a.learning.families)
+    assert (f"plus {rep.learning_groups} learning groups (kind rows overlap family rows); about 1 in 10 groups "
+            "shows an interval by chance") in format_markdown(rep)
 
 
 def test_a_trade_in_both_sources_is_counted_once_in_the_closed_trade_record(tmp_path):
