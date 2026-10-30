@@ -168,3 +168,38 @@ def test_the_survivors_report_is_written_atomically(tmp_path, monkeypatch):
         tensor=t, provider=prov, families=FAMS, cost_line="synthetic", mode="synthetic"))
     assert calls and calls[-1][1] == report.name and calls[-1][0] != report.name
     assert not [p for p in report.parent.iterdir() if p.name != report.name]       # no temp file left behind
+
+
+def test_the_report_carries_cumulative_k_and_survivors_across_nights_and_the_confirm_dsr_rule(tmp_path):
+    """Quant review F2: multiplicity across nights. K_search and the survivor count are cumulative over every night
+    in the ledger, and each survivor states its DSR at that cumulative K against the 0.95 confirm bar."""
+    t, prov = edge_tensor()
+    led = SearchLedger(tmp_path / "m.db", mode="synthetic")
+    first = NT.search_and_judge(t, prov, led, gp(seed=1), reps=2, night="night-1")
+    second = NT.search_and_judge(t, prov, led, gp(seed=2), reps=2, night="night-2")
+    assert second.k_search == led.k_search() > first.k_search
+    assert 0 < second.k_search_tonight < second.k_search
+    assert first.survivors_cumulative == len({s.spec_hash for s in first.survivors}) >= 1
+    assert second.survivors_cumulative == led.n_survivors() >= first.survivors_cumulative
+    text = NT.render(second)
+    assert f"K_search {second.k_search:,} cumulative over all nights ({second.k_search_tonight:,} new tonight)" in text
+    assert f"explore survivors, cumulative over all nights {second.survivors_cumulative:,}" in text
+    assert "advancing to confirm requires DSR >= 0.95 at the cumulative K_search" in text
+    for s in second.survivors:
+        assert f"DSR at cumulative K_search {second.k_search:,}: {s.dsr:,.3f}" in text
+        assert s.meets_confirm_dsr == (s.dsr >= NT.DSR_CONFIRM_BAR)
+    assert NT.DSR_CONFIRM_BAR == 0.95 and not hasattr(NT.S, "DSR_BAR")
+
+
+def test_the_report_lists_every_judged_candidate_that_failed_with_the_test_it_failed(tmp_path):
+    """Quant review F5: one line per judged candidate that is not a survivor, naming the failed check."""
+    t, prov = edge_tensor()
+    res = NT.search_and_judge(t, prov, SearchLedger(tmp_path / "f.db", mode="synthetic"), gp(), reps=2)
+    assert res.judged == len(res.survivors) + len(res.rejected)
+    rej = NT.Rejected(spec_hash="a" * 64, fitness=1.2, shift_p=0.31, plateau_share=0.25, plateau_ratio=0.1,
+                      failed=["shift p 0.310 > 0.05", "plateau share 0.25 < 0.60", "plateau ratio 0.100 < 0.50"])
+    text = NT.render(res.model_copy(update={"rejected": [rej], "batch_ok": False, "batch_why": ["SPA p 0.400 > 0.10"]}))
+    assert "judged candidates that failed 1" in text
+    assert "aaaaaaaaaaaa  fitness 1.200  failed: shift p 0.310 > 0.05; plateau share 0.25 < 0.60; plateau ratio " \
+           "0.100 < 0.50" in text
+    assert not CONFIRM.search(text)

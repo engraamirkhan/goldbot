@@ -37,9 +37,10 @@ def test_reality_check_does_not_reject_a_batch_of_pure_noise():
 
 
 def test_reality_check_size_on_noise_stays_near_the_nominal_level():
-    p = np.array([S.reality_check(noise(300, 20, seed=1000 + s), draws=300, seed=s).spa_p for s in range(100)])
-    # 10% nominal; the consistent SPA is known to run slightly liberal in small samples (measured 12% at 150 seeds)
-    assert (p <= S.RC_ALPHA).mean() <= 0.18 and (p <= 0.05).mean() <= 0.10
+    p = np.array([S.reality_check(noise(300, 20, seed=1000 + s), draws=300, seed=s).spa_p for s in range(400)])
+    # 10% nominal; the consistent SPA runs slightly liberal in small samples. 400 seeds: the rejection rate's se is
+    # 1.5 points, so 0.15 is ~3 se above nominal (quant review F5, 2026-10-30)
+    assert (p <= S.RC_ALPHA).mean() <= 0.15 and (p <= 0.05).mean() <= 0.10
 
 
 def test_reality_check_rejects_when_one_spec_has_a_real_edge():

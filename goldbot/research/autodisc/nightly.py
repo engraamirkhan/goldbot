@@ -10,8 +10,10 @@ baseline, the 1.5x cost stress (the evaluator's own checks); a fitness above the
 `null_reps` reruns of the WHOLE G2 search on random sides (step 7, "the reality check for an adaptive search"); a
 batch whose Hansen SPA rejects at 10% and whose PBO is <= 0.30 (steps 8-9: "otherwise nothing from the batch
 advances"); a circular-shift null p <= 5% (whole-week shifts in calendar time, excess R over the drift baseline); and a plateau (step 6) over its grid neighbours. The neighbours are searched
-specs: each is ledgered before it is evaluated and counts in K. The DSR at the ledger's K is reported, informational
-(step 10). Novelty (step 12) is not labelled here: a G2 spec carries no family, and the novelty pass over survivors is
+specs: each is ledgered before it is evaluated and counts in K. The DSR at the ledger's cumulative K_search (every
+night) is reported per survivor against the 0.95 confirm bar (step 10, "informational at this stage; binding at
+confirm"; ADR 0058 amendment 2026-10-30: advancing to confirm requires it), with the cumulative survivor count from the
+ledger and one line per judged candidate that failed, naming the failed check. Novelty (step 12) is not labelled here: a G2 spec carries no family, and the novelty pass over survivors is
 read from the report by the research director.
 
 Selection reads only the explore window: the bars come through `windows.ExploreFrame` (2018+ raises) and only the
@@ -30,6 +32,7 @@ import pandas as pd
 
 from goldbot.base import FrozenRecord
 from goldbot.config import Settings
+from goldbot.research.autodisc import stats as S
 from goldbot.research.autodisc.gen_gp import (
     GENERATOR,
     GPCandidate,
@@ -46,6 +49,7 @@ from goldbot.research.autodisc.nulls import exit_index
 from goldbot.research.autodisc.outcomes import OutcomeTensor
 from goldbot.research.autodisc.stats import (
     CS_ALPHA,
+    DSR_CONFIRM_BAR,
     PBOResult,
     Plateau,
     RealityCheck,
@@ -84,13 +88,26 @@ class Survivor(FrozenRecord):
     n_events: int
     shift_p: float
     plateau: Plateau
-    dsr: float
+    dsr: float                                # at the cumulative K_search
+    meets_confirm_dsr: bool                   # dsr >= DSR_CONFIRM_BAR: what advancing to confirm requires
+
+
+class Rejected(FrozenRecord):
+    """A judged candidate that is not a survivor, with every check it failed (quant review F5)."""
+    spec_hash: str
+    fitness: float
+    shift_p: float
+    plateau_share: float
+    plateau_ratio: float | None
+    failed: list[str]
 
 
 class NightlyResult(FrozenRecord):
     generator: str
     timeframe: str
-    k_search: int
+    k_search: int                             # cumulative over every night in the ledger: the K the DSR is read at
+    k_search_tonight: int                     # new distinct specs this night added
+    survivors_cumulative: int                 # distinct explore survivors over every night (ledger)
     k_null: int
     null_reps: int
     evaluated: int
@@ -106,6 +123,7 @@ class NightlyResult(FrozenRecord):
     batch_ok: bool
     batch_why: list[str]
     survivors: list[Survivor]
+    rejected: list[Rejected]
     head: tuple[int, str]
     cost_line: str = ""
 
@@ -115,9 +133,22 @@ def _day_ids(t: OutcomeTensor) -> tuple[np.ndarray, int]:
     return codes.astype(np.int64), int(codes.max()) + 1
 
 
+def _failed(p: float, pl: Plateau, batch_ok: bool) -> list[str]:
+    why = [] if batch_ok else ["batch (SPA / PBO)"]
+    if p > CS_ALPHA:
+        why.append(f"shift p {p:.3f} > {CS_ALPHA:.2f}")
+    if pl.share_positive < S.PLATEAU_MIN_SHARE:
+        why.append(f"plateau share {pl.share_positive:.2f} < {S.PLATEAU_MIN_SHARE:.2f}")
+    if pl.ratio is None or pl.ratio < S.PLATEAU_MIN_RATIO:
+        why.append(f"plateau ratio {_f(pl.ratio)} < {S.PLATEAU_MIN_RATIO:.2f}")
+    return why or ["plateau"]                           # e.g. no grid neighbours: nothing shows a plateau
+
+
 def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg: GPConfig, *, reps: int,
-                     max_candidates: int = 20, cost_line: str = "") -> NightlyResult:
-    """The module docstring's funnel on one tensor. Every evaluated spec (search, null, neighbours) is ledgered first."""
+                     max_candidates: int = 20, cost_line: str = "", night: str = "adhoc") -> NightlyResult:
+    """The module docstring's funnel on one tensor. Every evaluated spec (search, null, neighbours) is ledgered first.
+    The night's survivors are recorded in the ledger under `night`, so the report states the cumulative count."""
+    k_before = ledger.k_search()
     res = Resolver(provider)
     real = run_gp(t, provider, cfg, ledger, resolver=res)
     null = gp_null(t, provider, cfg, ledger, reps=reps, resolver=res)
@@ -150,16 +181,30 @@ def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg:
         n_nb += len(nbs)
         fit = [f if np.isfinite(f := gp_fitness(nb.evaluation)) else None for nb in nbs]
         judged.append((c, shift.p_value, plateau_check(gp_fitness(c.evaluation), fit)))
-    dsr = batch_dsr(d, [col_of[c.spec_hash] for c, _, _ in judged], ledger.k_search()) if judged else {}
-    survivors = [Survivor(spec_hash=c.spec_hash, spec_json=c.spec.model_dump_json(), fitness=gp_fitness(c.evaluation),
-                          mean_r=c.evaluation.mean_r, excess_r=c.evaluation.excess_r, n_events=c.evaluation.n_events,
-                          shift_p=p, plateau=pl, dsr=dsr[col_of[c.spec_hash]])
-                 for c, p, pl in judged if batch_ok and p <= CS_ALPHA and pl.passed]
-    return NightlyResult(generator=f"{GENERATOR} gp", timeframe=cfg.timeframe, k_search=ledger.k_search(),
+    k_cum = ledger.k_search()                 # every night's specs: the multiplicity the confirm DSR pays for
+    dsr = batch_dsr(d, [col_of[c.spec_hash] for c, _, _ in judged], k_cum) if judged else {}
+    survivors: list[Survivor] = []
+    rejected: list[Rejected] = []
+    for c, p, pl in judged:
+        f = gp_fitness(c.evaluation)
+        if batch_ok and p <= CS_ALPHA and pl.passed:
+            v = dsr[col_of[c.spec_hash]]
+            survivors.append(Survivor(spec_hash=c.spec_hash, spec_json=c.spec.model_dump_json(), fitness=f,
+                                      mean_r=c.evaluation.mean_r, excess_r=c.evaluation.excess_r,
+                                      n_events=c.evaluation.n_events, shift_p=p, plateau=pl, dsr=v,
+                                      meets_confirm_dsr=bool(v >= DSR_CONFIRM_BAR)))
+        else:
+            rejected.append(Rejected(spec_hash=c.spec_hash, fitness=f, shift_p=p, plateau_share=pl.share_positive,
+                                     plateau_ratio=pl.ratio, failed=_failed(p, pl, batch_ok)))
+    if survivors:
+        ledger.record_survivors(night, [(s.spec_hash, s.dsr) for s in survivors], k_search=k_cum)
+    return NightlyResult(generator=f"{GENERATOR} gp", timeframe=cfg.timeframe, k_search=k_cum,
+                         k_search_tonight=k_cum - k_before, survivors_cumulative=ledger.n_survivors(),
                          k_null=ledger.k_null(), null_reps=reps, evaluated=len(real.evaluated), passed_floors=len(floors),
                          null_threshold=thr, real_best=real.best, real_best_null_percentile=null.percentile_of(real.best),
                          candidates=len(cands), judged=len(judged), neighbours_evaluated=n_nb, rc=rc, pbo=pbo,
-                         batch_ok=batch_ok, batch_why=why, survivors=survivors, head=ledger.head(), cost_line=cost_line)
+                         batch_ok=batch_ok, batch_why=why, survivors=survivors, rejected=rejected, head=ledger.head(),
+                         cost_line=cost_line)
 
 
 def _n(x: int) -> str:
@@ -177,21 +222,30 @@ def render(r: NightlyResult) -> str:
     pbo = f"PBO {_f(r.pbo.pbo)} over the top {_n(r.pbo.n_configs)}" if r.pbo else "PBO not computed"
     lines = [
         f"autodisc nightly | generator {r.generator} | {r.timeframe} | explore window 2010-2017 only",
-        f"K_search {_n(r.k_search)} | K_null {_n(r.k_null)} (null reruns of the whole search {_n(r.null_reps)})",
+        f"K_search {_n(r.k_search)} cumulative over all nights ({_n(r.k_search_tonight)} new tonight) | K_null "
+        f"{_n(r.k_null)} (null reruns of the whole search {_n(r.null_reps)})",
         *([f"costs: {_BUILT_DATE.sub('', r.cost_line)}"] if r.cost_line else []),
         f"evaluated {_n(r.evaluated)} | passed floors {_n(r.passed_floors)} | neighbours evaluated "
         f"{_n(r.neighbours_evaluated)}",
-        f"null bar (95th pct of best-of-search, floored at 0) {_f(r.null_threshold)} | real best {_f(r.real_best)} at "
-        f"null percentile {_f(r.real_best_null_percentile)}",
+        f"null bar (95th pct of best-of-search excess-R fitness, floored at 0) {_f(r.null_threshold)} | real best "
+        f"{_f(r.real_best)} at null percentile {_f(r.real_best_null_percentile)}",
         f"batch: {rc}; {pbo}; {'advances' if r.batch_ok else 'nothing advances: ' + '; '.join(r.batch_why)}",
         f"candidates (beat the null and the explore checks) {_n(r.candidates)}, judged {_n(r.judged)}",
-        f"explore survivors {_n(len(r.survivors))}: a recorded fact, not evidence of edge",
+        f"explore survivors tonight {_n(len(r.survivors))}; explore survivors, cumulative over all nights "
+        f"{_n(r.survivors_cumulative)}: a recorded fact, not evidence of edge",
+        f"rule (ADR 0058 amendment, pre-registered): advancing to confirm requires DSR >= {DSR_CONFIRM_BAR:.2f} at the "
+        f"cumulative K_search; the DSR uses raw K_search (ONC K_eff deferred: conservative) and tonight's batch for "
+        f"the variance of the Sharpe ratios",
     ]
     for s in r.survivors:
         lines.append(f"  {s.spec_hash[:12]}  fitness {_f(s.fitness)}  mean R {_f(s.mean_r)}  excess R {_f(s.excess_r)}  "
-                     f"events {_n(s.n_events)}  shift p {_f(s.shift_p)}  plateau {_f(s.plateau.ratio)}  "
-                     f"DSR {_f(s.dsr)} (informational)")
+                     f"events {_n(s.n_events)}  shift p {_f(s.shift_p)}  plateau {_f(s.plateau.ratio)}")
+        lines.append(f"    DSR at cumulative K_search {_n(r.k_search)}: {_f(s.dsr)} "
+                     f"({'meets' if s.meets_confirm_dsr else 'below'} the {DSR_CONFIRM_BAR:.2f} confirm bar)")
         lines.append(f"    {s.spec_json}")
+    lines.append(f"judged candidates that failed {_n(len(r.rejected))}")
+    for x in r.rejected:
+        lines.append(f"  {x.spec_hash[:12]}  fitness {_f(x.fitness)}  failed: {'; '.join(x.failed)}")
     lines.append(f"ledger head seq {_n(r.head[0])} digest {r.head[1]}")
     text = "\n".join(lines) + "\n"
     assert_no_confirm_numbers(text)
@@ -275,7 +329,7 @@ def run_nightly_job(settings: Settings, state_dir: Path, slot: pd.Timestamp, *,
     cfg = GPConfig(timeframe=a.timeframe, population=a.population, generations=a.generations,
                    seed=night_seed(a.seed, slot), min_events=min_events, families=b.families)
     res = search_and_judge(b.tensor, b.provider, ledger, cfg, reps=a.null_reps, max_candidates=a.max_candidates,
-                           cost_line=b.cost_line)
+                           cost_line=b.cost_line, night=f"{pd.Timestamp(slot):%Y-%m-%d}")
     rel = f"{REPORT_DIR}/survivors-{pd.Timestamp(slot):%Y-%m-%d}.md"
     out = Path(state_dir) / rel
     _write_atomic(out, render(res))
@@ -283,5 +337,6 @@ def run_nightly_job(settings: Settings, state_dir: Path, slot: pd.Timestamp, *,
     pbo = "n/a" if res.pbo is None else f"{res.pbo.pbo:.2f}"
     return {"report": rel, "k_search": res.k_search, "k_null": res.k_null, "evaluated": res.evaluated,
             "candidates": res.candidates, "survivors": len(res.survivors), "batch_ok": res.batch_ok,
+            "survivors_cumulative": res.survivors_cumulative,
             "health": f"autodisc {res.timeframe}: {res.evaluated:,} specs, K_search {res.k_search:,}, SPA p {spa}, "
                       f"PBO {pbo}, survivors {len(res.survivors)} (explore only, not evidence)"}

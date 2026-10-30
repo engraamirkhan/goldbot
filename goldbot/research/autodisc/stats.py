@@ -15,7 +15,8 @@ performance, so gold's long drift cannot make a long-biased rule look clever and
 - `batch_dsr`: the deflated Sharpe ratio (Bailey and Lopez de Prado 2014, `metrics.deflated_sharpe`) of each named spec
   at K from the ledger (`SearchLedger.k_search`, the raw count of distinct specs; K_eff of the design is not built, so
   this DSR is the conservative one), with the spec's own skew and kurtosis and the cross-trial variance of the batch's
-  Sharpe ratios. Step 10: "informational at this stage; binding at confirm".
+  Sharpe ratios. Step 10: "informational at this stage; binding at confirm": the confirm bar is the gates' 0.95
+  (`DSR_CONFIRM_BAR`), read at the cumulative K_search of every night (ADR 0058 amendment, 2026-10-30).
 - `circular_shift_null`: the spec's signal rotated against the returns by random offsets of WHOLE WEEKS in calendar
   time (whole days when the sample spans fewer than `CS_MIN_WEEKS` weeks), so a shifted event keeps its UTC hour and
   weekday, and scored in excess R over the drift baseline of its hour and side (quant review F1, 2026-10-30: a shift by
@@ -39,6 +40,7 @@ from scipy import stats as sps
 
 from goldbot.base import FrozenRecord
 from goldbot.data.timeutil import epoch_ns
+from goldbot.research import gates
 from goldbot.research.autodisc.evaluate import PLATEAU_MIN_SHARE
 from goldbot.research.autodisc.outcomes import OutcomeTensor
 from goldbot.research.cpcv import pbo
@@ -53,13 +55,13 @@ RC_ALPHA = 0.10
 PBO_TOP = 50
 PBO_GROUPS = 12
 PBO_MAX = 0.30
-DSR_BAR = 0.90
 CS_SHIFTS = 199              # p resolution 1/200
 CS_ALPHA = 0.05
 CS_MIN_WEEKS = 40            # whole-week shifts need >= ~2/CS_ALPHA admissible offsets; a shorter sample uses days
 ShiftUnit = Literal["week", "day"]
 _UNIT_NS: dict[str, int] = {"week": 7 * 86_400_000_000_000, "day": 86_400_000_000_000}
 PLATEAU_MIN_RATIO = 0.5
+DSR_CONFIRM_BAR = gates.DSR_BAR      # the gates' 0.95: what advancing to confirm requires, at the cumulative K
 _CHUNK = 1000                # specs per bootstrap matrix product (memory: draws x chunk floats)
 
 
