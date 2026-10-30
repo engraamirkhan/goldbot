@@ -19,6 +19,11 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ReadWritePaths=/opt/goldbot/state /opt/goldbot/logs
 PrivateTmp=true
+ProtectHome=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
 
 [Install]
 WantedBy=multi-user.target
