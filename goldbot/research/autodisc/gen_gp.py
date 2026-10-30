@@ -22,7 +22,7 @@ from collections.abc import Iterator, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, model_validator
 
 from goldbot.base import FrozenRecord
 from goldbot.research.autodisc.contracts import BoolArr, MaskProvider, SideArr
@@ -72,6 +72,12 @@ class GPConfig(FrozenRecord):
     seed: int = 0
     min_events: int | None = Field(None, ge=1)      # None: the evaluator's per-timeframe floor
     families: tuple[str, ...] = ()                  # family rules offered as structure leaves and side primitives
+
+    @model_validator(mode="after")
+    def _tournament_fits(self) -> "GPConfig":
+        if self.tournament > self.population:
+            raise ValueError(f"tournament {self.tournament} > population {self.population}")
+        return self
 
 
 class GPCandidate(FrozenRecord):
@@ -404,7 +410,7 @@ def run_gp(t: OutcomeTensor, provider: MaskProvider, cfg: GPConfig, ledger: Sear
         rank = _rank(pop, t.n_bars)
 
         def pick() -> int:
-            ids = rng.choice(len(pop), size=cfg.tournament, replace=False)
+            ids = rng.choice(len(pop), size=min(cfg.tournament, len(pop)), replace=False)   # pop may be short
             return int(min(ids, key=lambda i: rank[int(i)]))
 
         kids: dict[str, tuple[StrategySpec, tuple[str, ...]]] = {}

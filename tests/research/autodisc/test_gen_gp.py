@@ -167,3 +167,16 @@ def test_config_bounds_the_search():
         G.GPConfig(timeframe="15m", population=2)
     with pytest.raises(ValueError):
         G.GPConfig(timeframe="15m", generations=0)
+
+
+def test_a_tournament_larger_than_the_population_is_refused_by_the_config():
+    with pytest.raises(ValueError):
+        G.GPConfig(timeframe="15m", population=4, tournament=8)
+    assert G.GPConfig(timeframe="15m", population=4, tournament=4).tournament == 4
+
+
+def test_selection_survives_a_population_smaller_than_the_tournament(tmp_path):
+    t = make_noise_tensor(N, seed=2)
+    c = G.GPConfig.model_construct(**{**dict(cfg()), "population": 4, "tournament": 8, "generations": 2})
+    out = G.run_gp(t, SyntheticProvider(N), c, SearchLedger(tmp_path / "s.db", mode="synthetic"))
+    assert len(out.best_by_generation) >= 2
