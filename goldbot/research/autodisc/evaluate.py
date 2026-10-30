@@ -148,7 +148,8 @@ def evaluate(tensor: OutcomeTensor, mask: np.ndarray, side: np.ndarray | int, ex
         return Evaluation(spec_hash=spec_hash, exit_name=tensor.exits[exit_i].name, n_events=0, mean_r=None, t_stat=None,
                           time_in_market=0.0, floors_passed=False, floor_failures=failures, long=Stat(n=0),
                           short=Stat(n=0), fold_t=[None] * N_FOLDS, fitness=None, drift_baseline_r=None, excess_r=None,
-                          stress_mean_r=None, stress_passed=False, input_digest=tensor.digest)
+                          stress_mean_r=None, stress_passed=False, input_digest=tensor.digest,
+                          excess_fold_t=[None] * N_FOLDS)
     r = ev.r()
     day = ev.ts_utc.normalize().to_numpy()
     folds = fold_fitness(ev, tensor, timeframe)

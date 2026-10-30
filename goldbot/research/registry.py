@@ -43,7 +43,15 @@ Research discipline (docs/proposals/2026-10-design-improvements.md, P2):
   combinatorial purged CV (research/cpcv.py), is attached to that trial in a sidecar file
   (`<registry>.evidence.jsonl`, `attach_evidence` / `evidence`), never written as a trial row: it takes no budget
   slot and does not raise the deflated-Sharpe count. The sidecar is local to the host that wrote it: registry_sync
-  and research.yml do not carry it (evidence is advisory and can only veto; docs/decisions/0002)."""
+  and research.yml do not carry it (evidence is advisory and can only veto; docs/decisions/0002);
+* discovery batches (ADR 0058 decision 2, F3; design 3.1): each batch of the autonomous-discovery search records its
+  `k_contrib` (new distinct spec hashes) with `record_discovery_batch`. Design 3.1: "Human pre-registered hypotheses
+  written independently keep the registry's K", so `n_trials_effective` is unchanged, and a discovered candidate reads
+  its DSR at `n_trials_discovery` = `n_trials_effective` + every batch's k_contrib. A batch is never a trial and never
+  a budget slot. Its rows live in a sidecar (`<registry>.discovery.jsonl`), not in the registry rows, because a host
+  on an older build counts every unknown status as a trial (`is_trial`) and registry_sync would carry a new status to
+  it; `record` refuses the DISCOVERY_BATCH status. The sidecar is rebuilt from the search ledger when lost
+  (`autodisc.k_link.sync_discovery_k` tops it up to the ledger's K_search)."""
 from __future__ import annotations
 
 import hashlib
@@ -65,6 +73,7 @@ WITHDRAWN = "withdrawn"                 # a withdrawal of a pre-registration (`T
 VERDICT = "verdict"                     # an evaluator's reading of a trial (`TrialRegistry.record_verdict`): not a trial
 VERDICT_DECISIONS: tuple[str, ...] = ("continue", "stop", "inconclusive")
 DISCOVERY = "discovery"
+DISCOVERY_BATCH = "discovery_batch"     # an autodisc search batch: sidecar only (`record_discovery_batch`), never a row
 FROM_DISCOVERY_KEY = "from_discovery"   # set on a config whose features came from a discovery trial: its `row_ref`
 SURVIVOR_KEY = "survivor"               # ... and the discovery survivor (cluster, group or feature) the config tests
 SLOT_KINDS: tuple[str, ...] = ("survivor", "followup", "holdout")
@@ -301,9 +310,41 @@ class TrialRegistry:
     def n_trials_effective(self) -> int:
         return n_trials_effective(self._rows())
 
+    # ------------------------------------------------------------------ discovery batches (sidecar; not trials)
+    @property
+    def discovery_path(self) -> Path:
+        return self.path.with_name(self.path.stem + ".discovery.jsonl")
+
+    def discovery_batches(self) -> list[dict[str, Any]]:
+        """Every recorded discovery batch, oldest first."""
+        if not self.discovery_path.exists():
+            return []
+        return [json.loads(x) for x in self.discovery_path.read_text().splitlines() if x.strip()]
+
+    def record_discovery_batch(self, *, k_contrib: int, generator: str, ledger_head: tuple[int, str],
+                               ledger_id: str = "", timeframe: str = "") -> dict[str, Any]:
+        """Record one discovery batch's `k_contrib` (new distinct spec hashes of the search ledger `ledger_id`, whose
+        chain tip was `ledger_head`) in the sidecar: no trial, no budget slot, no change to `n_trials_effective`."""
+        if int(k_contrib) < 0:
+            raise ValueError(f"k_contrib must be >= 0, got {k_contrib}")
+        row = {"status": DISCOVERY_BATCH, "ts": _utcnow().isoformat(), "k_contrib": int(k_contrib),
+               "generator": generator, "timeframe": timeframe, "ledger_id": ledger_id,
+               "ledger_head": [int(ledger_head[0]), str(ledger_head[1])]}
+        with open(self.discovery_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row) + "\n")
+        return row
+
+    @property
+    def n_trials_discovery(self) -> int:
+        """The K a discovered candidate's DSR is read at (design 3.1): the registry's K plus every batch's k_contrib."""
+        return self.n_trials_effective + sum(int(b.get("k_contrib") or 0) for b in self.discovery_batches())
+
     def record(self, *, agent_id: str, family: str, config: dict, feature_version: str, rationale: str,
                results: dict, status: str = "evaluated", budget_quarter: str | None = None,
                preregistration: dict[str, Any] | None = None, rule_ref: str | None = None) -> dict:
+        if status == DISCOVERY_BATCH:
+            raise ValueError("a discovery_batch is never a registry row (an older build would count it as a trial): "
+                             "use record_discovery_batch")
         row: dict[str, Any] = {
             "trial": self.n_trials + 1,
             "ts": datetime.now(timezone.utc).isoformat(),

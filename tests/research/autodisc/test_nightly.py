@@ -210,3 +210,76 @@ def test_a_survivor_with_dsr_097_on_150_events_does_not_meet_the_confirm_bar():
     assert NT.MIN_TRADES_FOR_DSR == 200
     assert not NT.meets_confirm_bar(0.97, 150)
     assert NT.meets_confirm_bar(0.97, 200) and not NT.meets_confirm_bar(0.94, 500)
+
+
+def test_every_evaluated_spec_records_its_search_fitness_and_its_components_so_the_top_can_be_ranked_later(tmp_path):
+    t, prov = edge_tensor()
+    led = SearchLedger(tmp_path / "f.db", mode="synthetic")
+    res = NT.search_and_judge(t, prov, led, gp(), reps=2)
+    assert res.evaluated > 0
+    for e in led.entries():
+        if e.kind != "result" or e.is_null:
+            continue
+        r = led.result(e.spec_hash)
+        assert r is not None
+        for key in ("search_fitness", "fold_t", "excess_fold_t", "t_stat", "time_in_market", "floor_failures"):
+            assert key in r, key
+        assert len(r["fold_t"]) == len(r["excess_fold_t"]) == 4
+        if r["floors"] and r["excess_fitness"] is not None:
+            assert r["search_fitness"] == r["excess_fitness"]                 # gp_fitness: what the search ranked by
+        else:
+            assert r["search_fitness"] is None                                 # below the floors: -inf, stored as null
+
+
+def test_a_candidate_that_beats_the_null_but_fails_an_explore_check_is_reported_with_the_check_and_its_value(
+        tmp_path, monkeypatch):
+    from goldbot.research.autodisc.nulls import NullDistribution
+    monkeypatch.setattr(NT, "gp_null", lambda *a, **k: NullDistribution((float("-inf"),) * 4, 0))   # bar floored at 0
+    from dataclasses import replace
+    t, prov = edge_tensor()
+    t = replace(t, cost=t.cost + 2.0 * t.risk)              # the edge survives the cost, never the 1.5x cost stress
+    led = SearchLedger(tmp_path / "x.db", mode="synthetic")
+    res = NT.search_and_judge(t, prov, led, gp(), reps=4)
+    assert res.explore_failed and res.candidates == 0
+    for x in res.explore_failed:
+        assert x.fitness > res.null_threshold and x.failed
+        assert all(re.search(r"-?\d+\.\d{3}", f) for f in x.failed)              # the check AND its value
+    searched = [led.result(e.spec_hash) or {} for e in led.entries()
+                if e.kind == "result" and not e.is_null]
+    beat = [r for r in searched if r.get("generation", -1) >= 0 and r.get("search_fitness") is not None
+            and r["search_fitness"] > res.null_threshold]
+    assert res.candidates + len(res.explore_failed) == len(beat)
+    text = NT.render(res)
+    assert f"beat the null but failed an explore check {len(res.explore_failed):,}" in text
+    assert f"{res.explore_failed[0].spec_hash[:12]}  fitness" in text and res.explore_failed[0].failed[0] in text
+    assert not CONFIRM.search(text)
+
+
+def test_explore_failures_name_each_failed_check_with_its_value():
+    t, prov = edge_tensor()
+    from goldbot.research.autodisc.evaluate import evaluate
+    mask, side = prov.family_entries("tsmom", "15m")
+    e = evaluate(t, mask, side, 0, timeframe="15m", min_events=60)
+    bad = e.model_copy(update={"fitness": -0.25, "excess_r": -0.01, "stress_mean_r": -0.002, "stress_passed": False})
+    assert NT.explore_failures(bad) == ["min-fold t -0.250 <= 0", "excess R -0.010 <= 0",
+                                        "mean R at 1.5x cost -0.002 <= 0"]
+    good = e.model_copy(update={"fitness": 1.0, "excess_r": 0.1, "stress_mean_r": 0.1, "stress_passed": True,
+                                "floors_passed": True})
+    assert NT.explore_failures(good) == []
+
+
+def test_the_explore_dsr_reads_at_the_offset_k_and_survivors_keep_their_dsr_inputs_and_costs(tmp_path):
+    """Quant F1/F2/F3: the DSR is read at the registry's discovery K (k_offset + K_search); each survivor row keeps
+    its DSR inputs (re-read at a later K) and the night's cost line."""
+    from goldbot.research.metrics import DsrInputs
+    t, prov = edge_tensor()
+    led = SearchLedger(tmp_path / "o.db", mode="synthetic")
+    res = NT.search_and_judge(t, prov, led, gp(), reps=2, k_offset=900, cost_line="cost table x", night="n1")
+    assert res.k_dsr == res.k_search + 900 and res.survivors
+    text = NT.render(res)
+    assert f"DSR at K {res.k_dsr:,}" in text and not CONFIRM.search(text)
+    for s in res.survivors:
+        rec = led.survivor_record(s.spec_hash)
+        assert rec is not None and rec["k_search"] == res.k_dsr and rec["cost_line"] == "cost table x"
+        inp = DsrInputs.model_validate_json(rec["dsr_inputs"])
+        assert inp.dsr(res.k_dsr) == pytest.approx(s.dsr)

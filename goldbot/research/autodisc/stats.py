@@ -44,7 +44,7 @@ from goldbot.research import gates
 from goldbot.research.autodisc.evaluate import PLATEAU_MIN_SHARE
 from goldbot.research.autodisc.outcomes import OutcomeTensor
 from goldbot.research.cpcv import pbo
-from goldbot.research.metrics import deflated_sharpe
+from goldbot.research.metrics import DsrInputs
 
 FloatArr = NDArray[np.float64]
 IntArr = NDArray[np.int64]
@@ -176,10 +176,10 @@ def batch_pbo(d: FloatArr, fitness: Sequence[float] | FloatArr, *, top: int = PB
     return None if out is None else PBOResult(**out)
 
 
-def batch_dsr(d: FloatArr, columns: Sequence[int], k_search: int) -> dict[int, float]:
-    """Deflated Sharpe probability of each listed column of `d` (daily excess R) at K = `k_search`: the per-day Sharpe
-    ratio against the expected best of K unskilled trials, scaled by the variance of the Sharpe ratios across the
-    batch's columns, with the column's own skew and (non-excess) kurtosis. A column with no variance has Sharpe 0."""
+def batch_dsr_inputs(d: FloatArr, columns: Sequence[int]) -> dict[int, DsrInputs]:
+    """The DSR inputs of each listed column of `d` (daily excess R): the per-day Sharpe ratio, the days, the column's
+    own skew and (non-excess) kurtosis, and the variance of the Sharpe ratios across the batch's columns. A column
+    with no variance has Sharpe 0. Stored with each survivor so the DSR can be re-read at a later K (quant F2)."""
     d = np.asarray(d, dtype=float)
     n = d.shape[0]
     sd = d.std(axis=0)
@@ -190,8 +190,14 @@ def batch_dsr(d: FloatArr, columns: Sequence[int], k_search: int) -> dict[int, f
         x = d[:, c]
         skew = float(sps.skew(x)) if sd[c] > 0 else 0.0
         kurt = float(sps.kurtosis(x, fisher=False)) if sd[c] > 0 else 3.0
-        out[c] = deflated_sharpe(float(sr[c]), max(k_search, 1), n, skew, kurt, var_sr)
+        out[c] = DsrInputs(sr=float(sr[c]), n=max(n, 1), skew=skew, kurtosis=kurt, var_sr_trials=var_sr)
     return out
+
+
+def batch_dsr(d: FloatArr, columns: Sequence[int], k_search: int) -> dict[int, float]:
+    """Deflated Sharpe probability of each listed column of `d` (daily excess R) at K = `k_search`: the per-day Sharpe
+    ratio against the expected best of K unskilled trials (`batch_dsr_inputs`)."""
+    return {c: inp.dsr(max(k_search, 1)) for c, inp in batch_dsr_inputs(d, columns).items()}
 
 
 def _side_mean(side: NDArray[np.int8], r_long: FloatArr, r_short: FloatArr) -> tuple[float, int]:

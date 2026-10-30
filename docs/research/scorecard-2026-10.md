@@ -191,3 +191,30 @@ Sources: `goldbot run perf-report --from 2026-10-19 --to 2026-10-30` on all thre
   (research-plan section 3). **Scales:** none. K ~360 by the arm-id rule.
 - **Bets next week:** H-16 range forecast screen; exits (H-80 R2 confirm + wider-target screen vs control); the
   when-to-trade map on random entries.
+
+## Weekly research read, Friday 2026-10-30 (research director, cycle 2)
+
+Sources: the four result documents below, re-derived where marked; demo figures unchanged from cycle 1 (perf-report
+2026-10-19..10-30; icm-probe 10-19..10-25 now excluded, login mix).
+
+**History screens this week (2010-2017 unless stated), 4 bets, 4 fails:**
+
+| Bet | Result | Verdict | Source |
+|---|---|---|---|
+| H-16 range forecast | rho gain +0.201 (95% 0.145..0.260), quintile ratio 1.437 < 1.5 (re-derived 1.0744/0.7478) | FAIL; GVZ/events/compression retired as range inputs; O-1 cancelled | `opportunity-days-screen-2026-11.md` |
+| H-80 R2 box runner (2018-2025-09, n 5,355) | runner - fixed gross -0.018 R (t -1.12); net E0 -0.199, E4 -0.288, E8 -0.206 R | FAIL; BXR killed | `prereg-exits-adaptive-2026-10-26.md` s.8 |
+| H-82 exits on scalp entries (337,341 entries) | DiD -0.0017..+0.0009 R (bar +0.05); arm gross -0.011..+0.010 R; net -0.04..-0.06 R (broker cost), -0.11..-0.13 R (cost of record) | FAIL, all 5 variants; re-derived +1 R shares 4.1-12.7% from the pairs files | `hb-exits-screen-2026-11.md` |
+| H-83 when-map (493,694 random trades) | 0/24 cells net > 0 (-0.058..-0.109 R); H-A -0.008 R (t -2.7) | FAIL; timing at the scalp clock retired | `when-map-screen-2026-11.md` |
+
+- **Winners: none**, on history or demo. Demo matched excess (cycle 1, all not distinguishable): probe
+  session_vwap_fade +0.21 R (54), icm nr4_break +0.35 (47), icm round_reject +0.34 (85), icm halfhour_persist +0.25
+  (107). **Losers beside them:** probe round_reject -0.15 (76), probe ema_pullback -0.03 (191), probe
+  halfhour_persist -0.02 (103). History now says the "winners" are drift: the same entries gross +/-0.011 R on 2010-2017.
+- **Kills:** BXR* (A2 after R2 FAIL); the A2 "kill now" list (~68 ids, demo-reset PR) plus XC15; S5/Z4/Z6/Z7 on A5
+  sign-off (draft, 11-04). **Scales:** none.
+- **Discovery:** v1 0 survivors on 15m/1h/4h; v2 last run on 1h/4h/1d by 11-20 or generation freezes.
+- **TradingView:** parser audit 2 FAIL (direction 83.3%, levels 76.7%); one last attempt under amendment T-1
+  (direction only, abstain class), else parked 11-13.
+- **K ~1,256** (360 arm ids + 864 discovery specs + 31 screen looks + 1 registry trial).
+- **Bets next week:** H-84 macro 4h/1d direction (K +4), H-17 trend day + runner (K +2), discovery v2 on 1h/4h/1d
+  (K_v2 declared). All 2010-2017 first.

@@ -313,3 +313,26 @@ swap asymmetry between long and short is charged honestly.
   - the TradingView access route and its terms-of-service risk (already accepted by the owner for the direct pull,
     2026-10-18, memory "TradingView direct pull"). Idea text stays local, under the same rule as market data;
   - any live use (owner-only).
+
+## 7. Amendment T-1 (research director, 2026-10-30): direction only, with an abstain class
+
+Written after parser audits 1 and 2 failed (`tv-ideas-parser-audit-2026-10-30.md`, `-2026-10-31.md`) and **before
+any idea outcome was computed** (no score exists). It changes only the parser freeze (1.1) and the idea type; the
+scorer, baselines, decision rules (3) and K (5) are unchanged.
+
+- **Every admitted idea is scored as type D** (direction only, 1.3 rules), whatever levels it states. Type L and
+  the levels audit are dropped: 0 of 60 audit-1 ideas carried entry + stop, and audit 2 found levels the weakest
+  part of the parser.
+- **Parser output:** long, short or **abstain**. Abstain covers conditional, two-sided, scenario, neutral, results
+  or "target hit" posts, and any idea where the cues disagree. Abstained ideas are excluded and counted, as "neutral"
+  already is.
+- **Freeze bar (replaces 1.1's two bars):** on a fresh outcome-blind audit of 60 pre-2025-10-01 ideas (20 per author,
+  new seed 20261102, excluding the 120 already audited), **precision >= 95%** (of the ideas the parser calls long or
+  short, the hand read agrees; a hand read of conditional/neutral counts as a disagreement) **and coverage >= 50%**
+  (share not abstained). The hand reads are written before the parser fields are queried, as in audit 2.
+- **One attempt.** A fail parks the line to the Q1 state-of-the-art refresh; no further parser iteration this
+  quarter. Deadline 2026-11-13.
+- **Not used:** an LLM classifier. A model trained after the ideas were published has seen gold's later path, so
+  its reads of ambiguous text are not outcome-blind.
+- **K:** unchanged (the 9 cells of section 3). Abstention can shrink cells below 100 ideas; such cells read
+  `insufficient` and stay counted.

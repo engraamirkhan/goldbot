@@ -2484,3 +2484,29 @@ prints `ack N`). Install (owner steps, once): on the Mac `ssh-keygen -t ed25519 
 Run: `GOLDBOT_LEDGER_REMOTE=goldbot@<brain> GOLDBOT_LEDGER_KEY=~/.ssh/goldbot_ledger python -m goldbot.ops.run ledger sync` (the host stays in your shell, never in the repo).
 A rejected or unacknowledged batch stays pending and is retried on the next run (exit 1). Backfill once with `ledger import all` (the registry is fetched
 from release `research-v1` with `gh`). Remove: delete the key line from the brain's `authorized_keys`.
+
+### Autonomous discovery on the Mac (ADR 0058 phases 2-3)
+
+The search reads the local-only 1m bars, so it runs on the owner's Mac, never on the brain (`research.autodisc.nightly_enabled`
+stays false there). Install the nightly agent once (Claude may run it; the owner does nothing):
+`scripts/install_autodisc_launchd.sh` prints the plist and commands (dry run); `scripts/install_autodisc_launchd.sh --apply` installs
+`~/Library/LaunchAgents/com.goldbot.autodisc.plist`. At 01:30 local (or on wake, if asleep then) it runs
+`scripts/autodisc_nightly_mac.sh`: `scripts/autodisc.py nightly --timeframe 15m`, then `1h`, then `4h`, one after another, each logged
+to `~/tmp/autodisc/<day>-<tf>.log`, a one-line summary per run in `~/tmp/autodisc/nightly.log`, survivors reports in
+`state/autodisc/`. Every real night tops up the registry's discovery K (`state/research_registry.discovery.jsonl`, never a trial).
+Remove: `scripts/install_autodisc_launchd.sh --uninstall`. The agent runs whatever branch the Mac checkout has open at
+01:30 (it does not switch or pull): keep that checkout on `main` (or the branch you mean to search with) overnight. Set
+`research.autodisc.cost_table` (or pass `--cost-table`) to the measured `costs_measured.json`: a survivor judged on
+priors-only costs cannot advance, and every confirm or holdout read refuses priors (A4 cost floor).
+
+Confirm and holdout (design 3.3 / 3.5; each read happens once and is charged one trial slot from the quarter's open budget):
+1. Merge the shared registry in first: `python -m goldbot.research.registry_sync fetch ~/tmp/registry-release.jsonl`, then
+   `python -m goldbot.research.registry_sync merge state/research_registry.jsonl ~/tmp/registry-release.jsonl -o state/research_registry.jsonl`.
+2. `python scripts/autodisc.py confirm-prereg <spec_hash>`: refused unless the spec is a recorded survivor with DSR >= 0.95 at the
+   cumulative K_search on 200+ events; at most 8 a month, one monthly batch.
+3. `python scripts/autodisc.py confirm-run --batch YYYY-MM`: reads the whole batch once on 2018-01 .. 2025-09 (Holm across it),
+   writes the trial and verdict rows; refused when the budget has no open slot (2026Q4 has none unless the program-director extends it).
+4. `python scripts/autodisc.py holdout <spec_hash>`: a confirm passer only, once; a failed holdout is final.
+5. Save the registry (`python -m goldbot.research.registry_sync save state/research_registry.jsonl`).
+A confirm or holdout passer may then become a demo arm with `python -m goldbot.ops.run autodisc-register` (default: passers only;
+`--stage explore` registers an explore survivor as a demo-learning arm, journalled as such). Nothing here touches live.
