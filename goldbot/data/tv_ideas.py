@@ -161,10 +161,27 @@ def _values(m: re.Match[str]) -> list[float]:
     return [v for v, raw in zip(out, (a, b or "")) if v > 0 and ("." in raw or v >= 10)]
 
 
+_MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?"
+# a date or a year, not a price: `2025-10-30`, `12/10/2024`, `January 2025`, `2024 year`, `year 2024`
+_DATE = re.compile(
+    rf"\b(?:19|20)\d{{2}}-\d{{1,2}}-\d{{1,2}}\b|\b\d{{1,2}}[/.]\d{{1,2}}[/.](?:19|20)?\d{{2}}\b"
+    rf"|\b{_MONTH}\s+(?:\d{{1,2}}(?:st|nd|rd|th)?,?\s+)?(?:19|20)\d{{2}}\b"
+    rf"|\b(?:19|20)\d{{2}}\s+(?:year|yr)s?\b|\b(?:year|yr)\s+(?:19|20)\d{{2}}\b", re.I)
+
+
+_GLUE = re.compile(r"[\s:=]{0,%d}" % _GLUED)
+
+
+def _owns_number(seg: str, k: re.Match[str]) -> bool:
+    """Keyword `k` has a price glued to it (`SL 3990`, `stop: 4010`), so a number before it is not its."""
+    return _NUM.match(seg, k.end() + len(_GLUE.match(seg, k.end())[0])) is not None  # type: ignore[index]
+
+
 def parse_levels(text: str) -> Levels:
     """Prices named in `text`, by the keyword that names them on the same line or sentence: after it (at most
-    `_MAX_GAP` characters on from the keyword or its previous number) or right before it (`the 1970-75 target`)."""
-    clean = _NOT_PRICE.sub(" ", _TAG.sub("", text or ""))
+    `_MAX_GAP` characters on from the keyword or its previous number; its own keyword always wins) or, with no keyword
+    before it in the segment, right after it (`the 1970-75 target`). Dates and years are not prices."""
+    clean = _NOT_PRICE.sub(" ", _DATE.sub(" ", _TAG.sub("", text or "")))
     out: dict[str, list[float]] = {k: [] for k in ("entry", "stop", "target", "support", "resistance")}
     for seg in _BREAK.split(clean):
         keys = list(_KEY.finditer(seg))
@@ -172,17 +189,23 @@ def parse_levels(text: str) -> Levels:
             continue
         last_kind: str | None = None
         pos = 0
+        used: set[int] = set()                             # keywords already taken by a number before them
         for n in _NUM.finditer(seg):
-            before = [k for k in keys if k.end() <= n.start()]
+            before = [k for k in keys if k.end() <= n.start() and k.start() not in used]
             if before and before[-1].end() > pos:          # a new keyword since the last number
                 last_kind, pos = before[-1].lastgroup, before[-1].end()
             gap = n.start() - pos if before else _MAX_GAP + 1
-            trailing = next((k for k in keys if k.start() >= n.end()
-                             and _TRAIL.fullmatch(seg[n.end():k.start()])), None)
-            if gap <= _GLUED or (trailing is None and gap <= _MAX_GAP):
-                kind = last_kind                           # `Entry: 4035`, `TP 2370 / 2385`
-            elif trailing is not None:
-                kind = trailing.lastgroup                  # `the 1970-75 target`, `1795 support`
+            trailing = None
+            if gap > _GLUED:                               # not glued to its own keyword: a keyword just after it ...
+                trailing = next((k for k in keys if k.start() >= n.end()
+                                 and _TRAIL.fullmatch(seg[n.end():k.start()]) and not _owns_number(seg, k)), None)
+            # ... names it only if that keyword has no number of its own (`entry for the 1970-75 target`; not
+            # `Buy at 4000 SL 3990`, where SL takes 3990 and the entry keeps 4000)
+            if trailing is not None:
+                kind, own = trailing.lastgroup, False
+                used.add(trailing.start())
+            elif gap <= _MAX_GAP:
+                kind, own = last_kind, True                # `Entry: 4035`, `TP 2370 / 2385`
             else:
                 continue
             if kind is None:
@@ -190,7 +213,7 @@ def parse_levels(text: str) -> Levels:
             for v in _values(n):
                 if v not in out[kind]:
                     out[kind].append(v)
-            if kind == last_kind:
+            if own:
                 pos = n.end()
     return Levels(**out)
 

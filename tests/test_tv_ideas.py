@@ -339,3 +339,18 @@ def test_backfill_gives_up_on_ideas_the_listing_counts_but_never_serves(tmp_path
     lst = rep.listing["SynthAuthor"]
     assert (lst.total, lst.collected) == (1301, 1300) and lst.requests < 200
     assert rep.ok and "incomplete" in rep.reason and rep.details_fetched == 1300
+
+
+@pytest.mark.parametrize("text,entry,stop,target", [
+    ("Buy at 4000 SL 3990 TP 4020", [4000.0], [3990.0], [4020.0]),
+    ("Sell limit at 4000 stop 4010", [4000.0], [4010.0], []),
+    ("sell below 4000 target 3950", [4000.0], [], [3950.0]),
+    ("Buy at 3995-4000 stop 3990", [3995.0, 4000.0], [3990.0], []),
+    ("stop 4000, 2025-10-30", [], [4000.0], []),
+    ("target 2024 year", [], [], []),
+    ("stop 4000 since January 2025 and 12/10/2024", [], [4000.0], []),
+])
+def test_parse_levels_own_keyword_wins_and_dates_are_not_prices(text: str, entry: list[float], stop: list[float],
+                                                                target: list[float]):
+    lv = ti.parse_levels(text)
+    assert (lv.entry, lv.stop, lv.target) == (entry, stop, target)
