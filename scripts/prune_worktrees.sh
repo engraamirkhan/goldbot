@@ -9,7 +9,7 @@
 # last N hours (default 24); and it holds no modified tracked file and no untracked or ignored file outside the
 # regenerable build and test leftovers (data/, state/, *.egg-info, .venv, node_modules, __pycache__, .pytest_cache,
 # .mypy_cache, .ruff_cache, web/dist, web/test-results, web/playwright-report, web/coverage, .coverage,
-# *.tsbuildinfo): `git worktree remove` would delete an ignored file such as .env silently.
+# .testmondata, *.tsbuildinfo, data_dryrun/, the e2e servers' .server*.json): `git worktree remove` would delete an ignored file such as .env silently.
 # Its branch is deleted with it, as is any merged worktree-agent-* branch without a worktree; --apply ends with
 # `git worktree prune`. Runs on the repository of the current directory. Env: INTEGRATION_BRANCH overrides REF.
 set -euo pipefail
@@ -86,7 +86,9 @@ leftover() {  # $1 a repo-relative path from `git status`: true for a regenerabl
   case "/${1%/}/" in
     */.venv/*|*/node_modules/*|*/__pycache__/*|*/.pytest_cache/*|*/.mypy_cache/*|*/.ruff_cache/*) return 0 ;;
     /data/*|/state/*|*.egg-info/*|/web/dist/*|/web/test-results/*|/web/playwright-report/*|/web/coverage/*) return 0 ;;
-    /.coverage/|*.tsbuildinfo/) return 0 ;;
+    /.coverage/|/.testmondata/|*.tsbuildinfo/) return 0 ;;
+    # scripts/dry_run.py's store, and the e2e servers' info files (a throwaway state dir's port and setup code)
+    /data_dryrun/*|/web/e2e/.server.json/|/web/e2e/.server-auth.json/|/web/shots/.server.json/) return 0 ;;
   esac
   return 1
 }

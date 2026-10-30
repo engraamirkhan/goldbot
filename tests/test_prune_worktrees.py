@@ -24,7 +24,8 @@ pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash
 CASES = ("merged", "dirty", "unmerged", "locked", "fresh", "detached", "secret", "empty", "leftovers", "modified",
          "touched")
 LEFTOVERS = ("data/bars/XAUUSD_1h.parquet", "state/core.db", "goldbot.egg-info/PKG-INFO", "web/dist/index.html",
-             "web/node_modules/x/index.js", ".pytest_cache/v/x")
+             "web/node_modules/x/index.js", ".pytest_cache/v/x", "data_dryrun/registry.jsonl", "web/e2e/.server.json",
+             "web/e2e/.server-auth.json", ".testmondata")
 
 
 @pytest.fixture
