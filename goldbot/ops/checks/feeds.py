@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pandas as pd
 
@@ -75,8 +75,15 @@ def check_pnl_basis(ctx: HealthContext, account_id: str) -> Check:
     """Share of this account's closed trades over the last PNL_BASIS_WINDOW_DAYS (by exit) that are not net
     (gates_phase.pnl_basis: "gross", or a legacy row without both commission and swap). The reports leave those out
     of every net figure ("nothing gross is labelled net"), so WARN when more than PNL_BASIS_GROSS_WARN_PCT of them are;
-    never FAIL, even on an unreadable record: it is a reporting-quality signal, not a trading fault."""
+    never FAIL, even on an unreadable record: it is a reporting-quality signal, not a trading fault.
+
+    The closed-trade record never holds exploration, control or cost-probe closes (they would feed the phase gate), so
+    a demo account that only explores used to read "no closed trades". Those closes are counted from the trade ledger
+    (ops/learning_ledger.py; net = commission and swap both recorded), once each, and the line says how many came from
+    which kind. An unreadable aux.db is a WARN with the reason, never a FAIL."""
     from goldbot.ops.gates_phase import load_closed_trades, pnl_basis
+    from goldbot.ops.learning_ledger import closed_learning_trades, recorded_keys
+    from goldbot.telegram.entry_text import account_name
     name = f"pnl_basis:{account_id}"
     try:
         trades, err = load_closed_trades(ctx.state_dir)
@@ -84,18 +91,38 @@ def check_pnl_basis(ctx: HealthContext, account_id: str) -> Check:
         return Check(name=name, status="warn", reason=f"closed-trade record unreadable: {type(exc).__name__}")
     since = ctx.now - pd.Timedelta(days=PNL_BASIS_WINDOW_DAYS)
     rows = [t for t in trades if t.account_id == account_id and since <= t.exit_utc <= ctx.now]
+    total, not_net = len(rows), sum(pnl_basis(t) != "net" for t in rows)
     note = f"; {err}" if err else ""
-    if not rows:
-        return Check(name=name, status="warn" if err else "ok",
-                     reason=f"no closed trades in the last {PNL_BASIS_WINDOW_DAYS} d{note}"[:400])
-    gross = sum(pnl_basis(t) != "net" for t in rows)
-    pct = 100.0 * gross / len(rows)
-    msg = (f"{gross} of {len(rows)} closed trades in the last {PNL_BASIS_WINDOW_DAYS} d ({pct:.0f}%) are gross only "
-           f"(costs not recorded)")
+    unreadable = bool(err)
+    by_kind: dict[str, int] = {}
+    try:
+        learn = closed_learning_trades(ctx.state_dir, ctx.now, recorded_keys(trades))
+    except Exception as exc:                      # noqa: BLE001 - reporting only: a torn ledger never fails the check
+        learn = None
+        unreadable = True
+        note += f"; trade ledger unreadable: {type(exc).__name__}"
+    if learn is not None:
+        if learn.unreadable:
+            unreadable = True
+            note += f"; trade ledger source unreadable: {', '.join(learn.unreadable)} (those trades are missing)"
+        for c in learn.rows:
+            if c.account == account_name(account_id) and since <= c.exit_utc <= ctx.now:
+                by_kind[c.kind] = by_kind.get(c.kind, 0) + 1
+                total += 1
+                not_net += not c.net
+    status: Literal["ok", "warn"] = "warn" if unreadable else "ok"
+    if not total:
+        return Check(name=name, status=status, reason=f"no closed trades in the last {PNL_BASIS_WINDOW_DAYS} d{note}"[:400])
+    pct = 100.0 * not_net / total
+    split = ", ".join(f"{label} {by_kind[k]:,}" for k, label in (("exploration", "exploration"), ("control", "control"),
+                                                                 ("cost_probe", "probes")) if k in by_kind)
+    sources = f" ({split})" if split else ""
+    msg = (f"{not_net:,} of {total:,} closed trades in the last {PNL_BASIS_WINDOW_DAYS} d ({pct:.0f}%) are gross only "
+           f"(costs not recorded){sources}")
     if pct > PNL_BASIS_GROSS_WARN_PCT:
         return Check(name=name, status="warn", reason=(f"{msg}, > {PNL_BASIS_GROSS_WARN_PCT:.0f}%: the net totals leave "
                                                        f"them out (check the broker's deal history){note}")[:400])
-    return Check(name=name, status="warn" if err else "ok", reason=(msg + note)[:400])
+    return Check(name=name, status=status, reason=(msg + note)[:400])
 
 
 @register_check("global", block=BLOCK_COSTS_PUBLISHED, pos=10, when=_publishes_costs)
