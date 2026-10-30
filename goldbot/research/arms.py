@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from datetime import time
 from pathlib import Path
@@ -18,11 +19,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import numpy as np
 import pandas as pd
 import yaml
-from pydantic import Field, model_validator
+from pydantic import Field, ValidationError, model_validator
 
 from goldbot.base import FrozenRecord
 from goldbot.data.calendar import SessionWindow
 from goldbot.data.timeutil import utc_index
+
+log = logging.getLogger(__name__)
 
 HOLDOUT_FROM = pd.Timestamp("2025-10-01", tz="UTC")     # first instant that is never read
 LAST_DAY = pd.Timestamp("2025-09-30", tz="UTC")
@@ -117,6 +120,174 @@ def net_r(move_usd: np.ndarray, risk_usd: np.ndarray, stop_exit: np.ndarray, cos
     return (pnl - np.asarray(extra_usd, dtype=float)) / np.asarray(risk_usd, dtype=float)
 
 
+# ---------------------------------------------------------------- qualification before demo
+# Owner rule 2026-10-30 (ADR 0061): "every strategy should have been back tested and qualified before it is tested and
+# learn from live trades that are taken on demo accounts". A strategy arm enters on demo only with a passing
+# `qualification` on its own row; the random controls and the named cost arms are exempt by their explicit `role`.
+QUALIFY_RULE = "unqualified (owner rule 2026-10-30)"
+COST_READ_DONE = "cost read complete, qualify first"
+REPO_ROOT = Path(__file__).resolve().parents[2]           # a doc reference resolves inside this checkout only
+# the trial registry (settings research.registry): a `registry:<config_hash>` reference must name one of its rows
+REGISTRY_PATH = REPO_ROOT / "state" / "research_registry.jsonl"
+EXEMPT_ROLES = ("control", "cost")
+# trading-safety M2 + quant ruling 2026-10-30: the cost role is closed to these arms, each naming its prereg cost read
+# (prereg-2026-10-26-time-structure.md 2.2 / 3.2: "Signal-time cost read ... at >= 200 admissible F1A fills", ">= 100
+# admissible G1A fills"); the exemption ends when that many admissible fills are counted (`engine.exploration`)
+COST_ARMS: dict[str, tuple[str, int]] = {"F1A": ("O-11", 200), "G1A": ("O-12", 100)}
+# each cost arm's paired control: no purpose once its arm stops ("F1C stops with F1A, G1C with G1A", prereg 2.2/3.2)
+COST_CONTROLS: dict[str, str] = {"F1A": "F1C", "G1A": "G1C"}
+# a measured slippage cell rests on this many fills at least (prereg 2026-10-26 Costs: "per (session x exit type) cell
+# with at least 30 fills")
+MIN_COST_CELL_FILLS = 30
+REGISTRY_PREFIX = "registry:"
+_REGISTRY_REF = re.compile(r"^registry:([A-Za-z0-9][A-Za-z0-9:_.#/-]{0,127})(?:@([0-9a-f]{40}))?$")
+_WINDOW = re.compile(r"^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$")
+_PATH_MAX = 1024                                          # a longer doc reference is no repo path
+
+
+class CostCell(FrozenRecord):
+    """One slippage cell a qualification's costs rest on (`execution.costs.SlippageStat`, key `<session>:<order_type>`):
+    its fill count, the measured mean, the prior and what the read charged, all USD per oz."""
+    n: int = Field(ge=0)
+    mean_usd: float
+    prior_usd: float
+    charged_usd: float
+    from_prior: bool
+
+
+class Qualification(FrozenRecord):
+    """An arm's history qualification (ADR 0061): the screen read (2010-2017) and the confirm read (2018-2025-09), each
+    a repo doc path (an `#anchor` allowed) or a trial-registry row (`registry:<config_hash>[@<evaluator commit>]`), the
+    evaluator's verdict and the cost basis of the reads: the cost table version cited and every slippage cell used.
+    Both reads are required: a screen alone is selection, not qualification."""
+    screen: str = Field(min_length=1)
+    screen_window: str
+    confirm: str = Field(min_length=1)
+    confirm_window: str
+    verdict: str
+    cost_basis: str
+    cost_table: str = Field(min_length=1)
+    cost_cells: dict[str, CostCell]
+
+
+def _window(text: str) -> tuple[pd.Timestamp, pd.Timestamp] | None:
+    m = _WINDOW.match(text)
+    if m is None:
+        return None
+    try:
+        start, end = pd.Timestamp(m.group(1), tz="UTC"), pd.Timestamp(m.group(2), tz="UTC")
+    except ValueError:
+        return None
+    return (start, end) if start <= end else None
+
+
+def _registry_hashes(path: Path) -> frozenset[str] | None:
+    """The config hashes of the registry's rows, None when the file is not there or cannot be read (a bad line is
+    skipped: one row never hides the others)."""
+    try:
+        if not path.is_file():
+            return None
+        lines = path.read_text().splitlines()
+    except (OSError, ValueError):
+        return None
+    out = set()
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and isinstance(row.get("config_hash"), str):
+            out.add(row["config_hash"])
+    return frozenset(out)
+
+
+def _ref_exists(ref: str, root: Path, registry: frozenset[str] | None) -> bool:
+    """A doc reference: a file of the repo at `root` (the part before `#`), never a path that leaves it. A registry
+    reference (trading-safety L3): a row of the registry file when it is there, else it must carry the evaluator's
+    commit (`@<40 hex>`). Never raises: a NUL byte or an over-long path (ValueError, OSError) is a missing file."""
+    try:
+        m = _REGISTRY_REF.match(ref)
+        if ref.startswith(REGISTRY_PREFIX):
+            if m is None:
+                return False
+            return m.group(1) in registry if registry is not None else m.group(2) is not None
+        rel = ref.split("#", 1)[0]
+        if not rel or len(rel) > _PATH_MAX or "\x00" in rel or Path(rel).is_absolute():
+            return False
+        base = root.resolve()
+        path = (base / rel).resolve()
+        return path.is_relative_to(base) and path.is_file()
+    except (OSError, ValueError):
+        return False
+
+
+def _cost_refusal(q: Qualification) -> str | None:
+    """Quant ruling 2026-10-30: `cost_basis: measured` cites the cost table version, and every slippage cell it uses is
+    measured (not at the prior) on at least MIN_COST_CELL_FILLS fills and priced at the worse of measured and prior.
+    Until such cells exist no arm qualifies."""
+    if q.cost_basis != "measured":
+        return f"cost_basis {q.cost_basis!r} is not measured"
+    if not q.cost_cells:
+        return "no measured cost cell cited"
+    for key, c in sorted(q.cost_cells.items()):
+        if c.from_prior:
+            return f"cost cell {key} is at the prior, not measured"
+        if c.n < MIN_COST_CELL_FILLS:
+            return f"cost cell {key} rests on {c.n} fills (< {MIN_COST_CELL_FILLS})"
+        if c.charged_usd < max(c.mean_usd, c.prior_usd) - 1e-12:
+            return f"cost cell {key} charged {c.charged_usd} below the worse of measured and prior"
+    return None
+
+
+def qualification_refusal(arm: Arm, root: Path = REPO_ROOT, registry: Path = REGISTRY_PATH) -> str | None:
+    """Why `arm` may send no demo entry under the owner rule 2026-10-30, or None when it may. Exempt: `role` control
+    (a random control: a random_bracket rule or a body naming its `control`), or `role` cost on a COST_ARMS id naming
+    its own cost read (`cost_read`). Any other arm needs a `qualification` that validates, with verdict `pass`,
+    measured costs (`_cost_refusal`), a screen window that ends before the confirm window starts, a confirm window that
+    ends before the holdout (2025-10-01), and two distinct references that exist. Never raises: a malformed record is
+    a refusal (one bad row never stops the engine)."""
+    if arm.role == "control" and not (arm.rule == "random_bracket" or "control" in arm.params):
+        return f"{QUALIFY_RULE}: role control on a body that is not a control (no random_bracket rule, no params.control)"
+    if arm.role == "cost":
+        read = COST_ARMS.get(arm.id)
+        if read is None:
+            return f"{QUALIFY_RULE}: the cost role is only for {sorted(COST_ARMS)}"
+        if arm.cost_read != read[0]:
+            return f"{QUALIFY_RULE}: cost arm {arm.id} names cost read {arm.cost_read!r}, not {read[0]!r}"
+        return None
+    if arm.role in EXEMPT_ROLES:
+        return None
+    if arm.qualification is None:
+        return f"{QUALIFY_RULE}: no qualification record (a screen and a confirm, both pass)"
+    try:
+        q = Qualification.model_validate(arm.qualification)
+    except ValidationError as exc:
+        return f"{QUALIFY_RULE}: qualification record invalid ({exc.error_count()} errors)"
+    if q.verdict != "pass":
+        return f"{QUALIFY_RULE}: verdict {q.verdict!r} is not pass"
+    if (why := _cost_refusal(q)) is not None:
+        return f"{QUALIFY_RULE}: {why}"
+    screen, confirm = _window(q.screen_window), _window(q.confirm_window)
+    if screen is None or confirm is None:
+        return f"{QUALIFY_RULE}: a window is not YYYY-MM-DD..YYYY-MM-DD"
+    if confirm[1] >= HOLDOUT_FROM:
+        return f"{QUALIFY_RULE}: the confirm window reaches the holdout (from {HOLDOUT_FROM.date()})"
+    if screen[1] >= confirm[0]:
+        return f"{QUALIFY_RULE}: the screen window must end before the confirm window starts"
+    if q.screen == q.confirm:
+        return f"{QUALIFY_RULE}: screen and confirm are the same reference (two reads are required)"
+    hashes = _registry_hashes(registry) if REGISTRY_PREFIX in q.screen + q.confirm else None
+    for name, ref in (("screen", q.screen), ("confirm", q.confirm)):
+        if not _ref_exists(ref, root, hashes):
+            return f"{QUALIFY_RULE}: the {name} reference {ref[:80]!r} does not exist"
+    return None
+
+
+def stamp_qualification(arm: Arm, root: Path = REPO_ROOT, registry: Path = REGISTRY_PATH) -> Arm:
+    """`arm` with `entry_refused` set from `qualification_refusal` (a value written on the row is overwritten)."""
+    return arm.model_copy(update={"entry_refused": qualification_refusal(arm, root, registry) or ""})
+
+
 # ---------------------------------------------------------------- arms
 class Arm(FrozenRecord):
     id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -135,12 +306,45 @@ class Arm(FrozenRecord):
     # confirmation credit" (8.8) and H-80's box family, whose 2018+ half is its evaluator's single confirmation read.
     # A run policy, like status: not in the hash
     forward_only: bool = False
+    # A retirement from demo trading recorded on the arm's own row, as the daily review records a stop in aux.db
+    # `exploration_arm_status` (day, rule): "A retired unit keeps its K, its registry row and its arm id (never
+    # reused)" (prereg-amendment-2026-10-30-kill-rules.md A2). The engine sends no new entry of it on any account and
+    # keeps it configured, so an open position keeps every exit (`goldbot.engine.exploration.spec_retired`). Run
+    # policy, like status: not in the hash, so the frozen body and its id stay as they were
+    retired_day: str | None = None
+    retired_rule: str = ""
+    # Owner rule 2026-10-30 (ADR 0061): `role` control (a random control) or cost (a cost arm) is exempt; a strategy
+    # needs `qualification` (`Qualification`, read leniently by `qualification_refusal`: a malformed record refuses the
+    # arm, never the load). `entry_refused` is the loader's verdict (`load_arms` stamps it, overwriting the row): an
+    # arm with one stays configured, so an open position keeps every exit, and sends no new entry. Run policy, like
+    # a retirement: not in the hash
+    role: Literal["strategy", "control", "cost"] = "strategy"
+    qualification: Any = None
+    # a cost arm's prereg cost read (COST_ARMS: F1A O-11, G1A O-12). A row field, not `params`: params are hashed, and
+    # naming the read is run policy on a frozen body (trading-safety M2 asked for params.cost_read; the hash forbids it)
+    cost_read: str = ""
+    entry_refused: str = ""
     config_hash: str | None = None
+
+    @property
+    def retired(self) -> bool:
+        return self.retired_day is not None
+
+    @property
+    def family(self) -> str:
+        """The arm's family: its rule, or for a `specialist` arm the specialist it runs (box_break, session_open, ...),
+        the name its exploration rows carry and every view reads it under."""
+        return family_of(self.rule, self.params)
 
     @model_validator(mode="after")
     def _consistent(self) -> Arm:
         if self.rule not in RULES:
             raise ValueError(f"{self.id}: unknown rule {self.rule!r}; known: {RULES}")
+        if self.retired_day is not None and not _DAY.match(self.retired_day):
+            raise ValueError(f"{self.id}: retired_day {self.retired_day!r} is not YYYY-MM-DD")
+        if (self.retired_day is None) != (not self.retired_rule):
+            raise ValueError(f"{self.id}: a retirement names both its retired_day and its retired_rule (the rule that "
+                             "retired it), or neither")
         if self.status == "blocked" and not self.note:
             raise ValueError(f"{self.id}: a blocked arm needs a note saying what unblocks it")
         if "window_utc" in self.params and "window_local" in self.params:
@@ -170,7 +374,14 @@ class Arm(FrozenRecord):
         return self
 
 
+def family_of(rule: str, params: dict[str, Any]) -> str:
+    """An arm's family from its rule and params: the rule, or for a `specialist` arm the specialist it runs."""
+    spec = params.get("specialist") if rule == "specialist" else None
+    return spec if isinstance(spec, str) and spec else rule
+
+
 _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def local_window(params: dict[str, Any]) -> SessionWindow | None:
@@ -204,19 +415,25 @@ def local_window(params: dict[str, Any]) -> SessionWindow | None:
 
 
 def arm_hash(arm: Arm) -> str:
-    """The arm's frozen configuration: sha256 over id, rule, timeframe, params, max_open (status, note and
-    forward_only are prose and run policy)."""
+    """The arm's frozen configuration: sha256 over id, rule, timeframe, params, max_open (status, note,
+    forward_only, a retirement, the role and the qualification are prose and run policy)."""
     body = {"id": arm.id, "rule": arm.rule, "timeframe": arm.timeframe, "params": arm.params, "max_open": arm.max_open}
     return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
-def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False) -> list[Arm]:
+def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False, root: Path = REPO_ROOT,
+              registry: Path = REGISTRY_PATH) -> list[Arm]:
     """The arms of `path`. With `check_hash` every arm must carry a `config_hash` equal to its own: an arm edited after
     it was frozen is refused (ARM-SPEC: an edit needs a written amendment and a new arm id). With `live_class` (the
     arms are loaded for an account that is not demo) a `spec_rule` arm is refused: ADR 0058 "Demo arms are data rows
-    run by one reviewed interpreter (`spec_rule`), loaded only on demo accounts"."""
+    run by one reviewed interpreter (`spec_rule`), loaded only on demo accounts".
+
+    Owner rule 2026-10-30 (ADR 0061), first layer: every arm is stamped `entry_refused` from `qualification_refusal`
+    (doc references resolved under `root`, registry references against `registry`) and each refusal is logged. The
+    row is kept, never dropped: an arm no longer configured has its open positions closed at once, and the history
+    matrix must still run an arm to qualify it."""
     raw = yaml.safe_load(Path(path).read_text()) or {}
-    out = [Arm.model_validate(a) for a in raw.get("arms", [])]
+    out = [stamp_qualification(Arm.model_validate(a), root, registry) for a in raw.get("arms", [])]
     if live_class and (spec := sorted(a.id for a in out if a.rule == SPEC_RULE)):
         raise ValueError(f"spec_rule arms {spec} load on demo accounts only (ADR 0058): refused for a live-class account")
     ids = [a.id for a in out]
@@ -237,6 +454,9 @@ def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False) 
             if a.config_hash != arm_hash(a):
                 raise ValueError(f"{a.id}: config_hash {a.config_hash!r} does not match the arm (expected "
                                  f"{arm_hash(a)!r}); an arm is frozen, amend it under a new id")
+    for a in out:
+        if a.entry_refused and a.status == "run" and not a.retired:
+            log.info("arm %s refuses new demo entries: %s", a.id, a.entry_refused)
     return out
 
 

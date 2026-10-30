@@ -144,6 +144,7 @@ from goldbot.ops.checks.feeds import (
     check_model_watch,
     check_news,
     check_pnl_basis,
+    check_qualification,
 )
 from goldbot.ops.checks.operations import (
     check_accounts,
@@ -298,6 +299,7 @@ __all__ = [
     "check_disk",
     "check_drift",
     "check_exploration_learning",
+    "check_qualification",
     "check_email_link",
     "check_engine",
     "check_engine_loop",
@@ -378,6 +380,8 @@ class HealthContext(Record):
     clock: Callable[[], pd.Timestamp] | None = None           # host UTC read after a network probe; None: use `now`
     last_run: UtcTimestamp | None = None                      # the previous health run (health_last.json), if any
     memo: dict[str, Any] = Field(default_factory=dict)        # per-run reads shared by the per-account checks
+    # ADR 0061: () -> {account: (arms that may enter, arms refused as unqualified)}; None skips check_qualification
+    qualification: Callable[[], dict[str, tuple[list[str], list[str]]]] | None = None
 
     @classmethod
     def from_runtime(cls, state_dir: str | Path = "state", settings_path: str | Path = DEFAULT_SETTINGS,
@@ -409,7 +413,14 @@ class HealthContext(Record):
                    clock=lambda: pd.Timestamp.now("UTC"), last_run=_last_run(Path(state_dir)),
                    tick_reader=bridge_tick_reader, bridge_info=lambda url: read_bridge_info(url, BRIDGE_TIMEOUT_S),
                    terminal_probe=lambda url: probe_terminal(url, BRIDGE_TIMEOUT_S),
-                   commit=repo_commit())
+                   commit=repo_commit(), qualification=_qualification_view)
+
+
+def _qualification_view() -> dict[str, tuple[list[str], list[str]]]:
+    """The enabled accounts' arms that may enter and the arms refused as unqualified (ADR 0061), as the engine selects."""
+    from goldbot.engine.exploration import qualification_by_account
+    from goldbot.ops import accounts
+    return qualification_by_account(accounts.enabled_accounts())
 
 
 def bridge_tick_reader(account_id: str, symbol: str) -> Any:

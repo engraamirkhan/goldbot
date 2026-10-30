@@ -536,6 +536,9 @@ STRICT_OR_NOT_PERSISTED: dict[tuple[str, str, str], str] = {
         "not persisted: a GP child built in memory from its parent spec; strict so an invalid tree is refused (ADR 0058)",
     ("goldbot/research/arms.py", "load_arms", "Arm"):
         "strict: frozen arm spec, checked-in config with a sha256 per arm (an edited or misspelt arm must fail)",
+    ("goldbot/research/arms.py", "qualification_refusal", "Qualification"):
+        "strict: an arm row's checked-in qualification (ADR 0061); a malformed or misspelt record must refuse the arm's "
+        "demo entries (caught, never raised), not be read loosely as a pass",
     ("goldbot/engine/exploration.py", "_load_spec_arm_rows", "SpecArm"):
         "strict: the same frozen Arm rows from config/spec_arms.yaml (hash-checked), read one row at a time so a bad row "
         "is dropped and journalled, never a loosened read (ADR 0058 phase 4)",

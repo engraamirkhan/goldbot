@@ -318,6 +318,26 @@ def _at(ns: int | None) -> str:
     return "never" if ns is None else f"{pd.Timestamp(int(ns), tz='UTC'):%Y-%m-%d %H:%M}"
 
 
+@register_check("global", block=BLOCK_TAIL, pos=97, when=lambda ctx: ctx.qualification is not None)
+def check_qualification(ctx: HealthContext) -> Check:
+    """Owner rule 2026-10-30 (ADR 0061): "every strategy should have been back tested and qualified before it is tested
+    and learn from live trades that are taken on demo accounts". Per exploring account, the arms that may enter (the
+    exempt controls and cost arms until a family qualifies) and the strategy arms refused as unqualified (a spec
+    retirement aside). WARN when an exploring account has no arm that may enter (its demo learns nothing)."""
+    assert ctx.qualification is not None
+    view = ctx.qualification()
+    parts, idle = [], []
+    for account_id in sorted(view):
+        running, refused = view[account_id]
+        listed = f" ({', '.join(refused)})" if refused else ""
+        parts.append(f"{account_id}: running {', '.join(running) or 'none'}; refused {len(refused)}{listed}")
+        if not running:
+            idle.append(account_id)
+    if not parts:
+        return Check(name="qualification", status="ok", reason="no exploring account")
+    return Check(name="qualification", status="warn" if idle else "ok", reason="; ".join(parts))
+
+
 @register_check("global", block=BLOCK_TAIL, pos=95, when=_has_aux)
 def check_exploration_learning(ctx: HealthContext) -> Check:
     """Is the system learning: per broker, every exploration trade that closed more than LEARNER_STALE_H ago must be

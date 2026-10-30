@@ -15,7 +15,10 @@ The daily `broker_ledger` job (goldbot/ops/jobs.py) calls `run_ledger` per accou
   the scheduler slot's UTC date keys the row (one per account and day, `balance_snapshots`; a re-run replaces it).
   `deals_through_utc` = max(newest deal, read time - MIN_WINDOW): the cursor never trails the read by more than a
   day, so an idle account never drifts into a new baseline. The login, server and deal comments are never stored;
-  only `identity`, a truncated hash of (account, login, server) that detects a login change. It is never printed.
+  only `identity`, a truncated hash of (account, login, server) that detects a login change, and `terminal`, one of
+  (login, server) alone: the health check reconcile:<account> FAILs when another account's terminal reported the same
+  one that day and WARNs when another account's balance and equity are identical that day (`twin_accounts`; two
+  accounts are never one MT5 login, data-engineer 2026-10-30). Neither is ever printed.
 * Balance deals. MT5 non-trade deals: DEAL_TYPE_BALANCE (2) is a deposit (> 0) or a withdrawal (< 0), CREDIT (3) is
   kept apart (credit is not balance), CHARGE, CORRECTION, BONUS, INTEREST and the rest are `adjustment`; commission
   deals (7-11) count as commission. Booked once per deal ticket (`balance_deals`): with the tie-out they explain, or,
@@ -115,6 +118,10 @@ class BalanceSnapshot(FrozenRecord):
     # switched, so the previous balance belongs to another account and the tie-out starts a new baseline. None on rows
     # written before this field (nothing to compare)
     identity: str | None = None
+    # one-way fingerprint of the terminal's (login, server) alone, no account id (`terminal_identity`): two accounts
+    # whose terminals report one login on a day have the same one (data-engineer 2026-10-30, `twin_accounts`). Never
+    # printed; None on rows written before this field
+    terminal: str | None = None
 
 
 class BalanceDeal(FrozenRecord):
@@ -472,6 +479,12 @@ def account_identity(info: AccountInfo, account_id: str) -> str:
     return hashlib.sha256(f"{account_id}|{info.login}|{info.server}".encode()).hexdigest()[:16]
 
 
+def terminal_identity(info: AccountInfo) -> str:
+    """A truncated SHA-256 of (login, server) without the account: equal for two accounts on one terminal login. As
+    `account_identity`, kept only in aux.db and never printed."""
+    return hashlib.sha256(f"terminal|{info.login}|{info.server}".encode()).hexdigest()[:16]
+
+
 def _assess(prev: BalanceSnapshot | None, info: AccountInfo, deals: pd.DataFrame, read_at: pd.Timestamp,
             since: pd.Timestamp, slot: pd.Timestamp, acc_id: str,
             cfg: LedgerSettings) -> tuple[BalanceSnapshot, BalanceTieOut | None, _Verdict, list[str]]:
@@ -481,7 +494,7 @@ def _assess(prev: BalanceSnapshot | None, info: AccountInfo, deals: pd.DataFrame
     snap = BalanceSnapshot(account_id=acc_id, ts_utc=read_at, slot_utc=slot, balance=float(info.balance),
                            equity=float(info.equity), margin=float(info.margin), margin_free=float(info.margin_free),
                            currency=str(info.currency), deals_through_utc=through,
-                           identity=account_identity(info, acc_id))
+                           identity=account_identity(info, acc_id), terminal=terminal_identity(info))
     notes: list[str] = []
     if prev is None:
         return snap, None, "ok", ["first snapshot: a baseline, nothing to tie out against"]
@@ -614,6 +627,40 @@ def latest_report(state_dir: str | Path, account_id: str) -> LedgerReport | None
     return load_record_json(LedgerReport, r[0], source="db:ledger_reports") if r else None
 
 
+def twin_accounts(state_dir: str | Path, account_id: str) -> tuple[list[str], list[str]]:
+    """(accounts whose terminal reported the same login and server, accounts whose balance and equity are identical to
+    the cent) on the day of `account_id`'s newest snapshot, read-only. The design rule (data-engineer 2026-10-30,
+    research-plan.md item 89: "icm-probe balance snapshots 20-23 Oct equal icm-demo's"): two accounts are never one MT5
+    login. Empty without aux.db, the table or a snapshot; any other database error raises (the caller warns)."""
+    if not db_path(state_dir, "aux").exists():
+        return [], []
+    conn = _read_only(state_dir)
+    try:
+        mine = conn.execute("SELECT key, body FROM balance_snapshots WHERE account_id = ? ORDER BY ts_ns DESC LIMIT 1",
+                            (account_id,)).fetchone()
+        if mine is None:
+            return [], []
+        day = str(mine[0]).rsplit("|", 1)[-1]
+        others = conn.execute("SELECT account_id, body FROM balance_snapshots WHERE account_id <> ? "
+                              "AND key = account_id || '|' || ?", (account_id, day)).fetchall()
+    except sqlite3.Error as exc:
+        if _no_table(exc):
+            return [], []
+        raise
+    finally:
+        conn.close()
+    me = load_record_json(BalanceSnapshot, mine[1], source="db:balance_snapshots")
+    money = (round(me.balance, 2), round(me.equity, 2), me.currency)
+    same_login, same_money = [], []
+    for other_id, body in others:
+        o = load_record_json(BalanceSnapshot, body, source="db:balance_snapshots")
+        if me.terminal is not None and o.terminal == me.terminal:
+            same_login.append(str(other_id))
+        elif (round(o.balance, 2), round(o.equity, 2), o.currency) == money:
+            same_money.append(str(other_id))
+    return sorted(same_login), sorted(same_money)
+
+
 DEFAULT_MAX_AGE_HOURS = LedgerSettings().max_age_hours
 
 
@@ -635,9 +682,24 @@ def ledger_status(ctx: HealthContext, account_id: str) -> tuple[Status, str] | N
     msg += f"; {rep.note}" if rep.note else ""
     max_age = ctx.settings.ledger.max_age_hours if ctx.settings is not None else DEFAULT_MAX_AGE_HOURS
     age_h = (ctx.now - rep.ts_utc).total_seconds() / 3600
+    status: Status = rep.status
+    try:
+        same_login, same_money = twin_accounts(ctx.state_dir, account_id)
+    except (sqlite3.Error, ValueError) as exc:
+        same_login, same_money = [], []
+        msg += f"; balance snapshots unreadable for the one-login check: {type(exc).__name__}"
+        status = "fail" if status == "fail" else "warn"
+    if same_login:
+        status = "fail"
+        msg = (f"terminal on one MT5 login with {', '.join(same_login)} the same day: two accounts are one login, so "
+               f"their limits and records are not separate (check each box's terminal login); {msg}")
+    elif same_money:
+        status = "fail" if status == "fail" else "warn"
+        msg = (f"balance and equity identical to {', '.join(same_money)}'s snapshot the same day: possibly one MT5 "
+               f"login (check each box's terminal login); {msg}")
     if age_h > max_age:
-        return ("fail" if rep.status == "fail" else "warn"), f"last ledger run {age_h:.0f} h ago: {msg}"
-    return rep.status, msg
+        return ("fail" if status == "fail" else "warn"), f"last ledger run {age_h:.0f} h ago: {msg}"
+    return status, msg
 
 
 # ---------------------------------------------------------------------------------------------- CLI
@@ -665,7 +727,8 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         conn.close()
     out = {"report": rep.model_dump(mode="json") if rep is not None else None,
-           "snapshots": [s.model_dump(mode="json", exclude={"identity"}) for s in snaps if s.ts_utc >= since],
+           "snapshots": [s.model_dump(mode="json", exclude={"identity", "terminal"}) for s in snaps
+                         if s.ts_utc >= since],
            "balance_deals": [d.model_dump(mode="json") for d in deals if d.ts_utc >= since]}
     print(json.dumps(out, indent=1))
     return 0

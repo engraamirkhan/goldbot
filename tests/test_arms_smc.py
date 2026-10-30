@@ -173,7 +173,8 @@ class _Terminal(PaperBroker):
 
 
 def _engine(tmp_path: Path, spec: A.Arm, cap: float) -> tuple[Engine, PaperBroker]:
-    arm = Arm(spec=spec, style="intraday")
+    from tests.test_exploration_engine import qualified
+    arm = qualified(Arm(spec=spec, style="intraday"))
     cfg = ExplorationConfig(enabled=True, budget_share=0.9, max_open_total=18,
                             pots={"scalp": Pot(gbp=50, max_open=8), "intraday": Pot(gbp=48, max_open=5),
                                   "swing": Pot(gbp=40, max_open=1)}, arms=(arm,))

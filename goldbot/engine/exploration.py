@@ -47,7 +47,18 @@ The plan's rules, as built here:
   positions keep their stop, target, hold and every exit (never closed as an orphan). An unreadable table keeps the
   arms already known retired (a retirement is never undone by a read error); until the first read after a start
   succeeds no exploration entry is sent (its signals are recorded blocked `arm_status_unread`; trading-safety
-  2026-10-26: a restart must not trade an arm it cannot know is not retired). Exits are never affected.
+  2026-10-26: a restart must not trade an arm it cannot know is not retired). Exits are never affected. An arm whose
+  frozen spec row records a retirement (`retired_day`/`retired_rule`, e.g. A2 readability 2026-10-30) is retired the
+  same way from the start (`spec_retired`, journalled `exploration_arm_retired` with its rule), on every account.
+* Qualification before demo (owner rule 2026-10-30, ADR 0061: "every strategy should have been back tested and
+  qualified before it is tested and learn from live trades that are taken on demo accounts"): a strategy arm without a
+  passing `qualification` on its row (a screen AND a confirm, verdict pass, measured costs) is refused the same way,
+  from the start, on every account (`entry_refused`: the loader's stamp, then the row read again here; journalled
+  `exploration_arm_unqualified` with the reason). The random controls and the cost arms (`role` control/cost) run.
+  A cost arm (F1A, G1A) runs only until its prereg cost read has its admissible fills (200, 100; quant ruling
+  2026-10-30), counted once a minute in this host's ledger (`refresh_cost_reads`); then it and its paired control are
+  refused the same way (journalled `exploration_arm_cost_read_complete`, "cost read complete, qualify first"). An
+  unreadable count keeps them running and warns (`exploration_cost_read_unread`, once until a read succeeds).
 * Identity: magic_base + 95 (`goldbot.engine.magic`), order id and MT5 comment `ex<arm5>-<epoch10>-<h8>` (27 chars,
   inside MT5's 29). After a restart a position is adopted by its order row or its comment and its hold resumes from
   the broker's open time.
@@ -81,7 +92,16 @@ from goldbot.db import Database, RecordRepo
 from goldbot.engine import auto_entry, cost_probe
 from goldbot.execution.costs import CONTRACT_OZ
 from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec
-from goldbot.research.arms import SPEC_RULE, arm_hash, load_arms
+from goldbot.research.arms import (
+    COST_ARMS,
+    COST_CONTROLS,
+    COST_READ_DONE,
+    SPEC_RULE,
+    arm_hash,
+    load_arms,
+    qualification_refusal,
+    stamp_qualification,
+)
 from goldbot.research.arms import Arm as SpecArm
 
 if TYPE_CHECKING:
@@ -167,7 +187,15 @@ class Arm(FrozenRecord):
 
     @property
     def family(self) -> str:
+        """The arm's rule: the family the RiskGate and the engine's own rule checks read (`Intent.family`)."""
         return self.spec.rule
+
+    @property
+    def ledger_family(self) -> str:
+        """The family its rows and candidates are recorded under: the rule, or a `specialist` arm's specialist
+        (`research.arms.Arm.family`); rows recorded as "specialist" before 2026-10-30 read the same through the views,
+        which label an arm from its registry row (`api.strategy_labels.arm_family`)."""
+        return self.spec.family
 
     @property
     def key(self) -> str:
@@ -240,7 +268,7 @@ def _load_spec_arm_rows(path: Path, *, live_class: bool) -> tuple[list[SpecArm],
     for i, row in enumerate(rows):
         name = str(row.get("id")) if isinstance(row, dict) and row.get("id") else f"row{i}"
         try:
-            arm = SpecArm.model_validate(row)
+            arm = stamp_qualification(SpecArm.model_validate(row))      # ADR 0061: kept, entries refused if unqualified
             if ids.count(arm.id) > 1:
                 raise ValueError("another row has the same id (ambiguous: neither runs)")
             if arm.config_hash != arm_hash(arm):
@@ -251,6 +279,44 @@ def _load_spec_arm_rows(path: Path, *, live_class: bool) -> tuple[list[SpecArm],
             continue
         arms.append(arm)
     return arms, rejected
+
+
+def spec_retired(cfg: ExplorationConfig) -> frozenset[str]:
+    """The arms of `cfg` whose frozen spec row records a retirement (`research.arms.Arm.retired_day`, e.g. A2
+    readability, prereg-amendment-2026-10-30-kill-rules.md: "A retired unit keeps its K, its registry row and its arm
+    id"). They stay configured, so an open position keeps its stop, target, hold and every exit (an arm no longer
+    configured would be closed at once); the engine queues no signal of them, as of an arm retired at its stop."""
+    return frozenset(a.arm_id for a in cfg.arms if a.spec.retired)
+
+
+def entry_refused(cfg: ExplorationConfig) -> dict[str, str]:
+    """The arms of `cfg` that may send no demo entry under the owner rule 2026-10-30 (ADR 0061), with the reason: the
+    loader's stamp (`research.arms.load_arms`), else the row read again (`qualification_refusal`), so an arm that
+    reached the engine any other way is refused all the same. Like a spec retirement they stay configured: an open
+    position keeps its stop, target, hold and every exit."""
+    out: dict[str, str] = {}
+    for a in cfg.arms:
+        why = a.spec.entry_refused or qualification_refusal(a.spec)
+        if why:
+            out[a.arm_id] = why
+    return out
+
+
+def qualification_by_account(accounts: list[Account]) -> dict[str, tuple[list[str], list[str]]]:
+    """Per exploring account (health `qualification`): the arms that may enter (every one exempt today) and the arms
+    the owner rule 2026-10-30 refuses, a spec retirement aside (those are refused already). As the engine selects:
+    run status, a rule it has, a spec_rule arm on demo only."""
+    from goldbot.research import arm_rules
+    out: dict[str, tuple[list[str], list[str]]] = {}
+    for acc in accounts:
+        cfg = config_for(acc)
+        if cfg is None:
+            continue
+        ok = {a.arm_id for a in cfg.arms if a.spec.status == "run" and a.spec.rule in arm_rules.RULE_FUNCS
+              and (a.spec.rule != SPEC_RULE or acc.mode == "demo")}
+        refused, retired = set(entry_refused(cfg)), spec_retired(cfg)
+        out[acc.account_id] = (sorted(ok - refused - retired), sorted((ok & refused) - retired))
+    return out
 
 
 def config_for(acc: Account, spec_path: Path = SPEC_PATH,
@@ -442,7 +508,23 @@ class Exploration:
         self.weights_cache: tuple[pd.Timestamp, dict[str, float]] | None = None
         self.cost_scale: dict[str, float] = {}         # H-81 cost stop: arm -> its share's scale (`shares`)
         self.champion_seen: dict[str, tuple[pd.Timestamp | None, bool]] = {}
-        self.retired: frozenset[str] = frozenset()      # arms retired at their stop (`refresh_retired`)
+        # arms retired at their stop (`refresh_retired`), from the start every arm its spec row retires (`spec_retired`)
+        self.retired: frozenset[str] = spec_retired(cfg) & frozenset(a.arm_id for a in ok)
+        for a in sorted(self.retired):
+            log.warning("exploration arm %s retired in the spec (%s): no new entries, exits managed", a,
+                        self.arms[a].spec.retired_rule)
+            eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": "exploration_arm_retired",
+                                  "arm": a, "rule": self.arms[a].spec.retired_rule})
+        # ADR 0061, second layer: every unqualified strategy arm, refused from the start as a spec retirement is (no new
+        # entry; configured, so its open positions keep every exit); journalled once each, a spec retirement aside
+        self.unqualified: dict[str, str] = {k: v for k, v in entry_refused(cfg).items() if k in self.arms}
+        for a in sorted(set(self.unqualified) - self.retired):
+            log.warning("exploration arm %s refused: %s", a, self.unqualified[a])
+            eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": "exploration_arm_unqualified",
+                                  "arm": a, "rule": self.unqualified[a]})
+        self.retired = self.retired | frozenset(self.unqualified)
+        self.cost_read_at: pd.Timestamp | None = None   # the minute the cost arms' fills were last counted
+        self.cost_read_warned = False                   # an unreadable count is journalled once until a read succeeds
         self.retired_read: pd.Timestamp | None = None
         self.retired_ok = False                         # a read has succeeded since the start: entries may go out
         self.lost_seen: dict[int, pd.Timestamp] = {}     # lost record -> the day it was last journalled
@@ -802,6 +884,7 @@ def on_pass(eng: Engine, tick: Tick) -> None:
     try:
         now = eng._now(tick)
         refresh_retired(eng, ex, now)
+        refresh_cost_reads(eng, ex, now)
         ct = eng._closed_through
         if ct is not None and (ex.last_close is None or ct > ex.last_close) and step(eng, ct):
             ex.last_close = ct                      # a deferred close (clock ahead) is tried again next pass
@@ -842,6 +925,51 @@ def refresh_retired(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
         log.warning("exploration arm %s retired at its pre-registered stop: no new entries", arm_id)
         eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + arm_id, "action": "exploration_arm_retired",
                               "arm": arm_id})
+    _block(eng, ex, [s for s in ex.queue if s.arm_id in ex.retired], now, "arm_retired")
+
+
+def admissible_fills(conn: Any, arm_id: str) -> int:
+    """The arm's admissible fills in this host's ledger, every account: filled, closed by its own barrier (not
+    censored), net P&L recorded (`telegram.labs.admissible`, the arm's n on every view)."""
+    return sum(1 for t in LEDGER.select(conn, "arm_id = ? AND closed = 1", (arm_id,))
+               if t.fill_price is not None and t.exit_utc is not None and t.pnl is not None and not t.censored)
+
+
+def refresh_cost_reads(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
+    """Once a minute: a cost arm (`research.arms.COST_ARMS`) whose prereg cost read has its admissible fills is
+    refused new entries with its paired control (quant ruling 2026-10-30: "The cost exemption ends when the cost-read
+    fills are counted"); both stay configured, so open positions keep every exit. An unreadable count keeps them
+    running and warns (journalled once until a read succeeds). Entries only."""
+    minute = now.floor("min")
+    if ex.cost_read_at == minute:
+        return
+    ex.cost_read_at = minute
+    due = sorted(a for a in ex.arms if ex.arms[a].spec.role == "cost" and a in COST_ARMS and a not in ex.retired)
+    if not due:
+        return
+    try:
+        with ex.db.connection() as conn:
+            counts = {a: admissible_fills(conn, a) for a in due}
+    except Exception as exc:
+        log.warning("cost-read fills unreadable (%s): cost arms %s keep running", type(exc).__name__, due)
+        if not ex.cost_read_warned:
+            ex.cost_read_warned = True
+            for a in due:
+                eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + a,
+                                      "action": "exploration_cost_read_unread", "arm": a, "error": type(exc).__name__})
+        return
+    ex.cost_read_warned = False
+    done = [a for a in due if counts[a] >= COST_ARMS[a][1]]
+    stop = sorted({*done, *(COST_CONTROLS[a] for a in done if COST_CONTROLS.get(a) in ex.arms)} - ex.retired)
+    if not stop:
+        return
+    ex.retired = ex.retired | frozenset(stop)
+    for a in stop:
+        ex.unqualified[a] = COST_READ_DONE
+        log.warning("exploration arm %s refused: %s", a, COST_READ_DONE)
+        eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + a,
+                              "action": "exploration_arm_cost_read_complete", "arm": a, "rule": COST_READ_DONE,
+                              "fills": counts.get(a)})
     _block(eng, ex, [s for s in ex.queue if s.arm_id in ex.retired], now, "arm_retired")
 
 
@@ -1243,7 +1371,7 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
     taken = blocked is None
     try:
         record_candidate(ex.db, candidate_id=cid, account_id=eng.cfg.account_id, broker=ex.broker, arm_id=arm.arm_id,
-                         family=arm.family, style=arm.style, tf=arm.tf, side=s.side, decision_utc=s.bar_ts,
+                         family=arm.ledger_family, style=arm.style, tf=arm.tf, side=s.side, decision_utc=s.bar_ts,
                          stop_dist=s.stop_usd, target_dist=s.target_usd, max_hold_s=s.hold_bars * tf_seconds(arm.tf),
                          taken=taken, is_control=arm.control_share is not None, arm_config_hash=arm.config_hash,
                          blocked_reason=blocked, branch=branch if taken else "blocked", u=u,
@@ -1373,7 +1501,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
                latency_ms: float) -> ExplorationRecord:
         at_gate.append(at_stop)
         return ExplorationRecord(
-            client_order_id=pid, account_id=eng.cfg.account_id, arm_id=arm.arm_id, family=arm.family, tf=arm.tf,
+            client_order_id=pid, account_id=eng.cfg.account_id, arm_id=arm.arm_id, family=arm.ledger_family, tf=arm.tf,
             side=side, lots=float(res.filled_lots if filled else gd.lots), signal_utc=s.bar_ts, sent_utc=sent,
             atr_usd=stop_d, stop_usd=gd.stop_distance, target_usd=target_d, hold_s=hold_s,
             requested_price=price, spread_usd=round(tick.ask - tick.bid, 6), latency_ms=round(latency_ms, 3),
@@ -1721,7 +1849,7 @@ def record_close(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float | 
         start = tr.opened_utc or tr.entry_bar_ts
         rec = LEDGER.get(conn, cid) or ExplorationRecord(
             client_order_id=cid, account_id=eng.cfg.account_id, arm_id=arm_id,
-            family=arm.family if arm else "", tf=arm.tf if arm else "", side=tr.side,
+            family=arm.ledger_family if arm else "", tf=arm.tf if arm else "", side=tr.side,
             lots=float(tr.initial_lots or tr.lots), signal_utc=start, sent_utc=start, atr_usd=0.0,
             stop_usd=abs((tr.open_price or 0.0) - (tr.initial_sl or tr.open_price or 0.0)), target_usd=0.0,
             hold_s=arm.hold_s if arm else 0, fill_price=tr.open_price, position_id=pid)
