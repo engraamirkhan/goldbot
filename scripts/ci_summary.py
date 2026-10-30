@@ -108,7 +108,32 @@ def render(title: str, junit: Path, rerun: Path | None, top: int = 10, root: Pat
 
 # --- CI issues keyed by the failing test (FR-5/FR-8) --------------------------------------------------------------------
 MAX_IDS = 20   # more distinct failing tests than this in one run is one cause: the rest are in the log, not keyed
-_PYTEST_LINE = re.compile(r"^(?:FAILED|ERROR|FAIL|FLAKY) (\S+::\S+?)(?: - .*)?$", re.M)
+_PYTEST_LINE = re.compile(r"^(?:FAILED|ERROR|FAIL|FLAKY) (\S.*?)\s*$", re.M)
+_UNSAFE = re.compile(r"[^\w./:\[\]› -]")   # an id is word characters, path/param punctuation and plain spaces only
+
+
+def clean(text: str) -> str:
+    """Text for an issue body: no backtick (closes a code span or fence) and no `-->` (closes the key comment)."""
+    return text.replace("`", "'").replace("-->", "--​>")
+
+
+def _id_of(rest: str) -> str:
+    """The test id of `<id> - <message>` (or a bare id). A node id ends at the first ` - ` outside its [params]; a
+    collection error `<path> - <message>` has no `::` and is keyed on the path."""
+    start = rest.find("::")
+    if start < 0:
+        return rest.split(" - ", 1)[0]
+    depth = 0
+    for k in range(start, len(rest)):
+        c = rest[k]
+        depth += (c == "[") - (c == "]" and depth > 0)
+        if depth == 0 and rest.startswith(" - ", k):
+            return rest[:k]
+    return rest
+
+
+def _safe_id(raw: str) -> str:
+    return _UNSAFE.sub("_", raw).strip()
 _PLAYWRIGHT_LINE = re.compile(r"^\s*\d+\) \[[^\]]+\] › (\S+?):\d+:\d+ › (.+?)(?: ─+)?\s*$", re.M)
 
 
@@ -120,9 +145,9 @@ class ReportPlan(NamedTuple):
 def failing_ids(text: str) -> list[str]:
     """Sorted, distinct test ids from pytest's short summary and Playwright's failure list. The key has no line
     number, failure message or browser project, so a moved line or a different message is still the same test."""
-    ids = set(_PYTEST_LINE.findall(text))
+    ids = {i for i in map(_id_of, _PYTEST_LINE.findall(text)) if "::" in i or i.endswith(".py")}
     ids |= {f"{path} › {title.strip()}" for path, title in _PLAYWRIGHT_LINE.findall(text)}
-    return sorted(ids)
+    return sorted({s for s in map(_safe_id, ids) if s})
 
 
 def ids_for_run(text: str, job_names: list[str]) -> list[str]:
@@ -163,25 +188,40 @@ def run_report(out_dir: Path, job_names: list[str], api: Callable[[str, str, dic
     names = sorted({n for f in files for n in f.read_text().split()}) or sorted(job_names)
     texts = {n: (out_dir / f"{n}.txt").read_text(errors="replace") for n in names if (out_dir / f"{n}.txt").exists()}
     ids = sorted({i for n in names for i in ids_for_run(texts.get(n, ""), [n])})[:MAX_IDS]
-    head = f"Run: {run_url}\nSHA: `{sha}`\nBranch: `{ref}`\nFailed: {', '.join(names) or '(none reported)'}\n"
-    open_issues = [i for i in api("GET", f"/repos/{repo}/issues?labels=ci&state=open&per_page=100", None)
-                   if "pull_request" not in i]
+    failed = clean(", ".join(names) or "(none reported)")
+    head = f"Run: {clean(run_url)}\nSHA: `{clean(sha)}`\nBranch: `{clean(ref)}`\nFailed: {failed}\n"
+    done: list[str] = []
+    try:
+        listed = api("GET", f"/repos/{repo}/issues?labels=ci&state=open&per_page=100", None)
+        open_issues = [i for i in listed if "pull_request" not in i]
+    except Exception as e:   # no plan without the open issues: still report (a duplicate beats silence)
+        open_issues = []
+        done.append(f"FAILED listing open ci issues: {type(e).__name__}")
     plan = plan_report(open_issues, ids)
-    done = []
     for number, tracked in sorted(plan.comment_on.items()):
-        again = head + "\nAgain: " + ", ".join(f"`{t}`" for t in tracked)
-        api("POST", f"/repos/{repo}/issues/{number}/comments", {"body": again})
-        done.append(f"commented on #{number}")
+        again = head + "\nAgain: " + ", ".join(f"`{clean(t)}`" for t in tracked)
+        try:
+            api("POST", f"/repos/{repo}/issues/{number}/comments", {"body": again})
+            done.append(f"commented on #{number}")
+        except Exception as e:
+            done.append(f"FAILED commenting on #{number}: {type(e).__name__}")
     if plan.new_ids or not ids:
         budget = 60000 // max(len(texts), 1)
         parts = [head, keys_block(plan.new_ids)]
-        parts += [f"### {n}\n```\n{t[-budget:]}\n```" for n, t in texts.items()]
+        parts += [f"### {clean(n)}\n```\n{clean(t[-budget:])}\n```" for n, t in texts.items()]
         if not texts:
             parts.append("(no output was written for the failed steps; see the run URL)")
         title = new_issue_title(plan.new_ids) if plan.new_ids else f"CI failure on {sha[:7]} ({', '.join(names)})"
-        made = api("POST", f"/repos/{repo}/issues", {"title": title, "body": "\n".join(parts), "labels": ["ci"]})
-        done.append(f"opened #{made.get('number')}")
+        try:
+            made = api("POST", f"/repos/{repo}/issues", {"title": title, "body": "\n".join(parts), "labels": ["ci"]})
+            done.append(f"opened #{made.get('number')}")
+        except Exception as e:
+            done.append(f"FAILED opening the issue: {type(e).__name__}")
     return done
+
+
+def report_failed(done: list[str]) -> bool:
+    return any(d.startswith("FAILED") for d in done)
 
 
 def _github(method: str, path: str, payload: dict[str, Any] | None) -> Any:
@@ -217,8 +257,9 @@ def main(argv: list[str] | None = None) -> int:
         sha = os.environ.get("PR_SHA") or os.environ["GITHUB_SHA"]
         ref = os.environ.get("GITHUB_HEAD_REF") or os.environ["GITHUB_REF_NAME"]
         run_url = f"https://github.com/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
-        print("\n".join(run_report(a.out_dir, a.jobs, _github, repo, sha, ref, run_url)))
-        return 0
+        done = run_report(a.out_dir, a.jobs, _github, repo, sha, ref, run_url)
+        print("\n".join(done))
+        return 1 if report_failed(done) else 0
 
     if a.cmd == "summary":
         md = render(a.title, a.junit, a.rerun, a.top)
