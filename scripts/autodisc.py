@@ -3,7 +3,7 @@
     python scripts/autodisc.py run --generator combine --synthetic [--limit N] [--reps 100] [--db PATH]
     python scripts/autodisc.py bench --synthetic --specs 10000        # throughput of log + evaluate
     python scripts/autodisc.py report --run-json state/autodisc_run.json
-    python scripts/autodisc.py nightly [--state-dir state]          # ADR 0058 phase 2: the autodisc_nightly job, here
+    python scripts/autodisc.py nightly [--state-dir state] [--timeframe 15m|1h|4h]   # ADR 0058 phase 2 job, here
 
 `--synthetic` runs the pipeline on seeded noise (`nulls.SyntheticProvider`). Without it `run` reads the local 1m bars
 (GOLDBOT_RAW_BARS or the repo's gitignored raw/, 2010-2017 only, never committed), builds the real outcome tensor and
@@ -188,10 +188,14 @@ def cmd_bench(args: argparse.Namespace) -> int:
 
 
 def cmd_nightly(args: argparse.Namespace) -> int:
-    """The scheduler's autodisc_nightly on this machine (enabled for this run only; settings.yaml is not changed)."""
+    """The scheduler's autodisc_nightly on this machine (enabled for this run only; settings.yaml is not changed).
+    `--timeframe` overrides research.autodisc.timeframe for this run (the Mac's launchd job runs 15m, 1h, 4h in turn)."""
     s = load_settings()
+    upd: dict[str, Any] = {"nightly_enabled": True}
+    if args.timeframe:
+        upd["timeframe"] = args.timeframe
     on = s.model_copy(update={"research": s.research.model_copy(update={
-        "autodisc": s.research.autodisc.model_copy(update={"nightly_enabled": True})})})
+        "autodisc": s.research.autodisc.model_copy(update=upd)})})
     out = run_nightly_job(on, Path(args.state_dir), pd.Timestamp.now(tz="UTC"))
     print(out.get("health") or out.get("skipped"))
     return 0
@@ -203,6 +207,8 @@ def main(argv: list[str] | None = None) -> int:
     night = sub.add_parser("nightly")
     night.set_defaults(fn=cmd_nightly)
     night.add_argument("--state-dir", default="state")
+    night.add_argument("--timeframe", default=None, choices=["15m", "1h", "4h"],
+                       help="decision timeframe of this run (default: research.autodisc.timeframe)")
     for name, fn in (("run", cmd_run), ("bench", cmd_bench), ("report", cmd_report)):
         p = sub.add_parser(name)
         p.set_defaults(fn=fn)

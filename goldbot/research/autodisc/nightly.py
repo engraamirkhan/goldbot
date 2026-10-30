@@ -14,7 +14,9 @@ specs: each is ledgered before it is evaluated and counts in K. The DSR at the l
 night) is reported per survivor against the 0.95 confirm bar (step 10, "informational at this stage; binding at
 confirm"; ADR 0058 amendment 2026-10-30: advancing to confirm requires it), with the cumulative survivor count from the
 ledger and one line per judged candidate that failed, naming the failed check. Novelty (step 12) is not labelled here: a G2 spec carries no family, and the novelty pass over survivors is
-read from the report by the research director.
+read from the report by the research director. A spec whose search fitness beat the null bar but that failed one of
+the evaluator's own explore checks is never judged; the report lists it with each failed check and its value, and every
+ledgered result carries its search fitness and components (first real nightly runs, 2026-10-30).
 
 Selection reads only the explore window: the bars come through `windows.ExploreFrame` (2018+ raises) and only the
 2010-2017 bar files are opened. "An explore survivor is a recorded fact, never evidence of edge." This module creates
@@ -33,6 +35,7 @@ import pandas as pd
 from goldbot.base import FrozenRecord
 from goldbot.config import Settings
 from goldbot.research.autodisc import stats as S
+from goldbot.research.autodisc.evaluate import STRESS_MULT, Evaluation
 from goldbot.research.autodisc.gen_gp import (
     GENERATOR,
     GPCandidate,
@@ -108,6 +111,26 @@ class Rejected(FrozenRecord):
     failed: list[str]
 
 
+class ExploreFailed(FrozenRecord):
+    """A spec whose search fitness beat the null bar but that failed one of the evaluator's own explore checks (so it
+    was never judged), with each failed check and its value (first real nightly runs, 2026-10-30)."""
+    spec_hash: str
+    fitness: float
+    failed: list[str]
+
+
+def explore_failures(e: Evaluation) -> list[str]:
+    """The evaluator's explore checks (`Evaluation.explore_checks_passed`) that `e` fails, each with its value."""
+    why = [f"floors: {'; '.join(e.floor_failures) or 'failed'}"] if not e.floors_passed else []
+    if e.fitness is None or not e.fitness > 0:
+        why.append(f"min-fold t {_f(e.fitness)} <= 0")
+    if e.excess_r is None or not e.excess_r > 0:
+        why.append(f"excess R {_f(e.excess_r)} <= 0")
+    if not e.stress_passed:
+        why.append(f"mean R at {STRESS_MULT:g}x cost {_f(e.stress_mean_r)} <= 0")
+    return why
+
+
 class NightlyResult(FrozenRecord):
     generator: str
     timeframe: str
@@ -131,6 +154,7 @@ class NightlyResult(FrozenRecord):
     survivors: list[Survivor]
     rejected: list[Rejected]
     head: tuple[int, str]
+    explore_failed: list[ExploreFailed] = []      # beat the null bar, failed an explore check: never judged
     cost_line: str = ""
 
 
@@ -171,8 +195,11 @@ def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg:
     pbo = batch_pbo(d, [gp_fitness(c.evaluation) for c in floors])
     batch_ok, why = batch_passes(rc, pbo)
     col_of = {c.spec_hash: j for j, c in enumerate(floors)}
-    cands = sorted((c for c in floors if gp_fitness(c.evaluation) > thr and c.evaluation.explore_checks_passed),
-                   key=lambda c: -gp_fitness(c.evaluation))
+    beat = sorted((c for c in floors if gp_fitness(c.evaluation) > thr), key=lambda c: -gp_fitness(c.evaluation))
+    cands = [c for c in beat if c.evaluation.explore_checks_passed]
+    explore_failed = [ExploreFailed(spec_hash=c.spec_hash, fitness=gp_fitness(c.evaluation),
+                                    failed=explore_failures(c.evaluation))
+                      for c in beat if not c.evaluation.explore_checks_passed]
     judged: list[tuple[GPCandidate, float, Plateau]] = []
     n_nb = 0
     hour = t.ts_utc.hour.to_numpy()
@@ -210,7 +237,7 @@ def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg:
                          null_threshold=thr, real_best=real.best, real_best_null_percentile=null.percentile_of(real.best),
                          candidates=len(cands), judged=len(judged), neighbours_evaluated=n_nb, rc=rc, pbo=pbo,
                          batch_ok=batch_ok, batch_why=why, survivors=survivors, rejected=rejected, head=ledger.head(),
-                         cost_line=cost_line)
+                         cost_line=cost_line, explore_failed=explore_failed)
 
 
 def _n(x: int) -> str:
@@ -252,6 +279,9 @@ def render(r: NightlyResult) -> str:
     lines.append(f"judged candidates that failed {_n(len(r.rejected))}")
     for x in r.rejected:
         lines.append(f"  {x.spec_hash[:12]}  fitness {_f(x.fitness)}  failed: {'; '.join(x.failed)}")
+    lines.append(f"specs that beat the null but failed an explore check {_n(len(r.explore_failed))}")
+    for e in r.explore_failed:
+        lines.append(f"  {e.spec_hash[:12]}  fitness {_f(e.fitness)}  failed: {'; '.join(e.failed)}")
     lines.append(f"ledger head seq {_n(r.head[0])} digest {r.head[1]}")
     text = "\n".join(lines) + "\n"
     assert_no_confirm_numbers(text)
@@ -343,6 +373,6 @@ def run_nightly_job(settings: Settings, state_dir: Path, slot: pd.Timestamp, *,
     pbo = "n/a" if res.pbo is None else f"{res.pbo.pbo:.2f}"
     return {"report": rel, "k_search": res.k_search, "k_null": res.k_null, "evaluated": res.evaluated,
             "candidates": res.candidates, "survivors": len(res.survivors), "batch_ok": res.batch_ok,
-            "survivors_cumulative": res.survivors_cumulative,
+            "survivors_cumulative": res.survivors_cumulative, "explore_failed": len(res.explore_failed),
             "health": f"autodisc {res.timeframe}: {res.evaluated:,} specs, K_search {res.k_search:,}, SPA p {spa}, "
                       f"PBO {pbo}, survivors {len(res.survivors)} (explore only, not evidence)"}

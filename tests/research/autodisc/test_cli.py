@@ -85,3 +85,18 @@ def test_nightly_command_runs_the_scheduler_job_on_this_machine(tmp_path, monkey
     monkeypatch.setattr(cli, "run_nightly_job", fake)
     assert cli.main(["nightly", "--state-dir", str(tmp_path)]) == 0
     assert seen == {"enabled": True, "state_dir": tmp_path}
+
+
+@pytest.mark.parametrize("tf", ["15m", "1h", "4h"])
+def test_nightly_command_takes_the_timeframe_so_the_mac_job_can_run_each_in_turn(tmp_path, monkeypatch, tf):
+    seen: dict[str, object] = {}
+
+    def fake(settings, state_dir, slot, **kw):
+        seen["tf"] = settings.research.autodisc.timeframe
+        return {"health": "autodisc test"}
+
+    monkeypatch.setattr(cli, "run_nightly_job", fake)
+    assert cli.main(["nightly", "--state-dir", str(tmp_path), "--timeframe", tf]) == 0
+    assert seen == {"tf": tf}
+    with pytest.raises(SystemExit):
+        cli.main(["nightly", "--timeframe", "1d"])

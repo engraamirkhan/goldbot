@@ -374,7 +374,10 @@ def _num(x: float | None) -> float | None:
 def evaluate_logged(t: OutcomeTensor, res: Resolver, s: StrategySpec, ledger: SearchLedger, *,
                     parents: tuple[str, ...] = (), generation: int = 0, min_events: int | None = None,
                     side_override: SideArr | None = None, null: bool = False) -> GPCandidate:
-    """Log the spec (ledger first, design 3.1), evaluate it (the evaluator refuses an unlogged hash), record its result."""
+    """Log the spec (ledger first, design 3.1), evaluate it (the evaluator refuses an unlogged hash), record its result.
+    The result carries the search fitness (`gp_fitness`, what the search ranked by; null below the floors) and its
+    components (per-fold t of net and of excess R, the clustered t, time in market, floor failures), so the top specs
+    of a night can be ranked and read afterwards (first real nightly runs, 2026-10-30)."""
     h = spec_hash(s)
     ledger.log_spec(s, GENERATOR, VERSION, parents=parents, null=null)
     mask, side = res.entries(s)
@@ -385,7 +388,10 @@ def evaluate_logged(t: OutcomeTensor, res: Resolver, s: StrategySpec, ledger: Se
     ledger.record_result(h, {"n_events": e.n_events, "mean_r": _num(e.mean_r), "fitness": _num(e.fitness),
                              "excess_r": _num(e.excess_r), "excess_fitness": _num(e.excess_fitness),
                              "stress_mean_r": _num(e.stress_mean_r),
-                             "floors": e.floors_passed, "generation": generation}, null=null)
+                             "floors": e.floors_passed, "generation": generation,
+                             "search_fitness": _num(gp_fitness(e)), "t_stat": _num(e.t_stat),
+                             "fold_t": [_num(x) for x in e.fold_t], "excess_fold_t": [_num(x) for x in e.excess_fold_t],
+                             "time_in_market": e.time_in_market, "floor_failures": list(e.floor_failures)}, null=null)
     return GPCandidate(spec=s, spec_hash=h, parents=parents, generation=generation, evaluation=e)
 
 
