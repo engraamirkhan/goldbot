@@ -4,6 +4,11 @@
 debt and quality review; next review Fri 10-23. Evidence is file:line at the base commit, a run id, an issue or a
 measured number. Nothing here changes a safety rail.
 
+**Update 2026-10-30, cto (new role holder):** delivery-tooling debt (TD-3, TD-4, TD-8 and the "interpreter choice"
+gap named below) is re-measured and superseded by `docs/ROADMAP.md` section 5a (FR-1 to FR-10), with ADR 0060 (lane
+flow) and `docs/process/deploy-approval-runbook.md`. TD-8's rule ("removal at merge") did not hold: 60 worktrees /
+28 GB on 10-16, 373 / 168 GiB on 10-30. The remaining TD items stand until the Fri 11-06 review re-dates them.
+
 **Update 2026-10-16 (late), cto:** ADR 0019 (TD-1) and ADR 0021 accepted by PD + PO + CTO under the owner's
 delegation; TD-16 added (bridge lot ceiling, ranked 3rd); TD-13 given lane id W3-1; standing rule on self-hosted CI
 runners added (section 4, "Standing constraint"). ROADMAP §5 now points here.

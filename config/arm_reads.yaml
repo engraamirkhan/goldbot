@@ -158,3 +158,60 @@ read_units:
 # An arm whose n is not its admissible trades (arms-2026-10-25.md 4: S0R's n is its stop exits).
 counts:
   S0R: stop_exits
+# ---------------------------------------------------------------------------------------------------------------------
+# EVALUATOR RULINGS 2026-10-30 on the research reset (research-plan.md table 3; prereg-amendment-2026-10-30-kill-rules.md
+# "Evaluator rulings"). Comments only: no read is recorded, no `reads:` row is added, nothing here retires an arm until
+# the quant-reviewer also signs A1/A2 and the per-unit fill rates below are recorded from aux.db.
+# R1 A1/A2: SIGNED WITH CONDITIONS. Valid kill-only amendments despite being written after interim reads: they add no
+#    route to continue/graduate/promote (HV "Graduation and promotion" unchanged), A2 is outcome-blind (fill rates
+#    only), A1 acts only at the unit's existing single read. Conditions: (a) A1's matched estimator is the perf-report
+#    learning section as of fe045043, first 300 admissible, Amendment-4 exclusions, 90% two-sided band; (b) no interim
+#    A1 look; passing A1 adds nothing to a continue; (c) A2 rates per read unit (pooled for `read_units`), recorded with
+#    each retirement; (d) noted: at n 300, SD 1.1 R, "UB < +0.10 R" implies point < -0.05 R, so the point <= 0 clause
+#    is the binding one; a true +0.05 R unit is falsely killed ~29% of the time, +0.10 R ~13% (accepted: demo cannot
+#    detect it, history can).
+# R2 Cost figure: the Z 4 cost stop reads the engine's SIGNAL-TIME cost (`cost`/`stop_loss` at the send,
+#    goldbot/research/arm_stops.cost_state), i.e. the ~0.116 R figure. Every "measured cost" rule reads the WORSE of
+#    ($0.23/oz + $0.70 per stop exit) and the arm's own signal-time fill cost "(spread + slippage + commission +
+#    overshoot on stop exits)" (prereg-2026-10-26-time-structure.md 2.2; arms-expansion 2.1). The ~0.053 R broker
+#    figure (spread + commission) omits slippage and overshoot and is never the figure of record; swapping to it after
+#    it binds would loosen a stop post hoc. Condition: data-engineer confirms by 11-06 that `cost` comes from the nightly
+#    measured table, not runner._cost_atr's config fallback; a fallback is a defect, fixed forward only.
+# R3 S1A/S1B: NOT VOID. HV "Retired-family neighbours" is a closed list without S1; H-76 is the failed Asia-range fade
+#    (hypotheses.md), not a VWAP rule; the session-VWAP closure (time-structure 2026-10-26, 0 trials) post-dates S1 and
+#    recorded S1 as running. S1 reads at its own H-61 read (300 per arm, ~2026-12-16) with A1, and is subject to A2's
+#    11-13 count (< 100 per arm; ~8 a day makes it marginal). Its +0.21 R (n 54, 90% -0.09..+0.51) is not evidence:
+#    one falling week, side drift, and gross <= 0 for VWAP fades on 2010-2017.
+# R4 Kill now, ONLY under A2 (< 2 admissible fills a session day 10-27..10-30, effective on quant sign-off):
+#    S2A S2B S3A S3B MSA15 VMS15 S4 I2A I2B VI2A VI2B W1A W1B VW1A VW1B W2 VW2 MB15 MB30 MB1H VMB15 VMB30 VMB1H WFRI
+#    XIMNY XIMLN XMR15 XMR1H XAD1H XSO15 XEQ15 XTV1 VXBO1H VXBO15 VXTR1H VXTV2 VXRIP1H VXRT1H VXFK1H VXTL1H
+#    Z8P KA15 OBR15 KSQ1 KSQ4 DON4 DOND C30A PDC1 PDC4 F2A
+#    plus ids the plan left implicit, by the same A2 text: XBB15 (if < 2/day), F2C C30C XC15 (dedicated controls, not
+#    in A2's exempt list; the plan's "keep XC15" is OBJECTED to), S6 I1 I3 W3, VS0 VS1A VS1B VS2A VS2B VS3A VS3B VS5A
+#    VS5B (blocked, 0 fills). Objections to the plan's stated grounds: VOID never permits early retirement (it only
+#    makes the 300 read descriptive); "ORB closed on history (R-02/H-76)" and "asia_drift hypothesis retired" are not
+#    registered kill rules (XAD1H was registered after H-04's STOP). A2 is the sole valid ground for every id above.
+# ---------------------------------------------------------------------------------------------------------------------
+# EVALUATOR RULINGS, CYCLE 2 (2026-10-30; prereg-amendment-2026-10-30-kill-rules.md "Evaluator rulings, cycle 2").
+# Comments only: no `reads:` row, nothing retires until the quant-reviewer also signs A5.
+# R5 A5 (history-bounded entries): SIGNED WITH CONDITIONS. Kill-only, written after H-82 and interim reads (disclosed);
+#    it reads the arm's entry stream on 2010-2017, never its demo outcomes. Conditions: (a) "within +/-0.02 R" is met
+#    by the 90% day-clustered bootstrap CI of mean gross R, not by the point estimate; (b) the replay is of the arm's
+#    OWN hashed row (config_hash), via hb_exits_screen.py at 06f94403 or a later commit named in the retirement, pairs
+#    sha256 recorded; (c) unit = the existing read unit: a pooled unit retires only when EVERY arm in it qualifies;
+#    (d) net at the worse cost (R2): measured $0.23/oz + $0.70/stop exit, and signal-time ~0.116 R.
+#    Evaluator re-derivation from ~/tmp/hb_exits/pairs_*.parquet (gross R, 90% day-clustered CI, all 5 exits):
+#    S5A n 55,442 -0.0092..+0.0046 (CI -0.0140..+0.0113); S5B n 55,264 -0.0089..+0.0007 (CI -0.0131..+0.0062);
+#    Z4D n 13,936 +0.0007..+0.0060 (CI -0.0071..+0.0155); Z4P n 16,143 -0.0013..+0.0081 (CI -0.0074..+0.0158);
+#    Z6D n 27,851 -0.0105..-0.0091 (CI -0.0144..-0.0049); Z7D n 84,320 +0.0077..+0.0095 (CI +0.0054..+0.0119);
+#    Z7P n 84,385 +0.0024..+0.0045 (CI +0.0001..+0.0070). Net: -0.048..-0.112 R (measured), -0.107..-0.126 R (0.116).
+#    Worst single year, any arm/exit: +0.033 R gross (S5A none), still below cost.
+#    RETIRES on joint sign-off: S5A, S5B (per-arm units), H-81:Z4 (Z4D, Z4P).
+#    NOT YET: H-81:Z6 (Z6D+Z6V) and H-81:Z7 (Z7D+Z7V+Z7P). OBJECTION to the draft's "broker twins sharing the rule":
+#    Z6V/Z7V run stop_usd 7.0 (hashes 7dedebd47fec46d7, cdcf4fe79dfbd333), not the 4.5 replayed; their exit geometry
+#    was never replayed. Replay both rows (seconds of compute); if all three criteria hold, the whole unit retires.
+#    Until then Z6/Z7 stay under the H-81 4 signal-time cost stop.
+# R6 15m out of discovery grammar v2: ACKNOWLEDGED as part of the v2 definition (decided before any v2 output).
+# R7 H-80 R2 registry: the 3 local rows (prereg / evaluated / verdict, ts 2026-10-30T17:39:03..17:41:59Z, config_hash
+#    f1b435b34030) are merged unchanged (same ts, hash, results) into the brain + research-v1 registry via
+#    registry_sync. Only the evaluated row is a trial: 2026Q4, 1 of the 2 added by 145 -> 147. Never re-run.

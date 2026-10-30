@@ -65,3 +65,26 @@ today's ATR). P4 for a family promotion is not expected to pass; the read is abo
 Trails 1.5 ATR after 1.25 ATR and half-at-1 ATR on R-03/R-04; exits as rescue of a primary with gross t < 2;
 break-even as an edge; partials at 0.01 lot (impossible); structural box-far-side stops (S1-S3: gross -0.16 to -0.25 R);
 nearest-box targets (inside 2 R 97-98% of the time).
+
+## 8. R2 verdict (evaluator, 2026-10-30, single read, 2018-01-01..2025-09-30)
+Run once by the section 5 rule with `candidates/time_structure/exits_adaptive_confirmation.py` (the discovery script's
+entries, E0/E4/E8 walks, Friday rule and costs unchanged; bars from 2025-10-01 never loaded). Registry row written
+before the first score (pre-registration, then the evaluated row, then the verdict; the registry file is local-only,
+local trial no. 1, to be synced into the brain registry as the 2026Q4 trial). Costs: 0.23 USD/oz plus a 0.70 USD/oz
+overshoot prior on the stopped share (S0R has no 30-stop read); flat 1.07 USD/oz also reported.
+
+Pooled paired comparisons (same entries, day-clustered t, one-sided):
+- E4 (RUNNER) minus E0: n 5,355, gross -0.0177 R, t -1.12, p 0.869 (Holm 0.869), net at measured cost -0.0889 R.
+- E8 (STRUCT) minus E0: n 5,355, gross -0.0002 R, t -0.02, p 0.508 (Holm 1.0), net -0.0076 R.
+
+By timeframe, E4 minus E0 gross: 15m -0.030, 30m -0.044, 1h 0.057, 4h 0.047 (trades 2855, 1478, 805, 217).
+Day-clustered t: -1.47, -1.54, 1.51, 0.82. All four have at least 150 trades, so 3 of 4 is needed; 2 of 4 are positive.
+Pooled levels, gross / net at measured cost: E0 +0.0115 / -0.199, E4 -0.0062 / -0.288, E8 +0.0113 / -0.206 R.
+
+**Verdict: FAIL (stop).** RUNNER is not adopted: pooled E4 minus E0 gross is negative (needs positive with t at least
+2.0), 2 of 4 timeframes agree (needs 3), and E4 net is below E0 net. The BXR arms stop at their next kill check.
+STRUCT is closed for the box family (pooled E8 minus E0 is -0.0002 R, not above 0). No family registry trial is
+written (pooled E4 net -0.288 R). The verdict is the same under any reading of "t 2.0 (Holm-adjusted)": the raw t is
+-1.12. The discovery-half +0.039 R (t 2.4) did not replicate. Caveats: the timeframes are not independent samples;
+trades open at the window end are time-exited at the last bar before 2025-10-01; the 0.70 overshoot is a prior and
+cannot change the sign of the gross failure.

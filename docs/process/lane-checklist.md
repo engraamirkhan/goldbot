@@ -22,7 +22,7 @@ fill it in. A brief without it is not dispatched.
 
 ```text
 Agent: <agent id>                  Item: BACKLOG <NN> / TD-<n>          Due: <date, time UTC>
-1. Reset first: `git reset --hard <integration tip SHA>` (claude/gifted-goldberg-lcb7pl at <SHA>), then echo
+1. Reset first: `git reset --hard <integration tip SHA>` (`origin/main` at <SHA>; the old integration branch is dead since 10-19, ROADMAP 5a FR-4), then echo
    `git rev-parse HEAD` as the first line of your hand-back.
 2. Read docs/process/all-hands/2026-10-16.md (the expectations E1-E5, F1-F5) and docs/AGENT_STANDARDS.md.
 3. Files you may touch: <list>. Leave every other file alone.

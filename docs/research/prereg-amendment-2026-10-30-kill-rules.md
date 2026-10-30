@@ -1,0 +1,192 @@
+# Amendment drafts A1-A4, 2026-10-30 (research director): demo kill rules, two-window screens, discovery grammar v2
+
+Status: **DRAFT.** Written 2026-10-30 by the research director. A1/A2 take effect when the evaluator and the
+quant-reviewer sign them (target 2026-11-04); A3 when the quant-reviewer signs it, before any 2010-2017 outcome of
+H-16/H-17 is computed; A4 when it is merged as an ADR 0058 amendment, before the next nightly search.
+
+**Disclosure (integrity).** A1 and A2 were written **after** interim matched reads were seen (perf-report learning
+section, 2026-10-19..10-30, all three accounts). Both are **kill-only**: they add ways for an arm to retire and none
+for it to graduate, continue or be promoted. The bias they can introduce is a false kill, never a false discovery.
+Every retired id stays counted in K. No graduation rule, no promotion rule, no holdout and no reserved slot changes.
+
+## A1. Matched-control futility at the existing read (amends H-61 "Graduation", W1, W2, H-81 section 4)
+
+At each unit's **existing** pre-registered read (unchanged: the 300th admissible trade or family fill on >= 20
+session days, first 300 only), add one retirement condition to the existing stops (-30 R / -15 R / -10 R and the
+UB < +0.03 R futility):
+
+- retire if the unit's **matched excess over the random control** (net mean R minus the control's on the same risk
+  day x session x side cell; `goldbot run perf-report`, learning section) has a point estimate <= 0, **or** its 90%
+  upper bound < +0.10 R.
+
+Why +0.10 R: per-trade SD is about 1.1 R (re-derived 2026-10-30 from aux.db `exploration_trades`, icm-probe: 0.97 to
+1.16 by side). At 300 a side, the matched 90% half-width is about 1.645 x 1.1 x sqrt(2/300) = 0.15 R. Detecting a
++0.05 R excess at 80% power needs about 6,000 trades a side; that is not a demo-scale question. Demo reads can only
+find large effects (>= ~0.15 R, about 670 a side), so a unit that cannot show one at 300 is retired and, if its
+mechanism is still believed, goes to a history screen where n is free.
+
+## A2. Readability (amends the same texts)
+
+An arm or read unit that cannot reach its read in time has no demo read and only spends slots.
+
+- **Retire now** (on sign-off): every unit that made **< 2 admissible fills a session day** over 2026-10-27..10-30
+  and is not exempt below.
+- **Retire on 2026-11-13** every non-exempt unit with **< 100 admissible fills** by the close of that day.
+- **Exempt:** random controls (S0, S0R, I0, W0, VI0, VW0, C1H, VC1H, ZCD, ZCV); cost arms whose fills are a
+  registered input to a confirmation read (F1A/F1C for O-11, G1A/G1C for O-12; S0R's overshoot read); H-80 R1 (BXR*)
+  until the R2 verdict, then retired if R2 does not adopt the runner.
+- A retired unit keeps its K, its registry row and its arm id (never reused). Its mechanism may return only as a
+  history screen under a new pre-registration.
+
+## A3. Two-window protocol for H-16 and H-17 (amends `preregistration-2027Q1.md` O-1, O-2/O-3)
+
+H-16 and H-17 are pre-registered on 2010-01..2025-09 as single reads. Neither has been run. To screen them locally
+now without spending their trial data:
+
+- the **screen** uses 2010-01-01..2017-12-31 only (the ADR 0058 explore window), read by the frozen rules unchanged
+  (H-16: OOS Spearman >= HAR-only + 0.05 and top/bottom quintile range ratio >= 1.5; H-17: as `hypotheses.md` row 4);
+- the **trial** (O-1, O-2/O-3) then reads 2018-01-01..2025-09-30 only, once, by the same rules, with the event floors
+  scaled to the window (H-17: >= 500 strict events on 2018-2025-09, count events only before freezing);
+- H-17's screen runs only after H-16's screen has a recorded result (H-17 conditions on the HAR-only baseline, so it
+  does not wait for H-16's verdict, only for the HAR model's code to be frozen);
+- K: each screen +1 (counted, not a registry trial); each trial unchanged.
+
+## A4. Discovery grammar v2 (to become an ADR 0058 amendment; strategy-researcher drafts the ADR text)
+
+Measured 2026-10-30 (`~/tmp/autodisc-run-{15m,1h,4h}/`, 288 specs a timeframe, about 5.3k null specs, 0 survivors):
+1h best 0.841 vs null bar 1.337; 4h best 0.692 vs 1.019 (RC p 0.64, PBO 0.62). 15m: batch RC p 0.001, best 3.866 vs
+bar 3.757, but the top specs have **negative own mean R** (re-read from the 15m ledger: excess over the random-side
+twin +0.30 to +0.50 R, own mean R -0.03 to -0.08 R, cost-stressed -0.18 to -0.20 R). At 15m with priors-only costs the
+search beats a cost-crushed null, not zero. Decisions:
+
+1. **No further nightly runs on grammar v1.** Each night adds K with near-zero new information. One run per grammar
+   version.
+2. **Fitness floor:** a spec can advance only if its own net mean R > 0 at the **worse of** the measured probe cost and
+   the signal-time cost (quant item 72), as well as beating the search null. Excess over random alone never advances.
+3. **Cost table:** the search reads the measured cost table (`costs_measured.json`), not the priors. Until the
+   release has it, the report states "priors only" and nothing advances.
+4. **Grammar v2 primitives, frozen before its first run:** when-to-trade gates (session window, HAR range-forecast
+   tercile, NR4/NR7, event day), the 4h-return side filter (performance-analyst H-A), and exit primitives (time exit
+   only, fixed 1/2/3 R, BE at +1 R with an ATR trail). Exits are drawn from a closed list of 6, so K grows by a known
+   factor.
+5. The ADR 0058 stop stands: 48 confirms with no pass sends discovery back to the quarterly state-of-the-art refresh.
+   Added: **grammar v2 with 0 explore survivors on all three timeframes by 2026-11-20 freezes generation** until the
+   Q1 state-of-the-art refresh.
+
+## Sign-off
+
+| Amendment | Signs | Due | Status |
+|---|---|---|---|
+| A1, A2 | evaluator, quant-reviewer | 2026-11-04 | draft |
+| A3 | quant-reviewer | 2026-11-03, before any H-16/H-17 screen output | draft |
+| A4 | quant-reviewer; strategy-researcher writes the ADR 0058 amendment | 2026-11-04, before grammar v2's first run | draft |
+
+## Quant-reviewer conditions (2026-10-30, binding; all four amendments pass with them)
+
+- **A1.** At n = 300 the upper-bound clause is redundant (UB < +0.10 R needs a point estimate below about -0.05 R), so
+  "point estimate <= 0" is the operative test. Added: **any cross-arm or family summary includes retired arms at their
+  value when retired; a read over surviving arms only is void** (kill-only rules must not flatter a pooled "demo
+  learning works" read).
+- **A2.** **Unit = the unit of the existing pre-registered read (per arm for H-61).** Under that unit S1A and S1B
+  (about 8 fills an arm) fall under the 2026-11-13 100-fill bar: they are retired on 2026-11-13 unless an exemption
+  with its reason is recorded here before 2026-11-04 (research-plan.md's 2026-12-16 date for S1 is superseded).
+- **A3.** Features, the HAR fit (walk-forward inside the window) and the reading rules are **frozen by commit hash
+  before any screen output**; a screen result can only **cancel** the formal trial, and any change means a new
+  pre-registration and a new id; the H-16 sample floor for 2018-01-01..2025-09-30 is stated in the screen document
+  before the trial is read.
+- **A4.** The exit list in item 4 names five primitives (time exit only; fixed 1 R, 2 R, 3 R; BE at +1 R with an ATR
+  trail), not six: **every v2 primitive and its count is enumerated and K_v2 declared before the run**; v2 survivors
+  pay the DSR at cumulative K (v1 864 + K_v2); the HAR terciles are fitted walk-forward and the event gate is joined
+  as-of on `available_utc`; if v2 has not run on all three timeframes by 2026-11-20 generation freezes anyway; no
+  v2.x before 2026-11-20.
+
+## Evaluator rulings, 2026-10-30
+
+The full text, with the id list, is in the comments at the end of `config/arm_reads.yaml` (R1-R4).
+
+1. **A1, A2: signed with conditions** (the quant-reviewer's signature is still needed before either takes effect).
+   They are valid kill-only amendments even though they were written after the interim reads. Neither adds a route to
+   continue, graduate or be promoted. A2 reads fill rates only, so it never looks at outcomes. A1 acts only at each
+   unit's existing single read. Conditions:
+   - A1's estimator is frozen as the perf-report learning section at `fe045043`.
+   - A1 is never applied at an interim look, and passing it adds nothing to a "continue".
+   - A2's rates are taken per read unit and recorded with each retirement.
+   - At n 300, the "UB < +0.10 R" clause implies a point estimate below -0.05 R, so the "point <= 0" clause is the one
+     that binds. False-kill rate: about 29% for a true +0.05 R unit, about 13% for +0.10 R. We accept that.
+2. **Cost figure.** The Z section 4 cost stop reads the engine's signal-time cost (about 0.116 R). The rules that say
+   "measured cost" read the **worse** of $0.23/oz + $0.70 per stop exit and the arm's own signal-time fill cost
+   (time-structure prereg 2.2(b), which includes slippage and overshoot). The 0.053 R broker figure leaves both of
+   those out and is not the figure of record. Condition: the data-engineer confirms by 11-06 that `cost` comes from
+   the measured nightly table and not from the config fallback.
+3. **S1A/S1B are not VOID.** S1 is not on the closed neighbour list, and H-76 is the Asia-range fade, not a VWAP rule.
+   S1 reads at its own read (about 2026-12-16), with A1 applied there, and is subject to A2's 11-13 count.
+4. **Kill now**, on A2 alone (VOID, "closed on history" and "hypothesis retired" are not registered kill grounds):
+   - the 51 ids the plan names;
+   - plus XBB15 (if it is under 2 fills a session day), F2C, C30C and XC15 (objection: XC15 is not A2-exempt), S6,
+     I1, I3, W3 and the nine blocked VS twins.
+
+## A5. History-bounded entries (DRAFT, research director, 2026-10-30 cycle 2; amends H-61 and H-81 section 4)
+
+**Disclosure.** Written after the H-82 history screen (`hb-exits-screen-2026-11.md`) and after the cycle-1 interim
+demo reads. **Kill-only**: it adds a way to retire and none to continue, graduate or be promoted. The bias it can
+introduce is a false kill. Every retired id keeps its K, registry row and arm id.
+
+**Rule.** A strategy arm is retired on sign-off if a replay of its **live rule code** (`arm_rules.candidates` on the
+hashed `config/exploration_arms.yaml` row, spread gate, send delay, `max_open`) on 2010-2017 1m bars, with the exit
+walk matching the engine labeller, shows all of:
+1. >= 10,000 entries;
+2. mean gross R within +/-0.02 R at **every** exit variant tested (its own and the pre-registered alternatives);
+3. mean net R < 0 at the cost of record (the worse figure, evaluator R2) at every exit variant.
+
+**Why it is not a re-read.** The demo read at 300 can only find effects >= ~0.15 R (A1). History bounds these arms'
+gross at +/-0.011 R on 27,851-168,705 entries each, so the demo read has ~0 power to change the conclusion and the
+slots buy nothing. The rule reads the arm's entry stream, not its demo outcomes.
+
+**Applies now to** (H-82 replay, re-derived by the director from `~/tmp/hb_exits/pairs_*.parquet`): S5A, S5B
+(gross -0.009..+0.005), Z4D, Z4P (-0.001..+0.008), Z6D (-0.011..-0.009), Z7D, Z7P (+0.002..+0.010), and their broker
+twins sharing the rule (Z6V, Z7V) in the same read unit. Not to Z3, S1, Z1, Z2, Z5, Z9, Z10 (no replay; A2 governs).
+Until signed, the H-81 section 4 per-stratum signal-time cost stop applies (UB > 0.10 halves, > 0.20 suspends).
+
+| Amendment | Signs | Due | Status |
+|---|---|---|---|
+| A5 | evaluator, quant-reviewer | 2026-11-04 | draft |
+
+## Evaluator rulings, cycle 2 (2026-10-30)
+
+Full text and per-arm figures: `config/arm_reads.yaml` R5-R7.
+
+1. **A5: signed with conditions.** The quant-reviewer must also sign before it takes effect. It is kill-only, the
+   disclosure is adequate, and it reads entry streams on 2010-2017 rather than demo outcomes. Conditions:
+   - **(a)** The +/-0.02 R band applies to the 90% day-clustered CI, not to the point estimate.
+   - **(b)** The replay uses the arm's own hashed row. Record the script commit (`06f94403` or later) and the pairs'
+     sha256.
+   - **(c)** The unit is the existing read unit, and a pooled unit retires only when every arm in it qualifies.
+   - **(d)** Net R is computed at the worse cost of record (R2).
+
+   I re-derived the figures from the pairs. Every arm's gross CI lies within -0.0144..+0.0158 R at all five exits. The
+   smallest n is 13,936 (Z4D), and net R is -0.048 to -0.126 R. No single year rescues any arm: the best is +0.033 R.
+   - **Retires on joint sign-off:** S5A, S5B and H-81:Z4 (Z4D, Z4P).
+   - **Objection:** Z6V and Z7V run a $7 stop, but the replay used $4.5, so they do not "share the rule". The Z6 and
+     Z7 units (Z6D+Z6V, Z7D+Z7V+Z7P) retire only after Z6V and Z7V are replayed on their own rows and meet all three
+     criteria. Until then the H-81 section 4 cost stop applies.
+   - **Accepted false-kill risk:** the fixed-$ geometry in 2010-2017 sits at about a third of today's price. The
+     demo's MFE (0.19-0.27 R) matches history's (0.18-0.30 R). A volatility-scaled test would be a new
+     pre-registration.
+2. **15m out of grammar v2: acknowledged as part of the v2 definition**, since it was decided before any v2 output.
+   Conditions:
+   - K_v2 is declared over 1h/4h/1d only. v1's 15m specs stay in the cumulative K (864).
+   - v1's 15m batch (RC p 0.001, negative own mean R) is never mined, and 15m does not return before 2026-11-20
+     except under a new pre-registration.
+   - The 11-20 freeze reads "0 explore survivors on 1h, 4h and 1d".
+   - Each spec's trade floor is declared before the run. At 1d on 2010-2017 most specs cannot reach 200 trades, so a
+     1d spec that falls short is not a survivor.
+3. **H-80 R2 registry.** The three rows in the worktree-local `state/research_registry.jsonl` are merged unchanged
+   into the brain and `research-v1` registry with `python -m goldbot.research.registry_sync save <file>`. They are the
+   pre-registration, the evaluated row and the verdict (config_hash `f1b435b34030`). A copy is at
+   `~/tmp/h80r2_registry_rows_2026-10-30.jsonl`, sha256 prefix `f5c2f9f316cb955a`.
+   - Only the evaluated row is a trial. It is the 2026Q4 trial for H-80 R2, the first of the two slots in the 145 ->
+     147 raise. Its local "trial 1" is renumbered by the union.
+   - **Repo:** `config/settings.yaml` is already at 147, so no code change is needed. Two corrections are owed:
+     research-plan item 96 says "145 -> 146" and should say 147, and section 8 of the exits-adaptive pre-registration
+     should cite the synced trial number once the merge is done. After the merge, check that `quarter_trials` for
+     2026Q4 is at most 147.
