@@ -272,6 +272,14 @@ def _symbol_of(sym: Mapping[str, Any]) -> str:
     return f"{ex}:{tk}" if ex and tk else str(tk)
 
 
+MAX_TEXT_BYTES = 64 * 1024              # a stored title, description or update note is cut here (a hostile or broken feed)
+
+
+def _cap(text: str) -> str:
+    raw = text.encode()
+    return text if len(raw) <= MAX_TEXT_BYTES else raw[:MAX_TEXT_BYTES].decode(errors="ignore")
+
+
 def idea_from_detail(det: Mapping[str, Any]) -> tuple[Idea, list[IdeaUpdate]]:
     """The detail endpoint's idea and its updates."""
     sym = det.get("symbol") or {}
@@ -279,12 +287,12 @@ def idea_from_detail(det: Mapping[str, Any]) -> tuple[Idea, list[IdeaUpdate]]:
     published = _epoch(det.get("created_timestamp")) or _ts(det["created_at"])
     chart = str(det.get("chart_url") or "")
     image = det.get("image") or {}
-    desc = str(det.get("description") or "")
+    desc = _cap(str(det.get("description") or ""))
     idea = Idea(
         idea_id=int(det["id"]), uuid=str(det["uuid"]), author=str((det.get("user") or {}).get("username") or ""),
         symbol=_symbol_of(sym), exchange=str(sym.get("exchange") or ""),
         interval=interval, tf=tf_of(interval), direction=_direction(det.get("direction", sym.get("direction"))),
-        title=str(det.get("name") or ""), description=desc, is_education=bool(det.get("is_education")),
+        title=_cap(str(det.get("name") or "")), description=desc, is_education=bool(det.get("is_education")),
         is_video=bool(det.get("video")), published_utc=published,
         updated_utc=_epoch(det.get("last_updated_timestamp")),
         chart_url=chart if chart.startswith("http") else SITE + chart,
@@ -293,8 +301,8 @@ def idea_from_detail(det: Mapping[str, Any]) -> tuple[Idea, list[IdeaUpdate]]:
     ups = [IdeaUpdate(update_id=int(u["id"]), idea_id=idea.idea_id, type=str(u.get("type") or ""),
                       value=None if u.get("value") is None else str(u["value"]),
                       label=None if u.get("label") is None else str(u["label"]),
-                      description=str(u.get("description") or ""), created_utc=_ts(u["created_at"]),
-                      levels=parse_levels(str(u.get("description") or "")))
+                      description=_cap(str(u.get("description") or "")), created_utc=_ts(u["created_at"]),
+                      levels=parse_levels(_cap(str(u.get("description") or ""))))
            for u in det.get("updates") or []]
     return idea, ups
 
@@ -419,8 +427,13 @@ class IdeasDb:
     def known(self, idea_id: int) -> sqlite3.Row | None:
         conn = self._conn()
         try:
-            return conn.execute("SELECT title, direction, updated_utc FROM tv_ideas WHERE idea_id = ?",
-                                (idea_id,)).fetchone()
+            # the title and direction of the latest version held, not of the first release (an edit is then
+            # re-read once, not on every poll)
+            return conn.execute(
+                "SELECT COALESCE(v.title, i.title) AS title, COALESCE(v.direction, i.direction) AS direction, "
+                "i.updated_utc AS updated_utc FROM tv_ideas i LEFT JOIN tv_idea_versions v ON v.idea_id = i.idea_id "
+                "AND v.rowid = (SELECT MAX(rowid) FROM tv_idea_versions WHERE idea_id = i.idea_id) "
+                "WHERE i.idea_id = ?", (idea_id,)).fetchone()
         finally:
             conn.close()
 
@@ -610,7 +623,16 @@ def poll_once(cfg: TvIdeasSettings, db: IdeasDb, client: IdeasClient, *,
             problems.append(f"{author}: {exc}")
             continue
         seen = now()
-        items = [it for it in data["results"] if _author_of(it).lower() == author.lower()]
+        items = []
+        for it in data["results"]:
+            if _author_of(it).lower() != author.lower():
+                continue
+            try:
+                int(it["id"])
+            except (KeyError, TypeError, ValueError):
+                problems.append(f"{author}: malformed listing item (no usable id)")
+                continue
+            items.append(it)
         db.add_listing(items, seen)
         live_since = db.live_since(author) or started
         author_ok = True
@@ -837,13 +859,23 @@ def _frame(path: str | Path, sql: str, times: Iterable[str]) -> pd.DataFrame:
     return df
 
 
-def ideas_frame(path: str | Path) -> pd.DataFrame:
-    """Every idea as first released, one row each; join to bars on `available_utc` only (asof_join)."""
+# overwritten by later polls (the idea's current state, not its state at `available_utc`): kept in the DB and the
+# summary, never exported for a join
+_LATER_COLS = ("updated_utc", "edited", "last_seen_utc")
+
+
+def _ideas_all(path: str | Path) -> pd.DataFrame:
     df = _frame(path, "SELECT * FROM tv_ideas ORDER BY available_utc, idea_id", _TIME_COLS)
     for c in ("backfilled", "edited", "is_education", "is_video", "has_entry", "has_stop", "has_target",
               "description_complete"):
         df[c] = df[c].astype(bool)
     return df
+
+
+def ideas_frame(path: str | Path) -> pd.DataFrame:
+    """Every idea as first released, one row each; join to bars on `available_utc` only (asof_join). Columns a later
+    poll overwrites (`updated_utc`, `edited`, `last_seen_utc`) are not exported: they would carry the future."""
+    return _ideas_all(path).drop(columns=list(_LATER_COLS))
 
 
 def updates_frame(path: str | Path) -> pd.DataFrame:
@@ -855,7 +887,7 @@ def updates_frame(path: str | Path) -> pd.DataFrame:
 
 def summary(path: str | Path) -> dict[str, Any]:
     """Counts per author and symbol, the published range and the shares the research brief asks for."""
-    ideas = ideas_frame(path)
+    ideas = _ideas_all(path)
     ups = updates_frame(path)
     out: dict[str, Any] = {"authors": {}}
     for author, g in ideas.groupby("author", sort=True):

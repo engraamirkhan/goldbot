@@ -249,7 +249,7 @@ def test_backfill_stops_at_its_budget_and_reports_it(tmp_path: Path):
 
 
 # ------------------------------------------------------------------------------------------------ point in time
-def test_asof_join_never_sees_an_idea_or_update_before_it_was_available(tmp_path: Path):
+def test_asof_join_never_sees_an_idea_before_it_was_available(tmp_path: Path):
     """Seed a future release: an idea first held at t1 must not reach a bar at t1 - 1 min."""
     db = _db(tmp_path)
     api = FakeIdeasApi([])
@@ -354,3 +354,62 @@ def test_parse_levels_own_keyword_wins_and_dates_are_not_prices(text: str, entry
                                                                 target: list[float]):
     lv = ti.parse_levels(text)
     assert (lv.entry, lv.stop, lv.target) == (entry, stop, target)
+
+
+# ------------------------------------------------------------------------------------------------ review findings
+def test_exported_ideas_frame_has_no_column_that_changes_after_it_was_available(tmp_path: Path):
+    db = _db(tmp_path)
+    api = FakeIdeasApi([])
+    ti.poll_once(_cfg(), db, _client(api), now=lambda: T0)
+    t1 = T0 + pd.Timedelta(minutes=12)
+    api.ideas.append(make_idea(1, created=t1.timestamp() - 60, direction=1, description="Long from 2360"))
+    ti.poll_once(_cfg(), db, _client(api), now=lambda: t1)
+    before = ti.ideas_frame(db.path)
+    t2 = t1 + pd.Timedelta(minutes=12)
+    api.ideas[0] = make_idea(1, created=t1.timestamp() - 60, direction=1, description="Long from 2365",
+                             updates=[{"id": 5, "ts": t2.timestamp() - 30}])
+    ti.poll_once(_cfg(), db, _client(api), now=lambda: t2)
+    after = ti.ideas_frame(db.path)
+    assert list(before.columns) == list(after.columns)
+    pd.testing.assert_frame_equal(before, after)
+    assert not {"updated_utc", "edited", "last_seen_utc"} & set(after.columns)
+    assert ti.summary(db.path)["authors"]["SynthAuthor"]["share_edited"] == 1.0      # still in the DB and the summary
+
+
+def test_an_edited_title_is_fetched_once_not_on_every_poll(tmp_path: Path):
+    db = _db(tmp_path)
+    created = T0.timestamp() - 3600
+    api = FakeIdeasApi([make_idea(1, created=created, title="First title")])
+    ti.poll_once(_cfg(), db, _client(api), now=lambda: T0)
+    api.ideas[0] = make_idea(1, created=created, title="Edited title")
+    details = lambda: sum("/ideas/u" in u for u, _ in api.calls)           # noqa: E731
+    base = details()
+    t1 = T0 + pd.Timedelta(minutes=12)
+    assert ti.poll_once(_cfg(), db, _client(api), now=lambda: t1).new_versions == 1
+    assert details() == base + 1
+    ti.poll_once(_cfg(), db, _client(api), now=lambda: t1 + pd.Timedelta(minutes=12))
+    assert details() == base + 1
+
+
+def test_a_malformed_listing_item_is_skipped_and_counted_as_a_problem(tmp_path: Path):
+    db = _db(tmp_path)
+    api = FakeIdeasApi([make_idea(1, created=T0.timestamp() - 60), make_idea(2, created=T0.timestamp() - 30)])
+    real = api._listing
+
+    def broken(q: dict[str, str]) -> dict[str, Any]:
+        data = real(q)
+        data["results"].insert(0, {"id": "not-a-number", "user": {"username": "SynthAuthor"}})
+        data["results"].insert(0, {"user": {"username": "SynthAuthor"}})
+        return data
+
+    api._listing = broken                                                    # type: ignore[method-assign]
+    rep = ti.poll_once(_cfg(), db, _client(api), now=lambda: T0)
+    assert rep.new_ideas == 2 and not rep.ok and "malformed" in rep.reason
+
+
+def test_stored_title_and_description_are_cut_at_64_kib():
+    det = make_idea(1, title="T" * 100_000, description="D" * 100_000,
+                    updates=[{"id": 9, "ts": 1_700_000_100.0, "description": "U" * 100_000}])
+    idea, ups = ti.idea_from_detail({k: v for k, v in det.items() if not k.startswith("_")})
+    assert len(idea.title.encode()) == 65536 and len(idea.description.encode()) == 65536
+    assert len(ups[0].description.encode()) == 65536
