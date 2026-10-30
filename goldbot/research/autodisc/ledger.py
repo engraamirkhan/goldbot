@@ -17,6 +17,7 @@ Signatures (the design leaves them open):
     .result(spec_hash, *, null=False) -> dict | None
     .k_search() -> int ; .k_null() -> int
     .entries() -> list[LedgerEntry]                      in chain order
+    .ledger_id() -> str                                  digest of entry 1: the ledger's identity (registry k_contrib)
     .head() -> tuple[int, str]                           (seq, digest) of the tip; (0, genesis) when empty. Keep it
                                                          elsewhere to detect tail truncation
     .verify() -> int                                     recomputes the whole chain; raises LedgerTamperError, returns
@@ -258,6 +259,12 @@ class SearchLedger:
 
     def entries(self) -> list[LedgerEntry]:
         return [_row_entry(r) for r in self._query(f"SELECT {_COLS} FROM entries ORDER BY seq")]
+
+    def ledger_id(self) -> str:
+        """The ledger's identity: the digest of its first entry (GENESIS while empty). A copy keeps it; another
+        ledger cannot share it."""
+        rows = self._query("SELECT digest FROM entries WHERE seq = 1")
+        return str(rows[0][0]) if rows else GENESIS
 
     def head(self) -> tuple[int, str]:
         rows = self._query("SELECT seq, digest FROM entries ORDER BY seq DESC LIMIT 1")

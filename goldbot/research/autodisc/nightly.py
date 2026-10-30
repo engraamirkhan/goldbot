@@ -19,7 +19,8 @@ the evaluator's own explore checks is never judged; the report lists it with eac
 ledgered result carries its search fitness and components (first real nightly runs, 2026-10-30).
 
 Selection reads only the explore window: the bars come through `windows.ExploreFrame` (2018+ raises) and only the
-2010-2017 bar files are opened. "An explore survivor is a recorded fact, never evidence of edge." This module creates
+2010-2017 bar files are opened. A real search then tops the trial registry's discovery K up to the ledger's K_search
+(`k_link.sync_discovery_k`: one `discovery_batch` sidecar row, never a trial or a budget slot; ADR 0058 F3). "An explore survivor is a recorded fact, never evidence of edge." This module creates
 no arm, writes no config and imports nothing that trades (phase 4 builds the interpreter)."""
 from __future__ import annotations
 
@@ -47,6 +48,7 @@ from goldbot.research.autodisc.gen_gp import (
     neighbours,
     run_gp,
 )
+from goldbot.research.autodisc.k_link import sync_discovery_k
 from goldbot.research.autodisc.ledger import SearchLedger
 from goldbot.research.autodisc.nulls import exit_index
 from goldbot.research.autodisc.outcomes import OutcomeTensor
@@ -65,6 +67,7 @@ from goldbot.research.autodisc.stats import (
     reality_check,
 )
 from goldbot.research.metrics import MIN_TRADES_FOR_DSR
+from goldbot.research.registry import TrialRegistry
 
 REPORT_DIR = "autodisc"
 LEDGER_FILE = {"real": "discovery_real.db", "synthetic": "discovery_synthetic.db"}
@@ -366,6 +369,10 @@ def run_nightly_job(settings: Settings, state_dir: Path, slot: pd.Timestamp, *,
                    seed=night_seed(a.seed, slot), min_events=min_events, families=b.families)
     res = search_and_judge(b.tensor, b.provider, ledger, cfg, reps=a.null_reps, max_candidates=a.max_candidates,
                            cost_line=b.cost_line, night=f"{pd.Timestamp(slot):%Y-%m-%d}")
+    batch = None
+    if b.mode == "real":                      # ADR 0058 decision 2 (F3): the registry's K includes the batch's k_contrib
+        batch = sync_discovery_k(TrialRegistry(settings.research.registry), ledger, generator=res.generator,
+                                 timeframe=res.timeframe)
     rel = f"{REPORT_DIR}/survivors-{pd.Timestamp(slot):%Y-%m-%d}.md"
     out = Path(state_dir) / rel
     _write_atomic(out, render(res))
@@ -374,5 +381,6 @@ def run_nightly_job(settings: Settings, state_dir: Path, slot: pd.Timestamp, *,
     return {"report": rel, "k_search": res.k_search, "k_null": res.k_null, "evaluated": res.evaluated,
             "candidates": res.candidates, "survivors": len(res.survivors), "batch_ok": res.batch_ok,
             "survivors_cumulative": res.survivors_cumulative, "explore_failed": len(res.explore_failed),
+            **({} if b.mode != "real" else {"k_contrib": 0 if batch is None else int(batch["k_contrib"])}),
             "health": f"autodisc {res.timeframe}: {res.evaluated:,} specs, K_search {res.k_search:,}, SPA p {spa}, "
                       f"PBO {pbo}, survivors {len(res.survivors)} (explore only, not evidence)"}
