@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from pathlib import Path
 from typing import Any, Literal
 
@@ -26,6 +25,8 @@ from goldbot.engine.shadow import ShadowBook, ShadowTrade
 from goldbot.ops import gates_phase
 from goldbot.ops.gates_phase import ClosedTrade
 from tests.test_api_views import _login
+
+pytestmark = pytest.mark.clock_at("2026-10-30T12:00:00Z")
 
 NOW = pd.Timestamp("2026-10-27 12:00", tz="UTC")       # a Tuesday
 SCALP, DAY, LIVE = "icm-probe", "icm-demo", "icm-live"
@@ -440,7 +441,10 @@ def test_the_routes_need_a_sign_in_page_and_answer_one_trade(tmp_path):
     assert "51234567" not in c.get("/api/trades?period=all", headers=h).text
 
 
-def test_a_filtered_page_over_50k_rows_answers_within_300_ms_at_p95():
+def test_a_filtered_page_over_50k_rows_does_per_row_work_only_on_the_date_slice(monkeypatch):
+    """Was "within 300 ms at p95" (CI #207: a stalled runner failed it on an unrelated PR). What the speed fix owes
+    (PR #206) is a plan, so the plan is asserted and no clock is read: a plain query (dates, accounts) tests no row
+    one by one; a filtered one tests only the rows of the bisected date slice, never the 50k; a repeat tests none."""
     base: dict[str, Any] = dict(kind="exploration", status="closed", account_label="Scalp lab", mode="demo", family="session_vwap_fade",
                 family_label="VWAP fade", variant="5m", timeframe="5m", is_control=False, side="long", lots=0.01,
                 entry=2400.0, stop=2397.0, stop_now=None, target=2406.0, exit=2406.0, exit_reason="target",
@@ -453,14 +457,36 @@ def test_a_filtered_page_over_50k_rows_answers_within_300_ms_at_p95():
                                      exit_utc=NOW - pd.Timedelta(minutes=i % 4000))
             for i in range(50_000)]
     rows.sort(key=lambda r: (r.exit_utc, r.trade_id), reverse=True)
-    led = tl.Ledger(as_of=NOW, rows=rows, unreadable=[])
-    times = []
-    for q in [_q(period="30d"), _q(period="30d", account=("icm-probe",)), _q(period="all", family=("ema_pullback",)),
-              _q(period="7d", status="closed")] * 5:
-        t0 = time.perf_counter()
-        tl.query(led, q)
-        times.append(time.perf_counter() - t0)
-    assert sorted(times)[int(0.95 * len(times)) - 1] < 0.3
+    led = tl.Ledger(as_of=NOW, rows=rows, unreadable=[])                  # the index is built here, not on a request
+    tested = [0]
+    real_matcher = tl._matcher
+
+    def counting_matcher(*a: Any, **k: Any) -> Any:
+        match = real_matcher(*a, **k)
+
+        def counted(r: Any) -> bool:
+            tested[0] += 1
+            return bool(match(r))
+        return counted
+
+    monkeypatch.setattr(tl, "_matcher", counting_matcher)
+    for q in [_q(period="30d"), _q(period="30d", account=("icm-probe",)), _q(period="all")]:
+        led.index().answers.clear()
+        assert len(tl.query(led, q).rows) == 50, q
+        assert tested[0] == 0, (q, "a plain query must slice, not test rows one by one")
+
+    q = _q(period="today", status="closed")
+    lo, _ = tl.bounds(q, NOW)
+    assert lo is not None
+    in_slice = sum(1 for r in rows if r.exit_utc is not None and r.exit_utc >= lo)
+    assert 0 < in_slice < len(rows) // 2                                      # the data really has rows outside the day
+    led.index().answers.clear()
+    page = tl.query(led, q)
+    assert page.totals.n_closed == in_slice and tested[0] == in_slice          # only the slice was tested, not 50,000
+
+    tested[0] = 0
+    tl.query(led, q)
+    assert tested[0] == 0                                                      # a repeat is answered from memory
 
 
 def test_the_indexed_query_gives_the_same_rows_and_totals_as_a_full_scan(tmp_path):

@@ -14,9 +14,7 @@ import json
 import logging
 import re
 import smtplib
-import statistics
 import tempfile
-import time
 
 import pytest
 from fastapi.routing import APIRoute
@@ -369,23 +367,33 @@ def test_email_code_suspended_after_a_lockout(api, lockout_clock):
     assert api.fake.codes() == [] and "email_code_suspended" in api.events()
 
 
-def test_email_code_decoy_timing(tmp_path, lockout_clock):
-    """Condition 6: scrypt runs on every request, so a wrong password or an unknown address takes as long as a real
-    send. Medians of interleaved runs; 0.5-2.0x absorbs a busy CI worker, while a skipped scrypt shows 10x or more."""
+def test_email_code_decoy_does_the_same_scrypt_work_for_every_input(tmp_path, lockout_clock, monkeypatch):
+    """Condition 6: scrypt runs on every request, so a wrong password or an unknown address costs the same as a real
+    send. Was a ratio of medians of wall-clock timings (0.5-2.0x; CI #166 failed it on a busy runner); what makes the
+    time equal is the work, so the work is counted: one scrypt call with the same cost parameters on every path, and a
+    skipped scrypt (the 10x timing leak) is zero calls."""
+    import hashlib
     s = _store(tmp_path)
     s.request_email_code(OWNER, PW, ip="10.9.9.9", enabled=True)          # warm-up: the key is created lazily
-    times: dict[str, list[float]] = {"real": [], "wrong_password": [], "unknown": []}
+    auth_mod._dummy_hash()                                                # the decoy hash is made on first use (lru_cache): once, not per request
+    calls: list[tuple[int, int, int]] = []
+    real = hashlib.scrypt
+
+    def counting(password: bytes, *, salt: bytes, n: int, r: int, p: int, **kw: int) -> bytes:
+        calls.append((n, r, p))
+        return real(password, salt=salt, n=n, r=r, p=p, **kw)
+
+    monkeypatch.setattr(hashlib, "scrypt", counting)
     inputs = {"real": (OWNER, PW), "wrong_password": (OWNER, "not the password!"), "unknown": ("n@x.io", PW)}
-    for i in range(9):
-        for kind, (email, pw) in inputs.items():
-            lockout_clock[0] += 3601 * S                              # a fresh hour and lockout window each time
-            t0 = time.perf_counter()
-            issue = s.request_email_code(email, pw, ip=f"10.0.{i}.{len(kind)}", enabled=True)
-            times[kind].append(time.perf_counter() - t0)
-            assert (issue.code is not None) == (kind == "real")
-    real = statistics.median(times["real"])
-    for kind in ("wrong_password", "unknown"):
-        assert 0.5 < statistics.median(times[kind]) / real < 2.0, (kind, times)
+    seen: dict[str, list[tuple[int, int, int]]] = {}
+    for i, (kind, (email, pw)) in enumerate(inputs.items()):
+        lockout_clock[0] += 3601 * S                                      # a fresh hour and lockout window each time
+        calls.clear()
+        issue = s.request_email_code(email, pw, ip=f"10.0.{i}.{len(kind)}", enabled=True)
+        assert (issue.code is not None) == (kind == "real")
+        seen[kind] = list(calls)
+    assert all(len(c) == 1 for c in seen.values()), seen
+    assert len({c[0] for c in seen.values()}) == 1, seen                  # the same n, r, p on every path
 
 
 # ----------------------------------------------------------------------------- boundaries and lifecycle

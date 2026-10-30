@@ -8,6 +8,7 @@ The script is sourced (its `main` runs only when executed), so the root-run copy
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -247,12 +248,32 @@ UNITS = {"goldbot-supervisor.service": True, "goldbot-engine@icm-demo.service": 
          "goldbot-engine@vantage-demo.service": False}          # a loaded but disabled stray instance
 
 
+def _git_env(home: Path) -> dict[str, str]:
+    """A git that reads nothing of the machine it runs on: no global or system config (a runner's or a developer's
+    `safe.directory`, hooks path, templates, credential helper), no inherited GIT_DIR / GIT_INDEX_FILE (set when pytest
+    runs from a git hook), HOME and the tool PATH pinned."""
+    return {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@example.invalid", "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+            "HOME": str(home), "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0"}
+
+
 def _git(cwd: Path, *args: str) -> str:
-    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t",
-           "GIT_COMMITTER_EMAIL": "t@example.invalid", "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
-           "HOME": str(cwd)}
-    return subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True,
-                          env=env).stdout.strip()
+    return _run_git(["git", "-C", str(cwd), *args], _git_env(cwd))
+
+
+def _run_git(argv: list[str], env: dict[str, str]) -> str:
+    """Run git; a failure names the command and git's own words (CI #167, #182, #217 failed a bare `git clone` with
+    only "exit status 128": the stderr was captured and thrown away, so the cause was never seen)."""
+    r = subprocess.run(argv, capture_output=True, text=True, env=env)
+    if r.returncode:
+        raise AssertionError(f"{' '.join(argv)} exited {r.returncode}: {r.stderr.strip() or r.stdout.strip()}")
+    return r.stdout.strip()
+
+
+def _clone(origin: Path, root: Path) -> None:
+    """The brain box's checkout: a copy of `origin` sharing nothing with it (no hard links into the origin's objects,
+    which a protected-hardlinks or cross-device tmp refuses) and run under the same hermetic git as `_git`."""
+    _run_git(["git", "clone", "-q", "--no-hardlinks", str(origin), str(root)], _git_env(root.parent))
 
 
 def _commit(repo: Path, files: dict[str, str], msg: str) -> str:
@@ -300,7 +321,7 @@ class Box:
         self.c2 = _commit(origin, {"goldbot/config.py": CONFIG_NEW,
                                    "goldbot/db/migrations.py": "MIGRATIONS = (1, 2, 3, 4, 5)\ncompat_back_to = 4\n"},
                           "new: state store step 3")
-        subprocess.run(["git", "clone", "-q", str(origin), str(tmp / "root")], check=True, capture_output=True)
+        _clone(origin, tmp / "root")
         self.root = tmp / "root"
         _git(self.root, "checkout", "-q", "--detach", self.c1 if running == "c1" else self.c2)
         (self.root / "state").mkdir()
@@ -1118,3 +1139,21 @@ def test_the_watchers_rollback_brings_back_what_ran_before_and_not_a_new_engine(
     st = json.loads((box.t / "units.json").read_text())
     assert all(st["units"][u]["active"] for u in (*INPUTS, "goldbot-supervisor.service",
                                                   "goldbot-engine@icm-demo.service"))
+
+
+def test_a_failed_git_command_says_why(tmp_path):
+    with pytest.raises(AssertionError, match=r"exited 128: .*(does not exist|No such file)"):
+        _run_git(["git", "clone", "-q", str(tmp_path / "nope"), str(tmp_path / "root")], _git_env(tmp_path))
+
+
+def test_the_box_checkout_reads_nothing_of_the_machines_git(tmp_path, monkeypatch):
+    """A runner or a hook can export GIT_DIR / GIT_INDEX_FILE or point GIT_CONFIG_GLOBAL at a file that makes any git
+    call fail (the bare `git clone` of CI #167, #182, #217 inherited all of it); the box builds on its own."""
+    (tmp_path / "bad.gitconfig").write_text("[core\n")                       # unparsable: a bare git exits 128
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "bad.gitconfig"))
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "nowhere"))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path / "nowhere.idx"))
+    box = Box(tmp_path / "box", running="c1")
+    assert _git(box.root, "rev-parse", "HEAD") == box.c1
+    bare = subprocess.run(["git", "clone", "-q", str(box.origin), str(tmp_path / "bare")], capture_output=True)
+    assert bare.returncode != 0                                              # the old call, on the same poisoned env

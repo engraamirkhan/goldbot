@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "prune_worktrees.sh"
 TWO_DAYS = 2 * 24 * 3600
 
-pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+pytestmark = [pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash"), pytest.mark.real_clock(reason="the pruner reads git commit times and file mtimes, which the OS stamps")]
 
 CASES = ("merged", "dirty", "unmerged", "locked", "fresh", "detached", "secret", "empty", "leftovers", "modified",
          "touched")
