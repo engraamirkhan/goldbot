@@ -4,6 +4,9 @@
     python scripts/autodisc.py bench --synthetic --specs 10000        # throughput of log + evaluate
     python scripts/autodisc.py report --run-json state/autodisc_run.json
     python scripts/autodisc.py nightly [--state-dir state] [--timeframe 15m|1h|4h]   # ADR 0058 phase 2 job, here
+    python scripts/autodisc.py confirm-prereg <spec_hash>        # ADR 0058 phase 3: pre-register a survivor's confirm read
+    python scripts/autodisc.py confirm-run --batch YYYY-MM       # read the month's frozen batch once (2018-01 .. 2025-09)
+    python scripts/autodisc.py holdout <spec_hash>               # a confirm passer's one holdout read
 
 `--synthetic` runs the pipeline on seeded noise (`nulls.SyntheticProvider`). Without it `run` reads the local 1m bars
 (GOLDBOT_RAW_BARS or the repo's gitignored raw/, 2010-2017 only, never committed), builds the real outcome tensor and
@@ -201,6 +204,64 @@ def cmd_nightly(args: argparse.Namespace) -> int:
     return 0
 
 
+def _stage_args(args: argparse.Namespace) -> tuple[Any, Any, Any]:
+    from goldbot.research.registry import TrialRegistry
+    s = load_settings()
+    return s, SearchLedger(args.db, mode="real"), TrialRegistry(args.registry or s.research.registry)
+
+
+def _stage_reader(args: argparse.Namespace, settings: Any, stage: Any) -> Any:
+    """Per timeframe, built once: the stage window's tensor and provider (`confirm.stage_backends`) and its reader."""
+    from goldbot.research.autodisc import confirm as C
+    built: dict[str, Any] = {}
+
+    def read(spec: StrategySpec) -> Any:
+        if spec.timeframe not in built:
+            t, prov, cost = C.stage_backends(settings, stage, spec.timeframe, raw=raw_dir(args.raw),
+                                             cost_table=args.cost_table)
+            built[spec.timeframe] = C.read_on(t, prov, cost)
+        return built[spec.timeframe](spec)
+    return read
+
+
+def _stage_cmd(fn: Any) -> int:
+    from goldbot.research.autodisc.stages import StageRefused
+    from goldbot.research.registry import TrialBudgetExceeded
+    try:
+        out = fn()
+    except (StageRefused, TrialBudgetExceeded) as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(out, indent=1, default=str))
+    return 0
+
+
+def cmd_confirm_prereg(args: argparse.Namespace) -> int:
+    from goldbot.research.autodisc import confirm as C
+    _, ledger, reg = _stage_args(args)
+    return _stage_cmd(lambda: C.preregister_confirm(reg, ledger, args.spec_hash))
+
+
+def cmd_confirm_run(args: argparse.Namespace) -> int:
+    from goldbot.research.autodisc import confirm as C
+    from goldbot.research.registry import quarter_of
+    s, ledger, reg = _stage_args(args)
+    q = quarter_of()
+    return _stage_cmd(lambda: [v.model_dump() for v in C.run_confirm_batch(
+        reg, ledger, args.batch, _stage_reader(args, s, "confirm"), cap=s.research.budget_for(q),
+        reserved=s.research.reserved_for(q))])
+
+
+def cmd_holdout(args: argparse.Namespace) -> int:
+    from goldbot.research.autodisc import confirm as C
+    from goldbot.research.registry import quarter_of
+    s, ledger, reg = _stage_args(args)
+    q = quarter_of()
+    return _stage_cmd(lambda: C.holdout_read(reg, ledger, args.spec_hash, _stage_reader(args, s, "holdout"),
+                                             cap=s.research.budget_for(q), reserved=s.research.reserved_for(q)
+                                             ).model_dump())
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -209,6 +270,18 @@ def main(argv: list[str] | None = None) -> int:
     night.add_argument("--state-dir", default="state")
     night.add_argument("--timeframe", default=None, choices=["15m", "1h", "4h"],
                        help="decision timeframe of this run (default: research.autodisc.timeframe)")
+    for name, fn in (("confirm-prereg", cmd_confirm_prereg), ("confirm-run", cmd_confirm_run), ("holdout", cmd_holdout)):
+        p = sub.add_parser(name)
+        p.set_defaults(fn=fn)
+        p.add_argument("--db", default=DEFAULT_DB["real"], help="the real search ledger")
+        p.add_argument("--registry", default=None, help="trial registry (default research.registry)")
+        if name == "confirm-run":
+            p.add_argument("--batch", required=True, help="YYYY-MM: the month's pre-registered batch")
+        else:
+            p.add_argument("spec_hash")
+        if name != "confirm-prereg":
+            p.add_argument("--raw", default=None, help="dir of xauusd_1m_*.parquet (default GOLDBOT_RAW_BARS or raw/)")
+            p.add_argument("--cost-table", default=None, help="measured cost table JSON; default research.autodisc")
     for name, fn in (("run", cmd_run), ("bench", cmd_bench), ("report", cmd_report)):
         p = sub.add_parser(name)
         p.set_defaults(fn=fn)

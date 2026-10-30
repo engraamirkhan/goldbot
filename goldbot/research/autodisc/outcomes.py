@@ -25,7 +25,7 @@ import pandas as pd
 
 from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec, triple_barrier, triple_barrier_1m
 from goldbot.research.autodisc.spec import ExitTemplate
-from goldbot.research.autodisc.windows import ExploreFrame
+from goldbot.research.autodisc.windows import ExploreFrame, StageFrame
 
 LONG, SHORT = 1, -1
 SIDES: tuple[int, int] = (LONG, SHORT)                 # side index 0 / 1
@@ -173,15 +173,16 @@ def _one_at_a_time(t_entry: np.ndarray, t_exit: np.ndarray) -> np.ndarray:
     return keep
 
 
-def build_tensor(bars_in: ExploreFrame, atr: pd.Series, exits: Sequence[BarrierExit], *, extra_cost_usd: float = 0.0,
-                 swap: SwapSpec | None = None, bars_1m_in: ExploreFrame | None = None,
+def build_tensor(bars_in: ExploreFrame | StageFrame, atr: pd.Series, exits: Sequence[BarrierExit], *,
+                 extra_cost_usd: float = 0.0, swap: SwapSpec | None = None, bars_1m_in: ExploreFrame | None = None,
                  mode: Literal["bar", "1m"] = "bar") -> OutcomeTensor:
     """The outcome tensor of `bars_in` (decision bars as an ExploreFrame: store schema with ts_utc and bid_/ask_ OHLC) for `exits`.
     `atr`: the barrier ATR per bar (the same series the family's labels use). `extra_cost_usd` and `swap` come from
     `execution.costs.research_costs(settings, table)` (the conservative table: the max of the refit cell and the table
     is the caller's choice, ADR 0045). `mode="1m"` reads the barriers on `bars_1m` (`triple_barrier_1m`, a rule
     pre-registered on 1m barriers); "bar" is the decision-bar labeller every family without `barriers_on_1m` uses."""
-    ExploreFrame(bars_in.frame)                     # re-checked here: a frame mutated after its guard is refused
+    # re-checked here: a frame mutated after its guard is refused (a StageFrame: confirm.py, ADR 0058 phase 3)
+    StageFrame(bars_in.frame, bars_in.stage) if isinstance(bars_in, StageFrame) else ExploreFrame(bars_in.frame)
     bars = bars_in.frame.reset_index(drop=True)
     bars_1m = None if bars_1m_in is None else bars_1m_in.frame
     if mode == "1m" and bars_1m is None:

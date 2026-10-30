@@ -11,21 +11,11 @@ no row). A synthetic ledger never reaches the registry (ValueError). The batch r
 slot (`TrialRegistry.record_discovery_batch`)."""
 from __future__ import annotations
 
-import sqlite3
 from contextlib import AbstractContextManager, nullcontext
 from typing import Any
 
 from goldbot.research.autodisc.ledger import SearchLedger
 from goldbot.research.registry import TrialRegistry
-
-
-def _mode(ledger: SearchLedger) -> str | None:
-    con = sqlite3.connect(ledger.path)
-    try:
-        row = con.execute("SELECT value FROM meta WHERE key = 'mode'").fetchone()
-    finally:
-        con.close()
-    return None if row is None else str(row[0])
 
 
 def counted(registry: TrialRegistry, ledger_id: str) -> int:
@@ -36,7 +26,7 @@ def counted(registry: TrialRegistry, ledger_id: str) -> int:
 def sync_discovery_k(registry: TrialRegistry, ledger: SearchLedger, *, generator: str, timeframe: str = "",
                      lock: bool = True) -> dict[str, Any] | None:
     """Record the ledger's uncounted K_search as one discovery batch (module docstring); None when nothing is new."""
-    if _mode(ledger) != "real":
+    if ledger.mode() != "real":
         raise ValueError(f"{ledger.path} is not a real search ledger (synthetic or unmarked): its specs never reach "
                          "the trial registry's K")
     guard: AbstractContextManager[Any] = registry.locked() if lock else nullcontext()

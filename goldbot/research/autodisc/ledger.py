@@ -151,12 +151,18 @@ class SearchLedger:
         return _row_entry(r) if r else None
 
     def log_spec(self, spec: StrategySpec, generator: str, generator_version: str,
-                 parents: Sequence[str] = (), *, null: bool = False) -> LedgerEntry:
+                 parents: Sequence[str] = (), *, null: bool = False,
+                 flags: Mapping[str, bool] | None = None) -> LedgerEntry:
+        """`flags`: metadata of the spec's source that is not part of the rule (design 2: `prior_informed`,
+        `holdout_contaminated`); written into the row only when given, so earlier rows are unchanged."""
         if not generator:
             raise LedgerError("generator is required")
         h = spec_hash(spec)
-        payload = _dumps({"generator": generator, "generator_version": generator_version,
-                          "parents": list(parents), "spec": json.loads(canonical_json(spec))})
+        body: dict[str, Any] = {"generator": generator, "generator_version": generator_version,
+                                "parents": list(parents), "spec": json.loads(canonical_json(spec))}
+        if flags:
+            body["flags"] = {k: bool(v) for k, v in sorted(flags.items())}
+        payload = _dumps(body)
         con = self._connect()
         try:
             con.execute("BEGIN IMMEDIATE")
@@ -241,6 +247,23 @@ class SearchLedger:
         rows = self._query("SELECT payload FROM entries WHERE kind='spec' AND spec_hash=? ORDER BY seq LIMIT 1",
                            (spec_hash,))
         return StrategySpec.model_validate(json.loads(rows[0][0])["spec"]) if rows else None
+
+    def spec_flags(self, spec_hash: str) -> dict[str, bool]:
+        """The flags the spec was logged with (`log_spec(flags=)`); {} when none."""
+        rows = self._query("SELECT payload FROM entries WHERE kind='spec' AND spec_hash=? ORDER BY seq LIMIT 1",
+                           (spec_hash,))
+        return dict(json.loads(rows[0][0]).get("flags") or {}) if rows else {}
+
+    def survivor_record(self, spec_hash: str) -> dict[str, Any] | None:
+        """The spec's latest explore-survivor row (night, k_search, dsr), judged at the largest K; None if never one."""
+        rows = self._query("SELECT night, k_search, dsr FROM survivors WHERE spec_hash=? ORDER BY k_search DESC, "
+                           "night DESC LIMIT 1", (spec_hash,))
+        return {"night": rows[0][0], "k_search": int(rows[0][1]), "dsr": rows[0][2]} if rows else None
+
+    def mode(self) -> str | None:
+        """The ledger's stamped mode ("real" / "synthetic"), None when unmarked."""
+        rows = self._query("SELECT value FROM meta WHERE key = 'mode'")
+        return str(rows[0][0]) if rows else None
 
     def result(self, spec_hash: str, *, null: bool = False) -> dict[str, Any] | None:
         rows = self._query("SELECT payload FROM entries WHERE kind='result' AND spec_hash=? AND is_null=?",
