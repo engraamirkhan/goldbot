@@ -142,7 +142,7 @@ Wave 3 (shares `runner.py` with W2-1): A2, D10, M9, M3 15m leg, and **W3-1**: st
 | FRED_API_KEY repository secret | Sun 10-18 | asked 10-11; chased 10-16 | program-director |
 | Batched decisions (section 6) | Sun 10-18 – Fri 10-30 | asked 10-16 on #34 | program-director |
 
-## 5. Risk register (top 14)
+## 5. Risk register (top 16)
 
 | # | Risk | L | I | Owner agent | Mitigation |
 | --- | --- | --- | --- | --- | --- |
@@ -160,12 +160,82 @@ Wave 3 (shares `runner.py` with W2-1): A2, D10, M9, M3 15m leg, and **W3-1**: st
 | 12 | **DST gap and market-closed clocks:** false FAILs or a wrong broker offset between 10-25 and 11-01 | Med | Med | sre | BACKLOG 59 before engine start; W1-9 daily clock check 26–30 Oct and on 11-02 |
 | 13 | **Broker leverage 1:5000 behind a fixed bridge ceiling:** the bridge's only independent size check is 3.0 lots (`execution/bridge.py:104`, `:266`), ≈ 945× equity at the demo's 1:5000, so a sizing bug past the RiskGate could wipe the account on a ≈ $4 move (added 2026-10-16) | Med | High | architect | TD-16: equity-scaled ceiling in `GuardedBroker`, fail-closed, exits ungated; plan Fri 10-23, ADR 0027, trading-safety review; built Fri 11-06. Review Fri 10-23 |
 | 14 | **Self-hosted CI runner exposes trading secrets:** on a public repo a fork PR could run code on the runner's host (CFO flag, added 2026-10-16) | Low | High | security-reviewer | No runner on a host holding trading secrets without a security-reviewer GO (W2-8; tech-debt "Standing constraint"). Review at W2-8's plan |
+| 15 | **Delivery pipeline red for reasons other than defects:** interpreter drift, date-bound and timing tests, a stale integration-branch default (added 2026-10-30) | High | Med | cto | FR-1 to FR-6 in section 5a as one PR by Tue 11-03. Measured status 10-30: 7 of 7 red `main` runs since 10-18 non-deterministic; 12 of 33 failures were guards first run after the push. Review Fri 11-06 |
+| 16 | **Deploy stall:** a fix on the money path (exit, engine down) waits for an owner approval of an exact command (added 2026-10-30) | Med | High | sre | `docs/process/deploy-approval-runbook.md`; owner decides the standing rule (FR-9). Review Fri 11-06 |
 
 **Technical debt and platform register:** `docs/process/tech-debt.md` (cto) holds the ranked technical-debt items
 TD-1 – TD-16, each with risk, cost, one accountable role and a date, the ADR numbers reserved for them (0023-0027),
 and the CTO's standing technical rulings. It is re-dated every Friday with the debt review; the technical rows above
 (4, 7, 13, 14) are kept consistent with it. Risk 4's pin is decided: ADR 0019 accepted 2026-10-16 (TD-1, sre, by Sat
 10-24).
+
+## 5a. Platform roadmap and delivery-friction register (cto, 2026-10-30)
+
+2026-10-30 · cto (first cycle after the owner's replacement of the role) · base `660d2db2`. Re-measured and re-dated
+every Friday in the weekly engineering read (issue #34). This section supersedes the delivery-tooling rows of
+`docs/process/tech-debt.md` (TD-3, TD-4, TD-8 and the "interpreter choice" gap named there on 10-16 and still open).
+Lane flow: ADR 0060 (proposed; decided by PD + PO + CTO by Mon 11-02). Deploy approvals:
+`docs/process/deploy-approval-runbook.md`.
+
+### Pipeline baseline (measured 2026-10-30 by the cto)
+
+| Metric | Value | Source |
+| --- | --- | --- |
+| Merged PRs, last 15 (#200-#224, 10-26 to 10-30) | 3 per day; 5 of 15 have 2-3 commits | `gh pr list --state merged --limit 15` |
+| PR open to merge | median 9 min; max 2,752 min (#215, held 46 h on calendar-test and allowlist failures) | same query |
+| First commit to merge | median 0.9 h, p90 46 h. **Understates lead time**: lane commits are made late, so dispatch-to-merge is not measurable from git today (FR-8) | same query, `commits[].committedDate` |
+| GitHub CI wall time (ci.yml, 200 runs 10-18 to 10-30) | median 6.8 min, p90 16.4 min; 173 success, 19 failure, 8 cancelled | `gh run list --workflow ci.yml --limit 200` |
+| CI runs per PR (last 15) | 21 runs, 6 failed (#215 3 of 4, #219 1, #211 1, #206 1) | runs joined to PR head branches |
+| Same-SHA pass and fail on GitHub | 0 of 200 SHAs (flakes surface as a new commit, not a re-run) | same query |
+| CI failure issues | 32 `ci` issues 10-07 to 10-30 (plus 17 data-dukascopy on 10-01); 9 still open, 4 of them (#164-#167) for 10 days | `gh issue list --label ci --state all` |
+| Failures on `main` | 7 issues, **all non-deterministic**: timing #100 #166, tmp `git clone` #167 #182, e2e #89 #223, unclassified #196 | issue bodies, `Branch:` line |
+| Local full gate (`scripts/ci_local.sh`) | today 931 / 990 / 1,023 s (2.3-2.5x GitHub); 29 runs 10-19 to 10-26 median 621 s, p90 924 s | `~/tmp/ci/*.log`, `~/tmp/ci_local/*.log` "total N s" |
+| Worktrees | 373 registered, 275 under `.claude/worktrees`; 268 of 275 have HEAD already in `main` | `git worktree list`, `merge-base --is-ancestor` |
+| Worktree disk | 175,767,892 KB (168 GiB) by `du`; `.venv` ≈ 555 MB per tree (22.2 GB over a 40-tree sample). `du` counts APFS clones in full: measure the real gain with `df` before and after the first prune | `du -sk .claude/worktrees` |
+| Worktree interpreters | 209 venvs on 3.11, **6 on 3.12** (numpy 2.5.3; one 2.5.4, which is not in `uv.lock`, so it was installed outside the lock), 60 with no venv | `.venv/pyvenv.cfg`, `site-packages` |
+| Agent cost per merged PR | **not measured** (FR-10) | none yet |
+
+**CI failure causes, 33 failures in 32 issues (10-07 to 10-30), top 5:**
+
+| # | Class | Count | Issues | Deterministic? |
+| --- | --- | --- | --- | --- |
+| 1 | Guard test caught a lane's stale expectation after the push (golden, registry order, line cap, persistence allowlist, family registry, shard partition, feature lists, bridge or bootstrap requirements) | 12 | 72 80 86 95 117 122 123 132 137 164 216 217 | yes: catchable before the push |
+| 2 | e2e: TOTP-step timeouts, layout shift under load, serial-story retry | 5 | 82 87 89 143 223 | no |
+| 3 | Wall-clock latency or timing assertion on a shared runner (p95 ≤ 300 ms, decoy timing, 30 s reads) | 5 | 91 100 166 207 212 | no |
+| 4 | Test coupled to the runner (git clone in tmp, gh token, shellcheck version) | 5 | 99 167 175 182 217 | no |
+| 5 | Calendar date baked into a test | 2 | 218 220 | yes, from a date on |
+| - | Unclassified (no failing test in the body) | 4 | 47 66 165 196 | - |
+
+**Flaky list (owner test-engineer, quarantine or fix by Mon 11-02 per FR-3):**
+`web/e2e/dashboard.spec.ts:499` layout shift (CLS 0.028 vs < 0.01 on GitHub main, run 41038754258, #223);
+`dashboard.spec.ts:50` "first run creates the owner" on retry: **not flaky, deterministic**: the file is
+`mode: "serial"` (`:45`), so a retry restarts the story against a server whose owner already exists (#143, #223);
+`tests/test_trades_ledger.py::test_a_filtered_page_over_50k_rows_answers_within_300_ms_at_p95` (#207);
+`tests/test_strategy_ranking.py::test_the_ranking_answers_over_50k_fills_within_300_ms_at_p95` (#212);
+`tests/test_email_code.py::test_email_code_decoy_timing` (#166); `tests/test_goldbot_deploy_sh.py` tmp clone (#167,
+#182, #217); `tests/test_mt5_terminal_state.py` 30 s reads (#91, #100).
+
+### Delivery-friction register (ranked: money path and delivery speed first)
+
+Cost of carrying is measured where possible; cost to fix is lane-days. All FR-1 to FR-6 tooling ships as **one PR**
+(the debt lane of Wave 2, week 1): merged by **Tue 11-03**, status measured on the first lane PR after it, read on
+**Fri 11-06**.
+
+| # | Friction | Root cause (evidence) | Structural fix | Guard | Carrying | Fix | Owner | Date |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| FR-1 | Worktree venvs on 3.12: false mypy errors (28 in 16 files, reported 10-30, not re-run by the cto), `ci_local` "No module named 'yaml'" | No `.python-version` in the repo; `requires-python = ">=3.11,<3.13"` (`pyproject.toml:5`) lets uv choose 3.12 (installed: `uv python list`); worktrees get ad-hoc venvs or none, and `ci_local.sh:36-40` reads the matrix with whatever `.venv` exists (`~/tmp/ci/ph2-1003.log`) | Commit `.python-version` = `3.11`; narrow `requires-python` to `>=3.11,<3.12` so the lock holds one numpy (every deploy path already pins `--python 3.11`: 8 of 8 hits in `goldbot/ops`, `scripts`); `scripts/worktree_env.sh` = `uv sync --frozen --extra dev` (+ `npm ci` only when `web/` is touched) | `scripts/check_env.py`, called first by `gates.sh`, `ci_local.sh`, `lane_test.sh`, `merge_smoke.sh`: exits 2 unless the interpreter is 3.11 and the venv matches `uv.lock`; a test asserts `.python-version` = setup-backend's `python-version` = mypy `python_version` | est. 1 lane-hour per affected lane; 6 venvs affected | 0.5 | implementer | Tue 11-03 |
+| FR-2 | Calendar-dependent tests fail every PR once the date moves (#218, #220; fixed by `a9c6104e`) | No clock seam: 111 wall-clock reads in 49 production files (`grep -rnE "Timestamp.now\|datetime.now\|date.today\|utcnow" goldbot`), 68 test files read the clock, 0 use a freezing library | Tests: `time-machine` (dev-only, MIT; build-vs-buy in ADR 0060) with a conftest option that runs the whole suite shifted by N days; production: one clock seam, planned with the engine split (TD-14 `engine/clock.py`) | Every backend-unit CI shard runs at a date shift derived from the SHA (0-45 days, printed in the job summary, reproducible with `GOLDBOT_TEST_SHIFT_DAYS`), so a date-bound test fails on its own PR, not two days later on everyone's | 2 days of red PRs (10-28 to 10-30) | 1 | test-engineer (tests), architect (seam plan) | Tue 11-03; seam plan Fri 11-13 |
+| FR-3 | Non-deterministic tests: 10 of 33 failures, 5 of 7 red `main` runs | Absolute wall-clock budgets on shared runners; e2e retry in a serial story is guaranteed to fail (`playwright.config.ts:26` `retries: 1` with `dashboard.spec.ts:45` serial) | Perf budgets move to a `perf` marker in their own job (`-n 0`, median of N, budget = measured CI p99 x 2) or become plan assertions (index used, rows scanned); `retries: 0` for serial projects; CLS measured after data load with reserved space | `@pytest.mark.quarantine(issue=, until=)` runs in a non-blocking job; a test fails the build once `until` (≤ 48 h) has passed; same for Playwright `test.fixme` annotations via a script check | 5 red `main` runs, each a stalled release | 1 | test-engineer | quarantine Mon 11-02; fixed Wed 11-04 |
+| FR-4 | 373 worktrees, 168 GiB | `INTEGRATION_BRANCH` defaults to the dead `claude/gifted-goldberg-lcb7pl` (last commit 10-19) in `prune_worktrees.sh:17`, `lane_test.sh:14`, `merge_smoke.sh:15`, `release.sh:18` and the lane brief (`docs/process/lane-checklist.md:24`); the pruner keeps 311 of 348 trees for regenerable ignored files (`data/`, `state/`, `goldbot.egg-info/`, `web/dist/`) | One base helper (`origin/main`) for every script; the pruner treats build and test artefacts as regenerable and lists sizes; `release.sh` prunes the lane's own worktree after its merge | `scripts/new_lane.sh` (worktree from `origin/main` + `worktree_env.sh`) refuses to create a tree while more than 40 exist or free disk is under 100 GB, printing the prune command | Disk; lanes iterate against an 11-day-old base, so `lane_test.sh iter` runs far more than the touched tests | 0.5 | sre | Tue 11-03; first `--apply` sweep Mon 11-02 |
+| FR-5 | One CI issue per failed run; 9 open, 4 stale 10 days | `report-failure` job writes one issue per run by SHA (`ci.yml` "one issue per failed run") | Key by failing test id: an open issue for the same test gets a comment (SHA, run, branch); PR-branch failures go to the PR as a comment, issues only for `main`; auto-close after 3 green `main` runs | Unit test of the dedup and close logic | Triage time; real failures hidden among stale ones | 0.5 | release-manager (implementer builds) | Tue 11-03; stale triage Mon 11-02 |
+| FR-6 | Guard tests fail after the push (12 of 33) | Lanes iterate on touched tests only; the cross-cutting guards (goldens, registries, allowlists, caps, shard partition) are not touched, so they first run in CI | `lane_test.sh iter` always appends the `guard`-marked set (target ≤ 60 s) | A test fails if a known guard file lacks the `guard` marker | One CI round trip (≈ 7 min + rework) per occurrence | 0.5 | test-engineer | Tue 11-03 |
+| FR-7 | Local full gate 15-17 min, 2.3-2.5x GitHub | Load from parallel lanes on one Mac (≤ 12 workers rule) | ADR 0060: one `ci_local.sh` per PR, run by `release.sh` alongside GitHub CI (GitHub is the gate; a local red stops auto-merge) | `release.sh` records both timings per PR | ≈ 15 min per extra local run | 0 (rule) | release-manager | Mon 11-02 |
+| FR-8 | Many small PRs, a review round and CI wait each | No bundling rule; review rounds sequential per PR | ADR 0060: one PR per lane, one combined review round, fixes in one batch | `release.sh` refuses a PR under 50 changed lines unless labelled `hotfix` (money path or engine down) | per-PR fixed overhead (review, ≥ 7 min CI, local gate) | 0.5 | release-manager | Tue 11-03 |
+| FR-9 | Production deploys stall on per-command approval | Auto-mode classifier blocks remote writes; no standing, exact rule | `docs/process/deploy-approval-runbook.md`; the owner decides on the standing rule | `release.sh` deploy step is the only deploy form agents use | Hours per deploy; an exit fix can wait on the owner | 0 | sre (runbook); owner (rule) | runbook 10-30; owner decision asked Mon 11-02 |
+| FR-10 | Cost per merged PR unknown | Lane dispatch time and token use are not recorded | `release.sh` writes lane start (from `state/program.db`), push, merge, CI minutes; tokens summed from the session transcripts | Weekly read shows it or says why not | Cannot judge lane value | 0.5 | release-manager with cfo | Fri 11-06 |
+
+**Debt budget.** Wave 2 week 1 spends its debt lane (one in eight) on FR-1 to FR-6 as one PR. Product lanes keep
+their order; nothing here touches a safety rail or the money path's code.
 
 ## 6. Owner decision queue
 
