@@ -37,7 +37,10 @@ printf '%s\n' "$*" >> "$FAKE_LOG.ssh"
 case "$cmd" in
   *systemd-run*) exit "${FAKE_D2_RC:-0}" ;;
   *deploys.jsonl*) n=$(grep -c 'deploys.jsonl' "$FAKE_LOG.ssh"); if [ "$n" -ge 2 ] && [ -n "$FAKE_RECORD2" ]; then echo "$FAKE_RECORD2"; else echo "$FAKE_RECORD"; fi ;;
-  *health*) echo "$FAKE_HEALTH"; exit "${FAKE_HEALTH_RC:-0}" ;;
+  *"run health"*) echo "$FAKE_HEALTH"; exit "${FAKE_HEALTH_RC:-0}" ;;
+  *"run positions --account "*) a=${cmd##*--account }; a=${a%\"}
+    case " $FAKE_POS_FAIL " in *" $a "*) echo "bridge down"; exit 1 ;; esac
+    printf 'ticket 1 %s buy 0.01 sl 2650.0\033[31m\ntotal: 1\n' "$a" ;;
   *) exit 99 ;;
 esac
 """
@@ -47,8 +50,10 @@ def record(result: str = "deployed", to: str = SHA) -> str:
     return json.dumps({"ts": "2026-10-30T10:00:00Z", "result": result, "from": "c" * 40, "to": to})
 
 
-def health(entry: str = "ok", reconcile: str = "ok", other_fail: bool = False) -> str:
+def health(entry: str = "ok", reconcile: str = "ok", other_fail: bool = False,
+           extra: tuple[str, ...] = ("icm-probe",)) -> str:
     checks = [{"name": "entry_status:icm-demo", "status": entry, "reason": "open"},
+              *({"name": f"entry_status:{a}", "status": "ok", "reason": "open"} for a in extra),
               {"name": "engine:icm-demo", "status": "ok", "reason": "fresh"},
               {"name": "reconcile:icm-demo", "status": reconcile, "reason": "positions match the broker"}]
     if other_fail:
@@ -65,7 +70,7 @@ def fakes(tmp_path):
         (bin_ / name).chmod(0o755)
     env = {"PATH": f"{bin_}:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin", "HOME": str(tmp_path),
            "FAKE_LOG": str(tmp_path / "log"), "FAKE_COMPARE": "ahead", "FAKE_GREEN": SHA, "FAKE_PARENT2": "",
-           "FAKE_ODD_TREE": "none", "FAKE_RECORD": record(), "FAKE_RECORD2": "", "FAKE_HEALTH": health(),
+           "FAKE_ODD_TREE": "none", "FAKE_RECORD": record(), "FAKE_RECORD2": "", "FAKE_HEALTH": health(), "FAKE_POS_FAIL": "",
            "GOLDBOT_RELEASE_WATCH_S": "0"}
     return tmp_path, env
 
@@ -83,14 +88,33 @@ D3 = "sudo tail -1 /var/lib/goldbot-deploy/deploys.jsonl"
 D4 = 'bash -lc "goldbot run health --json"'
 
 
+def d4p(account: str) -> str:
+    return f'bash -lc "goldbot run positions --account {account}"'
+
+
 def test_a_ci_green_main_commit_runs_exactly_the_documented_commands_and_succeeds(fakes):
     tmp, _ = fakes
     r, ssh = run(fakes, SHA)
     assert r.returncode == 0, r.stdout + r.stderr
     prefix = f"-F {tmp}/.ssh/goldbot.conf -o BatchMode=yes goldbot-brain "
-    assert ssh == [prefix + D2, prefix + D3, prefix + D3, prefix + D4]
+    assert ssh == [prefix + D2, prefix + D3, prefix + D3, prefix + D4, prefix + d4p("icm-demo"),
+                   prefix + d4p("icm-probe")]
     assert '"result": "deployed"' in r.stdout and "DEPLOYED " + SHA in r.stdout
     assert "entry_status:icm-demo" in r.stdout and "reconcile:icm-demo" in r.stdout
+    assert "ticket 1 icm-probe" in r.stdout and "total: 1" in r.stdout and "\x1b" not in r.stdout
+
+
+def test_unreadable_positions_for_any_account_fail_with_4(fakes):
+    r, ssh = run(fakes, SHA, FAKE_POS_FAIL="icm-probe")
+    assert r.returncode == 4 and "positions for icm-probe could not be read" in r.stdout
+    assert len(ssh) == 6
+
+
+def test_an_account_id_from_the_report_that_is_not_a_plain_id_is_never_sent(fakes):
+    r, ssh = run(fakes, SHA, FAKE_HEALTH=health(extra=("x; sudo reboot", "$(id)", "Upper")))
+    assert r.returncode == 0, r.stdout
+    assert [line for line in ssh if "positions" in line] == [
+        f"-F {fakes[0]}/.ssh/goldbot.conf -o BatchMode=yes goldbot-brain " + d4p("icm-demo")]
 
 
 @pytest.mark.parametrize("bad", ["", SHA[:39], SHA.upper(), SHA + "0", "main", f"{SHA[:39]};", "$(reboot)" + SHA[:31]])
@@ -120,7 +144,7 @@ def test_a_commit_without_green_ci_is_refused(fakes):
 def test_a_merge_commit_with_its_pr_heads_tree_uses_the_pr_heads_green_ci(fakes):
     r, ssh = run(fakes, SHA, FAKE_GREEN=HEAD, FAKE_PARENT2=HEAD)
     assert r.returncode == 0, r.stdout
-    assert "PR head " + HEAD in r.stdout and len(ssh) == 4
+    assert "PR head " + HEAD in r.stdout and len(ssh) == 6
 
 
 def test_a_merge_commit_whose_tree_differs_from_the_green_pr_head_is_refused(fakes):
@@ -168,8 +192,8 @@ def test_the_only_remote_commands_in_the_script_are_d2_d3_d4():
     """No rollback, stage, MT5 box or free-form remote command can be reached through the wrapper."""
     text = SCRIPT.read_text(encoding="utf-8")
     code = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
-    assert sum('"${SSH[@]}"' in line for line in code) == 4
-    assert all(any(f'"${{SSH[@]}}" "{c}"' in line for c in ("$D2", "$D3", "$D4"))
+    assert sum('"${SSH[@]}"' in line for line in code) == 5
+    assert all(any(f'"${{SSH[@]}}" "{c}"' in line for c in ("$D2", "$D3", "$D4", '$(d4_positions "$acc")'))
                for line in code if '"${SSH[@]}"' in line)
     assert "--rollback" not in "\n".join(code) and "--stage" not in "\n".join(code) and "goldbot-mt5" not in text
 

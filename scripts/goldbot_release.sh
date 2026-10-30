@@ -9,6 +9,7 @@
 #       goldbot-deploy-manual-$(date +%s) /usr/local/sbin/goldbot-deploy <sha>
 #   D3  sudo tail -1 /var/lib/goldbot-deploy/deploys.jsonl       (again after the 90 s rollback watch)
 #   D4  bash -lc "goldbot run health --json"                     (entry status, engines, reconcile = positions vs broker)
+#       bash -lc "goldbot run positions --account <id>"          (each enabled account, as health's entry_status:<id>)
 # Exit 0: deployed and the post-deploy checks pass; 3: the deploy record does not say deployed <sha> (refused,
 # failed or rolled back: the box restored the previous commit); 4: deployed, but a post-deploy check fails.
 # The remote command strings are fixed here; the only input is the validated SHA. No rollback, stage, MT5-box or
@@ -57,6 +58,7 @@ fi
 D2="sudo systemctl reset-failed 'goldbot-deploy-manual-*'; sudo systemd-run --wait --unit goldbot-deploy-manual-\$(date +%s) /usr/local/sbin/goldbot-deploy $SHA"
 D3="sudo tail -1 /var/lib/goldbot-deploy/deploys.jsonl"
 D4='bash -lc "goldbot run health --json"'
+d4_positions() { echo "bash -lc \"goldbot run positions --account $1\""; }   # $1 checked against ^[a-z0-9-]+$
 
 # deploys.jsonl's last record -> "deployed" / "deployed_degraded" / other; prints a one-line, printable summary
 read_record() {
@@ -109,4 +111,26 @@ if not any(clean(c.get("name")).startswith("entry_status:") for c in checks):
     print("  no entry_status check in the report"); bad += 1
 sys.exit(1 if bad else 0)
 ' || { say "DEPLOYED $SHA, but a post-deploy check fails (entry status, engine or reconcile): look before trading on"; exit 4; }
-say "DEPLOYED $SHA: record deployed, entry status, engines and positions (reconcile) not failing"
+
+# D4 positions, per enabled account: the accounts are the entry_status:<id> checks (health hides disabled accounts).
+# An id read from remote output goes into a remote command only when it is a plain account id.
+accounts=$(printf '%s\n' "$health" | python3 -I -c '
+import json, re, sys
+for c in json.loads(sys.stdin.read()[-4_000_000:])["checks"]:
+    n = str(c.get("name", ""))
+    if n.startswith("entry_status:") and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", n[13:]):
+        print(n[13:])
+')
+bad=0
+for acc in $accounts; do
+  [[ "$acc" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || continue
+  say "positions $acc (D4)"
+  if out=$("${SSH[@]}" "$(d4_positions "$acc")"); then
+    printf '%s\n' "$out" | LC_ALL=C tr -cd '\11\12\40-\176' | tail -n 50
+  else
+    printf '%s\n' "$out" | LC_ALL=C tr -cd '\11\12\40-\176' | tail -n 5
+    say "positions for $acc could not be read"; bad=1
+  fi
+done
+[ "$bad" -eq 0 ] || { say "DEPLOYED $SHA, but positions could not be read for every account: look before trading on"; exit 4; }
+say "DEPLOYED $SHA: record deployed; entry status, engines and reconcile not failing; positions read per account"
