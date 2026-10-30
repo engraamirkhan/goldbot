@@ -172,3 +172,22 @@ No owner confirmation is needed (delegated, within budget, no rail touched). Ful
 - The trial results are quoted from HANDOFF and `hypotheses.md`, not re-run.
 - Distances use ADR 0004's estimated ATR, gold price and GBPUSD; the M2 timings are arithmetic, not forecasts.
 - No code, settings, trials, budget, holdout or the Q1 pre-registration were touched.
+
+## Weekly research read, 2026-10-30 (research director, first cycle)
+
+Sources: `goldbot run perf-report --from 2026-10-19 --to 2026-10-30` on all three accounts (17:24 UTC); aux.db
+`exploration_trades` re-derivation (read-only); performance-analyst demo read 2026-10-30; discovery ledgers
+`~/tmp/autodisc-run-*`.
+
+- **Winners: none.** Matched excess vs the random control (n >= 30 a side): probe session_vwap_fade +0.21 R (54,
+  -0.09..+0.51), icm nr4_break +0.35 (47, -0.27..+0.96), icm round_reject +0.34 (85), icm halfhour_persist +0.25
+  (107), all not distinguishable.
+- **Losers beside them:** probe round_reject -0.15 (76), probe ema_pullback -0.03 (191), probe halfhour_persist
+  -0.02 (103); small-n: specialist arms -£44 on icm-demo, asia_drift -£48.65 (3).
+- Control: probe random_bracket +0.025 R (354), re-derived exactly. Raw strategy P&L is a short tilt in a falling
+  week (shorts +0.216 R, longs -0.164 R), not skill.
+- **Discovery:** K_search 288 a TF (~5.3k null specs), 0 survivors on 15m/1h/4h; grammar v2 ordered (A4).
+- **Kills this week (on A1/A2 sign-off):** ~50 arm ids that cannot reach a read this year or whose read is void
+  (research-plan section 3). **Scales:** none. K ~360 by the arm-id rule.
+- **Bets next week:** H-16 range forecast screen; exits (H-80 R2 confirm + wider-target screen vs control); the
+  when-to-trade map on random entries.
