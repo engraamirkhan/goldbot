@@ -99,3 +99,28 @@ search beats a cost-crushed null, not zero. Decisions:
   pay the DSR at cumulative K (v1 864 + K_v2); the HAR terciles are fitted walk-forward and the event gate is joined
   as-of on `available_utc`; if v2 has not run on all three timeframes by 2026-11-20 generation freezes anyway; no
   v2.x before 2026-11-20.
+
+## Evaluator rulings, 2026-10-30
+
+The full text, with the id list, is in the comments at the end of `config/arm_reads.yaml` (R1-R4).
+
+1. **A1, A2: signed with conditions** (the quant-reviewer's signature is still needed before either takes effect).
+   They are valid kill-only amendments even though they were written after the interim reads. Neither adds a route to
+   continue, graduate or be promoted. A2 reads fill rates only, so it never looks at outcomes. A1 acts only at each
+   unit's existing single read. Conditions:
+   - A1's estimator is frozen as the perf-report learning section at `fe045043`.
+   - A1 is never applied at an interim look, and passing it adds nothing to a "continue".
+   - A2's rates are taken per read unit and recorded with each retirement.
+   - At n 300, the "UB < +0.10 R" clause implies a point estimate below -0.05 R, so the "point <= 0" clause is the one
+     that binds. False-kill rate: about 29% for a true +0.05 R unit, about 13% for +0.10 R. We accept that.
+2. **Cost figure.** The Z section 4 cost stop reads the engine's signal-time cost (about 0.116 R). The rules that say
+   "measured cost" read the **worse** of $0.23/oz + $0.70 per stop exit and the arm's own signal-time fill cost
+   (time-structure prereg 2.2(b), which includes slippage and overshoot). The 0.053 R broker figure leaves both of
+   those out and is not the figure of record. Condition: the data-engineer confirms by 11-06 that `cost` comes from
+   the measured nightly table and not from the config fallback.
+3. **S1A/S1B are not VOID.** S1 is not on the closed neighbour list, and H-76 is the Asia-range fade, not a VWAP rule.
+   S1 reads at its own read (about 2026-12-16), with A1 applied there, and is subject to A2's 11-13 count.
+4. **Kill now**, on A2 alone (VOID, "closed on history" and "hypothesis retired" are not registered kill grounds):
+   - the 51 ids the plan names;
+   - plus XBB15 (if it is under 2 fills a session day), F2C, C30C and XC15 (objection: XC15 is not A2-exempt), S6,
+     I1, I3, W3 and the nine blocked VS twins.

@@ -158,3 +158,36 @@ read_units:
 # An arm whose n is not its admissible trades (arms-2026-10-25.md 4: S0R's n is its stop exits).
 counts:
   S0R: stop_exits
+# ---------------------------------------------------------------------------------------------------------------------
+# EVALUATOR RULINGS 2026-10-30 on the research reset (research-plan.md table 3; prereg-amendment-2026-10-30-kill-rules.md
+# "Evaluator rulings"). Comments only: no read is recorded, no `reads:` row is added, nothing here retires an arm until
+# the quant-reviewer also signs A1/A2 and the per-unit fill rates below are recorded from aux.db.
+# R1 A1/A2: SIGNED WITH CONDITIONS. Valid kill-only amendments despite being written after interim reads: they add no
+#    route to continue/graduate/promote (HV "Graduation and promotion" unchanged), A2 is outcome-blind (fill rates
+#    only), A1 acts only at the unit's existing single read. Conditions: (a) A1's matched estimator is the perf-report
+#    learning section as of fe045043, first 300 admissible, Amendment-4 exclusions, 90% two-sided band; (b) no interim
+#    A1 look; passing A1 adds nothing to a continue; (c) A2 rates per read unit (pooled for `read_units`), recorded with
+#    each retirement; (d) noted: at n 300, SD 1.1 R, "UB < +0.10 R" implies point < -0.05 R, so the point <= 0 clause
+#    is the binding one; a true +0.05 R unit is falsely killed ~29% of the time, +0.10 R ~13% (accepted: demo cannot
+#    detect it, history can).
+# R2 Cost figure: the Z 4 cost stop reads the engine's SIGNAL-TIME cost (`cost`/`stop_loss` at the send,
+#    goldbot/research/arm_stops.cost_state), i.e. the ~0.116 R figure. Every "measured cost" rule reads the WORSE of
+#    ($0.23/oz + $0.70 per stop exit) and the arm's own signal-time fill cost "(spread + slippage + commission +
+#    overshoot on stop exits)" (prereg-2026-10-26-time-structure.md 2.2; arms-expansion 2.1). The ~0.053 R broker
+#    figure (spread + commission) omits slippage and overshoot and is never the figure of record; swapping to it after
+#    it binds would loosen a stop post hoc. Condition: data-engineer confirms by 11-06 that `cost` comes from the nightly
+#    measured table, not runner._cost_atr's config fallback; a fallback is a defect, fixed forward only.
+# R3 S1A/S1B: NOT VOID. HV "Retired-family neighbours" is a closed list without S1; H-76 is the failed Asia-range fade
+#    (hypotheses.md), not a VWAP rule; the session-VWAP closure (time-structure 2026-10-26, 0 trials) post-dates S1 and
+#    recorded S1 as running. S1 reads at its own H-61 read (300 per arm, ~2026-12-16) with A1, and is subject to A2's
+#    11-13 count (< 100 per arm; ~8 a day makes it marginal). Its +0.21 R (n 54, 90% -0.09..+0.51) is not evidence:
+#    one falling week, side drift, and gross <= 0 for VWAP fades on 2010-2017.
+# R4 Kill now, ONLY under A2 (< 2 admissible fills a session day 10-27..10-30, effective on quant sign-off):
+#    S2A S2B S3A S3B MSA15 VMS15 S4 I2A I2B VI2A VI2B W1A W1B VW1A VW1B W2 VW2 MB15 MB30 MB1H VMB15 VMB30 VMB1H WFRI
+#    XIMNY XIMLN XMR15 XMR1H XAD1H XSO15 XEQ15 XTV1 VXBO1H VXBO15 VXTR1H VXTV2 VXRIP1H VXRT1H VXFK1H VXTL1H
+#    Z8P KA15 OBR15 KSQ1 KSQ4 DON4 DOND C30A PDC1 PDC4 F2A
+#    plus ids the plan left implicit, by the same A2 text: XBB15 (if < 2/day), F2C C30C XC15 (dedicated controls, not
+#    in A2's exempt list; the plan's "keep XC15" is OBJECTED to), S6 I1 I3 W3, VS0 VS1A VS1B VS2A VS2B VS3A VS3B VS5A
+#    VS5B (blocked, 0 fills). Objections to the plan's stated grounds: VOID never permits early retirement (it only
+#    makes the 300 read descriptive); "ORB closed on history (R-02/H-76)" and "asia_drift hypothesis retired" are not
+#    registered kill rules (XAD1H was registered after H-04's STOP). A2 is the sole valid ground for every id above.
