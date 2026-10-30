@@ -455,3 +455,11 @@ Source: `prereg-2026-10-27-scalp-volume.md` (2010-2017 event counts and null-bra
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | H-81 | Ten 1m/5m exploration families at fixed-$ brackets with cost/R ≤ 0.08 per broker (ICM $3 / $4.50, Vantage $7), each with a shared per-account random control: Z1 tick-surge continuation, Z2 run-exhaustion fade, Z3 round-number break, Z4 round-number touch rejection, Z5 tick-confirmed prior-hour break, Z6 NR4 inside-bar break, Z7 same-half-hour periodicity (Heston-Korajczyk-Sadka 2010), Z8 volume absorption fade, Z9 1h-trend 5m reclaim, Z10 three-horizon momentum; plus Vantage S-twins VS0-VS5B (blocked until the Vantage cost UB is ≤ $0.24) | **pre-registered**, not dispatched; 25 ids need the 2026Q4 override 118 -> 143 (PD) | 0 (exploration rows; K +25 by the precedent) | prereg section 4: one read per family at the 300th admissible fill, continue / stop (-30 R) / futility (UB < +0.03 R); never promotion evidence |
+
+## A18. Exits on the scalp arms' own entries (trade management researcher, 2026-10-30)
+
+Source: `prereg-2026-10-30-hb-exits.md` (bet 2b of `research-plan.md`; the plan's "H-B", renumbered: H-B is the THIN-days row).
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| H-82 | Wider targets (1 / 1.5 / 2 / 3 R) or a time-only exit at the arm's own hold, on the fixed entries of S5A/S5B, Z4D/Z4P, Z6D, Z7D/Z7P, beat the arm's current target by more than the same exits gain on random-side entries within +/-60 min (difference-in-differences of net R, day-block bootstrap), 2010-2017 only | **pre-registered 2026-10-30**; screened locally | 0 registry trials; K +5 (one per variant) | PASS per variant: pooled DiD >= +0.05 R, 90% lower bound > 0, Bonferroni-5 bound > 0, family and year consistency; no PASS closes plan line 2's wider-target part for these entries; a PASS earns only a 2018-2025-09 confirmation |
