@@ -462,7 +462,7 @@ viz = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=1.11" },
-    { name = "duckdb", specifier = ">=1.0" },
+    { name = "duckdb", specifier = ">=1.0,<2" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "keyring", specifier = ">=25" },
