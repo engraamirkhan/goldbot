@@ -118,13 +118,15 @@ def test_gp_recovers_an_injected_edge_above_its_own_null(tmp_path):
     t0 = make_noise_tensor(N, seed=7)
     prov = SyntheticProvider(N, seed=0)
     mask, side = prov.family_entries("tsmom", "15m")
-    t = inject_edge(t0, mask, side, edge_r=0.4)
+    # 0.6 R: the excess-R fitness reads the drift baseline from ~125 bars per (hour, side) cell on 3,000 synthetic bars,
+    # which costs this small search some power against 0.4 R (8 years of 15m bars hold ~60x more per cell)
+    t = inject_edge(t0, mask, side, edge_r=0.6)
     led = SearchLedger(tmp_path / "e.db", mode="synthetic")
     c = cfg(population=16, generations=4, seed=1, families=("tsmom", "nr4_break"))
     real = G.run_gp(t, prov, c, led)
     null = G.gp_null(t, prov, c, led, reps=9)
     assert real.best > null.threshold()
-    top = max(real.evaluated, key=lambda x: G.fitness_of(x.evaluation))
+    top = max(real.evaluated, key=lambda x: G.gp_fitness(x.evaluation))
     assert "tsmom" in top.spec.model_dump_json()
 
 
@@ -180,3 +182,23 @@ def test_selection_survives_a_population_smaller_than_the_tournament(tmp_path):
     c = G.GPConfig.model_construct(**{**dict(cfg()), "population": 4, "tournament": 8, "generations": 2})
     out = G.run_gp(t, SyntheticProvider(N), c, SearchLedger(tmp_path / "s.db", mode="synthetic"))
     assert len(out.best_by_generation) >= 2
+
+
+def drift_only_tensor():
+    """Every long outcome carries +0.5 R at every hour (gold's long drift), with no alignment edge anywhere."""
+    t = make_noise_tensor(N, seed=5)
+    return inject_edge(t, np.ones(N, dtype=bool), np.ones(N, dtype=np.int8), edge_r=0.5)
+
+
+def test_gp_fitness_is_the_excess_r_t_so_a_long_drift_is_not_skill(tmp_path):
+    """Quant review F4: the fitness is the min-fold t of excess R over the drift baseline, like the G0 null's."""
+    t = drift_only_tensor()
+    prov = SyntheticProvider(N)
+    long_spec = G.StrategySpec(timeframe="15m", side_rule="long", entry=Leaf(kind="time", name="london"),
+                               exit=G.exit_menu("15m")[0])
+    led = SearchLedger(tmp_path / "x.db", mode="synthetic")
+    c = G.evaluate_logged(t, G.Resolver(prov), long_spec, led, min_events=MIN_EV)
+    assert c.evaluation.fitness is not None and c.evaluation.fitness > 2.0          # the net-R t sees the drift
+    assert c.evaluation.excess_fitness is not None and abs(c.evaluation.excess_fitness) < 1.5   # excess-R t: no
+    out, _ = run(t, tmp_path, tag="drift")
+    assert out.best < 1.0 and out.best == max(G.gp_fitness(x.evaluation) for x in out.evaluated)

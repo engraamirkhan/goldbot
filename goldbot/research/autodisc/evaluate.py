@@ -12,7 +12,8 @@ Per spec (a boolean entry mask, a side rule and an exit template of the tensor):
 - **Side split:** long-only and short-only net R of the same events (`screen.rule_only_split`'s reading).
 - **Drift baseline:** excess net R over the random-entry baseline of the same timing (UTC hour) and side: the mean R of
   every bar at that hour and side (`OutcomeTensor.drift_table`), averaged over the spec's events. Gold's drift cannot
-  make a long-biased rule look clever.
+  make a long-biased rule look clever. `excess_fitness` is the fitness above on each event's excess R: the G2 search
+  ranks by it (quant review F4, 2026-10-30), so drift never counts as skill there.
 - **Plateau:** `plateau_test` on the fitness of the spec's grid neighbours (each parameter +-1 step; the generator
   evaluates the neighbours and passes their fitness): at least 60% positive.
 - **Cost stress:** net mean R at `STRESS_MULT` (1.5) x the conservative cost must be > 0.
@@ -64,6 +65,9 @@ class Evaluation(FrozenRecord):
     stress_mean_r: float | None         # net mean R at STRESS_MULT x cost
     stress_passed: bool
     input_digest: str
+    # the same folds on excess R (each event's R less its drift baseline): G2's fitness (quant review F4, 2026-10-30)
+    excess_fold_t: list[float | None] = []
+    excess_fitness: float | None = None
 
     @property
     def explore_checks_passed(self) -> bool:
@@ -97,11 +101,13 @@ def fold_edges(ts_utc: pd.DatetimeIndex, n_folds: int = N_FOLDS) -> np.ndarray:
     return np.append(pos, len(ts_utc))
 
 
-def fold_fitness(ev: Events, tensor: OutcomeTensor, timeframe: str, n_folds: int = N_FOLDS) -> list[float | None]:
-    """Clustered net-R t-statistic per purged, embargoed time fold (module docstring)."""
+def fold_fitness(ev: Events, tensor: OutcomeTensor, timeframe: str, n_folds: int = N_FOLDS,
+                 r: np.ndarray | None = None) -> list[float | None]:
+    """Clustered t-statistic per purged, embargoed time fold (module docstring) of each event's net R, or of `r`
+    (one value per event, e.g. the excess over the drift baseline)."""
     edges = fold_edges(tensor.ts_utc, n_folds)
     embargo = pd.Timedelta(days=WINDOWS[timeframe]["embargo_days"])
-    r = ev.r()
+    r = ev.r() if r is None else np.asarray(r, dtype=float)
     day = ev.ts_utc.normalize().to_numpy()
     out: list[float | None] = []
     for k in range(n_folds):
@@ -148,6 +154,7 @@ def evaluate(tensor: OutcomeTensor, mask: np.ndarray, side: np.ndarray | int, ex
     tab = tensor.drift_table(exit_i)
     base = tab[ev.side_i, ev.ts_utc.hour.to_numpy()]
     base_r = float(np.nanmean(base)) if np.isfinite(base).any() else None
+    xfolds = fold_fitness(ev, tensor, timeframe, r=r - np.nan_to_num(base, nan=0.0))
     stress = float(ev.r(stress_mult).mean())
     return Evaluation(
         spec_hash=spec_hash, exit_name=tensor.exits[exit_i].name, n_events=n, mean_r=float(r.mean()),
@@ -155,7 +162,8 @@ def evaluate(tensor: OutcomeTensor, mask: np.ndarray, side: np.ndarray | int, ex
         long=_stat(r[ev.side_i == 0], day[ev.side_i == 0]), short=_stat(r[ev.side_i == 1], day[ev.side_i == 1]),
         fold_t=folds, fitness=None if any(f is None for f in folds) else float(min(f for f in folds if f is not None)),
         drift_baseline_r=base_r, excess_r=None if base_r is None else float(r.mean()) - base_r, stress_mean_r=stress,
-        stress_passed=stress > 0, input_digest=tensor.digest)
+        stress_passed=stress > 0, input_digest=tensor.digest, excess_fold_t=xfolds,
+        excess_fitness=None if any(f is None for f in xfolds) else float(min(f for f in xfolds if f is not None)))
 
 
 def plateau_test(neighbour_fitness: Sequence[float | None], min_share: float = PLATEAU_MIN_SHARE) -> bool:

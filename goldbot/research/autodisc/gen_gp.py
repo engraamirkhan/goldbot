@@ -15,7 +15,9 @@ the adaptive search: design 3.2 step 7); its specs are logged null=True and coun
 
 Bounded: at most population x (generations + 1) evaluations a run. Deterministic under `GPConfig.seed`.
 Selection is NSGA-II (non-dominated fronts, crowding distance, (mu + lambda) survival) on (fitness, -leaves,
--turnover); fitness is the evaluator's min-fold clustered t (-inf below the floors)."""
+-turnover); fitness (`gp_fitness`) is the evaluator's min-fold clustered t of EXCESS net R over the drift baseline
+(-inf below the floors): the G0 null's random sides carry no drift, so a fitness on raw net R would count gold's long
+drift as skill against it (quant review F4, 2026-10-30)."""
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
@@ -29,7 +31,7 @@ from goldbot.research.autodisc.contracts import BoolArr, MaskProvider, SideArr
 from goldbot.research.autodisc.evaluate import Evaluation, evaluate
 from goldbot.research.autodisc.gen_combine import exit_menu
 from goldbot.research.autodisc.ledger import SearchLedger
-from goldbot.research.autodisc.nulls import NULL_REPS, NullDistribution, exit_index, fitness_of, hash_sides
+from goldbot.research.autodisc.nulls import NEG_INF, NULL_REPS, NullDistribution, exit_index, hash_sides
 from goldbot.research.autodisc.outcomes import OutcomeTensor
 from goldbot.research.autodisc.spec import (
     MAX_DEPTH,
@@ -300,6 +302,11 @@ def null_view(mask: BoolArr, side: SideArr, random_side: SideArr) -> tuple[BoolA
 
 # ---------------------------------------------------------------- NSGA-II
 
+def gp_fitness(e: Evaluation) -> float:
+    """G2's fitness: the min-fold excess-R t (module docstring); -inf below the floors or with an unreadable fold."""
+    return e.excess_fitness if (e.floors_passed and e.excess_fitness is not None) else NEG_INF
+
+
 def nondominated_fronts(obj: NDArray[np.float64]) -> list[list[int]]:
     """Fronts of rows of `obj` (every column maximised), best first (Deb et al. 2002, fast non-dominated sort)."""
     m = len(obj)
@@ -340,7 +347,7 @@ def crowding(obj: NDArray[np.float64], front: Sequence[int]) -> dict[int, float]
 def _objectives(cands: Sequence[GPCandidate], n_bars: int) -> NDArray[np.float64]:
     rows = []
     for c in cands:
-        f = fitness_of(c.evaluation)
+        f = gp_fitness(c.evaluation)
         n_leaves = len(leaves(canonicalise_predicate(c.spec.entry))) + (
             len(leaves(canonicalise_predicate(c.spec.filter))) if c.spec.filter is not None else 0)
         rows.append([f if np.isfinite(f) else _NEG, -float(n_leaves), -c.evaluation.n_events / max(n_bars, 1)])
@@ -376,7 +383,8 @@ def evaluate_logged(t: OutcomeTensor, res: Resolver, s: StrategySpec, ledger: Se
     e = evaluate(t, mask, side, exit_index(t, s), timeframe=s.timeframe, spec_hash=h, ledger=ledger, null=null,
                  min_events=min_events)
     ledger.record_result(h, {"n_events": e.n_events, "mean_r": _num(e.mean_r), "fitness": _num(e.fitness),
-                             "excess_r": _num(e.excess_r), "stress_mean_r": _num(e.stress_mean_r),
+                             "excess_r": _num(e.excess_r), "excess_fitness": _num(e.excess_fitness),
+                             "stress_mean_r": _num(e.stress_mean_r),
                              "floors": e.floors_passed, "generation": generation}, null=null)
     return GPCandidate(spec=s, spec_hash=h, parents=parents, generation=generation, evaluation=e)
 
@@ -405,7 +413,7 @@ def run_gp(t: OutcomeTensor, provider: MaskProvider, cfg: GPConfig, ledger: Sear
         s = random_spec(rng, cfg, cat)
         seeds.setdefault(spec_hash(s), s)
     pop = [run_one(s, (), 0) for s in seeds.values()]
-    best_by_gen = [max((fitness_of(c.evaluation) for c in pop), default=float("-inf"))]
+    best_by_gen = [max((gp_fitness(c.evaluation) for c in pop), default=float("-inf"))]
     for gen in range(1, cfg.generations + 1):
         rank = _rank(pop, t.n_bars)
 
@@ -434,7 +442,7 @@ def run_gp(t: OutcomeTensor, provider: MaskProvider, cfg: GPConfig, ledger: Sear
         merged = pop + offspring
         r = _rank(merged, t.n_bars)
         pop = [merged[i] for i in sorted(range(len(merged)), key=lambda i: (r[i], i))[: cfg.population]]
-        best_by_gen.append(max(best_by_gen[-1], max(fitness_of(c.evaluation) for c in offspring)))
+        best_by_gen.append(max(best_by_gen[-1], max(gp_fitness(c.evaluation) for c in offspring)))
     return GPRun(evaluated=tuple(order), best=max(best_by_gen), best_by_generation=tuple(best_by_gen))
 
 

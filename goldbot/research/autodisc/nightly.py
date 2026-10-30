@@ -36,12 +36,13 @@ from goldbot.research.autodisc.gen_gp import (
     GPConfig,
     Resolver,
     evaluate_logged,
+    gp_fitness,
     gp_null,
     neighbours,
     run_gp,
 )
 from goldbot.research.autodisc.ledger import SearchLedger
-from goldbot.research.autodisc.nulls import exit_index, fitness_of
+from goldbot.research.autodisc.nulls import exit_index
 from goldbot.research.autodisc.outcomes import OutcomeTensor
 from goldbot.research.autodisc.stats import (
     CS_ALPHA,
@@ -121,7 +122,7 @@ def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg:
     real = run_gp(t, provider, cfg, ledger, resolver=res)
     null = gp_null(t, provider, cfg, ledger, reps=reps, resolver=res)
     thr = max(null.threshold(), 0.0)
-    floors = [c for c in real.evaluated if np.isfinite(fitness_of(c.evaluation))]
+    floors = [c for c in real.evaluated if np.isfinite(gp_fitness(c.evaluation))]
     day_id, n_days = _day_ids(t)
     cols: list[np.ndarray] = []
     for c in floors:
@@ -130,11 +131,11 @@ def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg:
         cols.append(excess_daily(t, ev.r(), ev.idx, ev.side_i, exit_index(t, c.spec), day_id, n_days))
     d = np.column_stack(cols) if cols else np.zeros((n_days, 0))
     rc = reality_check(d, seed=cfg.seed) if d.shape[1] >= 1 and n_days >= 20 else None
-    pbo = batch_pbo(d, [fitness_of(c.evaluation) for c in floors])
+    pbo = batch_pbo(d, [gp_fitness(c.evaluation) for c in floors])
     batch_ok, why = batch_passes(rc, pbo)
     col_of = {c.spec_hash: j for j, c in enumerate(floors)}
-    cands = sorted((c for c in floors if fitness_of(c.evaluation) > thr and c.evaluation.explore_checks_passed),
-                   key=lambda c: -fitness_of(c.evaluation))
+    cands = sorted((c for c in floors if gp_fitness(c.evaluation) > thr and c.evaluation.explore_checks_passed),
+                   key=lambda c: -gp_fitness(c.evaluation))
     judged: list[tuple[GPCandidate, float, Plateau]] = []
     n_nb = 0
     hour = t.ts_utc.hour.to_numpy()
@@ -147,10 +148,10 @@ def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg:
         nbs = [evaluate_logged(t, res, nb, ledger, parents=(c.spec_hash,), generation=-1, min_events=cfg.min_events)
                for nb in neighbours(c.spec)]
         n_nb += len(nbs)
-        fit = [f if np.isfinite(f := fitness_of(nb.evaluation)) else None for nb in nbs]
-        judged.append((c, shift.p_value, plateau_check(fitness_of(c.evaluation), fit)))
+        fit = [f if np.isfinite(f := gp_fitness(nb.evaluation)) else None for nb in nbs]
+        judged.append((c, shift.p_value, plateau_check(gp_fitness(c.evaluation), fit)))
     dsr = batch_dsr(d, [col_of[c.spec_hash] for c, _, _ in judged], ledger.k_search()) if judged else {}
-    survivors = [Survivor(spec_hash=c.spec_hash, spec_json=c.spec.model_dump_json(), fitness=fitness_of(c.evaluation),
+    survivors = [Survivor(spec_hash=c.spec_hash, spec_json=c.spec.model_dump_json(), fitness=gp_fitness(c.evaluation),
                           mean_r=c.evaluation.mean_r, excess_r=c.evaluation.excess_r, n_events=c.evaluation.n_events,
                           shift_p=p, plateau=pl, dsr=dsr[col_of[c.spec_hash]])
                  for c, p, pl in judged if batch_ok and p <= CS_ALPHA and pl.passed]
