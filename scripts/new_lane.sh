@@ -4,6 +4,7 @@
 #   scripts/new_lane.sh <name>        -> .claude/worktrees/<name> on a new branch worktree-<name>, at origin/main
 # Refuses (exit 3) when LANE_MAX_WORKTREES (default 40) worktrees already exist, the main checkout included, or the
 # volume holding the repository has less than LANE_MIN_FREE_GB (default 100) GB free. Exit 2: bad name or usage.
+# Then runs the new tree's scripts/worktree_env.sh (exit 4 when it fails; a notice when origin/main has none yet).
 # Runs on the repository of the current directory; prints the new worktree's path as its last line.
 set -euo pipefail
 
@@ -41,4 +42,10 @@ base=$(git rev-parse --verify -q "origin/main^{commit}") || die "no origin/main"
 mkdir -p "$root/.claude/worktrees"
 git worktree add -q -b "$branch" "$dest" "$base"
 echo "lane $name: branch $branch at origin/main $base ($((n + 1)) of $MAX worktrees, $free_gb GB free)"
+# the lane's own .venv on the locked Python (FR-1), by the new tree's copy of the script
+if [ -x "$dest/scripts/worktree_env.sh" ]; then
+  (cd "$dest" && scripts/worktree_env.sh) || die "scripts/worktree_env.sh failed in $dest: fix it and rerun it there" 4
+else
+  echo "new_lane: notice: no scripts/worktree_env.sh at origin/main yet; build the venv by hand" >&2
+fi
 echo "$dest"

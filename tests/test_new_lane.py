@@ -56,6 +56,36 @@ def test_a_lane_is_created_from_origin_main_whatever_the_current_branch(repo):
     assert git(wt, "rev-parse", "HEAD") == git(repo, "rev-parse", "origin/main")
     assert git(wt, "rev-parse", "--abbrev-ref", "HEAD").strip() == "worktree-fr4-demo"
     assert not (wt / "b.txt").exists()
+    assert "no scripts/worktree_env.sh" in r.stderr
+
+
+def test_the_new_trees_worktree_env_script_runs_in_it_when_origin_main_has_one(repo):
+    git(repo, "checkout", "-q", "main")
+    env_sh = repo / "scripts" / "worktree_env.sh"
+    env_sh.parent.mkdir()
+    env_sh.write_text("#!/usr/bin/env bash\npwd > .env_built\n", encoding="utf-8")
+    env_sh.chmod(0o755)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "worktree_env")
+    git(repo, "push", "-q", "origin", "main")
+    r = run(repo, "with-env")
+    assert r.returncode == 0, r.stderr
+    wt = Path(r.stdout.strip().splitlines()[-1])
+    assert Path((wt / ".env_built").read_text(encoding="utf-8").strip()).resolve() == wt.resolve()
+    assert "notice" not in r.stderr
+
+
+def test_a_failing_worktree_env_script_fails_the_lane_with_4(repo):
+    git(repo, "checkout", "-q", "main")
+    env_sh = repo / "scripts" / "worktree_env.sh"
+    env_sh.parent.mkdir()
+    env_sh.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+    env_sh.chmod(0o755)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "broken worktree_env")
+    git(repo, "push", "-q", "origin", "main")
+    r = run(repo, "broken-env")
+    assert r.returncode == 4 and "worktree_env.sh failed" in r.stderr
 
 
 def test_the_worktree_cap_refuses_and_prints_the_prune_command(repo):
