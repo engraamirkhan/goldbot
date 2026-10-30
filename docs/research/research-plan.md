@@ -1,9 +1,9 @@
 # Research plan: live lines, kill/scale table, next bets
 
-Rewritten 2026-10-30 by the research director (role replaced 2026-10-30, owner decision), base `660d2db2`. The
-previous plan (cycle 1, 2026-10-20: milestone ladder, 23-row agenda, team-feedback items 1-83) is in git history at
-`660d2db2:docs/research/research-plan.md`; its answers stand unless a row below changes them. Kill rules here that
-need an amendment cite `prereg-amendment-2026-10-30-kill-rules.md` (A1-A4, drafts until signed).
+Rewritten 2026-10-30 (cycle 2, same day) by the research director, base `48768fda`. Cycle 1 of today is at
+`48768fda:docs/research/research-plan.md`; the 2026-10-20 plan (team-feedback items 1-83) at
+`660d2db2:docs/research/research-plan.md`. Their answers stand unless a row below changes them. Kill-rule amendments
+cite `prereg-amendment-2026-10-30-kill-rules.md` (A1-A4 signed with conditions 10-30; A5 draft).
 
 Safety rails are not research variables: RiskGate only path, 1% per-trade cap, daily loss limit, owner confirms
 real-money entries, exits never gated, holdout sealed, every id counted in K.
@@ -12,108 +12,124 @@ real-money entries, exits never gated, holdout sealed, every id counted in K.
 
 | Fact | Value | Source |
 |---|---|---|
-| Families with an edge over the random control | **0.** Every family with >= 30 trades a side is "not distinguishable" on the matched read | perf-report 2026-10-19..10-30, learning section, all 3 accounts (read 2026-10-30 17:24 UTC) |
-| Random control, icm-probe | n 354, +0.025 R net, +8.84 R | perf-report; **re-derived** from aux.db `exploration_trades` (read-only), identical |
-| Exploration + control closes | 1,468 in 2026-10-26..30 (probe 875, icm 389, vantage 204); peak 420 on 10-29, mean ~367 a session day 10-27..30; cost probes on top | aux.db, re-derived |
-| Why the raw book is green | Direction drift, not skill: icm-probe strategy shorts +0.216 R (n 333, t 3.4), longs -0.164 R (n 176, t -1.95); control shorts +0.058 R, longs -0.025 R; strategies 65% short in a falling week. The matched read (by side) removes it | performance-analyst 2026-10-30; **re-derived** exactly from aux.db |
-| Costs | ICM ~0.05 R round trip at $3-4.50 stops (spread 0.025 + commission 0.024), Vantage 0.021 R; engine signal-time cost reads ~2x (0.116 R vs 0.053 R) | performance-analyst; ruling owed (line 8) |
-| Exits (descriptive) | 93% of stopped trades never reach +1 R (median MFE 0.19-0.27 R). Strategy mean R by target: 0.5 R -0.070, 1 R +0.032, 2 R +0.133, none +0.213; control flat (+0.014 -> +0.007). Confounded by the short drift | performance-analyst sim, not yet history-tested |
-| Power | Per-trade SD ~1.1 R. At 300 a side the matched 90% half-width is ~0.15 R; a +0.05 R edge needs ~6,000 a side. **Demo can only kill or find large effects; small edges must be found on history** | re-derived, A1 |
-| Discovery (ADR 0058), 2010-2017 | 288 specs a TF, ~5.3k null specs, **0 survivors**. 1h 0.841 vs bar 1.337; 4h 0.692 vs 1.019 (RC p 0.64, PBO 0.62); 15m beats its null (RC p 0.001) but top specs have negative own mean R (-0.03..-0.08 R, stressed ~-0.19 R): it beats a cost-crushed null, not zero | `~/tmp/autodisc-run-*/`; 15m ledger re-read |
-| North-star | £50+ days: none attributable to an edge. Account balances 26-30 Oct: icm-probe +£46, icm-demo -£44, vantage +£30 (exploration + probes, demo) | performance-analyst |
-| K | ~360 by the arm-id rule (Q4 budget 145, all spent on arm ids) + 864 discovery specs this run | settings.yaml `trial_budget_overrides`; discovery ledgers |
+| Families with an edge over the random control (demo) | **0.** Every family with >= 30 trades a side "not distinguishable" | perf-report 2026-10-19..10-30, learning section (cycle 1) |
+| Scalp arms' own entries on history (S5A/B, Z4D/P, Z6D, Z7D/P), 337,341 entries 2010-2017 | Gross within +/-0.010 R at **every** exit (1 R..time-only); net -0.04..-0.06 R at the 0.05 R broker cost, -0.11..-0.13 R at the 0.116 R signal-time cost of record. Share reaching +1 R: 4.1-12.7%; median MFE 0.18-0.30 R. DiD of wider exits vs random entries -0.0017..+0.0009 R (bar +0.05) | `hb-exits-screen-2026-11.md`; **re-derived** by the director from `~/tmp/hb_exits/pairs_*.parquet`: +1 R share S5A 0.127, S5B 0.085, Z4D 0.101, Z4P 0.086, Z6D 0.044, Z7D 0.042, Z7P 0.041; Z7D time-only gross +0.0095, Z6D -0.0091; S5 n 55,442 + 55,264 = 110,706. All match |
+| Random entries by session x range tercile x trend side, 2010-2017 (493,694 trades) | **0 of 24 cells** net > 0 (net -0.058..-0.109 R; best gross +0.025 R); H-A trend side -0.008 R (t -2.7, wrong sign). Session changes cost (Asia/NY late ~2x the London spread add-on), not gross | `when-map-screen-2026-11.md` |
+| Box family (owner's box break) R2, 2018-2025-09, n 5,355 | Runner - fixed gross -0.018 R (t -1.12); levels gross/net E0 +0.012/-0.199, E4 -0.006/-0.288, E8 +0.011/-0.206 R. The +0.039 R discovery-half result did not replicate | `prereg-exits-adaptive-2026-10-26.md` s.8 |
+| H-16 range forecast, 2010-2017, 1,506 OOS days | FAIL by the frozen rule: rho gain +0.201 (95% 0.145..0.260; positive in all 6 years) passed, quintile ratio 1.437 < 1.5 failed (HAR alone 1.165). Every quintile's median day moves 14-18x the round-trip cost | `opportunity-days-screen-2026-11.md`; **re-derived** 1.0744 / 0.7478 = 1.437 from `~/tmp/h16-screen/result.json` |
+| Discovery v1 (ADR 0058) | 0 survivors on 15m/1h/4h; phase 3 (confirm/holdout) still being built | cycle 1 |
+| TradingView parser | Audit 2 (seed 20261031) FAIL: direction 83.3% (bar 95%), levels 76.7% (bar 90%). Second failed regex iteration | `tv-ideas-parser-audit-2026-10-31.md` |
+| Data integrity | icm-probe's terminal ran on icm-demo's login 10-19..10-25: its balances, daily loss and 137 probes in that window are icm-demo's | demo-reset PR (68 A2 ids retired, duplicate-login guard, specialist label fix) |
+| K | ~1,256 = ~360 arm ids + 864 discovery v1 specs + 31 screen looks (H-16 1, H-82 5, H-83 25) + 1 registry trial (H-80 R2, local-only, owed to the brain registry as a 2026Q4 trial) | this file; screen documents |
 
-**Read:** after ~2,000 demo trades the system has no edge distinguishable from random entries, and the demo cannot
-detect the size of edge that intraday gold plausibly offers (0.05-0.10 R). The cheapest information now is on
-history (free n, measured costs ~3-7x below the old research prior) and in *when* to trade and *how to exit*, not in
-more entry patterns. The demo's job is narrowed to: random controls, cost measurement, and reading the 5-6 families
-that can reach n = 300 this quarter.
+**Read.** Three independent history tests this week say the same thing: on 1m-4h gold, with the entries we have,
+the gross edge is zero to within 0.01-0.03 R, and the cost (0.05-0.3 R) is the whole result. Exits do not rescue it
+(H-82, H-80 R2), timing does not rescue it (H-83), and the day-type forecast predicts range, not money (H-16). The
+remaining expected information is where cost per R is small and a peer-reviewed mechanism exists: 4h/1d holds
+driven by trend and macro, and the one intraday "when + exit" idea with published support (H-17 trend day).
 
 ## 2. Live lines (at most 8)
 
 | # | Line | Mechanism (why gold pays) | Owner | Kill rule (sample, bar, date) | Next measurable step |
 |---|---|---|---|---|---|
-| 1 | **Opportunity days: H-16 range forecast, then H-17 trend day + runner** | Volatility persists and clusters on event days (Corsi 2009; Cai et al. 2001; R-grade); a trend day caught early pays only if held | opportunity-researcher | H-16 frozen rule on 2010-2017 screen: OOS Spearman < HAR-only + 0.05 or quintile ratio < 1.5 -> GVZ/events/compression retired as inputs; H-17 screen: gross t < 2 or net <= 0 at the measured cost -> trend-day line retired. Screen result by **2026-11-13** | A3 signed (11-03); H-16 screen on 2010-2017 by 11-06 (bet 1) |
-| 2 | **Exits: runner vs fixed, wider targets / time exits** | Stopped trades rarely reach +1 R; if intraday gold trends have positive serial correlation, cutting winners at 1-1.5 R forfeits the payoff (Kaminski & Lo 2014, S) | exits-researcher | H-80 R2 frozen rule (pooled paired t >= 2 Holm, 3 of 4 TF same sign, net >= fixed) on 2018-2025-09, once, by **2026-11-13**; H-B screen: if no target beats 1 R by >= 0.05 R **over the random control under the same exit** on 2010-2017, the line closes | bet 2 |
-| 3 | **When-to-trade map on random entries (incl. the 4h-trend side filter, H-A)** | If any session x range x trend-side cell makes even random brackets net-positive, the edge is in timing, and every family's bar moves | microstructure-researcher | Pre-registered 24 cells, DSR at cumulative K: no cell with net mean > 0, day-clustered t >= 3 and >= 6 of 8 years positive on 2010-2017 by **2026-11-13** -> line retired | bet 3 |
-| 4 | **Discovery funnel, grammar v2** | Search over when/exit/side primitives, not only entries; selection on 2010-2017 only | strategy-researcher (+ ml-researcher for the null and leakage) | ADR 0058 stop (48 confirms, no pass); A4: grammar v2 with 0 explore survivors on 15m/1h/4h by **2026-11-20** freezes generation until the Q1 SoA refresh | A4 signed; grammar v2 frozen with the absolute net-R floor and measured costs; one run per TF |
-| 5 | **Demo reads of the readable families** (table 3) | Kill machine for large effects; cost and parity evidence | performance-analyst (reads), evaluator (verdicts) | Each unit's pre-registered read + A1 + A2; first reads **2026-11-23** | Friday read every week; A1/A2 signed by 11-04 |
-| 6 | **Costs: the figure every rule reads** | Fixed USD costs are the largest share of R at small stops | microstructure-researcher | S0R overshoot read at 100 stop exits (~**2026-11-10**) by its rule; cost-figure ruling (measured vs signal-time) by **2026-11-06** | evaluator ruling; then re-score retired families' recorded gross edges at the worse measured cost (R-15 re-entry condition: cost below half the prior) |
-| 7 | **TradingView author ideas** | Rare public skill (Kakhbod et al. 2023, WP); prior 10-15% | strategy-researcher | Parser re-audit (outcome-blind, new seed) must reach direction >= 95%, levels >= 90% by **2026-11-13**, else the line is retired: 0 of 60 sampled ideas carry entry + stop, so only direction-plus-target ideas can ever be scored | parser fix in flight; re-audit |
-| 8 | **Money-leak analysis of the demo book** | Finds losses that are not edge (sizing, specialist arms, stale accounts, unrecorded balances) | performance-analyst | One-off: closes when its findings are answered in section 5 | data issues 89-90 below |
+| 1 | **Macro-driven 4h/1d direction (H-84)**, reopened from "parked" | Gold is priced against real rates and the dollar (opportunity cost; Erb & Harvey 2013; Baur & Lucey 2010, R) and trends at 1-12 months (MOP 2012; Hurst et al. 2017, R). At 5-20-day holds cost is ~0.02-0.05 R + swap, so a gross 0.1 R edge can survive | macro-researcher | Screen 2010-2017 by **2026-11-10**: per variant gross t >= 2 and net > 0 at the worse measured cost + swap, and >= 5 of 8 years positive, else retired; survivors confirm once on 2018-2025-09 (the 2022 real-rate break is the falsification test) | pre-registration (<= 4 variants, frozen by commit) by **11-03**; bet 1 |
+| 2 | **Trend day + runner (H-17)**; H-16 selector = HAR alone | Volatility clusters (R); a trend day caught early pays only if held (Zarattini et al. 2024, S) | opportunity-researcher | Frozen H-17 rule (A3) on 2010-2017 by **2026-11-06**: gross t < 2 on its events, or V1 net <= 0, or < 3 positive net years -> line retired with H-16 | bet 2 |
+| 3 | **Discovery grammar v2, last run** | Search over when/side/exit primitives with an absolute net-R floor | strategy-researcher (+ ml-researcher for null/leakage) | A4: 0 survivors on every TF run by **2026-11-20** freezes generation until the Q1 SoA refresh | K_v2 declared, one run per TF; bet 3 |
+| 4 | **Demo book: controls, cost, and the reads that remain** (table 3) | Kill machine for large effects; cost and parity evidence | performance-analyst (reads), evaluator (verdicts) | A1/A2 (signed with conditions), A5 (draft) and each unit's own read; 11-13 A2 bar; reads from **2026-11-23** | A5 signed by 11-04; per-stratum signal-time cost stop applied now |
+| 5 | **Costs: the figure every rule reads** | Fixed USD costs are the largest share of R at small stops | microstructure-researcher | S0R overshoot read at 100 stop exits (~**11-10**); data-engineer confirms `cost` is the measured table, not the config fallback, by **11-06** (evaluator R2) | then cost-probe volume set to what the protocol needs |
+| 6 | **TradingView author ideas, direction only with abstain (amendment T-1)** | Rare public skill (Kakhbod et al. 2023, WP); prior 10-15% | strategy-researcher (staff audit) | Re-audit on a fresh seed by **2026-11-13**: precision >= 95% on non-abstained ideas and coverage >= 50%, else the line is **parked** to the Q1 SoA refresh; no fourth parser iteration | T-1 written in `prereg-2026-10-28-tv-author-ideas.md` s.7 before the parser change |
+| 7 | **Book integrity** (money leaks, account mixing) | Losses that are not edge distort every read | performance-analyst + data-engineer | Closes when items 89, 90 and 101 are answered | icm-probe 10-19..10-25 excluded from every read and balance figure |
 
-**Parked, with the reason:** macro 4h/1d (H-01/H-02/H-06 frozen in Q1; untradeable before M3/M4; no new work this
-month); ML meta-labelling (no primary has a gross edge to label: BACKLOG "Rejected"); hand-written new entry
-families (0 of ~30 beat the control; new entries come only through line 4).
+**Retired this cycle, with the reason:**
+- *Exits* (was line 2): H-80 R2 FAIL (runner -0.018 R gross, t -1.12; 2 of 4 TF) and H-82 FAIL on all 5 variants
+  (DiD |x| <= 0.0017 R, CIs +/-0.001 R). Fixed-$ scalp brackets rarely reach a target, so exits cannot matter there;
+  box-family exits do not replicate. Not reopened: H-82's volatility-scaled replication (item 97).
+- *When-to-trade at the scalp clock* (was line 3): H-83 0/24 cells, H-A wrong sign. Not reopened: the 1h/4h
+  when-map (item 98) and the post-hoc "continuation on narrow days" pattern (item 99).
+- *H-16 as a separate line*: FAIL; GVZ/events/compression retired as range inputs; O-1 cancelled; no new money-tied
+  pre-registration (item 95).
 
-## 3. Kill/scale table, every demo family (matched read: perf-report 2026-10-19..10-30)
+**Parked:** ML meta-labelling (no primary with a gross edge); hand-written intraday entry families (0 of ~30 beat
+the control, and history now bounds the scalp entries' gross at +/-0.01 R); the owner's box break + MFI as a coded
+rule (R-15 at 15m, H-80 R2 at 15m-4h; H-53 1h stays the 2027Q1 retired-family trial by its own text).
 
-Rates are admissible fills a session day over 10-27..10-30 (aux.db). Reads: H-61 (arm, 300, >= 20 session days),
-W1/W2/H-81 (family pooled, 300, >= 20 session days; -30 R stop; futility UB < +0.03 R). 20 session days from 10-27
-= **2026-11-23**. **No family qualifies for scale**: exploration fills are never promotion evidence (H-61, H-81
-section 4); a read can at most earn a new pre-registration and a history trial.
+## 3. Kill/scale table, every demo family
 
-| Family (arms) | n, matched excess vs control (90%) | Rate | Pre-registered rule | Decision |
+Matched read: perf-report 2026-10-19..10-30 (cycle 1). Rates: admissible fills a session day 10-27..10-30. **No
+family qualifies for scale.** icm-probe fills and balances 10-19..10-25 are excluded (login mix, item 101).
+
+| Family (arms) | n, matched excess vs control (90%) | Rate | Rule | Decision this cycle |
 |---|---|---|---|---|
-| random_bracket (S0, S0R, I0, W0, VI0, C1H, VC1H), scalp_control (ZCD, ZCV), F1C, XC15 | control, +0.025 R (probe 354) | ~90 | controls never read | **keep** (the null) |
-| cost_probe | -0.05 R, cost measurement | ~120 | cost protocol | **keep** to the 11-06 cost ruling; microstructure proposes a lower volume then |
-| halfhour_persist (Z7D/Z7V/Z7P) | probe -0.02 (103), icm +0.25 (107, -0.27..+0.77), vantage +0.08 (98) | 78 | H-81 read 300 | **kill at read 2026-11-23** unless it passes the -30 R stop, futility and A1 |
-| ema_pullback (S5A, S5B) | probe -0.03 (191, -0.23..+0.16) | 53 | H-61 read 300 per arm; suspended if S0R reads "real" | **kill at read 2026-11-23** by H-61 + A1 (or earlier by S0R) |
-| round_reject (Z4D, Z4P) | probe -0.15 (76, -0.41..+0.11), icm +0.34 (85, -0.23..+0.91) | 40 | H-81 read 300 | **kill at read 2026-11-23** unless it passes A1; watch (performance-analyst) |
-| nr4_break (Z6D, Z6V) | icm +0.35 (47), vantage +0.05 (43) | 23 | H-81 read 300 | **kill at read 2026-11-23** unless it passes A1 |
-| round_break (Z3D, Z3V at V2) | icm +0.15 (62, -0.39..+0.68) | 15 | H-81 read 300; -9.5 R of -30 R | **kill at <100, 2026-11-13** (A2), else read 11-23 |
-| session_vwap_fade (S1A, S1B) | probe +0.21 (54, -0.09..+0.51), best point estimate in the book | 16 pooled, 8 per arm | H-61 read 300 per arm (~2026-12-16) | **keep to its read ~2026-12-16**; evaluator rules by 11-06 whether S1 is a neighbour of the closed session-VWAP fades (H-76); if VOID, **kill now** |
-| run_fade (Z2P) | -0.31 (27); prior 0.02, "expect <= 0" | 7 | H-81 read 300 | **kill at <100, 2026-11-13** (A2) |
-| three_horizon (Z10D) | +0.19 (24); prior 0.02, "expect <= 0" | 6 | H-81 read 300 | **kill at <100, 2026-11-13** (A2) |
-| extreme_break (Z5P, Z5V at V2) | +0.60 (13) | 3 | H-81 read 300 | **kill at <100, 2026-11-13** (A2) |
-| tick_surge (Z1P) | +0.21 (12) | 3 | H-81 read 300 | **kill at <100, 2026-11-13** (A2) |
-| htf_reclaim (Z9D) | +1.27 (12); prior "expect <= 0" | 3 | H-81 read 300 | **kill at <100, 2026-11-13** (A2) |
-| hurst_band_break (F1A) | -0.64 (13); -5.3 R | 3 | futility at 300/1,000; cost input to O-11 | **keep as cost arm** (A2 exempt) until 200 fills for O-11 (~2027-01-25); no demo edge read |
-| level_break (G1A) | -0.83 (2) | 0.5 | cost/safety arm for O-12 | **keep as cost arm** (A2 exempt); O-12 moves to Q2 by its own rule if 100 fills are not reached by 2027-03-12 |
-| box family H-80 R1 (BXR*, virtual BXT*/BXF*) | no admissible fills in the window | <1 | kill-only, no adoption before 3,000 | **keep until R2 verdict (bet 2), then kill** unless R2 adopts the runner |
-| sweep_absorb (S3A, S3B: VOID R-14; MSA15, VMS15) | n 11 | 3 | H-61; read void | **kill now** (A2; read void by H-61) |
-| opening_range_break (S2A, S2B) | -0.62 (6) | 2.5 | H-61 read 300 | **kill now** (A2: cannot read this year; ORB closed on history, R-02/H-76) |
-| specialist / wave 1 (XIMNY, XIMLN, XMR15, XMR1H, XAD1H, XSO15, XEQ15, XTV1, VXBO1H, VXBO15, VXTR1H, VXTV2, VXRIP1H, VXRT1H, VXFK1H, VXTL1H) | -0.16 R raw (13); icm-demo -£44 | 3 across 16 ids | W1 read 300, -30 R | **kill now** (A2) |
-| absorb_fade (Z8P), clock_anchor (KA15), ob_retest (OBR15), squeeze_release (KSQ1/4), DON4/DOND, C30A, PDC1/PDC4, F2A | n 1-4 each | < 2 | W2 / H-81 read 300 | **kill now** (A2) |
-| tsmom swing (W1A, W1B, VW1A, VW1B: VOID R-06/R-10), W2/VW2 (VOID R-15), I2A/I2B/VI2A/VI2B (VOID R-15), S4 (VOID R-15) | n 0-2 | < 1 | H-61; read void | **kill now** (read void; A2) |
-| asia_drift (icm-demo, 3 trades, -£48.65) | -0.36 (3) | < 1 | H-04 STOP (#44) on history | **kill now** (its hypothesis is already retired) |
-| MB15/MB30/MB1H, VMB15/30/1H, WFRI, other ids with no fills in the window | 0 | 0 | H-61 / time-structure 4 | **kill now** (A2); WFRI's 170-Friday read cannot land before 2030 |
+| random controls (S0, S0R, I0, W0, VI0, C1H, VC1H, ZCD, ZCV) | +0.025 R (probe 354) | ~90 | never read | **keep** (the null) |
+| XC15 (dedicated control of the specialist arms) | — | <2 | A2 | **kill** (evaluator R4 objection accepted: its arms are retired) |
+| cost_probe | -0.05 R | ~120 | cost protocol | **keep** to the 11-06 ruling, then cut to the protocol's need |
+| halfhour_persist (Z7D/Z7V/Z7P) | probe -0.02 (103), icm +0.25 (107), vantage +0.08 (98) | 78 | H-81 read 300 + A1 | **kill on A5 sign-off** (history: gross +0.002..+0.010 R across the 5 exits on 168,705 entries, below cost at every exit); until then the H-81 s.4 signal-time cost stop applies per stratum |
+| ema_pullback (S5A, S5B) | probe -0.03 (191) | 53 | H-61 read 300 + A1 | **kill on A5 sign-off** (gross -0.009..+0.005 R across exits on 110,706 entries) |
+| round_reject (Z4D, Z4P) | probe -0.15 (76), icm +0.34 (85) | 40 | H-81 read 300 + A1 | **kill on A5 sign-off** (gross -0.001..+0.008 R on 30,079) |
+| nr4_break (Z6D, Z6V) | icm +0.35 (47), vantage +0.05 (43) | 23 | H-81 read 300 + A1 | **kill on A5 sign-off** (gross -0.011..-0.009 R on 27,851) |
+| round_break (Z3D, Z3V) | icm +0.15 (62) | 15 | H-81 + A2 | **kill at < 100, 2026-11-13** (A2), else read 11-23 with A1 |
+| session_vwap_fade (S1A, S1B) | probe +0.21 (54, -0.09..+0.51) | ~8 an arm | H-61 per arm + A1/A2 (evaluator R3: not void) | **no A2 exemption**: retired 11-13 if < 100 an arm; else read at 300 an arm with A1. VWAP fades grossed <= 0 on 2010-2017 |
+| box family H-80 R1 (BXR*, virtual BXT*/BXF*) | no admissible fills | <1 | A2 exemption ended with the R2 FAIL | **kill now** (A2: "retired if R2 does not adopt the runner") |
+| hurst_band_break (F1A/F1C), level_break (G1A/G1C) | small n | <4 | cost arms for O-11/O-12 | **keep as cost arms** (A2 exempt) |
+| run_fade Z2P, three_horizon Z10D, extreme_break Z5P/Z5V, tick_surge Z1P, htf_reclaim Z9D | n 12-27 | <8 | H-81 + A2 | **kill at < 100, 2026-11-13** (A2) |
+| A2 "kill now" list (evaluator R4: S2*, S3*, MSA15, VMS15, S4, I2*, VI2*, W1*, VW1*, W2, VW2, MB*, VMB*, WFRI, specialists X*/VX*, Z8P, KA15, OBR15, KSQ1/4, DON4/DOND, C30A, PDC1/4, F2A/F2C, C30C, S6, I1, I3, W3, VS*) | < 2 a day | — | A2 | **killed** (A2 effective; the demo-reset PR retires the 68 ids; rates recorded with each retirement) |
 
-## 4. Next week's three bets (2026-11-02..11-06), screened on history locally
+**Volume after these decisions:** ~245 admissible fills a session day (controls ~90, cost probes ~120, Z3 ~15, S1
+~16, cost arms ~4), down from ~440; after 11-13 and the cost ruling, ~150-200. This follows the owner's own 10-27
+rule "anneal down on measured confidence": history measured these arms at zero gross on 337k entries. Owner
+options are in section 6.
 
-Chosen by expected information: each decides a whole line and the bar for every family, at 0 or 1 registry trial.
+## 4. Next week's three bets (2026-11-02..11-06), each screened on 2010-2017 locally first
 
-1. **H-16 range forecast on 2010-2017** (line 1). Not a return test. If GVZ/events/compression add >= 0.05 rho over
-   HAR, the system gets a selector that concentrates risk on opportunity days for every family and makes H-17
-   testable; if not, the selector ships on HAR alone and three inputs retire. P(pass) ~0.4. K +1 (screen).
-2. **Exits** (line 2): (a) H-80 R2 on 2018-2025-09, evaluator runs it once by the frozen rule (discovery half: runner
-   - fixed +0.039 R, t 2.4); **1 registry trial**, PD + PO raise 2026Q4 145 -> 146 under the owner's "backtest as much
-   as needed"; P(adopt) ~0.3. (b) H-B pre-registered first, then screened on 2010-2017: the S5/Z4/Z6/Z7 entry rules
-   with targets {1 R, 2 R, time-only} paired against random entries under the same exits, at the worse measured cost.
-   It separates "wider exits pay" from "the week fell". K +3.
-3. **When-to-trade map on random entries** (line 3): S0/ZC bracket geometry on 2010-2017 1m, net at the worse
-   measured cost, 4 sessions x 3 HAR range terciles x 2 trend sides (with / against the 4h return) = 24 cells,
-   pre-registered before any cell is computed, DSR at cumulative K. A positive cell would be the first net-positive
-   evidence in the program and would move every family's bar; a clean null closes timing-only ideas. K +24.
+Chosen by expected information per trial, given that entry timing, exits and when-to-trade failed intraday.
 
-## 5. Team feedback log (items 1-83: see `660d2db2`)
+1. **H-84 macro-driven 4h/1d direction** (line 1, macro-researcher). <= 4 pre-registered variants (real-yield
+   20-day change, broad-USD 20-day change, H-01 slow TSMOM gated by both (H-06), GVZ-RV variance premium (H-03)),
+   1d signal on `macro-v1` PIT data (`~/tmp/macro_dl/macro_fred.parquet`, `asof_join` on `available_utc`), 4h
+   execution, 5-20-day hold, measured cost + swap. Prior: H-01's gross +0.166 R (t 2.04) on 294 events (trial #48,
+   2010-2025-09, so H-01 itself is already seen; the gates are the new part, disclosed). P(any variant passes the
+   screen) ~0.25; P(confirm on 2018-2025-09) ~0.1. K +4. Tradeability flag: a 1.5 x ATR(1d) stop is not sizable on
+   the live pilot (0.01 lot, $4 stop): demo/shadow only unless the owner changes sizing (owner-only).
+2. **H-17 trend day + runner** (line 2, opportunity-researcher). The frozen A3 rule on 2010-2017, conditioned on
+   HAR (already frozen). The only intraday idea left with peer-reviewed support and the £50-day shape. P(pass)
+   ~0.1-0.15 (R-05 and H-80 R2 cut against it). K +2 (V0, V1).
+3. **Discovery grammar v2** (line 3, strategy-researcher). One run per TF on 1h, 4h and 1d (15m dropped before the
+   first run: every 1m-15m test so far is cost-bound with gross ~0; quant to acknowledge as a v2 definition, not a
+   v2.x), with the macro PIT drivers and the HAR tercile as gate primitives and the absolute net-R floor. K_v2
+   declared before the run; survivors pay the DSR at ~1,256 + K_v2. P(>= 1 survivor) ~0.1. It decides whether
+   automated generation continues past 11-20.
+
+## 5. Team feedback log (items 1-94: see the cycle-1 file at `48768fda`)
 
 A = adopted, D = deferred (date), X = declined (reason).
 
 | # | From | Item | Answer | What changed |
 |---|---|---|---|---|
-| 84 | performance-analyst 10-30 | Net by account; closed-trade record 0 on all accounts | **A** as the baseline (exploration is in the ledger by design) | section 1 |
-| 85 | performance-analyst | Loss is entry direction, not costs or exits; strategies 65% short in a falling week | **A, verified** from aux.db (shorts +0.216 R t 3.4, longs -0.164 R) | raw demo P&L is not quoted as skill anywhere; matched read only |
-| 86 | performance-analyst | No arm at its stop; signal-time cost ~2x measured, evaluator must rule | **A**: evaluator rules by 11-06; until then every history screen uses the worse figure (item 72) | line 6 |
-| 87 | performance-analyst | H-A trend filter on S5/Z4/Z7 | **A, reshaped**: tested first on random entries (bet 3), so it is a timing/side mechanism, not three more arm variants; arms only if a cell passes | line 3, bet 3 |
-| 88 | performance-analyst | H-B wider targets / time exit vs control under the same exit | **A** as bet 2b, pre-registered before the screen | line 2 |
-| 89 | performance-analyst | icm-probe balance snapshots 20-23 Oct equal icm-demo's (account mixing) | **A**: data-engineer checks by 11-04; fills from 20-23 Oct stay out of every read until cleared (matches item 56) | — |
-| 90 | performance-analyst | icm-demo lost £39 pre-reset (19-23 Oct), in no readable record | **A**: finance-auditor reconciles to the broker by 11-06 | — |
-| 91 | performance-analyst | Watch Z4P (-0.15 R, 76) and Z2P (-0.20 R, 27) | **A**: Z2 under A2 (11-13), Z4 at its 11-23 read | table 3 |
-| 92 | coordinator (ADR 0058 run) | 0 survivors; change grammar or search space? | **A**: grammar v2 (when/side/exit primitives), absolute net-R floor, measured costs, no nightly reruns on v1, freeze at 11-20 if still 0 | A4, line 4 |
-| 93 | strategy-researcher (TV parser audit 10-30) | Parser fails: direction 53%, levels 67%; 0 of 60 ideas have entry + stop | **A**: no scoring until a re-audit passes; retire the line at 11-13 if it does not | line 7 |
-| 94 | research director (self) | Kill-only futility and readability rules (A1, A2), disclosed as written after interim reads | evaluator + quant sign by 11-04 | table 3 |
+| 95 | opportunity-researcher (H-16) | New pre-registration on a money-tied target (net R of a random bracket by score quintile, or USD range in cost multiples)? | **X.** (1) Random brackets have ~0 gross in every range tercile (H-83: -0.025..+0.025 R), so a random-bracket target only measures cost per R, which is mechanical. (2) The cost-multiple target is already answered: every quintile's median day moves 14-18x the round trip, so no cost-based stand-aside rule exists to find. (3) The +0.20 rho is real and recorded; GVZ/events return only as a conditioning input inside the pre-registration of a primary that has passed a 2010-2017 screen (bets 1-2), under a new id, K counted | line 2; H-16 row |
+| 96 | evaluator (H-80 R2) | BXR arms stop; registry row local-only | **A**: BXR killed now (A2); evaluator syncs the row to the brain registry as the 2026Q4 trial (PD + PO raise 145 -> 146) by 11-04 | table 3 |
+| 97 | exits-researcher (H-82 limits) | Volatility-scaled replication at today's stop/ATR | **X**: the demo's median MFE (0.19-0.27 R) matches history's (0.18-0.30 R), so the geometry is the same; the gross bound (+/-0.01 R) leaves nothing for any exit to amplify | — |
+| 98 | microstructure-researcher (H-83) | When-map at the 1h/4h random-control geometry | **X** for now: bet 1 and bet 3 already test 4h/1d conditioning with a mechanism; revisit only if bet 1 finds a gross edge to condition | — |
+| 99 | microstructure-researcher (H-83) | Post-hoc "continuation after narrow days" (London low +0.050 R) | **X** as a trial (selected from 12 strata, below cost); recorded as a descriptive note for H-17's pre-registration review only | — |
+| 100 | microstructure-researcher (H-83) | Keep 1m/5m arms inside London + NY overlap (thin hours cost ~0.01 R more) | **A** as a cost rule for any surviving 1m/5m arm (Z3, S1 until 11-13) | table 3 |
+| 101 | data-engineer / demo-reset PR | icm-probe ran on icm-demo's login 10-19..10-25 | **A**: that window is excluded from every read and balance figure; performance-analyst re-runs the matched reads without it and states whether any cycle-1 number changes | line 7 |
+| 102 | strategy-researcher (TV audit 2) | Third regex, LLM classifier, abstain amendment, or park | **A: amendment T-1** (direction only, 3 classes long/short/abstain, precision >= 95% on non-abstained, coverage >= 50%). **X LLM**: a model trained on later data knows gold's path after each idea, so its reads of ambiguous text are not outcome-blind (look-ahead), and it costs ~3-4M tokens for the back catalogue. **X fourth regex** chasing full agreement. Park on a T-1 fail | line 6 |
+| 103 | evaluator R4 | XC15 is not A2-exempt | **A** | table 3 |
+| 104 | quant-reviewer A2 | S1A/S1B under the 11-13 bar unless exempted by 11-04 | **A**: no exemption | table 3 |
 
-## 6. Owner-only items
+## 6. Owner-only items (options and a recommendation; nothing decided here)
 
-None this cycle. The +1 registry trial (bet 2a) is a PD + PO budget decision under the owner's standing directive.
+1. **Live pilot (0.01 lot, stops <= $4, £3.12 a trade, owner-confirmed entries; not yet started).** At that geometry
+   history says every current entry loses 0.05-0.12 R a trade: about £0.16-£0.37 a trade, £5-£11 over the pilot's
+   30-trade cap. Options: (a) **defer real money until a family passes its history screen and confirm**
+   (recommended); (b) run the pilot as a plumbing and execution test only, inside its £25 / 30-trade stop, with the
+   expected small loss stated up front; (c) run it as a profit test (not recommended: no research supports it).
+2. **Demo volume vs the 10-19/10-25/10-27 volume directives** ("hundreds of demo trades a day", 500+ total). Options:
+   (a) **~150-250 a day of controls, cost probes and the readable families** (recommended; applied within the
+   owner's own "anneal down on measured confidence" clause, reversible); (b) keep 500+ by adding random-control
+   volume (pure nulls; useful for cost measurement only until the 11-06 ruling); (c) keep the scalp arms to their
+   11-23 reads (pays ~0.05-0.12 R a fill, notional, to learn what history already measured on 337k entries).
+3. **Sizing for 4h/1d** (only if bet 1 survives its confirm): a 1.5 x ATR(1d) stop does not fit 0.01 lot at £50 or
+   1% of £1,000. Options when it arises: demo/shadow only (default), or a larger live balance. No decision needed
+   this week.
+4. **Owner's own trade history** (memory "owner manual results"): the analyser exists (`owner-method-study.md`), but
+   no export is on the Mac. It is the one source of a demonstrated edge; optional, one export, aggregates only.

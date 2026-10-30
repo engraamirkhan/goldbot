@@ -124,3 +124,29 @@ The full text, with the id list, is in the comments at the end of `config/arm_re
    - the 51 ids the plan names;
    - plus XBB15 (if it is under 2 fills a session day), F2C, C30C and XC15 (objection: XC15 is not A2-exempt), S6,
      I1, I3, W3 and the nine blocked VS twins.
+
+## A5. History-bounded entries (DRAFT, research director, 2026-10-30 cycle 2; amends H-61 and H-81 section 4)
+
+**Disclosure.** Written after the H-82 history screen (`hb-exits-screen-2026-11.md`) and after the cycle-1 interim
+demo reads. **Kill-only**: it adds a way to retire and none to continue, graduate or be promoted. The bias it can
+introduce is a false kill. Every retired id keeps its K, registry row and arm id.
+
+**Rule.** A strategy arm is retired on sign-off if a replay of its **live rule code** (`arm_rules.candidates` on the
+hashed `config/exploration_arms.yaml` row, spread gate, send delay, `max_open`) on 2010-2017 1m bars, with the exit
+walk matching the engine labeller, shows all of:
+1. >= 10,000 entries;
+2. mean gross R within +/-0.02 R at **every** exit variant tested (its own and the pre-registered alternatives);
+3. mean net R < 0 at the cost of record (the worse figure, evaluator R2) at every exit variant.
+
+**Why it is not a re-read.** The demo read at 300 can only find effects >= ~0.15 R (A1). History bounds these arms'
+gross at +/-0.011 R on 27,851-168,705 entries each, so the demo read has ~0 power to change the conclusion and the
+slots buy nothing. The rule reads the arm's entry stream, not its demo outcomes.
+
+**Applies now to** (H-82 replay, re-derived by the director from `~/tmp/hb_exits/pairs_*.parquet`): S5A, S5B
+(gross -0.009..+0.005), Z4D, Z4P (-0.001..+0.008), Z6D (-0.011..-0.009), Z7D, Z7P (+0.002..+0.010), and their broker
+twins sharing the rule (Z6V, Z7V) in the same read unit. Not to Z3, S1, Z1, Z2, Z5, Z9, Z10 (no replay; A2 governs).
+Until signed, the H-81 section 4 per-stratum signal-time cost stop applies (UB > 0.10 halves, > 0.20 suspends).
+
+| Amendment | Signs | Due | Status |
+|---|---|---|---|
+| A5 | evaluator, quant-reviewer | 2026-11-04 | draft |
