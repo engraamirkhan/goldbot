@@ -23,6 +23,12 @@ export default defineConfig({
   // AUTH_PORT) and is serial inside. A second spec in the "chromium" project must get its own server, or that
   // project must be made serial (workers: 1), or two files would share one owner, one clock and one set of spent codes.
   workers: 2,
+  // 15 s, not the 5 s default: an assertion waits for a poll or a render, and on a shared runner or a laptop running
+  // other lanes (load average above 100 measured on 2026-10-30) one API round-trip alone can exceed 5 s. A wait only
+  // costs time when the thing it waits for is late; it never makes a wrong page pass.
+  expect: { timeout: 15_000 },
+  // Retries only label a test "flaky" and CI fails on flaky tests anyway. A serial story (dashboard.spec.ts, auth.spec.ts)
+  // sets retries: 0 itself: a retry would replay it from its first test against a server that already has its owner.
   retries: process.env.CI ? 1 : 0,
   // The retry only labels a test "flaky"; in CI a flaky test still fails the build (no retry masking). CI runs one
   // job per project (.github/workflows/ci.yml e2e matrix, tests/test_ci_workflow.py).
