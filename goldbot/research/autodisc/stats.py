@@ -16,8 +16,12 @@ performance, so gold's long drift cannot make a long-biased rule look clever and
   at K from the ledger (`SearchLedger.k_search`, the raw count of distinct specs; K_eff of the design is not built, so
   this DSR is the conservative one), with the spec's own skew and kurtosis and the cross-trial variance of the batch's
   Sharpe ratios. Step 10: "informational at this stage; binding at confirm".
-- `circular_shift_null`: the spec's signal rotated against the returns by random offsets (the signal keeps its own
-  clustering and density, only its alignment with the outcomes is broken); p = (1 + #{shifted >= true}) / (1 + shifts).
+- `circular_shift_null`: the spec's signal rotated against the returns by random offsets of WHOLE WEEKS in calendar
+  time (whole days when the sample spans fewer than `CS_MIN_WEEKS` weeks), so a shifted event keeps its UTC hour and
+  weekday, and scored in excess R over the drift baseline of its hour and side (quant review F1, 2026-10-30: a shift by
+  any bar offset moved a time-leaf signal onto other hours and scored raw R, so a spec riding an hour or session drift
+  beat its own null). The signal keeps its clustering and density, only its alignment with the outcomes is broken;
+  p = (1 + #{shifted >= true}) / (1 + shifts).
 - `plateau_check`: step 6, "at least 60% of the spec's grid neighbours (each parameter moved +-1 step) have a positive
   net fitness", and also the neighbours' mean fitness at least `PLATEAU_MIN_RATIO` of the peak (a knife-edge optimum
   with barely positive neighbours fails).
@@ -26,12 +30,15 @@ An output here is a recorded fact about a batch, never evidence of edge."""
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Literal
 
 import numpy as np
+import pandas as pd
 from numpy.typing import NDArray
 from scipy import stats as sps
 
 from goldbot.base import FrozenRecord
+from goldbot.data.timeutil import epoch_ns
 from goldbot.research.autodisc.evaluate import PLATEAU_MIN_SHARE
 from goldbot.research.autodisc.outcomes import OutcomeTensor
 from goldbot.research.cpcv import pbo
@@ -49,6 +56,9 @@ PBO_MAX = 0.30
 DSR_BAR = 0.90
 CS_SHIFTS = 199              # p resolution 1/200
 CS_ALPHA = 0.05
+CS_MIN_WEEKS = 40            # whole-week shifts need >= ~2/CS_ALPHA admissible offsets; a shorter sample uses days
+ShiftUnit = Literal["week", "day"]
+_UNIT_NS: dict[str, int] = {"week": 7 * 86_400_000_000_000, "day": 86_400_000_000_000}
 PLATEAU_MIN_RATIO = 0.5
 _CHUNK = 1000                # specs per bootstrap matrix product (memory: draws x chunk floats)
 
@@ -69,11 +79,12 @@ class PBOResult(FrozenRecord):
 
 
 class ShiftNull(FrozenRecord):
-    true_mean_r: float
+    true_mean_r: float                  # mean excess R over the drift baseline (raw R when no baseline is given)
     p_value: float
     n_events: int
     null_q95: float
-    shifts: tuple[int, ...]
+    unit: ShiftUnit
+    shifts: tuple[int, ...]             # in whole `unit`s
 
 
 class Plateau(FrozenRecord):
@@ -187,25 +198,76 @@ def _side_mean(side: NDArray[np.int8], r_long: FloatArr, r_short: FloatArr) -> t
     return (float(r[ok].mean()) if ok.any() else float("nan")), int(ok.sum())
 
 
-def circular_shift_null(side: NDArray[np.int8], r_long: FloatArr, r_short: FloatArr, *, n_shifts: int = CS_SHIFTS,
-                        min_shift: int | None = None, seed: int = 0) -> ShiftNull:
-    """Mean R of the signal (`side` per bar: +1 long, -1 short, 0 none; outcome per bar `r_long` / `r_short`, NaN where
-    there is none) against the same signal rotated by `n_shifts` distinct offsets in [min_shift, n - min_shift]
-    (default n // 20, so a shift never leaves the signal near its own alignment). Overlapping events are all counted:
-    this tests the alignment of signal and outcome, the evaluator's one-at-a-time book is read elsewhere."""
+def drift_per_bar(ts_utc: pd.DatetimeIndex, r_long: FloatArr, r_short: FloatArr) -> tuple[FloatArr, FloatArr]:
+    """The drift baseline of every bar for each side: the mean R of all bars of the same UTC hour on that side (as
+    `OutcomeTensor.drift_table`), 0 where an hour has no outcome. The shift null scores R less this."""
+    hour = pd.DatetimeIndex(ts_utc).hour.to_numpy()
+    out = []
+    for r in (np.asarray(r_long, dtype=float), np.asarray(r_short, dtype=float)):
+        ok = np.isfinite(r)
+        tot = np.bincount(hour[ok], weights=r[ok], minlength=24)
+        cnt = np.bincount(hour[ok], minlength=24)
+        tab = np.divide(tot, cnt, out=np.zeros(24), where=cnt > 0)
+        out.append(tab[hour])
+    return out[0], out[1]
+
+
+def shift_unit(ts_utc: pd.DatetimeIndex) -> ShiftUnit:
+    """Whole weeks when the sample spans at least `CS_MIN_WEEKS`, else whole days (module docstring)."""
+    ns = epoch_ns(ts_utc)
+    return "week" if len(ns) and ns[-1] - ns[0] >= CS_MIN_WEEKS * _UNIT_NS["week"] else "day"
+
+
+def _n_units(ns: IntArr, unit: ShiftUnit) -> int:
+    return int(-(-(int(ns[-1]) - int(ns[0]) + 1) // _UNIT_NS[unit]))           # ceil: the period is whole units
+
+
+def shift_signal(side: NDArray[np.int8], ts_utc: pd.DatetimeIndex, k: int, unit: ShiftUnit) -> NDArray[np.int8]:
+    """`side` moved `k` whole units later in calendar time, wrapping over a period of whole units from the first bar,
+    so every event keeps its UTC hour (and, for weeks, its weekday). An event whose moved time has no bar (a holiday,
+    a gap) is dropped, never moved to a neighbouring bar."""
     side = np.asarray(side, dtype=np.int8)
-    r_long, r_short = np.asarray(r_long, dtype=float), np.asarray(r_short, dtype=float)
+    ns = epoch_ns(ts_utc)
+    period = _n_units(ns, unit) * _UNIT_NS[unit]
+    ev = np.flatnonzero(side != 0)
+    moved = ns[0] + (ns[ev] - ns[0] + k * _UNIT_NS[unit]) % period
+    pos = np.minimum(np.searchsorted(ns, moved), len(ns) - 1)
+    ok = ns[pos] == moved
+    out = np.zeros(len(side), dtype=np.int8)
+    out[pos[ok]] = side[ev[ok]]
+    return out
+
+
+def circular_shift_null(side: NDArray[np.int8], r_long: FloatArr, r_short: FloatArr, ts_utc: pd.DatetimeIndex, *,
+                        base_long: FloatArr | None = None, base_short: FloatArr | None = None,
+                        n_shifts: int = CS_SHIFTS, min_shift: int | None = None, seed: int = 0) -> ShiftNull:
+    """Mean excess R of the signal (`side` per bar: +1 long, -1 short, 0 none; outcome per bar `r_long` / `r_short`,
+    NaN where there is none; drift baseline per bar `base_long` / `base_short`, default 0) against the same signal moved
+    by `n_shifts` distinct whole-unit offsets (`shift_signal`; unit by `shift_unit`) in [min_shift, units - min_shift]
+    (default units // 20, so a shift never leaves the signal near its own alignment). Overlapping events are all
+    counted: this tests the alignment of signal and outcome, the evaluator's one-at-a-time book is read elsewhere.
+    A rule that is a pure calendar pattern maps onto itself under whole-week shifts and cannot pass: its timing alone
+    is not alignment evidence (quant review F1, 2026-10-30)."""
+    side = np.asarray(side, dtype=np.int8)
     n = len(side)
-    lo = max(1, n // 20 if min_shift is None else min_shift)
-    pool = np.arange(lo, n - lo + 1)
+    ts = pd.DatetimeIndex(ts_utc)
+    if len(ts) != n:
+        raise ValueError("ts_utc must have one timestamp per bar")
+    zero = np.zeros(n)
+    e_long = np.asarray(r_long, dtype=float) - (zero if base_long is None else np.asarray(base_long, dtype=float))
+    e_short = np.asarray(r_short, dtype=float) - (zero if base_short is None else np.asarray(base_short, dtype=float))
+    unit = shift_unit(ts)
+    units = _n_units(epoch_ns(ts), unit)
+    lo = max(1, units // 20 if min_shift is None else min_shift)
+    pool = np.arange(lo, units - lo + 1)
     if len(pool) < 1:
-        raise ValueError(f"no admissible shift for {n} bars at min_shift {lo}")
+        raise ValueError(f"no admissible shift for {units} {unit}s at min_shift {lo}")
     shifts = np.sort(np.random.default_rng(seed).choice(pool, size=min(n_shifts, len(pool)), replace=False))
-    true, n_ev = _side_mean(side, r_long, r_short)
-    null = np.array([_side_mean(np.roll(side, int(k)), r_long, r_short)[0] for k in shifts])
+    true, n_ev = _side_mean(side, e_long, e_short)
+    null = np.array([_side_mean(shift_signal(side, ts, int(k), unit), e_long, e_short)[0] for k in shifts])
     null = np.where(np.isfinite(null), null, -np.inf)
     p = (1 + int((null >= true).sum())) / (1 + len(shifts)) if np.isfinite(true) else 1.0
-    return ShiftNull(true_mean_r=true, p_value=float(p), n_events=n_ev,
+    return ShiftNull(true_mean_r=true, p_value=float(p), n_events=n_ev, unit=unit,
                      null_q95=float(np.quantile(null, 0.95, method="higher")), shifts=tuple(int(k) for k in shifts))
 
 

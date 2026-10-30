@@ -9,7 +9,7 @@ Per design section 3.2, an explore survivor here has: floors, positive min-fold 
 baseline, the 1.5x cost stress (the evaluator's own checks); a fitness above the 95th percentile of best-of-search over
 `null_reps` reruns of the WHOLE G2 search on random sides (step 7, "the reality check for an adaptive search"); a
 batch whose Hansen SPA rejects at 10% and whose PBO is <= 0.30 (steps 8-9: "otherwise nothing from the batch
-advances"); a circular-shift null p <= 5%; and a plateau (step 6) over its grid neighbours. The neighbours are searched
+advances"); a circular-shift null p <= 5% (whole-week shifts in calendar time, excess R over the drift baseline); and a plateau (step 6) over its grid neighbours. The neighbours are searched
 specs: each is ledgered before it is evaluated and counts in K. The DSR at the ledger's K is reported, informational
 (step 10). Novelty (step 12) is not labelled here: a G2 spec carries no family, and the novelty pass over survivors is
 read from the report by the research director.
@@ -137,10 +137,13 @@ def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg:
                    key=lambda c: -fitness_of(c.evaluation))
     judged: list[tuple[GPCandidate, float, Plateau]] = []
     n_nb = 0
+    hour = t.ts_utc.hour.to_numpy()
     for c in cands[:max_candidates]:
         mask, side = res.entries(c.spec)
-        r = t.r(exit_index(t, c.spec))
-        shift = circular_shift_null(np.where(mask, side, 0).astype(np.int8), r[:, 0], r[:, 1], seed=cfg.seed)
+        ei = exit_index(t, c.spec)
+        r, base = t.r(ei), np.nan_to_num(t.drift_table(ei)[:, hour], nan=0.0)        # base: (side, bar)
+        shift = circular_shift_null(np.where(mask, side, 0).astype(np.int8), r[:, 0], r[:, 1], t.ts_utc,
+                                    base_long=base[0], base_short=base[1], seed=cfg.seed)
         nbs = [evaluate_logged(t, res, nb, ledger, parents=(c.spec_hash,), generation=-1, min_events=cfg.min_events)
                for nb in neighbours(c.spec)]
         n_nb += len(nbs)

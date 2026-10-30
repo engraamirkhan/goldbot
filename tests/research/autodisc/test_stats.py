@@ -1,5 +1,6 @@
 """The search-level honesty set (ADR 0058 phase 2, design section 3.2 steps 6-10): known cases for each statistic."""
 import numpy as np
+import pandas as pd
 import pytest
 from scipy import stats as sps
 
@@ -111,39 +112,81 @@ def test_deflated_sharpe_penalises_negative_skew_and_fat_tails():
 
 # ---------------------------------------------------------------- circular-shift null
 
+def hours(n, start="2010-01-04"):
+    return pd.date_range(start, periods=n, freq="1h", tz="UTC")
+
+
 def test_circular_shift_null_rejects_a_signal_aligned_with_the_returns():
     rng = np.random.default_rng(10)
-    n = 3000
+    n = 6000
     r_long = rng.normal(0, 1, n)
     side = np.where(rng.random(n) < 0.2, np.sign(r_long + rng.normal(0, 1.0, n)), 0).astype(np.int8)
-    out = S.circular_shift_null(side, r_long, -r_long, n_shifts=199, seed=1)
-    assert out.true_mean_r > 0.3 and out.p_value == pytest.approx(1 / 200)
+    out = S.circular_shift_null(side, r_long, -r_long, hours(n), seed=1)
+    assert out.true_mean_r > 0.3 and out.p_value == pytest.approx(1 / (1 + len(out.shifts))) and out.p_value <= S.CS_ALPHA
 
 
 def test_circular_shift_null_does_not_reject_a_signal_independent_of_the_returns():
     ps = []
     for s in range(20):
         rng = np.random.default_rng(100 + s)
-        r_long = rng.normal(0, 1, 2000)
-        side = np.where(rng.random(2000) < 0.2, rng.choice([-1, 1], 2000), 0).astype(np.int8)
-        ps.append(S.circular_shift_null(side, r_long, -r_long, n_shifts=99, seed=s).p_value)
+        r_long = rng.normal(0, 1, 4000)
+        side = np.where(rng.random(4000) < 0.2, rng.choice([-1, 1], 4000), 0).astype(np.int8)
+        ps.append(S.circular_shift_null(side, r_long, -r_long, hours(4000), n_shifts=99, seed=s).p_value)
     assert sum(p <= 0.05 for p in ps) <= 3 and np.median(ps) > 0.2
 
 
+def test_a_long_signal_at_one_hour_riding_that_hours_drift_does_not_beat_its_shift_null():
+    """Quant review F1: the shifted signal must stay on its own hour and weekday, and the score is excess over the
+    drift baseline, so an hour-of-day drift is not alignment skill."""
+    rng = np.random.default_rng(12)
+    ts = hours(24 * 7 * 60)                                         # 60 weeks: whole-week shifts
+    n = len(ts)
+    hr = ts.hour.to_numpy()
+    r_long = rng.normal(0, 1, n) + np.where(hr == 14, 0.5, 0.0)   # hour-14 drift, no alignment edge
+    side = np.where((hr == 14) & (rng.random(n) < 0.5), 1, 0).astype(np.int8)
+    base = S.drift_per_bar(ts, r_long, -r_long)
+    out = S.circular_shift_null(side, r_long, -r_long, ts, base_long=base[0], base_short=base[1], seed=3)
+    assert out.unit == "week" and out.p_value > S.CS_ALPHA
+    assert abs(out.true_mean_r) < 0.1                               # scored in excess R: the drift is taken out
+
+
+def test_whole_week_shifts_keep_every_event_on_its_hour_and_weekday():
+    ts = hours(24 * 7 * 60)
+    side = np.zeros(len(ts), dtype=np.int8)
+    side[(ts.weekday == 0) & (ts.hour == 8)] = 1
+    r = np.random.default_rng(0).normal(0, 1, len(ts))
+    out = S.circular_shift_null(side, r, -r, ts, n_shifts=30, seed=2)
+    assert out.unit == "week" and all(1 <= k < 61 for k in out.shifts)
+    shifted = S.shift_signal(side, ts, out.shifts[0], "week")
+    on = ts[shifted != 0]
+    assert len(on) == int((side != 0).sum()) and set(on.weekday) == {0} and set(on.hour) == {8}
+
+
+def test_a_short_sample_falls_back_to_whole_day_shifts_that_keep_the_hour():
+    ts = hours(24 * 30)
+    side = np.zeros(len(ts), dtype=np.int8)
+    side[ts.hour == 9] = -1
+    r = np.random.default_rng(1).normal(0, 1, len(ts))
+    out = S.circular_shift_null(side, r, -r, ts, seed=0)
+    assert out.unit == "day"
+    assert set(ts[S.shift_signal(side, ts, out.shifts[0], "day") != 0].hour) == {9}
+
+
 def test_circular_shift_null_never_uses_a_near_identity_shift_and_is_deterministic():
-    side = np.zeros(500, dtype=np.int8)
+    ts = hours(24 * 7 * 60)
+    side = np.zeros(len(ts), dtype=np.int8)
     side[::7] = 1
-    r = np.random.default_rng(0).normal(0, 1, 500)
-    a = S.circular_shift_null(side, r, -r, n_shifts=50, min_shift=40, seed=2)
-    assert a == S.circular_shift_null(side, r, -r, n_shifts=50, min_shift=40, seed=2)
-    assert all(40 <= k <= 460 for k in a.shifts)
+    r = np.random.default_rng(0).normal(0, 1, len(ts))
+    a = S.circular_shift_null(side, r, -r, ts, n_shifts=30, min_shift=5, seed=2)
+    assert a == S.circular_shift_null(side, r, -r, ts, n_shifts=30, min_shift=5, seed=2)
+    assert all(5 <= k <= 56 for k in a.shifts)
 
 
 def test_circular_shift_null_ignores_bars_without_an_outcome():
     side = np.ones(400, dtype=np.int8)
     r = np.random.default_rng(1).normal(0, 1, 400)
     r[::2] = np.nan
-    out = S.circular_shift_null(side, r, -r, n_shifts=20, seed=0)
+    out = S.circular_shift_null(side, r, -r, hours(400), n_shifts=20, seed=0)
     assert out.n_events == 200 and np.isfinite(out.true_mean_r)
 
 
