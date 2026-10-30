@@ -18,7 +18,8 @@ What it does, in this order, and nothing else:
 3. Journals the registration (`arm_registrations` in the ledger's database: spec hash, ledger K_search and K_null, the
    ledger head, the honesty results; append-only, hash-chained) BEFORE any file changes, then writes
    config/spec_arms.yaml and config/accounts.yaml. Nothing runs until those files are merged and the engine restarts;
-   it never touches the engine, a broker, RiskGate or an order.
+   it never touches the engine, a broker, RiskGate or an order. `register` documents the crash replay, the file lock
+   and the feature-branch rule.
 
 The stage it records is `explore_survivor`: the confirm and holdout reads (design 3.3/3.5) are not built yet, so the
 arm's forward demo read (design 4.4) is its first out-of-sample evidence and the prereg must say so.
@@ -26,14 +27,18 @@ arm's forward demo read (design 4.4) is its first out-of-sample evidence and the
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import re
 import sqlite3
+import subprocess
 import sys
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 import pandas as pd
 from pydantic import Field
@@ -117,44 +122,104 @@ def _connect(path: Path) -> sqlite3.Connection:
     return con
 
 
+class Head(NamedTuple):
+    """The journal's tip: how many rows and the last row's digest (the anchor `--head` checks against)."""
+    rows: int
+    digest: str
+
+
+def _rows(path: Path) -> list[tuple[Any, ...]]:
+    con = _connect(path)
+    try:
+        return con.execute("SELECT seq, arm_id, spec_hash, written_utc, payload, prev_digest, digest "
+                           "FROM arm_registrations ORDER BY seq").fetchall()
+    finally:
+        con.close()
+
+
+def verify(path: Path, head: str | None = None) -> Head:
+    """Verify the journal's chain (every column but the digest is hashed in) and return its tip. With `head` (a digest
+    kept outside the database) a journal whose tip differs, as when the tail rows were deleted, is refused naming the
+    expected head: a hash chain alone cannot see a truncated tail."""
+    rows = _rows(path) if path.exists() else []
+    prev = GENESIS
+    for seq, arm_id, spec_hash, written, payload, p, d in rows:
+        if p != prev or _digest(prev, seq, arm_id, spec_hash, written, payload) != d:
+            raise RegistrationRefused(f"arm_registrations row {seq} does not verify: the journal was altered")
+        prev = d
+    if head is not None and prev != head:
+        raise RegistrationRefused(f"the journal does not end at the anchored head: expected head {head}, found "
+                                  f"{prev} ({len(rows)} rows): rows were removed or replaced")
+    return Head(len(rows), prev)
+
+
 def journal(path: Path) -> list[Registration]:
     """Every registration journalled in `path`, in order (the chain verified)."""
     if not path.exists():
         return []
-    con = _connect(path)
-    try:
-        rows = con.execute("SELECT seq, payload, prev_digest, digest FROM arm_registrations ORDER BY seq").fetchall()
-    finally:
-        con.close()
-    prev = GENESIS
-    for seq, payload, p, d in rows:
-        if p != prev or _digest(prev, seq, payload) != d:
-            raise RegistrationRefused(f"arm_registrations row {seq} does not verify: the journal was altered")
-        prev = d
-    return [Registration.model_validate_json(r[1]) for r in rows]
+    verify(path)
+    return [Registration.model_validate_json(r[4]) for r in _rows(path)]
 
 
-def _digest(prev: str, seq: int, payload: str) -> str:
-    return hashlib.sha256(f"{prev}|{seq}|{payload}".encode()).hexdigest()
+def _digest(prev: str, seq: int, arm_id: str, spec_hash: str, written_utc: str, payload: str) -> str:
+    return hashlib.sha256(f"{prev}|{seq}|{arm_id}|{spec_hash}|{written_utc}|{payload}".encode()).hexdigest()
+
+
+def _week(utc: str) -> tuple[int, int]:
+    return pd.Timestamp(utc).isocalendar()[:2]
 
 
 def _append(path: Path, reg: Registration) -> None:
+    """Journal `reg`. The weekly cap, the duplicate spec and the taken arm id are checked again here, inside
+    `BEGIN IMMEDIATE` (the write lock), so two registrations racing past `plan` cannot both pass."""
     payload = reg.model_dump_json()
     con = _connect(path)
     try:
         con.execute("BEGIN IMMEDIATE")
         try:
+            have = con.execute("SELECT arm_id, spec_hash, written_utc FROM arm_registrations").fetchall()
+            if reg.spec_hash in {r[1] for r in have}:
+                raise RegistrationRefused(f"spec {reg.spec_hash[:12]} is registered already")
+            if reg.arm_id in {r[0] for r in have}:
+                raise RegistrationRefused(f"arm id {reg.arm_id} is taken by another registration: run it again")
+            if sum(_week(r[2]) == _week(reg.written_utc) for r in have) >= WEEKLY_MAX:
+                raise RegistrationRefused(f"{WEEKLY_MAX} registrations this week already (ADR 0045 weekly tier)")
             tip = con.execute("SELECT seq, digest FROM arm_registrations ORDER BY seq DESC LIMIT 1").fetchone()
             seq, prev = (tip[0] + 1, tip[1]) if tip else (1, GENESIS)
             con.execute("INSERT INTO arm_registrations (seq, arm_id, spec_hash, written_utc, payload, prev_digest, "
                         "digest) VALUES (?,?,?,?,?,?,?)",
-                        (seq, reg.arm_id, reg.spec_hash, reg.written_utc, payload, prev, _digest(prev, seq, payload)))
+                        (seq, reg.arm_id, reg.spec_hash, reg.written_utc, payload, prev,
+                         _digest(prev, seq, reg.arm_id, reg.spec_hash, reg.written_utc, payload)))
             con.execute("COMMIT")
         except BaseException:
             con.execute("ROLLBACK")
             raise
     finally:
         con.close()
+
+
+@contextmanager
+def _locked(path: Path) -> Iterator[None]:
+    """An exclusive advisory lock (fcntl) beside the ledger: one registration at a time reads, journals and writes."""
+    with open(path.with_name(path.name + ".register.lock"), "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _require_branch(root: Path) -> None:
+    """The rows must go through a PR and CI: refuse on main, master, a detached HEAD or outside a git checkout."""
+    try:
+        out = subprocess.run(["git", "-C", str(root), "symbolic-ref", "--short", "-q", "HEAD"], capture_output=True,
+                             text=True, check=False, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RegistrationRefused(f"cannot read the git branch of {root} ({exc}): register on a feature branch") from exc
+    branch = out.stdout.strip()
+    if out.returncode != 0 or not branch or branch in ("main", "master"):
+        raise RegistrationRefused(f"the checkout is on {branch or 'no git branch'!r}: register on a feature branch "
+                                  "(the rows go through a PR and CI, never straight to main)")
 
 
 # ---------------------------------------------------------------- the survivor
@@ -275,7 +340,7 @@ def plan(spec_hash: str, account_id: str, prereg: str, *, ledger_path: Path = LE
     peers = [a.max_loss for a in ex.arms.values() if a.style == style and a.control_share is None]
     if not peers:
         raise RegistrationRefused(f"{account_id}: no {style} strategy arm sets the style's per-trade cap")
-    cap = float(max_loss if max_loss is not None else min(peers))
+    cap = round(float(max_loss if max_loss is not None else min(peers)), 2)     # pence: journal and config agree
     ceiling = min(max(peers), X.SHARE_CAP * pot.gbp, ex.budget_share * float(acc.daily_loss_limit_abs or 0.0))
     if not 0 < cap <= ceiling + 1e-9:
         raise RegistrationRefused(f"max_loss {cap:g} is outside the {account_id} {style} caps (0, {ceiling:g}]: its "
@@ -307,18 +372,64 @@ def _validate(spec_text: str, accounts_text: str, account_id: str, arm_id: str, 
         raise RegistrationRefused(f"{arm_id} would not run on {account_id} (dropped by the engine's config)")
 
 
+def _write_atomic(path: Path, text: str) -> None:
+    tmp = Path(path).with_suffix(".yaml.tmp")
+    tmp.write_text(text)
+    tmp.replace(path)
+
+
+def _replay(reg: Registration, *, ledger_path: Path, accounts_path: Path, spec_arms_path: Path, spec_path: Path) -> None:
+    """Finish a registration whose journal row exists but whose file edits did not all land (a crash between the row and
+    the two writes): rebuild the arm from the journalled spec and write whichever file lacks it. No new journal row, no
+    new weekly slot. Both files having it already is `registered already`."""
+    in_spec = reg.arm_id in {a.id for a in load_arms(spec_arms_path)}
+    acc = A.load_accounts(accounts_path, logins=False).get(reg.account_id)
+    in_acc = acc is not None and reg.arm_id in acc.exploration.arms
+    if in_spec and in_acc:
+        raise RegistrationRefused(f"spec {reg.spec_hash[:12]} is registered already ({reg.arm_id})")
+    spec = SearchLedger(ledger_path, mode="real").get_spec(reg.spec_hash)
+    if spec is None:
+        raise RegistrationRefused(f"journalled spec {reg.spec_hash[:12]} is not in the ledger: cannot replay")
+    arm = Arm(id=reg.arm_id, rule=SPEC_RULE, timeframe=spec.timeframe,
+              params={"spec": canonical_json(spec), "spec_hash": reg.spec_hash, "prereg": reg.prereg},
+              max_open=1, forward_only=True)
+    arm = arm.model_copy(update={"config_hash": arm_hash(arm)})
+    if arm.config_hash != reg.config_hash:
+        raise RegistrationRefused(f"{reg.arm_id}: the rebuilt arm's hash differs from the journalled one: refusing to replay")
+    spec_text = spec_arms_path.read_text()
+    accounts_text = accounts_path.read_text()
+    new_spec = spec_text if in_spec else with_arm(spec_text, arm)
+    new_accounts = accounts_text if in_acc else with_registration(accounts_text, reg.account_id, reg.arm_id, reg.style,
+                                                                  reg.max_loss, reg.spec_hash)
+    _validate(new_spec, new_accounts, reg.account_id, reg.arm_id, spec_path)
+    for path, old, text in ((spec_arms_path, spec_text, new_spec), (accounts_path, accounts_text, new_accounts)):
+        if text != old:
+            _write_atomic(path, text)
+
+
 def register(spec_hash: str, account_id: str, prereg: str, **kw: Any) -> Registration:
     """`plan`, then the journal row, then the two files (each replaced whole). The journal comes first: a file
-    written without its journal row cannot happen; a journal row whose files failed to write runs nothing."""
+    written without its journal row cannot happen. A journal row whose files did not all land (a crash) is completed by
+    running the same command again (`_replay`: no new row, no new weekly slot). Refused unless the checkout is on a git
+    branch other than main; one registration at a time (file lock)."""
     ledger_path: Path = kw.get("ledger_path", LEDGER_PATH)
-    reg, spec_text, accounts_text = plan(spec_hash, account_id, prereg, **kw)
-    _append(ledger_path, reg)
-    for path, text in ((kw.get("spec_arms_path", X.SPEC_ARMS_PATH), spec_text),
-                       (kw.get("accounts_path", A.ACCOUNTS_FILE), accounts_text)):
-        tmp = Path(path).with_suffix(".yaml.tmp")
-        tmp.write_text(text)
-        tmp.replace(path)
-    return reg
+    spec_arms_path: Path = kw.get("spec_arms_path", X.SPEC_ARMS_PATH)
+    accounts_path: Path = kw.get("accounts_path", A.ACCOUNTS_FILE)
+    _require_branch(kw.get("root", ROOT))
+    with _locked(ledger_path):
+        done = {r.spec_hash: r for r in journal(ledger_path)}
+        if spec_hash in done:
+            reg = done[spec_hash]
+            if reg.account_id != account_id:
+                raise RegistrationRefused(f"spec {spec_hash[:12]} is journalled for {reg.account_id}, not {account_id}")
+            _replay(reg, ledger_path=ledger_path, accounts_path=accounts_path, spec_arms_path=spec_arms_path,
+                    spec_path=kw.get("spec_path", X.SPEC_PATH))
+            return reg
+        reg, spec_text, accounts_text = plan(spec_hash, account_id, prereg, **kw)
+        _append(ledger_path, reg)
+        _write_atomic(spec_arms_path, spec_text)
+        _write_atomic(accounts_path, accounts_text)
+        return reg
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -326,21 +437,36 @@ def main(argv: list[str] | None = None) -> int:
                                  description="Register a discovery survivor as a demo exploration arm (ADR 0058). "
                                              "Journals first, then writes config/spec_arms.yaml and "
                                              "config/accounts.yaml; it places no order and starts nothing.")
-    ap.add_argument("spec_hash", help="the survivor's spec hash in the search ledger")
-    ap.add_argument("--account", required=True, help="a demo probe_only account with exploration enabled")
-    ap.add_argument("--prereg", required=True, help="the forward reading rule: <path>#<section>")
+    ap.add_argument("spec_hash", nargs="?", help="the survivor's spec hash in the search ledger")
+    ap.add_argument("--account", help="a demo probe_only account with exploration enabled")
+    ap.add_argument("--prereg", help="the forward reading rule: <path>#<section>")
+    ap.add_argument("--verify", action="store_true", help="verify the registration journal's chain and print its head")
+    ap.add_argument("--head", help="with --verify: the head digest kept outside the database (detects a deleted tail)")
     ap.add_argument("--ledger", type=Path, default=LEDGER_PATH)
     ap.add_argument("--style", choices=sorted(set(STYLE_BY_TF.values())), default=None)
     ap.add_argument("--max-loss", type=float, default=None,
                     help="per-trade cap, account currency (default: the style's smallest strategy arm cap)")
     ap.add_argument("--dry-run", action="store_true", help="every check, nothing journalled or written")
     a = ap.parse_args(argv)
+    if a.verify:
+        try:
+            tip = verify(a.ledger, a.head)
+        except (RegistrationRefused, sqlite3.Error, OSError) as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps({"rows": tip.rows, "head": tip.digest}))
+        return 0
+    if not (a.spec_hash and a.account and a.prereg):
+        ap.error("spec_hash, --account and --prereg are required (or --verify)")
     try:
         kw: dict[str, Any] = {"ledger_path": a.ledger, "style": a.style, "max_loss": a.max_loss}
         reg = plan(a.spec_hash, a.account, a.prereg, **kw)[0] if a.dry_run else \
             register(a.spec_hash, a.account, a.prereg, **kw)
     except (RegistrationRefused, ValueError) as exc:
         print(f"refused: {exc}", file=sys.stderr)
+        return 2
+    except (sqlite3.IntegrityError, OSError) as exc:
+        print(f"failed: {type(exc).__name__}: {exc}".splitlines()[0], file=sys.stderr)
         return 2
     print(json.dumps({"dry_run": a.dry_run, **json.loads(reg.model_dump_json())}, indent=1))
     return 0

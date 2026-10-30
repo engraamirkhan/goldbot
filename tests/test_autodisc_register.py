@@ -5,7 +5,10 @@ Every file is a temp copy: the real config/accounts.yaml (no keyring read), an e
 built here. Nothing is market data."""
 from __future__ import annotations
 
+import json
 import shutil
+import sqlite3
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +39,7 @@ def env(tmp_path: Path) -> dict[str, Any]:
     shutil.copy(ROOT / "config" / "accounts.yaml", tmp_path / "accounts.yaml")
     shutil.copy(ROOT / "config" / "spec_arms.yaml", tmp_path / "spec_arms.yaml")
     (tmp_path / "prereg.md").write_text("# forward read\n## d1\nthe reading rule\n")
+    subprocess.run(["git", "init", "-q", "-b", "feature/autodisc-arm", str(tmp_path)], check=True)
     ledger = SearchLedger(tmp_path / "discovery.db", mode="real")
     for i in range(len(FILTERS)):
         ledger.log_spec(spec(i), "G1", "1")
@@ -178,3 +182,126 @@ def test_an_altered_journal_is_refused(env):
     con.close()
     with pytest.raises(R.RegistrationRefused, match="altered"):
         R.journal(env["ledger_path"])
+
+
+# ---------------------------------------------------------------- review findings (trading-safety, code review)
+def tampered_ids(env: dict[str, Any]) -> tuple[str, str]:
+    """(arm id in spec_arms.yaml?, in accounts?) as strings, for a crash-replay read."""
+    reg = R.journal(env["ledger_path"])[0]
+    in_spec = reg.arm_id in {a.id for a in load_arms(env["spec_arms_path"])}
+    in_acc = reg.arm_id in A.load_accounts(env["accounts_path"], logins=False)[reg.account_id].exploration.arms
+    return str(in_spec), str(in_acc)
+
+
+@pytest.mark.parametrize("fail_on,expect", [("spec_arms.yaml", ("False", "False")), ("accounts.yaml", ("True", "False"))])
+def test_a_crash_after_the_journal_row_is_completed_by_rerunning_without_a_new_row_or_weekly_slot(
+        env, monkeypatch, fail_on, expect):
+    real = R._write_atomic
+
+    def flaky(path: Path, text: str) -> None:
+        if Path(path).name == fail_on:
+            raise OSError("killed")
+        real(path, text)
+    monkeypatch.setattr(R, "_write_atomic", flaky)
+    with pytest.raises(OSError):
+        register(env)
+    assert tampered_ids(env) == expect and len(R.journal(env["ledger_path"])) == 1
+    monkeypatch.setattr(R, "_write_atomic", real)
+    again = register(env)
+    assert again == R.journal(env["ledger_path"])[0] and tampered_ids(env) == ("True", "True")
+    assert len(R.journal(env["ledger_path"])) == 1                      # no new row, no second weekly slot
+    assert [register(env, i).arm_id for i in (1, 2, 3)] == ["D2610-2", "D2610-3", "D2610-4"]      # 3 slots left
+    with pytest.raises(R.RegistrationRefused, match="registered already"):
+        register(env)                                                    # both files have it: now refused
+    [a] = [x for x in load_arms(env["spec_arms_path"]) if x.id == again.arm_id]                    # hash-checked
+    assert a.config_hash == again.config_hash
+
+
+def test_the_weekly_and_duplicate_checks_are_recounted_inside_the_journal_transaction(env):
+    regs = [register(env, i) for i in range(4)]
+    stale = regs[0].model_copy(update={"arm_id": "D2610-9", "spec_hash": "e" * 64})
+    with pytest.raises(R.RegistrationRefused, match="this week"):         # a plan that read the journal before the others
+        R._append(env["ledger_path"], stale)
+    dup = regs[0].model_copy(update={"arm_id": "D2611-1", "written_utc": (NOW + pd.Timedelta(days=7)).isoformat()})
+    with pytest.raises(R.RegistrationRefused, match="registered already"):
+        R._append(env["ledger_path"], dup)
+    taken = dup.model_copy(update={"spec_hash": "f" * 64, "arm_id": regs[1].arm_id})
+    with pytest.raises(R.RegistrationRefused, match="arm id"):
+        R._append(env["ledger_path"], taken)
+    assert len(R.journal(env["ledger_path"])) == 4
+
+
+@pytest.mark.parametrize("branch", ["main", "master", None])
+def test_registration_refuses_unless_the_checkout_is_on_a_branch_other_than_main(env, branch):
+    root = env["root"]
+    if branch is None:
+        subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
+                        "--allow-empty", "-m", "x"], check=True)
+        subprocess.run(["git", "-C", str(root), "checkout", "-q", "--detach"], check=True)
+    else:
+        subprocess.run(["git", "-C", str(root), "checkout", "-q", "-B", branch], check=True)
+    before = env["accounts_path"].read_text()
+    with pytest.raises(R.RegistrationRefused, match="branch"):
+        register(env)
+    assert R.journal(env["ledger_path"]) == [] and env["accounts_path"].read_text() == before
+    R.plan(spec_hash(spec(0)), "icm-demo", "prereg.md#d1", **env)         # a dry run is harmless anywhere
+
+
+def test_registration_refuses_outside_a_git_checkout(env, tmp_path):
+    shutil.rmtree(env["root"] / ".git")
+    with pytest.raises(R.RegistrationRefused, match="branch"):
+        register(env)
+
+
+def test_the_per_trade_cap_is_rounded_to_pence_before_the_ceiling_check_and_the_journal(env):
+    reg = register(env, max_loss=6.123456789)
+    assert reg.max_loss == 6.12
+    assert "max_loss: 6.12 }" in env["accounts_path"].read_text()
+    assert A.load_accounts(env["accounts_path"], logins=False)["icm-demo"].exploration.arms[reg.arm_id].max_loss == 6.12
+
+
+def test_the_digest_covers_the_row_columns_and_a_head_anchor_detects_a_deleted_tail(env):
+    for i in range(3):
+        register(env, i)
+    head = R.verify(env["ledger_path"])
+    assert head.rows == 3 and head.digest == R.verify(env["ledger_path"], head=head.digest).digest
+    con = sqlite3.connect(env["ledger_path"])
+    con.execute("UPDATE arm_registrations SET written_utc = '2020-01-01T00:00:00+00:00' WHERE seq = 2")
+    con.commit()
+    con.close()
+    with pytest.raises(R.RegistrationRefused, match="altered"):
+        R.journal(env["ledger_path"])                                     # a column outside the payload is covered
+
+
+def test_deleting_the_tail_row_is_detected_against_the_head_anchor(env):
+    for i in range(3):
+        register(env, i)
+    anchor = R.verify(env["ledger_path"]).digest
+    con = sqlite3.connect(env["ledger_path"])
+    con.execute("DELETE FROM arm_registrations WHERE seq = 3")
+    con.commit()
+    con.close()
+    assert len(R.journal(env["ledger_path"])) == 2                        # the chain alone cannot see it
+    with pytest.raises(R.RegistrationRefused, match=f"expected head {anchor}"):
+        R.verify(env["ledger_path"], head=anchor)
+
+
+@pytest.mark.parametrize("exc", [sqlite3.IntegrityError("UNIQUE constraint failed: arm_registrations.arm_id"),
+                                 OSError("disk full")])
+def test_the_command_exits_2_with_one_line_on_a_database_or_file_error(env, monkeypatch, capsys, exc):
+    def boom(*a: Any, **k: Any) -> None:
+        raise exc
+    monkeypatch.setattr(R, "register", boom)
+    rc = R.main([spec_hash(spec(0)), "--account", "icm-demo", "--prereg", "prereg.md#d1",
+                 "--ledger", str(env["ledger_path"])])
+    err = capsys.readouterr().err.strip().splitlines()
+    assert rc == 2 and len(err) == 1 and str(exc) in err[0]
+
+
+def test_the_verify_command_prints_the_head_and_refuses_a_wrong_anchor(env, capsys):
+    register(env)
+    assert R.main(["--verify", "--ledger", str(env["ledger_path"])]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["rows"] == 1 and out["head"] == R.verify(env["ledger_path"]).digest
+    assert R.main(["--verify", "--head", "0" * 64, "--ledger", str(env["ledger_path"])]) == 2
+    assert "expected head" in capsys.readouterr().err
