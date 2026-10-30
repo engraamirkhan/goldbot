@@ -305,3 +305,11 @@ def test_the_verify_command_prints_the_head_and_refuses_a_wrong_anchor(env, caps
     assert out["rows"] == 1 and out["head"] == R.verify(env["ledger_path"]).digest
     assert R.main(["--verify", "--head", "0" * 64, "--ledger", str(env["ledger_path"])]) == 2
     assert "expected head" in capsys.readouterr().err
+
+
+def test_a_prereg_path_outside_the_repo_is_refused(env, tmp_path):
+    outside = tmp_path.parent / "elsewhere.md"
+    outside.write_text("## d1\n")
+    for bad in (str(outside) + "#d1", "../elsewhere.md#d1"):
+        with pytest.raises(R.RegistrationRefused, match="under the repo"):
+            R.register(spec_hash(spec(0)), "icm-demo", bad, **env)

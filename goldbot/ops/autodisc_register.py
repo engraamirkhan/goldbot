@@ -305,9 +305,10 @@ def plan(spec_hash: str, account_id: str, prereg: str, *, ledger_path: Path = LE
     if bad := honesty.failures:
         raise RegistrationRefused(f"spec {spec_hash[:12]} is not an explore survivor: fails {bad}")
     path, _, section = prereg.partition("#")
-    if not section or not (root / path).is_file():
-        raise RegistrationRefused(f"prereg {prereg!r} must be <existing file>#<section> (the forward reading rule, "
-                                  "written before the arm runs)")
+    inside = not Path(path).is_absolute() and ".." not in Path(path).parts
+    if not section or not inside or not (root / path).is_file():
+        raise RegistrationRefused(f"prereg {prereg!r} must be <existing file under the repo>#<section> (the forward "
+                                  "reading rule, written before the arm runs)")
     done = journal(ledger_path)
     spec_text = spec_arms_path.read_text()
     shipped = load_arms(spec_arms_path)
