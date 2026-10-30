@@ -229,3 +229,21 @@ def test_excess_daily_subtracts_the_drift_baseline_of_the_same_hour_and_side():
     x = S.excess_daily(t, ev.r(), ev.idx, ev.side_i, 0, day_id, int(day_id.max()) + 1)
     base = t.drift_table(0)[0, t.ts_utc.hour.to_numpy()[ev.idx]]
     assert x.sum() == pytest.approx(float((ev.r() - base).sum()))
+
+
+def test_a_monday_1400_drift_passes_a_day_shift_but_not_the_whole_week_shift():
+    """Quant re-check: a weekday-by-hour drift is a calendar pattern. Whole-week shifts keep it (p large); whole-day
+    shifts (the short-sample fallback) move it off Monday and would call it alignment skill (p small)."""
+    rng = np.random.default_rng(21)
+    ts = hours(24 * 7 * 60)
+    mon14 = (ts.weekday == 0) & (ts.hour == 14)
+    r_long = rng.normal(0, 1, len(ts)) + np.where(mon14, 0.5, 0.0)
+    side = np.where(mon14, 1, 0).astype(np.int8)
+    week = S.circular_shift_null(side, r_long, -r_long, ts, seed=4)
+    assert week.unit == "week" and week.p_value > S.CS_ALPHA
+    true = S._side_mean(side, r_long, -r_long)[0]
+    null = [S._side_mean(S.shift_signal(side, ts, k, "day"), r_long, -r_long)[0] for k in range(10, 400, 3) if k % 7]
+    # day offsets that are whole weeks land back on Monday: they are the week mode's shifts, 1 in 7 of a pure day mode,
+    # so a pure day mode could not go below p = 1/7 on this pattern; the non-week offsets show the weekday is lost
+    p_day = (1 + sum(m >= true for m in null)) / (1 + len(null))
+    assert p_day <= S.CS_ALPHA
