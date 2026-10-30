@@ -1,6 +1,7 @@
 """Research commands (goldbot/research): `owner-history`, `ruin` (G-5), `sizing-feasibility` (G-7), and the TradingView
 chart-export pair `tv-import` / `tv-repaint-check`, the direct pull `tv-pull`, and the daily learning-ops review
-`daily-review`. The first three are the old dispatcher's branches, verbatim."""
+`daily-review`, and `autodisc-register` (ADR 0058 phase 4). The first three are the old dispatcher's branches,
+verbatim."""
 from __future__ import annotations
 
 import sys
@@ -54,3 +55,9 @@ def _ledger(cmd: str, args: list[str]) -> None:
 def _daily_review(cmd: str, args: list[str]) -> None:
     from goldbot.research.daily_review import main as daily_review_main
     sys.exit(daily_review_main(args))
+
+
+@register_command("autodisc-register", pos=320)
+def _autodisc_register(cmd: str, args: list[str]) -> None:
+    from goldbot.ops.autodisc_register import main as autodisc_register_main
+    sys.exit(autodisc_register_main(args))

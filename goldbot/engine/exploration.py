@@ -80,8 +80,8 @@ from goldbot.db import Database, RecordRepo
 from goldbot.engine import auto_entry, cost_probe
 from goldbot.execution.costs import CONTRACT_OZ
 from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec
+from goldbot.research.arms import SPEC_RULE, arm_hash, load_arms
 from goldbot.research.arms import Arm as SpecArm
-from goldbot.research.arms import arm_hash, load_arms
 
 if TYPE_CHECKING:
     from goldbot.engine.runner import Engine
@@ -124,6 +124,8 @@ PI_RANDOM = 1.0                     # champion zero: the random branch takes eve
 ARM_ROOM_LOSSES = 3
 SHARE_FLOOR, SHARE_CAP = 0.05, 0.30  # H-61's bounds on a strategy arm's share (L3 `bounded_shares`), fallback included
 SPEC_PATH = Path(__file__).parents[2] / "config" / "exploration_arms.yaml"   # the frozen ARM-SPEC (hash-checked)
+# ADR 0058: discovered arms (rule `spec_rule`), hash-checked like the ARM-SPEC and loaded on demo accounts only
+SPEC_ARMS_PATH = Path(__file__).parents[2] / "config" / "spec_arms.yaml"
 # a close by the arm's own barrier: anything else censors the label (`trail_close`: a runner arm's own trailed stop,
 # reached before the broker had it; no other arm trails)
 NATURAL = frozenset({HOLD_EXIT, "time_exit", "stop", "target", "engine_stop_close", "trail_close"})
@@ -217,15 +219,23 @@ class ExplorationConfig(FrozenRecord):
         return self
 
 
-def config_for(acc: Account, spec_path: Path = SPEC_PATH) -> ExplorationConfig | None:
+def config_for(acc: Account, spec_path: Path = SPEC_PATH,
+               spec_arms_path: Path = SPEC_ARMS_PATH) -> ExplorationConfig | None:
     """The engine's exploration block for `acc` (integration ruling 2026-10-25): None unless its `exploration` is
-    enabled. Rules come from the frozen, hash-checked spec (`research.arms.load_arms`); the account registers the arms
-    it runs (style, control share; the per-trade cap reaches the RiskGate as `exploration_arms`). A registered arm the
-    spec lacks or blocks is dropped and logged here, and journalled at the engine's start (`dropped`)."""
+    enabled. Rules come from the frozen, hash-checked spec (`research.arms.load_arms`) and the discovered arms
+    (`spec_arms_path`, ADR 0058: "Demo arms are data rows run by one reviewed interpreter (`spec_rule`), loaded only on
+    demo accounts": on any other account `load_arms(live_class=True)` refuses them, loudly); the account registers the
+    arms it runs (style, control share; the per-trade cap reaches the RiskGate as `exploration_arms`). A registered arm
+    the spec lacks or blocks is dropped and logged here, and journalled at the engine's start (`dropped`)."""
     ex = acc.exploration
     if not ex.enabled:
         return None
     specs = {a.id: a for a in load_arms(spec_path)}
+    if spec_arms_path.exists():
+        found = load_arms(spec_arms_path, live_class=acc.mode != "demo")
+        if clash := sorted(a.id for a in found if a.id in specs):
+            raise ValueError(f"discovered arm ids {clash} are already ARM-SPEC arm ids")
+        specs.update({a.id: a for a in found})
     arms, dropped = [], []
     for arm_id in sorted(ex.arms):
         reg = ex.arms[arm_id]
@@ -369,7 +379,10 @@ class Exploration:
         from goldbot.research import arm_rules
         self.cfg = cfg
         self.broker = eng.cfg.broker_name             # the key its evidence is learnt and read under (ADR 0043 am.)
-        ok = [a for a in cfg.arms if a.spec.status == "run" and a.spec.rule in arm_rules.RULE_FUNCS]
+        # ADR 0058: a discovered arm (`spec_rule`) runs on a demo account only; refused here again whatever the config
+        # said (the loader refuses it first, `config_for`), journalled as dropped like any arm that cannot run
+        ok = [a for a in cfg.arms if a.spec.status == "run" and a.spec.rule in arm_rules.RULE_FUNCS
+              and (a.spec.rule != SPEC_RULE or eng.cfg.mode == "demo")]
         for name in [*cfg.dropped, *(a.arm_id for a in cfg.arms if a not in ok)]:
             # trading-safety L2: one bad arm never stops the engine; it is named and the others run
             log.warning("exploration arm %s dropped (not in the frozen spec, blocked there or no rule)", name)

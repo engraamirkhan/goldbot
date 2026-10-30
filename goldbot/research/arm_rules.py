@@ -444,6 +444,8 @@ RULE_FUNCS: dict[str, Callable[[Arm, RuleContext], pd.DataFrame]] = {
     **dict.fromkeys(("hurst_band_break", "hurst_band_break_control", "htf_stretch_break", "htf_stretch_break_control"),
                     band_rule),
     **dict.fromkeys(SCALP_RULES, scalp_rule),
+    # ADR 0058 phase 4: any discovered StrategySpec through the autodisc primitives (`arm_rules_spec`)
+    "spec_rule": lambda arm, ctx: __import__("goldbot.research.arm_rules_spec", fromlist=["x"]).spec_candidates(arm, ctx),
 }
 
 
@@ -476,7 +478,11 @@ def screened(arm: Arm, ctx: RuleContext) -> tuple[pd.DataFrame, pd.DataFrame]:
 def lookback_bars(arm: Arm, default: int) -> int:
     """Bars of the arm's timeframe its rule needs live for its candidates to equal the history run's (bounded by the
     engine's `exploration.lookback`): a `specialist` family's warm-up (`arm_rules_specialist.WARMUP_MIN`), a band
-    rule's or a clock rule's LOOKBACK_BARS, else `default`."""
+    rule's or a clock rule's LOOKBACK_BARS, a `spec_rule` arm's leaves' warm-up (`arm_rules_spec.required_bars`), else
+    `default`."""
+    if arm.rule == "spec_rule":
+        from goldbot.research.arm_rules_spec import required_bars, spec_of
+        return max(default, required_bars(spec_of(arm)))
     if arm.rule == "specialist":
         from goldbot.research.arm_rules_specialist import warmup_bars
         return max(default, warmup_bars(arm))
