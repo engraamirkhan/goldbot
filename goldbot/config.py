@@ -702,6 +702,35 @@ class TvPullSettings(_Section):
         if self.backoff_max_s < self.backoff_base_s:
             raise ValueError("tv_pull.backoff_max_s must be at least backoff_base_s")
         return self
+
+
+class TvIdeasSettings(_Section):
+    """TradingView author ideas (goldbot/data/tv_ideas.py; owner directive 2026-10-28, ADR 0030's read-only rules): the
+    published chart ideas of the authors the owner follows, read from TradingView's public ideas listing without any
+    cookie. Handles only (public); the idea text and images are third-party content and stay in state/tv_ideas.db
+    (brain) and the gitignored raw/ (Mac), never in the repo."""
+    enabled: bool = True
+    authors: list[str] = Field(default_factory=lambda: ["KnightsofGold", "Goldviewfx", "ArmanShabanTrading"])
+    poll_interval_s: float = Field(default=720, ge=300)           # a poll every 12 min ...
+    poll_jitter_s: float = Field(default=180, ge=0)               #   ... plus up to 3 min, so 12-15 min apart
+    live_page_size: int = Field(default=20, gt=0, le=100)         # newest-activity page per author and poll
+    min_interval_s: float = Field(default=3.0, ge=1.0)            # between two requests (the tv_pull Pacer)
+    backfill_min_interval_s: float = Field(default=2.0, ge=1.0)   # the one-time back catalogue read
+    max_requests_per_day: int = Field(default=2000, gt=0)         # live, rolling 24 h; a poll is skipped beyond it
+    backfill_max_requests: int = Field(default=12000, gt=0)       # per backfill run (listing slices + details)
+    backfill_latency_s: float = Field(default=900, ge=0)          # back catalogue: available = published + this
+    backoff_base_s: float = Field(default=300, gt=0)
+    backoff_max_s: float = Field(default=21600, gt=0)
+    timeout_s: float = Field(default=30, gt=0)
+    stale_hours: float = Field(default=2.0, gt=0)                 # health tv_ideas WARNs past this on a weekday
+
+    @model_validator(mode="after")
+    def _backoff_ordered(self) -> TvIdeasSettings:
+        if self.backoff_max_s < self.backoff_base_s:
+            raise ValueError("tv_ideas.backoff_max_s must be at least backoff_base_s")
+        return self
+
+
 class TvSettings(_Section):
     """TradingView values at decision time (plan docs/plans/tradingview-strategies.md, "Live staleness fails closed"):
     a value counts only when its bar is the decision bar and it arrived no more than `max_lag_s` after that bar's
@@ -777,6 +806,7 @@ class Settings(_Section):
     ticks: TickRecordSettings = Field(default_factory=TickRecordSettings)
     webhook: WebhookSettings = Field(default_factory=WebhookSettings)
     tv_pull: TvPullSettings = Field(default_factory=TvPullSettings)
+    tv_ideas: TvIdeasSettings = Field(default_factory=TvIdeasSettings)
     tv: TvSettings = Field(default_factory=TvSettings)
     shadow: ShadowSettings = Field(default_factory=ShadowSettings)
     mt5_login: Mt5LoginSettings = Field(default_factory=Mt5LoginSettings)

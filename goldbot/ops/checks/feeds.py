@@ -8,6 +8,7 @@ import pandas as pd
 
 from goldbot.data.crossfeed import check_reconciliation
 from goldbot.data.ticks import check_tick_record
+from goldbot.data.tv_ideas import check_tv_ideas
 from goldbot.ops.checks._base import (
     COSTS_FAIL_DAYS,
     COSTS_PUBLISHED_WARN_DAYS,
@@ -261,6 +262,8 @@ register_check("account", block=BLOCK_RECONCILIATION, pos=10)(check_reconciliati
 register_check("account", block=BLOCK_RECONCILIATION, pos=20)(check_tick_record)
 # TradingView sign-in / pull state lives with the pull's health module (goldbot/ops/tv_pull_health.py); WARN only
 register_check("global", block=BLOCK_TAIL, pos=85)(check_tv_pull)
+# the followed TradingView authors' ideas (goldbot/data/tv_ideas.py): WARN when no poll succeeded for 2 h on a weekday
+register_check("global", block=BLOCK_TAIL, pos=86)(check_tv_ideas)
 
 
 # ---- exploration learning (brain 2026-10-27: 0 of 349 candidates labelled for days while the job reported ok)
