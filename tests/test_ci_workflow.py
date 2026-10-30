@@ -163,3 +163,24 @@ def test_unit_shards_are_balanced_by_the_committed_unit_weights():
     assignment = shard_assignment(list(weights), count, weights)
     loads = [sum(w for n, w in weights.items() if assignment[n] == s) for s in range(count)]
     assert max(loads) <= 1.1 * min(loads), loads     # a clustered module (test_goldbot_deploy_sh.py) must not sit in one shard
+
+
+def test_a_failing_reporter_fails_the_job_and_only_a_base_without_the_command_is_tolerated(tmp_path):
+    """Run the report step's shell against a fake base commit: a reporter that errors must exit non-zero, an old base
+    with no `def run_report` must not."""
+    import json
+    import os
+    import subprocess
+    import sys
+    steps = _ci()["jobs"]["report-failure"]["steps"]
+    body = next(s["run"] for s in steps if "ci_summary.py" in s.get("run", "")).replace("python3", sys.executable)
+    (tmp_path / "scripts").mkdir()
+    env = {**os.environ, "JOBS": json.dumps({"lint": {"result": "failure"}})}
+
+    def run(reporter: str) -> int:
+        (tmp_path / "scripts" / "ci_summary.py").write_text(reporter)
+        return subprocess.run(["bash", "-c", body], cwd=tmp_path, env=env, capture_output=True).returncode
+
+    assert run("def run_report(): pass\nraise SystemExit(1)\n") != 0     # a real reporter failure is not swallowed
+    assert run("def run_report(): pass\nraise SystemExit(0)\n") == 0
+    assert run("raise SystemExit(2)  # an old base: no report command\n") == 0

@@ -17,11 +17,23 @@
 # owner outside the repo (~/.local/bin/goldbot-release) after review, checked by sha256.
 set -euo pipefail
 export LC_ALL=C
+# Hardened environment: a fixed PATH (no caller-planted gh/ssh/python3) and none of the variables that redirect gh or git
+# or the ssh agent. GH_TOKEN and HOME are kept on purpose: gh authenticates with the owner's token/keyring under HOME.
+# Tests (GOLDBOT_TESTING=1 plus GOLDBOT_RELEASE_TEST_BIN, a directory holding fake gh/ssh) are the only way to prepend a
+# directory to PATH or to shorten the rollback watch.
+export PATH=/usr/bin:/bin:/opt/homebrew/bin
+unset GH_HOST GH_REPO GH_ENTERPRISE_TOKEN GH_CONFIG_DIR GIT_DIR GIT_WORK_TREE SSH_AUTH_SOCK_OVERRIDE
+if [ "${GOLDBOT_TESTING:-}" = 1 ] && [ -d "${GOLDBOT_RELEASE_TEST_BIN:-}" ]; then
+  PATH="$GOLDBOT_RELEASE_TEST_BIN:$PATH"
+  WATCH_S=${GOLDBOT_RELEASE_WATCH_S:-95}
+else
+  WATCH_S=95   # the on-box watcher rolls back on a restart up to 90 s after the switch
+fi
 
 REPO=engraamirkhan/goldbot
 ACTIONS_APP_ID=15368
-WATCH_S=${GOLDBOT_RELEASE_WATCH_S:-95}   # the on-box watcher rolls back on a restart up to 90 s after the switch
-SSH=(ssh -F "$HOME/.ssh/goldbot.conf" -o BatchMode=yes goldbot-brain)
+started=$(date +%s)   # a deploy record is accepted only if stamped at or after this instant
+SSH=(ssh -F "$HOME/.ssh/goldbot.conf" -o BatchMode=yes -o ProxyCommand=none goldbot-brain)
 say() { echo "$(date -u +%H:%M:%S) $*"; }
 refuse() { say "REFUSED: $*"; exit 2; }
 
@@ -63,8 +75,8 @@ d4_positions() { echo "bash -lc \"goldbot run positions --account $1\""; }   # $
 # deploys.jsonl's last record -> "deployed" / "deployed_degraded" / other; prints a one-line, printable summary
 read_record() {
   python3 -I -c '
-import json, sys
-sha = sys.argv[1]
+import datetime, json, sys
+sha, started = sys.argv[1], int(sys.argv[2])
 raw = sys.stdin.read()[-65536:]
 clean = lambda s: "".join(c for c in str(s) if c.isprintable())[:300]
 try:
@@ -73,11 +85,19 @@ except (ValueError, IndexError):
     print("unreadable record: " + clean(raw)); sys.exit(1)
 res, to = rec.get("result"), rec.get("to")
 print("deploys.jsonl: " + clean(json.dumps(rec)))
+try:   # a record from before this run (an earlier deploy of the same sha) proves nothing about this one
+    when = datetime.datetime.fromisoformat(str(rec.get("ts")).replace("Z", "+00:00"))
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=datetime.timezone.utc)
+    fresh = when.timestamp() >= started
+except ValueError:
+    fresh = False
+if not fresh:
+    print("stale or undated record: not this run"); sys.exit(1)
 sys.exit(0 if res in ("deployed", "deployed_degraded") and to == sha else 1)
-' "$SHA"
+' "$SHA" "$started"
 }
 
-started=$(date +%s)
 say "deploy $SHA to the brain (D2)"
 "${SSH[@]}" "$D2" || say "D2 exited non-zero: reading the record"
 rec=$("${SSH[@]}" "$D3") || rec=""

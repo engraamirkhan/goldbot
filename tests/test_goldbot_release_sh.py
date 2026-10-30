@@ -4,6 +4,7 @@ documented remote commands (D2 deploy, D3 record, D4 health) and nothing else, a
 `gh` and `ssh` are fakes on PATH that log every call."""
 from __future__ import annotations
 
+import datetime as dt
 import json
 import shutil
 import subprocess
@@ -21,6 +22,7 @@ pytestmark = pytest.mark.skipif(shutil.which("bash") is None or shutil.which("py
 
 FAKE_GH = r"""#!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FAKE_LOG.gh"
+env | grep -E '^(GH_HOST|GH_REPO|GH_ENTERPRISE_TOKEN|GH_CONFIG_DIR|GIT_DIR|GIT_WORK_TREE)=' >> "$FAKE_LOG.env"
 url=$2
 case "$url" in
   */compare/*) [ -n "$FAKE_COMPARE" ] || exit 1; echo "$FAKE_COMPARE" ;;
@@ -46,8 +48,9 @@ esac
 """
 
 
-def record(result: str = "deployed", to: str = SHA) -> str:
-    return json.dumps({"ts": "2026-10-30T10:00:00Z", "result": result, "from": "c" * 40, "to": to})
+def record(result: str = "deployed", to: str = SHA, ts: str | None = None) -> str:
+    ts = ts or (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return json.dumps({"ts": ts, "result": result, "from": "c" * 40, "to": to})
 
 
 def health(entry: str = "ok", reconcile: str = "ok", other_fail: bool = False,
@@ -68,10 +71,10 @@ def fakes(tmp_path):
     for name, body in (("gh", FAKE_GH), ("ssh", FAKE_SSH)):
         (bin_ / name).write_text(body, encoding="utf-8")
         (bin_ / name).chmod(0o755)
-    env = {"PATH": f"{bin_}:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin", "HOME": str(tmp_path),
+    env = {"PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin", "HOME": str(tmp_path),
            "FAKE_LOG": str(tmp_path / "log"), "FAKE_COMPARE": "ahead", "FAKE_GREEN": SHA, "FAKE_PARENT2": "",
            "FAKE_ODD_TREE": "none", "FAKE_RECORD": record(), "FAKE_RECORD2": "", "FAKE_HEALTH": health(), "FAKE_POS_FAIL": "",
-           "GOLDBOT_RELEASE_WATCH_S": "0"}
+           "GOLDBOT_RELEASE_WATCH_S": "0", "GOLDBOT_TESTING": "1", "GOLDBOT_RELEASE_TEST_BIN": str(bin_)}
     return tmp_path, env
 
 
@@ -96,7 +99,7 @@ def test_a_ci_green_main_commit_runs_exactly_the_documented_commands_and_succeed
     tmp, _ = fakes
     r, ssh = run(fakes, SHA)
     assert r.returncode == 0, r.stdout + r.stderr
-    prefix = f"-F {tmp}/.ssh/goldbot.conf -o BatchMode=yes goldbot-brain "
+    prefix = f"-F {tmp}/.ssh/goldbot.conf -o BatchMode=yes -o ProxyCommand=none goldbot-brain "
     assert ssh == [prefix + D2, prefix + D3, prefix + D3, prefix + D4, prefix + d4p("icm-demo"),
                    prefix + d4p("icm-probe")]
     assert '"result": "deployed"' in r.stdout and "DEPLOYED " + SHA in r.stdout
@@ -114,7 +117,7 @@ def test_an_account_id_from_the_report_that_is_not_a_plain_id_is_never_sent(fake
     r, ssh = run(fakes, SHA, FAKE_HEALTH=health(extra=("x; sudo reboot", "$(id)", "Upper")))
     assert r.returncode == 0, r.stdout
     assert [line for line in ssh if "positions" in line] == [
-        f"-F {fakes[0]}/.ssh/goldbot.conf -o BatchMode=yes goldbot-brain " + d4p("icm-demo")]
+        f"-F {fakes[0]}/.ssh/goldbot.conf -o BatchMode=yes -o ProxyCommand=none goldbot-brain " + d4p("icm-demo")]
 
 
 @pytest.mark.parametrize("bad", ["", SHA[:39], SHA.upper(), SHA + "0", "main", f"{SHA[:39]};", "$(reboot)" + SHA[:31]])
@@ -184,7 +187,7 @@ def test_an_unrelated_failing_check_is_shown_but_does_not_fail_the_deploy(fakes)
 
 
 def test_remote_output_is_printed_without_terminal_escapes(fakes):
-    r, _ = run(fakes, SHA, FAKE_RECORD=json.dumps({"result": "deployed", "to": SHA, "detail": "\x1b]0;pwned\x07"}))
+    r, _ = run(fakes, SHA, FAKE_RECORD=json.dumps({"ts": json.loads(record())["ts"], "result": "deployed", "to": SHA, "detail": "\x1b]0;pwned\x07"}))
     assert r.returncode == 0 and "\x1b" not in r.stdout and "\x07" not in r.stdout
 
 
@@ -202,3 +205,27 @@ def test_the_only_remote_commands_in_the_script_are_d2_d3_d4():
 def test_the_script_is_shellcheck_clean():
     r = subprocess.run(["shellcheck", str(SCRIPT)], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout
+
+
+def test_a_record_older_than_this_run_is_not_accepted_even_if_it_names_the_sha(fakes):
+    stale = record(ts=(dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    r, ssh = run(fakes, SHA, FAKE_RECORD=stale, FAKE_D2_RC="1")
+    assert r.returncode == 3 and "stale" in r.stdout and len(ssh) == 2
+    r, _ = run(fakes, SHA, FAKE_RECORD=json.dumps({"result": "deployed", "to": SHA}))   # no ts: not accepted either
+    assert r.returncode == 3
+
+
+def test_the_caller_environment_cannot_redirect_gh_or_git(fakes):
+    r, _ = run(fakes, SHA, GH_HOST="evil.example", GH_REPO="evil/repo", GH_ENTERPRISE_TOKEN="x", GH_CONFIG_DIR="/tmp/x",
+               GIT_DIR="/tmp/x", GIT_WORK_TREE="/tmp/x")
+    assert r.returncode == 0, r.stdout
+    assert (fakes[0] / "log.env").read_text(encoding="utf-8") == ""   # gh saw none of the redirecting variables
+
+
+def test_the_watch_time_and_the_path_are_only_overridable_by_the_test_marker(fakes):
+    """Without GOLDBOT_TESTING + a test bin dir the fakes are not on PATH and the 0 s watch is not honoured."""
+    r, ssh = run(fakes, SHA, GOLDBOT_TESTING="")
+    assert r.returncode == 2 and ssh == []                  # fixed PATH: the fake gh is not found
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "export PATH=/usr/bin:/bin:/opt/homebrew/bin" in text and "ProxyCommand=none" in text
+    assert text.index("export PATH=") < text.index("gh api")

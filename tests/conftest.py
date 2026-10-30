@@ -288,9 +288,13 @@ def quarantine_terms(item: Any) -> tuple[str, Any] | None:
     if not issue or not until or mark.args:
         raise pytest.UsageError(f"{item.nodeid}: quarantine needs issue=... and until='YYYY-MM-DD' (keywords only)")
     try:
-        return str(issue), datetime.date.fromisoformat(str(until))
+        when = datetime.date.fromisoformat(str(until))
     except ValueError:
         raise pytest.UsageError(f"{item.nodeid}: quarantine until={until!r} is not an ISO date") from None
+    if when > clockshift.real_today() + datetime.timedelta(days=2):
+        raise pytest.UsageError(f"{item.nodeid}: quarantine until={until} is more than 2 days out: a quarantine lasts "
+                                f"at most 2 days from today, re-date it when it lapses")
+    return str(issue), when
 
 
 def apply_quarantine(items: list[Any]) -> None:

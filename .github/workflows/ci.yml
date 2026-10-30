@@ -340,5 +340,9 @@ jobs:
         run: |
           failed=$(python3 -c 'import json, os; print(*[j for j, v in json.loads(os.environ["JOBS"]).items() if v["result"] == "failure"])')
           # shellcheck disable=SC2086
-          python3 -I scripts/ci_summary.py report ci-out --jobs $failed \
-            || echo "the base commit's ci_summary.py has no report command yet (first run after FR-5): see the run URL"
+          # tolerate only a base commit whose ci_summary.py predates the report command; any reporter failure fails the job
+          if grep -q 'def run_report' scripts/ci_summary.py; then
+            python3 -I scripts/ci_summary.py report ci-out --jobs $failed
+          else
+            echo "the base commit's ci_summary.py has no report command yet (first run after FR-5): see the run URL"
+          fi

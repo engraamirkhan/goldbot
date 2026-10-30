@@ -167,3 +167,12 @@ def test_real_clock_ignores_the_shift(tmp_path: Path) -> None:
 def test_real_clock_without_a_reason_fails(tmp_path: Path) -> None:
     r = _pytest_in(tmp_path, "import pytest\n\n@pytest.mark.real_clock\ndef test_x():\n    pass\n")
     assert r.returncode == 1 and "needs a reason" in r.stdout
+
+
+def test_a_quarantine_dated_more_than_two_days_out_is_refused(tmp_path: Path) -> None:
+    until = (clockshift.real_today() + dt.timedelta(days=400)).isoformat()
+    r = _pytest_in(tmp_path, QUARANTINE_FILE.format(until=until))
+    assert r.returncode != 0 and "at most 2 days" in (r.stdout + r.stderr)
+    ok = (clockshift.real_today() + dt.timedelta(days=2)).isoformat()
+    (tmp_path / "ok").mkdir()
+    assert _pytest_in(tmp_path / "ok", QUARANTINE_FILE.format(until=ok)).returncode == 0   # the boundary: today + 2
