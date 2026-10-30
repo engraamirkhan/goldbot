@@ -1,0 +1,9 @@
+- Qualify before demo (owner rule 2026-10-30, ADR 0061: "every strategy should have been back tested and qualified before it is tested and learn from live trades that are taken on demo accounts"). Each exploration arm row now has two new fields, both outside the hash. `role: control|cost` marks the exempt arms: the random controls and control twins, plus the cost arms F1A and G1A. `qualification: {screen, screen_window, confirm, confirm_window, verdict: pass, cost_basis: measured}` qualifies a strategy arm.
+  - Enforcement has two layers. `research.arms.load_arms` stamps `entry_refused` from `qualification_refusal`. The engine then reads every row again (`exploration.entry_refused`) and refuses new entries the same way as a spec retirement, journalled `exploration_arm_unqualified` with "unqualified (owner rule 2026-10-30): ...".
+  - Refused arms stay configured, so open positions keep every exit.
+  - A malformed record refuses only its own arm and never stops the engine.
+  - No strategy arm has a qualification yet. The arms that may enter are icm-demo C1H, G1A, G1C, I0, W0, ZCD; icm-probe F1A, F1C, S0, S0R; vantage-demo VC1H, VI0, VW0, ZCV. Newly refused: 11 on icm-demo, 9 on icm-probe, 2 on vantage-demo. Pots and caps are unchanged.
+  - Health shows a `qualification` line per account.
+  - A family comes back only through an evaluator commit that adds a passing qualification to its rows.
+  - spec_rule arms are NOT exempt. On this base `autodisc_register` registers explore survivors without a confirm read, so it must write a qualification once ADR 0058's confirm stage lands.
+  - Engine tests now declare their strategy arms qualified (`tests.test_exploration_engine.qualified`, `_engine(qualify=...)`).

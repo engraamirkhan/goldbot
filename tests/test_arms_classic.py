@@ -261,6 +261,8 @@ def _send_at(path: Path, ticks: pd.DataFrame, b1: pd.DataFrame, arm: Arm, close:
     """A demo probe-only engine with this one arm (per-trade cap `cap`, the pot and budget wide), just after `close`:
     its live 1m buffer, the close processed, a quote 2 s later, one exploration pass."""
     path.mkdir()
+    from tests.test_exploration_engine import qualified
+    arm = qualified(arm)
     cfg = ExplorationConfig(enabled=True, budget_share=0.9, max_open_total=18,
                             pots={"intraday": Pot(gbp=10_000, max_open=5)}, arms=(arm,))
     pb = _Terminal(equity=100_000, adverse_slip_points=0.0)

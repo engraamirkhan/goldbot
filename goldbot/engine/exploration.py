@@ -50,6 +50,11 @@ The plan's rules, as built here:
   2026-10-26: a restart must not trade an arm it cannot know is not retired). Exits are never affected. An arm whose
   frozen spec row records a retirement (`retired_day`/`retired_rule`, e.g. A2 readability 2026-10-30) is retired the
   same way from the start (`spec_retired`, journalled `exploration_arm_retired` with its rule), on every account.
+* Qualification before demo (owner rule 2026-10-30, ADR 0061: "every strategy should have been back tested and
+  qualified before it is tested and learn from live trades that are taken on demo accounts"): a strategy arm without a
+  passing `qualification` on its row (a screen AND a confirm, verdict pass, measured costs) is refused the same way,
+  from the start, on every account (`entry_refused`: the loader's stamp, then the row read again here; journalled
+  `exploration_arm_unqualified` with the reason). The random controls and the cost arms (`role` control/cost) run.
 * Identity: magic_base + 95 (`goldbot.engine.magic`), order id and MT5 comment `ex<arm5>-<epoch10>-<h8>` (27 chars,
   inside MT5's 29). After a restart a position is adopted by its order row or its comment and its hold resumes from
   the broker's open time.
@@ -83,7 +88,7 @@ from goldbot.db import Database, RecordRepo
 from goldbot.engine import auto_entry, cost_probe
 from goldbot.execution.costs import CONTRACT_OZ
 from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec
-from goldbot.research.arms import SPEC_RULE, arm_hash, load_arms
+from goldbot.research.arms import SPEC_RULE, arm_hash, load_arms, qualification_refusal, stamp_qualification
 from goldbot.research.arms import Arm as SpecArm
 
 if TYPE_CHECKING:
@@ -250,7 +255,7 @@ def _load_spec_arm_rows(path: Path, *, live_class: bool) -> tuple[list[SpecArm],
     for i, row in enumerate(rows):
         name = str(row.get("id")) if isinstance(row, dict) and row.get("id") else f"row{i}"
         try:
-            arm = SpecArm.model_validate(row)
+            arm = stamp_qualification(SpecArm.model_validate(row))      # ADR 0061: kept, entries refused if unqualified
             if ids.count(arm.id) > 1:
                 raise ValueError("another row has the same id (ambiguous: neither runs)")
             if arm.config_hash != arm_hash(arm):
@@ -269,6 +274,36 @@ def spec_retired(cfg: ExplorationConfig) -> frozenset[str]:
     id"). They stay configured, so an open position keeps its stop, target, hold and every exit (an arm no longer
     configured would be closed at once); the engine queues no signal of them, as of an arm retired at its stop."""
     return frozenset(a.arm_id for a in cfg.arms if a.spec.retired)
+
+
+def entry_refused(cfg: ExplorationConfig) -> dict[str, str]:
+    """The arms of `cfg` that may send no demo entry under the owner rule 2026-10-30 (ADR 0061), with the reason: the
+    loader's stamp (`research.arms.load_arms`), else the row read again (`qualification_refusal`), so an arm that
+    reached the engine any other way is refused all the same. Like a spec retirement they stay configured: an open
+    position keeps its stop, target, hold and every exit."""
+    out: dict[str, str] = {}
+    for a in cfg.arms:
+        why = a.spec.entry_refused or qualification_refusal(a.spec)
+        if why:
+            out[a.arm_id] = why
+    return out
+
+
+def qualification_by_account(accounts: list[Account]) -> dict[str, tuple[list[str], list[str]]]:
+    """Per exploring account (health `qualification`): the arms that may enter (every one exempt today) and the arms
+    the owner rule 2026-10-30 refuses, a spec retirement aside (those are refused already). As the engine selects:
+    run status, a rule it has, a spec_rule arm on demo only."""
+    from goldbot.research import arm_rules
+    out: dict[str, tuple[list[str], list[str]]] = {}
+    for acc in accounts:
+        cfg = config_for(acc)
+        if cfg is None:
+            continue
+        ok = {a.arm_id for a in cfg.arms if a.spec.status == "run" and a.spec.rule in arm_rules.RULE_FUNCS
+              and (a.spec.rule != SPEC_RULE or acc.mode == "demo")}
+        refused, retired = set(entry_refused(cfg)), spec_retired(cfg)
+        out[acc.account_id] = (sorted(ok - refused - retired), sorted((ok & refused) - retired))
+    return out
 
 
 def config_for(acc: Account, spec_path: Path = SPEC_PATH,
@@ -467,6 +502,14 @@ class Exploration:
                         self.arms[a].spec.retired_rule)
             eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": "exploration_arm_retired",
                                   "arm": a, "rule": self.arms[a].spec.retired_rule})
+        # ADR 0061, second layer: every unqualified strategy arm, refused from the start as a spec retirement is (no new
+        # entry; configured, so its open positions keep every exit); journalled once each, a spec retirement aside
+        self.unqualified: dict[str, str] = {k: v for k, v in entry_refused(cfg).items() if k in self.arms}
+        for a in sorted(set(self.unqualified) - self.retired):
+            log.warning("exploration arm %s refused: %s", a, self.unqualified[a])
+            eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": "exploration_arm_unqualified",
+                                  "arm": a, "rule": self.unqualified[a]})
+        self.retired = self.retired | frozenset(self.unqualified)
         self.retired_read: pd.Timestamp | None = None
         self.retired_ok = False                         # a read has succeeded since the start: entries may go out
         self.lost_seen: dict[int, pd.Timestamp] = {}     # lost record -> the day it was last journalled

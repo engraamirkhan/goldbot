@@ -33,6 +33,10 @@ TICKS = synthetic_ticks("2025-03-03", "2025-03-08", ticks_per_minute=1, seed=5)
 CLOSE = pd.Timestamp("2025-03-04 20:00", tz="UTC")        # a Tuesday 15m close in market hours
 LOSS = 1.0                                                 # every loss at a stop, and every round trip, in the tests
 LONG, SHORT = "random_bracket", "tsmom"                    # spec rule names whose generators the tests replace
+# a passing history qualification (ADR 0061: no strategy arm enters on demo without one): the test arms may enter
+QUALIFIED: dict[str, Any] = {"screen": "docs/research/research-plan.md", "screen_window": "2010-01-01..2017-12-31",
+                             "confirm": "registry:H-99-confirm", "confirm_window": "2018-01-01..2025-09-30",
+                             "verdict": "pass", "cost_basis": "measured"}
 
 
 class _Terminal(PaperBroker):
@@ -63,14 +67,25 @@ def _arm(arm_id: str, tf: str = "15m", *, side: int = 1, style: str = "intraday"
          status: Literal["run", "blocked"] = "run") -> Arm:
     spec = SpecArm(id=arm_id, rule=LONG if side > 0 else SHORT, timeframe=tf, max_open=max_open,  # type: ignore[arg-type]
                    params={"stop_usd": stop_usd, "target_r": target_r, "hold_bars": hold_bars}, status=status,
-                   note="test" if status != "run" else "")
+                   note="test" if status != "run" else "", qualification=QUALIFIED)
     return Arm(spec=spec, style=style, control_share=control_share)
+
+
+def qualified(arm: Arm) -> Arm:
+    """`arm` with a passing history qualification (QUALIFIED) when it is a strategy arm without one: the engine tests
+    exercise rules no family has qualified yet (ADR 0061), so their arms are declared qualified; a test of the
+    qualification itself builds its engine with `qualify=False`."""
+    if arm.spec.role != "strategy" or arm.spec.qualification is not None:
+        return arm
+    return arm.model_copy(update={"spec": arm.spec.model_copy(update={"qualification": QUALIFIED,
+                                                                      "entry_refused": ""})})
 
 
 def _engine(tmp_path: Path, arms: list[Arm], *, pots: dict[str, Pot] | None = None, max_open_total: int = 18,
             budget_share: float = 0.9, caps: dict[str, float] | None = None, agents: list[Any] | None = None,
             pb: PaperBroker | None = None, enabled: bool = True, max_positions: int = 50,
-            scheduled: bool = False) -> tuple[Engine, PaperBroker]:
+            scheduled: bool = False, qualify: bool = True) -> tuple[Engine, PaperBroker]:
+    arms = [qualified(a) for a in arms] if qualify else arms
     pots = pots if pots is not None else {"scalp": Pot(gbp=50, max_open=8), "intraday": Pot(gbp=48, max_open=5),
                                           "swing": Pot(gbp=40, max_open=1)}
     cfg = ExplorationConfig(enabled=enabled, budget_share=budget_share, max_open_total=max_open_total, pots=pots,
