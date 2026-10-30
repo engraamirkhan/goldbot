@@ -41,7 +41,13 @@ Sunday reopen belongs to Monday; default the month so far); trades are in the ra
   from 00:00 UTC, `timeutil.risk_day`; the risk week from Sunday 00:00 UTC, gate `_risk_week`) against the daily cap
   and the absolute limit, the weekly cap and the 8% / 12% stages. Floating losses and open risk are not seen; the exact
   figures need a daily risk summary from the engine, which does not exist yet;
-* with `--data-root`, the journal: proposals, gate refusals by reason, orders and failed orders.
+* with `--data-root`, the journal: proposals, gate refusals by reason, orders and failed orders;
+* exploration, control and cost-probe closes (ops/learning_ledger.py: the trade ledger over aux.db), in their own
+  section labelled by kind and by kind and family, the random controls beside the families they are read against.
+  These are NEVER in the closed-trade record above (it feeds the phase gate, the stop rule and the throttle), so the
+  sections above are exactly what they were; a trade in both sources (same account and broker position) is counted
+  once, in the record. Same honesty rules: net only where commission and swap are both recorded, no interval under
+  MIN_TRADES net R, and the groups count in the multiple-groups note.
 
 Design rule (the brief to the performance-analyst): "sample sizes everywhere, with no conclusion drawn from fewer than
 ~30 trades". Every figure carries its count; an interval and a reading ("mean R above zero") are given only from
@@ -66,9 +72,10 @@ import json
 import math
 import re
 import sys
+from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
@@ -81,9 +88,17 @@ from goldbot.engine.shadow import ShadowTrade, VersionBook
 from goldbot.execution.costs import SESSIONS, CostTable
 from goldbot.execution.not_placed import CAUSE_PHRASE, approval_cause
 from goldbot.ops.gates_phase import ClosedTrade, load_closed_trades, pnl_basis
+from goldbot.ops.learning_ledger import (
+    KIND_LABEL,
+    KINDS,
+    LearningClose,
+    closed_learning_trades,
+    recorded_keys,
+)
 from goldbot.ops.report_days import day_buckets, month_days, report_day
 from goldbot.ops.report_days import weekdays as weekdays_in
 from goldbot.telegram.approvals import Outcome, Proposal
+from goldbot.telegram.entry_text import account_name
 
 MIN_TRADES = 30                  # below this no interval and no reading, only the counts (design rule above)
 NORTH_STAR_GBP = 50.0            # ADR 0004 section 6: days at £50+ are counted, never aimed at
@@ -124,6 +139,15 @@ class GroupStats(FrozenRecord):
     r_ci90: tuple[float, float] | None = None   # Student-t, only from MIN_TRADES net R
     sufficient: bool
     verdict: str
+    # exploration, control and probe rows only (None / 0 elsewhere): trades closed by anything but the arm's own stop,
+    # target or hold, counted apart and never in R or money; a family's mean net R less the random control's, matched
+    # by risk day x session x side (the control weighted by the family's cell mix), with a Welch 90% interval only when
+    # both sides have MIN_TRADES trades; the family trades whose cell has no control trade are dropped and counted
+    censored: int = 0
+    excess_r: float | None = None
+    excess_ci90: tuple[float, float] | None = None
+    excess_cells: int | None = None
+    excess_dropped: int = 0
 
 
 class DayStats(FrozenRecord):
@@ -255,6 +279,13 @@ class JournalReport(FrozenRecord):
     orders_failed: int
 
 
+class LearningReport(FrozenRecord):
+    """Exploration, control and cost-probe closes (not in the phase-gate record), by kind and by kind and family."""
+    currency: str | None = None            # the learning trades' own (the record sections keep theirs)
+    kinds: list[GroupStats]
+    families: list[GroupStats]           # "<kind> / <family>": the controls (random_bracket, ...) beside the families
+
+
 class AccountReport(FrozenRecord):
     account_id: str
     mode: str | None = None
@@ -270,6 +301,7 @@ class AccountReport(FrozenRecord):
     not_recorded: dict[str, int]
     money_sources: dict[str, int] = {}         # the record's money_source (record-gap lane), "not recorded" without
     money_note: str | None = None
+    learning: LearningReport | None = None     # None when the account closed no exploration, control or probe trade
 
 
 class PerformanceReport(FrozenRecord):
@@ -280,6 +312,7 @@ class PerformanceReport(FrozenRecord):
     min_trades: int = MIN_TRADES
     groups: int = 0                            # group rows across every account and dimension
     groups_with_reading: int = 0
+    learning_groups: int = 0                   # exploration, control and probe rows (kind rows overlap family rows)
     accounts: list[AccountReport]
     errors: list[str] = []
 
@@ -325,7 +358,33 @@ def _read_json(path: Path) -> Any:
         return None
 
 
-def _group(key: str, rows: list[_Row], weekdays: int) -> GroupStats:
+class _Measured(Protocol):
+    """What a group sums: a closed trade's net and gross money and R, and the basis they rest on."""
+    @property
+    def basis(self) -> str | None: ...
+    @property
+    def net_pnl(self) -> float | None: ...
+    @property
+    def net_r(self) -> float | None: ...
+    @property
+    def gross_pnl(self) -> float | None: ...
+    @property
+    def gross_r(self) -> float | None: ...
+
+
+class _LRow(FrozenRecord):
+    """One closed exploration, control or probe trade with what the report derives from it (the `_Row` fields a
+    group reads)."""
+    trade: LearningClose
+    cell: tuple[str, str, str]                 # risk day x session x side: what a family is matched to the control on
+    basis: str | None
+    net_pnl: float | None
+    net_r: float | None
+    gross_pnl: float | None
+    gross_r: float | None
+
+
+def _group(key: str, rows: Sequence[_Measured], weekdays: int, censored: int = 0) -> GroupStats:
     net = [r.net_pnl for r in rows if r.net_pnl is not None]
     rs = [r.net_r for r in rows if r.net_r is not None]
     gross = [r.gross_pnl for r in rows if r.gross_pnl is not None]
@@ -342,7 +401,7 @@ def _group(key: str, rows: list[_Row], weekdays: int) -> GroupStats:
         pnl_per_day=net_sum / weekdays if net_sum is not None and weekdays else None,
         r_per_day=net_r / weekdays if net_r is not None and weekdays else None,
         win_rate=sum(x > 0 for x in rs) / len(rs) if rs else None, r_ci90=ci,
-        sufficient=len(rs) >= MIN_TRADES and ci is not None, verdict=_reading(len(rs), ci))
+        sufficient=len(rs) >= MIN_TRADES and ci is not None, verdict=_reading(len(rs), ci), censored=censored)
 
 
 # ---------------------------------------------------------------------------------------------- state readers
@@ -810,6 +869,113 @@ def _proposal_day(p: Proposal) -> str:
     return report_day(close if close is not None else pd.Timestamp(p.created, unit="s", tz="UTC"))
 
 
+# ---------------------------------------------------------------------------------------------- learning trades
+def _lrow(c: LearningClose, ccy: str | None) -> _LRow:
+    """Net only when commission and swap are both recorded (`LearningClose.net`); money only in the account currency."""
+    same_ccy = c.currency is None or ccy is None or c.currency.upper() == ccy.upper()
+    gross_r = c.gross / c.risk if c.net and c.gross is not None and c.risk else None
+    session = str(DEFAULT_SESSIONS.session_label(pd.DatetimeIndex([c.opened_utc]))[0])
+    day = f"{risk_day(pd.DatetimeIndex([c.opened_utc]))[0]:%Y-%m-%d}"   # the entry's day, as its session
+    return _LRow(trade=c, cell=(day, session, c.side), basis="net" if c.net else None,
+                 net_pnl=c.pnl if c.net and same_ccy else None, net_r=c.r if c.net else None,
+                 gross_pnl=c.gross if c.net and same_ccy else None, gross_r=gross_r)
+
+
+def _excess(key: str, fam: list[_LRow], control: list[_LRow], weekdays: int) -> GroupStats:
+    """The family's group, read against the random control on the same cells (risk day x session x side).
+
+    excess = the family's mean net R less the control's mean net R in each trade's own cell (the control weighted by the
+    family's cell mix); a family trade whose cell has no control trade is dropped and counted. The 90% interval is
+    Welch's on the difference and only when both sides have MIN_TRADES trades; the verdict is against the control,
+    never against zero (a family riding the day's drift reads "not distinguishable")."""
+    from scipy import stats
+    g = _group(key, fam, weekdays)
+    ctrl: dict[tuple[str, str, str], list[float]] = {}
+    for r in control:
+        if r.net_r is not None:
+            ctrl.setdefault(r.cell, []).append(r.net_r)
+    mine = [(r.cell, r.net_r) for r in fam if r.net_r is not None]
+    matched = [(c, x) for c, x in mine if c in ctrl]
+    dropped = len(mine) - len(matched)
+    if not matched:
+        return g.model_copy(update={"excess_dropped": dropped, "excess_cells": 0, "r_ci90": None, "sufficient": False,
+                                    "verdict": f"no matched control trades ({dropped} unmatched)"})
+    cmean = {c: float(np.mean(v)) for c, v in ctrl.items()}
+    diffs = [x - cmean[c] for c, x in matched]
+    excess = float(np.mean(diffs))
+    used = sorted({c for c, _ in matched})
+    n_ctrl = sum(len(ctrl[c]) for c in used)
+    ci: tuple[float, float] | None = None
+    if len(diffs) >= MIN_TRADES and n_ctrl >= MIN_TRADES:
+        pooled_var = float(np.var([x for c in used for x in ctrl[c]], ddof=1))
+        va = float(np.var(diffs, ddof=1)) / len(diffs)
+        # the control side: a cell-weighted mean, var = sum_u w_u^2 s_u^2 / m_u; Welch-Satterthwaite df per cell
+        # (m_u - 1), and a cell with one control trade takes the pooled variance with the pooled df (n_ctrl - 1)
+        cells: list[tuple[float, int]] = []
+        pooled_t = 0.0
+        for u in used:
+            w, m = sum(c == u for c, _ in matched) / len(matched), len(ctrl[u])
+            if m > 1:
+                cells.append((w * w * float(np.var(ctrl[u], ddof=1)) / m, m - 1))
+            else:
+                pooled_t += w * w * pooled_var
+        vb = sum(t for t, _ in cells) + pooled_t
+        se = math.sqrt(va + vb)
+        if se > 0:
+            df = (va + vb) ** 2 / (va ** 2 / (len(diffs) - 1) + sum(t * t / d for t, d in cells)
+                                   + pooled_t ** 2 / (n_ctrl - 1))
+            half = float(stats.t.ppf(0.95, df)) * se
+        else:
+            half = 0.0
+        ci = (excess - half, excess + half)
+    note = f"{_r(excess)} vs control on {len(used)} cells, {dropped} unmatched"
+    if ci is None:
+        verdict = f"insufficient sample (< {MIN_TRADES} trades on a side): {note}"
+    elif ci[0] > 0:
+        verdict = f"above the random control (matched 90% interval): {note}"
+    elif ci[1] < 0:
+        verdict = f"below the random control (matched 90% interval): {note}"
+    else:
+        verdict = f"not distinguishable from the random control (matched 90% interval): {note}"
+    return g.model_copy(update={"excess_r": excess, "excess_ci90": ci, "excess_cells": len(used),
+                                "excess_dropped": dropped, "r_ci90": None, "sufficient": ci is not None,
+                                "verdict": verdict})
+
+
+def _learning_group(key: str, kind: str, rows: list[_LRow], censored: int, weekdays: int, control: list[_LRow],
+                    family: bool) -> GroupStats:
+    """One learning row. Never "mean R above zero": a pooled arm's mean is the market's drift plus selection."""
+    if family and kind == "exploration":
+        return _excess(key, rows, control, weekdays).model_copy(update={"censored": censored})
+    g = _group(key, rows, weekdays, censored)
+    if g.r_trades < MIN_TRADES:
+        verdict = f"insufficient sample (< {MIN_TRADES} trades with a net R)"
+    elif kind == "control":
+        verdict = "the random control (the null the families are read against)"
+    elif kind == "cost_probe":
+        verdict = "cost measurement, not a return reading"
+    else:
+        verdict = "descriptive only: not tested against the control"
+    return g.model_copy(update={"verdict": verdict})
+
+
+def _learning(rows: list[_LRow], censored: list[_LRow], weekdays: int, ccy: str | None) -> LearningReport | None:
+    """`rows` are the countable trades; the `censored` ones are counted beside their row, never in R or money."""
+    if not rows and not censored:
+        return None
+    order = {k: i for i, k in enumerate(KINDS)}
+    control = [r for r in rows if r.trade.kind == "control"]
+    both = [*rows, *censored]
+    kinds = [_learning_group(KIND_LABEL[k], k, [r for r in rows if r.trade.kind == k],
+                             sum(r.trade.kind == k for r in censored), weekdays, control, False)
+             for k in KINDS if any(r.trade.kind == k for r in both)]
+    keys = sorted({(r.trade.kind, r.trade.family) for r in both}, key=lambda kf: (order[kf[0]], kf[1]))
+    families = [_learning_group(f"{k} / {f}", k, [r for r in rows if (r.trade.kind, r.trade.family) == (k, f)],
+                                sum((r.trade.kind, r.trade.family) == (k, f) for r in censored), weekdays, control,
+                                True) for k, f in keys]
+    return LearningReport(currency=ccy, kinds=kinds, families=families)
+
+
 # ---------------------------------------------------------------------------------------------- build
 def build_performance_report(state_dir: str | Path, *, start: str, end: str, data_root: str | Path | None = None,
                              account: str | None = None, now: pd.Timestamp | None = None,
@@ -822,6 +988,27 @@ def build_performance_report(state_dir: str | Path, *, start: str, end: str, dat
     trades, err = load_closed_trades(state) if state.is_dir() else ([], None)
     if err:
         errors.append(err)
+    # exploration, control and probe closes: read from the ledger, never from (or into) the closed-trade record
+    learn = None
+    if state.is_dir():
+        try:
+            learn = closed_learning_trades(state, now, recorded_keys(trades))
+        except Exception as exc:                   # noqa: BLE001 - reporting only: the closed-trade sections still show
+            errors.append(f"trade ledger unreadable ({type(exc).__name__}): exploration, control and probe trades "
+                          "missing, not zero")
+    if learn is not None and learn.unreadable:
+        errors.append("trade ledger source(s) unreadable: " + ", ".join(learn.unreadable)
+                      + " (exploration, control or probe trades missing, not zero)")
+    # the ledger cuts digit runs out of an account name: map it back through the record's ids, the accounts config and
+    # `--account`, so an account with only learning trades keeps its id (and `--account <id>` finds it)
+    from goldbot.ops import accounts as accounts_config
+    listed = accounts_config.account_ids()
+    known = {*(t.account_id for t in trades), *(listed.listed if listed is not None else ()), *([account] if account else ())}
+    ids = {account_name(a): a for a in known}
+    learn_by: dict[str, list[LearningClose]] = {}
+    for c in learn.rows if learn is not None else []:
+        if start <= report_day(c.exit_utc) <= end:
+            learn_by.setdefault(ids.get(c.account, c.account), []).append(c)
     store = _store(Path(data_root) if data_root is not None else None)
     day_types, classified, opp = _day_types(store, start, end, bars_source)
     population = _population(state)
@@ -842,7 +1029,7 @@ def build_performance_report(state_dir: str | Path, *, start: str, end: str, dat
     in_range = {a for a, ts in all_by.items()
                 if any(start <= report_day(t.exit_utc) <= end
                        or (t.entry_utc is not None and start <= report_day(t.entry_utc) <= end) for t in ts)}
-    accounts = sorted(in_range | set(props_by) | set(pending_by))
+    accounts = sorted(in_range | set(props_by) | set(pending_by) | set(learn_by))
     if account is not None:
         accounts = [a for a in accounts if a == account]
     out = []
@@ -877,6 +1064,12 @@ def build_performance_report(state_dir: str | Path, *, start: str, end: str, dat
         excluded = sum(not (r.trade.pnl_currency is None or ccy is None or r.trade.pnl_currency.upper() == ccy.upper())
                        for r in rows)
         modes = {r.trade.mode for r in rows}
+        lcs = learn_by.get(acc, [])
+        seen_l = {c.currency for c in lcs if c.currency}
+        lccy = ccy or (next(iter(seen_l)) if len(seen_l) == 1 else None)     # the record sections keep `ccy`
+        lrows = [_lrow(c, lccy) for c in lcs]
+        learning = _learning([r for r in lrows if not r.trade.censored], [r for r in lrows if r.trade.censored],
+                             weekdays, lccy)
         out.append(AccountReport(
             account_id=acc, mode=next(iter(modes)) if len(modes) == 1 else ("mixed" if modes else None), currency=ccy,
             overall=_group("all", rows, weekdays), by=by, days=_days(rows, weekdays, ccy),
@@ -888,10 +1081,12 @@ def build_performance_report(state_dir: str | Path, *, start: str, end: str, dat
             journal=_journal(store, acc, start, end), not_recorded={k: v for k, v in not_rec.items() if v},
             money_sources=dict(sorted(sources.items())),
             money_note=f"{excluded} trade(s) in another currency counted in trades and R, not in money"
-            if excluded else None))
+            if excluded else None, learning=learning))
     groups = [g for a in out for gs in a.by.values() for g in gs]
+    learning_groups = sum(len(a.learning.kinds) + len(a.learning.families) for a in out if a.learning is not None)
     return PerformanceReport(start=start, end=end, as_of_utc=now.isoformat(), weekdays=weekdays, accounts=out,
-                             groups=len(groups), groups_with_reading=sum(g.sufficient for g in groups), errors=errors)
+                             groups=len(groups), groups_with_reading=sum(g.sufficient for g in groups),
+                             learning_groups=learning_groups, errors=errors)
 
 
 # ---------------------------------------------------------------------------------------------- markdown
@@ -915,7 +1110,7 @@ def _label(dim: str, key: str) -> str:
     return SESSION_NAMES.get(key, key) if dim == "session" else key
 
 
-def _table(dim: str, groups: list[GroupStats], ccy: str | None) -> list[str]:
+def _table(dim: str, groups: list[GroupStats], ccy: str | None, learning: bool = False) -> list[str]:
     lines = ["| " + dim.replace("_", " ") + " | trades | net | gross | net R | gross R | mean R | per trade | per day "
              "| R per day | win | 90% interval | reading |", "|" + " --- |" * 13]
     for g in groups:
@@ -926,9 +1121,11 @@ def _table(dim: str, groups: list[GroupStats], ccy: str | None) -> list[str]:
                                              if g.gross_trades != g.trades else "")
         gr = _r(g.gross_r) + (f" ({g.gross_r_trades} of {g.trades})" if g.gross_r_trades != g.trades else "")
         nr = _r(g.net_r) + (f" ({g.r_trades} of {g.trades})" if g.r_trades != g.trades else "")
-        ci = f"{g.r_ci90[0]:+.2f} to {g.r_ci90[1]:+.2f}" if g.r_ci90 else "-"
+        iv = g.excess_ci90 if learning else g.r_ci90        # a learning row's interval is on its excess over the control
+        ci = f"{iv[0]:+.2f} to {iv[1]:+.2f}" if iv else "-"
         win = f"{100 * g.win_rate:.0f}%" if g.win_rate is not None else NOT_RECORDED
-        lines.append(f"| {_label(dim, g.key)} | {g.trades} | {net} | {gross} | {nr} | {gr} | "
+        trades = f"{g.trades}" + (f" (+{g.censored} censored)" if g.censored else "")
+        lines.append(f"| {_label(dim, g.key)} | {trades} | {net} | {gross} | {nr} | {gr} | "
                      f"{_r(g.mean_r)} | {_money(g.mean_pnl, ccy)} | {_money(g.pnl_per_day, ccy)} | {_r(g.r_per_day)} | "
                      f"{win} | {ci} | {g.verdict} |")
     return lines
@@ -948,7 +1145,9 @@ def format_markdown(rep: PerformanceReport) -> str:
          "Reporting only.", "",
          f"{rep.groups} groups across {len(DIMENSIONS)} dimensions, {rep.groups_with_reading} with a reading. With many "
          "groups some 90% intervals exclude zero by chance alone (about 1 group in 10 with no edge at all): read a "
-         "single group's interval as a lead to test, not a finding.", ""]
+         "single group's interval as a lead to test, not a finding"
+         + (f", plus {rep.learning_groups} learning groups (kind rows overlap family rows); about 1 in 10 groups shows "
+            "an interval by chance" if rep.learning_groups else "") + ".", ""]
     if not rep.accounts:
         L.append("No closed trades or proposals in this range.")
     for a in rep.accounts:
@@ -962,6 +1161,22 @@ def format_markdown(rep: PerformanceReport) -> str:
         L += ["### Overall", ""] + _table("all", [o], c) + [""]
         for dim in DIMENSIONS:
             L += [f"### {_heading(dim)}", ""] + _table(dim, a.by[dim], c) + [""]
+        if a.learning is not None:
+            L += ["### Exploration, control and cost-probe closes (not in the phase-gate record)", "",
+                  "These trades are never written to the closed-trade record the phase gate, stop rule and throttle "
+                  "read; they come from the trade ledger. Net only where commission and swap are both recorded. "
+                  "Control rows (random entries) sit beside the families: read a family's mean R against the control's "
+                  "over the same range, not alone.", ""]
+            lc = a.learning.currency
+            L += _table("kind", a.learning.kinds, lc, True) + [""]
+            L += _table("kind / family", a.learning.families, lc, True) + [""]
+            L += ["A family's reading is its mean net R less the random control's on the same risk day, session and side "
+                  "(the 90% interval is on that difference, only from "
+                  f"{rep.min_trades} trades on each side; \"unmatched\" trades had no control trade in their cell). "
+                  "Censored trades (closed by anything but the arm's own stop, target or hold) are counted beside the "
+                  "row, never in R or money; voided trades are left out. The bandit chooses which arms trade and when, so "
+                  "a family's pooled arms carry selection bias; no row here is evidence: claims go through a registry "
+                  "trial.", ""]
         d = a.days
         L += ["### Days", "",
               f"- traded {d.traded_days} of {d.weekdays} weekdays; mean {_money(d.mean_per_weekday, c)} per weekday; "

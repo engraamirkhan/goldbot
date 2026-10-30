@@ -377,6 +377,7 @@ class HealthContext(Record):
     commit: str | None = None                                 # this checkout's commit, compared with the bridge's
     clock: Callable[[], pd.Timestamp] | None = None           # host UTC read after a network probe; None: use `now`
     last_run: UtcTimestamp | None = None                      # the previous health run (health_last.json), if any
+    memo: dict[str, Any] = Field(default_factory=dict)        # per-run reads shared by the per-account checks
 
     @classmethod
     def from_runtime(cls, state_dir: str | Path = "state", settings_path: str | Path = DEFAULT_SETTINGS,

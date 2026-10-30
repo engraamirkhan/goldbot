@@ -1145,12 +1145,13 @@ def record_close(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float | 
 
 
 # ---------------------------------------------------------------------------------------------- readers (costs-v2)
-def probes(state_dir: str | Path, account_id: str | None = None) -> list[ProbeRecord]:
-    """Every probe record, oldest first (one account's when given): what costs-v2 reads. Empty when aux.db has none."""
+def probes(state_dir: str | Path, account_id: str | None = None, *, migrate: bool = True) -> list[ProbeRecord]:
+    """Every probe record, oldest first (one account's when given): what costs-v2 reads. Empty when aux.db has none.
+    `migrate=False` (the reports): a file whose schema is not current raises instead of being migrated by a reader."""
     f = Path(state_dir) / "aux.db"
     if not f.exists():
         return []
-    db = Database.open(state_dir, "aux")
+    db = Database.open(state_dir, "aux", migrate=migrate)
     with db.connection() as conn:
         if account_id is None:
             return LEDGER.select(conn, order_by="ts_ns")
