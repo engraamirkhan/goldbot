@@ -64,3 +64,24 @@ def test_run_json_records_dropped_and_cost_line(tmp_path):
     cli.main(["run", "--synthetic", "--limit", "5", "--reps", "2", "--min-events", "60", "--db", str(tmp_path / "d.db"),
               "--run-json", str(rj)])
     assert json.loads(rj.read_text())["dropped_unsupported"] == 0
+
+
+def test_report_prints_large_counts_with_separators_so_a_count_never_reads_as_a_confirm_year():
+    from goldbot.research.autodisc.nulls import FunnelResult
+
+    res = FunnelResult(k_search=2050, k_null=2019, evaluated=2024, passed_floors=2100, beat_null=0,
+                       passed_explore_checks=0, null_threshold=0.5, real_best_null_percentile=0.5, real_best=0.1)
+    text = cli.render_report(res, {}, (2077, "ab"), "G1 combine", 100, 1 / 101)
+    assert "K_search 2,050" in text and "seq 2,077" in text
+
+
+def test_nightly_command_runs_the_scheduler_job_on_this_machine(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake(settings, state_dir, slot, **kw):
+        seen.update(enabled=settings.research.autodisc.nightly_enabled, state_dir=state_dir)
+        return {"health": "autodisc test"}
+
+    monkeypatch.setattr(cli, "run_nightly_job", fake)
+    assert cli.main(["nightly", "--state-dir", str(tmp_path)]) == 0
+    assert seen == {"enabled": True, "state_dir": tmp_path}

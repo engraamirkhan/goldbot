@@ -358,6 +358,23 @@ def _num(x: float | None) -> float | None:
     return x if x is not None and np.isfinite(x) else None
 
 
+def evaluate_logged(t: OutcomeTensor, res: Resolver, s: StrategySpec, ledger: SearchLedger, *,
+                    parents: tuple[str, ...] = (), generation: int = 0, min_events: int | None = None,
+                    side_override: SideArr | None = None, null: bool = False) -> GPCandidate:
+    """Log the spec (ledger first, design 3.1), evaluate it (the evaluator refuses an unlogged hash), record its result."""
+    h = spec_hash(s)
+    ledger.log_spec(s, GENERATOR, VERSION, parents=parents, null=null)
+    mask, side = res.entries(s)
+    if side_override is not None:
+        mask, side = null_view(mask, side, side_override)
+    e = evaluate(t, mask, side, exit_index(t, s), timeframe=s.timeframe, spec_hash=h, ledger=ledger, null=null,
+                 min_events=min_events)
+    ledger.record_result(h, {"n_events": e.n_events, "mean_r": _num(e.mean_r), "fitness": _num(e.fitness),
+                             "excess_r": _num(e.excess_r), "stress_mean_r": _num(e.stress_mean_r),
+                             "floors": e.floors_passed, "generation": generation}, null=null)
+    return GPCandidate(spec=s, spec_hash=h, parents=parents, generation=generation, evaluation=e)
+
+
 def run_gp(t: OutcomeTensor, provider: MaskProvider, cfg: GPConfig, ledger: SearchLedger, *,
            side_override: SideArr | None = None, null: bool = False, resolver: Resolver | None = None) -> GPRun:
     """One bounded G2 search on the tensor (module docstring). `side_override` (with null=True) is G0's random side."""
@@ -369,21 +386,11 @@ def run_gp(t: OutcomeTensor, provider: MaskProvider, cfg: GPConfig, ledger: Sear
 
     def run_one(s: StrategySpec, parents: tuple[str, ...], gen: int) -> GPCandidate:
         h = spec_hash(s)
-        if h in done:
-            return done[h]
-        ledger.log_spec(s, GENERATOR, VERSION, parents=parents, null=null)          # ledger first (design 3.1)
-        mask, side = res.entries(s)
-        if side_override is not None:
-            mask, side = null_view(mask, side, side_override)
-        e = evaluate(t, mask, side, exit_index(t, s), timeframe=s.timeframe, spec_hash=h, ledger=ledger, null=null,
-                     min_events=cfg.min_events)
-        ledger.record_result(h, {"n_events": e.n_events, "mean_r": _num(e.mean_r), "fitness": _num(e.fitness),
-                                 "excess_r": _num(e.excess_r), "stress_mean_r": _num(e.stress_mean_r),
-                                 "floors": e.floors_passed, "generation": gen}, null=null)
-        c = GPCandidate(spec=s, spec_hash=h, parents=parents, generation=gen, evaluation=e)
-        done[h] = c
-        order.append(c)
-        return c
+        if h not in done:
+            done[h] = evaluate_logged(t, res, s, ledger, parents=parents, generation=gen, min_events=cfg.min_events,
+                                      side_override=side_override, null=null)
+            order.append(done[h])
+        return done[h]
 
     seeds: dict[str, StrategySpec] = {}
     for _ in range(cfg.population * _TRIES):
