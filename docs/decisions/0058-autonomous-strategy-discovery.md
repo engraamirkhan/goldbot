@@ -77,3 +77,31 @@ Written before any real-data nightly search has run, so it binds every explore s
    and a new registry row status synced to a host on an older build would read as a trial and take a budget slot
    (`is_trial` counts every unknown status). Phase 3 adds the `discovery_batch` row (no trial, no budget slot) with
    `n_trials_discovery` = registry K + sum of k_contrib, and no discovered spec reaches a confirm trial before it does.
+
+## Amendment 2026-10-30 (phase 3: confirm and holdout; quant review owed before the first confirm read)
+1. **The batch rows live in a sidecar.** `discovery_batch` rows are written to `<registry>.discovery.jsonl`, not the
+   registry's rows: an older host counts every unknown status as a trial, and registry_sync would carry a new status to
+   it. Options weighed: a reused non-trial status (`withdrawn`/`verdict`/`preregistered` all carry meaning that would
+   move reservations or verdicts) or a sidecar; the sidecar was chosen. `record` refuses the status. The sidecar is
+   rebuilt from the ledger when lost (`k_link.sync_discovery_k` tops it up to the ledger's K_search after every real
+   night and before every confirm step), so the K never falls below the ledger's. It is local to the Mac, where every
+   confirm read runs. What would change this: a confirm read on another host, which would need the sidecar synced.
+2. **The confirm read is rule-only** on the outcome tensor (the explore evaluator and conservative cost model), not the
+   `SpecSpecialist` -> `research_pass` model path of design 3.3. The design's gates are applied where they are defined
+   on a trade list: DSR >= 0.95 on 200+ events at K = `n_trials_discovery` + the batch, and the positive years (3,
+   one of 2021/2022). The model-only checks (1,500 candidates, per-fold sizes) do not apply. The rest of the frozen rule
+   is design 3.3's: Holm at 5% over the month's batch (frozen when the batch is read; a read batch is closed), net mean
+   R > 0 at 1.5x cost, and the confirm mean inside the explore 90% prediction interval (explore mean +- 1.645 x explore
+   se x sqrt(1 + n_explore / n_confirm), frozen in the pre-registration). Consequence: a passer is never
+   `passed_gates`; promotion and live eligibility are unchanged, and a passer can only become a demo arm. The calibrated
+   model path is a later item, required before any discovered spec goes near live (ADR 0038).
+3. **One read per stage per hash, journalled first.** Each confirm and holdout read is journalled (hash-chained
+   `stage_reads`, unique per stage and hash) before it looks; a read that crashes is closed void, charged as a trial and
+   stopped. A failed or voided read is final. The holdout read is only for a confirm passer whose verdict row says
+   "continue", once (`holdout_scored`), never for a `holdout_contaminated` spec, and charged one budget slot as any
+   holdout scoring is.
+4. **Registration follows the stages.** `autodisc-register` registers confirm or holdout passers by default. An explore
+   survivor registers only behind `--stage explore` (a demo-learning arm, journalled), and a spec with a failed or
+   voided stage read never registers.
+5. **Budget.** Confirm and holdout reads take open budget only (never reserved slots). 2026Q4 has no open slot, so no
+   confirm read runs before a program-director extension or 2027Q1. That is unchanged and is an owner/PD matter.
