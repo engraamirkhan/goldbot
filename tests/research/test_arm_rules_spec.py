@@ -90,10 +90,11 @@ def test_live_interpreter_matches_a_composed_predicate_spec_on_the_research_mask
     assert np.allclose(cands["risk_usd"], 1.5 * a[want]) and (cands["target_r"] == 1.0).all()
 
 
-def test_live_decision_on_a_trailing_window_equals_the_research_mask_at_that_bar(b1: pd.DataFrame) -> None:
+@pytest.mark.parametrize("regime", ["rvol_q_hi", "hurst_trend", "trend_strength_mid"])
+def test_live_decision_on_a_trailing_window_equals_the_research_mask_at_that_bar(b1: pd.DataFrame, regime: str) -> None:
     """The engine hands a rule `lookback` bars: with the interpreter's declared warm-up the last bar's decision is the
-    full-history one (the tercile rank forgets its start)."""
-    spec = family_spec("box_break_close", "15m", Leaf(kind="regime", name="rvol_q_hi"), T2R)
+    full-history one (the tercile rank and the Hurst band forget their start)."""
+    spec = family_spec("box_break_close", "15m", Leaf(kind="regime", name=regime), T2R)
     need = S.required_bars(spec)
     assert need >= 1000
     mask, side, a = research(b1, spec)
@@ -176,3 +177,19 @@ def test_a_spec_arm_with_an_unknown_family_is_refused_at_load() -> None:
 
 def test_shipped_spec_arms_file_loads_hash_checked() -> None:
     assert [a for a in load_arms(SPEC_ARMS) if a.rule != "spec_rule"] == []
+
+
+@pytest.mark.parametrize("family,tf", [("level_break", "1h"), ("donchian_break", "1d"), ("low30_touch", "15m"),
+                                       ("specialist", "15m")])
+def test_a_family_leaf_whose_arm_needs_stored_bars_or_replica_state_is_refused_at_load(family: str, tf: str) -> None:
+    """The live provider has no stored bars or replica state: such a leaf would read differently live than in research."""
+    spec = family_spec(family, tf, None, T2R)
+    with pytest.raises(ValueError, match="stored bars|replica"):
+        arm_for(spec)
+
+
+def test_a_hand_written_row_the_engine_cannot_warm_up_is_refused_at_load() -> None:
+    spec = StrategySpec(timeframe="1d", side_rule="long", entry=Leaf(kind="regime", name="hurst_trend"), exit=T2R)
+    assert S.required_bars(spec) > 90_000 * 60 // 86_400
+    with pytest.raises(ValueError, match="warm-up"):
+        arm_for(spec)

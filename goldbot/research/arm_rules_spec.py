@@ -17,15 +17,17 @@ What a spec arm may be, refused at load (`check`, called by `Arm` validation):
 - an exit with a time barrier as its target (`time`) or a structural stop: the engine has no target-free or
   price-level entry yet (exploration orders always carry a target, stop distance from ATR);
 - a leaf the code base does not compute (`PrimitiveProvider.check_supported`); a side primitive other than a family's own rule;
-- a family rule with no runnable arm of the spec's timeframe in `config/exploration_arms.yaml`;
+- a family rule with no runnable arm of the spec's timeframe in `config/exploration_arms.yaml`, or whose arm needs
+  stored bars beyond the engine window (`history_bars`: level_break, channels) or a replica state (`specialist`): the
+  live provider has neither, so live and research masks would differ (`exploration_context.needs_context`);
 - a family (G1) spec with a session window: the explore evaluator reads a family spec on every session
   (`nulls.MaskCache.entries`), so live would trade a subset research never scored.
 
 Point in time: a mask at decision bar t reads bars <= t only (the primitives' contract, tested again here on live
 frames). Warm-up: `required_bars` declares how many bars of the timeframe the leaves need before live equals the
 full-history run (the trailing 1000-bar tercile rank, the Hurst band, the family rule's own); `arm_rules.lookback_bars`
-passes it to the engine, which can hold only `exploration.LOOKBACK_MAX_1M` minutes of bars, and registration refuses a
-spec the engine cannot warm up (`goldbot.ops.autodisc_register`). With fewer bars a tercile or Hurst leaf is undefined,
+passes it to the engine, which can hold only `exploration.LOOKBACK_MAX_1M` minutes of bars, and `check` refuses a
+spec the engine cannot warm up (also a hand-written row; registration inherits it). With fewer bars a tercile or Hurst leaf is undefined,
 which is False (no entry), never a different signal.
 
 A spec arm runs on demo accounts only: `arms.load_arms(live_class=True)` refuses the rule, caps, pots, `max_stop_usd`
@@ -39,6 +41,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from goldbot.config import tf_seconds
 from goldbot.data.timeutil import utc_index
 from goldbot.features.technical import atr
 from goldbot.research import arm_rules as R
@@ -126,11 +129,22 @@ def check(arm: Arm) -> None:
         raise ValueError(str(exc)) from exc
     if spec.side_primitive is not None and (spec.side_primitive.kind, spec.side_primitive.name) != ("structure", "family_rule"):
         raise ValueError("only a family's own rule has a side (side_primitive must be a family_rule leaf)")
-    runnable = {(a.rule, a.timeframe) for a in family_arms() if a.status == "run" and a.twin_of is None}
+    # lazy: the engine imports this module's arm check
+    from goldbot.engine.exploration_context import needs_context
+    runnable = {(a.rule, a.timeframe): a for a in reversed(family_arms()) if a.status == "run" and a.twin_of is None}
     for leaf in _family_leaves(spec):
         fam = str(leaf.params.get("rule"))
-        if (fam, arm.timeframe) not in runnable or fam not in R.RULE_FUNCS or fam == "spec_rule":
+        carrier = runnable.get((fam, arm.timeframe))
+        if carrier is None or fam not in R.RULE_FUNCS or fam == "spec_rule":
             raise ValueError(f"no runnable {arm.timeframe} arm carries family {fam!r}")
+        if any(needs_context(a) for a in family_arms()          # whichever arm the provider resolves, none may need it
+               if (a.rule, a.timeframe, a.status, a.twin_of) == (fam, arm.timeframe, "run", None)):
+            raise ValueError(f"family {fam!r} on {arm.timeframe} reads stored bars beyond the engine window or a carried "
+                             "replica state, which the live provider does not have: live would differ from research")
+    from goldbot.engine.exploration import LOOKBACK_MAX_1M
+    reach = LOOKBACK_MAX_1M * 60 // tf_seconds(spec.timeframe)
+    if (need := required_bars(spec)) > reach:
+        raise ValueError(f"the spec needs {need} {spec.timeframe} bars of warm-up; the engine holds {reach}")
 
 
 def required_bars(spec: StrategySpec) -> int:

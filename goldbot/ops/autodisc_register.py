@@ -39,10 +39,8 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord
-from goldbot.config import tf_seconds
 from goldbot.engine import exploration as X
 from goldbot.ops import accounts as A
-from goldbot.research import arm_rules_spec as S
 from goldbot.research.arms import SPEC_RULE, Arm, arm_hash, load_arms
 from goldbot.research.autodisc.ledger import GENESIS, SearchLedger
 from goldbot.research.autodisc.nulls import NEG_INF, NullDistribution
@@ -262,9 +260,6 @@ def plan(spec_hash: str, account_id: str, prereg: str, *, ledger_path: Path = LE
     except ValueError as exc:
         raise RegistrationRefused(f"spec {spec_hash[:12]} cannot run live: {exc}") from exc
     arm = arm.model_copy(update={"config_hash": arm_hash(arm)})
-    reach = X.LOOKBACK_MAX_1M * 60 // tf_seconds(spec.timeframe)
-    if (need := S.required_bars(spec)) > reach:
-        raise RegistrationRefused(f"the spec needs {need} {spec.timeframe} bars of warm-up; the engine holds {reach}")
 
     acc = A.load_accounts(accounts_path, logins=False).get(account_id)
     if acc is None:
