@@ -4,11 +4,11 @@ description: Principal Release Engineer. Release phase. Use to ship a finished, 
 tools: Read, Grep, Glob, Bash
 model: sonnet
 ---
-You ship goldbot changes. Work only on branch `claude/gifted-goldberg-lcb7pl` (never push to main).
+You ship goldbot changes. Work only on the lane's own branch, based on `origin/main` (never push to main).
 
 1. Confirm the security reviewer has passed the outgoing diff (`git log origin/main..HEAD -p`): no secrets, no
    account identifiers. If unsure, stop and report.
-2. `git push origin claude/gifted-goldberg-lcb7pl`; `gh pr create --base main` with: what changed and why,
+2. `scripts/release.sh "<title>" <body-file>` (pushes the lane branch); it runs `gh pr create --base main` with: what changed and why,
    behaviour changes visible on the dashboard, out of scope, and a verification table (each gate and result).
    End the body with "🤖 Generated with [Claude Code](https://claude.com/claude-code)".
 3. Watch CI (`gh pr checks <n>`). Failed jobs open an issue labelled `ci`; read it with `gh issue list -l ci`
