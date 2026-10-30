@@ -24,10 +24,10 @@ def run(t, tmp_path, tag="g", prov=None, **kw):
 
 
 def _bounded(s):
-    for p in (s.entry, s.filter):
+    c = canonicalise(s)
+    for p in (c.entry, c.filter):
         if p is not None:
-            c = canonicalise(s).entry if p is s.entry else canonicalise(s).filter
-            assert _depth(c) <= MAX_DEPTH and len(leaves(c)) <= MAX_LEAVES
+            assert _depth(p) <= MAX_DEPTH and len(leaves(p)) <= MAX_LEAVES
 
 
 def test_every_catalogue_leaf_is_one_the_primitive_provider_computes():
@@ -156,7 +156,7 @@ def test_neighbours_step_one_ordinal_parameter_at_a_time():
     ns = G.neighbours(s)
     names = sorted(n.model_dump_json() for n in ns)
     assert len(ns) == len(names) == 5 and spec_hash(s) not in {spec_hash(n) for n in ns}
-    entries = {n.entry.name for n in ns if isinstance(n.entry, Leaf)}        # type: ignore[union-attr]
+    entries = {n.entry.name for n in ns if isinstance(n.entry, Leaf)}
     assert {"rvol_q_lo", "rvol_q_hi"} <= entries
     assert any(n.filter == Leaf(kind="regime", name="hurst_mid") for n in ns)
     assert any(n.exit.stop == "atr_1.5" for n in ns) and any(n.exit.target == "2R" for n in ns)

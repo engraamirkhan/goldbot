@@ -81,7 +81,7 @@ def test_pbo_of_pure_noise_is_near_one_half():
 
 def test_pbo_reads_only_the_top_specs_by_fitness_and_needs_two():
     d = noise(240, 80, seed=7)
-    assert S.batch_pbo(d, fitness=np.arange(80), top=10).n_configs == 10       # type: ignore[union-attr]
+    assert S.batch_pbo(d, fitness=np.arange(80, dtype=float), top=10).n_configs == 10       # type: ignore[union-attr]
     assert S.batch_pbo(d[:, :1], fitness=[1.0]) is None
 
 

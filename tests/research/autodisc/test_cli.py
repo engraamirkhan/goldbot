@@ -76,7 +76,7 @@ def test_report_prints_large_counts_with_separators_so_a_count_never_reads_as_a_
 
 
 def test_nightly_command_runs_the_scheduler_job_on_this_machine(tmp_path, monkeypatch):
-    seen = {}
+    seen: dict[str, object] = {}
 
     def fake(settings, state_dir, slot, **kw):
         seen.update(enabled=settings.research.autodisc.nightly_enabled, state_dir=state_dir)
