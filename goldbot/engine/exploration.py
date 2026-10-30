@@ -69,6 +69,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 import pandas as pd
+import yaml
 from pydantic import Field, ValidationError, model_validator
 
 from goldbot.base import FrozenRecord, UtcTimestamp
@@ -219,23 +220,60 @@ class ExplorationConfig(FrozenRecord):
         return self
 
 
+def _load_spec_arm_rows(path: Path, *, live_class: bool) -> tuple[list[SpecArm], list[str]]:
+    """The discovered-arm rows of `path`, one at a time (trading-safety L2: one bad row never stops the engine). A row
+    that fails validation (`arm_rules_spec.check`, the frozen hash) or shares its id with another row is left out, logged
+    and named in the second result (journalled at the engine's start like any dropped arm); an unreadable file drops
+    every row. The one hard error is a `spec_rule` row for a live-class account (ADR 0058, demo only)."""
+    try:
+        raw = yaml.safe_load(Path(path).read_text()) or {}
+        rows = list(raw.get("arms") or [])
+    except (yaml.YAMLError, OSError, AttributeError, TypeError) as exc:
+        log.error("discovered-arm file %s is unreadable (%s): no discovered arm runs", path, exc)
+        return [], []
+    if live_class and (spec := sorted(str(r.get("id")) for r in rows if isinstance(r, dict)
+                                      and r.get("rule") == SPEC_RULE)):
+        raise ValueError(f"spec_rule arms {spec} load on demo accounts only (ADR 0058): refused for a live-class account")
+    ids = [str(r.get("id")) for r in rows if isinstance(r, dict)]
+    arms: list[SpecArm] = []
+    rejected: list[str] = []
+    for i, row in enumerate(rows):
+        name = str(row.get("id")) if isinstance(row, dict) and row.get("id") else f"row{i}"
+        try:
+            arm = SpecArm.model_validate(row)
+            if ids.count(arm.id) > 1:
+                raise ValueError("another row has the same id (ambiguous: neither runs)")
+            if arm.config_hash != arm_hash(arm):
+                raise ValueError(f"config_hash {arm.config_hash!r} does not match the arm (an arm is frozen)")
+        except ValueError as exc:
+            log.error("discovered arm %s dropped from %s: %s", name, path, exc)
+            rejected.append(name)
+            continue
+        arms.append(arm)
+    return arms, rejected
+
+
 def config_for(acc: Account, spec_path: Path = SPEC_PATH,
                spec_arms_path: Path = SPEC_ARMS_PATH) -> ExplorationConfig | None:
     """The engine's exploration block for `acc` (integration ruling 2026-10-25): None unless its `exploration` is
     enabled. Rules come from the frozen, hash-checked spec (`research.arms.load_arms`) and the discovered arms
     (`spec_arms_path`, ADR 0058: "Demo arms are data rows run by one reviewed interpreter (`spec_rule`), loaded only on
-    demo accounts": on any other account `load_arms(live_class=True)` refuses them, loudly); the account registers the
+    demo accounts": on any other account they are refused, loudly; a bad row is dropped and journalled, never fatal:
+    `_load_spec_arm_rows`); the account registers the
     arms it runs (style, control share; the per-trade cap reaches the RiskGate as `exploration_arms`). A registered arm
     the spec lacks or blocks is dropped and logged here, and journalled at the engine's start (`dropped`)."""
     ex = acc.exploration
     if not ex.enabled:
         return None
     specs = {a.id: a for a in load_arms(spec_path)}
+    rejected: list[str] = []
     if spec_arms_path.exists():
-        found = load_arms(spec_arms_path, live_class=acc.mode != "demo")
-        if clash := sorted(a.id for a in found if a.id in specs):
-            raise ValueError(f"discovered arm ids {clash} are already ARM-SPEC arm ids")
-        specs.update({a.id: a for a in found})
+        found, rejected = _load_spec_arm_rows(spec_arms_path, live_class=acc.mode != "demo")
+        for a in found:
+            if a.id in specs:
+                log.warning("discovered arm id %s is already an ARM-SPEC arm id: the row is dropped", a.id)
+            else:
+                specs[a.id] = a
     arms, dropped = [], []
     for arm_id in sorted(ex.arms):
         reg = ex.arms[arm_id]
@@ -245,6 +283,8 @@ def config_for(acc: Account, spec_path: Path = SPEC_PATH,
             dropped.append(arm_id)
             continue
         arms.append(Arm(spec=specs[arm_id], style=reg.style, control_share=reg.control_share))
+    running = {a.arm_id for a in arms}
+    dropped += [i for i in rejected if i not in running and i not in dropped]
     return ExplorationConfig(enabled=True, budget_share=ex.budget_share, max_open_total=ex.max_open_total,
                              pots={k: Pot(gbp=v.gbp, max_open=v.max_open) for k, v in ex.pots.items()},
                              arms=tuple(arms), dropped=tuple(dropped))

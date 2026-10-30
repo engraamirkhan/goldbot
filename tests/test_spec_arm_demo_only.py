@@ -83,14 +83,57 @@ def test_a_live_account_cannot_register_any_exploration_arm_at_load(probe):
                                   "max_positions": None})
 
 
-def test_a_spec_arm_id_that_shadows_an_arm_spec_id_is_refused(probe, tmp_path):
+def _row(a: Arm) -> dict[str, Any]:
+    return a.model_dump(include={"id", "rule", "timeframe", "params", "max_open", "config_hash"})
+
+
+def _bad_and_good(tmp_path: Path, bad_id: str, bad: dict[str, Any]) -> Path:
+    good = spec_arm()
+    p = tmp_path / "mixed.yaml"
+    p.write_text("arms:\n  - " + json.dumps({**_row(good), "forward_only": True}) + "\n  - " + json.dumps(bad) + "\n")
+    return p
+
+
+def _registered(probe: A.Account, *ids: str) -> A.Account:
+    ex = probe.exploration
+    style = next(iter(ex.pots))
+    arms = {**ex.arms, **{i: A.ExplorationArm(style=style, max_loss=5.0) for i in ids}}
+    return probe.model_copy(update={"exploration": ex.model_copy(update={"arms": arms})})
+
+
+def test_a_spec_arm_id_that_shadows_an_arm_spec_id_is_dropped_and_journalled_not_fatal(probe, tmp_path):
     a = spec_arm().model_copy(update={"id": "I2A"})
     a = a.model_copy(update={"config_hash": arm_hash(a)})
-    p = tmp_path / "clash.yaml"
-    p.write_text("arms:\n  - " + json.dumps({**a.model_dump(include={"id", "rule", "timeframe", "params",
-                                                                       "max_open", "config_hash"})}) + "\n")
-    with pytest.raises(ValueError, match="already ARM-SPEC"):
-        X.config_for(probe, X.SPEC_PATH, p)
+    p = _bad_and_good(tmp_path, "I2A", {**_row(a), "forward_only": True})
+    cfg = X.config_for(_registered(probe, "I2A"), X.SPEC_PATH, p)
+    assert cfg is not None and ARM_ID in {x.arm_id for x in cfg.arms}
+    assert next(x for x in cfg.arms if x.arm_id == "I2A").spec.rule != "spec_rule"      # the ARM-SPEC arm, not the spec row
+
+
+@pytest.mark.parametrize("why", ["check", "hash", "clash_within_file"])
+def test_one_bad_spec_arm_row_is_dropped_and_journalled_and_the_good_row_still_runs(probe, tmp_path, why):
+    good = spec_arm()
+    bad = {**_row(good), "id": "D2610-9", "forward_only": True}
+    if why == "check":
+        bad["params"] = {**good.params, "spec_hash": "0" * 64}              # fails check_spec at validation
+    elif why == "hash":
+        bad["config_hash"] = "0" * 64
+    else:
+        bad["id"] = ARM_ID                                                   # a second row with the good row's id
+    p = _bad_and_good(tmp_path, bad["id"], bad)
+    cfg = X.config_for(_registered(probe, "D2610-9", ARM_ID), X.SPEC_PATH, p)
+    assert cfg is not None
+    if why == "clash_within_file":
+        assert ARM_ID not in {x.arm_id for x in cfg.arms} and ARM_ID in cfg.dropped     # ambiguous id: neither row runs
+    else:
+        assert "D2610-9" in cfg.dropped and ARM_ID in {x.arm_id for x in cfg.arms}
+
+
+def test_a_malformed_spec_arms_file_drops_its_arms_and_the_engine_still_starts(probe, tmp_path):
+    p = tmp_path / "broken.yaml"
+    p.write_text("arms: [ {id: \n")
+    cfg = X.config_for(_registered(probe, ARM_ID), X.SPEC_PATH, p)
+    assert cfg is not None and ARM_ID in cfg.dropped and ARM_ID not in {x.arm_id for x in cfg.arms}
 
 
 # ---------------------------------------------------------------- layer 2: engine arm selection
