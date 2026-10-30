@@ -312,7 +312,7 @@ def run_confirm_batch(registry: TrialRegistry, ledger: SearchLedger, batch: str,
                 reads[h] = read(specs[h])
         except Exception as exc:
             for p, h in zip(preregs, hashes):
-                _void(registry, journal, "confirm", h, p, quarter, batch, f"{type(exc).__name__}: {exc}")
+                _void(registry, journal, "confirm", h, p["config"], p, quarter, batch, f"{type(exc).__name__}: {exc}")
             raise
         checks = {h: judge(reads[h], p["plan"], k) for p, h in zip(preregs, hashes)}
         pv = [p_value(reads[h].t_stat) for h in hashes]
@@ -340,22 +340,16 @@ def run_confirm_batch(registry: TrialRegistry, ledger: SearchLedger, batch: str,
         return out
 
 
-def _void(registry: TrialRegistry, journal: StageJournal, stage: Stage, h: str, prereg: dict[str, Any] | None,
-          quarter: str, batch: str, why: str) -> None:
+def _void(registry: TrialRegistry, journal: StageJournal, stage: Stage, h: str, cfg: dict[str, Any],
+          prereg: dict[str, Any] | None, quarter: str, batch: str, why: str) -> None:
     """A read that did not complete: closed void, charged as a trial and stopped (it may have looked)."""
     results = {"batch": batch, "passed": False, "void": why, "window": window_text(stage)}
     journal.close(stage, h, results)
-    cfg = prereg["config"] if prereg else config_for(journal_spec(registry, h))
     row = registry.record(agent_id=AGENT_ID, family=FAMILY, config=cfg, feature_version=FEATURE_VERSION,
                           rationale=f"{stage} read of {h[:12]} did not complete", results=results,
                           status=STATUS_CONFIRM if stage == "confirm" else "holdout", budget_quarter=quarter,
                           preregistration=prereg, rule_ref=f"autodisc:{h}")
     registry.record_verdict(row_ref(row), "stop", f"void read ({why}): never read again", rule=RULE, agent_id="evaluator")
-
-
-def journal_spec(registry: TrialRegistry, h: str) -> StrategySpec:
-    row = next(r for r in registry._rows() if (r.get("config") or {}).get("spec_hash") == h)
-    return StrategySpec.model_validate_json(row["config"]["spec"])
 
 
 # ---------------------------------------------------------------- the holdout read
@@ -389,7 +383,7 @@ def holdout_read(registry: TrialRegistry, ledger: SearchLedger, h: str, read: Re
         try:
             rd = read(spec)
         except Exception as exc:
-            _void(registry, journal, "holdout", h, None, quarter, "", f"{type(exc).__name__}: {exc}")
+            _void(registry, journal, "holdout", h, cfg, None, quarter, "", f"{type(exc).__name__}: {exc}")
             raise
         hv = gates.holdout_verdict(np.asarray(rd.ret, dtype=float), np.asarray(rd.risk, dtype=float))
         results = {"passed": bool(hv["passed"]), "holdout": hv, "input_digest": rd.input_digest,

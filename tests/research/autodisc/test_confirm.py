@@ -244,6 +244,21 @@ def test_a_failed_holdout_read_is_a_one_way_stop(env):
         hold(env, 0, read(mean=0.3))
 
 
+def test_a_crashed_holdout_read_is_void_charged_stopped_and_never_repeated(env):
+    _passer(env)
+
+    def boom(s: StrategySpec) -> C.StageRead:
+        raise RuntimeError("bars unreadable")
+    with pytest.raises(RuntimeError):
+        C.holdout_read(env["reg"], env["ledger"], H(0), boom, cap=CAP, reserved=0)
+    reg = env["reg"]
+    [row] = [r for r in reg._rows() if r.get("status") == "holdout"]
+    assert row["results"]["void"] and verdict_of(reg._rows(), row) == "stop"
+    assert StageJournal(env["ledger"].path).state(H(0)).holdout == "void"
+    with pytest.raises(StageRefused):
+        hold(env, 0, read(mean=0.3))
+
+
 def test_a_holdout_contaminated_spec_cannot_be_holdout_scored(env):
     s = spec(40)
     env["ledger"].log_spec(s, "G5", "1", flags={"holdout_contaminated": True})
