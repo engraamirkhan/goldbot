@@ -191,3 +191,27 @@ counts:
 #    VS5B (blocked, 0 fills). Objections to the plan's stated grounds: VOID never permits early retirement (it only
 #    makes the 300 read descriptive); "ORB closed on history (R-02/H-76)" and "asia_drift hypothesis retired" are not
 #    registered kill rules (XAD1H was registered after H-04's STOP). A2 is the sole valid ground for every id above.
+# ---------------------------------------------------------------------------------------------------------------------
+# EVALUATOR RULINGS, CYCLE 2 (2026-10-30; prereg-amendment-2026-10-30-kill-rules.md "Evaluator rulings, cycle 2").
+# Comments only: no `reads:` row, nothing retires until the quant-reviewer also signs A5.
+# R5 A5 (history-bounded entries): SIGNED WITH CONDITIONS. Kill-only, written after H-82 and interim reads (disclosed);
+#    it reads the arm's entry stream on 2010-2017, never its demo outcomes. Conditions: (a) "within +/-0.02 R" is met
+#    by the 90% day-clustered bootstrap CI of mean gross R, not by the point estimate; (b) the replay is of the arm's
+#    OWN hashed row (config_hash), via hb_exits_screen.py at 06f94403 or a later commit named in the retirement, pairs
+#    sha256 recorded; (c) unit = the existing read unit: a pooled unit retires only when EVERY arm in it qualifies;
+#    (d) net at the worse cost (R2): measured $0.23/oz + $0.70/stop exit, and signal-time ~0.116 R.
+#    Evaluator re-derivation from ~/tmp/hb_exits/pairs_*.parquet (gross R, 90% day-clustered CI, all 5 exits):
+#    S5A n 55,442 -0.0092..+0.0046 (CI -0.0140..+0.0113); S5B n 55,264 -0.0089..+0.0007 (CI -0.0131..+0.0062);
+#    Z4D n 13,936 +0.0007..+0.0060 (CI -0.0071..+0.0155); Z4P n 16,143 -0.0013..+0.0081 (CI -0.0074..+0.0158);
+#    Z6D n 27,851 -0.0105..-0.0091 (CI -0.0144..-0.0049); Z7D n 84,320 +0.0077..+0.0095 (CI +0.0054..+0.0119);
+#    Z7P n 84,385 +0.0024..+0.0045 (CI +0.0001..+0.0070). Net: -0.048..-0.112 R (measured), -0.107..-0.126 R (0.116).
+#    Worst single year, any arm/exit: +0.033 R gross (S5A none), still below cost.
+#    RETIRES on joint sign-off: S5A, S5B (per-arm units), H-81:Z4 (Z4D, Z4P).
+#    NOT YET: H-81:Z6 (Z6D+Z6V) and H-81:Z7 (Z7D+Z7V+Z7P). OBJECTION to the draft's "broker twins sharing the rule":
+#    Z6V/Z7V run stop_usd 7.0 (hashes 7dedebd47fec46d7, cdcf4fe79dfbd333), not the 4.5 replayed; their exit geometry
+#    was never replayed. Replay both rows (seconds of compute); if all three criteria hold, the whole unit retires.
+#    Until then Z6/Z7 stay under the H-81 4 signal-time cost stop.
+# R6 15m out of discovery grammar v2: ACKNOWLEDGED as part of the v2 definition (decided before any v2 output).
+# R7 H-80 R2 registry: the 3 local rows (prereg / evaluated / verdict, ts 2026-10-30T17:39:03..17:41:59Z, config_hash
+#    f1b435b34030) are merged unchanged (same ts, hash, results) into the brain + research-v1 registry via
+#    registry_sync. Only the evaluated row is a trial: 2026Q4, 1 of the 2 added by 145 -> 147. Never re-run.

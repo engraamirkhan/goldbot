@@ -150,3 +150,43 @@ Until signed, the H-81 section 4 per-stratum signal-time cost stop applies (UB >
 | Amendment | Signs | Due | Status |
 |---|---|---|---|
 | A5 | evaluator, quant-reviewer | 2026-11-04 | draft |
+
+## Evaluator rulings, cycle 2 (2026-10-30)
+
+Full text and per-arm figures: `config/arm_reads.yaml` R5-R7.
+
+1. **A5: signed with conditions.** The quant-reviewer must also sign before it takes effect. It is kill-only, the
+   disclosure is adequate, and it reads entry streams on 2010-2017 rather than demo outcomes. Conditions:
+   - **(a)** The +/-0.02 R band applies to the 90% day-clustered CI, not to the point estimate.
+   - **(b)** The replay uses the arm's own hashed row. Record the script commit (`06f94403` or later) and the pairs'
+     sha256.
+   - **(c)** The unit is the existing read unit, and a pooled unit retires only when every arm in it qualifies.
+   - **(d)** Net R is computed at the worse cost of record (R2).
+
+   I re-derived the figures from the pairs. Every arm's gross CI lies within -0.0144..+0.0158 R at all five exits. The
+   smallest n is 13,936 (Z4D), and net R is -0.048 to -0.126 R. No single year rescues any arm: the best is +0.033 R.
+   - **Retires on joint sign-off:** S5A, S5B and H-81:Z4 (Z4D, Z4P).
+   - **Objection:** Z6V and Z7V run a $7 stop, but the replay used $4.5, so they do not "share the rule". The Z6 and
+     Z7 units (Z6D+Z6V, Z7D+Z7V+Z7P) retire only after Z6V and Z7V are replayed on their own rows and meet all three
+     criteria. Until then the H-81 section 4 cost stop applies.
+   - **Accepted false-kill risk:** the fixed-$ geometry in 2010-2017 sits at about a third of today's price. The
+     demo's MFE (0.19-0.27 R) matches history's (0.18-0.30 R). A volatility-scaled test would be a new
+     pre-registration.
+2. **15m out of grammar v2: acknowledged as part of the v2 definition**, since it was decided before any v2 output.
+   Conditions:
+   - K_v2 is declared over 1h/4h/1d only. v1's 15m specs stay in the cumulative K (864).
+   - v1's 15m batch (RC p 0.001, negative own mean R) is never mined, and 15m does not return before 2026-11-20
+     except under a new pre-registration.
+   - The 11-20 freeze reads "0 explore survivors on 1h, 4h and 1d".
+   - Each spec's trade floor is declared before the run. At 1d on 2010-2017 most specs cannot reach 200 trades, so a
+     1d spec that falls short is not a survivor.
+3. **H-80 R2 registry.** The three rows in the worktree-local `state/research_registry.jsonl` are merged unchanged
+   into the brain and `research-v1` registry with `python -m goldbot.research.registry_sync save <file>`. They are the
+   pre-registration, the evaluated row and the verdict (config_hash `f1b435b34030`). A copy is at
+   `~/tmp/h80r2_registry_rows_2026-10-30.jsonl`, sha256 prefix `f5c2f9f316cb955a`.
+   - Only the evaluated row is a trial. It is the 2026Q4 trial for H-80 R2, the first of the two slots in the 145 ->
+     147 raise. Its local "trial 1" is renumbered by the union.
+   - **Repo:** `config/settings.yaml` is already at 147, so no code change is needed. Two corrections are owed:
+     research-plan item 96 says "145 -> 146" and should say 147, and section 8 of the exits-adaptive pre-registration
+     should cite the synced trial number once the merge is done. After the merge, check that `quarter_trials` for
+     2026Q4 is at most 147.
