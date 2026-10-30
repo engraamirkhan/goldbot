@@ -29,7 +29,10 @@ while IFS= read -r line; do
 done < <(git worktree list --porcelain)
 [ "$n" -lt "$MAX" ] || die "$n worktrees exist (limit $MAX): prune merged lanes first: $prune"
 
-free_kb=$(df -Pk "$root" | awk 'NR == 2 {print $4}')
+df_bin=$(command -v df || true)
+[ -n "$df_bin" ] || for c in /bin/df /usr/bin/df; do [ -x "$c" ] && df_bin=$c && break; done
+[ -n "$df_bin" ] || die "df not found: cannot check free disk" 3
+free_kb=$("$df_bin" -Pk "$root" | awk 'NR == 2 {print $4}')
 free_gb=$((free_kb / 1048576))
 [ "$free_gb" -ge "$MIN_GB" ] || die "only $free_gb GB free on the repository's volume (minimum $MIN_GB): $prune"
 
