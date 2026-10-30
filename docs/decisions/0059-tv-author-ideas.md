@@ -36,11 +36,15 @@ afterwards. TradingView has no published API for ideas. Measured on 2026-10-28:
 - Levels (entry, stop, target, support, resistance) are parsed from the text by a keyword heuristic. They are
   derived data: `tv-ideas reparse` recomputes them and never touches the text.
 
-Back catalogue read on the Mac, 2026-10-28 (raw/tv_ideas): 6,843 of 6,846 counted ideas (KnightsofGold 1,955 of
+Back catalogue read on the Mac, 2026-10-28 (raw/tv_ideas): 6,842 of 6,846 counted ideas stored (the DB count; KnightsofGold 1,955 of
 1,957, from 2020-11-27; Goldviewfx 2,220 of 2,222, from 2021-10-06; ArmanShabanTrading 2,667 of 2,667, from
-2021-08-08). The three missing are counted by TradingView but never served, and one detail read failed. 4,862 of
+2021-08-08). The four missing are three that TradingView counts but never serves and one detail read that failed. 4,862 of
 the ideas are XAUUSD. There are 2,933 updates; 905 of them are "Trade closed: target reached" and 24 are "stop
 reached". The read took 6,843 detail requests plus about 1,500 listing requests, at 2 s apart.
+
+The ideas path sends browser-like request headers (a Chrome User-Agent plus Origin and Referer, from
+`goldbot/data/tv_wire.py`) so its requests look like the site's own page traffic rather than a script. The owner
+accepted the terms-of-service risk of this unofficial read (this ADR); it stays read-only GETs, no cookie, 2 s apart.
 
 ## Consequences
 - Finding: the authors almost never publish an entry, a stop and a target together (0-0.05% of ideas). About

@@ -28,7 +28,8 @@ Point in time ("every join to bars via asof_join on available_utc"):
   the author's claim, server-stamped, never earlier than a live poll could have held it. Research can drop or
   separate backfilled rows.
 * First release is immutable: a changed title, text, direction or timeframe is a new `tv_idea_versions` row with the
-  time we saw it; `edited` is set (bookkeeping only; the versions and updates carry the times). Nothing is overwritten.
+  time we saw it; `edited` is set (bookkeeping only; the versions and updates carry the times, and `ideas_frame` does
+  not export `edited`, `updated_utc` or `last_seen_utc`, which later polls overwrite). Nothing else is overwritten.
 
 Levels: `parse_levels` reads entry / stop / target prices that follow a keyword (entry, buy, sell, SL, stop, TP,
 target...) in the text. Heuristic: the raw text is kept, so research can re-parse.

@@ -7,6 +7,6 @@
   `raw/tv_ideas/tv_ideas.db` (one-time backfill; `tv-ideas export --out raw/tv_ideas` writes Parquet). Health
   `tv_ideas` WARNs after 2 h without a successful poll on a weekday. Deploy step still owed (SRE): install and
   enable `goldbot-tv-ideas.service` on the brain (RUNBOOK 2.7f); it needs no secret. Back catalogue (2026-10-28):
-  6,843 ideas (KnightsofGold 1,955, Goldviewfx 2,220, ArmanShabanTrading 2,667; 4,862 of them XAUUSD;
+  6,842 ideas in the Mac DB (KnightsofGold 1,955, Goldviewfx 2,220, ArmanShabanTrading 2,667; 4,862 of them XAUUSD;
   2020-11-27..2026-10-27) and 2,933 updates. Direction label: Arman 81%, Goldviewfx 1%, KoG 5%. A target is
   named in about 35%; entry, stop and target together in under 0.1%. Ideas with updates: 10-36%.
