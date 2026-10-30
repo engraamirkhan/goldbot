@@ -262,6 +262,8 @@ class SchedulerSettings(_Section):
     # the daily learning-ops review (goldbot/research/daily_review.py): after the nightly learner (inside
     # nightly_costs) and before the 06:45 owner report, which carries its section; a late run still retires and refits
     daily_review: ScheduleSettings = ScheduleSettings(kind="daily", at="06:15", max_late_hours=12)
+    # ADR 0058 phase 2: the bounded discovery search; skips unless research.autodisc.nightly_enabled (the Mac only)
+    autodisc_nightly: ScheduleSettings = ScheduleSettings(kind="daily", at="01:30", max_late_hours=6)
 
 
 class BackupSettings(_Section):
@@ -360,6 +362,22 @@ class RetiredFamily(_Section):
     trials: list[int] = Field(default_factory=list)       # registry trial numbers that retired it
 
 
+class AutodiscSettings(_Section):
+    """Autonomous discovery's nightly search (ADR 0058 phase 2, goldbot/research/autodisc/nightly.py): a bounded G2
+    search on the explore window (2010-2017) only, judged by the honesty set, a survivors report under state/. It
+    creates no arm and touches no engine (phase 4). "The brain runs only the interpreter and the forward read": the
+    search is on the owner's Mac, so it is off by default and stays off on the brain."""
+    nightly_enabled: bool = False
+    raw_dir: str | None = None                      # 1m bars dir; None: GOLDBOT_RAW_BARS or the repo's raw/
+    timeframe: DecisionTimeframe = "1h"
+    population: int = Field(32, ge=4, le=1000)
+    generations: int = Field(8, ge=1, le=200)
+    null_reps: int = Field(20, ge=1, le=200)        # G0 reruns of the whole search: the bar is their 95th percentile
+    max_candidates: int = Field(20, ge=1, le=500)   # candidates (best first) whose neighbours and shift null are run
+    seed: int = 0                                   # base seed; each night adds its day number
+    cost_table: str | None = None                   # measured cost table JSON; None: the settings priors
+
+
 class ResearchSettings(_Section):
     trial_budget_per_month: int = Field(12, ge=1, le=200)
     label_grid_paused: bool = True        # the monthly label-grid loop runs only when this is false (proposal P2)
@@ -405,6 +423,7 @@ class ResearchSettings(_Section):
     lot_fit_stops_level_points: float = Field(0.0, ge=0)  # ...and the broker's stops level (IC Markets: 0)
     registry: str = "state/research_registry.jsonl"
     models_dir: str = "models"
+    autodisc: AutodiscSettings = Field(default_factory=AutodiscSettings)
 
     @field_validator("reserved_trials_quarter")
     @classmethod

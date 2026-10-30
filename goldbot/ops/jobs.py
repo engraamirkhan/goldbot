@@ -86,6 +86,10 @@
                     (broker, session) slippage cell after 200 fills (never cheaper within a day), a learning-ops issue on
                     an incident or two low-volume days and one comment on #34 (github-token from the keyring, else
                     state/aux/daily_review/outbox/). Changes no arm, threshold, prior, cap or the bandit.
+* autodisc_nightly  daily (ADR 0058 phase 2, research/autodisc/nightly.py): a bounded G2 search on the 2010-2017
+                    explore window, every spec ledgered first (state/discovery_real.db), its G0 null, RC/SPA, PBO,
+                    DSR, circular-shift and plateau checks -> state/autodisc/survivors-<day>.md and a health line.
+                    Skips unless research.autodisc.nightly_enabled (the owner's Mac only). Creates no arm.
 * cpcv_quarterly    first Sunday of each quarter (M16): combinatorial purged CV (6 groups, 2 test: 15 splits, 5 paths)
                     of every trial that passed the gates, PBO against its family's other trials, attached to the
                     trial as evidence (not a trial) -> state/cpcv_<quarter>.md (research/cpcv.py).
@@ -1596,6 +1600,13 @@ def daily_review(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     return summary(review)
 
 
+def autodisc_nightly(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
+    """ADR 0058 phase 2: one bounded discovery search on the explore window (research/autodisc/nightly.py). Off unless
+    research.autodisc.nightly_enabled: "the brain runs only the interpreter and the forward read"."""
+    from goldbot.research.autodisc.nightly import run_nightly_job
+    return run_nightly_job(ctx.settings, ctx.state_dir, slot)
+
+
 JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "nightly_costs": nightly_costs,
     "saturday_retrain": saturday_retrain,
@@ -1622,6 +1633,7 @@ JOBS: dict[str, Callable[[JobContext, pd.Timestamp], dict[str, Any]]] = {
     "tick_record_winter": tick_record,            # ... the same job in the winter daily break (one slot skips)
     "limits_job": _limits_job,                    # ADR 0031: adaptive limits for the next risk day (ops/limits_job.py)
     "daily_review": daily_review,                 # learning-ops review before the owner report (research/daily_review.py)
+    "autodisc_nightly": autodisc_nightly,         # ADR 0058 phase 2 discovery search (off unless enabled; Mac only)
 }
 
 

@@ -281,3 +281,18 @@ def test_unit_independent_index() -> None:
     guard_times(idx)
     with pytest.raises(WindowViolation):
         guard_times(pd.DatetimeIndex(["2018-01-01"], tz="UTC").as_unit("ms"))
+
+
+def test_ledger_counts_explore_survivors_across_nights_once_per_spec(tmp_path: Path) -> None:
+    """Quant review F2: the nightly report carries the cumulative survivor count of every night, read from the ledger."""
+    led = SearchLedger(tmp_path / "s.db")
+    a, b = mk(), mk(entry=B)
+    led.log_spec(a, "G2", "1")
+    led.log_spec(b, "G2", "1")
+    with pytest.raises(LedgerError):
+        led.record_survivors("night-3", [("f" * 64, 0.5)], k_search=2)          # never a hash the search did not log
+    led.record_survivors("night-1", [(spec_hash(a), 0.4)], k_search=2)
+    led.record_survivors("night-1", [(spec_hash(a), 0.4)], k_search=2)          # a rerun of the night adds nothing
+    led.record_survivors("night-2", [(spec_hash(a), 0.3), (spec_hash(b), 0.2)], k_search=5)
+    assert led.n_survivors() == 2 and led.n_survivor_nights() == 2
+    assert led.verify() == 2                                                      # the spec chain is untouched

@@ -23,6 +23,12 @@ Signatures (the design leaves them open):
                                                          the entry count
 Digest = sha256(prev_digest | seq | kind | spec_hash | is_null | payload | written_utc); payload is canonical JSON
 (spec rows: generator, version, parents, canonical spec; result rows: the result mapping).
+
+Explore survivors (quant review F2, 2026-10-30): `record_survivors(night, [(spec_hash, dsr)], k_search=)` keeps each
+night's survivors in a side table (insert-only, one row per night and hash, pinned to the chain head it was judged
+at), and `n_survivors()` / `n_survivor_nights()` give the cumulative counts the nightly report states next to the
+cumulative K_search. A verdict, not a look at the data: it never moves K and is not part of the hash chain (an
+existing ledger gains the table on open; the chain's schema is unchanged).
 """
 from __future__ import annotations
 
@@ -73,6 +79,16 @@ CREATE TABLE IF NOT EXISTS entries (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS entries_once ON entries (kind, spec_hash, is_null);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS survivors (
+    night TEXT NOT NULL,
+    spec_hash TEXT NOT NULL,
+    k_search INTEGER NOT NULL,
+    dsr REAL,
+    head_seq INTEGER NOT NULL,
+    head_digest TEXT NOT NULL,
+    written_utc TEXT NOT NULL,
+    PRIMARY KEY (night, spec_hash)
+);
 """
 _COLS = "seq, kind, spec_hash, is_null, payload, written_utc, prev_digest, digest"
 
@@ -170,6 +186,40 @@ class SearchLedger:
             return entry
         finally:
             con.close()
+
+    def record_survivors(self, night: str, survivors: Sequence[tuple[str, float | None]], *, k_search: int) -> int:
+        """Record one night's explore survivors (spec hash, DSR at `k_search`); every hash must be a logged search spec
+        (LedgerError otherwise, and nothing is written). A rerun of the same night adds nothing. Returns rows added."""
+        con = self._connect()
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                for h, _ in survivors:
+                    if self._find(con, "spec", h, False) is None:
+                        raise LedgerError(f"survivor {h[:12]} is not a logged search spec")
+                tip = con.execute("SELECT seq, digest FROM entries ORDER BY seq DESC LIMIT 1").fetchone()
+                seq, digest = (int(tip[0]), str(tip[1])) if tip else (0, GENESIS)
+                written = self._clock().isoformat()
+                added = 0
+                for h, dsr in survivors:
+                    cur = con.execute("INSERT OR IGNORE INTO survivors VALUES (?,?,?,?,?,?,?)",
+                                      (night, h, int(k_search), dsr, seq, digest, written))
+                    added += cur.rowcount
+                con.execute("COMMIT")
+            except BaseException:
+                con.execute("ROLLBACK")
+                raise
+            return added
+        finally:
+            con.close()
+
+    def n_survivors(self) -> int:
+        """Distinct specs that were explore survivors on any night (cumulative)."""
+        return int(self._query("SELECT COUNT(DISTINCT spec_hash) FROM survivors")[0][0])
+
+    def n_survivor_nights(self) -> int:
+        """Nights that recorded at least one survivor."""
+        return int(self._query("SELECT COUNT(DISTINCT night) FROM survivors")[0][0])
 
     def _query(self, sql: str, args: tuple[Any, ...] = ()) -> list[Any]:
         con = self._connect()

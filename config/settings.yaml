@@ -173,6 +173,7 @@ scheduler:
   tick_record_winter: { kind: daily, at: "22:10", max_late_hours: 0.5 }                 #   ... and in the winter break; outside the break or weekend a run skips
   limits_job:       { kind: daily,   at: "23:05", max_late_hours: 0.9 }                 # ADR 0031: adaptive limits for the next risk day; never after the roll
   daily_review:     { kind: daily,   at: "06:15", max_late_hours: 12 }                  # learning-ops review after the nightly learner, before the 06:45 owner report
+  autodisc_nightly: { kind: daily,   at: "01:30", max_late_hours: 6 }                   # ADR 0058 phase 2 discovery search; skips unless research.autodisc.nightly_enabled
 
 agents:
   monthly_cap_usd: 40.0              # total spend of all staff agents per calendar month (design: capped)
@@ -261,6 +262,18 @@ research:
   lot_fit_stops_level_points: 0      #   USD; the typical London/NY spread) and the broker's stops level (0 at IC Markets)
   registry: state/research_registry.jsonl
   models_dir: models
+  autodisc:                          # ADR 0058 phase 2: nightly bounded G2 search on the explore window (2010-2017) only;
+                                     #   honesty set (G0 null, RC/SPA, PBO, DSR, circular shift, plateau) ->
+                                     #   state/autodisc/survivors-<day>.md. Creates no arm and touches no engine (phase 4)
+    nightly_enabled: false           # the owner's Mac only (the local 1m bars live there); the brain never searches
+    raw_dir: null                    # 1m bars dir; null: GOLDBOT_RAW_BARS or the repo's raw/ (never committed)
+    timeframe: 1h                    # 15m / 1h / 4h decision bars
+    population: 32                   # G2 population and generations: at most population x (generations + 1) specs a run,
+    generations: 8                   #   every one ledgered (state/discovery_real.db) and counted in K
+    null_reps: 20                    # G0 reruns of the whole search on random sides; survivors beat their 95th percentile
+    max_candidates: 20               # best candidates whose grid neighbours (plateau, counted in K) and shift null are run
+    seed: 0                          # base seed; each night adds its day number, so nights search new ground
+    cost_table: null                 # measured cost table JSON (costs_measured.json); null: the settings priors
 
 drift:                               # design: Drift and health (goldbot/research/drift.py)
   psi_warn: 0.1                      # PSI on a top-10 feature that warns

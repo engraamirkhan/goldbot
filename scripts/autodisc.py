@@ -3,19 +3,21 @@
     python scripts/autodisc.py run --generator combine --synthetic [--limit N] [--reps 100] [--db PATH]
     python scripts/autodisc.py bench --synthetic --specs 10000        # throughput of log + evaluate
     python scripts/autodisc.py report --run-json state/autodisc_run.json
+    python scripts/autodisc.py nightly [--state-dir state]          # ADR 0058 phase 2: the autodisc_nightly job, here
 
 `--synthetic` runs the pipeline on seeded noise (`nulls.SyntheticProvider`). Without it `run` reads the local 1m bars
 (GOLDBOT_RAW_BARS or the repo's gitignored raw/, 2010-2017 only, never committed), builds the real outcome tensor and
 masks from `primitives.PrimitiveProvider`; specs naming a leaf the code base cannot compute are dropped before they
 are ledgered. `bench` is synthetic only. Every spec is ledgered before it is evaluated (`SearchLedger.require_logged`),
 K_search and K_null are printed, the ledger head (seq, digest) goes into the run record so a truncated tail is
-detectable, and the report never prints a 2018+ date or year (`assert_no_confirm_numbers`).
+detectable, and the report never prints a 2018+ date or year (`assert_no_confirm_numbers`; counts carry thousands
+separators so a count of 2,019 cannot read as a year). `nightly` runs the scheduler's `autodisc_nightly` on this
+machine (the owner's Mac, where the bars are), whatever research.autodisc.nightly_enabled says.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 import time
@@ -28,16 +30,14 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from goldbot.config import load_settings  # noqa: E402
-from goldbot.data.release import read_bar_files  # noqa: E402
-from goldbot.execution.costs import (  # noqa: E402
-    load_research_cost_table,
-    research_costs,
-    settings_extra_cost_usd,
-)
-from goldbot.features.technical import atr  # noqa: E402
-from goldbot.research.autodisc import ExploreFrame, SearchLedger, spec_hash, truncate_to_explore  # noqa: E402
+from goldbot.research.autodisc import SearchLedger, nightly, spec_hash  # noqa: E402
 from goldbot.research.autodisc.contracts import MaskProvider  # noqa: E402
-from goldbot.research.autodisc.gen_combine import MAX_BARS, existing_family_names, generate  # noqa: E402
+from goldbot.research.autodisc.gen_combine import existing_family_names, generate  # noqa: E402
+from goldbot.research.autodisc.nightly import (  # noqa: E402
+    assert_no_confirm_numbers,
+    raw_dir,
+    run_nightly_job,
+)
 from goldbot.research.autodisc.novelty import (  # noqa: E402
     Reference,
     check_novelty,
@@ -52,22 +52,13 @@ from goldbot.research.autodisc.nulls import (  # noqa: E402
     run_funnel,
     search_specs,
 )
-from goldbot.research.autodisc.outcomes import OutcomeTensor, build_tensor, default_menu  # noqa: E402
+from goldbot.research.autodisc.outcomes import OutcomeTensor  # noqa: E402
 from goldbot.research.autodisc.primitives import PrimitiveProvider  # noqa: E402
 from goldbot.research.autodisc.spec import StrategySpec  # noqa: E402
 
 DEFAULT_DB = {"real": "state/discovery_real.db", "synthetic": "state/discovery_synthetic.db"}
 DEFAULT_REPS = 100      # reported null percentiles need >= 100 reps; 20 (resolution 1/21) is the pass/fail gate only
-_DATE = re.compile(r" built \d{4}-\d\d-\d\d")
-_CONFIRM_YEAR = re.compile(r"(?<![0-9A-Za-z])20(?:1[89]|[2-9]\d)(?![0-9A-Za-z])")
-_CONFIRM_MONTH = re.compile(r"20(?:1[89]|[2-9]\d)-\d\d")
-
-
-def assert_no_confirm_numbers(text: str) -> None:
-    """The report is explore-window only: refuse any 2018+ year or date in it."""
-    m = _CONFIRM_YEAR.search(text) or _CONFIRM_MONTH.search(text)
-    if m:
-        raise ValueError(f"report would contain a confirm/holdout-window date: {m.group(0)!r}")
+_DATE_RE = r" built \d{4}-\d\d-\d\d"
 
 
 def _daily(t: OutcomeTensor, mask: np.ndarray, side: np.ndarray, day_id: np.ndarray, n_days: int) -> np.ndarray:
@@ -101,19 +92,19 @@ def render_report(res: FunnelResult, labels: dict[str, str], head: tuple[int, st
                   fpr: float, cost_line: str = "") -> str:
     lines = [
         f"autodisc report | generator {generator} | explore window 2010-2017 only",
-        f"K_search {res.k_search} | K_null {res.k_null} (null reps {reps})",
-        *([f"costs: {_DATE.sub('', cost_line)}"] if cost_line else []),
-        f"evaluated {res.evaluated}",
-        f"passed floors {res.passed_floors}",
-        f"beat null (>= 95th pct of best-of-search, {res.null_threshold:.3f}) {res.beat_null}",
-        f"also pass explore checks (excess over drift, 1.5x cost stress, floors) {res.passed_explore_checks}",
+        f"K_search {res.k_search:,} | K_null {res.k_null:,} (null reps {reps:,})",
+        *([f"costs: {re.sub(_DATE_RE, '', cost_line)}"] if cost_line else []),
+        f"evaluated {res.evaluated:,}",
+        f"passed floors {res.passed_floors:,}",
+        f"beat null (>= 95th pct of best-of-search, {res.null_threshold:.3f}) {res.beat_null:,}",
+        f"also pass explore checks (excess over drift, 1.5x cost stress, floors) {res.passed_explore_checks:,}",
         f"real best-of-search fitness {res.real_best:.3f} at null percentile {res.real_best_null_percentile:.2f}",
         f"stated false-positive rate {fpr:.3f} (1/(reps+1))",
-        f"explore survivors {len(res.survivors)}: a recorded fact, not evidence of edge",
+        f"explore survivors {len(res.survivors):,}: a recorded fact, not evidence of edge",
     ]
     for h, lab in sorted(labels.items()):
         lines.append(f"  {h[:12]}  {lab}")
-    lines.append(f"ledger head seq {head[0]} digest {head[1]}")
+    lines.append(f"ledger head seq {head[0]:,} digest {head[1]}")
     text = "\n".join(lines) + "\n"
     assert_no_confirm_numbers(text)
     return text
@@ -124,25 +115,13 @@ def _need_synthetic(args: argparse.Namespace) -> None:
         raise SystemExit("bench runs on seeded noise only: pass --synthetic")
 
 
-def raw_dir(arg: str | None) -> Path:
-    return Path(arg or os.environ.get("GOLDBOT_RAW_BARS") or Path(__file__).resolve().parents[1] / "raw")
-
-
 def real_backends(args: argparse.Namespace, timeframe: str) -> tuple[OutcomeTensor, PrimitiveProvider, str]:
-    """Explore-window 1m bars -> provider and the outcome tensor of the decision bars it cut."""
+    """Explore-window 1m bars -> provider and the outcome tensor of the decision bars it cut (`nightly.real_backends`)."""
     raw = raw_dir(args.raw)
-    b1 = truncate_to_explore(read_bar_files(raw, 2010, 2017), "ts_utc")      # 2018+ files are never opened
-    if len(b1) == 0:
+    b = nightly.real_backends(load_settings(), timeframe, raw=raw, cost_table=args.cost_table or "")   # "": no table (priors), as before
+    if b is None:
         raise SystemExit(f"no 2010-2017 1m bars under {raw} (set --raw or GOLDBOT_RAW_BARS)")
-    prov = PrimitiveProvider(ExploreFrame.from_frame(b1, "ts_utc"))
-    bars = prov.bars(timeframe)
-    settings = load_settings()
-    table = load_research_cost_table(args.cost_table) if args.cost_table else None
-    extra, swap, source = research_costs(settings, table)
-    extra = max(extra, settings_extra_cost_usd(settings))       # conservative: never below the settings prior (ADR 0045)
-    t = build_tensor(ExploreFrame.from_frame(bars, "ts_utc"), atr(prov.mid_bars(timeframe), 14),
-                     default_menu(MAX_BARS[timeframe]), extra_cost_usd=extra, swap=swap)
-    return t, prov, source
+    return b.tensor, b.provider, b.cost_line
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -208,9 +187,22 @@ def cmd_bench(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_nightly(args: argparse.Namespace) -> int:
+    """The scheduler's autodisc_nightly on this machine (enabled for this run only; settings.yaml is not changed)."""
+    s = load_settings()
+    on = s.model_copy(update={"research": s.research.model_copy(update={
+        "autodisc": s.research.autodisc.model_copy(update={"nightly_enabled": True})})})
+    out = run_nightly_job(on, Path(args.state_dir), pd.Timestamp.now(tz="UTC"))
+    print(out.get("health") or out.get("skipped"))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
+    night = sub.add_parser("nightly")
+    night.set_defaults(fn=cmd_nightly)
+    night.add_argument("--state-dir", default="state")
     for name, fn in (("run", cmd_run), ("bench", cmd_bench), ("report", cmd_report)):
         p = sub.add_parser(name)
         p.set_defaults(fn=fn)
