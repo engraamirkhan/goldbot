@@ -62,13 +62,20 @@ def _trailing_rank(x: pd.Series) -> np.ndarray:
 
 
 class PrimitiveProvider:
-    """`MaskProvider` over the explore-window 1m bars; one instance serves any timeframe (per-timeframe state cached)."""
+    """`MaskProvider` over the explore-window 1m bars; one instance serves any timeframe (per-timeframe state cached).
+    `arm_rules_spec.LiveProvider` is the one subclass that drops the explore window (it serves the live engine's bars);
+    this class itself refuses any bar at or after the cutoff."""
+
+    _explore_only = True
 
     def __init__(self, b1: ExploreFrame, arms: list[Arm] | None = None, arm_ids: dict[tuple[str, str], str] | None = None
                  ) -> None:
         frame = b1.frame
         guard_times(frame["ts_utc"], what="1m bars")
         guard_times(frame["visible_at"], what="1m visible_at")
+        self._setup(frame, arms, arm_ids)
+
+    def _setup(self, frame: pd.DataFrame, arms: list[Arm] | None, arm_ids: dict[tuple[str, str], str] | None) -> None:
         self._b1 = frame.reset_index(drop=True)
         self._arms = arms if arms is not None else load_arms(ARMS_YAML)
         self._arm_ids = arm_ids or {}
@@ -82,8 +89,9 @@ class PrimitiveProvider:
         """Decision bars (store schema, positional index): complete bars closing before the explore cutoff only."""
         if timeframe not in self._bars:
             b = resample_bars(self._b1, timeframe).reset_index(drop=True)
-            b = b[utc_index(b["visible_at"]) < EXPLORE_CUTOFF].reset_index(drop=True)
-            guard_times(b["visible_at"], what="decision bars")
+            if self._explore_only:
+                b = b[utc_index(b["visible_at"]) < EXPLORE_CUTOFF].reset_index(drop=True)
+                guard_times(b["visible_at"], what="decision bars")
             self._bars[timeframe] = b
         return self._bars[timeframe]
 
@@ -99,15 +107,16 @@ class PrimitiveProvider:
     # ------------------------------------------------------------------ families
     def arm_for(self, family: str, timeframe: str) -> Arm:
         want = self._arm_ids.get((family, timeframe))
-        pool = [a for a in self._arms if a.rule == family and a.timeframe == timeframe and a.status == "run"
-                and a.twin_of is None and (want is None or a.id == want)]
+        pool = [a for a in self._arms if a.rule == family != "spec_rule" and a.timeframe == timeframe
+                and a.status == "run" and a.twin_of is None and (want is None or a.id == want)]
         if not pool:
             raise NoFamilyArm(f"no runnable {timeframe} arm carries family {family!r}")
         return min(pool, key=lambda a: len(a.params))        # min is stable: the first in file order on a tie
 
     def families(self, timeframe: str) -> tuple[str, ...]:
         return tuple(sorted({a.rule for a in self._arms if a.timeframe == timeframe and a.status == "run"
-                             and a.twin_of is None and a.rule in R.RULE_FUNCS}))
+                             and a.twin_of is None and a.rule in R.RULE_FUNCS
+                             and a.rule != "spec_rule"}))
 
     def family_entries(self, family: str, timeframe: str) -> tuple[BoolArr, SideArr]:
         key = (family, timeframe)
@@ -129,10 +138,12 @@ class PrimitiveProvider:
             return False
         return True
 
-    def _check(self, pred: Predicate) -> None:
+    @staticmethod
+    def check_supported(pred: Predicate) -> None:
+        """Raise `UnsupportedLeaf` unless every leaf of `pred` names a feature the code base computes (no state)."""
         if isinstance(pred, Group):
             for c in pred.children:
-                self._check(c)
+                PrimitiveProvider.check_supported(c)
             return
         n = pred.name
         ok = ((pred.kind == "structure" and n == "family_rule")
@@ -141,6 +152,9 @@ class PrimitiveProvider:
                                              and n.rsplit("_", 1)[1] in TERCILE)))
         if not ok:
             raise UnsupportedLeaf(f"{pred.kind}/{n}: no existing feature computes it")
+
+    def _check(self, pred: Predicate) -> None:
+        self.check_supported(pred)
 
     def predicate_mask(self, pred: Predicate, timeframe: str) -> BoolArr:
         if isinstance(pred, Group):

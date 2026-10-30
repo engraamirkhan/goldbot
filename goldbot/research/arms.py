@@ -35,6 +35,7 @@ CLOCK_BOX_RULES = ("friday_long", "clock_anchor", "clock_anchor_control", "box_n
 # H-81 scalp-volume families Z1-Z10 and their controls (goldbot.research.arm_rules_scalp)
 SCALP_RULES = ("tick_surge", "run_fade", "round_break", "round_reject", "extreme_break", "nr4_break",
                "halfhour_persist", "absorb_fade", "htf_reclaim", "three_horizon", "scalp_control")
+SPEC_RULE = "spec_rule"
 Timeframe = Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
 RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_absorb", "box_break_close",
          "ema_pullback", "tsmom", "specialist", *CLOCK_BOX_RULES, "blocked",
@@ -45,7 +46,10 @@ RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_ab
          "level_break",
          # wave 2 lane W2a (H-70 F1 / F-2)
          "hurst_band_break", "hurst_band_break_control", "htf_stretch_break", "htf_stretch_break_control",
-         *SCALP_RULES)
+         *SCALP_RULES,
+         # ADR 0058 phase 4: a discovered StrategySpec run by the one reviewed interpreter (`arm_rules_spec`); its rows
+         # live in config/spec_arms.yaml and load on demo accounts only (`load_arms(live_class=True)` refuses them)
+         SPEC_RULE)
 
 
 # ---------------------------------------------------------------- holdout guard
@@ -157,6 +161,10 @@ class Arm(FrozenRecord):
             if self.rule in SCALP_RULES:
                 from goldbot.research.arm_rules_scalp import check as check_scalp
                 check_scalp(self)
+            if self.rule == SPEC_RULE:
+                # ADR 0058 phase 4: a spec the engine cannot run exactly as its research read is refused at load
+                from goldbot.research.arm_rules_spec import check as check_spec
+                check_spec(self)
         except ValueError as exc:
             raise ValueError(f"{self.id}: {exc}") from exc
         return self
@@ -202,11 +210,15 @@ def arm_hash(arm: Arm) -> str:
     return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
-def load_arms(path: Path, *, check_hash: bool = True) -> list[Arm]:
+def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False) -> list[Arm]:
     """The arms of `path`. With `check_hash` every arm must carry a `config_hash` equal to its own: an arm edited after
-    it was frozen is refused (ARM-SPEC: an edit needs a written amendment and a new arm id)."""
+    it was frozen is refused (ARM-SPEC: an edit needs a written amendment and a new arm id). With `live_class` (the
+    arms are loaded for an account that is not demo) a `spec_rule` arm is refused: ADR 0058 "Demo arms are data rows
+    run by one reviewed interpreter (`spec_rule`), loaded only on demo accounts"."""
     raw = yaml.safe_load(Path(path).read_text()) or {}
     out = [Arm.model_validate(a) for a in raw.get("arms", [])]
+    if live_class and (spec := sorted(a.id for a in out if a.rule == SPEC_RULE)):
+        raise ValueError(f"spec_rule arms {spec} load on demo accounts only (ADR 0058): refused for a live-class account")
     ids = [a.id for a in out]
     dup = sorted({i for i in ids if ids.count(i) > 1})
     if dup:
