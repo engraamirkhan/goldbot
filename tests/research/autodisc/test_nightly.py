@@ -114,3 +114,57 @@ def test_autodisc_settings_are_bounded(bad):
     from goldbot.config import AutodiscSettings
     with pytest.raises(ValueError):
         AutodiscSettings(**bad)
+
+
+def _real_cost_line() -> str:
+    from goldbot.execution.costs import CostTable, research_costs
+    table = CostTable(account_id="icm-demo", built_utc=pd.Timestamp("2026-10-28", tz="UTC"), spread={}, slippage={},
+                      commission_per_lot_side_usd=3.5, slippage_prior_usd=0.1)
+    return research_costs(load_settings(), table)[2]
+
+
+def test_report_strips_the_cost_table_build_date_so_a_measured_table_does_not_fail_the_night(tmp_path):
+    line = _real_cost_line()
+    assert "built 2026-10-28" in line                                        # the real line carries a confirm-era date
+    t, prov = edge_tensor()
+    res = NT.search_and_judge(t, prov, SearchLedger(tmp_path / "c.db", mode="synthetic"), gp(), reps=2, cost_line=line)
+    text = NT.render(res)
+    assert "costs: cost table icm-demo, commission" in text and not CONFIRM.search(text)
+
+
+def test_real_backends_skip_a_raw_dir_without_the_explore_bar_files(tmp_path):
+    (tmp_path / "raw").mkdir()
+    (tmp_path / "raw" / "xauusd_1m_dukascopy_2021.parquet").write_bytes(b"")   # only a confirm-era file: never opened
+    assert NT.real_backends(load_settings(), "15m", raw=tmp_path / "raw") is None
+
+
+def test_the_survivors_report_is_written_atomically(tmp_path, monkeypatch):
+    s = load_settings()
+    on = s.model_copy(update={"research": s.research.model_copy(update={"autodisc": s.research.autodisc.model_copy(
+        update={"nightly_enabled": True, "population": 8, "generations": 1, "null_reps": 1})})})
+    t, prov = edge_tensor()
+    report = tmp_path / "autodisc" / "survivors-2026-11-10.md"
+    report.parent.mkdir(parents=True)
+    report.write_text("last good report\n")
+
+    def boom(r):
+        raise RuntimeError("render failed")
+
+    monkeypatch.setattr(NT, "render", lambda r: "partial " + boom(r))
+    with pytest.raises(RuntimeError):
+        NT.run_nightly_job(on, tmp_path, SLOT, min_events=60, backends=lambda st, tf: NT.Backends(
+            tensor=t, provider=prov, families=FAMS, cost_line="synthetic", mode="synthetic"))
+    assert report.read_text() == "last good report\n"
+    monkeypatch.undo()
+    calls = []
+    real_replace = NT.os.replace
+
+    def spy(src, dst):
+        calls.append((Path(src).name, Path(dst).name))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(NT.os, "replace", spy)
+    NT.run_nightly_job(on, tmp_path, SLOT, min_events=60, backends=lambda st, tf: NT.Backends(
+        tensor=t, provider=prov, families=FAMS, cost_line="synthetic", mode="synthetic"))
+    assert calls and calls[-1][1] == report.name and calls[-1][0] != report.name
+    assert not [p for p in report.parent.iterdir() if p.name != report.name]       # no temp file left behind

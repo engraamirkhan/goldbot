@@ -62,6 +62,7 @@ LEDGER_FILE = {"real": "discovery_real.db", "synthetic": "discovery_synthetic.db
 REPO_RAW = Path(__file__).resolve().parents[3] / "raw"
 _CONFIRM_YEAR = re.compile(r"(?<![0-9A-Za-z])20(?:1[89]|[2-9]\d)(?![0-9A-Za-z])")
 _CONFIRM_MONTH = re.compile(r"20(?:1[89]|[2-9]\d)-\d\d")
+_BUILT_DATE = re.compile(r" built \d{4}-\d\d-\d\d")      # a cost table's build date (as scripts/autodisc.py strips it)
 
 
 class Backends(FrozenRecord):
@@ -173,7 +174,7 @@ def render(r: NightlyResult) -> str:
     lines = [
         f"autodisc nightly | generator {r.generator} | {r.timeframe} | explore window 2010-2017 only",
         f"K_search {_n(r.k_search)} | K_null {_n(r.k_null)} (null reruns of the whole search {_n(r.null_reps)})",
-        *([f"costs: {r.cost_line}"] if r.cost_line else []),
+        *([f"costs: {_BUILT_DATE.sub('', r.cost_line)}"] if r.cost_line else []),
         f"evaluated {_n(r.evaluated)} | passed floors {_n(r.passed_floors)} | neighbours evaluated "
         f"{_n(r.neighbours_evaluated)}",
         f"null bar (95th pct of best-of-search, floored at 0) {_f(r.null_threshold)} | real best {_f(r.real_best)} at "
@@ -220,7 +221,10 @@ def real_backends(settings: Settings, timeframe: str, raw: Path | None = None, c
     src = raw if raw is not None else raw_dir(a.raw_dir)
     if not src.is_dir():
         return None
-    b1 = truncate_to_explore(read_bar_files(src, 2010, 2017), "ts_utc")
+    try:
+        b1 = truncate_to_explore(read_bar_files(src, 2010, 2017), "ts_utc")
+    except FileNotFoundError:                                   # the dir holds no 2010-2017 file: skip, as for no dir
+        return None
     if len(b1) == 0:
         return None
     prov = PrimitiveProvider(ExploreFrame.from_frame(b1, "ts_utc"))
@@ -232,6 +236,18 @@ def real_backends(settings: Settings, timeframe: str, raw: Path | None = None, c
                      default_menu(MAX_BARS[timeframe]), extra_cost_usd=extra, swap=swap)
     fams = tuple(f for f in existing_family_names() if f in prov.families(timeframe))
     return Backends(tensor=t, provider=prov, families=fams, cost_line=source, mode="real")
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """Write via a temp file in the same directory and rename it over `path`: a crash or a failed render leaves the
+    previous report whole, never a truncated one."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    try:
+        tmp.write_text(text)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def night_seed(base: int, slot: pd.Timestamp) -> int:
@@ -258,8 +274,7 @@ def run_nightly_job(settings: Settings, state_dir: Path, slot: pd.Timestamp, *,
                            cost_line=b.cost_line)
     rel = f"{REPORT_DIR}/survivors-{pd.Timestamp(slot):%Y-%m-%d}.md"
     out = Path(state_dir) / rel
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render(res))
+    _write_atomic(out, render(res))
     spa = "n/a" if res.rc is None else f"{res.rc.spa_p:.3f}"
     pbo = "n/a" if res.pbo is None else f"{res.pbo.pbo:.2f}"
     return {"report": rel, "k_search": res.k_search, "k_null": res.k_null, "evaluated": res.evaluated,
