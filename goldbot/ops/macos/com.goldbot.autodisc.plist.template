@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- ADR 0058 decision 6: the discovery search runs on the owner's Mac (the local-only 1m bars live there), never on
+     the brain. scripts/install_autodisc_launchd.sh fills __REPO__ and __LOGDIR__ and installs this as a user agent.
+     launchd runs a missed 01:30 slot when the Mac wakes. No credential, host or account id belongs in this file. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.goldbot.autodisc</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__REPO__/scripts/autodisc_nightly_mac.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>1</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__LOGDIR__/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOGDIR__/launchd.err.log</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+</dict>
+</plist>

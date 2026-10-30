@@ -85,3 +85,47 @@ def test_nightly_command_runs_the_scheduler_job_on_this_machine(tmp_path, monkey
     monkeypatch.setattr(cli, "run_nightly_job", fake)
     assert cli.main(["nightly", "--state-dir", str(tmp_path)]) == 0
     assert seen == {"enabled": True, "state_dir": tmp_path}
+
+
+@pytest.mark.parametrize("tf", ["15m", "1h", "4h"])
+def test_nightly_command_takes_the_timeframe_so_the_mac_job_can_run_each_in_turn(tmp_path, monkeypatch, tf):
+    seen: dict[str, object] = {}
+
+    def fake(settings, state_dir, slot, **kw):
+        seen["tf"] = settings.research.autodisc.timeframe
+        return {"health": "autodisc test"}
+
+    monkeypatch.setattr(cli, "run_nightly_job", fake)
+    assert cli.main(["nightly", "--state-dir", str(tmp_path), "--timeframe", tf]) == 0
+    assert seen == {"tf": tf}
+    with pytest.raises(SystemExit):
+        cli.main(["nightly", "--timeframe", "1d"])
+
+
+def test_the_stage_commands_preregister_a_survivor_and_refuse_with_exit_2_and_one_line(tmp_path, capsys):
+    import json
+
+    from goldbot.research.autodisc import SearchLedger
+    from goldbot.research.autodisc.spec import ExitTemplate, Leaf, StrategySpec
+    db, reg = tmp_path / "discovery_real.db", tmp_path / "registry.jsonl"
+    led = SearchLedger(db, mode="real")
+    s = StrategySpec(timeframe="1h", side_rule="long", entry=Leaf(kind="time", name="london"),
+                     exit=ExitTemplate(stop="atr_1.0", target="2R"))
+    h = cli.spec_hash(s)
+    led.log_spec(s, "G2", "1")
+    led.record_result(h, {"n_events": 420, "mean_r": 0.25, "t_stat": 10.0, "floors": True})
+    from goldbot.research.metrics import DsrInputs
+    inputs = DsrInputs(sr=0.5, n=2000, skew=0.0, kurtosis=3.0, var_sr_trials=0.001).model_dump_json()
+    led.record_survivors("n1", [(h, 0.97)], k_search=1, cost_line="cost table icm-demo, commission 3.50",
+                         inputs={h: inputs})
+    base = ["--db", str(db), "--registry", str(reg)]
+    assert cli.main(["confirm-prereg", h, "--db", str(tmp_path / "absent.db"), "--registry", str(reg)]) == 2
+    assert "no search ledger" in capsys.readouterr().err and not (tmp_path / "absent.db").exists()
+    assert cli.main(["confirm-prereg", h, *base]) == 0
+    assert json.loads(capsys.readouterr().out)["rule_ref"] == f"autodisc:{h}"
+    assert cli.main(["confirm-prereg", h, *base]) == 2
+    assert capsys.readouterr().err.startswith("refused: ")
+    assert cli.main(["confirm-run", "--batch", "1999-01", *base, "--cost-table", ""]) == 2   # priors: refused first
+    assert "measured cost table" in capsys.readouterr().err
+    assert cli.main(["holdout", h, *base, "--cost-table", ""]) == 2
+    assert "measured cost table" in capsys.readouterr().err

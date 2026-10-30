@@ -21,8 +21,13 @@ What it does, in this order, and nothing else:
    it never touches the engine, a broker, RiskGate or an order. `register` documents the crash replay, the file lock
    and the feature-branch rule.
 
-The stage it records is `explore_survivor`: the confirm and holdout reads (design 3.3/3.5) are not built yet, so the
-arm's forward demo read (design 4.4) is its first out-of-sample evidence and the prereg must say so.
+Phase 3 (ADR 0058, the phase-3 amendment): registration follows the stage reads. By default only a confirm passer
+(design 3.3) or a holdout passer (3.5) registers, read from the stage journal (`autodisc.stages`, in the same database)
+and journalled as `confirm_passer` / `holdout_passer`. An explore survivor that never had a confirm read registers only
+behind the explicit `--stage explore` flag (a demo-learning arm), journalled as `explore_survivor` with
+`requested_stage: explore`; its forward demo read (design 4.4) is then its first out-of-sample evidence and the prereg
+must say so. A spec whose confirm or holdout read failed, or was voided, never registers ("the failed hash can never be
+re-confirmed"; the holdout is a one-way stop), whatever the flag.
 """
 from __future__ import annotations
 
@@ -48,11 +53,13 @@ from goldbot.engine import exploration as X
 from goldbot.ops import accounts as A
 from goldbot.research.arms import SPEC_RULE, Arm, arm_hash, load_arms
 from goldbot.research.autodisc.ledger import GENESIS, SearchLedger
+from goldbot.research.autodisc.nightly import LEDGER_FILE
 from goldbot.research.autodisc.nulls import NEG_INF, NullDistribution
 from goldbot.research.autodisc.spec import StrategySpec, canonical_json
+from goldbot.research.autodisc.stages import StageJournal
 
 ROOT = Path(__file__).resolve().parents[2]
-LEDGER_PATH = ROOT / "state" / "discovery.db"
+LEDGER_PATH = ROOT / "state" / LEDGER_FILE["real"]      # the nightly search's real ledger (and its stage journal)
 WEEKLY_MAX = 4                     # ADR 0045 weekly tier: at most 4 reviewed variants a week across all sources
 STYLE_BY_TF = {"15m": "intraday", "1h": "intraday", "4h": "swing", "1d": "swing"}
 _SCHEMA = """
@@ -94,6 +101,9 @@ class Honesty(FrozenRecord):
         return out
 
 
+Reached = Literal["explore_survivor", "confirm_passer", "holdout_passer"]
+
+
 class Registration(FrozenRecord):
     """One journalled registration (`arm_registrations.payload`)."""
     arm_id: str
@@ -103,7 +113,8 @@ class Registration(FrozenRecord):
     style: str
     max_loss: float = Field(gt=0)
     prereg: str
-    stage: Literal["explore_survivor"] = "explore_survivor"
+    stage: Reached = "explore_survivor"
+    requested_stage: Literal["explore", "confirm"] | None = None     # the --stage given; None: before phase 3
     k_search: int
     k_null: int
     ledger_seq: int
@@ -241,6 +252,24 @@ def honesty_of(ledger: SearchLedger, spec_hash: str) -> Honesty:
                    floors=bool(res.get("floors")), null_threshold=float(thr), null_reps=reps)
 
 
+def stage_of(ledger_path: Path, spec_hash: str, requested: str) -> Reached:
+    """The stage a registration rests on (module docstring): holdout_passer, confirm_passer, or explore_survivor when
+    `requested` is "explore" and the spec never had a confirm read; RegistrationRefused otherwise."""
+    st = StageJournal(ledger_path).state(spec_hash)
+    for name, got in (("confirm", st.confirm), ("holdout", st.holdout)):
+        if got is not None and got != "passed":
+            raise RegistrationRefused(f"spec {spec_hash[:12]}: its {name} read is {got if got != 'open' else 'void'}: "
+                                      "that result is final, it never registers (ADR 0058 design 3.3/3.5)")
+    if st.holdout == "passed":
+        return "holdout_passer"
+    if st.confirm == "passed":
+        return "confirm_passer"
+    if requested == "explore":
+        return "explore_survivor"
+    raise RegistrationRefused(f"spec {spec_hash[:12]} is not a confirm passer: registration follows the confirm read "
+                              "(ADR 0058 phase 3); a demo-learning arm of an explore survivor needs --stage explore")
+
+
 # ---------------------------------------------------------------- the files
 def _next_id(now: pd.Timestamp, taken: set[str]) -> str:
     prefix = f"D{now:%y%m}-"
@@ -291,8 +320,10 @@ def with_registration(accounts_text: str, account_id: str, arm_id: str, style: s
 def plan(spec_hash: str, account_id: str, prereg: str, *, ledger_path: Path = LEDGER_PATH,
          accounts_path: Path = A.ACCOUNTS_FILE, spec_path: Path = X.SPEC_PATH,
          spec_arms_path: Path = X.SPEC_ARMS_PATH, style: str | None = None, max_loss: float | None = None,
-         now: pd.Timestamp | None = None, root: Path = ROOT) -> tuple[Registration, str, str]:
-    """Every check, nothing written: the registration and the two files' new text (spec arms, accounts)."""
+         now: pd.Timestamp | None = None, root: Path = ROOT, stage: Literal["explore", "confirm"] = "confirm"
+         ) -> tuple[Registration, str, str]:
+    """Every check, nothing written: the registration and the two files' new text (spec arms, accounts). `stage`:
+    "confirm" (default) needs a confirm or holdout passer; "explore" also takes an explore survivor (`stage_of`)."""
     now = now if now is not None else pd.Timestamp.now("UTC")
     if not ledger_path.exists():
         raise RegistrationRefused(f"no search ledger at {ledger_path}")
@@ -304,6 +335,7 @@ def plan(spec_hash: str, account_id: str, prereg: str, *, ledger_path: Path = LE
     honesty = honesty_of(ledger, spec_hash)
     if bad := honesty.failures:
         raise RegistrationRefused(f"spec {spec_hash[:12]} is not an explore survivor: fails {bad}")
+    reached = stage_of(ledger_path, spec_hash, stage)
     path, _, section = prereg.partition("#")
     inside = not Path(path).is_absolute() and ".." not in Path(path).parts
     if not section or not inside or not (root / path).is_file():
@@ -354,7 +386,7 @@ def plan(spec_hash: str, account_id: str, prereg: str, *, ledger_path: Path = LE
     reg = Registration(arm_id=arm_id, account_id=account_id, spec_hash=spec_hash, timeframe=spec.timeframe,
                        style=style, max_loss=cap, prereg=prereg, k_search=ledger.k_search(), k_null=ledger.k_null(),
                        ledger_seq=k_seq, ledger_digest=k_digest, honesty=honesty, config_hash=str(arm.config_hash),
-                       written_utc=now.isoformat())
+                       written_utc=now.isoformat(), stage=reached, requested_stage=stage)
     return reg, new_spec, new_accounts
 
 
@@ -448,6 +480,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-loss", type=float, default=None,
                     help="per-trade cap, account currency (default: the style's smallest strategy arm cap)")
     ap.add_argument("--dry-run", action="store_true", help="every check, nothing journalled or written")
+    ap.add_argument("--stage", choices=["confirm", "explore"], default="confirm",
+                    help="confirm (default): only a confirm or holdout passer registers; explore: an explore survivor "
+                         "may register as a demo-learning arm (journalled as such)")
     a = ap.parse_args(argv)
     if a.verify:
         try:
@@ -460,7 +495,7 @@ def main(argv: list[str] | None = None) -> int:
     if not (a.spec_hash and a.account and a.prereg):
         ap.error("spec_hash, --account and --prereg are required (or --verify)")
     try:
-        kw: dict[str, Any] = {"ledger_path": a.ledger, "style": a.style, "max_loss": a.max_loss}
+        kw: dict[str, Any] = {"ledger_path": a.ledger, "style": a.style, "max_loss": a.max_loss, "stage": a.stage}
         reg = plan(a.spec_hash, a.account, a.prereg, **kw)[0] if a.dry_run else \
             register(a.spec_hash, a.account, a.prereg, **kw)
     except (RegistrationRefused, ValueError) as exc:

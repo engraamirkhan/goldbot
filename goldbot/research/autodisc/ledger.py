@@ -17,6 +17,7 @@ Signatures (the design leaves them open):
     .result(spec_hash, *, null=False) -> dict | None
     .k_search() -> int ; .k_null() -> int
     .entries() -> list[LedgerEntry]                      in chain order
+    .ledger_id() -> str                                  digest of entry 1: the ledger's identity (registry k_contrib)
     .head() -> tuple[int, str]                           (seq, digest) of the tip; (0, genesis) when empty. Keep it
                                                          elsewhere to detect tail truncation
     .verify() -> int                                     recomputes the whole chain; raises LedgerTamperError, returns
@@ -117,6 +118,10 @@ class SearchLedger:
         con = self._connect()
         try:
             con.executescript(_SCHEMA)
+            have = {r[1] for r in con.execute("PRAGMA table_info(survivors)").fetchall()}
+            for col in ("cost_line", "dsr_inputs"):        # phase 3 (quant F2/F3): added to an existing ledger on open
+                if col not in have:
+                    con.execute(f"ALTER TABLE survivors ADD COLUMN {col} TEXT")
             if mode is not None:
                 con.execute("INSERT OR IGNORE INTO meta (key, value) SELECT 'mode', ? "
                             "WHERE NOT EXISTS (SELECT 1 FROM entries)", (mode,))
@@ -150,12 +155,18 @@ class SearchLedger:
         return _row_entry(r) if r else None
 
     def log_spec(self, spec: StrategySpec, generator: str, generator_version: str,
-                 parents: Sequence[str] = (), *, null: bool = False) -> LedgerEntry:
+                 parents: Sequence[str] = (), *, null: bool = False,
+                 flags: Mapping[str, bool] | None = None) -> LedgerEntry:
+        """`flags`: metadata of the spec's source that is not part of the rule (design 2: `prior_informed`,
+        `holdout_contaminated`); written into the row only when given, so earlier rows are unchanged."""
         if not generator:
             raise LedgerError("generator is required")
         h = spec_hash(spec)
-        payload = _dumps({"generator": generator, "generator_version": generator_version,
-                          "parents": list(parents), "spec": json.loads(canonical_json(spec))})
+        body: dict[str, Any] = {"generator": generator, "generator_version": generator_version,
+                                "parents": list(parents), "spec": json.loads(canonical_json(spec))}
+        if flags:
+            body["flags"] = {k: bool(v) for k, v in sorted(flags.items())}
+        payload = _dumps(body)
         con = self._connect()
         try:
             con.execute("BEGIN IMMEDIATE")
@@ -187,9 +198,12 @@ class SearchLedger:
         finally:
             con.close()
 
-    def record_survivors(self, night: str, survivors: Sequence[tuple[str, float | None]], *, k_search: int) -> int:
-        """Record one night's explore survivors (spec hash, DSR at `k_search`); every hash must be a logged search spec
-        (LedgerError otherwise, and nothing is written). A rerun of the same night adds nothing. Returns rows added."""
+    def record_survivors(self, night: str, survivors: Sequence[tuple[str, float | None]], *, k_search: int,
+                         inputs: Mapping[str, str] | None = None, cost_line: str = "") -> int:
+        """Record one night's explore survivors (spec hash, DSR at `k_search`, the K the DSR was read at); every hash
+        must be a logged search spec (LedgerError otherwise, and nothing is written). `inputs`: each survivor's DSR
+        inputs (`metrics.DsrInputs` JSON), so the confirm step re-reads the DSR at the K of its own day; `cost_line`: the
+        night's cost source. A rerun of the same night adds nothing. Returns rows added."""
         con = self._connect()
         try:
             con.execute("BEGIN IMMEDIATE")
@@ -202,8 +216,10 @@ class SearchLedger:
                 written = self._clock().isoformat()
                 added = 0
                 for h, dsr in survivors:
-                    cur = con.execute("INSERT OR IGNORE INTO survivors VALUES (?,?,?,?,?,?,?)",
-                                      (night, h, int(k_search), dsr, seq, digest, written))
+                    cur = con.execute("INSERT OR IGNORE INTO survivors (night, spec_hash, k_search, dsr, head_seq, "
+                                      "head_digest, written_utc, cost_line, dsr_inputs) VALUES (?,?,?,?,?,?,?,?,?)",
+                                      (night, h, int(k_search), dsr, seq, digest, written, cost_line,
+                                       (inputs or {}).get(h)))
                     added += cur.rowcount
                 con.execute("COMMIT")
             except BaseException:
@@ -241,6 +257,27 @@ class SearchLedger:
                            (spec_hash,))
         return StrategySpec.model_validate(json.loads(rows[0][0])["spec"]) if rows else None
 
+    def spec_flags(self, spec_hash: str) -> dict[str, bool]:
+        """The flags the spec was logged with (`log_spec(flags=)`); {} when none."""
+        rows = self._query("SELECT payload FROM entries WHERE kind='spec' AND spec_hash=? ORDER BY seq LIMIT 1",
+                           (spec_hash,))
+        return dict(json.loads(rows[0][0]).get("flags") or {}) if rows else {}
+
+    def survivor_record(self, spec_hash: str) -> dict[str, Any] | None:
+        """The spec's latest explore-survivor row (night, k_search, dsr, cost_line, dsr_inputs), judged at the largest
+        K; None if never one."""
+        rows = self._query("SELECT night, k_search, dsr, cost_line, dsr_inputs FROM survivors WHERE spec_hash=? "
+                           "ORDER BY k_search DESC, night DESC LIMIT 1", (spec_hash,))
+        if not rows:
+            return None
+        r = rows[0]
+        return {"night": r[0], "k_search": int(r[1]), "dsr": r[2], "cost_line": r[3] or "", "dsr_inputs": r[4]}
+
+    def mode(self) -> str | None:
+        """The ledger's stamped mode ("real" / "synthetic"), None when unmarked."""
+        rows = self._query("SELECT value FROM meta WHERE key = 'mode'")
+        return str(rows[0][0]) if rows else None
+
     def result(self, spec_hash: str, *, null: bool = False) -> dict[str, Any] | None:
         rows = self._query("SELECT payload FROM entries WHERE kind='result' AND spec_hash=? AND is_null=?",
                            (spec_hash, int(null)))
@@ -258,6 +295,12 @@ class SearchLedger:
 
     def entries(self) -> list[LedgerEntry]:
         return [_row_entry(r) for r in self._query(f"SELECT {_COLS} FROM entries ORDER BY seq")]
+
+    def ledger_id(self) -> str:
+        """The ledger's identity: the digest of its first entry (GENESIS while empty). A copy keeps it; another
+        ledger cannot share it."""
+        rows = self._query("SELECT digest FROM entries WHERE seq = 1")
+        return str(rows[0][0]) if rows else GENESIS
 
     def head(self) -> tuple[int, str]:
         rows = self._query("SELECT seq, digest FROM entries ORDER BY seq DESC LIMIT 1")

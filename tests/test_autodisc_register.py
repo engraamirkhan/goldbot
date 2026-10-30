@@ -47,7 +47,8 @@ def env(tmp_path: Path) -> dict[str, Any]:
         ledger.log_spec(spec(i), "G1", "1", null=True)
         ledger.record_result(spec_hash(spec(i)), {"null_fitness": [0.5, 1.1, None, 0.9]}, null=True)
     return {"ledger_path": tmp_path / "discovery.db", "accounts_path": tmp_path / "accounts.yaml",
-            "spec_arms_path": tmp_path / "spec_arms.yaml", "root": tmp_path, "now": NOW}
+            "spec_arms_path": tmp_path / "spec_arms.yaml", "root": tmp_path, "now": NOW,
+            "stage": "explore"}                     # explore-only survivors register behind the explicit flag
 
 
 def register(env: dict[str, Any], i: int = 0, account: str = "icm-demo", **kw: Any) -> R.Registration:
@@ -57,7 +58,7 @@ def register(env: dict[str, Any], i: int = 0, account: str = "icm-demo", **kw: A
 def test_a_survivor_is_journalled_with_its_ledger_k_and_honesty_results_then_runs_on_the_demo_account(env):
     reg = register(env)
     ledger = SearchLedger(env["ledger_path"])
-    assert reg.arm_id == "D2610-1" and reg.stage == "explore_survivor"
+    assert reg.arm_id == "D2610-1" and reg.stage == "explore_survivor" and reg.requested_stage == "explore"
     assert (reg.k_search, reg.k_null) == (ledger.k_search(), ledger.k_null()) == (6, 6)
     assert (reg.ledger_seq, reg.ledger_digest) == ledger.head()
     assert reg.honesty.fitness == 2.4 and reg.honesty.null_threshold == 1.1 and reg.honesty.failures == []
@@ -313,3 +314,69 @@ def test_a_prereg_path_outside_the_repo_is_refused(env, tmp_path):
     for bad in (str(outside) + "#d1", "../elsewhere.md#d1"):
         with pytest.raises(R.RegistrationRefused, match="under the repo"):
             R.register(spec_hash(spec(0)), "icm-demo", bad, **env)
+
+
+# ---------------------------------------------------------------- phase 3: the stage a registration rests on
+def _stage(env: dict[str, Any], i: int, stage: str, outcome: dict[str, Any] | None) -> None:
+    from goldbot.research.autodisc.stages import StageJournal
+    j = StageJournal(env["ledger_path"])
+    j.open(stage, spec_hash(spec(i)), {})                                 # type: ignore[arg-type]
+    if outcome is not None:
+        j.close(stage, spec_hash(spec(i)), outcome)                       # type: ignore[arg-type]
+
+
+def _confirm(env: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in env.items() if k != "stage"}               # no --stage flag: the default
+
+
+def test_an_explore_only_survivor_is_refused_without_the_explicit_explore_stage(env, capsys):
+    before = env["spec_arms_path"].read_text()
+    with pytest.raises(R.RegistrationRefused, match="--stage explore"):
+        R.register(spec_hash(spec(0)), "icm-demo", "prereg.md#d1", **_confirm(env))
+    assert R.journal(env["ledger_path"]) == [] and env["spec_arms_path"].read_text() == before
+    rc = R.main([spec_hash(spec(0)), "--account", "icm-demo", "--prereg", "prereg.md#d1", "--dry-run",
+                 "--ledger", str(env["ledger_path"])])
+    assert rc == 2 and "confirm passer" in capsys.readouterr().err
+    R.main([spec_hash(spec(0)), "--account", "icm-demo", "--prereg", "prereg.md#d1", "--dry-run",
+            "--ledger", str(env["ledger_path"]), "--stage", "explore"])      # (the repo has no prereg.md: refused there)
+    assert "confirm passer" not in capsys.readouterr().err                  # the flag passes the stage check
+
+
+@pytest.mark.parametrize("reads,stage", [
+    ([("confirm", {"passed": True})], "confirm_passer"),
+    ([("confirm", {"passed": True}), ("holdout", {"passed": True})], "holdout_passer"),
+])
+def test_a_confirm_or_holdout_passer_registers_by_default_and_the_journal_records_its_stage(env, reads, stage):
+    for st, out in reads:
+        _stage(env, 0, st, out)
+    reg = R.register(spec_hash(spec(0)), "icm-demo", "prereg.md#d1", **_confirm(env))
+    assert reg.stage == stage and reg.requested_stage == "confirm"
+    assert R.journal(env["ledger_path"])[0].stage == stage
+
+
+@pytest.mark.parametrize("reads", [
+    [("confirm", {"passed": False})],
+    [("confirm", {"passed": False, "void": "crash"})],
+    [("confirm", None)],                                                   # opened, never closed: void
+    [("confirm", {"passed": True}), ("holdout", {"passed": False})],     # the one-way stop
+])
+def test_a_spec_that_failed_or_voided_a_stage_read_never_registers_even_with_the_explore_flag(env, reads):
+    for st, out in reads:
+        _stage(env, 0, st, out)
+    with pytest.raises(R.RegistrationRefused, match="final"):
+        register(env)
+    assert R.journal(env["ledger_path"]) == []
+
+
+def test_the_default_ledger_is_the_nightly_searchs_real_ledger():
+    from goldbot.research.autodisc.nightly import LEDGER_FILE
+    assert R.LEDGER_PATH.name == LEDGER_FILE["real"]
+
+
+def test_a_journal_row_written_before_phase_3_still_reads():
+    old = {"arm_id": "D2610-1", "account_id": "icm-demo", "spec_hash": "a" * 64, "timeframe": "15m",
+           "style": "intraday", "max_loss": 5.0, "prereg": "p.md#x", "stage": "explore_survivor", "k_search": 1,
+           "k_null": 1, "ledger_seq": 1, "ledger_digest": "0" * 64, "config_hash": "c", "written_utc": NOW.isoformat(),
+           "honesty": {"n_events": 1, "mean_r": 0.1, "fitness": 1.0, "excess_r": 0.1, "stress_mean_r": 0.1,
+                       "floors": True, "null_threshold": 0.5, "null_reps": 2}}
+    assert R.Registration.model_validate(old).requested_stage is None
