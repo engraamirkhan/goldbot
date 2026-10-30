@@ -38,6 +38,22 @@ the demo fills were being read as discovery evidence for rules that history had 
   retirements are left out because they are refused already). It warns when an exploring account has no arm that may
   enter.
 
+## Amendment 2026-10-30 (trading-safety and quant review)
+- **References.** A reference the filesystem cannot read (a NUL byte, a path too long) counts as missing. It refuses
+  its arm and never raises, so the engine always starts. A registry reference names a row's `config_hash`. When the
+  registry file (state/research_registry.jsonl) is present, the hash must be one of its rows. When the file is absent,
+  the reference must carry the evaluator's commit (`registry:<hash>@<40 hex>`).
+- **Cost role.** The `cost` role is closed to `COST_ARMS` = {F1A: O-11, G1A: O-12}. Each must name its cost read in
+  `cost_read`. This is a row field outside the hash, because the reviewers' `params.cost_read` would change the frozen
+  hash. The exemption ends when the cost read has its admissible fills (F1A 200, G1A 100), counted once a minute in
+  the host's ledger. The arm and its paired control are then refused ("cost read complete, qualify first"). An
+  unreadable count keeps them running and warns.
+- **Measured costs.** `cost_basis: measured` must cite `cost_table` (the version) and `cost_cells`. Every cell must be
+  measured (not `from_prior`), rest on at least 30 fills, and be charged at the worse of measured and prior. Until such
+  cells exist, no arm qualifies.
+- **F1A's graduation.** F1A's forward Graduation rule is withdrawn from prereg-2026-10-26-time-structure.md 2.2, with a
+  dated note. Its stops stay as safety stops only.
+
 ## Consequences
 - Demo volume falls to the controls and cost arms until a family qualifies. On 2026-10-30 these may enter:
   - icm-demo: C1H, G1A, G1C, I0, W0, ZCD;
@@ -47,7 +63,6 @@ the demo fills were being read as discovery evidence for rules that history had 
   Newly refused: 11 on icm-demo, 9 on icm-probe, 2 on vantage-demo. Pots, caps and the RiskGate are unchanged.
 - Demo becomes a live-versus-history check of qualified rules, not a discovery venue. A family comes back to demo only
   through an evaluator commit that adds a passing qualification to its rows, which needs both reads.
-- F1A and G1A are strategy rules held under the `cost` role, which is a judgement call. They keep running unqualified
-  because their fills feed a pre-registered confirmation read. The quant reviewer should confirm that or move them to
-  `strategy`.
+- F1A and G1A run unqualified only as cost measurements, and only until their cost reads are full. Their demo fills
+  are never strategy evidence.
 - `ops.autodisc_register` must write a qualification (its confirm read) before a discovered arm can trade.

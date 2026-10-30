@@ -34,9 +34,12 @@ CLOSE = pd.Timestamp("2025-03-04 20:00", tz="UTC")        # a Tuesday 15m close 
 LOSS = 1.0                                                 # every loss at a stop, and every round trip, in the tests
 LONG, SHORT = "random_bracket", "tsmom"                    # spec rule names whose generators the tests replace
 # a passing history qualification (ADR 0061: no strategy arm enters on demo without one): the test arms may enter
-QUALIFIED: dict[str, Any] = {"screen": "docs/research/research-plan.md", "screen_window": "2010-01-01..2017-12-31",
-                             "confirm": "registry:H-99-confirm", "confirm_window": "2018-01-01..2025-09-30",
-                             "verdict": "pass", "cost_basis": "measured"}
+QUALIFIED: dict[str, Any] = {
+    "screen": "docs/research/research-plan.md", "screen_window": "2010-01-01..2017-12-31",
+    "confirm": "docs/decisions/0061-qualify-before-demo.md", "confirm_window": "2018-01-01..2025-09-30",
+    "verdict": "pass", "cost_basis": "measured", "cost_table": "costs-icm-2026-10-30",
+    "cost_cells": {"london:market": {"n": 40, "mean_usd": 0.05, "prior_usd": 0.03, "charged_usd": 0.05,
+                                     "from_prior": False}}}
 
 
 class _Terminal(PaperBroker):

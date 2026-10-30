@@ -109,8 +109,13 @@ Definitions are those of `docs/research/candidates/time_structure/volatility_ban
   - H-61's scalp stop: running net ≤ −30 R within the first 300;
   - **futility** at 300 and at 1,000: the one-sided 95% upper bound of F1A's mean net R at measured cost < +0.03 R.
     The arm stops, and F1C stops with it.
-- **Graduation:** H-61's rule at 300, **and** F1A − F1C net R paired by decision time with a 95% CI > 0. The decisive
-  forward read is at 1,000 (alone) or 2,000 (paired) if no stop fires first.
+- **Graduation: withdrawn 2026-10-30** (quant ruling on the owner rule 2026-10-30, ADR 0061: "every strategy should
+  have been back tested and qualified before it is tested and learn from live trades that are taken on demo
+  accounts"). F1A's demo fills are no longer read as strategy evidence: no F1A − F1C net R comparison is made on them,
+  and F1A cannot graduate from demo. F1A runs on demo only as a cost arm (`role: cost`, `cost_read: O-11`) until its
+  signal-time cost read below has its 200 admissible fills, then it and F1C are refused new entries. The stops above
+  stay, as safety stops only. Its edge is read only by O-11 on history (2.3), and a qualification on its row is what
+  brings it back.
 - **Signal-time cost read** (a fill-cost measurement, not an outcome): at ≥ 200 admissible F1A fills.
 
 ### 2.3 O-11 confirmation read (2027Q1, 1 slot)

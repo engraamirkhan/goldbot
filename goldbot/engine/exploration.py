@@ -55,6 +55,10 @@ The plan's rules, as built here:
   passing `qualification` on its row (a screen AND a confirm, verdict pass, measured costs) is refused the same way,
   from the start, on every account (`entry_refused`: the loader's stamp, then the row read again here; journalled
   `exploration_arm_unqualified` with the reason). The random controls and the cost arms (`role` control/cost) run.
+  A cost arm (F1A, G1A) runs only until its prereg cost read has its admissible fills (200, 100; quant ruling
+  2026-10-30), counted once a minute in this host's ledger (`refresh_cost_reads`); then it and its paired control are
+  refused the same way (journalled `exploration_arm_cost_read_complete`, "cost read complete, qualify first"). An
+  unreadable count keeps them running and warns (`exploration_cost_read_unread`, once until a read succeeds).
 * Identity: magic_base + 95 (`goldbot.engine.magic`), order id and MT5 comment `ex<arm5>-<epoch10>-<h8>` (27 chars,
   inside MT5's 29). After a restart a position is adopted by its order row or its comment and its hold resumes from
   the broker's open time.
@@ -88,7 +92,16 @@ from goldbot.db import Database, RecordRepo
 from goldbot.engine import auto_entry, cost_probe
 from goldbot.execution.costs import CONTRACT_OZ
 from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec
-from goldbot.research.arms import SPEC_RULE, arm_hash, load_arms, qualification_refusal, stamp_qualification
+from goldbot.research.arms import (
+    COST_ARMS,
+    COST_CONTROLS,
+    COST_READ_DONE,
+    SPEC_RULE,
+    arm_hash,
+    load_arms,
+    qualification_refusal,
+    stamp_qualification,
+)
 from goldbot.research.arms import Arm as SpecArm
 
 if TYPE_CHECKING:
@@ -510,6 +523,8 @@ class Exploration:
             eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": "exploration_arm_unqualified",
                                   "arm": a, "rule": self.unqualified[a]})
         self.retired = self.retired | frozenset(self.unqualified)
+        self.cost_read_at: pd.Timestamp | None = None   # the minute the cost arms' fills were last counted
+        self.cost_read_warned = False                   # an unreadable count is journalled once until a read succeeds
         self.retired_read: pd.Timestamp | None = None
         self.retired_ok = False                         # a read has succeeded since the start: entries may go out
         self.lost_seen: dict[int, pd.Timestamp] = {}     # lost record -> the day it was last journalled
@@ -869,6 +884,7 @@ def on_pass(eng: Engine, tick: Tick) -> None:
     try:
         now = eng._now(tick)
         refresh_retired(eng, ex, now)
+        refresh_cost_reads(eng, ex, now)
         ct = eng._closed_through
         if ct is not None and (ex.last_close is None or ct > ex.last_close) and step(eng, ct):
             ex.last_close = ct                      # a deferred close (clock ahead) is tried again next pass
@@ -909,6 +925,51 @@ def refresh_retired(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
         log.warning("exploration arm %s retired at its pre-registered stop: no new entries", arm_id)
         eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + arm_id, "action": "exploration_arm_retired",
                               "arm": arm_id})
+    _block(eng, ex, [s for s in ex.queue if s.arm_id in ex.retired], now, "arm_retired")
+
+
+def admissible_fills(conn: Any, arm_id: str) -> int:
+    """The arm's admissible fills in this host's ledger, every account: filled, closed by its own barrier (not
+    censored), net P&L recorded (`telegram.labs.admissible`, the arm's n on every view)."""
+    return sum(1 for t in LEDGER.select(conn, "arm_id = ? AND closed = 1", (arm_id,))
+               if t.fill_price is not None and t.exit_utc is not None and t.pnl is not None and not t.censored)
+
+
+def refresh_cost_reads(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
+    """Once a minute: a cost arm (`research.arms.COST_ARMS`) whose prereg cost read has its admissible fills is
+    refused new entries with its paired control (quant ruling 2026-10-30: "The cost exemption ends when the cost-read
+    fills are counted"); both stay configured, so open positions keep every exit. An unreadable count keeps them
+    running and warns (journalled once until a read succeeds). Entries only."""
+    minute = now.floor("min")
+    if ex.cost_read_at == minute:
+        return
+    ex.cost_read_at = minute
+    due = sorted(a for a in ex.arms if ex.arms[a].spec.role == "cost" and a in COST_ARMS and a not in ex.retired)
+    if not due:
+        return
+    try:
+        with ex.db.connection() as conn:
+            counts = {a: admissible_fills(conn, a) for a in due}
+    except Exception as exc:
+        log.warning("cost-read fills unreadable (%s): cost arms %s keep running", type(exc).__name__, due)
+        if not ex.cost_read_warned:
+            ex.cost_read_warned = True
+            for a in due:
+                eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + a,
+                                      "action": "exploration_cost_read_unread", "arm": a, "error": type(exc).__name__})
+        return
+    ex.cost_read_warned = False
+    done = [a for a in due if counts[a] >= COST_ARMS[a][1]]
+    stop = sorted({*done, *(COST_CONTROLS[a] for a in done if COST_CONTROLS.get(a) in ex.arms)} - ex.retired)
+    if not stop:
+        return
+    ex.retired = ex.retired | frozenset(stop)
+    for a in stop:
+        ex.unqualified[a] = COST_READ_DONE
+        log.warning("exploration arm %s refused: %s", a, COST_READ_DONE)
+        eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + a,
+                              "action": "exploration_arm_cost_read_complete", "arm": a, "rule": COST_READ_DONE,
+                              "fills": counts.get(a)})
     _block(eng, ex, [s for s in ex.queue if s.arm_id in ex.retired], now, "arm_retired")
 
 

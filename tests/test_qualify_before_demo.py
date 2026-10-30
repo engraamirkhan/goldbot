@@ -7,6 +7,7 @@ arm stays configured (as a spec retirement), so an open position keeps every exi
 and never stops the engine."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -38,10 +39,16 @@ def _row(arm_id: str = "Q1", **extra: Any) -> dict[str, Any]:
     return {**a.model_dump(exclude={"entry_refused"}), "config_hash": arms.arm_hash(a), **extra}
 
 
-def _load(tmp_path: Path, rows: list[dict[str, Any]]) -> dict[str, arms.Arm]:
+def _load(tmp_path: Path, rows: list[dict[str, Any]], registry: Path | None = None) -> dict[str, arms.Arm]:
+    """The rows through the loader, against `registry` (default: a registry file that is not there)."""
     path = tmp_path / "arms.yaml"
     path.write_text(yaml.safe_dump({"arms": rows}))
-    return {a.id: a for a in arms.load_arms(path)}
+    reg = registry if registry is not None else tmp_path / "no-registry.jsonl"
+    return {a.id: a for a in arms.load_arms(path, registry=reg)}
+
+
+def _cells(**change: Any) -> dict[str, Any]:
+    return {"london:market": {**QUALIFIED["cost_cells"]["london:market"], **change}}
 
 
 # ------------------------------------------------------------------------------------------------ the load layer
@@ -75,11 +82,48 @@ def test_a_qualification_needs_a_screen_and_a_confirm_both_passing_on_measured_c
     assert got.entry_refused.startswith(RULE) and why in got.entry_refused, got.entry_refused
 
 
-def test_a_doc_reference_may_carry_an_anchor_and_a_registry_id_is_accepted_on_its_form(tmp_path) -> None:
-    q = {**QUALIFIED, "screen": "docs/research/research-plan.md#table-3", "confirm": "registry:autodisc:abc123"}
+def test_a_doc_reference_may_carry_an_anchor(tmp_path) -> None:
+    q = {**QUALIFIED, "screen": "docs/research/research-plan.md#table-3"}
     assert _load(tmp_path, [_row("Q1", qualification=q)])["Q1"].entry_refused == ""
-    bad = {**QUALIFIED, "confirm": "registry:"}
-    assert "does not exist" in _load(tmp_path, [_row("Q1", qualification=bad)])["Q1"].entry_refused
+
+
+@pytest.mark.parametrize("ref", ["docs/research/\x00plan.md", "docs/" + "a" * 5_000 + ".md", "registry:" + "a" * 5_000,
+                                 "registry:abc\x00", "/etc/hosts", "docs/research", ""])
+def test_a_reference_the_filesystem_cannot_read_refuses_its_arm_and_never_raises(tmp_path, ref: str) -> None:
+    got = _load(tmp_path, [_row("Q1", qualification={**QUALIFIED, "confirm": ref}), _row("Q2", qualification=QUALIFIED)])
+    assert got["Q1"].entry_refused.startswith(RULE) and got["Q2"].entry_refused == ""
+
+
+def test_a_registry_reference_must_name_a_row_of_the_registry_file_when_the_file_is_there(tmp_path) -> None:
+    reg = tmp_path / "research_registry.jsonl"
+    reg.write_text(json.dumps({"trial": 1, "config_hash": "abc123", "status": "evaluated"}) + "\nnot json\n")
+    ok = {**QUALIFIED, "confirm": "registry:abc123"}
+    assert _load(tmp_path, [_row("Q1", qualification=ok)], reg)["Q1"].entry_refused == ""
+    miss = {**QUALIFIED, "confirm": "registry:fff999"}
+    assert "does not exist" in _load(tmp_path, [_row("Q1", qualification=miss)], reg)["Q1"].entry_refused
+
+
+def test_without_the_registry_file_a_registry_reference_needs_the_evaluators_commit(tmp_path) -> None:
+    def why(ref: str) -> str:
+        return _load(tmp_path, [_row("Q1", qualification={**QUALIFIED, "confirm": ref})])["Q1"].entry_refused
+    assert why("registry:abc123@" + "0123456789abcdef" * 2 + "01234567") == ""
+    for bad in ("registry:abc123", "registry:abc123@" + "z" * 40, "registry:abc123@abc1234", "registry:@" + "a" * 40):
+        assert why(bad).startswith(RULE) and "does not exist" in why(bad), bad
+
+
+@pytest.mark.parametrize("change, why", [
+    ({"cost_table": ""}, "invalid"),                                        # the cost table version is cited
+    ({"cost_cells": {}}, "no measured cost cell"),                          # no measured cell: nothing qualifies
+    ({"cost_cells": _cells(from_prior=True)}, "prior"),
+    ({"cost_cells": _cells(n=29)}, "fills"),
+    ({"cost_cells": _cells(charged_usd=0.04)}, "worse"),                     # below the measured mean
+    ({"cost_cells": _cells(mean_usd=0.01, charged_usd=0.02)}, "worse"),      # below the prior
+    ({"cost_cells": {"london:market": "measured"}}, "invalid"),
+])
+def test_measured_costs_cite_the_table_and_every_cell_is_measured_on_enough_fills_at_the_worse_of_measured_and_prior(
+        tmp_path, change: dict[str, Any], why: str) -> None:
+    got = _load(tmp_path, [_row("Q1", qualification={**QUALIFIED, **change})])["Q1"]
+    assert got.entry_refused.startswith(RULE) and why in got.entry_refused, got.entry_refused
 
 
 @pytest.mark.parametrize("bad", ["pass", ["pass"], {"verdict": "pass"}, 7])
@@ -92,20 +136,41 @@ def test_a_written_entry_refused_value_is_overwritten_by_the_loader(tmp_path) ->
     assert _load(tmp_path, [_row("Q1", entry_refused="")])["Q1"].entry_refused.startswith(RULE)
 
 
-def test_the_control_and_cost_roles_are_exempt_and_a_control_role_on_a_strategy_body_is_refused(tmp_path) -> None:
+def test_the_control_role_is_exempt_and_a_control_role_on_a_strategy_body_is_refused(tmp_path) -> None:
     rnd = arms.Arm(id="R1", rule="random_bracket", timeframe="15m",
                    params={"minutes": [0], "stop_atr": 1.5, "target_r": 2.0, "hold_bars": 4})
     rows = [{**rnd.model_dump(exclude={"entry_refused"}), "config_hash": arms.arm_hash(rnd), "role": "control"},
-            _row("K1", role="cost"), _row("FAKE", role="control")]
+            _row("FAKE", role="control")]
     got = _load(tmp_path, rows)
-    assert got["R1"].entry_refused == "" and got["K1"].entry_refused == ""
+    assert got["R1"].entry_refused == ""
     assert got["FAKE"].entry_refused.startswith(RULE) and "control" in got["FAKE"].entry_refused
+
+
+def test_the_cost_role_is_only_for_f1a_and_g1a_each_naming_its_own_prereg_cost_read(tmp_path) -> None:
+    assert arms.COST_ARMS == {"F1A": ("O-11", 200), "G1A": ("O-12", 100)}
+    got = _load(tmp_path, [_row("K1", role="cost", cost_read="O-11"), _row("F1A", role="cost"),
+                           _row("G1A", role="cost", cost_read="O-11")])
+    for arm_id in ("K1", "F1A", "G1A"):
+        assert got[arm_id].entry_refused.startswith(RULE) and "cost" in got[arm_id].entry_refused, arm_id
+    ok = _load(tmp_path, [_row("F1A", role="cost", cost_read="O-11"), _row("G1A", role="cost", cost_read="O-12")])
+    assert ok["F1A"].entry_refused == ok["G1A"].entry_refused == ""
 
 
 # ------------------------------------------------------------------------------------------------ the live spec
 @pytest.fixture(scope="module")
 def spec() -> dict[str, arms.Arm]:
     return {a.id: a for a in arms.load_arms(SPEC)}
+
+
+def test_the_spec_names_f1as_and_g1as_cost_reads_outside_the_hash(spec) -> None:
+    assert (spec["F1A"].cost_read, spec["G1A"].cost_read) == ("O-11", "O-12")
+    assert all(a.cost_read == "" for i, a in spec.items() if i not in arms.COST_ARMS)
+
+
+def test_f1as_forward_graduation_rule_is_withdrawn_with_a_dated_note_and_its_stops_stay() -> None:
+    text = (SPEC.parents[1] / "docs" / "research" / "prereg-2026-10-26-time-structure.md").read_text()
+    assert "**Graduation:** H-61's rule at 300, **and** F1A" not in text
+    assert "owner rule 2026-10-30" in text and "futility" in text
 
 
 def test_every_exempt_arm_carries_its_role_and_every_other_arm_is_a_strategy_refused_today(spec) -> None:
@@ -218,3 +283,65 @@ def test_the_runtime_qualification_view_matches_the_engine_per_account() -> None
     for account_id, (running, refused) in view.items():
         assert set(running) == RUNNING[account_id]
         assert set(refused) == NEWLY_REFUSED[account_id]
+
+
+# ------------------------------------------------------------------------------------------------ the cost read's end
+def _cost_arm(arm_id: str = "F1A", read: str = "O-11") -> exploration.Arm:
+    arm = _arm(arm_id)
+    return arm.model_copy(update={"spec": arm.spec.model_copy(update={"qualification": None, "entry_refused": "",
+                                                                      "role": "cost", "cost_read": read})})
+
+
+def _fills(tmp_path: Path, arm_id: str, n: int, *, censored: int = 0) -> None:
+    """`n` admissible fills of `arm_id` in aux.db's ledger (filled, closed by its own barrier, P&L recorded), and
+    `censored` more that do not count."""
+    db = exploration.ledger_db(str(tmp_path))
+    t = pd.Timestamp("2025-03-03 10:00", tz="UTC")
+    with db.write() as conn:
+        for i in range(n + censored):
+            exploration.LEDGER.upsert(conn, exploration.ExplorationRecord(
+                client_order_id=f"{arm_id}-{i}", account_id="icm-probe", arm_id=arm_id, family="x", tf="15m", side=1,
+                lots=0.01, signal_utc=t, sent_utc=t, atr_usd=5.0, stop_usd=5.0, target_usd=10.0, hold_s=3600,
+                fill_price=2000.0, exit_utc=t + pd.Timedelta(hours=1), pnl=-1.0, censored=i >= n))
+
+
+def test_a_cost_arm_runs_until_its_cost_read_has_its_admissible_fills(tmp_path, _fixed) -> None:
+    _fills(tmp_path, "F1A", 199, censored=5)                                 # censored closes never count
+    eng, pb = _engine(tmp_path, [_cost_arm()], qualify=False)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert _sent(eng) == ["F1A"]
+
+
+def test_a_cost_arm_whose_cost_read_is_complete_is_refused_with_its_paired_control(tmp_path, _fixed) -> None:
+    _fills(tmp_path, "G1A", 100)
+    ctl = _cost_arm("G1C").spec.model_copy(update={"role": "control", "cost_read": "",
+                                                   "params": {**_cost_arm("G1C").spec.params, "control": "t"}})
+    eng, pb = _engine(tmp_path, [_cost_arm("G1A", "O-12"), _arm("G1C").model_copy(update={"spec": ctl})],
+                      qualify=False)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    ex = eng.exploration
+    assert ex is not None and {"G1A", "G1C"} <= ex.retired and set(ex.arms) >= {"G1A", "G1C"}   # still configured
+    done = [d for d in eng.decisions if d.get("action") == "exploration_arm_cost_read_complete"]
+    assert sorted(d["arm"] for d in done) == ["G1A", "G1C"]
+    assert all(d["rule"] == "cost read complete, qualify first" for d in done)
+    assert _sent(eng) == []
+
+
+def test_an_unreadable_fill_count_keeps_the_cost_arm_running_and_warns(tmp_path, _fixed, monkeypatch) -> None:
+    eng, pb = _engine(tmp_path, [_cost_arm()], qualify=False)
+
+    def boom(*a: Any, **k: Any) -> Any:
+        raise OSError("disk")
+    monkeypatch.setattr(exploration, "admissible_fills", boom)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert _sent(eng) == ["F1A"]
+    assert [d["arm"] for d in eng.decisions if d.get("action") == "exploration_cost_read_unread"] == ["F1A"]
+
+
+def test_the_engine_starts_and_runs_its_other_arms_when_one_row_cites_an_unreadable_path(tmp_path, _fixed) -> None:
+    arm = _arm("nul")
+    bad = arm.model_copy(update={"spec": arm.spec.model_copy(update={
+        "qualification": {**QUALIFIED, "confirm": "docs/\x00" + "a" * 5_000}, "entry_refused": ""})})
+    eng, pb = _engine(tmp_path, [_arm("ok"), bad], qualify=False)
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    assert eng.exploration is not None and "nul" in eng.exploration.retired and _sent(eng) == ["ok"]

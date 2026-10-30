@@ -22,6 +22,12 @@ Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs
   - A family comes back only through an evaluator commit that adds a passing qualification to its rows.
   - spec_rule arms are NOT exempt. On this base `autodisc_register` registers explore survivors without a confirm read, so it must write a qualification once ADR 0058's confirm stage lands.
   - Engine tests now declare their strategy arms qualified (`tests.test_exploration_engine.qualified`, `_engine(qualify=...)`).
+  - Review round 2026-10-30, ADR 0061 amendment:
+    - A reference with a NUL byte or an over-long path refuses its arm and never raises.
+    - A `registry:<config_hash>` reference must be a row of the registry file; without the file it needs `@<40-hex evaluator commit>`.
+    - The `cost` role is only for F1A (`cost_read: O-11`) and G1A (`cost_read: O-12`). Each is refused with its paired control once its admissible fills reach 200 / 100 (`exploration.refresh_cost_reads`). An unreadable count keeps it running and journals `exploration_cost_read_unread`.
+    - A qualification must cite `cost_table` and `cost_cells`, each cell measured on at least 30 fills and charged at the worse of measured and prior.
+    - F1A's forward Graduation rule is withdrawn in prereg-2026-10-26-time-structure.md.
 - ADR 0037 amendment 7 (quant C5 on ADR 0057). Under icm-probe's £10 probe `max_loss`, the 1h (~£16.5) and 4h (~£38) mirror probes are skipped. Cost evidence now comes only from the scheduled M1 probes, which are biased low (about $0.156 against the conservative $0.23). The 1h+ hurdles already use the conservative cost, so no code changed:
   - research labels and arm reads charge the frozen $0.23, or each arm's own fills;
   - the H-81 cost stop falls back to $0.23 + $0.70 below 30 fills;
