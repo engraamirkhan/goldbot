@@ -2,7 +2,8 @@
 
 * `config/accounts.yaml` holds everything except secrets and MT5 login numbers (the repo is public): a login lives in
   the keyring under `mt5-login-<account_id>`, next to the password `mt5-<account_id>`; a login left in the yaml is
-  still read, but nothing writes one there.
+  still read, but nothing writes one there. Two ENABLED accounts resolving to one (login, server) are refused at load
+  (`shared_logins`; the login is compared in memory, never printed): one terminal would trade as two accounts.
 * Secrets live in the OS keyring (macOS Keychain / Windows Credential Manager) via `keyring`, falling back
   to state/.secrets.json only when no keyring backend exists AND GOLDBOT_ALLOW_PLAINTEXT=1 (headless Linux CI; never
   on macOS/Windows). That file is plaintext, owner-only (0600, replaced atomically), not encrypted; an existing one is
@@ -36,7 +37,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Collection, Iterator, Literal
+from typing import Any, Callable, Collection, Iterable, Iterator, Literal
 
 import yaml
 from pydantic import ConfigDict, Field, field_validator, model_validator
@@ -594,7 +595,24 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
     if len(hosts) > 1:      # ADR 0037 amendment 4: one shadow book, one host; two would trade it twice
         raise ValueError(f"{len(hosts)} enabled accounts are the shadow host in config/accounts.yaml: exactly one may "
                          f"be (move shadow_host and cost_probe off the other, ADR 0037 amendment 4)")
+    if twins := shared_logins(out.values()):
+        raise ValueError("enabled accounts " + "; ".join(" and ".join(t) for t in twins) + " resolve to the same MT5 "
+                         "login and server in the keyring: one terminal would trade as two accounts under two sets of "
+                         "limits. Store the right login (python -m goldbot.ops.accounts set mt5-login-<account>) or "
+                         "disable one")
     return out
+
+
+def shared_logins(accounts: Iterable[Account]) -> list[tuple[str, ...]]:
+    """Groups of ENABLED accounts with the same known (login, server), account ids sorted (data-engineer 2026-10-30:
+    icm-probe's terminal ran on icm-demo's login for a week and every check passed, because each account was verified
+    against its own keyring login and both held one number). Compared in memory only: the login is never returned,
+    printed or logged. An account without a login (not resolved, or `logins=False`) is not compared."""
+    by: dict[tuple[int, str], list[str]] = {}
+    for a in accounts:
+        if a.enabled and a.login is not None:
+            by.setdefault((int(a.login), a.server), []).append(a.account_id)
+    return sorted(tuple(sorted(ids)) for ids in by.values() if len(ids) > 1)
 
 
 def login_key(account_id: str) -> str:

@@ -135,12 +135,34 @@ class Arm(FrozenRecord):
     # confirmation credit" (8.8) and H-80's box family, whose 2018+ half is its evaluator's single confirmation read.
     # A run policy, like status: not in the hash
     forward_only: bool = False
+    # A retirement from demo trading recorded on the arm's own row, as the daily review records a stop in aux.db
+    # `exploration_arm_status` (day, rule): "A retired unit keeps its K, its registry row and its arm id (never
+    # reused)" (prereg-amendment-2026-10-30-kill-rules.md A2). The engine sends no new entry of it on any account and
+    # keeps it configured, so an open position keeps every exit (`goldbot.engine.exploration.spec_retired`). Run
+    # policy, like status: not in the hash, so the frozen body and its id stay as they were
+    retired_day: str | None = None
+    retired_rule: str = ""
     config_hash: str | None = None
+
+    @property
+    def retired(self) -> bool:
+        return self.retired_day is not None
+
+    @property
+    def family(self) -> str:
+        """The arm's family: its rule, or for a `specialist` arm the specialist it runs (box_break, session_open, ...),
+        the name its exploration rows carry and every view reads it under."""
+        return family_of(self.rule, self.params)
 
     @model_validator(mode="after")
     def _consistent(self) -> Arm:
         if self.rule not in RULES:
             raise ValueError(f"{self.id}: unknown rule {self.rule!r}; known: {RULES}")
+        if self.retired_day is not None and not _DAY.match(self.retired_day):
+            raise ValueError(f"{self.id}: retired_day {self.retired_day!r} is not YYYY-MM-DD")
+        if (self.retired_day is None) != (not self.retired_rule):
+            raise ValueError(f"{self.id}: a retirement names both its retired_day and its retired_rule (the rule that "
+                             "retired it), or neither")
         if self.status == "blocked" and not self.note:
             raise ValueError(f"{self.id}: a blocked arm needs a note saying what unblocks it")
         if "window_utc" in self.params and "window_local" in self.params:
@@ -170,7 +192,14 @@ class Arm(FrozenRecord):
         return self
 
 
+def family_of(rule: str, params: dict[str, Any]) -> str:
+    """An arm's family from its rule and params: the rule, or for a `specialist` arm the specialist it runs."""
+    spec = params.get("specialist") if rule == "specialist" else None
+    return spec if isinstance(spec, str) and spec else rule
+
+
 _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def local_window(params: dict[str, Any]) -> SessionWindow | None:
@@ -204,8 +233,8 @@ def local_window(params: dict[str, Any]) -> SessionWindow | None:
 
 
 def arm_hash(arm: Arm) -> str:
-    """The arm's frozen configuration: sha256 over id, rule, timeframe, params, max_open (status, note and
-    forward_only are prose and run policy)."""
+    """The arm's frozen configuration: sha256 over id, rule, timeframe, params, max_open (status, note,
+    forward_only and a retirement are prose and run policy)."""
     body = {"id": arm.id, "rule": arm.rule, "timeframe": arm.timeframe, "params": arm.params, "max_open": arm.max_open}
     return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:16]
 

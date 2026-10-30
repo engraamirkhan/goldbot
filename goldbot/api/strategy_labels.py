@@ -158,9 +158,10 @@ class Catalog(FrozenRecord):
 
 
 def arm_family(rule: str, params: dict[str, object]) -> str:
-    """An arm's family: its rule, or for a `specialist` arm the specialist it runs."""
-    spec = params.get("specialist") if rule == "specialist" else None
-    return spec if isinstance(spec, str) and spec else rule
+    """An arm's family: its rule, or for a `specialist` arm the specialist it runs (`research.arms.family_of`, the name
+    the engine records since 2026-10-30; rows recorded before as "specialist" read the same through this)."""
+    from goldbot.research.arms import family_of
+    return family_of(rule, dict(params))
 
 
 def account_label(account: str | None) -> str:

@@ -191,3 +191,7 @@ counts:
 #    VS5B (blocked, 0 fills). Objections to the plan's stated grounds: VOID never permits early retirement (it only
 #    makes the 300 read descriptive); "ORB closed on history (R-02/H-76)" and "asia_drift hypothesis retired" are not
 #    registered kill rules (XAD1H was registered after H-04's STOP). A2 is the sole valid ground for every id above.
+# APPLIED 2026-10-30 (demo reset lane, on the evaluator's and the quant-reviewer's A2 signatures): R4's ids carry
+#    `retired_day` / `retired_rule` (with the A2 rate from research-plan.md table 3) on their rows in
+#    config/exploration_arms.yaml; the engine sends no new entry of them. XBB15 is NOT retired: its rate could not be
+#    measured in the lane (aux.db is on the brain); retire it by the same fields if the data-engineer measures < 2/day.

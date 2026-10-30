@@ -2004,6 +2004,20 @@ word, never the reply itself. The watchdog acts on that word alone:
   back. Never on `wrong_account`.
 It restarts the terminal at most once every 10 min.
 
+### Two accounts on one MT5 login (`accounts`, `reconcile:<account>`)
+
+Incident 2026-10-19..25: icm-probe's terminal ran on icm-demo's login and every check passed. Now:
+- `config/accounts.yaml does not load: ... resolve to the same MT5 login and server` (health `accounts` FAIL; every
+  engine refuses to start): two enabled accounts hold one login in the brain's keyring. Store the right one with
+  `goldbot accounts set mt5-login-<account>` (hidden prompt; Claude runs it, the number never goes in a chat or file),
+  copy it to that account's box as in 0.3b B6, then restart the engines. Disabling one account also clears it.
+- `reconcile:<account>` FAIL "terminal on one MT5 login with <other> the same day": the daily ledger read both
+  terminals on one login (only a one-way fingerprint is kept). Check each box's terminal login (0.3 "Later logins"),
+  then `goldbot-mt5 login <account>` on the wrong box.
+- `reconcile:<account>` WARN "balance and equity identical to <other>'s snapshot": the same check for days the
+  fingerprint cannot cover (two idle accounts at one opening balance also match; then it clears on the first trade).
+Fills of the days two accounts shared a login stay out of every read until the data-engineer clears them.
+
 ### Terminal down (`terminal:<account>`)
 
 The terminal runs in its own unit, `goldbot-mt5-terminal@<account>`. That unit is the only thing that starts it. It

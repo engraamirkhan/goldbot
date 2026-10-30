@@ -47,7 +47,9 @@ The plan's rules, as built here:
   positions keep their stop, target, hold and every exit (never closed as an orphan). An unreadable table keeps the
   arms already known retired (a retirement is never undone by a read error); until the first read after a start
   succeeds no exploration entry is sent (its signals are recorded blocked `arm_status_unread`; trading-safety
-  2026-10-26: a restart must not trade an arm it cannot know is not retired). Exits are never affected.
+  2026-10-26: a restart must not trade an arm it cannot know is not retired). Exits are never affected. An arm whose
+  frozen spec row records a retirement (`retired_day`/`retired_rule`, e.g. A2 readability 2026-10-30) is retired the
+  same way from the start (`spec_retired`, journalled `exploration_arm_retired` with its rule), on every account.
 * Identity: magic_base + 95 (`goldbot.engine.magic`), order id and MT5 comment `ex<arm5>-<epoch10>-<h8>` (27 chars,
   inside MT5's 29). After a restart a position is adopted by its order row or its comment and its hold resumes from
   the broker's open time.
@@ -167,7 +169,15 @@ class Arm(FrozenRecord):
 
     @property
     def family(self) -> str:
+        """The arm's rule: the family the RiskGate and the engine's own rule checks read (`Intent.family`)."""
         return self.spec.rule
+
+    @property
+    def ledger_family(self) -> str:
+        """The family its rows and candidates are recorded under: the rule, or a `specialist` arm's specialist
+        (`research.arms.Arm.family`); rows recorded as "specialist" before 2026-10-30 read the same through the views,
+        which label an arm from its registry row (`api.strategy_labels.arm_family`)."""
+        return self.spec.family
 
     @property
     def key(self) -> str:
@@ -251,6 +261,14 @@ def _load_spec_arm_rows(path: Path, *, live_class: bool) -> tuple[list[SpecArm],
             continue
         arms.append(arm)
     return arms, rejected
+
+
+def spec_retired(cfg: ExplorationConfig) -> frozenset[str]:
+    """The arms of `cfg` whose frozen spec row records a retirement (`research.arms.Arm.retired_day`, e.g. A2
+    readability, prereg-amendment-2026-10-30-kill-rules.md: "A retired unit keeps its K, its registry row and its arm
+    id"). They stay configured, so an open position keeps its stop, target, hold and every exit (an arm no longer
+    configured would be closed at once); the engine queues no signal of them, as of an arm retired at its stop."""
+    return frozenset(a.arm_id for a in cfg.arms if a.spec.retired)
 
 
 def config_for(acc: Account, spec_path: Path = SPEC_PATH,
@@ -442,7 +460,13 @@ class Exploration:
         self.weights_cache: tuple[pd.Timestamp, dict[str, float]] | None = None
         self.cost_scale: dict[str, float] = {}         # H-81 cost stop: arm -> its share's scale (`shares`)
         self.champion_seen: dict[str, tuple[pd.Timestamp | None, bool]] = {}
-        self.retired: frozenset[str] = frozenset()      # arms retired at their stop (`refresh_retired`)
+        # arms retired at their stop (`refresh_retired`), from the start every arm its spec row retires (`spec_retired`)
+        self.retired: frozenset[str] = spec_retired(cfg) & frozenset(a.arm_id for a in ok)
+        for a in sorted(self.retired):
+            log.warning("exploration arm %s retired in the spec (%s): no new entries, exits managed", a,
+                        self.arms[a].spec.retired_rule)
+            eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": "exploration_arm_retired",
+                                  "arm": a, "rule": self.arms[a].spec.retired_rule})
         self.retired_read: pd.Timestamp | None = None
         self.retired_ok = False                         # a read has succeeded since the start: entries may go out
         self.lost_seen: dict[int, pd.Timestamp] = {}     # lost record -> the day it was last journalled
@@ -1243,7 +1267,7 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
     taken = blocked is None
     try:
         record_candidate(ex.db, candidate_id=cid, account_id=eng.cfg.account_id, broker=ex.broker, arm_id=arm.arm_id,
-                         family=arm.family, style=arm.style, tf=arm.tf, side=s.side, decision_utc=s.bar_ts,
+                         family=arm.ledger_family, style=arm.style, tf=arm.tf, side=s.side, decision_utc=s.bar_ts,
                          stop_dist=s.stop_usd, target_dist=s.target_usd, max_hold_s=s.hold_bars * tf_seconds(arm.tf),
                          taken=taken, is_control=arm.control_share is not None, arm_config_hash=arm.config_hash,
                          blocked_reason=blocked, branch=branch if taken else "blocked", u=u,
@@ -1373,7 +1397,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
                latency_ms: float) -> ExplorationRecord:
         at_gate.append(at_stop)
         return ExplorationRecord(
-            client_order_id=pid, account_id=eng.cfg.account_id, arm_id=arm.arm_id, family=arm.family, tf=arm.tf,
+            client_order_id=pid, account_id=eng.cfg.account_id, arm_id=arm.arm_id, family=arm.ledger_family, tf=arm.tf,
             side=side, lots=float(res.filled_lots if filled else gd.lots), signal_utc=s.bar_ts, sent_utc=sent,
             atr_usd=stop_d, stop_usd=gd.stop_distance, target_usd=target_d, hold_s=hold_s,
             requested_price=price, spread_usd=round(tick.ask - tick.bid, 6), latency_ms=round(latency_ms, 3),
@@ -1721,7 +1745,7 @@ def record_close(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float | 
         start = tr.opened_utc or tr.entry_bar_ts
         rec = LEDGER.get(conn, cid) or ExplorationRecord(
             client_order_id=cid, account_id=eng.cfg.account_id, arm_id=arm_id,
-            family=arm.family if arm else "", tf=arm.tf if arm else "", side=tr.side,
+            family=arm.ledger_family if arm else "", tf=arm.tf if arm else "", side=tr.side,
             lots=float(tr.initial_lots or tr.lots), signal_utc=start, sent_utc=start, atr_usd=0.0,
             stop_usd=abs((tr.open_price or 0.0) - (tr.initial_sl or tr.open_price or 0.0)), target_usd=0.0,
             hold_s=arm.hold_s if arm else 0, fill_price=tr.open_price, position_id=pid)
