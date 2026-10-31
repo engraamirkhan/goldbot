@@ -291,8 +291,14 @@ stays `enabled: false` for good, and its terminal units are stopped (step O1 bel
 `vantage-live-obs` is the owner's **live** Vantage account, read and never traded. Its terminal logs in with the MT5
 **investor (read-only) password**, so Vantage rejects any order. On top of that:
 - The account is never enabled, never unlocked, and never loaded by an engine, arm or allocator.
-- The bridge serves read-only methods only. It is observe-only from the account's `kind` and from
-  `GOLDBOT_BRIDGE_OBSERVE_ONLY=1` in its unit, and either one is enough.
+- The bridge serves an allowlist only: bars, ticks, symbol terms and the account read (no positions, history or
+  orders). It is observe-only from the account's `kind` and from `GOLDBOT_BRIDGE_OBSERVE_ONLY=1` in its unit, and either
+  one is enough.
+- **Shared login.** `vantage-live` (a trading account, off) may be this same real account. A trading account whose
+  keyring login and server equal this one's is refused by `unlock-live` and by its own bridge's start. To trade the
+  account one day, change `kind` here instead (see Reversal).
+- An observe_only block edited to trade (`enabled: true`, probes, arms, ...) is dropped at load, alone, with an ERROR,
+  and the `observe` health line WARNs `refused at load`.
 - The bridge serves nothing while the terminal reports that trading is allowed (a master-password login).
 - The brain's client refuses every order call before it sends anything.
 

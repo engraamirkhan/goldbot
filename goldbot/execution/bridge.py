@@ -45,8 +45,8 @@ keyring of each machine (`mt5-bridge-url-<account>`, `mt5-bridge-token-<account>
 
 Observe only (ADR 0063, the owner's live account read for XAUUSD247 with "NO live trading"): a bridge started with
 `observe_only` (the account's `kind`, or GOLDBOT_BRIDGE_OBSERVE_ONLY=1 in its unit, whichever is stricter) serves the
-read-only methods (READ_ONLY_METHODS) and nothing else: every order, stop change and close is refused 403 before the
-queue, its GuardedBroker refuses them again, and /health lists only what it serves with `observe_only: true`. On the
+OBSERVE_METHODS allowlist (bars, ticks, symbol terms, the account read) and nothing else: positions, history, sizing,
+orders, stop changes and closes are refused 403 before the queue, its GuardedBroker refuses them again, and /health lists only what it serves with `observe_only: true`. On the
 brain, `RemoteBroker(observe_only=True)` refuses the same calls before the network (`ObserveOnlyRefused`).
 """
 from __future__ import annotations
@@ -146,8 +146,10 @@ METHODS: dict[str, tuple[str, bool]] = {
 # None, which an observe_only account refuses and every other account ignores), so MIN_COMPATIBLE stays 5.
 API_VERSION = 9
 MIN_COMPATIBLE = 5
-# ADR 0063: what an observe-only bridge serves, the retry-safe (read-only) methods; every other one is refused
-READ_ONLY_METHODS = frozenset(m for m, (_, retry_safe) in METHODS.items() if retry_safe)
+# ADR 0063 (security review of PR 236): what an observe-only bridge serves, an allowlist of read-only methods for
+# bars, ticks and symbol terms, and the account read its verify needs; no positions, history, sizing or order method
+OBSERVE_METHODS = frozenset({"get_bars", "get_bars_range", "copy_ticks", "last_tick", "symbol_info", "symbols_get",
+                             "account"})
 OBSERVE_REFUSAL = "observe_only"          # the refusal's prefix on an observe-only bridge or client (ADR 0063)
 # Methods the brain calls only with a fallback for a bridge that lacks them: never required by bridge_compat, so their
 # absence never refuses entries. Read-only methods only (an order method is never optional).
@@ -307,13 +309,13 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
     terminal state this connection read (the lane's GuardedBroker reads the account itself on every order); an order
     whose lane died with it gets no reply at all, so the brain books it ambiguous (BACKLOG 72).
 
-    `observe_only` (ADR 0063): only READ_ONLY_METHODS are served; any other method is refused 403 before the queue
+    `observe_only` (ADR 0063): only OBSERVE_METHODS are served; any other method is refused 403 before the queue
     (the terminal never sees it), no order lane is used, and /health lists the served methods with `observe_only`."""
     if len(token) < 32:
         raise ValueError("bridge token must be at least 32 characters")
     if observe_only and lane is not None:
         raise ValueError("an observe-only bridge has no order lane (ADR 0063)")
-    served = READ_ONLY_METHODS if observe_only else frozenset(METHODS)
+    served = OBSERVE_METHODS if observe_only else frozenset(METHODS)
     lost_cb = on_terminal_lost or _exit_terminal_lost
     seen: dict[str, Any] = {"state": None, "since": clock(), "lost": 0, "lost_at": 0.0,
                             "verified": not verify_first}
@@ -915,7 +917,7 @@ def bridge_server_tz(url: str, timeout_s: float = 5.0, get: Callable[..., Any] =
 
 class RemoteBroker:
     """The `Broker` protocol over the bridge. Read-only calls retry once; order calls never retry. `observe_only`
-    (ADR 0063): every call that is not read-only raises ObserveOnlyRefused before anything is sent."""
+    (ADR 0063): every call outside OBSERVE_METHODS raises ObserveOnlyRefused before anything is sent."""
 
     def __init__(self, url: str, token: str, *, name: str = "mt5-remote", timeout_s: float = 10.0,
                  order_timeout_s: float = 15.0, post: Callable[..., Any] | None = None,
@@ -928,7 +930,7 @@ class RemoteBroker:
         self._post = post or self._session.post
 
     def _call(self, method: str, *args: Any) -> Any:
-        if self.observe_only and method not in READ_ONLY_METHODS:
+        if self.observe_only and method not in OBSERVE_METHODS:
             raise ObserveOnlyRefused(f"{OBSERVE_REFUSAL}: {method} refused for {self.name}; nothing was sent (ADR 0063)")
         _, retry = METHODS[method]
         attempts = self.read_attempts if retry else 1

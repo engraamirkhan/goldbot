@@ -215,3 +215,19 @@ def test_health_reads_a_status_a_newer_collector_wrote_with_an_extra_field(tmp_p
     f.write_text(json.dumps(raw))
     chk = observe.check_observe(_ctx(tmp_path, SAT + pd.Timedelta(seconds=30)))
     assert chk.status == "ok" and "XAUUSD247 last bar" in chk.reason
+
+
+@pytest.mark.parametrize("names", [None, RuntimeError("IPC timeout")])
+def test_symbol_selection_on_a_terminal_not_logged_in_yet_logs_and_continues(names, caplog):
+    """Trading-safety LOW (PR 236): symbols_get None (no login yet) or an IPC error never ends the bridge's start."""
+    class _B:
+        def symbols_get(self, pattern: str = "*") -> Any:
+            if isinstance(names, Exception):
+                raise names
+            return names
+
+    class _Api:
+        def symbol_select(self, name: str, on: bool) -> bool:
+            raise AssertionError("nothing to select")
+    assert observe.select_symbols(_Api(), _B(), ("XAUUSD247", "XAUUSD")) == []
+    assert any("not selected" in r.getMessage() for r in caplog.records)

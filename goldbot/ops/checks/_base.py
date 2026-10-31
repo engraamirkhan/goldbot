@@ -105,6 +105,7 @@ class ObserveLaneRef(FrozenRecord):
     account_id: str
     installed: bool                   # its bridge URL is stored on this host (the installer ran)
     symbol: str                       # the 24/7 symbol whose bars must keep coming
+    refused: str | None = None        # dropped by load_accounts (its block could trade): why, and health WARNs
 
 
 # --------------------------------------------------------------------------------------------- helpers

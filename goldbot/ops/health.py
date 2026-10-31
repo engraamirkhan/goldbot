@@ -420,6 +420,8 @@ class HealthContext(Record):
             observed = [ObserveLaneRef(account_id=a.account_id, symbol=a.symbol,      # ADR 0063: read, never traded
                                        installed=bool(accounts.get_secret(f"mt5-bridge-url-{a.account_id}")))
                         for a in accounts.observe_accounts(loaded={x.account_id: x for x in listed})]
+            observed += [ObserveLaneRef(account_id=aid, symbol="", installed=False, refused=why)
+                         for aid, why in accounts.refused_observe_accounts().items()]
         except Exception as exc:
             a_err = f"{type(exc).__name__}: {exc}"
         from goldbot.execution.bridge import probe_health, probe_terminal

@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Callable, Collection, Iterable, Iterator, Literal
 
 import yaml
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from goldbot.base import FrozenRecord, Record, write_private
 from goldbot.config import ROOT
@@ -650,6 +650,7 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
     path = _accounts_path(path)
     raw = yaml.safe_load(path.read_text())
     out = {}
+    _refused_observe.clear()
     for aid, a in raw["accounts"].items():
         _check_account_name(str(aid))      # before the keyring lookup and the record: the error never echoes it
         login = a.get("login")
@@ -659,25 +660,34 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
         server = a.get("server")
         if server is None and a.get("kind") == "observe_only":    # ADR 0063: kept in the keyring, "" when not read
             server = (get_secret(server_key(aid)) or "").strip() if logins else ""
-        out[aid] = Account(account_id=aid, broker=a["broker"], mode=a["mode"], server=server or "", login=login, terminal_path=a["terminal_path"],
-                           server_tz=a["server_tz"], symbol=a["symbol"], magic_base=a["magic_base"], enabled=bool(a.get("enabled", False)),
-                           daily_loss_limit_abs=a.get("daily_loss_limit_abs"), currency=a.get("currency"),
-                           account_class=a.get("account_class"),
-                           risk_overrides=a.get("risk_overrides"), approval_mode=a.get("approval_mode", "propose"),
-                           cost_probe=CostProbe(**(a.get("cost_probe") or {})),
-                           shadow_host=bool(a.get("shadow_host", False)), probe_only=bool(a.get("probe_only", False)),
-                           dynamic_limits=a.get("dynamic_limits", False),
-                           exploration=Exploration(**(a.get("exploration") or {})),
-                           max_positions=a.get("max_positions"), order_timeout_s=a.get("order_timeout_s", 15.0),
-                           pilot=PilotRules(**(a.get("pilot") or {})),
-                           order_lane=a.get("order_lane", False),    # BACKLOG 135: read by the bridge
-                           store_symbol=a.get("store_symbol"), contract_size=a.get("contract_size"),
-                           sessions=a.get("sessions", "broker"),
-                           pauses=tuple(PauseWindow(**p) for p in a.get("pauses") or ()),
-                           weekend_only=bool(a.get("weekend_only", False)),
-                           weekend_window=WeekendWindow(**(a.get("weekend_window") or {})),
-                           kind=a.get("kind", "trading"),
-                           observe_symbols=tuple(a.get("observe_symbols") or ()))
+        try:
+            out[aid] = Account(account_id=aid, broker=a["broker"], mode=a["mode"], server=server or "", login=login, terminal_path=a["terminal_path"],
+                               server_tz=a["server_tz"], symbol=a["symbol"], magic_base=a["magic_base"], enabled=bool(a.get("enabled", False)),
+                               daily_loss_limit_abs=a.get("daily_loss_limit_abs"), currency=a.get("currency"),
+                               account_class=a.get("account_class"),
+                               risk_overrides=a.get("risk_overrides"), approval_mode=a.get("approval_mode", "propose"),
+                               cost_probe=CostProbe(**(a.get("cost_probe") or {})),
+                               shadow_host=bool(a.get("shadow_host", False)), probe_only=bool(a.get("probe_only", False)),
+                               dynamic_limits=a.get("dynamic_limits", False),
+                               exploration=Exploration(**(a.get("exploration") or {})),
+                               max_positions=a.get("max_positions"), order_timeout_s=a.get("order_timeout_s", 15.0),
+                               pilot=PilotRules(**(a.get("pilot") or {})),
+                               order_lane=a.get("order_lane", False),    # BACKLOG 135: read by the bridge
+                               store_symbol=a.get("store_symbol"), contract_size=a.get("contract_size"),
+                               sessions=a.get("sessions", "broker"),
+                               pauses=tuple(PauseWindow(**p) for p in a.get("pauses") or ()),
+                               weekend_only=bool(a.get("weekend_only", False)),
+                               weekend_window=WeekendWindow(**(a.get("weekend_window") or {})),
+                               kind=a.get("kind", "trading"),
+                               observe_symbols=tuple(a.get("observe_symbols") or ()))
+        except ValidationError as exc:
+            if a.get("kind") != "observe_only":
+                raise
+            # trading-safety review of PR 236: a broken observe_only block is dropped alone (ERROR, health warns), so
+            # it never stops every service and is never returned as an account at all
+            why = "; ".join(str(e.get("msg", "")) for e in exc.errors()) or "invalid"
+            _refused_observe[aid] = why
+            log.error("config/accounts.yaml: observe_only account %s refused at load and dropped: %s", aid, why)
     if pooled := pooled_brokers(out.values()):
         raise ValueError("broker key " + ", ".join(pooled) + " is shared by an always-open account and a weekday "
                          "account in config/accounts.yaml: evidence, costs and weights are keyed by broker, so the "
@@ -693,6 +703,28 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
                          "limits. Store the right login (python -m goldbot.ops.accounts set mt5-login-<account>) or "
                          "disable one")
     return out
+
+
+# ADR 0063: observe_only accounts the last load_accounts dropped (account id -> why), for health's `observe` line
+_refused_observe: dict[str, str] = {}
+
+
+def refused_observe_accounts() -> dict[str, str]:
+    """The observe_only accounts the last `load_accounts` refused and dropped, with the reason (no secret in it)."""
+    return dict(_refused_observe)
+
+
+def observe_login_clash(acc: Account, accounts: Iterable[Account]) -> str | None:
+    """Trading-safety review of PR 236: why a TRADING account must not be unlocked or served, when its known (login,
+    server) equal an observe_only account's (the owner's live account read with the investor password must never also
+    be traded under another name); None otherwise. Compared in memory; neither value is in the reason."""
+    if acc.is_observe_only or acc.login is None or not acc.server:
+        return None
+    for o in accounts:
+        if o.is_observe_only and o.login is not None and int(o.login) == int(acc.login) and o.server == acc.server:
+            return (f"{acc.account_id} resolves to the same MT5 login and server as the observe_only account "
+                    f"{o.account_id} (ADR 0063): it is read, never traded; store another login or leave it disabled")
+    return None
 
 
 def pooled_brokers(accounts: Iterable[Account]) -> list[str]:
@@ -754,7 +786,8 @@ def verify_terminal_account(acc: Account, info: Any) -> str | None:
     if int(info.login) != int(acc.login):
         return f"terminal is logged in to another account than {acc.account_id}"
     if str(info.server) != acc.server:
-        return f"terminal server {info.server!r} is not {acc.server!r}"
+        # security review of PR 236: neither server name is shown (a live server is kept out of logs and alerts)
+        return f"terminal server mismatch: the terminal is not on {acc.account_id}'s configured server"
     want = "demo" if acc.mode == "demo" else "real"
     if info.trade_mode != want:
         return f"terminal account is {info.trade_mode or 'unknown'}, {acc.account_id} is {acc.mode}"
@@ -888,12 +921,16 @@ def unlock_live(account_id: str, confirmation: str, path: Path | None = None) ->
     account is never unlocked (ADR 0063): it trades only after a qualified family, a reviewed change of its kind,
     the owner's unlock and the phase gate."""
     try:
-        acc = load_accounts(path, logins=False).get(account_id)
+        loaded = load_accounts(path)
     except (ValueError, OSError, KeyError) as exc:
         print(f"refused: config/accounts.yaml cannot be read ({type(exc).__name__})")
         return False
-    if acc is not None and acc.is_observe_only:
+    acc = loaded.get(account_id)
+    if account_id in _refused_observe or (acc is not None and acc.is_observe_only):
         print(f"refused: {account_id} is observe_only (ADR 0063): it is read, never traded")
+        return False
+    if acc is not None and (clash := observe_login_clash(acc, loaded.values())):
+        print(f"refused: {clash}")
         return False
     st = phase_state()
     if "paper_to_tiny_live" not in st.get("gates_passed", []):

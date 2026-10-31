@@ -3,7 +3,7 @@ the owner's LIVE Vantage account, with "NO live trading").
 
 An account of `kind: observe_only` (config/accounts.yaml) is read, never traded. Its terminal is logged in with the MT5
 investor (read-only) password, so the broker rejects any order by construction; on top of that its bridge serves the
-read-only methods only (`observe_bridge`: the account's kind or the installer's GOLDBOT_BRIDGE_OBSERVE_ONLY=1, the
+OBSERVE_METHODS allowlist only (`observe_bridge`: the account's kind or the installer's GOLDBOT_BRIDGE_OBSERVE_ONLY=1, the
 stricter wins), its terminal-side broker refuses every order call, the brain's client below is built
 `observe_only=True` (every order, stop change and close refused before the network), and no engine, arm, allocator or
 report ever loads the account (`accounts.enabled_accounts`, `services.engine.run_engine`).
@@ -71,14 +71,30 @@ def resolve_symbol(names: Iterable[str], want: str) -> str | None:
     return suffixed[0] if suffixed else None
 
 
-def select_symbols(api: Any, broker: Any, wants: Iterable[str]) -> list[str]:  # pragma: no cover - MT5 package
+def trading_bridge_refusal(acc: Account, accounts: Iterable[Account], environ: Mapping[str, str]) -> str | None:
+    """Trading-safety review of PR 236: why a TRADING bridge must not start, when its account resolves to an
+    observe_only account's login and server (accounts.observe_login_clash); None for an observe-only bridge (it
+    serves reads only) and for every other account."""
+    from goldbot.ops.accounts import observe_login_clash
+    if observe_bridge(acc, environ):
+        return None
+    return observe_login_clash(acc, accounts)
+
+
+def select_symbols(api: Any, broker: Any, wants: Iterable[str]) -> list[str]:
     """On the MT5 box, at the observe bridge's start: add each observed symbol to Market Watch (symbol_select), so its
-    ticks and bars answer. Returns the names selected; a symbol the terminal lacks is logged and skipped."""
+    ticks and bars answer. Returns the names selected. A symbol the terminal lacks, a terminal that is not logged in
+    yet (symbols_get None) or an IPC error is logged and skipped, never raised: the bridge starts and serves anyway
+    (trading-safety review of PR 236: no restart loop before the login)."""
     selected = []
     for want in wants:
-        name = resolve_symbol(broker.symbols_get(f"{want}*"), want)
-        if name is None or not api.symbol_select(name, True):
-            log.warning("observe: %s is not on this terminal; not collected", want)
+        try:
+            name = resolve_symbol(broker.symbols_get(f"{want}*") or (), want)
+            if name is None or not api.symbol_select(name, True):
+                log.warning("observe: %s not selected (not on this terminal, or not logged in yet)", want)
+                continue
+        except Exception as exc:                        # noqa: BLE001 - logged by type, the start goes on
+            log.warning("observe: %s not selected (%s)", want, type(exc).__name__)
             continue
         selected.append(name)
     return selected
@@ -270,6 +286,10 @@ def check_observe(ctx: HealthContext) -> Check:
     statuses: list[Status] = []
     for lane in ctx.observe_lanes:
         aid = lane.account_id
+        if lane.refused is not None:                    # dropped at load (accounts.refused_observe_accounts)
+            statuses.append("warn")
+            parts.append(f"{aid}: observe only, never trades: refused at load and not collected ({lane.refused})")
+            continue
         if not lane.installed:
             parts.append(f"{aid}: observe only, never trades: not installed (no bridge stored)")
             continue

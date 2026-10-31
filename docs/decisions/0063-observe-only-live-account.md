@@ -21,11 +21,16 @@ phase gate.
    broker key `vantage_obs`, `observe_symbols: [XAUUSD247, XAUUSD]`).
    - Its server and login are `null` in the public yaml. Both are kept in the box keyring (`mt5-server-`,
      `mt5-login-`), as the password is.
-   - Load refuses an observe_only account that is enabled, or that has anything that could place, size or approve an
-     order: auto approval, cost probes, exploration, probe_only, shadow host, pilot, order lane, risk overrides,
-     dynamic limits, max_positions, always-open sessions or weekend_only.
+   - An observe_only block that is enabled, or that has anything that could place, size or approve an order, is
+     invalid: auto approval, cost probes, exploration, probe_only, shadow host, pilot, order lane, risk overrides,
+     dynamic limits, max_positions, always-open sessions or weekend_only. `load_accounts` drops that one account with
+     an ERROR (review of PR 236), so one bad block never stops every service. A dropped account is never returned at
+     all, `unlock_live` still refuses it, and health's `observe` line WARNs "refused at load".
    - `enabled_accounts` never returns it, even after every gate.
    - `unlock_live` refuses it.
+   - **Shared login (review of PR 236).** `vantage-live` may be the same real account. A trading account whose
+     keyring login and server equal an observe_only account's is refused by `unlock_live` and by its box bridge's
+     start, before any attach or login (`accounts.observe_login_clash`). Neither value appears in the reason.
    - The engine refuses to start for it before any broker connection (exit 78, nothing written).
 2. **The investor password.** `accounts add` asks for the "investor (read-only) password, not the master password".
    With it, MT5 logs in with `ACCOUNT_TRADE_ALLOWED` false, so the broker rejects every order. Bridge protocol v9
@@ -34,11 +39,14 @@ phase gate.
      password) or does not say (an older bridge).
    - The bridge's `verify_first` then serves nothing at all (`wrong_account`).
    - The hedging rule is skipped for these accounts only, because they never open a position.
+   - A wrong server is reported as "server mismatch" without either name, for every account.
 3. **Defence in depth, before the terminal.**
    - **Bridge (box).** It is observe-only when the account's `kind` says so, OR its unit sets
      `GOLDBOT_BRIDGE_OBSERVE_ONLY=1` (a drop-in the installer writes). Either one is enough, so the stricter wins.
-     - It serves `READ_ONLY_METHODS` (the retry-safe methods) only. `place_order`, `modify` and `close` get 403
-       `observe_only` before the queue.
+     - It serves the `OBSERVE_METHODS` allowlist only: bars (`get_bars`, `get_bars_range`), ticks (`copy_ticks`,
+       `last_tick`), `symbol_info`, `symbols_get` and `account`. Everything else gets 403 `observe_only` before the
+       queue: orders, stop changes and closes, and also positions, deal history, broker terms and sizing reads
+       (security review of PR 236).
      - It has no order lane.
      - Its `GuardedBroker` refuses the three calls again.
      - `/health` lists only the methods it serves, with `observe_only: true`.

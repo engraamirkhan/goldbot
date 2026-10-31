@@ -53,7 +53,7 @@ def _gate_passed() -> None:
 
 
 def _obs(**kw: Any) -> acc_mod.Account:
-    base: dict[str, Any] = dict(account_id=OBS, broker="vantage_obs", mode="live", server="S-Live", login=1234567,
+    base: dict[str, Any] = dict(account_id=OBS, broker="vantage_obs", mode="live", server="Example-Live", login=1234567,
                                 terminal_path="t", server_tz="NY+7", symbol="XAUUSD247", magic_base=260800,
                                 enabled=False, kind="observe_only", observe_symbols=("XAUUSD247", "XAUUSD"))
     base.update(kw)
@@ -62,7 +62,7 @@ def _obs(**kw: Any) -> acc_mod.Account:
 
 def _info(**kw: Any) -> AccountInfo:
     base: dict[str, Any] = dict(login=1234567, equity=1e3, balance=1e3, margin=0, margin_free=1e3, leverage=500,
-                                currency="GBP", server="S-Live", trade_mode="real", margin_mode="netting",
+                                currency="GBP", server="Example-Live", trade_mode="real", margin_mode="netting",
                                 trade_allowed=False)
     base.update(kw)
     return AccountInfo(**base)
@@ -109,13 +109,36 @@ def test_observe_symbols_and_an_empty_server_belong_to_observe_accounts_only():
         _obs(kind="trading", observe_symbols=(), server="")
 
 
-def test_load_refuses_an_observe_account_edited_to_enabled_true(isolated):
-    raw = isolated.read_text()
+def _edit_obs(cfg: Path, old: str, new: str) -> None:
+    raw = cfg.read_text()
     block_start = raw.index(f"  {OBS}:\n")
     head, tail = raw[:block_start], raw[block_start:]
-    isolated.write_text(head + tail.replace("    enabled: false", "    enabled: true", 1))
-    with pytest.raises(ValidationError, match="observe_only"):
-        acc_mod.load_accounts(isolated, logins=False)
+    cfg.write_text(head + tail.replace(old, new, 1))
+
+
+def test_an_observe_account_edited_to_enabled_true_is_dropped_alone_and_never_tradeable(isolated, caplog):
+    """Trading-safety LOW (PR 236): the offending observe account is dropped with an ERROR, every other account still
+    loads (one bad block never stops every service), and the drop is reported for health."""
+    _gate_passed()
+    _edit_obs(isolated, "    enabled: false", "    enabled: true")
+    accs = acc_mod.load_accounts(isolated, logins=False)
+    assert OBS not in accs and "icm-demo" in accs
+    assert "observe_only" in acc_mod.refused_observe_accounts()[OBS]
+    assert any(r.levelname == "ERROR" and OBS in r.getMessage() for r in caplog.records)
+    assert OBS not in {a.account_id for a in acc_mod.enabled_accounts(loaded=accs)}
+    assert OBS not in {a.account_id for a in acc_mod.observe_accounts(loaded=accs)}
+    assert not acc_mod.unlock_live(OBS, f"ENABLE LIVE {OBS}", isolated)        # still never unlocked
+
+
+def test_a_dropped_observe_account_warns_on_health(tmp_path):
+    from goldbot.ops import observe
+    from goldbot.ops.checks._base import ObserveLaneRef
+    from goldbot.ops.health import HealthContext
+    ctx = HealthContext(state_dir=tmp_path, now=T0, get_secret=lambda k: None,
+                        observe_lanes=[ObserveLaneRef(account_id=OBS, installed=True, symbol="XAUUSD247",
+                                                      refused="an observe_only account never trades: enabled")])
+    chk = observe.check_observe(ctx)
+    assert chk.status == "warn" and "refused at load" in chk.reason and "enabled" in chk.reason
 
 
 def test_the_observe_account_is_never_an_enabled_or_live_account_even_past_every_gate(isolated):
@@ -138,6 +161,47 @@ def test_unlock_live_refuses_an_observe_account_and_leaves_the_file_unchanged(is
     assert "observe_only" in capsys.readouterr().out
 
 
+def _store_login(aid: str, login: str, server: str | None = None) -> None:
+    acc_mod.set_secret(acc_mod.login_key(aid), login)
+    if server is not None:
+        acc_mod.set_secret(acc_mod.server_key(aid), server)
+
+
+def test_unlock_live_refuses_a_live_account_on_the_observe_accounts_login_and_server(isolated, capsys):
+    """Trading-safety MEDIUM (PR 236): vantage-live is the owner's real account too; unlocking it on the login and
+    server the observe account reads would put a trading engine on the observed account."""
+    _gate_passed()
+    _store_login(OBS, "7654321", "Example-Live 1")
+    _store_login("vantage-live", "7654321")
+    raw = isolated.read_text().replace("    server: VantageInternational-Live\n", "    server: Example-Live 1\n", 1)
+    isolated.write_text(raw)
+    before = isolated.read_text()
+    assert not acc_mod.unlock_live("vantage-live", "ENABLE LIVE vantage-live", isolated)
+    assert isolated.read_text() == before
+    out = capsys.readouterr().out
+    assert OBS in out and "7654321" not in out and "Example-Live" not in out
+
+
+def test_unlock_live_still_works_for_a_live_account_on_another_login(isolated):
+    _gate_passed()
+    _store_login(OBS, "7654321", "Example-Live 1")
+    _store_login("vantage-live", "1111111")
+    assert acc_mod.unlock_live("vantage-live", "ENABLE LIVE vantage-live", isolated)
+
+
+def test_a_trading_bridge_refuses_to_start_on_an_observe_accounts_login_and_server():
+    obs = _obs(login=7654321, server="Example-Live 1")
+    twin = _obs(account_id="vantage-live", kind="trading", observe_symbols=(), login=7654321, server="Example-Live 1",
+                broker="vantage", symbol="XAUUSD", magic_base=260400)
+    other = twin.model_copy(update={"login": 1111111})
+    loaded = {obs.account_id: obs, twin.account_id: twin}
+    why = acc_mod.observe_login_clash(twin, loaded.values())
+    assert why is not None and OBS in why and "7654321" not in why and "Example-Live" not in why
+    assert observe.trading_bridge_refusal(twin, loaded.values(), {}) == why
+    assert acc_mod.observe_login_clash(other, [obs, other]) is None
+    assert observe.trading_bridge_refusal(obs, loaded.values(), {}) is None          # the observe bridge itself
+
+
 def test_add_asks_for_the_investor_password_and_keeps_login_server_and_password_in_the_keyring(isolated, capsys):
     asked: list[tuple[str, bool]] = []
 
@@ -145,7 +209,7 @@ def test_add_asks_for_the_investor_password_and_keeps_login_server_and_password_
         asked.append((msg, secret))
         if secret:
             return "investor-pw"
-        return "Vantage-Live 9" if "server" in msg.lower() else "7654321"
+        return "Example-Live 1" if "server" in msg.lower() else "7654321"
     acc_mod.register_prompter(prompter)
     before = isolated.read_text()
     assert acc_mod.main(["add", OBS]) == 0
@@ -154,9 +218,9 @@ def test_add_asks_for_the_investor_password_and_keeps_login_server_and_password_
     assert INVESTOR in pw_msg
     assert acc_mod.get_secret(f"mt5-{OBS}") == "investor-pw"
     assert acc_mod.get_secret(acc_mod.login_key(OBS)) == "7654321"
-    assert acc_mod.get_secret(acc_mod.server_key(OBS)) == "Vantage-Live 9"
+    assert acc_mod.get_secret(acc_mod.server_key(OBS)) == "Example-Live 1"
     acc = acc_mod.load_accounts(isolated)[OBS]                     # the keyring resolves both on the box
-    assert acc.login == 7654321 and acc.server == "Vantage-Live 9"
+    assert acc.login == 7654321 and acc.server == "Example-Live 1"
     assert "7654321" not in capsys.readouterr().out
 
 
@@ -232,13 +296,78 @@ def test_an_observe_bridge_serves_reads_and_says_so_on_health(obs_bridge):
     assert RemoteBroker(url, TOKEN).last_tick("XAUUSD247") == pb.last_tick("XAUUSD247")
     h = requests.get(f"{url}/health", timeout=5).json()
     assert h["observe_only"] is True
-    assert set(h["methods"]) == bridge_mod.READ_ONLY_METHODS
+    assert set(h["methods"]) == bridge_mod.OBSERVE_METHODS
     assert not {"place_order", "modify", "close"} & set(h["methods"])
 
 
-def test_the_read_only_set_is_exactly_the_retry_safe_methods():
-    assert bridge_mod.READ_ONLY_METHODS == {m for m, (_, safe) in bridge_mod.METHODS.items() if safe}
-    assert {"place_order", "modify", "close"}.isdisjoint(bridge_mod.READ_ONLY_METHODS)
+def test_the_observe_allowlist_is_bars_ticks_and_terms_only():
+    """Security LOW (PR 236): no positions, history, sizing or order method on an observe bridge or client."""
+    assert bridge_mod.OBSERVE_METHODS == {"get_bars", "get_bars_range", "copy_ticks", "last_tick", "symbol_info",
+                                          "symbols_get", "account"}
+    assert all(bridge_mod.METHODS[m][1] for m in bridge_mod.OBSERVE_METHODS)          # all read-only
+
+
+@pytest.mark.parametrize("method, args", [("positions", [None]), ("account_positions", []),
+                                          ("deals_since", [T0]), ("broker_terms", ["x", T0, T0]),
+                                          ("margin_required", ["XAUUSD247", 1, 0.01, 2400.0]),
+                                          ("loss_per_lot", ["XAUUSD247", 1, 2400.0, 1.0]),
+                                          ("trading_sessions", ["XAUUSD247"])])
+def test_an_observe_bridge_and_client_refuse_every_method_outside_the_allowlist(obs_bridge, method, args):
+    url, _ = obs_bridge
+    r = _rpc(url, method, args)
+    assert r.status_code == 403 and "observe_only" in r.json()["error"]
+    sent: list[Any] = []
+    rb = RemoteBroker("http://b", TOKEN, observe_only=True, post=lambda *a, **k: sent.append(a))
+    with pytest.raises(ObserveOnlyRefused):
+        rb._call(method, *args)
+    assert sent == []
+
+
+class _MasterTerminal(PaperBroker):
+    """A terminal on the observe account's login and server that reports trading ALLOWED (the master password)."""
+
+    def terminal_info(self) -> Any:
+        from types import SimpleNamespace
+        return SimpleNamespace(connected=True, trade_allowed=True)
+
+    def account(self) -> AccountInfo:
+        return _info(trade_allowed=True)
+
+
+@pytest.mark.integration
+def test_an_observe_bridge_on_a_terminal_that_may_trade_serves_nothing_and_says_wrong_account():
+    """Trading-safety LOW (PR 236): a master-password login is refused end to end: reads 503, /health wrong_account."""
+    obs = _obs()
+    g = GuardedBroker(_MasterTerminal(symbol="XAUUSD247"), magic_base=260800, observe_only=True,
+                      verify=lambda info: acc_mod.verify_terminal_account(obs, info))
+    httpd = HTTPServer(("127.0.0.1", 0), make_handler(g, TOKEN, verify_first=True, observe_only=True))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        r = _rpc(url, "last_tick", ["XAUUSD247"])
+        assert r.status_code == 503
+        h = requests.get(f"{url}/health", timeout=5)
+        assert h.status_code == 503 and h.json()["terminal"] == "wrong_account"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+@pytest.mark.parametrize("raw, got", [(True, True), (False, False), (None, None), (1, True), (0, False)])
+def test_the_mt5_adapter_maps_trade_allowed(raw, got):
+    from types import SimpleNamespace
+
+    from goldbot.execution.mt5_adapter import account_info_from_mt5
+    a = dict(login=1, equity=1.0, balance=1.0, margin=0.0, margin_free=1.0, leverage=500, currency="GBP",
+             server="Example-Live", trade_mode=2, margin_mode=2)
+    if raw is not None:
+        a["trade_allowed"] = raw
+    assert account_info_from_mt5(SimpleNamespace(**a)).trade_allowed is got
+
+
+def test_a_wrong_server_message_shows_neither_server_name():
+    why = acc_mod.verify_terminal_account(_obs(), _info(server="Other-Live 2")) or ""
+    assert "server mismatch" in why and "Other-Live" not in why and "Example-Live" not in why
 
 
 @pytest.mark.parametrize("call", [lambda g: g.place_order(_intent()), lambda g: g.modify(1, 1.0, None),

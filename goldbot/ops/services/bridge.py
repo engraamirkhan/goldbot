@@ -52,7 +52,14 @@ def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTra
     from goldbot.execution.mt5_adapter import MT5Broker
     from goldbot.ops import accounts
     from goldbot.ops import login as mt5_login
-    acc = accounts.load_accounts()[account_id]
+    configured = accounts.load_accounts()
+    acc = configured[account_id]
+    # trading-safety review of PR 236: before any attach or login, a trading bridge never serves the login and server
+    # an observe_only account reads (ADR 0063)
+    from goldbot.ops.observe import trading_bridge_refusal
+    if why := trading_bridge_refusal(acc, configured.values(), os.environ):
+        log.error("refusing to serve %s: %s", account_id, why)
+        raise SystemExit(2)
     listen = accounts.get_secret(f"mt5-bridge-listen-{account_id}")
     token = accounts.get_secret(accounts.bridge_token_key(account_id))
     if not listen or not token:
