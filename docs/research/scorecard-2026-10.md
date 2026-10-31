@@ -218,3 +218,107 @@ Sources: the four result documents below, re-derived where marked; demo figures 
 - **K ~1,256** (360 arm ids + 864 discovery specs + 31 screen looks + 1 registry trial).
 - **Bets next week:** H-84 macro 4h/1d direction (K +4), H-17 trend day + runner (K +2), discovery v2 on 1h/4h/1d
   (K_v2 declared). All 2010-2017 first.
+
+## Weekly research read, week 2026-10-26..10-30 (research director, written 2026-10-31)
+
+Sources: `goldbot run perf-report --from 2026-10-26 --to 2026-10-30` on the brain (run 2026-10-31 13:23 UTC; learning
+section, matched by entry day x session x side); `state/aux/daily_review/2026-10-26..30.json` (costs, volume);
+`state/scheduler.json` (tournament, research_director, autodisc_nightly, agents_weekly); the history verdict documents
+named below; discovery logs `~/tmp/autodisc-run-{15m,1h,4h}.log`. **Re-derived from raw data:** icm-probe random
+control from aux.db `exploration_trades` less `evidence_exclusions`: n 358 (S0 270, S0R 88), net +£19.69, +8.83 R,
+mean +0.025 R, win 52%. This matches the report exactly; 49 voided rows were left out.
+
+**One line: 0 families beat the random control on demo, and all 6 history bets this week failed. Since 31 Oct
+07:15 the demo runs only the controls and the cost arms (ADR 0061).**
+
+### 1. Demo book: matched excess net R vs the random control (90% interval, n), 26-30 Oct
+
+| Account | Family | n | Mean net R | Excess vs control | Reading |
+|---|---|---|---|---|---|
+| icm-probe | session_vwap_fade | 54 | +0.18 | +0.22 (-0.08..+0.52) | not distinguishable |
+| icm-probe | ema_pullback | 195 | +0.17 | -0.02 (-0.21..+0.17) | not distinguishable |
+| icm-probe | halfhour_persist | 105 | +0.15 | -0.03 (-0.34..+0.28) | not distinguishable |
+| icm-probe | round_reject | 77 | -0.05 | -0.14 (-0.40..+0.12) | not distinguishable |
+| icm-demo | nr4_break | 47 | +0.08 | +0.35 (-0.27..+0.96) | not distinguishable |
+| icm-demo | round_reject | 87 | +0.05 | +0.27 (-0.31..+0.85) | not distinguishable |
+| icm-demo | halfhour_persist | 107 | +0.06 | +0.25 (-0.27..+0.77) | not distinguishable |
+| icm-demo | round_break | 62 | -0.15 | +0.15 (-0.39..+0.68) | not distinguishable |
+| vantage-demo | halfhour_persist | 98 | +0.04 | +0.08 (-0.37..+0.53) | not distinguishable |
+| vantage-demo | nr4_break | 44 | +0.20 | +0.01 (-0.43..+0.45) | not distinguishable |
+| **Losers under 30** | probe hurst_band_break -0.64 (13), opening_range_break -0.62 (6), sweep_absorb -0.68 (6), absorb_fade -0.52 (4), run_fade -0.25 (28); icm-demo asia_drift -0.36 (3, -£48.65), level_break -0.83 (2), mean_reversion -0.88 (2); vantage tsmom -2.97 (1, -£29.39) | | | | insufficient sample |
+| **Small-n "winners"** | probe extreme_break +0.58 (13), clock_anchor +0.83 (4), tick_surge +0.21 (8 cells); icm-demo htf_reclaim +1.27 (12), three_horizon +0.19 (24) | | | | insufficient sample |
+
+Controls (the null): icm-probe random_bracket +0.02 R (358); vantage-demo scalp_control -0.02 R (31); icm-demo
+random_bracket -0.14 R (10) and scalp_control -0.21 R (24). Book net per account (exploration + control + cost
+probe): icm-probe +£104.48, vantage-demo +£35.78, icm-demo -£37.71, all at 0.01 lot. **That is about +£20.5 a day,
+and £39.16 of it came from the random controls, so it is drift and not skill.** Each account's exploration book
+had positive net R (+50.5 / +8.5 / +15.2 R), but no family separates from the control in its own cells.
+
+### 2. Kills and retirements this week (none scaled)
+
+- **A2 kill-now list: 67 arm ids retired** at the 10-30 demo reset (entries refused, exits kept; `ed64463f`). The
+  list covers S2/S3/MSA/I1-3/W1-3/MB, the specialists X*/VX*, KA15, OBR15, KSQ, DON, C30, PDC, F2 and S6. **XC15**
+  was killed with its retired arms.
+- **BXR15/30/1H/4H (box runner)** were killed after the H-80 R2 confirm FAIL (A2).
+- **A5 (signed 10-30):** S5A/S5B (ema_pullback) and Z4D/Z4P (round_reject) retired. History showed the same entries
+  had a gross of -0.009..+0.008 R across exits on 140k entries.
+- **ADR 0061 (owner rule, live from 31 Oct 07:15):** every strategy arm without a passing screen and confirm on
+  record is refused new entries. None has one, so Z3/Z5/Z6/Z7 (halfhour_persist, nr4_break, round_break,
+  extreme_break), S1A/S1B (session_vwap_fade), Z1P/Z2P/Z9D/Z10D and the BX* twins all stop. I record them as
+  **retired on demo**: the 11-13 A2 bar and the 11-23 reads are moot. Only a history pass reopens a family, under a
+  new pre-registration. Still running: the random controls (S0, S0R, I0, W0, VI0, C1H, VC1H, ZCD, ZCV), the cost
+  probes and the cost arms F1A/G1A. WKS0/WKI0 (weekend 24/7) are pre-registered as cost measurement only and are
+  not yet enabled.
+
+### 3. History verdicts this week (2010-2017 screens unless stated): 6 bets, 0 passes
+
+| Bet | Key number | Verdict |
+|---|---|---|
+| H-16 range forecast | quintile ratio 1.437 < 1.5 (rho gain +0.20) | FAIL (`opportunity-days-screen-2026-11.md`) |
+| H-80 R2 box runner, confirm 2018-2025-09, n 5,355 | runner minus fixed gross -0.018 R (t -1.12) | FAIL, BXR killed |
+| H-82 wider exits on scalp entries, 337k entries | difference-in-differences vs random within +/-0.002 R | FAIL, 5/5 variants |
+| H-83 when-map, 494k random trades | 0/24 cells net > 0; trend side -0.008 R (t -2.7) | FAIL |
+| H-84 macro 4h/1d direction (4 variants) | gross t -0.59 / 0.47 / 0.84 / 0.62; net -0.22..-0.05 R | FAIL, retired R-16 (`h84-macro-screen-2026-11.md`) |
+| H-17 trend day + runner, 671 events | V0 gross -0.003 R (t -0.05), net -0.35 R, 0/6 years | FAIL, retired R-17 (`h17-screen-2026-11.md`; the H-17 row's "R-16" is corrected to R-17 in this PR) |
+
+**Discovery:** v1 searched 288 specs per timeframe on 15m/1h/4h (K 864) and found **0 survivors**. Its SPA p and PBO
+were 0.000/0.00 on 15m, 0.002/0.09 on 1h and 0.570/0.62 on 4h. The explore-only v2 run on 1h/4h/1d has not run yet.
+The brain's nightly job is off by design (Mac only, ADR 0058). **K ~1,264** = ~360 arm ids + 864 v1 specs + 37 screen
+looks (H-16 1, H-82 5, H-83 25, H-84 4, H-17 2) + 1 registry trial + 2 weekend controls.
+
+### 4. Costs: measured cells vs the 10-25 prior (`cost-model-1m-2026-10-25.md`)
+
+| Cell (week) | Fills | Spread | Entry slip | Round trip | Stop overshoot | Prior |
+|---|---|---|---|---|---|---|
+| ICM all | 1,373 | $0.085 | -$0.017 | **$0.208** | **$0.084** (618 stop exits) | spread $0.079, slip -$0.055, RT $0.144 central / $0.23 conservative, overshoot $0.70 (n 14) |
+| ICM Asia / London / NY | 317 / 436 / 620 | 0.088 / 0.083 / 0.086 | +0.013 / -0.032 / -0.023 | 0.237 / 0.200 / 0.198 | 0.049 / 0.068 / 0.112 | as above |
+| Vantage all | 195 | $0.105 | +$0.054 | **$0.226** (London 0.306) | ~0 | none (first week) |
+
+- Round trips cost more than the central prior: ICM is +44%, but still inside the conservative case.
+- Cost rose over the week. ICM went from $0.163 (10-26) to $0.250 (10-30) as entry slippage turned from favourable
+  to adverse. Vantage went from $0.173 to $0.317.
+- **Stop overshoot is 8x smaller than the prior** ($0.084 vs $0.70). Resting broker stops settle the 10-25 worry.
+- The session slippage refits (ICM Asia, London and NY) were set to $0.15.
+- **Blind spots:**
+  - perf-report's own Costs, Days and North-star sections read only the closed-trade record (0 trades), so they show
+    "not recorded" for the learning book.
+  - `registry_sync` returns HTTP 403 on both the tournament and research_director jobs, so the H-80 R2 row is still
+    not in the brain registry.
+  - The weekly agents job skips because there is no API key.
+
+### 5. Three bets for next week (2026-11-02..11-06), with expected information
+
+1. **Discovery v2, one run each on 1h, 4h and 1d** (strategy-researcher, ml-researcher for the null). Macro and HAR
+   enter as gate primitives, with an absolute net-R floor, and K_v2 is declared before the run. P(at least 1 survivor)
+   ~0.1. Either result decides whether automated generation continues past 11-20 (A4); 0 survivors freezes it.
+2. **Cost of record from measured cells** (microstructure-researcher with the data-engineer, by 11-06). Freeze the
+   per-broker, per-session round trip and overshoot above as the figure every screen reads. Explain why the round
+   trip rose about 50% in 5 days (session mix vs slippage drift). Then cut the cost probes to what the protocol
+   needs. Every remaining edge question is cost-bound, so this changes the bar for every future screen.
+3. **TradingView author ideas, T-1 re-audit** on a fresh seed by 11-13 (strategy-researcher staff): direction only,
+   with an abstain class; precision >= 95% and coverage >= 50%, else the line is parked to the Q1 SoA refresh. It is
+   the one untested information source, human discretionary calls, and costs no trial until the parser passes.
+   Prior ~10-15%.
+
+Alongside the bets (engineering, not research): fix `registry_sync` 403; make perf-report's Days, North-star and
+Costs read the learning ledger; the weekly agents job needs an API key in the brain keyring (owner-only: a secret and a spend; until then the director writes this read by hand).
