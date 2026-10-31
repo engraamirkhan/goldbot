@@ -45,6 +45,7 @@ AUTH_FAILED = -6          # RES_E_AUTH_FAILED: the broker refused the password (
 # MetaTrader5 package error codes that a retry cannot fix: RES_E_INVALID_PARAMS, RES_E_AUTH_FAILED,
 # RES_E_UNSUPPORTED. Everything else (-10005 IPC timeout, -10004 no IPC, -1 generic, ...) may pass on a later try.
 PERMANENT_ERRORS = frozenset({-2, AUTH_FAILED, -7})
+IPC_TIMEOUT = -10005
 VK_ESCAPE = 0x1B
 _LONG_DIGITS = re.compile(r"\d{5,}")
 LoginStatus = Literal["ok", "failed", "refused", "rate_limited"]
@@ -119,7 +120,10 @@ def _send(acc: accounts.Account, password: str, api: Any, settings: Mt5LoginSett
             return LoginResult(ok=False, status="refused", code=code,
                                reason=f"{what} failed: ({code}, {_scrub(msg, acc, password)}): "
                                       + refused_reason(acc, f"code {code}"))
-        return LoginResult(ok=False, reason=f"{what} failed: ({code}, {_scrub(msg, acc, password)})", code=code,
+        hint = (f"; likely a wrong server name (configured: {acc.server}) or a missing broker servers.dat: check "
+                f"servers.dat in the terminal's config dir (Config/servers.dat beside terminal64.exe)"
+                if code == IPC_TIMEOUT else "")
+        return LoginResult(ok=False, reason=f"{what} failed: ({code}, {_scrub(msg, acc, password)}){hint}", code=code,
                            retry=code not in PERMANENT_ERRORS)
     a = api.account_info()
     if a is None:

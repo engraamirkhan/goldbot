@@ -6,7 +6,7 @@
 # install (an upgrade under a running terminal is never done here) and nothing of the running sibling is restarted:
 #   * the terminal goes to C:\MT5\<install dir> in the same Wine prefix (MetaQuotes' generic installer, ADR 0020); an
 #     installer that starts its terminal has that one stopped (the unit is its only launcher), never the sibling's;
-#   * the sibling's broker server list (Config/servers.dat) is copied when the new install has none, so the keyring
+#   * the sibling's broker server list (Config/servers.dat) is always copied over the generic one, so the keyring
 #     login (`goldbot-mt5 login <account>`, goldbot/ops/login.py) finds the broker's servers without the wizard;
 #   * the AutoTrading script that takes an install dir is installed root-owned, the per-instance drop-ins are written
 #     (mt5-instance.sh; the shared unit templates stay as they are), and the account's units are enabled, not started.
@@ -40,9 +40,13 @@ sudo -u mt5 -H bash -c '
   rm -f mt5setup.exe
   test -f "$m/$1/terminal64.exe" || { echo "MT5 terminal not installed for this instance"; exit 1; }
   pkill -u mt5 -f "MT5.$1.[t]erminal64[.]exe" || true
-  if [ -f "$m/ICMarkets/Config/servers.dat" ] && [ ! -f "$m/$1/Config/servers.dat" ]; then
+  if [ -f "$m/ICMarkets/Config/servers.dat" ]; then
+    # always overwrite: the installer'"'"'s first start writes a generic list, and without the broker'"'"'s own the login
+    # ends in -10005 IPC timeouts (2026-10-30)
     mkdir -p "$m/$1/Config"
-    cp "$m/ICMarkets/Config/servers.dat" "$m/$1/Config/servers.dat"
+    cp -f "$m/ICMarkets/Config/servers.dat" "$m/$1/Config/servers.dat"
+  else
+    echo "warning: the sibling has no Config/servers.dat to copy; login may time out (-10005)"
   fi
 ' _ "$dir"
 systemctl daemon-reload
