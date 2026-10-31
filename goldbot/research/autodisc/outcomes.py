@@ -23,6 +23,7 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
+from goldbot.labels.exit_policy import ExitPolicy
 from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec, triple_barrier, triple_barrier_1m
 from goldbot.research.autodisc.spec import ExitTemplate
 from goldbot.research.autodisc.windows import ExploreFrame, StageFrame
@@ -34,11 +35,21 @@ _NO_TARGET_ATR = 1e6                                   # a time-exit template: t
 
 @dataclass(frozen=True)
 class BarrierExit:
-    """One stop/target/time-barrier exit in ATR units. `target_atr` None is a time exit at `max_bars`."""
+    """One stop/target/time-barrier exit in ATR units. `target_atr` None is a time exit at `max_bars`. `trail_r` (grammar
+    v2 `be_trail`): a trail `trail_r` stop distances behind the best price, armed once the best price is `trail_r` stop
+    distances beyond entry (`labels.exit_policy`), so with 1.0 the stop moves to break-even at +1 R and trails from
+    there; None: no trail (every v1 exit)."""
     name: str
     stop_atr: float
     target_atr: float | None
     max_bars: int
+    trail_r: float | None = None
+
+    def policy(self) -> ExitPolicy | None:
+        if self.trail_r is None:
+            return None
+        d = self.trail_r * self.stop_atr
+        return ExitPolicy(trail_atr=d, trail_after_atr=d)
 
     def barrier_spec(self) -> BarrierSpec:
         return BarrierSpec(target_atr=self.target_atr if self.target_atr is not None else _NO_TARGET_ATR,
@@ -61,7 +72,9 @@ def barrier_exit(exit_: ExitTemplate, max_bars: int) -> BarrierExit:
     if exit_.target == "time":
         assert exit_.time_bars is not None
         return BarrierExit(f"s{stop:g}_time", stop, None, exit_.time_bars)
-    mult = 1 if exit_.target == "1R" else 2
+    if exit_.target == "be_trail":
+        return BarrierExit(f"s{stop:g}_betrail", stop, None, max_bars, trail_r=1.0)
+    mult = {"1R": 1, "2R": 2, "3R": 3}[exit_.target]
     return BarrierExit(f"s{stop:g}_t{exit_.target}", stop, mult * stop, max_bars)
 
 
@@ -73,6 +86,14 @@ def default_menu(max_bars: int) -> tuple[BarrierExit, ...]:
         out += [BarrierExit(f"s{stop:g}_t1R", stop, stop, max_bars), BarrierExit(f"s{stop:g}_t2R", stop, 2 * stop, max_bars),
                 BarrierExit(f"s{stop:g}_time", stop, None, max_bars)]
     return tuple(out)
+
+
+def v2_menu(max_bars: int) -> tuple[BarrierExit, ...]:
+    """Grammar v2's closed exit list of 5 (ADR 0058 amendment 2026-11-02; A4 quant condition): stop 1.0 ATR with a time
+    exit only, a fixed target of 1R, 2R or 3R, or break-even at +1 R with a 1 R trail; every one closes at `max_bars`."""
+    return (BarrierExit("s1_time", 1.0, None, max_bars), BarrierExit("s1_t1R", 1.0, 1.0, max_bars),
+            BarrierExit("s1_t2R", 1.0, 2.0, max_bars), BarrierExit("s1_t3R", 1.0, 3.0, max_bars),
+            BarrierExit("s1_betrail", 1.0, None, max_bars, trail_r=1.0))
 
 
 @dataclass
@@ -198,9 +219,9 @@ def build_tensor(bars_in: ExploreFrame | StageFrame, atr: pd.Series, exits: Sequ
         spec = ex.barrier_spec()
         if mode == "1m":
             assert bars_1m is not None
-            lab = triple_barrier_1m(bars, bars_1m, signals, spec, atr, swap=swap)
+            lab = triple_barrier_1m(bars, bars_1m, signals, spec, atr, swap=swap, policy=ex.policy())
         else:
-            lab = triple_barrier(bars, signals, spec, atr, swap=swap)
+            lab = triple_barrier(bars, signals, spec, atr, swap=swap, policy=ex.policy())
         if lab.empty:
             continue
         i, s = lab["idx"].to_numpy(dtype=int), (lab["side"].to_numpy(dtype=int) < 0).astype(int)
