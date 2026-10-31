@@ -25,7 +25,7 @@ def _wrapper() -> str:
     return m.group(1)
 
 
-def _run(tmp_path: Path, key: str) -> tuple[int, str, list[str] | None]:
+def _run(tmp_path: Path, key: str, *ports: str) -> tuple[int, str, list[str] | None]:
     script = tmp_path / "authorize"
     script.write_text(_wrapper())
     bindir = tmp_path / "bin"
@@ -36,7 +36,7 @@ def _run(tmp_path: Path, key: str) -> tuple[int, str, list[str] | None]:
     stub.chmod(0o755)
     env = {"PATH": f"{bindir}:/usr/bin:/bin", "HOME": str(tmp_path)}
     assert BASH is not None
-    p = subprocess.run([BASH, str(script), key], capture_output=True, text=True, env=env, timeout=30)
+    p = subprocess.run([BASH, str(script), key, *ports], capture_output=True, text=True, env=env, timeout=30)
     args = calls.read_bytes().decode().split("\0")[:-1] if calls.exists() else None
     if calls.exists():
         os.remove(calls)
@@ -48,8 +48,38 @@ def test_a_valid_key_is_appended_as_mt5_restricted_to_the_bridge_port(tmp_path):
         rc, out, args = _run(tmp_path, key)
         assert rc == 0, out
         assert args is not None and args[:3] == ["-u", "mt5", "-H"]
-        assert args[-1] == f'restrict,port-forwarding,permitopen="127.0.0.1:8765",command="/bin/false" {key}'
-        assert "~/.ssh/authorized_keys" in args[-3] and "umask 077" in args[-3]
+        assert args[-2] == f'restrict,port-forwarding,permitopen="127.0.0.1:8765",command="/bin/false" {key}'
+        assert args[-1] == KEY.split()[1]                       # the key material: an older line of it is replaced
+        assert "~/.ssh/authorized_keys" in args[-4] and "umask 077" in args[-4] and "grep -vF" in args[-4]
+        assert "forwarding to 127.0.0.1:8765 only" in out
+
+
+def test_adr_0062_one_line_forwards_to_every_bridge_port_of_a_two_terminal_box(tmp_path):
+    rc, out, args = _run(tmp_path, KEY, "8765", "8766")
+    assert rc == 0 and args is not None
+    assert args[-2] == f'restrict,port-forwarding,permitopen="127.0.0.1:8765",permitopen="127.0.0.1:8766",' \
+                       f'command="/bin/false" {KEY}'
+    assert "127.0.0.1:8765, 127.0.0.1:8766 only" in out
+
+
+@pytest.mark.parametrize("port", ["22", "8765;id", "", "99999", "-1"])
+def test_a_bad_bridge_port_is_refused_before_sudo(tmp_path, port):
+    rc, out, args = _run(tmp_path, KEY, port)
+    assert rc != 0 and args is None and "refused: a bridge port" in out
+
+
+def test_the_replacement_keeps_every_other_key_and_drops_the_old_line_of_this_one(tmp_path):
+    """The mt5-side script itself, run without sudo on a scratch home."""
+    m = re.search(r"sudo -u mt5 -H sh -c '([^']+)'", _wrapper())
+    assert m
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    keys = home / ".ssh" / "authorized_keys"
+    keys.write_text(f'restrict,permitopen="127.0.0.1:8765" {KEY} old\nssh-ed25519 AAAAOTHER other\n')
+    body = KEY.split()[1]
+    subprocess.run(["sh", "-c", m.group(1), "_", f"restrict,new {KEY}", body], env={"HOME": str(home),
+                   "PATH": "/usr/bin:/bin"}, check=True, timeout=30)
+    assert keys.read_text().splitlines() == ["ssh-ed25519 AAAAOTHER other", f"restrict,new {KEY}"]
 
 
 @pytest.mark.parametrize("key", [

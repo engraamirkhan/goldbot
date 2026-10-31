@@ -97,8 +97,9 @@ def test_the_absolute_daily_limit_lives_per_account_in_accounts_yaml_not_in_sett
     assert raw["icm-demo"]["daily_loss_limit_abs"] == 220         # ADR 0042: 2% of the ~£11,000 demo balance
     assert raw["icm-probe"]["daily_loss_limit_abs"] == 220        # ADR 0042 (was 30, ADR 0037 am. 4)
     assert raw["vantage-demo"]["daily_loss_limit_abs"] == 200     # CFO 2026-10-26: 2% of the £10,000 demo deposit
+    assert raw["vantage-247"]["daily_loss_limit_abs"] == 20       # ADR 0062: the weekend lane's own small day
     assert all("daily_loss_limit_abs" not in a for k, a in raw.items()
-               if k not in ("icm-demo", "icm-probe", "vantage-demo", "icm-live"))
+               if k not in ("icm-demo", "icm-probe", "vantage-demo", "vantage-247", "icm-live"))
     assert raw["icm-live"]["daily_loss_limit_abs"] == 6.25       # ADR 0055: the live pilot's £6.25 a day
     with pytest.raises(ValidationError):
         _acc(daily_loss_limit_abs=0)

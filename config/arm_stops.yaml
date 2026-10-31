@@ -83,7 +83,8 @@ h61: [S1A, S1B, S2A, S2B, S3A, S3B, S4, S5A, S5B, S6, I1, I2A, I2B, MB15, MB30, 
 # No stop: the controls (the null; HV amendment 3, Z 4, arms 8.9) and the virtual twins BXT/BXF (H-80: scored on
 # BXR's fills, they place no order).
 none: [S0, S0R, I0, W0, VI0, VW0, VS0, C1H, VC1H, F2C, C30C, XC15, ZCD, ZCV,
-       BXT15, BXT30, BXT1H, BXT4H, BXF15, BXF30, BXF1H, BXF4H]
+       BXT15, BXT30, BXT1H, BXT4H, BXF15, BXF30, BXF1H, BXF4H,
+       WKS0, WKI0]      # ADR 0062: the XAUUSD247 weekend lane's random controls
 
 # Z 4 "Cost stop per stratum (independent of R)": at >= min_fills fills, the one-sided 95% upper bound of the
 # stratum's signal-time cost per R (`cost` / `stop_loss` at the send; SE clustered by UTC day) above halve_above

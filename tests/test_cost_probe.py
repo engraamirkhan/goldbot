@@ -553,7 +553,8 @@ def test_the_shipped_config_probes_on_the_dedicated_probe_hosts_only(monkeypatch
     monkeypatch.setattr(acc_mod, "get_secret", lambda k: None)
     accs = acc_mod.load_accounts()
     assert accs["icm-probe"].cost_probe.enabled is True and accs["icm-demo"].cost_probe.enabled is False
-    assert [k for k, a in accs.items() if a.cost_probe.enabled] == ["icm-probe", "vantage-demo"]
+    # ADR 0062: vantage-247 (off until its login exists) measures its own XAUUSD247 costs with weekend scheduled probes
+    assert [k for k, a in accs.items() if a.cost_probe.enabled] == ["icm-probe", "vantage-demo", "vantage-247"]
     assert all(a.probe_only for a in accs.values() if a.cost_probe.enabled)
     assert accs["vantage-demo"].cost_probe.scheduled.enabled and not accs["vantage-demo"].shadow_host
     assert all(not a.cost_probe.enabled for a in accs.values() if a.mode != "demo")

@@ -60,8 +60,9 @@ def test_units_are_enabled_for_the_account_and_icm_demo_is_the_default():
     assert '"$OPS"/systemd/goldbot-mt5-terminal@.service' in s
     term = (LINUX / "systemd" / "goldbot-mt5-terminal@.service").read_text()
     assert "Restart=always" in term
-    # the box layout is the same for every account: one prefix, one install path, one bridge port
-    assert 'permitopen=\\"127.0.0.1:8765\\"' in s and "C:\\\\MT5\\\\ICMarkets" in s
+    # the box layout is the same for every account: one prefix, one install path, one bridge port (8765 unless a
+    # second terminal is added beside it, ADR 0062: tests/test_mt5_second_terminal.py)
+    assert '[ $# -gt 0 ] || set -- 8765' in s and "C:\\\\MT5\\\\ICMarkets" in s
 
 
 def _directive(text: str, key: str) -> str:

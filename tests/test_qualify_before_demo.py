@@ -23,15 +23,15 @@ from tests.test_exploration_engine import CLOSE, LOSS, QUALIFIED, SHORT, _arm, _
 
 SPEC = Path(__file__).resolve().parents[1] / "config" / "exploration_arms.yaml"
 RULE = "unqualified (owner rule 2026-10-30)"
-CONTROLS = "S0 S0R I0 W0 VI0 VW0 C1H VC1H ZCD ZCV F1C G1C F2C C30C XC15 VS0".split()
+CONTROLS = "S0 S0R I0 W0 VI0 VW0 C1H VC1H ZCD ZCV F1C G1C F2C C30C XC15 VS0 WKS0 WKI0".split()   # + ADR 0062
 COSTS = "F1A G1A".split()
 # what each account may still enter on 2026-10-30 (exempt and not retired) and what it now refuses (registered strategy
 # arms that A2 had not retired: the A2 retirements are refused anyway)
 RUNNING = {"icm-demo": {"C1H", "G1A", "G1C", "I0", "W0", "ZCD"}, "icm-probe": {"F1A", "F1C", "S0", "S0R"},
-           "vantage-demo": {"VC1H", "VI0", "VW0", "ZCV"}}
+           "vantage-demo": {"VC1H", "VI0", "VW0", "ZCV"}, "vantage-247": {"WKS0", "WKI0"}}   # ADR 0062: controls only
 NEWLY_REFUSED = {"icm-demo": {"BXR15", "BXR1H", "BXR30", "BXR4H", "XBB15", "Z10D", "Z3D", "Z4D", "Z6D", "Z7D", "Z9D"},
                  "icm-probe": {"S1A", "S1B", "S5A", "S5B", "Z1P", "Z2P", "Z4P", "Z5P", "Z7P"},
-                 "vantage-demo": {"Z6V", "Z7V"}}
+                 "vantage-demo": {"Z6V", "Z7V"}, "vantage-247": set()}
 
 
 def _row(arm_id: str = "Q1", **extra: Any) -> dict[str, Any]:

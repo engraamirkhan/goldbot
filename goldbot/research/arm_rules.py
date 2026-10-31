@@ -129,11 +129,14 @@ def blackout_windows(cal: pd.DataFrame | None) -> tuple[np.ndarray, np.ndarray]:
 # ---------------------------------------------------------------- random brackets (S0, S0R, I0, W0)
 def random_bracket(arm: Arm, ctx: RuleContext) -> pd.DataFrame:
     """Seeded random control: a fixed schedule of decision closes (`minutes` of the hour within `window_utc`, Mon-Fri),
-    side from the arm's hash, a fixed bracket (`stop_usd` or `stop_atr` x ATR of the decision bars)."""
+    side from the arm's hash, a fixed bracket (`stop_usd` or `stop_atr` x ATR of the decision bars). ADR 0062: an arm
+    with its own `weekdays` (UTC, 0 = Monday; the weekend lane's [5, 6]) takes those days instead of Mon-Fri; an arm
+    without it is unchanged (its hash too: only the new arms carry the key)."""
     p = arm.params
     close = ctx.close_ts
     mins = close.minute.to_numpy()
-    ok = np.isin(mins, p.get("minutes", [0])) & arm_window(close, p) & (close.dayofweek.to_numpy() < 5)
+    days = p.get("weekdays", [0, 1, 2, 3, 4])
+    ok = np.isin(mins, p.get("minutes", [0])) & arm_window(close, p) & np.isin(close.dayofweek.to_numpy(), days)
     ok &= common_filter_ok(close, ctx.blackout_lo, ctx.blackout_hi)
     idx = np.flatnonzero(ok)
     if len(idx) == 0:

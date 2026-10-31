@@ -38,11 +38,11 @@ from typing import TYPE_CHECKING, Any, Callable
 import numpy as np
 import pandas as pd
 
-from goldbot.data.calendar import DEFAULT_SESSIONS
+from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
 from goldbot.data.quality import DQEvent, bar_errors
 from goldbot.data.resample import BAR_COLUMNS, ticks_to_1m
 from goldbot.data.timeutil import epoch_ns
-from goldbot.engine import history
+from goldbot.engine import history, weekend_lane
 
 if TYPE_CHECKING:
     from goldbot.engine.runner import Engine
@@ -67,8 +67,10 @@ class Job:
     """One rates call: the request's context (engine clock and tick stamp when it started, the latest closed minute
     it covers) and its outcome (converted bars, or the error's type name). `done` is set when it has finished."""
 
-    def __init__(self, started: pd.Timestamp, tick_ts: pd.Timestamp, upto: pd.Timestamp, point: float | None):
+    def __init__(self, started: pd.Timestamp, tick_ts: pd.Timestamp, upto: pd.Timestamp, point: float | None,
+                 sessions: SessionTable = DEFAULT_SESSIONS):
         self.started, self.tick_ts, self.upto, self.point = started, tick_ts, upto, point
+        self.sessions = sessions              # the engine's bar table (ADR 0062: always-open accounts keep weekends)
         self.bars: pd.DataFrame | None = None
         self.error: str | None = None
         self.done = threading.Event()
@@ -77,7 +79,7 @@ class Job:
         try:
             if self.point is None:
                 self.point = float(client.symbol_info(symbol).point)
-            self.bars = history.rates_to_bars(client.get_bars(symbol, "1m", FETCH_N), self.point)
+            self.bars = history.rates_to_bars(client.get_bars(symbol, "1m", FETCH_N), self.point, self.sessions)
         except Exception as exc:          # noqa: BLE001 - a bad reply is a warning applied on the tick thread
             self.error = type(exc).__name__
         finally:
@@ -149,13 +151,13 @@ def poll(eng: Engine, t: Tick) -> None:
     if new:
         start = closed if bb.asked is None else max(bb.asked + MINUTE, closed - (FETCH_N - 1) * MINUTE)
         minutes = pd.date_range(start, closed, freq="min")
-        bb.wanted |= set(minutes[np.asarray(DEFAULT_SESSIONS.is_open(minutes), dtype=bool)])
+        bb.wanted |= set(minutes[np.asarray(weekend_lane.bar_table(eng).is_open(minutes), dtype=bool)])
         bb.asked = closed
     _expire(bb, now)
     due = bb.retry_at is None or now >= bb.retry_at
     if bb.wanted and not bb.fetcher.busy() and (due or (new and bb.fails == 0)):
         bb.stats["fetches"] += 1
-        bb.fetcher.start(Job(now, t.ts_utc, closed, bb.point), eng.cfg.symbol)
+        bb.fetcher.start(Job(now, t.ts_utc, closed, bb.point, weekend_lane.bar_table(eng)), eng.cfg.symbol)
         _collect(eng, bb, now)                      # a call that has already finished (an in-process client)
 
 
@@ -185,7 +187,7 @@ def awaiting(eng: Engine, minute: pd.Timestamp, now: pd.Timestamp) -> bool:
         return False
     have = not bb.got.empty and bool((bb.got["ts_utc"] == minute).any())
     return not have and (bb.answered is None or bb.answered < minute) and now < minute + MINUTE + GRACE + HOLD \
-        and bool(DEFAULT_SESSIONS.is_open(pd.DatetimeIndex([minute]))[0])
+        and bool(weekend_lane.bar_table(eng).is_open(pd.DatetimeIndex([minute]))[0])
 
 
 def missed(eng: Engine, minute: pd.Timestamp) -> bool:
@@ -195,7 +197,7 @@ def missed(eng: Engine, minute: pd.Timestamp) -> bool:
     if not eng.cfg.broker_bars or bb.fetcher is None:
         return False
     have = not bb.got.empty and bool((bb.got["ts_utc"] == minute).any())
-    return not have and bool(DEFAULT_SESSIONS.is_open(pd.DatetimeIndex([minute]))[0])
+    return not have and bool(weekend_lane.bar_table(eng).is_open(pd.DatetimeIndex([minute]))[0])
 
 
 def fetched(eng: Engine, through: pd.Timestamp) -> pd.DataFrame:
@@ -394,7 +396,7 @@ def rebuild(eng: Engine, until: pd.Timestamp | None = None) -> None:
     if eng.ticks:
         tdf = pd.DataFrame({"ts_utc": [x.ts_utc for x in eng.ticks], "bid": [x.bid for x in eng.ticks],
                             "ask": [x.ask for x in eng.ticks]})
-        new = ticks_to_1m(tdf, DEFAULT_SESSIONS)
+        new = ticks_to_1m(tdf, weekend_lane.bar_table(eng))
     else:
         new = pd.DataFrame(columns=BAR_COLUMNS)
     if new.empty and not on:

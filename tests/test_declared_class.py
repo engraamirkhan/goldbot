@@ -37,7 +37,8 @@ def test_the_shipped_config_declares_the_three_demo_hosts_raw_and_nothing_else()
     # the baseline until measured
     accounts = load_accounts()
     declared = {a: acc.account_class for a, acc in accounts.items() if acc.account_class is not None}
-    assert declared == {"icm-demo": "raw", "icm-probe": "raw", "vantage-demo": "raw"}
+    # ADR 0062: vantage-247 is a Standard STP demo (spread only, no commission)
+    assert declared == {"icm-demo": "raw", "icm-probe": "raw", "vantage-demo": "raw", "vantage-247": "standard"}
 
 
 def test_an_account_class_other_than_raw_or_standard_is_refused_at_load():

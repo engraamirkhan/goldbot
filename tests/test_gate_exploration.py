@@ -221,7 +221,7 @@ def test_the_shipped_registry_runs_exploration_on_the_three_demo_probe_only_host
     cfg = tmp_path / "accounts.yaml"
     cfg.write_text(acc_mod.ACCOUNTS_FILE.read_text())
     accs = acc_mod.load_accounts(cfg, logins=False)
-    hosts = ("icm-probe", "icm-demo", "vantage-demo")
+    hosts = ("icm-probe", "icm-demo", "vantage-demo", "vantage-247")     # + ADR 0062 (configured, not enabled)
     for host in hosts:
         acc = accs[host]
         assert acc.exploration.enabled and acc.probe_only and acc.mode == "demo"

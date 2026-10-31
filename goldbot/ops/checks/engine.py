@@ -29,7 +29,7 @@ from goldbot.ops.checks._base import (
     _worst,
     log,
 )
-from goldbot.ops.checks.registry import BLOCK_ACCOUNT, register_check
+from goldbot.ops.checks.registry import BLOCK_ACCOUNT, BLOCK_TAIL, register_check
 from goldbot.ops.watchdog import loop_heartbeat_path
 from goldbot.risk.supervisor import engine_fault
 
@@ -305,3 +305,57 @@ def check_failed_orders(ctx: HealthContext, account_id: str) -> list[Check]:
                          reason=f"{what} at {ts:%Y-%m-%d %H:%M} UTC: account {account_id}, {side} {float(r.get('lots', 0)):g} lots, "
                                 f"agent {r.get('agent_id')}, retcode {rc if rc is not None else '?'}"))
     return out
+
+
+LANE_STATE_FAIL_S = 600     # inside its window a weekend lane's engine writes at least every state_every_s (10 s)
+LANE_TICK_WARN_S = 300      # a 24/7 symbol quotes all weekend: five minutes without a tick is a feed problem
+LANE_FLAT_GRACE_S = 900     # the flatten is retried every refresh; still open this long after the cut is a fault
+
+
+@register_check("global", block=BLOCK_TAIL, pos=98, when=lambda ctx: bool(ctx.weekend_lanes))
+def check_weekend_247(ctx: HealthContext) -> Check:
+    """ADR 0062 (the XAUUSD247 weekend lane). The weekday checks read gold's calendar, which calls the weekend closed,
+    so they cannot see a weekend lane stall. Per weekend_only account: off (disabled) is OK; inside its window the
+    engine state must be fresh (FAIL after LANE_STATE_FAIL_S) and ticking (WARN after LANE_TICK_WARN_S); outside it
+    the account must be flat once LANE_FLAT_GRACE_S has passed since the cut (FAIL: "no position carries into the
+    main session")."""
+    parts: list[str] = []
+    statuses: list[Status] = []
+    for lane in ctx.weekend_lanes:
+        aid = lane.account_id
+        if not lane.enabled:
+            parts.append(f"{aid} off (enabled: false)")
+            continue
+        f = ctx.state_dir / f"engine_{aid}.json"
+        inside = lane.window.inside(ctx.now)
+        try:
+            e = _read_json(f) if f.exists() else None
+        except (ValueError, OSError) as exc:
+            statuses.append("fail")
+            parts.append(f"{aid}: engine state unreadable ({type(exc).__name__})")
+            continue
+        if not isinstance(e, dict):
+            statuses.append("fail" if inside else "warn")
+            parts.append(f"{aid}: no engine state")
+            continue
+        age = _epoch(ctx.now) - float(e.get("ts", 0) or 0)
+        n_open = int(e.get("open_positions", 0) or 0)
+        if inside:
+            tick_age = float(e.get("last_tick_age_s", 0) or 0)
+            if age > LANE_STATE_FAIL_S:
+                statuses.append("fail")
+                parts.append(f"{aid}: in its window, engine state {_age(age)} old")
+            elif tick_age > LANE_TICK_WARN_S:
+                statuses.append("warn")
+                parts.append(f"{aid}: in its window, no tick for {_age(tick_age)}")
+            else:
+                parts.append(f"{aid}: in its window, {n_open} open")
+            continue
+        since_cut = (ctx.now - lane.window.last_cut(ctx.now)).total_seconds()
+        if n_open and since_cut > LANE_FLAT_GRACE_S:
+            statuses.append("fail")
+            parts.append(f"{aid}: {n_open} position(s) open {_age(since_cut)} past its flat cut (nothing may carry "
+                         "into the main session; the engine retries the flatten every refresh)")
+        else:
+            parts.append(f"{aid}: outside its window, {n_open} open")
+    return Check(name="weekend_247", status=_worst(statuses), reason="; ".join(parts) or "no weekend lane")

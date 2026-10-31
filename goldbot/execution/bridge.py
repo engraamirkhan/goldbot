@@ -104,6 +104,7 @@ METHODS: dict[str, tuple[str, bool]] = {
     "margin_required": ("float", True),      # read-only (order_calc_margin): retry-safe, nothing reaches the market
     "loss_per_lot": ("float", True),         # read-only (order_calc_profit / tick value): the sizing conversion
     "trading_sessions": ("list[TradingSession]", True),   # read-only session hours (D13)
+    "symbols_get": ("list[str]", True),      # read-only symbol names (ADR 0062 symbol check): optional
     "place_order": ("OrderResult", False),
     "modify": ("OrderResult", False),
     "close": ("OrderResult", False),
@@ -130,11 +131,15 @@ METHODS: dict[str, tuple[str, bool]] = {
 # (`order_lane` on /health), and the brain sends its read timeout (`timeout_s`) with every request. Same methods,
 # records and arguments, and a v6 server ignores the extra request key, so MIN_COMPATIBLE stays 5 and either box can
 # be deployed first; only a live account requires v7 (bridge_compat.CLOSE_PRIORITY_VERSION: entries refused below it).
-API_VERSION = 7
+# v8 (ADR 0062): `symbols_get(pattern)` (read-only symbol names) and SymbolInfo's swap_mode, swap_long, swap_short,
+# margin_initial and margin_maintenance, for the symbol check of a new account (goldbot/ops/symbol_check.py). Optional
+# and reporting only: a v7 bridge refuses symbols_get (the check falls back to symbol_info) and its SymbolInfo reads
+# with the new fields None, so MIN_COMPATIBLE stays 5 and either box can be deployed first.
+API_VERSION = 8
 MIN_COMPATIBLE = 5
 # Methods the brain calls only with a fallback for a bridge that lacks them: never required by bridge_compat, so their
 # absence never refuses entries. Read-only methods only (an order method is never optional).
-OPTIONAL_METHODS = frozenset({"get_bars_range"})
+OPTIONAL_METHODS = frozenset({"get_bars_range", "symbols_get"})
 _RECORDS: dict[str, type[BaseModel]] = {"SymbolInfo": SymbolInfo, "AccountInfo": AccountInfo, "Tick": Tick, "OrderResult": OrderResult,
             "Position": Position, "BrokerTerms": BrokerTerms, "OrderIntent": OrderIntent, "TradingSession": TradingSession}
 # Any change to these records' fields goes to the trading-safety reviewer (AGENT_STANDARDS S12): responses are read
@@ -939,6 +944,9 @@ class RemoteBroker:
 
     def trading_sessions(self, symbol: str) -> list[TradingSession]:
         return self._call("trading_sessions", symbol)
+
+    def symbols_get(self, pattern: str = "*") -> list[str]:
+        return self._call("symbols_get", pattern)
 
     def place_order(self, intent: OrderIntent) -> OrderResult:
         return self._call("place_order", intent)

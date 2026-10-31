@@ -87,7 +87,7 @@ def test_every_retired_arm_on_every_account_is_refused_by_the_engines_arm_select
 def test_retired_count_by_account(accounts) -> None:
     """The ids each account stops entering (registered there and on the A2 list)."""
     got = {k: len(set(a.exploration.arms) & set(A2)) for k, a in accounts.items() if a.exploration.enabled}
-    assert got == {"icm-demo": 24, "icm-probe": 8, "vantage-demo": 20}
+    assert got == {"icm-demo": 24, "icm-probe": 8, "vantage-demo": 20, "vantage-247": 0}    # ADR 0062: new controls
 
 
 def test_every_pot_keeps_its_caps_and_sums_inside_the_budget_and_keeps_an_active_arm(accounts, spec) -> None:

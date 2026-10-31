@@ -35,6 +35,7 @@ SWING = {"W0", "W1A", "W1B", "W2", "WFRI", "PDC4", "C30A", "C30C", "BXR4H"}
 # H-81 (prereg-2026-10-27-scalp-volume.md 3.2; ADR 0049 D1a scalp pots): icm-demo's and vantage-demo's scalp strata
 DEMO_SCALP = {"Z3D", "Z4D", "Z6D", "Z7D", "Z9D", "Z10D", "ZCD"}
 VANTAGE_SCALP = {"Z6V", "Z7V", "ZCV"}
+WEEKEND_247 = {"WKS0", "WKI0"}      # ADR 0062: vantage-247's weekend random controls (configured, off until enabled)
 VANTAGE = {"VI0", "VI2A", "VI2B", "VMB15", "VMB30", "VMB1H", "VMS15", "VW0", "VW1A", "VW1B", "VW2",
            "VXRIP1H", "VXRT1H", "VXFK1H", "VXTL1H", "VXTV2", "VXBO1H", "VXBO15", "VXTR1H", "VC1H",   # wave 1
            "KSQ1", "PDC1", "DON4"}                                                                     # wave 2
@@ -97,17 +98,17 @@ def test_no_arm_runs_on_two_enabled_accounts(accs):
         clash = {arm: seen[arm] for arm in acc.exploration.arms if arm in seen}
         assert not clash, f"{aid} shares arms with another host: {clash}"
         seen.update(dict.fromkeys(acc.exploration.arms, aid))
-    assert set(seen) == SCALP | INTRADAY | SWING | VANTAGE | DEMO_SCALP | VANTAGE_SCALP
+    assert set(seen) == SCALP | INTRADAY | SWING | VANTAGE | DEMO_SCALP | VANTAGE_SCALP | WEEKEND_247
 
 
 def test_each_hosts_exploration_magic_and_order_ids_are_its_own(accs, tmp_path):
     hosts = [a for a in accs.values() if a.exploration.enabled]           # configured, switched on or not
-    assert len({a.magic_base + magic.EXPLORATION_OFFSET for a in hosts}) == len(hosts) == 3
+    assert len({a.magic_base + magic.EXPLORATION_OFFSET for a in hosts}) == len(hosts) == 4     # + vantage-247
     ids = set()
     for a in hosts:                                                         # the same arm and bar on both: never one id
         eng = _host_engine(tmp_path / a.account_id, a)
         ids.add(exploration.order_id(eng, _arm("I0"), CLOSE))
-    assert len(ids) == 3
+    assert len(ids) == 4
 
 
 # ------------------------------------------------------------------------------------------------ the evidence fences

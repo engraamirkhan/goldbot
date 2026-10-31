@@ -25,6 +25,13 @@ brokers:
     symbol_map: { XAUUSD: XAUUSD+ }   # confirmed from symbol_info at startup, this is only a hint
     magic_base: 260200
     canonical_costs: false
+  # ADR 0062: the XAUUSD247 weekend lane's own broker key (vantage-247), so its weekend evidence, cost table and
+  # learner weights never pool with vantage-demo's XAUUSD+ (evidence is keyed by broker). Same broker, other symbol
+  vantage247:
+    server_tz: Europe/Athens
+    symbol_map: { XAUUSD247: XAUUSD247 }   # its own store symbol: never the weekday XAUUSD history
+    magic_base: 260700
+    canonical_costs: false
 
 features:
   max_live_features: 40

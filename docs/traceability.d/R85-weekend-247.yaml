@@ -1,0 +1,5 @@
+id: R85
+requirement: 'ADR 0062 XAUUSD247 weekend lane: an always-open account trades on its own calendar (no Friday cut), entries only Fri 21:00 .. Sun 21:00 UTC, every position closed at the Sunday cut; every weekday account unchanged; nothing of XAUUSD247 pooled with XAUUSD'
+status: implemented (vantage-247 configured, enabled false until its terminal, bridge and registry rows exist)
+code: config/accounts.yaml `vantage-247`; goldbot/data/calendar.py `PauseWindow`, `WeekendWindow`, `SessionTable.always_open`; goldbot/engine/weekend_lane.py; goldbot/engine/runner.py `_server_clock`, `_host_clock_exits`, `bar_sessions`; goldbot/engine/cost_probe.py `schedule_skip`; goldbot/engine/exploration.py `crosses_friday`; goldbot/ops/accounts.py `_always_open_fenced`, `pooled_brokers`; goldbot/ops/symbol_check.py; goldbot/execution/bridge.py `symbols_get` (v8); goldbot/ops/checks/engine.py `check_weekend_247`; goldbot/ops/linux/mt5-instance.sh, mt5-second-terminal.sh
+test: tests/test_weekend_247.py; tests/test_symbol_check.py; tests/test_mt5_second_terminal.py; tests/test_mt5_authorize.py::test_adr_0062_one_line_forwards_to_every_bridge_port_of_a_two_terminal_box

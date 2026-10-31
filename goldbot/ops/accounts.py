@@ -44,11 +44,13 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from goldbot.base import FrozenRecord, Record, write_private
 from goldbot.config import ROOT
+from goldbot.data.calendar import PauseWindow, WeekendWindow
 from goldbot.data.timeutil import server_zone
 from goldbot.risk.limits_profile import RiskOverrides
 from goldbot.risk.pilot import PILOT_MAX_DAILY_LOSS, PilotRules
 
 ACCOUNTS_FILE = ROOT / "config" / "accounts.yaml"
+CANONICAL_SYMBOL = "XAUUSD"     # the weekday gold history's store symbol: an always-open account never uses it
 ACCOUNT_ID_LOGIN = re.compile(r"\d{5,}")      # an account name with this could carry an MT5 login: refused at load
 # BACKLOG 63: the account name starts every proposal id, which a Telegram Approve/Reject button carries with the card
 # stamp in at most 64 bytes (goldbot.telegram.approvals.decision_callbacks); a longer name is refused at load
@@ -245,6 +247,19 @@ class Account(Record):
     # Read by the bridge only. Off until the drill on that box passed (RUNBOOK "Order lane"); off = entries share the
     # bridge's connection, at the back of its queue
     order_lane: bool = False
+    # ADR 0062 (the XAUUSD247 weekend lane). store_symbol: the store symbol of this account's own data (release bars,
+    # labels, costs); None = the canonical name of `brokers.<broker>.symbol_map` (services.engine.release_symbol).
+    # contract_size: the declared ounces per lot, compared with the terminal's by `goldbot.ops.symbol_check`
+    store_symbol: str | None = None
+    contract_size: float | None = Field(None, gt=0)
+    # sessions: `broker` = the weekday gold calendar and the Friday cut (every account before ADR 0062); `always_open` =
+    # a 24/7 symbol, open but for the broker's own `pauses` (UTC), with no Friday cut. Demo only, own store symbol
+    sessions: Literal["broker", "always_open"] = "broker"
+    pauses: tuple[PauseWindow, ...] = ()
+    # weekend_only: entries only inside `weekend_window` (default Fri 21:00 .. Sun 21:00 UTC), every position closed at
+    # its end, so nothing carries into the main session. Needs `always_open`; its exploration arms are controls only
+    weekend_only: bool = False
+    weekend_window: WeekendWindow = Field(default_factory=WeekendWindow)
 
     # backstop for records built outside load_accounts: validation errors never carry the input (names, logins)
     model_config = ConfigDict(hide_input_in_errors=True)      # merged with Record's config by pydantic
@@ -367,6 +382,25 @@ class Account(Record):
             raise ValueError(f"pilot needs daily_loss_limit_abs on the same account, at most {PILOT_MAX_DAILY_LOSS:g}")
         if self.dynamic_limits or self.risk_overrides is not None:
             raise ValueError("pilot needs dynamic_limits off and no risk_overrides (ADR 0055)")
+        return self
+
+    @model_validator(mode="after")
+    def _always_open_fenced(self) -> Account:
+        """ADR 0062: "never pooled with XAUUSD history, labels, learner weights or qualification". An always-open
+        account is demo (trading a 24/7 symbol with money is the owner's decision) and names its own store symbol,
+        never the weekday history's; weekend_only and pauses need it; a weekend_only account runs random controls only
+        (no strategy has a weekend history to qualify on)."""
+        if self.sessions != "always_open":
+            if self.weekend_only or self.pauses:
+                raise ValueError("weekend_only and pauses need sessions: always_open (ADR 0062)")
+            return self
+        if self.mode != "demo":
+            raise ValueError("sessions: always_open is allowed on demo accounts only (ADR 0062)")
+        if not self.store_symbol or self.store_symbol == CANONICAL_SYMBOL:
+            raise ValueError(f"sessions: always_open needs its own store_symbol, never {CANONICAL_SYMBOL} (ADR 0062)")
+        if self.weekend_only and any(a.control_share is None for a in self.exploration.arms.values()):
+            raise ValueError("a weekend_only account runs random controls only: every arm has a control_share "
+                             "(ADR 0062)")
         return self
 
     @property
@@ -590,8 +624,18 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
                            exploration=Exploration(**(a.get("exploration") or {})),
                            max_positions=a.get("max_positions"), order_timeout_s=a.get("order_timeout_s", 15.0),
                            pilot=PilotRules(**(a.get("pilot") or {})),
-                           order_lane=a.get("order_lane", False))    # BACKLOG 135: read by the bridge
-    hosts = [a for a in out.values() if a.enabled and a.shadow_host]
+                           order_lane=a.get("order_lane", False),    # BACKLOG 135: read by the bridge
+                           store_symbol=a.get("store_symbol"), contract_size=a.get("contract_size"),
+                           sessions=a.get("sessions", "broker"),
+                           pauses=tuple(PauseWindow(**p) for p in a.get("pauses") or ()),
+                           weekend_only=bool(a.get("weekend_only", False)),
+                           weekend_window=WeekendWindow(**(a.get("weekend_window") or {})))
+    if pooled := pooled_brokers(out.values()):
+        raise ValueError("broker key " + ", ".join(pooled) + " is shared by an always-open account and a weekday "
+                         "account in config/accounts.yaml: evidence, costs and weights are keyed by broker, so the "
+                         "24/7 symbol would pool with weekday gold. Give the always-open account its own broker key "
+                         "(ADR 0062)")
+    hosts =[a for a in out.values() if a.enabled and a.shadow_host]
     if len(hosts) > 1:      # ADR 0037 amendment 4: one shadow book, one host; two would trade it twice
         raise ValueError(f"{len(hosts)} enabled accounts are the shadow host in config/accounts.yaml: exactly one may "
                          f"be (move shadow_host and cost_probe off the other, ADR 0037 amendment 4)")
@@ -601,6 +645,16 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
                          "limits. Store the right login (python -m goldbot.ops.accounts set mt5-login-<account>) or "
                          "disable one")
     return out
+
+
+def pooled_brokers(accounts: Iterable[Account]) -> list[str]:
+    """Broker keys held by both an always-open account and a weekday account, listed or not (ADR 0062): the learner,
+    the label replay and `jobs.broker_cost_table` key evidence and costs by broker, so a shared key would pool the
+    24/7 symbol's weekend fills with weekday gold. Sorted."""
+    kinds: dict[str, set[str]] = {}
+    for a in accounts:
+        kinds.setdefault(a.broker, set()).add(a.sessions)
+    return sorted(b for b, k in kinds.items() if len(k) > 1)
 
 
 def shared_logins(accounts: Iterable[Account]) -> list[tuple[str, ...]]:

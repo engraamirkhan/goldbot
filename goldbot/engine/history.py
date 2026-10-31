@@ -32,6 +32,7 @@ from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
 from goldbot.data.resample import BAR_COLUMNS, ticks_to_1m
 from goldbot.data.ticks import Pace, PullDeferred, pull_day
 from goldbot.data.timeutil import epoch_ns
+from goldbot.engine import weekend_lane
 from goldbot.engine.shadow import minutes_of
 
 if TYPE_CHECKING:
@@ -96,7 +97,7 @@ class _Deadline(Pace):
         return now
 
 
-def rates_to_bars(r: pd.DataFrame | None, point: float) -> pd.DataFrame:
+def rates_to_bars(r: pd.DataFrame | None, point: float, sessions: SessionTable = DEFAULT_SESSIONS) -> pd.DataFrame:
     """The broker's 1m rates (`get_bars`: ts_utc, open/high/low/close bid, tick_count, spread in points) as BAR_COLUMNS,
     one definition for the history fill and the live minutes (engine/broker_bars.py): bid_* = the rates (MT5 bars are
     bid), ask_* = bid_* + spread x point, spread_mean = spread_max = spread x point (MT5 keeps one spread per bar),
@@ -114,7 +115,7 @@ def rates_to_bars(r: pd.DataFrame | None, point: float) -> pd.DataFrame:
     out["tick_count"] = pd.to_numeric(r["tick_count"]).to_numpy(float)
     out["spread_mean"] = spread
     out["spread_max"] = spread
-    out = out[np.asarray(DEFAULT_SESSIONS.is_open(ts), dtype=bool)]
+    out = out[np.asarray(sessions.is_open(ts), dtype=bool)]        # ADR 0062: the engine's bar table
     return out[BAR_COLUMNS].drop_duplicates("ts_utc").sort_values("ts_utc").reset_index(drop=True)
 
 
@@ -126,8 +127,8 @@ class BrokerRates:
     tick_count = tick volume, visible_at = ts_utc + 1 min, in-session minutes only (DEFAULT_SESSIONS, as the live
     builder). A broker without get_bars/symbol_info (or a failed pull) yields no minutes: the gap check decides."""
 
-    def __init__(self, broker: Any, symbol: str, pace: Pace):
-        self.broker, self.symbol, self.pace = broker, symbol, pace
+    def __init__(self, broker: Any, symbol: str, pace: Pace, sessions: SessionTable = DEFAULT_SESSIONS):
+        self.broker, self.symbol, self.pace, self.sessions = broker, symbol, pace, sessions
         self.frame: pd.DataFrame | None = None
         self.ok = False                  # a good pull (safety review MEDIUM: a failed pull never vouches for a day)
 
@@ -157,7 +158,7 @@ class BrokerRates:
             self.frame = empty
             return empty
         self.ok = True
-        self.frame = rates_to_bars(r, point)
+        self.frame = rates_to_bars(r, point, self.sessions)
         return self.frame
 
     def minutes(self, lo: pd.Timestamp, hi: pd.Timestamp, *, since: pd.Timestamp) -> pd.DataFrame:
@@ -168,6 +169,7 @@ class BrokerRates:
 
 def pull_bars(broker: Any, symbol: str, span: Span, *, page_ticks: int, pace: Pace, keep: bool,
               rates: BrokerRates | None = None, since: pd.Timestamp | None = None,
+              sessions: SessionTable = DEFAULT_SESSIONS,
               ) -> tuple[list[pd.DataFrame], list[Span], str | None]:
     """The broker's ticks in `span`, one UTC day per `pull_day`, as completed 1m bars (the live bar builder); minutes
     the ticks do not reach are taken from the broker's 1m bars (`rates`), so a terminal with a short tick history still
@@ -182,7 +184,7 @@ def pull_bars(broker: Any, symbol: str, span: Span, *, page_ticks: int, pace: Pa
         nxt = min(day.floor("D") + pd.Timedelta(days=1), end)
         try:
             ticks = pull_day(broker, symbol, day, nxt, chunk=page_ticks, pace=pace)
-            b = ticks_to_1m(ticks[["ts_utc", "bid", "ask"]], DEFAULT_SESSIONS) if not ticks.empty else ticks.iloc[:0]
+            b = ticks_to_1m(ticks[["ts_utc", "bid", "ask"]], sessions) if not ticks.empty else ticks.iloc[:0]
             if rates is not None:
                 fb = rates.minutes(day, nxt, since=since)
                 if not fb.empty:
@@ -208,8 +210,10 @@ class HistoryFill:
     """One background fill of `spans` (span, keep) from `broker`; `done` is set when it has finished."""
 
     def __init__(self, broker: Any, symbol: str, spans: list[tuple[Span, bool]], *, page_ticks: int, budget_s: float,
-                 clock: Callable[[], pd.Timestamp] | None = None, sleep: Callable[[float], None] = time.sleep):
+                 clock: Callable[[], pd.Timestamp] | None = None, sleep: Callable[[float], None] = time.sleep,
+                 sessions: SessionTable = DEFAULT_SESSIONS):
         self.broker, self.symbol, self.spans, self.page_ticks = broker, symbol, spans, page_ticks
+        self.sessions = sessions              # the engine's bar table (ADR 0062)
         clk = clock or (lambda: pd.Timestamp.now("UTC"))
         self.pace = _Deadline(clk, sleep, pause_s=PAUSE_S, page_limit_s=PAGE_LIMIT_S, budget_s=budget_s)
         self.bars: list[pd.DataFrame] = []
@@ -221,11 +225,12 @@ class HistoryFill:
 
     def _run(self) -> None:
         try:
-            rates = BrokerRates(self.broker, self.symbol, self.pace)
+            rates = BrokerRates(self.broker, self.symbol, self.pace, self.sessions)
             since = min(s[0] for s, _ in self.spans) if self.spans else None
             for span, keep in self.spans:
                 bars, covered, err = pull_bars(self.broker, self.symbol, span, page_ticks=self.page_ticks,
-                                               pace=self.pace, keep=keep, rates=rates, since=since)
+                                               pace=self.pace, keep=keep, rates=rates, since=since,
+                                               sessions=self.sessions)
                 self.bars += bars
                 self.covered += covered
                 if err:
@@ -363,7 +368,8 @@ def start_fill(eng: Engine, now: pd.Timestamp) -> None:
                 spans.append(((max(g.start, floor), g.end), bool(g.start >= cut)))
     if not spans:
         return
-    h.fill = HistoryFill(h.broker, cfg.symbol, spans, page_ticks=cfg.backfill_page_ticks, budget_s=cfg.backfill_budget_s)
+    h.fill = HistoryFill(h.broker, cfg.symbol, spans, page_ticks=cfg.backfill_page_ticks, budget_s=cfg.backfill_budget_s,
+                         sessions=weekend_lane.bar_table(eng))
     h.last_fill = now
     h.backfill.update({"from": spans[0][0][0].isoformat(), "running": True})
     log.info("history fill started in the background: %d spans from %s", len(spans), spans[0][0][0])

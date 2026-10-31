@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# mt5-experts-enable.sh   (MT5 box, run AS USER mt5 with the terminal STOPPED; ExecStartPre of
+# mt5-experts-enable.sh [<install dir under C:\MT5>]   (MT5 box, run AS USER mt5 with the terminal STOPPED; ExecStartPre of
 # goldbot-mt5-terminal@.service, installed root-owned at /usr/local/libexec/goldbot with mt5-ini.sh)
 # Starts every terminal with AutoTrading (Algo Trading) on. Incident 2026-10-20: the probe terminal's common.ini had no
 # [Experts] section, so AutoTrading was off and the terminal refused every order (10027), while the demo terminal's
@@ -16,15 +16,23 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 # MT5_DIR, BACKUP_ROOT and SKIP_RUNNING_CHECK are honoured only under GOLDBOT_TEST=1 (the tests): in the unit the edit
 # always targets mt5's own tree and the running check always runs (security review LOW)
 if [ "${GOLDBOT_TEST:-}" != 1 ]; then unset MT5_DIR BACKUP_ROOT SKIP_RUNNING_CHECK; fi
-MT5_DIR=${MT5_DIR:-${HOME:-/home/mt5}/.wine/drive_c/MT5/ICMarkets}
+die() { echo "refused: $*" >&2; exit 2; }
+# ADR 0062: an optional install dir under C:\MT5 (a second terminal on the box, mt5-instance.sh): the edit and the
+# running check then cover that install only, so the other terminal running never blocks it. Without it: unchanged
+INSTALL=${1-}
+RUNNING='[t]erminal64[.]exe'
+if [ -n "$INSTALL" ]; then
+  [[ "$INSTALL" =~ ^[A-Za-z0-9]{1,32}$ ]] || die "install dir must be letters and digits"
+  RUNNING="MT5.$INSTALL.[t]erminal64[.]exe"
+fi
+MT5_DIR=${MT5_DIR:-${HOME:-/home/mt5}/.wine/drive_c/MT5/${INSTALL:-ICMarkets}}
 BACKUP_ROOT=${BACKUP_ROOT:-${HOME:-/home/mt5}}
 INI=$MT5_DIR/Config/common.ini
 KEYS=(AllowDllImport=0 Enabled=1 Account=1 Profile=1 Chart=0 Api=0 WebRequest=0)
 
-die() { echo "refused: $*" >&2; exit 2; }
 [ "$(id -u)" -ne 0 ] || die "run as user mt5, not root"
 [ -f "$INI" ] || die "no Config/common.ini under $MT5_DIR (the terminal writes it on its first exit)"
-if [ -z "${SKIP_RUNNING_CHECK:-}" ] && pgrep -u "$(id -u)" -f '[t]erminal64[.]exe' >/dev/null; then
+if [ -z "${SKIP_RUNNING_CHECK:-}" ] && pgrep -u "$(id -u)" -f "$RUNNING" >/dev/null; then
   die "terminal64.exe is running: stop it first (it rewrites common.ini on exit)"
 fi
 

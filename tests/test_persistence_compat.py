@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from goldbot.base import Record, SkewSummary
 from goldbot.config import load_settings
 from goldbot.data import crossfeed, tv_pull
+from goldbot.data.calendar import PauseWindow
 from goldbot.data.ticks import TickIndex
 from goldbot.engine import cost_probe, exploration
 from goldbot.engine.runner import OpenTrade, PendingClose, SentOrder
@@ -516,7 +517,10 @@ def test_every_persisted_record_model_has_a_compat_case():
                # test_a_newer_engines_reason_with_an_extra_field_is_read_tolerantly
                AskReason,
                # state/aux/daily_review/: case_daily_review
-               dr.DailyReview, dr.WeeklyRollup}
+               dr.DailyReview, dr.WeeklyRollup,
+               # engine_<account>.json `sessions.pauses` (ADR 0062): tests/test_weekend_247.py::
+               # test_a_pause_a_newer_engine_wrote_with_an_extra_field_still_reads
+               PauseWindow}
     loaded = {f.model for f in _tolerant_finds() if f.model not in GENERIC_MODEL_ARGS.values()}
     assert loaded - {m.__name__ for m in covered} == set()
 

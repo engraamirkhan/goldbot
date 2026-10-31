@@ -85,11 +85,10 @@ from pydantic import Field, ValidationError, model_validator
 
 from goldbot.base import FrozenRecord, UtcTimestamp
 from goldbot.config import tf_seconds
-from goldbot.data.calendar import DEFAULT_SESSIONS
 from goldbot.data.resample import resample_bars, ticks_to_1m
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db import Database, RecordRepo
-from goldbot.engine import auto_entry, cost_probe
+from goldbot.engine import auto_entry, cost_probe, weekend_lane
 from goldbot.execution.costs import CONTRACT_OZ
 from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec
 from goldbot.research.arms import (
@@ -859,7 +858,7 @@ def _minutes(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     ticks = [t for t in eng.ticks if t.ts_utc < through]
     if ticks:
         parts.append(ticks_to_1m(pd.DataFrame({"ts_utc": [t.ts_utc for t in ticks], "bid": [t.bid for t in ticks],
-                                               "ask": [t.ask for t in ticks]}), DEFAULT_SESSIONS))
+                                               "ask": [t.ask for t in ticks]}), weekend_lane.bar_table(eng)))
     parts.append(broker_bars.fetched(eng, through))     # last, so a minute's broker bar wins over its sampled one
     parts = [p for p in parts if not p.empty]
     if not parts:
@@ -1152,6 +1151,8 @@ def crosses_friday(eng: Engine, now: pd.Timestamp, hold_s: int, follows_cut: boo
     acts on it as on every position of the engine (`Engine._weekend_rule`, unchanged), but never into the weekend:
     refused when its hold reaches the server's Saturday 00:00, or when it would be sent after the week's cut."""
     from goldbot.data.timeutil import server_wall
+    if getattr(eng.cfg, "always_open", False):   # ADR 0062: no Friday cut; a weekend_only account's own cut instead
+        return weekend_lane.crosses_cut(eng.cfg, now, hold_s)
     end = now + pd.Timedelta(seconds=hold_s)
     h, m = (int(x) for x in eng.cfg.weekend_cut.split(":"))
     srv_now, srv_end = server_wall(pd.DatetimeIndex([now, end]), eng.cfg.server_tz)

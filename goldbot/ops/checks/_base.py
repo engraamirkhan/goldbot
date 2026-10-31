@@ -15,6 +15,7 @@ import pandas as pd
 from pydantic import Field
 
 from goldbot.base import FrozenRecord, Record, UtcTimestamp
+from goldbot.data.calendar import WeekendWindow
 from goldbot.data.timeutil import CLOCK_AHEAD_TOLERANCE_S
 
 if TYPE_CHECKING:
@@ -88,6 +89,14 @@ class AccountRef(FrozenRecord):
     symbol: str = "XAUUSD"
     adaptive: bool = False            # ADR 0031: the nightly limits_job decides its limits (check limits_controller)
     live: bool = False                # a real-money account: needs bridge v7 and its order lane up (BACKLOG 135)
+
+
+class WeekendLaneRef(FrozenRecord):
+    """ADR 0062: a weekend_only account as the `weekend_247` check needs it (listed, enabled or not)."""
+
+    account_id: str
+    enabled: bool
+    window: WeekendWindow
 
 
 # --------------------------------------------------------------------------------------------- helpers

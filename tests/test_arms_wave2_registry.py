@@ -32,7 +32,7 @@ WAVE2 = {"F1A": ("hurst_band_break", "15m"), "F1C": ("hurst_band_break_control",
 # E2 G1 level_break + C30/DOND daily and weekend; E3 BXR trail, BXT/BXF virtual twins, XC15 netting shift)
 # lanes E1-E3 merged 2026-10-26; DOND unblocked by ARM-SPEC 8.15 (its exit runs under the Friday cut, as WFRI's)
 BLOCKED: dict[str, str] = {}
-FORWARD_ONLY = {"F1A", "F1C", "G1A", "G1C", "WFRI", "KA15", "XC15", *BOX}
+FORWARD_ONLY = {"F1A", "F1C", "G1A", "G1C", "WFRI", "KA15", "XC15", *BOX, "WKS0", "WKI0"}   # ADR 0062: weekend lane
 # account -> arm id -> (style, max_loss, control_share)
 HOSTS: dict[str, dict[str, tuple[str, float, float | None]]] = {
     "icm-probe": {"KA15": ("scalp", 6.5, None), "XC15": ("scalp", 6.5, 0.10),
