@@ -117,6 +117,7 @@ def test_exits_at_the_exact_stop_price_mark_the_overshoot_untrusted() -> None:
                   n_void=0)
     t = C.build_table(fr, version="v", window_utc=("a", "b"), resamples=100)
     assert t["cells"]["b"]["london"]["overshoot_trusted"] is False
+    assert t["cells"]["b"]["all"]["overshoot_trusted"] is False       # decided on the broker's pooled stop exits
 
 
 def test_the_interval_resamples_whole_minutes() -> None:

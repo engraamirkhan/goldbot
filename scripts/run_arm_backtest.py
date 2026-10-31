@@ -23,6 +23,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from goldbot.data.calendar import DEFAULT_SESSIONS  # noqa: E402
 from goldbot.data.release import read_bar_files, read_us_calendar_files  # noqa: E402
 from goldbot.data.resample import mid, resample_bars  # noqa: E402
 from goldbot.data.timeutil import utc_index  # noqa: E402
@@ -223,7 +224,13 @@ def twin_summary(trades: pd.DataFrame, arm_id: str) -> dict[str, Any]:
 
 
 def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp, costs: A.ArmCosts,
-            blackout: tuple[np.ndarray, np.ndarray] | None = None) -> tuple[pd.DataFrame, dict[str, Any]]:
+            blackout: tuple[np.ndarray, np.ndarray] | None = None,
+            screen: A.ScreenPin | None = None) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """`screen`: a NEW pre-registration's pin (broker, cost of record version). It adds `net_r_cor` (the pinned
+    table's charged round trip by the entry's session and the overshoot ruling) and `net_r_cor_stress` (0.70 on stop
+    exits); the registry columns `net_r` / `net_r_os` keep the frozen 0.23 and [0, 0.70]."""
+    if screen is not None:
+        costs.require_version(screen.cost_version)          # before any bar is read: a stale table stops the screen
     A.assert_no_holdout_rows(b1)
     b1 = b1.reset_index(drop=True)
     bars = b1 if arm.timeframe == "1m" else resample_bars(b1, arm.timeframe).reset_index(drop=True)
@@ -266,6 +273,12 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
                 "net_r": A.net_r(move, r_usd, stop, costs, os_lo, extra),
                 "net_r_os": A.net_r(move, r_usd, stop, costs, os_hi, extra), "barrier_hit": lab["barrier_hit"].to_numpy(),
                 "exit_px": lab["exit"].to_numpy(dtype=float)})
+            if screen is not None:
+                ets = utc_index(lab["entry_ts"])
+                sess = np.where(DEFAULT_SESSIONS.is_open(ets), DEFAULT_SESSIONS.session_label(ets), "")
+                for col, os_usd in (("net_r_cor", None), ("net_r_cor_stress", A.OVERSHOOT_STRESS_USD)):
+                    trades[col] = A.screen_net_r(move, r_usd, stop, costs, broker=screen.broker, sessions=sess,
+                                                 version=screen.cost_version, extra_usd=extra, overshoot_usd=os_usd)
             if "stratum" in cands.columns:
                 trades["stratum"] = cands.set_index("idx")["stratum"].reindex(idx).to_numpy()
                 trades["spread_extra_usd"] = extra
@@ -285,6 +298,10 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
     def stat(col: str, rows: pd.DataFrame | None = None) -> dict[str, Any]:
         return _stat(trades if rows is None else rows, col)
     extra_summary: dict[str, Any] = {}
+    if screen is not None:
+        extra_summary["screen"] = {"broker": screen.broker, "cost_of_record": screen.cost_version,
+                                   "net_r_of_record": stat("net_r_cor") if n else None,
+                                   "net_r_stress_0.70": stat("net_r_cor_stress") if n else None}
     if K.is_runner(arm) and n:
         extra_summary["twins"] = twin_summary(trades, arm.id)
     if "stratum" in trades.columns and n:
@@ -324,6 +341,8 @@ def main() -> None:
     ap.add_argument("--calendar", default="raw-calendar", help="the calendar-v1 files (tier-1 blackout)")
     ap.add_argument("--no-calendar", action="store_true", help="run without the blackout (recorded in the summary)")
     ap.add_argument("--out", default="arm_out")
+    ap.add_argument("--screen-broker", help="a NEW pre-registration's broker (with --cost-version): price at the cost of record")
+    ap.add_argument("--cost-version", help="the cost of record version the pre-registration pinned")
     args = ap.parse_args()
     loaded = A.load_arms(Path(args.arms_file))
     if args.list_arms:
@@ -343,7 +362,10 @@ def main() -> None:
     blackout = None
     if not args.no_calendar:
         blackout = load_blackout(Path(args.calendar))
-    trades, summary = run_arm(b1, arm, start, end, A.load_costs(Path(args.costs)), blackout)
+    if bool(args.screen_broker) != bool(args.cost_version):
+        ap.error("--screen-broker and --cost-version go together")
+    pin = A.ScreenPin(broker=args.screen_broker, cost_version=args.cost_version) if args.cost_version else None
+    trades, summary = run_arm(b1, arm, start, end, A.load_costs(Path(args.costs)), blackout, screen=pin)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     stem = f"{arm.id}__{start.date()}_{end.date()}"
