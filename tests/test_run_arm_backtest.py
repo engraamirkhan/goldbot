@@ -279,3 +279,19 @@ def test_the_history_run_applies_the_live_send_delay_of_a_scalp_arm(b1: pd.DataF
     assert moved.any()
     assert (pd.DatetimeIndex(pair["entry_ts_late"])[moved] >= d[moved] + pd.Timedelta(minutes=1)).all()
     assert (pair["entry_ts_late"] == pair["entry_ts"])[~moved].all()
+
+
+def test_a_new_prereg_screen_charges_the_pinned_cost_of_record(b1: pd.DataFrame) -> None:
+    """A new pre-registration's screen pins the table version and charges it per session; the registry columns
+    (0.23 and [0, 0.70]) are untouched."""
+    assert COSTS.of_record is not None
+    pin = A.ScreenPin(broker="icm", cost_version=COSTS.of_record.version)
+    plain, s0 = rab.run_arm(b1, ARMS["S0"], START, END, COSTS)
+    trades, s = rab.run_arm(b1, ARMS["S0"], START, END, COSTS, screen=pin)
+    assert trades["net_r"].tolist() == pytest.approx(plain["net_r"].tolist())
+    assert s["screen"]["cost_of_record"] == COSTS.of_record.version and s["screen"]["broker"] == "icm"
+    assert "net_r_of_record" in s["screen"] and "net_r_stress_0.70" in s["screen"]
+    if len(trades):
+        assert (trades["net_r_cor_stress"] <= trades["net_r_cor"] + 1e-12).all()
+    with pytest.raises(ValueError, match="version"):
+        rab.run_arm(b1, ARMS["S0"], START, END, COSTS, screen=A.ScreenPin(broker="icm", cost_version="cor-old"))
