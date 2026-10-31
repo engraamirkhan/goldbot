@@ -49,10 +49,12 @@ Group.model_rebuild()
 
 
 class ExitTemplate(FrozenRecord):
-    """One of the fixed menu: stop {1.0 ATR, 1.5 ATR, structural} x target {1R, 2R, time exit at N bars}."""
+    """One of the fixed menu: stop {1.0 ATR, 1.5 ATR, structural} x target {1R, 2R, time exit at N bars}. Grammar v2
+    (ADR 0058 amendment 2026-11-02) adds the target 3R and `be_trail` (no target: a trail one stop distance behind the
+    best price, armed at +1 R, i.e. break-even at +1 R; the time barrier closes the rest)."""
 
     stop: Literal["atr_1.0", "atr_1.5", "structural"]
-    target: Literal["1R", "2R", "time"]
+    target: Literal["1R", "2R", "3R", "time", "be_trail"]
     time_bars: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")

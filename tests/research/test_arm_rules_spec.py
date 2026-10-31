@@ -147,7 +147,7 @@ def test_spec_rule_arm_is_hash_frozen_and_carries_the_canonical_spec() -> None:
 
 
 @pytest.mark.parametrize("bad", ["hash", "noncanonical", "timeframe", "time_exit", "structural", "leaf", "extra",
-                                 "family_session"])
+                                 "family_session", "be_trail", "v2_leaf"])
 def test_a_spec_arm_that_is_not_executable_live_is_refused_at_load(bad: str) -> None:
     spec = family_spec("box_break_close", "15m", None, T2R)
     p, tf = dict(params_of(spec)), "15m"
@@ -163,7 +163,10 @@ def test_a_spec_arm_that_is_not_executable_live_is_refused_at_load(bad: str) -> 
         other = {"time_exit": spec.model_copy(update={"exit": ExitTemplate(stop="atr_1.0", target="time", time_bars=10)}),
                  "structural": spec.model_copy(update={"exit": ExitTemplate(stop="structural", target="2R")}),
                  "leaf": spec.model_copy(update={"filter": Leaf(kind="oscillator", name="rsi_bucket")}),
-                 "family_session": spec.model_copy(update={"session_window": "london"})}[bad]
+                 "family_session": spec.model_copy(update={"session_window": "london"}),
+                 # grammar v2 (ADR 0058 amendment 2026-11-02): the engine has no trail for a spec arm and no v2 gate
+                 "be_trail": spec.model_copy(update={"exit": ExitTemplate(stop="atr_1.0", target="be_trail")}),
+                 "v2_leaf": spec.model_copy(update={"filter": Leaf(kind="macro", name="ry_down")})}[bad]
         p.update(spec=canonical_json(other), spec_hash=spec_hash(other))
     with pytest.raises(ValueError):
         Arm(id="D2610-1", rule="spec_rule", timeframe=tf, params=p)       # type: ignore[arg-type]

@@ -118,7 +118,7 @@ def check(arm: Arm) -> None:
     if spec.family is not None and spec.session_window != "all":
         raise ValueError("a family spec is read by the explore evaluator on every session (`nulls.MaskCache`): its "
                          "session_window must be 'all' for live to equal research")
-    if spec.exit.stop == "structural" or spec.exit.target == "time":
+    if spec.exit.stop == "structural" or spec.exit.target in ("time", "be_trail"):
         raise ValueError("the engine has no structural stop or target-free (time exit) entry: the spec's exit is not "
                          "executable live")
     try:
