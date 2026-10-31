@@ -112,3 +112,24 @@ Written before any real-data nightly search has run, so it binds every explore s
    cost table with its own net mean R > 0; stage reads refuse priors (no fallback) and a read on other costs fails. F4:
    the holdout also needs the t clustered by session day >= HOLDOUT_MIN_T. A stage read refuses an absent or empty
    search ledger.
+
+## Amendment 2026-11-02 (grammar v2; pre-registered before its first run; kill-rules amendment A4)
+Context: grammar v1's three runs (2026-10-30, K 864) gave 0 survivors, and on 15m the top specs beat a cost-crushed
+null with a negative own net R. Decision:
+1. **Vocabulary.** v2 adds 13 gate leaves (HAR range band lo/mid/hi, NR4, NR7, tier-1 event day, real-yield 20-day
+   change up/down, broad-dollar 20-day change up/down, GVZ tercile lo/mid/hi), one side primitive (the sign of the 4h
+   return, `with` or `against`, never an entry leaf) and a closed exit list of five (stop 1.0 ATR with a time exit, a
+   1R/2R/3R target, or break-even at +1 R with a 1 R trail). Every value is read at the decision bar's close through
+   `asof_join` on `available_utc` (`autodisc/grammar_v2.py`, PIT tests in `test_grammar_v2.py`). Macro enters only as
+   gates (the H-84 direction rules are retired, R-16).
+2. **Absolute net-R floor.** A candidate advances only with its own net mean R >= +0.05 R at the cost of record, in
+   addition to beating the search null (excess over random alone never advances).
+3. **Costs.** v2 reads the measured ICM cells (round trip $0.208, stop overshoot $0.084) on top of the historical
+   bid/ask, not the settings priors; swap stays the prior until it is measured.
+4. **K.** K_v2 is declared before the run (1,704 for one run each on 1h, 4h and 1d) and the DSR is read at
+   max(ledger K_search, declared K) + the program K before v2 (1,264), i.e. 2,968.
+5. **Live.** The `spec_rule` interpreter refuses every v2-only leaf and the break-even trail exit (it checks with v1's
+   vocabulary and has no trail); a v2 survivor needs an interpreter change, reviewed, before it can become a demo arm.
+6. **Stop rule (A4).** 0 explore survivors on all three timeframes freezes generation on 2026-11-20 until the Q1
+   state-of-the-art refresh; no v2.x before 2026-11-20.
+Pre-registration: `docs/research/prereg-2026-11-02-discovery-v2.md`.
