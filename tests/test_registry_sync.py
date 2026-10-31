@@ -102,3 +102,35 @@ def test_a_repair_that_does_not_take_the_failed_rows_own_slot_drops_nothing(tmp_
         repaired = {**repaired, "repair": {**repaired["repair"], **change}}
     merged = rs.merge_rows(published, [repaired])
     assert len(merged) == 4 and sum(r["status"] == "failed" for r in merged) == 1
+
+
+# ---------------------------------------------------------------------------------------------- 403 from GitHub
+def _http_error(code):
+    import io
+    import urllib.error
+    return urllib.error.HTTPError("https://api.github.com/x", code, "Forbidden", {}, io.BytesIO(b"{}"))  # type: ignore[arg-type]
+
+
+def test_a_403_on_a_write_names_the_missing_contents_write_permission(monkeypatch):
+    """Measured on the brain 2026-10-31: the token reads the release (contents:read) but the upload POST was refused
+    with a bare "HTTP Error 403: Forbidden", which does not say what to fix."""
+    def refuse(req, timeout=None):
+        raise _http_error(403)
+    monkeypatch.setattr("urllib.request.urlopen", refuse)
+    with pytest.raises(rs.RegistryForbidden, match=r"POST .*Contents: Read and write.*engraamirkhan/goldbot"):
+        rs.HttpTransport("tok").upload({"upload_url": "https://uploads.github.com/x/assets{?name,label}"}, "n", b"")
+
+
+def test_a_403_on_a_read_names_contents_read(monkeypatch):
+    def refuse(req, timeout=None):
+        raise _http_error(403)
+    monkeypatch.setattr("urllib.request.urlopen", refuse)
+    with pytest.raises(rs.RegistryForbidden, match=r"Contents: Read-only"):
+        rs.HttpTransport("tok").release()
+
+
+def test_a_404_still_means_no_release(monkeypatch):
+    def missing(req, timeout=None):
+        raise _http_error(404)
+    monkeypatch.setattr("urllib.request.urlopen", missing)
+    assert rs.HttpTransport("tok").release() is None

@@ -1,0 +1,5 @@
+id: R86
+requirement: Brain reporting and scheduling gaps (2026-10-31) - a registry 403 names the missing token permission; perf-report Days, North star and Costs include the demo learning book; a never-run quarterly job runs once
+status: implemented
+code: goldbot/research/registry_sync.py `RegistryForbidden`; goldbot/ops/perf_report.py `_learning_book_sections`, `_learning_costs`; goldbot/ops/learning_ledger.py `LearningClose.commission/swap`; goldbot/ops/scheduler.py `Schedule.run_if_never_run`; config/settings.yaml `scheduler.cpcv_quarterly`
+test: tests/test_registry_sync.py::test_a_403_on_a_write_names_the_missing_contents_write_permission; tests/test_learning_book_sections.py; tests/test_scheduler.py::test_a_job_that_asks_for_it_runs_once_when_first_seen_late_in_its_period

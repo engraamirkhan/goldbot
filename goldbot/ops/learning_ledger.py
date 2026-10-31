@@ -55,6 +55,8 @@ class LearningClose(FrozenRecord):
     r: float | None = None              # pnl over the loss at the stop when sent
     gross: float | None = None          # pnl + commission + swap (None unless both are recorded)
     risk: float | None = None
+    commission: float | None = None     # the closed-trade record's convention: a cost, positive = paid
+    swap: float | None = None           # the record's convention: the broker's sign (negative = paid)
     net: bool                           # commission and swap both recorded (gates_phase.pnl_basis "net")
     censored: bool = False              # closed by anything but the arm's own stop, target or hold
 
@@ -88,6 +90,7 @@ def read_learning_closes(state_dir: str | Path, now: pd.Timestamp) -> LearningCl
             account=r.account, kind=r.kind, family=r.family, arm_id=r.arm_id, timeframe=r.timeframe,
             position_id=r.position_id, opened_utc=pd.Timestamp(r.opened_utc), exit_utc=pd.Timestamp(r.exit_utc),
             side=r.side, currency=r.currency, pnl=r.pnl, r=r.r, gross=gross, risk=r.risk_amount, net=gross is not None,
+            commission=c.commission if c is not None else None, swap=-c.swap if c is not None and c.swap is not None else None,
             censored=r.censored))
     return LearningCloses(rows=rows, unreadable=[s for s in ledger.unreadable if s in SOURCES])
 
