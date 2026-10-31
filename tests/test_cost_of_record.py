@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 import yaml
 
@@ -51,14 +52,58 @@ def test_charged_round_trip_is_the_upper_bound_never_below_the_frozen_model() ->
         for session in SESSIONS:
             hi = c.of_record.cells[broker][session].round_trip_ci90[1]
             assert c.charged_round_trip_usd(broker, session) == pytest.approx(max(c.round_trip_usd, hi))
-    # a session the table does not split (rollover, weekend) reads the broker's pooled cell
-    assert c.charged_round_trip_usd("icm", "rollover") == c.charged_round_trip_usd("icm", "all")
+    # a session name the session table does not know is refused, never read as the pooled cell (quant review #238)
+    with pytest.raises(ValueError, match="session"):
+        c.charged_round_trip_usd("icm", "rollover")
+    with pytest.raises(ValueError, match="session"):
+        c.charged_round_trip_usd("icm", "London")
 
 
 def test_another_brokers_measurement_is_never_used() -> None:
     c = arms.load_costs(COSTS)
     with pytest.raises(KeyError, match="no cost of record"):
         c.charged_round_trip_usd("pepperstone", "london")
+
+
+def test_a_screen_pins_the_cost_of_record_version() -> None:
+    c = arms.load_costs(COSTS)
+    assert c.of_record is not None
+    assert c.require_version(c.of_record.version) is c.of_record
+    with pytest.raises(ValueError, match="version"):
+        c.require_version("cor-1999-01-01")
+
+
+def test_without_a_table_no_version_can_be_pinned(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="no cost of record"):
+        arms.load_costs(_write(tmp_path, None)).require_version("cor-2026-10-31")
+
+
+def test_the_overshoot_ruling_floor_upper_bound_and_vantage_stress() -> None:
+    """Quant ruling on #238 (ADR): ICM charges the session's clustered upper bound, floored at 0.12; Vantage (stops
+    filled at the stop price on demo) charges the 0.70 stress until its exit legs are recorded."""
+    c = arms.load_costs(COSTS)
+    assert c.of_record is not None
+    for session in ("asia", "london", "newyork"):
+        hi = c.of_record.cells["icm"][session].overshoot_ci90[1]
+        assert c.overshoot_charge_usd("icm", session) == pytest.approx(max(arms.OVERSHOOT_FLOOR_USD, hi))
+        assert c.overshoot_charge_usd("vantage", session) == arms.OVERSHOOT_STRESS_USD
+
+
+def test_the_screen_charges_per_session_and_reports_the_stress() -> None:
+    c = arms.load_costs(COSTS)
+    assert c.of_record is not None
+    v = c.of_record.version
+    sessions = np.array(["asia", "london", ""])           # "" = outside every session: the broker's dearest cell
+    rt, os_ = c.screen_charges("icm", sessions, v)
+    dear = max(c.charged_round_trip_usd("icm", s) for s in ("asia", "london", "newyork"))
+    assert rt.tolist() == pytest.approx([c.charged_round_trip_usd("icm", "asia"), c.charged_round_trip_usd("icm", "london"),
+                                         dear])
+    assert os_[2] == pytest.approx(max(c.overshoot_charge_usd("icm", s) for s in ("asia", "london", "newyork")))
+    move, risk, stop = np.array([1.0, -3.0, 0.5]), np.array([3.0, 3.0, 3.0]), np.array([False, True, True])
+    net = arms.screen_net_r(move, risk, stop, c, broker="icm", sessions=sessions, version=v)
+    assert net.tolist() == pytest.approx(((move - rt - os_ * stop) / risk).tolist())
+    with pytest.raises(ValueError, match="version"):
+        c.screen_charges("icm", sessions, "cor-old")
 
 
 def test_overshoot_of_record_is_the_upper_bound_and_none_when_untrusted() -> None:
