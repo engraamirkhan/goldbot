@@ -171,5 +171,8 @@ arms:
   # hold, minutes, timeframe) at Saturday and Sunday UTC closes (`weekdays` [5, 6]; the rollover window and the tier-1
   # blackout still apply; the engine's own window refuses Sunday from 21:00 and any hold reaching that cut). Forward
   # only: XAUUSD247 has no history, and the matrix runs on XAUUSD bars, so they never run there (no pooling). New ids.
+  # Pre-registered 2026-10-31 (docs/research/prereg-2026-10-31-weekend-247.md): cost, swap and plumbing measurement
+  # only on a broker-made weekend quote; never read for edge, never the null of a weekday family, no promotion path.
+  # One registry row each (family arms_weekend_247, 2026Q4 budget 147 -> 149) before vantage-247 is enabled.
   - { id: WKS0, rule: random_bracket, timeframe: 1m, params: {"minutes": [0, 10, 20, 30, 40, 50], "window_utc": ["00:00", "23:50"], "stop_usd": 3.0, "target_r": 1.0, "hold_bars": 30, "weekdays": [5, 6]}, max_open: 3, status: run, forward_only: true, note: "weekend random control of the XAUUSD247 lane (S0 geometry; never read for edge)", role: control, config_hash: 643477cb6642a804 }
   - { id: WKI0, rule: random_bracket, timeframe: 15m, params: {"minutes": [0], "window_utc": ["00:00", "23:45"], "stop_atr": 1.5, "target_r": 2.0, "hold_bars": 96, "weekdays": [5, 6]}, max_open: 3, status: run, forward_only: true, note: "weekend random control of the XAUUSD247 lane (I0 geometry; never read for edge)", role: control, config_hash: e0f7bd18d11d3947 }
