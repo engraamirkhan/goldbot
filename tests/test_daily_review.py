@@ -636,3 +636,15 @@ def test_after_a_restart_no_entry_goes_out_until_the_retired_arms_are_read_and_e
         conn.execute("ALTER TABLE gone RENAME TO exploration_arm_status")
     exploration.on_pass(eng2, _at(eng2, pb, CLOSE + pd.Timedelta(minutes=30)))
     assert eng2.exploration is not None and eng2.exploration.retired_ok
+
+
+def test_a_host_whose_gold_symbol_has_a_suffix_still_has_its_exit_legs_read(tmp_path):
+    """Backlog 141: `Store.read` defaulted to symbol XAUUSD, so Vantage's legs (written under XAUUSD+) read as none."""
+    from goldbot.data.store import Store
+    from goldbot.research.daily_review import _frame
+    store = Store(tmp_path / "data")
+    legs = pd.DataFrame({"ts_utc": [LONDON], "position_id": [1], "agent_id": ["explore:Z7V"], "side": [1],
+                         "requested": [2002.0], "filled": [2001.95]})
+    store.append("exit_fills", legs, source="vantage-demo", symbol="XAUUSD+", dedupe=False)
+    got = _frame(store, "exit_fills", "vantage-demo", LONDON - pd.Timedelta(hours=1), LONDON + pd.Timedelta(hours=1))
+    assert len(got) == 1 and got["filled"].iloc[0] == 2001.95

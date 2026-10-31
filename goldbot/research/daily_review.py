@@ -462,7 +462,7 @@ def _cell(broker: str, host: str, session: str, *, entries: Sequence[Exploration
 
 
 def _frame(store: Any, table: str, host: str, lo: pd.Timestamp, hi: pd.Timestamp) -> pd.DataFrame:
-    df = store.read(table, source=host, start=lo, end=hi)
+    df = store.read(table, source=host, symbol=None, start=lo, end=hi)   # any symbol: Vantage's is XAUUSD+
     if df is None or df.empty or "ts_utc" not in df:
         return pd.DataFrame()
     ts = pd.to_datetime(df["ts_utc"], utc=True)

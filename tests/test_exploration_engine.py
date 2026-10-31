@@ -1209,3 +1209,24 @@ def test_a_scalp_signal_on_a_quarter_hour_close_waits_its_delay_and_keeps_its_de
     assert len(_sent(eng)) == 1 and not ex.queue
     [rec] = exploration.trades(str(tmp_path))
     assert rec.signal_utc == CLOSE
+
+
+def test_an_exploration_stop_out_at_the_broker_logs_its_exit_leg_at_the_deal_price_against_the_stop(tmp_path):
+    """Backlog 141: an exploration stop or target fill went to the exploration ledger and returned before the runner's
+    GAP-04 logging, so no stop-exit leg was ever written (stop overshoot unmeasurable on any broker). The leg is the
+    broker's deal price against the stop level; logging only, the exit itself is unchanged."""
+    from goldbot.data.store import Store
+    eng, pb = _engine(tmp_path, [_arm("a", max_open=1)])
+    eng.store = Store(tmp_path / "data")
+    exploration.on_pass(eng, _at(eng, pb, CLOSE))
+    [pid] = list(eng.open)
+    sl = eng.open[pid].sl
+    assert sl is not None
+    eng._last_reconcile = CLOSE
+    eng.on_tick(Tick(ts_utc=CLOSE + pd.Timedelta(seconds=40), bid=sl - 1.0, ask=sl - 0.8))
+    [rec] = exploration.trades(str(tmp_path))
+    assert rec.exit_reason == "stop" and rec.exit_price is not None
+    [leg] = Store(tmp_path / "data").read("exit_fills", source="icm-probe").to_dict("records")
+    assert leg["position_id"] == pid and leg["kind"] == "stop" and leg["agent_id"] == "explore:a"
+    assert leg["requested"] == sl and leg["filled"] == rec.exit_price and leg["filled"] < sl
+    assert leg["client_order_id"] == rec.client_order_id
