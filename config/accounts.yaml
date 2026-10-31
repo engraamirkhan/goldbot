@@ -385,7 +385,7 @@ accounts:
     # shared broker key at load).
     broker: vantage247
     mode: demo
-    server: VantageInternational-Demo   # Standard STP demo; confirm in the terminal (verify_terminal_account refuses another)
+    server: VantageMarkets-Demo   # Standard STP demo, same server as vantage-demo; confirmed by a keyring login 2026-10-31
     login: null  # never here (public repo): mt5-login-vantage-247 and mt5-vantage-247 in the MT5 box keyring
     terminal_path: C:\MT5\Vantage247\terminal64.exe   # the second install on the Vantage box (mt5_bootstrap.sh --instance)
     server_tz: NY+7   # as vantage-demo (same broker, measured 2026-10-26); re-checked by server_clock:vantage-247

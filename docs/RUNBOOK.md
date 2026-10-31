@@ -213,7 +213,7 @@ Nobody types a login or password anywhere else.
 |---|---|---|
 | W1 | Second terminal, on the box (below) | Claude, after the owner approves the deploy |
 | W2 | Login copied to the brain: `ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-mt5-vantage goldbot-mt5 accounts export mt5-login-vantage-247 \| ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-brain goldbot accounts set mt5-login-vantage-247 --stdin` | Claude |
-| W3 | First start and login from the keyring: `sudo systemctl start goldbot-mt5-terminal@vantage-247`, then `goldbot-mt5 login vantage-247 --dismiss-wizard` (prints ok or failed, never the login). It fails only if this install has no Vantage server list: then open an account once over VNC (File > Open an Account > Vantage > `VantageInternational-Demo`), and retry | Claude |
+| W3 | First start and login from the keyring: `sudo systemctl start goldbot-mt5-terminal@vantage-247`, then `goldbot-mt5 login vantage-247 --dismiss-wizard` (prints ok or failed, never the login). It fails only if this install has no Vantage server list: then open an account once over VNC (File > Open an Account > Vantage > `VantageMarkets-Demo`), and retry | Claude |
 | W4 | Bridge address and token, as B8 with `vantage-247`: listen `127.0.0.1:8766` on the box, `mt5-bridge-url-vantage-247` = `http://127.0.0.1:8769` on the brain | Claude |
 | W5 | Tunnel key, env file and tunnel drop-in on the brain (below) | Claude (root; security review) |
 | W6 | `sudo systemctl start goldbot-bridge@vantage-247 goldbot-bridge-watchdog@vantage-247.timer` on the box; on the brain `sudo systemctl enable --now goldbot-bridge-tunnel@vantage-247`, `curl -s 127.0.0.1:8769/health` ok | Claude |
@@ -960,7 +960,7 @@ job records "skipped" and headlines are collected unscored. Their total spend is
 2. Do the same with `C:\MT5\Vantage\terminal64.exe` and your Vantage **demo** account. Vantage may call the symbol
    `XAUUSD+`; the engine resolves it.
 3. Check the server names against `config/accounts.yaml`: `icm-demo` expects `ICMarketsSC-Demo`, `vantage-demo`
-   expects `VantageInternational-Demo`. If your terminal shows a different server name, change the `server:` line
+   expects `VantageMarkets-Demo`. If your terminal shows a different server name, change the `server:` line
    of that account in `config/accounts.yaml`.
 4. Allow algorithmic trading in each terminal (Tools -> Options -> Expert Advisors).
 
