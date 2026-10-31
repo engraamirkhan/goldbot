@@ -221,3 +221,18 @@ def test_correction_counts_a_prior_k_eff_zero_discovery_row(tmp_path: Path) -> N
              status="discovery", rationale="r", results={"kind": "historical_arms_matrix", "discovery": {"k_eff": 0}})
     assert mod.correct(reg)["results"]["discovery"]["k_eff"] == 24 - 2 - 1
     assert TrialRegistry(reg).n_trials_effective == 24
+
+
+def test_a_refusal_is_logged_once_per_process_at_info_then_at_debug(caplog: pytest.LogCaptureFixture) -> None:
+    """Every health run calls load_arms; the ~22 'refuses new demo entries' lines were repeated each time."""
+    arms._REFUSAL_LOGGED.clear()
+    with caplog.at_level("DEBUG", logger=arms.log.name):
+        first = arms.load_arms(ARMS)
+        n_info = sum(r.levelname == "INFO" and "refuses new demo entries" in r.message for r in caplog.records)
+        caplog.clear()
+        second = arms.load_arms(ARMS)
+    assert n_info > 0, "the first load reports each refusal"
+    assert not [r for r in caplog.records if r.levelname == "INFO" and "refuses new demo entries" in r.message]
+    assert [r for r in caplog.records if r.levelname == "DEBUG" and "refuses new demo entries" in r.message]
+    # qualification behaviour is unchanged (ADR 0061)
+    assert [(a.id, a.entry_refused) for a in first] == [(a.id, a.entry_refused) for a in second]
