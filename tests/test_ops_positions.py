@@ -12,6 +12,8 @@ from goldbot.engine.shadow import ShadowBook
 from goldbot.ops import positions
 from tests.test_api_home_cards import ACC, NOW, _engine, _orders
 
+pytestmark = pytest.mark.clock_at("2026-10-30T12:00:00Z")
+
 ACCOUNTS = [ACC]                        # the enabled accounts' ids; this config name embeds a login
 
 

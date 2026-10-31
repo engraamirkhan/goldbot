@@ -1,0 +1,236 @@
+"""scripts/goldbot_release.sh: the owner-approvable brain deploy wrapper (ROADMAP 5a FR-9, deploy-approval runbook
+option B). It deploys only a 40-hex commit on GitHub's main with green backend + frontend CI, runs exactly the
+documented remote commands (D2 deploy, D3 record, D4 health) and nothing else, and its exit code says what happened.
+`gh` and `ssh` are fakes on PATH that log every call."""
+from __future__ import annotations
+
+import datetime as dt
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "scripts" / "goldbot_release.sh"
+SHA = "a" * 40
+HEAD = "b" * 40
+
+pytestmark = pytest.mark.skipif(shutil.which("bash") is None or shutil.which("python3") is None,
+                                reason="needs bash and python3")
+
+FAKE_GH = r"""#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_LOG.gh"
+env | grep -E '^(GH_HOST|GH_REPO|GH_ENTERPRISE_TOKEN|GH_CONFIG_DIR|GIT_DIR|GIT_WORK_TREE)=' >> "$FAKE_LOG.env"
+url=$2
+case "$url" in
+  */compare/*) [ -n "$FAKE_COMPARE" ] || exit 1; echo "$FAKE_COMPARE" ;;
+  */check-runs*) case " $FAKE_GREEN " in *" $(echo "$url" | sed 's#.*/commits/\([0-9a-f]*\)/.*#\1#') "*) echo 2 ;; *) echo 1 ;; esac ;;
+  */git/commits/*) case "$url" in *"$FAKE_ODD_TREE"*) echo othertree ;; *) echo sametree ;; esac ;;
+  */commits/*) echo "$FAKE_PARENT2" ;;
+  *) exit 9 ;;
+esac
+"""
+
+FAKE_SSH = r"""#!/usr/bin/env bash
+cmd=${!#}
+printf '%s\n' "$*" >> "$FAKE_LOG.ssh"
+case "$cmd" in
+  *systemd-run*) exit "${FAKE_D2_RC:-0}" ;;
+  *deploys.jsonl*) n=$(grep -c 'deploys.jsonl' "$FAKE_LOG.ssh"); if [ "$n" -ge 2 ] && [ -n "$FAKE_RECORD2" ]; then echo "$FAKE_RECORD2"; else echo "$FAKE_RECORD"; fi ;;
+  *"run health"*) echo "$FAKE_HEALTH"; exit "${FAKE_HEALTH_RC:-0}" ;;
+  *"run positions --account "*) a=${cmd##*--account }; a=${a%\"}
+    case " $FAKE_POS_FAIL " in *" $a "*) echo "bridge down"; exit 1 ;; esac
+    printf 'ticket 1 %s buy 0.01 sl 2650.0\033[31m\ntotal: 1\n' "$a" ;;
+  *) exit 99 ;;
+esac
+"""
+
+
+def record(result: str = "deployed", to: str = SHA, ts: str | None = None) -> str:
+    ts = ts or (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return json.dumps({"ts": ts, "result": result, "from": "c" * 40, "to": to})
+
+
+def health(entry: str = "ok", reconcile: str = "ok", other_fail: bool = False,
+           extra: tuple[str, ...] = ("icm-probe",)) -> str:
+    checks = [{"name": "entry_status:icm-demo", "status": entry, "reason": "open"},
+              *({"name": f"entry_status:{a}", "status": "ok", "reason": "open"} for a in extra),
+              {"name": "engine:icm-demo", "status": "ok", "reason": "fresh"},
+              {"name": "reconcile:icm-demo", "status": reconcile, "reason": "positions match the broker"}]
+    if other_fail:
+        checks.append({"name": "tv_pull", "status": "fail", "reason": "stale"})
+    return json.dumps({"ts": "2026-10-30T10:01:00Z", "status": "ok", "checks": checks})
+
+
+@pytest.fixture
+def fakes(tmp_path):
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    for name, body in (("gh", FAKE_GH), ("ssh", FAKE_SSH)):
+        (bin_ / name).write_text(body, encoding="utf-8")
+        (bin_ / name).chmod(0o755)
+    env = {"PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin", "HOME": str(tmp_path),
+           "FAKE_LOG": str(tmp_path / "log"), "FAKE_COMPARE": "ahead", "FAKE_GREEN": SHA, "FAKE_PARENT2": "",
+           "FAKE_ODD_TREE": "none", "FAKE_RECORD": record(), "FAKE_RECORD2": "", "FAKE_HEALTH": health(), "FAKE_POS_FAIL": "",
+           "GOLDBOT_RELEASE_WATCH_S": "0", "GOLDBOT_TESTING": "1", "GOLDBOT_RELEASE_TEST_BIN": str(bin_)}
+    return tmp_path, env
+
+
+def run(fakes, *args: str, **over: str) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    tmp, env = fakes
+    r = subprocess.run(["bash", str(SCRIPT), *args], capture_output=True, text=True, env={**env, **over})
+    log = tmp / "log.ssh"
+    return r, log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
+
+D2 = (f"sudo systemctl reset-failed 'goldbot-deploy-manual-*'; sudo systemd-run --wait --unit "
+      f"goldbot-deploy-manual-$(date +%s) /usr/local/sbin/goldbot-deploy {SHA}")
+D3 = "sudo tail -1 /var/lib/goldbot-deploy/deploys.jsonl"
+D4 = 'bash -lc "goldbot run health --json"'
+
+
+def d4p(account: str) -> str:
+    return f'bash -lc "goldbot run positions --account {account}"'
+
+
+def test_a_ci_green_main_commit_runs_exactly_the_documented_commands_and_succeeds(fakes):
+    tmp, _ = fakes
+    r, ssh = run(fakes, SHA)
+    assert r.returncode == 0, r.stdout + r.stderr
+    prefix = f"-F {tmp}/.ssh/goldbot.conf -o BatchMode=yes -o ProxyCommand=none goldbot-brain "
+    assert ssh == [prefix + D2, prefix + D3, prefix + D3, prefix + D4, prefix + d4p("icm-demo"),
+                   prefix + d4p("icm-probe")]
+    assert '"result": "deployed"' in r.stdout and "DEPLOYED " + SHA in r.stdout
+    assert "entry_status:icm-demo" in r.stdout and "reconcile:icm-demo" in r.stdout
+    assert "ticket 1 icm-probe" in r.stdout and "total: 1" in r.stdout and "\x1b" not in r.stdout
+
+
+def test_unreadable_positions_for_any_account_fail_with_4(fakes):
+    r, ssh = run(fakes, SHA, FAKE_POS_FAIL="icm-probe")
+    assert r.returncode == 4 and "positions for icm-probe could not be read" in r.stdout
+    assert len(ssh) == 6
+
+
+def test_an_account_id_from_the_report_that_is_not_a_plain_id_is_never_sent(fakes):
+    r, ssh = run(fakes, SHA, FAKE_HEALTH=health(extra=("x; sudo reboot", "$(id)", "Upper")))
+    assert r.returncode == 0, r.stdout
+    assert [line for line in ssh if "positions" in line] == [
+        f"-F {fakes[0]}/.ssh/goldbot.conf -o BatchMode=yes -o ProxyCommand=none goldbot-brain " + d4p("icm-demo")]
+
+
+@pytest.mark.parametrize("bad", ["", SHA[:39], SHA.upper(), SHA + "0", "main", f"{SHA[:39]};", "$(reboot)" + SHA[:31]])
+def test_anything_but_a_full_lowercase_sha_is_refused_before_any_call(fakes, bad):
+    tmp, _ = fakes
+    r, ssh = run(fakes, bad)
+    assert r.returncode == 2 and "REFUSED" in r.stdout
+    assert ssh == [] and not (tmp / "log.gh").exists()
+
+
+def test_extra_arguments_are_refused(fakes):
+    r, ssh = run(fakes, SHA, "--rollback")
+    assert r.returncode == 2 and ssh == []
+
+
+@pytest.mark.parametrize("compare", ["behind", "diverged", ""])
+def test_a_commit_not_on_main_is_refused_without_touching_the_box(fakes, compare):
+    r, ssh = run(fakes, SHA, FAKE_COMPARE=compare)
+    assert r.returncode == 2 and ssh == []
+
+
+def test_a_commit_without_green_ci_is_refused(fakes):
+    r, ssh = run(fakes, SHA, FAKE_GREEN="")
+    assert r.returncode == 2 and "no green" in r.stdout and ssh == []
+
+
+def test_a_merge_commit_with_its_pr_heads_tree_uses_the_pr_heads_green_ci(fakes):
+    r, ssh = run(fakes, SHA, FAKE_GREEN=HEAD, FAKE_PARENT2=HEAD)
+    assert r.returncode == 0, r.stdout
+    assert "PR head " + HEAD in r.stdout and len(ssh) == 6
+
+
+def test_a_merge_commit_whose_tree_differs_from_the_green_pr_head_is_refused(fakes):
+    r, ssh = run(fakes, SHA, FAKE_GREEN=HEAD, FAKE_PARENT2=HEAD, FAKE_ODD_TREE=SHA)
+    assert r.returncode == 2 and "tree differs" in r.stdout and ssh == []
+
+
+# a fixed far-future ts: the ids must be identical on every xdist worker (a ts from now() differs between them)
+_TS = "2099-01-01T00:00:00Z"
+
+
+@pytest.mark.parametrize("rec", [record("refused", ts=_TS), record("rolled_back", ts=_TS),
+                                 record("deployed", "c" * 40, ts=_TS), "garbage", ""])
+def test_a_record_that_does_not_say_deployed_this_sha_fails_with_3_and_skips_the_checks(fakes, rec):
+    r, ssh = run(fakes, SHA, FAKE_RECORD=rec, FAKE_D2_RC="1")
+    assert r.returncode == 3, r.stdout
+    assert len(ssh) == 2 and not any("health" in line for line in ssh)
+
+
+def test_a_rollback_by_the_on_box_watch_after_the_switch_fails_with_3(fakes):
+    r, ssh = run(fakes, SHA, FAKE_RECORD2=record("rolled_back"))
+    assert r.returncode == 3 and "rolled back" in r.stdout and len(ssh) == 3
+
+
+def test_a_degraded_deploy_counts_as_deployed(fakes):
+    r, _ = run(fakes, SHA, FAKE_RECORD=record("deployed_degraded"))
+    assert r.returncode == 0, r.stdout
+
+
+@pytest.mark.parametrize("over", [{"FAKE_HEALTH": health(entry="fail"), "FAKE_HEALTH_RC": "1"},
+                                  {"FAKE_HEALTH": health(reconcile="fail"), "FAKE_HEALTH_RC": "1"},
+                                  {"FAKE_HEALTH": "not json"},
+                                  {"FAKE_HEALTH": json.dumps({"status": "ok", "checks": []})}])
+def test_a_failing_entry_status_or_reconcile_or_an_unreadable_report_fails_with_4(fakes, over):
+    r, _ = run(fakes, SHA, **over)
+    assert r.returncode == 4, r.stdout
+
+
+def test_an_unrelated_failing_check_is_shown_but_does_not_fail_the_deploy(fakes):
+    r, _ = run(fakes, SHA, FAKE_HEALTH=health(other_fail=True), FAKE_HEALTH_RC="1")
+    assert r.returncode == 0 and "tv_pull" in r.stdout
+
+
+def test_remote_output_is_printed_without_terminal_escapes(fakes):
+    r, _ = run(fakes, SHA, FAKE_RECORD=json.dumps({"ts": json.loads(record())["ts"], "result": "deployed", "to": SHA, "detail": "\x1b]0;pwned\x07"}))
+    assert r.returncode == 0 and "\x1b" not in r.stdout and "\x07" not in r.stdout
+
+
+def test_the_only_remote_commands_in_the_script_are_d2_d3_d4():
+    """No rollback, stage, MT5 box or free-form remote command can be reached through the wrapper."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    code = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    assert sum('"${SSH[@]}"' in line for line in code) == 5
+    assert all(any(f'"${{SSH[@]}}" "{c}"' in line for c in ("$D2", "$D3", "$D4", '$(d4_positions "$acc")'))
+               for line in code if '"${SSH[@]}"' in line)
+    assert "--rollback" not in "\n".join(code) and "--stage" not in "\n".join(code) and "goldbot-mt5" not in text
+
+
+@pytest.mark.skipif(shutil.which("shellcheck") is None, reason="shellcheck not installed (CI runs it in pre-commit)")
+def test_the_script_is_shellcheck_clean():
+    r = subprocess.run(["shellcheck", str(SCRIPT)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout
+
+
+def test_a_record_older_than_this_run_is_not_accepted_even_if_it_names_the_sha(fakes):
+    stale = record(ts=(dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    r, ssh = run(fakes, SHA, FAKE_RECORD=stale, FAKE_D2_RC="1")
+    assert r.returncode == 3 and "stale" in r.stdout and len(ssh) == 2
+    r, _ = run(fakes, SHA, FAKE_RECORD=json.dumps({"result": "deployed", "to": SHA}))   # no ts: not accepted either
+    assert r.returncode == 3
+
+
+def test_the_caller_environment_cannot_redirect_gh_or_git(fakes):
+    r, _ = run(fakes, SHA, GH_HOST="evil.example", GH_REPO="evil/repo", GH_ENTERPRISE_TOKEN="x", GH_CONFIG_DIR="/tmp/x",
+               GIT_DIR="/tmp/x", GIT_WORK_TREE="/tmp/x")
+    assert r.returncode == 0, r.stdout
+    assert (fakes[0] / "log.env").read_text(encoding="utf-8") == ""   # gh saw none of the redirecting variables
+
+
+def test_the_watch_time_and_the_path_are_only_overridable_by_the_test_marker(fakes):
+    """Without GOLDBOT_TESTING + a test bin dir the fakes are not on PATH and the 0 s watch is not honoured."""
+    r, ssh = run(fakes, SHA, GOLDBOT_TESTING="")
+    assert r.returncode == 2 and ssh == []                  # fixed PATH: the fake gh is not found
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "export PATH=/usr/bin:/bin:/opt/homebrew/bin" in text and "ProxyCommand=none" in text
+    assert text.index("export PATH=") < text.index("gh api")

@@ -25,6 +25,8 @@ from goldbot.research import daily_review as dr
 from goldbot.research import exploration_data as ex
 from goldbot.telegram import labs
 
+pytestmark = pytest.mark.clock_at("2026-10-30T12:00:00Z")
+
 S = load_settings()
 DAY = "2026-10-22"                                    # a Thursday opportunity day: 2026-10-21 22:00 .. 10-22 22:00 UTC
 LO, HI = pd.Timestamp("2026-10-21 22:00", tz="UTC"), pd.Timestamp("2026-10-22 22:00", tz="UTC")

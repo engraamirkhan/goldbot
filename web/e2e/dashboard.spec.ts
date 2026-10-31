@@ -1,6 +1,6 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { go } from "./nav";
 import { totpClock } from "./totp";
@@ -42,7 +42,12 @@ async function expectRoleNotEmail(page: Page, role: string, email: string) {
 
 // One serial story: first run -> owner approves a trade -> halts and re-arms -> invites a viewer -> viewer sees but cannot act.
 // each authenticator code is accepted once, so a test that needs another one steps the server's TOTP clock (totpClock)
-test.describe.configure({ mode: "serial", timeout: 90_000 });
+// retries: 0 on purpose. A retry of a failed serial story starts it again from its first test against a server that
+// already has its owner ("first run creates the owner" can then never pass: CI #143, #223), so a retry cannot turn
+// a red story green, only hide the first failure behind a second, misleading one. Fresh state per attempt would need a
+// new server per attempt; the story is one server by design (auth.spec.ts does the same: retries: 0). The real failure
+// is the first one, and the trace of it is kept (trace: "retain-on-failure").
+test.describe.configure({ mode: "serial", timeout: 90_000, retries: 0 });
 let ownerSecret = "";
 let inviteLink = "";
 let viewerSecret = "";
@@ -405,6 +410,79 @@ test("entry status says in plain words why an account can't trade, when it resum
 // Home v2 (docs/ux/home-v2-2026-10-19.md, owner 2026-10-19): a calm status page of five cards in order at 360 and
 // 1080 px, light and dark, and everything about trades on the Trades screen (Open, Activity, Summary). Today's money
 // carries its DEMO badge and names the limit that binds; Home links to the open trades; nothing scrolls sideways.
+/** The engines' reports age out after 60 s (trades_ledger.STALE_S, home_cards.STALE_S): a long test on a loaded machine
+ *  (these two take minutes) then reads "engine not reporting" halfway through, which swaps Home's heading and adds a
+ *  "figures N old" line under Open trades (a layout shift of 0.0285 at the exact moment the report goes stale). The
+ *  heartbeat rewrites only `ts` of the reports that exist (the engines' and the supervisor's, whose silence turns the header pill red), atomically, every 5 s, so the test sees an engine that is
+ *  alive for exactly as long as the test runs. Node runs the beat and the test on one thread: no interleaved write. */
+let stopBeat: (() => void) | undefined;
+test.afterEach(() => { stopBeat?.(); stopBeat = undefined; });
+function keepEnginesFresh(dir: string): () => void {
+  const beat = () => {
+    for (const name of readdirSync(dir).filter((n) => /^(engine_.*|supervisor)\.json$/.test(n))) {
+      const path = join(dir, name);
+      try {
+        const doc = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+        doc.ts = Date.now() / 1000;
+        writeFileSync(`${path}.beat`, JSON.stringify(doc));
+        renameSync(`${path}.beat`, path);
+      } catch { /* a report being rewritten by the test itself: the next beat gets it */ }
+    }
+  };
+  const timer = setInterval(beat, 5_000);
+  return () => clearInterval(timer);
+}
+
+type PollShift = { cls: number; degraded: boolean; shifts: { value: number; at: number; nodes: string[] }[] };
+/** The summed layout shift (excluding input-driven) over 11 s, two 5 s polls, with what moved; and whether the page
+ *  showed a stale-data banner at any moment of the window. */
+async function measurePollShift(page: Page): Promise<PollShift> {
+  return page.evaluate(() => new Promise<PollShift>((done) => {
+    const out: PollShift = { cls: 0, degraded: false, shifts: [] };
+    type Src = { node: Node | null; previousRect: DOMRectReadOnly; currentRect: DOMRectReadOnly };
+    type Entry = { value: number; startTime: number; hadRecentInput: boolean; sources?: Src[] };
+    const describe = (x: Src) => (x.node instanceof Element
+      ? `${x.node.tagName.toLowerCase()}.${x.node.className} y ${Math.round(x.previousRect.y)}>${Math.round(x.currentRect.y)} h ${Math.round(x.previousRect.height)}>${Math.round(x.currentRect.height)} "${(x.node.textContent ?? "").slice(0, 50)}"`
+      : "?");
+    // degraded = the page changed what it says about the system during the window (the header pill's text, the strip's
+    // "can't reach the server" alert, an engine's "figures N old"): a state change drawn, not a poll's steady refresh
+    const pill = () => document.querySelector("[data-status-pill]")?.textContent ?? "";
+    const pill0 = pill();
+    const banner = () => {
+      if (pill() !== pill0 || document.querySelector(".safety .strip-summary[role=alert], .now-group.stale")) out.degraded = true;
+    };
+    banner();
+    const mo = new MutationObserver(banner);
+    mo.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
+    new PerformanceObserver((l) => {
+      for (const e of l.getEntries() as unknown as Entry[]) {
+        if (e.hadRecentInput) continue;
+        out.cls += e.value;
+        out.shifts.push({ value: e.value, at: Math.round(e.startTime), nodes: (e.sources ?? []).map(describe) });
+      }
+    }).observe({ type: "layout-shift", buffered: false });
+    setTimeout(() => { mo.disconnect(); done(out); }, 11_000);                  // two 5 s polls
+  }));
+}
+
+/** Waits until the layout has stopped moving, then measures: web fonts loaded, and the document height and the box of
+ *  `region` unchanged for `quietMs`. A layout-shift measure that starts the moment the first row appears counts the page
+ *  still settling (font swap, the first poll's data, the viewport change) as if the 5 s polls shifted it: 0.028 on
+ *  GitHub main (run 41038754258, #223) against a 0.01 budget for the polls themselves. */
+async function layoutSettled(page: Page, region: Locator, quietMs = 1500) {
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+  let last = "";
+  let since = Date.now();
+  await expect.poll(async () => {
+    const now = await region.evaluate((e) => {
+      const b = e.getBoundingClientRect();
+      return `${document.documentElement.scrollHeight}:${Math.round(b.top)}:${Math.round(b.height)}:${Math.round(b.width)}`;
+    });
+    if (now !== last) { last = now; since = Date.now(); }
+    return Date.now() - since >= quietMs;
+  }, { message: "the layout never settled", timeout: 30_000, intervals: [250] }).toBe(true);
+}
+
 async function noSideways(page: Page, width: number) {
   const wide = await page.evaluate((w) => Array.from(document.querySelectorAll("body *")).filter((e) => {
     if (e.getBoundingClientRect().right <= w + 1) return false;
@@ -423,6 +501,7 @@ test("Home is five calm cards and the trades live on Trades, on a phone and a de
     ...engine, ts: Date.now() / 1000, market_closed: false, entry_blocks: [], throttle: undefined, server_clock: undefined,
     daily_loss_limit: 50, daily_loss_remaining: 40,
   }));
+  stopBeat = keepEnginesFresh(dir);
   const home = ["Needs you", "System status", "Today", "Your strategies", "Learning"];
   for (const scheme of ["light", "dark"] as const) {
     for (const width of [360, 1080]) {
@@ -497,7 +576,9 @@ const PYTHON = process.env.PYTHON ?? (existsSync("../.venv/bin/python") ? "../.v
 const seed = (...args: string[]) => execFileSync(PYTHON, ["e2e/seed_trades.py", info().state_dir, ...args], { stdio: "inherit" });
 
 test("Trades: money on every open row, filters in the URL, a strategy's totals, one trade's detail, the ranking, no layout shift", async ({ page }) => {
+  test.setTimeout(240_000);              // two viewports x two colour schemes, and two 11 s layout-shift windows of waiting by design
   seed();
+  stopBeat = keepEnginesFresh(info().state_dir);
   await page.goto("/");
   await signIn(page, OWNER.email, OWNER.password, ownerSecret);
   for (const [width, height] of [[360, 800], [1280, 900]] as const) {
@@ -516,13 +597,17 @@ test("Trades: money on every open row, filters in the URL, a strategy's totals, 
       await expect(row).toContainText(/[+−]\d\.\d\d\sR/);
       await noSideways(page, width);
       if (width === 360) {
-        const cls = await page.evaluate(() => new Promise<number>((done) => {
-          let sum = 0;
-          new PerformanceObserver((l) => { for (const e of l.getEntries() as unknown as { value: number; hadRecentInput: boolean }[]) if (!e.hadRecentInput) sum += e.value; })
-            .observe({ type: "layout-shift", buffered: false });
-          setTimeout(() => done(sum), 11_000);                                  // two 5 s polls
-        }));
-        expect(cls).toBeLessThan(0.01);
+        // Three attempts at a window in which the page was steady: a window in which the page itself said it was degraded
+        // (the safety strip's "can't reach the server" alert, or an engine's "figures N old") is not a measure of the
+        // polls, it is the stale-data banner being drawn, so it is measured again, never counted for or against.
+        let last: PollShift | undefined;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          await layoutSettled(page, open);
+          last = await measurePollShift(page);
+          if (!last.degraded) break;
+        }
+        expect(last?.degraded, `the page was degraded (stale banner) in all 3 windows at ${tag}: ${JSON.stringify(last?.shifts)}`).toBe(false);
+        expect(last?.cls, `layout shift of two polls at ${tag}: ${JSON.stringify(last?.shifts)}`).toBeLessThan(0.01);
         expect(Math.round(await row.evaluate((e) => e.getBoundingClientRect().height))).toBe(72);
         await rowsClearBar(page, `trades-now-${tag}`);
       }

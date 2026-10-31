@@ -8,6 +8,8 @@ from goldbot.telegram.approvals import REASON_CODES, ApprovalCenter, Outcome, Pr
 from goldbot.telegram.bus import ApprovalBus, BusDecision
 from tests.cards import submit_shown
 
+pytestmark = pytest.mark.real_clock(reason="ApprovalBus.recent ages a decision by its file mtime, which the OS stamps")
+
 OWNER, BACKUP, STRANGER = 111, 222, 999
 
 

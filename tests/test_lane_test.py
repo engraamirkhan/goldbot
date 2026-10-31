@@ -25,6 +25,8 @@ def repo(tmp_path: Path) -> Path:
     r = tmp_path / "repo"
     (r / "scripts").mkdir(parents=True)
     shutil.copy(SCRIPT, r / "scripts" / "lane_test.sh")
+    (r / "scripts" / "lib").mkdir()
+    shutil.copy(SCRIPT.parent / "lib" / "common.sh", r / "scripts" / "lib" / "common.sh")
     _git(r, "init", "-q", "-b", "integration")
     _git(r, "add", ".")
     _git(r, "commit", "-q", "-m", "base")

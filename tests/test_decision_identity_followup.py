@@ -24,6 +24,8 @@ from tests.test_api_owner_controls import _owner_secret
 from tests.test_api_security_followup import _viewer
 from tests.test_health import make_ctx
 
+pytestmark = pytest.mark.clock_at("2026-10-30T12:00:00Z")
+
 TELEGRAM_ID = 987654321
 EMAIL = "owner-secret@example.org"
 

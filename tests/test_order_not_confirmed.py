@@ -43,6 +43,8 @@ from tests.test_engine_safety import (
     _tick,
 )
 
+pytestmark = pytest.mark.clock_at("2026-10-30T12:00:00Z")
+
 PID = "icm-demo-72-a"
 AGENT = SPECIALISTS["session_open"]()
 SL, TP = 2396.0, 2406.0

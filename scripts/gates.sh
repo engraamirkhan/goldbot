@@ -19,6 +19,8 @@ done
 if [ "$quick" = 1 ] && [ "$web" = 1 ]; then echo "gates: --quick and --web do not combine" >&2; exit 2; fi
 
 [ -f .venv/bin/activate ] && . .venv/bin/activate
+. scripts/lib/common.sh
+goldbot_check_env   # exit 2 on a venv that is not 3.11 or differs from uv.lock: no gate result from it is trusted (FR-1)
 L=${GATES_LOG:-$HOME/tmp/gates/$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")}   # one log folder per worktree
 mkdir -p "$L"; rm -f "$L"/*.log                     # so parallel lanes never delete each other's logs
 

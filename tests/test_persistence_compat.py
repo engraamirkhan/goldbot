@@ -55,6 +55,8 @@ from goldbot.telegram.digest import DigestSchedule, DigestState
 from goldbot.telegram.outbox import Outbox, OutboxState
 from tests.cards import submit_shown
 
+pytestmark = pytest.mark.clock_at("2026-10-30T12:00:00Z")
+
 T0 = pd.Timestamp("2026-10-05 08:00", tz="UTC")
 NEW = {"future_field": {"from": "a newer release"}}
 ROOT = Path(__file__).resolve().parents[1]

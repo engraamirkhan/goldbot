@@ -26,6 +26,8 @@ from goldbot.ops.gates_phase import ClosedTrade
 from tests.test_api_views import _login
 from tests.test_trades_ledger import DAY, NOW, SCALP, _arm, _engine
 
+pytestmark = pytest.mark.clock_at("2026-10-30T12:00:00Z")
+
 H = pd.Timedelta(hours=1)
 
 
