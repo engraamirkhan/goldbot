@@ -75,7 +75,7 @@ import sys
 from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 
 import numpy as np
 import pandas as pd
@@ -284,6 +284,11 @@ class LearningReport(FrozenRecord):
     currency: str | None = None            # the learning trades' own (the record sections keep theirs)
     kinds: list[GroupStats]
     families: list[GroupStats]           # "<kind> / <family>": the controls (random_bracket, ...) beside the families
+    # The demo learning book's own Days, North star and Costs (the record sections read the closed-trade record only):
+    # countable trades (not voided, not censored) by the exit's day; the north star by the entry's opportunity day
+    days: DayStats | None = None
+    north_star: NorthStar | None = None
+    costs: CostReport | None = None
 
 
 class AccountReport(FrozenRecord):
@@ -636,8 +641,13 @@ def _journal(store: Any, account: str, start: str, end: str) -> JournalReport | 
 
 # ---------------------------------------------------------------------------------------------- sections
 def _days(rows: list[_Row], weekdays: int, ccy: str | None) -> DayStats:
-    per = {d: sum(r.net_pnl or 0.0 for r in v)
-           for d, v in day_buckets([r for r in rows if r.net_pnl is not None], lambda r: r.trade.exit_utc).items()}
+    return _days_of([(r.trade.exit_utc, r.net_pnl) for r in rows], weekdays, ccy)
+
+
+def _days_of(closes: list[tuple[pd.Timestamp, float | None]], weekdays: int, ccy: str | None) -> DayStats:
+    """`closes`: (exit time, net P&L or None) per trade; a day is the exit's opportunity day, net rows only."""
+    per = {d: sum(p or 0.0 for _, p in v)
+           for d, v in day_buckets([(t, p) for t, p in closes if p is not None], lambda x: x[0]).items()}
     if not per:
         return DayStats(weekdays=weekdays, traded_days=0)
     best, worst = max(per, key=lambda d: per[d]), min(per, key=lambda d: per[d])
@@ -648,12 +658,26 @@ def _days(rows: list[_Row], weekdays: int, ccy: str | None) -> DayStats:
                     days_50_plus=sum(v >= NORTH_STAR_GBP for v in per.values()) if ccy == "GBP" else None)
 
 
+class _Entry(NamedTuple):
+    """What the north star reads of one trade: when it entered, that entry's opportunity day, net P&L and R."""
+    entry_utc: pd.Timestamp | None
+    entry_day: str | None
+    net_pnl: float | None
+    net_r: float | None
+
+
 def _north_star(rows: list[_Row], ccy: str | None, classified: int, opp: set[str], have_bars: bool,
                 open_entries: list[pd.Timestamp], source: str) -> NorthStar:
     """`rows`: the account's trades ENTERED on the range's days (quant review, item 6), whenever they closed."""
+    return _north_star_of([_Entry(r.trade.entry_utc, r.entry_day, r.net_pnl, r.net_r) for r in rows], ccy, classified,
+                          opp, have_bars, open_entries, source)
+
+
+def _north_star_of(rows: list[_Entry], ccy: str | None, classified: int, opp: set[str], have_bars: bool,
+                   open_entries: list[pd.Timestamp], source: str) -> NorthStar:
     if not have_bars:
         return NorthStar(note=f"opportunity days {NOT_RECORDED}: they need the stored bars (--data-root)")
-    entered = [(r, r.trade.entry_utc) for r in rows if r.trade.entry_utc is not None]
+    entered = [(r, r.entry_utc) for r in rows if r.entry_utc is not None]
     by_entry = {d: [r for r, _ in v] for d, v in day_buckets(entered, lambda x: x[1]).items()}
     per_pnl = {d: sum(r.net_pnl for r in v if r.net_pnl is not None) for d, v in by_entry.items()}
     per_r = {d: sum(r.net_r for r in v if r.net_r is not None) for d, v in by_entry.items()}
@@ -959,8 +983,25 @@ def _learning_group(key: str, kind: str, rows: list[_LRow], censored: int, weekd
     return g.model_copy(update={"verdict": verdict})
 
 
-def _learning(rows: list[_LRow], censored: list[_LRow], weekdays: int, ccy: str | None) -> LearningReport | None:
-    """`rows` are the countable trades; the `censored` ones are counted beside their row, never in R or money."""
+def _learning_costs(rows: list[_LRow]) -> CostReport:
+    """The book's commission and swap where recorded (money rows only, as `_costs`); no cost table, requested or
+    decision prices: those columns belong to the closed-trade record and stay empty."""
+    com = [r for r in rows if r.trade.commission is not None and r.net_pnl is not None]
+    swp = [r for r in rows if r.trade.swap is not None and r.net_pnl is not None]
+    cost_r = [(r.trade.commission - r.trade.swap) / r.trade.risk for r in rows
+              if r.trade.commission is not None and r.trade.swap is not None and r.trade.risk]
+    return CostReport(
+        commission_trades=len(com), commission_total=sum(r.trade.commission or 0.0 for r in com) if com else None,
+        swap_trades=len(swp), swap_total=sum(r.trade.swap or 0.0 for r in swp) if swp else None,
+        cost_r_mean=float(np.mean(cost_r)) if cost_r else None, cost_r_trades=len(cost_r),
+        commission_note="the learning book has no modelled-commission comparison")
+
+
+def _learning(rows: list[_LRow], censored: list[_LRow], weekdays: int, ccy: str | None,
+              *, classified: int = 0, opp: set[str] | None = None, have_bars: bool = False,
+              source: str = BARS_SOURCE) -> LearningReport | None:
+    """`rows` are the countable trades; the `censored` ones are counted beside their row, never in R or money. Days,
+    North star and Costs of the book are from the same countable rows."""
     if not rows and not censored:
         return None
     order = {k: i for i, k in enumerate(KINDS)}
@@ -973,7 +1014,12 @@ def _learning(rows: list[_LRow], censored: list[_LRow], weekdays: int, ccy: str 
     families = [_learning_group(f"{k} / {f}", k, [r for r in rows if (r.trade.kind, r.trade.family) == (k, f)],
                                 sum((r.trade.kind, r.trade.family) == (k, f) for r in censored), weekdays, control,
                                 True) for k, f in keys]
-    return LearningReport(currency=ccy, kinds=kinds, families=families)
+    north = _north_star_of([_Entry(r.trade.opened_utc, report_day(r.trade.opened_utc), r.net_pnl, r.net_r)
+                            for r in rows], ccy, classified, opp or set(), have_bars, [], source)
+    return LearningReport(
+        currency=ccy, kinds=kinds, families=families,
+        days=_days_of([(r.trade.exit_utc, r.net_pnl) for r in rows], weekdays, ccy),
+        north_star=north.model_copy(update={"pending_open": None}), costs=_learning_costs(rows))
 
 
 # ---------------------------------------------------------------------------------------------- build
@@ -1069,7 +1115,8 @@ def build_performance_report(state_dir: str | Path, *, start: str, end: str, dat
         lccy = ccy or (next(iter(seen_l)) if len(seen_l) == 1 else None)     # the record sections keep `ccy`
         lrows = [_lrow(c, lccy) for c in lcs]
         learning = _learning([r for r in lrows if not r.trade.censored], [r for r in lrows if r.trade.censored],
-                             weekdays, lccy)
+                             weekdays, lccy, classified=classified, opp=opp, have_bars=day_types is not None,
+                             source=bars_source)
         out.append(AccountReport(
             account_id=acc, mode=next(iter(modes)) if len(modes) == 1 else ("mixed" if modes else None), currency=ccy,
             overall=_group("all", rows, weekdays), by=by, days=_days(rows, weekdays, ccy),
@@ -1137,6 +1184,42 @@ def _heading(dim: str) -> str:
     return f"By {dim.replace('_', ' ')}"
 
 
+def _learning_book_sections(lr: LearningReport) -> list[str]:
+    """Days, North star and Costs of the demo learning book, beside (never merged into) the closed-trade record's own
+    sections below them: the same countable rows as the learning tables (voided left out, censored not in money)."""
+    c = lr.currency
+    L: list[str] = []
+    d, n, k = lr.days, lr.north_star, lr.costs
+    if d is not None:
+        L += ["Days: demo learning book (exploration, control and probe closes; net rows, by the exit's opportunity day)",
+              "",
+              f"- traded {d.traded_days} of {d.weekdays} weekdays; mean {_money(d.mean_per_weekday, c)} per weekday; "
+              f"median traded day {_money(d.median_traded_day, c)}",
+              f"- best {d.best_day or '-'} {_money(d.best_day_pnl, c)}; worst {d.worst_day or '-'} "
+              f"{_money(d.worst_day_pnl, c)}",
+              f"- days at £50 or more: {d.days_50_plus if d.days_50_plus is not None else 'not a GBP account'}", ""]
+    if n is not None:
+        L += ["North star: demo learning book (£50+ on opportunity days; a learning-book day is not the owner's money)",
+              ""]
+        if n.opportunity_days is None:
+            L += [f"- {n.note}", ""]
+        else:
+            L += [f"- opportunity days (range >= {OPPORTUNITY_RANGE_ATR} x the prior ATR(1d), {n.source}): "
+                  f"{n.opportunity_days} of {n.classified_days} classified weekdays; traded on "
+                  f"{n.traded_opportunity_days}",
+                  f"- captured (>= {CAPTURE_R:g} R net made): {n.captured_1r} of {n.opportunity_days}; at £50 or more: "
+                  f"{n.days_50_plus_on_opportunity if n.days_50_plus_on_opportunity is not None else '-'}",
+                  f"- on opportunity days {_money(n.pnl_on_opportunity_days, c)} ({_r(n.r_on_opportunity_days)}); "
+                  f"on other days {_money(n.pnl_on_other_days, c)}",
+                  f"- {n.note}", ""]
+    if k is not None:
+        L += ["Costs: demo learning book (commission and swap where both the broker's deal reports them)", "",
+              f"- commission {_money(k.commission_total, c, sign=False)} on {k.commission_trades} trades; "
+              f"swap {_money(k.swap_total, c)} on {k.swap_trades}; mean cost {_r(k.cost_r_mean)} per trade over "
+              f"{k.cost_r_trades}", ""]
+    return L
+
+
 def format_markdown(rep: PerformanceReport) -> str:
     L = [f"# goldbot performance report: {rep.start} to {rep.end}", "",
          f"As of {rep.as_of_utc[:16].replace('T', ' ')} UTC. Opportunity days (D runs D-1 22:00 to D 22:00 UTC), "
@@ -1177,6 +1260,7 @@ def format_markdown(rep: PerformanceReport) -> str:
                   "row, never in R or money; voided trades are left out. The bandit chooses which arms trade and when, so "
                   "a family's pooled arms carry selection bias; no row here is evidence: claims go through a registry "
                   "trial.", ""]
+            L += _learning_book_sections(a.learning)
         d = a.days
         L += ["### Days", "",
               f"- traded {d.traded_days} of {d.weekdays} weekdays; mean {_money(d.mean_per_weekday, c)} per weekday; "
