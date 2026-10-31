@@ -59,6 +59,10 @@ class Schedule(FrozenRecord):
     day: int | None = Field(None, ge=1, le=28)
     months: tuple[int, ...] = tuple(range(1, 13))
     max_late_hours: float = 12.0
+    # A job never run (not started, not skipped) runs once for its most recent slot however late: for a quarterly job
+    # first seen after its slot, anchoring to that slot would mean no run for a whole quarter (brain 2026-10-31:
+    # cpcv_quarterly, seen after 2026-10-04, next due 2027-01-03). Only for work that is idempotent within its period.
+    run_if_never_run: bool = False
 
     @model_validator(mode="after")
     def _check(self) -> "Schedule":
@@ -180,8 +184,9 @@ class Scheduler:
             raise ValueError(f"job {name!r} already registered")
         self.jobs[name] = Job(name=name, schedule=schedule, fn=fn)
         if name not in self.state:
-            # first sight of a job: anchor it to the current slot so it waits for the next one
-            self.state[name] = JobState(last_slot=schedule.last_slot(self.clock()))
+            # first sight of a job: anchor it to the current slot so it waits for the next one (unless it asks to run
+            # once for that slot: `run_if_never_run`)
+            self.state[name] = JobState(last_slot=None if schedule.run_if_never_run else schedule.last_slot(self.clock()))
         self._save()
 
     def due(self, now: pd.Timestamp) -> list[tuple[Job, pd.Timestamp]]:
@@ -189,9 +194,14 @@ class Scheduler:
         for name, job in self.jobs.items():
             slot = job.schedule.last_slot(now)
             st = self.state[name]
-            if slot is not None and (st.last_slot is None or slot > st.last_slot):
+            if slot is not None and (st.last_slot is None or slot > st.last_slot or self._first_run(job, st)):
                 out.append((job, slot))
         return out
+
+    @staticmethod
+    def _first_run(job: Job, st: JobState) -> bool:
+        """`run_if_never_run`: the job has neither started nor been skipped for any slot."""
+        return job.schedule.run_if_never_run and st.last_started is None and st.last_skipped is None
 
     def run_pending(self) -> list[str]:
         """Run every job whose slot has arrived; returns the names run (skips are recorded, not returned)."""
@@ -199,7 +209,7 @@ class Scheduler:
         for job, slot in self.due(self.clock()):
             st = self.state[job.name]
             now = self.clock()
-            if now - slot > pd.Timedelta(hours=job.schedule.max_late_hours):
+            if now - slot > pd.Timedelta(hours=job.schedule.max_late_hours) and not self._first_run(job, st):
                 log.warning("skipping %s: slot %s missed by %s", job.name, slot, now - slot)
                 st.last_slot, st.last_skipped = slot, now
                 self._save()

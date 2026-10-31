@@ -217,6 +217,7 @@ class ScheduleSettings(_Section):
     day: int | None = Field(None, ge=1, le=28)
     months: list[int] = Field(default_factory=lambda: list(range(1, 13)))   # e.g. [1, 4, 7, 10]: quarterly
     max_late_hours: float = Field(12.0, gt=0)
+    run_if_never_run: bool = False         # run once for the latest slot however late if never started or skipped
 
 
 class SchedulerSettings(_Section):

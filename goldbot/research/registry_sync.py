@@ -162,20 +162,45 @@ class Transport(Protocol):
     def rename(self, asset_id: int, name: str) -> None: ...
 
 
+class RegistryForbidden(RuntimeError):
+    """GitHub refused the token (HTTP 403). Reading a release needs only `Contents: Read-only`; creating, uploading to,
+    renaming or deleting a release asset needs `Contents: Read and write` (fine-grained token on the repo), or the
+    classic `repo` scope. Measured 2026-10-31: the VPS token read the release but its upload POST was a bare 403."""
+
+
+def _forbidden(method: str, url: str) -> RegistryForbidden:
+    need = "Contents: Read-only" if method == "GET" else "Contents: Read and write"
+    path = url.split("?")[0].replace("https://", "")
+    return RegistryForbidden(
+        f"HTTP 403 on {method} {path}: the keyring `github-token` lacks the fine-grained permission '{need}' on "
+        f"{REPO} (a classic token needs the `repo` scope); re-issue it and store it with "
+        "`python -m goldbot.ops.accounts set github-token`")
+
+
 def _api(url: str, token: str, *, method: str = "GET", data: bytes | None = None, ctype: str | None = None) -> Any:
     hdr = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
     if ctype:
         hdr["Content-Type"] = ctype
     req = urllib.request.Request(url, data=data, headers=hdr, method=method)
-    with urllib.request.urlopen(req, timeout=120) as r:
-        body = r.read()
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            body = r.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code == 403:
+            raise _forbidden(method, url) from exc
+        raise
     return json.loads(body) if body else None
 
 
 def _download(url: str, token: str) -> bytes:
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/octet-stream"})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        data: bytes = r.read()
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            data: bytes = r.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code == 403:
+            raise _forbidden("GET", url) from exc
+        raise
     return data
 
 

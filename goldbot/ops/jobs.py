@@ -1649,5 +1649,6 @@ def build_scheduler(ctx: JobContext, clock: Callable[[], pd.Timestamp] | None = 
     for name, fn in JOBS.items():
         s = getattr(cfg, name)
         sch.add(name, Schedule(kind=s.kind, at=s.at, weekdays=tuple(s.weekdays), weekday=s.weekday, day=s.day,
-                               months=tuple(s.months), max_late_hours=s.max_late_hours), functools.partial(fn, ctx))
+                               months=tuple(s.months), max_late_hours=s.max_late_hours,
+                               run_if_never_run=s.run_if_never_run), functools.partial(fn, ctx))
     return sch
