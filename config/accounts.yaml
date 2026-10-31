@@ -393,9 +393,10 @@ accounts:
     store_symbol: XAUUSD247   # bars_1m_live source=vantage247, ticks source=vantage-247: never symbol=XAUUSD
     contract_size: 1.0        # 1 oz a lot (Vantage spec); goldbot.ops.symbol_check compares the terminal's
     magic_base: 260700
-    # OFF until its terminal and bridge answer and its two control trials are recorded in the registry (family
-    # arms_weekend_247; the research director records them against the quarter's budget, never this change). Then
-    # `enabled: true` + `goldbot-engine@vantage-247`. Rollback: enabled false + restart
+    # RETIRED 2026-10-31 (owner directive; ADR 0063): XAUUSD247 is listed on no Vantage demo server, so this demo can
+    # never trade it. XAUUSD247 is read instead through vantage-live-obs (observe only, below). The block stays,
+    # configured off, so the weekend-lane code and its controls WKS0/WKI0 stay tested for the day a demo lists the
+    # symbol; the observe installer stops and disables its terminal units on the Vantage box (memory). Do not enable.
     enabled: false
     # ADR 0062: open every minute but the broker's own pauses (UTC; none documented for XAUUSD247), no Friday cut
     sessions: always_open
@@ -428,6 +429,32 @@ accounts:
       arms:
         WKS0: { style: scalp, max_loss: 2.0, control_share: 1.0 }
         WKI0: { style: intraday, max_loss: 4.0, control_share: 1.0 }
+  vantage-live-obs:
+    # ADR 0063, owner directive 2026-10-31: "use XAUUSD247 via the LIVE Vantage account, but NO live trading". The
+    # owner's real Vantage account, READ ONLY: its terminal logs in with the MT5 INVESTOR (read-only) password, so the
+    # broker rejects every order; the bridge then refuses to serve unless the terminal reports trading disallowed.
+    # observe_only: never enabled (refused at load), never an engine, arm, allocator, probe or pilot account, never
+    # live or tiny-live in any report or gate, never unlocked (unlock_live refuses it); its bridge (port 8767 on the
+    # Vantage box, tunnel 8770 on the brain; RUNBOOK 0.3d) serves reads only and the brain's client refuses every order
+    # call. goldbot-observe@vantage-live-obs on the brain records XAUUSD247 and weekday XAUUSD (local only).
+    # Reversal (ADR 0063): an order needs a qualified family, a reviewed change of `kind`, the owner's unlock and the
+    # phase gate; editing this block alone can never place one.
+    kind: observe_only
+    broker: vantage_obs       # its own key: nothing it reads pools with vantage-demo's or vantage-247's evidence
+    mode: live                # the owner's real account (the terminal must report real; never counted as live)
+    # never here (public repo): the server, the login and the investor password are typed once at
+    # `goldbot-mt5 accounts add vantage-live-obs` on the Vantage box and kept in its keyring (mt5-server-, mt5-login-,
+    # mt5-vantage-live-obs)
+    server: null
+    login: null
+    terminal_path: C:\MT5\VantageObs\terminal64.exe   # the third install on the Vantage box (mt5_bootstrap.sh --instance)
+    server_tz: NY+7           # as vantage-demo (same broker, measured 2026-10-26)
+    symbol: XAUUSD247         # the bridge's own symbol (selected at its start)
+    # the store symbols the collector records (store observe_bars_1m / observe_ticks, source=vantage-live-obs), each
+    # resolved on the terminal (XAUUSD may carry a broker suffix there); XAUUSD is the weekday comparison
+    observe_symbols: [XAUUSD247, XAUUSD]
+    magic_base: 260800        # required by the schema; no order ever carries it (every order call is refused)
+    enabled: false            # always: an observe_only account with enabled: true is refused at load
   icm-live:
     broker: icm
     mode: live

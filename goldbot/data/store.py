@@ -58,6 +58,8 @@ TABLES = {
     "bars_1m_broker",                          # the broker's own M1 as its terminal reports it (D12/D23), never blended
     "bars_1m_live",                            # the engine's minutes from the broker's ticks (engine/history.py), never blended
     "positioning",                             # COT and GLD holdings (release positioning-v1), point in time
+    "observe_bars_1m",                         # ADR 0063: an observe-only account's terminal M1 (source = account), local only
+    "observe_ticks",                           # ADR 0063: its sampled quotes and spreads (source = account), local only
 }
 
 KEY_COLUMNS = {
@@ -70,6 +72,7 @@ KEY_COLUMNS = {
     "macro": ["series", "value_date", "vintage"],
     "positioning": ["series", "value_date", "vintage"],
     "fills": ["ts_utc", "client_order_id"],
+    "observe_ticks": ["ts_utc", "bid", "ask"],    # ADR 0063: a quote sampled twice (no change between samples) is one row
     "exit_fills": ["ts_utc", "position_id", "kind"],
     "calendar_events": ["event_id"],          # a re-fetched event replaces the earlier copy (forecast revisions)
     "news": ["item_id"],

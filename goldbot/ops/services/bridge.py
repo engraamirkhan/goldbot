@@ -3,6 +3,7 @@ terminal). Moved verbatim from goldbot/ops/run.py, which re-exports it."""
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -51,7 +52,14 @@ def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTra
     from goldbot.execution.mt5_adapter import MT5Broker
     from goldbot.ops import accounts
     from goldbot.ops import login as mt5_login
-    acc = accounts.load_accounts()[account_id]
+    configured = accounts.load_accounts()
+    acc = configured[account_id]
+    # trading-safety review of PR 236: before any attach or login, a trading bridge never serves the login and server
+    # an observe_only account reads (ADR 0063)
+    from goldbot.ops.observe import trading_bridge_refusal
+    if why := trading_bridge_refusal(acc, configured.values(), os.environ):
+        log.error("refusing to serve %s: %s", account_id, why)
+        raise SystemExit(2)
     listen = accounts.get_secret(f"mt5-bridge-listen-{account_id}")
     token = accounts.get_secret(accounts.bridge_token_key(account_id))
     if not listen or not token:
@@ -78,10 +86,18 @@ def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTra
         raise SystemExit(TERMINAL_SPAWNED_EXIT)
     if spawned is None:
         log.warning("could not list processes: a terminal launched by initialize would go unnoticed here")
+    # ADR 0063: an observe-only bridge (the account's kind, or GOLDBOT_BRIDGE_OBSERVE_ONLY=1 from its unit's drop-in,
+    # whichever is stricter) serves reads only, has no order lane, and its GuardedBroker refuses every order call
+    from goldbot.ops.observe import observe_bridge, select_symbols
+    observe_only = observe_bridge(acc, os.environ)
+    if observe_only:
+        log.info("observe-only bridge: reads only, every order, stop change and close refused (ADR 0063)")
+        select_symbols(mt5_adapter.mt5, broker, acc.observe_symbols)     # Market Watch, so ticks and bars answer
     guarded = GuardedBroker(broker, magic_base=acc.magic_base,
                             verify=lambda info: accounts.verify_terminal_account(acc, info),
                             # ADR 0055: the live pilot account's notional ceiling from its leverage cap (else 6x)
-                            leverage_cap=acc.pilot.leverage_cap if acc.pilot.enabled and acc.is_live else None)
+                            leverage_cap=acc.pilot.leverage_cap if acc.pilot.enabled and acc.is_live else None,
+                            observe_only=observe_only)
     # The registered-account check (login, server, demo vs real, hedging) gates every RPC instead of the start:
     # until the terminal is once seen `ok`, /health answers with the token (not_logged_in, wrong_account, ...) and
     # every call is refused, so a lost login shows as such rather than as a bridge that keeps restarting; after that,
@@ -97,11 +113,11 @@ def run_bridge(account_id: str) -> None:  # pragma: no cover - needs the MetaTra
     heal.start()
     from goldbot.ops.bridge_compat import repo_commit
     lane = None
-    if acc.order_lane:                    # BACKLOG 135: entries on a terminal connection of their own (a child process)
+    if acc.order_lane and not observe_only:   # BACKLOG 135: entries on a terminal connection of their own (a child process)
         from goldbot.execution.bridge_lane import ProcessLane, lane_argv
         lane = ProcessLane(lane_argv(account_id), spawned_exit=TERMINAL_SPAWNED_EXIT)
     serve(guarded, host, int(port), token, verify_first=True, lock=lock, login_status=heal.status,
-          commit=repo_commit(), lane=lane)   # commit read once: the code this process runs, on /health (BACKLOG 42)
+          commit=repo_commit(), lane=lane, observe_only=observe_only)   # commit read once: the code this process runs, on /health (BACKLOG 42)
 
 
 def run_order_lane(account_id: str) -> None:  # pragma: no cover - needs the MetaTrader5 package and a terminal
@@ -118,6 +134,10 @@ def run_order_lane(account_id: str) -> None:  # pragma: no cover - needs the Met
     from goldbot.execution.mt5_adapter import MT5Broker
     from goldbot.ops import accounts
     acc = accounts.load_accounts()[account_id]
+    from goldbot.ops.observe import observe_bridge
+    if observe_bridge(acc, os.environ):              # ADR 0063: an observed account has no order lane at all
+        log.error("refusing the order lane of %s: the account is observe-only", account_id)
+        raise SystemExit(2)
     broker = MT5Broker(terminal_path=acc.terminal_path, login=None, password=None, server=acc.server,
                        server_tz=acc.server_tz, symbol=acc.symbol, account_label=account_id, verify=None)
     spawned = terminals_in_bridge_cgroup(_proc_root())

@@ -99,6 +99,15 @@ class WeekendLaneRef(FrozenRecord):
     window: WeekendWindow
 
 
+class ObserveLaneRef(FrozenRecord):
+    """ADR 0063: an observe_only account as the `observe` check needs it (never a trading account)."""
+
+    account_id: str
+    installed: bool                   # its bridge URL is stored on this host (the installer ran)
+    symbol: str                       # the 24/7 symbol whose bars must keep coming
+    refused: str | None = None        # dropped by load_accounts (its block could trade): why, and health WARNs
+
+
 # --------------------------------------------------------------------------------------------- helpers
 def _worst(statuses: list[Status]) -> Status:
     return max(statuses, key=lambda s: _RANK[s]) if statuses else "ok"

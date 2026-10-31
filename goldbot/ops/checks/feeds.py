@@ -28,6 +28,7 @@ from goldbot.ops.checks.registry import (
     BLOCK_TAIL,
     register_check,
 )
+from goldbot.ops.observe import check_observe
 from goldbot.ops.tv_pull_health import check_tv_pull
 
 if TYPE_CHECKING:
@@ -304,6 +305,8 @@ register_check("account", block=BLOCK_RECONCILIATION, pos=20)(check_tick_record)
 register_check("global", block=BLOCK_TAIL, pos=85)(check_tv_pull)
 # the followed TradingView authors' ideas (goldbot/data/tv_ideas.py): WARN when no poll succeeded for 2 h on a weekday
 register_check("global", block=BLOCK_TAIL, pos=86)(check_tv_ideas)
+# ADR 0063: the observe-only live account's collector ("observe only, never trades"); WARN only
+register_check("global", block=BLOCK_TAIL, pos=99, when=lambda ctx: bool(ctx.observe_lanes))(check_observe)
 
 
 # ---- exploration learning (brain 2026-10-27: 0 of 349 candidates labelled for days while the job reported ok)

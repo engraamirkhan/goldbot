@@ -42,6 +42,12 @@ reads only that token, through an unprivileged probe (goldbot/ops/linux/goldbot-
 
 No credentials pass through the bridge: the terminal keeps its own saved login, and the URL and token live in the
 keyring of each machine (`mt5-bridge-url-<account>`, `mt5-bridge-token-<account>`), never in the repository.
+
+Observe only (ADR 0063, the owner's live account read for XAUUSD247 with "NO live trading"): a bridge started with
+`observe_only` (the account's `kind`, or GOLDBOT_BRIDGE_OBSERVE_ONLY=1 in its unit, whichever is stricter) serves the
+OBSERVE_METHODS allowlist (bars, ticks, symbol terms, the account read) and nothing else: positions, history, sizing,
+orders, stop changes and closes are refused 403 before the queue, its GuardedBroker refuses them again, and /health lists only what it serves with `observe_only: true`. On the
+brain, `RemoteBroker(observe_only=True)` refuses the same calls before the network (`ObserveOnlyRefused`).
 """
 from __future__ import annotations
 
@@ -135,8 +141,16 @@ METHODS: dict[str, tuple[str, bool]] = {
 # margin_initial and margin_maintenance, for the symbol check of a new account (goldbot/ops/symbol_check.py). Optional
 # and reporting only: a v7 bridge refuses symbols_get (the check falls back to symbol_info) and its SymbolInfo reads
 # with the new fields None, so MIN_COMPATIBLE stays 5 and either box can be deployed first.
-API_VERSION = 8
+# v9 (ADR 0063): AccountInfo.trade_allowed (MT5 ACCOUNT_TRADE_ALLOWED, False on an investor login), read by
+# verify_terminal_account for observe_only accounts only. Read tolerantly (a v8 brain drops it; a v8 bridge reports
+# None, which an observe_only account refuses and every other account ignores), so MIN_COMPATIBLE stays 5.
+API_VERSION = 9
 MIN_COMPATIBLE = 5
+# ADR 0063 (security review of PR 236): what an observe-only bridge serves, an allowlist of read-only methods for
+# bars, ticks and symbol terms, and the account read its verify needs; no positions, history, sizing or order method
+OBSERVE_METHODS = frozenset({"get_bars", "get_bars_range", "copy_ticks", "last_tick", "symbol_info", "symbols_get",
+                             "account"})
+OBSERVE_REFUSAL = "observe_only"          # the refusal's prefix on an observe-only bridge or client (ADR 0063)
 # Methods the brain calls only with a fallback for a bridge that lacks them: never required by bridge_compat, so their
 # absence never refuses entries. Read-only methods only (an order method is never optional).
 OPTIONAL_METHODS = frozenset({"get_bars_range", "symbols_get"})
@@ -179,6 +193,10 @@ TERMINAL_FOR_CAP_S = 99_999     # terminal_for_s never has six digits (security 
 
 class BridgeUnavailable(ConnectionError):
     """The bridge did not answer (network, timeout, terminal down). The call may or may not have reached the broker."""
+
+
+class ObserveOnlyRefused(PermissionError):
+    """ADR 0063: an order, stop change or close asked of an observe-only account's client; nothing was sent."""
 
 
 class BridgeError(RuntimeError):
@@ -262,7 +280,8 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
                  on_terminal_lost: Callable[[], None] | None = None,
                  clock: Callable[[], float] = time.monotonic, lock: threading.Lock | None = None,
                  login_status: Callable[[], str | None] | None = None,
-                 terminal: TerminalQueue | None = None, lane: Any = None) -> type[BaseHTTPRequestHandler]:
+                 terminal: TerminalQueue | None = None, lane: Any = None,
+                 observe_only: bool = False) -> type[BaseHTTPRequestHandler]:
     """`commit`: the commit this bridge process runs (read once at start), reported on /health so the brain can see
     when the two boxes run different code. Nothing on /health is a secret: zone, commit (public repo), protocol, the
     order lane's state token, and the terminal's state token when the broker reports one (`terminal_state()`).
@@ -288,9 +307,15 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
     the front is refused stale (409). `lane` (goldbot/execution/bridge_lane.py ProcessLane, or None): while it is up,
     `place_order` runs there on its own terminal connection (its own one-worker queue), checked against the last
     terminal state this connection read (the lane's GuardedBroker reads the account itself on every order); an order
-    whose lane died with it gets no reply at all, so the brain books it ambiguous (BACKLOG 72)."""
+    whose lane died with it gets no reply at all, so the brain books it ambiguous (BACKLOG 72).
+
+    `observe_only` (ADR 0063): only OBSERVE_METHODS are served; any other method is refused 403 before the queue
+    (the terminal never sees it), no order lane is used, and /health lists the served methods with `observe_only`."""
     if len(token) < 32:
         raise ValueError("bridge token must be at least 32 characters")
+    if observe_only and lane is not None:
+        raise ValueError("an observe-only bridge has no order lane (ADR 0063)")
+    served = OBSERVE_METHODS if observe_only else frozenset(METHODS)
     lost_cb = on_terminal_lost or _exit_terminal_lost
     seen: dict[str, Any] = {"state": None, "since": clock(), "lost": 0, "lost_at": 0.0,
                             "verified": not verify_first}
@@ -338,7 +363,9 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
             body["server_tz"] = tz
         body["api_version"] = API_VERSION
         body["min_compatible"] = MIN_COMPATIBLE
-        body["methods"] = sorted(METHODS)                # exactly what do_POST serves
+        body["methods"] = sorted(served)                 # exactly what do_POST serves
+        if observe_only:
+            body["observe_only"] = True
         body["order_lane"] = lane.state if lane is not None else "off"
         if commit is not None:
             body["commit"] = commit
@@ -471,6 +498,10 @@ def make_handler(broker: Any, token: str, *, commit: str | None = None, verify_f
                 if not isinstance(method, str) or method not in METHODS:
                     self._reply(403, {"error": f"method {method!r} not allowed"})
                     return
+                if method not in served:             # ADR 0063: an observe-only bridge never queues an order call
+                    log.warning("bridge: %s refused (observe-only bridge)", method)
+                    self._reply(403, {"error": f"{OBSERVE_REFUSAL}: {method} refused, this bridge only reads"})
+                    return
                 sent_at = float(req.get("sent_at", 0.0))
                 retry_safe = METHODS[method][1]
                 if not retry_safe and (why := stale(sent_at)) is not None:
@@ -543,11 +574,11 @@ class _BridgeServer(ThreadingHTTPServer):
 def serve(broker: Any, host: str, port: int, token: str, commit: str | None = None,
           verify_first: bool = False, lock: threading.Lock | None = None,
           login_status: Callable[[], str | None] | None = None,
-          lane: Any = None) -> None:  # pragma: no cover - blocking loop
+          lane: Any = None, observe_only: bool = False) -> None:  # pragma: no cover - blocking loop
     """Requests on threads, one terminal call at a time per connection (make_handler); the self-heal login thread
     shares `lock` with it. `lane`: the order lane (bridge_lane.ProcessLane), started here on a thread of its own;
     orders use it once it is up. A lost terminal, or a lane child that launched a terminal of its own, stops the
-    server and exits from this thread (TERMINAL_LOST_EXIT, or the lane's spawned_exit)."""
+    server and exits from this thread (TERMINAL_LOST_EXIT, or the lane's spawned_exit). `observe_only`: ADR 0063."""
     exit_code: dict[str, int] = {}
     holder: dict[str, ThreadingHTTPServer] = {}
 
@@ -562,7 +593,8 @@ def serve(broker: Any, host: str, port: int, token: str, commit: str | None = No
     if lane is not None:
         lane.on_spawned = lambda: stop(lane.spawned_exit)
     httpd = holder["httpd"] = make_server(broker, host, port, token, commit=commit, verify_first=verify_first,
-                                          lock=lock, login_status=login_status, on_terminal_lost=lost, lane=lane)
+                                          lock=lock, login_status=login_status, on_terminal_lost=lost, lane=lane,
+                                          observe_only=observe_only)
     if lane is not None:
         threading.Thread(target=lane.start, name="bridge-order-lane-start", daemon=True).start()
     log.info("bridge serving %s on %s:%d", type(broker).__name__, host, port)
@@ -629,8 +661,11 @@ class GuardedBroker:
     cannot be read, or has no such field, is not judged here. Closes and modifies are never gated by it."""
 
     def __init__(self, broker: Any, *, magic_base: int, verify: Callable[[Any], str | None] | None = None,
-                 leverage_cap: float | None = None) -> None:
+                 leverage_cap: float | None = None, observe_only: bool = False) -> None:
         self._b, self.magic_base, self._verify = broker, magic_base, verify
+        # ADR 0063: an observe-only account's terminal side refuses every order, stop change and close (PermissionError,
+        # the bridge's 500): nothing of the owner's live account is ever touched, its own positions included
+        self.observe_only = observe_only
         # ADR 0055 (trading-safety condition, HIGH): the live pilot account's own leverage cap (accounts.yaml
         # `pilot.leverage_cap`, 500), so its ceiling is NOTIONAL_FRAC x min(cap, the terminal's own leverage) x equity
         # (150x at 1:500) instead of 6x, which refuses every 0.01 lot at £50. None (every other account): 6x
@@ -646,8 +681,13 @@ class GuardedBroker:
         if not any(p.position_id == position_id and self._ours(p.magic) for p in self._b.positions()):
             raise PermissionError(f"position {position_id} is not one of this account's goldbot positions")
 
+    def _refuse_observed(self, what: str) -> None:
+        if self.observe_only:
+            raise PermissionError(f"{OBSERVE_REFUSAL}: {what} refused, this terminal is only read (ADR 0063)")
+
     def place_order(self, intent: OrderIntent) -> OrderResult:
         sent_at, self.order_sent_at = self.order_sent_at, None
+        self._refuse_observed("place_order")
         if not self._ours(intent.magic):
             raise PermissionError(f"magic {intent.magic} outside {self.magic_base}..{self.magic_base + 99}")
         if not 0 < intent.lots <= MAX_ORDER_LOTS:
@@ -729,10 +769,12 @@ class GuardedBroker:
         return None
 
     def modify(self, position_id: int, sl: float | None, tp: float | None) -> OrderResult:
+        self._refuse_observed("modify")
         self._own_position(position_id)
         return self._b.modify(position_id, sl, tp)
 
     def close(self, position_id: int, lots: float | None = None) -> OrderResult:
+        self._refuse_observed("close")
         return self._b.close(position_id, lots)
 
     def terminal_state(self) -> str | None:
@@ -874,17 +916,22 @@ def bridge_server_tz(url: str, timeout_s: float = 5.0, get: Callable[..., Any] =
 
 
 class RemoteBroker:
-    """The `Broker` protocol over the bridge. Read-only calls retry once; order calls never retry."""
+    """The `Broker` protocol over the bridge. Read-only calls retry once; order calls never retry. `observe_only`
+    (ADR 0063): every call outside OBSERVE_METHODS raises ObserveOnlyRefused before anything is sent."""
 
     def __init__(self, url: str, token: str, *, name: str = "mt5-remote", timeout_s: float = 10.0,
-                 order_timeout_s: float = 15.0, post: Callable[..., Any] | None = None) -> None:
+                 order_timeout_s: float = 15.0, post: Callable[..., Any] | None = None,
+                 observe_only: bool = False) -> None:
         self.url, self.name = url.rstrip("/"), name
+        self.observe_only = observe_only
         self._token, self.timeout_s, self.order_timeout_s = token, timeout_s, order_timeout_s
         self.read_attempts = 2          # read-only calls; a paced caller (the tick record) sets 1 and its own timeout_s
         self._session = requests.Session()
         self._post = post or self._session.post
 
     def _call(self, method: str, *args: Any) -> Any:
+        if self.observe_only and method not in OBSERVE_METHODS:
+            raise ObserveOnlyRefused(f"{OBSERVE_REFUSAL}: {method} refused for {self.name}; nothing was sent (ADR 0063)")
         _, retry = METHODS[method]
         attempts = self.read_attempts if retry else 1
         timeout = self.timeout_s if retry else self.order_timeout_s

@@ -26,6 +26,12 @@ def _preflight(cmd: str, args: list[str]) -> None:
     sys.exit(preflight_main(args))
 
 
+@register_command("observe", pos=209)
+def _observe(cmd: str, args: list[str]) -> None:
+    from goldbot.ops.observe import main as observe_main
+    sys.exit(observe_main(args))
+
+
 @register_command("health", pos=200)
 def _health(cmd: str, args: list[str]) -> None:
     from goldbot.ops.health import main as health_main

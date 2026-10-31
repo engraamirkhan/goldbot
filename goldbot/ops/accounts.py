@@ -13,10 +13,14 @@
   allow-listed owner and waits. The value is stored and never logged.
 * Live accounts can only be enabled through `unlock_live()`, which requires the phase gate file to say
   the paper -> tiny-live gate has passed AND an explicit confirmation phrase.
+* ADR 0063: an account of `kind: observe_only` is a real account the system only reads, through a terminal logged in
+  with the MT5 INVESTOR (read-only) password. It is never enabled, never returned by `enabled_accounts`, never unlocked,
+  and its MT5 server lives in the keyring (`mt5-server-<account_id>`) beside its login (`server: null` in the yaml).
 
 CLI:
   python -m goldbot.ops.accounts list
   python -m goldbot.ops.accounts add icm-demo          # prompts for login + password, stores in keyring
+  python -m goldbot.ops.accounts add vantage-live-obs  # observe_only: server, login and the INVESTOR password
   python -m goldbot.ops.accounts set tradingview-webhook-secret
   python -m goldbot.ops.accounts set smtp-password      # the SMTP (Gmail App) password for email sign-in links
   ... set <key> --stdin                                  # the value from a pipe (no prompt; never echoed)
@@ -40,7 +44,7 @@ from pathlib import Path
 from typing import Any, Callable, Collection, Iterable, Iterator, Literal
 
 import yaml
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from goldbot.base import FrozenRecord, Record, write_private
 from goldbot.config import ROOT
@@ -56,6 +60,9 @@ ACCOUNT_ID_LOGIN = re.compile(r"\d{5,}")      # an account name with this could 
 # stamp in at most 64 bytes (goldbot.telegram.approvals.decision_callbacks); a longer name is refused at load
 ACCOUNT_ID_MAX_BYTES = 24
 PHASE_FILE = ROOT / "state" / "phase_state.json"
+# ADR 0063: the password prompt of an observe_only account. It must name the investor password: the master password
+# would let the terminal trade the owner's live account (the bridge then refuses to serve it, verify_terminal_account)
+INVESTOR_PROMPT = "investor (read-only) password, not the master password"
 # an engine file of an account accounts.yaml does not list is shown while written this recently (engines write at
 # least every 15m bar close, and at every tick while trading): a newer engine than the brain's config is never hidden
 UNLISTED_FRESH_S = 10 * 60
@@ -260,6 +267,13 @@ class Account(Record):
     # its end, so nothing carries into the main session. Needs `always_open`; its exploration arms are controls only
     weekend_only: bool = False
     weekend_window: WeekendWindow = Field(default_factory=WeekendWindow)
+    # ADR 0063 (owner 2026-10-31: XAUUSD247 through the live account, "NO live trading"): `observe_only` = a real
+    # account the system only READS, its terminal logged in with the MT5 investor (read-only) password so the broker
+    # rejects every order by construction. Never enabled, never an engine, arm, allocator or probe account and never
+    # live or tiny-live in any report; its bridge and broker client refuse every order call before the terminal.
+    # `observe_symbols`: the store symbols the collector records (goldbot/ops/observe.py), each resolved on the terminal
+    kind: Literal["trading", "observe_only"] = "trading"
+    observe_symbols: tuple[str, ...] = ()
 
     # backstop for records built outside load_accounts: validation errors never carry the input (names, logins)
     model_config = ConfigDict(hide_input_in_errors=True)      # merged with Record's config by pydantic
@@ -288,6 +302,30 @@ class Account(Record):
         except Exception as exc:
             raise ValueError(f"server_tz {v!r} is neither NY+7 nor an IANA zone ({type(exc).__name__})") from exc
         return v
+
+    @model_validator(mode="after")
+    def _observe_only_fenced(self) -> Account:
+        """ADR 0063: "a qualified family + owner unlock + phase gate is required before any order" on an observed
+        account, so nothing that could place, size or approve one is accepted on it: refused at load, never ignored
+        quietly (the first account rule, so the reason names the kind). Only an observe_only account may leave its
+        server to the keyring (`server: null`)."""
+        if self.kind != "observe_only":
+            if self.observe_symbols:
+                raise ValueError("observe_symbols are allowed on observe_only accounts only (ADR 0063)")
+            if not self.server:
+                raise ValueError("server is required (only an observe_only account keeps it in the keyring, ADR 0063)")
+            return self
+        trading = {"enabled": self.enabled, "approval_mode auto": self.approval_mode == "auto",
+                   "cost_probe": self.cost_probe.enabled, "exploration": self.exploration.enabled,
+                   "probe_only": self.probe_only, "shadow_host": self.shadow_host, "pilot": self.pilot.enabled,
+                   "order_lane": self.order_lane, "risk_overrides": self.risk_overrides is not None,
+                   "dynamic_limits": self.dynamic_limits, "max_positions": self.max_positions is not None,
+                   "sessions always_open": self.sessions != "broker", "weekend_only": self.weekend_only}
+        if on := [k for k, v in trading.items() if v]:
+            raise ValueError(f"an observe_only account never trades: {', '.join(on)} refused (ADR 0063)")
+        if not self.observe_symbols:
+            raise ValueError("an observe_only account names its observe_symbols (ADR 0063)")
+        return self
 
     @model_validator(mode="after")
     def _overrides_demo_only(self) -> Account:
@@ -406,6 +444,11 @@ class Account(Record):
     @property
     def is_live(self) -> bool:
         return self.mode == "live"
+
+    @property
+    def is_observe_only(self) -> bool:
+        """ADR 0063: read only, never traded (see `kind`)."""
+        return self.kind == "observe_only"
 
 
 Prompter = Callable[[str, bool], str]  # (message, secret) -> value
@@ -607,29 +650,44 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
     path = _accounts_path(path)
     raw = yaml.safe_load(path.read_text())
     out = {}
+    _refused_observe.clear()
     for aid, a in raw["accounts"].items():
         _check_account_name(str(aid))      # before the keyring lookup and the record: the error never echoes it
         login = a.get("login")
         if login is None and logins:
             stored = get_secret(login_key(aid))
             login = int(stored) if stored and stored.strip().isdigit() else None
-        out[aid] = Account(account_id=aid, broker=a["broker"], mode=a["mode"], server=a["server"], login=login, terminal_path=a["terminal_path"],
-                           server_tz=a["server_tz"], symbol=a["symbol"], magic_base=a["magic_base"], enabled=bool(a.get("enabled", False)),
-                           daily_loss_limit_abs=a.get("daily_loss_limit_abs"), currency=a.get("currency"),
-                           account_class=a.get("account_class"),
-                           risk_overrides=a.get("risk_overrides"), approval_mode=a.get("approval_mode", "propose"),
-                           cost_probe=CostProbe(**(a.get("cost_probe") or {})),
-                           shadow_host=bool(a.get("shadow_host", False)), probe_only=bool(a.get("probe_only", False)),
-                           dynamic_limits=a.get("dynamic_limits", False),
-                           exploration=Exploration(**(a.get("exploration") or {})),
-                           max_positions=a.get("max_positions"), order_timeout_s=a.get("order_timeout_s", 15.0),
-                           pilot=PilotRules(**(a.get("pilot") or {})),
-                           order_lane=a.get("order_lane", False),    # BACKLOG 135: read by the bridge
-                           store_symbol=a.get("store_symbol"), contract_size=a.get("contract_size"),
-                           sessions=a.get("sessions", "broker"),
-                           pauses=tuple(PauseWindow(**p) for p in a.get("pauses") or ()),
-                           weekend_only=bool(a.get("weekend_only", False)),
-                           weekend_window=WeekendWindow(**(a.get("weekend_window") or {})))
+        server = a.get("server")
+        if server is None and a.get("kind") == "observe_only":    # ADR 0063: kept in the keyring, "" when not read
+            server = (get_secret(server_key(aid)) or "").strip() if logins else ""
+        try:
+            out[aid] = Account(account_id=aid, broker=a["broker"], mode=a["mode"], server=server or "", login=login, terminal_path=a["terminal_path"],
+                               server_tz=a["server_tz"], symbol=a["symbol"], magic_base=a["magic_base"], enabled=bool(a.get("enabled", False)),
+                               daily_loss_limit_abs=a.get("daily_loss_limit_abs"), currency=a.get("currency"),
+                               account_class=a.get("account_class"),
+                               risk_overrides=a.get("risk_overrides"), approval_mode=a.get("approval_mode", "propose"),
+                               cost_probe=CostProbe(**(a.get("cost_probe") or {})),
+                               shadow_host=bool(a.get("shadow_host", False)), probe_only=bool(a.get("probe_only", False)),
+                               dynamic_limits=a.get("dynamic_limits", False),
+                               exploration=Exploration(**(a.get("exploration") or {})),
+                               max_positions=a.get("max_positions"), order_timeout_s=a.get("order_timeout_s", 15.0),
+                               pilot=PilotRules(**(a.get("pilot") or {})),
+                               order_lane=a.get("order_lane", False),    # BACKLOG 135: read by the bridge
+                               store_symbol=a.get("store_symbol"), contract_size=a.get("contract_size"),
+                               sessions=a.get("sessions", "broker"),
+                               pauses=tuple(PauseWindow(**p) for p in a.get("pauses") or ()),
+                               weekend_only=bool(a.get("weekend_only", False)),
+                               weekend_window=WeekendWindow(**(a.get("weekend_window") or {})),
+                               kind=a.get("kind", "trading"),
+                               observe_symbols=tuple(a.get("observe_symbols") or ()))
+        except ValidationError as exc:
+            if a.get("kind") != "observe_only":
+                raise
+            # trading-safety review of PR 236: a broken observe_only block is dropped alone (ERROR, health warns), so
+            # it never stops every service and is never returned as an account at all
+            why = "; ".join(str(e.get("msg", "")) for e in exc.errors()) or "invalid"
+            _refused_observe[aid] = why
+            log.error("config/accounts.yaml: observe_only account %s refused at load and dropped: %s", aid, why)
     if pooled := pooled_brokers(out.values()):
         raise ValueError("broker key " + ", ".join(pooled) + " is shared by an always-open account and a weekday "
                          "account in config/accounts.yaml: evidence, costs and weights are keyed by broker, so the "
@@ -645,6 +703,28 @@ def load_accounts(path: Path | None = None, *, logins: bool = True) -> dict[str,
                          "limits. Store the right login (python -m goldbot.ops.accounts set mt5-login-<account>) or "
                          "disable one")
     return out
+
+
+# ADR 0063: observe_only accounts the last load_accounts dropped (account id -> why), for health's `observe` line
+_refused_observe: dict[str, str] = {}
+
+
+def refused_observe_accounts() -> dict[str, str]:
+    """The observe_only accounts the last `load_accounts` refused and dropped, with the reason (no secret in it)."""
+    return dict(_refused_observe)
+
+
+def observe_login_clash(acc: Account, accounts: Iterable[Account]) -> str | None:
+    """Trading-safety review of PR 236: why a TRADING account must not be unlocked or served, when its known (login,
+    server) equal an observe_only account's (the owner's live account read with the investor password must never also
+    be traded under another name); None otherwise. Compared in memory; neither value is in the reason."""
+    if acc.is_observe_only or acc.login is None or not acc.server:
+        return None
+    for o in accounts:
+        if o.is_observe_only and o.login is not None and int(o.login) == int(acc.login) and o.server == acc.server:
+            return (f"{acc.account_id} resolves to the same MT5 login and server as the observe_only account "
+                    f"{o.account_id} (ADR 0063): it is read, never traded; store another login or leave it disabled")
+    return None
 
 
 def pooled_brokers(accounts: Iterable[Account]) -> list[str]:
@@ -671,6 +751,11 @@ def shared_logins(accounts: Iterable[Account]) -> list[tuple[str, ...]]:
 
 def login_key(account_id: str) -> str:
     return f"mt5-login-{account_id}"
+
+
+def server_key(account_id: str) -> str:
+    """ADR 0063: the MT5 server of an observe_only account (`server: null` in the public yaml)."""
+    return f"mt5-server-{account_id}"
 
 
 def save_login(account_id: str, login: int) -> None:
@@ -701,13 +786,25 @@ def verify_terminal_account(acc: Account, info: Any) -> str | None:
     if int(info.login) != int(acc.login):
         return f"terminal is logged in to another account than {acc.account_id}"
     if str(info.server) != acc.server:
-        return f"terminal server {info.server!r} is not {acc.server!r}"
+        # security review of PR 236: neither server name is shown (a live server is kept out of logs and alerts)
+        return f"terminal server mismatch: the terminal is not on {acc.account_id}'s configured server"
     want = "demo" if acc.mode == "demo" else "real"
     if info.trade_mode != want:
         return f"terminal account is {info.trade_mode or 'unknown'}, {acc.account_id} is {acc.mode}"
     have = str(getattr(info, "currency", "") or "").strip().upper()
     if acc.currency is not None and have != acc.currency:
         return f"terminal account currency is {have or 'unknown'}, {acc.account_id} is {acc.currency}"
+    if acc.is_observe_only:
+        # ADR 0063: the investor (read-only) login reports trading disallowed. Allowed means the master password
+        # was stored; unknown (an older bridge) is refused too. No margin rule: an observed account opens nothing
+        allowed = getattr(info, "trade_allowed", None)
+        if allowed is None:
+            return (f"{acc.account_id} is observe_only and the terminal does not report whether trading is allowed: "
+                    "an investor login cannot be confirmed (bridge older than protocol v9)")
+        if allowed:
+            return (f"{acc.account_id} is observe_only but the terminal may trade: it is logged in with the master "
+                    f"password; store the investor password (accounts add {acc.account_id})")
+        return None
     margin = getattr(info, "margin_mode", None)
     if margin is None:          # a v3 bridge does not report it (review LOW-A: say what to do)
         return ("terminal margin mode unknown (not reported; the engine needs a hedging account): bridge older than "
@@ -728,14 +825,33 @@ def secret_store() -> str:
         return "file"
 
 
+def password_prompt(acc: Account) -> str:
+    """The MT5 password prompt; an observe_only account asks for its investor password (ADR 0063)."""
+    if acc.is_observe_only:
+        return f"MT5 {INVESTOR_PROMPT} for {acc.account_id} (login {acc.login}, {acc.server})"
+    return f"MT5 password for {acc.account_id} (login {acc.login}, {acc.server})"
+
+
 def account_password(acc: Account) -> str:
-    return get_credential(f"mt5-{acc.account_id}", f"MT5 password for {acc.account_id} (login {acc.login}, {acc.server})")
+    return get_credential(f"mt5-{acc.account_id}", password_prompt(acc))
 
 
 def stored_password(acc: Account) -> str | None:
     """The account's MT5 password from the keyring (`mt5-<account_id>`, as `add` stores it), or None; never prompts
     (the MT5 box login in goldbot/ops/login.py runs in services with no one to ask)."""
     return get_secret(f"mt5-{acc.account_id}")
+
+
+def ensure_server(acc: Account) -> Account:
+    """ADR 0063: an observe_only account's MT5 server is asked once and kept in the keyring, never in the yaml."""
+    if acc.is_observe_only and not acc.server:
+        v = _prompt(f"MT5 server name of {acc.account_id} (exactly as the terminal lists the live server)",
+                    secret=False).strip()
+        if not v:
+            raise RuntimeError(f"no server given for {acc.account_id}")
+        set_secret(server_key(acc.account_id), v)
+        acc.server = v
+    return acc
 
 
 def ensure_login(acc: Account) -> Account:
@@ -801,7 +917,21 @@ def tiny_live_risk(acc: Account) -> bool:
 
 
 def unlock_live(account_id: str, confirmation: str, path: Path | None = None) -> bool:
-    """Enable a live account only after the paper->tiny-live gate has passed and with a typed phrase."""
+    """Enable a live account only after the paper->tiny-live gate has passed and with a typed phrase. An observe_only
+    account is never unlocked (ADR 0063): it trades only after a qualified family, a reviewed change of its kind,
+    the owner's unlock and the phase gate."""
+    try:
+        loaded = load_accounts(path)
+    except (ValueError, OSError, KeyError) as exc:
+        print(f"refused: config/accounts.yaml cannot be read ({type(exc).__name__})")
+        return False
+    acc = loaded.get(account_id)
+    if account_id in _refused_observe or (acc is not None and acc.is_observe_only):
+        print(f"refused: {account_id} is observe_only (ADR 0063): it is read, never traded")
+        return False
+    if acc is not None and (clash := observe_login_clash(acc, loaded.values())):
+        print(f"refused: {clash}")
+        return False
     st = phase_state()
     if "paper_to_tiny_live" not in st.get("gates_passed", []):
         print("refused: the paper -> tiny-live gate has not passed (state/phase_state.json)")
@@ -816,7 +946,9 @@ def unlock_live(account_id: str, confirmation: str, path: Path | None = None) ->
 def enabled_accounts(mode: str | None = None, *, logins: bool = True,
                      loaded: dict[str, Account] | None = None) -> list[Account]:
     """`loaded`: accounts already read by `load_accounts` (not read again)."""
-    accs = [a for a in (load_accounts(logins=logins) if loaded is None else loaded).values() if a.enabled]
+    # ADR 0063: an observe_only account is never returned, whatever its flags say (it is read, never traded)
+    accs = [a for a in (load_accounts(logins=logins) if loaded is None else loaded).values()
+            if a.enabled and not a.is_observe_only]
     if mode:
         accs = [a for a in accs if a.mode == mode]
     # safety: live accounts are never returned unless the gate has passed, whatever the yaml says
@@ -829,6 +961,11 @@ class AccountIds(FrozenRecord):
     """Which accounts config/accounts.yaml lists, and which of them `enabled_accounts` returns."""
     listed: frozenset[str]
     enabled: frozenset[str]
+
+
+def observe_accounts(*, logins: bool = False, loaded: dict[str, Account] | None = None) -> list[Account]:
+    """ADR 0063: the observe_only accounts (read by the collector and health; never by an engine)."""
+    return [a for a in (load_accounts(logins=logins) if loaded is None else loaded).values() if a.is_observe_only]
 
 
 def account_ids() -> AccountIds | None:
@@ -934,8 +1071,8 @@ def main(argv: list[str]) -> int:
         return 0
     cmd = argv[0]
     if cmd == "add":
-        acc = ensure_login(load_accounts()[argv[1]])
-        pw = _prompt(f"MT5 password for {acc.account_id} (login {acc.login}, {acc.server})", secret=True)
+        acc = ensure_login(ensure_server(load_accounts()[argv[1]]))
+        pw = _prompt(password_prompt(acc), secret=True)
         set_secret(f"mt5-{acc.account_id}", pw)
         print(f"stored credentials for {acc.account_id} in the OS keyring")
         return 0

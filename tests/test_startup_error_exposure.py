@@ -159,7 +159,7 @@ def test_the_engine_service_passes_the_configured_probe_flag_to_a_refused_start(
         seen["probe_only"] = probe_only
         raise SystemExit(why)
 
-    probe = SimpleNamespace(account_id="icm-probe", probe_only=True, is_live=False, enabled=True)
+    probe = SimpleNamespace(account_id="icm-probe", probe_only=True, is_live=False, enabled=True, is_observe_only=False)
     monkeypatch.setattr(accounts, "load_accounts", lambda: {"icm-probe": probe})
     monkeypatch.setattr(svc, "approval_ids_problem", lambda account_id: "ids clash")
     monkeypatch.setattr(run_mod, "refuse_start", refuse)

@@ -195,6 +195,9 @@ reclaim, disk): rebuild with B4, then B6 to B11; the owner stores the password a
 that nothing listens on 8765 except `goldbot-bridge-tunnel.service`.
 
 ### 0.3c XAUUSD247 weekend lane (`vantage-247`, a second terminal on the Vantage box; ADR 0062)
+**Retired 2026-10-31.** XAUUSD247 is listed on no Vantage demo. Do not run W1 to W8: the symbol is read through 0.3d
+instead. The steps stay as the record of the design.
+
 `vantage-247` is a Vantage Standard STP demo trading the 24/7 XAUUSD247 at the weekend only. Its window is Friday
 21:00 to Sunday 21:00 UTC, and everything is flat at the Sunday cut. It runs on its own terminal at
 `C:\MT5\Vantage247` beside vantage-demo's `C:\MT5\ICMarkets` on `goldbot-mt5-vantage` (same Wine prefix). Its bridge
@@ -280,6 +283,86 @@ It FAILs on an engine state older than 10 min inside the window, or on a positio
 cut. The engine retries the flatten every refresh. To close by hand, use `/halt` and the kill switch, as on every
 account. The weekday checks (`engine:`, `terminal:`) call the weekend "market closed" for every account, this one
 included.
+
+### 0.3d Observe-only live account (`vantage-live-obs`, a third terminal on the Vantage box; ADR 0063)
+**Retired 2026-10-31: the weekend demo of 0.3c.** XAUUSD247 is listed on no Vantage demo server, so `vantage-247`
+stays `enabled: false` for good, and its terminal units are stopped (step O1 below). Its config and code stay, tested.
+
+`vantage-live-obs` is the owner's **live** Vantage account, read and never traded. Its terminal logs in with the MT5
+**investor (read-only) password**, so Vantage rejects any order. On top of that:
+- The account is never enabled, never unlocked, and never loaded by an engine, arm or allocator.
+- The bridge serves an allowlist only: bars, ticks, symbol terms and the account read (no positions, history or
+  orders). It is observe-only from the account's `kind` and from `GOLDBOT_BRIDGE_OBSERVE_ONLY=1` in its unit, and either
+  one is enough.
+- **Shared login.** `vantage-live` (a trading account, off) may be this same real account. A trading account whose
+  keyring login and server equal this one's is refused by `unlock-live` and by its own bridge's start. To trade the
+  account one day, change `kind` here instead (see Reversal).
+- An observe_only block edited to trade (`enabled: true`, probes, arms, ...) is dropped at load, alone, with an ERROR,
+  and the `observe` health line WARNs `refused at load`.
+- The bridge serves nothing while the terminal reports that trading is allowed (a master-password login).
+- The brain's client refuses every order call before it sends anything.
+
+The collector `goldbot-observe@vantage-live-obs` on the brain records XAUUSD247 and the account's weekday XAUUSD into
+the local store. It writes M1 bars, a quote every 15 s (every 5 s from Friday 21:00 to Sunday 21:00 UTC) and the
+symbol terms. Nothing is published.
+
+**The owner's one command** (on the Mac; it prompts on the Vantage box, and nothing is echoed or written to a file):
+```bash
+ssh -t -F ~/.ssh/goldbot.conf goldbot-mt5-vantage goldbot-mt5 accounts add vantage-live-obs
+```
+It asks for three things:
+1. The live server name, exactly as MT5 shows it (in the Vantage welcome email or the terminal's account list).
+2. The login number.
+3. The **investor (read-only) password, not the master password**. In MT5 the investor password is set under Tools >
+   Options > Server > Change, or in the Vantage client portal.
+
+All three go to the box keyring (`mt5-server-`, `mt5-login-` and `mt5-vantage-live-obs`). None of them goes to git.
+
+**Ports.** On the box the bridge uses 8767. 8765 is vantage-demo's, and 8766 belonged to the retired vantage-247. On
+the brain the tunnel uses 8770: 8765 to 8767 are taken, and 8768 (icm-depth) and 8769 (vantage-247) are reserved.
+
+**Memory (checked 2026-10-31).** The box has 1959 MB with 1089 MB available. Two terminals are running: vantage-demo
+(107 MB) and the idle vantage-247 (136 MB). A terminal and its bridge take about 320 MB. After O1 and O2 about 900 MB
+should remain available, well above the bootstrap's 500 MB floor. The installer prints MemAvailable before and after.
+
+Claude runs everything after the owner's command with `~/bin/goldbot-observe-install` from the Mac (`--dry-run`
+first; it is not in the repo). Each step prints `ok` or FAIL with its undo:
+
+| Step | What |
+|---|---|
+| O0 | Read-only checks. The brain and the box run a commit that lists `vantage-live-obs` (`kind: observe_only`, `enabled: false`). The three keyring entries exist on the box. 8767 and 8770 are free. vantage-demo's 8765 is ok. |
+| O1 | Retire vantage-247's units: `sudo systemctl disable --now goldbot-bridge-watchdog@vantage-247.timer goldbot-bridge@vantage-247 goldbot-mt5-terminal@vantage-247`. Its drop-ins and install stay. |
+| O2 | Third terminal, as 0.3c W1 with `--account vantage-live-obs --instance VantageObs --port 8767 --beside vantage-demo`. Then the bridge's observe-only drop-in: `/etc/systemd/system/goldbot-bridge@vantage-live-obs.service.d/observe-only.conf` = `[Service]` `Environment=GOLDBOT_BRIDGE_OBSERVE_ONLY=1`. |
+| O3 | Start the terminal, then `goldbot-mt5 login vantage-live-obs --dismiss-wizard`. It prints `ok` only if the terminal reports that trading is disallowed. A master password prints `failed: ... master password`: the owner reruns `add`. Then one restart (common.ini). |
+| O4 | As 0.3c W4: listen `127.0.0.1:8767` on the box, `mt5-bridge-url-vantage-live-obs` = `http://127.0.0.1:8770` on the brain. The token is piped to both ends. |
+| O5 | As 0.3c W5. Authorise the tunnel key for `8765 8767` (8766 is dropped). Write `/etc/goldbot/bridge-vantage-live-obs.env` with `LOCAL_PORT=8770`, and the tunnel drop-in to `127.0.0.1:8767`. |
+| O6 | Start the bridge and its watchdog, then the tunnel. `/health` on 8767 and on 8770 must be `ok`, show `"observe_only": true` and list no `place_order`, `modify` or `close`. |
+| O7 | Proof on the brain: a `place_order` posted through the tunnel gets 403 `observe_only`, and `RemoteBroker(observe_only=True)` raises before sending. |
+| O8 | Install `goldbot-observe@.service`, then `sudo systemctl enable --now goldbot-observe@vantage-live-obs`. `state/observe_vantage-live-obs.json` must say `"connected": true`. |
+
+**Health.** The `observe` line says `vantage-live-obs: observe only, never trades: connected; XAUUSD247 last bar 1 min
+old, spread 0.35; XAUUSD ...`. It only ever WARNs: when the collector has been silent for 5 min, the bridge cannot be
+reached, or XAUUSD247 has had no new bar for 15 min. The account never appears in the trading lines (`engine:`,
+`terminal:`, the dashboard's accounts, the phase gates or the finance ledger).
+
+**Where the data goes (brain, local only).**
+- `data/observe_bars_1m/source=vantage-live-obs/symbol={XAUUSD247,XAUUSD}`
+- `data/observe_ticks/...` (bid, ask, spread, sampled_utc)
+- `state/observe/vantage-live-obs/specs.jsonl` (contract size, sessions, swap, stops level; a line when they change)
+
+**Undo, in this order:**
+1. On the brain: `sudo systemctl disable --now goldbot-observe@vantage-live-obs goldbot-bridge-tunnel@vantage-live-obs`.
+2. On the box: `sudo systemctl disable --now goldbot-bridge-watchdog@vantage-live-obs.timer goldbot-bridge@vantage-live-obs goldbot-mt5-terminal@vantage-live-obs`,
+   then `sudo rm -rf /etc/systemd/system/goldbot-{mt5-terminal,bridge,bridge-watchdog}@vantage-live-obs.service.d && sudo systemctl daemon-reload`.
+3. Narrow the key back to 8765 only: `sudo goldbot-mt5-authorize '<the brain key line>' 8765`.
+4. The credentials stay in the box keyring, where nothing reads them once the units are off. To make them useless,
+   the owner changes the investor password in MT5 or in the Vantage portal.
+
+**Reversal (trading this account).** Never by editing this block. An order on it needs all four of these:
+- a qualified family (ADR 0061);
+- a reviewed change of `kind` (trading-safety and security review);
+- the owner's master-password login and `unlock-live`;
+- the phase gate.
 
 ### 0.4 The brain
 ```bash

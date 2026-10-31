@@ -153,6 +153,9 @@ class AccountInfo(Record):
     trade_mode: str | None = None   # demo | real | contest as the terminal reports it; None = not a broker terminal
     # hedging | netting | exchange (MT5 ACCOUNT_MARGIN_MODE_*); None = not reported (paper, or an older bridge)
     margin_mode: str | None = None
+    # MT5 ACCOUNT_TRADE_ALLOWED: False on an investor (read-only) login (ADR 0063: an observe_only account must report
+    # False, else its bridge serves nothing). None = not reported (paper, or a bridge older than v9); never a permission
+    trade_allowed: bool | None = None
 
 
 class Broker(Protocol):
