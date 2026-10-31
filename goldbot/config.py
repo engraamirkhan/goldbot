@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from urllib.parse import urlsplit
 
 import yaml
@@ -723,6 +723,39 @@ class TvPullSettings(_Section):
         return self
 
 
+class ObserveSettings(_Section):
+    """The observe lane (ADR 0063, goldbot/ops/observe.py; owner 2026-10-31: XAUUSD247 through the live account, "NO
+    live trading"): the collector reads an observe_only account's symbols through its bridge, read-only, into the
+    local store (tables observe_bars_1m and observe_ticks, source = the account) and state/observe/<account>/ (the
+    symbol terms). Never published (data-local-only). Weekend focus: faster tick samples inside the window, the same
+    bars and terms all week."""
+    tick_every_s: float = Field(default=15, ge=1)            # a quote (bid, ask, spread) per symbol this often ...
+    weekend_tick_every_s: float = Field(default=5, ge=1)     # ... and this often inside the weekend window
+    bars_every_s: float = Field(default=60, ge=10)           # closed M1 bars fetched since the last one stored
+    spec_every_s: float = Field(default=3600, ge=60)         # symbol terms read; a line only when they changed
+    backfill_hours: float = Field(default=72, gt=0, le=720)  # the first fetch of a symbol with nothing stored
+    flush_every_s: float = Field(default=600, ge=0)          # buffered bars and quotes written to the store this often
+    # the weekend window (UTC; 0 = Monday): Friday 21:00 .. Sunday 21:00, ADR 0062's default
+    weekend_open_day: int = Field(default=4, ge=0, le=6)
+    weekend_open: str = Field(default="21:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    weekend_flat_day: int = Field(default=6, ge=0, le=6)
+    weekend_flat: str = Field(default="21:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    status_stale_s: float = Field(default=300, gt=0)         # health `observe` WARNs on a collector silent this long
+    bar_stale_s: float = Field(default=900, gt=0)            # ... or on a 24/7 symbol without a new bar this long
+
+    @property
+    def weekend_window(self) -> Any:
+        """The window as goldbot.data.calendar.WeekendWindow (imported here: config stays free of the data layer)."""
+        from datetime import time as dtime
+
+        from goldbot.data.calendar import WeekendWindow
+
+        def hm(v: str) -> dtime:
+            return dtime(int(v[:2]), int(v[3:]))
+        return WeekendWindow(open_day=self.weekend_open_day, open=hm(self.weekend_open),
+                             flat_day=self.weekend_flat_day, flat=hm(self.weekend_flat))
+
+
 class TvIdeasSettings(_Section):
     """TradingView author ideas (goldbot/data/tv_ideas.py; owner directive 2026-10-28, ADR 0030's read-only rules): the
     published chart ideas of the authors the owner follows, read from TradingView's public ideas listing without any
@@ -826,6 +859,7 @@ class Settings(_Section):
     webhook: WebhookSettings = Field(default_factory=WebhookSettings)
     tv_pull: TvPullSettings = Field(default_factory=TvPullSettings)
     tv_ideas: TvIdeasSettings = Field(default_factory=TvIdeasSettings)
+    observe: ObserveSettings = Field(default_factory=ObserveSettings)
     tv: TvSettings = Field(default_factory=TvSettings)
     shadow: ShadowSettings = Field(default_factory=ShadowSettings)
     mt5_login: Mt5LoginSettings = Field(default_factory=Mt5LoginSettings)

@@ -333,6 +333,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     from goldbot.telegram.bus import ApprovalBus
     configured = accounts.load_accounts()
     acc = configured[account_id]
+    if acc.is_observe_only:     # ADR 0063: read by the collector, never traded; before any broker connection
+        refuse_disabled(account_id, "the account is observe_only (ADR 0063): it is read, never traded")
     # before any broker connection: a live account trades only enabled AND past the phase gate, never to wind down
     if acc.is_live and acc not in accounts.enabled_accounts("live", loaded=configured):
         refuse_disabled(account_id, "live account not enabled or not unlocked by the phase gate")
@@ -347,7 +349,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
         # terminal on another machine (Oracle free tier: MT5 under Wine); a bridge failure ends this process and the
         # service manager restarts it, so restart reconciliation settles any order whose result was lost (row X7)
         from goldbot.execution.bridge import RemoteBroker
-        broker: Any = RemoteBroker(bridge[0], bridge[1], name=f"mt5-remote-{account_id}")
+        broker: Any = RemoteBroker(bridge[0], bridge[1], name=f"mt5-remote-{account_id}",
+                                   observe_only=acc.is_observe_only)      # ADR 0063 (refused above already)
         info = broker.account()
         why = accounts.verify_terminal_account(acc, info)
         if why:

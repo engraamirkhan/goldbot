@@ -100,6 +100,7 @@ from goldbot.ops.checks._base import (
     WATCH_STALE_S,
     AccountRef,
     Check,
+    ObserveLaneRef,
     Status,
     WatchState,
     WeekendLaneRef,
@@ -196,6 +197,7 @@ from goldbot.ops.checks.services import (
     check_service_schema_skew,
 )
 from goldbot.ops.limits_job import check_limits_controller
+from goldbot.ops.observe import check_observe
 from goldbot.ops.tv_pull_health import check_tv_pull
 
 # the public surface: every name this module exposed before the checks moved to goldbot/ops/checks/ (callers and
@@ -262,6 +264,7 @@ __all__ = [
     "WINDOWS_HOLIDAY_WARN_DAYS",
     "WINDOWS_UNAVAILABLE_FAIL",
     "WatchState",
+    "ObserveLaneRef",
     "WeekendLaneRef",
     "_RANK",
     "_age",
@@ -340,6 +343,7 @@ __all__ = [
     "check_tick_errors",
     "check_tick_record",
     "check_tv_ideas",
+    "check_observe",
     "check_tv_pull",
     "exit_code",
     "heartbeat_path",
@@ -388,6 +392,8 @@ class HealthContext(Record):
     qualification: Callable[[], dict[str, tuple[list[str], list[str]]]] | None = None
     # ADR 0062: the weekend_only accounts accounts.yaml lists (enabled or not); empty skips check_weekend_247
     weekend_lanes: list[WeekendLaneRef] = Field(default_factory=list)
+    # ADR 0063: the observe_only accounts accounts.yaml lists (never in `accounts`); empty skips check_observe
+    observe_lanes: list[ObserveLaneRef] = Field(default_factory=list)
 
     @classmethod
     def from_runtime(cls, state_dir: str | Path = "state", settings_path: str | Path = DEFAULT_SETTINGS,
@@ -395,7 +401,7 @@ class HealthContext(Record):
         """Context for the VPS: settings re-read from disk (not the cached copy, so a bad edit shows up), enabled
         accounts (live ones only after the phase gate) and the keyring."""
         from goldbot.ops import accounts
-        settings, s_err, accs, a_err, pilots, lanes = None, None, [], None, [], []
+        settings, s_err, accs, a_err, pilots, lanes, observed = None, None, [], None, [], [], []
         try:
             settings = Settings.model_validate(settings_dict(settings_path))
         except Exception as exc:
@@ -411,6 +417,9 @@ class HealthContext(Record):
                       for a in listed if a.pilot.enabled and a.account_id not in on]
             lanes = [WeekendLaneRef(account_id=a.account_id, enabled=a.account_id in on, window=a.weekend_window)
                      for a in listed if a.weekend_only]                      # ADR 0062
+            observed = [ObserveLaneRef(account_id=a.account_id, symbol=a.symbol,      # ADR 0063: read, never traded
+                                       installed=bool(accounts.get_secret(f"mt5-bridge-url-{a.account_id}")))
+                        for a in accounts.observe_accounts(loaded={x.account_id: x for x in listed})]
         except Exception as exc:
             a_err = f"{type(exc).__name__}: {exc}"
         from goldbot.execution.bridge import probe_health, probe_terminal
@@ -421,7 +430,8 @@ class HealthContext(Record):
                    clock=lambda: pd.Timestamp.now("UTC"), last_run=_last_run(Path(state_dir)),
                    tick_reader=bridge_tick_reader, bridge_info=lambda url: read_bridge_info(url, BRIDGE_TIMEOUT_S),
                    terminal_probe=lambda url: probe_terminal(url, BRIDGE_TIMEOUT_S),
-                   commit=repo_commit(), qualification=_qualification_view, weekend_lanes=lanes)
+                   commit=repo_commit(), qualification=_qualification_view, weekend_lanes=lanes,
+                   observe_lanes=observed)
 
 
 def _qualification_view() -> dict[str, tuple[list[str], list[str]]]:

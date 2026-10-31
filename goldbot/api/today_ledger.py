@@ -52,6 +52,8 @@ def plans_from_config(settings: Settings | None) -> dict[str, AccountPlan]:
         return {}
     out = {}
     for aid, a in accounts.items():
+        if a.is_observe_only:             # ADR 0063: read, never traded: no plan, no target, never a trading row
+            continue
         ex = a.exploration
         target = None if a.mode == "live" or tv is None else tv.fills_target_by_account.get(aid, tv.fills_target)
         out[aid] = AccountPlan(fills_target=target, daily_target=tv.daily_target_by_account.get(aid) if tv else None,

@@ -83,6 +83,7 @@ DISPATCH: dict[str, list[str]] = {
     "tv-repaint-check": ["tv-repaint-check", "--indicator", "K", "--version", "1", "--tf", "15"],
     "tv-pull": ["tv-pull", "status"],
     "tv-ideas": ["tv-ideas", "summary"],
+    "observe": ["observe", "once", "--account", "vantage-live-obs"],    # ADR 0063: the observe-only collector
     "ledger": ["ledger", "resume"],
     "daily-review": ["daily-review", "--dry-run", "--date", "2026-10-22"],
     "repair-lost-record": ["repair-lost-record", "icm-probe", "--dry-run"],
@@ -172,6 +173,7 @@ def _entry_functions() -> dict[tuple[str, int, str], str]:
         gates_phase,
         health,
         monthly_report,
+        observe,
         perf_report,
         preflight,
         repair_records,
@@ -189,7 +191,7 @@ def _entry_functions() -> dict[tuple[str, int, str], str]:
     for fn in (gates_phase.main, gates_phase.evidence_main, backup.main, setup_wizard.main, preflight.main,
                auth.revoke_sessions_cli, mailer.main, owner_history.main, health.main, ruin.main, monthly_report.main,
                perf_report.main, min_lot.main, smoke.main, tv_csv.main, tv_repaint.main, daily_review.main,
-               repair_records.main, broker_depth.main, autodisc_register.main):
+               repair_records.main, broker_depth.main, autodisc_register.main, observe.main):
         add(fn, f"{fn.__module__}:{fn.__qualname__}")
     return out
 
@@ -288,6 +290,7 @@ ONE_SHOT: dict[str, tuple[str, str]] = {
     "ledger": ("goldbot.ledger.cli", "main"),
     "tv-pull": ("goldbot.data.tv_pull", "main"),             # `follow` loops, but exits with main()'s value
     "tv-ideas": ("goldbot.data.tv_ideas", "main"),
+    "observe": ("goldbot.ops.observe", "main"),                # `follow` loops, but exits with main()'s value
     "daily-review": ("goldbot.research.daily_review", "main"),
     "repair-lost-record": ("goldbot.ops.repair_records", "main"),
     "autodisc-register": ("goldbot.ops.autodisc_register", "main"),

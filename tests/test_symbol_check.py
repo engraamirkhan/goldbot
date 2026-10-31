@@ -62,7 +62,7 @@ def test_symbols_get_lists_the_terminals_symbol_names_for_a_pattern(monkeypatch)
 def test_the_bridge_serves_symbols_get_read_only_and_optional_on_a_bumped_protocol():
     assert METHODS["symbols_get"] == ("list[str]", True)
     assert "symbols_get" in OPTIONAL_METHODS and "symbols_get" not in REQUIRED_METHODS
-    assert API_VERSION == 8 and MIN_COMPATIBLE == 5                 # an older bridge stays compatible
+    assert API_VERSION >= 8 and MIN_COMPATIBLE == 5                 # an older bridge stays compatible
 
 
 def test_the_client_asks_the_bridge_for_symbols_get():

@@ -39,6 +39,7 @@ from goldbot.execution.costs import (
 )
 from goldbot.ops import health, jobs, ledger, scheduler
 from goldbot.ops.gates_phase import ClosedTrade, append_closed_trade, load_closed_trades
+from goldbot.ops.observe import ObserveStatus
 from goldbot.research import ruin
 from goldbot.research.attribution import AttributionReport
 from goldbot.research.director import ResearchPlan
@@ -522,7 +523,10 @@ def test_every_persisted_record_model_has_a_compat_case():
                dr.DailyReview, dr.WeeklyRollup,
                # engine_<account>.json `sessions.pauses` (ADR 0062): tests/test_weekend_247.py::
                # test_a_pause_a_newer_engine_wrote_with_an_extra_field_still_reads
-               PauseWindow}
+               PauseWindow,
+               # state/observe_<account>.json (ADR 0063): tests/test_observe_collector.py::
+               # test_health_reads_a_status_a_newer_collector_wrote_with_an_extra_field
+               ObserveStatus}
     loaded = {f.model for f in _tolerant_finds() if f.model not in GENERIC_MODEL_ARGS.values()}
     assert loaded - {m.__name__ for m in covered} == set()
 

@@ -235,8 +235,10 @@ def account_info_from_mt5(a: Any) -> AccountInfo:
     the keyring login in goldbot/ops/login.py read it the same way)."""
     mode = {0: "demo", 1: "contest", 2: "real"}.get(int(getattr(a, "trade_mode", -1)))   # ACCOUNT_TRADE_MODE_*
     margin = {0: "netting", 1: "exchange", 2: "hedging"}.get(int(getattr(a, "margin_mode", -1)))  # ACCOUNT_MARGIN_MODE_*
+    allowed = getattr(a, "trade_allowed", None)          # ACCOUNT_TRADE_ALLOWED: False on an investor login (ADR 0063)
     return AccountInfo(login=a.login, equity=a.equity, balance=a.balance, margin=a.margin, margin_free=a.margin_free,
-                       leverage=a.leverage, currency=a.currency, server=a.server, trade_mode=mode, margin_mode=margin)
+                       leverage=a.leverage, currency=a.currency, server=a.server, trade_mode=mode, margin_mode=margin,
+                       trade_allowed=None if allowed is None else bool(allowed))
 
 
 class MT5Broker:

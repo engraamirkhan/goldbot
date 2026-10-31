@@ -40,7 +40,8 @@ def test_icm_depth_is_not_an_enabled_account(accounts) -> None:
 
 
 def test_live_accounts_stay_disabled_and_every_login_is_null(accounts) -> None:
-    assert {a for a, x in accounts.items() if x.mode == "live"} == {"icm-live", "vantage-live"}
+    assert {a for a, x in accounts.items() if x.mode == "live" and not x.is_observe_only} == {"icm-live", "vantage-live"}
+    assert {a for a, x in accounts.items() if x.is_observe_only} == {"vantage-live-obs"}     # ADR 0063: read only
     assert not any(x.enabled for x in accounts.values() if x.mode == "live")
     raw = ACCOUNTS.read_text(encoding="utf-8")
     assert all(line.split("#")[0].strip() == "login: null" for line in raw.splitlines() if "login:" in line.split("#")[0])

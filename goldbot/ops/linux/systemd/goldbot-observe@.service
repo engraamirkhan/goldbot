@@ -1,0 +1,34 @@
+[Unit]
+# ADR 0063: the observe lane's collector for observe_only account %i (goldbot/ops/observe.py): M1 bars, quote and
+# spread samples and the symbol terms through the account's bridge (tunnel), READ ONLY: its client refuses every order,
+# stop change and close before the network, and the bridge serves reads only. Into /opt/goldbot/data (store tables
+# observe_bars_1m, observe_ticks) and /opt/goldbot/state/observe*; never published. Read errors never exit (it retries
+# at the next step); a crash restarts, at most 5 times in 10 min.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+Description=goldbot observe-only collector for account %i (read only, never trades)
+After=network-online.target goldbot-bridge-tunnel@%i.service
+Wants=network-online.target
+
+[Service]
+User=goldbot
+WorkingDirectory=/opt/goldbot
+Environment=PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring GOLDBOT_ALLOW_PLAINTEXT=1
+ExecStart=/opt/goldbot/.venv/bin/python -m goldbot.ops.run observe follow --account %i --state /opt/goldbot/state
+Restart=on-failure
+RestartSec=60
+# exit 2 (not an observe_only account) and 78 (no bridge stored yet) are config refusals: no restart loop
+RestartPreventExitStatus=2 78
+LimitCORE=0
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/goldbot/state /opt/goldbot/logs /opt/goldbot/data
+PrivateTmp=true
+ProtectHome=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

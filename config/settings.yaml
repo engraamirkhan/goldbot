@@ -440,7 +440,20 @@ tv_ideas:                            # followed TradingView authors' published i
   backoff_max_s: 21600
   timeout_s: 30
   stale_hours: 2.0                   # health tv_ideas WARNs past this without a successful poll on a weekday
-tv:                                  # TradingView values at decision time (goldbot/engine/tv_context.py, specialists/tv_event.py)
+observe:                             # ADR 0063: the observe-only live account's collector (goldbot/ops/observe.py), read only
+  tick_every_s: 15                   # a quote (bid, ask, spread) per symbol this often, all week ...
+  weekend_tick_every_s: 5            # ... and this often inside the weekend window (XAUUSD247 quotes, gold is closed)
+  bars_every_s: 60                   # closed M1 bars since the last stored (store observe_bars_1m, source = the account)
+  spec_every_s: 3600                 # symbol terms (contract, sessions, swap, stops level); a line only when changed
+  backfill_hours: 72                 # the first fetch of a symbol with nothing stored yet
+  flush_every_s: 600                 # bars and quotes buffered, written to the store this often (and at stop)
+  weekend_open_day: 4                # the weekend window, UTC, 0 = Monday: Friday 21:00 ..
+  weekend_open: "21:00"
+  weekend_flat_day: 6                # .. Sunday 21:00 (ADR 0062's window)
+  weekend_flat: "21:00"
+  status_stale_s: 300                # health `observe` WARNs (never FAILs: it never blocks trading) past this silence
+  bar_stale_s: 900                   # ... or when the 24/7 symbol has had no new bar this long
+tv:                                # TradingView values at decision time (goldbot/engine/tv_context.py, specialists/tv_event.py)
   max_lag_s: 60                      # a value counts only for the decision bar and when it arrived <= this after its close,
                                      #   else NaN and no TradingView entry (fails closed); equals features.tv_plots.MAX_LAG
   replica_series_start: "2016-01-01" # live replica state (smc/boxes/mfi) bootstraps from the store's bars from here

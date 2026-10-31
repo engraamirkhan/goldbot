@@ -32,7 +32,7 @@ BEFORE_SPLIT = (
 ORDER = ("supervisor", "engine", "drift-review", "bridge", "bridge-order-lane", "api", "webhook", "scheduler", "telegram", "news",
          "record-gate", "gates", "gate-evidence", "publish-costs", "backup", "restore", "restore-drill", "setup",
          "preflight", "revoke-sessions", "mail-test", "owner-history", "health", "positions", "shadow-report", "fill-count",
-         "broker-history-depth", "ruin", "monthly-report",
+         "broker-history-depth", "observe", "ruin", "monthly-report",
          "perf-report", "sizing-feasibility", "bridge-smoke", "tv-import", "tv-repaint-check", "tv-pull", "tv-ideas", "ledger",
          "daily-review", "repair-lost-record", "autodisc-register")
 
