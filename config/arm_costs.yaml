@@ -2,3 +2,6 @@
 # Bars are priced at mid, so the spread is inside the round trip; swap is charged per rollover held (costs.swap_*).
 round_trip_usd: 0.23              # per oz (= per 0.01 lot): p90 spread both legs 0.12 + slippage upper CI 0.05 + commission 0.06
 overshoot_scenarios_usd: [0.0, 0.70]   # stop-exit overshoot: none, and the measured mean (n = 14); S0R settles which holds
+# The measured cost of record by broker x session (docs/research/cost-of-record-2026-10-31.md), read beside the frozen
+# figures above (which stay as registered): `ArmCosts.charged_round_trip_usd` / `overshoot_of_record_usd`.
+cost_of_record: cost_of_record.yaml

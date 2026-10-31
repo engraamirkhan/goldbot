@@ -103,11 +103,102 @@ class ArmCosts(FrozenRecord):
     # 0.12"): a read that charges a measured spread instead (KA15 stratum T, arms 8.13 condition 2) adds what the
     # measured spread exceeds it by, so it never charges less than the frozen round trip
     spread_both_legs_usd: float = Field(0.12, ge=0)
+    # the measured cost of record by broker x session (config/cost_of_record.yaml); None = the frozen model only
+    of_record: CostOfRecord | None = None
+
+    def _cell(self, broker: str, session: str) -> CostOfRecordCell | None:
+        if self.of_record is None:
+            return None
+        cells = self.of_record.cells.get(broker)
+        if cells is None:              # ADR 0043 broker amendment: another broker's measurements are never used
+            raise KeyError(f"no cost of record for broker {broker!r} (has {sorted(self.of_record.cells)})")
+        return cells.get(session, cells[ALL_SESSIONS])
+
+    def charged_round_trip_usd(self, broker: str, session: str) -> float:
+        """The round trip a screen charges per oz on `broker` in `session` (a session the table does not split reads
+        the broker's pooled cell): the measured round trip's upper 90% bound, never below the frozen `round_trip_usd`
+        (the frozen model is itself the conservative case, so like is charged for like). The frozen figure alone
+        without a table."""
+        cell = self._cell(broker, session)
+        return self.round_trip_usd if cell is None else max(self.round_trip_usd, cell.round_trip_ci90[1])
+
+    def overshoot_of_record_usd(self, broker: str, session: str) -> float | None:
+        """The measured stop-exit overshoot's upper 90% bound, charged on stop exits only; None without a table or
+        when the cell's overshoot is not trusted (Vantage demo fills stops at the stop price): the caller keeps the
+        frozen `overshoot_scenarios_usd`."""
+        cell = self._cell(broker, session)
+        if cell is None or not cell.overshoot_trusted:
+            return None
+        return max(0.0, cell.overshoot_ci90[1])
+
+
+ALL_SESSIONS = "all"
+_ROUND_TRIP_TOL = 0.003           # the table's figures are rounded to 1e-3: four parts, each half a unit at most
+
+
+class CostOfRecordCell(FrozenRecord):
+    """One broker x session cell of the cost of record, USD per oz (= per 0.01 lot), adverse positive; ci90 = the
+    5th-95th percentile of the bootstrapped mean. round_trip = spread + max(0, entry slip) + max(0, exit slip) +
+    commission (pooled means, floored after pooling); overshoot = past the server stop on stop exits only."""
+    n_fills: int = Field(gt=0)
+    spread_usd: float = Field(ge=0)
+    spread_p90_usd: float = Field(ge=0)
+    spread_ci90: tuple[float, float]
+    entry_slip_usd: float
+    entry_slip_ci90: tuple[float, float]
+    n_exit_legs: int = Field(ge=0)
+    exit_slip_usd: float
+    exit_slip_ci90: tuple[float, float]
+    exit_slip_source: Literal["strategy_exit_legs", "scheduled_probes"]
+    commission_usd: float = Field(ge=0)
+    round_trip_usd: float = Field(ge=0)
+    round_trip_ci90: tuple[float, float]
+    n_stop_exits: int = Field(ge=0)
+    overshoot_usd: float
+    overshoot_ci90: tuple[float, float]
+    overshoot_trusted: bool
+
+    @model_validator(mode="after")
+    def _consistent(self) -> "CostOfRecordCell":
+        for name in ("spread_ci90", "entry_slip_ci90", "exit_slip_ci90", "round_trip_ci90", "overshoot_ci90"):
+            lo, hi = getattr(self, name)
+            if lo > hi:
+                raise ValueError(f"{name} is inverted: [{lo}, {hi}]")
+        parts = self.spread_usd + max(0.0, self.entry_slip_usd) + max(0.0, self.exit_slip_usd) + self.commission_usd
+        if abs(parts - self.round_trip_usd) > _ROUND_TRIP_TOL:
+            raise ValueError(f"round_trip_usd {self.round_trip_usd} is not its parts ({parts:.4f})")
+        return self
+
+
+class CostOfRecord(FrozenRecord):
+    """The measured cost table every research screen reads (docs/research/cost-of-record-2026-10-31.md): broker ->
+    session (asia, london, newyork and the pooled `all`) -> cell, with the version a qualification cites."""
+    version: str = Field(min_length=1)
+    window_utc: tuple[str, str]
+    source: str
+    cells: dict[str, dict[str, CostOfRecordCell]]
+
+    @model_validator(mode="after")
+    def _pooled_cell(self) -> "CostOfRecord":
+        for broker, cells in self.cells.items():
+            if ALL_SESSIONS not in cells:
+                raise ValueError(f"broker {broker!r} has no pooled {ALL_SESSIONS!r} cell")
+        return self
+
+
+ArmCosts.model_rebuild()          # `of_record` names CostOfRecord, defined after it
 
 
 def load_costs(path: Path) -> ArmCosts:
     raw = yaml.safe_load(Path(path).read_text())
-    extra = {"spread_both_legs_usd": float(raw["spread_both_legs_usd"])} if "spread_both_legs_usd" in raw else {}
+    extra: dict[str, Any] = {"spread_both_legs_usd": float(raw["spread_both_legs_usd"])} \
+        if "spread_both_legs_usd" in raw else {}
+    if raw.get("cost_of_record"):     # a path relative to the cost model's own file
+        table = yaml.safe_load((Path(path).parent / str(raw["cost_of_record"])).read_text())
+        try:
+            extra["of_record"] = CostOfRecord.model_validate(table)
+        except ValidationError as e:
+            raise ValueError(f"cost of record {raw['cost_of_record']}: {e}") from e
     return ArmCosts(round_trip_usd=float(raw["round_trip_usd"]),
                     overshoot_scenarios_usd=tuple(float(x) for x in raw["overshoot_scenarios_usd"]), **extra)
 

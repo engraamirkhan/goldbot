@@ -42,6 +42,7 @@ def test_arm_runs_and_prices_net_r_twice(b1: pd.DataFrame, arm_id: str) -> None:
         assert trades["net_r_os"].to_numpy() == pytest.approx(expect1.to_numpy())
         assert (trades["net_r_os"] <= trades["net_r"] + 1e-12).all()
     assert set(s) >= {"net_r_overshoot_0", "net_r_overshoot_0.70", "gross_r"}
+    assert s["cost_of_record"] == COSTS.of_record.version if COSTS.of_record is not None else s["cost_of_record"] is None
 
 
 def test_random_control_is_reproducible_and_loses_the_cost(b1: pd.DataFrame) -> None:
