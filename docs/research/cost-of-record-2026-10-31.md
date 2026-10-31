@@ -3,66 +3,93 @@
 Research director bet 2, week of 2026-11-02. This is a measurement. No hypothesis is tested, no registry trial is
 used, K does not change and the holdout is not touched. Source: the brain's `aux.db` (`exploration_trades`,
 `cost_probes`, `evidence_exclusions`) and the store's `exit_fills`. All of it was read read-only on 2026-10-31. Only
-aggregates are in this repo: no trade row, no login, no host. The machine-readable table is
-`config/cost_of_record.yaml` (version `cor-2026-10-31`). Every research screen reads it through
-`goldbot.research.arms.load_costs`.
+aggregates are in this repo: no trade row, no login, no host.
+
+The machine-readable table is `config/cost_of_record.yaml`, version **`cor-2026-10-31.2`** (it supersedes
+`cor-2026-10-31`, which used an i.i.d. interval). `python -m goldbot.research.cost_of_record` generates it; the
+definitions live in that module's docstring. Every research screen reads it through
+`goldbot.research.arms.load_costs`. ADR 0064 governs how a new pre-registration pins a version and what it charges.
 
 ## 1. Definitions
 
 - **Window.** Opportunity days 2026-10-26 to 2026-10-30, which is UTC 2026-10-25 22:00 to 2026-10-30 22:00.
   Sessions follow `DEFAULT_SESSIONS`, the same session table the cost table uses.
-- **Population.** Exploration fills, all market orders. The 95 fills voided by `evidence_exclusions` (scope
-  `cost_cells`) are removed. All 95 fall on 10-26 and come from ICM, which leaves 1,278 ICM fills and 194 Vantage
-  fills. The daily reviews counted 1,373 and 195: they keep the voided fills, and one Vantage fill has no requested price.
+- **Population.** Exploration fills, all market orders.
+  - The 95 fills voided by `evidence_exclusions` (scope `cost_cells`) are removed from every count: entries, closes,
+    stop exits and exit legs.
+  - All 95 fall on 10-26 and come from ICM. That leaves 1,278 ICM fills and 194 Vantage fills.
+  - The daily reviews counted 1,373 and 195: they keep the voided fills, and one Vantage fill has no requested price.
 - **Entry slippage** is `side x (fill - requested)`. Positive is adverse.
 - **Spread** is ask minus bid at send.
-- **Exit slippage** is `side x (requested - filled)` on market exit legs. ICM has 215 such legs. Vantage records no
-  exit legs at all (section 5). For Vantage the exit leg is therefore measured from that broker's own scheduled probes:
-  `side x (exit touch - exit price)`, n = 119.
+- **Exit slippage** is `side x (requested - filled)` on market exit legs. ICM has 208 such legs after the voids.
+  - Vantage records no exit legs at all (section 5, backlog 141).
+  - For Vantage the exit leg is therefore measured from that broker's own scheduled probes:
+    `side x (exit touch - exit price)`, n = 121.
 - **Commission** is the broker's booked commission divided by (lots x 100 x the GBP-per-USD rate).
 - **Round trip** is spread + max(0, entry slip) + max(0, exit slip) + commission. Each term is the pooled mean, and
   the floor is applied after pooling.
-- **Overshoot** is `side x ((requested - side x stop_usd) - exit price)` on stop exits. It is charged on stop exits
-  only.
-- **ci90** is the 5th to 95th percentile of 4,000 i.i.d. bootstrap means (seed 20261031). The round-trip interval
-  resamples every term jointly.
-- **Charged** is what a screen pays: `max(frozen 0.23, round-trip upper bound)`. The frozen 0.23 was itself the
-  conservative case (p90 spread plus the upper slippage bound), so charging the measured upper bound compares like
-  with like. Demo slippage only ever raises a cost (prereg-cost-measurement-2026-10 decision 3).
+- **Overshoot** is `side x ((requested - side x stop_usd) - exit price)` on stop exits **at the initial stop**. It is
+  charged on stop exits only.
+  - A stop exit at a moved stop is counted apart, never in the mean. It is moved if it belongs to an arm that trails
+    its stop (BXR runners: break-even at +1 R, then trailed), or if it exits more than $0.50 better than the initial
+    stop.
+  - ICM had 9 such exits: 5 in Asia, 2 in London and 2 in New York. Vantage had none.
+  - Removing them raises the ICM mean from 0.093 to 0.110. Those exits had looked like negative overshoot.
+- **ci90** is the 5th to 95th percentile of 4,000 bootstrap means (seed 20261031). The bootstrap resamples **whole
+  minutes**, because fills on the same bar are correlated.
+  - Entries cluster on their send minute. ICM's 1,278 fills fall in 880 minutes.
+  - Closes, stop exits and exit legs cluster on their exit minute.
+  - Spread and entry slip share one resample. The round-trip interval combines every term's draws.
+- **Charged** is what a new pre-registration's screen pays (ADR 0064): `max(frozen 0.23, round-trip upper bound)`.
+  - A trade outside every session pays the broker's dearest cell.
+  - Demo slippage only ever raises a cost (prereg-cost-measurement-2026-10 decision 3).
 
 ## 2. The table of record ($/oz = per 0.01 lot)
 
-| broker | session | n fills | spread (ci90) | entry slip (ci90) | exit slip (n, ci90) | commission | **round trip (ci90)** | **charged** | stop exits | overshoot (ci90) |
-|---|---|---|---|---|---|---|---|---|---|---|
-| ICM | Asia | 309 | 0.088 (0.086-0.091) | +0.015 (-0.039..+0.070) | +0.020 (68, -0.005..+0.046) | 0.080 | **0.204 (0.172-0.264)** | **0.264** | 131 | 0.053 (0.004-0.100) |
-| ICM | London | 376 | 0.084 (0.081-0.087) | -0.031 (-0.075..+0.013) | -0.013 (57, -0.045..+0.017) | 0.080 | **0.164 (0.162-0.187)** | **0.230** | 172 | 0.076 (0.051-0.100) |
-| ICM | New York | 593 | 0.086 (0.083-0.089) | -0.017 (-0.051..+0.016) | -0.044 (90, -0.158..+0.022) | 0.080 | **0.166 (0.164-0.193)** | **0.230** | 270 | 0.124 (0.085-0.167) |
-| ICM | all | 1,278 | 0.086 (0.084-0.088) | -0.013 (-0.037..+0.011) | -0.015 (215, -0.064..+0.017) | 0.080 | **0.166 (0.165-0.186)** | **0.230** | 573 | 0.093 (0.071-0.117) |
-| Vantage | Asia | 81 | 0.105 (0.104-0.106) | -0.025 (-0.088..+0.035) | -0.160 (82 probes, -0.334..-0.008) | 0.053 | **0.158 (0.157-0.193)** | **0.230** | 18 | 0.000, untrusted |
-| Vantage | London | 44 | 0.104 (0.103-0.105) | **+0.136** (-0.002..+0.296) | -0.232 (17 probes, -0.663..-0.003) | 0.053 | **0.293 (0.158-0.453)** | **0.453** | 10 | 0.000, untrusted |
-| Vantage | New York | 69 | 0.105 (0.104-0.106) | +0.097 (-0.004..+0.209) | +0.007 (20 probes, -0.002..+0.018) | 0.053 | **0.263 (0.160-0.386)** | **0.386** | 19 | 0.000, untrusted |
-| Vantage | all | 194 | 0.105 (0.104-0.105) | +0.055 (-0.002..+0.114) | -0.142 (119 probes, -0.271..-0.035) | 0.053 | **0.213 (0.159-0.273)** | **0.273** | 47 | 0.000, untrusted |
+"n fills / minutes" counts fills and the distinct minutes they fall in. The last column is the ADR 0064 overshoot
+charge.
 
-**Costs in R at the typical stop.** The median stop is $3 on ICM (scalp) and $7 on Vantage. On ICM the charged round
-trip is 0.077 R in London and New York and 0.088 R in Asia (Asia's median stop is $4.5, so 0.059 R there). Add the
-overshoot: its 0.117 upper bound times the 45% stop-exit share is about 0.018 R. The all-in figure on ICM is about
-0.10 R. On Vantage, London costs 0.065 R and New York 0.055 R. A scalp still needs a gross edge of at least 0.3 R
-(three times cost) to be worth running.
+| broker | session | n fills / minutes | spread (ci90) | entry slip (ci90) | exit slip (n, ci90) | commission | **round trip (ci90)** | **charged RT** | stop exits | overshoot (ci90) | **charged overshoot** |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| ICM | Asia | 309 / 234 | 0.088 (0.085-0.092) | +0.015 (-0.049..+0.081) | +0.020 (68, -0.004..+0.045) | 0.080 | **0.204 (0.172-0.272)** | **0.272** | 126 (+5 moved) | 0.100 (0.067-0.136) | **0.136** |
+| ICM | London | 376 / 240 | 0.084 (0.081-0.087) | -0.031 (-0.074..+0.012) | -0.011 (50, -0.045..+0.022) | 0.080 | **0.164 (0.161-0.191)** | **0.230** | 170 (+2 moved) | 0.085 (0.061-0.109) | **0.120** |
+| ICM | New York | 593 / 406 | 0.086 (0.081-0.092) | -0.017 (-0.052..+0.018) | -0.044 (90, -0.151..+0.022) | 0.080 | **0.166 (0.162-0.194)** | **0.230** | 268 (+2 moved) | 0.130 (0.075-0.196) | **0.196** |
+| ICM | all | 1,278 / 880 | 0.086 (0.083-0.089) | -0.013 (-0.039..+0.013) | -0.015 (208, -0.061..+0.018) | 0.080 | **0.166 (0.164-0.188)** | **0.230** | 564 (+9 moved) | 0.110 (0.081-0.145) | **0.145** |
+| Vantage | Asia | 81 / 69 | 0.105 (0.104-0.106) | -0.025 (-0.101..+0.043) | -0.158 (83 probes, -0.319..-0.010) | 0.053 | **0.158 (0.157-0.202)** | **0.230** | 18 | 0.000, untrusted | **0.700** |
+| Vantage | London | 44 / 40 | 0.104 (0.103-0.105) | **+0.135** (-0.005..+0.291) | -0.215 (18 probes, -0.623..+0.003) | 0.053 | **0.293 (0.158-0.450)** | **0.450** | 10 | 0.000, untrusted | **0.700** |
+| Vantage | New York | 69 / 62 | 0.106 (0.104-0.107) | +0.097 (-0.006..+0.210) | +0.007 (20 probes, -0.002..+0.019) | 0.053 | **0.263 (0.169-0.378)** | **0.378** | 19 | 0.000, untrusted | **0.700** |
+| Vantage | all | 194 / 171 | 0.105 (0.104-0.106) | +0.055 (-0.004..+0.117) | -0.139 (121 probes, -0.265..-0.035) | 0.053 | **0.213 (0.158-0.275)** | **0.275** | 47 | 0.000, untrusted | **0.700** |
 
-**What changes for screens.**
-1. The frozen 0.23 is **not** conservative in three cells: ICM Asia (upper bound 0.264), Vantage London (0.453) and
-   Vantage New York (0.386). A screen that trades those cells has to charge `charged_round_trip_usd(broker,
-   session)`.
-2. The 0.70 overshoot scenario is 6 to 13 times the measured ICM overshoot (0.053 to 0.124 by session; upper bound
-   0.167 in New York). For new pre-registrations I recommend charging `overshoot_of_record_usd` (the upper bound) in
-   place of the 0.70 stress. The frozen pair `[0, 0.70]` stays as registered so earlier registry rows stay
-   comparable. *Research-director decision; not changed here.*
+**What clustering changed.** The intervals widened modestly (for example ICM New York spread 0.083-0.089 became
+0.081-0.092). The ICM Asia upper round trip went from 0.264 to 0.272, Vantage London from 0.453 to 0.450 and Vantage
+New York from 0.386 to 0.378. The pooled point estimates did not move.
+
+**Costs in R at the typical stop.** The median stop is $3 on ICM (scalp) and $7 on Vantage. A scalp needs a gross
+edge of at least 0.3 R (three times cost) to be worth running.
+- **ICM charged round trip:** 0.077 R in London and New York, 0.091 R in Asia at a $3 stop. Asia's median stop is
+  $4.5, which makes it 0.060 R there.
+- **ICM overshoot:** the charge times the 45% stop-exit share adds 0.018 R (London) to 0.029 R (New York).
+- **ICM all-in:** about 0.10 to 0.11 R, against about 0.18 R under 0.23 plus 0.70.
+- **Vantage** pays the 0.70 stress on stops (ADR 0064), about 0.025 R at 24% stop exits and a $7 stop, on top of
+  0.033 R (Asia) to 0.064 R (London) of round trip.
+
+**What changes for screens (ADR 0064, accepted).**
+1. **Round trip.** The frozen 0.23 is **not** conservative in three cells: ICM Asia, Vantage London and Vantage New
+   York. A new pre-registration charges `charged_round_trip_usd(broker, session)`. It pins the table version, and
+   `run_arm_backtest.py --screen-broker --cost-version` refuses any other version.
+2. **Overshoot.** New ICM pre-registrations charge the session's clustered upper bound, floored at $0.12. Vantage pays
+   0.70 until its exit legs are recorded. The 0.70 is reported as a stress line (`net_r_cor_stress`), not a gate.
+3. **Registry rows.** They keep 0.23 and [0, 0.70].
 
 ## 3. Corrections to figures in circulation
 
-- **Commission is $0.080/oz, not $0.06.** The 0.06 GBP the broker books per 0.01 lot is GBP, and at about 0.747
-  GBP/USD that is $0.080. `cost-model-1m-2026-10-25.md` read it as USD, so its "central $0.144" understated cost by
-  $0.020/oz. The frozen 0.23 still covers it.
+- **Commission is $0.080/oz, not $0.06.** The 0.06 the broker books per 0.01 lot is GBP. At about 0.747 GBP/USD that
+  is $0.080.
+  - `cost-model-1m-2026-10-25.md` read it as USD, so its "central $0.144" understated cost by $0.020/oz.
+  - Its conservative case (p90 spread both legs 0.12 + slippage upper bound 0.05 + commission) is **0.25**, not 0.23.
+  - The frozen 0.23 therefore understates that case by $0.02. That is why ADR 0064 charges `max(0.23, measured upper
+    bound)`, and why the measured bound carries the real commission.
+  - The frozen 0.23 stays only on registry rows, so they remain comparable.
 - **The week's 0.208 for ICM (Asia 0.237, London 0.200, New York 0.198) is biased upward by about $0.04.** I
   reproduced those figures exactly as the fill-weighted mean of the daily review's per-day, per-host, per-session
   cells. Each of those cells floors its own small-n slippage mean at zero, and slippage has sd 0.5 with n of 20 to
@@ -108,15 +135,27 @@ of fills say otherwise.
 ## 5. Gaps found (flagged, not fixed here)
 
 1. **Vantage records no exit legs.** `exit_fills` holds 0 rows for that host this week. Its daily-review round trip
-   therefore omits exit slippage. The cost of record substitutes Vantage's own scheduled-probe exits. Owner of the
-   fix: data-engineer and engine, backlog item to be raised by the research director.
+   therefore omits exit slippage. The cost of record substitutes Vantage's own scheduled-probe exits. The fix is
+   backlog 141 (data-engineer, then implementer).
 2. **Vantage overshoot reads 0.000 (n 47, sd 0.001).** The demo server fills stops at the stop price. That is a demo
-   artefact that will not survive live, so the cell is marked `overshoot_trusted: false` and screens keep the frozen
-   scenarios for Vantage.
-3. **The intervals are i.i.d. across fills.** Five days give too few blocks for a day-block bootstrap. Day-to-day
-   dispersion (ICM pooled 0.152 to 0.196) is wider than the interval, so treat these intervals as lower bounds on
-   the uncertainty.
-4. **These are demo fills.** Live fills only raise these numbers, never lower them. Only tiny-live fills (an owner
+   artefact that will not survive live.
+   - The builder decides trust on the broker's pooled stops: 95% or more within $0.005 of the stop, with at least 20
+     stops. It then marks every Vantage cell `overshoot_trusted: false`.
+   - Vantage screens charge 0.70 per stop exit (ADR 0064).
+3. **The scheduled-probe exit-slip sign is correct, and its mean is a tail.** The sign is right by construction: a
+   long exits at the bid, so a fill below the bid is adverse and positive. Vantage's -0.139 (and ICM's -0.069 on its
+   own probes) does not come from a typical fill:
+   - The median is 0.000 and the 10% trimmed mean is -0.001.
+   - The mean comes from a favourable tail. 4.1% of Vantage probe exits fill more than $0.20 better than the touch,
+     and none fill more than $0.20 worse. On ICM the figures are 6.2% better and 4.8% worse.
+   - The exit quote is 0.26 s old at the median on Vantage and 0.64 s on ICM. A fill against a quote that is a second
+     old in a moving market explains tails on both sides. Only demo price improvement explains Vantage's one-sided
+     tail.
+   - Because the round trip floors exit slip at zero, this never lowers a cost.
+4. **The intervals cluster by minute, not by day.** Five days give too few blocks for a day-block bootstrap. Day-to-day
+   dispersion (ICM pooled 0.152 to 0.196) is still wider than the interval, so treat these intervals as lower bounds
+   on the uncertainty.
+5. **These are demo fills.** Live fills only raise these numbers, never lower them. Only tiny-live fills (an owner
    gate) may lower a cost.
 
 ## 6. How many cost probes a day the protocol still needs (recommendation; config not changed)
@@ -126,7 +165,7 @@ slippage, the limit fill rule, stop-exit slippage, and booked commission and swa
 fills already measure:
 
 - **Commission is settled.** It is a constant per broker, with sd $0.0003.
-- **Stop-exit slippage on ICM is settled** from 573 strategy stop exits. Probes add nothing.
+- **Stop-exit slippage on ICM is settled** from 564 strategy stop exits at the initial stop. Probes add nothing.
 - **ICM market-leg slippage is settled** from strategy fills, which are the population that actually pays it.
   - To see a $0.05/oz drift (about 0.017 R at a $3 stop) at one-sided α 0.10 with power 0.8, with sd 0.50, takes
     ((1.28 + 0.84) x 0.50 / 0.05)² ≈ 450 fills per group.
@@ -145,7 +184,8 @@ fills already measure:
 | Vantage | ~24 a day M1 / 40 | **keep 40 a day** until Vantage exit legs are recorded **and** strategy fills reach 200 per session (about 3 to 4 weeks at about 13 per session per day), **then 12 a day** | Probes are Vantage's only exit-slip measurement, and its entry slip is drifting (section 4). |
 | mirror probes | about 1 a day | no change needed | negligible volume, no measurement role left |
 
-Re-read this recommendation at the next cost-of-record refresh (weekly: re-run the aggregation and bump `version`).
+Re-read this recommendation at the next cost-of-record refresh (weekly: run `python -m goldbot.research.cost_of_record` with a new `--version`; ADR 0064: a running
+pre-registration keeps the version it pinned).
 Changing `probe_plan`, account `cost_probe` settings or arms is for the research director and program director. I
 changed none of them. Probe budgets are demo-only and inside the existing sleeves, so no owner money decision is
 involved.
