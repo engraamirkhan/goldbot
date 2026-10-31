@@ -520,7 +520,7 @@ def test_the_friday_cut_closes_losers_within_5_s_with_an_entry_in_flight_and_rea
 
 # ---------------------------------------------------------------------------------------------- (6) protocol
 def test_the_protocol_is_v7_and_old_peers_stay_compatible():
-    assert bridge_mod.API_VERSION == CLOSE_PRIORITY_VERSION == 7
+    assert bridge_mod.API_VERSION >= CLOSE_PRIORITY_VERSION == 7     # v8 (ADR 0062) adds an optional read only
     assert bridge_mod.MIN_COMPATIBLE == 5                           # a v6 bridge ignores timeout_s; a v6 brain omits it
 
 
@@ -553,7 +553,7 @@ def test_a_live_account_refuses_entries_on_a_bridge_without_close_priority_and_d
 
 def test_the_health_report_names_the_order_lane_state_as_a_fixed_token(laned):
     body = requests.get(f"{laned.url}/health", timeout=5).json()
-    assert body["order_lane"] == "separate" and body["api_version"] == 7
+    assert body["order_lane"] == "separate" and body["api_version"] == bridge_mod.API_VERSION
 
 
 def test_a_stuck_health_read_never_holds_a_close_queued_behind_it():

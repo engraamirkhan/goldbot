@@ -77,8 +77,10 @@ def test_a_small_fallback_brain_gets_swap_and_the_a1_shape_none():
 
 def test_m1_the_brain_key_on_the_mt5_box_can_run_no_command():
     s = _text("mt5")
-    line = next(x for x in s.splitlines() if "restrict,port-forwarding" in x)
-    assert 'command=\\"/bin/false\\"' in line and 'permitopen=\\"127.0.0.1:8765\\"' in line
+    # ADR 0062: the options are composed per bridge port (default 8765) and always end in command="/bin/false"
+    assert 'opts="restrict,port-forwarding,permitlisten=\\"127.0.0.1:1\\""' in s and '[ $# -gt 0 ] || set -- 8765' in s
+    assert 'opts="$opts,permitopen=\\"127.0.0.1:$p\\""' in s
+    assert '_ "$opts,command=\\"/bin/false\\" $key" "$body"' in s
     assert "(no shell, no other ports)" not in s                    # the old comment claimed what the line lacked
 
 

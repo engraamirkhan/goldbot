@@ -20,7 +20,7 @@ real-money entries, exits never gated, holdout sealed, every id counted in K.
 | Discovery v1 (ADR 0058) | 0 survivors on 15m/1h/4h; phase 3 (confirm/holdout) still being built | cycle 1 |
 | TradingView parser | Audit 2 (seed 20261031) FAIL: direction 83.3% (bar 95%), levels 76.7% (bar 90%). Second failed regex iteration | `tv-ideas-parser-audit-2026-10-31.md` |
 | Data integrity | icm-probe's terminal ran on icm-demo's login 10-19..10-25: its balances, daily loss and 137 probes in that window are icm-demo's | demo-reset PR (68 A2 ids retired, duplicate-login guard, specialist label fix) |
-| K | ~1,256 = ~360 arm ids + 864 discovery v1 specs + 31 screen looks (H-16 1, H-82 5, H-83 25) + 1 registry trial (H-80 R2, local-only, owed to the brain registry as a 2026Q4 trial) | this file; screen documents |
+| K | ~1,256 = ~360 arm ids + 864 discovery v1 specs + 31 screen looks (H-16 1, H-82 5, H-83 25) + 1 registry trial (H-80 R2, local-only, owed to the brain registry as a 2026Q4 trial); +2 weekend controls WKS0/WKI0 (2026-10-31) -> ~1,258 | this file; screen documents; `prereg-2026-10-31-weekend-247.md` s.5 |
 
 **Read.** Three independent history tests this week say the same thing: on 1m-4h gold, with the entries we have,
 the gross edge is zero to within 0.01-0.03 R, and the cost (0.05-0.3 R) is the whole result. Exits do not rescue it
@@ -61,6 +61,7 @@ family qualifies for scale.** icm-probe fills and balances 10-19..10-25 are excl
 | Family (arms) | n, matched excess vs control (90%) | Rate | Rule | Decision this cycle |
 |---|---|---|---|---|
 | random controls (S0, S0R, I0, W0, VI0, C1H, VC1H, ZCD, ZCV) | +0.025 R (probe 354) | ~90 | never read | **keep** (the null) |
+| weekend controls WKS0, WKI0 (vantage-247, XAUUSD247, ADR 0062; not enabled yet) | none | — | `prereg-2026-10-31-weekend-247.md` s.4: cost/plumbing read after 4 weekends or WKS0 300 fills; default stop | **keep as measurement only**: never read for edge, never a null for weekday families, no promotion path |
 | XC15 (dedicated control of the specialist arms) | — | <2 | A2 | **kill** (evaluator R4 objection accepted: its arms are retired) |
 | cost_probe | -0.05 R | ~120 | cost protocol | **keep** to the 11-06 ruling, then cut to the protocol's need |
 | halfhour_persist (Z7D/Z7V/Z7P) | probe -0.02 (103), icm +0.25 (107), vantage +0.08 (98) | 78 | H-81 read 300 + A1 | **kill on A5 sign-off** (history: gross +0.002..+0.010 R across the 5 exits on 168,705 entries, below cost at every exit); until then the H-81 s.4 signal-time cost stop applies per stratum |
@@ -115,6 +116,7 @@ A = adopted, D = deferred (date), X = declined (reason).
 | 102 | strategy-researcher (TV audit 2) | Third regex, LLM classifier, abstain amendment, or park | **A: amendment T-1** (direction only, 3 classes long/short/abstain, precision >= 95% on non-abstained, coverage >= 50%). **X LLM**: a model trained on later data knows gold's path after each idea, so its reads of ambiguous text are not outcome-blind (look-ahead), and it costs ~3-4M tokens for the back catalogue. **X fourth regex** chasing full agreement. Park on a T-1 fail | line 6 |
 | 103 | evaluator R4 | XC15 is not A2-exempt | **A** | table 3 |
 | 104 | quant-reviewer A2 | S1A/S1B under the 11-13 bar unless exempted by 11-04 | **A**: no exemption | table 3 |
+| 105 | owner directive 2026-10-31 / ADR 0062 | Use Vantage XAUUSD247 at weekends to keep learning and testing | **A, as cost and plumbing measurement only**: the weekend quote is broker-made (gold is shut), so no edge claim is possible; two random controls (WKS0, WKI0), 2 registry rows, Q4 budget 147 -> 149 (PD + PO), no strategy arm under the owner's history-qualified rule | table 3; `prereg-2026-10-31-weekend-247.md` |
 
 ## 6. Owner-only items (options and a recommendation; nothing decided here)
 

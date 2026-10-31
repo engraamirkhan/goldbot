@@ -11,6 +11,7 @@ wait for a quote. As on MT5, `positions()` lists the engine's symbol only and `a
 Every symbol uses this broker's contract size and point (paper simplification)."""
 from __future__ import annotations
 
+import fnmatch
 import itertools
 from collections import deque
 from collections.abc import AsyncIterator
@@ -81,6 +82,10 @@ class PaperBroker:
     def loss_per_lot(self, symbol: str, side: int, price: float, distance: float) -> float | None:
         """The paper account is in USD and XAUUSD P&L is USD: distance x contract (conversion factor 1)."""
         return abs(distance) * self.contract
+
+    def symbols_get(self, pattern: str = "*") -> list[str]:
+        """The paper terminal lists its one symbol (ADR 0062 symbol check)."""
+        return [self.symbol] if fnmatch.fnmatchcase(self.symbol, pattern) else []
 
     def trading_sessions(self, symbol: str) -> list[TradingSession]:
         """The static session table's hours for the week from the paper clock's server date (last tick, else now)."""

@@ -288,8 +288,20 @@ class MT5Broker:
         if i.filling_mode & 2:
             modes.append("IOC")
         modes.append("RETURN")
+        def opt(name: str) -> float | None:          # ADR 0062: reported when the package has the field
+            v = getattr(i, name, None)
+            return None if v is None else float(v)
+        swap_mode = getattr(i, "swap_mode", None)
         return SymbolInfo(name=i.name, digits=i.digits, point=i.point, contract_size=i.trade_contract_size, volume_min=i.volume_min, volume_step=i.volume_step, volume_max=i.volume_max,
-                          stops_level_points=i.trade_stops_level, filling_modes=modes, trade_allowed=i.trade_mode != 0)
+                          stops_level_points=i.trade_stops_level, filling_modes=modes, trade_allowed=i.trade_mode != 0,
+                          swap_mode=None if swap_mode is None else int(swap_mode), swap_long=opt("swap_long"),
+                          swap_short=opt("swap_short"), margin_initial=opt("margin_initial"),
+                          margin_maintenance=opt("margin_maintenance"))
+
+    def symbols_get(self, pattern: str = "*") -> list[str]:
+        """The names of the terminal's symbols matching `pattern` (MT5 symbols_get group filter, e.g. "XAUUSD*"),
+        read-only (ADR 0062: does the account's symbol exist on this terminal); an empty list when none or on error."""
+        return [str(s.name) for s in (mt5.symbols_get(group=pattern) or ())]
 
     def account(self) -> AccountInfo:
         return account_info_from_mt5(mt5.account_info())

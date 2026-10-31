@@ -946,14 +946,20 @@ def scheduled_side(slot: pd.Timestamp) -> int:
 def schedule_skip(eng: Engine, ts: pd.Timestamp) -> str | None:
     """Why no scheduled probe is sent at `ts`, or None: a weekend day (UTC or server), the rollover blackout (the
     configured window in its own zone, New York by default, so it moves with US DST; the daily break and the reopen
-    inside it) or past the Friday weekend cut (server time, `weekend_cut`)."""
+    inside it) or past the Friday weekend cut (server time, `weekend_cut`). ADR 0062: on an always-open account the
+    weekend and the Friday cut do not apply; outside a weekend_only account's window it is `weekend_lane`."""
     sch: ScheduledProbe = eng.cfg.cost_probe_scheduled
     srv = server_wall(pd.DatetimeIndex([ts]), eng.cfg.server_tz)[0]
-    if ts.weekday() >= 5 or srv.weekday() >= 5:
+    lane = eng.cfg.always_open      # ADR 0062: an always-open account measures its own weekend; no Friday cut
+    if lane and eng.cfg.weekend_window is not None and not eng.cfg.weekend_window.inside(ts):
+        return "weekend_lane"
+    if not lane and (ts.weekday() >= 5 or srv.weekday() >= 5):
         return "weekend"
     hm, (a, b) = ts.tz_convert(sch.blackout_tz).strftime("%H:%M"), sch.blackout
     if (a <= hm < b) if a <= b else (hm >= a or hm < b):
         return "blackout"
+    if lane:
+        return None
     h, m = (int(x) for x in eng.cfg.weekend_cut.split(":"))
     if srv.weekday() == 4 and srv.hour * 60 + srv.minute >= h * 60 + m:
         return "friday_cut"

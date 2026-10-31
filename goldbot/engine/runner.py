@@ -28,7 +28,13 @@ from pydantic import Field
 from goldbot.allocator import Regime, RuleAllocator, tier1_minutes
 from goldbot.base import Record, load_record_json, schema_skew_summary
 from goldbot.config import tf_seconds
-from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable, session_table_cache
+from goldbot.data.calendar import (
+    DEFAULT_SESSIONS,
+    PauseWindow,
+    SessionTable,
+    WeekendWindow,
+    session_table_cache,
+)
 from goldbot.data.econ_calendar import blackout_window
 from goldbot.data.news import shock_window
 from goldbot.data.quality import DQEvent, bar_errors, events_frame, stale_feed
@@ -45,6 +51,7 @@ from goldbot.engine import (
     order_send,
     pilot,
     unconfirmed,
+    weekend_lane,
 )
 from goldbot.engine.cost_probe import ScheduledProbe
 from goldbot.engine.limits_apply import EngineLimits, daily_allowance, min_lot_risk, published_limits
@@ -251,6 +258,12 @@ class EngineConfig(Record):
     server_tz: str = "Europe/Athens"         # broker server clock: rollover (00:00 +-5 min) and the Friday 21:30 rule
     rollover_min: int = 5
     weekend_cut: str = "21:30"               # Friday, server time: close losers, tighten winners, no new entries
+    # ADR 0062 (engine/weekend_lane.py): a 24/7 symbol. always_open: the session table is open but for `pauses` and
+    # the Friday cut above is off; weekend_window (set: a weekend_only account): entries only inside it, every own
+    # position closed at its flat cut. Off on every other account: its weekend rule is unchanged
+    always_open: bool = False
+    pauses: tuple[PauseWindow, ...] = ()
+    weekend_window: WeekendWindow | None = None
     # measured costs: a broker that reports its swap and commission (MT5Broker.broker_terms) is read this often (tick
     # time) and written to state/broker_terms_<account>.json for the nightly cost job; commission from this many days
     broker_terms_every_s: int = 6 * 3600
@@ -368,7 +381,8 @@ class Engine:
         self.clock: Callable[[], pd.Timestamp] = lambda: pd.Timestamp.now("UTC")
         # D13 session table: the static rule on this account's server clock until run.py sets the broker's (it refreshes
         # it outside the tick path, so on_tick never calls the broker for sessions); read with no I/O
-        self.sessions: SessionTable = SessionTable(server_tz=cfg.server_tz)
+        self.sessions: SessionTable = SessionTable(server_tz=cfg.server_tz, always_open=cfg.always_open,
+                                                   pauses=cfg.pauses)       # ADR 0062: open 24/7 when always_open
         self.clock_probe: server_clock.ServerClockProbe | None = None   # latest server-clock measurement
         self.bridge_compat: BridgeCompat | None = None   # BACKLOG 42: run.py's bridge verdict; None: no bridge / unchecked
         self._tick_error_detail: str | None = None     # type of the last exception (never its message: it can name hosts)
@@ -743,6 +757,9 @@ class Engine:
                     continue
                 if tr.bars_held + self._open_bars(max(bases), now) >= tr.max_bars:   # bars_held: closes processed
                     self._try_close(pid, "time_exit", now, clock="host")
+        if (ln := weekend_lane.lane(self.cfg, now)) is not None:
+            weekend_lane.step(self, now, ln)       # ADR 0062: no Friday cut; the lane's flatten needs no price
+            return
         srv = server_wall(now, self.cfg.server_tz)[0]
         h, m = (int(x) for x in self.cfg.weekend_cut.split(":"))
         if not (srv.weekday() == 4 and srv.hour * 60 + srv.minute >= h * 60 + m) \
@@ -2126,6 +2143,9 @@ class Engine:
         srv = server_wall(now, self.cfg.server_tz)[0]        # naive server wall clock; any server_tz incl. NY+7
         mins = srv.hour * 60 + srv.minute + srv.second / 60
         self.state.in_rollover = min(mins, 1440 - mins) <= self.cfg.rollover_min
+        if (ln := weekend_lane.lane(self.cfg, now)) is not None:
+            weekend_lane.step(self, now, ln)       # ADR 0062: an always-open account's own weekend rule
+            return
         h, m = (int(x) for x in self.cfg.weekend_cut.split(":"))
         friday_cut = srv.weekday() == 4 and mins >= h * 60 + m
         self.state.weekend = friday_cut or srv.weekday() >= 5
@@ -2138,39 +2158,8 @@ class Engine:
         open profit (never loosened). Exits are automatic and never gated. Each position is handled on its own (one
         raising or refused call never stops the others); a failed loser close is re-sent every tick (`_retry_closes`)
         and the rule runs again on each account refresh until it completes. Returns whether it completed for every
-        position (an unreadable book is not complete)."""
-        positions = self._read_positions("the weekend rule is retried on the next refresh")
-        if positions is None:
-            return False
-        done, left, flat = True, len(positions), pilot.weekend_flat(self)     # ADR 0055: the pilot closes winners too
-        for p in positions:
-            if not self._own(p.magic):
-                continue
-            px = tick.bid if p.side > 0 else tick.ask
-            if p.side * (px - p.open_price) <= 0 or flat:
-                ok = p.position_id not in self._close_due and \
-                    self._try_close(p.position_id, "weekend_flat" if flat else "weekend_close_loser", tick.ts_utc).ok
-                left -= ok
-                done = done and ok
-                continue
-            sl = round(p.open_price + 0.5 * (px - p.open_price), 2)
-            tr = self.open.get(p.position_id)
-            if tr is not None and tr.sl is not None and p.side * (tr.sl - sl) > 0:
-                sl = tr.sl                    # the engine's stop is already tighter (e.g. a rejected trail modify)
-            if p.sl is None or p.side * (sl - p.sl) > 0:
-                if tr is not None:
-                    tr.sl = sl                # never loosens; reconciliation and the stop check enforce it meanwhile
-                try:
-                    res = self.broker.modify(p.position_id, sl, p.tp)
-                except Exception as e:        # one position never stops the others
-                    log.exception("weekend tighten failed for position %s; retried on the next refresh", p.position_id)
-                    res = OrderResult(ok=False, retcode=-1, order_id=None, position_id=p.position_id, filled_lots=0.0,
-                                      price=None, message=repr(e))
-                self.decisions.append({"ts": time.time(), "action": "weekend_tighten", "position": p.position_id, "sl": sl,
-                                       "ok": res.ok, "retcode": res.retcode})
-                done = done and res.ok
-        self.state.open_positions = left
-        return done
+        position (an unreadable book is not complete). Moved verbatim to `weekend_lane.weekday_rule` (line cap)."""
+        return weekend_lane.weekday_rule(self, tick)
 
     def _now(self, tick: Tick) -> pd.Timestamp:
         return self.clock() if self.cfg.live_clock else tick.ts_utc

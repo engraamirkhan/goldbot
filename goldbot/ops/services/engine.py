@@ -259,7 +259,10 @@ def symbol_terms_problem(info: Any) -> str | None:
 def release_symbol(settings: Settings, acc: Account) -> str:
     """The store symbol of the research release bars for `acc` (trading-safety review M2 of 10a18031): the canonical
     name whose `brokers.<broker>.symbol_map` entry is the account's traded symbol (Vantage XAUUSD+ -> XAUUSD), else
-    the traded symbol itself. Orders always use `acc.symbol`."""
+    the traded symbol itself. Orders always use `acc.symbol`. ADR 0062: an account's own `store_symbol` comes first
+    (vantage-247's XAUUSD247: its data never reads or writes the weekday XAUUSD history)."""
+    if own := getattr(acc, "store_symbol", None):
+        return str(own)
     b = settings.brokers.get(acc.broker)
     for canonical, traded in (b.symbol_map.items() if b is not None else ()):
         if traded == acc.symbol:
@@ -424,6 +427,9 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
                               shadow_max_open=settings.shadow.max_open_per_agent,
                               magic_base=acc.magic_base, server_tz=acc.server_tz, state_dir="state", data_root=settings.data_root,
                               shadow_host=shadow_host, probe_only=acc.probe_only, wind_down=wind_down, halt_checks=True,
+                              # ADR 0062: a 24/7 symbol's own calendar and weekend window (off on every other account)
+                              always_open=acc.sessions == "always_open", pauses=acc.pauses,
+                              weekend_window=acc.weekend_window if acc.weekend_only else None,
                               news_blackout=True,
                               blackout_before_min=settings.risk.blackout.before_min,
                               blackout_after_min=settings.risk.blackout.after_min,
@@ -444,7 +450,8 @@ def _run_engine(account_id: str, watch: "LoopWatch") -> None:
     if bridge is not None:
         from goldbot.execution.bridge import RemoteBroker
         session_broker = RemoteBroker(bridge[0], bridge[1], name=f"mt5-remote-{account_id}-sessions")
-    sessions = BrokerSessions(session_broker, acc.symbol, fallback=SessionTable(server_tz=acc.server_tz))
+    sessions = BrokerSessions(session_broker, acc.symbol, fallback=SessionTable(
+        server_tz=acc.server_tz, always_open=acc.sessions == "always_open", pauses=acc.pauses))   # ADR 0062
     table = resolve(refresh_sessions)(sessions, pd.Timestamp.now("UTC"), None)     # once, before the loop starts
     if table is not None:
         eng.set_sessions(table)

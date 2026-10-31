@@ -30,12 +30,15 @@ PY_SHA256=5ee42c4eee1e6b4464bb23722f90b45303f79442df63083f05322f1785f5fdde
 WINPY=/home/mt5/.wine/drive_c/users/mt5/AppData/Local/Programs/Python/Python311/python.exe
 REF=
 ACCOUNT=${ACCOUNT:-icm-demo}
+INSTANCE="" PORT="" BESIDE=""
 LOG=/root/goldbot-bootstrap.log
-USAGE="usage: sudo bash mt5_bootstrap.sh [<40-hex commit id on main>] [--account <account id, default icm-demo>]"
+USAGE="usage: sudo bash mt5_bootstrap.sh [<40-hex commit id on main>] [--account <account id, default icm-demo>] [--instance <install dir> --port <bridge port> --beside <account>]"
 while [ $# -gt 0 ]; do
   case "$1" in
     --account) [ $# -ge 2 ] || { echo "$USAGE"; exit 2; }; ACCOUNT=$2; shift 2 ;;
     --account=*) ACCOUNT=${1#--account=}; shift ;;
+    --instance|--port|--beside) [ $# -ge 2 ] || { echo "$USAGE"; exit 2; }
+      case "$1" in --instance) INSTANCE=$2 ;; --port) PORT=$2 ;; *) BESIDE=$2 ;; esac; shift 2 ;;
     *) [ -z "$REF" ] || { echo "$USAGE"; exit 2; }; REF=$1; [ -n "$REF" ] || { echo "$USAGE"; exit 2; }; shift ;;
   esac
 done
@@ -46,6 +49,13 @@ fi
 if ! [[ "$ACCOUNT" =~ ^[a-z][a-z0-9-]{0,31}$ ]]; then
   echo "$USAGE"; echo "refused: the account id must be lowercase letters, digits and '-'"; exit 2
 fi
+# ADR 0062: --instance, --port and --beside come together (a second terminal on a built box); mt5-instance.sh
+# validates them again before it writes anything
+if [ -n "$INSTANCE$PORT$BESIDE" ] && { [ -z "$INSTANCE" ] || [ -z "$PORT" ] || [ -z "$BESIDE" ] \
+    || ! [[ "$INSTANCE" =~ ^[A-Za-z0-9]{1,32}$ ]] || [ "$INSTANCE" = ICMarkets ] || ! [[ "$PORT" =~ ^[0-9]{4,5}$ ]] \
+    || ! [[ "$BESIDE" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || [ "$BESIDE" = "$ACCOUNT" ]; }; then
+  echo "$USAGE"; echo "refused: --instance <letters and digits, not ICMarkets> --port <n> --beside <another account>"; exit 2
+fi
 [[ "$WINPY" == */Python"$(echo "$PYVER" | cut -d. -f1,2 | tr -d .)"/python.exe ]] || { echo "WINPY does not match PYVER $PYVER"; exit 1; }
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 [ "$(uname -m)" = x86_64 ] || { echo "MT5 needs an x86_64 VM (E2.1.Micro), not ARM"; exit 1; }
@@ -54,7 +64,71 @@ fi
 # terminal is gone, tee keeps writing the log and `cat` drains the pipe, so no write fails.
 trap '' PIPE HUP
 exec > >(tee -a "$LOG" --output-error=warn 2>/dev/null; cat > /dev/null) 2>&1
-echo "== goldbot mt5 bootstrap $(date -u +%FT%TZ) ref=${REF:-main} account=$ACCOUNT"
+echo "== goldbot mt5 bootstrap $(date -u +%FT%TZ) ref=${REF:-main} account=$ACCOUNT${INSTANCE:+ instance=$INSTANCE}"
+
+# What root installs (systemd units, the root-run deploy script) comes from root's OWN shallow clone in a root-only
+# directory, never from $ROOT: the service user can write that tree and its .git, and it runs code (pip/npm/Wine
+# installs) before the installs below. docs/AGENT_STANDARDS.md "Root-run tooling".
+fetch_ops() {
+  OPS_SRC=$(mktemp -d /root/goldbot-ops.XXXXXX)
+  trap 'rm -rf -- "$OPS_SRC"' EXIT
+  if [ -n "$REF" ]; then             # exactly the commit the owner checked off-box (git verifies the content by its id)
+    git init -q "$OPS_SRC/src" && git -C "$OPS_SRC/src" fetch -q --depth 1 "$REPO" "$REF" \
+      && git -C "$OPS_SRC/src" checkout -q --detach FETCH_HEAD
+    [ "$(git -C "$OPS_SRC/src" rev-parse HEAD)" = "$REF" ] || { echo "fetched commit is not $REF"; exit 1; }
+  else
+    git clone -q --depth 1 "$REPO" "$OPS_SRC/src"
+  fi
+  OPS=$OPS_SRC/src/goldbot/ops/linux
+}
+
+# the brain's tunnel key: forwarding to the bridge port only; any command runs /bin/false (`ssh -N` opens none) and
+# no remote forward is possible (permitlisten to a closed port). Written by the full build and by --instance (SRE
+# review of 43ad25ee: a box built before ADR 0062 keeps the 8765-only, appending wrapper otherwise)
+write_authorize() {
+cat > /usr/local/bin/goldbot-mt5-authorize <<'WRAP'
+#!/usr/bin/env bash
+# sudo goldbot-mt5-authorize '<ssh-ed25519 ... goldbot@brain>' [<bridge port> ...]
+# Root only validates: exactly one ssh-ed25519 key line (no options, no second line, printable ASCII) and the bridge
+# ports (default 8765; ADR 0062: every bridge of this box, e.g. 8765 8766 for a second terminal). Every write into
+# mt5's home runs AS mt5, so a symlink mt5 plants in ~/.ssh can only reach mt5's own files. A line already holding the
+# same key is replaced (sshd uses the first line of a key, so an appended one would never widen or narrow it).
+set -euo pipefail
+export LC_ALL=C
+key=${1-}
+re='^ssh-ed25519 [A-Za-z0-9+/=]+( [[:print:]]*)?$'
+if [[ "$key" == *$'\n'* || "$key" == *$'\r'* ]] || ! [[ "$key" =~ $re ]]; then
+  echo "refused: expected one ssh-ed25519 public key line (the brain's ~/.ssh/id_ed25519.pub)"
+  exit 1
+fi
+shift
+[ $# -gt 0 ] || set -- 8765
+opts="restrict,port-forwarding,permitlisten=\"127.0.0.1:1\"" to=""
+for p in "$@"; do
+  if ! [[ "$p" =~ ^[0-9]{4,5}$ ]] || [ "$p" -lt 1024 ] || [ "$p" -gt 65535 ]; then
+    echo "refused: a bridge port is 1024..65535"; exit 1
+  fi
+  opts="$opts,permitopen=\"127.0.0.1:$p\"" to="${to:+$to, }127.0.0.1:$p"
+done
+body=$(printf '%s' "$key" | cut -d' ' -f2)
+sudo -u mt5 -H sh -c 'umask 077; mkdir -p ~/.ssh && chmod 700 ~/.ssh && f=~/.ssh/authorized_keys && touch "$f" && { grep -vF -- "$2" "$f" || true; printf "%s\n" "$1"; } > "$f.goldbot" && mv -f "$f.goldbot" "$f" && chmod 600 ~/.ssh/authorized_keys' \
+  _ "$opts,command=\"/bin/false\" $key" "$body"
+echo "authorised (forwarding to $to only)"
+WRAP
+chmod 755 /usr/local/bin/goldbot-mt5-authorize
+}
+
+# ADR 0062: a second terminal on a box this script already built (vantage-247 beside vantage-demo): no swap, apt,
+# Wine or Python step below runs for it (an upgrade under the sibling's running terminal is never done here); root's
+# own clone's mt5-second-terminal.sh installs the terminal at C:\MT5\<instance> and writes per-instance drop-ins
+# (mt5-instance.sh), the shared unit templates untouched.
+if [ -n "$INSTANCE" ]; then
+  fetch_ops
+  bash "$OPS/mt5-second-terminal.sh" "$ACCOUNT" "$INSTANCE" "$PORT" "$BESIDE" "$WINPY"
+  write_authorize            # the wrapper that takes the second bridge's port and replaces the key's line
+  exit 0
+fi
+# ADR 0062: end of the second terminal
 
 # 1 GB of RAM: a 4 GB swap file keeps Wine + terminal + bridge from being killed (docs/deploy/free-hosting-options.md)
 if ! swapon --show | grep -q /swapfile; then
@@ -90,19 +164,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --install-recommends winehq-de
 DEBIAN_FRONTEND=noninteractive apt-get install -y git curl xvfb x11vnc chrony
 systemctl enable --now chrony
 
-# What root installs (systemd units, the root-run deploy script) comes from root's OWN shallow clone in a root-only
-# directory, never from $ROOT: the service user can write that tree and its .git, and it runs code (pip/npm/Wine
-# installs) before the installs below. docs/AGENT_STANDARDS.md "Root-run tooling".
-OPS_SRC=$(mktemp -d /root/goldbot-ops.XXXXXX)
-trap 'rm -rf -- "$OPS_SRC"' EXIT
-if [ -n "$REF" ]; then             # exactly the commit the owner checked off-box (git verifies the content by its id)
-  git init -q "$OPS_SRC/src" && git -C "$OPS_SRC/src" fetch -q --depth 1 "$REPO" "$REF" \
-    && git -C "$OPS_SRC/src" checkout -q --detach FETCH_HEAD
-  [ "$(git -C "$OPS_SRC/src" rev-parse HEAD)" = "$REF" ] || { echo "fetched commit is not $REF"; exit 1; }
-else
-  git clone -q --depth 1 "$REPO" "$OPS_SRC/src"
-fi
-OPS=$OPS_SRC/src/goldbot/ops/linux
+fetch_ops
 
 id mt5 >/dev/null 2>&1 || useradd --create-home --shell /bin/bash mt5
 # The service user's tree is created by root once and then written only as mt5: on a re-run, root must not follow
@@ -165,25 +227,7 @@ sudo -u mt5 -H bash -lc "
   wine '$WINPY' -c 'import pathlib, sysconfig; pathlib.Path(sysconfig.get_paths()[\"purelib\"], \"goldbot.pth\").write_text(\"Z:$ROOT\\n\")'
 "
 
-# the brain's tunnel key: forwarding to the bridge port only; any command runs /bin/false (`ssh -N` opens none)
-cat > /usr/local/bin/goldbot-mt5-authorize <<'WRAP'
-#!/usr/bin/env bash
-# sudo goldbot-mt5-authorize '<ssh-ed25519 ... goldbot@brain>'
-# Root only validates: exactly one ssh-ed25519 key line (no options, no second line, printable ASCII). Every write
-# into mt5's home runs AS mt5, so a symlink mt5 plants in ~/.ssh can only reach mt5's own files.
-set -euo pipefail
-export LC_ALL=C
-key=${1-}
-re='^ssh-ed25519 [A-Za-z0-9+/=]+( [[:print:]]*)?$'
-if [[ "$key" == *$'\n'* || "$key" == *$'\r'* ]] || ! [[ "$key" =~ $re ]]; then
-  echo "refused: expected one ssh-ed25519 public key line (the brain's ~/.ssh/id_ed25519.pub)"
-  exit 1
-fi
-sudo -u mt5 -H sh -c 'umask 077; mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf "%s\n" "$1" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys' \
-  _ "restrict,port-forwarding,permitopen=\"127.0.0.1:8765\",command=\"/bin/false\" $key"
-echo "authorised (forwarding to 127.0.0.1:8765 only)"
-WRAP
-chmod 755 /usr/local/bin/goldbot-mt5-authorize
+write_authorize
 
 cat > /usr/local/bin/goldbot-mt5 <<'WRAP'
 #!/usr/bin/env bash

@@ -376,6 +376,58 @@ accounts:
     # and enabled in one step. Until then approval_mode stays propose and no engine unit is enabled for it.
     # Rollback: remove this block.
     enabled: false
+  vantage-247:
+    # ADR 0062, the XAUUSD247 weekend lane: Vantage's 24/7 gold CFD (1 oz a lot, no commission: spread + swap, launched
+    # 2026-07) on a Standard STP demo the owner opened 2026-10-31, NOT on vantage-demo's Raw ECN server (XAUUSD+ only).
+    # A second terminal + bridge on the Vantage box beside vantage-demo (C:\MT5\Vantage247, bridge 127.0.0.1:8766;
+    # RUNBOOK "XAUUSD247 weekend lane"). Its own broker key, store symbol, cost table, magic range, day and arms:
+    # never pooled with XAUUSD history, labels, learner weights or qualification (accounts.pooled_brokers refuses a
+    # shared broker key at load).
+    broker: vantage247
+    mode: demo
+    server: VantageInternational-Demo   # Standard STP demo; confirm in the terminal (verify_terminal_account refuses another)
+    login: null  # never here (public repo): mt5-login-vantage-247 and mt5-vantage-247 in the MT5 box keyring
+    terminal_path: C:\MT5\Vantage247\terminal64.exe   # the second install on the Vantage box (mt5_bootstrap.sh --instance)
+    server_tz: NY+7   # as vantage-demo (same broker, measured 2026-10-26); re-checked by server_clock:vantage-247
+    symbol: XAUUSD247
+    store_symbol: XAUUSD247   # bars_1m_live source=vantage247, ticks source=vantage-247: never symbol=XAUUSD
+    contract_size: 1.0        # 1 oz a lot (Vantage spec); goldbot.ops.symbol_check compares the terminal's
+    magic_base: 260700
+    # OFF until its terminal and bridge answer and its two control trials are recorded in the registry (family
+    # arms_weekend_247; the research director records them against the quarter's budget, never this change). Then
+    # `enabled: true` + `goldbot-engine@vantage-247`. Rollback: enabled false + restart
+    enabled: false
+    # ADR 0062: open every minute but the broker's own pauses (UTC; none documented for XAUUSD247), no Friday cut
+    sessions: always_open
+    pauses: []
+    # entries only Friday 21:00 .. Sunday 21:00 UTC; at the Sunday cut every position is closed, winners too, so no
+    # position carries into the Monday reconvergence with the main session
+    weekend_only: true
+    weekend_window: { open_day: 4, open: "21:00", flat_day: 6, flat: "21:00" }
+    # its OWN small day (ADR 0004 pattern, demo only): £20, out of the supervisor's combined limits (probe_only)
+    daily_loss_limit_abs: 20
+    account_class: standard   # Standard STP: spread only, no commission; measurement keeps running
+    risk_overrides:
+      profile: demo-2026-10-18
+      ceilings: { daily: 0.05, weekly: 0.06, min_lot_risk_cap: 0.01 }
+    approval_mode: auto       # ADR 0036 (demo)
+    # its own cost table (state/costs_vantage-247.json): scheduled M1 probes at the weekend only, £2 a day
+    cost_probe: { enabled: true, budget_share: 0.1, max_open: 1, max_loss: 1.0, scheduled: { enabled: true, budget_share: 0.5 } }
+    shadow_host: false
+    probe_only: true
+    max_positions: 8
+    dynamic_limits: true
+    order_timeout_s: 35       # as vantage-demo (Vantage fills up to 31 s)
+    # the weekend random controls only (config/exploration_arms.yaml WKS0 = S0's and WKI0 = I0's geometry on Friday
+    # night, Saturday and Sunday; forward only, role control): £16 = 0.8 x £20, scalp £8 / 3, intraday £8 / 3
+    exploration:
+      enabled: true
+      budget_share: 0.8
+      max_open_total: 6
+      pots: { scalp: { gbp: 8, max_open: 3 }, intraday: { gbp: 8, max_open: 3 } }
+      arms:
+        WKS0: { style: scalp, max_loss: 2.0, control_share: 1.0 }
+        WKI0: { style: intraday, max_loss: 4.0, control_share: 1.0 }
   icm-live:
     broker: icm
     mode: live

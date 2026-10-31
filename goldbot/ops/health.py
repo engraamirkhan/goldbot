@@ -102,6 +102,7 @@ from goldbot.ops.checks._base import (
     Check,
     Status,
     WatchState,
+    WeekendLaneRef,
     _age,
     _epoch,
     _market_open_throughout,
@@ -131,6 +132,7 @@ from goldbot.ops.checks.engine import (
     check_entry_status,
     check_failed_orders,
     check_tick_errors,
+    check_weekend_247,
 )
 from goldbot.ops.checks.feeds import (
     PNL_BASIS_GROSS_WARN_PCT,
@@ -260,6 +262,7 @@ __all__ = [
     "WINDOWS_HOLIDAY_WARN_DAYS",
     "WINDOWS_UNAVAILABLE_FAIL",
     "WatchState",
+    "WeekendLaneRef",
     "_RANK",
     "_age",
     "_age_s",
@@ -300,6 +303,7 @@ __all__ = [
     "check_drift",
     "check_exploration_learning",
     "check_qualification",
+    "check_weekend_247",
     "check_email_link",
     "check_engine",
     "check_engine_loop",
@@ -382,6 +386,8 @@ class HealthContext(Record):
     memo: dict[str, Any] = Field(default_factory=dict)        # per-run reads shared by the per-account checks
     # ADR 0061: () -> {account: (arms that may enter, arms refused as unqualified)}; None skips check_qualification
     qualification: Callable[[], dict[str, tuple[list[str], list[str]]]] | None = None
+    # ADR 0062: the weekend_only accounts accounts.yaml lists (enabled or not); empty skips check_weekend_247
+    weekend_lanes: list[WeekendLaneRef] = Field(default_factory=list)
 
     @classmethod
     def from_runtime(cls, state_dir: str | Path = "state", settings_path: str | Path = DEFAULT_SETTINGS,
@@ -389,7 +395,7 @@ class HealthContext(Record):
         """Context for the VPS: settings re-read from disk (not the cached copy, so a bad edit shows up), enabled
         accounts (live ones only after the phase gate) and the keyring."""
         from goldbot.ops import accounts
-        settings, s_err, accs, a_err, pilots = None, None, [], None, []
+        settings, s_err, accs, a_err, pilots, lanes = None, None, [], None, [], []
         try:
             settings = Settings.model_validate(settings_dict(settings_path))
         except Exception as exc:
@@ -400,9 +406,11 @@ class HealthContext(Record):
                                adaptive=settings is not None and adaptive_enabled(settings, a), live=a.mode != "demo")
                     for a in accounts.enabled_accounts()]
             on = {a.account_id for a in accs}
+            listed = accounts.load_accounts(logins=False).values()
             pilots = [AccountRef(account_id=a.account_id, server_tz=a.server_tz, symbol=a.symbol)
-                      for a in accounts.load_accounts(logins=False).values()
-                      if a.pilot.enabled and a.account_id not in on]
+                      for a in listed if a.pilot.enabled and a.account_id not in on]
+            lanes = [WeekendLaneRef(account_id=a.account_id, enabled=a.account_id in on, window=a.weekend_window)
+                     for a in listed if a.weekend_only]                      # ADR 0062
         except Exception as exc:
             a_err = f"{type(exc).__name__}: {exc}"
         from goldbot.execution.bridge import probe_health, probe_terminal
@@ -413,7 +421,7 @@ class HealthContext(Record):
                    clock=lambda: pd.Timestamp.now("UTC"), last_run=_last_run(Path(state_dir)),
                    tick_reader=bridge_tick_reader, bridge_info=lambda url: read_bridge_info(url, BRIDGE_TIMEOUT_S),
                    terminal_probe=lambda url: probe_terminal(url, BRIDGE_TIMEOUT_S),
-                   commit=repo_commit(), qualification=_qualification_view)
+                   commit=repo_commit(), qualification=_qualification_view, weekend_lanes=lanes)
 
 
 def _qualification_view() -> dict[str, tuple[list[str], list[str]]]:

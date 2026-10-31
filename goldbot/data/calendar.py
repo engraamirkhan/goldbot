@@ -23,9 +23,9 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-from pydantic import Field
+from pydantic import Field, model_validator
 
-from goldbot.base import FrozenRecord
+from goldbot.base import FrozenRecord, load_record
 from goldbot.data.cme_holidays import cme_metals_closed
 from goldbot.data.timeutil import epoch_ns, server_to_utc, server_wall
 
@@ -153,6 +153,65 @@ DEFAULT_SESSION_WINDOWS: dict[str, SessionWindow] = {
 }
 
 
+class PauseWindow(FrozenRecord):
+    """A broker's own pause on an always-open symbol (ADR 0062), in UTC: [start, end) on `weekday` (0 = Monday), or on
+    every day when None. Default none: Vantage documents no pause for XAUUSD247; one it announces goes here."""
+    weekday: int | None = Field(None, ge=0, le=6)
+    start: time
+    end: time
+
+    @model_validator(mode="after")
+    def _ordered(self) -> PauseWindow:
+        if not self.start < self.end:
+            raise ValueError("a pause window ends after it starts, inside one UTC day")
+        return self
+
+
+class WeekendWindow(FrozenRecord):
+    """ADR 0062: a weekend_only account's entry window in UTC, from `open_day open` to `flat_day flat` (default Friday
+    21:00 to Sunday 21:00: no entries Monday 00:00 .. Friday 21:00, and flat before the Monday reconvergence with the
+    main session). At `flat` every position of the account is closed, winners too; no hold may reach it."""
+    open_day: int = Field(4, ge=0, le=6)
+    open: time = time(21, 0)
+    flat_day: int = Field(6, ge=0, le=6)
+    flat: time = time(21, 0)
+
+    @model_validator(mode="after")
+    def _not_empty(self) -> WeekendWindow:
+        if self._at(self.open_day, self.open) == self._at(self.flat_day, self.flat):
+            raise ValueError("the weekend window opens and goes flat at the same time")
+        return self
+
+    @staticmethod
+    def _at(day: int, t: time) -> int:
+        return day * 1440 + t.hour * 60 + t.minute
+
+    @staticmethod
+    def _week_min(ts: pd.Timestamp) -> float:
+        u = pd.Timestamp(ts).tz_convert("UTC")
+        return u.weekday() * 1440 + u.hour * 60 + u.minute + u.second / 60
+
+    def inside(self, ts: pd.Timestamp) -> bool:
+        """True while entries are allowed: [open, flat) of the week, wrapping over Monday 00:00 when it must."""
+        m, a, b = self._week_min(ts), self._at(self.open_day, self.open), self._at(self.flat_day, self.flat)
+        return bool(a <= m < b) if a < b else bool(m >= a or m < b)
+
+    def _cut_of_week(self, ts: pd.Timestamp) -> pd.Timestamp:
+        u = pd.Timestamp(ts).tz_convert("UTC")
+        monday = u.normalize() - pd.Timedelta(days=u.weekday())
+        return monday + pd.Timedelta(minutes=self._at(self.flat_day, self.flat))
+
+    def next_cut(self, ts: pd.Timestamp) -> pd.Timestamp:
+        """The first flat instant strictly after `ts`."""
+        cut = self._cut_of_week(ts)
+        return cut if cut > ts else cut + pd.Timedelta(days=7)
+
+    def last_cut(self, ts: pd.Timestamp) -> pd.Timestamp:
+        """The latest flat instant at or before `ts`."""
+        cut = self._cut_of_week(ts)
+        return cut if cut <= ts else cut - pd.Timedelta(days=7)
+
+
 class _SessionSource(Protocol):
     def trading_sessions(self, symbol: str) -> list[TradingSession]: ...
 
@@ -172,8 +231,13 @@ class SessionTable(FrozenRecord):
     broker_windows: tuple[tuple[pd.Timestamp, pd.Timestamp], ...] | None = None
     covers_from: pd.Timestamp | None = None
     covers_until: pd.Timestamp | None = None
-    source: str = "static"            # static | broker | static (fallback)
+    source: str = "static"            # static | broker | static (fallback) | always_open
     note: str = ""                    # why the fallback was taken
+    # ADR 0062: a 24/7 symbol (Vantage XAUUSD247). Open every minute but the broker's own `pauses`: no daily break, no
+    # weekend, no CME holiday, and the broker's session list is never read (the MT5 adapter reports the weekday gold
+    # hours, which would close it). Off on every other account: their table is unchanged
+    always_open: bool = False
+    pauses: tuple[PauseWindow, ...] = ()
 
     def server_sessions(self) -> list[ServerSession]:
         """The static rule as a weekly server-time session template (the broker's documented hours): from the end of
@@ -191,6 +255,9 @@ class SessionTable(FrozenRecord):
         no closed time in a whole week falls back to `fallback` (the static defaults) with the reason logged and kept
         in `note`: the market is never assumed always open."""
         base = fallback if fallback is not None else DEFAULT_SESSIONS
+        if base.always_open:
+            return base.model_copy(update={"broker_windows": None, "covers_from": None, "covers_until": None,
+                                           "source": "always_open", "note": ""})
         try:
             reported: Any = broker.trading_sessions(symbol)
             why = _implausible(reported, base.server_tz)
@@ -231,9 +298,26 @@ class SessionTable(FrozenRecord):
         """Minutes a complete feed has bars for: `is_open` less the CME metals holiday closures (goldbot/data/
         cme_holidays.py). For judging missing data only (the engine's history gap guard); `is_open` itself, which
         filters release, resampled and research bars, does not change."""
+        if self.always_open:
+            return np.asarray(self.is_open(utc_ts), dtype=bool)
         return np.asarray(self.is_open(utc_ts), dtype=bool) & ~cme_metals_closed(pd.DatetimeIndex(utc_ts))
 
+    def _paused(self, utc_ts: pd.DatetimeIndex) -> np.ndarray:
+        """Inside one of the broker's own pauses (UTC), for an always-open table."""
+        u = pd.DatetimeIndex(utc_ts).tz_convert("UTC")
+        out = np.zeros(len(u), dtype=bool)
+        if not self.pauses or not len(u):
+            return out
+        tsec = (u.hour * 3600 + u.minute * 60 + u.second).to_numpy()
+        dow = u.dayofweek.to_numpy()
+        for p in self.pauses:
+            a, b = p.start.hour * 3600 + p.start.minute * 60, p.end.hour * 3600 + p.end.minute * 60
+            out |= (tsec >= a) & (tsec < b) & ((dow == p.weekday) if p.weekday is not None else True)
+        return out
+
     def _static_open(self, utc_ts: pd.DatetimeIndex) -> np.ndarray:
+        if self.always_open:
+            return ~self._paused(utc_ts)
         local = server_wall(pd.DatetimeIndex(utc_ts), self.server_tz)
         dow = local.dayofweek.to_numpy()
         t = local.time
@@ -342,7 +426,9 @@ def session_table_cache(t: SessionTable) -> dict[str, Any]:
     windows as ISO strings; the static rule's fields stay at their defaults."""
     def iso(x: pd.Timestamp | None) -> str | None:
         return None if x is None else pd.Timestamp(x).isoformat()
-    return {"server_tz": t.server_tz, "source": t.source, "note": t.note,
+    # ADR 0062: the two keys only on an always-open table, so every other account's state file is unchanged
+    lane = {"always_open": True, "pauses": [p.model_dump(mode="json") for p in t.pauses]} if t.always_open else {}
+    return {"server_tz": t.server_tz, "source": t.source, "note": t.note, **lane,
             "covers_from": iso(t.covers_from), "covers_until": iso(t.covers_until),
             "broker_windows": None if t.broker_windows is None else [[iso(a), iso(b)] for a, b in t.broker_windows]}
 
@@ -351,7 +437,11 @@ def session_table_from_cache(d: Any) -> SessionTable | None:
     """Inverse of `session_table_cache`; None when `d` is missing or malformed (the caller uses the static table)."""
     try:
         win = d.get("broker_windows")
-        base = SessionTable(server_tz=str(d["server_tz"]))
+        base = SessionTable(server_tz=str(d["server_tz"]), always_open=bool(d.get("always_open", False)),
+                            pauses=tuple(load_record(PauseWindow, p, source="engine state sessions.pauses")
+                                         for p in d.get("pauses") or ()))
+        if base.always_open:
+            return base.model_copy(update={"source": "always_open"})
         if win is None:
             return base
         return base.model_copy(update={

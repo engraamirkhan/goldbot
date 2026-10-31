@@ -92,6 +92,14 @@ class SymbolInfo(Record):
     trade_allowed: bool
     sessions: dict = Field(default_factory=dict)
     commission_per_lot_side: float | None = None
+    # ADR 0062 (the symbol check, goldbot/ops/symbol_check.py): the terminal's swap and margin terms as MT5 reports them
+    # (swap_mode is MT5's SYMBOL_SWAP_MODE_*; swaps in that mode's unit; margin_* per lot, 0 = from the leverage).
+    # Reporting only: no rule reads them, and None (an older bridge or the paper broker) is never taken as zero
+    swap_mode: int | None = None
+    swap_long: float | None = None
+    swap_short: float | None = None
+    margin_initial: float | None = None
+    margin_maintenance: float | None = None
 
 
 class OrderIntent(Record):

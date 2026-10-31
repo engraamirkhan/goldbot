@@ -194,6 +194,93 @@ reclaim, disk): rebuild with B4, then B6 to B11; the owner stores the password a
 `icm-demo` is not touched by any step here; if its engine shows `terminal:icm-demo` during this work, stop and check
 that nothing listens on 8765 except `goldbot-bridge-tunnel.service`.
 
+### 0.3c XAUUSD247 weekend lane (`vantage-247`, a second terminal on the Vantage box; ADR 0062)
+`vantage-247` is a Vantage Standard STP demo trading the 24/7 XAUUSD247 at the weekend only. Its window is Friday
+21:00 to Sunday 21:00 UTC, and everything is flat at the Sunday cut. It runs on its own terminal at
+`C:\MT5\Vantage247` beside vantage-demo's `C:\MT5\ICMarkets` on `goldbot-mt5-vantage` (same Wine prefix). Its bridge
+listens on the box's `127.0.0.1:8766`.
+
+**Credentials: nothing to do.** The owner stored the login and password on the Vantage box (2026-10-31) as
+`mt5-login-vantage-247` and `mt5-vantage-247`. These are the key names that `goldbot-mt5 login` and the bridge read.
+If they ever have to be stored again, the owner runs this on the box:
+`goldbot-mt5 accounts add vantage-247`. It prompts for the login, then the password, which is never echoed.
+On a machine with a direct terminal the same command is `python -m goldbot.ops.accounts add vantage-247`.
+Nobody types a login or password anywhere else.
+
+`<SHA>` and `<HASH>` work as in 0.3. The `vantage-247` entry must be on `main` at `<SHA>` with `enabled: false`.
+
+| Step | What | Who |
+|---|---|---|
+| W1 | Second terminal, on the box (below) | Claude, after the owner approves the deploy |
+| W2 | Login copied to the brain: `ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-mt5-vantage goldbot-mt5 accounts export mt5-login-vantage-247 \| ssh -F ~/.ssh/goldbot.conf -o BatchMode=yes goldbot-brain goldbot accounts set mt5-login-vantage-247 --stdin` | Claude |
+| W3 | First start and login from the keyring: `sudo systemctl start goldbot-mt5-terminal@vantage-247`, then `goldbot-mt5 login vantage-247 --dismiss-wizard` (prints ok or failed, never the login). It fails only if this install has no Vantage server list: then open an account once over VNC (File > Open an Account > Vantage > `VantageInternational-Demo`), and retry | Claude |
+| W4 | Bridge address and token, as B8 with `vantage-247`: listen `127.0.0.1:8766` on the box, `mt5-bridge-url-vantage-247` = `http://127.0.0.1:8769` on the brain | Claude |
+| W5 | Tunnel key, env file and tunnel drop-in on the brain (below) | Claude (root; security review) |
+| W6 | `sudo systemctl start goldbot-bridge@vantage-247 goldbot-bridge-watchdog@vantage-247.timer` on the box; on the brain `sudo systemctl enable --now goldbot-bridge-tunnel@vantage-247`, `curl -s 127.0.0.1:8769/health` ok | Claude |
+| W7 | `python -m goldbot.ops.symbol_check vantage-247` on the brain prints `ok` (XAUUSD247 listed, contract 1, trading on; swap and margin printed for the record); `server` in accounts.yaml matches the terminal (`goldbot run preflight --account vantage-247`) | Claude |
+| W8 | The research director records WKS0 and WKI0 in the registry (family arms_weekend_247), then a one-line change `enabled: true` and `goldbot-engine@vantage-247` | Research director; Claude |
+
+**W1, second terminal** (on the box, inside `tmux new -s boot`). It runs no apt, Wine or Python step and restarts
+nothing of vantage-demo:
+```bash
+curl -fsSLo mt5_bootstrap.sh https://raw.githubusercontent.com/engraamirkhan/goldbot/<SHA>/goldbot/ops/linux/mt5_bootstrap.sh
+echo "<HASH>  mt5_bootstrap.sh" | sha256sum -c - && sudo bash mt5_bootstrap.sh <SHA> --account vantage-247 --instance Vantage247 --port 8766 --beside vantage-demo
+```
+What it does:
+- Refuses to run unless the box was built and has 500 MB available.
+- Writes the drop-ins under `/etc/systemd/system/goldbot-*@vantage-247.service.d/goldbot-instance.conf`:
+  - the install dir;
+  - a one-terminal guard and an AutoTrading edit for that install only;
+  - the bridge's wait for that terminal;
+  - the watchdog probing port 8766.
+- Writes vantage-demo's drop-ins, which narrow its guards to `ICMarkets`. Without them, vantage-demo's terminal would
+  refuse to restart while vantage-247's terminal runs.
+- Installs the terminal and copies vantage-demo's `Config/servers.dat` into it.
+- Enables vantage-247's units without starting them.
+
+The shared templates are not changed. The run also installs the new `goldbot-mt5-authorize`, which takes the bridge
+ports and replaces the key's line instead of appending one.
+
+**Undo, in this order:**
+1. On the box, stop the lane before removing anything:
+   `sudo systemctl disable --now goldbot-bridge-watchdog@vantage-247.timer goldbot-bridge@vantage-247 goldbot-mt5-terminal@vantage-247`.
+2. Remove both accounts' drop-ins:
+   `sudo rm -f /etc/systemd/system/goldbot-{mt5-terminal,bridge,bridge-watchdog}@vantage-247.service.d/goldbot-instance.conf /etc/systemd/system/goldbot-{mt5-terminal,bridge}@vantage-demo.service.d/goldbot-instance.conf && sudo systemctl daemon-reload`.
+3. Narrow the key back to 8765 only: `sudo goldbot-mt5-authorize '<the brain key line>'`.
+4. On the brain:
+   `sudo systemctl disable --now goldbot-bridge-tunnel@vantage-247 && sudo rm -f /etc/goldbot/bridge-vantage-247.env /etc/systemd/system/goldbot-bridge-tunnel@vantage-247.service.d/goldbot-instance.conf && sudo systemctl daemon-reload`.
+5. In config, set `enabled: false` on vantage-247 (if it was on) and restart its engine unit.
+
+vantage-demo is never restarted by these steps. Its default guards apply again at its next restart.
+
+Check:
+- `systemctl cat goldbot-mt5-terminal@vantage-247` shows the drop-in.
+- After W3, `pgrep -a -u mt5 -f 'MT5.Vantage247.[t]erminal64[.]exe'` shows one terminal.
+- After W3's login, restart the new terminal once: `sudo systemctl restart goldbot-mt5-terminal@vantage-247`. The
+  terminal writes `Config/common.ini` on its first exit, and its unit sets AutoTrading on in that file at the next
+  start. Then `curl -s 127.0.0.1:8766/health` must not say `autotrading_off`.
+- vantage-demo's `/health` on 8765 stays `ok` throughout.
+- `mt5-box-upgrade` refuses every phase on this box (it detects the drop-ins). Upgrade the box by hand.
+
+**W5, the brain side** (as root):
+1. Check that nothing listens on the brain's 8769: `ss -ltn 'sport = :8769'` prints only the header line.
+2. On the box, authorise the brain's key for both bridges on one line. This replaces the old 8765-only line:
+   `sudo goldbot-mt5-authorize '<the brain key line>' 8765 8766`.
+   Then check it: `sudo grep -c 'permitopen="127.0.0.1:8766"' ~mt5/.ssh/authorized_keys` must print `1`. A `0`
+   means the old wrapper is still installed: rerun W1 (it installs the new one).
+3. Write the env file: `printf 'MT5_HOST=%s\nLOCAL_PORT=8769\n' '<vantage box private ip>' | sudo install -m 644 -o root -g root /dev/stdin /etc/goldbot/bridge-vantage-247.env`.
+4. Point the box end of the tunnel at 8766 with a drop-in. The template forwards to 8765:
+   `sudo install -d -m 755 /etc/systemd/system/goldbot-bridge-tunnel@vantage-247.service.d && printf '%s\n' '[Service]' 'ExecStart=' 'ExecStart=/usr/bin/ssh -N -i /var/lib/goldbot/.ssh/id_ed25519 -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new -L 127.0.0.1:${LOCAL_PORT}:127.0.0.1:8766 mt5@${MT5_HOST}' | sudo install -m 644 -o root -g root /dev/stdin /etc/systemd/system/goldbot-bridge-tunnel@vantage-247.service.d/goldbot-instance.conf && sudo systemctl daemon-reload`
+
+**At the weekend.** The health line `weekend_247` reports the lane:
+- inside the window, `in its window, N open`;
+- outside it, `outside its window, 0 open`.
+
+It FAILs on an engine state older than 10 min inside the window, or on a position still open 15 min after the Sunday
+cut. The engine retries the flatten every refresh. To close by hand, use `/halt` and the kill switch, as on every
+account. The weekday checks (`engine:`, `terminal:`) call the weekend "market closed" for every account, this one
+included.
+
 ### 0.4 The brain
 ```bash
 ssh ubuntu@<brain public ip>

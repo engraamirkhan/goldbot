@@ -1526,6 +1526,12 @@ def tick_record(ctx: JobContext, slot: pd.Timestamp) -> dict[str, Any]:
     out: dict[str, Any] = {}
     failed: list[str] = []
     for acc in ctx.accounts:
+        if getattr(acc, "sessions", "broker") == "always_open":
+            # ADR 0062: its quiet hours are not gold's (it trades the weekend this job pulls in) and it has weekend
+            # server days the weekday pull skips; its engine records every tick it sees (store `ticks`, its own
+            # account and XAUUSD247) and its 1m bars (`bars_1m_live`, its own broker key), so its bridge is not paged
+            out[acc.account_id] = {"skipped": "always open: recorded by its engine (store ticks and bars_1m_live)"}
+            continue
         broker = None
         try:                                  # one unreachable terminal does not stop the other account's record
             broker = ctx.broker_for(acc)
