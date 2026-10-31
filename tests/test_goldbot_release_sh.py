@@ -155,7 +155,12 @@ def test_a_merge_commit_whose_tree_differs_from_the_green_pr_head_is_refused(fak
     assert r.returncode == 2 and "tree differs" in r.stdout and ssh == []
 
 
-@pytest.mark.parametrize("rec", [record("refused"), record("rolled_back"), record("deployed", "c" * 40), "garbage", ""])
+# a fixed far-future ts: the ids must be identical on every xdist worker (a ts from now() differs between them)
+_TS = "2099-01-01T00:00:00Z"
+
+
+@pytest.mark.parametrize("rec", [record("refused", ts=_TS), record("rolled_back", ts=_TS),
+                                 record("deployed", "c" * 40, ts=_TS), "garbage", ""])
 def test_a_record_that_does_not_say_deployed_this_sha_fails_with_3_and_skips_the_checks(fakes, rec):
     r, ssh = run(fakes, SHA, FAKE_RECORD=rec, FAKE_D2_RC="1")
     assert r.returncode == 3, r.stdout

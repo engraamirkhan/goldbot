@@ -100,7 +100,10 @@ def _pytest_in(tmp_path: Path, body: str, shift: str | None = None) -> subproces
     (pkg / "__init__.py").write_text("")
     shutil.copy(ROOT / "tests" / "clockshift.py", pkg / "clockshift.py")
     (tmp_path / "pytest.ini").write_text("[pytest]\naddopts = --strict-markers -p no:randomly -p no:cacheprovider\n")
-    env = {**os.environ, "PYTHONPATH": f"{tmp_path}{os.pathsep}{ROOT}"}
+    # the inner run must not inherit CI's shard selection or addopts, or it deselects the one test it runs
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("GOLDBOT_SHARD", "PYTEST_ADDOPTS") and not k.startswith("PYTEST_XDIST")}
+    env["PYTHONPATH"] = f"{tmp_path}{os.pathsep}{ROOT}"
     env.pop(clockshift.ENV, None)
     if shift is not None:
         env[clockshift.ENV] = shift
