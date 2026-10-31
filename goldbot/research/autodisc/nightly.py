@@ -39,6 +39,7 @@ from goldbot.research.autodisc import stats as S
 from goldbot.research.autodisc.evaluate import STRESS_MULT, Evaluation
 from goldbot.research.autodisc.gen_gp import (
     GENERATOR,
+    VERSION_OF,
     GPCandidate,
     GPConfig,
     Resolver,
@@ -122,8 +123,15 @@ class ExploreFailed(FrozenRecord):
     failed: list[str]
 
 
-def explore_failures(e: Evaluation) -> list[str]:
-    """The evaluator's explore checks (`Evaluation.explore_checks_passed`) that `e` fails, each with its value."""
+def passes_net_floor(e: Evaluation, net_r_floor: float | None) -> bool:
+    """Grammar v2's absolute floor (A4 item 2): the spec's own net mean R at the cost of record is at least
+    `net_r_floor` (None: no floor, v1)."""
+    return net_r_floor is None or (e.mean_r is not None and np.isfinite(e.mean_r) and e.mean_r >= net_r_floor)
+
+
+def explore_failures(e: Evaluation, net_r_floor: float | None = None) -> list[str]:
+    """The evaluator's explore checks (`Evaluation.explore_checks_passed`) that `e` fails, each with its value, and
+    (v2) the absolute net-R floor."""
     why = [f"floors: {'; '.join(e.floor_failures) or 'failed'}"] if not e.floors_passed else []
     if e.fitness is None or not e.fitness > 0:
         why.append(f"min-fold t {_f(e.fitness)} <= 0")
@@ -131,6 +139,8 @@ def explore_failures(e: Evaluation) -> list[str]:
         why.append(f"excess R {_f(e.excess_r)} <= 0")
     if not e.stress_passed:
         why.append(f"mean R at {STRESS_MULT:g}x cost {_f(e.stress_mean_r)} <= 0")
+    if not passes_net_floor(e, net_r_floor):
+        why.append(f"net mean R {_f(e.mean_r)} < floor {net_r_floor:+.3f}")
     return why
 
 
@@ -179,12 +189,14 @@ def _failed(p: float, pl: Plateau, batch_ok: bool) -> list[str]:
 
 
 def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg: GPConfig, *, reps: int,
-                     max_candidates: int = 20, cost_line: str = "", night: str = "adhoc", k_offset: int = 0
-                     ) -> NightlyResult:
+                     max_candidates: int = 20, cost_line: str = "", night: str = "adhoc", k_offset: int = 0,
+                     net_r_floor: float | None = None, k_declared: int = 0) -> NightlyResult:
     """The module docstring's funnel on one tensor. Every evaluated spec (search, null, neighbours) is ledgered first.
     The night's survivors are recorded in the ledger under `night` with their DSR inputs and the night's cost line, so
     the report states the cumulative count. The DSR is read at `k_offset` + the cumulative K_search (`k_offset`: the
-    registry's discovery K outside this ledger, `k_link.dsr_k_offset`; quant review of phase 3, F1)."""
+    registry's discovery K outside this ledger, `k_link.dsr_k_offset`; quant review of phase 3, F1). Grammar v2
+    (`cfg.grammar`): `net_r_floor` is the absolute net-R floor a candidate must also meet, and the DSR is read at
+    max(cumulative K_search, `k_declared`) + `k_offset`, the K declared in the pre-registration before the run."""
     k_before = ledger.k_search()
     res = Resolver(provider)
     real = run_gp(t, provider, cfg, ledger, resolver=res)
@@ -203,10 +215,11 @@ def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg:
     batch_ok, why = batch_passes(rc, pbo)
     col_of = {c.spec_hash: j for j, c in enumerate(floors)}
     beat = sorted((c for c in floors if gp_fitness(c.evaluation) > thr), key=lambda c: -gp_fitness(c.evaluation))
-    cands = [c for c in beat if c.evaluation.explore_checks_passed]
+    ok = [c.evaluation.explore_checks_passed and passes_net_floor(c.evaluation, net_r_floor) for c in beat]
+    cands = [c for c, o in zip(beat, ok, strict=True) if o]
     explore_failed = [ExploreFailed(spec_hash=c.spec_hash, fitness=gp_fitness(c.evaluation),
-                                    failed=explore_failures(c.evaluation))
-                      for c in beat if not c.evaluation.explore_checks_passed]
+                                    failed=explore_failures(c.evaluation, net_r_floor))
+                      for c, o in zip(beat, ok, strict=True) if not o]
     judged: list[tuple[GPCandidate, float, Plateau]] = []
     n_nb = 0
     hour = t.ts_utc.hour.to_numpy()
@@ -216,13 +229,14 @@ def search_and_judge(t: OutcomeTensor, provider: Any, ledger: SearchLedger, cfg:
         r, base = t.r(ei), np.nan_to_num(t.drift_table(ei)[:, hour], nan=0.0)        # base: (side, bar)
         shift = circular_shift_null(np.where(mask, side, 0).astype(np.int8), r[:, 0], r[:, 1], t.ts_utc,
                                     base_long=base[0], base_short=base[1], seed=cfg.seed)
-        nbs = [evaluate_logged(t, res, nb, ledger, parents=(c.spec_hash,), generation=-1, min_events=cfg.min_events)
-               for nb in neighbours(c.spec)]
+        nbs = [evaluate_logged(t, res, nb, ledger, parents=(c.spec_hash,), generation=-1, min_events=cfg.min_events,
+                               version=VERSION_OF[cfg.grammar])
+               for nb in neighbours(c.spec, cfg.grammar)]
         n_nb += len(nbs)
         fit = [f if np.isfinite(f := gp_fitness(nb.evaluation)) else None for nb in nbs]
         judged.append((c, shift.p_value, plateau_check(gp_fitness(c.evaluation), fit)))
     k_cum = ledger.k_search()                 # every night's specs: the multiplicity the confirm DSR pays for
-    k_dsr = k_cum + int(k_offset)
+    k_dsr = max(k_cum, int(k_declared)) + int(k_offset)
     inputs = batch_dsr_inputs(d, [col_of[c.spec_hash] for c, _, _ in judged]) if judged else {}
     dsr = {c: inp.dsr(max(k_dsr, 1)) for c, inp in inputs.items()}
     survivors: list[Survivor] = []
