@@ -128,6 +128,32 @@ def test_the_bootstrap_takes_an_instance_beside_an_account_and_never_reinstalls_
     assert second.index("mt5-instance.sh") < second.index("install -m 755") < second.index("mt5setup.exe")
 
 
+def test_the_installers_stop_of_its_own_terminal_never_matches_the_shell_running_it():
+    """SRE review of 43ad25ee (HIGH): `pkill -f 'MT5.<dir>.[t]erminal64[.]exe'` ran inside a `bash -lc "..."` whose argv
+    held the expanded path, so it killed the installing shell itself. The install dir now travels as "$1"."""
+    second = (LINUX / "mt5-second-terminal.sh").read_text(encoding="utf-8")
+    m = re.search(r"sudo -u mt5 -H bash -c '(.*?)' _ \"\$dir\"", second, re.S)
+    assert m, "the mt5 step passes the install dir as an argument"
+    script = m.group(1)
+    assert '$1' in script and '$dir' not in script
+    pk = re.search(r'pkill -u mt5 -f "MT5\.\$1\.\[t\]erminal64\[\.\]exe"', script)
+    assert pk
+    pattern = "MT5.Vantage247.[t]erminal64[.]exe"                    # what pkill runs with, $1 = Vantage247
+    argv = " ".join(["sudo", "-u", "mt5", "-H", "bash", "-c", script, "_", "Vantage247"])
+    assert not re.search(pattern, argv) and not re.search(pattern, " ".join(["bash", "-c", script, "_", "Vantage247"]))
+    assert re.search(pattern, r"C:\MT5\Vantage247\terminal64.exe /profile:goldbot")
+
+
+def test_the_instance_path_installs_the_authorize_wrapper_that_takes_the_new_port():
+    """SRE review of 43ad25ee (HIGH): --instance exited before the wrapper was written, so the box kept the old
+    8765-only, appending one and the 8766 forward was refused."""
+    s = BOOT.read_text(encoding="utf-8")
+    inst = s[s.index("# ADR 0062: a second terminal"):s.index("# ADR 0062: end of the second terminal")]
+    assert "write_authorize" in inst
+    assert s.index("write_authorize() {") < s.index("# ADR 0062: a second terminal")
+    assert s.count("cat > /usr/local/bin/goldbot-mt5-authorize <<'WRAP'") == 1
+
+
 @pytest.mark.parametrize("args", [
     ["--instance", "Vantage247", "--port", "8766"],                                 # no sibling
     ["--instance", "ICMarkets", "--port", "8766", "--beside", "vantage-demo"],      # the sibling's dir

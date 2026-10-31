@@ -426,3 +426,17 @@ def test_the_terminal_count_ignores_the_wine_start_launcher():
     pat = re.compile(m.group(1).replace("[\\\\]", "\\\\"))
     assert pat.search(r"C:\MT5\ICMarkets\terminal64.exe /profile:goldbot")
     assert not pat.search("start.exe /exec /home/mt5/.wine/drive_c/MT5/ICMarkets/terminal64.exe")
+
+
+@pytest.mark.parametrize("phase", ["precheck", "install", "post-reboot"])
+def test_a_box_with_a_second_terminal_is_refused_before_anything(box, phase):
+    """SRE review of 43ad25ee (ADR 0062): this script's pkill, its one-terminal count and its one watchdog assume one
+    terminal per box; on a box with per-instance drop-ins (vantage-247 beside vantage-demo) it would stop both
+    terminals and FAIL at two. It refuses every phase there, before any call."""
+    tmp, sha = box
+    d = tmp / "units" / "goldbot-mt5-terminal@vantage-247.service.d"
+    d.mkdir(parents=True)
+    (d / "goldbot-instance.conf").write_text("[Service]\n")
+    rc, out = run(box, phase, sha, *FLAGS)
+    assert rc == 2 and "more than one MT5 terminal" in out
+    assert "pkill" not in calls(tmp) and "stop" not in calls(tmp)

@@ -274,6 +274,23 @@ def test_at_the_sunday_cut_every_own_position_is_closed_winners_too_once(tmp_pat
     assert len([d for d in eng.decisions if d.get("action") == "weekend_lane_flat"]) == 2
 
 
+def test_a_position_that_appears_after_the_cuts_flatten_is_closed_too(tmp_path):
+    """Trading-safety review of 43ad25ee (MED): a late-resolved send or an adopted orphan that shows up after the
+    cut's flatten completed must not ride into Monday: outside the window every own position is closed whenever one
+    exists; the key only limits the risk-state save."""
+    eng, pb = _engine(tmp_path, lane=True)
+    after = SUN_CUT + pd.Timedelta(seconds=5)
+    eng.clock = lambda: after
+    eng._refresh_account(_tick(pb, after))                           # flat: the cut's flatten completes
+    assert eng._weekend_done == weekend_lane.lane(eng.cfg, after).key   # type: ignore[union-attr]
+    late = MON - pd.Timedelta(hours=6)
+    pid = _open(eng, pb, 1, late)                                    # appears after the flatten
+    eng.clock = lambda: late
+    eng._refresh_account(_tick(pb, late))
+    assert pid not in {p.position_id for p in pb.positions()}
+    assert [d["position"] for d in eng.decisions if d.get("action") == "weekend_lane_flat"] == [pid]
+
+
 def test_without_a_quote_the_lane_still_flattens_after_the_cut(tmp_path):
     eng, pb = _engine(tmp_path, lane=True)
     pid = _open(eng, pb, 1, SAT)

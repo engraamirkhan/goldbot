@@ -238,19 +238,36 @@ What it does:
 - Installs the terminal and copies vantage-demo's `Config/servers.dat` into it.
 - Enables vantage-247's units without starting them.
 
-The shared templates are not changed. To undo: delete the two accounts' `goldbot-instance.conf` files and run
-`sudo systemctl daemon-reload`.
+The shared templates are not changed. The run also installs the new `goldbot-mt5-authorize`, which takes the bridge
+ports and replaces the key's line instead of appending one.
+
+**Undo, in this order:**
+1. On the box, stop the lane before removing anything:
+   `sudo systemctl disable --now goldbot-bridge-watchdog@vantage-247.timer goldbot-bridge@vantage-247 goldbot-mt5-terminal@vantage-247`.
+2. Remove both accounts' drop-ins:
+   `sudo rm -f /etc/systemd/system/goldbot-{mt5-terminal,bridge,bridge-watchdog}@vantage-247.service.d/goldbot-instance.conf /etc/systemd/system/goldbot-{mt5-terminal,bridge}@vantage-demo.service.d/goldbot-instance.conf && sudo systemctl daemon-reload`.
+3. Narrow the key back to 8765 only: `sudo goldbot-mt5-authorize '<the brain key line>'`.
+4. On the brain:
+   `sudo systemctl disable --now goldbot-bridge-tunnel@vantage-247 && sudo rm -f /etc/goldbot/bridge-vantage-247.env /etc/systemd/system/goldbot-bridge-tunnel@vantage-247.service.d/goldbot-instance.conf && sudo systemctl daemon-reload`.
+5. In config, set `enabled: false` on vantage-247 (if it was on) and restart its engine unit.
+
+vantage-demo is never restarted by these steps. Its default guards apply again at its next restart.
 
 Check:
 - `systemctl cat goldbot-mt5-terminal@vantage-247` shows the drop-in.
 - After W3, `pgrep -a -u mt5 -f 'MT5.Vantage247.[t]erminal64[.]exe'` shows one terminal.
+- After W3's login, restart the new terminal once: `sudo systemctl restart goldbot-mt5-terminal@vantage-247`. The
+  terminal writes `Config/common.ini` on its first exit, and its unit sets AutoTrading on in that file at the next
+  start. Then `curl -s 127.0.0.1:8766/health` must not say `autotrading_off`.
 - vantage-demo's `/health` on 8765 stays `ok` throughout.
-- `mt5-box-upgrade` still expects one terminal per box: do not run it on this box until it counts per install.
+- `mt5-box-upgrade` refuses every phase on this box (it detects the drop-ins). Upgrade the box by hand.
 
 **W5, the brain side** (as root):
 1. Check that nothing listens on the brain's 8769: `ss -ltn 'sport = :8769'` prints only the header line.
 2. On the box, authorise the brain's key for both bridges on one line. This replaces the old 8765-only line:
    `sudo goldbot-mt5-authorize '<the brain key line>' 8765 8766`.
+   Then check it: `sudo grep -c 'permitopen="127.0.0.1:8766"' ~mt5/.ssh/authorized_keys` must print `1`. A `0`
+   means the old wrapper is still installed: rerun W1 (it installs the new one).
 3. Write the env file: `printf 'MT5_HOST=%s\nLOCAL_PORT=8769\n' '<vantage box private ip>' | sudo install -m 644 -o root -g root /dev/stdin /etc/goldbot/bridge-vantage-247.env`.
 4. Point the box end of the tunnel at 8766 with a drop-in. The template forwards to 8765:
    `sudo install -d -m 755 /etc/systemd/system/goldbot-bridge-tunnel@vantage-247.service.d && printf '%s\n' '[Service]' 'ExecStart=' 'ExecStart=/usr/bin/ssh -N -i /var/lib/goldbot/.ssh/id_ed25519 -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new -L 127.0.0.1:${LOCAL_PORT}:127.0.0.1:8766 mt5@${MT5_HOST}' | sudo install -m 644 -o root -g root /dev/stdin /etc/systemd/system/goldbot-bridge-tunnel@vantage-247.service.d/goldbot-instance.conf && sudo systemctl daemon-reload`

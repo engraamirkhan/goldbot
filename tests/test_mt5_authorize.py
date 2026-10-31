@@ -48,7 +48,7 @@ def test_a_valid_key_is_appended_as_mt5_restricted_to_the_bridge_port(tmp_path):
         rc, out, args = _run(tmp_path, key)
         assert rc == 0, out
         assert args is not None and args[:3] == ["-u", "mt5", "-H"]
-        assert args[-2] == f'restrict,port-forwarding,permitopen="127.0.0.1:8765",command="/bin/false" {key}'
+        assert args[-2] == f'restrict,port-forwarding,permitlisten="127.0.0.1:1",permitopen="127.0.0.1:8765",command="/bin/false" {key}'
         assert args[-1] == KEY.split()[1]                       # the key material: an older line of it is replaced
         assert "~/.ssh/authorized_keys" in args[-4] and "umask 077" in args[-4] and "grep -vF" in args[-4]
         assert "forwarding to 127.0.0.1:8765 only" in out
@@ -57,8 +57,8 @@ def test_a_valid_key_is_appended_as_mt5_restricted_to_the_bridge_port(tmp_path):
 def test_adr_0062_one_line_forwards_to_every_bridge_port_of_a_two_terminal_box(tmp_path):
     rc, out, args = _run(tmp_path, KEY, "8765", "8766")
     assert rc == 0 and args is not None
-    assert args[-2] == f'restrict,port-forwarding,permitopen="127.0.0.1:8765",permitopen="127.0.0.1:8766",' \
-                       f'command="/bin/false" {KEY}'
+    assert args[-2] == f'restrict,port-forwarding,permitlisten="127.0.0.1:1",permitopen="127.0.0.1:8765",' \
+                       f'permitopen="127.0.0.1:8766",command="/bin/false" {KEY}'
     assert "127.0.0.1:8765, 127.0.0.1:8766 only" in out
 
 

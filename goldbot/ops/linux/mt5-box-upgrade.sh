@@ -238,6 +238,12 @@ main() {
   valid_sha "$SHA" || die "the sha must be 40 lowercase hex characters"
   # it goes into unit instance names run by root: lowercase id only, as in config/accounts.yaml
   [[ "$ACCOUNT" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || die "the account id must be lowercase letters, digits and '-'"
+  # ADR 0062 (SRE review of 43ad25ee): its pkill, its one-terminal count and its one watchdog assume one terminal per
+  # box. A box with per-instance drop-ins (mt5-instance.sh: vantage-247 beside vantage-demo) runs two: refused, every
+  # phase, before any call. Upgrade that box by hand (RUNBOOK 0.3c) until this script counts per install
+  if compgen -G "$UNIT_DIR/goldbot-mt5-terminal@*.service.d/goldbot-instance.conf" >/dev/null; then
+    die "this box runs more than one MT5 terminal (ADR 0062 drop-ins): mt5-box-upgrade is for one-terminal boxes"
+  fi
   trap '' HUP   # a dropped SSH session must not stop it half-way
   case "$PHASE" in
     precheck) phase_precheck ;;

@@ -27,20 +27,24 @@ avail=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
 bash "$HERE/mt5-instance.sh" "$acct" "$dir" "$port" --beside "$sib" ICMarkets
 install -m 755 -o root -g root "$HERE/mt5/mt5-experts-enable.sh" /usr/local/libexec/goldbot/mt5-experts-enable.sh
 install -m 755 -o root -g root "$HERE/mt5/mt5-ini.sh" /usr/local/libexec/goldbot/mt5-ini.sh
-sudo -u mt5 -H bash -lc "
+# The install dir travels as "$1" (SRE review of 43ad25ee, HIGH): expanded into this shell's own argv, the pkill
+# pattern below matched the shell itself and killed the install half-way
+# shellcheck disable=SC2016  # the script is single-quoted on purpose: $1 and ~ expand in the mt5 shell
+sudo -u mt5 -H bash -c '
   set -euo pipefail
   export DISPLAY=:99 WINEDEBUG=-all WINEARCH=win64
+  m=~/.wine/drive_c/MT5
   cd /tmp
   curl -fsSLo mt5setup.exe https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe
-  wine mt5setup.exe /auto /path:'C:\\MT5\\$dir' || true
+  wine mt5setup.exe /auto /path:"C:\\MT5\\$1" || true
   rm -f mt5setup.exe
-  test -f ~/.wine/drive_c/MT5/$dir/terminal64.exe || { echo 'MT5 terminal not installed at C:\\MT5\\$dir'; exit 1; }
-  pkill -u mt5 -f 'MT5.$dir.[t]erminal64[.]exe' || true
-  if [ -f ~/.wine/drive_c/MT5/ICMarkets/Config/servers.dat ] && [ ! -f ~/.wine/drive_c/MT5/$dir/Config/servers.dat ]; then
-    mkdir -p ~/.wine/drive_c/MT5/$dir/Config
-    cp ~/.wine/drive_c/MT5/ICMarkets/Config/servers.dat ~/.wine/drive_c/MT5/$dir/Config/servers.dat
+  test -f "$m/$1/terminal64.exe" || { echo "MT5 terminal not installed for this instance"; exit 1; }
+  pkill -u mt5 -f "MT5.$1.[t]erminal64[.]exe" || true
+  if [ -f "$m/ICMarkets/Config/servers.dat" ] && [ ! -f "$m/$1/Config/servers.dat" ]; then
+    mkdir -p "$m/$1/Config"
+    cp "$m/ICMarkets/Config/servers.dat" "$m/$1/Config/servers.dat"
   fi
-"
+' _ "$dir"
 systemctl daemon-reload
 systemctl enable "goldbot-mt5-terminal@$acct"
 systemctl enable "goldbot-bridge@$acct"

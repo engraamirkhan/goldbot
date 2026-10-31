@@ -126,8 +126,16 @@ def weekday_rule(eng: Engine, tick: Tick) -> bool:
 
 
 def step(eng: Engine, now: pd.Timestamp, ln: Lane) -> None:
-    """At an account refresh or a no-quote pass: set the entry block and run the flatten once per cut."""
+    """At an account refresh or a no-quote pass: set the entry block and, outside the window, flatten. Trading-safety
+    review of 43ad25ee: after a cut's flatten completed, any own position that appears later (a late-resolved send, an
+    adopted orphan) is closed too, so nothing rides into Monday. The book is read again only when the engine tracks a
+    trade or the refresh's read saw a position; the cut's key only limits the risk-state save to once per cut."""
     eng.state.weekend = ln.block
-    if ln.flatten and eng._weekend_done != ln.key and flatten(eng, now):
+    if not ln.flatten:
+        return
+    held = bool(eng.open) or bool(getattr(eng, "_position_ids", None))
+    if eng._weekend_done == ln.key and not held:
+        return
+    if flatten(eng, now) and eng._weekend_done != ln.key:
         eng._weekend_done = ln.key
         eng._save_risk_state_now("the weekend lane's flatten")

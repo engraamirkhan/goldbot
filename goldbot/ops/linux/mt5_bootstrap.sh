@@ -82,6 +82,42 @@ fetch_ops() {
   OPS=$OPS_SRC/src/goldbot/ops/linux
 }
 
+# the brain's tunnel key: forwarding to the bridge port only; any command runs /bin/false (`ssh -N` opens none) and
+# no remote forward is possible (permitlisten to a closed port). Written by the full build and by --instance (SRE
+# review of 43ad25ee: a box built before ADR 0062 keeps the 8765-only, appending wrapper otherwise)
+write_authorize() {
+cat > /usr/local/bin/goldbot-mt5-authorize <<'WRAP'
+#!/usr/bin/env bash
+# sudo goldbot-mt5-authorize '<ssh-ed25519 ... goldbot@brain>' [<bridge port> ...]
+# Root only validates: exactly one ssh-ed25519 key line (no options, no second line, printable ASCII) and the bridge
+# ports (default 8765; ADR 0062: every bridge of this box, e.g. 8765 8766 for a second terminal). Every write into
+# mt5's home runs AS mt5, so a symlink mt5 plants in ~/.ssh can only reach mt5's own files. A line already holding the
+# same key is replaced (sshd uses the first line of a key, so an appended one would never widen or narrow it).
+set -euo pipefail
+export LC_ALL=C
+key=${1-}
+re='^ssh-ed25519 [A-Za-z0-9+/=]+( [[:print:]]*)?$'
+if [[ "$key" == *$'\n'* || "$key" == *$'\r'* ]] || ! [[ "$key" =~ $re ]]; then
+  echo "refused: expected one ssh-ed25519 public key line (the brain's ~/.ssh/id_ed25519.pub)"
+  exit 1
+fi
+shift
+[ $# -gt 0 ] || set -- 8765
+opts="restrict,port-forwarding,permitlisten=\"127.0.0.1:1\"" to=""
+for p in "$@"; do
+  if ! [[ "$p" =~ ^[0-9]{4,5}$ ]] || [ "$p" -lt 1024 ] || [ "$p" -gt 65535 ]; then
+    echo "refused: a bridge port is 1024..65535"; exit 1
+  fi
+  opts="$opts,permitopen=\"127.0.0.1:$p\"" to="${to:+$to, }127.0.0.1:$p"
+done
+body=$(printf '%s' "$key" | cut -d' ' -f2)
+sudo -u mt5 -H sh -c 'umask 077; mkdir -p ~/.ssh && chmod 700 ~/.ssh && f=~/.ssh/authorized_keys && touch "$f" && { grep -vF -- "$2" "$f" || true; printf "%s\n" "$1"; } > "$f.goldbot" && mv -f "$f.goldbot" "$f" && chmod 600 ~/.ssh/authorized_keys' \
+  _ "$opts,command=\"/bin/false\" $key" "$body"
+echo "authorised (forwarding to $to only)"
+WRAP
+chmod 755 /usr/local/bin/goldbot-mt5-authorize
+}
+
 # ADR 0062: a second terminal on a box this script already built (vantage-247 beside vantage-demo): no swap, apt,
 # Wine or Python step below runs for it (an upgrade under the sibling's running terminal is never done here); root's
 # own clone's mt5-second-terminal.sh installs the terminal at C:\MT5\<instance> and writes per-instance drop-ins
@@ -89,6 +125,7 @@ fetch_ops() {
 if [ -n "$INSTANCE" ]; then
   fetch_ops
   bash "$OPS/mt5-second-terminal.sh" "$ACCOUNT" "$INSTANCE" "$PORT" "$BESIDE" "$WINPY"
+  write_authorize            # the wrapper that takes the second bridge's port and replaces the key's line
   exit 0
 fi
 # ADR 0062: end of the second terminal
@@ -190,37 +227,7 @@ sudo -u mt5 -H bash -lc "
   wine '$WINPY' -c 'import pathlib, sysconfig; pathlib.Path(sysconfig.get_paths()[\"purelib\"], \"goldbot.pth\").write_text(\"Z:$ROOT\\n\")'
 "
 
-# the brain's tunnel key: forwarding to the bridge port only; any command runs /bin/false (`ssh -N` opens none)
-cat > /usr/local/bin/goldbot-mt5-authorize <<'WRAP'
-#!/usr/bin/env bash
-# sudo goldbot-mt5-authorize '<ssh-ed25519 ... goldbot@brain>' [<bridge port> ...]
-# Root only validates: exactly one ssh-ed25519 key line (no options, no second line, printable ASCII) and the bridge
-# ports (default 8765; ADR 0062: every bridge of this box, e.g. 8765 8766 for a second terminal). Every write into
-# mt5's home runs AS mt5, so a symlink mt5 plants in ~/.ssh can only reach mt5's own files. A line already holding the
-# same key is replaced (sshd uses the first line of a key, so an appended one would never widen or narrow it).
-set -euo pipefail
-export LC_ALL=C
-key=${1-}
-re='^ssh-ed25519 [A-Za-z0-9+/=]+( [[:print:]]*)?$'
-if [[ "$key" == *$'\n'* || "$key" == *$'\r'* ]] || ! [[ "$key" =~ $re ]]; then
-  echo "refused: expected one ssh-ed25519 public key line (the brain's ~/.ssh/id_ed25519.pub)"
-  exit 1
-fi
-shift
-[ $# -gt 0 ] || set -- 8765
-opts="restrict,port-forwarding" to=""
-for p in "$@"; do
-  if ! [[ "$p" =~ ^[0-9]{4,5}$ ]] || [ "$p" -lt 1024 ] || [ "$p" -gt 65535 ]; then
-    echo "refused: a bridge port is 1024..65535"; exit 1
-  fi
-  opts="$opts,permitopen=\"127.0.0.1:$p\"" to="${to:+$to, }127.0.0.1:$p"
-done
-body=$(printf '%s' "$key" | cut -d' ' -f2)
-sudo -u mt5 -H sh -c 'umask 077; mkdir -p ~/.ssh && chmod 700 ~/.ssh && f=~/.ssh/authorized_keys && touch "$f" && { grep -vF -- "$2" "$f" || true; printf "%s\n" "$1"; } > "$f.goldbot" && mv -f "$f.goldbot" "$f" && chmod 600 ~/.ssh/authorized_keys' \
-  _ "$opts,command=\"/bin/false\" $key" "$body"
-echo "authorised (forwarding to $to only)"
-WRAP
-chmod 755 /usr/local/bin/goldbot-mt5-authorize
+write_authorize
 
 cat > /usr/local/bin/goldbot-mt5 <<'WRAP'
 #!/usr/bin/env bash
