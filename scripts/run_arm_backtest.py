@@ -296,6 +296,8 @@ def run_arm(b1: pd.DataFrame, arm: A.Arm, start: pd.Timestamp, end: pd.Timestamp
                "n_candidates_in_data": n_cands, "gross_r": stat("gross_r"),
                "net_r_overshoot_0": stat("net_r"), "net_r_overshoot_0.70": stat("net_r_os"),
                "round_trip_usd": costs.round_trip_usd, "overshoot_scenarios_usd": list(costs.overshoot_scenarios_usd),
+               # the measured cost table the read sits beside (config/cost_of_record.yaml): cited, never charged here
+               "cost_of_record": costs.of_record.version if costs.of_record is not None else None,
                "bars_from": str(utc_index(b1["ts_utc"]).min()), "bars_to": str(utc_index(b1["ts_utc"]).max()),
                "holdout_from": str(A.HOLDOUT_FROM.date()), "blackout_windows": int(len(lo)),
                "entry_note": "entry at the open (mid) of the first 1m bar at or after the decision close; barriers searched from that bar"}

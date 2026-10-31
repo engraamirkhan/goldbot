@@ -499,6 +499,7 @@ def test_an_older_release_loads_a_file_with_ambiguous_rows(tmp_path):
 
 def test_every_persisted_record_model_has_a_compat_case():
     """A new persisted model must add a case above (and a default that is safe when missing, AGENT_STANDARDS S12)."""
+    from goldbot.research import arms
     from goldbot.research import daily_review as dr
     covered = {ClosedTrade, Proposal, VersionBook, PerfStats, ModelEntry, Member, ResearchPlan,
                BrokerTerms, CostTable, PublishedCostTable, scheduler.JobState, health.WatchState, health.HealthReport,
@@ -519,6 +520,9 @@ def test_every_persisted_record_model_has_a_compat_case():
                # reason is None): tests/test_api_ui_contract.py::
                # test_a_newer_engines_reason_with_an_extra_field_is_read_tolerantly
                AskReason,
+               # config/cost_of_record.yaml: tests/test_cost_of_record.py::
+               # test_a_table_a_newer_release_wrote_still_reads
+               arms.CostOfRecord,
                # state/aux/daily_review/: case_daily_review
                dr.DailyReview, dr.WeeklyRollup,
                # engine_<account>.json `sessions.pauses` (ADR 0062): tests/test_weekend_247.py::
