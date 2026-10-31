@@ -22,7 +22,7 @@ import yaml
 from pydantic import Field, ValidationError, model_validator
 
 from goldbot.base import FrozenRecord, load_record
-from goldbot.data.calendar import SessionWindow
+from goldbot.data.calendar import DEFAULT_SESSIONS, SessionWindow
 from goldbot.data.timeutil import utc_index
 
 log = logging.getLogger(__name__)
@@ -112,7 +112,39 @@ class ArmCosts(FrozenRecord):
         cells = self.of_record.cells.get(broker)
         if cells is None:              # ADR 0043 broker amendment: another broker's measurements are never used
             raise KeyError(f"no cost of record for broker {broker!r} (has {sorted(self.of_record.cells)})")
+        if session != ALL_SESSIONS and session not in SESSION_NAMES:   # quant review #238: never a silent pooled read
+            raise ValueError(f"unknown session {session!r}: one of {(*SESSION_NAMES, ALL_SESSIONS)}")
         return cells.get(session, cells[ALL_SESSIONS])
+
+    def require_version(self, version: str) -> CostOfRecord:
+        """The cost of record a pre-registration pinned (ADR: cost-of-record version pinning): the loaded table must be
+        exactly that version, else the screen stops before it prices anything."""
+        if self.of_record is None:
+            raise ValueError(f"no cost of record loaded; the pre-registration pins version {version!r}")
+        if self.of_record.version != version:
+            raise ValueError(f"cost of record version {self.of_record.version!r} is not the pinned {version!r}")
+        return self.of_record
+
+    def overshoot_charge_usd(self, broker: str, session: str) -> float:
+        """The stop-exit overshoot a NEW pre-registration charges (quant ruling on #238, binding): a trusted cell's
+        clustered upper 90% bound, floored at OVERSHOOT_FLOOR_USD; an untrusted cell (Vantage demo fills stops at the
+        stop price) or no table charges the OVERSHOOT_STRESS_USD stress until its exit legs are recorded (ADR 0043)."""
+        cell = self._cell(broker, session)
+        if cell is None or not cell.overshoot_trusted:
+            return OVERSHOOT_STRESS_USD
+        return max(OVERSHOOT_FLOOR_USD, cell.overshoot_ci90[1])
+
+    def screen_charges(self, broker: str, sessions: np.ndarray, version: str) -> tuple[np.ndarray, np.ndarray]:
+        """Per trade (its entry's session label; "" = outside every session, charged the broker's dearest cell): the
+        round trip and the stop-exit overshoot a new pre-registration's screen charges, after pinning `version`."""
+        self.require_version(version)
+        cells = list(SESSION_NAMES)
+        rt = {s: self.charged_round_trip_usd(broker, s) for s in cells}
+        os_ = {s: self.overshoot_charge_usd(broker, s) for s in cells}
+        rt[""], os_[""] = max(rt.values()), max(os_.values())
+        labels = [str(x) for x in np.asarray(sessions)]
+        return (np.array([rt[x] if x in rt else self.charged_round_trip_usd(broker, x) for x in labels], dtype=float),
+                np.array([os_[x] if x in os_ else self.overshoot_charge_usd(broker, x) for x in labels], dtype=float))
 
     def charged_round_trip_usd(self, broker: str, session: str) -> float:
         """The round trip a screen charges per oz on `broker` in `session` (a session the table does not split reads
@@ -133,6 +165,28 @@ class ArmCosts(FrozenRecord):
 
 
 ALL_SESSIONS = "all"
+SESSION_NAMES: tuple[str, ...] = tuple(DEFAULT_SESSIONS.sessions_local)
+OVERSHOOT_FLOOR_USD = 0.12        # quant ruling on #238: the least a new ICM pre-registration charges per stop exit
+OVERSHOOT_STRESS_USD = 0.70       # the 10-25 scenario: a reported stress line, and Vantage's charge until exit legs exist
+
+
+class ScreenPin(FrozenRecord):
+    """What a new pre-registration fixes for its screen's costs: the broker it is priced for and the cost of record
+    version it was written against (registry rows keep the frozen 0.23 and [0, 0.70])."""
+    broker: str = Field(min_length=1)
+    cost_version: str = Field(min_length=1)
+
+
+def screen_net_r(move_usd: np.ndarray, risk_usd: np.ndarray, stop_exit: np.ndarray, costs: ArmCosts, *, broker: str,
+                 sessions: np.ndarray, version: str, extra_usd: np.ndarray | float = 0.0,
+                 overshoot_usd: float | None = None) -> np.ndarray:
+    """Net R at the pinned cost of record: the move less the session's charged round trip, less the ruling's overshoot
+    on a stop exit (`overshoot_usd` replaces it for the stress line), less `extra_usd`, over the stop distance."""
+    rt, os_ = costs.screen_charges(broker, sessions, version)
+    if overshoot_usd is not None:
+        os_ = np.full(len(rt), float(overshoot_usd))
+    pnl = np.asarray(move_usd, dtype=float) - rt - os_ * np.asarray(stop_exit, dtype=float)
+    return (pnl - np.asarray(extra_usd, dtype=float)) / np.asarray(risk_usd, dtype=float)
 _ROUND_TRIP_TOL = 0.003           # the table's figures are rounded to 1e-3: four parts, each half a unit at most
 
 
@@ -141,6 +195,7 @@ class CostOfRecordCell(FrozenRecord):
     5th-95th percentile of the bootstrapped mean. round_trip = spread + max(0, entry slip) + max(0, exit slip) +
     commission (pooled means, floored after pooling); overshoot = past the server stop on stop exits only."""
     n_fills: int = Field(gt=0)
+    n_minutes: int = Field(0, ge=0)            # distinct send minutes: the bootstrap's clusters (0 = an i.i.d. table)
     spread_usd: float = Field(ge=0)
     spread_p90_usd: float = Field(ge=0)
     spread_ci90: tuple[float, float]
@@ -149,11 +204,12 @@ class CostOfRecordCell(FrozenRecord):
     n_exit_legs: int = Field(ge=0)
     exit_slip_usd: float
     exit_slip_ci90: tuple[float, float]
-    exit_slip_source: Literal["strategy_exit_legs", "scheduled_probes"]
+    exit_slip_source: Literal["strategy_exit_legs", "scheduled_probes", "none"]
     commission_usd: float = Field(ge=0)
     round_trip_usd: float = Field(ge=0)
     round_trip_ci90: tuple[float, float]
     n_stop_exits: int = Field(ge=0)
+    n_moved_stop_exits: int = Field(0, ge=0)   # stop exits at a moved (break-even, trailed) stop: not in the overshoot
     overshoot_usd: float
     overshoot_ci90: tuple[float, float]
     overshoot_trusted: bool
@@ -176,6 +232,7 @@ class CostOfRecord(FrozenRecord):
     version: str = Field(min_length=1)
     window_utc: tuple[str, str]
     source: str
+    interval: str = "iid bootstrap"
     cells: dict[str, dict[str, CostOfRecordCell]]
 
     @model_validator(mode="after")
