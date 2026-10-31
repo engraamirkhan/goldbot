@@ -615,7 +615,8 @@ and the rest still arrives. It never contains account numbers or emails.
      ```
      Never install it from `/opt/goldbot` or from `sudo -u goldbot git show`. The service user can write that tree and
      its `.git` (`git replace` can swap the file), so a hash computed there proves nothing.
-* **Release (Mac): `scripts/release.sh "<PR title>" <body-file>`** on `claude/gifted-goldberg-lcb7pl`. It merges
+* **Release (Mac): `scripts/release.sh [--hotfix] "<PR title>" <body-file>`** from the lane's own branch. It refuses a PR
+  under 50 changed lines unless `--hotfix` (money path only), appends a timing record to `~/tmp/release/timings.jsonl`, merges
   origin/main, runs ruff + mypy, pushes, opens the PR with auto-merge, stages the commit on the brain, runs
   `scripts/ci_local.sh` beside GitHub's checks (GitHub is the gate), deploys the merge commit as soon as it merges
   (its tree is the tested PR head's, which the brain's CI check verifies itself), and checks the deploy record and

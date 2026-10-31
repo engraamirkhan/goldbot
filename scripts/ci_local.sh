@@ -33,7 +33,9 @@ for arg in "$@"; do
   esac
 done
 
-[ -x .venv/bin/python ] || { echo "ci_local: no .venv; run: uv venv --python 3.11 && uv pip install -e '.[dev]'" >&2; exit 2; }
+[ -x .venv/bin/python ] || { echo "ci_local: no .venv; run: scripts/worktree_env.sh" >&2; exit 2; }
+. scripts/lib/common.sh
+goldbot_check_env .venv/bin/python   # exit 2 on a venv that is not 3.11 or differs from uv.lock (FR-1)
 # The CI matrix, from ci.yml itself: "<unit shards> <integration shards> <e2e projects, comma-separated>"
 matrix=$(.venv/bin/python - <<'PY'
 import yaml

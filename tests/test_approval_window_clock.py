@@ -29,6 +29,8 @@ from goldbot.telegram.outbox import Outbox
 from tests.cards import submit_shown
 from tests.test_approval_bus import _p
 
+pytestmark = pytest.mark.clock_at("2026-10-30T12:00:00Z")
+
 TWO_DAYS = 2 * 86_400.0
 
 

@@ -22,6 +22,8 @@ from goldbot.ops.health import AccountRef, HealthContext
 from goldbot.telegram import digest
 from goldbot.telegram.bus import ApprovalBus
 
+pytestmark = pytest.mark.real_clock(reason="the freshness of an engine file is its mtime, which the OS stamps")
+
 WED = pd.Timestamp("2026-10-14 14:00", tz="UTC")     # gold trades
 SAT = pd.Timestamp("2026-10-17 10:00", tz="UTC")     # weekend: market closed
 

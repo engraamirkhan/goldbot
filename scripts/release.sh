@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# release.sh: integration branch -> PR -> main -> brain deploy, in about 10 minutes instead of 25.
-#   scripts/release.sh "<PR title>" <body-file>      (run from the repo root on claude/gifted-goldberg-lcb7pl)
+# release.sh: lane branch -> PR -> main -> brain deploy, in about 10 minutes instead of 25 (ADR 0060: one lane, one PR).
+#   scripts/release.sh [--hotfix] "<PR title>" <body-file>   (run in the lane's worktree, on its branch, based on origin/main)
+# 0. refuses a PR under 50 changed lines (RELEASE_MIN_LINES) unless --hotfix, which labels the PR `hotfix` and is reserved
+#    for the money path (an exit, RiskGate, an engine down, a stuck deploy); small fixes ride the next lane PR (FR-8);
+#    every run appends one JSON timing record to ${RELEASE_TIMINGS:-~/tmp/release/timings.jsonl}: lane start (the
+#    branch's first commit), push, local CI, merge, finish, so cost per merged PR can be measured (FR-10).
 # 1. pushes the branch and opens (or reuses) the PR with auto-merge;
 # 2. runs scripts/ci_local.sh (clean worktree of HEAD) AT THE SAME TIME as GitHub's PR checks; GitHub is the gate
 #    (a local failure before the merge still stops the release; after it, the local run is advisory);
@@ -15,21 +19,39 @@
 #    restarts until 90 s after the switch and rolls back on one (look at deploys.jsonl again after that).
 # Never deploys a tree that no green CI run tested.
 set -euo pipefail
-BRANCH=claude/gifted-goldberg-lcb7pl
-TITLE=${1:?usage: release.sh "<PR title>" <body-file>}
-BODY=${2:?usage: release.sh "<PR title>" <body-file>}
+cd "$(dirname "$0")/.."
+. scripts/lib/common.sh
+HOTFIX=0
+if [ "${1:-}" = "--hotfix" ]; then HOTFIX=1; shift; fi
+TITLE=${1:?usage: release.sh [--hotfix] "<PR title>" <body-file>}
+BODY=${2:?usage: release.sh [--hotfix] "<PR title>" <body-file>}
 LOG=${RELEASE_LOG:-$HOME/tmp/release}
+TIMINGS=${RELEASE_TIMINGS:-$LOG/timings.jsonl}
 mkdir -p "$LOG"
 say() { echo "$(date -u +%H:%M:%S) $*"; }
 die() { say "STOP: $*"; exit 1; }
 
-[ "$(git rev-parse --abbrev-ref HEAD)" = "$BRANCH" ] || die "not on $BRANCH"
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+case $BRANCH in main|HEAD) die "on $BRANCH: release from the lane's own branch";; esac
 [ -z "$(git status --porcelain --untracked-files=no)" ] || die "uncommitted changes"
+OUTCOME=failed; PR=""; T_PUSH=""; T_LOCAL=""; T_MERGED=""; LINES=""
+T_LANE=$(git log --no-merges --reverse --format=%ct "$GOLDBOT_BASE..HEAD" 2>/dev/null | head -1)
+record_timing() {   # on every exit: a failed release is measured too
+  local rec=("branch=$BRANCH" "outcome=$OUTCOME" "hotfix=$HOTFIX" "finished=$(date +%s)")
+  [ -z "$PR" ] || rec+=("pr=$PR"); [ -z "$LINES" ] || rec+=("lines=$LINES")
+  [ -z "$T_LANE" ] || rec+=("lane_start=$T_LANE"); [ -z "$T_PUSH" ] || rec+=("pushed=$T_PUSH")
+  [ -z "$T_LOCAL" ] || rec+=("local_ci_done=$T_LOCAL"); [ -z "$T_MERGED" ] || rec+=("merged=$T_MERGED")
+  goldbot_timing_append "$TIMINGS" "${rec[@]}" || true
+}
+trap record_timing EXIT
 git fetch -q origin
-if ! git merge-base --is-ancestor origin/main HEAD; then   # main's merge commit from the last release, usually
-  git merge -q --no-edit origin/main || { git merge --abort 2>/dev/null || true; die "merging origin/main conflicts: resolve it first"; }
-  say "merged origin/main into $BRANCH"
+if ! git merge-base --is-ancestor "$GOLDBOT_BASE" HEAD; then   # main's merge commit from the last release, usually
+  git merge -q --no-edit "$GOLDBOT_BASE" || { git merge --abort 2>/dev/null || true; die "merging $GOLDBOT_BASE conflicts: resolve it first"; }
+  say "merged $GOLDBOT_BASE into $BRANCH"
 fi
+LINES=$(goldbot_changed_lines)
+goldbot_pr_size_check "$HOTFIX" || exit 1
+goldbot_check_env "$PWD/.venv/bin/python"   # no type or lint verdict from a venv that differs from uv.lock (FR-1)
 # seconds-cheap checks before anything is pushed (mypy is incremental): a type error costs a 2-min GitHub round trip
 uv run -q --extra dev ruff check goldbot tests scripts || die "ruff"
 uv run -q --extra dev mypy >/dev/null || { uv run -q --extra dev mypy | tail -5; die "mypy"; }
@@ -38,12 +60,15 @@ HEAD_TREE=$(git rev-parse "HEAD^{tree}")
 
 say "push $HEAD_SHA"
 git push -q origin "$BRANCH"
+T_PUSH=$(date +%s)
 # pre-build on the brain while CI runs (nothing is touched there; an old goldbot-deploy without --stage just says usage)
 SSH_BRAIN=(ssh -F "$HOME/.ssh/goldbot.conf" -o BatchMode=yes goldbot-brain)
 "${SSH_BRAIN[@]}" "sudo /usr/local/sbin/goldbot-deploy --stage $HEAD_SHA" > "$LOG/stage.log" 2>&1 &
 STAGE=$!
 if ! gh pr view "$BRANCH" --json state -q .state 2>/dev/null | grep -q OPEN; then
-  gh pr create --base main --head "$BRANCH" --title "$TITLE" --body-file "$BODY" >/dev/null
+  LABEL=()
+  if [ "$HOTFIX" = 1 ]; then gh label create hotfix --description "money-path emergency, ships alone" >/dev/null 2>&1 || true; LABEL=(--label hotfix); fi
+  gh pr create --base main --head "$BRANCH" --title "$TITLE" --body-file "$BODY" ${LABEL[@]+"${LABEL[@]}"} >/dev/null
 fi
 gh pr merge --auto --merge "$BRANCH" >/dev/null
 PR=$(gh pr view "$BRANCH" --json number -q .number)
@@ -65,7 +90,7 @@ local_done=0; pr_state=""
 while :; do
   if [ $local_done = 0 ] && ! kill -0 $LOCAL 2>/dev/null; then
     if wait $LOCAL && ! grep -qE "^(smoke|lint|frontend|unit[0-9]|integration[0-9]|e2e) +FAIL" "$LOG/ci_local.log"; then
-      local_done=1; say "local CI PASS"
+      local_done=1; T_LOCAL=$(date +%s); say "local CI PASS"
     else
       grep -E "^FAIL " "$LOG/ci_local.log" | head -5
       gh pr merge --disable-auto "$BRANCH" >/dev/null 2>&1 || true
@@ -80,9 +105,11 @@ while :; do
   esac
   sleep 20
 done
-say "PR #$PR merged"
+T_MERGED=$(date +%s)
+say "PR #$PR merged (push to merge $(( T_MERGED - T_PUSH )) s)"
 [ $local_done = 1 ] || say "local CI still running (advisory; log $LOG/ci_local.log): the deploy does not wait for it"
 
+OUTCOME=merged
 git fetch -q origin
 MAIN=$(git rev-parse origin/main)
 if [ "$(git rev-parse "$MAIN^{tree}")" = "$HEAD_TREE" ]; then
@@ -126,4 +153,5 @@ if echo "$OUT" | grep -q "\"result\":\"deployed_degraded\""; then   # running an
   say "WARNING deployed with a degraded check: $(echo "$OUT" | grep -o '"detail":"[^"]*"' | head -1 | cut -c1-200)"
 fi
 echo "$OUT" | grep -q "engine=active" || die "engine not active after the deploy"
+OUTCOME=deployed
 say "DEPLOYED $MAIN"

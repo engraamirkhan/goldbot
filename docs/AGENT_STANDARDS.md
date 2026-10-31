@@ -111,7 +111,7 @@ Each delivered item is scored; it is accepted only with every row "yes".
 | Accountable role and due date recorded; met, or re-dated with the reason and escalated within 24 h | |
 
 ## Parallel work rules
-- Each agent works in its own git worktree based on the tip of `claude/gifted-goldberg-lcb7pl`, on disjoint files.
+- Each agent works in its own git worktree based on the tip of `origin/main` (`scripts/new_lane.sh`; environment from `scripts/worktree_env.sh`), on disjoint files.
 - Python in a worktree: `env PYTHONPATH=$PWD $REPO/.venv/bin/python` (check
   `goldbot.__file__` points at the worktree).
 - CPU is shared: when several agents run at once, run pytest with `-n 4` (or `GATES_WORKERS=4 scripts/gates.sh`), never

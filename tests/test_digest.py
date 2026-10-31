@@ -17,6 +17,8 @@ from goldbot.telegram.approvals import Outcome, Proposal
 from goldbot.telegram.bus import ApprovalBus
 from goldbot.telegram.digest import STATE_FILE, WEEKEND_LINE, DigestSchedule, build_digest, owner_decisions
 
+pytestmark = pytest.mark.clock_at("2026-10-30T12:00:00Z")
+
 
 @pytest.fixture(autouse=True)
 def _no_ranking(monkeypatch):

@@ -2,13 +2,13 @@
 name = "goldbot"
 version = "0.1.0"
 description = "Evolving XAUUSD trading assistant: point-in-time data store, strategy specialists, walk-forward validation, risk-gated execution."
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.11,<3.12"   # one interpreter everywhere (FR-1, ADR 0060): CI and every deploy pin 3.11
 dependencies = [
     "pandas>=2.2",
     "numpy>=1.26",
     "pillow>=10",        # crops the MT5 capture to the chart pane (goldbot/api/mt5_crop.py)
     "pyarrow>=15",
-    "duckdb>=1.0",
+    "duckdb>=1.0,<2",
     "polars>=1.0",
     "lightgbm>=4.3",
     "scikit-learn>=1.4",

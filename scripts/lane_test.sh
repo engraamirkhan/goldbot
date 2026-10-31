@@ -5,13 +5,15 @@
 #   scripts/lane_test.sh final     reminder: run scripts/gates.sh once before handing back
 #   scripts/lane_test.sh refresh   integrator: build .testmondata at HEAD and publish it to $TESTMON_SHARED/<sha>/
 # Env: TESTMON_SHARED (default ~/tmp/testmon), LANE_BASE (base commit; default merge-base of HEAD with
-# $INTEGRATION_BRANCH, default claude/gifted-goldberg-lcb7pl), GATES_WORKERS, LANE_TEST_DRY_RUN=1 (print pytest, don't run).
+# $INTEGRATION_BRANCH, default origin/main: scripts/lib/common.sh), GATES_WORKERS, LANE_TEST_DRY_RUN=1 (print pytest, don't run).
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 [ -f .venv/bin/activate ] && . .venv/bin/activate
+. scripts/lib/common.sh
+[ "${LANE_TEST_DRY_RUN:-}" = 1 ] || goldbot_check_env   # refuses a venv that differs from uv.lock (FR-1)
 
 SHARED=${TESTMON_SHARED:-$HOME/tmp/testmon}
-BRANCH=${INTEGRATION_BRANCH:-claude/gifted-goldberg-lcb7pl}
+BRANCH=$GOLDBOT_BASE
 W=${GATES_WORKERS:-2}
 
 usage() { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }

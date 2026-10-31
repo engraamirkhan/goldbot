@@ -6,6 +6,16 @@ from typing import Any, Callable
 
 import pytest
 
+from tests import clockshift
+
+# FR-2: GOLDBOT_TEST_SHIFT_DAYS=N runs every test N days ahead of the real calendar (tests/clockshift.py). Installed
+# at import, before collection, so module-level clock reads in tests and production code are shifted too; xdist
+# workers import this file and inherit the variable.
+SHIFT_DAYS = clockshift.shift_days_from_env()
+clockshift.install(SHIFT_DAYS)         # always, even at 0: the patched classes must exist before any model imports them
+                                        # (a pydantic/FastAPI model built on the real `datetime` and one built on the patched
+                                        # class disagree), so every run, shifted or not, runs on the same classes
+
 
 @pytest.fixture(autouse=True)
 def stepping_totp_clock(monkeypatch):
@@ -235,8 +245,9 @@ def shard_assignment(nodeids: list[str], count: int, weights: dict[str, float]) 
 
 def pytest_collection_modifyitems(config, items) -> None:
     """CI runs the unit and integration suites as matrices: GOLDBOT_SHARD=i/n keeps only the tests of shard i
-    (0-based) of n and deselects the rest. Unset (local runs) selects everything."""
+    (0-based) of n and deselects the rest. Unset (local runs) selects everything. Quarantine marks apply first."""
     import os
+    apply_quarantine(items)
     spec = os.environ.get("GOLDBOT_SHARD")
     if not spec:
         return
@@ -247,3 +258,85 @@ def pytest_collection_modifyitems(config, items) -> None:
     keep = [i for i in items if owner[i.nodeid] == index]
     config.hook.pytest_deselected(items=[i for i in items if i not in keep])
     items[:] = keep
+
+
+def pytest_configure(config: Any) -> None:
+    config.addinivalue_line("markers", "quarantine(issue, until): known-bad test, skipped until the date (YYYY-MM-DD, at "
+                            "most 48 h out when set); after `until` it FAILS the run so it is fixed or re-dated, never forgotten")
+    config.addinivalue_line("markers", "clock_at(when): pin this test's clock to the instant `when` (ISO string with a zone); "
+                            "it keeps ticking from there. The fix for a test that reads the calendar (tests/clockshift.py)")
+    config.addinivalue_line("markers", "real_clock(reason): run on the real clock whatever shift is active; only for a test "
+                            "coupled to a clock the OS owns (file mtimes, git commit times), the reason says which")
+    config.addinivalue_line("markers", "guard: a guard test (golden, registry, allowlist, line cap, shard partition); "
+                            "`pytest -m guard` is the set a lane runs on every iteration, whatever else it touched")
+
+
+def pytest_report_header(config: Any) -> str | None:
+    if SHIFT_DAYS:
+        import datetime as dt
+        return f"goldbot clock shifted +{SHIFT_DAYS} days (GOLDBOT_TEST_SHIFT_DAYS): today is {dt.date.today()}"
+    return None
+
+
+def quarantine_terms(item: Any) -> tuple[str, Any] | None:
+    """(issue, until) of a `quarantine` marker, validated: both are required and `until` is an ISO date."""
+    import datetime
+    mark = item.get_closest_marker("quarantine")
+    if mark is None:
+        return None
+    issue, until = mark.kwargs.get("issue"), mark.kwargs.get("until")
+    if not issue or not until or mark.args:
+        raise pytest.UsageError(f"{item.nodeid}: quarantine needs issue=... and until='YYYY-MM-DD' (keywords only)")
+    try:
+        when = datetime.date.fromisoformat(str(until))
+    except ValueError:
+        raise pytest.UsageError(f"{item.nodeid}: quarantine until={until!r} is not an ISO date") from None
+    if when > clockshift.real_today() + datetime.timedelta(days=2):
+        raise pytest.UsageError(f"{item.nodeid}: quarantine until={until} is more than 2 days out: a quarantine lasts "
+                                f"at most 2 days from today, re-date it when it lapses")
+    return str(issue), when
+
+
+def apply_quarantine(items: list[Any]) -> None:
+    """Quarantined tests are skipped until `until`; once it has passed they run and FAIL (an expired quarantine is a
+    debt the build must not carry silently). Judged on the real calendar, never the shifted one."""
+    today = clockshift.real_today()
+    for item in items:
+        terms = quarantine_terms(item)
+        if terms is None:
+            continue
+        issue, until = terms
+        if today > until:
+            item._goldbot_expired_quarantine = (issue, until)
+        else:
+            item.add_marker(pytest.mark.skip(reason=f"quarantined until {until} ({issue})"))
+
+
+@pytest.fixture(autouse=True)
+def expired_quarantine_fails(request: pytest.FixtureRequest) -> None:
+    expired = getattr(request.node, "_goldbot_expired_quarantine", None)
+    if expired:
+        pytest.fail(f"quarantine of {request.node.nodeid} expired on {expired[1]} ({expired[0]}): fix the test or "
+                    f"re-date the quarantine with a reason on the issue", pytrace=False)
+
+
+@pytest.fixture(autouse=True)
+def test_clock(request: pytest.FixtureRequest) -> Any:
+    """Apply the `clock_at` / `real_clock` marks (tests/clockshift.py) for the length of one test."""
+    pin, real = request.node.get_closest_marker("clock_at"), request.node.get_closest_marker("real_clock")
+    if pin is None and real is None:
+        yield
+        return
+    if real is not None and not (real.kwargs.get("reason") or (real.args and real.args[0])):
+        pytest.fail("real_clock needs a reason: which OS clock is this test coupled to?", pytrace=False)
+    before = clockshift.offset()
+    if real is not None:
+        clockshift.set_offset(0.0) if clockshift._REAL else None
+    else:
+        assert pin is not None and pin.args, "clock_at needs the instant, e.g. clock_at('2026-10-30T12:00:00Z')"
+        clockshift.set_offset(clockshift.offset_to(pin.args[0]))
+    try:
+        yield
+    finally:
+        if clockshift._REAL:
+            clockshift.set_offset(before)
