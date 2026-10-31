@@ -113,7 +113,9 @@ def test_duplicate_job_names_are_refused(tmp_path):
 
 
 # ----------------------------------------------------------------------- a never-run quarterly job (brain 2026-10-31)
-QUARTERLY = dict(kind="monthly", at="14:00", weekday=6, months=(1, 4, 7, 10), max_late_hours=30)
+def quarterly(run_if_never_run: bool = False) -> Schedule:
+    return Schedule(kind="monthly", at="14:00", weekday=6, months=(1, 4, 7, 10), max_late_hours=30,
+                    run_if_never_run=run_if_never_run)
 
 
 def test_a_job_that_asks_for_it_runs_once_when_first_seen_late_in_its_period(tmp_path):
@@ -122,7 +124,11 @@ def test_a_job_that_asks_for_it_runs_once_when_first_seen_late_in_its_period(tmp
     clock = Clock("2026-10-20 12:00")
     sch = Scheduler(tmp_path / "s.json", clock=clock)
     calls: list[pd.Timestamp] = []
-    sch.add("cpcv", Schedule(**QUARTERLY, run_if_never_run=True), lambda slot: calls.append(slot) or {"ok": 1})
+
+    def cpcv(slot: pd.Timestamp) -> dict:
+        calls.append(slot)
+        return {"ok": 1}
+    sch.add("cpcv", quarterly(run_if_never_run=True), cpcv)
     assert sch.run_pending() == ["cpcv"] and calls == [ts("2026-10-04 14:00")]
     assert sch.run_pending() == [] and sch.state["cpcv"].runs == 1
 
@@ -131,10 +137,10 @@ def test_a_job_anchored_before_the_flag_existed_runs_once_too(tmp_path):
     """The brain's state: last_slot set, never started, never skipped."""
     clock = Clock("2026-10-20 12:00")
     old = Scheduler(tmp_path / "s.json", clock=clock)
-    old.add("cpcv", Schedule(**QUARTERLY), lambda slot: None)               # anchored, as the deployed release did
+    old.add("cpcv", quarterly(), lambda slot: None)               # anchored, as the deployed release did
     assert old.run_pending() == [] and old.state["cpcv"].last_started is None
     new = Scheduler(tmp_path / "s.json", clock=clock)
-    new.add("cpcv", Schedule(**QUARTERLY, run_if_never_run=True), lambda slot: {"ok": 1})
+    new.add("cpcv", quarterly(run_if_never_run=True), lambda slot: {"ok": 1})
     assert new.run_pending() == ["cpcv"]
 
 
@@ -144,11 +150,11 @@ def test_a_failed_first_run_is_not_retried_in_a_loop(tmp_path):
 
     def boom(slot):
         raise RuntimeError("x")
-    sch.add("cpcv", Schedule(**QUARTERLY, run_if_never_run=True), boom)
+    sch.add("cpcv", quarterly(run_if_never_run=True), boom)
     assert sch.run_pending() == ["cpcv"] and sch.run_pending() == [] and sch.state["cpcv"].failures == 1
 
 
 def test_without_the_flag_a_new_job_still_waits_for_its_next_slot(tmp_path):
     sch = Scheduler(tmp_path / "s.json", clock=Clock("2026-10-20 12:00"))
-    sch.add("cpcv", Schedule(**QUARTERLY), lambda slot: {"ok": 1})
+    sch.add("cpcv", quarterly(), lambda slot: {"ok": 1})
     assert sch.run_pending() == []
