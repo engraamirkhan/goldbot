@@ -525,3 +525,12 @@ def test_settings_carry_the_login_block_with_the_wizard_flag_off():
     s = load_settings().mt5_login
     assert s.attempts >= 1 and s.backoff_s > 0 and s.backoff_max_s >= s.backoff_s and s.dismiss_wizard is False
     assert s.heal_timeout_ms < 20_000 and s.max_attempts_per_hour >= 1
+
+
+def test_an_ipc_timeout_names_the_server_and_the_servers_dat_check(stored, led, clock):
+    """-10005 on a second terminal was a missing broker servers.dat (2026-10-30): say so, name the server."""
+    acc = _acc()
+    r = _login(FakeMT5(fail=[(-10005, "IPC timeout")] * 3), led, clock, acc=acc)
+    assert "-10005" in r.reason and acc.server in r.reason
+    assert "servers.dat" in r.reason and "config" in r.reason.lower() and "server name" in r.reason
+    _no_secret(r.reason)

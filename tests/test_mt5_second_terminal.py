@@ -165,3 +165,11 @@ def test_bad_instance_arguments_stop_the_bootstrap_before_anything(args):
     out = subprocess.run([BASH, str(BOOT), "--account", "vantage-247", *args], capture_output=True, text=True,
                          timeout=20, env={"PATH": "/usr/bin:/bin"})
     assert out.returncode == 2 and "usage:" in out.stdout
+
+
+def test_the_second_terminal_always_takes_the_siblings_servers_dat():
+    """2026-10-30: a generic servers.dat from the installer's first start gave login -10005 IPC timeouts. The sibling's
+    broker list is copied over it, unconditionally."""
+    second = (LINUX / "mt5-second-terminal.sh").read_text(encoding="utf-8")
+    assert 'cp -f "$m/ICMarkets/Config/servers.dat" "$m/$1/Config/servers.dat"' in second
+    assert '[ ! -f "$m/$1/Config/servers.dat" ]' not in second

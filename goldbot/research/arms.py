@@ -124,6 +124,7 @@ def net_r(move_usd: np.ndarray, risk_usd: np.ndarray, stop_exit: np.ndarray, cos
 # Owner rule 2026-10-30 (ADR 0061): "every strategy should have been back tested and qualified before it is tested and
 # learn from live trades that are taken on demo accounts". A strategy arm enters on demo only with a passing
 # `qualification` on its own row; the random controls and the named cost arms are exempt by their explicit `role`.
+_REFUSAL_LOGGED: set[tuple[str, str]] = set()      # (arm id, reason) already reported at INFO by this process
 QUALIFY_RULE = "unqualified (owner rule 2026-10-30)"
 COST_READ_DONE = "cost read complete, qualify first"
 REPO_ROOT = Path(__file__).resolve().parents[2]           # a doc reference resolves inside this checkout only
@@ -429,7 +430,7 @@ def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False, 
     run by one reviewed interpreter (`spec_rule`), loaded only on demo accounts".
 
     Owner rule 2026-10-30 (ADR 0061), first layer: every arm is stamped `entry_refused` from `qualification_refusal`
-    (doc references resolved under `root`, registry references against `registry`) and each refusal is logged. The
+    (doc references resolved under `root`, registry references against `registry`) and each refusal is logged (INFO once per process, DEBUG after). The
     row is kept, never dropped: an arm no longer configured has its open positions closed at once, and the history
     matrix must still run an arm to qualify it."""
     raw = yaml.safe_load(Path(path).read_text()) or {}
@@ -456,7 +457,10 @@ def load_arms(path: Path, *, check_hash: bool = True, live_class: bool = False, 
                                  f"{arm_hash(a)!r}); an arm is frozen, amend it under a new id")
     for a in out:
         if a.entry_refused and a.status == "run" and not a.retired:
-            log.info("arm %s refuses new demo entries: %s", a.id, a.entry_refused)
+            first = (a.id, a.entry_refused) not in _REFUSAL_LOGGED
+            _REFUSAL_LOGGED.add((a.id, a.entry_refused))
+            log.log(logging.INFO if first else logging.DEBUG, "arm %s refuses new demo entries: %s", a.id,
+                    a.entry_refused)
     return out
 
 
