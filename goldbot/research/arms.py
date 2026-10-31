@@ -21,7 +21,7 @@ import pandas as pd
 import yaml
 from pydantic import Field, ValidationError, model_validator
 
-from goldbot.base import FrozenRecord
+from goldbot.base import FrozenRecord, load_record
 from goldbot.data.calendar import SessionWindow
 from goldbot.data.timeutil import utc_index
 
@@ -196,7 +196,7 @@ def load_costs(path: Path) -> ArmCosts:
     if raw.get("cost_of_record"):     # a path relative to the cost model's own file
         table = yaml.safe_load((Path(path).parent / str(raw["cost_of_record"])).read_text())
         try:
-            extra["of_record"] = CostOfRecord.model_validate(table)
+            extra["of_record"] = load_record(CostOfRecord, table, source="cost_of_record")
         except ValidationError as e:
             raise ValueError(f"cost of record {raw['cost_of_record']}: {e}") from e
     return ArmCosts(round_trip_usd=float(raw["round_trip_usd"]),

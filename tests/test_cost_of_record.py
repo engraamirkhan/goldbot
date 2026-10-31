@@ -96,3 +96,12 @@ def test_a_broker_without_its_pooled_cell_is_refused(tmp_path: Path) -> None:
     del t["cells"]["vantage"]["all"]
     with pytest.raises(ValueError, match="all"):
         arms.load_costs(_write(tmp_path, t))
+
+
+def test_a_table_a_newer_release_wrote_still_reads(tmp_path: Path) -> None:
+    """ADR 0010: read tolerantly. A field a newer release adds (top level or in a cell) is dropped, not refused."""
+    t = _table()
+    t["refreshed_by"] = "weekly job"
+    t["cells"]["icm"]["asia"]["latency_ms"] = 800.0
+    c = arms.load_costs(_write(tmp_path, t))
+    assert c.of_record is not None and c.of_record.cells["icm"]["asia"].n_fills == _table()["cells"]["icm"]["asia"]["n_fills"]
