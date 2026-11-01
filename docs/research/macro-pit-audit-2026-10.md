@@ -1,5 +1,9 @@
 # Point-in-time audit of `macro-v1` and `positioning-v1`, and the SW-0 macro/flows feature design (2026-10-20)
 
+> **2026-11-01: release `positioning-v1` is retired and must not be used** (look-ahead stamps: every legacy row
+> stamped 2026-10-31; data-local-only policy). Positioning is built locally (goldbot/data/positioning_local.py);
+> see docs/RUNBOOK.md, "positioning-v1 is retired".
+
 Principal gold macro and flows researcher. Base `origin/main` 9a44bdcb. Status: **audit (evidence) + design draft**.
 Not a pre-registration: SW-0's pre-registration is written in `preregistration-2027Q2-draft.md` by its owner (swing
 lane, `candidates/swing-2026-10-17.md`); this file gives it the point-in-time (PIT) layer for the macro and flows
