@@ -524,3 +524,15 @@ Source: `growth-sprint-2026-11-01.md` section 2 (PR #251, K += 7 for C1-C4); ope
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | GS-C1/C2/C4 | Convex payoffs on 2010-2017 at 1.5 x measured ICM cost: C1 news straddle at NFP/CPI/FOMC (k 0.5, 1.0 x ATR15), C2 pyramided session-range breakout (Asia->London, London->NY; 1.5 x ATR15 stop, 3 adds at +1R, open risk <= 1 unit), C4 NR7 prior-day-range break with a 4 R target | **failed** 2026-11-01, 0 of 5 (prereg `fd02d0de`; `growth-screens-2026-11.md`): net mean R C2a -0.36, C2b -0.03, C4 +0.05, C1a +0.09 (whipsaw 64%), C1b -0.42; none beats its random twin at Bonferroni-7. Retired as specified except C1b, whose sign depends on 1m intrabar order (optimistic bracket +0.14 R, LB +0.01): tick re-measurement proposed, K +1 if slotted | 0 registry trials; K +5 of the director's +7, plus K +5 for the disclosed intrabar bracket (program K 3,014 with C3) | per variant: net mean 90% LB > 0, beats a 4-twin random-entry control with identical mechanics at Bonferroni-7, >= 5 of 8 years positive; else FAIL and retired as specified |
+
+## A24. Meta-label filter over existing entry generators (ML researcher, 2026-11-01)
+
+Source: owner direction relayed 2026-11-01 (learned filter over the high-volume generators). Admissible against R-07
+only on the new information in `prereg-ml-meta-label-2026-11-01.md` s.0 (positioning + calendar PIT columns, both-sided
+unbiased rows, net-R label at `cor-2026-10-31.2`). Screen 2010-2017, one look per model, holdout sealed. IDs carry the
+ML- prefix so parallel lanes cannot collide on H numbers.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| ML-M1 | A fixed LightGBM regressor on 40 PIT features (H-62 intraday base + COT/GLD + tier-1 calendar), trained on net R of every I0 decision taken both ways (15m, 1.5 ATR stop, 2 R, 96 bars), selects a top decile with positive net edge | pre-registered 2026-11-01 | K +1; 0 registry trials | top-decile net mean 90% LB > 0, beats a year- and side-matched random selection at p <= 0.025, >= 5/8 years, forward leg > 0; else FAIL -> R-20 |
+| ML-M2 | The same model class over I2B `box_break_close` candidates (15m, 1.0 ATR stop, 2 R, 96 bars) | pre-registered 2026-11-01 | K +1; 0 registry trials | as ML-M1 |
