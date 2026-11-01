@@ -1,7 +1,7 @@
 # Pre-registration: cross-asset lead-lag on 1m, 2010-2017 (macro researcher, 2026-11-01)
 
 Frozen by commit before any 2010-2017 outcome is computed (the lead-asset data was still downloading when this was
-committed). Results: `cross-asset-screen-2026-11.md`. Code: `candidates/cross_asset/cross_asset_screen.py`. Data fetch:
+committed). Results: `cross-asset-screen-2026-11.md`. Code: `docs/research/candidates/cross_asset/cross_asset_screen.py`. Data fetch:
 `scripts/cross_asset_fetch.py` (Dukascopy bi5 bid m1, local `raw/xasset/`, never committed).
 
 ## Why this line, and what it is not
