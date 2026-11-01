@@ -17,6 +17,8 @@ families:
   sweep_absorb: {label: "Sweep + absorb", why: "A sweep of a recent high or low was absorbed"}
   box_break_close: {label: "Box break + close", why: "Close outside the box after a squeeze"}
   box_next: {label: "Box break, exit study", why: "Close outside the box; the exit is what is measured"}
+  session_range_break: {label: "Session range breakout", why: "Asia range broken in London, London range in New York"}
+  session_range_control: {label: "Growth test random control", why: "Random time and side in the same session windows: GS1's null"}
   ema_pullback: {label: "EMA pullback", why: "Pullback to the EMA in a trend"}
   tsmom: {label: "Trend momentum", why: "Price trend over the lookback points one way"}
   donchian_break: {label: "Donchian break", why: "Close beyond the 55-bar high or low"}
@@ -94,3 +96,5 @@ arms:
   G1C: {variant: "random levels (control)"}
   XTV1: {variant: "TV rule 1"}
   VXTV2: {variant: "TV rule 2"}
+  GS1: {variant: "growth test"}
+  GS1C: {variant: "growth control"}

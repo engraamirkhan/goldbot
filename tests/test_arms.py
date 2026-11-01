@@ -31,7 +31,9 @@ ARM_SPEC_IDS = {"S0", "S0R", "S1A", "S1B", "S2A", "S2B", "S3A", "S3B", "S4", "S5
                 "Z3V", "Z5V", "Z6V", "Z7V", "ZCV",
                 "VS0", "VS1A", "VS1B", "VS2A", "VS2B", "VS3A", "VS3B", "VS5A", "VS5B",
                 # ADR 0062: the XAUUSD247 weekend lane's two random controls (forward only, vantage-247)
-                "WKS0", "WKI0"}
+                "WKS0", "WKI0",
+                # growth sprint 2026-11-01: the owner experiment and its random-entry control (icm-demo)
+                "GS1", "GS1C"}
 
 
 def test_time_structure_arms_are_forward_only_and_never_run_on_history() -> None:

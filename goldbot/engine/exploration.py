@@ -95,9 +95,12 @@ from goldbot.research.arms import (
     COST_ARMS,
     COST_CONTROLS,
     COST_READ_DONE,
+    OWNER_EXPERIMENT_RULE,
     SPEC_RULE,
     arm_hash,
     load_arms,
+    owner_experiment_refusal,
+    owner_experiment_until,
     qualification_refusal,
     stamp_qualification,
 )
@@ -155,6 +158,7 @@ NATURAL = frozenset({HOLD_EXIT, "time_exit", "stop", "target", "engine_stop_clos
 BROKER_BAR_LATE = "broker_bar_late"
 WAIT_ACTION = "exploration_broker_bar_wait"
 SHIFT_TF = "15m"                    # arms 8.9: a shifted XC15 enters "at the next 15m close" KA15 is not open
+OWNER_EXPERIMENT_ACTION = "exploration_arm_owner_experiment"   # journalled at start for each running owner experiment
 CUT_EXIT = "weekend_close_loser"    # the Friday cut's loser close (`Engine._weekend_rule`): natural for a rule following it
 
 
@@ -391,6 +395,10 @@ class ExplorationRecord(FrozenRecord):
     # and `shifted` (logged, "excluded from pairing"); `signal_utc` is the close it entered at
     decision_utc: UtcTimestamp | None = None
     shifted: bool = False
+    # growth sprint 2026-11-01 (contract with scripts/growth_sprint_read.py): a pyramid add carries the first unit's
+    # client_order_id here, the first unit its own id or None; the read folds a group into one trade (R = the group's
+    # P&L over the first unit's stop_loss: `research.growth_ledger.fold_groups`). In the JSON body only
+    group_id: str | None = None
 
 
 class TwinRecord(FrozenRecord):
@@ -522,6 +530,14 @@ class Exploration:
             eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": "exploration_arm_unqualified",
                                   "arm": a, "rule": self.unqualified[a]})
         self.retired = self.retired | frozenset(self.unqualified)
+        # ADR 0061 amendment 2026-11-01: each owner experiment running under its exemption, journalled once at start
+        # with its last day (`research.arms.OWNER_EXPERIMENTS`); its expiry is re-read once a minute
+        for a in sorted(k for k, v in self.arms.items() if v.spec.role == "owner_experiment" and k not in self.retired):
+            log.warning("exploration arm %s runs as an owner experiment until %s (unqualified, ADR 0061 amendment)", a,
+                        owner_experiment_until(a))
+            eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": OWNER_EXPERIMENT_ACTION, "arm": a,
+                                  "until": owner_experiment_until(a), "rule": OWNER_EXPERIMENT_RULE})
+        self.owner_read: pd.Timestamp | None = None     # the minute the owner experiments' expiry was last read
         self.cost_read_at: pd.Timestamp | None = None   # the minute the cost arms' fills were last counted
         self.cost_read_warned = False                   # an unreadable count is journalled once until a read succeeds
         self.retired_read: pd.Timestamp | None = None
@@ -884,6 +900,7 @@ def on_pass(eng: Engine, tick: Tick) -> None:
         now = eng._now(tick)
         refresh_retired(eng, ex, now)
         refresh_cost_reads(eng, ex, now)
+        refresh_owner_experiments(eng, ex, now)
         ct = eng._closed_through
         if ct is not None and (ex.last_close is None or ct > ex.last_close) and step(eng, ct):
             ex.last_close = ct                      # a deferred close (clock ahead) is tried again next pass
@@ -969,6 +986,41 @@ def refresh_cost_reads(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
         eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + a,
                               "action": "exploration_arm_cost_read_complete", "arm": a, "rule": COST_READ_DONE,
                               "fills": counts.get(a)})
+    _block(eng, ex, [s for s in ex.queue if s.arm_id in ex.retired], now, "arm_retired")
+
+
+def refresh_owner_experiments(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
+    """Once a minute: an owner experiment (`role: owner_experiment`) past its last day in OWNER_EXPERIMENTS is refused
+    new entries like an unqualified arm (journalled `exploration_arm_unqualified` with the reason), so the expiry binds
+    without a restart; so is every control whose `params.control` names it (GS1C stops with GS1: a control has no
+    purpose once its arm stops). They stay configured: open positions keep every exit. Entries only."""
+    minute = now.floor("min")
+    if ex.owner_read == minute:
+        return
+    ex.owner_read = minute
+    stop: dict[str, str] = {}
+    for a, arm in ex.arms.items():
+        if arm.spec.role == "owner_experiment" and a not in ex.retired:
+            why = owner_experiment_refusal(arm.spec, now)
+            if why:
+                stop[a] = why
+    for a, arm in ex.arms.items():
+        named = arm.spec.params.get("control")
+        if arm.spec.role != "control" or a in ex.retired or a in stop or not isinstance(named, str) \
+                or owner_experiment_until(named) is None:
+            continue
+        # its experiment stopped now, or was already refused (at load, after a restart past the expiry)
+        why = stop.get(named) or ex.unqualified.get(named) or qualification_refusal(arm.spec, now=now)
+        if why:
+            stop[a] = f"{why} (the control of {named} stops with it)"
+    if not stop:
+        return
+    ex.retired = ex.retired | frozenset(stop)
+    for a, why in sorted(stop.items()):
+        ex.unqualified[a] = why
+        log.warning("exploration arm %s refused: %s", a, why)
+        eng.decisions.append({"ts": now.isoformat(), "agent": PREFIX + a, "action": "exploration_arm_unqualified",
+                              "arm": a, "rule": why})
     _block(eng, ex, [s for s in ex.queue if s.arm_id in ex.retired], now, "arm_retired")
 
 
@@ -1485,6 +1537,16 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
                                      arm_cap, first=arm.arm_id not in ps.lost and not ps.count.get(arm.arm_id),
                                      floor_gbp=_room_floor(arm, arm_cap, cost, pot.gbp))}
 
+    volume_max = float(lot)
+    growth = arm.arm_id in eng.gate.limits.growth_arms
+    if growth:
+        sized = growth_lots(rooms, arm_cap, loss / float(lot), cost / float(lot), terms, side,
+                            sum(t.side * t.lots for t in eng.open.values()))
+        if sized is not None:
+            volume_max, loss, cost = sized
+            rooms["arm_cap"] = arm_cap - cost
+            applied.update(stop_loss=round(loss, 2), cost=round(cost, 2), growth_lots=volume_max)
+
     def binding(at_stop: float) -> str | None:
         return next((k for k, room in rooms.items() if at_stop > room + 1e-9), None)
 
@@ -1492,7 +1554,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
         refuse(why)
         return "refused"
     room = min(rooms.values())
-    intent = _intent(eng, arm, side, price, s, now, terms, room)
+    intent = _intent(eng, arm, side, price, s, now, terms, room, volume_max)
     if intent is None:
         refuse("gate_unsupported")
         return "refused"
@@ -1515,7 +1577,8 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
                             pid=pid, close_ts=now, entry=price, target=price + side * target_d, max_loss=room,
                             headroom=room, applied=lambda: applied, refuse=refuse, action="exploration:",
                             journal={"agent": tag, "arm": arm.arm_id}, record=record,
-                            over_cap=lambda at_stop: binding(at_stop) or "arm_cap")
+                            over_cap=lambda at_stop: binding(at_stop) or "arm_cap",
+                            max_lots=volume_max if growth else None)
     if pos is None:
         return "refused"
     ex.open_loss[pos] = at_gate[0] if at_gate else loss
@@ -1524,11 +1587,31 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     return "sent"
 
 
+def growth_lots(rooms: Mapping[str, float], arm_cap: float, loss_per_lot: float, cost_per_lot: float,
+                terms: Mapping[str, Any], side: int, net_open: float) -> tuple[float, float, float] | None:
+    """Growth sprint 2026-11-01 (`RiskLimits.growth_arms`): the largest lot, in the broker's steps, whose loss at the
+    stop fits every room (`_send`'s budget, pot and arm day), whose loss plus round trip fits the arm's per-trade cap,
+    whose net same-side lots stay within MAX_NET_LOTS (ADR 0043 X3) and at most the broker's volume_max: (lots, loss,
+    cost). The RiskGate then sizes at its own risk per trade, never above it. None when no lot above the minimum fits
+    (the minimum-lot path judges it as before): no cap is loosened, only the lot is no longer fixed at the minimum."""
+    step, lo, hi = (float(terms.get(k) or 0.0) for k in ("volume_step", "volume_min", "volume_max"))
+    if not (step > 0 and lo > 0 and loss_per_lot > 0 and cost_per_lot >= 0):
+        return None
+    bounds = [hi, arm_cap / (loss_per_lot + cost_per_lot), MAX_NET_LOTS - side * net_open]
+    bounds += [room / loss_per_lot for k, room in rooms.items() if k != "arm_cap"]
+    lots = math.floor(min(bounds) / step + 1e-9) * step
+    if lots <= lo + 1e-9:
+        return None
+    lots = round(lots, 8)
+    return lots, loss_per_lot * lots, cost_per_lot * lots
+
+
 def _intent(eng: Engine, arm: Arm, side: int, price: float, s: Pending, now: pd.Timestamp,
-            terms: dict[str, Any], headroom: float) -> Intent | None:
+            terms: dict[str, Any], headroom: float, volume_max: float | None = None) -> Intent | None:
     """The minimum-lot Intent of purpose `exploration` (lane L1's fence), in the rule's R: the stop is 1 "ATR" of
     `stop_usd`, the target its R multiple. No p is invented: 0.5, the gate skips only the edge rules for this purpose.
-    None when the gate's Intent does not take it (fail closed)."""
+    A growth arm's `volume_max` (`growth_lots`) lets the gate size it above the minimum lot. None when the gate's
+    Intent does not take it (fail closed)."""
     from goldbot.risk import Intent
     try:
         return Intent(agent_id=arm.tag, side=side, p=0.5, target_atr=s.target_usd / s.stop_usd, stop_atr=1.0,
@@ -1538,7 +1621,7 @@ def _intent(eng: Engine, arm: Arm, side: int, price: float, s: Pending, now: pd.
                       purpose="exploration", arm_id=arm.arm_id,
                       terminal_trade_mode=cost_probe._terminal_trade_mode(eng),
                       hold_s=float(s.hold_bars * tf_seconds(arm.tf)), probe_headroom=headroom,
-                      **{**terms, "volume_max": terms.get("volume_min")})
+                      **{**terms, "volume_max": volume_max if volume_max is not None else terms.get("volume_min")})
     except ValidationError as exc:
         log.warning("exploration intent refused by its schema (%s)", exc.error_count())
         return None
