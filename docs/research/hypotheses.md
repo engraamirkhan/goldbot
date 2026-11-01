@@ -578,3 +578,11 @@ A27 at merge (A24-A26 landed first).
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | ML-M1c | The ML-M1 model, features (h1_adx14 -> h4_adx14) and hyperparameters on 1h decisions (I0 schedule both ways, 1.5 x ATR14(1h) stop, 2 R, 24 x 1h), where costs are <= ~0.03 R; data-snooped from ML-M1 (director slot 2026-11-01) | **failed** 2026-11-01 (prereg `fba52087`, code `9f519d5d`; `meta-label-screen-2026-11.md` M1c): top decile n 4,192, net +0.032 R (90% LB -0.048), beats matched random (p 0.0005), forward +0.077 R, long +0.053 / short +0.024, but only 4/8 years (positive 2012-2015 only; positioning columns act as regime labels). Confirm not run; joins R-20 | K +1; 0 registry trials | M1's bar with control p <= 0.05, plus long and short top-decile net each >= 0 (n >= 30 each); pass -> one 2018-01..2025-09 confirm, else R-20 |
+
+## A28. Cross-asset lead-lag, 1m (macro researcher, 2026-11-01)
+
+Prereg `prereg-2026-11-01-cross-asset.md`; results `cross-asset-screen-2026-11.md`.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| XA-X1/X2/X3 | Gold lags silver (X1), the USD (X2: USDJPY up, EURUSD down) or the three jointly (X3) on 1m: when the lead's 5m move implies a gold move >= 2 residual sd and gold has done at most half of it, trade gold the implied way, 15m time exit, 1.5 x ATR15 stop, 1.5 x ICM cost of record | **failed** 2026-11-01, 0 of 3 (prereg `f2daf9b1` + amendments `a1876e41`, `4851c5f1`; `cross-asset-screen-2026-11.md`): net mean R X1 -0.097, X2 -0.103, X3 -0.081, 0/8 years positive each; X3 beats its random twin by +0.019 R (gross +$0.03/oz, Bonf-3 p 0.004), about 1/8 of the cost. Retired as a standalone rule; returns only with tick data and a round trip under ~$0.05/oz | K +3 (explore, no registry trials; ~3,023 on the brief's base of 3,020; parallel lanes add their own) | per variant: net mean R > 0 and beats a 4-twin random-entry control, each day-bootstrap Bonferroni-3 p < 0.10, >= 5 of 8 years positive; all FAIL -> 1-15m cross-asset lead-lag on 1m bars retired |
