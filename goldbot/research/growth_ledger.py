@@ -35,7 +35,9 @@ LEVERAGE = 20.0              # the gate's 1:20 figure (`RiskLimits.leverage_cap`
 GROWTH_ARMS = ("GS1", "GS1C")
 CONTROL_OF = {"GS1C": "GS1"}
 # a blocked candidate is a shadow fill unless its refusal says the entry was not a valid trade at all
-NOT_SHADOW = frozenset({"duplicate", "weekend_hold", "arm_retired", "arm_status_unread", "stale", "not_auto"})
+# (`above_minimum_lot`: an order-core size refusal, a plumbing fault, never a cap the other arm escaped)
+NOT_SHADOW = frozenset({"duplicate", "weekend_hold", "arm_retired", "arm_status_unread", "stale", "not_auto",
+                        "above_minimum_lot"})
 
 
 class LedgerTrade(FrozenRecord):

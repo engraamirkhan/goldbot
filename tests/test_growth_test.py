@@ -182,11 +182,11 @@ def _account(mode: str = "demo", probe_only: bool = True, exploring: bool = True
                                 {"probe_only": False, "exploring": False}])
 def test_growth_sizing_is_refused_at_load_on_an_account_that_is_not_demo_probe_only(kw: dict[str, Any]) -> None:
     with pytest.raises(ValueError, match="growth sizing"):
-        acc_mod.Account.model_validate({"account_id": "x", **_account(**kw)})
+        acc_mod.Account.model_validate({"account_id": "icm-demo", **_account(**kw)})
 
 
 def test_growth_arm_ids_reach_the_gate_only_on_a_demo_probe_only_account() -> None:
-    acc = acc_mod.Account.model_validate({"account_id": "x", **_account()})
+    acc = acc_mod.Account.model_validate({"account_id": "icm-demo", **_account()})
     assert acc_mod.growth_arm_ids(acc) == frozenset({"GS1"})
 
 
@@ -382,3 +382,76 @@ def test_perf_report_markdown_carries_the_growth_test_section(tmp_path) -> None:
     assert rep.growth_test is not None and rep.growth_test.multiple == pytest.approx(1.05)
     md = perf_report.format_markdown(rep)
     assert "## Growth test" in md and "x1.050" in md and "GS1 - GS1C" in md
+
+
+# ------------------------------------------------------------------------------------------------ end to end (_send)
+def _growth_engine(tmp_path: Path, growth: bool) -> tuple[Any, Any, Any]:
+    from goldbot.engine import exploration as X
+    from tests.test_exploration_engine import CLOSE as T0
+    from tests.test_exploration_engine import _arm, _at, _engine
+    arm = _arm("GS1", stop_usd=5.0, target_r=3.0, hold_bars=16)
+    eng, pb = _engine(tmp_path, [arm])
+    # 0.1% of £10,000 = £10 at a $5 stop on 100 oz: the gate sizes 0.02 lots
+    eng.gate.limits = eng.gate.limits.model_copy(update={"risk_per_trade": 0.001,
+                                                         "growth_arms": frozenset({"GS1"}) if growth else frozenset()})
+    tick = _at(eng, pb, T0)
+    X.on_pass(eng, tick)
+    return eng, pb, X
+
+
+def test_a_growth_arm_order_reaches_the_broker_above_the_minimum_lot(tmp_path) -> None:
+    eng, pb, X = _growth_engine(tmp_path, growth=True)
+    sent = [d for d in eng.decisions if str(d.get("action", "")).startswith("exploration:")]
+    assert [d["action"] for d in sent] == ["exploration:executed:auto"], eng.decisions[-5:]
+    [pos] = pb.positions()
+    assert pos.lots == pytest.approx(0.02)
+    [rec] = X.trades(str(tmp_path), "icm-probe")
+    assert rec.lots == pytest.approx(0.02)
+
+
+def test_a_non_growth_arm_keeps_the_minimum_lot_exactly(tmp_path) -> None:
+    eng, pb, _ = _growth_engine(tmp_path, growth=False)
+    [pos] = pb.positions()
+    assert pos.lots == pytest.approx(0.01)
+
+
+def test_a_non_growth_arm_sized_above_the_minimum_by_the_gate_is_refused_by_the_order_core(tmp_path) -> None:
+    from goldbot.engine import exploration as X
+    from tests.test_exploration_engine import CLOSE as T0
+    from tests.test_exploration_engine import _arm, _at, _engine
+    eng, pb = _engine(tmp_path, [_arm("i-long")])
+    check = eng.gate.check
+    eng.gate.check = lambda *a, **k: check(*a, **k).model_copy(update={"lots": 0.02})   # type: ignore[method-assign]
+    X.on_pass(eng, _at(eng, pb, T0))
+    assert not pb.positions()
+    assert any(d.get("action") == "exploration_refused:above_minimum_lot" for d in eng.decisions)
+
+
+def test_an_above_minimum_lot_refusal_is_no_shadow_fill() -> None:
+    assert "above_minimum_lot" in L.NOT_SHADOW
+
+
+def test_the_control_of_an_expired_owner_experiment_stops_with_it() -> None:
+    from types import SimpleNamespace
+
+    from goldbot.engine import exploration as X
+    got = {a.id: a for a in arms.load_arms(SPEC)}
+    ex = SimpleNamespace(arms={"GS1": SimpleNamespace(spec=got["GS1"]), "GS1C": SimpleNamespace(spec=got["GS1C"])},
+                         retired=frozenset(), unqualified={}, owner_read=None, queue=[])
+    eng = _Eng()
+    X.refresh_owner_experiments(eng, ex, pd.Timestamp("2026-11-28 00:01", tz="UTC"))     # type: ignore[arg-type]
+    assert {"GS1", "GS1C"} <= ex.retired
+    assert "GS1" in ex.unqualified["GS1C"]
+
+
+def test_an_owner_experiment_is_keyed_to_its_account() -> None:
+    assert arms.OWNER_EXPERIMENTS == {("icm-demo", "GS1"): "2026-11-27"}
+
+
+def test_gs1_registered_on_another_account_is_refused_at_load() -> None:
+    raw = _account()
+    raw["exploration"]["arms"] = {"GS1": {"style": "growth", "max_loss": 30.0}}
+    with pytest.raises(ValueError, match="owner experiment"):
+        acc_mod.Account.model_validate({"account_id": "icm-probe", **raw})
+    acc = acc_mod.Account.model_validate({"account_id": "icm-demo", **raw})
+    assert "GS1" in acc.exploration.arms

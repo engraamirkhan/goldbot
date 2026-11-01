@@ -96,11 +96,11 @@ from goldbot.research.arms import (
     COST_CONTROLS,
     COST_READ_DONE,
     OWNER_EXPERIMENT_RULE,
-    OWNER_EXPERIMENTS,
     SPEC_RULE,
     arm_hash,
     load_arms,
     owner_experiment_refusal,
+    owner_experiment_until,
     qualification_refusal,
     stamp_qualification,
 )
@@ -534,9 +534,9 @@ class Exploration:
         # with its last day (`research.arms.OWNER_EXPERIMENTS`); its expiry is re-read once a minute
         for a in sorted(k for k, v in self.arms.items() if v.spec.role == "owner_experiment" and k not in self.retired):
             log.warning("exploration arm %s runs as an owner experiment until %s (unqualified, ADR 0061 amendment)", a,
-                        OWNER_EXPERIMENTS.get(a))
+                        owner_experiment_until(a))
             eng.decisions.append({"ts": time.time(), "agent": PREFIX + a, "action": OWNER_EXPERIMENT_ACTION, "arm": a,
-                                  "until": OWNER_EXPERIMENTS.get(a), "rule": OWNER_EXPERIMENT_RULE})
+                                  "until": owner_experiment_until(a), "rule": OWNER_EXPERIMENT_RULE})
         self.owner_read: pd.Timestamp | None = None     # the minute the owner experiments' expiry was last read
         self.cost_read_at: pd.Timestamp | None = None   # the minute the cost arms' fills were last counted
         self.cost_read_warned = False                   # an unreadable count is journalled once until a read succeeds
@@ -992,7 +992,8 @@ def refresh_cost_reads(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
 def refresh_owner_experiments(eng: Engine, ex: Exploration, now: pd.Timestamp) -> None:
     """Once a minute: an owner experiment (`role: owner_experiment`) past its last day in OWNER_EXPERIMENTS is refused
     new entries like an unqualified arm (journalled `exploration_arm_unqualified` with the reason), so the expiry binds
-    without a restart. It stays configured: open positions keep every exit. Entries only."""
+    without a restart; so is every control whose `params.control` names it (GS1C stops with GS1: a control has no
+    purpose once its arm stops). They stay configured: open positions keep every exit. Entries only."""
     minute = now.floor("min")
     if ex.owner_read == minute:
         return
@@ -1003,6 +1004,10 @@ def refresh_owner_experiments(eng: Engine, ex: Exploration, now: pd.Timestamp) -
             why = owner_experiment_refusal(arm.spec, now)
             if why:
                 stop[a] = why
+    for a, arm in ex.arms.items():
+        named = arm.spec.params.get("control")
+        if arm.spec.role == "control" and a not in ex.retired and a not in stop and named in stop:
+            stop[a] = f"{stop[named]} (the control of {named} stops with it)"
     if not stop:
         return
     ex.retired = ex.retired | frozenset(stop)
@@ -1528,7 +1533,8 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
                                      floor_gbp=_room_floor(arm, arm_cap, cost, pot.gbp))}
 
     volume_max = float(lot)
-    if arm.arm_id in eng.gate.limits.growth_arms:
+    growth = arm.arm_id in eng.gate.limits.growth_arms
+    if growth:
         sized = growth_lots(rooms, arm_cap, loss / float(lot), cost / float(lot), terms, side,
                             sum(t.side * t.lots for t in eng.open.values()))
         if sized is not None:
@@ -1566,7 +1572,8 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
                             pid=pid, close_ts=now, entry=price, target=price + side * target_d, max_loss=room,
                             headroom=room, applied=lambda: applied, refuse=refuse, action="exploration:",
                             journal={"agent": tag, "arm": arm.arm_id}, record=record,
-                            over_cap=lambda at_stop: binding(at_stop) or "arm_cap")
+                            over_cap=lambda at_stop: binding(at_stop) or "arm_cap",
+                            max_lots=volume_max if growth else None)
     if pos is None:
         return "refused"
     ex.open_loss[pos] = at_gate[0] if at_gate else loss

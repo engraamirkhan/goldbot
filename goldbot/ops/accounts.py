@@ -446,6 +446,18 @@ class Account(Record):
         return self
 
     @model_validator(mode="after")
+    def _owner_experiment_account(self) -> Account:
+        """ADR 0061 amendment 2026-11-01: an owner experiment (`research.arms.OWNER_EXPERIMENTS`, keyed by account and
+        arm) is registered only on its own account; on any other it is refused at load."""
+        from goldbot.research.arms import owner_experiment_accounts
+        for arm in self.exploration.arms:
+            allowed = owner_experiment_accounts(arm)
+            if allowed and self.account_id not in allowed:
+                raise ValueError(f"{self.account_id}: {arm} is an owner experiment of {sorted(allowed)} only "
+                                 "(ADR 0061 amendment 2026-11-01)")
+        return self
+
+    @model_validator(mode="after")
     def _always_open_fenced(self) -> Account:
         """ADR 0062: "never pooled with XAUUSD history, labels, learner weights or qualification". An always-open
         account is demo (trading a 24/7 symbol with money is the owner's decision) and names its own store symbol,

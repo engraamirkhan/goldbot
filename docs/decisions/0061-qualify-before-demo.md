@@ -74,13 +74,16 @@ session-range breakout) on icm-demo before C2's screen and confirm have reported
 rule for that one experiment.
 
 - **A third exempt role, `owner_experiment`, closed to an explicit list in code:** `research.arms.OWNER_EXPERIMENTS` =
-  {GS1: last day 2026-11-27}. The role on any other id is refused. After the last day (UTC) the arm is refused like
+  {(icm-demo, GS1): last day 2026-11-27}, keyed by account and arm. The role on any other id is refused, and GS1
+  registered on any other account is refused at load (trading-safety review LOW 3). After the last day (UTC) the arm is refused like
   any unqualified strategy, with the reason "the owner experiment GS1 expired after 2026-11-27".
   - The engine re-reads the expiry once a minute (`exploration.refresh_owner_experiments`), so the expiry needs no
     restart.
   - At start the engine journals each running owner experiment (`exploration_arm_owner_experiment`, with `until`).
     The expiry is journalled as `exploration_arm_unqualified`.
 - **GS1C**, GS1's random-entry control, is an ordinary `control` role (rule `session_range_control`, `params.control`).
+  It stops with GS1 at the expiry: the engine refuses any control whose `params.control` names an expired owner
+  experiment (trading-safety review LOW 2).
 - **Every other arm keeps this rule.** A later experiment needs its own entry in OWNER_EXPERIMENTS and its own dated
   amendment here. A config edit cannot exempt an arm.
 - **GS1's fills are labelled "unqualified, owner experiment"** and are never qualification evidence. GS1 comes back

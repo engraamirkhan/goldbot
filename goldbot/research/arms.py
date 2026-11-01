@@ -282,10 +282,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]           # a doc reference reso
 REGISTRY_PATH = REPO_ROOT / "state" / "research_registry.jsonl"
 EXEMPT_ROLES = ("control", "cost")
 # ADR 0061 amendment 2026-11-01 (owner instruction 2026-11-01, growth sprint section 3: "`role: owner_experiment`, for
-# GS1 only, with the expiry 2026-11-27 in code, journalled"): the arms the owner exempts from the qualification rule,
-# each with the last UTC day it may enter. Closed: the role on any other id is refused, and after the day the arm is
-# refused like any unqualified strategy (the engine re-reads it once a minute: `exploration.refresh_owner_experiments`)
-OWNER_EXPERIMENTS: dict[str, str] = {"GS1": "2026-11-27"}
+# GS1 only, with the expiry 2026-11-27 in code, journalled"): the (account, arm) pairs the owner exempts from the
+# qualification rule, each with the last UTC day it may enter. Closed: the role on any other id is refused, the arm
+# registered on any other account is refused at load (`ops.accounts.Account._owner_experiment_account`), and after the
+# day the arm is refused like any unqualified strategy (re-read once a minute: `exploration.refresh_owner_experiments`)
+OWNER_EXPERIMENTS: dict[tuple[str, str], str] = {("icm-demo", "GS1"): "2026-11-27"}
 OWNER_EXPERIMENT_RULE = "owner experiment (owner instruction 2026-11-01, ADR 0061 amendment)"
 # trading-safety M2 + quant ruling 2026-10-30: the cost role is closed to these arms, each naming its prereg cost read
 # (prereg-2026-10-26-time-structure.md 2.2 / 3.2: "Signal-time cost read ... at >= 200 admissible F1A fills", ">= 100
@@ -396,12 +397,22 @@ def _cost_refusal(q: Qualification) -> str | None:
     return None
 
 
+def owner_experiment_until(arm_id: str) -> str | None:
+    """The last day of `arm_id`'s owner experiment (any account), None when it is none."""
+    return next((day for (_, a), day in OWNER_EXPERIMENTS.items() if a == arm_id), None)
+
+
+def owner_experiment_accounts(arm_id: str) -> frozenset[str]:
+    """The accounts `arm_id` may run on as an owner experiment (empty: it is none)."""
+    return frozenset(acc for acc, a in OWNER_EXPERIMENTS if a == arm_id)
+
+
 def owner_experiment_refusal(arm: Arm, now: pd.Timestamp | None = None) -> str | None:
     """Why an `owner_experiment` arm may not enter at `now` (default: the clock), None while its exemption holds: the
     id must be one of OWNER_EXPERIMENTS and `now` on or before its last day (UTC)."""
-    last = OWNER_EXPERIMENTS.get(arm.id)
+    last = owner_experiment_until(arm.id)
     if last is None:
-        return f"{QUALIFY_RULE}: the owner_experiment role is only for {sorted(OWNER_EXPERIMENTS)}"
+        return f"{QUALIFY_RULE}: the owner_experiment role is only for {sorted(a for _, a in OWNER_EXPERIMENTS)}"
     at = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now).tz_convert("UTC")
     if at.normalize() > pd.Timestamp(last, tz="UTC"):
         return f"{QUALIFY_RULE}: the owner experiment {arm.id} expired after {last}"
