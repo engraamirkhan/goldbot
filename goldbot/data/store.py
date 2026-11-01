@@ -57,7 +57,7 @@ TABLES = {
     "ticks_quarantine",                        # tick rows moved out of `ticks` (data/quarantine.py), kept for lineage
     "bars_1m_broker",                          # the broker's own M1 as its terminal reports it (D12/D23), never blended
     "bars_1m_live",                            # the engine's minutes from the broker's ticks (engine/history.py), never blended
-    "positioning",                             # COT and GLD holdings (release positioning-v1), point in time
+    "positioning",                             # COT and GLD holdings (local files only), point in time
     "observe_bars_1m",                         # ADR 0063: an observe-only account's terminal M1 (source = account), local only
     "observe_ticks",                           # ADR 0063: its sampled quotes and spreads (source = account), local only
 }

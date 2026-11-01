@@ -1,6 +1,7 @@
 """Download COMEX gold Commitments of Traders (CFTC) and SPDR Gold Shares holdings and write the point-in-time Parquet
-the data-positioning workflow publishes on release `positioning-v1` (goldbot/data/positioning.py has the sources and
-the availability rules).
+research reads from a local file (goldbot/data/positioning.py has the sources and the availability rules). Nothing
+is published: the data-positioning workflow is retired, and release `positioning-v1` must not be used (look-ahead
+stamps: every legacy row stamped 2026-10-31).
 
 With --existing (the last published file) history is kept as published: only new dates and revised values are added
 (merge_releases), and a row that should have been in the previous download but was not is stamped no earlier than this
@@ -8,7 +9,7 @@ run. COT: the first run downloads 2006 onwards (disaggregated) and 1986 onwards 
 the first run after a published file without legacy rows); later runs this year and last. GLD: the whole archive.
 
 Never loses history: --existing must name a file that exists unless --first-run says there is no published file yet
-(the workflow passes --first-run only when the release or its asset is confirmed missing), and a merged frame with
+(pass --first-run only when no local file exists yet), and a merged frame with
 fewer rows for any source than the previous file, or without every previously published row, is refused
 (check_keeps_history; exit 2, no output, so the publish step uploads nothing).
 
@@ -123,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as fh:
-            fh.write("\n".join(["## positioning-v1", "", *[f"- {n}" for n in notes], *lines]) + "\n")
+            fh.write("\n".join(["## positioning", "", *[f"- {n}" for n in notes], *lines]) + "\n")
     return 1 if cot_failed else 0
 
 
