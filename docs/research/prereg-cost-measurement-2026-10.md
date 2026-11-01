@@ -373,3 +373,14 @@ before and after 11-01. Its pre-break half stays unmeasured by fills; its spread
 bucket changes.
 
 Multiple testing: 0 trials, 0 to K, no holdout. Section 6 is still read on 2027-01-29.
+
+## Amendment 2026-11-01: M1 cadence trimmed on icm-probe (demo trim)
+
+**Dated 2026-11-01.** Cause: cost of record 2026-10-31 section 6 and decision-2026-11-01-next-lines.md option A. ICM
+market-leg and stop-exit slippage are settled from strategy fills, so the ~70 a day quiet-time M1 fills buy nothing
+more. **icm-probe's M1 cadence goes from every 15m close to one per hour** (`cost_probe.scheduled.every_min: 60`, at
+most 24 a day). Each hour's 15m slot rotates with the hour index plus the UTC day. The side rule (+1 on an even 15m slot
+index) is unchanged, so sides still alternate hour by hour and each hour of day flips side daily. Bucket ETAs to 30 fills
+are about 4 times longer on ICM. vantage-demo keeps every 15m close until its exit legs are recorded and it has 200
+strategy fills per session, then 120 minutes. Sections 5 and 6 are unchanged. Multiple testing: 0 trials, 0 to K,
+no holdout.

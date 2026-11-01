@@ -543,6 +543,60 @@ def test_scheduled_settings_outside_the_preregistered_bounds_are_refused(kw):
         acc_mod.ScheduledProbe(**kw)
 
 
+def test_the_schedule_keeps_every_15m_close_by_default():
+    assert acc_mod.ScheduledProbe().every_min == 15
+    closes = pd.date_range("2025-03-04 00:00", periods=96, freq="15min", tz="UTC")
+    assert all(cost_probe.scheduled_slot(ts, 15) for ts in closes)
+
+
+@pytest.mark.parametrize("every_min", [45, 90, 10])
+def test_a_cadence_that_is_not_15_30_60_or_120_minutes_is_refused(every_min):
+    with pytest.raises(ValidationError):
+        acc_mod.ScheduledProbe(every_min=every_min)
+
+
+@pytest.mark.parametrize("every_min", [30, 60, 120])
+def test_a_coarser_cadence_picks_exactly_one_15m_close_per_window(every_min):
+    closes = pd.date_range("2025-03-04 00:00", periods=96 * 2, freq="15min", tz="UTC")
+    picked = [ts for ts in closes if cost_probe.scheduled_slot(ts, every_min)]
+    assert len(picked) == 2 * 1440 // every_min
+    assert len({ts.floor(f"{every_min}min") for ts in picked}) == len(picked)
+
+
+@pytest.mark.parametrize("every_min", [30, 60, 120])
+def test_a_coarser_cadence_still_alternates_sides_and_flips_each_window_of_the_day_daily(every_min):
+    """Cost of record 2026-10-31 section 6 (ICM: "24 a day M1 (one per open hour)"): the prereg's side rule (+1 on an
+    even 15m slot index) is kept; the slot within each window rotates, so sides alternate window by window and the
+    same window of the next day takes the other side (no hour of day is always a buy)."""
+    day1 = pd.date_range("2025-03-04 00:00", periods=96, freq="15min", tz="UTC")
+    s1 = [cost_probe.scheduled_side(ts) for ts in day1 if cost_probe.scheduled_slot(ts, every_min)]
+    s2 = [cost_probe.scheduled_side(ts + pd.Timedelta(days=1)) for ts in day1
+          if cost_probe.scheduled_slot(ts + pd.Timedelta(days=1), every_min)]
+    assert all(a != b for a, b in zip(s1, s1[1:], strict=False))
+    assert all(a == -b for a, b in zip(s1, s2, strict=True))
+
+
+def test_on_an_hourly_cadence_a_close_that_is_not_the_hours_slot_sends_and_journals_nothing(tmp_path):
+    eng, pb, tick = _engine(tmp_path, scheduled=acc_mod.ScheduledProbe(enabled=True, every_min=60))
+    _allow(eng)
+    quarter = pd.date_range(CUT, periods=4, freq="15min")
+    off = next(ts for ts in quarter if not cost_probe.scheduled_slot(ts, 60))
+    on = next(ts for ts in quarter if cost_probe.scheduled_slot(ts, 60))
+    assert off < on                                          # CUT (20:00) is not this hour's slot
+    eng.on_bar_close(off, _bars_until(eng, pb, off))
+    assert not _rows(tmp_path) and not _refusals(eng)
+    eng.on_bar_close(on, _bars_until(eng, pb, on))
+    assert len(_rows(tmp_path)) == 1
+
+
+def test_icm_probe_runs_hourly_probes_and_vantage_keeps_every_15m_close():
+    """Demo trim (cost of record 2026-10-31 section 6): ICM 24 a day; Vantage kept at 40 a day until its exit legs are
+    recorded and it has 200 strategy fills per session (then every_min 120, 12 a day)."""
+    accts = acc_mod.load_accounts(logins=False)
+    assert accts["icm-probe"].cost_probe.scheduled.every_min == 60
+    assert accts["vantage-demo"].cost_probe.scheduled.every_min == 15
+
+
 def test_scheduled_probes_need_the_cost_probe_on():
     with pytest.raises(ValidationError):
         acc_mod.CostProbe(enabled=False, scheduled=acc_mod.ScheduledProbe(enabled=True))
