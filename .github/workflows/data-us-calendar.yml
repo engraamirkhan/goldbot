@@ -75,7 +75,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           [ -f us_calendar.parquet ] || exit 0
-          # same retry pattern as data-positioning (create/upload can race or hit transient API errors)
+          # same retry pattern as data-macro (create/upload can race or hit transient API errors)
           for i in 1 2 3 4 5; do
             { gh release view calendar-v1 >/dev/null 2>&1 || gh release create calendar-v1 --title "US economic calendar (rolling)" --notes "Point-in-time US release calendar (tiers 1 and 2) with available_utc, built by the data-us-calendar workflow from FRED/ALFRED release dates and the Federal Reserve Board's FOMC calendars. This product uses the FRED(R) API but is not endorsed or certified by the Federal Reserve Bank of St. Louis." --latest=false; } &&
             gh release upload calendar-v1 us_calendar.parquet --clobber && exit 0

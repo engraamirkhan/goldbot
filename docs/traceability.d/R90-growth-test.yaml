@@ -1,0 +1,5 @@
+id: R90
+requirement: 'Growth sprint 2026-11-01 (owner instruction): a demo growth test on icm-demo, GS1 against a random-entry control GS1C at the same size, GS1 exempt from ADR 0061 until 2026-11-27 only, sized by the RiskGate with no cap loosened, and read weekly as real equity plus virtual ledgers at f = 5/10/20%'
+status: implemented
+code: goldbot/research/arm_rules_growth.py (GS1 `session_range_break`, GS1C `session_range_control`); goldbot/research/arms.py `OWNER_EXPERIMENTS`, `owner_experiment_refusal`; goldbot/engine/exploration.py `growth_lots`, `refresh_owner_experiments`, `ExplorationRecord.group_id`; goldbot/risk/gate.py `RiskLimits.growth_arms`; goldbot/ops/accounts.py `ExplorationArm.sizing`, `growth_arm_ids`; goldbot/research/growth_ledger.py; goldbot/ops/growth_report.py; perf-report "Growth test" and health `growth_test`; config/exploration_arms.yaml GS1/GS1C; config/accounts.yaml icm-demo growth pot; docs/decisions/0061-qualify-before-demo.md amendment 2026-11-01
+test: tests/test_growth_test.py

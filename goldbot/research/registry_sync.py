@@ -9,10 +9,12 @@ a repair row's `repair.replaces` (scripts/registry_repair.py) is dropped from th
 
   python -m goldbot.research.registry_sync merge <a.jsonl> <b.jsonl> [-o out.jsonl]
   python -m goldbot.research.registry_sync fetch OUT [--bootstrap] | save LOCAL [--bootstrap] | recover   (via gh)
+  python -m goldbot.research.registry_sync publish-outbox OUTBOX WORK [--extra rows.jsonl]   (Mac, via gh)
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import random
@@ -473,9 +475,80 @@ def save_rows(t: Transport, local: Path, *, attempts: int = ATTEMPTS, bootstrap:
                        f"the published copy was left as the other writer wrote it (last: {last})")
 
 
+OUTBOX = "registry_outbox"      # next to the local registry (state/registry_outbox/): what the brain could not upload
+
+
+def _keys(rows: list[dict[str, Any]]) -> set[tuple[str, str, str, str]]:
+    return {_key(r) for r in rows}
+
+
+def _outbox_files(outbox: Path) -> list[Path]:
+    return sorted(outbox.glob("*.jsonl")) if outbox.is_dir() else []
+
+
+def _outbox_clear(outbox: Path) -> None:
+    for p in _outbox_files(outbox):
+        p.unlink(missing_ok=True)
+
+
+def _outbox_write(outbox: Path, rows: list[dict[str, Any]]) -> Path:
+    """The pending payload as `<sha256[:16]>.jsonl`, atomically (temp name, then rename); the same rows are the same
+    file (idempotent). The local registry is a union that only grows, so the new payload holds every older entry's
+    rows and replaces them."""
+    data = _encode(rows)
+    target = outbox / f"{hashlib.sha256(data).hexdigest()[:16]}.jsonl"
+    outbox.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        tmp = outbox / f".{target.name}.part"
+        tmp.write_bytes(data)
+        tmp.replace(target)
+    for p in _outbox_files(outbox):
+        if p != target:
+            p.unlink(missing_ok=True)
+    return target
+
+
+def _to_outbox(t: Transport, local: Path, why: Exception) -> int:
+    """The token cannot write the release (HTTP 403; decision 2026-11-01: the brain token is not widened). Keep the
+    pending payload for the Mac to publish with its own gh (scripts/registry_publish.sh). When the release already
+    holds every local row (the Mac published) the outbox is cleared instead: the brain's side of the acknowledgement."""
+    outbox, rows = local.parent / OUTBOX, read_rows(local)
+    try:
+        remote, _ = pull_stamped(t)
+    except Exception as exc:         # a pull that fails too: keep the payload, the next sync decides
+        log.info("could not read the release to check the outbox: %s", exc)
+        remote = []
+    if rows and _keys(rows) <= _keys(remote):
+        _outbox_clear(outbox)
+        log.info("trial registry: the release holds every local row; outbox cleared")
+    elif rows:
+        path = _outbox_write(outbox, rows)
+        log.info("trial registry upload forbidden (%s); %d rows waiting in %s for the Mac to publish "
+                 "(scripts/registry_publish.sh)", why, len(rows), path)
+    return sum(1 for r in rows if is_trial(r))
+
+
 def sync(local: Path, token: str, repo: str = REPO, *, attempts: int = ATTEMPTS) -> int:
-    """The VPS monthly loop's sync (scheduler `sync_trials`)."""
-    return save_rows(HttpTransport(token, repo), local, attempts=attempts)
+    """The VPS monthly loop's sync (scheduler `sync_trials`). A token that cannot write the release leaves the pending
+    registry in the outbox (INFO, not an alert) instead of failing the sync; the Mac publishes it."""
+    t = HttpTransport(token, repo)
+    try:
+        n = save_rows(t, local, attempts=attempts)
+    except RegistryForbidden as exc:
+        return _to_outbox(t, local, exc)
+    _outbox_clear(local.parent / OUTBOX)
+    return n
+
+
+def publish_outbox(t: Transport, outbox: Path, work: Path, extra: list[Path] | None = None) -> int | None:
+    """The Mac side: union the outbox entries (and any `extra` row files) into `work`, then `save_rows` it, the same
+    pull, union, compare-and-swap push `sync` runs, so the rows and their numbers are identical. None when there is
+    nothing to publish. Returns the merged trial count."""
+    files = [*_outbox_files(outbox), *(extra or [])]
+    if not files:
+        return None
+    write_rows(work, merge_rows(*(read_rows(p) for p in files)))
+    return save_rows(t, work)
 
 
 def recover(t: Transport) -> int:
@@ -519,6 +592,11 @@ def main() -> None:
     s = sub.add_parser("save", help="(gh) union LOCAL with the published registry and publish it (compare-and-swap)")
     s.add_argument("local", type=Path)
     s.add_argument("--bootstrap", action="store_true", help="allow a release without a registry (a new registry)")
+    o = sub.add_parser("publish-outbox", help="(gh) publish the brain's outbox files (and extra row files) through "
+                                              "the same union and compare-and-swap")
+    o.add_argument("outbox", type=Path)
+    o.add_argument("work", type=Path)
+    o.add_argument("--extra", type=Path, action="append", default=[])
     sub.add_parser("recover", help="(gh) union every registry copy on the release, including pending uploads, "
                                    "and publish it")
     args = ap.parse_args()
@@ -536,6 +614,12 @@ def main() -> None:
             before = len(read_rows(args.local))
             n = save_rows(GhTransport(), args.local, bootstrap=args.bootstrap)
             print(f"published {args.local}: {n} trials ({len(read_rows(args.local))} rows, {before} local before)")
+        elif args.cmd == "publish-outbox":
+            rows_before, _ = pull_stamped(GhTransport())
+            trials = publish_outbox(GhTransport(), args.outbox, args.work, args.extra)
+            rows_after, _ = pull_stamped(GhTransport())
+            print("nothing to publish" if trials is None else
+                  f"published: release rows {len(rows_before)} -> {len(rows_after)} ({trials} trials)")
         else:
             print(f"recovered {recover(GhTransport())} trials into {TAG}/{ASSET}")
     except (RegistryRace, RegistryStranded, RegistryMissing, GhError, ValueError) as exc:

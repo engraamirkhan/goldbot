@@ -23,11 +23,15 @@ from tests.test_exploration_engine import CLOSE, LOSS, QUALIFIED, SHORT, _arm, _
 
 SPEC = Path(__file__).resolve().parents[1] / "config" / "exploration_arms.yaml"
 RULE = "unqualified (owner rule 2026-10-30)"
-CONTROLS = "S0 S0R I0 W0 VI0 VW0 C1H VC1H ZCD ZCV F1C G1C F2C C30C XC15 VS0 WKS0 WKI0".split()   # + ADR 0062
+CONTROLS = "S0 S0R I0 W0 VI0 VW0 C1H VC1H ZCD ZCV F1C G1C F2C C30C XC15 VS0 WKS0 WKI0 GS1C".split()   # + ADR 0062
+# ADR 0061 amendment 2026-11-01 (owner instruction): GS1 runs unqualified as an owner experiment until 2026-11-27
+OWNER_EXPERIMENTS = {"GS1"}
+OWNER_UNTIL = pd.Timestamp("2026-11-27", tz="UTC")
 COSTS = "F1A G1A".split()
 # what each account may still enter on 2026-10-30 (exempt and not retired) and what it now refuses (registered strategy
 # arms that A2 had not retired: the A2 retirements are refused anyway)
-RUNNING = {"icm-demo": {"C1H", "G1A", "G1C", "I0", "W0", "ZCD"}, "icm-probe": {"F1A", "F1C", "S0", "S0R"},
+RUNNING = {"icm-demo": {"C1H", "G1A", "G1C", "I0", "W0", "ZCD", "GS1C"}
+           | ({"GS1"} if pd.Timestamp.now(tz="UTC").normalize() <= OWNER_UNTIL else set()), "icm-probe": {"F1A", "F1C", "S0", "S0R"},
            "vantage-demo": {"VC1H", "VI0", "VW0", "ZCV"}, "vantage-247": {"WKS0", "WKI0"}}   # ADR 0062: controls only
 NEWLY_REFUSED = {"icm-demo": {"BXR15", "BXR1H", "BXR30", "BXR4H", "XBB15", "Z10D", "Z3D", "Z4D", "Z6D", "Z7D", "Z9D"},
                  "icm-probe": {"S1A", "S1B", "S5A", "S5B", "Z1P", "Z2P", "Z4P", "Z5P", "Z7P"},
@@ -176,8 +180,11 @@ def test_f1as_forward_graduation_rule_is_withdrawn_with_a_dated_note_and_its_sto
 def test_every_exempt_arm_carries_its_role_and_every_other_arm_is_a_strategy_refused_today(spec) -> None:
     assert {i for i, a in spec.items() if a.role == "control"} == set(CONTROLS)
     assert {i for i, a in spec.items() if a.role == "cost"} == set(COSTS)
+    assert {i for i, a in spec.items() if a.role == "owner_experiment"} == OWNER_EXPERIMENTS
     for arm_id, a in spec.items():
-        if a.role == "strategy":       # 2026-10-30: no family has qualified (H-16, H-80 R2, H-82..H-84, H-17 FAIL)
+        if a.role == "owner_experiment":
+            assert (a.entry_refused == "") == (pd.Timestamp.now(tz="UTC").normalize() <= OWNER_UNTIL), arm_id
+        elif a.role == "strategy":       # 2026-10-30: no family has qualified (H-16, H-80 R2, H-82..H-84, H-17 FAIL)
             assert a.entry_refused.startswith(RULE), arm_id
         else:
             assert a.entry_refused == "", arm_id
