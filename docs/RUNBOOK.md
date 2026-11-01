@@ -987,7 +987,6 @@ Tailscale is optional.
 | --- | --- | --- | --- |
 | `data-dukascopy.yml` | Saturdays 03:17 UTC (current year), or by hand (inputs `from_year`/`to_year`, or `months` for a targeted refetch, section 6) | Downloads Dukascopy ticks, builds 1m bars, publishes Parquet files to the release `data-v1`. | Issues `data coverage <year>` (label `data-coverage`); failures as `data-dukascopy failure for <year>` (labels `ci`, `data`). |
 | `data-macro.yml` | Tuesdays 04:41 UTC, or by hand | Downloads the FRED macro series (10y real yield, breakeven, broad dollar, gold VIX, 2y yield) and publishes `macro_fred.parquet` to the release `macro-v1`. | Failures as issue `data-macro failure` (labels `ci`, `data`). |
-| `data-positioning.yml` | Saturdays 05:23 UTC, or by hand (input `from_year` re-downloads COT from that year) | Downloads COMEX gold Commitments of Traders (CFTC) and GLD holdings (SPDR archive) and publishes `positioning.parquet` to the release `positioning-v1`, each row with a conservative `available_utc`. If the GLD archive is blocked, the run stays green, keeps the published GLD rows and says `GLD SOURCE UNAVAILABLE` in its summary. | Failures (COT download or upload) as issue `data-positioning failure` (labels `ci`, `data`). |
 | `research.yml` | By hand only (Actions -> research -> Run workflow; inputs `specialist`, `from_year`, `to_year`, `rationale`, `macro`) | Walk-forward research for one specialist family (`session_open`, `mean_reversion`, `trend`, `breakout`) on the `data-v1` bars; with `macro` ticked, adds the macro features from `macro-v1`. Keeps the trial registry on release `research-v1`. | Issue `research: <specialist>` (label `research`). |
 | `ci.yml` | Every push, pull request, or by hand | Pre-commit, backend lint/types, unit (6 shards) and integration (10 shards), frontend lint/types/unit, API contract, browser end-to-end tests, all in parallel (about 3 min; ADR 0035). Locally: `scripts/ci_local.sh` (at most `CI_LOCAL_MAX_JOBS`, default 12, lanes at once). | On a failed push, one issue `CI failure on <commit> (<jobs>)` labelled `ci`, with each failed job's output. |
 
@@ -1122,9 +1121,13 @@ before it can decide. The Saturday retrain refreshes them, but load them once no
 
 `--macro` also loads the macro series (release `macro-v1`, published since 2026-10-13 and refreshed every Tuesday
 by `data-macro`) into the store; `macro 0` means nothing new since the last load. The engines do not use them yet;
-research does. Add `--positioning` to load the
-COT and GLD holdings rows (release `positioning-v1`, table `positioning`); it prints `positioning 0` until the
-`data-positioning` workflow has run once. Research only (`research_pass.py --positioning`); the engines do not use them.
+research does.
+
+**positioning-v1 is retired.** Do not download or use release `positioning-v1` (COT and GLD holdings): its rows carry
+look-ahead timestamps (every legacy row is stamped 2026-10-31), and market data is never published (data-local-only
+policy). The `data-positioning` workflow and `fetch_data_release.py --positioning` are gone. Build the positioning
+file locally (`scripts/positioning_data.py`, `goldbot/data/positioning_local.py`) and pass it to
+`research_pass.py --positioning <file>`; the engines do not use it. The release itself is left for the owner to delete.
 
 If the repository is private this needs a GitHub token. The script has a `--token` option, but do not type a
 token on the command line (it stays in the PowerShell history); skip this step instead and let the first Saturday

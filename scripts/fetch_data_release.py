@@ -1,12 +1,13 @@
 """Fetch the 1m bar Parquet files published by the data-dukascopy workflow (release tag data-v1) into the
 store, and with --macro the FRED macro series the data-macro workflow publishes (release macro-v1) into the store's
-`macro` table, and with --positioning the COT/GLD rows the data-positioning workflow publishes (release
-positioning-v1) into the `positioning` table, and with --us-calendar the US calendar, tiers 1 and 2, (release calendar-v1) into
+`macro` table, and with --us-calendar the US calendar, tiers 1 and 2, (release calendar-v1) into
 raw-calendar/ (research reads it as a file; no store table yet). Works anywhere github.com is reachable.
+COT/GLD positioning is not fetched from any release (release positioning-v1 is retired: look-ahead stamps); build
+it locally (scripts/positioning_data.py, goldbot/data/positioning_local.py).
 With --download-only the release files are only downloaded (bars into raw/, macro into raw-macro/, the calendar into
 raw-calendar/) and the store is not touched: what a workflow that reads the files directly needs
 (scripts/count_owed_events.py, .github/workflows/count-owed-events.yml).
-Usage: python scripts/fetch_data_release.py [--years 2015 2026] [--macro | --macro-only] [--positioning] [--us-calendar]
+Usage: python scripts/fetch_data_release.py [--years 2015 2026] [--macro | --macro-only] [--us-calendar]
        [--download-only]"""
 from __future__ import annotations
 
@@ -22,7 +23,6 @@ from goldbot.data.release import (  # noqa: E402
     download_release,
     sync_release_bars,
     sync_release_macro,
-    sync_release_positioning,
     sync_release_us_calendar,
 )
 from goldbot.data.store import Store  # noqa: E402
@@ -34,7 +34,6 @@ def main() -> None:
     ap.add_argument("--token", default=None, help="GitHub token for a private repo (or GH_TOKEN env)")
     ap.add_argument("--macro", action="store_true", help="also load the macro series (release macro-v1)")
     ap.add_argument("--macro-only", action="store_true", help="load only the macro series")
-    ap.add_argument("--positioning", action="store_true", help="also load COT and GLD holdings (release positioning-v1)")
     ap.add_argument("--us-calendar", action="store_true",
                     help="also download the US calendar, tiers 1 and 2 (release calendar-v1), into raw-calendar/")
     ap.add_argument("--download-only", action="store_true",
@@ -53,9 +52,6 @@ def main() -> None:
     if args.macro or args.macro_only:
         n = sync_release_macro(store, token=args.token)
         print("macro", n if n else "0 (no macro-v1 release yet, or nothing new; run the data-macro workflow)")
-    if args.positioning:
-        n = sync_release_positioning(store, token=args.token)
-        print("positioning", n if n else "0 (no positioning-v1 release yet; run the data-positioning workflow)")
     if args.us_calendar:
         cal = sync_release_us_calendar(token=args.token)
         print("us_calendar", len(cal) if len(cal) else "0 (no calendar-v1 release yet; run the data-us-calendar workflow)")
