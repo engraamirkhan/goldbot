@@ -47,8 +47,8 @@ Exit mix: VAC 50% stop / 45% target / 5% time; TIM 30% stop / 70% time; SRR 56% 
 
 ## Multiple testing
 
-K +3 (VAC, TIM, SRR), one look each, no registry trial. Program K 3,014 -> **3,017** (the ledger on main
-read 3,014 with C3; the brief's base of about 3,020 double-counted). Later lanes add on top. No bracket, re-run or variant was computed.
+K +3 (VAC, TIM, SRR), one look each, no registry trial. Program K 3,017 -> **3,020** (ledger:
+3,014 with C3, +3 for the opportunity-signals screen, A24). Later lanes add on top. No bracket, re-run or variant was computed.
 
 ## Owner-only flags
 
