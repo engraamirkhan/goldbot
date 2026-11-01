@@ -739,8 +739,9 @@ def test_bridge_health_through_the_tunnel(tmp_path):
     c = health.check_bridge(make_ctx(tmp_path, get_secret=get, bridge_probe=probe), "icm-demo")
     assert c is not None and c.status == "ok" and seen == ["http://127.0.0.1:18812"]
     c = health.check_bridge(make_ctx(tmp_path, get_secret=get, bridge_probe=lambda u: "unreachable (ConnectionError)"), "icm-demo")
-    assert c is not None and c.status == "fail" and "ConnectionError" in c.reason and "18812" not in c.reason
-    r = health.run_checks(make_ctx(tmp_path, get_secret=get, bridge_probe=lambda u: "HTTP 502"))
+    assert c is not None and c.status == "warn" and "ConnectionError" in c.reason and "18812" not in c.reason
+    later = NOW + pd.Timedelta(seconds=health.BRIDGE_DOWN_FAIL_S)          # incident 2026-11-01: fails at 5 min
+    r = health.run_checks(make_ctx(tmp_path, now=later, get_secret=get, bridge_probe=lambda u: "HTTP 502"))
     assert by_name(r.checks)["bridge:icm-demo"].status == "fail"
 
 

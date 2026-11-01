@@ -200,7 +200,7 @@ def run_preflight(ctx: PreflightContext) -> list[Item]:
                       fix=f"{SETUP}  (step 2: MT5 bridge), or `goldbot accounts bridge-use {aid}`"))
     bridge_fix = (f"on the MT5 box: `sudo systemctl status goldbot-bridge@{aid}` (start it with `sudo systemctl start "
                   f"goldbot-bridge@{aid}`); on the brain: `sudo systemctl restart {TUNNEL_UNIT}`")
-    bc = health.check_bridge(hctx, aid) if url else None
+    bc = health.check_bridge(hctx, aid, debounce=False) if url else None
     if bc is None:
         items.append(Item(name="bridge_health", status="fail", fix=bridge_fix,
                           detail="not checked: " + ("no bridge address stored" if not url else "no probe available")))

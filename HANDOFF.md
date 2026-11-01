@@ -5,6 +5,7 @@ Canonical design: `docs/DESIGN.md` (exported from the original Claude design doc
 Standing instructions for Claude sessions: `CLAUDE.md`. Owner's VPS guide: `docs/RUNBOOK.md`.
 
 ## Where things are (as of 2026-10-05)
+- Demo probe trim (decision-2026-11-01-next-lines.md option A; cost of record 2026-10-31 section 6): icm-probe's scheduled M1 cost probes run one per open hour (`cost_probe.scheduled.every_min: 60`, new field, default 15 = every 15m close), so about 70 a day fall to at most 24. The 15m slot inside each hour rotates (`cost_probe.scheduled_slot`), which keeps the prereg's even/odd side rule alternating, and each hour of day switches side from one day to the next. vantage-demo stays at every 15m close (40 a day plan). Switch it to `every_min: 120` (12 a day) by hand once its exit legs are recorded and it has 200 strategy fills per session: the engine does not read fill counts. Plans follow: `daily_review.probe_plan` ICM 90 -> 24, icm-probe fills target 323 -> 293. Random controls, RiskGate, caps and probe budgets are unchanged; the trim only removes probes.
 - Growth test: GS1's pyramid adds, the part of growth sprint section 3 that was deferred (a logged deviation, due
   11-03). GS1C gets the same adds. Registered as `adds: 3` on both arms in config/accounts.yaml (growth-sized arms
   only). An add goes out at each +1 R from the first unit's entry, R being the stop distance the gate set on that

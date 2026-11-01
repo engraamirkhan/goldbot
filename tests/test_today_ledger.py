@@ -119,7 +119,7 @@ def test_a_live_account_has_no_fill_target_and_plans_come_from_settings():
     assert plans and all((p.fills_target is None) == (k.endswith("-live")) for k, p in plans.items())
     # ADR 0049 D1/D1a step-1 targets, per account
     assert (plans["icm-probe"].fills_target, plans["icm-demo"].fills_target, plans["vantage-demo"].fills_target) == \
-        (323, 120, 90)
+        (293, 120, 90)                       # icm-probe: scalp 269 + scheduled probes 24 (demo trim 2026-11-01)
 
 
 def test_the_today_view_carries_the_ledger_fields_per_account(tmp_path, monkeypatch):

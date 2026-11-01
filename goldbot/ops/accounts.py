@@ -103,6 +103,10 @@ class ScheduledProbe(FrozenRecord):
     blackout_tz: str = "America/New_York"
     # prereg K10: scheduled probes' realised loss + open risk take at most this share of the day's probe budget
     budget_share: float = Field(0.5, gt=0, le=0.5)
+    # one probe per this many minutes (cost of record 2026-10-31 section 6: "24 a day M1 (one per open hour)" on ICM):
+    # 15 = every 15m close (the 2026-10-20 amendment); coarser picks one 15m close per window, rotating within it so
+    # the prereg's side rule still alternates (cost_probe.scheduled_slot). Fewer probes only, never more
+    every_min: Literal[15, 30, 60, 120] = 15
 
     @field_validator("blackout")
     @classmethod

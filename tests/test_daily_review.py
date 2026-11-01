@@ -163,7 +163,7 @@ def test_refusal_skip_and_stale_reasons_are_counted_from_the_journal_and_the_can
                                             "journal:exploration_refused:ledger_unreadable": 1}
 
 
-def test_candidates_and_fills_per_broker_and_style_are_set_against_the_plan_290_a_day_on_icm(tmp_path):
+def test_candidates_and_fills_per_broker_and_style_are_set_against_the_plan_224_a_day_on_icm(tmp_path):
     db = _db(tmp_path)
     for i in range(6):
         _cand(db, f"s{i}", at=LONDON + pd.Timedelta(minutes=i))
@@ -172,14 +172,16 @@ def test_candidates_and_fills_per_broker_and_style_are_set_against_the_plan_290_
     _cand(db, "v0", host="vantage-demo", arm="VI2A")
     review = _run(tmp_path)
     cfg = S.daily_review
-    assert sum(cfg.volume_plan["icm"].values()) + cfg.probe_plan["icm"] == 290      # the prereg's ~290 a day
+    # the prereg's ~290 a day, less the demo trim (cost of record 2026-10-31 section 6): ICM probes 90 -> 24
+    assert sum(cfg.volume_plan["icm"].values()) + cfg.probe_plan["icm"] == 224
+    assert cfg.probe_plan == {"icm": 24, "vantage": 40}
     vol = {(v.broker, v.style): v for v in review.volume}
     icm = vol["icm", "scalp"]
     assert (icm.candidates, icm.fills, icm.plan) == (6, 1, 160)
     assert vol["icm", "intraday"].candidates == 1 and vol["vantage", "intraday"].candidates == 1  # never pooled
-    assert vol["icm", "probe"].plan == 90 and vol["icm", "swing"].candidates == 0
-    assert review.volume_total == 8 and review.plan_total == 290 + 80
-    assert review.of_plan == pytest.approx(8 / 370, abs=1e-6)
+    assert vol["icm", "probe"].plan == 24 and vol["icm", "swing"].candidates == 0
+    assert review.volume_total == 8 and review.plan_total == 224 + 80      # ICM 224 (probes 24 after the demo trim), Vantage 80
+    assert review.of_plan == pytest.approx(8 / 304, abs=1e-6)
 
 
 @pytest.mark.parametrize(("arm", "host", "n", "breached"), [
@@ -319,7 +321,7 @@ def test_volume_under_half_the_plan_on_two_trading_days_running_opens_an_issue_w
     second = _run(tmp_path, sink=sink)
     assert second.volume_low_days == 2
     [(_, title, body)] = sink.issues
-    assert "volume" in title.lower() and "global_cap" in body and "of 370 planned" in body
+    assert "volume" in title.lower() and "global_cap" in body and "of 304 planned" in body
     _blinded(body)
 
 
@@ -468,7 +470,7 @@ def test_the_owner_report_carries_the_blinded_review_lines(tmp_path):
     _run(tmp_path)
     text = build_digest(tmp_path, NOW + pd.Timedelta(minutes=30), settings=S)
     line = next(x for x in text.splitlines() if x.startswith("Review:"))
-    assert "ICM $0.37/oz" in line and "3 of 370 planned" in line
+    assert "ICM $0.37/oz" in line and "3 of 304 planned" in line
     _blinded(line)
 
 

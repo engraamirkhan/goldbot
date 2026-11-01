@@ -1,6 +1,6 @@
 # 2026-11-01: a broker-side "Service is not available" latched vantage-demo's login off for 6 h
 
-Status: open (the watchdog item below is dated)
+Status: closed (every prevention item shipped)
 Severity: S2 a service down, no trading impact
 Author: sre. Reviewed by: (code-reviewer, trading-safety-reviewer, security-reviewer on the PR).
 
@@ -52,7 +52,7 @@ start the bridge and the timer. `Invalid account`: stop; never retry.
 | --- | --- | --- | --- |
 | `-6` latches only when the journal names bad credentials or nothing known; `Service is not available`, `No connection`, server busy, timeout are retried under the backoff and hourly cap | test + code | goldbot/ops/login.py, tests/test_mt5_login.py | shipped (this PR) |
 | Runbook step: tell a broker-side `-6` from a refused password, and the one-try recovery | runbook | docs/RUNBOOK.md | shipped (this PR) |
-| Watchdog does not restart the terminal while the bridge reports `login: refused` (restarts cannot fix it), and the brain alerts on a standing refusal within 6 min | check | goldbot/ops/linux watchdog, health.py | open (sre, 2026-11-08) |
+| Watchdog never restarts the terminal while the login refusal mark stands (tested as mt5, never followed by root); the brain pages once per outage: `terminal:<account>` FAILs on `login: refused` with both recoveries, `bridge:<account>` FAILs after 5 min unreachable (warning before, one page per outage, closed after 3 min answering) | test + check | goldbot/ops/linux/goldbot-bridge-watchdog.sh, goldbot/ops/checks/bridge.py, goldbot/execution/bridge.py probe_terminal; tests/test_engine_watchdog.py, tests/test_mt5_terminal_state.py | shipped (2026-11-01, brought forward from 11-08) |
 
 ## Lessons
 - Went well: the latch held; no credential was resent into a real refusal. The terminal journal gave a definite answer.
