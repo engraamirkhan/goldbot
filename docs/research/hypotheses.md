@@ -524,3 +524,12 @@ Source: `growth-sprint-2026-11-01.md` section 2 (PR #251, K += 7 for C1-C4); ope
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | GS-C1/C2/C4 | Convex payoffs on 2010-2017 at 1.5 x measured ICM cost: C1 news straddle at NFP/CPI/FOMC (k 0.5, 1.0 x ATR15), C2 pyramided session-range breakout (Asia->London, London->NY; 1.5 x ATR15 stop, 3 adds at +1R, open risk <= 1 unit), C4 NR7 prior-day-range break with a 4 R target | **failed** 2026-11-01, 0 of 5 (prereg `fd02d0de`; `growth-screens-2026-11.md`): net mean R C2a -0.36, C2b -0.03, C4 +0.05, C1a +0.09 (whipsaw 64%), C1b -0.42; none beats its random twin at Bonferroni-7. Retired as specified except C1b, whose sign depends on 1m intrabar order (optimistic bracket +0.14 R, LB +0.01): tick re-measurement proposed, K +1 if slotted | 0 registry trials; K +5 of the director's +7, plus K +5 for the disclosed intrabar bracket (program K 3,014 with C3) | per variant: net mean 90% LB > 0, beats a 4-twin random-entry control with identical mechanics at Bonferroni-7, >= 5 of 8 years positive; else FAIL and retired as specified |
+
+## A24. Tick-proxy microstructure at 1m (microstructure researcher, 2026-11-01)
+
+Source: research-director brief 2026-11-01 (tick-level mechanisms not yet tried). Pre-registration
+`prereg-2026-11-01-micro-tick.md`; screen 2010-2017, matched random twins, one look each, Holm over 3.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| MT-VAC/TIM/SRR | VAC: fade a fast 3-min move (>= 3 ATR1m) made while the minute's mean spread is >= 1.5 x its median (liquidity vacuum); TIM: 5-min continuation of a tick-volume-weighted 1m sign imbalance (abs I5 >= 0.6, activity >= 1.5 x median); SRR: fade a tick-burst first pierce of the prior-day high/low closed back inside within 5 min. 1.5 x ICM cost of record plus spread-state surcharge, fill at t+1 open | pre-registered 2026-11-01 | K +3 (explore screen, 0 registry trials) | growth-sprint section 2 bar over 3 variants; FAIL retires each as specified at 1m resolution (SRR with R-14) |
