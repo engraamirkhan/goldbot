@@ -57,13 +57,12 @@ costs `cor-2026-10-31.2` ICM charged cells + long swap $0.60/oz/night. Output (s
 
 ## Consequences
 
-- ML-M1 and ML-M2: **failed** (`hypotheses.md` A24). **R-20 (extends R-07):** meta-label filters over the I0 random
+- ML-M1 and ML-M2: **failed** (`hypotheses.md` A27). **R-20 (extends R-07):** meta-label filters over the I0 random
   schedule (both sides) or I2B box-break candidates with this point-in-time set (price, volatility, session,
   COT/GLD positioning, tier-1 calendar) are retired. Reopening needs a new information source (order flow, options
   surface, author calls), not a new algorithm or a new subset of these columns.
 - 2018+ stays sealed. Nothing goes to demo.
-- **K +2** (one per model). Ledger: 3,014 (A22 growth row) + 2 = 3,016 for merged lanes; lanes still in flight add
-  their own.
+- **K +2** (one per model). Ledger: 3,023 (after A24-A26) + 2 = 3,025.
 
 ## Proposal for the research director (not run; needs a slot and its own pre-registration)
 
@@ -117,4 +116,4 @@ The research director approved the slot on 2026-11-01. Rule `prereg-ml-meta-labe
   labels: they pay in the 2012-2015 bear market and not otherwise. This is the regime-memory failure M1's reading
   warned about. It is not a stable filter.
 - M1c joins **R-20**. Prereg s.4 applies: no further geometry variants of M1 without a new information source.
-- **K +1.** The ledger is 3,016 + 1 = **3,017**.
+- **K +1.** The ledger is 3,025 + 1 = **3,026**.
