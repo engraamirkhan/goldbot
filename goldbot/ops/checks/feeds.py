@@ -321,6 +321,24 @@ def _at(ns: int | None) -> str:
     return "never" if ns is None else f"{pd.Timestamp(int(ns), tz='UTC'):%Y-%m-%d %H:%M}"
 
 
+def _growth_recorded(ctx: HealthContext) -> bool:
+    from goldbot.ops.growth_report import recorded
+    return _has_aux(ctx) and recorded(ctx.state_dir)
+
+
+@register_check("global", block=BLOCK_TAIL, pos=96, when=_growth_recorded)
+def check_growth_test(ctx: HealthContext) -> Check:
+    """Growth sprint 2026-11-01 (docs/research/growth-sprint-2026-11-01.md section 3): this risk week's growth test on
+    icm-demo, week-start equity, equity, multiple, GS1 against GS1C and the virtual ledgers (`ops.growth_report`).
+    Reporting only: OK with the reading, WARN when a source is unreadable; no line until a GS1/GS1C order or
+    candidate is recorded (`growth_report.recorded`)."""
+    from goldbot.ops.growth_report import growth_test, lines
+    g = growth_test(ctx.state_dir, now=ctx.now)
+    if g is None:
+        return Check(name="growth_test", status="ok", reason="no growth test recorded")
+    return Check(name="growth_test", status="warn" if g.errors else "ok", reason="; ".join(lines(g)))
+
+
 @register_check("global", block=BLOCK_TAIL, pos=97, when=lambda ctx: ctx.qualification is not None)
 def check_qualification(ctx: HealthContext) -> Check:
     """Owner rule 2026-10-30 (ADR 0061): "every strategy should have been back tested and qualified before it is tested

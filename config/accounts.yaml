@@ -112,7 +112,16 @@ accounts:
       # H-81 scalp strata, so they are retired on the scalp stop (-30 R in 300), never the intraday one; intraday 108 / 9 -> 68 / 7, swing 90 / 2 -> 40 / 2.
       # budget_share, max_open_total 17 and max_positions 18 unchanged. Until option A (one shared host budget) lands.
       # Rollback: drop the scalp pot and the H-81 arms, restore intraday 108 / 9 and swing 90 / 2, restart.
-      pots: { scalp: { gbp: 90, max_open: 8 }, intraday: { gbp: 68, max_open: 7 }, swing: { gbp: 40, max_open: 2 } }
+      # Growth sprint 2026-11-01 (docs/research/growth-sprint-2026-11-01.md section 3; owner instruction 2026-11-01):
+      # a growth pot for GS1 and its control GS1C, carved from the scalp pot inside the unchanged £198 (90 -> 10:
+      # ADR 0061 refuses every icm-demo scalp stratum, so ZCD, their control, is the only scalp arm still entering).
+      # No cap is loosened: the daily £220, the weekly 6%, the RiskGate's per-trade maximum, ADR 0043 X3 (0.10 net
+      # lots) and every pot still bind. GS1 and GS1C register the SAME per-trade cap and day (£24: GS1's room floor
+      # is min(3 x (cap + cost), 0.30 x £80) = £24, GS1C's fixed share 0.30 x £80 = £24), so the pair trades at the
+      # same size; `sizing: growth` lets the RiskGate size them above the minimum lot inside those bounds. Rollback:
+      # drop GS1/GS1C and the growth pot, scalp back to 90, restart.
+      pots: { scalp: { gbp: 10, max_open: 8 }, intraday: { gbp: 68, max_open: 7 }, swing: { gbp: 40, max_open: 2 },
+              growth: { gbp: 80, max_open: 2 } }
       arms:
         I0: { style: intraday, max_loss: 17.0, control_share: 0.30 }
         I2A: { style: intraday, max_loss: 17.0 }
@@ -165,6 +174,9 @@ accounts:
         Z9D: { style: scalp, max_loss: 6.5 }
         Z10D: { style: scalp, max_loss: 6.5 }
         ZCD: { style: scalp, max_loss: 6.5, control_share: 0.12 }
+        # growth sprint 2026-11-01: GS1 (owner experiment to 2026-11-27) and its random-entry control at the same size
+        GS1: { style: growth, max_loss: 24.0, sizing: growth }
+        GS1C: { style: growth, max_loss: 24.0, control_share: 0.30, sizing: growth }
   icm-probe:
     broker: icm
     mode: demo

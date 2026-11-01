@@ -860,7 +860,7 @@ def _place(eng: Engine, db: Database, intent: Intent, agent: Specialist, *, pid:
            record: Callable[[OrderResult, GateDecision, bool, float, pd.Timestamp, float], Any],
            repo: RecordRepo[Any] | None = None, over_cap: Callable[[float], str] | None = None,
            max_stop: float | None = None, before_send: Callable[[], None] | None = None,
-           native_distance: float | None = None) -> int | None:
+           native_distance: float | None = None, max_lots: float | None = None) -> int | None:
     """Every probe's order core, mirror and scheduled, and an exploration arm's (`repo`: its ledger, the probe ledger
     by default): `RiskGate.check` (the only path to an order) on the minimum-lot
     intent, the loss at the stop the gate set within `max_loss` and the budget `headroom`, then `Engine._execute`
@@ -874,7 +874,9 @@ def _place(eng: Engine, db: Database, intent: Intent, agent: Specialist, *, pid:
     side, price = intent.side, intent.price
     gd = eng.gate.check(intent, eng.state, close_ts, margin_required=broker_margin(eng.broker, eng.cfg.symbol),
                         throttle=eng._agent_throttle(intent.agent_id, intent.timeframe, close_ts))
-    if not gd.allowed or gd.lots > intent.volume_min + 1e-9:
+    # the minimum lot, or a growth arm's allowed lot (`exploration.growth_lots`, growth sprint 2026-11-01): every
+    # other caller passes no `max_lots` and keeps the minimum-lot rule exactly
+    if not gd.allowed or gd.lots > (intent.volume_min if max_lots is None else max_lots) + 1e-9:
         refuse(",".join(gd.reasons or ["above_minimum_lot"]))
         return None
     if max_stop is not None and gd.stop_distance > max_stop + 1e-9:     # the gate floored it wider than allowed
