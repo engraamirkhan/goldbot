@@ -259,6 +259,8 @@ def boot_p(day: np.ndarray, r: np.ndarray, rng: np.random.Generator) -> tuple[fl
 
 
 def stats(real: list[dict[str, Any]], twins: list[dict[str, Any]], rng: np.random.Generator) -> dict[str, Any]:
+    if not real:
+        return {"n": 0, "pass": False}
     df, tw = pd.DataFrame(real), pd.DataFrame(twins)
     r = df.R.to_numpy(float)
     lb, p_a = boot_p(df.day.to_numpy(), r, rng)
