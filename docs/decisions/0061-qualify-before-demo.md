@@ -66,3 +66,30 @@ the demo fills were being read as discovery evidence for rules that history had 
 - F1A and G1A run unqualified only as cost measurements, and only until their cost reads are full. Their demo fills
   are never strategy evidence.
 - `ops.autodisc_register` must write a qualification (its confirm read) before a discovered arm can trade.
+
+## Amendment 2026-11-01 (owner instruction 2026-11-01; growth sprint)
+Context: the owner's goal of 2026-11-01 was "double the capital per week ... start proving it on demo accounts from
+tonight's open". The research director's plan (docs/research/growth-sprint-2026-11-01.md section 3) runs GS1 (C2, the
+session-range breakout) on icm-demo before C2's screen and confirm have reported. The owner instruction overrides this
+rule for that one experiment.
+
+- **A third exempt role, `owner_experiment`, closed to an explicit list in code:** `research.arms.OWNER_EXPERIMENTS` =
+  {(icm-demo, GS1): last day 2026-11-27}, keyed by account and arm. The role on any other id is refused, and GS1
+  registered on any other account is refused at load (trading-safety review LOW 3). After the last day (UTC) the arm is refused like
+  any unqualified strategy, with the reason "the owner experiment GS1 expired after 2026-11-27".
+  - The engine re-reads the expiry once a minute (`exploration.refresh_owner_experiments`), so the expiry needs no
+    restart.
+  - At start the engine journals each running owner experiment (`exploration_arm_owner_experiment`, with `until`).
+    The expiry is journalled as `exploration_arm_unqualified`.
+- **GS1C**, GS1's random-entry control, is an ordinary `control` role (rule `session_range_control`, `params.control`).
+  It stops with GS1 at the expiry: the engine refuses any control whose `params.control` names an expired owner
+  experiment (trading-safety review LOW 2).
+- **Every other arm keeps this rule.** A later experiment needs its own entry in OWNER_EXPERIMENTS and its own dated
+  amendment here. A config edit cannot exempt an arm.
+- **GS1's fills are labelled "unqualified, owner experiment"** and are never qualification evidence. GS1 comes back
+  only through the normal route (a passing screen and confirm on its rows). Its kill rule is the pre-registered excess
+  read in section 3 of the growth-sprint doc. The code expiry ends its entries whatever that read says.
+
+Consequences: icm-demo gains GS1 (until 2026-11-27) and GS1C, in a growth pot of £80 carved from its scalp pot inside
+the unchanged £198. No cap moves: the daily £220, the weekly 6%, the RiskGate's per-trade maximum and ADR 0043 X3 all
+still bind. Open positions keep every exit after the expiry.

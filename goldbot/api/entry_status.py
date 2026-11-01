@@ -117,6 +117,8 @@ REASONS: dict[str, Reason] = {
                                   f"{NOTHING}: refused here by design.", "wait"),
     "exploration_arm_unregistered": _r("Exploration trade refused: its arm is not registered for this account",
                                        "A settings error: add the arm under exploration.arms, or report it.", "act"),
+    "exploration_growth_lots": _r("Growth test trade refused: the size the gate chose is outside its allowed lots",
+                                  f"{NOTHING}: the growth test's size bounds are applied by design.", "wait"),
     "exploration_arm_cap": _r("Exploration trade skipped: its stop would lose more than the arm's limit",
                               f"{NOTHING}: wide-stop entries are skipped by design.", "wait"),
     "entry_reasons_missing": _r("Can't check whether new trades are allowed: this engine version doesn't report it",
