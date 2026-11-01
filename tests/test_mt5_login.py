@@ -534,3 +534,82 @@ def test_an_ipc_timeout_names_the_server_and_the_servers_dat_check(stored, led, 
     assert "-10005" in r.reason and acc.server in r.reason
     assert "servers.dat" in r.reason and "config" in r.reason.lower() and "server name" in r.reason
     _no_secret(r.reason)
+
+
+# ---- incident 2026-11-01: a broker-side "Service is not available" (-6 too) must not latch the password off
+def _journal(tmp_path, lines: list[tuple[str, str]], day: str = "20261101") -> str:
+    """A terminal dir with a UTF-16LE journal like the terminal's own logs/<YYYYMMDD>.log; returns terminal_path."""
+    (tmp_path / "term" / "logs").mkdir(parents=True, exist_ok=True)
+    body = "".join(f"HQ\t2\t{t}\tNetwork\t{msg}\r\n" for t, msg in lines)
+    (tmp_path / "term" / "logs" / f"{day}.log").write_bytes(("\ufeff" + body).encode("utf-16-le"))
+    return str(tmp_path / "term" / "terminal64.exe")
+
+
+def _local(day: str, hms: str) -> float:
+    from datetime import datetime
+    return datetime.strptime(f"{day} {hms}", "%Y%m%d %H:%M:%S").timestamp()   # the terminal logs in local time
+
+
+def _acc_at(path: str) -> accounts.Account:
+    return _acc().model_copy(update={"terminal_path": path})
+
+
+def test_the_journal_reason_of_an_authorization_failure_is_read_scrubbed(tmp_path):
+    path = _journal(tmp_path, [("01:28:09.481", f"'{LOGIN}': connection to X-Demo lost"),
+                               ("01:32:26.434", f"'{LOGIN}': authorization on X-Demo failed (Service is not available)")])
+    why = mt5_login.journal_auth_failure(path, _local("20261101", "01:32:25"))
+    assert why == "Service is not available"
+    assert mt5_login.journal_auth_failure(path, _local("20261101", "01:33:00")) is None   # older than the attempt
+
+
+def test_a_missing_journal_gives_no_reason(tmp_path):
+    assert mt5_login.journal_auth_failure(str(tmp_path / "none" / "terminal64.exe"), time.time()) is None
+    assert mt5_login.journal_auth_failure(r"C:\MT5\Nowhere\terminal64.exe", time.time()) is None
+
+
+def test_a_broker_side_unavailable_is_not_latched_and_is_retried_under_the_backoff(stored, led, clock, tmp_path,
+                                                                                    monkeypatch):
+    monkeypatch.setattr(mt5_login, "journal_auth_failure", lambda path, since: "Service is not available")
+    api = FakeMT5(fail=[(-6, "Terminal: Authorization failed")])
+    waits: list[float] = []
+    r = mt5_login.login_terminal(_acc(), api, FAST, ledger=led, sleep=_recording(waits, clock))
+    assert r.ok and len(api.calls) == 2 and waits == [5.0]   # the second try waited the backoff, then logged in
+    assert led.refusal() is None
+
+
+def test_a_broker_side_unavailable_reports_a_failure_not_a_refusal(stored, led, clock, monkeypatch):
+    monkeypatch.setattr(mt5_login, "journal_auth_failure", lambda path, since: "Service is not available")
+    r = _login(FakeMT5(fail=[(-6, "Terminal: Authorization failed")] * 9), led, clock)
+    assert not r.ok and r.status == "failed" and r.code == -6
+    assert "Service is not available" in r.reason and "stored again" not in r.reason
+    assert led.refusal() is None
+
+
+def test_an_unavailable_broker_restart_loop_stays_under_the_hourly_cap(stored, led, clock, monkeypatch):
+    monkeypatch.setattr(mt5_login, "journal_auth_failure", lambda path, since: "Service is not available")
+    api = FakeMT5(fail=[(-6, "Terminal: Authorization failed")] * 999)
+
+    def make() -> str:
+        raise RuntimeError("mt5.initialize failed: (-10005, 'IPC timeout')")
+    start = clock.t
+    while clock.t - start < 3600:                             # an hour of systemd restarts every 10 s
+        with pytest.raises(RuntimeError):
+            mt5_login.attach_terminal(_acc(), api, FAST, make, ledger=LoginLedger("icm-probe", led._dir, clock=clock),
+                                      sleep=clock.sleep)
+        clock.t += 10
+    assert 1 < len(api.calls) <= FAST.max_attempts_per_hour
+
+
+@pytest.mark.parametrize("why", ["Invalid account", "Invalid password", None, "something new"])
+def test_a_bad_or_unknown_authorization_failure_still_latches(stored, led, clock, monkeypatch, why):
+    monkeypatch.setattr(mt5_login, "journal_auth_failure", lambda path, since: why)
+    api = FakeMT5(fail=[(-6, "Terminal: Authorization failed")] * 3)
+    r = _login(api, led, clock)
+    assert r.status == "refused" and not r.retry and len(api.calls) == 1 and led.refusal() is not None
+
+
+def test_the_real_journal_path_is_used_on_a_refusal(stored, led, clock, tmp_path):
+    clock.t = _local("20261101", "01:32:26")
+    path = _journal(tmp_path, [("01:32:26.434", f"'{LOGIN}': authorization on X-Demo failed (Service is not available)")])
+    r = _login(FakeMT5(fail=[(-6, "Terminal: Authorization failed")]), led, clock, acc=_acc_at(path))
+    assert r.ok and led.refusal() is None
