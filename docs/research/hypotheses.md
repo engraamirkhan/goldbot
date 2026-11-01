@@ -494,3 +494,15 @@ Source: `prereg-amendment-2026-10-30-kill-rules.md` A4; pre-registration `prereg
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | H-85 | A bounded G2 search over v1's vocabulary plus 13 when-to-trade gates (HAR range band, NR4/NR7, tier-1 event day, real-yield and dollar 20-day change sign, GVZ tercile), the r4h side and 5 exits (time, 1R/2R/3R, break-even trail) finds a 1h/4h/1d rule with own net mean R >= +0.05 R at measured costs that beats its own search null, the shift null and the plateau test | **failed** 2026-10-31, 0 survivors on 1h/4h/1d (prereg `513f088c`, code `2ccbc8e5`; `discovery-v2-screen-2026-11.md`): best fitness 0.985 / 0.325 / -0.123 vs null bars 1.430 / 0.903 / 0.881; batch SPA p 0.044 / 0.479 / 0.845, PBO 0.35 / 0.62 / 0.51. Retired R-18; generation freezes 2026-11-20 | 0 registry trials; K +1,704 | 0 survivors on all three: generation freezes 2026-11-20 (A4); >= 1: generation continues, confirm only at DSR >= 0.95 at K 2,968 and with a slot |
+
+## A22. Positioning and flows at 1d decisions / 1-week holds (macro researcher, 2026-11-01)
+
+Source: R-18 ("a new generation needs a new information source: COT, ETF flows"). Pre-registration
+`prereg-positioning-2026-11-01.md`, frozen by commit before any outcome; screen 2010-2017, matched random-entry control,
+one look each; holdout sealed unless a screen passes. Closes the rule forms of H-09 and H-12 (their feature columns stay).
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| H-86 | P1_EXT: managed-money net % OI in its 156-report bottom decile -> long, top decile -> short, weekly decision, 1-week hold, 1R = 1.5 ATR(1d) stop | **pre-registered** 2026-11-01 | screen K +1; confirm 1 registry trial if the screen passes | prereg s.5: n >= 50, Holm p < 0.05 net, gross t >= 2, >= 5/8 years, net > 0 at 1.5x, net >= +0.05 R, net > matched-control q95 |
+| H-87 | P2_FLOW: -sign(weekly change of MM net % OI) when the change is in the top third of its 52-report range (Kang, Rouwenhorst & Tang 2020 liquidity-provision sign), 1-week hold | **pre-registered** 2026-11-01 | as H-86 | as H-86 |
+| H-88 | P3_ETF: sign(5-day % change in GLD tonnes) when in the top third of its 252-day range (flow momentum), daily decision, one at a time, 1-week hold | **pre-registered** 2026-11-01 | as H-86 | as H-86 |
