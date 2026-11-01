@@ -3,7 +3,7 @@
 Every row has value_date (what the number is about), available_utc (when the system could have
 known it) and vintage (the realtime_start FRED reports, the retrieval date for the public fredgraph CSV that the
 data-macro workflow publishes on release `macro-v1`). COT positioning and GLD holdings live in
-goldbot/data/positioning.py (release `positioning-v1`).
+goldbot/data/positioning.py (local files only).
 Features only ever join on available_utc via `store.asof_join`.
 """
 from __future__ import annotations

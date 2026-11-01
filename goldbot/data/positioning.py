@@ -1,6 +1,7 @@
 """Positioning and flow data for research, point in time: CFTC Commitments of Traders for COMEX gold and SPDR Gold
-Shares (GLD) holdings. The data-positioning workflow builds the file and publishes it on release `positioning-v1`
-(Claude sandboxes cannot reach cftc.gov or spdrgoldshares.com; GitHub's runners can).
+Shares (GLD) holdings, built and kept locally (scripts/positioning_data.py, goldbot/data/positioning_local.py; market
+data is never published). Release `positioning-v1` is retired and must not be used (look-ahead stamps: every
+legacy row stamped 2026-10-31).
 
 Every row: series, series_id, value_date (what the number is about), value, vintage (the date it was retrieved),
 available_utc (a conservative time it was public), ts_utc (= available_utc) and source (`cftc` or `spdr`). Features join
