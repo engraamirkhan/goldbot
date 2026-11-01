@@ -1,7 +1,7 @@
 """Positioning and flow features (opt-in): COT managed-money pressure and GLD holdings flow, point in time.
 
-Inputs: ctx["positioning"], the long table of release `positioning-v1` (goldbot/data/positioning.py). Each value is
-computed on its series' first releases (a later revision never changes what an earlier bar saw) and reaches the bars
+Inputs: ctx["positioning"], the local long table (goldbot/data/positioning.py; never release `positioning-v1`).
+Each value is computed on its series' first releases (a later revision never changes what an earlier bar saw) and reaches the bars
 only through `store.asof_join` on available_utc.
 
 Columns:
@@ -12,8 +12,8 @@ Columns:
 
 Opt-in: this module is NOT imported by goldbot.features and registers nothing on import. `enable()` registers the
 `positioning` feature; scripts/research_pass.py calls it only with `--positioning`. So the default feature set and its
-feature version (what the live engine builds) do not change, whatever is installed or loaded. (goldbot/research's
-OPT_IN_FEATURES list would be the more uniform home for this; it is outside this change's lane.)
+feature version (what the live engine builds) do not change, whatever is installed or loaded; goldbot/research's
+OPT_IN_FEATURES lists the name so `DEFAULT_FEATURE_NAMES` excludes it even when it was enabled first.
 """
 from __future__ import annotations
 

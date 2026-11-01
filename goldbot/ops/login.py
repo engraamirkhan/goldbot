@@ -9,9 +9,15 @@ One routine, `login_terminal`, used by the command and by the bridge (goldbot/op
 * then it checks the terminal is on exactly that account (`accounts.verify_terminal_account`: login, server, demo vs
   real, hedging). A mismatch is failed and never retried; the bridge then refuses every call (wrong_account), as before;
 * what was sent is kept across restarts (goldbot/ops/login_ledger.py; security review HIGH, trading-safety MEDIUM 1-2):
-  a refused password (-6) is never sent again until the password or login is stored again (`goldbot-mt5 accounts set
+  a refused password (-6 with the terminal journal naming bad credentials, or naming nothing it knows) is never sent
+  again until the password or login is stored again (`goldbot-mt5 accounts set
   mt5-<account>`), a success, or `--retry-refused` (one deliberate try); other failures wait a doubling backoff from
   the end of the last login, and at most `max_attempts_per_hour` logins are sent per hour, whatever restarts the bridge;
+* the MetaTrader5 package gives the same -6 "Authorization failed" when the broker's auth service is down (weekend
+  maintenance: "Service is not available"), so on -6 the terminal's own journal (<terminal dir>/logs/<YYYYMMDD>.log)
+  is read for the reason of the failure written during this attempt; only a reason in BROKER_UNAVAILABLE is treated
+  as a timeout (backoff, hourly cap, never latched). Unknown, unreadable or absent reasons latch as before
+  (incident 2026-11-01, docs/incidents/2026-11-01-vantage-demo-transient-auth-latched.md);
 * what it prints, logs and returns names the account id only: the login and the password are scrubbed from any terminal
   error text, and neither is ever formatted into a message.
 Real-money accounts take the same path, for their own configured login only: this changes no authority (the phase gate,
@@ -26,10 +32,12 @@ probe), and meanwhile /health answers not_logged_in with `login: in_progress` an
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sys
 import threading
 import time
+from datetime import date, datetime, timedelta
 from typing import Any, Callable, Literal, TypeVar
 
 from goldbot.base import FrozenRecord
@@ -46,6 +54,12 @@ AUTH_FAILED = -6          # RES_E_AUTH_FAILED: the broker refused the password (
 # RES_E_UNSUPPORTED. Everything else (-10005 IPC timeout, -10004 no IPC, -1 generic, ...) may pass on a later try.
 PERMANENT_ERRORS = frozenset({-2, AUTH_FAILED, -7})
 IPC_TIMEOUT = -10005
+# Reasons in the terminal journal's "authorization on <server> failed (<reason>)" that say the broker could not judge
+# the password at all (its service was down or unreachable). Lower case, matched exactly. Anything else latches.
+BROKER_UNAVAILABLE = frozenset({"service is not available", "no connection", "server is busy", "server busy",
+                                "too many requests", "timeout"})
+_AUTH_FAILED_LINE = re.compile(r"authorization on .+ failed \((?P<why>[^()]{1,80})\)")
+JOURNAL_SLACK_S = 2.0
 VK_ESCAPE = 0x1B
 _LONG_DIGITS = re.compile(r"\d{5,}")
 LoginStatus = Literal["ok", "failed", "refused", "rate_limited"]
@@ -82,6 +96,44 @@ def dismiss_wizard() -> None:
         time.sleep(1.0)
 
 
+def _terminal_dir(terminal_path: str) -> str:
+    cut = max(terminal_path.rfind("\\"), terminal_path.rfind("/"))
+    return terminal_path[:cut] if cut > 0 else "."
+
+
+def journal_auth_failure(terminal_path: str, since: float) -> str | None:
+    """The reason of the last "authorization on <server> failed (<reason>)" line the terminal wrote to its journal
+    (<terminal dir>/logs/<YYYYMMDD>.log, UTF-16, local time) at or after `since` (epoch seconds), scrubbed of long
+    digit runs; None when there is none or the journal cannot be read (a caller then treats -6 as a refusal)."""
+    start = datetime.fromtimestamp(since) - timedelta(seconds=JOURNAL_SLACK_S)
+    days = sorted({start.date(), datetime.fromtimestamp(time.time()).date(), datetime.fromtimestamp(since).date()})
+    found: str | None = None
+    for day in days:
+        try:
+            raw = open(os.path.join(_terminal_dir(terminal_path), "logs", f"{day:%Y%m%d}.log"), "rb").read()
+        except OSError:
+            continue
+        text = raw.decode("utf-16", errors="replace") if raw[:2] in (b"\xff\xfe", b"\xfe\xff") or b"\x00" in raw[:64] \
+            else raw.decode("utf-8", errors="replace")
+        for line in text.splitlines():
+            found = _journal_match(line, day, start) or found
+    return found
+
+
+def _journal_match(line: str, day: date, start: datetime) -> str | None:
+    parts = line.split("\t")
+    if len(parts) < 5:
+        return None
+    m = _AUTH_FAILED_LINE.search(parts[4])
+    if m is None:
+        return None
+    try:
+        at = datetime.combine(day, datetime.strptime(parts[2].strip()[:8], "%H:%M:%S").time())
+    except ValueError:
+        return None
+    return _LONG_DIGITS.sub("***", m.group("why").strip()) if at >= start else None
+
+
 def refused_reason(acc: accounts.Account, mark: str) -> str:
     return (f"password refused by the broker ({mark}); nothing is sent until it is stored again: update it with "
             f"`goldbot-mt5 accounts set mt5-{acc.account_id}`")
@@ -101,7 +153,7 @@ def _gate(acc: accounts.Account, ledger: LoginLedger, settings: Mt5LoginSettings
 
 
 def _send(acc: accounts.Account, password: str, api: Any, settings: Mt5LoginSettings, *,
-          attached: bool) -> LoginResult:
+          attached: bool, since: float | None = None) -> LoginResult:
     from goldbot.execution.mt5_adapter import MT5_INIT_TIMEOUT_MS, account_info_from_mt5
     assert acc.login is not None
     creds = {"login": int(acc.login), "password": password, "server": acc.server}
@@ -117,6 +169,11 @@ def _send(acc: accounts.Account, password: str, api: Any, settings: Mt5LoginSett
         code, msg = _last_error(api)
         what = "login" if attached else "initialize"
         if code == AUTH_FAILED:
+            why = journal_auth_failure(acc.terminal_path, time.time() if since is None else since)
+            if why is not None and why.lower() in BROKER_UNAVAILABLE:
+                return LoginResult(ok=False, code=code, retry=True,
+                                   reason=f"{what} failed: ({code}, broker unavailable: {why}); not a refused "
+                                          "password: retried after the backoff, within the hourly cap")
             return LoginResult(ok=False, status="refused", code=code,
                                reason=f"{what} failed: ({code}, {_scrub(msg, acc, password)}): "
                                       + refused_reason(acc, f"code {code}"))
@@ -181,13 +238,14 @@ def login_terminal(acc: accounts.Account, api: Any, settings: Mt5LoginSettings, 
                 dismiss()
             except Exception:                        # noqa: BLE001 - best effort only
                 log.info("could not press Escape on the terminal window; logging in anyway")
+        started = ledger.now()
         ledger.begin()
-        result = _send(acc, password, api, settings, attached=attached)
+        result = _send(acc, password, api, settings, attached=attached, since=started)
         ledger.finish(result.ok)
         if result.ok:
             ledger.clear_refusal()
             break
-        if result.code == AUTH_FAILED:
+        if result.status == "refused":
             ledger.mark_refused(AUTH_FAILED)
         if not result.retry:
             break

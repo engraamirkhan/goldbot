@@ -51,6 +51,10 @@ class LoginLedger:
     def _attempts(self) -> Path:
         return self._dir / f"{self.account_id}.attempts"
 
+    def now(self) -> float:
+        """The ledger's clock (epoch seconds), so callers time an attempt on the same clock as its records."""
+        return self._clock()
+
     # ------------------------------------------------------------------ refusal
     def refusal(self) -> str | None:
         """"<UTC time> code <n>" while the password stands refused, else None."""
