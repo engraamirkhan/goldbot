@@ -494,3 +494,11 @@ Source: `prereg-amendment-2026-10-30-kill-rules.md` A4; pre-registration `prereg
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | H-85 | A bounded G2 search over v1's vocabulary plus 13 when-to-trade gates (HAR range band, NR4/NR7, tier-1 event day, real-yield and dollar 20-day change sign, GVZ tercile), the r4h side and 5 exits (time, 1R/2R/3R, break-even trail) finds a 1h/4h/1d rule with own net mean R >= +0.05 R at measured costs that beats its own search null, the shift null and the plateau test | **failed** 2026-10-31, 0 survivors on 1h/4h/1d (prereg `513f088c`, code `2ccbc8e5`; `discovery-v2-screen-2026-11.md`): best fitness 0.985 / 0.325 / -0.123 vs null bars 1.430 / 0.903 / 0.881; batch SPA p 0.044 / 0.479 / 0.845, PBO 0.35 / 0.62 / 0.51. Retired R-18; generation freezes 2026-11-20 | 0 registry trials; K +1,704 | 0 survivors on all three: generation freezes 2026-11-20 (A4); >= 1: generation continues, confirm only at DSR >= 0.95 at K 2,968 and with a slot |
+
+## A22. Growth sprint screens C1, C2, C4 (exits researcher, 2026-11-01)
+
+Source: `growth-sprint-2026-11-01.md` section 2 (PR #251, K += 7 for C1-C4); operational details `prereg-growth-2026-11-01.md`. IDs carry the GS- prefix so parallel lanes cannot collide on H numbers.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| GS-C1/C2/C4 | Convex payoffs on 2010-2017 at 1.5 x measured ICM cost: C1 news straddle at NFP/CPI/FOMC (k 0.5, 1.0 x ATR15), C2 pyramided session-range breakout (Asia->London, London->NY; 1.5 x ATR15 stop, 3 adds at +1R, open risk <= 1 unit), C4 NR7 prior-day-range break with a 4 R target | pre-registered 2026-11-01 | 0 registry trials; K +5 of the director's +7 (3,002 -> 3,009 with C3) | per variant: net mean 90% LB > 0, beats a 4-twin random-entry control with identical mechanics at Bonferroni-7, >= 5 of 8 years positive; else FAIL and retired as specified |
