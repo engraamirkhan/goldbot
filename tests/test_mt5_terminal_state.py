@@ -351,6 +351,7 @@ def test_a_standing_login_refusal_fails_with_the_recovery_in_the_text(tmp_path, 
     ctx = make_ctx(tmp_path, terminal_probe=lambda u: (state, 30, "refused"),
                    get_secret=lambda k: "http://127.0.0.1:18765" if k == "mt5-bridge-url-icm-demo" else "s3cr3t-value")
     c = health.check_terminal(ctx, "icm-demo")
+    assert c is not None
     assert c.name == "terminal:icm-demo" and c.status == "fail"
     assert "login refused" in c.reason and "does not heal by itself" in c.reason
     assert "RUNBOOK 'MT5 login'" in c.reason and "--retry-refused" in c.reason
@@ -361,7 +362,8 @@ def test_a_standing_login_refusal_fails_with_the_recovery_in_the_text(tmp_path, 
 def test_a_login_token_beside_a_terminal_that_is_ok_changes_nothing(tmp_path):
     ctx = make_ctx(tmp_path, terminal_probe=lambda u: ("ok", 30, "refused"),
                    get_secret=lambda k: "http://127.0.0.1:18765" if k == "mt5-bridge-url-icm-demo" else "s3cr3t-value")
-    assert health.check_terminal(ctx, "icm-demo").status == "ok"
+    c = health.check_terminal(ctx, "icm-demo")
+    assert c is not None and c.status == "ok"
 
 
 # ---- incident 2026-11-01: a bridge down for hours paged nothing useful; one clear page per outage, inside 6 min
