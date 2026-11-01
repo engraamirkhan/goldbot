@@ -128,3 +128,17 @@ cost; one-at-a-time book of the top decile; GBP per trade at 0.01 lot.
 ## 8. Owner-only flags
 
 None arise from a screen. Sizing, instruments, live trading and budget stay owner decisions; a pass changes none of them.
+
+## Amendment 1 (2026-11-01, before any label statistic, model fit or read)
+
+The dry run (`--dry`: counts, feature coverage and the lookahead test only; no label statistic printed, no model
+fitted) found one description error in s.2 and fixes the counts:
+
+- **M2's stop is the I2B rule's own structural stop** (`box_break_close.decide_with_stop` with the arm's
+  `stop_atr: 1.0` parameter), not 1.0 x ATR14(15m). The generator is unchanged (hash `ccd052649a9dc2f9` governs);
+  median risk $0.61/oz, so the charged cost is about 0.3-0.5 R a trade and M2 is a cost-dominated pool. Pass bar
+  unchanged.
+- Candidates after the s.2 filters: **M1 41,862** (20,931 decisions x 2 sides; 5,106-5,408 a year, median risk
+  $2.52/oz), **M2 3,102** (346-465 a year). Both clear leg (a)'s 3,000; M2's top decile is about 310 (>= 300).
+- Lookahead test: 12 cuts x 50 rows x 39 market columns, 0 mismatches.
+- Feature NaN shares (LightGBM native): at most 4.1% (`d1_atr_ratio_14_100`, the 100-day warm-up); all others <= 1.3%.
