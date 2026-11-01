@@ -4,7 +4,7 @@ Opportunity researcher, 2026-11-01. Pre-registration `prereg-opportunity-signals
 before any outcome. Code `candidates/opportunity_signals/opp_screen.py` (sha256 `7ba7c7cd...`; a typing-only edit after
 the run, re-run byte-identical). One look per rule on local Dukascopy 1m bars 2010-01-01..2017-12-31. The loader
 asserts no 2018+ bar was read, and the holdout stays sealed. Cost `cor-2026-10-31.2` ICM at 1.5x, plus overshoot on
-stops and the long swap prior. Explore screen: **K +3** (base ~3,020 -> ~3,023), 0 registry trials.
+stops and the long swap prior. Explore screen: **K +3** (program K 3,014 -> 3,017), 0 registry trials.
 
 **Verdict: 0 of 3 pass.** SA FAIL, SB COUNT (n 90 < 100, and no signal anyway), SD FAIL. The two declined lines (c, b-ii)
 cost K +0 (prereg section 0).
