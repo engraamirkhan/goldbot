@@ -494,3 +494,12 @@ Source: `prereg-amendment-2026-10-30-kill-rules.md` A4; pre-registration `prereg
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | H-85 | A bounded G2 search over v1's vocabulary plus 13 when-to-trade gates (HAR range band, NR4/NR7, tier-1 event day, real-yield and dollar 20-day change sign, GVZ tercile), the r4h side and 5 exits (time, 1R/2R/3R, break-even trail) finds a 1h/4h/1d rule with own net mean R >= +0.05 R at measured costs that beats its own search null, the shift null and the plateau test | **failed** 2026-10-31, 0 survivors on 1h/4h/1d (prereg `513f088c`, code `2ccbc8e5`; `discovery-v2-screen-2026-11.md`): best fitness 0.985 / 0.325 / -0.123 vs null bars 1.430 / 0.903 / 0.881; batch SPA p 0.044 / 0.479 / 0.845, PBO 0.35 / 0.62 / 0.51. Retired R-18; generation freezes 2026-11-20 | 0 registry trials; K +1,704 | 0 survivors on all three: generation freezes 2026-11-20 (A4); >= 1: generation continues, confirm only at DSR >= 0.95 at K 2,968 and with a slot |
+
+## A22. Event-minute drift (research director memo 2026-11-01; `decision-2026-11-01-next-lines.md` line 1)
+
+Source: director's explore of 14 US calendar event types on 2010-2017 (K 30 recounted: 14 types x 2 directions +
+the 5m window + the 60m hold). Pre-registration `prereg-h89-fomc-2026-11-01.md`, code `a5f413b0`.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| H-89 | After a scheduled FOMC statement (14:00 New York), sign(mid t+5m - mid t-1m) continues to t+60m: entry t+6m close at ask/bid, exit t+60m at bid/ask, net of $0.08 commission + $0.30 slippage. Explore 2010-2017: n 64, +$3.11 net at entry t+6m (t 3.21), 8/8 years; placebo Wednesdays -$0.08 | **failed 2026-11-01, retired final** (`h89-fomc-confirm-2026-11.md`): 2018-01..2025-09 n 62, mean net -$1.23, t -0.82, 3 of 8 years positive, 50% positive; top-5 removed -$2.74. Do not re-test post-FOMC continuation on another window, entry minute, horizon or subset without a new mechanism or data source | 1 registry trial (local sidecar, sync owed via PR #243); explore K 30 + confirm K 1 -> ledger ~3,002 | PASS only if mean net > 0 with t >= 2, >= 5 of 8 years positive, share > 0 >= 55%; any leg fails -> retired |
