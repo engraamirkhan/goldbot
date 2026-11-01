@@ -1,6 +1,7 @@
 """MT5 bridge health checks: /health through the tunnel, compatibility, broker server clock."""
 from __future__ import annotations
 
+import sqlite3
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -13,10 +14,67 @@ if TYPE_CHECKING:
     from goldbot.ops.health import HealthContext
 
 
+# Incident 2026-11-01: a bridge in a restart loop for 6 h. One page per outage, inside the 6-minute alert objective:
+# unreachable under BRIDGE_DOWN_FAIL_S is a warning (a deploy or a restart passes), then a FAIL that names the causes
+# and the steps. The outage's start is kept in state/BRIDGE_DOWN_FILE (SQLite: robust-storage rule) across health
+# runs, so a bridge that answers now and then (a restart loop) cannot restart the clock; an outage that reached FAIL
+# stays one incident until the bridge has answered for BRIDGE_UP_CLOSE_S (no recovered + new page on every flap). A
+# record that cannot be read or written fails at once, as before this change: never silent.
+BRIDGE_DOWN_FAIL_S = 5 * 60
+BRIDGE_UP_CLOSE_S = 3 * 60
+BRIDGE_DOWN_FILE = "health_outages.db"
+
+
+def _outage(ctx: HealthContext, account_id: str, down: bool) -> tuple[float, float | None] | None:
+    """(seconds since the outage began, seconds the bridge has answered again after an outage that reached FAIL, else
+    None) after recording this probe; (0, None) when nothing is to be said; None when the record is unusable."""
+    now = ctx.now.timestamp()
+    try:
+        con = sqlite3.connect(ctx.state_dir / BRIDGE_DOWN_FILE, timeout=5.0)
+    except (sqlite3.Error, OSError):
+        return None
+    try:
+        with con:
+            con.execute("CREATE TABLE IF NOT EXISTS bridge_outage (account TEXT PRIMARY KEY, since REAL NOT NULL, "
+                        "answered REAL, failed INTEGER NOT NULL DEFAULT 0)")
+            row = con.execute("SELECT since, answered, failed FROM bridge_outage WHERE account = ?",
+                              (account_id,)).fetchone()
+            if row is None:
+                if down:
+                    con.execute("INSERT INTO bridge_outage (account, since) VALUES (?, ?)", (account_id, now))
+                return 0.0, None
+            since, failed = float(row[0]), bool(row[2])
+            if down:
+                failed = failed or now - since >= BRIDGE_DOWN_FAIL_S
+                con.execute("UPDATE bridge_outage SET answered = NULL, failed = ? WHERE account = ?",
+                            (int(failed), account_id))
+                return now - since, None
+            back = now if row[1] is None else float(row[1])
+            if now - back >= BRIDGE_UP_CLOSE_S:          # the incident is over; the next outage starts afresh
+                con.execute("DELETE FROM bridge_outage WHERE account = ?", (account_id,))
+                return 0.0, None
+            con.execute("UPDATE bridge_outage SET answered = ? WHERE account = ?", (back, account_id))
+            return (now - since, now - back) if failed else (0.0, None)
+    except (sqlite3.Error, OSError, TypeError, ValueError):
+        return None
+    finally:
+        con.close()
+
+
+def _bridge_down_reason(account_id: str, minutes: int, why: str) -> str:
+    return (f"MT5 bridge unreachable for {minutes} min ({why[:160]}): no ticks, no entries and no position management "
+            "by goldbot on this account; open positions keep their broker stop and target. On the MT5 box: `sudo "
+            f"journalctl -u goldbot-bridge@{account_id} -n 30`. 'password refused by the broker' there is a latched "
+            "login that no restart clears: RUNBOOK 'MT5 login' (read the terminal journal before --retry-refused); "
+            "otherwise RUNBOOK 'Terminal down'.")
+
+
 @register_check("account", block=BLOCK_ACCOUNT, pos=110)
-def check_bridge(ctx: HealthContext, account_id: str) -> Check | None:
+def check_bridge(ctx: HealthContext, account_id: str, *, debounce: bool = True) -> Check | None:
     """The MT5 bridge answers GET /health through the SSH tunnel (only when a bridge URL is in the keyring and a probe
-    is configured). A bridge down means no ticks, no orders and no position management for that account."""
+    is configured). A bridge down means no ticks, no orders and no position management for that account: a warning
+    for its first BRIDGE_DOWN_FAIL_S, then one FAIL for the whole outage (see BRIDGE_DOWN_FILE above). `debounce`
+    False (preflight: a verdict now) fails at once and neither reads nor writes the outage record."""
     try:
         url = ctx.get_secret(f"mt5-bridge-url-{account_id}")
     except Exception:
@@ -25,8 +83,27 @@ def check_bridge(ctx: HealthContext, account_id: str) -> Check | None:
         return None
     name = f"bridge:{account_id}"
     why = ctx.bridge_probe(url)          # the URL is never quoted in a reason (it names the tunnel endpoint)
-    if why is not None:
+    if not debounce:
+        if why is None:
+            return Check(name=name, status="ok", reason="bridge answers /health")
         return Check(name=name, status="fail", reason=f"bridge does not answer /health through the tunnel: {why[:160]}")
+    out = _outage(ctx, account_id, down=why is not None)
+    if out is None:                      # no record: fail at once rather than never
+        if why is None:
+            return Check(name=name, status="ok", reason="bridge answers /health")
+        return Check(name=name, status="fail", reason=_bridge_down_reason(account_id, 0, why)
+                     + f" (outage record state/{BRIDGE_DOWN_FILE} unusable: paged at once)")
+    down_s, back_s = out
+    if why is not None:
+        if down_s < BRIDGE_DOWN_FAIL_S:
+            return Check(name=name, status="warn", reason=f"bridge does not answer /health through the tunnel for "
+                         f"{int(down_s)} s: {why[:160]} (a restart or deploy passes; paged at "
+                         f"{BRIDGE_DOWN_FAIL_S // 60} min)")
+        return Check(name=name, status="fail", reason=_bridge_down_reason(account_id, int(down_s // 60), why))
+    if back_s is not None:
+        return Check(name=name, status="fail", reason=f"bridge answers again for {int(back_s)} s after "
+                     f"{int((down_s - back_s) // 60)} min unreachable; the incident closes after "
+                     f"{BRIDGE_UP_CLOSE_S // 60} min answering")
     return Check(name=name, status="ok", reason="bridge answers /health")
 
 
@@ -46,6 +123,14 @@ _TERMINAL_FAIL = {
 }
 
 
+_LOGIN_REFUSED = (
+    "MT5 login refused and latched on the MT5 box: it does not heal by itself (no password is sent again, through any "
+    "restart, until it is cleared), so this account stays down. " + _NO_ENTRIES + " RUNBOOK 'MT5 login': read the "
+    "reason in the terminal journal first. Broker side ('Service is not available', 'No connection'): stop the "
+    "watchdog timer and the bridge, then `goldbot-mt5 login {account} --retry-refused` once. 'Invalid account': store "
+    "the right password with `goldbot-mt5 accounts set mt5-{account}`; never retry.")
+
+
 @register_check("account", block=BLOCK_ACCOUNT, pos=115)
 def check_terminal(ctx: HealthContext, account_id: str) -> Check | None:
     """The MT5 terminal behind the bridge, as the bridge's GET /health reports it: one token (ok, not_running,
@@ -61,9 +146,13 @@ def check_terminal(ctx: HealthContext, account_id: str) -> Check | None:
         return None
     name = f"terminal:{account_id}"
     try:
-        state, for_s = ctx.terminal_probe(url)
+        probed = tuple(ctx.terminal_probe(url))
+        state, for_s = probed[0], probed[1]
+        login = probed[2] if len(probed) > 2 else None
     except Exception as exc:              # the type only: a message can name the tunnel endpoint
         return Check(name=name, status="warn", reason=f"MT5 terminal state not read ({type(exc).__name__})")
+    if state != "ok" and login == "refused":     # incident 2026-11-01: a latched refusal never heals by itself
+        return Check(name=name, status="fail", reason=_LOGIN_REFUSED.format(account=account_id))
     if state == "ok":
         return Check(name=name, status="ok", reason="MT5 terminal running, logged in to the registered account and "
                      "connected")
