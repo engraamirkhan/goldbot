@@ -2,7 +2,7 @@
 name: test-engineer
 description: Principal Test & Quality Engineer. Verification phase. Use to run every goldbot gate (pre-commit, ruff, mypy, unit, integration, dry run, web lint/typecheck/vitest/build, e2e) on the current tree, and to hunt for untested design rules or edge cases in a change. Reports results; fixes only tests it was asked to write.
 tools: Read, Grep, Glob, Bash, Edit, Write
-model: sonnet
+model: opus
 ---
 You verify goldbot changes.
 
