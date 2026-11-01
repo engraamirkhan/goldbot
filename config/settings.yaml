@@ -480,8 +480,10 @@ daily_review:                        # daily learning-ops review (goldbot/resear
     icm: {scalp: 160, intraday: 35, swing: 5}
     vantage: {scalp: 0, intraday: 35, swing: 5}
   # cost probes a day per broker, from the ADR 0043 probe sleeves (ICM: P0 60-90 + ~8 mirrors; Vantage: scheduled
-  # M1 probes only at half ICM's scheduled share, no shadow book to mirror)
-  probe_plan: {icm: 90, vantage: 40}
+  # M1 probes only at half ICM's scheduled share, no shadow book to mirror). Demo trim 2026-11-01 (cost of record
+  # 2026-10-31 section 6): ICM 90 -> 24 (icm-probe scheduled every_min 60); Vantage stays 40 until its exit legs are
+  # recorded and it has 200 fills per session, then 12
+  probe_plan: {icm: 24, vantage: 40}
   volume_alert_below: 0.5            # a trading day under half the plan is low ...
   volume_alert_days: 2               #   ... two low trading days running open a learning-ops issue with the counted cause
   refit_min_fills: 200               # a (broker, session) slippage cell is refit after 200 fills since its last fit; never cheaper within a day
@@ -493,9 +495,10 @@ daily_review:                        # daily learning-ops review (goldbot/resear
   weekly_proposals: 4                # Monday roll-up: at most 4 variant proposals for the research director (never run)
 trades_view:                         # trades screens' plan figures (goldbot/api/today_ledger.py, item 131); reporting only
   fills_target: 200                  # fills a day for a demo account not listed below; live accounts have none
-  # ADR 0049 D1/D1a step-1 targets (fills a day): icm-probe scalp 269 + probes 54; icm-demo under option B (separate
-  # pots, D1a); vantage-demo stage V1. Revisit with the ADR (icm-demo ~138 under option A, vantage ~130 at V2)
-  fills_target_by_account: {icm-probe: 323, icm-demo: 120, vantage-demo: 90}
+  # ADR 0049 D1/D1a step-1 targets (fills a day): icm-probe scalp 269 + probes 24 (54 before the 2026-11-01 demo
+  # trim); icm-demo under option B (separate pots, D1a); vantage-demo stage V1. Revisit with the ADR (icm-demo ~138
+  # under option A, vantage ~130 at V2)
+  fills_target_by_account: {icm-probe: 293, icm-demo: 120, vantage-demo: 90}
   daily_target_share: 0.05           # ADR 0004: GBP 50 a day on the GBP 1,000 basis = 5% of the day's start equity, per account
   daily_target_by_account: {}        # account id -> a fixed daily target in the account currency (overrides the share)
   strip_days: 14                     # trading days in the Today tab's daily net strip

@@ -58,7 +58,8 @@ real (live-agent) trades take priority". A cost probe, not a population status: 
   2026-10-25; the former 4-bar probe_only cap cut probes short of the strategy's exit).
 * Scheduled probes, the measured-cost protocol's M1 arm (docs/research/prereg-cost-measurement-2026-10.md, section 1:
   "0.01 lot at a fixed slot time; side = +1 on even slot index, -1 on odd ... market close after 30 s; server SL at $3
-  from fill (safety only)"), one per 15m close when `cost_probe.scheduled.enabled` (`scheduled_step`). Same lock
+  from fill (safety only)"), one per 15m close when `cost_probe.scheduled.enabled` (`scheduled_step`), or one per
+  `every_min` window (`scheduled_slot`; cost of record 2026-10-31 section 6: "24 a day M1 (one per open hour)"). Same lock
   (demo terminal, auto mode), the same order core as a mirror probe (`_place`: `RiskGate.check`, then
   `Engine._execute`), its own magic (magic_base + SCHEDULED_MAGIC_OFFSET), a `cm-sched-` order id and the
   `scheduled_m1` basis, purpose `cost_measurement` on its ledger row. Not in the rollover blackout, after the Friday cut
@@ -943,6 +944,16 @@ def scheduled_side(slot: pd.Timestamp) -> int:
     return 1 if (int(slot.timestamp()) // SLOT_S) % 2 == 0 else -1
 
 
+def scheduled_slot(ts: pd.Timestamp, every_min: int) -> bool:
+    """Whether the 15m close `ts` is its `every_min` window's slot (cost of record 2026-10-31 section 6: "24 a day M1
+    (one per open hour)"). Every close at 15; otherwise one close per window, its position in the window rotating with
+    the window index plus the UTC day, so `scheduled_side` (the prereg's even/odd slot rule, unchanged) still
+    alternates window by window and the same window of the next day takes the other side. The clock alone decides."""
+    k = every_min * 60 // SLOT_S
+    i = int(ts.timestamp()) // SLOT_S
+    return k <= 1 or i % k == (i // k + i // (86_400 // SLOT_S)) % k
+
+
 def schedule_skip(eng: Engine, ts: pd.Timestamp) -> str | None:
     """Why no scheduled probe is sent at `ts`, or None: a weekend day (UTC or server), the rollover blackout (the
     configured window in its own zone, New York by default, so it moves with US DST; the daily break and the reopen
@@ -981,7 +992,7 @@ def scheduled_step(eng: Engine, probe: CostProbe, close_ts: pd.Timestamp, tick: 
     pending or in flight, outside a demo terminal in auto mode, or past the probe budget or the scheduled share of it;
     silently while one is still open (one at a time)."""
     sch: ScheduledProbe = eng.cfg.cost_probe_scheduled
-    if not sch.enabled:
+    if not sch.enabled or not scheduled_slot(close_ts, sch.every_min):
         return
 
     def skip(why: str) -> None:
