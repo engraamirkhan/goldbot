@@ -3,8 +3,9 @@ rules on 15m bars.
 
 * `session_range_break` (GS1): "pyramided session-range breakout (2 variants: Asia range broken in London; London range
   broken in NY). Entry on a 15m close beyond the range. Initial stop 1.5 x ATR15." Section 3's fallback is what runs
-  now: "GS1 launches with a single unit and a 3 R target", the pyramid adds follow by 11-03 (a protocol deviation,
-  logged in the HANDOFF). One entry per session per day: the first 15m close beyond the range inside the break window.
+  first: "GS1 launches with a single unit and a 3 R target"; the pyramid adds followed on 11-02 as an execution
+  mechanic of the account (`engine.exploration_pyramid`, accounts.yaml `adds`, ADR 0065), so this rule decides the first
+  unit only. One entry per session per day: the first 15m close beyond the range inside the break window.
 * `session_range_control` (GS1C): "Entry time is uniform within the same session window on the same days, and
   direction is a fair coin. It is drawn from a seeded RNG that is logged." One entry per session whose range formed
   (the sessions GS1 was eligible in), at a close drawn from the sha256 seed of (arm, day, session), side from the seed

@@ -174,9 +174,13 @@ accounts:
         Z9D: { style: scalp, max_loss: 6.5 }
         Z10D: { style: scalp, max_loss: 6.5 }
         ZCD: { style: scalp, max_loss: 6.5, control_share: 0.12 }
-        # growth sprint 2026-11-01: GS1 (owner experiment to 2026-11-27) and its random-entry control at the same size
-        GS1: { style: growth, max_loss: 24.0, sizing: growth }
-        GS1C: { style: growth, max_loss: 24.0, control_share: 0.30, sizing: growth }
+        # growth sprint 2026-11-01: GS1 (owner experiment to 2026-11-27) and its random-entry control at the same size.
+        # `adds: 3` (section 3, ADR 0065): a unit at each +1 R of the first unit's entry, every earlier stop moved to the
+        # newest add's so the group never loses more than one unit; the pair adds alike. Each add is gate-checked; the
+        # pot's max_open counts groups, its Â£80 and the 0.10 net lots count every unit (at ~0.05 lots a unit the net cap
+        # leaves room for one add). Rollback: drop `adds`, restart (open groups keep every exit)
+        GS1: { style: growth, max_loss: 24.0, sizing: growth, adds: 3 }
+        GS1C: { style: growth, max_loss: 24.0, control_share: 0.30, sizing: growth, adds: 3 }
   icm-probe:
     broker: icm
     mode: demo

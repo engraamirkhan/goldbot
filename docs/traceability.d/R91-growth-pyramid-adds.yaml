@@ -1,0 +1,5 @@
+id: R91
+requirement: 'Growth sprint 2026-11-01 section 3 (deferred part): pyramid adds for GS1 and, identically, GS1C. A unit at each +1 R from the first unit''s entry, up to 3 adds, each through the RiskGate with every cap binding. After every add, open risk is at most 1 unit. Each add carries group_id = the first unit''s client order id. A refused add is a shadow fill. Exits are never gated, and restarts are safe'
+status: implemented
+code: goldbot/engine/exploration_pyramid.py (`pyramid`, `group_stop`, `heal`, `plan`, `before_send`, `add_id`, `group_of`); goldbot/engine/exploration.py (`Arm.adds`, `Pending.group_id`, `pending_id`, `_send` add branch, `_Pass` group slots, `growth_lots` max_lots, `_censored`); goldbot/ops/accounts.py `ExplorationArm.adds`; goldbot/research/exploration_data.py `CANDIDATE_STYLES`; config/accounts.yaml icm-demo GS1/GS1C `adds` 3; docs/decisions/0065-pyramid-adds-stop-rule.md
+test: tests/test_growth_pyramid.py

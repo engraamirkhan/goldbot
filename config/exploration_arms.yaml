@@ -178,8 +178,8 @@ arms:
   - { id: WKI0, rule: random_bracket, timeframe: 15m, params: {"minutes": [0], "window_utc": ["00:00", "23:45"], "stop_atr": 1.5, "target_r": 2.0, "hold_bars": 96, "weekdays": [5, 6]}, max_open: 3, status: run, forward_only: true, note: "weekend random control of the XAUUSD247 lane (I0 geometry; never read for edge)", role: control, config_hash: e0f7bd18d11d3947 }
   # Growth sprint 2026-11-01 (docs/research/growth-sprint-2026-11-01.md section 3; owner instruction 2026-11-01): the
   # demo growth test, icm-demo only. GS1 = C2, the session-range breakout (Asia range broken in London, London range
-  # broken in New York; stop 1.5 x ATR15), single unit with a 3 R target (section 3's fallback; pyramid adds by 11-03,
-  # a protocol deviation). `role: owner_experiment`: exempt from ADR 0061 until 2026-11-27 only (ADR 0061 amendment
+  # broken in New York; stop 1.5 x ATR15), first unit with a 3 R target (section 3's fallback; the pyramid adds are the
+  # account's `adds` since 11-02, engine/exploration_pyramid.py, ADR 0065; this row is unchanged, hash included). `role: owner_experiment`: exempt from ADR 0061 until 2026-11-27 only (ADR 0061 amendment
   # 2026-11-01, research.arms.OWNER_EXPERIMENTS). GS1C: its random-entry control, same mechanics, one seeded entry per
   # session GS1 is eligible in, seeded coin-flip side. Both sized by the RiskGate (accounts.yaml `sizing: growth`).
   - { id: GS1, rule: session_range_break, timeframe: 15m, params: {"sessions": ["asia_london", "london_ny"], "stop_atr": 1.5, "target_r": 3.0, "hold_bars": 16, "prereg": "growth-sprint-2026-11-01.md#3"}, max_open: 1, status: run, forward_only: true, note: "growth sprint C2 session-range breakout, single unit (owner experiment to 2026-11-27)", role: owner_experiment, config_hash: 04d238be1c1b9169 }
