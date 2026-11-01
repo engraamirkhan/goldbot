@@ -18,16 +18,18 @@ DECISION_FEATURES = (
     "slope_ema50", "dist_ema200_atr", "adx14", "bb_z_20", "mfi12", "er_30", "donchian_pos_20", "compression_8_96",
     "sess_high_dist_atr", "sess_low_dist_atr", "pdh_dist_atr", "pdl_dist_atr", "sweep_dir",
 )
-CONTEXT_FEATURES = {"1h": ("adx14",), "4h": ("dist_ema50_atr",), "1d": ("slope_ema20", "atr_ratio_14_100")}
+CONTEXT_FEATURES: dict[str, tuple[str, ...]] = {"1h": ("adx14",), "4h": ("dist_ema50_atr",), "1d": ("slope_ema20", "atr_ratio_14_100")}
+# ML-M1c (prereg-ml-meta-label-m1c-2026-11-01.md): 1h decisions; h1_adx14 would duplicate the bar's own adx14 -> h4_adx14
+CONTEXT_FEATURES_1H: dict[str, tuple[str, ...]] = {"4h": ("adx14", "dist_ema50_atr"), "1d": ("slope_ema20", "atr_ratio_14_100")}
 CONTEXT_PREFIX = {"1h": "h1", "4h": "h4", "1d": "d1"}
 POSITIONING_FEATURES = ("pos_cot_mm_net_pct_oi", "pos_cot_mm_net_pct_oi_z52", "pos_cot_mm_net_pct_oi_chg4",
                         "pos_gld_tonnes_chg5_pct", "pos_gld_tonnes_chg20_pct")
 CALENDAR_FEATURES = ("min_to_next_tier1_pit", "min_since_last_tier1_pit", "tier1_count_today")
 
 
-def model_columns() -> list[str]:
-    """The 40 model columns in a fixed order (side last)."""
-    ctx = [f"{CONTEXT_PREFIX[tf]}_{c}" for tf, cols in CONTEXT_FEATURES.items() for c in cols]
+def model_columns(context: dict[str, tuple[str, ...]] | None = None) -> list[str]:
+    """The 40 model columns in a fixed order (side last); `context` defaults to M1/M2's CONTEXT_FEATURES."""
+    ctx = [f"{CONTEXT_PREFIX[tf]}_{c}" for tf, cols in (context or CONTEXT_FEATURES).items() for c in cols]
     return [*DECISION_FEATURES, *ctx, *POSITIONING_FEATURES, *CALENDAR_FEATURES, "side"]
 
 
@@ -41,7 +43,9 @@ PURGE_NS = 26 * 3600 * 10**9          # longest label life (96 x 15m bars, weeke
 EMBARGO_NS = 5 * 86400 * 10**9
 FORWARD_YEARS = tuple(range(2012, 2018))
 MIN_CANDIDATES, MIN_SELECTED, MIN_YEAR_TRADES, MIN_POS_YEARS = 3000, 300, 20, 5
-ALPHA_CONTROL = 0.025                 # Bonferroni over 2 models
+ALPHA_CONTROL = 0.025                 # Bonferroni over 2 models (M1, M2)
+ALPHA_SINGLE = 0.05                   # M1c: one model in its own slot
+MIN_SIDE_TRADES = 30                  # M1c leg (g)
 SWAP_LONG_USD = 0.60
 
 
@@ -187,14 +191,27 @@ def one_at_a_time(dec_ns: np.ndarray, exit_ns: np.ndarray) -> np.ndarray:
     return keep
 
 
+def side_leg(net: np.ndarray, side: np.ndarray, sel: np.ndarray) -> dict[str, Any]:
+    """M1c leg (g): long and short top-decile net means each >= 0 over >= MIN_SIDE_TRADES trades."""
+    out: dict[str, Any] = {}
+    for name, sd in (("long", 1), ("short", -1)):
+        m = sel & (side == sd)
+        out[name] = {"n": int(m.sum()), "net_mean": float(net[m].mean()) if m.any() else None}
+    out["ok"] = all(v["n"] >= MIN_SIDE_TRADES and v["net_mean"] is not None and v["net_mean"] >= 0
+                    for v in (out["long"], out["short"]))
+    return out
+
+
 def verdict(n_cand: int, sel_net: np.ndarray, lb90: float, p_control: float, year_means: dict[int, tuple[float, int]],
-            forward_mean: float) -> dict[str, Any]:
-    """The prereg s.6 legs (a)-(e) and the overall PASS/FAIL/UNDERPOWERED."""
+            forward_mean: float, alpha: float = ALPHA_CONTROL, side_ok: bool | None = None) -> dict[str, Any]:
+    """The prereg s.6 legs (a)-(e) (and M1c's leg (g) when `side_ok` is given) and PASS/FAIL/UNDERPOWERED."""
     pos_years = sum(1 for m, k in year_means.values() if k >= MIN_YEAR_TRADES and m > 0)
     legs = {"a_power": bool(n_cand >= MIN_CANDIDATES and len(sel_net) >= MIN_SELECTED),
             "b_lb90_gt_0": bool(lb90 > 0),
-            "c_beats_control": bool(p_control <= ALPHA_CONTROL),
+            "c_beats_control": bool(p_control <= alpha),
             "d_years": bool(pos_years >= MIN_POS_YEARS),
             "e_forward_gt_0": bool(forward_mean > 0)}
+    if side_ok is not None:
+        legs["g_both_sides_ge_0"] = bool(side_ok)
     status = "UNDERPOWERED" if not legs["a_power"] else ("PASS" if all(legs.values()) else "FAIL")
     return {"legs": legs, "positive_years": pos_years, "verdict": status}

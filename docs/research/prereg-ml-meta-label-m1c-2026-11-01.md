@@ -55,3 +55,11 @@ The validity gate, VOID if the shuffled-label model beats the control at p <= 0.
 - **Screen FAIL:** M1c is retired with R-20. No further geometry variants of M1 (other bars, stops, holds, or side
   restrictions) without a new information source.
 - **Screen PASS, then confirm FAIL:** the same.
+
+## Dry-run facts (2026-11-01, before any label statistic or fit; no rule change)
+
+The `--models M1c --dry` run reports counts, coverage and the lookahead test only.
+- **Candidates:** 41,900 (20,950 decisions x 2 sides; 5,110-5,408 a year).
+- **Median risk:** $4.87/oz. The charged round trip is therefore about 0.04 R, and the long swap about 0.12 R a night.
+- **Lookahead test:** 12 cuts x 50 rows, 0 mismatches.
+- **Missing feature values:** at most 4.1% (`d1_atr_ratio_14_100`).

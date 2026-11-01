@@ -114,3 +114,24 @@ def test_verdict_legs() -> None:
     assert M.verdict(2000, np.zeros(400), 0.01, 0.01, ym, 0.02)["verdict"] == "UNDERPOWERED"
     few = {y: (0.05, 10) for y in range(2010, 2018)}
     assert M.verdict(5000, np.zeros(400), 0.01, 0.01, few, 0.02)["verdict"] == "FAIL"
+
+
+def test_m1c_columns_swap_h1_adx_for_h4_adx_and_keep_the_cap() -> None:
+    cols = M.model_columns(M.CONTEXT_FEATURES_1H)
+    assert len(cols) == 40 and len(set(cols)) == 40 and "h4_adx14" in cols and "h1_adx14" not in cols
+    check_feature_cap(cols)
+
+
+def test_side_leg_fails_a_one_sided_or_losing_side_book() -> None:
+    side = np.r_[np.full(40, 1), np.full(40, -1)]
+    sel = np.ones(80, dtype=bool)
+    assert M.side_leg(np.r_[np.full(40, 0.1), np.full(40, 0.0)], side, sel)["ok"]
+    assert not M.side_leg(np.r_[np.full(40, -0.01), np.full(40, 0.3)], side, sel)["ok"]
+    short_only = sel & (side < 0)
+    assert not M.side_leg(np.full(80, 0.2), side, short_only | (np.arange(80) < 10))["ok"]   # 10 longs < 30
+
+
+def test_verdict_side_leg_and_single_alpha() -> None:
+    ym = {y: (0.05, 50) for y in range(2010, 2018)}
+    assert M.verdict(5000, np.zeros(400), 0.01, 0.04, ym, 0.02, alpha=M.ALPHA_SINGLE, side_ok=True)["verdict"] == "PASS"
+    assert M.verdict(5000, np.zeros(400), 0.01, 0.04, ym, 0.02, alpha=M.ALPHA_SINGLE, side_ok=False)["verdict"] == "FAIL"
