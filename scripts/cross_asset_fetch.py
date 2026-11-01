@@ -1,8 +1,8 @@
 """Bid 1m bars for the cross-asset lead-lag screen (docs/research/prereg-2026-11-01-cross-asset.md), local only.
 
 Default source (2026-11-01): HistData's free M1 ASCII archive, one pair-year per request, serial, through the site's
-own download form; its stamps are EST without DST and are shifted to UTC (HD_OFFSET; checked against Dukascopy on
-overlapping months before use, see cross-asset-screen-2026-11.md). The Dukascopy bi5 route below throttled this host
+own download form; its stamps are New York local time WITH daylight saving
+(histdata_to_utc; found by the clock check against Dukascopy, see cross-asset-screen-2026-11.md). The Dukascopy bi5 route below throttled this host
 to ~1 month of three pairs per 10 minutes (6-75 s per day file, then dropped connections), about 40 h for 2010-2017.
 
 Dukascopy route (--source dukascopy): Dukascopy's free bi5 archive (the same source and record layout as scripts/dukascopy_year.py), bid side only,
@@ -122,16 +122,23 @@ def combine(code: str, year: int) -> str:
 
 HISTDATA = "https://www.histdata.com"
 HD_PAGE = HISTDATA + "/download-free-forex-historical-data/?/ascii/1-minute-bar-quotes/{pair}/{year}"
-HD_OFFSET = pd.Timedelta(hours=5)   # HistData ASCII stamps are EST without daylight saving (UTC-5 all year)
+def histdata_to_utc(local: pd.Series) -> pd.Series:
+    """HistData ASCII stamps -> UTC. HistData documents them as EST without daylight saving, but against Dukascopy
+    (UTC) the 2010 XAUUSD feed is 60 min off from mid-March to early November and aligned otherwise
+    (cross-asset-screen-2026-11.md, clock check): they are New York local time with DST. Ambiguous and
+    non-existent local minutes (the two DST switch hours, Sunday night, no trading) become NaT and are dropped."""
+    loc = pd.DatetimeIndex(local).tz_localize("America/New_York", ambiguous="NaT", nonexistent="NaT")
+    return pd.Series(loc.tz_convert("UTC"), index=local.index)
 
 
 def parse_histdata(text: str) -> pd.DataFrame:
-    """HistData ASCII M1 rows `YYYYMMDD HHMMSS;open;high;low;close;volume` (bid, bar open, EST no DST) -> UTC."""
+    """HistData ASCII M1 rows `YYYYMMDD HHMMSS;open;high;low;close;volume` (bid, bar open, New York time) -> UTC."""
     rows = [r.split(";") for r in text.strip().splitlines() if r.strip()]
     f = pd.DataFrame(rows, columns=["t", "open", "high", "low", "close", "volume"])
     for c in ("open", "high", "low", "close", "volume"):
         f[c] = f[c].astype(float)
-    f["ts_utc"] = pd.to_datetime(f["t"], format="%Y%m%d %H%M%S").dt.tz_localize("UTC") + HD_OFFSET
+    f["ts_utc"] = histdata_to_utc(pd.to_datetime(f["t"], format="%Y%m%d %H%M%S"))
+    f = f.dropna(subset=["ts_utc"])
     return f[["ts_utc", "open", "high", "low", "close", "volume"]].sort_values("ts_utc").reset_index(drop=True)
 
 

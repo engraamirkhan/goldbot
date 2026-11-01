@@ -89,3 +89,25 @@ effect under test. So, frozen before use, a **clock check** that touches no gold
 - pass: the 0-min offset has the highest correlation for every pair and year checked, and is at least 0.5 above both
   +-1 min offsets. If an offset other than 0 wins consistently, that offset is applied to all HistData leads and
   reported; if it is inconsistent, the screen is not run and the line is reported BLOCKED on data, K +0.
+
+## Amendment 2 (2026-11-01, before any gold-versus-lead outcome): clock check result and the fix
+
+The amendment-1 check (same instrument, two feeds; no gold-versus-lead number computed) **failed as written** and found
+two clock faults, so the screen was not run on that data:
+1. HistData's stamps are **New York local time with daylight saving**, not fixed EST as documented. With +5 h, 2010
+   XAUUSD peaks at -60 min from mid-March to early November (k0 0.001-0.004 in April/July) and at 0 otherwise; EURUSD
+   5m returns correlate 0.24 at 0 and 0.73 at -60 min. Re-stamped as America/New_York -> UTC: every 2010 month peaks
+   at 0 (XAUUSD k0 0.65-0.91), EURUSD 5m 0.97.
+2. After the DST fix a **sub-minute cross-feed offset** remains: HistData minute t correlates 0.08-0.25 with Dukascopy
+   minute t+1 in every 2010 month (versus <= 0.03 at t-1). Mixing HistData leads with Dukascopy gold would therefore
+   manufacture exactly the lead-lag under test. (The 0.5-margin threshold of amendment 1 was also miscalibrated: two
+   1m feeds of one instrument correlate 0.65-0.91, not ~1. The decision below does not lean on it.)
+
+Fix, frozen now:
+- **Gold comes from the same feed as the leads**: HistData XAUUSD bid 1m (signals, ATR15, entry, stop and exit path).
+  The cost of record still supplies spread, commission and slippage (1.5 x ICM round trip), so bid-only prices are
+  right. Dukascopy gold is no longer used in this screen.
+- **Entry one minute later**: decision at the close of minute t, entry at the open of minute t + 2 (the bar at
+  decision + 1 min). This removes any residual sub-minute offset between HistData pairs, at the cost of the first
+  minute of any genuine lag; the mechanism claims a lag of minutes, so the test stays fair.
+- Everything else (variants, thresholds, hold, stop, cost, twins, bar, K +3) is unchanged.

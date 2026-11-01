@@ -4,6 +4,7 @@ catch-up signal rule and the stop/time walk."""
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -84,3 +85,27 @@ def test_walk_time_stop_long_short_and_gap() -> None:
     # long gapped through the stop: fills at the open, worse than the level
     o2, h2, lo2 = np.array([100.0, 98.5]), np.array([100.1, 98.7]), np.array([99.5, 98.2])
     assert xs.walk_time_stop(o2, h2, lo2, 1, 100.0, 1.0, 99.0) == (pytest.approx(-1.5), True)
+
+
+def test_histdata_stamps_are_new_york_local_with_dst() -> None:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    from cross_asset_fetch import histdata_to_utc, parse_histdata
+
+    local = pd.Series(pd.to_datetime(["2010-01-15 10:00:00", "2010-07-15 10:00:00", "2010-03-14 02:30:00"]))
+    utc = histdata_to_utc(local)
+    assert utc.iloc[0] == pd.Timestamp("2010-01-15 15:00", tz="UTC")     # EST, UTC-5
+    assert utc.iloc[1] == pd.Timestamp("2010-07-15 14:00", tz="UTC")     # EDT, UTC-4
+    assert pd.isna(utc.iloc[2])                                          # skipped by the spring-forward switch
+    f = parse_histdata("20100715 100000;1.2;1.3;1.1;1.25;0\n20100115 100000;1.0;1.1;0.9;1.05;0\n")
+    assert list(f["ts_utc"]) == [pd.Timestamp("2010-01-15 15:00", tz="UTC"), pd.Timestamp("2010-07-15 14:00", tz="UTC")]
+    assert f["close"].tolist() == [1.05, 1.25]
+
+
+def test_entry_waits_one_minute_after_the_decision() -> None:
+    ts = np.arange(40, dtype=np.int64) * MIN
+    px = 100.0 + np.arange(40, dtype=float)
+    g = xs.Gold(ts, px, px + 0.1, px - 0.1, px, np.array([0], dtype=np.int64), np.array([10.0]))
+    costs = {s: {"rt": 0.0, "ov": 0.0} for s in ("asia", "london", "newyork")}
+    tr = xs.trade(g, costs, 5 * MIN, 1)       # decision at the close of the bar opening at minute 4 (= 5 min)
+    assert tr is not None and tr["t_entry"] == 6 * MIN and tr["t_exit"] == 21 * MIN
+    assert tr["gross_usd"] == pytest.approx(15.0)

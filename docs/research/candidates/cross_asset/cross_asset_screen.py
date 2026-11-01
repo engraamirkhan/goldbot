@@ -37,6 +37,7 @@ Z_MIN = 2.0
 CATCH_MAX = 0.5
 HOLD_MIN = 15
 STOP_ATR = 1.5
+ENTRY_DELAY_MIN = 1      # amendment 2: entry at the open of decision + 1 min, past any sub-minute feed clock offset
 WIN_START, WIN_END = 7 * 60, 19 * 60 + 44      # decision bar opens, minutes of the UTC day, inclusive
 VARIANTS: dict[str, list[str]] = {"X1": ["r_xag"], "X2": ["r_usd"], "X3": ["r_xag", "r_eur", "r_jpy"]}
 
@@ -70,6 +71,28 @@ def load_gold(raw: Path) -> Gold:
     t = t[order]
     uniq = np.r_[True, np.diff(t) > 0]
     o, h, lo, c = (m[k][order][uniq] for k in ("open", "high", "low", "close"))
+    t = t[uniq]
+    f = pd.DataFrame({"o": o, "h": h, "l": lo, "c": c}, index=pd.DatetimeIndex(t, tz="UTC"))
+    q = f.resample("15min").agg({"o": "first", "h": "max", "l": "min", "c": "last"}).dropna()
+    pc = q["c"].shift(1)
+    tr = pd.concat([q["h"] - q["l"], (q["h"] - pc).abs(), (q["l"] - pc).abs()], axis=1).max(axis=1)
+    ends = epoch_ns(pd.DatetimeIndex(q.index)) + 15 * MIN
+    return Gold(t, o, h, lo, c, ends, tr.rolling(14).mean().to_numpy(float))
+
+
+def load_gold_hd(hd: Path) -> Gold:
+    """Amendment 2: gold from the same feed as the leads (HistData XAUUSD bid), so a cross-feed clock offset cannot
+    pose as lead-lag."""
+    b = pd.concat([pd.read_parquet(hd / f"xauusd_1m_bid_{y}.parquet") for y in range(2010, 2018)], ignore_index=True)
+    ts = pd.DatetimeIndex(b["ts_utc"]).as_unit("ns")
+    keep = (ts >= START) & (ts < END)
+    b, ts = b.loc[keep].reset_index(drop=True), ts[keep]
+    assert ts.max() < END, "a 2018+ bar was read"
+    t = epoch_ns(ts)
+    order = np.argsort(t, kind="stable")
+    t = t[order]
+    uniq = np.r_[True, np.diff(t) > 0]
+    o, h, lo, c = (b[k].to_numpy(float)[order][uniq] for k in ("open", "high", "low", "close"))
     t = t[uniq]
     f = pd.DataFrame({"o": o, "h": h, "l": lo, "c": c}, index=pd.DatetimeIndex(t, tz="UTC"))
     q = f.resample("15min").agg({"o": "first", "h": "max", "l": "min", "c": "last"}).dropna()
@@ -186,10 +209,11 @@ def walk_time_stop(o: np.ndarray, h: np.ndarray, lo: np.ndarray, side: int, entr
 
 
 def trade(g: Gold, costs: dict[str, dict[str, float]], t_dec: int, side: int) -> dict[str, Any] | None:
-    """Entry at the open of the first gold minute at or after the decision (within 5 min), time exit at the open of the
-    first minute at or after entry + HOLD_MIN, stop STOP_ATR x ATR15."""
-    k = int(np.searchsorted(g.ts, t_dec, side="left"))
-    if k >= len(g.ts) or g.ts[k] - t_dec > 5 * MIN:
+    """Entry at the open of the first gold minute at or after decision + ENTRY_DELAY_MIN (within 5 min), time exit at
+    the open of the first minute at or after entry + HOLD_MIN, stop STOP_ATR x ATR15 (ATR known at the decision)."""
+    t_in = t_dec + ENTRY_DELAY_MIN * MIN
+    k = int(np.searchsorted(g.ts, t_in, side="left"))
+    if k >= len(g.ts) or g.ts[k] - t_in > 5 * MIN:
         return None
     atr = g.atr15(t_dec)
     if not np.isfinite(atr) or atr <= 0:
@@ -292,9 +316,9 @@ _G: Gold | None = None
 _F: pd.DataFrame | None = None
 
 
-def _init(gold_raw: str, xdir: str) -> None:
+def _init(gold_raw: str, xdir: str, gold_source: str = "histdata") -> None:
     global _G, _F
-    _G = load_gold(Path(gold_raw))
+    _G = load_gold_hd(Path(xdir)) if gold_source == "histdata" else load_gold(Path(gold_raw))
     f = pd.DataFrame({"ts_utc": pd.to_datetime(_G.ts + MIN, utc=True), "k": np.arange(len(_G.ts)),
                       "r_gold": ret5(_G.ts, _G.c)})
     for code, col in (("xagusd", "r_xag"), ("eurusd", "r_eur"), ("usdjpy", "r_jpy")):
@@ -324,13 +348,57 @@ def _run(variant: str) -> tuple[str, dict[str, Any]]:
     return variant, res
 
 
+def offset_corr(ts_a: np.ndarray, c_a: np.ndarray, ts_b: np.ndarray, c_b: np.ndarray,
+                offsets: range = range(-2, 3)) -> dict[int, float]:
+    """Correlation of 1m close-to-close log returns of feed a at minute t with feed b at minute t + k (exact minutes,
+    consecutive bars only). The clock check of amendment 1: two feeds of one instrument peak at k = 0 when aligned."""
+    def r1(ts: np.ndarray, c: np.ndarray) -> pd.Series:
+        s = pd.Series(np.log(c), index=ts)
+        s = s[~s.index.duplicated()]
+        prev = s.reindex(s.index - MIN).to_numpy(float)
+        return pd.Series(s.to_numpy(float) - prev, index=s.index).dropna()
+    a, b = r1(ts_a, c_a), r1(ts_b, c_b)
+    out: dict[int, float] = {}
+    for k in offsets:
+        bb = b.reindex(a.index + k * MIN).to_numpy(float)
+        m = np.isfinite(bb) & (a.to_numpy(float) != 0) & (bb != 0)
+        out[k] = float(np.corrcoef(a.to_numpy(float)[m], bb[m])[0, 1])
+    return out
+
+
+def clock_check(gold_raw: Path, duka: Path, hd: Path) -> dict[str, dict[int, float]]:
+    """Amendment 1: HistData vs Dukascopy for the same instrument, offsets -2..+2 min."""
+    res: dict[str, dict[int, float]] = {}
+    for code in ("xagusd", "eurusd", "usdjpy"):
+        parts = sorted((duka / "months").glob(f"{code}_2010_*.parquet"))
+        d = pd.concat([pd.read_parquet(p) for p in parts]).sort_values("ts_utc")
+        h = pd.read_parquet(hd / f"{code}_1m_bid_2010.parquet")
+        h = h[h.ts_utc <= d.ts_utc.max()]
+        res[f"{code} 2010-01..{len(parts):02d}"] = offset_corr(
+            epoch_ns(pd.DatetimeIndex(h.ts_utc).as_unit("ns")), h.close.to_numpy(float),
+            epoch_ns(pd.DatetimeIndex(d.ts_utc).as_unit("ns")), d.close.to_numpy(float))
+    for y in (2010, 2017):
+        g = pd.read_parquet(gold_raw / f"xauusd_1m_dukascopy_{y}.parquet")
+        h = pd.read_parquet(hd / f"xauusd_1m_bid_{y}.parquet")
+        res[f"xauusd {y}"] = offset_corr(
+            epoch_ns(pd.DatetimeIndex(h.ts_utc).as_unit("ns")), h.close.to_numpy(float),
+            epoch_ns(pd.DatetimeIndex(g.ts_utc).as_unit("ns")), ((g.bid_close + g.ask_close) / 2).to_numpy(float))
+    return res
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--gold-raw", default=str(ROOT / "raw"))
-    ap.add_argument("--xasset", default=str(ROOT / "raw" / "xasset"))
+    ap.add_argument("--xasset", default=str(ROOT / "raw" / "xasset" / "hd2"))
     ap.add_argument("--out", default=str(ROOT / "raw" / "xasset" / "results.json"))
+    ap.add_argument("--clock-check", action="store_true", help="amendment 1 feed alignment check only")
+    ap.add_argument("--gold-source", choices=["histdata", "dukascopy"], default="histdata")
     a = ap.parse_args()
-    with Pool(3, initializer=_init, initargs=(a.gold_raw, a.xasset)) as p:
+    if a.clock_check:
+        cc = clock_check(Path(a.gold_raw), ROOT / "raw" / "xasset", Path(a.xasset))
+        print(json.dumps(cc, indent=1))
+        return
+    with Pool(3, initializer=_init, initargs=(a.gold_raw, a.xasset, a.gold_source)) as p:
         res = dict(p.map(_run, list(VARIANTS)))
     Path(a.out).write_text(json.dumps(res, indent=1))
     print(json.dumps(res, indent=1))
