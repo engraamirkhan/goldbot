@@ -52,7 +52,9 @@ RULES = ("random_bracket", "session_vwap_fade", "opening_range_break", "sweep_ab
          *SCALP_RULES,
          # ADR 0058 phase 4: a discovered StrategySpec run by the one reviewed interpreter (`arm_rules_spec`); its rows
          # live in config/spec_arms.yaml and load on demo accounts only (`load_arms(live_class=True)` refuses them)
-         SPEC_RULE)
+         SPEC_RULE,
+         # growth sprint 2026-11-01 (goldbot.research.arm_rules_growth): GS1 and its random-entry control GS1C
+         "session_range_break", "session_range_control")
 
 
 # ---------------------------------------------------------------- holdout guard
@@ -279,6 +281,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]           # a doc reference reso
 # the trial registry (settings research.registry): a `registry:<config_hash>` reference must name one of its rows
 REGISTRY_PATH = REPO_ROOT / "state" / "research_registry.jsonl"
 EXEMPT_ROLES = ("control", "cost")
+# ADR 0061 amendment 2026-11-01 (owner instruction 2026-11-01, growth sprint section 3: "`role: owner_experiment`, for
+# GS1 only, with the expiry 2026-11-27 in code, journalled"): the arms the owner exempts from the qualification rule,
+# each with the last UTC day it may enter. Closed: the role on any other id is refused, and after the day the arm is
+# refused like any unqualified strategy (the engine re-reads it once a minute: `exploration.refresh_owner_experiments`)
+OWNER_EXPERIMENTS: dict[str, str] = {"GS1": "2026-11-27"}
+OWNER_EXPERIMENT_RULE = "owner experiment (owner instruction 2026-11-01, ADR 0061 amendment)"
 # trading-safety M2 + quant ruling 2026-10-30: the cost role is closed to these arms, each naming its prereg cost read
 # (prereg-2026-10-26-time-structure.md 2.2 / 3.2: "Signal-time cost read ... at >= 200 admissible F1A fills", ">= 100
 # admissible G1A fills"); the exemption ends when that many admissible fills are counted (`engine.exploration`)
@@ -388,7 +396,20 @@ def _cost_refusal(q: Qualification) -> str | None:
     return None
 
 
-def qualification_refusal(arm: Arm, root: Path = REPO_ROOT, registry: Path = REGISTRY_PATH) -> str | None:
+def owner_experiment_refusal(arm: Arm, now: pd.Timestamp | None = None) -> str | None:
+    """Why an `owner_experiment` arm may not enter at `now` (default: the clock), None while its exemption holds: the
+    id must be one of OWNER_EXPERIMENTS and `now` on or before its last day (UTC)."""
+    last = OWNER_EXPERIMENTS.get(arm.id)
+    if last is None:
+        return f"{QUALIFY_RULE}: the owner_experiment role is only for {sorted(OWNER_EXPERIMENTS)}"
+    at = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now).tz_convert("UTC")
+    if at.normalize() > pd.Timestamp(last, tz="UTC"):
+        return f"{QUALIFY_RULE}: the owner experiment {arm.id} expired after {last}"
+    return None
+
+
+def qualification_refusal(arm: Arm, root: Path = REPO_ROOT, registry: Path = REGISTRY_PATH,
+                          now: pd.Timestamp | None = None) -> str | None:
     """Why `arm` may send no demo entry under the owner rule 2026-10-30, or None when it may. Exempt: `role` control
     (a random control: a random_bracket rule or a body naming its `control`), or `role` cost on a COST_ARMS id naming
     its own cost read (`cost_read`). Any other arm needs a `qualification` that validates, with verdict `pass`,
@@ -406,6 +427,8 @@ def qualification_refusal(arm: Arm, root: Path = REPO_ROOT, registry: Path = REG
         return None
     if arm.role in EXEMPT_ROLES:
         return None
+    if arm.role == "owner_experiment":
+        return owner_experiment_refusal(arm, now)
     if arm.qualification is None:
         return f"{QUALIFY_RULE}: no qualification record (a screen and a confirm, both pass)"
     try:
@@ -467,7 +490,8 @@ class Arm(FrozenRecord):
     # arm, never the load). `entry_refused` is the loader's verdict (`load_arms` stamps it, overwriting the row): an
     # arm with one stays configured, so an open position keeps every exit, and sends no new entry. Run policy, like
     # a retirement: not in the hash
-    role: Literal["strategy", "control", "cost"] = "strategy"
+    # `owner_experiment`: exempt until its day in OWNER_EXPERIMENTS (ADR 0061 amendment 2026-11-01), that list only
+    role: Literal["strategy", "control", "cost", "owner_experiment"] = "strategy"
     qualification: Any = None
     # a cost arm's prereg cost read (COST_ARMS: F1A O-11, G1A O-12). A row field, not `params`: params are hashed, and
     # naming the read is run policy on a frozen body (trading-safety M2 asked for params.cost_read; the hash forbids it)
@@ -514,6 +538,9 @@ class Arm(FrozenRecord):
             if self.rule in SCALP_RULES:
                 from goldbot.research.arm_rules_scalp import check as check_scalp
                 check_scalp(self)
+            if self.rule in ("session_range_break", "session_range_control"):
+                from goldbot.research.arm_rules_growth import check as check_growth
+                check_growth(self)
             if self.rule == SPEC_RULE:
                 # ADR 0058 phase 4: a spec the engine cannot run exactly as its research read is refused at load
                 from goldbot.research.arm_rules_spec import check as check_spec

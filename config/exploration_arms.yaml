@@ -176,3 +176,11 @@ arms:
   # One registry row each (family arms_weekend_247, 2026Q4 budget 147 -> 149) before vantage-247 is enabled.
   - { id: WKS0, rule: random_bracket, timeframe: 1m, params: {"minutes": [0, 10, 20, 30, 40, 50], "window_utc": ["00:00", "23:50"], "stop_usd": 3.0, "target_r": 1.0, "hold_bars": 30, "weekdays": [5, 6]}, max_open: 3, status: run, forward_only: true, note: "weekend random control of the XAUUSD247 lane (S0 geometry; never read for edge)", role: control, config_hash: 643477cb6642a804 }
   - { id: WKI0, rule: random_bracket, timeframe: 15m, params: {"minutes": [0], "window_utc": ["00:00", "23:45"], "stop_atr": 1.5, "target_r": 2.0, "hold_bars": 96, "weekdays": [5, 6]}, max_open: 3, status: run, forward_only: true, note: "weekend random control of the XAUUSD247 lane (I0 geometry; never read for edge)", role: control, config_hash: e0f7bd18d11d3947 }
+  # Growth sprint 2026-11-01 (docs/research/growth-sprint-2026-11-01.md section 3; owner instruction 2026-11-01): the
+  # demo growth test, icm-demo only. GS1 = C2, the session-range breakout (Asia range broken in London, London range
+  # broken in New York; stop 1.5 x ATR15), single unit with a 3 R target (section 3's fallback; pyramid adds by 11-03,
+  # a protocol deviation). `role: owner_experiment`: exempt from ADR 0061 until 2026-11-27 only (ADR 0061 amendment
+  # 2026-11-01, research.arms.OWNER_EXPERIMENTS). GS1C: its random-entry control, same mechanics, one seeded entry per
+  # session GS1 is eligible in, seeded coin-flip side. Both sized by the RiskGate (accounts.yaml `sizing: growth`).
+  - { id: GS1, rule: session_range_break, timeframe: 15m, params: {"sessions": ["asia_london", "london_ny"], "stop_atr": 1.5, "target_r": 3.0, "hold_bars": 16, "prereg": "growth-sprint-2026-11-01.md#3"}, max_open: 1, status: run, forward_only: true, note: "growth sprint C2 session-range breakout, single unit (owner experiment to 2026-11-27)", role: owner_experiment, config_hash: 04d238be1c1b9169 }
+  - { id: GS1C, rule: session_range_control, timeframe: 15m, params: {"sessions": ["asia_london", "london_ny"], "stop_atr": 1.5, "target_r": 3.0, "hold_bars": 16, "prereg": "growth-sprint-2026-11-01.md#3", "control": "GS1"}, max_open: 1, status: run, forward_only: true, note: "random-entry control of GS1 (never read for edge)", role: control, config_hash: 4be30e28168b698f }

@@ -604,7 +604,9 @@ def engine_limits(settings: Settings, acc: Account, *, paper: bool = False) -> R
                                      # PD 2026-10-26: the probe host's own open-position cap (demo probe_only only)
                                      **({"max_positions": acc.max_positions}
                                         if acc.max_positions is not None and not paper else {}),
-                                     "exploration_arms": {} if paper else accounts.exploration_arm_caps(acc)})
+                                     "exploration_arms": {} if paper else accounts.exploration_arm_caps(acc),
+                                     # growth sprint 2026-11-01: the arms the gate sizes (demo probe_only only)
+                                     "growth_arms": frozenset() if paper else accounts.growth_arm_ids(acc)})
 
 
 def engine_limits_policy(settings: Settings, acc: Account, *, paper: bool = False, state_dir: str | Path = "state",

@@ -869,8 +869,10 @@ def test_the_two_hosts_ship_the_adr_0043_budget_with_exploration_on():
     assert (probe.budget_share + accs["icm-probe"].cost_probe.budget_share) * 220 == pytest.approx(198, abs=0.01)
     assert {k: (v.gbp, v.max_open) for k, v in probe.pots.items()} == {"scalp": (168, 14)}
     # ADR 0049 D1a (CFO 2026-10-27): a scalp pot for H-81 carved inside the same £198 (was intraday 108 / 9, swing 90 / 2)
-    assert {k: (v.gbp, v.max_open) for k, v in demo.pots.items()} == {"scalp": (90, 8), "intraday": (68, 7),
-                                                                       "swing": (40, 2)}
+    # growth sprint 2026-11-01: a growth pot for GS1/GS1C carved from the scalp pot inside the same £198
+    assert {k: (v.gbp, v.max_open) for k, v in demo.pots.items()} == {"scalp": (10, 8), "intraday": (68, 7),
+                                                                       "swing": (40, 2), "growth": (80, 2)}
+    assert sum(v.gbp for v in demo.pots.values()) == pytest.approx(198)
     assert {a.max_loss for a in probe.arms.values()} == {6.5}
     assert {a.max_loss for a in demo.arms.values() if a.style == "intraday"} == {17.0, 30.0}   # £30: wave-1 1h arms
     assert {a.max_loss for a in demo.arms.values() if a.style == "swing"} == {40.0}
