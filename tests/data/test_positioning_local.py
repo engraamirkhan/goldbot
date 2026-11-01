@@ -171,6 +171,15 @@ def test_gld_archive_frame_series_and_conservative_stamps():
     assert (out["source"] == "spdr").all() and (out["series_id"] == "GLD").all()
 
 
+def test_positions_dated_late_in_the_week_are_public_no_earlier_than_the_next_friday():
+    from goldbot.data.positioning import cot_available_utc, cot_legacy_available_utc
+
+    got = cot_legacy_available_utc(pd.DatetimeIndex(["2001-12-21", "2003-02-14"]))     # Friday-dated legacy reports
+    # 2001: the next Friday (28 Dec) is in Christmas week -> Monday 31 Dec; 2003: Friday 21 Feb, Presidents Day week
+    assert list(got) == [_utc("2001-12-31 20:30"), _utc("2003-02-24 20:30")]
+    assert cot_available_utc(pd.DatetimeIndex(["2025-06-03"]))[0] == _utc("2025-06-06 19:30")   # Tuesday unchanged
+
+
 # ------------------------------------------------------------------------------------------------ revisions
 def test_a_new_series_backfilled_later_keeps_its_rule_stamps_but_a_missed_date_is_late():
     days = pd.date_range("2025-05-06", periods=4, freq="7D")

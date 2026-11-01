@@ -105,7 +105,7 @@ def _naive_days(d: pd.Series | pd.DatetimeIndex) -> pd.DatetimeIndex:
     return (idx.tz_localize(None) if idx.tz is not None else idx).normalize()
 
 
-def cot_available_utc(report_date: pd.Series | pd.DatetimeIndex) -> pd.DatetimeIndex:
+def cot_available_utc(report_date: pd.Series | pd.DatetimeIndex, *, min_age: bool = True) -> pd.DatetimeIndex:
     """Conservative UTC time each COT report (positions as of `report_date`, normally a Tuesday) was public: the
     Friday of the report week at 15:30 ET, or 15:30 ET on the next US business day after that Friday when a federal
     holiday falls on Monday..Friday of the week; never before a shutdown floor (module docstring)."""
@@ -113,6 +113,11 @@ def cot_available_utc(report_date: pd.Series | pd.DatetimeIndex) -> pd.DatetimeI
     if len(d) == 0:
         return pd.DatetimeIndex([], tz="UTC")
     friday = d + pd.to_timedelta((4 - d.dayofweek) % 7, unit="D")
+    # positions dated Wednesday..Friday (holiday weeks, e.g. Friday 21 Dec 2001, Friday 14 Feb 2003) cannot be public
+    # by that week's Friday: the release is no earlier than the next week's Friday (the report needs >= 3 days)
+    # (`min_age=False`: the caller has already added a publication lag to the date, cot_legacy_available_utc)
+    if min_age:
+        friday = friday.where(friday - d >= pd.Timedelta(days=3), friday + pd.Timedelta(days=7))
     monday = friday - pd.Timedelta(days=4)
     hol = us_holidays(monday.min(), friday.max())
     holiday_week = np.array([bool(((hol >= m) & (hol <= f)).any()) for m, f in zip(monday, friday)])
@@ -268,7 +273,11 @@ def cot_legacy_available_utc(report_date: pd.Series | pd.DatetimeIndex) -> pd.Da
     lag = pd.to_timedelta(np.zeros(len(d), dtype="int64"), unit="D")
     for cutoff, days in reversed(COT_LEGACY_LAGS):        # earliest cut-off last, so it wins for the oldest reports
         lag = lag.where(~(d < pd.Timestamp(cutoff)), pd.Timedelta(days=days))
-    return cot_available_utc(d + lag)
+    lagged = np.asarray(lag > pd.Timedelta(0), dtype=bool)
+    out = cot_available_utc(d + lag, min_age=False)
+    if (~lagged).any():
+        out = out.where(lagged, cot_available_utc(d, min_age=True))
+    return pd.DatetimeIndex(out).as_unit("ns")
 
 
 def _legacy_norm(c: str) -> str:

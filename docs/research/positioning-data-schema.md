@@ -15,6 +15,16 @@ archive also forbids redistribution): nothing here is published to a GitHub rele
 Rebuild / refresh (idempotent; keeps every published row, adds new dates and revisions):
 `python -m goldbot.data.positioning_local --raw ~/myproject/goldbot/raw --store ~/myproject/goldbot/data`
 
+## Loaded (built 2026-11-01)
+
+| source | rows | series | value_date range |
+|---|---:|---:|---|
+| cftc | 17,024 | 16 | 2006-06-13 .. 2026-10-27 (1,064 reports) |
+| cftc_legacy | 19,400 | 10 | 1986-01-15 .. 2026-10-27 (1,940 reports) |
+| spdr | 22,080 | 4 | 2004-11-18 .. 2026-10-29 (5,520 days) |
+
+Do not use release `positioning-v1` for research: its legacy rows are all stamped 2026-10-31 (no usable history).
+
 ## Columns (one long table, one row per series, value_date and vintage)
 
 | column | type | meaning |
@@ -57,6 +67,8 @@ IAU (iShares): not loaded; the issuer has no free scripted historical download (
   moves it to 15:30 ET on the next US business day after the Friday (the CFTC's holiday schedule is never later than
   that). Shutdown backlogs (2013, 2018-19, 2025) have not-before floors. Legacy reports before 2001 add the
   fortnightly/semi-monthly publication lag (14 / 28 days).
+* Positions dated Wednesday..Friday (two holiday-week legacy reports, 2001-12-21 and 2003-02-14) are public no
+  earlier than the next week's Friday rule.
 * GLD: the next US business day after value_date (federal holidays skipped), 14:00 UTC. The trust publishes the
   evening of value_date, so this is conservative.
 * Known, accepted look-ahead: the history files carry corrected values, so the backfill stamps corrected values at the
