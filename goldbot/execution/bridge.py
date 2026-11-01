@@ -871,37 +871,41 @@ TERMINAL_PROBE_MAX_BYTES = 64 * 1024
 
 
 def probe_terminal(url: str, timeout_s: float = 5.0,
-                   get: Callable[..., Any] = requests.get) -> tuple[str, int | None]:
-    """The terminal's state from the bridge's GET /health, for `terminal:<account>`: (token, seconds in it). The token
-    is one of TERMINAL_STATES, "unreported" (a bridge older than the terminal state: 200 without the field), or
-    "noanswer" (no answer, junk, an unknown value, or a status that does not match the value: 200 only with ok)."""
+                   get: Callable[..., Any] = requests.get) -> tuple[str, int | None, str | None]:
+    """The terminal's state from the bridge's GET /health, for `terminal:<account>`: (token, seconds in it, keyring
+    login token). The token is one of TERMINAL_STATES, "unreported" (a bridge older than the terminal state: 200
+    without the field), or "noanswer" (no answer, junk, an unknown value, or a status that does not match the value:
+    200 only with ok). The login token is one of LOGIN_STATES or None (absent or anything else; incident 2026-11-01:
+    `refused` was on /health and nothing read it)."""
     try:
         r = get(f"{url.rstrip('/')}/health", timeout=timeout_s, stream=True)
     except requests.RequestException:
-        return "noanswer", None
+        return "noanswer", None, None
     try:
         buf = bytearray()
         for chunk in r.iter_content(4096):
             buf += chunk
             if len(buf) > TERMINAL_PROBE_MAX_BYTES:
-                return "noanswer", None
+                return "noanswer", None, None
         body = json.loads(bytes(buf))
     except (requests.RequestException, ValueError):
-        return "noanswer", None
+        return "noanswer", None, None
     finally:
         try:
             r.close()
         except Exception:                                # noqa: BLE001
             pass
     if not isinstance(body, dict):
-        return "noanswer", None
+        return "noanswer", None, None
     state = body.get("terminal")
     if state is None:
-        return ("unreported", None) if r.status_code == 200 and body.get("ok") is True else ("noanswer", None)
+        return ("unreported", None, None) if r.status_code == 200 and body.get("ok") is True else ("noanswer", None, None)
     if state not in TERMINAL_STATES or r.status_code != (200 if state == "ok" else 503):
-        return "noanswer", None
+        return "noanswer", None, None
     age = body.get("terminal_for_s")
-    return str(state), age if isinstance(age, int) and not isinstance(age, bool) and age >= 0 else None
+    raw_login = body.get("login")
+    login = raw_login if isinstance(raw_login, str) and raw_login in LOGIN_STATES else None
+    return (str(state), age if isinstance(age, int) and not isinstance(age, bool) and age >= 0 else None, login)
 
 
 def bridge_server_tz(url: str, timeout_s: float = 5.0, get: Callable[..., Any] = requests.get) -> str | None:

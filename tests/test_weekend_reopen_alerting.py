@@ -149,7 +149,7 @@ def test_no_quote_for_over_the_verdict_age_after_the_reopen_is_the_frozen_feed_p
     assert any("recovered" in x and t >= first for t, x in box.pages)
 
 
-def test_a_bridge_that_dies_on_saturday_pages_at_once_and_keeps_failing(tmp_path, monkeypatch):
+def test_a_bridge_that_dies_on_saturday_pages_within_6_min_and_keeps_failing(tmp_path, monkeypatch):
     box = Box(tmp_path, monkeypatch, FRI_LAST)
     box.jump(pd.Timestamp("2026-10-17 12:00", tz="UTC"))
     box.run(pd.Timestamp("2026-10-17 12:10", tz="UTC"))
@@ -157,9 +157,9 @@ def test_a_bridge_that_dies_on_saturday_pages_at_once_and_keeps_failing(tmp_path
     died = box.host[0]
     box.bridge_up = False
     box.run(died + pd.Timedelta(minutes=10))
-    fails = box.failing_pages()
-    assert len(fails) == 1 and "FAIL bridge:icm-demo" in fails[0][1]
-    assert (fails[0][0] - died).total_seconds() <= 120                  # within the 6-minute alert objective
+    fails = [(t, x) for t, x in box.failing_pages() if "FAIL bridge:icm-demo" in x]
+    assert len(fails) == 1                                              # once for the outage (incident 2026-11-01)
+    assert (fails[0][0] - died).total_seconds() <= 360                  # within the 6-minute alert objective
     assert box.watch["bridge:icm-demo"] == "fail"
     # the engine's published verdict is no longer confirmed: it goes stale (unchecked) instead of being refreshed
     st = json.loads((tmp_path / "engine_icm-demo.json").read_text())

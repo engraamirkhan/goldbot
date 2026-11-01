@@ -348,14 +348,18 @@ def _bridge_watchdog(tmp_path: Path, *, active: bool = True, up_s: int = 3600, c
                      env: dict[str, str] | None = None, bodies: list[bytes | None] | None = None,
                      bridge_state: str | None = None, term_active: bool = True, term_up_s: int = 3600,
                      term_restarted_meanwhile: bool = False, nrestarts: int = 0, baseline: int | None = 0,
-                     state_link: bool = False) -> tuple[int, str, str]:
+                     state_link: bool = False, refused: bool = False) -> tuple[int, str, str]:
     """The root script (and its unprivileged probe) with fake systemctl / curl / date / setpriv first on PATH; only
     the test copies' PATH line and the probe's install path are changed. `bodies`: what GET /health returns on each
     probe in turn (None: no answer); default: `curl_ok` -> the legacy {"ok": true} body, else no answer. `baseline`:
     the NRestarts the watchdog last saw on a settled bridge (None: no file yet); `state_link`: its state directory is a
-    symlink (refused)."""
+    symlink (refused). `refused`: the bridge's login refusal mark stands (state/mt5-login/icm-demo.refused)."""
     fake = tmp_path / "bin"
     fake.mkdir()
+    login_dir = tmp_path / "mt5-login"
+    login_dir.mkdir()
+    if refused:
+        (login_dir / "icm-demo.refused").write_text("2026-11-01T01:32:26Z code -6\n")
     run = tmp_path / "run"
     if state_link:
         (tmp_path / "elsewhere").mkdir()
@@ -422,10 +426,13 @@ exec "$@"
     state_line = "STATE_DIR=/run/goldbot-bridge-watchdog\n"
     assert src.count(path_line) == 1 and src.count("PROBE=/usr/local/sbin/goldbot-bridge-probe\n") == 1
     assert src.count(state_line) == 1
+    login_line = "LOGIN_DIR=/opt/goldbot/state/mt5-login\n"
+    assert src.count(login_line) == 1
     copy = tmp_path / "wd.sh"
     copy.write_text(src.replace(path_line, f"PATH={fake}:/usr/bin:/bin\n")
                     .replace("PROBE=/usr/local/sbin/goldbot-bridge-probe\n", f"PROBE={probe}\n")
-                    .replace(state_line, f"STATE_DIR={run}\n"))
+                    .replace(state_line, f"STATE_DIR={run}\n")
+                    .replace(login_line, f"LOGIN_DIR={login_dir}\n"))
     r = subprocess.run([BASH, str(copy), *args], capture_output=True, timeout=30, env={**os.environ, **(env or {})})
     out = (r.stdout + r.stderr).decode("utf-8", "replace")
     return r.returncode, out, log.read_text() if log.exists() else ""
@@ -623,6 +630,36 @@ def test_a_symlinked_state_directory_is_never_written_or_trusted(tmp_path):
     settled.mkdir()
     rc, _, calls = _bridge_watchdog(settled, bodies=[_health("ok")], nrestarts=9, state_link=True)
     assert rc == 0 and list((settled / "elsewhere").iterdir()) == []
+
+
+# ---- incident 2026-11-01: a standing login refusal restarted the terminal every ~12 min for 6 h
+@pytest.mark.skipif(not BASH, reason="needs bash")
+@pytest.mark.parametrize("kw", [dict(bridge_state="activating", nrestarts=3),
+                                dict(bodies=[_health("not_running")] * 3),
+                                dict(bodies=[_health("not_connected")] * 3)],
+                         ids=["attach_loop", "not_running", "not_connected"])
+def test_a_standing_login_refusal_never_restarts_the_terminal(tmp_path, kw):
+    """A restart cannot clear the mark (only `accounts set` or `--retry-refused` does), and each terminal restart makes
+    the terminal try its saved login again into a refusal. Logged every run so the journal names the cause."""
+    rc, out, calls = _bridge_watchdog(tmp_path, refused=True, **kw)
+    assert rc == 0 and _restarted(calls) == [], calls
+    assert "login refusal mark stands" in out and "RUNBOOK 'MT5 login'" in out
+    # the mark is read as the service user, never followed by root
+    assert "setpriv --reuid=mt5 --regid=mt5 --clear-groups --no-new-privs --bounding-set=-all --inh-caps=-all -- " \
+        in calls
+
+
+@pytest.mark.skipif(not BASH, reason="needs bash")
+def test_without_a_refusal_mark_the_terminal_rules_are_unchanged(tmp_path):
+    rc, _, calls = _bridge_watchdog(tmp_path, refused=False, bridge_state="activating", nrestarts=3)
+    assert rc == 0 and _restarted(calls) == [TERMINAL_UNIT], calls
+
+
+@pytest.mark.skipif(not BASH, reason="needs bash")
+def test_a_bridge_that_never_answers_is_still_restarted_with_a_refusal_mark(tmp_path):
+    """A bridge restart sends no credential (the ledger gates every login), so it stays allowed."""
+    rc, _, calls = _bridge_watchdog(tmp_path, refused=True, curl_ok=False)
+    assert rc == 0 and _restarted(calls) == ["goldbot-bridge@icm-demo.service"], calls
 
 
 def test_the_watchdog_restarts_only_the_two_literal_units():

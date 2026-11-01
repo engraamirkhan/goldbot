@@ -115,6 +115,9 @@ from goldbot.ops.checks._base import (
 )
 from goldbot.ops.checks.auth import check_email_link, check_secrets
 from goldbot.ops.checks.bridge import (
+    BRIDGE_DOWN_FAIL_S,
+    BRIDGE_DOWN_FILE,
+    BRIDGE_UP_CLOSE_S,
     TERMINAL_NOT_CONNECTED_FAIL_S,
     _age_s,
     _engine_bridge_unconfirmed,
@@ -210,6 +213,9 @@ __all__ = [
     "BACKUP_WARN_H",
     "BRIDGE_TIMEOUT_S",
     "TERMINAL_NOT_CONNECTED_FAIL_S",
+    "BRIDGE_DOWN_FAIL_S",
+    "BRIDGE_DOWN_FILE",
+    "BRIDGE_UP_CLOSE_S",
     "COSTS_FAIL_DAYS",
     "COSTS_PUBLISHED_WARN_DAYS",
     "COSTS_WARN_DAYS",

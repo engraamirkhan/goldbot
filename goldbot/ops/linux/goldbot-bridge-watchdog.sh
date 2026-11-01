@@ -31,6 +31,11 @@
 #   - noanswer on every probe: restart the bridge (as before);
 #   - not_running/not_connected on every probe, terminal unit up TERMINAL_GRACE_S: restart the terminal unit;
 #   - anything mixed: nothing (the next run looks again).
+# * before any terminal restart: a standing login refusal mark (<LOGIN_DIR>/<account>.refused, goldbot/ops/login_ledger.py)
+#   means nothing: logged, never restarted (incident 2026-11-01: the terminal was restarted every ~12 min for 6 h). A
+#   restart cannot clear the mark (only `goldbot-mt5 accounts set` or `--retry-refused` does) and makes the terminal
+#   try its saved login again into a refusal. The mark is tested as mt5 (setpriv; only test's exit status comes back),
+#   so root never follows a path under the mt5-owned tree. A bridge restart stays allowed: it sends no credential.
 # The terminal grace also limits terminal restarts to one per TERMINAL_GRACE_S. A unit restarted by someone else
 # while this probed is left alone. A bridge restart is the ordinary one: the brain's engine sees a lost reply, exits
 # and reconciles with the broker on restart (row X7); stops rest with the broker meanwhile.
@@ -40,6 +45,8 @@ PATH=/usr/sbin:/usr/bin:/sbin:/bin
 PROBE=/usr/local/sbin/goldbot-bridge-probe
 # root-only (RuntimeDirectory=, 0700, kept between runs): the bridge's NRestarts when it was last seen settled
 STATE_DIR=/run/goldbot-bridge-watchdog
+# the bridge's login ledger (mt5-owned): only ever tested as mt5, never opened or followed by root
+LOGIN_DIR=/opt/goldbot/state/mt5-login
 GRACE_S=${GOLDBOT_BRIDGE_GRACE_S:-300}
 TERMINAL_GRACE_S=${GOLDBOT_TERMINAL_GRACE_S:-600}
 ATTACH_RESTARTS=${GOLDBOT_BRIDGE_ATTACH_RESTARTS:-3}
@@ -85,8 +92,16 @@ get_baseline() {              # the stored count, or nothing
   fi
   if [[ "$b" =~ ^[0-9]{1,9}$ ]]; then echo "$b"; fi
 }
+login_refused() {             # exit status 0 while the account's login refusal mark stands; run as mt5, not root
+  setpriv --reuid=mt5 --regid=mt5 --clear-groups --no-new-privs --bounding-set=-all --inh-caps=-all -- \
+    test -e "$LOGIN_DIR/$inst.refused" 2>/dev/null
+}
 restart_terminal() {          # $1: why, built from fixed text, validated numbers and allow-listed tokens only
   [ "$(prop ActiveEnterTimestamp "$term")" = "$term_since" ] || exit 0      # restarted while we looked
+  if login_refused; then
+    log "$1, but the login refusal mark stands for $inst; not restarting $term (a restart cannot clear it; RUNBOOK 'MT5 login')"
+    exit 0
+  fi
   log "$1; restarting $term"
   systemctl restart "$term"
   exit 0

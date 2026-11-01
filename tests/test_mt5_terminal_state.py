@@ -257,7 +257,7 @@ def _get(status: int, body: Any) -> Any:
 def test_probe_terminal_reads_200_and_503(state):
     status = 200 if state == "ok" else 503
     assert probe_terminal("http://x", get=_get(status, {"ok": state == "ok", "terminal": state,
-                                                         "terminal_for_s": 42})) == (state, 42)
+                                                         "terminal_for_s": 42})) == (state, 42, None)
 
 
 @pytest.mark.parametrize("status,body,want", [
@@ -274,13 +274,21 @@ def test_probe_terminal_trusts_only_a_known_token(status, body, want):
 def test_probe_terminal_without_an_answer():
     def boom(url: str, timeout: float, **kw: Any) -> Any:
         raise requests.ConnectionError("tunnel down")
-    assert probe_terminal("http://x", get=boom) == ("noanswer", None)
+    assert probe_terminal("http://x", get=boom) == ("noanswer", None, None)
 
 
 def test_probe_health_counts_a_503_with_a_terminal_state_as_the_bridge_answering():
     """bridge:<account> is about the bridge; the terminal has its own check (no double alert, no wrong cause)."""
     assert probe_health("http://x", get=_get(503, {"ok": False, "terminal": "not_logged_in"})) is None
     assert probe_health("http://x", get=_get(503, {"ok": False})) == "HTTP 503"
+
+
+@pytest.mark.parametrize("login,want", [("refused", "refused"), ("waiting", "waiting"), ("rate_limited", "rate_limited"),
+                                        ("in_progress", "in_progress"), ("x; rm", None), (6, None), (None, None)])
+def test_probe_terminal_reads_the_keyring_login_token_only_when_known(login, want):
+    """Incident 2026-11-01: the bridge's /health said `login: refused` and the brain ignored it."""
+    body = {"ok": False, "terminal": "not_logged_in", "terminal_for_s": 30, "login": login}
+    assert probe_terminal("http://x", get=_get(503, body)) == ("not_logged_in", 30, want)
 
 
 # ---- the terminal:<account> check (plan section 3 wording)
@@ -335,6 +343,100 @@ def test_security_6_the_check_text_carries_no_login_server_or_host(tmp_path, sta
     for for_s in (30, 99_999):
         c = _check(tmp_path, state, for_s=for_s)
         assert not DIGITS.search(c.reason) and SERVER not in c.reason and "127.0.0.1" not in c.reason, c.reason
+
+
+@pytest.mark.parametrize("state", ["not_logged_in", "not_running", "not_connected"])
+def test_a_standing_login_refusal_fails_with_the_recovery_in_the_text(tmp_path, state):
+    """Incident 2026-11-01: a latched refusal never heals by itself; the alert says so and names both recoveries."""
+    ctx = make_ctx(tmp_path, terminal_probe=lambda u: (state, 30, "refused"),
+                   get_secret=lambda k: "http://127.0.0.1:18765" if k == "mt5-bridge-url-icm-demo" else "s3cr3t-value")
+    c = health.check_terminal(ctx, "icm-demo")
+    assert c.name == "terminal:icm-demo" and c.status == "fail"
+    assert "login refused" in c.reason and "does not heal by itself" in c.reason
+    assert "RUNBOOK 'MT5 login'" in c.reason and "--retry-refused" in c.reason
+    assert "goldbot-mt5 accounts set mt5-icm-demo" in c.reason and "Service is not available" in c.reason
+    assert not DIGITS.search(c.reason) and SERVER not in c.reason and "127.0.0.1" not in c.reason
+
+
+def test_a_login_token_beside_a_terminal_that_is_ok_changes_nothing(tmp_path):
+    ctx = make_ctx(tmp_path, terminal_probe=lambda u: ("ok", 30, "refused"),
+                   get_secret=lambda k: "http://127.0.0.1:18765" if k == "mt5-bridge-url-icm-demo" else "s3cr3t-value")
+    assert health.check_terminal(ctx, "icm-demo").status == "ok"
+
+
+# ---- incident 2026-11-01: a bridge down for hours paged nothing useful; one clear page per outage, inside 6 min
+def _bridge(tmp_path: Any, at: pd.Timestamp, up: bool) -> Any:
+    ctx = make_ctx(tmp_path, now=at, bridge_probe=lambda u: None if up else "unreachable (ConnectionError)",
+                   get_secret=lambda k: "http://127.0.0.1:18765" if k == "mt5-bridge-url-icm-demo" else "s3cr3t-value")
+    return health.check_bridge(ctx, "icm-demo")
+
+
+T0 = pd.Timestamp("2026-11-01 01:29", tz="UTC")
+
+
+def _at(minutes: float) -> pd.Timestamp:
+    return T0 + pd.Timedelta(minutes=minutes)
+
+
+def test_a_bridge_down_warns_first_and_fails_at_5_min_with_the_causes_and_steps(tmp_path):
+    assert health.BRIDGE_DOWN_FAIL_S == 300         # with the 60 s health pass: paged within the 6 min objective
+    c = _bridge(tmp_path, _at(0), up=False)
+    assert c.status == "warn" and "ConnectionError" in c.reason
+    assert _bridge(tmp_path, _at(4.9), up=False).status == "warn"
+    c = _bridge(tmp_path, _at(5), up=False)
+    assert c.status == "fail" and "for 5 min" in c.reason
+    assert "journalctl -u goldbot-bridge@icm-demo" in c.reason and "RUNBOOK 'MT5 login'" in c.reason
+    assert "password refused by the broker" in c.reason and "broker stop" in c.reason
+    assert "18765" not in c.reason and "127.0.0.1" not in c.reason
+
+
+def test_a_bridge_answering_between_outages_does_not_restart_the_clock(tmp_path):
+    """A restart loop that answers now and then must still page (a reset clock would keep it silent forever)."""
+    assert _bridge(tmp_path, _at(0), up=False).status == "warn"
+    assert _bridge(tmp_path, _at(3), up=True).status == "ok"       # a blip: not an outage yet, nothing said
+    assert _bridge(tmp_path, _at(5), up=False).status == "fail"    # the outage began at 0
+
+
+def test_a_bridge_back_just_before_the_page_is_never_paged_as_an_incident(tmp_path):
+    assert _bridge(tmp_path, _at(0), up=False).status == "warn"
+    assert _bridge(tmp_path, _at(4.9), up=False).status == "warn"
+    assert _bridge(tmp_path, _at(5.5), up=True).status == "ok"
+
+
+def test_a_long_outage_closes_only_after_3_min_answering_and_then_starts_afresh(tmp_path):
+    assert _bridge(tmp_path, _at(0), up=False).status == "warn"
+    assert _bridge(tmp_path, _at(10), up=False).status == "fail"
+    c = _bridge(tmp_path, _at(11), up=True)
+    assert c.status == "fail" and "answers again" in c.reason       # one incident: no recovered + new page per flap
+    assert _bridge(tmp_path, _at(12), up=False).status == "fail"
+    assert _bridge(tmp_path, _at(13), up=True).status == "fail"
+    c = _bridge(tmp_path, _at(16), up=True)
+    assert c.status == "ok" and c.reason == "bridge answers /health"
+    assert _bridge(tmp_path, _at(17), up=False).status == "warn"   # a new outage: its own clock
+
+
+def test_a_bridge_restart_loop_pages_once_for_the_whole_incident(tmp_path):
+    watch = health.HealthWatch(tmp_path)
+    pages = []
+    for m in range(0, 360):                                         # 6 h, health every minute, up 1 min in 7
+        c = _bridge(tmp_path, _at(m), up=m % 7 == 6)
+        text = watch.poll(health.HealthReport(ts=_at(m), status=c.status, checks=[c]))
+        if text and "new failure" in text:
+            pages.append((m, text))
+    assert len(pages) == 1 and pages[0][0] <= 6, pages
+    assert "MT5 bridge unreachable" in pages[0][1]
+
+
+def test_an_unusable_outage_record_fails_at_once_rather_than_never(tmp_path):
+    (tmp_path / health.BRIDGE_DOWN_FILE).write_bytes(b"not a database" * 100)
+    assert _bridge(tmp_path, _at(0), up=False).status == "fail"
+    ro = tmp_path / "ro"
+    ro.mkdir()
+    ro.chmod(0o500)
+    try:
+        assert _bridge(ro, _at(0), up=False).status == "fail"
+    finally:
+        ro.chmod(0o700)
 
 
 def test_run_checks_places_the_terminal_check_after_the_bridge(tmp_path):
