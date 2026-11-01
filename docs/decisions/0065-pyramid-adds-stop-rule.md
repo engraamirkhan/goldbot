@@ -1,6 +1,6 @@
 # 0065: Pyramid adds: every earlier stop to the newest add's stop
 
-Status: proposed (implementer, 2026-11-01; for trading-safety and quant review)
+Status: accepted (quant 2026-11-01)
 
 ## Context
 Growth sprint 2026-11-01 section 3 defers GS1's pyramid adds to 11-03 (a logged protocol deviation): "add a unit at
@@ -30,16 +30,16 @@ moved back to the rule (restart safety). Stops only ever tighten. The add ladder
 GS1 and GS1C. The engine's open-risk accounting is unchanged: no netting is introduced.
 
 ## Consequences
-- The live stops are tighter than the C2 screen's: after add 2 every unit is at +1 R (the screen has +0.67 R), after
-  add 3 at +2 R (screen +1.25 R). Live pyramids stop out earlier on pullbacks than the screen's, so the screen's R
-  distribution is not GS1's. The pre-registered read (GS1 - GS1C, identical mechanics) stays matched. A comparison
-  of GS1 against the C2 screen needs the screen re-walked with this rule (quant-reviewer).
-- A refused add's level is spent (tried once). It is a blocked candidate, so the read sees it as a shadow fill.
-  `fold_groups` does not fold a shadow add into its group: it counts as a trade of its own in the (day, session)
-  cell (performance-analyst).
-- At about 0.05 lots a unit, ADR 0043's 0.10 net-lot cap leaves room for one add of one group. GS1 and GS1C on the
-  same side share that room; on opposite sides they net. So the adds a leg gets depend on the other leg's side. The
-  pairing records it (refusals by reason), but three adds per group need units of at most 0.025 lots. Sizing is
-  PD + PO's call, not this ADR's.
-- What would change this: a decision to net locked gains in the engine's open risk (rule 2 then fits), or a
-  per-unit size that fits the screen's common stop (rule 1).
+- GS1 is not compared to the C2 screen. There is no re-walk: C2 is retired, and a re-walk adds K for no decision. The
+  live stops are tighter than C2's (every unit at +1 R after add 2, +2 R after add 3; the screen had +0.67 R and
+  +1.25 R). The pre-registered read, GS1 - GS1C, compares identical mechanics. Growth sprint §3 logs this as
+  protocol deviation 2.
+- The add path moves the earlier stops by `modify` and confirms them at the broker before the add is sent
+  (`confirm_move`). A rejected or raising modify refuses the add, and the engine's copy of a stop changes only to a
+  level the broker confirmed (safety S1, S2).
+- Each unit is 0.01 lots (`unit_lots`, quant Q2), so both legs' 8 units fit the 0.10 net lots. A pyramid unit has no
+  profit target, and the group exits together at its stop or its end (quant Q3).
+- A refused add's level is spent (tried once). The read never counts a refused add as a trade (quant Q4): it is listed
+  as `refused_adds`, and its replayed R appears only in the "uncapped (approx.)" ledger.
+- What would change this: a decision to net locked gains in the engine's open risk, under which the minimal move
+  (rule 2) would fit.

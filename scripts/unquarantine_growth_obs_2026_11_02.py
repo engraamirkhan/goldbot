@@ -27,12 +27,22 @@ def repair(db: Database) -> int:
         return int(cur.rowcount)
 
 
+def remaining(db: Database) -> int:
+    """Growth rows still quarantined, for any other reason (left as they are; printed for the read's owner)."""
+    with db.connection() as conn:
+        row = conn.execute("SELECT COUNT(*) FROM exploration_obs WHERE style = 'growth' AND quarantine IS NOT NULL "
+                           f"AND arm_id IN ({','.join('?' * len(ARMS))})", ARMS).fetchone()
+        return int(row[0])
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--state-dir", default="state")
     a = ap.parse_args()
-    n = repair(Database.open(a.state_dir, "aux"))
+    db = Database.open(a.state_dir, "aux")
+    n = repair(db)
     print(f"growth candidates released from quarantine: {n}")
+    print(f"growth candidates still quarantined for another reason: {remaining(db)}")
     return 0
 
 

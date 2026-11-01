@@ -828,8 +828,9 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
         raise ValueError("exploration evidence is learnt per broker")
     obs = read_obs(db, broker=broker, as_of=as_of, evidence="posterior", held_out=held_out)     # prereg Amendment 4
     strat = obs[~obs["is_control"]]
+    strat = strat[strat["style"].isin(STYLES)]        # quant Q5: a growth-pot row is read, never learnt from
     style_of = {str(a): str(s) for a, s in strat.groupby("arm_id")["style"].first().items()}
-    style_of.update(arms or {})
+    style_of.update({a: s for a, s in (arms or {}).items() if s in STYLES})
     for c in controls:
         style_of.pop(c, None)
     out: dict[str, Any] = {"arms": len(style_of)}

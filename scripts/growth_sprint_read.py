@@ -9,7 +9,11 @@ Sources: the closed rows of `exploration_trades` (the engine's exploration ledge
 `balance_snapshots` (the broker's equity, one a day) net of `balance_deals` (deposits, withdrawals) for the real account.
 A trade's R is net: broker P&L over the loss at the gate's stop (`pnl / stop_loss`, both account currency). Pyramid adds ride on their first unit when the body
 carries `group_id` (the first unit's client order id): the group's P&L over the first unit's stop. Day = the session
-day (17:00 New York roll) of the signal. The prereg items:
+day (17:00 New York roll) of the signal. Refused candidates (`exploration_obs`, taken = 0, a cap's reason; quant Q4
+2026-11-01, `growth_ledger.split_shadow`): a refused first unit is a shadow trade (R = its replay's label_sim_r, in the
+matched read and the ledgers, not in n); a refused pyramid add is never a trade: counted per arm as `refused_adds`, its
+replayed R added to its group only in the "uncapped (approx.)" ledgers, and the days holding one dropped from the
+matched-read sensitivity. The prereg items:
   (a) real equity multiple and (b) max drawdown since the week start (daily snapshots: a lower bound on the drawdown);
   virtual ledgers at f = 5/10/20 % on each arm's R in exit order (multiple, max drawdown, doubled);
   (c) GS1 minus GS1C mean R on the days both traded, day-bootstrap 90 % CI, n;
@@ -28,6 +32,9 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from goldbot.engine.exploration import signal_close
+from goldbot.research.growth_ledger import split_shadow
 
 ARM, CONTROL = "GS1", "GS1C"
 FRACTIONS = (0.05, 0.10, 0.20)
@@ -57,6 +64,9 @@ class ArmRead:
     total_r: float = 0.0
     top10_share: float | None = None
     ledgers: list[Ledger] = field(default_factory=list)
+    shadow: int = 0                  # refused first units read as shadow trades (in the matched read and ledgers)
+    refused_adds: dict[str, int] = field(default_factory=dict)
+    ledgers_uncapped: list[Ledger] = field(default_factory=list)   # with the refused adds' replayed R (approx.)
 
 
 @dataclass
@@ -71,6 +81,8 @@ class Read:
     diff_mean_r: float | None = None
     diff_ci90: tuple[float, float] | None = None
     warning: str = ""
+    matched_days_no_refused_add: int = 0      # sensitivity: the days without a refused add on either leg
+    diff_mean_no_refused_add_r: float | None = None
 
 
 def week_start(now: pd.Timestamp) -> pd.Timestamp:
@@ -93,7 +105,8 @@ def _ns(ts: pd.Timestamp) -> int:
 
 
 def trades(conn: sqlite3.Connection, account: str, arm: str, since: pd.Timestamp) -> tuple[pd.DataFrame, int]:
-    """One row per trade (adds folded into their group): exit, day, R, censored. Second: unreadable rows."""
+    """One row per trade (adds folded into their group; R over the stop loss of the row whose client order id is the
+    group key, the first unit): exit, day, R, censored, group. Second: unreadable rows."""
     rows = conn.execute("SELECT body FROM exploration_trades WHERE account_id = ? AND arm_id = ? AND closed = 1 "
                         "AND ts_ns >= ?", (account, arm, _ns(since))).fetchall()
     groups: dict[str, list[dict[str, Any]]] = {}
@@ -101,17 +114,18 @@ def trades(conn: sqlite3.Connection, account: str, arm: str, since: pd.Timestamp
         b = json.loads(body)
         groups.setdefault(str(b.get("group_id") or b["client_order_id"]), []).append(b)
     out, bad = [], 0
-    for g in groups.values():
-        g.sort(key=lambda b: str(b["sent_utc"]))
-        risk, pnls = g[0].get("stop_loss"), [b.get("pnl") for b in g]
-        if risk is None or float(risk) <= 0 or any(p is None for p in pnls) or g[-1].get("exit_utc") is None:
+    for key, g in groups.items():
+        first = next((b for b in g if str(b["client_order_id"]) == key), None)
+        risk, pnls = (first or {}).get("stop_loss"), [b.get("pnl") for b in g]
+        if first is None or risk is None or float(risk) <= 0 or any(p is None for p in pnls) \
+                or any(b.get("exit_utc") is None for b in g):
             bad += len(g)
             continue
         exit_utc = max(pd.Timestamp(b["exit_utc"]) for b in g)
-        out.append({"exit": exit_utc, "day": session_day(pd.Timestamp(g[0]["signal_utc"])),
+        out.append({"exit": exit_utc, "day": session_day(pd.Timestamp(first["signal_utc"])),
                     "r": sum(float(p) for p in pnls if p is not None) / float(risk),
-                    "censored": any(bool(b.get("censored")) for b in g)})
-    df = pd.DataFrame(out, columns=["exit", "day", "r", "censored"])
+                    "censored": any(bool(b.get("censored")) for b in g), "group": key, "shadow": False})
+    df = pd.DataFrame(out, columns=["exit", "day", "r", "censored", "group", "shadow"])
     return df.sort_values("exit", kind="stable").reset_index(drop=True), bad
 
 
@@ -179,23 +193,47 @@ def real_equity(conn: sqlite3.Connection, account: str, since: pd.Timestamp) -> 
     return float(v[-1]), max_drawdown(v), len(path)
 
 
+def refused(conn: sqlite3.Connection, account: str, since: pd.Timestamp) -> list[tuple[Any, ...]]:
+    """The refused GS1/GS1C candidates since `since` (none when aux.db has no candidate table yet)."""
+    try:
+        return conn.execute(
+            "SELECT candidate_id, arm_id, decision_ns, blocked_reason, label_sim_r, label_exit_ns, max_hold_s "
+            "FROM exploration_obs WHERE account_id = ? AND arm_id IN (?, ?) AND taken = 0 AND decision_ns >= ?",
+            (account, ARM, CONTROL, _ns(since))).fetchall()
+    except sqlite3.OperationalError:
+        return []
+
+
 def build(aux: Path, account: str, since: pd.Timestamp) -> Read:
     conn = _connect(aux)
     try:
         out = Read(account=account, since=since.isoformat())
         out.real_multiple, out.real_max_drawdown, out.snapshots = real_equity(conn, account, since)
+        split = split_shadow(refused(conn, account, since), account)
         frames = {}
         for arm in (ARM, CONTROL):
-            df, bad = trades(conn, account, arm, since)
+            real, bad = trades(conn, account, arm, since)
+            shadow = pd.DataFrame([{"exit": t.exit_utc, "day": session_day(t.entry_utc), "r": t.r, "censored": False,
+                                    "group": t.group_id, "shadow": True} for t in split.firsts if t.arm_id == arm],
+                                  columns=real.columns)
+            df = pd.concat([real, shadow], ignore_index=True) if len(shadow) else real
+            df = df.sort_values("exit", kind="stable").reset_index(drop=True)
             frames[arm] = df
-            r = df["r"].to_numpy(dtype=float)
-            out.arms.append(ArmRead(arm=arm, n=len(r), days=int(df["day"].nunique()),
-                                    censored=int(df["censored"].sum()), unreadable=bad,
-                                    mean_r=float(r.mean()) if len(r) else None, total_r=float(r.sum()),
-                                    top10_share=top10_share(r), ledgers=[ledger(r, f) for f in FRACTIONS]))
+            r, n = df["r"].to_numpy(dtype=float), len(real)
+            wide = r + np.array([sum(split.add_r.get(str(g), [])) for g in df["group"]], dtype=float)
+            out.arms.append(ArmRead(arm=arm, n=n, days=int(real["day"].nunique()),
+                                    censored=int(real["censored"].sum()), unreadable=bad,
+                                    mean_r=float(real["r"].mean()) if n else None, total_r=float(real["r"].sum()),
+                                    top10_share=top10_share(real["r"].to_numpy(dtype=float)),
+                                    ledgers=[ledger(r, f) for f in FRACTIONS], shadow=len(df) - n,
+                                    refused_adds=dict(split.refused_adds.get(arm, {})),
+                                    ledgers_uncapped=[ledger(wide, f) for f in FRACTIONS]))
     finally:
         conn.close()
     out.matched_days, out.diff_mean_r, out.diff_ci90 = matched_diff(frames[ARM], frames[CONTROL])
+    drop = {session_day(t) for t in (signal_close(g) for g in split.add_groups) if t is not None}
+    kept = {a: f[~f["day"].isin(drop)] for a, f in frames.items()}
+    out.matched_days_no_refused_add, out.diff_mean_no_refused_add_r, _ = matched_diff(kept[ARM], kept[CONTROL])
     out.warning = WARNING.format(n=out.arms[0].n) if out.arms[0].n < SMALL_N else ""
     return out
 
@@ -220,7 +258,13 @@ def markdown(rd: Read) -> str:
                      f"{a.total_r:+.2f} | {_f(a.top10_share, '{:.0%}')} | {led} |")
     ci = "n/a (needs 2+ matched days)" if rd.diff_ci90 is None else f"[{rd.diff_ci90[0]:+.3f}, {rd.diff_ci90[1]:+.3f}]"
     lines += ["", f"{ARM} minus {CONTROL} mean R on matched days: {_f(rd.diff_mean_r)} R, day-bootstrap 90% CI {ci}, "
-              f"matched days {rd.matched_days}, n {rd.arms[0].n} vs {rd.arms[1].n}"]
+              f"matched days {rd.matched_days}, n {rd.arms[0].n} vs {rd.arms[1].n}",
+              f"Sensitivity without the days holding a refused add: {_f(rd.diff_mean_no_refused_add_r)} R over "
+              f"{rd.matched_days_no_refused_add} matched days"]
+    for a in rd.arms:
+        adds = ", ".join(f"{k} {v}" for k, v in sorted(a.refused_adds.items())) or "none"
+        wide = ", ".join(f"f={x.fraction:.0%} {x.multiple:.3f}x" for x in a.ledgers_uncapped)
+        lines.append(f"{a.arm}: shadow first units {a.shadow}, refused adds {adds}; uncapped (approx.) {wide}")
     if rd.warning:
         lines += ["", f"**{rd.warning}**"]
     return "\n".join(lines) + "\n"

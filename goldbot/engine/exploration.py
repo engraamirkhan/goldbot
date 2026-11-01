@@ -181,6 +181,8 @@ class Arm(FrozenRecord):
     # growth sprint 2026-11-01: pyramid adds at +1 R steps of the first unit's entry, at most this many
     # (`exploration_pyramid`; accounts.yaml `adds`, growth-sized arms only). 0: the arm never adds
     adds: int = Field(0, ge=0, le=3)
+    # quant Q2 2026-11-01: the most lots a growth unit takes (accounts.yaml `unit_lots`); None = the gate's sizing
+    unit_lots: float | None = Field(None, gt=0)
 
     @property
     def arm_id(self) -> str:
@@ -357,7 +359,8 @@ def config_for(acc: Account, spec_path: Path = SPEC_PATH,
                         arm_id, acc.account_id)
             dropped.append(arm_id)
             continue
-        arms.append(Arm(spec=specs[arm_id], style=reg.style, control_share=reg.control_share, adds=reg.adds))
+        arms.append(Arm(spec=specs[arm_id], style=reg.style, control_share=reg.control_share, adds=reg.adds,
+                        unit_lots=reg.unit_lots))
     running = {a.arm_id for a in arms}
     dropped += [i for i in rejected if i not in running and i not in dropped]
     return ExplorationConfig(enabled=True, budget_share=ex.budget_share, max_open_total=ex.max_open_total,
@@ -608,8 +611,14 @@ def adoption(eng: Engine, p: Position) -> tuple[Specialist | None, str]:
 
 def order_id(eng: Engine, arm: Arm, bar_ts: pd.Timestamp) -> str:
     """`ex<arm5>-<epoch10>-<h8>`: 27 characters, the whole id fits MT5's 29-character comment (MT5_COMMENT_MAX)."""
-    h = hashlib.sha1(f"{eng.cfg.account_id}|{arm.arm_id}|{bar_ts.isoformat()}".encode()).hexdigest()[:8]
-    return f"{COMMENT}{arm.key}-{int(bar_ts.timestamp()):010d}-{h}"
+    return make_order_id(eng.cfg.account_id, arm.arm_id, bar_ts)
+
+
+def make_order_id(account_id: str, arm_id: str, bar_ts: pd.Timestamp) -> str:
+    """`order_id` from the account and arm ids alone (the read decodes pyramid groups with it, no engine)."""
+    h = hashlib.sha1(f"{account_id}|{arm_id}|{bar_ts.isoformat()}".encode()).hexdigest()[:8]
+    key = hashlib.sha1(arm_id.encode()).hexdigest()[:5]
+    return f"{COMMENT}{key}-{int(bar_ts.timestamp()):010d}-{h}"
 
 
 def pending_id(eng: Engine, arm: Arm, s: Pending) -> str:
@@ -720,10 +729,13 @@ def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.D
 
 def _pending(arm: Arm, rows: pd.DataFrame, through: pd.Timestamp) -> list[Pending]:
     """Candidate rows (side, risk_usd, target_r, max_bars; a BXR's struct_r) as signals with their own stop, target
-    and hold."""
+    and hold. An arm with pyramid adds has no profit target (quant Q3 2026-11-01: the group exits together at its stop
+    or its end), so its target is `exploration_pyramid.NO_TARGET_R` R, live and in the shadow replay alike."""
+    from goldbot.engine.exploration_pyramid import NO_TARGET_R
     struct = rows["struct_r"].to_numpy(dtype=float) if "struct_r" in rows.columns else [None] * len(rows)
     return [Pending(arm_id=arm.arm_id, side=int(side), bar_ts=through, stop_usd=float(risk),
-                    target_usd=float(target_r) * float(risk), hold_bars=int(max_bars) + 1,
+                    target_usd=(NO_TARGET_R if arm.adds > 0 else float(target_r)) * float(risk),
+                    hold_bars=int(max_bars) + 1,
                     struct_r=None if struct_r is None else float(struct_r))
             for side, risk, target_r, max_bars, struct_r in zip(rows["side"].to_numpy(dtype=int),
                                                                 rows["risk_usd"].to_numpy(dtype=float),
@@ -921,8 +933,9 @@ def on_pass(eng: Engine, tick: Tick) -> None:
     ex = eng.exploration
     if ex is None:
         return
+    now = eng._now(tick)
+    _pyramid(eng, ex, now, tick)        # safety S3: the group stops first, in their own try, whatever fails after
     try:
-        now = eng._now(tick)
         refresh_retired(eng, ex, now)
         refresh_cost_reads(eng, ex, now)
         refresh_owner_experiments(eng, ex, now)
@@ -930,7 +943,6 @@ def on_pass(eng: Engine, tick: Tick) -> None:
         if ct is not None and (ex.last_close is None or ct > ex.last_close) and step(eng, ct):
             ex.last_close = ct                      # a deferred close (clock ahead) is tried again next pass
         _minutes(eng, ex, now)
-        _pyramid(eng, ex, now, tick)
         if ex.queue and not ex.retired_ok:      # fail closed: the retired arms are not known yet
             _block(eng, ex, list(ex.queue), now, "arm_status_unread")
         elif ex.queue:
@@ -1598,7 +1610,8 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     if growth:
         sized = growth_lots(rooms, arm_cap, loss / float(lot), cost / float(lot), terms, side,
                             sum(t.side * t.lots for t in eng.open.values()),
-                            max_lots=plan.group.lots if plan is not None else None)
+                            max_lots=min((x for x in (arm.unit_lots, plan.group.lots if plan is not None else None)
+                                          if x is not None), default=None))
         if sized is not None:
             volume_max, loss, cost = sized
             rooms["arm_cap"] = arm_cap - cost
@@ -1632,7 +1645,9 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
 
     from goldbot.engine import exploration_pyramid as pyr
     try:
-        pos = cost_probe._place(eng, ex.db, intent, _agent(eng, arm, s.hold_bars, target_d / stop_d), repo=LEDGER,
+        # a pyramid unit's own time barrier is a backstop one bar past its group's end (`exploration_pyramid.due`)
+        hold = s.hold_bars + (1 if arm.adds > 0 else 0)
+        pos = cost_probe._place(eng, ex.db, intent, _agent(eng, arm, hold, target_d / stop_d), repo=LEDGER,
                                 pid=pid, close_ts=now, entry=price, target=price + side * target_d, max_loss=room,
                                 headroom=room, applied=lambda: applied, refuse=refuse, action="exploration:",
                                 journal={"agent": tag, "arm": arm.arm_id}, record=record,
@@ -1703,6 +1718,7 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
     the broker's open time) is closed (`HOLD_EXIT`); a 15m+ position of a rule under the Friday cut is closed at its
     wall-clock time exit (`_week_due`, `time_exit`); a position whose arm is not configured is closed at once
     (`ORPHAN_EXIT`). A refused close stays due and is retried like any close. Never raises."""
+    from goldbot.engine import exploration_pyramid
     try:
         ex = eng.exploration
         at = eng.clock() if eng.cfg.live_clock else now
@@ -1714,7 +1730,9 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
                 eng._try_close(pid, ORPHAN_EXIT, now)
                 continue
             since = tr.opened_utc or tr.entry_bar_ts
-            if arm.tf in SUB_15M and since is not None and (at - since).total_seconds() >= arm.hold_s:
+            if arm.adds > 0 and exploration_pyramid.due(eng, arm, tr, at):
+                eng._try_close(pid, "time_exit", now)   # quant Q3: every unit of a group at the group's end
+            elif arm.tf in SUB_15M and since is not None and (at - since).total_seconds() >= arm.hold_s:
                 eng._try_close(pid, HOLD_EXIT, now)
             elif arm.tf not in SUB_15M and _week_due(eng, arm, tr, at):
                 eng._try_close(pid, "time_exit", now)

@@ -8,7 +8,8 @@ The rule, as built here:
   distance the RiskGate set on the first unit (its ledger row), one add a group a pass, each level once (`pyramid`).
   GS1C, the control, is registered with the same `adds`, so its groups add at the same R levels of its own entry.
 * "Every add goes through the RiskGate": an add is a `Pending` like any signal (`exploration._send`: every engine
-  bound, then `cost_probe._place`: `RiskGate.check`, the only path to an order), sized at most the first unit's lots.
+  bound, then `cost_probe._place`: `RiskGate.check`, the only path to an order), sized at most the first unit's lots
+  and the arm's `unit_lots` (0.01 on GS1/GS1C, quant Q2: both legs' 8 units fit the 0.10 net lots).
   The 0.10 net-lot cap (ADR 0043 X3), the pots' and the day's money, the global and the host's position caps all
   count it. An add joins its group's slot (the arm's and the pot's `max_open` count groups), never a new one. A
   refused add is a blocked candidate (`exploration.candidate`), the read's shadow fill, and its level is not tried
@@ -16,12 +17,17 @@ The rule, as built here:
 * "After every add, open risk stays <= 1 unit": when an add is going out (after the gate allowed it, before it is
   sent) every earlier unit's stop moves to the newest add's own 1 R stop, or tighter where the gate floored that
   wider (`group_stop`), and again on the add's fill: no earlier unit loses there, so the group holds the newest add's
-  one unit, netted or counted unit by unit as the engine's bounds do. Only ever tighter (a ratchet,
-  `Engine._tighten_stop`); a move that does not take refuses the add (`StopMoveFailed`). ADR 0065: the C2 screen's
+  one unit, netted or counted unit by unit as the engine's bounds do. Only ever tighter. The add path moves them by
+  `modify` and confirms each at the broker first (`confirm_move`, safety S1/S2): a rejected or raising modify refuses
+  the add (`StopMoveFailed`), and the engine's copy takes only a confirmed level. ADR 0065: the C2 screen's
   common stop (avg - R / units) puts an add's stop up to 1.75 R away, above the arm's per-trade cap at a unit's lots,
   and the minimal move (earlier units at their average entry) leaves them a loss the arm's day counts in full.
+* No profit target (quant Q3): a unit of an arm with adds carries a 100 R (`NO_TARGET_R`) target, live and in the
+  shadow replay; every unit of a group closes together at its stop or at the group's end, the first signal + the
+  arm's `hold_bars` (`due`, from `exploration.exits`).
 * "Exits are never gated", "restart safety": every pass, whatever the entry state (halted, paused, the arm retired),
-  an open group whose loss at its stops is above one unit has its earlier stops moved back to the rule (`heal`). A
+  an open group whose loss at its stops is above one unit has its earlier stops moved back to the rule (`heal`, run
+  first in the pass and in its own try, safety S3). A
   restart adopts the units by their order rows or MT5 comments: an add's id is its group's signal close + k seconds
   (`add_id`, decoded by `group_of`), the group's terms come from the first unit's ledger row, and the ladder resumes
   after the highest level already sent or recorded (`exploration_obs`).
@@ -50,6 +56,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 MAX_ADDS = 3                          # "up to 3 adds"
+# quant Q3 2026-11-01: a pyramid unit has no profit target; the broker order and the shadow replay carry one this far
+NO_TARGET_R = 100.0
 CENT = 0.01                           # XAUUSD price step: a stop is rounded to it, tighter (as the BXR trail)
 MOVE_ACTION = "exploration_pyramid_stops"
 UNKNOWN_ACTION = "exploration_pyramid_group_unknown"
@@ -98,27 +106,38 @@ class AddPlan:
 def add_id(eng: Engine, arm: Arm, group_id: str, k: int) -> str:
     """Add k's client order id: the order id of the group's signal close + k seconds. Deterministic, so a restart
     never sends the same add twice (`Engine.sent_ids`) and its MT5 comment names its group."""
-    from goldbot.engine.exploration import order_id, signal_close
+    return make_add_id(eng.cfg.account_id, arm.arm_id, group_id, k)
+
+
+def make_add_id(account_id: str, arm_id: str, group_id: str, k: int) -> str:
+    """`add_id` from the account and arm ids alone."""
+    from goldbot.engine.exploration import make_order_id, signal_close
     signal = signal_close(group_id)
     if signal is None:
         raise ValueError(f"{group_id!r} is not an exploration order id")
-    return order_id(eng, arm, signal + pd.Timedelta(seconds=k))
+    return make_order_id(account_id, arm_id, signal + pd.Timedelta(seconds=k))
 
 
 def group_of(eng: Engine, arm: Arm, cid: str | None) -> tuple[str, int] | None:
-    """(the group id, the place on the ladder) of the arm's order id `cid`: a first unit's signal close is a close of
-    the arm's timeframe (k = 0), an add's is k seconds past it. None for an id that is neither."""
-    from goldbot.engine.exploration import COMMENT, order_id, signal_close
+    """(the group id, the place on the ladder) of the arm's order id `cid` (`decode`)."""
+    return decode(eng.cfg.account_id, arm.arm_id, tf_seconds(arm.tf), cid)
+
+
+def decode(account_id: str, arm_id: str, tf_s: int, cid: str | None) -> tuple[str, int] | None:
+    """(the group id, the place on the ladder) of an order or candidate id of `arm_id` on `account_id`: a first unit's
+    signal close is a close of the arm's timeframe (`tf_s` seconds; k = 0), an add's is k seconds past it. None for an
+    id that is neither. Pure: the growth read decodes its candidates with it."""
+    from goldbot.engine.exploration import make_order_id, signal_close
     signal = signal_close(cid)
-    if cid is None or signal is None or not cid.startswith(COMMENT + arm.key):
+    if cid is None or signal is None or make_order_id(account_id, arm_id, signal)[:7] != cid[:7]:
         return None
-    k = int(signal.timestamp()) % tf_seconds(arm.tf)
+    k = int(signal.timestamp()) % tf_s
     if k == 0:
-        return cid, 0
+        return (cid, 0) if make_order_id(account_id, arm_id, signal) == cid else None
     if k > MAX_ADDS:
         return None
-    first = order_id(eng, arm, signal - pd.Timedelta(seconds=k))
-    return (first, k) if add_id(eng, arm, first, k) == cid else None
+    first = make_order_id(account_id, arm_id, signal - pd.Timedelta(seconds=k))
+    return (first, k) if make_add_id(account_id, arm_id, first, k) == cid else None
 
 
 # ------------------------------------------------------------------------------------------------ the stop rule
@@ -241,7 +260,7 @@ def pyramid(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None
                 continue                              # the group's hold ends within the bar: no add outlives it
             ex.ladder[gid] = k
             ex.queue.append(Pending(arm_id=arm.arm_id, side=g.side, bar_ts=now, stop_usd=g.risk,
-                                    target_usd=g.target_usd, hold_bars=bars, group_id=gid, add_no=k))
+                                    target_usd=NO_TARGET_R * g.risk, hold_bars=bars, group_id=gid, add_no=k))
     for cache in (ex.groups, ex.ladder):            # a closed group's terms and ladder are read no more
         for gid in [k for k in cache if k not in live]:
             del cache[gid]
@@ -273,17 +292,76 @@ def heal(eng: Engine, ex: Exploration, arm: Arm, g: Group, now: pd.Timestamp, fo
 
 def move(eng: Engine, g: Group, stop: float, earlier: list[tuple[int, OpenTrade]], positions: dict[int, Position],
          now: pd.Timestamp) -> bool:
-    """The earlier units' stops to `stop` (never looser), journalled; True when every one still open is there."""
+    """`heal`'s move: the earlier units' stops to `stop` (never looser) by the engine's own stop move, which keeps the
+    level it expects (`tr.sl`; reconciliation sends it again if a modify did not stick, a close at market when the
+    price is through it). A unit whose move raises is logged and the others still move; journalled. True when every
+    one still open is there."""
     for pid, tr in earlier:
         pos = positions.get(pid)
         if pos is None or pid not in eng.open:
             continue
-        eng._tighten_stop(pid, tr, pos, _tighter(g.side, tr.sl, stop))
+        try:
+            eng._tighten_stop(pid, tr, pos, _tighter(g.side, tr.sl, stop))
+        except Exception:
+            log.exception("pyramid stop of position %s not moved; tried again next pass", pid)
     eng._save_orders()
     eng.decisions.append({"ts": now.isoformat(), "agent": "explore:" + g.arm_id, "action": MOVE_ACTION,
                           "group": g.group_id, "sl": stop, "positions": [pid for pid, _ in earlier]})
     return all(tr.sl is not None and g.side * (tr.sl - stop) >= -1e-9
                for pid, tr in earlier if pid in eng.open and pid not in eng._close_due)
+
+
+def confirm_move(eng: Engine, g: Group, stop: float, earlier: list[tuple[int, OpenTrade]],
+                 positions: dict[int, Position], now: pd.Timestamp) -> None:
+    """The add path's move (safety S1/S2): each earlier unit's broker stop to `stop` by `modify`, its result read, a
+    raise caught per position; then the broker's positions read again. The engine's copy (`tr.sl`) takes only a
+    broker stop seen tighter, so open risk is never counted below what the broker holds. Raises `StopMoveFailed`
+    (the add is not sent) unless every earlier unit still open has its broker stop at `stop` or tighter."""
+    failed: list[str] = []
+    for pid, tr in earlier:
+        if pid not in eng.open or pid in eng._close_due:
+            continue
+        pos = positions.get(pid)
+        if pos is None:
+            failed.append(f"{pid}:unseen")
+            continue
+        if pos.sl is not None and g.side * (pos.sl - stop) >= -1e-9:
+            continue
+        try:
+            res = eng.broker.modify(pid, stop, pos.tp)
+            if not res.ok:
+                failed.append(f"{pid}:{res.retcode}")
+        except Exception as exc:
+            log.warning("pyramid stop of position %s: modify raised (%s); the add is not sent", pid,
+                        type(exc).__name__)
+            failed.append(f"{pid}:{type(exc).__name__}")
+    seen = eng._read_positions("the add is not sent; its stops stand")
+    live = {p.position_id: p for p in seen} if seen is not None else {}
+    for pid, tr in earlier:
+        if pid not in eng.open or pid in eng._close_due:
+            continue
+        got = live.get(pid)
+        if got is not None and got.sl is not None and (tr.sl is None or g.side * (got.sl - tr.sl) > 1e-9):
+            tr.sl = got.sl                            # confirmed at the broker: the engine's copy follows it
+        if got is None or got.sl is None or g.side * (got.sl - stop) < -1e-9:
+            failed.append(f"{pid}:not_at_level")
+    eng._save_orders()
+    eng.decisions.append({"ts": now.isoformat(), "agent": "explore:" + g.arm_id, "action": MOVE_ACTION,
+                          "group": g.group_id, "sl": stop, "positions": [pid for pid, _ in earlier],
+                          "ok": not failed, **({"failed": sorted(set(failed))} if failed else {})})
+    if failed:
+        raise StopMoveFailed(g.group_id)
+
+
+def due(eng: Engine, arm: Arm, tr: OpenTrade, at: pd.Timestamp) -> bool:
+    """Quant Q3: a unit of a pyramid arm at its group's end, the first unit's signal close + the arm's `hold_bars`
+    bars (from the order id: no read, restart-safe). Every unit of the group closes then, together."""
+    from goldbot.engine.exploration import signal_close
+    g = group_of(eng, arm, tr.client_order_id)
+    start = signal_close(g[0]) if g is not None else None
+    if start is None:
+        return False
+    return at >= start + pd.Timedelta(seconds=int(arm.spec.params.get("hold_bars", 1)) * tf_seconds(arm.tf))
 
 
 # ------------------------------------------------------------------------------------------------ one add
@@ -321,9 +399,9 @@ def plan(eng: Engine, ex: Exploration, arm: Arm, s: Pending, tick: Tick, price: 
 
 def before_send(eng: Engine, p: AddPlan, now: pd.Timestamp) -> None:
     """`cost_probe._place`'s hook once the gate allowed the add: the earlier units to the plan's level first, so the
-    group never holds more than one unit at its stops; raises `StopMoveFailed` (nothing sent) if one is not there."""
-    if not move(eng, p.group, p.stop, p.earlier, p.positions, now):
-        raise StopMoveFailed(p.group.group_id)
+    group never holds more than one unit at its stops; raises `StopMoveFailed` (nothing sent) unless the broker
+    confirms every one (`confirm_move`)."""
+    confirm_move(eng, p.group, p.stop, p.earlier, p.positions, now)
 
 
 def journal_start(eng: Engine, ex: Exploration) -> None:

@@ -10,5 +10,10 @@
   Each add carries `group_id`. Also fixed: every growth-pot candidate had been quarantined as an unknown style since
   PR #257, so the nightly replay never scored it and no shadow fill existed. Rows written from 11-01 up to the
   deploy are released once by `scripts/unquarantine_growth_obs_2026_11_02.py` (RUNBOOK, icm-demo learning host).
-  Known limits: at about 0.05 lots a unit, the 0.10 net-lot cap leaves room for one add; the read does not fold a
-  shadow add into its group. Tests: `tests/test_growth_pyramid.py`.
+  Review round 1 (PR #266). Safety: the add path confirms every earlier stop at the broker before the add goes out
+  (a rejected or raising modify refuses it), and the group stop check runs first in the pass in its own try. Quant
+  (growth sprint Â§3, protocol deviation 2): ADR 0065 is accepted. Units are 0.01 lots (`unit_lots`), so both legs'
+  8 units fit the 0.10 net lots. A pyramid unit has no profit target, and a group exits together at its stop or its
+  end. The read (perf-report, health, `scripts/growth_sprint_read.py`) never counts a refused add as a trade: it is
+  listed as `refused_adds`, appears in an uncapped (approx.) ledger, and drives a pairing sensitivity. Growth rows
+  never reach the H-61 bandit (`learn`). Tests: `tests/test_growth_pyramid.py`.

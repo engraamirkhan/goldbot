@@ -32,10 +32,10 @@ def _rules(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _pyr(arm_id: str, *, side: int = 1, adds: int = 3, control_share: float | None = None,
-         target_r: float = 10.0) -> Arm:
+         target_r: float = 10.0, unit_lots: float | None = None) -> Arm:
     a = _arm(arm_id, side=side, style="growth", stop_usd=5.0, target_r=target_r, hold_bars=16, max_open=1,
              control_share=control_share)
-    return a.model_copy(update={"adds": adds})
+    return a.model_copy(update={"adds": adds, "unit_lots": unit_lots})
 
 
 def _eng(tmp_path: Path, arms: list[Arm], *, risk: float = 0.001, pb: PaperBroker | None = None,
@@ -383,3 +383,242 @@ def test_the_one_off_repair_releases_only_growth_rows_quarantined_for_their_styl
         rows = dict(conn.execute("SELECT candidate_id, quarantine FROM exploration_obs").fetchall())
     assert rows["g1"] is None and rows["g2"] is None
     assert rows["g3"] is not None and rows["o1"] == "other"
+    assert mod.remaining(db) == 1                                    # g3: printed, left quarantined
+
+
+
+# ------------------------------------------------------------------------------------------------ review round 1
+def _reject(pid: int, sl: float | None, tp: float | None) -> Any:
+    from goldbot.execution.broker import OrderResult
+    return OrderResult(ok=False, retcode=10016, order_id=None, position_id=pid, filled_lots=0.0, price=None,
+                       message="invalid stops")
+
+
+def test_a_stop_move_the_broker_rejects_sends_no_add_and_changes_no_stop(tmp_path, monkeypatch) -> None:
+    """Safety S1: the add goes out only once every earlier unit's broker stop is confirmed at its level."""
+    eng, pb = _start(tmp_path, [_pyr("GS1")])
+    first = _first(eng, tmp_path)
+    e0, r = _fill(first), first.stop_usd
+    prefix = first.client_order_id[:7]
+    [u0] = _units(pb, prefix)
+    before_broker, before_engine = u0.sl, eng.open[u0.position_id].sl
+    monkeypatch.setattr(pb, "modify", _reject)
+    _tick(eng, pb, 10, e0 + r + 0.05)
+    assert len(_units(pb, prefix)) == 1
+    assert _units(pb, prefix)[0].sl == before_broker and eng.open[u0.position_id].sl == before_engine
+    assert any(d.get("action") == "exploration_refused:stop_move_failed" for d in eng.decisions)
+
+
+def test_a_stop_move_that_raises_refuses_the_add_and_the_other_signals_still_go(tmp_path, monkeypatch) -> None:
+    """Safety S2: a raising modify is the add's refusal, never a failed pass that drops the other arms' signals."""
+    eng, pb = _start(tmp_path, [_pyr("GS1"), _arm("b", style="growth")])
+    first = _first(eng, tmp_path)
+    e0, r = _fill(first), first.stop_usd
+
+    def boom(*a: Any, **k: Any) -> Any:
+        raise ConnectionError("terminal gone")
+
+    monkeypatch.setattr(pb, "modify", boom)
+    for p in [p for p, t in eng.open.items() if t.agent_id == "explore:b"]:
+        eng._try_close(p, "time_exit", CLOSE)
+    eng._flush_closed()
+    assert not any(t.agent_id == "explore:b" for t in eng.open.values())
+    t = CLOSE + pd.Timedelta(seconds=10)
+    eng.exploration.queue.append(X.Pending(arm_id="b", side=1, bar_ts=t, stop_usd=5.0, target_usd=10.0,
+                                           hold_bars=4))
+    _tick(eng, pb, 10, e0 + r + 0.05)
+    assert any(d.get("action") == "exploration_refused:stop_move_failed" for d in eng.decisions)
+    assert not any(d.get("action") == "exploration_error" for d in eng.decisions)
+    assert any(tr.agent_id == "explore:b" for tr in eng.open.values())
+
+
+def test_the_group_stop_check_runs_even_when_another_part_of_the_pass_raises(tmp_path, monkeypatch) -> None:
+    """Safety S3: the pyramid stops are checked before, and apart from, the refreshes and the bar close's signals."""
+    eng, pb = _start(tmp_path, [_pyr("GS1")])
+    first = _first(eng, tmp_path)
+    e0, r = _fill(first), first.stop_usd
+    prefix = first.client_order_id[:7]
+    _tick(eng, pb, 10, e0 + r + 0.05)
+    u0 = _units(pb, prefix)[0]
+    pb.modify(u0.position_id, round(e0 - r, 2), u0.tp)              # as if the move never reached the broker
+    eng.open[u0.position_id].sl = round(e0 - r, 2)
+
+    def boom(*a: Any, **k: Any) -> None:
+        raise RuntimeError("refresh failed")
+
+    monkeypatch.setattr(X, "refresh_retired", boom)
+    _tick(eng, pb, 15, e0 + r + 0.05)
+    units = _units(pb, prefix)
+    assert _group_risk(units, 1) <= units[0].lots * r + 0.02 * units[0].lots + 1e-9
+
+
+def test_with_one_hundredth_lot_units_both_legs_get_all_three_adds_inside_the_net_lot_cap(tmp_path) -> None:
+    """Quant Q2: `unit_lots` 0.01 on GS1 and GS1C: 8 units at most 0.08 net lots, never a net-lot refusal."""
+    arms = [_pyr("GS1", unit_lots=0.01), _pyr("GS1C", control_share=0.3, unit_lots=0.01)]
+    eng, pb = _start(tmp_path, arms, risk=0.0025)                   # unbounded, the gate would size 0.05 a unit
+    a, c = _first(eng, tmp_path, "GS1"), _first(eng, tmp_path, "GS1C")
+    e0, r = _fill(a), a.stop_usd
+    for k, s in ((1, 10), (2, 20), (3, 30)):
+        _tick(eng, pb, s, e0 + k * r + 0.05)
+    units = _units(pb, a.client_order_id[:7]) + _units(pb, c.client_order_id[:7])
+    assert len(units) == 8 and all(p.lots == pytest.approx(0.01) for p in units)
+    assert not [d for d in eng.decisions if d.get("action") == "exploration_refused:same_side"]
+
+
+def test_a_pyramid_group_has_no_profit_target_and_still_holds_four_units_past_plus_three_r(tmp_path) -> None:
+    """Quant Q3: on an arm with adds no unit has a profit target (the rule's 3 R would close the first unit as add 3
+    opens); the group exits together at its stop or at its end."""
+    eng, pb = _start(tmp_path, [_pyr("GS1", target_r=3.0)])
+    first = _first(eng, tmp_path)
+    e0, r = _fill(first), first.stop_usd
+    prefix = first.client_order_id[:7]
+    for k, s in ((1, 10), (2, 20), (3, 30)):
+        _tick(eng, pb, s, e0 + k * r + 0.05)
+    _tick(eng, pb, 40, e0 + 3.6 * r)
+    units = _units(pb, prefix)
+    assert len(units) == 4
+    assert all(p.tp is None or p.tp - p.open_price >= 99 * r for p in units)
+    with eng.exploration.db.connection() as conn:
+        row = conn.execute("SELECT target_dist, stop_dist FROM exploration_obs WHERE candidate_id = ?",
+                           (first.client_order_id,)).fetchone()
+    assert row[0] == pytest.approx(100 * row[1])                     # the shadow replay: no target either
+
+
+def test_every_unit_of_a_group_closes_together_at_the_groups_end(tmp_path) -> None:
+    eng, pb = _start(tmp_path, [_pyr("GS1")])
+    first = _first(eng, tmp_path)
+    e0, r = _fill(first), first.stop_usd
+    prefix = first.client_order_id[:7]
+    _tick(eng, pb, 10, e0 + r + 0.05)
+    _tick(eng, pb, 20, e0 + 2 * r + 0.05)
+    end = CLOSE + pd.Timedelta(minutes=15 * 16)
+    X.exits(eng, end - pd.Timedelta(minutes=1))
+    assert len(_units(pb, prefix)) == 3
+    X.exits(eng, end)
+    assert not _units(pb, prefix)
+
+
+def test_unit_lots_registers_on_a_growth_sized_arm_and_icm_demo_sets_a_hundredth_lot() -> None:
+    import yaml
+    with pytest.raises(ValueError, match="unit_lots"):
+        acc_mod.ExplorationArm(style="growth", max_loss=24.0, unit_lots=0.01)
+    assert acc_mod.ExplorationArm(style="growth", max_loss=24.0, sizing="growth", unit_lots=0.01).unit_lots == 0.01
+    raw = yaml.safe_load((Path(__file__).resolve().parents[1] / "config" / "accounts.yaml").read_text())
+    arms = raw["accounts"]["icm-demo"]["exploration"]["arms"]
+    assert arms["GS1"]["unit_lots"] == arms["GS1C"]["unit_lots"] == 0.01
+
+
+def test_a_labelled_growth_candidate_never_reaches_the_bandit_weights(tmp_path) -> None:
+    """Quant Q5: growth rows are recorded and replayed for the read, never learnt from (no style of the H-61 bandit)."""
+    from goldbot.research.exploration_data import learn, record_candidate
+    db = X.ledger_db(str(tmp_path))
+    t = pd.Timestamp("2026-11-02 09:00", tz="UTC")
+    for i, (arm, style) in enumerate((("GS1", "growth"), ("I2A", "intraday"))):
+        record_candidate(db, candidate_id=f"c{i}", account_id="icm-demo", broker="icm", arm_id=arm, family="f",
+                         style=style, tf="15m", side=1, decision_utc=t, stop_dist=5.0, target_dist=15.0,
+                         max_hold_s=3600, taken=True, branch="random", u=0.5, mu=1.0)
+    with db.write() as conn:
+        conn.execute("UPDATE exploration_obs SET label_sim_r = 1.0, label_mid_r = 1.0, label_exit_ns = ?, "
+                     "labelled_ns = ?", (int((t + pd.Timedelta(hours=1)).value),
+                                         int((t + pd.Timedelta(hours=2)).value)))
+    learn(db, broker="icm", as_of=t + pd.Timedelta(days=1))
+    with db.connection() as conn:
+        arms = {r[0] for r in conn.execute("SELECT arm_id FROM exploration_broker_weights").fetchall()}
+    assert "GS1" not in arms and "I2A" in arms
+
+
+# ------------------------------------------------------------------------------------------------ the read (quant Q4)
+SIG = pd.Timestamp("2026-11-02 08:15", tz="UTC")          # an asia_london break-window close
+
+
+def _closed(cid: str, arm: str, pnl: float, group_id: str | None = None, minutes: int = 0) -> X.ExplorationRecord:
+    t = SIG + pd.Timedelta(minutes=minutes)
+    return X.ExplorationRecord(client_order_id=cid, account_id="icm-demo", arm_id=arm, family="f", tf="15m", side=1,
+                               lots=0.01, signal_utc=t, sent_utc=t, atr_usd=5.0, stop_usd=5.0, target_usd=500.0,
+                               hold_s=14400, fill_price=2400.0, stop_loss=10.0, exit_utc=t + pd.Timedelta(hours=1),
+                               pnl=pnl, group_id=group_id)
+
+
+def _refused_add(db: Any, arm: str, k: int, reason: str = "same_side", label: float | None = 1.0) -> str:
+    from goldbot.research.exploration_data import record_candidate
+    first = X.make_order_id("icm-demo", arm, SIG)
+    cid = P.make_add_id("icm-demo", arm, first, k)
+    record_candidate(db, candidate_id=cid, account_id="icm-demo", broker="icm", arm_id=arm, family="f",
+                     style="growth", tf="15m", side=1, decision_utc=SIG + pd.Timedelta(minutes=20), stop_dist=5.0,
+                     target_dist=500.0, max_hold_s=3600, taken=False, blocked_reason=reason, branch="blocked",
+                     u=0.5, mu=0.0)
+    if label is not None:
+        with db.write() as conn:
+            conn.execute("UPDATE exploration_obs SET label_sim_r = ? WHERE candidate_id = ?", (label, cid))
+    return cid
+
+
+def test_a_refused_add_is_no_trade_of_its_own_in_the_growth_report(tmp_path) -> None:
+    """Quant Q4: first unit filled + add 1 refused at the net-lot cap: n 1, refused_adds 1, pairs unchanged; the add
+    counts in the uncapped (approx.) ledger and drops its cell from the pairing sensitivity."""
+    import json
+
+    from goldbot.ops import growth_report as GR
+    (tmp_path / "engine_icm-demo.json").write_text(json.dumps({"equity": 10_000.0, "week_start_equity": 10_000.0}))
+    db = X.ledger_db(str(tmp_path))
+    a, c = X.make_order_id("icm-demo", "GS1", SIG), X.make_order_id("icm-demo", "GS1C", SIG)
+    with db.connection() as conn:
+        X.LEDGER.upsert(conn, _closed(a, "GS1", 10.0))
+        X.LEDGER.upsert(conn, _closed(c, "GS1C", -10.0))
+    now = pd.Timestamp("2026-11-03 12:00", tz="UTC")
+    before = GR.growth_test(tmp_path, now=now)
+    _refused_add(db, "GS1", 1, label=2.0)
+    g = GR.growth_test(tmp_path, now=now)
+    assert g is not None and before is not None
+    gs1 = g.read.arms["GS1"]
+    assert gs1.n == 1 and gs1.shadow_n == 0 and gs1.refused == {}
+    assert gs1.refused_adds == {"same_side": 1}
+    assert g.read.pairs == before.read.pairs == 1
+    assert g.read.paired_excess_r == pytest.approx(before.read.paired_excess_r)
+    assert g.read.pairs_no_refused_add == 0
+    assert gs1.ledgers["0.1"].final_multiple == pytest.approx(1.1)
+    assert gs1.ledgers_uncapped["0.1"].final_multiple == pytest.approx(1.3)     # 1 R + the add's 2 R
+    text = "\n".join(GR.lines(g))
+    assert "refused adds: same_side 1" in text and "uncapped (approx.)" in text
+
+
+def test_a_refused_first_unit_is_still_one_shadow_trade(tmp_path) -> None:
+    from goldbot.research.growth_ledger import split_shadow
+    first = X.make_order_id("icm-demo", "GS1C", SIG)
+    rows = [(first, "GS1C", int(SIG.value), "pot", -1.0, int((SIG + pd.Timedelta(hours=1)).value), 3600),
+            (P.make_add_id("icm-demo", "GS1C", first, 2), "GS1C", int(SIG.value), "stale", 1.0, None, 3600)]
+    got = split_shadow(rows, "icm-demo")
+    assert [t.r for t in got.firsts] == [-1.0] and got.firsts[0].group_id == first
+    assert got.refused == {"GS1C": {"pot": 1}} and got.refused_adds == {}       # a stale add is no cap refusal
+
+
+def test_the_sprint_read_folds_on_the_first_units_row_and_reports_refused_adds_apart(tmp_path) -> None:
+    import importlib.util
+    import sqlite3
+    import sys
+    path = Path(__file__).resolve().parents[1] / "scripts" / "growth_sprint_read.py"
+    spec = importlib.util.spec_from_file_location("growth_sprint_read_q4", path)
+    assert spec is not None and spec.loader is not None
+    gs = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = gs
+    spec.loader.exec_module(gs)
+    db = X.ledger_db(str(tmp_path))
+    a, c = X.make_order_id("icm-demo", "GS1", SIG), X.make_order_id("icm-demo", "GS1C", SIG)
+    add1 = P.make_add_id("icm-demo", "GS1", a, 1)
+    with db.connection() as conn:
+        X.LEDGER.upsert(conn, _closed(a, "GS1", 10.0))
+        # an add sent before its first unit in sent order (clock skew): R is still over the first unit's stop
+        X.LEDGER.upsert(conn, _closed(add1, "GS1", 5.0, group_id=a, minutes=-5).model_copy(
+            update={"stop_loss": 4.0}))
+        X.LEDGER.upsert(conn, _closed(c, "GS1C", -10.0))
+    _refused_add(db, "GS1", 2, label=2.0)
+    with sqlite3.connect(tmp_path / "aux.db") as conn:
+        for t in ("balance_snapshots", "balance_deals"):
+            conn.execute(f"CREATE TABLE IF NOT EXISTS {t} (key TEXT PRIMARY KEY, account_id TEXT, ts_ns INTEGER, "
+                         "body TEXT)")
+    rd = gs.build(tmp_path / "aux.db", "icm-demo", pd.Timestamp("2026-11-01 22:00", tz="UTC"))
+    arm = rd.arms[0]
+    assert arm.n == 1 and arm.total_r == pytest.approx(1.5)          # (10 + 5) / the first unit's 10
+    assert arm.refused_adds == {"same_side": 1}
+    assert rd.matched_days == 1 and rd.matched_days_no_refused_add == 0
+    assert arm.ledgers_uncapped[1].multiple == pytest.approx(1 + 0.1 * 3.5)
