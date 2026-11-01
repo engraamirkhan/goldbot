@@ -1,0 +1,5 @@
+id: R89
+requirement: The trial registry reaches release research-v1 although the brain token cannot write it - the brain keeps the pending registry in an outbox (INFO, no alert) and the Mac publishes it through the same union and compare-and-swap
+status: implemented
+code: goldbot/research/registry_sync.py `sync`, `_to_outbox`, `publish_outbox`, `OUTBOX`; scripts/registry_publish.sh
+test: tests/test_registry_outbox.py

@@ -99,7 +99,7 @@ def test_every_pot_keeps_its_caps_and_sums_inside_the_budget_and_keeps_an_active
             continue
         assert acc.daily_loss_limit_abs is not None
         assert sum(p.gbp for p in ex.pots.values()) <= ex.budget_share * acc.daily_loss_limit_abs + 1e-9
-        assert all(a.max_loss <= {"scalp": 6.5, "intraday": 30.0, "swing": 40.0}[str(a.style)]
+        assert all(a.max_loss <= {"scalp": 6.5, "intraday": 30.0, "swing": 40.0, "growth": 24.0}[str(a.style)]
                    for a in ex.arms.values())
         for style in ex.pots:
             mine = [i for i, a in ex.arms.items() if a.style == style]

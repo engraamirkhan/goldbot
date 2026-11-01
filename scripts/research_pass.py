@@ -40,7 +40,8 @@ for a trial that declares them, a seeded clone, or a specialist without a declar
 includes them, so such a model scores only frames built with macro. A missing or empty release is reported and the
 pass runs without them.
 
-Positioning (opt-in): `--positioning DIR` (the release positioning-v1, from the data-positioning workflow) adds the
+Positioning (opt-in): `--positioning DIR` (a local file from scripts/positioning_data.py; never the retired
+release positioning-v1, whose stamps look ahead) adds the
 point-in-time COT and GLD columns (goldbot/features/positioning.py: managed-money net % of OI, its 52-week z-score and
 4-week change, GLD tonnes 5/20-day % change) to the candidate frame and the leakage check, under the same rules as
 macro (the feature version includes them). Not available with --discover.
@@ -190,13 +191,13 @@ def _macro_line(info: dict[str, Any] | None) -> str:
 
 
 def load_positioning(path: str) -> tuple[pd.DataFrame | None, dict[str, Any]]:
-    """The positioning release for ctx["positioning"], or None with the reason (recorded in the trial and reported)."""
+    """The local positioning file for ctx["positioning"], or None with the reason (recorded in the trial and reported)."""
     if not path:
         return None, {"used": False, "detail": "off (no --positioning)"}
     df = read_positioning_files(Path(path))
     if df.empty:
-        return None, {"used": False, "detail": f"off: no positioning release at {path} (run the data-positioning "
-                                                f"workflow; `gh release download positioning-v1 -D {path}`)"}
+        return None, {"used": False, "detail": f"off: no positioning file at {path} (build it locally with "
+                                                f"scripts/positioning_data.py)"}
     series = sorted(df["series"].unique())
     return df, {"used": True, "series": series,
                 "detail": f"on: {', '.join(series)}; value dates {df['value_date'].min():%Y-%m-%d} .. "
@@ -645,7 +646,7 @@ def main() -> int:
     ap.add_argument("--diagnostic", action="store_true",
                     help="with --cpcv: allow trials that failed the gates; output is diagnostic, not evidence (ADR 0003)")
     ap.add_argument("--positioning", default="",
-                    help="folder or Parquet of the positioning-v1 release: adds the opt-in COT/GLD features")
+                    help="local positioning folder or Parquet: adds the opt-in COT/GLD features")
     ap.add_argument("--us-calendar-exclude-rule", action="store_true",
                     help="with --us-calendar: leave out the rule-derived (ISM) rows")
     ap.add_argument("--us-calendar", default="",

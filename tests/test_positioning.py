@@ -1,7 +1,6 @@
-"""Positioning release (data-positioning workflow, release positioning-v1): CFTC COT and GLD holdings parsing, the
+"""Positioning data (local files; release positioning-v1 is retired): CFTC COT and GLD holdings parsing, the
 conservative release stamps (DST, holiday weeks, shutdowns), vintages, and the opt-in positioning features."""
 import importlib.util
-import urllib.error
 from pathlib import Path
 
 import numpy as np
@@ -363,11 +362,17 @@ def test_workflow_script_never_publishes_a_frame_that_loses_history(tmp_path, mo
     assert not out.exists() and "REFUSED" in capsys.readouterr().out
 
 
-def test_workflow_treats_only_a_missing_release_as_a_first_run():
-    wf = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "data-positioning.yml").read_text()
-    assert '|| echo "no previous file"' not in wf
-    assert "release not found" in wf and "--first-run" in wf
-    assert "steps.prev.outcome == 'success'" in wf                     # no publish when the previous file was unreadable
+def test_no_workflow_or_code_publishes_or_downloads_the_retired_positioning_release():
+    """data-local-only: release positioning-v1 has look-ahead stamps, so nothing publishes to it or reads from it."""
+    root = Path(__file__).resolve().parents[1]
+    assert not (root / ".github" / "workflows" / "data-positioning.yml").exists()
+    readers = ("release download positioning-v1", '"positioning-v1"', "'positioning-v1'", "tag=positioning-v1")
+    hits = [str(p.relative_to(root)) for d in (".github", "scripts", "goldbot")
+            for p in (root / d).rglob("*") if p.suffix in {".py", ".yml", ".yaml", ".sh", ".ps1"}
+            and any(r in p.read_text(encoding="utf-8", errors="ignore") for r in readers)]
+    assert hits == []
+    from goldbot.data import release
+    assert not hasattr(release, "sync_release_positioning") and not hasattr(release, "POSITIONING_TAG")
 
 
 def test_workflow_script_keeps_gld_rows_when_the_source_is_unavailable(tmp_path, monkeypatch, capsys):
@@ -396,28 +401,14 @@ def test_workflow_script_keeps_gld_rows_when_the_source_is_unavailable(tmp_path,
 
 
 @pytest.mark.integration
-def test_positioning_sync_loads_the_release_into_the_store(tmp_path, monkeypatch):
+def test_a_local_positioning_file_loads_into_the_store_once(tmp_path):
     from goldbot.data import release
-
-    def no_release(token=None, repo=release.REPO, tag="data-v1"):
-        raise urllib.error.HTTPError("u", 404, "Not Found", {}, None)  # type: ignore[arg-type]
-    monkeypatch.setattr(release, "list_assets", no_release)
-    assert release.sync_release_positioning(Store(tmp_path / "s0")) == 0
     rel = pd.concat([_cot(n=10), _gld(n=30)], ignore_index=True)
     src = tmp_path / "positioning.parquet"
     write_release(rel, str(src), {})
-    monkeypatch.setattr(release, "list_assets", lambda token=None, repo=release.REPO, tag="data-v1":
-                        [{"name": "positioning.parquet", "size": src.stat().st_size, "url": "x"}]
-                        if tag == "positioning-v1" else [])
-
-    def fake_download(asset, dest_dir, token=None):
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        (dest_dir / asset["name"]).write_bytes(src.read_bytes())
-        return dest_dir / asset["name"]
-    monkeypatch.setattr(release, "download", fake_download)
     store = Store(tmp_path / "store")
-    assert release.sync_release_positioning(store, raw_dir=tmp_path / "raw") == len(rel)
-    release.sync_release_positioning(store, raw_dir=tmp_path / "raw")              # idempotent
+    assert release.load_positioning_into_store(store, read_positioning_files(src)) == len(rel)
+    release.load_positioning_into_store(store, read_positioning_files(src))           # idempotent
     got = release.store_positioning(store)
     assert len(got) == len(rel) and set(got["source"]) == {"cftc", "spdr"}
 

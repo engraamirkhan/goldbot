@@ -32,7 +32,8 @@ WAVE2 = {"F1A": ("hurst_band_break", "15m"), "F1C": ("hurst_band_break_control",
 # E2 G1 level_break + C30/DOND daily and weekend; E3 BXR trail, BXT/BXF virtual twins, XC15 netting shift)
 # lanes E1-E3 merged 2026-10-26; DOND unblocked by ARM-SPEC 8.15 (its exit runs under the Friday cut, as WFRI's)
 BLOCKED: dict[str, str] = {}
-FORWARD_ONLY = {"F1A", "F1C", "G1A", "G1C", "WFRI", "KA15", "XC15", *BOX, "WKS0", "WKI0"}   # ADR 0062: weekend lane
+FORWARD_ONLY = {"F1A", "F1C", "G1A", "G1C", "WFRI", "KA15", "XC15", *BOX, "WKS0", "WKI0",   # ADR 0062: weekend lane
+                "GS1", "GS1C"}                                                                # growth sprint 2026-11-01
 # account -> arm id -> (style, max_loss, control_share)
 HOSTS: dict[str, dict[str, tuple[str, float, float | None]]] = {
     "icm-probe": {"KA15": ("scalp", 6.5, None), "XC15": ("scalp", 6.5, 0.10),
@@ -148,7 +149,8 @@ def test_arms_without_a_host_and_virtual_exits_are_not_registered(accounts) -> N
 # ADR 0049 D1a (CFO 2026-10-27): a scalp pot carved inside the unchanged budget for H-81's scalp strata (H-81 option B /
 # V1): swing 90 / 2 -> 40 / 2 (icm-demo) and 82 / 2 -> 40 / 1 (vantage-demo), the pots still summing to the budget
 @pytest.mark.parametrize(("account", "pots"), [
-    ("icm-demo", {"scalp": (90, 8), "intraday": (68, 7), "swing": (40, 2)}),
+    # growth sprint 2026-11-01: growth 80 / 2 carved from the scalp pot (90 -> 10), the sum unchanged
+    ("icm-demo", {"scalp": (10, 8), "intraday": (68, 7), "swing": (40, 2), "growth": (80, 2)}),
     ("vantage-demo", {"scalp": (100, 8), "intraday": (40, 4), "swing": (40, 1)})])
 def test_the_pots_are_the_cfos_and_no_cap_moves(accounts, account, pots) -> None:
     acc = accounts[account]

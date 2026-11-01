@@ -449,6 +449,11 @@ RULE_FUNCS: dict[str, Callable[[Arm, RuleContext], pd.DataFrame]] = {
     **dict.fromkeys(SCALP_RULES, scalp_rule),
     # ADR 0058 phase 4: any discovered StrategySpec through the autodisc primitives (`arm_rules_spec`)
     "spec_rule": lambda arm, ctx: __import__("goldbot.research.arm_rules_spec", fromlist=["x"]).spec_candidates(arm, ctx),
+    # growth sprint 2026-11-01: GS1 and its random-entry control GS1C (`arm_rules_growth`)
+    "session_range_break":
+        lambda arm, ctx: __import__("goldbot.research.arm_rules_growth", fromlist=["x"]).session_range_break(arm, ctx),
+    "session_range_control":
+        lambda arm, ctx: __import__("goldbot.research.arm_rules_growth", fromlist=["x"]).session_range_control(arm, ctx),
 }
 
 

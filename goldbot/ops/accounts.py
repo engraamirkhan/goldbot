@@ -154,6 +154,11 @@ class ExplorationArm(FrozenRecord):
     # share of it (controls are the null: never allocated by results); None = a strategy arm (research weights)
     style: str | None = None
     control_share: float | None = Field(None, gt=0, le=1)
+    # growth sprint 2026-11-01 (docs/research/growth-sprint-2026-11-01.md section 3, "1% of equity per unit, the
+    # RiskGate cap"): `growth` = the RiskGate sizes the entry by its own risk sizing (risk per trade, at most
+    # max_risk_per_trade), never above `max_loss` at the stop; `min_lot` (default) = exactly the minimum lot. Refused
+    # at load on an account that is not demo and probe_only (`Account._growth_demo_only`)
+    sizing: Literal["min_lot", "growth"] = "min_lot"
 
 
 class ExplorationPot(FrozenRecord):
@@ -179,6 +184,14 @@ class Exploration(FrozenRecord):
     # ADR 0043: style -> its sleeve (scalp, intraday, swing); every enabled arm names one, and the sleeves together fit
     # inside budget_share x daily_loss_limit_abs
     pots: dict[str, ExplorationPot] = Field(default_factory=dict)
+
+
+def growth_arm_ids(acc: Account) -> frozenset[str]:
+    """`RiskLimits.growth_arms` for this account: the registered arms with `sizing: growth`; empty unless exploration
+    is enabled on a demo probe_only account (as `exploration_arm_caps`)."""
+    if not exploration_arm_caps(acc):
+        return frozenset()
+    return frozenset(arm for arm, a in acc.exploration.arms.items() if a.sizing == "growth")
 
 
 def exploration_arm_caps(acc: Account) -> dict[str, float]:
@@ -420,6 +433,28 @@ class Account(Record):
             raise ValueError(f"pilot needs daily_loss_limit_abs on the same account, at most {PILOT_MAX_DAILY_LOSS:g}")
         if self.dynamic_limits or self.risk_overrides is not None:
             raise ValueError("pilot needs dynamic_limits off and no risk_overrides (ADR 0055)")
+        return self
+
+    @model_validator(mode="after")
+    def _growth_demo_only(self) -> Account:
+        """Growth sprint 2026-11-01 ("Demo only. Live stays off"): an arm with `sizing: growth` loads only on a demo
+        probe_only account with exploration enabled; anything else is refused at load, loudly."""
+        growth = sorted(k for k, a in self.exploration.arms.items() if a.sizing == "growth")
+        if growth and not (self.mode == "demo" and self.probe_only and self.exploration.enabled):
+            raise ValueError(f"{self.account_id}: growth sizing {growth} is allowed on demo probe_only accounts with "
+                             "exploration enabled only (growth sprint 2026-11-01)")
+        return self
+
+    @model_validator(mode="after")
+    def _owner_experiment_account(self) -> Account:
+        """ADR 0061 amendment 2026-11-01: an owner experiment (`research.arms.OWNER_EXPERIMENTS`, keyed by account and
+        arm) is registered only on its own account; on any other it is refused at load."""
+        from goldbot.research.arms import owner_experiment_accounts
+        for arm in self.exploration.arms:
+            allowed = owner_experiment_accounts(arm)
+            if allowed and self.account_id not in allowed:
+                raise ValueError(f"{self.account_id}: {arm} is an owner experiment of {sorted(allowed)} only "
+                                 "(ADR 0061 amendment 2026-11-01)")
         return self
 
     @model_validator(mode="after")

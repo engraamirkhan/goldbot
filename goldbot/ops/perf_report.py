@@ -88,6 +88,8 @@ from goldbot.engine.shadow import ShadowTrade, VersionBook
 from goldbot.execution.costs import SESSIONS, CostTable
 from goldbot.execution.not_placed import CAUSE_PHRASE, approval_cause
 from goldbot.ops.gates_phase import ClosedTrade, load_closed_trades, pnl_basis
+from goldbot.ops.growth_report import GROWTH_ACCOUNT, GrowthTest, growth_test
+from goldbot.ops.growth_report import lines as growth_lines
 from goldbot.ops.learning_ledger import (
     KIND_LABEL,
     KINDS,
@@ -320,6 +322,9 @@ class PerformanceReport(FrozenRecord):
     learning_groups: int = 0                   # exploration, control and probe rows (kind rows overlap family rows)
     accounts: list[AccountReport]
     errors: list[str] = []
+    # growth sprint 2026-11-01: this risk week's growth test (GS1 against GS1C, the virtual ledgers); None when
+    # nothing of it is recorded (`ops.growth_report`)
+    growth_test: GrowthTest | None = None
 
 
 class _Row(FrozenRecord):
@@ -1131,9 +1136,15 @@ def build_performance_report(state_dir: str | Path, *, start: str, end: str, dat
             if excluded else None, learning=learning))
     groups = [g for a in out for gs in a.by.values() for g in gs]
     learning_groups = sum(len(a.learning.kinds) + len(a.learning.families) for a in out if a.learning is not None)
+    growth = None
+    if state.is_dir() and account in (None, GROWTH_ACCOUNT):
+        try:
+            growth = growth_test(state, now=now)
+        except Exception as exc:                   # noqa: BLE001 - reporting only
+            errors.append(f"growth test unreadable ({type(exc).__name__})")
     return PerformanceReport(start=start, end=end, as_of_utc=now.isoformat(), weekdays=weekdays, accounts=out,
                              groups=len(groups), groups_with_reading=sum(g.sufficient for g in groups),
-                             learning_groups=learning_groups, errors=errors)
+                             learning_groups=learning_groups, errors=errors, growth_test=growth)
 
 
 # ---------------------------------------------------------------------------------------------- markdown
@@ -1363,6 +1374,9 @@ def format_markdown(rep: PerformanceReport) -> str:
         if a.not_recorded:
             L += ["### Not recorded", "", "- " + ", ".join(f"{k}: {v} of {o.trades}" for k, v in a.not_recorded.items()),
                   ""]
+    if rep.growth_test is not None:
+        L += ["## Growth test (growth sprint 2026-11-01; demo only)", "",
+              *(f"- {line}" for line in growth_lines(rep.growth_test)), ""]
     for e in rep.errors:
         L.append(f"Warning: {e}")
     return "\n".join(L).rstrip() + "\n"

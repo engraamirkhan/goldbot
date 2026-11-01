@@ -108,6 +108,11 @@ class RiskLimits(Record):
     # account's `exploration.enabled`). Defaults: no account explores, so the purpose `exploration` is always refused
     probe_only: bool = False
     exploration_arms: dict[str, float] = Field(default_factory=dict)
+    # growth sprint 2026-11-01 (docs/research/growth-sprint-2026-11-01.md section 3: "1% of equity per unit, the
+    # RiskGate cap ... No cap is loosened"): the registered arms this gate sizes by its own risk sizing instead of the
+    # minimum lot (`accounts.growth_arm_ids`: `sizing: growth`, demo probe_only only). Every other check, the arm's
+    # per-trade cap included, still applies; an arm not listed keeps the minimum-lot fence
+    growth_arms: frozenset[str] = Field(default_factory=frozenset)
     # the live pilot (goldbot/risk/pilot.py, ADR 0055): the account's `pilot:` block when enabled, set only by
     # ops.services.engine.engine_limits for that account's real terminal. None (every other account): no change
     pilot: PilotRules | None = None
@@ -414,7 +419,8 @@ def _exploration_reasons(intent: Intent, limits: RiskLimits) -> list[str]:
     """The exploration purpose's fence before sizing (see `Intent.purpose`): a probe_only account
     (`exploration_not_probe_only`); the demo lock by the registry and the phase file, F1's rule
     (`exploration_not_demo`); a terminal that itself reports demo, never inferred from a label
-    (`exploration_terminal_not_demo`); the minimum lot only (`exploration_not_min_lot`); an arm id registered with a
+    (`exploration_terminal_not_demo`); the minimum lot only (`exploration_not_min_lot`), unless the arm is a growth
+    arm (`RiskLimits.growth_arms`, growth sprint 2026-11-01), which the gate sizes; an arm id registered with a
     usable cap (`exploration_arm_unregistered`). `check` judges the arm's cap on the sized order."""
     out = [] if limits.probe_only else ["exploration_not_probe_only"]
     gates = phase_gates(intent.phase_file) if intent.account_mode == "demo" and intent.phase_file is not None else None
@@ -422,7 +428,7 @@ def _exploration_reasons(intent: Intent, limits: RiskLimits) -> list[str]:
         out.append("exploration_not_demo")
     if intent.terminal_trade_mode != "demo":
         out.append("exploration_terminal_not_demo")
-    if intent.volume_max > intent.volume_min + 1e-9:
+    if intent.volume_max > intent.volume_min + 1e-9 and intent.arm_id not in limits.growth_arms:
         out.append("exploration_not_min_lot")
     if not intent.arm_id or not _ok_amount(limits.exploration_arms.get(intent.arm_id)):
         out.append("exploration_arm_unregistered")
@@ -431,9 +437,13 @@ def _exploration_reasons(intent: Intent, limits: RiskLimits) -> list[str]:
 
 def _exploration_sized(intent: Intent, limits: RiskLimits, d: GateDecision) -> list[str]:
     """The fence on the sized order: exactly the minimum lot, and the loss at the stop the gate set (stops level and
-    spread floored) within the arm's per-trade cap; equal is allowed (1e-9 absorbs float noise)."""
+    spread floored) within the arm's per-trade cap; equal is allowed (1e-9 absorbs float noise). A growth arm
+    (`RiskLimits.growth_arms`) is sized by the gate between the minimum lot and the intent's `volume_max`."""
     out: list[str] = []
-    if abs(d.lots - intent.volume_min) > 1e-9:
+    if intent.arm_id in limits.growth_arms:
+        if d.lots < intent.volume_min - 1e-9 or d.lots > intent.volume_max + 1e-9:
+            out.append("exploration_growth_lots")
+    elif abs(d.lots - intent.volume_min) > 1e-9:
         out.append("exploration_not_min_lot")
     if d.risk_amount > limits.exploration_arms.get(intent.arm_id or "", 0.0) + 1e-9:
         out.append("exploration_arm_cap")
