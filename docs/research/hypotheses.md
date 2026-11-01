@@ -525,3 +525,11 @@ Source: `growth-sprint-2026-11-01.md` section 2 (PR #251, K += 7 for C1-C4); ope
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | GS-C1/C2/C4 | Convex payoffs on 2010-2017 at 1.5 x measured ICM cost: C1 news straddle at NFP/CPI/FOMC (k 0.5, 1.0 x ATR15), C2 pyramided session-range breakout (Asia->London, London->NY; 1.5 x ATR15 stop, 3 adds at +1R, open risk <= 1 unit), C4 NR7 prior-day-range break with a 4 R target | **failed** 2026-11-01, 0 of 5 (prereg `fd02d0de`; `growth-screens-2026-11.md`): net mean R C2a -0.36, C2b -0.03, C4 +0.05, C1a +0.09 (whipsaw 64%), C1b -0.42; none beats its random twin at Bonferroni-7. Retired as specified except C1b, whose sign depends on 1m intrabar order (optimistic bracket +0.14 R, LB +0.01): tick re-measurement proposed, K +1 if slotted | 0 registry trials; K +5 of the director's +7, plus K +5 for the disclosed intrabar bracket (program K 3,014 with C3) | per variant: net mean 90% LB > 0, beats a 4-twin random-entry control with identical mechanics at Bonferroni-7, >= 5 of 8 years positive; else FAIL and retired as specified |
+
+## A24. Opportunity signals screen (opportunity researcher, 2026-11-01)
+
+Source: orchestrator brief 2026-11-01 (lines a-d). Pre-registration `prereg-opportunity-signals-2026-11-01.md`; lines (c) month/expiry and (b-ii) London-open gap declined as re-tests (K +0).
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| OS-SA/SB/SD | SA: fade a >= 3-sigma (clock-matched) 60-min move outside tier-1/2 news to the window VWAP, structure stop, 240 min; SB: fade the Sunday-reopen gap (>= 0.20 ATR20d at +30 min) to Friday's close by 07:00 UTC Monday; SD: 1h Donchian-20 trend in the top RV5 tercile, Bollinger(20,2) fade to SMA20 in the bottom tercile | **pre-registered** 2026-11-01 | 0 registry trials; K +3 | per variant: day-bootstrap LB90 net mean R > 0, real-minus-twin Bonferroni-3 p < 0.10, >= 5 of 8 years, n >= 100 |
