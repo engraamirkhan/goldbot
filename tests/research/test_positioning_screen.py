@@ -54,7 +54,7 @@ def test_gld_signal_momentum_sign() -> None:
 
 
 def test_new_report_mask() -> None:
-    r = pd.Series(pd.to_datetime([None, "2010-01-05", "2010-01-05", "2010-01-12", "2010-01-12"]))
+    r = pd.to_datetime(pd.Series([None, "2010-01-05", "2010-01-05", "2010-01-12", "2010-01-12"]))
     assert ps.new_report_mask(r).tolist() == [False, True, False, True, False]
 
 
