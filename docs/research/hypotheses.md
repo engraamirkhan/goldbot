@@ -508,3 +508,12 @@ one look each; holdout sealed unless a screen passes. Closes the rule forms of H
 | H-86 | P1_EXT: managed-money net % OI in its 156-report bottom decile -> long, top decile -> short, weekly decision, 1-week hold, 1R = 1.5 ATR(1d) stop | **failed** 2026-11-01 (prereg `f7fc8755`, code `af2eea16`; `positioning-screen-2026-11.md`): n 114, gross +0.015 R (t 0.16), net -0.081 R, Holm p 1.00, below matched-control q95 (-0.055); retired R-19 | screen K +1; confirm 1 registry trial if the screen passes | prereg s.5: n >= 50, Holm p < 0.05 net, gross t >= 2, >= 5/8 years, net > 0 at 1.5x, net >= +0.05 R, net > matched-control q95 |
 | H-87 | P2_FLOW: -sign(weekly change of MM net % OI) when the change is in the top third of its 52-report range (Kang, Rouwenhorst & Tang 2020 liquidity-provision sign), 1-week hold | **failed** 2026-11-01: n 135, gross +0.023 R (t 0.29), net -0.051 R, Holm p 1.00, control q95 +0.050; retired R-19 | as H-86 | as H-86 |
 | H-88 | P3_ETF: sign(5-day % change in GLD tonnes) when in the top third of its 252-day range (flow momentum), daily decision, one at a time, 1-week hold | **failed** 2026-11-01: n 214, gross +0.014 R (t 0.19), net -0.060 R, Holm p 1.00, control q95 +0.104; retired R-19 | as H-86 | as H-86 |
+
+## A23. Event-minute drift (research director memo 2026-11-01; `decision-2026-11-01-next-lines.md` line 1)
+
+Source: director's explore of 14 US calendar event types on 2010-2017 (K 30 recounted: 14 types x 2 directions +
+the 5m window + the 60m hold). Pre-registration `prereg-h89-fomc-2026-11-01.md`, code `a5f413b0`.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| H-89 | After a scheduled FOMC statement (14:00 New York), sign(mid t+5m - mid t-1m) continues to t+60m: entry t+6m close at ask/bid, exit t+60m at bid/ask, net of $0.08 commission + $0.30 slippage. Explore 2010-2017: n 64, +$3.11 net at entry t+6m (t 3.21), 8/8 years; placebo Wednesdays -$0.08 | **failed 2026-11-01, retired final** (`h89-fomc-confirm-2026-11.md`): 2018-01..2025-09 n 62, mean net -$1.23, t -0.82, 3 of 8 years positive, 50% positive; top-5 removed -$2.74. Do not re-test post-FOMC continuation on another window, entry minute, horizon or subset without a new mechanism or data source | 1 registry trial (local sidecar, sync owed via PR #243); explore K 30 + confirm K 1 -> ledger ~3,002 | PASS only if mean net > 0 with t >= 2, >= 5 of 8 years positive, share > 0 >= 55%; any leg fails -> retired |

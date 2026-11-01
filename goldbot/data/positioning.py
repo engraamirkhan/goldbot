@@ -59,6 +59,17 @@ COT_HIST_URL = "https://www.cftc.gov/files/dea/history/fut_disagg_txt_hist_2006_
 COT_YEAR_URL = "https://www.cftc.gov/files/dea/history/fut_disagg_txt_{year}.zip"
 COT_RELEASE_ET = time(15, 30)
 COT_SERIES = ("cot_mm_long", "cot_mm_short", "cot_mm_net", "cot_open_interest", "cot_comm_net")
+# The full trader-category split of the disaggregated report (parse_cot column -> CFTC column). Optional: a file
+# without them still parses (the core series above stay required); cot_frame emits a split series only where present.
+COT_SPLIT_COLUMNS: dict[str, str] = {
+    "pm_long": "prod_merc_positions_long_all", "pm_short": "prod_merc_positions_short_all",
+    "swap_long": "swap_positions_long_all", "swap_short": "swap_positions_short_all",
+    "swap_spread": "swap_positions_spread_all", "mm_spread": "m_money_positions_spread_all",
+    "other_long": "other_rept_positions_long_all", "other_short": "other_rept_positions_short_all",
+    "other_spread": "other_rept_positions_spread_all", "nonrept_long": "nonrept_positions_long_all",
+    "nonrept_short": "nonrept_positions_short_all",
+}
+COT_SPLIT_SERIES = tuple(f"cot_{k}" for k in COT_SPLIT_COLUMNS)
 # Unscheduled federal closures (executive orders; federal offices and the CFTC closed, markets closed): treated as
 # federal holidays for both the COT holiday-week rule and the next-business-day stamps. Add new ones here; a missing
 # one can stamp a release too early, an extra one only makes it later.
@@ -95,7 +106,7 @@ def _naive_days(d: pd.Series | pd.DatetimeIndex) -> pd.DatetimeIndex:
     return (idx.tz_localize(None) if idx.tz is not None else idx).normalize()
 
 
-def cot_available_utc(report_date: pd.Series | pd.DatetimeIndex) -> pd.DatetimeIndex:
+def cot_available_utc(report_date: pd.Series | pd.DatetimeIndex, *, min_age: bool = True) -> pd.DatetimeIndex:
     """Conservative UTC time each COT report (positions as of `report_date`, normally a Tuesday) was public: the
     Friday of the report week at 15:30 ET, or 15:30 ET on the next US business day after that Friday when a federal
     holiday falls on Monday..Friday of the week; never before a shutdown floor (module docstring)."""
@@ -103,6 +114,11 @@ def cot_available_utc(report_date: pd.Series | pd.DatetimeIndex) -> pd.DatetimeI
     if len(d) == 0:
         return pd.DatetimeIndex([], tz="UTC")
     friday = d + pd.to_timedelta((4 - d.dayofweek) % 7, unit="D")
+    # positions dated Wednesday..Friday (holiday weeks, e.g. Friday 21 Dec 2001, Friday 14 Feb 2003) cannot be public
+    # by that week's Friday: the release is no earlier than the next week's Friday (the report needs >= 3 days)
+    # (`min_age=False`: the caller has already added a publication lag to the date, cot_legacy_available_utc)
+    if min_age:
+        friday = friday.where(friday - d >= pd.Timedelta(days=3), friday + pd.Timedelta(days=7))
     monday = friday - pd.Timedelta(days=4)
     hol = us_holidays(monday.min(), friday.max())
     holiday_week = np.array([bool(((hol >= m) & (hol <= f)).any()) for m, f in zip(monday, friday)])
@@ -151,11 +167,16 @@ def parse_cot(text_or_bytes: str | bytes) -> pd.DataFrame:
         "comm_net": (num("prod_merc_positions_long_all") - num("prod_merc_positions_short_all")
                      + num("swap_positions_long_all") - num("swap_positions_short_all")),
     })
-    return out.dropna().drop_duplicates("report_date", keep="last").sort_values("report_date").reset_index(drop=True)
+    for k, c in COT_SPLIT_COLUMNS.items():
+        if c in raw.columns:
+            out[k] = num(c)
+    out = out.dropna(subset=["report_date", "mm_long", "mm_short", "open_interest", "comm_net"])
+    return out.drop_duplicates("report_date", keep="last").sort_values("report_date").reset_index(drop=True)
 
 
-def cot_frame(parsed: pd.DataFrame, vintage: pd.Timestamp) -> pd.DataFrame:
-    """parse_cot rows -> long release rows (COLUMNS), one per series and report date.
+def cot_frame(parsed: pd.DataFrame, vintage: pd.Timestamp, *, split: bool = False) -> pd.DataFrame:
+    """parse_cot rows -> long release rows (COLUMNS), one per series and report date. `split` adds the full
+    trader-category series (COT_SPLIT_SERIES, where parsed carries them); the workflow file keeps the core set.
 
     Known look-ahead in the backfill: the CFTC history files hold the current (corrected) value for each report date,
     not the value first published. The first run (2006 onwards) therefore stamps those corrected values with the
@@ -169,10 +190,20 @@ def cot_frame(parsed: pd.DataFrame, vintage: pd.Timestamp) -> pd.DataFrame:
     values = {"cot_mm_long": parsed["mm_long"], "cot_mm_short": parsed["mm_short"],
               "cot_mm_net": parsed["mm_long"] - parsed["mm_short"], "cot_open_interest": parsed["open_interest"],
               "cot_comm_net": parsed["comm_net"]}
+    if split:
+        values.update({f"cot_{k}": parsed[k] for k in COT_SPLIT_COLUMNS if k in parsed.columns})
+    return _long_rows(values, days, avail, vintage, "cftc")
+
+
+def _long_rows(values: dict[str, pd.Series], days: pd.DatetimeIndex, avail: pd.DatetimeIndex, vintage: pd.Timestamp,
+               source: str) -> pd.DataFrame:
+    """series -> values (aligned with days/avail) as long release rows; a missing value (NaN) is no row."""
     parts = [pd.DataFrame({"series": s, "series_id": COT_GOLD_CODE, "value_date": days,
-                           "value": v.astype(float).to_numpy(), "vintage": _vintage_day(vintage),
-                           "available_utc": avail, "source": "cftc"}) for s, v in values.items()]
+                           "value": pd.to_numeric(v, errors="coerce").astype(float).to_numpy(),
+                           "vintage": _vintage_day(vintage), "available_utc": avail, "source": source})
+             for s, v in values.items()]
     out = pd.concat(parts, ignore_index=True)
+    out = out[out["value"].notna()].reset_index(drop=True)
     out["ts_utc"] = out["available_utc"]
     return out[list(COLUMNS)]
 
@@ -219,6 +250,12 @@ COT_LEGACY_HIST_URL = "https://www.cftc.gov/files/dea/history/deacot1986_2016.zi
 COT_LEGACY_YEAR_URL = "https://www.cftc.gov/files/dea/history/deacot{year}.zip"
 COT_LEGACY_SERIES = ("cot_legacy_nc_long", "cot_legacy_nc_short", "cot_legacy_nc_net", "cot_legacy_open_interest",
                      "cot_legacy_comm_net")
+COT_LEGACY_SPLIT_COLUMNS: dict[str, str] = {     # optional, as COT_SPLIT_COLUMNS
+    "comm_long": "commercial_positions_long_all", "comm_short": "commercial_positions_short_all",
+    "nc_spread": "noncommercial_positions_spreading_all", "nonrept_long": "nonreportable_positions_long_all",
+    "nonrept_short": "nonreportable_positions_short_all",
+}
+COT_LEGACY_SPLIT_SERIES = tuple(f"cot_legacy_{k}" for k in COT_LEGACY_SPLIT_COLUMNS)
 # Publication before the weekly Friday release, conservative (UNVERIFIED against CFTC's own history of the report,
 # confirm before reading results that depend on the exact lag): positions were semi-monthly (15th and month end) until
 # Sept 1992 and weekly (Tuesday) from Oct 1992, but published every two weeks until the switch to weekly publication
@@ -237,7 +274,11 @@ def cot_legacy_available_utc(report_date: pd.Series | pd.DatetimeIndex) -> pd.Da
     lag = pd.to_timedelta(np.zeros(len(d), dtype="int64"), unit="D")
     for cutoff, days in reversed(COT_LEGACY_LAGS):        # earliest cut-off last, so it wins for the oldest reports
         lag = lag.where(~(d < pd.Timestamp(cutoff)), pd.Timedelta(days=days))
-    return cot_available_utc(d + lag)
+    lagged = np.asarray(lag > pd.Timedelta(0), dtype=bool)
+    out = cot_available_utc(d + lag, min_age=False)
+    if (~lagged).any():
+        out = out.where(lagged, cot_available_utc(d, min_age=True))
+    return pd.DatetimeIndex(out).as_unit("ns")
 
 
 def _legacy_norm(c: str) -> str:
@@ -273,11 +314,16 @@ def parse_cot_legacy(text_or_bytes: str | bytes) -> pd.DataFrame:
         "open_interest": num("open_interest_all"),
         "comm_net": num("commercial_positions_long_all") - num("commercial_positions_short_all"),
     })
-    return out.dropna().drop_duplicates("report_date", keep="last").sort_values("report_date").reset_index(drop=True)
+    for k, c in COT_LEGACY_SPLIT_COLUMNS.items():
+        if c in raw.columns:
+            out[k] = num(c)
+    out = out.dropna(subset=["report_date", "nc_long", "nc_short", "open_interest", "comm_net"])
+    return out.drop_duplicates("report_date", keep="last").sort_values("report_date").reset_index(drop=True)
 
 
-def cot_legacy_frame(parsed: pd.DataFrame, vintage: pd.Timestamp) -> pd.DataFrame:
-    """parse_cot_legacy rows -> long release rows (COLUMNS), source `cftc_legacy`. The history files hold current
+def cot_legacy_frame(parsed: pd.DataFrame, vintage: pd.Timestamp, *, split: bool = False) -> pd.DataFrame:
+    """parse_cot_legacy rows -> long release rows (COLUMNS), source `cftc_legacy`; `split` adds
+    COT_LEGACY_SPLIT_SERIES. The history files hold current
     (corrected) values, the same small accepted backfill look-ahead as `cot_frame`; later revisions are new rows."""
     if parsed.empty:
         return pd.DataFrame(columns=list(COLUMNS))
@@ -286,12 +332,9 @@ def cot_legacy_frame(parsed: pd.DataFrame, vintage: pd.Timestamp) -> pd.DataFram
     values = {"cot_legacy_nc_long": parsed["nc_long"], "cot_legacy_nc_short": parsed["nc_short"],
               "cot_legacy_nc_net": parsed["nc_long"] - parsed["nc_short"],
               "cot_legacy_open_interest": parsed["open_interest"], "cot_legacy_comm_net": parsed["comm_net"]}
-    parts = [pd.DataFrame({"series": s, "series_id": COT_GOLD_CODE, "value_date": days,
-                           "value": v.astype(float).to_numpy(), "vintage": _vintage_day(vintage),
-                           "available_utc": avail, "source": "cftc_legacy"}) for s, v in values.items()]
-    out = pd.concat(parts, ignore_index=True)
-    out["ts_utc"] = out["available_utc"]
-    return out[list(COLUMNS)]
+    if split:
+        values.update({f"cot_legacy_{k}": parsed[k] for k in COT_LEGACY_SPLIT_COLUMNS if k in parsed.columns})
+    return _long_rows(values, days, avail, vintage, "cftc_legacy")
 
 
 def fetch_cot_legacy(years: list[int], *, retries: int = 3, session: requests.Session | None = None) -> pd.DataFrame:
@@ -381,7 +424,8 @@ def merge_releases(prev: pd.DataFrame | None, fresh: pd.DataFrame, retrieved_utc
 
     * A (series, value_date) first seen now keeps its publication-rule available_utc, unless that time is before the
       previous successful download of its source (`last_ok[source]`): the row should have been there then and was not,
-      so the release was late (a shutdown, an outage) and it is stamped no earlier than `retrieved_utc`.
+      so the release was late (a shutdown, an outage) and it is stamped no earlier than `retrieved_utc`. A series the
+      published file has never carried (a newly parsed column of the same report) is a backfill and keeps the rule.
     * A value that differs from the last one published is a revision: a new row, available no earlier than
       `retrieved_utc`. The first release stays, so research can always use first-release values.
     * Unchanged values add nothing."""
@@ -402,7 +446,10 @@ def merge_releases(prev: pd.DataFrame | None, fresh: pd.DataFrame, retrieved_utc
         rule = pd.DatetimeIndex(m["available_utc"])
         ok = {k: str(pd.Timestamp(v)) for k, v in (last_ok or {}).items()}
         seen_before = pd.DatetimeIndex(pd.to_datetime(m["source"].map(ok), utc=True)).as_unit("ns")
-        late = new & np.asarray((rule < seen_before), dtype=bool)
+        # a series the published file has never carried (a new column of the same report) is a backfill: its
+        # history keeps the publication rule; only a missing date of an already published series is a late release
+        known = m["series"].isin(set(prev["series"])).to_numpy()
+        late = new & known & np.asarray((rule < seen_before), dtype=bool)
         bump = (revised | late) & np.asarray(rule < now, dtype=bool)
         m["available_utc"] = rule.where(~bump, now)
         out = pd.concat([prev, m[new | revised].drop(columns=["prev_value"])], ignore_index=True)
