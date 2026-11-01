@@ -163,6 +163,21 @@ class ExplorationArm(FrozenRecord):
     # max_risk_per_trade), never above `max_loss` at the stop; `min_lot` (default) = exactly the minimum lot. Refused
     # at load on an account that is not demo and probe_only (`Account._growth_demo_only`)
     sizing: Literal["min_lot", "growth"] = "min_lot"
+    # growth sprint 2026-11-01 section 3 ("adds at +1 R ... while open risk stays <= 1 unit"): pyramid adds, one unit at
+    # each +1 R from the first unit's entry, at most this many (`engine.exploration.pyramid`). Growth-sized arms only
+    # (`_adds_need_growth`): an add is sized like its first unit, so a minimum-lot arm never pyramids
+    adds: int = Field(0, ge=0, le=3)
+    # quant ruling 2026-11-01 (Q2): the most lots a growth unit (the first and every add) may take, so four units of
+    # each leg fit ADR 0043 X3's 0.10 net lots; None = the RiskGate's own sizing within `max_loss`. Growth arms only
+    unit_lots: float | None = Field(None, gt=0)
+
+    @model_validator(mode="after")
+    def _adds_need_growth(self) -> ExplorationArm:
+        if self.adds and self.sizing != "growth":
+            raise ValueError("pyramid adds are allowed on a growth-sized arm only (sizing: growth)")
+        if self.unit_lots is not None and self.sizing != "growth":
+            raise ValueError("unit_lots is allowed on a growth-sized arm only (sizing: growth)")
+        return self
 
 
 class ExplorationPot(FrozenRecord):

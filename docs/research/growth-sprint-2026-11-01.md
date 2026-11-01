@@ -134,6 +134,21 @@ above the 1% design hard limit. Options: (A) keep 1% plus the virtual ledger; (B
 **Recommendation: A.** The R sequence carries the same information. Section 1 shows B halves the account two weeks in
 three at zero edge, and B would train habits that are banned for real money.
 
+**Protocol deviation 2 (2026-11-01, quant rulings Q1-Q3 on PR #266).** The pyramid adds go live on GS1 and GS1C
+together, with mechanics that differ from C2's frozen walk:
+- **Q1, stop rule (ADR 0065).** After each add, every earlier stop moves to the newest add's 1 R stop. The C2 walk's
+  common stop is avg - R / units. GS1 is not compared to the C2 screen. There is no re-walk: C2 is retired, and a
+  re-walk adds K for no decision. The read stays GS1 - GS1C, whose mechanics are identical.
+- **Q2, unit size.** Each unit is 0.01 lots (accounts.yaml `unit_lots`), so 4 units x 2 legs = 0.08 net lots, inside
+  ADR 0043 X3's 0.10. Neither leg's adds then depend on the other leg's side.
+- **Q3, no profit target.** A pyramid unit has no profit target: the 100 R backstop is unreachable, on the broker
+  order and in the shadow replay alike. Every unit of a group exits together, at the group stop or at the group's end
+  (the first signal + 16 bars). The single-unit fallback's 3 R target is gone.
+
+Period split: the `exploration_pyramid` journal row of each arm, written at the icm-demo engine's start. Trades before
+it are single-unit with a 3 R target; trades after it follow this deviation. The read (Q4) counts a refused add as
+`refused_adds`, never as a trade of its own.
+
 Reproduce: the growth Monte Carlo is a short numpy script with seed 20261101. The ATR figure comes from
 `raw/xauusd_1m_dukascopy_2025.parquet` (bid OHLC, resampled to 15m, ATR(14), 2025-07-01..2025-09-30).
 

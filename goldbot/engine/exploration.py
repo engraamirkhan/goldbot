@@ -62,6 +62,9 @@ The plan's rules, as built here:
 * Identity: magic_base + 95 (`goldbot.engine.magic`), order id and MT5 comment `ex<arm5>-<epoch10>-<h8>` (27 chars,
   inside MT5's 29). After a restart a position is adopted by its order row or its comment and its hold resumes from
   the broker's open time.
+* Pyramid adds (growth sprint 2026-11-01 section 3; `exploration_pyramid`): an arm registered with `adds` adds a
+  unit at each +1 R from its first unit's entry, each through `_send` and the RiskGate like any signal, the earlier
+  stops moved first so the group never loses more than one unit at its stops; an add carries `group_id`.
 * The record: one `ExplorationRecord` per order in aux.db `exploration_trades`, never closed_trades.jsonl. A close for
   any reason but the arm's own stop, target or hold (the Friday cut, a kill switch, a moved stop, a manual close) is
   `censored`: the label did not run to its own barrier.
@@ -175,6 +178,11 @@ class Arm(FrozenRecord):
     spec: SpecArm
     style: str
     control_share: float | None = Field(None, gt=0, le=1)
+    # growth sprint 2026-11-01: pyramid adds at +1 R steps of the first unit's entry, at most this many
+    # (`exploration_pyramid`; accounts.yaml `adds`, growth-sized arms only). 0: the arm never adds
+    adds: int = Field(0, ge=0, le=3)
+    # quant Q2 2026-11-01: the most lots a growth unit takes (accounts.yaml `unit_lots`); None = the gate's sizing
+    unit_lots: float | None = Field(None, gt=0)
 
     @property
     def arm_id(self) -> str:
@@ -351,7 +359,8 @@ def config_for(acc: Account, spec_path: Path = SPEC_PATH,
                         arm_id, acc.account_id)
             dropped.append(arm_id)
             continue
-        arms.append(Arm(spec=specs[arm_id], style=reg.style, control_share=reg.control_share))
+        arms.append(Arm(spec=specs[arm_id], style=reg.style, control_share=reg.control_share, adds=reg.adds,
+                        unit_lots=reg.unit_lots))
     running = {a.arm_id for a in arms}
     dropped += [i for i in rejected if i not in running and i not in dropped]
     return ExplorationConfig(enabled=True, budget_share=ex.budget_share, max_open_total=ex.max_open_total,
@@ -468,6 +477,10 @@ class Pending(FrozenRecord):
     struct_r: float | None = None           # BXR: the STRUCT target (R) its virtual BXT twin takes
     decision_utc: UtcTimestamp | None = None    # XC15 shifted past an open KA15: the rule's own decision close
     shifted: bool = False
+    # a pyramid add (`exploration_pyramid`): its group (the first unit's client order id) and its level k (1..3);
+    # `bar_ts` is the pass that saw the level reached, its id is the group's (`pending_id`)
+    group_id: str | None = None
+    add_no: int = 0
 
 
 class _ArmAgent:
@@ -552,6 +565,10 @@ class Exploration:
         self.context = ArmContext(self.db, eng.store, eng.cfg.release_symbol, eng.cfg.account_id)
         self.needs_context = frozenset(a.arm_id for a in ok if needs_context(a.spec))
         self.held_back: dict[str, str] = {}             # arm -> why it is held back now (journalled once a change)
+        # pyramid groups (`exploration_pyramid`): their terms from the first unit's ledger row, and the highest level
+        # tried; both rebuilt from the ledger, the sent ids and the candidates after a restart
+        self.groups: dict[str, Any] = {}
+        self.ladder: dict[str, int] = {}
 
     @classmethod
     def start(cls, eng: Engine) -> Exploration | None:
@@ -562,7 +579,10 @@ class Exploration:
             raise ValueError("exploration runs on demo probe_only accounts only (plan 2026-10-25)")
         eng.decisions.append({"ts": time.time(), "agent": None, "action": "exploration_room_floor",
                               "losses": ARM_ROOM_LOSSES, "share_cap": SHARE_CAP})
-        return cls(eng, cfg)
+        from goldbot.engine import exploration_pyramid
+        ex = cls(eng, cfg)
+        exploration_pyramid.journal_start(eng, ex)
+        return ex
 
 
 def is_exploration(agent_id: str | None) -> bool:
@@ -591,8 +611,22 @@ def adoption(eng: Engine, p: Position) -> tuple[Specialist | None, str]:
 
 def order_id(eng: Engine, arm: Arm, bar_ts: pd.Timestamp) -> str:
     """`ex<arm5>-<epoch10>-<h8>`: 27 characters, the whole id fits MT5's 29-character comment (MT5_COMMENT_MAX)."""
-    h = hashlib.sha1(f"{eng.cfg.account_id}|{arm.arm_id}|{bar_ts.isoformat()}".encode()).hexdigest()[:8]
-    return f"{COMMENT}{arm.key}-{int(bar_ts.timestamp()):010d}-{h}"
+    return make_order_id(eng.cfg.account_id, arm.arm_id, bar_ts)
+
+
+def make_order_id(account_id: str, arm_id: str, bar_ts: pd.Timestamp) -> str:
+    """`order_id` from the account and arm ids alone (the read decodes pyramid groups with it, no engine)."""
+    h = hashlib.sha1(f"{account_id}|{arm_id}|{bar_ts.isoformat()}".encode()).hexdigest()[:8]
+    key = hashlib.sha1(arm_id.encode()).hexdigest()[:5]
+    return f"{COMMENT}{key}-{int(bar_ts.timestamp()):010d}-{h}"
+
+
+def pending_id(eng: Engine, arm: Arm, s: Pending) -> str:
+    """A candidate's id: its signal close's order id, a pyramid add's from its group (`exploration_pyramid.add_id`)."""
+    if s.group_id is not None:
+        from goldbot.engine.exploration_pyramid import add_id
+        return add_id(eng, arm, s.group_id, s.add_no)
+    return order_id(eng, arm, s.bar_ts)
 
 
 def _open(eng: Engine) -> list[int]:
@@ -695,10 +729,13 @@ def _signal(eng: Engine, ex: Exploration, arm: Arm, bars: pd.DataFrame, b1: pd.D
 
 def _pending(arm: Arm, rows: pd.DataFrame, through: pd.Timestamp) -> list[Pending]:
     """Candidate rows (side, risk_usd, target_r, max_bars; a BXR's struct_r) as signals with their own stop, target
-    and hold."""
+    and hold. An arm with pyramid adds has no profit target (quant Q3 2026-11-01: the group exits together at its stop
+    or its end), so its target is `exploration_pyramid.NO_TARGET_R` R, live and in the shadow replay alike."""
+    from goldbot.engine.exploration_pyramid import NO_TARGET_R
     struct = rows["struct_r"].to_numpy(dtype=float) if "struct_r" in rows.columns else [None] * len(rows)
     return [Pending(arm_id=arm.arm_id, side=int(side), bar_ts=through, stop_usd=float(risk),
-                    target_usd=float(target_r) * float(risk), hold_bars=int(max_bars) + 1,
+                    target_usd=(NO_TARGET_R if arm.adds > 0 else float(target_r)) * float(risk),
+                    hold_bars=int(max_bars) + 1,
                     struct_r=None if struct_r is None else float(struct_r))
             for side, risk, target_r, max_bars, struct_r in zip(rows["side"].to_numpy(dtype=int),
                                                                 rows["risk_usd"].to_numpy(dtype=float),
@@ -714,7 +751,7 @@ def _skipped(eng: Engine, ex: Exploration, arm: Arm, s: Pending, why: str) -> No
     effort: a failure here is logged and never stops the other arms' signals."""
     try:
         share = shares(ex, s.bar_ts).get(arm.arm_id)
-        eng.decisions.append({"ts": s.bar_ts.isoformat(), "agent": arm.tag, "proposal": order_id(eng, arm, s.bar_ts),
+        eng.decisions.append({"ts": s.bar_ts.isoformat(), "agent": arm.tag, "proposal": pending_id(eng, arm, s),
                               "action": "exploration_skipped:" + why, "arm": arm.arm_id, "tf": arm.tf,
                               "style": arm.style, "stop_usd": round(s.stop_usd, 4),
                               "propensity": round(share, 4) if share is not None else None})
@@ -896,8 +933,9 @@ def on_pass(eng: Engine, tick: Tick) -> None:
     ex = eng.exploration
     if ex is None:
         return
+    now = eng._now(tick)
+    _pyramid(eng, ex, now, tick)        # safety S3: the group stops first, in their own try, whatever fails after
     try:
-        now = eng._now(tick)
         refresh_retired(eng, ex, now)
         refresh_cost_reads(eng, ex, now)
         refresh_owner_experiments(eng, ex, now)
@@ -912,6 +950,20 @@ def on_pass(eng: Engine, tick: Tick) -> None:
     except Exception as exc:
         log.exception("exploration pass failed; no exploration entry this pass")
         eng.decisions.append({"ts": time.time(), "agent": None, "action": "exploration_error",
+                              "error": type(exc).__name__})
+
+
+def _pyramid(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
+    """The pyramid groups' stops and adds (`exploration_pyramid.pyramid`); an error is journalled
+    (`exploration_pyramid_error`) and the pass goes on."""
+    if not any(a.adds for a in ex.arms.values()):
+        return
+    from goldbot.engine.exploration_pyramid import pyramid
+    try:
+        pyramid(eng, ex, now, tick)
+    except Exception as exc:
+        log.exception("exploration pyramid failed; tried again next pass")
+        eng.decisions.append({"ts": time.time(), "agent": None, "action": "exploration_pyramid_error",
                               "error": type(exc).__name__})
 
 
@@ -1286,23 +1338,27 @@ class _Pass:
         # but an open scheduled probe, whose slot `_send` keeps free (ADR 0043: one of 18 kept for it)
         self.count: dict[str, int] = {"host": len(eng._foreign) + sum(
             t.agent_id != cost_probe.SCHEDULED_ID for t in eng.open.values())}
+        from goldbot.engine.exploration_pyramid import counts_as_slot
         for pid in _open(eng):
             tr = eng.open[pid]
             arm = ex.arms.get(tr.agent_id.removeprefix(PREFIX))
             loss = _held(eng, ex, pid, tr)
+            slot = counts_as_slot(eng, arm, tr)         # a pyramid add joins its group's arm and pot slot
             for k in ("*", *((arm.arm_id, "pot:" + arm.style) if arm is not None else ())):
                 _add(self.held, k, loss)
-                self.count[k] = self.count.get(k, 0) + 1
+                if k == "*" or slot:
+                    self.count[k] = self.count.get(k, 0) + 1
         self.cap: int | None = -1                   # -1: not read yet (the first signal's terms read it)
         self.why: str | None = None                 # the last signal's refusal
 
     def lost_in(self, ex: Exploration, style: str | None = None) -> float:
         return sum(v for a, v in self.lost.items() if style is None or (a in ex.arms and ex.arms[a].style == style))
 
-    def note(self, arm: Arm, loss: float) -> None:
+    def note(self, arm: Arm, loss: float, slot: bool = True) -> None:
         for k in ("*", arm.arm_id, "pot:" + arm.style):
             _add(self.held, k, loss)
-            self.count[k] = self.count.get(k, 0) + 1
+            if k == "*" or slot:
+                self.count[k] = self.count.get(k, 0) + 1
         self.count["host"] += 1
 
 
@@ -1418,7 +1474,7 @@ def candidate(eng: Engine, ex: Exploration, s: Pending, now: pd.Timestamp, block
     yet (None). Best effort: never raises."""
     from goldbot.research.exploration_data import record_candidate
     arm = ex.arms[s.arm_id]
-    cid = order_id(eng, arm, s.bar_ts)
+    cid = pending_id(eng, arm, s)
     branch = policy(ex, arm.style, now)
     u = draw(cid)
     taken = blocked is None
@@ -1461,7 +1517,7 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     bounds again on the loss at the gate's stop, and that loss is the position's open risk (trading-safety L1)."""
     from goldbot.research import arm_rules
     tag, side, pot = arm.tag, s.side, ex.cfg.pots[arm.style]
-    pid = order_id(eng, arm, s.bar_ts)
+    pid = pending_id(eng, arm, s)
     price = tick.ask if side > 0 else tick.bid
     stop_d, target_d, hold_s = s.stop_usd, s.target_usd, s.hold_bars * tf_seconds(arm.tf)
     applied: dict[str, Any] = {"arm": arm.arm_id, "tf": arm.tf, "style": arm.style, "stop_usd": round(stop_d, 4),
@@ -1494,10 +1550,11 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     if ps.count["host"] >= eng.gate.limits.max_positions - probe_slot(eng):
         refuse("probe_slot")
         return "cap"
-    if ps.count.get("pot:" + arm.style, 0) >= pot.max_open:
+    add = s.group_id is not None                    # a pyramid add joins its group's slots (`exploration_pyramid`)
+    if not add and ps.count.get("pot:" + arm.style, 0) >= pot.max_open:
         refuse("pot_slots")
         return "refused"
-    if ps.count.get(arm.arm_id, 0) >= arm.max_open:
+    if not add and ps.count.get(arm.arm_id, 0) >= arm.max_open:
         refuse("arm_max_open")
         return "refused"
     # quant Q2: every style, swing included; a rule whose exit is the cut may hold across it, never into the weekend
@@ -1529,6 +1586,17 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     if held_arm is None or held_pot is None or held_all is None:
         refuse("open_risk_unknown")
         return "refused"
+    plan = None
+    if add:
+        # the earlier units go to the add's level before it is sent (`before_send`): the bounds count them there
+        from goldbot.engine import exploration_pyramid
+        got = exploration_pyramid.plan(eng, ex, arm, s, tick, price, float(lot))
+        if isinstance(got, str):
+            refuse(got)
+            return "refused"
+        plan = got
+        held_arm, held_pot, held_all = held_arm + plan.delta, held_pot + plan.delta, held_all + plan.delta
+        applied.update(group=plan.group.group_id, add=s.add_no, group_sl=plan.stop)
     # what the new trade may lose at its stop under each bound, in the order they are journalled
     rooms = {"arm_cap": arm_cap - cost,              # trading-safety LOW: the round trip counts too
              "budget": (ps.total - ps.lost_in(ex) - held_all) if ps.total is not None else 0.0,
@@ -1541,7 +1609,9 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
     growth = arm.arm_id in eng.gate.limits.growth_arms
     if growth:
         sized = growth_lots(rooms, arm_cap, loss / float(lot), cost / float(lot), terms, side,
-                            sum(t.side * t.lots for t in eng.open.values()))
+                            sum(t.side * t.lots for t in eng.open.values()),
+                            max_lots=min((x for x in (arm.unit_lots, plan.group.lots if plan is not None else None)
+                                          if x is not None), default=None))
         if sized is not None:
             volume_max, loss, cost = sized
             rooms["arm_cap"] = arm_cap - cost
@@ -1571,33 +1641,47 @@ def _send(eng: Engine, ex: Exploration, ps: _Pass, arm: Arm, s: Pending, now: pd
             retcode=res.retcode, position_id=res.position_id if filled else None,
             fill_price=(res.price if res.price is not None else price) if filled else None,
             stop_loss=round(at_stop, 2), cost=round(cost, 2), fx_acct_per_usd=terms.get("acct_per_usd"),
-            decision_utc=s.decision_utc, shifted=s.shifted)
+            decision_utc=s.decision_utc, shifted=s.shifted, group_id=s.group_id)
 
-    pos = cost_probe._place(eng, ex.db, intent, _agent(eng, arm, s.hold_bars, target_d / stop_d), repo=LEDGER,
-                            pid=pid, close_ts=now, entry=price, target=price + side * target_d, max_loss=room,
-                            headroom=room, applied=lambda: applied, refuse=refuse, action="exploration:",
-                            journal={"agent": tag, "arm": arm.arm_id}, record=record,
-                            over_cap=lambda at_stop: binding(at_stop) or "arm_cap",
-                            max_lots=volume_max if growth else None)
+    from goldbot.engine import exploration_pyramid as pyr
+    try:
+        # a pyramid unit's own time barrier is a backstop one bar past its group's end (`exploration_pyramid.due`)
+        hold = s.hold_bars + (1 if arm.adds > 0 else 0)
+        pos = cost_probe._place(eng, ex.db, intent, _agent(eng, arm, hold, target_d / stop_d), repo=LEDGER,
+                                pid=pid, close_ts=now, entry=price, target=price + side * target_d, max_loss=room,
+                                headroom=room, applied=lambda: applied, refuse=refuse, action="exploration:",
+                                journal={"agent": tag, "arm": arm.arm_id}, record=record,
+                                over_cap=lambda at_stop: binding(at_stop) or "arm_cap",
+                                max_lots=volume_max if growth else None,
+                                before_send=(lambda: pyr.before_send(eng, plan, now)) if plan is not None else None)
+    except pyr.StopMoveFailed:
+        refuse("stop_move_failed")          # nothing sent: the group would hold more than one unit at its stops
+        return "refused"
     if pos is None:
         return "refused"
     ex.open_loss[pos] = at_gate[0] if at_gate else loss
-    ps.note(arm, ex.open_loss[pos])
+    ps.note(arm, ex.open_loss[pos], slot=not add)
+    if plan is not None:
+        pyr.heal(eng, ex, arm, plan.group, now, force=True)     # again from the add's fill and the stop it got
     open_twins(eng, ex, arm, s, pid, pos)
     return "sent"
 
 
 def growth_lots(rooms: Mapping[str, float], arm_cap: float, loss_per_lot: float, cost_per_lot: float,
-                terms: Mapping[str, Any], side: int, net_open: float) -> tuple[float, float, float] | None:
+                terms: Mapping[str, Any], side: int, net_open: float,
+                max_lots: float | None = None) -> tuple[float, float, float] | None:
     """Growth sprint 2026-11-01 (`RiskLimits.growth_arms`): the largest lot, in the broker's steps, whose loss at the
     stop fits every room (`_send`'s budget, pot and arm day), whose loss plus round trip fits the arm's per-trade cap,
     whose net same-side lots stay within MAX_NET_LOTS (ADR 0043 X3) and at most the broker's volume_max: (lots, loss,
     cost). The RiskGate then sizes at its own risk per trade, never above it. None when no lot above the minimum fits
-    (the minimum-lot path judges it as before): no cap is loosened, only the lot is no longer fixed at the minimum."""
+    (the minimum-lot path judges it as before): no cap is loosened, only the lot is no longer fixed at the minimum.
+    `max_lots`: a pyramid add is at most its first unit's lots ("add a unit")."""
     step, lo, hi = (float(terms.get(k) or 0.0) for k in ("volume_step", "volume_min", "volume_max"))
     if not (step > 0 and lo > 0 and loss_per_lot > 0 and cost_per_lot >= 0):
         return None
     bounds = [hi, arm_cap / (loss_per_lot + cost_per_lot), MAX_NET_LOTS - side * net_open]
+    if max_lots is not None:
+        bounds.append(max_lots)
     bounds += [room / loss_per_lot for k, room in rooms.items() if k != "arm_cap"]
     lots = math.floor(min(bounds) / step + 1e-9) * step
     if lots <= lo + 1e-9:
@@ -1634,6 +1718,7 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
     the broker's open time) is closed (`HOLD_EXIT`); a 15m+ position of a rule under the Friday cut is closed at its
     wall-clock time exit (`_week_due`, `time_exit`); a position whose arm is not configured is closed at once
     (`ORPHAN_EXIT`). A refused close stays due and is retried like any close. Never raises."""
+    from goldbot.engine import exploration_pyramid
     try:
         ex = eng.exploration
         at = eng.clock() if eng.cfg.live_clock else now
@@ -1645,7 +1730,9 @@ def exits(eng: Engine, now: pd.Timestamp) -> None:
                 eng._try_close(pid, ORPHAN_EXIT, now)
                 continue
             since = tr.opened_utc or tr.entry_bar_ts
-            if arm.tf in SUB_15M and since is not None and (at - since).total_seconds() >= arm.hold_s:
+            if arm.adds > 0 and exploration_pyramid.due(eng, arm, tr, at):
+                eng._try_close(pid, "time_exit", now)   # quant Q3: every unit of a group at the group's end
+            elif arm.tf in SUB_15M and since is not None and (at - since).total_seconds() >= arm.hold_s:
                 eng._try_close(pid, HOLD_EXIT, now)
             elif arm.tf not in SUB_15M and _week_due(eng, arm, tr, at):
                 eng._try_close(pid, "time_exit", now)
@@ -1959,7 +2046,7 @@ def _censored(arm: Arm | None, why: str, tr: OpenTrade) -> bool:
     realised outcome under the cut") the cut's loser close (CUT_EXIT) and a stop tightened (the cut's winner rule)
     are its own exit. A loosened stop, the no-quote flatten or any other close still censors. H-80 BXR (quant review
     C4): its trailed stop is its own exit only when it moved tighter, side x (sl - initial_sl) > 0; a stop moved
-    looser, or removed, censors."""
+    looser, or removed, censors. So for a pyramid unit (an arm with `adds`), whose stop its group's adds move up."""
     from goldbot.research import arm_rules
     follows = arm is not None and arm_rules.follows_friday_cut(arm.spec)
     if why not in NATURAL and not (follows and why == CUT_EXIT):
@@ -1967,7 +2054,8 @@ def _censored(arm: Arm | None, why: str, tr: OpenTrade) -> bool:
     if tr.initial_sl is None or tr.sl == tr.initial_sl:
         return False
     tighter = tr.sl is not None and tr.side * (tr.sl - tr.initial_sl) > 0
-    return not ((follows or (arm is not None and _is_runner(arm))) and tighter)
+    # a pyramid unit's stop moved up by its group's adds (`exploration_pyramid`) is its own exit too
+    return not ((follows or (arm is not None and (_is_runner(arm) or arm.adds > 0))) and tighter)
 
 
 def _observe(eng: Engine, db: Database, r: ExplorationRecord, filled: pd.Timestamp | None) -> None:

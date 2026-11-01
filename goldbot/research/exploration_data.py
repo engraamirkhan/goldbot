@@ -70,6 +70,9 @@ log = logging.getLogger("goldbot.exploration")
 
 Style = Literal["scalp", "intraday", "swing"]
 STYLES: tuple[str, ...] = ("scalp", "intraday", "swing")
+# a candidate may also come from the growth pot (growth sprint 2026-11-01, GS1/GS1C): recorded and replayed like any
+# (a refused growth entry is the read's shadow fill, quant requirement 5), never in a style's training table or weights
+CANDIDATE_STYLES: tuple[str, ...] = (*STYLES, "growth")
 TIMEFRAMES: tuple[str, ...] = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
 BRANCHES: tuple[str, ...] = ("ranked", "random", "uniform", "blocked")
 
@@ -176,8 +179,8 @@ def _candidate_problems(*, style: str, tf: str, side: int, stop_dist: float, tar
                         features: Mapping[str, Any] | None, feature_list_id: str | None, avail_max: int | None,
                         decision: int) -> list[str]:
     out = []
-    if style not in STYLES:
-        out.append(f"style {style!r} not one of {STYLES}")
+    if style not in CANDIDATE_STYLES:
+        out.append(f"style {style!r} not one of {CANDIDATE_STYLES}")
     if tf not in TIMEFRAMES:
         out.append(f"timeframe {tf!r} not one of {TIMEFRAMES}")
     if side not in (-1, 1):
@@ -825,8 +828,9 @@ def learn(db: Database, *, broker: str, as_of: pd.Timestamp, arms: Mapping[str, 
         raise ValueError("exploration evidence is learnt per broker")
     obs = read_obs(db, broker=broker, as_of=as_of, evidence="posterior", held_out=held_out)     # prereg Amendment 4
     strat = obs[~obs["is_control"]]
+    strat = strat[strat["style"].isin(STYLES)]        # quant Q5: a growth-pot row is read, never learnt from
     style_of = {str(a): str(s) for a, s in strat.groupby("arm_id")["style"].first().items()}
-    style_of.update(arms or {})
+    style_of.update({a: s for a, s in (arms or {}).items() if s in STYLES})
     for c in controls:
         style_of.pop(c, None)
     out: dict[str, Any] = {"arms": len(style_of)}

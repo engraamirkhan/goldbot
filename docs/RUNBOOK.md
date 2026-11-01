@@ -1677,6 +1677,13 @@ reconciliation run without asking. **Exits are never gated by approval or by a h
      decision, escalated with a recommendation, never edited here.
   6. Restart icm-demo's engine and check its engine file shows `probe_only: false` and entries come from the live
      agents again.
+* **Growth test pyramid adds (GS1/GS1C `adds: 3`, ADR 0065; Claude runs it).** Deploy, then run the one-off repair
+  once on the host that holds icm-demo's `aux.db`. Until this deploy every GS1/GS1C candidate was quarantined, so no
+  refused leg was ever scored as a shadow fill:
+  `sudo -n -u goldbot /opt/goldbot/.venv/bin/python scripts/unquarantine_growth_obs_2026_11_02.py --state-dir /opt/goldbot/state`
+  (idempotent; it prints how many rows it released). Restart `goldbot-engine@icm-demo`. Check the journal shows one
+  `exploration_pyramid` row each for GS1 and GS1C (the switch time the 11-07 read splits on). Rollback: drop `adds`
+  from both arms and restart. Open groups keep every stop already moved and every exit; no new add goes out.
 
 ### Auto mode (entries without your click)
 

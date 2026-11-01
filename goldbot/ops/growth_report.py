@@ -16,11 +16,10 @@ import pandas as pd
 from goldbot.base import FrozenRecord
 from goldbot.research.growth_ledger import (
     GROWTH_ARMS,
-    NOT_SHADOW,
     GrowthRead,
-    LedgerTrade,
     fold_groups,
     growth_read,
+    split_shadow,
 )
 
 GROWTH_ACCOUNT = "icm-demo"
@@ -81,8 +80,6 @@ def growth_test(state_dir: str | Path, *, account_id: str = GROWTH_ACCOUNT,
         engine = raw if isinstance(raw, dict) else {}
     except (OSError, ValueError):
         errors.append(f"engine_{account_id}.json unreadable: equity not shown")
-    shadow: list[LedgerTrade] = []
-    refused: dict[str, dict[str, int]] = {}
     marks = ",".join("?" * len(GROWTH_ARMS))
     recs: list[Any] = []
     rows: list[Any] = []
@@ -94,7 +91,7 @@ def growth_test(state_dir: str | Path, *, account_id: str = GROWTH_ACCOUNT,
                 recs = [r for r in LEDGER.select(conn, f"arm_id IN ({marks}) AND account_id = ?",
                                                  (*GROWTH_ARMS, account_id)) if r.signal_utc >= start]
                 rows = conn.execute(
-                    "SELECT arm_id, decision_ns, blocked_reason, label_sim_r, label_exit_ns, max_hold_s "
+                    "SELECT candidate_id, arm_id, decision_ns, blocked_reason, label_sim_r, label_exit_ns, max_hold_s "
                     f"FROM exploration_obs WHERE arm_id IN ({marks}) AND account_id = ? AND taken = 0 "
                     "AND decision_ns >= ?", (*GROWTH_ARMS, account_id, int(start.value))).fetchall()
             finally:
@@ -104,16 +101,7 @@ def growth_test(state_dir: str | Path, *, account_id: str = GROWTH_ACCOUNT,
             recs, rows = [], []
     trades = [t for t in fold_groups(recs) if t.entry_utc >= start]
     pnl = sorted((r.exit_utc, float(r.pnl)) for r in recs if r.exit_utc is not None and r.pnl is not None)
-    for arm, d_ns, why, label, exit_ns, hold_s in rows:
-        reason = str(why or "unknown")
-        refused.setdefault(str(arm), {})
-        refused[str(arm)][reason] = refused[str(arm)].get(reason, 0) + 1
-        if reason in NOT_SHADOW or label is None:
-            continue
-        entry = pd.Timestamp(int(d_ns), unit="ns", tz="UTC")
-        end = pd.Timestamp(int(exit_ns), unit="ns", tz="UTC") if exit_ns is not None \
-            else entry + pd.Timedelta(seconds=int(hold_s or 0))
-        shadow.append(LedgerTrade(arm_id=str(arm), entry_utc=entry, exit_utc=end, r=float(label), shadow=True))
+    split = split_shadow(rows, account_id)         # quant Q4: a refused pyramid add is no trade of its own
     if not (recs or rows):
         return None                                 # no GS1/GS1C order or candidate: the test has not started
     ws, eq = _num(engine, "week_start_equity"), _num(engine, "equity")
@@ -127,7 +115,9 @@ def growth_test(state_dir: str | Path, *, account_id: str = GROWTH_ACCOUNT,
     return GrowthTest(account_id=account_id, week_start=start.isoformat(), week_start_equity=ws, equity=eq,
                       multiple=eq / ws if eq is not None and ws else None,
                       growth_pnl=sum(p for _, p in pnl) if pnl else None, growth_drawdown=dd,
-                      read=growth_read(trades, refused=refused, shadow=shadow), errors=errors)
+                      read=growth_read(trades, refused=split.refused, shadow=split.firsts,
+                                       refused_adds=split.refused_adds, add_r=split.add_r,
+                                       add_groups=split.add_groups), errors=errors)
 
 
 def lines(g: GrowthTest) -> list[str]:
@@ -142,7 +132,13 @@ def lines(g: GrowthTest) -> list[str]:
         led = ", ".join(f"f={k}: x{v.final_multiple:.2f} dd {100 * v.max_drawdown:.0f}%"
                         f"{' doubled' if v.doubled else ''}{' ruined' if v.ruined else ''}" for k, v in a.ledgers.items())
         refused = ", ".join(f"{k} {v}" for k, v in sorted(a.refused.items())) or "none"
-        out.append(f"{arm}: n {a.n}, mean R {mean}, shadow {a.shadow_n}, refused: {refused}; virtual {led}")
+        adds = ", ".join(f"{k} {v}" for k, v in sorted(a.refused_adds.items())) or "none"
+        wide = ", ".join(f"f={k}: x{v.final_multiple:.2f}" for k, v in a.ledgers_uncapped.items())
+        out.append(f"{arm}: n {a.n}, mean R {mean}, shadow {a.shadow_n}, refused: {refused}; refused adds: {adds}; "
+                   f"virtual {led}; uncapped (approx.) {wide}")
     ex = f"{g.read.paired_excess_r:+.2f} R" if g.read.paired_excess_r is not None else "n/a"
     out.append(f"GS1 - GS1C over {g.read.pairs} paired sessions: {ex}" + (f" ({g.read.note})" if g.read.note else ""))
+    sx = g.read.paired_excess_no_refused_add_r
+    out.append(f"sensitivity, without sessions with a refused add: {g.read.pairs_no_refused_add} pairs, "
+               + (f"{sx:+.2f} R" if sx is not None else "n/a"))
     return out + [f"error: {e}" for e in g.errors]
