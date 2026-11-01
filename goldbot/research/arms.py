@@ -397,6 +397,11 @@ def _cost_refusal(q: Qualification) -> str | None:
     return None
 
 
+def _now() -> pd.Timestamp:
+    """The clock the owner-experiment expiry is read on (one seam, so a test can restart the engine after it)."""
+    return pd.Timestamp.now(tz="UTC")
+
+
 def owner_experiment_until(arm_id: str) -> str | None:
     """The last day of `arm_id`'s owner experiment (any account), None when it is none."""
     return next((day for (_, a), day in OWNER_EXPERIMENTS.items() if a == arm_id), None)
@@ -413,7 +418,7 @@ def owner_experiment_refusal(arm: Arm, now: pd.Timestamp | None = None) -> str |
     last = owner_experiment_until(arm.id)
     if last is None:
         return f"{QUALIFY_RULE}: the owner_experiment role is only for {sorted(a for _, a in OWNER_EXPERIMENTS)}"
-    at = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now).tz_convert("UTC")
+    at = _now() if now is None else pd.Timestamp(now).tz_convert("UTC")
     if at.normalize() > pd.Timestamp(last, tz="UTC"):
         return f"{QUALIFY_RULE}: the owner experiment {arm.id} expired after {last}"
     return None
@@ -429,6 +434,13 @@ def qualification_refusal(arm: Arm, root: Path = REPO_ROOT, registry: Path = REG
     a refusal (one bad row never stops the engine)."""
     if arm.role == "control" and not (arm.rule == "random_bracket" or "control" in arm.params):
         return f"{QUALIFY_RULE}: role control on a body that is not a control (no random_bracket rule, no params.control)"
+    named = arm.params.get("control") if arm.role == "control" else None
+    if isinstance(named, str) and owner_experiment_until(named) is not None:
+        # trading-safety review LOW 2: an owner experiment's control stops with it, at load too (a restart after the
+        # expiry), never left trading alone
+        stub = arm.model_copy(update={"id": named})
+        if (why := owner_experiment_refusal(stub, now)) is not None:
+            return f"{why}; its control {arm.id} stops with it"
     if arm.role == "cost":
         read = COST_ARMS.get(arm.id)
         if read is None:

@@ -83,7 +83,8 @@ rule for that one experiment.
     The expiry is journalled as `exploration_arm_unqualified`.
 - **GS1C**, GS1's random-entry control, is an ordinary `control` role (rule `session_range_control`, `params.control`).
   It stops with GS1 at the expiry: the engine refuses any control whose `params.control` names an expired owner
-  experiment (trading-safety review LOW 2).
+  experiment (trading-safety review LOW 2). This holds at load too: after a restart past the expiry, the loader refuses
+  the control together with its experiment.
 - **Every other arm keeps this rule.** A later experiment needs its own entry in OWNER_EXPERIMENTS and its own dated
   amendment here. A config edit cannot exempt an arm.
 - **GS1's fills are labelled "unqualified, owner experiment"** and are never qualification evidence. GS1 comes back
