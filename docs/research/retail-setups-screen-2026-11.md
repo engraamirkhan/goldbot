@@ -53,7 +53,7 @@ RS-2 long -0.06, short -0.45; RS-3 long -0.14, short -0.06.
 
 ## 4. Decisions
 
-- **Retire RS-1, RS-2, RS-3 as specified** (R-RS in `hypotheses.md`, section A24). Do not re-test on XAUUSD without
+- **Retire RS-1, RS-2, RS-3 as specified** (R-RS in `hypotheses.md`, section A26). Do not re-test on XAUUSD without
   new evidence (a mechanism or data source not used here, for example order-book or futures volume at the level).
 - With this screen, the retail SMC / price-action list is closed as stand-alone rules: order blocks, FVG (entry,
   magnet, inverse), silver bullet, supply/demand, sweeps, round numbers, VWAP bands, divergences, box + MFI, ORB,
@@ -69,8 +69,8 @@ changes.
 
 ## 6. Multiple testing
 
-K +3 (one look per rule; the 7 already-closed setups were not re-run, +0). Program K recorded on main 2026-11-01:
-3,014 -> **3,017**; parallel lanes add their own. 0 registry trials, 0 budget slots; `trial_budget_overrides`
+K +3 (one look per rule; the 7 already-closed setups were not re-run, +0). Program K on the ledger 2026-11-01:
+3,020 (after A24 and A25) -> **3,023**. 0 registry trials, 0 budget slots; `trial_budget_overrides`
 unchanged. Holdout sealed.
 
 ## Reproduce

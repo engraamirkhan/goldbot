@@ -312,7 +312,9 @@ a quarter (to the one with the best post-retirement evidence, else by rotation) 
 | Discovery grammar v2 (strategy researcher, 2026-10-31; `prereg-2026-11-02-discovery-v2.md`, code `2ccbc8e5`) | 0 registry trials, 0 budget slots | **K_v2 = 1,704 declared before the run** (3 x (288 search + 20 x 14 neighbours)); null specs in K_null only | **Program K 1,264 -> 2,968** (declared figure; the ledger holds 864 v2 specs, no neighbours were evaluated). Result 2026-10-31: 0 survivors (R-18) |
 | Positioning and flows (macro researcher, 2026-11-01; `prereg-positioning-2026-11-01.md` `f7fc8755`, code `af2eea16`; `positioning-screen-2026-11.md`) | 0 registry trials (no survivor, no confirm; holdout sealed) | K +3 (H-86..H-88, one look each) | **K 2,971** |
 | Growth sprint C3 screen (opportunity researcher, 2026-11-01; `growth-sprint-2026-11-01.md` §2, `gs-c3-screen-2026-11.md`, rule frozen at `2b8acfbd`) | 0 registry trials, 0 budget slots | **K +2** (V1 NY first 30 min -> last 60 min; V2 London first 60 min -> London close), part of the sprint's K +7 | Program K +2 (3,002 -> 3,004 for C3; 3,009 once C1/C2/C4 report). Result 2026-11-01, 2010-2017: **both FAIL** (V1 net -0.095 R, 0/8 years; V2 net -0.008 R, LB -0.109, 3/8 years, excess p 0.0086 > 0.05/7). R-05 shape closed a third time; no confirm |
-| Retail setups screen (strategy researcher, 2026-11-01; `prereg-2026-11-01-retail-setups.md` `9fc69477`, code `3779c53b`; `retail-setups-screen-2026-11.md`) | 0 registry trials, 0 budget slots | **K +3** (RS-1..RS-3, one look each); 7 requested setups already closed were not re-run (+0) | Program K 3,014 recorded on main -> **3,017** (parallel lanes add their own). All three FAIL; no confirm |
+| Opportunity signals screen (opportunity researcher, 2026-11-01; `prereg-opportunity-signals-2026-11-01.md` `d4dba0f3`; `opportunity-signals-screen-2026-11.md`; A24) | 0 registry trials, 0 budget slots | **K +3** (OS-SA, OS-SB, OS-SD, one look each); declined lines (c), (b-ii) +0 | Program K 3,014 -> **3,017**. All three FAIL; no confirm |
+| Tick-proxy microstructure screen (microstructure researcher, 2026-11-01; `prereg-2026-11-01-micro-tick.md` `8472864a`; `micro-tick-screen-2026-11.md`; A25) | 0 registry trials, 0 budget slots | **K +3** (MT-VAC, MT-TIM, MT-SRR, one look each) | Program K 3,017 -> **3,020**. All three FAIL; no confirm |
+| Retail setups screen (strategy researcher, 2026-11-01; `prereg-2026-11-01-retail-setups.md` `9fc69477`, code `3779c53b`; `retail-setups-screen-2026-11.md`; A26) | 0 registry trials, 0 budget slots | **K +3** (RS-1..RS-3, one look each); 7 requested setups already closed were not re-run (+0) | Program K 3,020 (A25) -> **3,023**. All three FAIL; no confirm |
 
 ## Next generation (after Q1 verdicts)
 
@@ -528,7 +530,24 @@ Source: `growth-sprint-2026-11-01.md` section 2 (PR #251, K += 7 for C1-C4); ope
 |---|---|---|---|---|
 | GS-C1/C2/C4 | Convex payoffs on 2010-2017 at 1.5 x measured ICM cost: C1 news straddle at NFP/CPI/FOMC (k 0.5, 1.0 x ATR15), C2 pyramided session-range breakout (Asia->London, London->NY; 1.5 x ATR15 stop, 3 adds at +1R, open risk <= 1 unit), C4 NR7 prior-day-range break with a 4 R target | **failed** 2026-11-01, 0 of 5 (prereg `fd02d0de`; `growth-screens-2026-11.md`): net mean R C2a -0.36, C2b -0.03, C4 +0.05, C1a +0.09 (whipsaw 64%), C1b -0.42; none beats its random twin at Bonferroni-7. Retired as specified except C1b, whose sign depends on 1m intrabar order (optimistic bracket +0.14 R, LB +0.01): tick re-measurement proposed, K +1 if slotted | 0 registry trials; K +5 of the director's +7, plus K +5 for the disclosed intrabar bracket (program K 3,014 with C3) | per variant: net mean 90% LB > 0, beats a 4-twin random-entry control with identical mechanics at Bonferroni-7, >= 5 of 8 years positive; else FAIL and retired as specified |
 
-## A24. Retail gold setups (strategy researcher, 2026-11-01)
+## A24. Opportunity signals screen (opportunity researcher, 2026-11-01)
+
+Source: orchestrator brief 2026-11-01 (lines a-d). Pre-registration `prereg-opportunity-signals-2026-11-01.md`; lines (c) month/expiry and (b-ii) London-open gap declined as re-tests (K +0).
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| OS-SA/SB/SD | SA: fade a >= 3-sigma (clock-matched) 60-min move outside tier-1/2 news to the window VWAP, structure stop, 240 min; SB: fade the Sunday-reopen gap (>= 0.20 ATR20d at +30 min) to Friday's close by 07:00 UTC Monday; SD: 1h Donchian-20 trend in the top RV5 tercile, Bollinger(20,2) fade to SMA20 in the bottom tercile | **failed** 2026-11-01, 0 of 3 (prereg `d4dba0f3`; `opportunity-signals-screen-2026-11.md`): SA n 2,582 gross +0.093 R but twin +0.148 R, net -0.197 R, 0/8 years; SB n 90 (COUNT), net -0.016 R; SD n 1,895 net -0.126 R, 3/8 years, reversion leg gross -0.079 R. Retired as specified; no neighbouring thresholds without a new mechanism | 0 registry trials; K +3 (program K 3,014 -> 3,017) | per variant: day-bootstrap LB90 net mean R > 0, real-minus-twin Bonferroni-3 p < 0.10, >= 5 of 8 years, n >= 100 |
+
+## A25. Tick-proxy microstructure at 1m (microstructure researcher, 2026-11-01)
+
+Source: research-director brief 2026-11-01 (tick-level mechanisms not yet tried). Pre-registration
+`prereg-2026-11-01-micro-tick.md`; screen 2010-2017, matched random twins, one look each, Holm over 3.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| MT-VAC/TIM/SRR | VAC: fade a fast 3-min move (>= 3 ATR1m) made while the minute's mean spread is >= 1.5 x its median (liquidity vacuum); TIM: 5-min continuation of a tick-volume-weighted 1m sign imbalance (abs I5 >= 0.6, activity >= 1.5 x median); SRR: fade a tick-burst first pierce of the prior-day high/low closed back inside within 5 min. 1.5 x ICM cost of record plus spread-state surcharge, fill at t+1 open | **failed** 2026-11-01, 0 of 3 (prereg `8472864a`; `micro-tick-screen-2026-11.md`): net mean R VAC -0.43 (gross +0.19, t 3.6; cost 0.62 R), TIM -0.44 (gross +0.005 on 28,054), SRR -0.29 (gross +0.07); none beats its twins at Holm-3; 1/0/0 of 8 years. Retired as specified at 1m resolution, SRR with R-14 | K +3 (explore screen, 0 registry trials; program K 3,017 -> 3,020) | growth-sprint section 2 bar over 3 variants; FAIL retires each as specified at 1m resolution (SRR with R-14) |
+
+## A26. Retail gold setups (strategy researcher, 2026-11-01)
 
 Source: owner 2026-11-01 "find strategies, setups, signals to add more". Pre-registration
 `prereg-2026-11-01-retail-setups.md` (`9fc69477`), code `3779c53b`, report `retail-setups-screen-2026-11.md`. Seven of
