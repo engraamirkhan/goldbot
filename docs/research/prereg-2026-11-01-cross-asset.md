@@ -73,3 +73,19 @@ the $0.25/oz cost, not as an edge.
 
 Trial cost: **K +3** (explore screen, no registry trials). Program K ~3,020 (brief, 2026-11-01) -> ~3,023. Gates
 touched: none. Owner-only items: none (no instrument, budget, sizing or live change; data stays local).
+
+## Amendment 1 (2026-11-01 16:05 UTC, before any outcome): lead data source
+
+Dukascopy's bi5 archive throttled this host after the first ~28 instrument-months (6-75 s per day file, then dropped
+connections; about 40 h for the rest at the rate it allowed). The lead series therefore come from **HistData.com free
+M1 ASCII** (bid, bar-open stamps in EST without daylight saving, shifted +5 h to UTC; `scripts/cross_asset_fetch.py
+--source histdata`), local only. Gold stays Dukascopy mid. Nothing else changes.
+
+A lead-lag screen is only as good as the clock, and a one-minute misalignment between feeds manufactures exactly the
+effect under test. So, frozen before use, a **clock check** that touches no gold-versus-lead outcome:
+- same instrument, two feeds: correlation of 1m close-to-close log returns between HistData and the Dukascopy bid
+  months already fetched (2010-01..2010-10 for XAGUSD, EURUSD and USDJPY) at offsets -2..+2 min, and HistData XAUUSD
+  against Dukascopy XAUUSD mid for 2010 and 2017;
+- pass: the 0-min offset has the highest correlation for every pair and year checked, and is at least 0.5 above both
+  +-1 min offsets. If an offset other than 0 wins consistently, that offset is applied to all HistData leads and
+  reported; if it is inconsistent, the screen is not run and the line is reported BLOCKED on data, K +0.
