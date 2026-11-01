@@ -1859,6 +1859,10 @@ def record_close(eng: Engine, pid: int, tr: OpenTrade, reason: str, px: float | 
             "exit_reason": why, "swap": known.get("swap"), "commission": known.get("commission"),
             "pnl": known.get("pnl"), "censored": censored})
         LEDGER.upsert(conn, rec)
+    level = {"stop": tr.sl, "target": tr.tp}.get(known["reason"]) if known.get("reason") else None
+    if level is not None:       # GAP-04, backlog 141: the broker's stop or target deal against its level (logging only)
+        eng._log_exit_fill(pid, tr, known["reason"], known["last_lots"], known["last_price"], at=known["exit_utc"],
+                           level=level)
     _observe(eng, db, rec, tr.opened_utc)
     if ex is not None:
         ex.open_loss.pop(pid, None)

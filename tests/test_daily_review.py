@@ -636,3 +636,35 @@ def test_after_a_restart_no_entry_goes_out_until_the_retired_arms_are_read_and_e
         conn.execute("ALTER TABLE gone RENAME TO exploration_arm_status")
     exploration.on_pass(eng2, _at(eng2, pb, CLOSE + pd.Timedelta(minutes=30)))
     assert eng2.exploration is not None and eng2.exploration.retired_ok
+
+
+def test_a_target_leg_never_offsets_a_stops_cost_in_the_daily_review():
+    at = LONDON + pd.Timedelta(minutes=5)
+    legs = pd.DataFrame({"ts_utc": [at, at], "agent_id": ["explore:S1A"] * 2, "side": [1, 1],
+                         "kind": ["stop", "target"], "requested": [2002.0, 2002.0], "filled": [2001.9, 2003.0]})
+    day = dr._Day.__new__(dr._Day)
+    day.exits = {"icm-probe": legs}
+    assert [v for _, v in dr._exit_slips(day, "icm-probe")] == [pytest.approx(0.1)]
+
+
+def test_only_the_journal_and_the_exit_legs_are_read_across_symbols_never_the_bars():
+    seen: dict[str, Any] = {}
+
+    def read(table: str, **kw: Any) -> pd.DataFrame:
+        seen[table] = kw.get("symbol", "XAUUSD")
+        return pd.DataFrame()
+    for t in ("decisions", "exit_fills", "bars_1m"):
+        dr._frame(SimpleNamespace(read=read), t, "h", LONDON, LONDON)
+    assert seen == {"decisions": None, "exit_fills": None, "bars_1m": "XAUUSD"}
+
+
+def test_a_host_whose_gold_symbol_has_a_suffix_still_has_its_exit_legs_read(tmp_path):
+    """Backlog 141: `Store.read` defaulted to symbol XAUUSD, so Vantage's legs (written under XAUUSD+) read as none."""
+    from goldbot.data.store import Store
+    from goldbot.research.daily_review import _frame
+    store = Store(tmp_path / "data")
+    legs = pd.DataFrame({"ts_utc": [LONDON], "position_id": [1], "agent_id": ["explore:Z7V"], "side": [1],
+                         "requested": [2002.0], "filled": [2001.95]})
+    store.append("exit_fills", legs, source="vantage-demo", symbol="XAUUSD+", dedupe=False)
+    got = _frame(store, "exit_fills", "vantage-demo", LONDON - pd.Timedelta(hours=1), LONDON + pd.Timedelta(hours=1))
+    assert len(got) == 1 and got["filled"].iloc[0] == 2001.95

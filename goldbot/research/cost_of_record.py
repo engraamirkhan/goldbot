@@ -124,6 +124,8 @@ def read_frames(conn: sqlite3.Connection, exit_legs: Mapping[str, pd.DataFrame],
         if host not in hosts or df is None or df.empty:
             continue
         df = df[df["agent_id"].astype(str).str.startswith("explore:")].dropna(subset=["requested", "filled"])
+        if "kind" in df.columns:
+            df = df[df["kind"].astype(str) != "target"]    # a target is a limit fill: it never offsets a stop's cost
         if "client_order_id" in df.columns:
             df = df[~df["client_order_id"].astype(str).isin(void)]
         ts = pd.to_datetime(df["ts_utc"], utc=True)
@@ -289,7 +291,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         from goldbot.data.store import Store
         store = Store(args.data_root)
         for host in hosts:
-            df = store.read("exit_fills", source=host, start=lo, end=hi)
+            df = store.read("exit_fills", source=host, symbol=None, start=lo, end=hi)   # Vantage: XAUUSD+
             legs[host] = df if df is not None else pd.DataFrame()
     conn = sqlite3.connect(f"file:{Path(args.state_dir) / 'aux.db'}?mode=ro", uri=True)
     try:

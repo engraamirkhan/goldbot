@@ -1562,7 +1562,7 @@ class Engine:
         try:
             rows = pd.DataFrame(self._exit_fills).astype({"client_order_id": "string", "agent_id": "string",
                                                           "kind": "string", "retcode": "Int64"})   # one schema
-            self.store.append("exit_fills", rows, source=self.cfg.account_id, symbol=self.cfg.symbol, dedupe=False)
+            self.store.append("exit_fills", rows, source=self.cfg.account_id, symbol=self.cfg.symbol)   # keyed: a replay adds no second leg
             self._exit_fills = []
         except Exception:
             log.exception("%d exit fills not written; kept for the next flush", len(self._exit_fills))

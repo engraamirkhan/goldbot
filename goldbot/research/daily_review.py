@@ -461,8 +461,12 @@ def _cell(broker: str, host: str, session: str, *, entries: Sequence[Exploration
                         overshoot_x=round(overshoot / scenario, 6) if overshoot is not None else None)
 
 
+ANY_SYMBOL = ("decisions", "exit_fills")     # Vantage writes XAUUSD+; bars_1m stays on XAUUSD (no false duplicate bars)
+
+
 def _frame(store: Any, table: str, host: str, lo: pd.Timestamp, hi: pd.Timestamp) -> pd.DataFrame:
-    df = store.read(table, source=host, start=lo, end=hi)
+    kw: dict[str, Any] = {"symbol": None} if table in ANY_SYMBOL else {}
+    df = store.read(table, source=host, start=lo, end=hi, **kw)
     if df is None or df.empty or "ts_utc" not in df:
         return pd.DataFrame()
     ts = pd.to_datetime(df["ts_utc"], utc=True)
@@ -521,6 +525,8 @@ def _exit_slips(d: _Day, host: str) -> list[tuple[str, float]]:
     if df.empty or not {"agent_id", "side", "requested", "filled"} <= set(df.columns):
         return []
     df = df[df["agent_id"].astype(str).str.startswith("explore:")].dropna(subset=["requested", "filled"])
+    if "kind" in df.columns:
+        df = df[df["kind"].astype(str) != "target"]    # a target is a limit fill: it never offsets a stop's cost
     if df.empty:
         return []
     slips = df["side"].to_numpy(dtype=float) * (df["requested"].to_numpy(dtype=float)
