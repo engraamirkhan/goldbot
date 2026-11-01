@@ -134,7 +134,7 @@ def _xlsx(rows: list[list[object]]) -> bytes:
 
 def _gld_rows(n: int = 30, start: str = "2025-06-02") -> list[list[object]]:
     days = pd.bdate_range(start, periods=n)
-    rows: list[list[object]] = [GLD_HEAD]
+    rows: list[list[object]] = [list(GLD_HEAD)]
     for i, d in enumerate(days):
         oz = 30_000_000.0 + 10_000 * i
         rows.append([d.strftime("%d-%b-%Y"), 300.0, 0.0917, 299.0, 300.1, 300.0, 0.03, 5_000_000 + i,
@@ -229,7 +229,7 @@ def test_quality_flags_positions_above_open_interest_and_gld_tonnes_mismatch():
     m = (df["series"] == "cot_mm_long") & (df["value_date"] == df["value_date"].min())
     df.loc[m, "value"] = 5000.0
     p = pl.parse_gld_xlsx(_xlsx(_gld_rows(10)))
-    p.loc[4, "tonnes"] = p.loc[4, "tonnes"] * 1.10
+    p.loc[4, "tonnes"] = float(p["tonnes"].iloc[4]) * 1.10
     g = pl.gld_archive_frame(p, pd.Timestamp("2026-11-01"))
     events = pl.check_positioning(pd.concat([df, g], ignore_index=True))
     kinds = {(e.check, e.severity) for e in events}
