@@ -152,11 +152,11 @@ class Store:
 
     @staticmethod
     @contextmanager
-    def _read_locks(tdir: Path, source: str | None, symbol: str) -> Iterator[None]:
+    def _read_locks(tdir: Path, source: str | None, symbol: str | None) -> Iterator[None]:
         """Shared lock on every matching partition while listing+reading: a writer holds its exclusive lock across
         rename+unlink, so a reader sees exactly the old or the new rows, never both. Fixed order; writers hold one
         lock: no deadlock."""
-        pat = f"source={source or '*'}/symbol={symbol}/year=*/month=*/.lock"
+        pat = f"source={source or '*'}/symbol={symbol or '*'}/year=*/month=*/.lock"
         locked: list[IO[bytes]] = []
         opened: list[IO[bytes]] = []
         try:
@@ -205,11 +205,13 @@ class Store:
         table: str,
         *,
         source: str | None = None,
-        symbol: str = "XAUUSD",
+        symbol: str | None = "XAUUSD",
         start: str | pd.Timestamp | None = None,
         end: str | pd.Timestamp | None = None,
         columns: Iterable[str] | None = None,
     ) -> pd.DataFrame:
+        """Rows of `table`, one `symbol` (default XAUUSD) or, with `symbol=None`, every symbol of the `source`: a broker
+        whose gold carries a suffix (Vantage writes XAUUSD+) is read by its source alone (backlog 141)."""
         tdir = self.table_dir(table)
         if not tdir.exists() or not any(tdir.rglob("*.parquet")):
             return pd.DataFrame()
@@ -217,8 +219,11 @@ class Store:
         cols = ", ".join(columns) if columns else "*"
         glob = str(tdir / "**" / "*.parquet")
         scan = _scan(glob, table)
-        where = ["symbol = ?"]
-        params: list = [symbol]
+        where: list[str] = []
+        params: list = []
+        if symbol is not None:
+            where.append("symbol = ?")
+            params.append(symbol)
         if source:
             where.append("source = ?")
             params.append(source)
@@ -235,7 +240,7 @@ class Store:
             params.append(_utc(end).to_pydatetime())
             where.append("year * 12 + CAST(month AS BIGINT) <= ?")
             params.append(_utc(end).year * 12 + _utc(end).month)
-        sql = f"SELECT {cols} FROM {scan} WHERE {' AND '.join(where)} ORDER BY ts_utc"
+        sql = f"SELECT {cols} FROM {scan} {'WHERE ' + ' AND '.join(where) if where else ''} ORDER BY ts_utc"
         with self._read_locks(tdir, source, symbol):
             df = con.execute(sql, params).df()
         con.close()

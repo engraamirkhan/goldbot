@@ -71,6 +71,21 @@ def _frames(tmp_path: Path) -> C.Frames:
         conn.close()
 
 
+def test_a_target_leg_never_offsets_a_stops_cost(tmp_path: Path) -> None:
+    import sqlite3
+    _seed(tmp_path)
+    at = LONDON + pd.Timedelta(minutes=5)
+    legs = pd.DataFrame({"ts_utc": [at, at], "client_order_id": ["t1", "t2"], "agent_id": ["explore:S0"] * 2,
+                         "side": [1, 1], "kind": ["stop", "target"], "requested": [2401.0, 2401.0],
+                         "filled": [2400.9, 2402.0]})
+    conn = sqlite3.connect(f"file:{tmp_path / 'aux.db'}?mode=ro", uri=True)
+    try:
+        fr = C.read_frames(conn, {"acct-a": legs}, HOSTS, LO, HI)
+    finally:
+        conn.close()
+    assert list(fr.legs["xslip"]) == [pytest.approx(0.1)]
+
+
 def test_a_fixture_aux_db_reproduces_each_cell(tmp_path: Path) -> None:
     fr = _frames(tmp_path)
     assert fr.n_void == 1

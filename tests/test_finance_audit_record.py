@@ -347,6 +347,17 @@ def test_a_failing_exit_fill_write_keeps_the_legs_and_writes_them_later(tmp_path
     assert len(_exit_fills(tmp_path)) == 3
 
 
+def test_a_replayed_exit_leg_is_written_once(tmp_path):
+    eng, pb = _engine(tmp_path)
+    pid = _enter(eng, pb)
+    eng.open[pid].sl = 2000.5
+    eng.on_tick(Tick(ts_utc=T0 + pd.Timedelta(minutes=1), bid=2000.4, ask=2000.7))
+    leg = dict(_exit_fills(tmp_path).iloc[0])
+    eng._exit_fills.append(leg)                                # the same leg again (a crash and replay)
+    eng._flush_exit_fills()
+    assert len(_exit_fills(tmp_path)) == 1
+
+
 def test_a_stale_proposal_archived_on_restart_takes_no_decision_time_from_a_late_click(tmp_path):
     """LOW-2: only an approved or rejected proposal takes the decision time; a stale one (outcome None) does not."""
     bus = ApprovalBus(tmp_path)
