@@ -83,3 +83,38 @@ is 89% short because of the swap will probably fail there. It should be run only
 `.venv/bin/python scripts/research/meta_label_screen.py --raw raw --positioning raw/positioning/positioning.parquet
 --cal <calendar-v1 us_calendar.parquet> --out ~/tmp/meta_label/result.json --workers 4` (`--dry`: counts, coverage and
 the lookahead test only). Seeds: model 20261101, bootstrap 20261101, control 20261102, shuffle 20261103 + year.
+
+## M1c: the M1 model on 1h bars. FAIL; the confirm was not run
+
+The research director approved the slot on 2026-11-01. Rule `prereg-ml-meta-label-m1c-2026-11-01.md`, frozen at
+**`fba52087`**. Code and dry-run facts frozen at **`9f519d5d`**. One run, 64 s, output
+`~/tmp/meta_label/result_m1c.json`. **K +1.**
+
+| Leg | Result |
+|---|---|
+| (a) power | 41,900 candidates / 4,192 in the top decile: yes |
+| (b) top-decile net mean R (90% LB) | **+0.032 (-0.048)**: no |
+| (c) vs year- and side-matched random selection | -0.058 (q97.5 -0.018), p 0.0005 (bar 0.05): yes |
+| (d) years with net > 0 | **4 of 8**: no (2010 -0.01, 2011 -0.13, 2012 +0.14, 2013 +0.08, 2014 +0.23, 2015 +0.13, 2016 -0.12, 2017 -0.06) |
+| (e) forward 2012-2017 | +0.077 (n 3,112; control -0.065): yes |
+| (g) long / short net, each >= 0 | long +0.053 (n 1,092), short +0.024 (n 3,100): yes |
+| Shuffled-label gate / lookahead test | p 0.670 (not VOID) / 0 mismatches |
+| **Verdict** | **FAIL (b, d)**. The 2018-2025 confirm was not run (prereg s.3) |
+
+**Diagnostics:**
+- **Gross and cost:** top-decile gross is +0.119 R; net is -0.003 R at 1.5x cost. The one-position book (n 1,131) is
+  +0.071 R.
+- **Size:** about $0.16 per trade at 0.01 lot.
+- **Model quality:** OOF AUC is 0.531, and the rank IC by year is 0.04-0.17.
+- **Deciles:** net R is not monotone. Decile 9 is -0.077 R, below decile 8.
+
+**Reading:**
+- The longer bar did what it was meant to do. Cost and swap fell, 26% of the top decile is long, and both sides are
+  positive.
+- The edge did not hold from year to year. It is +0.13 to +0.23 R in 2012-2015 and negative in 2010, 2011, 2016 and
+  2017.
+- The top gain columns are COT and GLD positioning (4 of the top 7). These change weekly, so they behave like regime
+  labels: they pay in the 2012-2015 bear market and not otherwise. This is the regime-memory failure M1's reading
+  warned about. It is not a stable filter.
+- M1c joins **R-20**. Prereg s.4 applies: no further geometry variants of M1 without a new information source.
+- **K +1.** The ledger is 3,016 + 1 = **3,017**.
