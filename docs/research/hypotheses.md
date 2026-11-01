@@ -524,3 +524,11 @@ Source: `growth-sprint-2026-11-01.md` section 2 (PR #251, K += 7 for C1-C4); ope
 | ID | Hypothesis | Status | Trials | Reading |
 |---|---|---|---|---|
 | GS-C1/C2/C4 | Convex payoffs on 2010-2017 at 1.5 x measured ICM cost: C1 news straddle at NFP/CPI/FOMC (k 0.5, 1.0 x ATR15), C2 pyramided session-range breakout (Asia->London, London->NY; 1.5 x ATR15 stop, 3 adds at +1R, open risk <= 1 unit), C4 NR7 prior-day-range break with a 4 R target | **failed** 2026-11-01, 0 of 5 (prereg `fd02d0de`; `growth-screens-2026-11.md`): net mean R C2a -0.36, C2b -0.03, C4 +0.05, C1a +0.09 (whipsaw 64%), C1b -0.42; none beats its random twin at Bonferroni-7. Retired as specified except C1b, whose sign depends on 1m intrabar order (optimistic bracket +0.14 R, LB +0.01): tick re-measurement proposed, K +1 if slotted | 0 registry trials; K +5 of the director's +7, plus K +5 for the disclosed intrabar bracket (program K 3,014 with C3) | per variant: net mean 90% LB > 0, beats a 4-twin random-entry control with identical mechanics at Bonferroni-7, >= 5 of 8 years positive; else FAIL and retired as specified |
+
+### Cross-asset lead-lag, 1m (macro researcher, 2026-11-01)
+
+Prereg `prereg-2026-11-01-cross-asset.md`; results `cross-asset-screen-2026-11.md`.
+
+| ID | Hypothesis | Status | Trials | Reading |
+|---|---|---|---|---|
+| XA-X1/X2/X3 | Gold lags silver (X1), the USD (X2: USDJPY up, EURUSD down) or the three jointly (X3) on 1m: when the lead's 5m move implies a gold move >= 2 residual sd and gold has done at most half of it, trade gold the implied way, 15m time exit, 1.5 x ATR15 stop, 1.5 x ICM cost of record | **pre-registered** 2026-11-01, explore 2010-2017 | K +3 (explore, no registry trials) | per variant: net mean R > 0 and beats a 4-twin random-entry control, each day-bootstrap Bonferroni-3 p < 0.10, >= 5 of 8 years positive; all FAIL -> 1-15m cross-asset lead-lag on 1m bars retired |
