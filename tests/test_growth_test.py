@@ -455,3 +455,51 @@ def test_gs1_registered_on_another_account_is_refused_at_load() -> None:
         acc_mod.Account.model_validate({"account_id": "icm-probe", **raw})
     acc = acc_mod.Account.model_validate({"account_id": "icm-demo", **raw})
     assert "GS1" in acc.exploration.arms
+
+
+# ------------------------------------------------------------------------------------------------ restart past expiry
+def test_the_control_of_an_owner_experiment_is_refused_at_load_once_the_experiment_expired() -> None:
+    got = {a.id: a for a in arms.load_arms(SPEC)}
+    after = pd.Timestamp("2026-11-28 00:01", tz="UTC")
+    why = arms.qualification_refusal(got["GS1C"], now=after)
+    assert why is not None and "GS1" in why and "2026-11-27" in why
+    assert arms.qualification_refusal(got["GS1C"], now=pd.Timestamp("2026-11-27 23:00", tz="UTC")) is None
+
+
+def test_an_engine_restarted_after_the_expiry_refuses_gs1_and_gs1c_from_the_start(tmp_path, monkeypatch) -> None:
+    from goldbot.engine import exploration as X
+    from tests.test_exploration_engine import _engine
+    monkeypatch.setattr(arms, "_now", lambda: pd.Timestamp("2026-11-28 09:00", tz="UTC"))
+    got = {a.id: a for a in arms.load_arms(SPEC)}
+    eng, _ = _engine(tmp_path, [X.Arm(spec=got["GS1"], style="intraday"),
+                                X.Arm(spec=got["GS1C"], style="intraday", control_share=0.3)], qualify=False)
+    ex = eng.exploration
+    assert ex is not None and {"GS1", "GS1C"} <= ex.retired
+    journalled = {d["arm"] for d in eng.decisions if d.get("action") == "exploration_arm_unqualified"}
+    assert {"GS1", "GS1C"} <= journalled
+    assert not any(d.get("action") == X.OWNER_EXPERIMENT_ACTION for d in eng.decisions)
+
+
+def test_the_loop_stops_a_control_whose_owner_experiment_is_already_unqualified() -> None:
+    from types import SimpleNamespace
+
+    from goldbot.engine import exploration as X
+    got = {a.id: a for a in arms.load_arms(SPEC)}
+    why = "unqualified (owner rule 2026-10-30): the owner experiment GS1 expired after 2026-11-27"
+    ex = SimpleNamespace(arms={"GS1": SimpleNamespace(spec=got["GS1"]), "GS1C": SimpleNamespace(spec=got["GS1C"])},
+                         retired=frozenset({"GS1"}), unqualified={"GS1": why}, owner_read=None, queue=[])
+    eng = _Eng()
+    X.refresh_owner_experiments(eng, ex, pd.Timestamp("2026-11-20 10:00", tz="UTC"))     # type: ignore[arg-type]
+    assert "GS1C" in ex.retired and "GS1" in ex.unqualified["GS1C"]
+
+
+def test_the_loop_keeps_gs1c_running_while_its_owner_experiment_holds() -> None:
+    from types import SimpleNamespace
+
+    from goldbot.engine import exploration as X
+    got = {a.id: a for a in arms.load_arms(SPEC)}
+    ex = SimpleNamespace(arms={"GS1": SimpleNamespace(spec=got["GS1"]), "GS1C": SimpleNamespace(spec=got["GS1C"])},
+                         retired=frozenset(), unqualified={}, owner_read=None, queue=[])
+    eng = _Eng()
+    X.refresh_owner_experiments(eng, ex, pd.Timestamp("2026-11-20 10:00", tz="UTC"))     # type: ignore[arg-type]
+    assert ex.retired == frozenset() and not eng.decisions

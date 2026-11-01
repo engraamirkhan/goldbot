@@ -1006,8 +1006,13 @@ def refresh_owner_experiments(eng: Engine, ex: Exploration, now: pd.Timestamp) -
                 stop[a] = why
     for a, arm in ex.arms.items():
         named = arm.spec.params.get("control")
-        if arm.spec.role == "control" and a not in ex.retired and a not in stop and named in stop:
-            stop[a] = f"{stop[named]} (the control of {named} stops with it)"
+        if arm.spec.role != "control" or a in ex.retired or a in stop or not isinstance(named, str) \
+                or owner_experiment_until(named) is None:
+            continue
+        # its experiment stopped now, or was already refused (at load, after a restart past the expiry)
+        why = stop.get(named) or ex.unqualified.get(named) or qualification_refusal(arm.spec, now=now)
+        if why:
+            stop[a] = f"{why} (the control of {named} stops with it)"
     if not stop:
         return
     ex.retired = ex.retired | frozenset(stop)
