@@ -18,12 +18,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 267 |
+| implemented | 268 |
 | partial | 22 |
 | missing | 2 |
 | deviates | 6 |
 | in review | 12 |
-| **total** | **309** |
+| **total** | **310** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -124,6 +124,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | R89 | The trial registry reaches release research-v1 although the brain token cannot write it - the brain keeps the pending registry in an outbox (INFO, no alert) and the Mac publishes it through the same union and compare-and-swap | implemented | goldbot/research/registry_sync.py `sync`, `_to_outbox`, `publish_outbox`, `OUTBOX`; scripts/registry_publish.sh | tests/test_registry_outbox.py |
 | R90 | Growth sprint 2026-11-01 (owner instruction): a demo growth test on icm-demo, GS1 against a random-entry control GS1C at the same size, GS1 exempt from ADR 0061 until 2026-11-27 only, sized by the RiskGate with no cap loosened, and read weekly as real equity plus virtual ledgers at f = 5/10/20% | implemented | goldbot/research/arm_rules_growth.py (GS1 `session_range_break`, GS1C `session_range_control`); goldbot/research/arms.py `OWNER_EXPERIMENTS`, `owner_experiment_refusal`; goldbot/engine/exploration.py `growth_lots`, `refresh_owner_experiments`, `ExplorationRecord.group_id`; goldbot/risk/gate.py `RiskLimits.growth_arms`; goldbot/ops/accounts.py `ExplorationArm.sizing`, `growth_arm_ids`; goldbot/research/growth_ledger.py; goldbot/ops/growth_report.py; perf-report "Growth test" and health `growth_test`; config/exploration_arms.yaml GS1/GS1C; config/accounts.yaml icm-demo growth pot; docs/decisions/0061-qualify-before-demo.md amendment 2026-11-01 | tests/test_growth_test.py |
 | R91 | Growth sprint 2026-11-01 section 3 (deferred part): pyramid adds for GS1 and, identically, GS1C. A unit at each +1 R from the first unit's entry, up to 3 adds, each through the RiskGate with every cap binding. After every add, open risk is at most 1 unit. Each add carries group_id = the first unit's client order id. A refused add is a shadow fill. Exits are never gated, and restarts are safe | implemented | goldbot/engine/exploration_pyramid.py (`pyramid`, `group_stop`, `heal`, `plan`, `before_send`, `add_id`, `group_of`); goldbot/engine/exploration.py (`Arm.adds`, `Pending.group_id`, `pending_id`, `_send` add branch, `_Pass` group slots, `growth_lots` max_lots, `_censored`); goldbot/ops/accounts.py `ExplorationArm.adds`; goldbot/research/exploration_data.py `CANDIDATE_STYLES`, `learn` (no growth row); goldbot/research/growth_ledger.py `split_shadow`, `refused_adds`, `ledgers_uncapped`; goldbot/ops/growth_report.py; scripts/growth_sprint_read.py; docs/research/growth-sprint-2026-11-01.md protocol deviation 2; config/accounts.yaml icm-demo GS1/GS1C `adds` 3 and `unit_lots` 0.01; docs/decisions/0065-pyramid-adds-stop-rule.md | tests/test_growth_pyramid.py |
+| R92 | Amendment C1 (2026-11-02, ADR 0069): research screens charge the cost of record's ICM point estimates in bps of the entry price at $4,000, the measured swap per side (shorts credited), and the stop overshoot as the residual past a simulated gap; the gate control is the random-side twin (or the drift-adjusted zero), same-side twins are diagnostic only; explore needs day-summed t >= 2, >= 5/8 years, drift-adjusted gross > 0, random-side excess >= 0; per-family composites are frozen before confirm; confirm is BH-FDR q=0.10 on the day-bootstrap p | implemented | goldbot/research/cost_of_record.py (`C1Costs`, `cost_r`, `swap_block`, `--swap-terms`/`--from-table`); goldbot/research/arms.py (`SwapMeasured`, `CostOfRecord.swap_measured`); config/cost_of_record.yaml `swap_measured` (swap-icm-2026-11-02); goldbot/research/c1_gates.py; scripts/rethink/c1_rescore.py; docs/research/rethink/audit.md, c1-composites.yaml | tests/research/test_c1_cost_r.py; tests/research/test_c1_gates.py::test_a_planted_side_edge_with_random_timing_passes_the_random_side_control; ::test_a_long_only_rule_that_collects_the_drift_fails_the_drift_adjusted_leg; ::test_bh_fdr_matches_the_textbook_example |
 
 Risk analytics (reporting tools, not design rows, so the counts are unchanged): `goldbot/research/ruin.py`
 (`run.py ruin`, playbook G-5) simulates R against the R9/R11/R13/R14 limits read from `config/settings.yaml`, applying
