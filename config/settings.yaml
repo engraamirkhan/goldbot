@@ -283,6 +283,49 @@ research:
     max_candidates: 20               # best candidates whose grid neighbours (plateau, counted in K) and shift null are run
     seed: 0                          # base seed; each night adds its day number, so nights search new ground
     cost_table: null                 # measured cost table JSON (costs_measured.json); null: the settings priors
+  position:                          # daily position engine (goldbot/research/position/, amendment W3, PR #285). These are
+                                     #   W3's program-wide fixed values: a spec never varies them; a change is a W3 amendment
+    day_close_utc: "21:00"           # W3.2 clock: decide on the 1d mid bar closing 21:00 UTC, fill at the next 1m open
+    target_vol: 0.10                 # W3.6 sizing only: 10%/yr per instrument, EWMA vol (span below) lagged one day,
+    vol_span_days: 60                #   exposure capped at max_leverage
+    max_leverage: 2.0
+    band: 0.10                       # W3.2 no-trade band when a spec states none: trade only beyond 10% of the target
+    stop_atr: 3.0                    # W3.2 disaster stop on every spec: 3 x ATR(atr_days, 1d) from the last rebalance
+    atr_days: 20                     #   price; flat until the next decision, restored only if the signal still says so
+    warmup_days: 260                 # POS-1: a market enters on its first day with data + 260 days of warm-up
+    null_draws: 1000                 # W3.2 episode-sign (long-only: exposure-matched) null draws and seed
+    null_seed: 20261102
+    boot_resamples: 4000             # W3.2 t: stationary day-block bootstrap, mean block 20 days
+    boot_block_days: 20.0
+    cost_broker: icm                 # C1 point costs: config/cost_of_record.yaml, the cell of the 21:00 UTC fill (asia,
+    cost_session: asia               #   W3 addendum), in bps of the reference (0.204 $ RT -> 0.51 bp; 0.10 $ overshoot -> 0.25 bp)
+    cost_reference_price: 4000.0
+    round_trip_bps_by_symbol: {}     # other markets' point RT in bps (data lane / cost of record); a market without one
+    overshoot_bps_by_symbol: {}      #   is refused, never priced at gold's cost
+    short_rate_path: raw/daily/fred_DTB3.parquet   # data lane FRED DTB3 (value_date, value, available_utc), local only;
+                                     #   joined on its stored available_utc, cut before 2025-10-01 on both stamps
+    currency_rate_paths:             # ISO -> FRED OECD 3-month file for FX differentials and non-USD indices (data lane,
+                                     #   PR #299, local only; monthly, available day 1 of M+2 at 23:00 UTC); a U_16
+                                     #   market whose currency is missing is refused, never financed at the USD rate
+      EUR: raw/daily/fred_IR3TIB01EZM156N.parquet
+      GBP: raw/daily/fred_IR3TIB01GBM156N.parquet
+      JPY: raw/daily/fred_IR3TIB01JPM156N.parquet
+      AUD: raw/daily/fred_IR3TIB01AUM156N.parquet
+      CAD: raw/daily/fred_IR3TIB01CAM156N.parquet
+      CHF: raw/daily/fred_IR3TIB01CHM156N.parquet
+      NZD: raw/daily/fred_IR3TIB01NZM156N.parquet
+    short_rate_constant_pct: 4.02    # fallback when DTB3 is absent (DTB3 at the swap measurement); a run using it is
+                                     #   marked and cannot gate (scripts/position_screen.py refuses without --allow-constant-rate)
+    markup_pct_by_symbol:            # W3.3 measured markups, % a year (long, short), swap-icm-2026-11-02: long -52.22 /
+      XAUUSD: [0.74, 0.74]           #   short +36.00 USD/lot/night at 4,000 = 4.76 / 3.29 %/yr against DTB3 4.02
+    default_markup_pct: 2.5          # W3.3: a symbol without measured terms pays this each side (conservative)
+    triple_weekday_by_symbol: {XAUUSD: 2}   # triple rollover per symbol (0 = Monday; ICM XAUUSD Wednesday): 3 nights,
+                                     #   weekend none; a symbol not listed is refused
+    read_registry: state/position_reads.jsonl   # one marker per (spec, TEST-OLD/CONFIRM) read; a second read is refused
+    etc_fee_pct: 0.12                # venue B (UK gold ETC, report only): long/flat, 0.12%/yr fee, no financing,
+    etc_extra_rt_bps: 5.0            #   round trip = C1 point RT + 5 bp
+    cme_fee_usd_per_side: 2.0        # venue C (CME 1OZ, report only): +$2/oz a side at the reference price, DTB3 both
+                                     #   ways with no markup, one round trip at each monthly roll
 
 drift:                               # design: Drift and health (goldbot/research/drift.py)
   psi_warn: 0.1                      # PSI on a top-10 feature that warns
