@@ -92,7 +92,7 @@ from goldbot.data.resample import resample_bars, ticks_to_1m
 from goldbot.data.timeutil import epoch_ns
 from goldbot.db import Database, RecordRepo
 from goldbot.engine import auto_entry, cost_probe, weekend_lane
-from goldbot.instruments import GOLD, contract_size
+from goldbot.instruments import GOLD, arm_instrument, contract_size
 from goldbot.labels.triple_barrier import BarrierSpec, SwapSpec
 from goldbot.research.arms import (
     COST_ARMS,
@@ -198,7 +198,7 @@ class Arm(FrozenRecord):
     def instrument(self) -> str:
         """The instrument the arm's frozen row trades (`params.instrument`, a config/instruments.yaml key: S0-<key>,
         I0-<key>, lane L1); XAUUSD when the row names none (every arm before the multi-instrument plan)."""
-        return str(self.spec.params.get("instrument") or GOLD)
+        return arm_instrument(self.spec.params)
 
     @property
     def tf(self) -> str:

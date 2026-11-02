@@ -247,21 +247,25 @@ def test_live_and_pilot_accounts_stay_xauusd_only(tmp_path):
     assert list(live.books) == ["XAUUSD"] and not live.gate.limits.multi_symbol
 
 
-def test_only_atr_scaled_random_controls_run_on_another_instrument_each_under_its_own_arm_id():
-    """Plan: "random controls S0/I0 ... per instrument (never pooled); no ... dollar-constant arms". S0's $3 stop
-    means nothing on silver; I0's 1.5 ATR does. The copy's id, order key and tag carry the instrument."""
+def test_each_book_runs_only_the_arms_of_its_own_instrument():
+    """Plan: "random controls S0/I0 ... per instrument (never pooled)". S0-XAGUSD / I0-XAGUSD (lane L1's rows,
+    `params.instrument`) run on silver's book only; gold's book never runs them, nor silver's gold's S0 and I0. A row
+    with a dollar figure is dropped on a non-gold book (gold's dollars mean nothing on another price scale)."""
     from goldbot.engine import exploration as X
     from goldbot.research.arms import load_arms
     specs = {a.id: a for a in load_arms(X.SPEC_PATH)}
     pots = {"scalp": X.Pot(gbp=10, max_open=3), "intraday": X.Pot(gbp=10, max_open=3)}
-    cfg = X.ExplorationConfig(enabled=True, pots=pots,
-                              arms=(X.Arm(spec=specs["S0"], style="scalp", control_share=0.25),
-                                    X.Arm(spec=specs["I0"], style="intraday", control_share=0.3)))
-    got = X.book_config(cfg, "XAGUSD")
-    assert got is not None and [a.arm_id for a in got.arms] == ["I0@XAGUSD"]
-    a = got.arms[0]
-    assert a.tag == "explore:I0@XAGUSD" and a.key != cfg.arms[1].key and a.spec.id == "I0"
-    assert X.book_config(cfg.model_copy(update={"arms": cfg.arms[:1]}), "XAGUSD") is None
+    arms = tuple(X.Arm(spec=specs[i], style="scalp" if i.startswith("S0") else "intraday", control_share=0.05)
+                 for i in ("S0", "I0", "S0-XAGUSD", "I0-XAGUSD", "S0-EURUSD"))
+    cfg = X.ExplorationConfig(enabled=True, pots=pots, arms=arms)
+    silver, gold = X.book_config(cfg, "XAGUSD"), X.book_config(cfg, "XAUUSD")
+    assert silver is not None and gold is not None
+    assert [a.arm_id for a in silver.arms] == ["S0-XAGUSD", "I0-XAGUSD"] and silver.arms[0].instrument == "XAGUSD"
+    assert [a.arm_id for a in gold.arms] == ["S0", "I0"] and gold.arms[0].instrument == "XAUUSD"
+    assert X.book_config(cfg, "US500") is None
+    usd = specs["S0"].model_copy(update={"params": {**specs["S0"].params, "instrument": "XAGUSD"}})
+    dollar = X.book_config(cfg.model_copy(update={"arms": (X.Arm(spec=usd, style="scalp"),)}), "XAGUSD")
+    assert dollar is not None and dollar.arms == () and dollar.dropped == ("S0",)
 
 
 def test_a_non_gold_books_rows_are_keyed_by_account_and_store_symbol_never_pooled_with_gold(tmp_path):
@@ -295,3 +299,18 @@ def test_an_exposure_the_engine_cannot_value_is_published_as_null_so_the_supervi
     eng._write_state()
     st = json.loads((tmp_path / "engine_icm-probe.json").read_text())
     assert "group_notional" in st and st["group_notional"] is None and st["exposure_unknown"] is True
+
+
+def test_a_book_of_an_unverified_instrument_refuses_every_entry_and_still_closes(tmp_path):
+    """L1: "NEVER trade a spec with verify: true": the book is blocked whatever its instruments.db terms read."""
+    pb = MultiPaper(equity=10_000, commission_per_lot_side=0.0, adverse_slip_points=0.0)
+    eng = _engine(tmp_path, pb, specs=(SILVER.model_copy(update={"blocked": "instrument_unverified"}),))
+    pb._positions[3] = Position(position_id=3, symbol="XAGUSD", side=1, lots=0.1, open_price=30.0, sl=29.0, tp=None,
+                                magic=3_050_100 + 95, comment="", open_time_utc=T0, profit=0.0)
+    with using(eng, eng.books["XAGUSD"]):
+        t = _quote(pb, "XAGUSD", 30.0)
+        eng._last_tick = t
+        eng._refresh_account(t)
+        assert eng.state.dq_error and books.problem(eng.book) == "instrument_unverified"
+        eng._reconcile(T0)
+        assert eng._try_close(3, "time_exit", T0).ok
