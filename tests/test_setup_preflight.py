@@ -208,7 +208,7 @@ def server(tmp_path, cfg):
 COMMIT = "a" * 40
 EXPECTED = ["settings", "owner_email", "telegram_token", "telegram_allowlist", "tunnel_service", "bridge_config",
             "bridge_health", "terminal_account", "bridge_server_tz", "bridge_compat", "server_clock", "web_dist", "db_files_private", "backups", "time_sync", "disk",
-            "memory", "deploy_timer"]
+            "memory", "deploy_timer", "retired_units"]
 
 
 def test_preflight_all_green_exits_zero(server, capsys):
@@ -362,3 +362,21 @@ def test_a_wal_file_that_vanishes_during_the_permission_check_is_skipped(server,
     monkeypatch.setattr(Path, "stat", stat_gone)
     items = {i.name: i for i in pf.run_preflight(ctx)}
     assert items["db_files_private"].status == "ok" and items["db_files_private"].detail == "1 state file(s) are 0600"
+
+
+@pytest.mark.parametrize("unit,state", [("goldbot-tv-pull", ("is-enabled", "enabled")),
+                                        ("goldbot-webhook", ("is-active", "active"))])
+def test_a_retired_tradingview_unit_still_enabled_or_running_warns_without_blocking(server, unit, state):
+    """ADR 0066 retired the chart pull and the webhook; a brain that still runs one is a leftover the deploy note
+    (docs/deploy/2026-11-retire-tv-units.md) removes."""
+    run, _ = fake_systemctl({**GOOD_UNITS, (state[0], unit): state[1]})
+    items = pf.run_preflight(server(run_cmd=run))
+    item = next(i for i in items if i.name == "retired_units")
+    assert item.status == "warn" and not item.blocking and unit in item.detail
+    assert f"sudo systemctl disable --now {unit}" in item.fix
+    assert pf.exit_code(items) == 0
+
+
+def test_retired_units_are_ok_when_neither_is_enabled_or_running(server):
+    item = next(i for i in pf.run_preflight(server()) if i.name == "retired_units")
+    assert item.status == "ok" and "goldbot-tv-pull" in item.detail and "goldbot-webhook" in item.detail

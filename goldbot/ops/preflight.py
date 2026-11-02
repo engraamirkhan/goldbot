@@ -32,6 +32,7 @@ MEM_FAIL_GB, MEM_WARN_GB = 0.5, 1.5        # MemAvailable before any service run
 SETUP = "goldbot run setup"
 TUNNEL_UNIT = "goldbot-bridge-tunnel"
 DEPLOY_TIMER = "goldbot-deploy.timer"
+RETIRED_UNITS = ("goldbot-tv-pull", "goldbot-webhook")   # ADR 0066; the ideas feed (goldbot-tv-ideas) stays
 
 
 class Item(FrozenRecord):
@@ -250,7 +251,29 @@ def run_preflight(ctx: PreflightContext) -> list[Item]:
     items.append(Item(name="deploy_timer", status="ok" if (t, a) == ("enabled", "active") else "fail",
                       detail=f"{DEPLOY_TIMER} is {t}, {a}" if t else "systemctl not found (run preflight on the brain)",
                       fix=f"sudo systemctl enable --now {DEPLOY_TIMER}"))
+
+    # 12. retired units (warn only)
+    items.append(_retired_units(ctx))
     return items
+
+
+def _retired_units(ctx: PreflightContext) -> Item:
+    """ADR 0066 retired the TradingView chart pull and the webhook; their code is gone, so a unit still enabled or
+    running on the brain only restarts and fails. A warning, not a block: removing it is a cleanup step
+    (docs/deploy/2026-11-retire-tv-units.md), and nothing that trades depends on it."""
+    left: dict[str, str] = {}
+    checked = True
+    for unit in RETIRED_UNITS:
+        enabled, active = _unit(ctx, "is-enabled", unit), _unit(ctx, "is-active", unit)
+        checked = checked and enabled is not None
+        if enabled == "enabled" or active == "active":
+            left[unit] = f"{unit} ({enabled}, {active})"
+    names = " and ".join(RETIRED_UNITS)
+    return Item(name="retired_units", status="warn" if left else "ok", blocking=False,
+                detail=f"retired unit(s) still on: {', '.join(left.values())}" if left
+                else f"{names} not enabled or running" if checked else f"{names} not checked (no systemctl)",
+                fix=" && ".join([f"sudo systemctl disable --now {u} && sudo rm -f /etc/systemd/system/{u}.service"
+                                 for u in left or RETIRED_UNITS] + ["sudo systemctl daemon-reload"]))
 
 
 def _terminal_item(ctx: PreflightContext, url: str, token: str, fix: str) -> Item:

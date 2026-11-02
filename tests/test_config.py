@@ -2,7 +2,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from goldbot.config import DEFAULT_SETTINGS, Settings, load_settings
+from goldbot.config import DEFAULT_SETTINGS, RETIRED_KEYS, Settings, load_settings
 
 
 def test_repo_settings_validate():
@@ -287,3 +287,20 @@ def test_the_shipped_settings_have_no_fxstreet_feed_and_no_retired_section():
     assert "fxstreet" not in raw["news"]["feeds"]
     assert not {"tv_pull", "webhook"} & set(raw) and "tv_ideas" in raw   # the authors' ideas stay
     assert not {"agents_daily", "agents_weekly", "agents_presession", "tv_reconcile"} & set(raw["scheduler"])
+
+
+def test_no_retired_key_path_names_a_live_settings_field():
+    """RETIRED_KEYS drops its paths silently (with a warning): a path that is still a live field would make the
+    owner's own value for it vanish without an error, so none may resolve to one."""
+    from pydantic import BaseModel
+    for path in RETIRED_KEYS:
+        model: type[BaseModel] | None = Settings
+        for depth, key in enumerate(path):
+            assert model is not None
+            field = model.model_fields.get(key)
+            if depth == len(path) - 1:
+                assert field is None, f"{'.'.join(path)} is retired but still a Settings field"
+                break
+            assert field is not None, f"{'.'.join(path[:depth + 1])}: the parent of a retired key must exist"
+            ann = field.annotation
+            model = ann if isinstance(ann, type) and issubclass(ann, BaseModel) else None

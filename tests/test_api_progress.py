@@ -89,3 +89,15 @@ def test_a_retired_route_is_not_found_even_where_the_app_serves_the_built_dashbo
     h = _login(c, app)
     assert c.get("/api/research", headers=h["owner"]).status_code == 404
     assert c.get("/research").text == "INDEX"                       # the dashboard's own paths still get the app
+
+
+def test_a_doubled_slash_or_upper_case_api_path_is_not_found_rather_than_the_dashboard(tmp_path):
+    """The SPA guard normalises the path first: `//api/x` and `/API/x` are /api/ paths too, never index.html."""
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("INDEX")
+    c = TestClient(create_app(tmp_path / "state", web_dist=dist, data_root=tmp_path / "data", owner_email="o@x.io"))
+    for path in ("//api/research", "/API/research", "/Api", "//API/"):
+        r = c.get("http://testserver" + path)                       # a full URL: "//api" alone reads as a host
+        assert r.status_code == 404 and r.text != "INDEX", path
+    assert c.get("/apiary").text == "INDEX"                         # only the api segment, not any prefix

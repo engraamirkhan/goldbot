@@ -954,8 +954,9 @@ class AuthStore:
 
     def _notify_owner(self, text: str) -> None:
         """A Telegram notice to the owner: one row in state/agent_runs.jsonl, which the Telegram service relays to
-        the owner's chat (goldbot/telegram/outbox.py new_reports) and the dashboard shows under Agents. Best effort:
-        the audit row is the record; a failed write is logged, never raised."""
+        the owner's chat (goldbot/telegram/outbox.py new_reports); Telegram is the only place it shows (the dashboard
+        has no Agents screen since ADR 0066). Best effort: the audit row is the record; a failed write is logged,
+        never raised."""
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         row = {"role": "account_security", "started_utc": now, "finished_utc": now, "status": "notice", "turns": 0,
                "cost_usd": 0.0, "report_path": None, "detail": text}

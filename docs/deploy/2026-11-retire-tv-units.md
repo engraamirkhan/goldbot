@@ -20,7 +20,9 @@ stay where they are.
 2. Deploy as usual (`sudo goldbot-deploy <sha>`).
 3. Start the deploy timer (see "Deploy timer" below): `sudo systemctl enable --now goldbot-deploy.timer`
 4. Check: `systemctl list-units 'goldbot-tv-*' --all` lists only `goldbot-tv-ideas.service`, active; `systemctl list-timers goldbot-deploy.timer`
-   shows a NEXT time; `goldbot run health` has no `heartbeat:tv-pull`/`heartbeat:webhook` and no `deploy_approval`.
+   shows a NEXT time; `goldbot run health` has no `heartbeat:tv-pull`/`heartbeat:webhook` and no `deploy_approval`;
+   `goldbot run preflight` shows `retired_units` ok.
+5. Delete the retired TradingView keys from the secret store: RUNBOOK 2.3, "Retired keys".
 
 The old `state/heartbeat_tv-pull.json` is now read by nothing; leave it (server data) or let the owner remove it.
 

@@ -70,6 +70,17 @@ research paths and needs trading-safety and quant review first. This ADR does no
   R67 (replica shadow engine) loses `tv_context` from its code list in the cleanup release. Its replica columns
   come from broker bars and stay.
 - The research views leave the dashboard. Research results are still in `docs/research/` and on issue #34.
+- The retired keyring entries `tradingview-sessionid`, `tradingview-sessionid-sign`, `tradingview-webhook-secret`
+  and `tradingview-ideas-cookie` are deleted after the deploy (RUNBOOK 2.3, "Retired keys"). Nothing reads them:
+  the author-ideas feed sends no cookie (checked in `data/tv_ideas.py` and `data/tv_http.py`). Preflight warns
+  (`retired_units`, non-blocking) while `goldbot-tv-pull` or `goldbot-webhook` is still enabled or running.
+- The Telegram one-tap deploy path is live from this release: the brain's `goldbot-deploy.timer` was enabled but
+  never started (docs/incidents/2026-11-02-deploy-timer-never-started.md) and now runs. Its protections: only an
+  allow-listed Telegram id can tap; only a fast-forward commit on `main` whose `backend` and `frontend` CI checks
+  passed on that exact commit (GitHub Actions check-runs only) is offered; the root-owned `goldbot-deploy` re-checks
+  `main` and CI itself, waits while an entry approval is pending, verifies the services and rolls back on failure;
+  there is no CLI approve. Preflight requires the timer enabled and active, and health FAILs (`deploy_approval`)
+  when an approval has waited more than 15 minutes.
 - **Reversal triggers:**
   - TradingView chart data or scored news comes back only if an arm or strategy that needs it passes its history
     qualification (explore + confirm, net of costs) on the stored data. A new ADR then restores the feed from the

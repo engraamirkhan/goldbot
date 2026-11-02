@@ -1,0 +1,61 @@
+# Sprint-3000 screen: the frozen pass rules, costs and controls (sprint-3000 brief, windows amendment W2 and amendment C1,
+# all 2026-11-02), read by goldbot.research.sprint3000.engine.load_rules. Every screen report carries this file's
+# sha256: a changed threshold is a new rule set, never a retune of an old run.
+version: c1-2026-11-02
+
+cost:
+  broker: icm                       # the cost of record's ICM cells (ADR 0043: another broker's figures never used)
+  version: cor-2026-10-31.2         # pinned: ArmCosts.require_version refuses any other table
+  # C1: cost_R = (RT_point_bps x P + OS_point_bps x P x [stop exit filled at the stop] - nights x swap_bps(side) x P)
+  # / stop_usd, bps = the cost of record's POINT estimate / reference_price_usd. A stop exit that gapped is already
+  # filled at the minute's open, so it pays no overshoot on top (the residual only: no double count)
+  reference_price_usd: 4000.0
+  # C1 swap: the measured broker terms (ICM demo, state/broker_terms_icm-demo.json on the VPS), USD per lot (100 oz) per
+  # night, broker sign: a long pays, a short is CREDITED; three nights on the triple day (Wednesday)
+  swap_long_usd_per_lot: -52.2
+  swap_short_usd_per_lot: 36.0
+  swap_triple_weekday: 2
+  stress_overshoot_usd: 0.70        # reported stress line: C1 with this overshoot on every stop exit
+
+controls:
+  # the GATE control (C1) is the random-side twin: the same minute, stop and exit with the side drawn at random, taken
+  # at its exact expectation (half the trade, half its opposite), so excess = (real - opposite) / 2 per trade
+  # same-side twins are an entry-timing DIAGNOSTIC only (C1): at or after the real fill, same session instance
+  timing_twins: 4
+  min_session_minutes: 30           # fewer minutes left in the instance: draw from the next fallback_minutes instead
+  fallback_minutes: 60
+
+explore:                            # also learn_old (same rule on its own years)
+  min_n: 100
+  min_n_slow: 60                    # on the slow timeframes below
+  slow_tfs: [4h, 1d]
+  min_t_day: 2.0                    # t of the mean on DAY-SUMMED net R (one observation per entry UTC day)
+  min_years_positive_share: 0.625   # 5 of 8 explore years with net mean R > 0 (rounded up on other year counts)
+  min_control_excess: 0.0           # net minus the random-side control, R per trade (>=)
+  min_drift_adj_gross: 0.0          # gross R less side x in-window drift x hold, per trade (strictly >)
+
+ensemble:                           # C1: one composite trial per family, frozen at the end of explore, before confirm
+  min_gross_t: 2.0                  # members: the family's explore passers and every spec with per-trade gross t >= this
+  min_members: 2
+
+confirm:
+  min_n: 100
+  fdr_q: 0.10                       # Benjamini-Hochberg over m = the singles and families sent, fixed before the run
+  bootstrap_resamples: 10000        # one-sided day-block bootstrap p of the confirm net R
+  min_years_positive_share: 0.625   # 5 of the 8 confirm years (2018-2025); no DSR term at confirm (C1)
+
+test_old:                           # qualification (held-out 2006-02..2009), confirm passers only, read once
+  min_n: 100
+  min_n_slow: 60
+  slow_tfs: [4h, 1d]
+  min_t_day: 1.28
+
+nulls:                              # prereg section 7 rule 1: the 120 grade-D negative controls (retired ideas)
+  entry_types: [inside_bar_break, session_range_break, opening_range_break, level_reject]
+  fade_mode: true                   # every entry with mode: fade is a null control too
+  max_explore_pass_share: 0.10      # more than this share of the evaluated nulls passing explore: the run is VOID
+                                    # (any null passing confirm or test_old: "engine audit required", nothing deploys)
+
+dsr:                                # reported, never gated here (the live gate's DSR >= 0.95 stays owner-only)
+  k_program: 6233                   # program trials before this sprint (~3,233) + the 3,000 specs
+  keff_rho: 0.5                     # specs whose daily net R correlate above this are one effective trial (K_eff)

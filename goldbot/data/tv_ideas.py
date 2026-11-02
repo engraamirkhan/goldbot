@@ -75,7 +75,7 @@ LISTING_CAP = 1000                       # items one listing query serves, whate
 PAGE = 100                               # per_page the listing accepts at most
 DIRECTIONS = {1: "long", 2: "short", 0: "neutral"}
 Direction = Literal["long", "short", "neutral", "unknown"]
-_UUID = re.compile(r"^[A-Za-z0-9]{4,20}$")
+_UUID = re.compile(r"[A-Za-z0-9]{4,20}")      # used with fullmatch: "$" would accept a trailing newline
 # exchanges gold ideas are published on: probed once for the top slice, beside those seen in the listing
 GOLD_EXCHANGES = ("FX", "OANDA", "TVC", "FX_IDC", "FOREXCOM", "CAPITALCOM", "PEPPERSTONE", "ICMARKETS", "SAXO",
                   "COMEX", "FXOPEN", "EIGHTCAP", "BLACKBULL", "VANTAGE", "SPREADEX", "CURRENCYCOM")
@@ -350,7 +350,7 @@ class IdeasClient:
         return data
 
     def detail(self, uuid: str) -> dict[str, Any]:
-        if not _UUID.match(uuid):
+        if not _UUID.fullmatch(uuid):
             raise TvReadError(f"refused idea id {uuid!r}")
         data = self.get_json(f"{LIST_URL}{uuid}/")
         if not isinstance(data, dict) or "id" not in data:
