@@ -295,6 +295,8 @@ def test_fx_financing_loads_for_all_seven_pairs_from_the_configured_oecd_files(t
     from goldbot.config import load_settings
     s = load_settings(ROOT / "config" / "settings.yaml").research.position
     assert set(s.currency_rate_paths) == {"EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"}
+    from goldbot.data.daily import currency_rate_paths
+    assert dict(s.currency_rate_paths) == currency_rate_paths()     # settings and the data lane cannot drift apart
     iso_rate = {"EUR": 3.0, "GBP": 4.0, "JPY": 0.1, "AUD": 3.5, "CAD": 2.5, "CHF": 0.5, "NZD": 5.0}
     for iso, rel in s.currency_rate_paths.items():
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
