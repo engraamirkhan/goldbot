@@ -2,6 +2,7 @@
 names and units into these dataclasses (price in $/oz, volume in lots, times in UTC)."""
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import AsyncIterator, Protocol
 
 import pandas as pd
@@ -100,6 +101,11 @@ class SymbolInfo(Record):
     swap_short: float | None = None
     margin_initial: float | None = None
     margin_maintenance: float | None = None
+    # Multi-instrument demo (step 0, interfaces frozen for lanes L1-L4): the profit currency of the symbol (MT5
+    # SYMBOL_CURRENCY_PROFIT) and the weekday its triple swap is charged (MT5 SYMBOL_SWAP_ROLLOVER3DAYS, 0 = Sunday ..
+    # 6 = Saturday). None = not reported (paper, an older bridge); never taken as USD or Wednesday by a rule
+    currency_profit: str | None = None
+    swap_rollover3days: int | None = None
 
 
 class OrderIntent(Record):
@@ -182,6 +188,14 @@ class Broker(Protocol):
     def place_order(self, intent: OrderIntent) -> OrderResult: ...
     def modify(self, position_id: int, sl: float | None, tp: float | None) -> OrderResult: ...
     def close(self, position_id: int, lots: float | None = None) -> OrderResult: ...
-    def positions(self, magic_prefix: int | None = None) -> list[Position]: ...
+    def positions(self, magic_prefix: int | None = None, symbol: str | None = None) -> list[Position]:
+        """Open positions of one symbol: `symbol`, or the adapter's own configured symbol when None (today's
+        single-symbol behaviour, unchanged). Filtered by `magic_prefix` when given."""
+        ...
+    def ticks_many(self, symbols: Sequence[str], since: pd.Timestamp) -> dict[str, list[Tick]]:
+        """Multi-instrument demo (step 0): every tick after `since` (UTC) for each of `symbols`, one call per poll
+        instead of one per symbol; a symbol with none maps to []. Read-only. Adapters that do not serve it yet raise
+        NotImplementedError (lane L4 implements MT5 and the bridge); no XAUUSD path calls it."""
+        ...
     def account_positions(self) -> list[Position]: ...   # every symbol: the equity cross-check only (ADR 0016)
     def deals_since(self, since_utc: pd.Timestamp) -> pd.DataFrame: ...
