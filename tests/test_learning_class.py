@@ -25,6 +25,7 @@ from goldbot.engine import exploration
 from goldbot.ops import accounts as acc_mod
 from goldbot.research import arms
 from tests.test_exploration_engine import QUALIFIED
+from tests.test_learning_mi import MI_ARMS, MI_CONTROLS
 
 TODAY = pd.Timestamp("2026-11-02", tz="UTC")
 PREREG = "docs/research/learning-2026-11-02.md"
@@ -231,7 +232,8 @@ def test_the_k_row_script_writes_each_row_once_inside_the_quarters_budget(tmp_pa
     mod = _k_script()
     reg = tmp_path / "research_registry.jsonl"
     want = mod.k_rows(SPEC)
-    assert len(want) == 2 * sum(len(v) for v in LEARNING.values())          # 15 arms and their 15 controls
+    # 15 gold arms and their 15 controls, and the 8 multi-instrument pairs (learning-mi-2026-11-02.md)
+    assert len(want) == 2 * sum(len(v) for v in LEARNING.values()) + len(MI_ARMS | MI_CONTROLS)
     assert mod.record(reg, SPEC, dry_run=True) and not TrialRegistry(reg)._rows()
     monkeypatch.setattr(TrialRegistry, "check_budget", lambda self, n, cap, now=None: "2026Q4")
     written = mod.record(reg, SPEC)
@@ -269,7 +271,7 @@ def k_rows(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_the_spec_registers_every_fixed_bracket_arm_the_gate_refused_as_a_learning_row(k_rows) -> None:
     spec = {a.id: a for a in arms.load_arms(SPEC)}
     wanted = {a for per in LEARNING.values() for a in per}
-    assert {i for i, a in spec.items() if a.role == "learning"} == wanted
+    assert {i for i, a in spec.items() if a.role == "learning"} == wanted | MI_ARMS
     for per in LEARNING.values():
         for arm_id, control in per.items():
             a = spec[arm_id]
@@ -324,7 +326,7 @@ def test_every_learning_arm_is_registered_on_its_account_with_its_control_and_no
 
 # ------------------------------------------------------------------------------------------------ reports
 def test_the_spec_names_its_learning_arms_for_the_reports() -> None:
-    assert arms.learning_arm_ids(SPEC) == frozenset(a for per in LEARNING.values() for a in per)
+    assert arms.learning_arm_ids(SPEC) == frozenset(a for per in LEARNING.values() for a in per) | MI_ARMS
 
 
 def test_the_perf_report_shows_learning_arms_in_their_own_section_never_in_the_family_rankings(

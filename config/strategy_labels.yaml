@@ -119,6 +119,58 @@ arms:
   I0-SUGAR: {variant: "SUGAR"}
   S0-COFFEE: {variant: "COFFEE"}
   I0-COFFEE: {variant: "COFFEE"}
+  LB-XAGUSD: {variant: "XAGUSD"}
+  LBC-XAGUSD: {variant: "XAGUSD control"}
+  LB-XPTUSD: {variant: "XPTUSD"}
+  LBC-XPTUSD: {variant: "XPTUSD control"}
+  LB-XAUEUR: {variant: "XAUEUR"}
+  LBC-XAUEUR: {variant: "XAUEUR control"}
+  LB-XAUAUD: {variant: "XAUAUD"}
+  LBC-XAUAUD: {variant: "XAUAUD control"}
+  LB-US500: {variant: "US500"}
+  LBC-US500: {variant: "US500 control"}
+  LB-USTEC: {variant: "USTEC"}
+  LBC-USTEC: {variant: "USTEC control"}
+  LB-DE40: {variant: "DE40"}
+  LBC-DE40: {variant: "DE40 control"}
+  LB-UK100: {variant: "UK100"}
+  LBC-UK100: {variant: "UK100 control"}
+  LB-JP225: {variant: "JP225"}
+  LBC-JP225: {variant: "JP225 control"}
+  LB-EURUSD: {variant: "EURUSD"}
+  LBC-EURUSD: {variant: "EURUSD control"}
+  LB-USDJPY: {variant: "USDJPY"}
+  LBC-USDJPY: {variant: "USDJPY control"}
+  LB-GBPUSD: {variant: "GBPUSD"}
+  LBC-GBPUSD: {variant: "GBPUSD control"}
+  LB-AUDUSD: {variant: "AUDUSD"}
+  LBC-AUDUSD: {variant: "AUDUSD control"}
+  LB-USDCAD: {variant: "USDCAD"}
+  LBC-USDCAD: {variant: "USDCAD control"}
+  LB-USDCHF: {variant: "USDCHF"}
+  LBC-USDCHF: {variant: "USDCHF control"}
+  LB-NZDUSD: {variant: "NZDUSD"}
+  LBC-NZDUSD: {variant: "NZDUSD control"}
+  LB-XTIUSD: {variant: "XTIUSD"}
+  LBC-XTIUSD: {variant: "XTIUSD control"}
+  LB-XBRUSD: {variant: "XBRUSD"}
+  LBC-XBRUSD: {variant: "XBRUSD control"}
+  LB-XNGUSD: {variant: "XNGUSD"}
+  LBC-XNGUSD: {variant: "XNGUSD control"}
+  LB-UST10Y: {variant: "UST10Y"}
+  LBC-UST10Y: {variant: "UST10Y control"}
+  LB-BUND10Y: {variant: "BUND10Y"}
+  LBC-BUND10Y: {variant: "BUND10Y control"}
+  LB-COPPER: {variant: "COPPER"}
+  LBC-COPPER: {variant: "COPPER control"}
+  LB-WHEAT: {variant: "WHEAT"}
+  LBC-WHEAT: {variant: "WHEAT control"}
+  LB-SOYBEAN: {variant: "SOYBEAN"}
+  LBC-SOYBEAN: {variant: "SOYBEAN control"}
+  LB-SUGAR: {variant: "SUGAR"}
+  LBC-SUGAR: {variant: "SUGAR control"}
+  LB-COFFEE: {variant: "COFFEE"}
+  LBC-COFFEE: {variant: "COFFEE control"}
   S1A: {variant: "target VWAP"}
   S1B: {variant: "target 1R"}
   S2A: {variant: "15-min range"}

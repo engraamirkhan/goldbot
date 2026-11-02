@@ -21,6 +21,7 @@ from goldbot.ops import accounts as acc_mod
 from goldbot.ops import health
 from goldbot.research import arm_rules, arms
 from tests.test_exploration_engine import CLOSE, LOSS, QUALIFIED, SHORT, _arm, _at, _engine, _rule
+from tests.test_learning_mi import MI_ARMS, MI_CONTROLS  # the multi-instrument learning pairs
 
 SPEC = Path(__file__).resolve().parents[1] / "config" / "exploration_arms.yaml"
 RULE = "unqualified (owner rule 2026-10-30)"
@@ -51,6 +52,9 @@ LEARNING = {"icm-demo": {"Z10D", "Z3D", "Z4D", "Z6D", "Z7D", "Z9D"},
             "icm-probe": {"S5A", "S5B", "Z1P", "Z2P", "Z4P", "Z5P", "Z7P"}, "vantage-demo": {"Z6V", "Z7V"},
             "vantage-247": set()}
 LEARNING_CONTROLS = {k: {"LC" + a for a in v} for k, v in LEARNING.items()}      # one per arm (quant (2)/(3))
+# learning-mi-2026-11-02.md (run since lane L3): each listed instrument's learning pair, refused without its K rows
+MI_PAIRS = {a.account_id: {f"{g}-{k}" for k in a.instruments for g in ("LB", "LBC")}
+            for a in acc_mod.load_accounts(logins=False).values() if a.account_id in LEARNING}
 NO_REGISTRY = Path("/nonexistent/research_registry.jsonl")
 
 
@@ -200,11 +204,11 @@ def test_f1as_forward_graduation_rule_is_withdrawn_with_a_dated_note_and_its_sto
 
 
 def test_every_exempt_arm_carries_its_role_and_every_other_arm_is_a_strategy_refused_today(spec) -> None:
-    dedicated = set().union(*LEARNING_CONTROLS.values())
+    dedicated = set().union(*LEARNING_CONTROLS.values()) | MI_CONTROLS
     assert {i for i, a in spec.items() if a.role == "control"} == set(CONTROLS) | dedicated
     assert {i for i, a in spec.items() if a.role == "cost"} == set(COSTS)
     assert {i for i, a in spec.items() if a.role == "owner_experiment"} == OWNER_EXPERIMENTS
-    assert {i for i, a in spec.items() if a.role == "learning"} == set().union(*LEARNING.values())
+    assert {i for i, a in spec.items() if a.role == "learning"} == set().union(*LEARNING.values()) | MI_ARMS
     for arm_id, a in spec.items():
         if a.role == "owner_experiment":
             assert (a.entry_refused == "") == (pd.Timestamp.now(tz="UTC").normalize() <= OWNER_UNTIL), arm_id
@@ -246,7 +250,8 @@ def test_with_their_k_rows_the_learning_arms_and_their_dedicated_controls_run_to
         if cfg is None:
             continue
         running = {a.arm_id for a in cfg.arms} - set(exploration.entry_refused(cfg)) - exploration.spec_retired(cfg)
-        want = RUNNING[acc.account_id] | LEARNING[acc.account_id] | LEARNING_CONTROLS[acc.account_id]
+        want = RUNNING[acc.account_id] | LEARNING[acc.account_id] | LEARNING_CONTROLS[acc.account_id] \
+            | MI_PAIRS[acc.account_id]
         assert running == want, acc.account_id
 
 
@@ -337,7 +342,7 @@ def test_the_runtime_qualification_view_matches_the_engine_per_account(_no_regis
     view = exploration.qualification_by_account(acc_mod.enabled_accounts())
     for account_id, (running, refused) in view.items():
         assert set(running) == RUNNING[account_id]
-        assert set(refused) == NEWLY_REFUSED[account_id] | LEARNING_CONTROLS[account_id]
+        assert set(refused) == NEWLY_REFUSED[account_id] | LEARNING_CONTROLS[account_id] | MI_PAIRS[account_id]
 
 
 # ------------------------------------------------------------------------------------------------ the cost read's end

@@ -24,6 +24,7 @@ from goldbot.research import exploration_data as ex
 from goldbot.research.exploration_data import PRIOR_BROKERS
 from goldbot.telegram.approvals import ApprovalCenter
 from tests.test_exploration_engine import CLOSE, _arm, _at, _sent, _Terminal
+from tests.test_learning_mi import MI_ON  # the multi-instrument learning pairs (learning-mi-2026-11-02.md)
 
 SPEC = Path(__file__).resolve().parents[1] / "config" / "exploration_arms.yaml"
 TWINS = {"VI0": "I0", "VI2A": "I2A", "VI2B": "I2B", "VMB15": "MB15", "VMB30": "MB30", "VMB1H": "MB1H",
@@ -71,18 +72,19 @@ def test_vantage_demo_measures_its_own_costs_with_scheduled_probes_on_a_15_pound
 
 def test_vantage_demo_exploration_pots_are_100_scalp_40_intraday_and_40_swing_of_180(vantage):
     ex = vantage.exploration
-    assert ex.enabled and set(ex.arms) == V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2) | V_SCALP | V_INSTRUMENTS
+    assert ex.enabled and set(ex.arms) == (V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2) | V_SCALP
+                                           | V_INSTRUMENTS | MI_ON["vantage-demo"])
     # demo-limits ADR 0072 (2026-11-02): budget £180 -> £165 (0.825), pots slots only (x1.35), 23 open at most
     assert ex.budget_share * 200 == pytest.approx(165, abs=0.01) and ex.max_open_total == 23
-    assert {k: (p.gbp, p.max_open) for k, p in ex.pots.items()} == {"scalp": (None, 11), "intraday": (None, 6),
+    assert {k: (p.gbp, p.max_open) for k, p in ex.pots.items()} == {"scalp": (None, 11), "intraday": (None, 10),
                                                                      "swing": (None, 2)}
     assert not ex.pot_budgets and ex.learning_max_open == 6
     assert {(ex.arms[a].style, ex.arms[a].max_loss) for a in V_SCALP} == {("scalp", 6.5)}
     assert {ex.arms[a].max_loss for a in V_INTRADAY} == {17.0}
     assert {a: ex.arms[a].max_loss for a in {**V_WAVE1, **V_WAVE2}} == {**V_WAVE1, **V_WAVE2}
     assert {a.max_loss for a in ex.arms.values() if a.style == "swing"} == {40.0}
-    assert {k for k, a in ex.arms.items() if a.control_share} == {"VI0", "VW0", "VC1H", "ZCV", "LCZ6V",
-                                                                    "LCZ7V"} | V_INSTRUMENTS
+    assert {k for k, a in ex.arms.items() if a.control_share} == {"VI0", "VW0", "VC1H", "ZCV", "LCZ6V", "LCZ7V"} | {
+        i for i in MI_ON["vantage-demo"] if i.startswith("LBC-")} | V_INSTRUMENTS
     assert ex.budget_share + vantage.cost_probe.budget_share <= 1           # one day's allowance
 
 
@@ -135,8 +137,8 @@ def test_vantage_engine_config_builds_its_runnable_arms_from_the_spec_and_drops_
     cfg = exploration.config_for(vantage)
     assert cfg is not None and cfg.dropped == ()      # VXTV2 runs since lane E2 carries the smc replica state
     assert {a.arm_id for a in cfg.arms} == (V_INTRADAY | V_SWING | set(V_WAVE1) | set(V_WAVE2) | V_SCALP
-                                            | V_INSTRUMENTS)
-    assert len(cfg.arms) == 28 + 14                    # + LCZ6V, LCZ7V (ADR 0072); + the instruments' S0/I0 (L3)
+                                            | V_INSTRUMENTS | MI_ON["vantage-demo"])
+    assert len(cfg.arms) == 28 + 14 + 14               # + the instruments' S0/I0 and LB/LBC pairs (lane L3)
     gold = exploration.book_config(cfg, "XAUUSD")       # gold's book runs gold's 28 only
     assert gold is not None and {a.arm_id for a in gold.arms} == (V_INTRADAY | V_SWING | set(V_WAVE1)
                                                                   | set(V_WAVE2) | V_SCALP)
@@ -151,7 +153,8 @@ def test_vantage_riskgate_limits_carry_its_host_cap_probe_only_fence_and_arm_cap
     assert limits.max_positions == 24 and limits.probe_only and limits.daily_loss_limit_abs == 200   # ADR 0072: 24
     assert limits.exploration_arms == {**{a: (17.0 if a in V_INTRADAY else 40.0) for a in V_INTRADAY | V_SWING},
                                        **V_WAVE1, **V_WAVE2, **dict.fromkeys(V_SCALP, 6.5),
-                                       **{a: (6.5 if a.startswith("S0-") else 17.0) for a in V_INSTRUMENTS}}
+                                       **{a: (6.5 if a.startswith("S0-") else 17.0) for a in V_INSTRUMENTS},
+                                       **dict.fromkeys(MI_ON["vantage-demo"], 8.0)}
 
 
 class _Recorder(_Terminal):

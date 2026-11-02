@@ -105,7 +105,9 @@ def test_every_pot_keeps_its_caps_and_sums_inside_the_budget_and_keeps_an_active
         for style in ex.pots:
             mine = [i for i, a in ex.arms.items() if a.style == style]
             assert sum(ex.arms[i].control_share or 0.0 for i in mine) <= 1
-            assert any(not spec[i].retired and spec[i].status == "run" for i in mine), (acc.account_id, style)
+            # a pot of multi-instrument learning pairs only (learning-mi-2026-11-02.md) waits for lane L3 as they do
+            waits = bool(mine) and all(spec[i].status == "blocked" and "L3" in spec[i].note for i in mine)
+            assert waits or any(not spec[i].retired and spec[i].status == "run" for i in mine), (acc.account_id, style)
 
 
 def _retired(arm: exploration.Arm) -> exploration.Arm:
