@@ -11,6 +11,7 @@ import {
 } from "../lib/limits";
 import { utcTitle } from "../lib/explain";
 import { useNow } from "../lib/useNow";
+import { GroupExposureCard } from "./GroupExposureCard";
 
 /** "£50", "£12.40": whole amounts without pence. */
 const money = (x: number, ccy: string | null | undefined) => cash(x, ccy).replace(/\.00(?=\D*$)/, "");
@@ -132,6 +133,7 @@ export function LimitCard({ a, now }: { a: LimitAccount; now: number }) {
               : "Minimum-lot exception: off."}
           </p>
           <Revert a={a} />
+          <GroupExposureCard a={a} now={now} />
         </>
       )}
       <LastChange a={a} />

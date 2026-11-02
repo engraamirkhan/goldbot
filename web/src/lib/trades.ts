@@ -7,6 +7,7 @@
 // an aggregate of its own over ledger rows, nor ranks anything: the ranking's order and figures are the server's, and
 // every per-strategy figure keeps its n, its CI and "early, not proven" until its read.
 import type { components } from "./schema";
+import { GROUP_ORDER, type InstrumentGroup } from "./instruments";
 import { money, NBSP, signedR, withUnit } from "../ui/format";
 
 type S = components["schemas"];
@@ -274,10 +275,14 @@ export type Filters = {
   kind: TradeKind[];
   exit: string[];
   evidence: Evidence[];
+  // multi-instrument (UI spec: "URL sym=…/grp=…"): a trade shows when its symbol is picked OR its group is
+  sym: string[];
+  grp: InstrumentGroup[];
 };
 export const DEFAULT_KINDS: TradeKind[] = KINDS.filter((k) => k !== "shadow");
 export const PERIODS: Period[] = ["today", "7d", "30d", "all"];
-export const DEFAULT_FILTERS: Filters = { period: "today", sort: "newest", acct: [], fam: [], tf: [], status: "", kind: [], exit: [], evidence: [] };
+export const DEFAULT_FILTERS: Filters = { period: "today", sort: "newest", acct: [], fam: [], tf: [], status: "", kind: [], exit: [], evidence: [], sym: [], grp: [] };
+const FILTER_LISTS = ["acct", "fam", "tf", "kind", "exit", "evidence", "sym", "grp"] as const;
 
 const list = (p: URLSearchParams, k: string) => (p.get(k) ?? "").split(",").filter(Boolean);
 
@@ -294,6 +299,8 @@ export function parseFilters(query: string): Filters {
     kind: list(p, "kind").filter((k): k is TradeKind => (KINDS as readonly string[]).includes(k)),
     exit: list(p, "exit").filter((k) => (EXIT_REASONS as readonly string[]).includes(k)),
     evidence: list(p, "evidence").filter((k): k is Evidence => k in EVIDENCE_WORDS),
+    sym: list(p, "sym").filter((s) => /^[A-Za-z0-9][A-Za-z0-9._+#-]{0,31}$/.test(s)),
+    grp: list(p, "grp").filter((g): g is InstrumentGroup => (GROUP_ORDER as readonly string[]).includes(g)),
   };
 }
 
@@ -302,7 +309,7 @@ export function filtersQuery(f: Filters): string {
   const p = new URLSearchParams();
   if (f.period !== "today") p.set("period", f.period);
   if (f.sort !== "newest") p.set("sort", f.sort);
-  for (const k of ["acct", "fam", "tf", "kind", "exit", "evidence"] as const) if (f[k].length) p.set(k, f[k].join(","));
+  for (const k of FILTER_LISTS) if (f[k].length) p.set(k, f[k].join(","));
   if (f.status) p.set("status", f.status);
   return p.toString().replace(/%2C/g, ",");
 }
@@ -313,7 +320,8 @@ export function apiQuery(f: Filters, cursor?: string | null): string {
   const p = new URLSearchParams();
   p.set("period", f.period);
   const many: [string, readonly string[]][] = [["account", f.acct], ["family", f.fam], ["timeframe", f.tf],
-    ["kind", f.kind.length ? f.kind : DEFAULT_KINDS], ["exit_reason", f.exit], ["evidence", f.evidence]];
+    ["kind", f.kind.length ? f.kind : DEFAULT_KINDS], ["exit_reason", f.exit], ["evidence", f.evidence],
+    ["symbol", f.sym], ["group", f.grp]];
   for (const [k, vs] of many) for (const v of vs) p.append(k, v);
   if (f.status) p.set("status", f.status);
   if (f.sort !== "newest") p.set("sort", f.sort);
@@ -323,7 +331,8 @@ export function apiQuery(f: Filters, cursor?: string | null): string {
 }
 
 export const activeFilterCount = (f: Filters) =>
-  (["acct", "fam", "tf", "kind", "exit", "evidence"] as const).reduce((n, k) => n + (f[k].length ? 1 : 0), 0) + (f.status ? 1 : 0);
+  (["acct", "fam", "tf", "kind", "exit", "evidence"] as const).reduce((n, k) => n + (f[k].length ? 1 : 0), 0) + (f.status ? 1 : 0)
+  + (f.sym.length || f.grp.length ? 1 : 0);
 
 export const PERIOD_WORDS: Record<Period, string> = { today: "Today", "7d": "7 days", "30d": "30 days", all: "All" };
 
