@@ -12,7 +12,8 @@ Design rules:
   live 540 days) and the 250-day strength pool. The worker keeps a long history of the broker's own M15 bars,
   LONG_DAYS deep. They come from `get_bars_range` through its own bridge client (`levels_client`: one attempt,
   CLIENT_TIMEOUT_S) in PAGE_DAYS pages, PAGE_PAUSE_S apart, within PULL_BUDGET_S (history._Deadline). They are topped
-  up daily. Only one pull per bridge runs at a time, and the first pull after a restart waits a random delay. The
+  up daily. Only one pull per MT5 box runs at a time (a file lock in state/locks, across engine processes), and the
+  first pull after a restart waits a random delay. Every pull resumes at the oldest hole in the cache. The
   bars are cached in the store (`bars_15m_broker`, source = account, symbol = the account's symbol) and filtered
   through the account's own sessions, and they are used before the first of the engine's 15m bars. A cache that
   starts well after its target head is re-pulled from the head. An empty page over open market time counts as a
@@ -28,11 +29,16 @@ Design rules:
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import random
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
+from urllib.parse import urlparse
 
 import numpy as np
 import pandas as pd
@@ -40,6 +46,7 @@ import pandas as pd
 from goldbot.base import FrozenRecord
 from goldbot.data.calendar import DEFAULT_SESSIONS, SessionTable
 from goldbot.data.resample import BAR_COLUMNS
+from goldbot.data.timeutil import epoch_ns
 from goldbot.engine.history import _Deadline, rates_to_bars
 from goldbot.features.key_levels import (
     CLUSTER_ATR,
@@ -50,6 +57,11 @@ from goldbot.features.key_levels import (
     KeyZones,
     zones_asof,
 )
+
+try:
+    import fcntl
+except ImportError:                       # pragma: no cover - Windows: engines run on the Linux brain
+    fcntl = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
     from goldbot.engine.runner import Engine
@@ -70,20 +82,52 @@ BUSY_RETRY = pd.Timedelta(minutes=5)   # another worker is pulling through the s
 START_JITTER_S = 600.0              # the first pull after a restart waits a random 0 .. this long
 OVERLAP = pd.Timedelta(days=2)      # a refresh re-reads its last two days (a bar the broker corrected)
 HEAD_GAP = pd.Timedelta(days=5)     # a cache starting later than this after its target head is re-pulled from the head
+HEAD_RECHECK = pd.Timedelta(days=7)   # ... at most this often (a broker whose history starts later is not re-read daily)
 LONG_TABLE = "bars_15m_broker"
 SLOW_BUILD_S = 1.0
 DISPLAY_MIN_PCT = 50.0
 DISPLAY_MAX_WIDTH_ATR = 2 * CLUSTER_ATR
 _STEP = pd.Timedelta(GRID_TF)
 
-# one long-history pull per bridge at a time (M2: up to 26 instruments' engines share an MT5 box)
-_BRIDGE_LOCKS: dict[str, threading.Lock] = {}
+# one long-history pull per MT5 box at a time (M2: up to 26 instruments' engines, one PROCESS each, share a box): an
+# flock on state/locks/levels-<box>.lock, which every engine process of the brain sees; in-process locks only without a
+# lock dir (paper, tests)
+_LOCAL_LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
 
 
-def _bridge_lock(key: str) -> threading.Lock:
-    with _LOCKS_GUARD:
-        return _BRIDGE_LOCKS.setdefault(key, threading.Lock())
+def box_key(url: str) -> str:
+    """The MT5 box a bridge URL points at: a short hash of its host (accounts on one box share it whatever their
+    port). Hashed, so no host name ever lands in a file name or a log line."""
+    host = urlparse(url).hostname or url
+    return hashlib.sha256(host.encode()).hexdigest()[:12]
+
+
+@contextmanager
+def box_lock(lock_dir: Path | None, box: str) -> Iterator[bool]:
+    """True while this process holds the box's pull lock, False when another holds it (never waits). The lock file
+    stays; the flock dies with its process, so a killed engine never leaves the box locked."""
+    if lock_dir is None or fcntl is None:
+        with _LOCKS_GUARD:
+            lk = _LOCAL_LOCKS.setdefault(box, threading.Lock())
+        got = lk.acquire(blocking=False)
+        try:
+            yield got
+        finally:
+            if got:
+                lk.release()
+        return
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    with open(lock_dir / f"levels-{box}.lock", "a") as fh:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
 class EmptyPage(RuntimeError):
@@ -119,19 +163,22 @@ class KeyZoneWorker:
                  sessions: SessionTable = DEFAULT_SESSIONS):
         self.account, self.symbol, self.store, self.client = account, symbol, store, client
         self.sessions = sessions                  # the account's own calendar (the engine's, set at each build)
-        self.bridge_key = account
+        self.box = account                        # the MT5 box's key (box_key); one pull per box at a time
+        self.lock_dir: Path | None = None         # state/locks: the cross-process pull lock
         self.long = pd.DataFrame(columns=BAR_COLUMNS)
         self.loaded = False                       # the store cache was read
         self.next_pull: pd.Timestamp | None = None
         self.broker_start: pd.Timestamp | None = None   # the first bar a pull from the head returned
+        self.head_checked: pd.Timestamp | None = None   # when a pull from the head last completed
         self.job: _Job | None = None
         self.clock: Callable[[], pd.Timestamp] = lambda: pd.Timestamp.now("UTC")   # pacing (wall time)
         self.sleep: Callable[[float], None] = time.sleep
 
-    def attach(self, client: Any, bridge_key: str, jitter_s: float | None = None) -> None:
-        """Pull through `client`; `bridge_key` names its MT5 box (one pull per box at a time). The first pull waits a
-        random 0 .. START_JITTER_S, so engines restarted together do not all pull at once."""
-        self.client, self.bridge_key = client, bridge_key
+    def attach(self, client: Any, box: str, lock_dir: Path | None = None, jitter_s: float | None = None) -> None:
+        """Pull through `client`; `box` names its MT5 box (box_key), `lock_dir` holds the cross-process pull locks
+        (one pull per box at a time). The first pull waits a random 0 .. START_JITTER_S, so engines restarted together
+        do not all pull at once."""
+        self.client, self.box, self.lock_dir = client, box, lock_dir
         wait = random.uniform(0, START_JITTER_S) if jitter_s is None else jitter_s
         self.next_pull = self.clock() + pd.Timedelta(seconds=wait)
 
@@ -186,28 +233,42 @@ class KeyZoneWorker:
                     log.warning("key zones: cache unreadable (%s)", type(exc).__name__)
         if self.client is None or (self.next_pull is not None and now < self.next_pull):
             return
-        lock = _bridge_lock(self.bridge_key)
-        if not lock.acquire(blocking=False):
-            self.next_pull = now + BUSY_RETRY
-            return
-        try:
-            self._pull(now)
-            self.next_pull = now + REFRESH
-        except Exception:
-            self.next_pull = now + RETRY
-            raise
-        finally:
-            lock.release()
+        with box_lock(self.lock_dir, self.box) as mine:
+            if not mine:
+                self.next_pull = now + BUSY_RETRY
+                return
+            try:
+                self._pull(now)
+                self.next_pull = now + REFRESH
+            except Exception:
+                self.next_pull = now + RETRY
+                raise
 
     def _start(self, now: pd.Timestamp) -> pd.Timestamp:
-        """The head (now - LONG_DAYS) for an empty cache or one starting more than HEAD_GAP after it (unless the
-        broker's own history starts there), else the cache's last bars minus OVERLAP."""
+        """Where the next pull starts, so every pull resumes at the oldest hole:
+        - the head (now - LONG_DAYS) when the cache is empty, or starts more than HEAD_GAP after it (unless the broker's
+          own history starts there, dated by a head page WITH bars), at most every HEAD_RECHECK once a head pull has
+          completed (an empty first page on a cold terminal dates nothing: the head is asked again a week later);
+        - else the last cached bar before the first gap holding more than HEAD_GAP of open market time (a head
+          re-pull that was cut short leaves one between its pages and the older cache, review N2);
+        - else the cache's last bars minus OVERLAP."""
         head = now - pd.Timedelta(days=LONG_DAYS)
         if self.long.empty:
             return head
-        first, last = (pd.Timestamp(self.long["ts_utc"].iloc[i]) for i in (0, -1))
-        short_head = first > head + HEAD_GAP and (self.broker_start is None or first > self.broker_start + HEAD_GAP)
-        return head if short_head else max(head, last - OVERLAP)
+        ts = pd.DatetimeIndex(pd.to_datetime(self.long["ts_utc"], utc=True))
+        first, last = ts[0], ts[-1]
+        recheck = self.head_checked is None or now - self.head_checked >= HEAD_RECHECK
+        if first > head + HEAD_GAP and recheck and (self.broker_start is None or first > self.broker_start + HEAD_GAP):
+            return head
+        for i in map(int, np.flatnonzero(np.diff(epoch_ns(ts)) > HEAD_GAP.value)):   # calendar gaps first: cheap
+            if self._open_time(ts[i], ts[i + 1]) > HEAD_GAP:
+                return max(head, ts[i])
+        return max(head, last - OVERLAP)
+
+    def _open_time(self, start: pd.Timestamp, end: pd.Timestamp) -> pd.Timedelta:
+        """Open market time strictly between two bar opens, on the account's own sessions (15m resolution)."""
+        grid = pd.date_range(start + _STEP, end - _STEP, freq=_STEP)
+        return _STEP * int(np.asarray(self.sessions.is_open(grid)).sum()) if len(grid) else pd.Timedelta(0)
 
     def _pull(self, now: pd.Timestamp) -> None:
         """Paged, paced and time-boxed (history._Deadline): PAGE_DAYS a page, PAGE_PAUSE_S between pages, PAGE_LIMIT_S
@@ -215,7 +276,8 @@ class KeyZoneWorker:
         pace = _Deadline(self.clock, self.sleep, pause_s=PAGE_PAUSE_S, page_limit_s=PAGE_LIMIT_S,
                          budget_s=PULL_BUDGET_S)
         point = float(self.client.symbol_info(self.symbol).point)
-        start = head = self._start(now)
+        start = first_page = self._start(now)
+        from_head = first_page == now - pd.Timedelta(days=LONG_DAYS)
         seen = not self.long.empty and pd.Timestamp(self.long["ts_utc"].iloc[0]) <= start
         while start < now:
             end = min(start + pd.Timedelta(days=PAGE_DAYS), now)
@@ -229,13 +291,15 @@ class KeyZoneWorker:
                 if seen and self._open_between(start, end):
                     raise EmptyPage(f"{self.symbol} M15 {start} .. {end}: no bars over open market time")
             else:
-                if not seen and start == head:
+                if from_head and start == first_page:     # only a head page WITH bars dates the broker's start
                     self.broker_start = pd.Timestamp(page["ts_utc"].iloc[0])
                 seen = True
                 if self.store is not None:
                     self.store.append(LONG_TABLE, page, source=self.account, symbol=self.symbol)
                 self._absorb(page, now)
             start = end
+        if from_head:
+            self.head_checked = now
 
     def _open_between(self, start: pd.Timestamp, end: pd.Timestamp) -> bool:
         grid = pd.date_range(start.ceil(_STEP), end, freq=_STEP)
