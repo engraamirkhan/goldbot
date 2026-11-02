@@ -96,6 +96,7 @@ trim), and 62 must hold the cap too. 11 ranked rows.
 | 134 | Telegram trades: push real money and safety only, /open and /today on demand | Telegram | S | ready after 128 and 131 · accountable: implementer · design: ui-ux-designer · reviews: code-reviewer, trading-safety-reviewer (real-money pushes unchanged) · due 2026-11-12 |
 | 133 | Trade detail with a chart: entry, stop, target and exit on the bars | API · UI | M | built 2026-10-27 (U32), in review · accountable: implementer · design: ui-ux-designer · reviews: code-reviewer · due 2026-11-16 |
 | 139 | Trades views follow the ranking: per-strategy blinding retired consistently | API (trades) · UI · Telegram | M | built 2026-10-27 (U34, incl. the Telegram 3-arm rule) · review findings of 39a335be fixed · reviews owed: quant-reviewer, code-reviewer |
+| 142 | Retire the population loop, decide the news shock blackout, prune offline research code (cleanup phase 2) | Operations and research hygiene (ADR 0066 phase 2) · PROTECT · RUN | M | ready 2026-11-02 (phase 1 = ADR 0066 cleanup release) · accountable: architect (plan), then implementer · reviews: trading-safety-reviewer, quant-reviewer, code-reviewer · due 2026-11-09 |
 | 68 | Release hygiene: explain the CI-minutes record; clean up and retire worktrees | Engineering operations (CI cost, disk) · RUN | S | ready (decided 2026-10-16 from the CFO budget and the CTO tech-debt list) · accountable: release-manager · due 2026-10-19 (worktrees), 2026-10-23 (CI minutes) |
 | 74 | The risk file notes schema skew on unknown keys (ADR 0010 gap) | Execution and reconciliation (persisted risk state) · PROTECT | S | ready after the ADR 0023 step-1 move (architect addendum A1, 2026-10-17) · own PR in engine/store.py before step 2 · reviews: trading-safety, code-reviewer · accountable: implementer · due 2026-11-06 |
 | 5 | Q1 2027 pre-registered trial queue | Idea generation · FIND | S | in progress (owner rulings recorded 2026-10-11; owed counts run on `main` 2026-10-16, run 38931951849: H-01 lower bound 152 >= 150, kept as a retire test; H-06 107 < 150, withdrawn by its rule; reservation 8 in the spec and settings (done 2026-10-16, `lane/h06-withdraw-lowerbound`; local dry run of 47 accepts it, 4 queued + 4 slots, nothing written); lower-bound loop fixed to the `one_at_a_time` rule, H-01 AT RISK (152 vs 150 on data-v1 with 21 weekdays missing, coverage triage 2026-10-16); the 2026-11-01 script recount and the G3 recount on repaired data merged into one count-owed-events run after G1 closes, by 2026-11-13, evaluator G3 check by 2026-11-14; `macro-v1` present since 2026-10-13; freeze commit 2026-12-14, rows 2026-12-18..23; needs a first dry run of 47) · accountable: research-director · due 2026-12-14 |
@@ -1481,6 +1482,22 @@ Research job check 2026-10-16 (research director): not blocked, so it starts now
   - The stop exit records the broker's deal price, not the order's SL level.
   - A test runs a fake bridge close through the exit path on a second broker and asserts the row.
   - After one week of rows, `python -m goldbot.research.cost_of_record` shows `exit_slip_source: strategy_exit_legs` for Vantage. Its overshoot is then trusted, or the deal-price evidence shows it is a demo artefact.
+- **142. Retire the population loop, decide the news shock blackout, prune offline research code (cleanup phase 2).** Value: RUN. ADR 0066 phase 1 removed the feeds and screens that nothing reads. Phase 2 removes the scheduled research machinery that no live strategy depends on. It also settles one safety rail that only looks active: the news shock blackout (D16) has never fired, because 4,764 polls in 30 days were all stored `scored: 0` (no Anthropic key is set). The scheduler, health and the deploy health window then watch only jobs that serve the main goal (ADR 0004; owner directive 2026-11-02, double capital weekly with net-profitable strategies). It helps neither FIND nor RUN an edge directly. It lowers the cost of running one: fewer jobs that can fail, wake the host or hide a real WARN. Expected profit impact is indirect and uncertain.
+
+  Scope, in three parts that touch different files:
+  - **(a) Population loop.** Retire the scheduler jobs `saturday_retrain`, `tournament`, `model_watch`, `recalibrate`, `research_director`, `gap_watch`, `attribution`, `cpcv_quarterly`, `monthly_research` and `autodisc_nightly`, with their settings, health checks and job code. Before anything is removed, the architect lists every live reader of what these jobs write (`state/attribution.json`, champion and calibrator files, CUSUM halts, `gaps`). If a running engine or the RiskGate reads one of them (for example `model_watch`'s CUSUM halt or `recalibrate`'s calibrator), that job stays or its reader goes in the same change, and trading-safety signs off on which. TRACEABILITY rows to update: G1-G6, G11, M29 and M39 (population, tournament, drift), and M16 (CPCV).
+  - **(b) News shock blackout.** Pick one option and record it in an ADR, after trading-safety review: (1) fund scoring, which needs an Anthropic key and so is an owner spending decision (see "Needs the owner"); (2) replace the LLM score with a deterministic keyword or source rule that can fire without a key; (3) retire the shock blackout and update D16. The scheduled tier-1 and tier-2 calendar blackouts stay whichever option is chosen. Until it is decided, health must not show the shock blackout as active.
+  - **(c) Offline research code.** Prune modules under `goldbot/research/` and `scripts/` that have no caller from a live path, a scheduled job or a research script used in the last 30 days. Pre-registration and trial records, the K counter and the ledger stay (research integrity).
+
+  Acceptance:
+  1. `config/settings.yaml` `scheduler` no longer lists the ten jobs. A test asserts that every remaining scheduler job resolves to a registered job function and that none of the ten is registered.
+  2. The architect's reader list is in the plan, and each live reader is resolved (kept, or removed in the same change). The trading-safety-reviewer and the quant-reviewer each record a GO in the PR.
+  3. The engine, RiskGate and exit tests pass unchanged. `scripts/dry_run.py 1` passes. A deploy health window on the brain shows no missing-job WARN for a retired job.
+  4. D16 shows the chosen option, and an ADR records it. If option (2) is chosen, a test shows the rule fires on a fixture headline and blocks entries for `risk.shock_blackout_min` minutes, and never blocks exits. If option (3) is chosen, a test shows the shock blackout is gone and the calendar blackouts still fire.
+  5. The pruned research modules are listed in the PR with their last caller. `ruff`, `mypy` and the touched tests are green, and `scripts/ci_local.sh` passes once on the release branch.
+  6. No server data is deleted (`state/`, `data/`, backups). The rollback is a redeploy of the previous SHA.
+
+  Dependencies: the ADR 0066 cleanup release is merged and deployed (phase 1). (b) option 1 needs the owner. TRACEABILITY: D16, G1-G6, G11, M16, M29, M39.
 
 ## Needs the owner
 These are never decided by the product owner or by agents. Since 2026-10-16 (owner rule) only truly owner-only
@@ -1531,6 +1548,12 @@ Every owner step below has `chaser: program-director`, who asks on #34 with a re
 - **Opportunity days (`docs/research/opportunity-days.md` section 6).**
   - An event-count floor for H-18 (~690 events vs 1,000).
   - Whether to project the percentage daily caps (item 29). At £1,000 that means at most one full loss a day.
+- **News scoring key (item 142 (b), added 2026-11-02).** The news shock blackout has never fired, because headline
+  scoring needs a paid Anthropic API key and none is set (4,764 polls in 30 days, all `scored: 0`). Options: (1)
+  fund a key with a monthly cap (CFO to price it); (2) no spend: PD + PO choose between a deterministic keyword rule
+  and retiring the shock blackout, after trading-safety review. Recommendation: (2). No strategy has shown that it
+  needs the shock rail, and the scheduled calendar blackouts cover the known events. Revisit if an incident shows
+  an unscheduled-news loss the calendar did not cover.
 - Also yours: sign off the P7 threshold values (item 8); commit or approve the first measured cost table until
   item 2 lands; VM provisioning and every credential (item 1).
 
