@@ -104,14 +104,19 @@ def load_bars(phase: str) -> Bars:
     return Bars(ts, m["open"], m["high"], m["low"], m["close"], sess, ts // (86_400 * 10**9))
 
 
+def true_range(r: pd.DataFrame, pc: pd.Series) -> pd.Series:
+    """max(h - l, abs(h - prev c), abs(l - prev c)); NaN where the previous close is missing (as np.maximum)."""
+    return pd.concat([r["h"] - r["l"], (r["h"] - pc).abs(), (r["l"] - pc).abs()], axis=1).max(axis=1, skipna=False)
+
+
 def resample_atr(b: Bars, freq: str, n: int) -> pd.Series:
     """ATR(n) of clock-aligned `freq` mid bars, indexed by bar CLOSE time (ns); value known at that time."""
     s = pd.DataFrame({"o": b.o, "h": b.h, "l": b.lo, "c": b.c}, index=pd.to_datetime(b.ts, utc=True))
     r = s.resample(freq, label="left", closed="left").agg({"o": "first", "h": "max", "l": "min", "c": "last"}).dropna()
     pc = r["c"].shift(1)
-    tr = np.maximum(r["h"] - r["l"], np.maximum((r["h"] - pc).abs(), (r["l"] - pc).abs()))
+    tr = true_range(r, pc)
     atr = tr.rolling(n).mean()
-    close_t = (r.index + pd.Timedelta(freq)).to_numpy().astype("datetime64[ns]").astype(np.int64)
+    close_t = np.asarray(epoch_ns(pd.DatetimeIndex(r.index)), dtype=np.int64) + int(pd.Timedelta(freq).value)
     return pd.Series(atr.to_numpy(), index=close_t)
 
 
@@ -119,7 +124,7 @@ def bars4h(b: Bars) -> pd.DataFrame:
     s = pd.DataFrame({"o": b.o, "h": b.h, "l": b.lo, "c": b.c}, index=pd.to_datetime(b.ts, utc=True))
     r = s.resample("4h", label="left", closed="left").agg({"o": "first", "h": "max", "l": "min", "c": "last"}).dropna()
     pc = r["c"].shift(1)
-    tr = np.maximum(r["h"] - r["l"], np.maximum((r["h"] - pc).abs(), (r["l"] - pc).abs()))
+    tr = true_range(r, pc)
     r["atr_prior"] = tr.rolling(14).mean().shift(1)          # 14 completed bars BEFORE this one
     r["open_ns"] = r.index.to_numpy().astype("datetime64[ns]").astype(np.int64)
     return r
@@ -136,7 +141,7 @@ def dbars(b: Bars) -> pd.DataFrame:
     close_t = [int(pd.Timestamp(d).replace(hour=17).tz_localize(NY).value) for d in g.index]
     g["close_ns"] = close_t
     pc = g["c"].shift(1)
-    tr = np.maximum(g["h"] - g["l"], np.maximum((g["h"] - pc).abs(), (g["l"] - pc).abs()))
+    tr = true_range(g, pc)
     g["atrd"] = tr.rolling(20).mean()
     g["r"] = np.log(g["c"] / pc)
     g["sd60"] = g["r"].rolling(60).std()
