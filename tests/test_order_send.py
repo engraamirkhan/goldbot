@@ -194,9 +194,9 @@ class _SerialBridge(PaperBroker):
         self._call(order_send.READ_ATTEMPTS)
         return super().last_tick(symbol)
 
-    def positions(self, magic_prefix: int | None = None) -> list[Any]:
+    def positions(self, magic_prefix: int | None = None, symbol: str | None = None) -> list[Any]:
         self._call(order_send.READ_ATTEMPTS)
-        return super().positions(magic_prefix)
+        return super().positions(magic_prefix, symbol)
 
     def close(self, position_id: int, lots: float | None = None) -> OrderResult:
         self._call(1)

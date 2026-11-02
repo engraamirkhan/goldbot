@@ -1,0 +1,553 @@
+# Rethink lane STRATEGY candidates (docs/research/rethink/strategy.md). Written 2026-11-02 BEFORE any outcome of these
+# rules was computed; none is a trial until a pre-registration selects it (then it counts in K).
+# Focus: multi-day / swing / position horizons and portfolio designs. Conventions:
+#  - "1d close" = the Dukascopy mid at 21:00 UTC (NY 17:00 ET roll proxy); decision at the close, fill at the next 1m
+#    open; financing per the W3 proposal (by date: 3-month bill + measured broker markup) and the three venue scenarios.
+#  - "vol-scaled" = exposure = signal x (target_vol / EWMA(60d) realised vol), capped at 2x, rounded to the lot step.
+#  - "position engine" = the daily target-exposure backtester proposed in strategy.md (4), step 2.
+#  - Every rule is long/short unless the side says otherwise; long_only variants exist for the ETC venue.
+#  - Data: "local" = raw/xauusd_1m_dukascopy_* or raw/positioning (CFTC 1986+, SPDR 2004+); "free" = Dukascopy other
+#    symbols, FRED, CFTC, World Bank, Yahoo daily; nothing paid is required by any candidate.
+version: rethink-strategy-v1
+lane: strategy
+candidates:
+- id: RT-STRATEGY-001
+  name: "TSMOM-12M vol-scaled"
+  source: "Moskowitz, Ooi, Pedersen 2012 JFE 104:228-250"
+  evidence_grade: "peer-reviewed"
+  mechanism: "slow information diffusion and herding make 12-month returns persist; hedgers pay trend followers for liquidity"
+  tf: "1d"
+  rule: {entry: "at each month-end 1d close, signal = sign(close / close 252 trading days earlier - 1)", side: signal, stop: "none (exposure model); risk via vol scaling to 12%/yr", exit: "signal flips at a month-end", hold: "1 month, rolled"}
+  sprint3000_mapping: "approx momentum_sign(252) tf 1d, exit opposite_signal; needs primitive: position engine with monthly rebalance + vol scaling"
+  data_needed: "available locally (XAU 2010+), free (Dukascopy 2003-2009)"
+- id: RT-STRATEGY-002
+  name: "TSMOM blend 1/3/12 months"
+  source: "Hurst, Ooi, Pedersen 2017 JPM (A Century of Evidence on Trend-Following)"
+  evidence_grade: "peer-reviewed"
+  mechanism: "as 001; averaging speeds diversifies turning-point risk"
+  tf: "1d"
+  rule: {entry: "daily at 1d close, s = mean(sign(r21), sign(r63), sign(r252)) in {-1,-1/3,1/3,1}", side: signal, stop: none (exposure model), exit: "exposure follows s daily with a 1/3 no-trade band", hold: continuous}
+  sprint3000_mapping: "needs primitive: position engine (multi-lookback blended exposure)"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-003
+  name: "TSMOM-3M weekly"
+  source: "Moskowitz, Ooi, Pedersen 2012 (lookback grid); Hurst et al. 2017"
+  evidence_grade: "peer-reviewed"
+  mechanism: "as 001 at the medium speed CTAs weight most"
+  tf: "1d"
+  rule: {entry: "each Friday 1d close, signal = sign(r63)", side: signal, stop: none, exit: "flip on a Friday", hold: "1 week, rolled"}
+  sprint3000_mapping: "approx momentum_sign(63) tf 1d with weekday filter [4], exit opposite_signal; needs primitive: max_hold > 20 bars"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-004
+  name: "Turtle system 2 (55/20 Donchian)"
+  source: "Curtis Faith, Way of the Turtle (2007); original Dennis/Eckhardt rules"
+  evidence_grade: "practitioner-documented"
+  mechanism: "breakouts to multi-month extremes mark trend starts driven by repositioning flows"
+  tf: "1d"
+  rule: {entry: "1d close above the prior 55-day high (long) / below the 55-day low (short)", side: signal, stop: "2 x ATR(20,1d) from entry", exit: "1d close below the 20-day low (long) / above the 20-day high (short)", hold: "until exit, no cap"}
+  sprint3000_mapping: "entry donchian_break(55) tf 1d, stop {atr_n 20, atr_mult 2}; needs primitive: donchian_exit(20) and no 20-bar cap"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-005
+  name: "Turtle system 1 (20/10 Donchian)"
+  source: "Faith 2007"
+  evidence_grade: "practitioner-documented"
+  mechanism: "as 004, faster"
+  tf: "1d"
+  rule: {entry: "1d close beyond the prior 20-day high/low", side: signal, stop: "2 x ATR(20,1d)", exit: "close beyond the 10-day opposite extreme", hold: until exit}
+  sprint3000_mapping: "donchian_break(20) tf 1d, stop 20/2; needs primitive: donchian_exit(10)"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-006
+  name: "50/200 SMA always-in"
+  source: "classic CTA filter; Lemperiere et al. 2014 (Two centuries of trend following) for MA trend signals"
+  evidence_grade: "peer-reviewed"
+  mechanism: "as 001 (slow trend)"
+  tf: "1d"
+  rule: {entry: "SMA50 crosses SMA200 at 1d close", side: signal, stop: "5 x ATR(20,1d) disaster stop", exit: opposite cross, hold: "until cross"}
+  sprint3000_mapping: "ma_cross(50,200,sma) tf 1d, exit opposite_signal, stop {20,5}; needs primitive: no 20-bar cap"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-007
+  name: "EMA 20/100 crossover"
+  source: "Lemperiere, Deremble, Seager, Potters, Bouchaud 2014 (JOIS)"
+  evidence_grade: "peer-reviewed"
+  mechanism: "exponential trend filter used in the paper's 200-year test"
+  tf: "1d"
+  rule: {entry: "EMA20 crosses EMA100 at 1d close", side: signal, stop: "4 x ATR(20,1d)", exit: opposite cross, hold: until cross}
+  sprint3000_mapping: "ma_cross(20,100,ema) tf 1d, exit opposite_signal; needs primitive: no 20-bar cap"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-008
+  name: "Faber 200-day long/flat"
+  source: "Faber 2007 (A Quantitative Approach to Tactical Asset Allocation, J. Wealth Mgmt)"
+  evidence_grade: "peer-reviewed"
+  mechanism: "avoids the long left tail of commodity bear phases; keeps the drift"
+  tf: "1d"
+  rule: {entry: "long when 1d close > SMA200", side: long_only, stop: none, exit: "flat when close < SMA200", hold: until exit}
+  sprint3000_mapping: "approx ma_cross(1,200,sma) long_only, exit opposite_signal; needs primitive: long/flat exposure + no cap"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-009
+  name: "Faber 10-month SMA monthly check"
+  source: "Faber 2007"
+  evidence_grade: "peer-reviewed"
+  mechanism: "as 008, monthly to cut whipsaw and cost"
+  tf: "1d"
+  rule: {entry: "at month-end, long if month-end close > mean of last 10 month-end closes", side: long_only, stop: none, exit: "flat at a month-end below", hold: "1 month, rolled"}
+  sprint3000_mapping: "needs primitive: monthly bars + position engine"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-010
+  name: "Donchian 20 break after compression"
+  source: "Turtle breakout + Crabel volatility contraction (Day Trading with Short Term Price Patterns, 1990)"
+  evidence_grade: "practitioner-documented"
+  mechanism: "low realised vol precedes expansion; breakouts from compressed ranges carry"
+  tf: "1d"
+  rule: {entry: "donchian 20-day break at 1d close while ATR(20) is below its 250-day 40th percentile", side: signal, stop: "2 x ATR(20)", exit: "chandelier 3 x ATR(22)", hold: "max 60 days"}
+  sprint3000_mapping: "donchian_break(20) tf 1d + compression(20, 40) + exit chandelier(22,3); needs primitive: max_hold 60"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-011
+  name: "4h pullback in the 1d TSMOM direction"
+  source: "own design on Hurst et al. 2017 (trend) + practitioner pullback entries"
+  evidence_grade: "practitioner-documented"
+  mechanism: "enter the slow trend at a cheaper price; exit with the slow trend"
+  tf: "4h"
+  rule: {entry: "1d TSMOM-3M sign = s; on 4h close that retraced >= 1 x ATR(14,4h) to EMA20(4h) and closes back in direction s", side: "s", stop: "2 x ATR(14,4h) beyond the pullback low/high", exit: "chandelier 3 x ATR(22,1d) or 1d signal flips", hold: "max 40 days"}
+  sprint3000_mapping: "ema_pullback(20, 1.0) tf 4h + filter trend(1d, 100); needs primitive: 1d TSMOM filter and multi-week hold"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-012
+  name: "Weekly 13-week breakout"
+  source: "Hurst et al. 2017 (slow trend); Donchian weekly rule (practitioner)"
+  evidence_grade: "practitioner-documented"
+  mechanism: "slow trend with very low turnover"
+  tf: "1w"
+  rule: {entry: "weekly close above the 13-week high / below the 13-week low", side: signal, stop: "2 x ATR(13,1w)", exit: "weekly close beyond the 6-week opposite extreme", hold: until exit}
+  sprint3000_mapping: "needs primitive: tf 1w + donchian_exit"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-013
+  name: "1d breakout with chandelier trail"
+  source: "Le Beau chandelier exit (practitioner); Donchian entry"
+  evidence_grade: "practitioner-documented"
+  mechanism: "as 004, with an exit that keeps the right tail"
+  tf: "1d"
+  rule: {entry: "donchian_break(20) at 1d close", side: signal, stop: "3 x ATR(22)", exit: "chandelier 3 x ATR(22)", hold: "max 60 days"}
+  sprint3000_mapping: "donchian_break(20) tf 1d, stop {22,3}, exit chandelier(22,3); needs primitive: max_hold 60"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-014
+  name: "Clenow core trend"
+  source: "Andreas Clenow, Following the Trend (2013)"
+  evidence_grade: "practitioner-documented"
+  mechanism: "as 004; the book's diversified CTA replica applied to gold"
+  tf: "1d"
+  rule: {entry: "EMA50 > EMA100 (long regime) and close = 50-day high", side: signal, stop: "3 x ATR(100) trailing from the extreme", exit: "trail hit or regime flips", hold: until exit}
+  sprint3000_mapping: "donchian_break(50) tf 1d + filter trend(1d, 100); exit chandelier(100,3); needs primitive: no cap"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-015
+  name: "TSMOM-12M long/flat (ETC venue)"
+  source: "Moskowitz et al. 2012; venue design per strategy.md Appendix D (B)"
+  evidence_grade: "peer-reviewed"
+  mechanism: "as 001; long/flat keeps the drift and avoids paying short-side risk on an unlevered venue"
+  tf: "1d"
+  rule: {entry: "month-end: long if r252 > 3-month bill return over the same 12 months", side: long_only, stop: none, exit: "flat at a month-end where it is not", hold: "1 month, rolled"}
+  sprint3000_mapping: "needs primitive: position engine + FRED DTB3"
+  data_needed: "free (FRED DTB3)"
+- id: RT-STRATEGY-016
+  name: "Gold six-signal equal-risk blend"
+  source: "Hurst et al. 2017 (trend); Erb and Harvey 2013 (real yields); practitioner USD link"
+  evidence_grade: "peer-reviewed"
+  mechanism: "several weak, partly independent reasons for gold to drift; averaging fixed ex ante raises Sharpe without fitting"
+  tf: "1d"
+  rule: {entry: "daily: s = mean(sign r21, sign r63, sign r252, sign(SMA50-SMA200), -sign(20d chg DFII10), -sign(20d % chg DTWEXBGS)) using values available_utc before the decision", side: "sign(s), exposure |s| vol-scaled to 12%", stop: none, exit: exposure follows s with 1/6 no-trade band, hold: continuous}
+  sprint3000_mapping: "needs primitive: position engine + macro asof_join"
+  data_needed: "free (FRED DFII10 2003+, DTWEXBGS 2006+)"
+- id: RT-STRATEGY-017
+  name: "Trend + seasonal + event tilt blend"
+  source: "Hurst 2017; Baur 2013; own H-89 explore evidence"
+  evidence_grade: "peer-reviewed"
+  mechanism: "adds two calendar tilts with independent mechanisms to the core trend"
+  tf: "1d"
+  rule: {entry: "daily: s = 0.6 x TSMOM blend (002) + 0.2 x (+1 in Sep and Nov, else 0) + 0.2 x (sign of FOMC statement-day move for 5 days after, else 0)", side: sign(s), stop: none, exit: follows s, hold: continuous}
+  sprint3000_mapping: "needs primitive: position engine + FOMC calendar"
+  data_needed: "free (FOMC dates public)"
+- id: RT-STRATEGY-018
+  name: "TSMOM blend, vol-managed vs plain (vol-managed variant)"
+  source: "Moreira and Muir 2017 JF; Harvey et al. 2018 JPM"
+  evidence_grade: "peer-reviewed"
+  mechanism: "scaling exposure inversely to recent variance cuts tail risk; the Sharpe gain is not expected for commodities"
+  tf: "1d"
+  rule: {entry: "exposure = 002 signal x min(2, (0.12^2) / (21d realised variance annualised))", side: signal, stop: none, exit: follows signal, hold: continuous}
+  sprint3000_mapping: "needs primitive: position engine (variance scaling)"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-019
+  name: "Trend gated by ADX"
+  source: "Wilder 1978 ADX; practitioner trend filter"
+  evidence_grade: "practitioner-documented"
+  mechanism: "only hold trend exposure when directional movement is strong; cuts whipsaw cost"
+  tf: "1d"
+  rule: {entry: "002 signal applied only while ADX(14,1d) > 20, else flat", side: signal, stop: none, exit: "flat when ADX < 20 or signal flips", hold: continuous}
+  sprint3000_mapping: "needs primitive: position engine; approx momentum_sign(63) + adx_min(14,20) tf 1d"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-020
+  name: "Trend with COT extreme override"
+  source: "practitioner (COT index, Williams); de Roon, Nijman, Veld 2000 (hedging pressure)"
+  evidence_grade: "practitioner-documented"
+  mechanism: "crowded speculative longs unwind; trend is cut when managed money is at a 3-year extreme in its direction"
+  tf: "1d"
+  rule: {entry: "002 signal; if CFTC non-commercial net long z(156 weeks) > +2 and signal long (or < -2 and short), exposure halves", side: signal, stop: none, exit: follows signal, hold: continuous; COT used at its Friday 15:30 ET release (available_utc)}
+  sprint3000_mapping: "needs primitive: position engine + positioning asof_join"
+  data_needed: "available locally (raw/positioning cftc_legacy 1986+)"
+- id: RT-STRATEGY-021
+  name: "Trend with ETF-flow confirmation"
+  source: "WGC (investment demand is the marginal short-run driver); Taiwan thesis on GLD flows (lag 1-2 days positive)"
+  evidence_grade: "practitioner-documented"
+  mechanism: "ETF creations are physical buying; trend backed by flows persists"
+  tf: "1d"
+  rule: {entry: "002 signal; full exposure only when sign(20d change in SPDR tonnes) agrees, half otherwise", side: signal, stop: none, exit: follows signal, hold: continuous}
+  sprint3000_mapping: "needs primitive: position engine + positioning asof_join"
+  data_needed: "available locally (raw/positioning spdr 2004+)"
+- id: RT-STRATEGY-022
+  name: "Macro-only blend, weekly"
+  source: "Erb and Harvey 2013; practitioner USD and breakeven links"
+  evidence_grade: "peer-reviewed"
+  mechanism: "falling real yields and a weaker USD raise gold's fair value; a blend reduces any one link breaking (2022)"
+  tf: "1d"
+  rule: {entry: "each Friday: s = mean(-sign 20d chg DFII10, -sign 20d % chg DTWEXBGS, +sign 20d chg T10YIE)", side: sign(s), stop: "3 x ATR(20,1d) disaster", exit: "re-evaluated weekly", hold: "1 week, rolled"}
+  sprint3000_mapping: "needs primitive: position engine + macro asof_join (H-84 failed as R brackets with the 17%/yr swap; new trial)"
+  data_needed: "free (FRED)"
+- id: RT-STRATEGY-023
+  name: "Gold-in-currencies trend agreement"
+  source: "practitioner (gold as a currency; trend in XAUEUR/XAUJPY)"
+  evidence_grade: "folklore"
+  mechanism: "a gold trend that holds in every currency is a gold move, not a USD move, and should persist"
+  tf: "1d"
+  rule: {entry: "long XAUUSD when 63d momentum is positive in USD, EUR, JPY and GBP terms; short when all negative; else flat", side: signal, stop: "3 x ATR(20,1d)", exit: "agreement lost", hold: until exit}
+  sprint3000_mapping: "needs primitive: cross-currency gold series"
+  data_needed: "free (Dukascopy EURUSD, USDJPY, GBPUSD)"
+- id: RT-STRATEGY-024
+  name: "Metals trend agreement"
+  source: "practitioner; precious-metal co-movement"
+  evidence_grade: "practitioner-documented"
+  mechanism: "when silver confirms gold's trend the move is broad precious-metal demand"
+  tf: "1d"
+  rule: {entry: "XAU position = sign(r63 XAU) only when sign(r63 XAG) agrees, else flat", side: signal, stop: "3 x ATR(20,1d)", exit: "disagreement or flip", hold: until exit}
+  sprint3000_mapping: "needs primitive: second instrument"
+  data_needed: "free (Dukascopy XAGUSD)"
+- id: RT-STRATEGY-025
+  name: "Precious-metals TSMOM book"
+  source: "Moskowitz et al. 2012; Hurst et al. 2017"
+  evidence_grade: "peer-reviewed"
+  mechanism: "as 001 across XAU, XAG, XPT (and XPD if quoted): more independent bets"
+  tf: "1d"
+  rule: {entry: "each metal: 002 blended signal, vol-scaled to 10%/yr per metal, equal risk", side: signal, stop: none, exit: follows signal, hold: continuous}
+  sprint3000_mapping: "needs primitive: multi-asset position engine"
+  data_needed: "free (Dukascopy XAG/XPT)"
+- id: RT-STRATEGY-026
+  name: "Diversified CFD TSMOM (same ICM account)"
+  source: "Moskowitz et al. 2012; Hurst et al. 2017"
+  evidence_grade: "peer-reviewed"
+  mechanism: "the CTA premium comes from breadth; about 16 markets of ICM CFDs (XAU, XAG, XPT, WTI, US500, US100, GER40, JP225, UK100, EURUSD, USDJPY, GBPUSD, AUDUSD, USDCAD, USDCHF, NZDUSD)"
+  tf: "1d"
+  rule: {entry: "each market: 002 signal, vol-scaled to equal risk, portfolio vol target 10%/yr", side: signal, stop: none, exit: follows signal with a 1/3 band, hold: continuous}
+  sprint3000_mapping: "needs primitive: multi-asset position engine + per-symbol cost of record"
+  data_needed: "free (Dukascopy 1m for each symbol)"
+- id: RT-STRATEGY-027
+  name: "Diversified Turtle 55/20 book"
+  source: "Faith 2007"
+  evidence_grade: "practitioner-documented"
+  mechanism: "as 004 across the 026 universe"
+  tf: "1d"
+  rule: {entry: "each market 55-day break", side: signal, stop: "2 x ATR(20)", exit: "20-day opposite break", hold: until exit; risk 0.5% per market per unit}
+  sprint3000_mapping: "needs primitive: multi-asset + donchian_exit"
+  data_needed: "free (Dukascopy)"
+- id: RT-STRATEGY-028
+  name: "Gold vs silver relative momentum"
+  source: "practitioner (pair momentum); Asness, Moskowitz, Pedersen 2013 (cross-sectional momentum everywhere)"
+  evidence_grade: "peer-reviewed"
+  mechanism: "relative strength between close substitutes persists over months"
+  tf: "1d"
+  rule: {entry: "each Friday: long the metal with higher r63, short the other, equal dollar vol", side: pair, stop: "pair drawdown 3 x pair ATR", exit: "rank flips on a Friday", hold: "1 week, rolled"}
+  sprint3000_mapping: "needs primitive: pair position"
+  data_needed: "free (Dukascopy XAGUSD)"
+- id: RT-STRATEGY-029
+  name: "Gold/silver ratio extreme reversion"
+  source: "practitioner (GSR mean reversion)"
+  evidence_grade: "folklore"
+  mechanism: "industrial vs monetary demand swings overshoot and revert over months"
+  tf: "1d"
+  rule: {entry: "z(250d) of log(XAU/XAG) > +2: long XAG / short XAU (mirror at -2)", side: pair, stop: "|z| > 3.5", exit: "z crosses 0", hold: "max 120 days"}
+  sprint3000_mapping: "needs primitive: pair position"
+  data_needed: "free (Dukascopy XAGUSD)"
+- id: RT-STRATEGY-030
+  name: "USD-shock catch-up"
+  source: "own design (lagged USD transmission)"
+  evidence_grade: "folklore"
+  mechanism: "gold reprices to large USD moves with a lag when local flows resist"
+  tf: "1d"
+  rule: {entry: "DXY-proxy (EURUSD-weighted) 5d return beyond 1.5 sigma while gold 5d return has the opposite or zero sign: take gold in the USD-implied direction", side: signal, stop: "2 x ATR(20,1d)", exit: "time 10 days or stop", hold: 10 days}
+  sprint3000_mapping: "needs primitive: cross-asset input"
+  data_needed: "free (FRED DTWEXBGS or Dukascopy FX)"
+- id: RT-STRATEGY-031
+  name: "Miners lead gold"
+  source: "practitioner (GDX leads spot at turns)"
+  evidence_grade: "folklore"
+  mechanism: "equity investors price gold leverage first"
+  tf: "1d"
+  rule: {entry: "GDX 5d return > 2 sigma (250d) while XAU 5d return < 0.5 sigma: long XAU (mirror short)", side: signal, stop: "2 x ATR(20,1d)", exit: "time 5 days", hold: 5 days}
+  sprint3000_mapping: "needs primitive: cross-asset input"
+  data_needed: "free (Yahoo GDX daily 2006+)"
+- id: RT-STRATEGY-032
+  name: "Real-yield residual reversion"
+  source: "Erb and Harvey 2013 (gold vs real rates)"
+  evidence_grade: "peer-reviewed"
+  mechanism: "deviations of gold from its real-yield fair value close over weeks (link broke in 2022: expected weak)"
+  tf: "1d"
+  rule: {entry: "rolling 250d OLS log(XAU) on DFII10 (known values only); residual z > +2: short, < -2: long", side: signal, stop: "|z| > 3.5", exit: "z crosses 0", hold: "max 40 days"}
+  sprint3000_mapping: "needs primitive: rolling regression input"
+  data_needed: "free (FRED DFII10)"
+- id: RT-STRATEGY-033
+  name: "Safe-haven after equity crash"
+  source: "Baur and Lucey 2010 Financial Review (gold is a safe haven for about 15 trading days)"
+  evidence_grade: "peer-reviewed"
+  mechanism: "flight to quality after extreme equity falls"
+  tf: "1d"
+  rule: {entry: "US500 daily return below its trailing 250d 5th percentile: long XAU at next open", side: long_only, stop: "2.5 x ATR(20,1d)", exit: "time 10 trading days", hold: 10 days}
+  sprint3000_mapping: "needs primitive: cross-asset event input"
+  data_needed: "free (Dukascopy US500 or Yahoo ^GSPC)"
+- id: RT-STRATEGY-034
+  name: "Post-FOMC 5-day continuation"
+  source: "own data (H-89 explore 1h: t 3.98, 8/8 years); Lucca and Moench 2015 JF context"
+  evidence_grade: "own-data"
+  mechanism: "slow digestion of policy news in the rate-sensitive asset"
+  tf: "1d"
+  rule: {entry: "at statement +60 min, side = sign(mid(t+60m) - mid(t-1m))", side: signal, stop: "2 x ATR(20,1d)", exit: "time 5 trading days", hold: 5 days}
+  sprint3000_mapping: "needs primitive: event calendar entry"
+  data_needed: "available locally + free (FOMC dates)"
+- id: RT-STRATEGY-035
+  name: "Pre-FOMC drift"
+  source: "Lucca and Moench 2015 JF (equities)"
+  evidence_grade: "peer-reviewed"
+  mechanism: "risk premium resolved ahead of the announcement (equity evidence; gold untested)"
+  tf: "1d"
+  rule: {entry: "long at the 1d close two days before the statement", side: long_only, stop: "2 x ATR(20,1d)", exit: "at statement minus 15 min", hold: "about 1.5 days"}
+  sprint3000_mapping: "needs primitive: event calendar entry"
+  data_needed: "free (FOMC dates)"
+- id: RT-STRATEGY-036
+  name: "Autumn effect"
+  source: "Baur 2013 RIBAF 27:1-11 (Sep and Nov positive 1980-2010); 2024 replication negative"
+  evidence_grade: "peer-reviewed"
+  mechanism: "Indian wedding-season demand and pre-holiday hedging"
+  tf: "1d"
+  rule: {entry: "long at the first 1d close of September and of November", side: long_only, stop: "3 x ATR(20,1d)", exit: "last 1d close of the month", hold: about 21 days}
+  sprint3000_mapping: "needs primitive: calendar entry"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-037
+  name: "Turn of the month"
+  source: "practitioner (equity TOM; flows from month-start allocations)"
+  evidence_grade: "folklore"
+  mechanism: "month-start investment flows into gold products"
+  tf: "1d"
+  rule: {entry: "long at the close of the 2nd-last trading day of the month", side: long_only, stop: "2 x ATR(20,1d)", exit: "close of the 3rd trading day of the next month", hold: 5 days}
+  sprint3000_mapping: "needs primitive: calendar entry"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-038
+  name: "Lunar New Year pre-holiday demand"
+  source: "WGC Chinese demand seasonality (practitioner)"
+  evidence_grade: "practitioner-documented"
+  mechanism: "Chinese physical buying ahead of the holiday"
+  tf: "1d"
+  rule: {entry: "long at the close 15 trading days before Lunar New Year", side: long_only, stop: "2.5 x ATR(20,1d)", exit: "close of the last trading day before the holiday", hold: 15 days}
+  sprint3000_mapping: "needs primitive: calendar entry"
+  data_needed: "free (holiday dates)"
+- id: RT-STRATEGY-039
+  name: "CPI-day 3-day continuation"
+  source: "own design (news-day momentum, Gao et al. 2018 analogue)"
+  evidence_grade: "folklore"
+  mechanism: "inflation news is gold's core macro news; digestion over days"
+  tf: "1d"
+  rule: {entry: "at the CPI-day 1d close, side = sign(close - prior close) if |move| > 1 x ATR(20)", side: signal, stop: "2 x ATR(20,1d)", exit: "time 3 days", hold: 3 days}
+  sprint3000_mapping: "needs primitive: event calendar entry"
+  data_needed: "free (BLS calendar)"
+- id: RT-STRATEGY-040
+  name: "Weekend gap continuation"
+  source: "own design"
+  evidence_grade: "folklore"
+  mechanism: "weekend news is digested over the next sessions"
+  tf: "1d"
+  rule: {entry: "Monday first hour: if |Sunday open - Friday close| > 0.5 x ATR(20,1d), take the gap side at the Monday 1h close", side: signal, stop: "1.5 x ATR(20,1d)", exit: "time 2 days", hold: 2 days}
+  sprint3000_mapping: "needs primitive: gap entry"
+  data_needed: "available locally"
+- id: RT-STRATEGY-041
+  name: "Quarter-end loser bounce"
+  source: "practitioner (window dressing / rebalancing)"
+  evidence_grade: "folklore"
+  mechanism: "rebalancing buys the quarter's loser"
+  tf: "1d"
+  rule: {entry: "if gold's quarter-to-date return < -5% at 5 trading days before quarter end, long", side: long_only, stop: "2 x ATR(20,1d)", exit: "2nd trading day of the new quarter", hold: about 7 days}
+  sprint3000_mapping: "needs primitive: calendar entry"
+  data_needed: "available locally"
+- id: RT-STRATEGY-042
+  name: "Post-options-expiry breakout"
+  source: "practitioner (pinning before COMEX gold options expiry)"
+  evidence_grade: "folklore"
+  mechanism: "dealer gamma hedging pins price before expiry and releases it after"
+  tf: "1d"
+  rule: {entry: "after COMEX OG expiry (4 business days before month end): first 1d close beyond the 5-day range", side: signal, stop: "opposite side of the 5-day range", exit: "chandelier 3 x ATR(22)", hold: "max 15 days"}
+  sprint3000_mapping: "needs primitive: calendar filter; approx donchian_break(5) tf 1d"
+  data_needed: "free (CME expiry calendar)"
+- id: RT-STRATEGY-043
+  name: "NR7 inside-day breakout, daily"
+  source: "Crabel 1990 (practitioner)"
+  evidence_grade: "practitioner-documented"
+  mechanism: "volatility contraction then expansion"
+  tf: "1d"
+  rule: {entry: "day is NR7 and inside the prior day; next close beyond its high/low", side: signal, stop: "opposite end of the NR7 bar", exit: "chandelier 3 x ATR(22)", hold: "max 20 days"}
+  sprint3000_mapping: "nr_breakout(7) tf 1d, exit chandelier(22,3), max_hold 20 (in vocabulary)"
+  data_needed: "available locally"
+- id: RT-STRATEGY-044
+  name: "Trend with crash brake"
+  source: "Daniel and Moskowitz 2016 JFE (momentum crashes)"
+  evidence_grade: "peer-reviewed"
+  mechanism: "momentum losses concentrate in high-vol rebounds; flatten then"
+  tf: "1d"
+  rule: {entry: "002 signal; flat while 20d realised vol > 90th pct of 250d and the 5d return opposes the signal", side: signal, stop: none, exit: follows signal, hold: continuous}
+  sprint3000_mapping: "needs primitive: position engine"
+  data_needed: "available locally"
+- id: RT-STRATEGY-045
+  name: "Vol-managed buy-and-hold"
+  source: "Moreira and Muir 2017 JF"
+  evidence_grade: "peer-reviewed"
+  mechanism: "risk is time-varying and expected return is not; scale down in high vol (commodity evidence weak, Harvey 2018)"
+  tf: "1d"
+  rule: {entry: "long; exposure = min(2, 0.12^2 / annualised 21d realised variance), monthly rebalance", side: long_only, stop: none, exit: none, hold: continuous}
+  sprint3000_mapping: "needs primitive: position engine"
+  data_needed: "available locally"
+- id: RT-STRATEGY-046
+  name: "Expansion-day follow-through"
+  source: "practitioner (range expansion, Crabel)"
+  evidence_grade: "practitioner-documented"
+  mechanism: "an outsized range day with a close at the extreme reveals new information and positioning"
+  tf: "1d"
+  rule: {entry: "daily range > 2 x ATR(20) and close in the top (bottom) 20% of the range: long (short) at the next open", side: signal, stop: "the expansion day's midpoint", exit: "time 5 days", hold: 5 days}
+  sprint3000_mapping: "atr_expansion(20, 2) tf 1d, exit time(5) (close-location filter: needs primitive)"
+  data_needed: "available locally"
+- id: RT-STRATEGY-047
+  name: "52-week high breakout"
+  source: "George and Hwang 2004 JF (equities, anchoring)"
+  evidence_grade: "peer-reviewed"
+  mechanism: "anchoring to the 52-week high delays the reaction to good news"
+  tf: "1d"
+  rule: {entry: "1d close above the prior 252-day high", side: long_only, stop: "3 x ATR(20)", exit: "chandelier 3 x ATR(22)", hold: "max 120 days"}
+  sprint3000_mapping: "donchian_break(252) tf 1d long_only; needs primitive: max_hold 120"
+  data_needed: "available locally"
+- id: RT-STRATEGY-048
+  name: "52-week low breakdown"
+  source: "George and Hwang 2004 (mirror)"
+  evidence_grade: "peer-reviewed"
+  mechanism: "mirror of 047; separate id so the side is not chosen after a look"
+  tf: "1d"
+  rule: {entry: "1d close below the prior 252-day low", side: short_only, stop: "3 x ATR(20)", exit: "chandelier 3 x ATR(22)", hold: "max 120 days"}
+  sprint3000_mapping: "donchian_break(252) tf 1d short_only; needs primitive: max_hold 120"
+  data_needed: "available locally"
+- id: RT-STRATEGY-049
+  name: "Connors RSI(2) pullback in the 200-day trend"
+  source: "Connors and Alvarez, Short Term Trading Strategies That Work (2008)"
+  evidence_grade: "practitioner-documented"
+  mechanism: "short-term liquidity overshoots inside a long trend revert (the daily version was never tested; 1h was)"
+  tf: "1d"
+  rule: {entry: "close > SMA200 and RSI(2) < 10: long at the next open (mirror short)", side: signal, stop: "2.5 x ATR(20)", exit: "close > SMA5 (long)", hold: "max 10 days"}
+  sprint3000_mapping: "rsi_threshold(2, 10, fade) tf 1d + trend(1d, 200); exit needs primitive: close_above_ma(5)"
+  data_needed: "available locally"
+- id: RT-STRATEGY-050
+  name: "Weekly-trend daily pullback"
+  source: "practitioner (multi-timeframe trend, Elder triple screen 1986)"
+  evidence_grade: "practitioner-documented"
+  mechanism: "the slow trend sets the side; a daily pullback gives a better entry"
+  tf: "1d"
+  rule: {entry: "weekly EMA13 > EMA26 and 1d low touches EMA20(1d), close back above: long (mirror short)", side: signal, stop: "2 x ATR(20,1d)", exit: "chandelier 3 x ATR(22)", hold: "max 40 days"}
+  sprint3000_mapping: "ema_pullback(20, 0) tf 1d + needs primitive: weekly trend filter, max_hold 40"
+  data_needed: "available locally"
+- id: RT-STRATEGY-051
+  name: "4h Keltner break with the 12-month trend"
+  source: "practitioner (Keltner) + Moskowitz et al. 2012 filter"
+  evidence_grade: "practitioner-documented"
+  mechanism: "intraday-timed entries into the slow trend"
+  tf: "4h"
+  rule: {entry: "4h close beyond Keltner(20, 2) in the direction of sign(r252, 1d)", side: signal, stop: "2 x ATR(14,4h)", exit: "chandelier 3 x ATR(22,1d)", hold: "max 15 days"}
+  sprint3000_mapping: "keltner_break(20,2) tf 4h; needs primitive: 1d TSMOM filter + daily chandelier"
+  data_needed: "available locally"
+- id: RT-STRATEGY-052
+  name: "TSMOM-12M with re-entry trail"
+  source: "Moskowitz et al. 2012 + practitioner trailing exit"
+  evidence_grade: "practitioner-documented"
+  mechanism: "keeps the slow signal but cuts the reversal leg before the monthly check"
+  tf: "1d"
+  rule: {entry: "001 signal at a month-end", side: signal, stop: "chandelier 4 x ATR(22)", exit: "trail hit (flat until the next month-end signal) or signal flip", hold: until exit}
+  sprint3000_mapping: "needs primitive: position engine + trail"
+  data_needed: "available locally"
+- id: RT-STRATEGY-053
+  name: "55-day break with 40-day time exit"
+  source: "Faith 2007 entry; time exit (exits-research comparison)"
+  evidence_grade: "practitioner-documented"
+  mechanism: "tests whether the right tail needs a trail or only time"
+  tf: "1d"
+  rule: {entry: "donchian_break(55) 1d", side: signal, stop: "2 x ATR(20)", exit: "time 40 days", hold: 40 days}
+  sprint3000_mapping: "donchian_break(55) tf 1d, exit time(40); needs primitive: time > 20 bars"
+  data_needed: "available locally"
+- id: RT-STRATEGY-054
+  name: "Turtle with pyramiding"
+  source: "Faith 2007 (units added each 0.5 N)"
+  evidence_grade: "practitioner-documented"
+  mechanism: "concentrates exposure in the trends that pay"
+  tf: "1d"
+  rule: {entry: "004 entry; add one unit at each +0.5 x ATR(20), max 4 units, all stops moved to 2 x ATR below the last add", side: signal, stop: "2 x ATR(20) from the last add", exit: "20-day opposite break", hold: until exit}
+  sprint3000_mapping: "needs primitive: pyramiding"
+  data_needed: "available locally"
+- id: RT-STRATEGY-055
+  name: "Gold trend ensemble (5 rules, one trial)"
+  source: "Hurst et al. 2017; Faith 2007; Faber 2007"
+  evidence_grade: "peer-reviewed"
+  mechanism: "ensemble of 001, 002, 004, 006, 008 at equal risk; lowers rule-specific luck"
+  tf: "1d"
+  rule: {entry: "daily exposure = mean of the five rules' exposures (008 contributes 0/1), vol-scaled to 12%/yr, 10% no-trade band", side: signal, stop: none, exit: follows ensemble, hold: continuous}
+  sprint3000_mapping: "needs primitive: position engine"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-056
+  name: "Gold trend ensemble, long/flat (ETC venue)"
+  source: "as 055"
+  evidence_grade: "peer-reviewed"
+  mechanism: "as 055 with shorts set to flat, for the unlevered ETC venue"
+  tf: "1d"
+  rule: {entry: "exposure = max(0, 055 exposure), cap 1x notional", side: long_only, stop: none, exit: follows ensemble, hold: continuous}
+  sprint3000_mapping: "needs primitive: position engine"
+  data_needed: "available locally / free"
+- id: RT-STRATEGY-057
+  name: "Diversified trend book with portfolio vol target"
+  source: "Harvey et al. 2018 (portfolio-level scaling helps); Hurst et al. 2017"
+  evidence_grade: "peer-reviewed"
+  mechanism: "as 026, with inverse-vol weights and a portfolio-level 10% vol target"
+  tf: "1d"
+  rule: {entry: "026 signals; weights proportional to 1/vol(60d); scale the book to 10%/yr on 60d covariance", side: signal, stop: none, exit: follows signals, hold: continuous}
+  sprint3000_mapping: "needs primitive: multi-asset position engine with covariance"
+  data_needed: "free (Dukascopy)"
+- id: RT-STRATEGY-058
+  name: "Trend + safe-haven overlay"
+  source: "Hurst 2017 + Baur and Lucey 2010"
+  evidence_grade: "peer-reviewed"
+  mechanism: "two independent reasons to be long gold at different times"
+  tf: "1d"
+  rule: {entry: "exposure = 002 exposure + 0.5 x (033 event active ? +1 : 0), capped at 1.5", side: signal, stop: none, exit: follows the components, hold: continuous}
+  sprint3000_mapping: "needs primitive: position engine + cross-asset event"
+  data_needed: "free (US500)"
+- id: RT-STRATEGY-059
+  name: "Dual momentum gold vs cash"
+  source: "Antonacci 2013 (Absolute Momentum, SSRN)"
+  evidence_grade: "practitioner-documented"
+  mechanism: "hold gold only while it out-earns cash over 12 months"
+  tf: "1d"
+  rule: {entry: "month-end: long if 12m gold return > 12m 3-month-bill return", side: long_only, stop: none, exit: "flat otherwise at a month-end", hold: "1 month, rolled"}
+  sprint3000_mapping: "needs primitive: position engine + FRED DTB3"
+  data_needed: "free (FRED DTB3)"
+- id: RT-STRATEGY-060
+  name: "Metals rotation with a cash filter"
+  source: "Antonacci 2013 (dual momentum); Asness et al. 2013"
+  evidence_grade: "practitioner-documented"
+  mechanism: "relative and absolute momentum across XAU, XAG, XPT"
+  tf: "1d"
+  rule: {entry: "month-end: hold the metal with the highest 6m return if it beats the 6m bill return, else flat", side: long_only, stop: "4 x ATR(20,1d) disaster", exit: "month-end re-rank", hold: "1 month, rolled"}
+  sprint3000_mapping: "needs primitive: multi-asset position engine"
+  data_needed: "free (Dukascopy XAG/XPT, FRED DTB3)"
