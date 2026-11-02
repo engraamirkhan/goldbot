@@ -98,6 +98,7 @@ def test_a_misspelt_field_fails_at_load(tmp_path: Path) -> None:
 # the terminals' own terms (python -m goldbot.ops.symbol_check icm-probe / vantage-demo on the brain, 2026-11-02):
 # key -> (contract_size, digits, point, min_lot, lot_step, currency_profit, swap_rollover3days, broker symbol)
 TERMINAL_TERMS: dict[str, tuple[float, int, float, float, float, str, int, str]] = {
+    "XAGUSD": (1000.0, 3, 0.001, 0.01, 0.01, "USD", 3, "XAGUSD"),
     "XPTUSD": (100.0, 2, 0.01, 0.01, 0.01, "USD", 3, "XPTUSD"),
     "XAUEUR": (100.0, 2, 0.01, 0.01, 0.01, "EUR", 3, "XAUEUR"),
     "XAUAUD": (100.0, 2, 0.01, 0.01, 0.01, "AUD", 3, "XAUAUD"),
@@ -125,7 +126,7 @@ TERMINAL_TERMS: dict[str, tuple[float, int, float, float, float, str, int, str]]
     "COFFEE": (37500.0, 4, 0.0001, 0.1, 0.1, "USD", 5, "Coffee-C"),
 }
 # the terminal did not report it (symbol_info failed: BridgeUnavailable), so its terms stay placeholders
-UNCONFIRMED = {"XAGUSD"}
+UNCONFIRMED: set[str] = set()
 
 
 @pytest.mark.parametrize("key", sorted(TERMINAL_TERMS))

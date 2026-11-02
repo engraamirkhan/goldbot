@@ -154,7 +154,7 @@ def client(tmp_path: Path) -> Any:
 
 def test_the_instruments_route_needs_a_session_and_lists_gold_and_only_the_confirmed_instruments(client):
     """Gold for every enabled account, plus each instrument an account lists that the symbol check confirmed
-    (`enabled: true`); an unconfirmed one (XAGUSD, `verify: true`) is never listed. Digits are the registry's."""
+    (`enabled: true`); an unconfirmed one (`verify: true`) is never listed; XAGUSD was confirmed on 11-02. Digits are the registry's."""
     c, h, state = client
     assert c.get("/api/instruments").status_code == 401
     (state / "engine_icm-demo.json").write_text(json.dumps({"account_id": "icm-demo", "ts": time.time()}))
@@ -163,7 +163,7 @@ def test_the_instruments_route_needs_a_session_and_lists_gold_and_only_the_confi
     gold = [r for r in rows if r["symbol"] == "XAUUSD"]
     assert gold and all(r["digits"] == 2 and r["unit"] == "USD/oz" for r in gold)
     assert {r["symbol"] for r in rows} <= {k for k, s in reg.instruments.items() if s.enabled}
-    assert all(r["digits"] == reg.get(r["symbol"]).digits for r in rows) and "XAGUSD" not in {r["symbol"] for r in rows}
+    assert all(r["digits"] == reg.get(r["symbol"]).digits for r in rows) and "XAGUSD" in {r["symbol"] for r in rows}
 
 
 def test_the_trades_route_takes_symbol_and_group_filters_and_answers_the_facet(client):

@@ -12,7 +12,7 @@
 #   terminal's symbol_info before any instrument is enabled. swap_rollover3days uses MT5 numbering (0 = Sunday).
 #   Source of the non-gold terms: the terminals themselves, `python -m goldbot.ops.symbol_check icm-probe` and
 #   `vantage-demo` run read-only on the brain on 2026-11-02 (it compares contract_size, digits, point, min_lot,
-#   lot_step, currency_profit and swap_rollover3days). Every instrument it confirmed is `verify: false`; XAGUSD
+#   lot_step, currency_profit and swap_rollover3days). Every instrument it confirmed is `verify: false` (XAGUSD confirmed on the 11-02 21:30 UTC rerun, contract 1000).
 #   stays `verify: true` (symbol_info failed: BridgeUnavailable) until a rerun passes. Sizing must not read these
 #   terms (the RiskGate sizes from the terminal's own symbol_info and the broker's loss_per_lot); they key the
 #   checks, the magic blocks and the research.
@@ -55,9 +55,9 @@ instruments:
   # --- IC Markets (icm-probe), 19 ---
   XAGUSD:
     { key: XAGUSD, broker_symbols: { icm: XAGUSD }, store_symbol: XAGUSD, asset_class: metal,
-      correlation_group: metals, magic_block: 1, contract_size: 5000.0, digits: 3, point: 0.001, min_lot: 0.01,
+      correlation_group: metals, magic_block: 1, contract_size: 1000.0, digits: 3, point: 0.001, min_lot: 0.01,
       lot_step: 0.01, max_spread_points: 60, currency_profit: USD, swap_rollover3days: 3, session_profile: metals, news_currencies: [USD],
-      leverage_class: commodity, enabled: false, verify: true }
+      leverage_class: commodity, enabled: true, verify: false }
   XPTUSD:
     { key: XPTUSD, broker_symbols: { icm: XPTUSD }, store_symbol: XPTUSD, asset_class: metal,
       correlation_group: metals, magic_block: 2, contract_size: 100.0, digits: 2, point: 0.01, min_lot: 0.01,
