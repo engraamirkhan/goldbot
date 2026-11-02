@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 import time
 from collections.abc import Callable
@@ -21,8 +22,11 @@ from multiprocessing import get_context
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-import pandas as pd
+for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+    os.environ.setdefault(_v, "1")          # 2 worker processes at most share the Mac (brief rule 6): no BLAS threads
+
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -880,11 +884,31 @@ def summarise(rid: str, tr: pd.DataFrame, tw: pd.DataFrame, costs: A.ArmCosts, w
 _G: dict[str, Any] = {}
 
 
+def load_for_window(raw: Path, window: str) -> pd.DataFrame:
+    if window in OLD_YEARS:
+        # warm-up from 2002; the fitted rules fit on 2010-2017 only, so the explore years are loaded too
+        m = load_1m(raw, OLD_LOAD_FROM, EXPLORE[1])
+        assert int(m["t"].min()) < EXPLORE[0].value, "no pre-2010 data on disk yet: old-test pending"
+        return m
+    return load_1m(raw, EXPLORE[0], window_bounds(window)[1])
+
+
+def _init(raw: str, window: str, payload: dict[str, Any]) -> None:
+    """Spawned worker: loads its own 1m frame (no fork of a threaded parent; coordinator fix 2026-11-02)."""
+    m = load_for_window(Path(raw), window)
+    costs = A.load_costs(ROOT / "config" / "arm_costs.yaml")
+    costs.require_version(COST_VERSION)
+    _G.update(m=m, M=Minutes(m), window=window, end=int(window_bounds(window)[1].value), costs=costs, **payload)
+
+
 def _work(rid: str) -> dict[str, Any]:
     M, sig, end_ns, costs, window = _G["M"], _G["sig"], _G["end"], _G["costs"], _G["window"]
+    t0 = time.time()
     rng = np.random.default_rng(SEED * 100 + int(rid))
     tr, tw = run_rule(M, sig[rid], end_ns, rng)
-    return summarise(rid, tr, tw, costs, window)
+    out = summarise(rid, tr, tw, costs, window)
+    out["seconds"] = round(time.time() - t0, 1)
+    return out
 
 
 # ================================================================ leakage tests (prereg s.3)
@@ -906,16 +930,18 @@ def _cut_check(cut: int) -> tuple[int, dict[str, int], int]:
     return cut, bad, checked
 
 
-def lookahead_test(m: pd.DataFrame, window: str, n_cuts: int = 8, workers: int = 2) -> dict[str, Any]:
+def lookahead_test(m: pd.DataFrame, raw: str, window: str, n_cuts: int = 8, workers: int = 2) -> dict[str, Any]:
     """Every decision made before a cut time is identical when computed on 1m data truncated at the cut."""
     full = all_signals(m, window)
     rng = np.random.default_rng(SEED)
     lo, hi = window_bounds(window)
     first = int(pd.Timestamp("2013-01-01", tz="UTC").value) if window == "explore" else lo.value
     cuts = [int(c) for c in np.sort(rng.integers(first, hi.value, size=n_cuts))]
-    _G.update(m=m, full=full, window=window)
-    with get_context("fork").Pool(workers) as pool:
-        res = pool.map(_cut_check, cuts)
+    res = []
+    with get_context("spawn").Pool(workers, initializer=_init, initargs=(raw, window, {"full": full})) as pool:
+        for r in pool.imap_unordered(_cut_check, cuts):
+            print(f"lookahead cut {pd.Timestamp(r[0], tz='UTC')}: {r[2]} decisions, mismatches {r[1]}", flush=True)
+            res.append(r)
     bad: dict[str, int] = {}
     for _, b, _ in res:
         for k in b:
@@ -957,31 +983,28 @@ def main() -> None:
         refused = [r for r in rules if r not in passed]
         if refused or not rules:
             raise SystemExit(f"test_old refuses rules that did not pass confirm: {refused or 'none given'}")
-    if a.window in OLD_YEARS:
-        # warm-up from 2002; the fitted rules fit on 2010-2017 only, so the explore years are loaded too
-        m = load_1m(Path(a.raw), OLD_LOAD_FROM, EXPLORE[1])
-        assert int(m["t"].min()) < EXPLORE[0].value, "no pre-2010 data on disk yet: old-test pending"
-    else:
-        m = load_1m(Path(a.raw), EXPLORE[0], hi)
+    m = load_for_window(Path(a.raw), a.window)
     print(f"loaded {len(m):,} 1m rows to {pd.Timestamp(int(m['t'].max()), tz='UTC')}", flush=True)
     result: dict[str, Any] = {"window": a.window, "prereg": "docs/research/sprint200/stats-prereg.md",
                               "cost_version": COST_VERSION, "k_total": K_TOTAL}
     if a.leak_only:
         result["shuffle"] = shuffle_test(m, a.window)
         print(json.dumps(result["shuffle"]), flush=True)
-        result["lookahead"] = lookahead_test(m, a.window, workers=a.workers)
+        result["lookahead"] = lookahead_test(m, a.raw, a.window, workers=a.workers)
         print(json.dumps(result["lookahead"]), flush=True)
     else:
         diag: dict[str, Any] = {}
         sig = all_signals(m, a.window, rules or None, diag)
         result["ml_oof_auc"] = diag
         result["decision_counts"] = {k: int(len(v)) for k, v in sig.items()}
-        costs = A.load_costs(ROOT / "config" / "arm_costs.yaml")
-        costs.require_version(COST_VERSION)
-        _G.update(M=Minutes(m), sig=sig, end=int(hi.value), costs=costs, window=a.window)
-        with get_context("fork").Pool(a.workers) as pool:
-            res = pool.map(_work, sorted(sig))
-        result["rules"] = {r["rule"]: r for r in res}
+        print(f"signals built ({time.time() - t0:.0f} s): {result['decision_counts']}", flush=True)
+        del m
+        res = []
+        with get_context("spawn").Pool(a.workers, initializer=_init, initargs=(a.raw, a.window, {"sig": sig})) as pool:
+            for r in pool.imap_unordered(_work, sorted(sig)):
+                print(f"rule {r['rule']} done: n {r['n']} ({r.get('seconds')} s)", flush=True)
+                res.append(r)
+        result["rules"] = {r["rule"]: r for r in sorted(res, key=lambda r: r["rule"])}
     result["seconds"] = round(time.time() - t0, 1)
     Path(a.out).expanduser().parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).expanduser().write_text(json.dumps(result, indent=1, default=float))
