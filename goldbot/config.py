@@ -214,6 +214,9 @@ class CostSettings(_Section):
     swap_long_usd_per_lot: float = -60.0
     swap_short_usd_per_lot: float = 0.0
     swap_triple_weekday: int = Field(2, ge=0, le=4)      # 0 = Monday; Wednesday for XAUUSD at most brokers
+    # the gold price the swap prior above stands for (SwapSpec.research_shipped): ICM measured -52.2 USD/lot long on
+    # 2026-11-02 at about 3,907, so -60 at 3,900 is a 5.6%-a-year rate, above the measured 4.9%
+    swap_ref_price_usd: float = Field(3900.0, gt=0)
     # nightly_costs publishes the canonical broker's table (costs only) to release costs-v1 for research.yml;
     # needs the github-token in the keyring. Health warns when the published table is older than 8 days.
     publish_release: bool = False
