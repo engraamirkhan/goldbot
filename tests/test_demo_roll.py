@@ -1,0 +1,311 @@
+"""ADR 0049 D3 / T1: the demo epoch roll (amends ADR 0043 R1 on demo `probe_only` hosts only).
+
+"It runs at the first 00:00 UTC risk-day roll after the pause, once the host is flat except P0 ... Mark reset: mark =
+equity, stage NORMAL, automated on the fenced path (T1). It never touches `day_start_equity` or `week_start_equity`,
+and never touches another engine." T1: "refused unless all of these hold: config `mode: demo` and `probe_only` and an
+`approval_mode` that is not confirm; the broker-reported trade mode is DEMO when the roll is called; the drawdown is
+>= 8% and < 12%; the host is flat except P0; it is a 00:00 UTC roll." D3: "-12% / HALTED: no roll. The ADR 0043 K2
+re-arm path stays as it is." Real-money accounts keep the owner's TOTP re-arm unchanged.
+"""
+import hashlib
+import inspect
+import json
+from pathlib import Path
+from typing import Any, Callable
+
+import pandas as pd
+import pytest
+
+from goldbot.engine import Engine, EngineConfig, demo_roll, exploration
+from goldbot.engine.cost_probe import SCHEDULED_ID, SCHEDULED_MAGIC_OFFSET
+from goldbot.engine.store import OpenTrade
+from goldbot.execution.broker import AccountInfo, OrderIntent
+from goldbot.risk.gate import RiskGate, Stage
+from goldbot.telegram.approvals import ApprovalCenter
+from goldbot.telegram.bus import ApprovalBus
+from tests.test_hwm_confirmation import T0, _Terminal, _tick
+
+H = pd.Timedelta(hours=1)
+NEXT_DAY = pd.Timestamp("2025-03-06 00:00:30", tz="UTC")       # Thursday: same risk week as T0 (Wednesday)
+
+
+class _DemoTerminal(_Terminal):
+    """A terminal that reports its own trade mode (MT5 ACCOUNT_TRADE_MODE), demo unless a test says otherwise."""
+
+    trade_mode: str | None = "demo"
+
+    def account(self) -> AccountInfo:
+        return super().account().model_copy(update={"trade_mode": self.trade_mode})
+
+
+def _engine(tmp_path: Path, *, mode: str = "demo", probe_only: bool = True, approval: str = "auto",
+            trade_mode: str | None = "demo", account_id: str = "icm-probe-51234567",
+            bus: ApprovalBus | None = None) -> tuple[Engine, _DemoTerminal]:
+    pb = _DemoTerminal(equity=10_000)
+    pb.trade_mode = trade_mode
+    pb.on_tick(_tick(T0))
+    eng = Engine(EngineConfig(account_id=account_id, broker_name="icm", mode=mode, probe_only=probe_only,
+                              approval_mode=approval, state_dir=str(tmp_path), owner_user_id=111, halt_checks=False),
+                 pb, [], {}, ApprovalCenter({111}, bus=bus))
+    eng._refresh_account(_tick(T0))                         # mark 10,000; risk day and week rolled at T0
+    assert eng.state.balance_closed_hwm == 10_000
+    return eng, pb
+
+
+def _balance(monkeypatch: Any, pb: _DemoTerminal, balance: float) -> None:
+    """Every account read returns this balance and equity (a flat book, or open P0 at no floating P&L)."""
+    real = pb.account
+
+    def read() -> AccountInfo:
+        return real().model_copy(update={"balance": balance, "equity": balance})
+    monkeypatch.setattr(pb, "account", read)
+
+
+def _at(eng: Engine, t: pd.Timestamp) -> None:
+    eng._refresh_account(_tick(t))
+
+
+def _rows(eng: Engine, action: str) -> list[dict[str, Any]]:
+    return [d for d in eng.decisions if d.get("action") == action]
+
+
+def _paused_at_9pct(eng: Engine, pb: _DemoTerminal, monkeypatch: Any) -> None:
+    _balance(monkeypatch, pb, 9_100.0)
+    _at(eng, T0 + H)
+    assert Stage(eng.state.stage) == Stage.SIZE_DOWN and exploration.paused(eng, T0 + H)
+
+
+def _notices(state: Path) -> list[str]:
+    path = state / "agent_runs.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line)["detail"] for line in path.read_text().splitlines() if line.strip()]
+
+
+def _open(pb: _DemoTerminal, magic: int, cid: str = "x") -> int:
+    r = pb.place_order(OrderIntent(client_order_id=cid, symbol="XAUUSD", side=1, lots=0.01, sl=2390.0, tp=2410.0,
+                                   magic=magic, comment=cid))
+    assert r.ok and r.position_id is not None
+    return r.position_id
+
+
+# ---------------------------------------------------------------------------------------------- the roll
+def test_a_demo_probe_host_paused_at_minus_8pct_rolls_at_the_next_00utc_risk_day_roll_and_resumes(tmp_path,
+                                                                                                 monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    _at(eng, NEXT_DAY)
+    st = eng.state
+    assert st.balance_closed_hwm == 9_100 and Stage(st.stage) == Stage.NORMAL
+    assert not exploration.paused(eng, NEXT_DAY)                                    # exploration resumes
+    [row] = _rows(eng, demo_roll.ACTION)
+    assert (row["epoch_from"], row["epoch_to"]) == (0, 1)
+    assert (row["mark_from"], row["mark_to"], row["equity"]) == (10_000, 9_100, 9_100)
+    assert row["drawdown"] == pytest.approx(0.09) and row["epoch_loss"] == pytest.approx(900.0)
+    # the journal carries amounts, never an identifier (public repo: no login, no account id)
+    assert set(row) == {"ts", "action", "by", "epoch_from", "epoch_to", "epoch_started", "mark_from", "mark_to",
+                        "equity", "drawdown", "epoch_loss"}
+
+
+def test_the_roll_never_touches_the_day_or_week_start_so_this_weeks_loss_is_not_forgiven(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    _at(eng, NEXT_DAY)
+    st = eng.state
+    assert st.day_start_equity == 9_100                    # the ordinary risk-day roll (gate.new_day), not the roll's
+    assert st.week_start_equity == 10_000                  # same risk week: the 900 lost stays in the weekly cap
+    assert _rows(eng, demo_roll.ACTION)
+
+
+def test_inside_the_same_risk_day_a_paused_host_is_not_rolled(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    for h in (2, 6, 13):                                   # Wednesday 12:01 .. 23:01: no 00:00 UTC boundary
+        _at(eng, T0 + h * H)
+    assert eng.state.balance_closed_hwm == 10_000 and Stage(eng.state.stage) == Stage.SIZE_DOWN
+    assert not _rows(eng, demo_roll.ACTION) and not _rows(eng, demo_roll.REFUSED)
+
+
+def test_a_host_above_the_pause_is_left_alone_at_the_day_roll(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _balance(monkeypatch, pb, 9_300.0)                      # -7%: warned, not paused
+    _at(eng, T0 + H)
+    _at(eng, NEXT_DAY)
+    assert eng.state.balance_closed_hwm == 10_000
+    assert not _rows(eng, demo_roll.ACTION) and not _rows(eng, demo_roll.REFUSED)
+
+
+def test_every_roll_is_sent_to_the_owner_on_telegram_without_the_account_login(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    bus = ApprovalBus(state)
+    eng, pb = _engine(state, bus=bus)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    _at(eng, NEXT_DAY)
+    [text] = _notices(state)
+    assert "epoch 1" in text and "10,000.00" in text and "9,100.00" in text and "9.0%" in text
+    assert "51234567" not in text and "icm-probe-…67" in text                     # entry_text.account_name masking
+    assert "?" not in text                                                          # information, never an ask
+
+
+def test_the_epoch_counts_up_across_rolls_and_survives_a_restart(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    _at(eng, NEXT_DAY)
+    again = Engine(eng.cfg.model_copy(), pb, [], {}, ApprovalCenter({111}))
+    assert again._epoch == 1 and again._epoch_utc == NEXT_DAY
+    _balance(monkeypatch, pb, 8_300.0)                      # -8.8% from the new mark
+    _at(again, NEXT_DAY + 10 * H)
+    _at(again, NEXT_DAY + pd.Timedelta(days=1))
+    [row] = _rows(again, demo_roll.ACTION)
+    assert (row["epoch_from"], row["epoch_to"], row["mark_from"], row["mark_to"]) == (1, 2, 9_100, 8_300)
+    assert row["epoch_started"] == NEXT_DAY.isoformat()
+
+
+def test_the_rolled_mark_is_anchored_so_a_later_deposit_still_moves_it_by_the_deposit(tmp_path, monkeypatch):
+    """ADR 0042 D3 after a roll: the deal-history anchor is the roll, so a top-up after it is a capital flow."""
+    eng, pb = _engine(tmp_path)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    _at(eng, NEXT_DAY)
+    assert eng._hwm.mark == 9_100 and eng._hwm.mark_utc == NEXT_DAY
+
+
+# ---------------------------------------------------------------------------------------------- exits and P0
+def test_an_open_scheduled_cost_probe_does_not_block_the_roll_and_keeps_its_stop_and_target(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    pid = _open(pb, eng.cfg.magic_base + SCHEDULED_MAGIC_OFFSET, "cm-sched-1")
+    before = pb.positions()
+    _paused_at_9pct(eng, pb, monkeypatch)
+    _at(eng, NEXT_DAY)
+    assert _rows(eng, demo_roll.ACTION)
+    assert [(p.position_id, p.sl, p.tp) for p in pb.positions()] == [(pid, before[0].sl, before[0].tp)]
+
+
+@pytest.mark.parametrize("magic_offset", [0, 50, 97])          # a strategy, an exploration arm, a mirror probe
+def test_any_open_position_other_than_p0_refuses_the_roll_and_is_left_to_its_own_exit(tmp_path, monkeypatch,
+                                                                                    magic_offset):
+    eng, pb = _engine(tmp_path)
+    pid = _open(pb, eng.cfg.magic_base + magic_offset)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    _at(eng, NEXT_DAY)
+    assert eng.state.balance_closed_hwm == 10_000 and not _rows(eng, demo_roll.ACTION)
+    [row] = _rows(eng, demo_roll.REFUSED)
+    assert row["reason"] == "not_flat"
+    assert [p.position_id for p in pb.positions()] == [pid]
+
+
+def test_an_engine_open_trade_other_than_p0_refuses_the_roll(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    eng.open[7] = OpenTrade(position_id=7, agent_id="explore:S0", side=1, lots=0.01, entry_bar_ts=T0, max_bars=5)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    _at(eng, NEXT_DAY)
+    assert [r["reason"] for r in _rows(eng, demo_roll.REFUSED)] == ["not_flat"]
+
+
+def test_an_engine_open_trade_of_p0_alone_does_not_refuse_the_roll(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    pid = _open(pb, eng.cfg.magic_base + SCHEDULED_MAGIC_OFFSET, "cm-sched-1")
+    eng.open[pid] = OpenTrade(position_id=pid, agent_id=SCHEDULED_ID, side=1, lots=0.01, entry_bar_ts=T0, max_bars=5)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    _at(eng, NEXT_DAY)
+    assert _rows(eng, demo_roll.ACTION) and pid in eng.open
+
+
+# ---------------------------------------------------------------------------------------------- refusals (T1)
+@pytest.mark.parametrize(("trade_mode", "reason"), [("real", "terminal_not_demo"), ("contest", "terminal_not_demo"),
+                                                    (None, "terminal_unknown")])
+def test_a_terminal_that_does_not_report_demo_refuses_the_roll(tmp_path, monkeypatch, trade_mode, reason):
+    eng, pb = _engine(tmp_path)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    pb.trade_mode = trade_mode
+    _at(eng, NEXT_DAY)
+    assert eng.state.balance_closed_hwm == 10_000 and Stage(eng.state.stage) == Stage.SIZE_DOWN
+    assert [r["reason"] for r in _rows(eng, demo_roll.REFUSED)] == [reason]
+
+
+def test_a_demo_probe_host_in_propose_mode_refuses_the_roll(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path, approval="propose")
+    _paused_at_9pct(eng, pb, monkeypatch)
+    _at(eng, NEXT_DAY)
+    assert eng.state.balance_closed_hwm == 10_000
+    assert [r["reason"] for r in _rows(eng, demo_roll.REFUSED)] == ["approval_not_auto"]
+
+
+def test_an_unreadable_account_at_the_roll_refuses_it_and_never_raises(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    eng.state.equity = 9_100.0
+    monkeypatch.setattr(pb, "positions", lambda: (_ for _ in ()).throw(RuntimeError("positions_get failed")))
+    demo_roll.at_day_roll(eng, NEXT_DAY)
+    assert eng.state.balance_closed_hwm == 10_000
+    assert [r["reason"] for r in _rows(eng, demo_roll.REFUSED)] == ["positions_unreadable"]
+
+
+def test_a_halted_demo_probe_host_is_never_rolled_and_keeps_the_owner_rearm(tmp_path, monkeypatch):
+    """ADR 0049 D3: "-12% / HALTED: no roll. A roll is never available at or after a halt"."""
+    eng, pb = _engine(tmp_path)
+    _balance(monkeypatch, pb, 8_700.0)                      # -13%
+    for s in (0, 30, 60):                                   # ADR 0016: the 12% read confirmed
+        _at(eng, T0 + H + pd.Timedelta(seconds=s))
+    assert Stage(eng.state.stage) == Stage.HALTED
+    _at(eng, NEXT_DAY)
+    assert Stage(eng.state.stage) == Stage.HALTED and eng.state.balance_closed_hwm == 10_000
+    assert not _rows(eng, demo_roll.ACTION)
+
+
+def test_a_drawdown_at_the_halt_line_waiting_for_confirmation_is_never_rolled(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path)
+    _paused_at_9pct(eng, pb, monkeypatch)
+    eng.state.equity = 8_700.0                              # -13%, the stage machine not yet run on it
+    demo_roll.at_day_roll(eng, NEXT_DAY)
+    assert eng.state.balance_closed_hwm == 10_000
+    assert [r["reason"] for r in _rows(eng, demo_roll.REFUSED)] == ["drawdown_at_halt"]
+
+
+# ---------------------------------------------------------------------------------------------- real money untouched
+@pytest.mark.parametrize(("mode", "probe_only", "approval", "trade_mode"), [
+    ("live", False, "propose", "real"),        # a real-money account
+    ("demo", False, "auto", "demo"),           # a demo strategy account (not a probe host)
+    ("paper", False, "propose", None),         # the paper broker
+])
+def test_any_account_other_than_a_demo_probe_host_never_rolls_and_journals_nothing(tmp_path, monkeypatch, mode,
+                                                                                 probe_only, approval, trade_mode):
+    eng, pb = _engine(tmp_path, mode=mode, probe_only=probe_only, approval=approval, trade_mode=trade_mode,
+                      account_id="icm-live")
+    _balance(monkeypatch, pb, 9_100.0)
+    _at(eng, T0 + H)
+    _at(eng, NEXT_DAY)
+    st = eng.state
+    assert st.balance_closed_hwm == 10_000 and Stage(st.stage) == Stage.SIZE_DOWN
+    assert not _rows(eng, demo_roll.ACTION) and not _rows(eng, demo_roll.REFUSED)
+    assert eng._epoch == 0
+
+
+def test_the_roll_reads_nothing_from_the_broker_on_a_live_account(tmp_path, monkeypatch):
+    eng, pb = _engine(tmp_path, mode="live", probe_only=False, approval="propose", trade_mode="real")
+    eng.state.equity = 9_100.0
+
+    def boom(*a: Any) -> Any:
+        raise AssertionError("the demo roll read the broker of a live account")
+    monkeypatch.setattr(pb, "account", boom)
+    monkeypatch.setattr(pb, "positions", boom)
+    demo_roll.at_day_roll(eng, NEXT_DAY)
+    assert not _rows(eng, demo_roll.ACTION) and not _rows(eng, demo_roll.REFUSED)
+    assert eng.state.balance_closed_hwm == 10_000
+
+
+# The owner's TOTP re-arm (dashboard -> control.json rearm id -> Engine._poll_rearm -> RiskGate.rearm) is the only
+# mark-lowering path on a real-money account (ADR 0043 R1, ADR 0049 D3 "the ADR 0043 K2 re-arm path stays as it is").
+# Its source is pinned: changing it needs a trading-safety review, and the pin is updated in that same PR.
+REARM_PATH_SHA256 = {
+    "Engine._poll_rearm": "37a9d935138d30d0fdcc7bd2af7b3db84e7e8f093c75145b152e9991fc9f0df9",
+    "Engine._rearm_conditions": "8460d520bd750f874fbb416f643dc201675b4fb03ce453a49309beccdf22c519",
+    "RiskGate.rearm": "0f5656464592607aa3b434fae1aad74e4c6fcf134455ef90fb5f3c6387496d94",
+}
+
+
+def test_the_owner_totp_rearm_path_is_byte_identical():
+    got: dict[str, Callable[..., Any]] = {"Engine._poll_rearm": Engine._poll_rearm,
+                                          "Engine._rearm_conditions": Engine._rearm_conditions,
+                                          "RiskGate.rearm": RiskGate.rearm}
+    digests = {k: hashlib.sha256(inspect.getsource(f).encode()).hexdigest() for k, f in got.items()}
+    assert digests == REARM_PATH_SHA256

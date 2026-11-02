@@ -46,6 +46,7 @@ from goldbot.engine import (
     broker_bars,
     capital_flows,
     cost_probe,
+    demo_roll,
     exploration,
     history,
     order_send,
@@ -404,6 +405,8 @@ class Engine:
         self._week_reset: pd.Timestamp | None = None
         self._flows_through: pd.Timestamp | None = None
         self._flow_balance: float | None = None
+        self._epoch = 0                                 # ADR 0049 D3: the demo roll's epoch and when it began
+        self._epoch_utc: pd.Timestamp | None = None
         self._rearm_seen: str | None = None
         self._weekend_done: str | None = None        # server date of the last Friday the weekend rule ran
         self._halted_at: pd.Timestamp | None = None  # when the 12% kill switch tripped (re-arm conditions count from it)
@@ -2269,6 +2272,8 @@ class Engine:
             # BACKLOG 43 (code review LOW-1): a new risk day starts with no "last entry refused" (an agent that stopped
             # producing intents is never allowed again, so its refusal would otherwise stay until a restart)
             self._entry_refusals.clear()
+            if last is not None:                # ADR 0049 D3: a paused demo probe host rolls at a 00:00 UTC roll
+                demo_roll.at_day_roll(self, now)
             self._save_risk_state_now("the risk-period reset")
 
     def _poll_rearm(self, now: pd.Timestamp) -> None:
@@ -2697,7 +2702,7 @@ class Engine:
             weekend_done=self._weekend_done, halted_at=self._halted_at, propose_only_until=self._propose_only_until,
             rearm_refused=self._rearm_refused, kill_everything=self._kill_everything,
             stage2_pending_since=self._stage2_pending_since, week_reset=self._week_reset,
-            flows_through=self._flows_through))
+            flows_through=self._flows_through, epoch=self._epoch, epoch_utc=self._epoch_utc))
 
     def _save_risk_state_now(self, what: str) -> None:
         """Save the risk state from the account-refresh path; never raises (BACKLOG 44 re-review MEDIUM-1, LOW-2). The
@@ -2732,6 +2737,7 @@ class Engine:
         self._stage2_pending_since = snap.stage2_pending_since
         self._kill_everything = snap.kill_everything
         self._week_reset, self._flows_through = snap.week_reset, snap.flows_through
+        self._epoch, self._epoch_utc = snap.epoch, snap.epoch_utc
 
     def _regime(self, X: pd.DataFrame, close_ts: pd.Timestamp) -> Regime:
         """The allocator's inputs at this close. The tier-1 distances (row M9) come from the archived calendar the

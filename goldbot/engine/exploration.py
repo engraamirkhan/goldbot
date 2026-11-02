@@ -1229,7 +1229,8 @@ def paused(eng: Engine, now: pd.Timestamp) -> bool:
     """ADR 0043 section 2 (X4): on a probe_only account at a drawdown of DD_PAUSE (8%, the gate's SIZE_DOWN) or more,
     every exploration and mirror-probe entry pauses (`exploration_paused_dd`; the scheduled cost probes go on); at
     DD_WARN (6%) a warning is journalled once a day. An unknown drawdown pauses (fail closed). Exits are never
-    gated. False on any other account (the rule is the probe host's)."""
+    gated. False on any other account (the rule is the probe host's). The pause ends at the ADR 0049 demo roll
+    (engine/demo_roll.py: mark = equity at a 00:00 UTC risk-day roll once flat except P0) or a recovery above -8%."""
     if not eng.cfg.probe_only:
         return False
     dd = drawdown(eng)

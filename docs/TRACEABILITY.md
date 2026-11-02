@@ -18,12 +18,12 @@ Status values:
 
 | Status | Rows |
 | --- | --- |
-| implemented | 267 |
+| implemented | 268 |
 | partial | 22 |
 | missing | 2 |
 | deviates | 6 |
 | in review | 12 |
-| **total** | **309** |
+| **total** | **310** |
 
 Fixed on this branch (failing test first, then the change): rows R6, D18 and X12 below.
 
@@ -124,6 +124,7 @@ Engine safety (failing test first, then the change): rows R7, R16, R17, R22, R23
 | R89 | The trial registry reaches release research-v1 although the brain token cannot write it - the brain keeps the pending registry in an outbox (INFO, no alert) and the Mac publishes it through the same union and compare-and-swap | implemented | goldbot/research/registry_sync.py `sync`, `_to_outbox`, `publish_outbox`, `OUTBOX`; scripts/registry_publish.sh | tests/test_registry_outbox.py |
 | R90 | Growth sprint 2026-11-01 (owner instruction): a demo growth test on icm-demo, GS1 against a random-entry control GS1C at the same size, GS1 exempt from ADR 0061 until 2026-11-27 only, sized by the RiskGate with no cap loosened, and read weekly as real equity plus virtual ledgers at f = 5/10/20% | implemented | goldbot/research/arm_rules_growth.py (GS1 `session_range_break`, GS1C `session_range_control`); goldbot/research/arms.py `OWNER_EXPERIMENTS`, `owner_experiment_refusal`; goldbot/engine/exploration.py `growth_lots`, `refresh_owner_experiments`, `ExplorationRecord.group_id`; goldbot/risk/gate.py `RiskLimits.growth_arms`; goldbot/ops/accounts.py `ExplorationArm.sizing`, `growth_arm_ids`; goldbot/research/growth_ledger.py; goldbot/ops/growth_report.py; perf-report "Growth test" and health `growth_test`; config/exploration_arms.yaml GS1/GS1C; config/accounts.yaml icm-demo growth pot; docs/decisions/0061-qualify-before-demo.md amendment 2026-11-01 | tests/test_growth_test.py |
 | R91 | Growth sprint 2026-11-01 section 3 (deferred part): pyramid adds for GS1 and, identically, GS1C. A unit at each +1 R from the first unit's entry, up to 3 adds, each through the RiskGate with every cap binding. After every add, open risk is at most 1 unit. Each add carries group_id = the first unit's client order id. A refused add is a shadow fill. Exits are never gated, and restarts are safe | implemented | goldbot/engine/exploration_pyramid.py (`pyramid`, `group_stop`, `heal`, `plan`, `before_send`, `add_id`, `group_of`); goldbot/engine/exploration.py (`Arm.adds`, `Pending.group_id`, `pending_id`, `_send` add branch, `_Pass` group slots, `growth_lots` max_lots, `_censored`); goldbot/ops/accounts.py `ExplorationArm.adds`; goldbot/research/exploration_data.py `CANDIDATE_STYLES`, `learn` (no growth row); goldbot/research/growth_ledger.py `split_shadow`, `refused_adds`, `ledgers_uncapped`; goldbot/ops/growth_report.py; scripts/growth_sprint_read.py; docs/research/growth-sprint-2026-11-01.md protocol deviation 2; config/accounts.yaml icm-demo GS1/GS1C `adds` 3 and `unit_lots` 0.01; docs/decisions/0065-pyramid-adds-stop-rule.md | tests/test_growth_pyramid.py |
+| R92 | ADR 0049 D3 / T1: a demo probe_only host paused at -8% rolls at the next 00:00 UTC risk-day roll (mark = equity, stage NORMAL, epoch n -> n+1). It is refused (journalled `rotation_refused`, retried at the next roll) unless the account is mode demo + probe_only + auto, the terminal reports demo at the call, the drawdown is >= 8% and < 12% with no 12% read pending, and the host is flat except P0. The day and week starts, dynamic limits and exits are untouched. Each roll is journalled `rotation` and sent to the owner on Telegram. Other accounts are never read; the owner TOTP re-arm path is unchanged (source-pinned) | implemented (T1, T3 by construction); trading-safety-reviewer (full), security and code review owed before merge; T2, T4-T6 open | goldbot/engine/demo_roll.py `at_day_roll`, `_refusal`, `_roll`; goldbot/engine/runner.py `_roll_risk_period`, `_save_risk_state`, `_load_risk_state`; goldbot/engine/store.py `RiskSnapshot.epoch`, `epoch_utc` | tests/test_demo_roll.py (25 cases: the roll, the starts untouched, same-day no roll, the Telegram notice, epoch persistence, the hwm anchor, P0 and non-P0 positions, every refusal, halted and at-halt no roll, live/demo-strategy/paper never read or rolled, `test_the_owner_totp_rearm_path_is_byte_identical`) |
 
 Risk analytics (reporting tools, not design rows, so the counts are unchanged): `goldbot/research/ruin.py`
 (`run.py ruin`, playbook G-5) simulates R against the R9/R11/R13/R14 limits read from `config/settings.yaml`, applying

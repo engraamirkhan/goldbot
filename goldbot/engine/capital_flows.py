@@ -22,7 +22,8 @@ def update_hwm(eng: Engine, acc: AccountInfo, now: pd.Timestamp) -> None:
     """BACKLOG 54 (ADR 0018): "a rise in balance_closed_hwm is applied only once confirmed: by the deal history
     (closed deals and balance operations since the last mark account for the rise within a tolerance), or by a
     second balance read that agrees; one disagreeing read never raises it, two agreeing reads always do". A
-    deposit explains a rise and raises the mark. The mark is never lowered here (only /rearm resets it). An
+    deposit explains a rise and raises the mark. The mark is never lowered here (only the owner's /rearm
+    resets it, and on a demo probe_only host the ADR 0049 demo roll, engine/demo_roll.py). An
     unconfirmed rise is read again on the next tick; a refused one is logged and recorded. The first read of an
     engine that has no mark yet sets it (and its deal-history anchor). ADR 0042: a deposit or withdrawal is a
     capital flow, applied first (`apply_capital_flows`), never a rise."""
