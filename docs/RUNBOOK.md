@@ -2452,8 +2452,9 @@ system to learn from and know about and improve on, not for charts to display"):
 strategies. Where the capture was installed, turn it off (it also frees memory on the 1 GB MT5 box):
 `sudo systemctl disable --now goldbot-chart-fetch.timer` (brain) and `sudo systemctl disable --now goldbot-chart-capture.timer`
 (MT5 box); delete the `goldbot-chart` line from `/home/mt5/.ssh/authorized_keys`
-(`sudo -u mt5 sed -i '/goldbot-chart/d' /home/mt5/.ssh/authorized_keys`), `sudo rm -f /usr/local/libexec/goldbot/goldbot-chart-*.sh`
-and `sudo rm -f /opt/goldbot/state/chart/mt5*.png`. The scripts in `goldbot/ops/linux` stay until the SRE lane retires them.
+(`sudo -u mt5 sed -i '/goldbot-chart/d' /home/mt5/.ssh/authorized_keys`) and `sudo rm -f /usr/local/libexec/goldbot/goldbot-chart-*.sh`.
+The last captures left in the brain's state are never read again. The scripts in `goldbot/ops/linux` stay until the SRE
+lane retires them.
 
 ### Multi-instrument MT5 boxes (bridge protocol v10)
 

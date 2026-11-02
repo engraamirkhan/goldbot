@@ -139,7 +139,7 @@ def test_trading_sessions_is_a_read_only_bridge_method():
 def test_the_mt5_adapter_reports_the_documented_hours_because_the_python_api_has_no_schedule(caplog):
     from goldbot.execution.mt5_adapter import MT5Broker
     b = object.__new__(MT5Broker)                      # no terminal: the method never calls the MetaTrader5 package
-    b.server_tz, b._sessions_noted = TZ, False
+    b.server_tz, b._sessions_noted, b.symbol = TZ, False, "XAUUSD"     # its own symbol: the documented hours
     with caplog.at_level("INFO", logger="goldbot.mt5"):
         out = b.trading_sessions("XAUUSD")
     assert "no session schedule" in caplog.text
