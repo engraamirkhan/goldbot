@@ -1015,6 +1015,9 @@ def on_pass(eng: Engine, tick: Tick) -> None:
         if ct is not None and (ex.last_close is None or ct > ex.last_close) and step(eng, ct):
             ex.last_close = ct                      # a deferred close (clock ahead) is tried again next pass
         _minutes(eng, ex, now)
+        from goldbot.engine import books
+        if ex.queue and books.warming(eng):     # the book's history backfill has not completed: no entry yet
+            _block(eng, ex, list(ex.queue), now, "book_warming")
         if ex.queue and not ex.retired_ok:      # fail closed: the retired arms are not known yet
             _block(eng, ex, list(ex.queue), now, "arm_status_unread")
         elif ex.queue:

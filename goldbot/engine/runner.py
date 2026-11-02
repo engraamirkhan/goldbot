@@ -961,6 +961,8 @@ class Engine:
                 continue
             frames[tf] = fr
             self._manage_policies(tf, fr.dec, close_ts)
+            if books.warming(self):
+                continue                       # a non-gold book warming up from history: no decision (exits ran)
             agents = [a for a in self.agents.values() if a.timeframe == tf]
             if (refused := history.refuse(self, tf, fr, gaps, agents, close_ts)) is not None:
                 decisions += refused           # a hole in tf's window: no entry, live or shadow

@@ -240,10 +240,12 @@ def ladder(eng: Engine, ex: Exploration, arm: Arm, group_id: str, held: list[int
 # ------------------------------------------------------------------------------------------------ every pass
 def pyramid(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None:
     """Every pass with a quote (`exploration.on_pass`): each open group of an arm with adds is held to one unit at its
-    stops (`heal`, whatever the entry state), then, unless the arm is retired, its next level is queued once the mid
-    reaches it. One add a group a pass; the level is spent when queued."""
+    stops (`heal`, whatever the entry state), then, unless the arm is retired or the book is warming up from history
+    (`books.warming`), its next level is queued once the mid reaches it. One add a group a pass; the level is spent when queued."""
+    from goldbot.engine import books
     from goldbot.engine.exploration import Pending
     mid = (tick.bid + tick.ask) / 2.0
+    warming = books.warming(eng)                      # a book warming up from history queues no add (book_backfill)
     live: set[str] = set()
     for arm in (a for a in ex.arms.values() if a.adds > 0):
         for gid, held in open_units(eng, arm).items():
@@ -252,7 +254,7 @@ def pyramid(eng: Engine, ex: Exploration, now: pd.Timestamp, tick: Tick) -> None
             if g is None:
                 continue
             heal(eng, ex, arm, g, now)
-            if arm.arm_id in ex.retired or any(s.group_id == gid for s in ex.queue) \
+            if warming or arm.arm_id in ex.retired or any(s.group_id == gid for s in ex.queue) \
                     or not any(u.add_no == 0 for u, _ in held):
                 continue                              # no entry, one already waiting, or the first unit is gone
             k = ladder(eng, ex, arm, gid, [u.add_no for u, _ in held]) + 1

@@ -1,0 +1,5 @@
+id: X28
+requirement: 'Live demo issue 2026-11-02: each enabled non-gold book warms up at engine start from the broker''s 1m history (get_bars_range), one book per pass in the background, paced (1 day a page, 1 s apart, 60 s a turn, one attempt with a 20 s timeout, one pull per MT5 box), only the gap to its stored minutes, on its own sessions and point in time, stored in bars_1m_live (account, store_symbol); until it holds the larger of 400 bars, a full decision frame and its arms'' longest lookback it takes no entry; exits are never gated; a failed page is retried after 120 s and never raises into the pass; gold is never pulled'
+status: in review (trading-safety; PR fix/book-history-backfill)
+code: goldbot/engine/book_backfill.py; goldbot/engine/books.py `warming`, SymbolBook.warm, `published` warm_up; goldbot/engine/runner.py `on_bar_close`; goldbot/engine/exploration.py `on_pass`; goldbot/ops/services/engine.py
+test: tests/test_book_backfill.py; tests/test_mi_xauusd_replay_golden.py
