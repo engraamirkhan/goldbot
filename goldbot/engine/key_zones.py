@@ -96,11 +96,22 @@ _LOCAL_LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
 
 
-def box_key(url: str) -> str:
-    """The MT5 box a bridge URL points at: a short hash of its host (accounts on one box share it whatever their
-    port). Hashed, so no host name ever lands in a file name or a log line."""
-    host = urlparse(url).hostname or url
-    return hashlib.sha256(host.encode()).hexdigest()[:12]
+LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def box_key(url: str, box: str | None = None) -> str:
+    """The MT5 box a bridge URL points at, as a short hash (no host or box name ever lands in a file name or a log
+    line). `box`: the account's own box name (accounts.yaml `box`, lane L1), which wins. Else the URL's host, so
+    accounts on one box share it whatever their port; but a loopback host is an SSH tunnel's local end (every brain
+    bridge is http://127.0.0.1:<port>), which names no box, so there the port does (safety re-review of #306, P1:
+    one host key would make one lock for the whole brain)."""
+    if box:
+        key = f"box:{box}"
+    else:
+        u = urlparse(url)
+        host = u.hostname or url
+        key = f"{host}:{u.port}" if host in LOOPBACK else host
+    return hashlib.sha256(key.encode()).hexdigest()[:12]
 
 
 @contextmanager
@@ -170,6 +181,10 @@ class KeyZoneWorker:
         self.next_pull: pd.Timestamp | None = None
         self.broker_start: pd.Timestamp | None = None   # the first bar a pull from the head returned
         self.head_checked: pd.Timestamp | None = None   # when a pull from the head last completed
+        # safety re-review of #306 (P2): a hole a completed pull re-read without getting a bar (the broker has none
+        # there) -> when; skipped until HEAD_RECHECK, as `broker_start` is for the head; `_gap` the hole being pulled
+        self.dead_gaps: dict[pd.Timestamp, pd.Timestamp] = {}
+        self._gap: tuple[pd.Timestamp, pd.Timestamp] | None = None
         self.job: _Job | None = None
         self.clock: Callable[[], pd.Timestamp] = lambda: pd.Timestamp.now("UTC")   # pacing (wall time)
         self.sleep: Callable[[float], None] = time.sleep
@@ -261,7 +276,11 @@ class KeyZoneWorker:
         if first > head + HEAD_GAP and recheck and (self.broker_start is None or first > self.broker_start + HEAD_GAP):
             return head
         for i in map(int, np.flatnonzero(np.diff(epoch_ns(ts)) > HEAD_GAP.value)):   # calendar gaps first: cheap
+            dead = self.dead_gaps.get(ts[i])
+            if dead is not None and now - dead < HEAD_RECHECK:
+                continue                                  # re-read empty within the week: the broker has nothing there
             if self._open_time(ts[i], ts[i + 1]) > HEAD_GAP:
+                self._gap = (ts[i], ts[i + 1])
                 return max(head, ts[i])
         return max(head, last - OVERLAP)
 
@@ -276,7 +295,10 @@ class KeyZoneWorker:
         pace = _Deadline(self.clock, self.sleep, pause_s=PAGE_PAUSE_S, page_limit_s=PAGE_LIMIT_S,
                          budget_s=PULL_BUDGET_S)
         point = float(self.client.symbol_info(self.symbol).point)
+        self._gap = None
         start = first_page = self._start(now)
+        gap = self._gap if self._gap is not None and first_page == max(now - pd.Timedelta(days=LONG_DAYS),
+                                                                       self._gap[0]) else None
         from_head = first_page == now - pd.Timedelta(days=LONG_DAYS)
         seen = not self.long.empty and pd.Timestamp(self.long["ts_utc"].iloc[0]) <= start
         while start < now:
@@ -300,6 +322,12 @@ class KeyZoneWorker:
             start = end
         if from_head:
             self.head_checked = now
+        if gap is not None:                               # completed: a hole still without a bar is the broker's
+            ts = pd.to_datetime(self.long["ts_utc"], utc=True)
+            if not ((ts > gap[0]) & (ts < gap[1])).any():
+                self.dead_gaps[gap[0]] = now
+                log.info("key zones: %s has no M15 bars in a %s hole; not re-read before %s", self.symbol,
+                         gap[1] - gap[0], now + HEAD_RECHECK)
 
     def _open_between(self, start: pd.Timestamp, end: pd.Timestamp) -> bool:
         grid = pd.date_range(start.ceil(_STEP), end, freq=_STEP)

@@ -655,7 +655,8 @@ def attach_levels(eng: Any, acc: Account, bridge: tuple[str, str], state_dir: Pa
         return
     from goldbot.engine import key_zones
     eng.key_zone_worker.attach(key_zones.levels_client(bridge[0], bridge[1], acc.account_id),
-                               box=key_zones.box_key(bridge[0]), lock_dir=Path(state_dir) / "locks")
+                               box=key_zones.box_key(bridge[0], getattr(acc, "box", None)),
+                               lock_dir=Path(state_dir) / "locks")
 
 
 def attach_replica(eng: Any, settings: Settings) -> None:

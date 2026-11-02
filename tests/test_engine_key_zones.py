@@ -341,6 +341,38 @@ def test_one_pull_per_mt5_box_across_engine_processes(tmp_path, m15_rates):
     assert list(locks.iterdir()) and all("invalid" not in f.name for f in locks.iterdir())   # no host in a name
 
 
+def test_two_loopback_tunnels_to_different_boxes_get_their_own_lock(tmp_path):
+    """Safety re-review of #306, P1: every brain bridge is http://127.0.0.1:<port> (an SSH tunnel), so the host names
+    no box. The tunnel's port does, and the account's own `box` (accounts.yaml) wins over both."""
+    a, b = "http://127.0.0.1:18765", "http://127.0.0.1:18766"
+    assert key_zones.box_key(a) != key_zones.box_key(b)
+    assert key_zones.box_key(a, "vps-icm") == key_zones.box_key(b, "vps-icm") != key_zones.box_key(a, "vps-vantage")
+    locks = tmp_path / "locks"
+    with key_zones.box_lock(locks, key_zones.box_key(a)) as first:
+        with key_zones.box_lock(locks, key_zones.box_key(b)) as second:
+            assert first and second                       # two boxes: two pulls at once
+    assert all("127" not in f.name and "vps" not in f.name for f in locks.iterdir())
+
+
+def test_a_hole_the_broker_has_no_bars_for_is_not_re_read_until_the_head_recheck(tmp_path, m15_rates):
+    """Safety re-review of #306, P2: a completed pull that re-read a hole and got no bar there is remembered, and the
+    hole is skipped until HEAD_RECHECK (as `broker_start` is for the head), never re-read on every refresh."""
+    ts = pd.to_datetime(m15_rates["ts_utc"], utc=True)
+    hole = (NOW - pd.Timedelta(days=300), NOW - pd.Timedelta(days=270))
+    holed = m15_rates[~((ts > hole[0]) & (ts < hole[1]))]
+    w = _worker(holed, tmp_path)
+    w.refresh(NOW)                                         # from the head: the hole is the broker's
+    w.client, w.next_pull = Bridge(holed), None
+    w.refresh(NOW + pd.Timedelta(days=1))                  # resumes at the hole, finds nothing there
+    assert w.client.calls[0][1] <= hole[0] and w.dead_gaps
+    w.client, w.next_pull = Bridge(holed), None
+    w.refresh(NOW + pd.Timedelta(days=2))                  # remembered: a top-up only
+    assert w.client.calls[0][1] > NOW - pd.Timedelta(days=3)
+    w.client, w.next_pull = Bridge(holed), None
+    w.refresh(NOW + key_zones.HEAD_RECHECK + pd.Timedelta(days=2))   # a week on: asked again
+    assert w.client.calls[0][1] <= hole[0]
+
+
 def test_the_first_pull_after_a_restart_waits_a_random_delay(tmp_path, m15_rates):
     w = _worker(m15_rates, tmp_path)
     before = w.clock()
